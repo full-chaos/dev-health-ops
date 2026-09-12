@@ -202,25 +202,115 @@ func TestTierBDeclarationsAreReasonedAndRooted(t *testing.T) {
 // Same, for baseline defects: every entry must name a ticket and at least
 // one path, or it declares nothing and can only ever read as coverage.
 func TestBaselineDefectDeclarationsNameATicketAndPaths(t *testing.T) {
+	checkDefects := func(t *testing.T, label string, responseRoot string, defects []BaselineDefect) {
+		t.Helper()
+		for _, defect := range defects {
+			if !strings.HasPrefix(defect.Ticket, "CHAOS-") {
+				t.Errorf("%s declares a baseline defect with ticket %q -- a defect with no ticket is an opinion", label, defect.Ticket)
+			}
+			if len(defect.Paths) == 0 {
+				t.Errorf("%s baseline defect %s cites no field paths, so it excuses nothing", label, defect.Ticket)
+			}
+			for _, path := range defect.Paths {
+				prefix := "data." + responseRoot
+				if path != prefix && !strings.HasPrefix(path, prefix+".") {
+					t.Errorf("%s baseline defect %s cites %q outside the subtree its document selects (want prefix %q)", label, defect.Ticket, path, prefix)
+				}
+			}
+		}
+	}
 	for _, operation := range KnownOperations() {
 		spec, err := SpecFor(operation)
 		if err != nil {
 			t.Fatalf("SpecFor(%q): %v", operation, err)
 		}
-		for _, defect := range spec.Parity.BaselineDefects {
-			if !strings.HasPrefix(defect.Ticket, "CHAOS-") {
-				t.Errorf("%s declares a baseline defect with ticket %q -- a defect with no ticket is an opinion", operation, defect.Ticket)
-			}
-			if len(defect.Paths) == 0 {
-				t.Errorf("%s baseline defect %s cites no field paths, so it excuses nothing", operation, defect.Ticket)
-			}
-			for _, path := range defect.Paths {
-				prefix := "data." + spec.ResponseRoot
-				if path != prefix && !strings.HasPrefix(path, prefix+".") {
-					t.Errorf("%s baseline defect %s cites %q outside the subtree its document selects (want prefix %q)", operation, defect.Ticket, path, prefix)
-				}
+		checkDefects(t, operation, spec.ResponseRoot, spec.Parity.BaselineDefects)
+		// A Variant's ResponseRoot is the operation's own -- see
+		// OperationSpec.Variants: a variant shares its operation's
+		// registered document, only Variables/Parity differ.
+		for _, variant := range spec.Variants {
+			checkDefects(t, operation+":"+variant.Name, spec.ResponseRoot, variant.Parity.BaselineDefects)
+		}
+	}
+}
+
+// TestEveryVariantIsNamed pins OperationSpec.Variants' own contract: an
+// empty Name is indistinguishable from the base request on the Outcome
+// and in every report line, which defeats the entire reason Variants
+// exist -- to tell more than one request under the same operation apart.
+func TestEveryVariantIsNamed(t *testing.T) {
+	for _, operation := range KnownOperations() {
+		spec, err := SpecFor(operation)
+		if err != nil {
+			t.Fatalf("SpecFor(%q): %v", operation, err)
+		}
+		for i, variant := range spec.Variants {
+			if variant.Name == "" {
+				t.Errorf("%s: Variants[%d] has an empty Name", operation, i)
 			}
 		}
+	}
+}
+
+// CHAOS-5426 (lane-chord-5426, 2026-09-12, R174): flowMatrix's base
+// request sends dimension=WORK_TYPE, the one dimension #2374 left
+// untouched, so it can never prove that fix -- see flowMatrixInvestmentVariant's
+// doc comment. This pins that the TEAM and REPO Variants actually exist,
+// actually send useInvestment=true (the shape web's useChordFlow.ts
+// always sends, and the one #2374 conditions its fix on), and actually
+// cite CHAOS-5426 rather than silently reusing CHAOS-5448's WORK_TYPE-only
+// FINAL-semantics declaration (which does not apply to the investment
+// source these variants read).
+func TestFlowMatrixVariantsExerciseTeamAndRepoWithInvestment(t *testing.T) {
+	spec, err := SpecFor("flowMatrix")
+	if err != nil {
+		t.Fatalf("SpecFor(flowMatrix): %v", err)
+	}
+	want := map[string]bool{"TEAM": false, "REPO": false}
+	if len(spec.Variants) != len(want) {
+		t.Fatalf("flowMatrix declares %d Variants, want %d (TEAM, REPO): %#v", len(spec.Variants), len(want), spec.Variants)
+	}
+	for _, variant := range spec.Variants {
+		if _, known := want[variant.Name]; !known {
+			t.Fatalf("flowMatrix declares an unexpected Variant %q, want only TEAM/REPO", variant.Name)
+		}
+		want[variant.Name] = true
+
+		vars := variant.Variables("org-under-test", DefaultWindow())
+		batch, _ := vars["batch"].(map[string]any)
+		fm, _ := batch["flowMatrix"].(map[string]any)
+		if fm == nil {
+			t.Fatalf("variant %q: Variables()[\"batch\"][\"flowMatrix\"] is not a map: %#v", variant.Name, vars)
+		}
+		if dim, _ := fm["dimension"].(string); dim != variant.Name {
+			t.Errorf("variant %q: dimension = %v, want %q", variant.Name, fm["dimension"], variant.Name)
+		}
+		if useInvestment, _ := fm["useInvestment"].(bool); !useInvestment {
+			t.Errorf("variant %q: useInvestment = %v, want true -- this is the exact shape web's useChordFlow.ts always sends, and the one CHAOS-5426's fix conditions on", variant.Name, fm["useInvestment"])
+		}
+
+		if len(variant.Parity.BaselineDefects) != 1 || variant.Parity.BaselineDefects[0].Ticket != "CHAOS-5426" {
+			t.Errorf("variant %q declares BaselineDefects %#v, want exactly one citing CHAOS-5426", variant.Name, variant.Parity.BaselineDefects)
+		}
+	}
+	for name, seen := range want {
+		if !seen {
+			t.Errorf("flowMatrix is missing the %s Variant", name)
+		}
+	}
+
+	// The base request's own CHAOS-5448 declaration must survive
+	// untouched -- Variants are ADDITIVE, never a repoint of the base
+	// request that would drop WORK_TYPE's FINAL-semantics regression
+	// coverage.
+	if len(spec.Parity.BaselineDefects) != 1 || spec.Parity.BaselineDefects[0].Ticket != "CHAOS-5448" {
+		t.Errorf("flowMatrix's base request declares %#v, want exactly one citing CHAOS-5448 (WORK_TYPE unaffected by CHAOS-5426)", spec.Parity.BaselineDefects)
+	}
+	baseVars := spec.Variables("org-under-test", DefaultWindow())
+	baseBatch, _ := baseVars["batch"].(map[string]any)
+	baseFM, _ := baseBatch["flowMatrix"].(map[string]any)
+	if dim, _ := baseFM["dimension"].(string); dim != "WORK_TYPE" {
+		t.Errorf("flowMatrix's base request dimension = %v, want WORK_TYPE unchanged", baseFM["dimension"])
 	}
 }
 

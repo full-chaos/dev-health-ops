@@ -861,9 +861,13 @@ func TestARoutedOperationNeedingAnInstanceIDIsRefusedByName(t *testing.T) {
 	}
 }
 
-// flowMatrixRunner drives the ONE operation whose committed spec declares
-// a baseline defect, which is what makes a fully-cited mismatch reachable
-// at all.
+// flowMatrixRunner drives flowMatrix, whose committed spec declares a
+// baseline defect on its base request (CHAOS-5448) AND on both of its
+// Variants (CHAOS-5426, TEAM/REPO) -- which is what makes a fully-cited
+// mismatch reachable at all. A Run() through this runner therefore
+// produces 3 outcomes, not 1: the base request plus the TEAM and REPO
+// variants, all measured against the same fakeEdge responses since the
+// fake does not vary its answer by request variables.
 func flowMatrixRunner(t *testing.T, edge *fakeEdge) *Runner {
 	t.Helper()
 	runner := newRunner(t, edge, "canary")
@@ -891,7 +895,13 @@ func flowMatrixRunner(t *testing.T, edge *fakeEdge) *Runner {
 // `$.http.status` even in principle. A citation mechanism that cannot
 // express a difference must never be read as covering it.
 func TestAnHTTPDifferenceCountsOutsideTheCitedBaselineDefect(t *testing.T) {
-	// The body difference IS cited: nodes.value is CHAOS-5448's path.
+	// The body difference IS cited: nodes.value is CHAOS-5448's path on
+	// flowMatrix's base request, and CHAOS-5426's path on both of its
+	// Variants (TEAM, REPO) -- so all THREE requests this runner proves
+	// share the exact vulnerability this test pins, and the fakeEdge
+	// below answers all three identically (it does not vary by request
+	// variables). 3 outcomes/receipts, not 1, since CHAOS-5426
+	// (lane-chord-5426, 2026-09-12): flowMatrix's spec grew Variants.
 	baseline := `{"data":{"analytics":{"flowMatrix":{"nodes":[{"value":2}]}}}}`
 	candidate := `{"data":{"analytics":{"flowMatrix":{"nodes":[{"value":1}]}}}}`
 
@@ -907,34 +917,36 @@ func TestAnHTTPDifferenceCountsOutsideTheCitedBaselineDefect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if len(outcomes) != 1 {
-		t.Fatalf("expected one outcome, got %d", len(outcomes))
+	if len(outcomes) != 3 {
+		t.Fatalf("expected 3 outcomes (base + TEAM + REPO variants), got %d", len(outcomes))
 	}
-	outcome := outcomes[0]
+	for _, outcome := range outcomes {
+		if outcome.TerminalState != TerminalStateMismatch {
+			t.Fatalf("variant %q: terminal state = %q, want mismatch", outcome.Variant, outcome.TerminalState)
+		}
+		if len(outcome.BaselineDefects) == 0 {
+			t.Fatalf("variant %q: the body difference must be CITED for this test to mean anything: without a citation the receipt is refused for a different reason and the hole stays hidden", outcome.Variant)
+		}
+		if outcome.DifferencesOutsideBaselineDefect < 1 {
+			t.Fatalf("variant %q: differences_outside_baseline_defect = %d with an UNCITED HTTP status difference present (%+v): this receipt claims every difference is a known Python defect and is enablement-eligible",
+				outcome.Variant, outcome.DifferencesOutsideBaselineDefect, outcome.Findings)
+		}
+	}
 
-	if outcome.TerminalState != TerminalStateMismatch {
-		t.Fatalf("terminal state = %q, want mismatch", outcome.TerminalState)
-	}
-	if len(outcome.BaselineDefects) == 0 {
-		t.Fatal("the body difference must be CITED for this test to mean anything: without a citation the receipt is refused for a different reason and the hole stays hidden")
-	}
-	if outcome.DifferencesOutsideBaselineDefect < 1 {
-		t.Fatalf("differences_outside_baseline_defect = %d with an UNCITED HTTP status difference present (%+v): this receipt claims every difference is a known Python defect and is enablement-eligible",
-			outcome.DifferencesOutsideBaselineDefect, outcome.Findings)
-	}
-
-	// And the receipt carries it, since that column is what the predicate
-	// actually reads.
+	// And every receipt carries it, since that column is what the
+	// predicate actually reads.
 	receipts, err := runner.ReceiptsFor(time.Unix(1757000000, 0).UTC())
 	if err != nil {
 		t.Fatalf("ReceiptsFor: %v", err)
 	}
-	if len(receipts) != 1 {
-		t.Fatalf("expected one receipt, got %d", len(receipts))
+	if len(receipts) != 3 {
+		t.Fatalf("expected 3 receipts (base + TEAM + REPO variants), got %d", len(receipts))
 	}
-	if receipts[0].DifferencesOutsideBaselineDefect < 1 {
-		t.Fatalf("the RECEIPT says outside=%d: the enablement predicate reads this column, so a zero here admits the run",
-			receipts[0].DifferencesOutsideBaselineDefect)
+	for _, receipt := range receipts {
+		if receipt.DifferencesOutsideBaselineDefect < 1 {
+			t.Fatalf("the RECEIPT (request_identity %s) says outside=%d: the enablement predicate reads this column, so a zero here admits the run",
+				receipt.RequestIdentity, receipt.DifferencesOutsideBaselineDefect)
+		}
 	}
 }
 
@@ -957,17 +969,23 @@ func TestACitedMismatchWithNoHTTPDifferenceStaysFullyCited(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	outcome := outcomes[0]
-
-	if outcome.TerminalState != TerminalStateMismatch {
-		t.Fatalf("terminal state = %q, want mismatch", outcome.TerminalState)
+	// 3 outcomes (base + TEAM + REPO variants, CHAOS-5426, 2026-09-12):
+	// the fakeEdge answers all three identically, so the control holds for
+	// every one of them.
+	if len(outcomes) != 3 {
+		t.Fatalf("expected 3 outcomes (base + TEAM + REPO variants), got %d", len(outcomes))
 	}
-	if len(outcome.BaselineDefects) == 0 {
-		t.Fatal("the body difference must be cited")
-	}
-	if outcome.DifferencesOutsideBaselineDefect != 0 {
-		t.Fatalf("differences_outside_baseline_defect = %d on a fully-cited mismatch (%+v): the fully-cited rule is now unreachable, which refuses legitimate evidence rather than admitting bad evidence -- the opposite defect",
-			outcome.DifferencesOutsideBaselineDefect, outcome.Findings)
+	for _, outcome := range outcomes {
+		if outcome.TerminalState != TerminalStateMismatch {
+			t.Fatalf("variant %q: terminal state = %q, want mismatch", outcome.Variant, outcome.TerminalState)
+		}
+		if len(outcome.BaselineDefects) == 0 {
+			t.Fatalf("variant %q: the body difference must be cited", outcome.Variant)
+		}
+		if outcome.DifferencesOutsideBaselineDefect != 0 {
+			t.Fatalf("variant %q: differences_outside_baseline_defect = %d on a fully-cited mismatch (%+v): the fully-cited rule is now unreachable, which refuses legitimate evidence rather than admitting bad evidence -- the opposite defect",
+				outcome.Variant, outcome.DifferencesOutsideBaselineDefect, outcome.Findings)
+		}
 	}
 }
 
@@ -999,29 +1017,40 @@ func TestAnUnboundFullyCitedMismatchCannotAuthorizeAnything(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	outcome := outcomes[0]
+	// 3 outcomes (base + TEAM + REPO variants, CHAOS-5426, 2026-09-12):
+	// the fakeEdge answers every one of flowMatrix's requests identically,
+	// so all three hit the same unbound-edge hole this test pins.
+	if len(outcomes) != 3 {
+		t.Fatalf("expected 3 outcomes (base + TEAM + REPO variants), got %d", len(outcomes))
+	}
+	for _, outcome := range outcomes {
+		if outcome.EdgeBuildBinding != EdgeBuildAbsent {
+			t.Fatalf("variant %q: this test needs an UNBOUND measurement to mean anything, got binding %q", outcome.Variant, outcome.EdgeBuildBinding)
+		}
+		if outcome.TerminalState != TerminalStateMismatch {
+			t.Fatalf("variant %q: the divergence must survive as a mismatch, got %q -- rewriting it would destroy the finding", outcome.Variant, outcome.TerminalState)
+		}
+		if len(outcome.BaselineDefects) == 0 {
+			t.Fatalf("variant %q: the body difference must be CITED for this test to reach the hole: an uncited one makes outside non-zero on its own and the assertion below passes vacuously", outcome.Variant)
+		}
+		if outcome.DifferencesOutsideBaselineDefect < 1 {
+			t.Fatalf("variant %q: outside=%d on an UNBOUND, fully-cited mismatch: the enablement predicate reads that as proof, for primary as well as canary, on a measurement tied to no replica (reproduced with `primary enable rc=0`)",
+				outcome.Variant, outcome.DifferencesOutsideBaselineDefect)
+		}
+	}
 
-	if outcome.EdgeBuildBinding != EdgeBuildAbsent {
-		t.Fatalf("this test needs an UNBOUND measurement to mean anything, got binding %q", outcome.EdgeBuildBinding)
-	}
-	if outcome.TerminalState != TerminalStateMismatch {
-		t.Fatalf("the divergence must survive as a mismatch, got %q -- rewriting it would destroy the finding", outcome.TerminalState)
-	}
-	if len(outcome.BaselineDefects) == 0 {
-		t.Fatal("the body difference must be CITED for this test to reach the hole: an uncited one makes outside non-zero on its own and the assertion below passes vacuously")
-	}
-	if outcome.DifferencesOutsideBaselineDefect < 1 {
-		t.Fatalf("outside=%d on an UNBOUND, fully-cited mismatch: the enablement predicate reads that as proof, for primary as well as canary, on a measurement tied to no replica (reproduced with `primary enable rc=0`)",
-			outcome.DifferencesOutsideBaselineDefect)
-	}
-
-	// The receipt carries it, since that column is what the predicate reads.
+	// Every receipt carries it, since that column is what the predicate reads.
 	receipts, err := runner.ReceiptsFor(time.Unix(1757000000, 0).UTC())
 	if err != nil {
 		t.Fatalf("ReceiptsFor: %v", err)
 	}
-	if len(receipts) != 1 || receipts[0].DifferencesOutsideBaselineDefect < 1 {
-		t.Fatalf("the RECEIPT says outside=%v -- a zero here admits the run", receipts)
+	if len(receipts) != 3 {
+		t.Fatalf("expected 3 receipts (base + TEAM + REPO variants), got %d: %v", len(receipts), receipts)
+	}
+	for _, receipt := range receipts {
+		if receipt.DifferencesOutsideBaselineDefect < 1 {
+			t.Fatalf("the RECEIPT (request_identity %s) says outside=%d -- a zero here admits the run", receipt.RequestIdentity, receipt.DifferencesOutsideBaselineDefect)
+		}
 	}
 }
 

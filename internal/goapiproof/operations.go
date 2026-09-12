@@ -101,6 +101,53 @@ type OperationSpec struct {
 
 	// Parity is this operation's declared comparator configuration.
 	Parity Options
+
+	// Variants are ADDITIONAL requests proven under this SAME operation
+	// name, document and routing row -- for an operation whose committed
+	// input selects between materially different server code paths, where
+	// the single (Variables, Parity) pair above cannot cover more than one
+	// of them.
+	//
+	// CHAOS-5426 (lane-chord-5426, 2026-09-12) is why this exists:
+	// flowMatrix's own Variables sends dimension=WORK_TYPE, the one
+	// dimension #2374 left untouched, so no proof row built from Variables
+	// alone could ever measure the code path #2374 changed (TEAM/REPO +
+	// useInvestment=true). A citation declared against the base request
+	// only ever covers what the base request exercises -- adding a second
+	// dimension to Variables would have meant picking ONE of WORK_TYPE or
+	// TEAM/REPO and losing proof coverage (and the pinned CHAOS-5448
+	// regression protection) for the other. Variants keeps both: each
+	// entry gets its own Outcome, its own request_identity (RequestIdentity
+	// digests the actual variables sent, not the operation name -- see
+	// identity.go), and its own receipt, so a citation on one variant can
+	// never leak into another's terminal state.
+	//
+	// The base (Variables, Parity) pair is never itself a Variant -- it has
+	// no Name and is always proven first, unconditionally, exactly as
+	// before this field existed. Every other operation today declares zero
+	// Variants and its behavior is byte-for-byte unchanged.
+	Variants []Variant
+}
+
+// Variant is one additional (Variables, Parity) pair an OperationSpec
+// proves alongside its base request. See OperationSpec.Variants.
+type Variant struct {
+	// Name distinguishes this variant on the Outcome and in operator
+	// output (e.g. "TEAM", "REPO"). Never empty -- SpecFor's
+	// TestEveryVariantIsNamed pins this, because an empty Name is
+	// indistinguishable from the base request in a report line.
+	Name string
+
+	// Variables builds this variant's GraphQL variables. Same contract as
+	// OperationSpec.Variables.
+	Variables func(orgID string, w Window) map[string]any
+
+	// Parity is this variant's OWN declared comparator configuration --
+	// deliberately separate from the base request's Parity, since a
+	// variant proves a different code path and a citation that covers the
+	// base request's divergence has no reason to cover the variant's (or
+	// vice versa).
+	Parity Options
 }
 
 // volatileReason documents one excluded field. Kept as a named constant
@@ -231,6 +278,19 @@ var operationSpecs = map[string]OperationSpec{
 			Reason: "Python omits FINAL on work_item_cycle_times (templates.py:304/:397) where Go has it (flowmatrix.go:732/:802), so Python counts superseded ReplacingMergeTree row versions and its answer converges onto Go's only after a background merge. Go is correct. Evidence: /var/lib/oci-cache/lane-scratch/lane-goapi-parity/5448/repro.txt",
 			Paths:  []string{"data.analytics.flowMatrix.nodes.value", "data.analytics.flowMatrix.edges.value"},
 		}}},
+		// CHAOS-5426 (lane-chord-5426, 2026-09-12, R174): the base request
+		// above sends dimension=WORK_TYPE, the one dimension CHAOS-5426's
+		// fix (#2374, flowmatrix.go:199-227) left untouched -- so it can
+		// never prove that fix. TEAM and REPO with useInvestment=true are
+		// the code path #2374 changed (matching web's useChordFlow.ts,
+		// which always sends useInvestment:true) and previously had ZERO
+		// executed proof coverage. Added as Variants, not a repointed base
+		// request, so the CHAOS-5448 WORK_TYPE regression coverage above is
+		// not lost.
+		Variants: []Variant{
+			flowMatrixInvestmentVariant("TEAM"),
+			flowMatrixInvestmentVariant("REPO"),
+		},
 	},
 	// hotspots.riskScore is deliberately NOT Tier B, and the reasoning is
 	// worth keeping: it is a STORED Float64 column in file_hotspot_daily
@@ -444,6 +504,33 @@ var operationSpecs = map[string]OperationSpec{
 	// of being silently excused.
 	"workGraphEdges": {ResponseRoot: "workGraphEdges", Variables: workGraphVariables},
 	"workGraphFlow":  {Variables: workGraphVariables, ResponseRoot: "workGraphFlow"},
+}
+
+// flowMatrixInvestmentVariant builds the TEAM or REPO flowMatrix Variant,
+// useInvestment=true, matching the CHAOS-5426 fix (#2374) and the shape
+// web's useChordFlow.ts always sends. Both dimensions declare the SAME
+// CHAOS-5426 BaselineDefect: chris ruled 2026-09-09 (ticket CHAOS-5426
+// comment, ticket accepted the compose canary flip) that Go's output on
+// this path is correct, and this is not a fresh data-semantics call --
+// it restates an already-accepted ruling as a citation.
+func flowMatrixInvestmentVariant(dimension string) Variant {
+	return Variant{
+		Name: dimension,
+		Variables: func(orgID string, w Window) map[string]any {
+			return map[string]any{"orgId": orgID, "batch": map[string]any{
+				"flowMatrix": map[string]any{
+					"dimension": dimension, "measure": "COUNT", "useInvestment": true,
+					"dateRange": map[string]any{"startDate": w.SinceDate, "endDate": w.UntilDate},
+					"maxNodes":  50, "maxEdges": 200,
+				},
+			}}
+		},
+		Parity: Options{BaselineDefects: []BaselineDefect{{
+			Ticket: "CHAOS-5426",
+			Reason: "Python's compile_flow_matrix TEAM/REPO branch reads work_item_cycle_times unconditionally and ignores useInvestment (compiler.py:450-533, templates.py:187-446); Go honors useInvestment and reads latest_work_unit_investments/latest_work_unit_repo_effort per #2374 (flowmatrix.go:199-227). Python is frozen under R60 (GO-ONLY-GraphQL ruling) and not to be patched. Chris accepted Go's output as correct 2026-09-09 (ticket comment, compose canary flip to ffd9e5d5d..., re-verified byte-identical through the product edge). Evidence: .remember/lanes/lane-chord-fix/handoff-2026-09-09.md.",
+			Paths:  []string{"data.analytics.flowMatrix.nodes.value", "data.analytics.flowMatrix.edges.value"},
+		}}},
+	}
 }
 
 // investmentVariables builds investmentBreakdown's request only.

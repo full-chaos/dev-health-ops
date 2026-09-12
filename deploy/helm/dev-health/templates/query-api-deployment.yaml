@@ -46,6 +46,19 @@ spec:
             - name: http
               containerPort: {{ .Values.queryApi.port }}
               protocol: TCP
+          {{- /*
+          Declared-only by design: unlike api/metrics-api/billing-edge, this
+          container gets NO envFrom unless the operator asks for one -- it
+          must not silently inherit every key in the platform Secret/
+          ConfigMap. Kubernetes gives explicit `env` entries precedence over
+          `envFrom` on a name collision, so this can safely sit ahead of
+          `env` below without risk of a platform key shadowing one of
+          query-api's own.
+          */}}
+          {{- with .Values.queryApi.envFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           env:
             - name: QUERY_API_ADDR
               value: {{ printf ":%v" .Values.queryApi.port | quote }}

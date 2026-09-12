@@ -476,11 +476,16 @@ goWorkers:
       # due-scheduled + retryable across this group's queues, see
       # go-worker-keda.yaml). investment.materialize carries the heavy
       # backlog (~2,200 jobs, concurrency 3 post-R176); queueDepthPerReplica
-      # is deliberately loose (10) so one extra replica clears a realistic
-      # burst without chasing every retry. cooldownPeriod 600s (>=5min) and
+      # is deliberately loose (10) so the ceiling reacts to a real backlog
+      # without chasing every retry. maxReplicas 2 matches the cross-renderer
+      # deployment contract (deploy/go-workers/deployment.json's
+      # heavy.max_replicas, asserted equal across compose/swarm/k8s/helm by
+      # test_group_replica_and_drain_contract_matches_every_renderer) --
+      # KEDA owns the replica count within that same declared ceiling, it
+      # does not get its own. cooldownPeriod 600s (>=5min) and
       # terminationGracePeriodSeconds above (7260s) both protect the
       # long-running metrics job from a scale-down SIGKILL.
-      autoscaling: {enabled: true, minReplicas: 1, maxReplicas: 3, queueDepthPerReplica: 10, cooldownPeriod: 600, pollingInterval: 30}
+      autoscaling: {enabled: true, minReplicas: 1, maxReplicas: 2, queueDepthPerReplica: 10, cooldownPeriod: 600, pollingInterval: 30}
       # CHAOS-4351: this is the ONLY worker group whose queue set includes
       # `metrics` (confirmed via `rg 'queues='` against every group in this
       # file), i.e. the only one that calls the metrics compatibility

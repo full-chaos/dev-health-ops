@@ -8,6 +8,7 @@ cannot prove the rendered Secret references stay role-scoped.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -67,6 +68,14 @@ _ROLE_SECRET_KEYS = {
     "POSTGRES_URI",
     "WORKER_DATABASE_URI",
     "COORDINATOR_DATABASE_URI",
+    # CHAOS-5594: the chart's default goWorkers.pgbouncer.transaction.
+    # extraUsers now carries one entry (devhealth_keda_readonly, KEDA's
+    # postgresql-scaler role) -- CHAOS-5616's extraUsers mechanism emits its
+    # password under its own passwordKey plus the shared userlist.txt the
+    # transaction pooler's AUTH_FILE mounts, so both are now part of the
+    # role-scoped Secret's default shape, not an opt-in extra.
+    "RIVER_KEDA_READONLY_PASSWORD",
+    "userlist.txt",
 }
 
 
@@ -201,10 +210,34 @@ def test_go_pgbouncer_render_scopes_role_dsns_and_preserves_direct_migrations() 
             "readOnlyRootFilesystem": True,
             "capabilities": {"drop": ["ALL"]},
         }
-        assert container["volumeMounts"] == [
-            {"name": "generated-config", "mountPath": "/etc/pgbouncer"}
-        ]
-        assert pod_spec["volumes"] == [{"name": "generated-config", "emptyDir": {}}]
+        expected_mounts = [{"name": "generated-config", "mountPath": "/etc/pgbouncer"}]
+        expected_volumes = [{"name": "generated-config", "emptyDir": {}}]
+        if name == "transaction":
+            # CHAOS-5616 + CHAOS-5594: the chart's default
+            # goWorkers.pgbouncer.transaction.extraUsers now carries one
+            # entry (KEDA's devhealth_keda_readonly), so the TRANSACTION
+            # pooler alone projects the rendered userlist.txt as its
+            # AUTH_FILE -- queue-session/coordinator-session stay
+            # single-user and untouched, asserted below.
+            expected_mounts.append(
+                {
+                    "name": "userlist",
+                    "mountPath": "/etc/pgbouncer-userlist",
+                    "readOnly": True,
+                }
+            )
+            expected_volumes.append(
+                {
+                    "name": "userlist",
+                    "secret": {
+                        "secretName": runtime_secret["metadata"]["name"],
+                        "defaultMode": 0o440,
+                        "items": [{"key": "userlist.txt", "path": "userlist.txt"}],
+                    },
+                }
+            )
+        assert container["volumeMounts"] == expected_mounts
+        assert pod_spec["volumes"] == expected_volumes
 
     services = {
         doc["metadata"]["labels"]["app.kubernetes.io/component"]: doc
@@ -350,18 +383,31 @@ def test_helm_river_workers_select_manifest_queues_and_queue_metrics() -> None:
             argument.startswith("--profile=") for argument in container["args"]
         ), f"{group} is a queue worker and must not run a runtime profile"
 
+        # CHAOS-5594: KEDA's ScaledObject replaced the External-metrics
+        # HorizontalPodAutoscaler this used to assert on (that HPA required a
+        # Prometheus Adapter that was never built and never actually scaled
+        # anything). The intent this block still pins -- the autoscaler's
+        # signal is scoped to exactly THIS group's own queues, never a
+        # profile or another group's queues -- now lives in the postgresql
+        # trigger's SQL query rather than a label selector, so there is no
+        # analogous "profile not in selector" shape to assert: KEDA's trigger
+        # metadata carries no label selector at all.
         scaler = next(
             doc
             for doc in documents
-            if doc["kind"] == "HorizontalPodAutoscaler"
+            if doc["kind"] == "ScaledObject"
             and doc["spec"]["scaleTargetRef"]["name"] == deployment["metadata"]["name"]
         )
-        selectors = [
-            metric["external"]["metric"]["selector"]["matchLabels"]
-            for metric in scaler["spec"]["metrics"]
-        ]
-        assert all("profile" not in selector for selector in selectors)
-        assert {selector["queue"] for selector in selectors} == set(process["queues"])
+        triggers = scaler["spec"]["triggers"]
+        assert len(triggers) == 1
+        trigger = triggers[0]
+        assert trigger["type"] == "postgresql"
+        query_match = re.search(r"queue IN \(([^)]*)\)", trigger["metadata"]["query"])
+        assert query_match is not None, trigger["metadata"]["query"]
+        queried_queues = {
+            entry.strip().strip("'") for entry in query_match.group(1).split(",")
+        }
+        assert queried_queues == set(process["queues"])
 
     for deployment in workers.values():
         group = deployment["metadata"]["labels"]["dev-health.io/worker-group"]

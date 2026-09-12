@@ -1307,19 +1307,18 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                 days=ns.days, pr_numbers=pr_numbers, release_refs=release_refs
             )
             incidents = generator.generate_incidents(days=ns.days)
-            # Pipeline-run insert — ONE path to keep the ci_daily_rollup_mv from
-            # seeing the same (repo_id, run_id) twice.
+            # Pipeline-run insert — ONE path per store, so a run is only ever
+            # inserted once.
             #
             # ClickHouseStore: insert_testops_pipeline_runs carries ALL fields
-            #   (retry_count, team_id, …) in a single INSERT statement so the MV
-            #   fires exactly once per run.  insert_ci_pipeline_runs is intentionally
-            #   skipped here — calling both would produce two MV events and inflate
-            #   synthetic daily totals even though ReplacingMergeTree eventually
-            #   deduplicates the source table.
+            #   (retry_count, team_id, …) in a single INSERT statement.
+            #   insert_ci_pipeline_runs is intentionally skipped here — calling
+            #   both would double-insert the same (repo_id, run_id) into the
+            #   source table before ReplacingMergeTree merges the duplicate away.
             #
             # SQLAlchemyStore (Postgres/SQLite): insert_ci_pipeline_runs is the
-            #   standard ORM path.  There is no MV concern, and the Postgres schema
-            #   does not carry retry_count/team_id in ci_pipeline_runs.
+            #   standard ORM path.  The Postgres schema does not carry
+            #   retry_count/team_id in ci_pipeline_runs.
             _ch_pipeline_insert = (
                 getattr(store, "insert_testops_pipeline_runs", None)
                 if not isinstance(store, SQLAlchemyStore)

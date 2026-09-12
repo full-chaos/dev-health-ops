@@ -562,8 +562,8 @@ def test_validate_security_alerts_fixture_rejects_single_severity():
 
 
 class TestRunnerWiresExtendedPipelineRows:
-    """CHAOS-2173: pipeline-run insert must be a single call per (repo_id, run_id)
-    so ci_daily_rollup_mv counts each run exactly once."""
+    """CHAOS-2173: pipeline-run insert must be a single call per (repo_id, run_id),
+    so the source table never receives the same run twice."""
 
     @pytest.mark.asyncio
     async def test_sqlite_path_no_double_insert(self, tmp_path, monkeypatch):

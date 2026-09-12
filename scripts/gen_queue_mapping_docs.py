@@ -16,21 +16,14 @@ can't happen here:
   ``rollback_route``. This is what actually decides which plane is live for
   a given kind -- a queue is not uniformly "live"; a specific kind on it can
   still be `canary` (see ``sync.provider_unit`` below).
-* ``deploy/docker-compose/compose.production.yml`` -- the dormant Celery
-  ``-Q`` lists, parsed from the actual service definitions rather than
-  retyped. Root ``compose.yml`` no longer defines these services at all
-  (CHAOS-5589 deleted the celery-legacy fleet outright); it was the second
-  half of a dev/production cross-check until then and is not consulted here
-  any more.
-
-The historical Celery-queue <-> Go-successor *correspondence* is not
-mechanically derivable (the two vocabularies share only coincidental names --
-see go-worker-runtime.md's Queue topology section) and is therefore curated
-in ``CELERY_CORRESPONDENCE`` below, with citations. To keep that curation
-honest, this script asserts every Go process and every Celery ``-Q`` queue
-name it discovers is accounted for, and fails loudly (rather than silently
-omitting a row) when a producer adds or removes one without a matching
-update here.
+CHAOS-5589 deleted the Celery ``worker``/``beat`` fleet outright from every
+compose surface (``compose.yml``, ``compose.production.yml``,
+``docker-swarm/stack.yml`` -- R146: Celery transport is not a rollback
+target), so there is no longer a live producer to parse Celery ``-Q`` lists
+from or cross-check against. The historical Celery-queue <-> Go-successor
+*correspondence* below (``CELERY_CORRESPONDENCE``) is therefore now a purely
+curated, hand-maintained historical record, cited per row -- not derived
+from, or cross-checked against, any compose file.
 
 CHAOS-4044 review note: an earlier version of this generator only looked at
 ``internal/jobs/metrics/remaining/families.json`` for per-kind route status,
@@ -43,7 +36,6 @@ the actual per-kind authority and is now used for every kind.
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 from typing import Any
 
@@ -51,7 +43,6 @@ ROOT = Path(__file__).resolve().parents[1]
 DEPLOYMENT_PATH = ROOT / "deploy" / "go-workers" / "deployment.json"
 REGISTRY_PATH = ROOT / "contracts" / "jobs" / "v1" / "registry.json"
 MIGRATION_STATE_PATH = ROOT / "contracts" / "jobs" / "v1" / "migration-state.json"
-COMPOSE_PRODUCTION_PATH = ROOT / "deploy" / "docker-compose" / "compose.production.yml"
 DOC_PATH = ROOT / "docs" / "contribute" / "architecture" / "go-worker-runtime.md"
 
 BEGIN = "<!-- BEGIN GENERATED QUEUE MAP -->"
@@ -222,56 +213,10 @@ def load_migration_state() -> dict[str, dict]:
     return {job["kind"]: job for job in data["jobs"]}
 
 
-CELERY_Q_RE = re.compile(r"-Q\s+([A-Za-z0-9_.,-]+)")
-SERVICE_NAME_RE = re.compile(r"^  ([a-z][a-z0-9-]*):\s*$")
-LIST_ITEM_RE = re.compile(r"^\s*-\s*(.+?)\s*$")
-
-
-def load_compose_celery_queues(compose_path: Path) -> dict[str, list[str]]:
-    """Parse ``-Q`` lists per Celery service straight out of a compose file.
-
-    Line-based on purpose: this compose file uses YAML anchors/merge keys
-    (``<<: *worker-base``) that a naive ``yaml.safe_load`` round-trip would
-    have to re-resolve. Only ``compose.production.yml``'s block-list
-    ``command:`` shape (one YAML list item per argument, so ``-Q`` and its
-    value are two consecutive ``- ...`` lines) is parsed here now -- root
-    ``compose.yml``'s flow-form Celery commands are gone (CHAOS-5589).
-    """
-    current_service: str | None = None
-    queues_by_service: dict[str, list[str]] = {}
-    pending_dash_q = False
-    for raw_line in compose_path.read_text(encoding="utf-8").splitlines():
-        service_match = SERVICE_NAME_RE.match(raw_line)
-        if service_match:
-            current_service = service_match.group(1)
-            pending_dash_q = False
-            continue
-        if current_service is None:
-            continue
-
-        if pending_dash_q:
-            list_item = LIST_ITEM_RE.match(raw_line)
-            pending_dash_q = False
-            if list_item:
-                queues_by_service[current_service] = list_item.group(1).split(",")
-            continue
-
-        stripped = raw_line.strip()
-        if stripped == "- -Q":
-            pending_dash_q = True
-            continue
-
-        queue_match = CELERY_Q_RE.search(raw_line)
-        if queue_match and "celery_app" in raw_line and "worker" in raw_line:
-            queues_by_service[current_service] = queue_match.group(1).split(",")
-    return queues_by_service
-
-
 def render_block() -> str:
     deployment = load_deployment()
     registry = load_registry()
     migration_state = load_migration_state()
-    compose_production_queues = load_compose_celery_queues(COMPOSE_PRODUCTION_PATH)
 
     # --- Consistency guards: fail loudly instead of silently omitting a row ---
     deployment_processes = set(deployment)
@@ -292,24 +237,6 @@ def render_block() -> str:
             f"{sorted(registry_kinds)} do not match "
             f"contracts/jobs/v1/migration-state.json kinds {sorted(migration_state_kinds)} "
             "-- every registered kind must have a migration-state row."
-        )
-
-    all_curated_celery_queues: set[str] = set()
-    for queue_map in CELERY_CORRESPONDENCE.values():
-        for curated_entry in queue_map.values():
-            all_curated_celery_queues.update(curated_entry["celery_queues"])
-    all_curated_celery_queues.update(CELERY_QUEUES_WITH_NO_GO_QUEUE)
-
-    all_compose_queues: set[str] = set()
-    for queues in compose_production_queues.values():
-        all_compose_queues.update(queues)
-    unaccounted = all_compose_queues - all_curated_celery_queues
-    if unaccounted:
-        raise SystemExit(
-            "gen_queue_mapping_docs: compose.production.yml declares Celery queue(s) "
-            f"{sorted(unaccounted)} not present in CELERY_CORRESPONDENCE or "
-            "CELERY_QUEUES_WITH_NO_GO_QUEUE in scripts/gen_queue_mapping_docs.py -- "
-            "document their Go successor (or lack of one)."
         )
 
     lines = [

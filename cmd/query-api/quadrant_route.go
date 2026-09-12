@@ -87,7 +87,7 @@ func buildQuadrantRoute() (handler http.HandlerFunc, cleanup func(), ok bool, er
 		return nil, nil, false, fmt.Errorf("quadrant: build envelope verifier: %w", err)
 	}
 
-	readClient, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: clickHouseURI})
+	readClient, err := dhclickhouse.NewClickHouseQueryClientWithOptions(newUnrestrictedReadClickHouseOptions(clickHouseURI))
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("quadrant: build read client: %w", err)
 	}

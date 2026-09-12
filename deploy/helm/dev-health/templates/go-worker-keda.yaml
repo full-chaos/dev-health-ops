@@ -130,7 +130,10 @@ spec:
         # devhealth_keda_readonly extraUsers role (go-pgbouncer.yaml,
         # CHAOS-5616's mechanism) -- host/port/userName/dbName are not
         # secret, only the password is (TriggerAuthentication above).
-        host: {{ include "dev-health.fullname" $ }}-go-pgbouncer-transaction
+        # Namespace-qualified FQDN (not the bare Service name): keda-operator
+        # evaluates this trigger from its own standalone `keda` namespace, so
+        # a bare name does not resolve there (prod smoke: "no such host").
+        host: {{ include "dev-health.fullname" $ }}-go-pgbouncer-transaction.{{ include "dev-health.namespace" $ }}.svc.cluster.local
         port: {{ $.Values.goWorkers.pgbouncer.transaction.port | quote }}
         userName: {{ $kedaRole | quote }}
         dbName: {{ $postgresDatabase | quote }}

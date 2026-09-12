@@ -811,6 +811,112 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  # CHAOS-5608: query-api had no publish job -- docker/query-api.Dockerfile
+  # (a single runtime target, its own file rather than a go-build matrix
+  # entry: go-build's `file:` is hardcoded to docker/go-worker.Dockerfile,
+  # and query-api's published name is `dev-health-query-api`, not
+  # `dev-health-go-query-api`) was build-verified only, by go.yml's
+  # `query-api-container-build` job (native arch, no push). This job mirrors
+  # go-build above exactly -- same runner-selection/QEMU/buildx/versioning/
+  # login/cache-and-push-by-digest shape, same PR-builds-both-platforms-but-
+  # never-pushes gate -- for the one target this Dockerfile has.
+  query-api-build:
+    name: Build query-api Image
+    needs: [changes]
+    # Same push-on-main-regardless-of-filter rule as go-build above
+    # (CHAOS-4921 M2): the artefact for this commit must exist whatever the
+    # paths filter says.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'release' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      needs.changes.outputs.code == 'true'
+    runs-on: ${{ matrix.runner }}
+    outputs:
+      sha: ${{ steps.versioning.outputs.commit }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [linux/amd64, linux/arm64]
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            # Same ARC-pool-or-x64+QEMU-fallback routing as go-build's arm64
+            # leg above -- ubuntu-26.04-arm is not a real hosted label
+            # (chris 2026-09-04 16:59).
+            runner: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.ref || github.event.pull_request.head.sha || github.sha }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a # v4.3.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Determine build metadata
+        id: versioning
+        run: |
+          SHA=$(git rev-parse HEAD)
+          VERSION="$(echo "${SHA}" | cut -c1-7)"
+          if [[ "${GITHUB_EVENT_NAME}" == "release" ]]; then
+            VERSION="${{ github.event.release.tag_name }}"
+          fi
+          EPOCH=$(git log -1 --pretty=%ct)
+          {
+            echo "version=${VERSION}"
+            echo "commit=${SHA}"
+            echo "build_time=$(date -u -d "@${EPOCH}" +%Y-%m-%dT%H:%M:%SZ)"
+            echo "source_date_epoch=${EPOCH}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: docker/query-api.Dockerfile
+          target: runtime
+          platforms: ${{ matrix.platform }}
+          build-args: |
+            VERSION=${{ steps.versioning.outputs.version }}
+            COMMIT=${{ steps.versioning.outputs.commit }}
+            BUILD_TIME=${{ steps.versioning.outputs.build_time }}
+            SOURCE_DATE_EPOCH=${{ steps.versioning.outputs.source_date_epoch }}
+          tags: ghcr.io/${{ github.repository_owner }}/dev-health-query-api
+          outputs: type=image,push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true') }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Export digest
+        if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: digests-query-api-${{ strategy.job-index }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
   # Runner contract v1.6 (signed 2026-09-03, chris via CF team-lead,
   # /Users/chris/projects/full-chaos/dev-health/.remember/lanes/
   # lane-4904-acr-runners/contract-v1.6-signed.md). Re-adds closed #2180's
@@ -1077,6 +1183,59 @@ jobs:
         run: |
           docker buildx imagetools inspect ghcr.io/${{ github.repository_owner }}/dev-health-go-${{ matrix.target }}:${{ steps.meta.outputs.version }}
 
+  # CHAOS-5608: merges query-api-build's per-platform digests into one
+  # manifest list, same shape as go-merge above, scoped to the single
+  # dev-health-query-api family (no target matrix needed -- one Dockerfile,
+  # one image).
+  query-api-merge:
+    name: Merge query-api Digests
+    runs-on: ubuntu-latest
+    # Single upstream job (unlike go-merge's two), same shape as `merge`
+    # above: no explicit needs.*.result check -- GitHub's default
+    # needs-success behaviour already skips this job if query-api-build
+    # fails, with no compound condition required for a lone dependency.
+    needs: query-api-build
+    if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')
+    outputs:
+      sha: ${{ needs.query-api-build.outputs.sha }}
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          path: /tmp/digests
+          pattern: digests-query-api-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/dev-health-query-api
+          tags: |
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=sha,format=short
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create manifest list and push
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf 'ghcr.io/${{ github.repository_owner }}/dev-health-query-api@sha256:%s ' *)
+
+      - name: Inspect image
+        run: |
+          docker buildx imagetools inspect ghcr.io/${{ github.repository_owner }}/dev-health-query-api:${{ steps.meta.outputs.version }}
+
   # ---------------------------------------------------------------------------
   # CHAOS-4947: one moving-tag decision, made ONCE, for every family.
   #
@@ -1105,7 +1264,7 @@ jobs:
   fan-in-latest:
     name: Apply moving tags (fan-in)
     runs-on: ubuntu-latest
-    needs: [merge, go-merge]
+    needs: [merge, go-merge, query-api-merge]
     if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')
     # team-lead (CHAOS-4947 review): the re-read-immediately-before-tagging
     # inside the step below NARROWS the cross-run race, it doesn't close
@@ -1361,7 +1520,7 @@ jobs:
           # The full family list, both naming schemes -- keep this whole,
           # like ci/check_go_containers.sh's ALL_TARGETS: a shorter,
           # second copy is how the next target goes untagged.
-          families="dev-hops-runner dev-hops-api dev-health-go-worker dev-health-go-scheduler dev-health-go-reconciler dev-health-go-stream-runner dev-health-go-operator dev-health-go-contractcheck dev-health-go-migrate"
+          families="dev-hops-runner dev-hops-api dev-health-go-worker dev-health-go-scheduler dev-health-go-reconciler dev-health-go-stream-runner dev-health-go-operator dev-health-go-contractcheck dev-health-go-migrate dev-health-query-api"
           short_sha="$(echo "${BUILT_SHA}" | cut -c1-7)"
           # codex round 3, P2: every family shares this ONE short_sha, so an
           # UNKNOWN source-tag registry error (rc==2) on it is not a

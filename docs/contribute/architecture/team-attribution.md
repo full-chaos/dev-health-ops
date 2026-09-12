@@ -326,6 +326,53 @@ ownership, or membership fact — a PERSON signal, "at best a low-precedence fal
 CHAOS-4244); `manual_fallback` (7) can only beat `unassigned`; a whole org at `unassigned` usually
 means the ClickHouse `teams` dimension is empty.
 
+> **CHAOS-5649 (R179, chris 2026-09-12) — two more `author_membership`/membership rules, on top of
+> the CHAOS-4320 ownership gate above.** Evidence record:
+> `.remember/lanes/lane-team-attribution/handoff-2026-09-02.md` plus memory
+> `project_ops_team_null_carrying.md`; prod measurement 2026-09-12 (gh:ops-team, one member
+> `github:chrisgeo`): 232 primary `author_membership` rows and 834 non-primary ones, all belonging
+> to a team chris never attached to any repo or project.
+>
+> 1. **`author_membership` never stacks a SECOND (different) team onto an item that already has a
+>    higher-ranked primary attribution.** Before this rule, the `order` loop in `Resolve()`
+>    (`internal/teamattribution/cascade.go`) recorded every source's non-primary candidates
+>    unconditionally, `author_membership` included — so a PR whose `linked_issue` donor (or any
+>    higher rank) already won primary for team A still got a **second, non-primary row for team B**
+>    whenever the reporter resolved to team B. That is a straight double count of team B's row
+>    count in `work_item_team_attributions`, not a precedence bug (team A still won `is_primary`
+>    correctly) — the row simply should never have existed. A candidate naming the **same** team as
+>    the existing primary is unaffected (kept, for provenance — see
+>    `TestGitHubWorkItemDerivationReporterAndAssigneeSamePersonSameTeamStayDistinctProvenance`,
+>    CHAOS-4244): only a genuinely *second* team is suppressed. No other source in the `order` list
+>    gets this treatment — every other source keeps recording its non-primary candidates exactly as
+>    before (the "no team_id collapse here, deliberately" contract, same function).
+> 2. **A provider-synced team with NO ownership signal anywhere — no `team_repo_ownership`, no
+>    `team_project_ownership`/`project_keys`, and (transitively, since GitHub has no native Project
+>    entity) no issue ownership — is NULL-CARRYING and excluded from the cascade entirely.** This is
+>    a **team-level** gate, distinct from CHAOS-4320/R74's **repo-level** gate above: R74 says "this
+>    ONE repo has no ownership row, treat that as unknown, pass membership through"; rule 2 says
+>    "this TEAM has zero ownership signal anywhere in the org (and a `teams` catalog row proves it —
+>    the team is not merely absent from data we happened to load), never let it resolve via
+>    `assignee_membership`/`author_membership` regardless of what any one repo's ownership looks
+>    like." The two do not conflict: a team this run's context has **no `teams` catalog row for at
+>    all** stays on R74's unknown-pass-through (unproven, not gated); only a team with a **real**
+>    catalog row and **zero** ownership facts is gated. Implemented as `teamOwnsSubjectRepo`'s first
+>    check (`teamIsNullCarrying`, same file) — a null-carrying team fails the SAME CHAOS-4320
+>    ownership gate assignee/author membership already goes through, so its member's unclaimed PRs
+>    fall to `unassigned` exactly like a non-member would, with evidence
+>    `no_candidate:team_null_carrying`.
+>
+> Both rules landed together in the CHAOS-5649 PR; neither changes the 9-value `_SOURCE_ORDER`
+> ladder or any rank — they change what gets *recorded* (rule 1) and what gets *resolved at all*
+> (rule 2), not precedence. Confirmed serving-path scope while implementing: both the flow-matrix
+> Team node (`primaryWorkItemTeamAttributionSource`, `cmd/query-api/internal/analytics/flowmatrix.go`)
+> and the Investment Evidence drilldown's per-unit team vote (`buildUnitTeamSubquery`,
+> `cmd/query-api/internal/analytics/investment.go`, §"Investment work-graph consumption" below) read
+> the SAME `is_primary = 1`, latest-`computed_at` source — there is no separate path joining
+> membership or non-primary rows on either page, so an `Ops Team` node/drilldown entry with units on
+> it was rule 2's 232 PRIMARY rows, never rule 1's 834 non-primary ones (which were already inert
+> for both serving paths).
+
 > **Restoration verification (2026-08-19, updated 2026-08-24 for CHAOS-4244): this ladder is
 > implemented, not just intended.** A prior reading of this repository, using the `Enum8` storage
 > codes instead of the precedence order, reported a *different* six-member ladder missing
@@ -534,6 +581,8 @@ means the ClickHouse `teams` dimension is empty.
 | `manual_fallback` resolves the wrong team | scope match | which `manual_attribution_fallbacks` row matched (repo/project/member/issue_key_prefix)? | check `_manual_fallback_candidates` scope match + rule `priority`; manual is rank 7 (done CS3; renumbered from 6 by CHAOS-4244) |
 | Provenance absent in the API | GraphQL | resolver SELECTs the provenance columns? SDL has the fields? | expose `source/confidence/evidence` |
 | Web shows a different team than the backend | client recompute | any client-side mapping derived from `evidence`? | render-only; delete client derivation |
+| A team's row count in `work_item_team_attributions` looks inflated vs. its `is_primary=1` count | 6 (author_membership) | are the extra rows non-primary `author_membership`, on items that already had a higher-ranked primary? | **fixed CHAOS-5649 (R179 rule 1)**: `author_membership` no longer records a SECOND (different) team once a higher-ranked source already set primary for that item |
+| A team with no `team_repo_ownership`/`team_project_ownership` row anywhere still gets `is_primary=1` attributions via a member's PRs | 4/6 (membership) | is the team's ONLY signal `assignee_membership`/`author_membership`, with zero rows in either ownership table for it? | **fixed CHAOS-5649 (R179 rule 2)**: a catalogued team with zero ownership signal anywhere is null-carrying and excluded from both membership sources; its members' unclaimed PRs fall to `unassigned` |
 
 > Full data-flow and data-object-hierarchy diagrams: see the CHAOS-2600 plan §1.6–1.7 / `team-flow.md`.
 

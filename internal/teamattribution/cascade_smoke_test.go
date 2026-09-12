@@ -238,26 +238,29 @@ func TestCascadeGateAllowsAuthorWhenOneOfMultipleOwningTeamsMatches(t *testing.T
 		WorkItemID: "ghpr:acme/api#10", Provider: "github", Type: "pr",
 		RepoID: &repoID, Reporter: &reporter, OrgID: "org-acme",
 	}
+	// CHAOS-4320's own gate (teamOwnsSubjectRepo) is verified directly
+	// below, unaffected by CHAOS-5649: team-b is one of two owners of
+	// repoID, so the gate must still say owns=true for it.
+	if reason, owns := derived.teamOwnsSubjectRepo(subject, "team-b"); !owns {
+		t.Fatalf("teamOwnsSubjectRepo(team-b) = (%q, false), want owns=true (team-b co-owns repoID)", reason)
+	}
 	teamID, _, candidates := derived.Resolve(subject)
 	if got := GithubWorkItemDerivationStringValue(teamID); got != "team-a" && got != "team-b" {
 		t.Fatalf("primary team id = %q, want team-a or team-b (repo_ownership itself outranks author_membership either way)", got)
 	}
-	// codex round 1, F3: the primary-team-id assertion above would ALSO
-	// pass if the gate incorrectly dropped author_membership entirely
-	// (repo_ownership wins primary regardless of what author_membership
-	// does) -- assert the candidate itself actually passed the gate, which
-	// is the property this test exists to check.
-	var author *GithubWorkItemDerivationCandidate
-	for index := range candidates {
-		if candidates[index].Source == "author_membership" {
-			author = &candidates[index]
+	// CHAOS-5649 (R179 rule 1, chris 2026-09-12) supersedes this test's
+	// ORIGINAL assertion (an author_membership row present for the
+	// gate-passing team-b): repo_ownership already set `primary` before
+	// the author_membership tier of `order` is even reached here, so rule
+	// 1 now drops author_membership from `all` entirely regardless of
+	// whether it would have passed CHAOS-4320's ownership gate -- the gate
+	// itself still passes it (asserted above via teamOwnsSubjectRepo
+	// directly), it is simply never RECORDED once a higher-ranked primary
+	// already exists.
+	for _, candidate := range candidates {
+		if candidate.Source == "author_membership" {
+			t.Fatalf("candidates = %+v, want NO author_membership row (CHAOS-5649 R179 rule 1: repo_ownership already set primary)", candidates)
 		}
-	}
-	if author == nil {
-		t.Fatalf("candidates = %+v, want an author_membership candidate present (team-b owns the repo, the gate must not have dropped it)", candidates)
-	}
-	if got := GithubWorkItemDerivationStringValue(author.TeamID); got != "team-b" {
-		t.Fatalf("author_membership candidate team id = %q, want team-b", got)
 	}
 }
 
@@ -481,5 +484,191 @@ func TestCascadeGateChecksOwnershipByRepositoryNameWhenNoRepoIDMatches(t *testin
 		if candidate.Source == "assignee_membership" {
 			t.Fatalf("candidates = %+v, want NO assignee_membership row (team-other does not own acme/api by NAME)", rejectedCandidates)
 		}
+	}
+}
+
+// TestAuthorMembershipNeverStacksASecondTeamOntoAHigherRankedPrimary is
+// CHAOS-5649's (R179 rule 1, chris 2026-09-12) red-first pin: on prod, 834
+// author_membership rows were non-primary duplicates recorded on work items
+// that ALREADY had a higher-ranked primary attribution -- a straight double
+// count in the table. team-third here independently co-owns repoID (so
+// CHAOS-4320's teamOwnsSubjectRepo gate itself would pass it, verified
+// directly below), isolating rule 1 (stacking suppression) from CHAOS-4320's
+// separate ownership gate.
+func TestAuthorMembershipNeverStacksASecondTeamOntoAHigherRankedPrimary(t *testing.T) {
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	repoID := "c7198fbc-1945-3717-05d8-eb78866b4e79"
+
+	derived := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{
+		Repos: []GithubWorkItemDerivationRepoFact{
+			{Provider: "github", TeamID: "team-primary", TeamName: "Primary Team", RepoID: &repoID, RepoFullName: "acme/api", IsPrimary: 1, Specificity: 70, UpdatedAt: now},
+			{Provider: "github", TeamID: "team-third", TeamName: "Third Team", RepoID: &repoID, RepoFullName: "acme/api", IsPrimary: 1, Specificity: 70, UpdatedAt: now},
+		},
+		Members: []GithubWorkItemDerivationMemberFact{{
+			Provider: "github", TeamID: "team-third", TeamName: "Third Team",
+			MemberID: "alice", IsPrimary: 1, Specificity: 50, UpdatedAt: now,
+		}},
+	})
+	reporter := "alice"
+	subject := GithubWorkItemDerivationSubject{
+		WorkItemID: "ghpr:acme/api#30", Provider: "github", Type: "pr",
+		RepoID: &repoID, Reporter: &reporter, OrgID: "org-acme",
+	}
+	if reason, owns := derived.teamOwnsSubjectRepo(subject, "team-third"); !owns {
+		t.Fatalf("teamOwnsSubjectRepo(team-third) = (%q, false), want owns=true -- this test isolates rule 1 from the CHAOS-4320 gate", reason)
+	}
+	teamID, _, candidates := derived.Resolve(subject)
+	if got := GithubWorkItemDerivationStringValue(teamID); got != "team-primary" {
+		t.Fatalf("primary team id = %q, want team-primary (repo_ownership, first-inserted owner)", got)
+	}
+	for _, candidate := range candidates {
+		if candidate.Source == "author_membership" {
+			t.Fatalf("candidates = %+v, want NO author_membership row (CHAOS-5649 R179 rule 1: repo_ownership already primary)", candidates)
+		}
+	}
+}
+
+// TestAssigneeMembershipStillStacksOntoAHigherRankedPrimary is the contrast
+// case for the test above: CHAOS-5649's ruling names author_membership
+// specifically (rank 6, the lowest-ranked person signal); every OTHER
+// source in `order`, assignee_membership included, keeps recording its
+// non-primary provenance rows exactly as before -- the "no team_id collapse
+// here, deliberately" contract above this loop still applies to them. Same
+// fixture shape as the author test, through Assignees instead of Reporter.
+func TestAssigneeMembershipStillStacksOntoAHigherRankedPrimary(t *testing.T) {
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	repoID := "c7198fbc-1945-3717-05d8-eb78866b4e79"
+
+	derived := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{
+		Repos: []GithubWorkItemDerivationRepoFact{
+			{Provider: "github", TeamID: "team-primary", TeamName: "Primary Team", RepoID: &repoID, RepoFullName: "acme/api", IsPrimary: 1, Specificity: 70, UpdatedAt: now},
+			{Provider: "github", TeamID: "team-third", TeamName: "Third Team", RepoID: &repoID, RepoFullName: "acme/api", IsPrimary: 1, Specificity: 70, UpdatedAt: now},
+		},
+		Members: []GithubWorkItemDerivationMemberFact{{
+			Provider: "github", TeamID: "team-third", TeamName: "Third Team",
+			MemberID: "alice", IsPrimary: 1, Specificity: 50, UpdatedAt: now,
+		}},
+	})
+	subject := GithubWorkItemDerivationSubject{
+		WorkItemID: "gh:acme/api#31", Provider: "github",
+		RepoID: &repoID, Assignees: []string{"alice"}, OrgID: "org-acme",
+	}
+	teamID, _, candidates := derived.Resolve(subject)
+	if got := GithubWorkItemDerivationStringValue(teamID); got != "team-primary" {
+		t.Fatalf("primary team id = %q, want team-primary (repo_ownership, first-inserted owner)", got)
+	}
+	var assignee *GithubWorkItemDerivationCandidate
+	for index := range candidates {
+		if candidates[index].Source == "assignee_membership" {
+			assignee = &candidates[index]
+		}
+	}
+	if assignee == nil {
+		t.Fatalf("candidates = %+v, want an assignee_membership row present (rule 1 names author_membership only)", candidates)
+	}
+	if got := GithubWorkItemDerivationStringValue(assignee.TeamID); got != "team-third" || assignee.IsPrimary != 0 {
+		t.Fatalf("assignee_membership candidate = %+v, want team-third, IsPrimary=0", assignee)
+	}
+}
+
+// TestNullCarryingProviderTeamExcludedFromAuthorCascade is CHAOS-5649's
+// (R179 rule 2, chris 2026-09-12) red-first pin for the concrete prod
+// shape: gh:ops-team is a real Teams-catalog row (github-provider-synced,
+// no project_keys, per the fixture below) with no repo_ownership or
+// project_ownership row anywhere -- null-carrying. Its one member
+// (chrisgeo, mirroring github:chrisgeo on prod) authors a PR on a repo with
+// NO ownership data at all. Before this fix, R74's unknown-repo pass-through
+// let the author_membership candidate through regardless, giving gh:ops-team
+// 232 primary attributions on prod that belong to nobody. After this fix,
+// the team-level null-carrying gate rejects it BEFORE the repo-level R74
+// check ever runs, and the item falls through to unassigned.
+func TestNullCarryingProviderTeamExcludedFromAuthorCascade(t *testing.T) {
+	now := time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC)
+	repoID := "d41d8cd9-8f00-3204-a980-0998ecf8427e"
+
+	derived := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{
+		Teams: []GithubWorkItemDerivationTeamFact{{
+			Provider: "github", TeamID: "gh:ops-team", TeamName: "Ops Team",
+			ProjectKeys: nil, UpdatedAt: now,
+		}},
+		// Deliberately NO Repos/Projects fact naming gh:ops-team anywhere --
+		// the null-carrying shape.
+		Members: []GithubWorkItemDerivationMemberFact{{
+			Provider: "github", TeamID: "gh:ops-team", TeamName: "Ops Team",
+			MemberID: "chrisgeo", IsPrimary: 1, Specificity: 50, UpdatedAt: now,
+		}},
+	})
+	if !derived.teamIsNullCarrying("gh:ops-team") {
+		t.Fatal("teamIsNullCarrying(gh:ops-team) = false, want true (catalogued, zero ownership signal)")
+	}
+	reporter := "chrisgeo"
+	subject := GithubWorkItemDerivationSubject{
+		WorkItemID: "ghpr:acme/tools#5", Provider: "github", Type: "pr",
+		RepoID: &repoID, Reporter: &reporter, OrgID: "org-acme",
+	}
+	teamID, _, candidates := derived.Resolve(subject)
+	if got := GithubWorkItemDerivationStringValue(teamID); got != "" {
+		t.Fatalf("primary team id = %q, want \"\" (unassigned -- gh:ops-team is null-carrying)", got)
+	}
+	var unassigned *GithubWorkItemDerivationCandidate
+	for index := range candidates {
+		if candidates[index].Source == "author_membership" {
+			t.Fatalf("candidates = %+v, want NO author_membership row (gh:ops-team is null-carrying)", candidates)
+		}
+		if candidates[index].Source == "unassigned" {
+			unassigned = &candidates[index]
+		}
+	}
+	if unassigned == nil {
+		t.Fatalf("candidates = %+v, want an unassigned row", candidates)
+	}
+	if got := unassigned.Evidence; got != "no_candidate:team_null_carrying" {
+		t.Fatalf("unassigned evidence = %q, want \"no_candidate:team_null_carrying\"", got)
+	}
+}
+
+// TestNullCarryingProviderTeamExcludedFromAssigneeCascade mirrors the test
+// above through the assignee path, confirming CHAOS-5649's rule 2 gates
+// BOTH membership paths teamOwnsSubjectRepo already gates for CHAOS-4320,
+// not just author_membership.
+func TestNullCarryingProviderTeamExcludedFromAssigneeCascade(t *testing.T) {
+	now := time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC)
+	repoID := "d41d8cd9-8f00-3204-a980-0998ecf8427e"
+
+	derived := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{
+		Teams: []GithubWorkItemDerivationTeamFact{{
+			Provider: "github", TeamID: "gh:ops-team", TeamName: "Ops Team",
+			ProjectKeys: nil, UpdatedAt: now,
+		}},
+		Members: []GithubWorkItemDerivationMemberFact{{
+			Provider: "github", TeamID: "gh:ops-team", TeamName: "Ops Team",
+			MemberID: "chrisgeo", IsPrimary: 1, Specificity: 50, UpdatedAt: now,
+		}},
+	})
+	subject := GithubWorkItemDerivationSubject{
+		WorkItemID: "gh:acme/tools#6", Provider: "github",
+		RepoID: &repoID, Assignees: []string{"chrisgeo"}, OrgID: "org-acme",
+	}
+	teamID, _, candidates := derived.Resolve(subject)
+	if got := GithubWorkItemDerivationStringValue(teamID); got != "" {
+		t.Fatalf("primary team id = %q, want \"\" (unassigned -- gh:ops-team is null-carrying)", got)
+	}
+	for _, candidate := range candidates {
+		if candidate.Source == "assignee_membership" {
+			t.Fatalf("candidates = %+v, want NO assignee_membership row (gh:ops-team is null-carrying)", candidates)
+		}
+	}
+}
+
+// TestUncatalogedTeamStaysOnR74UnknownPassThrough guards R74 (chris via
+// team-lead, 2026-09-09, decision log 93c4f16842d8): CHAOS-5649's rule 2
+// gate must NOT re-litigate it. A team this context never saw a Teams
+// catalog row for at all (only a Members fact, exactly like
+// TestCascadeGateOwnershipUnknownMatchesConfiguredDefault's fixture) is
+// UNKNOWN, not proven null-carrying, and still passes through.
+func TestUncatalogedTeamStaysOnR74UnknownPassThrough(t *testing.T) {
+	derived := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{})
+	if derived.teamIsNullCarrying("team-never-catalogued") {
+		t.Fatal("teamIsNullCarrying(team-never-catalogued) = true, want false (no Teams catalog row seen at all -- unknown, not null-carrying)")
 	}
 }

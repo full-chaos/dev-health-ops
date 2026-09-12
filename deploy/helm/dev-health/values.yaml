@@ -53,7 +53,11 @@ api:
     - "8000"
   resources:
     requests:
-      memory: "256Mi"
+      # Measured steady state is 260-286Mi, i.e. ABOVE the 256Mi this requested
+      # before. Memory utilization is computed against the REQUEST, so the old
+      # value put a healthy pod structurally over 100% and gave the memory HPA
+      # metric below a permanently-saturated reading with no headroom to report.
+      memory: "512Mi"
       cpu: "100m"
     limits:
       memory: "1Gi"
@@ -63,7 +67,15 @@ api:
     minReplicas: 2
     maxReplicas: 10
     targetCPUUtilizationPercentage: 70
-    targetMemoryUtilizationPercentage: 80
+    # -- Memory is not a scaling signal for this workload: a Python process's
+    #    RSS is dominated by the interpreter and long-lived caches, so it
+    #    neither falls when load drops nor rises proportionally with it, and a
+    #    memory target only ever ratchets replicas up and holds them there.
+    #    Explicitly `null`, not removed: this is the CHART's own default, and a
+    #    deleted key would leave the previous default of 80 applying to every
+    #    installation that does not set it. api-hpa.yaml's `if` guard then omits
+    #    the memory metric entirely and a default install gets a CPU-only HPA.
+    targetMemoryUtilizationPercentage: null
   livenessProbe:
     httpGet:
       path: /ready
@@ -115,7 +127,12 @@ metricsApi:
     - "0.0.0.0"
     - "--port"
     - "8000"
-  # Same as `api.resources` above -- identical workload, identical bound.
+  # Same workload, same bound as `api.resources` above, EXCEPT the memory
+  # request: api's was raised to 512Mi because its HPA reads memory
+  # utilization against the request and a 256Mi request made a healthy pod
+  # read as permanently over 100%. This workload has no HorizontalPodAutoscaler
+  # at all, so the request is a scheduling floor and nothing else, and 256Mi
+  # remains the honest one for a bridge-only pod.
   # Kubernetes has no per-container pids limit (same CHAOS-4317 gap noted
   # on api-deployment.yaml -- the only lever is cluster-wide kubelet
   # `--pod-max-pids`), so there is no `pids` field to mirror here.
@@ -159,10 +176,118 @@ billingEdge:
       cpu: "50m"
     limits:
       memory: "512Mi"
-      cpu: "250m"
+      # Measured 100% CPU-throttled at the previous 250m limit while true
+      # demand, once unthrottled, was 13m: the ceiling was not sized to the
+      # workload, it was sizing the workload. Same class as the web throttling
+      # fix, and the request below is unchanged, so this costs no scheduling
+      # capacity -- it only stops the cgroup from clamping a burst.
+      cpu: "1"
+  # -- Probes, previously hardcoded in billing-edge-deployment.yaml. The
+  #    defaults below are exactly the numbers that template carried, including
+  #    the ABSENT timeoutSeconds: Kubernetes then applies its own 1s default.
+  #    That 1s is deliberately visible-by-omission rather than restated -- it is
+  #    part of what made this workload fragile under CPU throttling (a probe
+  #    that cannot be answered inside a second on a clamped cgroup), so an
+  #    operator raising it should be making that choice knowingly.
+  livenessProbe:
+    httpGet:
+      path: /health
+      port: http
+    initialDelaySeconds: 15
+    periodSeconds: 10
+  readinessProbe:
+    httpGet:
+      path: /health
+      port: http
+    initialDelaySeconds: 5
+    periodSeconds: 5
   nodeSelector: {}
   tolerations: []
   affinity: {}
+
+# =============================================================================
+# Query API (Go query plane, CHAOS-5616)
+# =============================================================================
+# The Go half of the split query plane. The Python edge's dispatcher forwards
+# an operation here when the routing registry says the Go plane serves it; off
+# by default, matching billingEdge/metricsApi, because an edge with no endpoint
+# simply keeps every operation on the Python plane.
+#
+# Enabling it requires three things this chart references but does not create:
+# secrets.data.GO_API_REGISTRY_POSTGRES_URI, the shared Secret's
+# CLICKHOUSE_NATIVE_URI key (derived automatically with the bundled ClickHouse;
+# supply it yourself with an external one or with secrets.create=false), and the
+# envelope JWKS Secret named under envelope below. A missing key holds the pod
+# in CreateContainerConfigError rather than failing the render -- deliberately:
+# with secrets.create=false the chart cannot see the values to validate, and a
+# render-time guard would block exactly the operators managing them correctly.
+queryApi:
+  enabled: false
+  replicas: 1
+  port: 8090
+  image:
+    repository: ghcr.io/full-chaos/dev-health-query-api
+    # -- Empty defaults to Chart.appVersion. A `repo@sha256:...` digest (with or
+    #    without a readable tag in front) is accepted in `repository` and used
+    #    verbatim, the same rule image/webImage follow.
+    tag: ""
+    pullPolicy: IfNotPresent
+  # -- Stated, not measured: derived from the worst-case request the route
+  #    result-row ceiling allows, matching the bound the compose definition
+  #    states for the same service rather than re-deriving a different one.
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "250m"
+    limits:
+      memory: "2Gi"
+      cpu: "1"
+  # -- /readyz answers 200 for BOTH "ready" and "ready: /query not configured",
+  #    so a status-code probe proves the PROCESS is up, never that the env is
+  #    wired correctly. Assert the /readyz BODY out of band; do not try to make
+  #    these probes carry that check.
+  livenessProbe:
+    httpGet:
+      path: /readyz
+      port: http
+    initialDelaySeconds: 10
+    periodSeconds: 15
+    timeoutSeconds: 2
+    failureThreshold: 3
+  readinessProbe:
+    httpGet:
+      path: /readyz
+      port: http
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 2
+    failureThreshold: 3
+  envelope:
+    # -- Name of an EXISTING Secret holding the envelope JWKS public half. This
+    #    chart never creates it: the keypair is minted out of band and only the
+    #    public half belongs in the cluster. Empty derives
+    #    `<fullname>-query-api-jwks`, the name an existing deployment uses.
+    jwksSecretName: ""
+    # -- Mount path inside the container. Its basename is also the Secret KEY
+    #    the JWKS is read from, so the two cannot drift apart.
+    jwksPath: /secrets/envelope-jwks.json
+    # -- Issuer/audience of the principal envelope the Python edge signs and
+    #    query-api verifies. These MUST match the edge's own values; the
+    #    defaults here are the edge's own Python-side defaults
+    #    (principal_envelope.py), expressed as values rather than hardcoded in
+    #    the template so a future change on either side is a visible override
+    #    rather than a silent disagreement.
+    issuer: "dev-health-ops-edge"
+    audience: "query-api"
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+  # -- Extra environment variables (list of name/value pairs). GO_API_SCHEMA_-
+  #    DIGEST does not belong here: query-api computes its schema digest from
+  #    its own embedded SDL and an operator-supplied value can only disagree
+  #    with the binary.
+  extraEnv: []
 
 # =============================================================================
 # Go/River workers (CHAOS-3052, Celery removed under CHAOS-4195)
@@ -203,6 +328,12 @@ goWorkers:
   #    is derived natively; with an EXTERNAL ClickHouse this is REQUIRED,
   #    because the shared secrets.data.CLICKHOUSE_URI carries Python's HTTP URI
   #    and pointing a Go worker at it fails readiness immediately.
+  #    Set here it is treated as operator-supplied config and rendered inline;
+  #    left empty with the bundled ClickHouse the derived URI carries
+  #    clickhouse.credentials.password and reaches the pods by secretKeyRef on
+  #    the shared Secret's CLICKHOUSE_NATIVE_URI key instead, so the password
+  #    never lands in a Pod spec. With secrets.create=false that key must be
+  #    present in the external Secret.
   clickhouseURI: ""
   # CHAOS-4587: every group below reads a canonical operational table through
   # the ordering-contract guard (dora_native_clickhouse.go,
@@ -261,6 +392,34 @@ goWorkers:
       port: 6432
       poolSize: 20
       maxClientConnections: 1000
+      # -- Additional roles this pooler may authenticate, beyond its own
+      #    RIVER_DOMAIN_DATABASE_ROLE. Each entry is
+      #    {role: <postgres role>, passwordKey: <key in secret.data below>},
+      #    and the password must be present under that key.
+      #
+      #    Empty (the default) renders NOTHING -- the image generates its own
+      #    single-line userlist.txt from DB_USER/DB_PASSWORD, which is correct
+      #    for one role. A non-empty list makes the chart render userlist.txt
+      #    into the Secret above and point the pooler's AUTH_FILE at it. The
+      #    queue-session and coordinator-session poolers are untouched either
+      #    way; this knob exists only here, because only the transaction pooler
+      #    fronts a table set that more than one role owns.
+      #
+      #    The passwords are PLAINTEXT in that file, necessarily: with
+      #    auth_type=scram-sha-256 PgBouncer must authenticate ONWARD to
+      #    PostgreSQL as the client's role, and a SCRAM verifier fetched by
+      #    auth_user/auth_query can only authenticate the client. Do not
+      #    pre-hash them. PgBouncer's userlist parser has no escape syntax, so
+      #    a role name or password containing a double quote cannot be
+      #    expressed in this file at all -- rotate rather than try.
+      #
+      #    Two costs before adding one. PgBouncer pools per (user, database)
+      #    pair, so each extra role adds up to poolSize more server connections
+      #    -- size max_connections for the sum, not for poolSize. And with
+      #    secret.create=false the userlist.txt key must be present in the
+      #    pre-created Secret too, the same way POSTGRES_URI and the two other
+      #    DSNs already must be.
+      extraUsers: []
     queueSession:
       port: 6433
       poolSize: 50
@@ -653,6 +812,17 @@ config:
   #    rejects unless this opt-in is set. Set "false" and point the URL above at
   #    an internal HTTPS origin (mesh/ingress) to drop the exemption.
   WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE: "true"
+  # -- Where the Python edge's dispatcher forwards an operation the routing
+  #    registry assigns to the Go plane. Empty auto-computes the in-cluster
+  #    query-api Service URL when queryApi.enabled; with queryApi disabled and
+  #    no value here the key is omitted entirely and the edge keeps every
+  #    operation on the Python plane.
+  GO_API_QUERY_API_URL: ""
+  # -- Set "1"/"true"/"yes"/"on" to have the edge stamp each response with the
+  #    plane that actually served it (x-dev-health-plane). Empty is OFF, and so
+  #    is any unrecognised value: this is a diagnostic, and there is no
+  #    misconfiguration that turns it on by accident.
+  GO_API_PLANE_HEADER_ENABLED: ""
   # -- Exactly one runtime owns the PagerDuty webhook stream. API and Go stream
   #    runner pods share this ConfigMap so they can never disagree: "celery"
   #    named the retired Celery dispatch, "river" hands the stream to Go
@@ -724,6 +894,30 @@ secrets:
     # pin REDIS_URL to the SAME host and DB or the CHAOS-4226 cache
     # invalidation the Go finalize emits never reaches the API's cache.
     VALKEY_URI: ""
+    # -- query-api's OWN connection to the registry tables
+    #    (go_api_candidate_build / go_api_routing_state / go_api_proof_run).
+    #    A dedicated key rather than a widened one: the DSN a long-running
+    #    runtime service holds and the one a one-shot migration Job holds are
+    #    different credentials with different lifetimes, and today query-api
+    #    borrows the migration Secret's, which is a smell even where the role
+    #    happens to be right.
+    #
+    #    What to set it to TODAY: the same DIRECT `...@<postgres-host>:5432/...`
+    #    DSN for the role that owns those tables. Direct, not pooled, on
+    #    purpose -- the transaction pooler authenticates exactly one role, so
+    #    the owning role cannot reach it. That is a deliberate, working shape,
+    #    not an oversight.
+    #
+    #    What changes it LATER: add that role to
+    #    goWorkers.pgbouncer.transaction.extraUsers, then repoint this key at
+    #    `...@<release>-go-pgbouncer-transaction:6432/...`. Nothing else moves.
+    #
+    #    What must NOT happen instead: granting these three tables to
+    #    RIVER_DOMAIN_DATABASE_ROLE so the existing pooler role can read them.
+    #    Role provisioning can revert a grant with no error at the call site,
+    #    and routing lookups then fail silently -- the shape of a prior
+    #    multi-day outage.
+    GO_API_REGISTRY_POSTGRES_URI: ""
     JWT_SECRET_KEY: ""
     SETTINGS_ENCRYPTION_KEY: ""
     ADMIN_API_KEY: ""

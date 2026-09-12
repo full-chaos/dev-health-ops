@@ -104,6 +104,24 @@
           "properties": {
             "enabled": { "type": "boolean" },
             "image": { "type": "string" },
+            "transaction": {
+              "type": "object",
+              "properties": {
+                "extraUsers": {
+                  "type": "array",
+                  "description": "Roles the transaction pooler authenticates in addition to its own. Both fields are required and neither may be empty: the chart writes each entry as one `\"role\" \"password\"` userlist line, so a missing role would emit a line PgBouncer silently reads as a blank user, and a missing passwordKey has no Secret value to resolve.",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "role": { "type": "string", "minLength": 1 },
+                      "passwordKey": { "type": "string", "minLength": 1 }
+                    },
+                    "required": ["role", "passwordKey"],
+                    "additionalProperties": false
+                  }
+                }
+              }
+            },
             "postgres": {
               "type": "object",
               "properties": {

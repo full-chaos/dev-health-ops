@@ -11,6 +11,26 @@ sessions. These are separate services so each backend cap is auditable.
 {{- $postgresHost := include "dev-health.goPgbouncerPostgresHost" . }}
 {{- $postgresPort := include "dev-health.goPgbouncerPostgresPort" . }}
 {{- $postgresDatabase := include "dev-health.goPgbouncerPostgresDatabase" . }}
+{{- /*
+CHAOS-5616: additional roles the TRANSACTION pooler may authenticate. The
+edoburu image derives userlist.txt from DB_USER/DB_PASSWORD, so it is
+single-user by construction -- exactly one line -- and a role that is not in it
+cannot connect. Under auth_type=scram-sha-256 the onward SERVER authentication
+needs that role's plaintext password in the file; a SCRAM verifier fetched via
+auth_user/auth_query authenticates the CLIENT but leaves PgBouncer with nothing
+to present to PostgreSQL. So the file is rendered here, plaintext, into the same
+Secret that already holds these passwords.
+
+Empty (the default) renders nothing: the image's own generated userlist.txt is
+correct for a single role, and this block must not perturb the queue-session or
+coordinator-session poolers, which stay single-user.
+*/}}
+{{- $extraUsers := .Values.goWorkers.pgbouncer.transaction.extraUsers | default (list) }}
+{{- $secretData := .Values.goWorkers.pgbouncer.secret.data }}
+{{- $userlistSecret := "" }}
+{{- if $extraUsers }}
+{{- $userlistSecret = $secretName }}
+{{- end }}
 {{- if .Values.goWorkers.pgbouncer.secret.create }}
 apiVersion: v1
 kind: Secret
@@ -27,10 +47,24 @@ stringData:
   POSTGRES_URI: {{ printf "postgresql://%s:%s@%s:%v/%s" .Values.config.RIVER_DOMAIN_DATABASE_ROLE .Values.goWorkers.pgbouncer.secret.data.RIVER_DOMAIN_DATABASE_PASSWORD (include "dev-health.fullname" . | printf "%s-go-pgbouncer-transaction") .Values.goWorkers.pgbouncer.transaction.port $postgresDatabase | quote }}
   WORKER_DATABASE_URI: {{ printf "postgresql://%s:%s@%s:%v/%s" .Values.config.RIVER_QUEUE_DATABASE_ROLE .Values.goWorkers.pgbouncer.secret.data.RIVER_QUEUE_DATABASE_PASSWORD (include "dev-health.fullname" . | printf "%s-go-pgbouncer-queue-session") .Values.goWorkers.pgbouncer.queueSession.port $postgresDatabase | quote }}
   COORDINATOR_DATABASE_URI: {{ printf "postgresql://%s:%s@%s:%v/%s" .Values.config.RIVER_COORDINATOR_DATABASE_ROLE .Values.goWorkers.pgbouncer.secret.data.RIVER_COORDINATOR_DATABASE_PASSWORD (include "dev-health.fullname" . | printf "%s-go-pgbouncer-coordinator-session") .Values.goWorkers.pgbouncer.coordinatorSession.port $postgresDatabase | quote }}
+{{- range $user := $extraUsers }}
+  {{ $user.passwordKey }}: {{ required (printf "goWorkers.pgbouncer.secret.data.%s is required by goWorkers.pgbouncer.transaction.extraUsers role %s" $user.passwordKey $user.role) (index $secretData $user.passwordKey) | quote }}
+{{- end }}
+{{- if $extraUsers }}
+  # The transaction pooler's auth_file, mounted at AUTH_FILE (see below). Its
+  # FIRST line is the pooler's own role: the entrypoint appends DB_USER only
+  # when `grep -q '^"$DB_USER"'` misses, so with that line present it writes
+  # nothing and this read-only projection is safe.
+  userlist.txt: |
+    "{{ .Values.config.RIVER_DOMAIN_DATABASE_ROLE }}" "{{ .Values.goWorkers.pgbouncer.secret.data.RIVER_DOMAIN_DATABASE_PASSWORD }}"
+    {{- range $user := $extraUsers }}
+    "{{ $user.role }}" "{{ index $secretData $user.passwordKey }}"
+    {{- end }}
+{{- end }}
 ---
 {{- end }}
 {{- $poolers := list
-  (dict "name" "transaction" "component" "go-pgbouncer-transaction" "port" .Values.goWorkers.pgbouncer.transaction.port "poolMode" "transaction" "poolSize" .Values.goWorkers.pgbouncer.transaction.poolSize "maxClientConnections" .Values.goWorkers.pgbouncer.transaction.maxClientConnections "role" .Values.config.RIVER_DOMAIN_DATABASE_ROLE "passwordKey" "RIVER_DOMAIN_DATABASE_PASSWORD")
+  (dict "name" "transaction" "component" "go-pgbouncer-transaction" "port" .Values.goWorkers.pgbouncer.transaction.port "poolMode" "transaction" "poolSize" .Values.goWorkers.pgbouncer.transaction.poolSize "maxClientConnections" .Values.goWorkers.pgbouncer.transaction.maxClientConnections "role" .Values.config.RIVER_DOMAIN_DATABASE_ROLE "passwordKey" "RIVER_DOMAIN_DATABASE_PASSWORD" "userlistSecret" $userlistSecret)
   (dict "name" "queue-session" "component" "go-pgbouncer-queue-session" "port" .Values.goWorkers.pgbouncer.queueSession.port "poolMode" "session" "poolSize" .Values.goWorkers.pgbouncer.queueSession.poolSize "maxClientConnections" .Values.goWorkers.pgbouncer.queueSession.maxClientConnections "role" .Values.config.RIVER_QUEUE_DATABASE_ROLE "passwordKey" "RIVER_QUEUE_DATABASE_PASSWORD")
   (dict "name" "coordinator-session" "component" "go-pgbouncer-coordinator-session" "port" .Values.goWorkers.pgbouncer.coordinatorSession.port "poolMode" "session" "poolSize" .Values.goWorkers.pgbouncer.coordinatorSession.poolSize "maxClientConnections" .Values.goWorkers.pgbouncer.coordinatorSession.maxClientConnections "role" .Values.config.RIVER_COORDINATOR_DATABASE_ROLE "passwordKey" "RIVER_COORDINATOR_DATABASE_PASSWORD")
 }}
@@ -84,6 +118,14 @@ spec:
             - {name: LOG_CONNECTIONS, value: "0"}
             - {name: LOG_DISCONNECTIONS, value: "0"}
             - {name: LOG_POOLER_ERRORS, value: "1"}
+            {{- with $pooler.userlistSecret }}
+            # CHAOS-5616: AUTH_FILE moves auth_file off the generated-config
+            # emptyDir onto the chart-rendered, read-only userlist below, which
+            # the entrypoint honours verbatim -- it writes the auth file only
+            # when the file is missing (touch) or when its own DB_USER line is
+            # absent, and never rewrites pgbouncer.ini's auth_file once set.
+            - {name: AUTH_FILE, value: /etc/pgbouncer-userlist/userlist.txt}
+            {{- end }}
           # CHAOS-3944: tcpSocket only proves the port accepts a TCP connection,
           # not that PgBouncer can actually authenticate and serve a query —
           # the compose poolers now run an authenticated `psql -c "SELECT 1"`
@@ -98,11 +140,22 @@ spec:
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
           volumeMounts:
             - {name: generated-config, mountPath: /etc/pgbouncer}
+            {{- if $pooler.userlistSecret }}
+            - {name: userlist, mountPath: /etc/pgbouncer-userlist, readOnly: true}
+            {{- end }}
           resources:
             {{- toYaml $.Values.goWorkers.pgbouncer.resources | nindent 12 }}
       volumes:
         - name: generated-config
           emptyDir: {}
+        {{- with $pooler.userlistSecret }}
+        # Only the userlist key is projected: the rest of this Secret is role
+        # passwords and DSNs the pooler already reads as env. 0440 with the
+        # pod's fsGroup 70 leaves it root-owned and group-readable, never
+        # writable -- which the entrypoint never needs it to be.
+        - name: userlist
+          secret: {secretName: {{ . }}, defaultMode: 0440, items: [{key: userlist.txt, path: userlist.txt}]}
+        {{- end }}
 ---
 apiVersion: v1
 kind: Service

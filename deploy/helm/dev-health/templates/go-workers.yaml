@@ -176,10 +176,22 @@ spec:
             # 1 (rollout-safe); see deploy/go-workers/README.md.
             - name: OPERATIONAL_ORDERING_CONTRACT
               value: {{ $.Values.goWorkers.operationalOrderingContract | default "1" | quote }}
-            {{- with (include "dev-health.goWorkerClickhouseURI" $) }}
+            {{- if (include "dev-health.goWorkerClickhouseURI" $) }}
             # Explicit env beats the shared Secret mounted via envFrom below,
-            # so Go pods get the native port while Python keeps HTTP.
-            - {name: CLICKHOUSE_URI, value: {{ . | quote }}}
+            # so Go pods get the native port while Python keeps HTTP. The
+            # source decides how the value travels: an operator-supplied
+            # goWorkers.clickhouseURI is inline config the chart did not mint
+            # (same posture as goWorkers.pgbouncer.postgres.host), while the
+            # DERIVED bundled URI carries clickhouse.credentials.password and
+            # therefore goes through the shared Secret -- an inline `value:`
+            # here would put that password in the Pod spec, which every holder
+            # of `get` on the workload can read.
+            {{- if $.Values.goWorkers.clickhouseURI }}
+            - {name: CLICKHOUSE_URI, value: {{ $.Values.goWorkers.clickhouseURI | quote }}}
+            {{- else }}
+            - name: CLICKHOUSE_URI
+              valueFrom: {secretKeyRef: {name: {{ include "dev-health.secretName" $ }}, key: CLICKHOUSE_NATIVE_URI}}
+            {{- end }}
             {{- end }}
             {{- if $.Values.goWorkers.pgbouncer.enabled }}
             # Every Go worker group uses the bounded domain transaction pool plus

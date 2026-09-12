@@ -90,6 +90,17 @@ Web image
 {{- end }}
 
 {{/*
+query-api image
+*/}}
+{{- define "dev-health.queryApiImage" -}}
+{{- if contains "@" .Values.queryApi.image.repository -}}
+{{- .Values.queryApi.image.repository }}
+{{- else -}}
+{{- printf "%s:%s" .Values.queryApi.image.repository (default .Chart.AppVersion .Values.queryApi.image.tag) }}
+{{- end -}}
+{{- end }}
+
+{{/*
 Secret name — either the one we create or an external one
 */}}
 {{- define "dev-health.secretName" -}}
@@ -131,25 +142,45 @@ ClickHouse URI — auto-computed when clickhouse.enabled
 {{- end }}
 
 {{/*
-ClickHouse NATIVE-protocol URI for the Go workers.
+The Go runtimes' effective CLICKHOUSE_URI, or empty when neither source exists.
 
 dev-health.clickhouseURI above renders the HTTP port (8123) because Python's
-clickhouse-connect speaks HTTP. The Go worker's client speaks the native wire
-protocol and eagerly Ping()s at construction, so it needs 9000 -- the same
-variable name resolving to a different port per runtime. Go worker containers
-therefore set CLICKHOUSE_URI as an explicit env entry, which takes precedence
-over the shared Secret they also mount via envFrom (CHAOS-3872).
+clickhouse-connect speaks HTTP. The Go client speaks the native wire protocol
+and eagerly Ping()s at construction, so it needs the native port -- the same
+variable name resolving to a different port per runtime.
 
 Resolution order: an explicit goWorkers.clickhouseURI wins, otherwise the
-bundled ClickHouse is addressed natively. With an EXTERNAL ClickHouse and no
-goWorkers.clickhouseURI set, this renders empty and the shared Secret's HTTP
-URI is inherited -- which will fail readiness, so the value is required in that
-configuration and the deployment contract test asserts it.
+bundled ClickHouse is addressed natively (dev-health.clickhouseNativeURI
+below). With an EXTERNAL ClickHouse and no goWorkers.clickhouseURI set, this
+renders empty and the shared Secret's HTTP URI is inherited -- which will fail
+readiness, so the value is required in that configuration and the deployment
+contract test asserts it.
+
+Callers use this ONLY to decide WHETHER a CLICKHOUSE_URI entry is rendered.
+HOW the value reaches the container differs by source and is decided in
+go-workers.yaml: an operator-supplied goWorkers.clickhouseURI is inline config
+(same posture as goWorkers.pgbouncer.postgres.host -- the chart neither minted
+it nor can tell whether it carries a credential), while the derived bundled URI
+is a chart-managed credential and travels by secretKeyRef.
 */}}
 {{- define "dev-health.goWorkerClickhouseURI" -}}
 {{- if .Values.goWorkers.clickhouseURI }}
 {{- .Values.goWorkers.clickhouseURI }}
-{{- else if .Values.clickhouse.enabled }}
+{{- else }}
+{{- include "dev-health.clickhouseNativeURI" . }}
+{{- end }}
+{{- end }}
+
+{{/*
+The native-protocol (9000) URI for the bundled ClickHouse. It embeds
+clickhouse.credentials.password, so it is rendered into the shared Secret
+(dev-health.secretData, key CLICKHOUSE_NATIVE_URI) and reaches a Pod only by
+secretKeyRef -- never as an inline `value:` in a Pod spec, which
+`kubectl get <workload> -o yaml` prints to anyone holding read access on the
+workload.
+*/}}
+{{- define "dev-health.clickhouseNativeURI" -}}
+{{- if .Values.clickhouse.enabled }}
 {{- printf "clickhouse://%s:%s@%s-clickhouse:9000/%s" .Values.clickhouse.credentials.user .Values.clickhouse.credentials.password (include "dev-health.fullname" .) .Values.clickhouse.credentials.database }}
 {{- end }}
 {{- end }}
@@ -204,6 +235,31 @@ BRIDGE_URL to point at an internal HTTPS origin instead.
 {{- end }}
 
 {{/*
+query-api base URL — the in-cluster Service the Python edge's dispatcher
+(GO_API_QUERY_API_URL) forwards to. Auto-computed so the chart renders a
+reachable endpoint whenever queryApi is enabled; override
+config.GO_API_QUERY_API_URL to point at a differently-named release or an
+out-of-cluster origin instead.
+*/}}
+{{- define "dev-health.queryApiURL" -}}
+{{- printf "http://%s-query-api:%v" (include "dev-health.fullname" .) .Values.queryApi.port }}
+{{- end }}
+
+{{/*
+Envelope JWKS Secret for query-api. This chart does NOT create it: the keypair
+is minted out of band (scripts/mint-envelope-keys.sh) and only the public half
+belongs in the cluster. Empty derives the conventional name, which is what an
+existing deployment already uses.
+*/}}
+{{- define "dev-health.queryApiJwksSecretName" -}}
+{{- if .Values.queryApi.envelope.jwksSecretName }}
+{{- .Values.queryApi.envelope.jwksSecretName }}
+{{- else }}
+{{- printf "%s-query-api-jwks" (include "dev-health.fullname" .) }}
+{{- end }}
+{{- end }}
+
+{{/*
 Image pull secrets
 */}}
 {{- define "dev-health.imagePullSecrets" -}}
@@ -224,7 +280,7 @@ chart's regular resources are created).
    REDIS_URL Secret key. */}}
 {{- $redisAuto := and .Values.valkey.enabled (not (index .Values.secrets.data "REDIS_URL")) }}
 {{- /* Keys whose empty placeholder is replaced by a computed value below. */}}
-{{- $derivedKeys := list "WORKER_OPERATIONAL_BRIDGE_URL" }}
+{{- $derivedKeys := list "WORKER_OPERATIONAL_BRIDGE_URL" "GO_API_QUERY_API_URL" }}
 {{- range $key, $value := .Values.config }}
 {{- if or $value (not (has $key $derivedKeys)) }}
 {{ $key }}: {{ $value | quote }}
@@ -242,6 +298,13 @@ VALKEY_URI: {{ include "dev-health.redisURL" . | quote }}
 {{- end }}
 {{- if not (index .Values.config "WORKER_OPERATIONAL_BRIDGE_URL") }}
 WORKER_OPERATIONAL_BRIDGE_URL: {{ include "dev-health.operationalBridgeURL" . | quote }}
+{{- end }}
+{{- /* Only when a query-api workload actually exists to forward to. With
+   queryApi disabled and no operator override the key stays ABSENT rather than
+   empty: go_api_cli._query_api_url and the dispatcher both read it with `or`,
+   so absent and empty behave alike, and absent says "no Go plane here". */}}
+{{- if and .Values.queryApi.enabled (not (index .Values.config "GO_API_QUERY_API_URL")) }}
+GO_API_QUERY_API_URL: {{ include "dev-health.queryApiURL" . | quote }}
 {{- end }}
 {{- if not (hasKey .Values.config "AUTO_RUN_MIGRATIONS") }}
 {{- /* CHAOS-2304: when the migration hook owns schema changes, app pods must
@@ -262,6 +325,12 @@ Secret.
 {{- end }}
 {{- if and .Values.clickhouse.enabled (not (index .Values.secrets.data "CLICKHOUSE_URI")) }}
 CLICKHOUSE_URI: {{ include "dev-health.clickhouseURI" . | quote }}
+{{- end }}
+{{- /* The native-protocol (:9000) companion the Go runtimes need. It lives
+   here, not inline in a Pod spec, because it embeds
+   clickhouse.credentials.password -- see dev-health.clickhouseNativeURI. */}}
+{{- if and .Values.clickhouse.enabled (not (index .Values.secrets.data "CLICKHOUSE_NATIVE_URI")) }}
+CLICKHOUSE_NATIVE_URI: {{ include "dev-health.clickhouseNativeURI" . | quote }}
 {{- end }}
 {{- if and .Values.postgresql.enabled (not (index .Values.secrets.data "DATABASE_URI")) }}
 DATABASE_URI: {{ include "dev-health.postgresURI" . | quote }}

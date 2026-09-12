@@ -1,0 +1,145 @@
+{{- /*
+The Go query plane. The Python edge's dispatcher forwards a GraphQL operation
+here (GO_API_QUERY_API_URL, see dev-health.configData) when the routing
+registry says the Go plane serves it; with queryApi disabled the edge never
+learns an endpoint and every operation stays on the Python plane, which is why
+this defaults off like billingEdge and metricsApi.
+*/ -}}
+{{- if .Values.queryApi.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "dev-health.fullname" . }}-query-api
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "query-api" "context" $) | nindent 4 }}
+spec:
+  replicas: {{ .Values.queryApi.replicas }}
+  {{- /*
+  Same guarantee api-deployment.yaml states: never dip below current serving
+  capacity during a rollout. Kubernetes' 25%/25% default only behaves at
+  replicas: 1 by rounding.
+  */}}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxUnavailable: 0, maxSurge: 1}
+  selector:
+    matchLabels:
+      {{- include "dev-health.componentSelectorLabels" (dict "component" "query-api" "context" $) | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with .Values.queryApi.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "dev-health.componentSelectorLabels" (dict "component" "query-api" "context" $) | nindent 8 }}
+    spec:
+      {{- include "dev-health.imagePullSecrets" . | nindent 6 }}
+      serviceAccountName: {{ include "dev-health.serviceAccountName" . }}
+      containers:
+        - name: query-api
+          image: {{ include "dev-health.queryApiImage" . }}
+          imagePullPolicy: {{ .Values.queryApi.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.queryApi.port }}
+              protocol: TCP
+          env:
+            - name: QUERY_API_ADDR
+              value: {{ printf ":%v" .Values.queryApi.port | quote }}
+            {{- /*
+            Native ClickHouse wire protocol (9000), not the HTTP 8123 port the
+            Python services use: the Go client Pings eagerly at construction and
+            fails startup outright against 8123. By secretKeyRef, never inline:
+            the URI embeds clickhouse.credentials.password and a Pod spec is
+            readable by every holder of `get` on this Deployment.
+            */}}
+            - name: CLICKHOUSE_URI
+              valueFrom: {secretKeyRef: {name: {{ include "dev-health.secretName" . }}, key: CLICKHOUSE_NATIVE_URI}}
+            {{- /*
+            Registry tables (go_api_candidate_build / go_api_routing_state /
+            go_api_proof_run). Its own Secret key rather than the migration
+            credential a long-running service should not be borrowing; see
+            secrets.data.GO_API_REGISTRY_POSTGRES_URI in values.yaml for what
+            that key holds today and the pooler DSN it becomes once the
+            transaction pooler carries the owning role.
+            */}}
+            - name: GO_API_REGISTRY_POSTGRES_URI
+              valueFrom: {secretKeyRef: {name: {{ include "dev-health.secretName" . }}, key: GO_API_REGISTRY_POSTGRES_URI}}
+            - name: GO_API_ENVELOPE_JWKS_PATH
+              value: {{ .Values.queryApi.envelope.jwksPath | quote }}
+            - name: GO_API_ENVELOPE_ISSUER
+              value: {{ .Values.queryApi.envelope.issuer | quote }}
+            - name: GO_API_ENVELOPE_AUDIENCE
+              value: {{ .Values.queryApi.envelope.audience | quote }}
+            {{- /*
+            GO_API_SCHEMA_DIGEST is deliberately absent and must stay absent.
+            CHAOS-5013 removed it: query-api computes its schema digest from its
+            own go:embed'ed SDL at runtime, and an operator-supplied value can
+            only ever disagree with the binary. Do not add it back.
+            */}}
+            {{- with .Values.queryApi.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          volumeMounts:
+            - name: envelope-jwks
+              mountPath: {{ .Values.queryApi.envelope.jwksPath }}
+              subPath: {{ base .Values.queryApi.envelope.jwksPath }}
+              readOnly: true
+          {{- with .Values.queryApi.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.queryApi.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.queryApi.resources | nindent 12 }}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, capabilities: {drop: [ALL]}, seccompProfile: {type: RuntimeDefault}}
+      volumes:
+        {{- /*
+        The envelope keypair is minted out of band (scripts/mint-envelope-keys.sh)
+        and only its public half belongs in the cluster, so this chart references
+        the Secret and never creates it. It must exist before this workload is
+        enabled: a missing Secret leaves the Pod in ContainerCreating rather than
+        failing the render, which is the one failure mode a template cannot
+        catch for a resource it does not own.
+        */}}
+        - name: envelope-jwks
+          secret:
+            secretName: {{ include "dev-health.queryApiJwksSecretName" . }}
+            items:
+              - {key: {{ base .Values.queryApi.envelope.jwksPath }}, path: {{ base .Values.queryApi.envelope.jwksPath }}}
+      {{- with .Values.queryApi.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.queryApi.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.queryApi.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "dev-health.fullname" . }}-query-api
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "query-api" "context" $) | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "dev-health.componentSelectorLabels" (dict "component" "query-api" "context" $) | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.queryApi.port }}
+      targetPort: http
+      protocol: TCP
+{{- end }}

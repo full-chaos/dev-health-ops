@@ -1,5 +1,12 @@
 # v0 Celery baseline
 
+**RETIRED (CHAOS-5589):** `scripts/worker/capture_celery_baseline.py` and its
+lock test are deleted -- the Celery containers it sampled (`worker`,
+`worker-heavy`, `beat`, ...) no longer exist in `compose.yml` (R146: Celery
+transport is not a rollback target). `capture.json` below is kept as the
+historical evidence record the Go cutover was measured against; it is no
+longer reproducible from this tree.
+
 This directory contains the reproducible Celery baseline that replacement
 worker stacks must meet or improve. The running local Compose project
 `dev-health` is the designated production-equivalent runtime for this phase:

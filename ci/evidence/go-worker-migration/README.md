@@ -17,7 +17,6 @@ developer audience, and moving or reformatting a file breaks a gate.
 |---|---|
 | `ci/check_river_compat_static.sh` (CI gate, `.github/workflows/go.yml`) | `v0-celery-baseline/capture.json`, `v0-celery-baseline/local-resource-snapshot.json`, `v1-river-spike/compatibility-matrix.json`, `v1-river-spike/local-harness-results.json` |
 | `scripts/worker/canary_release_proof.py` (`PINNED_PATHS`) | `v3-canary-release-proof/parity-thresholds.json`, `v0-celery-baseline/capture.json` |
-| `scripts/worker/capture_celery_baseline.py` (`default_output()`) | writes `v0-celery-baseline/capture.json` |
 | `tests/compatibility/river/record.sh` | writes `v1-river-spike/local-harness-results.json` |
 | `tests/worker_baseline/` | `v0-celery-baseline/capture.json`, `v3-canary-release-proof/artifact.schema.json` |
 

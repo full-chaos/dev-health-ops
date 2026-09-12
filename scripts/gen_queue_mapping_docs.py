@@ -16,10 +16,12 @@ can't happen here:
   ``rollback_route``. This is what actually decides which plane is live for
   a given kind -- a queue is not uniformly "live"; a specific kind on it can
   still be `canary` (see ``sync.provider_unit`` below).
-* ``compose.yml`` and ``deploy/docker-compose/compose.production.yml`` -- the
-  dormant Celery ``-Q`` lists, parsed from the actual service definitions
-  rather than retyped, and cross-checked against each other so a
-  production-only queue change can't drift silently past the dev compose file.
+* ``deploy/docker-compose/compose.production.yml`` -- the dormant Celery
+  ``-Q`` lists, parsed from the actual service definitions rather than
+  retyped. Root ``compose.yml`` no longer defines these services at all
+  (CHAOS-5589 deleted the celery-legacy fleet outright); it was the second
+  half of a dev/production cross-check until then and is not consulted here
+  any more.
 
 The historical Celery-queue <-> Go-successor *correspondence* is not
 mechanically derivable (the two vocabularies share only coincidental names --
@@ -49,7 +51,6 @@ ROOT = Path(__file__).resolve().parents[1]
 DEPLOYMENT_PATH = ROOT / "deploy" / "go-workers" / "deployment.json"
 REGISTRY_PATH = ROOT / "contracts" / "jobs" / "v1" / "registry.json"
 MIGRATION_STATE_PATH = ROOT / "contracts" / "jobs" / "v1" / "migration-state.json"
-COMPOSE_PATH = ROOT / "compose.yml"
 COMPOSE_PRODUCTION_PATH = ROOT / "deploy" / "docker-compose" / "compose.production.yml"
 DOC_PATH = ROOT / "docs" / "contribute" / "architecture" / "go-worker-runtime.md"
 
@@ -229,18 +230,12 @@ LIST_ITEM_RE = re.compile(r"^\s*-\s*(.+?)\s*$")
 def load_compose_celery_queues(compose_path: Path) -> dict[str, list[str]]:
     """Parse ``-Q`` lists per Celery service straight out of a compose file.
 
-    Line-based on purpose: these compose files use YAML anchors/merge keys
+    Line-based on purpose: this compose file uses YAML anchors/merge keys
     (``<<: *worker-base``) that a naive ``yaml.safe_load`` round-trip would
-    have to re-resolve. Two ``command:`` shapes appear across the two files
-    this is called on:
-
-    * flow form (``compose.yml``): ``command: -A ... -Q <list> ...`` all on
-      one physical line;
-    * block-list form (``compose.production.yml``): one YAML list item per
-      argument, so ``-Q`` and its value are two consecutive ``- ...`` lines.
-
-    Both are handled so the dev and production queue lists can be
-    cross-checked against each other below.
+    have to re-resolve. Only ``compose.production.yml``'s block-list
+    ``command:`` shape (one YAML list item per argument, so ``-Q`` and its
+    value are two consecutive ``- ...`` lines) is parsed here now -- root
+    ``compose.yml``'s flow-form Celery commands are gone (CHAOS-5589).
     """
     current_service: str | None = None
     queues_by_service: dict[str, list[str]] = {}
@@ -276,7 +271,6 @@ def render_block() -> str:
     deployment = load_deployment()
     registry = load_registry()
     migration_state = load_migration_state()
-    compose_queues = load_compose_celery_queues(COMPOSE_PATH)
     compose_production_queues = load_compose_celery_queues(COMPOSE_PRODUCTION_PATH)
 
     # --- Consistency guards: fail loudly instead of silently omitting a row ---
@@ -300,26 +294,6 @@ def render_block() -> str:
             "-- every registered kind must have a migration-state row."
         )
 
-    compose_only_dev = set(compose_queues) - set(compose_production_queues)
-    compose_only_prod = set(compose_production_queues) - set(compose_queues)
-    if compose_only_dev or compose_only_prod:
-        raise SystemExit(
-            "gen_queue_mapping_docs: compose.yml and "
-            "deploy/docker-compose/compose.production.yml declare different Celery "
-            f"service sets -- dev-only: {sorted(compose_only_dev)}, "
-            f"production-only: {sorted(compose_only_prod)}."
-        )
-    for service, dev_queues in compose_queues.items():
-        prod_queues = compose_production_queues[service]
-        if set(dev_queues) != set(prod_queues):
-            raise SystemExit(
-                f"gen_queue_mapping_docs: Celery service '{service}' consumes "
-                f"{sorted(dev_queues)} in compose.yml but {sorted(prod_queues)} in "
-                "compose.production.yml -- the dormant Celery queue vocabulary has "
-                "diverged between dev and production; update the curated map to "
-                "match production before regenerating."
-            )
-
     all_curated_celery_queues: set[str] = set()
     for queue_map in CELERY_CORRESPONDENCE.values():
         for curated_entry in queue_map.values():
@@ -327,14 +301,15 @@ def render_block() -> str:
     all_curated_celery_queues.update(CELERY_QUEUES_WITH_NO_GO_QUEUE)
 
     all_compose_queues: set[str] = set()
-    for queues in compose_queues.values():
+    for queues in compose_production_queues.values():
         all_compose_queues.update(queues)
     unaccounted = all_compose_queues - all_curated_celery_queues
     if unaccounted:
         raise SystemExit(
-            f"gen_queue_mapping_docs: compose.yml declares Celery queue(s) {sorted(unaccounted)} "
-            "not present in CELERY_CORRESPONDENCE or CELERY_QUEUES_WITH_NO_GO_QUEUE in "
-            "scripts/gen_queue_mapping_docs.py -- document their Go successor (or lack of one)."
+            "gen_queue_mapping_docs: compose.production.yml declares Celery queue(s) "
+            f"{sorted(unaccounted)} not present in CELERY_CORRESPONDENCE or "
+            "CELERY_QUEUES_WITH_NO_GO_QUEUE in scripts/gen_queue_mapping_docs.py -- "
+            "document their Go successor (or lack of one)."
         )
 
     lines = [

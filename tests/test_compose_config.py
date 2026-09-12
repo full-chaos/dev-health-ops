@@ -56,41 +56,6 @@ def _go_worker_arguments(service: dict) -> dict[str, str]:
     return arguments
 
 
-def test_compose_workers_cover_every_celery_queue() -> None:
-    """CHAOS-2278: the union of -Q lists across all compose celery worker
-    services must cover every queue declared in workers.config.task_queues.
-
-    Guards against adding a queue (or a worker topology change) that leaves
-    a queue with no consumer — tasks routed there would silently never run.
-    The previous topology shipped exactly that bug: `ingest` and `reports`
-    existed in task_queues but no compose worker consumed them.
-    """
-    compose_path = Path(__file__).resolve().parents[1] / "compose.yml"
-    compose_data = yaml.safe_load(compose_path.read_text(encoding="utf-8"))
-
-    consumed_queues: set[str] = set()
-    worker_services: list[str] = []
-    for name, service in compose_data["services"].items():
-        command = service.get("command")
-        if command is None:
-            continue
-        command_str = _container_command_string(service)
-        tokens = command_str.split()
-        if "celery" not in tokens or "worker" not in tokens:
-            continue
-        worker_services.append(name)
-        consumed_queues.update(_parse_queues(command_str))
-
-    assert worker_services, "no celery worker services found in compose.yml"
-
-    missing = set(task_queues) - consumed_queues
-    assert not missing, (
-        f"queues declared in workers.config.task_queues but consumed by no "
-        f"compose worker service: {sorted(missing)} "
-        f"(workers: {sorted(worker_services)}, consumed: {sorted(consumed_queues)})"
-    )
-
-
 def test_celery_config_has_backfill_queue() -> None:
     assert "backfill" in task_queues
 
@@ -121,56 +86,18 @@ def test_celery_config_has_per_provider_sync_queues() -> None:
 # natively now). See tests/workers/test_celery_dead_code_contract.py.
 
 
-def test_scheduler_queue_declared_and_consumed_redundantly() -> None:
+def test_scheduler_queue_declared() -> None:
     assert "scheduler" in task_queues
 
-    compose_path = Path(__file__).resolve().parents[1] / "compose.yml"
-    compose_data = yaml.safe_load(compose_path.read_text(encoding="utf-8"))
 
-    consumers: list[str] = []
-    for name, service in compose_data["services"].items():
-        command = service.get("command")
-        if command is None:
-            continue
-        command_str = _container_command_string(service)
-        tokens = command_str.split()
-        if "celery" not in tokens or "worker" not in tokens:
-            continue
-        if "scheduler" in _parse_queues(command_str):
-            consumers.append(name)
+def test_monitoring_queue_declared() -> None:
+    """The `monitoring` queue must exist in task_queues.
 
-    assert "worker-heavy" in consumers
-    assert len(consumers) >= 2, (
-        f"`scheduler` must be consumed by >=2 worker services for redundancy, "
-        f"found: {sorted(consumers)}"
-    )
-
-
-def test_monitoring_queue_declared_and_consumed_redundantly() -> None:
-    """The `monitoring` queue must exist in task_queues and be consumed by at
-    least two compose worker services so queue telemetry survives one pool
-    being saturated or down."""
+    Redundant-consumer coverage moved to
+    ``test_production_stacks_consume_monitoring_queue`` (compose.production.yml
+    / stack.yml) once CHAOS-5589 deleted root compose.yml's celery-legacy
+    fleet -- there is no local compose worker left to assert against."""
     assert "monitoring" in task_queues
-
-    compose_path = Path(__file__).resolve().parents[1] / "compose.yml"
-    compose_data = yaml.safe_load(compose_path.read_text(encoding="utf-8"))
-
-    consumers: list[str] = []
-    for name, service in compose_data["services"].items():
-        command = service.get("command")
-        if command is None:
-            continue
-        command_str = _container_command_string(service)
-        tokens = command_str.split()
-        if "celery" not in tokens or "worker" not in tokens:
-            continue
-        if "monitoring" in _parse_queues(command_str):
-            consumers.append(name)
-
-    assert len(consumers) >= 2, (
-        f"`monitoring` must be consumed by >=2 worker services for redundancy, "
-        f"found: {sorted(consumers)}"
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -858,9 +785,6 @@ def test_legacy_compose_disables_ambient_migrations() -> None:
         "api",
         "metrics-api",
         "billing-edge",
-        "worker",
-        "worker-ingest",
-        "worker-heavy",
     ):
         env = services[name].get("environment") or {}
         assert env.get("AUTO_RUN_MIGRATIONS") == "false", (
@@ -875,9 +799,6 @@ def test_legacy_compose_app_services_gate_on_migrate() -> None:
         "api",
         "metrics-api",
         "billing-edge",
-        "worker",
-        "worker-ingest",
-        "worker-heavy",
     ):
         deps = services[name].get("depends_on") or {}
         assert (
@@ -1076,8 +997,10 @@ def test_deploy_stacks_keep_celery_beat_singleton() -> None:
     workers-and-schedules.md) rather than a machine-checked replica pin --
     CHAOS-5541: like every group it now deploys at replicas: 1 by default
     (deployment.json's go_default posture), still with no static "always
-    exactly 1" invariant machine-checked here."""
-    for stack in (_REPO_ROOT / "compose.yml", _PROD_COMPOSE, _SWARM_STACK):
+    exactly 1" invariant machine-checked here. CHAOS-5589 deleted root
+    compose.yml's celery-legacy fleet outright (R146: not a rollback
+    target), so it no longer checks one in."""
+    for stack in (_PROD_COMPOSE, _SWARM_STACK):
         _assert_compose_beat_singleton(stack)
 
 
@@ -1111,8 +1034,10 @@ def test_worker_commands_disable_prefetch_for_redis() -> None:
     (CHAOS-2277). CHAOS-4195 deleted the Kubernetes (worker.yaml) and Helm
     (worker-deployment.yaml/worker-pools.yaml) equivalents this test used to
     also assert on -- the Go worker's River client has no prefetch concept to
-    disable, so there is nothing there for this flag to apply to."""
-    for path in (_REPO_ROOT / "compose.yml", _PROD_COMPOSE, _SWARM_STACK):
+    disable, so there is nothing there for this flag to apply to. CHAOS-5589
+    deleted root compose.yml's celery-legacy fleet (R146: not a rollback
+    target), so only the production/swarm Celery stacks remain in scope."""
+    for path in (_PROD_COMPOSE, _SWARM_STACK):
         services = _load_yaml(path).get("services") or {}
         worker_commands = [
             _command_string(service).split()
@@ -1123,17 +1048,6 @@ def test_worker_commands_disable_prefetch_for_redis() -> None:
         assert worker_commands
         for command in worker_commands:
             assert "--disable-prefetch" in command
-
-
-def test_local_compose_workers_import_mounted_source() -> None:
-    services = _load_yaml(_REPO_ROOT / "compose.yml").get("services") or {}
-
-    for service_name in ("worker", "worker-ingest", "worker-heavy"):
-        service = services[service_name]
-        command = _command_string(service).split()
-        assert "worker" in command
-        assert service["environment"]["PYTHONPATH"] == "/app/src"
-        assert "./:/app" in service["volumes"]
 
 
 def test_platform_compose_workers_and_beat_import_mounted_source() -> None:
@@ -1282,7 +1196,7 @@ def test_platform_compose_runs_the_go_scheduler_without_a_profile() -> None:
 
 
 def test_compose_workers_override_runner_entrypoint() -> None:
-    for path in (_LEGACY_COMPOSE, _PROD_COMPOSE, _SWARM_STACK):
+    for path in (_PROD_COMPOSE, _SWARM_STACK):
         services = _load_yaml(path).get("services") or {}
         for service_name in ("worker", "worker-ingest", "worker-heavy", "beat"):
             service = services[service_name]
@@ -1477,9 +1391,10 @@ def test_go_config_package_declares_no_route_switches() -> None:
 
 def test_compose_declares_no_provider_route_switches() -> None:
     """Ticket step-5 acceptance: the rendered compose config contains ZERO
-    ``WORKER_*_ENABLED`` keys anywhere -- not on the shared Celery env
-    anchor, not on worker/beat, not on the go-* fleet. The route switch
-    plane is deleted, not defaulted off.
+    ``WORKER_*_ENABLED`` keys anywhere -- not on the shared env anchor, not
+    on the go-* fleet. The route switch plane is deleted, not defaulted off.
+    CHAOS-5589 deleted the celery-legacy worker/beat services outright, so
+    only the `api` anchor and the go-* fleet remain to check.
 
     The GitHub work-item route's two file-path configs are NOT switches
     (``WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH`` /
@@ -1495,8 +1410,8 @@ def test_compose_declares_no_provider_route_switches() -> None:
     """
     services = _load_yaml(_LEGACY_COMPOSE)["services"]
 
-    shared_env = services["api"]["environment"]  # &env anchor: api, worker, beat
-    for name in ("api", "worker", "worker-heavy", "beat"):
+    shared_env = services["api"]["environment"]  # &env anchor
+    for name in ("api",):
         env = services[name]["environment"]
         matched = [key for key in env if _WORKER_ENABLED_SWITCH_PATTERN.fullmatch(key)]
         assert not matched, f"{name} still declares route switches: {sorted(matched)}"
@@ -1583,21 +1498,22 @@ def test_go_profile_overlay_never_depends_on_python_migrate() -> None:
         )
 
 
-def test_go_services_are_unconditional_and_celery_is_profile_gated() -> None:
-    """CHAOS-3088: the premise flipped. Go is now this file's unconditional
-    default; the archived Celery fleet is the opt-in.
+def test_go_services_are_unconditional_and_celery_is_deleted() -> None:
+    """CHAOS-3088: Go is this file's unconditional default. CHAOS-5589:
+    the archived, profile-gated Celery fleet (R146: not a rollback target,
+    zero consumers since CHAOS-4026) is now deleted outright, not merely
+    opted out of -- the exact inverse of the pre-CHAOS-3088 contract, one
+    step further than the profile gate CHAOS-3088 added.
 
     Before CHAOS-3088, deploy/go-workers/compose-go-workers.yml gated every
     `go-*` service behind `profiles: ["go"]` so a default `docker compose up`
     brought up the unchanged Celery stack and nothing else -- that overlay is
     now deleted. Root compose.yml's own `go-*` fleet (folded in from
     deploy/docker-compose/compose.go-workers.yml) must declare NO `profiles`
-    key at all, and the five archived Celery services must declare
-    `profiles: ["celery-legacy"]` -- the exact inverse of the old contract.
+    key at all.
 
     Mutation coverage (manually verified): adding `profiles: ["go"]` to any
-    go-* service, or removing `profiles: [celery-legacy]` from `worker`,
-    fails this test.
+    go-* service, or reintroducing `worker`/`beat`, fails this test.
     """
     services = _load_yaml(_LEGACY_COMPOSE)["services"]
     go_services = {
@@ -1618,9 +1534,9 @@ def test_go_services_are_unconditional_and_celery_is_profile_gated() -> None:
         "beat",
     )
     for name in celery_services:
-        assert services[name].get("profiles") == ["celery-legacy"], (
-            f'{name} must declare profiles: ["celery-legacy"] so a default '
-            "`up` never starts the archived Celery fleet"
+        assert name not in services, (
+            f"{name} must not exist -- the celery-legacy fleet is deleted, "
+            "not merely profile-gated (CHAOS-5589)"
         )
 
 

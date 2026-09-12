@@ -1,0 +1,151 @@
+{{- /*
+CHAOS-5594: KEDA-driven autoscaling for queue-consuming Go worker groups.
+
+Contract (deploy/docs/canonical-deployment.md §Autoscaling): request-driven
+services use native HPA (api-hpa.yaml, web-hpa.yaml); queue-driven workers use
+KEDA on their authoritative backlog signal; the scheduler singleton is NEVER
+autoscaled. This file is additive -- goWorkers.enabled defaults false and each
+group's autoscaling.enabled defaults per-group, so a disabled chart renders
+nothing here, same as before CHAOS-5594 (go-workers.yaml used to render an
+autoscaling/v2 HorizontalPodAutoscaler on External metrics
+worker_jobs_available / worker_job_oldest_age_seconds /
+worker_execution_saturation_ratio here; that required a Prometheus Adapter
+that was never built -- deploy/go-workers/README.md said so -- so it never
+actually scaled anything. KEDA's postgresql scaler reads river_job directly
+and needs no adapter).
+
+Signal of record: river_job backlog (available + due-scheduled + retryable)
+per group's queue set, via a dedicated read-only role
+(devhealth_keda_readonly) over the EXISTING transaction pooler -- registered
+as one more goWorkers.pgbouncer.transaction.extraUsers entry (values.yaml,
+CHAOS-5616's mechanism), never a new pooler deployment, never an inline
+credential: the ScaledObject's trigger metadata carries host/port/userName/
+dbName (non-secret), TriggerAuthentication carries only the password via
+secretTargetRef. `running` (in-flight) rows are deliberately excluded from
+the query: they are being worked, not waiting.
+
+One TriggerAuthentication is shared by every group in this release (same
+role, same password) rather than one per group -- the credential is
+identical, so per-group copies would be pure duplication with no isolation
+benefit.
+*/}}
+{{- if .Values.goWorkers.enabled }}
+{{- $anyAutoscale := false }}
+{{- range $group := .Values.goWorkers.groups }}
+{{- if $group.autoscaling.enabled }}
+{{- $anyAutoscale = true }}
+{{- end }}
+{{- end }}
+{{- /* Declared at file scope (not inside the `if $anyAutoscale` block below)
+because Go template `:=` vars are block-scoped -- both are read again in the
+per-group ScaledObject range further down. */}}
+{{- $kedaRole := "" }}
+{{- range $user := (.Values.goWorkers.pgbouncer.transaction.extraUsers | default (list)) }}
+{{- if eq $user.passwordKey "RIVER_KEDA_READONLY_PASSWORD" }}
+{{- $kedaRole = $user.role }}
+{{- end }}
+{{- end }}
+{{- $postgresDatabase := include "dev-health.goPgbouncerPostgresDatabase" $ }}
+{{- if $anyAutoscale }}
+{{- if not .Values.goWorkers.pgbouncer.enabled }}
+{{- fail "goWorkers: at least one group has autoscaling.enabled=true, which requires goWorkers.pgbouncer.enabled=true (KEDA reads river_job through the transaction pooler's devhealth_keda_readonly extraUsers entry)." }}
+{{- end }}
+{{- if not $kedaRole }}
+{{- fail "goWorkers: at least one group has autoscaling.enabled=true, but goWorkers.pgbouncer.transaction.extraUsers has no entry with passwordKey: RIVER_KEDA_READONLY_PASSWORD -- KEDA's postgresql scaler has no role to authenticate the transaction pooler as. See go-worker-keda.yaml." }}
+{{- end }}
+---
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: {{ include "dev-health.fullname" $ }}-go-worker-river-ro
+  namespace: {{ include "dev-health.namespace" $ }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "go-worker-keda" "context" $) | nindent 4 }}
+spec:
+  secretTargetRef:
+    - parameter: password
+      name: {{ include "dev-health.goPgbouncerSecretName" $ }}
+      key: RIVER_KEDA_READONLY_PASSWORD
+{{- end }}
+{{- range $group := .Values.goWorkers.groups }}
+{{- /*
+Contract: the scheduler and reconciler are coordinator singletons and are
+NEVER autoscaled (canonical-deployment.md §Autoscaling). Fail closed rather
+than silently ignore a values override that tries to enable it.
+*/}}
+{{- if and $group.autoscaling.enabled (has $group.name (list "reconciler" "scheduler")) }}
+{{- fail (printf "goWorkers.groups[%s].autoscaling.enabled=true is not allowed -- %s is a coordinator singleton and must never be autoscaled (canonical-deployment.md Autoscaling contract)." $group.name $group.name) }}
+{{- end }}
+{{- if $group.autoscaling.enabled }}
+{{- /*
+CHAOS-4984 (kept): the HorizontalPodAutoscaler the ScaledObject generates
+still rejects minReplicaCount < 1 with no scale-to-zero feature gate assumed
+(Trap #167, HPA-from-zero) -- fail render time, not install time.
+*/}}
+{{- if lt (int $group.autoscaling.minReplicas) 1 }}
+{{- fail (printf "goWorkers.groups[%s].autoscaling.minReplicas=%v is below 1 -- KEDA's generated HorizontalPodAutoscaler rejects minReplicaCount < 1 (no scale-to-zero feature gate assumed here; Trap #167). Set minReplicas to at least 1, or disable autoscaling for this group instead." $group.name $group.autoscaling.minReplicas) }}
+{{- end }}
+{{- if not $group.queues }}
+{{- fail (printf "goWorkers.groups[%s].autoscaling.enabled=true but this group has no queues -- KEDA's postgresql scaler has no backlog signal to read. Stream-runner groups are event consumers, not queue consumers: size them by fixed replicas, not autoscaling." $group.name) }}
+{{- end }}
+{{- $queueList := join "','" $group.queues }}
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ include "dev-health.fullname" $ }}-go-{{ $group.name }}
+  namespace: {{ include "dev-health.namespace" $ }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "go-worker-keda" "context" $) | nindent 4 }}
+    dev-health.io/worker-group: {{ $group.name }}
+spec:
+  scaleTargetRef:
+    name: {{ include "dev-health.fullname" $ }}-go-{{ $group.name }}
+  # Trap #167 / HPA-from-zero: minReplicaCount stays >= 1 (guarded above).
+  minReplicaCount: {{ $group.autoscaling.minReplicas }}
+  maxReplicaCount: {{ $group.autoscaling.maxReplicas }}
+  pollingInterval: {{ $group.autoscaling.pollingInterval | default 30 }}
+  # NOTE (bigboy smoke, CHAOS-5594): KEDA's own `cooldownPeriod` is a no-op
+  # whenever minReplicaCount/idleReplicaCount are non-zero (KEDA prints this
+  # exact warning at apply time) -- Trap #167 keeps minReplicaCount >= 1 on
+  # every group here, so `cooldownPeriod` alone does NOT protect against a
+  # premature scale-down. Kept below anyway (harmless, matches the values
+  # schema, takes effect if a future group ever legitimately uses
+  # minReplicaCount: 0), but the REAL scale-down protection for these
+  # always-warm groups is `advanced.horizontalPodAutoscalerConfig.behavior.
+  # scaleDown.stabilizationWindowSeconds` right below, driven by the same
+  # value -- proven live: without it, a smoke run's replicas sat at 5 for
+  # 90s+ after the backlog cleared (the underlying HPA's own 300s default
+  # stabilization, invisible from ScaledObject alone).
+  cooldownPeriod: {{ $group.autoscaling.cooldownPeriod | default 300 }}
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleDown:
+          stabilizationWindowSeconds: {{ $group.autoscaling.cooldownPeriod | default 300 }}
+  triggers:
+    - type: postgresql
+      metadata:
+        # Connects DIRECTLY to the transaction pooler as the
+        # devhealth_keda_readonly extraUsers role (go-pgbouncer.yaml,
+        # CHAOS-5616's mechanism) -- host/port/userName/dbName are not
+        # secret, only the password is (TriggerAuthentication above).
+        host: {{ include "dev-health.fullname" $ }}-go-pgbouncer-transaction
+        port: {{ $.Values.goWorkers.pgbouncer.transaction.port | quote }}
+        userName: {{ $kedaRole | quote }}
+        dbName: {{ $postgresDatabase | quote }}
+        sslmode: disable
+        # river_job backlog for this group's queues: available now, due
+        # (scheduled_at <= now()), or retryable. `running` is excluded on
+        # purpose -- it is in-flight work, not backlog.
+        query: >-
+          SELECT count(*) FROM river_job
+          WHERE queue IN ('{{ $queueList }}')
+          AND state IN ('available', 'scheduled', 'retryable')
+          AND (scheduled_at IS NULL OR scheduled_at <= now())
+        targetQueryValue: {{ $group.autoscaling.queueDepthPerReplica | quote }}
+      authenticationRef:
+        name: {{ include "dev-health.fullname" $ }}-go-worker-river-ro
+{{- end }}
+{{- end }}
+{{- end }}

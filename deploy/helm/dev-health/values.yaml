@@ -369,6 +369,13 @@ goWorkers:
   # switch backends between statements. The role passwords stay in the
   # dedicated goWorkers.pgbouncer secret and are projected to each worker
   # group by individual secretKeyRef entries, never envFrom.
+  # -- CHAOS-5594: KEDA is a cluster-scoped operator installed as its OWN
+  #    Helm release, same pattern as ingress-nginx (never a chart dependency
+  #    of this umbrella -- CRD lifecycle stays independent). Only consulted
+  #    here to scope the transaction pooler's NetworkPolicy ingress
+  #    (go-pgbouncer.yaml) to KEDA's namespace when any group autoscales.
+  keda:
+    namespace: "keda"
   pgbouncer:
     enabled: true
     # Pinned to the compatibility-matrix image. Do not replace this with a
@@ -419,7 +426,15 @@ goWorkers:
       #    secret.create=false the userlist.txt key must be present in the
       #    pre-created Secret too, the same way POSTGRES_URI and the two other
       #    DSNs already must be.
-      extraUsers: []
+      #
+      #    CHAOS-5594: KEDA's read-only role is the first real user of this
+      #    knob -- its ScaledObject/TriggerAuthentication (go-worker-keda.yaml)
+      #    connects directly to this pooler with host/port/userName/dbName in
+      #    the trigger metadata and this role's password via
+      #    TriggerAuthentication, no dedicated pooler and no DSN key needed.
+      extraUsers:
+        - role: devhealth_keda_readonly
+          passwordKey: RIVER_KEDA_READONLY_PASSWORD
     queueSession:
       port: 6433
       poolSize: 50
@@ -448,6 +463,7 @@ goWorkers:
         RIVER_DOMAIN_DATABASE_PASSWORD: "change-me-river-domain-password"
         RIVER_QUEUE_DATABASE_PASSWORD: "change-me-river-queue-password"
         RIVER_COORDINATOR_DATABASE_PASSWORD: "change-me-river-coordinator-password"
+        RIVER_KEDA_READONLY_PASSWORD: "change-me-river-keda-readonly-password"
   groups:
     - name: heavy
       image: ghcr.io/full-chaos/dev-health-go-worker:latest
@@ -456,7 +472,15 @@ goWorkers:
       replicas: 1
       terminationGracePeriodSeconds: 7260
       resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
-      autoscaling: {enabled: true, minReplicas: 1, maxReplicas: 2, queueDepth: 1, oldestAgeSeconds: 60, saturationMilli: 800m}
+      # CHAOS-5594: KEDA postgresql scaler on river_job backlog (available +
+      # due-scheduled + retryable across this group's queues, see
+      # go-worker-keda.yaml). investment.materialize carries the heavy
+      # backlog (~2,200 jobs, concurrency 3 post-R176); queueDepthPerReplica
+      # is deliberately loose (10) so one extra replica clears a realistic
+      # burst without chasing every retry. cooldownPeriod 600s (>=5min) and
+      # terminationGracePeriodSeconds above (7260s) both protect the
+      # long-running metrics job from a scale-down SIGKILL.
+      autoscaling: {enabled: true, minReplicas: 1, maxReplicas: 3, queueDepthPerReplica: 10, cooldownPeriod: 600, pollingInterval: 30}
       # CHAOS-4351: this is the ONLY worker group whose queue set includes
       # `metrics` (confirmed via `rg 'queues='` against every group in this
       # file), i.e. the only one that calls the metrics compatibility
@@ -474,7 +498,11 @@ goWorkers:
       replicas: 1
       terminationGracePeriodSeconds: 960
       resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
-      autoscaling: {enabled: true, minReplicas: 1, maxReplicas: 2, queueDepth: 1, oldestAgeSeconds: 60, saturationMilli: 800m}
+      # CHAOS-5594: queueDepthPerReplica 5 -- webhooks (concurrency 4) is the
+      # busiest queue here; a modest per-replica target keeps one extra
+      # replica responsive without scaling on routine coverage/retention
+      # trickle.
+      autoscaling: {enabled: true, minReplicas: 1, maxReplicas: 2, queueDepthPerReplica: 5, cooldownPeriod: 300, pollingInterval: 30}
     - name: sync
       image: ghcr.io/full-chaos/dev-health-go-worker:latest
       queues: [sync]
@@ -482,7 +510,9 @@ goWorkers:
       replicas: 1
       terminationGracePeriodSeconds: 960
       resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
-      autoscaling: {enabled: true, minReplicas: 1, maxReplicas: 2, queueDepth: 1, oldestAgeSeconds: 60, saturationMilli: 800m}
+      # CHAOS-5594: single queue, concurrency 4 -- queueDepthPerReplica 5
+      # mirrors that headroom.
+      autoscaling: {enabled: true, minReplicas: 1, maxReplicas: 2, queueDepthPerReplica: 5, cooldownPeriod: 300, pollingInterval: 30}
     # Its own group, like the Celery fleet splits per queue. Fused with sync it
     # cannot start while provider routes are default-off: selected queues must
     # equal constructed queues, and no provider handler is built (CHAOS-3926).
@@ -493,7 +523,10 @@ goWorkers:
       replicas: 1
       terminationGracePeriodSeconds: 960
       resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
-      autoscaling: {enabled: true, minReplicas: 1, maxReplicas: 2, queueDepth: 1, oldestAgeSeconds: 60, saturationMilli: 800m}
+      # CHAOS-5594: provider routes are default-off (CHAOS-3926 above) --
+      # this group idles at 0 backlog on a fresh install, so the KEDA
+      # trigger simply never fires above minReplicas until routes activate.
+      autoscaling: {enabled: true, minReplicas: 1, maxReplicas: 2, queueDepthPerReplica: 3, cooldownPeriod: 300, pollingInterval: 30}
     - name: reconciler
       image: ghcr.io/full-chaos/dev-health-go-reconciler:latest
       replicas: 1
@@ -803,6 +836,12 @@ config:
   RIVER_DOMAIN_DATABASE_ROLE: "devhealth_domain"
   RIVER_QUEUE_DATABASE_ROLE: "devhealth_queue"
   RIVER_COORDINATOR_DATABASE_ROLE: "devhealth_coordinator"
+  # -- CHAOS-5594: KEDA's postgresql scaler reads river_job backlog through
+  #    this role, over the EXISTING transaction pooler (no new pooler
+  #    deployment). SELECT-only on river_job -- grant it nothing else. Same
+  #    role/DSN pattern as the three roles above; password lives under
+  #    goWorkers.pgbouncer.secret.data.RIVER_KEDA_READONLY_PASSWORD.
+  RIVER_KEDA_READONLY_DATABASE_ROLE: "devhealth_keda_readonly"
   # -- Worker operational bridge (CUT-04). The Go PagerDuty stream runner
   #    forwards reconciliation to the API bridge, so it cannot open readiness
   #    without a reachable endpoint. Empty auto-computes the in-cluster API

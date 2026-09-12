@@ -380,10 +380,51 @@ sections.
 5. Scrape `/metrics` and alert on all three capacity signals before proceeding:
    `worker_jobs_available` (depth), `worker_job_oldest_age_seconds` (oldest
    age), and `worker_execution_saturation_ratio` (configured worker capacity).
-   The Kubernetes/Helm HPAs require a Prometheus Adapter mapping those exact
-   metric names; they stay at zero if the adapter cannot read them. Also watch
+   These stay dashboard/alerting-only signals (Grafana, `alerts/rules.yml`) --
+   they do NOT drive autoscaling; see below. Also watch
    `worker_database_pool_saturation_ratio` and the checked-in Go-worker
    Grafana dashboard.
+
+## Autoscaling (KEDA, CHAOS-5594)
+
+The Helm chart's per-group `autoscaling.enabled` renders a KEDA
+`ScaledObject` + a shared `TriggerAuthentication`
+(`deploy/helm/dev-health/templates/go-worker-keda.yaml`), gated on
+`goWorkers.enabled` and each group's own `autoscaling.enabled`. Disabled
+(the default) renders nothing -- same as before this ticket.
+
+**Signal:** river_job backlog (`available` + due `scheduled` + `retryable`,
+`running` excluded -- it is in-flight, not waiting) for the group's own
+queues, read through the existing transaction pooler with a dedicated
+read-only role (`devhealth_keda_readonly`) registered as one more
+`goWorkers.pgbouncer.transaction.extraUsers` entry (`go-pgbouncer.yaml`,
+CHAOS-5616's mechanism) -- never a new pooler, never an inline credential:
+the ScaledObject's trigger metadata carries host/port/userName/dbName
+(non-secret), TriggerAuthentication carries only the password.
+
+**Why not the old HPA:** the previous `autoscaling/v2` HorizontalPodAutoscaler
+here scaled on External metrics `worker_jobs_available` /
+`worker_job_oldest_age_seconds` / `worker_execution_saturation_ratio` (still
+emitted at step 5 above, for dashboards/alerting), which required a
+Prometheus Adapter mapping those exact names into the External Metrics API.
+That adapter was never built, so those HPAs sat at `<unknown>` and never
+scaled anything -- this is the CHAOS-5594 footnote Chris asked about
+("why aren't the workers autoscaling?"). KEDA's `postgresql` scaler queries
+river_job directly and needs no adapter.
+
+**Never autoscaled:** `reconciler` and `scheduler` are coordinator singletons
+per the umbrella's Autoscaling contract (`deploy/docs/canonical-deployment.md`)
+-- the chart fails the render if either sets `autoscaling.enabled: true`.
+Stream-runner groups (`stream-ingest`/`stream-external`/`stream-pagerduty`)
+are event consumers with their own backpressure, not River queue consumers
+(no `queues` key) -- the chart fails the render if one sets
+`autoscaling.enabled: true` for the same reason: there is no backlog signal
+to read. Size those by fixed `replicas` instead.
+
+**Known gap:** `RIVER_KEDA_READONLY_DATABASE_ROLE` (`devhealth_keda_readonly`,
+SELECT-only on `river_job`) is not yet created by `go-river-provision` --
+provision it by hand until a follow-up ticket adds it to that tool's grant
+set (same shape as the three roles it already provisions).
 6. Keep Celery consumers and Beat running during coexistence. A failed Go
    readiness, queue age threshold, or saturation threshold means scale the
    affected group back to zero; do not reroute work as a recovery action.

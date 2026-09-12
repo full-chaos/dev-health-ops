@@ -254,6 +254,31 @@ type GithubWorkItemDerivationContext struct {
 	manualFallbacks              []GithubWorkItemDerivationManualFallback
 	LinkedIssue                  map[string][2]string
 	StoredEdgeMerge              GithubWorkItemStoredEdgeMergeObservation
+	// teamsWithOwnership and teamsKnownFromCatalog together answer CHAOS-
+	// 5649's (R179 rule 2, chris 2026-09-12) null-carrying-team question.
+	// teamsWithOwnership: every team_id that owns at least one repo
+	// (facts.Repos -- repo_ownership, repo_patterns already expanded to
+	// concrete repos before this package sees them), owns at least one
+	// project (facts.Projects -- project_ownership, and issue ownership,
+	// which is attributed via the SAME Projects fact), or carries at least
+	// one project_key (facts.Teams with len(ProjectKeys) > 0). Deliberately
+	// NOT built from projectKeyTeams -- every team self-registers there
+	// under its own team_id (native_team_key lookup), which would mark
+	// every team "owning" and defeat the check.
+	// teamsKnownFromCatalog: every team_id LoadTeams returned for the org
+	// (the `teams` table has no ownership filter -- a team with empty
+	// project_keys/repo_patterns still has a row). A team_id must be in
+	// teamsKnownFromCatalog AND absent from teamsWithOwnership to count as
+	// null-carrying -- a team_id this context never saw a Teams catalog row
+	// for at all (e.g. a members-only test fixture, or any other gap in
+	// what this run happened to load) is UNKNOWN, not proven null-carrying,
+	// and R74's existing ownership-unknown pass-through governs it
+	// unchanged. This is what keeps R179 rule 2 from re-litigating R74:
+	// R74 is "no evidence either way, don't gate"; R179 rule 2 is "positive
+	// evidence of zero ownership, do gate" -- two different questions that
+	// happen to look identical from ONE repo's ownership row alone.
+	teamsWithOwnership    map[string]struct{}
+	teamsKnownFromCatalog map[string]struct{}
 }
 
 // GithubWorkItemDerivationEdgeKey is the identity a fresh edge is authoritative
@@ -322,6 +347,29 @@ func NewGitHubWorkItemDerivationContext(
 		providerMemberByUntypedFacet: map[string][]GithubWorkItemDerivationCandidate{},
 		manualFallbacks:              append([]GithubWorkItemDerivationManualFallback(nil), facts.ManualFallbacks...),
 		LinkedIssue:                  map[string][2]string{},
+		teamsWithOwnership:           map[string]struct{}{},
+		teamsKnownFromCatalog:        map[string]struct{}{},
+	}
+	// CHAOS-5649 (R179 rule 2): populate the null-carrying-team sets from
+	// the raw ownership facts directly -- see teamsWithOwnership's doc
+	// comment for why this is not derived from projectKeyTeams.
+	for _, fact := range facts.Repos {
+		if teamID := strings.TrimSpace(fact.TeamID); teamID != "" {
+			result.teamsWithOwnership[teamID] = struct{}{}
+		}
+	}
+	for _, fact := range facts.Projects {
+		if teamID := strings.TrimSpace(fact.TeamID); teamID != "" {
+			result.teamsWithOwnership[teamID] = struct{}{}
+		}
+	}
+	for _, team := range facts.Teams {
+		if teamID := strings.TrimSpace(team.TeamID); teamID != "" {
+			result.teamsKnownFromCatalog[teamID] = struct{}{}
+			if len(team.ProjectKeys) > 0 {
+				result.teamsWithOwnership[teamID] = struct{}{}
+			}
+		}
 	}
 	for _, team := range facts.Teams {
 		for _, rawKey := range append(append([]string(nil), team.ProjectKeys...), team.TeamID) {
@@ -776,6 +824,32 @@ func (derived GithubWorkItemDerivationContext) resolve(
 		// (sinks/clickhouse/core.py inserts verbatim), which is why
 		// _collapse_by_team_id lives THERE instead.
 		candidates := RankDerivationCandidates(DedupeDerivationCandidates(bySource[source]))
+		// CHAOS-5649 (R179 rule 1, chris 2026-09-12): author_membership is
+		// the lowest-ranked person signal in `order` (rank 6, 0-indexed --
+		// only manual_fallback/unassigned rank below it). Once an
+		// earlier-ranked source already produced a primary attribution for
+		// this work item, author_membership must never add a SECOND
+		// (different) team on top of it -- that was a straight double
+		// count in the table (834 such rows measured on prod 2026-09-12,
+		// see .remember memory project_ops_team_null_carrying.md). A
+		// candidate naming the SAME team as the existing primary is kept
+		// (not a second team, and CHAOS-4244's own regression coverage --
+		// TestGitHubWorkItemDerivationReporterAndAssigneeSamePersonSameTeamStayDistinctProvenance
+		// -- deliberately wants that row for provenance: distinct source,
+		// distinct ClickHouse storage key, same team). No other source in
+		// `order` gets this treatment: the provenance contract still wants
+		// every OTHER source's non-primary candidates recorded (see the
+		// no-team_id-collapse comment above); this ticket's ruling names
+		// author_membership specifically.
+		if source == "author_membership" && primary != nil {
+			sameTeamOnly := candidates[:0:0]
+			for _, candidate := range candidates {
+				if GithubWorkItemDerivationStringValue(candidate.TeamID) == GithubWorkItemDerivationStringValue(primary.TeamID) {
+					sameTeamOnly = append(sameTeamOnly, candidate)
+				}
+			}
+			candidates = sameTeamOnly
+		}
 		if primary == nil && len(candidates) > 0 {
 			value := candidates[0]
 			primary = &value
@@ -843,6 +917,14 @@ func (derived GithubWorkItemDerivationContext) resolve(
 		// CONSTANT's value, not this composition's correctness -- if that
 		// constant's value is ever revisited, this branch becomes reachable
 		// again with no further code change needed.
+		// CHAOS-5649 (R179 rule 2): team_null_carrying is a definitive,
+		// actionable reason (the resolved team was deliberately excluded,
+		// not merely unmapped) -- ranked ahead of ownership_unknown/
+		// no_membership for the same "most actionable wins" reason
+		// ambiguous_admin_membership is ranked first above.
+		if membershipReason == "" && GithubWorkItemDerivationHasReason(membershipSkipReasons, MembershipOwnershipReasonTeamNullCarrying) {
+			membershipReason = MembershipOwnershipReasonTeamNullCarrying
+		}
 		if membershipReason == "" && GithubWorkItemDerivationHasReason(membershipSkipReasons, MembershipOwnershipReasonUnknown) {
 			membershipReason = MembershipOwnershipReasonUnknown
 		}
@@ -1868,6 +1950,23 @@ const (
 	// row at all. R74 (chris via team-lead, 2026-09-09, DECIDED): this
 	// passes through, does not gate -- see ownershipUnknownBlocksMembership.
 	MembershipOwnershipReasonUnknown = "ownership_unknown"
+	// MembershipOwnershipReasonTeamNullCarrying: the resolved team itself
+	// (not the repo) carries NO ownership signal anywhere in the org -- no
+	// repo_ownership, no repo_patterns-derived repo, no project_ownership,
+	// no project_keys (CHAOS-5649, R179 rule 2, chris 2026-09-12). This is
+	// a team-level gate, checked BEFORE the repo-level R74 unknown
+	// pass-through: a repo with no ownership row still passes an otherwise
+	// legitimate team through (R74), but a team with NO ownership row
+	// ANYWHERE never should, or an org's null-carrying provider team (e.g.
+	// gh:ops-team, GitHub-synced, zero repo/project ownership, one member)
+	// silently absorbs that member's unclaimed PRs instead of falling to
+	// unassigned. See teamsWithOwnership's doc comment for the exact set.
+	// DELIBERATELY NOT part of Python compute_work_items.py's
+	// membership_reason byte-identical contract, same footing as
+	// MembershipOwnershipReasonUnknown above: Python has no such gate, and
+	// this string collides with nothing Python's own composition emits, so
+	// it is additive, not a change to the pinned contract.
+	MembershipOwnershipReasonTeamNullCarrying = "team_null_carrying"
 )
 
 // ownershipUnknownBlocksMembership is CHAOS-4320's repo-ownership-gate
@@ -1922,9 +2021,33 @@ const ownershipUnknownBlocksMembership = false
 // convention this file's empty_string_team_id_is_not_null oracle case
 // already pins), otherwise it falls through exactly like any other
 // non-owning/unresolved team.
+// teamIsNullCarrying answers CHAOS-5649's (R179 rule 2) team-level gate:
+// does this context have POSITIVE evidence (a Teams catalog row --
+// teamsKnownFromCatalog) that teamID exists, AND zero ownership signal
+// anywhere for it (teamsWithOwnership)? A teamID this context has no Teams
+// catalog row for at all is UNKNOWN, not null-carrying -- returns false, and
+// R74's ownership-unknown pass-through governs unchanged (see
+// teamsKnownFromCatalog's doc comment). teamID == "" is also excluded
+// (returns false) for the same reason teamOwnsSubjectRepo does not
+// short-circuit "" elsewhere: a blank team_id is a degenerate membership
+// row, not a real provider-synced team, so it is not this gate's concern.
+func (derived GithubWorkItemDerivationContext) teamIsNullCarrying(teamID string) bool {
+	if teamID == "" {
+		return false
+	}
+	if _, known := derived.teamsKnownFromCatalog[teamID]; !known {
+		return false
+	}
+	_, owns := derived.teamsWithOwnership[teamID]
+	return !owns
+}
+
 func (derived GithubWorkItemDerivationContext) teamOwnsSubjectRepo(
 	subject GithubWorkItemDerivationSubject, teamID string,
 ) (string, bool) {
+	if derived.teamIsNullCarrying(teamID) {
+		return MembershipOwnershipReasonTeamNullCarrying, false
+	}
 	owners := append(
 		append([]GithubWorkItemDerivationCandidate(nil),
 			derived.repoByID[AttributionMapKey(subject.Provider, GithubWorkItemDerivationStringValue(subject.RepoID))]...),

@@ -1429,6 +1429,14 @@ func TestGitHubWorkItemDerivationAuthorNeverOutranksALinkedIssueDonor(t *testing
 	// admin-mapped author AND a linked_issue donor for a DIFFERENT team must
 	// resolve to the linked issue's team -- author_membership (rank 6) sits
 	// BELOW linked_issue (rank 5).
+	//
+	// CHAOS-5649 (R179 rule 1, chris 2026-09-12) supersedes this test's
+	// ORIGINAL author-candidate assertion (present, non-primary, team-ops):
+	// linked_issue already set primary to a DIFFERENT team (team-platform)
+	// before the author_membership tier of `order` is reached, so rule 1
+	// now drops the author_membership row for team-ops entirely -- it would
+	// have been a second, non-primary team on this item, exactly prod's
+	// measured 834-row double count.
 	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
 	derived := teamattribution.NewGitHubWorkItemDerivationContext(teamattribution.GithubWorkItemDerivationFacts{
 		Members: []teamattribution.GithubWorkItemDerivationMemberFact{{
@@ -1454,8 +1462,8 @@ func TestGitHubWorkItemDerivationAuthorNeverOutranksALinkedIssueDonor(t *testing
 	for _, candidate := range candidates {
 		bySource[candidate.Source] = candidate
 	}
-	if author := bySource["author_membership"]; author.IsPrimary != 0 || teamattribution.GithubWorkItemDerivationStringValue(author.TeamID) != "team-ops" {
-		t.Fatalf("author candidate = %+v, want present, non-primary, team-ops", author)
+	if _, present := bySource["author_membership"]; present {
+		t.Fatalf("candidates = %+v, want NO author_membership row (CHAOS-5649 R179 rule 1: linked_issue already set a DIFFERENT primary team)", candidates)
 	}
 	if linked := bySource["linked_issue"]; linked.IsPrimary != 1 || teamattribution.GithubWorkItemDerivationStringValue(linked.TeamID) != "team-platform" {
 		t.Fatalf("linked_issue candidate = %+v, want present, primary, team-platform", linked)
@@ -1515,8 +1523,14 @@ func TestGitHubWorkItemDerivationCausalAuthorNeverOutranksARealLinkedIssueDonor(
 	if linked := bySource["linked_issue"]; linked.IsPrimary != 1 || teamattribution.GithubWorkItemDerivationStringValue(linked.TeamID) != "CHAOS" {
 		t.Fatalf("linked_issue candidate = %+v, want present, primary, CHAOS", linked)
 	}
-	if author := bySource["author_membership"]; author.IsPrimary != 0 || teamattribution.GithubWorkItemDerivationStringValue(author.TeamID) != "team-ops" {
-		t.Fatalf("author candidate = %+v, want present, non-primary, team-ops", author)
+	// CHAOS-5649 (R179 rule 1, chris 2026-09-12) supersedes this test's
+	// ORIGINAL author-candidate assertion (present, non-primary, team-ops):
+	// see TestGitHubWorkItemDerivationAuthorNeverOutranksALinkedIssueDonor
+	// above for the full rationale -- the real donor already set a
+	// DIFFERENT primary team (CHAOS), so author_membership for team-ops is
+	// no longer recorded at all.
+	if _, present := bySource["author_membership"]; present {
+		t.Fatalf("candidates = %+v, want NO author_membership row (CHAOS-5649 R179 rule 1: the real donor already set a DIFFERENT primary team)", candidates)
 	}
 }
 

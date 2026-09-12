@@ -1,7 +1,8 @@
 // Response assembly for GET /api/v1/quadrant -- ports build_quadrant_response
-// (api/services/quadrant.py:468-659) for scope_type in {org, team, repo,
-// service}. See quadrant.go's package doc comment for the documented
-// developer/person scope gap.
+// (api/services/quadrant.py:468-659) for every scope_type Python serves
+// (org, team, repo, service, developer, person). See quadrant.go's package
+// doc comment and identity.go for the person/developer scope's identity
+// resolution.
 package quadrant
 
 import (
@@ -77,17 +78,15 @@ type RequestError struct {
 
 func (e *RequestError) Error() string { return e.Message }
 
-func badRequest(msg string) error     { return &RequestError{Status: 400, Message: msg} }
-func notFound(msg string) error       { return &RequestError{Status: 404, Message: msg} }
-func notImplemented(msg string) error { return &RequestError{Status: 501, Message: msg} }
+func badRequest(msg string) error { return &RequestError{Status: 400, Message: msg} }
+func notFound(msg string) error   { return &RequestError{Status: 404, Message: msg} }
 
 // Params is BuildResponse's input -- the query params GET /api/v1/quadrant
-// takes (main.py:882-890), minus scope_id (unused for every scope this port
-// serves -- see quadrant.go's package doc comment: scope_id only matters for
-// the unported person branch).
+// takes (main.py:882-890).
 type Params struct {
 	Type      string
 	ScopeType string // default "org", matching main.py's own default
+	ScopeID   string // required for person/developer scope only (quadrant.py:500-503)
 	RangeDays int    // default 30
 	Bucket    string // default "week"
 	StartDate *time.Time
@@ -180,8 +179,44 @@ type yWindow struct {
 	WindowEnd   time.Time
 }
 
+// rowEntity ports _row_entity (quadrant.py:384-397) plus the
+// `team_labels.get(entity_id, label)` override build_quadrant_response
+// applies right after calling it (quadrant.py:603, 619) -- teamLabels is
+// always empty outside team scope, so folding the lookup in here changes
+// nothing for repo/person. For person scope the raw entity_id (a stored
+// identity string, e.g. an email or "github:handle") is converted to a
+// person id/display name exactly like Python does; entity_label is
+// ignored entirely in that case, matching Python's own person branch
+// (quadrant.py:391 never reads row["entity_label"] once group_scope is
+// "person").
+func rowEntity(row metricRow, scope string, teamLabels map[string]string) (entityID, label string) {
+	if scope == "person" {
+		if row.EntityID == "" {
+			return "", ""
+		}
+		entityID = personIDForIdentity(row.EntityID)
+		label = displayNameForIdentity(row.EntityID)
+	} else {
+		entityID = row.EntityID
+		label = row.EntityLabel
+		if label == "" {
+			label = entityID
+		}
+	}
+	if entityID == "" {
+		return "", ""
+	}
+	if l, ok := teamLabels[entityID]; ok {
+		label = l
+	}
+	if label == "" {
+		label = entityID
+	}
+	return entityID, label
+}
+
 // BuildResponse ports build_quadrant_response (quadrant.py:468-659) for
-// group scope "team"/"repo". orgID is the caller's authenticated org
+// every group scope Python serves. orgID is the caller's authenticated org
 // (authctx.Claims.OrgID at the route layer), matching current_user.org_id
 // in main.py's quadrant() view.
 func BuildResponse(ctx context.Context, client QueryClient, orgID string, params Params) (*Response, error) {
@@ -192,20 +227,25 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string, params
 
 	normalizedScope := normalizeScope(params.ScopeType)
 	switch normalizedScope {
-	case "org", "team", "repo", "service":
+	case "org", "team", "repo", "service", "person":
 		// supported below
-	case "person":
-		return nil, notImplemented("Individual (person/developer) scope quadrants are not yet supported by the Go query-api port of /api/v1/quadrant (CHAOS-5550) -- served by the Python endpoint")
 	default:
 		return nil, badRequest("Invalid scope filter")
 	}
 
 	// CHAOS-2079 churn_throughput forced-repo-grain override, ported
-	// verbatim (quadrant.py:493-494).
+	// verbatim (quadrant.py:493-494) -- gated on org/team only, so person
+	// scope is untouched by it, same as Python.
 	if definition.Type == "churn_throughput" && (normalizedScope == "org" || normalizedScope == "team") {
 		normalizedScope = "repo"
 	}
 	scope := groupScope(normalizedScope)
+
+	// quadrant.py:500-503: person scope requires a scope_id up front, before
+	// any ClickHouse call.
+	if scope == "person" && params.ScopeID == "" {
+		return nil, badRequest("Individual quadrants require a person id")
+	}
 
 	if params.Bucket != "week" && params.Bucket != "month" {
 		return nil, badRequest("Bucket must be week or month")
@@ -224,11 +264,31 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string, params
 		return nil, badRequest("Metric not supported for scope")
 	}
 
+	// quadrant.py:532-541: person scope resolves the requested person id to
+	// its identity variants, then to that person's own team, and scopes
+	// both metric reads to that team cohort (_cohort_scope_filter) -- the
+	// response ends up plotting the person's whole team, not a
+	// single-point series, matching Python exactly (see identity.go).
+	var teamFilter string
+	if scope == "person" {
+		identities, err := resolveIdentityVariants(ctx, client, params.ScopeID, orgID)
+		if err != nil {
+			return nil, err
+		}
+		if len(identities) == 0 {
+			return nil, notFound("Individual not found")
+		}
+		teamFilter, err = fetchPersonTeamID(ctx, client, identities, orgID)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	fetch := func(spec MetricSpec) ([]metricRow, error) {
 		if definition.Type == "cycle_throughput" && scope == "team" && spec.UsePrimaryTeamAttribution {
 			return fetchWorkItemTeamQuadrantMetric(ctx, client, spec.Metric, startDay, endDay, params.Bucket, orgID)
 		}
-		return fetchQuadrantMetric(ctx, client, spec, startDay, endDay, params.Bucket, orgID)
+		return fetchQuadrantMetric(ctx, client, spec, startDay, endDay, params.Bucket, orgID, teamFilter)
 	}
 
 	xRows, err := fetch(xSpec)
@@ -262,40 +322,31 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string, params
 	}
 	xMap := map[xKey]xEntry{}
 	for _, row := range xRows {
-		if row.EntityID == "" {
+		entityID, label := rowEntity(row, scope, teamLabels)
+		if entityID == "" {
 			continue
 		}
-		label := row.EntityLabel
-		if l, ok := teamLabels[row.EntityID]; ok {
-			label = l
-		}
-		if label == "" {
-			label = row.EntityID
-		}
-		xMap[xKey{row.EntityID, row.Bucket}] = xEntry{Label: label, X: xSpec.Transform(row.Value)}
+		xMap[xKey{entityID, row.Bucket}] = xEntry{Label: label, X: xSpec.Transform(row.Value)}
 	}
 
 	entityOrder := make([]string, 0)
 	pointsByEntity := map[string][]yWindow{}
 	for _, row := range yRows {
-		if row.EntityID == "" {
+		entityID, label := rowEntity(row, scope, teamLabels)
+		if entityID == "" {
 			continue
 		}
-		label := row.EntityLabel
-		if l, ok := teamLabels[row.EntityID]; ok {
-			label = l
-		}
-		xe, ok := xMap[xKey{row.EntityID, row.Bucket}]
+		xe, ok := xMap[xKey{entityID, row.Bucket}]
 		if !ok {
 			continue
 		}
 		if label == "" {
 			label = xe.Label
 		}
-		if _, seen := pointsByEntity[row.EntityID]; !seen {
-			entityOrder = append(entityOrder, row.EntityID)
+		if _, seen := pointsByEntity[entityID]; !seen {
+			entityOrder = append(entityOrder, entityID)
 		}
-		pointsByEntity[row.EntityID] = append(pointsByEntity[row.EntityID], yWindow{
+		pointsByEntity[entityID] = append(pointsByEntity[entityID], yWindow{
 			Label:       label,
 			X:           xe.X,
 			Y:           ySpec.Transform(row.Value),

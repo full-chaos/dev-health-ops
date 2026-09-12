@@ -20,40 +20,34 @@
 // the stored team_id column directly off the daily rollup tables. Any
 // change to that split is a product decision, not a porting one.
 //
-// SCOPE, deliberately narrower than the full Python endpoint, in ONE
-// documented way:
+// SCOPE: all four group scopes Python serves (team, repo, person, and the
+// org/service aliases _group_scope folds into team) are now ported. The
+// person/developer branch additionally ports
+// identity.go's identity-alias resolution (people_identity.py's
+// load_identity_aliases/identity_variants/person_id_for_identity) and the
+// two ClickHouse readers queries/people.py's resolve_person_identity/
+// fetch_person_team_id back -- see identity.go's package doc comment for
+// the config-file reality that makes the alias-reconciliation path a
+// practical no-op today without changing the ported algorithm.
 //
-//  1. Only "team" and "repo" group scope are ported (scope_type
-//     org/team/service -> team grain, scope_type repo -> repo grain --
-//     _group_scope's own mapping). scope_type developer/person is NOT
-//     ported: Python's person branch pulls in a second subsystem this PR
-//     does not touch -- identity alias resolution (people_identity.py's
-//     load_identity_aliases/identity_variants/person_id_for_identity,
-//     backed by its own data file) and two more ClickHouse readers
-//     (queries/people.py's resolve_person_identity/fetch_person_team_id) --
-//     none of which the ticket's scope list names (resolver, the four
-//     quadrant definitions, the route, the migration-matrix row). This
-//     route answers 501 for scope_type in {developer, person}, naming the
-//     gap explicitly rather than silently mis-answering, and is
-//     independently reversible: the person branch can be added later
-//     without changing this file's team/repo code paths or the wire
-//     contract for the requests it already serves. PERSON_METRICS is
-//     therefore not ported either -- it exists only to serve that branch.
-//
-// Every other behaviour Python has for scope_type in {org, team, repo,
-// service} -- including the churn_throughput forced-repo-grain override
-// (CHAOS-2079) and the cycle_throughput attribution quirk above -- is
-// ported verbatim.
+// Every behaviour Python has for scope_type in {org, team, repo, service,
+// developer, person} -- including the churn_throughput forced-repo-grain
+// override (CHAOS-2079, which does NOT apply to person scope, matching
+// quadrant.py:493's own `normalized_scope in {"org", "team"}` gate) and the
+// cycle_throughput attribution quirk above -- is ported verbatim.
 //
 // Data-layer note: ClickHouse reads follow src/dev_health_ops/
-// clickhouse_dedup.py's dedup_from exactly (dedupFrom below is the
-// subset of its table registry the two ported metric tables and their
-// query-side dependency actually use): work_item_metrics_daily is
-// ReplacingMergeTree(computed_at), deduplicated with FINAL; user_metrics_daily
-// and repo_metrics_daily are legacy append-only MergeTree, deduplicated with
-// the same "latest computed_at per natural key" LIMIT-1-BY subquery Python's
-// dedup_from returns for them. teams is read with FINAL directly (not
-// through dedup_from), matching _resolve_team_labels's own query.
+// clickhouse_dedup.py's dedup_from exactly (dedupFrom below is the subset
+// of its table registry the three ported metric tables and their
+// query-side dependency actually use): work_item_metrics_daily and
+// work_item_user_metrics_daily are both ReplacingMergeTree(computed_at),
+// deduplicated with FINAL; user_metrics_daily and repo_metrics_daily are
+// legacy append-only MergeTree, deduplicated with the same "latest
+// computed_at per natural key" LIMIT-1-BY subquery Python's dedup_from
+// returns for them. teams is read with FINAL directly (not through
+// dedup_from), matching _resolve_team_labels's own query; identities
+// (person-scope team-cohort lookup, identity.go) is likewise read with
+// FINAL directly, matching fetch_person_team_id's own query.
 //
 // Go-side-only adaptation (does not change any computed value): every
 // value_expr is wrapped in toFloat64(...) in the outer SELECT so the Go
@@ -220,11 +214,54 @@ var RepoMetrics = map[string]MetricSpec{
 	},
 }
 
-// metricsByScope ports METRICS_BY_SCOPE (quadrant.py:272-276), restricted to
-// the two group scopes this port carries -- see package doc comment.
+// PersonMetrics ports PERSON_METRICS (quadrant.py:208-270) verbatim.
+var PersonMetrics = map[string]MetricSpec{
+	"churn": {
+		Metric: "churn", Label: "Churn", Unit: "loc",
+		Table: "user_metrics_daily AS m", ValueExpr: "sum(m.loc_touched)",
+		EntityExpr: "m.identity_id", LabelExpr: "m.identity_id",
+		WhereClause: "AND m.identity_id != ''", Transform: identity,
+	},
+	"throughput": {
+		Metric: "throughput", Label: "Throughput", Unit: "items",
+		Table: "work_item_user_metrics_daily AS m", ValueExpr: "sum(m.items_completed)",
+		EntityExpr: "m.user_identity", LabelExpr: "m.user_identity",
+		WhereClause: "AND m.user_identity != ''", Transform: identity,
+	},
+	"cycle_time": {
+		Metric: "cycle_time", Label: "Cycle Time", Unit: "days",
+		Table: "work_item_user_metrics_daily AS m", ValueExpr: "avg(m.cycle_time_p50_hours)",
+		EntityExpr: "m.user_identity", LabelExpr: "m.user_identity",
+		WhereClause: "AND m.cycle_time_p50_hours IS NOT NULL AND m.user_identity != ''",
+		Transform:   hoursToDays,
+	},
+	"wip": {
+		Metric: "wip", Label: "WIP", Unit: "items",
+		Table: "work_item_user_metrics_daily AS m", ValueExpr: "avg(m.wip_count_end_of_day)",
+		EntityExpr: "m.user_identity", LabelExpr: "m.user_identity",
+		WhereClause: "AND m.user_identity != ''", Transform: identity,
+	},
+	"review_load": {
+		Metric: "review_load", Label: "Review Load", Unit: "reviews",
+		Table: "user_metrics_daily AS m", ValueExpr: "sum(m.reviews_given)",
+		EntityExpr: "m.identity_id", LabelExpr: "m.identity_id",
+		WhereClause: "AND m.identity_id != ''", Transform: identity,
+	},
+	"review_latency": {
+		Metric: "review_latency", Label: "Review Latency", Unit: "hours",
+		Table: "user_metrics_daily AS m", ValueExpr: "avg(m.pr_first_review_p50_hours)",
+		EntityExpr: "m.identity_id", LabelExpr: "m.identity_id",
+		WhereClause: "AND m.identity_id != '' AND m.pr_first_review_p50_hours IS NOT NULL",
+		Transform:   identity,
+	},
+}
+
+// metricsByScope ports METRICS_BY_SCOPE (quadrant.py:272-276) for all three
+// group scopes.
 var metricsByScope = map[string]map[string]MetricSpec{
-	"team": TeamMetrics,
-	"repo": RepoMetrics,
+	"team":   TeamMetrics,
+	"repo":   RepoMetrics,
+	"person": PersonMetrics,
 }
 
 // QuadrantDefinitions ports QUADRANT_DEFINITIONS (quadrant.py:278-303)
@@ -265,7 +302,8 @@ var QuadrantDefinitions = map[string]QuadrantDefinition{
 // natural keys below).
 
 var rerunDedupedDailyTables = map[string]bool{
-	"work_item_metrics_daily": true,
+	"work_item_metrics_daily":      true,
+	"work_item_user_metrics_daily": true,
 }
 
 var appendOnlyDailyKeys = map[string][]string{
@@ -274,8 +312,9 @@ var appendOnlyDailyKeys = map[string][]string{
 }
 
 // dedupFrom ports dedup_from (clickhouse_dedup.py:135-157) for the table
-// subset above -- table is "<name>" or "<name> AS <alias>", matching every
-// MetricSpec.Table value in this package.
+// subset above (including work_item_user_metrics_daily, PersonMetrics'
+// throughput/cycle_time/wip table) -- table is "<name>" or "<name> AS
+// <alias>", matching every MetricSpec.Table value in this package.
 func dedupFrom(table string) string {
 	base, alias, hasAlias := strings.Cut(table, " AS ")
 	aliasSQL := ""
@@ -314,10 +353,13 @@ func bucketExpr(bucket string) string {
 }
 
 // fetchQuadrantMetric ports fetch_quadrant_metric (queries/quadrant.py:
-// 19-58). scope_filter/scope_params are Python parameters this port never
-// populates (always empty for team/repo group scope -- see package doc
-// comment), so they are not parameters here.
-func fetchQuadrantMetric(ctx context.Context, client QueryClient, spec MetricSpec, startDay, endDay time.Time, bucket, orgID string) ([]metricRow, error) {
+// 19-58). teamFilter ports the scope_filter/scope_params pair
+// _cohort_scope_filter builds (quadrant.py:378-381) -- "" (Python's None
+// team_filter) means no cohort filter, matching every team/repo group-scope
+// call site (which always pass ""); person group scope passes the team id
+// fetchPersonTeamID resolved, restricting the metric read to the person's
+// own team cohort exactly as Python's build_quadrant_response does.
+func fetchQuadrantMetric(ctx context.Context, client QueryClient, spec MetricSpec, startDay, endDay time.Time, bucket, orgID, teamFilter string) ([]metricRow, error) {
 	joinSQL := ""
 	if spec.JoinClause != "" {
 		joinSQL = "\n" + spec.JoinClause
@@ -325,6 +367,16 @@ func fetchQuadrantMetric(ctx context.Context, client QueryClient, spec MetricSpe
 	whereSQL := ""
 	if spec.WhereClause != "" {
 		whereSQL = "\n" + spec.WhereClause
+	}
+	scopeSQL := ""
+	bindings := []dhclickhouse.Binding{
+		{Name: "start_day", Value: formatDay(startDay)},
+		{Name: "end_day", Value: formatDay(endDay)},
+		{Name: "org_id", Value: orgID},
+	}
+	if teamFilter != "" {
+		scopeSQL = "\nAND m.team_id = {team_id:String}"
+		bindings = append(bindings, dhclickhouse.Binding{Name: "team_id", Value: teamFilter})
 	}
 	query := fmt.Sprintf(`
         SELECT
@@ -334,16 +386,11 @@ func fetchQuadrantMetric(ctx context.Context, client QueryClient, spec MetricSpe
             toFloat64(%s) AS value
         FROM %s%s
         WHERE day >= {start_day:Date} AND day < {end_day:Date}%s
-          AND org_id = {org_id:String}
+          AND org_id = {org_id:String}%s
         GROUP BY bucket, entity_id, entity_label
         ORDER BY bucket
-    `, bucketExpr(bucket), spec.EntityExpr, spec.LabelExpr, spec.ValueExpr, dedupFrom(spec.Table), joinSQL, whereSQL)
+    `, bucketExpr(bucket), spec.EntityExpr, spec.LabelExpr, spec.ValueExpr, dedupFrom(spec.Table), joinSQL, whereSQL, scopeSQL)
 
-	bindings := []dhclickhouse.Binding{
-		{Name: "start_day", Value: formatDay(startDay)},
-		{Name: "end_day", Value: formatDay(endDay)},
-		{Name: "org_id", Value: orgID},
-	}
 	return scanMetricRows(ctx, client, query, bindings, "quadrant: fetch_quadrant_metric")
 }
 

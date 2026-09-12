@@ -204,21 +204,32 @@ func TestChurnThroughputForcesRepoGrain(t *testing.T) {
 	}
 }
 
-// TestPersonScopeNotImplemented pins the documented scope gap: developer/
-// person scope answers a typed, recognizable error rather than silently
-// mis-resolving to team/repo grain.
-func TestPersonScopeNotImplemented(t *testing.T) {
+// TestPersonScopeRequiresScopeID pins quadrant.py:500-503: person/developer
+// scope with no scope_id fails fast (400) before any ClickHouse call.
+func TestPersonScopeRequiresScopeID(t *testing.T) {
 	for _, scopeType := range []string{"developer", "person"} {
 		_, err := BuildResponse(context.Background(), unusedQueryClientStub{t: t}, "org-1", Params{
 			Type: "wip_throughput", ScopeType: scopeType, RangeDays: 30, Bucket: "week",
 		})
 		reqErr, ok := AsRequestError(err)
-		if !ok {
-			t.Fatalf("scope_type=%q: err = %v, want *RequestError", scopeType, err)
+		if !ok || reqErr.Status != 400 {
+			t.Fatalf("scope_type=%q: err = %v, want *RequestError{Status: 400}", scopeType, err)
 		}
-		if reqErr.Status != 501 {
-			t.Fatalf("scope_type=%q: status = %d, want 501", scopeType, reqErr.Status)
-		}
+	}
+}
+
+// TestPersonScopeChurnThroughputNotForcedToRepo pins that the CHAOS-2079
+// churn_throughput override (quadrant.py:493-494) is gated on
+// normalized_scope in {"org", "team"} only -- person scope must reach the
+// person-scope-id check (400, no ClickHouse call) rather than being
+// silently redirected to repo grain.
+func TestPersonScopeChurnThroughputNotForcedToRepo(t *testing.T) {
+	_, err := BuildResponse(context.Background(), unusedQueryClientStub{t: t}, "org-1", Params{
+		Type: "churn_throughput", ScopeType: "person", RangeDays: 30, Bucket: "week",
+	})
+	reqErr, ok := AsRequestError(err)
+	if !ok || reqErr.Status != 400 {
+		t.Fatalf("err = %v, want *RequestError{Status: 400} (missing scope_id)", err)
 	}
 }
 

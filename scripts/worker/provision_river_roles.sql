@@ -107,3 +107,38 @@ GRANT USAGE ON SCHEMA public TO :"domain_role";
 REVOKE CREATE ON SCHEMA public FROM :"domain_role";
 GRANT USAGE ON SCHEMA public TO :"queue_role";
 REVOKE CREATE ON SCHEMA public FROM :"queue_role";
+
+-- The KEDA postgresql scaler's read-only role. Optional -- only
+-- provisioned when the caller passes keda_role (the Helm hook does this only
+-- when a goWorkers group has autoscaling.enabled=true; Compose never sets
+-- it). Unlike the three roles above, its password is re-applied every run
+-- (ALTER ROLE, not just at creation): it authenticates a scaler credential
+-- that a rotation should take effect on without a role drop/recreate. It
+-- gets no public schema access at all -- only USAGE on the River schema and
+-- SELECT on river_job, nothing else.
+\if :{?keda_role}
+  \if :{?keda_password}
+  \else
+    \prompt -1 'KEDA read-only role password: ' keda_password
+  \endif
+  \if :{?river_schema}
+  \else
+    \set river_schema river
+  \endif
+
+  SELECT format(
+           'CREATE ROLE %I LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD %L',
+           :'keda_role',
+           :'keda_password'
+         )
+   WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'keda_role')
+  \gexec
+
+  ALTER ROLE :"keda_role" PASSWORD :'keda_password';
+
+  GRANT CONNECT ON DATABASE :"app_database" TO :"keda_role";
+  REVOKE TEMPORARY ON DATABASE :"app_database" FROM :"keda_role";
+
+  GRANT USAGE ON SCHEMA :"river_schema" TO :"keda_role";
+  GRANT SELECT ON :"river_schema".river_job TO :"keda_role";
+\endif

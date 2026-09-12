@@ -424,10 +424,11 @@ are event consumers with their own backpressure, not River queue consumers
 `autoscaling.enabled: true` for the same reason: there is no backlog signal
 to read. Size those by fixed `replicas` instead.
 
-**Known gap:** `RIVER_KEDA_READONLY_DATABASE_ROLE` (`devhealth_keda_readonly`,
-SELECT-only on `river_job`) is not yet created by `go-river-provision` --
-provision it by hand until a follow-up ticket adds it to that tool's grant
-set (same shape as the three roles it already provisions).
+`RIVER_KEDA_READONLY_DATABASE_ROLE` (`devhealth_keda_readonly`,
+SELECT-only on `river_job`) is provisioned by the same
+`…-provision-roles` Helm hook as the three runtime logins
+(`provision_river_roles.sql`), whenever a `goWorkers` group has
+`autoscaling.enabled: true` -- no hand-run script needed.
 6. Keep Celery consumers and Beat running during coexistence. A failed Go
    readiness, queue age threshold, or saturation threshold means scale the
    affected group back to zero; do not reroute work as a recovery action.

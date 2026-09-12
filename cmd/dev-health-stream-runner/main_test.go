@@ -177,7 +177,14 @@ func TestStreamRunnerSpecBuildsProductionProfiles(t *testing.T) {
 		}
 	})
 
-	t.Run("unavailable storage defers stream consumer construction", func(t *testing.T) {
+	// CHAOS-5614: a bootstrap storage check (clickhouse/domain_postgres/
+	// valkey/posture_manifest_lockstep) that fails within cfg.HealthCheckTimeout
+	// used to return nil, nil here -- storage.Close() ran via closeOnError, but
+	// the shell (internal/platform/shell) only exits non-zero on a returned
+	// error, so the process stayed up forever, its readiness checks bound to
+	// the now-closed pools, with no restart. It must instead return a real
+	// error so the shell exits 1 and k8s restarts the process.
+	t.Run("failing bootstrap check returns an error instead of silently degrading", func(t *testing.T) {
 		storage := &streamCommandStorage{valkeyErr: errors.New("valkey unavailable")}
 		registry := health.NewRegistry(100 * time.Millisecond)
 		components, err := configureStreamRunnerDependenciesWithSources(
@@ -191,18 +198,14 @@ func TestStreamRunnerSpecBuildsProductionProfiles(t *testing.T) {
 			},
 			nil,
 		)
-		if err != nil {
-			t.Fatal(err)
+		if err == nil {
+			t.Fatal("want a non-nil error when a bootstrap storage check fails, got nil (the CHAOS-5614 silent-degrade shape)")
+		}
+		if !errors.Is(err, errStreamDependencyUnavailable) {
+			t.Fatalf("error = %v, want it to wrap errStreamDependencyUnavailable", err)
 		}
 		if len(components) != 0 || len(storage.handlers) != 0 || !storage.closed {
-			t.Fatalf("components=%d handlers=%v storage_closed=%v, want deferred consumer construction", len(components), storage.handlers, storage.closed)
-		}
-		if err := (health.Gate{Registry: registry}).Start(context.Background()); err != nil {
-			t.Fatal(err)
-		}
-		want := []string{"stream_consumer", "valkey"}
-		if status := registry.Readiness(context.Background()); status.Ready || !slices.Equal(status.Failed, want) {
-			t.Fatalf("readiness = %#v, want failed %v", status, want)
+			t.Fatalf("components=%d handlers=%v storage_closed=%v, want no components, no consumer construction, closed storage", len(components), storage.handlers, storage.closed)
 		}
 	})
 

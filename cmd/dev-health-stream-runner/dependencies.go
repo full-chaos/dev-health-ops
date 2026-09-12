@@ -475,7 +475,22 @@ func configureStreamRunnerDependenciesWithSources(
 	defer cancelBootstrap()
 	for _, check := range storageChecks {
 		if check.check(bootstrapContext) != nil {
-			return nil, nil
+			// CHAOS-5614: this used to return nil, nil. closeOnError's defer
+			// above still closed the pools, but the shell
+			// (internal/platform/shell.Execute) only logs
+			// "dependency_configuration_failed" and exits 1 when THIS
+			// function returns a non-nil error -- a bare nil, nil looked
+			// exactly like "storage is fine, no consumers configured yet"
+			// (see the RegisterUnavailable branch above), so the process
+			// stayed up indefinitely with its registered readiness checks
+			// (ClickHouseReady/DomainPostgresReady/ValkeyReady/
+			// postureGuard.Ready) bound to now-closed clients, serving
+			// not-ready forever with no restart. Each check already logged
+			// its own name and underlying error above
+			// (logDependencyCheckFailure / wrapStreamRunnerReadinessCheckWithLogging);
+			// this reason is deliberately a bounded, compile-time constant
+			// naming only the class of failure, not the dynamic check name.
+			return nil, dependencyUnavailable("stream_runner_bootstrap_check_failed")
 		}
 	}
 

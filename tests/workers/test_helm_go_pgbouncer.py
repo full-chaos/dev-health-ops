@@ -210,8 +210,12 @@ def test_go_pgbouncer_render_scopes_role_dsns_and_preserves_direct_migrations() 
             "readOnlyRootFilesystem": True,
             "capabilities": {"drop": ["ALL"]},
         }
-        expected_mounts = [{"name": "generated-config", "mountPath": "/etc/pgbouncer"}]
-        expected_volumes = [{"name": "generated-config", "emptyDir": {}}]
+        expected_mounts: list[dict[str, object]] = [
+            {"name": "generated-config", "mountPath": "/etc/pgbouncer"}
+        ]
+        expected_volumes: list[dict[str, object]] = [
+            {"name": "generated-config", "emptyDir": {}}
+        ]
         if name == "transaction":
             # CHAOS-5616 + CHAOS-5594: the chart's default
             # goWorkers.pgbouncer.transaction.extraUsers now carries one

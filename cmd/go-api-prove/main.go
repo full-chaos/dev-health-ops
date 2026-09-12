@@ -94,25 +94,26 @@ func main() {
 }
 
 type flags struct {
-	registryURL     string
-	buildInfoURL    string
-	edgeURL         string
-	candidateBuild  string
-	proofURL        string
-	documentsPath   string
-	postgresURI     string
-	orgID           string
-	artifactDir     string
-	recordedBy      string
-	reviewEvidence  string
-	principalKind   string
-	audience        string
-	keyID           string
-	proofBearerExec string
-	dryRun          bool
-	timeout         time.Duration
-	window          goapiproof.Window
-	reportPath      string
+	registryURL           string
+	buildInfoURL          string
+	edgeURL               string
+	candidateBuild        string
+	proofURL              string
+	documentsPath         string
+	postgresURI           string
+	orgID                 string
+	artifactDir           string
+	recordedBy            string
+	reviewEvidence        string
+	principalKind         string
+	audience              string
+	keyID                 string
+	proofBearerExec       string
+	proofBearerSecretFile string
+	dryRun                bool
+	timeout               time.Duration
+	window                goapiproof.Window
+	reportPath            string
 }
 
 func parseFlags() (flags, error) {
@@ -123,7 +124,8 @@ func parseFlags() (flags, error) {
 	flag.StringVar(&f.candidateBuild, "candidate-build", "", "optional CROSS-CHECK: fail if the running build is not this sha. Never the source of the value written (team-lead ruling R51)")
 	flag.StringVar(&f.edgeURL, "edge-url", "http://localhost:8000/graphql", "the real product GraphQL edge; both the canary/primary candidate leg and every baseline leg go through it")
 	flag.StringVar(&f.proofURL, "proof-url", "", "measurement-only route able to execute a SHADOW-mode operation on the deployed Go build; empty means shadow operations are refused by name rather than skipped")
-	flag.StringVar(&f.proofBearerExec, "proof-bearer-exec", "", "JSON argv of a helper printing a FRESH effective-principal envelope on stdout, e.g. '[\"/opt/job5/mint-envelope.sh\",\"--org\",\"70d529e0\"]'. Re-run as the previous envelope ages out; required when the envelope's TTL is shorter than the run (it is: 60s). argv, not a shell string, so nothing is interpolated into a shell. NOTE: argv IS visible in the process table -- a secret passed as an ARGUMENT here is readable by any user on the box, so the helper must read its own credential rather than be handed one (CHAOS-5511 tracks passing it through an inherited file descriptor). The helper's stdout and stderr are NEVER reported by this command")
+	flag.StringVar(&f.proofBearerExec, "proof-bearer-exec", "", "JSON argv of a helper printing a FRESH effective-principal envelope on stdout, e.g. '[\"/opt/job5/mint-envelope.sh\",\"--org\",\"70d529e0\"]'. Re-run as the previous envelope ages out; required when the envelope's TTL is shorter than the run (it is: 60s). argv, not a shell string, so nothing is interpolated into a shell. NOTE: argv IS visible in the process table, so a secret must NEVER appear as one of these elements -- an element that looks like one is refused by index, never by value. If the helper needs a credential, pass it with -proof-bearer-secret-file: it arrives on an inherited file descriptor (fd 3, env PROOF_BEARER_SECRET_FD=3), never in argv. The helper's stdout and stderr are NEVER reported by this command")
+	flag.StringVar(&f.proofBearerSecretFile, "proof-bearer-secret-file", "", "path to a file holding the credential the -proof-bearer-exec helper needs. Its bytes are handed to the helper on an inherited fd (3, env PROOF_BEARER_SECRET_FD=3) -- never in argv, an env VALUE, a log, or an error. The file must be owner-only (refused if group- or other-readable) and non-empty")
 	flag.StringVar(&f.documentsPath, "documents", "", "path to `registrydump -file cmd/query-api/query_route.go` JSON output (required)")
 	flag.StringVar(&f.postgresURI, "postgres-uri", os.Getenv("POSTGRES_URI"), "domain Postgres DSN holding go_api_routing_state / go_api_proof_run")
 	flag.StringVar(&f.orgID, "org", "", "org id every request is made for (required)")
@@ -590,9 +592,13 @@ func credentials(f flags) (edge, proof *goapiproof.Credential, err error) {
 		if len(argv) == 0 {
 			return nil, nil, errors.New("-proof-bearer-exec is an empty argv")
 		}
+		if err := refuseCredentialLikeArgv(argv); err != nil {
+			return nil, nil, err
+		}
+		secretFile := f.proofBearerSecretFile
 		proof = goapiproof.MintedCredential("Authorization", "effective-principal envelope", proofCredentialFreshness,
 			func(ctx context.Context) (string, error) {
-				return mintBearer(ctx, argv)
+				return mintBearer(ctx, argv, secretFile)
 			}).WithShapeValidator(goapiproof.ValidateEnvelopeShape)
 	case os.Getenv(proofBearerEnvVar) != "":
 		// Validated HERE, at construction, so a malformed static envelope
@@ -653,7 +659,13 @@ const (
 //     timeout, and the helper runs in its own process group so a timeout
 //     kills the children it spawned rather than orphaning them -- a
 //     `docker compose exec` helper is a process tree, not a process.
-func mintBearer(ctx context.Context, argv []string) (string, error) {
+//
+//  4. A credential the helper itself needs never rides on argv either.
+//     secretFilePath, when set, is opened here and its bytes are handed
+//     to the helper on an inherited fd (3) with PROOF_BEARER_SECRET_FD=3
+//     set so the helper knows where to read it -- the same argv-is-a-
+//     process-table-leak reasoning as (2), one level further out.
+func mintBearer(ctx context.Context, argv []string, secretFilePath string) (string, error) {
 	if len(argv) == 0 {
 		return "", errors.New("no minting helper configured")
 	}
@@ -684,7 +696,43 @@ func mintBearer(ctx context.Context, argv []string) (string, error) {
 	// showed how that decision goes.
 	cmd.Stderr = io.Discard
 
-	err := cmd.Run()
+	var secretReader *os.File
+	if secretFilePath != "" {
+		secretBytes, secretErr := readSecretFile(secretFilePath)
+		if secretErr != nil {
+			return "", secretErr
+		}
+		reader, writer, pipeErr := os.Pipe()
+		if pipeErr != nil {
+			return "", fmt.Errorf("open the -proof-bearer-secret-file delivery pipe: %w", pipeErr)
+		}
+		secretReader = reader
+		// fd 3: stdin/stdout/stderr are 0/1/2, so the first ExtraFiles
+		// entry lands at 3 -- the fd number PROOF_BEARER_SECRET_FD names.
+		cmd.ExtraFiles = []*os.File{reader}
+		cmd.Env = append(os.Environ(), "PROOF_BEARER_SECRET_FD=3")
+		// Written in a goroutine: the pipe's kernel buffer is finite, and
+		// this write must not be able to deadlock against a helper that
+		// reads fd 3 only after doing something else first.
+		go func() {
+			_, _ = writer.Write(secretBytes)
+			_ = writer.Close()
+		}()
+	}
+
+	// Start, not Run: the parent's copy of the pipe's read end must close
+	// once the child has it (via fd inheritance across exec), or a helper
+	// that never reads fd 3 leaves this process holding it open forever.
+	startErr := cmd.Start()
+	if secretReader != nil {
+		_ = secretReader.Close()
+	}
+	var err error
+	if startErr != nil {
+		err = startErr
+	} else {
+		err = cmd.Wait()
+	}
 	// WaitDelay bounds the WAIT, not the descendants. The parent can
 	// exit, mintBearer can return, and a grandchild the helper spawned is
 	// still running -- observed `State: S (sleeping)` after the deadline
@@ -720,6 +768,105 @@ func mintBearer(ctx context.Context, argv []string) (string, error) {
 		return minted, nil
 	}
 	return "Bearer " + minted, nil
+}
+
+// readSecretFile reads the bytes -proof-bearer-secret-file names, after
+// checking the file cannot be read by anyone but its owner and is not
+// empty.
+//
+// Every error names the FLAG and the PATH only -- never the file's
+// contents. This flag exists specifically to keep a credential off argv;
+// an error that echoed it to explain the refusal would be the exact
+// disclosure it removes.
+func readSecretFile(path string) ([]byte, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, fmt.Errorf("-proof-bearer-secret-file %s: %w", path, err)
+	}
+	if mode := info.Mode().Perm(); mode&0o077 != 0 {
+		return nil, fmt.Errorf("-proof-bearer-secret-file %s is readable by group or other (mode %04o); chmod it 0600 or tighter", path, mode)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("-proof-bearer-secret-file %s: %w", path, err)
+	}
+	if len(data) == 0 {
+		return nil, fmt.Errorf("-proof-bearer-secret-file %s is empty", path)
+	}
+	return data, nil
+}
+
+// refuseCredentialLikeArgv refuses to start when a -proof-bearer-exec
+// argv element looks like a credential rather than a path or an ordinary
+// argument.
+//
+// One function with a bounded rule set, table-tested, rather than checks
+// sprinkled at each call site: looksLikeCredential is the whole rule, and
+// this just applies it and reports WHERE.
+//
+// The refusal names the element's INDEX only, never its value -- printing
+// the value to justify the refusal would be exactly the disclosure this
+// guard exists to prevent.
+func refuseCredentialLikeArgv(argv []string) error {
+	for i, element := range argv {
+		if looksLikeCredential(element) {
+			return fmt.Errorf("-proof-bearer-exec argv element %d looks like a credential and is refused (its value is not printed here); pass a helper credential through -proof-bearer-secret-file instead, never on the command line", i)
+		}
+	}
+	return nil
+}
+
+// looksLikeCredential is the bounded rule set refuseCredentialLikeArgv
+// applies: a JWT shape, a well-known provider token prefix, or a long
+// bare run of hex/base64 characters -- three shapes actually seen typed
+// into an argv, and nothing broader. A UUID (org ids look like one) does
+// NOT match: its dashes are outside both the hex and the base64 alphabet
+// this checks.
+func looksLikeCredential(value string) bool {
+	if strings.HasPrefix(value, "eyJ") && strings.Count(value, ".") == 2 {
+		return true
+	}
+	for _, prefix := range []string{"sk-", "ghp_", "github_pat_", "xoxb-"} {
+		if strings.HasPrefix(value, prefix) {
+			return true
+		}
+	}
+	return isBareTokenShape(value)
+}
+
+// isBareTokenShape reports whether value is nothing but a long run of hex
+// or (non-URL) base64 characters -- the shape of a raw token or key with
+// no recognizable prefix. 32 is the floor: shorter than every real secret
+// shape this guard has seen, and long enough that an ordinary argument (an
+// org id, a flag name, a short path segment) does not accidentally match.
+func isBareTokenShape(value string) bool {
+	if len(value) < 32 {
+		return false
+	}
+	return isAllHex(value) || isAllBase64(value)
+}
+
+func isAllHex(value string) bool {
+	for _, r := range value {
+		switch {
+		case r >= '0' && r <= '9', r >= 'a' && r <= 'f', r >= 'A' && r <= 'F':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func isAllBase64(value string) bool {
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '+' || r == '/' || r == '=':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // limitedWriter stops storing past its limit and RECORDS that it did.

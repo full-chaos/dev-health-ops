@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -39,7 +40,7 @@ func TestTheMinterNeverReportsWhatTheHelperEmitted(t *testing.T) {
 			// The secret is also in the ARGV here, which is the other
 			// half of the old design's exposure: an argv is world-readable
 			// in the process table.
-			_, err := mintBearer(context.Background(), []string{helper, secret})
+			_, err := mintBearer(context.Background(), []string{helper, secret}, "")
 			if err == nil {
 				t.Fatal("expected the helper to fail")
 			}
@@ -58,7 +59,7 @@ func TestTheMinterNeverReportsWhatTheHelperEmitted(t *testing.T) {
 // helper's logs.
 func TestTheMinterErrorNamesTheExitCodeAndWhereToLook(t *testing.T) {
 	helper := writeHelper(t, "#!/bin/sh\nexit 42\n")
-	_, err := mintBearer(context.Background(), []string{helper})
+	_, err := mintBearer(context.Background(), []string{helper}, "")
 	if err == nil {
 		t.Fatal("expected failure")
 	}
@@ -83,7 +84,7 @@ func TestAHangingHelperIsKilledWithinItsOwnTimeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	started := time.Now()
-	_, err := mintBearer(ctx, []string{helper, pidFile})
+	_, err := mintBearer(ctx, []string{helper, pidFile}, "")
 	if err == nil {
 		t.Fatal("a hanging helper must fail")
 	}
@@ -99,7 +100,7 @@ func TestAHangingHelperIsKilledWithinItsOwnTimeout(t *testing.T) {
 // rejected.
 func TestHelperOutputIsBounded(t *testing.T) {
 	helper := writeHelper(t, "#!/bin/sh\nhead -c 5000000 /dev/zero | tr '\\0' 'a'\n")
-	minted, err := mintBearer(context.Background(), []string{helper})
+	minted, err := mintBearer(context.Background(), []string{helper}, "")
 	if err != nil {
 		// Rejected outright is also acceptable; what must not happen is
 		// an unbounded read.
@@ -217,7 +218,7 @@ func TestTheMinterRespectsACallerDeadline(t *testing.T) {
 	defer cancel()
 
 	started := time.Now()
-	if _, err := mintBearer(ctx, []string{helper}); err == nil {
+	if _, err := mintBearer(ctx, []string{helper}, ""); err == nil {
 		t.Fatal("a helper outliving the caller's deadline must fail")
 	}
 	if elapsed := time.Since(started); elapsed > 10*time.Second {
@@ -234,7 +235,7 @@ func TestOverflowIsReportedAsOverflowNotAsAFailedRun(t *testing.T) {
 	// Exactly the limit in JWT-shaped bytes, then more.
 	helper := writeHelper(t, "#!/bin/sh\nhead -c 8192 /dev/zero | tr '\\0' 'a'\nprintf 'aaaa'\n")
 
-	_, err := mintBearer(context.Background(), []string{helper})
+	_, err := mintBearer(context.Background(), []string{helper}, "")
 	if err == nil {
 		t.Fatal("output past the limit must be refused")
 	}
@@ -260,7 +261,7 @@ func TestAnExitedParentWithALivingChildStillHonoursTheDeadline(t *testing.T) {
 	defer cancel()
 
 	started := time.Now()
-	_, _ = mintBearer(ctx, []string{helper})
+	_, _ = mintBearer(ctx, []string{helper}, "")
 	if elapsed := time.Since(started); elapsed > 3*time.Second {
 		t.Fatalf("the caller deadline did not bound a helper whose parent exited with a child holding stdout: blocked for %s", elapsed)
 	}
@@ -454,7 +455,7 @@ func TestNoHelperDescendantSurvivesTheDeadline(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
-	_, _ = mintBearer(ctx, []string{helper, pidFile})
+	_, _ = mintBearer(ctx, []string{helper, pidFile}, "")
 
 	raw, err := os.ReadFile(pidFile)
 	if err != nil {
@@ -479,7 +480,7 @@ func TestNoHelperDescendantSurvivesTheDeadline(t *testing.T) {
 func TestACleanHelperStillReturnsItsCredential(t *testing.T) {
 	token := syntheticJWT(t, map[string]string{"sub": "u-1"})
 	helper := writeHelper(t, "#!/bin/sh\nprintf '"+token+"'\n")
-	minted, err := mintBearer(context.Background(), []string{helper})
+	minted, err := mintBearer(context.Background(), []string{helper}, "")
 	if err != nil {
 		t.Fatalf("mintBearer: %v", err)
 	}
@@ -551,7 +552,7 @@ func TestTheHelpersStderrNeverReachesTheTerminal(t *testing.T) {
 		done <- buf.String()
 	}()
 
-	_, mintErr := mintBearer(context.Background(), []string{helper})
+	_, mintErr := mintBearer(context.Background(), []string{helper}, "")
 
 	_ = writer.Close()
 	os.Stderr = original
@@ -602,7 +603,7 @@ func TestTheMintedProofCredentialIsShapeValidated(t *testing.T) {
 // containing one makes Go's transport reject the request outright.
 func TestAHelperUsingEchoStillYieldsAUsableHeader(t *testing.T) {
 	helper := writeHelper(t, "#!/bin/sh\necho '"+syntheticJWT(t, map[string]string{"sub": "u-1"})+"'\n")
-	minted, err := mintBearer(context.Background(), []string{helper})
+	minted, err := mintBearer(context.Background(), []string{helper}, "")
 	if err != nil {
 		t.Fatalf("mintBearer: %v", err)
 	}
@@ -635,5 +636,175 @@ func TestTheStdoutSummaryCarriesItsExplicitZeros(t *testing.T) {
 	}
 	if !strings.Contains(printed, "build binding: none") {
 		t.Fatalf("a run that admitted nothing must SAY so on stdout:\n%s", printed)
+	}
+}
+
+// writeSecretFile writes content at the given mode for -proof-bearer-secret-file
+// tests. t.TempDir()'s default mode is already owner-only, but the mode is
+// set explicitly here so each test says what it means.
+func writeSecretFile(t *testing.T, content string, mode os.FileMode) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "secret")
+	if err := os.WriteFile(path, []byte(content), mode); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, mode); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// The whole point of -proof-bearer-secret-file is that its bytes reach
+// the helper on fd 3, with PROOF_BEARER_SECRET_FD=3 telling it where to
+// look -- never as an argument, and never through an env VALUE.
+func TestTheHelperReceivesTheSecretOnFD3NeverInArgv(t *testing.T) {
+	const secretBody = "fd3-only-secret-body-4e2a"
+	secretPath := writeSecretFile(t, secretBody, 0o600)
+	helper := writeHelper(t, "#!/bin/sh\n"+
+		"[ \"$PROOF_BEARER_SECRET_FD\" = \"3\" ] || { exit 9; }\n"+
+		"secret=$(cat <&3)\n"+
+		"printf 'MARKER-%s' \"$secret\"\n")
+
+	minted, err := mintBearer(context.Background(), []string{helper}, secretPath)
+	if err != nil {
+		t.Fatalf("mintBearer: %v", err)
+	}
+	want := "Bearer MARKER-" + secretBody
+	if minted != want {
+		t.Fatalf("got %q, want %q", minted, want)
+	}
+}
+
+// A secret file readable by group or other must be refused -- that
+// readability is exactly the process-table exposure this flag exists to
+// avoid, moved one step: a file only its owner can read is no more
+// exposed than the process already is.
+func TestSecretFileRefusesGroupOrOtherReadableMode(t *testing.T) {
+	const secretBody = "mode-refusal-secret-9b71"
+	path := writeSecretFile(t, secretBody, 0o644)
+	if _, err := readSecretFile(path); err == nil {
+		t.Fatal("a group/other readable secret file must be refused")
+	} else {
+		if strings.Contains(err.Error(), secretBody) {
+			t.Fatalf("the refusal echoed the secret: %v", err)
+		}
+		if !strings.Contains(err.Error(), "-proof-bearer-secret-file") {
+			t.Fatalf("the refusal must name the flag: %v", err)
+		}
+		if !strings.Contains(err.Error(), path) {
+			t.Fatalf("the refusal must name the path: %v", err)
+		}
+		if !strings.Contains(err.Error(), "0644") {
+			t.Fatalf("the refusal must name the mode: %v", err)
+		}
+	}
+}
+
+// An empty secret file is refused rather than handed to the helper as a
+// zero-byte credential, which would fail remotely as an ordinary 401.
+func TestSecretFileRefusesEmpty(t *testing.T) {
+	path := writeSecretFile(t, "", 0o600)
+	if _, err := readSecretFile(path); err == nil {
+		t.Fatal("an empty secret file must be refused")
+	} else if !strings.Contains(err.Error(), "empty") {
+		t.Fatalf("the refusal must say the file is empty: %v", err)
+	}
+}
+
+// The argv guard's bounded rule set, positive and negative, tested
+// directly against the function rather than through credentials() so the
+// table names exactly what is and is not a credential shape.
+func TestArgvGuardRefusesCredentialShapedElementsByIndexOnly(t *testing.T) {
+	jwt := syntheticJWT(t, map[string]string{"sub": "u-1"})
+	longHex := strings.Repeat("a1b2c3d4", 5)                      // 40 hex chars
+	longBase64 := strings.Repeat("QWxhZGRpbjpvcGVuIHNlc2FtZQ", 2) // 52 base64 chars
+	ghpLike := "ghp_" + strings.Repeat("x", 36)
+	skLike := "sk-" + strings.Repeat("y", 40)
+	githubPatLike := "github_pat_" + strings.Repeat("z", 60)
+	xoxbLike := "xoxb-" + strings.Repeat("1", 24)
+
+	for _, credentialShaped := range []string{jwt, longHex, longBase64, ghpLike, skLike, githubPatLike, xoxbLike} {
+		argv := []string{"/opt/job5/mint-envelope.sh", credentialShaped}
+		err := refuseCredentialLikeArgv(argv)
+		if err == nil {
+			t.Fatalf("credential-shaped argv element was accepted: %q", credentialShaped)
+		}
+		if strings.Contains(err.Error(), credentialShaped) {
+			t.Fatalf("the refusal echoed the value: %v", err)
+		}
+		if !strings.Contains(err.Error(), "element 1") {
+			t.Fatalf("the refusal must name the INDEX, not the value: %v", err)
+		}
+	}
+
+	ordinary := [][]string{
+		{"/opt/job5/mint-envelope.sh", "--org", "70d529e0"},
+		// A UUID org id must not be mistaken for a bare token: its dashes
+		// are outside both the hex and the base64 alphabet this checks.
+		{"/opt/job5/mint-envelope.sh", "--org", "c6a38355-dad6-42e4-8cc9-4c712450827d"},
+		{"/usr/bin/env", "bash", "-c", "true"},
+	}
+	for _, argv := range ordinary {
+		if err := refuseCredentialLikeArgv(argv); err != nil {
+			t.Fatalf("an ordinary argv was refused: %v (%v)", err, argv)
+		}
+	}
+}
+
+// The property the whole flag exists for: whatever mintBearer does with
+// -proof-bearer-secret-file, the SPAWNED HELPER's own /proc/<pid>/cmdline
+// -- readable by any user on the box -- must never contain the secret.
+// Linux-only: /proc/<pid>/cmdline has no equivalent elsewhere.
+func TestSpawnedHelperCmdlineNeverCarriesTheSecret(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("/proc/<pid>/cmdline is Linux-only")
+	}
+	const secretBody = "proc-cmdline-secret-c9c1d0"
+	secretPath := writeSecretFile(t, secretBody, 0o600)
+	pidFile := filepath.Join(t.TempDir(), "helper.pid")
+	helper := writeHelper(t, "#!/bin/sh\n"+
+		"echo $$ > \"$1\"\n"+
+		"cat <&3 >/dev/null\n"+
+		"sleep 1\n"+
+		"printf done\n")
+
+	type result struct {
+		out string
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		out, err := mintBearer(context.Background(), []string{helper, pidFile}, secretPath)
+		done <- result{out, err}
+	}()
+
+	var pid int
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		raw, err := os.ReadFile(pidFile)
+		if err == nil && strings.TrimSpace(string(raw)) != "" {
+			pid, err = strconv.Atoi(strings.TrimSpace(string(raw)))
+			if err != nil {
+				t.Fatalf("unreadable helper pid %q: %v", raw, err)
+			}
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if pid == 0 {
+		t.Fatal("the helper never wrote its pid")
+	}
+
+	cmdline, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/cmdline")
+	if err != nil {
+		t.Skipf("could not read /proc/%d/cmdline (process may have exited): %v", pid, err)
+	}
+	if strings.Contains(string(cmdline), secretBody) {
+		t.Fatalf("the helper's /proc/%d/cmdline carried the secret: %q", pid, cmdline)
+	}
+
+	res := <-done
+	if res.err != nil {
+		t.Fatalf("mintBearer: %v", res.err)
 	}
 }

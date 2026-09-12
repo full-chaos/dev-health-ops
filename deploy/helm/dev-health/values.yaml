@@ -366,6 +366,21 @@ goWorkers:
   #    side-loaded. Same pattern, same reasoning, as postgresql.image.
   #    pullPolicy below (a registry image with its own dedicated policy).
   imagePullPolicy: IfNotPresent
+  # -- Default liveness/readiness probes applied to every group in `groups`
+  #    below that does not set its own `livenessProbe`/`readinessProbe`.
+  #    Deadlock class: a 1s timeoutSeconds (the Kubernetes default, unset
+  #    before this) plus the reconciler Deployment's maxUnavailable: 0 on a
+  #    singleton means one slow /readyz response under load fails the probe
+  #    even though the process is healthy -- the new pod never becomes Ready
+  #    and the old pod, pinned by maxUnavailable: 0, can never terminate. The
+  #    rollout deadlocks with both pods live and neither able to progress.
+  #    timeoutSeconds: 5 and failureThreshold: 6 give a slow-but-healthy
+  #    process room to answer before Kubernetes calls the probe failed. Any
+  #    group may still override either probe entirely via
+  #    goWorkers.groups[].livenessProbe / .readinessProbe.
+  defaultProbes:
+    livenessProbe: {httpGet: {path: /healthz, port: metrics}, initialDelaySeconds: 10, periodSeconds: 15, timeoutSeconds: 5, failureThreshold: 6}
+    readinessProbe: {httpGet: {path: /readyz, port: metrics}, initialDelaySeconds: 10, periodSeconds: 10, timeoutSeconds: 5, failureThreshold: 6}
   # -- Extra envFrom sources (list of {configMapRef: {name: ...}} or
   #    {secretRef: {name: ...}}), rendered BEFORE the chart's own configMap
   #    and Secret in go-workers.yaml's envFrom list, same rule and same

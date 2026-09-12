@@ -89,6 +89,7 @@ still rejects minReplicaCount < 1 with no scale-to-zero feature gate assumed
 {{- fail (printf "goWorkers.groups[%s].autoscaling.enabled=true but this group has no queues -- KEDA's postgresql scaler has no backlog signal to read. Stream-runner groups are event consumers, not queue consumers: size them by fixed replicas, not autoscaling." $group.name) }}
 {{- end }}
 {{- $queueList := join "','" $group.queues }}
+{{- $riverSchema := $.Values.config.RIVER_DATABASE_SCHEMA | default "river" }}
 ---
 apiVersion: keda.sh/v1alpha1
 kind: ScaledObject
@@ -140,9 +141,11 @@ spec:
         sslmode: disable
         # river_job backlog for this group's queues: available now, due
         # (scheduled_at <= now()), or retryable. `running` is excluded on
-        # purpose -- it is in-flight work, not backlog.
+        # purpose -- it is in-flight work, not backlog. Table is schema-
+        # qualified because the scaler role's search_path is not managed by
+        # the chart.
         query: >-
-          SELECT count(*) FROM river_job
+          SELECT count(*) FROM {{ $riverSchema }}.river_job
           WHERE queue IN ('{{ $queueList }}')
           AND state IN ('available', 'scheduled', 'retryable')
           AND (scheduled_at IS NULL OR scheduled_at <= now())

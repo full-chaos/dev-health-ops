@@ -335,6 +335,19 @@ func main() {
 		log.Print("query-api: /api/v1/investment/explain route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
 	}
 
+	// CHAOS-5550: GET /api/v1/quadrant, gated by its own routeswitch entry
+	// (default OFF via GO_API_QUADRANT_ENABLED) -- see quadrant_route.go's
+	// package doc comment for the reachability story and internal/quadrant
+	// for the ported resolver and its documented developer/person scope gap.
+	if quadrantHandler, quadrantCleanup, quadrantOK, quadrantErr := buildQuadrantRoute(); quadrantErr != nil {
+		log.Fatalf("query-api: build /api/v1/quadrant route: %v", quadrantErr)
+	} else if quadrantOK {
+		defer quadrantCleanup()
+		mux.HandleFunc("/api/v1/quadrant", quadrantHandler)
+	} else {
+		log.Print("query-api: /api/v1/quadrant route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
+	}
+
 	server := &http.Server{
 		Addr:              addr(),
 		Handler:           mux,

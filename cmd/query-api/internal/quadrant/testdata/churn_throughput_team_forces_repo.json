@@ -1,0 +1,27 @@
+{
+  "axes": {
+    "x": {
+      "metric": "churn",
+      "label": "Churn",
+      "unit": "loc"
+    },
+    "y": {
+      "metric": "throughput",
+      "label": "Throughput",
+      "unit": "items"
+    }
+  },
+  "points": [
+    {
+      "entity_id": "checkout-service",
+      "entity_label": "checkout-service",
+      "x": 4200.0,
+      "y": 12.0,
+      "window_start": "2024-01-01",
+      "window_end": "2024-01-08",
+      "evidence_link": "/api/v1/explain?metric=throughput",
+      "trajectory": null
+    }
+  ],
+  "annotations": []
+}

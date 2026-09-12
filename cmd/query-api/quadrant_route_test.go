@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
@@ -171,15 +172,33 @@ func TestNewQuadrantWorkHandlerHappyPathShape(t *testing.T) {
 	}
 }
 
-// TestNewQuadrantWorkHandlerPersonScopeIsNotImplemented pins the
-// documented scope gap surfacing through the HTTP layer as 501.
-func TestNewQuadrantWorkHandlerPersonScopeIsNotImplemented(t *testing.T) {
+// TestNewQuadrantWorkHandlerPersonScopeRequiresScopeID pins the
+// person/developer scope's own required-param check (quadrant.py:500-503)
+// surfacing through the HTTP layer as 400 when scope_id is absent.
+func TestNewQuadrantWorkHandlerPersonScopeRequiresScopeID(t *testing.T) {
 	handler := newQuadrantWorkHandler(emptyRowsQuadrantClient{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/quadrant?type=wip_throughput&scope_type=person", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
 	handler(rec, req)
-	if rec.Code != http.StatusNotImplemented {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotImplemented)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+// TestNewQuadrantWorkHandlerPersonScopeIndividualNotFound pins the person
+// scope's 404 (quadrant.py:536-537) surfacing through the HTTP layer for a
+// scope_id that resolves to no identity -- emptyRowsQuadrantClient answers
+// every ClickHouse call with zero rows, so resolve_person_identity's
+// lookup finds nothing.
+func TestNewQuadrantWorkHandlerPersonScopeIndividualNotFound(t *testing.T) {
+	t.Setenv("IDENTITY_MAPPING_PATH", filepath.Join(t.TempDir(), "missing.yaml"))
+	handler := newQuadrantWorkHandler(emptyRowsQuadrantClient{})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/quadrant?type=wip_throughput&scope_type=person&scope_id=deadbeef", nil)
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
 	}
 }

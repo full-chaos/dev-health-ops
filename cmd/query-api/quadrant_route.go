@@ -14,10 +14,10 @@
 // service has no rate-limiting mechanism anywhere yet).
 //
 // Business logic (the resolver, the four quadrant definitions, the
-// ClickHouse readers, the team/repo scope split, the cycle_throughput
-// attribution quirk) lives in internal/quadrant -- see that package's
-// doc comment for the full parity contract and the documented
-// developer/person scope gap.
+// ClickHouse readers, the team/repo/person scope split, the
+// cycle_throughput attribution quirk, and the person-scope identity
+// resolution) lives in internal/quadrant -- see that package's doc
+// comment for the full parity contract.
 package main
 
 import (
@@ -194,6 +194,7 @@ func newQuadrantWorkHandler(client quadrant.QueryClient) http.HandlerFunc {
 		params := quadrant.Params{
 			Type:      quadrantType,
 			ScopeType: scopeType,
+			ScopeID:   query.Get("scope_id"),
 			RangeDays: rangeDays,
 			Bucket:    bucket,
 		}

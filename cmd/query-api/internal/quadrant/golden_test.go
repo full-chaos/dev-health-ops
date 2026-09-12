@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -178,6 +179,104 @@ func TestGoldenReviewLoadLatencyRepo(t *testing.T) {
 	if !reflect.DeepEqual(*got, want) {
 		t.Fatalf("response mismatch\n got:  %+v\n want: %+v", *got, want)
 	}
+}
+
+// TestGoldenPersonScopeTeamCohort exercises the person-scope branch
+// end to end: resolve the requested person id to an identity via
+// resolve_person_identity, resolve that identity's team via
+// fetch_person_team_id, then scope BOTH metric reads to that team cohort
+// (_cohort_scope_filter) -- matching Python's actual person branch, which
+// plots the person's whole team, not a single point (see identity.go's and
+// response.go's rowEntity doc comments for why). The entity_id/label on
+// the wire are person_id_for_identity/display_name_for_identity of the
+// raw identity string, never the raw string itself.
+func TestGoldenPersonScopeTeamCohort(t *testing.T) {
+	t.Setenv("IDENTITY_MAPPING_PATH", filepath.Join(t.TempDir(), "missing.yaml"))
+
+	client := fakeQueryClient{t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+		switch {
+		case strings.Contains(query, "WITH identities AS"):
+			return &fixtureRowScanner{rows: [][]any{{"jane@example.com"}}}, nil
+		case strings.Contains(query, "FROM identities FINAL"):
+			return &fixtureRowScanner{rows: [][]any{{"team-x"}}}, nil
+		case strings.Contains(query, "wip_count_end_of_day"):
+			if !queryHasCohortFilter(query) {
+				t.Fatalf("wip query missing team cohort filter:\n%s", query)
+			}
+			return &fixtureRowScanner{rows: [][]any{
+				{day(2024, 1, 1), "jane@example.com", "jane@example.com", 5.0},
+			}}, nil
+		case strings.Contains(query, "items_completed"):
+			if !queryHasCohortFilter(query) {
+				t.Fatalf("throughput query missing team cohort filter:\n%s", query)
+			}
+			return &fixtureRowScanner{rows: [][]any{
+				{day(2024, 1, 1), "jane@example.com", "jane@example.com", 12.0},
+			}}, nil
+		}
+		t.Fatalf("unexpected query for person-scope fixture:\n%s", query)
+		return nil, nil
+	}}
+
+	got, err := BuildResponse(context.Background(), client, "org-1", Params{
+		Type: "wip_throughput", ScopeType: "person", ScopeID: "9e26471d35a78862c17e467d87cddedf",
+		RangeDays: 30, Bucket: "week",
+		StartDate: timePtr(day(2024, 1, 1)), EndDate: timePtr(day(2024, 1, 1)),
+	})
+	if err != nil {
+		t.Fatalf("BuildResponse: %v", err)
+	}
+
+	wantEntityID := personIDForIdentity("jane@example.com")
+	wantLabel := displayNameForIdentity("jane@example.com")
+	want := Response{
+		Axes: Axes{
+			X: Axis{Metric: "wip", Label: "WIP", Unit: "items"},
+			Y: Axis{Metric: "throughput", Label: "Throughput", Unit: "items"},
+		},
+		Points: []Point{
+			{
+				EntityID: wantEntityID, EntityLabel: wantLabel,
+				X: 5.0, Y: 12.0,
+				WindowStart: "2024-01-01", WindowEnd: "2024-01-08",
+				EvidenceLink: "/api/v1/explain?metric=throughput",
+			},
+		},
+		Annotations: []Annotation{},
+	}
+	if !reflect.DeepEqual(*got, want) {
+		t.Fatalf("response mismatch\n got:  %+v\n want: %+v", *got, want)
+	}
+}
+
+// TestGoldenPersonScopeIndividualNotFound pins quadrant.py:536-537: an
+// unresolvable person id (no matching identity, empty alias fallback) is a
+// 404, and neither the team lookup nor either metric read ever runs.
+func TestGoldenPersonScopeIndividualNotFound(t *testing.T) {
+	t.Setenv("IDENTITY_MAPPING_PATH", filepath.Join(t.TempDir(), "missing.yaml"))
+
+	client := fakeQueryClient{t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+		if strings.Contains(query, "WITH identities AS") {
+			return &fixtureRowScanner{}, nil
+		}
+		t.Fatalf("unexpected query for not-found person fixture (team lookup/metric reads must not run):\n%s", query)
+		return nil, nil
+	}}
+
+	_, err := BuildResponse(context.Background(), client, "org-1", Params{
+		Type: "wip_throughput", ScopeType: "person", ScopeID: "deadbeef", RangeDays: 30, Bucket: "week",
+	})
+	reqErr, ok := AsRequestError(err)
+	if !ok || reqErr.Status != 404 {
+		t.Fatalf("err = %v, want *RequestError{Status: 404}", err)
+	}
+}
+
+// queryHasCohortFilter reports whether a fetchQuadrantMetric query carries
+// the person-scope team-cohort filter _cohort_scope_filter builds
+// (quadrant.py:378-381).
+func queryHasCohortFilter(query string) bool {
+	return strings.Contains(query, "AND m.team_id = {team_id:String}")
 }
 
 type fakeQueryClient struct {

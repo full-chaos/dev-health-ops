@@ -148,6 +148,10 @@ type ReconcilerLoop struct {
 	strandClaimsSettled          uint64
 	strandRaceLost               uint64
 	providerUnitStrandsRearmed   uint64
+	undeliveredOutboxDead        uint64
+	undeliveredRequestsCanceled  uint64
+	undeliveredRaceLost          uint64
+	undeliveredBlocked           uint64
 	claimed                      uint64
 	delivered                    uint64
 	retried                      uint64
@@ -348,12 +352,24 @@ func (loop *ReconcilerLoop) step(ctx context.Context, now time.Time) error {
 	loop.strandClaimsSettled += nonNegativeUint(result.StrandClaimsSettled)
 	loop.strandRaceLost += nonNegativeUint(result.StrandRaceLost)
 	loop.providerUnitStrandsRearmed += nonNegativeUint(len(result.ProviderUnitRearms))
+	for _, resolution := range result.UndeliveredResolutions {
+		if resolution.OutboxDead {
+			loop.undeliveredOutboxDead++
+		}
+		if resolution.RequestCanceled {
+			loop.undeliveredRequestsCanceled++
+		}
+	}
+	loop.undeliveredRaceLost += nonNegativeUint(result.UndeliveredRaceLost)
 	loop.claimed += nonNegativeUint(result.Claimed)
 	loop.delivered += nonNegativeUint(result.Delivered)
 	loop.retried += nonNegativeUint(result.Retried)
 	loop.dead += nonNegativeUint(result.Dead)
 	loop.leaseLost += nonNegativeUint(result.LeaseLost)
 	if err == nil {
+		// A level, not a counter: set only from a pass that finished, so a
+		// failed pass cannot report a partial backlog as the whole one.
+		loop.undeliveredBlocked = nonNegativeUint(result.UndeliveredBlocked)
 		loop.lastOK = now
 		loop.up = true
 		// CHAOS-4429: one success clears the streak immediately, matching
@@ -400,6 +416,29 @@ func (loop *ReconcilerLoop) step(ctx context.Context, now time.Time) error {
 			"outbox_id", rearm.OutboxID,
 			"dedupe_key", rearm.DedupeKey,
 			"river_job_id", rearm.RiverJobID,
+		)
+	}
+	// One line per drop. A delivery that never reached River used to leave no
+	// trace at all -- neither an attempt nor an error code -- so these lines
+	// and the counters beside them are the only way the class is seen.
+	for _, resolution := range result.UndeliveredResolutions {
+		loop.logger().WarnContext(
+			ctx, "outbox undelivered row terminalized",
+			"outbox_id", resolution.OutboxID,
+			"job_kind", resolution.JobKind,
+			"request_id", resolution.RequestID,
+			"reason", resolution.Reason,
+			"request_canceled", resolution.RequestCanceled,
+			"outbox_dead", resolution.OutboxDead,
+		)
+	}
+	for _, dead := range result.DeadDeliveries {
+		loop.logger().WarnContext(
+			ctx, "outbox delivery dead",
+			"outbox_id", dead.OutboxID,
+			"job_kind", dead.JobKind,
+			"reason", dead.Reason,
+			"attempts", dead.Attempts,
 		)
 	}
 	if err == nil {
@@ -536,6 +575,10 @@ func (loop *ReconcilerLoop) WritePrometheus(output io.Writer) error {
 	strandClaimsSettled := loop.strandClaimsSettled
 	strandRaceLost := loop.strandRaceLost
 	providerUnitStrandsRearmed := loop.providerUnitStrandsRearmed
+	undeliveredOutboxDead := loop.undeliveredOutboxDead
+	undeliveredRequestsCanceled := loop.undeliveredRequestsCanceled
+	undeliveredRaceLost := loop.undeliveredRaceLost
+	undeliveredBlocked := loop.undeliveredBlocked
 	claimed := loop.claimed
 	delivered := loop.delivered
 	retried := loop.retried
@@ -579,6 +622,10 @@ func (loop *ReconcilerLoop) WritePrometheus(output io.Writer) error {
 	// "recovery is handling the strand" from "the sweep is about to destroy
 	// it". Buried inside the aggregate those two are indistinguishable.
 	writeReconcilerCounter(&text, "worker_outbox_reconciler_provider_unit_strands_rearmed_total", "Provider-unit deliveries rearmed after their River job went terminal while the unit was still dispatching.", providerUnitStrandsRearmed)
+	writeReconcilerCounter(&text, "worker_outbox_reconciler_undelivered_outbox_dead_total", "Outbox rows that could never reach River, moved to dead with a reason by the undelivered sweep.", undeliveredOutboxDead)
+	writeReconcilerCounter(&text, "worker_outbox_reconciler_undelivered_requests_canceled_total", "Work-graph requests canceled because their delivery could never reach River.", undeliveredRequestsCanceled)
+	writeReconcilerCounter(&text, "worker_outbox_reconciler_undelivered_race_lost_total", "Undelivered candidates whose writes refused under their re-proved predicate.", undeliveredRaceLost)
+	fmt.Fprintf(&text, "# HELP worker_outbox_reconciler_undelivered_blocked Fenced outbox rows still waiting on a prerequisite inside the undelivered ceiling, as of the last successful pass.\n# TYPE worker_outbox_reconciler_undelivered_blocked gauge\nworker_outbox_reconciler_undelivered_blocked %d\n", undeliveredBlocked)
 	writeReconcilerCounter(&text, "worker_outbox_reconciler_claimed_total", "Outbox rows claimed by the reconciler.", claimed)
 	writeReconcilerCounter(&text, "worker_outbox_reconciler_delivered_total", "Outbox rows delivered to River by the reconciler.", delivered)
 	writeReconcilerCounter(&text, "worker_outbox_reconciler_retried_total", "Outbox rows scheduled for relay retry by the reconciler.", retried)

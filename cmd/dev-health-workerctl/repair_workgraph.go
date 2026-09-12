@@ -32,6 +32,8 @@ func dispatchWorkgraph(ctx context.Context, runtime *operatorRuntime, args []str
 	switch args[0] {
 	case "list-ambiguous":
 		return dispatchWorkgraphListAmbiguous(ctx, runtime, args[1:], stdout, stderr)
+	case "list-undelivered":
+		return dispatchWorkgraphListUndelivered(ctx, runtime, args[1:], stdout, stderr)
 	case "repair":
 		return dispatchWorkgraphRepair(ctx, args[1:], stdout, stderr)
 	case "trigger":

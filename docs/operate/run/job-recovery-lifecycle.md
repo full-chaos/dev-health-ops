@@ -234,6 +234,11 @@ successors consume no retry attempts by design, so a row blocked for fourteen
 hours is indistinguishable from one enqueued a second ago. Judge it by `created_at` and
 by the state of the head named in `prerequisite_completion_key`.
 
+A fenced row no longer waits forever. The reconciler's undelivered sweep
+terminalizes it once its head can never succeed, or once it has waited past
+the ceiling — see
+[undelivered outbox rows](#undelivered-outbox-rows) below.
+
 ## Superseded investment materializations
 
 One kind is deliberately exempt from the "a fresh run does not supersede a
@@ -290,6 +295,89 @@ same way it reports a succeeded one, so the job retires without executing. The
 strand repair described above will not resurrect it either — its work-graph
 sweep selects only `pending` requests and `running` ones past their lease, so a
 `canceled` request is outside every re-arm path.
+
+## Undelivered outbox rows
+
+A handoff gated on a completion fence is invisible to the relay until the fence
+exists: the claim query skips it on every tick, it consumes no attempt, and it
+carries no error code. A fence is written only when its head **succeeds**, so a
+head that fails, is canceled, or never finishes used to leave the whole chain
+behind it `pending` with no River job and no trace. Production found 15
+`investment.materialize` and 111 `workgraph.build` requests in that state, some
+weeks old.
+
+The reconciler now runs an **undelivered sweep** in the same pass as the strand
+repair (`internal/joboutbox/undelivered_repair.go`). It selects two kinds of
+row:
+
+- a `pending` outbox row whose `prerequisite_completion_key` has no fence;
+- a `dead` outbox row whose `work_graph_execution_requests` row is still
+  `pending`.
+
+Each row gets exactly one reason from a fixed vocabulary:
+
+| Reason | When | What the sweep does |
+| --- | --- | --- |
+| `blocked` | The fence is absent, the head can still succeed, and the row has waited less than the ceiling. Also any row whose request is `running` or `ambiguous` — a lease or the ambiguous-repair contract owns those. | Nothing. Counted in the `worker_outbox_reconciler_undelivered_blocked` gauge. |
+| `prerequisite_failed` | The head is a work-graph request or daily-metrics run in `failed` or `canceled`. Its fence can never be written. | Cancels the work-graph request, then marks the outbox row `dead`. |
+| `prerequisite_expired` | The fence did not arrive within the ceiling, whatever the head's state (still running, `ambiguous`, missing, or a domain the sweep does not read). | Cancels the work-graph request, then marks the outbox row `dead`. |
+| `request_terminal` | The work-graph request is already terminal — usually `canceled` by [coalescing](#superseded-investment-materializations) — while its gated row is still pending. | Marks the outbox row `dead`. |
+| `delivery_dead` | The outbox row is already `dead` (relay attempts spent, or contract/policy rejected) while its request stayed `pending`. | Cancels the request. The outbox row keeps its own `last_error_code`. |
+
+The **ceiling is 72 hours**, measured from the later of the row's `created_at`
+and `scheduled_at`. A post-sync chain finishes in hours, and every later sync
+writes its own chain over the same days, so a chain past the ceiling covers
+nothing a newer one does not.
+
+The order is the same one coalescing uses: the request goes `canceled`
+**first**, then the outbox row goes `dead`. A River cancel without a terminal
+request row is re-armed by strand repair; a `canceled` request is outside every
+re-arm path and immutable under alembic 0060's trigger. Both writes re-check
+that the fence is still absent, so a head that succeeds between the survey and
+the write wins. A crash between the two writes leaves a canceled request with a
+pending row, which the next pass resolves as `request_terminal`. A canceled
+request writes no fence, so the next link of its chain resolves as
+`prerequisite_failed` on the following pass.
+
+Only work-graph requests are canceled. A gated row of any other kind
+(`metrics.remaining.*`, `metrics.daily_*`) has its outbox row marked `dead`
+with the reason, and its domain row is left alone.
+
+A `dead` row is kept by retention as a `worker_job_delivery_abandonments` fact
+with the same `last_error_code`.
+
+### Signals
+
+Every resolution logs one line:
+
+```text
+msg="outbox undelivered row terminalized" outbox_id=… job_kind=… request_id=… reason=prerequisite_failed request_canceled=true outbox_dead=true
+```
+
+Every row the relay itself moves to `dead` also logs one line
+(`msg="outbox delivery dead"` with `reason` = `contract_rejected`,
+`policy_rejected`, or `river_insert_failed` and the attempt count).
+
+| Metric | Meaning |
+| --- | --- |
+| `worker_outbox_reconciler_undelivered_outbox_dead_total` | Outbox rows the sweep moved to `dead`. |
+| `worker_outbox_reconciler_undelivered_requests_canceled_total` | Work-graph requests the sweep canceled. |
+| `worker_outbox_reconciler_undelivered_race_lost_total` | Candidates whose writes both refused because the fence or request changed after the survey. |
+| `worker_outbox_reconciler_undelivered_blocked` | Gauge: gated rows still inside the ceiling at the last successful pass. |
+
+### Counting the class
+
+```sh
+dev-health-workerctl workgraph list-undelivered [--ceiling-hours 72]
+```
+
+The command is read-only and uses the sweep's own classification SQL on the
+domain pool. It prints one row per `(job_kind, reason)` with its count and the
+age of its oldest row, plus `actionable` (everything except `blocked`) and
+`blocked` totals. A non-zero `actionable` that does not fall to zero after one
+reconciler pass means the sweep is not running or its writes are refused —
+read `worker_outbox_reconciler_undelivered_race_lost_total` and the reconciler
+log.
 
 ## What recovery does not cover
 

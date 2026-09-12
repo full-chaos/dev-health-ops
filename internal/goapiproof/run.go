@@ -167,7 +167,13 @@ type Observation struct {
 // Outcome is one operation's complete result: what was attempted, what
 // actually executed, and -- when nothing executed -- why, by name.
 type Outcome struct {
-	Operation      string `json:"operation"`
+	Operation string `json:"operation"`
+	// Variant names an OperationSpec.Variants entry this outcome measured
+	// (e.g. "TEAM"), or is empty for the operation's base request. Two
+	// outcomes can share Operation when an operation declares Variants --
+	// this is what a reader tells them apart by; it plays no part in
+	// routing or document lookup, which stay keyed by Operation alone.
+	Variant        string `json:"variant,omitempty"`
 	DocumentDigest string `json:"document_digest"`
 	Mode           string `json:"mode"`
 	Executed       bool   `json:"executed"`
@@ -275,6 +281,16 @@ type sealedOutcome struct {
 	differencesOutsideBaselineDefect int
 	coveredByShape                   map[string]int
 	outsideByShape                   map[string]int
+
+	// variables is the EXACT map this outcome's request was built from --
+	// captured at seal time, never re-derived from SpecFor(operation)
+	// afterwards. An operation with Variants has more than one sealed
+	// outcome sharing `operation`; re-deriving from the operation's base
+	// Variables at receipt time (the pre-Variants behavior) would give
+	// every one of them the SAME request_identity regardless of which
+	// variant they actually measured, which corrupts the one column
+	// that lets two receipts for the same operation be told apart.
+	variables map[string]any
 }
 
 // Summary is the explicit-zero telemetry block. Every field is printed on
@@ -414,9 +430,13 @@ func (r *Runner) Run(ctx context.Context) ([]Outcome, Summary, error) {
 	// measurements.
 	r.sealed = make([]sealedOutcome, 0, len(operations))
 
-	for _, operation := range operations {
+	// record folds one outcome into summary/outcomes/r.sealed. Pulled out
+	// of the loop below because an operation with Variants (OperationSpec)
+	// contributes MORE than one outcome -- its base request plus each
+	// declared variant -- and every one of them goes through the exact
+	// same bookkeeping the base request always has.
+	record := func(operation string, outcome Outcome, variables map[string]any) error {
 		summary.Attempted++
-		outcome := r.proveOne(ctx, operation)
 		if outcome.Admitted {
 			summary.Admitted++
 		}
@@ -429,13 +449,42 @@ func (r *Runner) Run(ctx context.Context) ([]Outcome, Summary, error) {
 		} else {
 			summary.Refused++
 			if outcome.RefusalReason == "" {
-				return outcomes, summary, fmt.Errorf("goapiproof: %s was refused with NO named reason -- an unnamed refusal is the failure this command exists to prevent", operation)
+				label := operation
+				if outcome.Variant != "" {
+					label = operation + ":" + outcome.Variant
+				}
+				return fmt.Errorf("goapiproof: %s was refused with NO named reason -- an unnamed refusal is the failure this command exists to prevent", label)
 			}
 			summary.ByRefusalReason[outcome.RefusalReason]++
 		}
 
 		outcomes = append(outcomes, outcome)
-		r.sealed = append(r.sealed, r.seal(outcome))
+		r.sealed = append(r.sealed, r.seal(outcome, variables))
+		return nil
+	}
+
+	for _, operation := range operations {
+		spec, specErr := SpecFor(operation)
+
+		baseOutcome := r.proveOne(ctx, operation)
+		var baseVariables map[string]any
+		if specErr == nil {
+			baseVariables = spec.Variables(r.Config.OrgID, r.Config.Window)
+		}
+		if err := record(operation, baseOutcome, baseVariables); err != nil {
+			return outcomes, summary, err
+		}
+
+		if specErr != nil {
+			continue
+		}
+		for i := range spec.Variants {
+			variant := spec.Variants[i]
+			variantOutcome := r.proveVariant(ctx, operation, variant)
+			if err := record(operation, variantOutcome, variant.Variables(r.Config.OrgID, r.Config.Window)); err != nil {
+				return outcomes, summary, err
+			}
+		}
 	}
 
 	if summary.Executed == 0 {
@@ -463,7 +512,7 @@ func (r *Runner) ReceiptsFor(observedAt time.Time) ([]Receipt, error) {
 		if !sealed.executed || !sealed.admitted {
 			continue
 		}
-		identity, err := RequestIdentity(sealed.orgID, r.Config.Auth, r.variablesFor(sealed.operation))
+		identity, err := RequestIdentity(sealed.orgID, r.Config.Auth, sealed.variables)
 		if err != nil {
 			return nil, err
 		}
@@ -523,7 +572,7 @@ func (r *Runner) RefusalReceipts(observedAt time.Time, cause string) ([]Receipt,
 		if !sealed.executed || !sealed.admitted {
 			continue
 		}
-		identity, err := RequestIdentity(sealed.orgID, r.Config.Auth, r.variablesFor(sealed.operation))
+		identity, err := RequestIdentity(sealed.orgID, r.Config.Auth, sealed.variables)
 		if err != nil {
 			return nil, err
 		}
@@ -577,18 +626,63 @@ func observationRef(observation *Observation) string {
 	return observation.BodyRef
 }
 
-func (r *Runner) variablesFor(operation string) map[string]any {
+// proveOne proves an operation's own base (Variables, Parity) request --
+// the only request there was before OperationSpec.Variants existed, and
+// still the only request for every operation that declares none.
+func (r *Runner) proveOne(ctx context.Context, operation string) Outcome {
 	spec, err := SpecFor(operation)
 	if err != nil {
-		return nil
+		return r.refuseNoSpec(operation, "", err)
 	}
-	return spec.Variables(r.Config.OrgID, r.Config.Window)
+	return r.proveRequest(ctx, operation, "", spec, spec.Variables(r.Config.OrgID, r.Config.Window), spec.Parity)
 }
 
-func (r *Runner) proveOne(ctx context.Context, operation string) Outcome {
+// proveVariant proves ONE OperationSpec.Variants entry, under the SAME
+// operation name (so it shares the operation's routing row and document)
+// but with the variant's OWN Variables and Parity. See
+// OperationSpec.Variants for why this exists.
+func (r *Runner) proveVariant(ctx context.Context, operation string, variant Variant) Outcome {
+	spec, err := SpecFor(operation)
+	if err != nil {
+		// Not reachable from Run(), which only calls proveVariant for an
+		// operation whose spec it already resolved to read Variants from
+		// in the first place. Refused defensively rather than assumed,
+		// for any other caller this method is not currently keeping safe.
+		return r.refuseNoSpec(operation, variant.Name, err)
+	}
+	return r.proveRequest(ctx, operation, variant.Name, spec, variant.Variables(r.Config.OrgID, r.Config.Window), variant.Parity)
+}
+
+// refuseNoSpec builds the refusal Outcome for an operation (or variant)
+// whose committed request payload could not be found -- the one refusal
+// reachable before a document, route or credential is even chosen.
+func (r *Runner) refuseNoSpec(operation, variantName string, err error) Outcome {
+	row := r.Routing[operation]
+	outcome := Outcome{
+		Operation: operation, Variant: variantName,
+		DocumentDigest: r.Registry.DocumentDigest[operation], Mode: row.Mode,
+	}
+	if row.CandidateBuild != "" && row.CandidateBuild != r.Registry.BuildIdentity {
+		outcome.RoutingRowBuild = row.CandidateBuild
+	}
+	outcome.RefusalReason = RefusalNoPayload
+	outcome.RefusalDetail = err.Error()
+	outcome.TerminalState = terminalStateForRefusal(RefusalNoPayload)
+	outcome.terminalState = outcome.TerminalState
+	return outcome
+}
+
+// proveRequest executes ONE HTTP-level proof request -- the operation's
+// base request (variantName == "") or one of its declared Variants -- and
+// runs it through admission and the comparator exactly the same way
+// either way. variables and parity are the caller's resolved choice for
+// THIS request; every other field (ResponseRoot, RootNullable,
+// InstanceVariable) comes from spec because it describes the registered
+// document, which a variant shares with the base request by definition.
+func (r *Runner) proveRequest(ctx context.Context, operation string, variantName string, spec OperationSpec, variables map[string]any, parity Options) Outcome {
 	registryDigest := r.Registry.DocumentDigest[operation]
 	row := r.Routing[operation]
-	outcome := Outcome{Operation: operation, DocumentDigest: registryDigest, Mode: row.Mode}
+	outcome := Outcome{Operation: operation, Variant: variantName, DocumentDigest: registryDigest, Mode: row.Mode}
 	// Recorded on EVERY outcome, refused or not: a refusal taken while the
 	// enablement record was stale is exactly as worth knowing as a match
 	// taken then. Empty when the row agrees with what is running.
@@ -602,11 +696,6 @@ func (r *Runner) proveOne(ctx context.Context, operation string) Outcome {
 		outcome.TerminalState = terminalStateForRefusal(reason)
 		outcome.terminalState = outcome.TerminalState
 		return outcome
-	}
-
-	spec, err := SpecFor(operation)
-	if err != nil {
-		return refuse(RefusalNoPayload, err.Error())
 	}
 
 	document, ok := r.Documents[operation]
@@ -652,8 +741,6 @@ func (r *Runner) proveOne(ctx context.Context, operation string) Outcome {
 			"the registered document requires $%s, an identifier for one stored row, and this table has no source for one: any value it invented would satisfy the SDL and return null on BOTH planes, so the run would record a match having compared nothing",
 			spec.InstanceVariable))
 	}
-
-	variables := spec.Variables(r.Config.OrgID, r.Config.Window)
 
 	candidate, err := r.post(ctx, candidateURL, document, candidateCredential, variables)
 	if err != nil {
@@ -706,7 +793,7 @@ func (r *Runner) proveOne(ctx context.Context, operation string) Outcome {
 	// receipt must state the binding that was actually checked.
 	outcome.EdgeBuildBinding = admission.EdgeBuildBinding
 
-	result := Compare(baselineSnapshot, candidateSnapshot, spec.Parity)
+	result := Compare(baselineSnapshot, candidateSnapshot, parity)
 	if len(result.UnusedTierB) > 0 {
 		// Same rule as a stale exclusion, one tier over: a Tier-B
 		// declaration that relaxed nothing means the comparison that ran
@@ -875,8 +962,9 @@ func (r *Runner) proveOne(ctx context.Context, operation string) Outcome {
 // established. Every value comes from the run -- the registry the process
 // reported, the config this run was given, the outcome proveOne produced --
 // and none of it can be reached again from outside this package.
-func (r *Runner) seal(outcome Outcome) sealedOutcome {
+func (r *Runner) seal(outcome Outcome, variables map[string]any) sealedOutcome {
 	return sealedOutcome{
+		variables:                        variables,
 		operation:                        outcome.Operation,
 		documentDigest:                   outcome.DocumentDigest,
 		schemaDigest:                     r.Registry.SchemaDigest,

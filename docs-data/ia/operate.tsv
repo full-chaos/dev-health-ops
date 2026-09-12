@@ -48,4 +48,7 @@ op-rb-auth	op-runbooks	/operate/runbooks/provider-authentication-failure/	Provid
 op-rb-ask-dev-proxy	op-runbooks	/operate/runbooks/ask-dev-web-proxy-or-browser-failure/	Ask Dev web proxy or browser failure	runbook	true	public	planned	false	
 op-rb-perf	op-runbooks	/operate/runbooks/performance-or-rate-limit/	Performance, rate limit, or saturation	runbook	true	public	planned	false	
 op-rb-backup	op-runbooks	/operate/runbooks/backup-or-restore-failure/	Backup or restore failure	runbook	true	public	planned	false	
-op-rb-dr	op-runbooks	/operate/runbooks/disaster-recovery/	Disaster recovery	runbook	true	public	planned	false	
+op-rb-dr	op-runbooks	/operate/runbooks/disaster-recovery/	Disaster recovery	runbook	true	public	planned	false
+op-rb-prod-k3s	op-runbooks	/operate/runbooks/prod-k3s-deploy-and-operate/	Prod k3s deploy and operate	runbook	true	public	active	false
+op-rb-query-api	op-runbooks	/operate/runbooks/query-api-bootstrap/	Query-api bootstrap on prod k3s	runbook	true	public	active	false
+op-prod-cutover-lessons	operate	/operate/prod-cutover-2026-09-11-lessons/	Prod cutover 2026-09-11 lessons	landing	true	public	active	false	

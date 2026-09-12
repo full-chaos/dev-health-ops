@@ -32,7 +32,7 @@ On 2026-09-11 21:30Z, prod moved to a single-host k3s cluster (CHAOS-5590). This
 
 ## Operator commands & patterns
 
-- [**Operator commands § Workerctl on k8s**](../runbooks/operator-commands.md#workerctl-on-kubernetes-trap-169-amended) — running corrective verbs from a one-off Pod.
+- [**Operator commands § Workerctl on k8s**](../runbooks/operator-commands.md#workerctl-on-kubernetes-trap-169-amended) — running corrective verbs from a one-off Pod with secretKeyRef (Trap #121, R167).
   - **Trap #169 (amended)**: Use `dev-health-go-operator` image, NOT go-worker (lacks sync-dispatch contracts).
   - One Pod per verb; credentials via secretKeyRef only (Trap #121, R167), never flags/argv.
   - Delete after completion.
@@ -49,7 +49,7 @@ On 2026-09-11 21:30Z, prod moved to a single-host k3s cluster (CHAOS-5590). This
 |---|---|---|
 | **Trap #163** | `go-api-prove -dry-run` never validates routing (pool skipped by design). | [Query-api bootstrap § Known limitations](../runbooks/query-api-bootstrap.md#known-limitations) |
 | **Trap #165** | Secrets loader must run AFTER overlay settles; re-run on every overlay change. | [Prod k3s operate § Restore procedure §5](../runbooks/prod-k3s-deploy-and-operate.md#procedure) |
-| **Trap #168** | `kubectl create secret --from-env-file` does NOT strip quotes. | [Prod k3s operate § Secrets loading](../runbooks/prod-k3s-deploy-and-operate.md#secrets-loading-on-kubernetes-trap-168) |
+| **Trap #168** | `kubectl create secret --from-env-file` does NOT strip quotes. | [Prod k3s operate § Secrets loading](../runbooks/prod-k3s-deploy-and-operate.md#secrets-loading-on-kubernetes) |
 | **Trap #169 (amended)** | Use `dev-health-go-operator` image for workerctl one-off Pod, NOT go-worker. | [Operator commands § Workerctl on k8s](../runbooks/operator-commands.md#workerctl-on-kubernetes-trap-169-amended) |
 | **Trap #171** | CPU limits under 250m throttle edge tiers; size by peak request time, not idle. | [Prod k3s operate § CPU limit sizing](../runbooks/prod-k3s-deploy-and-operate.md#cpu-limit-sizing-trap-171) |
 | **Trap #172** | Rolling all k8s Deployments at once deadlocks small node; batch ≤2, wait ready. | [Prod k3s operate § Batch size rule](../runbooks/prod-k3s-deploy-and-operate.md#batch-size-rule-trap-172) |

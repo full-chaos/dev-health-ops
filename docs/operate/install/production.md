@@ -77,7 +77,7 @@ What that means when you deploy:
   deployment whose routes disagree with the manifest fails closed rather than
   serving the wrong runtime.
 
-The root [`compose.yml`](https://github.com/full-chaos/dev-health-ops/blob/main/compose.yml) keeps the Celery services defined behind a `celery-legacy` profile for local parity and historical reference. They are not part of any default bring-up and must not be enabled in a production overlay.
+The root [`compose.yml`](https://github.com/full-chaos/dev-health-ops/blob/main/compose.yml) no longer defines the Celery services at all (CHAOS-5589): the `celery-legacy` profile was a rollback reserve only, and R146 established Celery is not a rollback target. `deploy/docker-compose/compose.production.yml` and `deploy/docker-swarm/stack.yml` still define the archived fleet for self-hosted docker-compose/swarm deployments; do not enable it in a Kubernetes/Helm production overlay.
 
 ## Prepare the production inputs
 

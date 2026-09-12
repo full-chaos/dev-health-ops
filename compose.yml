@@ -53,9 +53,8 @@ x-jwt-secret-key:
 # deploy/docker-compose/compose.go-workers.yml -- that file keeps its own
 # copy for compose.production.yml's separate `--profile go-workers` overlay
 # path; this is a second, independently maintained copy for local-dev
-# parity against THIS file's own postgres/clickhouse/valkey, same as the
-# archived Celery fleet below keeps its own copy rather than sharing one
-# with compose.production.yml). Credentials only in `environment:` --
+# parity against THIS file's own postgres/clickhouse/valkey. Credentials
+# only in `environment:` --
 # everything else is a flag, so `docker compose config` shows the deployed
 # configuration of every service below in one place.
 x-go-worker-flag:
@@ -929,130 +928,11 @@ services:
       start_period: 30s
 
   # ---------------------------------------------------------------------------
-  # ARCHIVED (CHAOS-4164, 2026-08-23; gated CHAOS-3088): Python/Celery worker
-  # fleet.
-  #
-  # Go owns every current production job and schedule; every Python Celery
-  # worker and Beat service was stopped in production 2026-08-19 (CHAOS-4026).
-  # The five services below are NOT live topology -- kept defined, not
-  # deleted, for local-dev parity and historical reference only (see
-  # docs/operate/configure/workers-and-schedules.md#historical-celery-topology-dormant).
-  # Go equivalents: worker/worker-heavy -> go-worker-sync, go-worker-sync-provider,
-  # go-worker-heavy, go-worker-ops; beat -> go-scheduler; the outbox relay
-  # these depended on -> go-reconciler. Do not bring one of these back up to
-  # diagnose a live incident: it has no consumers wired to current queues and
-  # no operator has kept its routing current since the cutover.
-  #
-  # CHAOS-3088: a bare `docker compose up -d` from this file used to start
-  # these five unconditionally -- the comment above was explicitly "not a
-  # guard." It now is one: `profiles: [celery-legacy]` on `worker` below
-  # (inherited by every sibling through `<<: *worker-base`) means a default
-  # `up` starts none of them; the Go fleet after this block is the
-  # unconditional default instead. Opt in with `--profile celery-legacy` to
-  # bring the archived fleet back for local-dev parity or historical
-  # reference. This still differs from the production/swarm compose files,
-  # which carry their own, separately-tracked archival note
-  # (compose.production.yml's ARCHIVED comment) and are not gated by this
-  # change.
-  # ---------------------------------------------------------------------------
-
-  # ---------------------------------------------------------------------------
-  # Celery workers — split topology (CHAOS-2278) [historical rationale]
-  #
-  # One shared pool let ~250s blocking stream consumers (ingest) and
-  # multi-minute syncs starve latency-sensitive work (Sync Now, webhooks)
-  # for hours. Three pools isolate the workload classes:
-  #   worker        — latency-sensitive: default,sync,sync.<provider>,webhooks,reports
-  #                     (per-provider sync queues, CHAOS-2299)
-  #   worker-ingest — blocking stream consumers, isolated at concurrency 1
-  #   worker-heavy  — long batch jobs: metrics,backfill
-  # `monitoring` (queue-depth telemetry) is consumed by BOTH worker and
-  # worker-heavy so telemetry survives one pool flooding (CHAOS-2299).
-  # ---------------------------------------------------------------------------
-  worker: &worker-base
-    profiles: [celery-legacy]
-    # Declared alongside `build:` so an operator pin is honoured: this is a
-    # staging file, `pull_policy` is left at Compose's own default, and a
-    # one-shot job that keeps building locally while the long-running
-    # services honour a release pin is how a setup step ends up running a
-    # different build of the same binary. The default is the `:local` tag
-    # of the same family, which no registry publishes: unpinned, Compose
-    # builds it from THIS tree, so a start is one coherent revision. A
-    # published moving tag as the default was worse than no pin at all --
-    # present on the host from any earlier pull, Compose ran THAT image
-    # instead of building, putting a months-old migration beside a fleet
-    # built today. Two consequences, both deliberate: with no pin and no
-    # prior build there is nothing for `--no-build` to run, and `:local`
-    # is shared across compose projects on one host.
-    image: ${DEV_HEALTH_IMAGE:-ghcr.io/full-chaos/dev-hops-runner:local}
-    build:
-      context: .
-      dockerfile: ./docker/Dockerfile
-      target: runner
-      args:
-        SETUPTOOLS_SCM_PRETEND_VERSION: 0.0.0
-        COMMIT: ${COMMIT:-unknown}
-        BUILD_TIME: ${BUILD_TIME:-1970-01-01T00:00:00Z}
-    container_name: worker
-    entrypoint: ["celery"]
-    command: -A dev_health_ops.workers.celery_app worker --loglevel=info --disable-prefetch -Q default,sync,sync.github,sync.gitlab,sync.linear,sync.jira,sync.launchdarkly,sync.github.light,sync.github.medium,sync.gitlab.light,sync.gitlab.medium,sync.jira.medium,sync.linear.medium,webhooks,reports,scheduler,monitoring --concurrency=${WORKER_CONCURRENCY:-4}
-    environment:
-      <<: *env
-      CELERY_BROKER_URL: redis://valkey:6379/0
-      CELERY_RESULT_BACKEND: redis://valkey:6379/0
-      AUTO_RUN_MIGRATIONS: "false"
-      # Email (Resend) — worker sends billing emails via Celery task
-      EMAIL_PROVIDER: ${EMAIL_PROVIDER:-console}
-      EMAIL_API_KEY: ${EMAIL_API_KEY:-}
-      EMAIL_FROM_ADDRESS: ${EMAIL_FROM_ADDRESS:-noreply@example.com}
-    depends_on:
-      valkey:
-        condition: service_healthy
-      clickhouse:
-        condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
-      pgbouncer:
-        condition: service_started
-    volumes:
-      - ./:/app
-    working_dir: /app
-
-  worker-ingest:
-    <<: *worker-base
-    container_name: worker-ingest
-    command: -A dev_health_ops.workers.celery_app worker --loglevel=info --disable-prefetch -Q ingest --concurrency=1
-
-  # CHAOS-2693 D8/master-spec CC11: dedicated queue/container, not folded
-  # into worker-ingest -- external-ingest is customer-facing (spiky,
-  # potentially larger batches) and must not share throughput with an
-  # unrelated internal consumer backlog, nor vice versa.
-  # DEPLOYMENT INVARIANT: exactly ONE replica at --concurrency=1. The
-  # reclaim/redelivery design (StreamConsumer.enable_reclaim,
-  # reclaim_idle_ms=900_000) assumes a single logical consumer identity
-  # draining the PEL; scaling replicas requires revisiting reclaim
-  # semantics first. tests/test_compose_config.py asserts this flag shape.
-  worker-external-ingest:
-    <<: *worker-base
-    container_name: worker-external-ingest
-    command: -A dev_health_ops.workers.celery_app worker --loglevel=info --disable-prefetch -Q external-ingest --concurrency=1
-
-  worker-heavy:
-    <<: *worker-base
-    container_name: worker-heavy
-    # `monitoring` is consumed here AND by `worker` above: queue telemetry
-    # survives either pool being saturated or down.
-    command: -A dev_health_ops.workers.celery_app worker --loglevel=info --disable-prefetch -Q metrics,backfill,scheduler,monitoring,sync.github.heavy,sync.gitlab.heavy --concurrency=${WORKER_HEAVY_CONCURRENCY:-2}
-
-  beat:
-    <<: *worker-base
-    container_name: beat
-    command: -A dev_health_ops.workers.celery_app beat --loglevel=info --schedule=/tmp/celerybeat-schedule
-
-  # ---------------------------------------------------------------------------
   # Go/River workers (CHAOS-3142) -- the unconditional default as of
-  # CHAOS-3088. No `profiles:` here, unlike the archived Celery fleet above:
-  # this is the fleet a bare `docker compose up -d` now actually runs,
+  # CHAOS-3088. The Celery/Beat fleet this replaced (CHAOS-4164) is deleted
+  # outright as of CHAOS-5589 -- R146: Celery transport is not a rollback
+  # target, and no consumer has run since 2026-08-19 (CHAOS-4026). This is
+  # the fleet a bare `docker compose up -d` now actually runs,
   # folded in from deploy/docker-compose/compose.go-workers.yml (kept there
   # too, for compose.production.yml's separate overlay path, still at its
   # own `replicas: 0` -- unaffected by this PR). The nine long-running

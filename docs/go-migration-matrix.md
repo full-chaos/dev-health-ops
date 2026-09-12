@@ -66,7 +66,7 @@ with its producer, or a family/dataset gains or loses a row without the doc bein
 `cmd/dev-health-worker/native_families_artifact_test.go` separately fails CI if
 `contracts/native-families/v1/native-families.json` disagrees with `daily.go`'s actual wiring.
 
-**Last verified:** `e3e2e77c48a9e4902e48d962b8292f1b408bf47b` (ops main, 2026-09-04) -- the commit every
+**Last verified:** `c6fa2c38b20bf77073c44d498d149434372825f7` (ops main, 2026-09-12) -- the commit every
 hand-curated citation/CLI-verb row on this page was read against. The generated tables always reflect
 whatever their producer files say at build time, independent of this date.
 
@@ -97,11 +97,13 @@ along with the age in days:
 go run ./cmd/dev-health-migration-matrix -render -root .
 ```
 
-**Not bumped on 2026-09-09.** The `ic_finalize` citation below was re-read and corrected that day (it named
-`compute_ic.py`, deleted weeks earlier by CHAOS-4290 PR3), but the OTHER hand-curated rows on this page were
-not re-read, so moving the stamp would have made a claim about them that nobody checked -- which is the
-exact move this gate exists to stop. The stamp stays at the commit those rows were genuinely last read
-against, and the freshness gate will start failing on 2026-09-11 until someone does the re-read.
+**Re-read on 2026-09-12.** Every hand-curated citation and CLI-verb row on this page was re-checked against
+`c6fa2c38b20b` (see the PR body for the per-row audit table): six `cmd/dev-health-workerctl/main.go` /
+`cmd/dev-health-stream-runner/dependencies.go` / `internal/scheduler/fixed/inventory.go` /
+`cmd/query-api/internal/routeswitch/postgres_switch.go` line-range citations had drifted from file growth
+and were corrected, and the `work_item_estimate` citation still pointed at a `compute_work_items.py` line
+whose function (`compute_estimate_coverage_metrics_daily`) CHAOS-5323 deleted weeks earlier -- corrected in
+`internal/migrationmatrix/curated.go` and re-rendered. Every other citation checked out as written.
 
 ## STATUS (v2): correctness, deployment and proof
 
@@ -211,7 +213,7 @@ A row that is live, reachable to real clients (`canary`/`primary`) and carries n
 is required before stage 4/5, and "a bare 200 does not qualify".
 
 <!-- BEGIN GENERATED GO API OPERATIONS -->
-_Rendered 2026-09-09T06:26:46Z against main merge-base `b36d2dad35f3e5994f50671e3cc85a87f56ae7e3`; SDL digest pin `sha256:19485ec136d04de0935717dca8b4f5fd27dd0351fe96b854d40f433229468fd0`; fleet read 2026-09-11T21:55:38Z via docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1._
+_Rendered 2026-09-09T06:26:46Z against main merge-base `c6fa2c38b20bf77073c44d498d149434372825f7`; SDL digest pin `sha256:19485ec136d04de0935717dca8b4f5fd27dd0351fe96b854d40f433229468fd0`; fleet read 2026-09-11T21:55:38Z via docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1._
 
 _Rows in `go_api_proof_run` at read time: **0**. Operations reachable to real clients with no deployed-executed proof: **11**. Rows whose mode says Go but whose schema digest no longer matches the pin, so every request silently falls back to Python: **12**._
 
@@ -256,8 +258,8 @@ tooling and Python trigger shells over the same native path:
 | CLI verb/area | Executor | Writer call site | Ticket |
 |---|---|---|---|
 | `dev-hops sync` (git/prs/blame/cicd/deployments/incidents/teams/work-items) | NATIVE (worker-side; Python CLI verbs are operator-trigger shells over the same Go sync-dispatch path, `sync_processor.register_commands`) | `internal/providersync/*` -- see the generated table below, all NATIVE except jira memberships | CHAOS-4198 (jira memberships) |
-| `dev-health-workerctl providersync retire-linear-pseudo-projects` / `retire-stale-linear-project-ownership` | NATIVE | `cmd/dev-health-workerctl/main.go:1199-1372` | -- |
-| `dev-health-workerctl sync-dispatch-outbox close-backlog` | NATIVE | `cmd/dev-health-workerctl/main.go:1379-1453` | -- |
+| `dev-health-workerctl providersync retire-linear-pseudo-projects` / `retire-stale-linear-project-ownership` | NATIVE | `cmd/dev-health-workerctl/main.go:1428-1609` | -- |
+| `dev-health-workerctl sync-dispatch-outbox close-backlog` | NATIVE | `cmd/dev-health-workerctl/main.go:1610-1689` | -- |
 
 ### Provider sync, by provider x dataset (generated from `contracts/provider-matrix/v1/matrix.json`)
 
@@ -367,11 +369,11 @@ which had been unreachable dead code (never wired into `cli.py`'s argparse tree)
 |---|---|---|---|
 | `dev-hops metrics daily` / `rebuild` | NATIVE (dispatch) | `workerctl_dispatch.py` `_cmd_metrics_daily`/`_cmd_metrics_rebuild` -> `dev-health-workerctl metrics daily-start` -- the worker's own native/bridge split decides the rest (CHAOS-5055/#2232). The old direct-Python-compute `job_daily.py` `_cmd_metrics_daily`/`_cmd_metrics_rebuild` (never wired into `cli.py`, zero callers) were deleted (CHAOS-5307); `run_daily_metrics_job`/`run_daily_metrics_finalize` themselves are unaffected -- other live callers remain (the worker bridge, fixtures, tests; `scripts/compute_metrics_daily.py` was itself deleted, CHAOS-5254/#2306) | CHAOS-5055/CHAOS-5307 |
 | `dev-health-workerctl metrics partition-recompute` | PARTIAL | `internal/jobs/metrics/daily/partition_recompute.go` -- Go-native REDRIVE only (bumps `daily_metrics_runs.generation`, republishes the partition claim); the recompute itself then follows the ordinary native/bridge split below, it is not a compute engine on its own | CHAOS-4459 |
-| `dev-health-workerctl metrics daily-redrive` / `daily-finalize` / `finalize-redrive` | NATIVE (ledger repair) -> triggers the ordinary native/bridge split on replay | `cmd/dev-health-workerctl/main.go:785-1193` | CHAOS-4358/4389/4405 |
-| `dev-hops metrics complexity` / `dora` / `capacity` | NATIVE (dispatch) | `workerctl_dispatch.py` -> `dev-health-workerctl metrics remaining trigger-backstop --family <complexity\|dora\|capacity>` (CHAOS-5055/#2232). The old direct-Python-compute `job_complexity_db.py`/`job_dora.py`/`job_capacity.py` CLI wrappers (never wired into `cli.py`, zero callers) were deleted (CHAOS-5307). `job_dora.py`/`job_capacity.py` and `compute_dora.py` are now deleted outright (CHAOS-5336): the native `DORAExecutor` (`internal/jobs/metrics/remaining/dora_native.go`, `dora_native_clickhouse.go`) is the sole DORA producer, with no Python fallback left to guard against drifting from -- proved end to end against a real Postgres+ClickHouse pair by `dora_pagerduty_incident_restore_time_integration_test.go`. `compute_capacity.py`/`metrics/forecast.py` survive as API-only Python -- CHAOS-5349 landed the Go query-api port of the three GraphQL operations that call them (`capacityForecast`/`capacityForecasts` -> `cmd/query-api/internal/capacityforecast/`, `throughputForecast` -> `cmd/query-api/internal/throughputforecast/`, all three registered in `cmd/query-api/query_route.go`'s `digestByOperation`), but registration is not enablement: `query_route.go` routes through the fail-closed `routeswitch.PostgresSwitch` (`cmd/query-api/internal/routeswitch/postgres_switch.go:100 Enabled`), which only serves Go traffic for an operation once its `go_api_routing_state` row says so -- until then Python's `resolve_capacity_forecast`/`resolve_capacity_forecasts` (`resolvers/capacity.py`) and `resolve_throughput_forecast` (`resolvers/forecast.py`) remain the LIVE producers. Deleting `compute_capacity.py`/`metrics/forecast.py` is CHAOS-5349's follow-up PR, gated on those `go_api_routing_state` rows being enabled. `metrics release-impact`'s own module (`job_release_impact.py`) no longer exists as a file at all. | CHAOS-5055/CHAOS-5307/CHAOS-5336/CHAOS-5349 |
+| `dev-health-workerctl metrics daily-redrive` / `daily-finalize` / `finalize-redrive` | NATIVE (ledger repair) -> triggers the ordinary native/bridge split on replay | `cmd/dev-health-workerctl/main.go:826-958,1169-1427` (`dispatchMetrics`'s inline `daily-redrive` case, `dispatchMetricsDailyFinalize`, `finalizeLedgerRepairGate`, `dispatchMetricsFinalizeRedrive`) | CHAOS-4358/4389/4405 |
+| `dev-hops metrics complexity` / `dora` / `capacity` | NATIVE (dispatch) | `workerctl_dispatch.py` -> `dev-health-workerctl metrics remaining trigger-backstop --family <complexity\|dora\|capacity>` (CHAOS-5055/#2232). The old direct-Python-compute `job_complexity_db.py`/`job_dora.py`/`job_capacity.py` CLI wrappers (never wired into `cli.py`, zero callers) were deleted (CHAOS-5307). `job_dora.py`/`job_capacity.py` and `compute_dora.py` are now deleted outright (CHAOS-5336): the native `DORAExecutor` (`internal/jobs/metrics/remaining/dora_native.go`, `dora_native_clickhouse.go`) is the sole DORA producer, with no Python fallback left to guard against drifting from -- proved end to end against a real Postgres+ClickHouse pair by `dora_pagerduty_incident_restore_time_integration_test.go`. `compute_capacity.py`/`metrics/forecast.py` survive as API-only Python -- CHAOS-5349 landed the Go query-api port of the three GraphQL operations that call them (`capacityForecast`/`capacityForecasts` -> `cmd/query-api/internal/capacityforecast/`, `throughputForecast` -> `cmd/query-api/internal/throughputforecast/`, all three registered in `cmd/query-api/query_route.go`'s `digestByOperation`), but registration is not enablement: `query_route.go` routes through the fail-closed `routeswitch.PostgresSwitch` (`cmd/query-api/internal/routeswitch/postgres_switch.go:123 Enabled`), which only serves Go traffic for an operation once its `go_api_routing_state` row says so -- until then Python's `resolve_capacity_forecast`/`resolve_capacity_forecasts` (`resolvers/capacity.py`) and `resolve_throughput_forecast` (`resolvers/forecast.py`) remain the LIVE producers. Deleting `compute_capacity.py`/`metrics/forecast.py` is CHAOS-5349's follow-up PR, gated on those `go_api_routing_state` rows being enabled. `metrics release-impact`'s own module (`job_release_impact.py`) no longer exists as a file at all. | CHAOS-5055/CHAOS-5307/CHAOS-5336/CHAOS-5349 |
 | `dev-hops metrics validate-flags` | **N/A -- confirmed still a read-only diagnostic**, no ClickHouse write, no worker path | `job_ff_validation.py` `_cmd_validate_flags` -> `run_validate_flags` (prints a report only) | -- |
 | `dev-hops metrics compounding-risk` | DELETED (CHAOS-5308) -- was a standalone CLI backfill wrapper, duplicate coverage of `job_daily.py`'s finalize (which already writes `compounding_risk_daily` nightly regardless); `job_compounding_risk.py` deleted whole, along with its orchestrator (`build_compounding_risk_rows_for_day`, `compounding_risk.py`) -- no remaining Python producer of this family at any scope | -- | CHAOS-4287/CHAOS-5308 |
-| `dev-health-workerctl metrics remaining start` | NATIVE (manual backfill trigger) | `cmd/dev-health-workerctl/main.go:1598-1686` -- help text is stale, only lists complexity/dora/release_impact (doesn't mention membership_backfill/recommendations/work_item_attribution, which also exist) | CHAOS-4254 |
+| `dev-health-workerctl metrics remaining start` | NATIVE (manual backfill trigger) | `cmd/dev-health-workerctl/main.go:1834-1992` (`dispatchMetricsRemaining`'s `start` case) -- help text is stale, only lists complexity/dora/release_impact (doesn't mention membership_backfill/recommendations/work_item_attribution, which also exist) | CHAOS-4254 |
 | membership_backfill / cognitive load / benchmarking | no dedicated Python CLI verb found | see the two tables below | -- |
 
 ### Daily metrics families (`internal/jobs/metrics/daily/families.json`)
@@ -403,7 +405,7 @@ which had been unreachable dead code (never wired into `cli.py`'s argparse tree)
 | work_graph_edges | NATIVE | Go: `internal/jobs/metrics/daily/work_graph_edges_native_executor.go` (`WorkGraphEdgesExecutor`) | CHAOS-4286 (Done) |
 | work_item | NATIVE | Go: `internal/jobs/metrics/daily/work_item_native_executor.go` -- pre_bridge, ordered after `work_item_attribution` by families.json's `after` edge; reuses `internal/jobs/metrics/workitemmetrics`'s pure compute (shared with the providersync sync-time deriver); ported `compute_work_item_metrics_daily` (compute_work_items.py), deleted entirely by CHAOS-5310/CHAOS-3092 (fully native, no remaining Python caller) | CHAOS-4283 |
 | work_item_attribution | NATIVE | Go: `internal/jobs/metrics/daily/work_item_attribution_native_executor.go` -- pre_bridge; ported `compute_work_item_team_attributions` (compute_work_items.py), the FULL daily compute (distinct from §3's native staleness-only backstop of the same table), deleted entirely by CHAOS-5321/CHAOS-3092 (fully native, no remaining Python caller). Runs before its three readers via families.json's `after` edges | CHAOS-4283 |
-| work_item_estimate | NATIVE | Go: `internal/jobs/metrics/daily/work_item_estimate_native_executor.go` -- pre_bridge, ordered after `work_item_attribution`; same shared compute; ports `compute_work_items.py:1425 compute_estimate_coverage_metrics_daily` | CHAOS-4283 |
+| work_item_estimate | NATIVE | Go: `internal/jobs/metrics/daily/work_item_estimate_native_executor.go` -- pre_bridge, ordered after `work_item_attribution`; same shared compute; ported `compute_estimate_coverage_metrics_daily` (`compute_work_items.py`), deleted entirely by CHAOS-5323/CHAOS-3092 (fully native, no remaining Python caller; `tests/metrics/test_job_daily_skip_families.py` asserts it no longer exists) | CHAOS-4283/CHAOS-5323 |
 | work_item_state | NATIVE | Go: `internal/jobs/metrics/daily/work_item_state_native_executor.go` -- pre_bridge, ordered after the now-native `work_item_attribution` that writes the `work_item_team_attributions` it reads; ported `compute_work_item_state_durations_daily` (compute_work_item_state_durations.py), deleted entirely by CHAOS-5321/CHAOS-3092 (fully native, no remaining Python caller) | CHAOS-4278 (Done) |
 <!-- END GENERATED DAILY METRICS MATRIX -->
 
@@ -505,10 +507,10 @@ it.
 
 | Profile | Executor | Writer call site | Ticket |
 |---|---|---|---|
-| `ingest` (internal product events) | NATIVE | `internal/streamhandlers/`; `cmd/dev-health-stream-runner/dependencies.go:10` profile list | -- |
-| `product-telemetry` | NATIVE -- a real separate handler, not folded into `ingest` (scheduler still names it `process-product-telemetry-streams`, `internal/scheduler/fixed/inventory.go:535`, but it's dispatched via the `ingest` binary's `productTelemetryHandlerKind`, `dependencies.go:60,199,521-522`) | `internal/streamhandlers/product_telemetry.go:52-58` | -- |
-| `external` | NATIVE | `dependencies.go:10` | -- |
-| `pagerduty` | NATIVE -- CHAOS-4105 ported the locked-graph reconciliation to Go; the handler writes the canonical rows through the providersync PagerDuty effect sinks and the Python compute is deleted | `dependencies.go:10`; `internal/jobs/pagerduty/reconcile_native.go`; `internal/providersync/pagerduty_webhook_reconcile.go` | -- |
+| `ingest` (internal product events) | NATIVE | `internal/streamhandlers/`; `cmd/dev-health-stream-runner/dependencies.go:503` (`configureStreamRunnerDependenciesWithSources`'s `"ingest"` case) | -- |
+| `product-telemetry` | NATIVE -- a real separate handler, not folded into `ingest` (scheduler still names it `process-product-telemetry-streams`, `internal/scheduler/fixed/inventory.go:585`, but it's dispatched via the `ingest` binary's `productTelemetryHandlerKind`, `dependencies.go:86,288,513`) | `internal/streamhandlers/product_telemetry.go:52-58` | -- |
+| `external` | NATIVE | `dependencies.go:526` (`"external"` case) | -- |
+| `pagerduty` | NATIVE -- CHAOS-4105 ported the locked-graph reconciliation to Go; the handler writes the canonical rows through the providersync PagerDuty effect sinks and the Python compute is deleted | `dependencies.go:553` (`"pagerduty"` case); `internal/jobs/pagerduty/reconcile_native.go`; `internal/providersync/pagerduty_webhook_reconcile.go` | -- |
 
 ## SCHEDULER / RECONCILER / OPERATOR
 

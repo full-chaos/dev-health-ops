@@ -1719,37 +1719,6 @@ _COMPOSE_MERGE_REQUIRED_ENV = {
 
 
 @pytest.mark.skipif(shutil.which("docker") is None, reason="docker is not installed")
-@pytest.mark.parametrize(
-    ("base", "overlay"),
-    [(_PRODUCTION_COMPOSE, _GO_COMPOSE), (_SWARM_STACK, _GO_SWARM)],
-)
-def test_compose_merge_flips_api_authority_without_losing_base_fields(
-    base: Path, overlay: Path
-) -> None:
-    """CHAOS-3942: the string-level `environment:` merge assumption behind
-    compose.go-workers.yml/stack.go-workers.yml is exactly what Compose's
-    multi-file merge does -- proved here through the real `docker compose
-    config` engine, not just by parsing base and overlay independently
-    (codex review round 2: independent parsing can't prove the merge itself
-    keeps the base service's image/command/ports/other environment intact).
-    """
-    result = subprocess.run(
-        ["docker", "compose", "-f", str(base), "-f", str(overlay), "config"],
-        check=True,
-        capture_output=True,
-        text=True,
-        env={**_COMPOSE_MERGE_REQUIRED_ENV, "PATH": os.environ["PATH"]},
-    )
-    merged = yaml.safe_load(result.stdout)
-    api = merged["services"]["api"]
-    assert api["image"]
-    assert api["environment"]["EXPECTED_WORKER_GROUPS"] == _EXPECTED_WORKER_GROUPS_VALUE
-    # The merge must ADD the key, not replace the whole service definition.
-    assert api["environment"]["CELERY_BROKER_URL"]
-    assert "POSTGRES_URI" in api["environment"]
-
-
-@pytest.mark.skipif(shutil.which("docker") is None, reason="docker is not installed")
 def test_compose_metrics_api_service_has_its_own_resource_limits() -> None:
     """CHAOS-4351: `metrics-api` is a second copy of `api` with its OWN
     memory/pids bound -- the entire point of the split is that a bridge-side
@@ -1760,17 +1729,13 @@ def test_compose_metrics_api_service_has_its_own_resource_limits() -> None:
     reachability, not a network/traefik split this file has no mechanism
     for, is what "no public route" means here.
 
-    `--profile go-workers` is required (codex review, PR #1938 P2):
-    `metrics-api` is profile-gated the same as `go-worker-heavy` itself --
-    `docker compose config` (like `up`) omits a profile-gated service
-    entirely unless its profile is active.
+    CHAOS-5589: `metrics-api` is unconditional now, not profile-gated --
+    no `--profile` flag needed for `docker compose config` to include it.
     """
     result = subprocess.run(
         [
             "docker",
             "compose",
-            "--profile",
-            "go-workers",
             "-f",
             str(_PRODUCTION_COMPOSE),
             "config",
@@ -1823,17 +1788,22 @@ def test_compose_go_worker_heavy_alone_targets_metrics_api() -> None:
     Only that group's rendered command may reference `metrics-api`; every
     other go-worker-*/go-reconciler/go-scheduler/go-stream-* service must
     still target `api`, unaffected by this ticket.
+
+    CHAOS-5589: reads compose.production.yml alone -- it carries the full
+    Go fleet unconditionally now, no `--profile go-workers` flag or
+    `compose.go-workers.yml` overlay merge needed (and merging the two
+    would redeclare identical `security_opt`/`cap_drop` list entries for
+    every service name that now exists in both files, which some
+    `docker compose` versions reject as a duplicate-item validation
+    error -- compose.go-workers.yml is an independently maintained
+    reference copy, not something this file is layered with any more).
     """
     result = subprocess.run(
         [
             "docker",
             "compose",
-            "--profile",
-            "go-workers",
             "-f",
             str(_PRODUCTION_COMPOSE),
-            "-f",
-            str(_GO_COMPOSE),
             "config",
         ],
         check=True,

@@ -718,11 +718,36 @@ migrations:
     #    change any existing installation's behaviour.
     routeActivate:
       enabled: true
-      # -- Image carrying `dev-health-workerctl`. Empty means the published
-      #    `ghcr.io/full-chaos/dev-health-go-operator` image (docker/
-      #    go-worker.Dockerfile's `operator` target, entrypoint
-      #    dev-health-workerctl) -- the same binary Compose's
-      #    go-worker-route-activate/go-sync-*-route-activate services run.
+      # -- Image carrying `dev-health-workerctl` (docker/go-worker.Dockerfile's
+      #    `operator` target, entrypoint dev-health-workerctl) -- the same
+      #    binary Compose's go-worker-route-activate/go-sync-*-route-activate
+      #    services run. REQUIRED, and must be pinned, whenever
+      #    routeActivate.enabled=true: the render refuses an empty value, a
+      #    floating tag such as `:latest`, or anything else that is not one
+      #    of the forms below -- there is no floating default, because a
+      #    default that can float is not a safe default.
+      #
+      #    Accepted forms:
+      #      * `repo@sha256:<64 hex>`  -- digest pin, with or without a tag
+      #                                    in front
+      #      * `repo:sha-<12 hex>`     -- this repo's other immutable-tag
+      #                                    convention (see
+      #                                    docs/operate/runbooks/
+      #                                    operator-commands.md)
+      #      * `repo:local`            -- ONLY with pullPolicy Never or
+      #                                    IfNotPresent, for a side-loaded
+      #                                    local/kind image
+      #
+      #    Lockstep convention: pin this to the go-operator image built from
+      #    the SAME commit as `image.repository`/`image.tag` (the api/migrate
+      #    image) -- the two binaries must agree on the posture manifest for
+      #    the database the migrate Job just migrated. When both this value
+      #    and `image.tag` carry a `sha-<12 hex>` tag, the chart compares
+      #    them and refuses the render on a mismatch. A digest-only pin on
+      #    either side cannot be compared this way -- a digest does not
+      #    encode which commit it came from -- so that comparison is skipped
+      #    rather than fabricated; keeping the two pins in step is then the
+      #    operator's responsibility, the same as any other digest pin.
       image: ""
       pullPolicy: ""
     backoffLimit: 2

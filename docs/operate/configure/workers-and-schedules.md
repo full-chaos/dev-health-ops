@@ -182,6 +182,38 @@ now comes from pinning every one of these images to the SAME sha (as
 JOB 6's `job6-prebuild/*:<sha>` images do), not from forcing a build on
 every bring-up.
 
+### Pinning the route-activate hook's operator image (Helm)
+
+The chart's route-activate pre-upgrade/pre-install hook Job
+(`deploy/helm/dev-health/templates/route-activate-hooks.yaml`) runs the
+`dev-health-go-operator` image against the database the migrate Job in the
+same release just migrated. `migrations.hook.routeActivate.image` has no
+floating default: the render refuses an empty value, `:latest`, or any
+other tag that is not immutable, the moment
+`migrations.hook.routeActivate.enabled=true`. This closed a real production
+failure: a node ran its stale, already-cached `:latest` operator binary
+against a database schema newer than the posture manifest that binary
+knew about, and it exited `runtime_role_unauthorized` with no diagnostics
+-- the mismatch looks identical to a real authorization failure.
+
+Accepted forms for `migrations.hook.routeActivate.image`:
+
+- `repo@sha256:<64 hex>` -- a digest pin, with or without a tag in front.
+- `repo:sha-<12 hex>` -- this repo's other immutable-tag convention (see
+  [Operator commands](../runbooks/operator-commands.md)).
+- `repo:local` -- only when the hook's own pull policy
+  (`migrations.hook.routeActivate.pullPolicy`) is `Never` or
+  `IfNotPresent`, for a side-loaded local/kind image.
+
+Pin it to the go-operator image built from the **same commit** as
+`image.repository`/`image.tag` (the api/migrate image): the operator's
+posture manifest has to agree with the schema the migrate Job just
+applied. When both values carry a `sha-<12 hex>` tag the chart compares
+them and refuses the render on a mismatch; a digest-only pin on either
+side cannot be compared this way (a digest does not encode which commit
+it came from), so keeping those in step is the operator's own
+responsibility, same as any other digest pin.
+
 ### billing-edge: Stripe webhook forwarding in local dev
 
 `billing-edge` (root `compose.yml`, port `8010`) needs three secrets to

@@ -7,6 +7,7 @@ source_of_truth:
   - contracts/jobs/v1/ (kind timeouts and attempt limits)
   - cmd/dev-health-worker/river_process.go (River client configuration)
   - internal/jobs/metrics/daily/postgres.go (domain lease behaviour)
+  - internal/jobs/workgraph/coalesce.go (materialize coalescing and start bound)
 applicability: current
 lifecycle: active
 ---
@@ -233,6 +234,63 @@ successors consume no retry attempts by design, so a row blocked for fourteen
 hours is indistinguishable from one enqueued a second ago. Judge it by `created_at` and
 by the state of the head named in `prerequisite_completion_key`.
 
+## Superseded investment materializations
+
+One kind is deliberately exempt from the "a fresh run does not supersede a
+stuck one" rule below: `investment.materialize` requests written by the
+external-ingest bounded recompute.
+
+Each customer-push flush used to enqueue its own materialize request, so a busy
+organization queued one request per flush for the same day and the same scope.
+The requests were not duplicates in the idempotency sense — each carried its own
+correlation and its own request id — but they named identical work, and the
+outputs are ReplacingMergeTree rows versioned by `computed_at` that both read
+planes `argMax` at query time, so the repeats wasted queue capacity without ever
+changing an answer.
+
+The enqueue now **coalesces per (organization, day range, scope)**:
+
+- The key is the request's `org_id`, its `kind`, and its `scope` jsonb compared
+  as a value — `from_date` and `to_date` live inside `scope`, so the day range
+  is part of the key rather than alongside it.
+- A later flush **supersedes** the queued one instead of queueing beside it. The
+  older request moves to `state = 'canceled'` in the same transaction that
+  writes the new one, which is terminal: alembic 0060's
+  `work_graph_execution_terminal_immutable` trigger refuses any later change to
+  it.
+- Only `pending`, never-claimed requests are superseded. Work already `running`
+  keeps its lease and runs to completion.
+- Only the enqueuing producer's own requests are superseded, matched on the
+  `correlation_id` prefix. A post-sync materialize request can be the
+  prerequisite half of a completion fence, so no producer may cancel another's.
+- A request whose scope names no `from_date` is **bounded at enqueue time**
+  rather than left to inherit the executor's 30-day default at claim time: the
+  writer fills in an explicit `from_date` when the scope names a `to_date` to
+  compute one from, and pins `window_days` to the 30-day maximum lookback when
+  it does not. An unbounded-start materialize request can no longer be enqueued.
+
+What this means when you are diagnosing a queue:
+
+```sql
+SELECT state, count(*)
+FROM work_graph_execution_requests
+WHERE kind = 'investment.materialize'
+GROUP BY state ORDER BY state;
+```
+
+A growing `canceled` count is coalescing working, not a failure — it is one
+superseded request per avoided duplicate. The drain logs each one on its own
+line (`external recompute superseded pending investment materialize requests`,
+with the superseded ids), and logs a bounded start as a warning
+(`external recompute bounded an unbounded investment materialize start`).
+
+The stale River job belonging to a superseded request is left in place on
+purpose and **no-ops** when it runs: the claim reports a canceled request the
+same way it reports a succeeded one, so the job retires without executing. The
+strand repair described above will not resurrect it either — its work-graph
+sweep selects only `pending` requests and `running` ones past their lease, so a
+`canceled` request is outside every re-arm path.
+
 ## What recovery does not cover
 
 Rescue re-runs a job that still exists. It cannot help when the job itself is
@@ -243,7 +301,12 @@ sweep (CHAOS-3997), not patience.
 Equally, a fresh run does not supersede a stuck one. Completion fences are keyed
 by run id, and run ids are derived from the organization, day, and generation.
 A new run writes a fence that nothing is waiting on, so replaying work does not
-release a chain blocked on an older run.
+release a chain blocked on an older run. The one exception is the coalescing
+described under
+[superseded investment materializations](#superseded-investment-materializations)
+above, and it is deliberately narrow: it supersedes only requests that are still
+`pending`, only within one producer, and so only work that nothing is waiting
+on.
 
 **Daily metrics has a targeted reclaim sweep as of CHAOS-4358/CHAOS-4304**: once
 every `daily_partition` River job for a run has failed and been discarded,
@@ -387,6 +450,9 @@ for the full command shape and coverage rule.
 - CHAOS-4399 / CHAOS-4405 — team-scope aggregation moved into the finalize
   step (fixing a multi-repo-team undercount), and the historical
   finalize-redrive backfill that re-runs it for already-completed days
+- CHAOS-5642 — coalescing for `investment.materialize`: one pending
+  materialization per (organization, day range, scope), a later flush
+  superseding the queued one, and a bound on an unbounded start
 - CHAOS-4254 / CHAOS-4384 — manual backfill for a remaining-metrics day that
   was never dispatched at all, and its use as the recovery path for a dora
   day frozen at 0 rows by the pre-fix same-day coverage bug

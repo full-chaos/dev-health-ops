@@ -24,12 +24,26 @@ Secret that already holds these passwords.
 Empty (the default) renders nothing: the image's own generated userlist.txt is
 correct for a single role, and this block must not perturb the queue-session or
 coordinator-session poolers, which stay single-user.
+
+CHAOS-5594: KEDA's read-only role rides this SAME mechanism as one more
+goWorkers.pgbouncer.transaction.extraUsers entry (values.yaml) -- it needs
+no dedicated userlist/auth path, and its password key is emitted by the
+existing $extraUsers loop below with no changes to this Secret block.
 */}}
 {{- $extraUsers := .Values.goWorkers.pgbouncer.transaction.extraUsers | default (list) }}
 {{- $secretData := .Values.goWorkers.pgbouncer.secret.data }}
 {{- $userlistSecret := "" }}
 {{- if $extraUsers }}
 {{- $userlistSecret = $secretName }}
+{{- end }}
+{{- /* CHAOS-5594: at least one group with KEDA autoscaling enabled means the
+transaction pooler's NetworkPolicy (below) must admit the KEDA operator's
+namespace too, not just go-worker pods. */ -}}
+{{- $anyAutoscale := false }}
+{{- range $group := .Values.goWorkers.groups }}
+{{- if $group.autoscaling.enabled }}
+{{- $anyAutoscale = true }}
+{{- end }}
 {{- end }}
 {{- if .Values.goWorkers.pgbouncer.secret.create }}
 apiVersion: v1
@@ -190,6 +204,19 @@ spec:
             matchLabels:
               {{- include "dev-health.componentSelectorLabels" (dict "component" "go-worker" "context" $) | nindent 14 }}
       ports: [{protocol: TCP, port: {{ $pooler.port }}}]
+    {{- /* CHAOS-5594: KEDA's metrics-apiserver runs in its own namespace
+    (goWorkers.keda.namespace, installed as its own release -- see
+    deploy repo docs), not labelled go-worker, and only ever queries the
+    TRANSACTION pooler directly (host/port/userName/dbName in the
+    ScaledObject's trigger metadata, password via TriggerAuthentication --
+    see go-worker-keda.yaml). Queue-session and coordinator-session
+    poolers stay go-worker-only. */}}
+    {{- if and $anyAutoscale (eq $pooler.name "transaction") }}
+    - from:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: {{ $.Values.goWorkers.keda.namespace | quote }}}
+      ports: [{protocol: TCP, port: {{ $pooler.port }}}]
+    {{- end }}
   egress:
     {{- if $.Values.postgresql.enabled }}
     - to:

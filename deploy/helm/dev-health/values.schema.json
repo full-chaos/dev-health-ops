@@ -149,6 +149,34 @@
               }
             }
           }
+        },
+        "keda": {
+          "type": "object",
+          "properties": {
+            "namespace": { "type": "string" }
+          }
+        },
+        "groups": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name"],
+            "properties": {
+              "name": { "type": "string" },
+              "autoscaling": {
+                "type": "object",
+                "required": ["enabled"],
+                "properties": {
+                  "enabled": { "type": "boolean" },
+                  "minReplicas": { "type": "integer", "minimum": 1 },
+                  "maxReplicas": { "type": "integer", "minimum": 1 },
+                  "queueDepthPerReplica": { "type": "integer", "minimum": 1 },
+                  "cooldownPeriod": { "type": "integer", "minimum": 300 },
+                  "pollingInterval": { "type": "integer", "minimum": 1 }
+                }
+              }
+            }
+          }
         }
       }
     }

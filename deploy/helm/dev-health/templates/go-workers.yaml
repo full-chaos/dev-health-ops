@@ -226,41 +226,16 @@ spec:
             {{- toYaml $group.resources | nindent 12 }}
           livenessProbe: {httpGet: {path: /healthz, port: metrics}, initialDelaySeconds: 10, periodSeconds: 15}
           readinessProbe: {httpGet: {path: /readyz, port: metrics}, initialDelaySeconds: 10, periodSeconds: 10}
-{{- if $group.autoscaling.enabled }}
 {{- /*
-CHAOS-4984: fail the render rather than ship an HPA the API server will
-reject. The stock HorizontalPodAutoscaler API requires minReplicas >= 1
-(scale-to-zero needs a separate, non-default feature gate this chart does
-not assume); the chart's own default values shipped minReplicas: 0 for
-every autoscaling-enabled group, so `goWorkers.enabled=true` with
-untouched defaults produced
-`HorizontalPodAutoscaler.spec.minReplicas: Invalid value: 0: must be
-greater than or equal to 1` on install -- caught only when someone
-actually installed the defaults, not by `helm template` alone, same shape
-as the terminationGracePeriodSeconds guard above.
+CHAOS-5594: autoscaling for this group (if enabled) renders as a KEDA
+ScaledObject in go-worker-keda.yaml, not here -- the previous inline
+autoscaling/v2 HorizontalPodAutoscaler on External `worker_jobs_available`
+/ `worker_job_oldest_age_seconds` / `worker_execution_saturation_ratio`
+metrics required a Prometheus Adapter that was never built (deploy/
+go-workers/README.md said as much), so it never actually scaled anything.
+KEDA's postgresql scaler reads river_job backlog directly and needs no
+adapter. See go-worker-keda.yaml for the render guards (minReplicas >= 1,
+reconciler/scheduler never autoscaled).
 */}}
-{{- if lt (int $group.autoscaling.minReplicas) 1 }}
-{{- fail (printf "goWorkers.groups[%s].autoscaling.minReplicas=%v is below 1 -- the HorizontalPodAutoscaler API rejects minReplicas < 1 (no scale-to-zero feature gate assumed here), so this would fail at install time, not render time. Set minReplicas to at least 1, or disable autoscaling for this group instead." $group.name $group.autoscaling.minReplicas) }}
-{{- end }}
----
-apiVersion: autoscaling/v2
-kind: HorizontalPodAutoscaler
-metadata:
-  name: {{ include "dev-health.fullname" $ }}-go-{{ $group.name }}
-  namespace: {{ include "dev-health.namespace" $ }}
-spec:
-  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: {{ include "dev-health.fullname" $ }}-go-{{ $group.name }}}
-  minReplicas: {{ $group.autoscaling.minReplicas }}
-  maxReplicas: {{ $group.autoscaling.maxReplicas }}
-  metrics:
-    {{- range $queue := $group.queues }}
-    - type: External
-      external: {metric: {name: worker_jobs_available, selector: {matchLabels: {queue: {{ $queue | quote }}}}}, target: {type: AverageValue, averageValue: {{ $group.autoscaling.queueDepth | quote }}}}
-    - type: External
-      external: {metric: {name: worker_job_oldest_age_seconds, selector: {matchLabels: {queue: {{ $queue | quote }}}}}, target: {type: AverageValue, averageValue: {{ $group.autoscaling.oldestAgeSeconds | quote }}}}
-    - type: External
-      external: {metric: {name: worker_execution_saturation_ratio, selector: {matchLabels: {queue: {{ $queue | quote }}}}}, target: {type: AverageValue, averageValue: {{ $group.autoscaling.saturationMilli | quote }}}}
-    {{- end }}
-{{- end }}
 {{- end }}
 {{- end }}

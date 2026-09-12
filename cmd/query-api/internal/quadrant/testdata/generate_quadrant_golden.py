@@ -51,18 +51,50 @@ async def _gen_cycle_throughput_team() -> None:
     returns nothing for it), exercising the "or entity_id" fallback.
     """
 
-    async def _fake_attributed_metric(_sink, *, metric, start_day, end_day, bucket, org_id):
+    async def _fake_attributed_metric(
+        _sink, *, metric, start_day, end_day, bucket, org_id
+    ):
         if metric == "throughput":
             return [
-                {"bucket": date(2024, 1, 1), "entity_id": "team-a", "entity_label": "team-a", "value": 5.0},
-                {"bucket": date(2024, 1, 8), "entity_id": "team-a", "entity_label": "team-a", "value": 9.0},
-                {"bucket": date(2024, 1, 1), "entity_id": "team-b", "entity_label": "team-b", "value": 3.0},
+                {
+                    "bucket": date(2024, 1, 1),
+                    "entity_id": "team-a",
+                    "entity_label": "team-a",
+                    "value": 5.0,
+                },
+                {
+                    "bucket": date(2024, 1, 8),
+                    "entity_id": "team-a",
+                    "entity_label": "team-a",
+                    "value": 9.0,
+                },
+                {
+                    "bucket": date(2024, 1, 1),
+                    "entity_id": "team-b",
+                    "entity_label": "team-b",
+                    "value": 3.0,
+                },
             ]
         if metric == "cycle_time":
             return [
-                {"bucket": date(2024, 1, 1), "entity_id": "team-a", "entity_label": "team-a", "value": 48.0},
-                {"bucket": date(2024, 1, 8), "entity_id": "team-a", "entity_label": "team-a", "value": 24.0},
-                {"bucket": date(2024, 1, 1), "entity_id": "team-b", "entity_label": "team-b", "value": 72.0},
+                {
+                    "bucket": date(2024, 1, 1),
+                    "entity_id": "team-a",
+                    "entity_label": "team-a",
+                    "value": 48.0,
+                },
+                {
+                    "bucket": date(2024, 1, 8),
+                    "entity_id": "team-a",
+                    "entity_label": "team-a",
+                    "value": 24.0,
+                },
+                {
+                    "bucket": date(2024, 1, 1),
+                    "entity_id": "team-b",
+                    "entity_label": "team-b",
+                    "value": 72.0,
+                },
             ]
         raise AssertionError(f"unexpected metric {metric}")
 
@@ -75,8 +107,14 @@ async def _gen_cycle_throughput_team() -> None:
 
     with (
         mock.patch.object(quadrant_module, "clickhouse_client", _fake_client),
-        mock.patch.object(quadrant_module, "fetch_quadrant_metric", _unexpected_rollup_metric),
-        mock.patch.object(quadrant_module, "fetch_work_item_team_quadrant_metric", _fake_attributed_metric),
+        mock.patch.object(
+            quadrant_module, "fetch_quadrant_metric", _unexpected_rollup_metric
+        ),
+        mock.patch.object(
+            quadrant_module,
+            "fetch_work_item_team_quadrant_metric",
+            _fake_attributed_metric,
+        ),
         mock.patch.object(quadrant_module, "query_dicts", _fake_query_dicts),
     ):
         response = await quadrant_module.build_quadrant_response(
@@ -90,7 +128,9 @@ async def _gen_cycle_throughput_team() -> None:
             start_date=date(2024, 1, 1),
             end_date=date(2024, 1, 8),
         )
-    (OUT_DIR / "cycle_throughput_team.json").write_text(json.dumps(_dump(response), indent=2) + "\n")
+    (OUT_DIR / "cycle_throughput_team.json").write_text(
+        json.dumps(_dump(response), indent=2) + "\n"
+    )
 
 
 async def _gen_churn_throughput_forces_repo() -> None:
@@ -98,12 +138,41 @@ async def _gen_churn_throughput_forces_repo() -> None:
     grain, so both axes read repo_metrics_daily via fetch_quadrant_metric,
     joined to repos -- team-label resolution never runs."""
 
-    async def _fake_metric(_sink, *, table, value_expr, entity_expr, label_expr, join_clause, where_clause, scope_filter, scope_params, org_id, start_day, end_day, bucket):
+    async def _fake_metric(
+        _sink,
+        *,
+        table,
+        value_expr,
+        entity_expr,
+        label_expr,
+        join_clause,
+        where_clause,
+        scope_filter,
+        scope_params,
+        org_id,
+        start_day,
+        end_day,
+        bucket,
+    ):
         assert table == "repo_metrics_daily AS m"
         if "total_loc_touched" in value_expr:
-            return [{"bucket": date(2024, 1, 1), "entity_id": "checkout-service", "entity_label": "checkout-service", "value": 4200.0}]
+            return [
+                {
+                    "bucket": date(2024, 1, 1),
+                    "entity_id": "checkout-service",
+                    "entity_label": "checkout-service",
+                    "value": 4200.0,
+                }
+            ]
         if "prs_merged" in value_expr:
-            return [{"bucket": date(2024, 1, 1), "entity_id": "checkout-service", "entity_label": "checkout-service", "value": 12.0}]
+            return [
+                {
+                    "bucket": date(2024, 1, 1),
+                    "entity_id": "checkout-service",
+                    "entity_label": "checkout-service",
+                    "value": 12.0,
+                }
+            ]
         raise AssertionError(f"unexpected value_expr {value_expr}")
 
     async def _unexpected_query_dicts(*_args, **_kwargs):
@@ -125,7 +194,9 @@ async def _gen_churn_throughput_forces_repo() -> None:
             start_date=date(2024, 1, 1),
             end_date=date(2024, 1, 8),
         )
-    (OUT_DIR / "churn_throughput_team_forces_repo.json").write_text(json.dumps(_dump(response), indent=2) + "\n")
+    (OUT_DIR / "churn_throughput_team_forces_repo.json").write_text(
+        json.dumps(_dump(response), indent=2) + "\n"
+    )
 
 
 async def _gen_review_load_latency_repo() -> None:
@@ -133,17 +204,52 @@ async def _gen_review_load_latency_repo() -> None:
     repo-grain path, no attribution quirk, two buckets for one repo (a
     real trajectory)."""
 
-    async def _fake_metric(_sink, *, table, value_expr, entity_expr, label_expr, join_clause, where_clause, scope_filter, scope_params, org_id, start_day, end_day, bucket):
+    async def _fake_metric(
+        _sink,
+        *,
+        table,
+        value_expr,
+        entity_expr,
+        label_expr,
+        join_clause,
+        where_clause,
+        scope_filter,
+        scope_params,
+        org_id,
+        start_day,
+        end_day,
+        bucket,
+    ):
         assert table == "user_metrics_daily AS m"
         if "reviews_given" in value_expr:
             return [
-                {"bucket": date(2024, 1, 1), "entity_id": "api-gateway", "entity_label": "api-gateway", "value": 6.0},
-                {"bucket": date(2024, 1, 8), "entity_id": "api-gateway", "entity_label": "api-gateway", "value": 10.0},
+                {
+                    "bucket": date(2024, 1, 1),
+                    "entity_id": "api-gateway",
+                    "entity_label": "api-gateway",
+                    "value": 6.0,
+                },
+                {
+                    "bucket": date(2024, 1, 8),
+                    "entity_id": "api-gateway",
+                    "entity_label": "api-gateway",
+                    "value": 10.0,
+                },
             ]
         if "pr_first_review_p50_hours" in value_expr:
             return [
-                {"bucket": date(2024, 1, 1), "entity_id": "api-gateway", "entity_label": "api-gateway", "value": 5.5},
-                {"bucket": date(2024, 1, 8), "entity_id": "api-gateway", "entity_label": "api-gateway", "value": 3.25},
+                {
+                    "bucket": date(2024, 1, 1),
+                    "entity_id": "api-gateway",
+                    "entity_label": "api-gateway",
+                    "value": 5.5,
+                },
+                {
+                    "bucket": date(2024, 1, 8),
+                    "entity_id": "api-gateway",
+                    "entity_label": "api-gateway",
+                    "value": 3.25,
+                },
             ]
         raise AssertionError(f"unexpected value_expr {value_expr}")
 
@@ -166,7 +272,9 @@ async def _gen_review_load_latency_repo() -> None:
             start_date=date(2024, 1, 1),
             end_date=date(2024, 1, 8),
         )
-    (OUT_DIR / "review_load_latency_repo.json").write_text(json.dumps(_dump(response), indent=2) + "\n")
+    (OUT_DIR / "review_load_latency_repo.json").write_text(
+        json.dumps(_dump(response), indent=2) + "\n"
+    )
 
 
 async def _main() -> None:

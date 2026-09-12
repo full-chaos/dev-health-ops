@@ -127,7 +127,13 @@ func buildInvestmentExplainRoute() (handler http.HandlerFunc, cleanup func(), ok
 		return nil, nil, false, fmt.Errorf("investment/explain: build envelope verifier: %w", err)
 	}
 
-	readClient, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: clickHouseURI})
+	// newUnrestrictedReadClickHouseOptions (query_route.go): this route's
+	// read client hit the SAME CHAOS-4647 64 MiB default this bare-literal
+	// Options{DSN: ...} used to reproduce -- prod, code 307 at 64.46 MiB,
+	// "iterate work unit investment rows: ClickHouse row iteration
+	// failed". Every query-api read client shares this posture; see that
+	// function's doc comment for the full CHAOS-4651/4653 lineage.
+	readClient, err := dhclickhouse.NewClickHouseQueryClientWithOptions(newUnrestrictedReadClickHouseOptions(clickHouseURI))
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("investment/explain: build read client: %w", err)
 	}

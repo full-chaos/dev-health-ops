@@ -36,7 +36,7 @@ configuring workers, read
 | Hook weight | Job | Applies |
 | --- | --- | --- |
 | `0` | `…-migrate` | Alembic (application schema) and the ClickHouse migrator |
-| `5` | `…-provision-roles` | the three runtime logins, via `provision_river_roles.sql` |
+| `5` | `…-provision-roles` | the three runtime logins, via `provision_river_roles.sql`; also the KEDA read-only role when a `goWorkers` group has `autoscaling.enabled: true` |
 | `10` | `…-river-migrate` | the pinned River schema and the full runtime grant posture, then re-checks it |
 
 The order is not interchangeable. Role provisioning grants against tables that

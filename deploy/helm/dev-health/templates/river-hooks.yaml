@@ -66,8 +66,29 @@ provisioning, which is the only ordering a fresh install survives.
 {{- $hookEvents := .Values.migrations.hook.events }}
 {{- if .Values.migrations.hook.provisionRoles.enabled }}
 {{- $poolerSecret := .Values.goWorkers.pgbouncer.secret }}
+{{- /*
+Does this release need the KEDA read-only role provisioned too?
+Same detection go-worker-keda.yaml uses (any group with autoscaling.enabled,
+under goWorkers.enabled) plus proof the extraUsers entry that owns its
+password key still exists -- an override could delete it.
+*/}}
+{{- $anyAutoscale := false }}
+{{- if .Values.goWorkers.enabled }}
+{{- range $group := .Values.goWorkers.groups }}
+{{- if $group.autoscaling.enabled }}
+{{- $anyAutoscale = true }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- $kedaRole := "" }}
+{{- range $user := (.Values.goWorkers.pgbouncer.transaction.extraUsers | default (list)) }}
+{{- if eq $user.passwordKey "RIVER_KEDA_READONLY_PASSWORD" }}
+{{- $kedaRole = $user.role }}
+{{- end }}
+{{- end }}
+{{- $provisionKeda := and $anyAutoscale (ne $kedaRole "") }}
 {{- if and (not $poolerSecret.create) (not $poolerSecret.externalSecretName) }}
-{{- fail "migrations.hook.provisionRoles.enabled=true needs a Secret carrying the three RIVER_*_DATABASE_PASSWORD keys: either set goWorkers.pgbouncer.secret.create=true, or point goWorkers.pgbouncer.secret.externalSecretName at a pre-created one. The provisioning Job sets each role's password from that Secret, and a role created with a password the poolers do not share cannot authenticate." }}
+{{- fail "migrations.hook.provisionRoles.enabled=true needs a Secret carrying the RIVER_*_DATABASE_PASSWORD keys (three, plus RIVER_KEDA_READONLY_PASSWORD when KEDA autoscaling is enabled): either set goWorkers.pgbouncer.secret.create=true, or point goWorkers.pgbouncer.secret.externalSecretName at a pre-created one. The provisioning Job sets each role's password from that Secret, and a role created with a password the poolers do not share cannot authenticate." }}
 {{- end }}
 {{- /*
 Which Secret this Job mounts, and why it is not simply the pooler Secret.
@@ -108,6 +129,9 @@ stringData:
   RIVER_DOMAIN_DATABASE_PASSWORD: {{ required "goWorkers.pgbouncer.secret.data.RIVER_DOMAIN_DATABASE_PASSWORD is required when migrations.hook.provisionRoles.enabled=true" $poolerSecret.data.RIVER_DOMAIN_DATABASE_PASSWORD | quote }}
   RIVER_QUEUE_DATABASE_PASSWORD: {{ required "goWorkers.pgbouncer.secret.data.RIVER_QUEUE_DATABASE_PASSWORD is required when migrations.hook.provisionRoles.enabled=true" $poolerSecret.data.RIVER_QUEUE_DATABASE_PASSWORD | quote }}
   RIVER_COORDINATOR_DATABASE_PASSWORD: {{ required "goWorkers.pgbouncer.secret.data.RIVER_COORDINATOR_DATABASE_PASSWORD is required when migrations.hook.provisionRoles.enabled=true" $poolerSecret.data.RIVER_COORDINATOR_DATABASE_PASSWORD | quote }}
+{{- if $provisionKeda }}
+  RIVER_KEDA_READONLY_PASSWORD: {{ required "goWorkers.pgbouncer.secret.data.RIVER_KEDA_READONLY_PASSWORD is required when migrations.hook.provisionRoles.enabled=true and a goWorkers group has autoscaling.enabled=true" $poolerSecret.data.RIVER_KEDA_READONLY_PASSWORD | quote }}
+{{- end }}
 {{- end }}
 ---
 apiVersion: batch/v1
@@ -195,6 +219,11 @@ spec:
                 --set=domain_password="$RIVER_DOMAIN_DATABASE_PASSWORD" \
                 --set=queue_password="$RIVER_QUEUE_DATABASE_PASSWORD" \
                 --set=coordinator_password="$RIVER_COORDINATOR_DATABASE_PASSWORD" \
+{{- if $provisionKeda }}
+                --set=keda_role="$RIVER_KEDA_READONLY_DATABASE_ROLE" \
+                --set=keda_password="$RIVER_KEDA_READONLY_PASSWORD" \
+                --set=river_schema="$RIVER_DATABASE_SCHEMA" \
+{{- end }}
                 --file=/usr/local/share/dev-health/provision_river_roles.sql
           env:
             - name: APP_DATABASE
@@ -220,6 +249,17 @@ spec:
                 secretKeyRef:
                   name: {{ $provisionSecretName }}
                   key: RIVER_COORDINATOR_DATABASE_PASSWORD
+{{- if $provisionKeda }}
+            - name: RIVER_KEDA_READONLY_DATABASE_ROLE
+              value: {{ .Values.config.RIVER_KEDA_READONLY_DATABASE_ROLE | quote }}
+            - name: RIVER_DATABASE_SCHEMA
+              value: {{ .Values.config.RIVER_DATABASE_SCHEMA | default "river" | quote }}
+            - name: RIVER_KEDA_READONLY_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $provisionSecretName }}
+                  key: RIVER_KEDA_READONLY_PASSWORD
+{{- end }}
           envFrom:
             - secretRef:
                 {{- if .Values.secrets.create }}

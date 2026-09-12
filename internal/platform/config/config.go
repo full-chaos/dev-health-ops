@@ -32,8 +32,19 @@ const (
 	defaultShutdownTimeout   = DefaultShutdownTimeout
 	maximumShutdownTimeout   = 3 * time.Hour
 	defaultHealthCheckTimout = 2 * time.Second
-	defaultDomainMaxConns    = 4
-	defaultQueueMaxConns     = 2
+	// defaultQueueTelemetryTimeout mirrors
+	// internal/storage/river/riverstore's own default of the same value and
+	// name -- CHAOS-5615. It is the STARTING point only; QueueTelemetryTimeout
+	// is always floored at HealthCheckTimeout below, so raising the health
+	// check budget alone (the CHAOS-5615 prod workaround) also raises this.
+	defaultQueueTelemetryTimeout = 2 * time.Second
+	// maximumQueueTelemetryTimeout matches riverstore's own hard cap
+	// (maximumQueueTelemetryTimeout in internal/storage/river/telemetry.go) --
+	// a value above it would pass config.Load only to be refused later by
+	// riverstore.NewQueueTelemetrySampler.
+	maximumQueueTelemetryTimeout = 30 * time.Second
+	defaultDomainMaxConns        = 4
+	defaultQueueMaxConns         = 2
 	// 2 matches the checked-in per-process coordinator_max_connections in
 	// deploy/go-workers/deployment.json for every coordinator process today
 	// (reconciler, scheduler, worker-operator).
@@ -154,7 +165,13 @@ type Config struct {
 	// failing every default-configured worker (CHAOS-3873).
 	ShutdownTimeoutExplicit bool
 	HealthCheckTimeout      time.Duration
-	LogLevel                slog.Level
+	// QueueTelemetryTimeout bounds the River queue-telemetry query
+	// (riverstore.QueueTelemetryConfig.QueryTimeout) -- CHAOS-5615. It is
+	// always at least HealthCheckTimeout (floored in Load below): a telemetry
+	// query cannot need less time than the readiness probe budget it runs
+	// inside without simply being cut off by the probe's own deadline first.
+	QueueTelemetryTimeout time.Duration
+	LogLevel              slog.Level
 
 	DomainDatabaseURI      secrets.Value
 	QueueDatabaseURI       secrets.Value
@@ -359,6 +376,28 @@ func Load(spec Spec) (Config, error) {
 	)
 	if err != nil {
 		return Config{}, err
+	}
+	// CHAOS-5615: a restored backlog (11,428 available rows observed live)
+	// made the hardcoded 2s riverstore default seq-scan+detoast past its
+	// budget, aborting go-heavy's preclaim readiness with 13 restarts. The
+	// prod workaround was --health-check-timeout=10s; this knob makes that
+	// relationship explicit instead of accidental -- QueueTelemetryTimeout is
+	// always floored at HealthCheckTimeout, so raising the health-check
+	// budget alone still raises the telemetry query's budget with it, and an
+	// operator who wants MORE headroom for telemetry specifically than for
+	// every other readiness check can set this independently, higher.
+	cfg.QueueTelemetryTimeout, err = durationEnv(
+		lookup,
+		"DEV_HEALTH_QUEUE_TELEMETRY_TIMEOUT",
+		defaultQueueTelemetryTimeout,
+		50*time.Millisecond,
+		maximumQueueTelemetryTimeout,
+	)
+	if err != nil {
+		return Config{}, err
+	}
+	if cfg.QueueTelemetryTimeout < cfg.HealthCheckTimeout {
+		cfg.QueueTelemetryTimeout = cfg.HealthCheckTimeout
 	}
 	cfg.LogLevel, err = logLevelEnv(lookup)
 	if err != nil {
@@ -675,6 +714,7 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.String("http_address", c.HTTPAddress),
 		slog.Duration("shutdown_timeout", c.ShutdownTimeout),
 		slog.Duration("health_check_timeout", c.HealthCheckTimeout),
+		slog.Duration("queue_telemetry_timeout", c.QueueTelemetryTimeout),
 		slog.String("log_level", c.LogLevel.String()),
 		slog.Bool("domain_database_configured", c.DomainDatabaseURI.Configured()),
 		slog.Bool("coordinator_database_configured", c.CoordinatorDatabaseURI.Configured()),

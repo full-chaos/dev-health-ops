@@ -596,6 +596,47 @@ func TestCeleryRoutedHandlersCannotPassQueueCompleteness(t *testing.T) {
 	}
 }
 
+// TestQueueTelemetryConfigUsesConfiguredTimeout pins CHAOS-5615: before this,
+// riverstore.QueueTelemetryConfig.QueryTimeout was never set by
+// buildQueueTelemetry, so every deploy silently ran the queue-telemetry query
+// on riverstore's own hardcoded 2s default regardless of cfg.HealthCheckTimeout
+// or any other operator-configured budget -- the prod incident's
+// --health-check-timeout=10s workaround had NO effect on this query's own
+// timeout without this wire-up. config.Load's own floor (QueueTelemetryTimeout
+// >= HealthCheckTimeout) is covered separately in internal/platform/config;
+// this test pins only that buildQueueTelemetry actually reads and forwards
+// whatever config.Config.QueueTelemetryTimeout already resolved to.
+func TestQueueTelemetryConfigUsesConfiguredTimeout(t *testing.T) {
+	t.Chdir(filepath.Join("..", ".."))
+	database := &fakeWorkerDatabase{domainSaturation: 0.25, queueSaturation: 0.5}
+	_, contractRoot := demotedContractRoot(t, celeryRoutedOperationalKinds...)
+	sources := productionWorkerDependencySources
+	sources.contractRoot = contractRoot
+	sources.openDatabase = func(context.Context, config.Config) (workerDatabase, error) {
+		return database, nil
+	}
+
+	_, err := configureWorkerDependenciesWithSources(
+		context.Background(),
+		config.Config{
+			Queues:                 []string{"coverage", "heartbeat", "retention", "webhooks"},
+			WorkerQueueConcurrency: map[string]int{"coverage": 1, "heartbeat": 1, "retention": 1, "webhooks": 4},
+			RiverDatabaseSchema:    "river",
+			DomainDatabaseMaxConns: 4,
+			QueueDatabaseMaxConns:  2,
+			QueueTelemetryTimeout:  17 * time.Second,
+		},
+		health.NewRegistry(100*time.Millisecond),
+		sources,
+	)
+	if err != nil {
+		t.Fatalf("configureWorkerDependenciesWithSources() error = %v", err)
+	}
+	if database.telemetryConfig.QueryTimeout != 17*time.Second {
+		t.Fatalf("QueueTelemetryConfig.QueryTimeout = %s, want the configured 17s forwarded from config.Config", database.telemetryConfig.QueryTimeout)
+	}
+}
+
 // TestNoCompiledCapabilityClaimSurvives pins the CUT-02 removal of the
 // compiled-kind advertisement. Capability is what a builder constructed; there
 // is no list a dormant package can appear on to look registered.

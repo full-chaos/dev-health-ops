@@ -1532,11 +1532,17 @@ func (dependencies *workerDependencies) buildQueueTelemetry(
 	}
 	dependencies.queueTelemetry, dependencies.queueTelemetryErr = dependencies.database.NewQueueTelemetrySampler(
 		riverstore.QueueTelemetryConfig{
-			Schema:    cfg.RiverDatabaseSchema,
-			ClientID:  dependencies.instanceID,
-			Queues:    queues,
-			Jobs:      jobs,
-			Occupants: nonRegistryQueueOccupants(queueBudgets),
+			Schema: cfg.RiverDatabaseSchema,
+			// CHAOS-5615: previously unset, so every deploy silently ran on
+			// riverstore's own hardcoded 2s default regardless of any
+			// operator-configured budget -- the prod incident's
+			// --health-check-timeout=10s workaround had NO effect on this
+			// query's own timeout without this wire-up.
+			QueryTimeout: cfg.QueueTelemetryTimeout,
+			ClientID:     dependencies.instanceID,
+			Queues:       queues,
+			Jobs:         jobs,
+			Occupants:    nonRegistryQueueOccupants(queueBudgets),
 		},
 	)
 }

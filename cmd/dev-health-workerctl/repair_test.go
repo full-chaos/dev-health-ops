@@ -307,6 +307,26 @@ func TestDispatchWorkgraphListAmbiguousRejectsInvalidOrg(t *testing.T) {
 	}
 }
 
+func TestDispatchWorkgraphListUndeliveredRejectsInvalidCeiling(t *testing.T) {
+	for _, value := range []string{"0", "-1", "2161", "soon"} {
+		var stdout, stderr bytes.Buffer
+		code := dispatchWorkgraphListUndelivered(context.Background(), &operatorRuntime{}, []string{
+			"--ceiling-hours", value,
+		}, &stdout, &stderr)
+		if code == 0 || !strings.Contains(stderr.String(), "invalid_request") {
+			t.Fatalf("--ceiling-hours %s = %d (%s), want invalid_request", value, code, stderr.String())
+		}
+	}
+}
+
+func TestDispatchWorkgraphListUndeliveredWithoutPoolsIsUnavailable(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := dispatchWorkgraph(context.Background(), &operatorRuntime{}, []string{"list-undelivered"}, &stdout, &stderr)
+	if code == 0 || !strings.Contains(stderr.String(), "operator_backend_unavailable") {
+		t.Fatalf("list-undelivered without pools = %d (%s), want operator_backend_unavailable", code, stderr.String())
+	}
+}
+
 // --- metrics execution-repair ------------------------------------------
 
 func TestDispatchMetricsExecutionRepairRequiresReviewEvidence(t *testing.T) {

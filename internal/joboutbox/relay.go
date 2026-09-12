@@ -56,12 +56,32 @@ type StepResult struct {
 	// unmodified for the same reason RetiredKindObservations is --
 	// ReconcilerLoop is the only layer in this chain that holds a logger.
 	ProviderUnitRearms []ProviderUnitRearm
-	Claimed            int
-	Deferred           int
-	Delivered          int
-	Retried            int
-	Dead               int
-	LeaseLost          int
+	// UndeliveredResolutions, UndeliveredBlocked, UndeliveredRaceLost: see
+	// StrandRepairResult. Relayed unmodified so ReconcilerLoop can log one
+	// line per resolution and export the counters.
+	UndeliveredResolutions []UndeliveredResolution
+	UndeliveredBlocked     int
+	UndeliveredRaceLost    int
+	// DeadDeliveries names every row this step moved to 'dead', with its
+	// bounded reason code, so a dropped delivery is never only a number in
+	// Dead.
+	DeadDeliveries []DeadDelivery
+	Claimed        int
+	Deferred       int
+	Delivered      int
+	Retried        int
+	Dead           int
+	LeaseLost      int
+}
+
+// DeadDelivery is one outbox row the relay terminalized. Reason is the
+// last_error_code written to the row (contract_rejected, policy_rejected, or
+// river_insert_failed once the relay attempt budget is spent).
+type DeadDelivery struct {
+	OutboxID string
+	JobKind  string
+	Reason   string
+	Attempts int
 }
 
 // Relay is a single bounded reconciliation step. Process lifecycle and polling
@@ -245,6 +265,9 @@ func (relay *Relay) stepRecovery(ctx context.Context, now time.Time, limit int) 
 		result.RetiredKindObservations = rearmed.RetiredKindObservations
 		result.RetiredKindObservationsTruncated = rearmed.RetiredKindObservationsTruncated
 		result.ProviderUnitRearms = rearmed.ProviderUnitRearms
+		result.UndeliveredResolutions = rearmed.UndeliveredResolutions
+		result.UndeliveredBlocked = rearmed.UndeliveredBlocked
+		result.UndeliveredRaceLost = rearmed.UndeliveredRaceLost
 		if err != nil {
 			// Same naming as the terminal-delivery seam above; strandRepair's
 			// own error already names its shape (see stepShape), this adds
@@ -324,7 +347,7 @@ func (relay *Relay) Step(ctx context.Context, now time.Time, limit int) (StepRes
 				return result, recordErr
 			}
 			if recorded {
-				result.Dead++
+				result.recordDead(claim, failureContract)
 			}
 		case errors.Is(dispatchErr, ErrPolicyRejected):
 			recorded, recordErr := relay.recordOutcome(ctx, claim, now, failurePolicy, &result)
@@ -332,7 +355,7 @@ func (relay *Relay) Step(ctx context.Context, now time.Time, limit int) (StepRes
 				return result, recordErr
 			}
 			if recorded {
-				result.Dead++
+				result.recordDead(claim, failurePolicy)
 			}
 		default:
 			recorded, recordErr := relay.recordOutcome(ctx, claim, now, failureRiver, &result)
@@ -341,7 +364,7 @@ func (relay *Relay) Step(ctx context.Context, now time.Time, limit int) (StepRes
 			}
 			if recorded {
 				if claim.AttemptCount >= relay.config.MaxRelayAttempts {
-					result.Dead++
+					result.recordDead(claim, failureRiver)
 				} else {
 					result.Retried++
 				}
@@ -349,6 +372,17 @@ func (relay *Relay) Step(ctx context.Context, now time.Time, limit int) (StepRes
 		}
 	}
 	return result, nil
+}
+
+func (result *StepResult) recordDead(claim Claim, kind failureKind) {
+	code, _, _ := failureEvidence(kind)
+	result.Dead++
+	result.DeadDeliveries = append(result.DeadDeliveries, DeadDelivery{
+		OutboxID: claim.ID,
+		JobKind:  claim.JobKind,
+		Reason:   code,
+		Attempts: claim.AttemptCount,
+	})
 }
 
 // recordOutcome distinguishes an expected stale-lease race from a persistence

@@ -113,6 +113,19 @@ type StrandRepairResult struct {
 	// no producer can only ever accumulate outbox rows, never resolve them
 	// -- the SAME first page would repeat forever without this signal.
 	RetiredKindObservationsTruncated bool
+	// UndeliveredResolutions names every outbox row that could never reach
+	// River -- gated on a completion fence that cannot or did not arrive, or
+	// dead while its work-graph request stayed pending -- and that this pass
+	// moved to a terminal state with a reason (see undelivered_repair.go).
+	UndeliveredResolutions []UndeliveredResolution
+	// UndeliveredBlocked counts fenced rows still inside the undelivered
+	// ceiling (or whose request a lease or the ambiguous contract owns). It is
+	// a per-pass level, not an action.
+	UndeliveredBlocked int
+	// UndeliveredRaceLost counts undelivered candidates whose writes both
+	// refused under their own re-proved predicate -- the fence arrived, or the
+	// request moved, between the survey and the write.
+	UndeliveredRaceLost int
 }
 
 // retiredKindsObservationCap is deliberately independent of the reconciler's
@@ -189,6 +202,10 @@ type StrandRepair struct {
 		JobDeleteTx(context.Context, pgx.Tx, int64) (*rivertype.JobRow, error)
 	}
 	shapes []strandShape
+	// undeliveredCeiling enables the undelivered sweep (undelivered_repair.go)
+	// and bounds how long a fenced row may wait. NewStrandRepair always sets
+	// it; zero disables the sweep for fixtures that exercise the shapes alone.
+	undeliveredCeiling time.Duration
 }
 
 // strandShape is one domain's predicate in both the forms a pass needs: an
@@ -246,6 +263,7 @@ func NewStrandRepair(
 			newStrandShape("workgraph", repairStrandedWorkGraphSQL, jobTable),
 			newStrandShape(providerUnitShapeName, repairStrandedProviderUnitSQL, jobTable),
 		},
+		undeliveredCeiling: DefaultUndeliveredCeiling,
 	}, nil
 }
 
@@ -295,6 +313,17 @@ func (repair *StrandRepair) Step(
 		// already COMMITTED in stepShape's phase-3 transaction, so a later
 		// shape's error must not erase them.
 		result.ProviderUnitRearms = append(result.ProviderUnitRearms, shapeResult.ProviderUnitRearms...)
+		if err != nil {
+			return result, err
+		}
+	}
+	if repair.undeliveredCeiling > 0 {
+		undelivered, err := repair.stepUndelivered(ctx, now, limit)
+		// Same rule as the shapes above: what the sweep committed is kept even
+		// when a later write in it fails.
+		result.UndeliveredResolutions = undelivered.resolutions
+		result.UndeliveredBlocked = undelivered.blocked
+		result.UndeliveredRaceLost = undelivered.raceLost
 		if err != nil {
 			return result, err
 		}

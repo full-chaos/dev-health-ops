@@ -473,6 +473,20 @@ INSERT INTO public.worker_job_completion_fences (completion_key) VALUES ($1)`, c
 		if err != nil || result.Dead != 2 {
 			t.Fatalf("Step() = %#v, %v", result, err)
 		}
+		// Every dead row is named with its reason, so the loop can log one
+		// line per drop instead of only moving a counter.
+		if len(result.DeadDeliveries) != 2 {
+			t.Fatalf("DeadDeliveries = %#v, want both terminalized rows", result.DeadDeliveries)
+		}
+		named := map[string]DeadDelivery{}
+		for _, dead := range result.DeadDeliveries {
+			named[dead.OutboxID] = dead
+		}
+		for _, seed := range []outboxSeed{unknown, version} {
+			if dead := named[seed.ID]; dead.Reason != "contract_rejected" || dead.JobKind != seed.Kind || dead.Attempts != 1 {
+				t.Fatalf("DeadDeliveries[%s] = %#v, want contract_rejected for kind %q after 1 attempt", seed.ID, dead, seed.Kind)
+			}
+		}
 		assertErrorEvidence(t, ctx, adminPool, "contract_rejected", "stored job contract was rejected")
 	})
 

@@ -1199,6 +1199,215 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 		})
 	})
 
+	// A fenced row the relay can never claim, because its prerequisite failed
+	// or never finished, used to sit 'pending' with no attempt and no error
+	// code forever. This is the invariant the undelivered sweep exists for:
+	// after ONE pass, no work-graph request is non-terminal while its outbox
+	// row is dead, or pending behind an absent fence past the ceiling.
+	t.Run("undelivered: one pass leaves no non-terminal request behind an undeliverable row", func(t *testing.T) {
+		resetStrandTables(t, ctx, admin)
+		now := time.Now().UTC().Truncate(time.Microsecond)
+		expired := now.Add(-DefaultUndeliveredCeiling - time.Hour)
+		dailyFailed, dailyRunning, dailySucceeded := integrationUUID(6001), integrationUUID(6002), integrationUUID(6003)
+		seedDailyRun(t, ctx, admin, fixture.orgID, dailyFailed, "failed", "failed", nil)
+		seedDailyRun(t, ctx, admin, fixture.orgID, dailyRunning, "running", "pending", nil)
+		seedDailyRun(t, ctx, admin, fixture.orgID, dailySucceeded, "succeeded", "succeeded", nil)
+		markFence(t, ctx, admin, "daily_metrics_run:"+dailySucceeded)
+
+		failedHead := integrationUUID(6101)
+		canceledHead, afterCanceled := integrationUUID(6102), integrationUUID(6103)
+		pendingHead, afterExpired := integrationUUID(6104), integrationUUID(6105)
+		blocked := integrationUUID(6106)
+		released := integrationUUID(6107)
+		superseded := integrationUUID(6108)
+		deadDelivery := integrationUUID(6109)
+		for _, seed := range []struct{ id, kind, state string }{
+			{failedHead, jobcontract.KindWorkGraphBuild, "pending"},
+			{canceledHead, jobcontract.KindWorkGraphBuild, "canceled"},
+			{afterCanceled, jobcontract.KindInvestmentMaterialize, "pending"},
+			{pendingHead, jobcontract.KindWorkGraphBuild, "pending"},
+			{afterExpired, jobcontract.KindInvestmentMaterialize, "pending"},
+			{blocked, jobcontract.KindWorkGraphBuild, "pending"},
+			{released, jobcontract.KindWorkGraphBuild, "pending"},
+			{superseded, jobcontract.KindInvestmentMaterialize, "canceled"},
+			{deadDelivery, jobcontract.KindWorkGraphBuild, "pending"},
+		} {
+			seedWorkGraphRequest(t, ctx, admin, fixture.orgID, seed.id, seed.kind, seed.state, nil)
+		}
+		failedOutbox := publishFencedWorkGraph(t, ctx, fixture, jobcontract.KindWorkGraphBuild, failedHead,
+			"daily_metrics_run:"+dailyFailed)
+		afterCanceledOutbox := publishFencedWorkGraph(t, ctx, fixture, jobcontract.KindInvestmentMaterialize,
+			afterCanceled, "work_graph_execution_request:"+canceledHead)
+		expiredOutbox := publishFencedWorkGraph(t, ctx, fixture, jobcontract.KindInvestmentMaterialize,
+			afterExpired, "work_graph_execution_request:"+pendingHead)
+		ageOutbox(t, ctx, admin, expiredOutbox, expired)
+		blockedOutbox := publishFencedWorkGraph(t, ctx, fixture, jobcontract.KindWorkGraphBuild, blocked,
+			"daily_metrics_run:"+dailyRunning)
+		releasedOutbox := publishFencedWorkGraph(t, ctx, fixture, jobcontract.KindWorkGraphBuild, released,
+			"daily_metrics_run:"+dailySucceeded)
+		ageOutbox(t, ctx, admin, releasedOutbox, expired)
+		supersededOutbox := publishFencedWorkGraph(t, ctx, fixture, jobcontract.KindInvestmentMaterialize,
+			superseded, "daily_metrics_run:"+dailyRunning)
+		deadOutbox := publishFencedWorkGraph(t, ctx, fixture, jobcontract.KindWorkGraphBuild, deadDelivery, "")
+		if _, err := admin.Exec(ctx, `
+			UPDATE public.worker_job_outbox
+			SET status = 'dead', last_error_code = 'river_insert_failed',
+				last_error_detail = 'queue insertion failed', last_error_at = $2
+			WHERE id = $1`, deadOutbox, now); err != nil {
+			t.Fatal(err)
+		}
+		// A non-work-graph kind has no request row to cancel; its outbox row
+		// still goes terminal with the reason.
+		finalizeOutbox := publishFencedSeed(t, ctx, fixture, jobcontract.KindDailyMetricsFinalize,
+			"metrics.daily_finalize:"+dailyRunning, "daily_metrics_run", dailyRunning,
+			jobcontract.DailyMetricsFinalizePayload{RunID: dailyRunning}, "daily_metrics_run:"+dailyFailed)
+
+		// The operator report reads the same classification on the DOMAIN
+		// role, which is the pool workerctl uses.
+		report := undeliveredReport(t, ctx, domain, now)
+		for key, want := range map[string]int64{
+			jobcontract.KindWorkGraphBuild + "/" + UndeliveredReasonPrerequisiteFailed:         1,
+			jobcontract.KindInvestmentMaterialize + "/" + UndeliveredReasonPrerequisiteFailed:  1,
+			jobcontract.KindInvestmentMaterialize + "/" + UndeliveredReasonPrerequisiteExpired: 1,
+			jobcontract.KindWorkGraphBuild + "/blocked":                                        1,
+			jobcontract.KindInvestmentMaterialize + "/" + UndeliveredReasonRequestTerminal:     1,
+			jobcontract.KindWorkGraphBuild + "/" + UndeliveredReasonDeliveryDead:               1,
+			jobcontract.KindDailyMetricsFinalize + "/" + UndeliveredReasonPrerequisiteFailed:   1,
+		} {
+			if report[key] != want {
+				t.Fatalf("report[%s] = %d, want %d (report %v)", key, report[key], want, report)
+			}
+		}
+		if len(report) != 7 {
+			t.Fatalf("report = %v, want exactly the seven stuck classes", report)
+		}
+
+		result, err := repair.Step(ctx, now, 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.UndeliveredBlocked != 1 || result.UndeliveredRaceLost != 0 ||
+			len(result.UndeliveredResolutions) != 6 || result.Rearmed != 0 {
+			t.Fatalf("Step() = %+v, want 6 resolutions, 1 blocked, 0 race lost", result)
+		}
+		assertUndeliveredInvariant(t, ctx, admin, now)
+
+		for _, check := range []struct {
+			outbox, status, code string
+		}{
+			{failedOutbox, "dead", UndeliveredReasonPrerequisiteFailed},
+			{afterCanceledOutbox, "dead", UndeliveredReasonPrerequisiteFailed},
+			{expiredOutbox, "dead", UndeliveredReasonPrerequisiteExpired},
+			{supersededOutbox, "dead", UndeliveredReasonRequestTerminal},
+			{deadOutbox, "dead", "river_insert_failed"},
+			{finalizeOutbox, "dead", UndeliveredReasonPrerequisiteFailed},
+			{blockedOutbox, "pending", ""},
+			{releasedOutbox, "pending", ""},
+		} {
+			status, code := outboxStatusAndCode(t, ctx, admin, check.outbox)
+			if status != check.status || code != check.code {
+				t.Fatalf("outbox %s = (%s, %q), want (%s, %q)", check.outbox, status, code, check.status, check.code)
+			}
+		}
+		for request, want := range map[string]string{
+			failedHead: "canceled", afterExpired: "canceled", afterCanceled: "canceled",
+			deadDelivery: "canceled", superseded: "canceled", canceledHead: "canceled",
+			blocked: "pending", released: "pending", pendingHead: "pending",
+		} {
+			if got := workGraphRequestState(t, ctx, admin, request); got != want {
+				t.Fatalf("request %s state = %s, want %s", request, got, want)
+			}
+		}
+
+		// The dead rows stay out of the relay, the released row is delivered,
+		// and a second pass is a no-op apart from the level it reports.
+		if _, err := relay.Step(ctx, now.Add(time.Second), 10); err != nil {
+			t.Fatal(err)
+		}
+		if status, _ := outboxStatusAndCode(t, ctx, admin, releasedOutbox); status != "delivered" {
+			t.Fatalf("released outbox status = %s, want delivered", status)
+		}
+		if status, _ := outboxStatusAndCode(t, ctx, admin, failedOutbox); status != "dead" {
+			t.Fatalf("failed outbox status = %s after a relay step, want dead", status)
+		}
+		again, err := repair.Step(ctx, now.Add(time.Second), 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if again.UndeliveredResolutions != nil || again.UndeliveredBlocked != 1 || again.UndeliveredRaceLost != 0 {
+			t.Fatalf("second Step() = %+v, want nothing left to resolve", again)
+		}
+	})
+
+	// A canceled head makes its own dependants unreachable in turn: the chain
+	// drains one link per pass.
+	t.Run("undelivered: a canceled head drains its chain on the next pass", func(t *testing.T) {
+		resetStrandTables(t, ctx, admin)
+		now := time.Now().UTC().Truncate(time.Microsecond)
+		dailyFailed := integrationUUID(6201)
+		seedDailyRun(t, ctx, admin, fixture.orgID, dailyFailed, "failed", "failed", nil)
+		build, materialize := integrationUUID(6202), integrationUUID(6203)
+		seedWorkGraphRequest(t, ctx, admin, fixture.orgID, build, jobcontract.KindWorkGraphBuild, "pending", nil)
+		seedWorkGraphRequest(t, ctx, admin, fixture.orgID, materialize, jobcontract.KindInvestmentMaterialize, "pending", nil)
+		publishFencedWorkGraph(t, ctx, fixture, jobcontract.KindWorkGraphBuild, build, "daily_metrics_run:"+dailyFailed)
+		materializeOutbox := publishFencedWorkGraph(t, ctx, fixture, jobcontract.KindInvestmentMaterialize, materialize,
+			"work_graph_execution_request:"+build)
+
+		first, err := repair.Step(ctx, now, 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(first.UndeliveredResolutions) != 1 || first.UndeliveredBlocked != 1 {
+			t.Fatalf("first Step() = %+v, want the build resolved and the materialize still blocked", first)
+		}
+		second, err := repair.Step(ctx, now, 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(second.UndeliveredResolutions) != 1 || second.UndeliveredResolutions[0].OutboxID != materializeOutbox ||
+			second.UndeliveredResolutions[0].Reason != UndeliveredReasonPrerequisiteFailed {
+			t.Fatalf("second Step() = %+v, want the materialize resolved as prerequisite_failed", second)
+		}
+		assertUndeliveredInvariant(t, ctx, admin, now)
+	})
+
+	// A fence that lands between the survey and the writes must win: both
+	// writes re-prove it, so the request stays pending for the relay.
+	t.Run("undelivered: a fence that arrives first is never overridden", func(t *testing.T) {
+		resetStrandTables(t, ctx, admin)
+		now := time.Now().UTC().Truncate(time.Microsecond)
+		head := integrationUUID(6301)
+		seedDailyRun(t, ctx, admin, fixture.orgID, head, "running", "pending", nil)
+		request := integrationUUID(6302)
+		seedWorkGraphRequest(t, ctx, admin, fixture.orgID, request, jobcontract.KindWorkGraphBuild, "pending", nil)
+		outboxID := publishFencedWorkGraph(t, ctx, fixture, jobcontract.KindWorkGraphBuild, request,
+			"daily_metrics_run:"+head)
+		ageOutbox(t, ctx, admin, outboxID, now.Add(-DefaultUndeliveredCeiling-time.Hour))
+		candidates, _, err := repair.surveyUndelivered(ctx, now, 10)
+		if err != nil || len(candidates) != 1 {
+			t.Fatalf("survey = %+v, %v; want the expired row", candidates, err)
+		}
+		markFence(t, ctx, admin, "daily_metrics_run:"+head)
+		ids := []string{candidates[0].outboxID}
+		canceled, err := repair.returningIDs(ctx, repair.queryDomain, undeliveredCancelRequestsSQL,
+			[]string{request}, ids)
+		if err != nil || len(canceled) != 0 {
+			t.Fatalf("cancel after the fence = %v, %v; want refused", canceled, err)
+		}
+		dead, err := repair.returningIDs(ctx, repair.queryQueue, undeliveredMarkDeadSQL,
+			now, ids, []string{UndeliveredReasonPrerequisiteExpired},
+			[]string{undeliveredReasonDetail[UndeliveredReasonPrerequisiteExpired]})
+		if err != nil || len(dead) != 0 {
+			t.Fatalf("mark dead after the fence = %v, %v; want refused", dead, err)
+		}
+		if got := workGraphRequestState(t, ctx, admin, request); got != "pending" {
+			t.Fatalf("request state = %s, want pending", got)
+		}
+		if status, _ := outboxStatusAndCode(t, ctx, admin, outboxID); status != "pending" {
+			t.Fatalf("outbox status = %s, want pending", status)
+		}
+	})
+
 	// The blocker, made executable. Without the CHAOS-3997 grants the repair
 	// cannot read the domain row, and the operator must be able to tell that
 	// from a database outage.
@@ -1946,5 +2155,152 @@ func assertOutboxStillDelivered(t *testing.T, ctx context.Context, pool *pgxpool
 	if status != "delivered" || riverJobID == nil || *riverJobID != jobID {
 		t.Fatalf("row = status %q, river_job_id %v; want an untouched delivery of job %d",
 			status, riverJobID, jobID)
+	}
+}
+
+// publishFencedWorkGraph writes a work-graph outbox row through the real
+// producer, gated on prerequisite (empty for an ungated row), exactly as the
+// work-graph request writer does.
+func publishFencedWorkGraph(
+	t *testing.T, ctx context.Context, fixture *strandFixture, kind, requestID, prerequisite string,
+) string {
+	t.Helper()
+	domainType, payload := "work_graph_request", any(jobcontract.WorkGraphBuildPayload{RequestID: requestID})
+	if kind == jobcontract.KindInvestmentMaterialize {
+		domainType, payload = "investment_request", jobcontract.InvestmentMaterializePayload{RequestID: requestID}
+	}
+	return publishFencedSeed(t, ctx, fixture, kind, kind+":"+requestID, domainType, requestID, payload, prerequisite)
+}
+
+func publishFencedSeed(
+	t *testing.T, ctx context.Context, fixture *strandFixture,
+	kind, dedupeKey, domainType, domainID string, payload any, prerequisite string,
+) string {
+	t.Helper()
+	producer, err := NewTransactionProducer(fixture.registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope := jobcontract.Envelope{
+		ContractVersion: 1,
+		CorrelationID:   "undelivered-integration-" + domainID,
+		IdempotencyKey:  dedupeKey,
+		OrganizationID:  &fixture.orgID,
+		Domain:          jobcontract.DomainLink{Type: domainType, ID: domainID},
+		Payload:         payload,
+	}
+	tx, err := fixture.admin.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if prerequisite == "" {
+		err = producer.Publish(ctx, tx, kind, envelope)
+	} else {
+		err = producer.PublishAfter(ctx, tx, kind, envelope, prerequisite)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	return OutboxRowID(dedupeKey).String()
+}
+
+func markFence(t *testing.T, ctx context.Context, pool *pgxpool.Pool, key string) {
+	t.Helper()
+	if _, err := pool.Exec(ctx,
+		"INSERT INTO public.worker_job_completion_fences (completion_key) VALUES ($1)", key); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func ageOutbox(t *testing.T, ctx context.Context, pool *pgxpool.Pool, outboxID string, at time.Time) {
+	t.Helper()
+	if _, err := pool.Exec(ctx, `
+		UPDATE public.worker_job_outbox
+		SET created_at = $2, scheduled_at = $2, next_attempt_at = $2, updated_at = $2
+		WHERE id = $1`, outboxID, at); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func outboxStatusAndCode(t *testing.T, ctx context.Context, pool *pgxpool.Pool, outboxID string) (string, string) {
+	t.Helper()
+	var status, code string
+	if err := pool.QueryRow(ctx, `
+		SELECT status, COALESCE(last_error_code, '') FROM public.worker_job_outbox WHERE id = $1`,
+		outboxID).Scan(&status, &code); err != nil {
+		t.Fatal(err)
+	}
+	return status, code
+}
+
+func workGraphRequestState(t *testing.T, ctx context.Context, pool *pgxpool.Pool, requestID string) string {
+	t.Helper()
+	var state string
+	if err := pool.QueryRow(ctx,
+		"SELECT state FROM public.work_graph_execution_requests WHERE id = $1", requestID).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	return state
+}
+
+func undeliveredReport(t *testing.T, ctx context.Context, pool *pgxpool.Pool, now time.Time) map[string]int64 {
+	t.Helper()
+	rows, err := pool.Query(ctx, UndeliveredReportSQL, now.Add(-DefaultUndeliveredCeiling))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	report := map[string]int64{}
+	for rows.Next() {
+		var kind, reason string
+		var count int64
+		var oldest time.Time
+		if err := rows.Scan(&kind, &reason, &count, &oldest); err != nil {
+			t.Fatal(err)
+		}
+		report[kind+"/"+reason] = count
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return report
+}
+
+// assertUndeliveredInvariant reads the invariant straight from the tables
+// rather than from the sweep's own result: no work-graph request is pending
+// while its outbox row is dead, or while it waits behind an absent fence for
+// longer than the ceiling. A running or ambiguous request is owned by its
+// lease or the ambiguous-repair contract and is outside the invariant.
+func assertUndeliveredInvariant(t *testing.T, ctx context.Context, pool *pgxpool.Pool, now time.Time) {
+	t.Helper()
+	var violations int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM public.work_graph_execution_requests AS request
+		JOIN public.worker_job_outbox AS outbox
+			ON outbox.args #>> '{domain,id}' = request.id::text
+			AND outbox.job_kind = request.kind
+		WHERE request.state = 'pending'
+			AND outbox.river_job_id IS NULL
+			AND (
+				outbox.status = 'dead'
+				OR (
+					outbox.status = 'pending'
+					AND outbox.prerequisite_completion_key IS NOT NULL
+					AND GREATEST(outbox.created_at, outbox.scheduled_at) <= $1
+					AND NOT EXISTS (
+						SELECT 1 FROM public.worker_job_completion_fences AS fence
+						WHERE fence.completion_key = outbox.prerequisite_completion_key
+					)
+				)
+			)`, now.Add(-DefaultUndeliveredCeiling)).Scan(&violations); err != nil {
+		t.Fatal(err)
+	}
+	if violations != 0 {
+		t.Fatalf("%d work-graph requests are pending behind an undeliverable outbox row", violations)
 	}
 }

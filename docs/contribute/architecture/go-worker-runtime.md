@@ -9,7 +9,7 @@ source_of_truth:
   - internal/storage/river/migrate.go (authoritative grants)
   - internal/storage/postgres/domain_authorization.go (role postures)
   - internal/platform/config/config.go (WorkerGroup contract)
-  - compose.yml and deploy/docker-compose/compose.production.yml (dormant Celery -Q service definitions)
+  - deploy/docker-compose/compose.production.yml and deploy/docker-swarm/stack.yml (dormant Celery -Q service definitions)
   - contracts/jobs/v1/migration-state.json (per-kind rollout state/route/rollback_route)
   - internal/syncdispatchruntime/ (native dispatch_sync_run/finalize_sync_run/reference_discovery)
   - internal/scheduler/sync/materializer.go (native scheduled-sync materialization)
@@ -1040,7 +1040,9 @@ shipped functionality behind an environment flag. The ~40
 `WORKER_*_ENABLED` provider-route switches are **deleted** — not migrated to
 a database table, not kept as a break-glass switch. They no longer exist on
 any surface: not in the Go binary's config, not in the Python producer, not
-in `compose.yml`, `.env.example`, the go-workers overlay, or Helm. Two Go
+in `compose.yml`, `.env.example`, the go-workers overlay, or Helm. (Root
+`compose.yml` no longer defines any Celery service at all -- CHAOS-5589
+deleted the celery-legacy fleet outright.) Two Go
 tests enforce that and will fail CI if any of it comes back:
 `TestNoRouteEnablementVariableIsReadAnywhere` walks `internal/`, `cmd/` and
 `src/dev_health_ops/` for a `WORKER_*_ENABLED` read, and
@@ -1057,9 +1059,11 @@ The Go fleet serves **10** River queues, listed in the process table above.
 The Celery fleet declared **23** — Redis lists, not PostgreSQL rows, a
 different transport entirely. **Every Python celery worker service has been
 stopped in production since 2026-08-19** (CHAOS-4026); the definitions below
-survive only in `compose.yml`/`deploy/docker-compose/compose.production.yml`
-as dormant/historical service definitions, kept for local dev parity and for
-the `route`/`rollback_route` values still recorded per kind in
+survive only in `deploy/docker-compose/compose.production.yml`/
+`deploy/docker-swarm/stack.yml` as dormant/historical service definitions
+(root `compose.yml`'s copy was deleted outright by CHAOS-5589 -- R146:
+Celery transport is not a rollback target), kept for the
+`route`/`rollback_route` values still recorded per kind in
 `contracts/jobs/v1/migration-state.json`. Nothing in this section describes a
 currently-running Celery consumer. The Go/River plane is the live system.
 
@@ -1120,17 +1124,16 @@ manifest), `contracts/jobs/v1/registry.json` (kind → queue, timeout,
 attempts), and `contracts/jobs/v1/migration-state.json` (per-kind rollout
 `state`/`route`/`rollback_route` — the actual authority on whether a given
 *kind*, not just its queue, has cleared canary) are the live producers;
-`compose.yml` and `deploy/docker-compose/compose.production.yml`'s dormant
-`-Q` service definitions are the historical Celery producer, cross-checked
-against each other. The table below is rendered by
-`scripts/gen_queue_mapping_docs.py` from those files; the only hand-curated
-part is the Celery-queue-to-Go-successor correspondence itself (cited
-inline), because that correspondence predates any single machine-readable
-file and isn't otherwise derivable. The generator asserts every Go process,
-every registered kind, and every Celery `-Q` queue name it finds is
-accounted for — including that dev and production compose declare the same
-queues per service — and fails the build rather than silently dropping or
-mislabeling a row when a producer changes. `docs:check-fast` /
+`deploy/docker-compose/compose.production.yml`'s dormant `-Q` service
+definitions are the historical Celery producer (root `compose.yml`'s copy
+was deleted outright by CHAOS-5589; production's is the sole surviving
+source now). The table below is rendered by `scripts/gen_queue_mapping_docs.py`
+from those files; the only hand-curated part is the Celery-queue-to-Go-successor
+correspondence itself (cited inline), because that correspondence predates
+any single machine-readable file and isn't otherwise derivable. The
+generator asserts every Go process, every registered kind, and every Celery
+`-Q` queue name it finds is accounted for, and fails the build rather than
+silently dropping or mislabeling a row when a producer changes. `docs:check-fast` /
 `tests/docs/test_queue_mapping_drift.py` fail if this block is stale — run
 `python scripts/gen_queue_mapping_docs.py` and commit the result after
 changing any of the source files.

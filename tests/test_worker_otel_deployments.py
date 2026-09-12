@@ -18,10 +18,11 @@ def _yaml(path: str) -> dict:
 
 
 def test_compose_worker_fleets_receive_otel_metric_configuration() -> None:
-    paths = ("compose.yml", "deploy/docker-compose/compose.production.yml")
-    for path in paths:
-        worker = _yaml(path)["services"]["worker"]
-        assert OTEL_KEYS <= set(worker["environment"])
+    """Root compose.yml no longer defines a Celery `worker` service (CHAOS-5589
+    deleted the celery-legacy fleet outright); only the production Celery
+    fleet remains to check here."""
+    worker = _yaml("deploy/docker-compose/compose.production.yml")["services"]["worker"]
+    assert OTEL_KEYS <= set(worker["environment"])
 
 
 def test_swarm_worker_fleet_receives_otel_metric_configuration() -> None:

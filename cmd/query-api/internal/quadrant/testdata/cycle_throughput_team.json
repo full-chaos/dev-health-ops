@@ -1,0 +1,48 @@
+{
+  "axes": {
+    "x": {
+      "metric": "cycle_time",
+      "label": "Cycle Time",
+      "unit": "days"
+    },
+    "y": {
+      "metric": "throughput",
+      "label": "Throughput",
+      "unit": "items"
+    }
+  },
+  "points": [
+    {
+      "entity_id": "team-a",
+      "entity_label": "Team Alpha",
+      "x": 1.0,
+      "y": 9.0,
+      "window_start": "2024-01-08",
+      "window_end": "2024-01-15",
+      "evidence_link": "/api/v1/explain?metric=cycle_time",
+      "trajectory": [
+        {
+          "x": 2.0,
+          "y": 5.0,
+          "window": "2024-01-01"
+        },
+        {
+          "x": 1.0,
+          "y": 9.0,
+          "window": "2024-01-08"
+        }
+      ]
+    },
+    {
+      "entity_id": "team-b",
+      "entity_label": "team-b",
+      "x": 3.0,
+      "y": 3.0,
+      "window_start": "2024-01-01",
+      "window_end": "2024-01-08",
+      "evidence_link": "/api/v1/explain?metric=cycle_time",
+      "trajectory": null
+    }
+  ],
+  "annotations": []
+}

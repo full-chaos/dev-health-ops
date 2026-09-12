@@ -1,0 +1,38 @@
+{
+  "axes": {
+    "x": {
+      "metric": "review_load",
+      "label": "Review Load",
+      "unit": "reviews"
+    },
+    "y": {
+      "metric": "review_latency",
+      "label": "Review Latency",
+      "unit": "hours"
+    }
+  },
+  "points": [
+    {
+      "entity_id": "api-gateway",
+      "entity_label": "api-gateway",
+      "x": 10.0,
+      "y": 3.25,
+      "window_start": "2024-01-08",
+      "window_end": "2024-01-15",
+      "evidence_link": "/api/v1/explain?metric=review_latency",
+      "trajectory": [
+        {
+          "x": 6.0,
+          "y": 5.5,
+          "window": "2024-01-01"
+        },
+        {
+          "x": 10.0,
+          "y": 3.25,
+          "window": "2024-01-08"
+        }
+      ]
+    }
+  ],
+  "annotations": []
+}

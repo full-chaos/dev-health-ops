@@ -158,6 +158,30 @@ Only if investment explanation text is needed:
 
 Without both keys in the same change, encrypted org settings silently fall back to the platform provider (not an error, a fallback).
 
+## Platform environment is declared, not inherited
+
+query-api's Deployment lists `env` explicitly and has **no `envFrom` by
+default** — it does not pick up any key from the platform Secret
+(`dev-health-ops`) the way the Python `api`/`metricsApi`/`billingEdge`
+workloads do. For investment-explain, query-api needs four platform vars:
+`LLM_PROVIDER`, `OPENAI_API_KEY`, `LLM_MODEL`, and `SETTINGS_ENCRYPTION_KEY`.
+
+Two ways to supply them:
+
+1. **`queryApi.extraEnv`** — list each var as a `secretKeyRef` entry pointing
+   at the platform Secret's key. Most explicit; what prod runs today.
+2. **`queryApi.envFrom`** — pull the whole platform Secret in one entry:
+   ```yaml
+   queryApi:
+     envFrom:
+       - secretRef: {name: dev-health-ops}
+   ```
+   Simpler, but it also imports every other key in that Secret.
+
+Either way, Kubernetes resolves `env`/`extraEnv` ahead of `envFrom`: an
+`extraEnv` entry for a name always wins over the same name arriving through
+`envFrom`, so the two can be combined without a collision risk.
+
 ## Registry DSN (current and future)
 
 ### Current (prod 2026-09-11)

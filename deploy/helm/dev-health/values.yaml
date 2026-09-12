@@ -288,6 +288,17 @@ queryApi:
   #    its own embedded SDL and an operator-supplied value can only disagree
   #    with the binary.
   extraEnv: []
+  # -- Optional envFrom sources (list of {configMapRef: {name: ...}} /
+  #    {secretRef: {name: ...}} entries), same shape as api.extraEnvFrom /
+  #    goWorkers.extraEnvFrom. Empty by default: unlike api/metricsApi/
+  #    billingEdge, this container inherits NOTHING from the platform Secret/
+  #    ConfigMap unless listed here -- set this to the platform Secret (e.g.
+  #    [{secretRef: {name: dev-health-ops}}]) to pull in LLM_PROVIDER/
+  #    OPENAI_API_KEY/LLM_MODEL/SETTINGS_ENCRYPTION_KEY instead of listing
+  #    each one under extraEnv. Kubernetes gives `env`/`extraEnv` precedence
+  #    over `envFrom` on a name collision, so an extraEnv entry always wins
+  #    over the same key arriving through envFrom.
+  envFrom: []
 
 # =============================================================================
 # Go/River workers (CHAOS-3052, Celery removed under CHAOS-4195)

@@ -1773,7 +1773,6 @@ dev-health-workerctl routes drain \
   dispatch_sync_run
 
 dev-health-workerctl routes resume \
-  --transport celery \
   --reason maintenance \
   --correlation-id change-123 \
   dispatch_sync_run
@@ -1792,18 +1791,11 @@ one unpaused Celery route to its checked-in River transport after proving the
 matching capability exists and no live outbox claim remains. It is idempotent
 when the route is already active.
 
-**`routes resume --transport celery` is not a supported rollback target.** The
-verb still exists and the recorded rollback transport is still `celery`, but no
-Celery consumer runs anywhere: resuming on it hands the work to nothing. It
-survives as a code-level mechanism only, until the code phase of the Celery
-removal deletes it. To roll back, redeploy a previously deployed Go revision
-from the rollback tag set.
-
-Were a consumer ever restored, the drain conditions would still apply: before
-resuming on Celery, drain the external River queue for the kind as well as the
-database claims, with no queued or running River job and no pending or claimed
-outbox row. `routes drain` proves the database-claim condition only; it does
-not inspect River job state.
+**`routes resume` no longer takes a `--transport` flag (CHAOS-5626).** The
+celery transport is retired: no Celery consumer runs anywhere, and it is not a
+supported rollback target (ruling R146). `resume` now always resumes onto
+River, the only remaining transport. To roll back, redeploy a previously
+deployed Go revision from the rollback tag set.
 
 ---
 

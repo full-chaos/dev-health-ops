@@ -699,7 +699,6 @@ func dispatchRoutes(ctx context.Context, runtime *operatorRuntime, args []string
 	flags := quietFlags("routes " + args[0])
 	reason := flags.String("reason", "", "bounded reason code")
 	correlation := flags.String("correlation-id", "", "bounded correlation ID")
-	transport := flags.String("transport", "", "checked-in target transport")
 	quiescenceTimeout := flags.Duration("quiescence-timeout", 10*time.Second, "legacy compatibility; no-op for sync-dispatch routes")
 	if flags.Parse(args[1:]) != nil || flags.NArg() != 1 || *reason == "" || *correlation == "" {
 		return writeError(stderr, "invalid_request")
@@ -711,28 +710,19 @@ func dispatchRoutes(ctx context.Context, runtime *operatorRuntime, args []string
 	)
 	switch args[0] {
 	case "apply":
-		if *transport != "" {
-			return writeError(stderr, "invalid_request")
-		}
 		state, err = runtime.service.ApplyCheckedInRoute(
 			ctx, runtime.principal, kind, *reason, *correlation,
 		)
 	case "pause":
-		if *transport != "" {
-			return writeError(stderr, "invalid_request")
-		}
 		state, err = runtime.service.PauseRoute(ctx, runtime.principal, kind, *reason, *correlation)
 	case "drain":
-		if *transport != "" {
-			return writeError(stderr, "invalid_request")
-		}
 		state, err = runtime.service.DrainRoute(ctx, runtime.principal, kind, *reason, *correlation)
 	case "resume":
-		if *transport == "" {
-			return writeError(stderr, "invalid_request")
-		}
+		// The celery transport is retired (CHAOS-5589; ruling R146): it is
+		// not a rollback target, so river is the only transport left to
+		// resume onto.
 		state, err = runtime.service.ResumeRoute(
-			ctx, runtime.principal, kind, *transport, *reason, *correlation, *quiescenceTimeout,
+			ctx, runtime.principal, kind, syncdispatchcontract.RouteRiver, *reason, *correlation, *quiescenceTimeout,
 		)
 	default:
 		return writeError(stderr, "invalid_request")

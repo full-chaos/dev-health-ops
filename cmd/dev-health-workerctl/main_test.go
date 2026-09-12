@@ -197,7 +197,7 @@ func TestDispatchMutationRequiresReasonAndCorrelationBeforeService(t *testing.T)
 	}
 }
 
-func TestDispatchRoutesCanPauseAndResumePostSyncOnCelery(t *testing.T) {
+func TestDispatchRoutesCanPauseAndResumePostSync(t *testing.T) {
 	runtime := commandRuntime(t, commandAuthorizer{})
 	var stdout, stderr bytes.Buffer
 	if code := dispatch(context.Background(), runtime, []string{
@@ -211,13 +211,24 @@ func TestDispatchRoutesCanPauseAndResumePostSyncOnCelery(t *testing.T) {
 	stdout.Reset()
 	stderr.Reset()
 	if code := dispatch(context.Background(), runtime, []string{
-		"routes", "resume", "--reason", "maintenance", "--correlation-id", "route-cli-2",
-		"--transport", "celery", "post_sync",
+		"routes", "resume", "--reason", "maintenance", "--correlation-id", "route-cli-2", "post_sync",
 	}, &stdout, &stderr); code != 0 {
 		t.Fatalf("routes resume code=%d stderr=%s", code, stderr.String())
 	}
 	if stdout.String() != "{\"kind\":\"post_sync\",\"transport\":\"celery\",\"generation\":3,\"paused\":false,\"rollback_transport\":\"celery\",\"live_claims\":0}\n" {
 		t.Fatalf("routes resume output=%q", stdout.String())
+	}
+}
+
+func TestDispatchRoutesResumeRejectsTransportFlag(t *testing.T) {
+	runtime := commandRuntime(t, commandAuthorizer{})
+	var stdout, stderr bytes.Buffer
+	code := dispatch(context.Background(), runtime, []string{
+		"routes", "resume", "--reason", "maintenance", "--correlation-id", "route-cli-3",
+		"--transport", "celery", "post_sync",
+	}, &stdout, &stderr)
+	if code != 1 || stderr.String() != "{\"error\":{\"code\":\"invalid_request\"}}\n" {
+		t.Fatalf("routes resume --transport code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }
 

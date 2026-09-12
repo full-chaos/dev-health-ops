@@ -64,6 +64,17 @@ type Request struct {
 	CorrelationID             string
 	IdempotencyKey            string
 	PrerequisiteCompletionKey string
+	// Coalesce asks the writer to supersede this producer's own PENDING
+	// requests that name the same work -- same organization, same kind, same
+	// scope -- instead of queueing alongside them.
+	//
+	// It is opt-in per producer rather than a property of the kind, because
+	// superseding is only safe for work NOTHING ELSE IS WAITING ON. A request
+	// whose completion key fences a later handoff must never be cancelled out
+	// from under that fence, so a producer that chains its requests leaves
+	// this false. It is not persisted: the coalescing group is derived from
+	// correlation_id, which every producer already namespaces to itself.
+	Coalesce bool
 }
 
 type Claim struct {

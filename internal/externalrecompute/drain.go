@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -86,6 +87,20 @@ var ErrPermanent = errors.New("external recompute: permanent rejection")
 type Enqueued struct {
 	DailyRunIDs         []string
 	InvestmentRequestID string
+	// InvestmentSupersededRequestIDs names the pending materialize requests
+	// this flush replaced instead of queueing alongside. It is reported rather
+	// than merely acted on for the same reason the strand repair counts every
+	// refusal it makes: a coalescing key that silently matches nothing and one
+	// that silently matches everything produce the same empty log, and telling
+	// them apart afterwards is the whole point of having enqueued it.
+	InvestmentSupersededRequestIDs []string
+	// InvestmentBoundedFromDate / InvestmentBoundedWindowDays record that the
+	// request's start was NOT the producer's -- the writer supplied it because
+	// the scope named none. A bound applied silently is indistinguishable from
+	// a producer that always sent one, which is exactly how 1094 start-less
+	// requests reached the queue unnoticed.
+	InvestmentBoundedFromDate   string
+	InvestmentBoundedWindowDays int
 }
 
 // Enqueuer turns a bounded plan into native job handoffs inside the CALLER's
@@ -475,8 +490,38 @@ func (drain *Drain) logConsumed(
 		"skip_investment_no_scope", plan.SkipInvestmentNoScope,
 		"daily_runs_enqueued", len(enqueued.DailyRunIDs),
 		"investment_request_id", enqueued.InvestmentRequestID,
+		"investment_superseded_request_ids", enqueued.InvestmentSupersededRequestIDs,
+		"investment_superseded_requests", len(enqueued.InvestmentSupersededRequestIDs),
+		"investment_bounded_from_date", enqueued.InvestmentBoundedFromDate,
+		"investment_bounded_window_days", enqueued.InvestmentBoundedWindowDays,
 		"capped_days", plan.CappedDays,
 		"capped_repos", plan.CappedRepos)
+	// The ids are logged a SECOND time, on their own line, when there are any.
+	// The consumed line above is one structured record per drained row and is
+	// read by row; a supersede is a decision ABOUT OTHER ROWS, and finding it
+	// by reading every consumed line for a non-empty field is the shape that
+	// made the original 2206-job backlog invisible for as long as it was. This
+	// line exists to be greppable on its own.
+	if len(enqueued.InvestmentSupersededRequestIDs) > 0 {
+		drain.logger.InfoContext(ctx, "external recompute superseded pending investment materialize requests",
+			"bridge_id", claim.BridgeID,
+			"org_id", claim.OrgID,
+			"investment_request_id", enqueued.InvestmentRequestID,
+			"superseded_request_ids", enqueued.InvestmentSupersededRequestIDs,
+			"superseded_requests", len(enqueued.InvestmentSupersededRequestIDs))
+	}
+	// Same rule for the bound: a start the producer did not supply is a
+	// rejection of an unbounded request, and a rejection nothing logs cannot
+	// be told apart from one that never fired.
+	if enqueued.InvestmentBoundedFromDate != "" || enqueued.InvestmentBoundedWindowDays > 0 {
+		drain.logger.WarnContext(ctx, "external recompute bounded an unbounded investment materialize start",
+			"bridge_id", claim.BridgeID,
+			"org_id", claim.OrgID,
+			"investment_request_id", enqueued.InvestmentRequestID,
+			"bounded_from_date", enqueued.InvestmentBoundedFromDate,
+			"bounded_window_days", enqueued.InvestmentBoundedWindowDays,
+			"max_lookback_days", workgraph.MaxMaterializeLookbackDays)
+	}
 }
 
 func (drain *Drain) mark(ctx context.Context, jobID uuid.UUID, status string) error {

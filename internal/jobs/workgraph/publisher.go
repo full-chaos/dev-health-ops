@@ -29,11 +29,95 @@ func NewRequestWriter(registry joboutbox.PolicyRegistry) (*RequestWriter, error)
 	return &RequestWriter{producer: producer, registry: registry}, nil
 }
 
+// WriteTx is WriteRequestTx for the callers that have nothing to report. It
+// exists so the five existing producers keep one-line call sites; a producer
+// that sets Coalesce, or that wants to know its start was bounded, calls
+// WriteRequestTx and logs the outcome.
 func (writer *RequestWriter) WriteTx(ctx context.Context, tx pgx.Tx, request Request) error {
+	_, err := writer.WriteRequestTx(ctx, tx, request)
+	return err
+}
+
+// WriteRequestTx writes the authoritative request and its outbox handoff, and
+// reports the two effects a caller cannot otherwise see: which pending
+// requests this one superseded, and whether its start had to be bounded.
+//
+// The ORDER inside the caller's transaction is load-bearing and is the reason
+// coalescing lives here rather than in a producer:
+//
+//  1. bound the materialize scope, so the row that gets written and the key
+//     that gets compared are the same bytes;
+//  2. supersede this producer's matching pending requests, making each one
+//     TERMINAL ('canceled') -- see supersedePendingSQL for why terminal-first
+//     is the only ordering the outbox strand repair cannot undo;
+//  3. insert this request and publish its handoff.
+//
+// All three commit with the caller's transaction or none of them do, so there
+// is no instant at which the old request is cancelled and the new one does not
+// exist.
+func (writer *RequestWriter) WriteRequestTx(
+	ctx context.Context, tx pgx.Tx, request Request,
+) (WriteOutcome, error) {
 	if writer == nil || writer.producer == nil || writer.registry == nil ||
 		tx == nil || !validRequest(request) {
-		return ErrInvalidState
+		return WriteOutcome{}, ErrInvalidState
 	}
+	var outcome WriteOutcome
+	if request.Kind == KindMaterialize {
+		bounded, addedFromDate, cappedWindowDays, err := boundMaterializeStart(request.Scope)
+		if err != nil {
+			return WriteOutcome{}, err
+		}
+		request.Scope = bounded
+		outcome.BoundedFromDate, outcome.BoundedWindowDays = addedFromDate, cappedWindowDays
+		// Re-validated because bounding rewrote the scope: the 8192-byte
+		// bound is a column contract, and a scope that was one date-string
+		// short of it before must not become an oversized INSERT here.
+		if !validRequest(request) {
+			return WriteOutcome{}, ErrInvalidState
+		}
+	}
+	if request.Coalesce {
+		superseded, err := writer.supersedeTx(ctx, tx, request)
+		if err != nil {
+			return WriteOutcome{}, err
+		}
+		outcome.SupersededRequestIDs = superseded
+	}
+	if err := writer.writeRowTx(ctx, tx, request); err != nil {
+		return WriteOutcome{}, err
+	}
+	return outcome, nil
+}
+
+// supersedeTx cancels this producer's pending duplicates of request and
+// returns their ids. A supersede that matches nothing is the ordinary case and
+// is not an error.
+func (writer *RequestWriter) supersedeTx(
+	ctx context.Context, tx pgx.Tx, request Request,
+) ([]string, error) {
+	rows, err := tx.Query(ctx, supersedePendingSQL,
+		request.OrganizationID, string(request.Kind), string(request.Scope),
+		request.CorrelationID, request.ID)
+	if err != nil {
+		return nil, ErrUnavailable
+	}
+	defer rows.Close()
+	var superseded []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, ErrUnavailable
+		}
+		superseded = append(superseded, id)
+	}
+	if rows.Err() != nil {
+		return nil, ErrUnavailable
+	}
+	return superseded, nil
+}
+
+func (writer *RequestWriter) writeRowTx(ctx context.Context, tx pgx.Tx, request Request) error {
 	encodedScope := string(request.Scope)
 	command, err := tx.Exec(ctx, `
 INSERT INTO public.work_graph_execution_requests (

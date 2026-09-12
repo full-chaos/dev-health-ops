@@ -95,7 +95,18 @@ RETURNING id::text, org_id::text, kind, scope::text, COALESCE(model_ref, ''),
 		var state string
 		var leaseExpiresAt *time.Time
 		rowErr := tx.QueryRow(ctx, `SELECT state, lease_expires_at FROM public.work_graph_execution_requests WHERE id = $1::uuid AND kind = $2`, requestID, string(kind)).Scan(&state, &leaseExpiresAt)
-		if rowErr == nil && state == "succeeded" {
+		// 'canceled' is reported as a finished request for the same reason
+		// 'succeeded' is: in both cases there is no work left for this job to
+		// do and nothing an operator needs to act on. A canceled request is
+		// one a later flush SUPERSEDED (internal/jobs/workgraph/coalesce.go) --
+		// its River job is deliberately left in place rather than deleted,
+		// because deleting a live job from inside the producer's transaction
+		// is a second write into River's own tables that cannot be made
+		// atomic with this one. Retiring the job here instead is the half of
+		// that pair that CAN be made unambiguous, and it must not be reported
+		// as a failure: 2206 stale jobs raising a permanent ErrInvalidState
+		// apiece is a backlog traded for an alert storm, not a fix.
+		if rowErr == nil && (state == "succeeded" || state == "canceled") {
 			return nil, nil
 		}
 		// A live lease is reported rather than treated as a completed request.

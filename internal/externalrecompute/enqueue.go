@@ -4,7 +4,7 @@ package externalrecompute
 // native handoffs the scheduled fan-out and post-sync fanout publish
 // (cmd/dev-health-worker/sync_dispatch.go), namely metrics.daily_dispatch via
 // daily.PostgresStore.StartRunTx and investment.materialize via
-// workgraph.RequestWriter.WriteTx.
+// workgraph.RequestWriter.WriteRequestTx.
 //
 // Those two are the native equivalents of the two Celery task names the deleted
 // Python planner dispatched by string (run_daily_metrics and
@@ -103,12 +103,19 @@ func (enqueuer PostgresEnqueuer) Enqueue(
 		if err != nil {
 			return Enqueued{}, err
 		}
-		if err := enqueuer.workGraph.WriteTx(ctx, tx, workgraph.Request{
+		outcome, err := enqueuer.workGraph.WriteRequestTx(ctx, tx, workgraph.Request{
 			ID:             requestID,
 			OrganizationID: plan.OrgID,
 			Kind:           workgraph.KindMaterialize,
 			Scope:          scope,
 			LLMConcurrency: 1,
+			// Coalesce is safe for THIS producer specifically: the request it
+			// writes has no PrerequisiteCompletionKey and nothing downstream
+			// fences on its completion, so superseding a queued one strands
+			// no chain. It is also the producer the backlog came from -- one
+			// request per flush, 2206 of them covering 65 distinct days,
+			// every duplicate naming a day and scope another already named.
+			Coalesce: true,
 			// force stays false and the spend limit stays 0, matching the
 			// Python planner's `force=False` and the post-sync producer's own
 			// choices: an external-ingest recompute is a freshness pass, never
@@ -116,11 +123,15 @@ func (enqueuer PostgresEnqueuer) Enqueue(
 			SpendLimitMicrounits: 0,
 			CorrelationID:        correlation,
 			IdempotencyKey:       correlation + ":" + investmentIdempotencySuffix,
-		}); err != nil {
+		})
+		if err != nil {
 			return Enqueued{}, classifyEnqueueError(
 				fmt.Errorf("write investment materialize request: %w", err))
 		}
 		enqueued.InvestmentRequestID = requestID
+		enqueued.InvestmentSupersededRequestIDs = outcome.SupersededRequestIDs
+		enqueued.InvestmentBoundedFromDate = outcome.BoundedFromDate
+		enqueued.InvestmentBoundedWindowDays = outcome.BoundedWindowDays
 	}
 	return enqueued, nil
 }

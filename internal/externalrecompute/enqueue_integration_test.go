@@ -518,3 +518,70 @@ INSERT INTO external_ingest_recompute_jobs (
 		t.Fatalf("materialize rows = %d, want one per collapsed grain", materializes)
 	}
 }
+
+// TestDrainCoalescesRepeatedFlushesOfTheSameWindow is CHAOS-5642's claim
+// measured at the seam that produced the backlog: two flushes naming the same
+// org, the same day range and the same scope must leave ONE pending
+// materialization, not two.
+//
+// The production shape it reproduces is the ordinary one, not a pathological
+// one -- each flush is a separate bridge row with its own correlation, which is
+// why each derived its own request id and why 2206 of them accumulated across
+// 65 distinct days. Nothing about the second flush is a duplicate in the
+// idempotency-key sense; it is a duplicate in the WORK sense, and only the
+// coalescing key can see that.
+//
+// The assertions that matter are the STATE of the first request, not just the
+// count: 'canceled' is the one state internal/joboutbox/strand_repair.go's
+// work-graph sweep cannot select, so it is the only state in which the first
+// request stays superseded across a reconciler tick.
+func TestDrainCoalescesRepeatedFlushesOfTheSameWindow(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	pool := enqueueTestPool(t, ctx)
+	now := time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)
+
+	orgID := uuid.New().String()
+	repoID := uuid.New().String()
+	sameWindow := func(scope map[string]any) {
+		scope["repoIds"] = []string{repoID}
+		scope["teamIds"] = []string{"team-a"}
+		scope["recordKinds"] = []string{"pull_request.v1"}
+		scope["windowStartedAt"] = "2026-08-19T00:00:00Z"
+		scope["windowEndedAt"] = "2026-08-19T00:00:00Z"
+	}
+	seedNativeRow(t, ctx, pool, orgID, "acme/api", now.Add(-2*time.Minute), statusPending, sameWindow)
+	seedNativeRow(t, ctx, pool, orgID, "acme/api", now.Add(-time.Minute), statusPending, sameWindow)
+
+	drain, err := NewDrain(pool, realEnqueuer(t, pool), DefaultDrainConfig(),
+		slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	drain.now = func() time.Time { return now }
+	for flush := range 2 {
+		if _, err := drain.Step(ctx); err != nil {
+			t.Fatalf("flush %d: %v", flush, err)
+		}
+	}
+
+	// Both flushes wrote a request -- coalescing supersedes, it does not
+	// suppress -- so the row count is 2 and only the STATES differ.
+	var total, pending, canceled int
+	if err := pool.QueryRow(ctx, `
+SELECT count(*),
+       count(*) FILTER (WHERE state = 'pending'),
+       count(*) FILTER (WHERE state = 'canceled')
+FROM public.work_graph_execution_requests
+WHERE org_id = $1::uuid AND kind = $2`,
+		orgID, string(workgraph.KindMaterialize)).Scan(&total, &pending, &canceled); err != nil {
+		t.Fatal(err)
+	}
+	if total != 2 {
+		t.Fatalf("materialize requests = %d, want one per flush", total)
+	}
+	if pending != 1 || canceled != 1 {
+		t.Fatalf("pending=%d canceled=%d, want exactly one pending materialization per key",
+			pending, canceled)
+	}
+}

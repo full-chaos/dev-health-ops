@@ -7,14 +7,16 @@ build_quadrant_response(...), and dump its model_dump(mode="json") output
 as the golden file the Go test's fixture QueryClient must reproduce
 byte-for-byte (field names, ordering, null handling).
 
+Uses unittest.mock.patch.object (not a direct module-attribute
+assignment) for the same reason
+generate_explain_investment_mix_golden.py does: mypy statically checks a
+direct `module.name = replacement` assignment against the ORIGINAL
+attribute's declared type, which a narrower fixture-shaped fake always
+fails -- patch.object's replacement parameter is typed Any, so it
+monkeypatches without tripping the typecheck gate.
+
 Run from the ops repo root:
     uv run python3 cmd/query-api/internal/quadrant/testdata/generate_quadrant_golden.py
-
-Three cases, chosen to cover: the cycle_throughput/team attribution quirk
-(CHAOS-5550's own subject) with a real multi-window trajectory and team-
-catalog label resolution; the CHAOS-2079 churn_throughput forced-repo-grain
-override; and a plain repo-grain quadrant with no attribution quirk
-involved (review_load_latency) to pin the non-quirky path too.
 """
 
 from __future__ import annotations
@@ -24,6 +26,7 @@ import json
 from contextlib import asynccontextmanager
 from datetime import date
 from pathlib import Path
+from unittest import mock
 
 from dev_health_ops.api.services import quadrant as quadrant_module
 
@@ -70,22 +73,23 @@ async def _gen_cycle_throughput_team() -> None:
         assert sorted(params["team_ids"]) == ["team-a", "team-b"]
         return [{"team_id": "team-a", "team_name": "Team Alpha"}]
 
-    quadrant_module.clickhouse_client = _fake_client
-    quadrant_module.fetch_quadrant_metric = _unexpected_rollup_metric
-    quadrant_module.fetch_work_item_team_quadrant_metric = _fake_attributed_metric
-    quadrant_module.query_dicts = _fake_query_dicts
-
-    response = await quadrant_module.build_quadrant_response(
-        db_url="clickhouse://test",
-        org_id="org-1",
-        type="cycle_throughput",
-        scope_type="team",
-        scope_id="",
-        range_days=30,
-        bucket="week",
-        start_date=date(2024, 1, 1),
-        end_date=date(2024, 1, 8),
-    )
+    with (
+        mock.patch.object(quadrant_module, "clickhouse_client", _fake_client),
+        mock.patch.object(quadrant_module, "fetch_quadrant_metric", _unexpected_rollup_metric),
+        mock.patch.object(quadrant_module, "fetch_work_item_team_quadrant_metric", _fake_attributed_metric),
+        mock.patch.object(quadrant_module, "query_dicts", _fake_query_dicts),
+    ):
+        response = await quadrant_module.build_quadrant_response(
+            db_url="clickhouse://test",
+            org_id="org-1",
+            type="cycle_throughput",
+            scope_type="team",
+            scope_id="",
+            range_days=30,
+            bucket="week",
+            start_date=date(2024, 1, 1),
+            end_date=date(2024, 1, 8),
+        )
     (OUT_DIR / "cycle_throughput_team.json").write_text(json.dumps(_dump(response), indent=2) + "\n")
 
 
@@ -105,21 +109,22 @@ async def _gen_churn_throughput_forces_repo() -> None:
     async def _unexpected_query_dicts(*_args, **_kwargs):
         raise AssertionError("team-label resolution must not run for repo-grain churn")
 
-    quadrant_module.clickhouse_client = _fake_client
-    quadrant_module.fetch_quadrant_metric = _fake_metric
-    quadrant_module.query_dicts = _unexpected_query_dicts
-
-    response = await quadrant_module.build_quadrant_response(
-        db_url="clickhouse://test",
-        org_id="org-1",
-        type="churn_throughput",
-        scope_type="team",
-        scope_id="",
-        range_days=30,
-        bucket="week",
-        start_date=date(2024, 1, 1),
-        end_date=date(2024, 1, 8),
-    )
+    with (
+        mock.patch.object(quadrant_module, "clickhouse_client", _fake_client),
+        mock.patch.object(quadrant_module, "fetch_quadrant_metric", _fake_metric),
+        mock.patch.object(quadrant_module, "query_dicts", _unexpected_query_dicts),
+    ):
+        response = await quadrant_module.build_quadrant_response(
+            db_url="clickhouse://test",
+            org_id="org-1",
+            type="churn_throughput",
+            scope_type="team",
+            scope_id="",
+            range_days=30,
+            bucket="week",
+            start_date=date(2024, 1, 1),
+            end_date=date(2024, 1, 8),
+        )
     (OUT_DIR / "churn_throughput_team_forces_repo.json").write_text(json.dumps(_dump(response), indent=2) + "\n")
 
 
@@ -145,21 +150,22 @@ async def _gen_review_load_latency_repo() -> None:
     async def _unexpected_query_dicts(*_args, **_kwargs):
         raise AssertionError("team-label resolution must not run for repo scope")
 
-    quadrant_module.clickhouse_client = _fake_client
-    quadrant_module.fetch_quadrant_metric = _fake_metric
-    quadrant_module.query_dicts = _unexpected_query_dicts
-
-    response = await quadrant_module.build_quadrant_response(
-        db_url="clickhouse://test",
-        org_id="org-1",
-        type="review_load_latency",
-        scope_type="repo",
-        scope_id="",
-        range_days=30,
-        bucket="week",
-        start_date=date(2024, 1, 1),
-        end_date=date(2024, 1, 8),
-    )
+    with (
+        mock.patch.object(quadrant_module, "clickhouse_client", _fake_client),
+        mock.patch.object(quadrant_module, "fetch_quadrant_metric", _fake_metric),
+        mock.patch.object(quadrant_module, "query_dicts", _unexpected_query_dicts),
+    ):
+        response = await quadrant_module.build_quadrant_response(
+            db_url="clickhouse://test",
+            org_id="org-1",
+            type="review_load_latency",
+            scope_type="repo",
+            scope_id="",
+            range_days=30,
+            bucket="week",
+            start_date=date(2024, 1, 1),
+            end_date=date(2024, 1, 8),
+        )
     (OUT_DIR / "review_load_latency_repo.json").write_text(json.dumps(_dump(response), indent=2) + "\n")
 
 

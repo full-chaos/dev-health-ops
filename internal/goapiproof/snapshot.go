@@ -77,7 +77,7 @@ func DecodeSnapshot(body []byte) (Snapshot, error) {
 		return Snapshot{}, fmt.Errorf("goapiproof: decode response envelope: %w", err)
 	}
 
-	snapshot := Snapshot{}
+	snapshot := Snapshot{BodyBytes: len(body)}
 	// A JSON decoder stops at the end of the first value and ignores
 	// everything after it, so two materially different bodies can decode to
 	// the same envelope and compare equal (confirmation pass C3: a 67-byte

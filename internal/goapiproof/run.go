@@ -60,6 +60,25 @@ const (
 	// exists to prevent, and it is worse than the missing-spec refusal
 	// because it is silent. Named and refused instead.
 	RefusalNeedsInstanceID = "operation_needs_an_instance_identifier"
+
+	// RefusalLegsDoNotOverlap and RefusalVacuousEmptyLegs are CHAOS-5661's
+	// two structural refusals, computed by Compare (compare.go's
+	// structuralAgreementFailure / bodySizeDisagreement / vacuousEmptyLegs)
+	// BEFORE any value in the response is compared -- see
+	// Result.StructuralRefusal's own doc comment for the measured
+	// instance (JOB 7 step 7 run 2) that motivated them.
+	//
+	// RefusalLegsDoNotOverlap covers two distinct triggers, one reason:
+	// a collection (object or list) that is non-empty on both legs while
+	// sharing not one key or id between them, or a gross response-body
+	// size disagreement. Either way the two legs are not describing the
+	// same data closely enough for a field-by-field comparison to mean
+	// anything.
+	RefusalLegsDoNotOverlap = "legs_do_not_overlap"
+	// RefusalVacuousEmptyLegs fires when both legs resolve to zero
+	// non-null leaves: an empty result on both sides is not evidence the
+	// two planes agree, because the comparison found nothing to check.
+	RefusalVacuousEmptyLegs = "vacuous_empty_legs"
 )
 
 // Measurement routes. Recorded on every receipt so a proof-route
@@ -262,6 +281,7 @@ type Outcome struct {
 // fails if anyone adds one.
 type sealedOutcome struct {
 	operation       string
+	variant         string
 	documentDigest  string
 	schemaDigest    string
 	candidateBuild  string
@@ -520,6 +540,7 @@ func (r *Runner) ReceiptsFor(observedAt time.Time) ([]Receipt, error) {
 			SchemaDigest:                     sealed.schemaDigest,
 			DocumentDigest:                   sealed.documentDigest,
 			SelectedOperation:                sealed.operation,
+			Variant:                          sealed.variant,
 			CandidateBuild:                   sealed.candidateBuild,
 			RequestIdentity:                  identity,
 			Stage:                            Stage,
@@ -580,6 +601,7 @@ func (r *Runner) RefusalReceipts(observedAt time.Time, cause string) ([]Receipt,
 			SchemaDigest:      sealed.schemaDigest,
 			DocumentDigest:    sealed.documentDigest,
 			SelectedOperation: sealed.operation,
+			Variant:           sealed.variant,
 			CandidateBuild:    sealed.candidateBuild,
 			RequestIdentity:   identity,
 			Stage:             Stage,
@@ -614,7 +636,10 @@ func WriteReceipts(ctx context.Context, db Querier, receipts []Receipt) (map[str
 		if _, err := WriteAtomic(ctx, db, receipt); err != nil {
 			return written, err
 		}
-		written[receipt.SelectedOperation] = true
+		// CHAOS-5623: keyed by (operation, variant), not operation alone --
+		// see ReceiptKey's own doc comment for why a bare operation key let
+		// one variant's success read as every sibling variant's success too.
+		written[ReceiptKey(receipt.SelectedOperation, receipt.Variant)] = true
 	}
 	return written, nil
 }
@@ -794,6 +819,18 @@ func (r *Runner) proveRequest(ctx context.Context, operation string, variantName
 	outcome.EdgeBuildBinding = admission.EdgeBuildBinding
 
 	result := Compare(baselineSnapshot, candidateSnapshot, parity)
+	if result.StructuralRefusal != "" {
+		// Checked FIRST, ahead of every declared-relaxation guard below:
+		// Compare returns immediately on a structural refusal (see
+		// structuralAgreementFailure/vacuousEmptyLegs), so StaleBaselineDefects
+		// and the rest of Result were never computed for this pair. CHAOS-5661:
+		// the JOB 7 step 7 run 2 refusal read "declared baseline defects
+		// covered no difference" when the true cause was zero node-id
+		// overlap, and that text must never stand in for this one again --
+		// which this ordering guarantees, since the stale-declaration checks
+		// below are unreachable once this fires.
+		return refuse(result.StructuralRefusal, result.StructuralDetail)
+	}
 	if len(result.UnusedTierB) > 0 {
 		// Same rule as a stale exclusion, one tier over: a Tier-B
 		// declaration that relaxed nothing means the comparison that ran
@@ -966,6 +1003,7 @@ func (r *Runner) seal(outcome Outcome, variables map[string]any) sealedOutcome {
 	return sealedOutcome{
 		variables:                        variables,
 		operation:                        outcome.Operation,
+		variant:                          outcome.Variant,
 		documentDigest:                   outcome.DocumentDigest,
 		schemaDigest:                     r.Registry.SchemaDigest,
 		candidateBuild:                   r.Registry.BuildIdentity,

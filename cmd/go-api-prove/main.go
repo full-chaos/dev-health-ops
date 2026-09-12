@@ -321,7 +321,13 @@ func run() error {
 		written, err := goapiproof.WriteReceipts(ctx, pool, receipts)
 		summary.ReceiptsWritten = len(written)
 		for i := range outcomes {
-			outcomes[i].ReceiptWritten = written[outcomes[i].Operation]
+			// CHAOS-5623: keyed by (operation, variant) -- an operation
+			// with Variants (flowMatrix's TEAM/REPO) can share one
+			// Operation across more than one Outcome, and a bare
+			// written[outcomes[i].Operation] read ANY variant's successful
+			// write as every sibling variant's, including one whose write
+			// genuinely failed.
+			outcomes[i].ReceiptWritten = written[goapiproof.ReceiptKey(outcomes[i].Operation, outcomes[i].Variant)]
 		}
 		// Held, not returned: the report below is exactly the evidence
 		// somebody needs to see when a write fails halfway, and returning

@@ -91,6 +91,13 @@ type Snapshot struct {
 	// over the decoded value is not a comparison over what was served --
 	// the admission gate refuses rather than compare.
 	TrailingBytes bool
+	// BodyBytes is the raw response body's length, set by DecodeSnapshot
+	// from the bytes it decoded. CHAOS-5661's bodySizeDisagreement reads
+	// it directly: a gross size mismatch between the two legs is a
+	// structural signal independent of (and checked before) any decoded
+	// value, and it has to come from the BYTES, since a value comparison
+	// never sees how large the body that produced it was.
+	BodyBytes int
 }
 
 // Finding is one comparator observation.
@@ -243,6 +250,29 @@ type Result struct {
 	// the pairing it promises cannot be built. The caller fails the run
 	// on this exactly as it does on a stale declaration.
 	OrderInsensitiveListRefusals []string `json:"order_insensitive_list_refusals,omitempty"`
+
+	// StructuralRefusal is CHAOS-5661's precondition, checked BEFORE any
+	// value in `data` is compared: see structuralAgreementFailure,
+	// bodySizeDisagreement and vacuousEmptyLegs. Non-empty means Compare
+	// refused outright -- every other field above stays zero-valued,
+	// because no value comparison ran at all. One of the run.go
+	// RefusalLegsDoNotOverlap / RefusalVacuousEmptyLegs constants.
+	//
+	// This exists because a path-joining comparator that only ever
+	// visits paths present on BOTH legs reports zero differences when the
+	// legs share none -- JOB 7 step 7 run 2 measured exactly that:
+	// flowMatrix's TEAM/REPO variants are Go name-keyed, Python
+	// UUID-keyed, with ZERO ids in common, and the run refused only
+	// because the declared CHAOS-5426 baseline defect matched nothing --
+	// a refusal that reads as "the ticket citation is stale" when the
+	// real fact is "these two legs are not describing the same data at
+	// all". Checked ahead of the stale-baseline-defect guard so that
+	// refusal text is never emitted for THIS cause again.
+	StructuralRefusal string `json:"structural_refusal,omitempty"`
+	// StructuralDetail explains StructuralRefusal: the key or id sets
+	// that failed to overlap, or the body-size ratio, so a reader does
+	// not have to reproduce the run to see why.
+	StructuralDetail string `json:"structural_detail,omitempty"`
 }
 
 // IsMatch reports whether the verdict is a clean match.
@@ -413,6 +443,28 @@ func Compare(baseline, candidate Snapshot, opts Options) Result {
 				Detail: fmt.Sprintf("baseline watermark %q != candidate watermark %q",
 					baseline.Watermark, candidate.Watermark),
 			}},
+		}
+	}
+
+	// CHAOS-5661: judged BEFORE anything below, and over the RAW decoded
+	// bodies -- never the view VolatileFields/exclusions would leave.
+	// Skipping a whole collection because it is declared volatile is
+	// exactly how a comparator can visit zero overlapping paths and
+	// report zero differences (see compareDict's `excluded` check);
+	// structure has to be judged on what the response actually carries,
+	// not on what the value comparator was told to ignore.
+	if baseline.DataPresent && candidate.DataPresent {
+		if vacuousEmptyLegs(baseline.Data, candidate.Data, opts) {
+			return Result{
+				StructuralRefusal: RefusalVacuousEmptyLegs,
+				StructuralDetail:  "both legs resolved to zero non-null leaves under data: an empty result on both sides is not evidence the two planes agree, because nothing was actually compared",
+			}
+		}
+		if reason, detail := structuralAgreementFailure(baseline.Data, candidate.Data, "$.data"); reason != "" {
+			return Result{StructuralRefusal: reason, StructuralDetail: detail}
+		}
+		if reason, detail := bodySizeDisagreement(baseline.BodyBytes, candidate.BodyBytes); reason != "" {
+			return Result{StructuralRefusal: reason, StructuralDetail: detail}
 		}
 	}
 

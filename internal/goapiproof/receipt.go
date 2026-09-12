@@ -74,6 +74,38 @@ type Receipt struct {
 	// which build served it cannot be told apart later from one that knew
 	// exactly.
 	BuildBinding string
+
+	// Variant names the OperationSpec.Variants entry (e.g. "TEAM") this
+	// receipt measured, or is empty for an operation's base request --
+	// mirrors Outcome.Variant. NOT a database column (there is no
+	// go_api_proof_run.variant; RequestIdentity already differs per
+	// variant because it is built from the variant's own Variables), so
+	// Write/WriteAtomic never reference it. It exists purely so
+	// WriteReceipts can key its returned map by ReceiptKey(operation,
+	// variant) instead of by operation alone -- see CHAOS-5623.
+	Variant string
+}
+
+// ReceiptKey identifies one WriteReceipts entry: the operation alone when
+// variant is empty (a receipt for the operation's base request), or
+// operation+variant otherwise.
+//
+// CHAOS-5623: OperationSpec.Variants (flowMatrix's WORK_TYPE/TEAM/REPO)
+// means more than one Outcome can share one Operation, each with its own
+// Receipt. WriteReceipts used to return written[operation]=true keyed by
+// SelectedOperation alone, so cmd/go-api-prove's
+// `outcomes[i].ReceiptWritten = written[outcomes[i].Operation]` read ANY
+// variant's success as every OTHER variant's success too -- a variant
+// whose write genuinely FAILED still reported ReceiptWritten=true because
+// a sibling variant for the same operation had already set that one
+// shared key. Keying by (operation, variant) instead makes the two
+// distinguishable; the empty-variant form keeps every pre-CHAOS-5623
+// caller and test (which key by plain operation name) working unchanged.
+func ReceiptKey(operation, variant string) string {
+	if variant == "" {
+		return operation
+	}
+	return operation + "\x1f" + variant
 }
 
 // Querier is the subset of pgx this package needs, so a test can pass a

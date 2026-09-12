@@ -19,15 +19,15 @@ lifecycle: active
 
 **Go/River is the production owner of every current background job and every
 current production schedule.** Every Python Celery worker and Beat service has
-been stopped in production since 2026-08-19 (CHAOS-4026). Since CHAOS-3088,
-root `compose.yml` no longer started them by default; CHAOS-5589 deleted them
-from `compose.yml` outright (R146: Celery transport is not a rollback target)
--- the Go/River fleet is that file's only worker topology now. The archived
-fleet still remains defined in `deploy/docker-compose/compose.production.yml`
-and `deploy/docker-swarm/stack.yml` for self-hosted docker-compose/swarm
-deployments. Configure and operate the Go worker groups and the Go scheduler
-described below; read the Celery section only to understand a queue name you
-find in an old issue, runbook, or `rollback_route` value.
+been stopped in production since 2026-08-19 (CHAOS-4026), and CHAOS-5589
+deleted the service definitions outright from every compose surface
+(`compose.yml`, `compose.production.yml`, `docker-swarm/stack.yml` -- R146:
+Celery transport is not a rollback target). The Go/River fleet is every
+compose file's only worker topology now, folded in as the unconditional
+default the same way CHAOS-3088 first did for root `compose.yml`. Configure
+and operate the Go worker groups and the Go scheduler described below; read
+the Celery section only to understand a queue name you find in an old issue,
+runbook, or `rollback_route` value.
 {: .fc-page-lede }
 
 For worker-group semantics (identity vs. routing), the two-plane
@@ -37,19 +37,18 @@ this page does not repeat that content.
 
 ## Historical Celery topology (dormant)
 
-**ARCHIVED (CHAOS-4164, 2026-08-23; gated CHAOS-3088; deleted from
-`compose.yml` CHAOS-5589):** `deploy/docker-compose/compose.production.yml`
-and `deploy/docker-swarm/stack.yml` still define the `worker`/`worker-ingest`/
-`worker-external-ingest`/`worker-heavy`/`beat` Celery services, each carrying
-an ARCHIVED banner comment at the service definition itself, so a reader of
-either compose file alone (not just this doc) sees that the fleet is not live
-topology; they are unaffected by CHAOS-5589 and still start the archived
-fleet unconditionally (their own, separately tracked archival note says so).
-Root `compose.yml` no longer defines these services at all: CHAOS-3088 first
-gated them behind `profiles: [celery-legacy]`, and CHAOS-5589 deleted them
-outright once R146 established Celery is not a rollback target.
+**ARCHIVED (CHAOS-4164, 2026-08-23) then DELETED (CHAOS-5589):** every
+`worker`/`worker-ingest`/`worker-external-ingest`/`worker-heavy`/`beat`
+Celery service definition is gone from every compose surface -- `compose.yml`
+first (gated behind `profiles: [celery-legacy]` under CHAOS-3088, then
+deleted outright), then `compose.production.yml` and
+`deploy/docker-swarm/stack.yml` in the same ticket, once R146 established
+Celery is not a rollback target and no consumer had run since 2026-08-19.
+There is no compose surface left where the archived fleet can be brought
+back up.
 
-Kept for context, not for operation. Before 2026-08-19 these were configured together:
+Kept for context, not for operation -- nothing below is reproducible from
+this tree any more. Before 2026-08-19 these were configured together:
 
 - broker and result backend;
 - worker queue lists;

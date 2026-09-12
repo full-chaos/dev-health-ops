@@ -938,7 +938,9 @@ def test_deployment_pgbouncer_budget_matches_production_compose_defaults() -> No
     manifest = _load_json(_DEPLOYMENT)
     pgbouncer = _load_yaml(_PRODUCTION_COMPOSE)["services"]["pgbouncer"]
 
-    assert pgbouncer["profiles"] == ["pooler"]
+    # CHAOS-5589: unconditional now -- the Go fleet depends_on this being
+    # healthy by default, not an operator opt-in.
+    assert "profiles" not in pgbouncer
     environment = pgbouncer["environment"]
     assert manifest["postgres_budget"][
         "pgbouncer_transaction_max_client_connections"
@@ -1554,30 +1556,30 @@ def test_every_renderer_gives_go_workers_a_native_protocol_clickhouse_uri() -> N
 
 
 def test_go_worker_health_check_flips_authority_with_the_overlay() -> None:
-    """CHAOS-3942: /health/workers is Celery-authoritative until told
-    otherwise. EXPECTED_WORKER_GROUPS must reach the API service through
-    every go-workers opt-in overlay -- and stay ABSENT from the Celery-owned
-    base, so a base-only deployment (no go-workers overlay applied) never
-    silently loses its Celery signal, and an operator applying the overlay
-    gets the authority flip in the same change that stages the fleet.
+    """CHAOS-3942: /health/workers is Go-fleet-authoritative by default now.
+
+    CHAOS-5589 deleted compose.production.yml's/stack.yml's separate
+    go-workers opt-in overlay concept for the Celery-vs-Go authority split:
+    the Go fleet is folded in as the unconditional base now, so
+    EXPECTED_WORKER_GROUPS is baked into the base `api` service directly
+    (matching root compose.yml's own CHAOS-3088 fold), not staged behind a
+    separate overlay file. `compose.go-workers.yml`/`stack.go-workers.yml`
+    still exist as independently-maintained reference copies (unaffected by
+    this ticket) and are checked on their own terms elsewhere in this file.
     """
-    base_compose_api = _load_yaml(_PRODUCTION_COMPOSE)["services"]["api"]
-    assert "EXPECTED_WORKER_GROUPS" not in (base_compose_api.get("environment") or {})
-    overlay_compose_api = _load_yaml(_GO_COMPOSE)["services"]["api"]
+    compose_api = _load_yaml(_PRODUCTION_COMPOSE)["services"]["api"]
     assert (
         _compose_variable_default(
-            overlay_compose_api["environment"]["EXPECTED_WORKER_GROUPS"],
+            compose_api["environment"]["EXPECTED_WORKER_GROUPS"],
             "EXPECTED_WORKER_GROUPS",
         )
         == _EXPECTED_WORKER_GROUPS_VALUE
     )
 
-    base_swarm_api = _load_yaml(_SWARM_STACK)["services"]["api"]
-    assert "EXPECTED_WORKER_GROUPS" not in (base_swarm_api.get("environment") or {})
-    overlay_swarm_api = _load_yaml(_GO_SWARM)["services"]["api"]
+    swarm_api = _load_yaml(_SWARM_STACK)["services"]["api"]
     assert (
         _compose_variable_default(
-            overlay_swarm_api["environment"]["EXPECTED_WORKER_GROUPS"],
+            swarm_api["environment"]["EXPECTED_WORKER_GROUPS"],
             "EXPECTED_WORKER_GROUPS",
         )
         == _EXPECTED_WORKER_GROUPS_VALUE
@@ -1793,14 +1795,13 @@ def test_compose_metrics_api_service_has_its_own_resource_limits() -> None:
 
 
 @pytest.mark.skipif(shutil.which("docker") is None, reason="docker is not installed")
-def test_compose_metrics_api_is_absent_without_the_go_workers_profile() -> None:
-    """CHAOS-4351 codex review (PR #1938, P2) falsifier: before this fix,
-    `metrics-api` started unconditionally on a bare `docker compose up`,
-    even in a Celery-only deployment where nothing ever calls it -- a
-    second full API process idling for no reason on every default stack.
-    It must now be gated behind the same `go-workers` profile as
-    `go-worker-heavy` itself, so a plain `docker compose config`/`up` with
-    no `--profile` flag never even sees it.
+def test_compose_metrics_api_is_present_without_any_profile() -> None:
+    """CHAOS-5589: the Go/River fleet is compose.production.yml's
+    unconditional default now (no Celery baseline left to idle it against),
+    and `go-worker-heavy` depends_on `metrics-api` being healthy
+    unconditionally -- so `metrics-api` must start on a plain
+    `docker compose config`/`up` with no `--profile` flag, the opposite of
+    the pre-CHAOS-5589 CHAOS-4351 contract this test used to pin.
     """
     result = subprocess.run(
         ["docker", "compose", "-f", str(_PRODUCTION_COMPOSE), "config"],
@@ -1810,7 +1811,7 @@ def test_compose_metrics_api_is_absent_without_the_go_workers_profile() -> None:
         env={**_COMPOSE_MERGE_REQUIRED_ENV, "PATH": os.environ["PATH"]},
     )
     merged = yaml.safe_load(result.stdout)
-    assert "metrics-api" not in merged["services"]
+    assert "metrics-api" in merged["services"]
 
 
 @pytest.mark.skipif(shutil.which("docker") is None, reason="docker is not installed")

@@ -32,7 +32,7 @@ Schema migrations run as a one-shot `migrate` service
 
 Swarm has **no** `depends_on` ordering: on first deploy (and after every image
 update) you MUST verify the migrate service completed successfully before
-relying on the stack — api/worker will not create the schema for you:
+relying on the stack — api/the Go workers will not create the schema for you:
 
 ```bash
 # Wait for the one-shot task to finish, then check it exited 0
@@ -56,14 +56,14 @@ Notes:
 
 ```bash
 docker service scale dev-health_api=4
-docker service scale dev-health_worker=4
+docker service scale dev-health_go-worker-sync=4
 ```
 
 ## Viewing Logs
 
 ```bash
 docker service logs -f dev-health_api
-docker service logs -f dev-health_worker
+docker service logs -f dev-health_go-worker-sync
 ```
 
 ## Updating the Stack
@@ -72,23 +72,23 @@ docker service logs -f dev-health_worker
 docker stack deploy -c stack.yml dev-health
 ```
 
-## Additive Go/River topology (CHAOS-3052)
+## Go/River topology (CHAOS-5589)
 
-The Go topology is a separate, zero-replica overlay. It preserves the Celery,
-Beat, and Valkey DB 0 services in `stack.yml` and must be deployed explicitly:
+`stack.yml` folds the Go/River worker fleet in directly as its unconditional
+default -- there is no separate overlay to deploy, and no Celery/Beat/Valkey
+DB 0 service left in this file (CHAOS-5589 deleted them outright: R146,
+Celery transport is not a rollback target). `docker stack deploy -c
+stack.yml dev-health` above already starts every `go-worker-*`/`go-reconciler`/
+`go-scheduler`/`go-stream-*` service at its default replica count.
+`deploy/docker-swarm/stack.go-workers.yml` still exists as an independently
+maintained reference copy of the same service definitions, not something you
+also need to pass to `-c`.
 
-```bash
-docker stack deploy -c stack.yml -c stack.go-workers.yml dev-health
-docker service scale dev-health_go-worker-heavy=1
-docker service ps dev-health_go-worker-heavy
-```
-
-The overlay uses non-root/read-only tasks, explicit resource budgets, and
+Tasks are non-root/read-only, with explicit resource budgets and
 start-first/rollback rolling updates. Swarm does not have an HPA: use
 `worker_jobs_available`, `worker_job_oldest_age_seconds`, and
 `worker_execution_saturation_ratio` from the Go `/metrics` endpoint as the
-manual scale signals. Do not scale Celery/Beat to zero until the Go-only gate
-in `../go-workers/README.md` is satisfied.
+manual scale signals.
 
 ## Removing the Stack
 

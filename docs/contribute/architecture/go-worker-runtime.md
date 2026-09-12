@@ -9,7 +9,6 @@ source_of_truth:
   - internal/storage/river/migrate.go (authoritative grants)
   - internal/storage/postgres/domain_authorization.go (role postures)
   - internal/platform/config/config.go (WorkerGroup contract)
-  - deploy/docker-compose/compose.production.yml and deploy/docker-swarm/stack.yml (dormant Celery -Q service definitions)
   - contracts/jobs/v1/migration-state.json (per-kind rollout state/route/rollback_route)
   - internal/syncdispatchruntime/ (native dispatch_sync_run/finalize_sync_run/reference_discovery)
   - internal/scheduler/sync/materializer.go (native scheduled-sync materialization)
@@ -1058,11 +1057,11 @@ in a tracked service file. Do not document any third.
 The Go fleet serves **10** River queues, listed in the process table above.
 The Celery fleet declared **23** — Redis lists, not PostgreSQL rows, a
 different transport entirely. **Every Python celery worker service has been
-stopped in production since 2026-08-19** (CHAOS-4026); the definitions below
-survive only in `deploy/docker-compose/compose.production.yml`/
-`deploy/docker-swarm/stack.yml` as dormant/historical service definitions
-(root `compose.yml`'s copy was deleted outright by CHAOS-5589 -- R146:
-Celery transport is not a rollback target), kept for the
+stopped in production since 2026-08-19** (CHAOS-4026), and CHAOS-5589
+deleted the service definitions outright from every compose surface
+(`compose.yml`, `compose.production.yml`, `docker-swarm/stack.yml` -- R146:
+Celery transport is not a rollback target). The table below is now a purely
+curated historical record (see the next section), kept for the
 `route`/`rollback_route` values still recorded per kind in
 `contracts/jobs/v1/migration-state.json`. Nothing in this section describes a
 currently-running Celery consumer. The Go/River plane is the live system.
@@ -1123,17 +1122,15 @@ what *should* run is `IntegrationDataset.is_enabled`; where it *can* run is
 manifest), `contracts/jobs/v1/registry.json` (kind → queue, timeout,
 attempts), and `contracts/jobs/v1/migration-state.json` (per-kind rollout
 `state`/`route`/`rollback_route` — the actual authority on whether a given
-*kind*, not just its queue, has cleared canary) are the live producers;
-`deploy/docker-compose/compose.production.yml`'s dormant `-Q` service
-definitions are the historical Celery producer (root `compose.yml`'s copy
-was deleted outright by CHAOS-5589; production's is the sole surviving
-source now). The table below is rendered by `scripts/gen_queue_mapping_docs.py`
-from those files; the only hand-curated part is the Celery-queue-to-Go-successor
-correspondence itself (cited inline), because that correspondence predates
-any single machine-readable file and isn't otherwise derivable. The
-generator asserts every Go process, every registered kind, and every Celery
-`-Q` queue name it finds is accounted for, and fails the build rather than
-silently dropping or mislabeling a row when a producer changes. `docs:check-fast` /
+*kind*, not just its queue, has cleared canary) are the live producers. The
+Celery side of the table is now a purely hand-curated historical record
+(`CELERY_CORRESPONDENCE`, cited inline): CHAOS-5589 deleted the Celery `-Q`
+service definitions outright from every compose surface, so there is no
+longer a producer file to derive or cross-check it against. The table below
+is rendered by `scripts/gen_queue_mapping_docs.py`; the generator still
+asserts every Go process and every registered kind is accounted for, and
+fails the build rather than silently dropping or mislabeling a row when a
+producer changes. `docs:check-fast` /
 `tests/docs/test_queue_mapping_drift.py` fail if this block is stale — run
 `python scripts/gen_queue_mapping_docs.py` and commit the result after
 changing any of the source files.

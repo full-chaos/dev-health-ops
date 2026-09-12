@@ -242,24 +242,6 @@ def _command_string(service: dict) -> str:
     return _container_command_string(service)
 
 
-def _is_beat_service(name: str, service: dict) -> bool:
-    command = _command_string(service).split()
-    return name == "beat" or ("celery" in command and "beat" in command)
-
-
-def _assert_compose_beat_singleton(path: Path) -> None:
-    services = _load_yaml(path).get("services") or {}
-    beat_services = [
-        (name, service)
-        for name, service in services.items()
-        if _is_beat_service(name, service)
-    ]
-    assert len(beat_services) == 1, f"{path.name} must define exactly one beat service"
-    for name, service in beat_services:
-        replicas = (service.get("deploy") or {}).get("replicas")
-        assert replicas in (None, 1), f"{path.name}:{name} must not exceed 1 replica"
-
-
 def test_platform_go_worker_drain_contract_matches_groups() -> None:
     compose_path = _platform_go_compose_path()
     if compose_path is None:
@@ -296,7 +278,7 @@ def test_production_compose_has_one_shot_migrate_service() -> None:
 
 def test_production_compose_app_services_gate_on_migrate() -> None:
     services = _load_yaml(_PROD_COMPOSE)["services"]
-    for name in ("api", "metrics-api", "billing-edge", "worker", "beat"):
+    for name in ("api", "metrics-api", "billing-edge"):
         deps = services[name].get("depends_on") or {}
         assert (
             deps.get("migrate", {}).get("condition") == "service_completed_successfully"
@@ -305,7 +287,7 @@ def test_production_compose_app_services_gate_on_migrate() -> None:
 
 def test_production_compose_disables_ambient_migrations() -> None:
     services = _load_yaml(_PROD_COMPOSE)["services"]
-    for name in ("api", "metrics-api", "worker", "beat"):
+    for name in ("api", "metrics-api"):
         env = services[name].get("environment") or {}
         assert env.get("AUTO_RUN_MIGRATIONS") == "false", (
             f"{name} must set AUTO_RUN_MIGRATIONS=false — schema is applied by "
@@ -814,7 +796,7 @@ def test_swarm_stack_has_migrate_service_and_disables_ambient_migrations() -> No
     assert restart == "none", "swarm migrate must be one-shot (restart: none)"
     entrypoint = " ".join(str(p) for p in migrate["entrypoint"])
     assert "dev-hops migrate clickhouse" in entrypoint
-    for name in ("api", "worker"):
+    for name in ("api",):
         env = services[name].get("environment") or {}
         assert env.get("AUTO_RUN_MIGRATIONS") == "false"
 
@@ -986,24 +968,6 @@ def test_helm_chart_runs_migrations_as_pre_upgrade_hook() -> None:
     assert values["migrations"]["hook"]["localBundledPostgres"] is False
 
 
-def test_deploy_stacks_keep_celery_beat_singleton() -> None:
-    """Compose-only: the archived Celery Beat service must stay a singleton
-    on every deploy target that still checks one in. CHAOS-4195 deleted the
-    Kubernetes (beat.yaml) and Helm (beat-deployment.yaml) equivalents this
-    test used to also assert on -- their Go successor is the `scheduler`
-    goWorkers group (`kubernetes/go-workers.yaml`'s dev-health-go-scheduler
-    Deployment), which is a singleton by operational convention ("Run exactly
-    one active production scheduler", docs/operate/configure/
-    workers-and-schedules.md) rather than a machine-checked replica pin --
-    CHAOS-5541: like every group it now deploys at replicas: 1 by default
-    (deployment.json's go_default posture), still with no static "always
-    exactly 1" invariant machine-checked here. CHAOS-5589 deleted root
-    compose.yml's celery-legacy fleet outright (R146: not a rollback
-    target), so it no longer checks one in."""
-    for stack in (_PROD_COMPOSE, _SWARM_STACK):
-        _assert_compose_beat_singleton(stack)
-
-
 def test_celery_worker_prefetch_multiplier_is_one() -> None:
     """CHAOS-2277: long-running tasks (sync, stream consumers) + default
     prefetch (4) let reserved slow-queue messages fill the QoS window and
@@ -1027,27 +991,6 @@ def test_celery_worker_prefetch_is_disabled_for_redis() -> None:
 # with this cleanup (Go's stream-ingest process now natively consumes both
 # streams; there is no Python beat-tick cadence left to bound). See
 # tests/workers/test_celery_dead_code_contract.py.
-
-
-def test_worker_commands_disable_prefetch_for_redis() -> None:
-    """Compose-only: `--disable-prefetch` is a Celery/Redis QoS flag
-    (CHAOS-2277). CHAOS-4195 deleted the Kubernetes (worker.yaml) and Helm
-    (worker-deployment.yaml/worker-pools.yaml) equivalents this test used to
-    also assert on -- the Go worker's River client has no prefetch concept to
-    disable, so there is nothing there for this flag to apply to. CHAOS-5589
-    deleted root compose.yml's celery-legacy fleet (R146: not a rollback
-    target), so only the production/swarm Celery stacks remain in scope."""
-    for path in (_PROD_COMPOSE, _SWARM_STACK):
-        services = _load_yaml(path).get("services") or {}
-        worker_commands = [
-            _command_string(service).split()
-            for service in services.values()
-            if "worker" in _command_string(service).split()
-        ]
-
-        assert worker_commands
-        for command in worker_commands:
-            assert "--disable-prefetch" in command
 
 
 def test_platform_compose_workers_and_beat_import_mounted_source() -> None:
@@ -1195,85 +1138,19 @@ def test_platform_compose_runs_the_go_scheduler_without_a_profile() -> None:
     assert "beat" not in services
 
 
-def test_compose_workers_override_runner_entrypoint() -> None:
-    for path in (_PROD_COMPOSE, _SWARM_STACK):
-        services = _load_yaml(path).get("services") or {}
-        for service_name in ("worker", "worker-ingest", "worker-heavy", "beat"):
-            service = services[service_name]
-            assert service["entrypoint"] == ["celery"]
-            command = _stringify_command(service["command"])
-            assert command.split()[0] != "celery"
-            assert "dev_health_ops.workers.celery_app" in command
-
-
 def test_production_workers_use_semantic_postgres_uri() -> None:
+    """CHAOS-5589 deleted the Celery worker/worker-ingest/worker-heavy
+    services from both stacks -- only `api` still carries this literal
+    `postgresql+asyncpg://` shape; the Go fleet's POSTGRES_URI is an
+    operator-supplied pass-through, not a string this test can assert a
+    prefix on (see the x-go-worker-env-base anchor in each file)."""
     for path in (_PROD_COMPOSE, _SWARM_STACK):
         services = _load_yaml(path).get("services") or {}
-        for service_name in ("api", "worker", "worker-ingest", "worker-heavy"):
+        for service_name in ("api",):
             environment = services[service_name]["environment"]
             assert environment["POSTGRES_URI"].startswith("postgresql+asyncpg://")
             assert environment["DATABASE_URI"].startswith("postgresql+asyncpg://")
             assert environment["CLICKHOUSE_URI"].startswith("clickhouse://")
-
-
-def test_production_stacks_consume_monitoring_queue() -> None:
-    """The monitor-queue-depths beat entry enqueues to `monitoring`
-    unconditionally — every production Celery stack's worker must consume it
-    or telemetry tasks accumulate unconsumed forever (1,440/day). Celery-only:
-    CHAOS-4195 deleted the Kubernetes (worker.yaml) and Helm (values.yaml
-    worker pools) equivalents this test used to also cover -- the Go
-    successors don't use Celery's `-Q`/`queues:` queue-list shape or a
-    literal `monitoring` queue name at all, so there's nothing there for this
-    regex-based check to match against."""
-    import re
-
-    stacks = [
-        _PROD_COMPOSE,
-        _REPO_ROOT / "deploy" / "docker-swarm" / "stack.yml",
-    ]
-    for stack in stacks:
-        text = stack.read_text(encoding="utf-8")
-        queue_lists = re.findall(r"(?:- |queues: \")(default,[a-z.,]+)", text)
-        assert any("monitoring" in q for q in queue_lists), (
-            f"{stack.name}: no worker queue list includes 'monitoring'"
-        )
-
-
-def _compose_worker_queues(path: Path) -> set[str]:
-    """Union of -Q lists across every celery worker service in a compose file."""
-    data = _load_yaml(path)
-    consumed: set[str] = set()
-    for _name, service in (data.get("services") or {}).items():
-        cmd = _command_string(service)
-        toks = cmd.split()
-        if "celery" not in toks or "worker" not in toks:
-            continue
-        consumed |= _parse_queues(cmd)
-    return consumed
-
-
-def test_production_stacks_cover_every_celery_queue() -> None:
-    """CHAOS-2308: every production Celery deploy stack must consume every
-    queue in workers.config.task_queues across the union of its worker pools.
-    A queue declared in task_queues but consumed by no prod worker silently
-    accumulates forever (backfill jobs, webhook events, ingest, reports,
-    cost-class sync). Mirrors test_compose_workers_cover_every_celery_queue
-    for the prod stacks. Celery-only: CHAOS-4195 deleted the Kubernetes
-    (worker.yaml) and Helm (values.yaml worker pools) coverage this test used
-    to also assert, along with the now-unused `_k8s_worker_queues`/
-    `_helm_worker_queues` helpers -- the Go successors don't route through
-    Celery queue names."""
-    all_queues = set(task_queues)
-    coverage = {
-        "compose.production.yml": _compose_worker_queues(_PROD_COMPOSE),
-        "docker-swarm/stack.yml": _compose_worker_queues(_SWARM_STACK),
-    }
-    for name, consumed in coverage.items():
-        missing = all_queues - consumed
-        assert not missing, (
-            f"{name}: production worker pools miss queues {sorted(missing)} "
-            f"declared in workers.config.task_queues (consumed: {sorted(consumed)})"
-        )
 
 
 # ---------------------------------------------------------------------------

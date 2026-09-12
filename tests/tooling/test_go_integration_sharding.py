@@ -2862,6 +2862,12 @@ _IMAGE_PULLING_ACTION_DEBT = {
     ("docker-images.yml", "merge", "docker/setup-buildx-action"),
     ("docker-images.yml", "go-build", "docker/setup-buildx-action"),
     ("docker-images.yml", "go-merge", "docker/setup-buildx-action"),
+    # CHAOS-5608: query-api-build/query-api-merge mirror go-build/go-merge's
+    # exact shape (build-push-by-digest, then merge the per-platform
+    # digests into one manifest list) for the one dev-health-query-api
+    # image -- same buildx-driver tradeoff as those two, not a new one.
+    ("docker-images.yml", "query-api-build", "docker/setup-buildx-action"),
+    ("docker-images.yml", "query-api-merge", "docker/setup-buildx-action"),
     # CHAOS-4947: fan-in-latest applies moving tags via `docker buildx
     # imagetools create`, which -- like merge/go-merge above -- needs the
     # docker-container buildx driver, not the default one.

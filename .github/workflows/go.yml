@@ -727,8 +727,12 @@ jobs:
   # tag anyone deploys from, no push, no families/fan-in change) --
   # ruled: a build-verification check, not a new published image. Native
   # arch only (this catches a broken import graph regardless of target
-  # platform; a real publish job, if one is ever wanted, is a separate
-  # decision). Same plain `docker build`/no-buildx-setup shape as
+  # platform). CHAOS-5608 later added the real publish job -- multi-arch,
+  # tagged and pushed to ghcr.io/full-chaos/dev-health-query-api -- as
+  # query-api-build/query-api-merge in docker-images.yml, alongside the
+  # other Go service images; this job is unchanged and keeps doing native-
+  # arch PR-time build verification only. Same plain `docker build`/
+  # no-buildx-setup shape as
   # go-container-security above -- NOT `docker/setup-buildx-action`: that
   # action pulls moby/buildkit straight from Docker Hub before any login
   # step runs (tests/tooling/test_go_integration_sharding.py's image-pull

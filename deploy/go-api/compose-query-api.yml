@@ -40,6 +40,13 @@
 # in sync with it.
 services:
   query-api:
+    # CHAOS-5608: docker-images.yml's query-api-build/query-api-merge jobs
+    # now publish this image (multi-arch, sha-/main/latest tags) to
+    # ghcr.io/full-chaos/dev-health-query-api on every merge to main -- same
+    # `image:`-pins-but-`build:`-still-works shape compose.yml's go-worker
+    # services already use, so `DEV_HEALTH_QUERY_API_IMAGE` can pin a
+    # published tag/digest, or `--build` still builds this tree locally.
+    image: ${DEV_HEALTH_QUERY_API_IMAGE:-ghcr.io/full-chaos/dev-health-query-api:local}
     build:
       context: ${DEV_HEALTH_OPS_ROOT:-./ops}
       dockerfile: docker/query-api.Dockerfile

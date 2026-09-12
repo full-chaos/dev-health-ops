@@ -680,7 +680,7 @@ def _run_latest_tag_step(
     `source_tag_scenario` (`"absent"` or `"unknown"`) scripts the
     source-tag probe itself to FAIL that way instead of always finding
     its ref -- every family shares one `short_sha`, so this affects all
-    nine identically and none of them reach the :latest check at all
+    ten identically and none of them reach the :latest check at all
     (the loop `continue`s before it). Returns (recorded `imagetools
     create` invocations, whether `git log` was called, whether `git
     merge-base --is-ancestor` was called, captured stdout, the script's
@@ -804,7 +804,7 @@ def test_latest_check_behaviourally_bootstraps_only_on_confirmed_absence() -> No
     )
 
     # codex round 5, P2: every family shares this scenario uniformly (no
-    # source_tag_scenario override), so all nine hit `:latest` UNKNOWN --
+    # source_tag_scenario override), so all ten hit `:latest` UNKNOWN --
     # which is now the exact trigger for the post-loop
     # tags_moved_count==0/any_unknown_count>0 job failure (see
     # test_latest_check_all_unknown_fails_the_job below for the dedicated
@@ -819,7 +819,7 @@ def test_latest_check_behaviourally_bootstraps_only_on_confirmed_absence() -> No
         unknown_rc,
     ) = _run_latest_tag_step("unknown", assert_success=False)
     assert unknown_rc != 0, (
-        "all nine families hitting :latest UNKNOWN should now fail the "
+        "all ten families hitting :latest UNKNOWN should now fail the "
         f"step (post-loop tags_moved_count/any_unknown_count check), got "
         f"returncode={unknown_rc}"
     )
@@ -846,14 +846,14 @@ def test_latest_check_behaviourally_bootstraps_only_on_confirmed_absence() -> No
     # the guard and confirming this specific assertion goes red while
     # the create-count assertion alone stays green.
     # codex round 5, P2: same uniform-scenario shape as "unknown" above --
-    # all nine families hit the empty-read case, which is now ALSO an
+    # all ten families hit the empty-read case, which is now ALSO an
     # any_unknown_count trigger (its own comment in the workflow already
     # says "treating as unknown"), so this scenario fails the step too.
     empty_record, empty_log_called, empty_mb_called, empty_stdout, empty_rc = (
         _run_latest_tag_step("empty_success", assert_success=False)
     )
     assert empty_rc != 0, (
-        "all nine families hitting the rc==0-yet-empty :latest read should "
+        "all ten families hitting the rc==0-yet-empty :latest read should "
         f"now fail the step, got returncode={empty_rc}"
     )
     assert empty_record == "", (
@@ -1036,7 +1036,7 @@ def test_source_tag_check_distinguishes_confirmed_absent_from_unknown() -> None:
     Runs the real script with $SOURCE_TAG_SCENARIO scripting the
     source-tag probe itself (not :latest, which these two cases never
     even reach). Both must decline before the :latest check -- no
-    `imagetools create` for any of the nine families, which all share one
+    `imagetools create` for any of the ten families, which all share one
     `short_sha` and so all hit the same scripted outcome -- and neither
     reaches the digest-walk or merge-base checks (git untouched). The
     OBSERVABLE that actually distinguishes them is stdout: rc==1 is a
@@ -1088,7 +1088,7 @@ def test_source_tag_check_distinguishes_confirmed_absent_from_unknown() -> None:
         )
     )
     assert unknown_rc != 0, (
-        "all nine families hitting source_rc==2 should now fail the step "
+        "all ten families hitting source_rc==2 should now fail the step "
         f"(post-loop source_unknown_count==family_total check), got "
         f"returncode={unknown_rc}"
     )
@@ -1124,8 +1124,8 @@ def test_source_tag_check_distinguishes_confirmed_absent_from_unknown() -> None:
 def test_source_tag_all_unknown_fails_the_job_instead_of_a_silent_noop() -> None:
     """codex round 3, P2 (reproduced live): every family shares ONE
     `short_sha`, so an UNKNOWN source-tag registry error is never a
-    per-family gap -- it hits all nine simultaneously. Before this row's
-    fix, that produced nine `::error::` annotations, an EMPTY create
+    per-family gap -- it hits all ten simultaneously. Before this row's
+    fix, that produced ten `::error::` annotations, an EMPTY create
     record (no tags moved for anyone), and a ZERO-EXIT step: a full
     publish no-op that reads as a green job unless someone actually reads
     the log for the annotations. docker-images.yml now fails the step
@@ -1136,7 +1136,7 @@ def test_source_tag_all_unknown_fails_the_job_instead_of_a_silent_noop() -> None
     fails_the_job below for that scenario specifically).
 
     Negative control: `test_source_tag_check_distinguishes_confirmed_absent_from_unknown`'s
-    own "absent" call (all nine hit source_rc==1, not 2) uses the
+    own "absent" call (all ten hit source_rc==1, not 2) uses the
     DEFAULT `assert_success=True` and passes -- proving this check is
     keyed on "nothing found," not "every family declined for any reason"
     (an all-CONFIRMED-ABSENT run, e.g. a fresh org with nothing published
@@ -1158,7 +1158,7 @@ def test_source_tag_all_unknown_fails_the_job_instead_of_a_silent_noop() -> None
         "merge-base ancestry check instead of failing immediately after "
         "the per-family loop"
     )
-    assert "0 of 9 families had a moving tag applied this run" in stdout, (
+    assert "0 of 10 families had a moving tag applied this run" in stdout, (
         "expected the job-level failure annotation naming the "
         f"moved/ambiguous counts, got stdout:\n{stdout}"
     )
@@ -1167,10 +1167,10 @@ def test_source_tag_all_unknown_fails_the_job_instead_of_a_silent_noop() -> None
 def test_source_tag_mixed_unknown_and_absent_still_fails_the_job() -> None:
     """codex round 4, P2 (reproduced): the round-3 fix only fired when
     EVERY family's source-tag read was UNKNOWN (source_unknown_count ==
-    family_total). A MIXED run -- 8 families UNKNOWN, 1 CONFIRMED ABSENT,
+    family_total). A MIXED run -- 9 families UNKNOWN, 1 CONFIRMED ABSENT,
     zero families actually FOUND -- reached this exact silent-no-op shape
     too, because the round-3 equality test never matches when even one
-    family declines via "absent" instead of "unknown": 8 != 9. Reviewer's
+    family declines via "absent" instead of "unknown": 9 != 10. Reviewer's
     own repro (matching the scenario here almost exactly, one family --
     dev-health-go-migrate -- forced to "not found" via a docker-shim
     monkeypatch) recorded rc=0, zero creates, no job-level annotation.
@@ -1182,7 +1182,7 @@ def test_source_tag_mixed_unknown_and_absent_still_fails_the_job() -> None:
     this row goes RED against the round-3-only check (`source_unknown_
     count == family_total`, reverted from the round-4 `source_present_
     count == 0 and source_unknown_count > 0` form) before trusting it:
-    8 != 9, so the reverted check never fires and the run exits 0."""
+    9 != 10, so the reverted check never fires and the run exits 0."""
     record, log_called, mb_called, stdout, returncode = _run_latest_tag_step(
         "labelled",
         source_tag_scenario="unknown",
@@ -1202,7 +1202,7 @@ def test_source_tag_mixed_unknown_and_absent_still_fails_the_job() -> None:
         "merge-base ancestry check instead of failing immediately after "
         "the per-family loop"
     )
-    assert "0 of 9 families had a moving tag applied this run" in stdout, (
+    assert "0 of 10 families had a moving tag applied this run" in stdout, (
         "expected the job-level failure annotation naming the "
         f"moved/ambiguous counts, got stdout:\n{stdout}"
     )
@@ -1214,7 +1214,7 @@ def test_source_tag_mixed_unknown_and_absent_still_fails_the_job() -> None:
 
 def test_latest_check_all_unknown_fails_the_job() -> None:
     """codex round 5, P2 (reproduced): the round-3/round-4 no-op guard
-    only counted source-tag-stage ambiguity. An all-nine-source-PRESENT
+    only counted source-tag-stage ambiguity. An all-ten-source-PRESENT
     run where every `:latest` read is then UNKNOWN reaches the identical
     silent no-op shape one stage later -- zero `imagetools create` calls,
     rc=0 -- because the source-tag-only check never looks at the
@@ -1229,8 +1229,8 @@ def test_latest_check_all_unknown_fails_the_job() -> None:
     job_instead_of_a_silent_noop` already covers.
 
     Every family shares one `short_sha` for the source-tag probe (default
-    "always found"), so all nine reach `:latest`; `scenario="unknown"`
-    then answers UNKNOWN for all nine uniformly. Verified this row goes
+    "always found"), so all ten reach `:latest`; `scenario="unknown"`
+    then answers UNKNOWN for all ten uniformly. Verified this row goes
     RED against the round-4-only condition (`source_present_count==0 and
     source_unknown_count>0`, reverted from the round-5 `tags_moved_count`/
     `any_unknown_count` form) before trusting it: source_present_count=9
@@ -1251,7 +1251,7 @@ def test_latest_check_all_unknown_fails_the_job() -> None:
         "merge-base ancestry check instead of failing immediately after "
         "the per-family loop"
     )
-    assert "0 of 9 families had a moving tag applied this run" in stdout, (
+    assert "0 of 10 families had a moving tag applied this run" in stdout, (
         "expected the job-level failure annotation naming the "
         f"moved/ambiguous counts, got stdout:\n{stdout}"
     )
@@ -1271,7 +1271,7 @@ def test_latest_check_all_families_digest_walk_exhausted_fails_the_job() -> None
 
     Every family shares the same $SCENARIO ("unlabelled") and the
     default empty git-log history (no digest_walk_candidates), so the
-    digest walk finds nothing for any of the nine. Verified this row
+    digest walk finds nothing for any of the ten. Verified this row
     goes RED against the pre-fix code (the digest-walk `else` branch
     with no any_unknown_count increment) before trusting it: rc=0
     there, with an unchanged record/log/merge-base shape."""
@@ -1279,7 +1279,7 @@ def test_latest_check_all_families_digest_walk_exhausted_fails_the_job() -> None
         "unlabelled", assert_success=False
     )
     assert returncode == 1, (
-        f"expected the all-nine digest-walk-exhausted scenario to exit "
+        f"expected the all-ten digest-walk-exhausted scenario to exit "
         f"1, got returncode={returncode}, stdout:\n{stdout}"
     )
     assert record == "", (
@@ -1290,7 +1290,7 @@ def test_latest_check_all_families_digest_walk_exhausted_fails_the_job() -> None
         f"log) but never the merge-base ancestry check -- got "
         f"log_called={log_called}, merge_base_called={mb_called}"
     )
-    assert "0 of 9 families had a moving tag applied this run" in stdout, (
+    assert "0 of 10 families had a moving tag applied this run" in stdout, (
         "expected the job-level failure annotation naming the "
         f"moved/ambiguous counts, got stdout:\n{stdout}"
     )
@@ -1307,7 +1307,7 @@ def test_latest_check_all_families_disagree_fails_the_job() -> None:
     fix, an org where every family hit this state no-op'd silently
     forever: zero `imagetools create` calls, rc=0, no job-level signal.
 
-    Every family shares the same $SCENARIO ("disagree"), so all nine
+    Every family shares the same $SCENARIO ("disagree"), so all ten
     decline on the platform-label mismatch and never reach the
     digest-walk fallback or the merge-base check. Verified this row
     goes RED against the pre-fix code (the `amd64_rev != arm64_rev`
@@ -1317,7 +1317,7 @@ def test_latest_check_all_families_disagree_fails_the_job() -> None:
         "disagree", assert_success=False
     )
     assert returncode == 1, (
-        f"expected the all-nine platform-label-disagree scenario to "
+        f"expected the all-ten platform-label-disagree scenario to "
         f"exit 1, got returncode={returncode}, stdout:\n{stdout}"
     )
     assert record == "", (
@@ -1329,7 +1329,7 @@ def test_latest_check_all_families_disagree_fails_the_job() -> None:
         f"the platform-label mismatch -- log_called={log_called}, "
         f"merge_base_called={mb_called}"
     )
-    assert "0 of 9 families had a moving tag applied this run" in stdout, (
+    assert "0 of 10 families had a moving tag applied this run" in stdout, (
         "expected the job-level failure annotation naming the "
         f"moved/ambiguous counts, got stdout:\n{stdout}"
     )

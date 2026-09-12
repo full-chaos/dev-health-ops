@@ -252,7 +252,7 @@ func TestEveryVariantIsNamed(t *testing.T) {
 	}
 }
 
-// CHAOS-5426 (lane-chord-5426, 2026-09-12, R174): flowMatrix's base
+// CHAOS-5426: flowMatrix's base
 // request sends dimension=WORK_TYPE, the one dimension #2374 left
 // untouched, so it can never prove that fix -- see flowMatrixInvestmentVariant's
 // doc comment. This pins that the TEAM and REPO Variants actually exist,

@@ -108,7 +108,7 @@ type OperationSpec struct {
 	// the single (Variables, Parity) pair above cannot cover more than one
 	// of them.
 	//
-	// CHAOS-5426 (lane-chord-5426, 2026-09-12) is why this exists:
+	// CHAOS-5426 is why this exists:
 	// flowMatrix's own Variables sends dimension=WORK_TYPE, the one
 	// dimension #2374 left untouched, so no proof row built from Variables
 	// alone could ever measure the code path #2374 changed (TEAM/REPO +
@@ -278,7 +278,7 @@ var operationSpecs = map[string]OperationSpec{
 			Reason: "Python omits FINAL on work_item_cycle_times (templates.py:304/:397) where Go has it (flowmatrix.go:732/:802), so Python counts superseded ReplacingMergeTree row versions and its answer converges onto Go's only after a background merge. Go is correct. Evidence: /var/lib/oci-cache/lane-scratch/lane-goapi-parity/5448/repro.txt",
 			Paths:  []string{"data.analytics.flowMatrix.nodes.value", "data.analytics.flowMatrix.edges.value"},
 		}}},
-		// CHAOS-5426 (lane-chord-5426, 2026-09-12, R174): the base request
+		// CHAOS-5426: the base request
 		// above sends dimension=WORK_TYPE, the one dimension CHAOS-5426's
 		// fix (#2374, flowmatrix.go:199-227) left untouched -- so it can
 		// never prove that fix. TEAM and REPO with useInvestment=true are

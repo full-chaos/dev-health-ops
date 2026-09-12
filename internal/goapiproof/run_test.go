@@ -901,7 +901,7 @@ func TestAnHTTPDifferenceCountsOutsideTheCitedBaselineDefect(t *testing.T) {
 	// share the exact vulnerability this test pins, and the fakeEdge
 	// below answers all three identically (it does not vary by request
 	// variables). 3 outcomes/receipts, not 1, since CHAOS-5426
-	// (lane-chord-5426, 2026-09-12): flowMatrix's spec grew Variants.
+	// (CHAOS-5426): flowMatrix's spec grew Variants.
 	baseline := `{"data":{"analytics":{"flowMatrix":{"nodes":[{"value":2}]}}}}`
 	candidate := `{"data":{"analytics":{"flowMatrix":{"nodes":[{"value":1}]}}}}`
 
@@ -969,7 +969,7 @@ func TestACitedMismatchWithNoHTTPDifferenceStaysFullyCited(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	// 3 outcomes (base + TEAM + REPO variants, CHAOS-5426, 2026-09-12):
+	// 3 outcomes (base + TEAM + REPO variants, CHAOS-5426):
 	// the fakeEdge answers all three identically, so the control holds for
 	// every one of them.
 	if len(outcomes) != 3 {
@@ -1017,7 +1017,7 @@ func TestAnUnboundFullyCitedMismatchCannotAuthorizeAnything(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	// 3 outcomes (base + TEAM + REPO variants, CHAOS-5426, 2026-09-12):
+	// 3 outcomes (base + TEAM + REPO variants, CHAOS-5426):
 	// the fakeEdge answers every one of flowMatrix's requests identically,
 	// so all three hit the same unbound-edge hole this test pins.
 	if len(outcomes) != 3 {

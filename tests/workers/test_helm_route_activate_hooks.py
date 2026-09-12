@@ -85,9 +85,15 @@ def _secrets(*sets: str) -> dict[str, dict]:
     }
 
 
+_PINNED_OPERATOR_IMAGE = (
+    "ghcr.io/full-chaos/dev-health-go-operator"
+    "@sha256:a6acfd0b8cc78d4d2fd4160c68ab3f8b69eb282b1c2433117af01c954f576534"
+)
+
 _FULL_CHAIN_ON = (
     "migrations.hook.provisionRoles.enabled=true",
     "migrations.hook.riverMigrate.enabled=true",
+    f"migrations.hook.routeActivate.image={_PINNED_OPERATOR_IMAGE}",
 )
 
 
@@ -270,7 +276,10 @@ def test_route_activate_uses_the_published_operator_image() -> None:
     """`ghcr.io/full-chaos/dev-health-go-operator` is CI-published
     (docker-images.yml's go-merge matrix) -- naming an unpublished image
     fails tests/tooling/test_go_image_publishing.py, the same guard
-    river-migrate's own image default exists to satisfy."""
+    river-migrate's own image default exists to satisfy. There is no
+    floating default any more (the render refuses one -- see the image
+    input-domain tests below), so this pins a real digest of the published
+    repo name through to all four kind containers instead."""
     jobs = _jobs(*_FULL_CHAIN_ON)
     init_containers = {
         c["name"]: c
@@ -278,7 +287,7 @@ def test_route_activate_uses_the_published_operator_image() -> None:
     }
     for kind in _KINDS:
         image = init_containers[f"route-activate-{kind.replace('_', '-')}"]["image"]
-        assert image == "ghcr.io/full-chaos/dev-health-go-operator:latest", image
+        assert image == _PINNED_OPERATOR_IMAGE, image
 
 
 def test_route_activate_operator_image_override_is_honoured() -> None:
@@ -286,10 +295,13 @@ def test_route_activate_operator_image_override_is_honoured() -> None:
     killed): `migrations.hook.routeActivate.image`'s consumer
     (`$operatorImage`) was never exercised with a real override set -- only
     its DEFAULT was pinned above. Pairwise knob x consumer, per the prompt's
-    amendment: set the knob, execute its reader."""
+    amendment: set the knob, execute its reader. The override itself must be
+    pinned (this repo's `sha-<12 hex>` immutable-tag convention here, to
+    prove that form is honoured too, not just a digest) -- a floating tag
+    would now fail the image guard before ever reaching this assertion."""
     jobs = _jobs(
         *_FULL_CHAIN_ON,
-        "migrations.hook.routeActivate.image=ghcr.io/example/custom-operator:v9",
+        "migrations.hook.routeActivate.image=ghcr.io/example/custom-operator:sha-abc123456789",
     )
     init_containers = {
         c["name"]: c
@@ -297,7 +309,7 @@ def test_route_activate_operator_image_override_is_honoured() -> None:
     }
     for kind in _KINDS:
         image = init_containers[f"route-activate-{kind.replace('_', '-')}"]["image"]
-        assert image == "ghcr.io/example/custom-operator:v9", image
+        assert image == "ghcr.io/example/custom-operator:sha-abc123456789", image
 
 
 def test_operator_credential_uses_the_ops_image_that_carries_the_cli() -> None:
@@ -617,6 +629,8 @@ def test_route_activate_without_any_password_secret_fails_the_render() -> None:
             "migrations.hook.provisionRoles.enabled=true",
             "--set",
             "migrations.hook.riverMigrate.enabled=true",
+            "--set",
+            f"migrations.hook.routeActivate.image={_PINNED_OPERATOR_IMAGE}",
             "--set",
             "goWorkers.pgbouncer.secret.create=false",
         ],

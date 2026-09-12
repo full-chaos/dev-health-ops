@@ -63,7 +63,7 @@ resources exist, that guard has already passed. No need to repeat it.
 {{- $postgresHost := include "dev-health.goPgbouncerPostgresHost" . }}
 {{- $postgresPort := include "dev-health.goPgbouncerPostgresPort" . }}
 {{- $postgresDatabase := include "dev-health.goPgbouncerPostgresDatabase" . }}
-{{- $operatorImage := .Values.migrations.hook.routeActivate.image | default "ghcr.io/full-chaos/dev-health-go-operator:latest" }}
+{{- $operatorImage := .Values.migrations.hook.routeActivate.image }}
 {{- /*
 codex review (r2, P2 -- executed): defaulting to .Values.image.pullPolicy
 pulled in a local kind/kiac profile's Never (set for the side-loaded
@@ -73,6 +73,46 @@ goWorkers.imagePullPolicy (values.yaml:218-226): its own dedicated default,
 IfNotPresent, independent of image.pullPolicy.
 */}}
 {{- $operatorPullPolicy := .Values.migrations.hook.routeActivate.pullPolicy | default "IfNotPresent" }}
+{{- /*
+A prior default here ("ghcr.io/.../dev-health-go-operator:latest") let a
+node reuse whatever it already had cached under that floating tag -- an
+operator binary built against an older posture manifest than the database
+the migrate Job (a pinned image) had just migrated to. It exited
+runtime_role_unauthorized with no diagnostics, because the posture mismatch
+looks identical to a real authorization failure. A default that can float
+is not a safe default, so there is none: this now fails closed instead.
+
+Accepted, in order: a digest pin (`repo@sha256:<64 hex>`, with or without a
+tag in front); this repo's other immutable-tag convention
+(`repo:sha-<12 hex>`, see docs/operate/runbooks/operator-commands.md); or
+`repo:local`, ONLY when the resolved pull policy is Never or IfNotPresent --
+the side-loaded local/kind case, where a registry pull would fail outright
+(no registry ever publishes ":local") and the node's own local image is the
+intended target.
+*/}}
+{{- $operatorImageIsDigestPinned := and $operatorImage (contains "@sha256:" $operatorImage) }}
+{{- $operatorImageIsImmutableTag := and $operatorImage (regexMatch "^.+:sha-[0-9a-f]{12}$" $operatorImage) }}
+{{- $operatorImageIsSideloadedLocal := and $operatorImage (regexMatch "^.+:local$" $operatorImage) (or (eq $operatorPullPolicy "Never") (eq $operatorPullPolicy "IfNotPresent")) }}
+{{- if not (or $operatorImageIsDigestPinned $operatorImageIsImmutableTag $operatorImageIsSideloadedLocal) }}
+{{- fail (printf "migrations.hook.routeActivate.image=%q is not pinned. This is the failure class that took down production revision 14: a floating/default operator image ran the node's stale local binary against a database the migrate Job had just migrated, and it exited runtime_role_unauthorized with no diagnostics. Set migrations.hook.routeActivate.image to repo@sha256:<digest> or repo:sha-<12 hex> (pinned to the same commit as image.repository/image.tag); repo:local is accepted only with pullPolicy Never or IfNotPresent." $operatorImage) }}
+{{- end }}
+{{- /*
+Lockstep check: this operator image and the api/migrate image
+(dev-health.image, image.repository/image.tag) must come from the SAME
+commit, since the operator's posture manifest has to match the schema the
+migrate Job just applied -- the exact mismatch that produced
+runtime_role_unauthorized on production revision 14. Only comparable when
+BOTH sides carry this repo's `sha-<12 hex>` immutable-tag convention: a
+sha256 digest does not encode which commit it was built from, so a
+digest-only pin on either side is never compared here -- that would be
+fabricating a mapping this chart cannot verify. Keeping a digest pin in
+lockstep with the api image is the operator's own responsibility.
+*/}}
+{{- $apiImageShaTag := regexFind ":sha-[0-9a-f]{12}$" (include "dev-health.image" .) }}
+{{- $operatorImageShaTag := regexFind ":sha-[0-9a-f]{12}$" $operatorImage }}
+{{- if and $apiImageShaTag $operatorImageShaTag (ne $apiImageShaTag $operatorImageShaTag) }}
+{{- fail (printf "migrations.hook.routeActivate.image (%s) and image.repository/image.tag (%s) are pinned to different commits (%s vs %s) -- the operator's posture manifest must match the database the migrate Job just migrated." $operatorImage (include "dev-health.image" .) $operatorImageShaTag $apiImageShaTag) }}
+{{- end }}
 {{- $routeKinds := list "dispatch_sync_run" "finalize_sync_run" "post_sync" "reference_discovery" }}
 {{- /*
 codex review (r2, P1 -- executed): this Secret was created and read

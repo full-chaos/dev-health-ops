@@ -61,9 +61,15 @@ def _jobs(*sets: str) -> dict[str, dict]:
     }
 
 
+_PINNED_OPERATOR_IMAGE = (
+    "ghcr.io/full-chaos/dev-health-go-operator"
+    "@sha256:a6acfd0b8cc78d4d2fd4160c68ab3f8b69eb282b1c2433117af01c954f576534"
+)
+
 _BOTH_ON = (
     "migrations.hook.provisionRoles.enabled=true",
     "migrations.hook.riverMigrate.enabled=true",
+    f"migrations.hook.routeActivate.image={_PINNED_OPERATOR_IMAGE}",
 )
 
 
@@ -327,6 +333,8 @@ def _values(river_migrate: bool) -> str:
           hook:
             provisionRoles: {{enabled: true}}
             riverMigrate: {{enabled: {str(river_migrate).lower()}}}
+            routeActivate:
+              image: "{_PINNED_OPERATOR_IMAGE}"
             secretData:
               MIGRATION_DATABASE_URI: "{_MIGRATION_DSN}"
               POSTGRES_URI: ""
@@ -779,6 +787,8 @@ def _values_no_dsn(river_migrate: bool) -> str:
           hook:
             provisionRoles: {{enabled: true}}
             riverMigrate: {{enabled: {str(river_migrate).lower()}}}
+            routeActivate:
+              image: "{_PINNED_OPERATOR_IMAGE}"
             secretData:
               MIGRATION_DATABASE_URI: ""
               POSTGRES_URI: "postgresql://alembic:pw@postgres:5432/devhealth"

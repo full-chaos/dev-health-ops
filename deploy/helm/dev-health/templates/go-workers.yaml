@@ -224,8 +224,23 @@ spec:
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
           resources:
             {{- toYaml $group.resources | nindent 12 }}
-          livenessProbe: {httpGet: {path: /healthz, port: metrics}, initialDelaySeconds: 10, periodSeconds: 15}
-          readinessProbe: {httpGet: {path: /readyz, port: metrics}, initialDelaySeconds: 10, periodSeconds: 10}
+          {{- /*
+          A 1s timeoutSeconds (the prior hardcoded default,
+          unset) combined with the reconciler's maxUnavailable: 0 on a
+          singleton deadlocks a rolling update -- both old and new pods can
+          fail a 1s /readyz under load while the process is healthy, so the
+          new pod never becomes Ready and the old one can never terminate.
+          goWorkers.defaultProbes carries the safe shape; a group may still
+          set its own livenessProbe/readinessProbe to override it entirely.
+          */}}
+          {{- with ($group.livenessProbe | default $.Values.goWorkers.defaultProbes.livenessProbe) }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with ($group.readinessProbe | default $.Values.goWorkers.defaultProbes.readinessProbe) }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
 {{- /*
 CHAOS-5594: autoscaling for this group (if enabled) renders as a KEDA
 ScaledObject in go-worker-keda.yaml, not here -- the previous inline

@@ -98,6 +98,17 @@ Do not add a queue to a group unless it is registered. The process rejects an
 empty, unknown, duplicate, malformed, or conflicting selection before
 readiness, and it does not support runtime queue reconfiguration.
 
+Every group's liveness and readiness probes default to
+`goWorkers.defaultProbes` in `values.yaml`: `/healthz` and `/readyz` on the
+`metrics` port, with `timeoutSeconds: 5` and `failureThreshold: 6`. That
+timeout is deliberately generous, not cosmetic: with the old 1s default (the
+Kubernetes default, previously unset) a reconciler-style group running with
+`maxUnavailable: 0` could deadlock its own rolling update — a slow-but-healthy
+`/readyz` response under load fails the probe, so the new pod never becomes
+Ready while the old one, pinned by `maxUnavailable: 0`, can never terminate.
+Set `goWorkers.groups[].livenessProbe` / `.readinessProbe` to override either
+probe for one group only.
+
 Do not treat a healthy container as a route change. Today, "what should run"
 is decided by the sync config (`IntegrationDataset.is_enabled`) and "where
 it's served" is decided by `-Q` topology — the two-plane model ratified in

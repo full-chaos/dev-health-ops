@@ -174,8 +174,17 @@
                   "cooldownPeriod": { "type": "integer", "minimum": 300 },
                   "pollingInterval": { "type": "integer", "minimum": 1 }
                 }
-              }
+              },
+              "livenessProbe": { "type": "object" },
+              "readinessProbe": { "type": "object" }
             }
+          }
+        },
+        "defaultProbes": {
+          "type": "object",
+          "properties": {
+            "livenessProbe": { "type": "object" },
+            "readinessProbe": { "type": "object" }
           }
         }
       }

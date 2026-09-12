@@ -406,6 +406,15 @@ def test_helm_river_workers_select_manifest_queues_and_queue_metrics() -> None:
         assert len(triggers) == 1
         trigger = triggers[0]
         assert trigger["type"] == "postgresql"
+        # CHAOS-5594 prod smoke: keda-operator evaluates this trigger from
+        # the standalone `keda` namespace, not the release namespace -- a
+        # bare Service name does not resolve there ("no such host"). The
+        # host must be the in-cluster FQDN so the scaler can actually reach
+        # the transaction pooler.
+        assert trigger["metadata"]["host"] == (
+            f"{_RELEASE}-dev-health-go-pgbouncer-transaction."
+            f"{scaler['metadata']['namespace']}.svc.cluster.local"
+        )
         query_match = re.search(r"queue IN \(([^)]*)\)", trigger["metadata"]["query"])
         assert query_match is not None, trigger["metadata"]["query"]
         queried_queues = {

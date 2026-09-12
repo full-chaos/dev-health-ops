@@ -400,7 +400,10 @@ read-only role (`devhealth_keda_readonly`) registered as one more
 `goWorkers.pgbouncer.transaction.extraUsers` entry (`go-pgbouncer.yaml`,
 CHAOS-5616's mechanism) -- never a new pooler, never an inline credential:
 the ScaledObject's trigger metadata carries host/port/userName/dbName
-(non-secret), TriggerAuthentication carries only the password.
+(non-secret), TriggerAuthentication carries only the password. The trigger
+`host` is the pooler's namespace-qualified FQDN, not the bare Service name,
+because keda-operator evaluates the trigger from its own standalone `keda`
+namespace, where a bare name does not resolve.
 
 **Why not the old HPA:** the previous `autoscaling/v2` HorizontalPodAutoscaler
 here scaled on External metrics `worker_jobs_available` /

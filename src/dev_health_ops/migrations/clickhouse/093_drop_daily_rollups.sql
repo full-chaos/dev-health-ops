@@ -5,7 +5,7 @@
 -- insert blocks, so the MV recomputes and adds its aggregate again for
 -- every block instead of once per logical row -- the rollups silently
 -- double (or triple, ...) count on any re-sync. No Go or Python code reads
--- these tables; only test fixtures reference them. Rather than rework the
+-- these tables: only test fixtures reference them. Rather than rework the
 -- views to track state with uniqExact, drop the rollups and their views
 -- outright until a reader actually needs them.
 --

@@ -1989,9 +1989,14 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # (each of the sorting key's repo/work-item/team components must
     # actually distinguish two rejections, not just Source) are all
     # in-memory, non-integration tests.
-    assert len(expected_provider_tests) == 1354
+    # CHAOS-5618 added TestDailyRollupsAreDroppedByMigrations
+    # (`-tags=integration`, real ClickHouse -- guards against a silent
+    # re-add of the three dropped per-block daily rollups and their
+    # materialized views): +1 top-level (1354 -> 1355), of which it is
+    # the one integration-tagged addition (154 -> 155).
+    assert len(expected_provider_tests) == 1355
 
-    assert len(expected_integration_tests) == 154
+    assert len(expected_integration_tests) == 155
     assert expected_integration_tests < expected_provider_tests
 
     provider_assignments: dict[int, set[str]] = {}
@@ -2007,7 +2012,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1354
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1355
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -2121,7 +2126,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1354
+    assert len(selected_tests) == len(set(selected_tests)) == 1355
     assert set(selected_tests) == expected_tests
 
 

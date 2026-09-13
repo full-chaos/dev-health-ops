@@ -118,9 +118,68 @@ def _seed_batch_sync(
     session.commit()
 
 
-def test_record_recompute_dispatch_writes_status_scope_and_jobs(
+def test_record_recompute_dispatch_dispatched_routes_native_pending(
     sync_session_maker,
 ) -> None:
+    """CHAOS-5700: a "dispatched" outcome is persisted as recompute_status
+    = 'pending' with dispatched_at/completed_at left NULL -- exactly the
+    row shape the existing native external-ingest recompute drain
+    (internal/externalrecompute, CHAOS-5296) polls
+    external_ingest_batches for. Persisting the literal string
+    "dispatched" here would make the row invisible to that poll."""
+    with sync_session_maker() as session:
+        _seed_batch_sync(session, ingestion_id="ing-1")
+
+        scope = _scope()
+        result = RecomputeDispatchResult(
+            status="dispatched", jobs=(), capped_days=False, capped_repos=False
+        )
+        record_recompute_dispatch(
+            session, org_id=ORG, ingestion_ids=["ing-1"], scope=scope, result=result
+        )
+
+    with sync_session_maker() as session:
+        row = (
+            session.execute(
+                text("SELECT * FROM external_ingest_batches WHERE ingestion_id = :id"),
+                {"id": "ing-1"},
+            )
+            .mappings()
+            .first()
+        )
+        assert row is not None
+        assert row["recompute_status"] == "pending"
+        assert row["recompute_dispatched_at"] is None
+        assert row["recompute_completed_at"] is None
+        assert row["recompute_error"] is None
+        # The persisted scope must decode exactly like the Go stream
+        # runner's own writer shape (internal/streamhandlers/
+        # external_postgres.go's externalStoredScope): repoIds/teamIds/
+        # recordKinds/windowStartedAt/windowEndedAt, no bridgeKind marker
+        # (a bridgeKind would tell the native poll this row was already
+        # claimed).
+        scope_json = json.loads(row["recompute_scope"])
+        assert scope_json["repoIds"] == ["repo-a"]
+        assert scope_json["teamIds"] == []
+        assert scope_json["recordKinds"] == ["pull_request.v1"]
+        assert scope_json["windowStartedAt"] == "2026-06-25T00:00:00+00:00"
+        assert scope_json["windowEndedAt"] == "2026-06-26T00:00:00+00:00"
+        assert "bridgeKind" not in scope_json
+        assert scope_json["cappedDays"] is False
+
+        jobs = session.execute(
+            text("SELECT COUNT(*) FROM external_ingest_recompute_jobs")
+        ).scalar_one()
+        assert jobs == 0
+
+
+def test_record_recompute_dispatch_still_persists_job_rows_when_present(
+    sync_session_maker,
+) -> None:
+    """Defensive coverage: ``result.jobs`` is always empty from
+    ``dispatch_recompute`` post-CHAOS-5700, but the job-row writer itself
+    stays generic (the table is shared with the Go native drain's own
+    bridge-identity rows, see ExternalIngestRecomputeJob's docstring)."""
     with sync_session_maker() as session:
         _seed_batch_sync(session, ingestion_id="ing-1")
 
@@ -157,14 +216,7 @@ def test_record_recompute_dispatch_writes_status_scope_and_jobs(
             .mappings()
             .first()
         )
-        assert row is not None
-        assert row["recompute_status"] == "dispatched"
-        assert row["recompute_dispatched_at"] is not None
-        assert row["recompute_completed_at"] is not None
-        assert row["recompute_error"] is None
-        scope_json = json.loads(row["recompute_scope"])
-        assert scope_json["repoIds"] == ["repo-a"]
-        assert scope_json["cappedDays"] is False
+        assert row["recompute_status"] == "pending"
 
         jobs = (
             session.execute(
@@ -214,7 +266,7 @@ def test_record_recompute_dispatch_covers_all_coalesced_ingestion_ids(
             .all()
         )
         assert len(rows) == 2
-        assert all(r["recompute_status"] == "dispatched" for r in rows)
+        assert all(r["recompute_status"] == "pending" for r in rows)
 
 
 def test_record_recompute_dispatch_failed_status_no_dispatched_at(
@@ -303,7 +355,7 @@ def test_record_recompute_dispatch_persists_job_with_none_task_id(
             .mappings()
             .first()
         )
-        assert row["recompute_status"] == "dispatched"
+        assert row["recompute_status"] == "pending"
 
         job = (
             session.execute(

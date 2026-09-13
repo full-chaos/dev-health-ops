@@ -2,9 +2,15 @@
 
 Given the affected scope accumulated while processing an accepted
 customer-push batch (org, source system/instance, repo ids, team ids,
-record kinds, occurred-at window), decide which existing metric Celery
-tasks to enqueue -- capped fan-out/window, never a full-org recompute by
-default (master-spec CC21).
+record kinds, occurred-at window), decide whether the bounded scope needs
+recomputing -- capped fan-out/window, never a full-org recompute by
+default (master-spec CC21). The actual hand-off is native, not Celery: a
+"dispatched" plan is persisted as a pending recompute scope on the
+batch's own row (``recompute_status.record_recompute_dispatch``), which is
+exactly the row shape the existing native external-ingest recompute drain
+(``internal/externalrecompute``, CHAOS-5296) already polls for the Go
+stream runner's own rows. Routing through that SAME poll -- rather than a
+second compute path -- is what lets this module drop Celery entirely.
 
 ``RecomputeScope`` is internal to this module (decouples from CHAOS-2697/2698
 per the synthesizer reconciliation on brief-2699-recompute.md); the public
@@ -23,8 +29,6 @@ import os
 from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta, timezone
 from typing import Any
-
-from dev_health_ops.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 
@@ -63,10 +67,6 @@ _RECOMPUTE_TRIGGER_KINDS = _GIT_KINDS | _WORK_ITEM_KINDS
 # tests/test_external_ingest_recompute_dispatch.py via a source-text grep,
 # so this comment itself must not name any of those four disqualified
 # task identifiers.
-_RUN_DAILY_METRICS_TASK = "dev_health_ops.workers.tasks.run_daily_metrics"
-_DISPATCH_INVESTMENT_MATERIALIZE_TASK = (
-    "dev_health_ops.workers.tasks.dispatch_investment_materialize_partitioned"
-)
 
 _DEFAULT_DEBOUNCE_SECONDS = 45
 _DEFAULT_MAX_BACKFILL_DAYS = 14
@@ -290,37 +290,16 @@ class RecomputeDispatchResult:
     error: str | None = None
 
 
-def _daily_metrics_kwargs(
-    plan: RecomputePlan, *, repo_id: str | None
-) -> dict[str, Any]:
-    kwargs: dict[str, Any] = {"org_id": plan.org_id}
-    if plan.day is not None:
-        kwargs["day"] = plan.day
-    if plan.backfill_days is not None:
-        kwargs["backfill_days"] = plan.backfill_days
-    if repo_id is not None:
-        kwargs["repo_id"] = repo_id
-    return kwargs
-
-
-def _investment_kwargs(plan: RecomputePlan) -> dict[str, Any]:
-    # D4/D5: never both repo_ids and team_ids empty -- caller only invokes
-    # this when skip_investment_no_scope is False. force=False (same-day
-    # investment freshness best-effort, never forces a full rematerialize).
-    kwargs: dict[str, Any] = {"org_id": plan.org_id, "force": False}
-    if plan.repo_ids:
-        kwargs["repo_ids"] = list(plan.repo_ids)
-    if plan.team_ids:
-        kwargs["team_ids"] = list(plan.team_ids)
-    if plan.from_date is not None:
-        kwargs["from_date"] = plan.from_date
-    if plan.to_date is not None:
-        kwargs["to_date"] = plan.to_date
-    return kwargs
-
-
 def dispatch_recompute(plan: RecomputePlan) -> RecomputeDispatchResult:
-    """Impure: builds and fires Celery signatures per D5/D6.
+    """Classify a bounded plan into a dispatch outcome (D5/D6).
+
+    No Celery, no native call of its own: a ``"dispatched"`` outcome is
+    handed off by the caller (:func:`dispatch_and_persist_scope`, via
+    ``recompute_status.record_recompute_dispatch``) to the existing native
+    external-ingest recompute drain (``internal/externalrecompute``,
+    CHAOS-5296) -- the SAME poll that already turns the Go stream runner's
+    rows into ``metrics.daily_dispatch``/``investment.materialize`` native
+    handoffs, rather than a second compute path re-derived here.
 
     Never raises (D13) -- catches and returns ``status="failed"`` so a
     recompute-dispatch problem can never fail (or retry-loop) the ingestion
@@ -332,80 +311,33 @@ def dispatch_recompute(plan: RecomputePlan) -> RecomputeDispatchResult:
         )
 
     try:
-        jobs: list[RecomputeJobRecord] = []
-
-        if plan.dispatch_daily:
-            if plan.repo_ids:
-                # D5: run_daily_metrics only accepts a single repo_id --
-                # fan out N independent dispatches, one per repo.
-                # run_work_graph_build was chained after this per-repo (CHAOS-4924
-                # deleted the task entirely -- its compute was already a 0-stats
-                # no-op, and the Go worker's own post-sync writer creates
-                # workgraph.build requests independent of this Celery path
-                # anyway; see workers/post_sync_dispatch.py's identical fold).
-                for repo_id in plan.repo_ids:
-                    async_result = celery_app.send_task(
-                        _RUN_DAILY_METRICS_TASK,
-                        kwargs=_daily_metrics_kwargs(plan, repo_id=repo_id),
-                        queue="metrics",
-                    )
-                    jobs.append(
-                        RecomputeJobRecord(
-                            task=_RUN_DAILY_METRICS_TASK,
-                            task_id=async_result.id,
-                            queue="metrics",
-                            repo_id=repo_id,
-                        )
-                    )
-            elif plan.fallback_org_wide_daily:
-                # D8: day-bounded, all-repos fallback for repo-less
-                # work-item batches. run_work_graph_build was deliberately
-                # NOT dispatched here even before CHAOS-4924 (repo_id=None
-                # there means "all repos, 30-day trailing window", ignoring
-                # the tighter batch window -- not useful in this fallback).
-                async_result = celery_app.send_task(
-                    _RUN_DAILY_METRICS_TASK,
-                    kwargs=_daily_metrics_kwargs(plan, repo_id=None),
-                    queue="metrics",
-                )
-                jobs.append(
-                    RecomputeJobRecord(
-                        task=_RUN_DAILY_METRICS_TASK,
-                        task_id=async_result.id,
-                        queue="metrics",
-                        repo_id=None,
-                    )
-                )
-
-        if not plan.skip_investment_no_scope:
-            # D5: dispatch_investment_materialize_partitioned accepts
-            # repo_ids/team_ids lists directly -- called ONCE per flush
-            # with the full capped list, never per repo.
-            async_result = celery_app.send_task(
-                _DISPATCH_INVESTMENT_MATERIALIZE_TASK,
-                kwargs=_investment_kwargs(plan),
-                queue="default",
+        # Mirrors the old fan-out's own "did anything actually get built"
+        # check (D5/D8): daily fires for an explicit repo scope OR the
+        # repo-less work-item fallback; investment fires whenever D4's hard
+        # invariant (never both repo_ids and team_ids empty) is satisfied.
+        daily_will_dispatch = plan.dispatch_daily and (
+            bool(plan.repo_ids) or plan.fallback_org_wide_daily
+        )
+        investment_will_dispatch = not plan.skip_investment_no_scope
+        if not daily_will_dispatch and not investment_will_dispatch:
+            return RecomputeDispatchResult(
+                status="skipped_no_scope",
+                jobs=(),
+                capped_days=plan.capped_days,
+                capped_repos=plan.capped_repos,
             )
-            jobs.append(
-                RecomputeJobRecord(
-                    task=_DISPATCH_INVESTMENT_MATERIALIZE_TASK,
-                    task_id=async_result.id,
-                    queue="default",
-                    repo_id=None,
-                )
-            )
-
-        status = "dispatched" if jobs else "skipped_no_scope"
         return RecomputeDispatchResult(
-            status=status,
-            jobs=tuple(jobs),
+            status="dispatched",
+            jobs=(),
             capped_days=plan.capped_days,
             capped_repos=plan.capped_repos,
         )
     except Exception as exc:
         # D13: recompute dispatch failures must never fail ingestion.
-        logger.exception(
-            "external_ingest.recompute.dispatch_failed org_id=%s", plan.org_id
+        logger.error(
+            "external_ingest.recompute.dispatch_failed org_id=%s reason=%s",
+            plan.org_id,
+            exc,
         )
         return RecomputeDispatchResult(
             status="failed",
@@ -430,13 +362,12 @@ def dispatch_and_persist_scope(
 ) -> RecomputeDispatchResult:
     """Plan + dispatch + persist for an already-coalesced scope.
 
-    Shared by ``workers/external_ingest_recompute.py``'s debounced flush
-    task and by :func:`schedule_or_coalesce`'s Valkey-unavailable
-    synchronous fallback (D3) -- both end up with the same primitives, just
-    via a different trigger path. Persistence failures are logged, never
-    raised (mirrors D13: a status-write hiccup must not surface as a
-    recompute-dispatch failure to the caller, who has already durably
-    dispatched -- or skipped -- the Celery jobs by this point).
+    Called by :func:`schedule_or_coalesce`'s Valkey-unavailable synchronous
+    fallback (D3). Persistence failures are logged, never raised (mirrors
+    D13: a status-write hiccup must not surface as a recompute-dispatch
+    failure to the caller, who has already durably handed the scope to the
+    native external-ingest recompute drain -- or skipped it -- by this
+    point).
     """
     from dev_health_ops.db import get_postgres_session_sync
     from dev_health_ops.external_ingest.recompute_status import (
@@ -538,10 +469,12 @@ def schedule_or_coalesce(
     Debounce key grain is ``(org_id, source_system, source_instance)`` --
     D10: different source instances debounce independently since their
     repo/team scopes are disjoint. Writes/merges the pending scope blob
-    into Valkey and, iff a SETNX guard key is newly acquired, schedules
-    ``flush_external_ingest_recompute`` via a named ``celery_app.send_task(...,
-    countdown=debounce_seconds)`` (CHAOS-3093: the direct task import this used
-    to call ``.apply_async()`` on no longer exists, its module was deleted).
+    into Valkey; iff a SETNX guard key is newly acquired, the merge/guard
+    bookkeeping is retained but nothing is scheduled from it (CHAOS-3093:
+    the debounced flush task this used to schedule was deleted along with
+    its module, and CHAOS-4427/CHAOS-5700's real fix routes recompute
+    through the per-batch Valkey-unavailable fallback below instead of
+    reviving a debounced flush).
 
     If Valkey is unavailable (no ``REDIS_URL``, connection error, or any
     other exception talking to it), degrades to an IMMEDIATE synchronous

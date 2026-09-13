@@ -1210,6 +1210,108 @@ func TestPreclaimReadinessExitsAfterBudgetExhaustedOnPersistentTimeout(t *testin
 	}
 }
 
+// A roll storm rarely saturates Postgres for only one dependency at a time:
+// go-sync-provider's rev 32 restart hit river_schema AND queue_postgres
+// together, each failing on its own context deadline. The aggregate must
+// inherit retryability from its members -- every failing check timing out
+// makes the whole evaluation retryable, exactly as a single timing-out check
+// already does.
+func TestPreclaimReadinessRetriesWhenEveryFailingMemberTimedOut(t *testing.T) {
+	t.Parallel()
+	const checkTimeout = 10 * time.Millisecond
+	const wantSuccessAttempt = 2
+
+	registry := health.NewRegistry(checkTimeout)
+	var schemaAttempts, queueAttempts atomic.Int32
+	if err := registry.RegisterRequired("river_schema", func(ctx context.Context) error {
+		if schemaAttempts.Add(1) < wantSuccessAttempt {
+			<-ctx.Done()
+			return ctx.Err()
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.RegisterRequired("queue_postgres", func(ctx context.Context) error {
+		if queueAttempts.Add(1) < wantSuccessAttempt {
+			<-ctx.Done()
+			return ctx.Err()
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var logs bytes.Buffer
+	component := preclaimReadinessComponent{
+		registry: registry,
+		logger:   slog.New(slog.NewJSONHandler(&logs, nil)),
+		budget:   time.Second,
+		sleep:    preclaimSleepAfterCheckTimeout(checkTimeout),
+	}
+	if err := component.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v, want nil: two members both timing out must be retryable", err)
+	}
+	if strings.Contains(logs.String(), "preclaim readiness refused") {
+		t.Fatalf("two members timing out together must never refuse: %s", logs.String())
+	}
+	if count := strings.Count(logs.String(), "preclaim readiness timed out, retrying"); count < 1 {
+		t.Fatalf("retry log count = %d, want at least 1", count)
+	}
+}
+
+// One of the two members answering with a genuine, completed error -- a
+// real posture mismatch, not a timeout -- must make the aggregate
+// non-retryable even though the OTHER member is still only timing out.
+// Waiting out the timing-out member can never fix the one that already ran
+// to completion and reported a real problem.
+func TestPreclaimReadinessRefusesWhenOneFailingMemberIsNotATimeout(t *testing.T) {
+	t.Parallel()
+	const checkTimeout = 10 * time.Millisecond
+
+	registry := health.NewRegistry(checkTimeout)
+	var timeoutAttempts, postureAttempts atomic.Int32
+	if err := registry.RegisterRequired("river_schema", func(ctx context.Context) error {
+		timeoutAttempts.Add(1)
+		<-ctx.Done()
+		return ctx.Err()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.RegisterRequired("queue_postgres", func(context.Context) error {
+		postureAttempts.Add(1)
+		return errors.New("role posture refused for devhealth_queue")
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var logs bytes.Buffer
+	component := preclaimReadinessComponent{
+		registry: registry,
+		logger:   slog.New(slog.NewJSONHandler(&logs, nil)),
+		budget:   time.Minute,
+		sleep: func(context.Context, time.Duration) {
+			t.Fatal("a genuine member failure alongside a timing-out one must not be retried")
+		},
+	}
+	if err := component.Start(context.Background()); !errors.Is(err, errWorkerDependencyUnavailable) {
+		t.Fatalf("Start() error = %v, want preclaim dependency refusal", err)
+	}
+	if got := postureAttempts.Load(); got != 1 {
+		t.Fatalf("posture check ran %d times, want exactly 1 (no retry)", got)
+	}
+	var record struct {
+		Attempts int    `json:"attempts"`
+		Reason   string `json:"reason"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(logs.Bytes()), &record); err != nil {
+		t.Fatalf("decode log record: %v (raw %q)", err, logs.String())
+	}
+	if record.Reason != "dependency_check_failed" || record.Attempts != 1 {
+		t.Fatalf("log record = %#v, want reason dependency_check_failed at attempt 1", record)
+	}
+}
+
 func TestUnsupportedAvailableContractVersionFailsClosed(t *testing.T) {
 	t.Chdir(filepath.Join("..", ".."))
 	database := &fakeWorkerDatabase{telemetry: &fakeQueueTelemetry{

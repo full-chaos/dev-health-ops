@@ -462,36 +462,88 @@ func (component preclaimReadinessComponent) Start(ctx context.Context) error {
 	if component.registry == nil {
 		return errWorkerDependencyUnavailable
 	}
-	now := component.now
+	var latest health.Readiness
+	err := startupRetryBudget(
+		ctx, component.budget, component.now, component.sleep,
+		func(ctx context.Context) error {
+			latest = component.registry.CheckRequired(ctx)
+			if latest.Ready {
+				return nil
+			}
+			return errWorkerDependencyUnavailable
+		},
+		func(error) bool { return preclaimReadinessRetryable(latest) },
+		func(attempt int, elapsed, wait time.Duration, _ error) {
+			component.logRetry(ctx, latest.Failed, attempt, elapsed, wait)
+		},
+		func(attempt int, elapsed time.Duration, _ error, budgetExhausted bool) {
+			reason := "dependency_check_failed"
+			if budgetExhausted {
+				reason = "retry_budget_exhausted"
+			}
+			component.logRefusal(ctx, latest.Failed, reason, attempt, elapsed)
+		},
+	)
+	if err != nil {
+		return errWorkerDependencyUnavailable
+	}
+	return nil
+}
+
+// startupRetryBudget runs attempt repeatedly, backing off between tries up to
+// budget, for as long as retryable classifies the most recent failure as
+// transient. It is the one implementation of the roll-storm retry shape more
+// than one startup dependency needs: a fleet-wide helm roll restarts every
+// worker group's Deployments together, Postgres and its pooler saturate for
+// the length of that burst, and a dependency that merely timed out during it
+// is not broken -- it is worth retrying with backoff rather than exiting the
+// process on the first attempt. A failure retryable classifies as
+// non-transient exits immediately, exactly as a single unretried attempt
+// always did, and so does an exhausted budget.
+//
+// preclaimReadinessComponent.Start and riverWorkerProcess.Start share this
+// loop rather than each keeping their own copy of the backoff shape (start
+// small, double, cap, spend down to zero as the budget runs out), so the two
+// call sites that exist to survive the same production event cannot drift
+// apart from each other.
+func startupRetryBudget(
+	ctx context.Context,
+	budget time.Duration,
+	now func() time.Time,
+	sleep func(context.Context, time.Duration),
+	attempt func(context.Context) error,
+	retryable func(error) bool,
+	onRetry func(attemptNum int, elapsed, wait time.Duration, err error),
+	onGiveUp func(attemptNum int, elapsed time.Duration, err error, budgetExhausted bool),
+) error {
 	if now == nil {
 		now = time.Now
 	}
-	sleep := component.sleep
 	if sleep == nil {
 		sleep = preclaimReadinessSleep
 	}
 
 	start := now()
 	backoff := preclaimReadinessInitialBackoff
-	for attempt := 1; ; attempt++ {
-		readiness := component.registry.CheckRequired(ctx)
-		if readiness.Ready {
+	for attemptNum := 1; ; attemptNum++ {
+		err := attempt(ctx)
+		if err == nil {
 			return nil
 		}
 		elapsed := now().Sub(start)
-		if !preclaimReadinessRetryable(readiness) {
-			component.logRefusal(ctx, readiness.Failed, "dependency_check_failed", attempt, elapsed)
-			return errWorkerDependencyUnavailable
+		if !retryable(err) {
+			onGiveUp(attemptNum, elapsed, err, false)
+			return err
 		}
-		if elapsed >= component.budget || ctx.Err() != nil {
-			component.logRefusal(ctx, readiness.Failed, "retry_budget_exhausted", attempt, elapsed)
-			return errWorkerDependencyUnavailable
+		if elapsed >= budget || ctx.Err() != nil {
+			onGiveUp(attemptNum, elapsed, err, true)
+			return err
 		}
 		wait := backoff
-		if remaining := component.budget - elapsed; wait > remaining {
+		if remaining := budget - elapsed; wait > remaining {
 			wait = remaining
 		}
-		component.logRetry(ctx, readiness.Failed, attempt, elapsed, wait)
+		onRetry(attemptNum, elapsed, wait, err)
 		sleep(ctx, wait)
 		backoff *= 2
 		if backoff > preclaimReadinessMaxBackoff {

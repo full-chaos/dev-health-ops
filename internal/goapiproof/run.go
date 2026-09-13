@@ -40,6 +40,9 @@ const (
 	RefusalStaleExclusion      = "declared_exclusion_matched_nothing"
 	RefusalStaleTierB          = "declared_tier_b_field_matched_nothing"
 	RefusalStaleBaselineDefect = "declared_baseline_defect_matched_nothing"
+	// RefusalInvalidBaselineDefect: a declared baseline defect failed
+	// validateBaselineDefects, so no request is sent under it.
+	RefusalInvalidBaselineDefect = "declared_baseline_defect_is_invalid"
 	// RefusalStaleOrderInsensitiveList/RefusalOrderInsensitiveListKeyMissing
 	// are OrderInsensitiveList's two vacuity guards -- see compare.go's
 	// doc comment on that type. Same discipline as the three refusals
@@ -721,6 +724,10 @@ func (r *Runner) proveRequest(ctx context.Context, operation string, variantName
 		outcome.TerminalState = terminalStateForRefusal(reason)
 		outcome.terminalState = outcome.TerminalState
 		return outcome
+	}
+
+	if err := validateBaselineDefects(parity.BaselineDefects); err != nil {
+		return refuse(RefusalInvalidBaselineDefect, err.Error())
 	}
 
 	document, ok := r.Documents[operation]

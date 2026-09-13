@@ -374,6 +374,21 @@ var operationSpecs = map[string]OperationSpec{
 				"data.analytics.sankey.coverage.teamCoverage": "ratio of float sums: assignedTeam/total, both sum()/sumIf(repoEffortCol, ...) once coverageUseInvestment is true, which this document's committed useInvestment=true payload always sets (sankeycoverage.go:210-212,490). Rule-derived, not observed (CHAOS-5451)",
 				"data.analytics.sankey.coverage.repoCoverage": "ratio of float sums: assignedRepo/repoTotal, both sum()/sumIf(repoEffortCol, ...) once coverageUseInvestment is true, same gate as teamCoverage (sankeycoverage.go:210-211,213,493). Measured live at build e4a9fabff (JOB 5, run 5167b7de-18da-4747-addf-16c65a2858c8): 0.9931181145418517 vs 0.9931181145418516, 1 ULP, relative 1.1e-16 (CHAOS-5451)",
 			},
+			// Intermittent because the fan-out lasts only from a repos write
+			// until the next background merge; a merged-state run shows no
+			// difference here and must not refuse as stale.
+			BaselineDefects: []BaselineDefect{{
+				Ticket: "CHAOS-4773",
+				Reason: "Python joins repos (ReplacingMergeTree(org_id, id)) without FINAL in the sankey compiler (graphql/sql/compiler.py) and in the coverage query (resolvers/analytics.py). Any repo row with an unmerged physical version multiplies every sankey node and edge value for units in that repo, and inflates repo-assigned coverage, by the version count. Measured on prod at query-api build 16bfb582: three repos read exactly 2x on Python, the TEAM, THEME and REPO totals each differ by exactly that duplicated effort, and breakdowns (no repos join) match. Go reads repos FINAL (investment.go, sankeycoverage.go). Go is correct.",
+				Paths: []string{
+					"data.analytics.sankey.nodes.value",
+					"data.analytics.sankey.edges.value",
+					"data.analytics.sankey.coverage.teamCoverage",
+					"data.analytics.sankey.coverage.repoCoverage",
+				},
+				Intermittent:       true,
+				IntermittentReason: "repos is a ReplacingMergeTree rewritten every sync cycle and merged in the background, so the fan-out is present only between a repos write and the next merge; the same operation matched on an earlier build while the rows were merged",
+			}},
 			// CHAOS-5546: sankey.go's nodes/edges queries are a plain
 			// ClickHouse UNION ALL with no outer ORDER BY. Measured live:
 			// the SAME compiled SQL for this exact request, run 4 times

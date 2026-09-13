@@ -5,25 +5,25 @@
       "kind": "dispatch_sync_run",
       "delivery": "at_least_once",
       "route": "river",
-      "rollback_route": "celery"
+      "rollback_route": "none"
     },
     {
       "kind": "finalize_sync_run",
       "delivery": "at_least_once",
       "route": "river",
-      "rollback_route": "celery"
+      "rollback_route": "none"
     },
     {
       "kind": "post_sync",
       "delivery": "at_least_once",
       "route": "river",
-      "rollback_route": "celery"
+      "rollback_route": "none"
     },
     {
       "kind": "reference_discovery",
       "delivery": "at_least_once",
       "route": "river",
-      "rollback_route": "celery"
+      "rollback_route": "none"
     }
   ]
 }

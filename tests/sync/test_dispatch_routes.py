@@ -71,7 +71,18 @@ def test_v1_schema_describes_the_canonical_transport_artifact() -> None:
                     "rollback_route": {"const": "celery"},
                 }
             },
+            {
+                "properties": {
+                    "route": {"const": "river"},
+                    "rollback_route": {"const": "none"},
+                }
+            },
         ]
+    }
+    assert definitions["rollback_transport"] == {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9_]*$",
+        "enum": ["celery", "none"],
     }
     artifact_routes = artifact["routes"]
     assert isinstance(artifact_routes, list)
@@ -91,7 +102,7 @@ def test_v1_schema_describes_the_canonical_transport_artifact() -> None:
         assert route["kind"] == properties["kind"]["const"]
         assert route["delivery"] == properties["delivery"]["const"]
         assert route["route"] in definitions["transport"]["enum"]
-        assert route["rollback_route"] in definitions["transport"]["enum"]
+        assert route["rollback_route"] in definitions["rollback_transport"]["enum"]
 
     assert load_transport_routes().by_kind("post_sync").delivery == "at_least_once"
 
@@ -106,7 +117,7 @@ def test_contract_covers_exactly_the_production_outbox_kinds() -> None:
     assert tuple(production_kinds) == tuple(sorted(load_transport_routes().routes))
 
 
-def test_checked_in_transport_routes_are_river_with_celery_rollback() -> None:
+def test_checked_in_transport_routes_are_river_with_retired_rollback() -> None:
     routes = load_transport_routes()
 
     assert tuple(routes.routes) == (
@@ -117,7 +128,7 @@ def test_checked_in_transport_routes_are_river_with_celery_rollback() -> None:
     )
     assert routes.by_kind("post_sync").delivery == "at_least_once"
     assert all(route.route == "river" for route in routes.routes.values())
-    assert all(route.rollback_route == "celery" for route in routes.routes.values())
+    assert all(route.rollback_route == "none" for route in routes.routes.values())
     with pytest.raises(TypeError):
         routes.routes["post_sync"] = routes.by_kind("post_sync")  # type: ignore[index]
     with pytest.raises(DispatchRouteContractError, match="unknown"):
@@ -234,6 +245,7 @@ def test_loader_accepts_a_future_river_route_with_explicit_celery_rollback(
     [
         ("celery", "river"),
         ("river", "river"),
+        ("celery", "none"),
     ],
 )
 def test_loader_rejects_unsafe_transport_pairs(

@@ -480,7 +480,7 @@ def _validated_parity_routes() -> dict[str, TransportRoute]:
         if (
             route is None
             or route.delivery != expected_delivery
-            or route.rollback_route != "celery"
+            or route.rollback_route not in {"celery", "none"}
             or route.route not in {"celery", "river"}
         ):
             raise SyncDispatchParityObservationUnavailable("route_unavailable")

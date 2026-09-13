@@ -26,6 +26,11 @@
       "pattern": "^[a-z][a-z0-9_]*$",
       "enum": ["celery", "river"]
     },
+    "rollback_transport": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "enum": ["celery", "none"]
+    },
     "transport_pair": {
       "anyOf": [
         {
@@ -39,6 +44,12 @@
             "route": {"const": "river"},
             "rollback_route": {"const": "celery"}
           }
+        },
+        {
+          "properties": {
+            "route": {"const": "river"},
+            "rollback_route": {"const": "none"}
+          }
         }
       ]
     },
@@ -51,7 +62,7 @@
         "kind": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$", "const": "dispatch_sync_run"},
         "delivery": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$", "const": "at_least_once"},
         "route": {"$ref": "#/$defs/transport"},
-        "rollback_route": {"$ref": "#/$defs/transport"}
+        "rollback_route": {"$ref": "#/$defs/rollback_transport"}
       }
     },
     "finalize_sync_run": {
@@ -63,7 +74,7 @@
         "kind": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$", "const": "finalize_sync_run"},
         "delivery": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$", "const": "at_least_once"},
         "route": {"$ref": "#/$defs/transport"},
-        "rollback_route": {"$ref": "#/$defs/transport"}
+        "rollback_route": {"$ref": "#/$defs/rollback_transport"}
       }
     },
     "post_sync": {
@@ -75,7 +86,7 @@
         "kind": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$", "const": "post_sync"},
         "delivery": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$", "const": "at_least_once"},
         "route": {"$ref": "#/$defs/transport"},
-        "rollback_route": {"$ref": "#/$defs/transport"}
+        "rollback_route": {"$ref": "#/$defs/rollback_transport"}
       }
     },
     "reference_discovery": {
@@ -87,7 +98,7 @@
         "kind": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$", "const": "reference_discovery"},
         "delivery": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$", "const": "at_least_once"},
         "route": {"$ref": "#/$defs/transport"},
-        "rollback_route": {"$ref": "#/$defs/transport"}
+        "rollback_route": {"$ref": "#/$defs/rollback_transport"}
       }
     }
   }

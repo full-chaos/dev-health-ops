@@ -615,7 +615,7 @@ class SyncDispatchTransportRoute(Base):
             name="ck_sync_dispatch_transport_routes_transport",
         ),
         CheckConstraint(
-            "rollback_transport = 'celery'",
+            "rollback_transport IN ('celery', 'none')",
             name="ck_sync_dispatch_transport_routes_rollback",
         ),
         CheckConstraint(

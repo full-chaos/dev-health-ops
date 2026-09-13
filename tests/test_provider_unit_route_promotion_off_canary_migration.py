@@ -26,8 +26,6 @@ import sqlalchemy as sa
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 
-from tests._alembic_heads import application_schema_head
-
 _KIND = "sync.provider_unit"
 _MODULE = "0131_promote_sync_provider_unit_route_off_canary_and_celery"
 
@@ -91,16 +89,13 @@ def _route(connection: sa.Connection) -> tuple[str, int, bool]:
     return str(transport), int(generation), bool(paused)
 
 
-def test_0131_is_the_application_schema_head_and_chains_after_0130() -> None:
-    """Derived, not typed. See ``tests/_alembic_heads.py``'s own docstring:
-    the next migration author renumbers THIS check (or supersedes it, the
-    same way this one supersedes 0130's) rather than leaving a stale pin.
+def test_0131_chains_after_0130() -> None:
+    """0131 is no longer the application_schema head (0132 superseded it) --
+    this now only pins the chain link this migration owns. See
+    ``test_sync_dispatch_transport_route_celery_rollback_retirement_postgres.py``'s
+    sibling check for the current head.
     """
     migration = _load()
-    assert migration.revision == application_schema_head(), (
-        "0131 must be the application_schema head; if another migration "
-        "landed first, renumber this one and re-run"
-    )
     assert migration.down_revision == "0130"
 
 

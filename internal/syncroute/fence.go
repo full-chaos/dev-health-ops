@@ -138,7 +138,7 @@ func (state routeState) valid(registry *syncdispatchcontract.Registry, seen map[
 	if !known || (state.transport != syncdispatchcontract.RouteCelery && state.transport != syncdispatchcontract.RouteRiver) {
 		return false
 	}
-	if state.rollbackTransport != syncdispatchcontract.RouteCelery {
+	if state.rollbackTransport != descriptor.RollbackRoute {
 		return false
 	}
 	if state.paused != (state.pausedAt != nil) {
@@ -154,7 +154,7 @@ func validRegistry(registry *syncdispatchcontract.Registry) bool {
 	for _, kind := range frozenKinds {
 		descriptor, ok := registry.Lookup(kind)
 		if !ok || descriptor.Route != syncdispatchcontract.RouteCelery && descriptor.Route != syncdispatchcontract.RouteRiver ||
-			descriptor.RollbackRoute != syncdispatchcontract.RouteCelery {
+			(descriptor.RollbackRoute != syncdispatchcontract.RouteCelery && descriptor.RollbackRoute != syncdispatchcontract.RouteNone) {
 			return false
 		}
 	}

@@ -2912,8 +2912,8 @@ def test_dispatch_sync_run_github_work_item_direct_alias_never_stages_a_writer(
 ):
     """A malformed alias claim is refused before any staging happens."""
 
+    from dev_health_ops.jobs.routes import WorkerJobRouteError
     from dev_health_ops.workers import sync_units
-    from dev_health_ops.workers.job_routes import WorkerJobRouteError
 
     run, unit = _seed_run(
         db_session,
@@ -2958,8 +2958,8 @@ def test_dispatch_sync_run_github_work_items_rejects_partial_canonical_claim(
 ):
     """A stale non-exact family claim is refused before it stages anything."""
 
+    from dev_health_ops.jobs.routes import WorkerJobRouteError
     from dev_health_ops.workers import sync_units
-    from dev_health_ops.workers.job_routes import WorkerJobRouteError
 
     run, unit = _seed_run(
         db_session,
@@ -3021,8 +3021,8 @@ def test_dispatch_enabled_atomic_work_item_family_rejects_before_staging(
 ) -> None:
     """An enabled Go family rejects stale ownership before anything is staged."""
 
+    from dev_health_ops.jobs.routes import WorkerJobRouteError
     from dev_health_ops.workers import sync_units
-    from dev_health_ops.workers.job_routes import WorkerJobRouteError
 
     run, unit = _seed_run(
         db_session,
@@ -3267,8 +3267,8 @@ def test_dispatch_sync_run_route_faults_fail_closed(db_session, monkeypatch, sta
     (the Go sweep's own route fence declines for exactly the same reason).
     """
 
+    from dev_health_ops.jobs.routes import WorkerJobRouteError
     from dev_health_ops.workers import sync_units
-    from dev_health_ops.workers.job_routes import WorkerJobRouteError
 
     run, unit = _seed_run(db_session, provider="github", dataset_key="commits")
     route_row = db_session.query(WorkerJobRoute).filter(

@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session, SessionTransactionOrigin
 from dev_health_ops.models.worker_job_outbox import WorkerJobOutbox
 from dev_health_ops.tracing import current_trace_parent
 
-from .job_contracts import (
+from .contracts import (
     ContractDecodeError,
     ContractPayload,
     MigrationJob,

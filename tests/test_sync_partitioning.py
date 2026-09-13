@@ -803,7 +803,7 @@ class TestSyncQueueForProvider:
     def test_known_providers_get_dedicated_queue_when_enabled(
         self, provider, monkeypatch
     ):
-        from dev_health_ops.workers.queues import sync_queue_for_provider
+        from dev_health_ops.jobs.queues import sync_queue_for_provider
 
         monkeypatch.setenv("PROVIDER_SYNC_QUEUES_ENABLED", "true")
         assert sync_queue_for_provider(provider) == f"sync.{provider}"
@@ -814,21 +814,21 @@ class TestSyncQueueForProvider:
     def test_flag_unset_routes_everything_to_shared_queue(self, provider, monkeypatch):
         """Default-off: mixed deploys (producers upgraded, consumers not yet)
         must keep every sync on the legacy shared queue."""
-        from dev_health_ops.workers.queues import sync_queue_for_provider
+        from dev_health_ops.jobs.queues import sync_queue_for_provider
 
         monkeypatch.delenv("PROVIDER_SYNC_QUEUES_ENABLED", raising=False)
         assert sync_queue_for_provider(provider) == "sync"
 
     @pytest.mark.parametrize("value", ["false", "0", "no", "", "off", "bogus"])
     def test_falsy_flag_values_route_to_shared_queue(self, value, monkeypatch):
-        from dev_health_ops.workers.queues import sync_queue_for_provider
+        from dev_health_ops.jobs.queues import sync_queue_for_provider
 
         monkeypatch.setenv("PROVIDER_SYNC_QUEUES_ENABLED", value)
         assert sync_queue_for_provider("github") == "sync"
 
     @pytest.mark.parametrize("value", ["1", "true", "yes", "TRUE", " True "])
     def test_truthy_flag_values_enable_provider_queues(self, value, monkeypatch):
-        from dev_health_ops.workers.queues import sync_queue_for_provider
+        from dev_health_ops.jobs.queues import sync_queue_for_provider
 
         monkeypatch.setenv("PROVIDER_SYNC_QUEUES_ENABLED", value)
         assert sync_queue_for_provider("github") == "sync.github"
@@ -836,7 +836,7 @@ class TestSyncQueueForProvider:
     def test_flag_is_read_at_call_time_not_import_time(self, monkeypatch):
         """Ops must be able to flip the flag without import-order pain: the
         same already-imported function changes behavior with the env."""
-        from dev_health_ops.workers.queues import sync_queue_for_provider
+        from dev_health_ops.jobs.queues import sync_queue_for_provider
 
         monkeypatch.delenv("PROVIDER_SYNC_QUEUES_ENABLED", raising=False)
         assert sync_queue_for_provider("linear") == "sync"
@@ -847,13 +847,13 @@ class TestSyncQueueForProvider:
 
     @pytest.mark.parametrize("provider", ["", "local", "bitbucket", "unknown"])
     def test_unknown_providers_fall_back_to_shared_queue(self, provider, monkeypatch):
-        from dev_health_ops.workers.queues import sync_queue_for_provider
+        from dev_health_ops.jobs.queues import sync_queue_for_provider
 
         monkeypatch.setenv("PROVIDER_SYNC_QUEUES_ENABLED", "true")
         assert sync_queue_for_provider(provider) == "sync"
 
     def test_normalizes_case_and_whitespace(self, monkeypatch):
-        from dev_health_ops.workers.queues import sync_queue_for_provider
+        from dev_health_ops.jobs.queues import sync_queue_for_provider
 
         monkeypatch.setenv("PROVIDER_SYNC_QUEUES_ENABLED", "true")
         assert sync_queue_for_provider(" GitHub ") == "sync.github"
@@ -862,11 +862,11 @@ class TestSyncQueueForProvider:
         """Routing to an undeclared queue would strand messages: every queue
         the helper can return must exist in workers.config.task_queues (which
         the compose -Q coverage test then ties to a consumer)."""
-        from dev_health_ops.workers.config import task_queues
-        from dev_health_ops.workers.queues import (
+        from dev_health_ops.jobs.queues import (
             SYNC_QUEUE_PROVIDERS,
             sync_queue_for_provider,
         )
+        from dev_health_ops.workers.config import task_queues
 
         monkeypatch.setenv("PROVIDER_SYNC_QUEUES_ENABLED", "true")
         for provider in SYNC_QUEUE_PROVIDERS:

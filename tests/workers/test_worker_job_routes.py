@@ -8,14 +8,14 @@ from sqlalchemy import Table, create_engine
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Session
 
-from dev_health_ops.models import WorkerJobRoute
-from dev_health_ops.workers.job_contracts import MigrationJob
-from dev_health_ops.workers.job_routes import (
+from dev_health_ops.jobs.contracts import MigrationJob
+from dev_health_ops.jobs.routes import (
     WorkerJobRouteError,
     _locked_route_statement,
     resolve_worker_job_route,
     route_requires_outbox,
 )
+from dev_health_ops.models import WorkerJobRoute
 
 KIND = "operational.billing_notification"
 
@@ -55,7 +55,7 @@ def test_celery_rollback_route_is_rejected_as_drift(engine) -> None:
     with (
         Session(engine) as session,
         patch(
-            "dev_health_ops.workers.job_routes.load_migration_jobs",
+            "dev_health_ops.jobs.routes.load_migration_jobs",
             return_value=_policy("river"),
         ),
     ):
@@ -76,7 +76,7 @@ def test_executable_route_selects_outbox_without_implicit_celery(
     with (
         Session(engine) as session,
         patch(
-            "dev_health_ops.workers.job_routes.load_migration_jobs",
+            "dev_health_ops.jobs.routes.load_migration_jobs",
             return_value=_policy(transport),
         ),
     ):
@@ -88,7 +88,7 @@ def test_missing_paused_and_drifted_routes_fail_closed(engine) -> None:
     with (
         Session(engine) as session,
         patch(
-            "dev_health_ops.workers.job_routes.load_migration_jobs",
+            "dev_health_ops.jobs.routes.load_migration_jobs",
             return_value=_policy(),
         ),
     ):
@@ -102,7 +102,7 @@ def test_missing_paused_and_drifted_routes_fail_closed(engine) -> None:
     with (
         Session(engine) as session,
         patch(
-            "dev_health_ops.workers.job_routes.load_migration_jobs",
+            "dev_health_ops.jobs.routes.load_migration_jobs",
             return_value=_policy("river"),
         ),
     ):

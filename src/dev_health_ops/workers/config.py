@@ -93,7 +93,7 @@ task_queues: dict[str, dict[str, Any]] = {
     # already in flight at deploy time. Per-provider queues (CHAOS-2299)
     # make queue depth answer "is <provider> stuck?" with one LLEN and let
     # operators purge a single provider. Routing lives in
-    # workers.queues.sync_queue_for_provider.
+    # jobs.queues.sync_queue_for_provider.
     "sync": {},
     "sync.github": {},
     "sync.gitlab": {},
@@ -102,7 +102,7 @@ task_queues: dict[str, dict[str, Any]] = {
     "sync.launchdarkly": {},
     # Cost-class sub-queues (CHAOS-2517). Gated by SYNC_COST_CLASS_QUEUES flag.
     # Deploy these queue entries first (consumers), then flip the flag on
-    # producers. Routing lives in workers.queues / sync.dispatch_policy.
+    # producers. Routing lives in jobs.queues / sync.dispatch_policy.
     "sync.github.light": {},
     "sync.github.medium": {},
     "sync.github.heavy": {},

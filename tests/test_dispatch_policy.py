@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from dev_health_ops.sync.dispatch_policy import DispatchRoute, route
-from dev_health_ops.workers.config import task_queues
-from dev_health_ops.workers.queues import (
+from dev_health_ops.jobs.queues import (
     DEFAULT_SYNC_QUEUE,
     SYNC_COST_CLASS_QUEUE_NAMES,
     SYNC_COST_CLASS_QUEUES,
@@ -16,6 +14,8 @@ from dev_health_ops.workers.queues import (
     cost_class_queue_for_provider,
     sync_queue_for_provider,
 )
+from dev_health_ops.sync.dispatch_policy import DispatchRoute, route
+from dev_health_ops.workers.config import task_queues
 
 # ---------------------------------------------------------------------------
 # Helpers

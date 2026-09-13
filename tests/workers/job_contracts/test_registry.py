@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from dev_health_ops.workers.job_contracts import (
+from dev_health_ops.jobs.contracts import (
     CapabilityReport,
     ContractCapability,
     ContractDecodeError,
@@ -17,7 +17,7 @@ from dev_health_ops.workers.job_contracts import (
     load_migration_jobs,
     load_registry,
 )
-from dev_health_ops.workers.job_contracts.registry import _validate_version_window
+from dev_health_ops.jobs.contracts.registry import _validate_version_window
 
 
 def test_registry_enforces_n_and_n_minus_one() -> None:

@@ -46,7 +46,7 @@ _DEFAULT_MANUAL_TRIGGER_AWAIT_SECONDS = 10.0
 def _go_manual_backfill_planner_enabled() -> bool:
     """CHAOS-4602 rollout flag, read at call time (ops/tests can flip it
     live) -- matches the established PROVIDER_SYNC_QUEUES_ENABLED shape
-    (workers/queues.py).
+    (jobs/queues.py).
 
     CHAOS-4629 (chris ruling, 2026-08-31 06:20 PT): default flips PERMANENTLY
     ON now that this parity ticket (Go discovery parity with #2036's

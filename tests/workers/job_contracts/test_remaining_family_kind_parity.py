@@ -6,7 +6,7 @@ families exist and what job kind (route_key) each maps to. The Go side
 derives its family->kind lookup directly from families.json (see
 internal/jobs/metrics/remaining/publisher.go's loadFamilyJobKinds), so it can
 no longer drift from it. The Python mirror still needs its own hand-written
-KIND_REMAINING_* string constants -- job_contracts/models.py's envelope
+KIND_REMAINING_* string constants -- jobs/contracts/models.py's envelope
 dataclasses need a concrete `ClassVar[str]`, not a value loaded from JSON at
 import time -- so nothing structurally prevents THIS side from drifting the
 way publisher.go's old hardcoded map did. This test is that guard: it
@@ -21,7 +21,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from dev_health_ops.workers import job_contracts
+from dev_health_ops.jobs import contracts as job_contracts
 
 _FAMILIES_PATH = (
     Path(__file__).parents[3]
@@ -60,7 +60,7 @@ def test_python_remaining_kind_constants_match_families_json_route_keys() -> Non
 
     python_kinds = _python_remaining_kinds()
     assert python_kinds, (
-        "found no KIND_REMAINING_* constants on dev_health_ops.workers.job_contracts "
+        "found no KIND_REMAINING_* constants on dev_health_ops.jobs.contracts "
         "-- test would pass vacuously (either the introspection broke, or the "
         "package stopped re-exporting them)"
     )

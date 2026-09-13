@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from dev_health_ops.workers.job_contracts import (
+from dev_health_ops.jobs.contracts import (
     KIND_DAILY_METRICS_DISPATCH,
     KIND_DAILY_METRICS_FINALIZE,
     KIND_DAILY_METRICS_PARTITION,
@@ -46,7 +46,7 @@ from dev_health_ops.workers.job_contracts import (
     encode_envelope,
     load_registry,
 )
-from dev_health_ops.workers.job_contracts import registry as contract_registry
+from dev_health_ops.jobs.contracts import registry as contract_registry
 
 
 @pytest.mark.parametrize(
@@ -362,7 +362,7 @@ def test_default_contract_root_uses_installed_data_scheme(
 ) -> None:
     installed_module = (
         tmp_path
-        / "lib/python3.14/site-packages/dev_health_ops/workers/job_contracts/registry.py"
+        / "lib/python3.14/site-packages/dev_health_ops/jobs/contracts/registry.py"
     )
     data_root = tmp_path / "installation-data"
     monkeypatch.setattr(contract_registry, "__file__", str(installed_module))

@@ -250,12 +250,9 @@ Category key: **LIVE** = reached today from a live FastAPI bridge route. **CELER
 | `celery_app.py` | LIBRARY / SHARED | imported by ~20 workers files, including live ones, for `@celery_app.task` — Celery app factory, still load-bearing for the decorator even on live functions | n/a |
 | `config.py` | LIBRARY / SHARED | used by queues.py, celery_app.py, and api/external_ingest/stream_health.py — env/config constants. queue_monitor.py, external_ingest_reconciler.py, and sync_reconciler.py, former importers, were deleted (CHAOS-3093) | n/a |
 | `feature_flag_sync.py` | LIVE | LIVE — corrected 2026-08-28 per codex review across 2 rounds: an earlier draft wrongly claimed zero importers, then a follow-up correction wrongly said both helpers are called unconditionally. Actual shape: `_run_feature_flags_dataset` (`dataset_adapters.py:684`, called from the live dataset dispatcher at `:758`) branches per provider (`dataset_adapters.py:694-712`) -- calls `_sync_gitlab_feature_flags` for `provider=='gitlab'`, `_sync_launchdarkly_feature_flags` for `provider=='launchdarkly'`, raises `ValueError` for any other provider | n/a — live |
-| `job_outbox.py` | LIVE | enqueue_worker_job called sync_units.py:1047, inside dispatch_sync_run (live via worker_sync.py:26) | n/a |
-| `job_routes.py` | LIVE | resolve_worker_job_route called sync_units.py:999, inside dispatch_sync_run | n/a |
 | `post_sync_dispatch.py` | LIVE | build_post_sync_dispatch_payload called sync_units.py:2274, inside finalize_sync_run (live via worker_sync.py:26) | n/a |
 | `provider_family_contract.py` | LIVE | imported by provider_unit_route.py & sync_units.py:122, reached from dispatch_sync_run | n/a |
 | `provider_unit_route.py` | LIVE | imported sync_units.py:125, used sync_units.py:999-1000 inside dispatch_sync_run | n/a |
-| `queues.py` | LIBRARY / SHARED | imported only by config.py:1 — per-provider queue-name constants | n/a |
 | `rate_limit_defer.py` | LIVE | plan_rate_limit_deferral imported sync_units.py:130-132, called sync_units.py:1514 inside dispatch_sync_run | n/a |
 | `recommendations_tasks.py` | TEST/FIXTURE ONLY | worker_metrics.py's _run_recommendations bridge handler (its only production caller) is deleted -- verified no live wiring reaches it; _compute_recommendations_for_org is now exercised only by tests/test_recommendations_task.py | n/a |
 | `reference_discovery.py` | LIVE | imported directly worker_sync.py:22-25; served by /reference-discovery and /reference-discovery-populate routes | n/a |

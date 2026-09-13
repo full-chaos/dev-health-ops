@@ -416,16 +416,6 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
         "evidence": "LIVE — corrected 2026-08-28 per codex review across 2 rounds: an earlier draft wrongly claimed zero importers, then a follow-up correction wrongly said both helpers are called unconditionally. Actual shape: `_run_feature_flags_dataset` (`dataset_adapters.py:684`, called from the live dataset dispatcher at `:758`) branches per provider (`dataset_adapters.py:694-712`) -- calls `_sync_gitlab_feature_flags` for `provider=='gitlab'`, `_sync_launchdarkly_feature_flags` for `provider=='launchdarkly'`, raises `ValueError` for any other provider",
         "ticket": "n/a — live",
     },
-    "job_outbox.py": {
-        "category": "a",
-        "evidence": "enqueue_worker_job called sync_units.py:1047, inside dispatch_sync_run (live via worker_sync.py:26)",
-        "ticket": "n/a",
-    },
-    "job_routes.py": {
-        "category": "a",
-        "evidence": "resolve_worker_job_route called sync_units.py:999, inside dispatch_sync_run",
-        "ticket": "n/a",
-    },
     "post_sync_dispatch.py": {
         "category": "a",
         "evidence": "build_post_sync_dispatch_payload called sync_units.py:2274, inside finalize_sync_run (live via worker_sync.py:26)",
@@ -439,11 +429,6 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
     "provider_unit_route.py": {
         "category": "a",
         "evidence": "imported sync_units.py:125, used sync_units.py:999-1000 inside dispatch_sync_run",
-        "ticket": "n/a",
-    },
-    "queues.py": {
-        "category": "c",
-        "evidence": "imported only by config.py:1 — per-provider queue-name constants",
         "ticket": "n/a",
     },
     "rate_limit_defer.py": {

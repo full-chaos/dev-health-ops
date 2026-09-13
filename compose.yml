@@ -628,7 +628,7 @@ services:
       # CHAOS-2299: route sync dispatch to per-provider queues. Safe to enable
       # here because the worker -Q lists below consume sync.<provider> in the
       # SAME change. Bare-image deployments must follow the two-phase rollout
-      # in workers/queues.py: expand consumer -Q lists first, then flip this.
+      # in jobs/queues.py: expand consumer -Q lists first, then flip this.
       PROVIDER_SYNC_QUEUES_ENABLED: "true"
       # CHAOS-3942/CHAOS-3088: /health/workers is Celery-authoritative until
       # told otherwise. The Go fleet below is this file's unconditional

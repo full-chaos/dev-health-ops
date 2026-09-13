@@ -4,6 +4,8 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -451,6 +453,66 @@ func TestJiraTeamCatalogCollectorSkipsCleanlyWithNothingSelectedNonStrict(t *tes
 	if result.TeamsWritten != 0 || result.MembershipsWritten != 0 || result.ProjectsWritten != 0 ||
 		result.OwnershipWritten != 0 || result.SprintsWritten != 0 {
 		t.Fatalf("want a zero result, got %+v", result)
+	}
+}
+
+// TestJiraTeamCatalogCollectResolvesMemberIdentityThroughAliasMap is a collector-level proof: a project lead's membership row must
+// carry the org's ALIAS-RESOLVED canonical identity for its account id, not
+// the raw "jira:accountid:<id>" qualified id the collector would otherwise
+// write. Deliberately not t.Parallel(): it sets IDENTITY_MAPPING_PATH via
+// t.Setenv, which panics if called from a parallel subtest sibling.
+func TestJiraTeamCatalogCollectResolvesMemberIdentityThroughAliasMap(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "identity_mapping.yaml")
+	if err := os.WriteFile(path, []byte(`
+version: 1
+identities:
+  - canonical: "person-b@example.com"
+    aliases:
+      - "jira:accountid:account-1"
+`), 0o600); err != nil {
+		t.Fatalf("write seeded identity_mapping.yaml: %v", err)
+	}
+	t.Setenv("IDENTITY_MAPPING_PATH", path)
+
+	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	doer := &jiraTeamCatalogFixtureDoer{t: t, byURI: map[string]jiraTeamCatalogFixtureResponse{
+		jiraTeamCatalogProjectSearchURI: {
+			body: `{"values":[{"key":"OPS","name":"Ops Project"}]}`,
+		},
+		"/rest/api/3/project/OPS": {
+			body: `{"projectTypeKey":"software","lead":{"accountId":"account-1","emailAddress":"ops@example.com","displayName":"Ops Lead"}}`,
+		},
+		"/rest/agile/1.0/board?maxResults=100&projectKeyOrId=OPS&startAt=0": {
+			body: `{"values":[],"isLast":true}`,
+		},
+	}}
+	handler := JiraTeamCatalogRouteHandler{}
+	client := jiraTeamCatalogTestClient(t, doer)
+	credential := providerfoundation.Credential{Provider: "jira"}
+
+	batch, err := handler.CollectTeamCatalog(
+		context.Background(),
+		TeamCatalogReference{OrgID: "org-1", SyncRunID: "run-1", Strict: false},
+		credential, client,
+		TeamCatalogSelections{Members: true},
+		now,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(batch.Rows.Memberships) != 1 {
+		t.Fatalf("memberships=%+v", batch.Rows.Memberships)
+	}
+	membership := batch.Rows.Memberships[0]
+	if membership.RawProviderUserID == nil || *membership.RawProviderUserID != "person-b@example.com" {
+		t.Fatalf("RawProviderUserID=%v, want alias-resolved person-b@example.com", membership.RawProviderUserID)
+	}
+	if len(membership.IdentityFacets) != 3 ||
+		membership.IdentityFacets[0] != "person-b@example.com" ||
+		membership.IdentityFacets[1] != "jira:accountid:account-1" ||
+		membership.IdentityFacets[2] != "ops@example.com" {
+		t.Fatalf("IdentityFacets=%v, want [person-b@example.com jira:accountid:account-1 ops@example.com]", membership.IdentityFacets)
 	}
 }
 

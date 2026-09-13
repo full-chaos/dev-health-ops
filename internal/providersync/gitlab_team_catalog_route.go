@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/identityalias"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
@@ -203,6 +204,9 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 	claim := Claim{Unit: Unit{OrgID: ref.OrgID, Provider: gitlabTeamCatalogProvider}}
 	normalizedAt = normalizedAt.UTC().Truncate(time.Millisecond)
 	evidence := GitLabTeamCatalogEvidence{Provider: gitlabTeamCatalogProvider}
+	// Loaded once per walk: every member this run normalizes
+	// shares the same org alias config.
+	resolver := identityalias.LoadDefault()
 
 	rootPath := providerRelativePath(client, "api", "v4", "groups", groupPath)
 	var root gitlabTeamCatalogGroupPayload
@@ -343,7 +347,7 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 					if err := json.Unmarshal(raw, &member); err != nil {
 						return GitLabTeamCatalogBatch{}, providerfoundation.ErrNormalizationInvalid
 					}
-					row, memberID, ok := normalizeGitLabMembershipRow(ref.OrgID, teamID, member, normalizedAt)
+					row, memberID, ok := normalizeGitLabMembershipRow(ref.OrgID, teamID, member, resolver, normalizedAt)
 					if !ok {
 						continue
 					}

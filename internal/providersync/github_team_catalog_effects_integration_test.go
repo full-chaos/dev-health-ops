@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/identityalias"
 )
 
 func TestGitHubTeamCatalogEffectsAgainstMigratedSchema(t *testing.T) {
@@ -23,7 +25,7 @@ func TestGitHubTeamCatalogEffectsAgainstMigratedSchema(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	membership, err := normalizeGitHubMembership(orgID, "platform", "octocat", "octocat@example.com", now)
+	membership, err := normalizeGitHubMembership(orgID, "platform", "octocat", "octocat@example.com", identityalias.Load(""), now)
 	if err != nil {
 		t.Fatal(err)
 	}

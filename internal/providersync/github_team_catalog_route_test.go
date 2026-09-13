@@ -4,6 +4,8 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -285,5 +287,51 @@ func TestGitHubTeamCatalogCollectResolvesMemberEmail(t *testing.T) {
 	}
 	if usersRequests != 1 {
 		t.Fatalf("email lookup should be cached per login within one collection pass: requests=%v", doer.requests)
+	}
+}
+
+// TestGitHubTeamCatalogCollectResolvesMemberIdentityThroughAliasMap is a collector-level proof: a membership row's identity facets must
+// carry the org's ALIAS-RESOLVED canonical identity, not the raw
+// "github:<login>" qualified id the collector would otherwise write.
+// Deliberately not t.Parallel(): it sets IDENTITY_MAPPING_PATH via t.Setenv,
+// which panics if called from a parallel subtest sibling.
+func TestGitHubTeamCatalogCollectResolvesMemberIdentityThroughAliasMap(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "identity_mapping.yaml")
+	if err := os.WriteFile(path, []byte(`
+version: 1
+identities:
+  - canonical: "lead@example.com"
+    aliases:
+      - "github:octocat"
+`), 0o600); err != nil {
+		t.Fatalf("write seeded identity_mapping.yaml: %v", err)
+	}
+	t.Setenv("IDENTITY_MAPPING_PATH", path)
+
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	doer := &githubTeamCatalogFixtureDoer{t: t, byPath: map[string]string{
+		"/orgs/acme/teams":                  `[{"slug":"platform","name":"Platform"}]`,
+		"/orgs/acme/teams/platform/repos":   `[]`,
+		"/orgs/acme/teams/platform/members": `[{"login":"octocat"}]`,
+	}}
+	collector := GitHubTeamCatalogRouteHandler{
+		Client: githubTeamCatalogTestClient(t, doer), OrgName: "acme",
+		Now: func() time.Time { return now }, ResolveEmail: false,
+	}
+	rows, _, err := collector.Collect(context.Background(), "org-1", true, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows.Memberships) != 1 {
+		t.Fatalf("memberships=%+v", rows.Memberships)
+	}
+	membership := rows.Memberships[0]
+	if membership.RawProviderUserID == nil || *membership.RawProviderUserID != "lead@example.com" {
+		t.Fatalf("membership.RawProviderUserID=%v, want alias-resolved lead@example.com (not the raw github:octocat qualified id)", membership.RawProviderUserID)
+	}
+	if len(membership.IdentityFacets) != 2 ||
+		membership.IdentityFacets[0] != "lead@example.com" || membership.IdentityFacets[1] != "github:octocat" {
+		t.Fatalf("membership.IdentityFacets=%v, want [lead@example.com github:octocat]", membership.IdentityFacets)
 	}
 }

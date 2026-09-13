@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/identityalias"
 )
 
 // github_team_catalog.go ports src/dev_health_ops/workers/team_autoimport_github.py
@@ -194,33 +196,21 @@ func githubTeamUUID(teamID string) string {
 	return uuid.NewSHA1(uuid.NameSpaceURL, []byte("team:"+teamID)).String()
 }
 
-// githubQualifiedIdentity mirrors providers/identity.py's
-// provider_qualified_identity("github", username=login): the stable,
-// no-email facet team auto-import and the work-item assignee ladder both
-// converge on (CHAOS-2609).
-func githubQualifiedIdentity(login string) string {
-	return "github:" + strings.TrimSpace(login)
-}
-
 // githubMembershipFacets mirrors IdentityResolver.membership_facets for a
-// GitHub member. It assumes an empty alias_to_canonical map: the same
-// simplification the already-shipped Linear route makes
-// (linearReferenceMembershipFacets), consistent with this deployment's
-// checked-in src/dev_health_ops/config/identity_mapping.yaml shipping
-// `identities: []` (see internal/jobs/metrics/daily/repouser/identity.go's
-// doc comment) -- with an empty alias map, resolve()'s alias lookup always
-// misses, so the no-email identity and the qualified identity coincide at
-// "github:<login>", exactly as this function returns.
-func githubMembershipFacets(login, email string) []string {
+// GitHub member, consulting the org's real alias map via
+// internal/identityalias -- the same config file
+// (src/dev_health_ops/config/identity_mapping.yaml / IDENTITY_MAPPING_PATH)
+// the retired Python bridge read. With no aliases configured (this
+// deployment's checked-in default, `identities: []`), the resolver's alias
+// lookup always misses, so the no-email identity and the qualified identity
+// still coincide at "github:<login>" exactly as before this port -- an org
+// that populates the file now gets real alias resolution instead.
+func githubMembershipFacets(resolver *identityalias.Resolver, login, email string) []string {
 	login = strings.TrimSpace(login)
 	if login == "" {
 		return nil
 	}
-	facets := []string{githubQualifiedIdentity(login)}
-	if normalized := strings.ToLower(strings.TrimSpace(email)); normalized != "" && !containsString(facets, normalized) {
-		facets = append(facets, normalized)
-	}
-	return facets
+	return resolver.MembershipFacets("github", login, "", email)
 }
 
 func normalizeGitHubTeam(
@@ -254,6 +244,7 @@ func normalizeGitHubTeam(
 
 func normalizeGitHubMembership(
 	orgID, teamSlug, login, email string,
+	resolver *identityalias.Resolver,
 	normalizedAt time.Time,
 ) (githubMembershipRow, error) {
 	login = strings.TrimSpace(login)
@@ -261,7 +252,7 @@ func normalizeGitHubMembership(
 		return githubMembershipRow{}, ErrInvalidConfiguration
 	}
 	normalizedAt = normalizedAt.UTC().Truncate(time.Microsecond)
-	facets := githubMembershipFacets(login, email)
+	facets := githubMembershipFacets(resolver, login, email)
 	if len(facets) == 0 {
 		return githubMembershipRow{}, ErrInvalidConfiguration
 	}

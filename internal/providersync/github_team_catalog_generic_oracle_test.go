@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/identityalias"
 )
 
 // github_team_catalog_generic_oracle_test.go proves the Go port (CHAOS-4434)
@@ -112,7 +114,8 @@ func buildGitHubTeamCatalogMembershipOracleRow(t *testing.T, input map[string]an
 		email = value
 	}
 	membership, err := normalizeGitHubMembership(
-		input["org_id"].(string), input["team_slug"].(string), input["login"].(string), email, normalizedAt,
+		input["org_id"].(string), input["team_slug"].(string), input["login"].(string), email,
+		identityalias.Load(""), normalizedAt,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -165,7 +168,7 @@ func TestGitHubTeamCatalogFacetsMatchLivePythonResolver(t *testing.T) {
 			if value, ok := input["email"].(string); ok {
 				email = value
 			}
-			return githubTeamCatalogFacetsProducerRow{Facets: githubMembershipFacets(input["login"].(string), email)}
+			return githubTeamCatalogFacetsProducerRow{Facets: githubMembershipFacets(identityalias.Load(""), input["login"].(string), email)}
 		},
 		nil,
 	)

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/identityalias"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
@@ -35,7 +36,7 @@ func gitlabTeamCatalogIntegrationRows(orgID string, now time.Time) GitLabTeamCat
 }
 
 func mustGitLabMembershipRows(orgID string, now time.Time) []gitlabTeamCatalogMembershipRow {
-	row, _, ok := normalizeGitLabMembershipRow(orgID, "gl:org", gitlabTeamCatalogMemberPayload{Username: "root-owner"}, now)
+	row, _, ok := normalizeGitLabMembershipRow(orgID, "gl:org", gitlabTeamCatalogMemberPayload{Username: "root-owner"}, identityalias.Load(""), now)
 	if !ok {
 		panic("normalizeGitLabMembershipRow failed")
 	}

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/identityalias"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
@@ -126,6 +127,11 @@ func (collector GitHubTeamCatalogRouteHandler) Collect(
 	}
 	normalizedAt := collector.now().Truncate(time.Microsecond)
 	org := strings.TrimSpace(collector.OrgName)
+	// Loaded once per Collect call: every member this run
+	// normalizes shares the same org alias config, so there is no reason to
+	// re-read the file per member the way calling identityalias.LoadDefault()
+	// straight from normalizeGitHubMembership would.
+	resolver := identityalias.LoadDefault()
 
 	teamPages, err := providerfoundation.CollectGitHubLinkPages(ctx, collector.Client, providerfoundation.GitHubPageOptions{
 		Path: "/orgs/" + url.PathEscape(org) + "/teams", Query: perPageQuery(perPage),
@@ -212,7 +218,7 @@ func (collector GitHubTeamCatalogRouteHandler) Collect(
 			// Strict=true (reference discovery) re-raises, matching Python
 			// exactly.
 			memberships, requests, ok, memberErr := collector.collectTeamMemberships(
-				ctx, orgID, org, slug, perPage, maxPages, normalizedAt, emailCache,
+				ctx, orgID, org, slug, perPage, maxPages, resolver, normalizedAt, emailCache,
 			)
 			evidence.Requests += requests
 			if ok {
@@ -255,6 +261,7 @@ func (collector GitHubTeamCatalogRouteHandler) collectTeamMemberships(
 	ctx context.Context,
 	orgID, org, slug string,
 	perPage, maxPages int,
+	resolver *identityalias.Resolver,
 	normalizedAt time.Time,
 	emailCache map[string]*string,
 ) ([]githubMembershipRow, int, bool, error) {
@@ -289,7 +296,7 @@ func (collector GitHubTeamCatalogRouteHandler) collectTeamMemberships(
 		if resolved != nil {
 			email = *resolved
 		}
-		membership, err := normalizeGitHubMembership(orgID, slug, login, email, normalizedAt)
+		membership, err := normalizeGitHubMembership(orgID, slug, login, email, resolver, normalizedAt)
 		if err != nil {
 			return nil, requests, false, err
 		}

@@ -2000,7 +2000,19 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # jira_team_catalog_test.go and jira_team_catalog_route_test.go, none
     # integration-tagged (all HTTP-fixture or in-memory): +21 top-level
     # (1355 -> 1376), integration-tagged UNCHANGED at 155.
-    assert len(expected_provider_tests) == 1376
+    # A shared org-identity-alias resolver (internal/identityalias, wired
+    # into all four native team-catalog collectors' membership-row
+    # construction) added 7 new top-level tests, none integration-tagged
+    # (all in-memory or HTTP-fixture): TestGitLabTeamCatalogMembershipFacetsConsultsAliasMap,
+    # TestGitLabTeamCatalogCollectResolvesMemberIdentityThroughAliasMap
+    # (gitlab_team_catalog_test.go); TestJiraTeamCatalogMembershipFacetsConsultsAliasMap
+    # (jira_team_catalog_test.go); TestJiraTeamCatalogCollectResolvesMemberIdentityThroughAliasMap
+    # (jira_team_catalog_route_test.go); TestGitHubTeamCatalogCollectResolvesMemberIdentityThroughAliasMap
+    # (github_team_catalog_route_test.go); TestLinearReferenceCatalogResolvesMemberIdentityThroughAliasMap
+    # (linear_reference_catalog_test.go); and TestIdentityAliasResolverMatchesLivePythonResolverWithSeededAliases,
+    # a live-Python-oracle parity test (identity_alias_resolver_oracle_test.go):
+    # +7 top-level (1376 -> 1383), integration-tagged UNCHANGED at 155.
+    assert len(expected_provider_tests) == 1383
 
     assert len(expected_integration_tests) == 155
     assert expected_integration_tests < expected_provider_tests
@@ -2018,7 +2030,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1376
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1383
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -2132,7 +2144,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1376
+    assert len(selected_tests) == len(set(selected_tests)) == 1383
     assert set(selected_tests) == expected_tests
 
 

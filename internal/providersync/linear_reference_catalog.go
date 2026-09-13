@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/identityalias"
 )
 
 // The reference catalog is an auxiliary projection of the Linear work-items
@@ -295,6 +297,7 @@ func normalizeLinearReferenceProject(
 func normalizeLinearReferenceTeam(
 	claim Claim,
 	payload linearReferenceCatalogTeamPayload,
+	resolver *identityalias.Resolver,
 	normalizedAt time.Time,
 ) (linearReferenceTeamRow, error) {
 	if claim.Provider != "linear" || strings.TrimSpace(claim.OrgID) == "" ||
@@ -312,7 +315,7 @@ func normalizeLinearReferenceTeam(
 	// is appended to the returned batch. This page-1 roster is only ever
 	// the value actually used for a team that turns out to have <=10
 	// members (no extra page fetched at all).
-	members := linearReferenceTeamRosterFacets(payload.Members.Nodes)
+	members := linearReferenceTeamRosterFacets(resolver, payload.Members.Nodes)
 	return linearReferenceTeamRow{
 		ID:       teamKey,
 		TeamUUID: uuid.NewSHA1(uuid.NameSpaceURL, []byte("team:"+teamKey)).String(),
@@ -342,7 +345,7 @@ func normalizeLinearReferenceTeam(
 // that needed extra pages) -- codex review P1: a roster built from page 1
 // alone silently truncates any team with more than 10 members even though
 // the members/team_memberships TABLES already get the full paginated set.
-func linearReferenceTeamRosterFacets(nodes []linearReferenceCatalogMemberPayload) []string {
+func linearReferenceTeamRosterFacets(resolver *identityalias.Resolver, nodes []linearReferenceCatalogMemberPayload) []string {
 	members := make([]string, 0, len(nodes))
 	for _, member := range nodes {
 		if member.Active != nil && !*member.Active {
@@ -352,7 +355,7 @@ func linearReferenceTeamRosterFacets(nodes []linearReferenceCatalogMemberPayload
 		if identity = strings.TrimSpace(identity); identity == "" {
 			continue
 		}
-		for _, facet := range linearReferenceMembershipFacets(identity, member.Email) {
+		for _, facet := range linearReferenceMembershipFacets(resolver, identity, member.Email) {
 			if !containsString(members, facet) {
 				members = append(members, facet)
 			}
@@ -397,6 +400,7 @@ func normalizeLinearReferenceMember(
 	claim Claim,
 	teamID string,
 	payload linearReferenceCatalogMemberPayload,
+	resolver *identityalias.Resolver,
 	normalizedAt time.Time,
 ) (linearReferenceMemberRow, linearReferenceMembershipRow, string, error) {
 	if claim.Provider != "linear" || strings.TrimSpace(claim.OrgID) == "" ||
@@ -423,7 +427,7 @@ func normalizeLinearReferenceMember(
 	identityJSON := `{"linear": [` + string(identityValue) + `]}`
 	name := linearFirstNonEmpty(payload.Name, identity)
 	email := optionalLinearString(payload.Email)
-	facets := linearReferenceMembershipFacets(identity, payload.Email)
+	facets := linearReferenceMembershipFacets(resolver, identity, payload.Email)
 	return linearReferenceMemberRow{
 		OrgID: claim.OrgID, MemberID: memberID, Name: name, Email: email,
 		ProviderIdentities: string(identityJSON), IsActive: 1, UpdatedAt: normalizedAt,
@@ -439,17 +443,12 @@ func linearMemberID(identity string) string {
 	return "linear:" + strings.ToLower(strings.TrimSpace(identity))
 }
 
-func linearReferenceMembershipFacets(identity, email string) []string {
+func linearReferenceMembershipFacets(resolver *identityalias.Resolver, identity, email string) []string {
 	identity = strings.TrimSpace(identity)
 	if identity == "" {
 		return nil
 	}
-	facets := []string{"linear:" + identity}
-	if normalizedEmail := strings.ToLower(strings.TrimSpace(email)); normalizedEmail != "" &&
-		!containsString(facets, normalizedEmail) {
-		facets = append(facets, normalizedEmail)
-	}
-	return facets
+	return resolver.MembershipFacets("linear", identity, "", email)
 }
 
 func linearReferenceTeamPayloadForOrg(rows []LinearReferenceTeam, orgID, teamKey string) (linearTeamPayload, bool) {

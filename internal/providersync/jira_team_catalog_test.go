@@ -3,6 +3,8 @@ package providersync
 import (
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/identityalias"
 )
 
 func TestJiraTeamID(t *testing.T) {
@@ -44,20 +46,37 @@ func TestNormalizeJiraTeamRow(t *testing.T) {
 }
 
 func TestJiraTeamCatalogMembershipFacets(t *testing.T) {
-	// No alias configured (the same simplification GitHub/GitLab's native
-	// collectors already make): the no-email identity IS the provider-
-	// qualified id, "jira:accountid:<id>" (Jira carries no username).
-	facets := jiraTeamCatalogMembershipFacets("account-1", nil)
+	// No alias configured: the no-email identity IS the provider-qualified
+	// id, "jira:accountid:<id>" (Jira carries no username).
+	resolver := identityalias.Load("")
+	facets := jiraTeamCatalogMembershipFacets(resolver, "account-1", nil)
 	if len(facets) != 1 || facets[0] != "jira:accountid:account-1" {
 		t.Fatalf("got %v", facets)
 	}
 	email := "Ops.Lead@Example.com"
-	facets = jiraTeamCatalogMembershipFacets("account-1", &email)
+	facets = jiraTeamCatalogMembershipFacets(resolver, "account-1", &email)
 	if len(facets) != 2 || facets[0] != "jira:accountid:account-1" || facets[1] != "ops.lead@example.com" {
 		t.Fatalf("got %v", facets)
 	}
-	if got := jiraTeamCatalogMembershipFacets("", nil); got != nil {
+	if got := jiraTeamCatalogMembershipFacets(resolver, "", nil); got != nil {
 		t.Fatalf("empty account id should yield no facets, got %v", got)
+	}
+}
+
+// TestJiraTeamCatalogMembershipFacetsConsultsAliasMap is a red-first proof: an account-id alias must resolve to its configured
+// canonical person, not just the raw provider-qualified id.
+func TestJiraTeamCatalogMembershipFacetsConsultsAliasMap(t *testing.T) {
+	resolver := &identityalias.Resolver{AliasToCanonical: map[string]string{
+		"jira:accountid:acct-999": "person-b@example.com",
+	}}
+	facets := jiraTeamCatalogMembershipFacets(resolver, "acct-999", nil)
+	if len(facets) != 2 || facets[0] != "person-b@example.com" || facets[1] != "jira:accountid:acct-999" {
+		t.Fatalf("got %v, want [person-b@example.com jira:accountid:acct-999]", facets)
+	}
+	// A DIFFERENT, unaliased account id must not pick up the same canonical.
+	unaliased := jiraTeamCatalogMembershipFacets(resolver, "acct-111", nil)
+	if len(unaliased) != 1 || unaliased[0] != "jira:accountid:acct-111" {
+		t.Fatalf("got %v, want unaliased raw qualified id", unaliased)
 	}
 }
 
@@ -73,7 +92,7 @@ func TestNormalizeJiraMembershipRow(t *testing.T) {
 	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
 	row, ok := normalizeJiraMembershipRow("org-1", "OPS", jiraTeamCatalogUserPayload{
 		AccountID: "Account-1", EmailAddress: "ops@example.com", DisplayName: "Ops Lead",
-	}, now)
+	}, identityalias.Load(""), now)
 	if !ok {
 		t.Fatal("expected ok")
 	}
@@ -86,7 +105,7 @@ func TestNormalizeJiraMembershipRow(t *testing.T) {
 		t.Fatalf("row=%+v", row)
 	}
 
-	if _, ok := normalizeJiraMembershipRow("org-1", "OPS", jiraTeamCatalogUserPayload{}, now); ok {
+	if _, ok := normalizeJiraMembershipRow("org-1", "OPS", jiraTeamCatalogUserPayload{}, identityalias.Load(""), now); ok {
 		t.Fatal("a lead with no accountId/email/displayName must be rejected")
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/identityalias"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
@@ -177,6 +178,9 @@ func (handler LinearReferenceCatalogRouteHandler) CollectReferenceCatalog(
 		return LinearReferenceCatalogBatch{}, err
 	}
 	normalizedAt = normalizedAt.UTC().Truncate(time.Millisecond)
+	// Loaded once per walk: every member this run normalizes
+	// shares the same org alias config.
+	resolver := identityalias.LoadDefault()
 	evidence := LinearReferenceCatalogEvidence{Provider: "linear", Dataset: "reference-catalog"}
 	rows := LinearReferenceCatalogRows{
 		Teams: make([]linearReferenceTeamRow, 0), Members: make([]linearReferenceMemberRow, 0),
@@ -207,7 +211,7 @@ func (handler LinearReferenceCatalogRouteHandler) CollectReferenceCatalog(
 		if err := json.Unmarshal(raw, &payload); err != nil {
 			return linearReferenceCatalogFailureBatch(evidence, "teams", evidence.Pages, evidence.Records, err, false)
 		}
-		team, normalizeErr := normalizeLinearReferenceTeam(claim, payload, normalizedAt)
+		team, normalizeErr := normalizeLinearReferenceTeam(claim, payload, resolver, normalizedAt)
 		if normalizeErr != nil {
 			return linearReferenceCatalogFailureBatch(evidence, "teams", evidence.Pages, evidence.Records, normalizeErr, false)
 		}
@@ -251,12 +255,12 @@ func (handler LinearReferenceCatalogRouteHandler) CollectReferenceCatalog(
 			// value normalizeLinearReferenceTeam provisionally set above --
 			// otherwise any team with more than 10 members gets a `teams.
 			// members` silently truncated to its first page forever.
-			team.Members = linearReferenceTeamRosterFacets(memberNodes)
+			team.Members = linearReferenceTeamRosterFacets(resolver, memberNodes)
 			for _, memberPayload := range memberNodes {
 				if memberPayload.Active != nil && !*memberPayload.Active {
 					continue
 				}
-				member, membership, _, memberErr := normalizeLinearReferenceMember(claim, team.ID, memberPayload, normalizedAt)
+				member, membership, _, memberErr := normalizeLinearReferenceMember(claim, team.ID, memberPayload, resolver, normalizedAt)
 				if memberErr != nil {
 					// Python skips members without an email and provider id. A node
 					// with either field absent is not an authoritative identity row.

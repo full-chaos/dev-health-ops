@@ -318,7 +318,21 @@ def test_inventory_is_non_empty_and_matches_audit_row_count():
     # new literal dispatch call in Python; that status write is covered by
     # tests/test_external_ingest_recompute_status_sql.py, not this
     # inventory. Net: 41 - 3 = 38.
-    assert inventory["row_count"] == 38
+    #
+    # = 39. POST /teams/trigger-drift-sync (admin/routers/teams.py) is deleted
+    # outright: it dispatched a name-based sync_team_drift Celery signature,
+    # but the task itself (team_drift_sync.py) was already deleted with zero
+    # production callers, so the endpoint enqueued into a void on every call
+    # regardless of Celery's own retirement. Removed: the
+    # call_site_literal:teams.py:401 row and the
+    # api_trigger_endpoint:teams.py:393 row. The two
+    # getattr(finalize_sync_run, 'apply_async') rows (sync_units.py:1681/2672)
+    # are also untouched: their enclosing function, run_sync_unit, is not dead
+    # code -- it is exercised directly by roughly 100 test call sites across
+    # tests/test_sync_units.py and siblings (the
+    # getattr(run_sync_unit, "run")(...) calling convention), so it is not a
+    # safe unilateral deletion. Net, on top of the recompute removal above: 38 - 2 = 36.
+    assert inventory["row_count"] == 36
 
 
 def test_retired_beat_entries_are_evidenced_and_absent_from_source():

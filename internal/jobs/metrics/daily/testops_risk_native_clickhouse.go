@@ -23,14 +23,18 @@ import (
 // The Python authority is:
 //   - src/dev_health_ops/metrics/compute_testops.py
 //     (compute_pipeline_metrics_daily, compute_test_metrics_daily,
-//     compute_coverage_metrics_daily -- these three families,
-//     testops_pipeline/testops_test/testops_coverage, families.json,
-//     CHAOS-4284 -- stay "pending"/bridge; ported as the sibling
-//     internal/jobs/metrics/testops package, which THIS file loads raw
-//     rows for and calls, purely as an in-memory input to testops_risk's
-//     own three functions below. See that package's doc comment for why
-//     it is a separate, exported package rather than private helpers here
-//     -- CHAOS-4284 is meant to import and reuse it verbatim.)
+//     compute_coverage_metrics_daily -- ported as the sibling
+//     internal/jobs/metrics/testops package, purely as an in-memory input
+//     to testops_risk's own three functions below. See that package's doc
+//     comment for why it is a separate, exported package rather than
+//     private helpers here: its accumulators are shared verbatim with the
+//     sibling testops_pipeline/testops_test/testops_coverage native
+//     families in testops_native_clickhouse.go, and TestopsRiskExecutor
+//     streams its own reads into those same accumulators via that file's
+//     cap-free pushdown readers rather than the raw, row-materialising
+//     loaders below. Those loaders stay in THIS file as the raw reference
+//     reader the pushdown-vs-raw differential test compares the streaming
+//     path against -- see loadTestopsSuiteAndCaseRows's doc comment.)
 //   - src/dev_health_ops/metrics/compute_testops_risk.py
 //     (compute_release_confidence, compute_quality_drag,
 //     compute_pipeline_stability -- the family THIS file's
@@ -83,53 +87,33 @@ type testopsRiskBatchConn interface {
 	PrepareBatch(context.Context, string, ...driver.PrepareBatchOption) (driver.Batch, error)
 }
 
-// testopsLoaderMaxRows ports _testops_loader_max_rows (loaders/clickhouse.py:99):
-// same env var, same default, same "non-positive or unparseable falls back
-// to the default" behavior.
-func testopsLoaderMaxRows() int {
-	const defaultMaxRows = 200_000
-	raw, err := envInt("DEV_HEALTH_TESTOPS_LOADER_MAX_ROWS", defaultMaxRows)
-	if err != nil || raw <= 0 {
-		return defaultMaxRows
-	}
-	return raw
-}
-
-// errTestopsRowCapExceeded ports TestopsRowCapExceeded (loaders/clickhouse.py:110):
-// a bounded, classified refusal rather than an unbounded read. ComputeFamily
-// returning this error is not a partition failure -- PartitionHandler's
-// fail-open native-family policy (daily.go computeNativeFamilies) simply
-// leaves testops_risk off the skip list for this partition, so the Python
-// compatibility bridge computes and writes it exactly as it would have
-// before this executor existed (the bridge enforces the identical cap on
-// its own read).
-type errTestopsRowCapExceeded struct {
-	table   string
-	maxRows int
-	fetched int
-}
-
-func (err *errTestopsRowCapExceeded) Error() string {
-	return fmt.Sprintf(
-		"testops_row_cap_exceeded: table=%q max_rows=%d fetched>=%d -- refusing to compute testops metrics on a partial/truncated result",
-		err.table, err.maxRows, err.fetched,
-	)
-}
-
 // -----------------------------------------------------------------------
-// Loaders -- ports of ClickHouseDataLoader.load_testops_* (loaders/clickhouse.py),
-// building the internal/jobs/metrics/testops package's row types directly.
-// Every loader here is scoped to exactly ONE repo (this executor's own
-// per-repo loop, mirroring the Python bridge's per-repo_id call) and one
-// organization, unlike the Python methods' optional org-wide mode -- a
-// native executor is always constructed for one run.OrganizationID, so the
-// "repo_id is None" / "self.org_id is empty" branches those methods carry
-// for admin/backfill tooling are dropped here as genuinely unreachable from
-// this call site.
+// Raw row loaders -- ports of ClickHouseDataLoader.load_testops_*
+// (loaders/clickhouse.py), building the internal/jobs/metrics/testops
+// package's row types directly. Every loader here is scoped to exactly ONE
+// repo (this executor's own per-repo loop, mirroring the Python bridge's
+// per-repo_id call) and one organization, unlike the Python methods'
+// optional org-wide mode -- a native executor is always constructed for one
+// run.OrganizationID, so the "repo_id is None" / "self.org_id is empty"
+// branches those methods carry for admin/backfill tooling are dropped here
+// as genuinely unreachable from this call site.
 //
 // job_runs (ci_job_runs) is deliberately NOT loaded: compute_pipeline_metrics_daily
 // receives job_runs only to `del` it immediately (compute_testops.py:123) --
 // it is unused by the family this executor ports.
+//
+// NONE of these four loaders is on TestopsRiskExecutor's production read
+// path any more: it streams straight into a testops.PipelineAccumulator /
+// testops.TestAccumulator via loadNativeTestopsPipelineRuns /
+// loadNativeTestopsSuites / loadNativeTestopsCaseGroups /
+// loadNativeHistoricalFailedCaseNames / loadNativeTestopsLatestCoverage
+// (testops_native_clickhouse.go), which never materialises a whole day's
+// test_case_results and carries no row cap. These raw loaders are kept
+// purely as the differential test's ground truth: it reads the SAME
+// ClickHouse fixture through both the pushdown readers and these
+// row-at-a-time loaders (feeding the testops package's slice API) and
+// asserts the two produce identical records field by field, which is what
+// proves the streaming path did not change testops_risk's output.
 // -----------------------------------------------------------------------
 
 func loadTestopsPipelineRuns(
@@ -168,23 +152,25 @@ WHERE started_at >= ? AND started_at < ? AND repo_id = ? AND org_id = ?`,
 // (loaders/clickhouse.py:1344), including its two-query semi-join shape:
 // suites in [start,end) for this repo, then cases whose run has SOME suite
 // in [start,end) for this repo AND whose OWN suite starts before `end`
-// (the day-boundary guard load_testops_test_data:1459 documents). Row-cap
-// enforced on both, suites first (mirrors the Python ordering rationale).
+// (the day-boundary guard load_testops_test_data:1459 documents).
+//
+// This is no longer the production read path for testops_risk (see
+// TestopsRiskExecutor, which streams test_suite_results/test_case_results
+// into a testops.TestAccumulator via the shared pushdown readers in
+// testops_native_clickhouse.go instead of materialising them here). It is
+// kept as the raw, row-at-a-time reference reader that the pushdown-vs-raw
+// differential test compares the streaming path against.
 func loadTestopsSuiteAndCaseRows(
 	ctx context.Context, conn testopsRiskConn, orgID string, repoID uuid.UUID, start, end time.Time,
 ) ([]testops.SuiteRow, []testops.CaseRow, error) {
-	maxRows := testopsLoaderMaxRows()
-	limit := maxRows + 1
-
 	suiteRows, err := conn.Query(ctx, `
 SELECT repo_id, run_id, suite_id, total_count, passed_count, failed_count, skipped_count,
        error_count, quarantined_count, duration_seconds, started_at, finished_at,
        team_id, service_id, org_id
 FROM test_suite_results FINAL
 WHERE coalesce(started_at, finished_at) >= ? AND coalesce(started_at, finished_at) < ?
-  AND repo_id = ? AND org_id = ?
-LIMIT ?`,
-		start.UTC(), end.UTC(), repoID, orgID, uint64(limit))
+  AND repo_id = ? AND org_id = ?`,
+		start.UTC(), end.UTC(), repoID, orgID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("load testops suite results: %w", err)
 	}
@@ -206,9 +192,6 @@ LIMIT ?`,
 	if suiteErr != nil {
 		return nil, nil, fmt.Errorf("iterate testops suite results: %w", suiteErr)
 	}
-	if len(suites) > maxRows {
-		return nil, nil, &errTestopsRowCapExceeded{table: "test_suite_results", maxRows: maxRows, fetched: len(suites)}
-	}
 
 	caseRows, err := conn.Query(ctx, `
 SELECT c.repo_id, c.run_id, c.suite_id, c.case_name, c.status, c.retry_attempt
@@ -223,11 +206,10 @@ AND (c.repo_id, c.run_id, c.suite_id) IN (
   WHERE coalesce(started_at, finished_at) < ?
     AND repo_id = ? AND org_id = ?
 )
-AND c.repo_id = ? AND c.org_id = ?
-LIMIT ?`,
+AND c.repo_id = ? AND c.org_id = ?`,
 		start.UTC(), end.UTC(), repoID, orgID,
 		end.UTC(), repoID, orgID,
-		repoID, orgID, uint64(limit))
+		repoID, orgID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("load testops case results: %w", err)
 	}
@@ -245,9 +227,6 @@ LIMIT ?`,
 	if caseErr != nil {
 		return nil, nil, fmt.Errorf("iterate testops case results: %w", caseErr)
 	}
-	if len(cases) > maxRows {
-		return nil, nil, &errTestopsRowCapExceeded{table: "test_case_results", maxRows: maxRows, fetched: len(cases)}
-	}
 	return suites, cases, nil
 }
 
@@ -257,12 +236,13 @@ LIMIT ?`,
 // [end,currentDayEnd) -- the same day-boundary run_id exclusion that
 // prevents a straddling run from being double counted as both "today" and
 // "historical".
+//
+// Kept as the differential test's raw-reader reference; the production
+// testops_risk path calls loadNativeHistoricalFailedCaseNames instead (see
+// loadTestopsSuiteAndCaseRows's doc comment).
 func loadHistoricalFailedCaseNames(
 	ctx context.Context, conn testopsRiskConn, orgID string, repoID uuid.UUID, start, end, currentDayEnd time.Time,
 ) (map[string]struct{}, error) {
-	maxRows := testopsLoaderMaxRows()
-	limit := maxRows + 1
-
 	rows, err := conn.Query(ctx, `
 SELECT DISTINCT c.case_name AS case_name
 FROM test_case_results AS c FINAL
@@ -275,34 +255,28 @@ WHERE coalesce(s.started_at, s.finished_at) >= ? AND coalesce(s.started_at, s.fi
     WHERE coalesce(started_at, finished_at) >= ? AND coalesce(started_at, finished_at) < ?
       AND repo_id = ? AND org_id = ?
   )
-  AND s.repo_id = ? AND s.org_id = ?
-LIMIT ?`,
+  AND s.repo_id = ? AND s.org_id = ?`,
 		start.UTC(), end.UTC(),
 		"failure", "failed", "error", "errors", "timeout", "timed_out",
 		end.UTC(), currentDayEnd.UTC(), repoID, orgID,
-		repoID, orgID, uint64(limit))
+		repoID, orgID)
 	if err != nil {
 		return nil, fmt.Errorf("load testops historical failed case names: %w", err)
 	}
 	defer rows.Close()
 
 	result := make(map[string]struct{})
-	count := 0
 	for rows.Next() {
 		var name string
 		if err := rows.Scan(&name); err != nil {
 			return nil, fmt.Errorf("scan testops historical failed case name: %w", err)
 		}
-		count++
 		if name != "" {
 			result[name] = struct{}{}
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate testops historical failed case names: %w", err)
-	}
-	if count > maxRows {
-		return nil, &errTestopsRowCapExceeded{table: "test_case_results:historical_names", maxRows: maxRows, fetched: count}
 	}
 	return result, nil
 }

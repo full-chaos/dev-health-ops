@@ -481,8 +481,8 @@
       "verification_status": "verified",
       "compatibility_dependency": "None. CHAOS-5353 deletes send_billing_notification, billing_emails.py and the /api/internal/worker-operational/billing route entirely; BillingHandler.Work (internal/jobs/operational/billinghandler.go) owns the completion fence, the owner-email lookup, all seven email renderings and the provider send -- no Python callback of any kind.",
       "deletion_evidence_requirement": "Already satisfied by this PR: registry.json kind `operational.billing_notification` passes Registry.ValidateStartup with BillingHandler as its concrete non-HTTP-bridge handler, and the compatibility runner import is removed from the Python API.",
-      "acceptance_test_id": "tests/api/test_worker_operational_bridge.py::test_internal_bridge_no_longer_exposes_a_billing_route",
-      "notes": "CHAOS-5353: was the last operational COMPAT bridge; the seven email bodies are pinned byte-for-byte against the retired Python renderer by internal/jobs/operational/testdata/billing_email/*.json"
+      "acceptance_test_id": "tests/test_credential_confusion_production_stack.py::test_the_deleted_billing_route_is_gone_not_merely_unused",
+      "notes": "CHAOS-5353: was the last operational COMPAT bridge; the seven email bodies are pinned byte-for-byte against the retired Python renderer by internal/jobs/operational/testdata/billing_email/*.json. CORRECTION: acceptance_test_id re-pointed here from tests/api/test_worker_operational_bridge.py (deleted -- worker_operational.py's last route, /heartbeat, was ported to native Go and the whole module had no route left)."
     },
     {
       "id": "registry_kind:contracts/jobs/v1/registry.json:396",
@@ -637,7 +637,7 @@
         "line": 588
       },
       "queue_or_cadence": "heartbeat / ops",
-      "dispatches": "phone_home_heartbeat",
+      "dispatches": "NativeHeartbeatDispatcher.DispatchHeartbeat",
       "dispatch_mechanism": "job_registry_descriptor",
       "owner_role": "primary",
       "target_owner": {
@@ -645,12 +645,12 @@
         "value": "system.heartbeat"
       },
       "target_kind_id": "kind:system.heartbeat",
-      "current_implementation_state": "python_compatibility",
+      "current_implementation_state": "native_go",
       "verification_status": "verified",
-      "compatibility_dependency": "HTTP compatibility bridge (internal/worker/*/v1/execute) backed by the corresponding src/dev_health_ops/api/internal/*.py runner.",
-      "deletion_evidence_requirement": "registry.json kind `system.heartbeat` passes Registry.ValidateStartup with a concrete non-HTTP-bridge handler, the compatibility runner import is removed from the Python API, and a non-empty baseline parity dataset matches product data (not just job status).",
-      "acceptance_test_id": "tests/workers/job_contracts/test_registry.py",
-      "notes": ""
+      "compatibility_dependency": "None. internal/jobs/system/heartbeat_native.go computes the phone-home payload and writes its audit_logs row directly against PostgreSQL; the former HTTP compatibility bridge (internal/jobs/operational's HTTPDispatcher, api/internal/worker_operational.py's /heartbeat route, and system_ops.py's phone_home_heartbeat body) is deleted, not merely unused.",
+      "deletion_evidence_requirement": "Satisfied. registry.json kind `system.heartbeat` resolves to NativeHeartbeatDispatcher with no HTTP bridge in the handler chain; the former compatibility runner (phone_home_heartbeat) and its route are removed from the Python API; a red-first parity test seeds identical fixture data and compares the native compute's counts/tier/license-hash against the deleted Python function's real (oracle-captured) output.",
+      "acceptance_test_id": "internal/jobs/system/heartbeat_native_integration_test.go",
+      "notes": "CORRECTION: this row previously read python_compatibility / dispatches=phone_home_heartbeat, stale since the phone-home compute was ported to native Go with the HTTP bridge deleted outright (see compatibility_dependency)."
     },
     {
       "id": "registry_kind:contracts/jobs/v1/registry.json:621",

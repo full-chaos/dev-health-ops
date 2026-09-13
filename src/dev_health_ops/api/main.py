@@ -33,9 +33,6 @@ from dev_health_ops.api.external_ingest.status import (
 )
 from dev_health_ops.api.internal import router as internal_acr_router
 from dev_health_ops.api.internal.worker_metrics import router as worker_metrics_router
-from dev_health_ops.api.internal.worker_operational import (
-    router as worker_operational_router,
-)
 from dev_health_ops.api.internal.worker_sync import router as worker_sync_router
 from dev_health_ops.api.internal.worker_workgraph import (
     router as worker_workgraph_router,
@@ -248,7 +245,6 @@ app.include_router(ingest_router)
 app.include_router(external_ingest_router)
 app.include_router(external_ingest_status_router)
 app.include_router(internal_acr_router)
-app.include_router(worker_operational_router)
 app.include_router(worker_sync_router)
 app.include_router(worker_metrics_router)
 app.include_router(worker_workgraph_router)

@@ -278,6 +278,20 @@ type Config struct {
 	OperationalBridgeAllowInsecure bool
 	StreamConfiguredReplicas       int
 
+	// TelemetryEndpoint is the phone-home receiver the native heartbeat
+	// dispatcher POSTs to (internal/jobs/system.NativeHeartbeatDispatcher);
+	// empty means "record the heartbeat locally only", same as the Python
+	// implementation it replaced. Unlike OperationalBridge*, this is an
+	// external, possibly-public URL, not an internal service -- no
+	// loopback/private-network restriction applies to it.
+	TelemetryEndpoint string
+	// TelemetryInstanceID identifies this deployment to the phone-home
+	// receiver across restarts; "unknown" when unset. It is an
+	// operator-configured deployment identity, unrelated to
+	// WorkerInstanceID (the per-process River client identity generated
+	// above).
+	TelemetryInstanceID string
+
 	// WorkerGithubWorkItemsInvestmentConfigPath are explicit production paths
 	// for the two Python-parity config engines. Production has no source-relative
 	// default; a local deployment falls back to artifacts packaged at fixed
@@ -558,6 +572,8 @@ func Load(spec Spec) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	cfg.TelemetryEndpoint = envOrDefault(lookup, "TELEMETRY_ENDPOINT", "")
+	cfg.TelemetryInstanceID = envOrDefault(lookup, "INSTANCE_ID", "unknown")
 	postgresSchemes := []string{
 		"postgres",
 		"postgresql",
@@ -787,6 +803,8 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.Duration("river_job_cleaner_timeout", c.RiverJobCleanerTimeout),
 		slog.Duration("sync_observation_timeout", c.SyncObservationTimeout),
 		slog.Bool("operational_bridge_allow_insecure", c.OperationalBridgeAllowInsecure),
+		slog.Bool("telemetry_endpoint_configured", c.TelemetryEndpoint != ""),
+		slog.String("telemetry_instance_id", c.TelemetryInstanceID),
 		slog.Int("stream_configured_replicas", c.StreamConfiguredReplicas),
 		slog.Bool(
 			"worker_github_work_items_status_mapping_path_configured",

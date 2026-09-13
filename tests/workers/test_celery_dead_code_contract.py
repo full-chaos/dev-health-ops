@@ -95,32 +95,26 @@ _DEAD_TASK_NAMES = (
     # CHAOS-3093 (PR2b): health_check had no dispatch site of any kind
     # (confirmed repo-wide: no .delay/.apply_async/send_task/getattr
     # indirection/Beat entry/CLI invocation) -- deleted outright, along with
-    # its two re-export sites (tasks.py, system_tasks.py). Unlike the other
-    # PR2b decorator strips below, this one is a full deletion, not a
-    # decorator-only removal -- see test_dead_code_contract's own comment
-    # for phone_home_heartbeat, which keeps its function body and stays
-    # live via an HTTP compatibility bridge.
+    # its two re-export sites (tasks.py, system_tasks.py).
     "health_check",
     # run_post_sync_team_autoimport (team_autoimport.py) lost its
     # `@celery_app.task` decorator in the same PR2b pass as phone_home_
-    # heartbeat below, staying live behind the /team-autoimport HTTP
-    # bridge -- and was later deleted outright, decorator-stripped body and
-    # all, once jira (the last provider still routed through it) got its
-    # own native Go collector and that bridge route had no remaining
-    # caller. Unlike phone_home_heartbeat, it belongs here now: fully
-    # absent from tasks.__all__, not just un-decorated.
+    # heartbeat, staying live behind the /team-autoimport HTTP bridge -- and
+    # was later deleted outright, decorator-stripped body and all, once jira
+    # (the last provider still routed through it) got its own native Go
+    # collector and that bridge route had no remaining caller.
     "run_post_sync_team_autoimport",
+    # phone_home_heartbeat (system_ops.py) had its `@celery_app.task`
+    # decorator dropped in the same PR2b pass (Celery has had zero consumers
+    # since CHAOS-4026), staying live behind the HTTP compatibility bridge
+    # (api/internal/worker_operational.py's /heartbeat) -- and was later
+    # deleted outright, decorator-stripped body and all, once the phone-home
+    # compute it implemented was ported to run natively in Go
+    # (internal/jobs/system/heartbeat_native.go) and that bridge route had
+    # no remaining caller. system_ops.py and system_tasks.py, its two
+    # re-export sites, are deleted with it -- see _DELETED_MODULES.
+    "phone_home_heartbeat",
 )
-
-# CHAOS-3093 (PR2b): phone_home_heartbeat (system_ops.py) had its
-# `@celery_app.task` decorator dropped -- Celery has had zero consumers
-# since CHAOS-4026, so the decorator was dead weight around code that is
-# still genuinely needed: it remains the live compute body behind an HTTP
-# compatibility bridge (api/internal/worker_operational.py's /heartbeat),
-# called directly now instead of via `.run()`. It is deliberately NOT added
-# to _DEAD_TASK_NAMES above -- that set asserts absence from
-# `tasks.__all__`/the registered celery app, and both functions correctly
-# stay present in `tasks.__all__` (just no longer celery-registered).
 
 # Beat schedule keys that must no longer exist.
 _DEAD_BEAT_ENTRIES = (
@@ -172,6 +166,11 @@ _DELETED_MODULES = (
     # test_recompute_bridge_task_is_deleted below, not this tuple.
     "sync_scheduler.py",
     "sync_reconciler.py",
+    # phone_home_heartbeat's compute now runs natively in Go
+    # (internal/jobs/system/heartbeat_native.go); these two re-export sites
+    # had no other symbol left once it was deleted.
+    "system_ops.py",
+    "system_tasks.py",
 )
 
 
@@ -226,37 +225,6 @@ def test_dead_task_names_are_absent_from_tasks_module_exports() -> None:
         assert not hasattr(tasks, name), (
             f"{name!r} reappeared as an attribute of workers.tasks -- Go "
             "owns this cadence (CHAOS-4026)."
-        )
-
-
-def test_decorator_stripped_tasks_are_plain_functions_still_exported() -> None:
-    """PR2b's decorator strips: live, but no longer celery-registered.
-
-    phone_home_heartbeat keeps its compute body (still genuinely needed
-    behind an HTTP compatibility bridge) but lost its `@celery_app.task`
-    decorator -- a re-added decorator fails this test. It is deliberately
-    NOT in _DEAD_TASK_NAMES above: that set asserts absence from
-    tasks.__all__, and it correctly stays exported there. (Its PR2b sibling
-    run_post_sync_team_autoimport underwent the same decorator strip, but
-    has since been deleted outright -- see _DEAD_TASK_NAMES's entry for it.)
-    """
-    from dev_health_ops.workers import tasks
-
-    app = _celery_app()
-    registered = set(app.tasks)
-    for name in ("phone_home_heartbeat",):
-        assert name in tasks.__all__, (
-            f"{name!r} unexpectedly missing from tasks.__all__"
-        )
-        func = getattr(tasks, name)
-        assert not hasattr(func, "run"), (
-            f"{name!r} has a .run attribute -- a @celery_app.task decorator "
-            "reappeared; Celery has had zero consumers since CHAOS-4026."
-        )
-        assert _qualified(name) not in registered, (
-            f"{_qualified(name)!r} is registered on the celery app -- a "
-            "@celery_app.task decorator reappeared on a function that is "
-            "meant to stay a plain HTTP-bridge compute body."
         )
 
 

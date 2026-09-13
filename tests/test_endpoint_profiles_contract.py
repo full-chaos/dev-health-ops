@@ -130,10 +130,10 @@ def test_inventory_row_count_matches_the_baseline():
     ever reached for real (every provider `team_provider_capabilities()`
     lists now has a registered native collector), so nothing calls the
     route any more.
-    = 360, -2 REST under CHAOS-5694: `POST /api/internal/worker-sync/dispatch`
-    and `POST /api/internal/worker-sync/finalize` are deleted with their rows
-    in the same change -- the same shape as every prior worker-bridge
-    deletion in this list. Both routes only ever called
+    = 360, -2 REST under a separately-merged change: `POST /api/internal/
+    worker-sync/dispatch` and `POST /api/internal/worker-sync/finalize` are
+    deleted with their rows in the same change -- the same shape as every
+    prior worker-bridge deletion in this list. Both routes only ever called
     `dispatch_sync_run.run`/`finalize_sync_run.run` synchronously for the Go
     coordinator's `HTTPBridge.Dispatch`/`.Finalize` callers, and neither of
     those Go callers is wired to anything live (`RegisterWorkers` takes the
@@ -143,6 +143,14 @@ def test_inventory_row_count_matches_the_baseline():
     `finalize_sync_run` themselves are NOT deleted (still called directly by
     `backfill/runner.py` and `processors/sync.py`); only the two dead HTTP
     routes and their Go bridge client methods go.
+    = 359, -1 REST under this change: `POST /api/internal/worker-operational/
+    heartbeat` is deleted with its row in the same change -- the phone-home
+    compute it bridged to is now native Go, so nothing calls this route any
+    more and the module it lived in (worker_operational.py) had no other
+    route left. This decrement and the -2 above landed on two different
+    branches, independently, each starting from the same pre-existing 362
+    baseline -- see the MERGE HAZARD note below for why this number is
+    recounted from the file rather than trusted from either branch alone.
 
     MERGE HAZARD, recorded because it has now nearly landed silently more
     than once. Each change edited these same asserts, and each was correct
@@ -163,9 +171,9 @@ def test_inventory_row_count_matches_the_baseline():
     rows = inventory["rows"]
     rest = [r for r in rows if r["surface_kind"] == "rest"]
     graphql = [r for r in rows if r["surface_kind"] in _GRAPHQL_KINDS]
-    assert len(rest) == 301, len(rest)
+    assert len(rest) == 300, len(rest)
     assert len(graphql) == 59, len(graphql)
-    assert len(rows) == 360, len(rows)
+    assert len(rows) == 359, len(rows)
 
 
 def test_the_three_subscriptions_are_profiled():
@@ -209,10 +217,15 @@ def test_classification_summary_matches_the_baseline():
     # - 1 more under this change: the deleted worker-sync/
     # reference-discovery-populate row was also protected (worker bridge
     # bearer, same as every other worker-sync route).
-    # - 2 more under CHAOS-5694: the deleted worker-sync/dispatch and
-    # worker-sync/finalize rows were also protected (worker bridge bearer,
-    # same as every other worker-sync route).
-    assert len(protected) == 333, len(protected)
+    # - 2 more under a separately-merged change: the deleted worker-sync/
+    # dispatch and worker-sync/finalize rows were also protected (worker
+    # bridge bearer, same as every other worker-sync route).
+    # - 1 more under this change: the deleted worker-operational/heartbeat
+    # row was also protected (worker bridge bearer, same as every other
+    # worker-operational route). Both decrements landed independently from
+    # the same pre-existing 335 baseline -- recounted from the file rather
+    # than trusted from either branch alone.
+    assert len(protected) == 332, len(protected)
     # 22 + the four fastapi doc routes + /metrics.
     assert len(public) == 27, len(public)
     assert len(protected) + len(public) == len(rows)

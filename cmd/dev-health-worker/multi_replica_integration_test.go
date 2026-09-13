@@ -5,7 +5,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -24,7 +23,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
-	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/google/uuid"
@@ -55,17 +53,31 @@ func TestExplicitQueueMultiReplicaClaimDrainRestart(t *testing.T) {
 	t.Cleanup(admin.Close)
 	prepareMultiReplicaDatabase(t, ctx, admin)
 
-	bridge := newMultiReplicaBridge()
-	server := httptest.NewServer(http.HandlerFunc(bridge.serveHTTP))
-	t.Cleanup(server.Close)
+	// The heartbeat's fleet-wide concurrency budget (registry.json: scope
+	// "fleet", limit 1) is enforced by jobruntime's Acquire loop BEFORE the
+	// handler ever runs (internal/jobruntime/budget_postgres.go): the loser
+	// polls every 100ms and stays in River's "running" state the whole time
+	// it waits, bounded only by the job's own 30s contract deadline -- it
+	// never reaches this handler at all until it actually wins the lease.
+	// So exactly one replica's telemetry receiver ever gets a request during
+	// the parked phase below, and river_job.state cannot tell the two jobs
+	// apart (both legitimately read "running" for as long as one is parked).
+	// Each of first/second gets its OWN receiver so identity comes from
+	// WHICH receiver fired, never from decoding the request.
+	firstBridge := newMultiReplicaBridge()
+	firstServer := httptest.NewServer(http.HandlerFunc(firstBridge.serveHTTP))
+	t.Cleanup(firstServer.Close)
+	secondBridge := newMultiReplicaBridge()
+	secondServer := httptest.NewServer(http.HandlerFunc(secondBridge.serveHTTP))
+	t.Cleanup(secondServer.Close)
 	registry, err := jobruntime.Load(filepath.Join("contracts", "jobs", "v1"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	first := newOperationalReplica(t, ctx, postgres.URI, server.URL, registry, logger)
-	second := newOperationalReplica(t, ctx, postgres.URI, server.URL, registry, logger)
+	first := newOperationalReplica(t, ctx, postgres.URI, firstServer.URL, registry, logger)
+	second := newOperationalReplica(t, ctx, postgres.URI, secondServer.URL, registry, logger)
 	t.Cleanup(func() { first.close(t); second.close(t) })
 	assertReplicaQueueParity(t, first, second)
 	first.start(t, ctx)
@@ -74,37 +86,61 @@ func TestExplicitQueueMultiReplicaClaimDrainRestart(t *testing.T) {
 
 	firstHeartbeat := insertHeartbeat(t, ctx, first.client, 1)
 	secondHeartbeat := insertHeartbeat(t, ctx, first.client, 2)
-	activeSchedule := bridge.waitForFirst(t)
-	heartbeats := map[int64]string{
-		firstHeartbeat.Job.ID:  heartbeatSchedule(1),
-		secondHeartbeat.Job.ID: heartbeatSchedule(2),
+
+	var activeReplica, waitingReplica *operationalReplica
+	var activeBridge *multiReplicaBridge
+	select {
+	case <-firstBridge.firstStarted:
+		activeReplica, waitingReplica = first, second
+		activeBridge = firstBridge
+	case <-secondBridge.firstStarted:
+		activeReplica, waitingReplica = second, first
+		activeBridge = secondBridge
+	case <-time.After(20 * time.Second):
+		t.Fatal("no heartbeat reached either replica's telemetry receiver")
 	}
+	// Insertion order names neither job's claimant: River hands each of
+	// job1/job2 to whichever replica polls it first, independent of which
+	// bridge that replica owns. The bridge signal above only says WHICH
+	// REPLICA is active; which of the two logical jobs that replica is
+	// running still has to come from AttemptedBy, not from an assumed
+	// 1:1 pairing with insertion order.
+	var activeJobID, waitingJobID int64
 	waitFor(t, 20*time.Second, func() (bool, error) {
 		firstRow, err := readRiverJob(ctx, admin, firstHeartbeat.Job.ID)
 		if err != nil {
 			return false, err
 		}
 		secondRow, err := readRiverJob(ctx, admin, secondHeartbeat.Job.ID)
-		return err == nil && len(firstRow.AttemptedBy) == 1 && len(secondRow.AttemptedBy) == 1, err
+		if err != nil {
+			return false, err
+		}
+		if len(firstRow.AttemptedBy) != 1 || len(secondRow.AttemptedBy) != 1 {
+			return false, nil
+		}
+		switch activeReplica.client.ID() {
+		case firstRow.AttemptedBy[0]:
+			activeJobID, waitingJobID = firstHeartbeat.Job.ID, secondHeartbeat.Job.ID
+		case secondRow.AttemptedBy[0]:
+			activeJobID, waitingJobID = secondHeartbeat.Job.ID, firstHeartbeat.Job.ID
+		default:
+			return false, nil
+		}
+		return waitingReplica.client.ID() == firstRow.AttemptedBy[0] ||
+			waitingReplica.client.ID() == secondRow.AttemptedBy[0], nil
 	})
-
-	activeJobID, waitingJobID := heartbeatJobOrder(t, heartbeats, activeSchedule)
-	activeRow, err := readRiverJob(ctx, admin, activeJobID)
-	if err != nil {
-		t.Fatal(err)
+	if activeJobID == 0 {
+		t.Fatal("neither heartbeat job's AttemptedBy matched the replica whose receiver fired")
 	}
-	waitingRow, err := readRiverJob(ctx, admin, waitingJobID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if activeRow.AttemptedBy[0] == waitingRow.AttemptedBy[0] {
-		t.Fatal("two independent clients did not claim the two concurrent jobs")
-	}
-	activeReplica := replicaByClientID(t, activeRow.AttemptedBy[0], first, second)
-	waitingReplica := replicaByClientID(t, waitingRow.AttemptedBy[0], first, second)
 	waitingReplica.stopAndCancel(t, ctx)
 
-	restarted := newOperationalReplica(t, ctx, postgres.URI, server.URL, registry, logger)
+	// restarted's receiver must NOT park its first request: by the time the
+	// waiting job's retry lands here, the contention phase is over and it
+	// should complete like any ordinary heartbeat.
+	restartedBridge := newUnblockedMultiReplicaBridge()
+	restartedServer := httptest.NewServer(http.HandlerFunc(restartedBridge.serveHTTP))
+	t.Cleanup(restartedServer.Close)
+	restarted := newOperationalReplica(t, ctx, postgres.URI, restartedServer.URL, registry, logger)
 	t.Cleanup(func() { restarted.close(t) })
 	assertReplicaQueueParity(t, activeReplica, restarted)
 	restarted.start(t, ctx)
@@ -113,11 +149,11 @@ func TestExplicitQueueMultiReplicaClaimDrainRestart(t *testing.T) {
 		row, err := readRiverJob(ctx, admin, waitingJobID)
 		return err == nil && row.Attempt >= 2 && slices.Contains(row.AttemptedBy, restarted.client.ID()), err
 	})
-	bridge.release()
+	activeBridge.release()
 	waitForCompleted(t, ctx, admin, firstHeartbeat.Job.ID, secondHeartbeat.Job.ID)
 
-	if effects := bridge.effects(); effects[heartbeatSchedule(1)] != 1 || effects[heartbeatSchedule(2)] != 1 {
-		t.Fatalf("heartbeat product effects = %#v, want one per logical job", effects)
+	if total := activeBridge.total() + restartedBridge.total(); total != 2 {
+		t.Fatalf("heartbeat telemetry POSTs = %d, want exactly one per logical job (2 total)", total)
 	}
 	retried, err := readRiverJob(ctx, admin, waitingJobID)
 	if err != nil {
@@ -211,7 +247,7 @@ func newOperationalReplica(
 	t *testing.T,
 	ctx context.Context,
 	postgresURI string,
-	bridgeURL string,
+	telemetryURL string,
 	registry *jobruntime.Registry,
 	logger *slog.Logger,
 ) *operationalReplica {
@@ -230,8 +266,12 @@ func newOperationalReplica(
 	cfg := config.Config{
 		Service: "dev-health-worker", Queues: []string{"coverage", "heartbeat", "retention", "webhooks"}, WorkerInstanceID: instanceID,
 		WorkerQueueConcurrency: map[string]int{"coverage": 1, "heartbeat": 1, "retention": 1, "webhooks": 4},
-		RiverDatabaseSchema:    "river", OperationalBridgeURL: bridgeURL,
-		OperationalBridgeToken:   secrets.NewValue("multi-replica-token"),
+		RiverDatabaseSchema:    "river",
+		// The heartbeat's phone-home effect is native Go now: TelemetryEndpoint
+		// (not OperationalBridgeURL/Token, which no kind on this queue set
+		// still uses) is what the test's fake receiver below observes.
+		TelemetryEndpoint:        telemetryURL,
+		TelemetryInstanceID:      "multi-replica-instance",
 		OperationalBridgeTimeout: 20 * time.Second,
 	}
 	metrics, err := buildWorkerMetrics(ctx, cfg, registry)
@@ -496,40 +536,22 @@ func insertRetention(
 	return result
 }
 
-func heartbeatJobOrder(t *testing.T, jobs map[int64]string, activeSchedule string) (int64, int64) {
-	t.Helper()
-	var active, waiting int64
-	for jobID, scheduledFor := range jobs {
-		if scheduledFor == activeSchedule {
-			active = jobID
-		} else {
-			waiting = jobID
-		}
-	}
-	if active == 0 || waiting == 0 {
-		t.Fatalf("active schedule %q did not identify one heartbeat", activeSchedule)
-	}
-	return active, waiting
-}
-
-func replicaByClientID(t *testing.T, clientID string, replicas ...*operationalReplica) *operationalReplica {
-	t.Helper()
-	for _, replica := range replicas {
-		if replica.client.ID() == clientID {
-			return replica
-		}
-	}
-	t.Fatalf("no replica owns client %q", clientID)
-	return nil
-}
-
+// multiReplicaBridge stands in for the heartbeat's phone-home receiver
+// (TELEMETRY_ENDPOINT) now that the effect is native Go
+// (internal/jobs/system/heartbeat_native.go) with no HTTP call into the
+// Python API on the way there. It carries no job/schedule identity in its
+// request body -- the native dispatcher's outbound payload is the
+// phone-home snapshot (instance/version/counts/tier/...), not a job
+// reference, matching the Python body it replaced -- so ordering is
+// established by which request arrives FIRST, not by decoding which
+// schedule it belongs to.
 type multiReplicaBridge struct {
-	firstStarted chan string
+	firstStarted chan struct{}
 	releaseFirst chan struct{}
 	first        sync.Once
 	releaseOnce  sync.Once
 	mu           sync.Mutex
-	bySchedule   map[string]int
+	count        int
 	// parked is true for exactly as long as the first handler is blocked
 	// inside serveHTTP below, waiting on releaseFirst or its own request
 	// context. A caller that depends on "the first handler is still parked"
@@ -540,24 +562,22 @@ type multiReplicaBridge struct {
 
 func newMultiReplicaBridge() *multiReplicaBridge {
 	return &multiReplicaBridge{
-		firstStarted: make(chan string, 1), releaseFirst: make(chan struct{}),
-		bySchedule: make(map[string]int),
+		firstStarted: make(chan struct{}, 1), releaseFirst: make(chan struct{}),
 	}
 }
 
+// newUnblockedMultiReplicaBridge returns a bridge that never parks a
+// request: its once-only block slot is pre-consumed with a no-op, so every
+// real call always takes serveHTTP's non-blocking path. Used for a replica
+// that only takes over work AFTER a contention phase is over, where parking
+// its first request would wrongly stall the rest of the test.
+func newUnblockedMultiReplicaBridge() *multiReplicaBridge {
+	bridge := newMultiReplicaBridge()
+	bridge.first.Do(func() {})
+	return bridge
+}
+
 func (bridge *multiReplicaBridge) serveHTTP(output http.ResponseWriter, request *http.Request) {
-	if request.URL.Path != "/api/internal/worker-operational/heartbeat" ||
-		request.Header.Get("Authorization") != "Bearer multi-replica-token" {
-		http.Error(output, "not found", http.StatusNotFound)
-		return
-	}
-	var payload struct {
-		ScheduledFor string `json:"scheduled_for"`
-	}
-	if json.NewDecoder(request.Body).Decode(&payload) != nil || payload.ScheduledFor == "" {
-		http.Error(output, "bad request", http.StatusBadRequest)
-		return
-	}
 	block := false
 	bridge.first.Do(func() {
 		block = true
@@ -568,7 +588,7 @@ func (bridge *multiReplicaBridge) serveHTTP(output http.ResponseWriter, request 
 		// value even though this handler was about to block (codex
 		// adversarial review, CHAOS-4235).
 		bridge.parked.Store(true)
-		bridge.firstStarted <- payload.ScheduledFor
+		bridge.firstStarted <- struct{}{}
 	})
 	if block {
 		defer bridge.parked.Store(false)
@@ -579,20 +599,17 @@ func (bridge *multiReplicaBridge) serveHTTP(output http.ResponseWriter, request 
 		}
 	}
 	bridge.mu.Lock()
-	bridge.bySchedule[payload.ScheduledFor]++
+	bridge.count++
 	bridge.mu.Unlock()
-	output.Header().Set("Content-Type", "application/json")
-	_, _ = io.WriteString(output, `{"status":"ok"}`)
+	output.WriteHeader(http.StatusAccepted)
 }
 
-func (bridge *multiReplicaBridge) waitForFirst(t *testing.T) string {
+func (bridge *multiReplicaBridge) waitForFirst(t *testing.T) {
 	t.Helper()
 	select {
-	case scheduledFor := <-bridge.firstStarted:
-		return scheduledFor
+	case <-bridge.firstStarted:
 	case <-time.After(20 * time.Second):
-		t.Fatal("no heartbeat reached the production bridge")
-		return ""
+		t.Fatal("no heartbeat reached the native telemetry receiver")
 	}
 }
 
@@ -608,13 +625,17 @@ func (bridge *multiReplicaBridge) stillParked() bool {
 	return bridge.parked.Load()
 }
 
-func (bridge *multiReplicaBridge) effects() map[string]int {
+// total is the count of heartbeat telemetry POSTs the receiver has seen.
+// Fleet-wide heartbeat concurrency is 1 and each logical schedule occurrence
+// completes exactly once (proven independently by the River state/attempt
+// assertions around each call site), so this reaching exactly the expected
+// count is "one native effect per logical job", the same property the old
+// per-schedule bucketed count proved when the request body carried a
+// schedule to bucket by.
+func (bridge *multiReplicaBridge) total() int {
 	bridge.mu.Lock()
 	defer bridge.mu.Unlock()
-	return map[string]int{
-		heartbeatSchedule(1): bridge.bySchedule[heartbeatSchedule(1)],
-		heartbeatSchedule(2): bridge.bySchedule[heartbeatSchedule(2)],
-	}
+	return bridge.count
 }
 
 func assertWorkerPresence(
@@ -716,6 +737,18 @@ func prepareMultiReplicaDatabase(t *testing.T, ctx context.Context, pool *pgxpoo
 		);
 		CREATE TABLE public.multi_replica_retention_effects (
 			observation_id uuid PRIMARY KEY, deleted_at timestamptz NOT NULL DEFAULT statement_timestamp()
+		);
+		-- Tables the native heartbeat's compute reads (internal/jobs/system/
+		-- heartbeat_native.go queryHeartbeatFacts): counts and the org
+		-- license lookup. Left empty on purpose -- an empty organizations
+		-- table means no audit_logs row is attempted (matching
+		-- phone_home_heartbeat's own org_id_for_audit=None branch), which
+		-- this test does not otherwise need a schema for.
+		CREATE TABLE public.organizations (id uuid PRIMARY KEY, name text NOT NULL);
+		CREATE TABLE public.users (id uuid PRIMARY KEY, email text NOT NULL);
+		CREATE TABLE public.org_licenses (
+			id uuid PRIMARY KEY, org_id uuid NOT NULL,
+			license_key text, tier text NOT NULL DEFAULT 'community'
 		);
 		CREATE FUNCTION public.record_multi_replica_retention_effect() RETURNS trigger
 		LANGUAGE plpgsql AS $$ BEGIN

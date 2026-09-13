@@ -286,11 +286,12 @@ func checkedInSchedules() []Schedule {
 		},
 		{
 			ID: "phone_home_heartbeat",
-			// CHAOS-4026 (2026-08-21): the legacy Beat entry "phone-home-heartbeat"
-			// was deleted -- Celery is retired. Native now; see
-			// RetiredBeatInventory. phone_home_heartbeat itself is not dead -- it
-			// is still invoked by api/internal/worker_operational.py's dormant-Go
-			// HTTP bridge (.run(), bypassing Celery entirely).
+			// The legacy Beat entry "phone-home-heartbeat" was deleted --
+			// Celery is retired; see RetiredBeatInventory. The compute body
+			// it used to trigger (system_ops.py's phone_home_heartbeat) is
+			// also gone now: the phone-home effect runs natively in Go
+			// (internal/jobs/system/heartbeat_native.go), with no HTTP call
+			// into the Python API on this path any more.
 			Native:   true,
 			Cadence:  DailyAt(0, 0),
 			Timezone: inventoryTimezone,
@@ -606,9 +607,11 @@ func RetiredBeatInventory() []RetiredLegacyEntry {
 		{
 			Name:    "phone-home-heartbeat",
 			Cadence: DailyAt(0, 0),
-			Reason: "The phone_home_heartbeat Celery task is not dead -- it stays live via " +
-				"api/internal/worker_operational.py's dormant-Go HTTP bridge (.run(), bypassing " +
-				"Celery entirely) -- but this Beat entry, its only Celery Beat trigger, is deleted.",
+			Reason: "This Beat entry, the phone_home_heartbeat Celery task's only trigger, is " +
+				"deleted -- Celery is retired. The task itself has since been deleted outright too: " +
+				"the phone-home effect it computed now runs natively in Go " +
+				"(internal/jobs/system/heartbeat_native.go), with no Python body or HTTP bridge left " +
+				"to keep alive.",
 			Evidence: "CHAOS-4026, CHAOS-4056 beat-schedule inventory (COVERED).",
 		},
 		{

@@ -1,0 +1,36 @@
+{
+  "_generated_by": "one-off local run of the real (now-deleted) src/dev_health_ops/workers/system_ops.py::phone_home_heartbeat against an ephemeral Postgres seeded with the fixture rows named below -- not hand-typed. See heartbeat_native_integration_test.go for the Go-side seed that reproduces it.",
+  "seed": {
+    "organizations": 3,
+    "users": 5,
+    "org_license": {
+      "tier": "team",
+      "license_key": "fixture-license-key-oracle-001"
+    }
+  },
+  "python_output": {
+    "status": "ok",
+    "endpoint_configured": false,
+    "org_count": 3,
+    "user_count": 5,
+    "tier": "team",
+    "license_hash": "e527d051f60aba1d",
+    "payload_keys": [
+      "instance_id",
+      "license_hash",
+      "org_count",
+      "tier",
+      "timestamp",
+      "uptime_seconds",
+      "user_count",
+      "version"
+    ]
+  },
+  "audit_log": {
+    "row_written": true,
+    "action": "other",
+    "resource_type": "other",
+    "resource_id": "phone_home_heartbeat",
+    "request_metadata_source": "http_bridge"
+  }
+}

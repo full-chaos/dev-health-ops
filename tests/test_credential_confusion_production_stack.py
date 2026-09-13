@@ -17,9 +17,11 @@ drive it through ``TestClient`` -- the full middleware order
 OriginValidation/CSRF -> GraphQLQuerySizeLimit -> SecurityHeaders -> CORS ->
 route), exactly as production assembles it in ``_middleware.py``. No
 middleware and no auth dependency is mocked or overridden anywhere in this
-file -- only unrelated business-logic functions (a Celery-style ``.run()``
-call) are patched, the same pattern already used in
-``tests/api/test_worker_operational_bridge.py``. A test here that could pass
+file. One test overrides the DB session dependency of an unrelated
+worker-bridge route (a raw-SQL table this suite's sqlite-in-memory test
+database does not provision) -- that stand-in is for the table read only;
+``authorize_worker_bridge`` still runs for real against the real middleware
+stack in every test, including that one. A test here that could pass
 against a version of the code where the JWT decoder RAISES instead of
 degrading, or where a route's own credential check silently accepted a
 foreign class, would be a test that proves nothing -- every assertion below
@@ -31,11 +33,13 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from dev_health_ops.api.dependencies import get_postgres_session_dep
 from dev_health_ops.api.main import app
 from dev_health_ops.api.services.auth import AuthService
 from dev_health_ops.api.services.impersonation_cache import (
@@ -135,10 +139,10 @@ class TestWorkerBridgeRouteRejectsForeignCredentialClasses:
     """Pins api/internal/worker_auth.py::authorize_worker_bridge.
 
     ``OrgIdMiddleware`` and ``ImpersonationMiddleware`` are NOT exempted
-    for ``/api/internal/worker-operational/*`` (only the
-    ``/api/v1/internal/acr/`` prefix is) -- every request here transits the
-    ops-JWT decoder first regardless of outcome. What actually gates the
-    route is ``authorize_worker_bridge``'s constant-time compare against
+    for ``/internal/worker/*`` (only the ``/api/v1/internal/acr/`` prefix
+    is) -- every request here transits the ops-JWT decoder first regardless
+    of outcome. What actually gates the route is
+    ``authorize_worker_bridge``'s constant-time compare against
     ``WORKER_OPERATIONAL_BRIDGE_TOKEN``. These tests pin BOTH halves at
     once: a foreign bearer class must still be REJECTED by that compare
     (not accidentally accepted because the middleware's decode attempt
@@ -150,28 +154,30 @@ class TestWorkerBridgeRouteRejectsForeignCredentialClasses:
     silently swallowed.
     """
 
-    # This class has now outlived two routes: CHAOS-5320 deleted /webhook
-    # (operational.webhook_delivery's Python fallback) and CHAOS-5353 deleted
-    # /billing (operational.billing_notification's). Retargeted to /heartbeat,
-    # the surviving bridge-token-gated route behind the same middleware stack.
+    # This class has now outlived three routes: CHAOS-5320 deleted /webhook
+    # (operational.webhook_delivery's Python fallback), CHAOS-5353 deleted
+    # /billing (operational.billing_notification's), and the phone-home
+    # compute going native deleted /heartbeat along with the rest of
+    # worker_operational.py. Retargeted to worker_metrics.py's
+    # /metric-executions/v1/{execution_id}, a still-live route that calls
+    # authorize_worker_bridge directly (unlike worker_sync.py, which
+    # reimplements the same check inline rather than sharing the helper).
     # The security property under test -- authorize_worker_bridge's behavior
     # against a foreign credential class -- is a property of the AUTHORIZER,
-    # not of any one route, so it is unaffected by which operational route
-    # carries it. The route-existence assertion below keeps the retarget
-    # honest: a 401 proves nothing if the route quietly stopped existing.
-    _BODY = {"scheduled_for": "2026-07-21T12:00:00Z"}
+    # not of any one route, so it is unaffected by which route carries it.
+    # The route-existence assertions below keep the retarget honest: a 401
+    # proves nothing if a deleted route quietly stopped existing instead.
+    _EXECUTION_PATH = (
+        "/internal/worker/metric-executions/v1/00000000-0000-4000-8000-000000000012"
+    )
 
     def test_the_deleted_billing_route_is_gone_not_merely_unused(
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """CHAOS-5353: /billing must be absent, not just unexercised.
 
-        Without this, the retarget above could silently mask a regression:
-        if /billing were ever re-mounted, the foreign-credential tests would
-        keep passing against /heartbeat while an ungated second bridge route
-        existed. It also pins the deletion itself -- a re-mounted route would
-        accept a POST from an old Go binary and send an email the native
-        handler has already sent.
+        A re-mounted route would accept a POST from an old Go binary and
+        send an email the native handler has already sent.
         """
         monkeypatch.setenv("WORKER_OPERATIONAL_BRIDGE_TOKEN", "the-real-bridge-secret")
         response = client.post(
@@ -187,6 +193,26 @@ class TestWorkerBridgeRouteRejectsForeignCredentialClasses:
             "the billing bridge route must be DELETED, not merely unused"
         )
 
+    def test_the_deleted_heartbeat_route_is_gone_not_merely_unused(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The phone-home compute is native Go now; the bridge route (and the
+        rest of worker_operational.py, which had no other route left) is
+        deleted, not merely unused.
+
+        A re-mounted route would accept a POST from an old Go binary and
+        record/send a heartbeat the native handler has already recorded.
+        """
+        monkeypatch.setenv("WORKER_OPERATIONAL_BRIDGE_TOKEN", "the-real-bridge-secret")
+        response = client.post(
+            "/api/internal/worker-operational/heartbeat",
+            headers={"Authorization": "Bearer the-real-bridge-secret"},
+            json={"scheduled_for": "2026-07-21T12:00:00Z"},
+        )
+        assert response.status_code == 404, (
+            "the heartbeat bridge route must be DELETED, not merely unused"
+        )
+
     @pytest.mark.parametrize(
         "bearer_value",
         [_SVC_ACR_SHAPED_GARBAGE, None],
@@ -197,27 +223,39 @@ class TestWorkerBridgeRouteRejectsForeignCredentialClasses:
     ) -> None:
         monkeypatch.setenv("WORKER_OPERATIONAL_BRIDGE_TOKEN", "the-real-bridge-secret")
         token = bearer_value if bearer_value is not None else _forged_ops_jwt()
-        response = client.post(
-            "/api/internal/worker-operational/heartbeat",
+        response = client.get(
+            self._EXECUTION_PATH,
             headers={"Authorization": f"Bearer {token}"},
-            json=self._BODY,
         )
         assert response.status_code == 401
 
     def test_correct_bridge_secret_still_works_despite_middleware_misdecode(
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        # metric_compatibility_executions is a raw-SQL table (no ORM model),
+        # so it does not exist on this suite's sqlite-in-memory test database
+        # -- overriding the DB session here, unlike every other test in this
+        # file, is a stand-in for that one unrelated table read, not for
+        # anything auth-related. authorize_worker_bridge itself still runs
+        # for real, against the real middleware stack, exactly like every
+        # other test above.
         monkeypatch.setenv("WORKER_OPERATIONAL_BRIDGE_TOKEN", "the-real-bridge-secret")
-        with patch(
-            "dev_health_ops.api.internal.worker_operational.phone_home_heartbeat",
-            return_value={"status": "ok"},
-        ):
-            response = client.post(
-                "/api/internal/worker-operational/heartbeat",
+        empty_result = MagicMock()
+        empty_result.mappings.return_value.first.return_value = None
+        session = MagicMock(spec=AsyncSession)
+        session.execute = AsyncMock(return_value=empty_result)
+        app.dependency_overrides[get_postgres_session_dep] = lambda: session
+        try:
+            response = client.get(
+                self._EXECUTION_PATH,
                 headers={"Authorization": "Bearer the-real-bridge-secret"},
-                json=self._BODY,
             )
-        assert response.status_code == 200
+        finally:
+            app.dependency_overrides.pop(get_postgres_session_dep, None)
+        # The bridge secret passes authorize_worker_bridge and reaches the
+        # route's own business logic, which 404s on an execution id that was
+        # never created -- the point here is "not 401", not the exact code.
+        assert response.status_code == 404
 
 
 class _DBTouchSpy:

@@ -9,9 +9,6 @@
 # partitioned/run_membership_backfill) were already dead (no consumer since
 # 2026-08-19) and dispatch_investment_materialize_partitioned was dead-into-
 # the-void the same way (investment.materialize is river-only,
-# rollback_route=none).
-from dev_health_ops.workers import system_tasks
-
-__all__ = [
-    "system_tasks",
-]
+# rollback_route=none). system_tasks.py/system_ops.py are deleted the same
+# way: phone_home_heartbeat, their last live symbol, now runs natively in Go
+# (internal/jobs/system/heartbeat_native.go).

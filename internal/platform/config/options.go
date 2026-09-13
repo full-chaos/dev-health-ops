@@ -88,6 +88,7 @@ const (
 	GroupDatabase    = "Database and River"
 	GroupRoutes      = "Provider routes"
 	GroupBridge      = "Operational bridge"
+	GroupTelemetry   = "Telemetry"
 	GroupCredentials = "Credentials"
 )
 
@@ -97,6 +98,7 @@ var groupOrder = []string{
 	GroupDatabase,
 	GroupRoutes,
 	GroupBridge,
+	GroupTelemetry,
 	GroupCredentials,
 }
 
@@ -388,6 +390,20 @@ var optionRegistry = []Option{
 		Flag: "operational-bridge-allow-insecure", Env: "WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE",
 		Kind: KindBool, Default: "false", Group: GroupBridge,
 		Usage: "permit a plaintext operational bridge origin",
+	},
+
+	// Telemetry: the heartbeat's phone-home effect (internal/jobs/system.
+	// NativeHeartbeatDispatcher). Both are worker-only -- no other binary
+	// reports a heartbeat.
+	{
+		Flag: "telemetry-endpoint", Env: "TELEMETRY_ENDPOINT", Kind: KindString,
+		Services: []string{"dev-health-worker"}, Group: GroupTelemetry,
+		Usage: "phone-home receiver URL; unset means record the heartbeat locally only",
+	},
+	{
+		Flag: "instance-id", Env: "INSTANCE_ID", Kind: KindString,
+		Default: "unknown", Services: []string{"dev-health-worker"}, Group: GroupTelemetry,
+		Usage: "deployment identity reported in the phone-home heartbeat",
 	},
 
 	// Credentials: environment only, on purpose.

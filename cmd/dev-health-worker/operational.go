@@ -5,7 +5,6 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
@@ -14,6 +13,7 @@ import (
 	coveragejobs "github.com/full-chaos/dev-health-ops/internal/jobs/synccoverage"
 	systemjobs "github.com/full-chaos/dev-health-ops/internal/jobs/system"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
+	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 	"github.com/full-chaos/dev-health-ops/internal/synccoverage"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -57,10 +57,6 @@ func buildOperationalWorker(
 	postgresDatabase, ok := database.(*postgresWorkerDatabase)
 	if !ok || postgresDatabase.pools == nil || observer == nil || logger == nil {
 		return workerFamily{}, errWorkerDependencyUnavailable
-	}
-	dispatcher, err := buildOperationalHTTPDispatcher(cfg, specs, logger)
-	if err != nil {
-		return workerFamily{}, err
 	}
 	// Retention deletes relay-owned outbox rows and completion fences. Use the
 	// queue-control role, whose intentionally narrow grants own that cleanup;
@@ -153,7 +149,22 @@ func buildOperationalWorker(
 			}
 			registered = append(registered, adapter.Spec())
 		case jobcontract.KindHeartbeat:
-			handler, handlerErr := systemjobs.NewHeartbeatHandler(dispatcher)
+			// The phone-home effect runs entirely in this process now: no
+			// HTTP call into the Python API remains on this path. version.
+			// Current gives the payload's "version" field this worker's own
+			// build identity, not a value translated from Python.
+			build := version.Current(cfg.Service)
+			heartbeatDispatcher, dispatcherErr := systemjobs.NewNativeHeartbeatDispatcher(
+				postgresDatabase.pools.Domain,
+				&http.Client{Timeout: cfg.OperationalBridgeTimeout},
+				cfg.TelemetryEndpoint,
+				cfg.TelemetryInstanceID,
+				build.Version,
+			)
+			if dispatcherErr != nil {
+				return workerFamily{}, errWorkerDependencyUnavailable
+			}
+			handler, handlerErr := systemjobs.NewHeartbeatHandler(heartbeatDispatcher)
 			if handlerErr != nil {
 				return workerFamily{}, errWorkerDependencyUnavailable
 			}
@@ -199,55 +210,6 @@ func buildOperationalWorker(
 		handlers: registered,
 		queues:   budgets,
 	}, nil
-}
-
-// operationalHTTPDispatchedKinds names exactly the enabled-kind checks whose
-// handlers still route through the Python-compatibility HTTP bridge. CHAOS-
-// 5320 (#2346) deleted the bridge's webhook leg entirely -- webhook delivery
-// needs no dispatcher at all now -- but billing notification and the
-// heartbeat phone-home effect are each still HTTP-backed compatibility
-// shims (see NewHeartbeatHandler's doc comment), not just billing alone.
-// CHAOS-5353 has now done exactly that for billing_notification: it renders
-// and sends natively, so the heartbeat phone-home effect is the ONLY remaining
-// HTTP-backed compatibility shim. Once heartbeat follows, this whole
-// construction collapses and the dispatcher can go with it.
-var operationalHTTPDispatchedKinds = map[string]bool{
-	jobcontract.KindHeartbeat: true,
-}
-
-// buildOperationalHTTPDispatcher constructs the operational HTTP bridge
-// dispatcher only when an enabled, executable kind in specs still needs it
-// (CHAOS-5384). A webhook-only worker builds no HTTP dispatcher at all and
-// so cannot fail on an unset/misconfigured bridge URL it never uses. When a
-// kind that DOES need it is enabled, an invalid bridge URL fails fast here
-// with a bounded reason instead of silently falling through.
-func buildOperationalHTTPDispatcher(
-	cfg config.Config, specs []jobruntime.HandlerSpec, logger *slog.Logger,
-) (*operational.HTTPDispatcher, error) {
-	var kinds []string
-	for _, spec := range specs {
-		if operationalHTTPDispatchedKinds[spec.Kind] {
-			kinds = append(kinds, spec.Kind)
-		}
-	}
-	if len(kinds) == 0 {
-		logger.Info("operational http dispatcher not constructed", "reason", "no enabled kind requires it")
-		return nil, nil
-	}
-	baseURL := strings.TrimRight(cfg.OperationalBridgeURL, "/")
-	dispatcher, err := operational.NewHTTPDispatcher(
-		&http.Client{Timeout: cfg.OperationalBridgeTimeout},
-		operational.HTTPDispatcherConfig{
-			HeartbeatEndpoint:     baseURL + "/api/internal/worker-operational/heartbeat",
-			BearerToken:           cfg.OperationalBridgeToken.Reveal(),
-			AllowInsecureInternal: cfg.OperationalBridgeAllowInsecure,
-		},
-	)
-	if err != nil {
-		return nil, dependencyUnavailable("operational_http_dispatcher_misconfigured")
-	}
-	logger.Info("operational http dispatcher constructed", "kinds", strings.Join(kinds, ","))
-	return dispatcher, nil
 }
 
 type operationalTenantScope struct{}

@@ -9,28 +9,20 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/operational"
 )
 
-// HeartbeatDispatcher performs the bounded compatibility side effect while
-// the existing Python telemetry implementation remains authoritative.
+// HeartbeatDispatcher performs the heartbeat's phone-home side effect. This
+// handler owns the occurrence contract, the River attempt, retry
+// classification, and cancellation; the effect itself -- organization and
+// user counts, the single OrgLicense tier, a truncated licence-key digest,
+// an audit_logs row, and a POST to TELEMETRY_ENDPOINT -- is native Go
+// (NativeHeartbeatDispatcher, heartbeat_native.go). No HTTP call into the
+// Python API remains on this path.
 //
-// CLASSIFICATION: python_compatibility, not native Go. This handler owns the
-// occurrence contract, the River attempt, retry classification, and
-// cancellation, but the effect itself is an HTTP call to
-// /api/internal/worker-operational/heartbeat, which runs the Celery
-// phone_home_heartbeat body.
-//
-// The compute is small (organization and user counts, the single OrgLicense
-// tier, a truncated licence-key digest, an audit_logs row, and a POST to
-// TELEMETRY_ENDPOINT) but three payload fields carry Python identity that a
-// telemetry receiver may key on and that a Go process cannot reproduce:
-// "version" is the dev_health_ops package version, "uptime_seconds" is that
-// interpreter's time.monotonic() origin, and request_metadata.source is
-// hardcoded "celery". Porting the body without first agreeing the new values
-// for those three fields would silently change what the receiver records.
-//
-// DELETION: CUT-20 removes this relay. The native replacement needs (1) an
-// agreed payload identity for version/uptime/source, (2) config for
-// TELEMETRY_ENDPOINT and INSTANCE_ID on the Go worker, and (3) a Go writer for
-// audit_logs. Until then this pair must never be reported as native_go.
+// The payload's version/uptime_seconds/request_metadata.source fields carry
+// this worker's OWN identity now, not a value translated from the Python
+// interpreter that used to compute them (see HeartbeatSnapshot's doc
+// comment) -- a telemetry receiver keyed on the old Python-shaped values for
+// those three fields would need to be told about this change; every other
+// field keeps its name and meaning unchanged.
 type HeartbeatDispatcher interface {
 	DispatchHeartbeat(context.Context, time.Time) error
 }

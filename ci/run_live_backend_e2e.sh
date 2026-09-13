@@ -12,6 +12,10 @@ cd "${ROOT_DIR}" || exit "${EXIT_FAILURE}"
 # telemetry wait, teardown) is shared with ci/run_metrics_executed_proof.sh.
 # shellcheck source=ci/lib/go_worker_fixture.sh
 source "${ROOT_DIR}/ci/lib/go_worker_fixture.sh"
+# go-api-prove end to end on the tools-pod bearer path (both bearers minted
+# in-process by the tools-image helpers); see the file's own header.
+# shellcheck source=ci/lib/go_api_prove_e2e.sh
+source "${ROOT_DIR}/ci/lib/go_api_prove_e2e.sh"
 
 PYTHONPATH="${ROOT_DIR}/src${PYTHONPATH:+:${PYTHONPATH}}"
 export PYTHONPATH
@@ -313,6 +317,7 @@ WORKER_OPERATIONAL_BRIDGE_TOKEN="${WORKER_OPERATIONAL_BRIDGE_TOKEN:-ci-live-e2e-
 SETTINGS_ENCRYPTION_KEY="${SETTINGS_ENCRYPTION_KEY:-dev-key-not-for-prod}"
 WORKER_HTTP_PORT="${LIVE_E2E_WORKER_PORT:-18085}"
 RECONCILER_HTTP_PORT="${LIVE_E2E_RECONCILER_PORT:-18086}"
+QUERY_API_PORT="${LIVE_E2E_QUERY_API_PORT:-18090}"
 
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/live-backend-e2e.XXXXXX")"
 # CHAOS-5362: BIN_DIR for the Go binaries build_go_binaries builds.
@@ -322,6 +327,7 @@ API_LOG_FILE="${LIVE_E2E_API_LOG_FILE:-${TMP_DIR}/api.log}"
 API_PID=""
 WORKER_PID=""
 RECONCILER_PID=""
+QUERY_API_PID=""
 
 # CHAOS-5025 (shared teardown bound): see validate_teardown_wait_secs /
 # stop_worker_stack in ci/lib/go_worker_fixture.sh.
@@ -351,6 +357,7 @@ cleanup() {
   # LAST -- stop_worker_stack drains worker then reconciler; the api stops
   # here, directly, afterward.
   stop_worker_stack
+  stop_service "query-api" "${QUERY_API_PID}"
   stop_service "dev-hops api" "${API_PID}"
   rm -rf "${TMP_DIR}" >/dev/null 2>&1 || true
   return "${rc}"
@@ -555,6 +562,10 @@ echo "==> starting API at ${BASE_URL}"
   # same value to accept them, same as ci/run_metrics_executed_proof.sh's
   # own API-start block.
   export WORKER_OPERATIONAL_BRIDGE_TOKEN="${WORKER_OPERATIONAL_BRIDGE_TOKEN}"
+  # The edge stamps x-dev-health-plane on the GraphQL responses it serves,
+  # as prod does. go-api-prove refuses a baseline leg without it (see
+  # ci/lib/go_api_prove_e2e.sh).
+  export GO_API_PLANE_HEADER_ENABLED="true"
   exec_dev_hops \
     --db "${POSTGRES_URI}" \
     --analytics-db "${CLICKHOUSE_URI}" \
@@ -642,6 +653,9 @@ echo "==> validating /api/v1/home"
 HOME_FILE="${TMP_DIR}/home.json"
 fetch_json "/api/v1/home" "${HOME_FILE}" "200"
 run_python "${PY_PROGRAM_DIR}/assert_home.py" "${HOME_FILE}"
+
+echo "==> running go-api-prove end to end with the envelope and the edge access token minted in-process"
+run_go_api_prove_e2e
 
 echo "==> running customer-push external-ingest live e2e test (CHAOS-2702)"
 (

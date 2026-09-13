@@ -604,7 +604,7 @@ outright instead of trailing a fixed entrypoint binary:
 kubectl run dev-health-go-api-tools-oneoff \
   --image=ghcr.io/full-chaos/dev-health-go-api-tools:sha-<COMMIT> \
   --restart=Never \
-  --overrides='{"spec":{"containers":[{"name":"dev-health-go-api-tools-oneoff","image":"ghcr.io/full-chaos/dev-health-go-api-tools:sha-<COMMIT>","command":["sleep","86400"],"env":[{"name":"GO_API_ENVELOPE_PRIVATE_KEY","valueFrom":{"secretKeyRef":{"name":"dev-health-ops","key":"GO_API_ENVELOPE_PRIVATE_KEY"}}}]}]}}'
+  --overrides='{"spec":{"containers":[{"name":"dev-health-go-api-tools-oneoff","image":"ghcr.io/full-chaos/dev-health-go-api-tools:sha-<COMMIT>","command":["sleep","86400"],"env":[{"name":"GO_API_ENVELOPE_PRIVATE_KEY","valueFrom":{"secretKeyRef":{"name":"dev-health-ops","key":"GO_API_ENVELOPE_PRIVATE_KEY"}}},{"name":"JWT_SECRET_KEY","valueFrom":{"secretKeyRef":{"name":"dev-health-ops","key":"JWT_SECRET_KEY"}}},{"name":"POSTGRES_URI","valueFrom":{"secretKeyRef":{"name":"dev-health-ops","key":"POSTGRES_URI"}}}]}]}}'
 
 kubectl exec dev-health-go-api-tools-oneoff -- \
   go-api-routing status -registry-url http://query-api:8090/registry
@@ -612,7 +612,8 @@ kubectl exec dev-health-go-api-tools-oneoff -- \
 kubectl exec dev-health-go-api-tools-oneoff -- \
   go-api-prove -documents /app/go-api/documents.json -org <org> \
   -recorded-by <who> -review-evidence '<why>' -artifact-dir /tmp/proof \
-  -proof-bearer-exec '["/usr/local/bin/mint-envelope","-org","<org>"]'
+  -proof-bearer-exec '["/usr/local/bin/mint-envelope","-org","<org>"]' \
+  -edge-bearer-exec '["/usr/local/bin/mint-edge-token","-org","<org>"]'
 
 kubectl delete pod dev-health-go-api-tools-oneoff
 ```
@@ -637,6 +638,28 @@ for local/dev use. Claim shape, algorithm (EdDSA/Ed25519), key id, TTL
 byte-compatible by signing with `internal/envelopemint` and verifying with
 the real `Verifier`. `go-api-routing` still takes a pre-minted
 `GO_API_ROUTING_BEARER` the same way it always has.
+
+The image also carries `mint-edge-token`, `go-api-prove`'s
+`-edge-bearer-exec` helper (`internal/edgetokenmint`). It mints the other
+bearer, the edge **access token** the Python edge checks on every request,
+the same way `mint-envelope` mints the envelope: locally, in this Pod, from
+the key the api Pod's environment already holds (`JWT_SECRET_KEY`, by
+`secretKeyRef`, as the `--overrides` above shows). The edge bearer check is
+unchanged; there is no in-cluster trust bypass.
+
+The token is for a **dedicated proof service principal**, never a human
+user: the `users` row with the fixed id `00000000-0000-4000-8000-00000000e0e1`.
+Before signing, `mint-edge-token` reads that row and its membership through
+`POSTGRES_URI` and refuses unless the row is a service identity
+(`auth_provider = 'service'`, no password hash), is active, is not a
+superuser, and holds a `viewer` or `member` membership in the requested
+org. The token carries the row's current `token_version`, lives 10 minutes
+by default (30 at most), and `go-api-prove` re-runs the helper every four
+minutes, so no token outlives one run by more than its TTL. Revoke with
+`is_active = false` on the row; bumping `token_version` ends every token
+already minted. `mint-edge-token` reads the key and the DSN by env var name
+only, never from a flag. `GO_API_PROVE_BEARER` (a hand-minted token) is
+still accepted; setting it together with `-edge-bearer-exec` is refused.
 
 ## Float comparison: engine nondeterminism and the Tier-B rule
 

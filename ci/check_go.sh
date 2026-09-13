@@ -355,6 +355,29 @@ check_live_python_oracles() {
     return 1
   fi
 
+  printf 'go test -count=1: internal/edgetokenmint (Go-minted edge access token vs the live Python edge validator)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHON="${PYTHON:-python3}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 \
+        -run '^TestGoMintedEdgeTokenIsJudgedByTheLiveEdgeExactlyLikeAPythonMintedOne$' \
+        ./internal/edgetokenmint
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  proof_file="${proof_dir}/edgetokenmint-edge-oracle"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: the Go-minted edge access token was not judged by the live Python edge validator\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+
   printf 'go test -count=1: internal/scheduler/sync (live Python planner source is outside the Go embed/cache boundary)\n'
   if ! (
     cd "${ROOT}"

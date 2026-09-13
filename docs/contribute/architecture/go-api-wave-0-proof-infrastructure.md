@@ -555,12 +555,20 @@ audit table must outlive the row it describes.
 | `go_api_routing.rows_stale` (ERROR log) | Python edge startup (`api/_lifespan.py`) | Rows exist, none at the live digest |
 | `devhealth_go_api_routing_digest_drift_total{result="stale"}` | Python edge startup | Same condition, as a scrapeable counter |
 | `query-api: ROUTING ROWS STALE` (log) | `query-api` route construction | Same condition, on the Go plane |
+| structured ERROR-level record (`slog`, no fixed line text) | `query-api` route construction (`registry_drift_telemetry.go`) | Same condition, leveled so a log-level alert rule fires on it -- the plain-text line above carries no level at all |
+| `devhealth_query_api_routing_rows_for_digest` (gauge, `schema_digest` attr) | `query-api` route construction | Rows keyed to the digest THIS process computed; 0 with the total gauge below `>0` is the DEAD-fleet condition, on every startup, not only at read time |
+| `devhealth_query_api_routing_rows_total` (gauge, `schema_digest` attr) | `query-api` route construction | Disambiguates the gauge above from the legitimate `total == 0` "nothing enabled yet" posture |
 | `devhealth_go_api_dispatch_fallback_total{reason="no_routing_row"}` | Python edge, per request | A dispatch-eligible request found no row |
 | `ci/check_go_api_routing_digest.py` | CI | The SDL moved without updating the pin and this table |
 
 `empty` (nothing enabled) is deliberately reported as a *different* result
 from `stale` (everything enabled is dead). The two look identical from
 outside — no traffic reaches Go either way — and mean opposite things.
+
+None of the above shortcuts the recovery procedure. In particular, a schema digest that happens to match a
+previously-proven build is NOT grounds to re-point a DEAD row's `candidate_build` onto a new image without a
+fresh `go-api-prove` run: see "Per Go-API operation" in `docs/go-migration-matrix.md` ("The condition is now
+observable, not just render-visible") for why that specific shortcut was considered and rejected.
 
 ### Schema-digest history
 

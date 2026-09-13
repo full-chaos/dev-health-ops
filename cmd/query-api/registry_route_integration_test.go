@@ -98,3 +98,41 @@ func TestLogRoutingStateDrift_RowsOnlyAtSupersededDigestReportStale(t *testing.T
 		t.Fatalf("stale line does not name the recovery command; got %q", logged)
 	}
 }
+
+// logRoutingStateDrift must actually call through to
+// recordRoutingRowsForDigest (registry_drift_telemetry.go) against a REAL
+// Postgres census -- the unit tests beside
+// registry_drift_telemetry_test.go only prove the recorder itself behaves
+// correctly given a counts map; they cannot prove the query path actually
+// hands it one. Missing this wiring would leave the gauges and the
+// ERROR-level record permanently unpopulated in production while every
+// text-log assertion above kept passing.
+func TestLogRoutingStateDrift_WiresThroughToRoutingRowsRecorder(t *testing.T) {
+	var captured struct {
+		counts map[string]int64
+		digest string
+		called bool
+	}
+	previousRecorder := recordRoutingRowsForDigest
+	recordRoutingRowsForDigest = func(_ context.Context, counts map[string]int64, schemaDigest string) {
+		captured.counts = counts
+		captured.digest = schemaDigest
+		captured.called = true
+	}
+	t.Cleanup(func() { recordRoutingRowsForDigest = previousRecorder })
+
+	pool := startTestRegistryPostgres(t)
+	seedRoutingRowAtDigest(t, pool, "sha256:live", "featureFlags")
+
+	logRoutingStateDrift(pool, "sha256:live")
+
+	if !captured.called {
+		t.Fatal("logRoutingStateDrift did not call recordRoutingRowsForDigest")
+	}
+	if captured.digest != "sha256:live" {
+		t.Errorf("recorder saw schema digest %q, want sha256:live", captured.digest)
+	}
+	if captured.counts["sha256:live"] != 1 {
+		t.Errorf("recorder saw counts %v, want sha256:live=1", captured.counts)
+	}
+}

@@ -27,6 +27,13 @@ package main
 //     what digest it computed, so an enablement can REFUSE before writing
 //     rows the running binary could never read.
 //
+// logRoutingStateDrift's plain log.Print line only reaches someone
+// tailing logs at that exact moment, which is how the six days happened
+// in the first place. registry_drift_telemetry.go (same package) adds a
+// gauge pair and an ERROR-level structured record driven from this same
+// query, so the condition is visible on a dashboard and can page, not
+// just be discoverable in hindsight.
+//
 // Both are built from the same digestByOperation map and schemaDigest
 // newQueryHandler hands to PostgresSwitch, so neither can drift from the
 // real registration set. That is deliberately the same by-construction
@@ -173,6 +180,11 @@ func logRoutingStateDrift(pool *pgxpool.Pool, schemaDigest string) {
 	for _, line := range classifyRoutingDrift(counts, schemaDigest) {
 		log.Print(line)
 	}
+	// registry_drift_telemetry.go: the gauge pair and the ERROR-level
+	// structured record a dashboard/alert can watch continuously, driven
+	// from this SAME counts map so it cannot disagree with the log lines
+	// just above it.
+	recordRoutingRowsForDigest(ctx, counts, schemaDigest)
 }
 
 // classifyRoutingDrift turns a per-digest row census into the log lines that

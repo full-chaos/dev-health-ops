@@ -201,13 +201,32 @@ func logRejectedExplainOutput(ctx context.Context, parseResult ParseResult, prov
 	slog.WarnContext(ctx, "query_api.investment_mix_explain.llm_output_rejected",
 		"status", string(parseResult.Status),
 		"reason", parseResult.Reason,
+		"reason_rule", parseResult.ReasonRule,
+		"reason_path", parseResult.ReasonPath,
+		"reason_snippet", parseResult.ReasonSnippet,
 		"provider", provider,
 		"model", model,
-		"prompt_tokens", completion.InputTokens,
-		"completion_tokens", completion.OutputTokens,
+		"prompt_tokens", tokenCountForLog(completion.InputTokens),
+		"completion_tokens", tokenCountForLog(completion.OutputTokens),
 		"output_length", utf8.RuneCountInString(completion.Text),
 		"output_head", redactedOutputHead(completion.Text, llmOutputRejectionLogHeadRunes),
 	)
+}
+
+// tokenCountForLog dereferences a completion's token-count pointer for a
+// log attribute. Passing the *int itself to slog (as this line used to)
+// logs cleanly under the JSON handler tests exercise (encoding/json
+// dereferences pointers), but prod's real handler formats an unhandled
+// KindAny value with a plain "%+v", which prints a POINTER ADDRESS for
+// *int -- confirmed against a real prod line
+// (prompt_tokens=0x4010c55bdb40) that should have read prompt_tokens=2086.
+// -1 (not 0, a real and meaningful token count) marks "no count available"
+// when the pointer is nil.
+func tokenCountForLog(value *int) int {
+	if value == nil {
+		return -1
+	}
+	return *value
 }
 
 // redactedOutputHead returns the first maxRunes runes of text with

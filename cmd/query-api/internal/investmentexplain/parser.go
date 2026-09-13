@@ -220,10 +220,10 @@ func isJSONIdentByte(b byte) bool {
 func ParseInvestmentMixResponse(text string, opts ParseOptions) ParseResult {
 	parsed, ok := extractJSONObject(text)
 	if !ok {
-		return ParseResult{Status: ParseStatusInvalidJSON, Reason: "could not extract a single JSON object from the raw text"}
+		return ParseResult{Status: ParseStatusInvalidJSON, Reason: "could not extract a single JSON object from the raw text", ReasonRule: "invalid_json", ReasonPath: "$", ReasonSnippet: snippetOf(text)}
 	}
 	if !exactKeySetFromSet(parsed, topLevelKeys) {
-		return ParseResult{Status: ParseStatusInvalidLLMOutput, Reason: "top-level keys did not exactly match summary/top_findings/confidence/what_to_check_next/anti_claims"}
+		return ParseResult{Status: ParseStatusInvalidLLMOutput, Reason: "top-level keys did not exactly match summary/top_findings/confidence/what_to_check_next/anti_claims", ReasonRule: "top_level_keys_mismatch", ReasonPath: "$", ReasonSnippet: snippetOf(parsed)}
 	}
 
 	summary, summaryOK := parsed["summary"].(string)
@@ -232,25 +232,31 @@ func ParseInvestmentMixResponse(text string, opts ParseOptions) ParseResult {
 	rawAntiClaims, antiClaimsIsList := parsed["anti_claims"].([]any)
 
 	if !summaryOK {
-		return ParseResult{Status: ParseStatusInvalidLLMOutput, Reason: "summary is not a string"}
+		return ParseResult{Status: ParseStatusInvalidLLMOutput, Reason: "summary is not a string", ReasonRule: "summary_not_string", ReasonPath: "summary", ReasonSnippet: snippetOf(parsed["summary"])}
 	}
 	if pythonparity.Strip(summary) == "" {
-		return ParseResult{Status: ParseStatusInvalidLLMOutput, Reason: "summary is blank"}
+		return ParseResult{Status: ParseStatusInvalidLLMOutput, Reason: "summary is blank", ReasonRule: "summary_blank", ReasonPath: "summary", ReasonSnippet: snippetOf(summary)}
 	}
 	if pythonLen(summary) > 1000 {
-		return ParseResult{Status: ParseStatusInvalidLLMOutput, Reason: "summary exceeds 1000 characters"}
+		return ParseResult{Status: ParseStatusInvalidLLMOutput, Reason: "summary exceeds 1000 characters", ReasonRule: "summary_too_long", ReasonPath: "summary", ReasonSnippet: snippetOf(summary)}
 	}
 	if hasUnicodeDigit(summary) {
-		return ParseResult{Status: ParseStatusInvalidLLMOutput, Reason: "summary contains a digit"}
+		return ParseResult{Status: ParseStatusInvalidLLMOutput, Reason: "summary contains a digit", ReasonRule: "summary_digit", ReasonPath: "summary", ReasonSnippet: snippetOf(summary)}
 	}
 	if !findingsOK {
-		return ParseResult{Status: ParseStatusInvalidLLMOutput, Reason: "top_findings is not a list"}
+		return ParseResult{Status: ParseStatusInvalidLLMOutput, Reason: "top_findings is not a list", ReasonRule: "top_findings_not_list", ReasonPath: "top_findings", ReasonSnippet: snippetOf(parsed["top_findings"])}
 	}
 	if len(rawFindings) > 10 {
-		return ParseResult{Status: ParseStatusInvalidLLMOutput, Reason: "top_findings has more than 10 entries"}
+		return ParseResult{Status: ParseStatusInvalidLLMOutput, Reason: "top_findings has more than 10 entries", ReasonRule: "top_findings_too_many", ReasonPath: "top_findings", ReasonSnippet: snippetOf(len(rawFindings))}
 	}
-	if !validConfidence(parsed["confidence"]) {
-		return ParseResult{Status: ParseStatusInvalidLLMOutput, Reason: "confidence failed validation"}
+	if confidenceOK, confidenceRejection := validConfidence(parsed["confidence"]); !confidenceOK {
+		return ParseResult{
+			Status:        ParseStatusInvalidLLMOutput,
+			Reason:        "confidence failed validation",
+			ReasonRule:    confidenceRejection.Rule,
+			ReasonPath:    "confidence." + confidenceRejection.Path,
+			ReasonSnippet: confidenceRejection.Snippet,
+		}
 	}
 
 	findingOpts := parseFindingOptions{
@@ -261,51 +267,81 @@ func ParseInvestmentMixResponse(text string, opts ParseOptions) ParseResult {
 	}
 	findings := make([]Finding, 0, len(rawFindings))
 	for i, item := range rawFindings {
-		finding, ok := parseFinding(item, findingOpts)
+		finding, rejection, ok := parseFinding(item, findingOpts)
 		if !ok {
-			return ParseResult{Status: ParseStatusInvalidLLMOutput, Reason: fmt.Sprintf("top_findings[%d] failed validation", i)}
+			return ParseResult{
+				Status:        ParseStatusInvalidLLMOutput,
+				Reason:        fmt.Sprintf("top_findings[%d] failed validation", i),
+				ReasonRule:    rejection.Rule,
+				ReasonPath:    fmt.Sprintf("top_findings[%d].%s", i, rejection.Path),
+				ReasonSnippet: rejection.Snippet,
+			}
 		}
 		findings = append(findings, finding)
 	}
 	if !actionsOK {
-		return ParseResult{Status: ParseStatusInvalidLLMOutput, Reason: "what_to_check_next is not a list"}
+		return ParseResult{Status: ParseStatusInvalidLLMOutput, Reason: "what_to_check_next is not a list", ReasonRule: "what_to_check_next_not_list", ReasonPath: "what_to_check_next", ReasonSnippet: snippetOf(parsed["what_to_check_next"])}
 	}
 	if len(rawActions) > 10 {
-		return ParseResult{Status: ParseStatusInvalidLLMOutput, Reason: "what_to_check_next has more than 10 entries"}
+		return ParseResult{Status: ParseStatusInvalidLLMOutput, Reason: "what_to_check_next has more than 10 entries", ReasonRule: "what_to_check_next_too_many", ReasonPath: "what_to_check_next", ReasonSnippet: snippetOf(len(rawActions))}
 	}
 
 	actions := make([]ActionItem, 0, len(rawActions))
 	for i, item := range rawActions {
-		action, ok := parseAction(item)
+		action, rejection, ok := parseAction(item)
 		if !ok {
-			return ParseResult{Status: ParseStatusInvalidLLMOutput, Reason: fmt.Sprintf("what_to_check_next[%d] failed validation", i)}
+			return ParseResult{
+				Status:        ParseStatusInvalidLLMOutput,
+				Reason:        fmt.Sprintf("what_to_check_next[%d] failed validation", i),
+				ReasonRule:    rejection.Rule,
+				ReasonPath:    fmt.Sprintf("what_to_check_next[%d].%s", i, rejection.Path),
+				ReasonSnippet: rejection.Snippet,
+			}
 		}
 		actions = append(actions, action)
 	}
 
 	if !antiClaimsIsList {
-		return ParseResult{Status: ParseStatusInvalidLLMOutput, Reason: "anti_claims is not a list"}
+		return ParseResult{Status: ParseStatusInvalidLLMOutput, Reason: "anti_claims is not a list", ReasonRule: "anti_claims_not_list", ReasonPath: "anti_claims", ReasonSnippet: snippetOf(parsed["anti_claims"])}
 	}
 	for i, claim := range rawAntiClaims {
 		claimString, isString := claim.(string)
 		if !isString || pythonLen(claimString) > 300 {
-			return ParseResult{Status: ParseStatusInvalidLLMOutput, Reason: fmt.Sprintf("anti_claims[%d] is not a string, or exceeds 300 characters", i)}
+			return ParseResult{
+				Status:        ParseStatusInvalidLLMOutput,
+				Reason:        fmt.Sprintf("anti_claims[%d] is not a string, or exceeds 300 characters", i),
+				ReasonRule:    "anti_claim_invalid",
+				ReasonPath:    fmt.Sprintf("anti_claims[%d]", i),
+				ReasonSnippet: snippetOf(claim),
+			}
 		}
 	}
 	antiClaims := stringList(parsed["anti_claims"])
 	if len(rawAntiClaims) > 10 {
-		return ParseResult{Status: ParseStatusInvalidLLMOutput, Reason: "anti_claims has more than 10 entries"}
+		return ParseResult{Status: ParseStatusInvalidLLMOutput, Reason: "anti_claims has more than 10 entries", ReasonRule: "anti_claims_too_many", ReasonPath: "anti_claims", ReasonSnippet: snippetOf(len(rawAntiClaims))}
 	}
 	for i, claim := range antiClaims {
 		if pythonLen(claim) > 300 {
-			return ParseResult{Status: ParseStatusInvalidLLMOutput, Reason: fmt.Sprintf("anti_claims[%d] exceeds 300 characters after stripping", i)}
+			return ParseResult{
+				Status:        ParseStatusInvalidLLMOutput,
+				Reason:        fmt.Sprintf("anti_claims[%d] exceeds 300 characters after stripping", i),
+				ReasonRule:    "anti_claim_too_long",
+				ReasonPath:    fmt.Sprintf("anti_claims[%d]", i),
+				ReasonSnippet: snippetOf(claim),
+			}
 		}
 		if hasUnicodeDigit(claim) {
-			return ParseResult{Status: ParseStatusInvalidLLMOutput, Reason: fmt.Sprintf("anti_claims[%d] contains a digit after stripping", i)}
+			return ParseResult{
+				Status:        ParseStatusInvalidLLMOutput,
+				Reason:        fmt.Sprintf("anti_claims[%d] contains a digit after stripping", i),
+				ReasonRule:    "anti_claim_digit",
+				ReasonPath:    fmt.Sprintf("anti_claims[%d]", i),
+				ReasonSnippet: snippetOf(claim),
+			}
 		}
 	}
 	if len(antiClaims) != len(rawAntiClaims) {
-		return ParseResult{Status: ParseStatusInvalidLLMOutput, Reason: "anti_claims contains a blank-after-strip entry"}
+		return ParseResult{Status: ParseStatusInvalidLLMOutput, Reason: "anti_claims contains a blank-after-strip entry", ReasonRule: "anti_claim_blank", ReasonPath: "anti_claims", ReasonSnippet: snippetOf(rawAntiClaims)}
 	}
 
 	output := InvestmentMixExplainOutput{
@@ -331,8 +367,15 @@ func ParseInvestmentMixResponse(text string, opts ParseOptions) ParseResult {
 		narrative = append(narrative, action.Action, action.Why, action.Where)
 	}
 	narrative = append(narrative, antiClaims...)
-	if containsForbiddenLanguage(strings.Join(narrative, " ")) {
-		return ParseResult{Status: ParseStatusForbiddenLanguage, Reason: "narrative text contains forbidden hedge/certainty language"}
+	joinedNarrative := strings.Join(narrative, " ")
+	if word, matched := firstForbiddenMatch(joinedNarrative); matched {
+		return ParseResult{
+			Status:        ParseStatusForbiddenLanguage,
+			Reason:        "narrative text contains forbidden hedge/certainty language",
+			ReasonRule:    "forbidden_language:" + word,
+			ReasonPath:    "narrative",
+			ReasonSnippet: snippetOf(joinedNarrative),
+		}
 	}
 
 	return ParseResult{Status: ParseStatusValid, Output: &output}

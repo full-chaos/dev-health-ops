@@ -106,13 +106,27 @@ func hasUnicodeDigit(s string) bool {
 // ß) -- unverified is not the same as safe. Re-check this note before
 // adding any non-ASCII entry to forbiddenWords.
 func containsForbiddenLanguage(text string) bool {
+	_, ok := firstForbiddenMatch(text)
+	return ok
+}
+
+// firstForbiddenMatch is containsForbiddenLanguage's own reporting
+// companion: it returns which specific forbidden term matched (one of
+// forbiddenWords, or the literal "without question" for the separate
+// without\s+question phrase) instead of just true/false, so a caller can
+// log WHICH rule fired rather than "forbidden language matched somewhere
+// in the narrative".
+func firstForbiddenMatch(text string) (string, bool) {
 	lower := strings.ToLower(text)
 	for _, word := range forbiddenWords {
 		if containsWordBoundaryMatch(lower, word) {
-			return true
+			return word, true
 		}
 	}
-	return containsWithoutQuestion(lower)
+	if containsWithoutQuestion(lower) {
+		return "without question", true
+	}
+	return "", false
 }
 
 func containsWordBoundaryMatch(lower, word string) bool {
@@ -254,6 +268,39 @@ func stringList(value any) []string {
 	return out
 }
 
+// reasonSnippetHeadRunes caps snippetOf's output -- shorter than
+// llmOutputRejectionLogHeadRunes (explain.go's 300-rune cap on the WHOLE
+// rejected completion) because a rejection detail's snippet targets one
+// single offending field, not the entire response.
+const reasonSnippetHeadRunes = 80
+
+// validationRejection is the structured companion to the plain bool
+// parseFinding/parseAction/validConfidence returned before this fix: Rule
+// names WHICH specific check failed, Path locates the offending field
+// relative to the item being validated (e.g. "evidence.theme", to be
+// prefixed by the caller with "top_findings[i]."), and Snippet is the
+// REDACTED head of the offending raw value. See ParseResult's own doc
+// comment (types.go) for why this carries no parity weight.
+type validationRejection struct {
+	Rule    string
+	Path    string
+	Snippet string
+}
+
+// snippetOf renders value -- whatever shape a rejected JSON field held:
+// string, json.Number, bool, nil, a nested list/map, or the nonFiniteValue
+// sentinel -- as a short REDACTED head for a log line. A real string is
+// used as-is; everything else falls back to fmt.Sprint so a non-string
+// offender (e.g. top_findings[2].evidence.theme holding the number 5)
+// still shows something rather than silently vanishing from the log.
+func snippetOf(value any) string {
+	s, isString := value.(string)
+	if !isString {
+		s = fmt.Sprint(value)
+	}
+	return redactedOutputHead(s, reasonSnippetHeadRunes)
+}
+
 // parseFindingOptions bundles parse_finding's keyword-only parameters
 // (investment_mix_validation.py:58-65).
 type parseFindingOptions struct {
@@ -265,31 +312,45 @@ type parseFindingOptions struct {
 
 // parseFinding ports investment_mix_validation.py's parse_finding
 // (investment_mix_validation.py:58-115) exactly, including the rendered
-// finding text's "(~{share_pct:.0f}% of effort)." suffix.
-func parseFinding(raw any, opts parseFindingOptions) (Finding, bool) {
+// finding text's "(~{share_pct:.0f}% of effort)." suffix. The bool return
+// is unchanged parity behavior; validationRejection is the Go-only
+// addition (see its own doc comment) describing WHY a false came back.
+func parseFinding(raw any, opts parseFindingOptions) (Finding, validationRejection, bool) {
 	rawMap, isMap := raw.(map[string]any)
-	if !isMap || !exactKeySet(rawMap, "finding", "evidence") {
-		return Finding{}, false
+	if !isMap {
+		return Finding{}, validationRejection{Rule: "finding_not_object", Path: "$", Snippet: snippetOf(raw)}, false
+	}
+	if !exactKeySet(rawMap, "finding", "evidence") {
+		return Finding{}, validationRejection{Rule: "finding_keys_mismatch", Path: "$", Snippet: snippetOf(rawMap)}, false
 	}
 	finding, isString := rawMap["finding"].(string)
 	if !isString {
-		return Finding{}, false
+		return Finding{}, validationRejection{Rule: "finding_not_string", Path: "finding", Snippet: snippetOf(rawMap["finding"])}, false
 	}
 	strippedFinding := pythonparity.Strip(finding)
-	if strippedFinding == "" || pythonLen(finding) > 500 || hasUnicodeDigit(finding) {
-		return Finding{}, false
+	if strippedFinding == "" {
+		return Finding{}, validationRejection{Rule: "finding_blank", Path: "finding", Snippet: snippetOf(finding)}, false
+	}
+	if pythonLen(finding) > 500 {
+		return Finding{}, validationRejection{Rule: "finding_too_long", Path: "finding", Snippet: snippetOf(finding)}, false
+	}
+	if hasUnicodeDigit(finding) {
+		return Finding{}, validationRejection{Rule: "finding_digit", Path: "finding", Snippet: snippetOf(finding)}, false
 	}
 	evidence, isEvidenceMap := rawMap["evidence"].(map[string]any)
-	if !isEvidenceMap || !exactKeySetFromSet(evidence, evidenceKeys) {
-		return Finding{}, false
+	if !isEvidenceMap {
+		return Finding{}, validationRejection{Rule: "evidence_not_object", Path: "evidence", Snippet: snippetOf(rawMap["evidence"])}, false
+	}
+	if !exactKeySetFromSet(evidence, evidenceKeys) {
+		return Finding{}, validationRejection{Rule: "evidence_keys_mismatch", Path: "evidence", Snippet: snippetOf(evidence)}, false
 	}
 	theme, themeOK := evidence["theme"].(string)
 	if !themeOK {
-		return Finding{}, false
+		return Finding{}, validationRejection{Rule: "theme_not_string", Path: "evidence.theme", Snippet: snippetOf(evidence["theme"])}, false
 	}
 	themeShare, themeKnown := opts.themeSharesPct[theme]
 	if !themeKnown {
-		return Finding{}, false
+		return Finding{}, validationRejection{Rule: "theme_unknown", Path: "evidence.theme", Snippet: snippetOf(theme)}, false
 	}
 
 	var subcategory *string
@@ -300,36 +361,36 @@ func parseFinding(raw any, opts parseFindingOptions) (Finding, bool) {
 	case string:
 		subcategoryShare, subcategoryKnown := opts.subcategorySharesPct[rawSubcategory]
 		if !subcategoryKnown {
-			return Finding{}, false
+			return Finding{}, validationRejection{Rule: "subcategory_unknown", Path: "evidence.subcategory", Snippet: snippetOf(rawSubcategory)}, false
 		}
 		if before, _, _ := strings.Cut(rawSubcategory, "."); before != theme {
-			return Finding{}, false
+			return Finding{}, validationRejection{Rule: "subcategory_theme_mismatch", Path: "evidence.subcategory", Snippet: snippetOf(rawSubcategory)}, false
 		}
 		_ = subcategoryShare
 		subcategoryCopy := rawSubcategory
 		subcategory = &subcategoryCopy
 	default:
 		// subcategory present but not a string (and not None) -- invalid.
-		return Finding{}, false
+		return Finding{}, validationRejection{Rule: "subcategory_invalid_type", Path: "evidence.subcategory", Snippet: snippetOf(rawSubcategory)}, false
 	}
 
 	if !finiteNumber(evidence["share_pct"], 0, ptr(100.0), true) {
-		return Finding{}, false
+		return Finding{}, validationRejection{Rule: "share_pct_invalid", Path: "evidence.share_pct", Snippet: snippetOf(evidence["share_pct"])}, false
 	}
 	if delta, present := evidence["delta_pct_points"]; present && delta != nil {
 		if !finiteNumber(delta, -100, ptr(100.0), true) {
-			return Finding{}, false
+			return Finding{}, validationRejection{Rule: "delta_pct_points_invalid", Path: "evidence.delta_pct_points", Snippet: snippetOf(delta)}, false
 		}
 	}
 	if rawQuality, present := evidence["evidence_quality_mean"]; present && rawQuality != nil {
 		if !finiteNumber(rawQuality, 0, ptr(1.0), true) {
-			return Finding{}, false
+			return Finding{}, validationRejection{Rule: "evidence_quality_mean_invalid", Path: "evidence.evidence_quality_mean", Snippet: snippetOf(rawQuality)}, false
 		}
 	}
 	if rawBand, present := evidence["evidence_quality_band"]; present && rawBand != nil {
 		bandString, isBandString := rawBand.(string)
 		if !isBandString || !bands[bandString] {
-			return Finding{}, false
+			return Finding{}, validationRejection{Rule: "evidence_quality_band_invalid", Path: "evidence.evidence_quality_band", Snippet: snippetOf(rawBand)}, false
 		}
 	}
 
@@ -348,41 +409,49 @@ func parseFinding(raw any, opts parseFindingOptions) (Finding, bool) {
 			EvidenceQualityMean: opts.qualityMean,
 			EvidenceQualityBand: opts.qualityBand,
 		},
-	}, true
+	}, validationRejection{}, true
 }
 
 // validConfidence ports investment_mix_validation.py's valid_confidence
-// (investment_mix_validation.py:118-146).
-func validConfidence(raw any) bool {
+// (investment_mix_validation.py:118-146). The bool return is unchanged
+// parity behavior; validationRejection is the Go-only addition (see its
+// own doc comment) describing WHY a false came back.
+func validConfidence(raw any) (bool, validationRejection) {
 	rawMap, isMap := raw.(map[string]any)
-	if !isMap || !exactKeySetFromSet(rawMap, confidenceKeys) {
-		return false
+	if !isMap {
+		return false, validationRejection{Rule: "confidence_not_object", Path: "$", Snippet: snippetOf(raw)}
+	}
+	if !exactKeySetFromSet(rawMap, confidenceKeys) {
+		return false, validationRejection{Rule: "confidence_keys_mismatch", Path: "$", Snippet: snippetOf(rawMap)}
 	}
 	level, levelOK := rawMap["level"].(string)
 	if !levelOK || !confidenceLevels[level] {
-		return false
+		return false, validationRejection{Rule: "confidence_level_invalid", Path: "level", Snippet: snippetOf(rawMap["level"])}
 	}
 	if mean, present := rawMap["quality_mean"]; present && mean != nil {
 		if !finiteNumber(mean, 0, ptr(1.0), true) {
-			return false
+			return false, validationRejection{Rule: "confidence_quality_mean_invalid", Path: "quality_mean", Snippet: snippetOf(mean)}
 		}
 	}
 	if stddev, present := rawMap["quality_stddev"]; present && stddev != nil {
 		if !finiteNumber(stddev, 0, ptr(1.0), true) {
-			return false
+			return false, validationRejection{Rule: "confidence_quality_stddev_invalid", Path: "quality_stddev", Snippet: snippetOf(stddev)}
 		}
 	}
 	bandMix, isBandMixMap := rawMap["band_mix"].(map[string]any)
-	if !isBandMixMap || !exactKeySetFromSet(bandMix, bands) {
-		return false
+	if !isBandMixMap {
+		return false, validationRejection{Rule: "confidence_band_mix_not_object", Path: "band_mix", Snippet: snippetOf(rawMap["band_mix"])}
 	}
-	for _, value := range bandMix {
+	if !exactKeySetFromSet(bandMix, bands) {
+		return false, validationRejection{Rule: "confidence_band_mix_keys_mismatch", Path: "band_mix", Snippet: snippetOf(bandMix)}
+	}
+	for band, value := range bandMix {
 		if _, isBool := value.(bool); isBool {
-			return false
+			return false, validationRejection{Rule: "confidence_band_mix_value_invalid", Path: "band_mix." + band, Snippet: snippetOf(value)}
 		}
 		number, isNumber := value.(json.Number)
 		if !isNumber || !isPythonInt(number) {
-			return false
+			return false, validationRejection{Rule: "confidence_band_mix_value_invalid", Path: "band_mix." + band, Snippet: snippetOf(value)}
 		}
 		// Non-negativity is checked on the LITERAL DIGIT STRING, not via
 		// number.Float64() -- Python's int is arbitrary-precision
@@ -396,52 +465,72 @@ func validConfidence(raw any) bool {
 		// above already confirms the literal has no '.'/'e'/'E', so
 		// checking for a leading '-' is sufficient and exact.
 		if strings.HasPrefix(string(number), "-") {
-			return false
+			return false, validationRejection{Rule: "confidence_band_mix_value_invalid", Path: "band_mix." + band, Snippet: snippetOf(value)}
 		}
 	}
 	drivers, isDriversList := rawMap["drivers"].([]any)
-	if !isDriversList || len(drivers) > 10 {
-		return false
+	if !isDriversList {
+		return false, validationRejection{Rule: "confidence_drivers_invalid", Path: "drivers", Snippet: snippetOf(rawMap["drivers"])}
 	}
-	for _, driver := range drivers {
+	if len(drivers) > 10 {
+		return false, validationRejection{Rule: "confidence_drivers_too_many", Path: "drivers", Snippet: snippetOf(len(drivers))}
+	}
+	for i, driver := range drivers {
 		driverString, isString := driver.(string)
 		if !isString || pythonparity.Strip(driverString) == "" || pythonLen(driverString) > 120 {
-			return false
+			return false, validationRejection{Rule: "confidence_driver_invalid", Path: fmt.Sprintf("drivers[%d]", i), Snippet: snippetOf(driver)}
 		}
 	}
-	return true
+	return true, validationRejection{}
 }
 
 // parseAction ports investment_mix_validation.py's parse_action
-// (investment_mix_validation.py:149-165).
-func parseAction(raw any) (ActionItem, bool) {
+// (investment_mix_validation.py:149-165). The bool return is unchanged
+// parity behavior; validationRejection is the Go-only addition (see its
+// own doc comment) describing WHY a false came back.
+func parseAction(raw any) (ActionItem, validationRejection, bool) {
 	rawMap, isMap := raw.(map[string]any)
-	if !isMap || !exactKeySet(rawMap, "action", "why", "where") {
-		return ActionItem{}, false
+	if !isMap {
+		return ActionItem{}, validationRejection{Rule: "action_not_object", Path: "$", Snippet: snippetOf(raw)}, false
+	}
+	if !exactKeySet(rawMap, "action", "why", "where") {
+		return ActionItem{}, validationRejection{Rule: "action_keys_mismatch", Path: "$", Snippet: snippetOf(rawMap)}, false
 	}
 	action, actionOK := rawMap["action"].(string)
 	why, whyOK := rawMap["why"].(string)
 	where, whereOK := rawMap["where"].(string)
 	if !actionOK || pythonparity.Strip(action) == "" {
-		return ActionItem{}, false
+		return ActionItem{}, validationRejection{Rule: "action_field_blank", Path: "action", Snippet: snippetOf(rawMap["action"])}, false
 	}
 	if !whyOK || pythonparity.Strip(why) == "" {
-		return ActionItem{}, false
+		return ActionItem{}, validationRejection{Rule: "action_field_blank", Path: "why", Snippet: snippetOf(rawMap["why"])}, false
 	}
 	if !whereOK || pythonparity.Strip(where) == "" {
-		return ActionItem{}, false
+		return ActionItem{}, validationRejection{Rule: "action_field_blank", Path: "where", Snippet: snippetOf(rawMap["where"])}, false
 	}
-	if pythonLen(action) > 200 || pythonLen(why) > 300 || pythonLen(where) > 200 {
-		return ActionItem{}, false
+	if pythonLen(action) > 200 {
+		return ActionItem{}, validationRejection{Rule: "action_field_too_long", Path: "action", Snippet: snippetOf(action)}, false
 	}
-	if hasUnicodeDigit(action) || hasUnicodeDigit(why) || hasUnicodeDigit(where) {
-		return ActionItem{}, false
+	if pythonLen(why) > 300 {
+		return ActionItem{}, validationRejection{Rule: "action_field_too_long", Path: "why", Snippet: snippetOf(why)}, false
+	}
+	if pythonLen(where) > 200 {
+		return ActionItem{}, validationRejection{Rule: "action_field_too_long", Path: "where", Snippet: snippetOf(where)}, false
+	}
+	if hasUnicodeDigit(action) {
+		return ActionItem{}, validationRejection{Rule: "action_field_digit", Path: "action", Snippet: snippetOf(action)}, false
+	}
+	if hasUnicodeDigit(why) {
+		return ActionItem{}, validationRejection{Rule: "action_field_digit", Path: "why", Snippet: snippetOf(why)}, false
+	}
+	if hasUnicodeDigit(where) {
+		return ActionItem{}, validationRejection{Rule: "action_field_digit", Path: "where", Snippet: snippetOf(where)}, false
 	}
 	return ActionItem{
 		Action: pythonparity.Strip(action),
 		Why:    pythonparity.Strip(why),
 		Where:  pythonparity.Strip(where),
-	}, true
+	}, validationRejection{}, true
 }
 
 func ptr(v float64) *float64 { return &v }

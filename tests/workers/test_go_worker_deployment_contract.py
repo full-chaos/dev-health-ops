@@ -2132,3 +2132,101 @@ def test_helm_metrics_api_deployment_only_renders_when_enabled() -> None:
     container = deployment["spec"]["template"]["spec"]["containers"][0]
     assert container["image"]
     assert container["resources"]["limits"]["memory"] == "1Gi"
+
+
+@pytest.mark.skipif(shutil.which("helm") is None, reason="helm is not installed")
+def test_helm_go_worker_groups_roll_on_shared_config_or_secret_change() -> None:
+    """CHAOS-5687: all nine go-worker groups envFrom the shared ConfigMap and
+    Secret (go-workers.yaml), same as api-deployment.yaml/
+    billing-edge-deployment.yaml -- but envFrom never triggers a rollout on
+    its own. Prod rev 28 changed one ConfigMap key and rolled api and
+    billing-edge (they carry checksum/config + checksum/secret pod-template
+    annotations) but none of the nine go-worker groups, which had no such
+    annotation; the operator had to `kubectl rollout restart` them by hand.
+    Render the chart with two different config values and two different
+    secret values and assert every group's pod-template annotations change
+    accordingly, while its image and probes do not.
+    """
+    expected_groups = {
+        "heavy",
+        "ops",
+        "sync",
+        "sync-provider",
+        "reconciler",
+        "scheduler",
+        "stream-external",
+        "stream-ingest",
+        "stream-pagerduty",
+    }
+
+    def render(*extra_args: str) -> dict[str, dict]:
+        result = subprocess.run(
+            [
+                "helm",
+                "template",
+                "phase1",
+                str(_HELM_CHART),
+                *extra_args,
+                "--show-only",
+                "templates/go-workers.yaml",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        docs = list(yaml.safe_load_all(result.stdout))
+        by_group = {
+            doc["metadata"]["labels"]["dev-health.io/worker-group"]: doc
+            for doc in docs
+            if doc and doc.get("kind") == "Deployment"
+        }
+        assert set(by_group) == expected_groups
+        return by_group
+
+    def fingerprint(deployment: dict) -> tuple[str, object, object]:
+        pod = deployment["spec"]["template"]
+        container = pod["spec"]["containers"][0]
+        return (
+            container["image"],
+            container.get("livenessProbe"),
+            container.get("readinessProbe"),
+        )
+
+    base = render()
+    config_changed = render("--set-string", "config.LOG_LEVEL=DEBUG")
+    secret_changed = render(
+        "--set-string", "secrets.data.DATABASE_URI=postgresql://rotated"
+    )
+
+    for group in expected_groups:
+        base_annotations = base[group]["spec"]["template"]["metadata"]["annotations"]
+        assert "checksum/config" in base_annotations, group
+        assert "checksum/secret" in base_annotations, group
+
+        config_annotations = config_changed[group]["spec"]["template"]["metadata"][
+            "annotations"
+        ]
+        assert (
+            config_annotations["checksum/config"]
+            != (base_annotations["checksum/config"])
+        ), f"{group}: a ConfigMap-only change must roll this group"
+        assert (
+            config_annotations["checksum/secret"] == base_annotations["checksum/secret"]
+        ), f"{group}: a ConfigMap-only change must not touch the secret checksum"
+        assert fingerprint(config_changed[group]) == fingerprint(base[group]), (
+            f"{group}: a config value change must not touch image or probes"
+        )
+
+        secret_annotations = secret_changed[group]["spec"]["template"]["metadata"][
+            "annotations"
+        ]
+        assert (
+            secret_annotations["checksum/secret"]
+            != (base_annotations["checksum/secret"])
+        ), f"{group}: a Secret-only change must roll this group"
+        assert (
+            secret_annotations["checksum/config"] == base_annotations["checksum/config"]
+        ), f"{group}: a Secret-only change must not touch the config checksum"
+        assert fingerprint(secret_changed[group]) == fingerprint(base[group]), (
+            f"{group}: a secret value change must not touch image or probes"
+        )

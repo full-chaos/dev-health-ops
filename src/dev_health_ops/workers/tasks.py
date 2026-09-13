@@ -11,7 +11,6 @@ from dev_health_ops.workers.task_utils import (
     _invalidate_metrics_cache,
     _resolve_env_credentials,
 )
-from dev_health_ops.workers.team_autoimport import run_post_sync_team_autoimport
 
 __all__ = [
     "_extract_provider_token",
@@ -23,5 +22,4 @@ __all__ = [
     "finalize_sync_run",
     "run_sync_reference_discovery",
     "run_sync_unit",
-    "run_post_sync_team_autoimport",
 ]

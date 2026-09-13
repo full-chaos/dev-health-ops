@@ -16,7 +16,7 @@ from dev_health_ops.metrics.schemas import (
     TeamProjectOwnershipRecord,
 )
 from dev_health_ops.providers.identity import IdentityResolver
-from dev_health_ops.workers import team_autoimport, team_autoimport_jira
+from dev_health_ops.workers import team_autoimport_jira
 
 
 @dataclass
@@ -299,6 +299,17 @@ def test_jira_org_import_fails_closed_when_roster_read_fails(
 def test_chaos_2547_2544_jira_autoimport_uses_analytics_db_url_with_env_unset(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Calls team_autoimport_jira.populate() directly rather than through
+    team_autoimport.run_team_autoimport(): jira joined _GO_NATIVE_PROVIDERS
+    once its own Go collector shipped, so the dispatcher now refuses it
+    before ever threading analytics_db_url into a populator scope --
+    exactly like every other now-native provider (see
+    test_run_team_autoimport_skips_linear_go_native_writer in
+    test_team_autoimport_executor.py). This test's actual subject,
+    _clickhouse_dsn/_sink_from_kwargs preferring scope["analytics_db"] over
+    the CLICKHOUSE_URI env var, is a property of populate() itself and is
+    unaffected by which caller reaches it."""
+
     async def discover_jira(
         self: object, email: str, api_token: str, url: str
     ) -> list[DiscoveredTeam]:
@@ -347,19 +358,16 @@ def test_chaos_2547_2544_jira_autoimport_uses_analytics_db_url_with_env_unset(
         CapturingClickHouseSink,
     )
 
-    summary = team_autoimport.run_team_autoimport(
-        provider="jira",
+    summary = team_autoimport_jira.populate(
         org_id="org-1",
         credentials={
             "email": "jira@example.com",
             "api_token": "jira-token",
             "base_url": "https://jira.example.com",
         },
-        scope={"mode": "sync_config"},
-        analytics_db_url="clickhouse://jira-config-dsn",
+        scope={"mode": "sync_config", "analytics_db": "clickhouse://jira-config-dsn"},
     )
 
-    assert summary["status"] == "success"
     assert summary["projects_imported"] == 1
     assert summary["members_imported"] == 1
     assert summary["team_memberships_imported"] == 1

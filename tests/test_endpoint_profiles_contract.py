@@ -108,6 +108,21 @@ def test_inventory_row_count_matches_the_baseline():
     worker-bridge routes, removed by four different changes landing across
     three merges. No one -1 subsumes another, and a merge keeping only some
     of them silently re-admits a deleted route to the baseline.
+    = 364, -1 REST under this change: `POST /api/internal/worker-sync/
+    team-autoimport` is deleted with its row in the same change, the same
+    shape as every prior worker-bridge deletion in this list -- jira, the
+    last provider whose sync-time dispatch still reached it through the
+    Python bridge, got its own native Go collector, so nothing calls the
+    route any more.
+    = 363, -1 REST under a separately-merged change: `POST /teams/
+    trigger-drift-sync` (the admin team-drift-sync trigger) is deleted with
+    its row too -- it dispatched a Celery task by name string, and that task
+    was already deleted as dead code, so the route enqueued into a void
+    regardless of whether a Celery broker even exists. This decrement and
+    the one above landed on two different branches, independently, each
+    starting from the SAME pre-existing 365/306 baseline -- see the MERGE
+    HAZARD note below for why the two numbers coincided and had to be
+    recounted from the file rather than trusted from either branch alone.
 
     MERGE HAZARD, recorded because it has now nearly landed silently more
     than once. Each change edited these same asserts, and each was correct
@@ -128,9 +143,9 @@ def test_inventory_row_count_matches_the_baseline():
     rows = inventory["rows"]
     rest = [r for r in rows if r["surface_kind"] == "rest"]
     graphql = [r for r in rows if r["surface_kind"] in _GRAPHQL_KINDS]
-    assert len(rest) == 305, len(rest)
+    assert len(rest) == 304, len(rest)
     assert len(graphql) == 59, len(graphql)
-    assert len(rows) == 364, len(rows)
+    assert len(rows) == 363, len(rows)
 
 
 def test_the_three_subscriptions_are_profiled():
@@ -162,9 +177,16 @@ def test_classification_summary_matches_the_baseline():
     # so each such deletion lands here too. All four decrements apply; see
     # the merge hazard note in test_inventory_row_count_matches_the_baseline
     # for why none of them subsumes another, and why this number is
-    # recounted rather than derived. - 1 more when the admin team-drift-sync
-    # trigger (a protected REST route) was deleted; recounted from the file.
-    assert len(protected) == 337, len(protected)
+    # recounted rather than derived.
+    # - 1 more under a separately-merged change: the admin team-drift-sync
+    # trigger (a protected REST route) was deleted too.
+    # - 1 more under this change: the deleted worker-sync/team-autoimport row
+    # was also protected (worker bridge bearer, same as every other
+    # worker-sync route). Both decrements landed independently from the same
+    # pre-existing 338 baseline -- see the merge hazard note in
+    # test_inventory_row_count_matches_the_baseline for why this number is
+    # recounted from the file rather than trusted from either branch alone.
+    assert len(protected) == 336, len(protected)
     # 22 + the four fastapi doc routes + /metrics.
     assert len(public) == 27, len(public)
     assert len(protected) + len(public) == len(rows)

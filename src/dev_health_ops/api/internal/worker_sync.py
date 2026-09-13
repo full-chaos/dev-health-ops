@@ -24,7 +24,6 @@ from dev_health_ops.workers.reference_discovery import (
     run_sync_reference_discovery,
 )
 from dev_health_ops.workers.sync_units import dispatch_sync_run, finalize_sync_run
-from dev_health_ops.workers.team_autoimport import run_post_sync_team_autoimport
 
 router = APIRouter(prefix="/api/internal/worker-sync", include_in_schema=False)
 
@@ -263,23 +262,6 @@ async def reference_discovery_reference(
         accepted=frozenset(
             {"feature_disabled", "success", "skipped", "retrying", "failed"}
         ),
-    )
-
-
-@router.post("/team-autoimport", dependencies=[])
-async def team_autoimport_reference(
-    reference: TeamAutoImportReference,
-    authorization: Annotated[str | None, Header()] = None,
-) -> dict[str, str]:
-    _authorize(authorization)
-    if not _current_sync_run_reference(reference):
-        return {"status": "stale"}
-    result = await run_in_threadpool(
-        run_post_sync_team_autoimport, str(reference.sync_run_id)
-    )
-    return _result(
-        result,
-        accepted=frozenset({"skipped", "dispatched"}),
     )
 
 

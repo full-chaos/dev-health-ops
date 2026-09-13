@@ -281,7 +281,7 @@ tooling and Python trigger shells over the same native path:
 
 | CLI verb/area | Executor | Writer call site | Ticket |
 |---|---|---|---|
-| `dev-hops sync` (git/prs/blame/cicd/deployments/incidents/teams/work-items) | NATIVE (worker-side; Python CLI verbs are operator-trigger shells over the same Go sync-dispatch path, `sync_processor.register_commands`) | `internal/providersync/*` -- see the generated table below, all NATIVE except jira memberships | CHAOS-4198 (jira memberships) |
+| `dev-hops sync` (git/prs/blame/cicd/deployments/incidents/teams/work-items) | NATIVE (worker-side; Python CLI verbs are operator-trigger shells over the same Go sync-dispatch path, `sync_processor.register_commands`) | `internal/providersync/*` -- see the generated table below, all NATIVE (jira team/project/membership catalog collection moved to `JiraTeamCatalogCollector` last) | -- |
 | `dev-health-workerctl providersync retire-linear-pseudo-projects` / `retire-stale-linear-project-ownership` | NATIVE | `cmd/dev-health-workerctl/main.go:1428-1609` | -- |
 | `dev-health-workerctl sync-dispatch-outbox close-backlog` | NATIVE | `cmd/dev-health-workerctl/main.go:1610-1689` | -- |
 

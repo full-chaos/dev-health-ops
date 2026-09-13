@@ -388,6 +388,21 @@ var operationSpecs = map[string]OperationSpec{
 				},
 				Intermittent:       true,
 				IntermittentReason: "repos is a ReplacingMergeTree rewritten every sync cycle and merged in the background, so the fan-out is present only between a repos write and the next merge; the same operation matched on an earlier build while the rows were merged",
+				// The blanket path citation above admits ANY difference
+				// under these four paths, including a real Go regression
+				// -- see RepoFanoutShape's doc comment (repofanout.go)
+				// for the incident this narrows down to exactly the
+				// transform the repos-join fan-out can produce. Paths is
+				// unchanged; this only tightens what counts as covered
+				// under it.
+				RepoFanoutShape: &RepoFanoutShape{
+					NodesListPath:    "data.analytics.sankey.nodes",
+					EdgesListPath:    "data.analytics.sankey.edges",
+					NodeValuePath:    "data.analytics.sankey.nodes.value",
+					EdgeValuePath:    "data.analytics.sankey.edges.value",
+					TeamCoveragePath: "data.analytics.sankey.coverage.teamCoverage",
+					RepoCoveragePath: "data.analytics.sankey.coverage.repoCoverage",
+				},
 			}},
 			// CHAOS-5546: sankey.go's nodes/edges queries are a plain
 			// ClickHouse UNION ALL with no outer ORDER BY. Measured live:

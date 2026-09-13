@@ -53,4 +53,7 @@ def test_query_api_deployment_exposes_a_named_metrics_port() -> None:
         "convention go-workers.yaml uses) so pod-based Prometheus discovery "
         "finds its /metrics route"
     )
-    assert ports_by_name["metrics"]["containerPort"] == ports_by_name["http"]["containerPort"]
+    assert (
+        ports_by_name["metrics"]["containerPort"]
+        == ports_by_name["http"]["containerPort"]
+    )

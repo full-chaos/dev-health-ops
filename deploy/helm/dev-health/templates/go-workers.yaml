@@ -109,6 +109,23 @@ spec:
             - {{ printf "--shutdown-timeout=%ds" (int $group.terminationGracePeriodSeconds) | quote }}
             - "--http-addr=:8080"
             {{- /*
+            preclaim-readiness-timeout is a dev-health-worker-only flag
+            (config.Options's Services restriction), so it is gated on
+            $group.queues the same way --queues/--worker-group above are --
+            never rendered for a reconciler/scheduler/stream-runner group,
+            which would reject it as an unrecognized flag. It is appended
+            here, after the fixed queue-topology/shutdown-timeout prefix
+            test_helm_river_workers_select_manifest_queues_and_queue_metrics
+            pins, as "the rest of the worker's configuration" that prefix
+            check deliberately leaves unconstrained. $group.
+            preclaimReadinessTimeout overrides goWorkers.
+            defaultPreclaimReadinessTimeout per group, same fallback
+            pattern as livenessProbe/readinessProbe below.
+            */}}
+            {{- if $group.queues }}
+            - {{ printf "--preclaim-readiness-timeout=%s" ($group.preclaimReadinessTimeout | default $.Values.goWorkers.defaultPreclaimReadinessTimeout) | quote }}
+            {{- end }}
+            {{- /*
               CHAOS-4351: whichever group's queue set includes `metrics` is
               the one that calls the metrics compatibility bridge -- point
               it at the dedicated metricsApi Service instead of api's, same

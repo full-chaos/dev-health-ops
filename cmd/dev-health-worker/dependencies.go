@@ -46,6 +46,15 @@ const (
 	// the log site, and the test assert on ONE string rather than three copies
 	// of a literal that can drift apart (CHAOS-5034).
 	reasonShutdownTimeoutBelowDrainBudget = "shutdown_timeout_below_drain_budget"
+
+	// preclaimReadinessInitialBackoff and preclaimReadinessMaxBackoff shape
+	// the wait between preclaim-readiness retries. Doubling from a short
+	// first wait means a dependency that clears in a couple of seconds
+	// (typical connection-pool contention easing) is retried almost right
+	// away, while a longer outage does not hammer an already-struggling
+	// Postgres with a retry every couple of seconds for minutes on end.
+	preclaimReadinessInitialBackoff = 2 * time.Second
+	preclaimReadinessMaxBackoff     = 30 * time.Second
 )
 
 var errWorkerDependencyUnavailable = errors.New("worker readiness dependency is unavailable")
@@ -422,42 +431,156 @@ type workerDependencies struct {
 type preclaimReadinessComponent struct {
 	registry *health.Registry
 	logger   *slog.Logger
+	// budget is the total wall-clock time Start spends retrying a readiness
+	// check that keeps timing out before it gives up and returns an error.
+	// Zero (the value every hand-built test fixture below leaves it at)
+	// means no retry at all: the first evaluation is final, exactly like
+	// this component behaved before retrying existed. Production
+	// construction always supplies cfg.PreclaimReadinessTimeout.
+	budget time.Duration
+	// now and sleep are overridden by tests so the retry loop can be driven
+	// deterministically without real wall-clock waits. Left nil, Start uses
+	// time.Now and a context-aware time.Sleep.
+	now   func() time.Time
+	sleep func(context.Context, time.Duration)
 }
 
 func (preclaimReadinessComponent) Name() string { return "preclaim-readiness" }
 
+// Start evaluates required checks and, while every failure is one that timed
+// out rather than one that ran to completion and reported a real problem,
+// keeps retrying with backoff until either the checks pass or the retry
+// budget is spent. A roll storm that starts every replica of every worker
+// group at once can push Postgres and its pooler past the per-check timeout
+// for as long as it takes the burst of new connections to settle -- that is
+// not a broken dependency, and treating it as one turns an ordinary rollout
+// into a crash loop. A check that runs to completion and reports a genuine
+// problem (wrong credentials, a posture mismatch) answers quickly and is
+// never confused for a timeout, so that case still exits on the first
+// attempt exactly as before.
 func (component preclaimReadinessComponent) Start(ctx context.Context) error {
 	if component.registry == nil {
 		return errWorkerDependencyUnavailable
 	}
-	readiness := component.registry.CheckRequired(ctx)
-	if readiness.Ready {
-		return nil
+	now := component.now
+	if now == nil {
+		now = time.Now
 	}
-	// Name the checks that refused. A preclaim failure aborts Start, so the
-	// shell exits 1 and the process is restarted -- and the readiness detail
-	// that would explain why is only reachable on the operator HTTP surface,
-	// which this process never lives long enough to serve. Without this line
-	// the whole crash loop reports nothing but the shell's
-	// "runtime_failure" category (CHAOS-3902).
-	//
-	// Check names are bounded compile-time constants registered by this
-	// package, and Registry.CheckRequired returns names only -- never a
-	// dependency error string that could carry a DSN or credential -- so this
-	// is the same disclosure the /readyz surface already makes, on the one
-	// path that cannot reach it. Joined the way every other multi-valued
-	// worker startup attribute is (see the "queues" attribute).
-	if component.logger != nil {
-		component.logger.ErrorContext(
-			ctx,
-			"preclaim readiness refused",
-			"error_category",
-			"dependency_unavailable",
-			"failed_checks",
-			strings.Join(readiness.Failed, ","),
-		)
+	sleep := component.sleep
+	if sleep == nil {
+		sleep = preclaimReadinessSleep
 	}
-	return errWorkerDependencyUnavailable
+
+	start := now()
+	backoff := preclaimReadinessInitialBackoff
+	for attempt := 1; ; attempt++ {
+		readiness := component.registry.CheckRequired(ctx)
+		if readiness.Ready {
+			return nil
+		}
+		elapsed := now().Sub(start)
+		if !preclaimReadinessRetryable(readiness) {
+			component.logRefusal(ctx, readiness.Failed, "dependency_check_failed", attempt, elapsed)
+			return errWorkerDependencyUnavailable
+		}
+		if elapsed >= component.budget || ctx.Err() != nil {
+			component.logRefusal(ctx, readiness.Failed, "retry_budget_exhausted", attempt, elapsed)
+			return errWorkerDependencyUnavailable
+		}
+		wait := backoff
+		if remaining := component.budget - elapsed; wait > remaining {
+			wait = remaining
+		}
+		component.logRetry(ctx, readiness.Failed, attempt, elapsed, wait)
+		sleep(ctx, wait)
+		backoff *= 2
+		if backoff > preclaimReadinessMaxBackoff {
+			backoff = preclaimReadinessMaxBackoff
+		}
+	}
+}
+
+// preclaimReadinessRetryable reports whether every currently failing check
+// is failing only because it timed out. A single check that ran to
+// completion and reported a real error is a genuine, non-transient failure
+// (wrong credentials, a posture mismatch) that waiting out will not clear, so
+// it is not retryable even alongside other checks that are merely slow right
+// now.
+func preclaimReadinessRetryable(readiness health.Readiness) bool {
+	if readiness.Ready || len(readiness.Checks) == 0 {
+		return false
+	}
+	for _, status := range readiness.Checks {
+		if status.Failed && !status.TimedOut {
+			return false
+		}
+	}
+	return true
+}
+
+func preclaimReadinessSleep(ctx context.Context, wait time.Duration) {
+	if wait <= 0 {
+		return
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+	case <-ctx.Done():
+	}
+}
+
+// logRefusal reports the terminal (non-retrying) failure of preclaim
+// readiness: either a genuine check failure, or a retryable one whose budget
+// ran out. A preclaim failure aborts Start, so the shell exits 1 and the
+// process is restarted -- and the readiness detail that would explain why is
+// only reachable on the operator HTTP surface, which this process never
+// lives long enough to serve. Without this line the whole crash loop reports
+// nothing but the shell's generic "runtime_failure" category.
+//
+// Check names are bounded compile-time constants registered by this package,
+// and Registry.CheckRequired returns names only -- never a dependency error
+// string that could carry a DSN or credential -- so this is the same
+// disclosure the /readyz surface already makes, on the one path that cannot
+// reach it. Joined the way every other multi-valued worker startup attribute
+// is (see the "queues" attribute).
+func (component preclaimReadinessComponent) logRefusal(
+	ctx context.Context, failed []string, reason string, attempt int, elapsed time.Duration,
+) {
+	if component.logger == nil {
+		return
+	}
+	component.logger.ErrorContext(
+		ctx,
+		"preclaim readiness refused",
+		"error_category", "dependency_unavailable",
+		"failed_checks", strings.Join(failed, ","),
+		"reason", reason,
+		"attempts", attempt,
+		"elapsed", elapsed.String(),
+	)
+}
+
+// logRetry reports one non-terminal attempt: the failing checks all timed
+// out and the retry budget is not yet spent, so Start is about to wait and
+// try again. Logged at warn, not error, because this is the expected shape
+// of a roll storm, not a failure an operator needs to act on unless it keeps
+// recurring until the budget is exhausted (see logRefusal above).
+func (component preclaimReadinessComponent) logRetry(
+	ctx context.Context, failed []string, attempt int, elapsed, wait time.Duration,
+) {
+	if component.logger == nil {
+		return
+	}
+	component.logger.WarnContext(
+		ctx,
+		"preclaim readiness timed out, retrying",
+		"error_category", "dependency_unavailable",
+		"failed_checks", strings.Join(failed, ","),
+		"attempt", attempt,
+		"elapsed", elapsed.String(),
+		"retry_in", wait.String(),
+	)
 }
 
 func (preclaimReadinessComponent) Shutdown(context.Context) error { return nil }
@@ -984,7 +1107,11 @@ func configureWorkerDependenciesWithSources(
 	// runtime config) has actually finished, not back when claim was first
 	// allocated -- see claimLiveness.reseed's doc comment.
 	claim.reseed(time.Now())
-	components = append(components, preclaimReadinessComponent{registry: registry, logger: logger})
+	components = append(components, preclaimReadinessComponent{
+		registry: registry,
+		logger:   logger,
+		budget:   cfg.PreclaimReadinessTimeout,
+	})
 	if len(active.queues) == 0 {
 		return components, nil
 	}

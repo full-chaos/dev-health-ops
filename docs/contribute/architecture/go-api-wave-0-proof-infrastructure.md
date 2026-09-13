@@ -603,25 +603,40 @@ outright instead of trailing a fixed entrypoint binary:
 ```bash
 kubectl run dev-health-go-api-tools-oneoff \
   --image=ghcr.io/full-chaos/dev-health-go-api-tools:sha-<COMMIT> \
-  --restart=Never
+  --restart=Never \
+  --overrides='{"spec":{"containers":[{"name":"dev-health-go-api-tools-oneoff","image":"ghcr.io/full-chaos/dev-health-go-api-tools:sha-<COMMIT>","command":["sleep","86400"],"env":[{"name":"GO_API_ENVELOPE_PRIVATE_KEY","valueFrom":{"secretKeyRef":{"name":"dev-health-ops","key":"GO_API_ENVELOPE_PRIVATE_KEY"}}}]}]}}'
 
 kubectl exec dev-health-go-api-tools-oneoff -- \
   go-api-routing status -registry-url http://query-api:8090/registry
 
 kubectl exec dev-health-go-api-tools-oneoff -- \
   go-api-prove -documents /app/go-api/documents.json -org <org> \
-  -recorded-by <who> -review-evidence '<why>' -artifact-dir /tmp/proof
+  -recorded-by <who> -review-evidence '<why>' -artifact-dir /tmp/proof \
+  -proof-bearer-exec '["/usr/local/bin/mint-envelope","-org","<org>"]'
 
 kubectl delete pod dev-health-go-api-tools-oneoff
 ```
 
-The image carries no envelope-minting helper for `go-api-prove`'s
-`-proof-bearer-exec`: minting the effective-principal envelope calls into
-the Python edge's `principal_envelope.issue_effective_principal_envelope`,
-which needs the signing key that only the Python edge holds, and this repo
-checks in no standalone script that wraps it. Point `-proof-bearer-exec`
-at whatever helper the deploy repo provides for that, or supply a
-pre-minted `GO_API_ROUTING_BEARER` for `go-api-routing`.
+The image also carries `mint-envelope`, `go-api-prove`'s
+`-proof-bearer-exec` helper (`internal/envelopemint`). It mints the
+effective-principal envelope **locally, in this Pod** -- it does not call
+`principal_envelope.issue_effective_principal_envelope` over the network
+or exec into a running api Pod. It needs the same Ed25519 signing key the
+api Pod's own environment already holds
+(`GO_API_ENVELOPE_PRIVATE_KEY`), reached the identical way: a Secret key
+mounted into this Pod's environment via `secretKeyRef`, as the
+`--overrides` above shows (the SAME Secret name and key the api
+Deployment's `envFrom` pulls the value from -- see
+`_records/job7/go-api-tools-pod.yaml`'s R167 note for the shape this was
+proven against on prod). The key is never copied into the image and never
+passed as a flag value (which would land on argv/`/proc/<pid>/cmdline`);
+`mint-envelope` reads it by env var name only, or from a `-key-file` path
+for local/dev use. Claim shape, algorithm (EdDSA/Ed25519), key id, TTL
+(60s) and issuer/audience all mirror `principal_envelope.py` exactly --
+`cmd/query-api/internal/principal`'s own test suite proves the two stay
+byte-compatible by signing with `internal/envelopemint` and verifying with
+the real `Verifier`. `go-api-routing` still takes a pre-minted
+`GO_API_ROUTING_BEARER` the same way it always has.
 
 ## Float comparison: engine nondeterminism and the Tier-B rule
 

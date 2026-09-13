@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/identityalias"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
@@ -50,17 +53,35 @@ func TestGitLabTeamDepthOnlyCountsDiscoveredParents(t *testing.T) {
 }
 
 func TestGitLabTeamCatalogMembershipFacets(t *testing.T) {
-	facets := gitlabTeamCatalogMembershipFacets("octocat", nil)
+	resolver := identityalias.Load("")
+	facets := gitlabTeamCatalogMembershipFacets(resolver, "octocat", nil)
 	if len(facets) != 1 || facets[0] != "gitlab:octocat" {
 		t.Fatalf("got %v", facets)
 	}
 	email := "Octo.Cat@Example.com"
-	facets = gitlabTeamCatalogMembershipFacets("octocat", &email)
+	facets = gitlabTeamCatalogMembershipFacets(resolver, "octocat", &email)
 	if len(facets) != 2 || facets[0] != "gitlab:octocat" || facets[1] != "octo.cat@example.com" {
 		t.Fatalf("got %v", facets)
 	}
-	if got := gitlabTeamCatalogMembershipFacets("", nil); got != nil {
+	if got := gitlabTeamCatalogMembershipFacets(resolver, "", nil); got != nil {
 		t.Fatalf("empty username should yield no facets, got %v", got)
+	}
+}
+
+// TestGitLabTeamCatalogMembershipFacetsConsultsAliasMap is a red-first proof: an alias-configured resolver must override the raw
+// provider-qualified id, not just pass it through unchanged.
+func TestGitLabTeamCatalogMembershipFacetsConsultsAliasMap(t *testing.T) {
+	resolver := &identityalias.Resolver{AliasToCanonical: map[string]string{
+		"gitlab:octocat": "lead@example.com",
+	}}
+	facets := gitlabTeamCatalogMembershipFacets(resolver, "octocat", nil)
+	if len(facets) != 2 || facets[0] != "lead@example.com" || facets[1] != "gitlab:octocat" {
+		t.Fatalf("got %v, want [lead@example.com gitlab:octocat]", facets)
+	}
+	// Case-different login must still hit the same alias entry.
+	facets = gitlabTeamCatalogMembershipFacets(resolver, "OctoCat", nil)
+	if len(facets) == 0 || facets[0] != "lead@example.com" {
+		t.Fatalf("case-different login: got %v, want lead@example.com first", facets)
 	}
 }
 
@@ -945,5 +966,52 @@ func TestGitLabTeamCatalogRouteHandlerReportsIncompleteOnPaginationTruncation(t 
 	}
 	if batch.Result.Complete {
 		t.Fatal("expected Result.Complete=false on pagination-cap truncation")
+	}
+}
+
+// TestGitLabTeamCatalogCollectResolvesMemberIdentityThroughAliasMap is a collector-level proof: a membership row's identity facets must
+// carry the org's ALIAS-RESOLVED canonical identity, not the raw
+// "gitlab:<username>" qualified id the collector would otherwise write.
+// Deliberately not t.Parallel(): it sets IDENTITY_MAPPING_PATH via
+// t.Setenv, which panics if called from a parallel subtest sibling.
+func TestGitLabTeamCatalogCollectResolvesMemberIdentityThroughAliasMap(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "identity_mapping.yaml")
+	if err := os.WriteFile(path, []byte(`
+version: 1
+identities:
+  - canonical: "lead@example.com"
+    aliases:
+      - "gitlab:root-owner"
+`), 0o600); err != nil {
+		t.Fatalf("write seeded identity_mapping.yaml: %v", err)
+	}
+	t.Setenv("IDENTITY_MAPPING_PATH", path)
+
+	fake := newGitLabTeamCatalogFakeServer(t)
+	client := gitlabTeamCatalogTestClient(t, fake.URL)
+	ref := TeamCatalogReference{OrgID: "org-1", SyncRunID: "run-1"}
+	selections := TeamCatalogSelections{Members: true}
+	credential := providerfoundation.Credential{Provider: "gitlab", Config: map[string]string{"group_path": "org"}}
+
+	batch, err := (GitLabTeamCatalogRouteHandler{}).CollectTeamCatalog(context.Background(), ref, credential, client, selections, time.Now())
+	if err != nil {
+		t.Fatalf("collect: %v requests=%v", err, fake.requests)
+	}
+	var rootOwner *gitlabTeamCatalogMembershipRow
+	for i := range batch.Rows.Memberships {
+		if batch.Rows.Memberships[i].TeamID == "gl:org" {
+			rootOwner = &batch.Rows.Memberships[i]
+		}
+	}
+	if rootOwner == nil {
+		t.Fatalf("no membership for gl:org: %+v", batch.Rows.Memberships)
+	}
+	if rootOwner.RawProviderUserID == nil || *rootOwner.RawProviderUserID != "lead@example.com" {
+		t.Fatalf("RawProviderUserID=%v, want alias-resolved lead@example.com", rootOwner.RawProviderUserID)
+	}
+	if len(rootOwner.IdentityFacets) != 2 ||
+		rootOwner.IdentityFacets[0] != "lead@example.com" || rootOwner.IdentityFacets[1] != "gitlab:root-owner" {
+		t.Fatalf("IdentityFacets=%v, want [lead@example.com gitlab:root-owner]", rootOwner.IdentityFacets)
 	}
 }

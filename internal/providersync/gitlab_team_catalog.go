@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/identityalias"
 )
 
 // GitLab team-catalog collection is a provider-only reference collector, the
@@ -310,42 +312,30 @@ func normalizeGitLabOwnershipRow(
 	}
 }
 
-// gitlabTeamCatalogMembershipFacets mirrors IdentityResolver.membership_facets
-// under the DEFAULT (production) identity_mapping.yaml, which ships
-// `identities: []` -- an empty alias map (verified: src/dev_health_ops/config/
-// identity_mapping.yaml, no org currently configures aliases). With no
-// aliases configured, resolve() for a username-only member degrades to the
-// provider-qualified id, so the full facet ladder collapses to exactly:
-// "gitlab:<username>" first, then the normalized email if present. This is
-// the identical simplification internal/jobs/metrics/daily/repouser/identity.go
-// documents for the SAME default config (see that package's own doc comment
-// for "the alias-resolution gap this does not close" as an accepted, tracked
-// limitation), and the one linearReferenceMembershipFacets already relies on
-// for Linear's own ALREADY-MERGED reference-catalog port -- codex review
-// flagged this as a P1 for this PR; it is a pre-existing, org-configurable-
-// alias gap shared by every native Go reference-catalog collector today; not
-// a regression this port introduces. Wiring the real IdentityResolver
-// (parsing identity_mapping.yaml, alias matching) into Go is out of scope
-// here and belongs to CHAOS-4453 (filed by lane-4434, shared child of
-// CHAOS-4198), which closes this gap for all three native providers at
-// once, not one provider's port.
-func gitlabTeamCatalogMembershipFacets(username string, email *string) []string {
+// gitlabTeamCatalogMembershipFacets mirrors IdentityResolver.membership_facets,
+// consulting the org's real alias map via internal/identityalias
+// instead of assuming it is empty. With no aliases configured (this
+// deployment's checked-in default, `identities: []`), resolve() for a
+// username-only member still degrades to the provider-qualified id, so the
+// facet ladder still collapses to exactly "gitlab:<username>" first, then the
+// normalized email if present -- unchanged from before this port. An org
+// that populates identity_mapping.yaml now gets real alias resolution.
+func gitlabTeamCatalogMembershipFacets(resolver *identityalias.Resolver, username string, email *string) []string {
 	username = strings.TrimSpace(username)
 	if username == "" {
 		return nil
 	}
-	facets := []string{"gitlab:" + username}
+	normalizedEmail := ""
 	if email != nil {
-		if normalized := strings.ToLower(strings.TrimSpace(*email)); normalized != "" && !containsString(facets, normalized) {
-			facets = append(facets, normalized)
-		}
+		normalizedEmail = *email
 	}
-	return facets
+	return resolver.MembershipFacets("gitlab", username, "", normalizedEmail)
 }
 
 func normalizeGitLabMembershipRow(
 	orgID, teamID string,
 	payload gitlabTeamCatalogMemberPayload,
+	resolver *identityalias.Resolver,
 	normalizedAt time.Time,
 ) (gitlabTeamCatalogMembershipRow, string, bool) {
 	username := strings.TrimSpace(payload.Username)
@@ -353,7 +343,7 @@ func normalizeGitLabMembershipRow(
 		return gitlabTeamCatalogMembershipRow{}, "", false
 	}
 	memberID := "gl:" + username
-	facets := gitlabTeamCatalogMembershipFacets(username, payload.Email)
+	facets := gitlabTeamCatalogMembershipFacets(resolver, username, payload.Email)
 	if len(facets) == 0 {
 		return gitlabTeamCatalogMembershipRow{}, "", false
 	}

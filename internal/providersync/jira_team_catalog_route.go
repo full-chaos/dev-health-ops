@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/identityalias"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
@@ -136,6 +137,9 @@ func (handler JiraTeamCatalogRouteHandler) CollectTeamCatalog(
 	claim := Claim{Unit: Unit{OrgID: ref.OrgID, Provider: jiraTeamCatalogProvider}}
 	normalizedAt = normalizedAt.UTC().Truncate(time.Millisecond)
 	evidence := JiraTeamCatalogEvidence{Provider: jiraTeamCatalogProvider}
+	// Loaded once per walk: every project lead this run
+	// normalizes shares the same org alias config.
+	resolver := identityalias.LoadDefault()
 
 	searchPath := "/rest/api/3/project/search?" + url.Values{
 		"maxResults": {strconv.Itoa(jiraTeamCatalogProjectSearchMaxResults)},
@@ -172,7 +176,7 @@ func (handler JiraTeamCatalogRouteHandler) CollectTeamCatalog(
 			if detail.Lead == nil {
 				continue
 			}
-			membership, ok := normalizeJiraMembershipRow(ref.OrgID, team.ID, *detail.Lead, normalizedAt)
+			membership, ok := normalizeJiraMembershipRow(ref.OrgID, team.ID, *detail.Lead, resolver, normalizedAt)
 			if !ok {
 				continue
 			}

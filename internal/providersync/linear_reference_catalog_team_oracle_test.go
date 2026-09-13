@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/identityalias"
 )
 
 type linearReferenceTeamProducerRow struct {
@@ -82,7 +84,7 @@ func buildLinearReferenceTeamCatalogOracleRow(t *testing.T, input map[string]any
 	team, err := normalizeLinearReferenceTeam(claim, linearReferenceCatalogTeamPayload{
 		ID: input["team_id"].(string), Key: input["team_id"].(string), Name: input["name"].(string),
 		Description: description,
-	}, normalizedAt)
+	}, identityalias.Load(""), normalizedAt)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -621,5 +623,58 @@ func TestLinearReferenceCatalogTeamKeyOwnershipRowMatchesItsOneReader(t *testing
 	}
 	if teamKeyRow.TeamID != "QA" || teamKeyRow.Source != "native" {
 		t.Fatalf("team-key-shaped ownership row shape changed: %+v", teamKeyRow)
+	}
+}
+
+// TestLinearReferenceCatalogResolvesMemberIdentityThroughAliasMap is a collector-level proof: a member's identity facets must carry
+// the org's ALIAS-RESOLVED canonical identity, not the raw "linear:<email>"
+// qualified id the collector would otherwise write. Deliberately not
+// t.Parallel(): it sets IDENTITY_MAPPING_PATH via t.Setenv, which panics if
+// called from a parallel subtest sibling.
+func TestLinearReferenceCatalogResolvesMemberIdentityThroughAliasMap(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "identity_mapping.yaml")
+	if err := os.WriteFile(path, []byte(`
+version: 1
+identities:
+  - canonical: "lead@example.com"
+    aliases:
+      - "linear:alice@example.com"
+`), 0o600); err != nil {
+		t.Fatalf("write seeded identity_mapping.yaml: %v", err)
+	}
+	t.Setenv("IDENTITY_MAPPING_PATH", path)
+
+	claim := nativeTestClaim("linear", "work-items")
+	claim.SourceExternalID = "workspace"
+	observed := time.Date(2026, 8, 10, 12, 34, 56, 0, time.UTC)
+	doer := &linearWorkItemsDoer{responses: []string{
+		`{"data":{"teams":{"nodes":[{"id":"team-raw-1","key":"ENG","name":"Engineering","members":{"nodes":[{"id":"user-1","name":"Alice","email":"alice@example.com","active":true}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
+		`{"data":{"cycles":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
+	}}
+	batch, err := (LinearReferenceCatalogRouteHandler{PerPage: 50, MaxPages: 10}).CollectReferenceCatalog(
+		context.Background(), teamCatalogRefFromClaim(claim),
+		providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
+		linearWorkItemsClient(t, doer),
+		TeamCatalogSelections{Teams: true, Members: true}, observed,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(batch.Rows.Memberships) != 1 {
+		t.Fatalf("memberships=%+v", batch.Rows.Memberships)
+	}
+	membership := batch.Rows.Memberships[0]
+	if membership.RawProviderUserID == nil || *membership.RawProviderUserID != "lead@example.com" {
+		t.Fatalf("RawProviderUserID=%v, want alias-resolved lead@example.com", membership.RawProviderUserID)
+	}
+	if len(membership.IdentityFacets) != 3 ||
+		membership.IdentityFacets[0] != "lead@example.com" ||
+		membership.IdentityFacets[1] != "linear:alice@example.com" ||
+		membership.IdentityFacets[2] != "alice@example.com" {
+		t.Fatalf("IdentityFacets=%v, want [lead@example.com linear:alice@example.com alice@example.com]", membership.IdentityFacets)
+	}
+	if len(batch.Rows.Teams) != 1 || len(batch.Rows.Teams[0].Members) == 0 || batch.Rows.Teams[0].Members[0] != "lead@example.com" {
+		t.Fatalf("team roster must also carry the alias-resolved identity first: %+v", batch.Rows.Teams)
 	}
 }

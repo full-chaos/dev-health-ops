@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/identityalias"
 )
 
 func TestLinearReferenceMemberMatchesLivePythonProducer(t *testing.T) {
@@ -57,7 +59,7 @@ func buildLinearReferenceMemberOracleRow(t *testing.T, input map[string]any) lin
 		t.Fatal(err)
 	}
 	member, _, _, err := normalizeLinearReferenceMember(
-		linearOracleClaim(input), input["team_id"].(string), payload, normalizedAt,
+		linearOracleClaim(input), input["team_id"].(string), payload, identityalias.Load(""), normalizedAt,
 	)
 	if err != nil {
 		t.Fatal(err)

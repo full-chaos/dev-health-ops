@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/identityalias"
 )
 
 // Jira team-catalog collection is a provider-only reference collector, the
@@ -245,25 +247,23 @@ func normalizeJiraProjectRow(orgID, projectKey, name string, normalizedAt time.T
 
 // jiraTeamCatalogMembershipFacets mirrors team_autoimport_jira.py's
 // resolver.membership_facets(provider="jira", account_id=..., email=...)
-// call with NO alias configured for this identity (the same simplification
-// GitHub/GitLab's native collectors already make -- neither consults the
-// real org alias map either): with no alias, IdentityResolver.resolve falls
-// back to provider_qualified_identity, "jira:accountid:<id>" (Jira carries
-// no username, only an accountId), and membership_facets then appends the
-// normalized email. facets[0] is written into raw_provider_user_id exactly
-// as Python's does.
-func jiraTeamCatalogMembershipFacets(accountID string, email *string) []string {
+// call, consulting the org's real alias map via
+// internal/identityalias instead of assuming it is empty. With no alias
+// configured for this identity, IdentityResolver.resolve still falls back
+// to provider_qualified_identity, "jira:accountid:<id>" (Jira carries no
+// username, only an accountId), and membership_facets still appends the
+// normalized email -- unchanged from before this port. facets[0] is written
+// into raw_provider_user_id exactly as Python's does.
+func jiraTeamCatalogMembershipFacets(resolver *identityalias.Resolver, accountID string, email *string) []string {
 	accountID = strings.TrimSpace(accountID)
 	if accountID == "" {
 		return nil
 	}
-	facets := []string{"jira:accountid:" + accountID}
+	normalizedEmail := ""
 	if email != nil {
-		if normalized := strings.ToLower(strings.TrimSpace(*email)); normalized != "" && !containsString(facets, normalized) {
-			facets = append(facets, normalized)
-		}
+		normalizedEmail = *email
 	}
-	return facets
+	return resolver.MembershipFacets(jiraTeamCatalogProvider, "", accountID, normalizedEmail)
 }
 
 // jiraMemberID mirrors team_autoimport_jira._member_id: "jira:" + the
@@ -278,7 +278,7 @@ func jiraMemberID(accountID string) string {
 // (is_primary=1 always, since role is always "lead" -- Python's ternary
 // never observes any other role for Jira).
 func normalizeJiraMembershipRow(
-	orgID, teamID string, lead jiraTeamCatalogUserPayload, normalizedAt time.Time,
+	orgID, teamID string, lead jiraTeamCatalogUserPayload, resolver *identityalias.Resolver, normalizedAt time.Time,
 ) (jiraTeamCatalogMembershipRow, bool) {
 	accountID := strings.TrimSpace(lead.AccountID)
 	if accountID == "" {
@@ -291,7 +291,7 @@ func normalizeJiraMembershipRow(
 		return jiraTeamCatalogMembershipRow{}, false
 	}
 	email := optionalJiraString(&lead.EmailAddress)
-	facets := jiraTeamCatalogMembershipFacets(accountID, email)
+	facets := jiraTeamCatalogMembershipFacets(resolver, accountID, email)
 	if len(facets) == 0 {
 		return jiraTeamCatalogMembershipRow{}, false
 	}

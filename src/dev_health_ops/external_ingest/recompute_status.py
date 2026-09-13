@@ -12,9 +12,8 @@ pytest marker epic-wide, per the synthesizer reconciliation).
 Two entry points, two session flavors -- deliberate, not an oversight:
 
 - :func:`record_recompute_dispatch` takes a **sync** ``Session``. It is
-  called from ``workers/external_ingest_recompute.py``'s Celery flush task,
-  which (like every other Celery task in this codebase, e.g.
-  ``prune_external_ingest_batches``) runs synchronously via
+  called from ``external_ingest.recompute.dispatch_and_persist_scope``'s
+  Valkey-unavailable synchronous fallback, via
   ``get_postgres_session_sync()`` -- no ``run_async`` bridging needed.
 - :func:`get_recompute_jobs` and :func:`mark_recompute_pending` take an
   **async** ``AsyncSession``, matching ``api/external_ingest/status.py``'s
@@ -79,7 +78,7 @@ def record_recompute_dispatch(
     result: RecomputeDispatchResult,
 ) -> None:
     """Persist a flush's outcome onto every coalesced ingestion's batch row
-    plus one job-log row per dispatched Celery task (D11).
+    plus one job-log row per dispatched Celery task, if any (D11).
 
     ``ingestion_ids`` is the FULL set that fed into the coalesced scope
     (Risk 5 in the brief: debounce coalesces across multiple ingestion_ids,
@@ -87,13 +86,35 @@ def record_recompute_dispatch(
     every row gets the identical ``scope``/``result`` snapshot, since they
     were all folded into the same bounded plan.
 
+    CHAOS-5700: a ``"dispatched"`` outcome no longer means a Celery task
+    left this process -- it means the bounded scope is being handed to the
+    existing native external-ingest recompute drain
+    (``internal/externalrecompute``, CHAOS-5296), which claims work by
+    polling ``external_ingest_batches`` for ``recompute_status = 'pending'``
+    (the SAME poll that already drains the Go stream runner's own rows).
+    Persisting ``recompute_status = 'dispatched'`` here would make the row
+    invisible to that poll and the recompute would silently never run --
+    exactly the bug this exists to fix -- so a dispatched outcome is
+    persisted as ``'pending'`` (already part of the epic-wide enum, see
+    ``models/external_ingest.py``) with ``recompute_dispatched_at``/
+    ``recompute_completed_at`` left ``NULL``, mirroring how the Go stream
+    runner's own writer (``internal/streamhandlers/external_postgres.go``)
+    marks a batch pending for that same poll.
+
     D12 (emit-then-raise): commits before returning so a caller that goes
     on to re-raise (e.g. Celery retry on an unrelated later step) never
     rolls back an already-decided recompute outcome.
     """
     now = datetime.now(timezone.utc)
     scope_json = json.dumps(_scope_to_json(scope, result))
-    dispatched_at = now if result.status == "dispatched" else None
+    if result.status == "dispatched":
+        recompute_status = "pending"
+        dispatched_at = None
+        completed_at = None
+    else:
+        recompute_status = result.status
+        dispatched_at = None
+        completed_at = now
 
     # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text
     update_sql = text(
@@ -111,10 +132,10 @@ def record_recompute_dispatch(
         session.execute(
             update_sql,
             {
-                "status": result.status,
+                "status": recompute_status,
                 "scope": scope_json,
                 "dispatched_at": dispatched_at,
-                "completed_at": now,
+                "completed_at": completed_at,
                 "error": result.error,
                 "org_id": org_id,
                 "ingestion_id": ingestion_id,

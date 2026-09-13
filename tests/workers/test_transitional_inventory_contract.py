@@ -304,7 +304,21 @@ def test_inventory_is_non_empty_and_matches_audit_row_count():
     # 347/366, deferred to CHAOS-4427) are untouched -- deleting the former
     # would change dispatch_recompute's caller-visible status/jobs return
     # value, flagged to team-lead rather than papered over. Net: 45 - 4 = 41.
-    assert inventory["row_count"] == 41
+    #
+    # = 38. CHAOS-5700 (CHAOS-4427's flagged follow-up) does exactly that:
+    # dispatch_recompute's three celery_app.send_task call sites
+    # (recompute.py:347/366/384) are deleted outright -- Celery is removed
+    # from the module entirely, so no re-anchor target exists. The three
+    # rows are removed rather than re-anchored, -3. A "dispatched" outcome
+    # now routes through recompute_status.record_recompute_dispatch onto
+    # recompute_status='pending' on the batch's own row, which the existing
+    # native external-ingest recompute drain (internal/externalrecompute,
+    # CHAOS-5296) already polls external_ingest_batches for -- no new
+    # call_site_literal row is added for the replacement since there is no
+    # new literal dispatch call in Python; that status write is covered by
+    # tests/test_external_ingest_recompute_status_sql.py, not this
+    # inventory. Net: 41 - 3 = 38.
+    assert inventory["row_count"] == 38
 
 
 def test_retired_beat_entries_are_evidenced_and_absent_from_source():

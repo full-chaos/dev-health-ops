@@ -76,20 +76,35 @@ type InvestmentMixExplainOutput struct {
 }
 
 // ParseResult ports investment_mix_types.py's InvestmentMixParseResult
-// dataclass, plus one Go-only addition: Reason.
+// dataclass, plus four Go-only additions: Reason, ReasonRule, ReasonPath
+// and ReasonSnippet.
 //
-// Reason is NOT ported from Python -- Python's own parser (investment_
-// mix_parser.py) returns just the four-way Status on every rejection,
-// with no finer-grained "why" attached (only two of its many bail-out
-// points even log a message, and neither is structured). Reason exists
-// purely so a caller can put something better than the bare Status into
-// a log line: prod was logging NOTHING on invalid_llm_output, discarding
-// the real LLM answer along with any way to tell "parser bug" from "bad
-// completion" apart. It carries no parity weight and MUST
-// NOT be compared by any golden/differential test -- only Status and
-// Output are ported fields.
+// None of the four are ported from Python -- Python's own parser
+// (investment_mix_parser.py) returns just the four-way Status on every
+// rejection, with no finer-grained "why" attached (only two of its many
+// bail-out points even log a message, and neither is structured). They
+// exist purely so a caller can put something better than the bare Status
+// into a log line: prod was logging NOTHING on invalid_llm_output,
+// discarding the real LLM answer along with any way to tell "parser bug"
+// from "bad completion" apart, and even after Reason was added, a
+// rejection inside one list item (top_findings[i]/what_to_check_next[i])
+// or inside confidence collapsed to a generic "failed validation" with no
+// way to tell WHICH of the several content rules a given item failed.
+//
+//   - ReasonRule is a short slug naming the specific rule that fired (e.g.
+//     "theme_unknown", "finding_digit", "forbidden_language:is").
+//   - ReasonPath locates the offending field within the rejected item
+//     (e.g. "top_findings[2].evidence.theme", "confidence.band_mix.high").
+//   - ReasonSnippet is the REDACTED head (first ~80 runes, via snippetOf)
+//     of the offending raw value itself.
+//
+// All four carry no parity weight and MUST NOT be compared by any
+// golden/differential test -- only Status and Output are ported fields.
 type ParseResult struct {
-	Status ParseStatus
-	Output *InvestmentMixExplainOutput
-	Reason string
+	Status        ParseStatus
+	Output        *InvestmentMixExplainOutput
+	Reason        string
+	ReasonRule    string
+	ReasonPath    string
+	ReasonSnippet string
 }

@@ -173,6 +173,108 @@ func TestLogRejectedExplainOutputFields(t *testing.T) {
 	}
 }
 
+// TestLogRejectedExplainOutputTokenCountsAreIntegers is the red-first test
+// for the token-count half of the fix: before logRejectedExplainOutput
+// dereferenced completion.InputTokens/OutputTokens, it passed the raw
+// *int straight to slog. slog.NewJSONHandler happens to serialize a *int
+// attribute correctly (encoding/json dereferences pointers), which is
+// exactly why the earlier tests in this file didn't catch the bug -- but
+// prod's real handler formats an unhandled value with a plain "%+v",
+// which prints the POINTER'S ADDRESS for *int, not the number it points
+// to (confirmed against a real prod line reading
+// prompt_tokens=0x4010c55bdb40 where the real count was 2086). This test
+// uses slog.NewTextHandler, which hits that same "%+v" code path, so it
+// fails the moment a raw pointer is logged again.
+func TestLogRejectedExplainOutputTokenCountsAreIntegers(t *testing.T) {
+	var buf bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	inputTokens := 2086
+	outputTokens := 1488
+	completion := categorize.CompletionResult{
+		Text:         "not json",
+		InputTokens:  &inputTokens,
+		OutputTokens: &outputTokens,
+		Model:        "gpt-5-nano",
+	}
+
+	logRejectedExplainOutput(context.Background(), ParseResult{Status: ParseStatusInvalidJSON, Reason: "could not extract a single JSON object from the raw text"}, "openai", "gpt-5-nano", completion)
+
+	line := buf.String()
+	if strings.Contains(line, "0x") {
+		t.Fatalf("log line contains a pointer address, want the dereferenced token counts: %s", line)
+	}
+	if !strings.Contains(line, "prompt_tokens=2086") {
+		t.Fatalf("log line missing prompt_tokens=2086: %s", line)
+	}
+	if !strings.Contains(line, "completion_tokens=1488") {
+		t.Fatalf("log line missing completion_tokens=1488: %s", line)
+	}
+}
+
+// TestLogRejectedExplainOutputNilTokenCountsLogNegativeOne asserts the nil
+// guard: when a completion carries no token counts at all (both pointers
+// nil), the line must still log integers -- -1, a value no real token
+// count can take -- rather than a literal "null"/omitted attribute that a
+// dashboard would have to special-case.
+func TestLogRejectedExplainOutputNilTokenCountsLogNegativeOne(t *testing.T) {
+	var buf bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	completion := categorize.CompletionResult{Text: "not json", Model: "gpt-5-nano"}
+	logRejectedExplainOutput(context.Background(), ParseResult{Status: ParseStatusInvalidJSON, Reason: "could not extract a single JSON object from the raw text"}, "openai", "gpt-5-nano", completion)
+
+	var line map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &line); err != nil {
+		t.Fatalf("decode log line: %v\nraw: %s", err, buf.String())
+	}
+	if line["prompt_tokens"] != float64(-1) {
+		t.Fatalf("prompt_tokens = %v, want -1", line["prompt_tokens"])
+	}
+	if line["completion_tokens"] != float64(-1) {
+		t.Fatalf("completion_tokens = %v, want -1", line["completion_tokens"])
+	}
+}
+
+// TestLogRejectedExplainOutputReasonDetailFields asserts the second half
+// of the fix: reason_rule/reason_path/reason_snippet from a structured
+// ParseResult rejection land on the warn line, not just the generic
+// Reason string.
+func TestLogRejectedExplainOutputReasonDetailFields(t *testing.T) {
+	var buf bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	parseResult := ParseResult{
+		Status:        ParseStatusInvalidLLMOutput,
+		Reason:        "top_findings[2] failed validation",
+		ReasonRule:    "theme_unknown",
+		ReasonPath:    "top_findings[2].evidence.theme",
+		ReasonSnippet: "made_up_theme",
+	}
+	completion := categorize.CompletionResult{Text: "{}", Model: "gpt-5-nano"}
+	logRejectedExplainOutput(context.Background(), parseResult, "openai", "gpt-5-nano", completion)
+
+	var line map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &line); err != nil {
+		t.Fatalf("decode log line: %v\nraw: %s", err, buf.String())
+	}
+	if line["reason_rule"] != "theme_unknown" {
+		t.Fatalf("reason_rule = %v", line["reason_rule"])
+	}
+	if line["reason_path"] != "top_findings[2].evidence.theme" {
+		t.Fatalf("reason_path = %v", line["reason_path"])
+	}
+	if line["reason_snippet"] != "made_up_theme" {
+		t.Fatalf("reason_snippet = %v", line["reason_snippet"])
+	}
+}
+
 // TestLogRejectedExplainOutputFallsBackToCompletionModel asserts the
 // resolved-model-empty edge case: when the caller's resolvedModel is
 // empty (e.g. the completion layer didn't resolve one), the log still

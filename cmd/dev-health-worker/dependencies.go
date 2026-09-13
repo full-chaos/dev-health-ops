@@ -81,6 +81,32 @@ func (failure dependencyFailure) DependencyReason() string { return failure.reas
 
 func dependencyUnavailable(reason string) error { return dependencyFailure{reason: reason} }
 
+// dependencyCheckFailed wraps a required check's own error behind the
+// errWorkerDependencyUnavailable sentinel every existing caller already
+// tests for with errors.Is, WITHOUT discarding the original error the way
+// returning the bare sentinel used to. health.Registry never exposes a
+// CheckFunc's returned error anywhere external (registry.go: "Error text is
+// deliberately never returned by the HTTP surface") -- it only uses it
+// in-process to decide whether the failure is a timeout
+// (errors.Is(err, context.DeadlineExceeded) / context.Canceled, in
+// requiredCheck.execute) before discarding it too. Returning the bare
+// sentinel broke exactly that classification: a check whose own pgx call
+// against a context deadline correctly returns an error unwrapping to
+// context.DeadlineExceeded (verified against the real driver) was turned,
+// the instant it passed through here, into an error indistinguishable from
+// a genuine posture mismatch -- so every failing required check always
+// looked non-retryable to preclaimReadinessComponent.Start, regardless of
+// its real cause. A fleet-wide roll that pushed river_schema and
+// queue_postgres past their per-check timeout together hit exactly this:
+// both members actually failed with a wrapped context.DeadlineExceeded, but
+// the aggregate was reported (and treated) as a genuine, non-retryable
+// failure. The operator-facing log line (logDependencyCheckFailure) already
+// carries the real error text; this only restores that same detail to the
+// in-process return value the classifier reads.
+func dependencyCheckFailed(err error) error {
+	return fmt.Errorf("%w: %w", errWorkerDependencyUnavailable, err)
+}
+
 // preserveDependencyReason keeps an error that ALREADY names its own failing
 // construction site, and only attaches fallback to one that does not.
 //
@@ -462,36 +488,88 @@ func (component preclaimReadinessComponent) Start(ctx context.Context) error {
 	if component.registry == nil {
 		return errWorkerDependencyUnavailable
 	}
-	now := component.now
+	var latest health.Readiness
+	err := startupRetryBudget(
+		ctx, component.budget, component.now, component.sleep,
+		func(ctx context.Context) error {
+			latest = component.registry.CheckRequired(ctx)
+			if latest.Ready {
+				return nil
+			}
+			return errWorkerDependencyUnavailable
+		},
+		func(error) bool { return preclaimReadinessRetryable(latest) },
+		func(attempt int, elapsed, wait time.Duration, _ error) {
+			component.logRetry(ctx, latest.Failed, attempt, elapsed, wait)
+		},
+		func(attempt int, elapsed time.Duration, _ error, budgetExhausted bool) {
+			reason := "dependency_check_failed"
+			if budgetExhausted {
+				reason = "retry_budget_exhausted"
+			}
+			component.logRefusal(ctx, latest.Failed, reason, attempt, elapsed)
+		},
+	)
+	if err != nil {
+		return errWorkerDependencyUnavailable
+	}
+	return nil
+}
+
+// startupRetryBudget runs attempt repeatedly, backing off between tries up to
+// budget, for as long as retryable classifies the most recent failure as
+// transient. It is the one implementation of the roll-storm retry shape more
+// than one startup dependency needs: a fleet-wide helm roll restarts every
+// worker group's Deployments together, Postgres and its pooler saturate for
+// the length of that burst, and a dependency that merely timed out during it
+// is not broken -- it is worth retrying with backoff rather than exiting the
+// process on the first attempt. A failure retryable classifies as
+// non-transient exits immediately, exactly as a single unretried attempt
+// always did, and so does an exhausted budget.
+//
+// preclaimReadinessComponent.Start and riverWorkerProcess.Start share this
+// loop rather than each keeping their own copy of the backoff shape (start
+// small, double, cap, spend down to zero as the budget runs out), so the two
+// call sites that exist to survive the same production event cannot drift
+// apart from each other.
+func startupRetryBudget(
+	ctx context.Context,
+	budget time.Duration,
+	now func() time.Time,
+	sleep func(context.Context, time.Duration),
+	attempt func(context.Context) error,
+	retryable func(error) bool,
+	onRetry func(attemptNum int, elapsed, wait time.Duration, err error),
+	onGiveUp func(attemptNum int, elapsed time.Duration, err error, budgetExhausted bool),
+) error {
 	if now == nil {
 		now = time.Now
 	}
-	sleep := component.sleep
 	if sleep == nil {
 		sleep = preclaimReadinessSleep
 	}
 
 	start := now()
 	backoff := preclaimReadinessInitialBackoff
-	for attempt := 1; ; attempt++ {
-		readiness := component.registry.CheckRequired(ctx)
-		if readiness.Ready {
+	for attemptNum := 1; ; attemptNum++ {
+		err := attempt(ctx)
+		if err == nil {
 			return nil
 		}
 		elapsed := now().Sub(start)
-		if !preclaimReadinessRetryable(readiness) {
-			component.logRefusal(ctx, readiness.Failed, "dependency_check_failed", attempt, elapsed)
-			return errWorkerDependencyUnavailable
+		if !retryable(err) {
+			onGiveUp(attemptNum, elapsed, err, false)
+			return err
 		}
-		if elapsed >= component.budget || ctx.Err() != nil {
-			component.logRefusal(ctx, readiness.Failed, "retry_budget_exhausted", attempt, elapsed)
-			return errWorkerDependencyUnavailable
+		if elapsed >= budget || ctx.Err() != nil {
+			onGiveUp(attemptNum, elapsed, err, true)
+			return err
 		}
 		wait := backoff
-		if remaining := component.budget - elapsed; wait > remaining {
+		if remaining := budget - elapsed; wait > remaining {
 			wait = remaining
 		}
-		component.logRetry(ctx, readiness.Failed, attempt, elapsed, wait)
+		onRetry(attemptNum, elapsed, wait, err)
 		sleep(ctx, wait)
 		backoff *= 2
 		if backoff > preclaimReadinessMaxBackoff {
@@ -1825,7 +1903,7 @@ func (dependencies *workerDependencies) domainReady(ctx context.Context) error {
 	}
 	if err := dependencies.database.DomainReady(ctx); err != nil {
 		dependencies.logDependencyCheckFailure(ctx, "domain_postgres", err)
-		return errWorkerDependencyUnavailable
+		return dependencyCheckFailed(err)
 	}
 	return nil
 }
@@ -1836,7 +1914,7 @@ func (dependencies *workerDependencies) queueReady(ctx context.Context) error {
 	}
 	if err := dependencies.database.QueueReady(ctx); err != nil {
 		dependencies.logDependencyCheckFailure(ctx, "queue_postgres", err)
-		return errWorkerDependencyUnavailable
+		return dependencyCheckFailed(err)
 	}
 	return nil
 }
@@ -1857,7 +1935,7 @@ func (dependencies *workerDependencies) postureManifestLockstepReady(ctx context
 	}
 	if err := dependencies.postureGuard.Ready(ctx); err != nil {
 		dependencies.logDependencyCheckFailure(ctx, "posture_manifest_lockstep", err)
-		return errWorkerDependencyUnavailable
+		return dependencyCheckFailed(err)
 	}
 	return nil
 }
@@ -1898,7 +1976,7 @@ func (dependencies *workerDependencies) idempotencyBackendReady(ctx context.Cont
 	}
 	if err := selfprobe.Once(ctx, dependencies.database.DomainTxOpener()); err != nil {
 		dependencies.logDependencyCheckFailure(ctx, "idempotency_backend", err)
-		return errWorkerDependencyUnavailable
+		return dependencyCheckFailed(err)
 	}
 	return nil
 }
@@ -1934,7 +2012,7 @@ func (dependencies *workerDependencies) riverSchemaReady(schema string) health.C
 		}
 		if err := dependencies.database.RiverSchemaReady(ctx, schema); err != nil {
 			dependencies.logDependencyCheckFailure(ctx, "river_schema", err)
-			return errWorkerDependencyUnavailable
+			return dependencyCheckFailed(err)
 		}
 		return nil
 	}

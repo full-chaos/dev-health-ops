@@ -648,7 +648,17 @@ the key the api Pod's environment already holds (`JWT_SECRET_KEY`, by
 unchanged; there is no in-cluster trust bypass.
 
 The token is for a **dedicated proof service principal**, never a human
-user: the `users` row with the fixed id `00000000-0000-4000-8000-00000000e0e1`.
+user: the `users` row with the fixed id `00000000-0000-4000-8000-00000000e0e1`,
+created by the application schema migration (alembic `0133`) with
+`auth_provider = 'service'`, no password, active, not a superuser, and **no
+membership**. Until an operator grants it a membership in the org being
+proven, `mint-edge-token` refuses by name:
+
+```sql
+INSERT INTO memberships (id, user_id, org_id, role, created_at, updated_at)
+VALUES (gen_random_uuid(), '00000000-0000-4000-8000-00000000e0e1', '<org>', 'viewer', now(), now());
+```
+
 Before signing, `mint-edge-token` reads that row and its membership through
 `POSTGRES_URI` and refuses unless the row is a service identity
 (`auth_provider = 'service'`, no password hash), is active, is not a

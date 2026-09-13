@@ -5,7 +5,9 @@ test_0125_promote_worker_job_routes_off_celery_postgres.py's harness. The row
 must have exactly the shape internal/edgetokenmint.LookupPrincipal accepts as
 a service identity, and NO membership: the minter refusing an unmembered
 principal is what keeps this revision from granting any org access on its
-own (the live e2e tier proves that refusal against this migrated row).
+own (the live e2e tier proves that refusal against this migrated row). The
+insert is ON CONFLICT DO NOTHING, and downgrade only removes a service row
+that holds no membership.
 """
 
 from __future__ import annotations
@@ -126,6 +128,41 @@ def _membership_count(engine: Engine) -> int:
         )
 
 
+def _all_users(engine: Engine) -> list[tuple[object, ...]]:
+    with engine.connect() as connection:
+        return [
+            tuple(row)
+            for row in connection.execute(
+                sa.text(
+                    "SELECT id::text, email, password_hash, auth_provider "
+                    "FROM users ORDER BY id"
+                )
+            )
+        ]
+
+
+def _grant_membership(engine: Engine) -> None:
+    org_id = str(uuid.uuid4())
+    with engine.begin() as connection:
+        connection.execute(
+            sa.text(
+                "INSERT INTO organizations (id, slug, name) VALUES (:id, :slug, :name)"
+            ),
+            {"id": org_id, "slug": f"org-{org_id}", "name": "Proof org"},
+        )
+        connection.execute(
+            sa.text(
+                "INSERT INTO memberships (id, user_id, org_id, role) "
+                "VALUES (:id, :user_id, :org_id, 'viewer')"
+            ),
+            {
+                "id": str(uuid.uuid4()),
+                "user_id": _migration().PRINCIPAL_ID,
+                "org_id": org_id,
+            },
+        )
+
+
 def _insert_user(engine: Engine, **overrides: object) -> None:
     values: dict[str, object] = {
         "id": _migration().PRINCIPAL_ID,
@@ -212,15 +249,15 @@ def test_0133_accepts_a_row_that_already_has_the_service_shape(
         ),
     ],
 )
-def test_0133_refuses_a_conflicting_row(
+def test_0133_leaves_a_conflicting_row_untouched(
     migrated_to_0132: Engine, overrides: dict[str, object]
 ) -> None:
     _insert_user(migrated_to_0132, **overrides)
+    before = _all_users(migrated_to_0132)
 
-    with pytest.raises(
-        RuntimeError, match="conflicts with the go-api-prove service principal"
-    ):
-        command.upgrade(_config(), "0133")
+    command.upgrade(_config(), "0133")
+
+    assert _all_users(migrated_to_0132) == before
 
 
 def test_0133_downgrade_deletes_the_row_and_upgrade_restores_it(
@@ -234,6 +271,31 @@ def test_0133_downgrade_deletes_the_row_and_upgrade_restores_it(
     command.upgrade(_config(), "0133")
 
     assert _principal(migrated_to_0132) is not None
+
+
+def test_0133_upgrade_body_run_twice_is_a_no_op(migrated_to_0132: Engine) -> None:
+    command.upgrade(_config(), "0133")
+    first = _all_users(migrated_to_0132)
+
+    # Stamp back WITHOUT running downgrade, so 0133's insert runs a second
+    # time against the row it already created.
+    command.stamp(_config(), "0132")
+    command.upgrade(_config(), "0133")
+
+    assert _all_users(migrated_to_0132) == first
+    assert _principal(migrated_to_0132) is not None
+
+
+def test_0133_downgrade_keeps_a_row_that_holds_a_membership(
+    migrated_to_0132: Engine,
+) -> None:
+    command.upgrade(_config(), "0133")
+    _grant_membership(migrated_to_0132)
+
+    command.downgrade(_config(), "0132")
+
+    assert _principal(migrated_to_0132) is not None
+    assert _membership_count(migrated_to_0132) == 1
 
 
 def test_0133_downgrade_leaves_a_row_that_no_longer_has_the_service_shape(

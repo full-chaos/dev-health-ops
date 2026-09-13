@@ -13,20 +13,22 @@ any other access token.
 
 The row is created with NO membership. The minter also refuses a principal
 that holds no read-level membership in the org being proven, so this revision
-alone grants no access to any org's data. An operator grants a ``viewer``
-membership per proven org (see the go-api Wave 0 proof infrastructure doc).
+alone grants no access to any org's data. The per-org grant is an idempotent
+operator statement in the query-api bootstrap runbook's prod-proof step, not
+part of this revision.
 
 The email uses the reserved ``.invalid`` top-level domain, so no OAuth or SSO
 provider can ever verify it, and the NULL password hash means no local login
 path can reach the row.
 
-DATA CHANGE. Inserts at most one row. An existing row with this id is
-accepted only if it already has the service-identity shape; any other row
-with this id or this email is a conflict and the revision refuses.
+DATA CHANGE. Inserts at most one row, ``ON CONFLICT DO NOTHING``: an existing
+row with this id or this email is left exactly as it is. If that row is not a
+service identity, the minter refuses it, so a conflict can never become a
+mintable principal.
 
-downgrade() deletes the row only while it still has the service-identity
-shape. ``memberships.user_id`` is ``ON DELETE CASCADE``, so any membership an
-operator granted to it goes too.
+downgrade() deletes the row only while it is still a service identity AND
+holds no membership. A row an operator has granted access to, or has changed,
+records a later decision this revision cannot infer belongs to it.
 """
 
 from __future__ import annotations
@@ -36,7 +38,7 @@ from datetime import UTC, datetime
 
 import sqlalchemy as sa
 from alembic import op
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.sql.selectable import TableClause
 
 revision: str = "0133"
@@ -55,7 +57,7 @@ SERVICE_AUTH_PROVIDER = "service"
 def _users() -> TableClause:
     return sa.table(
         "users",
-        sa.column("id", UUID(as_uuid=False)),
+        sa.column("id", sa.Uuid(as_uuid=False)),
         sa.column("email", sa.Text()),
         sa.column("password_hash", sa.Text()),
         sa.column("auth_provider", sa.Text()),
@@ -68,59 +70,43 @@ def _users() -> TableClause:
     )
 
 
+def _memberships() -> TableClause:
+    return sa.table("memberships", sa.column("user_id", sa.Uuid(as_uuid=False)))
+
+
 def upgrade() -> None:
-    users = _users()
     bind = op.get_bind()
-    existing = (
-        bind.execute(
-            sa.select(
-                users.c.id,
-                users.c.email,
-                users.c.auth_provider,
-                users.c.password_hash,
-            )
-            .where(sa.or_(users.c.id == PRINCIPAL_ID, users.c.email == PRINCIPAL_EMAIL))
-            .with_for_update()
-        )
-        .mappings()
-        .all()
-    )
-    for row in existing:
-        if (
-            str(row["id"]) != PRINCIPAL_ID
-            or row["email"] != PRINCIPAL_EMAIL
-            or row["auth_provider"] != SERVICE_AUTH_PROVIDER
-            or row["password_hash"] is not None
-        ):
-            raise RuntimeError(
-                "a users row conflicts with the go-api-prove service principal "
-                f"(id {PRINCIPAL_ID}, email {PRINCIPAL_EMAIL})"
-            )
-    if existing:
-        return
     now = datetime.now(UTC)
-    bind.execute(
-        users.insert().values(
-            id=PRINCIPAL_ID,
-            email=PRINCIPAL_EMAIL,
-            password_hash=None,
-            auth_provider=SERVICE_AUTH_PROVIDER,
-            is_active=True,
-            is_verified=False,
-            is_superuser=False,
-            token_version=0,
-            created_at=now,
-            updated_at=now,
+    values = {
+        "id": PRINCIPAL_ID,
+        "email": PRINCIPAL_EMAIL,
+        "password_hash": None,
+        "auth_provider": SERVICE_AUTH_PROVIDER,
+        "is_active": True,
+        "is_verified": False,
+        "is_superuser": False,
+        "token_version": 0,
+        "created_at": now,
+        "updated_at": now,
+    }
+    if bind.dialect.name == "postgresql":
+        bind.execute(
+            postgresql.insert(_users()).values(**values).on_conflict_do_nothing()
         )
-    )
+    elif bind.dialect.name == "sqlite":
+        bind.execute(sqlite.insert(_users()).values(**values).on_conflict_do_nothing())
+    else:
+        raise RuntimeError(f"0133 does not support the {bind.dialect.name} dialect")
 
 
 def downgrade() -> None:
     users = _users()
+    memberships = _memberships()
     op.get_bind().execute(
         users.delete().where(
             users.c.id == PRINCIPAL_ID,
             users.c.auth_provider == SERVICE_AUTH_PROVIDER,
             users.c.password_hash.is_(None),
+            ~sa.exists().where(memberships.c.user_id == users.c.id),
         )
     )

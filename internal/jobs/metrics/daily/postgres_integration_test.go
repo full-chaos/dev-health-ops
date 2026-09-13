@@ -1238,10 +1238,71 @@ CREATE TABLE daily_metrics_partition_recompute_events (
  CONSTRAINT ck_dpre_prior_status CHECK (prior_status <> ''),
  CONSTRAINT ck_dpre_prior_generation CHECK (prior_generation <> ''),
  CONSTRAINT ck_dpre_reason CHECK (reason <> '')
+);
+CREATE TABLE metric_compatibility_executions (
+ id uuid PRIMARY KEY,
+ worker_kind text NOT NULL CHECK (worker_kind IN ('daily', 'remaining')),
+ operation text NOT NULL CHECK (operation IN ('partition', 'finalize')),
+ run_id uuid NOT NULL,
+ partition_id uuid NULL,
+ family text NOT NULL CHECK (length(family) BETWEEN 1 AND 64),
+ generation text NOT NULL CHECK (length(generation) BETWEEN 1 AND 128),
+ scope_digest text NOT NULL CHECK (length(scope_digest) = 64 AND scope_digest ~ '^[0-9a-f]{64}$'),
+ claim_token uuid NOT NULL,
+ state text NOT NULL CHECK (state IN ('executing', 'succeeded', 'ambiguous', 'retry_authorized')),
+ attempt_count integer NOT NULL DEFAULT 1 CHECK (attempt_count >= 1),
+ output_evidence jsonb NULL,
+ failure_detail text NULL CHECK (failure_detail IS NULL OR length(failure_detail) BETWEEN 1 AND 1024),
+ created_at timestamptz NOT NULL DEFAULT statement_timestamp(),
+ last_attempt_at timestamptz NOT NULL DEFAULT statement_timestamp(),
+ completed_at timestamptz NULL,
+ CONSTRAINT ck_mce_partition_scope CHECK (
+     (operation = 'partition' AND partition_id IS NOT NULL)
+     OR (operation = 'finalize' AND partition_id IS NULL)
+ ),
+ CONSTRAINT ck_mce_succeeded_has_evidence CHECK (
+     (state = 'succeeded' AND completed_at IS NOT NULL AND output_evidence IS NOT NULL)
+     OR (state <> 'succeeded' AND completed_at IS NULL)
+ )
 )`)
 	if err != nil {
 		t.Fatal(err)
 	}
+}
+
+// insertCompatibilityLedgerRow inserts one metric_compatibility_executions
+// row directly -- mirroring what the (now-deleted) compatibility bridge, or
+// today's `metrics execution-repair`/`daily-redrive` ledger_repair, would
+// have left behind -- so a settle test can start from the exact stuck shape
+// a real repaired row has, against the real CHECK constraints above.
+func insertCompatibilityLedgerRow(
+	t *testing.T, ctx context.Context, pool *pgxpool.Pool,
+	id, operation, runID, partitionID, state string, now time.Time,
+) {
+	t.Helper()
+	if _, err := pool.Exec(ctx, `
+INSERT INTO metric_compatibility_executions (
+    id, worker_kind, operation, run_id, partition_id, family, generation,
+    scope_digest, claim_token, state, attempt_count, created_at, last_attempt_at
+) VALUES (
+    $1::uuid, 'daily', $2, $3::uuid, $4::uuid, 'test-family', 'daily-v1',
+    repeat('a', 64), $5::uuid, $6, 1, $7, $7
+)`,
+		id, operation, runID, nullableUUID(partitionID), uuid.NewString(), state, now,
+	); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// nullableUUID lets insertCompatibilityLedgerRow accept "" for a finalize-
+// scope row's NULL partition_id -- pgx has no bare string->NULL coercion, so
+// an empty string must become a typed nil to satisfy ck_mce_partition_scope
+// rather than fail as an invalid uuid literal.
+func nullableUUID(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
 }
 
 type dailyTestRegistry struct {

@@ -303,14 +303,14 @@ KIND_LEDGER: dict[str, dict[str, str]] = {
         "ticket": "CHAOS-4365 (Done)",
     },
     "system.heartbeat": {
-        "producer": "`cmd/dev-health-worker/operational.go:144-155`",
+        "producer": "`cmd/dev-health-worker/operational.go:151-170`",
         "trigger": "schedule",
         "gate": "`descriptor.Executable()` (route=river)",
-        "writer": "Python `system_ops.py:22 phone_home_heartbeat`",
-        "tables": "Python-owned `audit_logs` row + external `TELEMETRY_ENDPOINT` POST",
-        "evidence": "argued — code read; `internal/jobs/system/heartbeat.go:12-33` docstring is accurate and non-stale about this (explicitly says 'CLASSIFICATION: python_compatibility, not native Go')",
-        "state": "bridge",
-        "ticket": "CUT-20 (code label, no Linear ticket found — see report)",
+        "writer": "Go `internal/jobs/system/heartbeat_native.go` (`NativeHeartbeatDispatcher.DispatchHeartbeat`)",
+        "tables": "Go-owned `audit_logs` row + external `TELEMETRY_ENDPOINT` POST",
+        "evidence": "internal/jobs/system/heartbeat_native_integration_test.go seeds fixture data and compares the native compute's counts/tier/license-hash against the deleted Python phone_home_heartbeat's real (oracle-captured) output; system_ops.py/system_tasks.py and the HTTP bridge (worker_operational.py's /heartbeat route, internal/jobs/operational's HTTPDispatcher) are deleted entirely, not merely unreachable",
+        "state": "native",
+        "ticket": "n/a",
     },
     "system.retention_cleanup": {
         "producer": "`cmd/dev-health-worker/operational.go:156-167`",
@@ -427,16 +427,6 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
         "category": "a",
         "evidence": "dispatch_sync_run called directly by backfill/runner.py; finalize_sync_run called directly by processors/sync.py and dispatch_sync_run itself -- the /dispatch and /finalize HTTP bridge routes (and their dead Go HTTPBridge.Dispatch/.Finalize callers) are deleted outright",
         "ticket": "n/a",
-    },
-    "system_ops.py": {
-        "category": "a",
-        "evidence": "imported worker_operational.py (phone_home_heartbeat only, serving /heartbeat) — CHAOS-5353 deleted send_billing_notification and its fence helpers from this module",
-        "ticket": "n/a",
-    },
-    "system_tasks.py": {
-        "category": "c",
-        "evidence": "corrected 2026-09-06 (CHAOS-5320): NOT a dead shim, but for a different reason than before — `api/webhooks/router.py`'s `process_webhook_event` import and `api/billing/router.py`'s `send_billing_notification`/`.delay(...)` call site (both gated behind `route_requires_celery`) are DELETED; `route_requires_celery` itself is deleted (job_routes.py). CHAOS-5353 then deleted `send_billing_notification` itself, so this shim re-exported only `health_check` and `phone_home_heartbeat`. CHAOS-3093 (PR2b) deleted `health_check` outright (no dispatch site of any kind) and dropped `phone_home_heartbeat`'s `@celery_app.task` decorator (Celery has had zero consumers since CHAOS-4026) -- this shim now re-exports only `phone_home_heartbeat`, a plain function. `system_tasks.py`'s only remaining live importer is `workers/tasks.py`'s barrel re-export.",
-        "ticket": "CHAOS-4439 (dead worker modules) -- the router-coordination caveat from the prior entry no longer applies",
     },
     "task_utils.py": {
         "category": "c",

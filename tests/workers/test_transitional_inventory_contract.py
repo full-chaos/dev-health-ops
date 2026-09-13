@@ -517,8 +517,8 @@ def test_billing_rows_point_at_a_real_billing_acceptance_test():
     ]
     for row in billing_rows:
         assert row["acceptance_test_id"] == (
-            "tests/api/test_worker_operational_bridge.py"
-            "::test_internal_bridge_no_longer_exposes_a_billing_route"
+            "tests/test_credential_confusion_production_stack.py"
+            "::test_the_deleted_billing_route_is_gone_not_merely_unused"
         ), row
 
 

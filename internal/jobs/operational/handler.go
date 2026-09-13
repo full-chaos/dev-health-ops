@@ -21,6 +21,10 @@ var (
 	ErrDispatchPermanent = errors.New("operational delivery was permanently rejected")
 )
 
+// maxResponseBytes bounds how much of a provider HTTP response this package
+// ever reads into memory.
+const maxResponseBytes = 4 * 1024
+
 type WebhookDelivery struct {
 	ID            string
 	Provider      string

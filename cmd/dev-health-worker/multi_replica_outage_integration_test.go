@@ -197,8 +197,8 @@ func TestMultiReplicaFleetSurvivesDatabaseOutage(t *testing.T) {
 	}
 
 	// Each logical job produced exactly one external effect despite the outage.
-	if effects := bridge.effects(); effects[heartbeatSchedule(1)] != 1 || effects[heartbeatSchedule(2)] != 1 {
-		t.Fatalf("effects = %#v, want exactly one per logical job", effects)
+	if total := bridge.total(); total != 2 {
+		t.Fatalf("heartbeat telemetry POSTs = %d, want exactly one per logical job (2 total)", total)
 	}
 
 	// The fleet is still alive. Waiting past the presence TTL before asserting

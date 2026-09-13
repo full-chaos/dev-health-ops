@@ -19,7 +19,6 @@ from dev_health_ops.models import (
     SyncRunStatus,
     SyncRunUnit,
     SyncRunUnitStatus,
-    SyncWatermark,
 )
 from dev_health_ops.sync.planner import SyncPlanRequest, plan_sync_run
 from tests._helpers import (
@@ -57,28 +56,12 @@ def _session_context(session: Session):
     session.commit()
 
 
-class _Signature:
-    def __init__(self, value: str, queued: list[str]) -> None:
-        self.value = value
-        self.queued = queued
-
-    def set(self, *, queue: str) -> _Signature:
-        self.queued.append(f"{queue}:{self.value}")
-        return self
-
-    def apply_async(self) -> None:
-        return None
-
-
-def test_plan_dispatch_worker_state_transitions_are_characterized(monkeypatch) -> None:
-    from dev_health_ops.processors import dataset_adapters
+def test_plan_dispatch_state_transitions_are_characterized(monkeypatch) -> None:
     from dev_health_ops.workers import sync_units
-    from dev_health_ops.workers.sync_bootstrap import ProviderRuntime
 
     # Given
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
-    queued: list[str] = []
     with Session(engine) as session:
         seed_sync_dispatch_transport_routes(session)
         org_id = str(uuid.uuid4())
@@ -155,37 +138,5 @@ def test_plan_dispatch_worker_state_transitions_are_characterized(monkeypatch) -
         # ("sync:<id>"); there is no queue choice left to characterize, so the
         # baseline records the staged row instead.
         assert provider_unit_outbox_keys(session) == {f"sync.provider_unit:{unit.id}"}
-
-        monkeypatch.setattr(
-            sync_units,
-            "_start_unit_heartbeat",
-            lambda *_args: (None, None),
-        )
-        monkeypatch.setattr(
-            sync_units._runtime_cache,
-            "get",
-            lambda _ctx: ProviderRuntime(extra={}),
-        )
-        monkeypatch.setattr(
-            dataset_adapters,
-            "run_dataset_unit",
-            lambda _ctx, _runtime: {"items_synced": 1},
-        )
-        monkeypatch.setattr(
-            sync_units.finalize_sync_run,
-            "apply_async",
-            lambda *, args, queue: queued.append(f"{queue}:{args[0]}"),
-        )
-
-        # When
-        worker_result = getattr(sync_units.run_sync_unit, "run")(str(unit.id))
-
-        # Then
-        session.refresh(unit)
-        assert worker_result["status"] == "success"
-        assert unit.status == SyncRunUnitStatus.SUCCESS.value
-        assert unit.lease_owner is None
-        assert unit.lease_expires_at is None
-        assert session.query(SyncWatermark).count() == 1
 
     engine.dispose()

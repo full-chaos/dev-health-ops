@@ -337,7 +337,6 @@ def test_github_usage_key_backward_compat() -> None:
     linear page/batch promotion contract intact."""
 
     from dev_health_ops.metrics.job_work_items import _build_work_item_observations
-    from dev_health_ops.workers.sync_units import _WORK_ITEM_RESULT_OBSERVATION_FIELDS
 
     github_usage = [{"transport": "rest", "route_family": "work_items"}]
     provider_usage = [{"transport": "rest", "route_family": "work_items"}]
@@ -352,13 +351,6 @@ def test_github_usage_key_backward_compat() -> None:
     assert observations["provider_usage"] == provider_usage
     assert observations["linear_page_count"] == 3
     assert observations["linear_batch_count"] == 5
-
-    # The admin-API promotion contract (fields lifted to the top-level result)
-    # must not have silently changed.
-    assert _WORK_ITEM_RESULT_OBSERVATION_FIELDS == (
-        "linear_page_count",
-        "linear_batch_count",
-    )
 
 
 # ---------------------------------------------------------------------------

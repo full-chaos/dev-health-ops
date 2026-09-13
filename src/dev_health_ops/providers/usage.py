@@ -262,9 +262,11 @@ def provider_usage_observations(client: object) -> dict[str, Any]:
 # just to preserve partial actuals across a raise. ``metrics/job_work_items.py``
 # now delegates its ``attach_work_item_partial_observations`` /
 # ``read_work_item_partial_observations`` to the functions below (same
-# attribute name, so anything already reading it -- e.g.
-# ``workers/sync_units.py::_merge_partial_observations_into_result`` --
-# continues to work unchanged for both callers).
+# attribute name, so anything already reading it continues to work unchanged
+# for both callers). ``workers/sync_units.py``'s own reader
+# (``_merge_partial_observations_into_result``, part of the deleted
+# ``run_sync_unit`` Celery task body) is gone -- the native Go unit worker
+# does not need this cross-exception-attribute channel at all.
 _PARTIAL_OBSERVATIONS_ATTR = "dev_health_partial_observations"
 
 

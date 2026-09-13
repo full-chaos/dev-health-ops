@@ -49,9 +49,13 @@ _ATTEMPTED_WRITERS = {
 
 #: Files allowed to terminalize a unit as SUCCESS. Each MUST stamp the proven
 #: bit in the same transaction.
+#:
+#: workers/sync_units.py's own SUCCESS terminalizer (inside the deleted
+#: run_sync_unit Celery task body, which had no Celery producer or HTTP
+#: bridge) is gone -- the native Go unit worker is the only SUCCESS
+#: terminalizer left, and it already stamped the ledger before this deletion.
 _PROVEN_WRITERS = {
     "internal/providersync/repository_postgres.go": "RecordExecutedProofTerminal",
-    "src/dev_health_ops/workers/sync_units.py": "record_executed_proof_terminal",
 }
 
 

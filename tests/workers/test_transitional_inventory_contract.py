@@ -342,7 +342,23 @@ def test_inventory_is_non_empty_and_matches_audit_row_count():
     # sync_dispatch_transport_route row for the same kind is untouched: it
     # describes transport-routes.json's still-checked-in rollback_route
     # declaration, which this change does not retire.
-    assert inventory["row_count"] == 35
+    #
+    # = 33. run_sync_unit's own blocking condition above is resolved: every
+    # one of its ~100 test call sites is now deleted outright (tested only
+    # its dead body) or retargeted onto a still-live function, so the
+    # function itself, its exclusive helpers, and its Celery registration
+    # are deleted outright -- there is no remaining reason to keep it.
+    # Removed: the celery_task:sync_units.py:1179 row for run_sync_unit
+    # itself, -1, plus one of the two call_site_getattr_indirection rows for
+    # getattr(finalize_sync_run, 'apply_async') -- run_sync_unit's own
+    # finally block was the second call site, and it went with the
+    # function, -1. The surviving call site (dispatch_sync_run's denied-
+    # active-finalize path) keeps its row, re-anchored to its new line. The
+    # sibling celery_task rows for dispatch_sync_run and finalize_sync_run,
+    # and the sync.provider_unit registry_kind row, are also re-anchored to
+    # their new lines -- untouched in surface, just shifted up by the
+    # deletion. Net: 35 - 2 = 33.
+    assert inventory["row_count"] == 33
 
 
 def test_retired_beat_entries_are_evidenced_and_absent_from_source():

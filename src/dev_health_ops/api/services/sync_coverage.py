@@ -545,8 +545,10 @@ def _unit_window_from_row(
 # (cicd/tests -> cicd). Coverage math must expand a persisted unit into its
 # effective child dataset keys before doing interval/status math, or a later
 # successful composite run never supersedes stale child-dataset gaps or
-# failures. This mirrors the identical expansion in
-# ``workers/sync_units.py::_watermark_dataset_keys``/``_family_dataset_audit_metadata``.
+# failures. This mirrors the identical expansion the native Go unit worker
+# does for per-dataset watermark writes, and
+# ``workers/sync_units.py::_family_dataset_audit_metadata`` does for compute
+# checkpoint metadata.
 _WORK_ITEMS_CANONICAL_DATASET_KEY = "work-items"
 
 # canonical_dataset_key -> member dataset keys, for every collapsible family.

@@ -296,8 +296,7 @@ def test_launchdarkly_feature_flags_route_to_existing_feature_flag_sync() -> Non
 def test_launchdarkly_feature_flags_threads_usage_observations_to_result() -> None:
     """CHAOS-2761: provider_usage actuals drained by LaunchDarklyClient /
     LaunchDarklyCodeReferencesClient must reach the unit result's top-level
-    ``observations``, mirroring the work-items dataset passthrough, so
-    run_sync_unit's budget_comparison join can see them."""
+    ``observations``, mirroring the work-items dataset passthrough."""
     ctx = _context(
         provider="launchdarkly",
         dataset_key="feature-flags",
@@ -1250,65 +1249,3 @@ def test_gitlab_dataset_failure_attaches_partial_observations_to_exception() -> 
 
     partial = read_partial_observations(exc_info.value)
     assert partial == {"provider_usage": [fake_record]}
-
-
-def test_github_dataset_observations_join_through_real_attach_budget_comparison() -> (
-    None
-):
-    """CHAOS-2803/CS2: the adapter's returned payload's observations shape
-    must be exactly what workers.sync_units._attach_budget_comparison expects
-    -- proven with a REAL (unmocked) call to that function AND the real
-    GitHub budget estimator, without needing a live GitHub API. This is the
-    proof that markers + draining are not enough on their own: the payload
-    shape has to join too."""
-    from dev_health_ops.sync.budget import estimate_provider_budget
-    from dev_health_ops.workers.sync_units import _attach_budget_comparison
-
-    ctx = _context(dataset_key="pr-reviews", processor_flags=_flags(sync_prs=True))
-
-    async def _fake_process_github_repo(**kwargs: object) -> None:
-        # A single aggregated observation with request_count=3 -- matching the
-        # REAL shape UsageRecorder.drain() returns (one dict per unique
-        # (transport, route_family, dimension) key, already summed), and the
-        # pr_social/graphql_cost bucket the estimator reserves for the
-        # prs/pr-reviews/pr-comments dataset family (providers/github/budget.py
-        # _dataset_estimates).
-        sink = kwargs["usage_sink"]
-        assert isinstance(sink, list)
-        sink.append(dict(_FAKE_PR_SOCIAL_RECORD))
-
-    with patch(
-        "dev_health_ops.processors.github.process_github_repo",
-        _fake_process_github_repo,
-    ):
-        result = run_dataset_unit(ctx, _runtime())
-
-    provider_usage = result["observations"]["provider_usage"]
-    assert len(provider_usage) == 1
-    assert provider_usage[0]["route_family"] == "pr_social"
-
-    budget_audit = [estimate.to_dict() for estimate in estimate_provider_budget(ctx)]
-    pr_social_estimate = next(
-        entry
-        for entry in budget_audit
-        if entry["route_family"] == "pr_social"
-        and entry["bucket"]["dimension"] == "graphql_cost"
-    )
-    assert pr_social_estimate["estimated_units"] > 0
-
-    joined = _attach_budget_comparison(
-        result,
-        budget_audit,
-        log_ctx={},
-        computed_at=datetime.now(timezone.utc),
-    )
-
-    comparisons = joined["observations"]["budget_comparison"]
-    pr_social_comparison = next(
-        row for row in comparisons if row["route_family"] == "pr_social"
-    )
-    assert pr_social_comparison["dimension"] == "graphql_cost"
-    assert pr_social_comparison["actual_requests"] == 3
-    assert (
-        pr_social_comparison["estimated_units"] == pr_social_estimate["estimated_units"]
-    )

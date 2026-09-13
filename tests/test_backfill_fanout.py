@@ -163,17 +163,6 @@ def _seed_single_unit_run(
     return run, unit
 
 
-def _patch_unit_runtime(monkeypatch):
-    from dev_health_ops.workers import sync_units
-    from dev_health_ops.workers.sync_bootstrap import ProviderRuntime
-
-    class RuntimeCache:
-        def get(self, context):
-            return ProviderRuntime(extra={"unit_id": context.unit_id})
-
-    monkeypatch.setattr(sync_units, "_runtime_cache", RuntimeCache())
-
-
 def test_run_backfill_via_planner_creates_backfill_units_per_source_dataset_window(
     db_session, monkeypatch
 ):

@@ -36,12 +36,12 @@ from dev_health_ops.models.git import GUID, Base
 class ProviderRateLimitObservation(Base):
     """One row per rate-limit observation that deferred a sync unit.
 
-    Written atomically with the deferring unit's RETRYING stamp
-    (``workers/sync_units.py`` -- the ``except RateLimitException`` branch of
-    ``run_sync_unit``), in the same session/transaction: the observation and
-    the deferral must commit together or not at all, so this table never
-    holds an "orphan" row for a deferral that didn't actually happen (and vice
-    versa).
+    Written atomically with the deferring unit's RETRYING stamp, in the same
+    session/transaction: the observation and the deferral must commit together
+    or not at all, so this table never holds an "orphan" row for a deferral
+    that didn't actually happen (and vice versa). The stamp itself is native
+    Go now (``internal/jobs/providerunit``); Python's Celery-era equivalent
+    (``workers/sync_units.py``'s ``run_sync_unit``) is deleted.
 
     No foreign keys to ``sync_runs`` / ``sync_run_units`` / ``Integration``:
     this is a durable, independently-retained observation log (see
@@ -70,7 +70,8 @@ class ProviderRateLimitObservation(Base):
     # comments/attachments/history all under graphql_cost). A future
     # cooldown-gating consumer (CHAOS-2760) falls back to
     # provider+integration+dimension gating whenever this is set, never a
-    # guessed family. See workers/sync_units.py:_route_family_and_attribution.
+    # guessed family. See internal/syncdispatchruntime/budget_cooldown.go's
+    # ambiguousRouteFamilyAttribution, the native Go writer of this column.
     route_family_attribution: Mapped[str | None] = mapped_column(Text, nullable=True)
     dimension: Mapped[str | None] = mapped_column(Text, nullable=True)
     retry_after_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)

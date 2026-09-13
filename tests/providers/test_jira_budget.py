@@ -384,41 +384,6 @@ def test_jira_budget_guard_active_reservation_blocks_planned_unit(
     assert active.status == SyncRunUnitStatus.DISPATCHING.value
 
 
-def test_jira_budget_estimate_is_persisted_on_success(db_session, monkeypatch):
-    from dev_health_ops.processors import dataset_adapters
-    from dev_health_ops.workers import sync_units
-
-    _jira_env(monkeypatch)
-    run, unit = _seed_jira_run(db_session)
-    unit.status = SyncRunUnitStatus.DISPATCHING.value
-    db_session.flush()
-    _patch_db_session(monkeypatch, db_session)
-    monkeypatch.delenv("CLICKHOUSE_URI", raising=False)
-    monkeypatch.delenv("DATABASE_URI", raising=False)
-    monkeypatch.delenv("DATABASE_URL", raising=False)
-    monkeypatch.setattr(
-        dataset_adapters, "run_dataset_unit", lambda ctx, runtime: {"ok": True}
-    )
-    monkeypatch.setattr(
-        sync_units.finalize_sync_run, "apply_async", lambda *args, **kwargs: None
-    )
-
-    class RuntimeCache:
-        def get(self, context):
-            return None
-
-    monkeypatch.setattr(sync_units, "_runtime_cache", RuntimeCache())
-
-    result = getattr(sync_units.run_sync_unit, "run")(str(unit.id))
-
-    db_session.refresh(unit)
-    assert result["status"] == "success"
-    assert unit.result is not None
-    budget_estimate = unit.result["observations"]["budget_estimate"]
-    assert budget_estimate[0]["bucket"]["provider"] == "jira"
-    assert budget_estimate[0]["route_family"] == "jira_jql"
-
-
 def test_jira_provider_queue_routing_supports_provider_and_cost_class_queues(
     monkeypatch,
 ) -> None:

@@ -163,12 +163,6 @@ def test_transitional_inventory_route_readiness_notes_follow_matrix(
     for row in (
         _inventory_row_by_identity(
             inventory,
-            surface_class="celery_task",
-            surface="run_sync_unit",
-            target_kind_id="kind:sync.provider_unit",
-        ),
-        _inventory_row_by_identity(
-            inventory,
             surface_class="registry_kind",
             surface="sync.provider_unit",
             target_kind_id="kind:sync.provider_unit",

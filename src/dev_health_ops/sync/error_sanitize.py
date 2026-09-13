@@ -10,9 +10,10 @@ siblings (``sync_runs.error``, ``sync_run_reference_discoveries.error``,
 controls what a provider client library puts in an exception message.
 
 This is deliberately a **redaction pass**, not the allow-list used for the
-durable rate-limit observation store's ``reason`` column
-(``_normalized_rate_limit_reason`` in ``workers/sync_units.py``, CHAOS-2758).
-That column is a closed, normalized enum with no diagnostic-text mandate, so
+durable rate-limit observation store's ``reason`` column (formerly
+``_normalized_rate_limit_reason`` in ``workers/sync_units.py``, deleted along
+with the rest of ``run_sync_unit``'s Celery task body; CHAOS-2758). That
+column is a closed, normalized enum with no diagnostic-text mandate, so
 allow-listing a fixed vocabulary is correct there. The columns this module
 guards are free-form operator-facing diagnostics -- the whole point of
 persisting them is to help operators debug a failed sync without re-running

@@ -695,14 +695,16 @@ func buildSyncCoordinatorWorker(
 		cfg.Queues, []string{syncCoordinatorQueue}, cfg.WorkerQueueConcurrency,
 	)
 	if autoimport.Executable() {
-		// CHAOS-4431: a sync run whose own provider has a registered native
-		// collector runs it directly (gated by CHAOS-4323 selections,
-		// mirroring Python's non-strict run_team_autoimport) and never calls
-		// the bridge's team-autoimport endpoint; every other provider still
-		// does, unchanged. Reuses the same native-collector map and client
-		// resolver the reference-discovery executor above was built with.
-		teamAutoimportBridge := &teamCatalogAutoimportBridge{
-			CoordinatorBridge: bridge,
+		// A sync run whose own provider has a registered native collector
+		// runs it directly (gated by the org's per-category import
+		// selections, mirroring Python's non-strict run_team_autoimport);
+		// every provider that can ever write real team-catalog data is
+		// native now, so any other resolved provider or resolution failure
+		// fails loudly instead of falling through to a bridge -- see
+		// nativeTeamAutoimportDispatcher.TeamAutoImport. Reuses the same
+		// native-collector map and client resolver the reference-discovery
+		// executor above was built with.
+		teamAutoimportDispatcher := &nativeTeamAutoimportDispatcher{
 			resolveProvider: func(ctx context.Context, orgID, runID string) (string, error) {
 				return resolveTeamCatalogProvider(ctx, postgresDatabase.pools.Domain, orgID, runID)
 			},
@@ -712,7 +714,7 @@ func buildSyncCoordinatorWorker(
 			sources:    teamCatalogSources,
 			observer:   teamCatalogObserver,
 		}
-		if err := syncdispatchruntime.RegisterTeamAutoimportWorker(workers, teamAutoimportBridge); err != nil {
+		if err := syncdispatchruntime.RegisterTeamAutoimportWorker(workers, teamAutoimportDispatcher); err != nil {
 			closeClickHouse()
 			return workerFamily{}, errWorkerDependencyUnavailable
 		}

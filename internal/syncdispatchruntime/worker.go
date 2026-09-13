@@ -88,11 +88,21 @@ func RegisterWorkers(
 	return nil
 }
 
+// TeamAutoImporter is the narrow seam RegisterTeamAutoimportWorker depends
+// on: every provider that can ever write real team-catalog data now has a
+// registered native collector (see cmd/dev-health-worker/
+// team_catalog_clients.go), so the worker consuming sync.team_autoimport
+// jobs no longer needs the wide CoordinatorBridge (Dispatch/Finalize/
+// Discover) -- only the one method it actually calls.
+type TeamAutoImporter interface {
+	TeamAutoImport(context.Context, DomainReference) error
+}
+
 // RegisterTeamAutoimportWorker registers the one bounded-registry kind this
 // runtime hosts. The caller must first prove the kind is executable and must
 // report the constructed handler spec to startup validation, so capability is
 // observable no matter which River client hosts the worker.
-func RegisterTeamAutoimportWorker(workers *river.Workers, bridge CoordinatorBridge) error {
+func RegisterTeamAutoimportWorker(workers *river.Workers, bridge TeamAutoImporter) error {
 	if workers == nil || bridge == nil {
 		return ErrWorkerRegistration
 	}
@@ -214,7 +224,7 @@ type referenceDiscoveryWorker struct {
 
 type teamAutoimportWorker struct {
 	river.WorkerDefaults[TeamAutoimportJobArgs]
-	bridge CoordinatorBridge
+	bridge TeamAutoImporter
 }
 
 func (worker *teamAutoimportWorker) Work(ctx context.Context, job *river.Job[TeamAutoimportJobArgs]) (err error) {

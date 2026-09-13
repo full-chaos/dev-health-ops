@@ -21,8 +21,8 @@ import (
 // lookup native_reference_discovery.go's resolveAuthoritativeProvider uses,
 // without a provider to fence by -- the post-sync team-autoimport dispatch
 // (below) needs to discover which provider a sync run belongs to BEFORE it
-// can decide native vs bridge; resolveTeamCatalogIntegration above requires
-// already knowing it.
+// can decide whether a native collector applies; resolveTeamCatalogIntegration
+// above requires already knowing it.
 func resolveTeamCatalogProvider(ctx context.Context, pool *pgxpool.Pool, orgID, runID string) (string, error) {
 	if pool == nil || orgID == "" || runID == "" {
 		return "", providersync.ErrInvalidConfiguration
@@ -385,17 +385,40 @@ func syncOptionBool(syncOptions map[string]any, key string) bool {
 	return ok && value
 }
 
-// teamCatalogAutoimportBridge decorates a syncdispatchruntime.CoordinatorBridge:
-// a sync run whose OWN provider has a registered native collector runs that
-// collector directly (gated by CHAOS-4323 selections, mirroring Python's
-// non-strict run_team_autoimport -- UNLIKE TeamCatalogDiscoveryExecutor
-// above, which mirrors the selection-blind run_team_autoimport_strict used
-// by the separate reference-discovery seam) and never calls TeamAutoImport
-// on the wrapped bridge at all. Every other provider, and any resolution
-// failure, falls through to the wrapped bridge unchanged -- Dispatch/
-// Finalize/Discover are untouched pass-throughs via the embedded interface.
-type teamCatalogAutoimportBridge struct {
-	syncdispatchruntime.CoordinatorBridge
+// teamAutoimportImportCapableProviders is the fixed set of providers
+// Python's team_autoimport.py ever resolved a real populate() for
+// (_IMPORTER_MODULES: linear/jira/github/gitlab). jira's own native
+// collector closed this set out -- every provider in it is registered in
+// nativeTeamCatalogCollectors (cmd/dev-health-worker/sync_dispatch.go). A
+// provider in THIS set missing from that map is therefore a wiring bug (a
+// collector that failed to register), not a legitimate "nothing to import"
+// provider, and TeamAutoImport fails loudly instead of silently reporting a
+// clean result for it. Any other provider (pagerduty, launchdarkly, and
+// anything not listed here) has never had import capability and gets a
+// genuine, permanent no-op. Mirrors referenceDiscoveryImportCapableProviders
+// in internal/syncdispatchruntime/team_catalog_discovery_executor.go.
+var teamAutoimportImportCapableProviders = map[string]bool{
+	"linear": true, "jira": true, "github": true, "gitlab": true,
+}
+
+// errTeamAutoImportProviderUnavailable signals a wiring bug: a provider this
+// codebase knows can write real reference data resolved successfully but has
+// no registered native collector. There is no bridge left to fall through to
+// -- unlike a genuinely non-import-capable provider (a clean no-op), this
+// must fail (and retry through River) so the gap gets noticed and fixed.
+var errTeamAutoImportProviderUnavailable = errors.New("team autoimport: import-capable provider has no registered native collector")
+
+// nativeTeamAutoimportDispatcher dispatches post-sync team-catalog import for
+// one sync run: it resolves the run's own provider and, when that provider
+// has a registered native collector, runs it directly (gated by the org's
+// per-category import selections, mirroring Python's non-strict
+// run_team_autoimport -- UNLIKE TeamCatalogDiscoveryExecutor, which mirrors
+// the selection-blind run_team_autoimport_strict used by the separate
+// reference-discovery seam). Every provider that can ever write real
+// reference data is native now, so there is no bridge left to fall through
+// to for the rest: see TeamAutoImport for what a non-native provider gets
+// instead.
+type nativeTeamAutoimportDispatcher struct {
 	// resolveProvider discovers the sync run's own provider; production
 	// wiring sets this to a closure over resolveTeamCatalogProvider + the
 	// domain pool, tests inject a fake directly.
@@ -412,134 +435,140 @@ type teamCatalogAutoimportBridge struct {
 	now      func() time.Time
 }
 
-func (bridge *teamCatalogAutoimportBridge) nowUTC() time.Time {
-	if bridge.now != nil {
-		return bridge.now().UTC()
+func (dispatcher *nativeTeamAutoimportDispatcher) nowUTC() time.Time {
+	if dispatcher.now != nil {
+		return dispatcher.now().UTC()
 	}
 	return time.Now().UTC()
 }
 
-func (bridge *teamCatalogAutoimportBridge) observeDispatch(provider string, outcome jobruntime.TeamCatalogOutcome) {
-	if bridge.observer == nil {
+func (dispatcher *nativeTeamAutoimportDispatcher) observeDispatch(provider string, outcome jobruntime.TeamCatalogOutcome) {
+	if dispatcher.observer == nil {
 		return
 	}
-	_ = bridge.observer.ObserveTeamCatalogDispatch(provider, jobruntime.TeamCatalogEntryPointPostSync, outcome)
+	_ = dispatcher.observer.ObserveTeamCatalogDispatch(provider, jobruntime.TeamCatalogEntryPointPostSync, outcome)
 }
 
-func (bridge *teamCatalogAutoimportBridge) TeamAutoImport(
+func (dispatcher *nativeTeamAutoimportDispatcher) TeamAutoImport(
 	ctx context.Context, reference syncdispatchruntime.DomainReference,
 ) error {
-	if bridge == nil || bridge.CoordinatorBridge == nil || bridge.resolveProvider == nil {
+	if dispatcher == nil || dispatcher.resolveProvider == nil {
 		return syncdispatchruntime.ErrInvalidBridge
 	}
 	orgID, runID := reference.OrganizationID, reference.SyncRunID
-	provider, err := bridge.resolveProvider(ctx, orgID, runID)
-	if err == nil {
-		if collector, ok := bridge.native[provider]; ok {
-			// Non-strict (team-lead ruling, 2026-08-28): mirrors Python's
-			// run_team_autoimport, which catches every populator exception --
-			// including auth/config resolution failures, not only the
-			// populate call itself -- and returns a zero summary rather than
-			// failing the job. EVERY error from this point on (selections,
-			// credential/client, source ids, or the collection call itself)
-			// must degrade the same way, or a resolver blip still causes a
-			// retry storm exactly like an un-degraded collector error would.
-			// The strict reference-discovery seam (TeamCatalogDiscoveryExecutor)
-			// has no such decorator and keeps propagating every one of these.
-			selections, syncOptions, selectionsErr := bridge.selections.ResolveSelections(ctx, orgID, runID, provider, false)
-			if selectionsErr != nil {
-				bridge.observeDispatch(provider, jobruntime.TeamCatalogOutcomeNativeFailedNonfatal)
-				return nil
-			}
-			if !selections.Any() {
-				bridge.observeDispatch(provider, jobruntime.TeamCatalogOutcomeSkipped)
-				return nil
-			}
-			credential, client, integrationID, clientErr := bridge.clients.ResolveClient(ctx, orgID, runID, provider)
-			if clientErr != nil {
-				bridge.observeDispatch(provider, jobruntime.TeamCatalogOutcomeNativeFailedNonfatal)
-				return nil
-			}
-			var sourceExternalIDs []string
-			if bridge.sources != nil {
-				var sourcesErr error
-				sourceExternalIDs, sourcesErr = bridge.sources.ResolveSourceExternalIDs(ctx, orgID, runID)
-				if sourcesErr != nil {
-					bridge.observeDispatch(provider, jobruntime.TeamCatalogOutcomeNativeFailedNonfatal)
-					return nil
-				}
-			}
-			result, collectErr := collector.CollectTeamCatalog(ctx, providersync.TeamCatalogReference{
-				OrgID: orgID, SyncRunID: runID, IntegrationID: integrationID,
-				SyncOptions: syncOptions, Strict: false, SourceExternalIDs: sourceExternalIDs,
-			}, credential, client, selections, bridge.nowUTC())
-			if collectErr != nil {
-				// The failure is still visible via the dedicated nonfatal
-				// outcome, not silently dropped.
-				bridge.observeDispatch(provider, jobruntime.TeamCatalogOutcomeNativeFailedNonfatal)
-				return nil
-			}
-			if result.Skipped {
-				// CHAOS-4432 (team-lead ruling, 2026-08-28): a collector
-				// that made NO writes and is reporting a clean, successful
-				// zero result (Python parity for a non-strict walk
-				// failure) must record a dedicated skipped outcome, not
-				// "native" -- a zero-row success must never be silently
-				// indistinguishable from a real, healthy zero-row run.
-				// TeamCatalogOutcomeCollectorSkipped (codex review finding,
-				// distinct from TeamCatalogOutcomeSkipped above, which
-				// means "nothing selected, the collector never ran" --
-				// this means the collector WAS called and chose to skip):
-				// conflating the two would make dev_health_team_catalog_
-				// dispatch_total unable to tell "nothing configured" apart
-				// from "this provider's fetch is failing". result.
-				// SkipReason (e.g. "group_projects_fetch_failed") is not
-				// yet a metric label, but is warn-logged by the collector
-				// itself at the point of failure.
-				bridge.observeDispatch(provider, jobruntime.TeamCatalogOutcomeCollectorSkipped)
-				return nil
-			}
-			if result.RosterPreservationFailed {
-				// A collector may choose to continue after its own
-				// existing-members pre-read failed rather than hard-failing
-				// the whole write (Linear's collector does not -- it always
-				// hard-fails instead, see CHAOS-4446). This outcome exists so
-				// that choice, if any collector ever makes it, is visible in
-				// telemetry rather than indistinguishable from a clean run.
-				bridge.observeDispatch(provider, jobruntime.TeamCatalogOutcomeRosterPreservationFailed)
-			} else {
-				bridge.observeDispatch(provider, jobruntime.TeamCatalogOutcomeNative)
-			}
-			if bridge.observer != nil {
-				for _, row := range []struct {
-					table string
-					count int
-				}{
-					{"teams", result.TeamsWritten}, {"members", result.MembersWritten},
-					{"team_memberships", result.MembershipsWritten}, {"projects", result.ProjectsWritten},
-					{"team_project_ownership", result.OwnershipWritten},
-					{"team_repo_ownership", result.RepoOwnershipWritten},
-					{"sprints", result.SprintsWritten},
-					{"projects_without_key", result.ProjectsWithoutKey},
-					{"teams_skipped_policy", result.TeamsSkippedPolicy},
-					{"team_memberships_skipped_manual_conflict", result.MembershipsSkippedManualConflict},
-					{"teams_staged_for_review", result.TeamsStagedForReview},
-					{"team_memberships_staged_for_review", result.MembershipsStagedForReview},
-					{"team_drift_changes_superseded", result.DriftChangesSuperseded},
-				} {
-					_ = bridge.observer.ObserveTeamCatalogRowsWritten(provider, jobruntime.TeamCatalogTable(row.table), row.count)
-				}
-			}
+	provider, err := dispatcher.resolveProvider(ctx, orgID, runID)
+	if err != nil {
+		// There is no bridge left to fall through to: a provider-resolution
+		// failure must fail (and retry through River's lease/backoff
+		// machinery), never silently no-op.
+		return err
+	}
+	collector, native := dispatcher.native[provider]
+	if !native {
+		if teamAutoimportImportCapableProviders[provider] {
+			// A provider this codebase knows CAN write real reference data
+			// has no registered collector -- a wiring bug (a collector
+			// missing from production registration), never a legitimate
+			// "nothing to import" case. Fail loudly instead of silently
+			// dropping the import.
+			return errTeamAutoImportProviderUnavailable
+		}
+		dispatcher.observeDispatch(provider, jobruntime.TeamCatalogOutcomeNotImportCapable)
+		return nil
+	}
+	// Non-strict: mirrors Python's run_team_autoimport, which catches every
+	// populator exception -- including auth/config resolution failures, not
+	// only the populate call itself -- and returns a zero summary rather
+	// than failing the job. EVERY error from this point on (selections,
+	// credential/client, source ids, or the collection call itself) must
+	// degrade the same way, or a resolver blip still causes a retry storm
+	// exactly like an un-degraded collector error would. The strict
+	// reference-discovery seam (TeamCatalogDiscoveryExecutor) has no such
+	// decorator and keeps propagating every one of these.
+	selections, syncOptions, selectionsErr := dispatcher.selections.ResolveSelections(ctx, orgID, runID, provider, false)
+	if selectionsErr != nil {
+		dispatcher.observeDispatch(provider, jobruntime.TeamCatalogOutcomeNativeFailedNonfatal)
+		return nil
+	}
+	if !selections.Any() {
+		dispatcher.observeDispatch(provider, jobruntime.TeamCatalogOutcomeSkipped)
+		return nil
+	}
+	credential, client, integrationID, clientErr := dispatcher.clients.ResolveClient(ctx, orgID, runID, provider)
+	if clientErr != nil {
+		dispatcher.observeDispatch(provider, jobruntime.TeamCatalogOutcomeNativeFailedNonfatal)
+		return nil
+	}
+	var sourceExternalIDs []string
+	if dispatcher.sources != nil {
+		var sourcesErr error
+		sourceExternalIDs, sourcesErr = dispatcher.sources.ResolveSourceExternalIDs(ctx, orgID, runID)
+		if sourcesErr != nil {
+			dispatcher.observeDispatch(provider, jobruntime.TeamCatalogOutcomeNativeFailedNonfatal)
 			return nil
 		}
 	}
-	// Provider resolution failed, or the provider is not native: fall back
-	// to the Python path exactly as before CHAOS-4431.
-	bridge.observeDispatch(provider, jobruntime.TeamCatalogOutcomeBridge)
-	return bridge.CoordinatorBridge.TeamAutoImport(ctx, reference)
+	result, collectErr := collector.CollectTeamCatalog(ctx, providersync.TeamCatalogReference{
+		OrgID: orgID, SyncRunID: runID, IntegrationID: integrationID,
+		SyncOptions: syncOptions, Strict: false, SourceExternalIDs: sourceExternalIDs,
+	}, credential, client, selections, dispatcher.nowUTC())
+	if collectErr != nil {
+		// The failure is still visible via the dedicated nonfatal outcome,
+		// not silently dropped.
+		dispatcher.observeDispatch(provider, jobruntime.TeamCatalogOutcomeNativeFailedNonfatal)
+		return nil
+	}
+	if result.Skipped {
+		// A collector that made NO writes and is reporting a clean,
+		// successful zero result (Python parity for a non-strict walk
+		// failure) must record a dedicated skipped outcome, not "native" --
+		// a zero-row success must never be silently indistinguishable from
+		// a real, healthy zero-row run. TeamCatalogOutcomeCollectorSkipped
+		// is distinct from TeamCatalogOutcomeSkipped above, which means
+		// "nothing selected, the collector never ran" -- this means the
+		// collector WAS called and chose to skip: conflating the two would
+		// make dev_health_team_catalog_dispatch_total unable to tell
+		// "nothing configured" apart from "this provider's fetch is
+		// failing". result.SkipReason (e.g. "group_projects_fetch_failed")
+		// is not yet a metric label, but is warn-logged by the collector
+		// itself at the point of failure.
+		dispatcher.observeDispatch(provider, jobruntime.TeamCatalogOutcomeCollectorSkipped)
+		return nil
+	}
+	if result.RosterPreservationFailed {
+		// A collector may choose to continue after its own existing-members
+		// pre-read failed rather than hard-failing the whole write (Linear's
+		// collector does not -- it always hard-fails instead). This outcome
+		// exists so that choice, if any collector ever makes it, is visible
+		// in telemetry rather than indistinguishable from a clean run.
+		dispatcher.observeDispatch(provider, jobruntime.TeamCatalogOutcomeRosterPreservationFailed)
+	} else {
+		dispatcher.observeDispatch(provider, jobruntime.TeamCatalogOutcomeNative)
+	}
+	if dispatcher.observer != nil {
+		for _, row := range []struct {
+			table string
+			count int
+		}{
+			{"teams", result.TeamsWritten}, {"members", result.MembersWritten},
+			{"team_memberships", result.MembershipsWritten}, {"projects", result.ProjectsWritten},
+			{"team_project_ownership", result.OwnershipWritten},
+			{"team_repo_ownership", result.RepoOwnershipWritten},
+			{"sprints", result.SprintsWritten},
+			{"projects_without_key", result.ProjectsWithoutKey},
+			{"teams_skipped_policy", result.TeamsSkippedPolicy},
+			{"team_memberships_skipped_manual_conflict", result.MembershipsSkippedManualConflict},
+			{"teams_staged_for_review", result.TeamsStagedForReview},
+			{"team_memberships_staged_for_review", result.MembershipsStagedForReview},
+			{"team_drift_changes_superseded", result.DriftChangesSuperseded},
+		} {
+			_ = dispatcher.observer.ObserveTeamCatalogRowsWritten(provider, jobruntime.TeamCatalogTable(row.table), row.count)
+		}
+	}
+	return nil
 }
 
-var _ syncdispatchruntime.CoordinatorBridge = &teamCatalogAutoimportBridge{}
+var _ syncdispatchruntime.TeamAutoImporter = &nativeTeamAutoimportDispatcher{}
 
 // teamCatalogSourceResolver implements
 // syncdispatchruntime.SourceExternalIDsResolver against the SAME

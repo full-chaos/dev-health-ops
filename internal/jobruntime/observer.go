@@ -465,14 +465,14 @@ type BudgetEstimateFailureObserver interface {
 	ObserveBudgetEstimateFailure(reason string) error
 }
 
-// TeamCatalogObserver is the narrow capability CHAOS-4431's native/bridge
-// team-catalog dispatch depends on to report what it did: generic runtime
-// middleware cannot infer which path a provider took (native collector vs
-// the Python bridge vs skipped for no CHAOS-4323 selection) or how many rows
+// TeamCatalogObserver is the narrow capability the native team-catalog
+// dispatch seams depend on to report what they did: generic runtime
+// middleware cannot infer which path a provider took (native collector vs.
+// not-import-capable vs. skipped for no import selection) or how many rows
 // a native collector actually wrote per destination table -- only the
-// dispatch implementation itself (TeamCatalogDiscoveryExecutor or
-// teamCatalogAutoimportBridge, both cmd/dev-health-worker/internal/syncdispatchruntime)
-// knows either.
+// dispatch implementation itself (TeamCatalogDiscoveryExecutor in
+// internal/syncdispatchruntime, or nativeTeamAutoimportDispatcher in
+// cmd/dev-health-worker) knows either.
 type TeamCatalogObserver interface {
 	// ObserveTeamCatalogDispatch records one dispatch decision: which path a
 	// (provider, entry point) pair took for one call.

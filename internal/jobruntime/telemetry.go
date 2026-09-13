@@ -303,12 +303,12 @@ func incidentValidFromGuardReasons() []IncidentValidFromGuardReason {
 	}
 }
 
-// TeamCatalogEntryPoint names which of the two Python team-autoimport call
-// sites CHAOS-4431's native/bridge dispatch decided for (they are NOT
-// equivalent -- see teamCatalogAutoimportBridge's doc comment,
+// TeamCatalogEntryPoint names which of the two team-autoimport dispatch
+// paths a call took (they are NOT equivalent -- see
+// nativeTeamAutoimportDispatcher's doc comment,
 // cmd/dev-health-worker/team_catalog_clients.go): reference discovery
-// mirrors run_team_autoimport_strict (selection-blind), post_sync mirrors
-// run_team_autoimport (selection-gated).
+// mirrors Python's old selection-blind run_team_autoimport_strict, post_sync
+// mirrors the selection-gated run_team_autoimport.
 type TeamCatalogEntryPoint string
 
 const (
@@ -321,25 +321,24 @@ func teamCatalogEntryPoints() []TeamCatalogEntryPoint {
 }
 
 // TeamCatalogOutcome is the bounded dispatch result for one (provider,
-// entry point) call: "native" ran a registered Go collector and never
-// touched the Python bridge; "bridge" fell through to the existing Python
-// path unchanged (provider resolution failed on the post_sync seam, the
-// only entry point that still has a bridge to fall through to); "skipped"
-// is the post_sync-only case of a native provider whose org has every
-// per-category import selection (teams/projects/members) off -- nothing to
-// import either way, so neither the collector nor the bridge ran;
-// "native_failed_nonfatal" is the
-// post_sync-only case of a native collector call that returned an error --
-// mirroring Python's non-strict run_team_autoimport, which catches every
-// populator exception and returns a zero summary rather than failing the
-// job (the strict reference-discovery seam never uses this value; it
-// propagates the error instead, same as run_team_autoimport_strict);
-// "not_import_capable" is the reference-discovery-only case of a provider
+// entry point) call: "native" ran a registered Go collector; "bridge" is
+// retired (kept defined for historical metric-label continuity only -- both
+// team-catalog dispatch seams, reference-discovery and post-sync, have no
+// Python bridge left to fall through to at all, so nothing produces this
+// value any more); "skipped" is the post_sync-only case of a native
+// provider whose org has every per-category import selection
+// (teams/projects/members) off -- nothing to import, so the collector never
+// ran; "native_failed_nonfatal" is the post_sync-only case of a native
+// collector call that returned an error -- mirroring Python's non-strict
+// run_team_autoimport, which catches every populator exception and returns
+// a zero summary rather than failing the job (the strict reference-
+// discovery seam never uses this value; it propagates the error instead,
+// same as run_team_autoimport_strict); "not_import_capable" is a provider
 // with no registered native collector AND no import capability at all
-// (e.g. atlassian/pagerduty) -- the seam that used to fall through to the
-// Python bridge for these now reports a clean no-op directly, mirroring
-// team_autoimport.py's _provider_capability no-op (see
-// TeamCatalogDiscoveryExecutor.Discover).
+// (e.g. atlassian/pagerduty) -- both seams report a clean no-op directly
+// for these, mirroring team_autoimport.py's old _provider_capability no-op
+// (see TeamCatalogDiscoveryExecutor.Discover and
+// nativeTeamAutoimportDispatcher.TeamAutoImport).
 type TeamCatalogOutcome string
 
 const (
@@ -372,13 +371,13 @@ const (
 	// provider's fetch is failing and needs attention" -- exactly the
 	// signal an operator/alert needs.
 	TeamCatalogOutcomeCollectorSkipped TeamCatalogOutcome = "collector_skipped"
-	// TeamCatalogOutcomeNotImportCapable names the reference-discovery
-	// executor's own no-op: a provider absent from Native that also has no
-	// real import capability (every provider that ever does -- linear/
-	// github/gitlab/jira -- is registered in Native as of the jira
-	// collector closing that set out). Distinct from TeamCatalogOutcomeBridge
+	// TeamCatalogOutcomeNotImportCapable names either team-catalog dispatch
+	// seam's own no-op: a provider absent from its native-collector map that
+	// also has no real import capability (every provider that ever does --
+	// linear/github/gitlab/jira -- is registered as of the jira collector
+	// closing that set out). Distinct from the retired TeamCatalogOutcomeBridge
 	// (a genuine fall-through to a live Python path) -- there is no such
-	// path left for this seam to fall through to.
+	// path left for either seam to fall through to.
 	TeamCatalogOutcomeNotImportCapable TeamCatalogOutcome = "not_import_capable"
 )
 

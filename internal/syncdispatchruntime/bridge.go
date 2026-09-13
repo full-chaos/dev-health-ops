@@ -37,7 +37,6 @@ type CoordinatorBridge interface {
 	Dispatch(context.Context, DispatchSyncRunArgs) error
 	Finalize(context.Context, FinalizeSyncRunArgs) error
 	Discover(context.Context, ReferenceDiscoveryArgs) error
-	TeamAutoImport(context.Context, DomainReference) error
 }
 
 type HTTPBridgeConfig struct {
@@ -89,11 +88,6 @@ type bridgeReference struct {
 	RouteGeneration int64  `json:"route_generation"`
 }
 
-type teamAutoImportReference struct {
-	OrganizationID string `json:"organization_id"`
-	SyncRunID      string `json:"sync_run_id"`
-}
-
 func (bridge *HTTPBridge) Dispatch(ctx context.Context, args DispatchSyncRunArgs) error {
 	return bridge.call(ctx, "/api/internal/worker-sync/dispatch", bridgeReferenceFor(args))
 }
@@ -104,16 +98,6 @@ func (bridge *HTTPBridge) Finalize(ctx context.Context, args FinalizeSyncRunArgs
 
 func (bridge *HTTPBridge) Discover(ctx context.Context, args ReferenceDiscoveryArgs) error {
 	return bridge.call(ctx, "/api/internal/worker-sync/reference-discovery", bridgeReferenceFor(args))
-}
-
-func (bridge *HTTPBridge) TeamAutoImport(ctx context.Context, reference DomainReference) error {
-	if bridge == nil || !uuidPattern.MatchString(reference.OrganizationID) || !uuidPattern.MatchString(reference.SyncRunID) {
-		return ErrInvalidBridge
-	}
-	return bridge.call(ctx, "/api/internal/worker-sync/team-autoimport", teamAutoImportReference{
-		OrganizationID: reference.OrganizationID,
-		SyncRunID:      reference.SyncRunID,
-	})
 }
 
 func bridgeReferenceFor(args Args) bridgeReference {

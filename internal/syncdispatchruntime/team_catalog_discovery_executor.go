@@ -178,15 +178,14 @@ func (executor *TeamCatalogDiscoveryExecutor) Discover(
 	if err != nil {
 		return nil, err
 	}
-	// Unlike the non-strict post-sync bridge (teamCatalogAutoimportBridge),
-	// this seam NEVER skips the collector call outright when every
-	// CHAOS-4323 selection is off. Sprints/cycles are unconditional
-	// reference data in Python's STRICT mode -- team_autoimport_linear.py:
-	// 421's early exit explicitly does not apply when strict, specifically
-	// so dispatch-blocking sprint keys are resolved even when an org
-	// disabled every writable category (CHAOS-4437 P1; codex review of
-	// this PR independently re-found the same gap in this executor before
-	// that Python fix's rationale was even known here). Ref.Strict is
+	// Unlike the non-strict post-sync dispatcher
+	// (cmd/dev-health-worker/team_catalog_clients.go's
+	// nativeTeamAutoimportDispatcher), this seam NEVER skips the collector
+	// call outright when every import selection is off. Sprints/cycles are
+	// unconditional reference data in Python's old STRICT mode --
+	// team_autoimport_linear.py:421's early exit explicitly did not apply
+	// when strict, specifically so dispatch-blocking sprint keys are
+	// resolved even when an org disabled every writable category. Ref.Strict is
 	// always true below, so the collector decides on its own whether to
 	// skip -- see LinearTeamCatalogCollector.CollectTeamCatalog's doc
 	// comment -- this function never special-cases "all off" itself.

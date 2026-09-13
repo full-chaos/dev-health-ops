@@ -15,11 +15,16 @@ def test_resolve_populator_refuses_linear_regardless_of_caller() -> None:
     enumerated (/team-autoimport, /reference-discovery-populate,
     /reference-discovery), and any future one -- without each needing its
     own copy of the check. Every other provider is unaffected.
+
+    jira joined this refusal set once its own Go collector shipped (same
+    _GO_NATIVE_PROVIDERS mechanism, see team_autoimport.py) -- github/gitlab
+    are the remaining providers this test can use to prove the guard is
+    NOT a blanket refusal of every provider.
     """
     assert team_autoimport._resolve_populator("linear") is None
     assert team_autoimport._resolve_populator("LINEAR") is None
     assert team_autoimport._resolve_populator(" linear ") is None
-    assert team_autoimport._resolve_populator("jira") is not None
+    assert team_autoimport._resolve_populator("jira") is None
     assert team_autoimport._resolve_populator("github") is not None
     assert team_autoimport._resolve_populator("gitlab") is not None
 
@@ -67,7 +72,7 @@ def test_run_team_autoimport_calls_resolved_populator(monkeypatch) -> None:
     )
 
     result = team_autoimport.run_team_autoimport(
-        provider="jira",
+        provider="github",
         org_id="org-1",
         credentials={"token": "secret"},
         scope={"project_keys": ["OPS"]},
@@ -76,7 +81,7 @@ def test_run_team_autoimport_calls_resolved_populator(monkeypatch) -> None:
 
     assert result == {
         "status": "success",
-        "provider": "jira",
+        "provider": "github",
         "org_id": "org-1",
         "members_imported": 2,
     }

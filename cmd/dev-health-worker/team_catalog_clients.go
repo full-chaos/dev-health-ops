@@ -261,6 +261,9 @@ func (resolver teamCatalogClientResolver) ResolveClient(
 	case "gitlab":
 		client, err := providerfoundation.NewGitLabClient(credential, resolver.doer, resolver.retry, lease)
 		return credential, client, integrationID, err
+	case "jira":
+		client, err := providerfoundation.NewJiraClient(credential, resolver.doer, resolver.retry, lease)
+		return credential, client, integrationID, err
 	default:
 		return providerfoundation.Credential{}, nil, "", errTeamCatalogUnsupportedProvider
 	}

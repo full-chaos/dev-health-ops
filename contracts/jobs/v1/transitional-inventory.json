@@ -589,7 +589,7 @@
         "line": 524
       },
       "queue_or_cadence": "sync / sync",
-      "dispatches": "run_post_sync_team_autoimport",
+      "dispatches": "nativeTeamCatalogCollectors[provider].CollectTeamCatalog (cmd/dev-health-worker/sync_dispatch.go)",
       "dispatch_mechanism": "job_registry_descriptor",
       "owner_role": "primary",
       "target_owner": {
@@ -597,10 +597,10 @@
         "value": "sync.team_autoimport"
       },
       "target_kind_id": "kind:sync.team_autoimport",
-      "current_implementation_state": "python_compatibility",
+      "current_implementation_state": "native_go",
       "verification_status": "verified",
-      "compatibility_dependency": "HTTP compatibility bridge (internal/worker/*/v1/execute) backed by the corresponding src/dev_health_ops/api/internal/*.py runner.",
-      "deletion_evidence_requirement": "registry.json kind `sync.team_autoimport` passes Registry.ValidateStartup with a concrete non-HTTP-bridge handler, the compatibility runner import is removed from the Python API, and a non-empty baseline parity dataset matches product data (not just job status).",
+      "compatibility_dependency": "None for any import-capable provider: linear/github/gitlab/jira all resolve to a registered `nativeTeamCatalogCollectors` entry before any bridge call. `run_post_sync_team_autoimport` and the `/api/internal/worker-sync/team-autoimport` HTTP route it served are deleted outright. The Go-side `teamCatalogAutoimportBridge`/`TeamCatalogDiscoveryExecutor.Fallback` wrapper still exists and is still wired (it degrades pagerduty/launchdarkly, which are not import-capable, to a no-op) -- removing that residual dead code is left for a follow-up rather than done in this change.",
+      "deletion_evidence_requirement": "Met for the Python side: registry.json kind `sync.team_autoimport` resolves to concrete native collectors for every import-capable provider, and the compatibility runner (`run_post_sync_team_autoimport`) is removed from the Python API. Outstanding: delete the now-fully-dead `teamCatalogAutoimportBridge`/`Fallback` Go wiring and `team_autoimport_{linear,github,gitlab,jira}.py`.",
       "acceptance_test_id": "tests/workers/job_contracts/test_registry.py",
       "notes": ""
     },

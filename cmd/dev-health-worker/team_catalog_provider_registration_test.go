@@ -8,14 +8,14 @@ import (
 	"testing"
 )
 
-// TestNativeTeamCatalogCollectorsRegisterAllThreeProviders and
-// TestResolveClientSwitchReachesAllThreeProviders pin the exact wiring
-// CHAOS-4431/CHAOS-4434/CHAOS-4432 each independently added: the native
-// team-catalog collector map in sync_dispatch.go and the credential-client
-// switch in team_catalog_clients.go must both cover linear+github+gitlab,
-// with no key silently dropped by a bad rebase/merge (this pair of files
-// conflicted three times landing #1985 on top of #1989+#1984 -- see the
-// merge history).
+// TestNativeTeamCatalogCollectorsRegisterAllFourProviders and
+// TestResolveClientSwitchReachesAllFourProviders pin the exact wiring each
+// provider migration independently added: the native team-catalog collector
+// map in sync_dispatch.go and the credential-client switch in
+// team_catalog_clients.go must both cover every provider with team-catalog
+// import capability (linear+github+gitlab+jira), with no key silently
+// dropped by a bad rebase/merge (this pair of files conflicted three times
+// landing #1985 on top of #1989+#1984 -- see the merge history).
 //
 // Both nativeTeamCatalogCollectors and ResolveClient's switch require a live
 // *pgxpool.Pool / ClickHouse connection to exercise end-to-end (resolveTeam-
@@ -39,7 +39,7 @@ func parseCmdFile(t *testing.T, filename string) *ast.File {
 	return file
 }
 
-func TestNativeTeamCatalogCollectorsRegisterAllThreeProviders(t *testing.T) {
+func TestNativeTeamCatalogCollectorsRegisterAllFourProviders(t *testing.T) {
 	file := parseCmdFile(t, "sync_dispatch.go")
 
 	var keys []string
@@ -80,7 +80,7 @@ func TestNativeTeamCatalogCollectorsRegisterAllThreeProviders(t *testing.T) {
 		t.Fatal("nativeTeamCatalogCollectors literal not found in sync_dispatch.go -- did the variable get renamed?")
 	}
 	sort.Strings(keys)
-	want := []string{"github", "gitlab", "linear"}
+	want := []string{"github", "gitlab", "jira", "linear"}
 	if len(keys) != len(want) {
 		t.Fatalf("nativeTeamCatalogCollectors keys = %v, want %v", keys, want)
 	}
@@ -91,7 +91,7 @@ func TestNativeTeamCatalogCollectorsRegisterAllThreeProviders(t *testing.T) {
 	}
 }
 
-func TestResolveClientSwitchReachesAllThreeProviders(t *testing.T) {
+func TestResolveClientSwitchReachesAllFourProviders(t *testing.T) {
 	file := parseCmdFile(t, "team_catalog_clients.go")
 
 	var receiver string
@@ -134,7 +134,7 @@ func TestResolveClientSwitchReachesAllThreeProviders(t *testing.T) {
 		t.Fatal("ResolveClient's provider switch not found in team_catalog_clients.go")
 	}
 	sort.Strings(cases)
-	want := []string{"github", "gitlab", "linear"}
+	want := []string{"github", "gitlab", "jira", "linear"}
 	if len(cases) != len(want) {
 		t.Fatalf("ResolveClient switch cases = %v, want %v", cases, want)
 	}

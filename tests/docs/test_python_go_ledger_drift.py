@@ -172,21 +172,21 @@ def test_every_registry_kind_and_bridge_route_and_worker_file_has_a_curated_row(
     )
 
 
-def test_team_item_kinds_native_for_linear_github_gitlab_chaos_4492() -> None:
-    """CHAOS-4492: linear/github/gitlab team-item writes must read as Go-native.
+def test_team_item_kinds_native_for_every_provider() -> None:
+    """linear/github/gitlab/jira team-item writes must all read as Go-native.
 
-    #1989 (27bef7286, Linear), #1984 (950752653, GitHub), and #1985
-    (5bff38a5a, GitLab) merged native Go collectors for `teams` /
+    #1989 (27bef7286, Linear), #1984 (950752653, GitHub), #1985 (5bff38a5a,
+    GitLab), and jira's own native collector (`JiraTeamCatalogCollector`)
+    complete the set of native Go collectors for `teams` /
     `team_memberships` / `team_project_ownership`. The ledger's
-    `sync.team_autoimport` kind row must say so -- citing all three merge
-    SHAs -- and must no longer claim those three providers are still
-    "In Progress" ports.
+    `sync.team_autoimport` kind row must say so -- citing the three merge
+    SHAs -- and must no longer claim jira (or any provider) is still bridge.
 
     The `state` field is asserted on its own (not the whole row's aggregate
-    text), and pinned to specific per-provider clauses -- codex round 1
-    (2026-08-29) found the original substring-anywhere version would still
-    pass a swapped or partial attribution, e.g. "native for jira, bridge for
-    linear/github/gitlab" or a route that marks only jira dead.
+    text), and pinned to a specific attribution -- an earlier codex round
+    (2026-08-29) found a substring-anywhere version would still pass a
+    swapped or partial attribution, e.g. "native for jira, bridge for
+    linear/github/gitlab" or a route that marks only one provider dead.
     """
     gen = _load_gen_module()
     row = gen.KIND_LEDGER["sync.team_autoimport"]
@@ -203,55 +203,57 @@ def test_team_item_kinds_native_for_linear_github_gitlab_chaos_4492() -> None:
 
     # Pin the exact per-provider attribution in `state`, not just "some field
     # somewhere mentions the words native/linear/github/gitlab/jira".
-    assert "native for linear/github/gitlab" in state, (
-        f"sync.team_autoimport state must claim native specifically for linear/github/gitlab (got: {row.get('state')!r})"
+    assert "native for linear/github/gitlab/jira" in state, (
+        f"sync.team_autoimport state must claim native for every provider (got: {row.get('state')!r})"
     )
-    assert "bridge for jira only" in state, (
-        f"sync.team_autoimport state must claim bridge specifically for jira only (got: {row.get('state')!r})"
-    )
-    # Reject the swapped/partial attributions codex's finding named explicitly.
-    for bad_provider in ("linear", "github", "gitlab"):
-        assert f"bridge for {bad_provider}" not in state, (
-            f"sync.team_autoimport state must not claim {bad_provider} is still bridge"
+    # Reject any lingering bridge attribution for a real import-capable
+    # provider (pagerduty/launchdarkly's mechanical no-op reach is fine).
+    for provider in ("linear", "github", "gitlab", "jira"):
+        assert f"bridge for {provider}" not in state, (
+            f"sync.team_autoimport state must not claim {provider} is still bridge"
         )
-    assert "native for jira" not in state, (
-        "sync.team_autoimport state must not claim jira is native"
-    )
 
 
-def test_bridge_routes_marked_dead_after_5_6_readback_chaos_4492() -> None:
-    """CHAOS-4492: the two live bridge routes are dead for 3/4 providers, pending prod proof.
+def test_bridge_routes_marked_dead_or_deleted() -> None:
+    """The two team-autoimport bridge routes are dead (or deleted) for every provider.
 
-    `/team-autoimport` and `/reference-discovery-populate` stay live only for
-    jira until the 5.6 prod readback confirms the native linear/github/gitlab
-    routes are actually running in prod -- the ledger must say so explicitly,
-    not claim the routes are fully dead before that proof exists.
-
-    Pinned to exact per-provider clauses in `state` (see the kind-row test's
-    docstring for why substring-anywhere was insufficient -- codex round 1,
-    2026-08-29).
+    `/team-autoimport`'s Python side is deleted outright now that jira (the
+    last import-capable provider still reaching it) has its own native
+    collector. `/reference-discovery-populate` still exists but is dead for
+    every import-capable provider, pending the same 5.6 prod readback that
+    already gates linear/github/gitlab -- the ledger must say so explicitly,
+    not claim either route is still live for a real provider.
     """
     gen = _load_gen_module()
-    for route in (
-        "/api/internal/worker-sync/team-autoimport",
-        "/api/internal/worker-sync/reference-discovery-populate",
-    ):
-        row = gen.BRIDGE_ROUTE_LEDGER[route]
-        state = row.get("state", "").lower()
-        assert "live for jira" in state, (
-            f"{route} state must claim live specifically for jira (got: {row.get('state')!r})"
+    populate_row = gen.BRIDGE_ROUTE_LEDGER["/api/internal/worker-sync/reference-discovery-populate"]
+    populate_state = populate_row.get("state", "").lower()
+    assert "dead for every import-capable provider" in populate_state, (
+        "reference-discovery-populate state must claim dead for every import-capable provider "
+        f"(got: {populate_row.get('state')!r})"
+    )
+    assert "5.6" in populate_state, (
+        f"reference-discovery-populate state must cite the 5.6 readback gate (got: {populate_row.get('state')!r})"
+    )
+    for provider in ("linear", "github", "gitlab", "jira"):
+        assert f"live for {provider}" not in populate_state, (
+            f"reference-discovery-populate state must not claim {provider} is still live"
         )
-        assert "dead for linear/github/gitlab" in state, (
-            f"{route} state must claim dead specifically for linear/github/gitlab (got: {row.get('state')!r})"
+
+    team_autoimport_row = gen.BRIDGE_ROUTE_LEDGER["/api/internal/worker-sync/team-autoimport"]
+    team_autoimport_state = team_autoimport_row.get("state", "").lower()
+    assert "dead" in team_autoimport_state, (
+        f"team-autoimport route state must claim dead (got: {team_autoimport_row.get('state')!r})"
+    )
+    assert "deleted" in team_autoimport_state, (
+        f"team-autoimport route state must say the Python route is deleted (got: {team_autoimport_row.get('state')!r})"
+    )
+    for provider in ("linear", "github", "gitlab", "jira"):
+        assert f"live for {provider}" not in team_autoimport_state, (
+            f"team-autoimport route state must not claim {provider} is still live"
         )
-        assert "5.6" in state, (
-            f"{route} state must cite the 5.6 readback gate (got: {row.get('state')!r})"
-        )
-        # Reject the swapped attributions codex's finding named explicitly.
-        assert "dead for jira" not in state, (
-            f"{route} state must not claim jira is dead"
-        )
-        for bad_provider in ("linear", "github", "gitlab"):
-            assert f"live for {bad_provider}" not in state, (
-                f"{route} state must not claim {bad_provider} is still live"
-            )
+    assert (
+        team_autoimport_row.get("python_handler", "").upper().startswith("DELETED")
+    ), (
+        "team-autoimport route's python_handler must say DELETED "
+        f"(got: {team_autoimport_row.get('python_handler')!r})"
+    )

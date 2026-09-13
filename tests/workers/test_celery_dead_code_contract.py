@@ -98,20 +98,27 @@ _DEAD_TASK_NAMES = (
     # its two re-export sites (tasks.py, system_tasks.py). Unlike the other
     # PR2b decorator strips below, this one is a full deletion, not a
     # decorator-only removal -- see test_dead_code_contract's own comment
-    # for phone_home_heartbeat/run_post_sync_team_autoimport, which keep
-    # their function bodies and stay live via HTTP compatibility bridges.
+    # for phone_home_heartbeat, which keeps its function body and stays
+    # live via an HTTP compatibility bridge.
     "health_check",
+    # run_post_sync_team_autoimport (team_autoimport.py) lost its
+    # `@celery_app.task` decorator in the same PR2b pass as phone_home_
+    # heartbeat below, staying live behind the /team-autoimport HTTP
+    # bridge -- and was later deleted outright, decorator-stripped body and
+    # all, once jira (the last provider still routed through it) got its
+    # own native Go collector and that bridge route had no remaining
+    # caller. Unlike phone_home_heartbeat, it belongs here now: fully
+    # absent from tasks.__all__, not just un-decorated.
+    "run_post_sync_team_autoimport",
 )
 
-# CHAOS-3093 (PR2b): phone_home_heartbeat (system_ops.py) and
-# run_post_sync_team_autoimport (team_autoimport.py) had their
-# `@celery_app.task` decorators dropped -- Celery has had zero consumers
+# CHAOS-3093 (PR2b): phone_home_heartbeat (system_ops.py) had its
+# `@celery_app.task` decorator dropped -- Celery has had zero consumers
 # since CHAOS-4026, so the decorator was dead weight around code that is
-# still genuinely needed: both remain the live compute body behind an HTTP
-# compatibility bridge (api/internal/worker_operational.py's /heartbeat,
-# api/internal/worker_sync.py's /team-autoimport), called directly now
-# instead of via `.run()`. They are deliberately NOT added to
-# _DEAD_TASK_NAMES above -- that set asserts absence from
+# still genuinely needed: it remains the live compute body behind an HTTP
+# compatibility bridge (api/internal/worker_operational.py's /heartbeat),
+# called directly now instead of via `.run()`. It is deliberately NOT added
+# to _DEAD_TASK_NAMES above -- that set asserts absence from
 # `tasks.__all__`/the registered celery app, and both functions correctly
 # stay present in `tasks.__all__` (just no longer celery-registered).
 
@@ -225,18 +232,19 @@ def test_dead_task_names_are_absent_from_tasks_module_exports() -> None:
 def test_decorator_stripped_tasks_are_plain_functions_still_exported() -> None:
     """PR2b's decorator strips: live, but no longer celery-registered.
 
-    phone_home_heartbeat and run_post_sync_team_autoimport keep their
-    compute bodies (still genuinely needed behind an HTTP compatibility
-    bridge) but lost their `@celery_app.task` decorator -- a re-added
-    decorator on either fails this test. They are deliberately NOT in
-    _DEAD_TASK_NAMES above: that set asserts absence from tasks.__all__,
-    and both correctly stay exported there.
+    phone_home_heartbeat keeps its compute body (still genuinely needed
+    behind an HTTP compatibility bridge) but lost its `@celery_app.task`
+    decorator -- a re-added decorator fails this test. It is deliberately
+    NOT in _DEAD_TASK_NAMES above: that set asserts absence from
+    tasks.__all__, and it correctly stays exported there. (Its PR2b sibling
+    run_post_sync_team_autoimport underwent the same decorator strip, but
+    has since been deleted outright -- see _DEAD_TASK_NAMES's entry for it.)
     """
     from dev_health_ops.workers import tasks
 
     app = _celery_app()
     registered = set(app.tasks)
-    for name in ("phone_home_heartbeat", "run_post_sync_team_autoimport"):
+    for name in ("phone_home_heartbeat",):
         assert name in tasks.__all__, (
             f"{name!r} unexpectedly missing from tasks.__all__"
         )

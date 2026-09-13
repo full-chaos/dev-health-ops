@@ -579,6 +579,19 @@ func buildSyncCoordinatorWorker(
 				Conn: clickhouseConnection, Lease: teamCatalogLease{},
 			},
 		},
+		// Jira teams/team_project_ownership/team_memberships/sprints +
+		// native projects catalog, Go-native: a Jira project IS the team
+		// unit (no separate team concept), its lead is the only discovered
+		// member, and board/sprint reference discovery mirrors Linear's
+		// cycles. Closes out CHAOS-4431's provider set -- every provider
+		// team_provider_capabilities() lists now has a native collector, so
+		// the Python bridge's TeamAutoImport is unreachable for all of them.
+		"jira": providersync.JiraTeamCatalogCollector{
+			Handler: providersync.JiraTeamCatalogRouteHandler{},
+			Sink: providersync.JiraTeamCatalogClickHouseEffects{
+				Conn: clickhouseConnection, Lease: teamCatalogLease{},
+			},
+		},
 	}
 	teamCatalogClients := teamCatalogClientResolver{
 		pool: postgresDatabase.pools.Domain,

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import importlib
 import logging
-import uuid
 from collections.abc import Callable, Mapping
 from typing import Any, cast
 
@@ -77,7 +76,16 @@ _IMPORTER_MODULES = {
 # shared layer -- _resolve_populator itself -- so no current or future
 # caller, of this function or of run_team_autoimport(_strict), can ever
 # resolve the Linear writer again.
-_GO_NATIVE_PROVIDERS = frozenset({"linear"})
+#
+# jira joined this set once its own Go collector (JiraTeamCatalogCollector,
+# registered in nativeTeamCatalogCollectors) went live -- the same
+# structural argument applies verbatim, with jira substituted for linear
+# throughout. It was the last provider team_provider_capabilities() lists
+# still resolving a Python populator module here, so every path this
+# function's docstring enumerates is now refused for every provider: the
+# HTTP bridge routes above are unreachable for team-autoimport regardless of
+# which provider a caller names.
+_GO_NATIVE_PROVIDERS = frozenset({"linear", "jira"})
 
 TeamAutoimportPopulator = Callable[..., dict[str, Any]]
 
@@ -357,163 +365,4 @@ def run_team_autoimport_strict(
         "provider": normalized_provider,
         "org_id": org_id,
         **dict(summary),
-    }
-
-
-def run_post_sync_team_autoimport(sync_run_id: str) -> dict[str, Any]:
-    """Refresh team/project/member attribution after a successful sync run.
-
-    Restores the legacy post-sync team auto-import (CHAOS-2647) on the unitized
-    fan-out path. The post-sync relay dispatches this once per terminal SyncRun
-    when the run's canonical config has ``auto_import_teams`` enabled. Credentials
-    are resolved via :func:`resolve_run_auth` — the SAME run-stamped auth context
-    the unit workers used (CHAOS-2755) — so auto-import authenticates identically
-    to the sync that just completed even if ``Integration.credential_id`` was
-    repointed mid-run (and never the legacy ``SyncConfiguration.credential_id``
-    row, which can drift). Best-effort and non-fatal: :func:`run_team_autoimport` capability-
-    gates providers and swallows populator exceptions, so a failure here never
-    fails the sync.
-    """
-    from dev_health_ops.db import get_postgres_session_sync
-    from dev_health_ops.models import (
-        Integration,
-        SyncRun,
-        SyncRunStatus,
-    )
-    from dev_health_ops.sync.trigger_routing import (
-        canonical_sync_config_for_sync_run,
-    )
-    from dev_health_ops.workers.sync_bootstrap import resolve_run_auth
-    from dev_health_ops.workers.task_utils import (
-        _get_db_url,
-    )
-
-    run_uuid = uuid.UUID(str(sync_run_id))
-    with get_postgres_session_sync() as session:
-        run = session.query(SyncRun).filter(SyncRun.id == run_uuid).one_or_none()
-        if run is None:
-            return {
-                "status": "skipped",
-                "reason": "run_not_found",
-                "sync_run_id": sync_run_id,
-            }
-        # Gate on SUCCESS: the relay only dispatches once per terminal run, but a
-        # partial/failed run can still have some successful units; team auto-import
-        # must only run for a fully successful sync (mirrors the legacy path, which
-        # ran it only on the success branch).
-        if run.status != SyncRunStatus.SUCCESS.value:
-            return {
-                "status": "skipped",
-                "reason": "run_not_successful",
-                "sync_run_id": sync_run_id,
-                "run_status": str(run.status),
-            }
-
-        config = canonical_sync_config_for_sync_run(session, run)
-        if config is None:
-            return {
-                "status": "skipped",
-                "reason": "no_canonical_config",
-                "sync_run_id": sync_run_id,
-            }
-        sync_options = dict(config.sync_options or {})
-        if not any(import_categories_from_sync_options(sync_options).values()):
-            return {
-                "status": "skipped",
-                "reason": "auto_import_disabled",
-                "sync_run_id": sync_run_id,
-            }
-
-        provider = str(config.provider or "").strip().lower()
-        org_id = str(run.org_id)
-        sync_targets = [str(t) for t in (config.sync_targets or [])]
-        config_id = str(config.id)
-        triggered_by = str(run.triggered_by)
-
-        integration = (
-            session.query(Integration)
-            .filter(
-                Integration.id == run.integration_id,
-                Integration.org_id == org_id,
-            )
-            .one_or_none()
-        )
-        if integration is None:
-            # Mirror the unit workers (SyncTaskBootstrap.load treats a missing
-            # integration as an error): skip rather than silently authenticating
-            # with env credentials that may not match the synced integration.
-            return {
-                "status": "skipped",
-                "reason": "integration_not_found",
-                "sync_run_id": sync_run_id,
-            }
-        # CHAOS-2755: resolve via the run-stamped auth context (resolve_run_auth)
-        # so a mid-run credential repoint cannot make post-sync attribution use a
-        # different credential than the units that produced the synced data.
-        # Best-effort contract preserved: resolution failures (stamped credential
-        # deleted, strict fingerprint mismatch) skip rather than fail the task.
-        try:
-            _credential_id, credentials = resolve_run_auth(
-                session,
-                run=run,
-                integration=integration,
-                provider=provider,
-                error_label=f"team_autoimport run: {sync_run_id}",
-            )
-        except Exception as exc:
-            return {
-                "status": "skipped",
-                "reason": "credential_resolution_failed",
-                "detail": str(exc),
-                "sync_run_id": sync_run_id,
-            }
-
-    summary = run_team_autoimport(
-        provider=provider,
-        org_id=org_id,
-        credentials=credentials,
-        scope={
-            "mode": "sync_config",
-            "sync_config_id": config_id,
-            "sync_targets": sync_targets,
-            "sync_options": sync_options,
-            "triggered_by": triggered_by,
-            # CHAOS-4323 round-3-follow-up (codex adversarial-review,
-            # MEDIUM): if a LATER write in the same populate() call raises
-            # after roster_write_safe was already set False, the exception
-            # propagates through run_team_autoimport's except-block and the
-            # returned summary never carries roster_preservation_failed --
-            # the WARNING below would never fire. Threading sync_run_id
-            # into scope lets the per-populator warning (which fires
-            # synchronously, unconditionally, at the moment the read fails
-            # -- see _existing_team_members) carry the SAME diagnostic
-            # context, so the compound-failure case is never silent even
-            # when this task-level warning is.
-            "sync_run_id": sync_run_id,
-        },
-        analytics_db_url=_get_db_url(),
-    )
-    # CHAOS-4323 (team-lead 08-26): run_team_autoimport still returns
-    # status=success on a roster-preservation-read failure -- correct, since
-    # the write was safely skipped rather than corrupting data, but that
-    # also means a degraded run is otherwise indistinguishable from a clean
-    # one. The counter (record_team_autoimport_roster_preservation_failed,
-    # incremented at the point of failure inside each populator) is the
-    # metric signal; this WARNING is the log signal for the same event,
-    # surfaced at the one place every sync run's outcome is already logged.
-    if summary.get("roster_preservation_failed"):
-        logger.warning(
-            "Team auto-import for org_id=%s provider=%s could not confirm "
-            "the existing team roster and skipped the team-dimension write "
-            "for sync_run_id=%s -- team name/description/repo_patterns are "
-            "stale for this org until a later run succeeds",
-            org_id,
-            provider,
-            sync_run_id,
-        )
-    return {
-        "status": "dispatched",
-        "sync_run_id": sync_run_id,
-        "provider": provider,
-        "team_autoimport": summary,
     }

@@ -26,7 +26,7 @@ def test_api_liveness_is_process_only_while_readiness_checks_dependencies() -> N
     assert container["readinessProbe"]["httpGet"]["path"] == "/health"
 
 
-def test_query_api_deployment_exposes_a_named_metrics_port() -> None:
+def test_query_api_deployment_ports_are_unique_per_port_and_protocol() -> None:
     chart_path = Path(__file__).parents[1] / "deploy/helm/dev-health"
     rendered = run(
         [
@@ -47,13 +47,11 @@ def test_query_api_deployment_exposes_a_named_metrics_port() -> None:
     deployment = next(doc for doc in documents if doc["kind"] == "Deployment")
     container = deployment["spec"]["template"]["spec"]["containers"][0]
 
-    ports_by_name = {port["name"]: port for port in container["ports"]}
-    assert "metrics" in ports_by_name, (
-        "query-api container must carry a port named `metrics` (the same "
-        "convention go-workers.yaml uses) so pod-based Prometheus discovery "
-        "finds its /metrics route"
+    ports = container["ports"]
+    keys = [(port["containerPort"], port.get("protocol", "TCP")) for port in ports]
+    assert len(keys) == len(set(keys)), (
+        "query-api container ports must be unique on (containerPort, protocol): "
+        "server-side apply keys the ports list on that pair and rejects a "
+        "duplicate, so /metrics is scraped through the `http` port"
     )
-    assert (
-        ports_by_name["metrics"]["containerPort"]
-        == ports_by_name["http"]["containerPort"]
-    )
+    assert [port["name"] for port in ports] == ["http"]

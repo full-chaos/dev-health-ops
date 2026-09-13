@@ -199,12 +199,13 @@ Userlist exposure and pooler convergence move to CHAOS-5604 scope. For now, dire
 ## Known limitations
 
 - **`/query/proof` cannot mount on prod** (Trap #163). `GO_API_PROOF_ROUTE_ENABLED` gates on a non-production `DEV_HEALTH_ENV`; prod never sets it. Real proof runs use `-proof-url=""` (empty).
-- **Tools Pod image** (`dev-health-go-api-tools`) lacks the `go-worker` image's sync-dispatch contracts. Use only the tools image, not go-worker, for one-off `go-api-prove` and corrective `go-api-routing` runs.
+- **Tools Pod image** (`dev-health-go-api-tools`) lacks the `go-worker` image's sync-dispatch contracts. Use only the tools image, not go-worker, for one-off `go-api-prove` and corrective `go-api-routing` runs. It has no envelope-minting helper baked in — see [Tools pod (operator image)](../../contribute/architecture/go-api-wave-0-proof-infrastructure.md#tools-pod-operator-image) for the `kubectl run` form and what is (and is not) on the image.
 - **Shadow set never lands on prod**. The 3 operations that `disable -mode python` skipped are disabled by design (CHAOS-5606 note: enabling would surface unproven operations to traffic before baseline is established).
 
 ## See also
 
 - [Operator commands § Workerctl on Kubernetes](operator-commands.md#workerctl-on-kubernetes-trap-169-amended) — running corrective verbs from a one-off Pod.
+- [Go API Wave 0 § Tools pod (operator image)](../../contribute/architecture/go-api-wave-0-proof-infrastructure.md#tools-pod-operator-image) — what the tools image carries and the `kubectl run` form for it.
 - [Prod k3s operate](prod-k3s-deploy-and-operate.md) — restore procedures, secrets, rollouts.
 - CHAOS-5606 — Query-api bootstrap epic (JOB 7).
 - CHAOS-5604 — Chart and pooler convergence (pooler exposures, CPU limits, future DSN form).

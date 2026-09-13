@@ -583,6 +583,46 @@ appear here.
 | `sha256:29d509cd414cd957a7bcd73a1c0e78a07f17dd8a8794893233954aaa87241b88` | 2026-09-01 | `33b3f3f21d` (#2065, widen `TimeseriesBucket.value` nullability) | superseded |
 | `sha256:19485ec136d04de0935717dca8b4f5fd27dd0351fe96b854d40f433229468fd0` | 2026-09-11 | declaring the coverage split's three nullable fields on the Strawberry type, which regenerates this SDL | Current. Every routing row written at the digest above stops matching the moment this lands: rebuild and deploy query-api from this SDL FIRST, then re-enable, per the recovery procedure above. |
 
+## Tools pod (operator image)
+
+`ghcr.io/full-chaos/dev-health-go-api-tools` (`docker/go-api-tools.Dockerfile`)
+carries `go-api-routing` and `go-api-prove` on `PATH`, the registrydump
+documents dump generated from the SAME commit at build time
+(`/app/go-api/documents.json`), and the checked-in operation catalog at its
+`DefaultCatalogPath` relative to the image's working directory
+(`/app/go-api/src/dev_health_ops/api/graphql/go_api_operations.json`) --
+`go-api-routing`'s `-catalog` flag needs no override when run from there.
+
+The runtime base is a small Debian, not distroless: this image doubles as
+the operator's one-off Pod for running both binaries by hand, and a
+distroless runtime has no shell to `kubectl exec` into. The image sets no
+`ENTRYPOINT` and defaults `CMD` to `sleep infinity`, so a plain
+`kubectl run` keeps the Pod alive and a command after `--` replaces `CMD`
+outright instead of trailing a fixed entrypoint binary:
+
+```bash
+kubectl run dev-health-go-api-tools-oneoff \
+  --image=ghcr.io/full-chaos/dev-health-go-api-tools:sha-<COMMIT> \
+  --restart=Never
+
+kubectl exec dev-health-go-api-tools-oneoff -- \
+  go-api-routing status -registry-url http://query-api:8090/registry
+
+kubectl exec dev-health-go-api-tools-oneoff -- \
+  go-api-prove -documents /app/go-api/documents.json -org <org> \
+  -recorded-by <who> -review-evidence '<why>' -artifact-dir /tmp/proof
+
+kubectl delete pod dev-health-go-api-tools-oneoff
+```
+
+The image carries no envelope-minting helper for `go-api-prove`'s
+`-proof-bearer-exec`: minting the effective-principal envelope calls into
+the Python edge's `principal_envelope.issue_effective_principal_envelope`,
+which needs the signing key that only the Python edge holds, and this repo
+checks in no standalone script that wraps it. Point `-proof-bearer-exec`
+at whatever helper the deploy repo provides for that, or supply a
+pre-minted `GO_API_ROUTING_BEARER` for `go-api-routing`.
+
 ## Float comparison: engine nondeterminism and the Tier-B rule
 
 ClickHouse merges partial aggregate states in thread-completion order and

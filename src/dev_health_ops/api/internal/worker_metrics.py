@@ -20,7 +20,7 @@ import sys
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date
 from time import monotonic as _monotonic
 from typing import Annotated, Any, Literal
 
@@ -35,7 +35,6 @@ from dev_health_ops.api.internal.worker_auth import (
     authorize_metric_repair,
     authorize_worker_bridge,
 )
-from dev_health_ops.db import require_clickhouse_uri
 from dev_health_ops.metrics.prometheus import (
     DEV_HEALTH_METRIC_COMPAT_CAPACITY_WAIT_EXHAUSTED_TOTAL,
     DEV_HEALTH_METRIC_COMPAT_EXECUTION_DURATION_SECONDS,
@@ -48,10 +47,7 @@ from dev_health_ops.metrics.prometheus import (
     DEV_HEALTH_METRIC_COMPAT_RUNNER_RSS_BYTES,
     DEV_HEALTH_METRIC_COMPAT_RUNNER_SLOTS_IN_USE,
 )
-from dev_health_ops.metrics.remaining_scope_contract import (
-    RecommendationsScope,
-    parse_scope,
-)
+from dev_health_ops.metrics.remaining_scope_contract import parse_scope
 
 logger = logging.getLogger(__name__)
 
@@ -1485,37 +1481,8 @@ async def _mark_succeeded(
     )
 
 
-async def _run_recommendations(
-    execution: _Execution, scope: RecommendationsScope
-) -> dict[str, Any]:
-    from dev_health_ops.workers.recommendations_tasks import (
-        _compute_recommendations_for_org,
-    )
-
-    if scope.as_of:
-        as_of_day = date.fromisoformat(scope.as_of)
-        now = datetime.combine(
-            as_of_day + timedelta(days=1), time.min, tzinfo=timezone.utc
-        )
-    else:
-        now = datetime.now(timezone.utc)
-        as_of_day = now.date()
-    fired = await run_in_threadpool(
-        _compute_recommendations_for_org,
-        org_id=execution.organization_id,
-        db_url=require_clickhouse_uri(),
-        window=scope.window,
-        now=now,
-        as_of_day=as_of_day,
-        team_id=scope.team_id,
-    )
-    return {"family": execution.family, "fired": fired}
-
-
 _RemainingRunner = Callable[[_Execution, Any], Awaitable[dict[str, Any]]]
-_REMAINING_RUNNERS: dict[str, _RemainingRunner] = {
-    "recommendations": _run_recommendations,
-}
+_REMAINING_RUNNERS: dict[str, _RemainingRunner] = {}
 
 
 async def _run_remaining_direct(execution: _Execution) -> dict[str, Any]:
@@ -2237,18 +2204,17 @@ async def _run_until_client_disconnect(
 # naming the inline compute sites that already cover every table they would
 # have written.
 #
-# recommendations is ALSO a deliberate omission (CHAOS-4243 codex round 3):
-# _compute_recommendations_for_org's docstring is explicit that its int
-# return is "the number of *fired* recommendations written (tombstones
-# excluded)" -- the function persists the FULL rule state per team, fired
-# rows AND explicit fired=False tombstones, so a run can write many rows
-# while `fired` reads 0. Mapping "fired" here would report a misleading
-# rows_written (a wrong non-zero-looking-like-zero case), which is worse
-# than reporting none at all. Fixing this properly needs
-# _compute_recommendations_for_org to return the true persisted count
-# (len(records)) alongside fired_count -- a signature change with several
-# existing test call sites (tests/test_recommendations_task.py), deferred
-# as a separate, larger change.
+# recommendations is gone from _REMAINING_RUNNERS entirely too: its native
+# Go executor has no Python fallback, so its old deliberate-omission entry
+# here (the "fired" count undercounts the true persisted row total) is moot
+# rather than fixed. _compute_recommendations_for_org itself is unchanged --
+# see tests/test_recommendations_task.py for its retained direct coverage.
+# membership_backfill is gone from _REMAINING_RUNNERS entirely too: its
+# native Go executor has no Python fallback either, so its old
+# "memberships_written" entry here is moot rather than fixed --
+# backfill_memberships itself survives, but only as the live-parity oracle
+# the Go executor is checked against, never as a runtime path an execution
+# reaches.
 _EVIDENCE_ROW_COUNT_KEYS: dict[str, str] = {}
 
 

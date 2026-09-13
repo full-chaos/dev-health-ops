@@ -405,12 +405,12 @@
         "value": "metrics.remaining.recommendations"
       },
       "target_kind_id": "kind:metrics.remaining.recommendations",
-      "current_implementation_state": "python_compatibility",
+      "current_implementation_state": "native_go",
       "verification_status": "verified",
-      "compatibility_dependency": "HTTP compatibility bridge (internal/worker/*/v1/execute) backed by the corresponding src/dev_health_ops/api/internal/*.py runner.",
-      "deletion_evidence_requirement": "registry.json kind `metrics.remaining.recommendations` passes Registry.ValidateStartup with a concrete non-HTTP-bridge handler, the compatibility runner import is removed from the Python API, and a non-empty baseline parity dataset matches product data (not just job status).",
+      "compatibility_dependency": "None. The native RecommendationsExecutor (internal/jobs/metrics/remaining/recommendations_native.go) has no Python fallback in daily.go's worker registration. worker_metrics.py's `_run_recommendations` HTTP compatibility handler and its `_REMAINING_RUNNERS` dispatch entry are deleted -- verified unreachable from any live wiring (`/remaining-metrics/v1/execute` had zero non-test Go or Python callers). `_compute_recommendations_for_org` (workers/recommendations_tasks.py) is retained: tests/test_recommendations_task.py directly unit-tests it as the RuleEngine compute path, an unrelated non-job caller.",
+      "deletion_evidence_requirement": "Satisfied. registry.json kind `metrics.remaining.recommendations` resolves to a concrete non-HTTP-bridge handler (RecommendationsExecutor, daily.go); the compatibility runner import and its `_REMAINING_RUNNERS` entry are removed from the Python API.",
       "acceptance_test_id": "tests/workers/job_contracts/test_registry.py",
-      "notes": ""
+      "notes": "CORRECTION: this row previously read python_compatibility / dispatches=run_recommendations_job, stale since this family was ported to native Go with no Python fallback registered. Verified and corrected; see compatibility_dependency for the reachability evidence."
     },
     {
       "id": "registry_kind:contracts/jobs/v1/registry.json:300",
@@ -717,12 +717,12 @@
         "value": "workgraph.build"
       },
       "target_kind_id": "kind:workgraph.build",
-      "current_implementation_state": "python_compatibility",
+      "current_implementation_state": "native_go",
       "verification_status": "verified",
-      "compatibility_dependency": "HTTP compatibility bridge (internal/worker/*/v1/execute) backed by the corresponding src/dev_health_ops/api/internal/*.py runner.",
-      "deletion_evidence_requirement": "registry.json kind `workgraph.build` passes Registry.ValidateStartup with a concrete non-HTTP-bridge handler, the compatibility runner import is removed from the Python API, and a non-empty baseline parity dataset matches product data (not just job status).",
+      "compatibility_dependency": "None. buildHandler (internal/jobs/workgraph/handler.go) takes no executor argument at all -- the absence of a bridge is structural (a compile-time fact), not a runtime nil-check. worker_workgraph.py's POST /execute route, its request/scope model, and its subprocess runner were already deleted outright, since Python's remaining WorkGraphBuilder.build() (work_graph/builder.py) was already a 0-stats no-op before the cutover; that file is deleted too. Only the unrelated operator escape hatch, POST .../executions/{id}/repair (an ambiguous native-executor outcome), remains in worker_workgraph.py.",
+      "deletion_evidence_requirement": "Satisfied. registry.json kind `workgraph.build` resolves to a concrete non-HTTP-bridge handler (buildHandler); no compatibility runner import exists in the Python API to remove.",
       "acceptance_test_id": "tests/workers/job_contracts/test_registry.py",
-      "notes": ""
+      "notes": "CORRECTION: this row previously read python_compatibility, stale since this kind's HTTP bridge and its Python compute body were both already deleted outright with no fallback left to describe."
     },
     {
       "id": "stream_surface:src/dev_health_ops/api/ingest/streams.py:15",

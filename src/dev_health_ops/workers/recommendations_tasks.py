@@ -441,11 +441,11 @@ def _compute_recommendations_for_org(
         sink.close()
 
 
-# CHAOS-4026 (2026-08-21): the beat-scheduled ``run_recommendations_job``
-# Celery task (and its ``_discover_active_org_ids`` all-org fan-out) were
-# deleted -- Go's `recommendations_daily` fixed schedule now owns the
-# periodic cadence and Celery Beat has not scheduled this since the
-# 2026-08-19 stop. ``_compute_recommendations_for_org`` above stays: it is
-# still the live, per-org compute invoked synchronously by the dormant-Go
-# operational bridge (api/internal/worker_metrics.py::_run_recommendations),
-# and by nothing beat-shaped any more.
+# The beat-scheduled ``run_recommendations_job`` Celery task (and its
+# ``_discover_active_org_ids`` all-org fan-out) are deleted -- Go's
+# `recommendations_daily` fixed schedule owns the periodic cadence, and
+# Celery Beat has not scheduled anything here in a long time.
+# ``_compute_recommendations_for_org`` above stays: the worker_metrics.py
+# HTTP bridge handler that used to call it (the family's Go executor has no
+# Python fallback) is gone too, so this module's own direct unit tests
+# (tests/test_recommendations_task.py) are its only remaining caller.

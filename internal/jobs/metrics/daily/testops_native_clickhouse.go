@@ -17,17 +17,20 @@ import (
 //
 // # Why these are not the loaders next door
 //
-// testops_risk_native_clickhouse.go already has loadTestopsPipelineRuns /
-// loadTestopsSuiteAndCaseRows / loadTestopsCoverageSnapshots, and CHAOS-4294
-// wrote them for its own in-process recompute. They are deliberately NOT
-// reused here, for one reason: they materialise every source row and bound
-// that materialisation with a 200k hard cap
-// (DEV_HEALTH_TESTOPS_LOADER_MAX_ROWS, errTestopsRowCapExceeded), which is a
-// faithful port of the Python loader -- including the exact failure this
-// ticket exists to remove. On repo 920f9442 the Python side hit that cap on
-// test_case_results and raised TestopsRowCapExceeded (a MemoryError
-// subclass), which worker_metrics_runner classifies as resource_exhausted,
-// freezing the allocation chain downstream.
+// testops_risk_native_clickhouse.go has loadTestopsPipelineRuns /
+// loadTestopsSuiteAndCaseRows / loadTestopsCoverageSnapshots, which
+// materialise every source row into a slice. They are kept there purely as
+// the raw, row-at-a-time reference reader the pushdown-vs-raw differential
+// test (testops_native_integration_test.go) compares the readers below
+// against -- neither TestopsRiskExecutor nor the testops_pipeline /
+// testops_test / testops_coverage families read through them any more. On
+// repo 920f9442 a Python loader with this same row-materialising shape hit
+// its 200k-row cap on test_case_results and raised TestopsRowCapExceeded (a
+// MemoryError subclass), which worker_metrics_runner classified as
+// resource_exhausted, freezing the allocation chain downstream -- the
+// original motivation for reducing test_case_results inside ClickHouse
+// instead of reading it row by row, in both the pushdown and the raw
+// readers.
 //
 // The readers below have NO cap because they never need one:
 //

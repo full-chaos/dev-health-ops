@@ -124,29 +124,50 @@ func (executor *TestopsRiskExecutor) ComputeFamily(
 	for _, repoID := range repoIDs {
 		repoName := repoID.String()
 
-		pipelineRuns, err := loadTestopsPipelineRuns(ctx, executor.conn, run.OrganizationID, repoID, start, end)
-		if err != nil {
+		// Stream straight into the same accumulators the sibling
+		// testops_pipeline/testops_test native families use
+		// (testops_native_clickhouse.go), instead of materialising a whole
+		// day's ci_pipeline_runs/test_suite_results/test_case_results into
+		// slices first. test_case_results is reduced to one row per
+		// case_name INSIDE ClickHouse (loadNativeTestopsCaseGroups) -- the
+		// allocation choke a large CI day used to hit here -- so this path
+		// carries no row cap.
+		pipelineAccumulator := testops.NewPipelineAccumulator(repoID, repoName, repoResolver)
+		if err := loadNativeTestopsPipelineRuns(
+			ctx, executor.conn, pipelineAccumulator, run.OrganizationID, repoID, start, end,
+		); err != nil {
 			return 0, err
 		}
-		pipelineMetrics := testops.ComputePipelineMetrics(repoID, pipelineRuns, repoName, repoResolver)
+		pipelineMetrics := pipelineAccumulator.Finish()
 
-		suites, cases, err := loadTestopsSuiteAndCaseRows(ctx, executor.conn, run.OrganizationID, repoID, start, end)
-		if err != nil {
+		testAccumulator := testops.NewTestAccumulator(repoID, repoName, repoResolver)
+		if err := loadNativeTestopsSuites(
+			ctx, executor.conn, testAccumulator, run.OrganizationID, repoID, start, end,
+		); err != nil {
 			return 0, err
 		}
-		historicalFailedNames, err := loadHistoricalFailedCaseNames(
+		if err := loadNativeTestopsCaseGroups(
+			ctx, executor.conn, testAccumulator, run.OrganizationID, repoID, start, end,
+		); err != nil {
+			return 0, err
+		}
+		historicalFailedNames, err := loadNativeHistoricalFailedCaseNames(
 			ctx, executor.conn, run.OrganizationID, repoID, historyStart, start, end,
 		)
 		if err != nil {
 			return 0, err
 		}
-		testMetrics := testops.ComputeTestMetrics(repoID, suites, cases, historicalFailedNames, repoName, repoResolver)
+		testMetrics := testAccumulator.Finish(historicalFailedNames)
 
-		coverageRows, err := loadTestopsCoverageSnapshots(ctx, executor.conn, run.OrganizationID, repoID, start, end)
+		// coverage_snapshots per repo/day is small (a handful of rows), so
+		// the single-row-per-window pushdown reduction below is a
+		// simplification, not a memory fix -- but reusing it avoids a second
+		// copy of the same "latest by (run_id, snapshot_id)" query.
+		coverageRows, err := loadNativeTestopsLatestCoverage(ctx, executor.conn, run.OrganizationID, repoID, start, end)
 		if err != nil {
 			return 0, err
 		}
-		priorCoverageRows, err := loadTestopsCoverageSnapshots(ctx, executor.conn, run.OrganizationID, repoID, priorCoverageStart, start)
+		priorCoverageRows, err := loadNativeTestopsLatestCoverage(ctx, executor.conn, run.OrganizationID, repoID, priorCoverageStart, start)
 		if err != nil {
 			return 0, err
 		}

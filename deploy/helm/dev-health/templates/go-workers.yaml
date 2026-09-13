@@ -57,6 +57,19 @@ spec:
       dev-health.io/worker-group: {{ $group.name }}
   template:
     metadata:
+      annotations:
+        {{- /*
+        Every group here envFrom's the shared ConfigMap and Secret (below),
+        same as api-deployment.yaml/billing-edge-deployment.yaml -- without
+        this, a config-only revision (a ConfigMap/Secret key edit, no image
+        or arg change) never rolls these pods, since envFrom doesn't trigger
+        a rollout on its own. Same include/sha256sum pattern as those two
+        templates, so a config or secret change gives all nine groups a new
+        pod-template hash and a rollout, and an unrelated change leaves them
+        untouched.
+        */}}
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") $ | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") $ | sha256sum }}
       labels:
         {{- include "dev-health.componentSelectorLabels" (dict "component" "go-worker" "context" $) | nindent 8 }}
         dev-health.io/worker-group: {{ $group.name }}

@@ -536,7 +536,7 @@ func preclaimReadinessSleep(ctx context.Context, wait time.Duration) {
 // process is restarted -- and the readiness detail that would explain why is
 // only reachable on the operator HTTP surface, which this process never
 // lives long enough to serve. Without this line the whole crash loop reports
-// nothing but the shell's "runtime_failure" category (CHAOS-3902).
+// nothing but the shell's generic "runtime_failure" category.
 //
 // Check names are bounded compile-time constants registered by this package,
 // and Registry.CheckRequired returns names only -- never a dependency error

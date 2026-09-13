@@ -39,28 +39,35 @@ type claimLiveness struct {
 	// selfprobe.Monitor.SetStaleness) instead of sleeping out the full
 	// window.
 	staleWindow time.Duration
+	// preclaim is true from construction until markRuntimeLive reports that
+	// preclaim readiness has actually passed. While true, claimLivenessReady
+	// must not fail a queue on backlog-with-no-recent-claim alone: no claim
+	// can possibly exist yet, by construction of the startup order itself
+	// (preclaimReadinessComponent runs strictly before workerProcessComponent
+	// ever starts River's producers), no matter how long preclaim's own
+	// retry loop has been running against an unrelated slow dependency. The
+	// zero value is false so every test fixture built directly as
+	// &claimLiveness{} -- there is no other production construction path --
+	// keeps its original always-enforced semantics without having to opt in.
+	preclaim bool
 }
 
 // newClaimLiveness seeds every selected queue's clock to now, NOT the zero
-// value.
+// value, and starts the tracker in preclaim mode.
 //
-// This is deliberately different from selfprobe.Monitor's "never_proven"
-// fail-closed-until-first-sample discipline, and the difference is load-
-// bearing, not cosmetic: claimLivenessReady is one of the checks
-// preclaimReadinessComponent evaluates via Registry.CheckRequired BEFORE
-// the River client (workerProcessComponent) ever starts -- so at true
-// process construction, no real claim can possibly exist yet, by
-// construction of the startup order itself. A zero-seeded clock would fail
-// forever the instant any selected queue held real backlog (observed live:
-// a worker restarting after a shared-stack outage, with genuine
-// multi-minute backlog already queued, could never pass preclaim-readiness
-// again -- the exact deadlock this seeding exists to prevent). Seeding to
-// "now" treats admission itself as the starting gun and gives the real
-// consumer a full staleness window to make its first claim on each
-// selected queue before this signal can ever fail -- ample for a healthy
-// process, while a consumer that is ACTUALLY wedged still fails visibly
-// once that window elapses with nothing claimed, exactly matching the
-// ticket's two-hour incident timeline rather than a from-birth deadlock.
+// The seed is deliberately different from selfprobe.Monitor's "never_proven"
+// fail-closed-until-first-sample discipline: it gives the real consumer a
+// full staleness window to make its first claim on each selected queue once
+// running actually starts, ample for a healthy process, while a consumer
+// that is ACTUALLY wedged still fails visibly once that window elapses with
+// nothing claimed. It alone is not sufficient during preclaim itself,
+// though: preclaim's own retry loop (startupRetryBudget) can legitimately
+// run far longer than the staleness window while retrying an unrelated slow
+// dependency, and no claim can exist yet regardless -- River has not
+// started. preclaim being true is what actually prevents claimLivenessReady
+// from mistaking that elapsed retry time for a wedged consumer; the seed
+// then supplies the grace window markRuntimeLive hands off into once
+// preclaim ends and a real claim becomes possible.
 //
 // queues is the process's selected queue set (cfg.Queues); only those
 // queues are pre-seeded, so claimLivenessReady's per-queue lookup always
@@ -71,7 +78,7 @@ func newClaimLiveness(now time.Time, queues []string) *claimLiveness {
 	for _, queue := range queues {
 		perQueue[queue] = now
 	}
-	return &claimLiveness{perQueue: perQueue, staleWindow: claimStalenessWindow}
+	return &claimLiveness{perQueue: perQueue, staleWindow: claimStalenessWindow, preclaim: true}
 }
 
 // SetStaleWindow overrides the staleness window from the production default
@@ -127,6 +134,26 @@ func (c *claimLiveness) reseed(now time.Time) {
 	for queue := range c.perQueue {
 		c.perQueue[queue] = now
 	}
+}
+
+// markRuntimeLive reports that preclaim readiness has actually passed, so a
+// real claim is now possible on every selected queue -- called exactly once,
+// by preclaimReadinessComponent.Start, immediately before it returns
+// success. It does not touch the per-queue clock: the grace window from the
+// most recent reseed still governs how long the real consumer now has to
+// make its first claim before claimLivenessReady can fail it.
+func (c *claimLiveness) markRuntimeLive() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.preclaim = false
+}
+
+// inPreclaim reports whether a real claim can plausibly exist yet. See
+// markRuntimeLive and the preclaim field's doc comment.
+func (c *claimLiveness) inPreclaim() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.preclaim
 }
 
 // since returns how long ago the given queue's last real claim (or the
@@ -251,7 +278,20 @@ const claimStalenessWindow = 3 * 20 * time.Second
 // claim fails closed: that is exactly "recent jobs are all terminal-
 // without-execution" (or, in the more severe case this also catches, no
 // jobs are even being attempted), regardless of what an independent DB
-// probe reports.
+// probe reports. That failure branch is itself gated by claim.inPreclaim:
+// while true, no claim can exist yet by construction (River has not
+// started), so a backlogged-but-unclaimed queue is logged and passed rather
+// than failed -- see claim.preclaim's doc comment. Once markRuntimeLive
+// flips that off, the branch enforces exactly as before.
+//
+// Every error this returns wraps errWorkerDependencyUnavailable via
+// dependencyCheckFailed rather than replacing it outright, and is logged
+// through logDependencyCheckFailure before it is returned -- the same
+// discipline domainReady/queueReady/riverSchemaReady/idempotencyBackendReady
+// already follow -- so a queue-telemetry read that failed only because its
+// own bounded context expired still classifies as retryable, and an
+// operator sees this member's own cause, not just its name, in the crash-
+// loop log.
 func (dependencies *workerDependencies) claimLivenessReady(claim *claimLiveness) health.CheckFunc {
 	return func(ctx context.Context) error {
 		if dependencies == nil || claim == nil {
@@ -262,20 +302,26 @@ func (dependencies *workerDependencies) claimLivenessReady(claim *claimLiveness)
 			// buildQueueTelemetry) -- there is no claim path to prove live.
 			return nil
 		}
-		if dependencies.queueTelemetryErr != nil || dependencies.queueTelemetry == nil {
-			// Cannot prove idle or saturated and cannot prove a recent claim
+		if dependencies.queueTelemetryErr != nil {
+			dependencies.logDependencyCheckFailure(ctx, "execution_liveness", dependencies.queueTelemetryErr)
+			return dependencyCheckFailed(dependencies.queueTelemetryErr)
+		}
+		if dependencies.queueTelemetry == nil {
+			// No error was ever recorded, so there is nothing to unwrap or log
 			// -- fail closed rather than silently passing on missing evidence.
 			return errWorkerDependencyUnavailable
 		}
 		snapshot, err := dependencies.queueTelemetry.Snapshot(ctx)
 		if err != nil {
-			return errWorkerDependencyUnavailable
+			dependencies.logDependencyCheckFailure(ctx, "execution_liveness", err)
+			return dependencyCheckFailed(err)
 		}
 		capacityByQueue := make(map[string]riverstore.QueueCapacityTelemetry, len(snapshot.QueueCapacities))
 		for _, capacity := range snapshot.QueueCapacities {
 			capacityByQueue[capacity.Queue] = capacity
 		}
 		now := time.Now()
+		preclaim := claim.inPreclaim()
 		for _, job := range snapshot.Jobs {
 			if job.Available <= 0 {
 				continue // this queue is confirmed empty right now: idle, not broken.
@@ -286,8 +332,29 @@ func (dependencies *workerDependencies) claimLivenessReady(claim *claimLiveness)
 			if claim.since(job.Queue, now) <= claim.staleness() {
 				continue // a real claim landed on this queue recently.
 			}
+			if preclaim {
+				// River has not started yet, so no claim on this queue could
+				// possibly exist regardless of how long preclaim's own retry
+				// loop has been running against some other slow dependency.
+				dependencies.logClaimLivenessPreclaimSkip(ctx, job.Queue)
+				continue
+			}
 			return fmt.Errorf("%w: queue %q", errClaimLivenessStalledWithBacklog, job.Queue)
 		}
 		return nil
 	}
+}
+
+// logClaimLivenessPreclaimSkip explains why a queue with backlog and idle
+// capacity did not fail execution_liveness during preclaim: at info, not
+// warn or error, because this is the expected shape of every startup with
+// pre-existing backlog, not a symptom of anything wrong.
+func (dependencies *workerDependencies) logClaimLivenessPreclaimSkip(ctx context.Context, queue string) {
+	if dependencies == nil || dependencies.logger == nil {
+		return
+	}
+	dependencies.logger.InfoContext(ctx, "execution liveness claim check skipped before claiming can start",
+		"check", "execution_liveness",
+		"queue", queue,
+	)
 }

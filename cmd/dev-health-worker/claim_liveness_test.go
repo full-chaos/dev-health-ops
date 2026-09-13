@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -375,5 +378,118 @@ func TestClaimLivenessReadyPassesWithoutTelemetryRequirement(t *testing.T) {
 	ready := dependencies.claimLivenessReady(claim)
 	if err := ready(context.Background()); err != nil {
 		t.Fatalf("ready() with no telemetry requirement = %v, want nil", err)
+	}
+}
+
+// TestClaimLivenessReadyPreservesATelemetryDeadlineAndLogsItsOwnCause is the
+// execution_liveness counterpart of TestDependencyCheckFailedPreservesThe
+// UnderlyingCauseForClassification: a queue-telemetry read that fails only
+// because its own bounded context expired must still classify as retryable
+// (health.Registry decides that by unwrapping the CheckFunc's own returned
+// error for context.DeadlineExceeded/Canceled, never by reading logs), and
+// this member must log its own cause the same way domainReady/queueReady/
+// riverSchemaReady/idempotencyBackendReady already do -- so an operator
+// reading a crash loop sees why execution_liveness specifically refused,
+// not just its bare name.
+func TestClaimLivenessReadyPreservesATelemetryDeadlineAndLogsItsOwnCause(t *testing.T) {
+	t.Parallel()
+	var logOutput bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logOutput, nil))
+	claim := &claimLiveness{}
+	snapshotErr := fmt.Errorf("%w: sampling queue telemetry: %w", errors.New("queue_telemetry_unavailable"), context.DeadlineExceeded)
+	dependencies := &workerDependencies{
+		logger:                 logger,
+		queueTelemetryRequired: true,
+		queueTelemetry:         &fakeQueueTelemetry{snapshotErr: snapshotErr},
+	}
+	ready := dependencies.claimLivenessReady(claim)
+
+	err := ready(context.Background())
+	if !errors.Is(err, errWorkerDependencyUnavailable) {
+		t.Fatalf("ready() error = %v, want errWorkerDependencyUnavailable", err)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("ready() error = %v, want it to still unwrap to context.DeadlineExceeded", err)
+	}
+	if !strings.Contains(logOutput.String(), "execution_liveness") {
+		t.Fatalf("expected a member-level log line naming execution_liveness, got %q", logOutput.String())
+	}
+	if !strings.Contains(logOutput.String(), "sampling queue telemetry") {
+		t.Fatalf("expected the member's own error text in the log line, got %q", logOutput.String())
+	}
+}
+
+// TestClaimLivenessReadySkipsBacklogDuringPreclaimButEnforcesAfter is the
+// direct reproduction of the preclaim false-negative: a fresh worker has not
+// started claiming anything yet during preclaim (River's producers have not
+// started -- that is the entire point of a PRE-claim check), so a queue
+// that already has backlog and no recorded claim must not be read as wedged
+// while claim.inPreclaim() is still true, no matter how long preclaim's own
+// retry loop has been running. The same state, once markRuntimeLive reports
+// preclaim is over and the grace window has elapsed with still nothing
+// claimed, must fail exactly as it always did -- this check must not lose
+// its ability to catch a consumer that is genuinely wedged from birth.
+func TestClaimLivenessReadySkipsBacklogDuringPreclaimButEnforcesAfter(t *testing.T) {
+	t.Parallel()
+	var logOutput bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logOutput, nil))
+	claim := newClaimLiveness(time.Now(), []string{"sync_provider"})
+	claim.SetStaleWindow(10 * time.Millisecond)
+	dependencies := &workerDependencies{
+		logger:                 logger,
+		queueTelemetryRequired: true,
+		queueTelemetry: &fakeQueueTelemetry{snapshot: riverstore.QueueTelemetrySnapshot{
+			Jobs: []riverstore.QueueJobTelemetry{{Queue: "sync_provider", Kind: "sync.provider_unit", Available: 6}},
+		}},
+	}
+	ready := dependencies.claimLivenessReady(claim)
+
+	// Elapse the grace window while still in preclaim -- the shape a slow,
+	// unrelated dependency's own retry loop produces. Nothing has claimed
+	// anything because nothing could have: River has not started.
+	time.Sleep(30 * time.Millisecond)
+	if err := ready(context.Background()); err != nil {
+		t.Fatalf("ready() during preclaim with elapsed backlog = %v, want nil (no claim is possible yet)", err)
+	}
+	if !strings.Contains(logOutput.String(), "execution_liveness") {
+		t.Fatalf("expected a log line explaining the preclaim skip, got %q", logOutput.String())
+	}
+
+	// Preclaim readiness passes; River is about to start claiming.
+	claim.markRuntimeLive()
+
+	// The exact same backlog-with-no-claim state, past the same age gate,
+	// must now fail -- this is the genuinely wedged case the check exists to
+	// catch, and markRuntimeLive must not have disabled it.
+	time.Sleep(30 * time.Millisecond)
+	if err := ready(context.Background()); !errors.Is(err, errClaimLivenessStalledWithBacklog) {
+		t.Fatalf("ready() after preclaim ended = %v, want errClaimLivenessStalledWithBacklog", err)
+	}
+}
+
+// TestClaimLivenessReadyRefusesOnFirstAttemptWhenGenuinelyFailed proves a
+// queue-telemetry failure that does NOT unwrap to a context deadline -- a
+// real, non-transient problem -- still refuses immediately: it must not be
+// misread as retryable just because this member now wraps its cause instead
+// of discarding it.
+func TestClaimLivenessReadyRefusesOnFirstAttemptWhenGenuinelyFailed(t *testing.T) {
+	t.Parallel()
+	claim := &claimLiveness{}
+	genuineErr := errors.New("queue telemetry query rejected: unsupported contract version")
+	dependencies := &workerDependencies{
+		queueTelemetryRequired: true,
+		queueTelemetry:         &fakeQueueTelemetry{snapshotErr: genuineErr},
+	}
+	ready := dependencies.claimLivenessReady(claim)
+
+	err := ready(context.Background())
+	if !errors.Is(err, errWorkerDependencyUnavailable) {
+		t.Fatalf("ready() error = %v, want errWorkerDependencyUnavailable", err)
+	}
+	if !errors.Is(err, genuineErr) {
+		t.Fatalf("ready() error = %v, want it to still unwrap to the genuine cause", err)
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("ready() error unexpectedly classifies as a deadline -- a genuine failure must not be retryable")
 	}
 }

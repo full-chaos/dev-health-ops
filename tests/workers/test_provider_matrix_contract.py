@@ -143,9 +143,8 @@ def test_route_ready_census_matches_aggregate_acceptance(
 def test_transitional_inventory_route_readiness_notes_follow_matrix(
     matrix: dict[str, Any],
 ) -> None:
-    """The inventory remains Python-compatible/deployment-inactive, but its
-    factual note must track the generated capability matrix rather than retain
-    the old "only LaunchDarkly" claim.
+    """The inventory's factual note must track the generated capability
+    matrix rather than retain the old "only LaunchDarkly" claim.
 
     This derives both numbers from the checked-in artifact. A later intentional
     matrix update therefore makes the inventory wording fail until it is
@@ -179,9 +178,10 @@ def test_transitional_inventory_route_readiness_notes_follow_matrix(
         assert summary in notes
         assert github_summary in notes
         assert "only launchdarkly" not in notes.lower()
-        # Matrix readiness does not transfer runtime ownership. This is the
-        # no-cutover invariant the corrected prose must retain.
-        assert row["current_implementation_state"] == "python_compatibility"
+        # The family completed: registry kind sync.provider_unit already
+        # resolves to a concrete native Go handler for every route-ready
+        # pair the matrix lists, with no HTTP compatibility bridge behind it.
+        assert row["current_implementation_state"] == "native_go"
 
 
 def test_pagerduty_is_covered_by_the_same_contract(

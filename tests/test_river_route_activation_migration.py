@@ -80,9 +80,11 @@ def test_upgrade_moves_every_checked_in_kind_to_river_and_is_idempotent(
     try:
         with engine.begin() as connection:
             _create_schema(connection)
-            # sync.provider_unit is the one live canary (seeded by 0061/0064)
-            # and is excluded from this migration; every migrated kind sits on
-            # the Celery rollback route beforehand.
+            # sync.provider_unit was the one live canary at the time this
+            # migration was written (seeded by 0061/0064) and is excluded
+            # from it; every migrated kind sits on the Celery rollback route
+            # beforehand. (Its own migration has since completed -- this
+            # historical migration's own pinned kind list is unaffected.)
             canary = "sync.provider_unit"
             assert canary not in migration._KINDS
             _seed(connection, migration._KINDS)
@@ -252,17 +254,21 @@ def test_pinned_kinds_match_the_checked_in_migration_state() -> None:
         else:
             assert by_kind[kind]["rollback_route"] == "celery", kind
 
-    # The canary and the post-0066 Go-native-only kinds are deliberately
-    # excluded. Asserting their identities stops a future kind from being
-    # dropped from the historical migration unnoticed.
+    # The post-0066 Go-native-only kinds are deliberately excluded (this
+    # migration predates all four). Asserting their identities stops a
+    # future kind from being dropped from the historical migration
+    # unnoticed. sync.provider_unit was the one still-canary kind when this
+    # comparison was written; its own migration has since completed to the
+    # same celery_removed/river/none shape as its three siblings here.
     assert set(by_kind) - pinned == {
         "sync.provider_unit",
         "system.sync_coverage_refresh",
         "sync.team_repo_ownership_derivation",
         "metrics.remaining.work_item_attribution",
     }
-    assert by_kind["sync.provider_unit"]["state"] == "canary"
-    assert by_kind["sync.provider_unit"]["route"] == "river_canary"
+    assert by_kind["sync.provider_unit"]["state"] == "celery_removed"
+    assert by_kind["sync.provider_unit"]["route"] == "river"
+    assert by_kind["sync.provider_unit"]["rollback_route"] == "none"
     assert by_kind["system.sync_coverage_refresh"]["state"] == "celery_removed"
     assert by_kind["system.sync_coverage_refresh"]["route"] == "river"
     assert by_kind["system.sync_coverage_refresh"]["rollback_route"] == "none"

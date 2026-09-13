@@ -214,17 +214,15 @@ func TestRegistryDescriptorsAreCompleteSortedDefensiveCopies(t *testing.T) {
 		t.Fatalf("Descriptors() = %#v", descriptors)
 	}
 	// Every checked-in kind is executable, and no kind is Celery-routed any
-	// more. sync.provider_unit is the single deliberate exception to
-	// go_default/river: Go's provider route surface covers one of the 59
-	// provider/dataset pairs in contracts/provider-matrix/v1/matrix.json, so it
-	// stays on river_canary where ProviderUnitRouteSwitches can confine River to
-	// that one ready pair. Asserting its route by name rather than skipping it
-	// keeps an accidental promotion visible here.
+	// more. sync.provider_unit used to be a deliberate exception here (its
+	// Go provider route surface once covered only some of the 59
+	// provider/dataset pairs in contracts/provider-matrix/v1/matrix.json,
+	// gated on river_canary) -- that matrix is now 59/59 route-ready and the
+	// route promoted to plain river/rollback none, so it is asserted the
+	// same way as every other kind below rather than carrying its own
+	// special case.
 	for _, descriptor := range descriptors {
 		wantRoute := "river"
-		if descriptor.Kind == jobcontract.KindSyncProviderUnit {
-			wantRoute = "river_canary"
-		}
 		if descriptor.Route != wantRoute || !descriptor.Executable() {
 			t.Fatalf(
 				"checked-in policy drifted: kind=%s route=%q want=%q executable=%v",

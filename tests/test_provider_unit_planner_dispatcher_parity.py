@@ -115,7 +115,7 @@ _SOURCE_TYPES = {
 
 
 @contextmanager
-def _fresh_session(*, transport: str = "river_canary"):
+def _fresh_session(*, transport: str = "river"):
     """A private in-memory database seeded with the migration-default routes."""
 
     engine = create_engine("sqlite:///:memory:")

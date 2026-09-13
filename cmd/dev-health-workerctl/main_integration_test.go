@@ -169,7 +169,35 @@ func connectAsRole(t *testing.T, ctx context.Context, rawURI, role, password str
 	return pool
 }
 
-func TestNewJobRouteControllerWiresCelerySyncProviderQuiescence(t *testing.T) {
+// TestNewJobRouteControllerWiresRealRoleScopedPools proves the wiring
+// newJobRouteController exists for -- coordinatorPool, not domainPool, runs
+// every worker_job_routes/worker_job_outbox/worker_job_runs statement (the
+// CHAOS-3113 regression) -- against a real un-pause of sync.provider_unit,
+// the kind this controller was originally built to promote off Celery.
+//
+// This used to prove that promotion directly, plus the Celery-quiescence
+// gate (hence its former name): sync.provider_unit's checked-in policy
+// carried rollback_route=celery, so ApplyCheckedIn's celery->river_canary
+// transition ran through domainPool's PostgresCelerySyncProviderQuiescer,
+// and a live sync_run_units claim blocked it. That policy has since
+// completed to rollback_route=none -- the same shape every other checked-in
+// kind already had. jobroute.allowed() now requires a row's transport to be
+// EXACTLY the checked-in route or rollback route, which for this kind is
+// just {"river"} -- so a row still on "celery" or "river_canary" is DRIFT,
+// not something ApplyCheckedIn can promote any more (that is exactly what
+// the 0131 Alembic migration exists to fix directly at the data layer,
+// bypassing this Go-domain check the same way 0125 did for its twelve
+// kinds). The only transition ApplyCheckedIn can still make for this kind
+// is un-pausing an already-correctly-routed row, which is what this test
+// proves instead -- it still exercises a real coordinator-role WRITE
+// (paused=true fails the no-op fast path, so the UPDATE runs), just not the
+// Celery-quiescence gate, which no longer applies to ANY kind
+// (RollbackRoute=="celery" no longer exists anywhere in
+// migration-state.json). That gate mechanism itself remains covered by
+// internal/jobroute/control_integration_test.go's own synthetic
+// RollbackRoute: "celery" descriptors, which do not depend on what any real
+// kind's checked-in policy says.
+func TestNewJobRouteControllerWiresRealRoleScopedPools(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	admin, uri, roles := startJobRouteHarness(t, ctx)
@@ -177,7 +205,7 @@ func TestNewJobRouteControllerWiresCelerySyncProviderQuiescence(t *testing.T) {
 	if _, err := admin.Exec(ctx, `
 		INSERT INTO public.worker_job_routes
 			(job_kind, transport, paused, generation, updated_at)
-		VALUES ('sync.provider_unit', 'celery', FALSE, 1, statement_timestamp())`); err != nil {
+		VALUES ('sync.provider_unit', 'river', TRUE, 1, statement_timestamp())`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -201,27 +229,34 @@ func TestNewJobRouteControllerWiresCelerySyncProviderQuiescence(t *testing.T) {
 	}
 	state, err := controller.ApplyCheckedIn(ctx, "sync.provider_unit")
 	if err != nil {
-		t.Fatalf("empty Celery unit ledger activation: %v", err)
+		t.Fatalf("un-pausing an already-correctly-routed kind: %v", err)
 	}
-	if state.Transport != "river_canary" || state.Generation != 2 {
+	if state.Transport != "river" || state.Paused || state.Generation != 2 {
 		t.Fatalf("activated state = %+v", state)
 	}
-	if _, err := controller.Rollback(ctx, "sync.provider_unit"); err != nil {
-		t.Fatalf("rollback: %v", err)
+	// No rollback path left: rollback_route=none refuses outright rather
+	// than reversing into a transport nothing can execute.
+	if _, err := controller.Rollback(ctx, "sync.provider_unit"); !errors.Is(err, jobroute.ErrUnknownRoute) {
+		t.Fatalf("rollback with no rollback route error = %v, want %v", err, jobroute.ErrUnknownRoute)
 	}
-	if _, err := admin.Exec(ctx, `
-		INSERT INTO public.sync_run_units (id, provider, dataset_key, status, updated_at)
-		VALUES ('00000000-0000-4000-8000-000000000002', 'launchdarkly', 'feature-flags', 'running', statement_timestamp())`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := controller.ApplyCheckedIn(ctx, "sync.provider_unit"); !errors.Is(err, jobroute.ErrLiveClaims) {
-		t.Fatalf("nonterminal Celery unit activation error = %v, want %v", err, jobroute.ErrLiveClaims)
-	}
-	state, err = controller.Inspect(ctx, "sync.provider_unit")
+	// Re-applying an already-current, unpaused row is the fast, no-op
+	// success path -- it must not bump the generation fence again.
+	state, err = controller.ApplyCheckedIn(ctx, "sync.provider_unit")
 	if err != nil {
+		t.Fatalf("re-applying an already-current route: %v", err)
+	}
+	if state.Transport != "river" || state.Generation != 2 {
+		t.Fatalf("re-applied state = %+v", state)
+	}
+	// A drifted row (still on either legacy transport) is exactly what
+	// ApplyCheckedIn can no longer fix for this kind -- proving that
+	// negative keeps this test honest about what changed.
+	if _, err := admin.Exec(ctx, `
+		UPDATE public.worker_job_routes SET transport = 'celery', generation = generation + 1
+		WHERE job_kind = 'sync.provider_unit'`); err != nil {
 		t.Fatal(err)
 	}
-	if state.Transport != "celery" || state.Generation != 3 {
-		t.Fatalf("failed activation changed state = %+v", state)
+	if _, err := controller.ApplyCheckedIn(ctx, "sync.provider_unit"); !errors.Is(err, jobroute.ErrDrift) {
+		t.Fatalf("drifted celery row error = %v, want %v", err, jobroute.ErrDrift)
 	}
 }

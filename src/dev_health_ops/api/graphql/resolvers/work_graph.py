@@ -953,15 +953,15 @@ def _build_work_graph_where(
     params: dict[str, Any] = {"org_id": org_id}
     # Tombstone rows, and every version of an identity whose latest version is
     # a tombstone, are not edges; versions of a live identity all pass.
-    where_clauses: list[str] = [
-        "org_id = %(org_id)s",
+    live_edge_clause = (
         "is_deleted = 0 AND (org_id, source_type, source_id, edge_type,"
         " target_type, target_id) NOT IN ("
         "SELECT org_id, source_type, source_id, edge_type, target_type, target_id"
         " FROM work_graph_edges WHERE org_id = %(org_id)s"
         " GROUP BY org_id, source_type, source_id, edge_type, target_type, target_id"
-        " HAVING argMax(is_deleted, last_synced) = 1)",
-    ]
+        " HAVING argMax(is_deleted, last_synced) = 1)"
+    )
+    where_clauses: list[str] = ["org_id = %(org_id)s", live_edge_clause]
     _add_membership_scope_params(params, filters)
 
     theme_filter = filters.theme if filters else None

@@ -49,7 +49,6 @@ from dev_health_ops.metrics.prometheus import (
     DEV_HEALTH_METRIC_COMPAT_RUNNER_SLOTS_IN_USE,
 )
 from dev_health_ops.metrics.remaining_scope_contract import (
-    MembershipBackfillScope,
     RecommendationsScope,
     parse_scope,
 )
@@ -1513,36 +1512,9 @@ async def _run_recommendations(
     return {"family": execution.family, "fired": fired}
 
 
-async def _run_membership(
-    execution: _Execution, scope: MembershipBackfillScope
-) -> dict[str, Any]:
-    from dev_health_ops.work_graph.investment.backfill import (
-        MembershipBackfillConfig,
-        backfill_memberships,
-    )
-
-    stats = await run_in_threadpool(
-        backfill_memberships,
-        MembershipBackfillConfig(
-            dsn=require_clickhouse_uri(),
-            org_id=execution.organization_id,
-            repo_ids=scope.repo_ids or None,
-        ),
-    )
-    # CHAOS-4243: stats["memberships"] is backfill_memberships's own total
-    # membership-row count; surfaced as a flat top-level int (rather than
-    # only nested in `stats`) so _evidence_row_count can report it.
-    return {
-        "family": execution.family,
-        "stats": stats,
-        "memberships_written": stats.get("memberships", 0),
-    }
-
-
 _RemainingRunner = Callable[[_Execution, Any], Awaitable[dict[str, Any]]]
 _REMAINING_RUNNERS: dict[str, _RemainingRunner] = {
     "recommendations": _run_recommendations,
-    "membership_backfill": _run_membership,
 }
 
 
@@ -2251,7 +2223,12 @@ async def _run_until_client_disconnect(
 # their old evidence-key entries here are moot rather than fixed. complexity
 # is gone from _REMAINING_RUNNERS entirely too (CHAOS-4291: the native
 # ComplexityExecutor has no Python fallback), so its old "deliberate gap"
-# entry here is moot rather than fixed.
+# entry here is moot rather than fixed. membership_backfill is gone from
+# _REMAINING_RUNNERS entirely too: its native Go executor has no Python
+# fallback either, so its old "memberships_written" entry here is moot
+# rather than fixed -- backfill_memberships itself survives, but only as the
+# live-parity oracle the Go executor is checked against, never as a runtime
+# path an execution reaches.
 #
 # extra_metrics and team_metrics no longer exist: both were registered
 # handlers with zero producer anywhere (CHAOS-4243), retired (removed, not
@@ -2272,9 +2249,7 @@ async def _run_until_client_disconnect(
 # (len(records)) alongside fired_count -- a signature change with several
 # existing test call sites (tests/test_recommendations_task.py), deferred
 # as a separate, larger change.
-_EVIDENCE_ROW_COUNT_KEYS: dict[str, str] = {
-    "membership_backfill": "memberships_written",
-}
+_EVIDENCE_ROW_COUNT_KEYS: dict[str, str] = {}
 
 
 def _evidence_row_count(family: str, evidence: dict[str, Any]) -> int | None:

@@ -222,7 +222,7 @@ def test_remaining_execution_rejects_unknown_persisted_family() -> None:
         )
 
 
-def test_remaining_runner_is_a_closed_two_family_allowlist() -> None:
+def test_remaining_runner_is_a_closed_one_family_allowlist() -> None:
     # extra_metrics/team_metrics were removed by CHAOS-4243 (registered
     # handlers with zero producer, retired rather than left dormant).
     # release_impact was removed by CHAOS-5234/CHAOS-5244: its native Go
@@ -239,10 +239,12 @@ def test_remaining_runner_is_a_closed_two_family_allowlist() -> None:
     # (dora_native.go/capacity_native.go) have no Python fallback, and
     # job_dora.py/job_capacity.py are deleted outright -- this HTTP bridge's
     # dispatch entries were the only thing keeping them reachable.
-    assert set(worker_metrics._REMAINING_RUNNERS) == {
-        "membership_backfill",
-        "recommendations",
-    }
+    # membership_backfill was removed the same way too: its native Go
+    # executor has no Python fallback, so this bridge handler and its
+    # dispatch entry are gone. backfill_memberships itself is NOT deleted --
+    # it survives as the live-parity oracle the Go executor is still checked
+    # against, a live non-bridge caller exactly like job_complexity_db.py's.
+    assert set(worker_metrics._REMAINING_RUNNERS) == {"recommendations"}
 
 
 @pytest.mark.asyncio
@@ -316,21 +318,38 @@ async def test_effect_then_exception_is_fenced_as_ambiguous_on_retry() -> None:
     assert effects == ["append-output"]
 
 
-def test_evidence_row_count_extracts_only_mapped_families() -> None:
+def test_evidence_row_count_extracts_only_mapped_families(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # No remaining-metrics family currently maps to a genuine row count --
+    # membership_backfill was the last one, and it was removed from
+    # _EVIDENCE_ROW_COUNT_KEYS the same way capacity/dora/complexity/
+    # release_impact were: its native Go executor has no Python fallback, so
+    # the bridge evidence shape it used to map is moot. The mapping/coercion
+    # behavior of _evidence_row_count itself is still real code, so it is
+    # exercised here against a synthetic mapping rather than a live family.
+    monkeypatch.setattr(
+        worker_metrics, "_EVIDENCE_ROW_COUNT_KEYS", {"synthetic": "rows_written"}
+    )
     assert (
         worker_metrics._evidence_row_count(
-            "membership_backfill",
-            {"family": "membership_backfill", "memberships_written": 3},
+            "synthetic", {"family": "synthetic", "rows_written": 3}
         )
         == 3
     )
     # An explicit 0 is a real count, not "not applicable" -- must round-trip.
     assert (
         worker_metrics._evidence_row_count(
-            "membership_backfill",
-            {"family": "membership_backfill", "memberships_written": 0},
+            "synthetic", {"family": "synthetic", "rows_written": 0}
         )
         == 0
+    )
+    # A bool would satisfy isinstance(x, int) in Python; must be excluded.
+    assert (
+        worker_metrics._evidence_row_count(
+            "synthetic", {"family": "synthetic", "rows_written": True}
+        )
+        is None
     )
     # complexity's evidence carries no row count (exit_code is a status, not
     # a count) -- must be nil, never coerced.
@@ -340,34 +359,19 @@ def test_evidence_row_count_extracts_only_mapped_families() -> None:
         )
         is None
     )
-    # A bool would satisfy isinstance(x, int) in Python; must be excluded.
-    assert (
-        worker_metrics._evidence_row_count(
+    # capacity, dora, release_impact and membership_backfill were all
+    # removed from _EVIDENCE_ROW_COUNT_KEYS entirely once their native Go
+    # executors left no Python fallback -- confirm each is an unmapped
+    # family like complexity, never coerced.
+    for family, evidence in (
+        ("capacity", {"family": "capacity", "forecast_count": 3}),
+        ("release_impact", {"family": "release_impact", "records_written": 3}),
+        (
             "membership_backfill",
-            {"family": "membership_backfill", "memberships_written": True},
-        )
-        is None
-    )
-    # capacity was removed from _EVIDENCE_ROW_COUNT_KEYS entirely by
-    # CHAOS-5336 (job_capacity.py and its worker-bridge runner are deleted;
-    # compute_capacity.py survives only as the GraphQL resolver's direct,
-    # non-bridge caller) -- confirm it is now an unmapped family like
-    # complexity, never coerced.
-    assert (
-        worker_metrics._evidence_row_count(
-            "capacity", {"family": "capacity", "forecast_count": 3}
-        )
-        is None
-    )
-    # release_impact was removed from _EVIDENCE_ROW_COUNT_KEYS entirely by
-    # CHAOS-5234/CHAOS-5244 (its runner is deleted) -- confirm it is now an
-    # unmapped family like complexity, never coerced.
-    assert (
-        worker_metrics._evidence_row_count(
-            "release_impact", {"family": "release_impact", "records_written": 3}
-        )
-        is None
-    )
+            {"family": "membership_backfill", "memberships_written": 3},
+        ),
+    ):
+        assert worker_metrics._evidence_row_count(family, evidence) is None
     # CHAOS-4243 codex round 3: "fired" undercounts recommendations'
     # true persisted row total (tombstones excluded) -- a run that writes
     # rows but fires none would misreport rows_written=0. recommendations
@@ -382,51 +386,29 @@ def test_evidence_row_count_extracts_only_mapped_families() -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_membership_surfaces_a_flat_rows_written_count(
+async def test_execute_surfaces_rows_written_for_a_zero_row_completion(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("CLICKHOUSE_URI", "clickhouse://example/default")
-    execution = _execution(family="membership_backfill")
-    from dev_health_ops.metrics.remaining_scope_contract import (
-        MembershipBackfillScope,
-    )
+    """The bridge execute response body used to carry only status/
+    execution_id, so a completion could never be told apart from a reported
+    zero -- the response itself never transported the count. This proves the
+    HTTP contract actually carries rows_written=0 through to the caller, not
+    just the durable output_evidence.
 
-    scope = MembershipBackfillScope.model_validate({"version": 1, "repo_ids": []})
-
-    with patch(
-        "dev_health_ops.work_graph.investment.backfill.backfill_memberships",
-        return_value={"components": 2, "matched": 2, "skipped": 0, "memberships": 5},
-    ):
-        evidence = await worker_metrics._run_membership(execution, scope)
-
-    assert evidence["memberships_written"] == 5
-    assert worker_metrics._evidence_row_count(execution.family, evidence) == 5
-
-
-@pytest.mark.asyncio
-async def test_execute_surfaces_rows_written_for_a_zero_row_membership_backfill_completion() -> (
-    None
-):
-    """CHAOS-4243: before this, /remaining-metrics/v1/execute's response body
-    carried only status/execution_id, so the Go compatibility bridge could
-    never distinguish a real write from a reported zero -- the response
-    itself never transported the count. This proves the HTTP contract
-    actually carries rows_written=0 through to the caller, not just the
-    durable output_evidence.
-
-    Uses membership_backfill (not release_impact, CHAOS-5234/CHAOS-5244
-    deleted that family's runner and its _EVIDENCE_ROW_COUNT_KEYS entry; not
-    capacity either, CHAOS-5336 deleted job_capacity.py and its runner --
-    compute_capacity.py survives only as the GraphQL resolver's direct,
-    non-bridge caller) as the example family that still maps to a genuine
-    row count.
+    No remaining-metrics family currently maps to a genuine row count (see
+    test_evidence_row_count_extracts_only_mapped_families), so this exercises
+    _execute's rows_written plumbing against a synthetic mapping instead of a
+    live family.
     """
-    execution = _execution(family="membership_backfill")
+    monkeypatch.setattr(
+        worker_metrics, "_EVIDENCE_ROW_COUNT_KEYS", {"synthetic": "rows_written"}
+    )
+    execution = _execution(family="synthetic")
 
     async def zero_row_effect(
         _connection: object, _current: worker_metrics._Execution
     ) -> dict[str, Any]:
-        return {"family": "membership_backfill", "memberships_written": 0}
+        return {"family": "synthetic", "rows_written": 0}
 
     with (
         patch.object(

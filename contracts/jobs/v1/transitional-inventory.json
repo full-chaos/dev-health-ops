@@ -502,10 +502,10 @@
         "value": "metrics.remaining.membership_backfill"
       },
       "target_kind_id": "kind:metrics.remaining.membership_backfill",
-      "current_implementation_state": "python_compatibility",
+      "current_implementation_state": "native_go",
       "verification_status": "verified",
-      "compatibility_dependency": "HTTP compatibility bridge (internal/worker/*/v1/execute) backed by the corresponding src/dev_health_ops/api/internal/*.py runner.",
-      "deletion_evidence_requirement": "registry.json kind `metrics.remaining.membership_backfill` passes Registry.ValidateStartup with a concrete non-HTTP-bridge handler, the compatibility runner import is removed from the Python API, and a non-empty baseline parity dataset matches product data (not just job status).",
+      "compatibility_dependency": "None. The native remaining.MembershipExecutor (internal/jobs/metrics/remaining/membership_native.go) replaced HTTPCompatibilityExecutor for this kind -- per kind, with no environment switch and no fallback: a worker that cannot build the native executor refuses the family rather than reverting to the bridge. src/dev_health_ops/api/internal/worker_metrics.py's bridge runner (_run_membership) and its dispatch entry are deleted; backfill_memberships itself is retained, but only as the live-parity oracle tests/fixtures/generate_membership_backfill_golden.py runs for the Go executor's golden test, never as a runtime path an execution reaches.",
+      "deletion_evidence_requirement": "Satisfied. registry.json kind `metrics.remaining.membership_backfill` resolves to a concrete non-HTTP-bridge handler (cmd/dev-health-worker/daily.go); the compatibility runner import is removed from the Python API; TestComputeOrgMatchesLivePythonBackfillMemberships compares a non-empty product-data table row by row against the Python producer, rather than comparing job status.",
       "acceptance_test_id": "tests/workers/job_contracts/test_registry.py",
       "notes": ""
     },

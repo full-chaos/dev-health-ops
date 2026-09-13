@@ -14,9 +14,9 @@ import (
 // coverage for teamRepoOwnershipDerivationWorker.Work (CHAOS-4365 item 1b):
 // no existing generic test exercised its outcome mapping (rows_written /
 // no_signal / error) or telemetry recording -- TestCoordinatorWorkersCall
-// TheirDirectBridgeSeams only covers the bridge-based coordinator workers,
+// TheirDirectBridgeSeams only covers the team-autoimport coordinator worker,
 // which this one is not (it holds a TeamRepoOwnershipDerivationRunner, not
-// a CoordinatorBridge).
+// a TeamAutoImporter).
 
 type recordingDerivationRunner struct {
 	written     int

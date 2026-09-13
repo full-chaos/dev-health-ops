@@ -142,11 +142,10 @@ const (
 	syncComputeCheckpointStatusOK = "ready"
 )
 
-// Finalize is the native equivalent of bridge.Finalize / the Python
-// finalize_sync_run task. It satisfies the same signature CoordinatorBridge
-// declares so finalizeWorker can hold either a bridge or this service, the
-// same way postSyncWorker already holds *NativePostSyncService instead of a
-// bridge.
+// Finalize is the native equivalent of the (now-deleted) HTTP bridge call
+// into the Python finalize_sync_run task. finalizeWorker holds this service
+// directly, the same way postSyncWorker holds *NativePostSyncService instead
+// of a bridge.
 func (service *NativeFinalizeSyncRunService) Finalize(ctx context.Context, args FinalizeSyncRunArgs) error {
 	if service == nil || service.pool == nil || ctx == nil || args.valid() != nil {
 		return ErrFinalizeSyncRunUnavailable

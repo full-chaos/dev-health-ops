@@ -130,6 +130,19 @@ def test_inventory_row_count_matches_the_baseline():
     ever reached for real (every provider `team_provider_capabilities()`
     lists now has a registered native collector), so nothing calls the
     route any more.
+    = 360, -2 REST under CHAOS-5694: `POST /api/internal/worker-sync/dispatch`
+    and `POST /api/internal/worker-sync/finalize` are deleted with their rows
+    in the same change -- the same shape as every prior worker-bridge
+    deletion in this list. Both routes only ever called
+    `dispatch_sync_run.run`/`finalize_sync_run.run` synchronously for the Go
+    coordinator's `HTTPBridge.Dispatch`/`.Finalize` callers, and neither of
+    those Go callers is wired to anything live (`RegisterWorkers` takes the
+    four Native services, never `bridge`; CHAOS-4175 superseded both with
+    `NativeDispatchSyncRunService`/`NativeFinalizeSyncRunService`) -- so
+    nothing calls either route any more. `dispatch_sync_run`/
+    `finalize_sync_run` themselves are NOT deleted (still called directly by
+    `backfill/runner.py` and `processors/sync.py`); only the two dead HTTP
+    routes and their Go bridge client methods go.
 
     MERGE HAZARD, recorded because it has now nearly landed silently more
     than once. Each change edited these same asserts, and each was correct
@@ -150,9 +163,9 @@ def test_inventory_row_count_matches_the_baseline():
     rows = inventory["rows"]
     rest = [r for r in rows if r["surface_kind"] == "rest"]
     graphql = [r for r in rows if r["surface_kind"] in _GRAPHQL_KINDS]
-    assert len(rest) == 303, len(rest)
+    assert len(rest) == 301, len(rest)
     assert len(graphql) == 59, len(graphql)
-    assert len(rows) == 362, len(rows)
+    assert len(rows) == 360, len(rows)
 
 
 def test_the_three_subscriptions_are_profiled():
@@ -196,7 +209,10 @@ def test_classification_summary_matches_the_baseline():
     # - 1 more under this change: the deleted worker-sync/
     # reference-discovery-populate row was also protected (worker bridge
     # bearer, same as every other worker-sync route).
-    assert len(protected) == 335, len(protected)
+    # - 2 more under CHAOS-5694: the deleted worker-sync/dispatch and
+    # worker-sync/finalize rows were also protected (worker bridge bearer,
+    # same as every other worker-sync route).
+    assert len(protected) == 333, len(protected)
     # 22 + the four fastapi doc routes + /metrics.
     assert len(public) == 27, len(public)
     assert len(protected) + len(public) == len(rows)

@@ -43,10 +43,10 @@ var ErrDispatchSyncRunUnavailable = errors.New("native dispatch_sync_run is unav
 // stray external `errors.Is` match fails loudly instead of silently
 // matching an error path that no longer exists.
 
-// NativeDispatchSyncRunService is the native equivalent of bridge.Dispatch /
-// Python's dispatch_sync_run task -- CHAOS-4175 family 3, the last of the
-// three sync-dispatch coordinator families to move off the HTTP
-// compatibility bridge. Mirrors NativeFinalizeSyncRunService/
+// NativeDispatchSyncRunService is the native equivalent of the (now-deleted)
+// HTTP bridge call into Python's dispatch_sync_run task -- CHAOS-4175 family
+// 3, the last of the three sync-dispatch coordinator families to move off
+// the HTTP compatibility bridge. Mirrors NativeFinalizeSyncRunService/
 // NativeReferenceDiscoveryService's exact composition shape: a pool this
 // service owns no lifecycle over, opening its own transaction(s) per call
 // rather than accepting an ambient one, matching Python's own multiple
@@ -135,8 +135,8 @@ func (service *NativeDispatchSyncRunService) nowUTC() time.Time {
 	return service.now().UTC()
 }
 
-// Dispatch is the native equivalent of bridge.Dispatch / Python's
-// dispatch_sync_run(sync_run_id), ported verbatim end to end
+// Dispatch is the native equivalent of the (now-deleted) HTTP bridge call
+// into Python's dispatch_sync_run(sync_run_id), ported verbatim end to end
 // (workers/sync_units.py:759-1158): the outbox-relay route fence, the
 // feature/reference-discovery/DispatchGuard gate chain and total-cap
 // denial (in the FIRST transaction), concurrency partial-cap, the full

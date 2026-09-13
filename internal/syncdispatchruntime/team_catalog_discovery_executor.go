@@ -80,13 +80,32 @@ type SourceExternalIDsResolver interface {
 	ResolveSourceExternalIDs(ctx context.Context, orgID, runID string) ([]string, error)
 }
 
+// referenceDiscoveryImportCapableProviders is the fixed set of providers
+// Python's team_autoimport.py ever resolved a real populate() for
+// (_IMPORTER_MODULES: linear/jira/github/gitlab). jira's own native
+// collector closed this set out -- every provider in it is now registered
+// in the production Native map (cmd/dev-health-worker/sync_dispatch.go).
+// A provider in THIS set that is absent from Native is therefore a wiring
+// bug (a collector that failed to register), not a legitimate "nothing to
+// discover" provider, and Discover fails loudly rather than silently
+// reporting a clean empty result for it. Any other provider (atlassian,
+// pagerduty, and anything not listed here) has never had import capability
+// -- team_autoimport.py's own _provider_capability check already no-ops
+// for it today -- and gets a genuine, permanent no-op below.
+var referenceDiscoveryImportCapableProviders = map[string]bool{
+	"linear": true, "jira": true, "github": true, "gitlab": true,
+}
+
 // TeamCatalogDiscoveryExecutor dispatches reference discovery per provider:
 // a provider with a registered native collector runs it directly (gated by
-// CHAOS-4323 selections, same as the post-sync path) and skips the Python
-// bridge entirely; every other provider falls through to Fallback, the
-// existing BridgeDiscoveryExecutor. It implements the same DiscoveryExecutor
-// seam VerifiedDiscoveryExecutor already wraps, so ClickHouse readback
-// verification covers native and bridge providers alike.
+// CHAOS-4323 selections, same as the post-sync path); every other provider
+// gets a clean no-op (see referenceDiscoveryImportCapableProviders) -- the
+// Python bridge this seam used to fall through to (BridgeDiscoveryExecutor)
+// is gone, closed out by the jira collector completing the native-provider
+// set. It implements the same DiscoveryExecutor seam VerifiedDiscoveryExecutor
+// already wraps, so ClickHouse readback verification covers every provider
+// alike (vacuously, for the no-op case: no-op means the empty claim keys
+// readback verifies trivially).
 //
 // When every CHAOS-4323 selection is off, a native provider still dispatches
 // (never blocks unit dispatch): teams/members/projects are not written, but
@@ -103,7 +122,6 @@ type SourceExternalIDsResolver interface {
 // checked for real.
 type TeamCatalogDiscoveryExecutor struct {
 	Native     map[string]providersync.TeamCatalogCollector
-	Fallback   DiscoveryExecutor
 	Clients    ProviderClientResolver
 	Selections TeamCatalogSelectionsResolver
 	Sources    SourceExternalIDsResolver
@@ -136,11 +154,21 @@ func (executor *TeamCatalogDiscoveryExecutor) Discover(
 	normalizedProvider := strings.ToLower(strings.TrimSpace(provider))
 	collector, native := executor.Native[normalizedProvider]
 	if !native {
-		if executor.Fallback == nil {
+		if referenceDiscoveryImportCapableProviders[normalizedProvider] {
+			// A provider this codebase knows CAN write real reference data
+			// has no registered collector -- that is a wiring bug (a
+			// collector missing from production registration), never a
+			// legitimate "nothing to discover" case. Fail loudly instead of
+			// silently reporting an empty, unverified result.
 			return nil, ErrReferenceDiscoveryUnavailable
 		}
-		executor.observeDispatch(normalizedProvider, jobruntime.TeamCatalogOutcomeBridge)
-		return executor.Fallback.Discover(ctx, orgID, runID, provider)
+		executor.observeDispatch(normalizedProvider, jobruntime.TeamCatalogOutcomeNotImportCapable)
+		return map[string]any{
+			"provider":             normalizedProvider,
+			"outcome":              "not_import_capable",
+			"reference_team_keys":  []string{},
+			"reference_sprint_ids": []string{},
+		}, nil
 	}
 	if executor.Clients == nil || executor.Selections == nil {
 		return nil, ErrReferenceDiscoveryUnavailable

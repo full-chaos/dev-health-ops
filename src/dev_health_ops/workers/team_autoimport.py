@@ -31,37 +31,28 @@ _IMPORTER_MODULES = {
 # again": 4466/4495/4493 each missed a sibling caller outside the named
 # producer), every path that can reach this module's populator dispatch for
 # provider=linear:
-#   - HTTP bridge (worker_sync.py), all reachable with WORKER_OPERATIONAL_
-#     BRIDGE_TOKEN and no provider scoping of their own:
-#       * POST /team-autoimport -> run_post_sync_team_autoimport() ->
-#         run_team_autoimport (proved live-local: HTTP 200, recreated the
-#         pseudo-project, before this guard existed). CHAOS-3093 (PR2b)
-#         dropped the `@celery_app.task` decorator that used to wrap this
-#         call (Celery has had zero consumers since CHAOS-4026); the bridge
-#         now calls the plain function directly instead of its former
-#         `.run()`.
-#       * POST /reference-discovery-populate ->
-#         run_reference_discovery_populate_for_sync_run ->
-#         run_reference_discovery_populate_strict -> run_team_autoimport_strict.
-#       * POST /reference-discovery -> run_sync_reference_discovery.run() ->
-#         (same run_reference_discovery_populate_strict call, reference_discovery.py:135).
-#   - Go side (internal/, cmd/dev-health-worker/): every one of the three
-#     HTTP calls above is Fallback-only. teamCatalogAutoimportBridge.
+#   - HTTP bridge (worker_sync.py): POST /reference-discovery ->
+#     run_sync_reference_discovery.run() -> run_reference_discovery_populate_strict
+#     -> run_team_autoimport_strict. The /team-autoimport and
+#     /reference-discovery-populate routes this module used to also refuse
+#     through are deleted entirely -- jira going native (the last provider
+#     that route ever reached) removed their only remaining caller.
+#   - Go side (internal/, cmd/dev-health-worker/): teamCatalogAutoimportBridge.
 #     TeamAutoImport (team_catalog_clients.go:426-536) resolves the sync
 #     run's own provider and, for any provider in its `native` map (linear
 #     since #1989/27bef7286), runs the Go collector and `return`s WITHOUT
 #     ever calling the wrapped CoordinatorBridge.TeamAutoImport --
 #     structurally unreachable for linear. TeamCatalogDiscoveryExecutor.
-#     Discover (team_catalog_discovery_executor.go:137-143) is the same
-#     shape for the other two: `Native[provider]` always hits for linear,
-#     so `Fallback.Discover` (bridge_discovery_executor.go, which itself
-#     only calls PopulateReferenceDiscovery -> /reference-discovery-populate,
-#     never HTTPBridge.Discover -> /reference-discovery) never runs.
-#     HTTPBridge.Discover exists only to satisfy the CoordinatorBridge
-#     interface; nothing in cmd/dev-health-worker invokes it -- the native
-#     reference-discovery River worker (worker.go:308) calls
-#     NativeReferenceDiscoveryService.Discover, which is the executor chain
-#     above, not the bridge directly.
+#     Discover (team_catalog_discovery_executor.go) is the same shape for
+#     reference discovery: `Native[provider]` always hits for linear (and,
+#     post-CHAOS-4435, every provider that ever had real populate capacity),
+#     so the once-Fallback path -- deleted along with BridgeDiscoveryExecutor
+#     and PopulateReferenceDiscovery -- never runs for it. HTTPBridge.Discover
+#     (-> /reference-discovery, the one HTTP route still standing) exists
+#     only to satisfy the CoordinatorBridge interface; nothing in
+#     cmd/dev-health-worker invokes it -- the native reference-discovery
+#     River worker (worker.go:308) calls NativeReferenceDiscoveryService.
+#     Discover, which is the executor chain above, not the bridge directly.
 #   - backfill/runner.py (CHAOS-4498): no longer calls run_team_autoimport_
 #     strict in-process for any provider; it arms the same ledger/outbox
 #     row sync-time dispatch uses and goes through the identical

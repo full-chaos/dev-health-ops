@@ -6,11 +6,11 @@ import (
 )
 
 // VerifiedDiscoveryExecutor decorates another DiscoveryExecutor (in
-// practice, BridgeDiscoveryExecutor) with the ClickHouse readback
+// practice, TeamCatalogDiscoveryExecutor) with the ClickHouse readback
 // verification step -- ports run_sync_reference_discovery's sequential
 // run_team_autoimport_strict-then-_verify_reference_readback call, as a
 // composed decorator rather than folding the verification directly into
-// BridgeDiscoveryExecutor, so the populate call and the verify step stay
+// the inner executor, so the discovery call and the verify step stay
 // independently testable.
 //
 // The provider used for readback is the caller-supplied AUTHORITATIVE

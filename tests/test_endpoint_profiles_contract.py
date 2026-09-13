@@ -123,6 +123,13 @@ def test_inventory_row_count_matches_the_baseline():
     starting from the SAME pre-existing 365/306 baseline -- see the MERGE
     HAZARD note below for why the two numbers coincided and had to be
     recounted from the file rather than trusted from either branch alone.
+    = 362, -1 REST under this change: `POST /api/internal/worker-sync/
+    reference-discovery-populate` is deleted with its row in the same
+    change, the same shape as every prior worker-bridge deletion in this
+    list -- jira's own native collector was the last provider this route
+    ever reached for real (every provider `team_provider_capabilities()`
+    lists now has a registered native collector), so nothing calls the
+    route any more.
 
     MERGE HAZARD, recorded because it has now nearly landed silently more
     than once. Each change edited these same asserts, and each was correct
@@ -143,9 +150,9 @@ def test_inventory_row_count_matches_the_baseline():
     rows = inventory["rows"]
     rest = [r for r in rows if r["surface_kind"] == "rest"]
     graphql = [r for r in rows if r["surface_kind"] in _GRAPHQL_KINDS]
-    assert len(rest) == 304, len(rest)
+    assert len(rest) == 303, len(rest)
     assert len(graphql) == 59, len(graphql)
-    assert len(rows) == 363, len(rows)
+    assert len(rows) == 362, len(rows)
 
 
 def test_the_three_subscriptions_are_profiled():
@@ -186,7 +193,10 @@ def test_classification_summary_matches_the_baseline():
     # pre-existing 338 baseline -- see the merge hazard note in
     # test_inventory_row_count_matches_the_baseline for why this number is
     # recounted from the file rather than trusted from either branch alone.
-    assert len(protected) == 336, len(protected)
+    # - 1 more under this change: the deleted worker-sync/
+    # reference-discovery-populate row was also protected (worker bridge
+    # bearer, same as every other worker-sync route).
+    assert len(protected) == 335, len(protected)
     # 22 + the four fastapi doc routes + /metrics.
     assert len(public) == 27, len(public)
     assert len(protected) + len(public) == len(rows)

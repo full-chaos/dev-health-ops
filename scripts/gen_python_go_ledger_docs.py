@@ -364,17 +364,10 @@ BRIDGE_ROUTE_LEDGER: dict[str, dict[str, str]] = {
     },
     "/api/internal/worker-sync/reference-discovery": {
         "go_caller": "`bridge.go:106 HTTPBridge.Discover` — same, no live registrant",
-        "python_handler": "`worker_sync.py:250 reference_discovery_reference` -> `reference_discovery.py:56 run_sync_reference_discovery`",
+        "python_handler": "`worker_sync.py:246 reference_discovery_reference` -> `reference_discovery.py:56 run_sync_reference_discovery`",
         "computes": "reference-discovery orchestration (claim/lease/heartbeat/outbox)",
-        "state": "dead in live wiring — superseded by `NativeReferenceDiscoveryService` (CHAOS-4175, Done); its populate step still bridges, see next row",
+        "state": "dead in live wiring — superseded by `NativeReferenceDiscoveryService` (CHAOS-4175, Done)",
         "ticket": "CHAOS-4175 (Done)",
-    },
-    "/api/internal/worker-sync/reference-discovery-populate": {
-        "go_caller": "`bridge.go:133 PopulateReferenceDiscovery`, called from `bridge_discovery_executor.go:45` (`BridgeDiscoveryExecutor`), wired as the `Fallback` field of `TeamCatalogDiscoveryExecutor` (`sync_dispatch.go:580`) — code still LIVE, synchronous, blocking, but its `Fallback` branch is now unreachable for every import-capable provider: `TeamCatalogDiscoveryExecutor.Discover` only reaches it when the sync run's own provider has no entry in `nativeTeamCatalogCollectors`, and that map now covers linear/github/gitlab/jira (every provider `team_provider_capabilities()` lists). Only pagerduty/launchdarkly sync runs still mechanically reach it -- a `SyncRunReferenceDiscovery` row is created unconditionally per sync run (`sync/planner.py:380`) regardless of provider -- and `BridgeDiscoveryExecutor.Discover` ignores its own `provider` argument, sending only `{organization_id, sync_run_id}`; Python resolves the provider itself from the sync run's own integration row",
-        "python_handler": "`worker_sync.py:286 reference_discovery_populate_reference` -> `reference_discovery.py:226` -> `team_autoimport.py:169 run_team_autoimport_strict` -> per-provider `populate()`. Every provider with a real populator (`_IMPORTER_MODULES`: linear/jira/github/gitlab) is now refused before `populate()` is ever resolved -- linear and jira explicitly, via `_resolve_populator`'s `_GO_NATIVE_PROVIDERS` set; github/gitlab implicitly, since the Go-side Fallback above never reaches this route for them. pagerduty/launchdarkly reach the route but `_provider_capability` (`team_autoimport.py:45`) is false for them, so the call is a no-op zero-summary",
-        "computes": "nothing, in practice: no provider whose call actually writes ever reaches this route any more. Historically computed jira teams/members/memberships/project-ownership rows here before jira's own native collector shipped",
-        "state": "bridge code still exists and is still wired, but dead for every import-capable provider (linear/github/gitlab/jira) pending the 5.6 prod readback (CHAOS-4492) that confirms the native collectors are the live prod writer, not just local/CI-proven -- pagerduty/launchdarkly still reach it mechanically as a permanent no-op",
-        "ticket": "CHAOS-4435 (retire the Fallback wiring and this route now that no provider needs it — the backfill blocker CHAOS-4498 closed) + CHAOS-4492 (ledger regen, 5.6 prod readback)",
     },
     "/api/internal/worker-sync/team-autoimport": {
         "go_caller": "`bridge.go:113 TeamAutoImport`, called from `teamCatalogAutoimportBridge.TeamAutoImport` (`cmd/dev-health-worker/team_catalog_clients.go:426`), the wrapper `RegisterTeamAutoimportWorker` (`worker.go:93`) registers, wired `sync_dispatch.go:565`. `teamCatalogAutoimportBridge` resolves the run's own provider and calls its embedded `CoordinatorBridge.TeamAutoImport` (i.e. this route) for ANY provider absent from `nativeTeamCatalogCollectors`, but that map now covers every import-capable provider (linear/github/gitlab/jira) -- this call is unreachable-but-still-wired dead code for all of them, reachable in practice only for pagerduty/launchdarkly (both no-op on the Python side, see the row below). Deliberately left in place rather than ripped out (tracked as CHAOS-4435 scope, not this change): removing it cleanly needs a narrower `CoordinatorBridge` seam than the one `RegisterTeamAutoimportWorker` currently requires",
@@ -458,7 +451,7 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
     },
     "reference_discovery.py": {
         "category": "a",
-        "evidence": "imported directly worker_sync.py:22-25; served by /reference-discovery and /reference-discovery-populate routes",
+        "evidence": "imported directly worker_sync.py:22; served by /reference-discovery. The narrower /reference-discovery-populate route this file also used to serve (`run_reference_discovery_populate_for_sync_run`) is deleted -- jira going native closed out every provider that route ever reached for real",
         "ticket": "n/a",
     },
     "sync_bootstrap.py": {

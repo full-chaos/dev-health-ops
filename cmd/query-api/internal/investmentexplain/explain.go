@@ -11,9 +11,11 @@ package investmentexplain
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"math"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/units"
@@ -168,6 +170,60 @@ func invalidLLMOutputExplanation(topThemes []keyValue, totalEffort float64, conf
 		},
 		Status: &status,
 	}
+}
+
+// llmOutputRejectionLogHeadRunes caps how much of a rejected LLM
+// completion's raw text logRejectedExplainOutput will echo into a log
+// line -- a REDACTED head, not the whole completion (investment-mix
+// explain output can carry customer quote text pulled from work-unit
+// evidence, and prod logs are not a place to mirror that verbatim at
+// full length).
+const llmOutputRejectionLogHeadRunes = 300
+
+// logRejectedExplainOutput closes a real telemetry gap: before this, a
+// strict-parser rejection (parseResult.Output == nil, covering all three
+// non-valid ParseStatus values) fell straight through to
+// invalidLLMOutputExplanation with NOTHING logged -- the reason the
+// parser rejected the completion, which provider/model answered, and the
+// completion's own text were all discarded together. That made a real
+// LLM answer the parser refused (confirmed in prod via ClickHouse
+// llm_token_usage showing a genuine model call at the fallback's receipt
+// time) indistinguishable from a parser bug from the logs alone.
+//
+// completion.Text is truncated to llmOutputRejectionLogHeadRunes runes
+// and newlines are escaped so the rejection reason stays on one log
+// line; output_length is measured on the FULL text so a truncated head
+// never hides how much was cut.
+func logRejectedExplainOutput(ctx context.Context, parseResult ParseResult, provider, model string, completion categorize.CompletionResult) {
+	if model == "" {
+		model = completion.Model
+	}
+	slog.WarnContext(ctx, "query_api.investment_mix_explain.llm_output_rejected",
+		"status", string(parseResult.Status),
+		"reason", parseResult.Reason,
+		"provider", provider,
+		"model", model,
+		"prompt_tokens", completion.InputTokens,
+		"completion_tokens", completion.OutputTokens,
+		"output_length", utf8.RuneCountInString(completion.Text),
+		"output_head", redactedOutputHead(completion.Text, llmOutputRejectionLogHeadRunes),
+	)
+}
+
+// redactedOutputHead returns the first maxRunes runes of text with
+// newlines escaped to the two-character sequence "\n" (and bare "\r"
+// folded the same way) so the result can never split a structured log
+// line across multiple lines.
+func redactedOutputHead(text string, maxRunes int) string {
+	runes := []rune(text)
+	if len(runes) > maxRunes {
+		runes = runes[:maxRunes]
+	}
+	head := string(runes)
+	head = strings.ReplaceAll(head, "\r\n", "\\n")
+	head = strings.ReplaceAll(head, "\n", "\\n")
+	head = strings.ReplaceAll(head, "\r", "\\n")
+	return head
 }
 
 // ExplainInvestmentMix ports explain_investment_mix
@@ -487,6 +543,7 @@ func (reader *Reader) ExplainInvestmentMix(ctx context.Context, writer *CacheWri
 	})
 
 	if parseResult.Output == nil {
+		logRejectedExplainOutput(ctx, parseResult, resolvedProvider, resolvedModel, completion)
 		return invalidLLMOutputExplanation(topThemes, totalEffort, confidenceLevel, qualityMean, qualityStddev, bandCounts, qualityDrivers), nil
 	}
 

@@ -76,8 +76,20 @@ type InvestmentMixExplainOutput struct {
 }
 
 // ParseResult ports investment_mix_types.py's InvestmentMixParseResult
-// dataclass.
+// dataclass, plus one Go-only addition: Reason.
+//
+// Reason is NOT ported from Python -- Python's own parser (investment_
+// mix_parser.py) returns just the four-way Status on every rejection,
+// with no finer-grained "why" attached (only two of its many bail-out
+// points even log a message, and neither is structured). Reason exists
+// purely so a caller can put something better than the bare Status into
+// a log line: prod was logging NOTHING on invalid_llm_output, discarding
+// the real LLM answer along with any way to tell "parser bug" from "bad
+// completion" apart. It carries no parity weight and MUST
+// NOT be compared by any golden/differential test -- only Status and
+// Output are ported fields.
 type ParseResult struct {
 	Status ParseStatus
 	Output *InvestmentMixExplainOutput
+	Reason string
 }

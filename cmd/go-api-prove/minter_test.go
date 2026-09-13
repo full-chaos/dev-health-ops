@@ -319,7 +319,7 @@ func TestTheReportCarriesTheCountersItComputes(t *testing.T) {
 		// rebuilt label strips -- so the two forms now differ.
 		if err := emitReport(flags{orgID: "o", edgeURL: "http://edge.test/graphql?token=s3cret-happy-path", proofURL: "http://proof.test/query/proof/s3cret-proof"},
 			goapiproof.RegistryView{SchemaDigest: "sha256:x", BuildIdentity: "b"},
-			outcomes, summary, credential); err != nil {
+			outcomes, summary, credential, nil); err != nil {
 			t.Fatalf("emitReport: %v", err)
 		}
 	})
@@ -428,7 +428,7 @@ func TestThisCommandsGuardsAreKillable(t *testing.T) {
 		printed := captureStdout(t, func() {
 			_ = emitReport(flags{orgID: "o", edgeURL: "http://edge.test/graphql"},
 				goapiproof.RegistryView{SchemaDigest: "s", BuildIdentity: "b"},
-				outcomes, goapiproof.Summary{Attempted: 1, Admitted: 1, Executed: 1}, nil)
+				outcomes, goapiproof.Summary{Attempted: 1, Admitted: 1, Executed: 1}, nil, nil)
 		})
 		// 2 present, 1 absent -- neither number is 1, so a constant
 		// cannot satisfy both.
@@ -626,7 +626,7 @@ func TestTheStdoutSummaryCarriesItsExplicitZeros(t *testing.T) {
 	printed := captureStdout(t, func() {
 		_ = emitReport(flags{orgID: "o", edgeURL: "http://edge.test/graphql"},
 			goapiproof.RegistryView{SchemaDigest: "s", BuildIdentity: "b"},
-			nil, goapiproof.Summary{Attempted: 3}, nil)
+			nil, goapiproof.Summary{Attempted: 3}, nil, nil)
 	})
 
 	for _, want := range []string{"admitted=0", "stale_routing_rows=0", "attempted=3"} {
@@ -725,7 +725,7 @@ func TestArgvGuardRefusesCredentialShapedElementsByIndexOnly(t *testing.T) {
 
 	for _, credentialShaped := range []string{jwt, longHex, longBase64, ghpLike, skLike, githubPatLike, xoxbLike} {
 		argv := []string{"/opt/job5/mint-envelope.sh", credentialShaped}
-		err := refuseCredentialLikeArgv(argv)
+		err := refuseCredentialLikeArgv("-proof-bearer-exec", argv)
 		if err == nil {
 			t.Fatalf("credential-shaped argv element was accepted: %q", credentialShaped)
 		}
@@ -745,7 +745,7 @@ func TestArgvGuardRefusesCredentialShapedElementsByIndexOnly(t *testing.T) {
 		{"/usr/bin/env", "bash", "-c", "true"},
 	}
 	for _, argv := range ordinary {
-		if err := refuseCredentialLikeArgv(argv); err != nil {
+		if err := refuseCredentialLikeArgv("-proof-bearer-exec", argv); err != nil {
 			t.Fatalf("an ordinary argv was refused: %v (%v)", err, argv)
 		}
 	}
@@ -806,5 +806,119 @@ func TestSpawnedHelperCmdlineNeverCarriesTheSecret(t *testing.T) {
 	res := <-done
 	if res.err != nil {
 		t.Fatalf("mintBearer: %v", res.err)
+	}
+}
+
+// -edge-bearer-exec replaces the hand-minted GO_API_PROVE_BEARER. Setting
+// both is refused: a run must never guess which edge credential it sent,
+// and a stale static token left in a pod's environment must not silently
+// win over the minted one (or the reverse).
+func TestTheEdgeCredentialIsMintedOrStaticNeverBoth(t *testing.T) {
+	t.Setenv(proofBearerEnvVar, syntheticJWT(t, map[string]string{"sub": "u-1"}))
+	argv, err := json.Marshal([]string{"/usr/local/bin/mint-edge-token", "-org", "11111111-2222-4333-8444-555555555555"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const static = "static-edge-token-value"
+	t.Setenv(edgeBearerEnvVar, static)
+	_, _, err = credentials(flags{edgeBearerExec: string(argv)})
+	if err == nil {
+		t.Fatal("both -edge-bearer-exec and a static edge bearer were accepted")
+	}
+	if strings.Contains(err.Error(), static) || !strings.Contains(err.Error(), edgeBearerEnvVar) {
+		t.Fatalf("the refusal must name the variable and never its value: %v", err)
+	}
+
+	t.Setenv(edgeBearerEnvVar, "")
+	edge, _, err := credentials(flags{edgeBearerExec: string(argv)})
+	if err != nil {
+		t.Fatalf("-edge-bearer-exec alone was refused: %v", err)
+	}
+	if edge.Kind() != "edge access token" {
+		t.Fatalf("edge credential kind = %q", edge.Kind())
+	}
+
+	_, _, err = credentials(flags{})
+	if err == nil || !strings.Contains(err.Error(), "-edge-bearer-exec") {
+		t.Fatalf("with no edge credential the refusal must point at -edge-bearer-exec: %v", err)
+	}
+}
+
+func TestTheEdgeExecFlagGetsTheSameArgvRulesAsTheProofOne(t *testing.T) {
+	t.Setenv(edgeBearerEnvVar, "")
+	t.Setenv(proofBearerEnvVar, syntheticJWT(t, map[string]string{"sub": "u-1"}))
+	for _, value := range []string{"/usr/local/bin/mint-edge-token -org x", "[]", "{}", "not json"} {
+		_, _, err := credentials(flags{edgeBearerExec: value})
+		if err == nil {
+			t.Fatalf("%q was accepted as an argv", value)
+		}
+		if !strings.Contains(err.Error(), "-edge-bearer-exec") {
+			t.Fatalf("the refusal must name the flag it is about: %v", err)
+		}
+	}
+
+	credentialShaped := syntheticJWT(t, map[string]string{"sub": "u-1"})
+	argv, err := json.Marshal([]string{"/usr/local/bin/mint-edge-token", credentialShaped})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = credentials(flags{edgeBearerExec: string(argv)})
+	if err == nil {
+		t.Fatal("a credential-shaped -edge-bearer-exec element was accepted")
+	}
+	if strings.Contains(err.Error(), credentialShaped) || !strings.Contains(err.Error(), "-edge-bearer-exec argv element 1") {
+		t.Fatalf("the refusal must name the flag and the index, never the value: %v", err)
+	}
+}
+
+// The minted edge credential is shape-checked and re-minted like the
+// proof one, and its mint COUNT reaches the report.
+func TestTheMintedEdgeCredentialIsShapeValidatedAndCounted(t *testing.T) {
+	t.Setenv(edgeBearerEnvVar, "")
+	t.Setenv(proofBearerEnvVar, syntheticJWT(t, map[string]string{"sub": "u-1"}))
+
+	usage := writeHelper(t, "#!/bin/sh\nprintf 'usage: mint-edge-token -org ORG'\n")
+	argv, err := json.Marshal([]string{usage})
+	if err != nil {
+		t.Fatal(err)
+	}
+	edge, _, err := credentials(flags{edgeBearerExec: string(argv)})
+	if err != nil {
+		t.Fatalf("credentials: %v", err)
+	}
+	request, _ := http.NewRequest(http.MethodPost, "http://example.invalid/graphql", nil)
+	if err := edge.Apply(context.Background(), request); err == nil || request.Header.Get("Authorization") != "" {
+		t.Fatalf("a helper printing a usage line was installed as the edge credential (err=%v)", err)
+	}
+
+	token := syntheticJWT(t, map[string]string{"sub": "edge-principal"})
+	good := writeHelper(t, "#!/bin/sh\necho '"+token+"'\n")
+	argv, err = json.Marshal([]string{good})
+	if err != nil {
+		t.Fatal(err)
+	}
+	edge, _, err = credentials(flags{edgeBearerExec: string(argv)})
+	if err != nil {
+		t.Fatalf("credentials: %v", err)
+	}
+	request, _ = http.NewRequest(http.MethodPost, "http://example.invalid/graphql", nil)
+	if err := edge.Apply(context.Background(), request); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if request.Header.Get("Authorization") != "Bearer "+token {
+		t.Fatal("the minted edge token did not reach the request as a bearer")
+	}
+
+	printed := captureStdout(t, func() {
+		_ = emitReport(flags{orgID: "o", edgeURL: "http://edge.test/graphql"},
+			goapiproof.RegistryView{SchemaDigest: "s", BuildIdentity: "b"},
+			nil, goapiproof.Summary{}, nil, edge)
+	})
+	if !strings.Contains(printed, "edge access token mints = 1") {
+		t.Fatalf("the edge mint count must reach the report:\n%s", printed)
+	}
+	if strings.Contains(printed, token) {
+		t.Fatalf("the report printed the edge token:\n%s", printed)
 	}
 }

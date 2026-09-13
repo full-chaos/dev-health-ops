@@ -56,6 +56,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 COPY cmd/go-api-routing ./cmd/go-api-routing
 COPY cmd/go-api-prove ./cmd/go-api-prove
 COPY cmd/mint-envelope ./cmd/mint-envelope
+COPY cmd/mint-edge-token ./cmd/mint-edge-token
 COPY cmd/query-api ./cmd/query-api
 COPY contracts/graphql/v1 ./contracts/graphql/v1
 COPY internal ./internal
@@ -66,7 +67,8 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     for command in \
         go-api-routing \
         go-api-prove \
-        mint-envelope; do \
+        mint-envelope \
+        mint-edge-token; do \
       GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build \
         -buildvcs=false \
         -trimpath \
@@ -99,7 +101,7 @@ ARG COMMIT="unknown"
 ARG BUILD_TIME="1970-01-01T00:00:00Z"
 
 LABEL org.opencontainers.image.title="Dev Health Go-API tools" \
-      org.opencontainers.image.description="go-api-routing and go-api-prove operator binaries, mint-envelope (go-api-prove's local envelope-signing helper), plus the documents dump and operation catalog they need, for the Go-API rollout's tools pod" \
+      org.opencontainers.image.description="go-api-routing and go-api-prove operator binaries, mint-envelope and mint-edge-token (go-api-prove's local envelope and edge-token signing helpers), plus the documents dump and operation catalog they need, for the Go-API rollout's tools pod" \
       org.opencontainers.image.source="https://github.com/full-chaos/dev-health-ops" \
       org.opencontainers.image.version=${VERSION} \
       org.opencontainers.image.revision=${COMMIT} \
@@ -121,6 +123,12 @@ COPY --from=build /out/go-api-prove /usr/local/bin/go-api-prove
 # into THIS pod's environment via secretKeyRef, never a copied key file
 # and never a call to a running pod.
 COPY --from=build /out/mint-envelope /usr/local/bin/mint-envelope
+# The -edge-bearer-exec helper (internal/edgetokenmint's package doc has the
+# design): mints the edge access token for the dedicated proof service
+# principal LOCALLY, from the same JWT_SECRET_KEY the api pod's environment
+# holds, reached the same way -- a Secret key via secretKeyRef. It reads the
+# principal row through POSTGRES_URI, which go-api-prove already needs.
+COPY --from=build /out/mint-edge-token /usr/local/bin/mint-edge-token
 
 # The documents dump (freshly generated above, same commit as the
 # binaries) and the checked-in operation catalog (never regenerated here

@@ -139,10 +139,13 @@ Real proof run after the metrics drain completes (Trap #174 repair landed). Tool
 # From tools Pod. GO_API_ENVELOPE_PRIVATE_KEY reaches this Pod's own
 # environment via secretKeyRef (same Secret/key the api Deployment reads),
 # and mint-envelope mints the envelope LOCALLY from it -- see "Tools pod
-# (operator image)" below.
+# (operator image)" below. JWT_SECRET_KEY and POSTGRES_URI reach it the
+# same way, and mint-edge-token mints the edge access token for the proof
+# service principal LOCALLY from them.
 go-api-prove -api-url=http://dev-health-ops.default.svc.cluster.local:8000 \
   -query-api-url=http://dev-health-query-api:8000 \
   -proof-bearer-exec='["/usr/local/bin/mint-envelope","-org","c6a38355-dad6-42e4-8cc9-4c712450827d"]' \
+  -edge-bearer-exec='["/usr/local/bin/mint-edge-token","-org","c6a38355-dad6-42e4-8cc9-4c712450827d"]' \
   -org=c6a38355-dad6-42e4-8cc9-4c712450827d \
   -from=<baseline-date> -to=<proof-date>
 ```
@@ -202,7 +205,7 @@ Userlist exposure and pooler convergence move to CHAOS-5604 scope. For now, dire
 ## Known limitations
 
 - **`/query/proof` cannot mount on prod** (Trap #163). `GO_API_PROOF_ROUTE_ENABLED` gates on a non-production `DEV_HEALTH_ENV`; prod never sets it. Real proof runs use `-proof-url=""` (empty).
-- **Tools Pod image** (`dev-health-go-api-tools`) lacks the `go-worker` image's sync-dispatch contracts. Use only the tools image, not go-worker, for one-off `go-api-prove` and corrective `go-api-routing` runs. Its baked-in `mint-envelope` helper mints the envelope locally and needs `GO_API_ENVELOPE_PRIVATE_KEY` mounted into the Pod's environment via `secretKeyRef` (same Secret/key the api Deployment reads) — see [Tools pod (operator image)](../../contribute/architecture/go-api-wave-0-proof-infrastructure.md#tools-pod-operator-image) for the `kubectl run` form and what is (and is not) on the image.
+- **Tools Pod image** (`dev-health-go-api-tools`) lacks the `go-worker` image's sync-dispatch contracts. Use only the tools image, not go-worker, for one-off `go-api-prove` and corrective `go-api-routing` runs. Its baked-in `mint-envelope` helper mints the envelope locally and needs `GO_API_ENVELOPE_PRIVATE_KEY` mounted into the Pod's environment via `secretKeyRef` (same Secret/key the api Deployment reads) — see [Tools pod (operator image)](../../contribute/architecture/go-api-wave-0-proof-infrastructure.md#tools-pod-operator-image) for the `kubectl run` form and what is (and is not) on the image. Its `mint-edge-token` helper mints the edge access token the same way and needs `JWT_SECRET_KEY` and `POSTGRES_URI` by `secretKeyRef`, plus the proof service principal row (active, `auth_provider = 'service'`, a `viewer` membership in the org).
 - **Shadow set never lands on prod**. The 3 operations that `disable -mode python` skipped are disabled by design (CHAOS-5606 note: enabling would surface unproven operations to traffic before baseline is established).
 
 ## See also

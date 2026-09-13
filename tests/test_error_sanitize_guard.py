@@ -19,11 +19,10 @@ exactly what a persistence site producing unsanitized text looks like, since
 every real persistence site in these files has already been converted to
 call ``sanitize_error_text`` instead of stringifying the exception directly.
 
-Three internal-classification sites are exempted: ``_classify_error`` in
-``workers/sync_units.py`` and ``_is_retryable_discovery_error`` in
-``workers/reference_discovery.py`` lowercase ``str(exc)`` purely to
-pattern-match it against a fixed, curated vocabulary (mirroring the existing
-``_normalized_rate_limit_reason`` allow-list precedent) and return only a
+One internal-classification site is exempted: ``_classify_error`` in
+``workers/sync_units.py`` lowercases ``str(exc)`` purely to pattern-match it
+against a fixed, curated vocabulary (mirroring the existing
+``_normalized_rate_limit_reason`` allow-list precedent) and returns only a
 category string -- the raw text itself is discarded, never persisted.
 ``_only_unroutable`` in ``workers/sync_reconciler.py`` (CHAOS-3957) did the
 same for one fixed substring ("paused") to choose a log level (WARNING for a
@@ -32,6 +31,12 @@ raw text was never returned, stored, or logged itself; only the two fixed
 event-name strings were. ``sync_reconciler.py`` was deleted outright under
 CHAOS-3093 (PR2a', internal/syncreconciler is the live Go owner), so both the
 target-file entry and this exemption are removed, not carried forward.
+``_is_retryable_discovery_error`` in ``workers/reference_discovery.py`` did
+the same for its own retry-classification, exempted the same way; the whole
+Celery discovery task it classified for is now deleted (the Go-native
+reference-discovery worker superseded it), so both its target-file entry and
+this exemption are removed too -- ``reference_discovery.py`` no longer
+stringifies or persists an exception anywhere.
 
 ``api/admin/routers/sync.py`` (added for the CHAOS-2766 codex review
 finding: a Celery/broker enqueue-failure exception can embed the broker/
@@ -53,16 +58,12 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 
 _TARGET_FILES = (
     "src/dev_health_ops/workers/sync_units.py",
-    "src/dev_health_ops/workers/reference_discovery.py",
     "src/dev_health_ops/sync/dispatch_outbox.py",
     "src/dev_health_ops/sync/trigger_routing.py",
     "src/dev_health_ops/sync/execution_trigger.py",
     "src/dev_health_ops/api/admin/routers/sync.py",
 )
 
-# Files that must actually import/use the helper -- reference discovery is
-# intentionally excluded because its stronger boundary persists only a stable,
-# opaque code/message and has dedicated malicious-exception regressions.
 _FILES_REQUIRING_HELPER_USAGE = (
     "src/dev_health_ops/workers/sync_units.py",
     "src/dev_health_ops/sync/dispatch_outbox.py",
@@ -93,10 +94,6 @@ _LOGGER_METHODS = {"debug", "info", "warning", "error", "exception", "critical",
 # never persisted -- see module docstring.
 _CLASSIFICATION_ONLY_EXEMPTIONS = {
     ("src/dev_health_ops/workers/sync_units.py", "_classify_error"),
-    (
-        "src/dev_health_ops/workers/reference_discovery.py",
-        "_is_retryable_discovery_error",
-    ),
 }
 
 

@@ -1,6 +1,6 @@
 # Frozen oracle snapshots
 
-Two independent deletion PRs landed the same freezing mechanism
+Three independent deletion PRs landed the same freezing mechanism
 (`compareRowsAgainstFrozenOracle`/`frozenOracleDivergences` in
 `oracle_compare_test.go`) against different sets of retired Python producers.
 Both sections below apply the SAME contract: `compareRowsAgainstFrozenOracle`
@@ -155,3 +155,54 @@ engine-destinations pairs, so those frozen bytes are exactly what those tests
 would have produced. The instrumentation itself was never committed;
 capturing again means re-adding the same temporary hook, one test run per
 pair, then discarding it.
+
+## CHAOS-5713/CHAOS-4435: team-catalog row-builder pairs
+
+`team_autoimport_{linear,github,gitlab}.py` are deleted outright -- the
+`/api/internal/worker-sync/reference-discovery` bridge route and the whole
+Python `run_team_autoimport(_strict)` call chain that was their only
+remaining caller are dead (no live Go caller of `HTTPBridge.Discover`, no
+Celery consumer of the task that route drove), and providersync's own native
+collectors (`github_team_catalog.go`, `gitlab_team_catalog.go`,
+`linear_team_catalog_collector.go`) are the only producers of GitHub/GitLab/
+Linear team-catalog rows now. The 9 pairs here (of the many `linear_*`/
+`gitlab_*`/`github_*` oracle pairs -- every other pair tests a different,
+unrelated Python function and is untouched) used to run
+`python_generic_row_oracle.py` live on every test run via
+`python_oracle_loader.load_live_module`; with the Python producers gone,
+there is nothing left to shell out to, so each pair's LAST live comparison
+output was captured once and frozen the same way as the sections above.
+`python_oracle_loader.py`'s own three `_target_*_team_autoimport` stub-
+namespace functions and their `_TEAM_AUTOIMPORT_*_SOURCE` module-level
+constants are deleted too -- those constants eagerly `.resolve(strict=True)`
+the (now missing) source paths at THIS shared loader module's own import
+time, so leaving them in place would break every one of the ~70 unrelated
+oracle pairs that import `load_live_module`, not just these 9.
+
+- `linear_work-items_reference-team.json` -- `TestLinearReferenceTeamCatalogMatchesLivePythonProducer` (`linear_reference_catalog_team_oracle_test.go`).
+- `linear_work-items_reference-member.json` -- `TestLinearReferenceMemberMatchesLivePythonProducer` (`linear_reference_catalog_member_oracle_test.go`).
+- `linear_work-items_reference-project.json` -- `TestLinearReferenceProjectMatchesLivePythonProducer` (`linear_reference_catalog_oracle_test.go`).
+- `gitlab_work-items_reference-team.json` -- `TestGitLabReferenceTeamCatalogMatchesLivePythonProducer` (`gitlab_team_catalog_team_oracle_test.go`).
+- `gitlab_work-items_reference-project.json` -- `TestGitLabReferenceProjectCatalogMatchesLivePythonProducer` (`gitlab_team_catalog_project_oracle_test.go`).
+- `gitlab_work-items_reference-ownership.json` -- `TestGitLabReferenceOwnershipMatchesLivePythonProducer` (`gitlab_team_catalog_ownership_oracle_test.go`).
+- `github_team-catalog_team.json` -- `TestGitHubTeamCatalogTeamRowMatchesLivePythonProducer` (`github_team_catalog_generic_oracle_test.go`).
+- `github_team-catalog_membership.json` -- `TestGitHubTeamCatalogMembershipRowMatchesLivePythonProducer` (`github_team_catalog_generic_oracle_test.go`).
+- `github_team-catalog_repo-ownership.json` -- `TestGitHubTeamCatalogRepoOwnershipRowMatchesLivePythonProducer` (`github_team_catalog_generic_oracle_test.go`).
+
+`github/team-catalog/facets` (same file) is untouched: its producer is
+`providers/identity.py`, still live.
+
+Captured from the parent commit of the deletion (the tip this branch was cut
+from, before `team_autoimport_{linear,github,gitlab}.py` were removed), by
+temporarily restoring those three files plus the pre-deletion
+`python_oracle_loader.py` into the working tree (never staged, never
+committed) and invoking `python_generic_row_oracle.py "<pair id>" <cases>`
+directly for each of the 9 pairs, with cases.json built to match each Go
+test's own `[]oracleCase{...}` literal field-for-field -- never a hand-
+reconstructed case set, so the frozen bytes are exactly what those tests
+would have produced. The temporary restoration was reverted immediately
+after capture; the deleted Python files are not, and must not be, present in
+the committed tree. Re-capturing (a future field addition to these 9 pairs'
+Go code) means checking out the same three now-deleted files from that same
+pre-deletion commit into a temp path, one test run per pair, then discarding
+them again.

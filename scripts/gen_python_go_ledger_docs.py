@@ -286,9 +286,9 @@ KIND_LEDGER: dict[str, dict[str, str]] = {
         "producer": "enqueue: `cmd/dev-health-worker/sync_dispatch.go:195 teamAutoimportPostSyncWriter.PublishTx`, called from `NativePostSyncService.publishTeamAutoimport` (`native_post_sync.go:337-344`) only when `plan.TeamAutoimport` is true; dequeue/consumer: `internal/syncdispatchruntime/worker.go:105 RegisterTeamAutoimportWorker`, wired `sync_dispatch.go:717`. Per-provider dispatch: `nativeTeamAutoimportDispatcher.TeamAutoImport` (`cmd/dev-health-worker/team_catalog_clients.go:452`) resolves the sync run's own provider (`resolveTeamCatalogProvider`) and looks it up in the `nativeTeamCatalogCollectors` map (`sync_dispatch.go:545`, linear/github/gitlab/jira); a hit runs the Go collector directly. jira's own collector (`JiraTeamCatalogCollector`, `internal/providersync/jira_team_catalog_route.go`) was the last entry added, closing the map to every provider `team_provider_capabilities()` lists as import-capable, so there is no Python bridge left in this seam at all: `CoordinatorBridge.TeamAutoImport`, the wrapped `HTTPBridge.TeamAutoImport` method, and the `/api/internal/worker-sync/team-autoimport` route it called are all deleted. A miss on a provider `teamAutoimportImportCapableProviders` still lists as import-capable (linear/jira/github/gitlab) is a wiring bug and returns `errTeamAutoImportProviderUnavailable`, propagated to fail (and retry) the River job; any other provider (pagerduty, launchdarkly) is a genuine, permanent no-op recorded as `not_import_capable`; a provider-resolution failure itself now propagates too, since there is no bridge to mask it",
         "trigger": "post-sync (best-effort, fire-and-forget)",
         "gate": "Go-side: `plan.TeamAutoimport` (`native_post_sync.go:560-577`) = OR of the org's 3 sync_options flags (`auto_import_teams`/`auto_import_projects`/`auto_import_members`) -- when all 3 are false, the job is never enqueued at all, not merely a no-op inside the populator. Provider routing gate: presence of a registered entry in `nativeTeamCatalogCollectors` (linear/github/gitlab/jira) selects the native collector per sync run's own provider (see producer column); every import-capable provider is native now, so there is no live Python-side gate left to describe",
-        "writer": "linear/github/gitlab/jira sync runs: Go-native collectors registered in `nativeTeamCatalogCollectors` (`cmd/dev-health-worker/sync_dispatch.go`), writing via `providerfoundation.CredentialResolver` + per-provider ClickHouse effects -- #1989 `27bef7286` (Linear), #1984 `950752653` (GitHub), #1985 `5bff38a5a` (GitLab), jira's own collector completing the set. The operator-triggered backfill tool (`backfill/runner.py`) arms the SAME `sync_run_reference_discoveries` ledger + outbox row sync-time dispatch uses and waits for a terminal outcome, so a backfill reaches `TeamCatalogDiscoveryExecutor` exactly like any other sync run: native collector for every import-capable provider, a clean no-op for pagerduty/launchdarkly. `team_autoimport_{linear,github,gitlab,jira}.py`'s `populate()` functions remain in the tree but are execution-unreachable via sync-time OR backfill dispatch for any provider",
+        "writer": "linear/github/gitlab/jira sync runs: Go-native collectors registered in `nativeTeamCatalogCollectors` (`cmd/dev-health-worker/sync_dispatch.go`), writing via `providerfoundation.CredentialResolver` + per-provider ClickHouse effects -- #1989 `27bef7286` (Linear), #1984 `950752653` (GitHub), #1985 `5bff38a5a` (GitLab), jira's own collector completing the set. The operator-triggered backfill tool (`backfill/runner.py`) arms the SAME `sync_run_reference_discoveries` ledger + outbox row sync-time dispatch uses and waits for a terminal outcome, so a backfill reaches `TeamCatalogDiscoveryExecutor` exactly like any other sync run: native collector for every import-capable provider, a clean no-op for pagerduty/launchdarkly. `team_autoimport_{linear,github,gitlab,jira}.py`'s `populate()` functions -- execution-unreachable via sync-time OR backfill dispatch for any provider -- are deleted outright (CHAOS-4435/CHAOS-5713), along with their `team_autoimport.py` executor (`run_team_autoimport`/`run_team_autoimport_strict`) and the also-dead `/api/internal/worker-sync/reference-discovery` bridge route",
         "tables": "ClickHouse `teams`, `team_memberships`, `team_project_ownership`, `projects`, `sprints`",
-        "evidence": "local — re-armed reference-discovery run, org 70d529e0, 2026-08-29 07:11 UTC: outcome `native` for linear with `rows_written` for teams/team_memberships/team_project_ownership; ClickHouse `teams.updated_at` matches the re-arm instant; `system.query_log` writer `clickhouse-go/2.47.0`, not Python's `clickhouse-connect`. jira's own native-collector parity is argued (code read + `go test ./internal/providersync/... ./cmd/dev-health-worker/...`, table-driven fixture parity against `team_autoimport_jira.py`'s test fixtures), not yet re-executed against org 70d529e0 real data from this worktree -- tracked under the same 5.6 prod readback as linear/github/gitlab. The narrowed-seam / no-bridge-left design is argued (unit tests in `cmd/dev-health-worker/team_catalog_clients_test.go`), not yet re-executed against prod.",
+        "evidence": "local — re-armed reference-discovery run, org 70d529e0, 2026-08-29 07:11 UTC: outcome `native` for linear with `rows_written` for teams/team_memberships/team_project_ownership; ClickHouse `teams.updated_at` matches the re-arm instant; `system.query_log` writer `clickhouse-go/2.47.0`, not Python's `clickhouse-connect`. jira's own native-collector parity is argued (code read + `go test ./internal/providersync/... ./cmd/dev-health-worker/...`, table-driven fixture parity proven against `team_autoimport_jira.py`'s test fixtures before that file's deletion, CHAOS-4435/CHAOS-5713), not yet re-executed against org 70d529e0 real data from this worktree -- tracked under the same 5.6 prod readback as linear/github/gitlab. The narrowed-seam / no-bridge-left design is argued (unit tests in `cmd/dev-health-worker/team_catalog_clients_test.go`), not yet re-executed against prod.",
         "state": "native for linear/github/gitlab/jira, both sync-time and backfill dispatch, among every provider whose populate() ever actually wrote rows -- pagerduty/launchdarkly sync runs get a clean, direct Go no-op (not import-capable, see producer column); the Go-side bridge client and the Python route it called are both fully deleted now, not merely unreachable",
         "ticket": "CHAOS-4492 (ledger regen, 5.6 prod readback still pending for jira same as linear/github/gitlab)",
     },
@@ -347,15 +347,7 @@ KIND_LEDGER: dict[str, dict[str, str]] = {
 # ---------------------------------------------------------------------------
 # CURATED: one entry per bridge.go route (internal/syncdispatchruntime/bridge.go).
 # ---------------------------------------------------------------------------
-BRIDGE_ROUTE_LEDGER: dict[str, dict[str, str]] = {
-    "/api/internal/worker-sync/reference-discovery": {
-        "go_caller": "`bridge.go:83 HTTPBridge.Discover` — interface method exists but `RegisterWorkers` (`worker.go:72-89`) takes the 4 Native services, never `bridge`; no live registrant calls `.Discover()`",
-        "python_handler": "`worker_sync.py:200 reference_discovery_reference` -> `reference_discovery.py:56 run_sync_reference_discovery`",
-        "computes": "reference-discovery orchestration (claim/lease/heartbeat/outbox)",
-        "state": "dead in live wiring — superseded by `NativeReferenceDiscoveryService` (CHAOS-4175, Done)",
-        "ticket": "CHAOS-4175 (Done)",
-    },
-}
+BRIDGE_ROUTE_LEDGER: dict[str, dict[str, str]] = {}
 
 # ---------------------------------------------------------------------------
 # CURATED: one entry per file under src/dev_health_ops/workers/*.py.
@@ -415,12 +407,12 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
     },
     "reference_discovery.py": {
         "category": "a",
-        "evidence": "imported directly worker_sync.py:22; served by /reference-discovery. The narrower /reference-discovery-populate route this file also used to serve (`run_reference_discovery_populate_for_sync_run`) is deleted -- jira going native closed out every provider that route ever reached for real",
+        "evidence": "the /reference-discovery route this file used to serve (`run_sync_reference_discovery`) is deleted -- `HTTPBridge.Discover` never had a live Go caller, and no Celery producer ever called the task either (CHAOS-4435/CHAOS-5713). `await_reference_discovery_terminal`/`ensure_reference_discovery_wakeup`/`reference_discovery_succeeded` remain: imported by sync_units.py and backfill/runner.py to poll/arm the SAME ledger the native Go reference-discovery worker owns",
         "ticket": "n/a",
     },
     "sync_bootstrap.py": {
         "category": "a",
-        "evidence": "imported by reference_discovery.py/team_autoimport.py/sync_units.py:134; resolve_run_auth reached from dispatch_sync_run",
+        "evidence": "imported by sync_units.py:134; resolve_run_auth reached from dispatch_sync_run",
         "ticket": "n/a",
     },
     "sync_units.py": {
@@ -430,7 +422,7 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
     },
     "task_utils.py": {
         "category": "c",
-        "evidence": "imported by live files (sync_units, reference_discovery, team_autoimport) — shared credential/cache helpers; system_webhooks.py was also an importer until CHAOS-4105 deleted it, and work_graph_tasks.py until CHAOS-3093 deleted it",
+        "evidence": "imported by sync_units.py — shared credential/cache helpers; system_webhooks.py was also an importer until CHAOS-4105 deleted it, work_graph_tasks.py until CHAOS-3093 deleted it, and reference_discovery.py/team_autoimport.py until CHAOS-4435/CHAOS-5713 deleted their own imports of it",
         "ticket": "n/a",
     },
     "tasks.py": {
@@ -440,33 +432,8 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
     },
     "team_autoimport_categories.py": {
         "category": "a",
-        "evidence": "imported by team_autoimport.py (live) and the provider variants",
+        "evidence": "imported by post_sync_dispatch.py (live, gates plan.TeamAutoimport) -- the provider populate() modules and their team_autoimport.py executor that used to import it are deleted (CHAOS-4435/CHAOS-5713)",
         "ticket": "n/a",
-    },
-    "team_autoimport_github.py": {
-        "category": "a",
-        "evidence": "imported by team_autoimport.py; ported CHAOS-4434 (`950752653`, Done) — a GitHub sync run's post-sync/reference-discovery dispatch now resolves to the Go-native collector in `nativeTeamCatalogCollectors` and never calls the bridge, so `populate()` is no longer reached via sync-time dispatch. CHAOS-4498 (this PR): the backfill path no longer calls `run_team_autoimport_strict` directly either (it now arms the same ledger/outbox row and routes through `TeamCatalogDiscoveryExecutor`, which resolves GitHub to this same native collector, never the Python populator) — `populate()` in this file is no longer reachable from any live production or operator call path. Not yet deleted: that is CHAOS-4435's scope, now fully unblocked now that jira (the shared kind/route/module's other remaining dependent) is also native",
-        "ticket": "CHAOS-4435 (delete — the backfill blocker CHAOS-4498 closed, and jira going native removes the last shared kind/route/module dependency)",
-    },
-    "team_autoimport_gitlab.py": {
-        "category": "a",
-        "evidence": "imported by team_autoimport.py; ported CHAOS-4432 (`5bff38a5a`, Done) — a GitLab sync run's post-sync/reference-discovery dispatch now resolves to the Go-native collector and never calls the bridge, so `populate()` is no longer reached via sync-time dispatch. CHAOS-4498 (this PR): the backfill path no longer calls `run_team_autoimport_strict` directly either — same routing story as `team_autoimport_github.py` above. `populate()` in this file is no longer reachable from any live production or operator call path; deletion is CHAOS-4435's scope, now unblocked",
-        "ticket": "CHAOS-4435 (delete — the backfill blocker CHAOS-4498 closed)",
-    },
-    "team_autoimport_jira.py": {
-        "category": "a",
-        "evidence": "imported by team_autoimport.py; ported — jira's own native Go collector (`JiraTeamCatalogCollector`, `internal/providersync/jira_team_catalog_route.go`) is now registered in `nativeTeamCatalogCollectors`, so a Jira sync run's post-sync/reference-discovery dispatch never calls the bridge, and `_resolve_populator` (`team_autoimport.py:_GO_NATIVE_PROVIDERS`) refuses provider=jira outright the same way it already refused linear (CHAOS-4555) -- no current or future caller can import this module at all. `populate()` in this file is no longer reachable from any live production or operator call path; deletion is CHAOS-4435's scope, now unblocked (jira was the last provider blocking it)",
-        "ticket": "CHAOS-4435 (delete — the backfill blocker CHAOS-4498 closed, reachability closed the same way CHAOS-4555 closed it for linear)",
-    },
-    "team_autoimport_linear.py": {
-        "category": "a",
-        "evidence": "imported by team_autoimport.py; ported CHAOS-4431 (`27bef7286`, Done) — the previously-unwired Go route (CHAOS-3716) is now registered in `nativeTeamCatalogCollectors`, so a Linear sync run's post-sync/reference-discovery dispatch never calls the bridge. CHAOS-4498 (this PR): the backfill path no longer calls `run_team_autoimport_strict` directly either — same routing story as `team_autoimport_github.py` above. `populate()` in this file is no longer reachable from any live production or operator call path. CHAOS-4555 (2026-08-30): unlike github/gitlab, this unreachability is no longer just an emergent property of caller wiring — `team_autoimport._resolve_populator` (`team_autoimport.py:103-111`) refuses provider=linear outright, so no current or future caller (of `run_team_autoimport`/`run_team_autoimport_strict`, or of `_resolve_populator` directly) can import this module at all; deletion is CHAOS-4435's scope, now unblocked",
-        "ticket": "CHAOS-4435 (delete — the backfill blocker CHAOS-4498 closed, reachability closed by CHAOS-4555)",
-    },
-    "team_autoimport.py": {
-        "category": "a",
-        "evidence": "run_post_sync_team_autoimport (formerly imported worker_sync.py:27, served by /team-autoimport) is deleted -- jira going native removed its last caller. `run_team_autoimport`/`run_team_autoimport_strict` remain, now refusing every import-capable provider (linear+jira explicitly via `_GO_NATIVE_PROVIDERS`, github/gitlab implicitly via Go-side routing) before ever resolving a populator",
-        "ticket": "CHAOS-4435 (delete the now-fully-dead run_team_autoimport/run_team_autoimport_strict + their bridge routes)",
     },
 }
 

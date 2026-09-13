@@ -13,28 +13,16 @@ from starlette.concurrency import run_in_threadpool
 
 from dev_health_ops.db import get_postgres_session_sync
 from dev_health_ops.models import (
-    SyncDispatchOutbox,
-    SyncDispatchTransportRoute,
     SyncRun,
     SyncRunUnit,
 )
 from dev_health_ops.sync.budget_guard import batch_estimate_provider_budget_for_units
-from dev_health_ops.workers.reference_discovery import run_sync_reference_discovery
 
 router = APIRouter(prefix="/api/internal/worker-sync", include_in_schema=False)
 
 
 class _StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
-
-
-class SyncCoordinatorReference(_StrictModel):
-    """A bounded River reference; the database remains the source of truth."""
-
-    organization_id: uuid.UUID
-    sync_run_id: uuid.UUID
-    outbox_id: uuid.UUID
-    route_generation: int = Field(ge=1)
 
 
 class TeamAutoImportReference(_StrictModel):
@@ -100,55 +88,6 @@ def _authorize(authorization: Annotated[str | None, Header()] = None) -> None:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
-def _result(result: object, *, accepted: frozenset[str]) -> dict[str, str]:
-    if not isinstance(result, dict):
-        raise HTTPException(
-            status_code=502, detail="Sync coordinator result unavailable"
-        )
-    status = str(result.get("status", "unknown"))
-    if status not in accepted:
-        raise HTTPException(
-            status_code=422, detail="Sync coordinator delivery rejected"
-        )
-    return {"status": status}
-
-
-def _current_river_reference(reference: SyncCoordinatorReference, *, kind: str) -> bool:
-    """Accept only the exact durable River delivery that created this job.
-
-    A River retry may arrive after a route pause, rollback, or a later
-    generation became active. The job envelope alone is not authoritative, so
-    stale work is acknowledged without calling the durable coordinator.
-    """
-
-    with get_postgres_session_sync() as session:
-        outbox = (
-            session.query(SyncDispatchOutbox)
-            .filter(
-                SyncDispatchOutbox.id == reference.outbox_id,
-                SyncDispatchOutbox.sync_run_id == reference.sync_run_id,
-                SyncDispatchOutbox.org_id == str(reference.organization_id),
-                SyncDispatchOutbox.kind == kind,
-                SyncDispatchOutbox.status == "dispatched",
-                SyncDispatchOutbox.dispatched_transport == "river",
-                SyncDispatchOutbox.dispatched_route_generation
-                == reference.route_generation,
-            )
-            .one_or_none()
-        )
-        route = (
-            session.query(SyncDispatchTransportRoute)
-            .filter(
-                SyncDispatchTransportRoute.kind == kind,
-                SyncDispatchTransportRoute.transport == "river",
-                SyncDispatchTransportRoute.paused.is_(False),
-                SyncDispatchTransportRoute.generation == reference.route_generation,
-            )
-            .one_or_none()
-        )
-    return outbox is not None and route is not None
-
-
 def _current_sync_run_reference(reference: TeamAutoImportReference) -> bool:
     """Reject a trusted bridge request whose run belongs to another tenant."""
 
@@ -195,25 +134,6 @@ def _units_belong_to_run(
         .count()
     )
     return matched == len(set(unit_ids))
-
-
-@router.post("/reference-discovery", dependencies=[])
-async def reference_discovery_reference(
-    reference: SyncCoordinatorReference,
-    authorization: Annotated[str | None, Header()] = None,
-) -> dict[str, str]:
-    _authorize(authorization)
-    if not _current_river_reference(reference, kind="reference_discovery"):
-        return {"status": "stale"}
-    result = await run_in_threadpool(
-        run_sync_reference_discovery.run, str(reference.sync_run_id)
-    )
-    return _result(
-        result,
-        accepted=frozenset(
-            {"feature_disabled", "success", "skipped", "retrying", "failed"}
-        ),
-    )
 
 
 def _dispatch_budget_estimate(

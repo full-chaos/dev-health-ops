@@ -2,8 +2,7 @@
 for every later phase (CHAOS-2755).
 
 These tests exercise the full path: ``plan_sync_run`` stamps the credential onto
-the ``SyncRun``; ``SyncTaskBootstrap.load`` and
-``reference_discovery._load_discovery_context`` prefer the run-stamped credential;
+the ``SyncRun``; ``SyncTaskBootstrap.load`` prefers the run-stamped credential;
 mid-run edits to ``Integration.credential_id`` (repoint) or to the credential's
 secret bytes (in-place rotation) can no longer change a stamped run's auth.
 """
@@ -12,7 +11,6 @@ from __future__ import annotations
 
 import json
 import uuid
-from contextlib import contextmanager
 from datetime import datetime, timezone
 
 import pytest
@@ -40,7 +38,6 @@ from dev_health_ops.models.licensing import FeatureFlag, OrgFeatureOverride
 from dev_health_ops.models.settings import IntegrationCredential
 from dev_health_ops.sync.planner import SyncPlanRequest, plan_sync_run
 from dev_health_ops.sync.watermarks import set_watermark
-from dev_health_ops.workers import reference_discovery
 from dev_health_ops.workers.sync_bootstrap import (
     RunAuthFingerprintMismatchError,
     SyncTaskBootstrap,
@@ -92,17 +89,6 @@ def db_session():
         session.commit()
         yield session
     engine.dispose()
-
-
-@contextmanager
-def _fake_session_ctx(session: Session):
-    try:
-        yield session
-    except Exception:
-        session.rollback()
-        raise
-    else:
-        session.commit()
 
 
 def _make_credential(
@@ -407,26 +393,6 @@ def test_stamp_contains_no_raw_secret_material(db_session):
     assert secret not in fingerprint
     # Must NOT be the full-payload hash of the decrypted secret mapping.
     assert fingerprint != full_payload_fingerprint({"token": secret})
-
-
-def test_reference_discovery_uses_run_stamped_credential(db_session, monkeypatch):
-    """Discovery resolves the SAME credential as the units of the same run, even
-    after the integration pointer is repointed mid-run."""
-    import dev_health_ops.db as db
-
-    cred_a = _make_credential(db_session, token="tok-A", name="primary")
-    cred_b = _make_credential(db_session, token="tok-B", name="secondary")
-    integration = _make_integration(db_session, credential_id=cred_a.id)
-    run, _unit = _plan(db_session, integration)
-
-    integration.credential_id = cred_b.id
-    db_session.flush()
-
-    monkeypatch.setattr(
-        db, "get_postgres_session_sync", lambda: _fake_session_ctx(db_session)
-    )
-    context = reference_discovery._load_discovery_context(run.id)
-    assert context["credentials"].get("token") == "tok-A"
 
 
 def test_fingerprint_mismatch_warns_by_default_fails_when_strict(

@@ -60,8 +60,11 @@ func buildGitHubTeamCatalogTeamOracleRow(t *testing.T, input map[string]any) git
 }
 
 func TestGitHubTeamCatalogTeamRowMatchesLivePythonProducer(t *testing.T) {
-	compareRowsAgainstPythonOracle(
-		t, "github/team-catalog/team",
+	// team_autoimport_github.py is deleted -- native Go providersync is the
+	// only producer now. Frozen under the last live comparison (see
+	// testdata/oracle_frozen/README.md).
+	compareRowsAgainstFrozenOracle(
+		t, "github_team-catalog_team",
 		[]oracleCase{
 			{ID: "team_with_repos", Input: map[string]any{
 				"org_id": "org-acme", "team_slug": "platform", "name": "Platform",
@@ -125,8 +128,11 @@ func buildGitHubTeamCatalogMembershipOracleRow(t *testing.T, input map[string]an
 }
 
 func TestGitHubTeamCatalogMembershipRowMatchesLivePythonProducer(t *testing.T) {
-	compareRowsAgainstPythonOracle(
-		t, "github/team-catalog/membership",
+	// team_autoimport_github.py is deleted -- native Go providersync is the
+	// only producer now. Frozen under the last live comparison (see
+	// testdata/oracle_frozen/README.md).
+	compareRowsAgainstFrozenOracle(
+		t, "github_team-catalog_membership",
 		[]oracleCase{
 			{ID: "member_with_email", Input: map[string]any{
 				"org_id": "org-acme", "team_slug": "platform", "login": "octocat",
@@ -185,8 +191,11 @@ type githubTeamCatalogRepoOwnershipProducerRow struct {
 }
 
 func TestGitHubTeamCatalogRepoOwnershipRowMatchesLivePythonProducer(t *testing.T) {
-	compareRowsAgainstPythonOracle(
-		t, "github/team-catalog/repo-ownership",
+	// team_autoimport_github.py is deleted -- native Go providersync is the
+	// only producer now. Frozen under the last live comparison (see
+	// testdata/oracle_frozen/README.md).
+	compareRowsAgainstFrozenOracle(
+		t, "github_team-catalog_repo-ownership",
 		[]oracleCase{
 			{ID: "single_repo_grant", Input: map[string]any{
 				"org_id": "org-acme", "team_slug": "platform", "repo_full_name": "acme/api",

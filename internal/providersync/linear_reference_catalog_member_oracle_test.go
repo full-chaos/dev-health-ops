@@ -7,9 +7,12 @@ import (
 )
 
 func TestLinearReferenceMemberMatchesLivePythonProducer(t *testing.T) {
-	compareRowsAgainstPythonOracle(
+	// team_autoimport_linear.py is deleted -- native Go providersync is the
+	// only producer now. Frozen under the last live comparison (see
+	// testdata/oracle_frozen/README.md).
+	compareRowsAgainstFrozenOracle(
 		t,
-		"linear/work-items/reference-member",
+		"linear_work-items_reference-member",
 		[]oracleCase{
 			{
 				ID: "email_identity",

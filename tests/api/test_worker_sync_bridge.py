@@ -24,32 +24,14 @@ _REFERENCE = {
 def test_sync_bridge_requires_token(monkeypatch) -> None:
     monkeypatch.setenv("WORKER_OPERATIONAL_BRIDGE_TOKEN", "test-token")
     response = TestClient(app).post(
-        "/api/internal/worker-sync/reference-discovery", json=_REFERENCE
+        "/api/internal/worker-sync/dispatch-budget-estimate",
+        json={
+            "organization_id": _REFERENCE["organization_id"],
+            "sync_run_id": _REFERENCE["sync_run_id"],
+            "unit_ids": ["00000000-0000-4000-8000-000000000020"],
+        },
     )
     assert response.status_code == 401
-
-
-def test_sync_bridge_stale_delivery_is_acknowledged_without_coordinator_call(
-    monkeypatch,
-) -> None:
-    monkeypatch.setenv("WORKER_OPERATIONAL_BRIDGE_TOKEN", "test-token")
-    with (
-        patch(
-            "dev_health_ops.api.internal.worker_sync._current_river_reference",
-            return_value=False,
-        ),
-        patch(
-            "dev_health_ops.api.internal.worker_sync.run_sync_reference_discovery.run"
-        ) as run,
-    ):
-        response = TestClient(app).post(
-            "/api/internal/worker-sync/reference-discovery",
-            headers={"Authorization": "Bearer test-token"},
-            json=_REFERENCE,
-        )
-    assert response.status_code == 200
-    assert response.json() == {"status": "stale"}
-    run.assert_not_called()
 
 
 # CHAOS-4175: the narrow, identifiers-only bridge call the native Go

@@ -128,7 +128,7 @@ def test_inventory_row_count_matches_the_baseline():
     rows = inventory["rows"]
     rest = [r for r in rows if r["surface_kind"] == "rest"]
     graphql = [r for r in rows if r["surface_kind"] in _GRAPHQL_KINDS]
-    assert len(rest) == 306, len(rest)
+    assert len(rest) == 305, len(rest)
     assert len(graphql) == 59, len(graphql)
     assert len(rows) == 365, len(rows)
 
@@ -162,8 +162,9 @@ def test_classification_summary_matches_the_baseline():
     # so each such deletion lands here too. All four decrements apply; see
     # the merge hazard note in test_inventory_row_count_matches_the_baseline
     # for why none of them subsumes another, and why this number is
-    # recounted rather than derived.
-    assert len(protected) == 338, len(protected)
+    # recounted rather than derived. - 1 more when the admin team-drift-sync
+    # trigger (a protected REST route) was deleted; recounted from the file.
+    assert len(protected) == 337, len(protected)
     # 22 + the four fastapi doc routes + /metrics.
     assert len(public) == 27, len(public)
     assert len(protected) + len(public) == len(rows)

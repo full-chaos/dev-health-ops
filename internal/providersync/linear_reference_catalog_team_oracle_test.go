@@ -23,9 +23,12 @@ type linearReferenceTeamProducerRow struct {
 }
 
 func TestLinearReferenceTeamCatalogMatchesLivePythonProducer(t *testing.T) {
-	compareRowsAgainstPythonOracle(
+	// team_autoimport_linear.py is deleted -- native Go providersync is the
+	// only producer now. Frozen under the last live comparison (see
+	// testdata/oracle_frozen/README.md).
+	compareRowsAgainstFrozenOracle(
 		t,
-		"linear/work-items/reference-team",
+		"linear_work-items_reference-team",
 		[]oracleCase{
 			{
 				ID: "team_with_project_key",

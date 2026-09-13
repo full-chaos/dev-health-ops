@@ -73,36 +73,6 @@ func bridgeHTTPClient(connectTimeout time.Duration) *http.Client {
 	return &http.Client{Transport: transport}
 }
 
-type bridgeReference struct {
-	OrganizationID  string `json:"organization_id"`
-	SyncRunID       string `json:"sync_run_id"`
-	OutboxID        string `json:"outbox_id"`
-	RouteGeneration int64  `json:"route_generation"`
-}
-
-func (bridge *HTTPBridge) Discover(ctx context.Context, args ReferenceDiscoveryArgs) error {
-	return bridge.call(ctx, "/api/internal/worker-sync/reference-discovery", bridgeReferenceFor(args))
-}
-
-func bridgeReferenceFor(args Args) bridgeReference {
-	return bridgeReference{
-		OrganizationID:  args.OrganizationID(),
-		SyncRunID:       args.SyncRunID(),
-		OutboxID:        args.OutboxID(),
-		RouteGeneration: args.RouteGeneration(),
-	}
-}
-
-func (bridge *HTTPBridge) call(ctx context.Context, path string, payload any) error {
-	response, err := bridge.do(ctx, path, payload)
-	if err != nil {
-		return err
-	}
-	defer response.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4097))
-	return nil
-}
-
 func (bridge *HTTPBridge) do(ctx context.Context, path string, payload any) (*http.Response, error) {
 	if bridge == nil || bridge.client == nil || bridge.baseURL == nil || strings.TrimSpace(bridge.bearerToken) == "" || ctx == nil {
 		return nil, ErrInvalidBridge

@@ -23,9 +23,12 @@ type gitlabTeamCatalogOwnershipProducerRow struct {
 }
 
 func TestGitLabReferenceOwnershipMatchesLivePythonProducer(t *testing.T) {
-	compareRowsAgainstPythonOracle(
+	// team_autoimport_gitlab.py is deleted -- native Go providersync is the
+	// only producer now. Frozen under the last live comparison (see
+	// testdata/oracle_frozen/README.md).
+	compareRowsAgainstFrozenOracle(
 		t,
-		"gitlab/work-items/reference-ownership",
+		"gitlab_work-items_reference-ownership",
 		[]oracleCase{
 			{
 				// Root-only: depth 0 -> specificity BASE_SPECIFICITY (100),

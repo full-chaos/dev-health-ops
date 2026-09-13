@@ -28,9 +28,12 @@ type gitlabTeamCatalogProjectProducerRow struct {
 }
 
 func TestGitLabReferenceProjectCatalogMatchesLivePythonProducer(t *testing.T) {
-	compareRowsAgainstPythonOracle(
+	// team_autoimport_gitlab.py is deleted -- native Go providersync is the
+	// only producer now. Frozen under the last live comparison (see
+	// testdata/oracle_frozen/README.md).
+	compareRowsAgainstFrozenOracle(
 		t,
-		"gitlab/work-items/reference-project",
+		"gitlab_work-items_reference-project",
 		[]oracleCase{
 			{
 				ID: "active_project",

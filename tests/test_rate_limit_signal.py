@@ -415,29 +415,6 @@ def test_linear_complexity_emits_signal_and_stays_non_retryable() -> None:
 
 
 # ---------------------------------------------------------------------------
-# reference_discovery honors Retry-After
-# ---------------------------------------------------------------------------
-
-
-def test_reference_discovery_honors_retry_after() -> None:
-    from dev_health_ops.workers.reference_discovery import (
-        _reference_discovery_backoff_seconds,
-    )
-
-    # attempt 1 -> base 30s (+ up to 30s jitter), no server hint.
-    attempt_only = _reference_discovery_backoff_seconds(1)
-    assert 30 <= attempt_only <= 60
-
-    # A server Retry-After larger than the attempt-based base wins.
-    with_retry_after = _reference_discovery_backoff_seconds(1, 600.0)
-    assert with_retry_after >= 600
-
-    # Still capped at the 900s ceiling (+ jitter).
-    capped = _reference_discovery_backoff_seconds(1, 100_000.0)
-    assert 900 <= capped <= 930
-
-
-# ---------------------------------------------------------------------------
 # LaunchDarkly 403 -> AuthenticationException (all three LD client modules)
 # ---------------------------------------------------------------------------
 

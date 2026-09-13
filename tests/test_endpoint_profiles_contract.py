@@ -151,6 +151,12 @@ def test_inventory_row_count_matches_the_baseline():
     branches, independently, each starting from the same pre-existing 362
     baseline -- see the MERGE HAZARD note below for why this number is
     recounted from the file rather than trusted from either branch alone.
+    = 358, -1 REST under this change: `POST /api/internal/worker-sync/
+    reference-discovery` is deleted with its row in the same change --
+    `HTTPBridge.Discover` never had a live Go caller (`RegisterWorkers`
+    takes only the native reference-discovery service, never the bridge),
+    and no Celery producer ever called the Python task this route invoked
+    either, so nothing reaches this route any more.
 
     MERGE HAZARD, recorded because it has now nearly landed silently more
     than once. Each change edited these same asserts, and each was correct
@@ -171,9 +177,9 @@ def test_inventory_row_count_matches_the_baseline():
     rows = inventory["rows"]
     rest = [r for r in rows if r["surface_kind"] == "rest"]
     graphql = [r for r in rows if r["surface_kind"] in _GRAPHQL_KINDS]
-    assert len(rest) == 300, len(rest)
+    assert len(rest) == 299, len(rest)
     assert len(graphql) == 59, len(graphql)
-    assert len(rows) == 359, len(rows)
+    assert len(rows) == 358, len(rows)
 
 
 def test_the_three_subscriptions_are_profiled():
@@ -225,7 +231,10 @@ def test_classification_summary_matches_the_baseline():
     # worker-operational route). Both decrements landed independently from
     # the same pre-existing 335 baseline -- recounted from the file rather
     # than trusted from either branch alone.
-    assert len(protected) == 332, len(protected)
+    # - 1 more under this change: the deleted worker-sync/reference-discovery
+    # row was also protected (worker bridge bearer, same as every other
+    # worker-sync route).
+    assert len(protected) == 331, len(protected)
     # 22 + the four fastapi doc routes + /metrics.
     assert len(public) == 27, len(public)
     assert len(protected) + len(public) == len(rows)

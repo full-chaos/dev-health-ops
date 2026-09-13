@@ -332,7 +332,17 @@ def test_inventory_is_non_empty_and_matches_audit_row_count():
     # tests/test_sync_units.py and siblings (the
     # getattr(run_sync_unit, "run")(...) calling convention), so it is not a
     # safe unilateral deletion. Net, on top of the recompute removal above: 38 - 2 = 36.
-    assert inventory["row_count"] == 36
+    #
+    # = 35. The celery_task:reference_discovery.py:53 row
+    # (run_sync_reference_discovery) is removed: the Celery task body itself
+    # is deleted outright, along with the dead `/api/internal/worker-sync/
+    # reference-discovery` HTTP bridge route it was only ever reachable
+    # through -- no Celery producer ever called it via `.delay()`/
+    # `.apply_async()`, only that route's synchronous `.run()`. The sibling
+    # sync_dispatch_transport_route row for the same kind is untouched: it
+    # describes transport-routes.json's still-checked-in rollback_route
+    # declaration, which this change does not retire.
+    assert inventory["row_count"] == 35
 
 
 def test_retired_beat_entries_are_evidenced_and_absent_from_source():

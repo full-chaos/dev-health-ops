@@ -14,11 +14,16 @@
 # invoked together by the same operator, so there is no deploy unit that
 # wants one without the other.
 #
-# Same base-image pins and build discipline as query-api.Dockerfile /
-# go-worker.Dockerfile: pin both build and runtime image digests so an
-# update is an explicit, reviewed dependency change.
+# Same build-image pin and build discipline as query-api.Dockerfile /
+# go-worker.Dockerfile. The runtime base deliberately does NOT follow
+# those two into distroless: this image is also the operator's one-off
+# corrective-verb pod (docs/operate/runbooks/query-api-bootstrap.md), and
+# a distroless runtime has no shell or coreutils to stay up for
+# `kubectl exec` or to read the baked-in documents dump / operation
+# catalog off disk with a plain path. Both image digests stay pinned so
+# an update is an explicit, reviewed dependency change.
 ARG GO_BUILD_IMAGE="mirror.gcr.io/library/golang:1.27.0-alpine@sha256:4c9fe60190a2a3350ddc51de80d0224b8a6698d12bdfc999fee45ea9d6c46dbc"
-ARG GO_RUNTIME_IMAGE="gcr.io/distroless/static-debian12:nonroot@sha256:f5b485ea962d9bd1186b2f6b3a061191539b905b82ec395de78cbfae51f20e35"
+ARG TOOLS_RUNTIME_IMAGE="mirror.gcr.io/library/debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171"
 
 FROM --platform=$BUILDPLATFORM ${GO_BUILD_IMAGE} AS build
 
@@ -41,13 +46,16 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 # Both binaries import internal/goapidigest and internal/goapiproof;
 # go-api-routing also imports contracts/graphql/v1 (the schemav1.SDL
-# embed the posture/schema-digest is computed from). Whole-tree COPY for
-# both, same reasoning query-api.Dockerfile documents for its own
-# COPY internal ./internal: an enumerated subpackage list is how the
-# next import added to either binary goes uncopied and fails closed with
-# a "-mod=readonly" error instead of a clear diff.
+# embed the posture/schema-digest is computed from). cmd/query-api is
+# needed too, whole-tree, for its tools/registrydump helper and the
+# query_route.go it reads (below) -- same reasoning query-api.Dockerfile
+# documents for its own COPY internal ./internal: an enumerated
+# subpackage list is how the next import added to any of these goes
+# uncopied and fails closed with a "-mod=readonly" error instead of a
+# clear diff.
 COPY cmd/go-api-routing ./cmd/go-api-routing
 COPY cmd/go-api-prove ./cmd/go-api-prove
+COPY cmd/query-api ./cmd/query-api
 COPY contracts/graphql/v1 ./contracts/graphql/v1
 COPY internal ./internal
 
@@ -69,22 +77,60 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     done; \
     find /out -exec touch -d "@${SOURCE_DATE_EPOCH}" {} +
 
-FROM ${GO_RUNTIME_IMAGE} AS runtime
+# go-api-prove's -documents flag needs registrydump's enumeration of
+# query-api's registered GraphQL documents (cmd/query-api/query_route.go).
+# Built and run here, at the SAME commit as the two binaries above, so the
+# baked-in dump can never drift from what this image's go-api-prove
+# actually verifies against -- a stale, hand-carried dump was exactly the
+# gap the old hand-built tags left open.
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    go build -buildvcs=false -trimpath -o /out/registrydump ./cmd/query-api/tools/registrydump && \
+    /out/registrydump -file cmd/query-api/query_route.go > /out/documents.json && \
+    rm /out/registrydump && \
+    touch -d "@${SOURCE_DATE_EPOCH}" /out/documents.json
+
+FROM ${TOOLS_RUNTIME_IMAGE} AS runtime
 
 ARG VERSION="dev"
 ARG COMMIT="unknown"
 ARG BUILD_TIME="1970-01-01T00:00:00Z"
 
 LABEL org.opencontainers.image.title="Dev Health Go-API tools" \
-      org.opencontainers.image.description="go-api-routing and go-api-prove operator binaries for the Go-API rollout" \
+      org.opencontainers.image.description="go-api-routing and go-api-prove operator binaries, plus the documents dump and operation catalog they need, for the Go-API rollout's tools pod" \
       org.opencontainers.image.source="https://github.com/full-chaos/dev-health-ops" \
       org.opencontainers.image.version=${VERSION} \
       org.opencontainers.image.revision=${COMMIT} \
       org.opencontainers.image.created=${BUILD_TIME}
 
-USER 65532:65532
+# Same non-root numeric-friendly convention as docker/Dockerfile's runtime
+# stage: a real user, not root, but one a Kubernetes securityContext can
+# still pin by uid.
+RUN useradd --uid 10001 --create-home --shell /bin/bash toolsuser
+
+WORKDIR /app/go-api
 
 COPY --from=build /out/go-api-routing /usr/local/bin/go-api-routing
 COPY --from=build /out/go-api-prove /usr/local/bin/go-api-prove
 
-ENTRYPOINT ["/usr/local/bin/go-api-routing"]
+# The documents dump (freshly generated above, same commit as the
+# binaries) and the checked-in operation catalog (never regenerated here
+# -- see internal/goapiproof/routing_catalog.go's own comment on why it
+# is a checked-in artifact, not a build output). The catalog lands at its
+# DefaultCatalogPath *relative to WORKDIR*, so go-api-routing's `-catalog`
+# flag needs no override from this image's default working directory.
+COPY --from=build /out/documents.json /app/go-api/documents.json
+COPY src/dev_health_ops/api/graphql/go_api_operations.json /app/go-api/src/dev_health_ops/api/graphql/go_api_operations.json
+
+RUN chown -R toolsuser:toolsuser /app/go-api
+
+USER toolsuser
+
+# No long-lived process of its own -- this exists to be `kubectl exec`ed
+# or `kubectl run ... -- <command>`ed into for one-off go-api-routing /
+# go-api-prove runs, so no ENTRYPOINT is set: a caller-supplied command
+# replaces CMD outright instead of trailing a fixed entrypoint binary.
+# The default CMD only needs to keep the Pod alive when no command is
+# given (docker/Dockerfile's `api` and `runner` targets exist because
+# THEIR image runs continuously; this one never does).
+CMD ["sleep", "infinity"]

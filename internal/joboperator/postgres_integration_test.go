@@ -648,6 +648,7 @@ func createOperatorIntegrationSchema(
 		"CREATE TABLE public.daily_metrics_runs (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.daily_metrics_finalize_redrive_events (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.daily_metrics_partition_recompute_events (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.metric_compatibility_executions (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.external_ingest_batch_payloads (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.external_ingest_batches (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.external_ingest_recompute_jobs (id bigint PRIMARY KEY)",

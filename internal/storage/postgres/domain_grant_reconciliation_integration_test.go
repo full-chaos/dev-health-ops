@@ -321,6 +321,39 @@ func reconciliationTables() []domainTable {
 					"WHERE org_id = 'org-acme' AND generation = 'g'",
 			},
 		},
+		{
+			// The compatibility-bridge execution ledger. Only ever settled by
+			// CompleteFinalize/CompletePartition (postgres.go) moving a
+			// repaired row off retry_authorized once the run/partition it was
+			// blocking finishes -- never opened by the domain role, so no
+			// INSERT exercise belongs here. The CHECK below mirrors the real
+			// table (alembic 0059): 'succeeded' requires completed_at and
+			// output_evidence non-NULL, everything else requires both NULL.
+			name: "metric_compatibility_executions",
+			ddl: `CREATE TABLE public.metric_compatibility_executions (
+				id uuid PRIMARY KEY, worker_kind text NOT NULL, operation text NOT NULL,
+				run_id uuid NOT NULL, partition_id uuid NULL, state text NOT NULL,
+				output_evidence jsonb NULL, completed_at timestamptz NULL,
+				last_attempt_at timestamptz NOT NULL DEFAULT statement_timestamp(),
+				CHECK (
+					(state = 'succeeded' AND completed_at IS NOT NULL AND output_evidence IS NOT NULL)
+					OR (state <> 'succeeded' AND completed_at IS NULL)
+				))`,
+			// No INSERT exercise: the domain role never opens a ledger row (see
+			// the comment above), so this table has no seed data of its own --
+			// matching production's overwhelmingly common case, where the
+			// UPDATE below matches zero rows because no repaired row exists
+			// for this run at all. Postgres checks table privilege before row
+			// matching, so a zero-row UPDATE still proves the domain role
+			// genuinely holds it.
+			exercise: []string{
+				"UPDATE public.metric_compatibility_executions " +
+					"SET state = 'succeeded', output_evidence = '{}'::jsonb, " +
+					"completed_at = now(), last_attempt_at = now() " +
+					"WHERE worker_kind = 'daily' AND operation = 'finalize' " +
+					"AND run_id = gen_random_uuid() AND partition_id IS NULL AND state = 'retry_authorized'",
+			},
+		},
 	}
 }
 

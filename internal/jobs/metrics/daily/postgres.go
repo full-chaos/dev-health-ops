@@ -1108,6 +1108,15 @@ WHERE id = $2::uuid AND run_id = $3::uuid AND status = 'running'
 	if command.RowsAffected() != 1 {
 		return ErrLeaseLost
 	}
+	// Same reasoning as CompleteFinalize's own settle call: a repaired
+	// partition ledger row (metric_compatibility_executions,
+	// operation='partition') never gets re-claimed by the native path on
+	// redrive, so this partition's own successful completion is the only
+	// remaining signal that a 'retry_authorized' row for it is done blocking
+	// anything. Same transaction as the partition's own status write above.
+	if err := settleCompatibilityLedgerTx(ctx, tx, now, "partition", claim.Partition.RunID, claim.Partition.ID); err != nil {
+		return ErrUnavailable
+	}
 	var incomplete int
 	if err := tx.QueryRow(ctx, `
 SELECT count(*)
@@ -1453,6 +1462,16 @@ WHERE id = $2::uuid AND finalization_status = 'running'
 	if command.RowsAffected() != 1 {
 		return ErrLeaseLost
 	}
+	// A repaired finalize ledger row (metric_compatibility_executions,
+	// operation='finalize') must not outlive the run it was blocking: the
+	// native finalize path never re-claims that row on redrive (there is no
+	// bridge left to do so), so nothing else will ever move it off
+	// 'retry_authorized' once this run has genuinely finished. Same
+	// transaction as the run's own completion write above -- either both
+	// land or neither does.
+	if err := settleCompatibilityLedgerTx(ctx, tx, now, "finalize", claim.Run.ID, ""); err != nil {
+		return ErrUnavailable
+	}
 	// CHAOS-4405 (team-lead escalation on conditions (2)/(3)): close this
 	// run's own OPEN finalize-redrive event, if any -- 'closed_succeeded'
 	// is moot for FindStrandedFinalizeRuns's own exclusion (status='running'
@@ -1602,4 +1621,58 @@ func (store *PostgresStore) valid() bool {
 func validUUID(value string) bool {
 	_, err := uuid.Parse(value)
 	return err == nil
+}
+
+// compatibilityLedgerSettledEvidence is the fixed output_evidence a native
+// settle writes into metric_compatibility_executions.output_evidence.
+// Migration 0059's own CHECK requires this column non-NULL whenever
+// state='succeeded' -- but the native executor path never produces
+// per-execution evidence to put there: it writes its real rows straight to
+// their own tables (user_metrics_daily, daily_metrics_partitions, ...),
+// never through this ledger. This records where that real evidence actually
+// lives instead of fabricating a number nothing here observed.
+var compatibilityLedgerSettledEvidence = json.RawMessage(
+	`{"settled_by":"native_completion","note":"no per-row evidence recorded here -- see the run/partition's own tables for the real written output"}`,
+)
+
+// settleCompatibilityLedgerTx moves every metric_compatibility_executions row
+// for this run (and, for operation='partition', this partition) still
+// sitting at 'retry_authorized' to 'succeeded', in the SAME transaction as
+// the caller's own completion write -- so a repaired ledger row can never
+// again outlive the run/partition it blocked.
+//
+// Scoped to 'retry_authorized' ONLY, deliberately never 'executing' or
+// 'ambiguous': those two states mean the original claim may still be live,
+// or a progress-having failure still awaits human review -- exactly the
+// two-writer hazard `metrics execution-repair`/`daily-redrive`'s
+// ledger_repair step exists to fence before anything touches the row again.
+// 'retry_authorized' is the one state ledger_repair leaves a row in that a
+// later, unrelated completion is safe to settle unilaterally: repair already
+// established the original claim is dead, and this run/partition just
+// finished the redriven attempt that row was blocking.
+//
+// Idempotent by construction, not by a RowsAffected check: a row already
+// 'succeeded', or one that was never 'retry_authorized' to begin with (the
+// overwhelming majority of completions carry no ledger row at all), matches
+// zero rows here -- an ordinary outcome, not an error worth surfacing to the
+// caller.
+func settleCompatibilityLedgerTx(
+	ctx context.Context, tx pgx.Tx, now time.Time, operation, runID, partitionID string,
+) error {
+	if partitionID == "" {
+		_, err := tx.Exec(ctx, `
+UPDATE public.metric_compatibility_executions
+SET state = 'succeeded', output_evidence = $1::jsonb, completed_at = $2, last_attempt_at = $2
+WHERE worker_kind = 'daily' AND operation = $3 AND run_id = $4::uuid AND partition_id IS NULL
+  AND state = 'retry_authorized'`,
+			[]byte(compatibilityLedgerSettledEvidence), now, operation, runID)
+		return err
+	}
+	_, err := tx.Exec(ctx, `
+UPDATE public.metric_compatibility_executions
+SET state = 'succeeded', output_evidence = $1::jsonb, completed_at = $2, last_attempt_at = $2
+WHERE worker_kind = 'daily' AND operation = $3 AND run_id = $4::uuid AND partition_id = $5::uuid
+  AND state = 'retry_authorized'`,
+		[]byte(compatibilityLedgerSettledEvidence), now, operation, runID, partitionID)
+	return err
 }

@@ -208,6 +208,30 @@ hypothetical -- PR #2065 moved the digest on 2026-09-01 hours after twelve `cana
 old value, and the twelve dead rows below are those rows, still sitting in the table six days later. They are
 rendered rather than filtered out precisely because filtering them is how they went unnoticed.
 
+#### The condition is now observable, not just render-visible
+
+The table above is a point-in-time render; it does not page anyone. `query-api` itself now surfaces the same
+"zero rows at my own digest" condition continuously: on every startup (and drift-check re-run) it records two
+gauges, `devhealth_query_api_routing_rows_for_digest` (rows keyed to the digest this process actually
+computed) and `devhealth_query_api_routing_rows_total` (rows across every digest, alive or dead) --
+`for_digest == 0 AND total > 0` is the DEAD-fleet condition above, distinguishable on a dashboard from the
+legitimate `total == 0` "nothing enabled yet" default posture. The same check also emits an ERROR-level
+structured log record for exactly that condition (`cmd/query-api/registry_drift_telemetry.go`), separate
+from the pre-existing plain-text `ROUTING ROWS STALE` line, which carries no level at all and only reaches
+someone tailing logs at the moment it is written.
+
+**No carry-forward on an unchanged digest.** It might look tempting to auto-repoint a DEAD row's
+`candidate_build` onto a newly deployed image whenever the new image's schema digest happens to equal the
+old one -- "the SDL didn't change, so the old proof should still count". This directly contradicts the
+per-build proof requirement already stated above (a proof is keyed to the immutable 4-tuple *including*
+`candidate_build` and "is never carried forward across any of the four changing") and CHAOS-5425's own
+acceptance ruling, quoted in `cmd/go-api-prove/main.go` and `cmd/query-api/buildinfo_route.go`: **"Do not
+construct a receipt from a digest or an arbitrary build name."** A schema digest matching says the *SDL*
+didn't change; it says nothing about whether the new binary is the one that was actually measured. The
+recovery procedure stays exactly what it already is above: rebuild/redeploy, re-run `go-api-prove` against
+the deployed build, then `routing enable`. The two surfaces this section describes exist so that step is
+never skipped silently, not so it can be skipped on purpose.
+
 A row that is live, reachable to real clients (`canary`/`primary`) and carries no proof is marked
 **UNPROVEN** in its mode cell. Per the Go-API epic plan's five-stage gate, stage 3 (deployed-executed proof)
 is required before stage 4/5, and "a bare 200 does not qualify".

@@ -515,15 +515,11 @@ func buildSyncCoordinatorWorker(
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	// The populate step (credential resolution + run_team_autoimport_strict)
-	// stays behind the narrow, identifiers-only bridge call by design
-	// (CHAOS-4175 ruling, 2026-08-24) -- everything else (claim/lease/
-	// heartbeat/retry-backoff/outbox wakeups/state transitions, and now the
-	// ClickHouse readback verification below) is native.
-	bridgeDiscoveryExecutor, err := syncdispatchruntime.NewBridgeDiscoveryExecutor(bridge)
-	if err != nil {
-		closeClickHouse()
-		return workerFamily{}, errWorkerDependencyUnavailable
-	}
+	// used to stay behind a narrow, identifiers-only bridge call. jira's own
+	// native collector closed that out: every provider that ever had real
+	// populate capability is registered in nativeTeamCatalogCollectors below,
+	// so there is no Python path left for this seam to fall through to (see
+	// TeamCatalogDiscoveryExecutor.Discover).
 	readbackChecker, err := syncdispatchruntime.NewClickHouseReadbackVerifier(clickhouseConnection)
 	if err != nil {
 		closeClickHouse()
@@ -534,12 +530,12 @@ func buildSyncCoordinatorWorker(
 		closeClickHouse()
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
-	// CHAOS-4431: a registered native provider runs its own collector and
-	// skips the Python populate bridge entirely; every other provider keeps
-	// going through bridgeDiscoveryExecutor exactly as before. ClickHouse
-	// readback verification (readbackVerifier, just above) still wraps the
-	// combined result either way. The same native-collector map and client
-	// resolver feed the post-sync team-autoimport dispatch below
+	// A registered native provider runs its own collector; every other
+	// provider gets TeamCatalogDiscoveryExecutor's own no-op (there is no
+	// Python populate bridge left to fall through to). ClickHouse readback
+	// verification (readbackVerifier, just above) still wraps the combined
+	// result either way. The same native-collector map and client resolver
+	// feed the post-sync team-autoimport dispatch below
 	// (teamAutoimportNative/teamCatalogClients), so they are built once here.
 	catalogDecryptor, err := newWorkerCredentialCipher(cfg)
 	if err != nil {
@@ -617,7 +613,6 @@ func buildSyncCoordinatorWorker(
 	}
 	teamCatalogExecutor := &syncdispatchruntime.TeamCatalogDiscoveryExecutor{
 		Native:     nativeTeamCatalogCollectors,
-		Fallback:   bridgeDiscoveryExecutor,
 		Clients:    teamCatalogClients,
 		Selections: teamCatalogSelections,
 		Sources:    teamCatalogSources,

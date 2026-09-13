@@ -219,25 +219,22 @@ def test_bridge_routes_marked_dead_or_deleted() -> None:
 
     `/team-autoimport`'s Python side is deleted outright now that jira (the
     last import-capable provider still reaching it) has its own native
-    collector. `/reference-discovery-populate` still exists but is dead for
-    every import-capable provider, pending the same 5.6 prod readback that
-    already gates linear/github/gitlab -- the ledger must say so explicitly,
-    not claim either route is still live for a real provider.
+    collector. `/reference-discovery-populate` is deleted entirely -- Go
+    caller (`PopulateReferenceDiscovery`/`BridgeDiscoveryExecutor`) and
+    Python handler both gone, so neither the generator's route regex nor
+    its curated ledger has a row for it any more; a stale curated row here
+    is exactly what the generator's own consistency guard would refuse to
+    render on.
     """
     gen = _load_gen_module()
-    populate_row = gen.BRIDGE_ROUTE_LEDGER["/api/internal/worker-sync/reference-discovery-populate"]
-    populate_state = populate_row.get("state", "").lower()
-    assert "dead for every import-capable provider" in populate_state, (
-        "reference-discovery-populate state must claim dead for every import-capable provider "
-        f"(got: {populate_row.get('state')!r})"
-    )
-    assert "5.6" in populate_state, (
-        f"reference-discovery-populate state must cite the 5.6 readback gate (got: {populate_row.get('state')!r})"
-    )
-    for provider in ("linear", "github", "gitlab", "jira"):
-        assert f"live for {provider}" not in populate_state, (
-            f"reference-discovery-populate state must not claim {provider} is still live"
-        )
+    assert (
+        "/api/internal/worker-sync/reference-discovery-populate"
+        not in gen.load_bridge_routes()
+    ), "reference-discovery-populate must have no remaining Go caller in bridge.go"
+    assert (
+        "/api/internal/worker-sync/reference-discovery-populate"
+        not in gen.BRIDGE_ROUTE_LEDGER
+    ), "reference-discovery-populate must have no remaining curated ledger row"
 
     team_autoimport_row = gen.BRIDGE_ROUTE_LEDGER["/api/internal/worker-sync/team-autoimport"]
     team_autoimport_state = team_autoimport_row.get("state", "").lower()

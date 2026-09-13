@@ -67,17 +67,6 @@ func (collector *fakeTeamCatalogCollector) CollectTeamCatalog(
 	return collector.result, collector.err
 }
 
-type fakeTeamCatalogFallbackExecutor struct {
-	gotOrgID, gotRunID, gotProvider string
-	summary                         map[string]any
-	err                             error
-}
-
-func (executor *fakeTeamCatalogFallbackExecutor) Discover(_ context.Context, orgID, runID, provider string) (map[string]any, error) {
-	executor.gotOrgID, executor.gotRunID, executor.gotProvider = orgID, runID, provider
-	return executor.summary, executor.err
-}
-
 type fakeProviderClientResolver struct {
 	credential    providerfoundation.Credential
 	client        *providerfoundation.HTTPClient
@@ -119,14 +108,12 @@ func TestTeamCatalogDiscoveryExecutorRoutesNativeProvidersToTheirCollector(t *te
 	collector := &fakeTeamCatalogCollector{result: providersync.TeamCatalogResult{
 		TeamsWritten: 3, RepoOwnershipWritten: 9, TeamKeys: []string{"ENG", "OPS"},
 	}}
-	fallback := &fakeTeamCatalogFallbackExecutor{}
 	credential := providerfoundation.Credential{Provider: "linear", ID: "cred-1"}
 	observer := &fakeTeamCatalogObserver{}
 	syncOptions := map[string]any{"auto_import_teams": true}
 	executor := &TeamCatalogDiscoveryExecutor{
-		Native:   map[string]providersync.TeamCatalogCollector{"linear": collector},
-		Fallback: fallback,
-		Clients:  &fakeProviderClientResolver{credential: credential, integrationID: "integration-1"},
+		Native:  map[string]providersync.TeamCatalogCollector{"linear": collector},
+		Clients: &fakeProviderClientResolver{credential: credential, integrationID: "integration-1"},
 		Selections: &fakeTeamCatalogSelectionsResolver{
 			selections:  providersync.TeamCatalogSelections{Teams: true, Projects: true, Members: true},
 			syncOptions: syncOptions,
@@ -179,9 +166,6 @@ func TestTeamCatalogDiscoveryExecutorRoutesNativeProvidersToTheirCollector(t *te
 	if !foundRepoOwnershipRow {
 		t.Fatalf("no team_repo_ownership row observed (RepoOwnershipWritten must get its own table label, not share team_project_ownership's): %+v", observer.rows)
 	}
-	if fallback.gotProvider != "" {
-		t.Fatalf("native provider reached the bridge fallback: %+v", fallback)
-	}
 	if collector.gotRef.OrgID != testOrg || collector.gotRef.SyncRunID != testRun {
 		t.Fatalf("collector ref=%+v want org=%q run=%q", collector.gotRef, testOrg, testRun)
 	}
@@ -221,9 +205,8 @@ func TestTeamCatalogDiscoveryExecutorReportsRosterPreservationFailure(t *testing
 	collector := &fakeTeamCatalogCollector{result: providersync.TeamCatalogResult{RosterPreservationFailed: true}}
 	observer := &fakeTeamCatalogObserver{}
 	executor := &TeamCatalogDiscoveryExecutor{
-		Native:   map[string]providersync.TeamCatalogCollector{"linear": collector},
-		Fallback: &fakeTeamCatalogFallbackExecutor{},
-		Clients:  &fakeProviderClientResolver{credential: providerfoundation.Credential{Provider: "linear"}},
+		Native:  map[string]providersync.TeamCatalogCollector{"linear": collector},
+		Clients: &fakeProviderClientResolver{credential: providerfoundation.Credential{Provider: "linear"}},
 		Selections: &fakeTeamCatalogSelectionsResolver{
 			selections: providersync.TeamCatalogSelections{Teams: true},
 		},
@@ -243,11 +226,9 @@ func TestTeamCatalogDiscoveryExecutorSkipsNativeProviderWithEverySelectionOff(t 
 	collector := &fakeTeamCatalogCollector{result: providersync.TeamCatalogResult{
 		SprintsWritten: 2, SprintIDs: []string{"linear:cycle:1", "linear:cycle:2"},
 	}}
-	fallback := &fakeTeamCatalogFallbackExecutor{}
 	observer := &fakeTeamCatalogObserver{}
 	executor := &TeamCatalogDiscoveryExecutor{
 		Native:     map[string]providersync.TeamCatalogCollector{"linear": collector},
-		Fallback:   fallback,
 		Clients:    &fakeProviderClientResolver{},
 		Selections: &fakeTeamCatalogSelectionsResolver{selections: providersync.TeamCatalogSelections{}},
 		Observer:   observer,
@@ -263,9 +244,6 @@ func TestTeamCatalogDiscoveryExecutorSkipsNativeProviderWithEverySelectionOff(t 
 	}
 	if collector.gotSelections.Any() {
 		t.Fatalf("resolver selections leaked as non-empty: %+v", collector.gotSelections)
-	}
-	if fallback.gotProvider != "" {
-		t.Fatalf("bridge was called despite a registered native collector: %+v", fallback)
 	}
 	teamKeys, ok := summary["reference_team_keys"].([]string)
 	if !ok || len(teamKeys) != 0 {
@@ -325,31 +303,60 @@ func (*alwaysMissingReadbackChecker) MissingSprintIDs(_ context.Context, _, _ st
 	return expected, nil
 }
 
-// TestTeamCatalogDiscoveryExecutorFallsBackForUnregisteredProviders pins the
-// complement: a provider with no native collector goes through the bridge,
-// exactly as it does today, untouched.
-func TestTeamCatalogDiscoveryExecutorFallsBackForUnregisteredProviders(t *testing.T) {
-	fallback := &fakeTeamCatalogFallbackExecutor{summary: map[string]any{"provider": "github", "outcome": "bridge"}}
+// TestTeamCatalogDiscoveryExecutorNoOpsForProvidersWithNoImportCapability
+// pins the complement to the wiring-bug guard above: a provider with no
+// import capability at all (never registered a real populate() in Python,
+// and never will be in Native -- e.g. atlassian) gets a clean, empty no-op
+// instead of an error. There is no Python bridge left to fall through to.
+func TestTeamCatalogDiscoveryExecutorNoOpsForProvidersWithNoImportCapability(t *testing.T) {
 	observer := &fakeTeamCatalogObserver{}
 	executor := &TeamCatalogDiscoveryExecutor{
 		Native:   map[string]providersync.TeamCatalogCollector{"linear": &fakeTeamCatalogCollector{}},
-		Fallback: fallback,
 		Observer: observer,
 	}
-	summary, err := executor.Discover(context.Background(), testOrg, testRun, "github")
+	summary, err := executor.Discover(context.Background(), testOrg, testRun, "atlassian")
 	if err != nil {
 		t.Fatalf("Discover: %v", err)
 	}
-	if fallback.gotOrgID != testOrg || fallback.gotRunID != testRun || fallback.gotProvider != "github" {
-		t.Fatalf("fallback saw org=%q run=%q provider=%q", fallback.gotOrgID, fallback.gotRunID, fallback.gotProvider)
-	}
-	if summary["outcome"] != "bridge" {
+	if summary["provider"] != "atlassian" || summary["outcome"] != "not_import_capable" {
 		t.Fatalf("summary=%#v", summary)
 	}
+	teamKeys, ok := summary["reference_team_keys"].([]string)
+	if !ok || len(teamKeys) != 0 {
+		t.Fatalf("summary reference_team_keys=%#v, want an empty slice", summary["reference_team_keys"])
+	}
+	sprintIDs, ok := summary["reference_sprint_ids"].([]string)
+	if !ok || len(sprintIDs) != 0 {
+		t.Fatalf("summary reference_sprint_ids=%#v, want an empty slice", summary["reference_sprint_ids"])
+	}
 	if len(observer.dispatches) != 1 || observer.dispatches[0] != (teamCatalogDispatchCall{
-		provider: "github", entryPoint: jobruntime.TeamCatalogEntryPointReferenceDiscovery, outcome: jobruntime.TeamCatalogOutcomeBridge,
+		provider: "atlassian", entryPoint: jobruntime.TeamCatalogEntryPointReferenceDiscovery, outcome: jobruntime.TeamCatalogOutcomeNotImportCapable,
 	}) {
 		t.Fatalf("observer dispatches=%+v", observer.dispatches)
+	}
+
+	// The empty claim keys must verify trivially -- prove it against a
+	// checker that would fail any non-vacuous claim.
+	verifier, err := NewReferenceReadbackVerifier(&alwaysMissingReadbackChecker{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := verifier.Verify(context.Background(), testOrg, "atlassian", summary); err != nil {
+		t.Fatalf("Verify should vacuously succeed on an empty claim: %v", err)
+	}
+}
+
+// TestTeamCatalogDiscoveryExecutorFailsClosedWhenAnImportCapableProviderHasNoCollector
+// pins the wiring-bug guard: a provider this codebase KNOWS can write real
+// reference data (linear/jira/github/gitlab) missing from Native is a
+// registration bug, never a legitimate no-op, and must fail loudly rather
+// than silently report an empty, unverified result.
+func TestTeamCatalogDiscoveryExecutorFailsClosedWhenAnImportCapableProviderHasNoCollector(t *testing.T) {
+	executor := &TeamCatalogDiscoveryExecutor{
+		Native: map[string]providersync.TeamCatalogCollector{"linear": &fakeTeamCatalogCollector{}},
+	}
+	if _, err := executor.Discover(context.Background(), testOrg, testRun, "github"); !errors.Is(err, ErrReferenceDiscoveryUnavailable) {
+		t.Fatalf("github missing from Native: error=%v want=%v", err, ErrReferenceDiscoveryUnavailable)
 	}
 }
 

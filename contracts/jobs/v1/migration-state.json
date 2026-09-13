@@ -297,7 +297,7 @@
     },
     {
       "kind": "sync.provider_unit",
-      "state": "canary",
+      "state": "celery_removed",
       "producer_version": 1,
       "consumer_versions": [
         1
@@ -305,12 +305,13 @@
       "required_queues": [
         "sync_provider"
       ],
-      "route": "river_canary",
-      "rollback_route": "celery",
+      "route": "river",
+      "rollback_route": "none",
       "evidence": [
         "contract_schema",
         "cross_language_golden",
         "duplicate_delivery",
+        "handler_wiring",
         "kill_window",
         "provider_parity"
       ]

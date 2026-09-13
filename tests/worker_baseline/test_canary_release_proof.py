@@ -19,6 +19,19 @@ proof = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(proof)
 
 
+# A synthetic kind, never a real registry/migration-state entry, injected
+# into a deep copy of the pinned documents by documents() below. The canary
+# happy-path tests in this file need SOME kind that canary_supported()
+# accepts (state=canary/route=river_canary/rollback_route=celery) to exist;
+# pinning that to a real kind (this file used to default to
+# "sync.provider_unit") means the day that kind's own migration completes
+# and its row moves off canary, this whole file's happy path silently loses
+# its only positive example and starts asserting "canary_not_executable" was
+# never a real failure. A synthetic entry this file owns end to end can
+# never be retired out from under it by an unrelated migration.
+_SYNTHETIC_CANARY_KIND = "test.synthetic_canary_unit"
+
+
 def route(kind: str, generation: int, transport: str, observed_at: str) -> dict:
     return {
         "kind": kind,
@@ -30,7 +43,7 @@ def route(kind: str, generation: int, transport: str, observed_at: str) -> dict:
     }
 
 
-def rollback(kind: str = "sync.provider_unit") -> dict:
+def rollback(kind: str = _SYNTHETIC_CANARY_KIND) -> dict:
     digest = "1" * 64
     return {
         "kind": kind,
@@ -68,7 +81,7 @@ def rollback(kind: str = "sync.provider_unit") -> dict:
     }
 
 
-def observation(runtime: str, *, kind: str = "sync.provider_unit") -> dict:
+def observation(runtime: str, *, kind: str = _SYNTHETIC_CANARY_KIND) -> dict:
     digest = "a" * 64
     return {
         "schema_version": 2,
@@ -104,7 +117,46 @@ def observation(runtime: str, *, kind: str = "sync.provider_unit") -> dict:
 
 
 def documents() -> dict:
-    return proof.load_pinned_documents()
+    """The real pinned documents, plus one synthetic canary-state job added
+    to deep copies of the registry and migration-state documents (see
+    _SYNTHETIC_CANARY_KIND above). Each document's own path/sha256 stays
+    the real checked-in file's -- only its in-memory .value gains the extra
+    job -- so assertions elsewhere in this file that pin the real file's
+    hash are unaffected.
+    """
+    result = dict(proof.load_pinned_documents())
+    registry = copy.deepcopy(result["registry"].value)
+    migration_state = copy.deepcopy(result["migration_state"].value)
+    registry["jobs"].append(
+        {
+            "kind": _SYNTHETIC_CANARY_KIND,
+            "handler_owner": "tests/worker_baseline/test_canary_release_proof.py",
+            "current_version": 1,
+            "supported_versions": [1],
+            "queue": "test_synthetic_canary",
+        }
+    )
+    migration_state["jobs"].append(
+        {
+            "kind": _SYNTHETIC_CANARY_KIND,
+            "state": "canary",
+            "producer_version": 1,
+            "consumer_versions": [1],
+            "required_queues": ["test_synthetic_canary"],
+            "route": "river_canary",
+            "rollback_route": "celery",
+            "evidence": [],
+        }
+    )
+    result["registry"] = proof.PinnedDocument(
+        result["registry"].path, result["registry"].sha256, registry
+    )
+    result["migration_state"] = proof.PinnedDocument(
+        result["migration_state"].path,
+        result["migration_state"].sha256,
+        migration_state,
+    )
+    return result
 
 
 def approved_documents() -> dict:
@@ -387,6 +439,13 @@ def test_adversarial_rollback_and_control_plane_observations_fail_closed(
 def test_cli_pins_documents_rejects_overrides_and_invalidates_stale_output(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    # proof.main() always reads the real checked-in registry/migration-state
+    # (there is no override that isn't fail-closed -- see the --registry call
+    # below), so unlike every other test in this file it cannot use
+    # observation()'s synthetic-kind default to get a canary_supported()
+    # pass: no real kind is in canary state, so this observation's kind is
+    # legitimately unrecognized and "canary_not_executable" is an expected
+    # failure alongside "thresholds_unapproved", not a regression.
     celery = tmp_path / "celery.json"
     go = tmp_path / "go.json"
     output = tmp_path / "candidate.json"
@@ -408,7 +467,7 @@ def test_cli_pins_documents_rejects_overrides_and_invalidates_stale_output(
     )
     assert json.loads(capsys.readouterr().out) == {
         "status": "fail",
-        "failures": ["thresholds_unapproved"],
+        "failures": ["canary_not_executable", "thresholds_unapproved"],
         "measurements": {
             "lag_seconds_delta": 0.0,
             "error_count_delta": 0,

@@ -93,12 +93,12 @@
         "value": "sync.provider_unit"
       },
       "target_kind_id": "kind:sync.provider_unit",
-      "current_implementation_state": "python_compatibility",
+      "current_implementation_state": "native_go",
       "verification_status": "verified",
-      "compatibility_dependency": "Implements the compute body invoked by the registry kind's HTTP compatibility bridge.",
-      "deletion_evidence_requirement": "Deleted once registry kind `sync.provider_unit` no longer routes through the HTTP compatibility bridge.",
+      "compatibility_dependency": "None -- there is no HTTP compatibility bridge for this kind (see the `sync.provider_unit` registry_kind row). Kept only as dead code pending a separate cleanup: see that row's deletion_evidence_requirement.",
+      "deletion_evidence_requirement": "Not yet deleted: unreachable from any live dispatch path (no Celery consumer anywhere, no HTTP compatibility bridge), but not a safe unilateral deletion -- exercised directly by roughly 100 test call sites across tests/test_sync_units.py and siblings via the `getattr(run_sync_unit, \"run\")(...)` calling convention -- pending a separate cleanup.",
       "acceptance_test_id": "tests/workers/test_provider_matrix_contract.py",
-      "notes": "matrix inventory: 59/59 provider/dataset pairs route-ready in Go, including GitHub 17/17. CHAOS-4054 deleted the route enablement environment plane (steps 1-3) and step 4 deleted the Celery fallthrough that dispatch_sync_run used to publish this task with, so no Celery producer targets it any more; it survives only as the compute body behind the registry kind's HTTP compatibility bridge."
+      "notes": "matrix inventory: 59/59 provider/dataset pairs route-ready in Go, including GitHub 17/17. CHAOS-4054 deleted the route enablement environment plane (steps 1-3) and step 4 deleted the Celery fallthrough that dispatch_sync_run used to publish this task with, so no Celery producer targets it any more. CORRECTION: the prior claim that it 'survives only as the compute body behind the registry kind's HTTP compatibility bridge' was stale -- no such bridge exists; it survives only as dead code (see compatibility_dependency)."
     },
     {
       "id": "celery_task:src/dev_health_ops/workers/sync_units.py:2054",
@@ -565,7 +565,7 @@
         "line": 492
       },
       "queue_or_cadence": "sync_provider / sync",
-      "dispatches": "run_sync_unit",
+      "dispatches": "internal/jobs/providerunit/providerunit.go (*Handler).Work",
       "dispatch_mechanism": "job_registry_descriptor",
       "owner_role": "primary",
       "target_owner": {
@@ -573,12 +573,12 @@
         "value": "sync.provider_unit"
       },
       "target_kind_id": "kind:sync.provider_unit",
-      "current_implementation_state": "python_compatibility",
+      "current_implementation_state": "native_go",
       "verification_status": "verified",
-      "compatibility_dependency": "HTTP compatibility bridge (internal/worker/*/v1/execute) backed by the corresponding src/dev_health_ops/api/internal/*.py runner.",
-      "deletion_evidence_requirement": "registry.json kind `sync.provider_unit` passes Registry.ValidateStartup with a concrete non-HTTP-bridge handler, the compatibility runner import is removed from the Python API, and a non-empty baseline parity dataset matches product data (not just job status).",
+      "compatibility_dependency": "None. registry.json kind `sync.provider_unit` resolves to a concrete native Go handler (`handler_owner: internal/jobs/providerunit`) for every provider/dataset pair (matrix inventory: 59/59 route-ready). There is no HTTP compatibility bridge or Python runner in this path.",
+      "deletion_evidence_requirement": "Met: registry.json kind `sync.provider_unit` resolves to `internal/jobs/providerunit`'s native handler with no HTTP-bridge fallback, migration-state.json marks it `celery_removed`/route=`river`/rollback_route=`none`, and no Celery consumer serves this queue in any deployment. Outstanding: the Python `run_sync_unit` celery task body (src/dev_health_ops/workers/sync_units.py) remains in the tree, unreachable from any live dispatch path, pending a separate cleanup -- see that row's own deletion_evidence_requirement.",
       "acceptance_test_id": "tests/workers/job_contracts/test_registry.py",
-      "notes": "only non-celery route transport is river_canary; matrix inventory: 59/59 provider/dataset pairs route-ready natively in Go, including GitHub 17/17. All checked-in deployment switches remain default-off, so every non-enabled scope continues through the Celery/Python compatibility path."
+      "notes": "matrix inventory: 59/59 provider/dataset pairs route-ready natively in Go, including GitHub 17/17. CORRECTION: the prior note claiming 'only non-celery route transport is river_canary' and 'every non-enabled scope continues through the Celery/Python compatibility path' was stale -- no Celery consumer has served this queue in any deployment for a long time, and there was never a Python HTTP compatibility bridge for this kind to fall through to."
     },
     {
       "id": "registry_kind:contracts/jobs/v1/registry.json:524",

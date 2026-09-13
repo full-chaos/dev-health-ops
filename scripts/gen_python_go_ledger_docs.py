@@ -275,12 +275,12 @@ KIND_LEDGER: dict[str, dict[str, str]] = {
     "sync.provider_unit": {
         "producer": "`internal/jobs/providerunit/providerunit.go:538 (*Handler).Work`",
         "trigger": "post-sync (leased unit from sync-run dispatch)",
-        "gate": "route=`river_canary` (`Executable()` true for canary too)",
+        "gate": "route=`river`, rollback=`none` -- no Celery consumer has served this queue in any deployment, so the canary label the migration-state.json row used to carry was vestigial (`Executable()` was already unconditionally true)",
         "writer": "`internal/providersync/repository_postgres.go:144 (*PostgresRepository).Complete`",
         "tables": "`public.sync_run_units`, `public.sync_run_unit_effect_chunks`, `public.sync_run_unit_chunk_checkpoints`",
         "evidence": "argued — code read; no Python call found in the `Work()` path",
         "state": "native",
-        "ticket": "n/a — matches migration-state.json canary state, no gap",
+        "ticket": "n/a — matches migration-state.json celery_removed state, no gap. The Python run_sync_unit celery task body remains in the tree, unreachable from any live dispatch path, pending a separate cleanup (see the transitional-inventory.json row).",
     },
     "sync.team_autoimport": {
         "producer": "enqueue: `cmd/dev-health-worker/sync_dispatch.go:195 teamAutoimportPostSyncWriter.PublishTx`, called from `NativePostSyncService.publishTeamAutoimport` (`native_post_sync.go:337-344`) only when `plan.TeamAutoimport` is true; dequeue/consumer: `internal/syncdispatchruntime/worker.go:105 RegisterTeamAutoimportWorker`, wired `sync_dispatch.go:717`. Per-provider dispatch: `nativeTeamAutoimportDispatcher.TeamAutoImport` (`cmd/dev-health-worker/team_catalog_clients.go:452`) resolves the sync run's own provider (`resolveTeamCatalogProvider`) and looks it up in the `nativeTeamCatalogCollectors` map (`sync_dispatch.go:545`, linear/github/gitlab/jira); a hit runs the Go collector directly. jira's own collector (`JiraTeamCatalogCollector`, `internal/providersync/jira_team_catalog_route.go`) was the last entry added, closing the map to every provider `team_provider_capabilities()` lists as import-capable, so there is no Python bridge left in this seam at all: `CoordinatorBridge.TeamAutoImport`, the wrapped `HTTPBridge.TeamAutoImport` method, and the `/api/internal/worker-sync/team-autoimport` route it called are all deleted. A miss on a provider `teamAutoimportImportCapableProviders` still lists as import-capable (linear/jira/github/gitlab) is a wiring bug and returns `errTeamAutoImportProviderUnavailable`, propagated to fail (and retry) the River job; any other provider (pagerduty, launchdarkly) is a genuine, permanent no-op recorded as `not_import_capable`; a provider-resolution failure itself now propagates too, since there is no bridge to mask it",

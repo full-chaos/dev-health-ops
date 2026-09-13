@@ -112,13 +112,20 @@ def seed_sync_dispatch_transport_routes(session: Session) -> None:
 
     ``worker_job_routes['sync.provider_unit']`` deliberately does NOT. Alembic
     0061 seeds it ``celery`` on a fresh database and 0066 excludes it, but a
-    production dump taken for CHAOS-4082 shows the deployed row is
-    ``river_canary`` -- an operator applied it, which is the state every
-    provider unit has actually dispatched under for months. Seeding ``celery``
-    here made the fixture disagree with production in the one field the
-    dispatcher fails closed on, so every dispatch test had to override it by
-    hand and a test that forgot got a fail-closed refusal that looked like a
-    routing bug.
+    production dump once showed the deployed row was ``river_canary`` --
+    an operator applied it, which was the state every provider unit actually
+    dispatched under for months. Seeding ``celery`` here made the fixture
+    disagree with production in the one field the dispatcher fails closed
+    on, so every dispatch test had to override it by hand and a test that
+    forgot got a fail-closed refusal that looked like a routing bug.
+
+    That migration has since completed: ``contracts/jobs/v1/migration-state.json``
+    now pins ``sync.provider_unit`` to ``river``/rollback ``none``, and
+    ``resolve_worker_job_route`` fails closed ("worker job route drifts from
+    checked-in policy") on ANY row transport that doesn't exactly match the
+    checked-in policy's route -- so this fixture must track that value
+    exactly, not merely something plausible, or every caller silently starts
+    getting that drift error instead of a working route.
 
     A test that wants a route FAULT sets the row itself; see
     ``test_dispatch_sync_run_route_faults_fail_closed``.
@@ -146,7 +153,7 @@ def seed_sync_dispatch_transport_routes(session: Session) -> None:
     session.add(
         WorkerJobRoute(
             job_kind="sync.provider_unit",
-            transport="river_canary",
+            transport="river",
             paused=False,
             generation=1,
         )

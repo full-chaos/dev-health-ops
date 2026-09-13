@@ -9014,7 +9014,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/teams.py",
-        "line": 351,
+        "line": 350,
         "router_local_path": "/teams/pending-changes"
       },
       "gaps": [],
@@ -9079,7 +9079,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/teams.py",
-        "line": 361,
+        "line": 360,
         "router_local_path": "/teams/{team_id}/approve-changes"
       },
       "gaps": [],
@@ -9144,73 +9144,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/teams.py",
-        "line": 377,
+        "line": 376,
         "router_local_path": "/teams/{team_id}/dismiss-changes"
-      },
-      "gaps": [],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "ops_access_token_hs256"
-      ],
-      "primary_validator": {
-        "description": "require_admin (router-level dependency on admin.router:39-43, applies to every nested sub-router included after it) requires current_user.is_admin via get_current_user.",
-        "anchor": {
-          "path": "src/dev_health_ops/api/admin/middleware.py",
-          "line": 9,
-          "line_end": 14,
-          "note": "require_admin(current_user=Depends(get_current_user))"
-        }
-      },
-      "token_shape": {
-        "token_type": "HS256 JWT",
-        "issuer": "JWT_ISSUER env",
-        "audience": "JWT_AUDIENCE env",
-        "algorithm": "HS256"
-      },
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ decodes the Authorization: Bearer value as an ops access-token JWT and resolves/validates X-Org-Id against it -- this IS the route's intended validator for ops_access_token_hs256.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": true,
-          "reachable_but_not_owner": false
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": "org_id from JWT / X-Org-Id (superuser may cross-org)",
-      "tenant_requirement": "cross_org_superuser_only",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": "403 for a non-admin authenticated user; 401 for no/invalid token (OrgIdMiddleware degrades an invalid JWT to anonymous, so get_current_user's own 401 is what actually fires)."
-    },
-    {
-      "id": "POST /api/v1/admin/teams/trigger-drift-sync [dev-health-ops-api]",
-      "surface_kind": "rest",
-      "method": "POST",
-      "route": "/api/v1/admin/teams/trigger-drift-sync",
-      "graphql_field_name": null,
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/admin/routers/teams.py",
-        "line": 393,
-        "router_local_path": "/teams/trigger-drift-sync"
       },
       "gaps": [],
       "classification": "protected",
@@ -9274,7 +9209,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/teams.py",
-        "line": 407,
+        "line": 392,
         "router_local_path": "/teams/{team_id}"
       },
       "gaps": [],
@@ -9339,7 +9274,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/teams.py",
-        "line": 420,
+        "line": 405,
         "router_local_path": "/teams/{team_id}"
       },
       "gaps": [],

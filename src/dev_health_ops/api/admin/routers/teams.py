@@ -342,10 +342,9 @@ async def import_teams(
 # ``team_drift_changes`` + ``team_provider_observations``; the web caller is
 # repointed to stable ``change_id`` decisions instead of the old index path.
 #
-# ROUTING: the static paths (``/teams/pending-changes``,
-# ``/teams/trigger-drift-sync``) are declared BEFORE the ``/teams/{team_id}``
-# path-param route so FastAPI matches them rather than treating the literal as a
-# team id.
+# ROUTING: the static path ``/teams/pending-changes`` is declared BEFORE the
+# ``/teams/{team_id}`` path-param route so FastAPI matches it rather than
+# treating the literal as a team id.
 
 
 @router.get("/teams/pending-changes", response_model=PendingChangesResponse)
@@ -388,20 +387,6 @@ async def dismiss_team_changes(
         dismiss_all=payload.dismiss_all,
         decided_by=org_id,
     )
-
-
-@router.post("/teams/trigger-drift-sync")
-async def trigger_drift_sync(
-    org_id: str = Depends(get_admin_org_id),
-) -> dict[str, Any]:
-    from dev_health_ops.workers.celery_app import celery_app
-
-    # TODO(CHAOS-2653): replace name-based dispatch with the concrete
-    # ``sync_team_drift`` task import once the worker lane lands it.
-    async_result = celery_app.signature(
-        "sync_team_drift", kwargs={"org_id": org_id}, queue="sync"
-    ).apply_async()
-    return {"triggered": True, "task_id": str(async_result.id)}
 
 
 @router.get("/teams/{team_id}", response_model=TeamMappingResponse)

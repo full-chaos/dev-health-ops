@@ -937,10 +937,10 @@ suppress a later `A→C`. The projector enforces:
 `team_drift_changes FINAL`: `GET /admin/teams/pending-changes` lists flagged drift; approve/dismiss
 act **by `change_id`** (`{change_ids: [...], approve_all|dismiss_all}`, replacing the old racy
 index-based wire) — approve applies the observed value into `teams` via `create_or_update` and marks
-the change `approved`, dismiss marks it `dismissed` (catalog unchanged); `POST
-/admin/teams/trigger-drift-sync` dispatches the `sync_team_drift` Celery task on the `sync` queue
-(worker-supplied provider credentials). The web side adds `FlaggedChange.change_id` and sends
-`change_ids`. All three tables join the org-deletion purge path.
+the change `approved`, dismiss marks it `dismissed` (catalog unchanged). `POST
+/admin/teams/trigger-drift-sync` is removed: it dispatched a `sync_team_drift` Celery task that has
+had no consumer since the task itself was deleted as dead code. The web side adds `FlaggedChange.change_id`
+and sends `change_ids`. All three tables join the org-deletion purge path.
 
 > **Identities/members slice (implemented by CHAOS-2656).** Member/identity drift +
 > `manual_attribution_fallbacks(scope_type='member')` reconciliation reuses `team_drift_changes` via

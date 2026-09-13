@@ -326,8 +326,9 @@ func teamCatalogEntryPoints() []TeamCatalogEntryPoint {
 // path unchanged (provider resolution failed on the post_sync seam, the
 // only entry point that still has a bridge to fall through to); "skipped"
 // is the post_sync-only case of a native provider whose org has every
-// CHAOS-4323 selection off -- nothing to import either way, so neither the
-// collector nor the bridge ran; "native_failed_nonfatal" is the
+// per-category import selection (teams/projects/members) off -- nothing to
+// import either way, so neither the collector nor the bridge ran;
+// "native_failed_nonfatal" is the
 // post_sync-only case of a native collector call that returned an error --
 // mirroring Python's non-strict run_team_autoimport, which catches every
 // populator exception and returns a zero summary rather than failing the

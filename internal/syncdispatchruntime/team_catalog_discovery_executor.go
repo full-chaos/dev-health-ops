@@ -98,8 +98,9 @@ var referenceDiscoveryImportCapableProviders = map[string]bool{
 
 // TeamCatalogDiscoveryExecutor dispatches reference discovery per provider:
 // a provider with a registered native collector runs it directly (gated by
-// CHAOS-4323 selections, same as the post-sync path); every other provider
-// gets a clean no-op (see referenceDiscoveryImportCapableProviders) -- the
+// the org's per-category import selections, same as the post-sync path);
+// every other provider gets a clean no-op (see
+// referenceDiscoveryImportCapableProviders) -- the
 // Python bridge this seam used to fall through to (BridgeDiscoveryExecutor)
 // is gone, closed out by the jira collector completing the native-provider
 // set. It implements the same DiscoveryExecutor seam VerifiedDiscoveryExecutor

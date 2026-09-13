@@ -304,10 +304,10 @@ func (*alwaysMissingReadbackChecker) MissingSprintIDs(_ context.Context, _, _ st
 }
 
 // TestTeamCatalogDiscoveryExecutorNoOpsForProvidersWithNoImportCapability
-// pins the post-CHAOS-4435 complement: a provider with no import capability
-// at all (never registered a real populate() in Python, and never will be
-// in Native -- e.g. atlassian) gets a clean, empty no-op instead of an
-// error. There is no Python bridge left to fall through to.
+// pins the complement to the wiring-bug guard above: a provider with no
+// import capability at all (never registered a real populate() in Python,
+// and never will be in Native -- e.g. atlassian) gets a clean, empty no-op
+// instead of an error. There is no Python bridge left to fall through to.
 func TestTeamCatalogDiscoveryExecutorNoOpsForProvidersWithNoImportCapability(t *testing.T) {
 	observer := &fakeTeamCatalogObserver{}
 	executor := &TeamCatalogDiscoveryExecutor{

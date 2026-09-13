@@ -515,11 +515,11 @@ func buildSyncCoordinatorWorker(
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	// The populate step (credential resolution + run_team_autoimport_strict)
-	// used to stay behind a narrow, identifiers-only bridge call (CHAOS-4175
-	// ruling, 2026-08-24). jira's own native collector closed that out: every
-	// provider that ever had real populate capability is registered in
-	// nativeTeamCatalogCollectors below, so there is no Python path left for
-	// this seam to fall through to (see TeamCatalogDiscoveryExecutor.Discover).
+	// used to stay behind a narrow, identifiers-only bridge call. jira's own
+	// native collector closed that out: every provider that ever had real
+	// populate capability is registered in nativeTeamCatalogCollectors below,
+	// so there is no Python path left for this seam to fall through to (see
+	// TeamCatalogDiscoveryExecutor.Discover).
 	readbackChecker, err := syncdispatchruntime.NewClickHouseReadbackVerifier(clickhouseConnection)
 	if err != nil {
 		closeClickHouse()
@@ -530,9 +530,9 @@ func buildSyncCoordinatorWorker(
 		closeClickHouse()
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
-	// CHAOS-4431: a registered native provider runs its own collector; every
-	// other provider gets TeamCatalogDiscoveryExecutor's own no-op (there is
-	// no Python populate bridge left to fall through to). ClickHouse readback
+	// A registered native provider runs its own collector; every other
+	// provider gets TeamCatalogDiscoveryExecutor's own no-op (there is no
+	// Python populate bridge left to fall through to). ClickHouse readback
 	// verification (readbackVerifier, just above) still wraps the combined
 	// result either way. The same native-collector map and client resolver
 	// feed the post-sync team-autoimport dispatch below

@@ -124,19 +124,24 @@ func TestTestopsTestAndRiskReadCaseResultsOnceAgainstRealClickHouse(t *testing.T
 	}
 	t.Logf("test_case_results: %d queries, %d rows read", firstPass.queries, firstPass.readRows)
 
-	const wantCaseReadQueries = 1
+	// One read per repo in the partition: testops_test and testops_risk need
+	// the same per-case aggregate for the same (org, repo, day), and both of
+	// its halves come out of a single scan.
+	wantCaseReadQueries := uint64(len(partition.RepoIDs))
 	if firstPass.queries != wantCaseReadQueries {
-		t.Errorf("one partition pass ran %d queries against test_case_results, want %d: "+
-			"testops_test and testops_risk need the same per-case aggregate for the same "+
-			"(org, repo, day), so they must share a single read", firstPass.queries, wantCaseReadQueries)
+		t.Errorf("one partition pass ran %d queries against test_case_results for %d repos, want %d",
+			firstPass.queries, len(partition.RepoIDs), wantCaseReadQueries)
 	}
-	const wantCaseReadRows = 0
+	// Exact, because merges are stopped and the part layout is fixed. Each
+	// family reading on its own, with separate case-group and history
+	// queries, read 136 rows here across 8 queries.
+	const wantCaseReadRows = 64
 	if firstPass.readRows != wantCaseReadRows {
 		t.Errorf("one partition pass read %d rows through test_case_results queries, want %d",
 			firstPass.readRows, wantCaseReadRows)
 	}
 
-	assertTestopsOutputsMatchGolden(ctx, t, conn, orgID)
+	assertTestopsOutputsMatchGolden(ctx, t, conn)
 
 	// A retried partition is a new pass and must see the table as it is then,
 	// so nothing may carry a read from one pass into the next.
@@ -284,7 +289,7 @@ const testopsSharedReadGoldenPath = "testdata/testops_test_and_risk_outputs.gold
 // assertTestopsOutputsMatchGolden renders every row both families wrote,
 // computed_at aside, as ClickHouse's own text form of the tuple, so a float
 // that moves in its last digit changes the golden.
-func assertTestopsOutputsMatchGolden(ctx context.Context, t *testing.T, conn driver.Conn, orgID string) {
+func assertTestopsOutputsMatchGolden(ctx context.Context, t *testing.T, conn driver.Conn) {
 	t.Helper()
 	var rendered strings.Builder
 	for _, table := range []string{

@@ -1,7 +1,9 @@
 package testops
 
 import (
+	"fmt"
 	"math"
+	"reflect"
 	"testing"
 
 	"github.com/google/uuid"
@@ -200,4 +202,75 @@ func identicalStrPtr(a, b *string) bool {
 		return a == nil && b == nil
 	}
 	return *a == *b
+}
+
+// A record finished without a resolver and resolved afterwards must equal the
+// record finished with that resolver, for every way the first suite's team
+// can be set, and a record with no suites must keep a nil team.
+func TestTestMetricResolveTeamMatchesFinishWithResolver(t *testing.T) {
+	repoID := uuid.MustParse("00000000-0000-4000-8000-0000000000d4")
+	repoName := repoID.String()
+	explicit := "suite-team"
+	empty := ""
+	resolvers := map[string]RepoTeamResolver{
+		"nil":      nil,
+		"matching": fixedRepoTeamResolver{repoName: repoName, teamID: "pattern-team"},
+		"missing":  fixedRepoTeamResolver{repoName: "another-repo", teamID: "pattern-team"},
+	}
+	suiteTeams := map[string]*string{"nil": nil, "empty": &empty, "explicit": &explicit}
+
+	finish := func(resolver RepoTeamResolver, suiteTeam *string, withSuite bool) []TestMetric {
+		accumulator := NewTestAccumulator(repoID, repoName, resolver)
+		if withSuite {
+			accumulator.AddSuite(SuiteRow{RepoID: repoID, RunID: "run", SuiteID: "suite", TotalCount: 2, PassedCount: 1, TeamID: suiteTeam})
+		}
+		accumulator.AddCaseGroup(CaseGroup{CaseName: "case", Statuses: []string{"failed", "passed"}})
+		return accumulator.Finish(map[string]struct{}{"case": {}})
+	}
+
+	for resolverName, resolver := range resolvers {
+		for teamName, suiteTeam := range suiteTeams {
+			for _, withSuite := range []bool{true, false} {
+				want := finish(resolver, suiteTeam, withSuite)
+				unresolved := finish(nil, suiteTeam, withSuite)
+				if len(want) != 1 || len(unresolved) != 1 {
+					t.Fatalf("resolver=%s team=%s suite=%v: want one record each, got %d and %d",
+						resolverName, teamName, withSuite, len(want), len(unresolved))
+				}
+				got := unresolved[0].ResolveTeam(repoName, resolver)
+				if !sameTeam(want[0].TeamID, got.TeamID) {
+					t.Fatalf("resolver=%s team=%s suite=%v: ResolveTeam gave %v, Finish with the resolver gave %v",
+						resolverName, teamName, withSuite, derefForMessage(got.TeamID), derefForMessage(want[0].TeamID))
+				}
+				got.TeamID, want[0].TeamID = nil, nil
+				if !reflect.DeepEqual(want[0], got) {
+					t.Fatalf("resolver=%s team=%s suite=%v: ResolveTeam changed more than the team:\nwant %+v\ngot  %+v",
+						resolverName, teamName, withSuite, want[0], got)
+				}
+			}
+		}
+	}
+}
+
+type fixedRepoTeamResolver struct{ repoName, teamID string }
+
+func (resolver fixedRepoTeamResolver) ResolveRepo(repoName string) (string, string) {
+	if repoName != resolver.repoName {
+		return "", ""
+	}
+	return resolver.teamID, resolver.teamID
+}
+
+func sameTeam(a, b *string) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
+}
+
+func derefForMessage(value *string) string {
+	if value == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("%q", *value)
 }

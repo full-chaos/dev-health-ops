@@ -35,12 +35,13 @@ import (
 // The readers below have NO cap because they never need one:
 //
 //   - test_case_results, the table that actually choked, is REDUCED INSIDE
-//     ClickHouse to one row per case_name (loadNativeTestopsCaseGroups). The
-//     compute only ever asks two questions of a case -- which normalised
-//     statuses did it have, and did any attempt exceed 0 -- so a status set
-//     plus a max is lossless. Result cardinality becomes the distinct case
-//     count, which is the irreducible size of Python's own case_statuses
-//     dict: never worse than Python, with the row explosion gone.
+//     ClickHouse to one row per case_name (loadNativeTestopsCaseAggregate). The
+//     compute only ever asks three questions of a case -- which normalised
+//     statuses did it have today, did any attempt today exceed 0, and did it
+//     fail in the history window -- so a status set, a max and a flag are
+//     lossless. Result cardinality becomes the distinct case count, which is
+//     the irreducible size of Python's own case_statuses dict: never worse
+//     than Python, with the row explosion gone.
 //   - ci_pipeline_runs and test_suite_results STREAM into an accumulator
 //     (testops.PipelineAccumulator / testops.TestAccumulator) instead of a
 //     slice, so peak memory is O(groups) + two float64 per run, not
@@ -210,134 +211,112 @@ ORDER BY run_id, suite_id`,
 	return nil
 }
 
-// loadNativeTestopsCaseGroups is the cap-removing read: test_case_results
-// reduced to ONE row per case_name inside ClickHouse.
+// loadNativeTestopsCaseAggregate is the one test_case_results read behind a
+// test metric record, reduced inside ClickHouse to one row per case_name. The
+// table's sorting key has no time column, so any read of it scans the repo's
+// whole case history; both questions the record asks of it are therefore
+// answered in the same scan. It folds today's cases into accumulator and
+// returns the names that failed in [historyStart, start).
 //
-// It reproduces load_testops_test_data's two-part semi-join exactly
+// Today's half reproduces load_testops_test_data's two-part semi-join
 // (loaders/clickhouse.py:1344): a case counts when (a) its run has SOME suite
 // in [start, end) and (b) its OWN suite starts before `end` -- (b) is the
 // day-boundary guard that stops a suite from a later day being folded into
-// today just because it shares a run_id.
-//
-// Status strings come back RAW. Normalising them here would mean writing
-// Python's `str.strip().lower()` in SQL, and the two do not agree: str.strip()
-// removes unicode whitespace, ClickHouse's trim and RE2's \s do not.
-// normalizeTestStatus in the testops package does it instead, on exactly the
-// strings Python would have seen. (Contrast loadNativeHistoricalFailedCaseNames
-// below, where the SQL-side lower(trim(...)) is CORRECT -- because Python's own
-// query already does it that way, so copying it is fidelity, not divergence.)
-//
+// today just because it shares a run_id. Status strings come back RAW.
+// Normalising them here would mean writing Python's `str.strip().lower()` in
+// SQL, and the two do not agree: str.strip() removes unicode whitespace,
+// ClickHouse's trim and RE2's \s do not. normalizeTestStatus in the testops
+// package does it instead, on exactly the strings Python would have seen.
 // coalesce(status, ”) keeps the NULL case explicit: Python maps a NULL status
 // to None to "" through _normalize_test_status, and groupUniqArray would
 // otherwise drop NULLs from the array entirely.
-func loadNativeTestopsCaseGroups(
+//
+// The history half ports load_testops_historical_failed_case_names
+// (loaders/clickhouse.py:1498): distinct names that failed in [historyStart,
+// start), EXCLUDING any run that also has a suite in [start, end) so a run
+// straddling the day boundary is not counted as both today and history. That
+// query joined each case to its suite on the suite key and kept DISTINCT
+// names, so the join only ever tested that a matching suite existed; the
+// (run_id, suite_id) semi-join below tests the same thing. lower(trim(status))
+// IS evaluated in SQL there, unlike today's half, because Python's own query
+// normalises that way, so matching it is fidelity rather than divergence.
+// FAILURE_STATUSES (compute_testops.py:54) is the vocabulary, passed as
+// parameters rather than interpolated.
+//
+// A name seen only in history comes back with seen_today = 0 and never
+// reaches the accumulator: counting it would make a repo with no suites and
+// no cases today emit a record.
+func loadNativeTestopsCaseAggregate(
 	ctx context.Context,
 	conn testopsNativeConn,
 	accumulator *testops.TestAccumulator,
 	orgID string,
 	repoID uuid.UUID,
-	start, end time.Time,
-) error {
+	historyStart, start, end time.Time,
+) (map[string]struct{}, error) {
 	rows, err := conn.Query(ctx, `
 SELECT
   case_name,
-  groupUniqArray(ifNull(toString(status), '')) AS statuses,
-  max(retry_attempt) AS max_retry
-FROM test_case_results FINAL
-WHERE org_id = ? AND repo_id = ? AND case_name != ''
-  AND run_id IN (
-    SELECT run_id FROM test_suite_results FINAL
-    WHERE org_id = ? AND repo_id = ?
-      AND coalesce(started_at, finished_at) >= ? AND coalesce(started_at, finished_at) < ?
-  )
-  AND (run_id, suite_id) IN (
-    SELECT run_id, suite_id FROM test_suite_results FINAL
-    WHERE org_id = ? AND repo_id = ?
-      AND coalesce(started_at, finished_at) < ?
-  )
+  groupUniqArrayIf(ifNull(toString(status), ''), in_today) AS statuses,
+  maxIf(retry_attempt, in_today) AS max_retry,
+  max(in_today) AS seen_today,
+  max(failed_in_history) AS failed_before
+FROM (
+  SELECT
+    case_name,
+    status,
+    retry_attempt,
+    run_id IN (
+      SELECT run_id FROM test_suite_results FINAL
+      WHERE org_id = ? AND repo_id = ?
+        AND coalesce(started_at, finished_at) >= ? AND coalesce(started_at, finished_at) < ?
+    ) AS run_in_today,
+    run_in_today AND (run_id, suite_id) IN (
+      SELECT run_id, suite_id FROM test_suite_results FINAL
+      WHERE org_id = ? AND repo_id = ?
+        AND coalesce(started_at, finished_at) < ?
+    ) AS in_today,
+    NOT run_in_today
+      AND lower(trim(status)) IN (?, ?, ?, ?, ?, ?)
+      AND (run_id, suite_id) IN (
+        SELECT run_id, suite_id FROM test_suite_results FINAL
+        WHERE org_id = ? AND repo_id = ?
+          AND coalesce(started_at, finished_at) >= ? AND coalesce(started_at, finished_at) < ?
+      ) AS failed_in_history
+  FROM test_case_results FINAL
+  WHERE org_id = ? AND repo_id = ? AND case_name != ''
+)
+WHERE in_today OR failed_in_history
 GROUP BY case_name
 ORDER BY case_name`,
-		orgID, repoID,
 		orgID, repoID, start.UTC(), end.UTC(),
-		orgID, repoID, end.UTC())
-
+		orgID, repoID, end.UTC(),
+		"failure", "failed", "error", "errors", "timeout", "timed_out",
+		orgID, repoID, historyStart.UTC(), start.UTC(),
+		orgID, repoID)
 	if err != nil {
-		return fmt.Errorf("load native testops case groups: %w", err)
+		return nil, fmt.Errorf("load native testops case aggregate: %w", err)
 	}
 	defer rows.Close()
 
+	historicalFailedNames := make(map[string]struct{})
 	for rows.Next() {
 		var group testops.CaseGroup
-		if err := rows.Scan(&group.CaseName, &group.Statuses, &group.MaxRetry); err != nil {
-			return fmt.Errorf("scan native testops case group: %w", err)
+		var seenToday, failedBefore uint8
+		if err := rows.Scan(&group.CaseName, &group.Statuses, &group.MaxRetry, &seenToday, &failedBefore); err != nil {
+			return nil, fmt.Errorf("scan native testops case aggregate: %w", err)
 		}
-		accumulator.AddCaseGroup(group)
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("iterate native testops case groups: %w", err)
-	}
-	return nil
-}
-
-// loadNativeHistoricalFailedCaseNames ports
-// load_testops_historical_failed_case_names (loaders/clickhouse.py:1498):
-// distinct case names that failed in [start, end), EXCLUDING any run that also
-// has a suite in [end, currentDayEnd) so a run straddling the day boundary is
-// not counted as both "today" and "historical".
-//
-// The result is already a reduction (distinct names over a 29-day window), so
-// there is nothing left to push down -- the cap is simply dropped, and the two
-// source reads gain argMax dedup.
-//
-// lower(trim(status)) IS evaluated in SQL here, unlike the case-group reader.
-// That is deliberate fidelity: Python's own version of this query does the
-// normalisation in SQL with the same expression, so matching it is what keeps
-// the two sides identical. FAILURE_STATUSES (compute_testops.py:54) is the
-// vocabulary, passed as parameters rather than interpolated.
-func loadNativeHistoricalFailedCaseNames(
-	ctx context.Context,
-	conn testopsNativeConn,
-	orgID string,
-	repoID uuid.UUID,
-	start, end, currentDayEnd time.Time,
-) (map[string]struct{}, error) {
-	rows, err := conn.Query(ctx, `
-SELECT DISTINCT c.case_name AS case_name
-FROM test_case_results AS c FINAL
-INNER JOIN test_suite_results AS s FINAL
-  ON (s.repo_id = c.repo_id) AND (s.run_id = c.run_id) AND (s.suite_id = c.suite_id) AND (s.org_id = c.org_id)
-WHERE coalesce(s.started_at, s.finished_at) >= ? AND coalesce(s.started_at, s.finished_at) < ?
-  AND lower(trim(c.status)) IN (?, ?, ?, ?, ?, ?)
-  AND s.run_id NOT IN (
-    SELECT run_id FROM test_suite_results FINAL
-    WHERE org_id = ? AND repo_id = ?
-      AND coalesce(started_at, finished_at) >= ? AND coalesce(started_at, finished_at) < ?
-  )
-  AND s.repo_id = ? AND s.org_id = ?
-ORDER BY case_name`,
-		start.UTC(), end.UTC(),
-		"failure", "failed", "error", "errors", "timeout", "timed_out",
-		orgID, repoID, end.UTC(), currentDayEnd.UTC(),
-		repoID, orgID)
-	if err != nil {
-		return nil, fmt.Errorf("load native testops historical failed case names: %w", err)
-	}
-	defer rows.Close()
-
-	result := make(map[string]struct{})
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return nil, fmt.Errorf("scan native testops historical failed case name: %w", err)
+		if seenToday != 0 {
+			accumulator.AddCaseGroup(group)
 		}
-		if name != "" {
-			result[name] = struct{}{}
+		if failedBefore != 0 {
+			historicalFailedNames[group.CaseName] = struct{}{}
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate native testops historical failed case names: %w", err)
+		return nil, fmt.Errorf("iterate native testops case aggregate: %w", err)
 	}
-	return result, nil
+	return historicalFailedNames, nil
 }
 
 // loadNativeTestopsLatestCoverage returns AT MOST ONE snapshot: the latest by

@@ -129,7 +129,7 @@ func (executor *TestopsRiskExecutor) ComputeFamily(
 		// (testops_native_clickhouse.go), instead of materialising a whole
 		// day's ci_pipeline_runs/test_suite_results/test_case_results into
 		// slices first. test_case_results is reduced to one row per
-		// case_name INSIDE ClickHouse (loadNativeTestopsCaseGroups) -- the
+		// case_name INSIDE ClickHouse (loadNativeTestopsCaseAggregate) -- the
 		// allocation choke a large CI day used to hit here -- so this path
 		// carries no row cap.
 		pipelineAccumulator := testops.NewPipelineAccumulator(repoID, repoName, repoResolver)
@@ -140,24 +140,17 @@ func (executor *TestopsRiskExecutor) ComputeFamily(
 		}
 		pipelineMetrics := pipelineAccumulator.Finish()
 
-		testAccumulator := testops.NewTestAccumulator(repoID, repoName, repoResolver)
-		if err := loadNativeTestopsSuites(
-			ctx, executor.conn, testAccumulator, run.OrganizationID, repoID, start, end,
-		); err != nil {
-			return 0, err
-		}
-		if err := loadNativeTestopsCaseGroups(
-			ctx, executor.conn, testAccumulator, run.OrganizationID, repoID, start, end,
-		); err != nil {
-			return 0, err
-		}
-		historicalFailedNames, err := loadNativeHistoricalFailedCaseNames(
-			ctx, executor.conn, run.OrganizationID, repoID, historyStart, start, end,
+		// The same record testops_test writes. Within one partition pass the
+		// two families share its computation, so the repo's case history is
+		// scanned once rather than once per family -- see
+		// testopsTestMetricShare for why that leaves each family's failure
+		// and ledger semantics its own.
+		testMetrics, err := loadTestopsTestMetrics(
+			ctx, executor.conn, run.OrganizationID, repoID, repoName, repoResolver, historyStart, start, end,
 		)
 		if err != nil {
 			return 0, err
 		}
-		testMetrics := testAccumulator.Finish(historicalFailedNames)
 
 		// coverage_snapshots per repo/day is small (a handful of rows), so
 		// the single-row-per-window pushdown reduction below is a

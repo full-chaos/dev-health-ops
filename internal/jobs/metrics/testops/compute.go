@@ -785,6 +785,19 @@ func (accumulator *TestAccumulator) Finish(historicalFailedNames map[string]stru
 	return []TestMetric{metric}
 }
 
+// ResolveTeam returns metric with TeamID resolved through resolver, for a
+// record Finish produced with a nil resolver. It applies the same rule Finish
+// does, so Finish(names) with a resolver equals Finish(names) without one
+// followed by ResolveTeam: an explicit team on the first suite wins over the
+// repo pattern, and a record with no suite has no representative row and keeps
+// a nil team.
+func (metric TestMetric) ResolveTeam(repoName string, resolver RepoTeamResolver) TestMetric {
+	if metric.TotalSuites > 0 {
+		metric.TeamID = resolveRepoTeam(metric.TeamID, repoName, resolver)
+	}
+	return metric
+}
+
 // ComputeCoverageMetric ports compute_coverage_metrics_daily
 // (compute_testops.py:371), narrowed to one repo: the latest (by
 // (run_id, snapshot_id) lexical order, matching Python's tuple-comparison

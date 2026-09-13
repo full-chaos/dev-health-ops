@@ -171,7 +171,7 @@ func (executor *TestopsPipelineExecutor) ComputeFamily(
 // This is the family the allocation freeze was traced to: its Python loader
 // materialised every test_case_results row for the day and refused at 200k
 // (DEV_HEALTH_TESTOPS_LOADER_MAX_ROWS -> TestopsRowCapExceeded ->
-// resource_exhausted). loadNativeTestopsCaseGroups reduces those rows to one
+// resource_exhausted). loadNativeTestopsCaseAggregate reduces those rows to one
 // per case_name inside ClickHouse, so this executor has no cap and no
 // equivalent refusal path.
 type TestopsTestExecutor struct{ testopsNativeBase }
@@ -195,31 +195,22 @@ func (executor *TestopsTestExecutor) ComputeFamily(
 		return 0, err
 	}
 	// job_daily.py's historical window for failure_recurrence_score is the 29
-	// days BEFORE the target day (CHAOS-4350 PR2's SQL aggregate), with the
-	// current day's own runs excluded by run_id -- see
-	// loadNativeHistoricalFailedCaseNames.
+	// days BEFORE the target day, with the current day's own runs excluded by
+	// run_id -- see loadNativeTestopsCaseAggregate. testops_risk scores the
+	// same record, so within one partition pass the two share its computation
+	// -- see testopsTestMetricShare.
 	historyStart := scope.day.AddDate(0, 0, -29)
 
 	var metrics []testops.TestMetric
 	for _, repoID := range scope.repoIDs {
-		accumulator := testops.NewTestAccumulator(repoID, repoID.String(), scope.resolver)
-		if err := loadNativeTestopsSuites(
-			ctx, executor.conn, accumulator, run.OrganizationID, repoID, scope.start, scope.end,
-		); err != nil {
-			return 0, err
-		}
-		if err := loadNativeTestopsCaseGroups(
-			ctx, executor.conn, accumulator, run.OrganizationID, repoID, scope.start, scope.end,
-		); err != nil {
-			return 0, err
-		}
-		historicalFailedNames, err := loadNativeHistoricalFailedCaseNames(
-			ctx, executor.conn, run.OrganizationID, repoID, historyStart, scope.start, scope.end,
+		repoMetrics, err := loadTestopsTestMetrics(
+			ctx, executor.conn, run.OrganizationID, repoID, repoID.String(), scope.resolver,
+			historyStart, scope.start, scope.end,
 		)
 		if err != nil {
 			return 0, err
 		}
-		metrics = append(metrics, accumulator.Finish(historicalFailedNames)...)
+		metrics = append(metrics, repoMetrics...)
 	}
 	return writeTestopsTestMetrics(
 		ctx, executor.conn, run.OrganizationID, scope.day, scope.computedAt, metrics)

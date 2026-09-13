@@ -68,8 +68,10 @@ go_api_prove_e2e_pgx_uri() {
   printf '%s' "${POSTGRES_URI/+asyncpg/}"
 }
 
+# E2E_ORG_ID is a plain shell variable in the caller, not an exported one,
+# so it is handed to the program explicitly.
 go_api_prove_e2e_principal() {
-  run_python "${GO_API_PROVE_E2E_DIR}/principal.py" "$1" "${GO_API_PROVE_E2E_PRINCIPAL_ID}"
+  E2E_ORG_ID="${E2E_ORG_ID}" run_python "${GO_API_PROVE_E2E_DIR}/principal.py" "$1" "${GO_API_PROVE_E2E_PRINCIPAL_ID}"
 }
 
 # go_api_prove_e2e_edge_status TOKEN_FILE -- prints the HTTP status the edge

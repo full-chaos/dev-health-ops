@@ -1059,6 +1059,157 @@ func TestPreclaimReadinessLogsNothingWhenDependenciesPass(t *testing.T) {
 	}
 }
 
+// preclaimSleepAfterCheckTimeout returns a fake preclaimReadinessComponent
+// sleep function that waits long enough (a few multiples of checkTimeout)
+// for a timed-out check's own goroutine to actually notice its context was
+// canceled and return, before the retry loop calls CheckRequired again.
+// Without this buffer, a fast retry can race the still-unwinding goroutine
+// from the PREVIOUS attempt and reuse its in-flight execution (by design --
+// see health.Registry's non-cooperative-check sharing), undercounting how
+// many times the check function itself actually ran.
+func preclaimSleepAfterCheckTimeout(checkTimeout time.Duration) func(context.Context, time.Duration) {
+	return func(context.Context, time.Duration) {
+		time.Sleep(4 * checkTimeout)
+	}
+}
+
+// A posture client that only starts answering after a burst of contention
+// clears -- the shape of a fleet-wide roll storm overloading Postgres -- must
+// not cost the worker its process: Start retries through the timeouts and
+// becomes ready the moment the check finally answers, without ever
+// returning an error.
+func TestPreclaimReadinessRetriesTimeoutsUntilPostureClientRecovers(t *testing.T) {
+	t.Parallel()
+	const checkTimeout = 10 * time.Millisecond
+	const wantSuccessAttempt = 3
+
+	registry := health.NewRegistry(checkTimeout)
+	var attempts atomic.Int32
+	if err := registry.RegisterRequired("posture_manifest_lockstep", func(ctx context.Context) error {
+		if attempts.Add(1) < wantSuccessAttempt {
+			<-ctx.Done()
+			return ctx.Err()
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var logs bytes.Buffer
+	component := preclaimReadinessComponent{
+		registry: registry,
+		logger:   slog.New(slog.NewJSONHandler(&logs, nil)),
+		budget:   time.Second,
+		sleep:    preclaimSleepAfterCheckTimeout(checkTimeout),
+	}
+	if err := component.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v, want nil once the posture client recovers", err)
+	}
+	if got := attempts.Load(); got != wantSuccessAttempt {
+		t.Fatalf("posture check ran %d times, want exactly %d", got, wantSuccessAttempt)
+	}
+	if count := strings.Count(logs.String(), "preclaim readiness timed out, retrying"); count != wantSuccessAttempt-1 {
+		t.Fatalf("retry log count = %d, want %d (one per timed-out attempt)", count, wantSuccessAttempt-1)
+	}
+	if strings.Contains(logs.String(), "preclaim readiness refused") {
+		t.Fatalf("a recovered posture client must never log a refusal: %s", logs.String())
+	}
+}
+
+// A genuine posture mismatch runs its check to completion and reports a real
+// error well within the per-check timeout -- CheckDomainAuthorization's
+// ErrPostureRefused shape. That is never confused for the burst-of-restarts
+// timeout case, so Start must exit on the very first attempt.
+func TestPreclaimReadinessExitsImmediatelyOnGenuinePostureMismatch(t *testing.T) {
+	t.Parallel()
+	registry := health.NewRegistry(time.Second)
+	var attempts atomic.Int32
+	if err := registry.RegisterRequired("domain_postgres", func(context.Context) error {
+		attempts.Add(1)
+		return errors.New("role posture refused for devhealth_domain")
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var logs bytes.Buffer
+	component := preclaimReadinessComponent{
+		registry: registry,
+		logger:   slog.New(slog.NewJSONHandler(&logs, nil)),
+		budget:   time.Minute,
+		sleep: func(context.Context, time.Duration) {
+			t.Fatal("a genuine posture mismatch must not be retried")
+		},
+	}
+	if err := component.Start(context.Background()); !errors.Is(err, errWorkerDependencyUnavailable) {
+		t.Fatalf("Start() error = %v, want preclaim dependency refusal", err)
+	}
+	if got := attempts.Load(); got != 1 {
+		t.Fatalf("posture check ran %d times, want exactly 1 (no retry on a genuine mismatch)", got)
+	}
+	var record struct {
+		Attempts int    `json:"attempts"`
+		Reason   string `json:"reason"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(logs.Bytes()), &record); err != nil {
+		t.Fatalf("decode log record: %v (raw %q)", err, logs.String())
+	}
+	if record.Reason != "dependency_check_failed" || record.Attempts != 1 {
+		t.Fatalf("log record = %#v, want reason dependency_check_failed at attempt 1", record)
+	}
+}
+
+// A dependency that never recovers within the configured retry budget must
+// still end the process -- retrying is a survivability measure for a roll
+// storm, not a way to hang forever -- and must log how many attempts it took
+// so an operator is not left with a bare crash loop and no explanation.
+func TestPreclaimReadinessExitsAfterBudgetExhaustedOnPersistentTimeout(t *testing.T) {
+	t.Parallel()
+	const checkTimeout = 10 * time.Millisecond
+	const budget = 45 * time.Millisecond
+
+	registry := health.NewRegistry(checkTimeout)
+	var attempts atomic.Int32
+	if err := registry.RegisterRequired("queue_postgres", func(ctx context.Context) error {
+		attempts.Add(1)
+		<-ctx.Done()
+		return ctx.Err()
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var logs bytes.Buffer
+	component := preclaimReadinessComponent{
+		registry: registry,
+		logger:   slog.New(slog.NewJSONHandler(&logs, nil)),
+		budget:   budget,
+		sleep:    preclaimSleepAfterCheckTimeout(checkTimeout),
+	}
+	if err := component.Start(context.Background()); !errors.Is(err, errWorkerDependencyUnavailable) {
+		t.Fatalf("Start() error = %v, want preclaim dependency refusal once the budget is spent", err)
+	}
+	finalAttempts := attempts.Load()
+	if finalAttempts < 2 {
+		t.Fatalf("queue check ran %d times, want at least 2 (proof retrying happened before giving up)", finalAttempts)
+	}
+	if count := strings.Count(logs.String(), "preclaim readiness timed out, retrying"); count < 1 {
+		t.Fatalf("retry log count = %d, want at least 1 warn-level retry before giving up", count)
+	}
+	lines := strings.Split(strings.TrimSpace(logs.String()), "\n")
+	var record struct {
+		Attempts int    `json:"attempts"`
+		Reason   string `json:"reason"`
+	}
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &record); err != nil {
+		t.Fatalf("decode final log record: %v (raw %q)", err, lines[len(lines)-1])
+	}
+	if record.Reason != "retry_budget_exhausted" {
+		t.Fatalf("final log reason = %q, want retry_budget_exhausted", record.Reason)
+	}
+	if record.Attempts != int(finalAttempts) {
+		t.Fatalf("logged attempts = %d, want %d (matching how many times the check actually ran)", record.Attempts, finalAttempts)
+	}
+}
+
 func TestUnsupportedAvailableContractVersionFailsClosed(t *testing.T) {
 	t.Chdir(filepath.Join("..", ".."))
 	database := &fakeWorkerDatabase{telemetry: &fakeQueueTelemetry{

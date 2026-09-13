@@ -381,6 +381,21 @@ goWorkers:
   defaultProbes:
     livenessProbe: {httpGet: {path: /healthz, port: metrics}, initialDelaySeconds: 10, periodSeconds: 15, timeoutSeconds: 5, failureThreshold: 6}
     readinessProbe: {httpGet: {path: /readyz, port: metrics}, initialDelaySeconds: 10, periodSeconds: 10, timeoutSeconds: 5, failureThreshold: 6}
+  # -- --preclaim-readiness-timeout for every queue-consuming group in
+  #    `groups` below that does not set its own `preclaimReadinessTimeout`
+  #    (heavy/ops/sync/sync-provider; reconciler, scheduler, and the
+  #    stream-runner groups do not carry `queues` and never receive this
+  #    flag at all -- see go-workers.yaml). It bounds how long a worker
+  #    retries its startup posture/authorization checks when they are only
+  #    timing out -- e.g. a fleet-wide rollout starting every group's
+  #    Deployments at once, which can push Postgres and its pooler past a
+  #    single check's own timeout for as long as the resulting connection
+  #    burst takes to settle -- before giving up and letting Kubernetes
+  #    restart the pod. A check that instead completes and reports a real
+  #    problem (wrong credentials, a posture mismatch) still exits on its
+  #    first attempt regardless of this value. Any group may override it via
+  #    goWorkers.groups[].preclaimReadinessTimeout.
+  defaultPreclaimReadinessTimeout: "5m"
   # -- Extra envFrom sources (list of {configMapRef: {name: ...}} or
   #    {secretRef: {name: ...}}), rendered BEFORE the chart's own configMap
   #    and Secret in go-workers.yaml's envFrom list, same rule and same

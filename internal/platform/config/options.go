@@ -156,6 +156,14 @@ var optionRegistry = []Option{
 		Usage: "River queue-telemetry query timeout; floored at --health-check-timeout",
 	},
 	{
+		// Floored at --health-check-timeout in config.Load, the same way
+		// --queue-telemetry-timeout is above: a budget shorter than one check
+		// attempt could never fit a single retry.
+		Flag: "preclaim-readiness-timeout", Env: "DEV_HEALTH_PRECLAIM_READINESS_TIMEOUT", Kind: KindDuration,
+		Default: defaultPreclaimReadinessTimeout.String(), Services: []string{"dev-health-worker"}, Group: GroupWorker,
+		Usage: "total retry budget for preclaim-readiness before the process exits; floored at --health-check-timeout",
+	},
+	{
 		// celery worker spells this --loglevel; both are accepted.
 		Flag: "log-level", Aliases: []string{"loglevel"},
 		Env: "DEV_HEALTH_LOG_LEVEL", Kind: KindString,

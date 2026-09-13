@@ -176,7 +176,8 @@
                 }
               },
               "livenessProbe": { "type": "object" },
-              "readinessProbe": { "type": "object" }
+              "readinessProbe": { "type": "object" },
+              "preclaimReadinessTimeout": { "type": "string" }
             }
           }
         },
@@ -186,7 +187,8 @@
             "livenessProbe": { "type": "object" },
             "readinessProbe": { "type": "object" }
           }
-        }
+        },
+        "defaultPreclaimReadinessTimeout": { "type": "string" }
       }
     }
   },

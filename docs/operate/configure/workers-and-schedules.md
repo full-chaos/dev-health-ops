@@ -109,6 +109,34 @@ Ready while the old one, pinned by `maxUnavailable: 0`, can never terminate.
 Set `goWorkers.groups[].livenessProbe` / `.readinessProbe` to override either
 probe for one group only.
 
+Before a worker opens its River queues, it runs preclaim-readiness: required
+startup checks (domain/queue PostgreSQL authorization, the posture-manifest
+lockstep proof, queued contract versions, execution liveness) that must all
+pass before the process claims any job. A check that runs to completion and
+reports a real problem — wrong credentials, a posture mismatch between this
+binary and the applied manifest — still fails the process immediately, the
+same as always. A check that only *times out* — most commonly Postgres or its
+pgbouncer pooler taking longer than usual to answer a connection or a query —
+is instead retried with backoff, logging each attempt at warn with how long
+the process has been waiting, for up to `--preclaim-readiness-timeout`
+(`goWorkers.defaultPreclaimReadinessTimeout` in `values.yaml`, 5 minutes by
+default; override one group via `goWorkers.groups[].preclaimReadinessTimeout`).
+Only once that budget is spent does the process exit and let Kubernetes
+restart it.
+
+This matters most during a fleet-wide rollout: a helm upgrade that restarts
+every worker group's Deployments at once starts a burst of new connections
+against Postgres and its pooler at the same moment, which can push an
+individual readiness check past its own timeout (`--health-check-timeout`,
+2 seconds by default) for as long as it takes that connection burst to
+settle — independently of whether any dependency is actually broken. Without
+the retry, that burst crash-loops every worker group in the fleet at once;
+with it, a replica simply stays not-yet-ready and becomes ready again on its
+own once the burst clears. Raise `--preclaim-readiness-timeout` if a rollout
+is large enough, or Postgres small enough, that recovery regularly needs more
+than 5 minutes; a shorter recovery time does not need a shorter budget, since
+retries stop as soon as the checks pass.
+
 Do not treat a healthy container as a route change. Today, "what should run"
 is decided by the sync config (`IntegrationDataset.is_enabled`) and "where
 it's served" is decided by `-Q` topology — the two-plane model ratified in

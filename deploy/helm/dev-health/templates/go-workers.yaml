@@ -102,6 +102,17 @@ spec:
             - {{ printf "--queues=%s" (join "," $group.queues) | quote }}
             - {{ printf "--queue-concurrency=%s" (join "," $parts) | quote }}
             - {{ printf "--worker-group=%s" $group.name | quote }}
+            {{- /*
+            preclaim-readiness-timeout is a dev-health-worker-only flag
+            (config.Options's Services restriction) -- it must stay inside
+            this `if $group.queues` block alongside --worker-group above,
+            never rendered for a reconciler/scheduler/stream-runner group,
+            which would reject it as an unrecognized flag. $group.
+            preclaimReadinessTimeout overrides goWorkers.
+            defaultPreclaimReadinessTimeout per group, same fallback
+            pattern as livenessProbe/readinessProbe below.
+            */}}
+            - {{ printf "--preclaim-readiness-timeout=%s" ($group.preclaimReadinessTimeout | default $.Values.goWorkers.defaultPreclaimReadinessTimeout) | quote }}
             {{- end }}
             {{- with $group.runtimeProfile }}
             - {{ printf "--profile=%s" . | quote }}

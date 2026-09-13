@@ -108,6 +108,51 @@ func TestReadinessTimesOutAndContainsPanics(t *testing.T) {
 	}
 }
 
+// CheckStatus.TimedOut lets a caller like the worker's preclaim-readiness
+// retry loop tell a merely-slow dependency (retry it) apart from one that
+// answered with a real problem (do not retry it) without CheckRequired ever
+// exposing the underlying error. A check that notices its own context expire
+// must report TimedOut; one that answers quickly with an unrelated error
+// must not, even though both fail readiness identically.
+func TestCheckRequiredDistinguishesTimeoutFromGenuineFailure(t *testing.T) {
+	t.Parallel()
+	registry := NewRegistry(20 * time.Millisecond)
+	if err := registry.RegisterRequired("slow", func(ctx context.Context) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.RegisterRequired("broken", func(context.Context) error {
+		return errors.New("posture refused")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.RegisterRequired("fine", func(context.Context) error {
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	status := registry.CheckRequired(context.Background())
+	if status.Ready {
+		t.Fatalf("expected readiness to fail with slow and broken both failing: %#v", status)
+	}
+	byName := make(map[string]CheckStatus, len(status.Checks))
+	for _, check := range status.Checks {
+		byName[check.Name] = check
+	}
+	if check := byName["slow"]; !check.Failed || !check.TimedOut {
+		t.Errorf("slow check = %#v, want Failed and TimedOut", check)
+	}
+	if check := byName["broken"]; !check.Failed || check.TimedOut {
+		t.Errorf("broken check = %#v, want Failed and NOT TimedOut", check)
+	}
+	if check := byName["fine"]; check.Failed || check.TimedOut {
+		t.Errorf("fine check = %#v, want neither Failed nor TimedOut", check)
+	}
+}
+
 func TestReadinessSharesOneNonCooperativeExecutionAcrossCallers(t *testing.T) {
 	t.Parallel()
 

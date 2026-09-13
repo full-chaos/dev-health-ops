@@ -4,6 +4,7 @@ package health
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"regexp"
@@ -49,6 +50,16 @@ type requiredCheck struct {
 type checkExecution struct {
 	done   chan struct{}
 	passed bool
+	// timedOut is set only when passed is false, and only when the check
+	// function itself returned an error wrapping context.DeadlineExceeded or
+	// context.Canceled -- i.e. it noticed its own bounded context expire,
+	// rather than answering with some other error. It is deliberately NOT
+	// derived from a race between this execution finishing and a caller's
+	// separate wait expiring (see requiredCheck.run): the caller's timeout
+	// and the check's own internal timeout are frequently the same duration
+	// started microseconds apart, which made "whichever context fires
+	// first" decide the classification at random.
+	timedOut bool
 }
 
 // Readiness is a sanitized snapshot suitable for logs, metrics, and HTTP.
@@ -70,6 +81,16 @@ type Readiness struct {
 type CheckStatus struct {
 	Name   string
 	Failed bool
+	// TimedOut reports that this result came from the caller's own wait
+	// expiring (checkTimeout) before the check function returned anything at
+	// all, as opposed to the check running to completion and returning an
+	// error. A dependency that is merely slow right now -- contending for a
+	// connection slot against a burst of other replicas starting at once --
+	// looks exactly like this; a dependency that is definitively wrong (bad
+	// credentials, a posture mismatch) answers quickly with an error instead.
+	// Callers that want to retry only the former, not the latter, use this
+	// bit to tell them apart without the check ever exposing its error text.
+	TimedOut bool
 }
 
 func NewRegistry(checkTimeout time.Duration) *Registry {
@@ -277,12 +298,12 @@ func (r *Registry) CheckRequired(ctx context.Context) Readiness {
 
 	type outcome struct {
 		name   string
-		failed bool
+		result checkResult
 	}
 	results := make(chan outcome, len(checks))
 	for name, check := range checks {
 		go func() {
-			results <- outcome{name: name, failed: !check.run(ctx, r.checkTimeout)}
+			results <- outcome{name: name, result: check.run(ctx, r.checkTimeout)}
 		}()
 	}
 
@@ -290,8 +311,12 @@ func (r *Registry) CheckRequired(ctx context.Context) Readiness {
 	statuses := make([]CheckStatus, 0, len(checks))
 	for range checks {
 		result := <-results
-		statuses = append(statuses, CheckStatus{Name: result.name, Failed: result.failed})
-		if result.failed {
+		statuses = append(statuses, CheckStatus{
+			Name:     result.name,
+			Failed:   result.result.failed,
+			TimedOut: result.result.timedOut,
+		})
+		if result.result.failed {
 			failed = append(failed, result.name)
 		}
 	}
@@ -300,14 +325,24 @@ func (r *Registry) CheckRequired(ctx context.Context) Readiness {
 	return Readiness{Ready: len(failed) == 0, Failed: failed, Checks: statuses}
 }
 
+// checkResult is one caller's outcome from requiredCheck.run: whether the
+// dependency is unready, and -- only when it is -- whether that failure is a
+// timeout (the check itself hit its own bounded context, or the caller never
+// got an answer at all before its own wait expired) as opposed to the check
+// running to completion and reporting a real error.
+type checkResult struct {
+	failed   bool
+	timedOut bool
+}
+
 // run shares a single in-flight execution across callers. A check that ignores
 // cancellation can therefore strand at most one goroutine; every caller still
 // has its own bounded wait and fails closed when that wait expires.
-func (c *requiredCheck) run(parent context.Context, timeout time.Duration) bool {
+func (c *requiredCheck) run(parent context.Context, timeout time.Duration) checkResult {
 	waitCtx, waitCancel := context.WithTimeout(parent, timeout)
 	defer waitCancel()
 	if waitCtx.Err() != nil {
-		return false
+		return checkResult{failed: true, timedOut: true}
 	}
 
 	c.mu.Lock()
@@ -322,9 +357,12 @@ func (c *requiredCheck) run(parent context.Context, timeout time.Duration) bool 
 
 	select {
 	case <-execution.done:
-		return execution.passed
+		return checkResult{failed: !execution.passed, timedOut: !execution.passed && execution.timedOut}
 	case <-waitCtx.Done():
-		return false
+		// The caller's own wait expired with no answer at all -- whatever the
+		// check eventually returns, THIS caller never saw it in time, which is
+		// the definition of a timeout from its perspective.
+		return checkResult{failed: true, timedOut: true}
 	}
 }
 
@@ -334,17 +372,23 @@ func (c *requiredCheck) execute(
 	execution *checkExecution,
 ) {
 	defer cancel()
-	passed := func() (passed bool) {
+	passed, timedOut := func() (passed, timedOut bool) {
 		defer func() {
 			if recover() != nil {
-				passed = false
+				// A panic is a bug in the check, never a transient timeout.
+				passed, timedOut = false, false
 			}
 		}()
-		return c.check(ctx) == nil
+		err := c.check(ctx)
+		if err == nil {
+			return true, false
+		}
+		return false, errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
 	}()
 
 	c.mu.Lock()
 	execution.passed = passed
+	execution.timedOut = timedOut
 	close(execution.done)
 	if c.active == execution {
 		c.active = nil

@@ -43,8 +43,29 @@ const (
 	// a value above it would pass config.Load only to be refused later by
 	// riverstore.NewQueueTelemetrySampler.
 	maximumQueueTelemetryTimeout = 30 * time.Second
-	defaultDomainMaxConns        = 4
-	defaultQueueMaxConns         = 2
+	// defaultPreclaimReadinessTimeout bounds the worker's preclaim-readiness
+	// retry budget: how long the process keeps retrying required checks that
+	// are only failing because they timed out, before giving up and exiting.
+	// A fleet-wide roll that restarts every go-worker group's Deployments at
+	// once (a helm upgrade touching every group plus the API) was observed
+	// putting posture checks past their per-check timeout for close to four
+	// minutes while Postgres and its pooler absorbed twelve replicas'
+	// simultaneous connection storms; a healthy worker was ready again as
+	// soon as that contention cleared. Five minutes gives that recovery
+	// headroom above the observed worst case rather than sitting right at
+	// its edge, while still bounding a genuinely stuck worker to one restart
+	// per five minutes instead of a tight crash loop.
+	defaultPreclaimReadinessTimeout = 5 * time.Minute
+	// minimumPreclaimReadinessTimeout keeps the budget from being configured
+	// below a single check attempt, which would make retrying pointless.
+	minimumPreclaimReadinessTimeout = 1 * time.Second
+	// maximumPreclaimReadinessTimeout bounds how long an operator can widen
+	// the budget: past this, a genuinely broken dependency would hold a
+	// replica in an unready-but-not-yet-failed state for longer than most
+	// rollout tooling waits before flagging the rollout itself as stuck.
+	maximumPreclaimReadinessTimeout = 30 * time.Minute
+	defaultDomainMaxConns           = 4
+	defaultQueueMaxConns            = 2
 	// 2 matches the checked-in per-process coordinator_max_connections in
 	// deploy/go-workers/deployment.json for every coordinator process today
 	// (reconciler, scheduler, worker-operator).
@@ -171,7 +192,14 @@ type Config struct {
 	// query cannot need less time than the readiness probe budget it runs
 	// inside without simply being cut off by the probe's own deadline first.
 	QueueTelemetryTimeout time.Duration
-	LogLevel              slog.Level
+	// PreclaimReadinessTimeout bounds the worker's preclaim-readiness retry
+	// budget: how long Start keeps retrying required checks that are only
+	// timing out (never a check that ran to completion and reported a real
+	// mismatch) before it gives up and exits. It is never allowed below
+	// HealthCheckTimeout: a budget shorter than a single check attempt could
+	// never accommodate even one retry.
+	PreclaimReadinessTimeout time.Duration
+	LogLevel                 slog.Level
 
 	DomainDatabaseURI      secrets.Value
 	QueueDatabaseURI       secrets.Value
@@ -398,6 +426,22 @@ func Load(spec Spec) (Config, error) {
 	}
 	if cfg.QueueTelemetryTimeout < cfg.HealthCheckTimeout {
 		cfg.QueueTelemetryTimeout = cfg.HealthCheckTimeout
+	}
+	cfg.PreclaimReadinessTimeout, err = durationEnv(
+		lookup,
+		"DEV_HEALTH_PRECLAIM_READINESS_TIMEOUT",
+		defaultPreclaimReadinessTimeout,
+		minimumPreclaimReadinessTimeout,
+		maximumPreclaimReadinessTimeout,
+	)
+	if err != nil {
+		return Config{}, err
+	}
+	// A budget shorter than one check attempt could never fit a single
+	// retry, so it is floored at HealthCheckTimeout the same way
+	// QueueTelemetryTimeout is floored above.
+	if cfg.PreclaimReadinessTimeout < cfg.HealthCheckTimeout {
+		cfg.PreclaimReadinessTimeout = cfg.HealthCheckTimeout
 	}
 	cfg.LogLevel, err = logLevelEnv(lookup)
 	if err != nil {
@@ -715,6 +759,7 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.Duration("shutdown_timeout", c.ShutdownTimeout),
 		slog.Duration("health_check_timeout", c.HealthCheckTimeout),
 		slog.Duration("queue_telemetry_timeout", c.QueueTelemetryTimeout),
+		slog.Duration("preclaim_readiness_timeout", c.PreclaimReadinessTimeout),
 		slog.String("log_level", c.LogLevel.String()),
 		slog.Bool("domain_database_configured", c.DomainDatabaseURI.Configured()),
 		slog.Bool("coordinator_database_configured", c.CoordinatorDatabaseURI.Configured()),

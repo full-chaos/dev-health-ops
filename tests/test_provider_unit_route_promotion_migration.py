@@ -19,7 +19,7 @@ import sqlalchemy as sa
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 
-from dev_health_ops.workers.job_routes import PROVIDER_UNIT_OUTBOX_ROUTES
+from dev_health_ops.jobs.routes import PROVIDER_UNIT_OUTBOX_ROUTES
 
 _KIND = "sync.provider_unit"
 

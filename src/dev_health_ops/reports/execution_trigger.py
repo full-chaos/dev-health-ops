@@ -16,6 +16,11 @@ from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
+from dev_health_ops.jobs.contracts import (
+    OnDemandReportExecutionPayload,
+    ScheduledReportExecutionPayload,
+)
+from dev_health_ops.jobs.outbox import enqueue_worker_job
 from dev_health_ops.models.reports import (
     ReportRun,
     ReportRunStatus,
@@ -23,11 +28,6 @@ from dev_health_ops.models.reports import (
     ScheduledReportOccurrence,
 )
 from dev_health_ops.models.settings import ScheduledJob
-from dev_health_ops.workers.job_contracts import (
-    OnDemandReportExecutionPayload,
-    ScheduledReportExecutionPayload,
-)
-from dev_health_ops.workers.job_outbox import enqueue_worker_job
 
 SCHEDULED_REPORT_OCCURRENCE_IDENTITY_VERSION = "report_scheduler_occurrence_v1"
 

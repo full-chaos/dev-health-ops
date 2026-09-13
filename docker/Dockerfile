@@ -144,7 +144,7 @@ COPY scripts/worker/provision_river_roles.sql /usr/local/share/dev-health/provis
 
 # Fail the image build if the installed distribution cannot load the exact job
 # contract artifacts used by Python worker routing.
-RUN python -c "from dev_health_ops.workers.job_contracts.registry import load_migration_jobs, load_registry; load_registry(); load_migration_jobs()"
+RUN python -c "from dev_health_ops.jobs.contracts.registry import load_migration_jobs, load_registry; load_registry(); load_migration_jobs()"
 
 RUN useradd --uid 10001 --create-home --shell /bin/bash appuser
 

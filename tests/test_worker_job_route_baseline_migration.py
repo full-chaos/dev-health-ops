@@ -8,9 +8,9 @@ from alembic.migration import MigrationContext
 from alembic.operations import Operations
 from sqlalchemy.orm import Session
 
-from dev_health_ops.workers.job_contracts import load_registry
-from dev_health_ops.workers.job_contracts.registry import load_migration_jobs
-from dev_health_ops.workers.job_routes import (
+from dev_health_ops.jobs.contracts import load_registry
+from dev_health_ops.jobs.contracts.registry import load_migration_jobs
+from dev_health_ops.jobs.routes import (
     WorkerJobRouteError,
     resolve_worker_job_route,
 )

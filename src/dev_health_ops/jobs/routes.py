@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from dev_health_ops.models.worker_job_route import WorkerJobRoute
 
-from .job_contracts import ContractDecodeError, load_migration_jobs
+from .contracts import ContractDecodeError, load_migration_jobs
 
 CELERY_ROUTE = "celery"
 SHADOW_ROUTE = "shadow"

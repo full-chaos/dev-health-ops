@@ -1,7 +1,7 @@
 """Sync dispatch policy contract (CHAOS-2284 folded -> CHAOS-2517).
 
 FROZEN CONTRACT — provider/cost-class -> queue routing. Absorbs
-``workers.queues.sync_queue_for_provider`` (kept as a compatibility wrapper).
+``jobs.queues.sync_queue_for_provider`` (kept as a compatibility wrapper).
 Implemented in Wave 1 (CHAOS-2517). The dispatcher (CHAOS-2512) routes each
 unit through :func:`route`; the planner does NOT know about queues.
 """
@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from dev_health_ops.workers.queues import (
+from dev_health_ops.jobs.queues import (
     DEFAULT_SYNC_QUEUE,
     SYNC_COST_CLASS_QUEUES,
     SYNC_QUEUE_PROVIDERS,
@@ -47,7 +47,7 @@ def route(
         -> sync
 
     The ``cost_class_queues_enabled`` argument is the caller-supplied flag
-    (typically read from env via :func:`workers.queues._cost_class_queues_enabled`).
+    (typically read from env via :func:`jobs.queues._cost_class_queues_enabled`).
     Provider-level routing still requires ``PROVIDER_SYNC_QUEUES_ENABLED``.
 
     Tests must assert no route targets an unconsumed queue.

@@ -13,9 +13,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.schema import CreateSchema, DropSchema
 
+from dev_health_ops.jobs.contracts import HeartbeatPayload, MigrationJob
+from dev_health_ops.jobs.outbox import OutboxEnqueueError, enqueue_worker_job
 from dev_health_ops.models import Base, WorkerJobOutbox
-from dev_health_ops.workers.job_contracts import HeartbeatPayload, MigrationJob
-from dev_health_ops.workers.job_outbox import OutboxEnqueueError, enqueue_worker_job
 
 
 @pytest.fixture
@@ -67,7 +67,7 @@ def _enqueue(session: Session, **overrides):
             **values,
         )
     with patch(
-        "dev_health_ops.workers.job_outbox.load_migration_jobs",
+        "dev_health_ops.jobs.outbox.load_migration_jobs",
         return_value=migration_jobs,
     ):
         return enqueue_worker_job(
@@ -214,7 +214,7 @@ def test_dedupe_key_reuse_with_different_content_fails_closed(engine):
     with Session(engine) as session, session.begin():
         with pytest.raises(OutboxEnqueueError, match="dedupe key conflicts"):
             with patch(
-                "dev_health_ops.workers.job_outbox.load_migration_jobs",
+                "dev_health_ops.jobs.outbox.load_migration_jobs",
                 return_value=_migration_job("shadow"),
             ):
                 enqueue_worker_job(

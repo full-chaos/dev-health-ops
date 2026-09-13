@@ -3,6 +3,7 @@ package investmentexplain
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"strings"
 
@@ -207,13 +208,22 @@ func isJSONIdentByte(b byte) bool {
 
 // ParseInvestmentMixResponse ports parse_investment_mix_response
 // (investment_mix_parser.py:43-133) exactly, field order and all.
+//
+// The combined boolean conditions Python (and an earlier draft of this
+// port) tests in one `if` are split into sequential `if`s below purely
+// so each can carry its own Reason string -- Go's `||` and a run of
+// single-condition `if`s short-circuit identically, so this is a
+// logging-only change: every input takes exactly the same branch, in
+// the same order, to the same Status/Output it did before. See
+// ParseResult.Reason's own doc comment for why Reason exists at all and
+// why it carries no parity weight.
 func ParseInvestmentMixResponse(text string, opts ParseOptions) ParseResult {
 	parsed, ok := extractJSONObject(text)
 	if !ok {
-		return ParseResult{Status: ParseStatusInvalidJSON}
+		return ParseResult{Status: ParseStatusInvalidJSON, Reason: "could not extract a single JSON object from the raw text"}
 	}
 	if !exactKeySetFromSet(parsed, topLevelKeys) {
-		return ParseResult{Status: ParseStatusInvalidLLMOutput}
+		return ParseResult{Status: ParseStatusInvalidLLMOutput, Reason: "top-level keys did not exactly match summary/top_findings/confidence/what_to_check_next/anti_claims"}
 	}
 
 	summary, summaryOK := parsed["summary"].(string)
@@ -221,11 +231,26 @@ func ParseInvestmentMixResponse(text string, opts ParseOptions) ParseResult {
 	rawActions, actionsOK := parsed["what_to_check_next"].([]any)
 	rawAntiClaims, antiClaimsIsList := parsed["anti_claims"].([]any)
 
-	if !summaryOK || pythonparity.Strip(summary) == "" || pythonLen(summary) > 1000 || hasUnicodeDigit(summary) {
-		return ParseResult{Status: ParseStatusInvalidLLMOutput}
+	if !summaryOK {
+		return ParseResult{Status: ParseStatusInvalidLLMOutput, Reason: "summary is not a string"}
 	}
-	if !findingsOK || len(rawFindings) > 10 || !validConfidence(parsed["confidence"]) {
-		return ParseResult{Status: ParseStatusInvalidLLMOutput}
+	if pythonparity.Strip(summary) == "" {
+		return ParseResult{Status: ParseStatusInvalidLLMOutput, Reason: "summary is blank"}
+	}
+	if pythonLen(summary) > 1000 {
+		return ParseResult{Status: ParseStatusInvalidLLMOutput, Reason: "summary exceeds 1000 characters"}
+	}
+	if hasUnicodeDigit(summary) {
+		return ParseResult{Status: ParseStatusInvalidLLMOutput, Reason: "summary contains a digit"}
+	}
+	if !findingsOK {
+		return ParseResult{Status: ParseStatusInvalidLLMOutput, Reason: "top_findings is not a list"}
+	}
+	if len(rawFindings) > 10 {
+		return ParseResult{Status: ParseStatusInvalidLLMOutput, Reason: "top_findings has more than 10 entries"}
+	}
+	if !validConfidence(parsed["confidence"]) {
+		return ParseResult{Status: ParseStatusInvalidLLMOutput, Reason: "confidence failed validation"}
 	}
 
 	findingOpts := parseFindingOptions{
@@ -235,46 +260,52 @@ func ParseInvestmentMixResponse(text string, opts ParseOptions) ParseResult {
 		qualityBand:          opts.FallbackQualityBand,
 	}
 	findings := make([]Finding, 0, len(rawFindings))
-	for _, item := range rawFindings {
+	for i, item := range rawFindings {
 		finding, ok := parseFinding(item, findingOpts)
 		if !ok {
-			return ParseResult{Status: ParseStatusInvalidLLMOutput}
+			return ParseResult{Status: ParseStatusInvalidLLMOutput, Reason: fmt.Sprintf("top_findings[%d] failed validation", i)}
 		}
 		findings = append(findings, finding)
 	}
-	if !actionsOK || len(rawActions) > 10 {
-		return ParseResult{Status: ParseStatusInvalidLLMOutput}
+	if !actionsOK {
+		return ParseResult{Status: ParseStatusInvalidLLMOutput, Reason: "what_to_check_next is not a list"}
+	}
+	if len(rawActions) > 10 {
+		return ParseResult{Status: ParseStatusInvalidLLMOutput, Reason: "what_to_check_next has more than 10 entries"}
 	}
 
 	actions := make([]ActionItem, 0, len(rawActions))
-	for _, item := range rawActions {
+	for i, item := range rawActions {
 		action, ok := parseAction(item)
 		if !ok {
-			return ParseResult{Status: ParseStatusInvalidLLMOutput}
+			return ParseResult{Status: ParseStatusInvalidLLMOutput, Reason: fmt.Sprintf("what_to_check_next[%d] failed validation", i)}
 		}
 		actions = append(actions, action)
 	}
 
 	if !antiClaimsIsList {
-		return ParseResult{Status: ParseStatusInvalidLLMOutput}
+		return ParseResult{Status: ParseStatusInvalidLLMOutput, Reason: "anti_claims is not a list"}
 	}
-	for _, claim := range rawAntiClaims {
+	for i, claim := range rawAntiClaims {
 		claimString, isString := claim.(string)
 		if !isString || pythonLen(claimString) > 300 {
-			return ParseResult{Status: ParseStatusInvalidLLMOutput}
+			return ParseResult{Status: ParseStatusInvalidLLMOutput, Reason: fmt.Sprintf("anti_claims[%d] is not a string, or exceeds 300 characters", i)}
 		}
 	}
 	antiClaims := stringList(parsed["anti_claims"])
 	if len(rawAntiClaims) > 10 {
-		return ParseResult{Status: ParseStatusInvalidLLMOutput}
+		return ParseResult{Status: ParseStatusInvalidLLMOutput, Reason: "anti_claims has more than 10 entries"}
 	}
-	for _, claim := range antiClaims {
-		if pythonLen(claim) > 300 || hasUnicodeDigit(claim) {
-			return ParseResult{Status: ParseStatusInvalidLLMOutput}
+	for i, claim := range antiClaims {
+		if pythonLen(claim) > 300 {
+			return ParseResult{Status: ParseStatusInvalidLLMOutput, Reason: fmt.Sprintf("anti_claims[%d] exceeds 300 characters after stripping", i)}
+		}
+		if hasUnicodeDigit(claim) {
+			return ParseResult{Status: ParseStatusInvalidLLMOutput, Reason: fmt.Sprintf("anti_claims[%d] contains a digit after stripping", i)}
 		}
 	}
 	if len(antiClaims) != len(rawAntiClaims) {
-		return ParseResult{Status: ParseStatusInvalidLLMOutput}
+		return ParseResult{Status: ParseStatusInvalidLLMOutput, Reason: "anti_claims contains a blank-after-strip entry"}
 	}
 
 	output := InvestmentMixExplainOutput{
@@ -301,7 +332,7 @@ func ParseInvestmentMixResponse(text string, opts ParseOptions) ParseResult {
 	}
 	narrative = append(narrative, antiClaims...)
 	if containsForbiddenLanguage(strings.Join(narrative, " ")) {
-		return ParseResult{Status: ParseStatusForbiddenLanguage}
+		return ParseResult{Status: ParseStatusForbiddenLanguage, Reason: "narrative text contains forbidden hedge/certainty language"}
 	}
 
 	return ParseResult{Status: ParseStatusValid, Output: &output}

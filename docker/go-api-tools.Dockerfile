@@ -55,6 +55,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # clear diff.
 COPY cmd/go-api-routing ./cmd/go-api-routing
 COPY cmd/go-api-prove ./cmd/go-api-prove
+COPY cmd/mint-envelope ./cmd/mint-envelope
 COPY cmd/query-api ./cmd/query-api
 COPY contracts/graphql/v1 ./contracts/graphql/v1
 COPY internal ./internal
@@ -64,7 +65,8 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     set -eu; \
     for command in \
         go-api-routing \
-        go-api-prove; do \
+        go-api-prove \
+        mint-envelope; do \
       GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build \
         -buildvcs=false \
         -trimpath \
@@ -97,7 +99,7 @@ ARG COMMIT="unknown"
 ARG BUILD_TIME="1970-01-01T00:00:00Z"
 
 LABEL org.opencontainers.image.title="Dev Health Go-API tools" \
-      org.opencontainers.image.description="go-api-routing and go-api-prove operator binaries, plus the documents dump and operation catalog they need, for the Go-API rollout's tools pod" \
+      org.opencontainers.image.description="go-api-routing and go-api-prove operator binaries, mint-envelope (go-api-prove's local envelope-signing helper), plus the documents dump and operation catalog they need, for the Go-API rollout's tools pod" \
       org.opencontainers.image.source="https://github.com/full-chaos/dev-health-ops" \
       org.opencontainers.image.version=${VERSION} \
       org.opencontainers.image.revision=${COMMIT} \
@@ -112,6 +114,13 @@ WORKDIR /app/go-api
 
 COPY --from=build /out/go-api-routing /usr/local/bin/go-api-routing
 COPY --from=build /out/go-api-prove /usr/local/bin/go-api-prove
+# The -proof-bearer-exec helper for go-api-prove (internal/envelopemint's
+# package doc has the design): mints the envelope LOCALLY from the same
+# Ed25519 signing key the api pod's environment holds
+# (GO_API_ENVELOPE_PRIVATE_KEY), reached the same way -- a Secret mounted
+# into THIS pod's environment via secretKeyRef, never a copied key file
+# and never a call to a running pod.
+COPY --from=build /out/mint-envelope /usr/local/bin/mint-envelope
 
 # The documents dump (freshly generated above, same commit as the
 # binaries) and the checked-in operation catalog (never regenerated here

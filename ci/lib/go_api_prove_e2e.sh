@@ -23,8 +23,9 @@ GO_API_PROVE_E2E_OPERATION="featureFlags"
 # Must match internal/edgetokenmint.ProvePrincipalID.
 GO_API_PROVE_E2E_PRINCIPAL_ID="00000000-0000-4000-8000-00000000e0e1"
 
-# The fixture program that provisions and then mutates the proof service
-# principal row. A shell string written to a file, not a here-document, for
+# The fixture program that checks the migrated proof service principal row,
+# grants it an org membership, and then mutates it. The users row itself comes
+# from the application schema migration, never from this fixture. A shell string written to a file, not a here-document, for
 # the pipe-buffer reason run_live_backend_e2e.sh documents.
 GO_API_PROVE_E2E_PRINCIPAL_PROGRAM='import os, sys, uuid
 from datetime import datetime, timezone
@@ -34,11 +35,17 @@ action, principal_id = sys.argv[1], sys.argv[2]
 engine = create_engine(os.environ["POSTGRES_URI"].replace("+asyncpg", "", 1))
 now = datetime.now(timezone.utc)
 with engine.begin() as conn:
-    if action == "seed":
-        conn.execute(text(
-            "INSERT INTO users (id, email, is_active, is_verified, is_superuser, auth_provider, token_version, created_at, updated_at)"
-            " VALUES (:id, :email, true, false, false, :provider, 0, :now, :now) ON CONFLICT (id) DO NOTHING"
-        ), {"id": principal_id, "email": "go-api-prove@service.dev-health.invalid", "provider": "service", "now": now})
+    if action == "assert-migrated":
+        row = conn.execute(text(
+            "SELECT auth_provider, password_hash IS NULL, is_active, is_superuser, token_version,"
+            " (SELECT count(*) FROM memberships WHERE user_id = users.id)"
+            " FROM users WHERE id = :id"
+        ), {"id": principal_id}).one_or_none()
+        if row is None:
+            sys.exit("the migration did not create the proof service principal row")
+        if tuple(row) != ("service", True, True, False, 0, 0):
+            sys.exit("the migrated proof service principal row has an unexpected shape: " + repr(tuple(row)))
+    elif action == "grant-membership":
         conn.execute(text(
             "INSERT INTO memberships (id, user_id, org_id, role, created_at, updated_at)"
             " VALUES (:mid, :uid, :oid, :role, :now, :now) ON CONFLICT DO NOTHING"
@@ -149,8 +156,20 @@ run_go_api_prove_e2e() {
       -recorded-by live-e2e -review-evidence "live-e2e: measure through the proof route, not the edge dispatcher"
   ) || go_api_prove_e2e_fail "could not route ${GO_API_PROVE_E2E_OPERATION} to shadow"
 
-  echo "==> [go-api-prove e2e] provisioning the proof service principal"
-  go_api_prove_e2e_principal seed || go_api_prove_e2e_fail "could not provision the proof service principal"
+  echo "==> [go-api-prove e2e] the migration created the proof service principal, with no membership"
+  go_api_prove_e2e_principal assert-migrated || go_api_prove_e2e_fail "the proof service principal row is not the migrated one"
+  set +e
+  go_api_prove_e2e_mint_edge_token > "${dir}/token-no-membership" 2> "${dir}/mint-no-membership.err"
+  rc=$?
+  set -e
+  if [ "${rc}" -eq 0 ] || [ -s "${dir}/token-no-membership" ]; then
+    go_api_prove_e2e_fail "mint-edge-token minted for a principal with no membership in the org"
+  fi
+  grep -q "no membership in this org" "${dir}/mint-no-membership.err" \
+    || go_api_prove_e2e_fail "mint-edge-token did not refuse the unmembered principal by name"
+
+  echo "==> [go-api-prove e2e] granting the proof service principal a viewer membership"
+  go_api_prove_e2e_principal grant-membership || go_api_prove_e2e_fail "could not grant the proof service principal a membership"
 
   echo "==> [go-api-prove e2e] running go-api-prove with both bearers minted in-process"
   prove_log="${dir}/go-api-prove.log"

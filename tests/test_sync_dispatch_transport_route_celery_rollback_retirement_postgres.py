@@ -132,16 +132,14 @@ def _routes(engine: Engine) -> dict[str, tuple[str, int, str]]:
         return {row[0]: (str(row[1]), int(row[2]), str(row[3])) for row in rows}
 
 
-def test_0132_is_the_application_schema_head_and_chains_after_0131() -> None:
-    """Derived, not typed. See ``tests/_alembic_heads.py``'s own docstring:
-    the next migration author renumbers THIS check (or supersedes it) rather
-    than leaving a stale pin.
+def test_0132_chains_after_0131() -> None:
+    """0132 is no longer the application_schema head (0133 superseded it) --
+    see ``tests/_alembic_heads.py`` and
+    tests/test_0133_seed_go_api_prove_service_principal_postgres.py's
+    sibling check for the current head.
     """
     migration = _migration()
-    assert migration.revision == application_schema_head(), (
-        "0132 must be the application_schema head; if another migration "
-        "landed first, renumber this one and re-run"
-    )
+    assert migration.revision != application_schema_head()
     assert migration.down_revision == "0131"
 
 

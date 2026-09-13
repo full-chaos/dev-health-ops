@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -334,7 +335,72 @@ func TestRepointRefusesWhenSomethingElseDriftsModeDuringTheWrite(t *testing.T) {
 // defect (CHAOS-5507's actual fix is a separate PR) so a regression that
 // makes this WORSE -- data corruption instead of a clean rollback -- has
 // something to fail.
+//
+// WHICH SIDE SURVIVES is not fixed: whichever backend has been waiting on
+// its half of the cycle LONGER hits its own deadlock_timeout check first
+// and cancels itself (Postgres's deadlock detector always aborts the
+// waiter that runs the check, never the other party). Locally, repoint's
+// contested statement happens to always reach Postgres and start waiting
+// before enable's, so repoint always loses. Hosted CI has seen the
+// opposite. Only repoint's write ever lands in current_candidate_build
+// (repointRoutingRowSQL) -- the exact statement this test fires at repoint
+// (registerCandidateBuildSQL) never touches that column, so when repoint
+// is the survivor the column is untouched, not "repoint's write". Both
+// orderings are forced deterministically below via forceFirstToWait,
+// rather than left to a race, so both are exercised every run instead of
+// whichever one the local network happens to schedule first.
 func TestEnableAndRepointLockOrderInversionDeadlocks(t *testing.T) {
+	t.Run("RepointEntersTheCycleFirst", func(t *testing.T) {
+		runLockOrderInversionDeadlock(t, "repoint")
+	})
+	t.Run("EnableEntersTheCycleFirst", func(t *testing.T) {
+		runLockOrderInversionDeadlock(t, "enable")
+	})
+}
+
+// backendPID reports tx's server-side backend process id, so a second
+// connection can look tx up in pg_stat_activity while tx sits mid-wait.
+func backendPID(t *testing.T, ctx context.Context, tx pgx.Tx) int {
+	t.Helper()
+	var pid int
+	if err := tx.QueryRow(ctx, "SELECT pg_backend_pid()").Scan(&pid); err != nil {
+		t.Fatalf("read backend pid: %v", err)
+	}
+	return pid
+}
+
+// waitUntilBlockedOnLock polls pg_stat_activity until pid is actually
+// waiting on a heavyweight lock. This is the difference between "the Go
+// goroutine that issues the Exec has been scheduled" and "the statement
+// has reached Postgres and joined the wait queue" -- only the latter
+// starts that backend's deadlock_timeout clock, which is the clock this
+// test relies on to force who wins.
+func waitUntilBlockedOnLock(t *testing.T, ctx context.Context, pool *pgxpool.Pool, pid int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		var waiting bool
+		if err := pool.QueryRow(ctx,
+			`SELECT wait_event_type = 'Lock' FROM pg_stat_activity WHERE pid = $1`, pid).Scan(&waiting); err != nil {
+			t.Fatalf("poll pg_stat_activity for pid %d: %v", pid, err)
+		}
+		if waiting {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("pid %d never entered a lock wait within 5s", pid)
+}
+
+// runLockOrderInversionDeadlock drives the enable/repoint deadlock with
+// forceFirstToWait ("repoint" or "enable") named as the side made to enter
+// the lock cycle first. That side's deadlock_timeout elapses first, so
+// Postgres cancels IT to break the cycle -- forceFirstToWait is therefore
+// also the side asserted to deadlock, and the other side is asserted to
+// survive. Both directions are exercised (see the two subtests above)
+// rather than leaving the outcome to whichever side's network round-trip
+// happens to land first.
+func runLockOrderInversionDeadlock(t *testing.T, forceFirstToWait string) {
 	ctx := t.Context()
 	pool := startRegistryPostgres(t)
 	const operation = "flowMatrix"
@@ -380,25 +446,46 @@ func TestEnableAndRepointLockOrderInversionDeadlocks(t *testing.T) {
 	}
 
 	// Step 3: BOTH sides now reach for the resource the OTHER already
-	// holds, concurrently -- repoint wants the CB row enable just locked,
-	// enable wants the RS row repoint has held since step 1. This is the
-	// cycle.
+	// holds -- repoint wants the CB row enable just locked, enable wants
+	// the RS row repoint has held since step 1. This is the cycle.
+	// forceFirstToWait's Exec is sent, and CONFIRMED blocked server-side,
+	// before the other side's Exec is sent at all, so it has an
+	// unambiguous head start on the deadlock_timeout clock and is the one
+	// Postgres cancels.
 	type outcome struct {
 		side string
 		err  error
 	}
 	results := make(chan outcome, 2)
-	go func() {
+	fireRepoint := func() {
 		_, err := repointTx.Exec(ctx, registerCandidateBuildSQL, testSchemaDigest, testDocumentDigest, operation, buildB)
 		results <- outcome{"repoint", err}
-	}()
-	go func() {
+	}
+	fireEnable := func() {
 		now := time.Now().UTC()
 		_, err := enableTx.Exec(ctx, upsertRoutingStateSQL,
 			testSchemaDigest, testDocumentDigest, operation, buildB,
 			"canary", 100, "r6 F1 killer", "lane-routing-verbs", now)
 		results <- outcome{"enable", err}
-	}()
+	}
+
+	var firstPID int
+	switch forceFirstToWait {
+	case "repoint":
+		firstPID = backendPID(t, ctx, repointTx)
+		go fireRepoint()
+	case "enable":
+		firstPID = backendPID(t, ctx, enableTx)
+		go fireEnable()
+	default:
+		t.Fatalf("forceFirstToWait = %q, want %q or %q", forceFirstToWait, "repoint", "enable")
+	}
+	waitUntilBlockedOnLock(t, ctx, pool, firstPID)
+	if forceFirstToWait == "repoint" {
+		go fireEnable()
+	} else {
+		go fireRepoint()
+	}
 
 	var first, second outcome
 	select {
@@ -426,6 +513,9 @@ func TestEnableAndRepointLockOrderInversionDeadlocks(t *testing.T) {
 	if !errors.As(deadlocked.err, &pgErr) || pgErr.Code != "40P01" {
 		t.Fatalf("%s failed, but not with SQLSTATE 40P01 (deadlock_detected): %v", deadlocked.side, deadlocked.err)
 	}
+	if deadlocked.side != forceFirstToWait {
+		t.Fatalf("forced %s to enter the cycle first, but %s deadlocked instead of %s -- the forcing mechanism did not produce the intended ordering", forceFirstToWait, deadlocked.side, forceFirstToWait)
+	}
 	t.Logf("%s deadlocked (SQLSTATE 40P01) as expected; %s survived", deadlocked.side, survived.side)
 
 	// Roll back the deadlocked side (Postgres already aborted it -- this
@@ -451,7 +541,21 @@ func TestEnableAndRepointLockOrderInversionDeadlocks(t *testing.T) {
 	if mode != "canary" {
 		t.Fatalf("mode = %q, want canary (neither side changes mode) -- the deadlock must not have corrupted an UNRELATED column", mode)
 	}
-	if build != buildB {
-		t.Fatalf("current_candidate_build = %q, want %q -- the survivor's write, and only the survivor's write, must be visible", build, buildB)
+
+	// The statement fired at repoint here (registerCandidateBuildSQL) is a
+	// CB-table insert, not repointRoutingRowSQL -- it never touches
+	// current_candidate_build. So the column reflects enable's write when
+	// enable survives, and is UNCHANGED (still buildA) when repoint
+	// survives, since the only write ever aimed at the column -- enable's
+	// -- is the one that deadlocked and rolled back.
+	switch deadlocked.side {
+	case "repoint":
+		if build != buildB {
+			t.Fatalf("current_candidate_build = %q, want %q -- enable survived and its write must be visible", build, buildB)
+		}
+	case "enable":
+		if build != buildA {
+			t.Fatalf("current_candidate_build = %q, want %q -- enable deadlocked, so its write to buildB must be ABSENT and the column must be left exactly as seeded", build, buildA)
+		}
 	}
 }

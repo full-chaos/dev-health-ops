@@ -724,6 +724,14 @@ func domainPosture() RolePosture {
 			// above, no code path ever updates a row after insert, so no
 			// UPDATE grant.
 			{"daily_metrics_partition_recompute_events", true, false, false},
+			// The compatibility-bridge execution ledger. UPDATE only, never
+			// INSERT: the domain worker never opens a new ledger row (that
+			// bridge is gone), it only settles a row an operator's repair tool
+			// already left at retry_authorized once the run/partition it was
+			// blocking finishes (CompleteFinalize/CompletePartition,
+			// postgres.go). No DELETE: this ledger is retained, not reaped, by
+			// this role.
+			{"metric_compatibility_executions", false, true, false},
 			{"dev_conversations", false, true, true},
 			{"dev_conversation_tombstones", true, false, false},
 			{"external_ingest_batch_payloads", false, false, true},

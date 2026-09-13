@@ -206,3 +206,31 @@ the committed tree. Re-capturing (a future field addition to these 9 pairs'
 Go code) means checking out the same three now-deleted files from that same
 pre-deletion commit into a temp path, one test run per pair, then discarding
 them again.
+
+## Linear expired-lease recovery contract
+
+Unlike every pair above, `linear_expired_lease_recovery.json` is not a
+`compareRowsAgainstFrozenOracle` row-oracle pair -- its consumer,
+`TestLinearExpiredLeaseRecoveryContractMatchesPythonAST`
+(`recovery_contract_test.go`), used to run its own dedicated
+`testdata/python_linear_recovery_oracle.py`, which `ast.parse`d
+`workers/sync_units.py` (never imported it) to read three module-level
+constant sets literally, then compared them against this package's Go
+mirrors (`workitemcontract.LinearBackfillWorkItemDatasets()`,
+`workitemcontract.LinearExpiredLeaseRetryDestinations()`, and this package's
+own `clickHouseRetryProvenSafeSurfaces`). The Python producer's only
+consumer was `run_sync_unit`'s expired-lease retry path, itself unreachable
+(no Celery consumer, no HTTP bridge) and deleted along with its exclusive
+constants -- `LinearExpiredLeaseRetryDecision` (`recovery_contract.go`) is
+the only production recovery path now. Same row-comparison shape as every
+section above even though the Python source it replaces was read a
+different way (AST-parsed, never imported): the test reads a checked-in JSON
+snapshot instead of shelling out, doing the exact same field comparisons; a
+regression guard against the snapshot, not a live-drift guard.
+
+The frozen file preserves `python_linear_recovery_oracle.py`'s own output
+shape (`{"datasets", "retry_surfaces", "proven_safe_surfaces"}`), captured by
+running that script once against the still-live constants immediately before
+their deletion -- the values it emitted are exactly what the test compared
+against on every prior run, never hand-reconstructed. `python_linear_recovery_
+oracle.py` itself is deleted: nothing else called it.

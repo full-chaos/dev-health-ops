@@ -30,26 +30,25 @@ from dev_health_ops.workers.sync_bootstrap import SyncTaskBootstrap
 
 logger = logging.getLogger(__name__)
 
-# Mirrors ``workers/sync_units.py::_AMBIGUOUS_ROUTE_FAMILY_ATTRIBUTION``
-# verbatim. Duplicated rather than imported: sync_units.py already imports
-# BudgetGuard from this module, so the reverse import would cycle; the same
-# duplicate-rather-than-reach-in pattern is already used for
-# ``_comparison_budget_key`` mirroring ``_budget_key``. Pinned equal by
-# ``tests/test_budget_guard_cooldown.py::test_ambiguous_attribution_constant_matches_observation_writer``.
+# Mirrors internal/syncdispatchruntime/budget_cooldown.go's
+# ambiguousRouteFamilyAttribution (the native Go writer of
+# ProviderRateLimitObservation.route_family_attribution) verbatim. Python's
+# own former writer, workers/sync_units.py's run_sync_unit (and its
+# _AMBIGUOUS_ROUTE_FAMILY_ATTRIBUTION constant), is deleted -- it had no
+# Celery producer or HTTP bridge.
 _AMBIGUOUS_ROUTE_FAMILY_ATTRIBUTION = "ambiguous_dimension"
 
-# Distinct from 'budget_deferred' (_defer_unit_for_budget) and 'rate_limit'
-# (workers/sync_units.py's in-worker deferral) so operators can tell a
-# shared-cooldown gate hit apart from either (docs/providers/rate-limit-policy.md).
+# Distinct from 'budget_deferred' (_defer_unit_for_budget) so operators can
+# tell a shared-cooldown gate hit apart from a rate-limit episode
+# (docs/providers/rate-limit-policy.md).
 _RATE_LIMIT_COOLDOWN_DEFERRED_CATEGORY = "rate_limit_cooldown_deferred"
 _RATE_LIMIT_COOLDOWN_EXHAUSTED_CATEGORY = "rate_limit_cooldown_exhausted"
 
 # Defense in depth for _rate_limit_deferral_exhausted (review finding, round
 # 3): the unit's own last-recorded result.error_category must ALSO show a
 # rate-limit-related cause before the wall-clock-exhaustion check can fire.
-# 'rate_limit' mirrors the in-worker 429 path's category
-# (workers/sync_units.py's RateLimitException handler) -- duplicated for the
-# same reverse-import-cycle reason as _AMBIGUOUS_ROUTE_FAMILY_ATTRIBUTION.
+# 'rate_limit' mirrors the native Go unit worker's own 429-path category
+# (internal/jobs/providerunit's RateLimitCategory).
 _RATE_LIMIT_EPISODE_ERROR_CATEGORIES = frozenset(
     {"rate_limit", _RATE_LIMIT_COOLDOWN_DEFERRED_CATEGORY}
 )

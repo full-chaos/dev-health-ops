@@ -1,0 +1,40 @@
+{
+    "datasets": [
+        "work-item-comments",
+        "work-item-history",
+        "work-item-labels",
+        "work-item-projects",
+        "work-items"
+    ],
+    "retry_surfaces": [
+        "ai_attribution",
+        "investment_classifications_daily",
+        "investment_metrics_daily",
+        "issue_type_metrics_daily",
+        "sprints",
+        "work_item_dependencies",
+        "work_item_interactions",
+        "work_item_reopen_events",
+        "work_item_transitions",
+        "work_items"
+    ],
+    "proven_safe_surfaces": [
+        "ai_attribution",
+        "estimate_coverage_metrics_daily",
+        "investment_classifications_daily",
+        "investment_metrics_daily",
+        "issue_type_metrics_daily",
+        "manual_attribution_fallbacks",
+        "sprints",
+        "work_item_cycle_times",
+        "work_item_dependencies",
+        "work_item_interactions",
+        "work_item_metrics_daily",
+        "work_item_reopen_events",
+        "work_item_state_durations_daily",
+        "work_item_team_attributions",
+        "work_item_transitions",
+        "work_item_user_metrics_daily",
+        "work_items"
+    ]
+}

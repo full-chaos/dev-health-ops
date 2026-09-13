@@ -180,19 +180,6 @@ def _observation(
     )
 
 
-def test_ambiguous_attribution_constant_matches_observation_writer():
-    """budget_guard duplicates (does not import) sync_units's ambiguous
-    attribution marker to avoid a reverse import cycle -- pin them equal."""
-    from dev_health_ops.sync.budget_guard import (
-        _AMBIGUOUS_ROUTE_FAMILY_ATTRIBUTION as guard_constant,
-    )
-    from dev_health_ops.workers.sync_units import (
-        _AMBIGUOUS_ROUTE_FAMILY_ATTRIBUTION as writer_constant,
-    )
-
-    assert guard_constant == writer_constant == "ambiguous_dimension"
-
-
 def test_sibling_units_deferred_during_active_cooldown(db_session, monkeypatch):
     from dev_health_ops.workers import sync_units
 
@@ -1474,79 +1461,6 @@ def test_stale_rate_limit_columns_without_rate_limit_error_category_do_not_termi
     assert unit.status == SyncRunUnitStatus.DISPATCHING.value
 
 
-def test_rate_limit_state_cleared_on_success_starts_fresh_episode_later(
-    db_session, monkeypatch
-):
-    """HIGH finding, round 3, regression (ii): a unit that resolves a
-    rate-limit episode by SUCCEEDING has its rate_limit_deferrals/
-    rate_limit_first_seen_at cleared. A LATER, unrelated rate-limit episode
-    (simulated well past the OLD episode's 2h wall-clock budget) computes
-    its OWN fresh clock starting from the new first_seen_at -- it is not
-    immediately exhausted against the stale old timestamp, which is exactly
-    what would happen if the clear had not fired.
-    """
-    from dev_health_ops.exceptions import RateLimitException
-    from dev_health_ops.processors import dataset_adapters
-    from dev_health_ops.workers.rate_limit_defer import plan_rate_limit_deferral
-    from dev_health_ops.workers.sync_units import run_sync_unit
-    from tests.test_sync_units import (
-        _mark_dispatching,
-        _patch_finalize_apply,
-        _patch_runtime,
-    )
-
-    run, unit = _seed_run(db_session)  # provider=github, dataset_key=commits
-    _mark_dispatching(db_session, unit)
-    _patch_db_session(monkeypatch, db_session)
-    _patch_runtime(monkeypatch)
-    _patch_finalize_apply(monkeypatch)
-
-    def rate_limited(ctx, runtime):
-        raise RateLimitException("rate limited", retry_after_seconds=1.0)
-
-    monkeypatch.setattr(dataset_adapters, "run_dataset_unit", rate_limited)
-    result = getattr(run_sync_unit, "run")(str(unit.id))
-    assert result["status"] == "rate_limited_deferred"
-
-    db_session.refresh(unit)
-    assert unit.rate_limit_deferrals == 1
-    assert unit.rate_limit_first_seen_at is not None
-    old_first_seen = _aware(unit.rate_limit_first_seen_at)
-
-    # Redispatch -- this time the provider is healthy.
-    _mark_dispatching(db_session, unit)
-
-    def succeeds(ctx, runtime):
-        return {"ok": True}
-
-    monkeypatch.setattr(dataset_adapters, "run_dataset_unit", succeeds)
-    result = getattr(run_sync_unit, "run")(str(unit.id))
-    assert result["status"] == "success"
-
-    db_session.refresh(unit)
-    assert unit.status == SyncRunUnitStatus.SUCCESS.value
-    # Root fix: cleared on SUCCESS.
-    assert unit.rate_limit_deferrals == 0
-    assert unit.rate_limit_first_seen_at is None
-
-    # A LATER, unrelated rate-limit episode -- well past the OLD episode's
-    # wall-clock budget -- must start its OWN fresh clock, not be treated
-    # as a continuation of (and therefore immediately exhausted against)
-    # the stale old first_seen_at.
-    much_later = old_first_seen + timedelta(hours=3)
-    deferral = plan_rate_limit_deferral(
-        retry_after_seconds=30.0,
-        attempts=unit.rate_limit_deferrals,
-        first_seen_at=unit.rate_limit_first_seen_at.isoformat()
-        if unit.rate_limit_first_seen_at
-        else None,
-        now=much_later,
-    )
-    assert deferral is not None
-    fresh_first_seen = datetime.fromisoformat(deferral.first_seen_at)
-    assert abs((fresh_first_seen - much_later).total_seconds()) < 1
-
-
 # ---------------------------------------------------------------------------
 # CHAOS-3412: budget-deferral episode exhaustion
 # ---------------------------------------------------------------------------
@@ -1832,44 +1746,6 @@ def test_rate_limit_deferral_clears_the_budget_episode_pair(db_session, monkeypa
     assert second.budget_first_deferred_at is None
 
 
-def test_budget_episode_pair_cleared_on_success_starts_fresh_later(
-    db_session, monkeypatch
-):
-    """A unit that resolves its budget episode by SUCCEEDING gets a fresh
-    count and a fresh wall clock for any later episode -- it is not
-    immediately exhausted against a resolved one. This is what makes the
-    Lane 2 window ratchet safe: each narrowed window that succeeds resets
-    the episode instead of inheriting the cold-start block's history.
-    """
-    from dev_health_ops.processors import dataset_adapters
-    from dev_health_ops.workers.sync_units import run_sync_unit
-    from tests.test_sync_units import (
-        _mark_dispatching,
-        _patch_finalize_apply,
-        _patch_runtime,
-    )
-
-    run, unit = _seed_run(db_session)
-    now = datetime.now(timezone.utc)
-    unit.budget_deferrals = 7
-    unit.budget_first_deferred_at = now - timedelta(hours=4)
-    db_session.flush()
-
-    _mark_dispatching(db_session, unit)
-    _patch_db_session(monkeypatch, db_session)
-    _patch_runtime(monkeypatch)
-    _patch_finalize_apply(monkeypatch)
-    monkeypatch.setattr(dataset_adapters, "run_dataset_unit", lambda ctx, rt: {"ok": 1})
-
-    result = getattr(run_sync_unit, "run")(str(unit.id))
-    assert result["status"] == "success"
-
-    db_session.refresh(unit)
-    assert unit.status == SyncRunUnitStatus.SUCCESS.value
-    assert unit.budget_deferrals == 0
-    assert unit.budget_first_deferred_at is None
-
-
 def _stamp_values_calls(source: str):
     """Every ``update(SyncRunUnit).values(...)`` call in a module, as
     {keyword: unparsed value} dicts."""
@@ -1966,8 +1842,18 @@ def test_deferral_lifecycle_columns_are_classified_and_stamped_correctly():
     assert "first_blocked_at" in model_columns
     assert "first_blocked_at" not in per_episode
 
-    # (module, marker keyword, marker value) for the three real DEFERRAL
-    # stamps -- the ones that hold a unit back without it ever running.
+    # (module, marker keyword, marker value) for the real DEFERRAL stamps
+    # Python still owns -- the ones that hold a unit back without it ever
+    # running. workers/sync_units.py's own RateLimitException deferral stamp
+    # (rate_limit_first_seen_at=first_seen_at, inside the deleted
+    # run_sync_unit) is gone with that dead Celery task body -- the native Go
+    # unit worker's deferForRateLimitSQL
+    # (internal/providersync/repository_postgres.go) is the only rate-limit
+    # deferral stamp left, and it is not something this Python-AST-only guard
+    # can see. The cooldown-guard stamp below already covers
+    # rate_limit_deferrals/rate_limit_first_seen_at on the Python side (a
+    # cooldown deferral is a rate-limit episode too), so removing the
+    # sync_units.py entry does not leave those two columns unclassified.
     deferral_stamps = [
         (
             "src/dev_health_ops/sync/budget_guard.py",
@@ -1978,11 +1864,6 @@ def test_deferral_lifecycle_columns_are_classified_and_stamped_correctly():
             "src/dev_health_ops/sync/budget_guard.py",
             "error",
             "'deferred by sync cooldown guard'",
-        ),
-        (
-            "src/dev_health_ops/workers/sync_units.py",
-            "rate_limit_first_seen_at",
-            "first_seen_at",
         ),
     ]
     lifecycle_columns: set[str] = set()
@@ -2023,13 +1904,17 @@ def test_deferral_lifecycle_columns_are_classified_and_stamped_correctly():
     # Per-episode rule: every non-terminal stamp assigns EVERY per-episode
     # column. Terminal (failed) stamps are excluded -- a failed unit is never
     # a dispatch candidate, so no predicate reads it.
+    #
+    # sync_units.py's own SUCCESS/RETRYING stamps (run_sync_unit's body) and
+    # workers/sync_reconciler.py's RETRYING stamp site were both deleted
+    # outright (run_sync_unit had no Celery producer or HTTP bridge;
+    # sync_reconciler.py under CHAOS-3093 PR2a') -- per-unit execution is
+    # native Go now. internal/providersync's
+    # TestCompleteUnitSQLClearsEveryEpisodeColumn (the SUCCESS stamp) and
+    # internal/syncreconciler's TestExpiredLeaseRetryStampClearsEveryEpisodeColumn
+    # (the RETRYING stamp) are the Go analogues proving the same per-episode-
+    # column invariant there -- this Python-AST-only guard cannot see either.
     sites = [
-        ("src/dev_health_ops/workers/sync_units.py", "SUCCESS"),
-        ("src/dev_health_ops/workers/sync_units.py", "RETRYING"),
-        # workers/sync_reconciler.py's RETRYING stamp site was deleted outright
-        # under CHAOS-3093 (PR2a'); internal/syncreconciler's
-        # TestExpiredLeaseRetryStampClearsEveryEpisodeColumn is its Go
-        # analogue and proves the same per-episode-column invariant there.
         ("src/dev_health_ops/sync/budget_guard.py", "RETRYING"),
     ]
     checked = 0
@@ -2052,7 +1937,10 @@ def test_deferral_lifecycle_columns_are_classified_and_stamped_correctly():
     assert checked >= len(sites), f"only located {checked} stamp sites"
 
     # Aggregate rule: SUCCESS and the dispatch claim are the ONLY places that
-    # clear it, and they clear it outright rather than COALESCEing.
+    # clear it, and they clear it outright rather than COALESCEing. SUCCESS
+    # is native Go now (TestCompleteUnitSQLClearsEveryEpisodeColumn) -- this
+    # Python-AST-only guard only reaches the two dispatch-claim UPDATEs left
+    # in sync_units.py.
     claim_and_success = [
         assigned
         for assigned in _stamp_values_calls(
@@ -2060,9 +1948,9 @@ def test_deferral_lifecycle_columns_are_classified_and_stamped_correctly():
         )
         if assigned.get("first_blocked_at") == "None"
     ]
-    assert len(claim_and_success) == 3, (
-        "expected exactly 3 first_blocked_at clear sites (SUCCESS plus the "
-        f"two dispatch-claim UPDATEs), found {len(claim_and_success)}"
+    assert len(claim_and_success) == 2, (
+        "expected exactly 2 first_blocked_at clear sites (the two "
+        f"dispatch-claim UPDATEs), found {len(claim_and_success)}"
     )
 
 
@@ -2291,36 +2179,6 @@ def test_aggregate_cap_does_not_kill_a_unit_that_now_fits(db_session, monkeypatc
     db_session.refresh(unit)
     assert result == {"status": "dispatched", "queued_units": 1}
     assert unit.status == SyncRunUnitStatus.DISPATCHING.value
-    assert unit.first_blocked_at is None
-
-
-def test_aggregate_blocked_clock_cleared_on_success(db_session, monkeypatch):
-    """A unit that gets through is not going nowhere: SUCCESS stops the
-    aggregate clock, so a later, unrelated blocking episode starts its own
-    24h rather than inheriting a resolved one's.
-    """
-    from dev_health_ops.processors import dataset_adapters
-    from dev_health_ops.workers.sync_units import run_sync_unit
-    from tests.test_sync_units import (
-        _mark_dispatching,
-        _patch_finalize_apply,
-        _patch_runtime,
-    )
-
-    run, unit = _seed_run(db_session)
-    unit.first_blocked_at = datetime.now(timezone.utc) - timedelta(hours=12)
-    db_session.flush()
-
-    _mark_dispatching(db_session, unit)
-    _patch_db_session(monkeypatch, db_session)
-    _patch_runtime(monkeypatch)
-    _patch_finalize_apply(monkeypatch)
-    monkeypatch.setattr(dataset_adapters, "run_dataset_unit", lambda ctx, rt: {"ok": 1})
-
-    assert getattr(run_sync_unit, "run")(str(unit.id))["status"] == "success"
-
-    db_session.refresh(unit)
-    assert unit.status == SyncRunUnitStatus.SUCCESS.value
     assert unit.first_blocked_at is None
 
 

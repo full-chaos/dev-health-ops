@@ -114,6 +114,12 @@ _DEAD_TASK_NAMES = (
     # no remaining caller. system_ops.py and system_tasks.py, its two
     # re-export sites, are deleted with it -- see _DELETED_MODULES.
     "phone_home_heartbeat",
+    # run_sync_unit (sync_units.py) never had a Celery producer or an HTTP
+    # bridge -- dispatch_sync_run stages every admitted unit straight into
+    # the durable sync.provider_unit outbox, which internal/jobs/providerunit
+    # (native Go) consumes. Only its body was deleted here; dispatch_sync_run
+    # and finalize_sync_run, sync_units.py's other two Celery tasks, stay.
+    "run_sync_unit",
 )
 
 # Beat schedule keys that must no longer exist.

@@ -27,14 +27,6 @@ def session_context(session: Session):
     session.commit()
 
 
-class Signature:
-    def set(self, *, queue: str) -> Signature:
-        return self
-
-    def apply_async(self) -> None:
-        return None
-
-
 def plan_run(state: CanonicalState) -> tuple[SyncRun, SyncRunUnit]:
     graph = create_canonical_graph(state, state.enabled_org_id)
     plan = plan_sync_run(
@@ -97,10 +89,7 @@ def plan_zero_unit_run(state: CanonicalState) -> SyncRun:
 
 
 def patch_dispatch(monkeypatch: pytest.MonkeyPatch, session: Session) -> None:
-    from dev_health_ops.workers import sync_units
-
     monkeypatch.setattr(
         "dev_health_ops.db.get_postgres_session_sync",
         lambda: session_context(session),
     )
-    monkeypatch.setattr(sync_units.run_sync_unit, "s", lambda _unit_id: Signature())

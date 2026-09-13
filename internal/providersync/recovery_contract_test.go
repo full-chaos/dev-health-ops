@@ -2,7 +2,7 @@ package providersync
 
 import (
 	"encoding/json"
-	"os/exec"
+	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -11,27 +11,31 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/workitemcontract"
 )
 
+// TestLinearExpiredLeaseRecoveryContractMatchesPythonAST compares this
+// package's Linear recovery constants against a frozen snapshot instead of
+// shelling out to a live Python AST parse: the Python producer these values
+// mirrored (workers/sync_units.py's run_sync_unit and its
+// _LINEAR_BACKFILL_WORK_ITEM_DATASETS / _LINEAR_BACKFILL_WORK_ITEM_IN_BAND_
+// WRITE_SURFACES / _CLICKHOUSE_RETRY_PROVEN_SAFE_SURFACES constants) is
+// deleted -- the native Go recovery decision (recovery_contract.go) is the
+// only production path now. See testdata/oracle_frozen/README.md for the
+// freezing convention this reuses.
 func TestLinearExpiredLeaseRecoveryContractMatchesPythonAST(t *testing.T) {
-	python := pythonExecutable(t)
 	_, currentFile, _, _ := runtime.Caller(0)
 	packageDir := filepath.Dir(currentFile)
-	command := exec.Command(
-		python,
-		filepath.Join(packageDir, "testdata", "python_linear_recovery_oracle.py"),
-		filepath.Join(packageDir, "..", "..", "src", "dev_health_ops", "workers", "sync_units.py"),
-		filepath.Join(packageDir, "..", "..", "src", "dev_health_ops", "sync", "datasets.py"),
-	)
-	output, err := command.CombinedOutput()
+	frozen, err := os.ReadFile(filepath.Join(
+		packageDir, "testdata", "oracle_frozen", "linear_expired_lease_recovery.json",
+	))
 	if err != nil {
-		t.Fatalf("run Python Linear recovery oracle: %v: %s", err, output)
+		t.Fatalf("read frozen Linear recovery oracle snapshot: %v", err)
 	}
 	var want struct {
 		Datasets           []string `json:"datasets"`
 		RetrySurfaces      []string `json:"retry_surfaces"`
 		ProvenSafeSurfaces []string `json:"proven_safe_surfaces"`
 	}
-	if err := json.Unmarshal(output, &want); err != nil {
-		t.Fatalf("decode Python Linear recovery oracle: %v: %s", err, output)
+	if err := json.Unmarshal(frozen, &want); err != nil {
+		t.Fatalf("decode frozen Linear recovery oracle snapshot: %v: %s", err, frozen)
 	}
 	if got := workitemcontract.LinearBackfillWorkItemDatasets(); !reflect.DeepEqual(got, want.Datasets) {
 		t.Fatalf("datasets=%v want=%v", got, want.Datasets)

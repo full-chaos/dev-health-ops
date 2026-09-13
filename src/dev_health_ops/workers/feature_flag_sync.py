@@ -293,11 +293,7 @@ def _sync_launchdarkly_feature_flags(
             # Preserve actuals gathered before the raise so the worker's
             # deferral/failure stamp can still persist them (CHAOS-2754
             # contract, reused here verbatim -- `attach_work_item_partial_
-            # observations` is provider-neutral despite its name;
-            # `_merge_partial_observations_into_result` in
-            # workers/sync_units.py reads it regardless of dataset/provider,
-            # and only ever ADDS an `observations` key -- it never touches
-            # `error_category` / `next_retry_at`). Draining an
+            # observations` is provider-neutral despite its name). Draining an
             # already-drained UsageRecorder is safe: `drain()` clears its
             # internal state, so re-draining `connector` / `code_refs_client`
             # here after an earlier successful drain returns `[]` and nothing

@@ -861,19 +861,6 @@ def test_long_running_unit_counts_against_cap_and_is_not_re_enqueued(
         db, "get_postgres_session_sync", lambda: _fake_session_ctx(db_session)
     )
 
-    class FakeUnitSig:
-        def __init__(self, unit_id):
-            self.unit_id = unit_id
-
-        def set(self, *, queue):
-            return self
-
-        def apply_async(self):
-            return None
-
-    monkeypatch.setattr(
-        sync_units.run_sync_unit, "s", lambda unit_id: FakeUnitSig(unit_id)
-    )
     monkeypatch.setattr(
         sync_units.dispatch_sync_run, "apply_async", lambda *a, **k: None
     )

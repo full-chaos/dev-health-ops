@@ -2136,7 +2136,7 @@ def test_helm_metrics_api_deployment_only_renders_when_enabled() -> None:
 
 @pytest.mark.skipif(shutil.which("helm") is None, reason="helm is not installed")
 def test_helm_go_worker_groups_roll_on_shared_config_or_secret_change() -> None:
-    """CHAOS-5687: all nine go-worker groups envFrom the shared ConfigMap and
+    """All nine go-worker groups envFrom the shared ConfigMap and
     Secret (go-workers.yaml), same as api-deployment.yaml/
     billing-edge-deployment.yaml -- but envFrom never triggers a rollout on
     its own. Prod rev 28 changed one ConfigMap key and rolled api and

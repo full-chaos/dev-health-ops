@@ -45,7 +45,7 @@ var ErrMembershipWriterUnavailable = errors.New(
 var membershipTableRequirements = map[string][]string{
 	"work_graph_edges": {
 		"org_id", "repo_id", "source_type", "source_id", "target_type", "target_id",
-		"edge_type", "provider", "provenance", "confidence", "evidence", "last_synced",
+		"edge_type", "provider", "provenance", "confidence", "evidence", "last_synced", "is_deleted",
 	},
 	"work_unit_investments": {
 		"org_id", "work_unit_id", "theme_distribution_json",

@@ -469,6 +469,7 @@ _BLOCKERS_SQL = (
     ON blocked.org_id = edge.org_id AND blocked.work_item_id = edge.target_id
   LEFT JOIN project ON 1 = 1
   WHERE edge.org_id = {org_id:String}
+    AND edge.is_deleted = 0
     AND edge.source_type = 'issue'
     AND edge.target_type = 'issue'
     AND edge.edge_type = 'blocks'
@@ -915,6 +916,7 @@ SELECT edge_id AS change_id, source_type, source_id, edge_type,
        discovered_at AS observed_at, last_synced
 FROM work_graph_edges FINAL
 WHERE org_id = {org_id:String}
+  AND is_deleted = 0
   AND toString(repo_id) IN {repository_ids:Array(String)}
   AND discovered_at >= {start:DateTime64(3, 'UTC')}
   AND discovered_at < {end:DateTime64(3, 'UTC')}

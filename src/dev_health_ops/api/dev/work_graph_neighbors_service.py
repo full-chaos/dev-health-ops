@@ -232,6 +232,7 @@ class ClickHouseWorkGraphNeighborSource:
                    last_synced AS source_watermark
             FROM work_graph_edges FINAL
             WHERE org_id = %(org_id)s
+              AND is_deleted = 0
               AND edge_type IN %(relationship_types)s
               AND ({direction_clause})
               {repo_clause}

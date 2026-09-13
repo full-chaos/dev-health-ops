@@ -401,7 +401,7 @@ SELECT edge_id, source_type, source_id, target_type, target_id, edge_type,
        discovered_at, last_synced, event_ts, toString(day), org_id
 FROM work_graph_edges FINAL
 WHERE org_id = ? AND source_type = ? AND source_id = ? AND edge_type = ?
-  AND target_type = ? AND target_id = ?`,
+  AND target_type = ? AND target_id = ? AND is_deleted = 0`,
 		expected.OrgID, expected.SourceType, expected.SourceID, expected.EdgeType,
 		expected.TargetType, expected.TargetID,
 	)

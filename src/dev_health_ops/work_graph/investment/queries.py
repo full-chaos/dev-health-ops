@@ -60,7 +60,8 @@ def fetch_work_graph_edges(
         params["org_id"] = org_id
         conditions.append("org_id = %(org_id)s")
     where_sql = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-    having_sql = ""
+    # An identity whose latest version is a tombstone is not an edge.
+    having_sql = "HAVING argMax(is_deleted, last_synced) = 0"
     if exclude_heuristic:
         # Parameterized (no value interpolation): exclude rule-inferred edges,
         # judged on the deduplicated (latest) provenance. HAVING must reference
@@ -69,7 +70,10 @@ def fetch_work_graph_edges(
         # ILLEGAL_AGGREGATION (184) — same ClickHouse trap documented on
         # LATEST_WORK_UNIT_INVESTMENTS_CTE (api/queries/investment.py).
         params["heuristic_provenance"] = "heuristic"
-        having_sql = "HAVING provenance != %(heuristic_provenance)s"
+        having_sql = (
+            "HAVING provenance != %(heuristic_provenance)s"
+            " AND argMax(is_deleted, last_synced) = 0"
+        )
     query = f"""
         SELECT
             any(edge_id) AS edge_id,

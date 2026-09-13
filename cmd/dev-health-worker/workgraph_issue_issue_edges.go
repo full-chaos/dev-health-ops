@@ -48,12 +48,12 @@ import (
 // sequence Python did, in Python's own order: delete stale projection-run
 // rows for this org+rule, read the currently-live blocker-family edge ids,
 // compute and execute the cleanup plan, write the fresh edges, then publish
-// the new watermark. Delete-before-write matters: the ids this step is about
-// to re-create are exactly the ids the cleanup step may also name (a
-// still-current edge is BOTH an "existing id" input to the plan AND
-// re-inserted moments later), and Python performs the delete first for the
-// same reason -- a write ordered before the matching delete would be
-// immediately undone by it.
+// the new watermark. The ids this step is about to re-create are exactly the
+// ids the cleanup step may also name (a still-current edge is BOTH an
+// "existing id" input to the plan AND re-inserted moments later). Python
+// deleted first so the write was not undone; the cleanup is now tombstones
+// that skip every identity this run re-writes, and those re-writes are stamped
+// newer than anything stored for the identity.
 type issueIssueEdgesPreStep struct {
 	connection driver.Conn
 	observer   jobruntime.WorkGraphIssueEdgesObserver
@@ -111,11 +111,19 @@ func (step *issueIssueEdgesPreStep) Run(
 		return nil, fmt.Errorf("read existing blocker edge ids: %w", err)
 	}
 	cleanupPlan := edges.BuildCleanupPlan(rows, existingBlockerEdgeIDs)
-	if err := edges.DeleteEdgesByID(ctx, step.connection, organizationID, cleanupPlan); err != nil {
+	versions, err := edges.ReadIssueIssueEdgeVersions(ctx, step.connection, organizationID)
+	if err != nil {
+		return nil, fmt.Errorf("read issue<->issue edge versions: %w", err)
+	}
+	// Tombstones, not ALTER TABLE ... DELETE: see edges/tombstone.go. The
+	// re-written edges are stamped past every stored version of an identity the
+	// cleanup covers, which is what the delete used to guarantee.
+	if err := edges.DeleteEdgesByID(ctx, step.connection, organizationID, cleanupPlan, versions, result.Edges, started); err != nil {
 		return nil, fmt.Errorf("delete stale blocker-family work_graph_edges: %w", err)
 	}
 
-	written, err := edges.WriteEdges(ctx, step.connection, organizationID, result.Edges)
+	written, err := edges.WriteEdges(ctx, step.connection, organizationID,
+		edges.StampRewrites(result.Edges, cleanupPlan, versions))
 	if err != nil {
 		return nil, fmt.Errorf("write work_graph_edges: %w", err)
 	}

@@ -105,7 +105,9 @@ func (reader *Reader) FetchWorkGraphEdges(ctx context.Context, opts EdgeQueryOpt
 		whereSQL = "WHERE " + strings.Join(conditions, " AND ")
 	}
 
-	outerFilterSQL := ""
+	// winner.6 is is_deleted: an identity whose latest version is a tombstone
+	// is not an edge.
+	outerFilterSQL := "WHERE winner.6 = 0"
 	if !opts.IncludeHeuristic {
 		// References the OUTER SELECT's `provenance` alias (extracted from
 		// the tupled winner below), not a raw column or another aggregate --
@@ -117,7 +119,7 @@ func (reader *Reader) FetchWorkGraphEdges(ctx context.Context, opts EdgeQueryOpt
 		// same reason the old HAVING-on-alias form avoided it -- same
 		// ClickHouse trap documented on LATEST_WORK_UNIT_INVESTMENTS_CTE,
 		// just enforced one query level further out now.
-		outerFilterSQL = "WHERE provenance != {heuristic_provenance:String}"
+		outerFilterSQL += " AND provenance != {heuristic_provenance:String}"
 		arguments = append(arguments, clickhouse.Named("heuristic_provenance", heuristicProvenance))
 	}
 
@@ -161,7 +163,7 @@ func (reader *Reader) FetchWorkGraphEdges(ctx context.Context, opts EdgeQueryOpt
                 target_id,
                 edge_type,
                 any(edge_id) AS edge_id,
-                argMax(tuple(repo_id, provider, provenance, confidence, evidence), last_synced) AS winner
+                argMax(tuple(repo_id, provider, provenance, confidence, evidence, is_deleted), last_synced) AS winner
             FROM work_graph_edges
             %s
             GROUP BY org_id, source_type, source_id, edge_type, target_type, target_id

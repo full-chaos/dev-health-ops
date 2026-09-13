@@ -336,19 +336,30 @@ func TestRepointRefusesWhenSomethingElseDriftsModeDuringTheWrite(t *testing.T) {
 // makes this WORSE -- data corruption instead of a clean rollback -- has
 // something to fail.
 //
-// WHICH SIDE SURVIVES is not fixed: whichever backend has been waiting on
-// its half of the cycle LONGER hits its own deadlock_timeout check first
-// and cancels itself (Postgres's deadlock detector always aborts the
-// waiter that runs the check, never the other party). Locally, repoint's
-// contested statement happens to always reach Postgres and start waiting
-// before enable's, so repoint always loses. Hosted CI has seen the
-// opposite. Only repoint's write ever lands in current_candidate_build
-// (repointRoutingRowSQL) -- the exact statement this test fires at repoint
-// (registerCandidateBuildSQL) never touches that column, so when repoint
-// is the survivor the column is untouched, not "repoint's write". Both
-// orderings are forced deterministically below via forceFirstToWait,
-// rather than left to a race, so both are exercised every run instead of
-// whichever one the local network happens to schedule first.
+// WHICH SIDE SURVIVES is picked by configuration, not by wait order.
+// Postgres's deadlock detector aborts whichever waiter's own
+// deadlock_timeout check happens to run once the cycle exists, and each
+// backend only ever runs that check once, on its own clock, starting from
+// when IT joined the wait queue. Forcing the loser by making it wait
+// queue first does not work: if the second side joins more than one
+// deadlock_timeout after the first, the first side's one-shot check ran
+// before the cycle existed and never fires again, so the SECOND side's
+// check finds the cycle and it becomes the victim instead. Below, the
+// side forceFirstToWait names gets a short deadlock_timeout so its check
+// fires soon after it blocks with the cycle present; the other side gets
+// a deadlock_timeout far longer than the test can run, so its check never
+// fires first. The short value has to stay ABOVE the largest gap this
+// process can plausibly put between the two sides joining the wait queue
+// -- a value too close to zero misses the same way the old wait-order
+// approach did, only for the opposite reason: the one-shot check fires
+// before the cycle even exists, instead of after the other side's check
+// already claimed it. That makes the victim a property of the setting,
+// not of which backend happened to join the wait queue first. Only repoint's
+// write ever lands in current_candidate_build (repointRoutingRowSQL) --
+// the exact statement this test fires at repoint (registerCandidateBuildSQL)
+// never touches that column, so when repoint is the survivor the column
+// is untouched, not "repoint's write". Both orderings are exercised below
+// via forceFirstToWait, so both are covered every run.
 func TestEnableAndRepointLockOrderInversionDeadlocks(t *testing.T) {
 	t.Run("RepointEntersTheCycleFirst", func(t *testing.T) {
 		runLockOrderInversionDeadlock(t, "repoint")
@@ -393,13 +404,15 @@ func waitUntilBlockedOnLock(t *testing.T, ctx context.Context, pool *pgxpool.Poo
 }
 
 // runLockOrderInversionDeadlock drives the enable/repoint deadlock with
-// forceFirstToWait ("repoint" or "enable") named as the side made to enter
-// the lock cycle first. That side's deadlock_timeout elapses first, so
-// Postgres cancels IT to break the cycle -- forceFirstToWait is therefore
-// also the side asserted to deadlock, and the other side is asserted to
-// survive. Both directions are exercised (see the two subtests above)
-// rather than leaving the outcome to whichever side's network round-trip
-// happens to land first.
+// forceFirstToWait ("repoint" or "enable") named as the side that must be
+// the deadlock victim. Its connection is given a short deadlock_timeout,
+// so its one-shot check runs and finds the cycle soon after it blocks; the
+// other connection's deadlock_timeout is set far longer than this test can
+// run, so its check never gets a chance to fire first. That is what pins
+// the outcome -- not which side's Exec happens to reach Postgres's wait
+// queue first, which network scheduling does not guarantee. Both
+// directions are exercised (see the two subtests above) so both victims
+// are covered every run.
 func runLockOrderInversionDeadlock(t *testing.T, forceFirstToWait string) {
 	ctx := t.Context()
 	pool := startRegistryPostgres(t)
@@ -418,6 +431,34 @@ func runLockOrderInversionDeadlock(t *testing.T, forceFirstToWait string) {
 		t.Fatalf("begin enable side: %v", err)
 	}
 	defer func() { _ = enableTx.Rollback(ctx) }()
+
+	// Pin the victim by configuration, not by wait order (see the
+	// package comment above TestEnableAndRepointLockOrderInversionDeadlocks).
+	// The side named by forceFirstToWait gets a short deadlock_timeout so
+	// its one-shot deadlock check fires soon after the cycle forms; the
+	// other side's is set far longer than this test can run, so its check
+	// never gets a chance to run first.
+	var victimTx, survivorTx pgx.Tx
+	switch forceFirstToWait {
+	case "repoint":
+		victimTx, survivorTx = repointTx, enableTx
+	case "enable":
+		victimTx, survivorTx = enableTx, repointTx
+	default:
+		t.Fatalf("forceFirstToWait = %q, want %q or %q", forceFirstToWait, "repoint", "enable")
+	}
+	if _, err := survivorTx.Exec(ctx, "SET deadlock_timeout = '60s'"); err != nil {
+		t.Fatalf("set deadlock_timeout on the side that must survive: %v", err)
+	}
+	// 2s, not sub-second: it must comfortably outlast the gap between the
+	// two sides actually joining Postgres's wait queue (goroutine and
+	// network scheduling, not just the Go-level ordering below), or its
+	// one-shot check runs before the cycle exists and never gets a second
+	// try -- confirmed by temporarily forcing that gap past 100ms, which
+	// reintroduced a miss (see the comment above this function).
+	if _, err := victimTx.Exec(ctx, "SET deadlock_timeout = '2s'"); err != nil {
+		t.Fatalf("set deadlock_timeout on the side that must deadlock: %v", err)
+	}
 
 	// Step 1: repoint's RS pre-lock lands FIRST -- exactly
 	// selectRepointCandidatesSQL, `FOR UPDATE`, iterated to completion so
@@ -449,9 +490,10 @@ func runLockOrderInversionDeadlock(t *testing.T, forceFirstToWait string) {
 	// holds -- repoint wants the CB row enable just locked, enable wants
 	// the RS row repoint has held since step 1. This is the cycle.
 	// forceFirstToWait's Exec is sent, and CONFIRMED blocked server-side,
-	// before the other side's Exec is sent at all, so it has an
-	// unambiguous head start on the deadlock_timeout clock and is the one
-	// Postgres cancels.
+	// before the other side's Exec is sent at all -- this fixes the wait
+	// ORDER so the pg_stat_activity check above has something to confirm,
+	// but it is the deadlock_timeout values set earlier, not this order,
+	// that decide which side Postgres cancels.
 	type outcome struct {
 		side string
 		err  error

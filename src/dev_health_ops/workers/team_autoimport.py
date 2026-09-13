@@ -37,22 +37,25 @@ _IMPORTER_MODULES = {
 #     /reference-discovery-populate routes this module used to also refuse
 #     through are deleted entirely -- jira going native (the last provider
 #     that route ever reached) removed their only remaining caller.
-#   - Go side (internal/, cmd/dev-health-worker/): teamCatalogAutoimportBridge.
-#     TeamAutoImport (team_catalog_clients.go:426-536) resolves the sync
-#     run's own provider and, for any provider in its `native` map (linear
-#     since #1989/27bef7286), runs the Go collector and `return`s WITHOUT
-#     ever calling the wrapped CoordinatorBridge.TeamAutoImport --
-#     structurally unreachable for linear. TeamCatalogDiscoveryExecutor.
-#     Discover (team_catalog_discovery_executor.go) is the same shape for
-#     reference discovery: `Native[provider]` always hits for linear (and,
-#     post-CHAOS-4435, every provider that ever had real populate capacity),
-#     so the once-Fallback path -- deleted along with BridgeDiscoveryExecutor
-#     and PopulateReferenceDiscovery -- never runs for it. HTTPBridge.Discover
-#     (-> /reference-discovery, the one HTTP route still standing) exists
-#     only to satisfy the CoordinatorBridge interface; nothing in
+#   - Go side (internal/, cmd/dev-health-worker/): there is no HTTP bridge
+#     left in this path at all any more. nativeTeamAutoimportDispatcher.
+#     TeamAutoImport (team_catalog_clients.go) resolves the sync run's own
+#     provider and, for any provider in its `native` map (linear since
+#     #1989/27bef7286), runs the Go collector directly; a provider it knows
+#     is import-capable but missing from that map fails loudly instead of
+#     reaching Python, and any other provider is a clean no-op -- neither
+#     branch has an HTTP call to make. TeamCatalogDiscoveryExecutor.Discover
+#     (team_catalog_discovery_executor.go) is the same shape for reference
+#     discovery: `Native[provider]` always hits for linear (and every
+#     provider that ever had real populate capacity), so its own
+#     import-capable-but-missing/not-import-capable branches are the only
+#     alternatives -- no Fallback path exists (deleted along with
+#     BridgeDiscoveryExecutor and PopulateReferenceDiscovery). HTTPBridge.
+#     Discover (-> /reference-discovery, the one HTTP route still standing)
+#     exists only to satisfy the CoordinatorBridge interface; nothing in
 #     cmd/dev-health-worker invokes it -- the native reference-discovery
-#     River worker (worker.go:308) calls NativeReferenceDiscoveryService.
-#     Discover, which is the executor chain above, not the bridge directly.
+#     River worker calls NativeReferenceDiscoveryService.Discover, which is
+#     the executor chain above, not the bridge directly.
 #   - backfill/runner.py (CHAOS-4498): no longer calls run_team_autoimport_
 #     strict in-process for any provider; it arms the same ledger/outbox
 #     row sync-time dispatch uses and goes through the identical

@@ -25,10 +25,11 @@ import (
 // telemetry label.
 //
 // Telemetry is generic, not per-provider: the caller (syncdispatchruntime.
-// TeamCatalogDiscoveryExecutor / teamCatalogAutoimportBridge) observes
-// dispatch outcome and rows-written-per-table from this method's own return
-// value via jobruntime.TeamCatalogObserver (CHAOS-4431) -- no bespoke
-// GitHub-specific Observer field needed here.
+// TeamCatalogDiscoveryExecutor, or cmd/dev-health-worker's
+// nativeTeamAutoimportDispatcher) observes dispatch outcome and
+// rows-written-per-table from this method's own return value via
+// jobruntime.TeamCatalogObserver -- no bespoke GitHub-specific Observer
+// field needed here.
 type GitHubTeamCatalogCollector struct {
 	Client GitHubTeamCatalogRouteHandler
 	Sink   GitHubTeamCatalogClickHouseEffects

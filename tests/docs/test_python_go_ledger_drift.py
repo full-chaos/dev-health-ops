@@ -214,43 +214,22 @@ def test_team_item_kinds_native_for_every_provider() -> None:
         )
 
 
-def test_bridge_routes_marked_dead_or_deleted() -> None:
-    """The two team-autoimport bridge routes are dead (or deleted) for every provider.
+def test_bridge_routes_are_gone_entirely() -> None:
+    """Both team-catalog bridge routes are deleted entirely, not just dead.
 
-    `/team-autoimport`'s Python side is deleted outright now that jira (the
-    last import-capable provider still reaching it) has its own native
-    collector. `/reference-discovery-populate` is deleted entirely -- Go
-    caller (`PopulateReferenceDiscovery`/`BridgeDiscoveryExecutor`) and
-    Python handler both gone, so neither the generator's route regex nor
-    its curated ledger has a row for it any more; a stale curated row here
-    is exactly what the generator's own consistency guard would refuse to
-    render on.
+    `/reference-discovery-populate` and `/team-autoimport` are each deleted on
+    BOTH sides now -- Go caller and Python handler -- so neither the
+    generator's route regex nor its curated ledger has a row for either one
+    any more; a stale curated row here is exactly what the generator's own
+    consistency guard would refuse to render on.
     """
     gen = _load_gen_module()
-    assert (
-        "/api/internal/worker-sync/reference-discovery-populate"
-        not in gen.load_bridge_routes()
-    ), "reference-discovery-populate must have no remaining Go caller in bridge.go"
-    assert (
-        "/api/internal/worker-sync/reference-discovery-populate"
-        not in gen.BRIDGE_ROUTE_LEDGER
-    ), "reference-discovery-populate must have no remaining curated ledger row"
-
-    team_autoimport_row = gen.BRIDGE_ROUTE_LEDGER["/api/internal/worker-sync/team-autoimport"]
-    team_autoimport_state = team_autoimport_row.get("state", "").lower()
-    assert "dead" in team_autoimport_state, (
-        f"team-autoimport route state must claim dead (got: {team_autoimport_row.get('state')!r})"
-    )
-    assert "deleted" in team_autoimport_state, (
-        f"team-autoimport route state must say the Python route is deleted (got: {team_autoimport_row.get('state')!r})"
-    )
-    for provider in ("linear", "github", "gitlab", "jira"):
-        assert f"live for {provider}" not in team_autoimport_state, (
-            f"team-autoimport route state must not claim {provider} is still live"
+    live_routes = gen.load_bridge_routes()
+    for route in (
+        "/api/internal/worker-sync/reference-discovery-populate",
+        "/api/internal/worker-sync/team-autoimport",
+    ):
+        assert route not in live_routes, f"{route} must have no remaining Go caller in bridge.go"
+        assert route not in gen.BRIDGE_ROUTE_LEDGER, (
+            f"{route} must have no remaining curated ledger row"
         )
-    assert (
-        team_autoimport_row.get("python_handler", "").upper().startswith("DELETED")
-    ), (
-        "team-autoimport route's python_handler must say DELETED "
-        f"(got: {team_autoimport_row.get('python_handler')!r})"
-    )

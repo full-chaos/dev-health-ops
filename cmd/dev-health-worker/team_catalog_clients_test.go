@@ -66,25 +66,6 @@ func (collector *linearCollectorSpy) CollectTeamCatalog(
 	return collector.result, collector.err
 }
 
-type fakeCoordinatorBridge struct {
-	teamAutoImportCalled bool
-	err                  error
-}
-
-func (bridge *fakeCoordinatorBridge) Dispatch(context.Context, syncdispatchruntime.DispatchSyncRunArgs) error {
-	return nil
-}
-func (bridge *fakeCoordinatorBridge) Finalize(context.Context, syncdispatchruntime.FinalizeSyncRunArgs) error {
-	return nil
-}
-func (bridge *fakeCoordinatorBridge) Discover(context.Context, syncdispatchruntime.ReferenceDiscoveryArgs) error {
-	return nil
-}
-func (bridge *fakeCoordinatorBridge) TeamAutoImport(context.Context, syncdispatchruntime.DomainReference) error {
-	bridge.teamAutoImportCalled = true
-	return bridge.err
-}
-
 type fakeAutoimportClientResolver struct {
 	integrationID string
 }
@@ -117,15 +98,14 @@ func (resolver fakeAutoimportSourceResolver) ResolveSourceExternalIDs(context.Co
 	return resolver.ids, resolver.err
 }
 
-func TestTeamCatalogAutoimportBridgeRoutesNativeProviderDirectly(t *testing.T) {
+func TestTeamCatalogAutoimportDispatcherRoutesNativeProviderDirectly(t *testing.T) {
 	native := &linearCollectorSpy{result: providersync.TeamCatalogResult{TeamsWritten: 1, MembersWritten: 2, RepoOwnershipWritten: 4}}
 	observer := &fakeTeamCatalogObserver{}
 	syncOptions := map[string]any{"owner": "acme-group"}
-	bridge := &teamCatalogAutoimportBridge{
-		CoordinatorBridge: &fakeCoordinatorBridge{},
-		resolveProvider:   func(context.Context, string, string) (string, error) { return "linear", nil },
-		native:            map[string]providersync.TeamCatalogCollector{"linear": native},
-		clients:           fakeAutoimportClientResolver{integrationID: "integration-1"},
+	dispatcher := &nativeTeamAutoimportDispatcher{
+		resolveProvider: func(context.Context, string, string) (string, error) { return "linear", nil },
+		native:          map[string]providersync.TeamCatalogCollector{"linear": native},
+		clients:         fakeAutoimportClientResolver{integrationID: "integration-1"},
 		selections: fakeAutoimportSelectionsResolver{
 			selections:  providersync.TeamCatalogSelections{Teams: true, Members: true},
 			syncOptions: syncOptions,
@@ -133,7 +113,7 @@ func TestTeamCatalogAutoimportBridgeRoutesNativeProviderDirectly(t *testing.T) {
 		sources:  fakeAutoimportSourceResolver{ids: []string{"src-1"}},
 		observer: observer,
 	}
-	err := bridge.TeamAutoImport(context.Background(), syncdispatchruntime.DomainReference{
+	err := dispatcher.TeamAutoImport(context.Background(), syncdispatchruntime.DomainReference{
 		OrganizationID: testOrg, SyncRunID: testRun,
 	})
 	if err != nil {
@@ -141,9 +121,6 @@ func TestTeamCatalogAutoimportBridgeRoutesNativeProviderDirectly(t *testing.T) {
 	}
 	if !native.called {
 		t.Fatal("native collector was not called")
-	}
-	if bridge.CoordinatorBridge.(*fakeCoordinatorBridge).teamAutoImportCalled {
-		t.Fatal("wrapped bridge's TeamAutoImport was called despite a native provider")
 	}
 	if !native.gotSelections.Teams || native.gotSelections.Projects || !native.gotSelections.Members {
 		t.Fatalf("selections not threaded through: %+v", native.gotSelections)
@@ -182,28 +159,26 @@ func TestTeamCatalogAutoimportBridgeRoutesNativeProviderDirectly(t *testing.T) {
 	}
 }
 
-// TestTeamCatalogAutoimportBridgeDegradesNativeFailureToNonfatal pins the
-// team-lead ruling (2026-08-28): a native collector error on the POST-SYNC
-// path must not fail/retry the River job -- it mirrors Python's non-strict
+// TestTeamCatalogAutoimportDispatcherDegradesNativeFailureToNonfatal pins the
+// rule this seam runs under: a native collector error on the POST-SYNC path
+// must not fail/retry the River job -- it mirrors Python's non-strict
 // run_team_autoimport, which catches every populator exception and returns
 // a zero summary. The strict reference-discovery seam
 // (TeamCatalogDiscoveryExecutor) has no such decorator and keeps
 // propagating; this distinction is the whole reason the two paths are
 // separate types.
-func TestTeamCatalogAutoimportBridgeDegradesNativeFailureToNonfatal(t *testing.T) {
+func TestTeamCatalogAutoimportDispatcherDegradesNativeFailureToNonfatal(t *testing.T) {
 	collectErr := errors.New("linear API rate limited")
 	native := &linearCollectorSpy{err: collectErr}
-	fallback := &fakeCoordinatorBridge{}
 	observer := &fakeTeamCatalogObserver{}
-	bridge := &teamCatalogAutoimportBridge{
-		CoordinatorBridge: fallback,
-		resolveProvider:   func(context.Context, string, string) (string, error) { return "linear", nil },
-		native:            map[string]providersync.TeamCatalogCollector{"linear": native},
-		clients:           fakeAutoimportClientResolver{},
-		selections:        fakeAutoimportSelectionsResolver{selections: providersync.TeamCatalogSelections{Teams: true}},
-		observer:          observer,
+	dispatcher := &nativeTeamAutoimportDispatcher{
+		resolveProvider: func(context.Context, string, string) (string, error) { return "linear", nil },
+		native:          map[string]providersync.TeamCatalogCollector{"linear": native},
+		clients:         fakeAutoimportClientResolver{},
+		selections:      fakeAutoimportSelectionsResolver{selections: providersync.TeamCatalogSelections{Teams: true}},
+		observer:        observer,
 	}
-	err := bridge.TeamAutoImport(context.Background(), syncdispatchruntime.DomainReference{
+	err := dispatcher.TeamAutoImport(context.Background(), syncdispatchruntime.DomainReference{
 		OrganizationID: testOrg, SyncRunID: testRun,
 	})
 	if err != nil {
@@ -211,9 +186,6 @@ func TestTeamCatalogAutoimportBridgeDegradesNativeFailureToNonfatal(t *testing.T
 	}
 	if !native.called {
 		t.Fatal("native collector was not called")
-	}
-	if fallback.teamAutoImportCalled {
-		t.Fatal("wrapped bridge was called despite a registered native collector")
 	}
 	if len(observer.dispatches) != 1 || observer.dispatches[0] != (teamCatalogDispatchCall{
 		provider: "linear", entryPoint: jobruntime.TeamCatalogEntryPointPostSync, outcome: jobruntime.TeamCatalogOutcomeNativeFailedNonfatal,
@@ -225,14 +197,14 @@ func TestTeamCatalogAutoimportBridgeDegradesNativeFailureToNonfatal(t *testing.T
 	}
 }
 
-// TestTeamCatalogAutoimportBridgeDegradesResolverFailuresToNonfatal pins the
-// team-lead ruling (2026-08-28): EVERY failure past provider resolution on
+// TestTeamCatalogAutoimportDispatcherDegradesResolverFailuresToNonfatal pins
+// the rule this seam runs under: EVERY failure past provider resolution on
 // the post-sync path -- selections, credential/client, or source ids, not
 // only the collector call itself -- must degrade to a non-fatal zero
 // result, or a resolver blip causes the exact retry storm the collector-
-// error degrade (TestTeamCatalogAutoimportBridgeDegradesNativeFailureToNonfatal)
+// error degrade (TestTeamCatalogAutoimportDispatcherDegradesNativeFailureToNonfatal)
 // already exists to prevent.
-func TestTeamCatalogAutoimportBridgeDegradesResolverFailuresToNonfatal(t *testing.T) {
+func TestTeamCatalogAutoimportDispatcherDegradesResolverFailuresToNonfatal(t *testing.T) {
 	okSelections := fakeAutoimportSelectionsResolver{selections: providersync.TeamCatalogSelections{Teams: true}}
 	for _, testCase := range []struct {
 		name       string
@@ -259,25 +231,20 @@ func TestTeamCatalogAutoimportBridgeDegradesResolverFailuresToNonfatal(t *testin
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			native := &linearCollectorSpy{}
-			fallback := &fakeCoordinatorBridge{}
 			observer := &fakeTeamCatalogObserver{}
-			bridge := &teamCatalogAutoimportBridge{
-				CoordinatorBridge: fallback,
-				resolveProvider:   func(context.Context, string, string) (string, error) { return "linear", nil },
-				native:            map[string]providersync.TeamCatalogCollector{"linear": native},
-				clients:           testCase.clients,
-				selections:        testCase.selections,
-				sources:           testCase.sources,
-				observer:          observer,
+			dispatcher := &nativeTeamAutoimportDispatcher{
+				resolveProvider: func(context.Context, string, string) (string, error) { return "linear", nil },
+				native:          map[string]providersync.TeamCatalogCollector{"linear": native},
+				clients:         testCase.clients,
+				selections:      testCase.selections,
+				sources:         testCase.sources,
+				observer:        observer,
 			}
-			err := bridge.TeamAutoImport(context.Background(), syncdispatchruntime.DomainReference{
+			err := dispatcher.TeamAutoImport(context.Background(), syncdispatchruntime.DomainReference{
 				OrganizationID: testOrg, SyncRunID: testRun,
 			})
 			if err != nil {
 				t.Fatalf("TeamAutoImport must not propagate a resolver error on the post-sync path, got: %v", err)
-			}
-			if fallback.teamAutoImportCalled {
-				t.Fatal("wrapped bridge was called despite a registered native collector")
 			}
 			if len(observer.dispatches) != 1 || observer.dispatches[0] != (teamCatalogDispatchCall{
 				provider: "linear", entryPoint: jobruntime.TeamCatalogEntryPointPostSync, outcome: jobruntime.TeamCatalogOutcomeNativeFailedNonfatal,
@@ -294,21 +261,20 @@ func (resolver erroringClientResolver) ResolveClient(context.Context, string, st
 	return providerfoundation.Credential{}, nil, "", resolver.err
 }
 
-// TestTeamCatalogAutoimportBridgeReportsRosterPreservationFailure mirrors
+// TestTeamCatalogAutoimportDispatcherReportsRosterPreservationFailure mirrors
 // TestTeamCatalogDiscoveryExecutorReportsRosterPreservationFailure for the
 // post-sync seam.
-func TestTeamCatalogAutoimportBridgeReportsRosterPreservationFailure(t *testing.T) {
+func TestTeamCatalogAutoimportDispatcherReportsRosterPreservationFailure(t *testing.T) {
 	native := &linearCollectorSpy{result: providersync.TeamCatalogResult{RosterPreservationFailed: true}}
 	observer := &fakeTeamCatalogObserver{}
-	bridge := &teamCatalogAutoimportBridge{
-		CoordinatorBridge: &fakeCoordinatorBridge{},
-		resolveProvider:   func(context.Context, string, string) (string, error) { return "linear", nil },
-		native:            map[string]providersync.TeamCatalogCollector{"linear": native},
-		clients:           fakeAutoimportClientResolver{},
-		selections:        fakeAutoimportSelectionsResolver{selections: providersync.TeamCatalogSelections{Teams: true}},
-		observer:          observer,
+	dispatcher := &nativeTeamAutoimportDispatcher{
+		resolveProvider: func(context.Context, string, string) (string, error) { return "linear", nil },
+		native:          map[string]providersync.TeamCatalogCollector{"linear": native},
+		clients:         fakeAutoimportClientResolver{},
+		selections:      fakeAutoimportSelectionsResolver{selections: providersync.TeamCatalogSelections{Teams: true}},
+		observer:        observer,
 	}
-	if err := bridge.TeamAutoImport(context.Background(), syncdispatchruntime.DomainReference{
+	if err := dispatcher.TeamAutoImport(context.Background(), syncdispatchruntime.DomainReference{
 		OrganizationID: testOrg, SyncRunID: testRun,
 	}); err != nil {
 		t.Fatalf("TeamAutoImport: %v", err)
@@ -320,28 +286,27 @@ func TestTeamCatalogAutoimportBridgeReportsRosterPreservationFailure(t *testing.
 	}
 }
 
-// TestTeamCatalogAutoimportBridgeReportsSkippedCollectorResult is the
-// CHAOS-4432 regression proof (team-lead confirmation, 2026-08-28): a
-// collector that made NO writes and returned a clean, successful zero
-// result (providersync.TeamCatalogResult.Skipped -- GitLab's non-strict
-// walk-failure Python-parity fix) must record the DEDICATED skipped
-// outcome, never the plain "native" success outcome a bare zero result
-// would otherwise be indistinguishable from ("zero-row success = defect").
-// Distinct from TestTeamCatalogAutoimportBridgeSkipsNativeProviderWithNoSelection,
+// TestTeamCatalogAutoimportDispatcherReportsSkippedCollectorResult is the
+// regression proof: a collector that made NO writes and returned a clean,
+// successful zero result (providersync.TeamCatalogResult.Skipped -- GitLab's
+// non-strict walk-failure Python-parity fix) must record the DEDICATED
+// skipped outcome, never the plain "native" success outcome a bare zero
+// result would otherwise be indistinguishable from ("zero-row success =
+// defect"). Distinct from
+// TestTeamCatalogAutoimportDispatcherSkipsNativeProviderWithNoSelection,
 // which never even calls the collector -- here the collector IS called and
 // itself chooses to report a skip.
-func TestTeamCatalogAutoimportBridgeReportsSkippedCollectorResult(t *testing.T) {
+func TestTeamCatalogAutoimportDispatcherReportsSkippedCollectorResult(t *testing.T) {
 	native := &linearCollectorSpy{result: providersync.TeamCatalogResult{Skipped: true, SkipReason: "group_projects_fetch_failed"}}
 	observer := &fakeTeamCatalogObserver{}
-	bridge := &teamCatalogAutoimportBridge{
-		CoordinatorBridge: &fakeCoordinatorBridge{},
-		resolveProvider:   func(context.Context, string, string) (string, error) { return "linear", nil },
-		native:            map[string]providersync.TeamCatalogCollector{"linear": native},
-		clients:           fakeAutoimportClientResolver{},
-		selections:        fakeAutoimportSelectionsResolver{selections: providersync.TeamCatalogSelections{Teams: true}},
-		observer:          observer,
+	dispatcher := &nativeTeamAutoimportDispatcher{
+		resolveProvider: func(context.Context, string, string) (string, error) { return "linear", nil },
+		native:          map[string]providersync.TeamCatalogCollector{"linear": native},
+		clients:         fakeAutoimportClientResolver{},
+		selections:      fakeAutoimportSelectionsResolver{selections: providersync.TeamCatalogSelections{Teams: true}},
+		observer:        observer,
 	}
-	if err := bridge.TeamAutoImport(context.Background(), syncdispatchruntime.DomainReference{
+	if err := dispatcher.TeamAutoImport(context.Background(), syncdispatchruntime.DomainReference{
 		OrganizationID: testOrg, SyncRunID: testRun,
 	}); err != nil {
 		t.Fatalf("TeamAutoImport: %v", err)
@@ -359,28 +324,23 @@ func TestTeamCatalogAutoimportBridgeReportsSkippedCollectorResult(t *testing.T) 
 	}
 }
 
-func TestTeamCatalogAutoimportBridgeSkipsNativeProviderWithNoSelection(t *testing.T) {
+func TestTeamCatalogAutoimportDispatcherSkipsNativeProviderWithNoSelection(t *testing.T) {
 	native := &linearCollectorSpy{}
-	fallback := &fakeCoordinatorBridge{}
 	observer := &fakeTeamCatalogObserver{}
-	bridge := &teamCatalogAutoimportBridge{
-		CoordinatorBridge: fallback,
-		resolveProvider:   func(context.Context, string, string) (string, error) { return "linear", nil },
-		native:            map[string]providersync.TeamCatalogCollector{"linear": native},
-		clients:           fakeAutoimportClientResolver{},
-		selections:        fakeAutoimportSelectionsResolver{selections: providersync.TeamCatalogSelections{}},
-		observer:          observer,
+	dispatcher := &nativeTeamAutoimportDispatcher{
+		resolveProvider: func(context.Context, string, string) (string, error) { return "linear", nil },
+		native:          map[string]providersync.TeamCatalogCollector{"linear": native},
+		clients:         fakeAutoimportClientResolver{},
+		selections:      fakeAutoimportSelectionsResolver{selections: providersync.TeamCatalogSelections{}},
+		observer:        observer,
 	}
-	if err := bridge.TeamAutoImport(context.Background(), syncdispatchruntime.DomainReference{
+	if err := dispatcher.TeamAutoImport(context.Background(), syncdispatchruntime.DomainReference{
 		OrganizationID: testOrg, SyncRunID: testRun,
 	}); err != nil {
 		t.Fatalf("TeamAutoImport: %v", err)
 	}
 	if native.called {
 		t.Fatal("native collector was called despite no selection")
-	}
-	if fallback.teamAutoImportCalled {
-		t.Fatal("wrapped bridge was called despite no selection -- nothing to import either way")
 	}
 	if len(observer.dispatches) != 1 || observer.dispatches[0] != (teamCatalogDispatchCall{
 		provider: "linear", entryPoint: jobruntime.TeamCatalogEntryPointPostSync, outcome: jobruntime.TeamCatalogOutcomeSkipped,
@@ -389,54 +349,72 @@ func TestTeamCatalogAutoimportBridgeSkipsNativeProviderWithNoSelection(t *testin
 	}
 }
 
-func TestTeamCatalogAutoimportBridgeFallsBackForNonNativeProviders(t *testing.T) {
-	fallback := &fakeCoordinatorBridge{}
+// TestTeamCatalogAutoimportDispatcherNoOpsForProvidersWithNoImportCapability
+// pins the complement to the wiring-bug guard below: a provider with no
+// import capability at all (never registered a real populate() in Python,
+// and never will be in the native collector map -- e.g. pagerduty) gets a
+// clean no-op instead of an error. There is no Python bridge left to fall
+// through to.
+func TestTeamCatalogAutoimportDispatcherNoOpsForProvidersWithNoImportCapability(t *testing.T) {
 	observer := &fakeTeamCatalogObserver{}
-	bridge := &teamCatalogAutoimportBridge{
-		CoordinatorBridge: fallback,
-		resolveProvider:   func(context.Context, string, string) (string, error) { return "github", nil },
-		native:            map[string]providersync.TeamCatalogCollector{"linear": &linearCollectorSpy{}},
-		observer:          observer,
+	dispatcher := &nativeTeamAutoimportDispatcher{
+		resolveProvider: func(context.Context, string, string) (string, error) { return "pagerduty", nil },
+		native:          map[string]providersync.TeamCatalogCollector{"linear": &linearCollectorSpy{}},
+		observer:        observer,
 	}
-	if err := bridge.TeamAutoImport(context.Background(), syncdispatchruntime.DomainReference{
+	if err := dispatcher.TeamAutoImport(context.Background(), syncdispatchruntime.DomainReference{
 		OrganizationID: testOrg, SyncRunID: testRun,
 	}); err != nil {
 		t.Fatalf("TeamAutoImport: %v", err)
 	}
-	if !fallback.teamAutoImportCalled {
-		t.Fatal("non-native provider did not fall through to the wrapped bridge")
-	}
 	if len(observer.dispatches) != 1 || observer.dispatches[0] != (teamCatalogDispatchCall{
-		provider: "github", entryPoint: jobruntime.TeamCatalogEntryPointPostSync, outcome: jobruntime.TeamCatalogOutcomeBridge,
+		provider: "pagerduty", entryPoint: jobruntime.TeamCatalogEntryPointPostSync, outcome: jobruntime.TeamCatalogOutcomeNotImportCapable,
 	}) {
 		t.Fatalf("observer dispatches=%+v", observer.dispatches)
 	}
 }
 
-func TestTeamCatalogAutoimportBridgeFallsBackWhenProviderResolutionFails(t *testing.T) {
-	fallback := &fakeCoordinatorBridge{}
-	bridge := &teamCatalogAutoimportBridge{
-		CoordinatorBridge: fallback,
-		resolveProvider:   func(context.Context, string, string) (string, error) { return "", errors.New("resolution failed") },
-		native:            map[string]providersync.TeamCatalogCollector{"linear": &linearCollectorSpy{}},
+// TestTeamCatalogAutoimportDispatcherFailsClosedWhenAnImportCapableProviderHasNoCollector
+// pins the wiring-bug guard: a provider this codebase KNOWS can write real
+// reference data (linear/jira/github/gitlab) missing from the native
+// collector map is a registration bug, never a legitimate no-op, and must
+// fail loudly rather than silently report a clean, unwritten result.
+func TestTeamCatalogAutoimportDispatcherFailsClosedWhenAnImportCapableProviderHasNoCollector(t *testing.T) {
+	dispatcher := &nativeTeamAutoimportDispatcher{
+		resolveProvider: func(context.Context, string, string) (string, error) { return "github", nil },
+		native:          map[string]providersync.TeamCatalogCollector{"linear": &linearCollectorSpy{}},
 	}
-	if err := bridge.TeamAutoImport(context.Background(), syncdispatchruntime.DomainReference{
+	if err := dispatcher.TeamAutoImport(context.Background(), syncdispatchruntime.DomainReference{
 		OrganizationID: testOrg, SyncRunID: testRun,
-	}); err != nil {
-		t.Fatalf("TeamAutoImport: %v", err)
-	}
-	if !fallback.teamAutoImportCalled {
-		t.Fatal("provider-resolution failure did not fall through to the wrapped bridge")
+	}); !errors.Is(err, errTeamAutoImportProviderUnavailable) {
+		t.Fatalf("github missing from native: error=%v want=%v", err, errTeamAutoImportProviderUnavailable)
 	}
 }
 
-func TestTeamCatalogAutoimportBridgeFailsClosedWhenUnconstructed(t *testing.T) {
-	var nilBridge *teamCatalogAutoimportBridge
-	if err := nilBridge.TeamAutoImport(context.Background(), syncdispatchruntime.DomainReference{}); !errors.Is(err, syncdispatchruntime.ErrInvalidBridge) {
-		t.Fatalf("nil bridge error=%v want=%v", err, syncdispatchruntime.ErrInvalidBridge)
+// TestTeamCatalogAutoimportDispatcherFailsClosedWhenProviderResolutionFails
+// pins the other half of the same rule: with no bridge left to fall through
+// to, a provider-resolution failure can no longer be masked -- it must
+// propagate so the job retries through River instead of silently no-opping.
+func TestTeamCatalogAutoimportDispatcherFailsClosedWhenProviderResolutionFails(t *testing.T) {
+	resolutionErr := errors.New("resolution failed")
+	dispatcher := &nativeTeamAutoimportDispatcher{
+		resolveProvider: func(context.Context, string, string) (string, error) { return "", resolutionErr },
+		native:          map[string]providersync.TeamCatalogCollector{"linear": &linearCollectorSpy{}},
 	}
-	zeroBridge := &teamCatalogAutoimportBridge{}
-	if err := zeroBridge.TeamAutoImport(context.Background(), syncdispatchruntime.DomainReference{}); !errors.Is(err, syncdispatchruntime.ErrInvalidBridge) {
-		t.Fatalf("zero-value bridge error=%v want=%v", err, syncdispatchruntime.ErrInvalidBridge)
+	if err := dispatcher.TeamAutoImport(context.Background(), syncdispatchruntime.DomainReference{
+		OrganizationID: testOrg, SyncRunID: testRun,
+	}); !errors.Is(err, resolutionErr) {
+		t.Fatalf("error=%v want=%v", err, resolutionErr)
+	}
+}
+
+func TestTeamCatalogAutoimportDispatcherFailsClosedWhenUnconstructed(t *testing.T) {
+	var nilDispatcher *nativeTeamAutoimportDispatcher
+	if err := nilDispatcher.TeamAutoImport(context.Background(), syncdispatchruntime.DomainReference{}); !errors.Is(err, syncdispatchruntime.ErrInvalidBridge) {
+		t.Fatalf("nil dispatcher error=%v want=%v", err, syncdispatchruntime.ErrInvalidBridge)
+	}
+	zeroDispatcher := &nativeTeamAutoimportDispatcher{}
+	if err := zeroDispatcher.TeamAutoImport(context.Background(), syncdispatchruntime.DomainReference{}); !errors.Is(err, syncdispatchruntime.ErrInvalidBridge) {
+		t.Fatalf("zero-value dispatcher error=%v want=%v", err, syncdispatchruntime.ErrInvalidBridge)
 	}
 }

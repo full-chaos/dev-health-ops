@@ -15,10 +15,10 @@ import (
 type panickingBridge struct{ recordingBridge }
 
 // TeamAutoImport is the panic seam exercised below: teamAutoimportWorker is
-// the last coordinator worker still holding a CoordinatorBridge field
-// (CHAOS-4175: dispatch_sync_run, finalize_sync_run, and
+// the last coordinator worker still holding a bridge-shaped (TeamAutoImporter)
+// field -- dispatch_sync_run, finalize_sync_run, and
 // run_sync_reference_discovery are all native now, so their own workers no
-// longer have a bridge call to panic through).
+// longer have a bridge call to panic through.
 func (*panickingBridge) TeamAutoImport(context.Context, DomainReference) error {
 	panic("bridge exploded")
 }

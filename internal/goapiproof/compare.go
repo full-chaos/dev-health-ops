@@ -231,6 +231,13 @@ type Result struct {
 	// wrong. Either way the entry must go, so the caller fails the run.
 	StaleBaselineDefects []string `json:"stale_baseline_defects,omitempty"`
 
+	// IdleIntermittentBaselineDefects names intermittent entries that
+	// cover no difference here. Unlike a stale entry this does not fail
+	// the run: the defect is expected to be absent while the baseline's
+	// source table is merged. It is recorded so an idle declaration stays
+	// visible instead of silent.
+	IdleIntermittentBaselineDefects []string `json:"idle_intermittent_baseline_defects,omitempty"`
+
 	// DifferencesOutsideBaselineDefect counts the mismatch findings NOT
 	// covered by any declared baseline defect. It is serialised even when
 	// zero: "every difference is a known Python defect" and "there were no
@@ -387,7 +394,11 @@ type OrderInsensitiveList struct {
 //   - an entry covering no difference in this comparison FAILS the run.
 //     The defect was fixed, or the paths are wrong; a stale exemption that
 //     silently exempts nothing is the failure mode this whole file is
-//     built against.
+//     built against. The one exception is an entry marked Intermittent
+//     with a stated IntermittentReason: a defect that exists only while
+//     the baseline's source table holds unmerged row versions is recorded
+//     as idle instead of stale when it covers nothing. Its coverage rules
+//     and the mismatch terminal state are unchanged.
 type BaselineDefect struct {
 	// Ticket is the issue that owns the defect, e.g. "CHAOS-5448".
 	Ticket string
@@ -400,6 +411,31 @@ type BaselineDefect struct {
 	// length, presence or structure difference beneath a cited path is
 	// outside every citation (see leafDifference).
 	Paths []string
+	// Intermittent marks a defect that is visible only while the
+	// baseline's source table still holds unmerged row versions. A
+	// comparison taken after the merge shows no difference under Paths,
+	// and for this entry alone that is expected rather than stale. It
+	// relaxes the stale rule and nothing else.
+	Intermittent bool
+	// IntermittentReason states why the defect comes and goes. It is
+	// mandatory when Intermittent is set, and forbidden when it is not.
+	IntermittentReason string
+}
+
+// validateBaselineDefects refuses a declaration that claims the
+// intermittent exemption without saying why, or gives a reason for an
+// exemption it does not claim.
+func validateBaselineDefects(defects []BaselineDefect) error {
+	for _, defect := range defects {
+		hasReason := strings.TrimSpace(defect.IntermittentReason) != ""
+		if defect.Intermittent && !hasReason {
+			return fmt.Errorf("goapiproof: baseline defect %s is marked intermittent with no IntermittentReason -- an exemption from the stale rule must say why the defect comes and goes", defect.Ticket)
+		}
+		if !defect.Intermittent && hasReason {
+			return fmt.Errorf("goapiproof: baseline defect %s gives an IntermittentReason but is not marked intermittent -- the reason describes an exemption the entry does not claim", defect.Ticket)
+		}
+	}
+	return nil
 }
 
 // tracker records which declared entries actually matched something, so
@@ -576,7 +612,7 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 	}
 
 	covered := make([]bool, len(mismatches))
-	var matched, stale []string
+	var matched, stale, idle []string
 	for _, defect := range defects {
 		hit := false
 		for i, path := range mismatches {
@@ -592,14 +628,20 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 				covered[i] = true
 			}
 		}
-		if hit {
+		switch {
+		case hit:
 			matched = append(matched, defect.Ticket)
-		} else {
+		case defect.Intermittent && validateBaselineDefects([]BaselineDefect{defect}) == nil:
+			// Absent while the baseline's source table is merged: expected,
+			// so recorded as idle and never as stale.
+			idle = append(idle, defect.Ticket)
+		default:
 			stale = append(stale, defect.Ticket)
 		}
 	}
 	sort.Strings(matched)
 	sort.Strings(stale)
+	sort.Strings(idle)
 
 	outside := 0
 	coveredByShape, outsideByShape := map[string]int{}, map[string]int{}
@@ -616,6 +658,7 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 	result.OutsideByShape = outsideByShape
 	result.BaselineDefectsMatched = matched
 	result.StaleBaselineDefects = stale
+	result.IdleIntermittentBaselineDefects = idle
 	result.DifferencesOutsideBaselineDefect = outside
 }
 

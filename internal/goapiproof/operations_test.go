@@ -204,6 +204,9 @@ func TestTierBDeclarationsAreReasonedAndRooted(t *testing.T) {
 func TestBaselineDefectDeclarationsNameATicketAndPaths(t *testing.T) {
 	checkDefects := func(t *testing.T, label string, responseRoot string, defects []BaselineDefect) {
 		t.Helper()
+		if err := validateBaselineDefects(defects); err != nil {
+			t.Errorf("%s: %v", label, err)
+		}
 		for _, defect := range defects {
 			if !strings.HasPrefix(defect.Ticket, "CHAOS-") {
 				t.Errorf("%s declares a baseline defect with ticket %q -- a defect with no ticket is an opinion", label, defect.Ticket)

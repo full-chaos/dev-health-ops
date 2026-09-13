@@ -121,13 +121,19 @@ func TestInitialWindowFailureStillStartsTheLoopAndSelfHeals(t *testing.T) {
 	schedule := heartbeatSchedule(t)
 	stepper := &scriptedStepper{failing: true, schedules: []Schedule{schedule}}
 	loop, clock := newFixedTestLoop(t, stepper)
+	// stepObserved fires only once run has finished ALL bookkeeping for a
+	// window (readiness, counters, and the next-eligible backoff deadline),
+	// so waiting on it can never race that bookkeeping the way polling
+	// Readiness() off a real-clock retry loop did.
+	observed := make(chan struct{}, 8)
+	loop.stepObserved = func() { observed <- struct{}{} }
 
 	if err := loop.Start(context.Background()); err != nil {
 		t.Fatalf("Start() = %v; a failed first window must not prevent starting", err)
 	}
 	defer func() { _ = loop.Shutdown(context.Background()) }()
 
-	waitFor(t, "the first window to run", func() bool { return stepper.calls.Load() >= 1 })
+	waitForStepObserved(t, observed, "the first window to finish")
 	if err := loop.Readiness(context.Background()); err == nil {
 		t.Fatal("readiness opened despite a failed first window")
 	}
@@ -137,22 +143,26 @@ func TestInitialWindowFailureStillStartsTheLoopAndSelfHeals(t *testing.T) {
 	stepper.repair()
 	clock.advance(4 * minLoopPollInterval)
 	clock.tick(clock.Now())
+	waitForStepObserved(t, observed, "the recovered window to finish")
 
-	deadline := time.After(2 * time.Second)
-	for {
-		if err := loop.Readiness(context.Background()); err == nil {
-			break
-		}
-		select {
-		case <-deadline:
-			t.Fatalf("loop never recovered after the failure cleared (%d windows ran)",
-				stepper.calls.Load())
-		case <-time.After(2 * time.Millisecond):
-			clock.tick(clock.Now())
-		}
+	if err := loop.Readiness(context.Background()); err != nil {
+		t.Fatalf("loop never recovered after the failure cleared (%d windows ran): %v",
+			stepper.calls.Load(), err)
 	}
 	if stepper.calls.Load() < 2 {
 		t.Fatalf("recovery observed after only %d windows", stepper.calls.Load())
+	}
+}
+
+// waitForStepObserved blocks for one stepObserved signal. The deadline only
+// bounds a hang if the loop never finishes the window under test; it never
+// paces the test, unlike the real-clock retry loop this replaced.
+func waitForStepObserved(t *testing.T, observed <-chan struct{}, what string) {
+	t.Helper()
+	select {
+	case <-observed:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for %s", what)
 	}
 }
 

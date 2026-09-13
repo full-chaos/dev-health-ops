@@ -908,16 +908,19 @@ func TestLoopAccumulatesExhaustedDeliveryRecoveriesAcrossSteps(t *testing.T) {
 	clock := &testClock{now: time.Date(2026, time.August, 20, 12, 0, 0, 0, time.UTC)}
 	recoveries := []int64{2, 0, 1}
 	var index atomic.Int64
-	calls := make(chan struct{}, len(recoveries))
 	loop, registry := newTestLoop(t, loopStepFunc(func(context.Context, time.Time, int) (Observation, error) {
 		observation := testObservation()
 		position := int(index.Add(1)) - 1
 		if position < len(recoveries) {
 			observation.ExhaustedDeliveriesRecovered = recoveries[position]
 		}
-		calls <- struct{}{}
 		return observation, nil
 	}), clock)
+	// stepObserved fires only once run has finished ALL bookkeeping for a
+	// tick, so waiting on it can never race that bookkeeping the way a
+	// signal sent from inside the stepper closure did.
+	observed := make(chan struct{}, len(recoveries))
+	loop.stepObserved = func() { observed <- struct{}{} }
 	openReadinessGate(t, registry)
 	if err := loop.Start(context.Background()); err != nil {
 		t.Fatal(err)
@@ -927,7 +930,8 @@ func TestLoopAccumulatesExhaustedDeliveryRecoveriesAcrossSteps(t *testing.T) {
 			t.Fatal(err)
 		}
 	}()
-	<-calls
+	// The initial step runs synchronously inside Start, which has already
+	// returned above -- no separate synchronization needed for it.
 	assertRecoveryTotal(t, loop, 2)
 
 	clock.mu.Lock()
@@ -935,7 +939,7 @@ func TestLoopAccumulatesExhaustedDeliveryRecoveriesAcrossSteps(t *testing.T) {
 	clock.mu.Unlock()
 	for step := 1; step < len(recoveries); step++ {
 		ticker.ticks <- clock.Now().Add(time.Duration(step) * time.Second)
-		<-calls
+		<-observed
 	}
 	// The middle step recovered nothing; the total must still carry the first
 	// step's two, and the last step's one must add rather than replace.

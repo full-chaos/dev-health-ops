@@ -142,6 +142,15 @@ type Loop struct {
 	up          bool
 	schedules   map[string]*scheduleState
 	overdue     []string
+
+	// stepObserved is a test-only synchronization hook, mirroring the
+	// syncreconciler sibling loop's own seam of the same name: production
+	// never sets it, and run's nil check is a no-op in that case. It fires
+	// once run has finished all bookkeeping for a window (readiness,
+	// counters, and the next-eligible backoff deadline), so a test can wait
+	// on it instead of racing this goroutine's own scheduling with a
+	// real-clock retry loop of its own.
+	stepObserved func()
 }
 
 // NewLoop constructs the production loop.
@@ -251,6 +260,9 @@ func (loop *Loop) run(ctx context.Context, ticker loopTicker, done chan struct{}
 			loop.setFailed()
 			nextEligible = loop.clock.Now().Add(loop.backoff())
 		}
+		if loop.stepObserved != nil {
+			loop.stepObserved()
+		}
 	}
 	for {
 		select {
@@ -267,9 +279,15 @@ func (loop *Loop) run(ctx context.Context, ticker loopTicker, done chan struct{}
 			if err := loop.step(ctx, now); err != nil {
 				loop.setFailed()
 				nextEligible = loop.clock.Now().Add(loop.backoff())
+				if loop.stepObserved != nil {
+					loop.stepObserved()
+				}
 				continue
 			}
 			nextEligible = time.Time{}
+			if loop.stepObserved != nil {
+				loop.stepObserved()
+			}
 		}
 	}
 }

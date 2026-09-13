@@ -420,6 +420,14 @@ type BaselineDefect struct {
 	// IntermittentReason states why the defect comes and goes. It is
 	// mandatory when Intermittent is set, and forbidden when it is not.
 	IntermittentReason string
+
+	// RepoFanoutShape, when set, replaces this defect's blanket "any leaf
+	// difference under Paths is covered" rule with a shape-specific
+	// admission built from the two DECODED response bodies -- see
+	// RepoFanoutShape's own doc comment (repofanout.go). nil is the
+	// default, unchanged blanket behaviour every other declared defect
+	// still uses.
+	RepoFanoutShape *RepoFanoutShape
 }
 
 // validateBaselineDefects refuses a declaration that claims the
@@ -604,10 +612,12 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 	}
 
 	var mismatches, shapes []string
-	for _, finding := range result.Findings {
+	var findingRefs []int
+	for i, finding := range result.Findings {
 		if finding.Kind == FindingMismatch {
 			mismatches = append(mismatches, tieredPath(finding.Path))
 			shapes = append(shapes, finding.Shape)
+			findingRefs = append(findingRefs, i)
 		}
 	}
 
@@ -615,6 +625,14 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 	var matched, stale, idle []string
 	for _, defect := range defects {
 		hit := false
+		// Built once per defect, not per finding: RepoFanoutShape's
+		// per-repo multiplier map and aggregate totals are a property of
+		// this ONE comparison, and every finding under the defect's
+		// Paths is judged against the SAME plan.
+		var plan *repoFanoutPlan
+		if defect.RepoFanoutShape != nil {
+			plan = buildRepoFanoutPlan(defect.RepoFanoutShape, baselineData, candidateData)
+		}
 		for i, path := range mismatches {
 			if !defectCovers(defect, path) {
 				continue
@@ -624,9 +642,16 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 			// difference. A length / presence / structure finding under a
 			// cited subtree stays outside every citation.
 			hit = true
-			if leafDifference(shapes[i]) {
-				covered[i] = true
+			if !leafDifference(shapes[i]) {
+				continue
 			}
+			if plan != nil {
+				if plan.admits(result.Findings[findingRefs[i]]) {
+					covered[i] = true
+				}
+				continue
+			}
+			covered[i] = true
 		}
 		switch {
 		case hit:

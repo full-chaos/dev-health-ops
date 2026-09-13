@@ -100,9 +100,30 @@ func TestInvestmentFullRepoJoinFanout_FannedOutBaselineIsACoveredMismatch(t *tes
 			}
 		}
 	}
+	candidateRaw, err := os.ReadFile(candidatePath)
+	if err != nil {
+		t.Fatalf("read %s: %v", candidatePath, err)
+	}
+	var candidateBody map[string]any
+	if err := json.Unmarshal(candidateRaw, &candidateBody); err != nil {
+		t.Fatalf("decode %s: %v", candidatePath, err)
+	}
+	candidateCoverage := candidateBody["data"].(map[string]any)["analytics"].(map[string]any)["sankey"].(map[string]any)["coverage"].(map[string]any)
+	candidateRepoCoverage := candidateCoverage["repoCoverage"].(float64)
+	candidateTeamCoverage := candidateCoverage["teamCoverage"].(float64)
+
 	coverage := sankey["coverage"].(map[string]any)
-	coverage["repoCoverage"] = coverage["repoCoverage"].(float64) * 0.9
-	coverage["teamCoverage"] = coverage["teamCoverage"].(float64) * 0.9
+	// Every repo doubles uniformly here (k=2 on every nonzero node
+	// above): repoCoverage's unassigned share is PROVABLY immune to the
+	// repos join (a repo_id IS NULL row can never join `repos`), so
+	// under a uniform fan-out it rises all the way to
+	// repoFanoutRepoCoverageCeiling's k=2 ceiling. teamCoverage shares
+	// the SAME sum(repoEffortCol) denominator as repoCoverage
+	// (sankeycoverage.go: repoTotalExpr = totalExpr) and every repo is
+	// affected here, so its numerator and denominator double together
+	// and the ratio is UNCHANGED -- left as the candidate's own value.
+	coverage["repoCoverage"] = repoFanoutRepoCoverageCeiling(candidateRepoCoverage, 2)
+	coverage["teamCoverage"] = candidateTeamCoverage
 	fanned, err := json.Marshal(body)
 	if err != nil {
 		t.Fatalf("encode fanned-out baseline: %v", err)

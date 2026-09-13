@@ -469,6 +469,14 @@ type preclaimReadinessComponent struct {
 	// time.Now and a context-aware time.Sleep.
 	now   func() time.Time
 	sleep func(context.Context, time.Duration)
+	// claim is the same execution_liveness claim tracker registered as part
+	// of component.registry's checks. Start calls claim.markRuntimeLive on
+	// it the instant readiness actually passes, so claimLivenessReady stops
+	// treating a backlogged-but-unclaimed queue as merely "preclaim has not
+	// finished yet" and starts enforcing its normal staleness contract, the
+	// moment River is actually about to start claiming. nil in every
+	// hand-built test fixture that does not exercise execution_liveness.
+	claim *claimLiveness
 }
 
 func (preclaimReadinessComponent) Name() string { return "preclaim-readiness" }
@@ -512,6 +520,9 @@ func (component preclaimReadinessComponent) Start(ctx context.Context) error {
 	)
 	if err != nil {
 		return errWorkerDependencyUnavailable
+	}
+	if component.claim != nil {
+		component.claim.markRuntimeLive()
 	}
 	return nil
 }
@@ -1189,6 +1200,7 @@ func configureWorkerDependenciesWithSources(
 		registry: registry,
 		logger:   logger,
 		budget:   cfg.PreclaimReadinessTimeout,
+		claim:    claim,
 	})
 	if len(active.queues) == 0 {
 		return components, nil

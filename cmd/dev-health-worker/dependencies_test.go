@@ -981,6 +981,50 @@ func TestPreclaimReadinessRefusesFailedDependenciesBeforeConsumersStart(t *testi
 	}
 }
 
+// TestPreclaimReadinessMarksClaimRuntimeLiveOnlyOnSuccess proves the one
+// wiring point claimLivenessReady's preclaim gate depends on: Start must
+// flip claim out of preclaim mode when (and only when) readiness actually
+// passes, immediately before River is ever given the chance to start
+// claiming. A failed Start must leave the gate exactly as it found it --
+// the process is about to exit and retry preclaim again from the top, so a
+// premature flip here would let a LATER, genuinely wedged consumer's own
+// first check slip through the preclaim skip it no longer qualifies for.
+func TestPreclaimReadinessMarksClaimRuntimeLiveOnlyOnSuccess(t *testing.T) {
+	t.Parallel()
+	t.Run("success flips it", func(t *testing.T) {
+		t.Parallel()
+		registry := health.NewRegistry(time.Second)
+		if err := registry.RegisterRequired("domain_postgres", func(context.Context) error { return nil }); err != nil {
+			t.Fatal(err)
+		}
+		claim := &claimLiveness{preclaim: true}
+		component := preclaimReadinessComponent{registry: registry, claim: claim}
+		if err := component.Start(context.Background()); err != nil {
+			t.Fatalf("Start() error = %v, want nil", err)
+		}
+		if claim.inPreclaim() {
+			t.Fatal("Start() succeeded but left claim in preclaim mode")
+		}
+	})
+	t.Run("failure leaves it alone", func(t *testing.T) {
+		t.Parallel()
+		registry := health.NewRegistry(time.Second)
+		if err := registry.RegisterRequired("domain_postgres", func(context.Context) error {
+			return errors.New("database unavailable")
+		}); err != nil {
+			t.Fatal(err)
+		}
+		claim := &claimLiveness{preclaim: true}
+		component := preclaimReadinessComponent{registry: registry, claim: claim}
+		if err := component.Start(context.Background()); err == nil {
+			t.Fatal("Start() error = nil, want a refusal")
+		}
+		if !claim.inPreclaim() {
+			t.Fatal("Start() failed but took claim out of preclaim mode")
+		}
+	})
+}
+
 // A preclaim refusal aborts Start, so the process exits before its operator
 // HTTP surface can be scraped: the log line is the ONLY place the failing
 // check names are ever observable. It must name exactly the checks that

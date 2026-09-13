@@ -305,10 +305,24 @@ func seedTwoVersionDonorCorpus(t *testing.T, ctx context.Context, conn driver.Co
 	return []string{"wi-a", "wi-b", "wi-gone"}
 }
 
+func assertDonorOraclesAgree(t *testing.T, ctx context.Context, conn driver.Conn, state string, ids []string, at time.Time, current []TeamRepoDonor) {
+	t.Helper()
+	for _, oracle := range []struct{ name, query string }{
+		{"per-arm FINALs", previousTeamRepoDonorsQuery},
+		{"DISTINCT after the join", fanOutTeamRepoDonorsQuery},
+	} {
+		if got := runDonorQuery(t, ctx, conn, oracle.query, ids, orgAlpha, at); !reflect.DeepEqual(got, current) {
+			t.Fatalf("%s corpus: donor query diverged from its %s form:\n%s: %v\ncurrent: %v", state, oracle.name, oracle.name, donorKeys(got), donorKeys(current))
+		}
+	}
+}
+
 // TestDonorOutputIsIndependentOfMergeState reads the two-version corpus while
 // every version is still an unmerged part, then forces every table to its
 // fully merged state and reads again. The two results must be byte-equal:
-// the donor query may not depend on whether ClickHouse has merged yet.
+// the donor query may not depend on whether ClickHouse has merged yet. Each
+// earlier form of the query is an oracle on both states, so a reshaping that
+// resolves a version differently than its predecessors shows up here.
 func TestDonorOutputIsIndependentOfMergeState(t *testing.T) {
 	reader, conn, ctx := newTestReader(t)
 	stopDonorTableMerges(t, ctx, conn)
@@ -327,9 +341,7 @@ func TestDonorOutputIsIndependentOfMergeState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if previous := runDonorQuery(t, ctx, conn, previousTeamRepoDonorsQuery, ids, orgAlpha, at); !reflect.DeepEqual(previous, unmerged) {
-		t.Fatalf("unmerged corpus: donor query diverged from its previous form:\nprevious: %v\ncurrent:  %v", donorKeys(previous), donorKeys(unmerged))
-	}
+	assertDonorOraclesAgree(t, ctx, conn, "unmerged", ids, at, unmerged)
 	for _, table := range donorTables {
 		mustExec(t, ctx, conn, "SYSTEM START MERGES "+table)
 		mustExec(t, ctx, conn, "OPTIMIZE TABLE "+table+" FINAL")
@@ -338,9 +350,7 @@ func TestDonorOutputIsIndependentOfMergeState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if previous := runDonorQuery(t, ctx, conn, previousTeamRepoDonorsQuery, ids, orgAlpha, at); !reflect.DeepEqual(previous, merged) {
-		t.Fatalf("merged corpus: donor query diverged from its previous form:\nprevious: %v\ncurrent:  %v", donorKeys(previous), donorKeys(merged))
-	}
+	assertDonorOraclesAgree(t, ctx, conn, "merged", ids, at, merged)
 	if !reflect.DeepEqual(unmerged, merged) {
 		t.Fatalf("donor output depends on merge state:\nunmerged: %v\nmerged:   %v", donorKeys(unmerged), donorKeys(merged))
 	}
@@ -434,11 +444,15 @@ SELECT ?, toUUID('00000000-0000-0000-0000-000000000000'), concat('wi-', toString
 		ids[i] = fmt.Sprintf("wi-%d", i)
 	}
 	params := []any{
-		clickhouse.Named("org_id", orgAlpha), clickhouse.Named("work_item_ids", ids),
+		clickhouse.Named("org_id", orgAlpha),
 		clickhouse.Named("as_of", at.UTC().Format("2006-01-02 15:04:05.000")),
 	}
+	explainCtx, err := withDonorWorkItems(ctx, ids)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	rows, err := conn.Query(ctx, "EXPLAIN PLAN\n"+teamRepoDonorsQuery, params...)
+	rows, err := conn.Query(explainCtx, "EXPLAIN PLAN\n"+teamRepoDonorsQuery, params...)
 	if err != nil {
 		t.Fatalf("EXPLAIN PLAN: %v", err)
 	}
@@ -490,7 +504,10 @@ SELECT ?, toUUID('00000000-0000-0000-0000-000000000000'), concat('wi-', toString
 	if err := conn.QueryRow(ctx, `SELECT read_rows FROM system.query_log WHERE type = 'QueryFinish' AND log_comment = ? ORDER BY event_time_microseconds DESC LIMIT 1`, tag).Scan(&readRows); err != nil {
 		t.Fatalf("read query_log: %v", err)
 	}
-	if readRows < attributionRows || readRows >= 2*attributionRows {
-		t.Fatalf("donor query read %d rows over %d attribution rows; the attributions table must be scanned exactly once", readRows, attributionRows)
+	// The requested ids arrive as an external table, and read_rows counts its
+	// rows too: one per id, which is what is taken off before the bound.
+	if scanned := readRows - uint64(len(ids)); readRows < uint64(len(ids)) || scanned < attributionRows || scanned >= 2*attributionRows {
+		t.Fatalf("donor query read %d rows (%d of them requested ids) over %d attribution rows; the attributions table must be scanned exactly once",
+			readRows, len(ids), attributionRows)
 	}
 }

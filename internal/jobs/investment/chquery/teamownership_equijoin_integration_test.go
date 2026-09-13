@@ -59,9 +59,19 @@ func runDonorQuery(
 	workItemIDs []string, orgID string, asOf time.Time,
 ) []TeamRepoDonor {
 	t.Helper()
-	rows, err := conn.Query(ctx, query,
-		clickhouse.Named("org_id", orgID), clickhouse.Named("work_item_ids", workItemIDs),
-		clickhouse.Named("as_of", asOf.UTC().Format("2006-01-02 15:04:05.000")))
+	// Earlier forms kept as oracles bind the ids as an Array(String) parameter;
+	// the production form reads them from the external table. Each gets only
+	// the input its text names, so an oracle cannot pass on the other's input.
+	args := []any{clickhouse.Named("org_id", orgID), clickhouse.Named("as_of", asOf.UTC().Format("2006-01-02 15:04:05.000"))}
+	if strings.Contains(query, "{work_item_ids:Array(String)}") {
+		args = append(args, clickhouse.Named("work_item_ids", workItemIDs))
+	} else {
+		var err error
+		if ctx, err = withDonorWorkItems(ctx, workItemIDs); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, err := conn.Query(ctx, query, args...)
 	if err != nil {
 		t.Fatalf("donor query: %v\n%s", err, query)
 	}
@@ -213,8 +223,12 @@ func TestEquiJoinPlanHasNoDisjunctiveJoinCondition(t *testing.T) {
 	mustExec(t, ctx, conn, `INSERT INTO team_repo_ownership (org_id,provider,team_id,repo_full_name,match_type,source,valid_from,valid_to,updated_at) VALUES (?,'github','team','acme/good','exact','provider_access',?,NULL,?)`, orgAlpha, at.Add(-time.Hour), at)
 	mustExec(t, ctx, conn, `INSERT INTO work_item_team_attributions (org_id,repo_id,work_item_id,provider,team_id,source,is_primary,confidence,evidence,computed_at) VALUES (?,toUUID('00000000-0000-0000-0000-000000000000'),'wi','linear','team','native_team',1,'high','fixture',?)`, orgAlpha, at)
 
-	rows, err := conn.Query(ctx, "EXPLAIN PLAN actions=1\n"+teamRepoDonorsQuery,
-		clickhouse.Named("org_id", orgAlpha), clickhouse.Named("work_item_ids", []string{"wi"}),
+	explainCtx, err := withDonorWorkItems(ctx, []string{"wi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := conn.Query(explainCtx, "EXPLAIN PLAN actions=1\n"+teamRepoDonorsQuery,
+		clickhouse.Named("org_id", orgAlpha),
 		clickhouse.Named("as_of", at.UTC().Format("2006-01-02 15:04:05.000")))
 	if err != nil {
 		t.Fatalf("EXPLAIN PLAN: %v", err)

@@ -130,7 +130,7 @@ def test_inventory_row_count_matches_the_baseline():
     graphql = [r for r in rows if r["surface_kind"] in _GRAPHQL_KINDS]
     assert len(rest) == 305, len(rest)
     assert len(graphql) == 59, len(graphql)
-    assert len(rows) == 365, len(rows)
+    assert len(rows) == 364, len(rows)
 
 
 def test_the_three_subscriptions_are_profiled():

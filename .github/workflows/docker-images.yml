@@ -1418,7 +1418,41 @@ jobs:
     name: Apply moving tags (fan-in)
     runs-on: ubuntu-latest
     needs: [merge, go-merge, query-api-merge, go-api-tools-merge]
-    if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')
+    # go-merge and go-build-worker-arm64 already tolerate dind-smoke-test
+    # being skipped (self-hosted runners unavailable, or a fork PR) via
+    # their own always() + explicit needs.*.result gate. That is not
+    # enough here: GitHub's default implicit success() gate (added
+    # whenever `if:` uses no status-check function) is not scoped to a
+    # job's own direct needs -- it walks the whole transitive dependency
+    # chain, and a skip anywhere in that chain fails the gate even when a
+    # downstream job already decided to look past it. dind-smoke-test
+    # skips on every run on this fleet, that skip flows through
+    # go-build-worker-arm64 into go-merge, and the implicit gate then
+    # sinks this job before it ever looks at merge/go-merge/query-api-merge/
+    # go-api-tools-merge's own results -- which is why this job was
+    # skipped on every push-to-main run regardless of those four jobs all
+    # reporting success.
+    #
+    # The fix mirrors go-merge's own shape: always() opts this job out of
+    # the whole-chain implicit gate, then explicit checks stand in for it
+    # -- but scoped to ONLY this job's direct needs, not the full chain.
+    # Unlike go-build-worker-arm64 (a leg that can legitimately not run),
+    # none of these four merge jobs has a by-design "did not need to run"
+    # case once the event/push guard below is true: each of them carries
+    # that exact same guard, so a push to main, a workflow_dispatch with
+    # push_images, or a release always runs all four. A skip on any of
+    # them here is therefore never by design -- it means that family's
+    # digests never got merged and pushed -- so each is checked for
+    # == 'success', not merely "did not fail", and a skip blocks the
+    # fan-in exactly like a failure would rather than letting it move
+    # latest/main over an incomplete image set.
+    if: >-
+      always() &&
+      needs.merge.result == 'success' &&
+      needs.go-merge.result == 'success' &&
+      needs.query-api-merge.result == 'success' &&
+      needs.go-api-tools-merge.result == 'success' &&
+      github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')
     # team-lead (CHAOS-4947 review): the re-read-immediately-before-tagging
     # inside the step below NARROWS the cross-run race, it doesn't close
     # it -- two fan-in runs at different commits can both pass their own

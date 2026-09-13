@@ -8,9 +8,10 @@ and the multi-org fan-out helper (``_discover_active_org_ids``) were
 deleted -- Go's ``recommendations_daily`` fixed schedule now owns the
 periodic cadence, and Celery Beat has not scheduled this since the
 2026-08-19 stop (see tests/workers/test_celery_dead_code_contract.py).
-``_compute_recommendations_for_org`` itself stays live: it is invoked
-synchronously by the dormant-Go operational bridge
-(api/internal/worker_metrics.py::_run_recommendations).
+``_compute_recommendations_for_org`` itself stays live here as a directly
+tested unit: the worker_metrics.py HTTP bridge handler that used to call it
+synchronously is gone (the family's Go executor has no Python fallback), so
+this module is now its only caller.
 
 No live ClickHouse / Postgres is touched — every collaborator (loader,
 engine, sink, team discovery) is mocked.

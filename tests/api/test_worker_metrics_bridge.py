@@ -222,29 +222,25 @@ def test_remaining_execution_rejects_unknown_persisted_family() -> None:
         )
 
 
-def test_remaining_runner_is_a_closed_one_family_allowlist() -> None:
-    # extra_metrics/team_metrics were removed by CHAOS-4243 (registered
-    # handlers with zero producer, retired rather than left dormant).
-    # release_impact was removed by CHAOS-5234/CHAOS-5244: its native Go
-    # executor (CHAOS-4296) has no Python fallback, so the compatibility
+def test_remaining_runner_is_a_closed_empty_allowlist() -> None:
+    # extra_metrics/team_metrics were removed (registered handlers with zero
+    # producer, retired rather than left dormant). release_impact,
+    # complexity, capacity and dora were each removed the same way: their
+    # native Go executors have no Python fallback, so the compatibility
     # bridge handler and its dispatch entry were deleted entirely rather
-    # than skip-gated. complexity was removed the same way by CHAOS-4291:
-    # its native ComplexityExecutor has no Python fallback either
-    # (daily.go's KindRemainingComplexity case), and job_complexity_db.py
-    # itself is NOT deleted -- src/dev_health_ops/fixtures/runner.py still
-    # imports run_complexity_db_job directly for local/CI fixture
-    # generation, a live non-production-job caller -- only this bridge
-    # handler and its dispatch entry were dead. capacity and dora were
-    # removed the same way by CHAOS-5336: both native Go executors
-    # (dora_native.go/capacity_native.go) have no Python fallback, and
-    # job_dora.py/job_capacity.py are deleted outright -- this HTTP bridge's
-    # dispatch entries were the only thing keeping them reachable.
-    # membership_backfill was removed the same way too: its native Go
-    # executor has no Python fallback, so this bridge handler and its
-    # dispatch entry are gone. backfill_memberships itself is NOT deleted --
-    # it survives as the live-parity oracle the Go executor is still checked
-    # against, a live non-bridge caller exactly like job_complexity_db.py's.
-    assert set(worker_metrics._REMAINING_RUNNERS) == {"recommendations"}
+    # than skip-gated (complexity's underlying job_complexity_db.py is NOT
+    # deleted -- src/dev_health_ops/fixtures/runner.py still imports
+    # run_complexity_db_job directly for local/CI fixture generation, a live
+    # non-production-job caller -- only its bridge handler and dispatch
+    # entry were dead). recommendations and membership_backfill were removed
+    # the same way too, the last two families left in the allowlist: their
+    # native Go executors have no Python fallback either, and no live wiring
+    # anywhere called either dispatch entry -- only the bridge handlers and
+    # their dispatch entries were dead. _compute_recommendations_for_org and
+    # backfill_memberships themselves are unchanged: the former is still
+    # directly unit-tested (tests/test_recommendations_task.py), the latter
+    # survives as the live-parity oracle the Go executor is checked against.
+    assert set(worker_metrics._REMAINING_RUNNERS) == set()
 
 
 @pytest.mark.asyncio

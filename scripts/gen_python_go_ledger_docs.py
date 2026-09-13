@@ -219,7 +219,7 @@ KIND_LEDGER: dict[str, dict[str, str]] = {
         "tables": "`recommendations_daily`",
         "evidence": "argued — wired `daily.go:421-461,557-567` (re-verified against the merge of origin/main into this branch; line numbers moved when #2177's membership block landed ahead of this one during conflict resolution)",
         "state": "native",
-        "ticket": "n/a — the Go worker no longer routes this kind to the bridge (daily.go), but Python `_compute_recommendations_for_org` (`workers/recommendations_tasks.py:334`) is NOT dead code: it is still imported/called at `worker_metrics.py:1833/1863` and served live by `/remaining-metrics/v1/execute` (see this file's own WORKER_FILE_LEDGER['recommendations_tasks.py'], category a) — deleting it needs its own verification that nothing else reaches it, not assumed here",
+        "ticket": "n/a — the Go worker no longer routes this kind to the bridge (daily.go); verified nothing else reaches worker_metrics.py's compatibility handler either, so it and its `_REMAINING_RUNNERS` dispatch entry are deleted. `_compute_recommendations_for_org` (`workers/recommendations_tasks.py:333`) is retained as a directly-unit-tested compute path (see this file's own WORKER_FILE_LEDGER['recommendations_tasks.py'], now category d) -- tests/test_recommendations_task.py is its only remaining caller",
     },
     "metrics.remaining.release_impact": {
         "producer": "`internal/scheduler/fixed/inventory.go:75` (release_impact_daily_fanout)",
@@ -452,8 +452,8 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
         "ticket": "n/a",
     },
     "recommendations_tasks.py": {
-        "category": "a",
-        "evidence": "_compute_recommendations_for_org imported/called worker_metrics.py:1833/1863, served by /remaining-metrics/v1/execute",
+        "category": "d",
+        "evidence": "worker_metrics.py's _run_recommendations bridge handler (its only production caller) is deleted -- verified no live wiring reaches it; _compute_recommendations_for_org is now exercised only by tests/test_recommendations_task.py",
         "ticket": "n/a",
     },
     "reference_discovery.py": {

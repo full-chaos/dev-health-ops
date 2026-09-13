@@ -767,10 +767,10 @@
       "target_kind_id": "route:dispatch_sync_run",
       "current_implementation_state": "native_go",
       "verification_status": "verified",
-      "compatibility_dependency": "contracts/sync-dispatch/v1/transport-routes.json route=river, rollback_route=celery; the checked-in route is applied through the audited durable route-row controller.",
-      "deletion_evidence_requirement": "Remove this transitional inventory row after the Celery rollback route is retired; preserve the River route contract while the native coordinator remains active.",
+      "compatibility_dependency": "None. contracts/sync-dispatch/v1/transport-routes.json now declares rollback_route=none for this kind -- no Celery producer serves it in any deployment, and the checked-in route is applied through the audited durable route-row controller.",
+      "deletion_evidence_requirement": "None. This row tracks the checked-in transport-routes.json kind entry itself, not a Celery compatibility bridge; discovery requires one row per kind while that entry exists.",
       "acceptance_test_id": "tests/test_sync_units.py",
-      "notes": "route=river, rollback_route=celery; ApplyCheckedIn records the durable route generation change"
+      "notes": "route=river, rollback_route=none; ApplyCheckedIn records the durable route generation change. The Celery rollback route this row previously described is retired."
     },
     {
       "id": "sync_dispatch_transport_route:contracts/sync-dispatch/v1/transport-routes.json:11",
@@ -791,10 +791,10 @@
       "target_kind_id": "route:finalize_sync_run",
       "current_implementation_state": "native_go",
       "verification_status": "verified",
-      "compatibility_dependency": "contracts/sync-dispatch/v1/transport-routes.json route=river, rollback_route=celery; the checked-in route is applied through the audited durable route-row controller.",
-      "deletion_evidence_requirement": "Remove this transitional inventory row after the Celery rollback route is retired; preserve the River route contract while the native finalizer remains active.",
+      "compatibility_dependency": "None. contracts/sync-dispatch/v1/transport-routes.json now declares rollback_route=none for this kind -- no Celery producer serves it in any deployment, and the checked-in route is applied through the audited durable route-row controller.",
+      "deletion_evidence_requirement": "None. This row tracks the checked-in transport-routes.json kind entry itself, not a Celery compatibility bridge; discovery requires one row per kind while that entry exists.",
       "acceptance_test_id": "tests/test_sync_units.py",
-      "notes": "route=river, rollback_route=celery; ApplyCheckedIn records the durable route generation change"
+      "notes": "route=river, rollback_route=none; ApplyCheckedIn records the durable route generation change. The Celery rollback route this row previously described is retired."
     },
     {
       "id": "sync_dispatch_transport_route:contracts/sync-dispatch/v1/transport-routes.json:17",
@@ -815,10 +815,10 @@
       "target_kind_id": "route:post_sync",
       "current_implementation_state": "native_go",
       "verification_status": "verified",
-      "compatibility_dependency": "contracts/sync-dispatch/v1/transport-routes.json route=river, rollback_route=celery; the Python post-sync fan-out remains the rollback compatibility target.",
-      "deletion_evidence_requirement": "Remove this transitional inventory row after the Celery rollback route and Python post-sync compatibility fan-out are retired; preserve the River route contract while the native coordinator remains active.",
+      "compatibility_dependency": "contracts/sync-dispatch/v1/transport-routes.json now declares rollback_route=none for this kind, so no route mechanism can select the Python post-sync fan-out any longer; the fan-out implementation itself (src/dev_health_ops/workers/post_sync_dispatch.py) remains in the tree pending its own separate removal decision.",
+      "deletion_evidence_requirement": "Remove this transitional inventory row once the Python post-sync fan-out implementation is deleted; the Celery-rollback-route half of this row's original condition is satisfied by the checked-in rollback_route=none.",
       "acceptance_test_id": "tests/test_sync_units.py",
-      "notes": "route=river, rollback_route=celery; native Go owns the active post-sync route, while rollback fans out through Python"
+      "notes": "route=river, rollback_route=none; native Go owns the active post-sync route. The Celery rollback route is retired; the Python post-sync fan-out is unreachable through any route mechanism but has not itself been deleted."
     },
     {
       "id": "sync_dispatch_transport_route:contracts/sync-dispatch/v1/transport-routes.json:23",
@@ -839,10 +839,10 @@
       "target_kind_id": "route:reference_discovery",
       "current_implementation_state": "native_go",
       "verification_status": "verified",
-      "compatibility_dependency": "contracts/sync-dispatch/v1/transport-routes.json route=river, rollback_route=celery; the checked-in route is applied through the audited durable route-row controller.",
-      "deletion_evidence_requirement": "Remove this transitional inventory row after the Celery rollback route is retired; preserve the River route contract while native Go reference discovery remains active.",
+      "compatibility_dependency": "None. contracts/sync-dispatch/v1/transport-routes.json now declares rollback_route=none for this kind -- no Celery producer serves it in any deployment, and the checked-in route is applied through the audited durable route-row controller.",
+      "deletion_evidence_requirement": "None. This row tracks the checked-in transport-routes.json kind entry itself, not a Celery compatibility bridge; discovery requires one row per kind while that entry exists.",
       "acceptance_test_id": "tests/test_sync_units.py",
-      "notes": "route=river, rollback_route=celery; ApplyCheckedIn records the durable route generation change"
+      "notes": "route=river, rollback_route=none; ApplyCheckedIn records the durable route generation change. The Celery rollback route this row previously described is retired."
     }
   ]
 }

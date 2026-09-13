@@ -48,6 +48,11 @@ const (
 
 	RouteCelery = "celery"
 	RouteRiver  = "river"
+
+	// RouteNone is the only accepted rollback_route value once a kind's
+	// Celery rollback route is retired: no Celery producer exists for it in
+	// any deployment, so there is no fallback target below river.
+	RouteNone = "none"
 )
 
 // dispatchStaleSecondsEnv and defaultDispatchStaleSeconds are the same
@@ -211,6 +216,9 @@ var frozenDeliveries = map[string]string{
 }
 
 func validRoutePair(route, rollbackRoute string) bool {
+	if route == RouteRiver && rollbackRoute == RouteNone {
+		return true
+	}
 	return rollbackRoute == RouteCelery && (route == RouteCelery || route == RouteRiver)
 }
 

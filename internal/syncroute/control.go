@@ -122,7 +122,8 @@ func newController(
 }
 
 func (controller *Controller) Inspect(ctx context.Context, kind string) (RouteState, error) {
-	if !controller.validKind(kind) {
+	descriptor, known := controller.validDescriptor(kind)
+	if !known {
 		return RouteState{}, ErrUnknownRoute
 	}
 	tx, err := controller.begin(ctx)
@@ -130,7 +131,7 @@ func (controller *Controller) Inspect(ctx context.Context, kind string) (RouteSt
 		return RouteState{}, ErrUnavailable
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	state, err := readRouteState(ctx, tx, kind, controller.now().UTC(), false)
+	state, err := readRouteState(ctx, tx, kind, descriptor.RollbackRoute, controller.now().UTC(), false)
 	if err != nil {
 		return RouteState{}, err
 	}
@@ -240,7 +241,8 @@ RETURNING generation, paused_at`, kind, now, state.Generation)
 
 // Drain proves whether a paused route has any unexpired database claims.
 func (controller *Controller) Drain(ctx context.Context, kind string) (RouteState, error) {
-	if !controller.validKind(kind) {
+	descriptor, known := controller.validDescriptor(kind)
+	if !known {
 		return RouteState{}, ErrUnknownRoute
 	}
 	tx, err := controller.begin(ctx)
@@ -248,7 +250,7 @@ func (controller *Controller) Drain(ctx context.Context, kind string) (RouteStat
 		return RouteState{}, ErrUnavailable
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	state, err := readRouteState(ctx, tx, kind, controller.now().UTC(), true)
+	state, err := readRouteState(ctx, tx, kind, descriptor.RollbackRoute, controller.now().UTC(), true)
 	if err != nil {
 		return RouteState{}, err
 	}
@@ -352,11 +354,15 @@ func (controller *Controller) beginRouteMutation(
 	kind string,
 	now time.Time,
 ) (pgx.Tx, RouteState, error) {
+	descriptor, known := controller.validDescriptor(kind)
+	if !known {
+		return nil, RouteState{}, ErrUnknownRoute
+	}
 	tx, err := controller.begin(ctx)
 	if err != nil || tx == nil {
 		return nil, RouteState{}, ErrUnavailable
 	}
-	if _, err := readRouteRecord(ctx, tx, kind, true); err != nil {
+	if _, err := readRouteRecord(ctx, tx, kind, descriptor.RollbackRoute, true); err != nil {
 		_ = tx.Rollback(ctx)
 		return nil, RouteState{}, err
 	}
@@ -364,7 +370,7 @@ func (controller *Controller) beginRouteMutation(
 		_ = tx.Rollback(ctx)
 		return nil, RouteState{}, ErrUnavailable
 	}
-	state, err := readRouteState(ctx, tx, kind, now, true)
+	state, err := readRouteState(ctx, tx, kind, descriptor.RollbackRoute, now, true)
 	if err != nil {
 		_ = tx.Rollback(ctx)
 		return nil, RouteState{}, err
@@ -380,8 +386,19 @@ func (controller *Controller) validKind(kind string) bool {
 	return ok
 }
 
-func readRouteState(ctx context.Context, tx pgx.Tx, kind string, now time.Time, lock bool) (RouteState, error) {
-	state, err := readRouteRecord(ctx, tx, kind, lock)
+// validDescriptor is validKind plus the looked-up descriptor, for callers that
+// need the kind's checked-in rollback route to validate the persisted row
+// against -- not a hardcoded literal, since a retired kind's rollback route is
+// "none" while an unretired one's is still "celery".
+func (controller *Controller) validDescriptor(kind string) (syncdispatchcontract.Descriptor, bool) {
+	if controller == nil || controller.registry == nil {
+		return syncdispatchcontract.Descriptor{}, false
+	}
+	return controller.registry.Lookup(kind)
+}
+
+func readRouteState(ctx context.Context, tx pgx.Tx, kind, expectedRollback string, now time.Time, lock bool) (RouteState, error) {
+	state, err := readRouteRecord(ctx, tx, kind, expectedRollback, lock)
 	if err != nil {
 		return RouteState{}, err
 	}
@@ -389,7 +406,7 @@ func readRouteState(ctx context.Context, tx pgx.Tx, kind string, now time.Time, 
 	return state, err
 }
 
-func readRouteRecord(ctx context.Context, tx pgx.Tx, kind string, lock bool) (RouteState, error) {
+func readRouteRecord(ctx context.Context, tx pgx.Tx, kind, expectedRollback string, lock bool) (RouteState, error) {
 	suffix := ""
 	if lock {
 		suffix = " FOR UPDATE"
@@ -410,7 +427,7 @@ WHERE kind = $1`+suffix, kind).Scan(
 	}
 	if state.Generation < 1 || state.Paused != (state.PausedAt != nil) ||
 		(state.Transport != syncdispatchcontract.RouteCelery && state.Transport != syncdispatchcontract.RouteRiver) ||
-		state.RollbackTransport != syncdispatchcontract.RouteCelery {
+		state.RollbackTransport != expectedRollback {
 		return RouteState{}, ErrDrift
 	}
 	return state, nil

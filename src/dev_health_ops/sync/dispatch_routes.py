@@ -38,6 +38,10 @@ _ALLOWED_TRANSPORT_PAIRS = frozenset(
     {
         ("celery", "celery"),
         ("river", "celery"),
+        # No Celery producer exists for any of the four frozen kinds in any
+        # deployment; a rollback_route of "none" is the completed shape for a
+        # river-routed kind once its Celery rollback route is retired.
+        ("river", "none"),
     }
 )
 

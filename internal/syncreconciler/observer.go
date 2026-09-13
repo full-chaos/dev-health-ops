@@ -298,7 +298,7 @@ func fixedDescriptors(registry Registry) ([]syncdispatchcontract.Descriptor, err
 		descriptor, ok := registry.Lookup(kind)
 		expectedDelivery := syncdispatchcontract.DeliveryAtLeastOnce
 		if !ok || descriptor.Kind != kind || descriptor.Delivery != expectedDelivery ||
-			descriptor.RollbackRoute != syncdispatchcontract.RouteCelery ||
+			(descriptor.RollbackRoute != syncdispatchcontract.RouteCelery && descriptor.RollbackRoute != syncdispatchcontract.RouteNone) ||
 			(descriptor.Route != syncdispatchcontract.RouteCelery && descriptor.Route != syncdispatchcontract.RouteRiver) {
 			return nil, ErrInvalidConfiguration
 		}

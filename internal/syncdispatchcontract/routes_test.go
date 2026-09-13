@@ -25,8 +25,8 @@ func TestCheckedInArtifactIsFrozenAndLookupIsImmutable(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s route is missing", kind)
 		}
-		if descriptor.Route != RouteRiver || descriptor.RollbackRoute != RouteCelery {
-			t.Fatalf("%s descriptor is not River with Celery rollback: %#v", kind, descriptor)
+		if descriptor.Route != RouteRiver || descriptor.RollbackRoute != RouteNone {
+			t.Fatalf("%s descriptor is not River with its Celery rollback retired: %#v", kind, descriptor)
 		}
 	}
 	descriptor, ok := registry.Lookup(KindPostSync)
@@ -58,6 +58,7 @@ func TestLoadRejectsInvalidArtifacts(t *testing.T) {
 		{name: "unknown route", contents: strings.Replace(canonicalArtifact, `"route": "celery"`, `"route": "sqs"`, 1)},
 		{name: "celery with river rollback", contents: strings.Replace(canonicalArtifact, `"rollback_route": "celery"`, `"rollback_route": "river"`, 1)},
 		{name: "river with river rollback", contents: strings.ReplaceAll(canonicalArtifact, `"celery"`, `"river"`)},
+		{name: "celery route with retired rollback", contents: strings.Replace(canonicalArtifact, `"rollback_route": "celery"`, `"rollback_route": "none"`, 1)},
 		{name: "trailing data", contents: canonicalArtifact + "\n{}"},
 	}
 	for _, test := range cases {
@@ -79,6 +80,24 @@ func TestLoadAcceptsSelectableRiverRoutes(t *testing.T) {
 	}
 	descriptor, ok := registry.Lookup(KindDispatchSyncRun)
 	if !ok || descriptor.Route != RouteRiver || descriptor.RollbackRoute != RouteCelery {
+		t.Fatalf("dispatch_sync_run descriptor = %#v", descriptor)
+	}
+}
+
+func TestLoadAcceptsARetiredRollbackRoute(t *testing.T) {
+	t.Parallel()
+	root := writeArtifact(t, strings.Replace(
+		canonicalArtifact,
+		`"kind": "dispatch_sync_run", "delivery": "at_least_once", "route": "celery", "rollback_route": "celery"`,
+		`"kind": "dispatch_sync_run", "delivery": "at_least_once", "route": "river", "rollback_route": "none"`,
+		1,
+	))
+	registry, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor, ok := registry.Lookup(KindDispatchSyncRun)
+	if !ok || descriptor.Route != RouteRiver || descriptor.RollbackRoute != RouteNone {
 		t.Fatalf("dispatch_sync_run descriptor = %#v", descriptor)
 	}
 }

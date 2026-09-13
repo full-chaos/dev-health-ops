@@ -501,8 +501,8 @@ func TestEveryDeclaredCitationCoversOnlyValueDifferences(t *testing.T) {
 			t.Fatalf("SpecFor(%s): %v", operation, err)
 		}
 		for _, defect := range spec.Parity.BaselineDefects {
-			// A RepoFanoutShape defect (investmentFull's CHAOS-4773)
-			// replaces the blanket "any leaf value differs -> covered"
+			// A RepoFanoutShape defect (the repos-join fan-out declared
+			// on investmentFull) replaces the blanket "any leaf value differs -> covered"
 			// rule this sweep assumes with a shape-specific
 			// reconstruction over the real sankey nodes/edges -- a bare
 			// "python"/"go" string at the cited path is neither, so this

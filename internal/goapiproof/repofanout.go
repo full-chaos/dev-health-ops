@@ -8,10 +8,11 @@ import (
 
 // RepoFanoutShape, set on a BaselineDefect, narrows that defect's blanket
 // "any leaf difference under Paths is covered" rule to the ONE transform
-// CHAOS-4773's repos-join fan-out can actually produce, instead of
-// admitting any value difference under the cited sankey/coverage paths.
+// the repos-join fan-out declared on investmentFull can actually produce,
+// instead of admitting any value difference under the cited sankey/coverage
+// paths.
 //
-// Why the blanket form was not enough, measured: the CHAOS-4773 citation
+// Why the blanket form was not enough, measured: the declared citation
 // on investmentFull covers data.analytics.sankey.nodes/.edges.value and
 // .coverage.teamCoverage/.repoCoverage as a whole subtree, so ANY
 // difference under those four paths -- including a real Go sankey

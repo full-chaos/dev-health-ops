@@ -8,8 +8,8 @@ import (
 )
 
 // This file exercises RepoFanoutShape (repofanout.go) directly through
-// the registered investmentFull CHAOS-4773 declaration: the SHAPE-SPECIFIC
-// admission that replaced its blanket "any difference under
+// the registered repos-join fan-out declaration on investmentFull: the
+// SHAPE-SPECIFIC admission that replaced its blanket "any difference under
 // sankey.nodes/.edges/.coverage is covered" rule. Every baseline here is
 // built from the committed job5 CANDIDATE capture
 // (testdata/investmentfull_candidate_job5_7ae7cb5b.json) so every field
@@ -45,9 +45,9 @@ func sankeyOf(t *testing.T, body map[string]any) map[string]any {
 }
 
 // applyRepoFanout mutates a baseline's sankey subtree to look exactly
-// like what CHAOS-4773's real mechanism produces for the given per-repo
-// multipliers: each named REPO node and every THEME->REPO edge into it
-// scale by its own k; each affected THEME node gains the SAME per-repo
+// like what the repos-join fan-out's real mechanism produces for the
+// given per-repo multipliers: each named REPO node and every THEME->REPO
+// edge into it scale by its own k; each affected THEME node gains the SAME per-repo
 // inflation its own edges now carry; and the aggregate total that
 // inflation implies is dumped onto one arbitrarily-chosen TEAM node and
 // one TEAM->THEME edge (the shape's own TEAM/THEME rule 4 only checks the

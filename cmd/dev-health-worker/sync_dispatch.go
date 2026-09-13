@@ -583,8 +583,8 @@ func buildSyncCoordinatorWorker(
 		// native projects catalog, Go-native: a Jira project IS the team
 		// unit (no separate team concept), its lead is the only discovered
 		// member, and board/sprint reference discovery mirrors Linear's
-		// cycles. Closes out CHAOS-4431's provider set -- every provider
-		// team_provider_capabilities() lists now has a native collector, so
+		// cycles. This closes out the native-collector provider set --
+		// every provider team_provider_capabilities() lists now has one, so
 		// the Python bridge's TeamAutoImport is unreachable for all of them.
 		"jira": providersync.JiraTeamCatalogCollector{
 			Handler: providersync.JiraTeamCatalogRouteHandler{},

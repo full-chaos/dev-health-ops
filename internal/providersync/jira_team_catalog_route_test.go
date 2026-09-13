@@ -65,9 +65,9 @@ const jiraTeamCatalogProjectSearchURI = "/rest/api/3/project/search?maxResults=1
 // TestJiraTeamCatalogCollectSkipsOneBoardsSprint400UnderStrict ports
 // team_autoimport_jira's test_jira_populate_skips_one_boards_sprint_400_
 // under_strict_reference_discovery: board 81 answers the documented
-// "no sprint support" 400, board 82 returns a sprint normally -- CHAOS-4357
-// requires the whole walk to still succeed, strict included, with the
-// healthy board's sprint landing and the failing board simply absent.
+// "no sprint support" 400, board 82 returns a sprint normally -- the whole
+// walk must still succeed, strict included, with the healthy board's
+// sprint landing and the failing board simply absent.
 func TestJiraTeamCatalogCollectSkipsOneBoardsSprint400UnderStrict(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
@@ -112,8 +112,8 @@ func TestJiraTeamCatalogCollectSkipsOneBoardsSprint400UnderStrict(t *testing.T) 
 
 // TestJiraTeamCatalogCollectResolvesSprintsWhenNothingSelectedUnderStrict
 // ports test_jira_strict_reference_discovery_still_resolves_sprints_when_
-// all_categories_off (CHAOS-4437): sprint/cycle reference discovery is
-// unconditional under strict, even with every CHAOS-4323 selection off.
+// all_categories_off: sprint/cycle reference discovery is unconditional
+// under strict, even with every category selection off.
 func TestJiraTeamCatalogCollectResolvesSprintsWhenNothingSelectedUnderStrict(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
@@ -222,7 +222,7 @@ func TestJiraTeamCatalogCollectReraisesABoardListing400UnderStrict(t *testing.T)
 
 // TestJiraTeamCatalogCollectSkipsBoardDiscoveryForNonSoftwareProjectUnderStrict
 // ports test_jira_populate_skips_board_discovery_for_a_non_software_
-// project_under_strict_reference_discovery (CHAOS-4575): a service_desk
+// project_under_strict_reference_discovery: a service_desk
 // project's board discovery is skipped entirely (iter_boards must never
 // even be called for it), but its project/ownership rows still land --
 // the skip is boards-only, never project-level.
@@ -278,9 +278,9 @@ func TestJiraTeamCatalogCollectSkipsBoardDiscoveryForNonSoftwareProjectUnderStri
 
 // TestJiraTeamCatalogCollectRaisesOnUnrecognizedProjectTypeUnderStrict ports
 // test_jira_populate_raises_on_an_unrecognized_project_type_under_strict_
-// reference_discovery (CHAOS-4575 codex P2): an unrecognized projectTypeKey
-// is not the same as a confirmed non-board-capable type and must propagate,
-// never be silently skipped.
+// reference_discovery: an unrecognized projectTypeKey is not the same as a
+// confirmed non-board-capable type and must propagate, never be silently
+// skipped.
 func TestJiraTeamCatalogCollectRaisesOnUnrecognizedProjectTypeUnderStrict(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)

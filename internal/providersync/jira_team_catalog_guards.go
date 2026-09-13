@@ -8,7 +8,7 @@ import (
 )
 
 // jira_team_catalog_guards.go is Jira's own thin wrapper over the two
-// shared, provider-agnostic fail-safe guards CHAOS-4431 built for Linear
+// shared, provider-agnostic fail-safe guards built for Linear
 // (team_membership_conflict_guard.go finding #6, team_sync_policy_guard.go
 // finding #3) and every native collector since reuses -- same shape,
 // Jira-typed rows.
@@ -57,7 +57,7 @@ func jiraMembershipConflictsWithManualState(
 // applyJiraTeamMembershipConflictGuard filters a batch of native membership
 // rows against both active-conflict sources, returning the rows safe to
 // write and a count of how many were skipped -- mirrors
-// applyTeamMembershipConflictGuard exactly. CHAOS-4444: every skipped
+// applyTeamMembershipConflictGuard exactly. Every skipped
 // (conflicting) row is also staged as a team_drift_changes row via the
 // shared reviewMembershipsForDrift engine, and a stale pending row for a
 // member this run observed but no longer sees conflicting (or sees at all)
@@ -100,7 +100,7 @@ func applyJiraTeamMembershipConflictGuard(
 }
 
 // applyJiraTeamSyncPolicyGuard is Jira's wrapper over the shared
-// reviewTeamRowsForDrift engine (team_drift_review.go, CHAOS-4444): a team
+// reviewTeamRowsForDrift engine (team_drift_review.go): a team
 // whose sync_policy is not the auto-apply default (0) is left completely
 // untouched by this write, and its diff against the currently-persisted row
 // is staged as a team_drift_changes row for review. Mirrors

@@ -33,7 +33,7 @@ const (
 )
 
 // _JIRA_BOARD_CAPABLE_PROJECT_TYPES / _JIRA_NO_BOARD_PROJECT_TYPES port
-// team_autoimport_jira.py's identical allowlists verbatim (CHAOS-4575): only
+// team_autoimport_jira.py's identical allowlists verbatim: only
 // "software" projects have Agile boards; service_desk/business/
 // product_discovery are confirmed to have none; any other/unknown type is a
 // hard failure, never a silent skip (an unrecognized type could be a real
@@ -48,10 +48,10 @@ var jiraTeamCatalogNoBoardProjectTypes = map[string]bool{
 
 // JiraTeamCatalogRouteHandler owns the provider-only team/project-ownership/
 // membership/sprint catalog walk that ports
-// src/dev_health_ops/workers/team_autoimport_jira.py. Claim-free (CHAOS-4431
-// ruling, team-lead 2026-08-28, option (c)): team/member/project reference
-// discovery runs once per sync run per provider, not as a claimed
-// provider-unit. It stays DB-free -- JiraTeamCatalogCollector (below) merges
+// src/dev_health_ops/workers/team_autoimport_jira.py. Claim-free by design:
+// team/member/project reference discovery runs once per sync run per
+// provider, not as a claimed provider-unit. It stays DB-free --
+// JiraTeamCatalogCollector (below) merges
 // in the jira_project_ops_team_links legacy carry-forward, which needs the
 // ClickHouse connection this Handler deliberately never sees.
 type JiraTeamCatalogRouteHandler struct{}
@@ -125,8 +125,8 @@ func (handler JiraTeamCatalogRouteHandler) CollectTeamCatalog(
 		client.Doer == nil || client.Lease == nil || normalizedAt.IsZero() {
 		return JiraTeamCatalogBatch{}, ErrInvalidConfiguration
 	}
-	// CHAOS-4437 parity: sprint/cycle reference discovery is unconditional
-	// reference data, so the early exit below (matching Python's
+	// Sprint/cycle reference discovery is unconditional reference data, so
+	// the early exit below (matching Python's
 	// `if not strict and not (want_teams or want_projects or want_members)`)
 	// is the ONLY gate on it -- a strict call always proceeds even with
 	// every selection off.
@@ -410,9 +410,8 @@ func jiraTeamCatalogSkippable400Detail(body []byte) string {
 
 // JiraTeamCatalogCollector adapts JiraTeamCatalogRouteHandler (the collection
 // walk) and JiraTeamCatalogClickHouseEffects (the write) to the shared,
-// claim-free TeamCatalogCollector seam (CHAOS-4431, team-lead ruling
-// 2026-08-28, option (c)) -- the same shape Linear/GitHub/GitLab's
-// collectors use.
+// claim-free TeamCatalogCollector seam -- the same shape Linear/GitHub/
+// GitLab's collectors use.
 type JiraTeamCatalogCollector struct {
 	Handler JiraTeamCatalogRouteHandler
 	Sink    JiraTeamCatalogClickHouseEffects
@@ -560,9 +559,9 @@ func (collector JiraTeamCatalogCollector) CollectTeamCatalog(
 		}
 		result.ProjectsWritten = len(projects)
 	}
-	// Sprints are unconditional reference data (CHAOS-4437 parity), written
-	// whenever the walk reached this point at all -- see the function doc
-	// comment on collectSprints.
+	// Sprints are unconditional reference data, written whenever the walk
+	// reached this point at all -- see the function doc comment on
+	// collectSprints.
 	sprintsEffect, effectErr := effectBatchFromValues(jiraTeamCatalogSprintsDestination, EffectReadbackRequired, batch.Rows.Sprints)
 	if effectErr != nil {
 		return result, effectErr

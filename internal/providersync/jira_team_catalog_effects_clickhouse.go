@@ -154,8 +154,8 @@ func (sink JiraTeamCatalogClickHouseEffects) InspectEffect(ctx context.Context, 
 
 // validateRequest deliberately does NOT call claim.Validate() -- see
 // GitLabTeamCatalogClickHouseEffects.validateRequest's identical doc
-// comment: this write path is claim-free (CHAOS-4431 ruling, option (c)),
-// with no lease or claimed provider-unit behind it.
+// comment: this write path is claim-free by design, with no lease or
+// claimed provider-unit behind it.
 func (sink JiraTeamCatalogClickHouseEffects) validateRequest(ctx context.Context, claim Claim, effect EffectBatch) error {
 	if ctx == nil || sink.Lease == nil || sink.Conn == nil ||
 		claim.Provider != jiraTeamCatalogProvider || strings.TrimSpace(claim.OrgID) == "" ||

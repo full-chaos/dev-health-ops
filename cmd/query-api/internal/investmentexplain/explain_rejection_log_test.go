@@ -11,10 +11,10 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
 )
 
-// TestParseInvestmentMixResponseReasonForMalformedOutput is CHAOS-5682's
-// red-first test for the parser side of the fix: before ParseResult grew
-// a Reason field, every one of these malformed shapes collapsed onto the
-// bare ParseStatus with nothing else to log -- a real prod rejection was
+// TestParseInvestmentMixResponseReasonForMalformedOutput is the red-first
+// test for the parser side of the fix: before ParseResult grew a Reason
+// field, every one of these malformed shapes collapsed onto the bare
+// ParseStatus with nothing else to log -- a real prod rejection was
 // indistinguishable from any other. Each case here feeds a genuinely
 // malformed completion through the real parser and asserts Status AND
 // that Reason names the specific field that failed, not just "invalid".
@@ -93,15 +93,15 @@ func TestParseInvestmentMixResponseReasonForMalformedOutput(t *testing.T) {
 	}
 }
 
-// TestLogRejectedExplainOutputFields is CHAOS-5682's red-first test for
-// the actual telemetry deliverable: before logRejectedExplainOutput
-// existed, a strict-parser rejection logged NOTHING -- reason, provider,
-// model, token counts and the raw completion were all silently
-// discarded, which is exactly what made the real prod incident
-// (ClickHouse llm_token_usage showing a genuine gpt-5-nano call at the
-// invalid_llm_output fallback's receipt time) undiagnosable from the
-// logs alone. This asserts every field CHAOS-5682 asks for actually
-// lands on the warn line, with the correct value.
+// TestLogRejectedExplainOutputFields is the red-first test for the
+// actual telemetry deliverable: before logRejectedExplainOutput existed,
+// a strict-parser rejection logged NOTHING -- reason, provider, model,
+// token counts and the raw completion were all silently discarded,
+// which is exactly what made the real prod incident (ClickHouse
+// llm_token_usage showing a genuine LLM call at the invalid_llm_output
+// fallback's receipt time) undiagnosable from the logs alone. This
+// asserts every field the fix is meant to log actually lands on the
+// warn line, with the correct value.
 func TestLogRejectedExplainOutputFields(t *testing.T) {
 	var buf bytes.Buffer
 	previous := slog.Default()

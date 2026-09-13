@@ -83,9 +83,9 @@ type InvestmentMixExplainOutput struct {
 // with no finer-grained "why" attached (only two of its many bail-out
 // points even log a message, and neither is structured). Reason exists
 // purely so a caller can put something better than the bare Status into
-// a log line (CHAOS-5682: prod was logging NOTHING on invalid_llm_output,
-// discarding the real LLM answer along with any way to tell "parser bug"
-// from "bad completion" apart). It carries no parity weight and MUST
+// a log line: prod was logging NOTHING on invalid_llm_output, discarding
+// the real LLM answer along with any way to tell "parser bug" from "bad
+// completion" apart. It carries no parity weight and MUST
 // NOT be compared by any golden/differential test -- only Status and
 // Output are ported fields.
 type ParseResult struct {

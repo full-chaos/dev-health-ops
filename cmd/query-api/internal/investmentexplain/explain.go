@@ -174,21 +174,21 @@ func invalidLLMOutputExplanation(topThemes []keyValue, totalEffort float64, conf
 
 // llmOutputRejectionLogHeadRunes caps how much of a rejected LLM
 // completion's raw text logRejectedExplainOutput will echo into a log
-// line -- CHAOS-5682 asks for "a redacted head", not the whole
-// completion (investment-mix explain output can carry customer quote
-// text pulled from work-unit evidence, and prod logs are not a place to
-// mirror that verbatim at full length).
+// line -- a REDACTED head, not the whole completion (investment-mix
+// explain output can carry customer quote text pulled from work-unit
+// evidence, and prod logs are not a place to mirror that verbatim at
+// full length).
 const llmOutputRejectionLogHeadRunes = 300
 
-// logRejectedExplainOutput is CHAOS-5682's telemetry deliverable: before
-// this, a strict-parser rejection (parseResult.Output == nil, covering
-// all three non-valid ParseStatus values) fell straight through to
+// logRejectedExplainOutput closes a real telemetry gap: before this, a
+// strict-parser rejection (parseResult.Output == nil, covering all three
+// non-valid ParseStatus values) fell straight through to
 // invalidLLMOutputExplanation with NOTHING logged -- the reason the
 // parser rejected the completion, which provider/model answered, and the
 // completion's own text were all discarded together. That made a real
 // LLM answer the parser refused (confirmed in prod via ClickHouse
-// llm_token_usage showing a genuine gpt-5-nano call at the fallback's
-// receipt time) indistinguishable from a parser bug from the logs alone.
+// llm_token_usage showing a genuine model call at the fallback's receipt
+// time) indistinguishable from a parser bug from the logs alone.
 //
 // completion.Text is truncated to llmOutputRejectionLogHeadRunes runes
 // and newlines are escaped so the rejection reason stays on one log

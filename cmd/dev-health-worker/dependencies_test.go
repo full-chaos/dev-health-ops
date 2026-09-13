@@ -1463,6 +1463,96 @@ func TestPoolReadinessErrorsAreCollapsedToStableFailure(t *testing.T) {
 	}
 }
 
+// TestDependencyCheckFailedPreservesTheUnderlyingCauseForClassification is
+// the regression test for the roll-storm incident: go-sync-provider's rev 32
+// restart logged river_schema and queue_postgres each failing with their own
+// context deadline exceeded, yet the aggregate still refused as a genuine,
+// non-retryable failure. queueReady/riverSchemaReady (and the other checks
+// sharing this shape) used to replace whatever error the real dependency
+// returned with the bare errWorkerDependencyUnavailable sentinel before
+// returning -- so health.Registry's classifier (which decides retryability
+// by unwrapping the CheckFunc's own returned error, never the logged text)
+// could never see that the real cause was a deadline, no matter how the
+// underlying driver wrapped it. The errors constructed here are the exact
+// shape postgres.CheckQueueAuthorization / riverstore.CheckSchema really
+// produce against a context that expires (verified directly against a real
+// Postgres connection in the integration suite).
+func TestDependencyCheckFailedPreservesTheUnderlyingCauseForClassification(t *testing.T) {
+	database := &fakeWorkerDatabase{
+		queueErr:  fmt.Errorf("%w: querying queue role posture: %w", postgres.ErrUnavailable, context.DeadlineExceeded),
+		schemaErr: fmt.Errorf("%w: error checking if `river_migration` exists: %w", riverstore.ErrSchemaCheckUnavailable, context.DeadlineExceeded),
+	}
+	dependencies := &workerDependencies{database: database}
+
+	queueErr := dependencies.queueReady(context.Background())
+	if !errors.Is(queueErr, errWorkerDependencyUnavailable) {
+		t.Fatalf("queueReady() error = %v, want errWorkerDependencyUnavailable", queueErr)
+	}
+	if !errors.Is(queueErr, context.DeadlineExceeded) {
+		t.Fatalf("queueReady() error = %v, want it to still unwrap to context.DeadlineExceeded", queueErr)
+	}
+
+	schemaErr := dependencies.riverSchemaReady("river")(context.Background())
+	if !errors.Is(schemaErr, errWorkerDependencyUnavailable) {
+		t.Fatalf("riverSchemaReady() error = %v, want errWorkerDependencyUnavailable", schemaErr)
+	}
+	if !errors.Is(schemaErr, context.DeadlineExceeded) {
+		t.Fatalf("riverSchemaReady() error = %v, want it to still unwrap to context.DeadlineExceeded", schemaErr)
+	}
+}
+
+// TestPreclaimReadinessRetriesRealCheckWrappersWhenBothMembersTimeOut
+// reproduces the production incident end to end, through the REAL
+// queueReady/riverSchemaReady wrappers (not a hand-rolled CheckFunc), with
+// the exact error shape those members really produce against an expiring
+// context. Both members time out together; the aggregate must retry rather
+// than exit on the first attempt.
+func TestPreclaimReadinessRetriesRealCheckWrappersWhenBothMembersTimeOut(t *testing.T) {
+	t.Parallel()
+	const checkTimeout = 10 * time.Millisecond
+	const wantSuccessAttempt = 2
+
+	database := &fakeWorkerDatabase{
+		queueErr:  fmt.Errorf("%w: querying queue role posture: %w", postgres.ErrUnavailable, context.DeadlineExceeded),
+		schemaErr: fmt.Errorf("%w: error checking if `river_migration` exists: %w", riverstore.ErrSchemaCheckUnavailable, context.DeadlineExceeded),
+	}
+	dependencies := &workerDependencies{database: database}
+
+	registry := health.NewRegistry(checkTimeout)
+	var queueAttempts, schemaAttempts atomic.Int32
+	if err := registry.RegisterRequired("queue_postgres", func(ctx context.Context) error {
+		if queueAttempts.Add(1) < wantSuccessAttempt {
+			return dependencies.queueReady(ctx)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	schemaCheck := dependencies.riverSchemaReady("river")
+	if err := registry.RegisterRequired("river_schema", func(ctx context.Context) error {
+		if schemaAttempts.Add(1) < wantSuccessAttempt {
+			return schemaCheck(ctx)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var logs bytes.Buffer
+	component := preclaimReadinessComponent{
+		registry: registry,
+		logger:   slog.New(slog.NewJSONHandler(&logs, nil)),
+		budget:   time.Second,
+		sleep:    preclaimSleepAfterCheckTimeout(checkTimeout),
+	}
+	if err := component.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v, want nil: both real members timing out together must be retryable", err)
+	}
+	if strings.Contains(logs.String(), "preclaim readiness refused") {
+		t.Fatalf("both real check wrappers timing out must never refuse: %s", logs.String())
+	}
+}
+
 // TestReadinessCheckFailuresLogTheCheckNameAndUnderlyingError is the
 // regression test for CHAOS-5435: before this fix, domainReady/queueReady/
 // riverSchemaReady/idempotencyBackendReady all discarded the real error and

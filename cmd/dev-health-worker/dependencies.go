@@ -81,6 +81,32 @@ func (failure dependencyFailure) DependencyReason() string { return failure.reas
 
 func dependencyUnavailable(reason string) error { return dependencyFailure{reason: reason} }
 
+// dependencyCheckFailed wraps a required check's own error behind the
+// errWorkerDependencyUnavailable sentinel every existing caller already
+// tests for with errors.Is, WITHOUT discarding the original error the way
+// returning the bare sentinel used to. health.Registry never exposes a
+// CheckFunc's returned error anywhere external (registry.go: "Error text is
+// deliberately never returned by the HTTP surface") -- it only uses it
+// in-process to decide whether the failure is a timeout
+// (errors.Is(err, context.DeadlineExceeded) / context.Canceled, in
+// requiredCheck.execute) before discarding it too. Returning the bare
+// sentinel broke exactly that classification: a check whose own pgx call
+// against a context deadline correctly returns an error unwrapping to
+// context.DeadlineExceeded (verified against the real driver) was turned,
+// the instant it passed through here, into an error indistinguishable from
+// a genuine posture mismatch -- so every failing required check always
+// looked non-retryable to preclaimReadinessComponent.Start, regardless of
+// its real cause. A fleet-wide roll that pushed river_schema and
+// queue_postgres past their per-check timeout together hit exactly this:
+// both members actually failed with a wrapped context.DeadlineExceeded, but
+// the aggregate was reported (and treated) as a genuine, non-retryable
+// failure. The operator-facing log line (logDependencyCheckFailure) already
+// carries the real error text; this only restores that same detail to the
+// in-process return value the classifier reads.
+func dependencyCheckFailed(err error) error {
+	return fmt.Errorf("%w: %w", errWorkerDependencyUnavailable, err)
+}
+
 // preserveDependencyReason keeps an error that ALREADY names its own failing
 // construction site, and only attaches fallback to one that does not.
 //
@@ -1877,7 +1903,7 @@ func (dependencies *workerDependencies) domainReady(ctx context.Context) error {
 	}
 	if err := dependencies.database.DomainReady(ctx); err != nil {
 		dependencies.logDependencyCheckFailure(ctx, "domain_postgres", err)
-		return errWorkerDependencyUnavailable
+		return dependencyCheckFailed(err)
 	}
 	return nil
 }
@@ -1888,7 +1914,7 @@ func (dependencies *workerDependencies) queueReady(ctx context.Context) error {
 	}
 	if err := dependencies.database.QueueReady(ctx); err != nil {
 		dependencies.logDependencyCheckFailure(ctx, "queue_postgres", err)
-		return errWorkerDependencyUnavailable
+		return dependencyCheckFailed(err)
 	}
 	return nil
 }
@@ -1909,7 +1935,7 @@ func (dependencies *workerDependencies) postureManifestLockstepReady(ctx context
 	}
 	if err := dependencies.postureGuard.Ready(ctx); err != nil {
 		dependencies.logDependencyCheckFailure(ctx, "posture_manifest_lockstep", err)
-		return errWorkerDependencyUnavailable
+		return dependencyCheckFailed(err)
 	}
 	return nil
 }
@@ -1950,7 +1976,7 @@ func (dependencies *workerDependencies) idempotencyBackendReady(ctx context.Cont
 	}
 	if err := selfprobe.Once(ctx, dependencies.database.DomainTxOpener()); err != nil {
 		dependencies.logDependencyCheckFailure(ctx, "idempotency_backend", err)
-		return errWorkerDependencyUnavailable
+		return dependencyCheckFailed(err)
 	}
 	return nil
 }
@@ -1986,7 +2012,7 @@ func (dependencies *workerDependencies) riverSchemaReady(schema string) health.C
 		}
 		if err := dependencies.database.RiverSchemaReady(ctx, schema); err != nil {
 			dependencies.logDependencyCheckFailure(ctx, "river_schema", err)
-			return errWorkerDependencyUnavailable
+			return dependencyCheckFailed(err)
 		}
 		return nil
 	}

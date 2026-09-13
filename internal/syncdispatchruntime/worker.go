@@ -92,8 +92,8 @@ func RegisterWorkers(
 // on: every provider that can ever write real team-catalog data now has a
 // registered native collector (see cmd/dev-health-worker/
 // team_catalog_clients.go), so the worker consuming sync.team_autoimport
-// jobs no longer needs the wide CoordinatorBridge (Dispatch/Finalize/
-// Discover) -- only the one method it actually calls.
+// jobs no longer needs the wide bridge (Dispatch/Finalize/Discover) -- only
+// the one method it actually calls.
 type TeamAutoImporter interface {
 	TeamAutoImport(context.Context, DomainReference) error
 }

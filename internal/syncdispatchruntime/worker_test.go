@@ -13,21 +13,6 @@ type recordingBridge struct {
 	teamReference DomainReference
 }
 
-func (bridge *recordingBridge) Dispatch(_ context.Context, _ DispatchSyncRunArgs) error {
-	bridge.calls = append(bridge.calls, "dispatch")
-	return nil
-}
-
-func (bridge *recordingBridge) Finalize(_ context.Context, _ FinalizeSyncRunArgs) error {
-	bridge.calls = append(bridge.calls, "finalize")
-	return nil
-}
-
-func (bridge *recordingBridge) Discover(_ context.Context, _ ReferenceDiscoveryArgs) error {
-	bridge.calls = append(bridge.calls, "discover")
-	return nil
-}
-
 func (bridge *recordingBridge) TeamAutoImport(_ context.Context, reference DomainReference) error {
 	bridge.calls = append(bridge.calls, "team_autoimport")
 	bridge.teamReference = reference

@@ -20,7 +20,6 @@ from dev_health_ops.models import (
 )
 from dev_health_ops.sync.budget_guard import batch_estimate_provider_budget_for_units
 from dev_health_ops.workers.reference_discovery import run_sync_reference_discovery
-from dev_health_ops.workers.sync_units import dispatch_sync_run, finalize_sync_run
 
 router = APIRouter(prefix="/api/internal/worker-sync", include_in_schema=False)
 
@@ -196,51 +195,6 @@ def _units_belong_to_run(
         .count()
     )
     return matched == len(set(unit_ids))
-
-
-@router.post("/dispatch", dependencies=[])
-async def dispatch_reference(
-    reference: SyncCoordinatorReference,
-    authorization: Annotated[str | None, Header()] = None,
-) -> dict[str, str]:
-    _authorize(authorization)
-    if not _current_river_reference(reference, kind="dispatch_sync_run"):
-        return {"status": "stale"}
-    # The function loads its SyncRun, units, reference-discovery ledger, budget
-    # state, and durable wakeups from PostgreSQL. The River message contains no
-    # executable command, credentials, or provider payload.
-    result = await run_in_threadpool(dispatch_sync_run.run, str(reference.sync_run_id))
-    return _result(
-        result,
-        accepted=frozenset(
-            {
-                "missing",
-                "feature_disabled",
-                "blocked_on_reference_discovery",
-                "denied",
-                "denied_active",
-                "dispatched",
-                "noop",
-                "waiting_inflight",
-                "deferred",
-            }
-        ),
-    )
-
-
-@router.post("/finalize", dependencies=[])
-async def finalize_reference(
-    reference: SyncCoordinatorReference,
-    authorization: Annotated[str | None, Header()] = None,
-) -> dict[str, str]:
-    _authorize(authorization)
-    if not _current_river_reference(reference, kind="finalize_sync_run"):
-        return {"status": "stale"}
-    result = await run_in_threadpool(finalize_sync_run.run, str(reference.sync_run_id))
-    return _result(
-        result,
-        accepted=frozenset({"missing", "pending", "already_dispatched", "finalized"}),
-    )
 
 
 @router.post("/reference-discovery", dependencies=[])

@@ -348,23 +348,9 @@ KIND_LEDGER: dict[str, dict[str, str]] = {
 # CURATED: one entry per bridge.go route (internal/syncdispatchruntime/bridge.go).
 # ---------------------------------------------------------------------------
 BRIDGE_ROUTE_LEDGER: dict[str, dict[str, str]] = {
-    "/api/internal/worker-sync/dispatch": {
-        "go_caller": "`bridge.go:98 HTTPBridge.Dispatch` — interface method exists but `RegisterWorkers` (`worker.go:72-87`) takes the 4 Native services, never `bridge`; no live registrant calls `.Dispatch()`",
-        "python_handler": "`worker_sync.py:205 dispatch_reference` -> `sync_units.py:761 dispatch_sync_run`",
-        "computes": "reads/writes `sync_run`, `sync_run_unit`, dispatches units",
-        "state": "dead in live wiring — superseded by `NativeDispatchSyncRunService` (CHAOS-4175, Done)",
-        "ticket": "CHAOS-4175 (Done)",
-    },
-    "/api/internal/worker-sync/finalize": {
-        "go_caller": "`bridge.go:102 HTTPBridge.Finalize` — same as above, no live registrant",
-        "python_handler": "`worker_sync.py:235 finalize_reference` -> `sync_units.py:2053 finalize_sync_run`",
-        "computes": "finalizes `sync_run`, coverage-cache invalidation, compute checkpoints",
-        "state": "dead in live wiring — superseded by `NativeFinalizeSyncRunService` (CHAOS-4175, Done)",
-        "ticket": "CHAOS-4175 (Done)",
-    },
     "/api/internal/worker-sync/reference-discovery": {
-        "go_caller": "`bridge.go:106 HTTPBridge.Discover` — same, no live registrant",
-        "python_handler": "`worker_sync.py:246 reference_discovery_reference` -> `reference_discovery.py:56 run_sync_reference_discovery`",
+        "go_caller": "`bridge.go:83 HTTPBridge.Discover` — interface method exists but `RegisterWorkers` (`worker.go:72-89`) takes the 4 Native services, never `bridge`; no live registrant calls `.Discover()`",
+        "python_handler": "`worker_sync.py:200 reference_discovery_reference` -> `reference_discovery.py:56 run_sync_reference_discovery`",
         "computes": "reference-discovery orchestration (claim/lease/heartbeat/outbox)",
         "state": "dead in live wiring — superseded by `NativeReferenceDiscoveryService` (CHAOS-4175, Done)",
         "ticket": "CHAOS-4175 (Done)",
@@ -404,7 +390,7 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
     },
     "post_sync_dispatch.py": {
         "category": "a",
-        "evidence": "build_post_sync_dispatch_payload called sync_units.py:2274, inside finalize_sync_run (live via worker_sync.py:26)",
+        "evidence": "build_post_sync_dispatch_payload called sync_units.py:2274, inside finalize_sync_run (live via direct callers processors/sync.py and backfill/runner.py -- the /finalize HTTP bridge route is deleted)",
         "ticket": "n/a",
     },
     "provider_family_contract.py": {
@@ -439,7 +425,7 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
     },
     "sync_units.py": {
         "category": "a",
-        "evidence": "dispatch_sync_run/finalize_sync_run imported worker_sync.py:26, served by /dispatch and /finalize",
+        "evidence": "dispatch_sync_run called directly by backfill/runner.py; finalize_sync_run called directly by processors/sync.py and dispatch_sync_run itself -- the /dispatch and /finalize HTTP bridge routes (and their dead Go HTTPBridge.Dispatch/.Finalize callers) are deleted outright",
         "ticket": "n/a",
     },
     "system_ops.py": {

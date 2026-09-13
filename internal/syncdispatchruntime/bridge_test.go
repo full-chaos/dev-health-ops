@@ -39,13 +39,13 @@ func TestHTTPBridgeSendsOnlyAuthenticatedReference(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	args := DispatchSyncRunArgs{TransportArgs: TransportArgs{
+	args := ReferenceDiscoveryArgs{TransportArgs: TransportArgs{
 		Version: ContractVersionV1, OrgID: testOrg, RunID: testRun, DispatchOutbox: testOutbox, RouteGeneration: 7,
 	}}
-	if err := bridge.Dispatch(context.Background(), args); err != nil {
+	if err := bridge.Discover(context.Background(), args); err != nil {
 		t.Fatal(err)
 	}
-	if path != "/api/internal/worker-sync/dispatch" {
+	if path != "/api/internal/worker-sync/reference-discovery" {
 		t.Fatalf("path=%q", path)
 	}
 }
@@ -67,11 +67,11 @@ func TestHTTPBridgeRejectsUnsafeOrUnsuccessfulDelivery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	args := FinalizeSyncRunArgs{TransportArgs: TransportArgs{
+	args := ReferenceDiscoveryArgs{TransportArgs: TransportArgs{
 		Version: ContractVersionV1, OrgID: testOrg, RunID: testRun, DispatchOutbox: testOutbox, RouteGeneration: 1,
 	}}
-	if err := bridge.Finalize(context.Background(), args); !errors.Is(err, ErrBridgeRequest) {
-		t.Fatalf("Finalize() error=%v", err)
+	if err := bridge.Discover(context.Background(), args); !errors.Is(err, ErrBridgeRequest) {
+		t.Fatalf("Discover() error=%v", err)
 	}
 }
 
@@ -93,10 +93,10 @@ func TestHTTPBridgeConnectionBudgetDoesNotCapWholeRequest(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	args := DispatchSyncRunArgs{TransportArgs: TransportArgs{
+	args := ReferenceDiscoveryArgs{TransportArgs: TransportArgs{
 		Version: ContractVersionV1, OrgID: testOrg, RunID: testRun, DispatchOutbox: testOutbox, RouteGeneration: 7,
 	}}
-	if err := bridge.Dispatch(ctx, args); err != nil {
+	if err := bridge.Discover(ctx, args); err != nil {
 		t.Fatal(err)
 	}
 }

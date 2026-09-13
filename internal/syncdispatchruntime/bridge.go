@@ -31,14 +31,6 @@ var (
 	ErrBridgeContractRejected = fmt.Errorf("%w: bridge rejected the request as malformed", ErrBridgeRequest)
 )
 
-// CoordinatorBridge is the reference-only execution seam used by River
-// workers. It deliberately does not expose an arbitrary command or payload.
-type CoordinatorBridge interface {
-	Dispatch(context.Context, DispatchSyncRunArgs) error
-	Finalize(context.Context, FinalizeSyncRunArgs) error
-	Discover(context.Context, ReferenceDiscoveryArgs) error
-}
-
 type HTTPBridgeConfig struct {
 	BaseURL       string
 	BearerToken   string
@@ -86,14 +78,6 @@ type bridgeReference struct {
 	SyncRunID       string `json:"sync_run_id"`
 	OutboxID        string `json:"outbox_id"`
 	RouteGeneration int64  `json:"route_generation"`
-}
-
-func (bridge *HTTPBridge) Dispatch(ctx context.Context, args DispatchSyncRunArgs) error {
-	return bridge.call(ctx, "/api/internal/worker-sync/dispatch", bridgeReferenceFor(args))
-}
-
-func (bridge *HTTPBridge) Finalize(ctx context.Context, args FinalizeSyncRunArgs) error {
-	return bridge.call(ctx, "/api/internal/worker-sync/finalize", bridgeReferenceFor(args))
 }
 
 func (bridge *HTTPBridge) Discover(ctx context.Context, args ReferenceDiscoveryArgs) error {

@@ -46,6 +46,17 @@ spec:
             - name: http
               containerPort: {{ .Values.queryApi.port }}
               protocol: TCP
+            {{- /*
+            Same port as `http` above, under the second name go-workers.yaml
+            already uses for its one operator-http port: this process serves
+            /metrics on the one address it already listens on (QUERY_API_ADDR),
+            not a separate socket, so pod-based Prometheus discovery keyed on
+            a port literally named `metrics` (the go-worker convention) finds
+            it too without a second listener to stand up.
+            */}}
+            - name: metrics
+              containerPort: {{ .Values.queryApi.port }}
+              protocol: TCP
           {{- /*
           Declared-only by design: unlike api/metrics-api/billing-edge, this
           container gets NO envFrom unless the operator asks for one -- it

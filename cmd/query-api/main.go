@@ -35,6 +35,7 @@ import (
 	"time"
 
 	gqlhandler "github.com/99designs/gqlgen/graphql/handler"
+	"go.opentelemetry.io/otel"
 
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
@@ -242,6 +243,28 @@ func main() {
 	logger := logging.NewJSON(os.Stdout, slog.LevelInfo)
 	tracingComponent := tracing.InitWithServiceName(logger, otelServiceName)
 
+	// Installs the process-wide OTel MeterProvider so the gauges/counters
+	// registry_drift_telemetry.go, readyz_telemetry.go, and
+	// internal/routeswitch/telemetry.go already create via otel.Meter(...)
+	// actually record somewhere, and mounts the Prometheus text they
+	// collect at /metrics. Fails soft, matching tracing.InitWithServiceName
+	// just above: a broken exporter must not stop query-api from serving
+	// traffic, only leave /metrics unavailable.
+	var metricsHTTPHandler http.Handler
+	if meterProvider, promRegistry, err := newPrometheusMeterProvider(); err != nil {
+		log.Printf("query-api: build Prometheus meter provider: %v -- /metrics will 404", err)
+	} else {
+		otel.SetMeterProvider(meterProvider)
+		metricsHTTPHandler = metricsHandler(promRegistry)
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), tracingShutdownTimeout)
+			defer cancel()
+			if shutdownErr := meterProvider.Shutdown(shutdownCtx); shutdownErr != nil {
+				log.Printf("query-api: meter provider shutdown error: %v", shutdownErr)
+			}
+		}()
+	}
+
 	// Constructed to prove the schema/resolver pair builds and links
 	// correctly (see newExecutableSchemaHandler's doc comment); not
 	// mounted on any mux route in this Wave.
@@ -249,6 +272,9 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", healthzHandler())
+	if metricsHTTPHandler != nil {
+		mux.Handle("/metrics", metricsHTTPHandler)
+	}
 
 	// CHAOS-4367 Wave 1 / CHAOS-4368 Wave 2 / CHAOS-4369 Wave 3: mount the
 	// real featureFlags, reviewEdges, and cognitiveLoad routes when their

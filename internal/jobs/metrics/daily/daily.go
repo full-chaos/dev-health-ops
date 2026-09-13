@@ -777,6 +777,10 @@ func (handler *PartitionHandler) computeNativeFamilies(ctx context.Context, run 
 	if handler == nil || len(handler.nativeFamilyNames) == 0 {
 		return nil
 	}
+	// Families in this pass that derive the same record from the same source
+	// rows compute it once; the share ends with this call, so a retried
+	// partition always reads afresh. See testopsTestMetricShare.
+	ctx = withTestopsTestMetricShare(ctx)
 	// incomplete (CHAOS-5078 codex r3, widened by CHAOS-5243) names every
 	// family that did not complete this pass -- the partition-level signal
 	// Work uses to decide whether to hold the partition out of

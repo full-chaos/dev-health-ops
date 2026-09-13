@@ -28,7 +28,7 @@ import (
 // ComputeFamily returned as a hard failure for the whole partition. The
 // production path now streams test_case_results into a
 // testops.TestAccumulator via a GROUP BY case_name pushdown
-// (loadNativeTestopsCaseGroups), so peak memory is bounded by the distinct
+// (loadNativeTestopsCaseAggregate), so peak memory is bounded by the distinct
 // case_name count, not the row count, and there is no cap left to trip.
 func TestTestopsRiskExecutorStreamsPastTheOldRowCapAgainstRealClickHouse(t *testing.T) {
 	if _, isSet := os.LookupEnv("DEV_HEALTH_TESTOPS_LOADER_MAX_ROWS"); isSet {

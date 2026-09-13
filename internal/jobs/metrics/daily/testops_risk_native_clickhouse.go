@@ -105,8 +105,8 @@ type testopsRiskBatchConn interface {
 // NONE of these four loaders is on TestopsRiskExecutor's production read
 // path any more: it streams straight into a testops.PipelineAccumulator /
 // testops.TestAccumulator via loadNativeTestopsPipelineRuns /
-// loadNativeTestopsSuites / loadNativeTestopsCaseGroups /
-// loadNativeHistoricalFailedCaseNames / loadNativeTestopsLatestCoverage
+// loadNativeTestopsSuites / loadNativeTestopsCaseAggregate /
+// loadNativeTestopsLatestCoverage
 // (testops_native_clickhouse.go), which never materialises a whole day's
 // test_case_results and carries no row cap. These raw loaders are kept
 // purely as the differential test's ground truth: it reads the SAME
@@ -238,7 +238,7 @@ AND c.repo_id = ? AND c.org_id = ?`,
 // "historical".
 //
 // Kept as the differential test's raw-reader reference; the production
-// testops_risk path calls loadNativeHistoricalFailedCaseNames instead (see
+// testops_risk path calls loadNativeTestopsCaseAggregate instead (see
 // loadTestopsSuiteAndCaseRows's doc comment).
 func loadHistoricalFailedCaseNames(
 	ctx context.Context, conn testopsRiskConn, orgID string, repoID uuid.UUID, start, end, currentDayEnd time.Time,

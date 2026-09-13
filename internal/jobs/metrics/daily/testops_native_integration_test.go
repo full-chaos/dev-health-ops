@@ -110,6 +110,7 @@ func TestNativeTestopsPushdownMatchesRowLoadersAgainstRealClickHouse(t *testing.
 	priorStart := day.AddDate(0, 0, -30)
 
 	seedTestopsDifferentialFixture(ctx, t, conn, orgID, repoID, day)
+	seedTestopsStraddlingRun(ctx, t, conn, orgID, repoID, day)
 
 	// One positive control PER TABLE. Previously only ci_pipeline_runs was
 	// checked, and an executed mutation proved the consequence: FINAL could be
@@ -186,12 +187,9 @@ func TestNativeTestopsPushdownMatchesRowLoadersAgainstRealClickHouse(t *testing.
 	if err := loadNativeTestopsSuites(ctx, conn, pushTestAccumulator, orgID, repoID, start, end); err != nil {
 		t.Fatalf("pushdown suite read: %v", err)
 	}
-	if err := loadNativeTestopsCaseGroups(ctx, conn, pushTestAccumulator, orgID, repoID, start, end); err != nil {
-		t.Fatalf("pushdown case-group read: %v", err)
-	}
-	pushHistorical, err := loadNativeHistoricalFailedCaseNames(ctx, conn, orgID, repoID, historyStart, start, end)
+	pushHistorical, err := loadNativeTestopsCaseAggregate(ctx, conn, pushTestAccumulator, orgID, repoID, historyStart, start, end)
 	if err != nil {
-		t.Fatalf("pushdown historical read: %v", err)
+		t.Fatalf("pushdown case aggregate read: %v", err)
 	}
 	pushTest := pushTestAccumulator.Finish(pushHistorical)
 
@@ -209,6 +207,21 @@ func TestNativeTestopsPushdownMatchesRowLoadersAgainstRealClickHouse(t *testing.
 	// dedup was never under test: the FINAL-based loader collapses them, so
 	// its case count is the DISTINCT count while the table holds 5x that.
 	assertRowCountAtLeast(ctx, t, conn, "test_case_results", 15)
+
+	// The recurrence score only sees how many of today's failures are in the
+	// historical set, so compare the sets themselves: a history half that
+	// drifted to a different superset would otherwise hide behind the ratio.
+	if len(rawHistorical) == 0 {
+		t.Fatal("fixture is vacuous: the row loader found no historical failures")
+	}
+	if len(pushHistorical) != len(rawHistorical) {
+		t.Fatalf("historical failed names: pushdown=%v rowloader=%v", pushHistorical, rawHistorical)
+	}
+	for name := range rawHistorical {
+		if _, ok := pushHistorical[name]; !ok {
+			t.Fatalf("historical failed names: pushdown=%v rowloader=%v", pushHistorical, rawHistorical)
+		}
+	}
 
 	if len(pushTest) != len(rawTest) {
 		t.Fatalf("test row count: pushdown=%d rowloader=%d", len(pushTest), len(rawTest))
@@ -618,6 +631,50 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			); err != nil {
 				t.Fatalf("seed coverage_snapshots %s/%s: %v", seed.runID, seed.snapshotID, err)
 			}
+		}
+	}
+}
+
+// seedTestopsStraddlingRun adds a run with one suite in the history window
+// and another today, whose history suite holds a failure under a name no
+// other run fails. The history read must exclude that run, or a run that is
+// partly today would count as its own history. Only the differential test
+// seeds it: it compares against the row loader, not against a golden.
+func seedTestopsStraddlingRun(
+	ctx context.Context, t *testing.T, conn driver.Conn,
+	orgID string, repoID uuid.UUID, day time.Time,
+) {
+	t.Helper()
+	synced := day.Add(23 * time.Hour)
+	for _, suite := range []struct {
+		suiteID string
+		started time.Time
+	}{
+		{"suite-straddle-history", day.AddDate(0, 0, -5).Add(9 * time.Hour)},
+		{"suite-straddle-today", day.Add(10 * time.Hour)},
+	} {
+		if err := conn.Exec(ctx, `INSERT INTO test_suite_results
+(repo_id, run_id, suite_id, suite_name, total_count, passed_count, failed_count, skipped_count,
+ error_count, quarantined_count, duration_seconds, started_at, finished_at,
+ team_id, service_id, org_id, last_synced)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			repoID, "run-straddle", suite.suiteID, "suite", uint32(1), uint32(0), uint32(1), uint32(0),
+			uint32(0), uint32(0), 5.0, suite.started, suite.started.Add(time.Minute),
+			nil, nil, orgID, synced,
+		); err != nil {
+			t.Fatalf("seed straddling suite %s: %v", suite.suiteID, err)
+		}
+	}
+	for _, row := range []struct{ suiteID, caseID, caseName, status string }{
+		{"suite-straddle-history", "straddle-history", "straddler", "failed"},
+		{"suite-straddle-today", "straddle-today", "straddler", "failed"},
+	} {
+		if err := conn.Exec(ctx, `INSERT INTO test_case_results
+(repo_id, run_id, suite_id, case_id, case_name, status, retry_attempt, org_id, last_synced)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			repoID, "run-straddle", row.suiteID, row.caseID, row.caseName, row.status, uint32(0), orgID, synced,
+		); err != nil {
+			t.Fatalf("seed straddling case %s: %v", row.caseID, err)
 		}
 	}
 }

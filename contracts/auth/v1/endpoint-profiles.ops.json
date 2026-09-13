@@ -14925,7 +14925,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/internal/worker_metrics.py",
-        "line": 2295,
+        "line": 2294,
         "router_local_path": "/remaining-metrics/v1/execute"
       },
       "gaps": [],
@@ -14989,7 +14989,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/internal/worker_metrics.py",
-        "line": 2307,
+        "line": 2306,
         "router_local_path": "/metric-executions/v1/{execution_id}"
       },
       "gaps": [],
@@ -15053,7 +15053,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/internal/worker_metrics.py",
-        "line": 2344,
+        "line": 2343,
         "router_local_path": "/metric-executions/v1/{execution_id}/repair"
       },
       "gaps": [],
@@ -15117,7 +15117,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/internal/worker_metrics.py",
-        "line": 2355,
+        "line": 2354,
         "router_local_path": "/daily-metrics/v1/redrive"
       },
       "gaps": [],

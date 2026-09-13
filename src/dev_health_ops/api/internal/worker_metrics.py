@@ -28,7 +28,6 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
-from starlette.concurrency import run_in_threadpool
 
 from dev_health_ops.api.dependencies import get_postgres_session_dep
 from dev_health_ops.api.internal.worker_auth import (

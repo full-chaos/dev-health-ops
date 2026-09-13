@@ -59,9 +59,9 @@ func normEmail(email string) string {
 }
 
 // ProviderQualifiedIdentity mirrors identity.py's provider_qualified_identity:
-// the stable, no-email facet both the work-item assignee ladder and team
-// auto-import converge on (CHAOS-2609). Priority: username before
-// account_id. Returns "" when neither is present (Python's None).
+// the stable, no-email identity the provider-qualified fallback and team
+// auto-import converge on. Priority: username before account_id. Returns ""
+// when neither is present (Python's None).
 func ProviderQualifiedIdentity(provider, username, accountID string) string {
 	if trimmed := strings.TrimSpace(username); trimmed != "" {
 		return provider + ":" + trimmed

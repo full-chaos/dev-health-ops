@@ -758,8 +758,13 @@ func constructProviderSyncWorkerWithDependencies(
 	// Executable() already restricts this to shadow, river_canary, and river.
 	// Pinning the literal canary route here would make the handler refuse to
 	// register the moment the kind was promoted past canary, which is the one
-	// transition the pin was meant to protect.
-	if !ok || !spec.Executable() || spec.RollbackRoute != "celery" {
+	// transition the pin was meant to protect. An earlier cut of this check
+	// also required RollbackRoute == "celery" -- the same mistake in a
+	// different field: this kind's migration has since completed all the way
+	// to rollback_route=none, and pinning that field here would have made
+	// the handler refuse to register the moment THAT promotion landed, the
+	// same failure mode this comment already warned against for Route.
+	if !ok || !spec.Executable() {
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	postgresDatabase, ok := database.(*postgresWorkerDatabase)

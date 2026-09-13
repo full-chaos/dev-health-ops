@@ -97,17 +97,23 @@ func TestGenericOutboxLiveFailureInjectionMatrix(t *testing.T) {
 	}
 	// CHAOS-3033 (PR #1292, ee2141eca) moved every checked-in job kind except
 	// sync.provider_unit to state go_default / route river; provider_unit
-	// remains the sole canary at river_canary. CHAOS-5320: the Celery
-	// dispatch plane is gone fleet-wide (prod Celery stopped 2026-08-19), so
-	// celery is no longer a resolvable rollback route ANYWHERE -- every kind
-	// below celeryRemovedKinds moved from go_default/river/celery to
-	// celery_removed/river/none in that same change (3 kinds -- sync-coverage
-	// refresh, team-repo-ownership-derivation, work-item-attribution -- were
-	// already there, born native with no Celery predecessor at all). This
-	// loop is a drift tripwire: it asserts the *current* checked-in policy
-	// shape, not the pre-cutover all-celery baseline, so a future accidental
-	// state/route edit in migration-state.json still fails loudly here.
+	// stayed the sole canary at river_canary for a time. CHAOS-5320: the
+	// Celery dispatch plane is gone fleet-wide (prod Celery stopped
+	// 2026-08-19), so celery is no longer a resolvable rollback route
+	// ANYWHERE -- every kind below celeryRemovedKinds moved from
+	// go_default/river/celery to celery_removed/river/none in that same
+	// change (3 kinds -- sync-coverage refresh, team-repo-ownership-derivation,
+	// work-item-attribution -- were already there, born native with no Celery
+	// predecessor at all). sync.provider_unit's own canary graduated to the
+	// same celery_removed/river/none shape once its Go handler
+	// (internal/jobs/providerunit) covered every provider/dataset pair the
+	// checked-in matrix lists -- it is no longer the one deliberate exception
+	// in this loop. This loop is a drift tripwire: it asserts the *current*
+	// checked-in policy shape, not the pre-cutover all-celery baseline, so a
+	// future accidental state/route edit in migration-state.json still fails
+	// loudly here.
 	celeryRemovedKinds := map[string]bool{
+		jobcontract.KindSyncProviderUnit:             true,
 		jobcontract.KindSyncCoverageRefresh:          true,
 		jobcontract.KindTeamRepoOwnershipDerivation:  true,
 		jobcontract.KindRemainingWorkItemAttribution: true,
@@ -131,12 +137,6 @@ func TestGenericOutboxLiveFailureInjectionMatrix(t *testing.T) {
 		jobcontract.KindWorkGraphBuild:               true,
 	}
 	for _, descriptor := range productionRegistry.Descriptors() {
-		if descriptor.Kind == jobcontract.KindSyncProviderUnit {
-			if descriptor.Route != "river_canary" || descriptor.MigrationState != "canary" || descriptor.RollbackRoute != "celery" || !descriptor.Executable() {
-				t.Fatalf("provider-unit production canary policy drifted: %#v", descriptor)
-			}
-			continue
-		}
 		if celeryRemovedKinds[descriptor.Kind] {
 			if descriptor.Route != "river" || descriptor.MigrationState != "celery_removed" || descriptor.RollbackRoute != "none" || !descriptor.Executable() {
 				t.Fatalf("%s celery_removed policy drifted: %#v", descriptor.Kind, descriptor)

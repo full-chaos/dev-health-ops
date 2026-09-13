@@ -47,8 +47,6 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy.engine import Engine, make_url
 
-from tests._alembic_heads import application_schema_head
-
 _POSTGRES_URI_ENV = "DEV_HEALTH_POSTGRES_TEST_URI"
 _ALEMBIC_DIR = Path(__file__).parents[1] / "src" / "dev_health_ops" / "alembic"
 _TABLE = "go_api_routing_audits"
@@ -171,12 +169,12 @@ def migrated(monkeypatch: pytest.MonkeyPatch) -> Iterator[Engine]:
         admin.dispose()
 
 
-def test_0130_is_the_application_schema_head_and_chains_after_0129() -> None:
-    """Derived, not typed. A renumber moves this in one place."""
-    assert _MIGRATION.revision == application_schema_head(), (
-        "0130 must be the application_schema head; if another migration landed "
-        "first, renumber this one and re-run"
-    )
+def test_0130_chains_after_0129() -> None:
+    """0130 is no longer the application_schema head (0131 superseded it) --
+    this now only pins the chain link this migration owns. See
+    ``test_provider_unit_route_promotion_off_canary_migration.py``'s sibling
+    check for the current head.
+    """
     assert _MIGRATION.down_revision == "0129"
 
 

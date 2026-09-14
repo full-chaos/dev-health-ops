@@ -29,10 +29,25 @@ func emptyArtifactsResult(degradedReason *string, scope *filterScope) *model.Wor
 // set (a UNION ALL of source/target projections). Uses uniqExact(edge_id)
 // for degree, NOT count() -- same dedup-tolerant-by-construction property
 // ResolveFlow documents (work_graph.py:1430-1435), confirmed by reading the
-// query verbatim; no argMax fix needed here either. A self-referential edge
-// (source==target) contributes the SAME edge_id to both UNION ALL
-// projections of that node, so uniqExact makes it count once (degree 1),
-// not twice.
+// query verbatim. A self-referential edge (source==target) contributes the
+// SAME edge_id to both UNION ALL projections of that node, so uniqExact
+// makes it count once (degree 1), not twice.
+//
+// evidence tie-break: a node can carry several live edges, each with its
+// own evidence label, so the per-node evidence value is a pick among many
+// candidate rows, not a single-identity collapse -- a different concern
+// from edges.go's per-edge_id argMax (which resolves duplicate physical
+// versions of ONE edge). ClickHouse's any() is documented as
+// implementation-defined and observed to disagree across readers (and
+// across repeated runs of the SAME reader) once a node has tied/multiple
+// edges -- two readers, or one reader before and after a background part
+// merge, can each return a different edge's evidence for the same node.
+// The rule here is: the node's evidence is the evidence of its live edge
+// with the greatest (last_synced, edge_id) -- most-recently-synced edge
+// wins, edge_id (a deterministic hash of the edge's identity columns)
+// breaking an exact last_synced tie so the pick never depends on merge
+// order. argMax(evidence, (last_synced, edge_id)) computes that in one
+// pass; the Python reader's SQL literal applies the SAME expression.
 //
 // filters.limit is the top-N (default 1000, web passes 50). Applies ONLY
 // the graph-wide filters, same as ResolveFlow. Display names reuse
@@ -87,13 +102,13 @@ func ResolveArtifacts(ctx context.Context, client QueryClient, orgID string, fil
 	// duplicate-bind bug).
 	where := buildWorkGraphWhere(orgID, scope, false, true)
 	query := fmt.Sprintf(`
-        SELECT node_type, node_id, uniqExact(edge_id) AS degree, any(evidence) AS evidence
+        SELECT node_type, node_id, uniqExact(edge_id) AS degree, argMax(evidence, (last_synced, edge_id)) AS evidence
         FROM (
-            SELECT source_type AS node_type, source_id AS node_id, edge_id, evidence
+            SELECT source_type AS node_type, source_id AS node_id, edge_id, evidence, last_synced
             FROM work_graph_edges
             %s
             UNION ALL
-            SELECT target_type AS node_type, target_id AS node_id, edge_id, evidence
+            SELECT target_type AS node_type, target_id AS node_id, edge_id, evidence, last_synced
             FROM work_graph_edges
             %s
         )

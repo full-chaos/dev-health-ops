@@ -1443,14 +1443,24 @@ async def resolve_work_graph_artifacts(
     # makes a self-loop (source==target, same node) count ONCE — the node's two
     # UNION ALL projections carry the SAME edge_id, so a self-referential edge
     # contributes degree 1 (one edge touching the node), not 2.
+    #
+    # evidence tie-break: a node can carry several live edges, each with its
+    # own evidence label. any(evidence) is documented as implementation
+    # defined and was observed to disagree across readers (and across
+    # repeated runs of one reader, before/after a background part merge)
+    # once a node has multiple edges. The rule: a node's evidence is the
+    # evidence of its live edge with the greatest (last_synced, edge_id) --
+    # most-recently-synced edge wins, edge_id breaking an exact last_synced
+    # tie so the pick never depends on merge order. The Go reader applies
+    # the SAME expression.
     query = f"""
-        SELECT node_type, node_id, uniqExact(edge_id) AS degree, any(evidence) AS evidence
+        SELECT node_type, node_id, uniqExact(edge_id) AS degree, argMax(evidence, (last_synced, edge_id)) AS evidence
         FROM (
-            SELECT source_type AS node_type, source_id AS node_id, edge_id, evidence
+            SELECT source_type AS node_type, source_id AS node_id, edge_id, evidence, last_synced
             FROM work_graph_edges
             {where_sql}
             UNION ALL
-            SELECT target_type AS node_type, target_id AS node_id, edge_id, evidence
+            SELECT target_type AS node_type, target_id AS node_id, edge_id, evidence, last_synced
             FROM work_graph_edges
             {where_sql}
         )

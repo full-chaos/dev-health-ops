@@ -108,11 +108,17 @@ func TestPartitionHandlerClassifiesAnInvalidStateComputeFailureAsPermanent(t *te
 	// Observer.ObserveDeterministicFailure) once Adapter.Work classifies
 	// it, which TestAdapterCarriesReasonInvalidStateFromAPermanentCompute
 	// Failure (internal/jobruntime) proves end to end.
-	if store.releases != 1 || store.completions != 0 {
+	//
+	// This Permanent/ErrInvalidState branch is the one release site that
+	// must reach ReleasePartitionTerminally, not the ordinary
+	// ReleasePartition every other release site uses: River discards a
+	// Permanent job outright, so only the terminal variant's
+	// same-transaction "was this the run's last outstanding partition"
+	// check ever runs for this failure shape.
+	if store.terminalReleases != 1 || store.releases != 0 || store.completions != 0 {
 		t.Fatalf(
-			"releases=%d completions=%d, want the same release-not-complete "+
-				"shape the (now unreachable for this cause) Retryable path had",
-			store.releases, store.completions,
+			"terminalReleases=%d releases=%d completions=%d, want exactly one terminal release and no ordinary release/completion",
+			store.terminalReleases, store.releases, store.completions,
 		)
 	}
 }
@@ -297,8 +303,13 @@ type handlerStore struct {
 	failRenewal bool
 	loadRunErr  error
 	releases    int
-	completions int
-	evidence    string
+	// terminalReleases counts ReleasePartitionTerminally calls separately
+	// from the ordinary releases above, so a test can pin WHICH release
+	// variant a given Work() failure path reaches (only the
+	// ErrInvalidState/Permanent branch may ever call the terminal one).
+	terminalReleases int
+	completions      int
+	evidence         string
 }
 
 func (store *handlerStore) LoadRun(context.Context, string) (Run, error) {
@@ -324,6 +335,10 @@ func (store *handlerStore) CompletePartition(_ context.Context, _ Claim, evidenc
 }
 func (store *handlerStore) ReleasePartition(context.Context, Claim) error {
 	store.releases++
+	return nil
+}
+func (store *handlerStore) ReleasePartitionTerminally(context.Context, Claim) error {
+	store.terminalReleases++
 	return nil
 }
 

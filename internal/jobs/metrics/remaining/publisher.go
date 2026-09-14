@@ -149,3 +149,64 @@ func (publisher *PostgresPublisher) PublishPartitionTx(
 	}
 	return nil
 }
+
+// PublishRedrivePartitionTx enqueues a NEW job for a partition an operator
+// (or `metrics remaining redrive`) explicitly named for redrive -- the
+// remaining-metrics analog of daily's PublishRedrivePartitionTx, and for the
+// identical reason: PublishPartitionTx's idempotency key is
+// "remaining:partition:"+partition.ID, permanent and immutable, so once
+// River discards the one job ever published under that key nothing else
+// re-enqueues it -- the partition can sit 'failed' forever even though its
+// parent run is still status='running' and ClaimPartition would happily
+// reclaim it if a job ever named it again. nonce must be unique per redrive
+// invocation (a fresh UUID is the expected caller pattern), so a repeated
+// redrive of the same still-failed partition is never silently deduped
+// against an earlier attempt.
+func (publisher *PostgresPublisher) PublishRedrivePartitionTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	run Run,
+	partition Partition,
+	nonce string,
+) error {
+	if publisher == nil || publisher.producer == nil || publisher.registry == nil ||
+		tx == nil || run.ID == "" || run.OrganizationID == "" ||
+		partition.ID == "" || partition.RunID != run.ID || nonce == "" {
+		return ErrUnavailable
+	}
+	kind, ok := JobKindForFamily(run.Family)
+	if !ok {
+		return ErrInvalidState
+	}
+	descriptor, ok := publisher.registry.Descriptor(kind)
+	if !ok {
+		return ErrUnavailable
+	}
+	if !descriptor.Executable() {
+		// A partition can only ever have reached 'failed' by first being
+		// claimed and executed (ClaimPartition/ComputePartition), which
+		// requires an executable route -- a deferred-only route here means
+		// the checked-in route table itself regressed, not a normal redrive
+		// input.
+		return fmt.Errorf("%w: remaining metrics redrive route is not executable", ErrInvalidState)
+	}
+	organizationID := run.OrganizationID
+	envelope := jobcontract.Envelope{
+		ContractVersion: jobcontract.ContractVersionV1,
+		OrganizationID:  &organizationID,
+		CorrelationID:   "remaining:" + run.ID,
+		IdempotencyKey:  "remaining:partition:redrive:" + partition.ID + ":" + nonce,
+		Domain: jobcontract.DomainLink{
+			Type: "remaining_metric_partition",
+			ID:   partition.ID,
+		},
+		Payload: jobcontract.NewRemainingMetricsPartitionPayload(kind, partition.ID),
+	}
+	if err := publisher.producer.Publish(ctx, tx, kind, envelope); !joboutbox.IsPublished(err) {
+		if errors.Is(err, joboutbox.ErrContractRejected) || errors.Is(err, joboutbox.ErrPolicyRejected) {
+			return fmt.Errorf("%w: %w", ErrInvalidState, err)
+		}
+		return fmt.Errorf("%w: %w", ErrUnavailable, err)
+	}
+	return nil
+}

@@ -16,6 +16,13 @@ type Store interface {
 	RenewPartition(context.Context, Claim) error
 	CompletePartition(context.Context, Claim, string) error
 	ReleasePartition(context.Context, Claim) error
+	// ReleasePartitionTerminally is ReleasePartition's twin for a failure
+	// nothing will ever retry (see PostgresStore.ReleasePartitionTerminally):
+	// it stands the partition down to 'failed' AND, in the same transaction,
+	// terminalizes the parent run 'failed' if this was its last outstanding
+	// partition -- otherwise a run behind a permanently-discarded job lingers
+	// status='running' forever.
+	ReleasePartitionTerminally(context.Context, Claim) error
 }
 
 type PartitionExecutor interface {
@@ -111,7 +118,6 @@ func (handler *PartitionHandler[T]) Work(
 			return workErr
 		},
 	); err != nil {
-		releaseClaim(handler.store, ctx, *claim)
 		// CHAOS-4242: a ComputePartition failure wrapping ErrInvalidState is
 		// a deterministic precondition failure (malformed/empty scope, no
 		// organization, an unparseable day, capacity's missing seed) -- the
@@ -122,9 +128,17 @@ func (handler *PartitionHandler[T]) Work(
 		// that is the actual native-executor precondition bug this ticket
 		// is about. Anything else here (a ClickHouse/Postgres query error)
 		// is genuinely transient and stays Retryable.
+		//
+		// This is also the ONE release site that must use the terminal
+		// variant: River discards a Permanent job outright, so if this was
+		// the run's last outstanding partition, nothing will ever come back
+		// to move the run out of 'running' unless the release itself does
+		// it (see ReleasePartitionTerminally).
 		if errors.Is(err, ErrInvalidState) {
+			releaseClaimTerminally(handler.store, ctx, *claim)
 			return jobruntime.WithReason(jobruntime.Permanent(err), jobruntime.ReasonInvalidState)
 		}
+		releaseClaim(handler.store, ctx, *claim)
 		return jobruntime.Retryable(err)
 	}
 	if err := handler.store.CompletePartition(
@@ -197,4 +211,10 @@ func releaseClaim(store Store, ctx context.Context, claim Claim) {
 	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	_ = store.ReleasePartition(releaseCtx, claim)
+}
+
+func releaseClaimTerminally(store Store, ctx context.Context, claim Claim) {
+	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	_ = store.ReleasePartitionTerminally(releaseCtx, claim)
 }

@@ -751,6 +751,88 @@ WHERE id = $2::uuid AND run_id = $3::uuid AND status = 'running'
 	return nil
 }
 
+// ReleasePartitionTerminally stands a claimed partition down to 'failed' the
+// same way ReleasePartition does, but for the one caller (PartitionHandler.Work's
+// Permanent/ErrInvalidState branch) that already knows nothing will ever
+// retry this attempt: River discards a Permanent job outright. Without this,
+// a deterministic ComputePartition precondition failure on a run's LAST
+// outstanding partition released that partition to 'failed' and left the
+// parent run status='running' forever -- CompletePartition/FinalizeRun both
+// require EVERY partition 'succeeded' before a run can leave 'running', and
+// nothing else ever writes 'failed' onto remaining_metric_runs.status even
+// though the schema's own CHECK constraint has allowed that value since
+// migration 0058. This closes that gap: in the SAME transaction as the
+// release, if no other partition of this run is still 'pending'/'running'
+// (i.e. this was genuinely the last outstanding one), the run is
+// terminalized 'failed' too, so it reaches a real terminal state instead of
+// lingering. A run with other partitions still pending/running is left
+// exactly as ReleasePartition would leave it -- only reclaimable/eligible
+// for `metrics remaining redrive`, never silently terminalized underneath
+// still-live work.
+func (store *PostgresStore) ReleasePartitionTerminally(ctx context.Context, claim Claim) error {
+	if !store.validClaim(claim) {
+		return ErrUnavailable
+	}
+	now := store.now().UTC()
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return store.wrapUnavailable(ctx, "begin terminal release tx", err)
+	}
+	defer func() {
+		rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_ = tx.Rollback(rollbackCtx)
+	}()
+	// Two sequential statements, not one WITH: Postgres gives every
+	// statement in a single WITH clause the SAME snapshot, so a data-
+	// modifying CTE's write is invisible to a sibling CTE's own read of the
+	// same table in that same statement (the terminalize check below would
+	// see the partition's PRE-release status, not 'failed', and never
+	// fire). Two Exec calls under read-committed each get a fresh
+	// snapshot, so the second one correctly observes the first one's
+	// write -- the same two-statement shape CompletePartition already uses
+	// for its own "release/complete, then maybe transition the run" pair.
+	command, err := tx.Exec(ctx, `
+UPDATE public.remaining_metric_partitions
+SET status = 'failed', claim_token = NULL, lease_expires_at = NULL, updated_at = $1
+WHERE id = $2::uuid AND run_id = $3::uuid AND status = 'running'
+  AND claim_token = $4::uuid AND lease_expires_at > $1
+  AND EXISTS (
+      SELECT 1 FROM public.remaining_metric_runs AS run
+      WHERE run.id = remaining_metric_partitions.run_id AND run.status = 'running'
+  )`, now, claim.Partition.ID, claim.Partition.RunID, claim.Token)
+	if err != nil {
+		return store.wrapUnavailable(ctx, "release partition terminally", err)
+	}
+	if command.RowsAffected() != 1 {
+		store.observeReleaseLost()
+		return ErrLeaseLost
+	}
+	runTransition, err := tx.Exec(ctx, `
+UPDATE public.remaining_metric_runs AS run
+SET status = 'failed', updated_at = $1
+WHERE run.id = $2::uuid AND run.status = 'running'
+  AND NOT EXISTS (
+      SELECT 1 FROM public.remaining_metric_partitions AS partition
+      WHERE partition.run_id = run.id AND partition.status IN ('pending', 'running')
+  )`, now, claim.Partition.RunID)
+	if err != nil {
+		return store.wrapUnavailable(ctx, "terminalize run", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return store.wrapUnavailable(ctx, "commit terminal release tx", err)
+	}
+	if runTransition.RowsAffected() == 1 {
+		logger := store.logger
+		if logger == nil {
+			logger = slog.Default()
+		}
+		logger.WarnContext(ctx, "remaining metrics run terminalized failed",
+			"run_id", claim.Partition.RunID, "partition_id", claim.Partition.ID)
+	}
+	return nil
+}
+
 // HasSucceededPartition reports whether ANY run of this organization/family
 // -- regardless of which trigger created it or what generation it carries
 // -- already has a succeeded partition whose scope covers exactly this day.

@@ -365,29 +365,54 @@ GROUP BY file_path`, repoID, organizationID, day.UTC())
 	return result, nil
 }
 
-// loadBlameMap ports job_daily.py's _load_blame_map_for_repo
-// (job_daily.py:1022): per-file dominant-owner concentration from git_blame,
-// scoped by BOTH org_id and repo_id (CHAOS-2376 round-2: a stale/default-org
-// row for a reused repo_id must not contaminate another tenant).
-func loadBlameMap(
-	ctx context.Context, conn repositoryRows, organizationID string, repoID uuid.UUID,
-) (map[string]float64, error) {
-	if conn == nil || strings.TrimSpace(organizationID) == "" {
-		return nil, ErrInvalidState
-	}
-	rows, err := conn.Query(ctx, `
+// blameOwnershipConn is the capability loadBlameMap needs: it settles
+// git_blame_file_ownership (a write) before it reads it.
+type blameOwnershipConn interface {
+	Exec(context.Context, string, ...any) error
+	Query(context.Context, string, ...any) (driver.Rows, error)
+}
+
+// settleBlameOwnershipQuery recomputes git_blame_file_ownership for the files
+// of one repository that git_blame_dirty_paths marks as written since their
+// last settle, reading git_blame for those files only. The per-file
+// aggregation is the full-scan reader's own expression -- argMax author per
+// line by last_synced, email falling back to name, blank authors excluded --
+// with one difference: a file whose lines all have a blank author still
+// settles, with attributed_lines = 0, so it does not stay dirty forever. The
+// read query skips those rows exactly as the full scan's `author != ”`
+// filter dropped such a file.
+//
+// A file stays dirty until 300 seconds after its latest marker. The
+// materialized view stamps the marker while the git_blame insert runs, before
+// that insert's parts commit, so a settle starting in that gap reads a
+// snapshot without the new lines although its settled_at is later than the
+// marker. Keeping the file dirty for the margin makes the next call settle it
+// again, which is exact as long as no single git_blame insert takes longer
+// than the margin to commit. A file with no ownership row yet compares
+// against the epoch and is always dirty.
+const settleBlameOwnershipQuery = `
+INSERT INTO git_blame_file_ownership
+    (org_id, repo_id, path, owner_lines, attributed_lines, settled_at)
 SELECT
+    org_id,
+    repo_id,
     path,
-    max(author_lines) / sum(author_lines) AS concentration
+    maxIf(author_lines, author != '') AS owner_lines,
+    sumIf(author_lines, author != '') AS attributed_lines,
+    now64(3, 'UTC') AS settled_at
 FROM
 (
     SELECT
+        org_id,
+        repo_id,
         path,
         author,
         count() AS author_lines
     FROM
     (
         SELECT
+            org_id,
+            repo_id,
             path,
             line_no,
             argMax(
@@ -395,13 +420,77 @@ FROM
                 last_synced
             ) AS author
         FROM git_blame
-        WHERE repo_id = ? AND org_id = ?
-        GROUP BY path, line_no
+        WHERE org_id = ? AND repo_id = ?
+          AND path IN
+          (
+              SELECT path
+              FROM
+              (
+                  SELECT
+                      path,
+                      max(marked_at) AS last_marked,
+                      toDateTime64(0, 3, 'UTC') AS last_settled
+                  FROM git_blame_dirty_paths
+                  WHERE org_id = ? AND repo_id = ?
+                  GROUP BY path
+                  UNION ALL
+                  SELECT
+                      path,
+                      toDateTime64(0, 3, 'UTC') AS last_marked,
+                      max(settled_at) AS last_settled
+                  FROM git_blame_file_ownership
+                  WHERE org_id = ? AND repo_id = ?
+                  GROUP BY path
+              )
+              GROUP BY path
+              HAVING max(last_marked) + INTERVAL 300 SECOND > max(last_settled)
+          )
+        GROUP BY org_id, repo_id, path, line_no
     )
-    WHERE author != ''
-    GROUP BY path, author
+    GROUP BY org_id, repo_id, path, author
 )
-GROUP BY path`, repoID, organizationID)
+GROUP BY org_id, repo_id, path`
+
+// readBlameOwnershipQuery reads the latest settled ownership per file. The
+// owner/attributed pair is taken as one tuple so a settled_at tie cannot pair
+// one settle's numerator with another's denominator. UInt64 / UInt64 is the
+// same Float64 division the full scan performed on the same two counts.
+const readBlameOwnershipQuery = `
+SELECT
+    path,
+    tupleElement(latest, 1) / tupleElement(latest, 2) AS concentration
+FROM
+(
+    SELECT
+        path,
+        argMax((owner_lines, attributed_lines), settled_at) AS latest
+    FROM git_blame_file_ownership
+    WHERE org_id = ? AND repo_id = ?
+    GROUP BY path
+)
+WHERE tupleElement(latest, 2) > 0`
+
+// loadBlameMap ports job_daily.py's _load_blame_map_for_repo
+// (job_daily.py:1022): per-file dominant-owner concentration, scoped by BOTH
+// org_id and repo_id so a stale or default-org row for a reused repo_id never
+// contaminates another tenant.
+//
+// It never aggregates the repository's whole git_blame. It first settles the
+// files written since their last settle, then reads the per-file ownership
+// rows. A file's concentration depends on that file's own lines alone, so
+// recomputing only the changed files yields the same map as a full scan.
+func loadBlameMap(
+	ctx context.Context, conn blameOwnershipConn, organizationID string, repoID uuid.UUID,
+) (map[string]float64, error) {
+	if conn == nil || strings.TrimSpace(organizationID) == "" {
+		return nil, ErrInvalidState
+	}
+	if err := conn.Exec(ctx, settleBlameOwnershipQuery,
+		organizationID, repoID, organizationID, repoID, organizationID, repoID,
+	); err != nil {
+		return nil, fmt.Errorf("settle blame ownership: %w", err)
+	}
+	rows, err := conn.Query(ctx, readBlameOwnershipQuery, organizationID, repoID)
 	if err != nil {
 		return nil, fmt.Errorf("load blame map: %w", err)
 	}

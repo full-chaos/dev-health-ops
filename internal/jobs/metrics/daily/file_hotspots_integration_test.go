@@ -87,6 +87,15 @@ func TestFileHotspotsFamiliesWriteRealOrgIDAndIsolateTenants(t *testing.T) {
     repo_id UUID, path String, line_no UInt32, author_email Nullable(String),
     author_name Nullable(String), last_synced DateTime64(3, 'UTC'), org_id String
 ) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, path, line_no)`,
+		// The blame reader settles and reads these; exact DDL of migration
+		// 095_git_blame_file_ownership.sql.
+		`CREATE TABLE git_blame_file_ownership (
+    org_id String, repo_id UUID, path String, owner_lines UInt64, attributed_lines UInt64,
+    settled_at DateTime64(3, 'UTC')
+) ENGINE = ReplacingMergeTree(settled_at) ORDER BY (org_id, repo_id, path)`,
+		`CREATE TABLE git_blame_dirty_paths (
+    org_id String, repo_id UUID, path String, marked_at DateTime64(3, 'UTC')
+) ENGINE = ReplacingMergeTree(marked_at) ORDER BY (org_id, repo_id, path)`,
 		// Exact production sorting keys: migration 027_add_org_id_to_sorting_keys.py.
 		`CREATE TABLE file_metrics_daily (
     repo_id UUID, day Date, path String, churn UInt32, contributors UInt32,

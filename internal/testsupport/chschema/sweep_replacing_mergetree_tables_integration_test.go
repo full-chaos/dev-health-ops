@@ -173,8 +173,13 @@ func sweepReplacingMergeTreeTables(t *testing.T) []replacingMergeTreeTable {
 // base of 88 (they landed independently, on separate branches) -- the
 // authoritative count is their UNION, 88 + 1 (release_impact) + 3
 // (complexity's three tables) = 92, not either branch's own count alone.
+// 92 -> 94: 095_git_blame_file_ownership.sql adds two ReplacingMergeTree
+// tables, `git_blame_file_ownership` (version settled_at) and
+// `git_blame_dirty_paths` (version marked_at). Recounted from the migration
+// chain: the failing run's printed list was the prior 92 plus exactly these
+// two names, nothing else added or removed.
 func TestSweepReplacingMergeTreeTablesMatchesTheAuthoritativeCount(t *testing.T) {
-	const wantCount = 92
+	const wantCount = 94
 
 	tables := sweepReplacingMergeTreeTables(t)
 	if len(tables) != wantCount {

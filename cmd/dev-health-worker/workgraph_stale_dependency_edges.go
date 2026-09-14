@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
@@ -35,7 +36,7 @@ func (step *staleDependencyIssueEdgesCleanupPreStep) Name() string {
 }
 
 func (step *staleDependencyIssueEdgesCleanupPreStep) Run(ctx context.Context, claim workgraph.Claim) (map[string]any, error) {
-	if err := edges.DeleteStalePRDependencyIssueEdges(ctx, step.conn, claim.Request.OrganizationID); err != nil {
+	if err := edges.DeleteStalePRDependencyIssueEdges(ctx, step.conn, claim.Request.OrganizationID, time.Now()); err != nil {
 		return nil, err
 	}
 	return nil, nil

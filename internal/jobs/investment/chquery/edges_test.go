@@ -50,7 +50,7 @@ func TestFetchWorkGraphEdgesQueryShapeHasArgMaxCollapse(t *testing.T) {
 		// NOT five separate argMax(col, last_synced) calls -- the separate
 		// form can, under a last_synced tie, independently pick DIFFERENT
 		// tied rows per column and assemble a hybrid that never existed.
-		"argMax(tuple(repo_id, provider, provenance, confidence, evidence), last_synced) AS winner",
+		"argMax(tuple(repo_id, provider, provenance, confidence, evidence, is_deleted), last_synced) AS winner",
 		"toString(winner.1) AS repo_id",
 		"winner.2 AS provider",
 		"winner.3 AS provenance",
@@ -98,12 +98,12 @@ func TestFetchWorkGraphEdgesHeuristicFilterAppliesAfterTheCollapse(t *testing.T)
 	if strings.Contains(sql, "WHERE org_id = {org_id:String} AND provenance !=") {
 		t.Fatalf("heuristic filter must not be folded into the pre-aggregation WHERE: %s", sql)
 	}
-	if !strings.Contains(sql, "WHERE provenance != {heuristic_provenance:String}") {
+	if !strings.Contains(sql, "WHERE winner.6 = 0 AND provenance != {heuristic_provenance:String}") {
 		t.Fatalf("expected the heuristic filter as an outer WHERE referencing the extracted provenance: %s", sql)
 	}
 	groupByIdx := strings.Index(sql, "GROUP BY")
 	closeParenIdx := strings.Index(sql[groupByIdx:], ")")
-	outerWhereIdx := strings.LastIndex(sql, "WHERE provenance !=")
+	outerWhereIdx := strings.LastIndex(sql, "WHERE winner.6 = 0 AND provenance !=")
 	if groupByIdx < 0 || closeParenIdx < 0 || outerWhereIdx < 0 || outerWhereIdx < groupByIdx+closeParenIdx {
 		t.Fatalf("outer heuristic filter must be rendered after the subquery closes: %s", sql)
 	}

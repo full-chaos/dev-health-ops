@@ -101,7 +101,7 @@ VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		targetType: "issue", targetID: "linear:ACME-5", evidence: "linear_attachment", orgID: otherOrg,
 	})
 
-	if err := DeleteStalePRDependencyIssueEdges(ctx, conn, org); err != nil {
+	if err := DeleteStalePRDependencyIssueEdges(ctx, conn, org, time.Now()); err != nil {
 		t.Fatalf("DeleteStalePRDependencyIssueEdges: %v", err)
 	}
 
@@ -109,7 +109,7 @@ VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		t.Helper()
 		var got uint64
 		if err := conn.QueryRow(ctx,
-			`SELECT count() FROM work_graph_edges FINAL WHERE edge_id = ?`, id,
+			`SELECT count() FROM work_graph_edges FINAL WHERE edge_id = ? AND is_deleted = 0`, id,
 		).Scan(&got); err != nil {
 			t.Fatal(err)
 		}
@@ -129,7 +129,7 @@ VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 
 	// Scope refusal: an empty org must refuse rather than silently sweeping
 	// every tenant's stale rows.
-	if err := DeleteStalePRDependencyIssueEdges(ctx, conn, ""); err == nil {
+	if err := DeleteStalePRDependencyIssueEdges(ctx, conn, "", time.Now()); err == nil {
 		t.Fatal("DeleteStalePRDependencyIssueEdges(\"\") succeeded, want ErrScopeRequired")
 	}
 }

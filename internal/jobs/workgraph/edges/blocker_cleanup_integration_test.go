@@ -161,10 +161,14 @@ VALUES (?,?,NULL,?,?,?,?)`,
 			orphanEdgeID, existingIDs)
 	}
 	plan := BuildCleanupPlan(dependencyRows, existingIDs)
-	if err := DeleteEdgesByID(ctx, conn, org, plan); err != nil {
+	versions, err := ReadIssueIssueEdgeVersions(ctx, conn, org)
+	if err != nil {
+		t.Fatalf("ReadIssueIssueEdgeVersions: %v", err)
+	}
+	if err := DeleteEdgesByID(ctx, conn, org, plan, versions, derived.Edges, buildClock); err != nil {
 		t.Fatalf("DeleteEdgesByID: %v", err)
 	}
-	if _, err := WriteEdges(ctx, conn, org, derived.Edges); err != nil {
+	if _, err := WriteEdges(ctx, conn, org, StampRewrites(derived.Edges, plan, versions)); err != nil {
 		t.Fatalf("WriteEdges: %v", err)
 	}
 	projectionRun := BuildBlockerProjection(org, "", derived.Edges, buildClock)
@@ -174,12 +178,12 @@ VALUES (?,?,NULL,?,?,?,?)`,
 
 	// ASSERTION 1: BOTH stale edges are gone -- the freshly-regenerated-candidate
 	// path (staleEdgeID) AND the existing-ids-read path (orphanEdgeID).
-	// `mutations_sync=2` inside DeleteEdgesByID means this read does not need
-	// to poll for the mutation to land.
+	// DeleteEdgesByID appends tombstones, so the read is the live form:
+	// FINAL plus is_deleted = 0.
 	for _, staleID := range []string{staleEdgeID, orphanEdgeID} {
 		var staleCount uint64
 		if err := conn.QueryRow(ctx,
-			`SELECT count() FROM work_graph_edges FINAL WHERE edge_id = ?`, staleID,
+			`SELECT count() FROM work_graph_edges FINAL WHERE edge_id = ? AND is_deleted = 0`, staleID,
 		).Scan(&staleCount); err != nil {
 			t.Fatal(err)
 		}

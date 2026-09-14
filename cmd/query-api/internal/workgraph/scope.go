@@ -296,6 +296,18 @@ type whereBuild struct {
 	repoBindings  []clickhouse.Binding
 }
 
+// liveEdgeClause drops tombstone rows and every stored version of an identity
+// whose latest version is a tombstone. Versions of a live identity all pass,
+// so a reader that deduplicates after this filter picks the same winner it
+// picked before, and a raw uniqExact(edge_id) reader counts the same ids.
+const liveEdgeClause = `is_deleted = 0 AND (org_id, source_type, source_id, edge_type, target_type, target_id) NOT IN (
+                SELECT org_id, source_type, source_id, edge_type, target_type, target_id
+                FROM work_graph_edges
+                WHERE org_id = {org_id:String}
+                GROUP BY org_id, source_type, source_id, edge_type, target_type, target_id
+                HAVING argMax(is_deleted, last_synced) = 1
+            )`
+
 // buildWorkGraphWhere mirrors work_graph.py:930-1009's
 // _build_work_graph_where. Callers MUST have already screened for
 // themeSubcategoryConflict and short-circuited to an empty result -- this
@@ -321,7 +333,7 @@ type whereBuild struct {
 // raises ClickHouse error 184 ILLEGAL_AGGREGATION, the same trap
 // work_graph/investment/queries.py's HAVING documents).
 func buildWorkGraphWhere(orgID string, scope *filterScope, includeEdgeFilters bool, includeRepoFilter bool) whereBuild {
-	clauses := []string{"org_id = {org_id:String}"}
+	clauses := []string{"org_id = {org_id:String}", liveEdgeClause}
 	bindings := []clickhouse.Binding{{Name: "org_id", Value: orgID}}
 	bindings = addMembershipScopeBindings(bindings, scope)
 	var repoHavingSQL string

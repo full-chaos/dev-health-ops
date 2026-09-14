@@ -460,6 +460,7 @@ _SPECS: dict[str, _SourceSpec] = {
                '' AS source_url, 0 AS deleted, ifNull(confidence, 1.0) AS confidence
         FROM work_graph_edges FINAL
         WHERE org_id = {{org_id:String}}
+          AND is_deleted = 0
           AND discovered_at >= {{start:DateTime64(3, 'UTC')}}
           AND discovered_at < {{end:DateTime64(3, 'UTC')}}
           AND ({_search_predicate(("edge_id", "source_id", "target_id", "edge_type"))})
@@ -478,6 +479,7 @@ _SPECS: dict[str, _SourceSpec] = {
                '' AS source_url, 0 AS deleted, ifNull(confidence, 1.0) AS confidence
         FROM work_graph_edges FINAL
         WHERE org_id = {org_id:String} AND edge_id = {entity_id:String}
+          AND is_deleted = 0
           AND (empty({repository_ids:Array(String)}) OR toString(repo_id) IN {repository_ids:Array(String)})
         ORDER BY last_synced DESC LIMIT 1
         """,

@@ -530,7 +530,10 @@ class TestWorkGraphFlow:
             sql = mock_query.call_args[0][1]
             params = mock_query.call_args[0][2]
 
-            assert "edge_type" not in sql
+            # edge_type appears in the tombstone identity tuple; only a
+            # predicate ON it would be an edge-list-only filter.
+            assert "edge_type =" not in sql
+            assert "edge_type IN" not in sql
             assert "node_id" not in sql
             assert "repo_id IN %(repo_ids)s" in sql
             assert params["repo_ids"] == ["repo-1"]

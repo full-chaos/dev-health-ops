@@ -185,7 +185,8 @@ func WriteEdges(ctx context.Context, conn driver.Conn, organizationID string, ro
 // FINAL here is deliberate and NOT the same divergence flagged on
 // dependencyReadSQL above -- Python's own read of THIS table uses FINAL too
 // (builder.py:959), because this query decides what to DELETE and reading a
-// pre-merge duplicate would target an id that may already be gone.
+// pre-merge duplicate would target an id that may already be gone. A
+// tombstoned identity is not live, so it is not an existing id.
 const existingBlockerEdgeIDsSQL = `
         SELECT edge_id
         FROM work_graph_edges FINAL
@@ -194,6 +195,7 @@ const existingBlockerEdgeIDsSQL = `
           AND target_type = 'issue'
           AND edge_type IN ('blocks', 'is_blocked_by')
           AND provenance = 'native'
+          AND is_deleted = 0
           AND edge_id > {after:String}
         ORDER BY edge_id
         LIMIT 1000
@@ -270,69 +272,6 @@ func DeleteProjectionRuns(ctx context.Context, conn driver.Conn, organizationID,
 		clickhouse.Named("rule_version", ruleVersion),
 	); err != nil {
 		return fmt.Errorf("delete work_graph_projection_runs: %w", err)
-	}
-	return nil
-}
-
-// deleteEdgesByIDSQL is one page of `_delete_dependency_edge_candidates`'s
-// delete (builder.py:988-1006). `mutations_sync=2` for the same reason as
-// above: the edges this deletes are re-created by the very next write in
-// Run(), and that write must not race a still-pending delete of the same ids.
-const deleteEdgesByIDSQL = `
-        ALTER TABLE work_graph_edges DELETE WHERE
-        org_id = {org_id:String} AND edge_id IN {edge_ids:Array(String)}
-        SETTINGS mutations_sync=2
-`
-
-// DeleteEdgesByID executes a CleanupPlan, one page at a time, in the order
-// BuildCleanupPlan produced them.
-func DeleteEdgesByID(ctx context.Context, conn driver.Conn, organizationID string, plan CleanupPlan) error {
-	if err := requireEdgeScope(organizationID); err != nil {
-		return err
-	}
-	for _, page := range plan.Pages {
-		if err := conn.Exec(ctx, deleteEdgesByIDSQL,
-			clickhouse.Named("org_id", organizationID),
-			clickhouse.Named("edge_ids", page),
-		); err != nil {
-			return fmt.Errorf("delete work_graph_edges page (%d ids): %w", len(page), err)
-		}
-	}
-	return nil
-}
-
-// staleDependencyIssueEdgesDeleteSQL ports `_delete_stale_pr_dependency_issue_edges`
-// verbatim (work_graph/builder.py, pre-CHAOS-4924 deletion): a legacy stale-row
-// shape where a PR-sourced edge was mislabelled with `source_type='issue'`
-// (`source_id` still carries its real `ghpr:`/`gitlab:` prefix) but
-// `target_type`/`target_id` name a genuine Linear issue via a
-// `linear_attachment` evidence tag. `mutations_sync=2` for the same reason
-// DeleteEdgesByID uses it: this delete must be visible before anything reads
-// work_graph_edges again in the same build.
-const staleDependencyIssueEdgesDeleteSQL = `
-        ALTER TABLE work_graph_edges DELETE WHERE
-        source_type = 'issue' AND target_type = 'issue' AND evidence = 'linear_attachment'
-        AND startsWith(target_id, 'linear:')
-        AND (startsWith(source_id, 'ghpr:') OR startsWith(source_id, 'gitlab:'))
-        AND org_id = {org_id:String}
-        SETTINGS mutations_sync=2
-`
-
-// DeleteStalePRDependencyIssueEdges runs the stale-edge cleanup
-// `_delete_stale_pr_dependency_issue_edges` used to run as the FIRST action
-// inside Python's `build()`, before any other stage. Refuses an unscoped
-// call rather than replicating Python's silent no-op on an empty org_id --
-// same deliberate divergence ReadDependencies/WriteEdges already document
-// for this package: an unscoped delete would target every tenant's stale
-// rows at once, which is never what a per-org build request means.
-func DeleteStalePRDependencyIssueEdges(ctx context.Context, conn driver.Conn, organizationID string) error {
-	if err := requireEdgeScope(organizationID); err != nil {
-		return err
-	}
-	if err := conn.Exec(ctx, staleDependencyIssueEdgesDeleteSQL,
-		clickhouse.Named("org_id", organizationID),
-	); err != nil {
-		return fmt.Errorf("delete stale PR-dependency issue edges: %w", err)
 	}
 	return nil
 }

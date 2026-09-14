@@ -1393,6 +1393,65 @@ func TestDispatchMetricsRemainingStartRejectsToday(t *testing.T) {
 	}
 }
 
+func TestDispatchMetricsRemainingRedriveValidatesFlagsBeforeTouchingTheBackend(t *testing.T) {
+	const org = "00000000-0000-4000-8000-000000000001"
+	cases := map[string][]string{
+		"invalid org": {
+			"remaining", "redrive", "--org", "not-a-uuid", "--review-evidence", "testing",
+		},
+		"invalid family": {
+			"remaining", "redrive", "--org", org, "--family", "not-a-real-family", "--review-evidence", "testing",
+		},
+		"invalid run": {
+			"remaining", "redrive", "--org", org, "--run", "not-a-uuid", "--review-evidence", "testing",
+		},
+		"missing review-evidence": {
+			"remaining", "redrive", "--org", org,
+		},
+		"missing review-evidence with terminalize": {
+			"remaining", "redrive", "--org", org, "--terminalize",
+		},
+	}
+	for name, args := range cases {
+		t.Run(name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := dispatchMetrics(context.Background(), &operatorRuntime{}, args, &stdout, &stderr)
+			if code != 1 || stderr.String() != invalidRequestJSON {
+				t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+		})
+	}
+}
+
+// TestDispatchMetricsRemainingRedriveDryRunDoesNotRequireReviewEvidence
+// mirrors `metrics finalize-redrive`'s own --dry-run exemption: a preview
+// makes no durable write, so there is nothing yet to justify.
+func TestDispatchMetricsRemainingRedriveDryRunDoesNotRequireReviewEvidence(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
+		"remaining", "redrive", "--org", "00000000-0000-4000-8000-000000000001", "--dry-run",
+	}, &stdout, &stderr)
+	if code != 1 || stderr.String() != "{\"error\":{\"code\":\"operator_backend_unavailable\"}}\n" {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+// TestDispatchMetricsRemainingRedriveReportsBackendUnavailableOnceFlagsAreValid
+// distinguishes a bad request (above) from a genuinely unconfigured operator
+// runtime once the request itself is well-formed, matching
+// TestDispatchMetricsDailyStartReportsBackendUnavailableOnceFlagsAreValid's
+// own shape for the sibling daily command.
+func TestDispatchMetricsRemainingRedriveReportsBackendUnavailableOnceFlagsAreValid(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
+		"remaining", "redrive", "--org", "00000000-0000-4000-8000-000000000001",
+		"--review-evidence", "testing",
+	}, &stdout, &stderr)
+	if code != 1 || stderr.String() != "{\"error\":{\"code\":\"operator_backend_unavailable\"}}\n" {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
 func TestManualBackfillGenerationIsDeterministicAndInputSensitive(t *testing.T) {
 	// codex review, P1: the generation MUST be a pure function of the
 	// request (never wall-clock time) so a retried CLI invocation reuses

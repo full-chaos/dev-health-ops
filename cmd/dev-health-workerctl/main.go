@@ -1964,9 +1964,117 @@ func dispatchMetricsRemaining(ctx context.Context, runtime *operatorRuntime, arg
 		return code
 	case "trigger-backstop":
 		return dispatchMetricsRemainingTriggerBackstop(ctx, runtime, args[1:], stdout, stderr)
+	case "redrive":
+		return dispatchMetricsRemainingRedrive(ctx, runtime, args[1:], stdout, stderr)
 	default:
 		return writeError(stderr, "invalid_request")
 	}
+}
+
+// dispatchMetricsRemainingRedrive handles `metrics remaining redrive`: the
+// operator entry point that closes the gap `metrics daily-redrive` already
+// closes for the daily family -- a remaining_metric_runs row stuck
+// status='running' forever behind a 'failed' partition nothing will ever
+// automatically retry (River permanently discarded the one job it ever
+// published for that partition, or the run predates the automatic
+// last-partition terminalize this same change adds -- see
+// ReleasePartitionTerminally). Scoped to --org, optionally narrowed to one
+// --family and/or one --run.
+//
+// Always prints the run/partition table first (StrandedRuns), in both
+// --dry-run and real invocations, mirroring `metrics daily-blocked`'s
+// read-first shape. Exactly one action then runs: by default, a fresh job
+// is published for every currently-'failed' partition of every matching
+// run (re-enqueue); with --terminalize, every matching run with no
+// partition still pending/running is instead moved straight to
+// status='failed' (a one-way trip out of 'running' with no automatic path
+// back). --review-evidence is REQUIRED unless --dry-run -- required doubly
+// so for --terminalize, since terminalizing a run destroys nothing but
+// forecloses ever automatically finishing it.
+func dispatchMetricsRemainingRedrive(
+	ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer,
+) int {
+	flags := quietFlags("metrics remaining redrive")
+	org := flags.String("org", "", "organization id (uuid)")
+	family := flags.String("family", "", "optional remaining-metrics family to narrow the scope to ("+strings.Join(remainingRedriveFamilyNames(), ", ")+")")
+	run := flags.String("run", "", "optional single remaining_metric_runs id (uuid) to narrow the scope to")
+	terminalize := flags.Bool("terminalize", false, "move every matching run with no partition still pending/running straight to status='failed', instead of re-enqueuing its failed partitions")
+	reviewEvidence := flags.String("review-evidence", "", "REQUIRED unless --dry-run: what you verified before authorizing this action (for --terminalize, why no automatic or manual redrive will ever finish this run)")
+	dryRun := flags.Bool("dry-run", false, "print the run/partition table without publishing or terminalizing anything")
+	if flags.Parse(args) != nil || flags.NArg() != 0 {
+		return writeError(stderr, "invalid_request")
+	}
+	canonicalOrg, err := canonicalUUID(*org)
+	if err != nil {
+		return writeError(stderr, "invalid_request")
+	}
+	*org = canonicalOrg
+	if *family != "" && !slices.Contains(remainingRedriveFamilyNames(), *family) {
+		return writeError(stderr, "invalid_request")
+	}
+	canonicalRun := ""
+	if strings.TrimSpace(*run) != "" {
+		canonicalRun, err = canonicalUUID(*run)
+		if err != nil {
+			return writeError(stderr, "invalid_request")
+		}
+	}
+	if !*dryRun && strings.TrimSpace(*reviewEvidence) == "" {
+		return writeError(stderr, "invalid_request")
+	}
+	if runtime.pools == nil || runtime.registry == nil {
+		return writeError(stderr, "operator_backend_unavailable")
+	}
+	store, err := remaining.NewPostgresStore(runtime.pools.Domain)
+	if err != nil {
+		return writeError(stderr, "operator_backend_unavailable")
+	}
+	candidates, err := store.StrandedRuns(ctx, *org, *family, canonicalRun)
+	if err != nil {
+		return writeServiceError(stderr, err)
+	}
+	if *dryRun {
+		status := "would_redrive"
+		if *terminalize {
+			status = "would_terminalize"
+		}
+		return writeResult(stdout, stderr, map[string]any{
+			"stranded_runs": candidates,
+			"terminalize":   *terminalize,
+			"status":        status,
+		})
+	}
+	publisher, err := remaining.NewPostgresPublisher(runtime.pools.Domain, runtime.registry)
+	if err != nil {
+		return writeError(stderr, "operator_backend_unavailable")
+	}
+	outcome, err := store.Redrive(ctx, publisher, *org, *family, canonicalRun, uuid.NewString(), *terminalize, *reviewEvidence)
+	if err != nil {
+		return writeServiceError(stderr, err)
+	}
+	return writeResult(stdout, stderr, map[string]any{
+		"stranded_runs": candidates,
+		"outcome":       outcome,
+	})
+}
+
+// remainingRedriveFamilyNames returns every family name `metrics remaining
+// redrive`'s --family flag accepts, derived from families.json -- the
+// single source for the family list this CLI already uses elsewhere,
+// rather than a second hand-maintained copy. A families.json load failure
+// here means the embedded artifact itself is corrupt -- the same
+// build-time-defect condition remaining.Load's other callers panic on --
+// so this does too, rather than silently accepting every --family value.
+func remainingRedriveFamilyNames() []string {
+	inventory, err := remaining.Load()
+	if err != nil {
+		panic(fmt.Sprintf("remaining metrics redrive: families.json failed to load: %v", err))
+	}
+	names := make([]string, len(inventory.Families))
+	for index, family := range inventory.Families {
+		names[index] = family.Name
+	}
+	return names
 }
 
 // manualBackstopTriggerReadbackHint returns the ClickHouse readback query

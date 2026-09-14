@@ -147,6 +147,17 @@ const metricsExecutionFailureDetailPreviewLimit = 200
 // try to reproduce that liveness check locally, `execution-repair`'s
 // --expected-state accepts 'executing' too for exactly that already-decided
 // case).
+//
+// Also excludes a row whose owning run (daily_metrics_runs or
+// remaining_metric_runs, by worker_kind) has already reached a terminal
+// status (succeeded/failed/canceled): repairing this ledger can never
+// change anything about a run nothing will ever revisit again, and
+// surfacing it here would read as "still needs repair" for a run that is
+// already done, one way or the other. This matters specifically now that a
+// remaining_metric_run can reach status='failed' (the automatic
+// last-partition terminalize, and `metrics remaining redrive
+// --terminalize`) -- a schema-legal value the ledger listing previously had
+// no reason to treat specially, because nothing ever wrote it.
 func dispatchMetricsListAmbiguousExecutions(ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer) int {
 	flags := quietFlags("metrics list-ambiguous-executions")
 	org := flags.String("org", "", "optional organization id (uuid) to scope the listing")
@@ -175,6 +186,7 @@ LEFT JOIN remaining_metric_runs AS remaining_run
   ON execution.worker_kind = 'remaining' AND remaining_run.id = execution.run_id
 WHERE execution.state = 'ambiguous'
   AND ($1::uuid IS NULL OR COALESCE(daily_run.org_id, remaining_run.org_id) = $1::uuid)
+  AND COALESCE(daily_run.status, remaining_run.status) NOT IN ('succeeded', 'failed', 'canceled')
 ORDER BY execution.last_attempt_at`, orgFilter)
 	if err != nil {
 		return writeError(stderr, "operator_backend_unavailable")

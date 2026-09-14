@@ -351,11 +351,7 @@ internal/jobs/investment	35
 internal/jobs/investment/categorize	15
 internal/jobs/investment/chquery	122
 internal/jobs/investment/chwrite	130
-# internal/jobs/metrics/daily: +30s for TestBlameOwnershipMatchesFullScanBlameMap,
-# one ClickHouse container plus the real migration chain via chschema.Apply,
-# measured 29.86s locally. The prior 6 predates this package's other
-# container tests and is not re-timed here.
-internal/jobs/metrics/daily	36
+internal/jobs/metrics/daily	6
 # internal/jobs/metrics/daily/benchmarking (CHAOS-4806): first
 # -tags=integration file in this package,
 # TestWriteBaselinesNullFieldsRoundTripAsRealClickHouseNull, one

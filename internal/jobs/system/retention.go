@@ -143,7 +143,8 @@ func (handler *RetentionHandler) Work(ctx context.Context, execution *jobruntime
 	if deleteBefore.After(handler.now().UTC().Add(retentionClockSkew)) {
 		return jobruntime.Permanent(errors.New("retention cutoff is in the future"))
 	}
-	if _, err := store.DeleteBefore(ctx, deleteBefore, payload.BatchSize); err != nil {
+	deleted, err := store.DeleteBefore(ctx, deleteBefore, payload.BatchSize)
+	if err != nil {
 		return jobruntime.Retryable(err)
 	}
 	// deleteInChunks (retention_postgres.go) stops as soon as one chunk comes
@@ -166,6 +167,20 @@ func (handler *RetentionHandler) Work(ctx context.Context, execution *jobruntime
 				payload.RetentionPolicy, remaining,
 			))
 		}
+	}
+	// The deleted count is the only durable evidence an operator has of what
+	// one retention run actually did -- without it, a zero-row run and a
+	// silently-broken one look identical, and the only way to tell them apart
+	// is diffing table counts before and after. Emitted through the same
+	// execution-scoped logger every handler in this runtime already uses for
+	// its own result line (see e.g. the provider-unit handler's lifecycle
+	// log), not a new logging mechanism.
+	if execution.Logger != nil {
+		execution.Logger.InfoContext(ctx, "system_retention_finished",
+			"retention_policy", payload.RetentionPolicy,
+			"delete_before", payload.DeleteBefore,
+			"deleted", deleted,
+		)
 	}
 	return nil
 }

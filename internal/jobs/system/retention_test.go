@@ -1,8 +1,12 @@
 package system
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -75,15 +79,16 @@ func allRetentionStores(store RetentionStore) map[string]RetentionStore {
 }
 
 type retentionStore struct {
-	before time.Time
-	limit  int
-	called bool
-	err    error
+	before  time.Time
+	limit   int
+	called  bool
+	err     error
+	deleted int64
 }
 
 func (store *retentionStore) DeleteBefore(_ context.Context, before time.Time, limit int) (int64, error) {
 	store.before, store.limit, store.called = before, limit, true
-	return 0, store.err
+	return store.deleted, store.err
 }
 
 func retentionExecution(payload jobcontract.RetentionCleanupPayload) *jobruntime.Execution[jobruntime.RetentionCleanupArgs] {
@@ -304,6 +309,53 @@ func TestRetentionHandlerNeverRecountsAPolicyWithoutTheAmbiguity(t *testing.T) {
 		BatchSize: 500, DeleteBefore: "2026-07-14T12:00:00Z", RetentionPolicy: jobcontract.RetentionRateLimitObservations,
 	})); err != nil {
 		t.Fatalf("Work: %v", err)
+	}
+}
+
+// TestRetentionHandlerLogsTheDeletedCountPolicyAndCutoffOnSuccess is the
+// operator-visibility control: before this, a successful retention run's only
+// durable evidence of what it did was a before/after table-count diff. Every
+// contract-declared policy must emit its own deleted count, policy name, and
+// cutoff on its finished line so an operator can read what one run did
+// without touching the database.
+func TestRetentionHandlerLogsTheDeletedCountPolicyAndCutoffOnSuccess(t *testing.T) {
+	t.Parallel()
+	for index, policy := range jobcontract.RetentionPolicies() {
+		t.Run(policy, func(t *testing.T) {
+			t.Parallel()
+			wantDeleted := int64(index + 1)
+			store := &retentionStore{deleted: wantDeleted}
+			handler, err := NewRetentionHandler(allRetentionStores(store))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var captured bytes.Buffer
+			execution := retentionExecution(jobcontract.RetentionCleanupPayload{
+				BatchSize: 250, DeleteBefore: "2026-07-14T12:00:00Z", RetentionPolicy: policy,
+			})
+			execution.Logger = slog.New(slog.NewJSONHandler(&captured, &slog.HandlerOptions{Level: slog.LevelInfo}))
+			if err := handler.Work(context.Background(), execution); err != nil {
+				t.Fatalf("Work: %v", err)
+			}
+			line := strings.TrimSpace(captured.String())
+			if line == "" {
+				t.Fatal("nothing was logged -- a successful run left no durable evidence of what it deleted")
+			}
+			var record map[string]any
+			if err := json.Unmarshal([]byte(strings.Split(line, "\n")[0]), &record); err != nil {
+				t.Fatalf("log line is not JSON: %v\n%s", err, line)
+			}
+			if got, _ := record["retention_policy"].(string); got != policy {
+				t.Errorf("retention_policy = %q, want %q", got, policy)
+			}
+			if got, _ := record["delete_before"].(string); got != "2026-07-14T12:00:00Z" {
+				t.Errorf("delete_before = %q, want the cutoff the occurrence ran with", got)
+			}
+			gotDeleted, ok := record["deleted"].(float64)
+			if !ok || int64(gotDeleted) != wantDeleted {
+				t.Errorf("deleted = %v, want %d", record["deleted"], wantDeleted)
+			}
+		})
 	}
 }
 

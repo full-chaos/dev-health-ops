@@ -666,8 +666,9 @@ by default (30 at most), and `go-api-prove` re-runs the helper every four
 minutes, so no token outlives one run by more than its TTL. Revoke with
 `is_active = false` on the row; bumping `token_version` ends every token
 already minted. `mint-edge-token` reads the key and the DSN by env var name
-only, never from a flag. `GO_API_PROVE_BEARER` (a hand-minted token) is
-still accepted; setting it together with `-edge-bearer-exec` is refused.
+only, never from a flag. `-edge-bearer-exec` is the only source for
+`go-api-prove`'s edge credential; the earlier hand-minted static bearer is
+retired.
 
 ## Float comparison: engine nondeterminism and the Tier-B rule
 

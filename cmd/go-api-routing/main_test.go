@@ -68,16 +68,14 @@ func TestRequestedOperationsRefusesAFilterThatNamesNothing(t *testing.T) {
 	}
 }
 
-// The credential env var must name the ENVELOPE, not the edge access
-// token: /buildinfo checks the envelope and rejects the access token with
-// 401. Naming the wrong one sends an operator into a 401 that reads like
-// an authorization failure rather than a wrong credential KIND.
-func TestBearerEnvVarIsDistinctFromTheProveEdgeToken(t *testing.T) {
-	if bearerEnvVar == "GO_API_PROVE_BEARER" {
-		t.Fatal("this command needs the envelope; GO_API_PROVE_BEARER is go-api-prove's EDGE access token")
-	}
+// The credential env var must name this command's OWN routing credential,
+// never a flag: a flag value reaches ps and shell history.
+func TestBearerEnvVarNamesTheRoutingCredential(t *testing.T) {
 	if bearerEnvVar == "" {
 		t.Fatal("the credential must come from a named environment variable, never a flag: a flag value reaches ps and shell history")
+	}
+	if bearerEnvVar != "GO_API_ROUTING_BEARER" {
+		t.Fatalf("bearerEnvVar = %q, want GO_API_ROUTING_BEARER", bearerEnvVar)
 	}
 }
 

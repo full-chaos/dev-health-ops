@@ -176,7 +176,7 @@ run_go_api_prove_e2e() {
   set +e
   (
     cd "${ROOT_DIR}"
-    unset GO_API_PROVE_BEARER GO_API_PROVE_PROOF_BEARER
+    unset GO_API_PROVE_PROOF_BEARER
     POSTGRES_URI="${pgx_uri}" "${BIN_DIR}/go-api-prove" \
       -registry-url "${query_api}/registry" \
       -buildinfo-url "${query_api}/buildinfo" \

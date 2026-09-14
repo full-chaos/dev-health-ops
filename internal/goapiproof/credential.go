@@ -211,9 +211,9 @@ func (c *Credential) value(ctx context.Context) (string, error) {
 			// the confusion this whole file exists to remove. Refuse at
 			// the source (r2 P2).
 			// TrimSpace, not == "": r3 installed `Authorization: "Bearer    "`
-			// from GO_API_PROVE_BEARER="   ", which the server answers 401 --
-			// the same indistinguishable-401 an empty one produces. Whitespace
-			// is an empty credential wearing a disguise.
+			// from a whitespace-only static bearer env var, which the server
+			// answers 401 -- the same indistinguishable-401 an empty one
+			// produces. Whitespace is an empty credential wearing a disguise.
 			return "", fmt.Errorf("the %s credential is empty or whitespace", c.kind)
 		}
 		return c.state.cached, nil
@@ -265,9 +265,9 @@ func (c *Credential) Apply(ctx context.Context, request *http.Request) error {
 // isEmptyCredential reports whether a header value carries no actual
 // credential.
 //
-// Not simply == "": r3 installed `Authorization: "Bearer    "` from
-// GO_API_PROVE_BEARER="   ", which the server answers 401 -- the same
-// indistinguishable-401 an empty value produces. And not simply
+// Not simply == "": r3 installed `Authorization: "Bearer    "` from a
+// whitespace-only static bearer env var, which the server answers 401 --
+// the same indistinguishable-401 an empty value produces. And not simply
 // TrimSpace either, because by the time the value reaches here it already
 // carries the "Bearer " scheme, so the whitespace that matters is AFTER
 // the scheme. Whitespace is an empty credential wearing a disguise, and it

@@ -472,7 +472,16 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # CURRENT TOTAL: 57 -- the one number to bump when a new
     # -tags=integration package is added.
     assert "57 package(s) discovered, 0 denylisted, 57 will run" in result.stdout
-    assert "integration shard plan: 3 shard(s), 57 package(s)" in result.stdout
+    # Raised 3 -> 4: a whole-manifest re-time from hosted CI evidence (see
+    # ci/go_integration_shards.tsv's own header) found the honest per-package
+    # weights no longer leave internal/providersync dominant enough to stay
+    # isolated at three shards without an unmeasured, hand-inflated weight.
+    # Four shards keeps its real measured weight dominant on its own and
+    # gives the three balanced "packages" shards real headroom under the
+    # job's 20-minute target -- see the weight-derived isolation check below
+    # for how a future regression here is caught instead of silently
+    # re-balanced.
+    assert "integration shard plan: 4 shard(s), 57 package(s)" in result.stdout
 
     output = dict(
         line.split("=", maxsplit=1)
@@ -486,17 +495,23 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
         ("providersync", 4),
         ("packages", 2),
         ("packages", 3),
+        ("packages", 4),
     }
-    assert len(matrix) == 6
+    assert len(matrix) == 7
 
     assignments: dict[int, set[str]] = {}
+    shard_weights: dict[str, int] = {}
     for line in result.stdout.splitlines():
         if not line.startswith("  SHARD "):
             continue
-        _, shard, package, _weight = line.split()
+        _, shard, package, weight_field = line.split()
         assignments.setdefault(int(shard), set()).add(package)
+        assert weight_field.startswith("weight=") and weight_field.endswith("s"), (
+            weight_field
+        )
+        shard_weights[package] = int(weight_field.removeprefix("weight=").removesuffix("s"))
 
-    assert set(assignments) == {1, 2, 3}
+    assert set(assignments) == {1, 2, 3, 4}
     flattened = [package for packages in assignments.values() for package in packages]
     # CHAOS-4441: 36, not 35 -- internal/jobs/investment/chquery added. This
     # is the FLATTENED set across all shards, so unlike the selected-package
@@ -541,7 +556,35 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # CURRENT TOTAL: 57 -- the one number to bump.
     assert len(flattened) == len(set(flattened)) == 57
     assert set(flattened) == EXPECTED_PACKAGES
-    assert assignments[1] == {"internal/providersync"}
+
+    # internal/providersync's isolation in the lowest-numbered shard is a
+    # property of its WEIGHT relative to the other packages, not a fact this
+    # test should hardcode as a bare membership literal -- a literal only
+    # tells a human "this passed today", it does not explain why, and it
+    # says nothing about how close the next re-time is to breaking it. Derive
+    # the same inequality the LPT planner's own greedy placement depends on
+    # directly from the planner's printed weights: providersync must cover
+    # at least the other packages' balanced share once split evenly across
+    # the remaining shards, or the planner starts packing packages into its
+    # shard too. Checking the inequality AND the resulting membership means
+    # a future package addition that erodes this margin fails loudly here,
+    # with the actual numbers, instead of a human silently recounting a new
+    # shard-1 membership as fine.
+    provider_weight = shard_weights[PROVIDER_PACKAGE]
+    other_total = sum(
+        weight for package, weight in shard_weights.items() if package != PROVIDER_PACKAGE
+    )
+    non_isolated_shards = len(assignments) - 1
+    balanced_share = other_total / non_isolated_shards
+    assert provider_weight >= balanced_share, (
+        f"{PROVIDER_PACKAGE}'s weight ({provider_weight}s) no longer covers "
+        f"the other {len(shard_weights) - 1} packages' balanced per-shard "
+        f"share ({balanced_share:.1f}s across {non_isolated_shards} shards) "
+        "-- the LPT planner will start packing other packages into its "
+        "shard. Re-time ci/go_integration_shards.tsv (or raise its shard "
+        "count) before this reshuffles silently."
+    )
+    assert assignments[1] == {PROVIDER_PACKAGE}
 
     estimated = {
         int(match.group("shard")): int(match.group("seconds"))
@@ -554,48 +597,15 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
             )
         )
     }
-    assert set(estimated) == {1, 2, 3}
-    # CHAOS-5336 removed internal/testsupport/computeparity's 50s package.
-    # Every prior package-count change in this file's history (see the
-    # "LPT re-balanced shards 2/3" notes above) kept the greedy LPT
-    # algorithm's shards 2/3 within 1s of each other; removing this
-    # specific-sized item pushes it to 777s/775s, 2s apart -- LPT balance
-    # is not guaranteed monotonic under item removal, this is the
-    # algorithm's actual output, not a bug in this PR's diff. Loosening the
-    # tolerance to reflect it rather than silently widening it further:
-    # re-tighten if a future change brings the gap back under 1s.
-    # CHAOS-5486 raised internal/goapiproof 30 -> 90, then its codex r2 fixes
-    # raised it again 90 -> 110 (seventeen more container-per-test integration
-    # tests in the same package, two of them deterministic concurrency tests;
-    # whole-package measured run 101.96s on bigboy). Shards 2/3 land at
-    # 903s/904s -- within 1s -- so the tolerance is re-tightened here as the
-    # note above asked, rather than left loose because it happens to pass.
-    # Raised again 110 -> 120 by r3's CONC-01 fix (one more duplicate-row
-    # re-point test; measured 113.98s). Shards 2/3 land at 908s/909s.
-    # Re-measured 2026-09-10 on the rebase onto 8a0590b22: 108.80s and
-    # 109.70s across two -count=1 runs, so 120 keeps its headroom and is
-    # left unchanged (see the ledger entry in ci/go_integration_shards.tsv
-    # for why a weight is not lowered to chase a quiet host). With the two
-    # packages main added since -- cmd/query-api/internal/featureflags and
-    # internal/jobs/metrics/daily/benchmarking -- shards 2/3 land at
-    # 933s/934s, still a gap of 1.
-    # r1's P3 fix then added cmd/go-api-routing at weight 10 (measured
-    # 8.009s / 7.926s across two -count=1 runs): shards 2/3 land at
-    # 939s/938s, still a gap of 1, so the tolerance stays tightened.
-    # internal/goapiproof's weight was subsequently raised further, 120 ->
-    # 175 (see ci/go_integration_shards.tsv for the full measurement
-    # history).
-    # CHAOS-5505, rebased onto that 175, adds ten more audit-row tests, and
-    # every routing verb's existing test now also builds
-    # go_api_routing_audits. See ci/go_integration_shards.tsv for the
-    # measured weight this landed at, then corrected 175 -> 235 once PR
-    # #2448's isolated hosted CI run (not a host-contended local one) gave
-    # a real measurement (234.482s, shard 2 job 103446098966).
-    # CHAOS-5507, stacked on that corrected 235, adds three 20-round
-    # concurrency tests plus a deterministic TOCTOU test: 235 -> 245 (see
-    # ci/go_integration_shards.tsv for the full measurement history and
-    # why the post-rebase local re-run was discounted).
-    assert abs(estimated[2] - estimated[3]) <= 1
+    assert set(estimated) == {1, 2, 3, 4}
+    # The three non-isolated "packages" shards (2/3/4) are what the LPT
+    # planner actually balances against each other -- shard 1 only ever
+    # holds internal/providersync, checked above. Recounted directly from
+    # this run's own planner output (not hand-adjusted): 2119s/2119s/2118s,
+    # a 1s spread. Re-tighten or loosen this to match a future re-time's
+    # actual output rather than forcing new weights to preserve today's gap.
+    packages_totals = [estimated[shard] for shard in (2, 3, 4)]
+    assert max(packages_totals) - min(packages_totals) <= 1
 
     expected_provider_tests = _providersync_top_level_tests()
     expected_integration_tests = _providersync_integration_tagged_tests()
@@ -2064,7 +2074,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
 
 def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
     selected_packages: list[str] = []
-    for shard in (2, 3):
+    for shard in (2, 3, 4):
         result = _run_check_go("integration-shard", "packages", str(shard), "--dry-run")
         assert result.returncode == 0, result.stdout + result.stderr
         assert f"integration package shard {shard}: DRY RUN" in result.stdout

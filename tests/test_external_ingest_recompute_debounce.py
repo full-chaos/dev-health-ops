@@ -15,7 +15,6 @@ from datetime import datetime, timezone
 from unittest.mock import patch
 
 import dev_health_ops.external_ingest.recompute as recompute_mod
-from dev_health_ops.external_ingest.recompute import schedule_or_coalesce
 
 ORG = "org-1"
 SYSTEM = "github"
@@ -26,7 +25,7 @@ def test_dispatches_synchronously_with_the_full_batch_scope() -> None:
     with patch(
         "dev_health_ops.external_ingest.recompute.dispatch_and_persist_scope"
     ) as mock_dispatch:
-        schedule_or_coalesce(
+        recompute_mod.schedule_or_coalesce(
             org_id=ORG,
             source_system=SYSTEM,
             source_instance=INSTANCE,
@@ -61,7 +60,7 @@ def test_dispatch_failure_propagates_to_the_caller() -> None:
         side_effect=RuntimeError("boom"),
     ):
         try:
-            schedule_or_coalesce(
+            recompute_mod.schedule_or_coalesce(
                 org_id=ORG,
                 source_system=SYSTEM,
                 source_instance=INSTANCE,
@@ -95,7 +94,7 @@ def test_no_valkey_dependency_dispatches_identically_regardless_of_redis_url(
     monkeypatch.setattr(recompute_mod, "dispatch_and_persist_scope", _fake_dispatch)
 
     def _call() -> None:
-        schedule_or_coalesce(
+        recompute_mod.schedule_or_coalesce(
             org_id=ORG,
             source_system=SYSTEM,
             source_instance=INSTANCE,

@@ -162,6 +162,17 @@ func (publisher *PostgresPublisher) PublishPartitionTx(
 // invocation (a fresh UUID is the expected caller pattern), so a repeated
 // redrive of the same still-failed partition is never silently deduped
 // against an earlier attempt.
+//
+// Branches on descriptor.Executable() and carries both routes, exactly like
+// PublishPartitionTx, even though only the executable route is ever reached
+// in practice here: a partition can only have reached 'failed' by first
+// being claimed and computed through the native (River-only) executor path,
+// which requires an already-executable route, so a redrive of it can never
+// legitimately need the deferred one. The kind is still resolved from
+// run.Family at run time, not a compile-time constant, so it cannot be
+// checked per kind the way a fixed-kind call site can -- carrying both
+// routes here is what keeps this call site checkable at all (see
+// TestEveryOutboxPublishSiteAgreesWithTheCheckedInRoute).
 func (publisher *PostgresPublisher) PublishRedrivePartitionTx(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -182,14 +193,6 @@ func (publisher *PostgresPublisher) PublishRedrivePartitionTx(
 	if !ok {
 		return ErrUnavailable
 	}
-	if !descriptor.Executable() {
-		// A partition can only ever have reached 'failed' by first being
-		// claimed and executed (ClaimPartition/ComputePartition), which
-		// requires an executable route -- a deferred-only route here means
-		// the checked-in route table itself regressed, not a normal redrive
-		// input.
-		return fmt.Errorf("%w: remaining metrics redrive route is not executable", ErrInvalidState)
-	}
 	organizationID := run.OrganizationID
 	envelope := jobcontract.Envelope{
 		ContractVersion: jobcontract.ContractVersionV1,
@@ -202,7 +205,13 @@ func (publisher *PostgresPublisher) PublishRedrivePartitionTx(
 		},
 		Payload: jobcontract.NewRemainingMetricsPartitionPayload(kind, partition.ID),
 	}
-	if err := publisher.producer.Publish(ctx, tx, kind, envelope); !joboutbox.IsPublished(err) {
+	var err error
+	if descriptor.Executable() {
+		err = publisher.producer.Publish(ctx, tx, kind, envelope)
+	} else {
+		err = publisher.producer.PublishDeferred(ctx, tx, kind, envelope)
+	}
+	if !joboutbox.IsPublished(err) {
 		if errors.Is(err, joboutbox.ErrContractRejected) || errors.Is(err, joboutbox.ErrPolicyRejected) {
 			return fmt.Errorf("%w: %w", ErrInvalidState, err)
 		}

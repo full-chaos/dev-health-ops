@@ -375,6 +375,13 @@ CREATE TABLE worker_job_completion_fences (
 	if err != nil {
 		t.Fatal(err)
 	}
+	// deadHandoffReasonSQL (redrive.go) is embedded in
+	// findManualBackfillBlocker's own query (manual_backfill.go), so every
+	// caller of StartManualBackfillRun/StartManualCapacityTriggerRun/
+	// StartManualRecommendationsTriggerRun -- not just this package's
+	// redrive-focused tests -- reads worker_job_outbox now. The real schema
+	// always has it alongside these tables; this fixture matches that.
+	createRemainingOutboxTable(t, ctx, pool)
 }
 
 // A live lease must be reported, not folded into the same nil that means

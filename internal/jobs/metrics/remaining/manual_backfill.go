@@ -636,7 +636,20 @@ WHERE run.org_id = $1::uuid AND run.family = $2
   AND run.status IN ('pending', 'running', 'succeeded')
   AND coalesce(partition.scope->>'day', run.scope_key) >= $3
   AND coalesce(partition.scope->>'day', run.scope_key) <= $4
-  AND (NOT $5 OR partition.scope = $6::jsonb)`,
+  AND (NOT $5 OR partition.scope = $6::jsonb)
+  -- CHAOS gap: a 'pending' run whose handoff is provably dead under
+  -- deadHandoffReasonSQL (redrive.go -- the SAME predicate
+  -- UnstartableRuns/terminalizeUnstartableRuns use, kept in one place on
+  -- purpose) will never be claimed, so it can never become the genuine
+  -- blockReasonInProgress collision this query exists to catch. Left
+  -- unfiltered, a zombie pending run with a dead handoff would refuse an
+  -- operator's manual backfill for a day nothing will ever actually
+  -- compute. 'running' and 'succeeded' rows are untouched by this
+  -- exclusion -- their handoff already delivered (running) or is
+  -- irrelevant to a completed partition's own coverage value (succeeded),
+  -- so narrowing it to run.status = 'pending' keeps every other coverage
+  -- and in-progress rule exactly as before.
+  AND NOT (run.status = 'pending' AND `+deadHandoffReasonSQL+` <> 'deliverable')`,
 		organizationID, family, day, upperBound, requireExactScope, scopeFilter,
 	)
 	if err != nil {

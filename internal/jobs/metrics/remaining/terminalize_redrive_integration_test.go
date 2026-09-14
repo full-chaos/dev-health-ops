@@ -56,11 +56,17 @@ func newRemainingRedriveTestStack(t *testing.T) (*pgxpool.Pool, *PostgresStore, 
 // createRemainingOutboxTable adds worker_job_outbox alongside
 // createRemainingTables's own tables -- column-for-column the same fixture
 // shape internal/jobs/metrics/daily's own createDailyTables uses, since
-// joboutbox.Producer's write path is family-agnostic.
+// joboutbox.Producer's write path is family-agnostic. createRemainingTables
+// itself now calls this (deadHandoffReasonSQL, embedded in
+// findManualBackfillBlocker's own query, reads worker_job_outbox on every
+// invocation, not just this file's redrive-focused tests), so the CREATE is
+// idempotent: a caller that -- like this file's own stack builder -- still
+// calls both explicitly hits IF NOT EXISTS rather than a duplicate-relation
+// error.
 func createRemainingOutboxTable(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
 	_, err := pool.Exec(ctx, `
-CREATE TABLE worker_job_outbox (
+CREATE TABLE IF NOT EXISTS worker_job_outbox (
  id uuid PRIMARY KEY, dedupe_key varchar(256) NOT NULL UNIQUE,
  job_kind varchar(96) NOT NULL, contract_version integer NOT NULL,
  args json NOT NULL, payload_hash varchar(71) NOT NULL,

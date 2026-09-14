@@ -742,6 +742,44 @@ func TestWorkerJobTerminalRetentionIsScheduledWithTheDefaultHorizon(t *testing.T
 	}
 }
 
+// Unlike Ask Dev (whose product-owned expires_at makes zero a coherent
+// posture) and unlike the two other day-based policies (where zero is a
+// deliberately legal "retain nothing" configuration, pinned by
+// TestZeroHorizonEmitsACutoffExactlyAtTheDueTime), worker_job_terminal has no
+// product-owned floor of its own: an override of zero -- or anything below
+// one day -- must fail loudly rather than collapse the window to same-day
+// deletion.
+func TestWorkerJobTerminalRetentionRejectsAnOverrideBelowOneDay(t *testing.T) {
+	schedule := scheduleByID(t, "prune_worker_job_terminal")
+	dueTime := mustTime(t, "2026-07-24T05:45:00Z")
+
+	for _, raw := range []string{"0"} {
+		t.Setenv("WORKER_JOB_TERMINAL_RETENTION_DAYS", raw)
+		outcome, err := NewRetentionProducer().Produce(
+			context.Background(), &stubTx{}, schedule, NewOccurrence(schedule, dueTime, dueTime),
+		)
+		if !errors.Is(err, ErrRetentionConfiguration) {
+			t.Fatalf("override %q = %v, want ErrRetentionConfiguration", raw, err)
+		}
+		if len(outcome.Requests) != 0 {
+			t.Fatalf("override %q emitted work anyway: %+v", raw, outcome)
+		}
+	}
+
+	// One day is the boundary and must be accepted.
+	t.Setenv("WORKER_JOB_TERMINAL_RETENTION_DAYS", "1")
+	outcome, err := NewRetentionProducer().Produce(
+		context.Background(), &stubTx{}, schedule, NewOccurrence(schedule, dueTime, dueTime),
+	)
+	if err != nil {
+		t.Fatalf("override %q = %v, want the one day floor accepted", "1", err)
+	}
+	payload := outcome.Requests[0].Envelope.Payload.(jobcontract.RetentionCleanupPayload)
+	if payload.DeleteBefore != "2026-07-23T05:45:00Z" {
+		t.Fatalf("delete_before = %s, want exactly one day back", payload.DeleteBefore)
+	}
+}
+
 // A malformed or non-positive override must keep the checked default rather
 // than widening or zeroing a deletion range.
 func TestEveryProducedEnvelopeSatisfiesTheCompiledContract(t *testing.T) {

@@ -431,9 +431,10 @@ func (result *OrphanedUnitRepairResult) merge(committed committedOutcome) {
 func (repair *OrphanedUnitRepair) survey(
 	ctx context.Context, now time.Time, limit int,
 ) ([]orphanedCandidate, error) {
+	started := time.Now()
 	rows, err := repair.queryQueue(ctx, repair.surveyQuery, now, now.Add(-repair.staleAge), limit)
 	if err != nil {
-		return nil, repair.failed(ctx, "survey", err)
+		return nil, repair.surveyFailed(ctx, "survey", err, 0, time.Since(started), limit)
 	}
 	defer rows.Close()
 	candidates := make([]orphanedCandidate, 0, limit)
@@ -443,15 +444,21 @@ func (repair *OrphanedUnitRepair) survey(
 			&candidate.outboxID, &candidate.dedupeKey, &candidate.unitID,
 			&candidate.runID, &candidate.riverJobID, &candidate.disposition,
 		); err != nil {
-			return nil, repair.failed(ctx, "survey_scan", err)
+			return nil, repair.surveyFailed(ctx, "survey_scan", err, len(candidates), time.Since(started), limit)
 		}
 		if !uuidPattern.MatchString(candidate.outboxID) || !uuidPattern.MatchString(candidate.unitID) {
-			return nil, repair.failed(ctx, "survey_identity", ErrUnavailable)
+			return nil, repair.surveyFailed(ctx, "survey_identity", ErrUnavailable, len(candidates), time.Since(started), limit)
 		}
 		candidates = append(candidates, candidate)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, repair.failed(ctx, "survey_rows", err)
+		// This is the shape a stage-budget miss takes: the deadline that
+		// bounds this call fires while rows.Next() is blocked mid-scan, pgx
+		// sends the driver a cancel, and that surfaces here rather than at
+		// the initial Query call above. surveyFailed's evidence line is what
+		// makes THIS failure diagnosable, because every other field this
+		// function can report is otherwise silent about how far the scan got.
+		return nil, repair.surveyFailed(ctx, "survey_rows", err, len(candidates), time.Since(started), limit)
 	}
 	if len(candidates) > limit {
 		return nil, repair.failed(ctx, "survey_bound", ErrUnavailable)
@@ -506,7 +513,7 @@ func (repair *OrphanedUnitRepair) rearm(
 		var prerequisite string
 		sourceErr := tx.QueryRow(ctx, readOrphanedSourceRowSQL,
 			candidate.outboxID, candidate.dedupeKey, candidate.riverJobID,
-			providerUnitKeyPrefix(candidate.unitID), newKey,
+			providerUnitCandidateKeys(candidate.unitID), newKey,
 		).Scan(&args, &prerequisite)
 		if errors.Is(sourceErr, pgx.ErrNoRows) {
 			// The triple no longer matches, a live row appeared for this unit,
@@ -608,6 +615,39 @@ func (repair *OrphanedUnitRepair) failed(ctx context.Context, step string, cause
 	return fmt.Errorf("orphaned-unit %s: %w: %w", step, ErrUnavailable, cause)
 }
 
+// surveyFailed wraps failed with the evidence a bare
+// "syncreconciler.orphaned_unit_repair_failed" line cannot carry: how many
+// rows this attempt had already read off the wire before it stopped, and how
+// long the attempt had been running. rowsSurveyed is exact, not an estimate --
+// every entry it counts was fully scanned and appended before the failure --
+// so a stage-budget miss is diagnosable from this one line: rowsSurveyed near
+// limit says the scan was nearly done and lost a race with the clock;
+// rowsSurveyed near zero with a long elapsed says the query itself, not the
+// row count, is what is slow.
+func (repair *OrphanedUnitRepair) surveyFailed(
+	ctx context.Context, step string, cause error, rowsSurveyed int, elapsed time.Duration, limit int,
+) error {
+	slog.WarnContext(ctx, "syncreconciler.orphaned_unit_survey_incomplete",
+		"step", step,
+		"rows_surveyed", rowsSurveyed,
+		"elapsed_ms", elapsed.Milliseconds(),
+		"limit", limit,
+		"error", causeText(cause),
+	)
+	return repair.failed(ctx, step, cause)
+}
+
+// causeText answers "" for a nil cause the same way failed's own detail
+// variable does, so this line's error field and the paired
+// orphaned_unit_repair_failed line never disagree about whether a cause was
+// given.
+func causeText(cause error) string {
+	if cause == nil {
+		return ""
+	}
+	return cause.Error()
+}
+
 func (repair *OrphanedUnitRepair) logOutcome(
 	ctx context.Context, now time.Time, result OrphanedUnitRepairResult,
 ) {
@@ -636,11 +676,27 @@ func (repair *OrphanedUnitRepair) logOutcome(
 	)
 }
 
-// providerUnitKeyPrefix is the LIKE pattern covering a unit's base key and
-// every reclaim generation of it. unit is a UUID rendered by Postgres, so it
-// carries no LIKE metacharacter and needs no escape.
-func providerUnitKeyPrefix(unitID string) string {
-	return jobcontract.KindSyncProviderUnit + ":" + unitID + "%"
+// providerUnitCandidateKeys is the exhaustive, bounded set of dedupe keys ANY
+// delivered row for one unit could ever carry: the base key (generation 0)
+// through generation maxProviderUnitReclaims -- the last one
+// nextProviderUnitReclaimKey will ever mint, but still a legal surveyable
+// shape once it is delivered and stuck (the guard matrix's
+// "reclaim_budget_is_spent" arm surveys exactly this generation).
+//
+// A fixed-size equality set replaces a LIKE 'prefix%' match against
+// worker_job_outbox.dedupe_key: an exact set can be looked up through the
+// column's own unique index once per key, while a computed LIKE pattern
+// cannot use that index's ordering at all (the pattern is not a planning-time
+// constant). See selectOrphanedUnitDeliverySQL's comment for why that
+// distinction is the whole point.
+func providerUnitCandidateKeys(unitID string) []string {
+	base := jobcontract.KindSyncProviderUnit + ":" + unitID
+	keys := make([]string, 0, maxProviderUnitReclaims+1)
+	keys = append(keys, base)
+	for generation := 1; generation <= maxProviderUnitReclaims; generation++ {
+		keys = append(keys, base+providerUnitReclaimInfix+strconv.Itoa(generation))
+	}
+	return keys
 }
 
 // nextProviderUnitReclaimKey derives generation n+1 from the surveyed key.
@@ -706,26 +762,6 @@ func reclaimEnvelope(args string, idempotencyKey string) (string, string, error)
 	return string(encoded), "sha256:" + hex.EncodeToString(digest[:]), nil
 }
 
-// providerUnitDomainIdentity binds the outbox row to its unit four ways -- the
-// envelope's domain type, the domain id behind a UUID format guard, the org,
-// and the derived key prefix -- mirroring the sibling provider-unit repairs
-// rather than inventing a second convention for the same table. The domain id
-// is cast to uuid rather than unit.id being cast to text: CHAOS-4092 turned
-// exactly that inversion into a 9.5-hour crash loop, because a text cast of the
-// primary key is not sargable against it.
-const providerUnitDomainIdentity = `
-	JOIN public.sync_run_units AS unit
-		ON unit.id = CASE
-			WHEN (outbox.args #>> '{domain,id}') ~
-				'^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
-			THEN (outbox.args #>> '{domain,id}')::uuid
-			ELSE NULL
-		END
-		AND unit.org_id = outbox.args ->> 'organization_id'
-	JOIN public.sync_runs AS run
-		ON run.id = unit.sync_run_id
-		AND run.org_id = unit.org_id`
-
 // orphanedUnitIdlePredicate is the ONE definition of "no genuine progress on
 // this unit for a stale window", shared by the queue-side survey and the
 // domain-side lock.
@@ -758,28 +794,50 @@ const orphanedUnitDomainPredicate = `unit.status = 'dispatching'
 	AND ` + orphanedUnitIdlePredicate + `
 	AND ` + nonterminalSyncRunStatusPredicate
 
-// noLiveDeliveryForUnit refuses a unit that already has an executable delivery
-// under ANY generation of its key. Without it a pass could mint generation 2
-// while generation 1 sits 'pending' in the relay's own queue, which is a
-// duplicate delivery of the same work -- the one outcome a repair must never
-// produce.
+// providerUnitCandidateKeyArraySQL is the SQL ARRAY[...] expression naming
+// every dedupe key providerUnitCandidateKeys computes in Go, built from unit
+// .id and the same two constants (maxProviderUnitReclaims,
+// providerUnitReclaimInfix) so the SQL-side generation walk and the Go-side
+// one cannot drift apart.
+var providerUnitCandidateKeyArraySQL = buildProviderUnitCandidateKeyArraySQL("unit.id")
+
+func buildProviderUnitCandidateKeyArraySQL(idExpr string) string {
+	base := "'" + jobcontract.KindSyncProviderUnit + ":' || " + idExpr + "::text"
+	elements := make([]string, 0, maxProviderUnitReclaims+1)
+	elements = append(elements, base)
+	for generation := 1; generation <= maxProviderUnitReclaims; generation++ {
+		elements = append(elements, base+" || '"+providerUnitReclaimInfix+strconv.Itoa(generation)+"'")
+	}
+	return "ARRAY[" + strings.Join(elements, ", ") + "]"
+}
+
+// noLiveDeliveryForUnitKeys refuses a unit that already has an executable
+// delivery under ANY generation of its key. Without it a pass could mint
+// generation 2 while generation 1 sits 'pending' in the relay's own queue,
+// which is a duplicate delivery of the same work -- the one outcome a repair
+// must never produce.
 //
-// It is a FUNCTION over the key expression rather than two hand-kept copies:
-// the survey reaches the unit through a join and phrases the pattern as
-// `'sync.provider_unit:' || unit.id::text || '%'`, while the compare-and-set
-// has only a bind parameter, and those are the only two things that differ.
-// 5456's ready-finalizer backstop found the hard way that two look-alike
-// predicates mask each other's mutations -- neither copy can be pinned,
-// because the other still refuses the row.
+// It is a FUNCTION over the key-set expression rather than two hand-kept
+// copies: the survey passes providerUnitCandidateKeyArraySQL (computed from
+// the joined unit's own id) and the compare-and-set passes a bind parameter
+// carrying providerUnitCandidateKeys(candidate.unitID)'s own result, and those
+// are the only two things that differ. 5456's ready-finalizer backstop found
+// the hard way that two look-alike predicates mask each other's mutations --
+// neither copy can be pinned, because the other still refuses the row.
+//
+// The set is an exact equality list rather than a LIKE prefix match: a fixed,
+// small set of keys can be looked up through worker_job_outbox's own unique
+// dedupe_key index, while a computed LIKE pattern cannot use that index's
+// ordering at all, because the pattern is not a planning-time constant.
 //
 // 'pending' and 'claimed' are named POSITIVELY rather than as NOT IN
 // ('delivered','dead'), so a status added to ck_worker_job_outbox_status later
 // is treated as non-executable by default: that direction leaves a strand
 // visible, the other direction double-delivers.
-func noLiveDeliveryForUnit(keyPattern string) string {
+func noLiveDeliveryForUnitKeys(keysExpr string) string {
 	return `NOT EXISTS (
 		SELECT 1 FROM public.worker_job_outbox AS live
-		WHERE live.dedupe_key LIKE ` + keyPattern + `
+		WHERE live.dedupe_key = ANY(` + keysExpr + `)
 			AND live.status IN ('pending', 'claimed')
 	)`
 }
@@ -788,6 +846,25 @@ func noLiveDeliveryForUnit(keyPattern string) string {
 // River state; it REPORTS it, so a refusal is counted instead of vanishing --
 // this package's standing rule, and the reason UnreclaimableSweep's own
 // deferred-to-repair count exists.
+//
+// It is driven FROM sync_run_units, not from worker_job_outbox. A unit that is
+// currently 'dispatching' is a naturally bounded population -- proportional to
+// how many syncs are concurrently in flight, not to how much delivery history
+// the outbox table has ever accumulated. worker_job_outbox holds a delivered
+// or dead row for every kind for as long as the deployment has run; nothing
+// schedules retention against it today. A survey driven FROM the outbox,
+// ordered oldest-delivered-first with no lower bound, would have to walk that
+// whole, almost entirely non-matching history on every single pass -- a cost
+// that grows without bound as the table does, which no fixed stage budget can
+// absorb forever regardless of how selective the rest of the WHERE clause is.
+//
+// Driving from the unit side turns the join around: for each of the FEW
+// currently-dispatching, lease-free, idle units, this looks up at most
+// maxProviderUnitReclaims+1 specific dedupe keys (providerUnitCandidateKeys'
+// own generation set) by EQUALITY, which worker_job_outbox's existing unique
+// dedupe_key index answers directly -- no LIKE prefix scan, and no new index
+// on either table: the driving side is already covered by the partial index
+// over status = 'dispatching', 'running'.
 //
 // The join to river_job is a LEFT JOIN on the bigint primary key. That is the
 // single most important line in this file: every sibling repair INNER JOINs it,
@@ -815,15 +892,21 @@ var selectOrphanedUnitDeliverySQL = `
 				THEN '` + dispositionSkipOtherRepair + `'
 			ELSE '` + dispositionSkipOrphanedLive + `'
 		END AS disposition
-	FROM public.worker_job_outbox AS outbox` + providerUnitDomainIdentity + `
+	FROM public.sync_run_units AS unit
+	JOIN public.sync_runs AS run
+		ON run.id = unit.sync_run_id
+		AND run.org_id = unit.org_id
+	JOIN public.worker_job_outbox AS outbox
+		ON outbox.dedupe_key = ANY (` + providerUnitCandidateKeyArraySQL + `)
+		AND outbox.status = 'delivered'
+		AND outbox.job_kind = 'sync.provider_unit'
+		AND outbox.args #>> '{domain,type}' = 'sync_run_unit'
+		AND outbox.args #>> '{domain,id}' = unit.id::text
+		AND unit.org_id = outbox.args ->> 'organization_id'
 	LEFT JOIN %s AS job
 		ON job.id = outbox.river_job_id
-	WHERE outbox.job_kind = 'sync.provider_unit'
-		AND outbox.status = 'delivered'
-		AND outbox.args #>> '{domain,type}' = 'sync_run_unit'
-		AND outbox.dedupe_key LIKE 'sync.provider_unit:' || unit.id::text || '%%'
-		AND ` + orphanedUnitDomainPredicate + `
-		AND ` + noLiveDeliveryForUnit(`'sync.provider_unit:' || unit.id::text || '%%'`) + `
+	WHERE ` + orphanedUnitDomainPredicate + `
+		AND ` + noLiveDeliveryForUnitKeys(providerUnitCandidateKeyArraySQL) + `
 	ORDER BY outbox.delivered_at, outbox.id
 	LIMIT $3`
 
@@ -858,7 +941,7 @@ var readOrphanedSourceRowSQL = `
 		AND source.dedupe_key = $2
 		AND source.river_job_id = $3
 		AND source.status = 'delivered'
-		AND ` + noLiveDeliveryForUnit(`$4`) + `
+		AND ` + noLiveDeliveryForUnitKeys(`$4`) + `
 		AND NOT EXISTS (
 			SELECT 1 FROM public.worker_job_outbox AS existing
 			WHERE existing.dedupe_key = $5

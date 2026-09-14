@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 const testUnitID = "e784daf9-592c-5fca-b6f7-81d2c9de940e"
@@ -235,5 +237,120 @@ func TestOrphanedUnitDomainPredicateIsSharedNotRestated(t *testing.T) {
 	if strings.Contains(orphanedUnitIdlePredicate, "updated_at") {
 		t.Error("the idle gate reads updated_at; the false-success redispatch loop keeps that " +
 			"column fresh on exactly this population, so the gate would never fire")
+	}
+}
+
+// partialSurveyRows is a fake pgx.Rows that yields a fixed number of
+// successfully-scanned rows and then reports failWith, modelling a survey
+// whose queue-pool context deadline fires mid-scan -- the shape a stage-
+// budget miss takes: pgx sends the driver a cancel while rows.Next() is
+// blocked, and the failure surfaces from rows.Err() after every row read so
+// far has already been fully scanned.
+type partialSurveyRows struct {
+	remaining []orphanedCandidate
+	failWith  error
+	index     int
+}
+
+func (rows *partialSurveyRows) Next() bool { return rows.index < len(rows.remaining) }
+
+func (rows *partialSurveyRows) Scan(dest ...any) error {
+	candidate := rows.remaining[rows.index]
+	rows.index++
+	*dest[0].(*string) = candidate.outboxID
+	*dest[1].(*string) = candidate.dedupeKey
+	*dest[2].(*string) = candidate.unitID
+	*dest[3].(*string) = candidate.runID
+	*dest[4].(*int64) = candidate.riverJobID
+	*dest[5].(*string) = candidate.disposition
+	return nil
+}
+
+func (rows *partialSurveyRows) Err() error {
+	if rows.index >= len(rows.remaining) {
+		return rows.failWith
+	}
+	return nil
+}
+
+func (rows *partialSurveyRows) Close()                                       {}
+func (rows *partialSurveyRows) CommandTag() pgconn.CommandTag                { return pgconn.CommandTag{} }
+func (rows *partialSurveyRows) FieldDescriptions() []pgconn.FieldDescription { return nil }
+func (rows *partialSurveyRows) Values() ([]any, error)                       { return nil, nil }
+func (rows *partialSurveyRows) RawValues() [][]byte                          { return nil }
+func (rows *partialSurveyRows) Conn() *pgx.Conn                              { return nil }
+
+// TestOrphanedUnitSurveyLogsTheCauseOfAMidScanFailure is the miss-telemetry
+// half of the fix: a stage-budget miss must be diagnosable from one log
+// line, not just visible as a bare, causeless failure. It forces the queue-
+// pool seam to fail after two rows are already fully read, the way a real
+// context deadline firing mid-scan would, and asserts the evidence line names
+// exactly how far the scan got and how long it had been running -- the two
+// facts pipeline.go's own stage_failed line (budget_ms, elapsed_ms, sqlstate)
+// cannot report, because they live inside this repair, not the pipeline.
+func TestOrphanedUnitSurveyLogsTheCauseOfAMidScanFailure(t *testing.T) {
+	captured, restore := captureSlogRecords(t)
+	defer restore()
+
+	seeded := []orphanedCandidate{
+		{
+			outboxID:   "e784daf9-592c-5fca-b6f7-81d2c9de9401",
+			dedupeKey:  jobcontract.KindSyncProviderUnit + ":e784daf9-592c-5fca-b6f7-81d2c9de9401",
+			unitID:     "e784daf9-592c-5fca-b6f7-81d2c9de9401",
+			runID:      "1410329c-51aa-5895-89c7-b36442da361e",
+			riverJobID: 101, disposition: dispositionOrphanMissing,
+		},
+		{
+			outboxID:   "e784daf9-592c-5fca-b6f7-81d2c9de9402",
+			dedupeKey:  jobcontract.KindSyncProviderUnit + ":e784daf9-592c-5fca-b6f7-81d2c9de9402",
+			unitID:     "e784daf9-592c-5fca-b6f7-81d2c9de9402",
+			runID:      "1410329c-51aa-5895-89c7-b36442da361e",
+			riverJobID: 102, disposition: dispositionOrphanMissing,
+		},
+	}
+	repair := &OrphanedUnitRepair{
+		queryQueue: func(context.Context, string, ...any) (pgx.Rows, error) {
+			return &partialSurveyRows{remaining: seeded, failWith: context.DeadlineExceeded}, nil
+		},
+		beginDomain: func(context.Context) (pgx.Tx, error) {
+			t.Fatal("a survey that never finished must not open the domain transaction")
+			return nil, nil
+		},
+		surveyQuery: "select 1",
+		staleAge:    time.Minute,
+	}
+
+	const limit = 50
+	if _, err := repair.Step(context.Background(), time.Now(), limit); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("Step err = %v, want ErrUnavailable", err)
+	}
+
+	record, found := findSlogRecord(*captured, "syncreconciler.orphaned_unit_survey_incomplete")
+	if !found {
+		t.Fatal("a mid-scan survey failure logged nothing about its own cause; a future miss " +
+			"would be diagnosable only by reproducing it live")
+	}
+	if record["step"] != "survey_rows" {
+		t.Fatalf("step = %v, want survey_rows", record["step"])
+	}
+	if rowsSurveyed, _ := record["rows_surveyed"].(int64); rowsSurveyed != int64(len(seeded)) {
+		t.Fatalf("rows_surveyed = %v, want %d -- every row this attempt actually scanned before "+
+			"the deadline fired, not an estimate", record["rows_surveyed"], len(seeded))
+	}
+	if recordedLimit, _ := record["limit"].(int64); recordedLimit != int64(limit) {
+		t.Fatalf("limit = %v, want %d", record["limit"], limit)
+	}
+	if elapsedMS, ok := record["elapsed_ms"].(int64); !ok || elapsedMS < 0 {
+		t.Fatalf("elapsed_ms = %v, want a non-negative duration", record["elapsed_ms"])
+	}
+	if record["error"] != context.DeadlineExceeded.Error() {
+		t.Fatalf("error = %v, want %q", record["error"], context.DeadlineExceeded.Error())
+	}
+
+	// The bare failure line must still carry the SQLSTATE-capable classification
+	// pipeline.go's stageSQLState reads -- the new line is additional evidence,
+	// not a replacement for it.
+	if _, found := findSlogRecord(*captured, "syncreconciler.orphaned_unit_repair_failed"); !found {
+		t.Fatal("the existing orphaned_unit_repair_failed line stopped firing")
 	}
 }

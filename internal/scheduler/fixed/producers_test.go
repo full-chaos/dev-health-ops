@@ -635,6 +635,7 @@ func TestOrganizationReadFailurePropagates(t *testing.T) {
 func TestRetentionProducerHonorsOperatorHorizonOverrides(t *testing.T) {
 	t.Setenv("SYNC_RATE_LIMIT_OBSERVATION_RETENTION_DAYS", "7")
 	t.Setenv("EXTERNAL_INGEST_STATUS_RETENTION_DAYS", "30")
+	t.Setenv("WORKER_JOB_TERMINAL_RETENTION_DAYS", "10")
 	producer := NewRetentionProducer()
 
 	for _, test := range []struct {
@@ -652,11 +653,19 @@ func TestRetentionProducerHonorsOperatorHorizonOverrides(t *testing.T) {
 			wantPolicy:   jobcontract.RetentionExternalIngestBatches,
 			wantDeleteAt: "2026-06-24T05:15:00Z",
 		},
+		{
+			scheduleID:   "prune_worker_job_terminal",
+			wantPolicy:   jobcontract.RetentionWorkerTerminal,
+			wantDeleteAt: "2026-07-14T05:45:00Z",
+		},
 	} {
 		schedule := scheduleByID(t, test.scheduleID)
 		dueTime := mustTime(t, "2026-07-24T05:00:00Z")
-		if test.scheduleID == "prune_external_ingest_batches" {
+		switch test.scheduleID {
+		case "prune_external_ingest_batches":
 			dueTime = mustTime(t, "2026-07-24T05:15:00Z")
+		case "prune_worker_job_terminal":
+			dueTime = mustTime(t, "2026-07-24T05:45:00Z")
 		}
 		occurrence := NewOccurrence(schedule, dueTime, dueTime)
 		outcome, err := producer.Produce(context.Background(), &stubTx{}, schedule, occurrence)
@@ -680,6 +689,59 @@ func TestRetentionProducerHonorsOperatorHorizonOverrides(t *testing.T) {
 	}
 }
 
+// The worker_job_terminal policy had a contract-declared name since v1 and a
+// wired handler, but no schedule ever produced it -- worker_job_outbox and its
+// terminal companion grew without bound as a result. This pins the schedule
+// that closes that gap: its own cadence, its default horizon, its batch size,
+// and an idempotency key stable across a replayed occurrence.
+func TestWorkerJobTerminalRetentionIsScheduledWithTheDefaultHorizon(t *testing.T) {
+	schedule := scheduleByID(t, "prune_worker_job_terminal")
+	if schedule.Cadence.Fingerprint() != DailyAt(5, 45).Fingerprint() {
+		t.Fatalf("cadence = %s, want daily at 05:45 UTC", schedule.Cadence.Fingerprint())
+	}
+	if schedule.Native != true {
+		t.Fatal("prune_worker_job_terminal has no legacy predecessor and must be Native")
+	}
+	dueTime := mustTime(t, "2026-07-24T05:45:00Z")
+	occurrence := NewOccurrence(schedule, dueTime, dueTime)
+	outcome, err := NewRetentionProducer().Produce(context.Background(), &stubTx{}, schedule, occurrence)
+	if err != nil {
+		t.Fatalf("Produce() = %v", err)
+	}
+	if len(outcome.Requests) != 1 {
+		t.Fatalf("produced %d requests, want one", len(outcome.Requests))
+	}
+	envelope := outcome.Requests[0].Envelope
+	wantIdempotencyKey := "retention:" + jobcontract.RetentionWorkerTerminal + ":2026-07-24"
+	if envelope.IdempotencyKey != wantIdempotencyKey {
+		t.Fatalf("idempotency_key = %q, want %q", envelope.IdempotencyKey, wantIdempotencyKey)
+	}
+	// Replaying the same due time must reproduce the identical idempotency
+	// key so a re-run cannot duplicate the deletion window.
+	replay, err := NewRetentionProducer().Produce(context.Background(), &stubTx{}, schedule, occurrence)
+	if err != nil {
+		t.Fatalf("replayed Produce() = %v", err)
+	}
+	if replay.Requests[0].Envelope.IdempotencyKey != wantIdempotencyKey {
+		t.Fatalf("replayed idempotency_key = %q, want the same %q",
+			replay.Requests[0].Envelope.IdempotencyKey, wantIdempotencyKey)
+	}
+	payload, ok := envelope.Payload.(jobcontract.RetentionCleanupPayload)
+	if !ok {
+		t.Fatalf("payload type %T", envelope.Payload)
+	}
+	if payload.RetentionPolicy != jobcontract.RetentionWorkerTerminal {
+		t.Fatalf("retention_policy = %s", payload.RetentionPolicy)
+	}
+	if payload.BatchSize != 500 {
+		t.Fatalf("batch_size = %d, want the coordinated 500", payload.BatchSize)
+	}
+	// Default horizon is 30 days: dueTime minus 30 days.
+	if payload.DeleteBefore != "2026-06-24T05:45:00Z" {
+		t.Fatalf("delete_before = %s, want the 30 day default horizon", payload.DeleteBefore)
+	}
+}
+
 // A malformed or non-positive override must keep the checked default rather
 // than widening or zeroing a deletion range.
 func TestEveryProducedEnvelopeSatisfiesTheCompiledContract(t *testing.T) {
@@ -698,6 +760,7 @@ func TestEveryProducedEnvelopeSatisfiesTheCompiledContract(t *testing.T) {
 		"prune_rate_limit_observations": retentionProducer,
 		"prune_external_ingest_batches": retentionProducer,
 		"prune_ask_dev_conversations":   askDevProducer,
+		"prune_worker_job_terminal":     retentionProducer,
 	}
 	for id, producer := range producers {
 		schedule := scheduleByID(t, id)
@@ -914,6 +977,7 @@ func TestRetentionPayloadsSatisfyTheHandlerContract(t *testing.T) {
 		{"prune_rate_limit_observations", jobcontract.RetentionRateLimitObservations},
 		{"prune_external_ingest_batches", jobcontract.RetentionExternalIngestBatches},
 		{"prune_ask_dev_conversations", jobcontract.RetentionAskDevConversations},
+		{"prune_worker_job_terminal", jobcontract.RetentionWorkerTerminal},
 	} {
 		producer := legacyProducer
 		if test.scheduleID == "prune_ask_dev_conversations" {

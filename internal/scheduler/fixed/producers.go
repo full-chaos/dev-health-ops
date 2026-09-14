@@ -236,11 +236,38 @@ func NewRetentionProducerForRoute(
 	const (
 		rateLimitEnv      = "SYNC_RATE_LIMIT_OBSERVATION_RETENTION_DAYS"
 		externalIngestEnv = "EXTERNAL_INGEST_STATUS_RETENTION_DAYS"
+		workerTerminalEnv = "WORKER_JOB_TERMINAL_RETENTION_DAYS"
 	)
 	return &RetentionProducer{
 		askDevAdmission:       askDevAdmission,
 		activeProducerVersion: activeProducerVersion,
 		byScheduleID: map[string]RetentionSpec{
+			"prune_worker_job_terminal": {
+				Policy:          jobcontract.RetentionWorkerTerminal,
+				ContractVersion: jobcontract.ContractVersionV3, // see prune_rate_limit_observations below
+				// The handler (internal/joboutbox Repository.DeleteTerminalBefore)
+				// imposes no horizon of its own: it deletes any 'delivered'/'dead'
+				// row older than whatever cutoff it is given, with no floor. There
+				// is also no legacy predecessor to mirror -- this policy has been
+				// contract-declared since v1 but no schedule has ever emitted it,
+				// which is exactly why worker_job_outbox and its terminal rows grow
+				// without bound today. 30 days sits between the two existing
+				// day-based horizons (14/90).
+				//
+				// Interaction with the daily-metrics finalize orphan sweep
+				// (internal/jobs/metrics/daily/redrive.go's
+				// ReconcileOrphanedFinalizeRedriveRuns): that sweep places no age
+				// bound of its own on the outbox rows it inspects, so a 'delivered'
+				// row this policy has already deleted reads as ambiguous evidence
+				// and is deliberately left 'open' rather than guessed at -- never a
+				// wrong close or a double-dispatch, only a slower recovery signal
+				// for a stranding old enough to have outlived the window. A 'dead'
+				// row is unaffected at any horizon: its abandonment fact is written
+				// in the same statement that deletes it.
+				DefaultDays:      30,
+				BatchSize:        500,
+				RetentionDaysEnv: workerTerminalEnv,
+			},
 			"prune_rate_limit_observations": {
 				Policy: jobcontract.RetentionRateLimitObservations,
 				// A kind has one canonical wire format in flight at a time

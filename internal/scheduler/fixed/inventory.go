@@ -394,6 +394,29 @@ func checkedInSchedules() []Schedule {
 			Rationale: "CHAOS-3209 bounded Ask Dev expiry cleanup. Conversation rows carry " +
 				"their exact 0/30-day expiry; this schedule adds no second horizon.",
 		},
+		{
+			ID: "prune_worker_job_terminal",
+			// This policy has been contract-declared since v1 (see
+			// jobcontract.RetentionWorkerTerminal) and the worker-side handler
+			// has been wired since worker_job_outbox itself shipped, but no
+			// schedule has ever produced it -- there is no legacy Beat
+			// predecessor to mirror, so it is Native from the start.
+			Native:   true,
+			Cadence:  DailyAt(5, 45),
+			Timezone: inventoryTimezone,
+			// Retention is cumulative: the next night deletes everything the
+			// missed night would have, so replay adds nothing.
+			CatchUp:          CatchUpSkip,
+			UniquenessWindow: 25 * time.Hour,
+			TargetKind:       jobcontract.KindRetentionCleanup,
+			ProducerID:       ProducerRetentionCleanup,
+			MaxAttempts:      3,
+			AlertThreshold:   25 * time.Hour,
+			Rationale: "Bounded retention for terminal (delivered/dead) worker_job_outbox " +
+				"rows and their completion fences, which otherwise grow without bound. " +
+				"Scheduled last in the prune sequence, off-peak and clear of the other " +
+				"three retention passes.",
+		},
 	}
 }
 

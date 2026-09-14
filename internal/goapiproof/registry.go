@@ -402,8 +402,8 @@ func transportError(rawURL string, err error) error {
 func RefuseCredentialsInURL(flagName, raw string) error {
 	if _, err := safeEndpoint(raw); err != nil {
 		if errors.Is(err, ErrCredentialInURL) {
-			return fmt.Errorf("%w: %s carries userinfo (its value is not printed here). An embedded credential reaches the process table and every log that records a command line -- pass it through %s or %s instead",
-				ErrCredentialInURL, flagName, edgeBearerEnvVarName, proofBearerEnvVarName)
+			return fmt.Errorf("%w: %s carries userinfo (its value is not printed here). An embedded credential reaches the process table and every log that records a command line -- pass it through -edge-bearer-exec or %s instead",
+				ErrCredentialInURL, flagName, proofBearerEnvVarName)
 		}
 		return fmt.Errorf("goapiproof: %s is refused (%s). Its value is not printed here. This guard requires a URL it can fully account for -- an http/https scheme, no opaque body, no userinfo, and a host -- because a string it cannot parse into safe parts is one whose credential it cannot locate either",
 			flagName, err)
@@ -413,10 +413,7 @@ func RefuseCredentialsInURL(flagName, raw string) error {
 
 // Named here rather than imported from the command, so this package's
 // message does not depend on which binary is calling it.
-const (
-	edgeBearerEnvVarName  = "GO_API_PROVE_BEARER"
-	proofBearerEnvVarName = "GO_API_PROVE_PROOF_BEARER"
-)
+const proofBearerEnvVarName = "GO_API_PROVE_PROOF_BEARER"
 
 // FetchRegistry asks the RUNNING process what it serves.
 //

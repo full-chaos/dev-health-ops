@@ -117,10 +117,9 @@ func TestHelperOutputIsBounded(t *testing.T) {
 // later.
 func TestAMalformedStaticProofBearerFailsAtConstruction(t *testing.T) {
 	const bad = "not-an-envelope-but-still-a-secret"
-	t.Setenv(edgeBearerEnvVar, "edge-token")
 	t.Setenv(proofBearerEnvVar, bad)
 
-	_, _, err := credentials(flags{})
+	_, _, err := credentials(flags{edgeBearerExec: validEdgeBearerExecArgv(t)})
 	if err == nil {
 		t.Fatal("a malformed static proof bearer must be refused before anything is measured")
 	}
@@ -158,9 +157,8 @@ func syntheticJWT(t *testing.T, claims map[string]string) string {
 // And a well-formed one is accepted, so the check above is not simply
 // refusing everything.
 func TestAWellFormedStaticProofBearerIsAccepted(t *testing.T) {
-	t.Setenv(edgeBearerEnvVar, "edge-token")
 	t.Setenv(proofBearerEnvVar, syntheticJWT(t, map[string]string{"sub": "u-1"}))
-	edge, proof, err := credentials(flags{})
+	edge, proof, err := credentials(flags{edgeBearerExec: validEdgeBearerExecArgv(t)})
 	if err != nil {
 		t.Fatalf("a well-formed static envelope was refused: %v", err)
 	}
@@ -173,7 +171,7 @@ func TestAWellFormedStaticProofBearerIsAccepted(t *testing.T) {
 // command line is readable in the process table, and a shell string
 // invites injection through anything interpolated into it.
 func TestTheExecFlagRefusesAnythingThatIsNotAJSONArgv(t *testing.T) {
-	t.Setenv(edgeBearerEnvVar, "edge-token")
+	edgeExec := validEdgeBearerExecArgv(t)
 	for _, value := range []string{
 		"/opt/job5/mint-envelope.sh --org 70d529e0", // a shell string
 		"[]",     // empty argv
@@ -181,7 +179,7 @@ func TestTheExecFlagRefusesAnythingThatIsNotAJSONArgv(t *testing.T) {
 		"[1, 2]", // not strings
 		"not json",
 	} {
-		if _, _, err := credentials(flags{proofBearerExec: value}); err == nil {
+		if _, _, err := credentials(flags{edgeBearerExec: edgeExec, proofBearerExec: value}); err == nil {
 			t.Fatalf("%q was accepted as an argv", value)
 		}
 	}
@@ -190,9 +188,23 @@ func TestTheExecFlagRefusesAnythingThatIsNotAJSONArgv(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := credentials(flags{proofBearerExec: string(argv)}); err != nil {
+	if _, _, err := credentials(flags{edgeBearerExec: edgeExec, proofBearerExec: string(argv)}); err != nil {
 		t.Fatalf("a valid JSON argv was refused: %v", err)
 	}
+}
+
+// validEdgeBearerExecArgv returns a JSON argv string usable as the
+// -edge-bearer-exec flag value in tests that only need SOME edge
+// credential configured to isolate the proof-plane credential under
+// test -- it is never invoked, since credentials() only parses the argv
+// at construction and mints lazily.
+func validEdgeBearerExecArgv(t *testing.T) string {
+	t.Helper()
+	argv, err := json.Marshal([]string{"/usr/local/bin/mint-edge-token", "-org", "11111111-2222-4333-8444-555555555555"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(argv)
 }
 
 func writeHelper(t *testing.T, script string) string {
@@ -582,8 +594,7 @@ func TestTheMintedProofCredentialIsShapeValidated(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	t.Setenv(edgeBearerEnvVar, "edge-token")
-	_, proof, err := credentials(flags{proofBearerExec: string(argv)})
+	_, proof, err := credentials(flags{edgeBearerExec: validEdgeBearerExecArgv(t), proofBearerExec: string(argv)})
 	if err != nil {
 		t.Fatalf("credentials: %v", err)
 	}
@@ -809,28 +820,15 @@ func TestSpawnedHelperCmdlineNeverCarriesTheSecret(t *testing.T) {
 	}
 }
 
-// -edge-bearer-exec replaces the hand-minted GO_API_PROVE_BEARER. Setting
-// both is refused: a run must never guess which edge credential it sent,
-// and a stale static token left in a pod's environment must not silently
-// win over the minted one (or the reverse).
-func TestTheEdgeCredentialIsMintedOrStaticNeverBoth(t *testing.T) {
+// -edge-bearer-exec is the only source for the edge access token -- the
+// hand-minted static bearer this command used to also accept is retired.
+func TestTheEdgeCredentialRequiresExecFlag(t *testing.T) {
 	t.Setenv(proofBearerEnvVar, syntheticJWT(t, map[string]string{"sub": "u-1"}))
 	argv, err := json.Marshal([]string{"/usr/local/bin/mint-edge-token", "-org", "11111111-2222-4333-8444-555555555555"})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	const static = "static-edge-token-value"
-	t.Setenv(edgeBearerEnvVar, static)
-	_, _, err = credentials(flags{edgeBearerExec: string(argv)})
-	if err == nil {
-		t.Fatal("both -edge-bearer-exec and a static edge bearer were accepted")
-	}
-	if strings.Contains(err.Error(), static) || !strings.Contains(err.Error(), edgeBearerEnvVar) {
-		t.Fatalf("the refusal must name the variable and never its value: %v", err)
-	}
-
-	t.Setenv(edgeBearerEnvVar, "")
 	edge, _, err := credentials(flags{edgeBearerExec: string(argv)})
 	if err != nil {
 		t.Fatalf("-edge-bearer-exec alone was refused: %v", err)
@@ -846,7 +844,6 @@ func TestTheEdgeCredentialIsMintedOrStaticNeverBoth(t *testing.T) {
 }
 
 func TestTheEdgeExecFlagGetsTheSameArgvRulesAsTheProofOne(t *testing.T) {
-	t.Setenv(edgeBearerEnvVar, "")
 	t.Setenv(proofBearerEnvVar, syntheticJWT(t, map[string]string{"sub": "u-1"}))
 	for _, value := range []string{"/usr/local/bin/mint-edge-token -org x", "[]", "{}", "not json"} {
 		_, _, err := credentials(flags{edgeBearerExec: value})
@@ -875,7 +872,6 @@ func TestTheEdgeExecFlagGetsTheSameArgvRulesAsTheProofOne(t *testing.T) {
 // The minted edge credential is shape-checked and re-minted like the
 // proof one, and its mint COUNT reaches the report.
 func TestTheMintedEdgeCredentialIsShapeValidatedAndCounted(t *testing.T) {
-	t.Setenv(edgeBearerEnvVar, "")
 	t.Setenv(proofBearerEnvVar, syntheticJWT(t, map[string]string{"sub": "u-1"}))
 
 	usage := writeHelper(t, "#!/bin/sh\nprintf 'usage: mint-edge-token -org ORG'\n")

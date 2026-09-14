@@ -171,6 +171,14 @@ go-api-prove -api-url=http://dev-health-ops.default.svc.cluster.local:8000 \
 
 Proof runs against the 12 canary operations (shadow set is empty by design, not deferred). Compare baseline and candidate legs; `-proof-url` left empty (Trap #163: `/query/proof` cannot mount on prod). Result: `{12 total, 11 match, 1 mismatch}` or better.
 
+**Retirement note.** `go-api-prove` no longer accepts a hand-minted static
+edge bearer; `-edge-bearer-exec` (above) is the only source. Two prod
+cleanup steps remain, owned separately from this repo change: remove the
+now-unused bearer key from the `dev-health-go-api-prove` Secret, and remove
+the operator script that used to hand-mint it from the prod host. Re-run
+the 12-operation proof above afterward to confirm the exec path alone still
+produces a clean result.
+
 ## Step 8: Enable the investment explanation (optional, requires encryption keys)
 
 Only if investment explanation text is needed:

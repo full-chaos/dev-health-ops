@@ -62,19 +62,15 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
 )
 
-// The two credential environment variables. VALUES never appear in
-// output; only these NAMES do.
+// The proof-plane credential environment variable. VALUES never appear in
+// output; only this NAME does.
 //
-// There are two because the two planes accept different credential KINDS,
-// measured on the deployed stack (JOB 4): an access token gets
-// HTTP 200 on the Python edge and 401 on /buildinfo; an effective-principal
-// envelope gets the reverse. GO_API_PROVE_BEARER keeps its old name and
-// its old meaning -- the EDGE token -- so an existing invocation does not
-// silently change which plane it authenticates.
-const (
-	edgeBearerEnvVar  = "GO_API_PROVE_BEARER"
-	proofBearerEnvVar = "GO_API_PROVE_PROOF_BEARER"
-)
+// The two planes accept different credential KINDS, measured on the
+// deployed stack (JOB 4): an access token gets HTTP 200 on the Python edge
+// and 401 on /buildinfo; an effective-principal envelope gets the reverse.
+// The edge leg has no env var: -edge-bearer-exec is its only source, since
+// mint-edge-token can mint a fresh access token for every run.
+const proofBearerEnvVar = "GO_API_PROVE_PROOF_BEARER"
 
 // proofCredentialFreshness is how long a minted envelope is reused before
 // a fresh one is requested.
@@ -132,7 +128,7 @@ func parseFlags() (flags, error) {
 	flag.StringVar(&f.edgeURL, "edge-url", "http://localhost:8000/graphql", "the real product GraphQL edge; both the canary/primary candidate leg and every baseline leg go through it")
 	flag.StringVar(&f.proofURL, "proof-url", "", "measurement-only route able to execute a SHADOW-mode operation on the deployed Go build; empty means shadow operations are refused by name rather than skipped")
 	flag.StringVar(&f.proofBearerExec, "proof-bearer-exec", "", "JSON argv of a helper printing a FRESH effective-principal envelope on stdout, e.g. '[\"/opt/job5/mint-envelope.sh\",\"--org\",\"70d529e0\"]'. Re-run as the previous envelope ages out; required when the envelope's TTL is shorter than the run (it is: 60s). argv, not a shell string, so nothing is interpolated into a shell. NOTE: argv IS visible in the process table, so a secret must NEVER appear as one of these elements -- an element that looks like one is refused by index, never by value. If the helper needs a credential, pass it with -proof-bearer-secret-file: it arrives on an inherited file descriptor (fd 3, env PROOF_BEARER_SECRET_FD=3), never in argv. The helper's stdout and stderr are NEVER reported by this command")
-	flag.StringVar(&f.edgeBearerExec, "edge-bearer-exec", "", "JSON argv of a helper printing a FRESH edge access token on stdout, e.g. '[\"/usr/local/bin/mint-edge-token\",\"-org\",\"<org>\"]'. Re-run as the token ages. Use it instead of "+edgeBearerEnvVar+"; setting both is refused. The same argv rules as -proof-bearer-exec apply: no secret may appear as an element (the helper reads its key from its own environment). The helper's stdout and stderr are NEVER reported by this command")
+	flag.StringVar(&f.edgeBearerExec, "edge-bearer-exec", "", "JSON argv of a helper printing a FRESH edge access token on stdout, e.g. '[\"/usr/local/bin/mint-edge-token\",\"-org\",\"<org>\"]'. Re-run as the token ages. This is the ONLY source for the edge credential (required). The same argv rules as -proof-bearer-exec apply: no secret may appear as an element (the helper reads its key from its own environment). The helper's stdout and stderr are NEVER reported by this command")
 	flag.StringVar(&f.proofBearerSecretFile, "proof-bearer-secret-file", "", "path to a file holding the credential the -proof-bearer-exec helper needs. Its bytes are handed to the helper on an inherited fd (3, env PROOF_BEARER_SECRET_FD=3) -- never in argv, an env VALUE, a log, or an error. The file must be owner-only (refused if group- or other-readable) and non-empty")
 	flag.StringVar(&f.documentsPath, "documents", "", "path to `registrydump -file cmd/query-api/query_route.go` JSON output (required)")
 	flag.StringVar(&f.postgresURI, "postgres-uri", os.Getenv("POSTGRES_URI"), "domain Postgres DSN holding go_api_routing_state / go_api_proof_run")
@@ -524,7 +520,9 @@ func emitReport(f flags, registry goapiproof.RegistryView, outcomes []goapiproof
 	// a run that will fail at the closing /buildinfo, and without this
 	// line that is invisible until it does.
 	fmt.Printf("go-api-prove:   envelope mints = %d\n", proofCredential.Mints())
-	// Zero for a static GO_API_PROVE_BEARER, which is itself worth seeing.
+	// The edge credential is always minted (-edge-bearer-exec is the only
+	// source), so this is at least 1 on a successful run -- a 0 here means
+	// the edge leg was never actually exercised.
 	fmt.Printf("go-api-prove:   edge access token mints = %d\n", edgeCredential.Mints())
 	for _, state := range sortedKeys(summary.ByTerminalState) {
 		fmt.Printf("go-api-prove:   terminal_state %s = %d\n", state, summary.ByTerminalState[state])
@@ -574,12 +572,12 @@ func sortedKeys[V any](m map[string]V) []string {
 
 // credentials builds the two credential sources, one per plane.
 //
-// The edge token is normally MINTED too: -edge-bearer-exec runs a helper
-// that signs a short-lived access token for the proof service principal
-// (cmd/mint-edge-token), re-run as the token ages. A static
-// GO_API_PROVE_BEARER is still accepted, but a hand-minted token expires
-// mid-day and has to be replaced by hand; setting both is refused so a run
-// never guesses which one it used. The proof
+// The edge token is always MINTED: -edge-bearer-exec runs a helper that
+// signs a short-lived access token for the proof service principal
+// (cmd/mint-edge-token), re-run as the token ages. It is the only source
+// for this credential -- the earlier hand-minted static token expired
+// mid-day and had to be replaced by hand, and mint-edge-token replaces
+// that operator step. The proof
 // credential is normally MINTED, because the effective-principal envelope
 // it needs lives 60 seconds and a fifteen-operation run does not fit in
 // that. Go cannot mint one itself -- issue_effective_principal_envelope
@@ -592,10 +590,7 @@ func sortedKeys[V any](m map[string]V) []string {
 // on the real stack; the refusal below says so rather than letting a
 // second operator rediscover it at the closing /buildinfo.
 func credentials(f flags) (edge, proof *goapiproof.Credential, err error) {
-	edgeBearer := os.Getenv(edgeBearerEnvVar)
 	switch {
-	case f.edgeBearerExec != "" && edgeBearer != "":
-		return nil, nil, fmt.Errorf("both -edge-bearer-exec and %s are set; set one, so the run never guesses which edge credential it used (the VALUE is never printed by this command)", edgeBearerEnvVar)
 	case f.edgeBearerExec != "":
 		argv, err := parseHelperArgv("-edge-bearer-exec", f.edgeBearerExec)
 		if err != nil {
@@ -607,10 +602,8 @@ func credentials(f flags) (edge, proof *goapiproof.Credential, err error) {
 			func(ctx context.Context) (string, error) {
 				return mintBearer(ctx, argv, "")
 			}).WithShapeValidator(goapiproof.ValidateEnvelopeShape)
-	case edgeBearer != "":
-		edge = goapiproof.StaticCredential("Authorization", "edge access token", "Bearer "+edgeBearer)
 	default:
-		return nil, nil, fmt.Errorf("no edge credential: set -edge-bearer-exec to a helper printing a fresh ACCESS TOKEN the Python edge accepts (preferred), or %s to one (the VALUE is never printed by this command)", edgeBearerEnvVar)
+		return nil, nil, errors.New("no edge credential: set -edge-bearer-exec to a helper printing a fresh ACCESS TOKEN the Python edge accepts (the VALUE is never printed by this command)")
 	}
 
 	switch {

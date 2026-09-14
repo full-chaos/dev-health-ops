@@ -3,7 +3,11 @@
 package system
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -281,8 +285,25 @@ func TestWorkerJobTerminalRetentionHandlerDeletesOnlyOlderTerminalRowsAndLeavesL
 		DeleteBefore:    cutoff.Format(time.RFC3339),
 		RetentionPolicy: jobcontract.RetentionWorkerTerminal,
 	}
-	if err := handler.Work(ctx, retentionExecution(payload)); err != nil {
+	var captured bytes.Buffer
+	execution := retentionExecution(payload)
+	execution.Logger = slog.New(slog.NewJSONHandler(&captured, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	if err := handler.Work(ctx, execution); err != nil {
 		t.Fatalf("Work: %v", err)
+	}
+
+	// The finished line is the only place an operator can read what this run
+	// actually deleted without diffing table counts: two seeded rows (1 and 3)
+	// are expired against the real Postgres store, not a fake.
+	var record map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(strings.Split(captured.String(), "\n")[0])), &record); err != nil {
+		t.Fatalf("log line is not JSON: %v\n%s", err, captured.String())
+	}
+	if gotDeleted, ok := record["deleted"].(float64); !ok || int64(gotDeleted) != 2 {
+		t.Fatalf("deleted = %v, want 2", record["deleted"])
+	}
+	if got, _ := record["retention_policy"].(string); got != jobcontract.RetentionWorkerTerminal {
+		t.Fatalf("retention_policy = %q, want %q", got, jobcontract.RetentionWorkerTerminal)
 	}
 
 	if got := countRows(t, ctx, pool, "worker_job_outbox"); got != 3 {

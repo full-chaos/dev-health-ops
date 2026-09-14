@@ -2115,7 +2115,13 @@ func (dependencies *workerDependencies) queuedContractVersionsReady(ctx context.
 	if dependencies == nil || !dependencies.queueTelemetryRequired {
 		return nil
 	}
-	if dependencies.queueTelemetryErr != nil || dependencies.queueTelemetry == nil {
+	if dependencies.queueTelemetryErr != nil {
+		dependencies.logDependencyCheckFailure(ctx, "queued_contract_versions", dependencies.queueTelemetryErr)
+		return dependencyCheckFailed(dependencies.queueTelemetryErr)
+	}
+	if dependencies.queueTelemetry == nil {
+		// No error was ever recorded, so there is nothing to unwrap or log --
+		// fail closed rather than silently passing on missing evidence.
 		return errWorkerDependencyUnavailable
 	}
 	if err := dependencies.queueTelemetry.CheckAvailableContractVersions(ctx); err != nil {
@@ -2123,14 +2129,30 @@ func (dependencies *workerDependencies) queuedContractVersionsReady(ctx context.
 		// check names only, so without this an operator sees
 		// "failed_checks=queued_contract_versions" and has no way to tell
 		// which kind, which queue, or which version refused the start -- which
-		// is what turned CHAOS-3938 into a 20-minute outage instead of a
-		// one-line diagnosis. Only bounded, re-validated queue/kind/version
-		// labels are logged; see riverstore.UnsupportedContractVersionError.
+		// is what turned a prior contract-version incident into a 20-minute
+		// outage instead of a one-line diagnosis. Only bounded, re-validated
+		// queue/kind/version labels are logged; see
+		// riverstore.UnsupportedContractVersionError.
 		var unsupported *riverstore.UnsupportedContractVersionError
 		if errors.As(err, &unsupported) {
+			// A genuine contract-version mismatch: it already gets its own
+			// dedicated, change-deduplicated log line naming the offender
+			// below, and it never unwraps to context.DeadlineExceeded or
+			// context.Canceled, so it is already correctly non-retryable
+			// without wrapping the cause.
 			dependencies.reportUnsupportedContracts(ctx, strings.Join(unsupported.Offenders, ","))
+			return errWorkerDependencyUnavailable
 		}
-		return errWorkerDependencyUnavailable
+		// Any other failure -- a context deadline, a dropped connection, a
+		// pool-acquire timeout -- used to collapse into the same bare
+		// sentinel as a genuine mismatch. That discarded whatever
+		// context.DeadlineExceeded/context.Canceled the underlying error
+		// wrapped, which made the readiness aggregate treat a merely slow
+		// dependency exactly like a real, non-retryable refusal, and it left
+		// no log line anywhere naming the cause -- unlike every sibling
+		// dependency check.
+		dependencies.logDependencyCheckFailure(ctx, "queued_contract_versions", err)
+		return dependencyCheckFailed(err)
 	}
 	dependencies.reportUnsupportedContracts(ctx, "")
 	return nil

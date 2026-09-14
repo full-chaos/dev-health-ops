@@ -3,6 +3,7 @@ package riverstore
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"slices"
 	"sort"
@@ -258,9 +259,31 @@ func (sampler *QueueTelemetrySampler) sample(ctx context.Context) (QueueTelemetr
 	defer cancel()
 	rows, err := sampler.read(queryContext)
 	if err != nil {
-		return QueueTelemetrySnapshot{}, nil, ErrQueueTelemetryUnavailable
+		return QueueTelemetrySnapshot{}, nil, queueTelemetryReadFailure(err)
 	}
 	return sampler.snapshot(rows)
+}
+
+// queueTelemetryReadFailure sanitizes a raw read error down to the stable
+// ErrQueueTelemetryUnavailable sentinel -- the underlying error can carry a
+// row's encoded arguments (see the sanitization tests), so its text is never
+// safe to keep -- while still preserving whether the read failed only
+// because a context deadline or cancellation fired. That distinction is
+// never text: it is a fixed, bounded, well-known sentinel pair, so
+// preserving it cannot leak anything. Without it, a query that failed
+// purely because its own bounded context expired was indistinguishable from
+// a genuine, non-transient failure, so every caller classifying retryable
+// causes by unwrapping to context.DeadlineExceeded/context.Canceled (see
+// health.Registry) saw a slow dependency exactly like a real refusal.
+func queueTelemetryReadFailure(err error) error {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return fmt.Errorf("%w: %w", ErrQueueTelemetryUnavailable, context.DeadlineExceeded)
+	case errors.Is(err, context.Canceled):
+		return fmt.Errorf("%w: %w", ErrQueueTelemetryUnavailable, context.Canceled)
+	default:
+		return ErrQueueTelemetryUnavailable
+	}
 }
 
 func (sampler *QueueTelemetrySampler) snapshot(rows []queueTelemetryRow) (QueueTelemetrySnapshot, []string, error) {

@@ -3,6 +3,7 @@ package riverstore
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"reflect"
 	"strings"
@@ -200,12 +201,71 @@ func TestQueueTelemetrySamplerHonorsQueryTimeout(t *testing.T) {
 		},
 	}
 	started := time.Now()
-	if _, err := sampler.Snapshot(context.Background()); err != ErrQueueTelemetryUnavailable {
-		t.Fatalf("timed out Snapshot() error = %v", err)
+	_, err = sampler.Snapshot(context.Background())
+	if !errors.Is(err, ErrQueueTelemetryUnavailable) {
+		t.Fatalf("timed out Snapshot() error = %v, want ErrQueueTelemetryUnavailable", err)
+	}
+	// The read failed only because its own bounded context expired -- a
+	// caller classifying retryable causes by unwrapping to
+	// context.DeadlineExceeded must still be able to tell that apart from a
+	// genuine, non-transient failure (see queueTelemetryReadFailure).
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("timed out Snapshot() error = %v, want it to still unwrap to context.DeadlineExceeded", err)
 	}
 	if elapsed := time.Since(started); elapsed > time.Second {
 		t.Fatalf("query timeout took %s", elapsed)
 	}
+}
+
+// TestCheckAvailableContractVersionsPreservesADeadlineButSanitizesOtherErrors
+// is queueTelemetryReadFailure's direct regression: CheckAvailableContract
+// Versions -- the readiness-check entry point, not just Snapshot -- must
+// unwrap to context.DeadlineExceeded/context.Canceled for a read that failed
+// only because its own bounded context ended, while a read that failed for
+// any other reason (including one whose text could carry a row's encoded
+// arguments) must still sanitize down to the bare, stable sentinel.
+func TestCheckAvailableContractVersionsPreservesADeadlineButSanitizesOtherErrors(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name       string
+		readErr    error
+		wantUnwrap error
+	}{
+		{name: "deadline", readErr: fmt.Errorf("query queue telemetry: %w", context.DeadlineExceeded), wantUnwrap: context.DeadlineExceeded},
+		{name: "canceled", readErr: fmt.Errorf("query queue telemetry: %w", context.Canceled), wantUnwrap: context.Canceled},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			sampler := testQueueTelemetrySampler(t, func(context.Context) ([]queueTelemetryRow, error) {
+				return nil, testCase.readErr
+			})
+			err := sampler.CheckAvailableContractVersions(context.Background())
+			if !errors.Is(err, ErrQueueTelemetryUnavailable) {
+				t.Fatalf("CheckAvailableContractVersions() error = %v, want ErrQueueTelemetryUnavailable", err)
+			}
+			if !errors.Is(err, testCase.wantUnwrap) {
+				t.Fatalf("CheckAvailableContractVersions() error = %v, want it to still unwrap to %v", err, testCase.wantUnwrap)
+			}
+		})
+	}
+
+	t.Run("genuine failure stays sanitized", func(t *testing.T) {
+		t.Parallel()
+		sampler := testQueueTelemetrySampler(t, func(context.Context) ([]queueTelemetryRow, error) {
+			return nil, errors.New("encoded_args credential-secret")
+		})
+		err := sampler.CheckAvailableContractVersions(context.Background())
+		if !errors.Is(err, ErrQueueTelemetryUnavailable) {
+			t.Fatalf("CheckAvailableContractVersions() error = %v, want ErrQueueTelemetryUnavailable", err)
+		}
+		if strings.Contains(err.Error(), "credential") {
+			t.Fatalf("genuine query error was not sanitized: %v", err)
+		}
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			t.Fatal("a non-deadline failure unexpectedly classifies as retryable")
+		}
+	})
 }
 
 func TestQueueTelemetrySamplerRejectsMalformedDatabaseSnapshots(t *testing.T) {

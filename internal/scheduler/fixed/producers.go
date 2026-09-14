@@ -141,6 +141,13 @@ type RetentionSpec struct {
 	// the environment. A worker whose environment differs from the scheduler's
 	// would otherwise delete a different range than the one scheduled.
 	RetentionDaysEnv string
+	// MinDays is an additional, per-policy floor below the shared zero-is-legal
+	// rule: zero remains a coherent "retain nothing" posture for a policy whose
+	// window is otherwise product-owned (Ask Dev's expires_at), but a policy
+	// with no such product-owned floor of its own must not let an operator
+	// override collapse its horizon to same-day deletion by a typo. Zero (the
+	// default) applies no additional floor.
+	MinDays int
 }
 
 // ErrRetentionConfiguration identifies an operator-supplied retention horizon
@@ -236,11 +243,44 @@ func NewRetentionProducerForRoute(
 	const (
 		rateLimitEnv      = "SYNC_RATE_LIMIT_OBSERVATION_RETENTION_DAYS"
 		externalIngestEnv = "EXTERNAL_INGEST_STATUS_RETENTION_DAYS"
+		workerTerminalEnv = "WORKER_JOB_TERMINAL_RETENTION_DAYS"
 	)
 	return &RetentionProducer{
 		askDevAdmission:       askDevAdmission,
 		activeProducerVersion: activeProducerVersion,
 		byScheduleID: map[string]RetentionSpec{
+			"prune_worker_job_terminal": {
+				Policy:          jobcontract.RetentionWorkerTerminal,
+				ContractVersion: jobcontract.ContractVersionV3, // see prune_rate_limit_observations below
+				// The handler (internal/joboutbox Repository.DeleteTerminalBefore)
+				// imposes no horizon of its own: it deletes any 'delivered'/'dead'
+				// row older than whatever cutoff it is given, with no floor. There
+				// is also no legacy predecessor to mirror -- this policy has been
+				// contract-declared since v1 but no schedule has ever emitted it,
+				// which is exactly why worker_job_outbox and its terminal rows grow
+				// without bound today. 30 days sits between the two existing
+				// day-based horizons (14/90).
+				//
+				// Interaction with the daily-metrics finalize orphan sweep
+				// (internal/jobs/metrics/daily/redrive.go's
+				// ReconcileOrphanedFinalizeRedriveRuns): that sweep places no age
+				// bound of its own on the outbox rows it inspects, so a 'delivered'
+				// row this policy has already deleted reads as ambiguous evidence
+				// and is deliberately left 'open' rather than guessed at -- never a
+				// wrong close or a double-dispatch, only a slower recovery signal
+				// for a stranding old enough to have outlived the window. A 'dead'
+				// row is unaffected at any horizon: its abandonment fact is written
+				// in the same statement that deletes it.
+				DefaultDays:      30,
+				BatchSize:        500,
+				RetentionDaysEnv: workerTerminalEnv,
+				// Unlike Ask Dev, this policy owns no product-level expiry of its
+				// own, so zero is not a coherent posture here the way it is there:
+				// an override of 0 (or a scheduler/handler clock skewed by less
+				// than a day) must not be able to collapse the window to same-day
+				// deletion.
+				MinDays: 1,
+			},
 			"prune_rate_limit_observations": {
 				Policy: jobcontract.RetentionRateLimitObservations,
 				// A kind has one canonical wire format in flight at a time
@@ -313,6 +353,13 @@ func (producer *RetentionProducer) Produce(
 	retention, err := retentionDays(spec.RetentionDaysEnv, spec.DefaultDays)
 	if err != nil {
 		return Outcome{}, fmt.Errorf("schedule %s: %w", schedule.ID, err)
+	}
+	if spec.MinDays > 0 && retention < time.Duration(spec.MinDays)*24*time.Hour {
+		return Outcome{}, fmt.Errorf(
+			"%w: schedule %s horizon %s is below the required minimum of %d day(s); "+
+				"a misconfiguration this small would delete same-day rows",
+			ErrRetentionConfiguration, schedule.ID, retention, spec.MinDays,
+		)
 	}
 	deleteBefore := occurrence.ScheduledFor.UTC().Add(-retention).Format(time.RFC3339)
 	envelope := jobcontract.Envelope{

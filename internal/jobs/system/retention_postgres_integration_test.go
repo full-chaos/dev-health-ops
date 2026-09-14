@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
+	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -232,6 +234,95 @@ func TestAskDevRetentionRemainingBeforeSeesARowDeleteBeforeSkippedUnderContentio
 	}
 }
 
+// TestWorkerJobTerminalRetentionHandlerDeletesOnlyOlderTerminalRowsAndLeavesLiveOnes
+// exercises the previously-unwired worker_job_terminal policy end to end
+// through RetentionHandler.Work, the same seam a scheduled occurrence uses --
+// not just the store beneath it. worker_job_outbox is a queue-role-owned
+// table this package's fixture creates fresh rather than reusing the real
+// migrations, matching every other case in this file.
+func TestWorkerJobTerminalRetentionHandlerDeletesOnlyOlderTerminalRowsAndLeavesLiveOnes(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	pool := startRetentionPostgres(t, ctx)
+	createRetentionTables(t, ctx, pool)
+
+	cutoff := time.Date(2026, 7, 10, 0, 0, 0, 0, time.UTC)
+	expiredErrorCode := "contract_rejected"
+
+	// Delivered before the cutoff: expired.
+	insertTerminalOutboxRow(t, ctx, pool, 1, "delivered", cutoff.Add(-48*time.Hour), timePtr(cutoff.Add(-48*time.Hour)), 1, nil)
+	// Delivered after the cutoff: live, must survive.
+	insertTerminalOutboxRow(t, ctx, pool, 2, "delivered", cutoff.Add(time.Hour), timePtr(cutoff.Add(time.Hour)), 1, nil)
+	// Dead before the cutoff: expired, and must leave a durable abandonment
+	// fact in the same statement that deletes it.
+	insertTerminalOutboxRow(t, ctx, pool, 3, "dead", cutoff.Add(-24*time.Hour), nil, 5, &expiredErrorCode)
+	// Dead after the cutoff: live, must survive.
+	insertTerminalOutboxRow(t, ctx, pool, 4, "dead", cutoff.Add(time.Hour), nil, 5, &expiredErrorCode)
+	// Never terminal: must survive at any age, however old.
+	insertTerminalOutboxRow(t, ctx, pool, 5, "pending", cutoff.Add(-96*time.Hour), nil, 0, nil)
+
+	repository, err := joboutbox.NewRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	terminalStore, err := NewTerminalOutboxRetentionStore(repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stores := allRetentionStores(&retentionStore{})
+	stores[jobcontract.RetentionWorkerTerminal] = terminalStore
+	handler, err := NewRetentionHandler(stores)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	payload := jobcontract.RetentionCleanupPayload{
+		BatchSize:       10,
+		DeleteBefore:    cutoff.Format(time.RFC3339),
+		RetentionPolicy: jobcontract.RetentionWorkerTerminal,
+	}
+	if err := handler.Work(ctx, retentionExecution(payload)); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+
+	if got := countRows(t, ctx, pool, "worker_job_outbox"); got != 3 {
+		t.Fatalf("surviving outbox rows = %d, want the two live terminal rows plus the pending row", got)
+	}
+	for _, survivor := range []int{2, 4, 5} {
+		if !terminalOutboxRowExists(t, ctx, pool, survivor) {
+			t.Errorf("row %d should have survived retention", survivor)
+		}
+	}
+	for _, expired := range []int{1, 3} {
+		if terminalOutboxRowExists(t, ctx, pool, expired) {
+			t.Errorf("row %d should have been deleted by retention", expired)
+		}
+	}
+	if got := countRows(t, ctx, pool, "worker_job_delivery_abandonments"); got != 1 {
+		t.Fatalf("delivery abandonments = %d, want exactly one for the deleted dead row", got)
+	}
+	var attempts int
+	var errorCode *string
+	if err := pool.QueryRow(ctx, `
+SELECT attempt_count, last_error_code
+FROM worker_job_delivery_abandonments
+WHERE dedupe_key = $1`, terminalOutboxDedupeKey(3)).Scan(&attempts, &errorCode); err != nil {
+		t.Fatalf("read delivery abandonment: %v", err)
+	}
+	if attempts != 5 || errorCode == nil || *errorCode != expiredErrorCode {
+		t.Errorf("abandonment fact = attempts:%d code:%v, want 5/%s", attempts, errorCode, expiredErrorCode)
+	}
+
+	// Replay: the cutoff is immutable, so a repeated occurrence is a bounded
+	// no-op rather than a second deletion pass.
+	if err := handler.Work(ctx, retentionExecution(payload)); err != nil {
+		t.Fatalf("replayed Work: %v", err)
+	}
+	if got := countRows(t, ctx, pool, "worker_job_outbox"); got != 3 {
+		t.Fatalf("surviving outbox rows after replay = %d, want the replay to be a no-op", got)
+	}
+}
+
 func TestRetentionStoresRejectUnboundedRequests(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -401,6 +492,34 @@ CREATE TABLE dev_conversation_tombstones (
 	),
 	CONSTRAINT ck_dev_conversation_tombstones_retention_days CHECK (retention_days IN (0, 30)),
 	CONSTRAINT uq_dev_conversation_tombstones_conversation UNIQUE (conversation_id)
+);
+-- worker_job_outbox, worker_job_delivery_abandonments and
+-- worker_job_completion_fences reproduce exactly the columns
+-- joboutbox.Repository.DeleteTerminalBefore's query touches, the same way
+-- the tables above reproduce only what their own store's query touches. The
+-- real table carries queue-role delivery-tracking columns this retention
+-- path never reads.
+CREATE TABLE worker_job_outbox (
+	id uuid PRIMARY KEY,
+	dedupe_key text NOT NULL UNIQUE,
+	job_kind text NOT NULL,
+	status text NOT NULL,
+	attempt_count integer NOT NULL DEFAULT 0,
+	last_error_code varchar(64),
+	delivered_at timestamptz,
+	updated_at timestamptz NOT NULL,
+	prerequisite_completion_key text
+);
+CREATE TABLE worker_job_delivery_abandonments (
+	dedupe_key text PRIMARY KEY,
+	job_kind text NOT NULL,
+	abandoned_at timestamptz NOT NULL,
+	attempt_count integer NOT NULL,
+	last_error_code varchar(64)
+);
+CREATE TABLE worker_job_completion_fences (
+	completion_key text PRIMARY KEY,
+	completed_at timestamptz NOT NULL DEFAULT statement_timestamp()
 )`); err != nil {
 		t.Fatal(err)
 	}
@@ -498,6 +617,45 @@ INSERT INTO external_ingest_rejections (
 			t.Fatal(err)
 		}
 	}
+}
+
+func terminalOutboxDedupeKey(index int) string {
+	return "terminal-retention-test:" + padIndex(index)
+}
+
+func timePtr(value time.Time) *time.Time { return &value }
+
+func insertTerminalOutboxRow(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	index int,
+	status string,
+	updatedAt time.Time,
+	deliveredAt *time.Time,
+	attemptCount int,
+	lastErrorCode *string,
+) {
+	t.Helper()
+	id := retentionUUID(t, "0000002a", index)
+	if _, err := pool.Exec(ctx, `
+INSERT INTO worker_job_outbox (
+	id, dedupe_key, job_kind, status, attempt_count, last_error_code, delivered_at, updated_at
+) VALUES ($1, $2, 'sync.provider_unit', $3, $4, $5, $6, $7)`,
+		id, terminalOutboxDedupeKey(index), status, attemptCount, lastErrorCode, deliveredAt, updatedAt); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func terminalOutboxRowExists(t *testing.T, ctx context.Context, pool *pgxpool.Pool, index int) bool {
+	t.Helper()
+	var exists bool
+	if err := pool.QueryRow(ctx, `
+SELECT EXISTS (SELECT 1 FROM worker_job_outbox WHERE dedupe_key = $1)`,
+		terminalOutboxDedupeKey(index)).Scan(&exists); err != nil {
+		t.Fatal(err)
+	}
+	return exists
 }
 
 func countRows(t *testing.T, ctx context.Context, pool *pgxpool.Pool, table string) int {

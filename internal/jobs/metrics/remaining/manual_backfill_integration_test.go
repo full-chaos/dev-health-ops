@@ -467,6 +467,13 @@ func TestStartManualBackfillRunRefusesADayWithAnInProgressAutomaticRun(t *testin
 	day := "2026-08-25"
 
 	pendingRunID := seedPendingDoraPartition(t, ctx, store, pool, orgID, day, "post-sync:in-flight")
+	// Unlike a zombie pending run (no worker_job_outbox row at all -- see
+	// TestFindManualBackfillBlockerIgnoresADeadHandoffPendingRunButStillCountsALiveOne),
+	// a genuinely in-flight automatic run always has one: real automatic
+	// dispatch goes through the real publisher. Seed that here so this test
+	// keeps exercising the in-progress collision it is named for, not the
+	// dead-handoff exclusion.
+	seedOutboxRow(t, ctx, pool, deterministicPartitionID(pendingRunID, 1), "pending", "")
 
 	outcome, err := store.StartManualBackfillRun(ctx, "dora", orgID, day, "manual-backfill:test-6", nopPartitionPublisher{})
 	if !errors.Is(err, ErrDayInProgress) {

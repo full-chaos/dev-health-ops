@@ -124,7 +124,7 @@ flowchart TD
     PR[["project_membership_presence<br/>per (subject, project): active iff the latest<br/>row touching it JOINED it<br/>else work_items column, per subject"]]
     W[("work_items FINAL<br/>current-value column, no history")]
     CF["Context Fabric devhealthsource<br/>BELONGS_TO_PROJECT edge"]
-    RC["ExternalRecomputeScope<br/>coalesced in Valkey, scheduled after commit"]
+    RC["ExternalRecomputeScope<br/>planned and dispatched synchronously after commit"]
 
     P --> B --> N
     P --> G
@@ -288,12 +288,13 @@ Load-bearing properties, and why each is where it is:
   against the wrong catalogue. The schema enum cannot see this: it validates the
   field in isolation, and the contradiction exists only relative to the pointer.
 
-The only cache hop is `ExternalRecomputeScope`: after `Complete` commits the
-batch outcome, the scope is handed to the recompute controller, which coalesces
-it in Valkey and dispatches downstream recomputation. It is best-effort by
-design -- a crash is recovered by the scheduler's pending-scope scan rather
-than by replaying already-terminal sink writes -- so a missed schedule delays
-derived materializations but never loses a transition row.
+`ExternalRecomputeScope` has no cache hop: after `Complete` commits the
+batch outcome, the scope is handed to the recompute controller, which plans
+and dispatches downstream recomputation synchronously, in the same call. It
+is best-effort by design -- a dispatch failure is logged, never raised, and
+a crash before that point is recovered by the scheduler's pending-scope scan
+rather than by replaying already-terminal sink writes -- so a missed
+dispatch delays derived materializations but never loses a transition row.
 
 ## Migration rules
 

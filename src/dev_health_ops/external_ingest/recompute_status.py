@@ -13,8 +13,8 @@ Two entry points, two session flavors -- deliberate, not an oversight:
 
 - :func:`record_recompute_dispatch` takes a **sync** ``Session``. It is
   called from ``external_ingest.recompute.dispatch_and_persist_scope``'s
-  Valkey-unavailable synchronous fallback, via
-  ``get_postgres_session_sync()`` -- no ``run_async`` bridging needed.
+  synchronous dispatch, via ``get_postgres_session_sync()`` -- no
+  ``run_async`` bridging needed.
 - :func:`get_recompute_jobs` and :func:`mark_recompute_pending` take an
   **async** ``AsyncSession``, matching ``api/external_ingest/status.py``'s
   FastAPI request-scoped session (``get_postgres_session_dep``).

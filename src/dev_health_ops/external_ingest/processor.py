@@ -30,7 +30,7 @@ Replay safety: every path here tolerates a second invocation for the same
 ``ingestion_id`` (CC11 post-critique). The terminal-status check short-
 circuits redelivered pointers; ``mark_processing``/``complete_batch`` are
 CAS transitions; sink writes are ReplacingMergeTree upserts on natural keys;
-recompute is debounce-coalesced. See
+recompute is planned and dispatched synchronously per batch, once. See
 docs/architecture/external-ingest-worker.md.
 """
 
@@ -243,9 +243,9 @@ async def _dispatch_recompute_best_effort(
     (``pull_request.v1``) — the planner's ``_GIT_KINDS``/``_WORK_ITEM_KINDS``
     vocabularies are ``.v1``-suffixed, so the sink scope's bare-kind names
     would silently plan zero recompute. ``schedule_or_coalesce`` is sync
-    (Valkey pipeline + ``apply_async`` + a possible synchronous fallback into
-    ``get_postgres_session_sync``) — run in a thread, matching the sink
-    layer's ``asyncio.to_thread`` convention for sync clients."""
+    (plan + dispatch + persist via ``get_postgres_session_sync``) — run in
+    a thread, matching the sink layer's ``asyncio.to_thread`` convention
+    for sync clients."""
     scope = sink_result.affected_scope
     try:
         await asyncio.to_thread(

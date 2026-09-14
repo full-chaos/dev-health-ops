@@ -1978,19 +1978,26 @@ func dispatchMetricsRemaining(ctx context.Context, runtime *operatorRuntime, arg
 // automatically retry (River permanently discarded the one job it ever
 // published for that partition, or the run predates the automatic
 // last-partition terminalize this same change adds -- see
-// ReleasePartitionTerminally). Scoped to --org, optionally narrowed to one
-// --family and/or one --run.
+// ReleasePartitionTerminally), AND a remaining_metric_runs row stuck
+// status='pending' forever because its handoff to a worker never delivered
+// and never can (no worker_job_outbox row for its partition, the row is
+// 'dead', or it is still 'pending' behind a prerequisite completion key
+// whose fence will never be written -- see UnstartableRuns). Scoped to
+// --org, optionally narrowed to one --family and/or one --run.
 //
-// Always prints the run/partition table first (StrandedRuns), in both
-// --dry-run and real invocations, mirroring `metrics daily-blocked`'s
-// read-first shape. Exactly one action then runs: by default, a fresh job
-// is published for every currently-'failed' partition of every matching
-// run (re-enqueue); with --terminalize, every matching run with no
-// partition still pending/running is instead moved straight to
-// status='failed' (a one-way trip out of 'running' with no automatic path
-// back). --review-evidence is REQUIRED unless --dry-run -- required doubly
-// so for --terminalize, since terminalizing a run destroys nothing but
-// forecloses ever automatically finishing it.
+// Always prints both read-only tables first (StrandedRuns and
+// UnstartableRuns), in both --dry-run and real invocations, mirroring
+// `metrics daily-blocked`'s read-first shape. Exactly one action then runs:
+// by default, a fresh job is published for every currently-'failed'
+// partition of every matching StrandedRuns run (re-enqueue) -- an
+// UnstartableRuns row has no failed partition to re-enqueue and is
+// untouched by this path; with --terminalize, every matching StrandedRuns
+// run with no partition still pending/running AND every matching
+// UnstartableRuns run are instead moved straight to status='failed' (a
+// one-way trip with no automatic path back). --review-evidence is REQUIRED
+// unless --dry-run -- required doubly so for --terminalize, since
+// terminalizing a run destroys nothing but forecloses ever automatically
+// finishing it.
 func dispatchMetricsRemainingRedrive(
 	ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer,
 ) int {
@@ -2033,15 +2040,25 @@ func dispatchMetricsRemainingRedrive(
 	if err != nil {
 		return writeServiceError(stderr, err)
 	}
+	// UnstartableRuns is the OTHER class this same verb now surfaces: a
+	// 'pending' run (never claimed at all) whose handoff is provably dead,
+	// rather than a 'running' run stranded behind a 'failed' partition.
+	// Always printed alongside StrandedRuns, mirroring the same
+	// read-first-in-both-modes shape.
+	unstartable, err := store.UnstartableRuns(ctx, *org, *family, canonicalRun)
+	if err != nil {
+		return writeServiceError(stderr, err)
+	}
 	if *dryRun {
 		status := "would_redrive"
 		if *terminalize {
 			status = "would_terminalize"
 		}
 		return writeResult(stdout, stderr, map[string]any{
-			"stranded_runs": candidates,
-			"terminalize":   *terminalize,
-			"status":        status,
+			"stranded_runs":    candidates,
+			"unstartable_runs": unstartable,
+			"terminalize":      *terminalize,
+			"status":           status,
 		})
 	}
 	publisher, err := remaining.NewPostgresPublisher(runtime.pools.Domain, runtime.registry)
@@ -2053,8 +2070,9 @@ func dispatchMetricsRemainingRedrive(
 		return writeServiceError(stderr, err)
 	}
 	return writeResult(stdout, stderr, map[string]any{
-		"stranded_runs": candidates,
-		"outcome":       outcome,
+		"stranded_runs":    candidates,
+		"unstartable_runs": unstartable,
+		"outcome":          outcome,
 	})
 }
 

@@ -238,6 +238,84 @@ func assertRefusalNames(
 	}
 }
 
+// TestCheckAvailableContractVersionsPreservesARealPgxDeadlineForClassification
+// is the integration-level half of the roll-storm regression for
+// queued_contract_versions specifically: it drives CheckAvailableContract
+// Versions against a REAL Postgres connection with a context that is
+// already past its deadline, the same shape a connection burst produces
+// when Postgres and its pooler are saturated long enough for a required
+// check's own bounded wait to expire before it gets an answer. The
+// unit-level regression
+// (TestCheckAvailableContractVersionsPreservesADeadlineButSanitizesOtherErrors)
+// proves the classification against a hand-constructed error of the same
+// shape; this test proves that shape is actually what the real driver
+// produces, end to end through the real QueueTelemetrySampler -- not a
+// fake.
+func TestCheckAvailableContractVersionsPreservesARealPgxDeadlineForClassification(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeInstance(t, instance)
+
+	dbName, err := containers.DatabaseName(instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	domainRole, err := containers.RoleName("worker_domain_runtime", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queueRole, err := containers.RoleName("worker_queue_runtime", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	adminPool := openPool(t, ctx, instance.URI)
+	defer adminPool.Close()
+	defer containers.DropRole(adminPool, domainRole, t.Logf)
+	defer containers.DropRole(adminPool, queueRole, t.Logf)
+	createRuntimeRoles(t, ctx, adminPool, domainRole, queueRole)
+	if _, err := riverstore.ApplyPinnedMigrations(ctx, adminPool, riverstore.MigrationOptions{
+		Schema: "river", DomainRole: domainRole, QueueRole: queueRole,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	queueURI := roleURI(t, instance.URI, queueRole, queuePassword, dbName)
+	queuePool := openPool(t, ctx, queueURI)
+	defer queuePool.Close()
+	sampler, err := riverstore.NewQueueTelemetrySampler(queuePool, riverstore.QueueTelemetryConfig{
+		Schema:   "river",
+		ClientID: "client-ops",
+		Queues:   []riverstore.QueueTelemetryQueue{{Name: "heartbeat", MaxWorkers: 1}},
+		Jobs:     []riverstore.QueueTelemetryJob{{Queue: "heartbeat", Kind: "system.heartbeat", SupportedVersions: []int{1}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Already past its deadline: no schema or grants need to exist for this
+	// -- pgxpool's own Acquire (and, failing that, pgconn's own context
+	// check before any network I/O) refuses a context that is already done,
+	// which is exactly the shape the query hits when a connection-burst-
+	// saturated pooler cannot answer within a required check's bounded
+	// wait.
+	expiredCtx, expiredCancel := context.WithDeadline(ctx, time.Now().Add(-time.Second))
+	defer expiredCancel()
+
+	err = sampler.CheckAvailableContractVersions(expiredCtx)
+	if !errors.Is(err, riverstore.ErrQueueTelemetryUnavailable) {
+		t.Fatalf("CheckAvailableContractVersions() error = %v, want ErrQueueTelemetryUnavailable", err)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("CheckAvailableContractVersions() error = %v, want a real pgx deadline error still classifiable as context.DeadlineExceeded", err)
+	}
+}
+
 // TestQueueSaturationIsPerProcessAcrossReplicas is CHAOS-3867 evidence.
 //
 // The per-queue running count was fleet-wide while the capacity it is divided

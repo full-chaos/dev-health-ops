@@ -1545,6 +1545,91 @@ func TestDependencyCheckFailedPreservesTheUnderlyingCauseForClassification(t *te
 	}
 }
 
+// TestQueuedContractVersionsReadyPreservesADeadlineAndLogsItsOwnCause is the
+// queued_contract_versions counterpart of
+// TestDependencyCheckFailedPreservesTheUnderlyingCauseForClassification: a
+// contract-version read that fails only because its own bounded context
+// expired must still classify as retryable (health.Registry decides that by
+// unwrapping the CheckFunc's own returned error for
+// context.DeadlineExceeded/Canceled, never by reading logs), and this
+// member must log its own cause the same way every sibling dependency check
+// already does -- so an operator reading a crash loop sees why
+// queued_contract_versions specifically refused, not just its bare name.
+func TestQueuedContractVersionsReadyPreservesADeadlineAndLogsItsOwnCause(t *testing.T) {
+	t.Parallel()
+	var logOutput bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logOutput, nil))
+	checkErr := fmt.Errorf("%w: sampling queued contract versions: %w", errors.New("queue_telemetry_unavailable"), context.DeadlineExceeded)
+	dependencies := &workerDependencies{
+		logger:                 logger,
+		queueTelemetryRequired: true,
+		queueTelemetry:         &fakeQueueTelemetry{checkErr: checkErr},
+	}
+
+	err := dependencies.queuedContractVersionsReady(context.Background())
+	if !errors.Is(err, errWorkerDependencyUnavailable) {
+		t.Fatalf("queuedContractVersionsReady() error = %v, want errWorkerDependencyUnavailable", err)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("queuedContractVersionsReady() error = %v, want it to still unwrap to context.DeadlineExceeded", err)
+	}
+	if !strings.Contains(logOutput.String(), "queued_contract_versions") {
+		t.Fatalf("expected a member-level log line naming queued_contract_versions, got %q", logOutput.String())
+	}
+	if !strings.Contains(logOutput.String(), "sampling queued contract versions") {
+		t.Fatalf("expected the member's own error text in the log line, got %q", logOutput.String())
+	}
+}
+
+// TestQueuedContractVersionsReadyRefusesOnFirstAttemptWhenGenuinelyFailed
+// proves a contract-version check failure that does NOT unwrap to a context
+// deadline -- a real, non-transient problem -- still refuses immediately: it
+// must not be misread as retryable just because this member now wraps its
+// cause instead of discarding it.
+func TestQueuedContractVersionsReadyRefusesOnFirstAttemptWhenGenuinelyFailed(t *testing.T) {
+	t.Parallel()
+	genuineErr := errors.New("queue telemetry query rejected: connection refused")
+	dependencies := &workerDependencies{
+		queueTelemetryRequired: true,
+		queueTelemetry:         &fakeQueueTelemetry{checkErr: genuineErr},
+	}
+
+	err := dependencies.queuedContractVersionsReady(context.Background())
+	if !errors.Is(err, errWorkerDependencyUnavailable) {
+		t.Fatalf("queuedContractVersionsReady() error = %v, want errWorkerDependencyUnavailable", err)
+	}
+	if !errors.Is(err, genuineErr) {
+		t.Fatalf("queuedContractVersionsReady() error = %v, want it to still unwrap to the genuine cause", err)
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("queuedContractVersionsReady() error unexpectedly classifies as a deadline -- a genuine failure must not be retryable")
+	}
+}
+
+// TestQueuedContractVersionsReadyGenuineMismatchStaysNonRetryable proves a
+// real *riverstore.UnsupportedContractVersionError -- an available job whose
+// contract version this worker does not support -- never classifies as a
+// timeout no matter how the cause-preserving change above is implemented:
+// waiting out a genuine mismatch can never fix it, so it must keep refusing
+// on the very first attempt.
+func TestQueuedContractVersionsReadyGenuineMismatchStaysNonRetryable(t *testing.T) {
+	t.Parallel()
+	dependencies := &workerDependencies{
+		queueTelemetryRequired: true,
+		queueTelemetry: &fakeQueueTelemetry{checkErr: &riverstore.UnsupportedContractVersionError{
+			Offenders: []string{"sync/dispatch_sync_run@7"},
+		}},
+	}
+
+	err := dependencies.queuedContractVersionsReady(context.Background())
+	if !errors.Is(err, errWorkerDependencyUnavailable) {
+		t.Fatalf("queuedContractVersionsReady() error = %v, want errWorkerDependencyUnavailable", err)
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		t.Fatal("queuedContractVersionsReady() error unexpectedly classifies as retryable for a genuine contract mismatch")
+	}
+}
+
 // TestPreclaimReadinessRetriesRealCheckWrappersWhenBothMembersTimeOut
 // reproduces the production incident end to end, through the REAL
 // queueReady/riverSchemaReady wrappers (not a hand-rolled CheckFunc), with
@@ -1594,6 +1679,52 @@ func TestPreclaimReadinessRetriesRealCheckWrappersWhenBothMembersTimeOut(t *test
 	}
 	if strings.Contains(logs.String(), "preclaim readiness refused") {
 		t.Fatalf("both real check wrappers timing out must never refuse: %s", logs.String())
+	}
+}
+
+// TestPreclaimReadinessRetriesTheRealQueuedContractVersionsWrapperOnTimeout
+// reproduces the production incident for queued_contract_versions
+// specifically, through the REAL queuedContractVersionsReady wrapper (not a
+// hand-rolled CheckFunc), with the exact error shape that member really
+// produces against an expiring context: its own bounded context firing at
+// essentially the same instant as the caller's equal-duration wait. The
+// aggregate must retry rather than exit on the first attempt.
+func TestPreclaimReadinessRetriesTheRealQueuedContractVersionsWrapperOnTimeout(t *testing.T) {
+	t.Parallel()
+	const checkTimeout = 10 * time.Millisecond
+	const wantSuccessAttempt = 2
+
+	telemetry := &fakeQueueTelemetry{
+		checkErr: fmt.Errorf("%w: sampling queued contract versions: %w", errors.New("queue_telemetry_unavailable"), context.DeadlineExceeded),
+	}
+	dependencies := &workerDependencies{
+		queueTelemetryRequired: true,
+		queueTelemetry:         telemetry,
+	}
+
+	registry := health.NewRegistry(checkTimeout)
+	var attempts atomic.Int32
+	if err := registry.RegisterRequired("queued_contract_versions", func(ctx context.Context) error {
+		if attempts.Add(1) < wantSuccessAttempt {
+			return dependencies.queuedContractVersionsReady(ctx)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var logs bytes.Buffer
+	component := preclaimReadinessComponent{
+		registry: registry,
+		logger:   slog.New(slog.NewJSONHandler(&logs, nil)),
+		budget:   time.Second,
+		sleep:    preclaimSleepAfterCheckTimeout(checkTimeout),
+	}
+	if err := component.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v, want nil: a timing-out queued_contract_versions member must be retryable", err)
+	}
+	if strings.Contains(logs.String(), "preclaim readiness refused") {
+		t.Fatalf("a real check wrapper timing out must never refuse: %s", logs.String())
 	}
 }
 

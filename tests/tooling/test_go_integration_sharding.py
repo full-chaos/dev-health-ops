@@ -509,7 +509,9 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
         assert weight_field.startswith("weight=") and weight_field.endswith("s"), (
             weight_field
         )
-        shard_weights[package] = int(weight_field.removeprefix("weight=").removesuffix("s"))
+        shard_weights[package] = int(
+            weight_field.removeprefix("weight=").removesuffix("s")
+        )
 
     assert set(assignments) == {1, 2, 3, 4}
     flattened = [package for packages in assignments.values() for package in packages]
@@ -572,7 +574,9 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # shard-1 membership as fine.
     provider_weight = shard_weights[PROVIDER_PACKAGE]
     other_total = sum(
-        weight for package, weight in shard_weights.items() if package != PROVIDER_PACKAGE
+        weight
+        for package, weight in shard_weights.items()
+        if package != PROVIDER_PACKAGE
     )
     non_isolated_shards = len(assignments) - 1
     balanced_share = other_total / non_isolated_shards

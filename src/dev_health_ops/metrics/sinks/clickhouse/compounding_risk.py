@@ -1,7 +1,8 @@
 """CompoundingRiskMixin — write method for ``compounding_risk_daily`` (CHAOS-1641).
 
 Table: ``compounding_risk_daily``
-Engine: MergeTree (append-only; read latest with ``argMax(<col>, computed_at)``)
+Engine: ReplacingMergeTree(computed_at) since migration 096; merges are eventual,
+so read the latest row with ``argMax(<col>, computed_at)``
 
 The composite is computed elsewhere in
 ``dev_health_ops.metrics.compounding_risk``; this mixin only persists rows.
@@ -34,9 +35,9 @@ class CompoundingRiskMixin(_ClickHouseSinkBase):
     ) -> None:
         """Append rows to ``compounding_risk_daily``.
 
-        Append-only: re-running for the same ``(org_id, day, scope, scope_id)``
-        produces new rows with a newer ``computed_at``. Use
-        ``argMax(<col>, computed_at)`` in read queries.
+        Re-running for the same ``(org_id, day, scope, scope_id)`` produces new
+        rows with a newer ``computed_at``; a later merge keeps only the newest.
+        Use ``argMax(<col>, computed_at)`` in read queries until then.
         """
         if not rows:
             return

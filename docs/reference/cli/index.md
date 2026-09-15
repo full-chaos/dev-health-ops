@@ -1448,7 +1448,9 @@ same day: `run_daily_metrics_finalize`'s outputs are read back via
 reader in this schema already uses, so a second full write changes nothing
 a correctly-written reader observes (confirmed live: two runs for the same
 org/day left 2 raw rows in `team_cognitive_load_daily` but an identical
-argMax-deduped read both times).
+argMax-deduped read both times; the table is `ReplacingMergeTree(computed_at)`
+since migration 096, so a later merge removes the older row and the read stays
+the same).
 
 **Provenance.** Every terminal-state reset writes one row to
 `daily_metrics_finalize_redrive_events` — `run_id`, `org_id`, `target_day`,
@@ -1566,8 +1568,9 @@ audit/intent, but does **not** narrow the actual recompute: one
 compatibility-bridge call plus whichever native executors have cut over
 (`job_daily.py`'s `run_daily_metrics_job`), so resetting a partition
 recomputes ALL of its families, not just the named one. This is safe —
-every native/bridge family's writer is append-only with `computed_at`-keyed
-reader dedup — but it is not free, which is exactly why `--family` stays a
+every family writer stamps a newer `computed_at`, its output table keeps the
+newest row per reader key (`ReplacingMergeTree(computed_at)`, migration 096), and
+readers dedup by `computed_at` — but it is not free, which is exactly why `--family` stays a
 required, closed-vocabulary flag rather than an implied default: it forces
 an operator to name which specific gap they are repairing, even though the
 mechanism underneath is the same for all of them today.

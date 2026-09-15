@@ -13,10 +13,13 @@ metric-config read path in ``api/queries/metrics.py`` instead wraps these tables
 in an ``argMax(..., computed_at)`` subquery (the established CHAOS-2377 pattern);
 both approaches yield one logical row per key.
 
-Older daily tables remain append-only ``MergeTree`` tables.  For those tables,
-``FINAL`` cannot collapse a repeated compute generation; readers instead select
-the latest ``computed_at`` row for each physical daily key.  This keeps old
-data and new re-drives compatible without a destructive table rewrite.
+The daily-family tables in ``_APPEND_ONLY_DAILY_KEYS`` are also
+``ReplacingMergeTree(computed_at)`` since ClickHouse migration 096, sorted by
+exactly the keys below (``dora_metrics_daily`` excepted: still plain
+``MergeTree``).  Merges only eventually drop superseded generations, so
+readers still select the latest ``computed_at`` row for each key.  That form
+returns the same rows before and after a merge, which is why it is kept
+instead of ``FINAL``: existing Go and Python readers stay byte-identical.
 
 A static guard test (``tests/test_rerun_dedup_guard.py``) fails CI if a raw
 ``FROM``/``JOIN`` of the ReplacingMergeTree tables is introduced without
@@ -33,9 +36,10 @@ RERUN_DEDUPED_DAILY_TABLES = frozenset(
     }
 )
 
-# Legacy append-only daily tables written once per compute generation.  Values
-# are logically unique at these keys, but a post-sync re-drive appends a newer
-# generation.  Each table's physical daily key is paired with ``org_id`` so an
+# Daily tables written once per compute generation.  Values are logically unique
+# at these keys, but a post-sync re-drive writes a newer generation.  Each key is
+# also the table's ReplacingMergeTree sorting key (migration 096), so a merge can
+# never collapse two rows these keys keep apart.  Each table's physical daily key is paired with ``org_id`` so an
 # identity alias, tenant, or second repository is never collapsed into another
 # logical row.
 _APPEND_ONLY_DAILY_KEYS: dict[str, tuple[str, ...]] = {

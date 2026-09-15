@@ -2,7 +2,8 @@
 (CHAOS-4365 item 2 / 4347-C).
 
 Table: ``team_cognitive_load_daily``
-Engine: MergeTree (append-only; read latest with ``argMax(<col>, computed_at)``)
+Engine: ReplacingMergeTree(computed_at) since migration 096; merges are eventual,
+so read the latest row with ``argMax(<col>, computed_at)``
 
 The row set is composed elsewhere in
 ``dev_health_ops.metrics.team_cognitive_load``; this mixin only persists rows.
@@ -35,9 +36,9 @@ class TeamCognitiveLoadMixin(_ClickHouseSinkBase):
     ) -> None:
         """Append rows to ``team_cognitive_load_daily``.
 
-        Append-only: re-running for the same ``(org_id, team_id, day)``
-        produces new rows with a newer ``computed_at``. Use
-        ``argMax(<col>, computed_at)`` in read queries.
+        Re-running for the same ``(org_id, team_id, day)`` produces new rows
+        with a newer ``computed_at``; a later merge keeps only the newest. Use
+        ``argMax(<col>, computed_at)`` in read queries until then.
         """
         if not rows:
             return

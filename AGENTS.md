@@ -53,14 +53,14 @@ Design checks every Ask Dev / acr / ops-metrics change must pass — checks 1–
 14. Prefer investigation over diagnosis-by-metric.
 15. Ask Dev is the product surface over Context Fabric; metrics/graph/landscape/investment views are supporting surfaces.
 16. Diagnoses need an executed repro; label code-argued findings as such.
-17. Append-only daily tables + argMax readers; never zero-fill missing days.
+17. Daily tables keep the newest `computed_at` per key (ReplacingMergeTree) and readers still dedup with `argMax`/`LIMIT 1 BY`; never zero-fill missing days.
 18. Authorization is re-checked live every turn — never carried as conversation memory.
 
 Contract rule: any acr contract widening ⇒ ask-dev pin bump before any live proof. Team authorization is ownership-derived (`team_repo_ownership` rows), so team answers are impossible until ownership is synced.
 
 Data vocabulary: "local" = the admin@test.com org (`70d529e0`, REAL synced data on the compose stack); `dev-hops fixtures generate` = contrived CI data; "prod" = read-only post-deploy readback. Team = project/repo OWNERSHIP only (never person→membership→team); ownership is sync-derived, provider-agnostic; no manual TEAM mappings (ClickHouse `manual_fallback` records remain valid for work-item/PR attribution — never for team authorization).
 
-Checks that bite hardest here: 3, 9, 12, 13, 17 — plus: team is OWNERSHIP only, never person→membership→team; metrics readers use append-only daily tables + `argMax`, never zero-fill missing days.
+Checks that bite hardest here: 3, 9, 12, 13, 17 — plus: team is OWNERSHIP only, never person→membership→team; metrics readers dedup daily tables by `computed_at` (`argMax`/`LIMIT 1 BY`; merges are eventual), never zero-fill missing days.
 
 ## Ops-specific rules (beyond root contracts)
 

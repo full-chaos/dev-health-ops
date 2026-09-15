@@ -157,7 +157,7 @@ func TestFetchHotspotRows_BackfilledOlderDayDoesNotWinOverTheLatestDay(t *testin
 	chschema.Apply(ctx, t, inst)
 
 	conn := openRawClickHouse(t, inst.URI)
-	assertHotspotDailyIsAppendOnly(t, ctx, conn)
+	assertHotspotDailyKeepsEveryDay(t, ctx, conn)
 	seedBackfillRows(t, ctx, conn, []backfillSeedRow{latestDayRow, staleBackfilledRow})
 
 	client, err := clickhouse.NewClickHouseQueryClientWithOptions(clickhouse.Options{DSN: inst.URI})
@@ -217,13 +217,13 @@ func TestFetchHotspotRows_BackfilledOlderDayDoesNotWinOverTheLatestDay(t *testin
 	}
 }
 
-// assertHotspotDailyIsAppendOnly reads the engine back from the migrated
-// table. This fixture depends on BOTH seeded rows remaining visible: on a
-// ReplacingMergeTree keyed by (repo_id, day, file_path) they would be
-// distinct rows anyway, but if a migration ever collapsed the table by
-// (repo_id, file_path) the older row would disappear and the inversion
-// could not be expressed at all.
-func assertHotspotDailyIsAppendOnly(t *testing.T, ctx context.Context, conn stdclickhouse.Conn) {
+// assertHotspotDailyKeepsEveryDay reads the schema back from the migrated
+// table. This fixture depends on BOTH seeded rows remaining visible. The table
+// is a ReplacingMergeTree(computed_at), and a merge collapses rows that share
+// the sorting key: with `day` in the key the two seeded days stay distinct
+// rows, but a key reduced to (repo_id, file_path) would merge the older day
+// away and the inversion could not be expressed at all.
+func assertHotspotDailyKeepsEveryDay(t *testing.T, ctx context.Context, conn stdclickhouse.Conn) {
 	t.Helper()
 	var engineFull, sortingKey string
 	row := conn.QueryRow(ctx,
@@ -231,8 +231,11 @@ func assertHotspotDailyIsAppendOnly(t *testing.T, ctx context.Context, conn stdc
 	if err := row.Scan(&engineFull, &sortingKey); err != nil {
 		t.Fatalf("read file_hotspot_daily schema from the migrated database: %v", err)
 	}
-	if strings.Contains(engineFull, "Replacing") || strings.Contains(engineFull, "Collapsing") {
-		t.Fatalf("file_hotspot_daily engine is %q; this fixture needs both seeded days to stay visible", engineFull)
+	if strings.Contains(engineFull, "Collapsing") {
+		t.Fatalf("file_hotspot_daily engine is %q; a collapsing engine can remove a seeded day", engineFull)
+	}
+	if strings.Contains(engineFull, "Replacing") && !strings.Contains(engineFull, "ReplacingMergeTree(computed_at)") {
+		t.Fatalf("file_hotspot_daily engine is %q; a merge must keep the newest computed_at per key", engineFull)
 	}
 	if !strings.Contains(sortingKey, "day") {
 		t.Fatalf("file_hotspot_daily sorting key is %q, missing `day` -- one row per (repo, day, file) is "+

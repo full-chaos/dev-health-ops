@@ -26,9 +26,10 @@ var rerunDedupedDailyTables = map[string]bool{
 	"work_item_user_metrics_daily": true,
 }
 
-// appendOnlyDailyKeys are legacy plain MergeTree daily tables. FINAL cannot
-// collapse a repeated compute generation on these; the latest computed_at row
-// per natural key must be selected explicitly. Keys mirror
+// appendOnlyDailyKeys are daily tables read through the latest-computed_at
+// form. Most are ReplacingMergeTree(computed_at) sorted by these keys, but a
+// merge is eventual, so the latest row per key is still selected explicitly;
+// that returns the same rows before and after a merge. Keys mirror
 // clickhouse_dedup._APPEND_ONLY_DAILY_KEYS exactly.
 var appendOnlyDailyKeys = map[string][]string{
 	"repo_metrics_daily": {"org_id", "repo_id", "day"},

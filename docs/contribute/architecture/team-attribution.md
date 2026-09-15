@@ -510,11 +510,12 @@ means the ClickHouse `teams` dimension is empty.
 > | `contributing_repo_count`, `sample_author_count` | `UInt32` | Diagnosability: how many owned repos and distinct authors rolled up into the row |
 > | `computed_at` | `DateTime64(6, 'UTC')` | |
 >
-> `ENGINE = MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, team_id, day)` — **append-only**,
-> matching every other daily rollup in this schema (`compounding_risk_daily` included): a
-> re-computation inserts a new row with a later `computed_at`, it never updates in place, and
-> readers dedup per `(org_id, team_id, day)` via `argMax(<col>, computed_at)`. Never
-> `ReplacingMergeTree`.
+> `ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, team_id, day)`
+> (created as plain `MergeTree` by migration 081, converted by 096, like every other daily rollup
+> in this schema): a re-computation inserts a new row with a later `computed_at`, a background
+> merge later keeps only the newest row per key, and readers still dedup per
+> `(org_id, team_id, day)` via `argMax(tuple(...), computed_at)` because merges are eventual. The
+> sorting key must stay the reader key: a narrower key would merge rows the readers keep apart.
 >
 > **Producer runs in the finalize step, once per org/day** — `run_daily_metrics_finalize`
 > (`metrics/job_daily.py`), the same once-per-org/day stage CHAOS-4399 moved
@@ -2022,12 +2023,12 @@ flowchart LR
 | `contributing_repo_count` | `UInt32` | Diagnosability: how many distinct owned repos contributed a `repo_complexity_daily` row this day |
 | `computed_at` | `DateTime64(6, 'UTC')` | |
 
-`ENGINE = MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, team_id, day)`
-— append-only, matching every other daily rollup in this schema
-(`compounding_risk_daily`, `team_cognitive_load_daily` included): a
-re-computation inserts a new row with a later `computed_at`; readers dedup
-per `(org_id, team_id, day)` via `argMax(<col>, computed_at)`. Never
-`ReplacingMergeTree`.
+`ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, team_id, day)`
+(migration 087), like every other daily rollup in this schema
+(`compounding_risk_daily` and `team_cognitive_load_daily` since migration 096): a
+re-computation inserts a new row with a later `computed_at`, a merge later keeps
+only the newest row per key, and readers still dedup per `(org_id, team_id, day)`
+via `argMax(<col>, computed_at)` because merges are eventual.
 
 **Producer runs in the finalize step, once per org/day** — the native Go
 executor (`internal/jobs/metrics/daily/team_complexity_native_executor.go`,

@@ -125,6 +125,35 @@ func runService(t *testing.T, env map[string]string) (*safeBuffer, func() int) {
 	return logs, stop
 }
 
+// awaitBoundAddress polls the service's log stream for the "listener bound"
+// line of the named component and returns the address it reports. Together
+// with a ":0" address this replaces reserving a port up front, which is a
+// race against every other process on the host that is doing the same.
+func awaitBoundAddress(t *testing.T, logs *safeBuffer, component string) string {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, line := range strings.Split(logs.String(), "\n") {
+			if !strings.Contains(line, `"msg":"listener bound"`) {
+				continue
+			}
+			var entry struct {
+				Component string `json:"component"`
+				Address   string `json:"address"`
+			}
+			if err := json.Unmarshal([]byte(line), &entry); err != nil {
+				t.Fatalf("decode log line %q: %v", line, err)
+			}
+			if entry.Component == component && entry.Address != "" {
+				return entry.Address
+			}
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("no \"listener bound\" line for %s within 20s; logs:\n%s", component, logs.String())
+	return ""
+}
+
 // awaitResponse polls url until it answers, so the test never races the
 // listener's bind.
 func awaitResponse(t *testing.T, client *http.Client, url string) *http.Response {
@@ -535,14 +564,21 @@ func TestVersionFlagPrintsBuildMetadata(t *testing.T) {
 // resolution site as the environment, end to end through Execute: a flag that
 // only existed in --help would fail this.
 func TestFlagsOverrideTheEnvironment(t *testing.T) {
-	apiAddress := reservePort(t)
+	// Every address the service will BIND is ":0": the kernel picks a free
+	// port at bind time, so there is no reserve-then-release window for a
+	// neighbouring test process to win. The operator address the flag wins
+	// with is read back from the "listener bound" log line.
+	// The API listener spells its ":0" as "localhost:0" only because the
+	// configuration rejects two identically-spelled addresses; both bind an
+	// ephemeral loopback port.
 	operatorAddress := reservePort(t)
-	env := brokenEnvironment(t, apiAddress, operatorAddress)
+	env := brokenEnvironment(t, "localhost:0", operatorAddress)
 	// Point the environment at an address the flag will override. If the flag
 	// were ignored, the operator listener would bind the environment's
-	// address and the poll below would never succeed.
-	flagOperator := reservePort(t)
-	env[authconfig.EnvOperatorAddress] = operatorAddress
+	// address and the bind check below would fail. The environment's address
+	// is never bound by the service in the passing case, so reserving it is
+	// race-free.
+	env[authconfig.EnvLogLevel] = "info"
 
 	logs := &safeBuffer{}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -550,11 +586,12 @@ func TestFlagsOverrideTheEnvironment(t *testing.T) {
 	exit := make(chan int, 1)
 	go func() {
 		exit <- Execute(
-			ctx, []string{"--operator-http-addr", flagOperator}, lookupFrom(env),
+			ctx, []string{"--operator-http-addr", "127.0.0.1:0"}, lookupFrom(env),
 			IO{Stdout: logs, Stderr: logs},
 		)
 	}()
 
+	flagOperator := awaitBoundAddress(t, logs, "operator-http")
 	client := &http.Client{Timeout: 5 * time.Second}
 	defer client.CloseIdleConnections()
 	response := awaitResponse(t, client, "http://"+flagOperator+"/healthz")

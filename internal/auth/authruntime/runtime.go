@@ -280,11 +280,43 @@ func configure(
 
 	return []lifecycle.Component{
 		store,
-		operatorHTTP,
-		apiHTTP,
+		announcedListener{listener: operatorHTTP, logger: logger},
+		announcedListener{listener: apiHTTP, logger: logger},
 		health.Gate{Registry: registry},
 	}, nil
 }
+
+// listener is the surface a socket-binding component exposes: its lifecycle,
+// the errors it can raise after a successful bind, and the address it bound.
+type listener interface {
+	lifecycle.Component
+	lifecycle.ErrorSource
+	Address() string
+}
+
+// announcedListener logs the address a listener actually bound once Start
+// returns. With ":0" configured the operating system picks the port, and this
+// log line is the only place the choice is visible -- a harness that wants to
+// reach the service without pre-reserving a port reads it from here rather
+// than racing another process for an ephemeral port it released.
+type announcedListener struct {
+	listener listener
+	logger   *slog.Logger
+}
+
+func (a announcedListener) Name() string { return a.listener.Name() }
+
+func (a announcedListener) Start(ctx context.Context) error {
+	if err := a.listener.Start(ctx); err != nil {
+		return err
+	}
+	a.logger.InfoContext(ctx, "listener bound", "component", a.listener.Name(), "address", a.listener.Address())
+	return nil
+}
+
+func (a announcedListener) Shutdown(ctx context.Context) error { return a.listener.Shutdown(ctx) }
+
+func (a announcedListener) Errors() <-chan error { return a.listener.Errors() }
 
 // reasonOf renders a bounded reason code for a dependency-construction
 // failure. It never falls back to err.Error(): those errors can carry a DSN.

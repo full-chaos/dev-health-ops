@@ -237,7 +237,7 @@ A row that is live, reachable to real clients (`canary`/`primary`) and carries n
 is required before stage 4/5, and "a bare 200 does not qualify".
 
 <!-- BEGIN GENERATED GO API OPERATIONS -->
-_Rendered 2026-09-09T06:26:46Z against main merge-base `c6fa2c38b20bf77073c44d498d149434372825f7`; SDL digest pin `sha256:19485ec136d04de0935717dca8b4f5fd27dd0351fe96b854d40f433229468fd0`; fleet read 2026-09-11T21:55:38Z via docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1._
+_Rendered 2026-09-09T06:26:46Z against main merge-base `c90c344ce1c932668d6f92187f9296f5ca6debfa`; SDL digest pin `sha256:19485ec136d04de0935717dca8b4f5fd27dd0351fe96b854d40f433229468fd0`; fleet read 2026-09-11T21:55:38Z via docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1._
 
 _Rows in `go_api_proof_run` at read time: **0**. Operations reachable to real clients with no deployed-executed proof: **11**. Rows whose mode says Go but whose schema digest no longer matches the pin, so every request silently falls back to Python: **12**._
 
@@ -273,6 +273,61 @@ _Live rows the edge cannot dispatch -- serving a document the operation catalog 
 | `workGraphEdges` | canary | `sha256:67b87d38e46f76…` | `78fc68815e82` | **DEAD** (digest moved) | **none** | -- |
 | `workGraphFlow` | canary | `sha256:67b87d38e46f76…` | `78fc68815e82` | **DEAD** (digest moved) | **none** | -- |
 <!-- END GENERATED GO API OPERATIONS -->
+
+### Per REST endpoint
+
+Every `/api/v1/*` route `src/dev_health_ops/api/main.py` declares, enumerated mechanically from its FastAPI
+decorators (`internal/migrationmatrix.LoadFastAPIRoutes`) and cross-referenced against every `/api/v1/*`
+path query-api's own mux registers (`internal/migrationmatrix.LoadQueryAPIMuxRoutes`, read straight from
+`cmd/query-api`'s Go source -- query-api has no separate REST route registry the way it has an operation
+catalog for GraphQL). `ported` means the path is registered on query-api's mux; `python-only` is the
+default every other route earns by simply existing; `dead-by-design` is emitted only for a route already
+carrying chris's word on record that it is staying Python (see `RESTDeadByDesign`'s own doc comment --
+empty today). Matching is by PATH, not (method, path): see `internal/migrationmatrix/restendpoints.go`'s
+module comment for the one known simplification that follows from that.
+
+Both sources are read fresh on every `-render`/`-check` -- there is no per-row ledger here to drift out of
+sync with either side, so a route added, removed or newly wired on either plane changes this table the next
+time the tool runs, and the doc-drift check below fails until it is re-rendered.
+
+<!-- BEGIN GENERATED REST ENDPOINTS -->
+_32 `/api/v1/*` routes in `src/dev_health_ops/api/main.py`: **2** ported, **30** python-only, **0** dead-by-design._
+
+| Method | Path | Status | Go handler |
+| --- | --- | --- | --- |
+| GET | `/api/v1/drilldown/issues` | python-only | -- |
+| POST | `/api/v1/drilldown/issues` | python-only | -- |
+| GET | `/api/v1/drilldown/prs` | python-only | -- |
+| POST | `/api/v1/drilldown/prs` | python-only | -- |
+| GET | `/api/v1/explain` | python-only | -- |
+| POST | `/api/v1/explain` | python-only | -- |
+| GET | `/api/v1/filters/options` | python-only | -- |
+| GET | `/api/v1/flame` | python-only | -- |
+| GET | `/api/v1/flame/aggregated` | python-only | -- |
+| GET | `/api/v1/heatmap` | python-only | -- |
+| GET | `/api/v1/home` | python-only | -- |
+| POST | `/api/v1/home` | python-only | -- |
+| GET | `/api/v1/investment` | python-only | -- |
+| POST | `/api/v1/investment` | python-only | -- |
+| POST | `/api/v1/investment/explain` | ported | `cmd/query-api/investment_explain_route.go:119` |
+| POST | `/api/v1/investment/flow` | python-only | -- |
+| POST | `/api/v1/investment/flow/repo-team` | python-only | -- |
+| GET | `/api/v1/investment/sunburst` | python-only | -- |
+| GET | `/api/v1/meta` | python-only | -- |
+| GET | `/api/v1/opportunities` | python-only | -- |
+| POST | `/api/v1/opportunities` | python-only | -- |
+| GET | `/api/v1/people` | python-only | -- |
+| GET | `/api/v1/people/{person_id}/drilldown/issues` | python-only | -- |
+| GET | `/api/v1/people/{person_id}/drilldown/prs` | python-only | -- |
+| GET | `/api/v1/people/{person_id}/metric` | python-only | -- |
+| GET | `/api/v1/people/{person_id}/summary` | python-only | -- |
+| GET | `/api/v1/quadrant` | ported | `cmd/query-api/quadrant_route.go:79` |
+| GET | `/api/v1/sankey` | python-only | -- |
+| POST | `/api/v1/sankey` | python-only | -- |
+| GET | `/api/v1/work-units` | python-only | -- |
+| POST | `/api/v1/work-units` | python-only | -- |
+| POST | `/api/v1/work-units/{work_unit_id}/explain` | python-only | -- |
+<!-- END GENERATED REST ENDPOINTS -->
 
 ## SYNC
 

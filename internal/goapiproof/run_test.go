@@ -871,7 +871,14 @@ func TestARoutedOperationNeedingAnInstanceIDIsRefusedByName(t *testing.T) {
 // it sends is the supplied one, never an invented empty string.
 func TestARoutedOperationWithASuppliedInstanceIDIsMeasured(t *testing.T) {
 	const realID = "9f5c2e6a-real-pr-id"
-	body := `{"data":{"pr":null}}`
+	// createdAt differs only by the offset suffix the pr OperationSpec's
+	// own baseline defect declares (ClickHouse's naive-vs-aware
+	// created_at) -- an identical body on both legs would make that
+	// declaration cover no difference and refuse as stale
+	// (RefusalStaleBaselineDefect), which is the wrong failure for a test
+	// about the SUPPLIED ID, not the defect. This shape exercises both.
+	goBody := `{"data":{"pr":{"createdAt":"2026-09-08T10:34:52Z"}}}`
+	pythonBody := `{"data":{"pr":{"createdAt":"2026-09-08T10:34:52"}}}`
 
 	var mu sync.Mutex
 	var sentIDs []string
@@ -887,8 +894,10 @@ func TestARoutedOperationWithASuppliedInstanceIDIsMeasured(t *testing.T) {
 		mu.Unlock()
 
 		w.Header().Set(buildHeader, "b18e56fa79cfe20ce0f75df148144b832d92be36")
+		body := goBody
 		if strings.Contains(parsed.Query, "python-plane control") {
 			w.Header().Set(planeHeader, "python")
+			body = pythonBody
 		} else {
 			w.Header().Set(planeHeader, "go")
 		}

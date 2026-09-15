@@ -389,6 +389,16 @@ type Config struct {
 	RecordedBy     string
 	ReviewEvidence string
 	Timeout        time.Duration
+
+	// InstanceIDs supplies a REAL row identifier for an operation whose
+	// registered document needs one (OperationSpec.InstanceVariable),
+	// keyed by operation name. It comes from the run itself -- a flag, or
+	// a row read from the org's own data -- never invented: an invented
+	// id satisfies the SDL and returns null on both planes, so the
+	// comparison would record a match having measured nothing. An
+	// operation with InstanceVariable set and no entry here is refused by
+	// name (RefusalNeedsInstanceID) rather than measured with a guess.
+	InstanceIDs map[string]string
 }
 
 // Runner executes the proof run.
@@ -662,7 +672,18 @@ func (r *Runner) proveOne(ctx context.Context, operation string) Outcome {
 	if err != nil {
 		return r.refuseNoSpec(operation, "", err)
 	}
-	return r.proveRequest(ctx, operation, "", spec, spec.Variables(r.Config.OrgID, r.Config.Window), spec.Parity)
+	variables := spec.Variables(r.Config.OrgID, r.Config.Window)
+	// A REAL id from the run (Config.InstanceIDs), never invented here or
+	// anywhere upstream -- see OperationSpec.InstanceVariable and this
+	// operation's own table comment. Absent, variables keeps whatever
+	// zero value the table wrote (empty string for `pr`), and
+	// proveRequest refuses by name rather than sending it.
+	if spec.InstanceVariable != "" {
+		if id := r.Config.InstanceIDs[operation]; id != "" {
+			variables[spec.InstanceVariable] = id
+		}
+	}
+	return r.proveRequest(ctx, operation, "", spec, variables, spec.Parity)
 }
 
 // proveVariant proves ONE OperationSpec.Variants entry, under the SAME
@@ -769,9 +790,18 @@ func (r *Runner) proveRequest(ctx context.Context, operation string, variantName
 	// operation is routed and would otherwise be compared with an
 	// invented identifier.
 	if spec.InstanceVariable != "" {
-		return refuse(RefusalNeedsInstanceID, fmt.Sprintf(
-			"the registered document requires $%s, an identifier for one stored row, and this table has no source for one: any value it invented would satisfy the SDL and return null on BOTH planes, so the run would record a match having compared nothing",
-			spec.InstanceVariable))
+		// Checked against the RESOLVED request, not the table: proveOne
+		// (the only caller that can supply one, via Config.InstanceIDs)
+		// already merged a real id in if the run had one. A variant never
+		// reaches this table shape at all (spec.InstanceVariable is a
+		// base-request-only field), so this only ever fires for the base
+		// request.
+		supplied, _ := variables[spec.InstanceVariable].(string)
+		if supplied == "" {
+			return refuse(RefusalNeedsInstanceID, fmt.Sprintf(
+				"the registered document requires $%s, an identifier for one stored row, and this run supplied none: any value it invented would satisfy the SDL and return null on BOTH planes, so the run would record a match having compared nothing",
+				spec.InstanceVariable))
+		}
 	}
 
 	candidate, err := r.post(ctx, candidateURL, document, candidateCredential, variables)

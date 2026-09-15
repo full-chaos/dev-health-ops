@@ -98,7 +98,7 @@ class FakeClient:
         return match.group(1)
 
     def query(self, query: str, parameters: dict | None = None) -> _Result:
-        name = (parameters or {}).get("name") or (parameters or {}).get("t")
+        name = str((parameters or {}).get("name") or (parameters or {}).get("t") or "")
         if "count() FROM system.tables" in query:
             return _Result([[1 if name in self.tables else 0]])
         if "engine FROM system.tables" in query:
@@ -458,22 +458,27 @@ def test_a_held_lock_waits_for_the_other_runner(migration, monkeypatch) -> None:
 def test_a_lock_released_without_a_conversion_raises(migration) -> None:
     table = "testops_pipeline_stability"
     lock = f"{table}_096_lock"
-    client = FakeClient(
+
+    class LockVanished(FakeClient):
+        """The lock table disappears while the waiter polls for it."""
+
+        lock_probes = 0
+
+        def query(self, query: str, parameters: dict | None = None) -> _Result:
+            if (
+                "count() FROM system.tables" in query
+                and (parameters or {}).get("name") == lock
+            ):
+                LockVanished.lock_probes += 1
+                return _Result([[0]])
+            return super().query(query, parameters)
+
+    client = LockVanished(
         {table: _ddl(table, "repo_id, day"), lock: "CREATE TABLE x ENGINE = Memory"}
     )
-    original_query = client.query
-    calls = {"n": 0}
-
-    def query(q: str, parameters: dict | None = None) -> _Result:
-        if "count() FROM system.tables" in q and (parameters or {}).get("name") == lock:
-            calls["n"] += 1
-            return _Result([[0]])
-        return original_query(q, parameters)
-
-    client.query = query  # type: ignore[method-assign]
     with pytest.raises(RuntimeError, match="released its lock without finishing"):
         migration._wait_for_concurrent_conversion(client, table)
-    assert calls["n"] == 1
+    assert LockVanished.lock_probes == 1
 
 
 def test_a_failed_probe_propagates_instead_of_skipping(migration) -> None:

@@ -476,6 +476,17 @@ var operationSpecs = map[string]OperationSpec{
 		Variables: func(orgID string, _ Window) map[string]any {
 			return map[string]any{"orgId": orgID, "id": ""}
 		},
+		Parity: Options{BaselineDefects: []BaselineDefect{{
+			Ticket: "CHAOS-5780",
+			Reason: "git_pull_requests' created_at/merged_at/closed_at/first_review_at/first_comment_at columns are ClickHouse DateTime64(3, 'UTC') (000_raw_tables.sql:69-78) -- the same column class as CHAOS-5450's capacityForecast fields and CHAOS-5492's featureFlags fields. Python's clickhouse_connect driver returns them NAIVE (no tzinfo) even though the column declares UTC, so strawberry's DateTime scalar isoformat()s them with no offset; Go's ClickHouse driver attaches UTC location, and these fields are typed DateTime! in the schema (schema.graphql:1654-1663), which gqlgen's built-in graphql.Time scalar formats via RFC3339Nano -- always an explicit offset. The forecast fields already established this pattern: RFC3339's explicit offset is the canonical DateTime wire form, and a naive Python isoformat is the declared defect, not a bug to chase (graphqldate.RFC3339UTC's doc comment). featureFlags.createdAt/archivedAt went the other way only because a live-ClickHouse precedent test had already pinned the naive shape as that field's own contract; no such precedent exists for pr's fields. Go is correct.",
+			Paths: []string{
+				"data.pr.createdAt",
+				"data.pr.mergedAt",
+				"data.pr.closedAt",
+				"data.pr.firstReviewAt",
+				"data.pr.firstCommentAt",
+			},
+		}}},
 	},
 	"reviewEdges": {
 		ResponseRoot: "reviewEdges",

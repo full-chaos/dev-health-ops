@@ -200,6 +200,44 @@ func TestPrDeclaresTheIdentifierItCannotSupply(t *testing.T) {
 	}
 }
 
+// TestPrDeclaresBaselineDefectsForItsNaiveClickHouseTimestamps pins that
+// `pr`'s five DateTime64('UTC')-backed timestamp fields are each declared
+// a baseline defect, rather than left to surface one at a time as each
+// happens to be non-null on a proven row. git_pull_requests.created_at
+// and its siblings come back to Python's ClickHouse driver NAIVE (no
+// tzinfo) even though the column is declared UTC, so Python's isoformat()
+// carries no offset while Go's DateTime scalar (gqlgen's graphql.Time)
+// always renders one -- the same column-type class CHAOS-5450 already
+// ruled on for the forecast fields.
+func TestPrDeclaresBaselineDefectsForItsNaiveClickHouseTimestamps(t *testing.T) {
+	spec, err := SpecFor("pr")
+	if err != nil {
+		t.Fatalf("SpecFor(\"pr\"): %v", err)
+	}
+	want := []string{
+		"data.pr.createdAt",
+		"data.pr.mergedAt",
+		"data.pr.closedAt",
+		"data.pr.firstReviewAt",
+		"data.pr.firstCommentAt",
+	}
+	declared := map[string]bool{}
+	for _, defect := range spec.Parity.BaselineDefects {
+		for _, path := range defect.Paths {
+			declared[path] = true
+		}
+	}
+	var missing []string
+	for _, path := range want {
+		if !declared[path] {
+			missing = append(missing, path)
+		}
+	}
+	if len(missing) > 0 {
+		t.Fatalf("pr's OperationSpec does not declare a baseline defect for %v -- these fields read naive ClickHouse timestamps that Go's DateTime scalar renders with an explicit offset Python never emits, so a live run reports them mismatched the first time any is non-null", missing)
+	}
+}
+
 // r1 P3: the guard above enumerates the map LITERAL, so an operation
 // added at runtime -- `digestByOperation["futureOperation"] = ...` after
 // the literal -- is invisible to it. The reviewer demonstrated exactly

@@ -1,12 +1,17 @@
 package workgraph
 
 import (
+	"bytes"
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/99designs/gqlgen/graphql"
+
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
 )
 
 func TestParsePRDetailID(t *testing.T) {
@@ -308,6 +313,95 @@ func TestFetchPRCoreRow_NullableColumnsComeBackNil(t *testing.T) {
 				t.Errorf("%s = %v, want nil", name, *v)
 			}
 		}
+	}
+}
+
+// TestFetchPRCoreRow_CreatedAtWireStringCarriesAnExplicitUTCOffset pins
+// the wire string PullRequestDetail.createdAt actually serializes to
+// TODAY, through the same scalar marshaler cmd/query-api's generated
+// resolvers call (gqlgen.yml binds the DateTime scalar to
+// github.com/99designs/gqlgen/graphql.Time, and its MarshalTime always
+// renders time.RFC3339Nano -- an explicit offset). git_pull_requests'
+// created_at is a ClickHouse DateTime64(3, 'UTC') column; Python's driver
+// hands the resolver a NAIVE datetime for it and Python's isoformat()
+// carries no suffix, which is why this shape is a declared baseline
+// defect on the pr OperationSpec rather than a bug to close. A future
+// change to either the scalar binding or FetchPRCoreRow's own timezone
+// handling will show up here as an intentional diff, not a silent revert.
+func TestFetchPRCoreRow_CreatedAtWireStringCarriesAnExplicitUTCOffset(t *testing.T) {
+	created := time.Date(2026, 9, 8, 10, 34, 52, 0, time.UTC)
+	client := &fakeClient{responses: []*fakeRowScanner{{rows: [][]any{{
+		"", (*string)(nil), (*string)(nil), (*string)(nil), (*string)(nil), (*string)(nil),
+		created, (*time.Time)(nil), (*time.Time)(nil), (*string)(nil), (*string)(nil),
+		(*uint32)(nil), (*uint32)(nil), (*uint32)(nil), (*time.Time)(nil), (*time.Time)(nil),
+		uint32(0), uint32(0), uint32(0),
+	}}}}}
+
+	row, ok, err := FetchPRCoreRow(context.Background(), client, "org1", testRepoID, 42)
+	if err != nil {
+		t.Fatalf("FetchPRCoreRow: %v", err)
+	}
+	if !ok {
+		t.Fatal("got ok=false, want true")
+	}
+
+	var buf bytes.Buffer
+	graphql.MarshalTime(row.CreatedAt).MarshalGQL(&buf)
+
+	const want = `"2026-09-08T10:34:52Z"`
+	if got := buf.String(); got != want {
+		t.Fatalf("createdAt wire string = %s, want %s", got, want)
+	}
+}
+
+// TestPullRequestDetailDateTimeFieldsAreAllDeclaredBaselineDefects sweeps
+// EVERY time.Time-shaped field on model.PullRequestDetail via reflection,
+// not just createdAt (the one field a live run happened to see non-null)
+// -- mergedAt/closedAt/firstReviewAt/firstCommentAt read the exact same
+// naive-ClickHouse-column class from the same table and would otherwise
+// surface this one field at a time, the class of gap Trap #144 names.
+func TestPullRequestDetailDateTimeFieldsAreAllDeclaredBaselineDefects(t *testing.T) {
+	spec, err := goapiproof.SpecFor("pr")
+	if err != nil {
+		t.Fatalf("SpecFor(\"pr\"): %v", err)
+	}
+	declared := map[string]bool{}
+	for _, defect := range spec.Parity.BaselineDefects {
+		for _, path := range defect.Paths {
+			declared[path] = true
+		}
+	}
+
+	timeType := reflect.TypeOf(time.Time{})
+	timePtrType := reflect.PointerTo(timeType)
+
+	rt := reflect.TypeOf(model.PullRequestDetail{})
+	var found, missing []string
+	for i := 0; i < rt.NumField(); i++ {
+		field := rt.Field(i)
+		if field.Type != timeType && field.Type != timePtrType {
+			continue
+		}
+		name, _, _ := strings.Cut(field.Tag.Get("json"), ",")
+		if name == "" || name == "-" {
+			t.Fatalf("field %s has no usable json tag -- cannot derive its GraphQL path", field.Name)
+		}
+		path := "data.pr." + name
+		found = append(found, path)
+		if !declared[path] {
+			missing = append(missing, path)
+		}
+	}
+	// A struct reporting no time.Time-shaped field at all means the sweep
+	// itself found nothing to check -- as fatal a result as a missing
+	// declaration, since a future model regeneration losing every
+	// DateTime field (or a rename this reflection stops matching) would
+	// otherwise pass here vacuously.
+	if len(found) == 0 {
+		t.Fatal("PullRequestDetail carries no time.Time-shaped field -- the sweep found nothing to check, which means the guard is broken, not clean")
+	}
+	if len(missing) > 0 {
+		t.Fatalf("PullRequestDetail has time.Time field(s) with no baseline defect declared: %v (swept: %v) -- every DateTime field reading git_pull_requests' naive ClickHouse timestamps needs the same declaration, not just the one a proof run happened to see non-null", missing, found)
 	}
 }
 

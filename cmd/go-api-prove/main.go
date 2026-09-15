@@ -117,6 +117,33 @@ type flags struct {
 	timeout               time.Duration
 	window                goapiproof.Window
 	reportPath            string
+	instanceIDs           instanceIDFlag
+}
+
+// instanceIDFlag collects repeated -instance-id operation=value pairs into
+// Config.InstanceIDs. A flag rather than a table edit: the table
+// (operationSpecs' `pr` entry) says the id has to come from the RUN, and a
+// flag is the run's own input, never a value this checkout invents.
+type instanceIDFlag map[string]string
+
+func (m instanceIDFlag) String() string {
+	// flag calls String on the zero value while building its usage text,
+	// before Set has ever run -- must not panic on a nil map.
+	pairs := make([]string, 0, len(m))
+	for operation, id := range m {
+		pairs = append(pairs, operation+"="+id)
+	}
+	sort.Strings(pairs)
+	return strings.Join(pairs, ",")
+}
+
+func (m instanceIDFlag) Set(value string) error {
+	operation, id, ok := strings.Cut(value, "=")
+	if !ok || operation == "" || id == "" {
+		return fmt.Errorf("-instance-id must be operation=value (e.g. pr=<a real stored pr id>), got %q", value)
+	}
+	m[operation] = id
+	return nil
 }
 
 func parseFlags() (flags, error) {
@@ -142,6 +169,8 @@ func parseFlags() (flags, error) {
 	flag.BoolVar(&f.dryRun, "dry-run", false, "execute and compare, but write NO receipts")
 	flag.DurationVar(&f.timeout, "timeout", 60*time.Second, "per-request timeout")
 	flag.StringVar(&f.reportPath, "report", "", "write the full JSON report here in addition to stdout")
+	f.instanceIDs = instanceIDFlag{}
+	flag.Var(&f.instanceIDs, "instance-id", "operation=value, repeatable: a REAL row identifier for an operation whose registered document needs one (e.g. the pr operation needs $id), read from this org's own data -- a flag is the run's own input, never a value this command invents. An operation needing one with no entry here is refused by name (operation_needs_an_instance_identifier), not measured with a guess")
 	flag.StringVar(&f.window.SinceUTC, "since-utc", defaults.SinceUTC, "request window start (RFC3339)")
 	flag.StringVar(&f.window.UntilUTC, "until-utc", defaults.UntilUTC, "request window end (RFC3339)")
 	flag.StringVar(&f.window.SinceDate, "since-date", defaults.SinceDate, "request window start (YYYY-MM-DD)")
@@ -293,6 +322,7 @@ func run() error {
 			RecordedBy:     f.recordedBy,
 			ReviewEvidence: f.reviewEvidence,
 			Timeout:        f.timeout,
+			InstanceIDs:    map[string]string(f.instanceIDs),
 		},
 	}
 

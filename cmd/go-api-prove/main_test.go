@@ -82,3 +82,47 @@ func TestSortedKeysIsDeterministic(t *testing.T) {
 		}
 	}
 }
+
+// TestInstanceIDFlagParsesOperationEqualsValue pins -instance-id's
+// operation=value shape: the mechanism the `pr` operationSpecs entry's own
+// comment calls for ("a flag, or a row read from the org's own data") to
+// let a real id reach Config.InstanceIDs without inventing one.
+func TestInstanceIDFlagParsesOperationEqualsValue(t *testing.T) {
+	m := instanceIDFlag{}
+	if err := m.Set("pr=9f5c2e6a-real-pr-id"); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if got := m["pr"]; got != "9f5c2e6a-real-pr-id" {
+		t.Fatalf("m[%q] = %q, want %q", "pr", got, "9f5c2e6a-real-pr-id")
+	}
+	// Repeatable: a second -instance-id for a different operation adds,
+	// never replaces.
+	if err := m.Set("featureFlagEvents=irrelevant-for-this-operation"); err != nil {
+		t.Fatalf("Set (second): %v", err)
+	}
+	if len(m) != 2 {
+		t.Fatalf("expected 2 entries after 2 distinct -instance-id flags, got %d: %v", len(m), m)
+	}
+}
+
+// TestInstanceIDFlagRefusesTheShapesThatAreNotOperationEqualsValue guards
+// the failure this flag exists to prevent: a malformed value silently
+// becoming a no-op, or worse, an invented id nobody typed.
+func TestInstanceIDFlagRefusesTheShapesThatAreNotOperationEqualsValue(t *testing.T) {
+	for _, bad := range []string{"", "pr", "=9f5c2e6a", "pr=", "=", "pr:9f5c2e6a"} {
+		m := instanceIDFlag{}
+		if err := m.Set(bad); err == nil {
+			t.Fatalf("Set(%q) = nil error, want a refusal (got map %v)", bad, m)
+		}
+	}
+}
+
+// TestInstanceIDFlagStringNeverPanicsOnTheZeroValue pins the shape flag's
+// own package requires: String is called while building usage text before
+// Set has ever run, and a nil map must not panic there.
+func TestInstanceIDFlagStringNeverPanicsOnTheZeroValue(t *testing.T) {
+	var m instanceIDFlag
+	if got := m.String(); got != "" {
+		t.Fatalf("String() on the zero value = %q, want empty", got)
+	}
+}

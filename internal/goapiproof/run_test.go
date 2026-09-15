@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -858,6 +860,95 @@ func TestARoutedOperationNeedingAnInstanceIDIsRefusedByName(t *testing.T) {
 	}
 	if len(receipts) != 0 {
 		t.Fatalf("%d receipt(s) written for an operation that was never measured", len(receipts))
+	}
+}
+
+// TestARoutedOperationWithASuppliedInstanceIDIsMeasured is the sibling of
+// the refusal above: once the run supplies a REAL id through
+// Config.InstanceIDs (the mechanism the `pr` table entry's own comment
+// calls for -- "a flag, or a row read from the org's own data"), the
+// operation reaches the wire instead of being refused by name, and the id
+// it sends is the supplied one, never an invented empty string.
+func TestARoutedOperationWithASuppliedInstanceIDIsMeasured(t *testing.T) {
+	const realID = "9f5c2e6a-real-pr-id"
+	body := `{"data":{"pr":null}}`
+
+	var mu sync.Mutex
+	var sentIDs []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		var parsed struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		_ = json.Unmarshal(raw, &parsed)
+		mu.Lock()
+		sentIDs = append(sentIDs, fmt.Sprint(parsed.Variables["id"]))
+		mu.Unlock()
+
+		w.Header().Set(buildHeader, "b18e56fa79cfe20ce0f75df148144b832d92be36")
+		if strings.Contains(parsed.Query, "python-plane control") {
+			w.Header().Set(planeHeader, "python")
+		} else {
+			w.Header().Set(planeHeader, "go")
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(server.Close)
+
+	store, err := NewArtifactStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewArtifactStore: %v", err)
+	}
+
+	runner := &Runner{
+		Client:    server.Client(),
+		Documents: map[string]string{"pr": "query PrDetail($orgId: String!, $id: ID!) { pr(orgId: $orgId, id: $id) { id } }"},
+		Registry: RegistryView{
+			SchemaDigest:   "sha256:29d509cd",
+			BuildIdentity:  "b18e56fa79cfe20ce0f75df148144b832d92be36",
+			DocumentDigest: map[string]string{"pr": "06ca28a0"},
+		},
+		Routing:   map[string]RoutingRow{"pr": {Mode: "canary", CandidateBuild: "b18e56fa79cfe20ce0f75df148144b832d92be36"}},
+		Artifacts: store,
+		Config: Config{
+			OrgID:           "70d529e0",
+			Window:          DefaultWindow(),
+			PythonEdgeURL:   server.URL,
+			Auth:            AuthContext{PrincipalKind: "stored_account", Audience: "query-api", KeyID: "local-dev-20260906"},
+			EdgeCredential:  StaticCredential("Authorization", "edge access token", "Bearer edge"),
+			ProofCredential: StaticCredential("Authorization", "envelope", "Bearer envelope"),
+			InstanceIDs:     map[string]string{"pr": realID},
+		},
+	}
+
+	outcomes, summary, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(outcomes) != 1 {
+		t.Fatalf("expected one outcome, got %d", len(outcomes))
+	}
+	if outcomes[0].RefusalReason == RefusalNeedsInstanceID {
+		t.Fatalf("refused for a missing instance id even though Config.InstanceIDs supplied one: %s", outcomes[0].RefusalDetail)
+	}
+	if summary.Refused != 0 {
+		t.Fatalf("expected the supplied id to reach the wire, got a refusal: %s / %s", outcomes[0].RefusalReason, outcomes[0].RefusalDetail)
+	}
+	if summary.Executed != 1 || !outcomes[0].Admitted {
+		t.Fatalf("expected 1 executed and admitted outcome, got executed=%d admitted=%v", summary.Executed, outcomes[0].Admitted)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(sentIDs) != 2 {
+		t.Fatalf("expected 2 requests (candidate + baseline), got %d: %v", len(sentIDs), sentIDs)
+	}
+	for _, id := range sentIDs {
+		if id != realID {
+			t.Fatalf("expected the supplied id %q on the wire, got %q -- an invented or empty id must never reach the wire", realID, id)
+		}
 	}
 }
 

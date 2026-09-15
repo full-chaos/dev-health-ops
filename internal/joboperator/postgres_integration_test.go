@@ -637,6 +637,8 @@ func createOperatorIntegrationSchema(
 		"CREATE TABLE public.backfill_jobs (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.sync_coverage_projections (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.organizations (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.users (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.audit_logs (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.remaining_metric_runs (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.remaining_metric_partitions (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.work_graph_execution_requests (id bigint PRIMARY KEY)",

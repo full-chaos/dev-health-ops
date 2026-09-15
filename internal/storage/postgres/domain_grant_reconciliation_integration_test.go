@@ -160,6 +160,36 @@ func reconciliationTables() []domainTable {
 			},
 		},
 		{
+			// The native phone-home heartbeat's fleet count and audit row, in
+			// the exact statement shapes heartbeat_native.go issues on the
+			// domain pool. audit_logs carries its production columns because
+			// the INSERT names them and PostgreSQL resolves columns before it
+			// checks the ACL.
+			name: "users",
+			ddl:  "CREATE TABLE public.users (id uuid PRIMARY KEY, email text NOT NULL)",
+			exercise: []string{
+				"SELECT COUNT(*) FROM public.users",
+			},
+		},
+		{
+			name: "audit_logs",
+			ddl: `CREATE TABLE public.audit_logs (
+				id uuid PRIMARY KEY, org_id uuid NOT NULL, user_id uuid, action text NOT NULL,
+				resource_type text NOT NULL, resource_id text NOT NULL, description text,
+				changes jsonb, request_metadata jsonb, status text NOT NULL, error_message text,
+				created_at timestamptz NOT NULL DEFAULT now())`,
+			exercise: []string{
+				`INSERT INTO public.audit_logs
+					(id, org_id, action, resource_type, resource_id, description,
+						changes, request_metadata, status, created_at)
+				 VALUES (
+					gen_random_uuid(), gen_random_uuid(), 'other', 'other', 'phone_home_heartbeat',
+					'Background phone-home heartbeat recorded', '{}'::jsonb, '{}'::jsonb,
+					'success', now()
+				 )`,
+			},
+		},
+		{
 			name: "remaining_metric_runs",
 			ddl: `CREATE TABLE public.remaining_metric_runs (
 				id uuid PRIMARY KEY, org_id uuid NOT NULL, family text NOT NULL, generation text NOT NULL,

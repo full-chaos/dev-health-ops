@@ -104,6 +104,8 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 		"CREATE TABLE public.backfill_jobs (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.sync_coverage_projections (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.organizations (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.users (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.audit_logs (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.remaining_metric_runs (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.remaining_metric_partitions (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.work_graph_execution_requests (id bigint PRIMARY KEY)",
@@ -144,7 +146,7 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 		"CREATE ROLE " + authorizedDomainRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + domainAuthorizationPass + "'",
 		"GRANT CONNECT ON DATABASE " + dbName + " TO " + authorizedDomainRole,
 		"GRANT USAGE ON SCHEMA public TO " + authorizedDomainRole,
-		"GRANT SELECT ON TABLE public.integrations, public.integration_credentials, public.sync_dispatch_transport_routes, public.feature_flags, public.org_feature_overrides, public.scheduled_report_occurrences, public.organizations, public.billing_notifications, public.external_ingest_sources, public.org_licenses, public.tier_limits, public.webhook_deliveries TO " + authorizedDomainRole,
+		"GRANT SELECT ON TABLE public.integrations, public.integration_credentials, public.sync_dispatch_transport_routes, public.feature_flags, public.org_feature_overrides, public.scheduled_report_occurrences, public.organizations, public.users, public.billing_notifications, public.external_ingest_sources, public.org_licenses, public.tier_limits, public.webhook_deliveries TO " + authorizedDomainRole,
 		"GRANT SELECT, UPDATE ON TABLE public.scheduled_jobs TO " + authorizedDomainRole,
 		"GRANT SELECT, UPDATE ON TABLE public.provider_oauth_credentials TO " + authorizedDomainRole,
 		"GRANT SELECT, INSERT, UPDATE ON TABLE public.integration_sources, public.integration_datasets, public.sync_runs, public.sync_run_units TO " + authorizedDomainRole,
@@ -160,7 +162,7 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 		"GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.worker_concurrency_leases TO " + authorizedDomainRole,
 		"GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.worker_instances TO " + authorizedDomainRole,
 		"GRANT SELECT ON TABLE public.worker_posture_manifest_applied TO " + authorizedDomainRole,
-		"GRANT SELECT, INSERT ON TABLE public.worker_job_outbox, public.external_ingest_rejections TO " + authorizedDomainRole,
+		"GRANT SELECT, INSERT ON TABLE public.worker_job_outbox, public.external_ingest_rejections, public.audit_logs TO " + authorizedDomainRole,
 		// CHAOS-5296: the native external-recompute drain claims and terminalizes
 		// these rows from the domain role, so UPDATE is now part of the posture.
 		"GRANT SELECT, INSERT, UPDATE ON TABLE public.external_ingest_recompute_jobs TO " + authorizedDomainRole,

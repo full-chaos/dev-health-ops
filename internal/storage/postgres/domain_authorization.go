@@ -702,6 +702,11 @@ func domainPosture() RolePosture {
 			{"job_runs", false, true, false},
 			{"sync_coverage_projections", true, true, false},
 			{"organizations", false, false, false},
+			// The native phone-home heartbeat counts users next to
+			// organizations and appends its own audit_logs row; it never
+			// edits the trail, so audit_logs stays without UPDATE or DELETE.
+			{"users", false, false, false},
+			{"audit_logs", true, false, false},
 			{"remaining_metric_runs", true, true, false},
 			{"remaining_metric_partitions", true, true, false},
 			{"work_graph_execution_requests", true, true, false},

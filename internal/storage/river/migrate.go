@@ -620,6 +620,15 @@ func runtimeGrantStatements(options MigrationOptions) []string {
 		"DO $$ BEGIN IF to_regclass('public.backfill_jobs') IS NOT NULL THEN GRANT SELECT, UPDATE ON TABLE public.backfill_jobs TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.sync_coverage_projections') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_coverage_projections TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.organizations') IS NOT NULL THEN GRANT SELECT ON TABLE public.organizations TO " + domainRole + "; END IF; END $$",
+		// The native phone-home heartbeat runs on the domain pool
+		// (internal/jobs/system/heartbeat_native.go): it counts users
+		// alongside organizations and records each run as an audit_logs row.
+		// Without these two the daily job fails on its first statement and,
+		// at one attempt, is discarded -- the bridge it replaced ran as the
+		// application role and never needed them. audit_logs gets no UPDATE
+		// or DELETE: the worker appends its own row and never edits the trail.
+		"DO $$ BEGIN IF to_regclass('public.users') IS NOT NULL THEN GRANT SELECT ON TABLE public.users TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.audit_logs') IS NOT NULL THEN GRANT SELECT, INSERT ON TABLE public.audit_logs TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.remaining_metric_runs') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.remaining_metric_runs TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.remaining_metric_partitions') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.remaining_metric_partitions TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.work_graph_execution_requests') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.work_graph_execution_requests TO " + domainRole + "; END IF; END $$",

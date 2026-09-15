@@ -297,8 +297,8 @@ var QuadrantDefinitions = map[string]QuadrantDefinition{
 // dedup_from -- ported subset of src/dev_health_ops/clickhouse_dedup.py's
 // dedup_from, restricted to the tables the two ported metric sets (team/repo,
 // person excluded) actually name: work_item_metrics_daily (rerun-deduped
-// ReplacingMergeTree) and user_metrics_daily/repo_metrics_daily (legacy
-// append-only MergeTree, both registered in _APPEND_ONLY_DAILY_KEYS with the
+// ReplacingMergeTree) and user_metrics_daily/repo_metrics_daily (read through
+// LIMIT 1 BY, both registered in _APPEND_ONLY_DAILY_KEYS with the
 // natural keys below).
 
 var rerunDedupedDailyTables = map[string]bool{

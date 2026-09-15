@@ -140,7 +140,7 @@ async def _fetch_user_metrics(
 ) -> list[dict[str, Any]]:
     """SUM of latest-per-developer cognitive load columns, grouped by day.
 
-    ``user_metrics_daily`` is append-only (plain MergeTree), so a backfill
+    ``user_metrics_daily`` keeps superseded rows until a merge, so a backfill
     writes a duplicate row for the same ``(org_id, repo_id, author_email, day)``
     key. The inner subquery selects the latest row per key via
     ``argMax(<col>, computed_at)``; the outer query SUMs those deduplicated
@@ -221,7 +221,7 @@ async def _fetch_team_metrics(
 ) -> list[dict[str, Any]]:
     """AVG across teams of each team's after-hours / weekend commit ratio, by day.
 
-    ``team_metrics_daily`` is append-only (plain MergeTree) and, since
+    ``team_metrics_daily`` keeps superseded rows until a merge and, since
     CHAOS-4329, carries a ``repo_id`` per row (``''`` on legacy rows written
     before that migration -- see its comment for the dedup contract). A team
     owning N repos writes one row PER (team_id, repo_id, day); collapsing

@@ -8,8 +8,8 @@
 //
 // Ported deliberately verbatim: same inner-subquery dedup
 // (`argMax(reviews_count, computed_at)` per `(repo_id, reviewer, author,
-// day)`, since `review_edges_daily` is append-only plain MergeTree, not
-// ReplacingMergeTree -- a recompute/backfill can duplicate a key), same
+// day)`: a recompute/backfill writes a newer copy of a key, and
+// `review_edges_daily` drops the older copy only at a later merge), same
 // `ORDER BY reviews_count DESC, repo_id, reviewer, author, day` (the
 // Part-A deterministic tie-break -- the resolver's own GROUP BY key,
 // already a total order over the deduplicated row set), same optional

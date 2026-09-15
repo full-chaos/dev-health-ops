@@ -49,8 +49,8 @@ async def _fetch_review_edges(
 ) -> list[dict[str, Any]]:
     """Read ``review_edges_daily`` filtered by org + date range.
 
-    ``review_edges_daily`` is append-only (plain MergeTree, NOT
-    ReplacingMergeTree): a recompute / backfill writes a duplicate row for the
+    ``review_edges_daily`` keeps superseded rows until a background merge
+    (ReplacingMergeTree): a recompute / backfill writes a duplicate row for the
     same ``(org_id, repo_id, reviewer, author, day)`` key (live data shows 49
     duplicate-key rows). The inner subquery collapses each key to its latest
     row via ``argMax(reviews_count, computed_at)`` so a backfilled day is not

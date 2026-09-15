@@ -373,12 +373,11 @@ LIMIT 1`,
 // -----------------------------------------------------------------------
 // Writers
 //
-// All three target tables are plain MergeTree ORDER BY (repo_id, day)
-// (029_testops_tables.sql:106,130,155) -- NO ReplacingMergeTree, so nothing
-// deduplicates a second write of the same (repo_id, day). That is why
-// job_daily.py's three s.write_testops_* calls must be skip-gated in the same
-// change that registers these executors: without the gate every partition
-// would write each row twice, and no engine would collapse them.
+// All three target tables are ReplacingMergeTree(computed_at) ORDER BY
+// (org_id, repo_id, day) (migration 096). A merge keeps only the newest
+// computed_at per key, but two writes from the SAME run share that computed_at
+// and one of them survives arbitrarily, so each partition must still write
+// each row exactly once.
 //
 // Column lists mirror sinks/clickhouse/ci.py's _insert_rows calls exactly,
 // including org_id being supplied by the caller's run scope rather than the

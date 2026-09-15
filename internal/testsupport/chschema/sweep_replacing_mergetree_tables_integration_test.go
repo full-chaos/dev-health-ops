@@ -178,8 +178,12 @@ func sweepReplacingMergeTreeTables(t *testing.T) []replacingMergeTreeTable {
 // `git_blame_dirty_paths` (version marked_at). Recounted from the migration
 // chain: the failing run's printed list was the prior 92 plus exactly these
 // two names, nothing else added or removed.
+// 94 -> 113: 096_daily_family_tables_replacing_merge_tree.py converts the
+// 19 daily-family output tables from plain MergeTree to
+// ReplacingMergeTree(computed_at). Recounted from the migration chain: the
+// failing run's printed list was the prior 94 plus exactly those 19 names.
 func TestSweepReplacingMergeTreeTablesMatchesTheAuthoritativeCount(t *testing.T) {
-	const wantCount = 94
+	const wantCount = 113
 
 	tables := sweepReplacingMergeTreeTables(t)
 	if len(tables) != wantCount {

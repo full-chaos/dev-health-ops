@@ -335,7 +335,7 @@ func TestComputeWorkItemStateDurationsMissingAttributionCountsOnlyProcessedItems
 // were on disk -- daily.go's dispatcher only distinguishes ErrPartialWrite
 // from everything else, so this misclassification told an operator the
 // OPPOSITE of what a re-drive would create (duplicate rows on
-// work_item_state_durations_daily, a plain MergeTree with no dedup key).
+// work_item_state_durations_daily until a background merge collapses them).
 // Mirrors TestWorkGraphEdgesPartialWriteGuardPinsBothDirections's shape
 // exactly: wrap only when something already landed, never when nothing did.
 func TestWorkItemStatePartialWriteGuardPinsBothDirections(t *testing.T) {

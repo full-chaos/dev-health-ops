@@ -186,17 +186,16 @@ func buildInvestmentExplainRoute() (handler http.HandlerFunc, cleanup func(), ok
 	// notice, even though there is nothing this call site itself can do
 	// differently.
 	//
-	// codex round 1's P1 also names a NARROWER, still-open gap this log
-	// line does not close: a WRONG (present but incorrect) key is
-	// accepted here without error -- NewFernetDecryptor only validates
-	// that a key is configured, not that it is the RIGHT one -- and every
-	// subsequent per-row Decrypt() call then fails silently inside
-	// loadRawSettings (matches Python's own `except ValueError: continue`
-	// -- deliberate parity, see that function's doc comment), with no
-	// telemetry at any layer. Closing that fully needs per-decrypt-failure
-	// telemetry inside internal/llmorgsettings itself, a larger design
-	// change; deferred pending a team-lead ruling, same pattern as this
-	// package's own documented SSRF-fallback-audit-log gap.
+	// NewFernetDecryptor only validates that a key is configured, not
+	// that it is the RIGHT one: a WRONG (present but incorrect) key is
+	// accepted here without error, and every subsequent per-row
+	// Decrypt() call fails the same way a corrupt row does -- skipped,
+	// not fatal (matches Python's own `except ValueError: continue`,
+	// see loadRawSettings' doc comment) -- but not silently: each
+	// failure emits an ERROR log and counter, and internal/llmorgsettings
+	// (telemetry.go) additionally flags the first decrypt attempt this
+	// process makes if it fails, the signature of a misconfigured key
+	// rather than one corrupt row.
 	decryptor, decryptorErr := providerfoundation.NewFernetDecryptor(
 		secrets.NewValue(os.Getenv("SETTINGS_ENCRYPTION_KEY")), os.Getenv("SETTINGS_ENCRYPTION_SALT"))
 	if decryptorErr != nil {

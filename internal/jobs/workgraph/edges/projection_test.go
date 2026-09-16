@@ -96,13 +96,25 @@ func TestCleanupPlanAtEveryCardinality(t *testing.T) {
 		t.Errorf("zero rows produced %d pages; nothing to delete means no statement",
 			len(plan.Pages))
 	}
-	// Six ids per blocker row, as the audit records.
+	// Two endpoint directions crossed with every widened dependency edge type.
 	one := BuildCleanupPlan([]DependencyRow{blocker}, nil)
 	if len(one.Pages) != 1 {
 		t.Fatalf("one blocker row produced %d pages, want 1", len(one.Pages))
 	}
-	if got := len(one.Pages[0]); got != 6 {
-		t.Errorf("one blocker row produced %d ids, want 6", got)
+	if got, want := len(one.Pages[0]), 2*len(dependencyEdgeTypes); got != want {
+		t.Errorf("one blocker row produced %d ids, want %d (2 endpoint directions x %d widened types)",
+			got, want, len(dependencyEdgeTypes))
+	}
+
+	// A non-blocker row is covered too -- the widening is not blocker-only.
+	relatesRow := DependencyRow{
+		SourceWorkItemID: "gh:o/r#3", TargetWorkItemID: "gh:o/r#4",
+		RelationshipType: "relates", RelationshipRaw: "relates",
+	}
+	relatesPlan := BuildCleanupPlan([]DependencyRow{relatesRow}, nil)
+	if got, want := len(relatesPlan.Pages[0]), 2*len(dependencyEdgeTypes); got != want {
+		t.Errorf("one relates row produced %d ids, want %d -- cleanup no longer skips non-blocker rows",
+			got, want)
 	}
 	// Ordering is load-bearing: the plan is paged, so an unstable order
 	// redistributes ids across pages between runs.

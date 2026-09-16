@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -46,7 +47,8 @@ import (
 // but not executed" by their own doc comments) -- a real regression, caught
 // by codex review before merge, not by design. Run() now performs the full
 // sequence Python did, in Python's own order: delete stale projection-run
-// rows for this org+rule, read the currently-live blocker-family edge ids,
+// rows for this org+rule, read the currently-live dependency-family edge ids
+// (every type in edges.DependencyEdgeTypes, not just the blocker family),
 // compute and execute the cleanup plan, write the fresh edges, then publish
 // the new watermark. The ids this step is about to re-create are exactly the
 // ids the cleanup step may also name (a still-current edge is BOTH an
@@ -58,10 +60,11 @@ type issueIssueEdgesPreStep struct {
 	connection driver.Conn
 	observer   jobruntime.WorkGraphIssueEdgesObserver
 	now        func() time.Time
+	logger     *slog.Logger
 }
 
 func newIssueIssueEdgesPreStep(
-	connection driver.Conn, observer jobruntime.WorkGraphIssueEdgesObserver,
+	connection driver.Conn, observer jobruntime.WorkGraphIssueEdgesObserver, logger *slog.Logger,
 ) (*issueIssueEdgesPreStep, error) {
 	if connection == nil || observer == nil {
 		// An observer is required rather than optional: this step's counters are
@@ -69,7 +72,10 @@ func newIssueIssueEdgesPreStep(
 		// running without them is the failure they exist to detect.
 		return nil, errWorkerDependencyUnavailable
 	}
-	return &issueIssueEdgesPreStep{connection: connection, observer: observer, now: time.Now}, nil
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &issueIssueEdgesPreStep{connection: connection, observer: observer, now: time.Now, logger: logger}, nil
 }
 
 func (step *issueIssueEdgesPreStep) Name() string { return "issue_issue_edges" }
@@ -106,11 +112,17 @@ func (step *issueIssueEdgesPreStep) Run(
 	if err := edges.DeleteProjectionRuns(ctx, step.connection, organizationID, edges.BlockerProjectionName, edges.BlockerProjectionRuleVersion()); err != nil {
 		return nil, fmt.Errorf("delete stale work_graph_projection_runs: %w", err)
 	}
-	existingBlockerEdgeIDs, err := edges.ReadExistingBlockerEdgeIDs(ctx, step.connection, organizationID)
+	existingDependencyEdgeIDs, err := edges.ReadExistingDependencyEdgeIDs(ctx, step.connection, organizationID)
 	if err != nil {
-		return nil, fmt.Errorf("read existing blocker edge ids: %w", err)
+		return nil, fmt.Errorf("read existing dependency edge ids: %w", err)
 	}
-	cleanupPlan := edges.BuildCleanupPlan(rows, existingBlockerEdgeIDs)
+	cleanupPlan := edges.BuildCleanupPlan(rows, existingDependencyEdgeIDs)
+	step.logger.Info("work graph dependency edge cleanup scope",
+		slog.String("organization_id", organizationID),
+		slog.Any("edge_types", edges.DependencyEdgeTypes()),
+		slog.Int("existing_edge_ids", len(existingDependencyEdgeIDs)),
+		slog.Int("candidate_ids", len(cleanupPlan.CandidateIDs)),
+	)
 	versions, err := edges.ReadIssueIssueEdgeVersions(ctx, step.connection, organizationID)
 	if err != nil {
 		return nil, fmt.Errorf("read issue<->issue edge versions: %w", err)
@@ -119,7 +131,7 @@ func (step *issueIssueEdgesPreStep) Run(
 	// re-written edges are stamped past every stored version of an identity the
 	// cleanup covers, which is what the delete used to guarantee.
 	if err := edges.DeleteEdgesByID(ctx, step.connection, organizationID, cleanupPlan, versions, result.Edges, started); err != nil {
-		return nil, fmt.Errorf("delete stale blocker-family work_graph_edges: %w", err)
+		return nil, fmt.Errorf("delete stale dependency work_graph_edges: %w", err)
 	}
 
 	written, err := edges.WriteEdges(ctx, step.connection, organizationID,

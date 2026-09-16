@@ -246,7 +246,7 @@ func workgraphBuildPreSteps(
 	if !hasObserver {
 		return nil, nil, errWorkerDependencyUnavailable
 	}
-	edgeStep, edgeStepErr := newIssueIssueEdgesPreStep(connection, edgeObserver)
+	edgeStep, edgeStepErr := newIssueIssueEdgesPreStep(connection, edgeObserver, logger)
 	if edgeStepErr != nil {
 		return nil, nil, errWorkerDependencyUnavailable
 	}

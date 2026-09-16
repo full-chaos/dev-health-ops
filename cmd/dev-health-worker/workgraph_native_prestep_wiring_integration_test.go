@@ -32,7 +32,7 @@ func (stubIssueEdgesObserver) ObserveWorkGraphIssueEdges(
 // TestNativePreStepsRunThroughTheProductionWiring is CHAOS-5341's fold-in of
 // two review findings: (1) the issue_issue_edges cleanup/projection
 // sequence was only ever exercised by inlining DeleteProjectionRuns ->
-// ReadExistingBlockerEdgeIDs -> BuildCleanupPlan -> DeleteEdgesByID ->
+// ReadExistingDependencyEdgeIDs -> BuildCleanupPlan -> DeleteEdgesByID ->
 // WriteEdges -> BuildBlockerProjection by hand (edges package's own
 // blocker_cleanup_integration_test.go, kept as-is -- it still tests those
 // package-level functions directly, which remains valuable), never through
@@ -86,7 +86,7 @@ VALUES (?,?,?,?,?,?,?)`,
 			t.Fatal(err)
 		}
 
-		step, err := newIssueIssueEdgesPreStep(conn, stubIssueEdgesObserver{})
+		step, err := newIssueIssueEdgesPreStep(conn, stubIssueEdgesObserver{}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

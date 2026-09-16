@@ -50,15 +50,14 @@ type DeriveResult struct {
 	// comparison possible.
 	Outcomes []Outcome
 	Counts   map[Outcome]int
-	// MissingTimestamps counts rows that had NO last_synced, and whose event_ts
-	// is therefore the build clock rather than the row's own time.
+	// MissingTimestamps counts rows that had no last_synced, so event_ts on the
+	// derived edge is the row's own zero value rather than a real instant.
 	//
 	// This replaces a fallback counter that existed because the port could fail
 	// to PARSE a timestamp Python read fine. That failure mode is gone -- the
 	// value is an instant now, not text -- so the only remaining case is a row
-	// that genuinely has no timestamp. It is still counted, because event_ts is
-	// decided by merge state (CHAOS-4788) and a build-clock stamp on a row that
-	// should have had its own time is worth seeing.
+	// that genuinely has no timestamp, and a zero-valued event_ts downstream is
+	// worth being able to see.
 	MissingTimestamps int
 }
 
@@ -127,7 +126,7 @@ func DeriveIssueIssueEdges(rows []DependencyRow, buildClock time.Time) (DeriveRe
 			continue
 		}
 
-		eventTs, present := eventTimestamp(row.LastSynced, buildClock)
+		eventTs, present := eventTimestamp(row.LastSynced)
 		if !present {
 			result.MissingTimestamps++
 		}
@@ -187,11 +186,13 @@ func DeriveIssueIssueEdges(rows []DependencyRow, buildClock time.Time) (DeriveRe
 // Python's string arm (`fromisoformat`, and `except ValueError: self._now`)
 // only runs when its driver hands back text. Its `if not event_ts` arm is dead
 // for a different reason: `datetime` has no `__bool__`, so it fires only on a
-// true None (audit gate 19). What is left on both planes is: use the row's
-// instant; if there isn't one, use the build clock.
-func eventTimestamp(lastSynced time.Time, buildClock time.Time) (time.Time, bool) {
-	if lastSynced.IsZero() {
-		return buildClock, false
-	}
-	return lastSynced.UTC(), true
+// true None, and a `None` last_synced never reaches this port -- the read
+// scans it as a `time.Time`, not an optional. What is left is: use the row's
+// instant, exactly as read, whatever it is. There is no build-clock
+// substitution here -- discovered_at and last_synced are the build's clock by
+// design (see Row's own doc comment), but event_ts is the row's, and a row
+// with no timestamp of its own gets the zero value rather than a manufactured
+// one.
+func eventTimestamp(lastSynced time.Time) (time.Time, bool) {
+	return lastSynced.UTC(), !lastSynced.IsZero()
 }

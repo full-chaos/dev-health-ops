@@ -77,7 +77,7 @@ func legacyBuild(ctx context.Context, t *testing.T, conn driver.Conn, org string
 	if err != nil {
 		t.Fatal(err)
 	}
-	existing, err := ReadExistingBlockerEdgeIDs(ctx, conn, org)
+	existing, err := ReadExistingDependencyEdgeIDs(ctx, conn, org)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +109,7 @@ func tombstoneBuild(ctx context.Context, t *testing.T, conn driver.Conn, org str
 	if err != nil {
 		t.Fatal(err)
 	}
-	existing, err := ReadExistingBlockerEdgeIDs(ctx, conn, org)
+	existing, err := ReadExistingDependencyEdgeIDs(ctx, conn, org)
 	if err != nil {
 		t.Fatal(err)
 	}

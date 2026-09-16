@@ -200,9 +200,11 @@ func TestNewMetaWorkHandlerClickHouseFailureIsStill200(t *testing.T) {
 	}
 }
 
-// TestBuildMetaRouteEntryHandlerRejectsNonGET pins the same
-// method-guard shape every sibling entryHandler uses (http.NotFound, not
-// 405 -- see filter_options_route.go's entryHandler for the precedent).
+// TestBuildMetaRouteEntryHandlerRejectsNonGET pins the same method-guard
+// shape every sibling entryHandler uses: 405, not 404, with Starlette's
+// own default {"detail": "Method Not Allowed"} body -- confirmed live
+// against the real FastAPI app (see this route set's TEST-EVIDENCE for
+// the capture command).
 func TestBuildMetaRouteEntryHandlerRejectsNonGET(t *testing.T) {
 	t.Setenv("CLICKHOUSE_URI", "clickhouse://localhost:8123/default")
 	handler, cleanup, ok, err := buildMetaRoute()
@@ -217,8 +219,14 @@ func TestBuildMetaRouteEntryHandlerRejectsNonGET(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/meta", nil)
 	rec := httptest.NewRecorder()
 	handler(rec, req)
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Fatalf("content-type = %q, want application/json", ct)
+	}
+	if got, want := rec.Body.String(), `{"detail":"Method Not Allowed"}`+"\n"; got != want {
+		t.Fatalf("body = %q, want %q", got, want)
 	}
 }
 

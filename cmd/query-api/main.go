@@ -459,6 +459,19 @@ func main() {
 		log.Print("query-api: /api/v1/explain route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
 	}
 
+	// A /api/v1/* path no route above claims answers Starlette's own
+	// default 404 body -- {"detail": "Not Found"}, confirmed live --
+	// instead of net/http's plain-text default. This is a SUBTREE pattern
+	// (trailing slash): every specific /api/v1/... registration above
+	// still wins (Go's ServeMux routes to the longest matching pattern);
+	// this only catches what none of them do, including an
+	// individually-unmounted route (its own CLICKHOUSE_URI/envelope vars
+	// unset) -- indistinguishable from "does not exist" to an outside
+	// caller either way.
+	mux.HandleFunc("/api/v1/", func(w http.ResponseWriter, r *http.Request) {
+		writeRESTError(w, r, "api_v1", "", http.StatusNotFound, "Not Found")
+	})
+
 	server := &http.Server{
 		Addr:              addr(),
 		Handler:           mux,

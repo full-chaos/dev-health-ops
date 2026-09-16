@@ -237,7 +237,7 @@ A row that is live, reachable to real clients (`canary`/`primary`) and carries n
 is required before stage 4/5, and "a bare 200 does not qualify".
 
 <!-- BEGIN GENERATED GO API OPERATIONS -->
-_Rendered 2026-09-16T12:25:30Z against main merge-base `0fc1319fcb42a69eafc69a6781ec7baba073a129`; SDL digest pin `sha256:19485ec136d04de0935717dca8b4f5fd27dd0351fe96b854d40f433229468fd0`; fleet read 2026-09-16T12:25:30Z via fleet file fleet-prod.json._
+_Rendered 2026-09-16T12:25:30Z against main merge-base `1d6066b8eb4bb5fe9d16d30c0f1a70b8cec08a67`; SDL digest pin `sha256:19485ec136d04de0935717dca8b4f5fd27dd0351fe96b854d40f433229468fd0`; fleet read 2026-09-16T12:25:30Z via fleet file fleet-prod.json._
 
 _Rows in `go_api_proof_run` at read time: **515**. Operations reachable to real clients with no deployed-executed proof: **0**. Rows whose mode says Go but whose schema digest no longer matches the pin, so every request silently falls back to Python: **0**._
 
@@ -289,8 +289,8 @@ _32 `/api/v1/*` routes in `src/dev_health_ops/api/main.py`: **11** ported, **21*
 | POST | `/api/v1/drilldown/issues` | ported | `cmd/query-api/drilldown_issues_route.go:79` |
 | GET | `/api/v1/drilldown/prs` | ported | `cmd/query-api/drilldown_prs_route.go:86` |
 | POST | `/api/v1/drilldown/prs` | ported | `cmd/query-api/drilldown_prs_route.go:86` |
-| GET | `/api/v1/explain` | ported | `cmd/query-api/explain_route.go:94` |
-| POST | `/api/v1/explain` | ported | `cmd/query-api/explain_route.go:94` |
+| GET | `/api/v1/explain` | ported | `cmd/query-api/explain_route.go:98` |
+| POST | `/api/v1/explain` | ported | `cmd/query-api/explain_route.go:98` |
 | GET | `/api/v1/filters/options` | ported | `cmd/query-api/filter_options_route.go:81` |
 | GET | `/api/v1/flame` | python-only | -- |
 | GET | `/api/v1/flame/aggregated` | python-only | -- |
@@ -306,7 +306,7 @@ _32 `/api/v1/*` routes in `src/dev_health_ops/api/main.py`: **11** ported, **21*
 | GET | `/api/v1/meta` | ported | `cmd/query-api/meta_route.go:79` |
 | GET | `/api/v1/opportunities` | python-only | -- |
 | POST | `/api/v1/opportunities` | python-only | -- |
-| GET | `/api/v1/people` | ported | `cmd/query-api/people_route.go:85` |
+| GET | `/api/v1/people` | ported | `cmd/query-api/people_route.go:93` |
 | GET | `/api/v1/people/{person_id}/drilldown/issues` | python-only | -- |
 | GET | `/api/v1/people/{person_id}/drilldown/prs` | python-only | -- |
 | GET | `/api/v1/people/{person_id}/metric` | python-only | -- |

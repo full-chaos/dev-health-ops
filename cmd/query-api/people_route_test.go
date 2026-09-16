@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 
@@ -84,6 +85,9 @@ func TestNewPeopleSearchHandlerRequiresAuthContext(t *testing.T) {
 	handler(rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+	if got, want := rec.Body.String(), `{"detail":{"message":"Not authenticated"}}`+"\n"; got != want {
+		t.Fatalf("body = %q, want %q", got, want)
 	}
 }
 
@@ -252,5 +256,38 @@ func TestNewPeopleSearchHandlerNonNumericLimitValidationError(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("body = %+v, want %+v", got, want)
+	}
+}
+
+// TestBuildPeopleSearchRouteEntryHandlerRejectsNonGET pins the
+// entryHandler's own method guard: 405, not 404, with Starlette's own
+// default {"detail": "Method Not Allowed"} body -- the same shared-helper
+// contract every sibling REST route's entryHandler uses. Every env var
+// here is a placeholder value: construction is lazy (no live
+// ClickHouse/JWKS dial happens for a request this entryHandler rejects
+// before Dispatch).
+func TestBuildPeopleSearchRouteEntryHandlerRejectsNonGET(t *testing.T) {
+	t.Setenv("CLICKHOUSE_URI", "clickhouse://localhost:8123/default")
+	t.Setenv("GO_API_ENVELOPE_JWKS_PATH", filepath.Join(t.TempDir(), "missing-jwks.json"))
+	t.Setenv("GO_API_ENVELOPE_ISSUER", "test-issuer")
+	t.Setenv("GO_API_ENVELOPE_AUDIENCE", "test-audience")
+
+	handler, cleanup, ok, err := buildPeopleSearchRoute()
+	if err != nil {
+		t.Fatalf("buildPeopleSearchRoute: %v", err)
+	}
+	if !ok {
+		t.Fatal("buildPeopleSearchRoute: ok = false, want true with every dependency env var set")
+	}
+	defer cleanup()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/people", nil)
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
+	}
+	if got, want := rec.Body.String(), `{"detail":"Method Not Allowed"}`+"\n"; got != want {
+		t.Fatalf("body = %q, want %q", got, want)
 	}
 }

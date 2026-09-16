@@ -11,6 +11,14 @@
 // Business logic (identity-alias resolution, the ClickHouse read, the
 // ReplacingMergeTree dedup) lives in internal/people -- see that
 // package's own doc comment for the full parity contract.
+//
+// ERROR BODIES: every non-2xx response this route sends uses Python's
+// own FastAPI/Starlette contract -- {"detail": ...} JSON, never a plain-
+// text body -- via this binary's one shared REST error-response path
+// (rest_error_response.go: writeRESTError/writeRESTUnauthorized/
+// writeRESTMethodNotAllowed/writeRESTDataUnavailable/
+// authenticateRESTRequest), the same helper every sibling REST route in
+// this binary uses. This route keeps no local copy of that envelope.
 package main
 
 import (
@@ -108,24 +116,19 @@ func buildPeopleSearchRoute() (handler http.HandlerFunc, cleanup func(), ok bool
 	routeMux.Register(peopleSearchOperation, newPeopleSearchHandler(reader))
 
 	// Auth runs BEFORE Dispatch, same order every other route in this
-	// binary uses.
+	// binary uses. authenticateRESTRequest (rest_error_response.go) is the
+	// ONE place get_current_user's three 401 branches are classified --
+	// this route keeps no local copy of that distinction.
 	entryHandler := func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
-			http.NotFound(w, r)
+			writeRESTMethodNotAllowed(w, r, "people")
 			return
 		}
-		token, ok := bearerToken(r.Header.Get("Authorization"))
+		claims, ok := authenticateRESTRequest(w, r, verifier, "people")
 		if !ok {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		verifyCtx := principal.WithRequestMeta(r.Context(), r.RemoteAddr, envelopeRequestID(r))
-		claims, err := verifier.Verify(verifyCtx, token)
-		if err != nil {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		r = r.WithContext(authctx.WithClaims(r.Context(), authctx.Claims{OrgID: claims.OrgID}))
+		r = r.WithContext(authctx.WithClaims(r.Context(), claims))
 		routeMux.Dispatch(peopleSearchOperation, w, r)
 	}
 
@@ -133,23 +136,6 @@ func buildPeopleSearchRoute() (handler http.HandlerFunc, cleanup func(), ok bool
 		_ = readClient.Close()
 	}
 	return entryHandler, cleanupFn, true, nil
-}
-
-// writePeopleDetailError writes a Starlette-shaped `{"detail": message}`
-// JSON body -- fastapi.exception_handlers.http_exception_handler's exact
-// envelope for an HTTPException with no custom handler registered
-// (confirmed live: `JSONResponse({"detail": exc.detail}, status_code=
-// exc.status_code)`), which is what BOTH of this route's own typed
-// HTTPExceptions (_reject_comparative_params's 400, the outer 503
-// fallback) produce on the Python side. This is a NEW, more literal port
-// than quadrant_route.go/drilldown_prs_route.go's own plain-text
-// http.Error for their equivalent 503 fallback -- not a fix applied to
-// those already-shipped routes, just this route's own choice to reproduce
-// the verified body shape now that it is known.
-func writePeopleDetailError(w http.ResponseWriter, status int, detail string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]string{"detail": detail})
 }
 
 // writePeopleSearchResponse writes resp as the final 200 JSON body via
@@ -172,7 +158,11 @@ func newPeopleSearchHandler(reader *people.Reader) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		claims, ok := authctx.FromContext(r.Context())
 		if !ok {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			// Defensive only: buildPeopleSearchRoute's entryHandler always
+			// authenticates and attaches claims before Dispatch reaches this
+			// handler -- see authenticateRESTRequest's own doc comment for
+			// the three real 401 shapes this route actually answers.
+			writeRESTUnauthorized(w, r, "people", "Not authenticated")
 			return
 		}
 
@@ -210,7 +200,7 @@ func newPeopleSearchHandler(reader *people.Reader) http.HandlerFunc {
 		// is a 400.
 		for key := range query {
 			if peopleForbiddenQueryParams[key] {
-				writePeopleDetailError(w, http.StatusBadRequest, "Comparative parameters are not supported.")
+				writeRESTError(w, r, "people", claims.OrgID, http.StatusBadRequest, "Comparative parameters are not supported.")
 				return
 			}
 		}
@@ -230,7 +220,7 @@ func newPeopleSearchHandler(reader *people.Reader) http.HandlerFunc {
 		if err != nil {
 			// Python's outer `except Exception: raise HTTPException(503,
 			// "Data unavailable")` (main.py:1064-1065).
-			writePeopleDetailError(w, http.StatusServiceUnavailable, "Data unavailable")
+			writeRESTDataUnavailable(w, r, "people", claims.OrgID)
 			return
 		}
 		writePeopleSearchResponse(w, r, claims.OrgID, resp)

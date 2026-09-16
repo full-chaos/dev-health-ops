@@ -464,7 +464,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 			return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
 		}
 		pipeline, include := normalizeGitHubTestsPipeline(claim, repoID, run, normalizedAt)
-		if !include || (claim.BeforeAt != nil && pipeline.StartedAt.After(claim.BeforeAt.UTC())) {
+		if !include || githubTestsReportRunOutsideWindow(pipeline, claim) {
 			continue
 		}
 		artPage, pageErr := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
@@ -625,6 +625,47 @@ func githubTestsIncompleteCount(incomplete []GitHubTestsIncomplete) int {
 }
 
 func (row githubTestsPipelineRow) StartedAtPtr() *time.Time { value := row.StartedAt; return &value }
+
+// githubTestsReportRunOutsideWindow decides whether a run's report artifacts
+// (test suites/cases, coverage) belong to this claim's window. It is shared by
+// the chunked route and this non-chunked comparison implementation so the two
+// cannot grade each other apart.
+//
+// The upper bound is unchanged: a run that started after the claim's upper
+// bound is out of scope.
+//
+// The lower bound is on the run's own last-updated time, not its start time --
+// a re-run, a retried job, or a suite that lands late all bump that value, so
+// a run which is still changing stays in scope for as long as it keeps
+// changing. Only a run that has not changed since well before this window is
+// skipped.
+//
+// "Well before" is one full window width earlier than the window's own start,
+// so a run is offered this window AND the one before it -- two consecutive
+// looks -- before its report artifacts stop being re-fetched. The provider
+// documents no bound on how long a run's artifacts can take to become
+// listable after the run itself stops changing, so the margin is sized off
+// the claim's own cadence (the only figure this route actually knows) rather
+// than a fixed duration picked from a small sample.
+//
+// Both bounds fail open: a claim missing either edge (a backfill, or a still
+// -open forward claim) filters nothing on that edge, and a run with no
+// last-updated time is never excluded -- a run we cannot date is a run we
+// must not silently drop.
+func githubTestsReportRunOutsideWindow(pipeline githubTestsPipelineRow, claim Claim) bool {
+	if claim.BeforeAt != nil && pipeline.StartedAt.After(claim.BeforeAt.UTC()) {
+		return true
+	}
+	if claim.SinceAt == nil || claim.BeforeAt == nil || pipeline.FinishedAt == nil {
+		return false
+	}
+	since := claim.SinceAt.UTC()
+	width := claim.BeforeAt.UTC().Sub(since)
+	if width <= 0 {
+		return false
+	}
+	return pipeline.FinishedAt.UTC().Before(since.Add(-width))
+}
 
 func normalizeGitHubTestsPipeline(claim Claim, repoID string, run gitHubWorkflowRunPayload, at time.Time) (githubTestsPipelineRow, bool) {
 	queuedRaw := parseGitHubWorkflowTime(run.CreatedAt)

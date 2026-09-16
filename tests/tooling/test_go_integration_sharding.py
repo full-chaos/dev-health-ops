@@ -2026,9 +2026,15 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # (linear_reference_catalog_test.go); and TestIdentityAliasResolverMatchesLivePythonResolverWithSeededAliases,
     # a live-Python-oracle parity test (identity_alias_resolver_oracle_test.go):
     # +7 top-level (1376 -> 1383), integration-tagged UNCHANGED at 155.
-    assert len(expected_provider_tests) == 1383
+    # A client-side lower bound on the GitHub TestOps report phase's window
+    # (github_tests_report_run_outside_window in github_tests_route.go) added
+    # 2 ordinary tests (github_tests_report_window_test.go) and 4
+    # `-tags=integration` tests against real ClickHouse
+    # (github_tests_report_window_integration_test.go): +6 top-level
+    # (1383 -> 1389), integration-tagged 155 -> 159.
+    assert len(expected_provider_tests) == 1389
 
-    assert len(expected_integration_tests) == 155
+    assert len(expected_integration_tests) == 159
     assert expected_integration_tests < expected_provider_tests
 
     provider_assignments: dict[int, set[str]] = {}
@@ -2044,7 +2050,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1383
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1389
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -2158,7 +2164,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1383
+    assert len(selected_tests) == len(set(selected_tests)) == 1389
     assert set(selected_tests) == expected_tests
 
 

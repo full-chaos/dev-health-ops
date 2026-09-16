@@ -72,13 +72,23 @@ const (
 
 // defaultFleetContainers is the compose fleet whose image labels answer
 // "what commit is running?". One per distinct image, not one per replica.
+//
+// queryAPIContainerName is the compose container ReadFleetRevisions reads
+// query-api's OWN build identity from -- REST proof has no
+// go_api_routing_state row to read a per-operation candidate build from
+// (restproven.go's own package doc comment), so -render checks REST
+// receipts against THIS container's label specifically, never the
+// fleet-wide Revision field, which requires every container (including
+// worker images unrelated to query-api) to agree.
+const queryAPIContainerName = "dev-health-query-api-1"
+
 var defaultFleetContainers = []string{
 	"dev-health-go-worker-1",
 	"dev-health-go-worker-heavy-1",
 	"dev-health-go-worker-ops-1",
 	"dev-health-go-scheduler-1",
 	"dev-health-go-reconciler-1",
-	"dev-health-query-api-1",
+	queryAPIContainerName,
 	"dev-health-api-1",
 }
 
@@ -198,8 +208,15 @@ func checkFlagCombination(explicit map[string]bool, printSQL, render, check bool
 }
 
 // legacyBlocks renders the four blocks CHAOS-5473 absorbed from the deleted
-// scripts/gen_go_migration_matrix_docs.py, from committed sources only.
-func legacyBlocks(root string, families *migrationmatrix.NativeFamilies) (map[string]string, error) {
+// scripts/gen_go_migration_matrix_docs.py, from committed sources only, plus
+// the REST endpoints block's "proven" derivation.
+//
+// restProven is ReadRESTProof's own shape (routeswitch operation name ->
+// admissible receipt id), or nil. -check passes the COMMITTED snapshot's
+// own Render.RESTProven (offline, no DB); -render passes what it just read
+// live. Both callers reach the SAME ApplyRESTProof call below, so the two
+// modes cannot compute "proven" two different ways.
+func legacyBlocks(root string, families *migrationmatrix.NativeFamilies, restProven map[string]string) (map[string]string, error) {
 	pairs, err := migrationmatrix.LoadProviderMatrixPairs(filepath.Join(root, providerMatrixRelative))
 	if err != nil {
 		return nil, err
@@ -238,6 +255,7 @@ func legacyBlocks(root string, families *migrationmatrix.NativeFamilies) (map[st
 	if err != nil {
 		return nil, fmt.Errorf("REST endpoints: %w", err)
 	}
+	restRows = migrationmatrix.ApplyRESTProof(restRows, restProven)
 	restBlock := migrationmatrix.RenderRESTEndpointsBlock(restRows)
 	return map[string]string{
 		"provider":  providerBlock,
@@ -299,7 +317,7 @@ func runCheck(root string) error {
 	}
 	doc := string(raw)
 
-	legacy, err := legacyBlocks(root, families)
+	legacy, err := legacyBlocks(root, families, snapshot.RESTProven)
 	if err != nil {
 		return err
 	}
@@ -430,6 +448,14 @@ func runRender(root, dsn, routingFile, fleetMode string, containers []string) er
 		}
 	}
 
+	// queryAPIBuild is query-api's OWN fleet-label revision (never the
+	// cross-container Revision field) -- see queryAPIContainerName's own
+	// doc comment for why REST proof is checked against it specifically.
+	// Empty unless the docker fleet read actually names this container
+	// with a KNOWN (non-UnknownRevision) label, which is exactly the
+	// condition under which a REST receipt could be usefully checked.
+	var queryAPIBuild string
+
 	switch {
 	case fleetMode == "none":
 		if previous != nil {
@@ -449,6 +475,9 @@ func runRender(root, dsn, routingFile, fleetMode string, containers []string) er
 			fmt.Fprintf(os.Stderr, "warning: %s\n", reading.Disagreement)
 		}
 		applyFleet(ledger, reading)
+		if label := reading.PerContainer[queryAPIContainerName]; label != "" && label != migrationmatrix.UnknownRevision {
+			queryAPIBuild = label
+		}
 	default:
 		reading, err := fleetFromFile(fleetMode)
 		if err != nil {
@@ -457,7 +486,25 @@ func runRender(root, dsn, routingFile, fleetMode string, containers []string) er
 		snapshot.FleetReadAt = reading.ReadAt
 		snapshot.FleetSource = reading.Source
 		applyFleet(ledger, reading)
+		if label := reading.PerContainer[queryAPIContainerName]; label != "" && label != migrationmatrix.UnknownRevision {
+			queryAPIBuild = label
+		}
 	}
+
+	// REST "proven": read ONLY when both a live DSN and a known query-api
+	// build are available -- either missing means Render.RESTProven stays
+	// nil, and ApplyRESTProof(rows, nil) promotes nothing (see its own doc
+	// comment), so a render with no usable source for this column renders
+	// every REST row exactly as LoadRESTEndpoints found it, same as before
+	// this column existed.
+	var restProven map[string]string
+	if dsn != "" && queryAPIBuild != "" {
+		restProven, err = migrationmatrix.ReadRESTProof(ctx, dsn, queryAPIBuild)
+		if err != nil {
+			return fmt.Errorf("read REST proof: %w", err)
+		}
+	}
+	snapshot.RESTProven = restProven
 
 	if err := writeJSON(filepath.Join(root, renderRelative), snapshot); err != nil {
 		return err
@@ -483,7 +530,7 @@ func runRender(root, dsn, routingFile, fleetMode string, containers []string) er
 		return fmt.Errorf("go-api operations block: %w", err)
 	}
 
-	legacy, err := legacyBlocks(root, families)
+	legacy, err := legacyBlocks(root, families, restProven)
 	if err != nil {
 		return err
 	}

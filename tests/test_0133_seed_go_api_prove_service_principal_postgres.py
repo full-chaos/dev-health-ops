@@ -181,16 +181,14 @@ def _insert_user(engine: Engine, **overrides: object) -> None:
         )
 
 
-def test_0133_is_the_application_schema_head_and_chains_after_0132() -> None:
-    """Derived, not typed. See ``tests/_alembic_heads.py``'s own docstring:
-    the next migration author renumbers THIS check (or supersedes it) rather
-    than leaving a stale pin.
+def test_0133_chains_after_0132() -> None:
+    """0133 is no longer the application_schema head (0134 superseded it) --
+    see ``tests/_alembic_heads.py`` and
+    ``test_0134_add_go_api_rest_proof_run_migration.py``'s sibling check for
+    the current head.
     """
     migration = _migration()
-    assert migration.revision == application_schema_head(), (
-        "0133 must be the application_schema head; if another migration "
-        "landed first, renumber this one and re-run"
-    )
+    assert migration.revision != application_schema_head()
     assert migration.down_revision == "0132"
 
 

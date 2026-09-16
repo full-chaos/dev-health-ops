@@ -356,6 +356,16 @@ func main() {
 		log.Fatalf("query-api: build /api/v1/investment/explain route: %v", explainErr)
 	} else if explainOK {
 		defer explainCleanup()
+		// Wrapped in withProofProvenance so go-api-rest-prove can bind a
+		// receipt to the process that actually served this request, the
+		// same reason /query and /query/proof carry it. Reassigned, not
+		// inlined into the mux.HandleFunc call below:
+		// restendpoints.go's LoadQueryAPIMuxRoutes mechanically parses
+		// this file for `mux.HandleFunc("/api/v1/...", <bareIdentifier>)`
+		// and cannot resolve a call expression in the handler position --
+		// inlining the wrapper here would silently render this route
+		// "python-only" on the migration matrix page.
+		explainHandler = withProofProvenance(explainHandler, runningBuild())
 		mux.HandleFunc("/api/v1/investment/explain", explainHandler)
 	} else {
 		log.Print("query-api: /api/v1/investment/explain route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
@@ -369,6 +379,9 @@ func main() {
 		log.Fatalf("query-api: build /api/v1/quadrant route: %v", quadrantErr)
 	} else if quadrantOK {
 		defer quadrantCleanup()
+		// See the investment/explain mount above for why this is a
+		// reassignment, not an inlined wrapper.
+		quadrantHandler = withProofProvenance(quadrantHandler, runningBuild())
 		mux.HandleFunc("/api/v1/quadrant", quadrantHandler)
 	} else {
 		log.Print("query-api: /api/v1/quadrant route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
@@ -383,6 +396,9 @@ func main() {
 		log.Fatalf("query-api: build /api/v1/filters/options route: %v", filterOptionsErr)
 	} else if filterOptionsOK {
 		defer filterOptionsCleanup()
+		// See the investment/explain mount above for why this is a
+		// reassignment, not an inlined wrapper.
+		filterOptionsHandler = withProofProvenance(filterOptionsHandler, runningBuild())
 		mux.HandleFunc("/api/v1/filters/options", filterOptionsHandler)
 	} else {
 		log.Print("query-api: /api/v1/filters/options route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
@@ -397,6 +413,9 @@ func main() {
 		log.Fatalf("query-api: build /api/v1/drilldown/prs route: %v", drilldownPRsErr)
 	} else if drilldownPRsOK {
 		defer drilldownPRsCleanup()
+		// See the investment/explain mount above for why this is a
+		// reassignment, not an inlined wrapper.
+		drilldownPRsHandler = withProofProvenance(drilldownPRsHandler, runningBuild())
 		mux.HandleFunc("/api/v1/drilldown/prs", drilldownPRsHandler)
 	} else {
 		log.Print("query-api: /api/v1/drilldown/prs route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
@@ -411,6 +430,9 @@ func main() {
 		log.Fatalf("query-api: build /api/v1/drilldown/issues route: %v", drilldownIssuesErr)
 	} else if drilldownIssuesOK {
 		defer drilldownIssuesCleanup()
+		// See the investment/explain mount above for why this is a
+		// reassignment, not an inlined wrapper.
+		drilldownIssuesHandler = withProofProvenance(drilldownIssuesHandler, runningBuild())
 		mux.HandleFunc("/api/v1/drilldown/issues", drilldownIssuesHandler)
 	} else {
 		log.Print("query-api: /api/v1/drilldown/issues route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
@@ -424,6 +446,9 @@ func main() {
 		log.Fatalf("query-api: build /api/v1/people route: %v", peopleSearchErr)
 	} else if peopleSearchOK {
 		defer peopleSearchCleanup()
+		// See the investment/explain mount above for why this is a
+		// reassignment, not an inlined wrapper.
+		peopleSearchHandler = withProofProvenance(peopleSearchHandler, runningBuild())
 		mux.HandleFunc("/api/v1/people", peopleSearchHandler)
 	} else {
 		log.Print("query-api: /api/v1/people route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
@@ -440,6 +465,9 @@ func main() {
 		log.Fatalf("query-api: build /api/v1/meta route: %v", metaErr)
 	} else if metaOK {
 		defer metaCleanup()
+		// See the investment/explain mount above for why this is a
+		// reassignment, not an inlined wrapper.
+		metaHandler = withProofProvenance(metaHandler, runningBuild())
 		mux.HandleFunc("/api/v1/meta", metaHandler)
 	} else {
 		log.Print("query-api: /api/v1/meta route not configured (CLICKHOUSE_URI unset) -- staying unmounted")
@@ -454,6 +482,9 @@ func main() {
 		log.Fatalf("query-api: build /api/v1/explain route: %v", explainRESTErr)
 	} else if explainRESTOK {
 		defer explainRESTCleanup()
+		// See the investment/explain mount above for why this is a
+		// reassignment, not an inlined wrapper.
+		explainRESTHandler = withProofProvenance(explainRESTHandler, runningBuild())
 		mux.HandleFunc("/api/v1/explain", explainRESTHandler)
 	} else {
 		log.Print("query-api: /api/v1/explain route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")

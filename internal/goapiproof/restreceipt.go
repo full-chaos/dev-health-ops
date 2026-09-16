@@ -1,0 +1,168 @@
+package goapiproof
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/google/uuid"
+)
+
+// RESTReceipt is one immutable go_api_rest_proof_run row -- the REST
+// sibling of Receipt (receipt.go). REST has no GraphQL schema digest,
+// document digest or selected-operation name to key a receipt by, and no
+// go_api_routing_state row to read a candidate build from the way a
+// GraphQL operation does, so this receipt's identity is what the ported
+// route actually is: (Method, Path, CandidateBuild) -- see alembic
+// 0134_add_go_api_rest_proof_run.py's own module doc comment for why
+// that replaces Receipt's four-column key rather than reusing it, and why
+// there is no companion candidate-build registry table to foreign-key
+// against.
+//
+// Every other field is named identically to Receipt's own field of the
+// same purpose, and that is load-bearing, not cosmetic:
+// EnablementProofClause (receipt.go) is one predicate parameterised only
+// by a SQL alias, and it is reused VERBATIM against go_api_rest_proof_run
+// by ReadRESTProof (internal/migrationmatrix/restproven.go) precisely
+// because both tables name their stage/terminal_state/candidate_build/
+// build_binding/baseline_defect/differences_outside_baseline_defect
+// columns the same way.
+type RESTReceipt struct {
+	Method               string
+	Path                 string
+	CandidateBuild       string
+	RequestIdentity      string
+	Stage                string
+	TerminalState        string
+	BaselineResponseRef  string
+	CandidateResponseRef string
+	OrgID                string
+	ReviewEvidence       string
+	RecordedBy           string
+	ObservedAt           time.Time
+
+	// MeasurementRoute is RouteEdge or RouteProof -- see Receipt's own
+	// field of the same name. go-api-rest-prove always writes RouteProof
+	// today (restadmit.go's own doc comment: no REST route in this
+	// service is reached through a shared edge that could drop the build
+	// header), but the column carries the same two-value vocabulary
+	// Receipt's does rather than a REST-only constant, so a future edge
+	// path does not need a schema change to be recorded.
+	MeasurementRoute string
+
+	// BaselineDefects mirrors Receipt.BaselineDefects: it NEVER softens
+	// TerminalState, it only names which declared Python-plane defects
+	// covered this comparison's differences.
+	BaselineDefects []string
+
+	// DifferencesOutsideBaselineDefect mirrors Receipt's own field of the
+	// same name -- written even when zero, for the same reason.
+	DifferencesOutsideBaselineDefect int
+
+	// BuildBinding is EdgeBuildPresent or EdgeBuildAbsent, same vocabulary
+	// as Receipt's own field. RESTAdmit refuses admission outright when
+	// the candidate leg's build header is absent or mismatched (see
+	// RESTRefusalBuildUnbound), so a REST receipt is only ever built from
+	// an observation that already satisfies EdgeBuildPresent -- there is
+	// no REST equivalent of Receipt's RouteEdge/EdgeBuildAbsent fallback.
+	BuildBinding string
+}
+
+// WriteREST records one REST receipt. A single INSERT, not two statements
+// like Write's candidate-build upsert + proof-run insert: there is no
+// go_api_rest_candidate_build registry for this row to reference, so
+// there is nothing to upsert first.
+//
+// The vocabulary and blank-citation guards are byte-for-byte the same
+// checks Write applies, reused rather than re-derived, because the rule
+// ("a citation that names nothing is not a citation", NamesNothing's own
+// doc comment) is not a GraphQL-specific rule -- it is a rule about what a
+// citation array means, which this table's baseline_defect column carries
+// unchanged.
+func WriteREST(ctx context.Context, db Querier, receipt RESTReceipt) (uuid.UUID, error) {
+	if err := validateRESTVocabulary(receipt); err != nil {
+		return uuid.Nil, err
+	}
+	if NamesNothing(receipt.Method) || NamesNothing(receipt.Path) {
+		return uuid.Nil, fmt.Errorf("goapiproof: refusing to write a REST receipt with an empty method or path")
+	}
+	if NamesNothing(receipt.CandidateBuild) {
+		return uuid.Nil, fmt.Errorf("goapiproof: refusing to write a REST receipt with an empty candidate build")
+	}
+	if !buildBindings[receipt.BuildBinding] {
+		return uuid.Nil, fmt.Errorf("goapiproof: refusing to write a REST receipt with build binding %q -- expected %q or %q", receipt.BuildBinding, EdgeBuildPresent, EdgeBuildAbsent)
+	}
+	if !measurementRoutes[receipt.MeasurementRoute] {
+		return uuid.Nil, fmt.Errorf("goapiproof: refusing to write a REST receipt with measurement route %q -- expected %q or %q", receipt.MeasurementRoute, RouteEdge, RouteProof)
+	}
+	for _, ticket := range receipt.BaselineDefects {
+		if NamesNothing(ticket) {
+			return uuid.Nil, fmt.Errorf("goapiproof: refusing to write a REST receipt whose baseline_defect array contains an empty citation (%d entries) -- cardinality() counts it, so the enablement predicate would read this as a fully-cited mismatch while it cites nothing", len(receipt.BaselineDefects))
+		}
+	}
+
+	id := uuid.New()
+	if _, err := db.Exec(ctx,
+		`INSERT INTO go_api_rest_proof_run
+		   (id, method, path, candidate_build,
+		    request_identity, stage, terminal_state,
+		    baseline_response_ref, candidate_response_ref,
+		    org_id, review_evidence, recorded_by, observed_at,
+		    measurement_route, baseline_defect, differences_outside_baseline_defect,
+		    build_binding)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+		id, receipt.Method, receipt.Path, receipt.CandidateBuild,
+		receipt.RequestIdentity, receipt.Stage, receipt.TerminalState,
+		nullIfEmpty(receipt.BaselineResponseRef), nullIfEmpty(receipt.CandidateResponseRef),
+		nullIfEmpty(receipt.OrgID), nullIfEmpty(receipt.ReviewEvidence), nullIfEmpty(receipt.RecordedBy),
+		receipt.ObservedAt, nullIfEmpty(receipt.MeasurementRoute), receipt.BaselineDefects,
+		receipt.DifferencesOutsideBaselineDefect, nullIfEmpty(receipt.BuildBinding),
+	); err != nil {
+		return uuid.Nil, fmt.Errorf("goapiproof: record REST proof run for %s %s: %w", receipt.Method, receipt.Path, err)
+	}
+	return id, nil
+}
+
+// WriteRESTAtomic writes one REST receipt inside its own transaction when
+// db can begin one, matching WriteAtomic's own fallback contract. One
+// statement is already atomic on any single connection, but a caller that
+// can begin a transaction gets one anyway -- consistent with Write's own
+// caller-facing contract, so a future second statement (a REST candidate-
+// build registry, should one ever be added) does not silently change this
+// function's atomicity guarantee out from under an existing caller.
+func WriteRESTAtomic(ctx context.Context, db Querier, receipt RESTReceipt) (uuid.UUID, error) {
+	beginner, ok := db.(TxBeginner)
+	if !ok {
+		return WriteREST(ctx, db, receipt)
+	}
+	tx, err := beginner.Begin(ctx)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("goapiproof: begin REST receipt transaction: %w", err)
+	}
+	id, err := WriteREST(ctx, tx, receipt)
+	if err != nil {
+		_ = tx.Rollback(ctx)
+		return uuid.Nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return uuid.Nil, fmt.Errorf("goapiproof: commit REST receipt: %w", err)
+	}
+	return id, nil
+}
+
+// validateRESTVocabulary mirrors validateVocabulary's stage/terminal_state
+// checks, reusing the SAME package-level stages/terminalStates maps
+// receipt.go defines -- go_api_rest_proof_run's CHECK constraints enforce
+// the identical vocabulary (alembic 0134), so the fast, specific Go-side
+// failure is identical too. No shadow-requires-watermark check: REST
+// receipts carry no data_watermark column at all (0134's own doc comment
+// on why) and no REST route is ever proven in the shadow stage.
+func validateRESTVocabulary(receipt RESTReceipt) error {
+	if !stages[receipt.Stage] {
+		return fmt.Errorf("goapiproof: invalid REST proof-run stage %q", receipt.Stage)
+	}
+	if !terminalStates[receipt.TerminalState] {
+		return fmt.Errorf("goapiproof: invalid REST proof-run terminal_state %q", receipt.TerminalState)
+	}
+	return nil
+}

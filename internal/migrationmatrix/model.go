@@ -199,6 +199,17 @@ type Render struct {
 	// ProofRunTotal is the total row count of go_api_proof_run at read time.
 	// Rendered as a bare number because zero is the fact that matters.
 	ProofRunTotal int `json:"proof_run_total"`
+	// RESTProven is every REST routeswitch operation name (RESTOperationName's
+	// own form, e.g. "REST:GET:/api/v1/quadrant") ReadRESTProof found an
+	// admissible receipt for at render time, mapped to that receipt's id --
+	// ApplyRESTProof's own input shape, carried here so -check can re-derive
+	// the REST endpoints block OFFLINE from this committed snapshot, the
+	// same way it already re-derives the go-api operations block from
+	// Operations above. omitempty: an old snapshot predating this field, and
+	// a fresh render that found zero REST receipts, both decode to a nil
+	// map, and ApplyRESTProof(rows, nil) is defined to promote nothing --
+	// so neither renders any row "proven" until a real receipt exists.
+	RESTProven map[string]string `json:"rest_proven,omitempty"`
 }
 
 // LoadStatusLedger reads and shape-checks status.json.

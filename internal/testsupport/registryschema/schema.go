@@ -16,10 +16,11 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// DDL mirrors alembic 0114 (the three tables), 0127 (the
+// DDL mirrors alembic 0114 (the three go_api_* GraphQL tables), 0127 (the
 // review_evidence/recorded_by provenance columns), 0128 (the
-// measurement-route / baseline-defect provenance columns) and 0129
-// (build_binding).
+// measurement-route / baseline-defect provenance columns), 0129
+// (build_binding), and 0134 (go_api_rest_proof_run, the REST sibling
+// ledger go-api-rest-prove writes).
 //
 // The constraints are not decoration and are NOT trimmed to "what the
 // test needs": the 4-column composite FK from go_api_proof_run to
@@ -29,14 +30,28 @@ import (
 // test against a relaxed schema would pass while the real one rejected
 // every write.
 //
-// The drift check lives in PYTHON rather than here, deliberately: reading
-// the alembic files FROM a Go test made them inputs to the Go workflow,
-// and go.yml's path filters do not cover src/dev_health_ops/alembic/
-// versions -- so a PR changing only a migration would have satisfied
-// go-quality vacuously (caught by tests/tooling/test_go_workflow_path_
-// filters.py). Enforcing it from the Python side keeps the guard and
-// costs no cross-language trigger, because Python's own workflow already
-// runs on those files.
+// go_api_rest_proof_run's stage/terminal_state/measurement_route/
+// build_binding CHECKs are byte-identical in vocabulary to go_api_proof_run's
+// own -- deliberately, so internal/goapiproof.EnablementProofClause (one
+// predicate, parameterised only by a SQL alias) judges a row from EITHER
+// table without a second copy of the admission rule. It carries no FK to
+// go_api_candidate_build: that registry exists for go_api_routing_state to
+// reference an immutable build by, and nothing on the REST side plays that
+// role -- see alembic 0134's own module doc comment.
+//
+// The drift check for the four GraphQL-table migrations (0114/0127/0128/
+// 0129) lives in PYTHON rather than here, deliberately: reading the
+// alembic files FROM a Go test made them inputs to the Go workflow, and
+// go.yml's path filters do not cover src/dev_health_ops/alembic/versions
+// -- so a PR changing only a migration would have satisfied go-quality
+// vacuously (caught by tests/tooling/test_go_workflow_path_filters.py).
+// Enforcing it from the Python side keeps the guard and costs no
+// cross-language trigger, because Python's own workflow already runs on
+// those files. That check's own column-pattern scan names its four source
+// migrations explicitly (it does not enumerate the versions directory), so
+// it does not -- and is not meant to -- cover 0134; this table's own Go
+// integration test (internal/goapiproof's restreceipt_integration_test.go)
+// is what proves this mirror against the real migrated schema instead.
 const DDL = `
 CREATE TABLE go_api_candidate_build (
 	schema_digest TEXT NOT NULL,
@@ -109,9 +124,40 @@ CREATE TABLE go_api_proof_run (
 	CONSTRAINT ck_go_api_proof_run_measurement_route
 		CHECK (measurement_route IS NULL OR measurement_route IN ('edge', 'proof'))
 );
+
+CREATE TABLE go_api_rest_proof_run (
+	id UUID NOT NULL PRIMARY KEY,
+	method TEXT NOT NULL,
+	path TEXT NOT NULL,
+	candidate_build TEXT NOT NULL,
+	request_identity TEXT NOT NULL,
+	stage TEXT NOT NULL,
+	terminal_state TEXT NOT NULL,
+	baseline_response_ref TEXT,
+	candidate_response_ref TEXT,
+	org_id TEXT,
+	review_evidence TEXT,
+	recorded_by TEXT,
+	measurement_route TEXT,
+	baseline_defect TEXT[],
+	differences_outside_baseline_defect INTEGER NOT NULL DEFAULT 0,
+	build_binding TEXT,
+	observed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+	CONSTRAINT ck_go_api_rest_proof_run_stage
+		CHECK (stage IN ('dual_run', 'deployed_executed', 'shadow', 'canary')),
+	CONSTRAINT ck_go_api_rest_proof_run_terminal_state
+		CHECK (terminal_state IN ('match', 'mismatch', 'auth_rejected', 'validation_rejected',
+			'dependency_failed', 'timeout', 'cancelled', 'resource_exhausted',
+			'fallback', 'unsupported', 'proof_failed')),
+	CONSTRAINT ck_go_api_rest_proof_run_measurement_route
+		CHECK (measurement_route IS NULL OR measurement_route IN ('edge', 'proof')),
+	CONSTRAINT ck_go_api_rest_proof_run_build_binding
+		CHECK (build_binding IS NULL OR build_binding IN ('per_request', 'absent'))
+);
 `
 
-// Create builds the three registry tables in an empty database.
+// Create builds the four registry tables (three GraphQL, one REST) in an
+// empty database.
 func Create(ctx context.Context, pool *pgxpool.Pool) error {
 	if _, err := pool.Exec(ctx, DDL); err != nil {
 		return fmt.Errorf("registryschema: create registry schema: %w", err)

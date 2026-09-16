@@ -1,0 +1,14 @@
+{
+  "full_row": {
+    "repo_id": "00000000-0000-4000-8000-000000000001",
+    "incidents_count": 2,
+    "mttr_p50_hours": 8.0,
+    "mttr_p90_hours": 11.200000000000001
+  },
+  "sparse_row": {
+    "repo_id": "00000000-0000-4000-8000-000000000002",
+    "incidents_count": 1,
+    "mttr_p50_hours": null,
+    "mttr_p90_hours": null
+  }
+}

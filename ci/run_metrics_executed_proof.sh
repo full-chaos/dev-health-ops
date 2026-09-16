@@ -360,12 +360,18 @@ ASSERT_SUMMARY_JSON="${METRICS_PROOF_SUMMARY_JSON_FILE:-${TMP_DIR}/family-summar
 # CONTENTS (git_files.contents), which fixtures generate does not write by
 # default -- asserting it here would fail forever, for a reason unrelated to
 # CHAOS-4263, even after everything else merges.
+#
+# compounding_risk_team reads this same run's repo_metrics_daily (written by
+# repo_user_commit, seeded above) and resolves teams the same way
+# team_cognitive_load does (team_repo_ownership from the fixtures call) -- the
+# identical causal chain as team_cognitive_load, so it is satisfied by the
+# same seeding with no separate fixture path needed.
 assert_readback() {
   PYTHONPATH="${PYTHONPATH}" python3 "${ROOT_DIR}/ci/assert_metrics_executed_proof.py" \
     --clickhouse-uri "${CLICKHOUSE_URI_HTTP}" \
     --org-id "${ORG_ID}" \
     --run-start "${RUN_START}" \
-    --families cicd deploy testops_pipeline testops_test testops_coverage dora repo_user_commit team_wellbeing team_cognitive_load compounding_risk ic_finalize \
+    --families cicd deploy testops_pipeline testops_test testops_coverage dora repo_user_commit team_wellbeing team_cognitive_load compounding_risk compounding_risk_team ic_finalize \
     --summary-json "${ASSERT_SUMMARY_JSON}"
 }
 
@@ -453,15 +459,16 @@ echo "==> native-family telemetry proof (CHAOS-4276): confirms rows came from th
 # CHAOS-5283). Adding it here would wait NATIVE_TELEMETRY_WAIT_SECS every
 # run for a sample that can never arrive.
 #
-# compounding_risk's TEAM scope has no entry to add: it is still fully
-# Python (families.json's own phase_note -- "TEAM scope rows are still
-# Python... FinalizeHandler.Work hands the whole finalize step to the
-# bridge as one opaque call with no per-family registration and no
-# skip-list. CHAOS-4287 stays open until that finalize-side hook exists").
-# There is no native registration for compounding_risk's team scope for
-# this telemetry check to prove either way; the existing `compounding_risk`
-# entry above only ever asserted its REPO scope, which is unaffected.
-NATIVE_TELEMETRY_FAMILIES="team_wellbeing repo_user_commit cicd deploy compounding_risk ic_finalize team_cognitive_load"
+# compounding_risk_team added: it is a registered NativeFinalizeFamilyExecutor
+# (CompoundingRiskTeamExecutor, internal/jobs/metrics/daily/
+# compounding_risk_team_native_executor.go) wired through
+# FinalizeHandler.SetNativeFinalizeFamilies, the same finalize-scope observer
+# wiring ic_finalize and team_cognitive_load already prove emits
+# worker_daily_metrics_native_family_outcome_total{outcome="computed"} for
+# finalize-scope families. The existing `compounding_risk` entry above only
+# ever asserted its REPO scope; this is that family's TEAM scope, a separate
+# executor with its own registration.
+NATIVE_TELEMETRY_FAMILIES="team_wellbeing repo_user_commit cicd deploy compounding_risk compounding_risk_team ic_finalize team_cognitive_load"
 # The dual-read wait/dump/race-detection mechanism (bounded by
 # NATIVE_TELEMETRY_WAIT_SECS/NATIVE_TELEMETRY_POLL_SECS, default 60/5s) is
 # shared with ci/run_live_backend_e2e.sh -- see

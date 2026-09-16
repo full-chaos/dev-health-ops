@@ -403,6 +403,9 @@ func (e *ReleaseImpactExecutor) computeReleaseEnv(
 		CoverageRatioTop:      coverageRatio,
 		MissingRequiredFields: missing,
 		DataCompleteness:      completeness,
+		// concurrent is a count(DISTINCT release_ref) scoped by
+		// environment/window with no LIMIT -- bounded, never negative -- so
+		// it keeps a direct conversion.
 		ConcurrentDeployCount: uint32(concurrent),
 		ComputedAt:            computedAt,
 	}, nil

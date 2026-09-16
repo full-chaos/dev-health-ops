@@ -357,7 +357,12 @@ func WriteTeamMetricsDailyPerRepo(
 		computedAt := computedAtByRepo[groupIndex].UTC()
 		for _, row := range rows {
 			if err := batch.Append(
-				dayValue, row.TeamID, row.TeamName, uint32(row.CommitsCount),
+				dayValue, row.TeamID, row.TeamName,
+				// commits_count/after_hours_commits_count/weekend_commits_count
+				// are per-(team, day) tallies incremented once per commit
+				// row with no LIMIT -- bounded by a day's commit volume,
+				// never negative -- so they keep a direct conversion.
+				uint32(row.CommitsCount),
 				uint32(row.AfterHoursCommitsCount), uint32(row.WeekendCommitsCount),
 				row.AfterHoursCommitRatio, row.WeekendCommitRatio,
 				computedAt, organizationID, row.RepoID,

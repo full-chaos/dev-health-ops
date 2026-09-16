@@ -135,6 +135,9 @@ func (writer *Writer) WriteResult(ctx context.Context, rows []CICDMetric, orgID 
 	}
 	for _, row := range rows {
 		if err := batch.Append(
+			// pipelines_count is a per-(repo, day) tally with no LIMIT --
+			// bounded by how many pipeline runs a repo can have in one day,
+			// never negative -- so it keeps a direct conversion.
 			row.RepoID, row.Day, uint32(row.PipelinesCount), row.SuccessRate,
 			row.AvgDurationMinutes, row.P90DurationMinutes, row.AvgQueueMinutes,
 			row.ComputedAt, orgID,

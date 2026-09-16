@@ -351,6 +351,11 @@ func (writer *Writer) writeBaselines(ctx context.Context, rows []BenchmarkBaseli
 	for _, row := range rows {
 		if err := batch.Append(
 			row.MetricName, row.ScopeType, row.ScopeKey, row.PeriodStart, row.PeriodEnd,
+			// rolling_window_days is a fixed configuration constant
+			// (DefaultRollingWindowDays); sample_size is the length of one
+			// cross-section slice built in memory for this baseline -- both
+			// are bounded well below their column widths and never
+			// negative, so they keep a direct conversion.
 			uint16(row.RollingWindowDays), row.CurrentValue, row.BaselineValue, row.PercentileRank,
 			row.P25Value, row.P50Value, row.P75Value, row.P90Value, uint32(row.SampleSize),
 			orgID, row.ComputedAt,
@@ -498,6 +503,9 @@ func (writer *Writer) writeCorrelations(ctx context.Context, rows []MetricCorrel
 		if err := batch.Append(
 			row.MetricName, row.PairedMetricName, row.ScopeType, row.ScopeKey,
 			row.PeriodStart, row.PeriodEnd, row.Coefficient, row.PValue,
+			// sample_size is the length of an in-memory day-correlation
+			// slice -- bounded well below UInt32 range and never negative,
+			// so it keeps a direct conversion.
 			uint32(row.SampleSize), significant, row.Interpretation, orgID, row.ComputedAt,
 		); err != nil {
 			return 0, fmt.Errorf("append testops_metric_correlations row: %w", err)

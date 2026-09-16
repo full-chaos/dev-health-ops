@@ -8,6 +8,8 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/checkedcast"
 )
 
 // repoComplexityInput is one deduped repo_complexity_daily row this day.
@@ -194,9 +196,35 @@ func (writer *teamComplexityWriter) write(ctx context.Context, rows []teamComple
 		return fmt.Errorf("prepare team_complexity_daily batch: %w", err)
 	}
 	for _, row := range rows {
+		// loc_total/cyclomatic_total/high_complexity_functions/
+		// very_high_complexity_functions are each a SUM across every repo
+		// this team owns (buildTeamComplexityRows' bucket accumulation), not
+		// a single repo's already-bounded total -- they narrow through the
+		// shared checked-cast boundary instead of a bare uint64(...)
+		// conversion.
+		locTotal, err := checkedcast.Uint64(row.LOCTotal, "team_complexity_daily", "loc_total")
+		if err != nil {
+			return fmt.Errorf("check team_complexity_daily row: %w", err)
+		}
+		cyclomaticTotal, err := checkedcast.Uint64(row.CyclomaticTotal, "team_complexity_daily", "cyclomatic_total")
+		if err != nil {
+			return fmt.Errorf("check team_complexity_daily row: %w", err)
+		}
+		highComplexityFunctions, err := checkedcast.Uint64(row.HighComplexityFunctions, "team_complexity_daily", "high_complexity_functions")
+		if err != nil {
+			return fmt.Errorf("check team_complexity_daily row: %w", err)
+		}
+		veryHighComplexityFunctions, err := checkedcast.Uint64(row.VeryHighComplexityFunctions, "team_complexity_daily", "very_high_complexity_functions")
+		if err != nil {
+			return fmt.Errorf("check team_complexity_daily row: %w", err)
+		}
 		if err := batch.Append(
-			row.OrganizationID, row.TeamID, row.Day, uint64(row.LOCTotal), uint64(row.CyclomaticTotal),
-			row.CyclomaticPerKLOC, uint64(row.HighComplexityFunctions), uint64(row.VeryHighComplexityFunctions),
+			row.OrganizationID, row.TeamID, row.Day, locTotal, cyclomaticTotal,
+			row.CyclomaticPerKLOC, highComplexityFunctions, veryHighComplexityFunctions,
+			// contributing_repo_count is the size of the team's owned-repo
+			// set for this day (len(b.repoIDs)) -- bounded by how many repos
+			// a team can own, never negative and never remotely close to
+			// UInt32 range.
 			uint32(row.ContributingRepoCount), row.ComputedAt,
 		); err != nil {
 			return fmt.Errorf("append team_complexity_daily row: %w", err)

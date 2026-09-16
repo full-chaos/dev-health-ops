@@ -333,6 +333,10 @@ func (writer *teamCognitiveLoadWriter) write(ctx context.Context, rows []teamCog
 		if err := batch.Append(
 			row.OrganizationID, row.TeamID, row.Day, row.PRInterruptionLoad, row.ContextSpreadCount,
 			row.ReviewRequestLoad, row.AfterHoursCommitRatio, row.WeekendCommitRatio,
+			// contributing_repo_count/sample_author_count are the sizes of
+			// in-memory repo/author sets for this team/day -- bounded by
+			// team and org size, never negative -- so they keep a direct
+			// conversion.
 			uint32(row.ContributingRepoCount), uint32(row.SampleAuthorCount), row.ComputedAt,
 		); err != nil {
 			return fmt.Errorf("append team_cognitive_load_daily row: %w", err)

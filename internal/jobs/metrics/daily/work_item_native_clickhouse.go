@@ -9,6 +9,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/checkedcast"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
 )
 
@@ -150,9 +151,9 @@ type workItemCounter struct {
 func workItemUInt32s(table, subject string, counters []workItemCounter) ([]uint32, error) {
 	checked := make([]uint32, len(counters))
 	for index, counter := range counters {
-		value, err := checkUint32Range(counter.value, table, counter.column, subject)
+		value, err := checkedcast.Uint32(counter.value, table, counter.column)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("%w: %w for %s", ErrInvalidState, err, subject)
 		}
 		checked[index] = value
 	}

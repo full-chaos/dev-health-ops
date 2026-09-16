@@ -89,7 +89,10 @@
     },
     "daily/deploy": {
       "parity": {
-        "status": "unverified"
+        "status": "verified",
+        "ticket": "CHAOS-5794",
+        "sha": "cb9f5f48cece1ed836cd62f76854b9d6c9c73280",
+        "evidence": "internal/jobs/metrics/numerical/deploy_parity_test.go: TestComputeDeployMetricsGoldenParity (tests/fixtures/daily_deploy_python_golden.json)"
       },
       "deployed": {
         "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
@@ -137,7 +140,10 @@
     },
     "daily/incident": {
       "parity": {
-        "status": "unverified"
+        "status": "verified",
+        "ticket": "CHAOS-5794",
+        "sha": "cb9f5f48cece1ed836cd62f76854b9d6c9c73280",
+        "evidence": "internal/jobs/metrics/daily/incident_parity_golden_test.go: TestComputeIncidentMetricsDailyMatchesFrozenPythonGolden (testdata/incident_parity_golden.json)"
       },
       "deployed": {
         "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",

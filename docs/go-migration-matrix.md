@@ -156,8 +156,8 @@ _Deployed revisions read from: fleet file fleet-prod.json._
 
 | Family | Scope | Executes | Output parity | Deployed revision (read at) | Deployed-executed proof | Open regressions |
 | --- | --- | --- | --- | --- | --- | --- |
-| `ai_governance` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
-| `ai_impact` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
+| `ai_governance` | daily | NATIVE | VERIFIED (CHAOS-5794 @ `cb9f5f48cece`, internal/jobs/metrics/aigovernance/compute_test.go::TestGovernanceRowsMatchLivePythonProduction (live-Python full-row oracle over both ai_policy_events and ai_governance_coverage_daily, every persisted column except event_id/computed_at, gated by ci/check_go.sh live-python-oracles) plus TestDeriveEventIDMatchesItsFrozenGoldenValue (frozen event_id, the one field the oracle excludes)) | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
+| `ai_impact` | daily | NATIVE | VERIFIED (CHAOS-5794 @ `cb9f5f48cece`, internal/jobs/metrics/aiimpact/compute_test.go::TestAIImpactMatchesFrozenPythonGolden (frozen golden tests/fixtures/ai_impact_python_golden.json, captured from the now-deleted compute_ai_impact_metrics_daily before its removal, compared field-for-field and bit-exact on floats)) | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
 | `ai_workflow` | daily | NATIVE | VERIFIED (CHAOS-4286 @ `506c99beb3ec`, internal/jobs/metrics/aiworkflow/oracle_test.go TestAIWorkflowMatchesFrozenPythonGolden (frozen Python golden fixture; PASS re-run at this sha)) | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
 | `cicd` | daily | NATIVE | VERIFIED (CHAOS-4292 @ `506c99beb3ec`, internal/jobs/metrics/daily/cicd/compute_test.go TestComputeMatchesFrozenPythonGolden + TestComputeMatchesFrozenGoldenExhaustively (frozen Python golden; PASS re-run at this sha)) | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
 | `compounding_risk` | daily | POST_BRIDGE | VERIFIED (CHAOS-4287 @ `506c99beb3ec`, internal/jobs/metrics/daily/compoundingrisk/compute_test.go TestComputeMatchesFrozenPythonGolden (frozen Python golden; PASS re-run at this sha)) | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
@@ -237,7 +237,7 @@ A row that is live, reachable to real clients (`canary`/`primary`) and carries n
 is required before stage 4/5, and "a bare 200 does not qualify".
 
 <!-- BEGIN GENERATED GO API OPERATIONS -->
-_Rendered 2026-09-16T09:35:05Z against main merge-base `56f5fea61c0150b69f2f87f808afdaba6cd0ee02`; SDL digest pin `sha256:19485ec136d04de0935717dca8b4f5fd27dd0351fe96b854d40f433229468fd0`; fleet read 2026-09-16T09:35:05Z via fleet file fleet-prod.json._
+_Rendered 2026-09-16T09:35:05Z against main merge-base `cb9f5f48cece1ed836cd62f76854b9d6c9c73280`; SDL digest pin `sha256:19485ec136d04de0935717dca8b4f5fd27dd0351fe96b854d40f433229468fd0`; fleet read 2026-09-16T09:35:05Z via fleet file fleet-prod.json._
 
 _Rows in `go_api_proof_run` at read time: **481**. Operations reachable to real clients with no deployed-executed proof: **1**. Rows whose mode says Go but whose schema digest no longer matches the pin, so every request silently falls back to Python: **0**._
 

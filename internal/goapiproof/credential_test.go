@@ -178,6 +178,82 @@ func TestAMissingCredentialRefusesRatherThanSendingNone(t *testing.T) {
 	}
 }
 
+// Defect 3. A minted credential must carry the Bearer scheme
+// -- reproduces the production failure verbatim: "...rejected the
+// candidate bearer credential (HTTP 401) -- /buildinfo checks the
+// effective-principal envelope, not the edge access token".
+//
+// A minting helper's own documented contract is to print the bare
+// credential value and nothing else (mint-envelope's own doc comment) --
+// no "Bearer " scheme. go-api-rest-prove's own -candidate-bearer-exec/
+// -baseline-bearer-exec credentials sent exactly that bare value as
+// Authorization, and every server this tool talks to parses the header
+// the way query_route.go's bearerToken does: split on whitespace, require
+// EXACTLY two fields, the first case-insensitively "Bearer". A schemeless
+// value is one field, so it was refused before either verifier ever ran
+// -- at the very first live request the tool made, /buildinfo -- which
+// read from the outside exactly like the wrong credential CLASS had been
+// sent, though both classes were in fact correct.
+//
+// Two fakes stand in for the two real, plane-specific verifiers
+// (twoPlaneServers above models the same asymmetry): one accepts ONLY the
+// envelope's own value behind a Bearer scheme, the other ONLY the edge
+// access token's value behind a Bearer scheme. This test fails against a
+// Credential that does not add the scheme -- both "matching endpoint"
+// assertions below see a schemeless header and 401 -- and passes once the
+// scheme is guaranteed at the source.
+func TestMintedCredentialCarriesTheBearerScheme(t *testing.T) {
+	const envelopeValue = "envelope-value"
+	const edgeValue = "edge-value"
+
+	requireBearer := func(want string) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			parts := strings.Fields(r.Header.Get("Authorization"))
+			if len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") && parts[1] == want {
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"commit":"abc123def456abc123def456abc123def456ab","modified":false}`))
+				return
+			}
+			w.WriteHeader(http.StatusUnauthorized)
+		}
+	}
+
+	envelopeServer := httptest.NewServer(requireBearer(envelopeValue))
+	t.Cleanup(envelopeServer.Close)
+	edgeServer := httptest.NewServer(requireBearer(edgeValue))
+	t.Cleanup(edgeServer.Close)
+
+	// freshFor 0: mint fresh every call, and the mint function returns the
+	// BARE value only -- exactly MintViaAllowlistedHelper's own contract
+	// (a real helper's trimmed stdout, no scheme).
+	envelopeCredential := MintedCredential("Authorization", "candidate bearer", 0, func(context.Context) (string, error) {
+		return envelopeValue, nil
+	})
+	edgeCredential := MintedCredential("Authorization", "baseline bearer", 0, func(context.Context) (string, error) {
+		return edgeValue, nil
+	})
+
+	if _, err := FetchBuildIdentity(context.Background(), envelopeServer.Client(), envelopeServer.URL, envelopeCredential); err != nil {
+		t.Fatalf("the envelope credential must be accepted by the endpoint that checks the envelope: %v", err)
+	}
+	if _, err := FetchBuildIdentity(context.Background(), edgeServer.Client(), edgeServer.URL, edgeCredential); err != nil {
+		t.Fatalf("the edge credential must be accepted by the endpoint that checks the edge access token: %v", err)
+	}
+
+	// The wrong CLASS on the wrong endpoint must still fail, with the
+	// exact production wording, and neither value anywhere in the error.
+	_, err := FetchBuildIdentity(context.Background(), envelopeServer.Client(), envelopeServer.URL, edgeCredential)
+	if err == nil {
+		t.Fatal("the edge credential must be rejected by the endpoint that checks the envelope")
+	}
+	if !strings.Contains(err.Error(), "checks the effective-principal envelope, not the edge access token") {
+		t.Fatalf("error does not match the production wording: %v", err)
+	}
+	if strings.Contains(err.Error(), envelopeValue) || strings.Contains(err.Error(), edgeValue) {
+		t.Fatalf("error leaked a credential value: %v", err)
+	}
+}
+
 // Defect 2. A credential whose value ages out must be re-minted, and the
 // refresh has to survive the LAST call of a run -- the closing
 // /buildinfo, which is where JOB 4's attempt B died with every
@@ -826,7 +902,10 @@ func TestCredentialRedactsAsBothValueAndPointer(t *testing.T) {
 	if err := value.Apply(context.Background(), request); err != nil {
 		t.Fatalf("a copied credential must still authenticate: %v", err)
 	}
-	if request.Header.Get("Authorization") != secret {
+	// ensureBearerScheme prepends the scheme every server this package
+	// talks to requires -- see its own doc comment -- so the header
+	// carries "Bearer "+secret, not the bare value.
+	if request.Header.Get("Authorization") != "Bearer "+secret {
 		t.Fatal("the copy did not carry the credential")
 	}
 }

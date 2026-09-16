@@ -405,6 +405,10 @@ type workItemsRow struct {
 
 // fetchWorkItems ports the "work_items" query verbatim
 // (metrics/operating_review.py:123-156).
+// cycle_time_p50_hours, cycle_time_p90_hours, wip_age_p50_hours and
+// wip_age_p90_hours are Nullable(Float64) on work_item_metrics_daily;
+// each is tuple-wrapped so argMax cannot skip a newest row that carries
+// NULL in one of them.
 func fetchWorkItems(ctx context.Context, client QueryClient, orgID string, teamID *string, start, end time.Time) ([]workItemsRow, error) {
 	teamFilter, teamGroup, teamBinding := teamClauses(teamID)
 	query := `
@@ -425,10 +429,10 @@ func fetchWorkItems(ctx context.Context, client QueryClient, orgID string, teamI
             argMax(items_started, computed_at) AS items_started,
             argMax(items_completed, computed_at) AS items_completed,
             argMax(wip_count_end_of_day, computed_at) AS wip_count_end_of_day,
-            argMax(cycle_time_p50_hours, computed_at) AS cycle_time_p50_hours,
-            argMax(cycle_time_p90_hours, computed_at) AS cycle_time_p90_hours,
-            argMax(wip_age_p50_hours, computed_at) AS wip_age_p50_hours,
-            argMax(wip_age_p90_hours, computed_at) AS wip_age_p90_hours
+            (argMax(tuple(cycle_time_p50_hours), computed_at)).1 AS cycle_time_p50_hours,
+            (argMax(tuple(cycle_time_p90_hours), computed_at)).1 AS cycle_time_p90_hours,
+            (argMax(tuple(wip_age_p50_hours), computed_at)).1 AS wip_age_p50_hours,
+            (argMax(tuple(wip_age_p90_hours), computed_at)).1 AS wip_age_p90_hours
           FROM work_item_metrics_daily
           WHERE org_id = {org_id:String}
             ` + teamFilter + `
@@ -556,6 +560,9 @@ type repoMetricsRow struct {
 // CHAOS-4534: neither plane is correct today). No team_filter/team_group --
 // repo_metrics_daily has no team_id column, matching the Python query
 // (which does not splice either f-string placeholder into this one).
+// pr_first_review_p50_hours and mttr_hours are Nullable(Float64) on
+// repo_metrics_daily; both are tuple-wrapped so argMax cannot skip a
+// newest row that carries NULL in either.
 func fetchRepoMetrics(ctx context.Context, client QueryClient, orgID string, start, end time.Time) ([]repoMetricsRow, error) {
 	query := `
         SELECT
@@ -572,12 +579,12 @@ func fetchRepoMetrics(ctx context.Context, client QueryClient, orgID string, sta
             day,
             repo_id,
             argMax(prs_merged, computed_at) AS prs_merged,
-            argMax(pr_first_review_p50_hours, computed_at) AS pr_first_review_p50_hours,
+            (argMax(tuple(pr_first_review_p50_hours), computed_at)).1 AS pr_first_review_p50_hours,
             argMax(single_owner_file_ratio_30d, computed_at) AS single_owner_file_ratio_30d,
             argMax(code_ownership_gini, computed_at) AS code_ownership_gini,
             argMax(bus_factor, computed_at) AS bus_factor,
             argMax(change_failure_rate, computed_at) AS change_failure_rate,
-            argMax(mttr_hours, computed_at) AS mttr_hours
+            (argMax(tuple(mttr_hours), computed_at)).1 AS mttr_hours
           FROM repo_metrics_daily
           WHERE org_id = {org_id:String}
             AND day >= {start:Date} AND day < {end:Date}
@@ -775,6 +782,9 @@ type incidentsAggRow struct {
 
 // fetchIncidentsAgg ports the "incidents" query verbatim
 // (metrics/operating_review.py:265-281).
+// mttr_p50_hours is Nullable(Float64) on incident_metrics_daily;
+// tuple-wrapped so argMax cannot skip the newest row when it carries
+// NULL.
 func fetchIncidentsAgg(ctx context.Context, client QueryClient, orgID string, start, end time.Time) ([]incidentsAggRow, error) {
 	query := `
         SELECT sum(incidents_count) AS incidents_count, avg(mttr_p50_hours) AS mttr_p50_hours
@@ -783,7 +793,7 @@ func fetchIncidentsAgg(ctx context.Context, client QueryClient, orgID string, st
             day,
             repo_id,
             argMax(incidents_count, computed_at) AS incidents_count,
-            argMax(mttr_p50_hours, computed_at) AS mttr_p50_hours
+            (argMax(tuple(mttr_p50_hours), computed_at)).1 AS mttr_p50_hours
           FROM incident_metrics_daily
           WHERE org_id = {org_id:String}
             AND day >= {start:Date} AND day < {end:Date}
@@ -872,6 +882,10 @@ type aiImpactRow struct {
 // migration 036_ai_metrics.sql's real ai_impact_metrics_daily schema --
 // every referenced column exists (unlike ai_governance; see
 // fetchAIGovernance's doc comment), so no divergence here.
+// ai_cycle_time_delta_hours, ai_review_amplification, rework_drag_rate,
+// test_gap_rate and incident_drag_rate are Nullable(Float64) on
+// ai_impact_metrics_daily; each is tuple-wrapped so argMax cannot skip a
+// newest row that carries NULL in one of them.
 func fetchAIImpact(ctx context.Context, client QueryClient, orgID string, teamID *string, start, end time.Time) ([]aiImpactRow, error) {
 	teamFilter, _, teamBinding := teamClauses(teamID)
 	query := `
@@ -899,11 +913,11 @@ func fetchAIImpact(ctx context.Context, client QueryClient, orgID string, teamID
             argMax(agent_created_prs, computed_at) AS agent_created_prs,
             argMax(human_prs, computed_at) AS human_prs,
             argMax(unknown_prs, computed_at) AS unknown_prs,
-            argMax(ai_cycle_time_delta_hours, computed_at) AS ai_cycle_time_delta_hours,
-            argMax(ai_review_amplification, computed_at) AS ai_review_amplification,
-            argMax(rework_drag_rate, computed_at) AS rework_drag_rate,
-            argMax(test_gap_rate, computed_at) AS test_gap_rate,
-            argMax(incident_drag_rate, computed_at) AS incident_drag_rate
+            (argMax(tuple(ai_cycle_time_delta_hours), computed_at)).1 AS ai_cycle_time_delta_hours,
+            (argMax(tuple(ai_review_amplification), computed_at)).1 AS ai_review_amplification,
+            (argMax(tuple(rework_drag_rate), computed_at)).1 AS rework_drag_rate,
+            (argMax(tuple(test_gap_rate), computed_at)).1 AS test_gap_rate,
+            (argMax(tuple(incident_drag_rate), computed_at)).1 AS incident_drag_rate
           FROM ai_impact_metrics_daily
           WHERE org_id = {org_id:String}
             ` + teamFilter + `

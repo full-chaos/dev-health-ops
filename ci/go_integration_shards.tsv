@@ -52,7 +52,9 @@ cmd/query-api/internal/analytics	218
 cmd/query-api/internal/featureflags	22
 cmd/query-api/internal/hotspots	45
 cmd/query-api/internal/investmentexplain	22
+cmd/query-api/internal/operatingreview	112
 cmd/query-api/internal/routeswitch	17
+cmd/query-api/internal/throughputforecast	64
 cmd/query-api/internal/workgraph	380
 internal/cacheinvalidation	1
 internal/externalrecompute	33
@@ -97,6 +99,7 @@ internal/syncdispatchruntime	359
 internal/syncreconciler	175
 internal/synccoverage	4
 internal/syncroute	11
+internal/teamattribution	41
 internal/teamownership	123
 internal/testsupport/chschema	45
 internal/testsupport/containers	14

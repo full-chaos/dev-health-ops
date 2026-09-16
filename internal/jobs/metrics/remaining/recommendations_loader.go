@@ -379,11 +379,14 @@ func (loader *RecommendationsLoader) loadSustainabilitySignals(
 		return 0, false, nil, closeErr
 	}
 
+	// cycle_time_p50_hours is Nullable(Float64) on work_item_metrics_daily;
+	// tuple-wrapped so argMax cannot skip the newest row when it carries
+	// NULL.
 	cycleQuery := `
             SELECT day, avg(ct) AS avg_ct
             FROM (
                 SELECT day, provider, work_scope_id,
-                       argMax(cycle_time_p50_hours, computed_at) AS ct
+                       (argMax(tuple(cycle_time_p50_hours), computed_at)).1 AS ct
                 FROM work_item_metrics_daily
                 WHERE team_id = {team_id:String}
                   AND day >= {start:Date} AND day < {end:Date}` + loader.orgClause() + `

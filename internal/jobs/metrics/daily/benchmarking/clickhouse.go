@@ -115,6 +115,12 @@ func NewClickHouseLoader(connection conn, orgID string) (*ClickHouseLoader, erro
 // no such binding, so an explicit org_id filter is added. That NARROWS what
 // already-correct data satisfies the query and cannot widen it -- the same
 // reasoning CHAOS-4775 applied to family_readback.
+// Several ValueColumn choices (e.g. testops_pipeline_metrics_daily's
+// duration/queue columns, testops_coverage_metrics_daily's coverage
+// columns, work_item_metrics_daily.cycle_time_p50_hours) are
+// Nullable(Float64); the projected column is always tuple-wrapped so
+// argMax cannot skip a newest row that carries NULL, regardless of which
+// metric is selected.
 func (loader *ClickHouseLoader) FetchMetricSeriesByScope(
 	ctx context.Context, metricName string, startDay, endDay time.Time, scopeType string,
 ) (map[string][]MetricPoint, error) {
@@ -158,7 +164,7 @@ FROM (
     SELECT
         %s AS scope_key,
         day,
-        argMax(%s, computed_at) AS metric_value
+        (argMax(tuple(%s), computed_at)).1 AS metric_value
     FROM %s
     WHERE %s
     GROUP BY %s

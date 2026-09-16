@@ -18,6 +18,11 @@ type ClickHouseRepositoryShadowSource struct {
 	Conn driver.Conn
 }
 
+// repos.settings is Nullable(String). The tuple wrap sits INSIDE
+// coalesce(), around the projected column, not around argMax's result --
+// wrapping only the outer result would still let argMax skip the newest
+// row when its settings is NULL and resurrect a stale value instead of
+// falling through to the '{}' default.
 func (source ClickHouseRepositoryShadowSource) Load(
 	ctx context.Context,
 	claim Claim,
@@ -35,7 +40,7 @@ func (source ClickHouseRepositoryShadowSource) Load(
 	}
 	rows, err := source.Conn.Query(ctx, `
 SELECT repo,
-       coalesce(argMax(settings, last_synced), '{}') AS settings_json,
+       coalesce((argMax(tuple(settings), last_synced)).1, '{}') AS settings_json,
        max(last_synced) AS observed_at
 FROM repos
 WHERE org_id = ? AND provider = ? AND repo = ?

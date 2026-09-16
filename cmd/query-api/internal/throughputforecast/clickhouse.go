@@ -220,6 +220,9 @@ func loadWorkItemOverlay(
 // Returns nil when BOTH ages are null, which Python distinguishes from a zero:
 // staleWip is an optional field on the wire, and a scope whose rows carry no
 // age percentiles must render as absent rather than as "0 hours old".
+// wip_age_p50_hours and wip_age_p90_hours are Nullable(Float64) on
+// work_item_metrics_daily; both are tuple-wrapped so argMax cannot skip
+// the latest day's row when either carries NULL.
 func loadStaleWIP(
 	ctx context.Context, client QueryClient, orgID string,
 	teamIDs []string, workScopeID *string,
@@ -241,8 +244,8 @@ func loadStaleWIP(
                 provider,
                 work_scope_id,
                 team_id,
-                argMax(wip_age_p50_hours, computed_at) AS wip_age_p50_hours,
-                argMax(wip_age_p90_hours, computed_at) AS wip_age_p90_hours
+                (argMax(tuple(wip_age_p50_hours), computed_at)).1 AS wip_age_p50_hours,
+                (argMax(tuple(wip_age_p90_hours), computed_at)).1 AS wip_age_p90_hours
             FROM work_item_metrics_daily
             WHERE day = (
                 SELECT max(day) FROM work_item_metrics_daily WHERE %s
@@ -386,6 +389,9 @@ func loadEstimateCoverage(
 // org-wide signal even on a single-team forecast -- Python's behaviour, and
 // visible in the output as a team-scoped forecast whose review overlay does not
 // change when the team does.
+// pr_first_review_p50_hours is Nullable(Float64) on repo_metrics_daily;
+// tuple-wrapped so argMax cannot skip the newest row when it carries
+// NULL.
 func loadReviewOverlay(
 	ctx context.Context, client QueryClient, orgID string, historyWeeks int, today time.Time,
 ) (float64, error) {
@@ -395,7 +401,7 @@ func loadReviewOverlay(
             SELECT
                 repo_id,
                 day,
-                argMax(pr_first_review_p50_hours, computed_at) AS pr_first_review_p50_hours
+                (argMax(tuple(pr_first_review_p50_hours), computed_at)).1 AS pr_first_review_p50_hours
             FROM repo_metrics_daily
             WHERE day >= {start_date:Date} AND org_id = {org_id:String}
             GROUP BY repo_id, day

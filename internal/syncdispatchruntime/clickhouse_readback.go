@@ -74,6 +74,8 @@ SELECT native_team_key FROM (
 	return missingFrom(expectedKeys, visible), nil
 }
 
+// sprints.name is Nullable(String); the aggregate is tuple-wrapped so
+// argMax cannot skip a row whose newest version carries name = NULL.
 func (verifier *ClickHouseReadbackVerifier) MissingSprintIDs(ctx context.Context, orgID, provider string, expectedIDs []string) ([]string, error) {
 	if verifier == nil || verifier.conn == nil {
 		return nil, ErrReferenceDiscoveryUnavailable
@@ -84,7 +86,7 @@ func (verifier *ClickHouseReadbackVerifier) MissingSprintIDs(ctx context.Context
 	rows, err := verifier.conn.Query(ctx, `
 SELECT sprint_id FROM (
     SELECT org_id, provider, sprint_id,
-           argMax(name, last_synced) AS name,
+           (argMax(tuple(name), last_synced)).1 AS name,
            argMax(native_team_key, last_synced) AS native_team_key
     FROM sprints
     WHERE org_id = {org_id:String} AND provider = {provider:String}

@@ -263,6 +263,83 @@ func TestRepointHonoursTheOperationFilter(t *testing.T) {
 	}
 }
 
+// an operation with a catalog-matching row AND a
+// DOCUMENT_DRIFT row (as `status` names it) has BOTH re-pointed together
+// by the operation filter alone, since Repoint has no catalog of its
+// own to prefer one over the other. SelectDocumentDigest is the only way
+// to move just one of them, leaving the sibling row's build untouched.
+func TestRepointSelectDocumentDigestMovesOnlyTheNamedRow(t *testing.T) {
+	ctx := t.Context()
+	pool := startAuditedRegistryPostgres(t)
+	const driftedDigest = "5555555555555555555555555555555555555555555555555555555555555555"
+	seedRow(t, ctx, "featureFlags", testDocumentDigest, "canary", testCandidateBuild, pool)
+	seedRow(t, ctx, "featureFlags", driftedDigest, "shadow", testCandidateBuild, pool)
+
+	outcomes, err := Repoint(ctx, pool, RepointRequest{
+		PrincipalID:          testPrincipalID,
+		SchemaDigest:         testSchemaDigest,
+		RunningBuild:         repointRunningBuild,
+		Operations:           []string{"featureFlags"},
+		SelectDocumentDigest: driftedDigest,
+		RecordedBy:           "t", ReviewEvidence: "e",
+	})
+	if err != nil {
+		t.Fatalf("Repoint -document: %v", err)
+	}
+	if len(outcomes) != 1 || outcomes[0].DocumentDigest != driftedDigest || !outcomes[0].Changed {
+		t.Fatalf("outcomes = %+v, want the drifted row alone, changed", outcomes)
+	}
+
+	rows, err := pool.Query(ctx, `SELECT document_digest, current_candidate_build FROM go_api_routing_state WHERE selected_operation = 'featureFlags' ORDER BY document_digest`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	got := map[string]string{}
+	for rows.Next() {
+		var digest, build string
+		if err := rows.Scan(&digest, &build); err != nil {
+			t.Fatal(err)
+		}
+		got[digest] = build
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if got[testDocumentDigest] != testCandidateBuild {
+		t.Fatalf("the catalog-matching row moved: build = %q, want it UNTOUCHED at %q", got[testDocumentDigest], testCandidateBuild)
+	}
+	if got[driftedDigest] != repointRunningBuild {
+		t.Fatalf("the named row = %q, want it re-pointed to %q", got[driftedDigest], repointRunningBuild)
+	}
+}
+
+// A digest no row for the named operation carries is refused BY NAME.
+func TestRepointSelectDocumentDigestRefusesWhenNoRowCarriesIt(t *testing.T) {
+	ctx := t.Context()
+	pool := startAuditedRegistryPostgres(t)
+	seedRow(t, ctx, "featureFlags", testDocumentDigest, "canary", testCandidateBuild, pool)
+
+	_, err := Repoint(ctx, pool, RepointRequest{
+		PrincipalID:          testPrincipalID,
+		SchemaDigest:         testSchemaDigest,
+		RunningBuild:         repointRunningBuild,
+		Operations:           []string{"featureFlags"},
+		SelectDocumentDigest: "6666666666666666666666666666666666666666666666666666666666666666",
+		RecordedBy:           "t", ReviewEvidence: "e",
+	})
+	if !errors.Is(err, ErrRepointDocumentNotLive) {
+		t.Fatalf("Repoint = %v, want ErrRepointDocumentNotLive", err)
+	}
+	var build string
+	if err := pool.QueryRow(ctx, `SELECT current_candidate_build FROM go_api_routing_state WHERE selected_operation = 'featureFlags'`).Scan(&build); err != nil {
+		t.Fatal(err)
+	}
+	if build != testCandidateBuild {
+		t.Fatalf("a refused repoint changed the row: build = %q", build)
+	}
+}
+
 // "No rows" is an error, not an empty success: an unreachable or empty
 // registry and a fully-correct one must never read alike.
 func TestRepointRefusesWhenNothingMatches(t *testing.T) {

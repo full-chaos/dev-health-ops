@@ -1715,6 +1715,157 @@ func TestDisableAllRegisteredSkipsADeadRowsOnlyOperationAndStillDisablesTheHealt
 	}
 }
 
+// `-document` is the escape hatch for the SKIP the test above
+// pins. hotspots' only live row carries a digest the catalog does not
+// name for it (a DOCUMENT_DRIFT row, as `status` names the shape) --
+// naming that digest directly gives -candidate-build a row of its own to
+// compare against, instead of the catalog-driven path's "nothing to check
+// a guard against", so the operator who wants the safety of a guard on
+// this exact row is no longer forced to drop it and disable unguarded.
+func TestDisableDocumentSelectorGuardsAndDisablesADocumentDriftRow(t *testing.T) {
+	pool, dsn := startVerbPostgres(t)
+	ctx := context.Background()
+	liveDigest := "8888888888888888888888888888888888888888888888888888888888888882"
+	driftedDigest := "9999999999999999999999999999999999999999999999999999999999999992" // NOT in the catalog
+	catalogPath := writeCatalog(t, map[string]string{"hotspots": liveDigest})
+	const build = "dddddddddddddddddddddddddddddddddddddddd"
+
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO public.go_api_candidate_build (schema_digest, document_digest, selected_operation, candidate_build)
+		VALUES ($1, $2, 'hotspots', $3)`,
+		localSchemaDigest(), driftedDigest, build); err != nil {
+		t.Fatalf("seed drifted candidate build: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO public.go_api_routing_state
+			(schema_digest, document_digest, selected_operation, current_candidate_build, owner, mode, rollout_percentage, review_evidence, recorded_by)
+		VALUES ($1, $2, 'hotspots', $3, 'go', 'primary', 100, 'seeded drifted', 'test')`,
+		localSchemaDigest(), driftedDigest, build); err != nil {
+		t.Fatalf("seed drifted routing row: %v", err)
+	}
+
+	// RED, characterized: the catalog-driven path cannot select this row
+	// at all once a guard is named -- SKIPPED, not disabled, the same
+	// shape the sibling test above pins for `-operations all-registered`.
+	out, err := captureVerbOut(t, "disable",
+		"-operations", "hotspots", "-mode", "python",
+		"-postgres-uri", dsn, "-catalog", catalogPath,
+		"-candidate-build", build,
+		"-apply", "-recorded-by", "lane-routing-verbs", "-review-evidence", "document-drift disable, red",
+	)
+	if err == nil {
+		t.Fatal("today's catalog-driven guard must refuse to select a DOCUMENT_DRIFT row -- it has no catalog digest to compare the guard against")
+	}
+	if !strings.Contains(out, "SKIPPED, not disabled") {
+		t.Fatalf("the skip must be named on the plan line: %s", out)
+	}
+	if mode := readHotspotsMode(t, ctx, pool); mode != "primary" {
+		t.Fatalf("mode = %q, want primary (untouched)", mode)
+	}
+
+	// GREEN: naming the row's own digest gives the guard something to
+	// compare against, and the write proceeds.
+	out, err = captureVerbOut(t, "disable",
+		"-operations", "hotspots", "-mode", "python",
+		"-postgres-uri", dsn, "-catalog", catalogPath,
+		"-candidate-build", build, "-document", driftedDigest,
+		"-apply", "-recorded-by", "lane-routing-verbs", "-review-evidence", "document-drift disable, green",
+	)
+	if err != nil {
+		t.Fatalf("disable -document: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "applied: 1 row(s)") {
+		t.Fatalf("want one row applied: %s", out)
+	}
+	if mode := readHotspotsMode(t, ctx, pool); mode != "python" {
+		t.Fatalf("mode = %q, want python", mode)
+	}
+
+	// The status verb's census still names the row (disable is an UPDATE,
+	// never a DELETE) -- and its per-operation table still names the
+	// drifted digest, honestly: this row was never reachable and disable
+	// does not change that. What DOES change, and is the actual signal an
+	// operator re-checks status or disable's own dry-run for, is that the
+	// row no longer shows up as something still needing attention.
+	jsonOut, _, err := captureVerb(t, "status", "-postgres-uri", dsn, "-catalog", catalogPath, "-json")
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	var report struct {
+		RowsBySchemaDigest map[string]int `json:"rows_by_schema_digest"`
+	}
+	if err := json.Unmarshal([]byte(jsonOut), &report); err != nil {
+		t.Fatalf("decode status -json: %v\n%s", err, jsonOut)
+	}
+	if report.RowsBySchemaDigest[localSchemaDigest()] != 1 {
+		t.Fatalf("census = %+v, want the disabled row still counted at the live digest -- disable is an UPDATE, never a DELETE", report.RowsBySchemaDigest)
+	}
+	dryRunOut, err := captureVerbOut(t, "disable",
+		"-operations", "hotspots", "-mode", "python",
+		"-postgres-uri", dsn, "-catalog", catalogPath,
+	)
+	if err != nil {
+		t.Fatalf("disable dry-run: %v\n%s", err, dryRunOut)
+	}
+	if !strings.Contains(dryRunOut, "[no change]") {
+		t.Fatalf("re-running the same plan must show the drifted row already moved, not still pending: %s", dryRunOut)
+	}
+
+	// Guard mismatch on the named row still refuses, and writes nothing.
+	if _, err := captureVerbOut(t, "disable",
+		"-operations", "hotspots", "-mode", "shadow",
+		"-postgres-uri", dsn, "-catalog", catalogPath,
+		"-candidate-build", "0000000000000000000000000000000000000000", "-document", driftedDigest,
+		"-apply", "-recorded-by", "lane-routing-verbs", "-review-evidence", "document-drift disable, guard mismatch",
+	); err == nil {
+		t.Fatal("a mismatched guard against the named row must still refuse")
+	}
+	if mode := readHotspotsMode(t, ctx, pool); mode != "python" {
+		t.Fatalf("a refused guarded attempt changed the row: mode = %q", mode)
+	}
+
+	// A digest no live row carries is refused by name, not silently
+	// matched to something else.
+	if _, err := captureVerbOut(t, "disable",
+		"-operations", "hotspots", "-mode", "shadow",
+		"-postgres-uri", dsn, "-catalog", catalogPath,
+		"-document", "1111111111111111111111111111111111111111111111111111111111111119",
+		"-apply", "-recorded-by", "lane-routing-verbs", "-review-evidence", "document-drift disable, digest not live",
+	); err == nil {
+		t.Fatal("a document digest with no live row must be refused, not silently matched")
+	}
+
+	// -document naming more than one operation is refused before any
+	// write is attempted.
+	secondDigest := "7777777777777777777777777777777777777777777777777777777777777772"
+	multiCatalogPath := writeCatalog(t, map[string]string{"hotspots": liveDigest, verbTestOperation: secondDigest})
+	if _, err := captureVerbOut(t, "disable",
+		"-operations", "hotspots,"+verbTestOperation, "-mode", "python",
+		"-postgres-uri", dsn, "-catalog", multiCatalogPath, "-document", driftedDigest,
+		"-apply", "-recorded-by", "lane-routing-verbs", "-review-evidence", "document-drift disable, multiple operations",
+	); err == nil {
+		t.Fatal("-document with more than one named operation must be refused")
+	}
+}
+
+func readHotspotsMode(t *testing.T, ctx context.Context, pool *pgxpool.Pool) string {
+	t.Helper()
+	var mode string
+	if err := pool.QueryRow(ctx, `SELECT mode FROM go_api_routing_state WHERE selected_operation = 'hotspots'`).Scan(&mode); err != nil {
+		t.Fatal(err)
+	}
+	return mode
+}
+
+// captureVerbOut is captureVerb without the (unused, in most callers)
+// stderr half, matching the two-return shape most disable/repoint
+// assertions in this file actually want.
+func captureVerbOut(t *testing.T, argv ...string) (string, error) {
+	t.Helper()
+	out, _, err := captureVerb(t, argv...)
+	return out, err
+}
+
 // A classification failure
 // (`RoutingStatusRows`) must file into `ClassificationError`, NEVER into
 // `RegistryDBError` -- the census (`CountRowsBySchemaDigest`) reads only

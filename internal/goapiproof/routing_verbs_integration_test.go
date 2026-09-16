@@ -361,6 +361,141 @@ func TestDisableGuardRefusesARowThatMovedAndWritesNothing(t *testing.T) {
 	}
 }
 
+// the catalog-driven path above cannot check a
+// -candidate-build guard against a DOCUMENT_DRIFT row at all -- it has no
+// catalog digest to compare the guard against, so it SKIPS the operation
+// (DeadRowsOnly) rather than disabling it. This is the RED half:
+// characterizing that today's disable cannot select this row while a
+// guard is named.
+func TestDisableCannotGuardCheckADocumentDriftRowByCatalogDigestAlone(t *testing.T) {
+	ctx := t.Context()
+	pool := startAuditedRegistryPostgres(t)
+	const driftedDigest = "3333333333333333333333333333333333333333333333333333333333333331"
+	seedRow(t, ctx, "featureFlags", driftedDigest, "canary", verbsRunningBuild, pool)
+
+	changes, err := Disable(ctx, pool, DisableRequest{
+		SchemaDigest: testSchemaDigest,
+		Operations:   []string{"featureFlags"},
+		// The CATALOG's digest -- NOT what the row carries.
+		DocumentDigest:         map[string]string{"featureFlags": testDocumentDigest},
+		NewMode:                "python",
+		ExpectedCandidateBuild: verbsRunningBuild,
+		RecordedBy:             "lane-routing-verbs",
+		ReviewEvidence:         "document-drift disable, red",
+		Apply:                  true,
+	})
+	if err != nil {
+		t.Fatalf("Disable: %v", err)
+	}
+	if len(changes) != 1 || !changes[0].DeadRowsOnly || changes[0].Applied {
+		t.Fatalf("changes = %+v, want one DeadRowsOnly, unapplied change -- exactly what makes this row unselectable while guarded", changes)
+	}
+	if mode, _, _, _, _ := readRow(t, ctx, pool, "featureFlags"); mode != "canary" {
+		t.Fatalf("mode = %q, want canary (untouched)", mode)
+	}
+}
+
+// GREEN: naming the row's own digest supplies the comparison target the
+// catalog-driven path above has none of, so the SAME guard that skipped
+// the operation now checks and the write proceeds. Same provenance
+// fields (RecordedBy, ReviewEvidence) as the catalog path, on the same
+// row.
+func TestDisableSelectDocumentDigestGuardsAndDisablesADocumentDriftRow(t *testing.T) {
+	ctx := t.Context()
+	pool := startAuditedRegistryPostgres(t)
+	const driftedDigest = "3333333333333333333333333333333333333333333333333333333333333332"
+	seedRow(t, ctx, "featureFlags", driftedDigest, "canary", verbsRunningBuild, pool)
+
+	changes, err := Disable(ctx, pool, DisableRequest{
+		SchemaDigest:           testSchemaDigest,
+		Operations:             []string{"featureFlags"},
+		DocumentDigest:         map[string]string{"featureFlags": testDocumentDigest},
+		SelectDocumentDigest:   driftedDigest,
+		NewMode:                "python",
+		ExpectedCandidateBuild: verbsRunningBuild,
+		RecordedBy:             "lane-routing-verbs",
+		ReviewEvidence:         "document-drift disable, green",
+		Apply:                  true,
+	})
+	if err != nil {
+		t.Fatalf("Disable -document: %v", err)
+	}
+	if len(changes) != 1 || !changes[0].Applied || changes[0].DocumentDigest != driftedDigest {
+		t.Fatalf("changes = %+v, want the drifted row applied at its own digest", changes)
+	}
+	mode, build, evidence, recordedBy, _ := readRow(t, ctx, pool, "featureFlags")
+	if mode != "python" {
+		t.Fatalf("mode = %q, want python", mode)
+	}
+	if build != verbsRunningBuild {
+		t.Fatalf("current_candidate_build = %q, want it UNCHANGED at %q -- disable changes mode only", build, verbsRunningBuild)
+	}
+	if recordedBy != "lane-routing-verbs" || evidence != "document-drift disable, green" {
+		t.Fatalf("provenance not recorded: recorded_by=%q review_evidence=%q", recordedBy, evidence)
+	}
+
+	statuses, err := RoutingStatusRows(ctx, pool, testSchemaDigest, map[string]string{"featureFlags": testDocumentDigest})
+	if err != nil {
+		t.Fatalf("RoutingStatusRows: %v", err)
+	}
+	if len(statuses) != 1 || statuses[0].DigestState != DigestStale || len(statuses[0].UnreachableDocumentDigests) != 1 {
+		t.Fatalf("status = %+v, want STALE naming the drifted digest -- disable is an UPDATE, never a DELETE, so the row is still there, honestly reported as unreachable", statuses)
+	}
+}
+
+// A guard named against the row's OWN digest still refuses on a genuine
+// mismatch, and writes nothing -- the selector changes WHICH row is
+// checked, never whether a mismatch is enforced.
+func TestDisableSelectDocumentDigestStillRefusesAMismatchedGuard(t *testing.T) {
+	ctx := t.Context()
+	pool := startAuditedRegistryPostgres(t)
+	const driftedDigest = "3333333333333333333333333333333333333333333333333333333333333333"
+	seedRow(t, ctx, "featureFlags", driftedDigest, "canary", verbsRunningBuild, pool)
+
+	_, err := Disable(ctx, pool, DisableRequest{
+		SchemaDigest:           testSchemaDigest,
+		Operations:             []string{"featureFlags"},
+		DocumentDigest:         map[string]string{"featureFlags": testDocumentDigest},
+		SelectDocumentDigest:   driftedDigest,
+		NewMode:                "python",
+		ExpectedCandidateBuild: testCandidateBuild, // NOT what the row carries
+		RecordedBy:             "lane-routing-verbs",
+		ReviewEvidence:         "document-drift disable, guard mismatch",
+		Apply:                  true,
+	})
+	if !errors.Is(err, ErrDisableGuardMismatch) {
+		t.Fatalf("Disable = %v, want ErrDisableGuardMismatch", err)
+	}
+	if mode, build, _, _, _ := readRow(t, ctx, pool, "featureFlags"); mode != "canary" || build != verbsRunningBuild {
+		t.Fatalf("a refused guarded disable changed the row: mode=%q build=%q", mode, build)
+	}
+}
+
+// A digest no live row for the named operation carries is refused BY
+// NAME, not silently matched to the catalog's row or to nothing at all.
+func TestDisableSelectDocumentDigestRefusesWhenNoLiveRowCarriesIt(t *testing.T) {
+	ctx := t.Context()
+	pool := startAuditedRegistryPostgres(t)
+	seedRow(t, ctx, "featureFlags", testDocumentDigest, "canary", verbsRunningBuild, pool)
+
+	_, err := Disable(ctx, pool, DisableRequest{
+		SchemaDigest:         testSchemaDigest,
+		Operations:           []string{"featureFlags"},
+		DocumentDigest:       map[string]string{"featureFlags": testDocumentDigest},
+		SelectDocumentDigest: "4444444444444444444444444444444444444444444444444444444444444444",
+		NewMode:              "python",
+		RecordedBy:           "lane-routing-verbs",
+		ReviewEvidence:       "document-drift disable, digest not live",
+		Apply:                true,
+	})
+	if !errors.Is(err, ErrDisableDocumentNotLive) {
+		t.Fatalf("Disable = %v, want ErrDisableDocumentNotLive", err)
+	}
+	if mode, _, _, _, _ := readRow(t, ctx, pool, "featureFlags"); mode != "canary" {
+		t.Fatalf("a refused disable changed the row: mode=%q", mode)
+	}
+}
+
 // status classifies against the LIVE digest. A row at another digest is
 // STALE -- present in psql, unreachable in fact, which is exactly how the
 // CHAOS-5416 outage stayed invisible for six days.

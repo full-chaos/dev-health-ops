@@ -360,6 +360,29 @@ func TestDisableRequestRefusesEachMissingFieldInIsolation(t *testing.T) {
 	}
 }
 
+// a single document digest names at most one row for one
+// operation -- the routing table's primary key is (schema_digest,
+// document_digest, selected_operation) -- so SelectDocumentDigest is
+// refused alongside more than one named operation. (Disable already
+// refuses zero named operations on its own, for every request, selector
+// or not -- see TestDisableRequestRefusesEachMissingFieldInIsolation.)
+func TestDisableRequestDocumentSelectorRequiresExactlyOneOperation(t *testing.T) {
+	two := DisableRequest{SchemaDigest: "sha256:x", NewMode: "python", SelectDocumentDigest: "deaddigest", Operations: []string{"a", "b"}}
+	if err := two.validate(); !errors.Is(err, ErrDisableDocumentSelectorNeedsOneOperation) {
+		t.Fatalf("validate() = %v, want ErrDisableDocumentSelectorNeedsOneOperation with two named operations", err)
+	}
+	one := two
+	one.Operations = []string{"a"}
+	if err := one.validate(); err != nil {
+		t.Fatalf("exactly one named operation with a selector must validate: %v", err)
+	}
+	none := two
+	none.SelectDocumentDigest = ""
+	if err := none.validate(); err != nil {
+		t.Fatalf("more than one operation must still validate when no selector is named: %v", err)
+	}
+}
+
 func TestDisableChangeIsNoopCoversBothWaysARowCannotMove(t *testing.T) {
 	if !(DisableChange{CurrentMode: "", NewMode: "python"}).IsNoop() {
 		t.Fatal("no row at the live digest is a no-op -- disable never inserts")

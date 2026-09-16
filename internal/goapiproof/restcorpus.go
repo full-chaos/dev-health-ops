@@ -523,6 +523,37 @@ var personDrilldownIssuesParity = Options{
 // actually has, so it covers only the entity_type/entity_id validation
 // surface and the entity-id-shape guards, which need no live id at all.
 // AssertRESTPathCoverage is satisfied by these entries' PATH regardless.
+
+// heatmapDedupParity is shared by every admissible (2xx) heatmap request:
+// repos (ReplacingMergeTree(last_synced)) is joined without FINAL by
+// every one of api/queries/heatmap.py's seven readers, and
+// git_pull_requests/git_commits (same engine/version column) are read
+// the same way by review_wait_density/repo_touchpoints and
+// active_hours respectively -- the identical mechanism already declared
+// for drilldown/prs's own repos+git_pull_requests join (this file's own
+// drilldownPRsParity, same ticket, same class of divergence on the same
+// table pair). This port's internal/heatmap package reads every one of
+// those tables FINAL, with
+// org_id inside the same statement (heatmap.go's own package doc
+// comment). An unmerged physical version of a repo/PR/commit row can
+// surface as an extra bucket, a different aggregate total for an
+// existing weekday/hour/day/week/repo/file bucket, or an extra axis
+// label -- Paths names the whole axes/cells payload for the same reason
+// peopleParity/peopleDetailParity's own citations do: the affected
+// bucket is not fixed to one path, it depends on which source table
+// happens to hold an unmerged version at request time. Go is correct.
+var heatmapDedupParity = Options{
+	BaselineDefects: []BaselineDefect{
+		{
+			Ticket:             "CHAOS-5803",
+			Reason:             "repos, and (depending on the requested metric) git_pull_requests or git_commits, are each ReplacingMergeTree(last_synced) (000_raw_tables.sql); api/queries/heatmap.py's readers join repos with no FINAL or other merge-time dedup at all, where this port (internal/heatmap) reads every one of them FINAL, org_id filtered inside the same JOIN's ON clause. An unmerged physical version can change a weekday/hour/day/week/repo/file bucket's aggregate total, add an extra bucket, or add an extra axis label. Go is correct.",
+			Paths:              []string{"data.axes", "data.cells"},
+			Intermittent:       true,
+			IntermittentReason: "present only while repos, git_pull_requests or git_commits (whichever this request's metric reads) holds an unmerged physical version inside the requested window; a comparison taken after the next background merge shows no divergence",
+		},
+	},
+}
+
 var restEndpointSpecs = map[string]RESTEndpointSpec{
 	"REST:GET:/api/v1/quadrant": {
 		Method: "GET",
@@ -726,6 +757,88 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 					{Name: "team_id", ListPath: "teams"},
 					{Name: "repo_id", ListPath: "repos"},
 				},
+			},
+		},
+	},
+	"REST:GET:/api/v1/heatmap": {
+		Method: "GET",
+		Path:   "/api/v1/heatmap",
+		Requests: []RESTRequest{
+			{
+				// org scope (the default): no repo resolution query
+				// runs at all (scopeFilterForMetric's own org-scope
+				// no-op, heatmap package doc comment), so this exercises
+				// only the metric read itself.
+				Name:                "review_wait_density_org",
+				Query:               url.Values{"type": {"temporal_load"}, "metric": {"review_wait_density"}},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode: RESTBodyModeJSON, Parity: heatmapDedupParity,
+			},
+			{
+				// repo scope, scope_id bound to filters/options' own
+				// live repo_id -- exercises resolveRepoFilterIDs's own
+				// repos-FINAL read.
+				Name:                "repo_touchpoints_repo_scoped",
+				Query:               url.Values{"type": {"context_switch"}, "metric": {"repo_touchpoints"}, "scope_type": {"repo"}},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode:   RESTBodyModeJSON,
+				Parity:     heatmapDedupParity,
+				IDBindings: []RESTIDBinding{{Producer: "repo_id", QueryParam: "scope_id"}},
+			},
+			{
+				Name:                "hotspot_risk_org",
+				Query:               url.Values{"type": {"risk"}, "metric": {"hotspot_risk"}},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode: RESTBodyModeJSON, Parity: heatmapDedupParity,
+			},
+			{
+				// developer scope, scope_id bound to people's own live
+				// person_id (GET /api/v1/people's query_string_search
+				// entry) -- exercises identity resolution plus the
+				// git_commits-side dedup read.
+				Name:                "active_hours_person_scoped",
+				Query:               url.Values{"type": {"individual"}, "metric": {"active_hours"}, "scope_type": {"developer"}},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode:   RESTBodyModeJSON,
+				Parity:     heatmapDedupParity,
+				IDBindings: []RESTIDBinding{{Producer: "person_id", QueryParam: "scope_id"}},
+			},
+			{
+				// newHeatmapWorkHandler aggregates every invalid query
+				// param into ONE 422, byte-shaped like Pydantic's own
+				// aggregation -- missing type+metric answers the same
+				// missingFieldError shape quadrant/drilldown/prs already
+				// use.
+				Name:                "missing_type_and_metric",
+				Query:               url.Values{},
+				WantCandidateStatus: 422, WantBaselineStatus: 422,
+				BodyMode: RESTBodyModeJSON,
+			},
+			{
+				// _metric_for's own 404, surfaced through the HTTP layer
+				// via heatmap.AsRequestError.
+				Name:                "unknown_metric",
+				Query:               url.Values{"type": {"temporal_load"}, "metric": {"not_a_real_metric"}},
+				WantCandidateStatus: 404, WantBaselineStatus: 404,
+				BodyMode: RESTBodyModeJSON,
+			},
+			{
+				// ScopeFilter.level's Literal-set validation, surfaced as
+				// 400 "Invalid scope filter".
+				Name:                "invalid_scope_type",
+				Query:               url.Values{"type": {"temporal_load"}, "metric": {"review_wait_density"}, "scope_type": {"bogus"}},
+				WantCandidateStatus: 400, WantBaselineStatus: 400,
+				BodyMode: RESTBodyModeJSON,
+			},
+			{
+				// _reject_comparative_params (main.py:202-208): ANY of
+				// these query-param keys present is a 400, regardless of
+				// value -- the same shape people's own corpus entry
+				// already exercises for the identical shared check.
+				Name:                "comparative_param_rejected",
+				Query:               url.Values{"type": {"temporal_load"}, "metric": {"review_wait_density"}, "rank": {"1"}},
+				WantCandidateStatus: 400, WantBaselineStatus: 400,
+				BodyMode: RESTBodyModeJSON,
 			},
 		},
 	},
@@ -1564,6 +1677,7 @@ var restRunOrder = []string{
 	"REST:POST:/api/v1/investment/explain",
 	"REST:GET:/api/v1/meta",
 	"REST:GET:/api/v1/quadrant",
+	"REST:GET:/api/v1/heatmap",
 }
 
 // RESTRunOrder returns a fresh copy of restRunOrder -- cmd/go-api-rest-

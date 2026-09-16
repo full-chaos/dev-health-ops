@@ -573,14 +573,22 @@ func TestLoadRESTEndpointsOnTheRealRepo(t *testing.T) {
 		t.Fatalf("GET /api/v1/flame/aggregated = %+v, want ported at flame_aggregated_route.go", flameAggregatedGet)
 	}
 
+	heatmapGet, ok := byKey["GET /api/v1/heatmap"]
+	if !ok {
+		t.Fatal("expected GET /api/v1/heatmap to be enumerated")
+	}
+	if heatmapGet.Status != RESTPorted || !strings.Contains(heatmapGet.GoHandler, "heatmap_route.go") {
+		t.Fatalf("GET /api/v1/heatmap = %+v, want ported at heatmap_route.go", heatmapGet)
+	}
+
 	ported, _, _ := RESTEndpointCounts(rows)
-	if ported != 17 {
-		t.Fatalf("got %d ported routes, want exactly 17 (POST /api/v1/investment/explain, GET /api/v1/quadrant, "+
+	if ported != 18 {
+		t.Fatalf("got %d ported routes, want exactly 18 (POST /api/v1/investment/explain, GET /api/v1/quadrant, "+
 			"GET /api/v1/filters/options, POST+GET /api/v1/drilldown/prs, GET /api/v1/meta, "+
 			"POST+GET /api/v1/drilldown/issues, POST+GET /api/v1/explain, GET /api/v1/people, "+
 			"GET /api/v1/people/{person_id}/summary, GET /api/v1/people/{person_id}/metric, GET /api/v1/flame, "+
 			"GET /api/v1/people/{person_id}/drilldown/prs, GET /api/v1/people/{person_id}/drilldown/issues, "+
-			"GET /api/v1/flame/aggregated) -- "+
+			"GET /api/v1/flame/aggregated, GET /api/v1/heatmap) -- "+
 			"if this changed, a route was ported or un-ported; update this pin, it is not stale by accident", ported)
 	}
 }

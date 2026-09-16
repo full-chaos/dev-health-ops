@@ -1,0 +1,36 @@
+{
+  "org_id": "00000000-0000-4000-8000-0000000ec101",
+  "day": "2026-09-04",
+  "team_cognitive_load": [
+    {
+      "team_id": "team-a",
+      "pr_interruption_load": 9.0,
+      "context_spread_count": 3.0,
+      "review_request_load": 3.0,
+      "after_hours_commit_ratio": 0.13333333333333333,
+      "weekend_commit_ratio": 0.1,
+      "contributing_repo_count": 2,
+      "sample_author_count": 2
+    },
+    {
+      "team_id": "team-b",
+      "pr_interruption_load": 0.0,
+      "context_spread_count": 0.0,
+      "review_request_load": 0.0,
+      "after_hours_commit_ratio": 0.0,
+      "weekend_commit_ratio": 0.0,
+      "contributing_repo_count": 1,
+      "sample_author_count": 0
+    },
+    {
+      "team_id": "team-c",
+      "pr_interruption_load": 5.0,
+      "context_spread_count": 1.0,
+      "review_request_load": 0.0,
+      "after_hours_commit_ratio": null,
+      "weekend_commit_ratio": null,
+      "contributing_repo_count": 1,
+      "sample_author_count": 1
+    }
+  ]
+}

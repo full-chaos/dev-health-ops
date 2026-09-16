@@ -276,7 +276,10 @@
     },
     "daily/work_graph_edges": {
       "parity": {
-        "status": "unverified"
+        "status": "verified",
+        "ticket": "CHAOS-5794",
+        "sha": "cb9f5f48cece1ed836cd62f76854b9d6c9c73280",
+        "evidence": "internal/jobs/metrics/workgraphedges/compute_test.go TestWorkGraphEdgesMatchFrozenPythonGolden (frozen Python golden; PASS re-run at this sha)"
       },
       "deployed": {
         "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
@@ -307,7 +310,10 @@
     },
     "daily/work_item_attribution": {
       "parity": {
-        "status": "unverified"
+        "status": "verified",
+        "ticket": "CHAOS-5794",
+        "sha": "cb9f5f48cece1ed836cd62f76854b9d6c9c73280",
+        "evidence": "internal/providersync/work_item_attribution_backstop_oracle_test.go TestWorkItemAttributionBackstopMatchesLivePythonProduction (exercises remaining.BuildWorkItemAttributionRows, the same row-building function this family's native executor calls, against a frozen Python oracle snapshot; PASS re-run at this sha)"
       },
       "deployed": {
         "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
@@ -406,7 +412,10 @@
     },
     "finalize/team_cognitive_load": {
       "parity": {
-        "status": "unverified"
+        "status": "verified",
+        "ticket": "CHAOS-5794",
+        "sha": "cb9f5f48cece1ed836cd62f76854b9d6c9c73280",
+        "evidence": "internal/jobs/metrics/daily/team_cognitive_load_parity_golden_test.go TestTeamCognitiveLoadMatchesTheFrozenPythonGolden (frozen Python golden; PASS re-run at this sha)"
       },
       "deployed": {
         "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",

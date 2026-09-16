@@ -1,0 +1,24 @@
+[
+  {
+    "person_id": "c160f8cc69a4f0bf2b0362752353d060",
+    "display_name": "Alice",
+    "identities": [
+      {
+        "provider": "email",
+        "handle": "alice@example.com"
+      }
+    ],
+    "active": true
+  },
+  {
+    "person_id": "ea334e92d60e259e7da22becccff0b24",
+    "display_name": "alicia",
+    "identities": [
+      {
+        "provider": "github",
+        "handle": "alicia"
+      }
+    ],
+    "active": false
+  }
+]

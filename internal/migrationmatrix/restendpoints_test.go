@@ -443,11 +443,19 @@ func TestLoadRESTEndpointsOnTheRealRepo(t *testing.T) {
 		t.Fatalf("GET /api/v1/explain = %+v, want ported at explain_route.go", explainGet)
 	}
 
+	peopleGet, ok := byKey["GET /api/v1/people"]
+	if !ok {
+		t.Fatal("expected GET /api/v1/people to be enumerated")
+	}
+	if peopleGet.Status != RESTPorted || !strings.Contains(peopleGet.GoHandler, "people_route.go") {
+		t.Fatalf("GET /api/v1/people = %+v, want ported at people_route.go", peopleGet)
+	}
+
 	ported, _, _ := RESTEndpointCounts(rows)
-	if ported != 10 {
-		t.Fatalf("got %d ported routes, want exactly 10 (POST /api/v1/investment/explain, GET /api/v1/quadrant, "+
+	if ported != 11 {
+		t.Fatalf("got %d ported routes, want exactly 11 (POST /api/v1/investment/explain, GET /api/v1/quadrant, "+
 			"GET /api/v1/filters/options, POST+GET /api/v1/drilldown/prs, GET /api/v1/meta, "+
-			"POST+GET /api/v1/drilldown/issues, POST+GET /api/v1/explain) -- if this changed, "+
-			"a route was ported or un-ported; update this pin, it is not stale by accident", ported)
+			"POST+GET /api/v1/drilldown/issues, POST+GET /api/v1/explain, GET /api/v1/people) -- "+
+			"if this changed, a route was ported or un-ported; update this pin, it is not stale by accident", ported)
 	}
 }

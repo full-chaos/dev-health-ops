@@ -237,7 +237,7 @@ A row that is live, reachable to real clients (`canary`/`primary`) and carries n
 is required before stage 4/5, and "a bare 200 does not qualify".
 
 <!-- BEGIN GENERATED GO API OPERATIONS -->
-_Rendered 2026-09-16T12:25:30Z against main merge-base `90221956e6ce610f55d3cb9cc135b75cb2772660`; SDL digest pin `sha256:19485ec136d04de0935717dca8b4f5fd27dd0351fe96b854d40f433229468fd0`; fleet read 2026-09-16T12:25:30Z via fleet file fleet-prod.json._
+_Rendered 2026-09-16T12:25:30Z against main merge-base `0fc1319fcb42a69eafc69a6781ec7baba073a129`; SDL digest pin `sha256:19485ec136d04de0935717dca8b4f5fd27dd0351fe96b854d40f433229468fd0`; fleet read 2026-09-16T12:25:30Z via fleet file fleet-prod.json._
 
 _Rows in `go_api_proof_run` at read time: **515**. Operations reachable to real clients with no deployed-executed proof: **0**. Rows whose mode says Go but whose schema digest no longer matches the pin, so every request silently falls back to Python: **0**._
 
@@ -281,7 +281,7 @@ sync with either side, so a route added, removed or newly wired on either plane 
 time the tool runs, and the doc-drift check below fails until it is re-rendered.
 
 <!-- BEGIN GENERATED REST ENDPOINTS -->
-_32 `/api/v1/*` routes in `src/dev_health_ops/api/main.py`: **10** ported, **22** python-only, **0** dead-by-design._
+_32 `/api/v1/*` routes in `src/dev_health_ops/api/main.py`: **11** ported, **21** python-only, **0** dead-by-design._
 
 | Method | Path | Status | Go handler |
 | --- | --- | --- | --- |
@@ -306,7 +306,7 @@ _32 `/api/v1/*` routes in `src/dev_health_ops/api/main.py`: **10** ported, **22*
 | GET | `/api/v1/meta` | ported | `cmd/query-api/meta_route.go:79` |
 | GET | `/api/v1/opportunities` | python-only | -- |
 | POST | `/api/v1/opportunities` | python-only | -- |
-| GET | `/api/v1/people` | python-only | -- |
+| GET | `/api/v1/people` | ported | `cmd/query-api/people_route.go:85` |
 | GET | `/api/v1/people/{person_id}/drilldown/issues` | python-only | -- |
 | GET | `/api/v1/people/{person_id}/drilldown/prs` | python-only | -- |
 | GET | `/api/v1/people/{person_id}/metric` | python-only | -- |

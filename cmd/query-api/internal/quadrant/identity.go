@@ -119,10 +119,15 @@ func buildReverseAliasMap(aliases map[string][]string) map[string]string {
 	return reverse
 }
 
-// personIDForIdentity ports person_id_for_identity (people_identity.py:
-// 57-59): an md5 hex digest, not a security hash -- it is this system's
-// stable per-identity id, verbatim.
-func personIDForIdentity(identity string) string {
+// PersonIDForIdentity derives this system's stable per-identity id from an
+// identity string, using the SAME md5 hex digest Python's
+// person_id_for_identity (people_identity.py:57-59) uses -- an
+// identity-derivation contract every reader of a person_id must agree on,
+// not a security hash. Exported so cmd/query-api/internal/people (a
+// sibling port of the same Python identity scheme, for a different route)
+// calls this one implementation instead of carrying its own md5 call
+// site.
+func PersonIDForIdentity(identity string) string {
 	sum := md5.Sum([]byte(identity)) //nolint:gosec // parity requirement, see package doc comment.
 	return hex.EncodeToString(sum[:])
 }
@@ -237,11 +242,11 @@ func resolveIdentityVariants(ctx context.Context, client QueryClient, personID, 
 	}
 
 	for canonical, aliasList := range aliases {
-		if personIDForIdentity(canonical) == personID {
+		if PersonIDForIdentity(canonical) == personID {
 			return identityVariants(canonical, aliasList), nil
 		}
 		for _, alias := range aliasList {
-			if personIDForIdentity(alias) == personID {
+			if PersonIDForIdentity(alias) == personID {
 				return identityVariants(canonical, aliasList), nil
 			}
 		}

@@ -227,7 +227,7 @@ func TestGoldenPersonScopeTeamCohort(t *testing.T) {
 		t.Fatalf("BuildResponse: %v", err)
 	}
 
-	wantEntityID := personIDForIdentity("jane@example.com")
+	wantEntityID := PersonIDForIdentity("jane@example.com")
 	wantLabel := displayNameForIdentity("jane@example.com")
 	want := Response{
 		Axes: Axes{

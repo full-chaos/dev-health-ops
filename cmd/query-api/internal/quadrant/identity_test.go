@@ -12,7 +12,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 )
 
-// TestPersonIDForIdentityMatchesPythonMD5 pins personIDForIdentity against
+// TestPersonIDForIdentityMatchesPythonMD5 pins PersonIDForIdentity against
 // hashlib.md5(identity.encode("utf-8")).hexdigest().lower() (people_identity.py:
 // 57-59) for a handful of identity shapes.
 func TestPersonIDForIdentityMatchesPythonMD5(t *testing.T) {
@@ -22,8 +22,8 @@ func TestPersonIDForIdentityMatchesPythonMD5(t *testing.T) {
 		"github:octocat":       "c4837d37fe567d796fde9e102cf3930c",
 	}
 	for identity, want := range cases {
-		if got := personIDForIdentity(identity); got != want {
-			t.Fatalf("personIDForIdentity(%q) = %q, want %q", identity, got, want)
+		if got := PersonIDForIdentity(identity); got != want {
+			t.Fatalf("PersonIDForIdentity(%q) = %q, want %q", identity, got, want)
 		}
 	}
 }

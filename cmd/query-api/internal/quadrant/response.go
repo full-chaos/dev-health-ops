@@ -194,7 +194,7 @@ func rowEntity(row metricRow, scope string, teamLabels map[string]string) (entit
 		if row.EntityID == "" {
 			return "", ""
 		}
-		entityID = personIDForIdentity(row.EntityID)
+		entityID = PersonIDForIdentity(row.EntityID)
 		label = displayNameForIdentity(row.EntityID)
 	} else {
 		entityID = row.EntityID

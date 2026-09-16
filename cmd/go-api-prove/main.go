@@ -244,6 +244,9 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	if err := refuseEmptyRegistry(registry, f.registryURL); err != nil {
+		return err
+	}
 
 	// The build identity is fetched BEFORE anything is measured, and a
 	// failure here stops the run rather than degrading into an
@@ -424,6 +427,19 @@ func run() error {
 // removal.
 type routingRowSource interface {
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}
+
+// refuseEmptyRegistry is this command's own copy of the guard
+// `enable`/`repoint` each carry at their call site: FetchRegistry itself
+// accepts an empty registry (status needs the schema digest that comes
+// with one even when nothing is registered), so a caller with nothing to
+// prove or write against refuses it locally instead. Extracted to its
+// own function so a test can drive it without a live query-api.
+func refuseEmptyRegistry(registry goapiproof.RegistryView, registryURL string) error {
+	if len(registry.DocumentDigest) == 0 {
+		return fmt.Errorf("goapiproof: %s registers no operations -- there is nothing to prove", goapiproof.EndpointLabel(registryURL))
+	}
+	return nil
 }
 
 // isNilSource reports whether the source is absent, including the

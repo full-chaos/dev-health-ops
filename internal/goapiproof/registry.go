@@ -498,9 +498,10 @@ func FetchRegistry(ctx context.Context, client *http.Client, registryURL string)
 	// this whole package exists to match) tolerates exactly this shape:
 	// executed against the identical response, it returns
 	// `GoPlaneRegistry(schema_digest=..., operations={})`, not a refusal.
-	// The refusal moves to the WRITE-verb call sites instead (enable.go,
-	// repoint.go -- `disable` calls neither by design), which are the
-	// only callers for which "nothing to prove" is actually true.
+	// The refusal moves to the call sites for which "nothing to prove" is
+	// actually true instead: the WRITE verbs (enable.go, repoint.go --
+	// `disable` calls neither by design) and the prover
+	// (cmd/go-api-prove/main.go's refuseEmptyRegistry).
 	operations := make([]registryOperation, 0, len(rawOperations))
 	for index, rawOp := range rawOperations {
 		operationName, _, err := exactStringField(rawOp, "operation")

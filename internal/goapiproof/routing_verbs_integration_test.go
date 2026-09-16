@@ -242,6 +242,37 @@ func TestEnableIsIdempotentOnItsOwnPrimaryKey(t *testing.T) {
 	}
 }
 
+// upsertRoutingStateSQL's own comment says updated_at is refreshed even
+// on a no-change write, on purpose: it is the row's only timestamp, and
+// "re-confirmed today" reads very differently from "nothing has touched
+// this since September". Nothing pinned that the ON CONFLICT branch
+// actually does this rather than leaving the ORIGINAL row's timestamp in
+// place.
+func TestEnableRefreshesUpdatedAtOnAReConfirmingWrite(t *testing.T) {
+	ctx := t.Context()
+	pool := startAuditedRegistryPostgres(t)
+	seedProof(t, ctx, pool, "featureFlags", testDocumentDigest, verbsRunningBuild, EnablementProofStage, EnablementProofTerminalState)
+
+	if _, err := Enable(ctx, pool, enableRequest("featureFlags")); err != nil {
+		t.Fatalf("first Enable: %v", err)
+	}
+	past := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	if _, err := pool.Exec(ctx, `UPDATE go_api_routing_state SET updated_at = $1 WHERE selected_operation = 'featureFlags'`, past); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Enable(ctx, pool, enableRequest("featureFlags")); err != nil {
+		t.Fatalf("re-confirming Enable: %v", err)
+	}
+	var updatedAt time.Time
+	if err := pool.QueryRow(ctx, `SELECT updated_at FROM go_api_routing_state WHERE selected_operation = 'featureFlags'`).Scan(&updatedAt); err != nil {
+		t.Fatal(err)
+	}
+	if !updatedAt.After(past) {
+		t.Fatalf("updated_at = %v, still the seeded past value -- a re-confirming write with no other change must still refresh it", updatedAt)
+	}
+}
+
 // The off-ramp. It must work with no query-api, no credential and no
 // candidate build -- only a database.
 func TestDisableTurnsARowOffWithoutTouchingItsBuild(t *testing.T) {
@@ -1360,5 +1391,41 @@ func TestEnablesBeforeStateReadSeesADisableThatCommittedWhileItWasBlocked(t *tes
 	}
 	if result.mode != "python" {
 		t.Fatalf("enable's before-state read saw mode=%q, want %q -- it must reflect disable's COMMITTED write, not a stale pre-disable snapshot", result.mode, "python")
+	}
+}
+
+// "a genuine read failure now aborts the whole enable, the same as any
+// other mid-transaction database error" is declared right above the read
+// this pins, but only the ErrNoRows branch immediately below it had a
+// test. This forces the OTHER branch: a real, non-ErrNoRows failure at
+// exactly this SELECT, via an ACCESS EXCLUSIVE table lock held by
+// another session plus a deadline on the caller's own context. Production
+// never bounds this read with a deadline (see this file's package
+// comment on the lock-order fix), but Enable's ctx parameter is a real
+// seam a test can use one on.
+func TestEnableAbortsOnAGenuineBeforeStateReadFailure(t *testing.T) {
+	ctx := t.Context()
+	pool := startAuditedRegistryPostgres(t)
+	seedRow(t, ctx, "featureFlags", testDocumentDigest, "canary", testCandidateBuild, pool)
+
+	holder, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin lock side: %v", err)
+	}
+	t.Cleanup(func() { _ = holder.Rollback(ctx) })
+	if _, err := holder.Exec(ctx, `LOCK TABLE go_api_routing_state IN ACCESS EXCLUSIVE MODE`); err != nil {
+		t.Fatalf("lock table: %v", err)
+	}
+
+	boundedCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+	request := enableRequest("featureFlags")
+	request.AcknowledgeUnproven = true
+	if _, err := Enable(boundedCtx, pool, request); err == nil {
+		t.Fatal("Enable must return an error when its before-state read is blocked past the caller's own deadline")
+	} else if !strings.Contains(err.Error(), "read before-state") {
+		t.Fatalf("Enable's error did not name the failing read: %v", err)
+	} else if !strings.Contains(err.Error(), "featureFlags") {
+		t.Fatalf("Enable's error did not name the operation: %v", err)
 	}
 }

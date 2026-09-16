@@ -105,6 +105,27 @@ func TestInstanceIDFlagParsesOperationEqualsValue(t *testing.T) {
 	}
 }
 
+// FetchRegistry itself accepts an empty registry (status needs the
+// schema digest that comes with one), so each caller for which "nothing
+// to prove" is actually true refuses it locally -- enable.go, repoint.go,
+// and this command. Only the write verbs' copies had a test.
+func TestRefuseEmptyRegistryRefusesAndNamesTheEndpoint(t *testing.T) {
+	empty := goapiproof.RegistryView{SchemaDigest: "sha256:abc", DocumentDigest: map[string]string{}}
+	if err := refuseEmptyRegistry(empty, "http://127.0.0.1:8090/registry"); err == nil {
+		t.Fatal("an empty registry must be refused -- there is nothing to prove")
+	} else if !strings.Contains(err.Error(), "nothing to prove") {
+		t.Fatalf("refused for a different reason: %v", err)
+	}
+
+	nonEmpty := goapiproof.RegistryView{
+		SchemaDigest:   "sha256:abc",
+		DocumentDigest: map[string]string{"featureFlags": "digest"},
+	}
+	if err := refuseEmptyRegistry(nonEmpty, "http://127.0.0.1:8090/registry"); err != nil {
+		t.Fatalf("a non-empty registry must not be refused: %v", err)
+	}
+}
+
 // TestInstanceIDFlagRefusesTheShapesThatAreNotOperationEqualsValue guards
 // the failure this flag exists to prevent: a malformed value silently
 // becoming a no-op, or worse, an invented id nobody typed.

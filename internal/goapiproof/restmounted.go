@@ -48,6 +48,7 @@ var mountedRESTPaths = []string{
 	"/api/v1/drilldown/prs",              // GET, POST
 	"/api/v1/explain",                    // GET, POST
 	"/api/v1/filters/options",            // GET
+	"/api/v1/flame",                      // GET
 	"/api/v1/investment/explain",         // POST
 	"/api/v1/meta",                       // GET
 	"/api/v1/people",                     // GET

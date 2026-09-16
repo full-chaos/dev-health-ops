@@ -1,0 +1,32 @@
+{
+  "entity": {
+    "repo_id": "11111111-1111-1111-1111-111111111111",
+    "number": 7,
+    "title": null,
+    "state": "merged"
+  },
+  "timeline": {
+    "start": "2024-01-05T09:00:00Z",
+    "end": "2024-01-05T20:00:00Z"
+  },
+  "frames": [
+    {
+      "id": "pr:11111111-1111-1111-1111-111111111111:7",
+      "parent_id": null,
+      "label": "PR lifecycle",
+      "start": "2024-01-05T09:00:00Z",
+      "end": "2024-01-05T20:00:00Z",
+      "state": "active",
+      "category": "planned"
+    },
+    {
+      "id": "pr:11111111-1111-1111-1111-111111111111:7:review",
+      "parent_id": "pr:11111111-1111-1111-1111-111111111111:7",
+      "label": "Review and merge",
+      "start": "2024-01-05T09:00:00Z",
+      "end": "2024-01-05T20:00:00Z",
+      "state": "active",
+      "category": "planned"
+    }
+  ]
+}

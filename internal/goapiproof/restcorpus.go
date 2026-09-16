@@ -447,6 +447,21 @@ var peopleDetailParity = Options{
 // reason the GraphQL corpus's own `pr` operation stays refused: an
 // invented id is worse than no entry at all (operations.go's own `pr`
 // doc comment).
+//
+// flame's corpus is REFUSED-BY-NAME only, even with id binding now
+// available: every entry below is a deterministic 4xx that
+// build_flame_response/internal/flame.BuildResponse answers BEFORE any
+// ClickHouse call, never a live 200. The flame entity_id needs a PR
+// number, a work_item_id, or a deployment_id (a repo_id:number,
+// repo_id:deployment_id pair, or a bare work_item_id) -- none of which
+// any producer in this table supplies yet (GET /api/v1/people produces
+// person_id; GET /api/v1/filters/options produces team_id/repo_id; no
+// request anywhere in restRunOrder produces a PR number, work_item_id or
+// deployment_id). Until a producer for one of those exists, this table
+// cannot construct a request that reaches a row this org's live data
+// actually has, so it covers only the entity_type/entity_id validation
+// surface and the entity-id-shape guards, which need no live id at all.
+// AssertRESTPathCoverage is satisfied by these entries' PATH regardless.
 var restEndpointSpecs = map[string]RESTEndpointSpec{
 	"REST:GET:/api/v1/quadrant": {
 		Method: "GET",
@@ -863,6 +878,80 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 			},
 		},
 	},
+	"REST:GET:/api/v1/flame": {
+		Method: "GET",
+		Path:   "/api/v1/flame",
+		Requests: []RESTRequest{
+			{
+				// Both entity_type and entity_id are required (no
+				// default) in main.py's flame() signature -- an empty
+				// query string aggregates both missing-field errors,
+				// the same shape quadrant's own missing_type entry
+				// already exercises for a single required query param.
+				Name:                "missing_entity_type_and_id",
+				Query:               url.Values{},
+				WantCandidateStatus: 422, WantBaselineStatus: 422,
+				BodyMode: RESTBodyModeJSON,
+			},
+			{
+				// _reject_comparative_params (main.py:791, 202-208):
+				// checked AFTER FastAPI's own required-field
+				// validation already passed -- confirmed live for
+				// /api/v1/people (people_route.go's own doc comment,
+				// the same ordering this route's port reuses).
+				Name: "comparative_param_rejected",
+				Query: url.Values{
+					"entity_type": {"issue"}, "entity_id": {"whatever"}, "rank": {"1"},
+				},
+				WantCandidateStatus: 400, WantBaselineStatus: 400,
+				BodyMode: RESTBodyModeJSON,
+			},
+			{
+				// _parse_repo_entity's own missing-separator branch
+				// (services/flame.py:52-55) -- deterministic, no
+				// ClickHouse call, no live id needed.
+				Name: "pr_entity_id_missing_repo_prefix",
+				Query: url.Values{
+					"entity_type": {"pr"}, "entity_id": {"not-prefixed-42"},
+				},
+				WantCandidateStatus: 400, WantBaselineStatus: 400,
+				BodyMode: RESTBodyModeJSON,
+			},
+			{
+				// _parse_repo_entity's own invalid-UUID branch
+				// (services/flame.py:57-58).
+				Name: "pr_entity_id_invalid_repo_uuid",
+				Query: url.Values{
+					"entity_type": {"pr"}, "entity_id": {"not-a-uuid:42"},
+				},
+				WantCandidateStatus: 400, WantBaselineStatus: 400,
+				BodyMode: RESTBodyModeJSON,
+			},
+			{
+				// build_flame_response's own `int(suffix)` guard
+				// (services/flame.py:373-378), reached only after a
+				// syntactically valid (but not necessarily existing)
+				// repo UUID -- still deterministic, no ClickHouse call:
+				// the PR-id-numeric check runs before fetch_pull_request.
+				Name: "pr_entity_id_non_numeric_suffix",
+				Query: url.Values{
+					"entity_type": {"pr"}, "entity_id": {"00000000-0000-0000-0000-000000000000:not-a-number"},
+				},
+				WantCandidateStatus: 400, WantBaselineStatus: 400,
+				BodyMode: RESTBodyModeJSON,
+			},
+			{
+				// The final fallthrough (services/flame.py:426) -- no
+				// entity_type branch matches, no ClickHouse call at all.
+				Name: "unknown_entity_type",
+				Query: url.Values{
+					"entity_type": {"not-a-real-entity-type"}, "entity_id": {"whatever"},
+				},
+				WantCandidateStatus: 404, WantBaselineStatus: 404,
+				BodyMode: RESTBodyModeJSON,
+			},
+		},
+	},
 	"REST:GET:/api/v1/people": {
 		Method: "GET",
 		Path:   "/api/v1/people",
@@ -1230,6 +1319,7 @@ var restRunOrder = []string{
 	"REST:POST:/api/v1/drilldown/prs",
 	"REST:GET:/api/v1/explain",
 	"REST:POST:/api/v1/explain",
+	"REST:GET:/api/v1/flame",
 	"REST:POST:/api/v1/investment/explain",
 	"REST:GET:/api/v1/meta",
 	"REST:GET:/api/v1/quadrant",

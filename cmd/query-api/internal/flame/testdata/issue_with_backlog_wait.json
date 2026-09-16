@@ -1,0 +1,41 @@
+{
+  "entity": {
+    "work_item_id": "issue-123",
+    "provider": "github",
+    "type": "bug",
+    "status": "done"
+  },
+  "timeline": {
+    "start": "2024-01-05T08:00:00Z",
+    "end": "2024-01-09T17:00:00Z"
+  },
+  "frames": [
+    {
+      "id": "issue:issue-123",
+      "parent_id": null,
+      "label": "Issue lifecycle",
+      "start": "2024-01-05T08:00:00Z",
+      "end": "2024-01-09T17:00:00Z",
+      "state": "active",
+      "category": "planned"
+    },
+    {
+      "id": "issue:issue-123:wait",
+      "parent_id": "issue:issue-123",
+      "label": "Backlog waiting",
+      "start": "2024-01-05T08:00:00Z",
+      "end": "2024-01-06T09:00:00Z",
+      "state": "waiting",
+      "category": "planned"
+    },
+    {
+      "id": "issue:issue-123:work",
+      "parent_id": "issue:issue-123",
+      "label": "Active work",
+      "start": "2024-01-06T09:00:00Z",
+      "end": "2024-01-09T17:00:00Z",
+      "state": "active",
+      "category": "planned"
+    }
+  ]
+}

@@ -538,12 +538,20 @@ func TestLoadRESTEndpointsOnTheRealRepo(t *testing.T) {
 		t.Fatalf("GET /api/v1/people/{person_id}/metric = %+v, want ported at people_metric_route.go", peopleMetricGet)
 	}
 
+	flameGet, ok := byKey["GET /api/v1/flame"]
+	if !ok {
+		t.Fatal("expected GET /api/v1/flame to be enumerated")
+	}
+	if flameGet.Status != RESTPorted || !strings.Contains(flameGet.GoHandler, "flame_route.go") {
+		t.Fatalf("GET /api/v1/flame = %+v, want ported at flame_route.go", flameGet)
+	}
+
 	ported, _, _ := RESTEndpointCounts(rows)
-	if ported != 13 {
-		t.Fatalf("got %d ported routes, want exactly 13 (POST /api/v1/investment/explain, GET /api/v1/quadrant, "+
+	if ported != 14 {
+		t.Fatalf("got %d ported routes, want exactly 14 (POST /api/v1/investment/explain, GET /api/v1/quadrant, "+
 			"GET /api/v1/filters/options, POST+GET /api/v1/drilldown/prs, GET /api/v1/meta, "+
 			"POST+GET /api/v1/drilldown/issues, POST+GET /api/v1/explain, GET /api/v1/people, "+
-			"GET /api/v1/people/{person_id}/summary, GET /api/v1/people/{person_id}/metric) -- "+
+			"GET /api/v1/people/{person_id}/summary, GET /api/v1/people/{person_id}/metric, GET /api/v1/flame) -- "+
 			"if this changed, a route was ported or un-ported; update this pin, it is not stale by accident", ported)
 	}
 }

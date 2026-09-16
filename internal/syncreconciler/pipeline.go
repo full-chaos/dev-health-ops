@@ -580,6 +580,11 @@ func (pipeline *MutationPipeline) Step(
 			slog.Warn(
 				"syncreconciler.unreclaimable_sweep_declined_route_change",
 				"candidates", sweepResult.Candidates,
+				// Either branch can decline, and exactly one of them ran, so
+				// both counts are carried: without this the route-unavailable
+				// branch's decline reports the OTHER branch's zero and reads
+				// as a pass that had nothing to abandon.
+				"route_unavailable_candidates", sweepResult.RouteUnavailableCandidates,
 			)
 		}
 		// SHADOW MODE HAD NO OUTPUT AT ALL (adversarial review finding).
@@ -625,16 +630,48 @@ func (pipeline *MutationPipeline) Step(
 				"deferred_to_repair", sweepResult.DeferredToRepair,
 			)
 		}
+		// The route-unavailable branch. ERROR, not WARN: a durable
+		// sync.provider_unit route no runtime can serve is a control-plane
+		// fault that has already cost whole runs, it does not clear on its
+		// own, and the one action that resolves it -- restore the route -- is
+		// an operator's. Emitted on SELECTION so shadow mode says it too, and
+		// it names the fault because "which state" is the next question.
+		if sweepErr == nil && sweepResult.RouteUnavailableCandidates > 0 {
+			slog.Error(
+				"syncreconciler.provider_unit_route_unavailable_terminalized",
+				"mode", string(sweepResult.Mode),
+				"fault", sweepResult.RouteUnavailableFault,
+				"candidates", sweepResult.RouteUnavailableCandidates,
+				"terminalized", sweepResult.RouteUnavailableTerminalized,
+				"runs", sampleIdentifiers(sweepResult.RouteUnavailableRunIDs),
+				"run_sample_truncated", len(sweepResult.RouteUnavailableRunIDs) > sweepReportSample,
+				"unit_id_sample", sampleIdentifiers(sweepResult.RouteUnavailableUnitIDs),
+				"unit_id_sample_truncated", len(sweepResult.RouteUnavailableUnitIDs) > sweepReportSample,
+				"window_seconds", int(RouteUnavailableWindow.Seconds()),
+				"attempt_bound", RouteUnavailableAttempts,
+			)
+		}
 		if sweepErr == nil {
 			swept.UnreclaimableCandidates = int64(sweepResult.Candidates)
 			swept.UnreclaimableTerminalized = int64(sweepResult.Terminalized)
 			// The sweep ran and answered, so its zero -- if it is a zero -- is
 			// a finding rather than an absence.
-			swept.UnreclaimableMeasured = true
+			//
+			// A named route fault means the pass took the OTHER branch and the
+			// strand measurement was never made, so the bit stays clear and
+			// the last measured candidate gauge stands. Setting it here would
+			// publish a zero nobody took, which is the one thing this bit
+			// exists to prevent.
+			swept.UnreclaimableMeasured = sweepResult.RouteUnavailableFault == ""
 			// CHAOS-4586: terminalize() already recomputed sync_runs' rollup
 			// via syncrunrollup.Bump for each of these (always zero in shadow
 			// mode, matching Terminalized's own doc comment).
 			pipeline.rollupBumps.record("failed", "unreclaimable_sweep", sweepResult.Terminalized)
+			// terminalizeOneRouteUnavailable recomputes the same rollup on its
+			// own branch, so it reports through the same counter under its own
+			// path label -- the two branches are mutually exclusive per pass
+			// and an operator has to be able to tell which one fired.
+			pipeline.rollupBumps.record("failed", "route_unavailable", sweepResult.RouteUnavailableTerminalized)
 		}
 		if sweepErr != nil {
 			if ctx.Err() != nil {
@@ -1447,7 +1484,7 @@ func (pipeline *MutationPipeline) WritePrometheus(output io.Writer) error {
 	// rationale as swept.UnreclaimableMeasured.
 	text.WriteString("# HELP dev_health_sync_run_rollup_bumped_total sync_runs.completed_units/failed_units live recomputes on a per-unit terminal commit, by which outcome triggered it and which code path made the write (CHAOS-4559, CHAOS-4586).\n# TYPE dev_health_sync_run_rollup_bumped_total counter\n")
 	rollupBumps := pipeline.rollupBumps.snapshot()
-	for _, path := range []string{"unreclaimable_sweep", "lease_repair"} {
+	for _, path := range []string{"unreclaimable_sweep", "lease_repair", "route_unavailable"} {
 		fmt.Fprintf(&text, "dev_health_sync_run_rollup_bumped_total{outcome=%q,path=%q} %d\n",
 			"failed", path, rollupBumps[[2]string{"failed", path}])
 	}

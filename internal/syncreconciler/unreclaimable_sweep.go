@@ -277,6 +277,20 @@ type UnreclaimableSweepResult struct {
 	// those apart is the whole point of the shadow-mode reporting this file
 	// already had to add once after shipping without it.
 	DeferredToRepair int
+	// The route-unavailable branch's own report (see
+	// route_unavailable_termination.go). It is kept separate from Candidates/
+	// Terminalized above because the two branches are mutually exclusive --
+	// exactly one of them runs per pass, decided by the durable route -- and
+	// merging their counts would make "the ordinary strand sweep is working"
+	// and "the route is broken" the same number.
+	//
+	// RouteUnavailableFault names the durable state that parked the runs, and
+	// is empty on a pass where the branch did not run.
+	RouteUnavailableFault        string
+	RouteUnavailableCandidates   int
+	RouteUnavailableTerminalized int
+	RouteUnavailableRunIDs       []string
+	RouteUnavailableUnitIDs      []string
 }
 
 // routeFence is the durable route's identity at one instant: which transport
@@ -293,8 +307,10 @@ type routeFence struct {
 	generation int64
 }
 
-// riverOwns is the whole authorization to destroy work, so it is fail-closed
-// on both axes.
+// riverOwns is the whole authorization for THIS branch to destroy work, so it
+// is fail-closed on both axes. A false answer hands the pass to the bounded
+// route-unavailable branch instead (route_unavailable_termination.go); it
+// never licenses the ordinary strand sweep.
 //
 // PAUSED is load-bearing and was missing (review finding). The comment above
 // riverOwnsProviderUnits has always said a "missing, paused, duplicated or
@@ -500,6 +516,16 @@ func (sweep *UnreclaimableSweep) Step(
 		return UnreclaimableSweepResult{}, err
 	}
 	if !usable || !opening.riverOwns() {
+		// River does not own provider units, so the ordinary strand sweep must
+		// not touch anything -- but a run parked by that same state past its
+		// bound is this pass's to release. The branch is bounded, writes only
+		// units nothing can execute, and never dispatches: see
+		// route_unavailable_termination.go.
+		if err := sweep.terminalizeRouteUnavailable(
+			ctx, now, limit, opening, usable, &result,
+		); err != nil {
+			return UnreclaimableSweepResult{}, err
+		}
 		return result, nil
 	}
 
@@ -645,7 +671,7 @@ func (sweep *UnreclaimableSweep) Step(
 	//
 	// Shadow mode never reaches this: it writes nothing, so there is nothing
 	// to fence, and it must not block a rollback either.
-	held, err := sweep.holdRouteFence(ctx, opening)
+	held, err := sweep.holdRouteFence(ctx, opening, usable)
 	if err != nil {
 		return UnreclaimableSweepResult{}, err
 	}
@@ -764,11 +790,18 @@ func (sweep *UnreclaimableSweep) selectUnreclaimable(
 // the answer durable rather than an env-var inference.
 //
 // A missing, paused, duplicated or unreadable row is NOT read as "River owns
-// it": the sweep declines to act, matching Python's refusal to fall back to a
-// transport during a control-plane fault. The paused half of that sentence
+// it": THIS branch declines to act, matching Python's refusal to fall back to
+// a transport during a control-plane fault. The paused half of that sentence
 // was an unimplemented claim until CHAOS-4035 -- the statement selected only
 // `transport` -- which is why routeFence.riverOwns now carries the check and
 // says so.
+//
+// Declining to act is not the same as leaving the state alone forever. A route
+// the relay cannot serve parks whole runs, so Step routes those same states to
+// route_unavailable_termination.go, which terminalizes only units that have
+// been parked past a bound and still dispatches nothing. An unreadable row is
+// the one exception on both branches: it never reaches either, because a route
+// nobody could ask about is not a fault anything may act on.
 const selectProviderUnitRouteSQL = `
 SELECT transport, paused, generation
 FROM public.worker_job_routes
@@ -782,8 +815,13 @@ type heldRouteFence struct {
 	release func()
 }
 
+// openingUsable is compared alongside the fence itself so the route-unavailable
+// branch can fence an ABSENT row too: for that branch "still no usable row" is
+// the state that must hold across the commit, and a fence that only ever
+// declined on !usable could never serve it. The ordinary branch passes true and
+// keeps exactly its previous behaviour.
 func (sweep *UnreclaimableSweep) holdRouteFence(
-	ctx context.Context, opening routeFence,
+	ctx context.Context, opening routeFence, openingUsable bool,
 ) (heldRouteFence, error) {
 	tx, err := sweep.routes.Begin(ctx)
 	if err != nil || tx == nil {
@@ -807,7 +845,7 @@ func (sweep *UnreclaimableSweep) holdRouteFence(
 		}
 		return heldRouteFence{}, err
 	}
-	if !usable || closing != opening {
+	if usable != openingUsable || closing != opening {
 		release()
 		return heldRouteFence{}, nil
 	}

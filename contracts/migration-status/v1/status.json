@@ -7,9 +7,9 @@
         "status": "unverified"
       },
       "deployed": {
-        "revision": "unknown",
-        "read_at": "2026-09-11T21:55:38.835459872Z",
-        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-16T09:21:44.793497034Z",
+        "source": "fleet file fleet-prod.json"
       },
       "proof": {
         "ref": "none"
@@ -21,9 +21,9 @@
         "status": "unverified"
       },
       "deployed": {
-        "revision": "unknown",
-        "read_at": "2026-09-11T21:55:38.835459872Z",
-        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-16T09:21:44.793497034Z",
+        "source": "fleet file fleet-prod.json"
       },
       "proof": {
         "ref": "none"
@@ -35,9 +35,9 @@
         "status": "unverified"
       },
       "deployed": {
-        "revision": "unknown",
-        "read_at": "2026-09-11T21:55:38.835459872Z",
-        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-16T09:21:44.793497034Z",
+        "source": "fleet file fleet-prod.json"
       },
       "proof": {
         "ref": "none"
@@ -49,9 +49,9 @@
         "status": "unverified"
       },
       "deployed": {
-        "revision": "unknown",
-        "read_at": "2026-09-11T21:55:38.835459872Z",
-        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-16T09:21:44.793497034Z",
+        "source": "fleet file fleet-prod.json"
       },
       "proof": {
         "ref": "none"
@@ -63,9 +63,9 @@
         "status": "unverified"
       },
       "deployed": {
-        "revision": "unknown",
-        "read_at": "2026-09-11T21:55:38.835459872Z",
-        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-16T09:21:44.793497034Z",
+        "source": "fleet file fleet-prod.json"
       },
       "proof": {
         "ref": "none"
@@ -77,9 +77,9 @@
         "status": "unverified"
       },
       "deployed": {
-        "revision": "unknown",
-        "read_at": "2026-09-11T21:55:38.835459872Z",
-        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-16T09:21:44.793497034Z",
+        "source": "fleet file fleet-prod.json"
       },
       "proof": {
         "ref": "none"
@@ -91,9 +91,9 @@
         "status": "unverified"
       },
       "deployed": {
-        "revision": "unknown",
-        "read_at": "2026-09-11T21:55:38.835459872Z",
-        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-16T09:21:44.793497034Z",
+        "source": "fleet file fleet-prod.json"
       },
       "proof": {
         "ref": "none"
@@ -105,9 +105,9 @@
         "status": "unverified"
       },
       "deployed": {
-        "revision": "unknown",
-        "read_at": "2026-09-11T21:55:38.835459872Z",
-        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-16T09:21:44.793497034Z",
+        "source": "fleet file fleet-prod.json"
       },
       "proof": {
         "ref": "none"
@@ -119,9 +119,9 @@
         "status": "unverified"
       },
       "deployed": {
-        "revision": "unknown",
-        "read_at": "2026-09-11T21:55:38.835459872Z",
-        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-16T09:21:44.793497034Z",
+        "source": "fleet file fleet-prod.json"
       },
       "proof": {
         "ref": "none"
@@ -133,9 +133,9 @@
         "status": "unverified"
       },
       "deployed": {
-        "revision": "unknown",
-        "read_at": "2026-09-11T21:55:38.835459872Z",
-        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-16T09:21:44.793497034Z",
+        "source": "fleet file fleet-prod.json"
       },
       "proof": {
         "ref": "none"
@@ -147,9 +147,9 @@
         "status": "unverified"
       },
       "deployed": {
-        "revision": "unknown",
-        "read_at": "2026-09-11T21:55:38.835459872Z",
-        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-16T09:21:44.793497034Z",
+        "source": "fleet file fleet-prod.json"
       },
       "proof": {
         "ref": "none"
@@ -161,9 +161,9 @@
         "status": "unverified"
       },
       "deployed": {
-        "revision": "unknown",
-        "read_at": "2026-09-11T21:55:38.835459872Z",
-        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-16T09:21:44.793497034Z",
+        "source": "fleet file fleet-prod.json"
       },
       "proof": {
         "ref": "none"
@@ -175,9 +175,9 @@
         "status": "unverified"
       },
       "deployed": {
-        "revision": "unknown",
-        "read_at": "2026-09-11T21:55:38.835459872Z",
-        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-16T09:21:44.793497034Z",
+        "source": "fleet file fleet-prod.json"
       },
       "proof": {
         "ref": "none"
@@ -189,9 +189,9 @@
         "status": "unverified"
       },
       "deployed": {
-        "revision": "unknown",
-        "read_at": "2026-09-11T21:55:38.835459872Z",
-        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-16T09:21:44.793497034Z",
+        "source": "fleet file fleet-prod.json"
       },
       "proof": {
         "ref": "none"
@@ -203,9 +203,9 @@
         "status": "unverified"
       },
       "deployed": {
-        "revision": "unknown",
-        "read_at": "2026-09-11T21:55:38.835459872Z",
-        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-16T09:21:44.793497034Z",
+        "source": "fleet file fleet-prod.json"
       },
       "proof": {
         "ref": "none"
@@ -217,9 +217,9 @@
         "status": "unverified"
       },
       "deployed": {
-        "revision": "unknown",
-        "read_at": "2026-09-11T21:55:38.835459872Z",
-        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-16T09:21:44.793497034Z",
+        "source": "fleet file fleet-prod.json"
       },
       "proof": {
         "ref": "none"
@@ -231,9 +231,9 @@
         "status": "unverified"
       },
       "deployed": {
-        "revision": "unknown",
-        "read_at": "2026-09-11T21:55:38.835459872Z",
-        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-16T09:21:44.793497034Z",
+        "source": "fleet file fleet-prod.json"
       },
       "proof": {
         "ref": "none"
@@ -245,9 +245,9 @@
         "status": "unverified"
       },
       "deployed": {
-        "revision": "unknown",
-        "read_at": "2026-09-11T21:55:38.835459872Z",
-        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-16T09:21:44.793497034Z",
+        "source": "fleet file fleet-prod.json"
       },
       "proof": {
         "ref": "none"
@@ -259,9 +259,9 @@
         "status": "unverified"
       },
       "deployed": {
-        "revision": "unknown",
-        "read_at": "2026-09-11T21:55:38.835459872Z",
-        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-16T09:21:44.793497034Z",
+        "source": "fleet file fleet-prod.json"
       },
       "proof": {
         "ref": "none"
@@ -273,9 +273,9 @@
         "status": "unverified"
       },
       "deployed": {
-        "revision": "unknown",
-        "read_at": "2026-09-11T21:55:38.835459872Z",
-        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-16T09:21:44.793497034Z",
+        "source": "fleet file fleet-prod.json"
       },
       "proof": {
         "ref": "none"
@@ -287,9 +287,9 @@
         "status": "unverified"
       },
       "deployed": {
-        "revision": "unknown",
-        "read_at": "2026-09-11T21:55:38.835459872Z",
-        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-16T09:21:44.793497034Z",
+        "source": "fleet file fleet-prod.json"
       },
       "proof": {
         "ref": "none"
@@ -301,9 +301,9 @@
         "status": "unverified"
       },
       "deployed": {
-        "revision": "unknown",
-        "read_at": "2026-09-11T21:55:38.835459872Z",
-        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-16T09:21:44.793497034Z",
+        "source": "fleet file fleet-prod.json"
       },
       "proof": {
         "ref": "none"
@@ -315,9 +315,9 @@
         "status": "unverified"
       },
       "deployed": {
-        "revision": "unknown",
-        "read_at": "2026-09-11T21:55:38.835459872Z",
-        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-16T09:21:44.793497034Z",
+        "source": "fleet file fleet-prod.json"
       },
       "proof": {
         "ref": "none"
@@ -329,9 +329,9 @@
         "status": "unverified"
       },
       "deployed": {
-        "revision": "unknown",
-        "read_at": "2026-09-11T21:55:38.835459872Z",
-        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-16T09:21:44.793497034Z",
+        "source": "fleet file fleet-prod.json"
       },
       "proof": {
         "ref": "none"
@@ -343,9 +343,9 @@
         "status": "unverified"
       },
       "deployed": {
-        "revision": "unknown",
-        "read_at": "2026-09-11T21:55:38.835459872Z",
-        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-16T09:21:44.793497034Z",
+        "source": "fleet file fleet-prod.json"
       },
       "proof": {
         "ref": "none"
@@ -357,9 +357,9 @@
         "status": "unverified"
       },
       "deployed": {
-        "revision": "unknown",
-        "read_at": "2026-09-11T21:55:38.835459872Z",
-        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-16T09:21:44.793497034Z",
+        "source": "fleet file fleet-prod.json"
       },
       "proof": {
         "ref": "none"
@@ -371,9 +371,9 @@
         "status": "unverified"
       },
       "deployed": {
-        "revision": "unknown",
-        "read_at": "2026-09-11T21:55:38.835459872Z",
-        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-16T09:21:44.793497034Z",
+        "source": "fleet file fleet-prod.json"
       },
       "proof": {
         "ref": "none"
@@ -385,9 +385,9 @@
         "status": "unverified"
       },
       "deployed": {
-        "revision": "unknown",
-        "read_at": "2026-09-11T21:55:38.835459872Z",
-        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-16T09:21:44.793497034Z",
+        "source": "fleet file fleet-prod.json"
       },
       "proof": {
         "ref": "none"
@@ -399,9 +399,9 @@
         "status": "unverified"
       },
       "deployed": {
-        "revision": "unknown",
-        "read_at": "2026-09-11T21:55:38.835459872Z",
-        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-16T09:21:44.793497034Z",
+        "source": "fleet file fleet-prod.json"
       },
       "proof": {
         "ref": "none"
@@ -413,9 +413,9 @@
         "status": "unverified"
       },
       "deployed": {
-        "revision": "unknown",
-        "read_at": "2026-09-11T21:55:38.835459872Z",
-        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-16T09:21:44.793497034Z",
+        "source": "fleet file fleet-prod.json"
       },
       "proof": {
         "ref": "none"
@@ -427,9 +427,9 @@
         "status": "unverified"
       },
       "deployed": {
-        "revision": "unknown",
-        "read_at": "2026-09-11T21:55:38.835459872Z",
-        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-16T09:21:44.793497034Z",
+        "source": "fleet file fleet-prod.json"
       },
       "proof": {
         "ref": "none"
@@ -441,9 +441,9 @@
         "status": "unverified"
       },
       "deployed": {
-        "revision": "unknown",
-        "read_at": "2026-09-11T21:55:38.835459872Z",
-        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-16T09:21:44.793497034Z",
+        "source": "fleet file fleet-prod.json"
       },
       "proof": {
         "ref": "none"
@@ -455,9 +455,9 @@
         "status": "unverified"
       },
       "deployed": {
-        "revision": "unknown",
-        "read_at": "2026-09-11T21:55:38.835459872Z",
-        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-16T09:21:44.793497034Z",
+        "source": "fleet file fleet-prod.json"
       },
       "proof": {
         "ref": "none"
@@ -471,9 +471,9 @@
         "evidence": ".remember/lanes/team-lead/matrix-tracker-audit-2026-09-09.md section 4 -- repo attribution coverage fell 41% to 34% AFTER this family was recorded NATIVE; the fixes (internal/jobs/investment/hierarchycascade.go, materialize.go) are unmerged in PR #2382 with CHAOS-5460 stacked behind it"
       },
       "deployed": {
-        "revision": "unknown",
-        "read_at": "2026-09-11T21:55:38.835459872Z",
-        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-16T09:21:44.793497034Z",
+        "source": "fleet file fleet-prod.json"
       },
       "proof": {
         "ref": "none"
@@ -488,9 +488,9 @@
         "status": "unverified"
       },
       "deployed": {
-        "revision": "unknown",
-        "read_at": "2026-09-11T21:55:38.835459872Z",
-        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-16T09:21:44.793497034Z",
+        "source": "fleet file fleet-prod.json"
       },
       "proof": {
         "ref": "none"

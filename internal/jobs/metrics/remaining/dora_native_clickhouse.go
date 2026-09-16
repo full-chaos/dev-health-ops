@@ -12,6 +12,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/numerical"
 )
 
@@ -162,6 +163,16 @@ const (
 // (metrics/active_incidents.py:22). DORA uses RESOLVED; daily incident metrics
 // use STARTED. Keeping both on one builder prevents the service-mapping and
 // current-row predicates from drifting between metrics readers.
+//
+// The mapping-join predicate carries the same NULL-OK guard as
+// LoadIncidentsStarted (daily/incident_native_clickhouse.go): a NULL
+// valid_from means "valid since before records began" and must satisfy
+// every as-of filter, the same as the symmetric `valid_to IS NULL OR
+// valid_to > as_of` clause beside it. This is a live-Python-oracle-compared
+// port (dora_incident_sql_oracle_test.go): its column list and every other
+// clause stay byte-for-byte identical to the live builder's own output, so
+// a caller wanting to observe how many matched rows the guard recovered
+// runs its own separate query rather than widening this one's SELECT list.
 func IncidentProjectionQuery(
 	window IncidentWindow, repoFilter string, contract OperationalOrderingContract,
 ) string {
@@ -188,7 +199,7 @@ func IncidentProjectionQuery(
 		[]string{
 			"repo_id IS NOT NULL",
 			"is_active = 1",
-			"valid_from <= {as_of:DateTime64(6, 'UTC')}",
+			"(valid_from IS NULL OR valid_from <= {as_of:DateTime64(6, 'UTC')})",
 			"(valid_to IS NULL OR valid_to > {as_of:DateTime64(6, 'UTC')})",
 		},
 		contract,
@@ -325,11 +336,7 @@ func (executor *DORAExecutor) loadIncidents(
 		"org_id": organizationID,
 		"start":  dateTime64Argument(start, millisecondPrecision),
 		"end":    dateTime64Argument(end, millisecondPrecision),
-		// Python binds now() here. CHAOS-4111: mappings whose valid_from is
-		// NULL match nothing, because NULL <= as_of is NULL -- a producer gap,
-		// not something this reader may paper over. Reproduced exactly so the
-		// two runtimes agree on which mappings are live.
-		"as_of": dateTime64Argument(asOf, microsecondPrecision),
+		"as_of":  dateTime64Argument(asOf, microsecondPrecision),
 	}
 	filter := repoFilterClause(scope, arguments)
 	query := resolvedIncidentsQuery(filter, executor.contract)
@@ -378,7 +385,64 @@ func (executor *DORAExecutor) loadIncidents(
 	if err := rows.Err(); err != nil {
 		return nil, 0, fmt.Errorf("iterate incidents: %w", err)
 	}
+	executor.reportValidFromGuard(ctx, organizationID, asOf, filter, arguments)
 	return incidents, skipped, nil
+}
+
+// reportValidFromGuard counts, via its OWN standalone query (never the
+// live-Python-oracle-pinned IncidentProjectionQuery -- widening that one's
+// column list is exactly what drifted it from the Python builder it is
+// compared against), how many operational_service_repository_mappings rows
+// matching this call's as-of scope carry a set valid_from versus one
+// recovered only by the NULL-OK guard, and logs a WARN once per query when
+// the guard actually mattered -- the same observability contract
+// IncidentValidFromGuardObserver documents for LoadIncidentsStarted (the
+// daily incident reader), reused here rather than re-invented because it is
+// the same table and the same guard. A count-query failure is logged and
+// swallowed, never returned: telemetry must not fail a partition that
+// otherwise computed correctly.
+func (executor *DORAExecutor) reportValidFromGuard(
+	ctx context.Context, organizationID string, asOf time.Time, repoFilter string, arguments map[string]any,
+) {
+	currentMappings := currentOperationalRowsSQL(
+		"operational_service_repository_mappings",
+		[]string{
+			"repo_id IS NOT NULL",
+			"is_active = 1",
+			"(valid_from IS NULL OR valid_from <= {as_of:DateTime64(6, 'UTC')})",
+			"(valid_to IS NULL OR valid_to > {as_of:DateTime64(6, 'UTC')})",
+		},
+		executor.contract,
+	)
+	query := fmt.Sprintf(
+		"SELECT countIf(valid_from IS NOT NULL), countIf(valid_from IS NULL) FROM %s AS mapping WHERE mapping.repo_id IS NOT NULL%s",
+		currentMappings, repoFilter,
+	)
+	row := executor.conn.QueryRow(ctx, query, namedArguments(arguments)...)
+	var validFromSet, validFromNullRecovered uint64
+	if err := row.Scan(&validFromSet, &validFromNullRecovered); err != nil {
+		executor.logger.WarnContext(ctx, "dora: valid_from guard count query failed",
+			"org_id", organizationID, "error", err)
+		return
+	}
+	if validFromNullRecovered > 0 {
+		executor.logger.WarnContext(ctx,
+			"dora: operational_service_repository_mappings rows matched only via NULL valid_from guard",
+			"org_id", organizationID, "count", validFromNullRecovered)
+	}
+	if executor.observer == nil {
+		return
+	}
+	guardObserver, ok := executor.observer.(jobruntime.IncidentValidFromGuardObserver)
+	if !ok {
+		return
+	}
+	if validFromSet > 0 {
+		_ = guardObserver.ObserveIncidentValidFromGuardRows(jobruntime.IncidentValidFromGuardReasonSet, int(validFromSet))
+	}
+	if validFromNullRecovered > 0 {
+		_ = guardObserver.ObserveIncidentValidFromGuardRows(jobruntime.IncidentValidFromGuardReasonNullRecovered, int(validFromNullRecovered))
+	}
 }
 
 // writeMetrics ports write_dora_metrics (sinks/clickhouse/dora.py:40) --

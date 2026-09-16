@@ -11,6 +11,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/edges"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/operationaledges"
@@ -75,6 +76,10 @@ func (step *flagGuardsEdgesPreStep) Run(ctx context.Context, claim workgraph.Cla
 type operationalIncidentEdgesPreStep struct {
 	conn driver.Conn
 	now  func() time.Time
+	// validFromGuardObserver is optional: a nil value only skips the
+	// counter, ReadServiceRepositoryMappings still logs the WARN
+	// unconditionally.
+	validFromGuardObserver jobruntime.IncidentValidFromGuardObserver
 }
 
 func newOperationalIncidentEdgesPreStep(conn driver.Conn) (*operationalIncidentEdgesPreStep, error) {
@@ -82,6 +87,16 @@ func newOperationalIncidentEdgesPreStep(conn driver.Conn) (*operationalIncidentE
 		return nil, errWorkerDependencyUnavailable
 	}
 	return &operationalIncidentEdgesPreStep{conn: conn, now: time.Now}, nil
+}
+
+// SetValidFromGuardObserver wires the optional NULL-valid_from-guard
+// telemetry observer, matching daily.NewIncidentExecutor's
+// SetValidFromGuardObserver convention for the same guard.
+func (step *operationalIncidentEdgesPreStep) SetValidFromGuardObserver(observer jobruntime.IncidentValidFromGuardObserver) {
+	if step == nil {
+		return
+	}
+	step.validFromGuardObserver = observer
 }
 
 func (step *operationalIncidentEdgesPreStep) Name() string { return "operational_incident_edges" }
@@ -110,6 +125,7 @@ func (step *operationalIncidentEdgesPreStep) Run(ctx context.Context, claim work
 		ctx, step.conn, orgID, now,
 		window.heuristicDaysWindow, window.heuristicConfidence,
 		&window.fromDate, &window.toDate, window.repoID,
+		step.validFromGuardObserver,
 	)
 	if err != nil {
 		return nil, err

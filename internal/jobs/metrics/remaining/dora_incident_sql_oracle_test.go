@@ -77,7 +77,7 @@ func TestGoIncidentProjectionMatchesLivePythonBuilder(t *testing.T) {
 			contract, filter := contract, filter
 			t.Run(contract.name+"/"+filter.name, func(t *testing.T) {
 				repoFilter := repoFilterClause(filter.scope, map[string]any{})
-				want := runPythonIncidentQuery(t, python, contract.env, repoFilter)
+				want := declaredIncidentValidFromDivergence(t, runPythonIncidentQuery(t, python, contract.env, repoFilter))
 				got := resolvedIncidentsQuery(repoFilter, contract.contract)
 				if normalizeSQL(got) != normalizeSQL(want) {
 					t.Errorf(
@@ -104,6 +104,42 @@ func TestGoIncidentProjectionMatchesLivePythonBuilder(t *testing.T) {
 	); err != nil {
 		t.Fatalf("write live Python oracle proof: %v", err)
 	}
+}
+
+// declaredIncidentValidFromDivergence rewrites the ONE accepted difference
+// between the live Python builder's mapping-join predicate and the Go
+// projection's own, so the rest of the comparison stays exact. Python's
+// predicate is `valid_from <= {as_of}`, with no guard for a NULL
+// valid_from -- ClickHouse's three-valued logic evaluates that as false,
+// silently dropping the row. The Go projection guards it with
+// `(valid_from IS NULL OR valid_from <= {as_of})`, admitting a NULL
+// valid_from as valid since before records began. Python is the retired
+// plane for this producer and is not changed to match it.
+//
+// This rewrites ONLY that one literal substring and fails loudly if it is
+// not found verbatim in the Python builder's output, rather than silently
+// widening what the declaration covers: if Python's predicate text ever
+// changes shape (including gaining the same guard, at which point this
+// declaration should simply be deleted), the exact match this function
+// requires stops holding and the test fails until the declaration is
+// revisited. Every other clause in the query -- the join, the ordering,
+// the LIMIT, every other predicate -- still has to match byte-for-byte.
+func declaredIncidentValidFromDivergence(t *testing.T, pythonSQL string) string {
+	t.Helper()
+	const (
+		pythonPredicate = "valid_from <= {as_of:DateTime64(6, 'UTC')}"
+		goPredicate     = "(valid_from IS NULL OR valid_from <= {as_of:DateTime64(6, 'UTC')})"
+	)
+	if !strings.Contains(pythonSQL, pythonPredicate) {
+		t.Fatalf(
+			"declared incident valid_from divergence: the live Python builder no "+
+				"longer contains %q -- either it already carries the NULL-OK guard "+
+				"(delete this declaration and compare directly) or its predicate "+
+				"text changed shape (re-derive the declaration): got %q",
+			pythonPredicate, pythonSQL,
+		)
+	}
+	return strings.Replace(pythonSQL, pythonPredicate, goPredicate, 1)
 }
 
 func runPythonIncidentQuery(t *testing.T, python, contract, repoFilter string) string {

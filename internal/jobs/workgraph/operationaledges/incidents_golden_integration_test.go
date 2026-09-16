@@ -306,7 +306,7 @@ func TestBuildOperationalIncidentEdgesMatchesOrg70d529e0Golden(t *testing.T) {
 	golden := loadGolden(t, fixturePath(t, "workgraph_operational_edges_python_golden.json"))
 	now := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 
-	got, err := BuildOperationalIncidentEdges(ctx, conn, golden.OrgID, now, 7, 0.3, nil, nil, nil)
+	got, err := BuildOperationalIncidentEdges(ctx, conn, golden.OrgID, now, 7, 0.3, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("BuildOperationalIncidentEdges: %v", err)
 	}
@@ -330,7 +330,7 @@ func TestBuildOperationalEdgesMatchSyntheticGolden(t *testing.T) {
 	golden := loadGolden(t, fixturePath(t, "workgraph_operational_edges_synthetic_python_golden.json"))
 	now := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 
-	incidentEdges, err := BuildOperationalIncidentEdges(ctx, conn, golden.OrgID, now, 7, 0.3, nil, nil, nil)
+	incidentEdges, err := BuildOperationalIncidentEdges(ctx, conn, golden.OrgID, now, 7, 0.3, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("BuildOperationalIncidentEdges: %v", err)
 	}
@@ -416,7 +416,7 @@ func TestReadServiceRepositoryMappingsTruncatesNowToWholeSeconds(t *testing.T) {
 	}
 
 	now := time.Date(2026, 9, 1, 0, 0, 0, 900500000, time.UTC) // .9005 seconds
-	rows, err := ReadServiceRepositoryMappings(ctx, conn, orgID, now, nil)
+	rows, err := ReadServiceRepositoryMappings(ctx, conn, orgID, now, nil, nil)
 	if err != nil {
 		t.Fatalf("ReadServiceRepositoryMappings: %v", err)
 	}
@@ -457,7 +457,7 @@ func TestBuildOperationalIncidentEdgesRejectsInvalidMappingConfidence(t *testing
 	}
 
 	_, err := BuildOperationalIncidentEdges(
-		ctx, conn, orgID, time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), 7, 0.3, nil, nil, nil,
+		ctx, conn, orgID, time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), 7, 0.3, nil, nil, nil, nil,
 	)
 	if err == nil {
 		t.Fatal("expected an error for relationship_confidence=1.00000001 (outside [0,1] at float64 precision)")
@@ -486,7 +486,7 @@ func TestBuildOperationalIncidentEdgesIncludesPaddedEnvironment(t *testing.T) {
 
 	got, err := BuildOperationalIncidentEdges(
 		ctx, conn, "c4924000-0000-0000-0000-000000000001",
-		time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), 7, 0.3, nil, nil, nil,
+		time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), 7, 0.3, nil, nil, nil, nil,
 	)
 	if err != nil {
 		t.Fatalf("BuildOperationalIncidentEdges: %v", err)

@@ -460,13 +460,20 @@ func buildGitLabIncidentServiceRows(
 	}
 	provenance, confidence := "native_repository_context", 1.0
 	repoProvider, mappingKind := "gitlab", "repository_derived"
+	// ValidFrom is stamped from this effect's own observation time
+	// (normalizedAt, already carried for ObservedAt/LastSynced above) rather
+	// than left NULL: a NULL valid_from means "valid since before records
+	// began", and every as-of reader honors that, but a producer that CAN
+	// stamp a real instant should, so new rows carry one rather than relying
+	// on every future reader's NULL-OK guard.
+	validFrom := normalizedAt
 	mapping := gitLabServiceRepositoryMappingRow{
 		OrgID: claim.OrgID, Provider: "gitlab", ProviderInstanceID: providerInstance,
 		SourceEntityType: "repository_mapping", ExternalID: repoFullName + ":" + repoID.String(),
 		SourceVersionAt: sourceVersionAt, ObservedAt: normalizedAt, LastSynced: normalizedAt,
 		RelationshipProvenance: &provenance, RelationshipConfidence: &confidence,
 		ServiceID: service.ID, RepoID: &repoID, RepoFullName: &repoFullName,
-		RepoProvider: &repoProvider, MappingKind: &mappingKind, IsActive: true,
+		RepoProvider: &repoProvider, MappingKind: &mappingKind, ValidFrom: &validFrom, IsActive: true,
 	}
 	if err := fillGitLabServiceMappingOrdering(&mapping); err != nil {
 		return gitLabOperationalServiceRow{}, gitLabServiceRepositoryMappingRow{}, err
@@ -520,6 +527,21 @@ func fillGitLabOperationalServiceOrdering(row *gitLabOperationalServiceRow) erro
 	return nil
 }
 
+// fillGitLabServiceMappingOrdering derives this row's identity, conflict
+// key, and revisions. The conflict/revision hash pins valid_from to a
+// constant nil slot rather than the row's own ValidFrom value: valid_from is
+// stamped from this effect's own observation time, the same category as
+// observed_at/last_synced (already excluded from this hash for the same
+// reason) rather than a distinguishing attribute of the mapping itself. A
+// periodic re-sync of an otherwise-unchanged mapping stamps a NEW valid_from
+// every time; hashing the real value would mint a new source_conflict_key on
+// every such re-sync, defeating the ordering contract's "pick the current
+// physical row for this id" selection (`ORDER BY ... source_revision DESC,
+// source_conflict_key DESC LIMIT 1 BY org_id, id`, currentOperationalRowsSQL's
+// revision branch) with hash noise instead of a real content change. The
+// pinned constant also keeps this hash byte-identical to every row this
+// producer wrote before ValidFrom was stamped at all -- ValidFrom itself is
+// still written as its own row column below, independent of this hash.
 func fillGitLabServiceMappingOrdering(row *gitLabServiceRepositoryMappingRow) error {
 	fields := gitLabOperationalBaseFields(
 		row.OrgID, row.Provider, row.ProviderInstanceID, row.SourceEntityType,
@@ -536,7 +558,7 @@ func fillGitLabServiceMappingOrdering(row *gitLabServiceRepositoryMappingRow) er
 		jiraOperationalField{"service_id", row.ServiceID}, jiraOperationalField{"repo_id", repoID},
 		jiraOperationalField{"repo_full_name", jiraStringValue(row.RepoFullName)}, jiraOperationalField{"repo_provider", jiraStringValue(row.RepoProvider)},
 		jiraOperationalField{"mapping_kind", jiraStringValue(row.MappingKind)}, jiraOperationalField{"rule_id", jiraStringValue(row.RuleID)},
-		jiraOperationalField{"valid_from", jiraTimeValue(row.ValidFrom)}, jiraOperationalField{"valid_to", jiraTimeValue(row.ValidTo)},
+		jiraOperationalField{"valid_from", jiraTimeValue(nil)}, jiraOperationalField{"valid_to", jiraTimeValue(row.ValidTo)},
 		jiraOperationalField{"is_active", row.IsActive},
 	)
 	id, conflict, sourceRevision, ingestRevision, err := deriveGitLabOperationalOrdering(

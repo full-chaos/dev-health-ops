@@ -19,8 +19,17 @@ ENV CGO_ENABLED=0 \
 WORKDIR /src
 
 COPY go.mod go.sum ./
+# go mod download talks to proxy.golang.org over the network; a transient
+# proxy-side error should not fail the whole image build, so retry a
+# bounded number of times before giving up.
 RUN --mount=type=cache,target=/go/pkg/mod \
-    go mod download
+    attempt=1; \
+    until go mod download; do \
+      status=$?; \
+      if [ "$attempt" -ge 3 ]; then exit "$status"; fi; \
+      attempt=$((attempt + 1)); \
+      sleep 5; \
+    done
 
 COPY cmd ./cmd
 COPY contracts ./contracts

@@ -46,12 +46,12 @@ func TestCompareGitHubIssueTypeMetricsVersionRequiresOneUnambiguousFullRow(
 		{name: "identical row", distinct: 1, want: EffectExact},
 		{name: "absent", distinct: 0, want: EffectAbsent},
 		{name: "two distinct groups conflict even when first equals expected", distinct: 2, want: EffectConflict},
-		{name: "older divergent row remains ambiguous", distinct: 2, mutate: func(row *githubIssueTypeMetricsDailyRow) {
+		{name: "two distinct groups at the newest generation conflict", distinct: 2, mutate: func(row *githubIssueTypeMetricsDailyRow) {
 			row.ComputedAt = githubWorkItemEngineEffectOlderAt
 		}, want: EffectConflict},
-		{name: "single older row conflicts without a latest-row contract", distinct: 1, mutate: func(row *githubIssueTypeMetricsDailyRow) {
+		{name: "single older row is absent", distinct: 1, mutate: func(row *githubIssueTypeMetricsDailyRow) {
 			row.ComputedAt = githubWorkItemEngineEffectOlderAt
-		}, want: EffectConflict},
+		}, want: EffectAbsent},
 		{name: "single newer row conflicts", distinct: 1, mutate: func(row *githubIssueTypeMetricsDailyRow) {
 			row.ComputedAt = githubWorkItemEngineEffectNewerAt
 		}, want: EffectConflict},
@@ -118,12 +118,12 @@ func TestCompareGitHubInvestmentClassificationVersionRequiresOneUnambiguousFullR
 		{name: "identical row", distinct: 1, want: EffectExact},
 		{name: "absent", distinct: 0, want: EffectAbsent},
 		{name: "two distinct groups conflict even when first equals expected", distinct: 2, want: EffectConflict},
-		{name: "older divergent row remains ambiguous", distinct: 2, mutate: func(row *githubInvestmentClassificationDailyRow) {
+		{name: "two distinct groups at the newest generation conflict", distinct: 2, mutate: func(row *githubInvestmentClassificationDailyRow) {
 			row.ComputedAt = githubWorkItemEngineEffectOlderAt
 		}, want: EffectConflict},
-		{name: "single older row conflicts without a latest-row contract", distinct: 1, mutate: func(row *githubInvestmentClassificationDailyRow) {
+		{name: "single older row is absent", distinct: 1, mutate: func(row *githubInvestmentClassificationDailyRow) {
 			row.ComputedAt = githubWorkItemEngineEffectOlderAt
-		}, want: EffectConflict},
+		}, want: EffectAbsent},
 		{name: "single newer row conflicts", distinct: 1, mutate: func(row *githubInvestmentClassificationDailyRow) {
 			row.ComputedAt = githubWorkItemEngineEffectNewerAt
 		}, want: EffectConflict},

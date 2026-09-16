@@ -1,0 +1,50 @@
+{
+  "entity": {
+    "repo_id": "11111111-1111-1111-1111-111111111111",
+    "deployment_id": "deploy-1",
+    "status": "success",
+    "environment": "production"
+  },
+  "timeline": {
+    "start": "2024-01-12T01:00:00Z",
+    "end": "2024-01-12T01:20:00Z"
+  },
+  "frames": [
+    {
+      "id": "deploy:11111111-1111-1111-1111-111111111111:deploy-1",
+      "parent_id": null,
+      "label": "Deployment lifecycle",
+      "start": "2024-01-12T01:00:00Z",
+      "end": "2024-01-12T01:20:00Z",
+      "state": "ci",
+      "category": "planned"
+    },
+    {
+      "id": "deploy:11111111-1111-1111-1111-111111111111:deploy-1:queue",
+      "parent_id": "deploy:11111111-1111-1111-1111-111111111111:deploy-1",
+      "label": "Queue waiting",
+      "start": "2024-01-11T23:00:00Z",
+      "end": "2024-01-12T01:00:00Z",
+      "state": "waiting",
+      "category": "planned"
+    },
+    {
+      "id": "deploy:11111111-1111-1111-1111-111111111111:deploy-1:pipeline",
+      "parent_id": "deploy:11111111-1111-1111-1111-111111111111:deploy-1",
+      "label": "Deploy pipeline",
+      "start": "2024-01-12T01:00:00Z",
+      "end": "2024-01-12T01:20:00Z",
+      "state": "ci",
+      "category": "planned"
+    },
+    {
+      "id": "deploy:11111111-1111-1111-1111-111111111111:deploy-1:deploy",
+      "parent_id": "deploy:11111111-1111-1111-1111-111111111111:deploy-1:pipeline",
+      "label": "Deploy",
+      "start": "2024-01-12T01:15:00Z",
+      "end": "2024-01-12T01:20:00Z",
+      "state": "active",
+      "category": "planned"
+    }
+  ]
+}

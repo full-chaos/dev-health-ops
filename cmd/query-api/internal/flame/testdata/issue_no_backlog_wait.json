@@ -1,0 +1,32 @@
+{
+  "entity": {
+    "work_item_id": "issue-456",
+    "provider": "jira",
+    "type": "task",
+    "status": "in_progress"
+  },
+  "timeline": {
+    "start": "2024-01-05T08:00:00Z",
+    "end": "2024-01-05T18:00:00Z"
+  },
+  "frames": [
+    {
+      "id": "issue:issue-456",
+      "parent_id": null,
+      "label": "Issue lifecycle",
+      "start": "2024-01-05T08:00:00Z",
+      "end": "2024-01-05T18:00:00Z",
+      "state": "active",
+      "category": "planned"
+    },
+    {
+      "id": "issue:issue-456:work",
+      "parent_id": "issue:issue-456",
+      "label": "Active work",
+      "start": "2024-01-05T08:00:00Z",
+      "end": "2024-01-05T18:00:00Z",
+      "state": "active",
+      "category": "planned"
+    }
+  ]
+}

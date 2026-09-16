@@ -1,0 +1,41 @@
+{
+  "entity": {
+    "repo_id": "11111111-1111-1111-1111-111111111111",
+    "deployment_id": "deploy-2",
+    "status": "failure",
+    "environment": "staging"
+  },
+  "timeline": {
+    "start": "2024-01-13T02:00:00Z",
+    "end": "2024-01-13T02:05:00Z"
+  },
+  "frames": [
+    {
+      "id": "deploy:11111111-1111-1111-1111-111111111111:deploy-2",
+      "parent_id": null,
+      "label": "Deployment lifecycle",
+      "start": "2024-01-13T02:00:00Z",
+      "end": "2024-01-13T02:05:00Z",
+      "state": "ci",
+      "category": "planned"
+    },
+    {
+      "id": "deploy:11111111-1111-1111-1111-111111111111:deploy-2:queue",
+      "parent_id": "deploy:11111111-1111-1111-1111-111111111111:deploy-2",
+      "label": "Queue waiting",
+      "start": "2024-01-13T01:00:00Z",
+      "end": "2024-01-13T02:00:00Z",
+      "state": "waiting",
+      "category": "planned"
+    },
+    {
+      "id": "deploy:11111111-1111-1111-1111-111111111111:deploy-2:pipeline",
+      "parent_id": "deploy:11111111-1111-1111-1111-111111111111:deploy-2",
+      "label": "Deploy pipeline",
+      "start": "2024-01-13T02:00:00Z",
+      "end": "2024-01-13T02:05:00Z",
+      "state": "ci",
+      "category": "planned"
+    }
+  ]
+}

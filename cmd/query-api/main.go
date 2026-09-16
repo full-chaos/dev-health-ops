@@ -523,6 +523,23 @@ func main() {
 		log.Print("query-api: /api/v1/explain route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
 	}
 
+	// GET /api/v1/flame, gated by its own routeswitch entry
+	// (default OFF via GO_API_FLAME_ENABLED) -- see flame_route.go's
+	// package doc comment for the reachability story and internal/flame
+	// for the ported resolver and its documented ReplacingMergeTree-dedup
+	// notes.
+	if flameHandler, flameCleanup, flameOK, flameErr := buildFlameRoute(); flameErr != nil {
+		log.Fatalf("query-api: build /api/v1/flame route: %v", flameErr)
+	} else if flameOK {
+		defer flameCleanup()
+		// See the investment/explain mount above for why this is a
+		// reassignment, not an inlined wrapper.
+		flameHandler = withProofProvenance(flameHandler, runningBuild())
+		mux.HandleFunc("/api/v1/flame", flameHandler)
+	} else {
+		log.Print("query-api: /api/v1/flame route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
+	}
+
 	// A /api/v1/* path no route above claims answers Starlette's own
 	// default 404 body -- {"detail": "Not Found"}, confirmed live --
 	// instead of net/http's plain-text default. This is a SUBTREE pattern

@@ -387,6 +387,22 @@ func main() {
 		log.Print("query-api: /api/v1/quadrant route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
 	}
 
+	// GET /api/v1/heatmap, gated by its own routeswitch entry
+	// (default OFF via GO_API_HEATMAP_ENABLED) -- see heatmap_route.go's
+	// package doc comment for the reachability story and internal/heatmap
+	// for the ported resolver.
+	if heatmapHandler, heatmapCleanup, heatmapOK, heatmapErr := buildHeatmapRoute(); heatmapErr != nil {
+		log.Fatalf("query-api: build /api/v1/heatmap route: %v", heatmapErr)
+	} else if heatmapOK {
+		defer heatmapCleanup()
+		// See the investment/explain mount above for why this is a
+		// reassignment, not an inlined wrapper.
+		heatmapHandler = withProofProvenance(heatmapHandler, runningBuild())
+		mux.HandleFunc("/api/v1/heatmap", heatmapHandler)
+	} else {
+		log.Print("query-api: /api/v1/heatmap route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
+	}
+
 	// GET /api/v1/filters/options, gated by its own routeswitch
 	// entry (default OFF via GO_API_FILTER_OPTIONS_ENABLED) -- see
 	// filter_options_route.go's package doc comment for the reachability

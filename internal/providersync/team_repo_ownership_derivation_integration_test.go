@@ -328,7 +328,7 @@ func TestTeamRepoOwnershipDerivationPreservesReadinessGateForNonLinearOrgsTransi
 	}
 	if err := batch.Append(
 		orgID, "github", "team-platform", repoID, "acme/github-repo",
-		"exact", "inferred", uint8(0), teamRepoOwnershipInferredSpecificity, int32(0),
+		"exact", "inferred", uint8(0), teamRepoOwnershipPrecedence[teamRepoOwnershipSourceKindInferred].Specificity, teamRepoOwnershipPrecedence[teamRepoOwnershipSourceKindInferred].Priority,
 		now, nil, now,
 	); err != nil {
 		t.Fatalf("append pre-existing team_repo_ownership row: %v", err)
@@ -395,7 +395,7 @@ func TestTeamRepoOwnershipDerivationPreservesReadinessGateWhenProjectOwnershipIs
 	}
 	if err := batch.Append(
 		orgID, "github", "team-platform", repoID, "acme/github-repo",
-		"exact", "inferred", uint8(0), teamRepoOwnershipInferredSpecificity, int32(0),
+		"exact", "inferred", uint8(0), teamRepoOwnershipPrecedence[teamRepoOwnershipSourceKindInferred].Specificity, teamRepoOwnershipPrecedence[teamRepoOwnershipSourceKindInferred].Priority,
 		now, nil, now,
 	); err != nil {
 		t.Fatalf("append pre-existing team_repo_ownership row: %v", err)
@@ -469,7 +469,7 @@ func TestTeamRepoOwnershipDerivationSkipsRetractionWhenProjectOwnershipIsTransie
 	}
 	if err := batch.Append(
 		orgID, "github", "team-platform", githubRepoID, "acme/github-repo",
-		"exact", "inferred", uint8(0), teamRepoOwnershipInferredSpecificity, int32(0),
+		"exact", "inferred", uint8(0), teamRepoOwnershipPrecedence[teamRepoOwnershipSourceKindInferred].Specificity, teamRepoOwnershipPrecedence[teamRepoOwnershipSourceKindInferred].Priority,
 		now, nil, now,
 	); err != nil {
 		t.Fatalf("append pre-existing team_repo_ownership row: %v", err)

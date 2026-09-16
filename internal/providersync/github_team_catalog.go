@@ -306,13 +306,12 @@ func dedupeGitHubTeams(rows []githubTeamRow) []githubTeamRow {
 }
 
 // normalizeGitHubTeamRepoOwnership mirrors team_autoimport_github.py's
-// _repo_ownership_rows per (team, repo) pair. specificity always collapses
-// to githubTeamCatalogBaseSpecificity: Python's BASE_SPECIFICITY +
-// depth*CHILD_SPECIFICITY_STEP, where depth is the team's position in
-// parent_by_team -- always 0 for GitHub today, since ParentTeamID is always
-// nil (see githubTeamRow.ParentTeamID's doc comment). repo_id is always nil,
-// matching TeamRepoOwnershipRecord's own default (_repo_ownership_rows never
-// passes it).
+// _repo_ownership_rows per (team, repo) pair. Specificity and priority come
+// from teamRepoOwnershipPrecedence (team_repo_ownership_derivation.go), the
+// one place this writer and the inferred-ownership derivation agree on how
+// a provider_access grant ranks against an inferred row for the same repo.
+// repo_id is always nil, matching TeamRepoOwnershipRecord's own default
+// (_repo_ownership_rows never passes it).
 func normalizeGitHubTeamRepoOwnership(
 	orgID, teamSlug, repoFullName string, normalizedAt time.Time,
 ) (githubTeamRepoOwnershipRow, error) {
@@ -322,10 +321,11 @@ func normalizeGitHubTeamRepoOwnership(
 		return githubTeamRepoOwnershipRow{}, ErrInvalidConfiguration
 	}
 	normalizedAt = normalizedAt.UTC().Truncate(time.Microsecond)
+	rank := teamRepoOwnershipPrecedence[teamRepoOwnershipSourceKindProviderAccess]
 	return githubTeamRepoOwnershipRow{
 		OrgID: orgID, Provider: githubTeamCatalogProvider, TeamID: githubTeamID(teamSlug),
 		RepoID: nil, RepoFullName: repoFullName, MatchType: "exact", Source: githubTeamCatalogSource,
-		IsPrimary: 0, Specificity: githubTeamCatalogBaseSpecificity, Priority: githubTeamCatalogProviderAccessPriority,
+		IsPrimary: 0, Specificity: rank.Specificity, Priority: rank.Priority,
 		ValidFrom: normalizedAt, ValidTo: nil, UpdatedAt: normalizedAt,
 	}, nil
 }

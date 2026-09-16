@@ -454,8 +454,9 @@ func TestMultipleReposForTheSameTeamAllResolve(t *testing.T) {
 }
 
 // TestDerivedRowsUseTheInferredSpecificityConstant: every row this
-// producer emits carries the same, deliberately-low specificity so a
-// future direct signal (PR B, not built here) can always outrank it.
+// producer emits carries the same specificity, drawn from
+// teamRepoOwnershipPrecedence, so it ranks consistently against a
+// provider_access row for the same repo.
 func TestDerivedRowsUseTheInferredSpecificityConstant(t *testing.T) {
 	projectLinks := []TeamRepoOwnershipProjectLink{
 		{ProjectID: "proj-1", TeamID: "team-platform", IsPrimary: true},
@@ -466,8 +467,9 @@ func TestDerivedRowsUseTheInferredSpecificityConstant(t *testing.T) {
 
 	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nil, nil)
 
-	if len(got) != 1 || got[0].Specificity != teamRepoOwnershipInferredSpecificity {
-		t.Fatalf("expected specificity=%d, got %+v", teamRepoOwnershipInferredSpecificity, got)
+	wantSpecificity := teamRepoOwnershipPrecedence[teamRepoOwnershipSourceKindInferred].Specificity
+	if len(got) != 1 || got[0].Specificity != wantSpecificity {
+		t.Fatalf("expected specificity=%d, got %+v", wantSpecificity, got)
 	}
 }
 

@@ -171,6 +171,25 @@ func TestFetchBuildIdentitySendsTheEnvelope(t *testing.T) {
 	}
 }
 
+// /buildinfo's credential-rejection case covers 401 AND 403 -- it checks
+// the effective-principal envelope, not the edge access token, and an
+// access-token credential answers 403 there on the deployed stack. Only
+// 401 had a fixture.
+func TestFetchBuildIdentityNames403AsACredentialRejectionToo(t *testing.T) {
+	server := buildInfoServer(t, http.StatusForbidden, `ignored`)
+	_, err := FetchBuildIdentity(context.Background(), server.Client(), server.URL,
+		StaticCredential("Authorization", "test", "Bearer x"))
+	if err == nil {
+		t.Fatal("a 403 must be refused")
+	}
+	if !strings.Contains(err.Error(), "HTTP 403") {
+		t.Fatalf("error did not name the status code: %v", err)
+	}
+	if !strings.Contains(err.Error(), "rejected the") {
+		t.Fatalf("error did not name it as a credential rejection, not a generic failure: %v", err)
+	}
+}
+
 // --candidate-build can FAIL a run; it can never supply the value.
 func TestVerifyCandidateBuildTreatsTheFlagAsACrossCheck(t *testing.T) {
 	if err := VerifyCandidateBuild("abc", "abc", nil); err != nil {

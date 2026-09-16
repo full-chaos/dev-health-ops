@@ -551,6 +551,43 @@ func TestEnableHelpDoesNotShowAcknowledgeUnprovenAsTakingAnArgument(t *testing.T
 	}
 }
 
+// "every refusal carries the word `refused`" is a contract every refuse()
+// call site relies on implicitly, but nothing pinned the invariant
+// itself -- a path routed around refuse() (dropping the word, keeping
+// exit 2) went unnoticed until it recurred as its own finding. This is
+// the class-level pin: one refusal from each verb, none needing a
+// database or a running query-api.
+func TestEveryRefusalCarriesTheWordRefused(t *testing.T) {
+	t.Setenv(bearerEnvVar, "")
+	t.Setenv("POSTGRES_URI", "")
+	cases := []struct {
+		name string
+		argv []string
+	}{
+		{"unknown verb", []string{"bogusverb"}},
+		{"enable missing -mode", []string{"enable"}},
+		{"disable missing -mode", []string{"disable"}},
+		{"disable candidate-build passed empty", []string{"disable", "-candidate-build", ""}},
+		{"disable document passed empty", []string{"disable", "-document", ""}},
+		{"repoint missing -postgres-uri", []string{"repoint", "-recorded-by", "x", "-review-evidence", "y"}},
+		{"status non-positive -timeout", []string{"status", "-timeout", "0s"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, err := captureVerb(t, tc.argv...)
+			if err == nil {
+				t.Fatalf("run(%v) = nil, want a refusal", tc.argv)
+			}
+			if !errors.Is(err, errRefused) {
+				t.Fatalf("run(%v) = %v, want errRefused", tc.argv, err)
+			}
+			if !strings.HasPrefix(err.Error(), "refused: ") {
+				t.Fatalf("run(%v) = %q, does not carry the word %q", tc.argv, err.Error(), "refused")
+			}
+		})
+	}
+}
+
 // status's half of the
 // GO_API_QUERY_API_URL fallback -- a mutant that made
 // `haveRegistryURL` depend ONLY on the explicit `-registry-url` flag
@@ -627,20 +664,52 @@ func TestResolveEndpointURL(t *testing.T) {
 // verifying the fix, which is why the test exists rather than the comment.
 func TestConnectPostgresRefusesAndNeverEchoesTheDSN(t *testing.T) {
 	const password = "SUPERSECRET-NEVER-PRINT"
-	malformed := "postgres://u:" + password + "@ =not a dsn"
+	// Two shapes, not one: pgx's own DSN redaction (`redactPW`) only
+	// understands the URL form, so a URL-shaped DSN never proves this
+	// guard is doing anything -- pgx would have hidden the password on
+	// its own even with the guard removed. The keyword-form DSN with
+	// spaces around `=` is the one pgx does NOT redact, and it is the
+	// shape that actually distinguishes "the guard's fixed message is
+	// used" from "the underlying pgx error was wrapped and forwarded".
+	cases := map[string]string{
+		"url form (pgx redacts this on its own)":              "postgres://u:" + password + "@ =not a dsn",
+		"keyword form with spaces (pgx does not redact this)": "host=127.0.0.1 password = " + password + " connect_timeout=nan",
+	}
+	for name, malformed := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := connectPostgres(t.Context(), malformed, time.Second)
+			if err == nil {
+				t.Fatal("a malformed DSN must be refused")
+			}
+			if got := exitCodeFor(err); got != 2 {
+				t.Fatalf("a malformed DSN exits %d, want 2 -- it is the operator's to fix", got)
+			}
+			if strings.Contains(err.Error(), password) {
+				t.Fatalf("the refusal echoed the DSN's password: %q", err)
+			}
+			if !strings.Contains(err.Error(), "-postgres-uri") {
+				t.Fatalf("the refusal must name the flag the operator has to change, got %q", err)
+			}
+		})
+	}
+}
 
-	_, err := connectPostgres(t.Context(), malformed, time.Second)
-	if err == nil {
-		t.Fatal("a malformed DSN must be refused")
+// The same guard, exercised through `status`'s own report field rather
+// than connectPostgres directly -- a keyword-form DSN reaching
+// registry_db_error unwrapped would leak the password there instead.
+func TestStatusNeverEchoesADSNPasswordInItsReportField(t *testing.T) {
+	t.Setenv(bearerEnvVar, "")
+	const password = "SUPERSECRET-NEVER-PRINT"
+	t.Setenv("POSTGRES_URI", "host=127.0.0.1 password = "+password+" connect_timeout=nan")
+	out, _, err := captureVerb(t, "status", "-registry-url", "http://127.0.0.1:1", "-timeout", "2s", "-json")
+	if err != nil {
+		t.Fatalf("status must never refuse: %v", err)
 	}
-	if got := exitCodeFor(err); got != 2 {
-		t.Fatalf("a malformed DSN exits %d, want 2 -- it is the operator's to fix", got)
+	if strings.Contains(out, password) {
+		t.Fatalf("registry_db_error echoed the DSN's password:\n%s", out)
 	}
-	if strings.Contains(err.Error(), password) {
-		t.Fatalf("the refusal echoed the DSN's password: %q", err)
-	}
-	if !strings.Contains(err.Error(), "-postgres-uri") {
-		t.Fatalf("the refusal must name the flag the operator has to change, got %q", err)
+	if !strings.Contains(out, `"registry_db_error"`) {
+		t.Fatalf("status printed no registry_db_error field:\n%s", out)
 	}
 }
 
@@ -866,6 +935,32 @@ func TestTheSanitizedURLIsRebuiltFromComponentsNotForwarded(t *testing.T) {
 	}
 	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
 		t.Fatalf("the rebuilt URL carries a component it should have dropped: %q", got)
+	}
+}
+
+// pythonUTCIsoFormat's fraction branch was pinned only at zero
+// microseconds -- the one value at which the branch does not run. Every
+// row this binary writes stamps time.Now().UTC(), which always carries a
+// fraction, so the untested branch is the one that fires in production
+// and the tested one essentially never occurs.
+func TestPythonUTCIsoFormatMatchesAtEveryFractionShape(t *testing.T) {
+	cases := []struct {
+		name  string
+		input time.Time
+		want  string
+	}{
+		{"zero microseconds", time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC), "2026-09-09T12:00:00+00:00"},
+		{"one microsecond", time.Date(2026, 9, 9, 12, 0, 0, 1000, time.UTC), "2026-09-09T12:00:00.000001+00:00"},
+		{"trailing-zero fraction", time.Date(2026, 9, 9, 12, 0, 0, 123000000, time.UTC), "2026-09-09T12:00:00.123000+00:00"},
+		{"max microseconds", time.Date(2026, 9, 9, 12, 0, 0, 999999000, time.UTC), "2026-09-09T12:00:00.999999+00:00"},
+		{"non-UTC input converted first", time.Date(2026, 9, 9, 12, 0, 0, 500000000, time.FixedZone("", 2*3600)), "2026-09-09T10:00:00.500000+00:00"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := pythonUTCIsoFormat(tc.input); got != tc.want {
+				t.Fatalf("pythonUTCIsoFormat(%v) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
 	}
 }
 

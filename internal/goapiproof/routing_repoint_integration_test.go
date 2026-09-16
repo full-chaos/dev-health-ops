@@ -396,6 +396,52 @@ func TestRepointRefusesWhenSomethingElseDriftsModeDuringTheWrite(t *testing.T) {
 	}
 }
 
+// repoint's "affected 0 rows" guard carries the identical comment
+// enable's sibling guard does -- CHAOS-5416's silent-success shape -- but
+// only enable's had a trigger fixture forcing it to actually fail. Same
+// technique here: a BEFORE UPDATE trigger returning NULL skips the write
+// entirely, and the guard must catch it rather than report success.
+func TestRepointRefusesWhenTheRoutingRowWriteIsSwallowed(t *testing.T) {
+	ctx := t.Context()
+	pool := startAuditedRegistryPostgres(t)
+	seedRow(t, ctx, "featureFlags", testDocumentDigest, "canary", testCandidateBuild, pool)
+
+	if _, err := pool.Exec(ctx, `
+		CREATE OR REPLACE FUNCTION test_swallow_repoint_update() RETURNS trigger AS $$
+		BEGIN
+			RETURN NULL; -- BEFORE UPDATE returning NULL skips the row entirely
+		END;
+		$$ LANGUAGE plpgsql;
+		CREATE TRIGGER test_swallow_repoint_update BEFORE UPDATE ON go_api_routing_state
+			FOR EACH ROW EXECUTE FUNCTION test_swallow_repoint_update();
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Repoint(ctx, pool, RepointRequest{
+		PrincipalID:    testPrincipalID,
+		SchemaDigest:   testSchemaDigest,
+		RunningBuild:   repointRunningBuild,
+		Operations:     []string{"featureFlags"},
+		RecordedBy:     "lane-routing-verbs",
+		ReviewEvidence: "affected-0 swallow guard",
+	})
+	if err == nil {
+		t.Fatal("Repoint must refuse when the routing-row write affected 0 rows -- CHAOS-5416's exact silent-success shape")
+	}
+	if !strings.Contains(err.Error(), "affected 0 rows") {
+		t.Fatalf("refused for a different reason, so the RowsAffected() check is not what caught it: %v", err)
+	}
+
+	var build string
+	if err := pool.QueryRow(ctx, `SELECT current_candidate_build FROM go_api_routing_state WHERE selected_operation = 'featureFlags'`).Scan(&build); err != nil {
+		t.Fatal(err)
+	}
+	if build != testCandidateBuild {
+		t.Fatalf("the row's build = %q despite the write being swallowed -- want it UNCHANGED at %q", build, testCandidateBuild)
+	}
+}
+
 // `enable` and `repoint` acquire the routing-state
 // row lock and the candidate-build row lock in OPPOSITE orders (see
 // routing_enable.go's package-level comment, corrected by this same

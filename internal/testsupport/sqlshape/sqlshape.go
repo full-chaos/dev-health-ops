@@ -62,6 +62,21 @@ func scan(sql string) (depths []int, literals []bool) {
 	return depths, literals
 }
 
+// Depths returns, for each byte of sql, the parenthesis nesting depth that
+// byte sits at (0 = top level) -- the same structural scan ConcatOperands
+// and PreservesPriorResultCategory use internally, exported for a caller
+// that needs its own depth-aware structural check rather than one of this
+// package's `||`-specific ones. A guard that wants to assert "these two
+// points in the SQL text are part of the same statement, not one nested
+// inside a subquery relative to the other" compares depths[i] at each
+// point directly, rather than scanning for a bare `(` between them, which
+// a parenthesised function call (`toString(id)`, `coalesce(a, b)`) between
+// the two points would false-positive on.
+func Depths(sql string) []int {
+	depths, _ := scan(sql)
+	return depths
+}
+
 // ConcatOperands returns every `||` operator in sql with its two operands.
 //
 // This is a scan rather than a regexp because the regexp it replaced spanned

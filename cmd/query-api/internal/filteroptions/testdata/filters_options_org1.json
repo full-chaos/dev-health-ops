@@ -1,0 +1,45 @@
+{
+  "teams": [
+    "team-a",
+    "team-b"
+  ],
+  "repos": [
+    "api-gateway",
+    "checkout-service"
+  ],
+  "services": [],
+  "developers": [
+    "dev@example.com",
+    "second@example.com"
+  ],
+  "work_category": [
+    "feature_delivery",
+    "maintenance",
+    "operational",
+    "quality",
+    "risk",
+    "feature_delivery.customer",
+    "feature_delivery.enablement",
+    "feature_delivery.roadmap",
+    "maintenance.debt",
+    "maintenance.refactor",
+    "maintenance.upgrade",
+    "operational.incident_response",
+    "operational.on_call",
+    "operational.support",
+    "quality.bugfix",
+    "quality.reliability",
+    "quality.testing",
+    "risk.compliance",
+    "risk.security",
+    "risk.vulnerability"
+  ],
+  "issue_type": [
+    "bug",
+    "feature"
+  ],
+  "flow_stage": [
+    "done",
+    "in_progress"
+  ]
+}

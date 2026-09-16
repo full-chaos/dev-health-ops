@@ -325,11 +325,11 @@ func TestRenderRESTEndpointsBlockRendersCountsAndRowsGolden(t *testing.T) {
 }
 
 // TestLoadRESTEndpointsOnTheRealRepo pins today's real, mechanically-derived
-// facts: exactly two REST routes are ported so far
-// (/api/v1/investment/explain, /api/v1/quadrant), and a representative
-// python-only route is still python-only. This is the same "byte-identity
-// proof against the real repo" shape TestLoadDailyFinalizeCompatFamiliesIsEmptyOnTheRealRepo
-// uses.
+// facts: exactly three REST routes are ported so far
+// (/api/v1/investment/explain, /api/v1/quadrant, /api/v1/filters/options),
+// and a representative python-only route is still python-only. This is the
+// same "byte-identity proof against the real repo" shape
+// TestLoadDailyFinalizeCompatFamiliesIsEmptyOnTheRealRepo uses.
 func TestLoadRESTEndpointsOnTheRealRepo(t *testing.T) {
 	root := repoRootForTest(t)
 	rows, err := LoadRESTEndpoints(
@@ -361,6 +361,14 @@ func TestLoadRESTEndpointsOnTheRealRepo(t *testing.T) {
 		t.Fatalf("GET /api/v1/quadrant = %+v, want ported at quadrant_route.go", quadrant)
 	}
 
+	filterOptions, ok := byKey["GET /api/v1/filters/options"]
+	if !ok {
+		t.Fatal("expected GET /api/v1/filters/options to be enumerated")
+	}
+	if filterOptions.Status != RESTPorted || !strings.Contains(filterOptions.GoHandler, "filter_options_route.go") {
+		t.Fatalf("GET /api/v1/filters/options = %+v, want ported at filter_options_route.go", filterOptions)
+	}
+
 	meta, ok := byKey["GET /api/v1/meta"]
 	if !ok {
 		t.Fatal("expected GET /api/v1/meta to be enumerated")
@@ -370,8 +378,9 @@ func TestLoadRESTEndpointsOnTheRealRepo(t *testing.T) {
 	}
 
 	ported, _, _ := RESTEndpointCounts(rows)
-	if ported != 2 {
-		t.Fatalf("got %d ported routes, want exactly 2 (POST /api/v1/investment/explain, GET /api/v1/quadrant) -- "+
-			"if this changed, a route was ported or un-ported; update this pin, it is not stale by accident", ported)
+	if ported != 3 {
+		t.Fatalf("got %d ported routes, want exactly 3 (POST /api/v1/investment/explain, GET /api/v1/quadrant, "+
+			"GET /api/v1/filters/options) -- if this changed, a route was ported or un-ported; update this pin, "+
+			"it is not stale by accident", ported)
 	}
 }

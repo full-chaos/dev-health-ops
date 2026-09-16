@@ -374,6 +374,20 @@ func main() {
 		log.Print("query-api: /api/v1/quadrant route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
 	}
 
+	// GET /api/v1/filters/options, gated by its own routeswitch
+	// entry (default OFF via GO_API_FILTER_OPTIONS_ENABLED) -- see
+	// filter_options_route.go's package doc comment for the reachability
+	// story and internal/filteroptions for the ported reader and its
+	// declared ReplacingMergeTree dedup fixes.
+	if filterOptionsHandler, filterOptionsCleanup, filterOptionsOK, filterOptionsErr := buildFilterOptionsRoute(); filterOptionsErr != nil {
+		log.Fatalf("query-api: build /api/v1/filters/options route: %v", filterOptionsErr)
+	} else if filterOptionsOK {
+		defer filterOptionsCleanup()
+		mux.HandleFunc("/api/v1/filters/options", filterOptionsHandler)
+	} else {
+		log.Print("query-api: /api/v1/filters/options route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
+	}
+
 	server := &http.Server{
 		Addr:              addr(),
 		Handler:           mux,

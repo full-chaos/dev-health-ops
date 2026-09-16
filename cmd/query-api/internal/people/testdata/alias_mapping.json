@@ -1,0 +1,51 @@
+[
+  {
+    "person_id": "e4fad4e14a9d38aed38ea3383946ead7",
+    "display_name": "Bob Jones",
+    "identities": [
+      {
+        "provider": "email",
+        "handle": "bob.jones@example.com"
+      },
+      {
+        "provider": "github",
+        "handle": "bjones"
+      },
+      {
+        "provider": "identity",
+        "handle": "Bob J"
+      }
+    ],
+    "active": true
+  },
+  {
+    "person_id": "e4fad4e14a9d38aed38ea3383946ead7",
+    "display_name": "Bob Jones",
+    "identities": [
+      {
+        "provider": "email",
+        "handle": "bob.jones@example.com"
+      },
+      {
+        "provider": "github",
+        "handle": "bjones"
+      },
+      {
+        "provider": "identity",
+        "handle": "Bob J"
+      }
+    ],
+    "active": true
+  },
+  {
+    "person_id": "d4766e3f21c67b7c786f012d910fa54f",
+    "display_name": "Carol",
+    "identities": [
+      {
+        "provider": "email",
+        "handle": "carol@example.com"
+      }
+    ],
+    "active": true
+  }
+]

@@ -416,6 +416,19 @@ func main() {
 		log.Print("query-api: /api/v1/drilldown/issues route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
 	}
 
+	// GET /api/v1/people, gated by its own routeswitch entry (default OFF
+	// via GO_API_PEOPLE_SEARCH_ENABLED) -- see people_route.go's package
+	// doc comment for the reachability story and internal/people for the
+	// ported resolver and its documented ReplacingMergeTree-dedup notes.
+	if peopleSearchHandler, peopleSearchCleanup, peopleSearchOK, peopleSearchErr := buildPeopleSearchRoute(); peopleSearchErr != nil {
+		log.Fatalf("query-api: build /api/v1/people route: %v", peopleSearchErr)
+	} else if peopleSearchOK {
+		defer peopleSearchCleanup()
+		mux.HandleFunc("/api/v1/people", peopleSearchHandler)
+	} else {
+		log.Print("query-api: /api/v1/people route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
+	}
+
 	// GET /api/v1/meta, gated by its own routeswitch entry (default OFF via
 	// GO_API_META_ENABLED) -- see meta_route.go's package doc comment for
 	// the reachability story and internal/meta for the ported handler.

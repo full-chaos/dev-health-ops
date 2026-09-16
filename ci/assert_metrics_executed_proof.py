@@ -240,14 +240,26 @@ TEAM_DAY_FAMILIES: dict[str, str] = {
 # family_readback has (CHAOS-4263) rather than trading it away for a looser
 # org-only check. Team-scope rows are deliberately NOT proven here: they are
 # written by a DIFFERENT family in a DIFFERENT scope (compounding_risk_team,
-# run-scoped, from the finalize handler), so counting them would let this
-# gate pass with the repo-scope partition path dead. The original reason was
-# that those rows came from Python's run_daily_metrics_finalize; CHAOS-5084
-# ported that writer to a native finalize executor and CHAOS-3092 (PR-A)
-# deleted the bridge entirely, but the scope pin stays for the reason above
-# -- proving compounding_risk_team is a separate gate, not this one.
+# run-scoped, from the finalize handler) -- counting them here would let this
+# gate pass with the repo-scope partition path dead. compounding_risk_team is
+# proven separately, by SCOPE_ID_TEAM_FAMILIES below.
 SCOPE_ID_REPO_FAMILIES: dict[str, str] = {
     "compounding_risk": "compounding_risk_daily",
+}
+
+# Scope-ID-TEAM family: compounding_risk_team writes the SAME table as
+# SCOPE_ID_REPO_FAMILIES above (compounding_risk_daily, keyed (org_id, scope,
+# scope_id, day, computed_at)), but at scope='team' -- scope_id there is a
+# team_id (String), not a repo_id, so it cannot reuse scope_id_repo_readback's
+# live_repo_ids cross-check, which would flag every legitimate team_id as a
+# dead repo id. team_id has no separate "live id" oracle the way
+# repo_id does (no table lists every valid team_id the way `repos` does for
+# repo_id) -- the same reason TEAM_DAY_FAMILIES' team_readback above does not
+# cross-check either. This shape is therefore team_readback's policy (scope
+# by org_id + computed_at only, no dead-id check) applied to a scope/scope_id
+# column pair instead of a literal team_id column.
+SCOPE_ID_TEAM_FAMILIES: dict[str, str] = {
+    "compounding_risk_team": "compounding_risk_daily",
 }
 
 # Scope-KEY families (CHAOS-4288): a FOURTH shape. The benchmarking tables are
@@ -444,6 +456,34 @@ def scope_id_repo_readback(
     }
 
 
+def scope_id_team_readback(
+    client, table: str, org_id: str, run_start: datetime
+) -> dict[str, FamilyRowCount]:
+    """team_readback's counterpart for scope/scope_id-keyed tables.
+
+    Same table scope_id_repo_readback reads, but pins ``scope = 'team'``
+    instead of ``'repo'`` and groups by ``scope_id`` (a team_id) rather than a
+    literal ``team_id`` column. No cross-check against a live-id set: unlike
+    repo_id, a team_id has no "list of every valid id" oracle to check
+    against (the same reason team_readback above does not cross-check either).
+    """
+    result = client.query(
+        f"""
+        SELECT scope_id, count() AS n, max(computed_at) AS latest
+        FROM {table}
+        WHERE org_id = {{org_id:String}}
+          AND scope = 'team'
+          AND computed_at >= {{run_start:DateTime64(6)}}
+        GROUP BY scope_id
+        """,
+        parameters={"org_id": org_id, "run_start": run_start},
+    )
+    return {
+        str(row[0]): {"rows": int(row[1]), "latest_computed_at": str(row[2])}
+        for row in result.result_rows
+    }
+
+
 def unscoped_scope_ids(client, table: str, run_start: datetime) -> set[str]:
     """unscoped_repo_ids' counterpart for scope/scope_id-keyed tables."""
     result = client.query(
@@ -478,6 +518,7 @@ def main() -> int:
         sorted(REPO_DAY_FAMILIES)
         + sorted(TEAM_DAY_FAMILIES)
         + sorted(SCOPE_ID_REPO_FAMILIES)
+        + sorted(SCOPE_ID_TEAM_FAMILIES)
         + sorted(SCOPE_KEY_FAMILIES)
         + sorted(SYNTHESIZED_REPO_ID_FAMILIES)
     )
@@ -624,6 +665,26 @@ def main() -> int:
                         f"{family} ({table}): wrote scope_id(s) {sorted(stray)} "
                         "that are not in ClickHouse repos for any org at all -- "
                         "the exact CHAOS-4263 dead-id shape."
+                    )
+                continue
+
+            if family in SCOPE_ID_TEAM_FAMILIES:
+                table = SCOPE_ID_TEAM_FAMILIES[family]
+                team_scope_rows = scope_id_team_readback(
+                    client, table, args.org_id, run_start
+                )
+                total_rows = sum(int(v["rows"]) for v in team_scope_rows.values())
+                summary[family] = {
+                    "table": table,
+                    "org_id": args.org_id,
+                    "rows_written": total_rows,
+                    "teams_with_rows": sorted(team_scope_rows),
+                }
+                if total_rows == 0:
+                    failures.append(
+                        f"{family} ({table}): zero_rows_with_source_data -- no "
+                        f"scope='team' row with computed_at >= {args.run_start} "
+                        f"for org {args.org_id}."
                     )
                 continue
 

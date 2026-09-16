@@ -908,6 +908,60 @@ func TestPreparedRouteSnapshotRefusesEverySensitiveKey(t *testing.T) {
 	}
 }
 
+// TestPreparedRouteSnapshotRefusesMalformedMembershipRejections locks in
+// that a malformed MembershipRejections element refuses the whole manifest
+// with ErrEffectRecoveryUnsafe rather than persisting it -- no test fed this
+// scrub loop a malformed element before. This does not by itself prove the
+// loop's own json.Unmarshal check is load-bearing: json.RawMessage's
+// MarshalJSON returns its bytes unvalidated, but the encoding/json package
+// re-validates them when compacting a Marshaler's output, so
+// encodePreparedRouteManifest's own final json.Marshal(snapshot) call
+// already fails closed on the same malformed bytes independently of this
+// loop (verified directly: removing the loop's json.Unmarshal check alone
+// leaves this test passing). The sensitive-key clause below is the one this
+// loop actually needs a dedicated test for.
+func TestPreparedRouteSnapshotRefusesMalformedMembershipRejections(t *testing.T) {
+	t.Parallel()
+	claim := githubWorkItemOracleClaim()
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	batch := preparedGitHubWorkItemsFixture(t, claim)
+	for index := range batch.Effects {
+		if batch.Effects[index].Destination == githubTeamAttributionsDestination {
+			batch.Effects[index].MembershipRejections = []json.RawMessage{json.RawMessage(`{not-json`)}
+		}
+	}
+	if _, _, err := encodePreparedRouteManifest(
+		claim, batch, ShadowComparison{Match: true}, now,
+	); !errors.Is(err, ErrEffectRecoveryUnsafe) {
+		t.Fatalf("malformed membership rejection accepted: error=%v", err)
+	}
+}
+
+// TestPreparedRouteSnapshotRefusesSensitiveKeyInMembershipRejections is the
+// MembershipRejections sibling of TestPreparedRouteSnapshotRefusesEverySensitiveKey
+// above: the same sensitive-key scrub runs over this field too, but no test
+// ever populated a rejection entry with a sensitive key, so dropping that
+// clause on its own (independently of the json.Unmarshal error clause)
+// passed the full committed suite.
+func TestPreparedRouteSnapshotRefusesSensitiveKeyInMembershipRejections(t *testing.T) {
+	t.Parallel()
+	claim := githubWorkItemOracleClaim()
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	batch := preparedGitHubWorkItemsFixture(t, claim)
+	for index := range batch.Effects {
+		if batch.Effects[index].Destination == githubTeamAttributionsDestination {
+			batch.Effects[index].MembershipRejections = []json.RawMessage{
+				json.RawMessage(`{"reason":"repo_not_owned","token":"must-not-persist"}`),
+			}
+		}
+	}
+	if _, _, err := encodePreparedRouteManifest(
+		claim, batch, ShadowComparison{Match: true}, now,
+	); !errors.Is(err, ErrEffectRecoveryUnsafe) {
+		t.Fatalf("sensitive-key membership rejection accepted: error=%v", err)
+	}
+}
+
 // Completion is withheld until every effect commits. Only the converse was
 // proven -- that a fully committed batch completes -- and the converse is the
 // easy half.

@@ -454,6 +454,39 @@ func main() {
 		log.Print("query-api: /api/v1/people route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
 	}
 
+	// GET /api/v1/people/{person_id}/summary, gated by its own routeswitch
+	// entry (default OFF via GO_API_PEOPLE_SUMMARY_ENABLED) -- see
+	// people_summary_route.go's package doc comment for the reachability
+	// story, the path-parameter mechanism and internal/people for the
+	// ported resolver.
+	if peopleSummaryHandler, peopleSummaryCleanup, peopleSummaryOK, peopleSummaryErr := buildPeopleSummaryRoute(); peopleSummaryErr != nil {
+		log.Fatalf("query-api: build %s route: %v", peopleSummaryPath, peopleSummaryErr)
+	} else if peopleSummaryOK {
+		defer peopleSummaryCleanup()
+		// See the investment/explain mount above for why this is a
+		// reassignment, not an inlined wrapper.
+		peopleSummaryHandler = withProofProvenance(peopleSummaryHandler, runningBuild())
+		mux.HandleFunc("/api/v1/people/{person_id}/summary", peopleSummaryHandler)
+	} else {
+		log.Printf("query-api: %s route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted", peopleSummaryPath)
+	}
+
+	// GET /api/v1/people/{person_id}/metric, gated by its own routeswitch
+	// entry (default OFF via GO_API_PEOPLE_METRIC_ENABLED) -- see
+	// people_metric_route.go's package doc comment for the reachability
+	// story and internal/people for the ported resolver.
+	if peopleMetricHandler, peopleMetricCleanup, peopleMetricOK, peopleMetricErr := buildPeopleMetricRoute(); peopleMetricErr != nil {
+		log.Fatalf("query-api: build %s route: %v", peopleMetricPath, peopleMetricErr)
+	} else if peopleMetricOK {
+		defer peopleMetricCleanup()
+		// See the investment/explain mount above for why this is a
+		// reassignment, not an inlined wrapper.
+		peopleMetricHandler = withProofProvenance(peopleMetricHandler, runningBuild())
+		mux.HandleFunc("/api/v1/people/{person_id}/metric", peopleMetricHandler)
+	} else {
+		log.Printf("query-api: %s route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted", peopleMetricPath)
+	}
+
 	// GET /api/v1/meta, gated by its own routeswitch entry (default OFF via
 	// GO_API_META_ENABLED) -- see meta_route.go's package doc comment for
 	// the reachability story and internal/meta for the ported handler.

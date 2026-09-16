@@ -230,3 +230,46 @@ func identitiesForPerson(identity string, aliases []string) []PersonIdentity {
 	}
 	return results
 }
+
+// identityVariants ports identity_variants (people_identity.py:97-109):
+// the set of raw identity strings (the canonical identity, every alias,
+// an email's local-part/lowercased form, and a "provider:handle"
+// identity's bare handle) that all resolve to the same person -- fed
+// into a SQL IN clause by resolveIdentityContext's callers
+// (_identity_inputs, services/people.py:301-303). Iteration order over a
+// Go map is not the Python set's insertion order, but the result only
+// ever feeds a SQL IN list -- membership, not order, is the only thing
+// that matters downstream. A separate copy of
+// cmd/query-api/internal/quadrant/identity.go's own identityVariants:
+// same Python source, different package, same "repeat, don't couple for
+// something this narrow" posture the rest of this file's doc comment
+// already explains.
+func identityVariants(identity string, aliases []string) []string {
+	variants := map[string]bool{}
+	if identity != "" {
+		variants[identity] = true
+	}
+	for _, alias := range aliases {
+		if alias != "" {
+			variants[alias] = true
+		}
+	}
+	if idx := strings.Index(identity, ":"); idx != -1 {
+		if handle := identity[idx+1:]; handle != "" {
+			variants[handle] = true
+		}
+	}
+	if idx := strings.Index(identity, "@"); idx != -1 {
+		if local := identity[:idx]; local != "" {
+			variants[local] = true
+		}
+		variants[normalizeEmailIdentity(identity)] = true
+	}
+	out := make([]string, 0, len(variants))
+	for v := range variants {
+		if v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}

@@ -281,7 +281,7 @@ sync with either side, so a route added, removed or newly wired on either plane 
 time the tool runs, and the doc-drift check below fails until it is re-rendered.
 
 <!-- BEGIN GENERATED REST ENDPOINTS -->
-_32 `/api/v1/*` routes in `src/dev_health_ops/api/main.py`: **11** ported, **21** python-only, **0** dead-by-design._
+_32 `/api/v1/*` routes in `src/dev_health_ops/api/main.py`: **13** ported, **19** python-only, **0** dead-by-design._
 
 | Method | Path | Status | Go handler |
 | --- | --- | --- | --- |
@@ -309,8 +309,8 @@ _32 `/api/v1/*` routes in `src/dev_health_ops/api/main.py`: **11** ported, **21*
 | GET | `/api/v1/people` | ported | `cmd/query-api/people_route.go:93` |
 | GET | `/api/v1/people/{person_id}/drilldown/issues` | python-only | -- |
 | GET | `/api/v1/people/{person_id}/drilldown/prs` | python-only | -- |
-| GET | `/api/v1/people/{person_id}/metric` | python-only | -- |
-| GET | `/api/v1/people/{person_id}/summary` | python-only | -- |
+| GET | `/api/v1/people/{person_id}/metric` | ported | `cmd/query-api/people_metric_route.go:69` |
+| GET | `/api/v1/people/{person_id}/summary` | ported | `cmd/query-api/people_summary_route.go:88` |
 | GET | `/api/v1/quadrant` | ported | `cmd/query-api/quadrant_route.go:79` |
 | GET | `/api/v1/sankey` | python-only | -- |
 | POST | `/api/v1/sankey` | python-only | -- |

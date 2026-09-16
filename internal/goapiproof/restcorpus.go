@@ -314,6 +314,32 @@ var peopleParity = Options{
 // is declared via drilldownIssuesParity above, the same shape drilldown/
 // prs's own corpus entry already cites for its created_at/merged_at/
 // first_review_at fields.
+//
+// people/{person_id}/summary and people/{person_id}/metric carry NO 200
+// (success) entry, and consequently NO BaselineDefect citation for either
+// route's own several declared FINAL-dedup fixes (their own route/package
+// doc comments: user_metrics_daily, work_item_cycle_times and repos all
+// read raw in the reference and FINAL in this port) -- unlike quadrant's
+// type=person scope or explain's repo/team-scoped branches (both reachable
+// but simply unexercised here), a 200 from EITHER of these two routes is
+// only reachable through a REAL identity that resolves in the target
+// org's own ClickHouse data (resolveIdentityContext's own contract: ""
+// canonical means 404, full stop), which this corpus cannot know any more
+// than the GraphQL corpus's own `pr` operation can know a real stored pull
+// request id (operations.go's own `pr` entry: "an invented [id] is worse
+// than no entry at all"). Both routes' person_id is a PATH segment with no
+// per-request override in this table's own request shape (RESTRequest has
+// no path field; doREST sends spec.Path verbatim) -- so, rather than
+// leaving these two paths uncovered entirely (which AssertRESTPathCoverage
+// would refuse), each spec below turns that same constraint into its
+// negative-path coverage instead: every request's person_id literally
+// resolves to the un-templated text "{person_id}", which can never equal a
+// real identity's md5 digest, so it deterministically 404s (or, ahead of
+// identity resolution, still validates/400s) on both planes. If a live
+// person_id ever becomes available to this table (a flag, or a row read
+// from the target org's own data, matching InstanceVariable's own resolution
+// story for `pr`), the 200 entries and their BaselineDefect citations
+// belong here, not invented now.
 var restEndpointSpecs = map[string]RESTEndpointSpec{
 	"REST:GET:/api/v1/quadrant": {
 		Method: "GET",
@@ -697,6 +723,82 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				// request (people_route.go's own ordering doc comment).
 				Name:                "invalid_limit_with_comparative_param",
 				Query:               url.Values{"limit": {"not-a-number"}, "compare_to": {"1"}},
+				WantCandidateStatus: 422, WantBaselineStatus: 422,
+				BodyMode: RESTBodyModeJSON,
+			},
+		},
+	},
+	"REST:GET:/api/v1/people/{person_id}/summary": {
+		Method: "GET",
+		Path:   "/api/v1/people/{person_id}/summary",
+		Requests: []RESTRequest{
+			{
+				// person_id is a PATH segment, and RESTRequest has no
+				// per-request path override (doREST sends spec.Path
+				// verbatim) -- so every request under this spec resolves
+				// person_id to the LITERAL text "{person_id}", url-escaped
+				// on the wire and decoded back to that same literal string
+				// by both planes' own path routing before either ever
+				// looks at it. That string can never equal a real
+				// identity's md5 digest (resolve_person_identity/
+				// resolvePersonIdentity's WHERE clause), so it
+				// deterministically 404s on both planes -- this table's
+				// no-real-id constraint (see this file's package doc
+				// comment) turns INTO the negative-path proof here rather
+				// than blocking it, matching main.py's own literal
+				// `HTTPException(404, "Person not found")` string.
+				Name:                "person_not_found",
+				WantCandidateStatus: 404, WantBaselineStatus: 404,
+				BodyMode: RESTBodyModeJSON,
+			},
+			{
+				// FastAPI/Pydantic resolves range_days at the framework
+				// level before the route body (hence before identity
+				// resolution) ever runs -- people_summary_route.go's own
+				// doc comment on this precedence -- so this 422 fires
+				// regardless of person_id, the same "validation beats
+				// business logic" shape this table's people/quadrant
+				// entries already establish.
+				Name:                "invalid_range_days",
+				Query:               url.Values{"range_days": {"not-a-number"}},
+				WantCandidateStatus: 422, WantBaselineStatus: 422,
+				BodyMode: RESTBodyModeJSON,
+			},
+		},
+	},
+	"REST:GET:/api/v1/people/{person_id}/metric": {
+		Method: "GET",
+		Path:   "/api/v1/people/{person_id}/metric",
+		Requests: []RESTRequest{
+			{
+				// _metric_config(metric)/personMetricConfig(metric) both
+				// run BEFORE identity resolution (build_person_metric_
+				// response's own call order, metric.go's own doc comment)
+				// -- so an unsupported metric answers 400 regardless of
+				// person_id, the same literal-path-segment reasoning the
+				// summary spec's own person_not_found entry documents.
+				Name:                "unsupported_metric",
+				Query:               url.Values{"metric": {"not-a-real-metric"}},
+				WantCandidateStatus: 400, WantBaselineStatus: 400,
+				BodyMode: RESTBodyModeJSON,
+			},
+			{
+				// A SUPPORTED metric reaches identity resolution, which
+				// 404s for the same literal-path-segment reason the
+				// summary spec's own person_not_found entry documents.
+				Name:                "person_not_found",
+				Query:               url.Values{"metric": {"churn"}},
+				WantCandidateStatus: 404, WantBaselineStatus: 404,
+				BodyMode: RESTBodyModeJSON,
+			},
+			{
+				// metric is a REQUIRED query param (`metric: str`, no
+				// default, main.py) -- its absence is Pydantic's own
+				// "missing" 422 detail, aggregated the same way this
+				// table's other missing-required-field entries
+				// (quadrant's missing_type) already are. Confirmed live
+				// (this route's own PR TEST-EVIDENCE).
+				Name:                "missing_metric",
 				WantCandidateStatus: 422, WantBaselineStatus: 422,
 				BodyMode: RESTBodyModeJSON,
 			},

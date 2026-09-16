@@ -55,13 +55,18 @@ func startSweepPostgres(t *testing.T, ctx context.Context) *pgxpool.Pool {
 func createSweepFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
 	for _, statement := range []string{
+		// created_at carries the instant the run was planned. The
+		// route-unavailable branch bounds a parked run against it, so the
+		// column has to exist here as it does in production; the DEFAULT is
+		// fixture convenience, since production stamps every insert.
 		`CREATE TABLE public.sync_runs (
 			id uuid PRIMARY KEY,
 			org_id text NOT NULL,
 			status text NOT NULL,
 			completed_units int NOT NULL DEFAULT 0,
 			failed_units int NOT NULL DEFAULT 0,
-			total_units int NOT NULL DEFAULT 0
+			total_units int NOT NULL DEFAULT 0,
+			created_at timestamptz NOT NULL DEFAULT now()
 		)`,
 		// The finalizer's wakeup row. Shape copied from this package's
 		// materializer fixture (materializer_integration_test.go:685), which

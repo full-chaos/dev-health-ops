@@ -239,6 +239,20 @@ var crossPackageRollupSeamRegistry = []crossPackageWriteSite{
 		seamCoveredFile:   "unreclaimable_sweep.go",
 		seamCoveredMarker: `syncrunrollup.Bump(ctx, tx, candidate.syncRunID)`,
 	},
+	{
+		// terminalizeRouteUnavailableSQL is the sweep's OTHER branch: the
+		// units a durable sync.provider_unit route no runtime can serve has
+		// held past its bound. It lives in its own file, and its own
+		// terminalizeOneRouteUnavailable makes the Bump in the same
+		// transaction as the write, immediately after the write's CAS is
+		// proven to have landed.
+		pkgDir:            "../syncreconciler",
+		file:              "route_unavailable_termination.go",
+		snippet:           `SET status = 'failed',`,
+		seamCoveredPkgDir: "../syncreconciler",
+		seamCoveredFile:   "route_unavailable_termination.go",
+		seamCoveredMarker: `syncrunrollup.Bump(ctx, tx, candidate.syncRunID)`,
+	},
 }
 
 // terminalStatusLiteralRegexp matches the raw-SQL-literal write idiom used

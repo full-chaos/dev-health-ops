@@ -30,15 +30,37 @@ import (
 // re-attempted by the readiness poll below if anything grabs the port first.
 func reservePort(t *testing.T) string {
 	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("reserve port: %v", err)
+	return reservePorts(t, 1)[0]
+}
+
+// reservePorts binds n ephemeral ports simultaneously, records their
+// addresses, and only then releases all of them. Holding every listener open
+// until all are bound is what makes the addresses pairwise distinct: while
+// each socket is open the kernel cannot hand its port to another Listen
+// call, but reserving ports one at a time -- open, close, open, close --
+// lets a later call be handed back the very port an earlier one just
+// released. That collision made a configuration-fault case (which supplies
+// two addresses only to satisfy the environment shape, never binding them)
+// occasionally fail the same-address validation instead of exercising the
+// fault under test.
+func reservePorts(t *testing.T, n int) []string {
+	t.Helper()
+	listeners := make([]net.Listener, n)
+	for i := range listeners {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("reserve port: %v", err)
+		}
+		listeners[i] = listener
 	}
-	address := listener.Addr().String()
-	if err := listener.Close(); err != nil {
-		t.Fatalf("release reserved port: %v", err)
+	addresses := make([]string, n)
+	for i, listener := range listeners {
+		addresses[i] = listener.Addr().String()
+		if err := listener.Close(); err != nil {
+			t.Fatalf("release reserved port: %v", err)
+		}
 	}
-	return address
+	return addresses
 }
 
 // brokenEnvironment is the deliberately-broken deployment CHAOS-4881's
@@ -183,8 +205,8 @@ func awaitResponse(t *testing.T, client *http.Client, url string) *http.Response
 // alive. Liveness and readiness collapsing into one signal is the defect
 // CHAOS-4512 recorded; this is the control against it.
 func TestReadinessFailsClosedOnBrokenDatabaseAndSigningKey(t *testing.T) {
-	apiAddress := reservePort(t)
-	operatorAddress := reservePort(t)
+	ports := reservePorts(t, 2)
+	apiAddress, operatorAddress := ports[0], ports[1]
 	env := brokenEnvironment(t, apiAddress, operatorAddress)
 
 	logs, stop := runService(t, env)
@@ -269,8 +291,8 @@ func TestGracefulShutdownLeavesNoGoroutineBehind(t *testing.T) {
 	client := &http.Client{Timeout: 10 * time.Second}
 
 	start := func() (string, func() int) {
-		apiAddress := reservePort(t)
-		operatorAddress := reservePort(t)
+		ports := reservePorts(t, 2)
+		apiAddress, operatorAddress := ports[0], ports[1]
 		_, stop := runService(t, brokenEnvironment(t, apiAddress, operatorAddress))
 		response := awaitResponse(t, client, "http://"+operatorAddress+"/readyz")
 		_, _ = io.Copy(io.Discard, response.Body)
@@ -480,7 +502,8 @@ func TestExecuteRejectsAConfigurationFaultBeforeStarting(t *testing.T) {
 
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			env := brokenEnvironment(t, reservePort(t), reservePort(t))
+			portPair := reservePorts(t, 2)
+			env := brokenEnvironment(t, portPair[0], portPair[1])
 			testCase.mutate(env)
 			var stderr bytes.Buffer
 			code := Execute(context.Background(), nil, lookupFrom(env), IO{Stderr: &stderr})
@@ -498,7 +521,8 @@ func TestExecuteRejectsAConfigurationFaultBeforeStarting(t *testing.T) {
 // writes to a stream that a deployment captures into logs, so a value quoted
 // back from the operator's own environment goes through the redactor first.
 func TestConfigurationErrorsAreRedacted(t *testing.T) {
-	env := brokenEnvironment(t, reservePort(t), reservePort(t))
+	portPair := reservePorts(t, 2)
+	env := brokenEnvironment(t, portPair[0], portPair[1])
 	env[authconfig.EnvDatabaseURI] = "postgres://auth:hunter2@db.internal:5432/devhealth"
 	env[authconfig.EnvDatabaseURI+"_FILE"] = "/run/secrets/dsn"
 
@@ -526,7 +550,8 @@ func TestArgumentHandling(t *testing.T) {
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
-			env := brokenEnvironment(t, reservePort(t), reservePort(t))
+			portPair := reservePorts(t, 2)
+			env := brokenEnvironment(t, portPair[0], portPair[1])
 			code := Execute(
 				context.Background(), testCase.args, lookupFrom(env),
 				IO{Stdout: &stdout, Stderr: &stderr},
@@ -543,7 +568,8 @@ func TestArgumentHandling(t *testing.T) {
 
 func TestVersionFlagPrintsBuildMetadata(t *testing.T) {
 	var stdout bytes.Buffer
-	env := brokenEnvironment(t, reservePort(t), reservePort(t))
+	portPair := reservePorts(t, 2)
+	env := brokenEnvironment(t, portPair[0], portPair[1])
 	code := Execute(
 		context.Background(), []string{"--version"}, lookupFrom(env),
 		IO{Stdout: &stdout},

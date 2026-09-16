@@ -71,22 +71,44 @@ func redactAttr(_ []string, attr slog.Attr) slog.Attr {
 	return attr
 }
 
+// sensitiveKeySegments are markers matched against a whole `_`-separated
+// segment of the key, never a raw substring -- a raw substring match makes
+// "security" redact as a false positive of "uri" (sec-URI-ty). Matching on
+// segments keeps every genuine case (database_uri, redis_uri, api_token,
+// oauth_secret, db_password, dsn) while a key that merely contains one of
+// these words as a fragment of a longer, unrelated segment no longer does.
+var sensitiveKeySegments = map[string]bool{
+	"authorization": true,
+	"cookie":        true,
+	"credential":    true,
+	"dsn":           true,
+	"password":      true,
+	"passwd":        true,
+	"secret":        true,
+	"token":         true,
+	"uri":           true,
+}
+
+// sensitiveKeySegmentPairs are markers that span two adjacent segments. A
+// bare "url" segment is not sensitive by itself -- most *_url settings
+// (webhook_url, avatar_url) name a public endpoint, not a credential -- so
+// only the specific compound spellings known to carry a DSN are listed here.
+var sensitiveKeySegmentPairs = [][2]string{
+	{"database", "url"},
+}
+
 func sensitiveKey(key string) bool {
-	key = strings.ToLower(key)
-	for _, marker := range []string{
-		"authorization",
-		"cookie",
-		"credential",
-		"database_url",
-		"dsn",
-		"password",
-		"passwd",
-		"secret",
-		"token",
-		"uri",
-	} {
-		if strings.Contains(key, marker) {
+	segments := strings.Split(strings.ToLower(key), "_")
+	for _, segment := range segments {
+		if sensitiveKeySegments[segment] {
 			return true
+		}
+	}
+	for _, pair := range sensitiveKeySegmentPairs {
+		for i := 0; i+1 < len(segments); i++ {
+			if segments[i] == pair[0] && segments[i+1] == pair[1] {
+				return true
+			}
 		}
 	}
 	return false

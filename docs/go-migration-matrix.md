@@ -237,7 +237,7 @@ A row that is live, reachable to real clients (`canary`/`primary`) and carries n
 is required before stage 4/5, and "a bare 200 does not qualify".
 
 <!-- BEGIN GENERATED GO API OPERATIONS -->
-_Rendered 2026-09-16T12:25:30Z against main merge-base `02f7194df703d874b638b23e2c230f36d2afb96b`; SDL digest pin `sha256:19485ec136d04de0935717dca8b4f5fd27dd0351fe96b854d40f433229468fd0`; fleet read 2026-09-16T12:25:30Z via fleet file fleet-prod.json._
+_Rendered 2026-09-16T12:25:30Z against main merge-base `b74758e704c764bb8fab9b217270e339532ab6dd`; SDL digest pin `sha256:19485ec136d04de0935717dca8b4f5fd27dd0351fe96b854d40f433229468fd0`; fleet read 2026-09-16T12:25:30Z via fleet file fleet-prod.json._
 
 _Rows in `go_api_proof_run` at read time: **515**. Operations reachable to real clients with no deployed-executed proof: **0**. Rows whose mode says Go but whose schema digest no longer matches the pin, so every request silently falls back to Python: **0**._
 
@@ -281,7 +281,7 @@ sync with either side, so a route added, removed or newly wired on either plane 
 time the tool runs, and the doc-drift check below fails until it is re-rendered.
 
 <!-- BEGIN GENERATED REST ENDPOINTS -->
-_32 `/api/v1/*` routes in `src/dev_health_ops/api/main.py`: **5** ported, **27** python-only, **0** dead-by-design._
+_32 `/api/v1/*` routes in `src/dev_health_ops/api/main.py`: **6** ported, **26** python-only, **0** dead-by-design._
 
 | Method | Path | Status | Go handler |
 | --- | --- | --- | --- |
@@ -303,7 +303,7 @@ _32 `/api/v1/*` routes in `src/dev_health_ops/api/main.py`: **5** ported, **27**
 | POST | `/api/v1/investment/flow` | python-only | -- |
 | POST | `/api/v1/investment/flow/repo-team` | python-only | -- |
 | GET | `/api/v1/investment/sunburst` | python-only | -- |
-| GET | `/api/v1/meta` | python-only | -- |
+| GET | `/api/v1/meta` | ported | `cmd/query-api/meta_route.go:79` |
 | GET | `/api/v1/opportunities` | python-only | -- |
 | POST | `/api/v1/opportunities` | python-only | -- |
 | GET | `/api/v1/people` | python-only | -- |

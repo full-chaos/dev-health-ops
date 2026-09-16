@@ -402,6 +402,22 @@ func main() {
 		log.Print("query-api: /api/v1/drilldown/prs route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
 	}
 
+	// GET /api/v1/meta, gated by its own routeswitch entry (default OFF via
+	// GO_API_META_ENABLED) -- see meta_route.go's package doc comment for
+	// the reachability story and internal/meta for the ported handler.
+	// Unlike every sibling route above, this one carries no envelope
+	// verifier dependency: main.py's meta() route is public (see
+	// meta_route.go's doc comment for the citation trail), so only
+	// CLICKHOUSE_URI gates whether it mounts.
+	if metaHandler, metaCleanup, metaOK, metaErr := buildMetaRoute(); metaErr != nil {
+		log.Fatalf("query-api: build /api/v1/meta route: %v", metaErr)
+	} else if metaOK {
+		defer metaCleanup()
+		mux.HandleFunc("/api/v1/meta", metaHandler)
+	} else {
+		log.Print("query-api: /api/v1/meta route not configured (CLICKHOUSE_URI unset) -- staying unmounted")
+	}
+
 	server := &http.Server{
 		Addr:              addr(),
 		Handler:           mux,

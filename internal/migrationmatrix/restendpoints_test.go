@@ -325,8 +325,8 @@ func TestRenderRESTEndpointsBlockRendersCountsAndRowsGolden(t *testing.T) {
 }
 
 // TestLoadRESTEndpointsOnTheRealRepo pins today's real, mechanically-derived
-// facts: exactly three REST routes are ported so far
-// (/api/v1/investment/explain, /api/v1/quadrant, /api/v1/filters/options),
+// facts: /api/v1/investment/explain, /api/v1/quadrant, /api/v1/filters/options,
+// /api/v1/drilldown/prs (both methods) and /api/v1/meta are ported so far,
 // and a representative python-only route is still python-only. This is the
 // same "byte-identity proof against the real repo" shape
 // TestLoadDailyFinalizeCompatFamiliesIsEmptyOnTheRealRepo uses.
@@ -373,8 +373,16 @@ func TestLoadRESTEndpointsOnTheRealRepo(t *testing.T) {
 	if !ok {
 		t.Fatal("expected GET /api/v1/meta to be enumerated")
 	}
-	if meta.Status != RESTPythonOnly {
-		t.Fatalf("GET /api/v1/meta = %+v, want python-only (query-api registers no such route)", meta)
+	if meta.Status != RESTPorted || !strings.Contains(meta.GoHandler, "meta_route.go") {
+		t.Fatalf("GET /api/v1/meta = %+v, want ported at meta_route.go", meta)
+	}
+
+	homeGet, ok := byKey["GET /api/v1/home"]
+	if !ok {
+		t.Fatal("expected GET /api/v1/home to be enumerated")
+	}
+	if homeGet.Status != RESTPythonOnly {
+		t.Fatalf("GET /api/v1/home = %+v, want python-only (query-api registers no such route)", homeGet)
 	}
 
 	drilldownPRsPost, ok := byKey["POST /api/v1/drilldown/prs"]
@@ -400,9 +408,9 @@ func TestLoadRESTEndpointsOnTheRealRepo(t *testing.T) {
 	}
 
 	ported, _, _ := RESTEndpointCounts(rows)
-	if ported != 5 {
-		t.Fatalf("got %d ported routes, want exactly 5 (POST /api/v1/investment/explain, GET /api/v1/quadrant, "+
-			"GET /api/v1/filters/options, POST+GET /api/v1/drilldown/prs) -- if this changed, a route was ported "+
-			"or un-ported; update this pin, it is not stale by accident", ported)
+	if ported != 6 {
+		t.Fatalf("got %d ported routes, want exactly 6 (POST /api/v1/investment/explain, GET /api/v1/quadrant, "+
+			"GET /api/v1/filters/options, POST+GET /api/v1/drilldown/prs, GET /api/v1/meta) -- if this changed, "+
+			"a route was ported or un-ported; update this pin, it is not stale by accident", ported)
 	}
 }

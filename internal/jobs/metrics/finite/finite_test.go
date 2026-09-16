@@ -206,3 +206,70 @@ func TestWritePrometheusNilReceiverIsNoop(t *testing.T) {
 		t.Fatalf("WritePrometheus on nil receiver: %v", err)
 	}
 }
+
+// TestFiniteReturnsTheValueUnchangedWhenFinite is the red-first proof for
+// Finite() itself: it has no production caller (every write/serialization
+// boundary in this package goes through NullIfNonFinite/JSONLiteral/
+// DropNonFinite instead), so nothing else in this suite exercises it.
+// Pins both halves of its contract: a finite input passes through
+// UNCHANGED (never zeroed), and ok is true.
+func TestFiniteReturnsTheValueUnchangedWhenFinite(t *testing.T) {
+	got, ok := Finite(42.5)
+	if !ok {
+		t.Fatalf("Finite(42.5) ok = false, want true")
+	}
+	if got != 42.5 {
+		t.Fatalf("Finite(42.5) = %v, want 42.5 unchanged", got)
+	}
+}
+
+// TestFiniteReportsNonFiniteAndZerosTheValue is Finite()'s other half: a
+// NaN/+-Inf input reports ok=false and returns 0 (the documented
+// "caller must not use this value" sentinel).
+func TestFiniteReportsNonFiniteAndZerosTheValue(t *testing.T) {
+	for _, v := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
+		got, ok := Finite(v)
+		if ok {
+			t.Errorf("Finite(%v) ok = true, want false", v)
+		}
+		if got != 0 {
+			t.Errorf("Finite(%v) = %v, want 0", v, got)
+		}
+	}
+}
+
+// TestJSONLiteralPassesTheActualValueToRender is the red-first proof that
+// JSONLiteral's finite branch calls render with the REAL value, not a
+// fixed stand-in -- TestJSONLiteralFinitePassesThroughToRender's own
+// render func ignores its argument entirely (always returns "3.0"), so it
+// cannot tell render(value) apart from render(0). This one echoes its
+// input back so the two are distinguishable.
+func TestJSONLiteralPassesTheActualValueToRender(t *testing.T) {
+	got := JSONLiteral("t_family_json_arg", "t_field_json_arg", 7.25, func(v float64) string {
+		return fmt.Sprintf("echo:%v", v)
+	})
+	want := "echo:7.25"
+	if got != want {
+		t.Fatalf("JSONLiteral(7.25, echo) = %q, want %q -- render must be called with the ACTUAL value", got, want)
+	}
+}
+
+// TestJSONLiteralRecordsTelemetryOnNonFiniteTrip is the red-first proof
+// that JSONLiteral's non-finite branch still calls observe: this suite's
+// existing TestJSONLiteralNeverEmitsNonFiniteTokens only scans the
+// RENDERED output, never the counter, so dropping the observe call inside
+// JSONLiteral (while still returning "null") would pass it unnoticed.
+func TestJSONLiteralRecordsTelemetryOnNonFiniteTrip(t *testing.T) {
+	family, field := "t_family_json_telemetry", "t_field_json_telemetry"
+	before := Count(family, field, ReasonNaN)
+
+	got := JSONLiteral(family, field, math.NaN(), func(float64) string { return "unused" })
+	if got != "null" {
+		t.Fatalf("JSONLiteral(NaN) = %q, want \"null\"", got)
+	}
+
+	after := Count(family, field, ReasonNaN)
+	if after != before+1 {
+		t.Fatalf("Count(%s,%s,nan) = %d, want %d -- JSONLiteral must record the boundary trip even though render is never called", family, field, after, before+1)
+	}
+}

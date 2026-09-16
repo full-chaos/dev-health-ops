@@ -71,6 +71,11 @@ func TestFactorsJSONNonFiniteFieldsCountedByFamilyAndField(t *testing.T) {
 type reflectedFloatField struct {
 	name   string
 	inject func(value float64) (restore func())
+	// get reads the field's CURRENT live value through the same
+	// reflect.Value the matching inject closure targets -- used to prove
+	// inject actually wrote the value it was asked to, not a no-op that
+	// silently left (or restored) the original instead.
+	get func() float64
 }
 
 // reflectedFloatFields enumerates every float64/*float64 field on
@@ -99,6 +104,7 @@ func reflectedFloatFields(t *testing.T, structPtr any) []reflectedFloatField {
 					field.SetFloat(value)
 					return func() { field.SetFloat(original) }
 				},
+				get: func() float64 { return field.Float() },
 			})
 		case field.Kind() == reflect.Ptr && field.Type().Elem().Kind() == reflect.Float64:
 			if field.IsNil() {
@@ -113,6 +119,7 @@ func reflectedFloatFields(t *testing.T, structPtr any) []reflectedFloatField {
 					*ptr = value
 					return func() { *ptr = original }
 				},
+				get: func() float64 { return *ptr },
 			})
 		}
 	}
@@ -318,5 +325,74 @@ func TestClampUnitMatchesPythonClampSemantics(t *testing.T) {
 				t.Errorf("clampUnit(%v) = %v, want %v", tc.value, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestReflectedFloatFieldsInjectionActuallyWritesTheValue is the red-first
+// proof that each reflectedFloatField's inject closure really overwrites
+// the target field with the value it is given -- a setter that instead
+// restores the field's ORIGINAL value (e.g. `field.SetFloat(original)` in
+// place of `field.SetFloat(value)`) would leave every downstream sweep
+// asserting a boundary that was never actually exercised. Covers both the
+// scalar float64 and *float64 branches of reflectedFloatFields, since
+// PipelineMetric/TestMetric/CoverageMetric between them contain both kinds
+// of field.
+func TestReflectedFloatFieldsInjectionActuallyWritesTheValue(t *testing.T) {
+	const sentinel = 918273.5
+	for _, source := range []struct {
+		label string
+		ptr   any
+	}{
+		{"PipelineMetric", func() *testops.PipelineMetric { p, _, _ := baselineTestopsInputs(); return p }()},
+		{"TestMetric", func() *testops.TestMetric { _, tm, _ := baselineTestopsInputs(); return tm }()},
+		{"CoverageMetric", func() *testops.CoverageMetric { _, _, c := baselineTestopsInputs(); return c }()},
+	} {
+		for _, field := range reflectedFloatFields(t, source.ptr) {
+			originalBefore := field.get()
+			restore := field.inject(sentinel)
+			if got := field.get(); got != sentinel {
+				t.Errorf("%s.%s: inject(%v) left the live value at %v, want %v -- the setter must write the INJECTED value, not the original", source.label, field.name, sentinel, got, sentinel)
+			}
+			restore()
+			if got := field.get(); got != originalBefore {
+				t.Errorf("%s.%s: after restore(), live value = %v, want the pre-injection value %v", source.label, field.name, got, originalBefore)
+			}
+		}
+	}
+}
+
+// TestReflectedFloatFieldsDiscoversExactFieldCounts is the red-first proof
+// that the field-discovery switch in reflectedFloatFields still recognizes
+// PLAIN float64 fields, not only *float64 ones -- neutering the
+// reflect.Float64 case still passes reflectedFloatFields' own "found zero
+// fields" guard, because every one of these three struct types also has at
+// least one *float64 field, so the sweep would silently stop covering half
+// its target fields without failing anything. Counts are derived by hand
+// from the production struct definitions (testops.PipelineMetric/
+// TestMetric/CoverageMetric) and pinned here exactly.
+func TestReflectedFloatFieldsDiscoversExactFieldCounts(t *testing.T) {
+	pipe, test, cov := baselineTestopsInputs()
+	cases := []struct {
+		label     string
+		ptr       any
+		wantCount int
+	}{
+		// SuccessRate/FailureRate/CancelRate/RerunRate (scalar) +
+		// MedianDurationSeconds/P95DurationSeconds/AvgQueueSeconds/
+		// P95QueueSeconds (*float64) = 8.
+		{"PipelineMetric", pipe, 8},
+		// PassRate/FailureRate/FlakeRate/RetryDependencyRate/
+		// FailureRecurrence (scalar) + SuiteDurationP50Seconds/
+		// SuiteDurationP95Seconds (*float64) = 7.
+		{"TestMetric", test, 7},
+		// LineCoveragePct/BranchCoveragePct/CoverageDeltaPct (*float64
+		// only -- CoverageMetric has no scalar float64 field) = 3.
+		{"CoverageMetric", cov, 3},
+	}
+	for _, tc := range cases {
+		got := len(reflectedFloatFields(t, tc.ptr))
+		if got != tc.wantCount {
+			t.Errorf("reflectedFloatFields(%s) found %d fields, want %d", tc.label, got, tc.wantCount)
+		}
 	}
 }

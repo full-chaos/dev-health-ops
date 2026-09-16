@@ -384,3 +384,62 @@ func TestClassifyMaturityBandsSkipsUndefinedRank(t *testing.T) {
 		t.Errorf("ClassifyMaturityBands emitted a row for %q, want scope-defined only", bands[0].ScopeKey)
 	}
 }
+
+// TestComputeInternalBaselinesCurrentValueTagIsExactlyPinned is the
+// red-first proof that currentValueField's ":current_value" suffix is the
+// literal string it looks like: a scope's own CurrentValue already goes
+// nil correctly on a non-finite latest value regardless of what the tag
+// says (NullIfNonFinite nils the field the same way either way) -- only an
+// exact-match finite.Count on the real suffix catches a corrupted one.
+func TestComputeInternalBaselinesCurrentValueTagIsExactlyPinned(t *testing.T) {
+	asOf := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	metricName := "test_current_value_tag_metric"
+
+	series := map[string][]MetricPoint{
+		"scope-nan": {{Day: asOf, Value: math.NaN()}},
+	}
+
+	currentValueField := metricName + ":current_value"
+	before := finite.Count(finiteBaselineFamily, currentValueField, finite.ReasonNaN)
+
+	baselines := ComputeInternalBaselines(metricName, ScopeRepo, series, asOf, asOf, []int{30}, "org-tag-pin")
+	if len(baselines) != 1 {
+		t.Fatalf("ComputeInternalBaselines returned %d rows, want 1", len(baselines))
+	}
+	if baselines[0].CurrentValue != nil {
+		t.Errorf("CurrentValue = %v, want nil", *baselines[0].CurrentValue)
+	}
+
+	after := finite.Count(finiteBaselineFamily, currentValueField, finite.ReasonNaN)
+	if after != before+1 {
+		t.Errorf("finite.Count(%s,%s,nan) = %d, want %d -- the current-value tag suffix must be pinned exactly", finiteBaselineFamily, currentValueField, after, before+1)
+	}
+}
+
+// TestComputeInternalBaselinesWindowTagIsExactlyPinned is
+// TestComputeInternalBaselinesCurrentValueTagIsExactlyPinned's sibling for
+// windowField's ":window" suffix.
+func TestComputeInternalBaselinesWindowTagIsExactlyPinned(t *testing.T) {
+	asOf := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	metricName := "test_window_tag_metric"
+
+	series := map[string][]MetricPoint{
+		"scope-mixed": {
+			{Day: asOf.AddDate(0, 0, -1), Value: math.NaN()},
+			{Day: asOf, Value: 6.0},
+		},
+	}
+
+	windowField := metricName + ":window"
+	before := finite.Count(finiteBaselineFamily, windowField, finite.ReasonNaN)
+
+	baselines := ComputeInternalBaselines(metricName, ScopeRepo, series, asOf, asOf, []int{30}, "org-tag-pin")
+	if len(baselines) != 1 {
+		t.Fatalf("ComputeInternalBaselines returned %d rows, want 1", len(baselines))
+	}
+
+	after := finite.Count(finiteBaselineFamily, windowField, finite.ReasonNaN)
+	if after != before+1 {
+		t.Errorf("finite.Count(%s,%s,nan) = %d, want %d -- the window tag suffix must be pinned exactly", finiteBaselineFamily, windowField, after, before+1)
+	}
+}

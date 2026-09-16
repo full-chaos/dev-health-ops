@@ -581,14 +581,29 @@ func TestLoadRESTEndpointsOnTheRealRepo(t *testing.T) {
 		t.Fatalf("GET /api/v1/heatmap = %+v, want ported at heatmap_route.go", heatmapGet)
 	}
 
+	sankeyGet, ok := byKey["GET /api/v1/sankey"]
+	if !ok {
+		t.Fatal("expected GET /api/v1/sankey to be enumerated")
+	}
+	if sankeyGet.Status != RESTPorted || !strings.Contains(sankeyGet.GoHandler, "sankey_route.go") {
+		t.Fatalf("GET /api/v1/sankey = %+v, want ported at sankey_route.go", sankeyGet)
+	}
+	sankeyPost, ok := byKey["POST /api/v1/sankey"]
+	if !ok {
+		t.Fatal("expected POST /api/v1/sankey to be enumerated")
+	}
+	if sankeyPost.Status != RESTPorted || !strings.Contains(sankeyPost.GoHandler, "sankey_route.go") {
+		t.Fatalf("POST /api/v1/sankey = %+v, want ported at sankey_route.go", sankeyPost)
+	}
+
 	ported, _, _ := RESTEndpointCounts(rows)
-	if ported != 18 {
-		t.Fatalf("got %d ported routes, want exactly 18 (POST /api/v1/investment/explain, GET /api/v1/quadrant, "+
+	if ported != 20 {
+		t.Fatalf("got %d ported routes, want exactly 20 (POST /api/v1/investment/explain, GET /api/v1/quadrant, "+
 			"GET /api/v1/filters/options, POST+GET /api/v1/drilldown/prs, GET /api/v1/meta, "+
 			"POST+GET /api/v1/drilldown/issues, POST+GET /api/v1/explain, GET /api/v1/people, "+
 			"GET /api/v1/people/{person_id}/summary, GET /api/v1/people/{person_id}/metric, GET /api/v1/flame, "+
 			"GET /api/v1/people/{person_id}/drilldown/prs, GET /api/v1/people/{person_id}/drilldown/issues, "+
-			"GET /api/v1/flame/aggregated, GET /api/v1/heatmap) -- "+
+			"GET /api/v1/flame/aggregated, GET /api/v1/heatmap, POST+GET /api/v1/sankey) -- "+
 			"if this changed, a route was ported or un-ported; update this pin, it is not stale by accident", ported)
 	}
 }

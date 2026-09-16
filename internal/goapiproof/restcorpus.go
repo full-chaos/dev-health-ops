@@ -554,6 +554,78 @@ var heatmapDedupParity = Options{
 	},
 }
 
+// sankeyRepoDedupParity is shared by every admissible (2xx) sankey
+// request whose mode joins repos: investment (fetch_investment_flow_items'
+// own LEFT JOIN repos) and hotspot (fetch_hotspot_rows' two quantile CTEs
+// plus its main SELECT, all three joining repos). repos
+// (ReplacingMergeTree(last_synced)) is joined by api/queries/sankey.py
+// with no FINAL or org_id scoping at all -- the identical mechanism
+// already declared for heatmap's own repos join (this file's own
+// heatmapDedupParity, same ticket). This port's internal/sankey package
+// reads repos FINAL, org_id inside the same JOIN's ON clause (queries.go's
+// own doc comments). An unmerged physical version of a repo row can
+// surface as an extra/relabeled target node (investment mode) or an
+// extra/relabeled repo/directory/file node (hotspot mode) -- Paths names
+// the whole nodes/links payload for the same reason heatmapDedupParity's
+// own citation does: the affected node is not fixed to one path, it
+// depends on which source row happens to hold an unmerged version at
+// request time. Go is correct.
+var sankeyRepoDedupParity = Options{
+	BaselineDefects: []BaselineDefect{
+		{
+			Ticket:             "CHAOS-5803",
+			Reason:             "repos is ReplacingMergeTree(last_synced) (000_raw_tables.sql); api/queries/sankey.py's reader joins it with no FINAL or org_id scoping at all, where this port (internal/sankey) reads it FINAL, org_id filtered inside the JOIN's own ON clause. An unmerged physical version of a repo row can surface as an extra or relabeled node. Go is correct.",
+			Paths:              []string{"data.nodes", "data.links"},
+			Intermittent:       true,
+			IntermittentReason: "present only while repos holds an unmerged physical version inside the requested window; a comparison taken after the next background merge shows no divergence",
+		},
+	},
+}
+
+// sankeyInvestmentParity extends sankeyRepoDedupParity with the
+// investment mode's second, independent divergence source: the
+// argMax-tuple fix analytics.LatestWorkUnitInvestmentsSource() carries
+// for work_unit_investments.repo_id (a Nullable(UUID) column) -- the same
+// mechanism-class defect already declared for the GraphQL investmentFull
+// operation's own coverage paths (this repo's investmentFull corpus
+// entry, same class ticket). A work unit whose newest generation cleared
+// repo_id relative to an earlier generation reads the TRUE latest
+// (possibly-null) value here, where api/queries/sankey.py's own
+// LATEST_WORK_UNIT_INVESTMENTS_CTE import null-skips to a stale non-null
+// repo_id -- changing which target node that work unit's effort lands on.
+var sankeyInvestmentParity = Options{
+	BaselineDefects: append([]BaselineDefect{
+		{
+			Ticket:             "CHAOS-4547",
+			Reason:             "work_unit_investments.repo_id is Nullable(UUID) (017_investment_materialize_tables.sql); api/queries/investment.py's LATEST_WORK_UNIT_INVESTMENTS_CTE (imported unchanged by api/queries/sankey.py's fetch_investment_flow_items) dedups it via a bare argMax(repo_id, computed_at), which SKIPS a row whose repo_id is NULL when picking the newest version, returning a STALE non-null repo_id from an earlier generation instead of the true latest value. This port reuses analytics.LatestWorkUnitInvestmentsSource(), which tuple-wraps repo_id -- (argMax(tuple(repo_id), computed_at)).1 -- and therefore reads the true latest value. A work unit whose newest generation cleared repo_id relative to an earlier one changes which target node (a resolved repo, or the \"Other\" fallback) its effort lands on. Go is correct.",
+			Paths:              []string{"data.nodes", "data.links"},
+			Intermittent:       true,
+			IntermittentReason: "present only while at least one work unit in the requested window has a newer generation whose repo_id differs (including a NULL transition) from an earlier generation's; a request whose work units never re-categorize shows no divergence",
+		},
+	}, sankeyRepoDedupParity.BaselineDefects...),
+}
+
+// sankeyCycleTimesDedupParity is the expense mode's own declared
+// divergence: work_item_cycle_times is ReplacingMergeTree(computed_at)
+// (001_metrics_v2.sql, ordered by (provider, work_item_id)) since its
+// very first migration; api/queries/sankey.py's fetch_expense_abandoned
+// reads it with no FINAL or other dedup at all -- the same class of
+// divergence sankeyRepoDedupParity declares for repos, on a different
+// table. This port reads it FINAL. An unmerged physical version of a
+// work item's cycle-times row (a redrive/recompute) can double-count it
+// into canceled_items, changing the abandoned edge's value.
+var sankeyCycleTimesDedupParity = Options{
+	BaselineDefects: []BaselineDefect{
+		{
+			Ticket:             "CHAOS-5803",
+			Reason:             "work_item_cycle_times is ReplacingMergeTree(computed_at) (001_metrics_v2.sql); api/queries/sankey.py's fetch_expense_abandoned reads it with no FINAL or other dedup at all, where this port (internal/sankey) reads it FINAL. An unmerged physical version of a work item's cycle-times row can double-count it into canceled_items, changing the Rework->Abandonment / rewrite edge's value. Go is correct.",
+			Paths:              []string{"data.links"},
+			Intermittent:       true,
+			IntermittentReason: "present only while work_item_cycle_times holds an unmerged physical version of some work item's row inside the requested window; a comparison taken after the next background merge shows no divergence",
+		},
+	},
+}
+
 var restEndpointSpecs = map[string]RESTEndpointSpec{
 	"REST:GET:/api/v1/quadrant": {
 		Method: "GET",
@@ -838,6 +910,123 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				Name:                "comparative_param_rejected",
 				Query:               url.Values{"type": {"temporal_load"}, "metric": {"review_wait_density"}, "rank": {"1"}},
 				WantCandidateStatus: 400, WantBaselineStatus: 400,
+				BodyMode: RESTBodyModeJSON,
+			},
+		},
+	},
+	"REST:GET:/api/v1/sankey": {
+		Method: "GET",
+		Path:   "/api/v1/sankey",
+		Requests: []RESTRequest{
+			{
+				// mode defaults to "investment" (main.py's own query-param
+				// default), org scope -- no repo resolution query runs at
+				// all.
+				Name:                "investment_default_org",
+				Query:               url.Values{},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode: RESTBodyModeJSON, Parity: sankeyInvestmentParity,
+			},
+			{
+				Name:                "expense_org",
+				Query:               url.Values{"mode": {"expense"}},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode: RESTBodyModeJSON, Parity: sankeyCycleTimesDedupParity,
+			},
+			{
+				Name:                "state_org",
+				Query:               url.Values{"mode": {"state"}},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode: RESTBodyModeJSON,
+			},
+			{
+				Name:                "hotspot_org",
+				Query:               url.Values{"mode": {"hotspot"}},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode: RESTBodyModeJSON, Parity: sankeyRepoDedupParity,
+			},
+			{
+				// scope_type=repo, scope_id bound to filters/options' own
+				// live repo_id -- exercises resolveRepoFilterIDs' own
+				// repos-FINAL read on the hotspot mode's repo-column
+				// variant ("metrics.repo_id").
+				Name:                "hotspot_repo_scoped",
+				Query:               url.Values{"mode": {"hotspot"}, "scope_type": {"repo"}},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode:   RESTBodyModeJSON,
+				Parity:     sankeyRepoDedupParity,
+				IDBindings: []RESTIDBinding{{Producer: "repo_id", QueryParam: "scope_id"}},
+			},
+			{
+				// build_sankey_response's own ValueError for an unknown
+				// mode string reaches sankey_get's generic
+				// `except Exception: 503`, never a 400/404 -- no dedicated
+				// validation surface the way heatmap's `type`/`metric`
+				// pair has one (route file's own package doc comment).
+				Name:                "unknown_mode_is_503",
+				Query:               url.Values{"mode": {"not-a-real-mode"}},
+				WantCandidateStatus: 503, WantBaselineStatus: 503,
+				BodyMode: RESTBodyModeJSON,
+			},
+			{
+				// _filters_from_query's own ScopeFilter(level=scope_type)
+				// construction raises for any scope_type outside the
+				// Literal set, INSIDE sankey_get's try block -- the same
+				// generic 503, not heatmap's dedicated 400 "Invalid scope
+				// filter" (that check lives in build_heatmap_response
+				// itself, sankey has no equivalent).
+				Name:                "invalid_scope_type_is_503",
+				Query:               url.Values{"scope_type": {"bogus"}},
+				WantCandidateStatus: 503, WantBaselineStatus: 503,
+				BodyMode: RESTBodyModeJSON,
+			},
+		},
+	},
+	"REST:POST:/api/v1/sankey": {
+		Method: "POST",
+		Path:   "/api/v1/sankey",
+		Requests: []RESTRequest{
+			{
+				Name:                "investment_default_org",
+				Body:                map[string]any{"mode": "investment", "filters": map[string]any{}},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode: RESTBodyModeJSON, Parity: sankeyInvestmentParity,
+			},
+			{
+				Name:                "expense_org",
+				Body:                map[string]any{"mode": "expense", "filters": map[string]any{}},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode: RESTBodyModeJSON, Parity: sankeyCycleTimesDedupParity,
+			},
+			{
+				Name:                "state_org",
+				Body:                map[string]any{"mode": "state", "filters": map[string]any{}},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode: RESTBodyModeJSON,
+			},
+			{
+				Name:                "hotspot_org",
+				Body:                map[string]any{"mode": "hotspot", "filters": map[string]any{}},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode: RESTBodyModeJSON, Parity: sankeyRepoDedupParity,
+			},
+			{
+				// Confirmed live shape (pydantic_validation_error.go): a
+				// body with neither "mode" nor "filters" produces
+				// byte-parity 422 `missing` envelopes on both planes, in
+				// SankeyRequest's own field order.
+				Name:                "missing_mode_and_filters",
+				Body:                map[string]any{},
+				WantCandidateStatus: 422, WantBaselineStatus: 422,
+				BodyMode: RESTBodyModeJSON,
+			},
+			{
+				// mode outside the four-way Literal is a 422 literal_error,
+				// never reaching build_sankey_response's own ValueError at
+				// all -- unlike GET's unknown_mode_is_503 sibling above.
+				Name:                "invalid_mode_literal",
+				Body:                map[string]any{"mode": "not-a-real-mode", "filters": map[string]any{}},
+				WantCandidateStatus: 422, WantBaselineStatus: 422,
 				BodyMode: RESTBodyModeJSON,
 			},
 		},
@@ -1678,6 +1867,8 @@ var restRunOrder = []string{
 	"REST:GET:/api/v1/meta",
 	"REST:GET:/api/v1/quadrant",
 	"REST:GET:/api/v1/heatmap",
+	"REST:GET:/api/v1/sankey",
+	"REST:POST:/api/v1/sankey",
 }
 
 // RESTRunOrder returns a fresh copy of restRunOrder -- cmd/go-api-rest-

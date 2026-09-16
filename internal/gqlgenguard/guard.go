@@ -844,6 +844,16 @@ func GuardQueryEnv() []string {
 	return append(os.Environ(), "GOENV="+goenv, "XDG_CONFIG_HOME="+os.DevNull, "GOTOOLCHAIN=local")
 }
 
+// cacheQueryEnv is GuardQueryEnv with GOWORK and GOFLAGS pinned as well, for
+// the one query that reads the guard's own effective cache locations
+// (GOPATH/GOMODCACHE/GOCACHE): that query must answer from the environment and
+// go env file alone, never from an ambient workspace or build flag. Pulled out
+// on its own so the pinning itself -- not just its (largely unobservable)
+// effect on a `go env` answer -- has something to assert against directly.
+func cacheQueryEnv() []string {
+	return append(GuardQueryEnv(), "GOWORK=off", "GOFLAGS=")
+}
+
 // GoTool is the go command ONE run uses. It is resolved once, before anything
 // is executed, and every later command is checked against that one resolution
 // rather than against a fresh lookup -- a fresh lookup walks the same PATH in
@@ -930,7 +940,7 @@ func childEnvironment(ctx context.Context, tool GoTool, scratchRoot *os.Root, sc
 	// guard's own lookup cannot switch toolchains or be redirected; the caches
 	// it reports come from the environment and the go env file as the user set
 	// them. (exec keeps the LAST value of a duplicated key.)
-	parent := append(GuardQueryEnv(), "GOWORK=off", "GOFLAGS=")
+	parent := cacheQueryEnv()
 	shared, err := goEnv(ctx, tool, scratch, parent, sharedLocations...)
 	if err != nil {
 		return nil, err

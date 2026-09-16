@@ -377,10 +377,32 @@ func TestLoadRESTEndpointsOnTheRealRepo(t *testing.T) {
 		t.Fatalf("GET /api/v1/meta = %+v, want python-only (query-api registers no such route)", meta)
 	}
 
+	drilldownPRsPost, ok := byKey["POST /api/v1/drilldown/prs"]
+	if !ok {
+		t.Fatal("expected POST /api/v1/drilldown/prs to be enumerated")
+	}
+	if drilldownPRsPost.Status != RESTPorted || !strings.Contains(drilldownPRsPost.GoHandler, "drilldown_prs_route.go") {
+		t.Fatalf("POST /api/v1/drilldown/prs = %+v, want ported at drilldown_prs_route.go", drilldownPRsPost)
+	}
+
+	drilldownPRsGet, ok := byKey["GET /api/v1/drilldown/prs"]
+	if !ok {
+		t.Fatal("expected GET /api/v1/drilldown/prs to be enumerated")
+	}
+	// This package's own doc comment on matching-by-PATH (not (METHOD,
+	// PATH)) applies here: query-api's mux registers ONE path serving
+	// both methods, so both Python method rows render "ported" even
+	// though this is the real, both-methods-actually-wired case that
+	// comment flags as a known simplification for the OTHER (partial)
+	// case.
+	if drilldownPRsGet.Status != RESTPorted || !strings.Contains(drilldownPRsGet.GoHandler, "drilldown_prs_route.go") {
+		t.Fatalf("GET /api/v1/drilldown/prs = %+v, want ported at drilldown_prs_route.go", drilldownPRsGet)
+	}
+
 	ported, _, _ := RESTEndpointCounts(rows)
-	if ported != 3 {
-		t.Fatalf("got %d ported routes, want exactly 3 (POST /api/v1/investment/explain, GET /api/v1/quadrant, "+
-			"GET /api/v1/filters/options) -- if this changed, a route was ported or un-ported; update this pin, "+
-			"it is not stale by accident", ported)
+	if ported != 5 {
+		t.Fatalf("got %d ported routes, want exactly 5 (POST /api/v1/investment/explain, GET /api/v1/quadrant, "+
+			"GET /api/v1/filters/options, POST+GET /api/v1/drilldown/prs) -- if this changed, a route was ported "+
+			"or un-ported; update this pin, it is not stale by accident", ported)
 	}
 }

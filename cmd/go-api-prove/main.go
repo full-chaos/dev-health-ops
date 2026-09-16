@@ -285,9 +285,9 @@ func run() error {
 		return err
 	}
 
-	var pool *pgxpool.Pool
+	var pool dbPool
 	if !f.dryRun {
-		pool, err = pgxpool.New(ctx, f.postgresURI)
+		pool, err = openPostgresPool(ctx, f.postgresURI)
 		if err != nil {
 			return fmt.Errorf("connect to Postgres: %w", err)
 		}
@@ -427,6 +427,25 @@ func run() error {
 // removal.
 type routingRowSource interface {
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}
+
+// dbPool is the Postgres surface run() needs: reading routing rows
+// (routingRowSource) plus writing receipts (goapiproof.Querier) and
+// closing the connection when the run ends.
+//
+// openPostgresPool is a package-level function var rather than a direct
+// pgxpool.New call at the call site, so a test can substitute a fake pool
+// and drive run() end to end without a real database. pgxpool.New itself
+// never dials at construction (the first query does), so this
+// substitution changes nothing about how a real invocation connects.
+type dbPool interface {
+	routingRowSource
+	goapiproof.Querier
+	Close()
+}
+
+var openPostgresPool = func(ctx context.Context, uri string) (dbPool, error) {
+	return pgxpool.New(ctx, uri)
 }
 
 // refuseEmptyRegistry is this command's own copy of the guard

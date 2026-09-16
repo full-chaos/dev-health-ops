@@ -413,3 +413,64 @@ func TestResolveUsableProvider_NoFeatureFlagsTable(t *testing.T) {
 			"even for a community-tier org)", got, "openai")
 	}
 }
+
+// TestLoadRawSettings_WrongEncryptionKeyEmitsTelemetryNotSilence pins the
+// behavior for a present-but-INCORRECT SETTINGS_ENCRYPTION_KEY: an
+// encrypted row whose Decrypt() call fails is skipped exactly like a
+// corrupt row (Python parity, `except ValueError: continue`, unchanged),
+// so the org still resolves as if the setting were unset -- but the
+// failure is not silent. recordDecryptFailure fires for the row, and
+// checkKeyOnFirstDecrypt's once-per-process key-validation signal also
+// fires, because this is the first (and only) decrypt attempt in the
+// process.
+func TestLoadRawSettings_WrongEncryptionKeyEmitsTelemetryNotSilence(t *testing.T) {
+	ctx := context.Background()
+	resetFirstDecryptAttemptForTest()
+
+	rightStore, pool := newTestStore(t)
+	seedByoLLMFeature(ctx, t, pool, "team", true)
+	orgID := seedOrg(ctx, t, pool, "enterprise")
+	insertSetting(ctx, t, pool, orgID, "provider", "openai")
+	insertEncryptedSetting(ctx, t, rightStore, pool, orgID, "api_key", "sk-real-secret")
+
+	wrongDecryptor, err := providerfoundation.NewFernetDecryptor(secrets.NewValue("totally-wrong-key"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongStore := Store{Pool: pool, Decryptor: wrongDecryptor, Now: rightStore.Now}
+
+	var decryptFailures []string
+	var keyValidationFailures []string
+	previousRecordDecryptFailure := recordDecryptFailure
+	previousCheckKeyOnFirstDecrypt := checkKeyOnFirstDecrypt
+	recordDecryptFailure = func(_ context.Context, orgID string) {
+		decryptFailures = append(decryptFailures, orgID)
+	}
+	checkKeyOnFirstDecrypt = func(_ context.Context, orgID string, decryptErr error) {
+		if decryptErr != nil {
+			keyValidationFailures = append(keyValidationFailures, orgID)
+		}
+	}
+	t.Cleanup(func() {
+		recordDecryptFailure = previousRecordDecryptFailure
+		checkKeyOnFirstDecrypt = previousCheckKeyOnFirstDecrypt
+	})
+
+	got, err := wrongStore.ResolveUsableProvider(ctx, orgID.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "" {
+		t.Fatalf("got %q, want \"\" -- api_key must be unreadable with the wrong key, "+
+			"so openai (api-key-required) is not usable", got)
+	}
+
+	if len(decryptFailures) != 1 || decryptFailures[0] != orgID.String() {
+		t.Fatalf("recordDecryptFailure calls = %+v, want exactly [%s] -- "+
+			"the wrong-key decrypt failure must be observable, not silent", decryptFailures, orgID.String())
+	}
+	if len(keyValidationFailures) != 1 || keyValidationFailures[0] != orgID.String() {
+		t.Fatalf("checkKeyOnFirstDecrypt failing calls = %+v, want exactly [%s] -- "+
+			"the FIRST decrypt attempt failing must flag the key itself", keyValidationFailures, orgID.String())
+	}
+}

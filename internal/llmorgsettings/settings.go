@@ -28,6 +28,9 @@ const (
 // a zero-value Decryptor makes every encrypted row unreadable (Decrypt
 // returns ErrCredentialInvalid, treated the same as a corrupt row -- skipped,
 // not fatal, matching _load_org_llm_settings' `except ValueError: continue`).
+// A WRONG (present but incorrect) key fails the exact same way, but is no
+// longer silent about it -- see telemetry.go for the per-failure and
+// first-use-key-validation signals loadRawSettings now emits.
 type Store struct {
 	Pool      *pgxpool.Pool
 	Decryptor providerfoundation.FernetDecryptor
@@ -77,10 +80,13 @@ WHERE org_id = $1 AND category = $2`, orgID, settingsCategoryLLM)
 		resolved := *value
 		if isEncrypted {
 			plain, err := s.Decryptor.Decrypt(secrets.NewValue(resolved))
+			checkKeyOnFirstDecrypt(ctx, orgID, err)
 			if err != nil {
 				// Matches Python: `except ValueError: continue` -- a
 				// corrupt/unreadable row is skipped, never fatal to the
-				// rest of the org's settings.
+				// rest of the org's settings. It is no longer SILENT
+				// about it, though -- see telemetry.go.
+				recordDecryptFailure(ctx, orgID)
 				continue
 			}
 			resolved = string(plain)

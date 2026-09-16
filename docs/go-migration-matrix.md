@@ -156,41 +156,41 @@ _Deployed revisions read from: fleet file fleet-prod.json._
 
 | Family | Scope | Executes | Output parity | Deployed revision (read at) | Deployed-executed proof | Open regressions |
 | --- | --- | --- | --- | --- | --- | --- |
-| `ai_governance` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:21:44Z) | **none** | -- |
-| `ai_impact` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:21:44Z) | **none** | -- |
-| `ai_workflow` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:21:44Z) | **none** | -- |
-| `cicd` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:21:44Z) | **none** | -- |
-| `compounding_risk` | daily | POST_BRIDGE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:21:44Z) | **none** | -- |
-| `deploy` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:21:44Z) | **none** | -- |
-| `file_hotspots` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:21:44Z) | **none** | -- |
-| `file_risk_hotspots` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:21:44Z) | **none** | -- |
-| `incident` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:21:44Z) | **none** | -- |
-| `repo_user_commit` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:21:44Z) | **none** | -- |
-| `review_edges` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:21:44Z) | **none** | -- |
-| `team_wellbeing` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:21:44Z) | **none** | -- |
-| `testops_coverage` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:21:44Z) | **none** | -- |
-| `testops_pipeline` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:21:44Z) | **none** | -- |
-| `testops_risk` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:21:44Z) | **none** | -- |
-| `testops_test` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:21:44Z) | **none** | -- |
-| `work_graph_edges` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:21:44Z) | **none** | -- |
-| `work_item` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:21:44Z) | **none** | -- |
-| `work_item_attribution` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:21:44Z) | **none** | -- |
-| `work_item_estimate` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:21:44Z) | **none** | -- |
-| `work_item_state` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:21:44Z) | **none** | -- |
-| `benchmarking` | finalize | FINALIZE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:21:44Z) | **none** | -- |
-| `compounding_risk_team` | finalize | FINALIZE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:21:44Z) | **none** | -- |
-| `ic_finalize` | finalize | FINALIZE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:21:44Z) | **none** | -- |
-| `team_cognitive_load` | finalize | FINALIZE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:21:44Z) | **none** | -- |
-| `team_complexity` | finalize | FINALIZE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:21:44Z) | **none** | -- |
-| `capacity` | remaining | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:21:44Z) | **none** | -- |
-| `complexity` | remaining | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:21:44Z) | **none** | -- |
-| `dora` | remaining | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:21:44Z) | **none** | -- |
-| `membership_backfill` | remaining | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:21:44Z) | **none** | -- |
-| `recommendations` | remaining | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:21:44Z) | **none** | -- |
-| `release_impact` | remaining | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:21:44Z) | **none** | -- |
-| `work_item_attribution` | remaining | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:21:44Z) | **none** | -- |
-| `investment.materialize` | workgraph | NATIVE | **DIVERGED** (CHAOS-5459, .remember/lanes/team-lead/matrix-tracker-audit-2026-09-09.md section 4 -- repo attribution coverage fell 41% to 34% AFTER this family was recorded NATIVE; the fixes (internal/jobs/investment/hierarchycascade.go, materialize.go) are unmerged in PR #2382 with CHAOS-5460 stacked behind it) | `dd77701c5623` (read 2026-09-16T09:21:44Z) | **none** | **CHAOS-5459, CHAOS-5460** |
-| `workgraph.build` | workgraph | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:21:44Z) | **none** | -- |
+| `ai_governance` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
+| `ai_impact` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
+| `ai_workflow` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
+| `cicd` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
+| `compounding_risk` | daily | POST_BRIDGE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
+| `deploy` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
+| `file_hotspots` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
+| `file_risk_hotspots` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
+| `incident` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
+| `repo_user_commit` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
+| `review_edges` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
+| `team_wellbeing` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
+| `testops_coverage` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
+| `testops_pipeline` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
+| `testops_risk` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
+| `testops_test` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
+| `work_graph_edges` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
+| `work_item` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
+| `work_item_attribution` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
+| `work_item_estimate` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
+| `work_item_state` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
+| `benchmarking` | finalize | FINALIZE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
+| `compounding_risk_team` | finalize | FINALIZE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
+| `ic_finalize` | finalize | FINALIZE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
+| `team_cognitive_load` | finalize | FINALIZE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
+| `team_complexity` | finalize | FINALIZE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
+| `capacity` | remaining | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
+| `complexity` | remaining | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
+| `dora` | remaining | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
+| `membership_backfill` | remaining | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
+| `recommendations` | remaining | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
+| `release_impact` | remaining | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
+| `work_item_attribution` | remaining | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
+| `investment.materialize` | workgraph | NATIVE | **DIVERGED** (CHAOS-5459, .remember/lanes/team-lead/matrix-tracker-audit-2026-09-09.md section 4 -- repo attribution coverage fell 41% to 34% AFTER this family was recorded NATIVE; the fixes (internal/jobs/investment/hierarchycascade.go, materialize.go) are unmerged in PR #2382 with CHAOS-5460 stacked behind it) | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | **CHAOS-5459, CHAOS-5460** |
+| `workgraph.build` | workgraph | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
 <!-- END GENERATED MIGRATION STATUS V2 -->
 
 ### Per Go-API operation
@@ -237,28 +237,31 @@ A row that is live, reachable to real clients (`canary`/`primary`) and carries n
 is required before stage 4/5, and "a bare 200 does not qualify".
 
 <!-- BEGIN GENERATED GO API OPERATIONS -->
-_Rendered 2026-09-16T09:21:44Z against main merge-base `dd77701c562310465109aa5f6c9bffaed0ca6ec6`; SDL digest pin `sha256:19485ec136d04de0935717dca8b4f5fd27dd0351fe96b854d40f433229468fd0`; fleet read 2026-09-16T09:21:44Z via fleet file fleet-prod.json._
+_Rendered 2026-09-16T09:35:05Z against main merge-base `dd77701c562310465109aa5f6c9bffaed0ca6ec6`; SDL digest pin `sha256:19485ec136d04de0935717dca8b4f5fd27dd0351fe96b854d40f433229468fd0`; fleet read 2026-09-16T09:35:05Z via fleet file fleet-prod.json._
 
-_Rows in `go_api_proof_run` at read time: **464**. Operations reachable to real clients with no deployed-executed proof: **0**. Rows whose mode says Go but whose schema digest no longer matches the pin, so every request silently falls back to Python: **0**._
+_Rows in `go_api_proof_run` at read time: **481**. Operations reachable to real clients with no deployed-executed proof: **1**. Rows whose mode says Go but whose schema digest no longer matches the pin, so every request silently falls back to Python: **0**._
 
 _Live rows the edge cannot dispatch -- serving a document the operation catalog does not name (DOCUMENT_DRIFT, as `dev-hops go-api routing status` reports it): **0**; for an operation the catalog does not register (UNREGISTERED, as `dev-hops go-api routing status` reports it): **0**. Live rows with no recorded document digest, read before the reader carried it, so neither can be judged for them: **0**._
 
 | Operation | Mode | Schema digest | Candidate build | Live at current pin | Proven (derived) | Parity ticket |
 | --- | --- | --- | --- | --- | --- | --- |
-| `capacityForecast` | canary | `sha256:19485ec136d04d…` | `dd77701c5623` | yes | `3c953f0a-9dff-449f-9398-4233ab97bb25` | -- |
-| `cognitiveLoad` | canary | `sha256:19485ec136d04d…` | `dd77701c5623` | yes | `1487f388-1ef5-4778-b33d-00c043bdc4d5` | -- |
-| `complexityTimeseries` | canary | `sha256:19485ec136d04d…` | `dd77701c5623` | yes | `8cde9154-cfcb-4045-958c-e90d59479b00` | -- |
-| `featureFlagEvents` | canary | `sha256:19485ec136d04d…` | `dd77701c5623` | yes | `2d467069-9896-4124-bea7-d54f3ca3b13b` | -- |
-| `featureFlags` | canary | `sha256:19485ec136d04d…` | `dd77701c5623` | yes | `75e811b3-d397-4352-8942-be7e78bea6a0` | -- |
-| `flowMatrix` | canary | `sha256:19485ec136d04d…` | `dd77701c5623` | yes | `d353b355-7b6a-430e-b128-20d7ba4cd258` | -- |
-| `investmentBreakdown` | canary | `sha256:19485ec136d04d…` | `dd77701c5623` | yes | `2fb1e6e9-ec2a-48ce-8e29-514501de0a44` | -- |
-| `investmentFull` | canary | `sha256:19485ec136d04d…` | `dd77701c5623` | yes | `fddac5e3-e912-4ed3-bc87-d38f32f7506f` | -- |
-| `operatingReview` | canary | `sha256:19485ec136d04d…` | `dd77701c5623` | yes | `328b2116-f3c1-4aa4-9909-873dab5ea70d` | -- |
-| `pr` | canary | `sha256:19485ec136d04d…` | `dd77701c5623` | yes | `cc1a19bf-5e61-4408-8e16-3e30234d0e07` | -- |
-| `reviewEdges` | canary | `sha256:19485ec136d04d…` | `dd77701c5623` | yes | `75ef67ea-4c3b-4158-a08c-17193dda1380` | -- |
-| `throughputForecast` | canary | `sha256:19485ec136d04d…` | `dd77701c5623` | yes | `da501309-fe2b-43bc-b760-138d23ce7ace` | -- |
-| `workGraphArtifacts` | canary | `sha256:19485ec136d04d…` | `dd77701c5623` | yes | `7154bcb2-2659-4785-a0cf-2c7c20d80cc0` | -- |
-| `workGraphFlow` | canary | `sha256:19485ec136d04d…` | `dd77701c5623` | yes | `74552fcd-2907-4afb-82a8-fd33b45f6c8d` | -- |
+| `capacityForecast` | canary | `sha256:19485ec136d04d…` | `dd77701c5623` | yes | `42ab5bde-be50-4a84-b174-addbfa0eca43` | -- |
+| `capacityForecasts` | canary | `sha256:19485ec136d04d…` | `dd77701c5623` | yes | `ff48a066-1ced-4062-b17e-51c74f68de60` | -- |
+| `cognitiveLoad` | canary | `sha256:19485ec136d04d…` | `dd77701c5623` | yes | `6f607c10-c37e-490d-b9f7-caa7265c9cd5` | -- |
+| `complexityTimeseries` | canary | `sha256:19485ec136d04d…` | `dd77701c5623` | yes | `299db38b-bc0d-41d2-95f6-fa3b5cf0884f` | -- |
+| `featureFlagEvents` | canary | `sha256:19485ec136d04d…` | `dd77701c5623` | yes | `95967878-50bc-4bb4-9f21-1777ab10fa9d` | -- |
+| `featureFlags` | canary | `sha256:19485ec136d04d…` | `dd77701c5623` | yes | `db57b30c-90c5-4249-aebf-00bc4a648250` | -- |
+| `flowMatrix` | canary | `sha256:19485ec136d04d…` | `dd77701c5623` | yes | `5553f639-6140-4be4-bfc7-fabedf0b7ae3` | -- |
+| `hotspots` | canary | `sha256:19485ec136d04d…` | `dd77701c5623` | yes | `1e36f3f0-b1fc-4184-ab4b-a800c195c9a2` | -- |
+| `investmentBreakdown` | canary | `sha256:19485ec136d04d…` | `dd77701c5623` | yes | `6506e765-476e-4926-960b-b91f9d101ab6` | -- |
+| `investmentFull` | canary | `sha256:19485ec136d04d…` | `dd77701c5623` | yes | `17276651-6458-476c-a7e3-c73b91b8193f` | -- |
+| `operatingReview` | canary | `sha256:19485ec136d04d…` | `dd77701c5623` | yes | `48dd9f09-8a81-4723-a8da-4af7c004af2d` | -- |
+| `pr` | canary | `sha256:19485ec136d04d…` | `dd77701c5623` | yes | `9974845f-bb76-4cb0-ad6c-3b01c40a039e` | -- |
+| `reviewEdges` | canary | `sha256:19485ec136d04d…` | `dd77701c5623` | yes | `108b38c5-20f4-4a34-9793-563972c25d29` | -- |
+| `throughputForecast` | canary | `sha256:19485ec136d04d…` | `dd77701c5623` | yes | `2cbcbc64-53a3-4916-9ed3-d60293b8e37a` | -- |
+| `workGraphArtifacts` | canary | `sha256:19485ec136d04d…` | `dd77701c5623` | yes | `5ad85955-b288-4af2-a2b6-041126fb1681` | -- |
+| `workGraphEdges` | canary / **UNPROVEN** | `sha256:19485ec136d04d…` | `dd77701c5623` | yes | **none** | -- |
+| `workGraphFlow` | canary | `sha256:19485ec136d04d…` | `dd77701c5623` | yes | `fbd43458-73d6-42f3-b1e5-fd34f0e4d50e` | -- |
 <!-- END GENERATED GO API OPERATIONS -->
 
 ### Per REST endpoint

@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
-  "rendered_at": "2026-09-16T09:21:44Z",
+  "rendered_at": "2026-09-16T09:35:05Z",
   "ops_sha": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
-  "render_commit": "9420c258c8d6a921fcb1ac7701c8813af2e4b3e1",
+  "render_commit": "93c3095a16864017712ced3b7545cab9310a5d1d",
   "schema_digest": "sha256:19485ec136d04de0935717dca8b4f5fd27dd0351fe96b854d40f433229468fd0",
-  "fleet_read_at": "2026-09-16T09:21:44.793497034Z",
+  "fleet_read_at": "2026-09-16T09:35:05.283020318Z",
   "fleet_source": "fleet file fleet-prod.json",
   "operations": [
     {
@@ -14,7 +14,16 @@
       "document_digest": "b4fb8f075aba9954714f10f7f4451242d969548d6392d778dae1177759f80780",
       "candidate_build": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
       "live": true,
-      "proven": "3c953f0a-9dff-449f-9398-4233ab97bb25"
+      "proven": "42ab5bde-be50-4a84-b174-addbfa0eca43"
+    },
+    {
+      "operation": "capacityForecasts",
+      "mode": "canary",
+      "schema_digest": "sha256:19485ec136d04de0935717dca8b4f5fd27dd0351fe96b854d40f433229468fd0",
+      "document_digest": "43890adbbf75ac3ad71c29f728a82e35d035c3f2c701f0ced116559fa28b6c20",
+      "candidate_build": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+      "live": true,
+      "proven": "ff48a066-1ced-4062-b17e-51c74f68de60"
     },
     {
       "operation": "cognitiveLoad",
@@ -23,7 +32,7 @@
       "document_digest": "dcdfb2692addf52ed6117162963c698b628af37d01d08e4a8724f90388d8427d",
       "candidate_build": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
       "live": true,
-      "proven": "1487f388-1ef5-4778-b33d-00c043bdc4d5"
+      "proven": "6f607c10-c37e-490d-b9f7-caa7265c9cd5"
     },
     {
       "operation": "complexityTimeseries",
@@ -32,7 +41,7 @@
       "document_digest": "c74c904d99fe75a770cdacd5371112b46d9c2dcc0d8aef3dd2da108415c4aaf7",
       "candidate_build": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
       "live": true,
-      "proven": "8cde9154-cfcb-4045-958c-e90d59479b00"
+      "proven": "299db38b-bc0d-41d2-95f6-fa3b5cf0884f"
     },
     {
       "operation": "featureFlagEvents",
@@ -41,7 +50,7 @@
       "document_digest": "e5e5fd3aba6d00c5413407046dfa68acadeb72c6ff1bb5f40b983bd0ddc3b632",
       "candidate_build": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
       "live": true,
-      "proven": "2d467069-9896-4124-bea7-d54f3ca3b13b"
+      "proven": "95967878-50bc-4bb4-9f21-1777ab10fa9d"
     },
     {
       "operation": "featureFlags",
@@ -50,7 +59,7 @@
       "document_digest": "06ca28a0517a34c0f5a6cc25b193da7b5682bea5192ae93e5a79edc7e7742208",
       "candidate_build": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
       "live": true,
-      "proven": "75e811b3-d397-4352-8942-be7e78bea6a0"
+      "proven": "db57b30c-90c5-4249-aebf-00bc4a648250"
     },
     {
       "operation": "flowMatrix",
@@ -59,7 +68,16 @@
       "document_digest": "77c998975b27c6d14f0927c167464edaa01d702a3b1960b7a2f5bfd746f213c2",
       "candidate_build": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
       "live": true,
-      "proven": "d353b355-7b6a-430e-b128-20d7ba4cd258"
+      "proven": "5553f639-6140-4be4-bfc7-fabedf0b7ae3"
+    },
+    {
+      "operation": "hotspots",
+      "mode": "canary",
+      "schema_digest": "sha256:19485ec136d04de0935717dca8b4f5fd27dd0351fe96b854d40f433229468fd0",
+      "document_digest": "6ccfcc785f38dc4a2d3ef5c9bdc2a00e76c02ccf58d11fd1198d2d321165e781",
+      "candidate_build": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+      "live": true,
+      "proven": "1e36f3f0-b1fc-4184-ab4b-a800c195c9a2"
     },
     {
       "operation": "investmentBreakdown",
@@ -68,7 +86,7 @@
       "document_digest": "964b2e867a1e37c09382552eb0af394758fa10d68081a560ebc0f36c28cc3501",
       "candidate_build": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
       "live": true,
-      "proven": "2fb1e6e9-ec2a-48ce-8e29-514501de0a44"
+      "proven": "6506e765-476e-4926-960b-b91f9d101ab6"
     },
     {
       "operation": "investmentFull",
@@ -77,7 +95,7 @@
       "document_digest": "663e516c6152c81e28780d27809fcbe5aeae8c92b07d34b19978b7d59913cb3d",
       "candidate_build": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
       "live": true,
-      "proven": "fddac5e3-e912-4ed3-bc87-d38f32f7506f"
+      "proven": "17276651-6458-476c-a7e3-c73b91b8193f"
     },
     {
       "operation": "operatingReview",
@@ -86,7 +104,7 @@
       "document_digest": "c376a5dc191fd8d8759578ccd9dffaffadcd621bdc0625fe62c4c08619f3363e",
       "candidate_build": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
       "live": true,
-      "proven": "328b2116-f3c1-4aa4-9909-873dab5ea70d"
+      "proven": "48dd9f09-8a81-4723-a8da-4af7c004af2d"
     },
     {
       "operation": "pr",
@@ -95,7 +113,7 @@
       "document_digest": "564852769ff2397df5c7c0364ee6d1cf7ef0172e62566d575c2b9d5c9e77d577",
       "candidate_build": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
       "live": true,
-      "proven": "cc1a19bf-5e61-4408-8e16-3e30234d0e07"
+      "proven": "9974845f-bb76-4cb0-ad6c-3b01c40a039e"
     },
     {
       "operation": "reviewEdges",
@@ -104,7 +122,7 @@
       "document_digest": "4a759f9e3d3e903b03a3aae8039b3bdca2ed69b3af25a0b20f01c1da55d97123",
       "candidate_build": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
       "live": true,
-      "proven": "75ef67ea-4c3b-4158-a08c-17193dda1380"
+      "proven": "108b38c5-20f4-4a34-9793-563972c25d29"
     },
     {
       "operation": "throughputForecast",
@@ -113,7 +131,7 @@
       "document_digest": "fc08dea094ec832290b4f528141eacb5bbc463beea45794cf205fe43952379f9",
       "candidate_build": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
       "live": true,
-      "proven": "da501309-fe2b-43bc-b760-138d23ce7ace"
+      "proven": "2cbcbc64-53a3-4916-9ed3-d60293b8e37a"
     },
     {
       "operation": "workGraphArtifacts",
@@ -122,7 +140,16 @@
       "document_digest": "43bec17bb952ded61589e1a271a63030cb66577911047afed8d6d58be97131b0",
       "candidate_build": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
       "live": true,
-      "proven": "7154bcb2-2659-4785-a0cf-2c7c20d80cc0"
+      "proven": "5ad85955-b288-4af2-a2b6-041126fb1681"
+    },
+    {
+      "operation": "workGraphEdges",
+      "mode": "canary",
+      "schema_digest": "sha256:19485ec136d04de0935717dca8b4f5fd27dd0351fe96b854d40f433229468fd0",
+      "document_digest": "42839ae99e07329399e3522607463e12e5e8a53267578ea80a1d6c6c518a43e0",
+      "candidate_build": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+      "live": true,
+      "proven": "none"
     },
     {
       "operation": "workGraphFlow",
@@ -131,8 +158,8 @@
       "document_digest": "99b921280c0e40d6fe3484ee522c13bc025e7bc64604c2e9d615160e80ae1b3d",
       "candidate_build": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
       "live": true,
-      "proven": "74552fcd-2907-4afb-82a8-fd33b45f6c8d"
+      "proven": "fbd43458-73d6-42f3-b1e5-fd34f0e4d50e"
     }
   ],
-  "proof_run_total": 464
+  "proof_run_total": 481
 }

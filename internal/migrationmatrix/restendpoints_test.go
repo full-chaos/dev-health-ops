@@ -407,10 +407,30 @@ func TestLoadRESTEndpointsOnTheRealRepo(t *testing.T) {
 		t.Fatalf("GET /api/v1/drilldown/prs = %+v, want ported at drilldown_prs_route.go", drilldownPRsGet)
 	}
 
+	drilldownIssuesPost, ok := byKey["POST /api/v1/drilldown/issues"]
+	if !ok {
+		t.Fatal("expected POST /api/v1/drilldown/issues to be enumerated")
+	}
+	if drilldownIssuesPost.Status != RESTPorted || !strings.Contains(drilldownIssuesPost.GoHandler, "drilldown_issues_route.go") {
+		t.Fatalf("POST /api/v1/drilldown/issues = %+v, want ported at drilldown_issues_route.go", drilldownIssuesPost)
+	}
+
+	drilldownIssuesGet, ok := byKey["GET /api/v1/drilldown/issues"]
+	if !ok {
+		t.Fatal("expected GET /api/v1/drilldown/issues to be enumerated")
+	}
+	// Same matching-by-PATH note as drilldownPRsGet's own comment above:
+	// one mux registration serves both methods, so both Python method
+	// rows render "ported".
+	if drilldownIssuesGet.Status != RESTPorted || !strings.Contains(drilldownIssuesGet.GoHandler, "drilldown_issues_route.go") {
+		t.Fatalf("GET /api/v1/drilldown/issues = %+v, want ported at drilldown_issues_route.go", drilldownIssuesGet)
+	}
+
 	ported, _, _ := RESTEndpointCounts(rows)
-	if ported != 6 {
-		t.Fatalf("got %d ported routes, want exactly 6 (POST /api/v1/investment/explain, GET /api/v1/quadrant, "+
-			"GET /api/v1/filters/options, POST+GET /api/v1/drilldown/prs, GET /api/v1/meta) -- if this changed, "+
+	if ported != 8 {
+		t.Fatalf("got %d ported routes, want exactly 8 (POST /api/v1/investment/explain, GET /api/v1/quadrant, "+
+			"GET /api/v1/filters/options, POST+GET /api/v1/drilldown/prs, GET /api/v1/meta, "+
+			"POST+GET /api/v1/drilldown/issues) -- if this changed, "+
 			"a route was ported or un-ported; update this pin, it is not stale by accident", ported)
 	}
 }

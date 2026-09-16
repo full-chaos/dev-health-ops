@@ -1,0 +1,14 @@
+{
+  "items": [
+    {
+      "work_item_id": "ghpr:acme/webapp#101",
+      "provider": "github",
+      "status": "in_review",
+      "team_id": "team-y",
+      "cycle_time_hours": 4.0,
+      "lead_time_hours": 8.0,
+      "started_at": "2024-02-02T08:00:00Z",
+      "completed_at": "2024-02-02T20:00:00Z"
+    }
+  ]
+}

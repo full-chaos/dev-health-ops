@@ -1,0 +1,13 @@
+{
+  "detail": [
+    {
+      "type": "string_type",
+      "loc": [
+        "body",
+        "sort"
+      ],
+      "msg": "Input should be a valid string",
+      "input": 123
+    }
+  ]
+}

@@ -402,6 +402,20 @@ func main() {
 		log.Print("query-api: /api/v1/drilldown/prs route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
 	}
 
+	// GET+POST /api/v1/drilldown/issues, gated by its own routeswitch
+	// entries (default OFF via GO_API_DRILLDOWN_ISSUES_ENABLED)
+	// -- see drilldown_issues_route.go's package doc comment for the
+	// reachability story and internal/drilldown/issues.go for the ported
+	// resolver and its documented ReplacingMergeTree-dedup/org-scope notes.
+	if drilldownIssuesHandler, drilldownIssuesCleanup, drilldownIssuesOK, drilldownIssuesErr := buildDrilldownIssuesRoute(); drilldownIssuesErr != nil {
+		log.Fatalf("query-api: build /api/v1/drilldown/issues route: %v", drilldownIssuesErr)
+	} else if drilldownIssuesOK {
+		defer drilldownIssuesCleanup()
+		mux.HandleFunc("/api/v1/drilldown/issues", drilldownIssuesHandler)
+	} else {
+		log.Print("query-api: /api/v1/drilldown/issues route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
+	}
+
 	// GET /api/v1/meta, gated by its own routeswitch entry (default OFF via
 	// GO_API_META_ENABLED) -- see meta_route.go's package doc comment for
 	// the reachability story and internal/meta for the ported handler.

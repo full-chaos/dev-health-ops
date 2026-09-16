@@ -322,3 +322,238 @@ func TestGoldenPostTeamScopeLimitFallback(t *testing.T) {
 		t.Fatalf("response mismatch\n got:  %s\nwant: %s", gotJSON, wantJSON)
 	}
 }
+
+// loadIssuesGolden is loadGolden's IssuesResponse counterpart -- same
+// capture technique (time_window + scope_filter_for_metric + fetch_issues,
+// monkeypatched query_dicts, DrilldownResponse(items=...).model_dump(mode=
+// "json")) via a one-off `uv run python3` invocation (see this package's
+// IssueItem doc comment and the PR's own TEST-EVIDENCE for the exact
+// script), THEN hand-adjusted to replace each naive Python timestamp with
+// its RFC 3339 form (started_at/completed_at) -- the declared divergence
+// IssueItem's own doc comment explains. Every other field is byte-identical
+// to the captured Python JSON.
+func loadIssuesGolden(t *testing.T, name string) IssuesResponse {
+	t.Helper()
+	data, err := os.ReadFile("testdata/" + name)
+	if err != nil {
+		t.Fatalf("read golden %s: %v", name, err)
+	}
+	var resp IssuesResponse
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&resp); err != nil {
+		t.Fatalf("decode golden %s: %v", name, err)
+	}
+	return resp
+}
+
+// issuesFixtureRowScanner replays a fixed slice of pre-built rows in
+// fetchIssuesQuery's own column order (work_item_id, provider, status,
+// team_id, cycle_time_hours, lead_time_hours, started_at, completed_at) --
+// a package-local scanner rather than reusing fixtureRowScanner because
+// IssueItem's nullable numeric columns need a **float64 case
+// fixtureRowScanner's PRItem-shaped switch does not declare (PRItem has no
+// nullable float field).
+type issuesFixtureRowScanner struct {
+	rows  [][]any
+	index int
+}
+
+func (s *issuesFixtureRowScanner) Next() bool {
+	if s.index >= len(s.rows) {
+		return false
+	}
+	s.index++
+	return true
+}
+
+func (s *issuesFixtureRowScanner) Scan(dest ...any) error {
+	row := s.rows[s.index-1]
+	for i, d := range dest {
+		switch typed := d.(type) {
+		case *string:
+			v, _ := row[i].(string)
+			*typed = v
+		case **string:
+			if row[i] == nil {
+				*typed = nil
+				continue
+			}
+			v := row[i].(string)
+			*typed = &v
+		case **float64:
+			if row[i] == nil {
+				*typed = nil
+				continue
+			}
+			v := row[i].(float64)
+			*typed = &v
+		case **time.Time:
+			if row[i] == nil {
+				*typed = nil
+				continue
+			}
+			v := row[i].(time.Time)
+			*typed = &v
+		default:
+			return fmt.Errorf("issuesFixtureRowScanner: unsupported dest type %T", d)
+		}
+	}
+	return nil
+}
+
+func (s *issuesFixtureRowScanner) Err() error   { return nil }
+func (s *issuesFixtureRowScanner) Close() error { return nil }
+
+// TestGoldenGetDefaultOrgScopeIssues replays
+// testdata/get_default_org_scope_issues.json: scope.level="org",
+// scope.ids=[] -- scope_filter_for_metric's own asymmetry means NO team
+// filter is added (metric_scope="team" but filters.scope.level!="team"),
+// so the fake client only needs to answer the one fetch_issues query. One
+// row exercises every non-null field; the other exercises every nullable
+// field as NULL at once (team_id/cycle_time_hours/lead_time_hours/
+// started_at/completed_at).
+func TestGoldenGetDefaultOrgScopeIssues(t *testing.T) {
+	client := fakeQueryClient{t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+		if !strings.Contains(query, "FROM work_item_cycle_times") {
+			t.Fatalf("unexpected query for get-default-org-scope-issues fixture:\n%s", query)
+		}
+		if strings.Contains(query, "scope_ids") {
+			t.Fatalf("org scope must not add a team scope filter:\n%s", query)
+		}
+		if v, _ := bindingValue(bindings, "org_id"); v != "org-acme" {
+			t.Fatalf("org_id binding = %v, want org-acme", v)
+		}
+		if v, _ := bindingValue(bindings, "limit"); v != 50 {
+			t.Fatalf("limit binding = %v, want 50 (GET has no limit param)", v)
+		}
+		return &issuesFixtureRowScanner{rows: [][]any{
+			{
+				"ghpr:acme/webapp#42", "github", "done", "team-platform",
+				12.5, 30.25,
+				day(2024, 1, 10, 9, 0, 0),
+				day(2024, 1, 11, 15, 30, 0),
+			},
+			{
+				"jira:PROJ-7", "jira", "backlog", nil,
+				nil, nil,
+				nil, nil,
+			},
+		}}, nil
+	}}
+
+	reader, err := NewReader(client)
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	got, err := BuildIssuesResponse(context.Background(), reader, "org-acme", IssueParams{
+		StartDay:   day(2024, 1, 1, 0, 0, 0),
+		EndDay:     day(2024, 1, 15, 0, 0, 0),
+		ScopeLevel: "org",
+		Limit:      50,
+	})
+	if err != nil {
+		t.Fatalf("BuildIssuesResponse: %v", err)
+	}
+	want := loadIssuesGolden(t, "get_default_org_scope_issues.json")
+	if gotJSON, wantJSON := mustMarshal(t, got), mustMarshal(t, want); gotJSON != wantJSON {
+		t.Fatalf("response mismatch\n got:  %s\nwant: %s", gotJSON, wantJSON)
+	}
+}
+
+// TestGoldenGetTeamScopeExplicitDatesIssues replays
+// testdata/get_team_scope_explicit_dates_issues.json: scope.level="team",
+// scope.ids=["team-y"] -- exercises scopeClauseTeam's non-empty branch and
+// the resulting " AND t.team_id IN {scope_ids:Array(String)}" clause.
+func TestGoldenGetTeamScopeExplicitDatesIssues(t *testing.T) {
+	client := fakeQueryClient{t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+		if !strings.Contains(query, "FROM work_item_cycle_times") {
+			t.Fatalf("unexpected query for get-team-scope-issues fixture:\n%s", query)
+		}
+		if !strings.Contains(query, "AND t.team_id IN {scope_ids:Array(String)}") {
+			t.Fatalf("expected team scope filter in query:\n%s", query)
+		}
+		if v, _ := bindingValue(bindings, "scope_ids"); fmt.Sprint(v) != fmt.Sprint([]string{"team-y"}) {
+			t.Fatalf("scope_ids binding = %v, want [team-y]", v)
+		}
+		if v, _ := bindingValue(bindings, "org_id"); v != "org-acme" {
+			t.Fatalf("org_id binding = %v, want org-acme", v)
+		}
+		return &issuesFixtureRowScanner{rows: [][]any{
+			{
+				"ghpr:acme/webapp#101", "github", "in_review", "team-y",
+				4.0, 8.0,
+				day(2024, 2, 2, 8, 0, 0),
+				day(2024, 2, 2, 20, 0, 0),
+			},
+		}}, nil
+	}}
+
+	reader, err := NewReader(client)
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	got, err := BuildIssuesResponse(context.Background(), reader, "org-acme", IssueParams{
+		StartDay:   day(2024, 2, 1, 0, 0, 0),
+		EndDay:     day(2024, 2, 6, 0, 0, 0),
+		ScopeLevel: "team",
+		ScopeIDs:   []string{"team-y"},
+		Limit:      50,
+	})
+	if err != nil {
+		t.Fatalf("BuildIssuesResponse: %v", err)
+	}
+	want := loadIssuesGolden(t, "get_team_scope_explicit_dates_issues.json")
+	if gotJSON, wantJSON := mustMarshal(t, got), mustMarshal(t, want); gotJSON != wantJSON {
+		t.Fatalf("response mismatch\n got:  %s\nwant: %s", gotJSON, wantJSON)
+	}
+}
+
+// TestGoldenPostRepoScopeIgnoredLimitFallbackIssues replays
+// testdata/post_repo_scope_ignored_limit_fallback_issues.json: POST body
+// scope.level="repo" with explicit ids -- proving scope_filter_for_metric's
+// own asymmetry (a non-team scope level adds NO filter on drilldown/issues,
+// even with ids present) together with the "payload.limit or 50" fallback
+// (limit=0 in PRParams here is already resolved to 50 by the route file,
+// same division of labor TestGoldenPostTeamScopeLimitFallback documents for
+// prs).
+func TestGoldenPostRepoScopeIgnoredLimitFallbackIssues(t *testing.T) {
+	client := fakeQueryClient{t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+		if !strings.Contains(query, "FROM work_item_cycle_times") {
+			t.Fatalf("unexpected query for post-repo-scope-ignored-issues fixture:\n%s", query)
+		}
+		if strings.Contains(query, "scope_ids") {
+			t.Fatalf("repo scope must not add a team scope filter on drilldown/issues:\n%s", query)
+		}
+		if v, _ := bindingValue(bindings, "limit"); v != 50 {
+			t.Fatalf("limit binding = %v, want 50 (limit=0 falls back)", v)
+		}
+		return &issuesFixtureRowScanner{rows: [][]any{
+			{
+				"gitlab:acme/svc!9", "gitlab", "done", "team-z",
+				2.0, 3.5,
+				day(2024, 3, 1, 0, 0, 0),
+				day(2024, 3, 1, 6, 30, 0),
+			},
+		}}, nil
+	}}
+
+	reader, err := NewReader(client)
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	got, err := BuildIssuesResponse(context.Background(), reader, "org-acme", IssueParams{
+		StartDay:   day(2024, 2, 23, 0, 0, 0),
+		EndDay:     day(2024, 3, 2, 0, 0, 0),
+		ScopeLevel: "repo",
+		ScopeIDs:   []string{"some-repo"},
+		Limit:      50,
+	})
+	if err != nil {
+		t.Fatalf("BuildIssuesResponse: %v", err)
+	}
+	want := loadIssuesGolden(t, "post_repo_scope_ignored_limit_fallback_issues.json")
+	if gotJSON, wantJSON := mustMarshal(t, got), mustMarshal(t, want); gotJSON != wantJSON {
+		t.Fatalf("response mismatch\n got:  %s\nwant: %s", gotJSON, wantJSON)
+	}
+}

@@ -1,0 +1,14 @@
+{
+  "items": [
+    {
+      "work_item_id": "gitlab:acme/svc!9",
+      "provider": "gitlab",
+      "status": "done",
+      "team_id": "team-z",
+      "cycle_time_hours": 2.0,
+      "lead_time_hours": 3.5,
+      "started_at": "2024-03-01T00:00:00Z",
+      "completed_at": "2024-03-01T06:30:00Z"
+    }
+  ]
+}

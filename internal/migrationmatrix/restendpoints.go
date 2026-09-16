@@ -91,11 +91,36 @@ type RESTEndpointRow struct {
 // section. A ("METHOD", "/path") pair keyed here renders "dead-by-design"
 // instead of the honest default "python-only" -- and may be added ONLY when
 // chris's word already exists in an existing record or ticket saying that
-// route is staying Python on purpose. Empty today: no `/api/v1/*` route has
-// that word on record yet (checked against .remember/ at the time this
-// section was built). The next such ruling adds one entry here, cited by the
-// record it came from -- never a guess at what "probably" won't be ported.
-var RESTDeadByDesign = map[string]string{}
+// route is staying Python on purpose. Nil today: no `/api/v1/*` route has
+// that word on record yet. The next such ruling adds one entry here, cited
+// by the record it came from -- never a guess at what "probably" won't be
+// ported. Declared nil, not an empty map literal, and only ever read
+// through restDeadByDesignKeys/restDeadByDesignCitation below, both of
+// which guard on len() first -- so a range or index of this variable is
+// never dead code reachable only through an always-empty map.
+var RESTDeadByDesign map[string]string
+
+// restDeadByDesignKeys returns RESTDeadByDesign's keys, or nil while the
+// ledger is empty.
+func restDeadByDesignKeys() []string {
+	if len(RESTDeadByDesign) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(RESTDeadByDesign))
+	for key := range RESTDeadByDesign {
+		keys = append(keys, key)
+	}
+	return keys
+}
+
+// restDeadByDesignCitation looks up one ("METHOD", "/path") key's citation.
+func restDeadByDesignCitation(key string) (string, bool) {
+	if len(RESTDeadByDesign) == 0 {
+		return "", false
+	}
+	citation, ok := RESTDeadByDesign[key]
+	return citation, ok
+}
 
 var (
 	restRouteDecoratorRe = regexp.MustCompile(`^@app\.(get|post|put|delete|patch|api_route)\(`)
@@ -321,7 +346,7 @@ func LoadRESTEndpoints(mainPyPath, queryAPIDir string) ([]RESTEndpointRow, error
 	for _, r := range apiRoutes {
 		live[r.Method+" "+r.Path] = true
 	}
-	for key := range RESTDeadByDesign {
+	for _, key := range restDeadByDesignKeys() {
 		if !live[key] {
 			return nil, fmt.Errorf("RESTDeadByDesign names %q, which main.py no longer declares as a route -- "+
 				"the route was renamed or removed; update or drop the entry", key)
@@ -331,7 +356,7 @@ func LoadRESTEndpoints(mainPyPath, queryAPIDir string) ([]RESTEndpointRow, error
 	rows := make([]RESTEndpointRow, 0, len(apiRoutes))
 	for _, r := range apiRoutes {
 		key := r.Method + " " + r.Path
-		if citation, ok := RESTDeadByDesign[key]; ok {
+		if citation, ok := restDeadByDesignCitation(key); ok {
 			rows = append(rows, RESTEndpointRow{Method: r.Method, Path: r.Path, Status: RESTDeadByDesignStatus, Note: citation})
 			continue
 		}

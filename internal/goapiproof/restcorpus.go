@@ -373,6 +373,54 @@ var peopleDetailParity = Options{
 	},
 }
 
+// personDrilldownPRsParity is shared by GET
+// /api/v1/people/{person_id}/drilldown/prs's own live (person_id-bound,
+// 200) entry below.
+var personDrilldownPRsParity = Options{
+	BaselineDefects: []BaselineDefect{
+		{
+			Ticket: "CHAOS-5803",
+			Reason: "git_pull_requests' created_at/merged_at/first_review_at columns are ClickHouse DateTime64(3, 'UTC') (000_raw_tables.sql); Python's clickhouse_connect driver returns them NAIVE (no tzinfo), so the Pydantic response serializes them with no offset, while Go's driver attaches UTC location and this port's PullRequestRow (encoding/json's default time.Time marshaling) emits RFC 3339 with an explicit offset -- the same class of divergence drilldown/prs' own corpus entry (drilldownPRsParity) already declares for the sibling scope-based route reading the same three columns. Go is correct.",
+			Paths: []string{
+				"data.items.created_at",
+				"data.items.merged_at",
+				"data.items.first_review_at",
+			},
+			Intermittent:       true,
+			IntermittentReason: "present only while this request's live result actually contains at least one returned PR with a non-null value under one of these three fields; an empty items list shows no divergence under these paths",
+		},
+		{
+			Ticket:             "CHAOS-5803",
+			Reason:             "git_pull_requests and repos are both ReplacingMergeTree(last_synced) (000_raw_tables.sql, org_id added to both sorting keys by migration 027); sql/people/person_drilldown_prs.sql reads git_pull_requests with no FINAL/argMax dedup and joins repos (also unFINALed) with the org filter only in the JOIN's outer WHERE, evaluated after the merge. This port's fetchPersonPullRequestsQuery reads BOTH tables FINAL, with the org boundary resolved through an org-scoped repos subquery bound to git_pull_requests.repo_id (drilldownprs.go's own doc comment, matching internal/drilldown/prs.go's identical fix for the sibling scope-based route). An unmerged physical version on either table can surface a stale field value or drop/duplicate a row among this identity's own pull requests. Go is correct. This citation's Paths reach the divergence but, by this package's own leaf-only coverage rule, never silently admit a length or structural difference.",
+			Paths:              []string{"data"},
+			Intermittent:       true,
+			IntermittentReason: "present only while git_pull_requests or repos holds an unmerged physical version for a PR this identity authored, since the last merge; a comparison taken after the next background merge shows no divergence",
+		},
+	},
+}
+
+// personDrilldownIssuesParity is shared by GET
+// /api/v1/people/{person_id}/drilldown/issues's own live (person_id-bound,
+// 200) entry below. Unlike personDrilldownPRsParity there is only one
+// BaselineDefect here: work_item_cycle_times is already read FINAL on both
+// planes for this route (sql/people/person_drilldown_issues.sql:10,
+// drilldownissues.go's own doc comment), so the RMT-dedup shape
+// personDrilldownPRsParity's own second entry declares has no counterpart.
+var personDrilldownIssuesParity = Options{
+	BaselineDefects: []BaselineDefect{
+		{
+			Ticket: "CHAOS-5808",
+			Reason: "work_item_cycle_times' started_at/completed_at columns are ClickHouse Nullable(DateTime('UTC')) (001_metrics_v2.sql); Python's clickhouse_connect driver returns them NAIVE (no tzinfo), so the Pydantic response serializes them with no offset, while Go's driver attaches UTC location and this port's IssueRow (encoding/json's default time.Time marshaling) emits RFC 3339 with an explicit offset -- the same class of divergence drilldown/issues' own corpus entry (drilldownIssuesParity) already declares for the sibling scope-based route reading the same two columns. Go is correct.",
+			Paths: []string{
+				"data.items.started_at",
+				"data.items.completed_at",
+			},
+			Intermittent:       true,
+			IntermittentReason: "present only while this request's live result actually contains at least one returned issue with a non-null started_at or completed_at -- both columns are themselves Nullable, so an empty items list, or a window whose only issues have not yet started/completed, shows no divergence under these paths",
+		},
+	},
+}
+
 // restEndpointSpecs is the committed per-route corpus, keyed by
 // routeswitch operation name.
 //
@@ -430,23 +478,24 @@ var peopleDetailParity = Options{
 // prs's own corpus entry already cites for its created_at/merged_at/
 // first_review_at fields.
 //
-// people/{person_id}/summary and people/{person_id}/metric each declare
-// FOUR requests: three negative-path entries whose person_id literally
-// resolves to the un-templated text "{person_id}" (never a real
-// identity's md5 digest, so both planes 404 deterministically, or 422/400
-// ahead of identity resolution -- see each entry's own doc comment) plus
-// ONE 200-path entry whose person_id is bound at run time to GET
-// /api/v1/people's own live person_id (restidbind.go's PathParam
-// binding, the person_id RESTIDBinding peopleDetailParity's own
-// BaselineDefect below names). The 200 entry is what actually reaches
-// summary.go/metric.go's own several declared FINAL-dedup fixes
-// (user_metrics_daily, work_item_user_metrics_daily, work_item_cycle_times
-// and repos all read raw in the reference and FINAL in this port,
-// matching resolvePersonIdentity's own declared fix for the identical
-// user_metrics_daily gap) -- unreachable before this ticket for the same
-// reason the GraphQL corpus's own `pr` operation stays refused: an
-// invented id is worse than no entry at all (operations.go's own `pr`
-// doc comment).
+// people/{person_id}/summary, people/{person_id}/metric,
+// people/{person_id}/drilldown/prs and people/{person_id}/drilldown/issues
+// each declare negative-path entries whose person_id literally resolves to
+// the un-templated text "{person_id}" (never a real identity's md5 digest,
+// so both planes 404 deterministically, or 422/400 ahead of identity
+// resolution -- see each entry's own doc comment) PLUS one 200-path entry
+// whose person_id is bound at run time to GET /api/v1/people's own live
+// person_id (restidbind.go's PathParam binding, the person_id
+// RESTIDBinding peopleDetailParity/personDrilldownParity's own
+// BaselineDefect below names). The 200 entry is what actually reaches each
+// route's own several declared FINAL-dedup fixes (user_metrics_daily,
+// work_item_user_metrics_daily, work_item_cycle_times, git_pull_requests
+// and repos all read raw in the reference and FINAL in this port, matching
+// resolvePersonIdentity's own declared fix for the identical
+// user_metrics_daily gap) -- unreachable before the id-binding mechanism
+// existed, for the same reason the GraphQL corpus's own `pr` operation
+// stays refused: an invented id is worse than no entry at all
+// (operations.go's own `pr` doc comment).
 //
 // flame's corpus is REFUSED-BY-NAME only, even with id binding now
 // available: every entry below is a deterministic 4xx that
@@ -1131,6 +1180,94 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 			},
 		},
 	},
+	"REST:GET:/api/v1/people/{person_id}/drilldown/prs": {
+		Method: "GET",
+		Path:   "/api/v1/people/{person_id}/drilldown/prs",
+		Requests: []RESTRequest{
+			{
+				// Same literal-path-segment reasoning the summary spec's
+				// own person_not_found entry documents: this table has no
+				// live person_id, so every request's person_id resolves to
+				// the un-templated text "{person_id}", which never equals a
+				// real identity's md5 digest -- deterministically 404 on
+				// both planes.
+				Name:                "person_not_found",
+				WantCandidateStatus: 404, WantBaselineStatus: 404,
+				BodyMode: RESTBodyModeJSON,
+			},
+			{
+				// FastAPI/Pydantic resolves range_days at the framework
+				// level before identity resolution ever runs -- same
+				// precedence the summary/metric specs' own invalid_range_days
+				// entries document -- so this 422 fires regardless of
+				// person_id.
+				Name:                "invalid_range_days",
+				Query:               url.Values{"range_days": {"not-a-number"}},
+				WantCandidateStatus: 422, WantBaselineStatus: 422,
+				BodyMode: RESTBodyModeJSON,
+			},
+			{
+				// cursor is a `datetime | None` query param
+				// (people_drilldown_prs_route.go's own
+				// parseISODateTimeQueryParam/classifyDateTimeParseError,
+				// confirmed live against the real Pydantic TypeAdapter) --
+				// a malformed value answers 422 before identity resolution
+				// too, same precedence as range_days above.
+				Name:                "malformed_cursor",
+				Query:               url.Values{"cursor": {"not-a-date"}},
+				WantCandidateStatus: 422, WantBaselineStatus: 422,
+				BodyMode: RESTBodyModeJSON,
+			},
+			{
+				// person_id bound at run time to GET /api/v1/people's own
+				// live person_id, same binding the summary/metric specs'
+				// own 200 entries use -- this reaches identity resolution
+				// and the 200 path.
+				Name:                "drilldown_prs_default",
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode:   RESTBodyModeJSON,
+				Parity:     personDrilldownPRsParity,
+				IDBindings: []RESTIDBinding{{Producer: "person_id", PathParam: "person_id"}},
+			},
+		},
+	},
+	"REST:GET:/api/v1/people/{person_id}/drilldown/issues": {
+		Method: "GET",
+		Path:   "/api/v1/people/{person_id}/drilldown/issues",
+		Requests: []RESTRequest{
+			{
+				// Same literal-path-segment reasoning as drilldown/prs'
+				// own person_not_found entry above.
+				Name:                "person_not_found",
+				WantCandidateStatus: 404, WantBaselineStatus: 404,
+				BodyMode: RESTBodyModeJSON,
+			},
+			{
+				Name:                "invalid_range_days",
+				Query:               url.Values{"range_days": {"not-a-number"}},
+				WantCandidateStatus: 422, WantBaselineStatus: 422,
+				BodyMode: RESTBodyModeJSON,
+			},
+			{
+				// Same shared cursor validator drilldown/prs's own GET
+				// already exercises (both routes share
+				// pydantic_validation_error.go unchanged).
+				Name:                "malformed_cursor",
+				Query:               url.Values{"cursor": {"not-a-date"}},
+				WantCandidateStatus: 422, WantBaselineStatus: 422,
+				BodyMode: RESTBodyModeJSON,
+			},
+			{
+				// Same live person_id binding as drilldown/prs' own
+				// "drilldown_prs_default" entry above.
+				Name:                "drilldown_issues_default",
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode:   RESTBodyModeJSON,
+				Parity:     personDrilldownIssuesParity,
+				IDBindings: []RESTIDBinding{{Producer: "person_id", PathParam: "person_id"}},
+			},
+		},
+	},
 }
 
 // quadrantOrgRequest builds one of quadrant's four QuadrantDefinitions
@@ -1313,6 +1450,8 @@ var restRunOrder = []string{
 	"REST:GET:/api/v1/people",
 	"REST:GET:/api/v1/people/{person_id}/summary",
 	"REST:GET:/api/v1/people/{person_id}/metric",
+	"REST:GET:/api/v1/people/{person_id}/drilldown/prs",
+	"REST:GET:/api/v1/people/{person_id}/drilldown/issues",
 	"REST:GET:/api/v1/drilldown/issues",
 	"REST:POST:/api/v1/drilldown/issues",
 	"REST:GET:/api/v1/drilldown/prs",

@@ -1,0 +1,13 @@
+{
+  "detail": [
+    {
+      "type": "int_from_float",
+      "loc": [
+        "body",
+        "limit"
+      ],
+      "msg": "Input should be a valid integer, got a number with a fractional part",
+      "input": 3.7
+    }
+  ]
+}

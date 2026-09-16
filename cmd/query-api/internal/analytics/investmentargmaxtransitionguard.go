@@ -137,28 +137,38 @@ FROM (
 // over zero matching work units), but a defensive zero-value return
 // matches this package's existing style at
 // FetchInvestmentMembershipScopeState.
-func FetchArgMaxNullTransitionState(ctx context.Context, client QueryClient, orgID string, timeoutSeconds int) (ArgMaxNullTransitionState, error) {
-	rows, err := client.Query(ctx, argMaxNullTransitionGuardQuery(timeoutSeconds), bindingsForOrg(orgID))
-	if err != nil {
-		return ArgMaxNullTransitionState{}, fmt.Errorf("query: %w", err)
+func FetchArgMaxNullTransitionState(ctx context.Context, client QueryClient, orgID string, timeoutSeconds int) (state ArgMaxNullTransitionState, err error) {
+	rows, queryErr := client.Query(ctx, argMaxNullTransitionGuardQuery(timeoutSeconds), bindingsForOrg(orgID))
+	if queryErr != nil {
+		return ArgMaxNullTransitionState{}, fmt.Errorf("query: %w", queryErr)
 	}
-	defer rows.Close()
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil && err == nil {
+			// A stream that fails only on Close (Next/Scan/Err all clean)
+			// is otherwise invisible to RecordArgMaxNullTransitionGuard,
+			// which shortens the cooldown and reports on ANY non-nil
+			// error this function returns -- routing the Close failure
+			// through the same named return reaches that same path.
+			state = ArgMaxNullTransitionState{}
+			err = fmt.Errorf("close: %w", closeErr)
+		}
+	}()
 
 	if !rows.Next() {
-		if err := rows.Err(); err != nil {
-			return ArgMaxNullTransitionState{}, fmt.Errorf("rows: %w", err)
+		if rowsErr := rows.Err(); rowsErr != nil {
+			err = fmt.Errorf("rows: %w", rowsErr)
 		}
-		return ArgMaxNullTransitionState{}, nil
+		return
 	}
 
-	var state ArgMaxNullTransitionState
 	if scanErr := rows.Scan(&state.RepoID, &state.Provider, &state.WorkUnitType, &state.WorkUnitName, &state.MultiGenerationUnits); scanErr != nil {
-		return ArgMaxNullTransitionState{}, fmt.Errorf("scan: %w", scanErr)
+		err = fmt.Errorf("scan: %w", scanErr)
+		return
 	}
-	if err := rows.Err(); err != nil {
-		return ArgMaxNullTransitionState{}, fmt.Errorf("rows: %w", err)
+	if rowsErr := rows.Err(); rowsErr != nil {
+		err = fmt.Errorf("rows: %w", rowsErr)
 	}
-	return state, nil
+	return
 }
 
 // argMaxNullTransitionCounter fires once per transitioned COLUMN

@@ -17,8 +17,9 @@ package analytics
 // under-scoped subset), records a Prometheus counter increment PLUS a
 // gauge set for lag_seconds, and logs a warning. Any other scope_mode
 // ("scoped" or "unscoped_no_marker") records nothing. Errors fetching
-// the state are swallowed to a debug log line -- the metric must never
-// be able to break the real query it decorates.
+// the state are reported through a warn log line (org id + error) and
+// never propagated -- the metric must never be able to break the real
+// query it decorates.
 //
 // GO EQUIVALENT: RecordStaleInvestmentMembershipScope below reproduces
 // that exact decision (fetch, check scope_mode=="unscoped_fallback",
@@ -63,35 +64,51 @@ var validScopeModes = map[string]bool{
 // (`if mode not in {...}: mode = "unscoped_no_marker"`, :112-114 -- the
 // SAME normalization extract_scope_state_from_rows applies at :144-155
 // for a caller that already has rows in hand).
-func FetchInvestmentMembershipScopeState(ctx context.Context, client QueryClient, orgID string, timeoutSeconds int) (InvestmentMembershipScopeState, error) {
-	rows, err := client.Query(ctx, membershipScopeStateQuery(timeoutSeconds), bindingsForOrg(orgID))
-	if err != nil {
-		return InvestmentMembershipScopeState{ScopeMode: "unscoped_no_marker"}, fmt.Errorf("query: %w", err)
+func FetchInvestmentMembershipScopeState(ctx context.Context, client QueryClient, orgID string, timeoutSeconds int) (state InvestmentMembershipScopeState, err error) {
+	state = InvestmentMembershipScopeState{ScopeMode: "unscoped_no_marker"}
+
+	rows, queryErr := client.Query(ctx, membershipScopeStateQuery(timeoutSeconds), bindingsForOrg(orgID))
+	if queryErr != nil {
+		return state, fmt.Errorf("query: %w", queryErr)
 	}
-	defer rows.Close()
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil && err == nil {
+			// A stream that fails only on Close (Next/Scan/Err all
+			// clean) is otherwise invisible -- report it through the
+			// same named return every other branch below uses, which
+			// RecordStaleInvestmentMembershipScope already swallows to
+			// a debug log on any non-nil error (this decorator has no
+			// cooldown to shorten, unlike its two siblings).
+			state = InvestmentMembershipScopeState{ScopeMode: "unscoped_no_marker"}
+			err = fmt.Errorf("close: %w", closeErr)
+		}
+	}()
 
 	if !rows.Next() {
 		// Python: `if not rows: return InvestmentMembershipScopeState("unscoped_no_marker", 0)`
 		// (:109-110) -- zero rows is the SAME fallback as an
 		// unrecognized mode, not a distinct error.
-		if err := rows.Err(); err != nil {
-			return InvestmentMembershipScopeState{ScopeMode: "unscoped_no_marker"}, fmt.Errorf("rows: %w", err)
+		if rowsErr := rows.Err(); rowsErr != nil {
+			err = fmt.Errorf("rows: %w", rowsErr)
 		}
-		return InvestmentMembershipScopeState{ScopeMode: "unscoped_no_marker"}, nil
+		return
 	}
 
 	var mode string
 	var lagSeconds int64
 	if scanErr := rows.Scan(&mode, &lagSeconds); scanErr != nil {
-		return InvestmentMembershipScopeState{ScopeMode: "unscoped_no_marker"}, fmt.Errorf("scan: %w", scanErr)
+		err = fmt.Errorf("scan: %w", scanErr)
+		return
 	}
-	if err := rows.Err(); err != nil {
-		return InvestmentMembershipScopeState{ScopeMode: "unscoped_no_marker"}, fmt.Errorf("rows: %w", err)
+	if rowsErr := rows.Err(); rowsErr != nil {
+		err = fmt.Errorf("rows: %w", rowsErr)
+		return
 	}
 	if !validScopeModes[mode] {
 		mode = "unscoped_no_marker"
 	}
-	return InvestmentMembershipScopeState{ScopeMode: mode, LagSeconds: lagSeconds}, nil
+	state = InvestmentMembershipScopeState{ScopeMode: mode, LagSeconds: lagSeconds}
+	return
 }
 
 // membershipScopeStaleCounter mirrors
@@ -140,11 +157,11 @@ func defaultRecordStaleInvestmentMembershipScope(ctx context.Context, state Inve
 
 // RecordStaleInvestmentMembershipScope ports
 // record_stale_investment_membership_scope (investment_membership_scope.py:120-141)
-// verbatim in decision shape: fetch the state; a fetch error is
-// swallowed (Python: `except Exception as exc: logger.debug(...); return`
-// -- this metric must never be able to break the real query it
-// decorates); a non-"unscoped_fallback" mode records nothing; only
-// "unscoped_fallback" fires the counter+gauge+log.
+// in decision shape: fetch the state; a fetch error is reported via a
+// warn log (org id + error) and never propagated -- this metric must
+// never be able to break the real query it decorates; a non-
+// "unscoped_fallback" mode records nothing; only "unscoped_fallback"
+// fires the counter+gauge+log.
 //
 // CALLED FROM: every investment-path Compile*/Execute* entry point that
 // resolves useInvestment=true, mirroring _query_investment_dicts
@@ -160,7 +177,12 @@ func RecordStaleInvestmentMembershipScope(ctx context.Context, client QueryClien
 	}
 	state, err := FetchInvestmentMembershipScopeState(ctx, client, orgID, timeoutSeconds)
 	if err != nil {
-		slog.DebugContext(ctx, "investment membership scope metric skipped", "error", err)
+		// A swallowed fetch error must still be operator-visible: at
+		// this platform's default log level a debug line is invisible,
+		// which would let a persistently broken fetch stop observing
+		// this org's membership scope forever with zero signal.
+		slog.WarnContext(ctx, "investment membership scope metric skipped",
+			"org_id", orgID, "error", err)
 		return
 	}
 	if state.ScopeMode != "unscoped_fallback" {

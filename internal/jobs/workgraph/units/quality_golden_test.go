@@ -244,6 +244,68 @@ func TestMeanEdgeConfidenceMatchesPython(t *testing.T) {
 	}
 }
 
+// qualityGoldenNonFiniteDivergence is the declared, data-carried divergence
+// between this port and the frozen Python quality golden for a quality_case
+// whose edges include a non-finite confidence.
+//
+// The golden was generated from Python's compute_evidence_quality, which
+// clamps a non-finite structural term to 1.0 -- full structural credit for
+// data it cannot interpret. This port instead scores a non-finite confidence
+// as an ABSENT edge: excluded from both the graph-density edge count and the
+// confidence mean, so it contributes neither credit nor penalty. A plain
+// equality assertion against the frozen value is impossible once the two
+// planes intentionally disagree, so TestComputeEvidenceQualityMatchesPython
+// checks these cases against that rule instead, via
+// assertNonFiniteConfidenceScoresAsAbsent.
+var qualityGoldenNonFiniteDivergence = struct {
+	Ticket string
+	Reason string
+}{
+	Ticket: "CHAOS-4820",
+	Reason: "non-finite edge confidence scores as an absent edge, never as full structural credit",
+}
+
+// countNonFiniteConfidences reports how many of the already-decoded
+// confidence values are a non-finite float.
+func countNonFiniteConfidences(confidences []any) int {
+	count := 0
+	for _, value := range confidences {
+		if asFloat, ok := value.(float64); ok && (math.IsNaN(asFloat) || math.IsInf(asFloat, 0)) {
+			count++
+		}
+	}
+	return count
+}
+
+// assertNonFiniteConfidenceScoresAsAbsent checks one quality_case that falls
+// under qualityGoldenNonFiniteDivergence: it asserts Go's score for the case
+// AS GIVEN equals Go's score for the SAME inputs with every non-finite
+// confidence removed, since "absent" means exactly that equivalence, rather
+// than asserting a hand-computed number.
+func assertNonFiniteConfidenceScoresAsAbsent(
+	t *testing.T, label string, input EvidenceQualityInput, got float64, rejected int,
+) {
+	t.Helper()
+
+	nonFinite := countNonFiniteConfidences(input.Confidences)
+	if rejected != nonFinite {
+		t.Errorf("%s (%s): rejected = %d, want %d non-finite confidences excluded",
+			label, qualityGoldenNonFiniteDivergence.Ticket, rejected, nonFinite)
+	}
+
+	absentInput := input
+	absentInput.Confidences = nil
+	wantAbsent, rejectedAbsent := ComputeEvidenceQuality(absentInput)
+	if rejectedAbsent != 0 {
+		t.Fatalf("%s: control call with no edges rejected %d confidences, want 0", label, rejectedAbsent)
+	}
+	if !sameFloat(got, wantAbsent) {
+		t.Errorf("%s (%s): quality = %v with the non-finite edge present, %v with it "+
+			"removed entirely -- %s", label, qualityGoldenNonFiniteDivergence.Ticket,
+			got, wantAbsent, qualityGoldenNonFiniteDivergence.Reason)
+	}
+}
+
 // TestComputeEvidenceQualityMatchesPython drives the whole 2000-case cross
 // product of the three score components.
 func TestComputeEvidenceQualityMatchesPython(t *testing.T) {
@@ -261,13 +323,23 @@ func TestComputeEvidenceQualityMatchesPython(t *testing.T) {
 			confidences[index] = tagged.decode(t)
 		}
 
-		got := ComputeEvidenceQuality(EvidenceQualityInput{
+		input := EvidenceQualityInput{
 			TextSourceCount: testCase.TextSourceCount,
 			TextCharCount:   testCase.TextCharCount,
 			SourceTexts:     testCase.SourceTexts,
 			NodesCount:      testCase.NodesCount,
 			Confidences:     confidences,
-		})
+		}
+		got, rejected := ComputeEvidenceQuality(input)
+
+		if countNonFiniteConfidences(confidences) > 0 {
+			assertNonFiniteConfidenceScoresAsAbsent(t, testCase.Label, input, got, rejected)
+			continue
+		}
+		if rejected != 0 {
+			t.Errorf("%s: rejected = %d, want 0 -- no non-finite confidence in this case",
+				testCase.Label, rejected)
+		}
 		want := decodeFloat(t, testCase.Quality)
 
 		if !sameFloat(got, want) {
@@ -331,7 +403,7 @@ func TestPythonCoercionCopiesStillAgree(t *testing.T) {
 func TestWeightedSumIsNotFusedIntoAnFMA(t *testing.T) {
 	// text_source_count=0, text_char_count=600, no source types, 0 nodes and a
 	// single 0.5-confidence edge. Reduces to 0.4*0.25 + 0.3*0 + 0.3*0.75.
-	got := ComputeEvidenceQuality(EvidenceQualityInput{
+	got, _ := ComputeEvidenceQuality(EvidenceQualityInput{
 		TextSourceCount: 0,
 		TextCharCount:   600,
 		SourceTexts:     map[string]map[string]string{"issue": {}, "pr": {}, "commit": {}},

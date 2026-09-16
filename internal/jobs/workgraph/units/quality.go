@@ -1,6 +1,10 @@
 package units
 
-import "github.com/full-chaos/dev-health-ops/internal/pythonparity"
+import (
+	"math"
+
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
+)
 
 // This file ports the arithmetic plane of work_graph/investment/evidence.py
 // and the two helpers it borrows from utils/normalization.py.
@@ -44,21 +48,17 @@ func pythonMax(a, b float64) float64 {
 // choice; it decides where NaN lands.
 //
 // A naive Go port using math.Min/math.Max returns NaN from both and therefore
-// from Clamp, which then propagates into the stored evidence_quality column.
+// from Clamp, which then propagates into whatever the caller stores.
 //
-// # WHAT THIS MEANS IN PRODUCTION, WHICH IS WORSE THAN A ROUNDING DIFFERENCE
+// # A CALLER FEEDING A NON-FINITE VALUE THROUGH HERE GETS THE HIGH BOUND
 //
-// compute_evidence_quality feeds edge confidences through here. A NaN
-// confidence -- reachable, because `confidence` is an unconstrained Float32
-// with no finite-value guard on the writer side -- makes structural_density
-// clamp to 1.0, i.e. FULL structural credit. Measured end to end: a unit with
-// no text, no agreement and a single NaN-confidence edge scores 0.3, entirely
-// from the structural term, rather than 0.0.
-//
-// That is Python awarding maximum structural evidence to unusable data. It is
-// reproduced here because parity is the contract, not because it is right; it
-// is called out so that if it is ever fixed, it is fixed deliberately and in
-// BOTH planes at once.
+// Clamp is shared beyond this package, and this behaviour is real for every
+// caller: clamp(NaN) and clamp(+Inf) both land on high, clamp(-Inf) on low.
+// ComputeEvidenceQuality does not reach this function with a non-finite edge
+// confidence -- it rejects one before the structural term is computed, see
+// RejectNonFiniteConfidences -- but Clamp itself still applies its ordinary
+// NaN/Inf handling to the text and agreement terms and to the final
+// composite, and any other caller gets the same nesting.
 func Clamp(value, low, high float64) float64 {
 	return pythonMax(low, pythonMin(high, value))
 }
@@ -126,6 +126,12 @@ func GraphDensity(nodeCount, edgeCount int) float64 {
 //
 // An empty slice returns 0.0, NOT NaN: Python guards with `if not values`
 // before dividing, so there is no 0/0 here.
+//
+// This function stays a pure arithmetic mirror of evidence._edge_confidence
+// and does not itself reject a non-finite confidence -- ComputeEvidenceQuality
+// filters its input before calling this, via RejectNonFiniteConfidences, so a
+// non-finite value reaches here only through a caller that bypasses that
+// filter.
 func MeanEdgeConfidence(confidences []any) float64 {
 	if len(confidences) == 0 {
 		return 0.0
@@ -145,6 +151,26 @@ func MeanEdgeConfidence(confidences []any) float64 {
 		values[index] = ConfidenceFromValue(value)
 	}
 	return pythonparity.Sum(values) / float64(len(confidences))
+}
+
+// RejectNonFiniteConfidences is the boundary where an edge confidence enters
+// structural evidence scoring. A confidence that coerces to NaN or +/-Inf is
+// rejected here rather than carried forward: it is dropped from usable
+// entirely, so it contributes to neither the graph-density edge count nor the
+// confidence mean, and therefore to neither structural credit nor structural
+// penalty. rejected counts how many entries were dropped, for the caller to
+// report.
+func RejectNonFiniteConfidences(confidences []any) (usable []any, rejected int) {
+	usable = make([]any, 0, len(confidences))
+	for _, value := range confidences {
+		coerced := ConfidenceFromValue(value)
+		if math.IsNaN(coerced) || math.IsInf(coerced, 0) {
+			rejected++
+			continue
+		}
+		usable = append(usable, coerced)
+	}
+	return usable, rejected
 }
 
 // EvidenceQualityInput carries what compute_evidence_quality reads.
@@ -169,7 +195,14 @@ type EvidenceQualityInput struct {
 // Every intermediate is clamped, and then the total is clamped again -- so the
 // weights summing to 1.0 is not what keeps the result in range, and changing
 // one weight does not silently produce an out-of-range score.
-func ComputeEvidenceQuality(input EvidenceQualityInput) float64 {
+//
+// The structural term first passes input.Confidences through
+// RejectNonFiniteConfidences: a non-finite confidence scores as an absent
+// edge, not as an edge worth full or zero confidence, so it is removed from
+// both the graph-density edge count and the confidence mean rather than
+// propagated into either. The second return value is how many confidences
+// were rejected, for the caller to log.
+func ComputeEvidenceQuality(input EvidenceQualityInput) (float64, int) {
 	textPresence := ClampUnit(float64(input.TextSourceCount) / 3.0)
 	textRichness := ClampUnit(float64(input.TextCharCount) / 1200.0)
 	textScore := ClampUnit((textPresence + textRichness) / 2.0)
@@ -191,8 +224,9 @@ func ComputeEvidenceQuality(input EvidenceQualityInput) float64 {
 	}
 	agreementScore := ClampUnit(float64(agreement) / 2.0)
 
-	density := GraphDensity(input.NodesCount, len(input.Confidences))
-	confidence := MeanEdgeConfidence(input.Confidences)
+	usableConfidences, rejectedConfidences := RejectNonFiniteConfidences(input.Confidences)
+	density := GraphDensity(input.NodesCount, len(usableConfidences))
+	confidence := MeanEdgeConfidence(usableConfidences)
 	structuralDensity := ClampUnit((density + confidence) / 2.0)
 
 	// The float64() conversions are REQUIRED and must not be tidied away.
@@ -218,5 +252,5 @@ func ComputeEvidenceQuality(input EvidenceQualityInput) float64 {
 	value := float64(0.4*textScore) +
 		float64(0.3*agreementScore) +
 		float64(0.3*structuralDensity)
-	return ClampUnit(value)
+	return ClampUnit(value), rejectedConfidences
 }

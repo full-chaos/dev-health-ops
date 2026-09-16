@@ -104,6 +104,10 @@ type MaterializeComponentResult struct {
 	// stay byte-identical forever by convention rather than by construction.
 	// Zero value on either Skipped path: no bundle is built there.
 	Bundle units.TextBundle
+	// RejectedConfidences counts this component's edges whose confidence was
+	// non-finite and was therefore excluded from evidence-quality scoring
+	// rather than propagated into it.
+	RejectedConfidences int
 }
 
 const (
@@ -168,7 +172,7 @@ func MaterializeComponent(input MaterializeComponentInput) (MaterializeComponent
 	for i, edge := range input.Component.Edges {
 		confidences[i] = edge.Confidence
 	}
-	evidenceQuality := units.ComputeEvidenceQuality(units.EvidenceQualityInput{
+	evidenceQuality, rejectedConfidences := units.ComputeEvidenceQuality(units.EvidenceQualityInput{
 		TextSourceCount: bundle.TextSourceCount,
 		TextCharCount:   bundle.TextCharCount,
 		SourceTexts:     bundle.SourceTexts,
@@ -258,7 +262,10 @@ func MaterializeComponent(input MaterializeComponentInput) (MaterializeComponent
 		repoEffortRecords[i] = record
 	}
 
-	return MaterializeComponentResult{Investment: investment, RepoEffort: repoEffortRecords, Bundle: bundle}, nil
+	return MaterializeComponentResult{
+		Investment: investment, RepoEffort: repoEffortRecords, Bundle: bundle,
+		RejectedConfidences: rejectedConfidences,
+	}, nil
 }
 
 // dedupeNodeKeys is `list(dict.fromkeys(nodes))` (materialize.py:1321) --

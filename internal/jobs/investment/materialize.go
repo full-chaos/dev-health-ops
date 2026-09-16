@@ -43,6 +43,11 @@ const minEvidenceChars = 300
 // ceiling a requested concurrency is clamped to, independent of configuration.
 const maxLLMConcurrency = 32
 
+// nonFiniteConfidenceRejectedEvent names the log line a run emits when one or
+// more edge confidences were excluded from evidence-quality scoring because
+// they are not finite.
+const nonFiniteConfidenceRejectedEvent = "investment_materialization.nonfinite_confidence_rejected"
+
 // partitionOversizedHubs is the CHAOS-4771 hub-fate gate passed to
 // units.BuildComponents.
 //
@@ -147,6 +152,11 @@ type Stats struct {
 	RepoOwnershipDonorRows      int `json:"repo_ownership_donor_rows"`
 	RepoOwnershipDonorIssues    int `json:"repo_ownership_donor_issues"`
 	RepoOwnershipRepoShares     int `json:"repo_ownership_repo_shares"`
+	// RejectedConfidences sums, across every component this run assembled, the
+	// edge confidences excluded from evidence-quality scoring because they are
+	// not finite (NaN or +/-Inf). Zero on a run where every confidence was
+	// finite.
+	RejectedConfidences int `json:"rejected_confidences"`
 }
 
 // logOwnershipFallback emits the team-ownership fallback record. CHAOS-5460:
@@ -394,6 +404,7 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 		if err != nil {
 			return Stats{}, fmt.Errorf("assemble component %d: %w", index, err)
 		}
+		stats.RejectedConfidences += result.RejectedConfidences
 		if result.Skipped != "" {
 			stats.RepoOwnershipWindowSkipped++
 			continue // no bounds, or entirely outside the window
@@ -614,9 +625,17 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 
 	_ = fallbackCount
 
+	if stats.RejectedConfidences > 0 {
+		m.logger.WarnContext(ctx, nonFiniteConfidenceRejectedEvent,
+			"org_id", cfg.OrgID, "run_id", cfg.RunID,
+			"count", stats.RejectedConfidences,
+		)
+	}
+
 	m.logger.InfoContext(ctx, "investment materialization complete",
 		"components", stats.Components, "records", stats.Records, "quotes", stats.Quotes,
 		"skipped_existing", stats.SkippedExisting,
+		"rejected_confidences", stats.RejectedConfidences,
 		"llm", categorize.FormatFailureSummary(len(outcomes)-fallbackCount, stats.LLMFailureCounts),
 	)
 	return stats, nil

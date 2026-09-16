@@ -119,6 +119,8 @@ func (w *MembershipClickHouseWriter) WriteMemberships(
 		if err := batch.Append(
 			orgID, record.NodeType, record.NodeID, record.WorkUnitID,
 			record.CategoryKind, record.Category, record.Weight,
+			// is_dominant is a 0/1 flag (IsDominant is set to exactly 0 or
+			// 1), never anything else -- so it keeps a direct conversion.
 			uint8(record.IsDominant), record.CategorizationStatus,
 			record.ComputedAt.UTC(), record.RunID,
 		); err != nil {

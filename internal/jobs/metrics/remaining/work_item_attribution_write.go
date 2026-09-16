@@ -218,6 +218,8 @@ is_primary, confidence, evidence, computed_at, writer, run_id)`)
 		if err := batch.Append(
 			row.OrgID, repoID, row.WorkItemID,
 			row.Provider, row.TeamID, row.TeamName, row.Source,
+			// is_primary is a 0/1 flag (IsPrimary is set to exactly 0 or 1),
+			// never anything else -- so it keeps a direct conversion.
 			uint8(row.IsPrimary), row.Confidence, row.Evidence,
 			row.ComputedAt.UTC().Truncate(workItemAttributionStampPrecision),
 			producer.Writer, producer.RunID,

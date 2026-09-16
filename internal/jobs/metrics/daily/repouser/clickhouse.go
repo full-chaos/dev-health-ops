@@ -8,6 +8,8 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/checkedcast"
 )
 
 // conn is the narrow ClickHouse capability this package needs -- query plus
@@ -455,6 +457,30 @@ func (writer *Writer) WriteResult(ctx context.Context, result Result, orgID stri
 	return repoRows, userRows, commitRows, nil
 }
 
+// repoUint32Field pairs a UInt32 destination column with the value bound
+// for it, so a checked-cast call site names the exact column that refused a
+// value rather than just the row it came from.
+type repoUint32Field struct {
+	column string
+	value  int
+}
+
+// checkedRepoUint32s narrows every field through the shared checked-cast
+// boundary (internal/jobs/metrics/checkedcast), refusing rather than
+// silently wrapping an accumulated count or LOC total that no longer fits
+// its UInt32 destination column.
+func checkedRepoUint32s(table string, fields []repoUint32Field) ([]uint32, error) {
+	checked := make([]uint32, len(fields))
+	for index, field := range fields {
+		value, err := checkedcast.Uint32(field.value, table, field.column)
+		if err != nil {
+			return nil, err
+		}
+		checked[index] = value
+	}
+	return checked, nil
+}
+
 // writeRepoMetrics inserts into repo_metrics_daily, stamping every row with
 // orgID (CHAOS-4341 -- see the Writer doc comment).
 func (writer *Writer) writeRepoMetrics(ctx context.Context, rows []RepoMetric, orgID string) (int, error) {
@@ -475,15 +501,32 @@ func (writer *Writer) writeRepoMetrics(ctx context.Context, rows []RepoMetric, o
 		return 0, fmt.Errorf("prepare repo_metrics_daily batch: %w", err)
 	}
 	for _, row := range rows {
+		// Every UInt32 column below is an accumulation across every identity
+		// active on this repo/day (Compute's repo-level rollup sums each
+		// identity's own commit/LOC/PR counters), not a single bounded query
+		// row count, so it narrows through the shared checked-cast boundary
+		// instead of a bare uint32(...) conversion.
+		cols, err := checkedRepoUint32s("repo_metrics_daily", []repoUint32Field{
+			{"commits_count", row.CommitsCount},
+			{"total_loc_touched", row.TotalLOCTouched},
+			{"prs_merged", row.PRsMerged},
+			{"prs_with_first_review", row.PRsWithFirstReview},
+			{"bus_factor", row.BusFactor},
+		})
+		if err != nil {
+			return 0, fmt.Errorf("check repo_metrics_daily row: %w", err)
+		}
+		commitsCount, totalLOCTouched, prsMerged, prsWithFirstReview, busFactor :=
+			cols[0], cols[1], cols[2], cols[3], cols[4]
 		if err := batch.Append(
-			row.RepoID, row.Day, uint32(row.CommitsCount), uint32(row.TotalLOCTouched),
-			row.AvgCommitSizeLOC, row.LargeCommitRatio, uint32(row.PRsMerged),
+			row.RepoID, row.Day, commitsCount, totalLOCTouched,
+			row.AvgCommitSizeLOC, row.LargeCommitRatio, prsMerged,
 			row.MedianPRCycleHours, row.PRCycleP75Hours, row.PRCycleP90Hours,
-			uint32(row.PRsWithFirstReview), row.PRFirstReviewP50Hours, row.PRFirstReviewP90Hours,
+			prsWithFirstReview, row.PRFirstReviewP50Hours, row.PRFirstReviewP90Hours,
 			row.PRReviewTimeP50Hours, row.PRPickupTimeP50Hours, row.LargePRRatio, row.PRReworkRatio,
 			row.PRSizeP50LOC, row.PRSizeP90LOC, row.PRCommentsPer100LOC, row.PRReviewsPer100LOC,
 			row.ReworkChurnRatio30d, row.SingleOwnerFileRatio30d, row.ReviewLoadTopReviewerRatio,
-			uint32(row.BusFactor), row.CodeOwnershipGini, row.MTTRHours, row.ChangeFailureRate,
+			busFactor, row.CodeOwnershipGini, row.MTTRHours, row.ChangeFailureRate,
 			row.ComputedAt, orgID,
 		); err != nil {
 			return 0, fmt.Errorf("append repo_metrics_daily row: %w", err)
@@ -523,17 +566,53 @@ func (writer *Writer) writeUserMetrics(ctx context.Context, rows []UserMetric, o
 		return 0, fmt.Errorf("prepare user_metrics_daily batch: %w", err)
 	}
 	for _, row := range rows {
+		// Every UInt32 column below is this identity's own commit/LOC/PR/
+		// review counter for repo/day, computed straight from raw provider
+		// data (Compute's per-identity aggregation) with no structural
+		// ceiling -- it narrows through the shared checked-cast boundary
+		// instead of a bare uint32(...) conversion.
+		cols, err := checkedRepoUint32s("user_metrics_daily", []repoUint32Field{
+			{"commits_count", row.CommitsCount},
+			{"loc_added", row.LOCAdded},
+			{"loc_deleted", row.LOCDeleted},
+			{"files_changed", row.FilesChanged},
+			{"large_commits_count", row.LargeCommitsCount},
+			{"prs_authored", row.PRsAuthored},
+			{"prs_merged", row.PRsMerged},
+			{"prs_with_first_review", row.PRsWithFirstReview},
+			{"reviews_given", row.ReviewsGiven},
+			{"changes_requested_given", row.ChangesRequestedGiven},
+			{"reviews_received", row.ReviewsReceived},
+			{"pr_interruption_load", row.PRInterruptionLoad},
+			{"context_spread_count", row.ContextSpreadCount},
+			{"review_request_load", row.ReviewRequestLoad},
+		})
+		if err != nil {
+			return 0, fmt.Errorf("check user_metrics_daily row: %w", err)
+		}
+		commitsCount, locAdded, locDeleted, filesChanged := cols[0], cols[1], cols[2], cols[3]
+		largeCommitsCount, prsAuthored, prsMerged, prsWithFirstReview := cols[4], cols[5], cols[6], cols[7]
+		reviewsGiven, changesRequestedGiven, reviewsReceived := cols[8], cols[9], cols[10]
+		prInterruptionLoad, contextSpreadCount, reviewRequestLoad := cols[11], cols[12], cols[13]
+		// weekend_days is this identity's own count of weekend days worked
+		// in the window, the same shape as the counters above -- narrowed
+		// through the checked-cast boundary rather than a bare uint8(...)
+		// conversion.
+		weekendDays, err := checkedcast.Uint8(row.WeekendDays, "user_metrics_daily", "weekend_days")
+		if err != nil {
+			return 0, fmt.Errorf("check user_metrics_daily row: %w", err)
+		}
 		if err := batch.Append(
-			row.RepoID, row.Day, row.AuthorEmail, uint32(row.CommitsCount),
-			uint32(row.LOCAdded), uint32(row.LOCDeleted), uint32(row.FilesChanged),
-			uint32(row.LargeCommitsCount), row.AvgCommitSizeLOC, uint32(row.PRsAuthored),
-			uint32(row.PRsMerged), row.AvgPRCycleHours, row.MedianPRCycleHours,
-			row.PRCycleP75Hours, row.PRCycleP90Hours, uint32(row.PRsWithFirstReview),
+			row.RepoID, row.Day, row.AuthorEmail, commitsCount,
+			locAdded, locDeleted, filesChanged,
+			largeCommitsCount, row.AvgCommitSizeLOC, prsAuthored,
+			prsMerged, row.AvgPRCycleHours, row.MedianPRCycleHours,
+			row.PRCycleP75Hours, row.PRCycleP90Hours, prsWithFirstReview,
 			row.PRFirstReviewP50Hours, row.PRFirstReviewP90Hours, row.PRReviewTimeP50Hours,
-			row.PRPickupTimeP50Hours, uint32(row.ReviewsGiven), uint32(row.ChangesRequestedGiven),
-			uint32(row.ReviewsReceived), row.ReviewReciprocity, uint32(row.PRInterruptionLoad),
-			uint32(row.ContextSpreadCount), uint32(row.ReviewRequestLoad), row.TeamID,
-			row.TeamName, row.ActiveHours, uint8(row.WeekendDays), row.IdentityID,
+			row.PRPickupTimeP50Hours, reviewsGiven, changesRequestedGiven,
+			reviewsReceived, row.ReviewReciprocity, prInterruptionLoad,
+			contextSpreadCount, reviewRequestLoad, row.TeamID,
+			row.TeamName, row.ActiveHours, weekendDays, row.IdentityID,
 			row.ComputedAt, orgID,
 		); err != nil {
 			return 0, fmt.Errorf("append user_metrics_daily row: %w", err)
@@ -565,9 +644,22 @@ func (writer *Writer) writeCommitMetrics(ctx context.Context, rows []CommitMetri
 		return 0, fmt.Errorf("prepare commit_metrics batch: %w", err)
 	}
 	for _, row := range rows {
+		// total_loc/files_changed are this one commit's own stat totals, an
+		// unbounded provider-reported value (a vendored-file or lockfile
+		// commit can legitimately touch millions of lines) -- narrowed
+		// through the shared checked-cast boundary instead of a bare
+		// uint32(...) conversion.
+		cols, err := checkedRepoUint32s("commit_metrics", []repoUint32Field{
+			{"total_loc", row.TotalLOC},
+			{"files_changed", row.FilesChanged},
+		})
+		if err != nil {
+			return 0, fmt.Errorf("check commit_metrics row: %w", err)
+		}
+		totalLOC, filesChanged := cols[0], cols[1]
 		if err := batch.Append(
 			row.RepoID, row.CommitHash, row.Day, row.AuthorEmail,
-			uint32(row.TotalLOC), uint32(row.FilesChanged), row.SizeBucket, row.ComputedAt, orgID,
+			totalLOC, filesChanged, row.SizeBucket, row.ComputedAt, orgID,
 		); err != nil {
 			return 0, fmt.Errorf("append commit_metrics row: %w", err)
 		}

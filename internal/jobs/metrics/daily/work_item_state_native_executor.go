@@ -379,8 +379,12 @@ func computeWorkItemStateDurationsForRepo(
 			TeamName:      teamNameByKey[[3]string{key.provider, key.workScopeID, key.teamID}],
 			Status:        key.status,
 			DurationHours: totalHours,
-			ItemsTouched:  uint32(len(itemsSeen[key])),
-			AvgWIP:        totalHours / 24.0,
+			// items_touched is the size of an in-memory set of distinct
+			// work-item IDs touched by this (provider, work scope, team,
+			// status) key on one day -- bounded by a day's work-item
+			// volume, never negative -- so it keeps a direct conversion.
+			ItemsTouched: uint32(len(itemsSeen[key])),
+			AvgWIP:       totalHours / 24.0,
 		})
 	}
 	return rows, missingAttribution

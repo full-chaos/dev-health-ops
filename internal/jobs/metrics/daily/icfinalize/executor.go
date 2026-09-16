@@ -345,6 +345,14 @@ func (executor *Executor) writeUserMetrics(
 			repoID = SynthesizedRepoID(orgID, metric.IdentityID)
 		}
 		pass := metric.PassThrough
+		// Every uintN(pass.*) conversion below is a round trip, never a new
+		// computation: loadGitMetrics scanned each one straight off an
+		// already-UInt32/UInt8 user_metrics_daily column into a
+		// matching-width Go var, widened it to int64 for this package's own
+		// merge step, and PassThrough carries that same value here unchanged
+		// -- it narrows back into exactly the width it started in, so it can
+		// never wrap regardless of what value repouser's own write already
+		// validated and stored.
 		if err := batch.Append(
 			repoID, day, metric.IdentityID, metric.IdentityID, metric.TeamID,
 			metric.LOCTouched, metric.PRsOpened, metric.WorkItemsComplete,

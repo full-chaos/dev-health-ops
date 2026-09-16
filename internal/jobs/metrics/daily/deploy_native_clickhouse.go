@@ -109,6 +109,10 @@ func WriteDeployMetricsDaily(
 			return 0, fmt.Errorf("%w: deploy metric repo_id %q: %v", ErrInvalidState, row.RepoID, err)
 		}
 		if err := batch.Append(
+			// deployments_count/failed_deployments_count are per-(repo, day)
+			// tallies incremented once per deployment row with no LIMIT --
+			// bounded by a day's deployment volume, never negative -- so
+			// they keep a direct conversion.
 			repoID, row.Day, uint32(row.DeploymentsCount), uint32(row.FailedDeploymentsCount),
 			row.DeployTimeP50Hours, row.LeadTimeP50Hours, row.ComputedAt.UTC(), organizationID,
 		); err != nil {

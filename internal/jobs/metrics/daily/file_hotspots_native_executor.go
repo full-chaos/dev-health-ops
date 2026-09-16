@@ -4,13 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"strings"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/checkedcast"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/filehotspots"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/repouser"
 )
@@ -558,26 +558,11 @@ type fileMetricsBatchConn interface {
 // here (Refused, falls back to the Python bridge, which fails identically)
 // is fidelity-correct, not merely defensive.
 func uint32ColumnValue(value int, table, column string, repoID uuid.UUID, key string) (uint32, error) {
-	return checkUint32Range(value, table, column, fmt.Sprintf("repo %s %q", repoID, key))
-}
-
-// checkUint32Range is the single range check behind every UInt32 narrowing in
-// this package. uint32ColumnValue is the repo-keyed spelling of it; families
-// whose rows are not keyed by a repo UUID (the work_item families group by
-// provider/work_scope_id/team) call this directly with their own subject
-// string.
-//
-// It exists as a separate function so there is exactly ONE definition of "does
-// this int fit in a UInt32". Adding a second range-checker beside this one --
-// which is what a new family needing a different key would otherwise do -- is
-// how the two drift, and drift here is silent: a wrapped counter is a
-// plausible number, not an error.
-func checkUint32Range(value int, table, column, subject string) (uint32, error) {
-	if value < 0 || value > math.MaxUint32 {
-		return 0, fmt.Errorf("%w: %s.%s %d for %s exceeds UInt32 range",
-			ErrInvalidState, table, column, value, subject)
+	v, err := checkedcast.Uint32(value, table, column)
+	if err != nil {
+		return 0, fmt.Errorf("%w: %w for repo %s %q", ErrInvalidState, err, repoID, key)
 	}
-	return uint32(value), nil
+	return v, nil
 }
 
 // writeFileMetricsDaily ports the write side of write_file_metrics

@@ -184,8 +184,11 @@ func computeIncidentMetricsDaily(day time.Time, incidents []IncidentRow) []Incid
 	for _, repoID := range repoIDs {
 		b := byRepo[repoID]
 		record := IncidentMetricsDailyRecord{
-			RepoID:         repoID,
-			Day:            dayStart,
+			RepoID: repoID,
+			Day:    dayStart,
+			// incidents_count is a per-repo-day tally incremented once per
+			// incident row with no LIMIT -- bounded by a day's incident
+			// volume, never negative -- so it keeps a direct conversion.
 			IncidentsCount: uint32(b.incidents),
 		}
 		if len(b.mttrHours) > 0 {

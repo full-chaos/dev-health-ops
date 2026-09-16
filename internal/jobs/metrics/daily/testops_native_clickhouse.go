@@ -402,6 +402,10 @@ func writeTestopsPipelineMetrics(
 	for _, metric := range metrics {
 		if err := batch.Append(
 			metric.RepoID, chDate(day),
+			// pipelines_count/success_count/failure_count/cancelled_count
+			// are per-(repo, team, service, day) tallies incremented once
+			// per pipeline run with no LIMIT -- bounded by a day's pipeline
+			// volume, never negative -- so they keep a direct conversion.
 			uint32(metric.PipelinesCount), uint32(metric.SuccessCount),
 			uint32(metric.FailureCount), uint32(metric.CancelledCount),
 			metric.SuccessRate, metric.FailureRate, metric.CancelRate, metric.RerunRate,
@@ -444,6 +448,11 @@ func writeTestopsTestMetrics(
 	for _, metric := range metrics {
 		if err := batch.Append(
 			metric.RepoID, chDate(day),
+			// total_cases/passed_count/failed_count/skipped_count/
+			// quarantined_count/total_suites are per-(repo, team, service,
+			// day) tallies incremented once per test case/suite run with no
+			// LIMIT -- bounded by a day's test volume, never negative -- so
+			// they keep a direct conversion.
 			uint32(metric.TotalCases), uint32(metric.PassedCount), uint32(metric.FailedCount),
 			uint32(metric.SkippedCount), uint32(metric.QuarantinedCount),
 			metric.PassRate, metric.FailureRate, metric.FlakeRate, metric.RetryDependencyRate,
@@ -487,6 +496,9 @@ func writeTestopsCoverageMetrics(
 			metric.RepoID, chDate(day),
 			metric.LineCoveragePct, metric.BranchCoveragePct,
 			metric.LinesTotal, metric.LinesCovered, metric.CoverageDeltaPct,
+			// uncovered_files_count/coverage_regression_count are always 0
+			// (CoverageMetric's own doc comment: v1 has no per-file coverage
+			// input) -- a constant conversion, never negative or unbounded.
 			uint32(metric.UncoveredFilesCount), uint32(metric.CoverageRegressionCount),
 			metric.TeamID, metric.ServiceID, organizationID, computedAt.UTC(),
 		); err != nil {

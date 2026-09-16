@@ -279,7 +279,7 @@ func Execute(
 
 	profile, err := resolveProfile(spec, selectedProfile, lookup)
 	if err != nil {
-		fmt.Fprintf(streams.Stderr, "configuration error: %s\n", logging.RedactText(err.Error()))
+		config.WriteConfigError(streams.Stderr, err)
 		return 1
 	}
 	loadSpec := config.Spec{
@@ -294,7 +294,7 @@ func Execute(
 	}
 	cfg, err := config.Load(loadSpec)
 	if err != nil {
-		fmt.Fprintf(streams.Stderr, "configuration error: %s\n", logging.RedactText(err.Error()))
+		config.WriteConfigError(streams.Stderr, err)
 		return 1
 	}
 

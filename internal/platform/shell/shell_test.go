@@ -97,6 +97,109 @@ func TestConfigurationFailureIsSanitized(t *testing.T) {
 	}
 }
 
+// configErrorPayload pins the JSON shape every daemon entry point must
+// emit for a configuration error: the same {"error":{"code","detail"}}
+// object config.WriteConfigError already produces for workerctl and
+// migrate.
+type configErrorPayload struct {
+	Error struct {
+		Code   string `json:"code"`
+		Detail string `json:"detail"`
+	} `json:"error"`
+}
+
+// TestDaemonEntryPointsEmitJSONConfigurationErrors pins every long-running
+// daemon (dev-health-worker, the reconciler, the scheduler and the
+// stream-runner all route through this shared shell) onto the same JSON
+// configuration-error object workerctl and migrate already emit through
+// config.WriteConfigError, instead of the shell's own plain-text line.
+func TestDaemonEntryPointsEmitJSONConfigurationErrors(t *testing.T) {
+	t.Parallel()
+
+	for _, service := range []string{
+		"dev-health-worker",
+		"dev-health-reconciler",
+		"dev-health-scheduler",
+		"dev-health-stream-runner",
+	} {
+		t.Run(service, func(t *testing.T) {
+			t.Parallel()
+
+			var stderr bytes.Buffer
+			code := Execute(context.Background(), Spec{Service: service}, nil, testLookup(map[string]string{
+				"POSTGRES_URI": "postgres://user:do-not-print@",
+			}), IO{Stderr: &stderr})
+			if code == 0 {
+				t.Fatal("expected invalid config to fail")
+			}
+
+			var payload configErrorPayload
+			if err := json.Unmarshal(bytes.TrimSpace(stderr.Bytes()), &payload); err != nil {
+				t.Fatalf("stderr is not a single JSON object: %v; stderr=%s", err, stderr.String())
+			}
+			if payload.Error.Code != "configuration_error" {
+				t.Fatalf("error.code = %q, want %q", payload.Error.Code, "configuration_error")
+			}
+			if payload.Error.Detail == "" {
+				t.Fatal("error.detail is empty")
+			}
+		})
+	}
+}
+
+// TestDaemonProfileResolutionFailureIsJSON pins the same JSON shape for the
+// shell's other configuration-error site: an undeclared --profile value
+// rejected by resolveProfile before config.Load ever runs.
+func TestDaemonProfileResolutionFailureIsJSON(t *testing.T) {
+	t.Parallel()
+
+	var stderr bytes.Buffer
+	code := Execute(context.Background(), Spec{
+		Service:        "dev-health-stream-runner",
+		Profiles:       []string{"ingest", "external"},
+		DefaultProfile: "ingest",
+	}, []string{"--profile", "archive"}, testLookup(nil), IO{Stderr: &stderr})
+	if code == 0 {
+		t.Fatal("expected an undeclared profile to fail")
+	}
+
+	var payload configErrorPayload
+	if err := json.Unmarshal(bytes.TrimSpace(stderr.Bytes()), &payload); err != nil {
+		t.Fatalf("stderr is not a single JSON object: %v; stderr=%s", err, stderr.String())
+	}
+	if payload.Error.Code != "configuration_error" {
+		t.Fatalf("error.code = %q, want %q", payload.Error.Code, "configuration_error")
+	}
+	if payload.Error.Detail == "" {
+		t.Fatal("error.detail is empty")
+	}
+}
+
+// TestDaemonConfigurationErrorRedactsDSNShapedValue pins that a DSN-shaped
+// value surfacing in a config error is redacted in the JSON "detail"
+// field, not just somewhere on stderr -- the JSON writer must apply the
+// same logging.RedactText rule the plain-text path used.
+func TestDaemonConfigurationErrorRedactsDSNShapedValue(t *testing.T) {
+	t.Parallel()
+
+	secret := "postgres://user:do-not-print@"
+	var stderr bytes.Buffer
+	code := Execute(context.Background(), Spec{Service: "dev-health-reconciler"}, nil, testLookup(map[string]string{
+		"POSTGRES_URI": secret,
+	}), IO{Stderr: &stderr})
+	if code == 0 {
+		t.Fatal("expected invalid config to fail")
+	}
+
+	var payload configErrorPayload
+	if err := json.Unmarshal(bytes.TrimSpace(stderr.Bytes()), &payload); err != nil {
+		t.Fatalf("stderr is not a single JSON object: %v; stderr=%s", err, stderr.String())
+	}
+	if strings.Contains(payload.Error.Detail, secret) || strings.Contains(payload.Error.Detail, "do-not-print") {
+		t.Fatalf("configuration error JSON detail leaked secret: %q", payload.Error.Detail)
+	}
+}
+
 // TestProfileResolutionOwnsFlagEnvDefaultAndMembership pins the resolution
 // order the shell took over from internal/platform/config (CHAOS-3875):
 // --profile beats DEV_HEALTH_PROFILE beats the declared default, the result

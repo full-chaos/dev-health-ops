@@ -2749,19 +2749,18 @@ func writeServiceError(stderr io.Writer, err error) int {
 // configured; a KEY_FILE misconfigured to a raw credential string would
 // have that string echoed back verbatim on stderr. secrets.Resolve's
 // message is key-name-only at the source. logging.RedactText is applied
-// here too, as defense in depth (the same rule
-// internal/platform/shell/shell.go's own config.Load() error path
-// applies for its own diagnostics), in case any future error text this
+// here too, as defense in depth, in case any future error text this
 // function has not audited slips a credential-shaped substring through.
 // Uses encoding/json, never `%q` (Go string escaping, not JSON escaping
 // -- a control byte in the underlying text would produce invalid JSON).
 //
 // writeConfigError delegates to config.WriteConfigError -- ONE JSON
-// diagnostic writer shared by every entry point in this PR that can
-// surface a config.ResolveDSN error (workerctl and migrate), rather than
-// this binary keeping its own, separately-maintained copy.
-// internal/platform/shell/shell.go and the long-running worker binaries
-// keep their own, pre-existing plain-text convention -- not this writer.
+// diagnostic writer shared by every entry point that can surface a
+// configuration error: workerctl and migrate for a config.ResolveDSN
+// error, and internal/platform/shell.Execute (dev-health-worker, the
+// reconciler, the scheduler and the stream-runner) for a resolveProfile
+// or config.Load error -- rather than each binary keeping its own,
+// separately-maintained copy.
 func writeConfigError(stderr io.Writer, err error) int {
 	platformconfig.WriteConfigError(stderr, err)
 	return 1

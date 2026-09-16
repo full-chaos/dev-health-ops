@@ -968,15 +968,16 @@ func ComponentDatabaseIdentity(scheme string, built secrets.Value) string {
 // "detail" carries err's message run through logging.RedactText as
 // defense in depth.
 //
-// One JSON diagnostic writer, shared by cmd/dev-health-workerctl and
-// cmd/dev-health-worker-migrate (the entry points that can surface a
-// ResolveDSN/ResolveDSNFromComponents/secrets.Resolve error) rather than
-// each inventing its own safe-error convention. Every error these
-// packages build is already assembled purely from key-name strings,
-// never a resolved value; the redaction below is defense in depth on top
-// of that, matching the same rule internal/platform/shell/shell.go's own
-// pre-existing error path already applies for its own configuration
-// errors.
+// One JSON diagnostic writer, shared by every Go entry point that can
+// surface a configuration error: cmd/dev-health-workerctl and
+// cmd/dev-health-worker-migrate for a
+// ResolveDSN/ResolveDSNFromComponents/secrets.Resolve error, and
+// internal/platform/shell.Execute (dev-health-worker, the reconciler, the
+// scheduler and the stream-runner) for a resolveProfile or config.Load
+// error -- rather than each entry point inventing its own safe-error
+// convention. Every error these callers build is already assembled purely
+// from key-name strings, never a resolved value; the redaction below is
+// defense in depth on top of that.
 func WriteConfigError(w io.Writer, err error) {
 	payload := struct {
 		Error struct {

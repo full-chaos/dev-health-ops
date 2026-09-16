@@ -94,7 +94,7 @@ func TestConfidenceFromStringMatchesPythonCorpus(t *testing.T) {
 	// category Nd as the DEPLOYED interpreter reports it, emitted as a generated
 	// table by generate_python_decimal_digits_golden.py, so it is a fixed list
 	// rather than an open-ended commitment to Unicode. And it is VERIFIABLE:
-	// ParsePythonFloat is checked bit-for-bit against 102 measured cases in
+	// pythonparity.ParseFloat is checked bit-for-bit against 102 measured cases in
 	// python_float_python_golden.json. The estimate of the cost was wrong, not
 	// the principle -- "unbounded" was an assumption about the work, made
 	// without pricing it.

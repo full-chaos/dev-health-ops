@@ -3,7 +3,6 @@ package daily
 import (
 	"context"
 	"fmt"
-	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -373,67 +372,22 @@ func nullablePyRound(family, field string, value float64, ndigits int) *float64 
 	return &rounded
 }
 
-// pyMin2 and pyMax2 replicate CPython's two-argument min()/max() comparison
-// order exactly: the FIRST argument is the running candidate, and it is
-// replaced only on a strict "less than" (min) / "greater than" (max)
-// comparison against the second argument -- never on a tie, and never when
-// the comparison is unorderable (NaN). This matters because Go's `<`/`>`
-// on NaN are both always false, same as Python's, but CPython's algorithm
-// starts from a specific argument (not "value"), so a NaN input silently
-// resolves to whichever bound CPython happened to start from -- see
-// clampUnit below.
-func pyMin2(a, b float64) float64 {
-	if b < a {
-		return b
-	}
-	return a
-}
-
-func pyMax2(a, b float64) float64 {
-	if b > a {
-		return b
-	}
-	return a
-}
-
-// pyOrZero ports Python's `value or 0.0` idiom (compute_testops_risk.py:55,
-// 58, 133, 136 -- `cov.line_coverage_pct or 0.0`, `cov.coverage_delta_pct or
-// 0.0`, `pipe.median_duration_seconds or 0.0`, `pipe.avg_queue_seconds or
-// 0.0`), a DIFFERENT non-finite-semantics gap than clampUnit's (codex round
-// 5, P2, EXECUTED): Python's `bool(float)` is `value != 0.0`, which is
-// False (falsy) for BOTH +0.0 and -0.0 -- not just for a missing/None
-// value. `X or 0.0` therefore silently collapses a genuine -0.0 to +0.0,
-// same as it does for a nil-turned-zero, while NaN and +-Inf are all
-// truthy (`bool(nan)` is True; NaN's own `!=` is defined True by IEEE754,
-// unlike its `<`/`>`/`==`) and pass through unchanged. A naive Go
-// `if ptr != nil { v = *ptr }` only replaces a missing (nil) value -- it
-// leaves a genuine -0.0 reading unchanged, diverging from Python's silent
-// sign-normalization. Reachable: `ci_pipeline_runs.duration_seconds`/
-// `queue_seconds` and `coverage_snapshots.line_coverage_pct` are all
-// unconstrained `Nullable(Float64)`, so a stored -0.0 is a real input, not
-// hypothetical -- EXECUTED repro: Go's `median_duration_seconds` field kept
-// a `-0.0` (sign bit set) where live Python's `pipe.median_duration_seconds
-// or 0.0` produces `0.0`.
-func pyOrZero(value float64) float64 {
-	if value == 0 {
-		return 0.0
-	}
-	return value
-}
-
 // clampUnit ports Python's `_clamp(value, lo=0.0, hi=1.0) -> max(lo, min(hi,
 // value))` (compute_testops_risk.py:20-21) bit-for-bit, including its NaN
-// behavior. A naive `if value < 0 { 0 } else if value > 1 { 1 } else {
-// value }` looks equivalent but is NOT: for NaN, both Go comparisons are
-// false, so it falls through and returns NaN -- unlike Python, which always
-// resolves NaN to 1.0 here (min(1.0, nan) keeps its first arg 1.0 since
-// `nan < 1.0` is false; max(0.0, 1.0) then keeps 1.0 since `1.0 > 0.0` is
-// true). Verified against a live `python3` interpreter (codex round 4,
-// P2 EXECUTED finding): `max(0.0, min(1.0, float('nan'))) == 1.0`.
+// behavior, via pythonparity.Min2/Max2, which replicate CPython's
+// two-argument min()/max() comparison order exactly (the FIRST argument is
+// the running candidate, replaced only on a strict comparison, never on a
+// tie and never when the comparison is unorderable). A naive
+// `if value < 0 { 0 } else if value > 1 { 1 } else { value }` looks
+// equivalent but is NOT: for NaN, both Go comparisons are false, so it falls
+// through and returns NaN -- unlike Python, which always resolves NaN to 1.0
+// here (min(1.0, nan) keeps its first arg 1.0 since `nan < 1.0` is false;
+// max(0.0, 1.0) then keeps 1.0 since `1.0 > 0.0` is true):
+// `max(0.0, min(1.0, float('nan'))) == 1.0`.
 // coverage_snapshots.line_coverage_pct is an unconstrained Nullable(Float64)
 // and reaches this function via coveragePct/100.0, making NaN a real input.
 func clampUnit(value float64) float64 {
-	return pyMax2(0.0, pyMin2(1.0, value))
+	return pythonparity.Max2(0.0, pythonparity.Min2(1.0, value))
 }
 
 // factorsJSONField is one key/value pair of a factors_json payload, kept as
@@ -462,17 +416,16 @@ func fi(key string, value int) factorsJSONField {
 // factors dicts build it: default separators (", " and ": "), no
 // sort_keys, insertion order preserved.
 //
-// CHAOS-4806 / ruling R73: this is the write/serialization boundary for
-// every float field in the payload -- each one routes through
-// finite.JSONLiteral before pythonFloatJSON ever sees it, so a NaN or +-Inf
-// factor becomes the JSON literal `null` (tagged with family/field.key and
-// counted) instead of Python's own non-spec "NaN"/"Infinity"/"-Infinity"
-// json.dumps tokens (a baseline_defect, R60, deliberately not mirrored).
-// The rest of the factors object, and the row it belongs to, keep writing
-// regardless of which single key trips the guard. family identifies which
-// of this file's two factors_json producers is calling (see the two call
-// sites), so the counter can tell a release-confidence trip from a
-// quality-drag trip.
+// This is the write/serialization boundary for every float field in the
+// payload -- each one routes through finite.JSONLiteral before
+// pythonparity.FloatJSON ever sees it, so a NaN or +-Inf factor becomes the
+// JSON literal `null` (tagged with family/field.key and counted) instead of
+// Python's own non-spec "NaN"/"Infinity"/"-Infinity" json.dumps tokens,
+// which this port deliberately does not mirror. The rest of the factors
+// object, and the row it belongs to, keep writing regardless of which single
+// key trips the guard. family identifies which of this file's two
+// factors_json producers is calling (see the two call sites), so the
+// counter can tell a release-confidence trip from a quality-drag trip.
 func factorsJSON(family string, fields []factorsJSONField) string {
 	var b strings.Builder
 	b.WriteByte('{')
@@ -484,132 +437,13 @@ func factorsJSON(family string, fields []factorsJSONField) string {
 		b.WriteString(field.key)
 		b.WriteString("\": ")
 		if field.isFloat {
-			b.WriteString(finite.JSONLiteral(family, field.key, field.floatVal, pythonFloatJSON))
+			b.WriteString(finite.JSONLiteral(family, field.key, field.floatVal, pythonparity.FloatJSON))
 		} else {
 			b.WriteString(strconv.Itoa(field.intVal))
 		}
 	}
 	b.WriteByte('}')
 	return b.String()
-}
-
-// pythonFloatJSON mirrors how Python's json module serializes a float:
-// float.__repr__'s SHORTEST round-trip decimal digit string (David Gay's
-// algorithm) -- the same well-defined function of a double's bit pattern
-// Go's strconv.FormatFloat(-1 precision) computes, so the DIGITS always
-// agree -- but Python and Go pick fixed-vs-scientific NOTATION by different
-// rules given those same digits. Go's 'g' verb switches to scientific once
-// the exponent reaches the shortest digit COUNT (e.g. 1_000_000.0, a single
-// significant digit, prints as "1e+06"); CPython's float_repr
-// (Objects/floatobject.c via pystrtod.c, mode 0) switches to scientific
-// only when the decimal exponent of the leading digit is < -4 or >= 16,
-// regardless of how many significant digits there are -- so 1_000_000.0
-// stays "1000000.0" and only reaches "1e+16"-style notation at 10**16.
-// Codex round 2 (P2, EXECUTED) caught the earlier strconv.FormatFloat('g',
-// -1, 64) implementation emitting "1e+06" for a value Python renders
-// "1000000.0" -- a real byte-level factors_json divergence for any
-// duration/queue-seconds value at or above 1e6. This reimplements Python's
-// OWN notation rule on top of Go's shortest-digit scientific form
-// (strconv.FormatFloat(value, 'e', -1, 64)) rather than trying to coax the
-// 'g'/'f' verbs into matching a different threshold.
-func pythonFloatJSON(value float64) string {
-	// codex round 3 (P2, ARGUED, confirmed by source read): strconv.FormatFloat
-	// with 'e' never contains the byte 'e' for NaN/+-Inf ("NaN", "+Inf",
-	// "-Inf"), so the un-guarded IndexByte(...'e') lookup below returned -1
-	// and `scientific[:eIndex]` PANICKED (slice bounds out of range [:-1]) --
-	// a full process crash, not a returned error, bypassing the native
-	// family's fail-open/refused-telemetry path entirely (daily.go's
-	// computeNativeFamilies only degrades gracefully on a returned error).
-	// coverage_snapshots.line_coverage_pct is an unconstrained
-	// Nullable(Float64) with no finite-value guard on the Python writer
-	// side, so a NaN (e.g. a 0/0 division upstream) is real, representable
-	// input, not a hypothetical one. Python's own json.dumps (default
-	// allow_nan=True) emits the literal tokens "NaN"/"Infinity"/"-Infinity"
-	// for these -- not valid JSON per the spec. Byte-for-byte parity with
-	// that is a baseline_defect (R60), not a target: CHAOS-4806 / ruling R73
-	// closes it. This function's one caller, factorsJSON, now routes every
-	// float through finite.JSONLiteral first, so a NaN/+-Inf value never
-	// reaches here in production -- the branch below is a defensive
-	// fallback only, so a direct call (present or future) still returns
-	// valid JSON (`null`) instead of one of Python's non-spec tokens or
-	// panicking on the un-guarded scientific-notation split further down.
-	if math.IsNaN(value) || math.IsInf(value, 0) {
-		return "null"
-	}
-	if value == 0 {
-		if math.Signbit(value) {
-			return "-0.0"
-		}
-		return "0.0"
-	}
-	negative := value < 0
-	magnitude := value
-	if negative {
-		magnitude = -value
-	}
-	// Shortest round-trip scientific form, e.g. "1e+06", "1.234e+02",
-	// "9.42e+02" -- digits before 'e' are exactly Python's own dtoa digits.
-	scientific := strconv.FormatFloat(magnitude, 'e', -1, 64)
-	eIndex := strings.IndexByte(scientific, 'e')
-	mantissa := scientific[:eIndex]
-	exponent, err := strconv.Atoi(scientific[eIndex+1:])
-	if err != nil {
-		// Unreachable for a value strconv itself just formatted; fail soft
-		// to Go's own rendering rather than panic on a malformed parse.
-		formatted := strconv.FormatFloat(value, 'g', -1, 64)
-		if !strings.ContainsAny(formatted, ".eE") {
-			formatted += ".0"
-		}
-		return formatted
-	}
-	digits := strings.Replace(mantissa, ".", "", 1)
-
-	var rendered string
-	if exponent >= -4 && exponent < 16 {
-		rendered = pythonFixedNotation(digits, exponent)
-	} else {
-		rendered = pythonScientificNotation(digits, exponent)
-	}
-	if negative {
-		return "-" + rendered
-	}
-	return rendered
-}
-
-// pythonFixedNotation renders `digits` (the significant-digit string, no
-// sign, no decimal point) with its leading digit at decimal exponent `exp`
-// as plain fixed notation, matching CPython's format_float_short fixed-mode
-// branch -- always keeping a decimal point (json.dumps(5.0) -> "5.0").
-func pythonFixedNotation(digits string, exp int) string {
-	if exp >= 0 {
-		if len(digits) <= exp+1 {
-			return digits + strings.Repeat("0", exp+1-len(digits)) + ".0"
-		}
-		return digits[:exp+1] + "." + digits[exp+1:]
-	}
-	return "0." + strings.Repeat("0", -exp-1) + digits
-}
-
-// pythonScientificNotation renders `digits` at decimal exponent `exp` as
-// Python's json module would: lowercase "e", explicit sign, minimum
-// two-digit exponent (e.g. "1e-05", "1e+16"), matching CPython's
-// format_float_short scientific-mode branch.
-func pythonScientificNotation(digits string, exp int) string {
-	mantissa := digits[:1]
-	if len(digits) > 1 {
-		mantissa += "." + digits[1:]
-	}
-	sign := "+"
-	magnitude := exp
-	if magnitude < 0 {
-		sign = "-"
-		magnitude = -magnitude
-	}
-	exponentDigits := strconv.Itoa(magnitude)
-	if len(exponentDigits) < 2 {
-		exponentDigits = "0" + exponentDigits
-	}
-	return mantissa + "e" + sign + exponentDigits
 }
 
 // -----------------------------------------------------------------------
@@ -693,10 +527,10 @@ func computeReleaseConfidence(
 		failureRecurrence = test.FailureRecurrence
 	}
 	if cov != nil && cov.LineCoveragePct != nil {
-		coveragePct = pyOrZero(*cov.LineCoveragePct)
+		coveragePct = pythonparity.OrZero(*cov.LineCoveragePct)
 	}
 	if cov != nil && cov.CoverageDeltaPct != nil {
-		coverageDelta = pyOrZero(*cov.CoverageDeltaPct)
+		coverageDelta = pythonparity.OrZero(*cov.CoverageDeltaPct)
 	}
 
 	pipelineFactor := 0.4 * successRate
@@ -763,12 +597,12 @@ func computeQualityDrag(
 	var avgQueue, rerunRate float64
 	if pipe != nil {
 		if pipe.MedianDurationSeconds != nil {
-			medianDur = pyOrZero(*pipe.MedianDurationSeconds)
+			medianDur = pythonparity.OrZero(*pipe.MedianDurationSeconds)
 		}
 		failureCount = pipe.FailureCount
 		pipelinesCount = pipe.PipelinesCount
 		if pipe.AvgQueueSeconds != nil {
-			avgQueue = pyOrZero(*pipe.AvgQueueSeconds)
+			avgQueue = pythonparity.OrZero(*pipe.AvgQueueSeconds)
 		}
 		rerunRate = pipe.RerunRate
 	}

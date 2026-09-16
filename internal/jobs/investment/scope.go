@@ -6,8 +6,8 @@ package investment
 import (
 	"errors"
 	"fmt"
-	"strings"
-	"unicode"
+
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
 // ErrOrganizationScopeRequired is returned when an entry point is asked to run
@@ -61,9 +61,9 @@ var ErrOrganizationScopeRequired = errors.New(
 // the same class of defect the guard exists to prevent.
 //
 //  1. WHITESPACE-ONLY IS REFUSED, using Python's str.strip() rule -- which is
-//     WIDER than strings.TrimSpace. See pythonStrip: Go's unicode.IsSpace omits
-//     0x1c-0x1f, so a lone separator would otherwise be accepted as a scope
-//     Python refuses.
+//     WIDER than strings.TrimSpace. See pythonparity.Strip: Go's unicode.IsSpace
+//     omits 0x1c-0x1f, so a lone separator would otherwise be accepted as a
+//     scope Python refuses.
 //  2. THE ALL-ZERO UUID IS ACCEPTED. Python's rejection predicates run on the
 //     rendered string, and "00000000-0000-0000-0000-000000000000" is non-empty
 //     and therefore truthy. Excluding uuid.Nil here would reject rows Python
@@ -79,11 +79,11 @@ var ErrOrganizationScopeRequired = errors.New(
 //     no correct unscoped answer to disagree about. The absence is structural --
 //     the function takes only the org string, so there is no argument to flip.
 func RequireOrganizationScope(organizationID string) error {
-	// pythonStrip, not strings.TrimSpace — see its doc comment. A whitespace-only
-	// org is not a scope, and accepting one would reach the fetchers with a value
-	// that matches no rows rather than every row: a different wrong answer, not a
-	// right one.
-	if pythonStrip(organizationID) == "" {
+	// pythonparity.Strip, not strings.TrimSpace — see its doc comment. A
+	// whitespace-only org is not a scope, and accepting one would reach the
+	// fetchers with a value that matches no rows rather than every row: a
+	// different wrong answer, not a right one.
+	if pythonparity.Strip(organizationID) == "" {
 		return fmt.Errorf(
 			"%w: refusing to run unscoped, which would read every tenant's "+
 				"work_graph_edges and fuse them into shared components",
@@ -91,44 +91,4 @@ func RequireOrganizationScope(organizationID string) error {
 		)
 	}
 	return nil
-}
-
-// pythonStrip removes exactly what Python's `str.strip()` removes.
-//
-// `strings.TrimSpace` is NOT equivalent, and the difference is small enough to
-// look like pedantry until it is measured. Go's `unicode.IsSpace` is a strict
-// SUBSET of Python's `str.isspace()`, missing exactly four code points:
-//
-//	0x1c FILE SEPARATOR, 0x1d GROUP SEPARATOR,
-//	0x1e RECORD SEPARATOR, 0x1f UNIT SEPARATOR
-//
-// (Computed, not recalled: every code point in 0..0x10FFFF was compared between
-// the two predicates; the delta is those four, in one direction only.)
-//
-// So `RequireOrganizationScope("\x1c")` accepted a scope Python rejects, which
-// is a rejection-parity break: Python raises before any fetch, Go proceeds to a
-// silent zero-row run. Found by codex round 2 on CHAOS-4441 PR2.
-//
-// # WHY THE NUMERIC HELPERS DELIBERATELY DO NOT USE THIS
-//
-// `parsePythonInt` (constants.go, PR1) and `confidenceFromString` (chquery) also
-// mirror a Python whitespace rule, and they correctly use plain `TrimSpace` --
-// because `int()` and `float()` do NOT accept the separator characters that
-// `str.strip()` removes:
-//
-//	int("\x1c150")   -> ValueError        float("\x1c1.5") -> ValueError
-//	" 150".strip()   -> "150"            int(" 150")     -> 150
-//
-// Python uses TWO different whitespace definitions and Go's `TrimSpace` happens
-// to match the numeric one. Unifying these helpers "for consistency" would
-// therefore BREAK the parsers while fixing nothing -- pinned by
-// TestNumericParsersRejectSeparatorsLikePythonNumerics.
-func pythonStrip(value string) string {
-	return strings.TrimFunc(value, func(r rune) bool {
-		// The four ASCII separators Python treats as whitespace and Go does not.
-		if r >= 0x1c && r <= 0x1f {
-			return true
-		}
-		return unicode.IsSpace(r)
-	})
 }

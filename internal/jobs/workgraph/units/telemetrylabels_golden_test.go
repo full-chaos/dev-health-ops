@@ -168,8 +168,8 @@ func TestBoundedMatchesPython(t *testing.T) {
 //
 // str.strip() uses str.isspace() -- 29 code points, INCLUDING U+001C-U+001F.
 // float()/int() use a narrower 25-point set that excludes them and equals Go's
-// unicode.IsSpace. floatcoerce.go needs the narrow one; this file needs the wide
-// one. Both are correct, in different places, and the failure mode of picking
+// unicode.IsSpace. pythonparity.ParseFloat needs the narrow one; this file needs
+// the wide one. Both are correct, in different places, and the failure mode of picking
 // the familiar one is silent.
 func TestStripUsesTheIsSpaceClassNotTheNumericOne(t *testing.T) {
 	golden := loadTelemetryLabelsGolden(t)

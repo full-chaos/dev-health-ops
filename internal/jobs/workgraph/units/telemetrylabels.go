@@ -138,8 +138,8 @@ var SortedValidationErrorFamilies = [...]string{
 // The strip is pythonparity.Strip, NOT strings.TrimSpace. str.strip() uses
 // str.isspace(), which is 29 code points including U+001C-U+001F.
 //
-// This is the OPPOSITE of floatcoerce.go, where float()'s narrower 25-point set
-// is correct and pythonparity.Strip would be wrong. Two adjacent functions in
+// This is the OPPOSITE of pythonparity.ParseFloat, where float()'s narrower
+// 25-point set is correct and pythonparity.Strip would be wrong. Two adjacent functions in
 // the same package needing two different whitespace classes is not an accident
 // of this codebase -- Python genuinely has three (str.isspace, the numeric
 // parsers' set, and str.splitlines' boundaries) -- so the class is named at

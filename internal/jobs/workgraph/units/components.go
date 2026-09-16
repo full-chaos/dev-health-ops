@@ -1,6 +1,10 @@
 package units
 
-import "sort"
+import (
+	"sort"
+
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
+)
 
 // Edge is one deduplicated work_graph_edges row, reduced to the fields the
 // component builder reads.
@@ -90,7 +94,7 @@ func ConfidenceFromValue(value any) float64 {
 // confidenceFromString ports Python's `float(value)` for the string branch of
 // _edge_confidence (components.py:75-82), which returns 0.0 on ValueError.
 //
-// It delegates to ParsePythonFloat rather than reimplementing the grammar. This
+// It delegates to pythonparity.ParseFloat rather than reimplementing the grammar. This
 // function previously had its own strconv.ParseFloat-based version, guarded by a
 // 68-case corpus, and it was WRONG on 9 of the 102 cases in the fuller float
 // corpus:
@@ -114,9 +118,9 @@ func ConfidenceFromValue(value any) float64 {
 // matching PEP 515. Recorded because the prediction was wrong and the corpus is
 // what corrected it.
 func confidenceFromString(value string) float64 {
-	// ParsePythonFloat returns ok=false exactly where CPython raises
+	// pythonparity.ParseFloat returns ok=false exactly where CPython raises
 	// ValueError, and _edge_confidence's except branch yields 0.0.
-	parsed, ok := ParsePythonFloat(value)
+	parsed, ok := pythonparity.ParseFloat(value)
 	if !ok {
 		return 0.0
 	}

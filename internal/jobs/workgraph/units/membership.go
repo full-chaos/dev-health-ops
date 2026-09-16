@@ -1,6 +1,10 @@
 package units
 
-import "time"
+import (
+	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
+)
 
 // MembershipWeightThreshold is declared in constants.go, alongside the other
 // ported constants, so the two ported jobs cannot drift on it. Note 0.2 has no
@@ -93,9 +97,9 @@ func (d *Distribution) Weight(category string) any {
 // here and would be easy to "tidy" into a single case; it is not arbitrary, it
 // is the whole reason the branch exists.
 //
-// The string branch uses ParsePythonFloat, not strconv.ParseFloat. See
-// floatcoerce.go: ParseFloat accepts hex floats Python rejects and reports
-// ErrRange where Python simply returns inf, so it is wrong in both directions.
+// The string branch uses pythonparity.ParseFloat, not strconv.ParseFloat:
+// strconv.ParseFloat accepts hex floats Python rejects and reports ErrRange
+// where Python simply returns inf, so it is wrong in both directions.
 //
 // Everything else -- None, list, dict, bytes -- is 0.0. Note bytes: Python's
 // float(b"1.5") raises TypeError, not ValueError, so it would NOT be caught by
@@ -136,7 +140,7 @@ func FloatValue(value any) float64 {
 	case float64:
 		return typed
 	case string:
-		parsed, ok := ParsePythonFloat(typed)
+		parsed, ok := pythonparity.ParseFloat(typed)
 		if !ok {
 			return 0.0
 		}

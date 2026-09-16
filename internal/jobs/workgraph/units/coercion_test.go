@@ -153,7 +153,7 @@ func TestResolveMaxComponentNodesAcceptsNonASCIIDigits(t *testing.T) {
 }
 
 // TestNumericParsersRejectSeparatorsLikePythonNumerics pins the reason the
-// numeric helpers must NOT adopt pythonStrip.
+// numeric helpers must NOT adopt pythonparity.Strip.
 //
 // Python uses TWO different whitespace definitions, and this is the whole
 // subtlety of the fix above: str.strip() REMOVES 0x1c-0x1f, but int() and
@@ -167,8 +167,8 @@ func TestResolveMaxComponentNodesAcceptsNonASCIIDigits(t *testing.T) {
 //
 // Go's plain strings.TrimSpace happens to match the NUMERIC rule exactly, so
 // parsePythonInt and confidenceFromString are correct as written. Applying
-// pythonStrip to them "for consistency" would make Go accept a value Python
-// raises on -- breaking the parsers while fixing nothing.
+// pythonparity.Strip to them "for consistency" would make Go accept a value
+// Python raises on -- breaking the parsers while fixing nothing.
 func TestNumericParsersRejectSeparatorsLikePythonNumerics(t *testing.T) {
 	// 200, never 150. An earlier revision of this test used "150", whose
 	// expected result IS DefaultMaxComponentNodes -- so a successful parse and

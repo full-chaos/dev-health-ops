@@ -15,7 +15,7 @@ import (
 // for after codex rounds 3 and 4 (2026-09-01): both findings were the SAME
 // class -- Python float semantics on non-finite values (NaN/+Inf/-Inf/-0.0)
 // diverging from Go's -- surfacing at two different sites
-// (pythonFloatJSON's string formatting, clampUnit's comparison logic) that
+// (pythonparity.FloatJSON's string formatting, clampUnit's comparison logic) that
 // both trace back to the same reachable input: coverage_snapshots
 // .line_coverage_pct is an unconstrained Nullable(Float64), so a non-finite
 // value can reach every float this package derives from it.
@@ -158,41 +158,6 @@ func TestNonFiniteCoverageClassSweep(t *testing.T) {
 			wantDeltaField := `"coverage_delta_pct": ` + tc.wantDeltaJSON
 			if !strings.Contains(row.FactorsJSON, wantDeltaField) {
 				t.Errorf("factors_json missing %q\ngot: %s", wantDeltaField, row.FactorsJSON)
-			}
-		})
-	}
-}
-
-// TestPyOrZeroMatchesPythonTruthyOrIdiom pins pyOrZero itself against a live
-// python3 `value or 0.0` evaluation for every non-finite class plus the two
-// finite zeros -- codex round 5's own EXECUTED finding (median_duration_
-// seconds kept a -0.0 sign bit Go's row-9 sweep had not yet checked).
-func TestPyOrZeroMatchesPythonTruthyOrIdiom(t *testing.T) {
-	cases := []struct {
-		name  string
-		value float64
-		want  float64
-	}{
-		{"positive zero unchanged", 0.0, 0.0},
-		{"negative zero normalizes to positive zero", math.Copysign(0, -1), 0.0},
-		{"NaN passes through (bool(nan) is True in Python)", math.NaN(), math.NaN()},
-		{"+Inf passes through (truthy)", math.Inf(1), math.Inf(1)},
-		{"-Inf passes through (truthy)", math.Inf(-1), math.Inf(-1)},
-		{"ordinary negative value unchanged", -5.5, -5.5},
-		{"ordinary positive value unchanged", 5.5, 5.5},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := pyOrZero(tc.value)
-			if math.IsNaN(tc.want) {
-				if !math.IsNaN(got) {
-					t.Errorf("pyOrZero(%v) = %v, want NaN", tc.value, got)
-				}
-				return
-			}
-			if got != tc.want || math.Signbit(got) != math.Signbit(tc.want) {
-				t.Errorf("pyOrZero(%v) = %v (signbit=%v), want %v (signbit=%v)",
-					tc.value, got, math.Signbit(got), tc.want, math.Signbit(tc.want))
 			}
 		})
 	}

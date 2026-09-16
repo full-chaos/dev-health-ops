@@ -168,10 +168,10 @@ _Deployed revisions read from: fleet file fleet-prod.json._
 | `repo_user_commit` | daily | NATIVE | VERIFIED (CHAOS-4275 @ `506c99beb3ec`, internal/jobs/metrics/daily/repouser/compute_test.go TestComputeMatchesFrozenPythonGolden + golden_full_test.go TestComputeMatchesFrozenGoldenExhaustively (frozen Python golden; PASS re-run at this sha)) | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
 | `review_edges` | daily | NATIVE | VERIFIED (CHAOS-4279 @ `506c99beb3ec`, internal/jobs/metrics/daily/reviewedges/compute_test.go TestComputeMatchesFrozenPythonGolden (frozen Python golden; PASS re-run at this sha)) | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
 | `team_wellbeing` | daily | NATIVE | VERIFIED (CHAOS-4276 @ `506c99beb3ec`, internal/jobs/metrics/numerical/wellbeing_parity_test.go TestTeamWellbeingGoldenParity (frozen Python golden; PASS re-run at this sha)) | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
-| `testops_coverage` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
-| `testops_pipeline` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
-| `testops_risk` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
-| `testops_test` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
+| `testops_coverage` | daily | NATIVE | VERIFIED (CHAOS-5794 @ `d00f165f4bcb`, internal/jobs/metrics/testops/parity_golden_test.go: TestComputeCoverageMetricMatchesFrozenPythonGolden (testdata/testops_coverage_parity_golden.json)) | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
+| `testops_pipeline` | daily | NATIVE | VERIFIED (CHAOS-5794 @ `d00f165f4bcb`, internal/jobs/metrics/testops/parity_golden_test.go: TestComputePipelineMetricsMatchesFrozenPythonGolden (testdata/testops_pipeline_parity_golden.json)) | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
+| `testops_risk` | daily | NATIVE | VERIFIED (CHAOS-5794 @ `d00f165f4bcb`, internal/jobs/metrics/daily/testops_risk_parity_golden_test.go: TestTestopsRiskComputeMatchesFrozenPythonGolden (testdata/testops_risk_parity_golden.json)) | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
+| `testops_test` | daily | NATIVE | VERIFIED (CHAOS-5794 @ `d00f165f4bcb`, internal/jobs/metrics/testops/parity_golden_test.go: TestComputeTestMetricsMatchesFrozenPythonGolden (testdata/testops_test_parity_golden.json)) | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
 | `work_graph_edges` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
 | `work_item` | daily | NATIVE | VERIFIED (CHAOS-4283 @ `506c99beb3ec`, internal/jobs/metrics/workitemmetrics/golden_test.go TestComputeDailyTripletMatchesPythonGolden (frozen Python golden; PASS re-run at this sha)) | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
 | `work_item_attribution` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
@@ -237,7 +237,7 @@ A row that is live, reachable to real clients (`canary`/`primary`) and carries n
 is required before stage 4/5, and "a bare 200 does not qualify".
 
 <!-- BEGIN GENERATED GO API OPERATIONS -->
-_Rendered 2026-09-16T09:35:05Z against main merge-base `506c99beb3ece085c2d3e58ffb7d8f9c11e83fba`; SDL digest pin `sha256:19485ec136d04de0935717dca8b4f5fd27dd0351fe96b854d40f433229468fd0`; fleet read 2026-09-16T09:35:05Z via fleet file fleet-prod.json._
+_Rendered 2026-09-16T09:35:05Z against main merge-base `56f5fea61c0150b69f2f87f808afdaba6cd0ee02`; SDL digest pin `sha256:19485ec136d04de0935717dca8b4f5fd27dd0351fe96b854d40f433229468fd0`; fleet read 2026-09-16T09:35:05Z via fleet file fleet-prod.json._
 
 _Rows in `go_api_proof_run` at read time: **481**. Operations reachable to real clients with no deployed-executed proof: **1**. Rows whose mode says Go but whose schema digest no longer matches the pin, so every request silently falls back to Python: **0**._
 

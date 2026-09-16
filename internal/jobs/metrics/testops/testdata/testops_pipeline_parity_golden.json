@@ -1,0 +1,9 @@
+{
+  "real_row": [
+    {"repo_id": "d4f322ad-2102-1fbf-8425-7400573194f7", "day": "2026-08-27", "pipelines_count": 1, "success_count": 1, "failure_count": 0, "cancelled_count": 0, "success_rate": 1.0, "failure_rate": 0.0, "cancel_rate": 0.0, "rerun_rate": 0.0, "median_duration_seconds": 942.0, "p95_duration_seconds": 942.0, "avg_queue_seconds": 0.0, "p95_queue_seconds": 0.0, "team_id": null, "service_id": null, "org_id": "70d529e0-3c06-4597-8480-794fd02328b6"}
+  ],
+  "grouping": [
+    {"repo_id": "00000000-0000-4000-8000-000000000001", "day": "2026-08-15", "pipelines_count": 1, "success_count": 1, "failure_count": 0, "cancelled_count": 0, "success_rate": 1.0, "failure_rate": 0.0, "cancel_rate": 0.0, "rerun_rate": 0.0, "median_duration_seconds": 60.0, "p95_duration_seconds": 60.0, "avg_queue_seconds": null, "p95_queue_seconds": null, "team_id": "team-pattern", "service_id": null, "org_id": "00000000-0000-4000-8000-000000000009"},
+    {"repo_id": "00000000-0000-4000-8000-000000000001", "day": "2026-08-15", "pipelines_count": 1, "success_count": 0, "failure_count": 1, "cancelled_count": 0, "success_rate": 0.0, "failure_rate": 1.0, "cancel_rate": 0.0, "rerun_rate": 0.0, "median_duration_seconds": 90.0, "p95_duration_seconds": 90.0, "avg_queue_seconds": null, "p95_queue_seconds": null, "team_id": "team-pattern", "service_id": "", "org_id": "00000000-0000-4000-8000-000000000009"}
+  ]
+}

@@ -15,6 +15,14 @@ import (
 // connection.
 var ErrUnavailable = errors.New("chquery: clickhouse connection unavailable")
 
+// ErrOrganizationIDRequired is returned by a tenant-scoped reader when the
+// caller supplies an empty organization id. The entity ids these readers
+// group on (work_item_id, and others) are provider-scoped, not
+// tenant-scoped, so an empty org does not narrow the read to "no tenant" --
+// it removes the only predicate keeping one tenant's rows from folding into
+// another's.
+var ErrOrganizationIDRequired = errors.New("chquery: organization id is required")
+
 // heuristicProvenance is the provenance value excluded from work-unit grouping.
 // Heuristic edges are rule-inferred (same repo + time window) and percolate
 // thousands of unrelated nodes into one component (CHAOS-2775). They REMAIN in

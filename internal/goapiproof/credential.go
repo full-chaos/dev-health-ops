@@ -101,7 +101,36 @@ type credentialState struct {
 // not the only caller a future change might add; refusing at the moment of
 // use means no path can send a bare "Bearer ", whoever built it.
 func StaticCredential(header, kind, value string) *Credential {
-	return &Credential{header: header, kind: kind, state: &credentialState{cached: value}}
+	return &Credential{header: header, kind: kind, state: &credentialState{cached: ensureBearerScheme(value)}}
+}
+
+// ensureBearerScheme guarantees a credential value carries the scheme
+// query-api's own header parser requires (query_route.go's bearerToken:
+// split on whitespace, require exactly two fields, the first
+// case-insensitively "Bearer") and the Python edge's extract_token_from_
+// header mirrors. A bare token with no scheme parses as the wrong number
+// of fields and is refused before either verifier ever runs, which comes
+// back as a 401 indistinguishable from a rejected credential -- the exact
+// confusion this file exists to remove, one level further out.
+//
+// A minting helper's documented contract is to print the credential value
+// ALONE (mint-envelope's own doc comment), so the scheme is not something
+// every caller can be trusted to remember to add: go-api-rest-prove's own
+// -candidate-bearer-exec/-baseline-bearer-exec credentials shipped with
+// no scheme at all and rejected the very first live request they made
+// (the deployed /buildinfo read) for exactly this reason. Applying it
+// once, here, for every Credential this package constructs, closes the
+// class rather than the instance.
+//
+// Idempotent: a value that already carries the scheme (cmd/go-api-prove's
+// own mintBearer, and cmd/go-api-routing's static bearer, both already
+// prepend it) passes through unchanged, matching mintBearer's own
+// HasPrefix check.
+func ensureBearerScheme(value string) string {
+	if value == "" || strings.HasPrefix(value, "Bearer ") {
+		return value
+	}
+	return "Bearer " + value
 }
 
 // redacted is what every formatting verb renders instead of the value.
@@ -231,6 +260,10 @@ func (c *Credential) value(ctx context.Context) (string, error) {
 		// real authorization failure. Refuse at the source instead.
 		return "", fmt.Errorf("the %s minter returned an empty value", c.kind)
 	}
+	// See ensureBearerScheme's own doc comment: a minting helper's
+	// contract is to print the credential value alone, with no scheme,
+	// so it is added here rather than trusted to every caller.
+	minted = ensureBearerScheme(minted)
 	if c.validate != nil {
 		if err := c.validate(minted); err != nil {
 			// The VALUE is never included -- only what is wrong with its

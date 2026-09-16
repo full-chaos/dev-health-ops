@@ -16,14 +16,19 @@
 // Operator command of record: run from the go-api-tools image,
 // in-cluster, with query-api-url and python-api-url pointed at each
 // service's own ClusterIP/Service address (never a host or an ingress
-// hostname), and both bearer helpers minting a fresh envelope from
-// inside the pod:
+// hostname). The two bearer helpers mint DIFFERENT credential CLASSES,
+// one per plane -- query-api's own REST routes and /buildinfo check the
+// effective-principal envelope, never the edge access token, and the
+// Python api service is the reverse (credential.go's own doc comment) --
+// so -candidate-bearer-exec always names mint-envelope and
+// -baseline-bearer-exec always names mint-edge-token, never the other way
+// round or the same helper twice:
 //
 //	go-api-rest-prove \
 //	  -query-api-url http://<query-api-service>:8090 \
 //	  -python-api-url http://<api-service>:8000 \
 //	  -candidate-bearer-exec '["mint-envelope","-org","<org>"]' \
-//	  -baseline-bearer-exec  '["mint-envelope","-org","<org>"]' \
+//	  -baseline-bearer-exec  '["mint-edge-token","-org","<org>"]' \
 //	  -org <org> -recorded-by <operator> -review-evidence "<why>" \
 //	  -postgres-uri "$POSTGRES_URI"
 //

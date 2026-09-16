@@ -428,6 +428,15 @@ type BaselineDefect struct {
 	// default, unchanged blanket behaviour every other declared defect
 	// still uses.
 	RepoFanoutShape *RepoFanoutShape
+
+	// CoverageShiftShape, when set, replaces this defect's blanket "any
+	// leaf difference under Paths is covered" rule with a shape-specific
+	// admission built from the whole comparison's mismatch paths and the
+	// two DECODED response bodies -- see CoverageShiftShape's own doc
+	// comment (coverageshift.go). nil is the default, unchanged blanket
+	// behaviour every other declared defect still uses. A defect never
+	// sets both this and RepoFanoutShape.
+	CoverageShiftShape *CoverageShiftShape
 }
 
 // validateBaselineDefects refuses a declaration that claims the
@@ -625,33 +634,58 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 	var matched, stale, idle []string
 	for _, defect := range defects {
 		hit := false
-		// Built once per defect, not per finding: RepoFanoutShape's
-		// per-repo multiplier map and aggregate totals are a property of
-		// this ONE comparison, and every finding under the defect's
-		// Paths is judged against the SAME plan.
-		var plan *repoFanoutPlan
+		// Built once per defect, not per finding: a shape's plan (its
+		// per-repo multiplier map and aggregate totals, or its
+		// whole-comparison coverage-shift verdict) is a property of this
+		// ONE comparison, and every finding under the defect's Paths is
+		// judged against the SAME plan.
+		var repoPlan *repoFanoutPlan
 		if defect.RepoFanoutShape != nil {
-			plan = buildRepoFanoutPlan(defect.RepoFanoutShape, baselineData, candidateData)
+			repoPlan = buildRepoFanoutPlan(defect.RepoFanoutShape, baselineData, candidateData)
 		}
+		var covPlan *coverageShiftPlan
+		if defect.CoverageShiftShape != nil {
+			covPlan = buildCoverageShiftPlan(defect.CoverageShiftShape, baselineData, candidateData, mismatches)
+		}
+		// A SHAPED defect's citation is LIVE only when its shape actually
+		// admits something. A blanket (unshaped) citation stays live from
+		// path proximity alone -- any difference under Paths, covered or
+		// not, keeps the entry from reading as stale (see
+		// TestCompareIntermittentBaselineDefectCoversOnlyLeafDifferences).
+		// A shape exists specifically to tell a real instance of its
+		// mechanism apart from an unrelated difference that merely shares
+		// the same cited path -- CoverageShiftShape's own reason: the
+		// repos-join fan-out (CHAOS-4773) cites the SAME two coverage
+		// leaves, so path proximity alone cannot tell the two mechanisms
+		// apart, and a shaped defect that hit on path alone would still
+		// double-report alongside the shape that actually explains the
+		// difference.
+		shaped := repoPlan != nil || covPlan != nil
 		for i, path := range mismatches {
 			if !defectCovers(defect, path) {
 				continue
 			}
-			// The citation is LIVE -- there is a difference under its
-			// path, so it is not stale -- but it COVERS only a leaf
-			// difference. A length / presence / structure finding under a
-			// cited subtree stays outside every citation.
-			hit = true
+			if !shaped {
+				// The citation is LIVE -- there is a difference under its
+				// path, so it is not stale -- but it COVERS only a leaf
+				// difference. A length / presence / structure finding
+				// under a cited subtree stays outside every citation.
+				hit = true
+			}
 			if !leafDifference(shapes[i]) {
 				continue
 			}
-			if plan != nil {
-				if plan.admits(result.Findings[findingRefs[i]]) {
-					covered[i] = true
-				}
-				continue
+			admitted := !shaped
+			switch {
+			case repoPlan != nil:
+				admitted = repoPlan.admits(result.Findings[findingRefs[i]])
+			case covPlan != nil:
+				admitted = covPlan.admits(result.Findings[findingRefs[i]])
 			}
-			covered[i] = true
+			if admitted {
+				covered[i] = true
+				hit = true
+			}
 		}
 		switch {
 		case hit:

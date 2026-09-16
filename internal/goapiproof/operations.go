@@ -403,6 +403,30 @@ var operationSpecs = map[string]OperationSpec{
 					TeamCoveragePath: "data.analytics.sankey.coverage.teamCoverage",
 					RepoCoveragePath: "data.analytics.sankey.coverage.repoCoverage",
 				},
+			}, {
+				Ticket: "CHAOS-4547",
+				Reason: "Python's coverage query (resolvers/analytics.py) reads investment rows through api/queries/investment.py's LATEST_WORK_UNIT_INVESTMENTS_CTE, which dedups ReplacingMergeTree versions with a plain argMax(col, computed_at) over four Nullable columns (repo_id among them); argMax skips a row whose col is NULL when picking the newest version, so once a work unit's newest generation clears repo_id or its resolved team vote, Python keeps a stale non-null value from an older generation instead of the true latest one. Go's LatestWorkUnitInvestmentsSource and buildUnitTeamSubquery (investment.go) tuple-wrap the same reads -- (argMax(tuple(col), computed_at)).1 -- and correctly report the true latest generation, including a NULL. CHAOS-4759 ruled Go's reads are the ones kept, with Python left unfixed under this repo's standing no-Python-graphql-work policy; investmentargmaxtransitionguard.go is the guard that detects, per org, the moment a work unit's generation history stops agreeing across the two planes, independent of any code deploy -- the two coverage ratios move only by the units whose newest generation transitioned since the guard's baseline snapshot. Measured on prod at query-api build 72ffdb5d: repoCoverage 0.8924689846789948 (Go) vs 0.8906755621478929 (Python), teamCoverage 0.8527558256115781 vs 0.8503000595320582, identical across two proves a minute apart with no attribution write between them. Go is correct.",
+				Paths: []string{
+					"data.analytics.sankey.coverage.teamCoverage",
+					"data.analytics.sankey.coverage.repoCoverage",
+				},
+				Intermittent:       true,
+				IntermittentReason: "present only while some attributed row's newest generation carries NULL in a column an older generation filled; a later generation that restores the value, or a retraction that removes the row, makes both planes agree again",
+				// The blanket path citation above admits ANY coverage
+				// difference, including one the repos-join fan-out
+				// (CHAOS-4773, above) already explains through its own
+				// citation of these same two leaves -- see
+				// CoverageShiftShape's own doc comment (coverageshift.go)
+				// for the shape that narrows admission down to exactly
+				// what a null-transition on this query can produce. Paths
+				// is unchanged; this only tightens what counts as covered
+				// under it.
+				CoverageShiftShape: &CoverageShiftShape{
+					NodesListPath:    "data.analytics.sankey.nodes",
+					EdgesListPath:    "data.analytics.sankey.edges",
+					TeamCoveragePath: "data.analytics.sankey.coverage.teamCoverage",
+					RepoCoveragePath: "data.analytics.sankey.coverage.repoCoverage",
+				},
 			}},
 			// CHAOS-5546: sankey.go's nodes/edges queries are a plain
 			// ClickHouse UNION ALL with no outer ORDER BY. Measured live:

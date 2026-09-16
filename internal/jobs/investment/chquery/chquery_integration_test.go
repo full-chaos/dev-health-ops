@@ -114,14 +114,11 @@ func TestFetchWorkGraphEdgesRespectsDedupThenFilterOrder(t *testing.T) {
 	}
 }
 
-// TestFetchWorkGraphEdgesEmptyOrgReadsEveryTenant pins CHAOS-4804's behaviour
-// against a real engine.
-//
-// This asserts the WRONG-BUT-PYTHON-IDENTICAL behaviour on purpose. The port's
-// contract is to match Python, and the fix belongs on both planes at once; a
-// test that asserted the safe behaviour here would be asserting a divergence.
-// When CHAOS-4804 lands, THIS TEST is what should fail, loudly, on both planes.
-func TestFetchWorkGraphEdgesEmptyOrgReadsEveryTenant(t *testing.T) {
+// TestFetchWorkGraphEdgesScopedReadNeverSeesAnotherTenant proves the fix
+// directly against a live engine: two tenants each have their own edge, and a
+// scoped read for one tenant returns only that tenant's edge, while an
+// unscoped read is refused before it ever reaches ClickHouse.
+func TestFetchWorkGraphEdgesScopedReadNeverSeesAnotherTenant(t *testing.T) {
 	reader, conn, ctx := newTestReader(t)
 
 	seedEdge(t, ctx, conn, orgAlpha, "alpha", "native", 1.0, "2026-01-01 00:00:00.000")
@@ -135,18 +132,8 @@ func TestFetchWorkGraphEdgesEmptyOrgReadsEveryTenant(t *testing.T) {
 		t.Fatalf("scoped read returned %d edges, want exactly org alpha's 1", len(scoped))
 	}
 
-	unscoped, err := reader.FetchWorkGraphEdges(ctx, EdgeQueryOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(unscoped) != 2 {
-		t.Fatalf(
-			"unscoped read returned %d edges, want 2 (BOTH tenants). "+
-				"If this now returns 1, CHAOS-4804 has been fixed on the Go side "+
-				"only -- check that components.py moved in the same change set, "+
-				"or the two planes will group differently",
-			len(unscoped),
-		)
+	if _, err := reader.FetchWorkGraphEdges(ctx, EdgeQueryOptions{}); !errors.Is(err, ErrOrganizationIDRequired) {
+		t.Fatalf("unscoped read: want ErrOrganizationIDRequired, got %v", err)
 	}
 }
 

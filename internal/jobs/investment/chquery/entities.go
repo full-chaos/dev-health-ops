@@ -622,9 +622,9 @@ type InvestmentKey struct {
 //
 // # WHY THE org_id FILTER IS UNCONDITIONAL HERE
 //
-// Every other fetcher in this package makes the org predicate conditional,
-// faithfully reproducing Python's CHAOS-4804 tenant-fusion shape. This one does
-// not, because the reference does not either: materialize.py binds `org_id`
+// Some fetchers in this package make the org predicate conditional, matching
+// materialize.py's own per-table `if org_id:` shape. This one does not,
+// because the reference does not either: materialize.py binds `org_id`
 // unconditionally (`WHERE org_id = %(org_id)s`, :720), so an unscoped run
 // matches only rows literally written with org_id = ”. Making it conditional
 // here would be a divergence, and a costly one in the safe-looking direction --

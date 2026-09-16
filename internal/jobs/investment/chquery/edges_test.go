@@ -108,3 +108,56 @@ func TestFetchWorkGraphEdgesHeuristicFilterAppliesAfterTheCollapse(t *testing.T)
 		t.Fatalf("outer heuristic filter must be rendered after the subquery closes: %s", sql)
 	}
 }
+
+// TestFetchWorkGraphEdgesRefusesEmptyOrgWithoutQuerying proves an empty
+// organization id is refused before any query reaches ClickHouse, rather than
+// silently answered by reading every tenant's edges.
+func TestFetchWorkGraphEdgesRefusesEmptyOrgWithoutQuerying(t *testing.T) {
+	fake := &capturingConn{}
+	reader, err := NewReader(fake)
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+
+	_, err = reader.FetchWorkGraphEdges(context.Background(), EdgeQueryOptions{})
+	if !errors.Is(err, ErrOrganizationIDRequired) {
+		t.Fatalf("want ErrOrganizationIDRequired, got %v", err)
+	}
+	if fake.query != "" {
+		t.Fatalf("reader issued a query for an unscoped read, want none:\n%s", fake.query)
+	}
+}
+
+// TestFetchWorkGraphEdgesQueryShapeBindsOrgUnconditionally pins the emitted
+// SQL: the org filter is present and org_id is bound on every call, not only
+// when RepoIDs is also supplied.
+func TestFetchWorkGraphEdgesQueryShapeBindsOrgUnconditionally(t *testing.T) {
+	fake := &capturingConn{}
+	reader, err := NewReader(fake)
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+
+	_, _ = reader.FetchWorkGraphEdges(context.Background(), EdgeQueryOptions{OrganizationID: "org1"})
+
+	sql := fake.query
+	if !strings.Contains(sql, "WHERE org_id = {org_id:String}") {
+		t.Fatalf("edges query missing the unconditional org filter:\n%s", sql)
+	}
+	boundOrg := false
+	for _, arg := range fake.args {
+		named, ok := arg.(driver.NamedValue)
+		if !ok {
+			continue
+		}
+		if named.Name == "org_id" {
+			boundOrg = true
+			if named.Value != "org1" {
+				t.Fatalf("org_id bound to %v, want %q", named.Value, "org1")
+			}
+		}
+	}
+	if !boundOrg {
+		t.Fatalf("query arguments never bound org_id: %#v", fake.args)
+	}
+}

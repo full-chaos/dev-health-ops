@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
@@ -80,38 +81,30 @@ type EdgeRow struct {
 // re-sorted before units.BuildComponents: component discovery walks edges in
 // input order, and component order is addressed by numeric index elsewhere.
 //
-// CHAOS-4804: THIS FUNCTION HAS NO ORG GUARD, AND THAT IS PYTHON'S SHAPE.
-// An empty OrganizationID omits the org predicate entirely (queries.py:59-62,
-// `if org_id:`), and with no RepoIDs the WHERE clause is empty — the query then
-// reads every tenant's edges. The GROUP BY carries org_id so the ROWS stay
-// per-org, which makes it look contained; it is not. units.NodeKey is
-// (type, id) with NO org, so a provider-scoped id present in two tenants
-// becomes ONE node and the two graphs fuse into a single component, minting a
-// work_unit_id over a node set drawn from multiple organisations.
-//
-// Reproduced deliberately: a one-plane fix would be an unflagged divergence
-// between two planes that must group identically. CHAOS-4804 carries the fix
-// for both. Callers that can supply an org MUST supply one — passing "" is not
-// a way to say "everything", it is how this becomes reachable.
+// The org filter is mandatory. units.NodeKey is (type, id) with NO org, so a
+// provider-scoped id present in two tenants becomes ONE node once both
+// tenants' edges are read together, fusing two tenants' graphs into a single
+// component and minting a work_unit_id over a node set drawn from multiple
+// organisations. An empty OrganizationID is refused outright before any query
+// runs (see ErrOrganizationIDRequired) rather than reading every tenant's
+// edges. Callers that can supply an org MUST supply one — passing "" is not a
+// way to say "everything".
 func (reader *Reader) FetchWorkGraphEdges(ctx context.Context, opts EdgeQueryOptions) ([]EdgeRow, error) {
 	if reader == nil || reader.conn == nil {
 		return nil, ErrUnavailable
 	}
+	if opts.OrganizationID == "" {
+		slog.Error("chquery: refused an unscoped read", "reader", "FetchWorkGraphEdges")
+		return nil, fmt.Errorf("FetchWorkGraphEdges: %w", ErrOrganizationIDRequired)
+	}
 
-	conditions := make([]string, 0, 2)
-	arguments := make([]any, 0, 3)
+	conditions := []string{"org_id = {org_id:String}"}
+	arguments := []any{clickhouse.Named("org_id", opts.OrganizationID)}
 	if len(opts.RepoIDs) > 0 {
 		conditions = append(conditions, "repo_id IN {repo_ids:Array(String)}")
 		arguments = append(arguments, clickhouse.Named("repo_ids", dedupeStrings(opts.RepoIDs)))
 	}
-	if opts.OrganizationID != "" {
-		conditions = append(conditions, "org_id = {org_id:String}")
-		arguments = append(arguments, clickhouse.Named("org_id", opts.OrganizationID))
-	}
-	whereSQL := ""
-	if len(conditions) > 0 {
-		whereSQL = "WHERE " + strings.Join(conditions, " AND ")
-	}
+	whereSQL := "WHERE " + strings.Join(conditions, " AND ")
 
 	// winner.6 is is_deleted: an identity whose latest version is a tombstone
 	// is not an edge.
@@ -140,14 +133,11 @@ func (reader *Reader) FetchWorkGraphEdges(ctx context.Context, opts EdgeQueryOpt
 	// tie under argMax, which ClickHouse documents as implementation-defined
 	// for the tie-break; five INDEPENDENT argMax calls could each break that
 	// tie differently and assemble a row that never existed in any single
-	// physical insert. Latent here (FetchWorkGraphEdges has no non-test call
-	// site at this tip), hence P3 not P2 -- fixed anyway, matching the
+	// physical insert. Fixed regardless of call-site count, matching the
 	// established remediation rather than leaving a known-defective query on
 	// the books. `org_id` is carried through as a passthrough column purely
-	// for the ORDER BY (this function deliberately has no org filter by
-	// default, see the doc comment above -- a multi-tenant read needs org_id
-	// in the sort key), scanned and discarded below since EdgeRow never
-	// carried it.
+	// for the ORDER BY (a multi-tenant read needs org_id in the sort key),
+	// scanned and discarded below since EdgeRow never carried it.
 	query := fmt.Sprintf(`
         SELECT
             org_id,

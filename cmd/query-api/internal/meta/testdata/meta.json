@@ -1,0 +1,21 @@
+{
+  "backend": "clickhouse",
+  "version": "24.3.1.2672",
+  "last_ingest_at": null,
+  "coverage": {},
+  "limits": {
+    "max_days": 365,
+    "max_repos": 1000
+  },
+  "supported_endpoints": [
+    "/api/v1/home",
+    "/api/v1/quadrant",
+    "/api/v1/flame",
+    "/api/v1/heatmap",
+    "/api/v1/work-units",
+    "/api/v1/sankey",
+    "/api/v1/investment",
+    "/api/v1/opportunities",
+    "/graphql"
+  ]
+}

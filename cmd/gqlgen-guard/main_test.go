@@ -355,6 +355,8 @@ func TestTheBinaryReportsItsRefusalsAndExitCodes(t *testing.T) {
 			args: []string{"check-drift", "extra"}, wantExit: exitUsage, wantText: "unexpected argument"},
 		{name: "-update on generate is refused",
 			args: []string{"generate", "-update"}, wantExit: exitUsage, wantText: "applies to check-drift"},
+		{name: "-revert-recorded on check-drift is refused",
+			args: []string{"check-drift", "-revert-recorded"}, wantExit: exitUsage, wantText: "applies to generate, not check-drift"},
 		{name: "an unknown flag is refused", args: []string{"check-drift", "-nope"}, wantExit: exitUsage, wantText: "flag provided but not defined"},
 		{name: "a missing config is refused",
 			args:     []string{"check-drift", "-module", dir, "-config", "absent.yml"},
@@ -603,4 +605,175 @@ func firstLineWith(s, prefix string) string {
 		}
 	}
 	return ""
+}
+
+// TestAWorkspaceWhoseModulesDoNotContainTheWorkingDirectoryIsRefusedByName:
+// two workspace modules, neither containing the working directory. The
+// refusal must name the actual reason (a workspace of N modules, none of them
+// the working directory's) rather than falling through to whatever later
+// check happens to catch an empty module root next.
+func TestAWorkspaceWhoseModulesDoNotContainTheWorkingDirectoryIsRefusedByName(t *testing.T) {
+	bin := buildGuard(t)
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, dir, "a/go.mod", "module example.com/a\n\ngo 1.22\n")
+	write(t, dir, "b/go.mod", "module example.com/b\n\ngo 1.22\n")
+	write(t, dir, "outside/keep.txt", "x\n")
+	write(t, dir, "go.work", "go 1.22\n\nuse (\n\t./a\n\t./b\n)\n")
+
+	cmd := exec.Command(bin, "check-drift")
+	cmd.Dir = filepath.Join(dir, "outside")
+	cmd.Env = append(os.Environ(), "GOWORK=", "TMPDIR="+t.TempDir())
+	out, err := cmd.CombinedOutput()
+	t.Logf("CELL-OUTPUT: exit %d; %s", exitCodeOf(t, err), firstLineWith(string(out), "gqlgen-guard: "))
+	if got := exitCodeOf(t, err); got != exitRefused {
+		t.Fatalf("exit status %d, want %d\noutput:\n%s", got, exitRefused, out)
+	}
+	if !strings.Contains(string(out), "workspace mode lists 2 modules and the working directory is inside none of them") {
+		t.Fatalf("the refusal does not name the actual reason:\n%s", out)
+	}
+}
+
+// recordedHandEditFixture builds a real, generatable module, runs a first
+// generation and captures the record it produces, then hand-edits one output
+// and refreshes the record with -update so it describes that edit as a
+// deliberate, recorded hand-edit -- the state the -revert-recorded flag and
+// the writing verbs' dispatch exist to protect. Returns the module directory,
+// a private TMPDIR for the guard's own private copies, and the exact bytes
+// the fresh generator would produce for the hand-edited file (so a caller can
+// tell "reverted" from "left alone" without re-running the generator itself).
+func recordedHandEditFixture(t *testing.T, bin string) (dir, tmp, freshGenerated string) {
+	t.Helper()
+	dir = newGeneratableFixture(t)
+	tmp = t.TempDir()
+	const record = "contracts/expected-drift.record"
+
+	run := func(args ...string) (string, int) {
+		cmd := exec.Command(bin, args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), "TMPDIR="+tmp)
+		var out bytes.Buffer
+		cmd.Stdout = &out
+		cmd.Stderr = &out
+		err := cmd.Run()
+		return out.String(), exitCodeOf(t, err)
+	}
+
+	if out, exit := run("generate", "-config", "gqlgen.yml", "-record", record, "-revert-recorded"); exit != exitOK {
+		t.Fatalf("setup: the first generation failed (exit %d):\n%s", exit, out)
+	}
+	freshGenerated = readFile(t, filepath.Join(dir, "gen", "generated.go"))
+
+	if out, exit := run("check-drift", "-config", "gqlgen.yml", "-record", record, "-update"); exit != exitOK {
+		t.Fatalf("setup: recording the initial (no-drift) baseline failed (exit %d):\n%s", exit, out)
+	}
+
+	handEdited := freshGenerated + "\n// a person edited this file after it was generated\n"
+	if err := os.WriteFile(filepath.Join(dir, "gen", "generated.go"), []byte(handEdited), 0o644); err != nil {
+		t.Fatalf("setup: hand-edit gen/generated.go: %v", err)
+	}
+
+	if out, exit := run("check-drift", "-config", "gqlgen.yml", "-record", record, "-update"); exit != exitOK {
+		t.Fatalf("setup: recording the hand-edit as deliberate failed (exit %d):\n%s", exit, out)
+	}
+	recorded := readFile(t, filepath.Join(dir, record))
+	if !strings.Contains(recorded, "drift gen/generated.go ") {
+		t.Fatalf("setup: the record does not describe gen/generated.go as drift:\n%s", recorded)
+	}
+	return dir, tmp, freshGenerated
+}
+
+func readFile(t *testing.T, p string) string {
+	t.Helper()
+	data, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatalf("read %s: %v", p, err)
+	}
+	return string(data)
+}
+
+// TestCheckDriftUpdateActuallyRewritesTheRecordFromTheCurrentTree: -update is
+// the one path that writes the expected-drift record. A stale record -- the
+// tree changed since it was last written -- must come out matching the
+// CURRENT tree, not the tree -update was pointed at the last time it ran.
+func TestCheckDriftUpdateActuallyRewritesTheRecordFromTheCurrentTree(t *testing.T) {
+	bin := buildGuard(t)
+	// recordedHandEditFixture already exercises -update twice: once against a
+	// clean tree (baseline) and once after a hand-edit (drift). Its own
+	// assertion on the second call's output is this property; a build that
+	// wires -update to the read-only verb instead of UpdateDriftRecord fails
+	// inside the helper itself, at "the record does not describe
+	// gen/generated.go as drift" -- because the file on disk would never have
+	// changed from the clean baseline.
+	dir, tmp, _ := recordedHandEditFixture(t, bin)
+
+	// The record now describes the hand-edit. A plain check-drift (no
+	// -update) must find NO further drift against it: the record -update just
+	// wrote is exactly what this tree, and a fresh generation, produce.
+	cmd := exec.Command(bin, "check-drift", "-config", "gqlgen.yml", "-record", "contracts/expected-drift.record")
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "TMPDIR="+tmp)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	err := cmd.Run()
+	t.Logf("CELL-OUTPUT: exit %d; %s", exitCodeOf(t, err), lastLine(out.String()))
+	if got := exitCodeOf(t, err); got != exitOK {
+		t.Fatalf("check-drift against the record -update just wrote refused (exit %d):\n%s", got, out.String())
+	}
+	if !strings.Contains(out.String(), "gqlgen drift matches") {
+		t.Fatalf("the record -update wrote does not match a fresh check-drift:\n%s", out.String())
+	}
+}
+
+// TestGenerateVerbAndItsFlagAreWiredToWhatTheyDocument: the writing verb's
+// dispatch and its one flag, exercised through the real binary rather than
+// the library API directly -- every cell that drives the library API sets
+// RevertRecorded itself, so nothing else proves the COMMAND LINE actually
+// connects "generate" to the function that writes, or "-revert-recorded" to
+// the field that permits overwriting a recorded hand-edit.
+func TestGenerateVerbAndItsFlagAreWiredToWhatTheyDocument(t *testing.T) {
+	bin := buildGuard(t)
+	dir, tmp, freshGenerated := recordedHandEditFixture(t, bin)
+
+	run := func(args ...string) (string, int) {
+		cmd := exec.Command(bin, args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), "TMPDIR="+tmp)
+		var out bytes.Buffer
+		cmd.Stdout = &out
+		cmd.Stderr = &out
+		err := cmd.Run()
+		return out.String(), exitCodeOf(t, err)
+	}
+
+	t.Run("without -revert-recorded, generate refuses to revert a recorded hand-edit", func(t *testing.T) {
+		before := readFile(t, filepath.Join(dir, "gen", "generated.go"))
+		out, exit := run("generate", "-config", "gqlgen.yml", "-record", "contracts/expected-drift.record")
+		t.Logf("CELL-OUTPUT: exit %d; %s", exit, lastLine(out))
+		if exit != exitRefused {
+			t.Fatalf("generate did not refuse (exit %d); the hand-edit is unprotected:\n%s", exit, out)
+		}
+		if !strings.Contains(out, "revert") || !strings.Contains(out, "hand-edit") {
+			t.Fatalf("the refusal does not name a recorded hand-edit:\n%s", out)
+		}
+		after := readFile(t, filepath.Join(dir, "gen", "generated.go"))
+		if after != before {
+			t.Fatalf("generate refused but still wrote the file:\nbefore:\n%s\nafter:\n%s", before, after)
+		}
+	})
+
+	t.Run("with -revert-recorded, generate overwrites the hand-edit with a fresh generation", func(t *testing.T) {
+		out, exit := run("generate", "-config", "gqlgen.yml", "-record", "contracts/expected-drift.record", "-revert-recorded")
+		t.Logf("CELL-OUTPUT: exit %d; %s", exit, lastLine(out))
+		if exit != exitOK {
+			t.Fatalf("generate -revert-recorded refused (exit %d):\n%s", exit, out)
+		}
+		got := readFile(t, filepath.Join(dir, "gen", "generated.go"))
+		if got != freshGenerated {
+			t.Fatalf("generate -revert-recorded did not write a fresh generation:\n got:\n%s\nwant:\n%s", got, freshGenerated)
+		}
+	})
 }

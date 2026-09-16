@@ -91,6 +91,20 @@ const markerScanBytes = 4096
 // written by it in that form.
 var utf8BOM = []byte{0xef, 0xbb, 0xbf}
 
+// readProvenanceWindow fills buf (markerScanBytes long) from r, looping across
+// short reads the way io.ReadFull does, so a reader that hands back the file
+// in several small pieces is still read to the end of the window rather than
+// judged on whatever its first Read returned. It returns the number of bytes
+// actually read; reaching EOF before the window fills is not an error.
+func readProvenanceWindow(r io.Reader) (buf []byte, n int, err error) {
+	buf = make([]byte, markerScanBytes)
+	n, err = io.ReadFull(r, buf)
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return nil, 0, err
+	}
+	return buf, n, nil
+}
+
 // provenance decides whether the file at rel -- declared by declaree -- carries
 // the notice gqlgen writes for that section, at the position gqlgen writes it.
 //
@@ -103,9 +117,8 @@ func provenance(root *os.Root, rel string, declaree Declaree) (shape string, ok 
 		return "", false, "", fmt.Errorf("open %q: %w", rel, err)
 	}
 	defer f.Close()
-	buf := make([]byte, markerScanBytes)
-	n, err := io.ReadFull(f, buf)
-	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+	buf, n, err := readProvenanceWindow(f)
+	if err != nil {
 		return "", false, "", fmt.Errorf("read %q: %w", rel, err)
 	}
 	if declaree == DeclareeFederation && path.Base(rel) == federationRequiresFile {

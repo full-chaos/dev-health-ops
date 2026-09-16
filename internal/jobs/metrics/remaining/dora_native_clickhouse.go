@@ -168,9 +168,11 @@ const (
 // LoadIncidentsStarted (daily/incident_native_clickhouse.go): a NULL
 // valid_from means "valid since before records began" and must satisfy
 // every as-of filter, the same as the symmetric `valid_to IS NULL OR
-// valid_to > as_of` clause beside it. The projection also selects
-// mapping.valid_from as mapping_valid_from so a caller that scans it can
-// report how many matched rows were only admitted by the guard.
+// valid_to > as_of` clause beside it. This is a live-Python-oracle-compared
+// port (dora_incident_sql_oracle_test.go): its column list and every other
+// clause stay byte-for-byte identical to the live builder's own output, so
+// a caller wanting to observe how many matched rows the guard recovered
+// runs its own separate query rather than widening this one's SELECT list.
 func IncidentProjectionQuery(
 	window IncidentWindow, repoFilter string, contract OperationalOrderingContract,
 ) string {
@@ -203,7 +205,7 @@ func IncidentProjectionQuery(
 		contract,
 	)
 	return fmt.Sprintf(`
-        SELECT repo_id, incident_id, status, started_at, resolved_at, last_synced, mapping_valid_from
+        SELECT repo_id, incident_id, status, started_at, resolved_at, last_synced
         FROM (
             SELECT
                 mapping.repo_id AS repo_id,
@@ -211,8 +213,7 @@ func IncidentProjectionQuery(
                 incident.normalized_status AS status,
                 incident.started_at,
                 incident.resolved_at,
-                incident.last_synced AS last_synced,
-                mapping.valid_from AS mapping_valid_from
+                incident.last_synced AS last_synced
             FROM %s AS incident
             INNER JOIN %s AS mapping
                 ON incident.org_id = mapping.org_id
@@ -323,14 +324,6 @@ func (executor *DORAExecutor) loadDeployments(
 
 // loadIncidents ports _load_incidents (job_dora.py:123) plus
 // deduplicate_active_incidents (active_incidents.py:89).
-//
-// A mapping row's valid_from is Nullable, and NULL means "valid since
-// before records began" -- IncidentProjectionQuery's mapping-join predicate
-// admits it via the same NULL-OK guard LoadIncidentsStarted uses. This
-// reader reports how many matched mapping rows fell into each case
-// (validFromSet vs. validFromNullRecovered) through the optional guard
-// observer, and logs a WARN once per query when it recovers any NULL row,
-// so the class stays observable if a future producer regresses it.
 func (executor *DORAExecutor) loadIncidents(
 	ctx context.Context, organizationID string, day time.Time, scope doraScope,
 ) ([]numerical.Incident, int, error) {
@@ -357,26 +350,19 @@ func (executor *DORAExecutor) loadIncidents(
 	var incidents []numerical.Incident
 	seen := make(map[string]struct{})
 	skipped := 0
-	validFromSet, validFromNullRecovered := 0, 0
 	for rows.Next() {
 		var (
-			repoID           *uuid.UUID
-			incidentID       string
-			status           *string
-			startedAt        *time.Time
-			resolvedAt       *time.Time
-			lastSynced       time.Time
-			mappingValidFrom *time.Time
+			repoID     *uuid.UUID
+			incidentID string
+			status     *string
+			startedAt  *time.Time
+			resolvedAt *time.Time
+			lastSynced time.Time
 		)
 		if err := rows.Scan(
-			&repoID, &incidentID, &status, &startedAt, &resolvedAt, &lastSynced, &mappingValidFrom,
+			&repoID, &incidentID, &status, &startedAt, &resolvedAt, &lastSynced,
 		); err != nil {
 			return nil, 0, fmt.Errorf("scan incident: %w", err)
-		}
-		if mappingValidFrom == nil {
-			validFromNullRecovered++
-		} else {
-			validFromSet++
 		}
 		if repoID == nil {
 			skipped++
@@ -399,20 +385,46 @@ func (executor *DORAExecutor) loadIncidents(
 	if err := rows.Err(); err != nil {
 		return nil, 0, fmt.Errorf("iterate incidents: %w", err)
 	}
-	executor.reportValidFromGuard(ctx, organizationID, validFromSet, validFromNullRecovered)
+	executor.reportValidFromGuard(ctx, organizationID, asOf, filter, arguments)
 	return incidents, skipped, nil
 }
 
-// reportValidFromGuard records how many operational_service_repository_mappings
-// rows this call's join matched via a set valid_from versus one recovered
-// only by the NULL-OK guard, and logs a WARN once per query when the guard
-// actually mattered -- the same observability contract
+// reportValidFromGuard counts, via its OWN standalone query (never the
+// live-Python-oracle-pinned IncidentProjectionQuery -- widening that one's
+// column list is exactly what drifted it from the Python builder it is
+// compared against), how many operational_service_repository_mappings rows
+// matching this call's as-of scope carry a set valid_from versus one
+// recovered only by the NULL-OK guard, and logs a WARN once per query when
+// the guard actually mattered -- the same observability contract
 // IncidentValidFromGuardObserver documents for LoadIncidentsStarted (the
 // daily incident reader), reused here rather than re-invented because it is
-// the same table and the same guard.
+// the same table and the same guard. A count-query failure is logged and
+// swallowed, never returned: telemetry must not fail a partition that
+// otherwise computed correctly.
 func (executor *DORAExecutor) reportValidFromGuard(
-	ctx context.Context, organizationID string, validFromSet, validFromNullRecovered int,
+	ctx context.Context, organizationID string, asOf time.Time, repoFilter string, arguments map[string]any,
 ) {
+	currentMappings := currentOperationalRowsSQL(
+		"operational_service_repository_mappings",
+		[]string{
+			"repo_id IS NOT NULL",
+			"is_active = 1",
+			"(valid_from IS NULL OR valid_from <= {as_of:DateTime64(6, 'UTC')})",
+			"(valid_to IS NULL OR valid_to > {as_of:DateTime64(6, 'UTC')})",
+		},
+		executor.contract,
+	)
+	query := fmt.Sprintf(
+		"SELECT countIf(valid_from IS NOT NULL), countIf(valid_from IS NULL) FROM %s AS mapping WHERE mapping.repo_id IS NOT NULL%s",
+		currentMappings, repoFilter,
+	)
+	row := executor.conn.QueryRow(ctx, query, namedArguments(arguments)...)
+	var validFromSet, validFromNullRecovered uint64
+	if err := row.Scan(&validFromSet, &validFromNullRecovered); err != nil {
+		executor.logger.WarnContext(ctx, "dora: valid_from guard count query failed",
+			"org_id", organizationID, "error", err)
+		return
+	}
 	if validFromNullRecovered > 0 {
 		executor.logger.WarnContext(ctx,
 			"dora: operational_service_repository_mappings rows matched only via NULL valid_from guard",
@@ -426,10 +438,10 @@ func (executor *DORAExecutor) reportValidFromGuard(
 		return
 	}
 	if validFromSet > 0 {
-		_ = guardObserver.ObserveIncidentValidFromGuardRows(jobruntime.IncidentValidFromGuardReasonSet, validFromSet)
+		_ = guardObserver.ObserveIncidentValidFromGuardRows(jobruntime.IncidentValidFromGuardReasonSet, int(validFromSet))
 	}
 	if validFromNullRecovered > 0 {
-		_ = guardObserver.ObserveIncidentValidFromGuardRows(jobruntime.IncidentValidFromGuardReasonNullRecovered, validFromNullRecovered)
+		_ = guardObserver.ObserveIncidentValidFromGuardRows(jobruntime.IncidentValidFromGuardReasonNullRecovered, int(validFromNullRecovered))
 	}
 }
 

@@ -158,30 +158,30 @@ _Deployed revisions read from: fleet file fleet-prod.json._
 | --- | --- | --- | --- | --- | --- | --- |
 | `ai_governance` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
 | `ai_impact` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
-| `ai_workflow` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
-| `cicd` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
-| `compounding_risk` | daily | POST_BRIDGE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
+| `ai_workflow` | daily | NATIVE | VERIFIED (CHAOS-4286 @ `506c99beb3ec`, internal/jobs/metrics/aiworkflow/oracle_test.go TestAIWorkflowMatchesFrozenPythonGolden (frozen Python golden fixture; PASS re-run at this sha)) | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
+| `cicd` | daily | NATIVE | VERIFIED (CHAOS-4292 @ `506c99beb3ec`, internal/jobs/metrics/daily/cicd/compute_test.go TestComputeMatchesFrozenPythonGolden + TestComputeMatchesFrozenGoldenExhaustively (frozen Python golden; PASS re-run at this sha)) | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
+| `compounding_risk` | daily | POST_BRIDGE | VERIFIED (CHAOS-4287 @ `506c99beb3ec`, internal/jobs/metrics/daily/compoundingrisk/compute_test.go TestComputeMatchesFrozenPythonGolden (frozen Python golden; PASS re-run at this sha)) | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
 | `deploy` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
-| `file_hotspots` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
-| `file_risk_hotspots` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
+| `file_hotspots` | daily | NATIVE | VERIFIED (CHAOS-4277 @ `506c99beb3ec`, internal/jobs/metrics/daily/filehotspots/golden_full_test.go TestComputeMatchesFrozenPythonGolden (ComputeFileHotspots leg; frozen Python golden; PASS re-run at this sha)) | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
+| `file_risk_hotspots` | daily | NATIVE | VERIFIED (CHAOS-4277 @ `506c99beb3ec`, internal/jobs/metrics/daily/filehotspots/golden_full_test.go TestComputeMatchesFrozenPythonGolden (ComputeFileRiskHotspots leg; frozen Python golden; PASS re-run at this sha)) | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
 | `incident` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
-| `repo_user_commit` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
-| `review_edges` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
-| `team_wellbeing` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
+| `repo_user_commit` | daily | NATIVE | VERIFIED (CHAOS-4275 @ `506c99beb3ec`, internal/jobs/metrics/daily/repouser/compute_test.go TestComputeMatchesFrozenPythonGolden + golden_full_test.go TestComputeMatchesFrozenGoldenExhaustively (frozen Python golden; PASS re-run at this sha)) | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
+| `review_edges` | daily | NATIVE | VERIFIED (CHAOS-4279 @ `506c99beb3ec`, internal/jobs/metrics/daily/reviewedges/compute_test.go TestComputeMatchesFrozenPythonGolden (frozen Python golden; PASS re-run at this sha)) | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
+| `team_wellbeing` | daily | NATIVE | VERIFIED (CHAOS-4276 @ `506c99beb3ec`, internal/jobs/metrics/numerical/wellbeing_parity_test.go TestTeamWellbeingGoldenParity (frozen Python golden; PASS re-run at this sha)) | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
 | `testops_coverage` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
 | `testops_pipeline` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
 | `testops_risk` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
 | `testops_test` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
 | `work_graph_edges` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
-| `work_item` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
+| `work_item` | daily | NATIVE | VERIFIED (CHAOS-4283 @ `506c99beb3ec`, internal/jobs/metrics/workitemmetrics/golden_test.go TestComputeDailyTripletMatchesPythonGolden (frozen Python golden; PASS re-run at this sha)) | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
 | `work_item_attribution` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
-| `work_item_estimate` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
-| `work_item_state` | daily | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
-| `benchmarking` | finalize | FINALIZE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
-| `compounding_risk_team` | finalize | FINALIZE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
-| `ic_finalize` | finalize | FINALIZE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
+| `work_item_estimate` | daily | NATIVE | VERIFIED (CHAOS-5323 @ `506c99beb3ec`, internal/jobs/metrics/workitemmetrics/golden_test.go TestComputeEstimateCoverageMatchesPythonGolden (frozen Python golden; PASS re-run at this sha)) | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
+| `work_item_state` | daily | NATIVE | VERIFIED (CHAOS-4278 @ `506c99beb3ec`, internal/jobs/metrics/daily/work_item_state_native_executor_test.go TestComputeWorkItemStateDurationsGolden (ports Python's test_time_in_state_is_bucketed_to_day byte-for-byte; PASS re-run at this sha)) | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
+| `benchmarking` | finalize | FINALIZE | VERIFIED (CHAOS-4288 @ `506c99beb3ec`, internal/jobs/metrics/daily/benchmarking/compute_test.go TestComputeMatchesFrozenPythonGolden (frozen Python golden; PASS re-run at this sha)) | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
+| `compounding_risk_team` | finalize | FINALIZE | VERIFIED (CHAOS-5084 @ `506c99beb3ec`, internal/jobs/metrics/daily/compoundingrisk/team_golden_test.go TestBuildTeamRowsMatchesFrozenPythonGolden (frozen Python golden; PASS re-run at this sha)) | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
+| `ic_finalize` | finalize | FINALIZE | VERIFIED (CHAOS-4290 @ `506c99beb3ec`, internal/jobs/metrics/daily/icfinalize/parity_golden_test.go TestICFinalizeMatchesTheFrozenPythonGolden (integration-tagged frozen Python golden; requires a ClickHouse container, part of the committed suite; not independently re-run here -- a missing sqlalchemy venv in this worktree blocked the local re-run attempt)) | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
 | `team_cognitive_load` | finalize | FINALIZE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
-| `team_complexity` | finalize | FINALIZE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
+| `team_complexity` | finalize | FINALIZE | VERIFIED (CHAOS-5051 @ `506c99beb3ec`, internal/jobs/metrics/daily/team_complexity_parity_golden_test.go TestTeamComplexityMatchesTheFrozenPythonGolden (frozen Python golden; PASS re-run at this sha)) | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
 | `capacity` | remaining | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
 | `complexity` | remaining | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
 | `dora` | remaining | NATIVE | UNVERIFIED | `dd77701c5623` (read 2026-09-16T09:35:05Z) | **none** | -- |
@@ -237,7 +237,7 @@ A row that is live, reachable to real clients (`canary`/`primary`) and carries n
 is required before stage 4/5, and "a bare 200 does not qualify".
 
 <!-- BEGIN GENERATED GO API OPERATIONS -->
-_Rendered 2026-09-16T09:35:05Z against main merge-base `dd77701c562310465109aa5f6c9bffaed0ca6ec6`; SDL digest pin `sha256:19485ec136d04de0935717dca8b4f5fd27dd0351fe96b854d40f433229468fd0`; fleet read 2026-09-16T09:35:05Z via fleet file fleet-prod.json._
+_Rendered 2026-09-16T09:35:05Z against main merge-base `506c99beb3ece085c2d3e58ffb7d8f9c11e83fba`; SDL digest pin `sha256:19485ec136d04de0935717dca8b4f5fd27dd0351fe96b854d40f433229468fd0`; fleet read 2026-09-16T09:35:05Z via fleet file fleet-prod.json._
 
 _Rows in `go_api_proof_run` at read time: **481**. Operations reachable to real clients with no deployed-executed proof: **1**. Rows whose mode says Go but whose schema digest no longer matches the pin, so every request silently falls back to Python: **0**._
 

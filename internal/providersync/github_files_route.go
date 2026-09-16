@@ -27,6 +27,12 @@ const (
 // completing the sync with a zero-row effect.
 var ErrGitHubFilesTraversalFailed = errors.New("github files traversal failed")
 
+// ErrGitHubFilesSubtreeTruncated marks a non-recursive subtree fetch that
+// itself reports truncated during tree-walk recovery. The tree API can
+// truncate a single oversized directory even without recursive=1, so the
+// walk cannot treat that subtree's listing as complete either.
+var ErrGitHubFilesSubtreeTruncated = errors.New("github files subtree truncated")
+
 // gitFileRow is the git_files projection produced by github/files. The Python
 // producer constructs GitFile records in backfill_file_records and stamps the
 // sink-owned last_synced value at ClickHouse insertion; this route carries the
@@ -47,20 +53,28 @@ type gitHubBranchPayload struct {
 }
 
 type gitHubTreePayload struct {
-	Tree []gitHubTreeEntry `json:"tree"`
+	Tree      []gitHubTreeEntry `json:"tree"`
+	Truncated bool              `json:"truncated"`
 }
 
 type gitHubTreeEntry struct {
 	Path string `json:"path"`
 	Type string `json:"type"`
+	SHA  string `json:"sha"`
 	Size *int   `json:"size"`
 }
 
-// GitHubFilesRouteHandler mirrors github.py's files branch: resolve the branch
-// at the claim's upper bound, traverse its recursive tree, retain every blob
-// path, and fetch scanner-eligible, <=1MB blob text in 50-path GraphQL batches.
-// Python deliberately does not reject a truncated tree response, so this route
-// preserves that behavior rather than inventing a stricter policy.
+// GitHubFilesRouteHandler resolves the branch at the claim's upper bound,
+// traverses its tree, retains every blob path, and fetches scanner-eligible,
+// <=1MB blob text in 50-path GraphQL batches.
+//
+// The tree API can report the recursive listing truncated once a repository
+// crosses its entry-count or response-size ceiling. A truncated recursive
+// response is never banked as a complete inventory: the handler discards it
+// and walks the same tree non-recursively, descending into every subtree by
+// its own sha until every path is enumerated. A subtree that itself reports
+// truncated, or any fetch that fails partway through the walk, fails the
+// whole inventory rather than writing a partial one.
 type GitHubFilesRouteHandler struct{}
 
 func (GitHubFilesRouteHandler) Collect(
@@ -98,34 +112,49 @@ func (GitHubFilesRouteHandler) Collect(
 		if err := continueGitHubFilesTraversal(err, repoPayload.FullName); err != nil {
 			return CompleteRouteBatch{}, err
 		}
-		return gitHubFilesBatch(claim, repoPayload.FullName, nil, normalizedAt, requests, 0, false)
+		return gitHubFilesBatch(claim, repoPayload.FullName, nil, normalizedAt, requests, 0, false, false)
 	}
 	if treeRef == "" {
-		return gitHubFilesBatch(claim, repoPayload.FullName, nil, normalizedAt, requests, 0, false)
+		return gitHubFilesBatch(claim, repoPayload.FullName, nil, normalizedAt, requests, 0, false, false)
 	}
 	var tree gitHubTreePayload
 	if err := fetchObject(ctx, client, root+"/git/trees/"+url.PathEscape(treeRef)+"?recursive=true", &tree); err != nil {
 		if err := continueGitHubFilesTraversal(err, repoPayload.FullName); err != nil {
 			return CompleteRouteBatch{}, err
 		}
-		return gitHubFilesBatch(claim, repoPayload.FullName, nil, normalizedAt, requests, 0, false)
+		return gitHubFilesBatch(claim, repoPayload.FullName, nil, normalizedAt, requests, 0, false, false)
 	}
 	requests++
-	paths := make([]string, 0, len(tree.Tree))
-	sizes := make(map[string]*int, len(tree.Tree))
-	for _, entry := range tree.Tree {
-		if entry.Type != "blob" || entry.Path == "" {
-			continue
+	var paths []string
+	var sizes map[string]*int
+	subtreeWalked := tree.Truncated
+	if tree.Truncated {
+		walkedPaths, walkedSizes, walkErr := gitHubWalkTree(ctx, client, root, treeRef, "", &requests)
+		if walkErr != nil {
+			err := fmt.Errorf("ref=%s: %w", treeRef, walkErr)
+			if err := continueGitHubFilesTraversal(err, repoPayload.FullName); err != nil {
+				return CompleteRouteBatch{}, err
+			}
+			return gitHubFilesBatch(claim, repoPayload.FullName, nil, normalizedAt, requests, 0, false, subtreeWalked)
 		}
-		paths = append(paths, entry.Path)
-		sizes[entry.Path] = entry.Size
+		paths, sizes = walkedPaths, walkedSizes
+	} else {
+		paths = make([]string, 0, len(tree.Tree))
+		sizes = make(map[string]*int, len(tree.Tree))
+		for _, entry := range tree.Tree {
+			if entry.Type != "blob" || entry.Path == "" {
+				continue
+			}
+			paths = append(paths, entry.Path)
+			sizes[entry.Path] = entry.Size
+		}
 	}
 	contents, contentRequests, err := fetchGitHubFileContents(ctx, client, owner, repository, treeRef, paths, sizes)
 	if err != nil {
 		if err := continueGitHubFilesTraversal(err, repoPayload.FullName); err != nil {
 			return CompleteRouteBatch{}, err
 		}
-		return gitHubFilesBatch(claim, repoPayload.FullName, nil, normalizedAt, requests+contentRequests, 0, false)
+		return gitHubFilesBatch(claim, repoPayload.FullName, nil, normalizedAt, requests+contentRequests, 0, false, subtreeWalked)
 	}
 	requests += contentRequests
 	rows := make([]gitFileRow, 0, len(paths))
@@ -136,7 +165,59 @@ func (GitHubFilesRouteHandler) Collect(
 		}
 		rows = append(rows, row)
 	}
-	return gitHubFilesBatch(claim, repoPayload.FullName, rows, normalizedAt, requests, 1, false)
+	return gitHubFilesBatch(claim, repoPayload.FullName, rows, normalizedAt, requests, 1, false, subtreeWalked)
+}
+
+// gitHubWalkTree recovers a complete blob inventory when the recursive tree
+// listing reports truncated. It re-fetches the same tree object without
+// recursive=1 and descends into every "tree" entry by its own sha, joining
+// each level's path onto prefix. A subtree that itself reports truncated, or
+// any fetch that fails, aborts the whole walk instead of returning the paths
+// already collected -- a partial walk is exactly the incomplete inventory
+// this recovery exists to avoid.
+func gitHubWalkTree(
+	ctx context.Context,
+	client *providerfoundation.HTTPClient,
+	root, sha, prefix string,
+	requests *int,
+) ([]string, map[string]*int, error) {
+	var tree gitHubTreePayload
+	if err := fetchObject(ctx, client, root+"/git/trees/"+url.PathEscape(sha), &tree); err != nil {
+		return nil, nil, fmt.Errorf("path=%q: %w", prefix, err)
+	}
+	*requests++
+	if tree.Truncated {
+		return nil, nil, fmt.Errorf("path=%q: %w", prefix, ErrGitHubFilesSubtreeTruncated)
+	}
+	paths := make([]string, 0, len(tree.Tree))
+	sizes := make(map[string]*int, len(tree.Tree))
+	for _, entry := range tree.Tree {
+		if entry.Path == "" {
+			continue
+		}
+		fullPath := entry.Path
+		if prefix != "" {
+			fullPath = prefix + "/" + entry.Path
+		}
+		switch entry.Type {
+		case "blob":
+			paths = append(paths, fullPath)
+			sizes[fullPath] = entry.Size
+		case "tree":
+			if entry.SHA == "" {
+				return nil, nil, fmt.Errorf("path=%q: %w", fullPath, providerfoundation.ErrNormalizationInvalid)
+			}
+			childPaths, childSizes, err := gitHubWalkTree(ctx, client, root, entry.SHA, fullPath, requests)
+			if err != nil {
+				return nil, nil, err
+			}
+			paths = append(paths, childPaths...)
+			for childPath, size := range childSizes {
+				sizes[childPath] = size
+			}
+		}
+	}
+	return paths, sizes, nil
 }
 
 func continueGitHubFilesTraversal(err error, repository string) error {
@@ -147,7 +228,7 @@ func continueGitHubFilesTraversal(err error, repository string) error {
 	if errors.As(err, &providerErr) && providerErr.Class == providerfoundation.ErrorRateLimited {
 		return err
 	}
-	slog.Warn("github files traversal failed", "repository", repository, "inventory_status", "failed", "error", err)
+	slog.Error("github files traversal failed", "repository", repository, "inventory_status", "failed", "error", err)
 	return fmt.Errorf("%w: %w", ErrGitHubFilesTraversalFailed, err)
 }
 
@@ -192,6 +273,7 @@ func gitHubFilesBatch(
 	normalizedAt time.Time,
 	requests, pages int,
 	capReached bool,
+	subtreeWalked bool,
 ) (CompleteRouteBatch, error) {
 	effect, err := effectBatchFromValues("git_files", EffectReadbackRequired, rows)
 	if err != nil {
@@ -204,6 +286,10 @@ func gitHubFilesBatch(
 			inventoryStatus = "no_commit_at_bound"
 		}
 	}
+	slog.Info(
+		"github files inventory", "repository", fullName, "entries", len(rows),
+		"subtree_walk", subtreeWalked, "inventory_status", inventoryStatus,
+	)
 	return CompleteRouteBatch{
 		Effects: []EffectBatch{effect},
 		Result: map[string]any{

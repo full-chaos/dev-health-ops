@@ -37,15 +37,26 @@
 // cycle_throughput attribution quirk above -- is ported verbatim.
 //
 // Data-layer note: ClickHouse reads follow src/dev_health_ops/
-// clickhouse_dedup.py's dedup_from exactly (dedupFrom below is the subset
-// of its table registry the three ported metric tables and their
-// query-side dependency actually use): work_item_metrics_daily and
-// work_item_user_metrics_daily are both ReplacingMergeTree(computed_at),
-// deduplicated with FINAL; user_metrics_daily and repo_metrics_daily are
-// legacy append-only MergeTree, deduplicated with the same "latest
-// computed_at per natural key" LIMIT-1-BY subquery Python's dedup_from
-// returns for them. teams is read with FINAL directly (not through
-// dedup_from), matching _resolve_team_labels's own query; identities
+// clickhouse_dedup.py's dedup_from IN INTENT, not in the reference's own
+// current text -- all four daily-family tables the ported metric specs
+// read (work_item_metrics_daily, work_item_user_metrics_daily,
+// user_metrics_daily, repo_metrics_daily) are ReplacingMergeTree
+// (computed_at) and are deduplicated the same way, with FINAL: the first
+// two since migration 055, the last two since migration 096
+// (src/dev_health_ops/migrations/clickhouse/096_daily_family_tables_
+// replacing_merge_tree.py -- TARGET_SORT_KEYS covers both with a sorting
+// key that matches this package's own dedup key). dedupFrom below used to
+// treat user_metrics_daily/repo_metrics_daily as legacy append-only
+// MergeTree, deduplicated through an all-tenant "latest computed_at per
+// natural key" LIMIT-1-BY subquery with no org_id predicate inside it --
+// stale since migration 096 landed, and the origin case this package's
+// class sweep exists to fix: a subquery that sorted and collapsed every
+// tenant's rows before the outer org filter narrowed the result, and (once
+// the table became ReplacingMergeTree) a raw multi-version read on top of
+// that. Every dedup read below now uses FINAL, with org_id filtered in the
+// SAME top-level statement as the FINAL source, never a separate
+// unfiltered subquery. teams is read with FINAL directly (not through
+// dedupFrom), matching _resolve_team_labels's own query; identities
 // (person-scope team-cohort lookup, identity.go) is likewise read with
 // FINAL directly, matching fetch_person_team_id's own query.
 //
@@ -172,21 +183,21 @@ var RepoMetrics = map[string]MetricSpec{
 		Metric: "churn", Label: "Churn", Unit: "loc",
 		Table: "repo_metrics_daily AS m", ValueExpr: "sum(m.total_loc_touched)",
 		EntityExpr: "repos.repo", LabelExpr: "repos.repo",
-		JoinClause:  "INNER JOIN repos ON repos.id = m.repo_id",
+		JoinClause:  "INNER JOIN repos FINAL ON repos.id = m.repo_id AND repos.org_id = {org_id:String}",
 		WhereClause: "AND repos.repo != ''", Transform: identity,
 	},
 	"throughput": {
 		Metric: "throughput", Label: "Throughput", Unit: "items",
 		Table: "repo_metrics_daily AS m", ValueExpr: "sum(m.prs_merged)",
 		EntityExpr: "repos.repo", LabelExpr: "repos.repo",
-		JoinClause:  "INNER JOIN repos ON repos.id = m.repo_id",
+		JoinClause:  "INNER JOIN repos FINAL ON repos.id = m.repo_id AND repos.org_id = {org_id:String}",
 		WhereClause: "AND repos.repo != ''", Transform: identity,
 	},
 	"cycle_time": {
 		Metric: "cycle_time", Label: "Cycle Time", Unit: "days",
 		Table: "repo_metrics_daily AS m", ValueExpr: "avg(m.median_pr_cycle_hours)",
 		EntityExpr: "repos.repo", LabelExpr: "repos.repo",
-		JoinClause:  "INNER JOIN repos ON repos.id = m.repo_id",
+		JoinClause:  "INNER JOIN repos FINAL ON repos.id = m.repo_id AND repos.org_id = {org_id:String}",
 		WhereClause: "AND m.median_pr_cycle_hours > 0 AND repos.repo != ''",
 		Transform:   hoursToDays,
 	},
@@ -194,21 +205,21 @@ var RepoMetrics = map[string]MetricSpec{
 		Metric: "wip", Label: "WIP", Unit: "items",
 		Table: "work_item_metrics_daily AS m", ValueExpr: "avg(m.wip_count_end_of_day)",
 		EntityExpr: "repos.repo", LabelExpr: "repos.repo",
-		JoinClause:  "INNER JOIN repos ON repos.repo = m.work_scope_id",
+		JoinClause:  "INNER JOIN repos FINAL ON repos.repo = m.work_scope_id AND repos.org_id = {org_id:String}",
 		WhereClause: "AND m.work_scope_id != ''", Transform: identity,
 	},
 	"review_load": {
 		Metric: "review_load", Label: "Review Load", Unit: "reviews",
 		Table: "user_metrics_daily AS m", ValueExpr: "sum(m.reviews_given) / nullIf(countDistinct(m.identity_id), 0)",
 		EntityExpr: "repos.repo", LabelExpr: "repos.repo",
-		JoinClause:  "INNER JOIN repos ON repos.id = m.repo_id",
+		JoinClause:  "INNER JOIN repos FINAL ON repos.id = m.repo_id AND repos.org_id = {org_id:String}",
 		WhereClause: "AND repos.repo != ''", Transform: identity,
 	},
 	"review_latency": {
 		Metric: "review_latency", Label: "Review Latency", Unit: "hours",
 		Table: "user_metrics_daily AS m", ValueExpr: "avg(m.pr_first_review_p50_hours)",
 		EntityExpr: "repos.repo", LabelExpr: "repos.repo",
-		JoinClause:  "INNER JOIN repos ON repos.id = m.repo_id",
+		JoinClause:  "INNER JOIN repos FINAL ON repos.id = m.repo_id AND repos.org_id = {org_id:String}",
 		WhereClause: "AND repos.repo != '' AND m.pr_first_review_p50_hours IS NOT NULL",
 		Transform:   identity,
 	},
@@ -295,43 +306,38 @@ var QuadrantDefinitions = map[string]QuadrantDefinition{
 
 // ---------------------------------------------------------------------------
 // dedup_from -- ported subset of src/dev_health_ops/clickhouse_dedup.py's
-// dedup_from, restricted to the tables the two ported metric sets (team/repo,
-// person excluded) actually name: work_item_metrics_daily (rerun-deduped
-// ReplacingMergeTree) and user_metrics_daily/repo_metrics_daily (read through
-// LIMIT 1 BY, both registered in _APPEND_ONLY_DAILY_KEYS with the
-// natural keys below).
+// dedup_from, restricted to the tables the three ported metric sets
+// actually name. All four are ReplacingMergeTree(computed_at) today
+// (work_item_metrics_daily/work_item_user_metrics_daily since migration
+// 055; user_metrics_daily/repo_metrics_daily since migration 096) and take
+// the identical FINAL treatment -- see the package doc comment for why
+// user_metrics_daily/repo_metrics_daily no longer take the LIMIT-1-BY path
+// dedup_from's reference text still describes for them.
 
-var rerunDedupedDailyTables = map[string]bool{
+var replacingMergeTreeDailyTables = map[string]bool{
 	"work_item_metrics_daily":      true,
 	"work_item_user_metrics_daily": true,
+	"user_metrics_daily":           true,
+	"repo_metrics_daily":           true,
 }
 
-var appendOnlyDailyKeys = map[string][]string{
-	"user_metrics_daily": {"org_id", "repo_id", "author_email", "day"},
-	"repo_metrics_daily": {"org_id", "repo_id", "day"},
-}
-
-// dedupFrom ports dedup_from (clickhouse_dedup.py:135-157) for the table
-// subset above (including work_item_user_metrics_daily, PersonMetrics'
-// throughput/cycle_time/wip table) -- table is "<name>" or "<name> AS
-// <alias>", matching every MetricSpec.Table value in this package.
+// dedupFrom wraps a ReplacingMergeTree daily-family table in FINAL --
+// table is "<name>" or "<name> AS <alias>", matching every MetricSpec.
+// Table value in this package. Every caller applies its own org_id
+// predicate in the SAME top-level SELECT this FROM clause sits in
+// (fetchQuadrantMetric's WHERE), never inside a separate subquery here --
+// there is deliberately no subquery-based dedup helper in this file for
+// that reason, matching filteroptions's own "no wrapping subquery" rule.
 func dedupFrom(table string) string {
 	base, alias, hasAlias := strings.Cut(table, " AS ")
+	if !replacingMergeTreeDailyTables[base] {
+		return table
+	}
 	aliasSQL := ""
 	if hasAlias {
 		aliasSQL = " AS " + alias
 	}
-	if rerunDedupedDailyTables[base] {
-		return base + " FINAL" + aliasSQL
-	}
-	if keys, ok := appendOnlyDailyKeys[base]; ok {
-		sourceAlias := alias
-		if !hasAlias {
-			sourceAlias = base
-		}
-		return fmt.Sprintf("(\n            SELECT *\n            FROM %s\n            ORDER BY computed_at DESC\n            LIMIT 1 BY %s\n        ) AS %s", base, strings.Join(keys, ", "), sourceAlias)
-	}
-	return table
+	return base + " FINAL" + aliasSQL
 }
 
 // ---------------------------------------------------------------------------
@@ -352,14 +358,15 @@ func bucketExpr(bucket string) string {
 	return "toStartOfWeek(day)"
 }
 
-// fetchQuadrantMetric ports fetch_quadrant_metric (queries/quadrant.py:
-// 19-58). teamFilter ports the scope_filter/scope_params pair
-// _cohort_scope_filter builds (quadrant.py:378-381) -- "" (Python's None
-// team_filter) means no cohort filter, matching every team/repo group-scope
-// call site (which always pass ""); person group scope passes the team id
-// fetchPersonTeamID resolved, restricting the metric read to the person's
-// own team cohort exactly as Python's build_quadrant_response does.
-func fetchQuadrantMetric(ctx context.Context, client QueryClient, spec MetricSpec, startDay, endDay time.Time, bucket, orgID, teamFilter string) ([]metricRow, error) {
+// quadrantMetricQuery builds fetch_quadrant_metric's SQL text (queries/
+// quadrant.py:19-58) for one spec/bucket/teamFilter combination -- split
+// out from fetchQuadrantMetric so a test can assert the query SHAPE
+// (sqlshape.Depths: org_id sits at the same nesting depth as every
+// FINAL/JOIN dedup source, never behind an unfiltered subquery) without a
+// live QueryClient. Returns exactly the text fetchQuadrantMetric sends;
+// bindings are built separately since they carry request VALUES, not
+// shape.
+func quadrantMetricQuery(spec MetricSpec, bucket, teamFilter string) string {
 	joinSQL := ""
 	if spec.JoinClause != "" {
 		joinSQL = "\n" + spec.JoinClause
@@ -369,16 +376,10 @@ func fetchQuadrantMetric(ctx context.Context, client QueryClient, spec MetricSpe
 		whereSQL = "\n" + spec.WhereClause
 	}
 	scopeSQL := ""
-	bindings := []dhclickhouse.Binding{
-		{Name: "start_day", Value: formatDay(startDay)},
-		{Name: "end_day", Value: formatDay(endDay)},
-		{Name: "org_id", Value: orgID},
-	}
 	if teamFilter != "" {
 		scopeSQL = "\nAND m.team_id = {team_id:String}"
-		bindings = append(bindings, dhclickhouse.Binding{Name: "team_id", Value: teamFilter})
 	}
-	query := fmt.Sprintf(`
+	return fmt.Sprintf(`
         SELECT
             %s AS bucket,
             %s AS entity_id,
@@ -390,6 +391,25 @@ func fetchQuadrantMetric(ctx context.Context, client QueryClient, spec MetricSpe
         GROUP BY bucket, entity_id, entity_label
         ORDER BY bucket
     `, bucketExpr(bucket), spec.EntityExpr, spec.LabelExpr, spec.ValueExpr, dedupFrom(spec.Table), joinSQL, whereSQL, scopeSQL)
+}
+
+// fetchQuadrantMetric ports fetch_quadrant_metric (queries/quadrant.py:
+// 19-58). teamFilter ports the scope_filter/scope_params pair
+// _cohort_scope_filter builds (quadrant.py:378-381) -- "" (Python's None
+// team_filter) means no cohort filter, matching every team/repo group-scope
+// call site (which always pass ""); person group scope passes the team id
+// fetchPersonTeamID resolved, restricting the metric read to the person's
+// own team cohort exactly as Python's build_quadrant_response does.
+func fetchQuadrantMetric(ctx context.Context, client QueryClient, spec MetricSpec, startDay, endDay time.Time, bucket, orgID, teamFilter string) ([]metricRow, error) {
+	bindings := []dhclickhouse.Binding{
+		{Name: "start_day", Value: formatDay(startDay)},
+		{Name: "end_day", Value: formatDay(endDay)},
+		{Name: "org_id", Value: orgID},
+	}
+	if teamFilter != "" {
+		bindings = append(bindings, dhclickhouse.Binding{Name: "team_id", Value: teamFilter})
+	}
+	query := quadrantMetricQuery(spec, bucket, teamFilter)
 
 	return scanMetricRows(ctx, client, query, bindings, "quadrant: fetch_quadrant_metric")
 }

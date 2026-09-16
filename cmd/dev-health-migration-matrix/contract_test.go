@@ -503,15 +503,36 @@ func TestRenderFailsOnALiveRowTheCatalogCannotDispatch(t *testing.T) {
 }
 
 // Mutant g36: -check's warning about rows it cannot judge was
-// unpinned. On the committed tree (whose snapshot predates document digests)
-// the real -check must pass AND say how many rows it could not judge.
+// unpinned. The fixture, not the committed page, carries the unjudgeable
+// row: earlier this test relied on the COMMITTED snapshot predating document
+// digests, so it silently stopped meaning anything the day a real -render
+// carried a document digest for every row (CHAOS-3033's production read did
+// exactly that -- 0 unjudged rows on the committed page is the correct,
+// current state, not a test regression). A self-contained fixture keeps the
+// mutant-detection value without depending on what the live data happens to
+// look like today.
 func TestCheckWarnsAboutRowsItCannotJudge(t *testing.T) {
-	err, printed := runCheckCapturingViolations(t, copyContractTree(t))
+	root := copyContractTree(t)
+	pin, err := migrationmatrix.SchemaDigestPin(filepath.Join(root, digestPinRelative))
 	if err != nil {
-		t.Fatalf("the committed tree must pass -check: %v\n%s", err, printed)
+		t.Fatalf("read pin: %v", err)
+	}
+	unjudged := migrationmatrix.OperationRow{
+		Operation:      "featureFlags",
+		Mode:           "canary",
+		SchemaDigest:   pin,
+		DocumentDigest: "", // read before the reader carried the routing key -- can't judge drift
+		CandidateBuild: strings.Repeat("a", 40),
+		Live:           true,
+		Proven:         migrationmatrix.NoProof,
+	}
+	writeSnapshotAndPage(t, root, []migrationmatrix.OperationRow{unjudged})
+	err, printed := runCheckCapturingViolations(t, root)
+	if err != nil {
+		t.Fatalf("a live row with no document digest must still pass -check: %v\n%s", err, printed)
 	}
 	if !strings.Contains(printed, "carry no document digest") {
 		t.Fatalf("-check must warn about rows it cannot judge for DOCUMENT_DRIFT; stderr:\n%s", printed)
 	}
-	t.Logf("cell committed tree -> -check passes and warns: %v", strings.Contains(printed, "carry no document digest"))
+	t.Logf("cell fixture row with no document digest -> -check passes and warns: %v", strings.Contains(printed, "carry no document digest"))
 }

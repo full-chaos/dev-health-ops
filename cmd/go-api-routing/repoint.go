@@ -18,6 +18,7 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"time"
 
@@ -27,7 +28,7 @@ import (
 func runRepoint(argv []string) error {
 	set := newVerbFlagSet("repoint")
 	var common commonFlags
-	var registryURL, buildInfoURL, expectBuild string
+	var registryURL, buildInfoURL, expectBuild, documentDigest string
 	var dryRun bool
 	set.StringVar(&registryURL, "registry-url", "", "GET /registry on the DEPLOYED query-api -- the only authority on which schema digest is live (falls back to "+queryAPIURLEnvVar+"+\"/registry\")")
 	set.StringVar(&buildInfoURL, "buildinfo-url", "", "GET /buildinfo on the DEPLOYED query-api -- the ONLY source of the build every row is pointed at (falls back to "+queryAPIURLEnvVar+"+\"/buildinfo\")")
@@ -36,10 +37,24 @@ func runRepoint(argv []string) error {
 	set.StringVar(&common.recordedBy, "recorded-by", "", "WHO is running this, recorded on every row touched (required)")
 	set.StringVar(&common.reviewEvidence, "review-evidence", "", "WHY, in your own words, recorded on every row touched (required)")
 	set.StringVar(&expectBuild, "expect-build", "", "optional CROSS-CHECK: fail if the running build is not this sha. Never the source of the value written")
+	set.StringVar(&documentDigest, "document", "", "narrow -operations (exactly one name) to the ONE row whose OWN document digest equals this -- the only way to re-point just a DOCUMENT_DRIFT row (as `status` names it) and leave a sibling catalog row untouched. Exact-match")
 	set.BoolVar(&dryRun, "dry-run", false, "report what would change and write NOTHING")
 	set.DurationVar(&common.timeout, "timeout", 30*time.Second, "per-request timeout")
 	if err := parseVerbFlags(set, argv); err != nil {
 		return err
+	}
+	// Same empty-value trap -candidate-build guards against in disable:
+	// an interpolated but unset shell variable passed as `-document ""`
+	// must never read as "no selector", which would silently widen a
+	// deliberately narrow re-point back to every row the operation has.
+	var documentPassedEmpty bool
+	set.Visit(func(f *flag.Flag) {
+		if f.Name == "document" && f.Value.String() == "" {
+			documentPassedEmpty = true
+		}
+	})
+	if documentPassedEmpty {
+		return refuse("-document was passed but empty -- an empty value is silently the SAME as no selector at all, which this refuses rather than falls back to every row the operation has. Omit the flag entirely to re-point every row, or pass the exact digest `status` shows for the drifted row")
 	}
 	if err := common.requirePositiveTimeout(); err != nil {
 		return err
@@ -117,6 +132,9 @@ func runRepoint(argv []string) error {
 	if err != nil {
 		return refuse("%v", err)
 	}
+	if documentDigest != "" && len(operations) != 1 {
+		return refuse("-document selects one specific row and requires exactly one -operations name, got %d (%v)", len(operations), operations)
+	}
 
 	// Read only AFTER /buildinfo answered 200 -- the deployed verifier
 	// accepting this exact token. See goapiproof.EnvelopeSubject.
@@ -126,12 +144,13 @@ func runRepoint(argv []string) error {
 	}
 
 	outcomes, err := goapiproof.Repoint(ctx, pool, goapiproof.RepointRequest{
-		SchemaDigest:   registry.SchemaDigest,
-		RunningBuild:   running,
-		ExpectBuild:    expectBuild,
-		Operations:     operations,
-		RecordedBy:     common.recordedBy,
-		ReviewEvidence: common.reviewEvidence,
+		SchemaDigest:         registry.SchemaDigest,
+		RunningBuild:         running,
+		ExpectBuild:          expectBuild,
+		Operations:           operations,
+		SelectDocumentDigest: documentDigest,
+		RecordedBy:           common.recordedBy,
+		ReviewEvidence:       common.reviewEvidence,
 		// CHAOS-5505: WHO THE CREDENTIAL SAYS is acting, distinct from
 		// -recorded-by. Same envelope and same reasoning as `enable`.
 		PrincipalID: principalID,

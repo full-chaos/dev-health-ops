@@ -75,6 +75,26 @@ var ErrDisableGuardMismatch = errors.New("goapiproof: a routing row points at a 
 // ON -- the one thing an off-ramp must never be able to do.
 var ErrDisableRefusesEnablingMode = errors.New("goapiproof: disable may only set an unreachable mode")
 
+// ErrDisableDocumentSelectorNeedsOneOperation is returned when
+// SelectDocumentDigest is set alongside anything other than exactly one
+// operation.
+//
+// A single document digest names at most one row for a single operation;
+// spreading it across several named operations would not repeat the
+// selection, it would apply one row's digest as a filter to operations it
+// may describe nothing about.
+var ErrDisableDocumentSelectorNeedsOneOperation = errors.New("goapiproof: -document selects one specific row and requires exactly one named operation")
+
+// ErrDisableDocumentNotLive is returned when SelectDocumentDigest names a
+// digest no live row for the named operation actually carries.
+//
+// A caller who typed or copied the wrong digest must be told that
+// directly, rather than falling through to the catalog's digest (which
+// would silently select a different row than the one asked for) or to a
+// generic "nothing to disable" the len(rows)==0 path already means for a
+// different state.
+var ErrDisableDocumentNotLive = errors.New("goapiproof: no live row for this operation carries the named document digest")
+
 // DisableChange is one row `disable` would change, or did.
 type DisableChange struct {
 	Operation      string
@@ -131,7 +151,17 @@ type DisableRequest struct {
 	// simply not matched, which is correct: the edge could not dispatch
 	// to it either.
 	DocumentDigest map[string]string
-	NewMode        string
+	// SelectDocumentDigest, when non-empty, targets the live row by its
+	// OWN document digest instead of the catalog's -- the only way to
+	// select a DOCUMENT_DRIFT row (as `status` names it) for disable when
+	// a -candidate-build guard is also wanted: the catalog-driven path
+	// below refuses to guard-check a build against a row it has no
+	// catalog digest to compare against (DeadRowsOnly), which blocks the
+	// very row this exists to turn off. Exact-match only, and requires
+	// exactly one named Operation -- see
+	// ErrDisableDocumentSelectorNeedsOneOperation.
+	SelectDocumentDigest string
+	NewMode              string
 	// ExpectedCandidateBuild, when non-empty, is a guard: a row pointing
 	// somewhere else is refused. Never written.
 	ExpectedCandidateBuild string
@@ -152,6 +182,9 @@ func (r DisableRequest) validate() error {
 	}
 	if !contains(DisableModes, r.NewMode) {
 		return fmt.Errorf("%w: %v, got %q", ErrDisableRefusesEnablingMode, DisableModes, r.NewMode)
+	}
+	if r.SelectDocumentDigest != "" && len(r.Operations) != 1 {
+		return fmt.Errorf("%w: got %d", ErrDisableDocumentSelectorNeedsOneOperation, len(r.Operations))
 	}
 	if r.Apply {
 		if r.RecordedBy == "" {
@@ -270,6 +303,44 @@ func Disable(ctx context.Context, pool *pgxpool.Pool, request DisableRequest) ([
 	var guardProblems []string
 	for _, operation := range operations {
 		rows := live[operation]
+		// The explicit-digest path bypasses the catalog entirely: the
+		// caller named the exact row they want, so neither "does a
+		// catalog row exist" nor "does it match the catalog's digest"
+		// applies here -- only "does a live row carry THIS digest". This
+		// is what lets a -candidate-build guard be checked against a
+		// DOCUMENT_DRIFT row at all: the catalog-driven branch below
+		// treats a guard with no catalog row as DeadRowsOnly and SKIPS
+		// the operation, precisely because it has nothing of its own to
+		// compare the guard against -- naming the row directly supplies
+		// that missing comparison target.
+		if request.SelectDocumentDigest != "" {
+			var matched *liveRow
+			for index := range rows {
+				if rows[index].documentDigest == request.SelectDocumentDigest {
+					matched = &rows[index]
+					break
+				}
+			}
+			if matched == nil {
+				return nil, fmt.Errorf("%w: %s at document digest %s (schema digest %s)",
+					ErrDisableDocumentNotLive, operation, request.SelectDocumentDigest, request.SchemaDigest)
+			}
+			if request.ExpectedCandidateBuild != "" && matched.candidateBuild != request.ExpectedCandidateBuild {
+				guardProblems = append(guardProblems, fmt.Sprintf(
+					"%s (document digest %s) points at %s, not the %s you named -- somebody has repointed it since you looked; re-run `status` and decide again",
+					operation, matched.documentDigest, matched.candidateBuild, request.ExpectedCandidateBuild))
+				continue
+			}
+			changes = append(changes, DisableChange{
+				Operation:          operation,
+				DocumentDigest:     matched.documentDigest,
+				CurrentMode:        matched.mode,
+				NewMode:            request.NewMode,
+				CandidateBuild:     matched.candidateBuild,
+				StaleSchemaDigests: staleDigests[operation],
+			})
+			continue
+		}
 		if len(rows) == 0 {
 			// A named operation with no row at this checkout's own live
 			// digest but a row at ANOTHER digest means this checkout's
@@ -409,8 +480,19 @@ func Disable(ctx context.Context, pool *pgxpool.Pool, request DisableRequest) ([
 		// entries. So reaching HERE still proves the operation has a
 		// catalog row: this write-time guard needs no fallback of its
 		// own.
+		// The write-time guard fires for whichever row the plan actually
+		// checked it against: the catalog's document digest on the
+		// catalog-driven path, or the caller's own SelectDocumentDigest
+		// on the explicit-digest path -- never both, since validate()
+		// refuses SelectDocumentDigest alongside more than one operation
+		// and the catalog-driven branch above is skipped entirely when
+		// it is set.
+		guardedDigest := request.DocumentDigest[change.Operation]
+		if request.SelectDocumentDigest != "" {
+			guardedDigest = request.SelectDocumentDigest
+		}
 		var guard any
-		if request.ExpectedCandidateBuild != "" && change.DocumentDigest == request.DocumentDigest[change.Operation] {
+		if request.ExpectedCandidateBuild != "" && change.DocumentDigest == guardedDigest {
 			guard = request.ExpectedCandidateBuild
 		}
 		// This used to check `tag.RowsAffected() == 0`

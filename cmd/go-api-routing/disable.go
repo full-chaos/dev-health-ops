@@ -27,13 +27,14 @@ import (
 func runDisable(argv []string) error {
 	set := newVerbFlagSet("disable")
 	var common commonFlags
-	var mode, candidateBuild string
+	var mode, candidateBuild, documentDigest string
 	var apply bool
 	common.bindPostgresURI(set, "domain Postgres DSN holding go_api_routing_state")
 	set.StringVar(&common.operations, "operations", "all-registered", "comma-separated operation names, or 'all-registered' (default)")
 	set.StringVar(&common.catalogPath, "catalog", goapiproof.DefaultCatalogPath, "the edge's registered-document catalog")
 	set.StringVar(&mode, "mode", "", "python = the documented safe default (same as no row); disabled = same reachability but records a deliberate decision; shadow = the client still gets Python's response (required)")
 	set.StringVar(&candidateBuild, "candidate-build", "", "optional GUARD: refuse if a row points at a different build than this, i.e. somebody repointed it since you looked. NEVER written -- disable changes mode only")
+	set.StringVar(&documentDigest, "document", "", "target the live row by its OWN document digest instead of the catalog's -- the only way to select a DOCUMENT_DRIFT row (as `status` names it), e.g. to guard-check -candidate-build against it. Exact-match; requires exactly one -operations name")
 	set.StringVar(&common.recordedBy, "recorded-by", "", "WHO is running this. Required with -apply")
 	set.StringVar(&common.reviewEvidence, "review-evidence", "", "WHY. Required with -apply; recorded durably on each row")
 	set.BoolVar(&apply, "apply", false, "write the changes. Without it, prints what would change and exits 0")
@@ -55,14 +56,20 @@ func runDisable(argv []string) error {
 	// named`, exit 2). `set.Visit` only walks flags actually
 	// PASSED, so this tells "typed empty" from "never typed" -- the flag
 	// package itself cannot.
-	var candidateBuildPassedEmpty bool
+	var candidateBuildPassedEmpty, documentPassedEmpty bool
 	set.Visit(func(f *flag.Flag) {
-		if f.Name == "candidate-build" && f.Value.String() == "" {
+		switch {
+		case f.Name == "candidate-build" && f.Value.String() == "":
 			candidateBuildPassedEmpty = true
+		case f.Name == "document" && f.Value.String() == "":
+			documentPassedEmpty = true
 		}
 	})
 	if candidateBuildPassedEmpty {
 		return refuse("-candidate-build was passed but empty -- an empty value is silently the SAME as no guard at all, which this refuses rather than applies unguarded. Omit the flag entirely to skip the guard on purpose, or pass a real build sha")
+	}
+	if documentPassedEmpty {
+		return refuse("-document was passed but empty -- an empty value is silently the SAME as no selector at all, which this refuses rather than falls back to the catalog's digest unasked. Omit the flag entirely to use the catalog path, or pass the exact digest `status` shows for the drifted row")
 	}
 	if err := common.requirePositiveTimeout(); err != nil {
 		return err
@@ -87,6 +94,9 @@ func runDisable(argv []string) error {
 	if err != nil {
 		return refuse("%v", err)
 	}
+	if documentDigest != "" && len(operations) != 1 {
+		return refuse("-document selects one specific row and requires exactly one -operations name, got %d (%v)", len(operations), operations)
+	}
 
 	ctx := context.Background()
 	pool, err := connectPostgres(ctx, common.postgresURI, common.timeout)
@@ -100,6 +110,7 @@ func runDisable(argv []string) error {
 		SchemaDigest:           local,
 		Operations:             operations,
 		DocumentDigest:         catalog,
+		SelectDocumentDigest:   documentDigest,
 		NewMode:                mode,
 		ExpectedCandidateBuild: candidateBuild,
 		RecordedBy:             common.recordedBy,
@@ -107,7 +118,8 @@ func runDisable(argv []string) error {
 		Apply:                  apply,
 	})
 	if err != nil {
-		if errors.Is(err, goapiproof.ErrDisableGuardMismatch) || errors.Is(err, goapiproof.ErrDisableRefusesEnablingMode) {
+		if errors.Is(err, goapiproof.ErrDisableGuardMismatch) || errors.Is(err, goapiproof.ErrDisableRefusesEnablingMode) ||
+			errors.Is(err, goapiproof.ErrDisableDocumentSelectorNeedsOneOperation) || errors.Is(err, goapiproof.ErrDisableDocumentNotLive) {
 			return refuse("%v", err)
 		}
 		return classifyWriteError(err)

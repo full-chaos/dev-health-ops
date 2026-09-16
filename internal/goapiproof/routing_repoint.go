@@ -66,6 +66,21 @@ var ErrRepointNoRows = errors.New("goapiproof: no routing rows at this schema di
 // unknown name via ResolveOperations; this closes the third verb.
 var ErrRepointUnknownOperation = errors.New("goapiproof: no routing row at this schema digest for a named operation")
 
+// ErrRepointDocumentSelectorNeedsOneOperation is returned when
+// SelectDocumentDigest is set alongside anything other than exactly one
+// operation.
+//
+// A single document digest names at most one row for a single operation
+// -- the routing table's primary key is (schema_digest, document_digest,
+// selected_operation) -- so spreading it across several named operations
+// would not repeat the selection, it would apply one row's digest as a
+// filter to operations it may describe nothing about.
+var ErrRepointDocumentSelectorNeedsOneOperation = errors.New("goapiproof: -document selects one specific row and requires exactly one named operation")
+
+// ErrRepointDocumentNotLive is returned when SelectDocumentDigest names a
+// digest no surveyed row for the named operation actually carries.
+var ErrRepointDocumentNotLive = errors.New("goapiproof: no routing row for this operation carries the named document digest")
+
 // RepointOutcome is what happened to one operation's row.
 type RepointOutcome struct {
 	Operation string
@@ -98,7 +113,16 @@ type RepointRequest struct {
 	ExpectBuild string
 	// Operations restricts the write; empty means every row at the digest.
 	Operations []string
-	RecordedBy string
+	// SelectDocumentDigest, when non-empty, narrows the single named
+	// Operation to the ONE row whose own document digest equals this
+	// value, instead of every row that operation has at the schema
+	// digest. Without it, an operation with a catalog-matching row AND a
+	// DOCUMENT_DRIFT row (as `status` names it) has BOTH re-pointed
+	// together; this is the only way to move just one of them.
+	// Exact-match only, and requires exactly one named Operation -- see
+	// ErrRepointDocumentSelectorNeedsOneOperation.
+	SelectDocumentDigest string
+	RecordedBy           string
 	// ReviewEvidence is why, recorded durably on every row touched.
 	ReviewEvidence string
 	// PrincipalID is the effective-principal envelope's `sub` -- WHO THE
@@ -128,6 +152,8 @@ func (r RepointRequest) validate() error {
 		return fmt.Errorf("%w: cross-check %q, running %q", ErrRepointBuildMismatch, r.ExpectBuild, r.RunningBuild)
 	case r.PrincipalID == "" && !r.DryRun:
 		return errors.New("goapiproof: principal id is required: this verb reads the authenticated /buildinfo, so the envelope it presented was verified and the audit row must name the subject that credential carried")
+	case r.SelectDocumentDigest != "" && len(r.Operations) != 1:
+		return fmt.Errorf("%w: got %d", ErrRepointDocumentSelectorNeedsOneOperation, len(r.Operations))
 	}
 	return nil
 }
@@ -247,7 +273,20 @@ func repointOnce(ctx context.Context, pool *pgxpool.Pool, request RepointRequest
 	for _, operation := range request.Operations {
 		wanted[operation] = true
 	}
-	selected := func(operation string) bool { return len(wanted) == 0 || wanted[operation] }
+	// SelectDocumentDigest narrows further, to the single row (of
+	// possibly several this operation has at the schema digest) whose OWN
+	// document digest is named -- validate() already refused it alongside
+	// more than one wanted operation, so this is safe to apply
+	// unconditionally once set.
+	selected := func(operation, documentDigest string) bool {
+		if len(wanted) > 0 && !wanted[operation] {
+			return false
+		}
+		if request.SelectDocumentDigest != "" && documentDigest != request.SelectDocumentDigest {
+			return false
+		}
+		return true
+	}
 
 	tx, err := pool.Begin(ctx)
 	if err != nil {
@@ -287,6 +326,25 @@ func repointOnce(ctx context.Context, pool *pgxpool.Pool, request RepointRequest
 				ErrRepointUnknownOperation, missing, request.SchemaDigest)
 		}
 	}
+	// SelectDocumentDigest names an EXACT row -- checked against the
+	// survey, before any registration, the same shape as the missing-
+	// operation check just above: naming the wrong digest must be told
+	// directly, not silently re-point nothing while every other named
+	// operation (there is at most one here) succeeds.
+	if request.SelectDocumentDigest != "" {
+		operation := request.Operations[0]
+		found := false
+		for _, row := range surveyed {
+			if row.operation == operation && row.documentDigest == request.SelectDocumentDigest {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, fmt.Errorf("%w: %s at document digest %s (schema digest %s)",
+				ErrRepointDocumentNotLive, operation, request.SelectDocumentDigest, request.SchemaDigest)
+		}
+	}
 
 	// --- Register the candidate build, BEFORE any routing-row lock. ---
 	// In the shared total order, which readRoutingRows preserves. Only
@@ -295,7 +353,7 @@ func repointOnce(ctx context.Context, pool *pgxpool.Pool, request RepointRequest
 	// registration it does not already have.
 	if !request.DryRun {
 		for _, row := range surveyed {
-			if !selected(row.operation) || row.build == request.RunningBuild {
+			if !selected(row.operation, row.documentDigest) || row.build == request.RunningBuild {
 				continue
 			}
 			if _, err := tx.Exec(ctx, registerCandidateBuildSQL,
@@ -326,7 +384,7 @@ func repointOnce(ctx context.Context, pool *pgxpool.Pool, request RepointRequest
 
 	outcomes := make([]RepointOutcome, 0, len(locked))
 	for _, row := range locked {
-		if !selected(row.operation) {
+		if !selected(row.operation, row.documentDigest) {
 			continue
 		}
 		outcome := RepointOutcome{

@@ -368,6 +368,14 @@ decision.
   still turned off; in Python that write silently matches nothing. An
   off-ramp that stops working precisely when something has drifted is an
   off-ramp with a hole in it.
+* **`disable -document <digest>` (and `repoint -document <digest>`) select
+  the live row by that exact digest instead of the catalog's**, which is
+  the only way to guard-check `-candidate-build` against a DOCUMENT_DRIFT
+  row (the catalog-driven path has no catalog digest of its own to
+  compare the guard against, so it skips such a row rather than checking
+  it) or to act on one specific row of several an operation has, without
+  touching the others; it refuses outright when no live row for the
+  named operation carries that digest.
 * **`-recorded-by` and `-review-evidence` are required on every write.**
   Python derives `recorded_by` from `$DEV_HOPS_OPERATOR` / `$SUDO_USER` /
   `$USER` and falls back to the literal `unknown`, and it permits an

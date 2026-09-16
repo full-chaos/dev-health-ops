@@ -146,6 +146,27 @@ func TestSummarizeReportsZerosExplicitly(t *testing.T) {
 	}
 }
 
+// SelectDocumentDigest names one specific row -- the routing
+// table's primary key is (schema_digest, document_digest,
+// selected_operation) -- so it is refused alongside anything but exactly
+// one named operation, whether that is "every row" (Operations empty, the
+// zero value validRequest() starts from) or an explicit list of several.
+func TestRepointRequestDocumentSelectorRequiresExactlyOneOperation(t *testing.T) {
+	request := validRequest()
+	request.SelectDocumentDigest = "driftdigest"
+	if err := request.validate(); !errors.Is(err, ErrRepointDocumentSelectorNeedsOneOperation) {
+		t.Fatalf("validate() = %v, want ErrRepointDocumentSelectorNeedsOneOperation with no named operation", err)
+	}
+	request.Operations = []string{"a", "b"}
+	if err := request.validate(); !errors.Is(err, ErrRepointDocumentSelectorNeedsOneOperation) {
+		t.Fatalf("validate() = %v, want ErrRepointDocumentSelectorNeedsOneOperation with two named operations", err)
+	}
+	request.Operations = []string{"a"}
+	if err := request.validate(); err != nil {
+		t.Fatalf("exactly one named operation with a selector must validate: %v", err)
+	}
+}
+
 func TestRepointRefusesNilPool(t *testing.T) {
 	if _, err := Repoint(t.Context(), nil, validRequest()); err == nil {
 		t.Fatal("Repoint(nil pool) = nil error, want a refusal")

@@ -1,0 +1,32 @@
+{
+  "normal_computation_with_resolved_deltas": {
+    "release_ref": "v1.0.0-normal",
+    "environment": "production",
+    "release_user_friction_delta": 1,
+    "release_post_friction_rate": 0.5,
+    "release_error_rate_delta": 1.3999999999999997,
+    "release_post_error_rate": 1,
+    "time_to_first_user_issue_after_release": 0,
+    "release_impact_confidence_score": 1,
+    "release_impact_coverage_ratio": 1,
+    "coverage_ratio": 1,
+    "missing_required_fields_count": 0,
+    "data_completeness": 0.041666666666666664,
+    "concurrent_deploy_count": 0
+  },
+  "insufficient_samples_deltas_stay_nil": {
+    "release_ref": "v1.0.0-thin",
+    "environment": "production",
+    "release_user_friction_delta": null,
+    "release_post_friction_rate": 0.2,
+    "release_error_rate_delta": null,
+    "release_post_error_rate": null,
+    "time_to_first_user_issue_after_release": 0,
+    "release_impact_confidence_score": 0.6558333333333333,
+    "release_impact_coverage_ratio": 1,
+    "coverage_ratio": 1,
+    "missing_required_fields_count": 3,
+    "data_completeness": 0.041666666666666664,
+    "concurrent_deploy_count": 0
+  }
+}

@@ -28,12 +28,22 @@ func TestInvestmentFullDeclaresTheRepoJoinFanoutAsIntermittent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SpecFor(investmentFull): %v", err)
 	}
-	if len(spec.Parity.BaselineDefects) != 1 {
-		t.Fatalf("investmentFull declares %d baseline defects, want exactly 1: %#v", len(spec.Parity.BaselineDefects), spec.Parity.BaselineDefects)
+	// investmentFull also declares CHAOS-4547 (the argMax null-transition
+	// shift, coverageshift.go / investmentfull_argmax_coverage_shift_shape_test.go)
+	// over the same two coverage leaves -- this test only asserts the
+	// repos-join fan-out's OWN entry, found by ticket rather than assumed
+	// to be the only one declared.
+	var defect BaselineDefect
+	found := false
+	for _, candidate := range spec.Parity.BaselineDefects {
+		if candidate.Ticket == investmentFullRepoJoinFanoutTicket {
+			defect = candidate
+			found = true
+			break
+		}
 	}
-	defect := spec.Parity.BaselineDefects[0]
-	if defect.Ticket != investmentFullRepoJoinFanoutTicket {
-		t.Fatalf("ticket = %q, want %q", defect.Ticket, investmentFullRepoJoinFanoutTicket)
+	if !found {
+		t.Fatalf("investmentFull declares no %s baseline defect: %#v", investmentFullRepoJoinFanoutTicket, spec.Parity.BaselineDefects)
 	}
 	if !defect.Intermittent {
 		t.Fatal("the fan-out exists only while repos holds unmerged versions; without Intermittent every merged-state run refuses as stale")
@@ -66,8 +76,12 @@ func TestInvestmentFullRepoJoinFanout_MergedStateCapturesMatchWithTheDeclaration
 		if len(result.StaleBaselineDefects) != 0 {
 			t.Fatalf("%s: stale = %v -- a merged-state run would refuse", pair[0], result.StaleBaselineDefects)
 		}
-		if !equalStrings(result.IdleIntermittentBaselineDefects, []string{investmentFullRepoJoinFanoutTicket}) {
-			t.Fatalf("%s: idle = %v, want [%s]", pair[0], result.IdleIntermittentBaselineDefects, investmentFullRepoJoinFanoutTicket)
+		// Both declared defects cover no difference in a merged-state
+		// capture -- CHAOS-4547 (the argMax null-transition shift) is
+		// idle here for the same reason CHAOS-4773 is: nothing differs
+		// under either's cited paths.
+		if !equalStrings(result.IdleIntermittentBaselineDefects, []string{"CHAOS-4547", investmentFullRepoJoinFanoutTicket}) {
+			t.Fatalf("%s: idle = %v, want [CHAOS-4547 %s]", pair[0], result.IdleIntermittentBaselineDefects, investmentFullRepoJoinFanoutTicket)
 		}
 	}
 }
@@ -139,7 +153,15 @@ func TestInvestmentFullRepoJoinFanout_FannedOutBaselineIsACoveredMismatch(t *tes
 	if !equalStrings(result.BaselineDefectsMatched, []string{investmentFullRepoJoinFanoutTicket}) {
 		t.Fatalf("matched = %v, want [%s]", result.BaselineDefectsMatched, investmentFullRepoJoinFanoutTicket)
 	}
-	if len(result.StaleBaselineDefects) != 0 || len(result.IdleIntermittentBaselineDefects) != 0 {
-		t.Fatalf("a live entry is neither stale nor idle: stale=%v idle=%v", result.StaleBaselineDefects, result.IdleIntermittentBaselineDefects)
+	if len(result.StaleBaselineDefects) != 0 {
+		t.Fatalf("the fan-out entry matched, so it is not stale: %v", result.StaleBaselineDefects)
+	}
+	// CHAOS-4547 (the argMax null-transition shift) covers nothing here:
+	// this baseline's coverage shift is the fan-out's own uniform k=2
+	// (CoverageShiftShape's rule 1 sees the fanned-out node/edge
+	// differences too, so it refuses), and CHAOS-4547 is Intermittent, so
+	// it reads as idle rather than stale.
+	if !equalStrings(result.IdleIntermittentBaselineDefects, []string{"CHAOS-4547"}) {
+		t.Fatalf("idle = %v, want [CHAOS-4547]", result.IdleIntermittentBaselineDefects)
 	}
 }

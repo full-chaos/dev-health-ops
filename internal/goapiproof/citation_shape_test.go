@@ -510,7 +510,15 @@ func TestEveryDeclaredCitationCoversOnlyValueDifferences(t *testing.T) {
 			// investmentfull_repojoin_fanout_shape_test.go for its own
 			// dedicated sweep (which runs the real sankey shapes, not a
 			// synthetic scalar, through Compare).
-			if defect.RepoFanoutShape != nil {
+			// A CoverageShiftShape defect (the argMax null-transition
+			// declared on investmentFull, CHAOS-4547) replaces the
+			// blanket "any leaf value differs -> covered" rule this
+			// sweep assumes with a whole-comparison shape-specific
+			// admission -- a bare "python"/"go" string at the cited path
+			// is neither, so this generic sweep does not apply to it
+			// either. See investmentfull_argmax_coverage_shift_shape_test.go
+			// for its own dedicated sweep.
+			if defect.RepoFanoutShape != nil || defect.CoverageShiftShape != nil {
 				continue
 			}
 			for _, cited := range defect.Paths {

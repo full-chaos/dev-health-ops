@@ -124,8 +124,22 @@ QUALIFY ROW_NUMBER() OVER (
     updated_at DateTime64(6), org_id String
 ) ENGINE = ReplacingMergeTree(updated_at) ORDER BY (org_id, id)`,
 		`CREATE TABLE repos (
-    id UUID, repo String, last_synced DateTime64(3, 'UTC'), org_id String
+    id UUID, repo String, last_synced DateTime64(3, 'UTC'), org_id String,
+    provider String DEFAULT 'github'
 ) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, id)`,
+
+		// The table teamownership.AuthoritativeOwnerByRepo reads -- present but
+		// empty in fixtures that do not exercise ownership resolution, so the
+		// join still parses and the pattern-resolver fallback is exercised.
+		`CREATE TABLE team_repo_ownership (
+    org_id String, provider String, team_id String, repo_id Nullable(UUID),
+    repo_full_name String, match_type Enum8('exact' = 1, 'pattern' = 2),
+    source Enum8('native' = 1, 'jira_legacy' = 2, 'provider_access' = 3, 'manual' = 4, 'inferred' = 5),
+    is_primary UInt8 DEFAULT 0, specificity UInt16 DEFAULT 0, priority Int32 DEFAULT 0,
+    valid_from DateTime64(3, 'UTC'), valid_to Nullable(DateTime64(3, 'UTC')),
+    updated_at DateTime64(3, 'UTC')
+) ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY (org_id, provider, repo_full_name, team_id, source, valid_from)`,
 		`CREATE TABLE ai_impact_metrics_daily (
     org_id String, team_id String, repo_id UUID, work_type LowCardinality(String),
     day Date, attribution_bucket LowCardinality(String),
@@ -900,8 +914,22 @@ QUALIFY ROW_NUMBER() OVER (
     updated_at DateTime64(6), org_id String
 ) ENGINE = ReplacingMergeTree(updated_at) ORDER BY (org_id, id)`,
 		`CREATE TABLE repos (
-    id UUID, repo String, last_synced DateTime64(3, 'UTC'), org_id String
+    id UUID, repo String, last_synced DateTime64(3, 'UTC'), org_id String,
+    provider String DEFAULT 'github'
 ) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, id)`,
+
+		// The table teamownership.AuthoritativeOwnerByRepo reads -- present but
+		// empty in fixtures that do not exercise ownership resolution, so the
+		// join still parses and the pattern-resolver fallback is exercised.
+		`CREATE TABLE team_repo_ownership (
+    org_id String, provider String, team_id String, repo_id Nullable(UUID),
+    repo_full_name String, match_type Enum8('exact' = 1, 'pattern' = 2),
+    source Enum8('native' = 1, 'jira_legacy' = 2, 'provider_access' = 3, 'manual' = 4, 'inferred' = 5),
+    is_primary UInt8 DEFAULT 0, specificity UInt16 DEFAULT 0, priority Int32 DEFAULT 0,
+    valid_from DateTime64(3, 'UTC'), valid_to Nullable(DateTime64(3, 'UTC')),
+    updated_at DateTime64(3, 'UTC')
+) ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY (org_id, provider, repo_full_name, team_id, source, valid_from)`,
 		`CREATE TABLE ai_impact_metrics_daily (
     org_id String, team_id String, repo_id UUID, work_type LowCardinality(String),
     day Date, attribution_bucket LowCardinality(String),
@@ -985,6 +1013,202 @@ INSERT INTO repos (id, repo, last_synced, org_id) VALUES
 	if afterCount != beforeCount+1 {
 		t.Fatalf("dev_health_ai_impact_linkage_unavailable_total went %d -> %d, want +1 -- "+
 			"the linkage failure was NOT recorded, so it is silent again", beforeCount, afterCount)
+	}
+}
+
+// TestAIImpactComputeFamilyResolvesAnOwnershipOnlyRepo is the live-ClickHouse
+// proof that a repo whose ONLY team signal is a team_repo_ownership row (the
+// teams table below carries a real team but no repo_patterns at all, so the
+// pattern resolver cannot match anything) lands under that row's team_id in
+// ai_impact_metrics_daily.
+func TestAIImpactComputeFamilyResolvesAnOwnershipOnlyRepo(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	clickhouseInstance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clickhouseInstance.Close(context.Background())
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(clickhouseInstance.URI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	for _, statement := range []string{
+		`CREATE TABLE git_pull_requests (
+    repo_id UUID, number UInt32, title Nullable(String), body Nullable(String),
+    created_at DateTime64(3, 'UTC'), merged_at Nullable(DateTime64(3, 'UTC')),
+    additions Nullable(UInt32), deletions Nullable(UInt32), changed_files Nullable(UInt32),
+    changes_requested_count UInt32 DEFAULT 0, reviews_count UInt32 DEFAULT 0,
+    last_synced DateTime64(3, 'UTC'), org_id String
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, number)`,
+		`CREATE TABLE git_pull_request_reviews (
+    repo_id UUID, number UInt32, review_id String, reviewer String, state String,
+    submitted_at DateTime64(3, 'UTC'), last_synced DateTime64(3, 'UTC'), org_id String
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, number, review_id)`,
+		`CREATE TABLE ai_attribution (
+    record_id UUID, org_id UUID, provider LowCardinality(String),
+    subject_type LowCardinality(String), subject_id String, repo_id Nullable(UUID),
+    kind LowCardinality(String), source LowCardinality(String), confidence Float32,
+    actor Nullable(String), evidence String,
+    observed_at DateTime64(3, 'UTC'), ingested_at DateTime64(3, 'UTC'),
+    superseded_by Nullable(UUID), computed_at DateTime64(3, 'UTC')
+) ENGINE = ReplacingMergeTree(computed_at)
+ORDER BY (org_id, provider, subject_type, repo_id, subject_id, source)
+SETTINGS allow_nullable_key = 1`,
+		`CREATE VIEW ai_attribution_resolved AS
+SELECT record_id, org_id, provider, subject_type, subject_id, repo_id, kind,
+       source, confidence, actor, evidence, observed_at, ingested_at,
+       superseded_by, computed_at
+FROM (
+    SELECT *, multiIf(
+        source = 'manual', 1, source = 'pr_label', 2, source = 'bot_author', 3,
+        source = 'commit_trailer', 4, source = 'ci_annotation', 5,
+        source = 'branch_name', 6, source = 'pr_body', 7, 8) AS _source_priority
+    FROM ai_attribution FINAL WHERE superseded_by IS NULL
+)
+QUALIFY ROW_NUMBER() OVER (
+    PARTITION BY org_id, subject_type, repo_id, subject_id
+    ORDER BY _source_priority ASC, confidence DESC) = 1`,
+		`CREATE TABLE work_graph_issue_pr (
+    repo_id UUID, pr_number UInt32, work_item_id String,
+    last_synced DateTime64(3, 'UTC'), org_id String
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, pr_number, work_item_id)`,
+		`CREATE TABLE work_items (
+    repo_id UUID, work_item_id String, type Nullable(String),
+    last_synced DateTime64(3, 'UTC'), org_id String
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, work_item_id)`,
+		`CREATE TABLE work_graph_pr_commit (
+    repo_id UUID, pr_number UInt32, commit_hash String, evidence String,
+    last_synced DateTime64(3, 'UTC'), org_id String
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, pr_number, commit_hash)`,
+		`CREATE TABLE git_commits (
+    repo_id UUID, hash String, committer_when DateTime64(3, 'UTC'),
+    last_synced DateTime64(3, 'UTC'), org_id String
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, hash)`,
+		`CREATE TABLE git_commit_stats (
+    repo_id UUID, commit_hash String, file_path String,
+    last_synced DateTime64(3, 'UTC'), org_id String
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, commit_hash, file_path)`,
+		// repo_patterns is present but deliberately EMPTY -- this team has an
+		// ownership row below, never a pattern, so a pass reaching the pattern
+		// resolver ALONE would resolve nothing for this repo.
+		`CREATE TABLE teams (
+    id String, name String, repo_patterns Array(String), is_active UInt8 DEFAULT 1,
+    updated_at DateTime64(6), org_id String
+) ENGINE = ReplacingMergeTree(updated_at) ORDER BY (org_id, id)`,
+		`CREATE TABLE repos (
+    id UUID, repo String, last_synced DateTime64(3, 'UTC'), org_id String,
+    provider String DEFAULT 'github'
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, id)`,
+		// The table teamownership.AuthoritativeOwnerByRepo reads -- absent from
+		// every other test in this file, since none of them exercise ownership.
+		`CREATE TABLE team_repo_ownership (
+    org_id String, provider String, team_id String, repo_id Nullable(UUID),
+    repo_full_name String, match_type Enum8('exact' = 1, 'pattern' = 2),
+    source Enum8('native' = 1, 'jira_legacy' = 2, 'provider_access' = 3, 'manual' = 4, 'inferred' = 5),
+    is_primary UInt8 DEFAULT 0, specificity UInt16 DEFAULT 0, priority Int32 DEFAULT 0,
+    valid_from DateTime64(3, 'UTC'), valid_to Nullable(DateTime64(3, 'UTC')),
+    updated_at DateTime64(3, 'UTC')
+) ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY (org_id, provider, repo_full_name, team_id, source, valid_from)`,
+		`CREATE TABLE ai_impact_metrics_daily (
+    org_id String, team_id String, repo_id UUID, work_type LowCardinality(String),
+    day Date, attribution_bucket LowCardinality(String),
+    prs_total UInt32, prs_merged UInt32, ai_assisted_prs UInt32, agent_created_prs UInt32,
+    human_prs UInt32, unknown_prs UInt32, ai_assisted_pr_ratio Nullable(Float64),
+    agent_created_pr_count UInt32,
+    cycle_time_avg_hours Nullable(Float64), baseline_cycle_time_avg_hours Nullable(Float64),
+    ai_cycle_time_delta_hours Nullable(Float64),
+    reviews_per_pr Nullable(Float64), baseline_reviews_per_pr Nullable(Float64),
+    ai_review_amplification Nullable(Float64), changes_requested_per_pr Nullable(Float64),
+    rework_prs UInt32, rework_drag_rate Nullable(Float64), followup_commits_count UInt32,
+    revert_prs UInt32, revert_rate Nullable(Float64),
+    incidents_count UInt32, incident_drag_rate Nullable(Float64),
+    test_gap_prs UInt32, test_gap_rate Nullable(Float64),
+    leverage_prs_component Float64, leverage_cycle_time_component Nullable(Float64),
+    leverage_review_component Nullable(Float64), leverage_rework_component Nullable(Float64),
+    leverage_test_component Nullable(Float64), leverage_incident_component Nullable(Float64),
+    computed_at DateTime64(3, 'UTC') DEFAULT now64()
+) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day)
+ORDER BY (org_id, team_id, repo_id, work_type, day, attribution_bucket)`,
+		`CREATE TABLE operational_incidents (
+    id String, org_id String, service_id String, normalized_status String,
+    started_at DateTime64(3, 'UTC'), resolved_at Nullable(DateTime64(3, 'UTC')),
+    is_deleted UInt8 DEFAULT 0, last_synced DateTime64(3, 'UTC')
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, id)`,
+		`CREATE TABLE operational_service_repository_mappings (
+    org_id String, service_id String, repo_id Nullable(UUID), is_active UInt8 DEFAULT 1,
+    valid_from Nullable(DateTime64(3, 'UTC')), valid_to Nullable(DateTime64(3, 'UTC')),
+    last_synced DateTime64(3, 'UTC')
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, service_id)
+SETTINGS allow_nullable_key = 1`,
+	} {
+		if err := conn.Exec(ctx, statement); err != nil {
+			t.Fatalf("schema: %v\nstatement: %s", err, statement)
+		}
+	}
+
+	const (
+		orgID  = "00000000-0000-4000-8000-0000000000b0"
+		repoID = "00000000-0000-4000-8000-0000000000b1"
+	)
+	if err := conn.Exec(ctx, `
+INSERT INTO git_pull_requests (repo_id, number, created_at, merged_at, additions, deletions,
+    changed_files, changes_requested_count, reviews_count, last_synced, org_id) VALUES
+(toUUID('`+repoID+`'), 1, toDateTime64('2026-10-03 01:00:00', 3, 'UTC'), NULL,
+ NULL, NULL, NULL, 0, 0, toDateTime64('2026-10-03 09:00:00', 3, 'UTC'), '`+orgID+`')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Exec(ctx, `
+INSERT INTO repos (id, repo, last_synced, org_id) VALUES
+(toUUID('`+repoID+`'), 'acme/owned-only', toDateTime64('2026-10-01 00:00:00', 3, 'UTC'), '`+orgID+`')`); err != nil {
+		t.Fatal(err)
+	}
+	// A real team, but with NO repo_patterns -- the pattern resolver has
+	// nothing to match this repo against.
+	if err := conn.Exec(ctx, `
+INSERT INTO teams (id, name, repo_patterns, is_active, updated_at, org_id) VALUES
+('team-owner', 'Owner', [], 1, toDateTime64('2026-10-01 00:00:00', 6), '`+orgID+`')`); err != nil {
+		t.Fatal(err)
+	}
+	// The repo's ONLY team signal: a direct, already-resolved
+	// team_repo_ownership row.
+	if err := conn.Exec(ctx, `
+INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type,
+    source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES
+('`+orgID+`', 'github', 'team-owner', toUUID('`+repoID+`'), 'acme/owned-only', 'exact',
+ 'native', 1, 10, 0, toDateTime64('2026-10-01 00:00:00', 3, 'UTC'), NULL,
+ toDateTime64('2026-10-01 00:00:00', 3, 'UTC'))`); err != nil {
+		t.Fatal(err)
+	}
+
+	executor, err := NewAIImpactExecutor(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := Run{OrganizationID: orgID, TargetDay: time.Date(2026, 10, 3, 0, 0, 0, 0, time.UTC)}
+	partition := Partition{ID: "p1", RepoIDs: []RepositoryID{RepositoryID(repoID)}}
+
+	written, err := executor.ComputeFamily(ctx, run, partition)
+	if err != nil {
+		t.Fatalf("ComputeFamily against a real ClickHouse: %v", err)
+	}
+	if written == 0 {
+		t.Fatal("wrote zero rows for a seeded fixture")
+	}
+
+	var teamRows uint64
+	if err := conn.QueryRow(ctx,
+		`SELECT count() FROM ai_impact_metrics_daily FINAL WHERE org_id = ? AND team_id = 'team-owner'`,
+		orgID).Scan(&teamRows); err != nil {
+		t.Fatalf("read team-scoped rows: %v", err)
+	}
+	if teamRows == 0 {
+		t.Fatal("no row carries team_id 'team-owner' -- a repo owned only via team_repo_ownership " +
+			"(no repo_patterns match anywhere) must still resolve to its authoritative owner")
 	}
 }
 

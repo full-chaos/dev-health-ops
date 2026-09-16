@@ -3,11 +3,16 @@ package daily
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/aiimpact"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/numerical"
+	"github.com/full-chaos/dev-health-ops/internal/teamownership"
+	"github.com/full-chaos/dev-health-ops/internal/teamresolve"
 )
 
 // AIImpactExecutor is the NATIVE implementation of the ai_impact
@@ -138,15 +143,12 @@ func (executor *AIImpactExecutor) ComputeFamily(
 		aiimpact.RecordLinkageUnavailable()
 	}
 
-	// codex round chaos-4280-r1, finding 4 (REFUTED as a port defect, team-lead
-	// ruling): this loads teams.repo_patterns only, no team_repo_ownership.
-	// The architecture doc says native ownership should count, but the actual
-	// PRODUCTION call site (job_daily.py:1809-1820) passes
-	// `team_resolver=lambda ...: repo_team_resolver.resolve(repo_name)` --
-	// patterns only, no ownership map, for ai_impact specifically. Porting
-	// ownership here would be a BEHAVIOR CHANGE relative to what Python
-	// actually runs today, not a parity fix. Tracked as a Python-side gap,
-	// CHAOS-5117; out of scope for this port.
+	// Team resolution goes through the same authoritative single-owner
+	// resolver team_cognitive_load and compounding_risk_team already consume
+	// (teamownership.AuthoritativeOwnerByRepo, ranked
+	// is_primary/specificity/updated_at/team_id), with this family's own
+	// repo-pattern resolver as the fallback for a repo team_repo_ownership
+	// does not resolve -- see resolveAIImpactRepoToTeam.
 	teams, err := LoadAIImpactTeams(ctx, executor.conn, run.OrganizationID)
 	if err != nil {
 		return 0, err
@@ -155,14 +157,31 @@ func (executor *AIImpactExecutor) ComputeFamily(
 	if err != nil {
 		return 0, err
 	}
-	resolver := aiimpact.BuildRepoPatternResolver(teams)
+	repoNamesByIDText := make(map[string]string, len(repoNames))
+	for repoID, repoName := range repoNames {
+		repoNamesByIDText[repoID.String()] = repoName
+	}
+	patternResolver := aiimpact.BuildRepoPatternResolver(teams)
+	repoToTeam, err := resolveAIImpactRepoToTeam(
+		ctx, executor.conn, run.OrganizationID, dayStart, repoIDs, repoNamesByIDText, patternResolver,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("ai_impact: %w", err)
+	}
+	teamResolver := func(repoID uuid.UUID, _ string) *string {
+		teamID, resolved := repoToTeam[repoID.String()]
+		if !resolved {
+			return nil
+		}
+		return &teamID
+	}
 
 	records := aiimpact.Compute(aiimpact.Params{
 		Day: dayStart, OrgID: run.OrganizationID,
 		PullRequests: pullRequests, Reviews: reviews,
 		Attributions: attributions, Incidents: incidents,
 		PRCommitStats: linkage, HasCommitStats: hasLinkage,
-		TeamResolver: resolver.TeamResolverFunc(), RepoNamesByID: repoNames,
+		TeamResolver: teamResolver, RepoNamesByID: repoNames,
 	})
 	if len(records) == 0 {
 		return 0, nil
@@ -171,3 +190,55 @@ func (executor *AIImpactExecutor) ComputeFamily(
 }
 
 var _ NativeFamilyExecutor = (*AIImpactExecutor)(nil)
+
+// resolveAIImpactRepoToTeam builds {repo_id_str: team_id} through
+// teamownership.AuthoritativeOwnerByRepo -- the org-wide, ranked
+// (is_primary/specificity/updated_at/team_id) authoritative repo-ownership
+// resolver team_cognitive_load and compounding_risk_team already consume --
+// with patternResolver as the fallback for a repo that resolver leaves
+// unresolved. Ownership always wins over a pattern match for the same repo,
+// and a repo repoNamesByID does not carry is never guessed by either path
+// (teamresolve.ResolveFromOwnershipMap's own guard).
+//
+// A resolution failure is logged at ERROR and propagated, never swallowed: a
+// ClickHouse error resolving ownership must fail this partition rather than
+// silently degrade to a patterns-only (or empty) attribution.
+func resolveAIImpactRepoToTeam(
+	ctx context.Context, conn driver.Conn, organizationID string, asOf time.Time,
+	repoIDs []uuid.UUID, repoNamesByID map[string]string,
+	patternResolver numerical.RepoTeamResolver,
+) (map[string]string, error) {
+	ownershipMap, err := teamownership.AuthoritativeOwnerByRepo(ctx, conn, organizationID, asOf)
+	if err != nil {
+		slog.Error("ai_impact team resolution: authoritative repo ownership query failed",
+			"organization_id", organizationID, "error", err)
+		return nil, fmt.Errorf("resolve authoritative repo ownership: %w", err)
+	}
+
+	repoToTeam := teamresolve.ResolveFromOwnershipMap(ownershipMap, repoIDs, repoNamesByID, patternResolver)
+
+	ownershipWins, patternWins := 0, 0
+	for _, repoID := range repoIDs {
+		key := repoID.String()
+		teamID, resolved := repoToTeam[key]
+		if !resolved {
+			continue
+		}
+		if ownershipMap[key] == teamID {
+			ownershipWins++
+			slog.Debug("ai_impact team resolution: repository resolved via team_repo_ownership",
+				"organization_id", organizationID, "repo_id", key, "team_id", teamID)
+			continue
+		}
+		patternWins++
+		slog.Debug("ai_impact team resolution: repository resolved via repo_patterns fallback",
+			"organization_id", organizationID, "repo_id", key, "team_id", teamID)
+	}
+	slog.Info("ai_impact team resolution summary",
+		"organization_id", organizationID, "repos_total", len(repoIDs),
+		"resolved_via_ownership", ownershipWins, "resolved_via_patterns", patternWins,
+		"unresolved", len(repoIDs)-ownershipWins-patternWins,
+	)
+
+	return repoToTeam, nil
+}

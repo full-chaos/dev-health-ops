@@ -4,8 +4,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/google/uuid"
-
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
@@ -18,13 +16,16 @@ type Team struct {
 }
 
 // RepoPatternResolver ports RepoPatternTeamResolver (providers/teams.py:94)
-// and its builder. It is what supplies team_id for every ai_impact PR: the
-// attribution loader normalises its own team_id column to None
-// (loaders/ai_impact.py:141, `raw.get("team_id") or None`, over a SQL that
-// projects a literal ”), so compute_ai_impact_metrics_daily's
+// and its builder. The attribution loader normalises its own team_id column
+// to None (loaders/ai_impact.py:141, `raw.get("team_id") or None`, over a SQL
+// that projects a literal ”), so compute_ai_impact_metrics_daily's
 // `if team_id is None and team_resolver is not None` branch is taken for
-// EVERY attributed PR. This resolver is therefore the sole source of the
-// family's team dimension, not a fallback.
+// EVERY attributed PR -- a repo-derived team resolver is therefore the
+// family's only source of the team dimension. On the Go executor this
+// resolver supplies the FALLBACK half of that resolution: the authoritative
+// team_repo_ownership resolver (internal/teamownership.AuthoritativeOwnerByRepo)
+// is consulted first for each repo, and this pattern resolver is asked only
+// for a repo that leaves unresolved.
 //
 // Despite the name there is no glob matching at resolve time. A pattern
 // containing '*' is reduced ONCE, at build time, to a literal prefix; every
@@ -135,10 +136,16 @@ func (resolver *RepoPatternResolver) Resolve(repoName string) *string {
 	return nil
 }
 
-// TeamResolverFunc adapts this resolver to the TeamResolver signature Compute
-// takes, mirroring job_daily.py's `lambda _repo_id, repo_name, _identity:
-// repo_team_resolver.resolve(repo_name)` (:1817) -- repo_id and identity are
-// deliberately unused on that call.
-func (resolver *RepoPatternResolver) TeamResolverFunc() TeamResolver {
-	return func(_ uuid.UUID, repoName string) *string { return resolver.Resolve(repoName) }
+// ResolveRepo adapts this resolver to numerical.RepoTeamResolver, the
+// interface the shared ownership-then-patterns resolver
+// (internal/teamresolve.ResolveFromOwnershipMap /
+// ResolveOwnershipThenPatterns) takes for its pattern-fallback argument. A
+// team name is not tracked per pattern rule, so the second return value is
+// always empty; only the id is used by that resolver.
+func (resolver *RepoPatternResolver) ResolveRepo(repoName string) (teamID, teamName string) {
+	id := resolver.Resolve(repoName)
+	if id == nil {
+		return "", ""
+	}
+	return *id, ""
 }

@@ -185,10 +185,10 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # exactly the Trap #105 shape this comment block exists to prevent a
     # recurrence of: name every pin that carries this count, not just the
     # nearest one.
-    # CURRENT TOTAL: 57. Adding one -tags=integration package bumps every
+    # CURRENT TOTAL: 60. Adding one -tags=integration package bumps every
     # literal below by +1 -- this is the one number to change; the
     # narrative above is for someone auditing history, not for the bump.
-    assert "57 package(s) discovered, 0 denylisted, 57 will run" in result.stdout
+    assert "60 package(s) discovered, 0 denylisted, 60 will run" in result.stdout
     # Name the package explicitly (SET MEMBERSHIP), not just the count --
     # a bare count is exactly what let CHAOS-4643's own literal drift
     # 31 -> 32 -> 33 unnoticed.

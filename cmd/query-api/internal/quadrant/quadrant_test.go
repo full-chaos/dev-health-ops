@@ -2,6 +2,7 @@ package quadrant
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -108,30 +109,34 @@ func TestAttributionQuirkOnlyCycleThroughputTeam(t *testing.T) {
 	}
 }
 
-// TestDedupFromMatchesPython pins dedupFrom against
-// src/dev_health_ops/clickhouse_dedup.py's dedup_from (clickhouse_dedup.py:
-// 135-157) for the three tables this package's MetricSpecs actually name.
-func TestDedupFromMatchesPython(t *testing.T) {
+// TestDedupFromUsesFinalForEveryDailyTable pins dedupFrom against the
+// CURRENT ClickHouse engine of every daily-family table this package's
+// MetricSpecs name, not src/dev_health_ops/clickhouse_dedup.py's
+// dedup_from reference text -- migration 096 converted
+// user_metrics_daily/repo_metrics_daily to ReplacingMergeTree(computed_at)
+// with a sorting key matching their reader dedup key, so a LIMIT-1-BY
+// subquery (the reference's own shape, and this file's own shape before
+// this fix) is no longer correct: it is an all-tenant sort with no org_id
+// predicate inside it, scanning every org's rows before the caller's
+// outer WHERE narrows to one. Declared Python-plane divergence: Python's
+// dedup_from was not updated for migration 096 and still emits the
+// LIMIT-1-BY shape for these two tables.
+func TestDedupFromUsesFinalForEveryDailyTable(t *testing.T) {
 	cases := []struct {
 		table string
 		want  string
 	}{
-		{
-			"work_item_metrics_daily AS m",
-			"work_item_metrics_daily FINAL AS m",
-		},
-		{
-			"user_metrics_daily AS m",
-			"(\n            SELECT *\n            FROM user_metrics_daily\n            ORDER BY computed_at DESC\n            LIMIT 1 BY org_id, repo_id, author_email, day\n        ) AS m",
-		},
-		{
-			"repo_metrics_daily AS m",
-			"(\n            SELECT *\n            FROM repo_metrics_daily\n            ORDER BY computed_at DESC\n            LIMIT 1 BY org_id, repo_id, day\n        ) AS m",
-		},
+		{"work_item_metrics_daily AS m", "work_item_metrics_daily FINAL AS m"},
+		{"work_item_user_metrics_daily AS m", "work_item_user_metrics_daily FINAL AS m"},
+		{"user_metrics_daily AS m", "user_metrics_daily FINAL AS m"},
+		{"repo_metrics_daily AS m", "repo_metrics_daily FINAL AS m"},
 	}
 	for _, tc := range cases {
 		if got := dedupFrom(tc.table); got != tc.want {
 			t.Fatalf("dedupFrom(%q) = %q, want %q", tc.table, got, tc.want)
+		}
+		if strings.Contains(dedupFrom(tc.table), "LIMIT 1 BY") {
+			t.Fatalf("dedupFrom(%q) still emits a LIMIT-1-BY dedup subquery", tc.table)
 		}
 	}
 }

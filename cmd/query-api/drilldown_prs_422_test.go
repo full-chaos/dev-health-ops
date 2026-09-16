@@ -119,41 +119,14 @@ func TestPostValidationErrorsMatchPython(t *testing.T) {
 	}
 }
 
-// declaredDivergence documents one accepted, ticketed gap between this
-// route's Go validation and Python's Pydantic-driven one -- the same
-// shape (a Ticket field, separate from prose) internal/goapiproof's own
-// BaselineDefect declarations use. Never referenced by production code:
-// its only job is to give each declared-divergence test below one place
-// that carries the ticket id, so a source-diff grep for a bare ticket
-// number in a comment (this repo's own hygiene check on every lane's
-// diff) has exactly one accepted hit per declaration, not a citation
-// scattered across prose.
-type declaredDivergence struct {
-	Ticket string
-	Reason string
-}
-
-// TestDeclaredDivergenceNestedFilterFieldsNotValidated pins TODAY's Go
-// behavior for the first of two gaps pydantic_validation_error.go's own
-// package doc comment declares: a malformed field NESTED inside the POST
-// body's "filters" object (its Literal-typed scope.level, or a
-// wrong-typed time.range_days) is silently accepted, not rejected with
-// 422 -- filters stays an untyped map in this route (no Go MetricFilter
-// type exists in this binary), the same boundary
-// investment_explain_route.go already established elsewhere. Python
-// answers 422 for the SAME body (api/models/filters.py's ScopeFilter.level:
-// Literal[...]; confirmed live via the same FastAPI TestClient technique
-// this file's other golden tests use). This is a real, accepted
-// divergence, not an oversight -- this test exists so a future change
-// that starts silently MIScomputing on these inputs (instead of
-// continuing to pass them through unvalidated, today's documented
-// behavior) is caught.
-func TestDeclaredDivergenceNestedFilterFieldsNotValidated(t *testing.T) {
-	_ = declaredDivergence{
-		Ticket: "CHAOS-5797",
-		Reason: "nested MetricFilter fields (filters.scope.level's Literal enum, filters.time.range_days's type, and so on) are not validated by this Go port; a malformed value there is silently accepted rather than answering 422. Tracked for a shared validator alongside the malformed-JSON-message gap.",
-	}
-
+// TestNestedMetricFilterFieldsMatchPython pins that a malformed field
+// NESTED inside the POST body's "filters" object -- ScopeFilter.level's
+// Literal enum, and TimeFilter.range_days's int coercion, sent together
+// -- answers 422 with BOTH errors aggregated into one response, in
+// MetricFilter's own field order (time before scope), matching a live
+// FastAPI capture byte-for-byte (validateMetricFilter,
+// pydantic_metric_filter.go).
+func TestNestedMetricFilterFieldsMatchPython(t *testing.T) {
 	handler := newDrilldownPRsPostHandler(newEmptyRowsDrilldownReader(t))
 	body := `{"filters":{"scope":{"level":"not_a_real_level"},"time":{"range_days":"not-a-number"}}}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/drilldown/prs", bytes.NewReader([]byte(body)))
@@ -161,37 +134,38 @@ func TestDeclaredDivergenceNestedFilterFieldsNotValidated(t *testing.T) {
 	rec := httptest.NewRecorder()
 	handler(rec, req)
 
-	if rec.Code == http.StatusUnprocessableEntity {
-		t.Fatalf("got 422 for a malformed nested filters field -- this route now DOES validate nested filters; update the declared divergence this test pins (and pydantic_validation_error.go's own doc comment) to match, they no longer describe reality")
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422, body=%s", rec.Code, rec.Body.String())
 	}
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (today's declared behavior: the malformed nested field is silently accepted, not rejected); body=%s", rec.Code, rec.Body.String())
+	got := decodeValidationErrorBody(t, rec.Body.Bytes())
+	want := pydanticValidationErrorBody{Detail: []pydanticErrorDetail{
+		{
+			Type: "int_parsing", Loc: []any{"body", "filters", "time", "range_days"},
+			Msg: "Input should be a valid integer, unable to parse string as an integer", Input: "not-a-number",
+		},
+		{
+			Type: "literal_error", Loc: []any{"body", "filters", "scope", "level"},
+			Msg: "Input should be 'org', 'team', 'repo', 'service' or 'developer'", Input: "not_a_real_level",
+			Ctx: map[string]string{"expected": "'org', 'team', 'repo', 'service' or 'developer'"},
+		},
+	}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("response mismatch\n got:  %+v\nwant: %+v", got, want)
 	}
 }
 
-// TestDeclaredDivergenceMalformedJSONGenericMessage pins TODAY's Go
-// behavior for the second of two gaps pydantic_validation_error.go's own
-// package doc comment declares: genuinely malformed JSON syntax answers
-// 422 with the correct envelope (type "json_invalid", loc ["body", 0])
-// but a GENERIC message/ctx.error, not jiter's (pydantic-core's Rust
-// JSON parser) exact per-error-class text and byte offset. Python's real
-// answer for this exact body ("not json") is {"type": "json_invalid",
-// "loc": ["body", 0], "msg": "JSON decode error", "input": {}, "ctx":
-// {"error": "Expecting value"}} -- confirmed live via the same FastAPI
-// TestClient technique this file's other golden tests use. ctx.error
-// genuinely varies by WHERE and HOW the JSON is malformed (a missing
-// closing brace produces "Expecting property name enclosed in double
-// quotes", a trailing comma "Illegal trailing comma before end of
-// object", and so on -- also confirmed live), so replicating jiter's
-// exact taxonomy would mean reimplementing it; this route declares the
-// gap instead of guessing at a message that would only be right for one
-// specific kind of malformed input.
-func TestDeclaredDivergenceMalformedJSONGenericMessage(t *testing.T) {
-	_ = declaredDivergence{
-		Ticket: "CHAOS-5797",
-		Reason: "genuinely malformed JSON syntax (not just a wrong-shaped-but-valid body) answers 422 with the correct envelope/type but a generic ctx.error/msg, not jiter's exact per-error-class text and byte offset. Tracked for a shared validator alongside the nested-filters gap.",
-	}
-
+// TestMalformedJSONSyntaxMatchesPython pins that genuinely malformed
+// JSON syntax answers 422 with jiter's (pydantic-core's Rust JSON
+// parser) own message and position, not a generic placeholder --
+// classifyJSONSyntaxError (pydantic_json_syntax_error.go) reproduces the
+// same grammar CPython's json module documents, with the one departure
+// jiter itself makes (a distinct trailing-comma message/position; see
+// that file's own doc comment). Python's real answer for this exact body
+// ("not json") is {"type": "json_invalid", "loc": ["body", 0], "msg":
+// "JSON decode error", "input": {}, "ctx": {"error": "Expecting
+// value"}} -- confirmed live via the same FastAPI TestClient technique
+// this file's other golden tests use.
+func TestMalformedJSONSyntaxMatchesPython(t *testing.T) {
 	handler := newDrilldownPRsPostHandler(newEmptyRowsDrilldownReader(t))
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/drilldown/prs", bytes.NewReader([]byte(`not json`)))
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
@@ -207,9 +181,9 @@ func TestDeclaredDivergenceMalformedJSONGenericMessage(t *testing.T) {
 		Loc:   []any{"body", float64(0)},
 		Msg:   "JSON decode error",
 		Input: map[string]any{},
-		Ctx:   map[string]string{"error": "Invalid JSON"},
+		Ctx:   map[string]string{"error": "Expecting value"},
 	}}}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("response mismatch (this pins the DECLARED, generic-message divergence -- it is not meant to equal Python's own \"Expecting value\" text)\n got:  %+v\nwant: %+v", got, want)
+		t.Fatalf("response mismatch\n got:  %+v\nwant: %+v", got, want)
 	}
 }

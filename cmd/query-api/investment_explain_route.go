@@ -330,15 +330,38 @@ func writeKeepAliveJSON(ctx context.Context, w http.ResponseWriter, work func(co
 				log.Printf("query-api: investment/explain streaming error: %v", result.err)
 				return
 			}
-			// nosemgrep: go.lang.security.audit.xss.no-direct-write-to-responsewriter.no-direct-write-to-responsewriter
 			// result.body is EncodeInvestmentMixExplanation's own JSON
-			// output (investment_explain_route.go's caller, this function's
-			// own doc comment above), never HTML -- Content-Type is set to
-			// application/json at this function's entry. Same triage shape
-			// as main.go's readyzHandler suppression for this identical
-			// rule: a scanner that cannot see the Content-Type header or
-			// the byte source, not a real XSS surface on a JSON-only route.
-			_, _ = w.Write(result.body)
+			// text -- a Python-dict-spaced ("key": value) encoding built
+			// for BYTE-EXACT parity with the investment_explanations
+			// cache column (investmentexplain's own golden test asserts
+			// that), NOT with this route's own wire response: Python's
+			// real HTTP chunk is `result.model_dump_json()`
+			// (keep_alive_wrapper, api/main.py), and Pydantic's
+			// model_dump_json is COMPACT -- no space after `:`/`,` --
+			// confirmed live (`InvestmentMixExplanation(**golden_result)
+			// .model_dump_json()` against this package's own golden
+			// fixture byte-for-byte equals json.Compact(result.body)).
+			// json.NewEncoder(w).Encode(json.RawMessage(result.body))
+			// compacts result.body the same way -- via
+			// encoding/json's own internal compact step for a
+			// json.Marshaler's output, not a hand-rolled one -- so this
+			// call is BOTH this repo's standard JSON-response path
+			// (no raw w.Write of pre-marshalled bytes, matching every
+			// other route) AND a genuine byte-parity fix this route did
+			// not have before: the previous raw w.Write(result.body)
+			// sent Python's CACHE-format spacing over the wire, which
+			// Python's own client never actually sends.
+			//
+			// The one byte this does NOT match: Encode appends a
+			// trailing '\n' Python's chunk does not have. Treated as
+			// insignificant JSON whitespace (RFC 8259 §2), the same
+			// tolerance this function's own leading keep-alive " " ticks
+			// already rely on for the wire body as a whole -- not a
+			// value or shape difference, and no compliant JSON parser
+			// treats it as one.
+			if encodeErr := json.NewEncoder(w).Encode(json.RawMessage(result.body)); encodeErr != nil {
+				log.Printf("query-api: investment/explain: encode response failed: err=%v", encodeErr)
+			}
 			if flusher != nil {
 				flusher.Flush()
 			}
@@ -393,12 +416,10 @@ func newInvestmentExplainWorkHandler(
 			return
 		}
 
-		var reqBody investmentExplainRequestBody
-		if len(bodyBytes) > 0 {
-			if err := json.Unmarshal(bodyBytes, &reqBody); err != nil {
-				http.Error(w, "bad request", http.StatusBadRequest)
-				return
-			}
+		reqBody, validationErrors := decodeInvestmentExplainRequestBody([]any{"body"}, bodyBytes)
+		if len(validationErrors) > 0 {
+			writePydanticValidationError(w, r, claims.OrgID, validationErrors...)
+			return
 		}
 
 		llmProvider := r.URL.Query().Get("llm_provider")

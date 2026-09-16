@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
@@ -113,15 +114,91 @@ func TestNewQuadrantWorkHandlerRequiresAuthContext(t *testing.T) {
 	}
 }
 
-// TestNewQuadrantWorkHandlerRequiresType pins the "type is required" 400.
+// TestNewQuadrantWorkHandlerRequiresType pins the missing-`type` 422,
+// matching FastAPI's own RequestValidationError body for a required
+// query param with no value on the wire (live-captured, see this PR's
+// TEST-EVIDENCE): {"detail":[{"type":"missing","loc":["query","type"],
+// "msg":"Field required","input":null}]}.
 func TestNewQuadrantWorkHandlerRequiresType(t *testing.T) {
 	handler := newQuadrantWorkHandler(emptyRowsQuadrantClient{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/quadrant", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
 	handler(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Fatalf("Content-Type = %q, want application/json", ct)
+	}
+	var body pydanticValidationErrorBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v (body=%s)", err, rec.Body.String())
+	}
+	want := pydanticValidationErrorBody{Detail: []pydanticErrorDetail{
+		{Type: "missing", Loc: []any{"query", "type"}, Msg: "Field required", Input: nil},
+	}}
+	if !reflect.DeepEqual(body, want) {
+		t.Fatalf("body = %+v, want %+v", body, want)
+	}
+}
+
+// TestNewQuadrantWorkHandlerAggregatesMultipleValidationErrors pins that
+// multiple simultaneously-invalid fields are reported together in ONE
+// 422, in the same order Python's endpoint signature declares them --
+// matching a live FastAPI capture of the same request shape (quoted in
+// TEST-EVIDENCE), never a fail-fast single-error response.
+func TestNewQuadrantWorkHandlerAggregatesMultipleValidationErrors(t *testing.T) {
+	handler := newQuadrantWorkHandler(emptyRowsQuadrantClient{})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/quadrant?range_days=abc&start_date=bad", nil)
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
+	}
+	var body pydanticValidationErrorBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v (body=%s)", err, rec.Body.String())
+	}
+	if len(body.Detail) != 3 {
+		t.Fatalf("detail has %d entries, want 3: %+v", len(body.Detail), body.Detail)
+	}
+	wantLocs := [][]any{{"query", "type"}, {"query", "range_days"}, {"query", "start_date"}}
+	for i, want := range wantLocs {
+		if !reflect.DeepEqual(body.Detail[i].Loc, want) {
+			t.Fatalf("detail[%d].Loc = %v, want %v", i, body.Detail[i].Loc, want)
+		}
+	}
+}
+
+// TestNewQuadrantWorkHandlerBadRangeDaysIs422 pins a non-numeric
+// range_days against a live FastAPI capture (TEST-EVIDENCE):
+// {"detail":[{"type":"int_parsing","loc":["query","range_days"],
+// "msg":"Input should be a valid integer, unable to parse string as an
+// integer","input":"abc"}]}. A non-numeric range_days must be rejected,
+// never silently coerced to the default range.
+func TestNewQuadrantWorkHandlerBadRangeDaysIs422(t *testing.T) {
+	handler := newQuadrantWorkHandler(emptyRowsQuadrantClient{})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/quadrant?type=wip_throughput&range_days=abc", nil)
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
+	}
+	var body pydanticValidationErrorBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v (body=%s)", err, rec.Body.String())
+	}
+	want := pydanticValidationErrorBody{Detail: []pydanticErrorDetail{
+		{
+			Type: "int_parsing", Loc: []any{"query", "range_days"},
+			Msg: "Input should be a valid integer, unable to parse string as an integer", Input: "abc",
+		},
+	}}
+	if !reflect.DeepEqual(body, want) {
+		t.Fatalf("body = %+v, want %+v", body, want)
 	}
 }
 

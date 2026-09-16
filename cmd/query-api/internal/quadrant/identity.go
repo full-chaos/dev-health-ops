@@ -250,15 +250,20 @@ func resolveIdentityVariants(ctx context.Context, client QueryClient, personID, 
 }
 
 // resolvePersonIdentity ports resolve_person_identity (queries/people.py:
-// 35-45) and its person_lookup.sql, inlined verbatim. Deliberately NOT
-// routed through dedupFrom -- Python's load_sql call bypasses dedup_from
-// here too (a duplicate identity/user_identity string collapses via UNION
-// DISTINCT regardless of which physical row it came from).
+// 35-45) and its person_lookup.sql, inlined verbatim, with one declared
+// fix: the reference's load_sql call bypasses dedup_from for this read
+// (a duplicate identity/user_identity string collapses via UNION DISTINCT
+// regardless of which physical row it came from, so the VALUE was never
+// wrong), but user_metrics_daily is ReplacingMergeTree(computed_at)
+// (migration 096) and this package's own class ruling is one dedup shape
+// for every ReplacingMergeTree read, not a per-query exception -- so this
+// branch reads FINAL too, matching work_item_user_metrics_daily's branch
+// two lines below, which already carried it.
 func resolvePersonIdentity(ctx context.Context, client QueryClient, personID, orgID string) (string, error) {
 	const query = `
         WITH identities AS (
             SELECT identity_id AS identity
-            FROM user_metrics_daily
+            FROM user_metrics_daily FINAL
             WHERE identity_id != ''
               AND org_id = {org_id:String}
 

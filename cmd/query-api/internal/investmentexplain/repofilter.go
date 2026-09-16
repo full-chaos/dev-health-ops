@@ -18,6 +18,12 @@ import (
 // _resolve_repo_filter_refs, batched and case-folded on purpose for a
 // different call site -- do not conflate the two or "simplify" one into
 // the other). Not found is (\"\", false, nil), never an error.
+//
+// repos is ReplacingMergeTree(last_synced) (migrations/clickhouse/
+// 000_raw_tables.sql, org_id added by 024, sorting key (org_id, id) since
+// 027) -- both branches read FINAL so a rename/resync in flight resolves
+// to the current row, not a stale un-merged copy, with org_id filtered in
+// the same WHERE as the FINAL source.
 func (reader *Reader) resolveRepoID(ctx context.Context, repoRef, orgID string) (string, bool, error) {
 	if reader == nil || reader.client == nil {
 		return "", false, ErrUnavailable
@@ -28,7 +34,7 @@ func (reader *Reader) resolveRepoID(ctx context.Context, repoRef, orgID string) 
 	if parsed, err := pythonparity.ParseUUID(repoRef); err == nil {
 		query = fmt.Sprintf(`
 SELECT toString(id) AS id
-FROM repos
+FROM repos FINAL
 WHERE toString(id) = {repo_id:String}
   AND org_id = {org_id:String}
 LIMIT 1
@@ -41,7 +47,7 @@ LIMIT 1
 	} else {
 		query = fmt.Sprintf(`
 SELECT toString(id) AS id
-FROM repos
+FROM repos FINAL
 WHERE repo = {repo_name:String}
   AND org_id = {org_id:String}
 LIMIT 1
@@ -98,7 +104,11 @@ func (reader *Reader) resolveRepoIDs(ctx context.Context, repoRefs []string, org
 // (api/queries/scopes.py:72-89): every distinct repo_id worked on by any
 // user_metrics_daily row carrying one of teamIDs in this org, within the
 // table's own retention -- there is no time-window filter in the Python
-// source, so none is added here either.
+// source, so none is added here either. user_metrics_daily is
+// ReplacingMergeTree(computed_at) since migration 096; team_id is NOT part
+// of its sorting key, so a raw (non-FINAL) read here could keep returning
+// a repo under a team it was re-attributed away from until the next
+// merge. Read FINAL, with org_id in the same WHERE as the FINAL source.
 func (reader *Reader) resolveRepoIDsForTeams(ctx context.Context, teamIDs []string, orgID string) ([]string, error) {
 	if reader == nil || reader.client == nil {
 		return nil, ErrUnavailable
@@ -116,7 +126,7 @@ func (reader *Reader) resolveRepoIDsForTeams(ctx context.Context, teamIDs []stri
 
 	query := fmt.Sprintf(`
 SELECT DISTINCT toString(repo_id) AS id
-FROM user_metrics_daily
+FROM user_metrics_daily FINAL
 WHERE team_id IN {team_ids:Array(String)}
   AND org_id = {org_id:String}
 %s

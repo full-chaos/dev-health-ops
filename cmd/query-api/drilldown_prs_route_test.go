@@ -56,27 +56,22 @@ func TestDrilldownPRsSwitchFromEnvEnablesBothOperations(t *testing.T) {
 	}
 }
 
-func TestParseDrilldownDateEmpty(t *testing.T) {
-	_, present, ok := parseDrilldownDate("")
-	if present || !ok {
-		t.Fatalf("parseDrilldownDate(\"\") = present=%v ok=%v, want present=false ok=true", present, ok)
+// TestDrilldownUsesTheSharedISODateQueryParamParser pins that this
+// route parses start_date/end_date via parseISODateQueryParam
+// (pydantic_validation_error.go) -- the ONE shared implementation every
+// REST route in this binary uses, not a per-route copy. The function's
+// own behaviour is pinned once, by quadrant_route_test.go's equivalent
+// coverage; this test only guards against a future edit reintroducing a
+// second copy here.
+func TestDrilldownUsesTheSharedISODateQueryParamParser(t *testing.T) {
+	if _, present, ok := parseISODateQueryParam(""); present || !ok {
+		t.Fatalf("parseISODateQueryParam(\"\") = present=%v ok=%v, want present=false ok=true", present, ok)
 	}
-}
-
-func TestParseDrilldownDateValid(t *testing.T) {
-	got, present, ok := parseDrilldownDate("2024-03-01")
-	if !present || !ok {
-		t.Fatalf("parseDrilldownDate = present=%v ok=%v, want both true", present, ok)
+	if got, present, ok := parseISODateQueryParam("2024-03-01"); !present || !ok || got.Year() != 2024 || got.Month() != 3 || got.Day() != 1 {
+		t.Fatalf("parseISODateQueryParam(2024-03-01) = %v present=%v ok=%v, want 2024-03-01 true true", got, present, ok)
 	}
-	if got.Year() != 2024 || got.Month() != 3 || got.Day() != 1 {
-		t.Fatalf("parseDrilldownDate = %v, want 2024-03-01", got)
-	}
-}
-
-func TestParseDrilldownDateMalformed(t *testing.T) {
-	_, present, ok := parseDrilldownDate("not-a-date")
-	if !present || ok {
-		t.Fatalf("parseDrilldownDate(malformed) = present=%v ok=%v, want present=true ok=false", present, ok)
+	if _, present, ok := parseISODateQueryParam("not-a-date"); !present || ok {
+		t.Fatalf("parseISODateQueryParam(malformed) = present=%v ok=%v, want present=true ok=false", present, ok)
 	}
 }
 

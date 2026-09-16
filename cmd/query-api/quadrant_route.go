@@ -23,10 +23,10 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"strconv"
-	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
@@ -125,27 +125,17 @@ func buildQuadrantRoute() (handler http.HandlerFunc, cleanup func(), ok bool, er
 	return entryHandler, cleanupFn, true, nil
 }
 
-// parseQuadrantDate parses a "YYYY-MM-DD" query param the way FastAPI's
-// `date | None` parameter does on the happy path. ok is false for an
-// absent value; a present-but-malformed value is a caller error --
-// Python's Pydantic-driven param validation answers 422 for this, this
-// port answers 400 (a documented, Go-side-only status-code divergence;
-// the DATA contract -- what a well-formed request returns -- is
-// unaffected).
-func parseQuadrantDate(raw string) (t time.Time, present bool, ok bool) {
-	if raw == "" {
-		return time.Time{}, false, true
-	}
-	parsed, err := time.Parse("2006-01-02", raw)
-	if err != nil {
-		return time.Time{}, true, false
-	}
-	return parsed.UTC(), true, true
-}
-
 // newQuadrantWorkHandler is the routeswitch-registered handler -- reached
 // only after buildQuadrantRoute's entryHandler has already authenticated
 // the request and attached authctx.Claims to its context.
+//
+// Validation error aggregation matches FastAPI's own solve_dependencies
+// exactly (live-captured, see pydantic_validation_error.go and this PR's
+// TEST-EVIDENCE): every one of type/range_days/start_date/end_date is
+// checked, and every failing one is reported together in a single 422,
+// in the SAME order Python's endpoint signature declares them
+// (type, scope_type, scope_id, range_days, start_date, end_date, bucket)
+// -- never a fail-fast single-error 400 on the first bad field.
 func newQuadrantWorkHandler(client quadrant.QueryClient) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		claims, ok := authctx.FromContext(r.Context())
@@ -155,10 +145,11 @@ func newQuadrantWorkHandler(client quadrant.QueryClient) http.HandlerFunc {
 		}
 
 		query := r.URL.Query()
+		var validationErrors []pydanticErrorDetail
+
 		quadrantType := query.Get("type")
-		if quadrantType == "" {
-			http.Error(w, "type is required", http.StatusBadRequest)
-			return
+		if !query.Has("type") {
+			validationErrors = append(validationErrors, missingFieldError([]any{"query", "type"}, nil))
 		}
 		scopeType := query.Get("scope_type")
 		if scopeType == "" {
@@ -169,25 +160,26 @@ func newQuadrantWorkHandler(client quadrant.QueryClient) http.HandlerFunc {
 			bucket = "week"
 		}
 		rangeDays := 30
-		if raw := query.Get("range_days"); raw != "" {
+		if query.Has("range_days") {
+			raw := query.Get("range_days")
 			if parsed, err := strconv.Atoi(raw); err == nil {
 				rangeDays = parsed
+			} else {
+				validationErrors = append(validationErrors, intQueryParamError([]any{"query", "range_days"}, raw))
 			}
-			// A non-numeric range_days falls back to the default, same as
-			// _normalize_range_days' own except-branch fallback
-			// (quadrant.py:322-327) would if it ever saw one -- FastAPI's
-			// own int-typed param validation never lets Python's fallback
-			// fire in practice, but the value is identical either way.
 		}
 
-		startDate, startPresent, startOK := parseQuadrantDate(query.Get("start_date"))
+		startDate, startPresent, startOK := parseISODateQueryParam(query.Get("start_date"))
 		if startPresent && !startOK {
-			http.Error(w, "invalid start_date", http.StatusBadRequest)
-			return
+			validationErrors = append(validationErrors, dateQueryParamError([]any{"query", "start_date"}, query.Get("start_date")))
 		}
-		endDate, endPresent, endOK := parseQuadrantDate(query.Get("end_date"))
+		endDate, endPresent, endOK := parseISODateQueryParam(query.Get("end_date"))
 		if endPresent && !endOK {
-			http.Error(w, "invalid end_date", http.StatusBadRequest)
+			validationErrors = append(validationErrors, dateQueryParamError([]any{"query", "end_date"}, query.Get("end_date")))
+		}
+
+		if len(validationErrors) > 0 {
+			writePydanticValidationError(w, r, claims.OrgID, validationErrors...)
 			return
 		}
 
@@ -221,13 +213,20 @@ func newQuadrantWorkHandler(client quadrant.QueryClient) http.HandlerFunc {
 			return
 		}
 
-		body, encodeErr := json.Marshal(resp)
-		if encodeErr != nil {
-			http.Error(w, "Data unavailable", http.StatusServiceUnavailable)
-			return
-		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(body)
+		// json.NewEncoder(w).Encode is this repo's JSON-response path
+		// (filter_options_route.go's newFilterOptionsWorkHandler is the
+		// precedent this route now matches) -- never a raw w.Write of
+		// pre-marshalled bytes. The 200 status is already on the wire by
+		// the time Encode runs, so a failure here cannot change what the
+		// client sees -- but it is NOT silently dropped: it is logged with
+		// the same request-scoped fields (org_id, the caller-supplied
+		// X-Request-Id) so an operator can correlate a truncated or
+		// aborted response back to the request that produced it.
+		if encodeErr := json.NewEncoder(w).Encode(resp); encodeErr != nil {
+			log.Printf("query-api: quadrant: encode response failed: org_id=%s request_id=%s err=%v",
+				claims.OrgID, envelopeRequestID(r), encodeErr)
+		}
 	}
 }

@@ -204,6 +204,65 @@ func TestWriteKeepAliveJSONErrorBodyMatchesPythonByteForByte(t *testing.T) {
 	}
 }
 
+// TestWriteKeepAliveJSONSuccessBodyIsCompactAndNewlineTerminated pins
+// that the final chunk is compacted (no space after `:`/`,`) and ends
+// with exactly one '\n' -- json.NewEncoder(w).Encode(json.RawMessage(v))'s
+// own, unavoidable framing (a value implementing json.Marshaler is
+// always compacted before writing, and Encode always appends '\n')
+// applied to a work func's already-valid-but-spaced JSON, the shape
+// investmentexplain.EncodeInvestmentMixExplanation actually returns.
+func TestWriteKeepAliveJSONSuccessBodyIsCompactAndNewlineTerminated(t *testing.T) {
+	rec := httptest.NewRecorder()
+	spaced := []byte(`{"summary": "hello", "status": "valid"}`)
+	writeKeepAliveJSON(context.Background(), rec, func(context.Context) ([]byte, error) {
+		return spaced, nil
+	})
+
+	want := `{"summary":"hello","status":"valid"}` + "\n"
+	if rec.Body.String() != want {
+		t.Fatalf("body = %q, want %q", rec.Body.String(), want)
+	}
+}
+
+// TestWriteKeepAliveJSONSuccessBodyMatchesPythonModelDumpJSON proves wire
+// parity against Python's REAL HTTP response for this route:
+// keep_alive_wrapper (api/main.py) yields `result.model_dump_json()`,
+// not `json.dumps(result)` -- InvestmentMixExplanation is a Pydantic
+// model, so `hasattr(result, "model_dump_json")` is true and that branch
+// always fires. Pydantic's model_dump_json is COMPACT (no space after
+// `:`/`,`), unlike EncodeInvestmentMixExplanation's own
+// json.dumps-style output (verified byte-exact against a DIFFERENT
+// target -- the investment_explanations cache column -- by
+// investmentexplain's own golden test, which is why this route cannot
+// just write EncodeInvestmentMixExplanation's bytes as-is).
+//
+// spacedInput below is EncodeInvestmentMixExplanation's own output for
+// investmentexplain's "recorded_fixture_provider_valid" golden fixture
+// (captured via `go test -run TestExplainInvestmentMixRecordedFixture...
+// -v` with a temporary debug print, not hand-typed); want is
+// `InvestmentMixExplanation(**that golden fixture's "result" dict)
+// .model_dump_json()`, captured live via `uv run python3` against the
+// SAME fixture file -- both captures are quoted in this PR's
+// TEST-EVIDENCE. The two are BYTE-IDENTICAL once compacted (696 bytes
+// each, confirmed by direct diff), proving json.Compact's output for
+// this route's real data equals Pydantic's real serializer output, not
+// just "some compaction happened."
+func TestWriteKeepAliveJSONSuccessBodyMatchesPythonModelDumpJSON(t *testing.T) {
+	spacedInput := []byte(`{"summary": "Effort appears to lean toward velocity work this period.", "top_findings": [{"finding": "Velocity work leans toward feature delivery (~80% of effort).", "evidence": {"theme": "velocity", "subcategory": "velocity.feature", "share_pct": 80.0, "delta_pct_points": null, "evidence_quality_mean": 0.55, "evidence_quality_band": null}}], "confidence": {"level": "moderate", "quality_mean": 0.55, "quality_stddev": 0.25, "band_mix": {"high": 1, "low": 1}, "drivers": []}, "what_to_check_next": [{"action": "Review feature-delivery evidence quotes", "why": "Confirms the dominant velocity subcategory", "where": "Work unit evidence panel"}], "anti_claims": ["This does not indicate declining quality investment."], "status": "valid"}`)
+	wantModelDumpJSON := `{"summary":"Effort appears to lean toward velocity work this period.","top_findings":[{"finding":"Velocity work leans toward feature delivery (~80% of effort).","evidence":{"theme":"velocity","subcategory":"velocity.feature","share_pct":80.0,"delta_pct_points":null,"evidence_quality_mean":0.55,"evidence_quality_band":null}}],"confidence":{"level":"moderate","quality_mean":0.55,"quality_stddev":0.25,"band_mix":{"high":1,"low":1},"drivers":[]},"what_to_check_next":[{"action":"Review feature-delivery evidence quotes","why":"Confirms the dominant velocity subcategory","where":"Work unit evidence panel"}],"anti_claims":["This does not indicate declining quality investment."],"status":"valid"}`
+
+	rec := httptest.NewRecorder()
+	writeKeepAliveJSON(context.Background(), rec, func(context.Context) ([]byte, error) {
+		return spacedInput, nil
+	})
+
+	got := rec.Body.String()
+	want := wantModelDumpJSON + "\n"
+	if got != want {
+		t.Fatalf("body =\n%s\nwant (Python's model_dump_json, plus this route's trailing newline):\n%s", got, want)
+	}
+}
+
 type boomError struct{}
 
 func (boomError) Error() string { return "boom" }

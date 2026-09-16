@@ -143,23 +143,6 @@ func buildDrilldownPRsRoute() (handler http.HandlerFunc, cleanup func(), ok bool
 	return entryHandler, cleanupFn, true, nil
 }
 
-// parseDrilldownDate parses a "YYYY-MM-DD" query param the way FastAPI's
-// `date | None` parameter does on the happy path -- a byte-for-byte
-// duplicate of quadrant_route.go's parseQuadrantDate (both port the same
-// FastAPI date-param shape at a different route; see that function's own
-// doc comment for why a present-but-malformed value answers 400 here
-// instead of Python's 422).
-func parseDrilldownDate(raw string) (t time.Time, present bool, ok bool) {
-	if raw == "" {
-		return time.Time{}, false, true
-	}
-	parsed, err := time.Parse("2006-01-02", raw)
-	if err != nil {
-		return time.Time{}, true, false
-	}
-	return parsed.UTC(), true, true
-}
-
 // drilldownTimeFilterMap adapts GET's own query-param inputs (already
 // parsed to a range-days int and optional time.Time dates) into the
 // map[string]any shape timeWindow (investment_explain_route.go, this
@@ -220,6 +203,8 @@ func newDrilldownPRsGetHandler(reader *drilldown.Reader) http.HandlerFunc {
 		}
 		scopeID := query.Get("scope_id")
 
+		var validationErrors []pydanticErrorDetail
+
 		rangeDays := 14
 		if raw := query.Get("range_days"); raw != "" {
 			parsed, err := strconv.Atoi(raw)
@@ -227,30 +212,27 @@ func newDrilldownPRsGetHandler(reader *drilldown.Reader) http.HandlerFunc {
 				// Python's `range_days: int = 14` is FastAPI/Pydantic
 				// query-param validation, not a handler-level try/except:
 				// a non-numeric value never reaches the handler at all,
-				// it is rejected up front as 422 -- confirmed live. A
-				// Go-side 400 in place of Python's own 422 validation
-				// contract is not a declarable divergence; this route
-				// answers 422 with the same body Python emits instead
-				// (pydantic_validation_error.go).
-				writePydanticValidationError(w, r, claims.OrgID,
-					intQueryParamError([]any{"query", "range_days"}, raw))
-				return
+				// it is rejected up front as 422 -- confirmed live.
+				validationErrors = append(validationErrors, intQueryParamError([]any{"query", "range_days"}, raw))
+			} else {
+				rangeDays = parsed
 			}
-			rangeDays = parsed
 		}
 
-		startDate, startPresent, startOK := parseDrilldownDate(query.Get("start_date"))
+		startDate, startPresent, startOK := parseISODateQueryParam(query.Get("start_date"))
 		if startPresent && !startOK {
-			writePydanticValidationError(w, r, claims.OrgID,
-				dateQueryParamError([]any{"query", "start_date"}, query.Get("start_date")))
-			return
+			validationErrors = append(validationErrors, dateQueryParamError([]any{"query", "start_date"}, query.Get("start_date")))
 		}
-		endDate, endPresent, endOK := parseDrilldownDate(query.Get("end_date"))
+		endDate, endPresent, endOK := parseISODateQueryParam(query.Get("end_date"))
 		if endPresent && !endOK {
-			writePydanticValidationError(w, r, claims.OrgID,
-				dateQueryParamError([]any{"query", "end_date"}, query.Get("end_date")))
+			validationErrors = append(validationErrors, dateQueryParamError([]any{"query", "end_date"}, query.Get("end_date")))
+		}
+
+		if len(validationErrors) > 0 {
+			writePydanticValidationError(w, r, claims.OrgID, validationErrors...)
 			return
 		}
+
 		var startDatePtr, endDatePtr *time.Time
 		if startPresent {
 			startDatePtr = &startDate
@@ -325,17 +307,11 @@ func newDrilldownPRsPostHandler(reader *drilldown.Reader) http.HandlerFunc {
 		bodyIsEmptyOrNull := len(bodyBytes) == 0
 		if !bodyIsEmptyOrNull {
 			if err := json.Unmarshal(bodyBytes, &decoded); err != nil {
-				// Genuinely malformed JSON syntax: the correct envelope
-				// shape/type/status, but not jiter's exact message -- see
-				// this file's own package doc comment (pydantic_validation_error.go)
-				// for why that one case is a declared, generic-message gap.
-				writePydanticValidationError(w, r, claims.OrgID, pydanticErrorDetail{
-					Type:  "json_invalid",
-					Loc:   []any{"body", 0},
-					Msg:   "JSON decode error",
-					Input: map[string]any{},
-					Ctx:   map[string]string{"error": "Invalid JSON"},
-				})
+				// Genuinely malformed JSON syntax -- jsonSyntaxErrorDetail
+				// (pydantic_json_syntax_error.go) reproduces jiter's own
+				// message/position for this shape, not a generic
+				// placeholder.
+				writePydanticValidationError(w, r, claims.OrgID, jsonSyntaxErrorDetail([]any{"body"}, bodyBytes))
 				return
 			}
 			if decoded == nil {
@@ -343,42 +319,28 @@ func newDrilldownPRsPostHandler(reader *drilldown.Reader) http.HandlerFunc {
 			}
 		}
 		if bodyIsEmptyOrNull {
-			writePydanticValidationError(w, r, claims.OrgID, pydanticErrorDetail{
-				Type: "missing", Loc: []any{"body"}, Msg: "Field required", Input: nil,
-			})
+			writePydanticValidationError(w, r, claims.OrgID, missingFieldError([]any{"body"}, nil))
 			return
 		}
 
 		body, isObject := decoded.(map[string]any)
 		if !isObject {
-			writePydanticValidationError(w, r, claims.OrgID, pydanticErrorDetail{
-				Type: "model_attributes_type", Loc: []any{"body"},
-				Msg: "Input should be a valid dictionary or object to extract fields from", Input: decoded,
-			})
+			writePydanticValidationError(w, r, claims.OrgID, modelAttributesTypeError([]any{"body"}, decoded))
 			return
 		}
 
+		var validationErrors []pydanticErrorDetail
+
 		filtersValue, hasFilters := body["filters"]
 		if !hasFilters {
-			writePydanticValidationError(w, r, claims.OrgID, pydanticErrorDetail{
-				Type: "missing", Loc: []any{"body", "filters"}, Msg: "Field required", Input: body,
-			})
-			return
-		}
-		filters, filtersIsObject := filtersValue.(map[string]any)
-		if !filtersIsObject {
-			writePydanticValidationError(w, r, claims.OrgID, pydanticErrorDetail{
-				Type: "model_attributes_type", Loc: []any{"body", "filters"},
-				Msg: "Input should be a valid dictionary or object to extract fields from", Input: filtersValue,
-			})
-			return
+			validationErrors = append(validationErrors, missingFieldError([]any{"body", "filters"}, body))
+		} else {
+			validationErrors = append(validationErrors, validateMetricFilter([]any{"body", "filters"}, filtersValue)...)
 		}
 
 		if sortValue, hasSort := body["sort"]; hasSort && sortValue != nil {
 			if _, isString := sortValue.(string); !isString {
-				writePydanticValidationError(w, r, claims.OrgID,
-					stringBodyFieldError([]any{"body", "sort"}, sortValue))
-				return
+				validationErrors = append(validationErrors, stringBodyFieldError([]any{"body", "sort"}, sortValue))
 			}
 		}
 
@@ -398,15 +360,21 @@ func newDrilldownPRsPostHandler(reader *drilldown.Reader) http.HandlerFunc {
 		if limitValue, hasLimit := body["limit"]; hasLimit {
 			coerced, detail := coerceIntBodyField([]any{"body", "limit"}, limitValue)
 			if detail != nil {
-				writePydanticValidationError(w, r, claims.OrgID, *detail)
-				return
+				validationErrors = append(validationErrors, *detail)
+			} else {
+				limit = coerced
 			}
-			limit = coerced
+		}
+
+		if len(validationErrors) > 0 {
+			writePydanticValidationError(w, r, claims.OrgID, validationErrors...)
+			return
 		}
 		if limit == 0 {
 			limit = 50
 		}
 
+		filters, _ := filtersValue.(map[string]any)
 		scope, _ := filters["scope"].(map[string]any)
 		scopeLevel, _ := scope["level"].(string)
 		if scopeLevel == "" {

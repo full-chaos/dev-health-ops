@@ -199,6 +199,11 @@ LIMIT {limit:UInt64}
 }
 
 // FetchRepoScopes ports fetch_repo_scopes (work_unit_investments.py:82-108).
+// repos is ReplacingMergeTree(last_synced) (org_id added migration 024,
+// sorting key (org_id, id) since 027) -- read FINAL so an un-merged
+// duplicate id never lets a stale repo slug win the result map's
+// last-write-wins assignment; org_id sits in the same WHERE as the FINAL
+// source.
 func (reader *Reader) FetchRepoScopes(ctx context.Context, orgID string, repoIDs []string) (map[string]string, error) {
 	if reader == nil || reader.client == nil {
 		return nil, ErrUnavailable
@@ -212,7 +217,7 @@ func (reader *Reader) FetchRepoScopes(ctx context.Context, orgID string, repoIDs
 SELECT
     toString(id) AS repo_id,
     repo
-FROM repos
+FROM repos FINAL
 WHERE id IN {repo_ids:Array(String)}
   AND org_id = {org_id:String}
 %s

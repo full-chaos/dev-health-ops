@@ -237,7 +237,7 @@ A row that is live, reachable to real clients (`canary`/`primary`) and carries n
 is required before stage 4/5, and "a bare 200 does not qualify".
 
 <!-- BEGIN GENERATED GO API OPERATIONS -->
-_Rendered 2026-09-16T12:25:30Z against main merge-base `04d97d701cf90dd5ca0e3c8fbd0f3f1bad10d442`; SDL digest pin `sha256:19485ec136d04de0935717dca8b4f5fd27dd0351fe96b854d40f433229468fd0`; fleet read 2026-09-16T12:25:30Z via fleet file fleet-prod.json._
+_Rendered 2026-09-16T12:25:30Z against main merge-base `90221956e6ce610f55d3cb9cc135b75cb2772660`; SDL digest pin `sha256:19485ec136d04de0935717dca8b4f5fd27dd0351fe96b854d40f433229468fd0`; fleet read 2026-09-16T12:25:30Z via fleet file fleet-prod.json._
 
 _Rows in `go_api_proof_run` at read time: **515**. Operations reachable to real clients with no deployed-executed proof: **0**. Rows whose mode says Go but whose schema digest no longer matches the pin, so every request silently falls back to Python: **0**._
 
@@ -281,7 +281,7 @@ sync with either side, so a route added, removed or newly wired on either plane 
 time the tool runs, and the doc-drift check below fails until it is re-rendered.
 
 <!-- BEGIN GENERATED REST ENDPOINTS -->
-_32 `/api/v1/*` routes in `src/dev_health_ops/api/main.py`: **8** ported, **24** python-only, **0** dead-by-design._
+_32 `/api/v1/*` routes in `src/dev_health_ops/api/main.py`: **10** ported, **22** python-only, **0** dead-by-design._
 
 | Method | Path | Status | Go handler |
 | --- | --- | --- | --- |
@@ -289,8 +289,8 @@ _32 `/api/v1/*` routes in `src/dev_health_ops/api/main.py`: **8** ported, **24**
 | POST | `/api/v1/drilldown/issues` | ported | `cmd/query-api/drilldown_issues_route.go:79` |
 | GET | `/api/v1/drilldown/prs` | ported | `cmd/query-api/drilldown_prs_route.go:86` |
 | POST | `/api/v1/drilldown/prs` | ported | `cmd/query-api/drilldown_prs_route.go:86` |
-| GET | `/api/v1/explain` | python-only | -- |
-| POST | `/api/v1/explain` | python-only | -- |
+| GET | `/api/v1/explain` | ported | `cmd/query-api/explain_route.go:94` |
+| POST | `/api/v1/explain` | ported | `cmd/query-api/explain_route.go:94` |
 | GET | `/api/v1/filters/options` | ported | `cmd/query-api/filter_options_route.go:81` |
 | GET | `/api/v1/flame` | python-only | -- |
 | GET | `/api/v1/flame/aggregated` | python-only | -- |

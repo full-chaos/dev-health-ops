@@ -432,6 +432,20 @@ func main() {
 		log.Print("query-api: /api/v1/meta route not configured (CLICKHOUSE_URI unset) -- staying unmounted")
 	}
 
+	// GET+POST /api/v1/explain, gated by its own routeswitch entries
+	// (default OFF via GO_API_EXPLAIN_ENABLED) -- see explain_route.go's
+	// package doc comment for the reachability story and
+	// internal/explain for the ported resolver and its documented
+	// ReplacingMergeTree-dedup/org-scope notes.
+	if explainRESTHandler, explainRESTCleanup, explainRESTOK, explainRESTErr := buildExplainRoute(); explainRESTErr != nil {
+		log.Fatalf("query-api: build /api/v1/explain route: %v", explainRESTErr)
+	} else if explainRESTOK {
+		defer explainRESTCleanup()
+		mux.HandleFunc("/api/v1/explain", explainRESTHandler)
+	} else {
+		log.Print("query-api: /api/v1/explain route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
+	}
+
 	server := &http.Server{
 		Addr:              addr(),
 		Handler:           mux,

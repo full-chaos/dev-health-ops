@@ -1,0 +1,70 @@
+{
+  "meta": {
+    "approximation": {
+      "method": null,
+      "used": false
+    },
+    "filters": {},
+    "notes": [],
+    "window_end": "2024-02-01",
+    "window_start": "2024-01-01"
+  },
+  "mode": "code_hotspots",
+  "root": {
+    "children": [
+      {
+        "children": [
+          {
+            "children": [
+              {
+                "children": [
+                  {
+                    "children": [],
+                    "name": "main.rs",
+                    "value": 50.0
+                  },
+                  {
+                    "children": [],
+                    "name": "utils.rs",
+                    "value": 30.0
+                  }
+                ],
+                "name": "app",
+                "value": 80.0
+              },
+              {
+                "children": [
+                  {
+                    "children": [],
+                    "name": "helper.rs",
+                    "value": 20.0
+                  }
+                ],
+                "name": "lib",
+                "value": 20.0
+              }
+            ],
+            "name": "src",
+            "value": 100.0
+          }
+        ],
+        "name": "Alpha Repo",
+        "value": 100.0
+      },
+      {
+        "children": [
+          {
+            "children": [],
+            "name": "README.md",
+            "value": 5.0
+          }
+        ],
+        "name": "Beta Repo",
+        "value": 5.0
+      }
+    ],
+    "name": "Code Churn",
+    "value": 105.0
+  },
+  "unit": "loc"
+}

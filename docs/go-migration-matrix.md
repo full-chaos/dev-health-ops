@@ -237,7 +237,7 @@ A row that is live, reachable to real clients (`canary`/`primary`) and carries n
 is required before stage 4/5, and "a bare 200 does not qualify".
 
 <!-- BEGIN GENERATED GO API OPERATIONS -->
-_Rendered 2026-09-16T12:25:30Z against main merge-base `b2aabbd9fe4140f4b175b6273da75c0936c234de`; SDL digest pin `sha256:19485ec136d04de0935717dca8b4f5fd27dd0351fe96b854d40f433229468fd0`; fleet read 2026-09-16T12:25:30Z via fleet file fleet-prod.json._
+_Rendered 2026-09-16T12:25:30Z against main merge-base `df7f25f1a2653cf023838c28fccf50b544ca3b01`; SDL digest pin `sha256:19485ec136d04de0935717dca8b4f5fd27dd0351fe96b854d40f433229468fd0`; fleet read 2026-09-16T12:25:30Z via fleet file fleet-prod.json._
 
 _Rows in `go_api_proof_run` at read time: **515**. Operations reachable to real clients with no deployed-executed proof: **0**. Rows whose mode says Go but whose schema digest no longer matches the pin, so every request silently falls back to Python: **0**._
 
@@ -281,7 +281,7 @@ sync with either side, so a route added, removed or newly wired on either plane 
 time the tool runs, and the doc-drift check below fails until it is re-rendered.
 
 <!-- BEGIN GENERATED REST ENDPOINTS -->
-_32 `/api/v1/*` routes in `src/dev_health_ops/api/main.py`: **16** ported, **16** python-only, **0** dead-by-design._
+_32 `/api/v1/*` routes in `src/dev_health_ops/api/main.py`: **17** ported, **15** python-only, **0** dead-by-design._
 
 | Method | Path | Status | Go handler |
 | --- | --- | --- | --- |
@@ -293,7 +293,7 @@ _32 `/api/v1/*` routes in `src/dev_health_ops/api/main.py`: **16** ported, **16*
 | POST | `/api/v1/explain` | ported | `cmd/query-api/explain_route.go:98` |
 | GET | `/api/v1/filters/options` | ported | `cmd/query-api/filter_options_route.go:81` |
 | GET | `/api/v1/flame` | ported | `cmd/query-api/flame_route.go:94` |
-| GET | `/api/v1/flame/aggregated` | python-only | -- |
+| GET | `/api/v1/flame/aggregated` | ported | `cmd/query-api/flame_aggregated_route.go:96` |
 | GET | `/api/v1/heatmap` | python-only | -- |
 | GET | `/api/v1/home` | python-only | -- |
 | POST | `/api/v1/home` | python-only | -- |

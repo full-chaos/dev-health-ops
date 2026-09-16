@@ -1,0 +1,19 @@
+{
+  "meta": {
+    "approximation": {
+      "method": null,
+      "used": false
+    },
+    "filters": {},
+    "notes": [],
+    "window_end": "2024-03-05",
+    "window_start": "2024-03-01"
+  },
+  "mode": "cycle_breakdown",
+  "root": {
+    "children": [],
+    "name": "Cycle Time",
+    "value": 0.0
+  },
+  "unit": "hours"
+}

@@ -575,6 +575,23 @@ func main() {
 		log.Print("query-api: /api/v1/flame route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
 	}
 
+	// GET /api/v1/flame/aggregated, gated by its own routeswitch entry
+	// (default OFF via GO_API_FLAME_AGGREGATED_ENABLED) -- see
+	// flame_aggregated_route.go's package doc comment for the
+	// reachability story and internal/aggflame for the ported resolver
+	// and its documented ReplacingMergeTree-dedup notes.
+	if flameAggHandler, flameAggCleanup, flameAggOK, flameAggErr := buildFlameAggregatedRoute(); flameAggErr != nil {
+		log.Fatalf("query-api: build /api/v1/flame/aggregated route: %v", flameAggErr)
+	} else if flameAggOK {
+		defer flameAggCleanup()
+		// See the investment/explain mount above for why this is a
+		// reassignment, not an inlined wrapper.
+		flameAggHandler = withProofProvenance(flameAggHandler, runningBuild())
+		mux.HandleFunc("/api/v1/flame/aggregated", flameAggHandler)
+	} else {
+		log.Print("query-api: /api/v1/flame/aggregated route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
+	}
+
 	// A /api/v1/* path no route above claims answers Starlette's own
 	// default 404 body -- {"detail": "Not Found"}, confirmed live --
 	// instead of net/http's plain-text default. This is a SUBTREE pattern

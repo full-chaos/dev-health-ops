@@ -162,6 +162,18 @@ var quadrantPointFloats = map[string]string{
 	"data.points.y": "quadrant.go's toFloat64(...)-wrapped ClickHouse aggregate expression",
 }
 
+// cycleBreakdownFloats declares the three fixed leaf-depths
+// buildCycleBreakdownTree's root/category/status-leaf shape can ever
+// produce as Tier B -- see the flame/aggregated spec's own doc comment
+// for why this mode (unlike code_hotspots) both needs a declaration
+// (genuine Float64 sum(duration_hours) merge) and can express it exactly
+// (a FIXED two-level tree, never deeper).
+var cycleBreakdownFloats = map[string]string{
+	"data.root.value":                   "sum(duration_hours)-shaped ClickHouse float aggregate, merged across category nodes",
+	"data.root.children.value":          "sum(duration_hours)-shaped ClickHouse float aggregate, merged across a category's status rows",
+	"data.root.children.children.value": "sum(duration_hours)-shaped ClickHouse float aggregate for one status row",
+}
+
 // drilldownPRsParity is shared by every admissible (2xx) drilldown/prs
 // request, GET and POST alike: both routes call the same
 // BuildPRsResponse, so both carry the same two declared Python-plane
@@ -597,6 +609,95 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 					"start_date": {"not-a-date"},
 				},
 				WantCandidateStatus: 422, WantBaselineStatus: 422,
+				BodyMode: RESTBodyModeJSON,
+			},
+		},
+	},
+	// flame/aggregated: every query param this route takes is an OPTIONAL
+	// filter (main.py:807-819), so a bare `?mode=X` request is a perfectly
+	// valid, reachable 200 on real org data -- no id-binding producer is
+	// needed here, unlike flame's own corpus (this route's entity has no
+	// id at all). Both live entries below bound `range_days` to a small
+	// window (7 days) to keep the compared row set small and the request
+	// deterministic run to run.
+	//
+	// FLOAT TIER: checked leaf-by-leaf, not assumed. code_hotspots'
+	// numeric leaves (root.value down through every nested
+	// root.children...value) are `sum(churn)` over `file_metrics_daily`'s
+	// `churn UInt32` (001_metrics_v2.sql) -- an INTEGER ClickHouse
+	// aggregate, and compare.go's own compareJSON takes an exact-int64
+	// fast path for any whole-number pair not declared Tier B (see its own
+	// "DELIBERATE DIVERGENCE" doc comment) -- so this mode's live entry
+	// below declares nothing, matching this file's own "declare nothing
+	// when every leaf is an exact count" convention (quadrant's own
+	// missing_type/malformed_start_date entries carry no Parity either).
+	// cycle_breakdown's leaves ARE genuine merged Float64 aggregates
+	// (`sum(duration_hours)` over an argMax-deduped subquery,
+	// work_item_state_durations_daily.duration_hours Float64) -- the same
+	// risk class quadrantPointFloats' own doc comment names by name
+	// ("avg/sum/stddevPop over Float64"). Unlike code_hotspots'
+	// UNBOUNDED directory-depth tree, cycle_breakdown's own tree shape is
+	// FIXED at exactly two levels (buildCycleBreakdownTree: root ->
+	// category -> status leaf, no category or leaf ever has further
+	// children), so its three possible leaf depths are enumerable as
+	// concrete dotted paths -- cycleBreakdownFloats below declares all
+	// three.
+	"REST:GET:/api/v1/flame/aggregated": {
+		Method: "GET",
+		Path:   "/api/v1/flame/aggregated",
+		Requests: []RESTRequest{
+			{
+				// mode has no default (main.py:809) -- required, no value
+				// on the wire, the same missingFieldError shape quadrant's
+				// own missing_type entry already exercises for a single
+				// required query param.
+				Name:                "missing_mode",
+				Query:               url.Values{},
+				WantCandidateStatus: 422, WantBaselineStatus: 422,
+				BodyMode: RESTBodyModeJSON,
+			},
+			{
+				// _reject_comparative_params (main.py:202-208, called at
+				// main.py:836): checked AFTER FastAPI's own required-field
+				// validation already passed -- confirmed live for
+				// /api/v1/people and /api/v1/flame, the same ordering this
+				// route's own port reuses (flame_aggregated_route.go's own
+				// doc comment).
+				Name: "comparative_param_rejected",
+				Query: url.Values{
+					"mode": {"throughput"}, "rank": {"1"},
+				},
+				WantCandidateStatus: 400, WantBaselineStatus: 400,
+				BodyMode: RESTBodyModeJSON,
+			},
+			{
+				// The mode-enum 400 (main.py:838-842) -- deterministic, no
+				// ClickHouse call either plane.
+				Name: "unknown_mode",
+				Query: url.Values{
+					"mode": {"not-a-real-mode"},
+				},
+				WantCandidateStatus: 400, WantBaselineStatus: 400,
+				BodyMode: RESTBodyModeJSON,
+			},
+			{
+				// Live happy path, cycle_breakdown mode, org scope, a
+				// small bounded window. See this spec's own doc comment
+				// for cycleBreakdownFloats' three fixed leaf-depth paths.
+				Name:                "cycle_breakdown_org_week",
+				Query:               url.Values{"mode": {"cycle_breakdown"}, "range_days": {"7"}},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode: RESTBodyModeJSON,
+				Parity:   Options{FloatTierB: cycleBreakdownFloats},
+			},
+			{
+				// Live happy path, code_hotspots mode, org scope, a small
+				// bounded window and a small limit. No Parity: see this
+				// spec's own doc comment -- every leaf here is an exact
+				// integer churn sum, compared Tier A.
+				Name:                "code_hotspots_org_week_limit5",
+				Query:               url.Values{"mode": {"code_hotspots"}, "range_days": {"7"}, "limit": {"5"}},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
 				BodyMode: RESTBodyModeJSON,
 			},
 		},
@@ -1459,6 +1560,7 @@ var restRunOrder = []string{
 	"REST:GET:/api/v1/explain",
 	"REST:POST:/api/v1/explain",
 	"REST:GET:/api/v1/flame",
+	"REST:GET:/api/v1/flame/aggregated",
 	"REST:POST:/api/v1/investment/explain",
 	"REST:GET:/api/v1/meta",
 	"REST:GET:/api/v1/quadrant",

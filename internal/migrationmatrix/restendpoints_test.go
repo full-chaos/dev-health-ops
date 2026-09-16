@@ -565,13 +565,22 @@ func TestLoadRESTEndpointsOnTheRealRepo(t *testing.T) {
 		t.Fatalf("GET /api/v1/people/{person_id}/drilldown/issues = %+v, want ported at people_drilldown_issues_route.go", peopleDrilldownIssuesGet)
 	}
 
+	flameAggregatedGet, ok := byKey["GET /api/v1/flame/aggregated"]
+	if !ok {
+		t.Fatal("expected GET /api/v1/flame/aggregated to be enumerated")
+	}
+	if flameAggregatedGet.Status != RESTPorted || !strings.Contains(flameAggregatedGet.GoHandler, "flame_aggregated_route.go") {
+		t.Fatalf("GET /api/v1/flame/aggregated = %+v, want ported at flame_aggregated_route.go", flameAggregatedGet)
+	}
+
 	ported, _, _ := RESTEndpointCounts(rows)
-	if ported != 16 {
-		t.Fatalf("got %d ported routes, want exactly 16 (POST /api/v1/investment/explain, GET /api/v1/quadrant, "+
+	if ported != 17 {
+		t.Fatalf("got %d ported routes, want exactly 17 (POST /api/v1/investment/explain, GET /api/v1/quadrant, "+
 			"GET /api/v1/filters/options, POST+GET /api/v1/drilldown/prs, GET /api/v1/meta, "+
 			"POST+GET /api/v1/drilldown/issues, POST+GET /api/v1/explain, GET /api/v1/people, "+
 			"GET /api/v1/people/{person_id}/summary, GET /api/v1/people/{person_id}/metric, GET /api/v1/flame, "+
-			"GET /api/v1/people/{person_id}/drilldown/prs, GET /api/v1/people/{person_id}/drilldown/issues) -- "+
+			"GET /api/v1/people/{person_id}/drilldown/prs, GET /api/v1/people/{person_id}/drilldown/issues, "+
+			"GET /api/v1/flame/aggregated) -- "+
 			"if this changed, a route was ported or un-ported; update this pin, it is not stale by accident", ported)
 	}
 }

@@ -1,0 +1,67 @@
+{
+  "meta": {
+    "approximation": {
+      "method": null,
+      "used": false
+    },
+    "filters": {
+      "team_id": "team-a",
+      "work_scope_id": "scope-1"
+    },
+    "notes": [],
+    "window_end": "2024-01-31",
+    "window_start": "2024-01-01"
+  },
+  "mode": "cycle_breakdown",
+  "root": {
+    "children": [
+      {
+        "children": [
+          {
+            "children": [],
+            "name": "in_progress",
+            "value": 120.5
+          }
+        ],
+        "name": "Active Work",
+        "value": 120.5
+      },
+      {
+        "children": [
+          {
+            "children": [],
+            "name": "review",
+            "value": 80.25
+          }
+        ],
+        "name": "Review",
+        "value": 80.25
+      },
+      {
+        "children": [
+          {
+            "children": [],
+            "name": "Blocked",
+            "value": 40.0
+          }
+        ],
+        "name": "Blocked",
+        "value": 40.0
+      },
+      {
+        "children": [
+          {
+            "children": [],
+            "name": "custom_status",
+            "value": 15.0
+          }
+        ],
+        "name": "Other",
+        "value": 15.0
+      }
+    ],
+    "name": "Cycle Time",
+    "value": 255.75
+  },
+  "unit": "hours"
+}

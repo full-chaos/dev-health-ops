@@ -504,13 +504,8 @@ func TestRenderFailsOnALiveRowTheCatalogCannotDispatch(t *testing.T) {
 
 // Mutant g36: -check's warning about rows it cannot judge was
 // unpinned. The fixture, not the committed page, carries the unjudgeable
-// row: earlier this test relied on the COMMITTED snapshot predating document
-// digests, so it silently stopped meaning anything the day a real -render
-// carried a document digest for every row (CHAOS-3033's production read did
-// exactly that -- 0 unjudged rows on the committed page is the correct,
-// current state, not a test regression). A self-contained fixture keeps the
-// mutant-detection value without depending on what the live data happens to
-// look like today.
+// row, so the assertion holds independent of whatever document digests the
+// live data currently happens to carry.
 func TestCheckWarnsAboutRowsItCannotJudge(t *testing.T) {
 	root := copyContractTree(t)
 	pin, err := migrationmatrix.SchemaDigestPin(filepath.Join(root, digestPinRelative))

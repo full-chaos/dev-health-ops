@@ -152,3 +152,43 @@ identities:
 		t.Fatalf("reverse[jane doe] = %q, want jane.doe@example.com", reverse["jane doe"])
 	}
 }
+
+// TestIdentityVariants pins identity_variants (people_identity.py:97-109):
+// the canonical identity, its aliases, a "provider:handle" identity's bare
+// handle, and an email identity's local-part plus lowercased form -- as a
+// set (order-independent, membership only, see identityVariants' own doc
+// comment).
+func TestIdentityVariants(t *testing.T) {
+	got := identityVariants("Jane.Doe@Example.com", []string{"github:jdoe", "Jane Doe"})
+	want := map[string]bool{
+		"Jane.Doe@Example.com": true,
+		"github:jdoe":          true,
+		"Jane Doe":             true,
+		"Jane.Doe":             true,
+		"jane.doe@example.com": true,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("identityVariants(...) = %v, want set of size %d", got, len(want))
+	}
+	for _, v := range got {
+		if !want[v] {
+			t.Fatalf("identityVariants(...) contains unexpected %q, got %v", v, got)
+		}
+	}
+}
+
+// TestIdentityVariantsHandleFromProviderPrefix pins the "provider:handle"
+// branch (people_identity.py:104-106) in isolation, with no aliases and
+// no "@".
+func TestIdentityVariantsHandleFromProviderPrefix(t *testing.T) {
+	got := identityVariants("github:octocat", nil)
+	want := map[string]bool{"github:octocat": true, "octocat": true}
+	if len(got) != len(want) {
+		t.Fatalf("identityVariants(...) = %v, want set of size %d", got, len(want))
+	}
+	for _, v := range got {
+		if !want[v] {
+			t.Fatalf("identityVariants(...) contains unexpected %q, got %v", v, got)
+		}
+	}
+}

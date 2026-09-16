@@ -191,6 +191,69 @@ func init() {
 	}
 }
 
+// TestLoadRESTEndpointsMatchesAPathParameterRoute is a fixture-only,
+// isolated-from-the-real-repo proof for the people/{person_id} route
+// pair's own concern (people_summary_route.go's package doc comment): a Go 1.22+
+// "{person_id}"-shaped net/http.ServeMux pattern is registered as a
+// PLAIN STRING LITERAL (mux.HandleFunc's own convention every route in
+// this file follows), and LoadFastAPIRoutes reads main.py's matching
+// decorator's own "{person_id}"-shaped literal the same way -- so
+// LoadRESTEndpoints' path-equality match (byPath, no regex, no
+// mux-pattern parsing) pairs the two and renders "ported" with NO
+// matcher change, the same way TestLoadFastAPIRoutesParsesSingleAndMulti
+// lineDecoratorsAndMethodLists already proves LoadFastAPIRoutes alone
+// handles "{work_unit_id}". This end-to-end version closes the gap that
+// fixture left open: pairing against an ACTUAL mux.HandleFunc
+// registration, not just the Python side.
+func TestLoadRESTEndpointsMatchesAPathParameterRoute(t *testing.T) {
+	dir := t.TempDir()
+	mainPy := writeTempFile(t, dir, "main.py", `@app.get("/api/v1/people/{person_id}/summary", response_model=PersonSummaryResponse)
+async def people_summary(person_id: str, request: Request):
+    ...
+`)
+	queryAPIDir := filepath.Join(dir, "cmd", "query-api")
+	writeTempFile(t, queryAPIDir, "main.go", `package main
+
+import "net/http"
+
+func main() {
+	mux := http.NewServeMux()
+	if h, cleanup, ok, err := buildPeopleSummaryRoute(); err != nil {
+		panic(err)
+	} else if ok {
+		defer cleanup()
+		mux.HandleFunc("/api/v1/people/{person_id}/summary", h)
+	}
+}
+`)
+	writeTempFile(t, queryAPIDir, "people_summary_route.go", `package main
+
+import "net/http"
+
+func buildPeopleSummaryRoute() (handler http.HandlerFunc, cleanup func(), ok bool, err error) {
+	return nil, func() {}, true, nil
+}
+`)
+
+	rows, err := LoadRESTEndpoints(mainPy, queryAPIDir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("got %+v, want exactly one row", rows)
+	}
+	row := rows[0]
+	if row.Method != "GET" || row.Path != "/api/v1/people/{person_id}/summary" {
+		t.Fatalf("row = %+v, want GET /api/v1/people/{person_id}/summary", row)
+	}
+	if row.Status != RESTPorted {
+		t.Fatalf("row.Status = %q, want %q -- a {person_id}-shaped path must match its identically-spelled Go mux registration", row.Status, RESTPorted)
+	}
+	if !strings.Contains(row.GoHandler, "people_summary_route.go:5") {
+		t.Fatalf("row.GoHandler = %q, want it to resolve to buildPeopleSummaryRoute's definition (people_summary_route.go:5)", row.GoHandler)
+	}
+}
+
 // TestLoadRESTEndpointsCatchesANewlyAddedPythonOnlyRoute is the red-first
 // case the brief asks for: before this section existed, a route added to
 // main.py with nothing on the Go side left no trace anywhere on the board.
@@ -451,11 +514,36 @@ func TestLoadRESTEndpointsOnTheRealRepo(t *testing.T) {
 		t.Fatalf("GET /api/v1/people = %+v, want ported at people_route.go", peopleGet)
 	}
 
+	// The first PATH-PARAMETER routes this repo ports -- query-api's
+	// mux registers "/api/v1/people/{person_id}/summary" as a
+	// literal string (mux.HandleFunc's own registration convention every
+	// route in this file follows), and LoadFastAPIRoutes reads main.py's
+	// own "{person_id}"-shaped decorator literal verbatim too: both sides
+	// are plain string equality on the SAME "{person_id}" text, so no
+	// matcher change was needed for a "{...}" segment to render "ported".
+	peopleSummaryGet, ok := byKey["GET /api/v1/people/{person_id}/summary"]
+	if !ok {
+		t.Fatal("expected GET /api/v1/people/{person_id}/summary to be enumerated")
+	}
+	if peopleSummaryGet.Status != RESTPorted || !strings.Contains(peopleSummaryGet.GoHandler, "people_summary_route.go") {
+		t.Fatalf("GET /api/v1/people/{person_id}/summary = %+v, want ported at people_summary_route.go", peopleSummaryGet)
+	}
+
+	// Same path-parameter shape, sibling route.
+	peopleMetricGet, ok := byKey["GET /api/v1/people/{person_id}/metric"]
+	if !ok {
+		t.Fatal("expected GET /api/v1/people/{person_id}/metric to be enumerated")
+	}
+	if peopleMetricGet.Status != RESTPorted || !strings.Contains(peopleMetricGet.GoHandler, "people_metric_route.go") {
+		t.Fatalf("GET /api/v1/people/{person_id}/metric = %+v, want ported at people_metric_route.go", peopleMetricGet)
+	}
+
 	ported, _, _ := RESTEndpointCounts(rows)
-	if ported != 11 {
-		t.Fatalf("got %d ported routes, want exactly 11 (POST /api/v1/investment/explain, GET /api/v1/quadrant, "+
+	if ported != 13 {
+		t.Fatalf("got %d ported routes, want exactly 13 (POST /api/v1/investment/explain, GET /api/v1/quadrant, "+
 			"GET /api/v1/filters/options, POST+GET /api/v1/drilldown/prs, GET /api/v1/meta, "+
-			"POST+GET /api/v1/drilldown/issues, POST+GET /api/v1/explain, GET /api/v1/people) -- "+
+			"POST+GET /api/v1/drilldown/issues, POST+GET /api/v1/explain, GET /api/v1/people, "+
+			"GET /api/v1/people/{person_id}/summary, GET /api/v1/people/{person_id}/metric) -- "+
 			"if this changed, a route was ported or un-ported; update this pin, it is not stale by accident", ported)
 	}
 }

@@ -1,0 +1,42 @@
+{
+  "metric": "review_latency",
+  "label": "Review Latency",
+  "definition": {
+    "description": "Time from pull request creation to first review.",
+    "interpretation": "Lower values mean reviews start sooner."
+  },
+  "timeseries": [
+    {
+      "day": "2024-06-10",
+      "value": 4.0
+    },
+    {
+      "day": "2024-06-12",
+      "value": 5.0
+    },
+    {
+      "day": "2024-06-13",
+      "value": 0.0
+    }
+  ],
+  "breakdowns": {
+    "by_repo": [
+      {
+        "label": "acme/web",
+        "value": 6.0
+      },
+      {
+        "label": "acme/api",
+        "value": 2.0
+      }
+    ],
+    "by_work_type": [],
+    "by_stage": []
+  },
+  "drivers": [
+    {
+      "text": "acme/web accounts for 75% of this period.",
+      "link": "/api/v1/people/unused-input/drilldown/prs?metric=review_latency"
+    }
+  ]
+}

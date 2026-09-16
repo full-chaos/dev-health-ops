@@ -1,0 +1,200 @@
+{
+  "person": {
+    "person_id": "c160f8cc69a4f0bf2b0362752353d060",
+    "display_name": "Alice",
+    "identities": [
+      {
+        "provider": "email",
+        "handle": "alice@example.com"
+      }
+    ]
+  },
+  "freshness": {
+    "last_ingested_at": "2024-06-14T12:00:00Z",
+    "latest_successful_sync_at": null,
+    "sources": {
+      "github": "ok",
+      "gitlab": "ok",
+      "jira": "ok",
+      "ci": "ok"
+    },
+    "coverage": {
+      "repos_covered_pct": 80.0,
+      "prs_linked_to_issues_pct": 60.0,
+      "issues_with_cycle_states_pct": 50.0
+    }
+  },
+  "identity_coverage_pct": 100.0,
+  "deltas": [
+    {
+      "metric": "cycle_time",
+      "label": "Cycle Time",
+      "value": 2.0,
+      "unit": "days",
+      "delta_pct": -20.0,
+      "spark": [
+        {
+          "ts": "2024-06-10T00:00:00Z",
+          "value": 1.6000000000000003
+        },
+        {
+          "ts": "2024-06-12T00:00:00Z",
+          "value": 2.0
+        }
+      ]
+    },
+    {
+      "metric": "review_latency",
+      "label": "Review Latency",
+      "value": 5.0,
+      "unit": "hours",
+      "delta_pct": 25.0,
+      "spark": [
+        {
+          "ts": "2024-06-10T00:00:00Z",
+          "value": 4.0
+        },
+        {
+          "ts": "2024-06-12T00:00:00Z",
+          "value": 5.0
+        }
+      ]
+    },
+    {
+      "metric": "throughput",
+      "label": "Throughput",
+      "value": 20.0,
+      "unit": "items",
+      "delta_pct": 33.33333333333333,
+      "spark": [
+        {
+          "ts": "2024-06-10T00:00:00Z",
+          "value": 16.0
+        },
+        {
+          "ts": "2024-06-12T00:00:00Z",
+          "value": 20.0
+        }
+      ]
+    },
+    {
+      "metric": "churn",
+      "label": "Code Churn",
+      "value": 500.0,
+      "unit": "loc",
+      "delta_pct": 0.0,
+      "spark": [
+        {
+          "ts": "2024-06-10T00:00:00Z",
+          "value": 400.0
+        },
+        {
+          "ts": "2024-06-12T00:00:00Z",
+          "value": 500.0
+        }
+      ]
+    },
+    {
+      "metric": "wip_overlap",
+      "label": "WIP Overlap",
+      "value": 3.0,
+      "unit": "items",
+      "delta_pct": 0.0,
+      "spark": [
+        {
+          "ts": "2024-06-10T00:00:00Z",
+          "value": 2.4000000000000004
+        },
+        {
+          "ts": "2024-06-12T00:00:00Z",
+          "value": 3.0
+        }
+      ]
+    },
+    {
+      "metric": "blocked_work",
+      "label": "Blocked Work",
+      "value": 2.0,
+      "unit": "items",
+      "delta_pct": 100.0,
+      "spark": [
+        {
+          "ts": "2024-06-10T00:00:00Z",
+          "value": 1.6
+        },
+        {
+          "ts": "2024-06-12T00:00:00Z",
+          "value": 2.0
+        }
+      ]
+    }
+  ],
+  "narrative": [
+    {
+      "id": "n1",
+      "text": "Blocked work increased in this period.",
+      "evidence_link": "/api/v1/people/c160f8cc69a4f0bf2b0362752353d060/metric?metric=blocked_work&range_days=14&compare_days=14"
+    },
+    {
+      "id": "n2",
+      "text": "Throughput increased compared to the prior period.",
+      "evidence_link": "/api/v1/people/c160f8cc69a4f0bf2b0362752353d060/metric?metric=throughput&range_days=14&compare_days=14"
+    }
+  ],
+  "sections": {
+    "work_mix": [
+      {
+        "key": "bug",
+        "name": "Bug",
+        "value": 5.0
+      },
+      {
+        "key": "unknown",
+        "name": "Unknown",
+        "value": 2.0
+      }
+    ],
+    "flow_breakdown": [
+      {
+        "stage": "Active",
+        "value": 12.5,
+        "unit": "hours"
+      },
+      {
+        "stage": "Waiting",
+        "value": 3.2,
+        "unit": "hours"
+      }
+    ],
+    "collaboration": {
+      "review_load": [
+        {
+          "label": "Reviews given",
+          "value": 10.0
+        },
+        {
+          "label": "Reviews received",
+          "value": 8.0
+        },
+        {
+          "label": "PRs authored",
+          "value": 6.0
+        },
+        {
+          "label": "PRs merged",
+          "value": 5.0
+        }
+      ],
+      "handoff_points": [
+        {
+          "label": "Items started",
+          "value": 4.0
+        },
+        {
+          "label": "Items completed",
+          "value": 3.0
+        }
+      ]
+    }
+  }
+}

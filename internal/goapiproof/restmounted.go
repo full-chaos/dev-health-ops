@@ -11,7 +11,7 @@ import "sort"
 // (docker/go-api-tools.Dockerfile) ships ONLY the compiled binaries, never
 // the Go source tree -- it exists to be `kubectl exec`ed into for one-off
 // verb runs, not to carry a checkout. Requiring cmd/query-api's full
-// source there, purely so a regex could re-derive eight literal path
+// source there, purely so a regex could re-derive this list's literal path
 // strings from it on every invocation, meant the tool could not run in
 // its own deployed image at all (found verifying this exact gap: the
 // runtime stage copies the go-api-rest-prove BINARY but never the source
@@ -44,14 +44,16 @@ import "sort"
 // internal/migrationmatrix import here; the pin test lives in
 // cmd/go-api-rest-prove instead, which already imports both).
 var mountedRESTPaths = []string{
-	"/api/v1/drilldown/issues",   // GET, POST
-	"/api/v1/drilldown/prs",      // GET, POST
-	"/api/v1/explain",            // GET, POST
-	"/api/v1/filters/options",    // GET
-	"/api/v1/investment/explain", // POST
-	"/api/v1/meta",               // GET
-	"/api/v1/people",             // GET
-	"/api/v1/quadrant",           // GET
+	"/api/v1/drilldown/issues",           // GET, POST
+	"/api/v1/drilldown/prs",              // GET, POST
+	"/api/v1/explain",                    // GET, POST
+	"/api/v1/filters/options",            // GET
+	"/api/v1/investment/explain",         // POST
+	"/api/v1/meta",                       // GET
+	"/api/v1/people",                     // GET
+	"/api/v1/people/{person_id}/metric",  // GET
+	"/api/v1/people/{person_id}/summary", // GET
+	"/api/v1/quadrant",                   // GET
 }
 
 // MountedRESTPaths returns a fresh, sorted copy of the checked-in mounted

@@ -70,6 +70,28 @@ func TestResolveWorkUnitTeamAttributions_QueryShape(t *testing.T) {
 	}
 }
 
+// TestResolveWorkUnitTeamAttributions_AppliesPerStatementResultRowBudget
+// pins that the query text carries a trailing SETTINGS clause raising
+// max_result_rows to exactly probeLimit (limit+1), regardless of
+// whatever max_result_rows ceiling the underlying ClickHouse client's
+// connection defaults to -- the fix for the probe itself erroring with
+// ClickHouse code 396 ("Limit for result exceeded") once a caller's real
+// row count sits between a client's connection-wide ceiling (1,000 when
+// unset) and the probe width.
+func TestResolveWorkUnitTeamAttributions_AppliesPerStatementResultRowBudget(t *testing.T) {
+	client := &fakeClient{responses: []*fakeRowScanner{{rows: [][]any{}}}}
+
+	_, err := resolveWorkUnitTeamAttributions(context.Background(), client, "org1", nil, nil, 5000)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	stmt := client.statements[0]
+	wantSettings := "SETTINGS max_result_rows = 5001, result_overflow_mode = 'throw'"
+	if !strings.HasSuffix(strings.TrimRight(stmt, "\n"), wantSettings) {
+		t.Fatalf("query does not end with the expected per-statement row budget %q; got:\n%s", wantSettings, stmt)
+	}
+}
+
 // TestResolveWorkUnitTeamAttributions_NoFiltersOmitsClauses is the
 // complementary case: empty workUnitIDs / nil teamID must not render
 // either optional clause or bind either optional parameter, matching

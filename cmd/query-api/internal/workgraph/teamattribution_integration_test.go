@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -414,6 +415,61 @@ func TestResolveWorkUnitTeamAttributions_TruncationSignalRealEngine(t *testing.T
 	}
 	if got := truncationCounterValue(t, afterRM); got != counterValueBefore {
 		t.Fatalf("truncation counter incremented (%d -> %d) for a limit exactly equal to the real row count (false positive, TRUNC-1)", counterValueBefore, got)
+	}
+}
+
+// TestResolveWorkUnitTeamAttributions_ProbeSucceedsPastClientDefaultRowCapRealEngine
+// is the row-budget half of this reader's truncation-signal proof, against
+// a REAL ClickHouse engine and the SAME bare-Options client every other
+// test in this file uses (newTeamAttributionTestClickHouse -- no
+// connection-wide MaxResultRows override, so the client carries
+// dev-health-go's unset-default ceiling of 1,000 rows). It seeds one more
+// matching work unit than that default ceiling and calls
+// resolveWorkUnitTeamAttributions with limit=1000: the limit+1 probe asks
+// ClickHouse for 1,001 rows, one past the connection's own ceiling. Before
+// this reader carried its own per-statement row budget, that probe itself
+// failed with ClickHouse code 396 ("Limit for result exceeded") instead of
+// returning the truncated page the caller-visible cap promises -- the
+// truncation path erroring exactly when a tenant needed it. With the
+// budget in place, the probe succeeds, the result is capped at exactly
+// limit rows, and the truncation signal fires.
+func TestResolveWorkUnitTeamAttributions_ProbeSucceedsPastClientDefaultRowCapRealEngine(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	defer cancel()
+	admin, client := newTeamAttributionTestClickHouse(ctx, t)
+
+	const orgID = "org-5534-row-cap"
+	const runID = "run-5534-row-cap"
+	now := time.Now().UTC()
+	seedRunMarker(ctx, t, admin, orgID, runID, now)
+
+	// dev-health-go's clickhouse.Client defaults an unset Options.MaxResultRows
+	// connection ceiling to 1,000 rows (clickhouse/options.go,
+	// resolveCeilingUint) -- newTeamAttributionTestClickHouse's client never
+	// sets it, matching that default exactly.
+	const clientDefaultRowCap = 1000
+	const seedCount = clientDefaultRowCap + 1 // one past the probe's own reach
+
+	memberships := make([]membershipSeed, 0, seedCount)
+	attributions := make([]attributionSeed, 0, seedCount)
+	for i := 0; i < seedCount; i++ {
+		workItemID := fmt.Sprintf("wi-cap-%04d", i)
+		workUnitID := fmt.Sprintf("wu-cap-%04d", i)
+		memberships = append(memberships, membershipSeed{"issue", workItemID, workUnitID})
+		attributions = append(attributions, attributionSeed{
+			workItemID: workItemID, teamID: "team-cap", teamName: "Team Cap",
+			source: "native_team", confidence: "high",
+		})
+	}
+	seedMembership(ctx, t, admin, orgID, runID, now, memberships)
+	seedAttributions(ctx, t, admin, orgID, now, attributions)
+
+	got, err := resolveWorkUnitTeamAttributions(ctx, client, orgID, nil, nil, clientDefaultRowCap)
+	if err != nil {
+		t.Fatalf("resolveWorkUnitTeamAttributions: %v (the limit+1 probe reads %d rows, past the client's own %d-row default ceiling, without a per-statement row budget covering it)", err, seedCount, clientDefaultRowCap)
+	}
+	if len(got) != clientDefaultRowCap {
+		t.Fatalf("got %d results, want the %d-row cap", len(got), clientDefaultRowCap)
 	}
 }
 

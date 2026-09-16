@@ -38,6 +38,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
+	"github.com/full-chaos/dev-health-go/readers"
 
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph/model"
 )
@@ -190,6 +191,26 @@ func resolveWorkUnitTeamAttributions(ctx context.Context, client QueryClient, or
 	// widened by one row.
 	probeLimit := limit + 1
 	bindings = append(bindings, clickhouse.Binding{Name: "limit", Value: uint64(probeLimit)})
+
+	// A ClickHouse client whose Options never set MaxResultRows defaults
+	// its connection-wide ceiling to 1,000 rows (dev-health-go's
+	// clickhouse/options.go, resolveCeilingUint) -- below probeLimit for
+	// any org whose real work-unit count approaches
+	// workUnitTeamAttributionsMaxRows. Even a caller that layers its own
+	// higher connection-wide ceiling onto a shared client is configuring a
+	// different thing: an allowance sized for that caller's workload, not
+	// a floor this reader can rely on other callers of the same client to
+	// keep in place. Without its own floor, a tenant whose true count sits
+	// between the connection's ceiling and probeLimit hit ClickHouse code
+	// 396 ("Limit for result exceeded") on the probe itself -- the exact
+	// row this function reads specifically to detect truncation safely,
+	// erroring instead of returning the truncated page it exists to
+	// produce. This SETTINGS clause (readers.WithSettings, dev-health-go's
+	// per-statement query-complexity primitive) asks ClickHouse for a
+	// max_result_rows floor of probeLimit on this statement only --
+	// leaving the caller-visible cap (workUnitTeamAttributionsMaxRows) and
+	// the client's own connection-wide setting both unchanged.
+	query = readers.WithSettings(query, readers.Settings{MaxResultRows: uint64(probeLimit)})
 
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {
@@ -369,7 +390,7 @@ func defaultRecordWorkUnitTeamAttributionsTruncation(ctx context.Context, orgID 
 	slog.WarnContext(ctx, "query_api.workgraph.work_unit_team_attributions.truncated",
 		"org_id", orgID,
 		"limit", limit,
-		"reason", "returned row count equals the cap; more matching work units may exist (CHAOS-3969)",
+		"reason", "the limit+1 probe row was returned; more matching work units exist beyond the cap",
 	)
 	incrementWorkUnitTeamAttributionsTruncationCounter(ctx)
 }

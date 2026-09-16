@@ -251,6 +251,33 @@ func TestSelectNextGitLabBlamePathsPreservesTreeOrderAndBound(t *testing.T) {
 	}
 }
 
+type gitLabBlameAlwaysFailingDoer struct{ t *testing.T }
+
+func (doer *gitLabBlameAlwaysFailingDoer) Do(*http.Request) (*http.Response, error) {
+	doer.t.Helper()
+	return nil, errors.New("simulated transport failure")
+}
+
+// TestGitLabBlameTreeRefReturnsZeroPagesOnError pins gitLabBlameTreeRef's
+// error return: CollectGitLabPageParamPages returns a zero-value
+// PageCollection on every one of its own error paths, so the page count
+// reported alongside an error is always 0 -- this asserts that literal
+// rather than a read of the pre-call variable.
+func TestGitLabBlameTreeRefReturnsZeroPagesOnError(t *testing.T) {
+	client := gitLabRepositoryClient(t, &gitLabBlameAlwaysFailingDoer{t: t}, "https://gitlab.example")
+	beforeAt := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
+	ref, pages, err := gitLabBlameTreeRef(context.Background(), client, "/api/v4/projects/123", "main", &beforeAt)
+	if err == nil {
+		t.Fatal("want error from a failing transport")
+	}
+	if ref != "" {
+		t.Fatalf("ref=%q, want empty on error", ref)
+	}
+	if pages != 0 {
+		t.Fatalf("pages=%d, want 0 on error", pages)
+	}
+}
+
 func TestGitLabBlameRouteRejectsWrongDataset(t *testing.T) {
 	claim := nativeTestClaim("gitlab", "files")
 	client := gitLabRepositoryClient(t, &gitLabBlameDoer{t: t}, "https://gitlab.example")

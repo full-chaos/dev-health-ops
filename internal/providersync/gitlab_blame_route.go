@@ -336,7 +336,10 @@ func gitLabBlameTreeRef(
 			PerPage: 1, MaxPages: 1, SinglePage: true,
 		})
 	if err != nil {
-		return "", page.Pages, err
+		// CollectGitLabPageParamPages returns a zero-value PageCollection on
+		// every error path, so the page count on error is always 0 -- a
+		// literal, not a read of the value the error path may have modified.
+		return "", 0, err
 	}
 	if len(page.Items) == 0 {
 		return "", page.Pages, nil

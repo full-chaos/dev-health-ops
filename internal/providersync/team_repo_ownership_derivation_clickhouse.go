@@ -346,12 +346,12 @@ WHERE org_id = ?`,
 // linear_team_key arm uses this to validate a Linear work item's
 // native_team_key before trusting it as a resolved team_id, exactly like
 // every other native-team resolution in this codebase (see
-// TeamRepoOwnershipKnownTeam's doc comment). GROUP BY + argMax on `is_active`
-// mirrors github_work_items_derivation_context.go's loadTeams -- the
-// established convention for reading `teams` here, since its
-// ReplacingMergeTree ORDER BY is `(id)` alone (no org_id), so a plain `FINAL`
-// filtered only by a WHERE clause is not itself a safe per-org collapse.
-// Scoped to provider='linear' since that is the only provider this
+// TeamRepoOwnershipKnownTeam's doc comment). `teams` has been keyed
+// org_id-first since migration 061 (ReplacingMergeTree ORDER BY
+// (org_id, id)); GROUP BY + argMax on `is_active`, scoped by the WHERE
+// org_id clause below, follows the same tuple-argMax convention this
+// codebase's other `teams` readers use rather than reading via a plain
+// `FINAL`. Scoped to provider='linear' since that is the only provider this
 // validation set is used for.
 func loadTeamRepoOwnershipKnownTeams(
 	ctx context.Context, conn driver.Conn, orgID string,

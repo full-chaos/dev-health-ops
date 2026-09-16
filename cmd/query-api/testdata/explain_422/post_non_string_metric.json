@@ -1,0 +1,13 @@
+{
+  "detail": [
+    {
+      "type": "string_type",
+      "loc": [
+        "body",
+        "metric"
+      ],
+      "msg": "Input should be a valid string",
+      "input": 5
+    }
+  ]
+}

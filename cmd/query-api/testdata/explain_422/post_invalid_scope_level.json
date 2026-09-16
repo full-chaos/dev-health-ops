@@ -1,0 +1,18 @@
+{
+  "detail": [
+    {
+      "type": "literal_error",
+      "loc": [
+        "body",
+        "filters",
+        "scope",
+        "level"
+      ],
+      "msg": "Input should be 'org', 'team', 'repo', 'service' or 'developer'",
+      "input": "bogus",
+      "ctx": {
+        "expected": "'org', 'team', 'repo', 'service' or 'developer'"
+      }
+    }
+  ]
+}

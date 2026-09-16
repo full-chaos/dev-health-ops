@@ -1,0 +1,47 @@
+{
+  "metric": "throughput",
+  "label": "Throughput",
+  "unit": "items",
+  "value": 120.0,
+  "delta_pct": 20.0,
+  "drivers": [
+    {
+      "id": "team-a",
+      "label": "Team Alpha",
+      "value": 80.0,
+      "delta_pct": 25.0,
+      "evidence_link": "/api/v1/drilldown/prs?metric=throughput&scope_type=org&scope_id=",
+      "display_name": "Team Alpha"
+    },
+    {
+      "id": "22222222-2222-2222-2222-222222222222",
+      "label": "#22222222",
+      "value": 40.0,
+      "delta_pct": -10.0,
+      "evidence_link": "/api/v1/drilldown/prs?metric=throughput&scope_type=org&scope_id=",
+      "display_name": null
+    }
+  ],
+  "contributors": [
+    {
+      "id": "team-a",
+      "label": "Team Alpha",
+      "value": 80.0,
+      "delta_pct": 0.0,
+      "evidence_link": "/api/v1/drilldown/prs?metric=throughput&scope_type=org&scope_id=",
+      "display_name": "Team Alpha"
+    },
+    {
+      "id": "22222222-2222-2222-2222-222222222222",
+      "label": "#22222222",
+      "value": 40.0,
+      "delta_pct": 0.0,
+      "evidence_link": "/api/v1/drilldown/prs?metric=throughput&scope_type=org&scope_id=",
+      "display_name": null
+    }
+  ],
+  "drilldown_links": {
+    "prs": "/api/v1/drilldown/prs?metric=throughput",
+    "issues": "/api/v1/drilldown/issues?metric=throughput"
+  }
+}

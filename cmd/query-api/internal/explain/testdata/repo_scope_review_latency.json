@@ -1,0 +1,31 @@
+{
+  "metric": "review_latency",
+  "label": "Review Latency",
+  "unit": "hours",
+  "value": 5.0,
+  "delta_pct": -50.0,
+  "drivers": [
+    {
+      "id": "33333333-3333-3333-3333-333333333333",
+      "label": "acme/webapp",
+      "value": 5.0,
+      "delta_pct": -50.0,
+      "evidence_link": "/api/v1/drilldown/prs?metric=review_latency&scope_type=repo&scope_id=acme/webapp",
+      "display_name": "acme/webapp"
+    }
+  ],
+  "contributors": [
+    {
+      "id": "33333333-3333-3333-3333-333333333333",
+      "label": "acme/webapp",
+      "value": 5.0,
+      "delta_pct": 0.0,
+      "evidence_link": "/api/v1/drilldown/prs?metric=review_latency&scope_type=repo&scope_id=acme/webapp",
+      "display_name": "acme/webapp"
+    }
+  ],
+  "drilldown_links": {
+    "prs": "/api/v1/drilldown/prs?metric=review_latency",
+    "issues": "/api/v1/drilldown/issues?metric=review_latency"
+  }
+}

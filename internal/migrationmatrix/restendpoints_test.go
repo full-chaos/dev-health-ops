@@ -426,11 +426,28 @@ func TestLoadRESTEndpointsOnTheRealRepo(t *testing.T) {
 		t.Fatalf("GET /api/v1/drilldown/issues = %+v, want ported at drilldown_issues_route.go", drilldownIssuesGet)
 	}
 
+	explainPost, ok := byKey["POST /api/v1/explain"]
+	if !ok {
+		t.Fatal("expected POST /api/v1/explain to be enumerated")
+	}
+	if explainPost.Status != RESTPorted || !strings.Contains(explainPost.GoHandler, "explain_route.go") {
+		t.Fatalf("POST /api/v1/explain = %+v, want ported at explain_route.go", explainPost)
+	}
+
+	explainGet, ok := byKey["GET /api/v1/explain"]
+	if !ok {
+		t.Fatal("expected GET /api/v1/explain to be enumerated")
+	}
+	// Same both-methods-actually-wired case as drilldown/prs above.
+	if explainGet.Status != RESTPorted || !strings.Contains(explainGet.GoHandler, "explain_route.go") {
+		t.Fatalf("GET /api/v1/explain = %+v, want ported at explain_route.go", explainGet)
+	}
+
 	ported, _, _ := RESTEndpointCounts(rows)
-	if ported != 8 {
-		t.Fatalf("got %d ported routes, want exactly 8 (POST /api/v1/investment/explain, GET /api/v1/quadrant, "+
+	if ported != 10 {
+		t.Fatalf("got %d ported routes, want exactly 10 (POST /api/v1/investment/explain, GET /api/v1/quadrant, "+
 			"GET /api/v1/filters/options, POST+GET /api/v1/drilldown/prs, GET /api/v1/meta, "+
-			"POST+GET /api/v1/drilldown/issues) -- if this changed, "+
+			"POST+GET /api/v1/drilldown/issues, POST+GET /api/v1/explain) -- if this changed, "+
 			"a route was ported or un-ported; update this pin, it is not stale by accident", ported)
 	}
 }

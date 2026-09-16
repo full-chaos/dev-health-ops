@@ -29,7 +29,7 @@ func TestRequireOrganizationScope(t *testing.T) {
 		{name: "unknown but non-empty org is allowed through", org: "not-a-real-org", refused: false,
 			rationale: "existence is the query's answer, not the guard's"},
 		{name: "zero uuid is allowed through", org: "00000000-0000-0000-0000-000000000000", refused: false,
-			rationale: "non-empty; matching python's truthiness, and consistent with CHAOS-4804's repo_id gate"},
+			rationale: "non-empty; matching python's truthiness"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			err := RequireOrganizationScope(testCase.org)
@@ -46,7 +46,7 @@ func TestRequireOrganizationScope(t *testing.T) {
 			// The message must say WHAT goes wrong, not just that something did:
 			// an operator seeing this needs to know it is a tenant-isolation
 			// refusal, not a missing-argument nag.
-			if !strings.Contains(err.Error(), "CHAOS-4804") {
+			if !strings.Contains(err.Error(), "fuse them into shared components") {
 				t.Errorf("error should cite the defect it prevents, got %q", err)
 			}
 		})
@@ -56,9 +56,10 @@ func TestRequireOrganizationScope(t *testing.T) {
 // TestGuardHasNoUnscopedEscapeHatch pins the deliberate divergence from Python.
 //
 // Python permits an empty org for `mock`/`none` providers and for
-// allow_unscoped runs; those escape hatches are what make CHAOS-4804 reachable
-// at all. The Go guard takes only the org, so there is no argument that could
-// re-open them — the absence is structural, not a policy someone can flip.
+// allow_unscoped runs; those escape hatches are what make an unscoped read
+// reachable at all. The Go guard takes only the org, so there is no argument
+// that could re-open them — the absence is structural, not a policy someone
+// can flip.
 func TestGuardHasNoUnscopedEscapeHatch(t *testing.T) {
 	// The signature itself is the assertion: one string in, one error out. If a
 	// future change adds an allowUnscoped bool, this test stops compiling and

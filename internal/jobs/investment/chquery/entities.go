@@ -3,6 +3,7 @@ package chquery
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sort"
 	"time"
 
@@ -227,43 +228,41 @@ func (reader *Reader) FetchParentTitles(ctx context.Context, workItemIDs []strin
 
 // FetchWorkItemActiveHours ports queries.py:160-186 fetch_work_item_active_hours.
 //
-// CHAOS-4804: the org filter is CONDITIONAL but the GROUP BY is on
-// work_item_id ALONE, not (org_id, work_item_id). With an org the two agree;
-// with an empty org the filter disappears and the grouping collapses every
-// org's rows for a work-item id into one, returning whichever tenant wrote
-// last. work_item_id is provider-scoped, not tenant-scoped, so that is a real
-// cross-tenant read.
-//
-// Python's shape is preserved here DELIBERATELY. Fixing it on the Go side
-// alone would be an unflagged behaviour divergence between two planes that
-// must group identically, which is the failure mode this whole port exists to
-// avoid. CHAOS-4804 carries the fix for both planes at once — including that
-// the same-named API-plane function (api/queries/work_units.py:76) filters
-// UNCONDITIONALLY and therefore fails the OPPOSITE way on the same input.
+// The org filter is mandatory: work_item_id is provider-scoped, not
+// tenant-scoped, so a read with no org predicate would let
+// argMax(active_time_hours, computed_at) collapse every tenant's rows for a
+// shared work-item id into one group and return whichever tenant wrote it
+// last. An empty organizationID is refused outright before any query runs
+// (see ErrOrganizationIDRequired) rather than silently reading across
+// tenants, and the aggregation groups by (org_id, work_item_id) so the
+// GROUP BY key agrees with the filter by construction.
 func (reader *Reader) FetchWorkItemActiveHours(ctx context.Context, workItemIDs []string, organizationID string) (map[string]float64, error) {
 	if reader == nil || reader.conn == nil {
 		return nil, ErrUnavailable
+	}
+	if organizationID == "" {
+		slog.Error("chquery: refused an unscoped read", "reader", "FetchWorkItemActiveHours")
+		return nil, fmt.Errorf("FetchWorkItemActiveHours: %w", ErrOrganizationIDRequired)
 	}
 	ids := dedupeStrings(workItemIDs)
 	if len(ids) == 0 {
 		return map[string]float64{}, nil
 	}
 
-	whereSQL := "WHERE work_item_id IN {work_item_ids:Array(String)}"
-	arguments := []any{clickhouse.Named("work_item_ids", ids)}
-	if organizationID != "" {
-		whereSQL += " AND org_id = {org_id:String}"
-		arguments = append(arguments, clickhouse.Named("org_id", organizationID))
+	arguments := []any{
+		clickhouse.Named("work_item_ids", ids),
+		clickhouse.Named("org_id", organizationID),
 	}
 
-	query := fmt.Sprintf(`
+	query := `
         SELECT
             work_item_id,
             argMax(active_time_hours, computed_at) AS active_time_hours
         FROM work_item_cycle_times
-        %s
-        GROUP BY work_item_id
-    `, whereSQL)
+        WHERE work_item_id IN {work_item_ids:Array(String)}
+          AND org_id = {org_id:String}
+        GROUP BY org_id, work_item_id
+    `
 
 	rows, err := reader.conn.Query(ctx, query, arguments...)
 	if err != nil {
@@ -623,9 +622,9 @@ type InvestmentKey struct {
 //
 // # WHY THE org_id FILTER IS UNCONDITIONAL HERE
 //
-// Every other fetcher in this package makes the org predicate conditional,
-// faithfully reproducing Python's CHAOS-4804 tenant-fusion shape. This one does
-// not, because the reference does not either: materialize.py binds `org_id`
+// Some fetchers in this package make the org predicate conditional, matching
+// materialize.py's own per-table `if org_id:` shape. This one does not,
+// because the reference does not either: materialize.py binds `org_id`
 // unconditionally (`WHERE org_id = %(org_id)s`, :720), so an unscoped run
 // matches only rows literally written with org_id = ”. Making it conditional
 // here would be a divergence, and a costly one in the safe-looking direction --

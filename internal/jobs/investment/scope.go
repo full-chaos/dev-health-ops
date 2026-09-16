@@ -18,30 +18,25 @@ var ErrOrganizationScopeRequired = errors.New(
 
 // RequireOrganizationScope is the Go equivalent of Python's
 // materialize.py:1179-1188 gate, at the SAME LAYER: the entry point, before any
-// fetch. It is NOT a new gate, and it is deliberately NOT in chquery.
+// fetch.
 //
-// # WHY THE GUARD IS HERE AND NOT IN THE FETCHERS
+// # WHY THE GUARD IS HERE, IN ADDITION TO THE FETCHERS
 //
-// The fetchers are shape-identical to Python by design — chquery reproduces
-// `if org_id:` verbatim, including the part where an empty org drops the filter
-// (CHAOS-4804). Adding a refusal down there would make the two planes group
-// differently, which is the exact failure this port exists to prevent. So the
-// fetchers stay permissive and the entry point refuses, matching how Python is
-// arranged.
+// chquery's own tenant-scoped readers (FetchWorkGraphEdges,
+// FetchWorkItemActiveHours) also refuse an empty organization id before
+// querying. This guard runs earlier still, before resolveRepoIDs or any other
+// per-run work, so a caller with no legitimate unscoped path fails immediately
+// rather than partway through building the request.
 //
-// # WHAT AN EMPTY SCOPE ACTUALLY DOES, WHICH IS WHY THIS IS NOT DEFENSIVE NOISE
+// # WHAT AN EMPTY SCOPE WOULD DO IF NOTHING REFUSED IT
 //
-// With an empty org, fetch_work_graph_edges' WHERE clause becomes empty and the
-// query reads every tenant's edges. The rows stay per-org because of the GROUP
-// BY, but units.NodeKey is (type, id) with NO org — so a provider-scoped id
-// present in two tenants becomes ONE node, the two graphs fuse into a single
-// connected component, and the resulting work_unit_id hashes a node set drawn
-// from multiple organisations. It is then written under whichever org the run
-// was configured with.
-//
-// Nothing raises and nothing logs. The row is indistinguishable from a
-// legitimate one afterwards. That is why the guard is loud and unconditional
-// rather than a warning.
+// With an empty org, fetch_work_graph_edges' WHERE clause would read every
+// tenant's edges. The rows stay per-org because of the GROUP BY, but
+// units.NodeKey is (type, id) with NO org — so a provider-scoped id present in
+// two tenants becomes ONE node, the two graphs fuse into a single connected
+// component, and the resulting work_unit_id hashes a node set drawn from
+// multiple organisations. It would then be written under whichever org the run
+// was configured with, indistinguishable from a legitimate row.
 //
 // # ONE DELIBERATE DIVERGENCE FROM PYTHON, IN THE SAFE DIRECTION
 //
@@ -73,7 +68,7 @@ var ErrOrganizationScopeRequired = errors.New(
 //     rendered string, and "00000000-0000-0000-0000-000000000000" is non-empty
 //     and therefore truthy. Excluding uuid.Nil here would reject rows Python
 //     maps -- a false negative that keeps read == mapped + rejected balanced and
-//     is invisible to every conservation check (CHAOS-4804).
+//     is invisible to every conservation check.
 //  3. EXISTENCE IS NOT CHECKED. A well-formed but unknown org passes. Whether
 //     the org exists is the query's answer, not the guard's; refusing here would
 //     make this a NEW gate rather than the ported one.
@@ -91,7 +86,7 @@ func RequireOrganizationScope(organizationID string) error {
 	if pythonStrip(organizationID) == "" {
 		return fmt.Errorf(
 			"%w: refusing to run unscoped, which would read every tenant's "+
-				"work_graph_edges and fuse them into shared components (CHAOS-4804)",
+				"work_graph_edges and fuse them into shared components",
 			ErrOrganizationScopeRequired,
 		)
 	}

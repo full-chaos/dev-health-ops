@@ -820,9 +820,18 @@ func (m *Materializer) fetchEntities(ctx context.Context, cfg Config, components
 	if err != nil {
 		return entitySet{}, fmt.Errorf("fetch work items: %w", err)
 	}
-	activeHours, err := m.reader.FetchWorkItemActiveHours(ctx, issueIDs, cfg.OrgID)
-	if err != nil {
-		return entitySet{}, fmt.Errorf("fetch work item active hours: %w", err)
+	// FetchWorkItemActiveHours refuses an empty org outright (it would
+	// otherwise fuse active-hours values across tenants sharing a work-item
+	// id). An unscoped run reaches here only through the mock/allow-unscoped
+	// escape hatch (see nativeexecutor.go), which has no org to give it, so
+	// that path skips the read entirely rather than tripping the refusal --
+	// active hours are simply absent from an unscoped run's components.
+	activeHours := map[string]float64{}
+	if cfg.OrgID != "" {
+		activeHours, err = m.reader.FetchWorkItemActiveHours(ctx, issueIDs, cfg.OrgID)
+		if err != nil {
+			return entitySet{}, fmt.Errorf("fetch work item active hours: %w", err)
+		}
 	}
 	prs, err := m.reader.FetchPullRequests(ctx, groupPRsByRepo(prIDs), cfg.OrgID)
 	if err != nil {

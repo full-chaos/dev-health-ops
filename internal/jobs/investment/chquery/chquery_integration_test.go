@@ -4,6 +4,7 @@ package chquery
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -113,14 +114,11 @@ func TestFetchWorkGraphEdgesRespectsDedupThenFilterOrder(t *testing.T) {
 	}
 }
 
-// TestFetchWorkGraphEdgesEmptyOrgReadsEveryTenant pins CHAOS-4804's behaviour
-// against a real engine.
-//
-// This asserts the WRONG-BUT-PYTHON-IDENTICAL behaviour on purpose. The port's
-// contract is to match Python, and the fix belongs on both planes at once; a
-// test that asserted the safe behaviour here would be asserting a divergence.
-// When CHAOS-4804 lands, THIS TEST is what should fail, loudly, on both planes.
-func TestFetchWorkGraphEdgesEmptyOrgReadsEveryTenant(t *testing.T) {
+// TestFetchWorkGraphEdgesScopedReadNeverSeesAnotherTenant proves the fix
+// directly against a live engine: two tenants each have their own edge, and a
+// scoped read for one tenant returns only that tenant's edge, while an
+// unscoped read is refused before it ever reaches ClickHouse.
+func TestFetchWorkGraphEdgesScopedReadNeverSeesAnotherTenant(t *testing.T) {
 	reader, conn, ctx := newTestReader(t)
 
 	seedEdge(t, ctx, conn, orgAlpha, "alpha", "native", 1.0, "2026-01-01 00:00:00.000")
@@ -134,18 +132,8 @@ func TestFetchWorkGraphEdgesEmptyOrgReadsEveryTenant(t *testing.T) {
 		t.Fatalf("scoped read returned %d edges, want exactly org alpha's 1", len(scoped))
 	}
 
-	unscoped, err := reader.FetchWorkGraphEdges(ctx, EdgeQueryOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(unscoped) != 2 {
-		t.Fatalf(
-			"unscoped read returned %d edges, want 2 (BOTH tenants). "+
-				"If this now returns 1, CHAOS-4804 has been fixed on the Go side "+
-				"only -- check that components.py moved in the same change set, "+
-				"or the two planes will group differently",
-			len(unscoped),
-		)
+	if _, err := reader.FetchWorkGraphEdges(ctx, EdgeQueryOptions{}); !errors.Is(err, ErrOrganizationIDRequired) {
+		t.Fatalf("unscoped read: want ErrOrganizationIDRequired, got %v", err)
 	}
 }
 
@@ -367,25 +355,13 @@ func seedEdge(
 	)
 }
 
-// TestActiveHoursUnscopedCollapsesTenants is the SECOND deliberate pin of
-// behaviour that is wrong (CHAOS-4804).
-//
-// fetch_work_item_active_hours groups by work_item_id ALONE while filtering on
-// org conditionally, so an empty scope drops the filter and collapses every
-// tenant's row for a shared work-item id into one group. argMax then returns
-// whichever tenant wrote last. work_item_id is provider-scoped, not
-// tenant-scoped, so ids really are shared across orgs.
-//
-// Asserted as-is on purpose: the port's contract is to match Python, and the
-// fix belongs on BOTH planes at once. When CHAOS-4804 lands, this test and
-// TestFetchWorkGraphEdgesEmptyOrgReadsEveryTenant are what should fail, and
-// they should be flipped deliberately in the same change set that moves
-// queries.py -- never one plane alone.
-func TestActiveHoursUnscopedCollapsesTenants(t *testing.T) {
+// TestActiveHoursScopedReadNeverSeesAnotherTenant proves the fix directly
+// against a live engine: two tenants share a work-item id (realistic, since
+// these ids are provider-scoped, not tenant-scoped), and a scoped read for
+// one tenant returns only that tenant's value.
+func TestActiveHoursScopedReadNeverSeesAnotherTenant(t *testing.T) {
 	reader, conn, ctx := newTestReader(t)
 
-	// The SAME work-item id in two tenants -- the realistic case, since
-	// "linear:CHAOS-4441" is provider-scoped.
 	const sharedID = "linear:CHAOS-4441"
 	mustExec(t, ctx, conn, `
         INSERT INTO work_item_cycle_times
@@ -398,7 +374,8 @@ func TestActiveHoursUnscopedCollapsesTenants(t *testing.T) {
         VALUES (?, ?, 'linear', 'task', ?, ?, ?)
     `, orgBeta, sharedID, 99.0, "2026-03-01 00:00:00", "2026-06-01 00:00:00")
 
-	// Scoped: correct. Org alpha sees its own 10 hours, never beta's 99.
+	// Org alpha sees its own 10 hours, never beta's 99, even though beta's
+	// row is the later write and beta's org id sorts after alpha's.
 	scoped, err := reader.FetchWorkItemActiveHours(ctx, []string{sharedID}, orgAlpha)
 	if err != nil {
 		t.Fatal(err)
@@ -407,22 +384,10 @@ func TestActiveHoursUnscopedCollapsesTenants(t *testing.T) {
 		t.Fatalf("scoped read must return org alpha's own value, got %v", scoped[sharedID])
 	}
 
-	// Unscoped: CHAOS-4804. The filter disappears, the GROUP BY collapses both
-	// tenants, and argMax returns beta's later-written 99.
-	unscoped, err := reader.FetchWorkItemActiveHours(ctx, []string{sharedID}, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if unscoped[sharedID] != 99.0 {
-		t.Fatalf(
-			"unscoped read returned %v, want 99 (the OTHER tenant's value). "+
-				"If this now returns 10 or nothing, CHAOS-4804 has been fixed -- verify "+
-				"queries.py moved in the SAME change set, then flip this test and "+
-				"TestFetchWorkGraphEdgesEmptyOrgReadsEveryTenant together. Fixing one "+
-				"plane alone makes the two group differently, which is the failure this "+
-				"port exists to prevent",
-			unscoped[sharedID],
-		)
+	// An unscoped read is refused before it ever reaches ClickHouse -- it
+	// does not fall back to reading every tenant.
+	if _, err := reader.FetchWorkItemActiveHours(ctx, []string{sharedID}, ""); !errors.Is(err, ErrOrganizationIDRequired) {
+		t.Fatalf("unscoped read: want ErrOrganizationIDRequired, got %v", err)
 	}
 }
 

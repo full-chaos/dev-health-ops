@@ -1298,6 +1298,8 @@ LIMIT ?`, orgID, GithubWorkItemDerivationContextLimit+1)
 	return result, rows.Err()
 }
 
+// team_project_ownership.project_key is Nullable(String); tuple-wrapped
+// below so argMax cannot skip the newest row when it carries NULL.
 func (source ClickHouseFactSource) LoadProjects(
 	ctx context.Context, orgID string, asOf time.Time,
 ) ([]GithubWorkItemDerivationProjectFact, error) {
@@ -1306,7 +1308,7 @@ SELECT g.provider, g.team_id, ifNull(nullIf(t.name, ''), g.team_id),
        g.project_id, g.project_key, g.is_primary, g.specificity, g.priority, g.updated_at
 FROM (
   SELECT o.org_id, o.provider, o.project_id, o.team_id,
-         argMax(o.project_key, (o.updated_at, o.valid_from)) AS project_key,
+         (argMax(tuple(o.project_key), (o.updated_at, o.valid_from))).1 AS project_key,
          argMax(o.is_primary, (o.updated_at, o.valid_from)) AS is_primary,
          argMax(o.specificity, (o.updated_at, o.valid_from)) AS specificity,
          argMax(o.priority, (o.updated_at, o.valid_from)) AS priority,
@@ -1346,6 +1348,8 @@ LIMIT ?`, orgID, asOf, asOf, GithubWorkItemDerivationContextLimit+1)
 	return result, rows.Err()
 }
 
+// team_repo_ownership.repo_id is Nullable(UUID); tuple-wrapped below so
+// argMax cannot skip the newest row when it carries NULL.
 func (source ClickHouseFactSource) LoadRepos(
 	ctx context.Context, orgID string, asOf time.Time,
 ) ([]GithubWorkItemDerivationRepoFact, error) {
@@ -1354,7 +1358,7 @@ SELECT g.provider, g.team_id, ifNull(nullIf(t.name, ''), g.team_id),
        toString(g.repo_id), g.repo_full_name, g.is_primary, g.specificity, g.priority, g.updated_at
 FROM (
   SELECT o.org_id, o.provider, o.repo_full_name, o.team_id,
-         argMax(o.repo_id, (o.updated_at, o.valid_from)) AS repo_id,
+         (argMax(tuple(o.repo_id), (o.updated_at, o.valid_from))).1 AS repo_id,
          argMax(o.is_primary, (o.updated_at, o.valid_from)) AS is_primary,
          argMax(o.specificity, (o.updated_at, o.valid_from)) AS specificity,
          argMax(o.priority, (o.updated_at, o.valid_from)) AS priority,
@@ -1776,6 +1780,9 @@ func GithubWorkItemDerivationSortedAdminTeamIDs(
 // provider auto-import `team_memberships` directly. Consulted by
 // ResolveMembership only when the admin layer (LoadMembers's two return
 // values) has zero candidates for a given identity.
+// team_memberships.raw_provider_user_id and raw_email are both
+// Nullable(String); both are tuple-wrapped below so argMax cannot skip
+// the newest row when either carries NULL.
 func (source ClickHouseFactSource) LoadProviderMembers(
 	ctx context.Context, orgID string, asOf time.Time,
 ) ([]GithubWorkItemDerivationMemberFact, error) {
@@ -1785,8 +1792,8 @@ SELECT g.provider, g.team_id, ifNull(nullIf(t.name, ''), g.team_id),
        g.is_primary, g.specificity, g.priority, g.updated_at
 FROM (
   SELECT o.org_id, o.provider, o.team_id, o.member_id,
-         argMax(o.raw_provider_user_id, (o.updated_at, o.valid_from)) AS raw_provider_user_id,
-         argMax(o.raw_email, (o.updated_at, o.valid_from)) AS raw_email,
+         (argMax(tuple(o.raw_provider_user_id), (o.updated_at, o.valid_from))).1 AS raw_provider_user_id,
+         (argMax(tuple(o.raw_email), (o.updated_at, o.valid_from))).1 AS raw_email,
          argMax(o.identity_facets, (o.updated_at, o.valid_from)) AS identity_facets,
          argMax(o.is_primary, (o.updated_at, o.valid_from)) AS is_primary,
          argMax(o.specificity, (o.updated_at, o.valid_from)) AS specificity,

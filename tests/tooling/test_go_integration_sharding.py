@@ -54,7 +54,16 @@ EXPECTED_PACKAGES = {
     # path actually works against the real column type (it didn't, see
     # workunitreader_seeded_integration_test.go's own header comment).
     "cmd/query-api/internal/investmentexplain",
+    # The argMax dedup NULL-skip fix (Nullable(Float64) fields on
+    # work_item_metrics_daily/repo_metrics_daily/incident_metrics_daily/
+    # ai_impact_metrics_daily) has its own real-ClickHouse proof, since a
+    # fake RowScanner cannot reproduce argMax's server-side null-skip
+    # behaviour.
+    "cmd/query-api/internal/operatingreview",
     "cmd/query-api/internal/routeswitch",
+    # Same argMax dedup NULL-skip proof as operatingreview above, for
+    # wip_age_p50/p90_hours and pr_first_review_p50_hours.
+    "cmd/query-api/internal/throughputforecast",
     "cmd/query-api/internal/workgraph",
     "internal/cacheinvalidation",
     "internal/externalrecompute",
@@ -140,6 +149,11 @@ EXPECTED_PACKAGES = {
     "internal/syncreconciler",
     "internal/synccoverage",
     "internal/syncroute",
+    # The argMax dedup NULL-skip fix for team_project_ownership.project_key,
+    # team_repo_ownership.repo_id and team_memberships.raw_provider_user_id/
+    # raw_email has its own real-ClickHouse proof, for the same reason as
+    # operatingreview/throughputforecast above.
+    "internal/teamattribution",
     # CHAOS-4897: the recommendations loader's owned-repo scoping join reads
     # team_repo_ownership's bitemporal window for real, so its correctness
     # (valid_from/valid_to boundaries, NULL-repo_id exclusion, org isolation)
@@ -469,9 +483,9 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # through the real dispatch against a real Postgres and a real HTTP
     # server -- the two guards an adversarial round mutated at their real
     # call sites and watched survive the whole suite). 56 -> 57.
-    # CURRENT TOTAL: 57 -- the one number to bump when a new
+    # CURRENT TOTAL: 60 -- the one number to bump when a new
     # -tags=integration package is added.
-    assert "57 package(s) discovered, 0 denylisted, 57 will run" in result.stdout
+    assert "60 package(s) discovered, 0 denylisted, 60 will run" in result.stdout
     # Raised 3 -> 4: a whole-manifest re-time from hosted CI evidence (see
     # ci/go_integration_shards.tsv's own header) found the honest per-package
     # weights no longer leave internal/providersync dominant enough to stay
@@ -481,7 +495,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # job's 20-minute target -- see the weight-derived isolation check below
     # for how a future regression here is caught instead of silently
     # re-balanced.
-    assert "integration shard plan: 4 shard(s), 57 package(s)" in result.stdout
+    assert "integration shard plan: 4 shard(s), 60 package(s)" in result.stdout
 
     output = dict(
         line.split("=", maxsplit=1)
@@ -555,8 +569,8 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # CHAOS-5560 added internal/platform/config: 55 -> 56.
     # CHAOS-5486 added cmd/go-api-routing: 56 -> 57 (see the
     # "package(s) discovered" comment above).
-    # CURRENT TOTAL: 57 -- the one number to bump.
-    assert len(flattened) == len(set(flattened)) == 57
+    # CURRENT TOTAL: 60 -- the one number to bump.
+    assert len(flattened) == len(set(flattened)) == 60
     assert set(flattened) == EXPECTED_PACKAGES
 
     # internal/providersync's isolation in the lowest-numbered shard is a
@@ -2032,9 +2046,9 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # `-tags=integration` tests against real ClickHouse
     # (github_tests_report_window_integration_test.go): +6 top-level
     # (1383 -> 1389), integration-tagged 155 -> 159.
-    assert len(expected_provider_tests) == 1403
+    assert len(expected_provider_tests) == 1404
 
-    assert len(expected_integration_tests) == 159
+    assert len(expected_integration_tests) == 160
     assert expected_integration_tests < expected_provider_tests
 
     provider_assignments: dict[int, set[str]] = {}
@@ -2050,7 +2064,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1403
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1404
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -2145,9 +2159,9 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
     # - 1 for the providersync shard-1 package).
     # CHAOS-5486 added cmd/go-api-routing: 55 -> 56 (57 discovered - 1 for
     # the providersync shard-1 package).
-    # CURRENT TOTAL: 56 (== discovered-total-minus-one -- keep this in
+    # CURRENT TOTAL: 59 (== discovered-total-minus-one -- keep this in
     # sync with the discovered-total literal above when either changes).
-    assert len(selected_packages) == len(set(selected_packages)) == 56
+    assert len(selected_packages) == len(set(selected_packages)) == 59
     assert set(selected_packages) == EXPECTED_PACKAGES - {PROVIDER_PACKAGE}
 
     selected_tests: list[str] = []
@@ -2164,7 +2178,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1403
+    assert len(selected_tests) == len(set(selected_tests)) == 1404
     assert set(selected_tests) == expected_tests
 
 

@@ -853,3 +853,77 @@ func TestGitHubWorkItemTeamAttributionRejectionRowSurvivesTheEffectsJSONRoundTri
 	}
 	assertNoExportedFieldIsZero(t, "round-tripped", decoded[0])
 }
+
+// TestMarshalGitHubWorkItemTeamAttributionRejectionsCarriesRepoIDThroughTheRealConverter
+// is a mutation-resistant pin for a test-strength gap the test
+// above leaves open: that round trip builds a githubWorkItemTeamAttributionRejectionRow
+// BY HAND and calls the generic marshalGitHubWorkItemDerivedRows helper
+// directly, never the real converter the route layer actually calls
+// (marshalGitHubWorkItemTeamAttributionRejections) -- so dropping that
+// converter's RepoID assignment passed the full committed suite. This starts
+// from the teamattribution shape the route layer produces (a string RepoID),
+// goes through the real converter's uuid.Parse + field assignment, and
+// decodes with the real reader.
+func TestMarshalGitHubWorkItemTeamAttributionRejectionsCarriesRepoIDThroughTheRealConverter(t *testing.T) {
+	repoID := "c7198fbc-1945-3717-05d8-eb78866b4e79"
+	teamID := "team-outsider"
+	teamName := "Outsider Team"
+	marshaled, err := marshalGitHubWorkItemTeamAttributionRejections(
+		[]teamattribution.GithubWorkItemDerivationRejectedMembership{{
+			WorkItemID: "gh:acme/api#1", Provider: "github", RepoID: &repoID,
+			Source: "assignee_membership", TeamID: &teamID, TeamName: &teamName,
+			Reason: "repo_not_owned",
+		}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := decodeGitHubWorkItemTeamAttributionRejections(marshaled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded) != 1 {
+		t.Fatalf("decoded = %+v, want exactly 1", decoded)
+	}
+	if decoded[0].RepoID == nil || decoded[0].RepoID.String() != repoID {
+		t.Fatalf(
+			"decoded RepoID = %v, want %s -- the real converter dropped the parsed repo id",
+			decoded[0].RepoID, repoID,
+		)
+	}
+}
+
+// TestWriteGitHubWorkItemEffectRefusesMalformedMembershipRejections is
+// This pins the write boundary's own decode validation:
+// decodeGitHubWorkItemTeamAttributionRejections fails closed on a malformed
+// element, but no test ever fed WriteGitHubWorkItemEffect one, so removing
+// that check (or the write boundary's error propagation around it) passed
+// the full committed suite -- a malformed rejection would otherwise be
+// silently coerced to its zero value and inserted as if it were real.
+func TestWriteGitHubWorkItemEffectRefusesMalformedMembershipRejections(t *testing.T) {
+	rows := []githubWorkItemTeamAttributionRow{{
+		WorkItemID: "gh:acme/api#1", Provider: "github", Source: "repo_ownership",
+		IsPrimary: 1, Confidence: "high", Evidence: "repo_ownership=x", OrgID: "org-acme",
+	}}
+	effect, err := effectBatchFromValues(githubTeamAttributionsDestination, EffectReadbackRequired, rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	effect.MembershipRejections = []json.RawMessage{json.RawMessage(`{not-json`)}
+	identity := GitHubWorkItemEffectIdentity{
+		OrgID: "org-acme", Provider: "github", Destination: githubTeamAttributionsDestination,
+		ContentDigest: effect.ContentDigest, RowCount: len(effect.Rows),
+	}
+	conn := &ownershipReasonWriteConn{}
+	sink := GitHubWorkItemTeamAttributionsClickHouseEffects{
+		Conn:    conn,
+		Lease:   providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+		Metrics: providerfoundation.NewMetrics(),
+	}
+	if err := sink.WriteGitHubWorkItemEffect(context.Background(), identity, effect); !errors.Is(err, ErrInvalidConfiguration) {
+		t.Fatalf("err = %v, want ErrInvalidConfiguration", err)
+	}
+	if conn.batch != nil {
+		t.Fatalf("malformed rejection still opened an INSERT batch: %+v", conn.batch)
+	}
+}

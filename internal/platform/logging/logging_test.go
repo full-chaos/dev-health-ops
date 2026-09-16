@@ -78,3 +78,32 @@ func TestRedactTextCatchesBareCredentialShapedText(t *testing.T) {
 		})
 	}
 }
+
+// TestJSONLoggerLogsBooleanFeatureFlagsWhoseNameContainsSecurityUnredacted
+// pins two real worker config flags whose name contains the substring
+// "security", which itself contains the substring "uri" -- a key-name
+// marker match must not fire on a fragment inside an unrelated word.
+func TestJSONLoggerLogsBooleanFeatureFlagsWhoseNameContainsSecurityUnredacted(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	logger := NewJSON(&output, slog.LevelDebug)
+	logger.Info(
+		"service starting",
+		"worker_gitlab_security_enabled", true,
+		"worker_github_security_enabled", false,
+	)
+
+	logLine := output.String()
+	for _, want := range []string{
+		`"worker_gitlab_security_enabled":true`,
+		`"worker_github_security_enabled":false`,
+	} {
+		if !strings.Contains(logLine, want) {
+			t.Fatalf("expected %q in log line, got: %s", want, logLine)
+		}
+	}
+	if strings.Contains(logLine, redacted) {
+		t.Fatalf("boolean flag redacted although it carries no secret: %s", logLine)
+	}
+}

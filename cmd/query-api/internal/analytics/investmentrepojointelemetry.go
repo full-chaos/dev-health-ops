@@ -205,7 +205,25 @@ func RecordInvestmentRepoJoinDedupCollisions(ctx context.Context, client QueryCl
 		recordRepoJoinDedupCollisionFetchFailure(ctx, orgID, err)
 		return
 	}
-	defer rows.Close()
+	// reported tracks whether an error branch below already shortened the
+	// cooldown and reported the failure, so a Close() error on an
+	// already-failed stream does not double-report.
+	reported := false
+	reportFailure := func(err error) {
+		reported = true
+		repoJoinDedupCollisionShorten(orgID)
+		recordRepoJoinDedupCollisionFetchFailure(ctx, orgID, err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil && !reported {
+			// A stream that fails only on Close (Next/Scan/Err all
+			// clean) is otherwise invisible: no counter, no warn log,
+			// and the cooldown claimed at function entry stays at its
+			// full window instead of the short error-retry window --
+			// same report-and-shorten path every other branch above uses.
+			reportFailure(closeErr)
+		}
+	}()
 
 	if !rows.Next() {
 		// A mid-stream failure (connection dropped while the aggregate
@@ -217,20 +235,17 @@ func RecordInvestmentRepoJoinDedupCollisions(ctx context.Context, client QueryCl
 		// input set) and would silently drop the failure this
 		// telemetry exists to never let happen silently.
 		if err := rows.Err(); err != nil {
-			repoJoinDedupCollisionShorten(orgID)
-			recordRepoJoinDedupCollisionFetchFailure(ctx, orgID, err)
+			reportFailure(err)
 		}
 		return
 	}
 	var excess int64
 	if scanErr := rows.Scan(&excess); scanErr != nil {
-		repoJoinDedupCollisionShorten(orgID)
-		recordRepoJoinDedupCollisionFetchFailure(ctx, orgID, scanErr)
+		reportFailure(scanErr)
 		return
 	}
 	if err := rows.Err(); err != nil {
-		repoJoinDedupCollisionShorten(orgID)
-		recordRepoJoinDedupCollisionFetchFailure(ctx, orgID, err)
+		reportFailure(err)
 		return
 	}
 	if excess <= 0 {

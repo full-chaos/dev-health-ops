@@ -63,35 +63,51 @@ var validScopeModes = map[string]bool{
 // (`if mode not in {...}: mode = "unscoped_no_marker"`, :112-114 -- the
 // SAME normalization extract_scope_state_from_rows applies at :144-155
 // for a caller that already has rows in hand).
-func FetchInvestmentMembershipScopeState(ctx context.Context, client QueryClient, orgID string, timeoutSeconds int) (InvestmentMembershipScopeState, error) {
-	rows, err := client.Query(ctx, membershipScopeStateQuery(timeoutSeconds), bindingsForOrg(orgID))
-	if err != nil {
-		return InvestmentMembershipScopeState{ScopeMode: "unscoped_no_marker"}, fmt.Errorf("query: %w", err)
+func FetchInvestmentMembershipScopeState(ctx context.Context, client QueryClient, orgID string, timeoutSeconds int) (state InvestmentMembershipScopeState, err error) {
+	state = InvestmentMembershipScopeState{ScopeMode: "unscoped_no_marker"}
+
+	rows, queryErr := client.Query(ctx, membershipScopeStateQuery(timeoutSeconds), bindingsForOrg(orgID))
+	if queryErr != nil {
+		return state, fmt.Errorf("query: %w", queryErr)
 	}
-	defer rows.Close()
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil && err == nil {
+			// A stream that fails only on Close (Next/Scan/Err all
+			// clean) is otherwise invisible -- report it through the
+			// same named return every other branch below uses, which
+			// RecordStaleInvestmentMembershipScope already swallows to
+			// a debug log on any non-nil error (this decorator has no
+			// cooldown to shorten, unlike its two siblings).
+			state = InvestmentMembershipScopeState{ScopeMode: "unscoped_no_marker"}
+			err = fmt.Errorf("close: %w", closeErr)
+		}
+	}()
 
 	if !rows.Next() {
 		// Python: `if not rows: return InvestmentMembershipScopeState("unscoped_no_marker", 0)`
 		// (:109-110) -- zero rows is the SAME fallback as an
 		// unrecognized mode, not a distinct error.
-		if err := rows.Err(); err != nil {
-			return InvestmentMembershipScopeState{ScopeMode: "unscoped_no_marker"}, fmt.Errorf("rows: %w", err)
+		if rowsErr := rows.Err(); rowsErr != nil {
+			err = fmt.Errorf("rows: %w", rowsErr)
 		}
-		return InvestmentMembershipScopeState{ScopeMode: "unscoped_no_marker"}, nil
+		return
 	}
 
 	var mode string
 	var lagSeconds int64
 	if scanErr := rows.Scan(&mode, &lagSeconds); scanErr != nil {
-		return InvestmentMembershipScopeState{ScopeMode: "unscoped_no_marker"}, fmt.Errorf("scan: %w", scanErr)
+		err = fmt.Errorf("scan: %w", scanErr)
+		return
 	}
-	if err := rows.Err(); err != nil {
-		return InvestmentMembershipScopeState{ScopeMode: "unscoped_no_marker"}, fmt.Errorf("rows: %w", err)
+	if rowsErr := rows.Err(); rowsErr != nil {
+		err = fmt.Errorf("rows: %w", rowsErr)
+		return
 	}
 	if !validScopeModes[mode] {
 		mode = "unscoped_no_marker"
 	}
-	return InvestmentMembershipScopeState{ScopeMode: mode, LagSeconds: lagSeconds}, nil
+	state = InvestmentMembershipScopeState{ScopeMode: mode, LagSeconds: lagSeconds}
+	return
 }
 
 // membershipScopeStaleCounter mirrors

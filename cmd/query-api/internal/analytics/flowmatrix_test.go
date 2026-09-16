@@ -31,6 +31,10 @@ type fakeRowScanner struct {
 	cursor   int
 	err      error
 	errAfter int
+	// closeErr lets a test express a Close()-only failure: Next/Scan/Err
+	// all succeed, and only the deferred Close() call returns an error --
+	// distinct from err/errAfter, which fail the stream itself.
+	closeErr error
 }
 
 func (f *fakeRowScanner) Next() bool {
@@ -162,7 +166,12 @@ func (f *fakeRowScanner) Err() error {
 	}
 	return f.err
 }
-func (f *fakeRowScanner) Close() error { return nil }
+func (f *fakeRowScanner) Close() error {
+	if f == nil {
+		return nil
+	}
+	return f.closeErr
+}
 
 // fakeClient dispatches by inspecting the statement text for "dimension,"
 // (nodes queries alias their value-bearing column set as `... AS

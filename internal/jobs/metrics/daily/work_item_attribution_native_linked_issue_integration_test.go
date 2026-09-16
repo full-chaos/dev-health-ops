@@ -61,7 +61,7 @@ func TestWorkItemAttributionExecutorPreservesLinkedIssueFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new executor: %v", err)
 	}
-	run := Run{OrganizationID: orgID, TargetDay: targetDay}
+	run := Run{ID: uuid.NewString(), OrganizationID: orgID, TargetDay: targetDay}
 	// Deliberately repoA ONLY -- D's repo is out of partition scope, so D
 	// must arrive as a DONOR, not as a partition subject.
 	partition := Partition{ID: "p1", RunID: "r1", RepoIDs: []RepositoryID{RepositoryID(repoA.String())}}

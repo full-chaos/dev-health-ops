@@ -34,7 +34,9 @@ func TestWriteAttributionsReportsTheTrueRowCountOnSendAmbiguity(t *testing.T) {
 			Confidence: "high", Evidence: "{}", ComputedAt: time.Now().UTC(), OrgID: "org-42"},
 	}
 
-	written, err := writer.WriteAttributions(context.Background(), rows)
+	written, err := writer.WriteAttributions(context.Background(), WorkItemAttributionProducer{
+		Writer: WorkItemAttributionWriterBackstop, RunID: "run-send-ambiguity",
+	}, rows)
 	if err == nil {
 		t.Fatal("WriteAttributions err = nil, want the forced Send() failure to surface")
 	}

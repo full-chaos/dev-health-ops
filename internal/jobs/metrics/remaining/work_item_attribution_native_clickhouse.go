@@ -71,6 +71,12 @@ func (executor *WorkItemAttributionExecutor) ComputeOrg(
 	if err != nil {
 		return WorkItemAttributionOutcome{}, err
 	}
+	// One identifier for the whole run: the attribution rows this run writes
+	// and the run marker(s) it publishes both carry it, so a stored row joins
+	// back to the marker that recorded its scope and completion time. Minted
+	// before the early returns below so every path that publishes a marker
+	// uses the same one.
+	runID := uuid.NewString()
 
 	scope, err := executor.detectScope(ctx, orgID, now)
 	if err != nil {
@@ -96,7 +102,7 @@ func (executor *WorkItemAttributionExecutor) ComputeOrg(
 		// just given team ownership before any item synced). Still a
 		// completed run: publish the marker so this scope is not
 		// re-detected as changed forever.
-		if err := executor.publishRunMarkers(ctx, orgID, scope, now); err != nil {
+		if err := executor.publishRunMarkers(ctx, orgID, scope, now, runID); err != nil {
 			return outcome, err
 		}
 		executor.observeRun(orgID, outcome)
@@ -236,12 +242,16 @@ func (executor *WorkItemAttributionExecutor) ComputeOrg(
 	// outcome.RowsWritten only on the success path discarded that count a
 	// second time on a failure. Assign it BEFORE the error check, same
 	// idiom as every other fixed site in this PR.
-	written, err := executor.writer.WriteAttributions(ctx, rows)
+	producer := WorkItemAttributionProducer{
+		Writer: WorkItemAttributionWriterBackstop,
+		RunID:  runID,
+	}
+	written, err := executor.writer.WriteAttributions(ctx, producer, rows)
 	outcome.RowsWritten = written
 	if err != nil {
 		return outcome, err
 	}
-	if err := executor.publishRunMarkers(ctx, orgID, scope, now); err != nil {
+	if err := executor.publishRunMarkers(ctx, orgID, scope, now, runID); err != nil {
 		return outcome, err
 	}
 	executor.observeRun(orgID, outcome)
@@ -1138,10 +1148,13 @@ WHERE org_id = ? AND has(?, work_item_id) AND toDate(computed_at) = toDate(?)`,
 // one org-wide marker, or one scoped marker per repo/project actually
 // processed. CHAOS-2433 protocol: called only after WriteAttributions has
 // already returned successfully.
+//
+// runID is the CALLER's, not minted here: the attribution rows this run wrote
+// are stamped with it too, so a row and its marker name the same run.
 func (executor *WorkItemAttributionExecutor) publishRunMarkers(
-	ctx context.Context, orgID string, scope workItemAttributionScopeDecision, completedAt time.Time,
+	ctx context.Context, orgID string, scope workItemAttributionScopeDecision,
+	completedAt time.Time, runID string,
 ) error {
-	runID := uuid.NewString()
 	if scope.orgWide {
 		return executor.writer.WriteAttributionRun(ctx, WorkItemAttributionRunRecord{
 			OrgID: orgID, RunID: runID, CompletedAt: completedAt,

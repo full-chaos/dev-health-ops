@@ -518,7 +518,14 @@ func TestEveryDeclaredCitationCoversOnlyValueDifferences(t *testing.T) {
 			// is neither, so this generic sweep does not apply to it
 			// either. See investmentfull_argmax_coverage_shift_shape_test.go
 			// for its own dedicated sweep.
-			if defect.RepoFanoutShape != nil || defect.CoverageShiftShape != nil {
+			// A WorkGraphEdgeDedupShape defect (the unmerged-duplicate-row
+			// mechanism declared on workGraphEdges) replaces the same
+			// blanket rule with a shape-specific admission over the real
+			// edges list -- a bare "python"/"go" string at the cited
+			// path is neither, so this generic sweep does not apply to
+			// it either. See workgraphedgedup_test.go for its own
+			// dedicated sweep.
+			if defect.RepoFanoutShape != nil || defect.CoverageShiftShape != nil || defect.WorkGraphEdgeDedupShape != nil {
 				continue
 			}
 			for _, cited := range defect.Paths {

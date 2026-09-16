@@ -555,22 +555,38 @@ var operationSpecs = map[string]OperationSpec{
 		},
 	},
 	"workGraphArtifacts": {Variables: workGraphVariables, ResponseRoot: "workGraphArtifacts"},
-	// The 5449 BaselineDefect this entry used to carry (Python's
-	// un-deduped read undercounting distinct edgeIds against Go's argMax
-	// dedup) was MERGE-STATE DEPENDENT, not a permanent defect, and the
-	// first deployed-executed run correctly REFUSED it as vacuous:
-	// measured live (JOB 5), ClickHouse's
-	// work_graph_edges held 17,005 rows / 11,606 distinct edge_id, yet the
-	// first 1000 rows by the shared ORDER BY carried zero duplicates on
-	// EITHER plane (1000 edges / 1000 distinct edgeIds, Python and Go
-	// alike) -- the declared path `data.workGraphEdges.edges` matched
-	// nothing to excuse. Removed rather than re-measured: a blanket
-	// declaration here would mask any FUTURE regression on this
-	// operation, which is exactly what the vacuity guard exists to catch.
-	// If the divergence recurs, this row reads `mismatch` honestly instead
-	// of being silently excused.
-	"workGraphEdges": {ResponseRoot: "workGraphEdges", Variables: workGraphVariables},
-	"workGraphFlow":  {Variables: workGraphVariables, ResponseRoot: "workGraphFlow"},
+	// The baseline plane reads work_graph_edges (a ReplacingMergeTree keyed
+	// on the edge identity) without collapsing unmerged physical versions
+	// of one logical edge, so its page can hold more than one row for the
+	// same edgeId while the merge is pending; the candidate plane
+	// collapses them before applying the page limit. Whether that
+	// divergence is present in any one comparison depends on which
+	// physical parts happen to be merged at request time, so the
+	// declaration is Intermittent: absent while the source table holds no
+	// unmerged duplicate, and expected once it does.
+	//
+	// WorkGraphEdgeDedupShape narrows the blanket "any leaf difference
+	// under Paths is covered" rule to exactly that mechanism -- a
+	// duplicated baseline row whose copies agree with each other and with
+	// the candidate's own row for the same id -- rather than admitting
+	// any difference under the edges list, which would also excuse a
+	// genuine per-field regression sharing the same path.
+	"workGraphEdges": {
+		ResponseRoot: "workGraphEdges",
+		Variables:    workGraphVariables,
+		Parity: Options{BaselineDefects: []BaselineDefect{{
+			Ticket:             "CHAOS-5791",
+			Reason:             "work_graph_edges is a ReplacingMergeTree keyed on the edge identity; the baseline plane reads it with no merge-time collapse, so an unmerged duplicate physical version of one logical edge surfaces as two content-identical rows sharing one edgeId, spending one extra slot of the page limit and shifting every later element's position. The candidate plane collapses duplicate versions before applying the page limit, so it carries no repeated edgeId. Candidate is correct.",
+			Paths:              []string{"data.workGraphEdges.edges"},
+			Intermittent:       true,
+			IntermittentReason: "present only while the source table holds an unmerged duplicate physical version of some edge; a comparison taken after the background merge collapses it shows no repeated edgeId on the baseline side either",
+			WorkGraphEdgeDedupShape: &WorkGraphEdgeDedupShape{
+				EdgesListPath: "data.workGraphEdges.edges",
+				IDField:       "edgeId",
+			},
+		}}},
+	},
+	"workGraphFlow": {Variables: workGraphVariables, ResponseRoot: "workGraphFlow"},
 }
 
 // flowMatrixInvestmentVariant builds the TEAM or REPO flowMatrix Variant,

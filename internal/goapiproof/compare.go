@@ -437,6 +437,15 @@ type BaselineDefect struct {
 	// behaviour every other declared defect still uses. A defect never
 	// sets both this and RepoFanoutShape.
 	CoverageShiftShape *CoverageShiftShape
+
+	// WorkGraphEdgeDedupShape, when set, replaces this defect's blanket
+	// "any leaf difference under Paths is covered" rule with a
+	// shape-specific admission built from the two DECODED edge lists --
+	// see WorkGraphEdgeDedupShape's own doc comment (workgraphedgedup.go).
+	// nil is the default, unchanged blanket behaviour every other
+	// declared defect still uses. A defect never sets more than one shape
+	// field.
+	WorkGraphEdgeDedupShape *WorkGraphEdgeDedupShape
 }
 
 // validateBaselineDefects refuses a declaration that claims the
@@ -647,6 +656,10 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 		if defect.CoverageShiftShape != nil {
 			covPlan = buildCoverageShiftPlan(defect.CoverageShiftShape, baselineData, candidateData, mismatches)
 		}
+		var dedupPlan *workGraphEdgeDedupPlan
+		if defect.WorkGraphEdgeDedupShape != nil {
+			dedupPlan = buildWorkGraphEdgeDedupPlan(defect.WorkGraphEdgeDedupShape, baselineData, candidateData)
+		}
 		// A SHAPED defect's citation is LIVE only when its shape actually
 		// admits something. A blanket (unshaped) citation stays live from
 		// path proximity alone -- any difference under Paths, covered or
@@ -660,7 +673,7 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 		// apart, and a shaped defect that hit on path alone would still
 		// double-report alongside the shape that actually explains the
 		// difference.
-		shaped := repoPlan != nil || covPlan != nil
+		shaped := repoPlan != nil || covPlan != nil || dedupPlan != nil
 		for i, path := range mismatches {
 			if !defectCovers(defect, path) {
 				continue
@@ -681,6 +694,8 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 				admitted = repoPlan.admits(result.Findings[findingRefs[i]])
 			case covPlan != nil:
 				admitted = covPlan.admits(result.Findings[findingRefs[i]])
+			case dedupPlan != nil:
+				admitted = dedupPlan.admits(result.Findings[findingRefs[i]])
 			}
 			if admitted {
 				covered[i] = true

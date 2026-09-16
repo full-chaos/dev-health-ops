@@ -32,7 +32,10 @@
     },
     "daily/ai_workflow": {
       "parity": {
-        "status": "unverified"
+        "status": "verified",
+        "ticket": "CHAOS-4286",
+        "sha": "506c99beb3ece085c2d3e58ffb7d8f9c11e83fba",
+        "evidence": "internal/jobs/metrics/aiworkflow/oracle_test.go TestAIWorkflowMatchesFrozenPythonGolden (frozen Python golden fixture; PASS re-run at this sha)"
       },
       "deployed": {
         "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
@@ -46,7 +49,10 @@
     },
     "daily/cicd": {
       "parity": {
-        "status": "unverified"
+        "status": "verified",
+        "ticket": "CHAOS-4292",
+        "sha": "506c99beb3ece085c2d3e58ffb7d8f9c11e83fba",
+        "evidence": "internal/jobs/metrics/daily/cicd/compute_test.go TestComputeMatchesFrozenPythonGolden + TestComputeMatchesFrozenGoldenExhaustively (frozen Python golden; PASS re-run at this sha)"
       },
       "deployed": {
         "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
@@ -60,7 +66,10 @@
     },
     "daily/compounding_risk": {
       "parity": {
-        "status": "unverified"
+        "status": "verified",
+        "ticket": "CHAOS-4287",
+        "sha": "506c99beb3ece085c2d3e58ffb7d8f9c11e83fba",
+        "evidence": "internal/jobs/metrics/daily/compoundingrisk/compute_test.go TestComputeMatchesFrozenPythonGolden (frozen Python golden; PASS re-run at this sha)"
       },
       "deployed": {
         "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
@@ -88,7 +97,10 @@
     },
     "daily/file_hotspots": {
       "parity": {
-        "status": "unverified"
+        "status": "verified",
+        "ticket": "CHAOS-4277",
+        "sha": "506c99beb3ece085c2d3e58ffb7d8f9c11e83fba",
+        "evidence": "internal/jobs/metrics/daily/filehotspots/golden_full_test.go TestComputeMatchesFrozenPythonGolden (ComputeFileHotspots leg; frozen Python golden; PASS re-run at this sha)"
       },
       "deployed": {
         "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
@@ -102,7 +114,10 @@
     },
     "daily/file_risk_hotspots": {
       "parity": {
-        "status": "unverified"
+        "status": "verified",
+        "ticket": "CHAOS-4277",
+        "sha": "506c99beb3ece085c2d3e58ffb7d8f9c11e83fba",
+        "evidence": "internal/jobs/metrics/daily/filehotspots/golden_full_test.go TestComputeMatchesFrozenPythonGolden (ComputeFileRiskHotspots leg; frozen Python golden; PASS re-run at this sha)"
       },
       "deployed": {
         "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
@@ -130,7 +145,10 @@
     },
     "daily/repo_user_commit": {
       "parity": {
-        "status": "unverified"
+        "status": "verified",
+        "ticket": "CHAOS-4275",
+        "sha": "506c99beb3ece085c2d3e58ffb7d8f9c11e83fba",
+        "evidence": "internal/jobs/metrics/daily/repouser/compute_test.go TestComputeMatchesFrozenPythonGolden + golden_full_test.go TestComputeMatchesFrozenGoldenExhaustively (frozen Python golden; PASS re-run at this sha)"
       },
       "deployed": {
         "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
@@ -144,7 +162,10 @@
     },
     "daily/review_edges": {
       "parity": {
-        "status": "unverified"
+        "status": "verified",
+        "ticket": "CHAOS-4279",
+        "sha": "506c99beb3ece085c2d3e58ffb7d8f9c11e83fba",
+        "evidence": "internal/jobs/metrics/daily/reviewedges/compute_test.go TestComputeMatchesFrozenPythonGolden (frozen Python golden; PASS re-run at this sha)"
       },
       "deployed": {
         "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
@@ -158,7 +179,10 @@
     },
     "daily/team_wellbeing": {
       "parity": {
-        "status": "unverified"
+        "status": "verified",
+        "ticket": "CHAOS-4276",
+        "sha": "506c99beb3ece085c2d3e58ffb7d8f9c11e83fba",
+        "evidence": "internal/jobs/metrics/numerical/wellbeing_parity_test.go TestTeamWellbeingGoldenParity (frozen Python golden; PASS re-run at this sha)"
       },
       "deployed": {
         "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
@@ -242,7 +266,10 @@
     },
     "daily/work_item": {
       "parity": {
-        "status": "unverified"
+        "status": "verified",
+        "ticket": "CHAOS-4283",
+        "sha": "506c99beb3ece085c2d3e58ffb7d8f9c11e83fba",
+        "evidence": "internal/jobs/metrics/workitemmetrics/golden_test.go TestComputeDailyTripletMatchesPythonGolden (frozen Python golden; PASS re-run at this sha)"
       },
       "deployed": {
         "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
@@ -270,7 +297,10 @@
     },
     "daily/work_item_estimate": {
       "parity": {
-        "status": "unverified"
+        "status": "verified",
+        "ticket": "CHAOS-5323",
+        "sha": "506c99beb3ece085c2d3e58ffb7d8f9c11e83fba",
+        "evidence": "internal/jobs/metrics/workitemmetrics/golden_test.go TestComputeEstimateCoverageMatchesPythonGolden (frozen Python golden; PASS re-run at this sha)"
       },
       "deployed": {
         "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
@@ -284,7 +314,10 @@
     },
     "daily/work_item_state": {
       "parity": {
-        "status": "unverified"
+        "status": "verified",
+        "ticket": "CHAOS-4278",
+        "sha": "506c99beb3ece085c2d3e58ffb7d8f9c11e83fba",
+        "evidence": "internal/jobs/metrics/daily/work_item_state_native_executor_test.go TestComputeWorkItemStateDurationsGolden (ports Python's test_time_in_state_is_bucketed_to_day byte-for-byte; PASS re-run at this sha)"
       },
       "deployed": {
         "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
@@ -298,7 +331,10 @@
     },
     "finalize/benchmarking": {
       "parity": {
-        "status": "unverified"
+        "status": "verified",
+        "ticket": "CHAOS-4288",
+        "sha": "506c99beb3ece085c2d3e58ffb7d8f9c11e83fba",
+        "evidence": "internal/jobs/metrics/daily/benchmarking/compute_test.go TestComputeMatchesFrozenPythonGolden (frozen Python golden; PASS re-run at this sha)"
       },
       "deployed": {
         "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
@@ -312,7 +348,10 @@
     },
     "finalize/compounding_risk_team": {
       "parity": {
-        "status": "unverified"
+        "status": "verified",
+        "ticket": "CHAOS-5084",
+        "sha": "506c99beb3ece085c2d3e58ffb7d8f9c11e83fba",
+        "evidence": "internal/jobs/metrics/daily/compoundingrisk/team_golden_test.go TestBuildTeamRowsMatchesFrozenPythonGolden (frozen Python golden; PASS re-run at this sha)"
       },
       "deployed": {
         "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
@@ -326,7 +365,10 @@
     },
     "finalize/ic_finalize": {
       "parity": {
-        "status": "unverified"
+        "status": "verified",
+        "ticket": "CHAOS-4290",
+        "sha": "506c99beb3ece085c2d3e58ffb7d8f9c11e83fba",
+        "evidence": "internal/jobs/metrics/daily/icfinalize/parity_golden_test.go TestICFinalizeMatchesTheFrozenPythonGolden (integration-tagged frozen Python golden; requires a ClickHouse container, part of the committed suite; not independently re-run here -- a missing sqlalchemy venv in this worktree blocked the local re-run attempt)"
       },
       "deployed": {
         "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
@@ -354,7 +396,10 @@
     },
     "finalize/team_complexity": {
       "parity": {
-        "status": "unverified"
+        "status": "verified",
+        "ticket": "CHAOS-5051",
+        "sha": "506c99beb3ece085c2d3e58ffb7d8f9c11e83fba",
+        "evidence": "internal/jobs/metrics/daily/team_complexity_parity_golden_test.go TestTeamComplexityMatchesTheFrozenPythonGolden (frozen Python golden; PASS re-run at this sha)"
       },
       "deployed": {
         "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",

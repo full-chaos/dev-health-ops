@@ -142,4 +142,153 @@ func TestCapacityRefusesAStaleSchema(t *testing.T) {
 			t.Errorf("the refusal must name the missing table: %v", err)
 		}
 	})
+
+	t.Run("a replacing table with no version column is refused", func(t *testing.T) {
+		// The column and engine-family halves of the probe both pass here by
+		// construction: this table carries every required column and is in
+		// the Replacing family, with only the version argument removed from
+		// the engine clause. A table like this collapses duplicates in
+		// INSERTION ORDER rather than by computed_at, so a retried sync that
+		// writes an older row after a newer one leaves the older row as the
+		// survivor -- a stale forecast reported as a clean run.
+		fresh := freshMigratedClickHouse(t, ctx, OperationalOrderingRevision)
+		if err := fresh.Exec(ctx, "DROP TABLE work_item_metrics_daily"); err != nil {
+			t.Fatalf("stage the versionless schema: %v", err)
+		}
+		if err := fresh.Exec(ctx, `
+            CREATE TABLE work_item_metrics_daily (
+                day Date,
+                org_id String,
+                provider LowCardinality(String),
+                team_id LowCardinality(String),
+                work_scope_id LowCardinality(String),
+                items_completed UInt32,
+                wip_count_end_of_day UInt32,
+                computed_at DateTime64(3)
+            ) ENGINE = ReplacingMergeTree()
+            ORDER BY (org_id, provider, day, work_scope_id, team_id)
+        `); err != nil {
+			t.Fatalf("create the versionless replacing table: %v", err)
+		}
+
+		// Guard the guard: columns and engine family must both look
+		// acceptable, or a refusal here would be about one of those and this
+		// test would not exercise the version-column check at all.
+		present, err := capacityTableColumns(ctx, fresh, "work_item_metrics_daily")
+		if err != nil {
+			t.Fatalf("inspect the staged table: %v", err)
+		}
+		for _, column := range capacityTableRequirements["work_item_metrics_daily"].columns {
+			if !present[column] {
+				t.Fatalf(
+					"the staged table is missing %q, so a refusal here would "+
+						"be about columns and this test would not exercise "+
+						"the version-column check at all", column)
+			}
+		}
+		engine, err := capacityTableEngine(ctx, fresh, "work_item_metrics_daily")
+		if err != nil {
+			t.Fatalf("inspect the staged table engine: %v", err)
+		}
+		if !strings.Contains(engine, capacityReplacingEngineMarker) {
+			t.Fatalf(
+				"the staged table is %s, not in the Replacing family, so a "+
+					"refusal here would be about the engine and this test "+
+					"would not exercise the version-column check at all", engine)
+		}
+
+		_, err = NewCapacityExecutor(ctx, fresh, nil, nil)
+		if err == nil {
+			t.Fatal(
+				"a ReplacingMergeTree with no version column was accepted; " +
+					"duplicates collapse in insertion order instead of by " +
+					"computed_at, so a retried sync can leave an OLDER row as " +
+					"the survivor -- a stale forecast reported as a clean run")
+		}
+		if !errors.Is(err, ErrCapacitySchemaIncompatible) {
+			t.Fatalf("expected a schema-incompatible refusal, got: %v", err)
+		}
+		if !strings.Contains(err.Error(), "work_item_metrics_daily") {
+			t.Errorf("the refusal must name the offending table: %v", err)
+		}
+		if !strings.Contains(err.Error(), "version") {
+			t.Errorf("the refusal must name the missing version column: %v", err)
+		}
+	})
+
+	t.Run("a sorting key missing a reader-key column is refused", func(t *testing.T) {
+		// The column, engine-family and version-column halves of the probe
+		// all pass here by construction: this table has every required
+		// column and is ReplacingMergeTree(computed_at); only its ORDER BY is
+		// short one column. capacityScopeFilters never filters on provider --
+		// the throughput and backlog queries deliberately sum ACROSS
+		// providers -- so the sorting key is the only thing keeping rows from
+		// different providers distinct under FINAL. Drop provider from it and
+		// FINAL collapses those rows before aggregation: a multi-provider org
+		// silently loses data, with no error anywhere.
+		fresh := freshMigratedClickHouse(t, ctx, OperationalOrderingRevision)
+		if err := fresh.Exec(ctx, "DROP TABLE work_item_metrics_daily"); err != nil {
+			t.Fatalf("stage the narrow-key schema: %v", err)
+		}
+		if err := fresh.Exec(ctx, `
+            CREATE TABLE work_item_metrics_daily (
+                day Date,
+                org_id String,
+                provider LowCardinality(String),
+                team_id LowCardinality(String),
+                work_scope_id LowCardinality(String),
+                items_completed UInt32,
+                wip_count_end_of_day UInt32,
+                computed_at DateTime64(3)
+            ) ENGINE = ReplacingMergeTree(computed_at)
+            ORDER BY (org_id, day, work_scope_id, team_id)
+        `); err != nil {
+			t.Fatalf("create the narrow-sorting-key table: %v", err)
+		}
+
+		// Guard the guard: columns, engine family and version column must all
+		// look acceptable, or a refusal here would be about one of those and
+		// this test would not exercise the sorting-key check at all.
+		present, err := capacityTableColumns(ctx, fresh, "work_item_metrics_daily")
+		if err != nil {
+			t.Fatalf("inspect the staged table: %v", err)
+		}
+		for _, column := range capacityTableRequirements["work_item_metrics_daily"].columns {
+			if !present[column] {
+				t.Fatalf(
+					"the staged table is missing %q, so a refusal here would "+
+						"be about columns and this test would not exercise "+
+						"the sorting-key check at all", column)
+			}
+		}
+		engine, err := capacityTableEngine(ctx, fresh, "work_item_metrics_daily")
+		if err != nil {
+			t.Fatalf("inspect the staged table engine: %v", err)
+		}
+		if !strings.Contains(engine, capacityReplacingEngineMarker) {
+			t.Fatalf(
+				"the staged table is %s, not in the Replacing family, so a "+
+					"refusal here would be about the engine and this test "+
+					"would not exercise the sorting-key check at all", engine)
+		}
+
+		_, err = NewCapacityExecutor(ctx, fresh, nil, nil)
+		if err == nil {
+			t.Fatal(
+				"a sorting key omitting provider was accepted; " +
+					"capacityScopeFilters never filters on provider, so " +
+					"FINAL would collapse rows from different providers " +
+					"before aggregation and a multi-provider org would " +
+					"silently lose data")
+		}
+		if !errors.Is(err, ErrCapacitySchemaIncompatible) {
+			t.Fatalf("expected a schema-incompatible refusal, got: %v", err)
+		}
+		if !strings.Contains(err.Error(), "work_item_metrics_daily") {
+			t.Errorf("the refusal must name the offending table: %v", err)
+		}
+		if !strings.Contains(err.Error(), "provider") {
+			t.Errorf("the refusal must name the missing sorting-key column: %v", err)
+		}
+	})
 }

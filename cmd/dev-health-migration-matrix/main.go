@@ -54,6 +54,13 @@ const (
 	remainingFamiliesRel   = "internal/jobs/metrics/remaining/families.json"
 	jobDailyPyRelative     = "src/dev_health_ops/metrics/job_daily.py"
 
+	// The "Per REST endpoint" section's two sources. Both are already
+	// covered by go.yml's path filters -- main.py by the existing
+	// `src/dev_health_ops/api/**` entry, query-api's *.go files as
+	// ordinary Go source.
+	mainPyRelative      = "src/dev_health_ops/api/main.py"
+	queryAPIDirRelative = "cmd/query-api"
+
 	// catalogRelative is the registered-operation catalog the edge
 	// dispatches by -- the file `dev-hops go-api routing status` reports
 	// DOCUMENT_DRIFT against. Read by -check as well as -render, so a row
@@ -227,11 +234,17 @@ func legacyBlocks(root string, families *migrationmatrix.NativeFamilies) (map[st
 	if err != nil {
 		return nil, fmt.Errorf("workgraph investment block: %w", err)
 	}
+	restRows, err := migrationmatrix.LoadRESTEndpoints(filepath.Join(root, mainPyRelative), filepath.Join(root, queryAPIDirRelative))
+	if err != nil {
+		return nil, fmt.Errorf("REST endpoints: %w", err)
+	}
+	restBlock := migrationmatrix.RenderRESTEndpointsBlock(restRows)
 	return map[string]string{
 		"provider":  providerBlock,
 		"daily":     dailyBlock,
 		"remaining": remainingBlock,
 		"workgraph": workgraphBlock,
+		"rest":      restBlock,
 	}, nil
 }
 
@@ -304,6 +317,7 @@ func runCheck(root string) error {
 		{"daily metrics", migrationmatrix.DailyMetricsBegin, migrationmatrix.DailyMetricsEnd, legacy["daily"]},
 		{"remaining metrics", migrationmatrix.RemainingMetricsBegin, migrationmatrix.RemainingMetricsEnd, legacy["remaining"]},
 		{"workgraph investment", migrationmatrix.WorkgraphInvestmentBegin, migrationmatrix.WorkgraphInvestmentEnd, legacy["workgraph"]},
+		{"REST endpoints", migrationmatrix.RESTEndpointsBegin, migrationmatrix.RESTEndpointsEnd, legacy["rest"]},
 	}
 	for _, block := range blocks {
 		got, err := migrationmatrix.ExtractBlock(doc, block.begin, block.end)
@@ -478,6 +492,7 @@ func runRender(root, dsn, routingFile, fleetMode string, containers []string) er
 		{migrationmatrix.DailyMetricsBegin, migrationmatrix.DailyMetricsEnd, "daily metrics", legacy["daily"]},
 		{migrationmatrix.RemainingMetricsBegin, migrationmatrix.RemainingMetricsEnd, "remaining metrics", legacy["remaining"]},
 		{migrationmatrix.WorkgraphInvestmentBegin, migrationmatrix.WorkgraphInvestmentEnd, "workgraph investment", legacy["workgraph"]},
+		{migrationmatrix.RESTEndpointsBegin, migrationmatrix.RESTEndpointsEnd, "REST endpoints", legacy["rest"]},
 	}
 	for _, r := range legacyReplacements {
 		doc, err = migrationmatrix.ReplaceBlock(doc, r.begin, r.end, r.body)

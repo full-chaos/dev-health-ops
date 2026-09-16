@@ -50,9 +50,11 @@ func TestCheckFailsWhenTheDocIsEditedByHand(t *testing.T) {
 		remainingFamiliesRel,
 		jobDailyPyRelative,
 		catalogRelative,
+		mainPyRelative,
 	} {
 		copyInto(t, filepath.Join(realRoot, relative), filepath.Join(root, relative))
 	}
+	copyGoDirInto(t, filepath.Join(realRoot, queryAPIDirRelative), filepath.Join(root, queryAPIDirRelative))
 
 	// Sanity: the copy still passes, so a failure below is caused by the
 	// edit and not by the copying.
@@ -114,6 +116,27 @@ func copyInto(t *testing.T, from, to string) {
 	}
 	if err := os.WriteFile(to, raw, 0o644); err != nil {
 		t.Fatalf("write %s: %v", to, err)
+	}
+}
+
+// copyGoDirInto copies every top-level, non-test .go file from a directory --
+// what LoadQueryAPIMuxRoutes itself reads -- into an isolated tree, the same
+// "prove the offline check works on exactly its own inputs" shape copyInto
+// gives a single file.
+func copyGoDirInto(t *testing.T, from, to string) {
+	t.Helper()
+	matches, err := filepath.Glob(filepath.Join(from, "*.go"))
+	if err != nil {
+		t.Fatalf("glob %s: %v", from, err)
+	}
+	if len(matches) == 0 {
+		t.Fatalf("%s: no .go files found to copy", from)
+	}
+	for _, m := range matches {
+		if strings.HasSuffix(m, "_test.go") {
+			continue
+		}
+		copyInto(t, m, filepath.Join(to, filepath.Base(m)))
 	}
 }
 
@@ -232,10 +255,11 @@ func copyContractTree(t *testing.T) string {
 	for _, relative := range []string{
 		docRelative, statusRelative, renderRelative, nativeRelative, digestPinRelative,
 		providerMatrixRelative, dailyFamiliesRelative, remainingFamiliesRel, jobDailyPyRelative,
-		catalogRelative,
+		catalogRelative, mainPyRelative,
 	} {
 		copyInto(t, filepath.Join(realRoot, relative), filepath.Join(root, relative))
 	}
+	copyGoDirInto(t, filepath.Join(realRoot, queryAPIDirRelative), filepath.Join(root, queryAPIDirRelative))
 	return root
 }
 

@@ -178,22 +178,27 @@ func WriteEdges(ctx context.Context, conn driver.Conn, organizationID string, ro
 	return len(rows), nil
 }
 
-// existingBlockerEdgeIDsSQL is `_delete_dependency_edge_candidates`'s own read
-// (builder.py:952-971), reproduced verbatim in shape: every NATIVE issue<->issue
-// blocker-family edge id currently live, paged by edge_id after a cursor.
+// existingDependencyEdgeIDsSQL is `_delete_dependency_edge_candidates`'s own
+// read (builder.py:952-971), widened in scope: every NATIVE issue<->issue
+// dependency edge id currently live, of any type this producer's writer has
+// ever stamped (dependencyEdgeTypes), paged by edge_id after a cursor.
+//
+// `is_blocked_by` is read here but never written: CanonicalDependency forces
+// every blocker-family relationship to BLOCKS, so a live `is_blocked_by` row
+// can only be a historical one written before that canonicalisation.
 //
 // FINAL here is deliberate and NOT the same divergence flagged on
 // dependencyReadSQL above -- Python's own read of THIS table uses FINAL too
 // (builder.py:959), because this query decides what to DELETE and reading a
 // pre-merge duplicate would target an id that may already be gone. A
 // tombstoned identity is not live, so it is not an existing id.
-const existingBlockerEdgeIDsSQL = `
+const existingDependencyEdgeIDsSQL = `
         SELECT edge_id
         FROM work_graph_edges FINAL
         WHERE org_id = {org_id:String}
           AND source_type = 'issue'
           AND target_type = 'issue'
-          AND edge_type IN ('blocks', 'is_blocked_by')
+          AND edge_type IN {edge_types:Array(String)}
           AND provenance = 'native'
           AND is_deleted = 0
           AND edge_id > {after:String}
@@ -201,33 +206,34 @@ const existingBlockerEdgeIDsSQL = `
         LIMIT 1000
 `
 
-// ReadExistingBlockerEdgeIDs pages through every currently-live native
-// issue<->issue blocker-family edge id, for BuildCleanupPlan's
-// existingEdgeIDs input (builder.py:953-971).
-func ReadExistingBlockerEdgeIDs(ctx context.Context, conn driver.Conn, organizationID string) ([]string, error) {
+// ReadExistingDependencyEdgeIDs pages through every currently-live native
+// issue<->issue dependency edge id, of any type in dependencyEdgeTypes, for
+// BuildCleanupPlan's existingEdgeIDs input (builder.py:953-971).
+func ReadExistingDependencyEdgeIDs(ctx context.Context, conn driver.Conn, organizationID string) ([]string, error) {
 	if err := requireEdgeScope(organizationID); err != nil {
 		return nil, err
 	}
 	var ids []string
 	after := ""
 	for {
-		rows, err := conn.Query(ctx, existingBlockerEdgeIDsSQL,
-			clickhouse.Named("org_id", organizationID), clickhouse.Named("after", after))
+		rows, err := conn.Query(ctx, existingDependencyEdgeIDsSQL,
+			clickhouse.Named("org_id", organizationID), clickhouse.Named("after", after),
+			clickhouse.Named("edge_types", dependencyEdgeTypes))
 		if err != nil {
-			return nil, fmt.Errorf("read existing blocker edge ids: %w", err)
+			return nil, fmt.Errorf("read existing dependency edge ids: %w", err)
 		}
 		page := make([]string, 0, cleanupPageSize)
 		for rows.Next() {
 			var id string
 			if err := rows.Scan(&id); err != nil {
 				rows.Close()
-				return nil, fmt.Errorf("scan blocker edge id: %w", err)
+				return nil, fmt.Errorf("scan dependency edge id: %w", err)
 			}
 			page = append(page, id)
 		}
 		if err := rows.Err(); err != nil {
 			rows.Close()
-			return nil, fmt.Errorf("iterate blocker edge ids: %w", err)
+			return nil, fmt.Errorf("iterate dependency edge ids: %w", err)
 		}
 		rows.Close()
 		if len(page) == 0 {

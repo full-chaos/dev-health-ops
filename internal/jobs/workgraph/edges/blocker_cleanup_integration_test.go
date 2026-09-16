@@ -19,14 +19,14 @@ import (
 // `BuildCleanupPlan`/`BuildBlockerProjection` existed but were never called
 // against a real database. This test exercises the exact sequence
 // issueIssueEdgesPreStep.Run() now performs (DeleteProjectionRuns ->
-// ReadExistingBlockerEdgeIDs -> BuildCleanupPlan -> DeleteEdgesByID ->
+// ReadExistingDependencyEdgeIDs -> BuildCleanupPlan -> DeleteEdgesByID ->
 // WriteEdges -> BuildBlockerProjection -> WriteProjectionRun) against a real
 // engine and asserts both halves of what was missing: a stale legacy blocker
 // edge is actually deleted, and a fresh projection-run watermark actually
 // replaces the prior one.
 //
 // RED ON THE PRE-FIX TIP: before CHAOS-5303 r1's fix, Run() never called any
-// of DeleteProjectionRuns/ReadExistingBlockerEdgeIDs/DeleteEdgesByID/
+// of DeleteProjectionRuns/ReadExistingDependencyEdgeIDs/DeleteEdgesByID/
 // WriteProjectionRun -- this test's two assertions below would have failed
 // against that code (the stale edge would still be present, and no fresh
 // projection_runs row would exist at all, since work_graph_projection_runs
@@ -85,7 +85,7 @@ VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 	// or renamed upstream. BuildCleanupPlan's freshly-generated candidates
 	// (from the CURRENT dependency rows) can never name this id, since there
 	// is no row to generate it from. The ONLY path that can catch it is
-	// ReadExistingBlockerEdgeIDs's live read feeding into
+	// ReadExistingDependencyEdgeIDs's live read feeding into
 	// BuildCleanupPlan's existingEdgeIDs argument -- so this edge is what
 	// proves that read path actually does something, not just the
 	// freshly-generated path the first stale edge above also exercises.
@@ -145,9 +145,9 @@ VALUES (?,?,NULL,?,?,?,?)`,
 	if err := DeleteProjectionRuns(ctx, conn, org, BlockerProjectionName, BlockerProjectionRuleVersion()); err != nil {
 		t.Fatalf("DeleteProjectionRuns: %v", err)
 	}
-	existingIDs, err := ReadExistingBlockerEdgeIDs(ctx, conn, org)
+	existingIDs, err := ReadExistingDependencyEdgeIDs(ctx, conn, org)
 	if err != nil {
-		t.Fatalf("ReadExistingBlockerEdgeIDs: %v", err)
+		t.Fatalf("ReadExistingDependencyEdgeIDs: %v", err)
 	}
 	foundOrphan := false
 	for _, id := range existingIDs {
@@ -156,7 +156,7 @@ VALUES (?,?,NULL,?,?,?,?)`,
 		}
 	}
 	if !foundOrphan {
-		t.Fatalf("ReadExistingBlockerEdgeIDs did not return the seeded orphan edge id %s among %v "+
+		t.Fatalf("ReadExistingDependencyEdgeIDs did not return the seeded orphan edge id %s among %v "+
 			"-- this is the only path that can catch an edge with no current dependency row",
 			orphanEdgeID, existingIDs)
 	}
@@ -232,5 +232,111 @@ VALUES (?,?,NULL,?,?,?,?)`,
 	}
 	if !gotCompletedAt.Equal(buildClock) {
 		t.Errorf("completed_at = %v, want the build clock %v", gotCompletedAt, buildClock)
+	}
+}
+
+// TestWidenedCleanupRetiresStaleNonBlockerDependencyEdges is the red/green
+// proof for the widened cleanup scope: cleanup used to cover only the blocker family
+// (`blocks`/`is_blocked_by`), so a stale `relates`, `duplicates`, `parent_of`
+// or `child_of` issue<->issue edge whose dependency row was deleted upstream
+// was never cleaned by any path. It seeds one stale edge of each of those
+// four types with NO current dependency row backing it, runs the same
+// sequence issueIssueEdgesPreStep.Run() performs, and asserts every one of
+// them is gone -- proving the widened edge-type set covers the family the
+// writer produces, not just the blocker rows.
+//
+// RED ON THE PRE-WIDENING CODE: before dependencyEdgeTypes replaced the
+// blocker-only filter in both ReadExistingDependencyEdgeIDs's SQL and
+// BuildCleanupPlan's per-row loop, none of these four edges would appear in
+// existingEdgeIDs (the read's WHERE clause excluded their edge_type) and none
+// would be regenerated as a candidate from a current row (there is none), so
+// all four would survive cleanup indefinitely.
+func TestWidenedCleanupRetiresStaleNonBlockerDependencyEdges(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	instance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(instance.URI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	chschema.Apply(ctx, t, instance)
+
+	const org = "70d529e0-3c06-4597-8480-794fd0234812"
+	seededAt := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	type staleEdge struct {
+		id, sourceID, edgeType, targetID string
+	}
+	stale := []staleEdge{
+		{"stale-relates", "gh:acme/app#501", EdgeTypeRelates, "gh:acme/app#502"},
+		{"stale-duplicates", "gh:acme/app#503", EdgeTypeDuplicates, "gh:acme/app#504"},
+		{"stale-parent-of", "gh:acme/app#505", EdgeTypeParentOf, "gh:acme/app#506"},
+		{"stale-child-of", "gh:acme/app#507", EdgeTypeChildOf, "gh:acme/app#508"},
+	}
+	for _, edge := range stale {
+		if err := conn.Exec(ctx, `INSERT INTO work_graph_edges
+(edge_id, source_type, source_id, target_type, target_id, edge_type, provenance,
+ confidence, evidence, discovered_at, last_synced, event_ts, day, org_id)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			edge.id, "issue", edge.sourceID, "issue", edge.targetID, edge.edgeType, "native",
+			float32(0.9), "orphaned-no-current-dependency-row", seededAt, seededAt, seededAt, seededAt, org,
+		); err != nil {
+			t.Fatalf("seed %s: %v", edge.id, err)
+		}
+	}
+
+	// No current dependency rows at all: every seeded edge above is an orphan
+	// with nothing to regenerate it.
+	var dependencyRows []DependencyRow
+	buildClock := time.Date(2026, 9, 2, 0, 0, 0, 0, time.UTC)
+	derived, err := DeriveIssueIssueEdges(dependencyRows, buildClock)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	existingIDs, err := ReadExistingDependencyEdgeIDs(ctx, conn, org)
+	if err != nil {
+		t.Fatalf("ReadExistingDependencyEdgeIDs: %v", err)
+	}
+	for _, edge := range stale {
+		found := false
+		for _, id := range existingIDs {
+			if id == edge.id {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("ReadExistingDependencyEdgeIDs did not return seeded %s edge %s among %v -- "+
+				"the widened type set must cover %s", edge.edgeType, edge.id, existingIDs, edge.edgeType)
+		}
+	}
+
+	plan := BuildCleanupPlan(dependencyRows, existingIDs)
+	versions, err := ReadIssueIssueEdgeVersions(ctx, conn, org)
+	if err != nil {
+		t.Fatalf("ReadIssueIssueEdgeVersions: %v", err)
+	}
+	if err := DeleteEdgesByID(ctx, conn, org, plan, versions, derived.Edges, buildClock); err != nil {
+		t.Fatalf("DeleteEdgesByID: %v", err)
+	}
+
+	for _, edge := range stale {
+		var count uint64
+		if err := conn.QueryRow(ctx,
+			`SELECT count() FROM work_graph_edges FINAL WHERE edge_id = ? AND is_deleted = 0`, edge.id,
+		).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 0 {
+			t.Errorf("stale %s edge %s still present after widened cleanup (count=%d)",
+				edge.edgeType, edge.id, count)
+		}
 	}
 }

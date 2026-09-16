@@ -1,7 +1,6 @@
 package edges
 
 import (
-	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"sort"
 	"time"
 )
@@ -25,23 +24,26 @@ type CleanupPlan struct {
 //
 // # WHY A SUPERSET, AND WHY IT IS NOT OVER-DELETION
 //
-// For every blocker row it generates SIX ids: both endpoint directions crossed
-// with BLOCKS, IS_BLOCKED_BY and RELATES. That looks excessive until you see what
-// it is for — a legacy row may have been written under any of those orientations
-// by an older canonicalisation, and the rewrite that follows only re-creates the
-// one current orientation. Deleting only the current id would leave the other
-// five alive as orphans that no later run ever revisits.
+// For every dependency row it generates one candidate id per endpoint
+// direction crossed with every type in dependencyEdgeTypes. That looks
+// excessive until you see what it is for — a legacy row may have been written
+// under any of those orientations or types by an older canonicalisation, and
+// the rewrite that follows only re-creates the one current orientation and
+// type. Deleting only the current id would leave the rest alive as orphans
+// that no later run ever revisits.
 //
 // It is not over-deletion because every id it names is an id THIS run either
 // re-creates or has established should not exist.
 //
-// # WHAT IT DOES NOT COVER
+// # WHAT IT COVERS
 //
-// Only the blocker family. Stale `relates`, `duplicates`, `parent_of` and
-// `child_of` issue<->issue edges are cleaned by nothing, ever (CHAOS-4812 item 3).
-// Replicated verbatim: widening it here would delete rows Python leaves alive.
+// Every issue<->issue dependency edge type this producer writes or has ever
+// written -- the blocker family plus `relates`, `duplicates`, `parent_of` and
+// `child_of` (dependencyEdgeTypes, defined once and shared with the writer). A
+// stale edge whose dependency row is gone is stale regardless of which of
+// these types it carries.
 func BuildCleanupPlan(rows []DependencyRow, existingEdgeIDs []string) CleanupPlan {
-	candidates := make(map[string]struct{}, len(existingEdgeIDs)+len(rows)*6)
+	candidates := make(map[string]struct{}, len(existingEdgeIDs)+len(rows)*2*len(dependencyEdgeTypes))
 	for _, id := range existingEdgeIDs {
 		// Python's `if row.get("edge_id")` (:966): a falsy id is dropped.
 		if id != "" {
@@ -50,10 +52,6 @@ func BuildCleanupPlan(rows []DependencyRow, existingEdgeIDs []string) CleanupPla
 	}
 
 	for _, row := range rows {
-		// Python lowercases before the membership test (:927).
-		if _, isBlocker := blockerTypes[pythonparity.Lower(row.RelationshipType)]; !isBlocker {
-			continue
-		}
 		// NOTE these are the RAW endpoints, NOT the canonicalised ones — Python
 		// reads them straight off the row here (:975-977) rather than calling
 		// _canonical_dependency. Using the canonical pair would generate ids for
@@ -63,7 +61,7 @@ func BuildCleanupPlan(rows []DependencyRow, existingEdgeIDs []string) CleanupPla
 			continue
 		}
 		for _, pair := range [2][2]string{{source, target}, {target, source}} {
-			for _, edgeType := range [3]string{EdgeTypeBlocks, EdgeTypeIsBlockedBy, EdgeTypeRelates} {
+			for _, edgeType := range dependencyEdgeTypes {
 				candidates[EdgeID(NodeTypeIssue, pair[0], edgeType, NodeTypeIssue, pair[1])] = struct{}{}
 			}
 		}

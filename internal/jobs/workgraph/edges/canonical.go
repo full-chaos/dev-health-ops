@@ -38,15 +38,14 @@ var blockerTypes = map[string]struct{}{
 	"blocks": {}, "blocked_by": {}, "is_blocked_by": {},
 }
 
-// dependencyTypeMap is Python's `DEPENDENCY_TYPE_MAP` (builder.py:64-75).
+// dependencyTypeMap is the relationship-string to edge-type mapping this
+// producer uses for every relationship that is not in the blocker family.
 //
-// NOTE `is_blocked_by` maps to IS_BLOCKED_BY here and that entry is UNREACHABLE:
-// `is_blocked_by` is also in blockerTypes, so it never reaches this lookup. The
-// entry is kept because the port replicates Python verbatim, and its
-// unreachability is recorded as CHAOS-4812 item 1 rather than tidied away.
+// `is_blocked_by` is not a key here: every blocker-family relationship is
+// forced to BLOCKS before this map is ever consulted (blockerTypes is checked
+// first), so an entry for it here could never be reached.
 var dependencyTypeMap = map[string]string{
 	"blocks":          EdgeTypeBlocks,
-	"is_blocked_by":   EdgeTypeIsBlockedBy,
 	"relates":         EdgeTypeRelates,
 	"is_related_to":   EdgeTypeIsRelatedTo,
 	"duplicates":      EdgeTypeDuplicates,
@@ -55,6 +54,30 @@ var dependencyTypeMap = map[string]string{
 	"child":           EdgeTypeChildOf,
 	"is_parent_of":    EdgeTypeParentOf,
 	"is_child_of":     EdgeTypeChildOf,
+}
+
+// dependencyEdgeTypes is every edge_type this producer's write path stamps for
+// an issue<->issue dependency edge, current and historical, in one place
+// shared by the writer (dependencyTypeMap plus the forced blocker family) and
+// every cleanup path that decides which stored edges are this family's
+// concern. A stale edge whose dependency row is gone is stale regardless of
+// which of these types it carries.
+//
+// `is_blocked_by` is a member despite not being a dependencyTypeMap key: it is
+// read here because historical rows written before blocker canonicalisation
+// still carry it, and it is never written by the current builder.
+var dependencyEdgeTypes = []string{
+	EdgeTypeBlocks, EdgeTypeIsBlockedBy, EdgeTypeRelates, EdgeTypeIsRelatedTo,
+	EdgeTypeDuplicates, EdgeTypeIsDuplicateOf, EdgeTypeParentOf, EdgeTypeChildOf,
+}
+
+// DependencyEdgeTypes returns a copy of the widened issue<->issue dependency
+// edge-type set, for a caller outside this package that needs to log or
+// reason about it without duplicating the list.
+func DependencyEdgeTypes() []string {
+	widened := make([]string, len(dependencyEdgeTypes))
+	copy(widened, dependencyEdgeTypes)
+	return widened
 }
 
 // blockerProjectionRuleVersion is Python's BLOCKER_PROJECTION_RULE_VERSION (:82).
@@ -71,16 +94,16 @@ const blockerProjectionRuleVersion = "canonical-blocks.v2"
 // swap is correct depends on which provider wrote the row and under which
 // semantics version. Reordering these branches changes real edge directions.
 //
-// # TWO PYTHON DETAILS THAT ARE EASY TO LOSE
+// # ONE PYTHON DETAIL THAT IS EASY TO LOSE
 //
-//  1. `relationship` and `raw` are lowercased; `semantics` is NOT (:97-99). So a
-//     row carrying "Canonical-Blocks.V2" fails the equality at branch 2 and falls
-//     through to the legacy heuristics — a wrong-direction edge that is still
-//     counted as written. Replicated verbatim; recorded as CHAOS-4812 item 2.
-//  2. Branch 3's `raw == relationship` compares raw against the ALREADY-LOWERED
-//     relationship, so it only fires when raw was itself lowercase. Whitespace or
-//     case noise in raw silently skips the intended flip and falls to a later
-//     branch.
+// Branch 3's `raw == relationship` compares raw against the ALREADY-LOWERED
+// relationship, so it only fires when raw was itself lowercase. Whitespace or
+// case noise in raw silently skips the intended flip and falls to a later
+// branch.
+//
+// `relationship`, `raw` and `semantics` are all case-folded the same way before
+// any comparison, so a row carrying "Canonical-Blocks.V2" still takes the
+// canonical branch rather than falling through to the legacy heuristics.
 //
 // Returns source, target and edge type. Only the type is derived from the
 // relationship; the endpoints may be swapped.
@@ -91,8 +114,10 @@ func CanonicalDependency(row DependencyRow) (string, string, string) {
 	raw := pythonparity.Lower(row.RelationshipRaw)
 
 	// `str(row.get(...) or "legacy.v1")`: empty and missing both become the
-	// default, and they are indistinguishable afterwards (CHAOS-4812 context).
-	semantics := row.SemanticsVersion
+	// default, and they are indistinguishable afterwards. Folded like
+	// `relationship` and `raw` above, so a mixed-case stored value still
+	// compares equal to the canonical rule version below.
+	semantics := pythonparity.Lower(row.SemanticsVersion)
 	if semantics == "" {
 		semantics = "legacy.v1"
 	}

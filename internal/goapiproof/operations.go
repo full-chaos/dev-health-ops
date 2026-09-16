@@ -570,14 +570,18 @@ var operationSpecs = map[string]OperationSpec{
 	// duplicated baseline row whose copies agree with each other and with
 	// the candidate's own row for the same id -- rather than admitting
 	// any difference under the edges list, which would also excuse a
-	// genuine per-field regression sharing the same path.
+	// genuine per-field regression sharing the same path. pageInfo's
+	// endCursor names whichever edge lands in the page's last slot, so
+	// the same slot-count shift that explains every reordered edge also
+	// determines it deterministically -- it is covered for exactly the
+	// comparisons the shape already validates, never on its own.
 	"workGraphEdges": {
 		ResponseRoot: "workGraphEdges",
 		Variables:    workGraphVariables,
 		Parity: Options{BaselineDefects: []BaselineDefect{{
 			Ticket:             "CHAOS-5791",
-			Reason:             "work_graph_edges is a ReplacingMergeTree keyed on the edge identity; the baseline plane reads it with no merge-time collapse, so an unmerged duplicate physical version of one logical edge surfaces as two content-identical rows sharing one edgeId, spending one extra slot of the page limit and shifting every later element's position. The candidate plane collapses duplicate versions before applying the page limit, so it carries no repeated edgeId. Candidate is correct.",
-			Paths:              []string{"data.workGraphEdges.edges"},
+			Reason:             "work_graph_edges is a ReplacingMergeTree keyed on the edge identity; the baseline plane reads it with no merge-time collapse, so an unmerged duplicate physical version of one logical edge surfaces as two content-identical rows sharing one edgeId, spending one extra slot of the page limit and shifting every later element's position, including which edge's id pageInfo.endCursor names. The candidate plane collapses duplicate versions before applying the page limit, so it carries no repeated edgeId. Candidate is correct.",
+			Paths:              []string{"data.workGraphEdges.edges", "data.workGraphEdges.pageInfo.endCursor"},
 			Intermittent:       true,
 			IntermittentReason: "present only while the source table holds an unmerged duplicate physical version of some edge; a comparison taken after the background merge collapses it shows no repeated edgeId on the baseline side either",
 			WorkGraphEdgeDedupShape: &WorkGraphEdgeDedupShape{

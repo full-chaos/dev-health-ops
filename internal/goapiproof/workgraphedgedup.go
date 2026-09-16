@@ -1,6 +1,6 @@
 package goapiproof
 
-import "reflect"
+import "encoding/json"
 
 // WorkGraphEdgeDedupShape, set on a BaselineDefect, replaces that defect's
 // blanket "any leaf difference under Paths is covered" rule with a
@@ -15,17 +15,21 @@ import "reflect"
 // The shape this type verifies, over the two DECODED edge lists:
 //
 //  1. Every id repeated in the baseline list names a group of elements
-//     that are, ignoring order, byte-identical to one another: the SAME
-//     logical edge inserted more than once, not a real per-field
-//     disagreement hiding behind a shared id.
+//     that are, ignoring order, equal to one another field for field: the
+//     SAME logical edge inserted more than once, not a real per-field
+//     disagreement hiding behind a shared id. A number compares by
+//     VALUE, not by literal form, so a plane that always writes a whole
+//     number as "1" and one that sometimes writes it as "1.0" still agree
+//     -- that is a formatting choice, never the difference this rule
+//     exists to catch.
 //  2. The candidate list carries no repeated id at all -- the mechanism
 //     this shape explains is one-sided. A repeated id on the candidate
 //     side is a different, unexplained condition, and nothing here may
 //     admit it.
 //  3. For every id the two lists share, the (deduplicated) baseline
-//     element and the candidate element are byte-identical, field for
-//     field. An id present on only one side is outside this rule -- see
-//     below.
+//     element and the candidate element are equal, field for field, by
+//     the same by-value comparison as rule 1. An id present on only one
+//     side is outside this rule -- see below.
 //  4. At least one id was actually repeated in the baseline and at least
 //     one id was actually shared between the two lists -- a plan built
 //     from a comparison with neither has nothing to admit and stays
@@ -100,7 +104,7 @@ func buildWorkGraphEdgeDedupPlan(shape *WorkGraphEdgeDedupShape, baselineData, c
 	for id, group := range baseGroups {
 		first := group[0]
 		for _, other := range group[1:] {
-			if !reflect.DeepEqual(first, other) {
+			if !jsonValuesEqual(first, other) {
 				return plan
 			}
 		}
@@ -135,7 +139,7 @@ func buildWorkGraphEdgeDedupPlan(shape *WorkGraphEdgeDedupShape, baselineData, c
 			continue
 		}
 		shared++
-		if !reflect.DeepEqual(baseObject, candObject) {
+		if !jsonValuesEqual(baseObject, candObject) {
 			return plan
 		}
 	}
@@ -161,6 +165,60 @@ func edgeObjectAndID(element any, idField string) (map[string]any, string, bool)
 		return nil, "", false
 	}
 	return object, id, true
+}
+
+// jsonValuesEqual compares two values decoded from JSON (via
+// DecodeSnapshot, so every number is a json.Number) the same way the rest
+// of this package's comparator does: a number compares by parsed VALUE,
+// through asFloat (compare.go), never by its literal text, so "1" and
+// "1.0" agree exactly as compareNumber already treats them as one Tier-A
+// value. reflect.DeepEqual has no such normalization -- it would read the
+// two planes' own formatting conventions for a whole number as a content
+// disagreement, which is a different plane's serializer, not a duplicate
+// row whose fields actually differ. Every other JSON kind (object, list,
+// string, bool, null) compares structurally, recursively.
+func jsonValuesEqual(a, b any) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	if aNum, ok := a.(json.Number); ok {
+		bNum, ok := b.(json.Number)
+		if !ok {
+			return false
+		}
+		aFloat, aOK := asFloat(aNum)
+		bFloat, bOK := asFloat(bNum)
+		if aOK && bOK {
+			return aFloat == bFloat
+		}
+		return aNum == bNum
+	}
+	if aMap, ok := a.(map[string]any); ok {
+		bMap, ok := b.(map[string]any)
+		if !ok || len(aMap) != len(bMap) {
+			return false
+		}
+		for key, aValue := range aMap {
+			bValue, present := bMap[key]
+			if !present || !jsonValuesEqual(aValue, bValue) {
+				return false
+			}
+		}
+		return true
+	}
+	if aList, ok := a.([]any); ok {
+		bList, ok := b.([]any)
+		if !ok || len(aList) != len(bList) {
+			return false
+		}
+		for i := range aList {
+			if !jsonValuesEqual(aList[i], bList[i]) {
+				return false
+			}
+		}
+		return true
+	}
+	return a == b
 }
 
 // listAtDottedPath reads a JSON list at a dotted, index-free path (the

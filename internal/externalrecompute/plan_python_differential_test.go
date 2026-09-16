@@ -14,10 +14,14 @@ package externalrecompute
 
 import (
 	"encoding/base64"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
 // pythonIntDifferentialCases are chosen to cover every rule pythonInt claims to
@@ -40,7 +44,7 @@ var pythonIntDifferentialCases = []string{
 }
 
 func TestPythonIntMatchesRealCPython(t *testing.T) {
-	requireCPython(t)
+	python := requireCPython(t)
 	// The value crosses the process boundary base64-encoded so no shell,
 	// argv, or source-encoding layer can alter the exotic bytes under test --
 	// which would silently turn this differential into a comparison of two
@@ -54,10 +58,10 @@ except Exception:
 
 	for _, raw := range pythonIntDifferentialCases {
 		goValue, goOK := pythonInt(raw)
-		out, err := exec.Command("python3", "-c", script,
+		out, err := exec.Command(python, "-c", script,
 			base64.StdEncoding.EncodeToString([]byte(raw))).Output()
 		if err != nil {
-			t.Fatalf("python3 for %q: %v", raw, err)
+			t.Fatalf("%s for %q: %v", python, raw, pyoracle.RunError(python, err, nil))
 		}
 		pythonOK := strings.HasPrefix(string(out), "ok:")
 		pythonValue := 0
@@ -99,31 +103,54 @@ except Exception:
 // because a red test nobody trusts is a red test everybody ignores. The
 // repository targets 3.12+ (see pyproject.toml's requires-python), so anything
 // older is out of contract rather than a finding.
-func requireCPython(t *testing.T) {
+func requireCPython(t *testing.T) string {
 	t.Helper()
-	if _, err := exec.LookPath("python3"); err != nil {
-		t.Skip("python3 not available")
+	python, rule, err := pyoracle.Interpreter(externalrecomputeRepositoryRoot(t))
+	if err != nil {
+		t.Skipf("no Python interpreter available: %v", err)
 	}
-	out, err := exec.Command("python3", "-c",
+	t.Logf("pyoracle: resolved interpreter %s (%s)", python, rule)
+	out, err := exec.Command(python, "-c",
 		"import platform,sys;print(platform.python_implementation(),sys.version_info[0],sys.version_info[1])").
 		Output()
 	if err != nil {
-		t.Skipf("python3 did not report its implementation: %v", err)
+		t.Skipf("%s did not report its implementation: %v", python, err)
 	}
 	fields := strings.Fields(string(out))
 	if len(fields) != 3 {
-		t.Skipf("unexpected interpreter banner %q", strings.TrimSpace(string(out)))
+		t.Skipf("unexpected interpreter banner %q from %s", strings.TrimSpace(string(out)), python)
 	}
 	if fields[0] != "CPython" {
-		t.Skipf("interpreter is %s, not CPython: int() grammar is only specified here for CPython", fields[0])
+		t.Skipf("interpreter %s is %s, not CPython: int() grammar is only specified here for CPython", python, fields[0])
 	}
 	major, majorErr := strconv.Atoi(fields[1])
 	minor, minorErr := strconv.Atoi(fields[2])
 	if majorErr != nil || minorErr != nil {
-		t.Skipf("unexpected interpreter version %q", strings.TrimSpace(string(out)))
+		t.Skipf("unexpected interpreter version %q from %s", strings.TrimSpace(string(out)), python)
 	}
 	if major < 3 || (major == 3 && minor < 12) {
-		t.Skipf("CPython %d.%d predates this repository's 3.12+ contract", major, minor)
+		t.Skipf("%s is CPython %d.%d, which predates this repository's 3.12+ contract", python, major, minor)
+	}
+	return python
+}
+
+// externalrecomputeRepositoryRoot walks up to the module root, so the
+// resolved interpreter can find the checked-out virtualenv.
+func externalrecomputeRepositoryRoot(t *testing.T) string {
+	t.Helper()
+	working, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for directory := working; ; {
+		if _, err := os.Stat(filepath.Join(directory, "go.mod")); err == nil {
+			return directory
+		}
+		parent := filepath.Dir(directory)
+		if parent == directory {
+			t.Fatal("could not find repository root (no go.mod found)")
+		}
+		directory = parent
 	}
 }
 

@@ -8,6 +8,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
 // TestLinearWorkItemsOraclePrepExecutesLiveProducer is intentionally opt-in.
@@ -26,7 +28,8 @@ func TestLinearWorkItemsOraclePrepExecutesLiveProducer(t *testing.T) {
 	script := filepath.Join(
 		packageDir, "testdata", "linear_work_items_oracle_prep.py",
 	)
-	command := exec.Command("python3", script)
+	python := pyoracle.Resolve(t, root)
+	command := exec.Command(python, script)
 	command.Dir = root
 	command.Env = make([]string, 0, len(os.Environ())+2)
 	for _, value := range os.Environ() {
@@ -42,7 +45,7 @@ func TestLinearWorkItemsOraclePrepExecutesLiveProducer(t *testing.T) {
 	)
 	output, err := command.Output()
 	if err != nil {
-		t.Fatalf("execute live Linear producer probe: %v", err)
+		t.Fatalf("execute live Linear producer probe: %v", pyoracle.RunError(python, err, nil))
 	}
 	var result struct {
 		Producer       string           `json:"producer"`

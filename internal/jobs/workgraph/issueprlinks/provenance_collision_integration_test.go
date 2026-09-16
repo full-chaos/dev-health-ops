@@ -16,6 +16,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
 // TestIssuePRProvenanceCollisionSurvivesMerge is the acceptance test for
@@ -678,10 +679,7 @@ finally:
     sink.close()
 print("MIGRATION_084_APPLIED")
 `
-	python := os.Getenv("DEV_HEALTH_PYTHON")
-	if python == "" {
-		python = "python3"
-	}
+	python := pyoracle.Resolve(t, root)
 	migration := filepath.Join(root, "src", "dev_health_ops", "migrations",
 		"clickhouse", "084_issue_pr_provenance_version_precedence.py")
 	command := exec.CommandContext(ctx, python, "-c", script, dsn, migration, afterSnapshotSQL)
@@ -695,7 +693,7 @@ print("MIGRATION_084_APPLIED")
 		t.Logf("after-snapshot hook outcome: %s", hookOutcome(string(out)))
 	}
 	if err != nil || !strings.Contains(string(out), "MIGRATION_084_APPLIED") {
-		return fmt.Errorf("%w\n%s", err, out)
+		return pyoracle.RunError(python, fmt.Errorf("%w\n%s", err, out), nil)
 	}
 	return nil
 }

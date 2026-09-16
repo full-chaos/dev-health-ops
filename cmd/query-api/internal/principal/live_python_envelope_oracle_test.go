@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
 // pythonIssuedEnvelopeProgram mints a REAL effective-principal envelope with
@@ -73,19 +75,13 @@ func TestVerifierMatchesLivePythonIssuedEnvelope(t *testing.T) {
 	}
 	// .../cmd/query-api/internal/principal -> repository root.
 	repositoryRoot := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", "..", "..", ".."))
-	python := filepath.Join(repositoryRoot, ".venv", "bin", "python")
-	if _, err := os.Stat(python); err != nil {
-		python, err = exec.LookPath("python3")
-		if err != nil {
-			t.Fatalf("live Python oracle interpreter: %v", err)
-		}
-	}
+	python := pyoracle.Resolve(t, repositoryRoot)
 
 	command := exec.Command(python, "-c", pythonIssuedEnvelopeProgram)
 	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(repositoryRoot, "src"))
 	output, err := command.CombinedOutput()
 	if err != nil {
-		t.Fatalf("live Python envelope oracle: %v: %s", err, output)
+		t.Fatalf("live Python envelope oracle: %v", pyoracle.RunError(python, err, output))
 	}
 
 	var result struct {

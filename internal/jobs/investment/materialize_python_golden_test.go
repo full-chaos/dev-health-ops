@@ -25,6 +25,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/units"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
 const (
@@ -225,16 +226,13 @@ func TestFrozenPythonGoldenStillMatchesLivePython(t *testing.T) {
 	}
 	repoRoot := repoRootFromInvestment(t)
 
-	python := os.Getenv("PYTHON")
-	if python == "" {
-		python = "python3"
-	}
+	python := pyoracle.Resolve(t, repoRoot)
 	command := exec.Command(python, investmentGoldenGenerator, "--stdout")
 	command.Dir = repoRoot
 	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(repoRoot, "src"))
 	rendered, err := command.Output()
 	if err != nil {
-		t.Fatalf("running %s: %v", investmentGoldenGenerator, err)
+		t.Fatalf("running %s: %v", investmentGoldenGenerator, pyoracle.RunError(python, err, nil))
 	}
 
 	frozen, err := os.ReadFile(filepath.Join(repoRoot, investmentGoldenFixture))

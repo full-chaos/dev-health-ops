@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"unicode"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
 // The parity contract for this package is numeric equality with lizard
@@ -283,15 +285,12 @@ func assertGoldenBytesMatchLiveOracle(t *testing.T, corpusDir, goldenPath string
 		t.Skip("live Python oracle runs only through the uncached live-oracle gate")
 	}
 
-	python := os.Getenv("DEV_HEALTH_PYTHON")
-	if python == "" {
-		python = "python3"
-	}
+	python := pyoracle.Resolve(t, lizardccRepositoryRoot(t))
 	script := filepath.Join("testdata", "python_lizard_cc_oracle.py")
 	command := exec.Command(python, script, corpusDir)
 	live, err := command.Output()
 	if err != nil {
-		t.Fatalf("lizard oracle failed: %v", err)
+		t.Fatalf("lizard oracle failed: %v", pyoracle.RunError(python, err, nil))
 	}
 
 	want, err := os.ReadFile(goldenPath)
@@ -836,5 +835,25 @@ func assertConditionKeySetIsPinned(t *testing.T, conditions map[string]bool, pin
 		t.Errorf("condition keyword(s) present in the map but not in the pinned set: %v -- "+
 			"add a fixture exercising it AND add it to the pinned set in the SAME "+
 			"reviewed change", unexpected)
+	}
+}
+
+// lizardccRepositoryRoot walks up to the module root, so the resolved
+// interpreter can find the checked-out virtualenv.
+func lizardccRepositoryRoot(t *testing.T) string {
+	t.Helper()
+	working, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for directory := working; ; {
+		if _, err := os.Stat(filepath.Join(directory, "go.mod")); err == nil {
+			return directory
+		}
+		parent := filepath.Dir(directory)
+		if parent == directory {
+			t.Fatal("could not find repository root (no go.mod found)")
+		}
+		directory = parent
 	}
 }

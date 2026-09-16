@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
 // isoformatCases are chosen so each one can only pass for the right reason.
@@ -97,10 +99,7 @@ func TestIsoformatUTCMatchesLivePython(t *testing.T) {
 	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE") == "" {
 		t.Skip("live Python oracle runs only through the uncached live-oracle gate")
 	}
-	python := os.Getenv("DEV_HEALTH_PYTHON")
-	if python == "" {
-		python = "python3"
-	}
+	python := pyoracle.Resolve(t, parityRepositoryRoot(t))
 
 	var input strings.Builder
 	expected := map[string]string{}
@@ -115,7 +114,7 @@ func TestIsoformatUTCMatchesLivePython(t *testing.T) {
 	command.Stdin = strings.NewReader(input.String())
 	output, err := command.Output()
 	if err != nil {
-		t.Fatalf("python oracle failed: %v", err)
+		t.Fatalf("python oracle failed: %v", pyoracle.RunError(python, err, nil))
 	}
 
 	var got map[string]string

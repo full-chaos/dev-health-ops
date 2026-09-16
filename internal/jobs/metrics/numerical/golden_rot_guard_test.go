@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/oraclecompare"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
 const (
@@ -184,19 +185,12 @@ func repositoryRoot(t *testing.T) string {
 // one is entangled with its dataset-registry logic.
 func livePython(t *testing.T, repoRoot string) string {
 	t.Helper()
-	resolved := os.Getenv("PYTHON")
-	if resolved == "" {
-		path, err := exec.LookPath("python3")
-		if err != nil {
-			t.Fatalf("python3 is required for the golden rot guard: %v", err)
-		}
-		resolved = path
-	}
+	resolved := pyoracle.Resolve(t, repoRoot)
 	located, err := exec.Command(
 		resolved, "-c", "import dev_health_ops, sys; sys.stdout.write(dev_health_ops.__file__)",
-	).Output()
+	).CombinedOutput()
 	if err != nil {
-		t.Fatalf("resolve dev_health_ops with %s: %v", resolved, err)
+		t.Fatalf("resolve dev_health_ops: %v", pyoracle.RunError(resolved, err, located))
 	}
 	module := string(located)
 	if !strings.HasPrefix(module, repoRoot+string(os.PathSeparator)) {

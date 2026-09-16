@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
 func intp(n int) *int { return &n }
@@ -198,16 +200,13 @@ func TestBlameMaxFilesArithmeticMatchesLivePython(t *testing.T) {
 		t.Fatalf("marshal cases: %v", err)
 	}
 
-	python := os.Getenv("DEV_HEALTH_PYTHON")
-	if python == "" {
-		python = "python3"
-	}
+	python := pyoracle.Resolve(t, complexityRepositoryRoot(t))
 	script := filepath.Join("testdata", "python_blame_maxfiles_oracle.py")
 	cmd := exec.Command(python, script)
 	cmd.Stdin = bytes.NewReader(payload)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("oracle failed: %v\n%s", err, output)
+		t.Fatalf("oracle failed: %v", pyoracle.RunError(python, err, output))
 	}
 
 	var got []struct {

@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
 // edgeOracleProgram drives the REAL edge validator,
@@ -121,24 +123,7 @@ type oracleJudgement struct {
 
 func oraclePython(t *testing.T, repositoryRoot string) string {
 	t.Helper()
-	if python := os.Getenv("PYTHON"); python != "" {
-		if resolved, err := exec.LookPath(python); err == nil {
-			return resolved
-		}
-	}
-	if venv := filepath.Join(repositoryRoot, ".venv", "bin", "python"); fileExists(venv) {
-		return venv
-	}
-	python, err := exec.LookPath("python3")
-	if err != nil {
-		t.Fatalf("live Python oracle interpreter: %v", err)
-	}
-	return python
-}
-
-func fileExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
+	return pyoracle.Resolve(t, repositoryRoot)
 }
 
 // TestGoMintedEdgeTokenIsJudgedByTheLiveEdgeExactlyLikeAPythonMintedOne is
@@ -207,7 +192,8 @@ func TestGoMintedEdgeTokenIsJudgedByTheLiveEdgeExactlyLikeAPythonMintedOne(t *te
 		t.Fatal(err)
 	}
 
-	command := exec.Command(oraclePython(t, repositoryRoot), "-c", edgeOracleProgram)
+	python := oraclePython(t, repositoryRoot)
+	command := exec.Command(python, "-c", edgeOracleProgram)
 	command.Env = []string{"PYTHONPATH=" + filepath.Join(repositoryRoot, "src")}
 	for _, entry := range os.Environ() {
 		name, _, _ := strings.Cut(entry, "=")
@@ -224,7 +210,7 @@ func TestGoMintedEdgeTokenIsJudgedByTheLiveEdgeExactlyLikeAPythonMintedOne(t *te
 	command.Stderr = &stderr
 	output, err := command.Output()
 	if err != nil {
-		t.Fatalf("live Python edge oracle: %v\n%s", err, stderr.String())
+		t.Fatalf("live Python edge oracle: %v", pyoracle.RunError(python, err, stderr.Bytes()))
 	}
 
 	verdicts := map[string]map[string]oracleJudgement{}

@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
 // TestFloatTextGoldenMatchesLivePython is the rot guard for
@@ -39,11 +41,12 @@ func TestFloatTextGoldenMatchesLivePython(t *testing.T) {
 		t.Fatalf("golden generator is missing at %s: %v", generator, err)
 	}
 
-	command := exec.Command(floatTextLivePython(t, repositoryRoot), generator)
+	python := floatTextLivePython(t, repositoryRoot)
+	command := exec.Command(python, generator)
 	command.Dir = repositoryRoot
 	regenerated, err := command.Output()
 	if err != nil {
-		t.Fatalf("regenerate golden with the live interpreter: %v", err)
+		t.Fatalf("regenerate golden with the live interpreter: %v", pyoracle.RunError(python, err, nil))
 	}
 
 	committed, err := os.ReadFile(filepath.Join(repositoryRoot,
@@ -175,7 +178,8 @@ func floatTextInterpreterOf(t *testing.T, document []byte, label string) string 
 		", " + interpreter.Machine + ")"
 }
 
-// floatTextLivePython resolves the project interpreter, preferring the
+// floatTextLivePython resolves the project interpreter through the shared
+// policy every live-Python oracle in this repository uses, preferring the
 // worktree venv over whatever `python3` PATH happens to offer.
 //
 // ci/check_go.sh's live-oracle verb shells out to a bare `python3`, and a
@@ -187,15 +191,7 @@ func floatTextInterpreterOf(t *testing.T, document []byte, label string) string 
 // venv keeps the guard measuring the shipped interpreter.
 func floatTextLivePython(t *testing.T, repositoryRoot string) string {
 	t.Helper()
-	venvPython := filepath.Join(repositoryRoot, ".venv", "bin", "python")
-	if info, err := os.Stat(venvPython); err == nil && !info.IsDir() {
-		return venvPython
-	}
-	resolved, err := exec.LookPath("python3")
-	if err != nil {
-		t.Fatalf("no project venv at %s and no python3 on PATH: %v", venvPython, err)
-	}
-	return resolved
+	return pyoracle.Resolve(t, repositoryRoot)
 }
 
 func floatTextRepositoryRoot(t *testing.T) string {

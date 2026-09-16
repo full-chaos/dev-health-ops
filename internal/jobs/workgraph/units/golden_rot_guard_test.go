@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
 // TestWorkgraphComponentsGoldenMatchesLivePython is the rot guard for
@@ -90,21 +92,14 @@ func TestWorkgraphComponentsGoldenMatchesLivePython(t *testing.T) {
 // worktree's frozen golden.
 func workgraphComponentsLivePython(t *testing.T, repoRoot string) string {
 	t.Helper()
-	resolved := os.Getenv("PYTHON")
-	if resolved == "" {
-		path, err := exec.LookPath("python3")
-		if err != nil {
-			t.Fatalf("python3 is required for the golden rot guard: %v", err)
-		}
-		resolved = path
-	}
+	resolved := pyoracle.Resolve(t, repoRoot)
 	command := exec.Command(
 		resolved, "-c", "import dev_health_ops, sys; sys.stdout.write(dev_health_ops.__file__)",
 	)
 	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(repoRoot, "src"))
-	located, err := command.Output()
+	located, err := command.CombinedOutput()
 	if err != nil {
-		t.Fatalf("resolve dev_health_ops with %s: %v", resolved, err)
+		t.Fatalf("resolve dev_health_ops: %v", pyoracle.RunError(resolved, err, located))
 	}
 	module := string(located)
 	if !strings.HasPrefix(module, repoRoot+string(os.PathSeparator)) {

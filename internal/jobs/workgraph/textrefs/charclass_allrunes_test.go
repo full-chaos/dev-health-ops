@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 	"unicode"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
 // TestEveryRuneMatchesLivePythonCharacterClasses is the guard that makes the
@@ -48,14 +50,7 @@ func TestEveryRuneMatchesLivePythonCharacterClasses(t *testing.T) {
 	if proofDirectory == "" {
 		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
 	}
-	python := os.Getenv("PYTHON")
-	if python == "" {
-		resolved, err := exec.LookPath("python3")
-		if err != nil {
-			t.Fatalf("python3 is required: %v", err)
-		}
-		python = resolved
-	}
+	python := textrefsLivePython(t)
 
 	// Range-encoded so the transfer stays small: \w alone is ~143k code points,
 	// and a naive list would dominate the test's runtime for no benefit.
@@ -90,7 +85,7 @@ print(json.dumps({
 `
 	output, err := exec.Command(python, "-c", derive).Output()
 	if err != nil {
-		t.Fatalf("derive character classes from live python: %v", err)
+		t.Fatalf("derive character classes from live python: %v", pyoracle.RunError(python, err, nil))
 	}
 
 	var derived struct {
@@ -198,4 +193,32 @@ print(json.dumps({
 	); err != nil {
 		t.Fatalf("write proof marker: %v", err)
 	}
+}
+
+// textrefsRepositoryRoot walks up to the module root, for callers that need
+// it only to locate the checked-out virtualenv.
+func textrefsRepositoryRoot(t *testing.T) string {
+	t.Helper()
+	working, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for directory := working; ; {
+		if _, err := os.Stat(filepath.Join(directory, "go.mod")); err == nil {
+			return directory
+		}
+		parent := filepath.Dir(directory)
+		if parent == directory {
+			t.Fatal("could not find repository root (no go.mod found)")
+		}
+		directory = parent
+	}
+}
+
+// textrefsLivePython resolves the interpreter every live-Python oracle in
+// this package compares Go against, through the policy shared by every
+// live-Python oracle in the repository.
+func textrefsLivePython(t *testing.T) string {
+	t.Helper()
+	return pyoracle.Resolve(t, textrefsRepositoryRoot(t))
 }

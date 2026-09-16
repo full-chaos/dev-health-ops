@@ -179,6 +179,47 @@ func TestGitHubTestsReportPhaseFiltersNothingWithoutASinceBound(t *testing.T) {
 	}
 }
 
+// A run that stopped changing well before this window -- more than one full
+// window earlier than the window's own start -- is genuinely stale, and its
+// report artifacts are not re-fetched.
+func TestGitHubTestsReportPhaseSkipsARunThatHasNotChangedSinceWellBeforeTheWindow(t *testing.T) {
+	t.Parallel()
+	// The run last changed two days before this window opens -- far outside
+	// any grace tied to the window's own one-hour width.
+	doer := githubTestsReportWindowDoerFor(t, "2026-07-20T12:00:00Z")
+	suites, cases := collectGitHubTestsReportRows(t, doer,
+		githubTestsWindowClaim(t,
+			time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC),
+			time.Date(2026, 7, 22, 13, 0, 0, 0, time.UTC)),
+		time.Date(2026, 7, 22, 13, 5, 0, 0, time.UTC))
+	if doer.fetchedArtifacts() {
+		t.Fatalf("a run stale by two days was still re-fetched: %v", doer.requests)
+	}
+	if suites != 0 || cases != 0 {
+		t.Fatalf("a skipped run still projected rows: suites=%d cases=%d", suites, cases)
+	}
+}
+
+// A run within one window-width of the window's own start still gets exactly
+// one more look, which is the grace the late-artifact guard above relies on.
+func TestGitHubTestsReportPhaseStillCollectsARunWithinOneWindowOfTheStart(t *testing.T) {
+	t.Parallel()
+	// The run last changed 59 minutes before this one-hour window opens --
+	// inside the one-window grace, so it is offered once more.
+	doer := githubTestsReportWindowDoerFor(t, "2026-07-22T11:01:00Z")
+	_, cases := collectGitHubTestsReportRows(t, doer,
+		githubTestsWindowClaim(t,
+			time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC),
+			time.Date(2026, 7, 22, 13, 0, 0, 0, time.UTC)),
+		time.Date(2026, 7, 22, 13, 5, 0, 0, time.UTC))
+	if !doer.fetchedArtifacts() {
+		t.Fatalf("a run within the one-window grace was skipped: %v", doer.requests)
+	}
+	if cases == 0 {
+		t.Fatal("a run within the grace was fetched but projected no cases")
+	}
+}
+
 // GitLab is the in-repo precedent this fix mirrors: its report phase bounds
 // BOTH ends on updated_at, server-side (updated_after/updated_before), which is
 // why the shared six-destination projection never duplicated on that provider.

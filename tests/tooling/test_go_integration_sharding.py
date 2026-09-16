@@ -486,16 +486,15 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # CURRENT TOTAL: 60 -- the one number to bump when a new
     # -tags=integration package is added.
     assert "60 package(s) discovered, 0 denylisted, 60 will run" in result.stdout
-    # Raised 3 -> 4: a whole-manifest re-time from hosted CI evidence (see
-    # ci/go_integration_shards.tsv's own header) found the honest per-package
-    # weights no longer leave internal/providersync dominant enough to stay
-    # isolated at three shards without an unmeasured, hand-inflated weight.
-    # Four shards keeps its real measured weight dominant on its own and
-    # gives the three balanced "packages" shards real headroom under the
-    # job's 20-minute target -- see the weight-derived isolation check below
-    # for how a future regression here is caught instead of silently
+    # Raised 4 -> 6: at four shards each balanced "packages" shard's own
+    # estimated test time (2191s) already exceeded the hosted job's
+    # 25-minute (1500s) timeout-minutes cap before any setup/teardown
+    # overhead. Six shards spreads the same non-isolated packages across
+    # five balanced shards instead of three, each landing near 1315s --
+    # comfortably under the cap -- see the weight-derived isolation check
+    # below for how a future regression here is caught instead of silently
     # re-balanced.
-    assert "integration shard plan: 4 shard(s), 60 package(s)" in result.stdout
+    assert "integration shard plan: 6 shard(s), 60 package(s)" in result.stdout
 
     output = dict(
         line.split("=", maxsplit=1)
@@ -510,8 +509,10 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
         ("packages", 2),
         ("packages", 3),
         ("packages", 4),
+        ("packages", 5),
+        ("packages", 6),
     }
-    assert len(matrix) == 7
+    assert len(matrix) == 9
 
     assignments: dict[int, set[str]] = {}
     shard_weights: dict[str, int] = {}
@@ -527,7 +528,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
             weight_field.removeprefix("weight=").removesuffix("s")
         )
 
-    assert set(assignments) == {1, 2, 3, 4}
+    assert set(assignments) == {1, 2, 3, 4, 5, 6}
     flattened = [package for packages in assignments.values() for package in packages]
     # CHAOS-4441: 36, not 35 -- internal/jobs/investment/chquery added. This
     # is the FLATTENED set across all shards, so unlike the selected-package
@@ -615,15 +616,16 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
             )
         )
     }
-    assert set(estimated) == {1, 2, 3, 4}
-    # The three non-isolated "packages" shards (2/3/4) are what the LPT
+    assert set(estimated) == {1, 2, 3, 4, 5, 6}
+    # The five non-isolated "packages" shards (2/3/4/5/6) are what the LPT
     # planner actually balances against each other -- shard 1 only ever
     # holds internal/providersync, checked above. Recounted directly from
-    # this run's own planner output (not hand-adjusted): 2119s/2119s/2118s,
-    # a 1s spread. Re-tighten or loosen this to match a future re-time's
-    # actual output rather than forcing new weights to preserve today's gap.
-    packages_totals = [estimated[shard] for shard in (2, 3, 4)]
-    assert max(packages_totals) - min(packages_totals) <= 1
+    # this run's own planner output (not hand-adjusted): 1316s/1315s/1314s/
+    # 1314s/1314s, a 2s spread. Re-tighten or loosen this to match a future
+    # re-time's actual output rather than forcing new weights to preserve
+    # today's gap.
+    packages_totals = [estimated[shard] for shard in (2, 3, 4, 5, 6)]
+    assert max(packages_totals) - min(packages_totals) <= 2
 
     expected_provider_tests = _providersync_top_level_tests()
     expected_integration_tests = _providersync_integration_tagged_tests()
@@ -2098,7 +2100,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
 
 def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
     selected_packages: list[str] = []
-    for shard in (2, 3, 4):
+    for shard in (2, 3, 4, 5, 6):
         result = _run_check_go("integration-shard", "packages", str(shard), "--dry-run")
         assert result.returncode == 0, result.stdout + result.stderr
         assert f"integration package shard {shard}: DRY RUN" in result.stdout

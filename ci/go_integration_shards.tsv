@@ -42,7 +42,7 @@
 # so a future package addition that erodes this margin fails that assertion
 # loudly, with the actual numbers, instead of a human silently recounting a
 # new shard-1 membership as fine.
-shards	4
+shards	6
 cmd/dev-health-reconciler	6
 cmd/dev-health-worker	235
 cmd/dev-health-workerctl	16

@@ -4,11 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/workitemcontract"
 )
 
 // ErrWorkItemAttributionWriteInvalidState is returned when a write is
@@ -17,6 +21,48 @@ import (
 // ErrMembershipWriteInvalidState shape.
 var ErrWorkItemAttributionWriteInvalidState = errors.New(
 	"work_item_attribution: organization id is required to write attribution data")
+
+// ErrWorkItemAttributionProducerUnidentified is returned when a write is
+// attempted without a producer identity. It fails CLOSED rather than
+// defaulting to a writer name: a row stamped with the wrong producer is
+// worse than a refused write, because the divergence it is meant to explain
+// would then be traced to a path that never ran.
+var ErrWorkItemAttributionProducerUnidentified = errors.New(
+	"work_item_attribution: writer name and run id are required to write attribution data")
+
+// WorkItemAttributionWriterDaily and WorkItemAttributionWriterBackstop are
+// this package's aliases for the shared producer vocabulary. Both names are
+// stored in work_item_team_attributions.writer.
+const (
+	WorkItemAttributionWriterDaily    = workitemcontract.AttributionWriterDaily
+	WorkItemAttributionWriterBackstop = workitemcontract.AttributionWriterBackstop
+)
+
+// WorkItemAttributionProducer names the path and the individual run behind a
+// batch of attribution rows.
+//
+// It is a WRITE-CALL parameter, not a field on WorkItemAttributionRow,
+// because one run's rows all share it and BuildWorkItemAttributionRows is
+// shared by both producers -- putting it on the row would make the daily
+// family and the backstop each responsible for stamping every row they built,
+// and a path that forgot would write rows that look like the other producer's.
+//
+// RunID is the run's own identifier: the daily family's metrics run id, and
+// for the backstop the same id its work_item_attribution_backstop_runs marker
+// carries, so a stored row joins back to the marker that published its run.
+type WorkItemAttributionProducer struct {
+	Writer string
+	RunID  string
+}
+
+// Validate refuses a producer that names neither a known path nor a run.
+func (producer WorkItemAttributionProducer) Validate() error {
+	if strings.TrimSpace(producer.RunID) == "" ||
+		!slices.Contains(workitemcontract.AttributionWriters(), producer.Writer) {
+		return ErrWorkItemAttributionProducerUnidentified
+	}
+	return nil
+}
 
 // workItemAttributionStampPrecision matches the sync-time deriver's own
 // work_item_team_attributions column precision (githubTeamAttributionStampPrecision,
@@ -88,7 +134,10 @@ type WorkItemAttributionWriter interface {
 	// work_item_id, team_id, source), keeping the highest computed_at and
 	// breaking an equal-version tie in favor of the primary row. Returns the
 	// number of rows written.
-	WriteAttributions(ctx context.Context, rows []WorkItemAttributionRow) (int, error)
+	//
+	// producer names the path and run behind this batch and is stamped on
+	// every row. It is required: an unidentified producer is refused.
+	WriteAttributions(ctx context.Context, producer WorkItemAttributionProducer, rows []WorkItemAttributionRow) (int, error)
 	// WriteAttributionRun publishes the org-wide completion marker. Callers
 	// MUST call this only after WriteAttributions for the same run has
 	// returned successfully (CHAOS-2433 protocol: rows first, marker last).
@@ -128,10 +177,21 @@ func NewWorkItemAttributionClickHouseWriter(conn workItemAttributionWriterConn) 
 // exactly, so the two writers are byte-for-byte interchangeable at the
 // storage layer.
 func (w *WorkItemAttributionClickHouseWriter) WriteAttributions(
-	ctx context.Context, rows []WorkItemAttributionRow,
+	ctx context.Context, producer WorkItemAttributionProducer, rows []WorkItemAttributionRow,
 ) (int, error) {
 	if w == nil || w.conn == nil {
 		return 0, ErrWorkItemAttributionUnavailable
+	}
+	// Checked BEFORE the empty-rows shortcut: a caller passing no producer is
+	// a caller bug whether or not this particular batch happens to be empty,
+	// and letting the empty case through would hide it until the first run
+	// that actually had rows.
+	if err := producer.Validate(); err != nil {
+		slog.ErrorContext(ctx, "work_item_team_attributions write refused: unidentified producer",
+			slog.String("writer", producer.Writer),
+			slog.String("run_id", producer.RunID),
+			slog.Int("rows", len(rows)))
+		return 0, err
 	}
 	if len(rows) == 0 {
 		return 0, nil
@@ -143,7 +203,7 @@ func (w *WorkItemAttributionClickHouseWriter) WriteAttributions(
 	rows = workItemAttributionSortingKeyDedupe(rows)
 	batch, err := w.conn.PrepareBatch(ctx, `INSERT INTO work_item_team_attributions
 (org_id, repo_id, work_item_id, provider, team_id, team_name, source,
-is_primary, confidence, evidence, computed_at)`)
+is_primary, confidence, evidence, computed_at, writer, run_id)`)
 	if err != nil {
 		return 0, fmt.Errorf("prepare work_item_team_attributions batch: %w", err)
 	}
@@ -160,6 +220,7 @@ is_primary, confidence, evidence, computed_at)`)
 			row.Provider, row.TeamID, row.TeamName, row.Source,
 			uint8(row.IsPrimary), row.Confidence, row.Evidence,
 			row.ComputedAt.UTC().Truncate(workItemAttributionStampPrecision),
+			producer.Writer, producer.RunID,
 		); err != nil {
 			return 0, fmt.Errorf("append work_item_team_attributions row: %w", err)
 		}

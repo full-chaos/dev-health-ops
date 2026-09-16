@@ -11,6 +11,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
+	"github.com/full-chaos/dev-health-ops/internal/workitemcontract"
 )
 
 // ClickHouse effect adapters for the three derived destinations this lane
@@ -476,9 +477,17 @@ func (sink GitHubWorkItemTeamAttributionsClickHouseEffects) WriteGitHubWorkItemE
 	rows = githubWorkItemDerivedSortingKeyDedupe(
 		rows, githubTeamAttributionSortingKey, githubTeamAttributionVersion, githubTeamAttributionIsPrimary,
 	)
+	// writer/run_id name the path and the run behind every row. This table has
+	// three producers -- this sync-time deriver plus the daily
+	// work_item_attribution family and its staleness backstop -- whose rows are
+	// otherwise identical in every stored column, so a row that survives a
+	// merge is untraceable without them. Neither column is in the sorting key:
+	// putting one there would stop two producers' rows for a single key from
+	// ever collapsing, and every reader's (work_item_id, max(computed_at))
+	// fence would start returning one row per producer.
 	batch, err := sink.Conn.PrepareBatch(ctx, `INSERT INTO work_item_team_attributions
 (org_id, repo_id, work_item_id, provider, team_id, team_name, source,
-is_primary, confidence, evidence, computed_at)`)
+is_primary, confidence, evidence, computed_at, writer, run_id)`)
 	if err != nil {
 		return err
 	}
@@ -513,6 +522,7 @@ is_primary, confidence, evidence, computed_at)`)
 			row.Provider, row.TeamID, row.TeamName, row.Source,
 			uint8(row.IsPrimary), row.Confidence, row.Evidence,
 			githubWorkItemDerivedMillis(row.ComputedAt),
+			workitemcontract.AttributionWriterSync, identity.Generation,
 		); err != nil {
 			return err
 		}

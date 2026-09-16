@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -56,6 +57,13 @@ import (
 // writers on one key do not last-write-wins -- both snapshots stay resident and
 // readers depend on the (work_item_id, max(computed_at)) fence to choose. That
 // is why the ownership split is a real constraint and not a tidy-up.
+//
+// Every row this family writes carries writer='daily' and the metrics run id
+// in run_id. Those two columns are provenance only -- they are NOT in the
+// table's sorting key, so two producers' rows for one key still collapse on
+// computed_at exactly as before. What they add is the ability to say which
+// producer left a surviving row behind, which is otherwise unrecoverable:
+// the two producers' rows are identical in every other stored column.
 type WorkItemAttributionExecutor struct {
 	conn   driver.Conn
 	writer *remaining.WorkItemAttributionClickHouseWriter
@@ -91,6 +99,22 @@ func (executor *WorkItemAttributionExecutor) ComputeFamily(
 	scope, err := newWorkItemPartitionScope(run, partition, "work_item_attribution")
 	if err != nil {
 		return 0, err
+	}
+	// The producer identity is resolved BEFORE any ClickHouse work: a run with
+	// no id cannot stamp the rows it is about to write, and discovering that
+	// at the write would mean a full partition recomputed for nothing. run.ID
+	// is the daily_metrics_runs primary key, so a Run reaching here without
+	// one was not built from the store.
+	producer := remaining.WorkItemAttributionProducer{
+		Writer: remaining.WorkItemAttributionWriterDaily,
+		RunID:  run.ID,
+	}
+	if err := producer.Validate(); err != nil {
+		slog.ErrorContext(ctx, "work_item_attribution refused: run has no id to stamp rows with",
+			slog.String("partition_id", partition.ID),
+			slog.String("org_id", run.OrganizationID))
+		return 0, fmt.Errorf("%w: partition %s run has no id (work_item_attribution): %w",
+			ErrInvalidState, partition.ID, err)
 	}
 
 	// Facts are ORG-scoped and read ONCE per partition, not once per repo.
@@ -171,7 +195,7 @@ func (executor *WorkItemAttributionExecutor) ComputeFamily(
 		// total > 0, or computeNativeFamilies' dispatcher treats this as an
 		// ordinary refusal and fails OPEN to the Python bridge despite rows
 		// already landing, risking a duplicate write.
-		written, err := executor.writer.WriteAttributions(ctx, rows)
+		written, err := executor.writer.WriteAttributions(ctx, producer, rows)
 		total += written
 		if err != nil {
 			return wrapWorkItemAttributionPartialWrite(total, err)

@@ -546,12 +546,32 @@ func TestLoadRESTEndpointsOnTheRealRepo(t *testing.T) {
 		t.Fatalf("GET /api/v1/flame = %+v, want ported at flame_route.go", flameGet)
 	}
 
+	// Same path-parameter shape, sibling routes (own package doc comment:
+	// api/services/people.py also backs these two drilldown routes,
+	// sibling files of internal/people rather than one-off packages).
+	peopleDrilldownPRsGet, ok := byKey["GET /api/v1/people/{person_id}/drilldown/prs"]
+	if !ok {
+		t.Fatal("expected GET /api/v1/people/{person_id}/drilldown/prs to be enumerated")
+	}
+	if peopleDrilldownPRsGet.Status != RESTPorted || !strings.Contains(peopleDrilldownPRsGet.GoHandler, "people_drilldown_prs_route.go") {
+		t.Fatalf("GET /api/v1/people/{person_id}/drilldown/prs = %+v, want ported at people_drilldown_prs_route.go", peopleDrilldownPRsGet)
+	}
+
+	peopleDrilldownIssuesGet, ok := byKey["GET /api/v1/people/{person_id}/drilldown/issues"]
+	if !ok {
+		t.Fatal("expected GET /api/v1/people/{person_id}/drilldown/issues to be enumerated")
+	}
+	if peopleDrilldownIssuesGet.Status != RESTPorted || !strings.Contains(peopleDrilldownIssuesGet.GoHandler, "people_drilldown_issues_route.go") {
+		t.Fatalf("GET /api/v1/people/{person_id}/drilldown/issues = %+v, want ported at people_drilldown_issues_route.go", peopleDrilldownIssuesGet)
+	}
+
 	ported, _, _ := RESTEndpointCounts(rows)
-	if ported != 14 {
-		t.Fatalf("got %d ported routes, want exactly 14 (POST /api/v1/investment/explain, GET /api/v1/quadrant, "+
+	if ported != 16 {
+		t.Fatalf("got %d ported routes, want exactly 16 (POST /api/v1/investment/explain, GET /api/v1/quadrant, "+
 			"GET /api/v1/filters/options, POST+GET /api/v1/drilldown/prs, GET /api/v1/meta, "+
 			"POST+GET /api/v1/drilldown/issues, POST+GET /api/v1/explain, GET /api/v1/people, "+
-			"GET /api/v1/people/{person_id}/summary, GET /api/v1/people/{person_id}/metric, GET /api/v1/flame) -- "+
+			"GET /api/v1/people/{person_id}/summary, GET /api/v1/people/{person_id}/metric, GET /api/v1/flame, "+
+			"GET /api/v1/people/{person_id}/drilldown/prs, GET /api/v1/people/{person_id}/drilldown/issues) -- "+
 			"if this changed, a route was ported or un-ported; update this pin, it is not stale by accident", ported)
 	}
 }

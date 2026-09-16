@@ -487,6 +487,41 @@ func main() {
 		log.Printf("query-api: %s route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted", peopleMetricPath)
 	}
 
+	// GET /api/v1/people/{person_id}/drilldown/prs, gated by its own
+	// routeswitch entry (default OFF via GO_API_PEOPLE_DRILLDOWN_PRS_ENABLED)
+	// -- see people_drilldown_prs_route.go's package doc comment for the
+	// reachability story and internal/people/drilldownprs.go for the ported
+	// resolver.
+	if peopleDrilldownPRsHandler, peopleDrilldownPRsCleanup, peopleDrilldownPRsOK, peopleDrilldownPRsErr := buildPeopleDrilldownPRsRoute(); peopleDrilldownPRsErr != nil {
+		log.Fatalf("query-api: build %s route: %v", peopleDrilldownPRsPath, peopleDrilldownPRsErr)
+	} else if peopleDrilldownPRsOK {
+		defer peopleDrilldownPRsCleanup()
+		// See the investment/explain mount above for why this is a
+		// reassignment, not an inlined wrapper.
+		peopleDrilldownPRsHandler = withProofProvenance(peopleDrilldownPRsHandler, runningBuild())
+		mux.HandleFunc("/api/v1/people/{person_id}/drilldown/prs", peopleDrilldownPRsHandler)
+	} else {
+		log.Printf("query-api: %s route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted", peopleDrilldownPRsPath)
+	}
+
+	// GET /api/v1/people/{person_id}/drilldown/issues, gated by its own
+	// routeswitch entry (default OFF via
+	// GO_API_PEOPLE_DRILLDOWN_ISSUES_ENABLED) -- see
+	// people_drilldown_issues_route.go's package doc comment for the
+	// reachability story and internal/people/drilldownissues.go for the
+	// ported resolver.
+	if peopleDrilldownIssuesHandler, peopleDrilldownIssuesCleanup, peopleDrilldownIssuesOK, peopleDrilldownIssuesErr := buildPeopleDrilldownIssuesRoute(); peopleDrilldownIssuesErr != nil {
+		log.Fatalf("query-api: build %s route: %v", peopleDrilldownIssuesPath, peopleDrilldownIssuesErr)
+	} else if peopleDrilldownIssuesOK {
+		defer peopleDrilldownIssuesCleanup()
+		// See the investment/explain mount above for why this is a
+		// reassignment, not an inlined wrapper.
+		peopleDrilldownIssuesHandler = withProofProvenance(peopleDrilldownIssuesHandler, runningBuild())
+		mux.HandleFunc("/api/v1/people/{person_id}/drilldown/issues", peopleDrilldownIssuesHandler)
+	} else {
+		log.Printf("query-api: %s route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted", peopleDrilldownIssuesPath)
+	}
+
 	// GET /api/v1/meta, gated by its own routeswitch entry (default OFF via
 	// GO_API_META_ENABLED) -- see meta_route.go's package doc comment for
 	// the reachability story and internal/meta for the ported handler.

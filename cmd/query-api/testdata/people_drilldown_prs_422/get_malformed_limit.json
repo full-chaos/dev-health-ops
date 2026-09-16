@@ -1,0 +1,10 @@
+{
+  "detail": [
+    {
+      "type": "int_parsing",
+      "loc": ["query", "limit"],
+      "msg": "Input should be a valid integer, unable to parse string as an integer",
+      "input": "not-a-number"
+    }
+  ]
+}

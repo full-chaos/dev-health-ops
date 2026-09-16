@@ -1,0 +1,27 @@
+{
+  "items": [
+    {
+      "work_item_id": "wi-1",
+      "provider": "github",
+      "status": "done",
+      "team_id": "team-a",
+      "cycle_time_hours": 12.5,
+      "lead_time_hours": 20.25,
+      "started_at": "2024-06-01T10:00:00Z",
+      "completed_at": "2024-06-03T10:00:00Z",
+      "link": null
+    },
+    {
+      "work_item_id": "wi-2",
+      "provider": "jira",
+      "status": "in_progress",
+      "team_id": null,
+      "cycle_time_hours": null,
+      "lead_time_hours": null,
+      "started_at": null,
+      "completed_at": null,
+      "link": null
+    }
+  ],
+  "next_cursor": null
+}

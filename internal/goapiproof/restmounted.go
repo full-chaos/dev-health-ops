@@ -44,17 +44,19 @@ import "sort"
 // internal/migrationmatrix import here; the pin test lives in
 // cmd/go-api-rest-prove instead, which already imports both).
 var mountedRESTPaths = []string{
-	"/api/v1/drilldown/issues",           // GET, POST
-	"/api/v1/drilldown/prs",              // GET, POST
-	"/api/v1/explain",                    // GET, POST
-	"/api/v1/filters/options",            // GET
-	"/api/v1/flame",                      // GET
-	"/api/v1/investment/explain",         // POST
-	"/api/v1/meta",                       // GET
-	"/api/v1/people",                     // GET
-	"/api/v1/people/{person_id}/metric",  // GET
-	"/api/v1/people/{person_id}/summary", // GET
-	"/api/v1/quadrant",                   // GET
+	"/api/v1/drilldown/issues",                    // GET, POST
+	"/api/v1/drilldown/prs",                       // GET, POST
+	"/api/v1/explain",                             // GET, POST
+	"/api/v1/filters/options",                     // GET
+	"/api/v1/flame",                               // GET
+	"/api/v1/investment/explain",                  // POST
+	"/api/v1/meta",                                // GET
+	"/api/v1/people",                              // GET
+	"/api/v1/people/{person_id}/drilldown/issues", // GET
+	"/api/v1/people/{person_id}/drilldown/prs",    // GET
+	"/api/v1/people/{person_id}/metric",           // GET
+	"/api/v1/people/{person_id}/summary",          // GET
+	"/api/v1/quadrant",                            // GET
 }
 
 // MountedRESTPaths returns a fresh, sorted copy of the checked-in mounted

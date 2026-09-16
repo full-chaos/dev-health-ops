@@ -109,6 +109,134 @@ func dateQueryParamError(loc []any, raw string) pydanticErrorDetail {
 	}
 }
 
+// isoDateTimeQueryParamLayouts are the Go time.Parse layouts
+// parseISODateTimeQueryParam tries, in order, against a (possibly
+// separator-normalized) raw value -- covering every shape Pydantic's own
+// `datetime` field type accepts for a realistic ISO 8601-ish caller input:
+// a bare date, a date+time with no seconds, and a full RFC 3339 timestamp
+// with optional fractional seconds and an optional Z/offset. Confirmed live
+// (this route's own TEST-EVIDENCE): "2024-01-01", "2024-01-01T12:00",
+// "2024-01-01T12:00:00", "2024-01-01T12:00:00.123456" and
+// "2024-01-01T12:00:00+00:00"/"...Z" all parse successfully; nothing else
+// realistic does.
+var isoDateTimeQueryParamLayouts = []string{
+	"2006-01-02T15:04:05.999999999Z07:00",
+	"2006-01-02T15:04:05Z07:00",
+	"2006-01-02T15:04:05",
+	"2006-01-02T15:04",
+	"2006-01-02",
+}
+
+// parseISODateTimeQueryParam parses a `datetime | None` query param
+// (e.g. people_drilldown_prs/people_drilldown_issues's own `cursor`,
+// main.py:1133/1162) the way FastAPI's Pydantic-backed parameter does on
+// the happy path. present is false for an absent value (""); ok is false
+// for a present-but-malformed value, in which case the caller reports it
+// via dateTimeQueryParamError.
+//
+// DECLARED, ACCEPTED GAP: Pydantic's `datetime` field additionally accepts
+// a purely-numeric string as a Unix timestamp (confirmed live: "2024"
+// parses as 1970-01-01 00:33:44 UTC, NOT a malformed value) -- a real
+// pydantic-core/speedate behaviour this function does not reproduce. No
+// real caller of this route ever constructs a `cursor` value by hand: it
+// is always the `next_cursor` this same route's own previous response
+// emitted, always a full RFC 3339-shaped string -- so this gap has no
+// reachable caller in practice, the same scope-limiting precedent
+// classifyDateParseError's own doc comment already establishes for the
+// sibling `date` field type.
+func parseISODateTimeQueryParam(raw string) (t time.Time, present bool, ok bool) {
+	if raw == "" {
+		return time.Time{}, false, true
+	}
+	normalized := raw
+	if len(raw) > 10 {
+		switch raw[10] {
+		case 't', '_', ' ':
+			normalized = raw[:10] + "T" + raw[11:]
+		}
+	}
+	for _, layout := range isoDateTimeQueryParamLayouts {
+		if parsed, err := time.Parse(layout, normalized); err == nil {
+			return parsed.UTC(), true, true
+		}
+	}
+	return time.Time{}, true, false
+}
+
+// dateTimeQueryParamError builds the datetime_from_date_parsing detail
+// Pydantic's `datetime` field type produces for a malformed value, at the
+// given loc (e.g. []any{"query", "cursor"}). Note the type name and
+// message word order are BOTH reversed from dateQueryParamError's own
+// date_from_datetime_parsing/"a valid date or datetime" -- confirmed live,
+// not a typo: the `datetime` field type answers type="datetime_from_date_parsing",
+// msg="Input should be a valid datetime or date, ...".
+func dateTimeQueryParamError(loc []any, raw string) pydanticErrorDetail {
+	reason := classifyDateTimeParseError(raw)
+	return pydanticErrorDetail{
+		Type:  "datetime_from_date_parsing",
+		Loc:   loc,
+		Msg:   "Input should be a valid datetime or date, " + reason,
+		Input: raw,
+		Ctx:   map[string]string{"error": reason},
+	}
+}
+
+// classifyDateTimeParseError reproduces Pydantic v2's (pydantic-core/
+// speedate) error taxonomy for a malformed datetime-shaped value, for the
+// realistic malformed inputs a caller can send. The first ten characters
+// (the date prefix) share EXACTLY classifyDateParseError's own year/
+// separator/month/separator/day checks -- confirmed live, byte-identical
+// reasons for a bad date prefix regardless of whether the field type is
+// `date` or `datetime`. Everything past a valid ten-character date prefix
+// differs from the `date` type, and confirmed live to collapse to ONE
+// catch-all reason regardless of what actually went wrong there -- an
+// invalid separator character, an incomplete time fragment, an
+// out-of-range hour/minute/second, a malformed fractional-second or
+// timezone offset, or genuine trailing garbage all answer the identical
+// "unexpected extra characters at the end of the input" (this route's own
+// TEST-EVIDENCE covers every one of those shapes).
+func classifyDateTimeParseError(raw string) string {
+	if len(raw) < 10 {
+		return "input is too short"
+	}
+	year := raw[0:4]
+	if !allDigits(year) {
+		return "invalid character in year"
+	}
+	if raw[4] != '-' {
+		return "invalid date separator, expected `-`"
+	}
+	month := raw[5:7]
+	if !allDigits(month) {
+		return "invalid character in month"
+	}
+	monthVal, _ := strconv.Atoi(month)
+	if monthVal < 1 || monthVal > 12 {
+		return "month value is outside expected range of 1-12"
+	}
+	if raw[7] != '-' {
+		return "invalid date separator, expected `-`"
+	}
+	day := raw[8:10]
+	if !allDigits(day) {
+		return "invalid character in day"
+	}
+	dayVal, _ := strconv.Atoi(day)
+	yearVal, _ := strconv.Atoi(year)
+	if dayVal < 1 || dayVal > daysInMonth(yearVal, monthVal) {
+		return "day value is outside expected range"
+	}
+	if len(raw) == 10 {
+		// A fully valid ten-character date prefix with nothing trailing --
+		// parseISODateTimeQueryParam's own "2006-01-02" layout already
+		// accepts this, so this branch is never actually reached in
+		// practice, same defensive-fallback posture classifyDateParseError's
+		// own len==10 branch documents.
+		return "invalid datetime"
+	}
+	return "unexpected extra characters at the end of the input"
+}
+
 // intQueryParamError builds the int_parsing detail Pydantic's `int`
 // field type produces for a query string that doesn't parse as an
 // integer -- the ONLY int-coercion failure shape a query param (always a

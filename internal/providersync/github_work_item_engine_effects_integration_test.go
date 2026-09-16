@@ -15,9 +15,10 @@ import (
 // This suite authors no DDL. githubDerivedIntegrationConn applies the complete
 // production ClickHouse migration chain to a throwaway database before opening
 // the Go connection. These tables deliberately remain plain MergeTree tables:
-// issue/classification readback therefore treats every distinct historical row
-// as ambiguous, while investment metrics mirrors its production argMax reader
-// and rejects only a divergent tie at the newest timestamp.
+// every adapter's readback dedupes to the newest computed_at generation for
+// the logical identity and rejects only a divergent tie at that newest
+// timestamp; a superseded older generation never blocks a readback that
+// otherwise matches the newest one.
 func TestGitHubWorkItemEngineEffectsAgainstMigratedSchema(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 	defer cancel()
@@ -109,9 +110,27 @@ WHERE org_id = ? AND day = ? AND provider = ? AND team_id = ?
 		if err := sink.WriteGitHubWorkItemEffect(ctx, olderIdentity, olderEffect); err != nil {
 			t.Fatal(err)
 		}
+		// Two versions of the same key are now persisted for repoA: the
+		// newest generation (base, written above) and this strictly older,
+		// divergent one. Readback dedupes to the newest generation, so the
+		// stale divergent row does not block recognizing the current state.
+		assertGitHubWorkItemEngineInspection(
+			t, ctx, sink, identity, effect, EffectExact,
+			"older divergent generation is superseded by the newest one",
+		)
+
+		tied := rows[0]
+		tied.CreatedCount++
+		tiedIdentity, tiedEffect := githubWorkItemEngineIntegrationBatch(
+			t, githubDerivedIntegrationOrg, githubIssueTypeMetricsDestination,
+			[]githubIssueTypeMetricsDailyRow{tied},
+		)
+		if err := sink.WriteGitHubWorkItemEffect(ctx, tiedIdentity, tiedEffect); err != nil {
+			t.Fatal(err)
+		}
 		assertGitHubWorkItemEngineInspection(
 			t, ctx, sink, identity, effect, EffectConflict,
-			"older divergent history without a latest-row reader",
+			"equal-time divergent generation",
 		)
 	})
 
@@ -186,9 +205,27 @@ WHERE org_id = ? AND day = ? AND provider = ? AND artifact_type = ?
 		if err := sink.WriteGitHubWorkItemEffect(ctx, olderIdentity, olderEffect); err != nil {
 			t.Fatal(err)
 		}
+		// Two versions of the same key are now persisted for repoA: the
+		// newest generation (base, written above) and this strictly older,
+		// divergent one. Readback dedupes to the newest generation, so the
+		// stale divergent row does not block recognizing the current state.
+		assertGitHubWorkItemEngineInspection(
+			t, ctx, sink, identity, effect, EffectExact,
+			"older divergent generation is superseded by the newest one",
+		)
+
+		tied := rows[0]
+		tied.Confidence = 0.5
+		tiedIdentity, tiedEffect := githubWorkItemEngineIntegrationBatch(
+			t, githubDerivedIntegrationOrg, githubInvestmentClassificationsDestination,
+			[]githubInvestmentClassificationDailyRow{tied},
+		)
+		if err := sink.WriteGitHubWorkItemEffect(ctx, tiedIdentity, tiedEffect); err != nil {
+			t.Fatal(err)
+		}
 		assertGitHubWorkItemEngineInspection(
 			t, ctx, sink, identity, effect, EffectConflict,
-			"older divergent history without a latest-row reader",
+			"equal-time divergent generation",
 		)
 	})
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"math"
 	"strings"
+	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
@@ -12,10 +13,14 @@ import (
 )
 
 // These three tables are plain MergeTree tables, so FINAL does not deduplicate
-// them. Issue-type metrics and classifications have no production latest-row
-// reader contract and therefore accept only one unambiguous full row (identical
-// retries may collapse). Investment metrics follows its production argMax
-// contract but rejects divergent rows tied at the newest computed_at.
+// them. Every inspect() below reads back the row this process would have
+// written: dedup to the newest computed_at generation for the logical
+// identity (the argMax(tuple(...), computed_at) discipline this package uses
+// everywhere else), never a pre-dedup or arbitrarily-chosen historical row.
+// A tie at that newest generation -- more than one distinct value combination
+// sharing the newest computed_at -- stays a Conflict, the same fail-closed
+// rule githubWorkItemDerivedVersionOrder's callers apply throughout this
+// file.
 
 type GitHubIssueTypeMetricsClickHouseEffects struct {
 	Conn  driver.Conn
@@ -190,19 +195,20 @@ func (sink GitHubIssueTypeMetricsClickHouseEffects) InspectGitHubWorkItemEffect(
 	})
 }
 
-func (sink GitHubIssueTypeMetricsClickHouseEffects) inspect(
-	ctx context.Context,
-	identity GitHubWorkItemEffectIdentity,
-	expected githubIssueTypeMetricsDailyRow,
-) (EffectInspection, error) {
-	day, _ := expected.Day.time()
+// githubIssueTypeMetricsInspectQuery builds the readback SELECT for one
+// logical identity: the org filter sits in the SAME top-level statement as
+// the GROUP BY that dedups replay duplicates, never a subquery an outer
+// WHERE only narrows afterward.
+func githubIssueTypeMetricsInspectQuery(
+	orgID string, day time.Time, expected githubIssueTypeMetricsDailyRow,
+) (string, []any) {
 	query := `SELECT repo_id, created_count, completed_count, active_count,
 cycle_p50_hours, cycle_p90_hours, lead_p50_hours, computed_at
 FROM issue_type_metrics_daily
 WHERE org_id = ? AND day = ? AND provider = ? AND team_id = ?
 	AND issue_type_norm = ?`
 	arguments := []any{
-		identity.OrgID, day, expected.Provider, expected.TeamID, expected.IssueTypeNorm,
+		orgID, day, expected.Provider, expected.TeamID, expected.IssueTypeNorm,
 	}
 	if expected.RepoID == nil {
 		query += ` AND repo_id IS NULL`
@@ -210,20 +216,29 @@ WHERE org_id = ? AND day = ? AND provider = ? AND team_id = ?
 		query += ` AND repo_id = ?`
 		arguments = append(arguments, *expected.RepoID)
 	}
-	// There is no production latest-row reader contract for this table. Read
-	// every DISTINCT full row for the logical identity. GROUP BY collapses
-	// byte-identical replay duplicates while retaining ANY historical
-	// divergence; without a reader contract, even an older competing row is
-	// ambiguous and must fail closed.
+	// GROUP BY the full value tuple plus computed_at: this collapses
+	// byte-identical replay duplicates into one row per generation, so the
+	// caller only has to pick the newest generation and count ties on it,
+	// never fold value columns from two different physical rows.
 	query += ` GROUP BY repo_id, created_count, completed_count, active_count,
 cycle_p50_hours, cycle_p90_hours, lead_p50_hours, computed_at`
+	return query, arguments
+}
+
+func (sink GitHubIssueTypeMetricsClickHouseEffects) inspect(
+	ctx context.Context,
+	identity GitHubWorkItemEffectIdentity,
+	expected githubIssueTypeMetricsDailyRow,
+) (EffectInspection, error) {
+	day, _ := expected.Day.time()
+	query, arguments := githubIssueTypeMetricsInspectQuery(identity.OrgID, day, expected)
 	scan, err := sink.Conn.Query(ctx, query, arguments...)
 	if err != nil {
 		return EffectConflict, err
 	}
 	defer scan.Close()
 	var actual githubIssueTypeMetricsDailyRow
-	distinctRows := 0
+	found := 0
 	for scan.Next() {
 		candidate := githubIssueTypeMetricsDailyRow{
 			Day: expected.Day, Provider: expected.Provider, TeamID: expected.TeamID,
@@ -240,16 +255,23 @@ cycle_p50_hours, cycle_p90_hours, lead_p50_hours, computed_at`
 		candidate.CreatedCount = int(created)
 		candidate.CompletedCount = int(completed)
 		candidate.ActiveCount = int(active)
-		if distinctRows == 0 {
+		// Dedup by version: keep the newest computed_at seen so far. A
+		// candidate tied with the current newest is a second distinct value
+		// combination at that same generation, so it counts toward found
+		// without replacing actual.
+		switch {
+		case found == 0 || candidate.ComputedAt.After(actual.ComputedAt):
 			actual = candidate
+			found = 1
+		case candidate.ComputedAt.Equal(actual.ComputedAt):
+			found++
 		}
-		distinctRows++
 	}
 	if err := scan.Err(); err != nil {
 		return EffectConflict, err
 	}
 	return compareGitHubIssueTypeMetricsVersion(
-		expected, actual, distinctRows, identity.OrgID,
+		expected, actual, found, identity.OrgID,
 	), nil
 }
 
@@ -334,18 +356,19 @@ func (sink GitHubInvestmentClassificationsClickHouseEffects) InspectGitHubWorkIt
 	})
 }
 
-func (sink GitHubInvestmentClassificationsClickHouseEffects) inspect(
-	ctx context.Context,
-	identity GitHubWorkItemEffectIdentity,
-	expected githubInvestmentClassificationDailyRow,
-) (EffectInspection, error) {
-	day, _ := expected.Day.time()
+// githubInvestmentClassificationInspectQuery builds the readback SELECT for
+// one logical identity: the org filter sits in the SAME top-level statement
+// as the GROUP BY that dedups replay duplicates, never a subquery an outer
+// WHERE only narrows afterward.
+func githubInvestmentClassificationInspectQuery(
+	orgID string, day time.Time, expected githubInvestmentClassificationDailyRow,
+) (string, []any) {
 	query := `SELECT repo_id, confidence, rule_id, computed_at
 FROM investment_classifications_daily
 WHERE org_id = ? AND day = ? AND provider = ? AND artifact_type = ?
 	AND investment_area = ? AND project_stream = ? AND artifact_id = ?`
 	arguments := []any{
-		identity.OrgID, day, expected.Provider, expected.ArtifactType,
+		orgID, day, expected.Provider, expected.ArtifactType,
 		*expected.InvestmentArea, expected.ProjectStream, expected.ArtifactID,
 	}
 	if expected.RepoID == nil {
@@ -354,17 +377,28 @@ WHERE org_id = ? AND day = ? AND provider = ? AND artifact_type = ?
 		query += ` AND repo_id = ?`
 		arguments = append(arguments, *expected.RepoID)
 	}
-	// No production reader defines either a latest-row rule or a tie-break for
-	// this table. Collapse only identical full-row replays; any different row at
-	// the same logical identity remains a conflict, even at an older version.
+	// GROUP BY the full value tuple plus computed_at: this collapses
+	// byte-identical replay duplicates into one row per generation, so the
+	// caller only has to pick the newest generation and count ties on it,
+	// never fold value columns from two different physical rows.
 	query += ` GROUP BY repo_id, confidence, rule_id, computed_at`
+	return query, arguments
+}
+
+func (sink GitHubInvestmentClassificationsClickHouseEffects) inspect(
+	ctx context.Context,
+	identity GitHubWorkItemEffectIdentity,
+	expected githubInvestmentClassificationDailyRow,
+) (EffectInspection, error) {
+	day, _ := expected.Day.time()
+	query, arguments := githubInvestmentClassificationInspectQuery(identity.OrgID, day, expected)
 	scan, err := sink.Conn.Query(ctx, query, arguments...)
 	if err != nil {
 		return EffectConflict, err
 	}
 	defer scan.Close()
 	var actual githubInvestmentClassificationDailyRow
-	distinctRows := 0
+	found := 0
 	for scan.Next() {
 		candidate := githubInvestmentClassificationDailyRow{
 			Day: expected.Day, ArtifactType: expected.ArtifactType,
@@ -377,16 +411,23 @@ WHERE org_id = ? AND day = ? AND provider = ? AND artifact_type = ?
 		); err != nil {
 			return EffectConflict, err
 		}
-		if distinctRows == 0 {
+		// Dedup by version: keep the newest computed_at seen so far. A
+		// candidate tied with the current newest is a second distinct value
+		// combination at that same generation, so it counts toward found
+		// without replacing actual.
+		switch {
+		case found == 0 || candidate.ComputedAt.After(actual.ComputedAt):
 			actual = candidate
+			found = 1
+		case candidate.ComputedAt.Equal(actual.ComputedAt):
+			found++
 		}
-		distinctRows++
 	}
 	if err := scan.Err(); err != nil {
 		return EffectConflict, err
 	}
 	return compareGitHubInvestmentClassificationVersion(
-		expected, actual, distinctRows, identity.OrgID,
+		expected, actual, found, identity.OrgID,
 	), nil
 }
 
@@ -546,20 +587,24 @@ churn_loc, cycle_p50_hours, computed_at`
 
 func compareGitHubIssueTypeMetricsVersion(
 	expected, actual githubIssueTypeMetricsDailyRow,
-	distinctRows int,
+	found int,
 	orgID string,
 ) EffectInspection {
-	if distinctRows != 1 {
-		if distinctRows == 0 {
+	if found != 1 {
+		if found == 0 {
 			return EffectAbsent
 		}
+		// More than one distinct value combination survived at the newest
+		// computed_at: the newest generation itself is ambiguous.
 		return EffectConflict
 	}
 	if actual.OrgID != orgID {
 		return EffectConflict
 	}
-	if !actual.ComputedAt.Equal(githubWorkItemDerivedSeconds(expected.ComputedAt)) {
-		return EffectConflict
+	if verdict, decided := githubWorkItemDerivedVersionOrder(
+		actual.ComputedAt, githubWorkItemDerivedSeconds(expected.ComputedAt),
+	); decided {
+		return verdict
 	}
 	if actual.Day != expected.Day || actual.Provider != expected.Provider ||
 		actual.TeamID != expected.TeamID || actual.IssueTypeNorm != expected.IssueTypeNorm ||
@@ -577,20 +622,24 @@ func compareGitHubIssueTypeMetricsVersion(
 
 func compareGitHubInvestmentClassificationVersion(
 	expected, actual githubInvestmentClassificationDailyRow,
-	distinctRows int,
+	found int,
 	orgID string,
 ) EffectInspection {
-	if distinctRows != 1 {
-		if distinctRows == 0 {
+	if found != 1 {
+		if found == 0 {
 			return EffectAbsent
 		}
+		// More than one distinct value combination survived at the newest
+		// computed_at: the newest generation itself is ambiguous.
 		return EffectConflict
 	}
 	if actual.OrgID != orgID {
 		return EffectConflict
 	}
-	if !actual.ComputedAt.Equal(githubWorkItemDerivedSeconds(expected.ComputedAt)) {
-		return EffectConflict
+	if verdict, decided := githubWorkItemDerivedVersionOrder(
+		actual.ComputedAt, githubWorkItemDerivedSeconds(expected.ComputedAt),
+	); decided {
+		return verdict
 	}
 	if actual.Day != expected.Day || actual.Provider != expected.Provider ||
 		actual.ArtifactType != expected.ArtifactType ||

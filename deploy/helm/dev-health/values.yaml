@@ -7,12 +7,14 @@ global:
 
 # -- Image configuration for the backend (API, Go workers, cronjobs)
 image:
-  repository: ghcr.io/full-chaos/dev-health-ops
+  # -- Non-local profiles (prod/kiac) pin `repository@sha256:<digest>` explicitly; this bare-tag default is for local/dev use only.
+  repository: ghcr.io/full-chaos/dev-hops-api
   tag: ""  # defaults to Chart.appVersion
   pullPolicy: IfNotPresent
 
 # -- Image configuration for the frontend (web)
 webImage:
+  # -- Non-local profiles (prod/kiac) pin `repository@sha256:<digest>` explicitly; this bare-tag default is for local/dev use only.
   repository: ghcr.io/full-chaos/dev-health-web
   tag: ""  # defaults to Chart.appVersion
   pullPolicy: IfNotPresent
@@ -226,6 +228,7 @@ queryApi:
   replicas: 1
   port: 8090
   image:
+    # -- Non-local profiles (prod/kiac) pin `repository@sha256:<digest>` explicitly; this bare-tag default is for local/dev use only.
     repository: ghcr.io/full-chaos/dev-health-query-api
     # -- Empty defaults to Chart.appVersion. A `repo@sha256:...` digest (with or
     #    without a readable tag in front) is accepted in `repository` and used

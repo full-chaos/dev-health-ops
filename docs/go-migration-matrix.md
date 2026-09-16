@@ -281,14 +281,14 @@ sync with either side, so a route added, removed or newly wired on either plane 
 time the tool runs, and the doc-drift check below fails until it is re-rendered.
 
 <!-- BEGIN GENERATED REST ENDPOINTS -->
-_32 `/api/v1/*` routes in `src/dev_health_ops/api/main.py`: **3** ported, **29** python-only, **0** dead-by-design._
+_32 `/api/v1/*` routes in `src/dev_health_ops/api/main.py`: **5** ported, **27** python-only, **0** dead-by-design._
 
 | Method | Path | Status | Go handler |
 | --- | --- | --- | --- |
 | GET | `/api/v1/drilldown/issues` | python-only | -- |
 | POST | `/api/v1/drilldown/issues` | python-only | -- |
-| GET | `/api/v1/drilldown/prs` | python-only | -- |
-| POST | `/api/v1/drilldown/prs` | python-only | -- |
+| GET | `/api/v1/drilldown/prs` | ported | `cmd/query-api/drilldown_prs_route.go:86` |
+| POST | `/api/v1/drilldown/prs` | ported | `cmd/query-api/drilldown_prs_route.go:86` |
 | GET | `/api/v1/explain` | python-only | -- |
 | POST | `/api/v1/explain` | python-only | -- |
 | GET | `/api/v1/filters/options` | ported | `cmd/query-api/filter_options_route.go:81` |

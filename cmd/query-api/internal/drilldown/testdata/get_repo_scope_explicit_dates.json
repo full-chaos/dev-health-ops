@@ -1,0 +1,14 @@
+{
+  "items": [
+    {
+      "repo_id": "11111111-1111-1111-1111-111111111111",
+      "number": 101,
+      "title": "Fix flaky test",
+      "author_name": "bob",
+      "created_at": "2024-02-02T08:00:00Z",
+      "merged_at": "2024-02-02T20:00:00Z",
+      "first_review_at": null,
+      "review_latency_hours": null
+    }
+  ]
+}

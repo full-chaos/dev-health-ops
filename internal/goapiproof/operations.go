@@ -478,13 +478,15 @@ var operationSpecs = map[string]OperationSpec{
 		},
 		Parity: Options{BaselineDefects: []BaselineDefect{{
 			Ticket: "CHAOS-5780",
-			Reason: "git_pull_requests' created_at/merged_at/closed_at/first_review_at/first_comment_at columns are ClickHouse DateTime64(3, 'UTC') (000_raw_tables.sql:69-78) -- the same column class as CHAOS-5450's capacityForecast fields and CHAOS-5492's featureFlags fields. Python's clickhouse_connect driver returns them NAIVE (no tzinfo) even though the column declares UTC, so strawberry's DateTime scalar isoformat()s them with no offset; Go's ClickHouse driver attaches UTC location, and these fields are typed DateTime! in the schema (schema.graphql:1654-1663), which gqlgen's built-in graphql.Time scalar formats via RFC3339Nano -- always an explicit offset. The forecast fields already established this pattern: RFC3339's explicit offset is the canonical DateTime wire form, and a naive Python isoformat is the declared defect, not a bug to chase (graphqldate.RFC3339UTC's doc comment). featureFlags.createdAt/archivedAt went the other way only because a live-ClickHouse precedent test had already pinned the naive shape as that field's own contract; no such precedent exists for pr's fields. Go is correct.",
+			Reason: "git_pull_requests' created_at/merged_at/closed_at/first_review_at/first_comment_at columns, plus git_pull_request_reviews.submitted_at (reviews) and git_commits.author_when (commits, joined in via work_graph_pr_commit) are ALL ClickHouse DateTime64(3, 'UTC') (000_raw_tables.sql:69-78,92,27) -- the same column class as CHAOS-5450's capacityForecast fields and CHAOS-5492's featureFlags fields. Python's clickhouse_connect driver returns every one of them NAIVE (no tzinfo) even though the column declares UTC (src/dev_health_ops/api/graphql/resolvers/pr.py, models/pr.py: submitted_at/author_when are plain `datetime`), so strawberry's DateTime scalar isoformat()s them with no offset; Go's ClickHouse driver attaches UTC location, and every one of these fields is typed DateTime in the schema (schema.graphql:1654-1663 for pr itself, PullRequestReview.submittedAt, PullRequestCommit.authorWhen), which gqlgen's built-in graphql.Time scalar formats via RFC3339Nano -- always an explicit offset. The forecast fields already established this pattern: RFC3339's explicit offset is the canonical DateTime wire form, and a naive Python isoformat is the declared defect, not a bug to chase (graphqldate.RFC3339UTC's doc comment). featureFlags.createdAt/archivedAt went the other way only because a live-ClickHouse precedent test had already pinned the naive shape as that field's own contract; no such precedent exists for pr's fields. Go is correct. Paths below are index-free (a list element's position is stripped before matching), so one citation per field covers every element of reviews/commits, not just the one a live run happened to see non-null first.",
 			Paths: []string{
 				"data.pr.createdAt",
 				"data.pr.mergedAt",
 				"data.pr.closedAt",
 				"data.pr.firstReviewAt",
 				"data.pr.firstCommentAt",
+				"data.pr.reviews.submittedAt",
+				"data.pr.commits.authorWhen",
 			},
 		}}},
 	},

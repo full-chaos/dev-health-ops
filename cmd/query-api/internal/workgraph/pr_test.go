@@ -354,12 +354,60 @@ func TestFetchPRCoreRow_CreatedAtWireStringCarriesAnExplicitUTCOffset(t *testing
 	}
 }
 
+// sweepDateTimeFieldPaths walks t (and, through struct- and slice-typed
+// fields, every type reachable from it) collecting the dotted, index-free
+// path of every time.Time-shaped field it finds -- an array element's
+// position is never part of a path, matching tieredPath's own
+// normalisation of a comparator finding, so one path covers every element
+// of a list field, not just index 0.
+//
+// Recursion follows a field's type after unwrapping any pointer/slice
+// layers, so commits ([]PullRequestCommit) and reviews
+// ([]PullRequestReview) are walked exactly like a single nested struct
+// field would be -- a list is not a special case, just an extra
+// indirection to strip. visited stops it from re-entering a type it has
+// already walked, the only guard a set of plain DTOs needs against a
+// cycle.
+func sweepDateTimeFieldPaths(t reflect.Type, pathPrefix string, visited map[reflect.Type]bool, found *[]string) {
+	for t.Kind() == reflect.Ptr || t.Kind() == reflect.Slice || t.Kind() == reflect.Array {
+		t = t.Elem()
+	}
+	if t.Kind() != reflect.Struct || visited[t] {
+		return
+	}
+	visited[t] = true
+
+	timeType := reflect.TypeOf(time.Time{})
+	for i := 0; i < t.NumField(); i++ {
+		field := t.Field(i)
+		name, _, _ := strings.Cut(field.Tag.Get("json"), ",")
+		if name == "" || name == "-" {
+			continue
+		}
+		path := pathPrefix + "." + name
+
+		fieldType := field.Type
+		for fieldType.Kind() == reflect.Ptr || fieldType.Kind() == reflect.Slice || fieldType.Kind() == reflect.Array {
+			fieldType = fieldType.Elem()
+		}
+		switch {
+		case fieldType == timeType:
+			*found = append(*found, path)
+		case fieldType.Kind() == reflect.Struct:
+			sweepDateTimeFieldPaths(fieldType, path, visited, found)
+		}
+	}
+}
+
 // TestPullRequestDetailDateTimeFieldsAreAllDeclaredBaselineDefects sweeps
-// EVERY time.Time-shaped field on model.PullRequestDetail via reflection,
-// not just createdAt (the one field a live run happened to see non-null)
-// -- mergedAt/closedAt/firstReviewAt/firstCommentAt read the exact same
-// naive-ClickHouse-column class from the same table and would otherwise
-// surface this one field at a time, the class of gap Trap #144 names.
+// EVERY time.Time-shaped field reachable from model.PullRequestDetail --
+// its own createdAt/mergedAt/closedAt/firstReviewAt/firstCommentAt AND,
+// recursively, reviews[].submittedAt and commits[].authorWhen -- not just
+// the fields a live run happened to see non-null one at a time. All of
+// them read the same naive-ClickHouse-column class from ClickHouse tables
+// reached through git_pull_requests, and a fix for one field of that
+// class is not a fix until every sibling reading the same column type is
+// covered too.
 func TestPullRequestDetailDateTimeFieldsAreAllDeclaredBaselineDefects(t *testing.T) {
 	spec, err := goapiproof.SpecFor("pr")
 	if err != nil {
@@ -372,36 +420,26 @@ func TestPullRequestDetailDateTimeFieldsAreAllDeclaredBaselineDefects(t *testing
 		}
 	}
 
-	timeType := reflect.TypeOf(time.Time{})
-	timePtrType := reflect.PointerTo(timeType)
+	var found []string
+	sweepDateTimeFieldPaths(reflect.TypeOf(model.PullRequestDetail{}), "data.pr", map[reflect.Type]bool{}, &found)
 
-	rt := reflect.TypeOf(model.PullRequestDetail{})
-	var found, missing []string
-	for i := 0; i < rt.NumField(); i++ {
-		field := rt.Field(i)
-		if field.Type != timeType && field.Type != timePtrType {
-			continue
-		}
-		name, _, _ := strings.Cut(field.Tag.Get("json"), ",")
-		if name == "" || name == "-" {
-			t.Fatalf("field %s has no usable json tag -- cannot derive its GraphQL path", field.Name)
-		}
-		path := "data.pr." + name
-		found = append(found, path)
-		if !declared[path] {
-			missing = append(missing, path)
-		}
-	}
-	// A struct reporting no time.Time-shaped field at all means the sweep
-	// itself found nothing to check -- as fatal a result as a missing
+	// No time.Time-shaped field anywhere reachable means the sweep itself
+	// found nothing to check -- as fatal a result as a missing
 	// declaration, since a future model regeneration losing every
 	// DateTime field (or a rename this reflection stops matching) would
 	// otherwise pass here vacuously.
 	if len(found) == 0 {
-		t.Fatal("PullRequestDetail carries no time.Time-shaped field -- the sweep found nothing to check, which means the guard is broken, not clean")
+		t.Fatal("no time.Time-shaped field reachable from PullRequestDetail -- the sweep found nothing to check, which means the guard is broken, not clean")
+	}
+
+	var missing []string
+	for _, path := range found {
+		if !declared[path] {
+			missing = append(missing, path)
+		}
 	}
 	if len(missing) > 0 {
-		t.Fatalf("PullRequestDetail has time.Time field(s) with no baseline defect declared: %v (swept: %v) -- every DateTime field reading git_pull_requests' naive ClickHouse timestamps needs the same declaration, not just the one a proof run happened to see non-null", missing, found)
+		t.Fatalf("PullRequestDetail has time.Time field(s), including nested ones, with no baseline defect declared: %v (swept: %v) -- every DateTime field reading git_pull_requests' (or a table it joins) naive ClickHouse timestamps needs the same declaration, not just the one a proof run happened to see non-null", missing, found)
 	}
 }
 

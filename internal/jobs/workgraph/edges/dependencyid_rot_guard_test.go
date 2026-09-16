@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"unicode"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
 // TestNumericTypeDigitTableMatchesLivePython re-derives numericTypeDigitNotDecimal
@@ -32,14 +34,7 @@ func TestNumericTypeDigitTableMatchesLivePython(t *testing.T) {
 		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
 	}
 
-	python := os.Getenv("PYTHON")
-	if python == "" {
-		resolved, err := exec.LookPath("python3")
-		if err != nil {
-			t.Fatalf("python3 is required: %v", err)
-		}
-		python = resolved
-	}
+	python := edgesLivePython(t)
 	const derive = `
 import json, sys
 out = []
@@ -61,7 +56,7 @@ json.dump(out, sys.stdout)
 		if errors.As(err, &exitErr) {
 			stderr = exitErr.Stderr
 		}
-		t.Fatalf("derive the Numeric_Type=Digit set from live Python: %v: %s", err, stderr)
+		t.Fatalf("derive the Numeric_Type=Digit set from live Python: %v", pyoracle.RunError(python, err, stderr))
 	}
 	var live []rune
 	if err := json.Unmarshal(rendered, &live); err != nil {
@@ -128,17 +123,10 @@ func TestIntMaxStrDigitsMatchesLivePython(t *testing.T) {
 	if proofDirectory == "" {
 		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
 	}
-	python := os.Getenv("PYTHON")
-	if python == "" {
-		resolved, err := exec.LookPath("python3")
-		if err != nil {
-			t.Fatalf("python3 is required: %v", err)
-		}
-		python = resolved
-	}
+	python := edgesLivePython(t)
 	output, err := exec.Command(python, "-c", "import sys; print(sys.get_int_max_str_digits())").Output()
 	if err != nil {
-		t.Fatalf("read int_max_str_digits from live python: %v", err)
+		t.Fatalf("read int_max_str_digits from live python: %v", pyoracle.RunError(python, err, nil))
 	}
 	live, err := strconv.Atoi(strings.TrimSpace(string(output)))
 	if err != nil {
@@ -185,14 +173,7 @@ func TestPythonDecimalBlocksMatchLivePython(t *testing.T) {
 	if proofDirectory == "" {
 		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
 	}
-	python := os.Getenv("PYTHON")
-	if python == "" {
-		resolved, err := exec.LookPath("python3")
-		if err != nil {
-			t.Fatalf("python3 is required: %v", err)
-		}
-		python = resolved
-	}
+	python := edgesLivePython(t)
 
 	const derive = `
 import json, unicodedata
@@ -218,7 +199,7 @@ print(json.dumps({
 `
 	output, err := exec.Command(python, "-c", derive).Output()
 	if err != nil {
-		t.Fatalf("derive decimal blocks from live python: %v", err)
+		t.Fatalf("derive decimal blocks from live python: %v", pyoracle.RunError(python, err, nil))
 	}
 	var live struct {
 		Blocks         []int  `json:"blocks"`

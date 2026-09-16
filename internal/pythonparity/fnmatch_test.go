@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
 // fnMatchCases pair a pattern with a name. They are chosen to separate
@@ -112,10 +114,7 @@ func TestFnMatchMatchesLivePython(t *testing.T) {
 	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE") == "" {
 		t.Skip("live Python oracle runs only through the uncached live-oracle gate")
 	}
-	python := os.Getenv("DEV_HEALTH_PYTHON")
-	if python == "" {
-		python = "python3"
-	}
+	python := pyoracle.Resolve(t, parityRepositoryRoot(t))
 
 	// JSON rather than a line-based protocol: two cases carry a newline INSIDE
 	// the name, and a line-based encoding silently drops them. The first
@@ -135,7 +134,7 @@ func TestFnMatchMatchesLivePython(t *testing.T) {
 	command.Stdin = bytes.NewReader(encoded)
 	output, err := command.Output()
 	if err != nil {
-		t.Fatalf("python oracle failed: %v", err)
+		t.Fatalf("python oracle failed: %v", pyoracle.RunError(python, err, nil))
 	}
 
 	var got []struct {

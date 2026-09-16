@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
 // TestLowerAndUpperMatchLivePythonOnEveryMultiRuneMapping derives, from the
@@ -45,7 +47,7 @@ json.dump(out, sys.stdout)
 		if errors.As(err, &exitErr) {
 			stderr = exitErr.Stderr
 		}
-		t.Fatalf("derive multi-rune case mappings: %v: %s", err, stderr)
+		t.Fatalf("derive multi-rune case mappings: %v", pyoracle.RunError(python, err, stderr))
 	}
 	var derived struct {
 		Lower map[string]string `json:"lower"`
@@ -170,7 +172,7 @@ func TestFinalSigmaLookaheadBoundaryIsWhereWeMeasuredIt(t *testing.T) {
 		command := exec.Command(python, "-c", "import sys; sys.stdout.write(sys.argv[1].lower())", input)
 		rendered, err := command.Output()
 		if err != nil {
-			t.Fatalf("live python lower(n=%d): %v", dots, err)
+			t.Fatalf("live python lower(n=%d): %v", dots, pyoracle.RunError(python, err, nil))
 		}
 		cpython, got := string(rendered), Lower(input)
 		agrees := cpython == got
@@ -204,13 +206,5 @@ func requireLivePython(t *testing.T) string {
 	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
 		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
 	}
-	python := os.Getenv("PYTHON")
-	if python == "" {
-		resolved, err := exec.LookPath("python3")
-		if err != nil {
-			t.Fatalf("python3 is required: %v", err)
-		}
-		python = resolved
-	}
-	return python
+	return pyoracle.Resolve(t, parityRepositoryRoot(t))
 }

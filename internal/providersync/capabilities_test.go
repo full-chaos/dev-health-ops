@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
 const (
@@ -37,7 +39,7 @@ func TestCapabilitiesMatchPythonProviderRegistry(t *testing.T) {
 	oracleScript := filepath.Join(packageDir, "testdata", "python_registry_oracle.py")
 	output, err := exec.Command(python, oracleScript, datasetsSource).CombinedOutput()
 	if err != nil {
-		t.Fatalf("execute Python registry oracle: %v: %s", err, output)
+		t.Fatalf("execute Python registry oracle: %v", pyoracle.RunError(python, err, output))
 	}
 	var want map[string][]registryEntry
 	if err := json.Unmarshal(output, &want); err != nil {
@@ -79,15 +81,9 @@ type registryEntry struct {
 func pythonExecutable(t *testing.T) string {
 	t.Helper()
 	requireLivePythonOracles(t)
-	resolved := ""
-	if configured := os.Getenv("PYTHON"); configured != "" {
-		resolved = configured
-	} else if path, err := exec.LookPath("python3"); err == nil {
-		resolved = path
-	}
-	if resolved == "" {
-		t.Fatal("python3 is required for the cross-language dataset registry freshness check")
-	}
+	_, currentFile, _, _ := runtime.Caller(0)
+	root := filepath.Dir(filepath.Dir(filepath.Dir(currentFile)))
+	resolved := pyoracle.Resolve(t, root)
 	assertPythonProducerIsThisWorktree(t, resolved)
 	return resolved
 }

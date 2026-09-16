@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
 const (
@@ -152,7 +154,7 @@ func runPythonIncidentQuery(t *testing.T, python, contract, repoFilter string) s
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			stderr = exitErr.Stderr
 		}
-		t.Fatalf("run the live Python incident builder: %v: %s", err, stderr)
+		t.Fatalf("run the live Python incident builder: %v", pyoracle.RunError(python, err, stderr))
 	}
 	return string(output)
 }
@@ -177,21 +179,14 @@ func normalizeSQL(query string) string {
 // success.
 func livePythonInterpreter(t *testing.T) string {
 	t.Helper()
-	resolved := os.Getenv("PYTHON")
-	if resolved == "" {
-		path, err := exec.LookPath("python3")
-		if err != nil {
-			t.Fatalf("python3 is required for the incident-SQL oracle: %v", err)
-		}
-		resolved = path
-	}
 	root := repositoryRootForOracle(t)
+	resolved := pyoracle.Resolve(t, root)
 	located, err := exec.Command(
 		resolved, "-c",
 		"import dev_health_ops, sys; sys.stdout.write(dev_health_ops.__file__)",
-	).Output()
+	).CombinedOutput()
 	if err != nil {
-		t.Fatalf("resolve dev_health_ops with %s: %v", resolved, err)
+		t.Fatalf("resolve dev_health_ops: %v", pyoracle.RunError(resolved, err, located))
 	}
 	if !strings.HasPrefix(string(located), root+string(os.PathSeparator)) {
 		t.Fatalf(

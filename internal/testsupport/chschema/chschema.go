@@ -37,6 +37,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
 // applyScript runs the canonical migration entrypoint. force=true bypasses the
@@ -71,14 +72,11 @@ func Apply(ctx context.Context, t *testing.T, instance *containers.Instance) {
 	if err != nil {
 		t.Fatalf("chschema: %v", err)
 	}
-	python, err := pythonBinary(root)
-	if err != nil {
-		t.Fatalf("chschema: %v", err)
-	}
+	python := pyoracle.Resolve(t, root)
 	command := pythonCommand(ctx, python, dsn, root)
 	output, err := command.CombinedOutput()
 	if err != nil {
-		t.Fatalf("chschema: applying the real migration chain failed: %v\n%s", err, output)
+		t.Fatalf("chschema: applying the real migration chain failed: %v", pyoracle.RunError(python, err, output))
 	}
 	// The runner can exit 0 having done nothing if the entrypoint ever stops
 	// raising on failure, so require the positive marker rather than trusting
@@ -145,12 +143,14 @@ func pythonCommand(ctx context.Context, python, dsn, root string) *exec.Cmd {
 	// unresolvable on any host that ships only python3.
 	//
 	// Why it is not a code-injection path here. `python` comes from
-	// pythonBinary(): the DEV_HEALTH_PYTHON environment variable, else
-	// <root>/.venv/bin/python, else exec.LookPath("python3"). The env var is a
-	// deliberate developer-facing knob for choosing an interpreter, set by
-	// whoever is already running the test binary -- it is not request data, not
-	// file content, and not attacker-reachable. Anyone able to set it can
-	// already run arbitrary code as that user by running `go test` at all.
+	// pythonBinary(), which defers to pyoracle.Interpreter(): the
+	// DEV_HEALTH_PYTHON environment variable, else the deprecated PYTHON
+	// alias, else <root>/.venv/bin/python, else PATH's python3 interpreter. The
+	// env var is a deliberate developer-facing knob for choosing an
+	// interpreter, set by whoever is already running the test binary -- it is
+	// not request data, not file content, and not attacker-reachable. Anyone
+	// able to set it can already run arbitrary code as that user by running
+	// `go test` at all.
 	//
 	// There is no shell: exec.CommandContext execs directly, so word splitting
 	// and metacharacter interpretation do not apply. The remaining argv is
@@ -183,10 +183,12 @@ func pythonCommand(ctx context.Context, python, dsn, root string) *exec.Cmd {
 	return command
 }
 
-// pythonBinary prefers the checked-out virtualenv, which is what the live
-// Python oracle gate already relies on, then an explicit override, then PATH.
 // Interpreter resolves the Python this package would use, for callers that
-// must run the SAME interpreter chschema does.
+// must run the SAME interpreter chschema does: internal/testsupport/pyoracle's
+// shared policy, which every live-Python oracle in this repository now
+// shares -- an explicit override, then the checked-out virtualenv, then PATH.
+// It also reports which rule matched, so a caller can log it the same way
+// Apply does.
 //
 // It exists because a test in internal/jobs/metrics/remaining hard-coded
 // <root>/.venv/bin/python while chschema, three lines earlier in the same test,
@@ -195,30 +197,16 @@ func pythonCommand(ctx context.Context, python, dsn, root string) *exec.Cmd {
 // lookups in one test disagreeing about where Python lives.
 //
 // Exported rather than duplicated on purpose: a copied resolver is the same
-// defect again one refactor later. It shares this package's repoRoot() as well
-// as its lookup order, so caller and schema setup cannot diverge on either.
-func Interpreter() (string, error) {
+// defect again one refactor later.
+func Interpreter() (path string, rule string, err error) {
 	root, err := repoRoot()
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	return pythonBinary(root)
+	return pyoracle.Interpreter(root)
 }
 
 func pythonBinary(root string) (string, error) {
-	if override := os.Getenv("DEV_HEALTH_PYTHON"); override != "" {
-		return override, nil
-	}
-	venv := filepath.Join(root, ".venv", "bin", "python")
-	if _, err := os.Stat(venv); err == nil {
-		return venv, nil
-	}
-	found, err := exec.LookPath("python3")
-	if err != nil {
-		return "", fmt.Errorf(
-			"no Python to run the migration chain: %s does not exist, "+
-				"DEV_HEALTH_PYTHON is unset, and python3 is not on PATH", venv,
-		)
-	}
-	return found, nil
+	path, _, err := pyoracle.Interpreter(root)
+	return path, err
 }

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
 func TestFernetCipherMatchesLivePythonCustomSalt(t *testing.T) {
@@ -20,13 +21,7 @@ func TestFernetCipherMatchesLivePythonCustomSalt(t *testing.T) {
 		t.Fatal("resolve providerfoundation package path")
 	}
 	repositoryRoot := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", ".."))
-	python := filepath.Join(repositoryRoot, ".venv", "bin", "python")
-	if _, err := os.Stat(python); err != nil {
-		python, err = exec.LookPath("python3")
-		if err != nil {
-			t.Fatalf("live Python oracle interpreter: %v", err)
-		}
-	}
+	python := pyoracle.Resolve(t, repositoryRoot)
 
 	const (
 		key       = "pagerduty-cross-runtime-test-key"
@@ -88,7 +83,7 @@ func runPythonEncryptionOracle(
 	}
 	output, err := command.CombinedOutput()
 	if err != nil {
-		t.Fatalf("live Python encryption oracle: %v: %s", err, output)
+		t.Fatalf("live Python encryption oracle: %v", pyoracle.RunError(python, err, output))
 	}
 	return strings.TrimSpace(string(output))
 }

@@ -350,10 +350,11 @@ func dailyFamilyPerColumnArgMax(ctx context.Context, t *testing.T, raw stdclickh
 // rather than a copy of it.
 func dailyFamilyPythonDedupSources(ctx context.Context, t *testing.T) map[string]string {
 	t.Helper()
-	python, err := chschema.Interpreter()
+	python, rule, err := chschema.Interpreter()
 	if err != nil {
 		t.Fatalf("resolve python: %v", err)
 	}
+	t.Logf("pyoracle: resolved interpreter %s (%s)", python, rule)
 	_, file, _, _ := runtime.Caller(0)
 	source := filepath.Join(filepath.Dir(file), "..", "..", "src")
 	tables, err := json.Marshal(dailyFamilyTableNames())

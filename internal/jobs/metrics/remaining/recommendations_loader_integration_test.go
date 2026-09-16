@@ -1264,12 +1264,12 @@ func assertArgMaxKeysAreUnique(t *testing.T, ctx context.Context, conn driver.Co
 // close, so a missing interpreter is a hard failure.
 func loaderPythonBinary(t *testing.T) string {
 	t.Helper()
-	python, err := chschema.Interpreter()
+	python, rule, err := chschema.Interpreter()
 	if err != nil {
 		t.Fatalf("no Python to run the reference loader: %v. This test compares the "+
 			"SHIPPED Python loader against the Go one, so without an interpreter it "+
 			"proves nothing -- failing rather than skipping is deliberate.", err)
 	}
-	t.Logf("reference interpreter resolved to: %s", python)
+	t.Logf("reference interpreter resolved to: %s (%s)", python, rule)
 	return python
 }

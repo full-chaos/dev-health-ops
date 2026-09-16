@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
 const (
@@ -32,14 +34,12 @@ func requireLivePythonOracles(t *testing.T) {
 func livePythonExecutable(t *testing.T) string {
 	t.Helper()
 	requireLivePythonOracles(t)
-	if configured := os.Getenv("PYTHON"); configured != "" {
-		return configured
+	_, currentFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("cannot locate the scheduler sync package path")
 	}
-	if path, err := exec.LookPath("python3"); err == nil {
-		return path
-	}
-	t.Fatal("python3 is required for the live scheduled planner oracle")
-	return ""
+	root := filepath.Dir(filepath.Dir(filepath.Dir(currentFile)))
+	return pyoracle.Resolve(t, root)
 }
 
 type plannerOracleSource struct {
@@ -576,8 +576,8 @@ func runPythonPlannerOracle(t *testing.T, cases []plannerOracleCase) map[string]
 	err = command.Run()
 	output := stdout.Bytes()
 	if err != nil {
-		t.Fatalf("execute live Python planner oracle: %v\nstdout:\n%s\nstderr:\n%s",
-			err, output, stderr.String())
+		t.Fatalf("execute live Python planner oracle: %v\nstdout:\n%s",
+			pyoracle.RunError(python, err, stderr.Bytes()), output)
 	}
 	proof := filepath.Join(os.Getenv(livePythonOracleProofDir), livePythonOracleProofFile)
 	if err := os.WriteFile(proof, []byte("executed\n"), 0o600); err != nil {

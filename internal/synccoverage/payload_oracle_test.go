@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
 const (
@@ -165,17 +167,14 @@ func buildGoOraclePayload(t *testing.T, fixture payloadOracleFixture) projection
 
 func executePythonPayloadOracle(t *testing.T, repositoryRoot, helperPath, fixturePath string) []byte {
 	t.Helper()
-	python := os.Getenv("PYTHON")
-	if python == "" {
-		python = "python3"
-	}
+	python := pyoracle.Resolve(t, repositoryRoot)
 	command := exec.Command(python, helperPath, fixturePath)
 	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(repositoryRoot, "src"))
 	var stderr bytes.Buffer
 	command.Stderr = &stderr
 	output, err := command.Output()
 	if err != nil {
-		t.Fatalf("execute live Python sync coverage oracle: %v: %s", err, stderr.String())
+		t.Fatalf("execute live Python sync coverage oracle: %v", pyoracle.RunError(python, err, stderr.Bytes()))
 	}
 	if len(bytes.TrimSpace(output)) == 0 {
 		t.Fatalf("live Python sync coverage oracle returned empty output: %s", stderr.String())

@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
 // TestCompoundingRiskGoldenMatchesLivePython is the rot guard for
@@ -43,7 +45,7 @@ func TestCompoundingRiskGoldenMatchesLivePython(t *testing.T) {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			stderr = exitErr.Stderr
 		}
-		t.Fatalf("run the golden generator against live Python: %v: %s", err, stderr)
+		t.Fatalf("run the golden generator against live Python: %v", pyoracle.RunError(python, err, stderr))
 	}
 
 	goldenPath := filepath.Join(
@@ -87,19 +89,12 @@ func compoundingRiskRepositoryRoot(t *testing.T) string {
 // golden.
 func compoundingRiskLivePython(t *testing.T, repoRoot string) string {
 	t.Helper()
-	resolved := os.Getenv("PYTHON")
-	if resolved == "" {
-		path, err := exec.LookPath("python3")
-		if err != nil {
-			t.Fatalf("python3 is required for the golden rot guard: %v", err)
-		}
-		resolved = path
-	}
+	resolved := pyoracle.Resolve(t, repoRoot)
 	cmd := exec.Command(resolved, "-c", "import dev_health_ops, sys; sys.stdout.write(dev_health_ops.__file__)")
 	cmd.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(repoRoot, "src"))
-	located, err := cmd.Output()
+	located, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("resolve dev_health_ops with %s: %v", resolved, err)
+		t.Fatalf("resolve dev_health_ops: %v", pyoracle.RunError(resolved, err, located))
 	}
 	module := string(located)
 	if !strings.HasPrefix(module, repoRoot+string(os.PathSeparator)) {

@@ -14,6 +14,8 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
 func TestClickHouseRepositoryDiscovererUsesPythonLatestRowQueryWithTenantFence(t *testing.T) {
@@ -59,14 +61,11 @@ func TestPythonDiscoverReposOracle(t *testing.T) {
 	if proofDirectory == "" {
 		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
 	}
-	python := os.Getenv("PYTHON")
-	if python == "" {
-		t.Fatal("PYTHON is required for the live daily metrics Python oracle")
-	}
 	root, err := filepath.Abs(filepath.Join("..", "..", "..", ".."))
 	if err != nil {
 		t.Fatal(err)
 	}
+	python := pyoracle.Resolve(t, root)
 	command := exec.Command(python, "testdata/python_daily_discover_oracle.py")
 	command.Dir = filepath.Join(root, "internal", "jobs", "metrics", "daily")
 	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
@@ -76,7 +75,8 @@ func TestPythonDiscoverReposOracle(t *testing.T) {
 	err = command.Run()
 	output := stdout.Bytes()
 	if err != nil {
-		t.Fatalf("execute production Python discover_repos oracle: %v\nstdout:\n%s\nstderr:\n%s", err, output, stderr.String())
+		t.Fatalf("execute production Python discover_repos oracle: %v\nstdout:\n%s",
+			pyoracle.RunError(python, err, stderr.Bytes()), output)
 	}
 	var oracle struct {
 		IDs        []string          `json:"ids"`

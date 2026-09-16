@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
 const (
@@ -44,14 +46,7 @@ func TestGoldenStillDescribesLiveCPython(t *testing.T) {
 	generator := filepath.Join(root, "tests", "fixtures", "generate_cpython_random_golden.py")
 	golden := filepath.Join(root, "tests", "fixtures", "cpython_random_golden.json")
 
-	python := os.Getenv("PYTHON")
-	if python == "" {
-		resolved, err := exec.LookPath("python3")
-		if err != nil {
-			t.Fatalf("python3 is required for the cpython-random rot guard: %v", err)
-		}
-		python = resolved
-	}
+	python := pyoracle.Resolve(t, root)
 
 	// --check re-derives every vector from the LIVE interpreter and compares.
 	// The generator owns that comparison so there is only one definition of
@@ -65,8 +60,8 @@ func TestGoldenStillDescribesLiveCPython(t *testing.T) {
 			"the recorded CPython vectors no longer match this interpreter.\n"+
 				"Either CPython changed its random stream (in which case the "+
 				"capacity port's parity claim needs re-examining, not just a "+
-				"regenerated file) or the generator was edited.\n%s",
-			output,
+				"regenerated file) or the generator was edited.\n%v",
+			pyoracle.RunError(python, err, output),
 		)
 	}
 	if !strings.Contains(string(output), "CPYTHON_RANDOM_GOLDEN_CURRENT") {

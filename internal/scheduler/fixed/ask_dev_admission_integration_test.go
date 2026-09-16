@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -185,11 +186,12 @@ func pythonAskDevFeatureDecisions[T any](t *testing.T, cases []T) map[string]boo
 		t.Fatal("cannot locate Ask Dev Python parity oracle")
 	}
 	script := filepath.Join(filepath.Dir(currentFile), "testdata", "python_ask_dev_feature_oracle.py")
-	command := exec.Command("python3", script)
+	python := pyoracle.Resolve(t, repositoryRoot(t))
+	command := exec.Command(python, script)
 	command.Stdin = bytes.NewReader(encoded)
 	output, err := command.Output()
 	if err != nil {
-		t.Fatalf("execute live Python Ask Dev feature oracle: %v", err)
+		t.Fatalf("execute live Python Ask Dev feature oracle: %v", pyoracle.RunError(python, err, nil))
 	}
 	var decisions map[string]bool
 	if err := json.Unmarshal(output, &decisions); err != nil {

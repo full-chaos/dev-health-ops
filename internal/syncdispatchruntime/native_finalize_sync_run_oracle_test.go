@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
 // livePythonOracleProofFile names this package's proof marker for
@@ -56,15 +58,9 @@ var (
 func pythonExecutable(t *testing.T) string {
 	t.Helper()
 	requireLivePythonOracles(t)
-	resolved := ""
-	if configured := os.Getenv("PYTHON"); configured != "" {
-		resolved = configured
-	} else if path, err := exec.LookPath("python3"); err == nil {
-		resolved = path
-	}
-	if resolved == "" {
-		t.Fatal("python3 is required for the finalize_sync_run zero-unit oracle")
-	}
+	_, currentFile, _, _ := runtime.Caller(0)
+	root := filepath.Dir(filepath.Dir(filepath.Dir(currentFile)))
+	resolved := pyoracle.Resolve(t, root)
 	assertPythonProducerIsThisWorktree(t, resolved)
 	return resolved
 }
@@ -134,7 +130,7 @@ func TestAggregateRunStatusAndZeroUnitReasonMatchLivePython(t *testing.T) {
 	oracleScript := filepath.Join(packageDir, "testdata", "finalize_zero_unit_oracle.py")
 	output, err := exec.Command(python, oracleScript).CombinedOutput()
 	if err != nil {
-		t.Fatalf("execute Python zero-unit oracle: %v: %s", err, output)
+		t.Fatalf("execute Python zero-unit oracle: %v", pyoracle.RunError(python, err, output))
 	}
 	var want finalizeZeroUnitOracle
 	if err := json.Unmarshal(output, &want); err != nil {

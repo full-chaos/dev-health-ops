@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
 // The parity contract for this package is numeric equality with radon
@@ -274,15 +276,12 @@ func TestRadonGoldenIsNotStale(t *testing.T) {
 		t.Skip("live Python oracle runs only through the uncached live-oracle gate")
 	}
 
-	python := os.Getenv("DEV_HEALTH_PYTHON")
-	if python == "" {
-		python = "python3"
-	}
+	python := pyoracle.Resolve(t, pyccRepositoryRoot(t))
 	script := filepath.Join("testdata", "python_radon_cc_oracle.py")
 	command := exec.Command(python, script, corpusDir(t))
 	output, err := command.CombinedOutput()
 	if err != nil {
-		t.Fatalf("radon oracle failed: %v\n%s", err, output)
+		t.Fatalf("radon oracle failed: %v", pyoracle.RunError(python, err, output))
 	}
 
 	var live oracleDoc
@@ -309,5 +308,25 @@ func TestRadonGoldenIsNotStale(t *testing.T) {
 				name, got.CyclomaticTotal, got.FunctionsCount,
 				want.CyclomaticTotal, want.FunctionsCount)
 		}
+	}
+}
+
+// pyccRepositoryRoot walks up to the module root, so the resolved
+// interpreter can find the checked-out virtualenv.
+func pyccRepositoryRoot(t *testing.T) string {
+	t.Helper()
+	working, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for directory := working; ; {
+		if _, err := os.Stat(filepath.Join(directory, "go.mod")); err == nil {
+			return directory
+		}
+		parent := filepath.Dir(directory)
+		if parent == directory {
+			t.Fatal("could not find repository root (no go.mod found)")
+		}
+		directory = parent
 	}
 }

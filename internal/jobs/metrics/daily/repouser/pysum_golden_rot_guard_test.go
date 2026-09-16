@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
 // TestPysumGoldenMatchesLivePython is the CHAOS-4824 rot guard for
@@ -23,19 +25,11 @@ func TestPysumGoldenMatchesLivePython(t *testing.T) {
 	if proofDirectory == "" {
 		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
 	}
-	python := os.Getenv("PYTHON")
-	if python == "" {
-		if resolved, err := exec.LookPath("python3"); err == nil {
-			python = resolved
-		} else {
-			t.Fatalf("PYTHON is required for the live pysum oracle: %v", err)
-		}
-	}
-
 	root, err := filepath.Abs(filepath.Join("..", "..", "..", "..", ".."))
 	if err != nil {
 		t.Fatal(err)
 	}
+	python := pyoracle.Resolve(t, root)
 	generator := filepath.Join(root, "tests", "fixtures", "generate_pysum_golden.py")
 	if info, statErr := os.Stat(generator); statErr != nil || !info.Mode().IsRegular() {
 		t.Fatalf("golden generator is missing at %s: %v", generator, statErr)
@@ -47,7 +41,7 @@ func TestPysumGoldenMatchesLivePython(t *testing.T) {
 	command.Stdout = &stdout
 	command.Stderr = &stderr
 	if err := command.Run(); err != nil {
-		t.Fatalf("run the pysum golden generator against live Python: %v\nstderr:\n%s", err, stderr.String())
+		t.Fatalf("run the pysum golden generator against live Python: %v", pyoracle.RunError(python, err, stderr.Bytes()))
 	}
 	rendered := stdout.Bytes()
 

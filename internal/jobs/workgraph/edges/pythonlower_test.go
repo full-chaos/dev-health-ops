@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -69,14 +70,7 @@ func TestPythonLowerMatchesLivePython(t *testing.T) {
 	if proofDirectory == "" {
 		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
 	}
-	python := os.Getenv("PYTHON")
-	if python == "" {
-		resolved, err := exec.LookPath("python3")
-		if err != nil {
-			t.Fatalf("python3 is required: %v", err)
-		}
-		python = resolved
-	}
+	python := edgesLivePython(t)
 	const derive = `
 import json, sys
 out = {}
@@ -95,7 +89,7 @@ json.dump(out, sys.stdout)
 		if errors.As(err, &exitErr) {
 			stderr = exitErr.Stderr
 		}
-		t.Fatalf("derive multi-rune lowercase mappings: %v: %s", err, stderr)
+		t.Fatalf("derive multi-rune lowercase mappings: %v", pyoracle.RunError(python, err, stderr))
 	}
 	var multi map[string]string
 	if err := json.Unmarshal(rendered, &multi); err != nil {
@@ -238,14 +232,7 @@ func TestEveryRuneLowercasesLikeLivePython(t *testing.T) {
 	if proofDirectory == "" {
 		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
 	}
-	python := os.Getenv("PYTHON")
-	if python == "" {
-		resolved, err := exec.LookPath("python3")
-		if err != nil {
-			t.Fatalf("python3 is required: %v", err)
-		}
-		python = resolved
-	}
+	python := edgesLivePython(t)
 
 	const derive = `
 import json, sys, unicodedata
@@ -259,7 +246,7 @@ print(json.dumps({"mapping": mapping, "unicode": unicodedata.unidata_version}))
 `
 	output, err := exec.Command(python, "-c", derive).Output()
 	if err != nil {
-		t.Fatalf("derive full lower mapping from live python: %v", err)
+		t.Fatalf("derive full lower mapping from live python: %v", pyoracle.RunError(python, err, nil))
 	}
 	var live struct {
 		Mapping map[string][]int `json:"mapping"`
@@ -315,4 +302,13 @@ print(json.dumps({"mapping": mapping, "unicode": unicodedata.unidata_version}))
 	); err != nil {
 		t.Fatalf("write proof marker: %v", err)
 	}
+}
+
+// edgesLivePython resolves the interpreter every live-Python oracle in this
+// package compares Go against, through the policy shared by every
+// live-Python oracle in the repository: an explicit override, then the
+// checked-out virtualenv, then PATH.
+func edgesLivePython(t *testing.T) string {
+	t.Helper()
+	return pyoracle.Resolve(t, repositoryRootPath(t))
 }

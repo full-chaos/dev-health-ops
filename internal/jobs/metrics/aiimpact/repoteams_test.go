@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
 // fixtureTeams MUST stay byte-identical to
@@ -150,21 +152,19 @@ func runRepoTeamsOracle(t *testing.T, markerName string) map[string]*string {
 	if proofDirectory == "" {
 		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
 	}
-	python := os.Getenv("PYTHON")
-	if python == "" {
-		t.Fatal("PYTHON is required for the live repo-teams Python oracle")
-	}
 	root, err := filepath.Abs(filepath.Join("..", "..", "..", ".."))
 	if err != nil {
 		t.Fatal(err)
 	}
+	python := pyoracle.Resolve(t, root)
 	command := exec.Command(python, filepath.Join("testdata", "python_repo_teams_oracle.py"))
 	command.Dir = filepath.Join(root, "internal", "jobs", "metrics", "aiimpact")
 	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
 	var stdout, stderr bytes.Buffer
 	command.Stdout, command.Stderr = &stdout, &stderr
 	if err := command.Run(); err != nil {
-		t.Fatalf("execute production Python oracle: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+		t.Fatalf("execute production Python oracle: %v\nstdout:\n%s",
+			pyoracle.RunError(python, err, stderr.Bytes()), stdout.String())
 	}
 	output := bytes.TrimSpace(stdout.Bytes())
 	if lastLine := bytes.LastIndexByte(output, '\n'); lastLine >= 0 {

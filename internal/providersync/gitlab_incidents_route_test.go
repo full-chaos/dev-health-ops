@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
@@ -246,5 +248,59 @@ func TestGitLabIncidentsRouteFailsClosedOnIncompleteOrMalformedInventory(t *test
 				t.Fatalf("error=%v want=%v", err, test.want)
 			}
 		})
+	}
+}
+
+// TestGitLabServiceMappingConflictKeyIsStableAcrossValidFromStamping guards a
+// producer identity property: two repository_derived mapping rows for the
+// SAME mapping (same org/provider/instance/external id and the same content
+// otherwise) must share one source_conflict_key regardless of what
+// valid_from carries. valid_from is stamped from the effect's own
+// observation time -- it varies on every sync of an otherwise-unchanged
+// mapping the same way observed_at/last_synced do, and those are already
+// excluded from the conflict/revision hash for exactly this reason. If
+// valid_from were allowed to participate, an unchanged mapping would mint a
+// new conflict key (and therefore a new source_revision) on every periodic
+// re-sync, defeating the ordering contract's "pick the current physical row
+// for this id" selection with essentially hash noise instead of a real
+// content change.
+func TestGitLabServiceMappingConflictKeyIsStableAcrossValidFromStamping(t *testing.T) {
+	repoID := uuid.New()
+	buildRow := func(validFrom *time.Time) gitLabServiceRepositoryMappingRow {
+		row := gitLabServiceRepositoryMappingRow{
+			OrgID: "org-1", Provider: "gitlab", ProviderInstanceID: "gitlab.example",
+			SourceEntityType: "repository_mapping", ExternalID: "Acme/API:" + repoID.String(),
+			SourceVersionAt: time.Date(2026, 7, 21, 11, 0, 0, 0, time.UTC),
+			ObservedAt:      time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
+			LastSynced:      time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
+			ServiceID:       "svc-1", RepoID: &repoID,
+			RepoFullName: strPtr("Acme/API"), RepoProvider: strPtr("gitlab"),
+			MappingKind: strPtr("repository_derived"),
+			ValidFrom:   validFrom, IsActive: true,
+		}
+		if err := fillGitLabServiceMappingOrdering(&row); err != nil {
+			t.Fatalf("fillGitLabServiceMappingOrdering: %v", err)
+		}
+		return row
+	}
+
+	// An "existing" row, as it would have been written before any producer
+	// stamped valid_from at all.
+	unstamped := buildRow(nil)
+	// The SAME mapping, re-synced after the producer fix -- a later sync's
+	// own observation time, nothing else about the mapping changed.
+	firstSync := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	secondSync := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	stampedFirst := buildRow(&firstSync)
+	stampedSecond := buildRow(&secondSync)
+
+	if unstamped.ID != stampedFirst.ID || unstamped.ID != stampedSecond.ID {
+		t.Fatalf("row identity (id) must not depend on valid_from: %s / %s / %s",
+			unstamped.ID, stampedFirst.ID, stampedSecond.ID)
+	}
+	if unstamped.SourceConflictKey != stampedFirst.SourceConflictKey ||
+		unstamped.SourceConflictKey != stampedSecond.SourceConflictKey {
+		t.Fatalf("source_conflict_key must not depend on valid_from: unstamped=%s stampedFirst=%s stampedSecond=%s",
+			unstamped.SourceConflictKey, stampedFirst.SourceConflictKey, stampedSecond.SourceConflictKey)
 	}
 }

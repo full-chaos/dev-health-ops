@@ -248,3 +248,53 @@ func TestInternalIngestPersistsWorkItemPriorityAndOrg(t *testing.T) {
 		t.Fatalf("work item org/priority = %v %v", row[0], row[27])
 	}
 }
+
+// TestInternalIngestMappingConflictKeyIsStableAcrossValidFromStamping guards
+// a producer identity property: two repository_derived mapping rows for the
+// SAME mapping (same org/repo, re-synced at two different observation
+// times) must share one source_conflict_key. valid_from is stamped from
+// this effect's own observation time -- it varies on every otherwise-
+// unchanged re-sync the same way observed_at/last_synced do (both already
+// excluded from the conflict/revision hash for that reason). If valid_from
+// were allowed into the hash, an unchanged mapping would mint a new
+// conflict key on every periodic re-sync, defeating the ordering
+// contract's "pick the current physical row for this id" selection with
+// hash noise instead of a real content change.
+func TestInternalIngestMappingConflictKeyIsStableAcrossValidFromStamping(t *testing.T) {
+	serviceBatch1, mappingBatch1, incidentBatch1 := &productBatch{}, &productBatch{}, &productBatch{}
+	serviceBatch2, mappingBatch2, incidentBatch2 := &productBatch{}, &productBatch{}, &productBatch{}
+	sink := &productSink{batches: []*productBatch{
+		serviceBatch1, mappingBatch1, incidentBatch1,
+		serviceBatch2, mappingBatch2, incidentBatch2,
+	}}
+	handler, err := NewInternalIngestHandler(sink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := streamrunner.Message{
+		Stream: "ingest:org-1:incidents",
+		Fields: map[string]string{"payload": `{"org_id":"org-1","repo_url":"https://example.test/acme/repo","items":[{"incident_id":"inc-1","status":"resolved","started_at":"2026-07-23T12:00:00Z","resolved_at":"2026-07-23T13:00:00Z"}]}`},
+	}
+
+	handler.now = func() time.Time { return time.Date(2026, 7, 23, 14, 0, 0, 0, time.UTC) }
+	if err := handler.Handle(context.Background(), payload); err != nil {
+		t.Fatal(err)
+	}
+	// A later, otherwise-identical re-sync of the same mapping.
+	handler.now = func() time.Time { return time.Date(2026, 7, 24, 9, 0, 0, 0, time.UTC) }
+	if err := handler.Handle(context.Background(), payload); err != nil {
+		t.Fatal(err)
+	}
+
+	firstConflictKey, secondConflictKey := mappingBatch1.rows[0][7], mappingBatch2.rows[0][7]
+	if firstConflictKey != secondConflictKey {
+		t.Fatalf("mapping source_conflict_key must not depend on valid_from: first=%v second=%v",
+			firstConflictKey, secondConflictKey)
+	}
+	// The valid_from column itself still carries each call's own observation
+	// time -- only the hash is stable, not the written value.
+	if mappingBatch1.rows[0][31] == mappingBatch2.rows[0][31] {
+		t.Fatalf("valid_from should differ between the two syncs' own observation times, got %v for both",
+			mappingBatch1.rows[0][31])
+	}
+}

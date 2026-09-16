@@ -260,9 +260,12 @@ func (h *InternalIngestHandler) persistIncidents(ctx context.Context, orgID, rep
 		// (now, already carried for observedAt/lastSynced above), never left
 		// NULL: a NULL valid_from means "valid since before records began",
 		// and every as-of reader honors that, but a producer that can stamp
-		// a real instant should.
+		// a real instant should. Excluded from the conflict/revision hash
+		// below (same reason observed_at/last_synced are excluded): it
+		// varies on every re-sync of an otherwise-unchanged mapping, and
+		// letting it into the hash would mint a new conflict key each time.
 		{"valid_from", now}, {"valid_to", nil}, {"is_active", true},
-	})
+	}, "valid_from")
 	if err != nil {
 		return &streamrunner.PermanentError{Reason: "invalid_incident_ordering"}
 	}

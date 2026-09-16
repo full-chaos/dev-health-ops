@@ -40,10 +40,26 @@ type operationalBase struct {
 	relationshipConfidence                                            *float64
 }
 
-func operationalValues(family string, base operationalBase, entity []operationalField) ([]any, error) {
+// operationalValues builds one row's full column values (id, conflict key,
+// revisions, then every base + entity field in order), hashing every base
+// field plus every entity field into the conflict key by default. Pass
+// field NAMES via excludeFromConflict to write a field's value without it
+// participating in the conflict/revision hash -- for a field whose value
+// varies with WHEN a producer observed the row rather than WHAT the row is
+// (the same reason observed_at/last_synced are never in conflictFields to
+// begin with; excludeFromConflict exists for a caller-supplied entity field
+// that needs the same treatment, e.g. a valid_from stamped from the
+// effect's own observation time).
+func operationalValues(
+	family string, base operationalBase, entity []operationalField, excludeFromConflict ...string,
+) ([]any, error) {
 	id, err := canonicalOperationalID(base.orgID, base.provider, base.providerInstanceID, family, base.externalID)
 	if err != nil {
 		return nil, err
+	}
+	excluded := make(map[string]bool, len(excludeFromConflict))
+	for _, name := range excludeFromConflict {
+		excluded[name] = true
 	}
 	conflictFields := []operationalField{
 		{"org_id", base.orgID},
@@ -65,7 +81,11 @@ func operationalValues(family string, base operationalBase, entity []operational
 		{"relationship_provenance", nullableString(base.relationshipProvenance)},
 		{"relationship_confidence", nullableFloatPointer(base.relationshipConfidence)},
 	}
-	conflictFields = append(conflictFields, entity...)
+	for _, field := range entity {
+		if !excluded[field.name] {
+			conflictFields = append(conflictFields, field)
+		}
+	}
 	conflictKey, err := encodeOperationalConflict(family, conflictFields)
 	if err != nil {
 		return nil, err

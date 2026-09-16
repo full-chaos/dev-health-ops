@@ -14,16 +14,14 @@
 // line, not three different Python resolvers). See ResolveOwnershipThenPatterns's
 // doc for the exact precedence.
 //
-// A SECOND, narrower shape exists for ai_impact (CHAOS-4280, #2236):
-// providers/teams.py's build_repo_pattern_resolver / RepoPatternTeamResolver
-// has NO ownership lookup at all — patterns only, because ai_impact's own
-// Python call site (job_daily.py:1809-1820) never wires an ownership-backed
-// resolver (CHAOS-5117, a Python-side gap, out of scope here). That shape is
-// NOT extracted into this package yet: #2236 already has its own correct,
-// tested, pattern-only port (internal/jobs/metrics/aiimpact/repoteams.go),
-// and migrating it to share this package's pattern engine is follow-up work,
-// not a blocker for CHAOS-5084 (team-lead ruling, 2026-09-05). Documented
-// here so the next reader knows the gap is known, not missed.
+// ai_impact (internal/jobs/metrics/aiimpact) resolves a repo's team through
+// this same order but keeps its own pattern engine rather than sharing this
+// package's: its resolver (aiimpact.RepoPatternResolver, adapted to
+// numerical.RepoTeamResolver via ResolveRepo) is asked only for a repo
+// teamownership.AuthoritativeOwnerByRepo leaves unresolved. Its executor
+// calls AuthoritativeOwnerByRepo and ResolveFromOwnershipMap directly rather
+// than through ResolveOwnershipThenPatterns below, so it can log which of
+// the two paths resolved each repo.
 //
 // This package's own tests prove cross-language equivalence for the
 // precedence/gating logic (a frozen golden from the REAL Python function,

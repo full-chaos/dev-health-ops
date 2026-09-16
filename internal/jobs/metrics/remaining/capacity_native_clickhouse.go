@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"regexp"
 	"strings"
 	"time"
 
@@ -449,6 +450,23 @@ type capacityTableRequirement struct {
 	// readWithFINAL marks a table this code reads with FINAL, making the
 	// Replacing family a precondition rather than a deployment detail.
 	readWithFINAL bool
+	// versionColumn and sortingKey are the two pieces of physical contract
+	// FINAL depends on beyond the engine family, checked only when
+	// readWithFINAL is set. Both are set to what the ClickHouse migration
+	// chain's head declares for this table, so this probe stays a proxy for
+	// "can THIS code run" without re-deriving storage semantics no query
+	// text states.
+	//
+	// versionColumn: ReplacingMergeTree collapses on whichever column its
+	// engine clause names as the version, defaulting to none -- an engine
+	// clause with no version argument collapses by INSERTION ORDER instead,
+	// which an out-of-order retry can resolve the wrong way.
+	versionColumn string
+	// sortingKey: FINAL only collapses rows that share every column of the
+	// sorting key. A key missing a column this code's WHERE does not filter
+	// on leaves rows that column distinguishes uncollapsed, and they are
+	// then summed together as if they were one.
+	sortingKey []string
 }
 
 // capacityTableRequirements is every table the executor touches, and what it
@@ -467,6 +485,18 @@ var capacityTableRequirements = map[string]capacityTableRequirement{
 			"items_completed", "wip_count_end_of_day",
 		},
 		readWithFINAL: true,
+		// Migration 055 converts this table's engine to
+		// ReplacingMergeTree(computed_at), and migration 027 sets its
+		// sorting key to (org_id, provider, day, work_scope_id, team_id) --
+		// neither migration since has changed either. provider is in the
+		// key deliberately: capacityScopeFilters never filters on it, so the
+		// throughput and backlog queries sum across providers on purpose,
+		// and the sorting key is the only thing left keeping their rows
+		// distinct under FINAL.
+		versionColumn: "computed_at",
+		sortingKey: []string{
+			"org_id", "provider", "day", "work_scope_id", "team_id",
+		},
 	},
 	"capacity_forecasts": {
 		columns: []string{
@@ -541,6 +571,32 @@ func verifyCapacitySchema(ctx context.Context, conn driver.Conn) error {
 				ErrCapacitySchemaIncompatible, table, engine,
 				capacityReplacingEngineMarker, engine)
 		}
+
+		version, err := capacityTableVersionColumn(ctx, conn, table)
+		if err != nil {
+			return err
+		}
+		if version != requirement.versionColumn {
+			return fmt.Errorf(
+				"%w: %s has no %s version column on its %s engine -- without "+
+					"it, FINAL collapses superseded rows by INSERTION ORDER "+
+					"instead, and a retried write that lands an older row "+
+					"after a newer one leaves the older row as the survivor",
+				ErrCapacitySchemaIncompatible, table, requirement.versionColumn, engine)
+		}
+
+		sortingKey, err := capacityTableSortingKey(ctx, conn, table)
+		if err != nil {
+			return err
+		}
+		if missing := capacityMissingSortingKeyColumns(requirement.sortingKey, sortingKey); len(missing) > 0 {
+			return fmt.Errorf(
+				"%w: %s sorting key (%s) does not include %s -- this executor "+
+					"reads it with FINAL and needs that column to keep rows "+
+					"it does not filter on from collapsing into each other",
+				ErrCapacitySchemaIncompatible, table,
+				strings.Join(sortingKey, ", "), strings.Join(missing, ", "))
+		}
 	}
 	return nil
 }
@@ -587,4 +643,77 @@ func capacityTableEngine(
 		return "", fmt.Errorf("inspect %s engine: %w", table, err)
 	}
 	return engine, nil
+}
+
+// capacityVersionColumnPattern extracts a ReplacingMergeTree engine's version
+// argument from engine_full, e.g. "ReplacingMergeTree(computed_at)" ->
+// "computed_at". An engine clause with no argument
+// ("ReplacingMergeTree()") does not match, which is the versionless case:
+// that table still collapses under FINAL, but by insertion order rather than
+// by any named column.
+var capacityVersionColumnPattern = regexp.MustCompile(`ReplacingMergeTree\(\s*` + "`?" + `([^` + "`" + `\s)]+)` + "`?" + `\s*\)`)
+
+// capacityTableVersionColumn reports the column a ReplacingMergeTree table
+// versions on, or "" when its engine clause names none.
+//
+// engine_full rather than the bare engine column: the version argument lives
+// inside the engine clause itself, and system.tables.engine carries only the
+// family name.
+func capacityTableVersionColumn(
+	ctx context.Context, conn driver.Conn, table string,
+) (string, error) {
+	var engineFull string
+	if err := conn.QueryRow(ctx, `
+        SELECT engine_full FROM system.tables
+        WHERE database = currentDatabase() AND name = {table:String}
+    `, clickhouse.Named("table", table)).Scan(&engineFull); err != nil {
+		return "", fmt.Errorf("inspect %s engine_full: %w", table, err)
+	}
+	match := capacityVersionColumnPattern.FindStringSubmatch(engineFull)
+	if match == nil {
+		return "", nil
+	}
+	return match[1], nil
+}
+
+// capacityTableSortingKey reports a table's ORDER BY columns, in the order
+// ClickHouse stores them.
+func capacityTableSortingKey(
+	ctx context.Context, conn driver.Conn, table string,
+) ([]string, error) {
+	var sortingKey string
+	if err := conn.QueryRow(ctx, `
+        SELECT sorting_key FROM system.tables
+        WHERE database = currentDatabase() AND name = {table:String}
+    `, clickhouse.Named("table", table)).Scan(&sortingKey); err != nil {
+		return nil, fmt.Errorf("inspect %s sorting key: %w", table, err)
+	}
+	if strings.TrimSpace(sortingKey) == "" {
+		return nil, nil
+	}
+	columns := strings.Split(sortingKey, ",")
+	for index, column := range columns {
+		columns[index] = strings.TrimSpace(column)
+	}
+	return columns, nil
+}
+
+// capacityMissingSortingKeyColumns reports which of the required columns the
+// deployed sorting key omits.
+//
+// A membership check rather than a positional comparison: what makes FINAL
+// safe is that every required column is somewhere in the key collapsing rows
+// on it, not that the key matches the required order column-for-column.
+func capacityMissingSortingKeyColumns(required, deployed []string) []string {
+	present := make(map[string]bool, len(deployed))
+	for _, column := range deployed {
+		present[column] = true
+	}
+	var missing []string
+	for _, column := range required {
+		if !present[column] {
+			missing = append(missing, column)
+		}
+	}
+	return missing
 }

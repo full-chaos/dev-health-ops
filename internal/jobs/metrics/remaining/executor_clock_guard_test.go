@@ -196,21 +196,48 @@ func (conn constructorConn) Query(
 }
 
 func (conn constructorConn) QueryRow(
-	_ context.Context, query string, _ ...any,
+	_ context.Context, query string, args ...any,
 ) chdriver.Row {
-	// Two DIFFERENT probes hit system.tables: DORA reads sorting_key to
+	// Three DIFFERENT probes hit system.tables: DORA reads sorting_key to
 	// classify the ordering contract, capacity reads engine to confirm FINAL
-	// collapses anything. Answering both with one value made the capacity
-	// constructor refuse with the sorting key in the engine's place.
+	// collapses anything, and capacity also reads sorting_key and engine_full
+	// to check the physical contract FINAL depends on. Answering every
+	// sorting_key probe with one value made the capacity constructor refuse
+	// with DORA's key in the place of its own.
 	switch {
 	case strings.Contains(query, "sorting_key"):
+		if queriedTable(args) == "work_item_metrics_daily" {
+			return stubRow{value: strings.Join(
+				capacityTableRequirements["work_item_metrics_daily"].sortingKey, ", ")}
+		}
 		return stubRow{value: conn.sortingKey}
+	case strings.Contains(query, "engine_full"):
+		// From the requirement, so a version-column change cannot leave this
+		// stub satisfying a check the production code no longer makes.
+		return stubRow{value: capacityReplacingEngineMarker + "(" +
+			capacityTableRequirements["work_item_metrics_daily"].versionColumn + ")"}
 	case strings.Contains(query, "SELECT engine"):
 		// From the constant, so a marker change cannot leave this stub
 		// satisfying a check the production code no longer makes.
 		return stubRow{value: capacityReplacingEngineMarker + "(computed_at)"}
 	}
 	return stubRow{err: errStubExhausted}
+}
+
+// queriedTable extracts the {table:String} named argument every schema probe
+// in this package binds, so the stub can answer differently per table instead
+// of by query text alone.
+func queriedTable(args []any) string {
+	for _, arg := range args {
+		named, ok := arg.(chdriver.NamedValue)
+		if !ok || named.Name != "table" {
+			continue
+		}
+		if table, ok := named.Value.(string); ok {
+			return table
+		}
+	}
+	return ""
 }
 
 // allCapacityRequiredColumns is derived from capacityTableRequirements rather

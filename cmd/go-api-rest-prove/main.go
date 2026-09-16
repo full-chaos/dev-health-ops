@@ -167,46 +167,25 @@ func buildCredential(header, kind, flagName, rawArgv string) (*goapiproof.Creden
 		return nil, err
 	}
 	helperName, args := argv[0], argv[1:]
+	// Same shape check cmd/go-api-prove applies to BOTH of its own
+	// credentials (edge and proof): a helper that printed a usage line,
+	// an error or a shell prompt instead of a token is caught here, as a
+	// clearly-labelled "not a well-formed bearer" error, rather than
+	// surfacing 200 requests later as an indistinguishable 401.
 	return goapiproof.MintedCredential(header, kind, 25*time.Second, func(ctx context.Context) (string, error) {
 		return goapiproof.MintViaAllowlistedHelper(ctx, helperName, args)
-	}), nil
+	}).WithShapeValidator(goapiproof.ValidateEnvelopeShape), nil
 }
 
-// buildInfoResponse mirrors cmd/query-api's own buildInfoResponse wire
-// shape -- duplicated as a plain struct rather than imported, since
-// cmd/query-api is package main and cannot be imported.
-type buildInfoResponse struct {
-	Commit string `json:"commit"`
-}
-
-// fetchNamedBuild reads the candidate build identity from query-api's own
-// /buildinfo -- the ONLY source of the value every receipt names (never
-// -candidate-build, which is a cross-check only).
-func fetchNamedBuild(ctx context.Context, client *http.Client, buildInfoURL string, credential *goapiproof.Credential) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, buildInfoURL, nil)
-	if err != nil {
-		return "", err
-	}
-	if err := credential.Apply(ctx, req); err != nil {
-		return "", err
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("GET %s: %w", buildInfoURL, err)
-	}
-	defer func() { _, _ = io.Copy(io.Discard, resp.Body); _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("GET %s: HTTP %d", buildInfoURL, resp.StatusCode)
-	}
-	var body buildInfoResponse
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		return "", fmt.Errorf("decode /buildinfo: %w", err)
-	}
-	if strings.TrimSpace(body.Commit) == "" || body.Commit == "unknown" {
-		return "", fmt.Errorf("/buildinfo reports commit %q -- an unstamped build cannot be named on a receipt", body.Commit)
-	}
-	return body.Commit, nil
-}
+// /buildinfo is read via goapiproof.FetchBuildIdentity -- the same
+// function cmd/go-api-prove uses for its own -buildinfo-url read, rather
+// than a second, ad hoc decoder in this binary. That function refuses a
+// redirect (NoRedirectClient), guards the commit string's UTF-8, and,
+// load-bearing for an operator debugging a 401 here, distinguishes "the
+// endpoint is unreachable" from "this credential was rejected" and names
+// WHICH credential kind (candidate bearer) was rejected and why
+// (EndpointLabel + credential.Kind(), never the credential's value) --
+// see run()'s own call below.
 
 // doREST sends one leg of one corpus request and returns its observation.
 // A transport-level failure (the leg never answered at all) is a hard
@@ -281,19 +260,40 @@ type outcome struct {
 
 	ReceiptID string `json:"receipt_id,omitempty"`
 
+	// BoundIDs names every id (goapiproof.RESTIDBinding.Producer -> the
+	// resolved value) this request's Query/Path were bound to before
+	// either leg was sent -- see goapiproof.ResolveRESTIDBindings and
+	// RESTReceipt.BoundIDs' own doc comment for why ids, unlike a bearer
+	// token, are safe to print here. Empty for every request with no
+	// IDBindings, the overwhelming majority.
+	BoundIDs map[string]string `json:"bound_ids,omitempty"`
+
 	// vacuityErrors names every stale/unused declaration this comparison
 	// found -- see resultVacuityErrors. Non-empty here fails the whole run
 	// (see run's own closing check), same discipline compare.go's Result
 	// doc comments state for every one of these fields.
 	vacuityErrors []string
+
+	// producedIDs names every id (goapiproof.RESTIDProducer.Name -> the
+	// extracted value) this request's OWN baseline response yielded for a
+	// LATER request's IDBindings -- see goapiproof.ExtractRESTID. Never
+	// serialised: it is run()'s own bookkeeping between one request and
+	// the next, not a fact about this request worth reporting on its own
+	// outcome line (a later consumer's BoundIDs already reports the same
+	// value where it matters).
+	producedIDs map[string]string
 }
 
 func (o outcome) line() string {
 	if !o.Admitted {
 		return fmt.Sprintf("%s/%s: REFUSED %s -- %s", o.Operation, o.Request, o.Refusal, o.Detail)
 	}
-	return fmt.Sprintf("%s/%s: %s outside=%d baseline_defect=%v receipt=%s",
-		o.Operation, o.Request, o.TerminalState, o.DifferencesOutsideBaselineDefect, o.BaselineDefectsMatched, o.ReceiptID)
+	boundSuffix := ""
+	if len(o.BoundIDs) > 0 {
+		boundSuffix = fmt.Sprintf(" bound=%v", o.BoundIDs)
+	}
+	return fmt.Sprintf("%s/%s: %s outside=%d baseline_defect=%v receipt=%s%s",
+		o.Operation, o.Request, o.TerminalState, o.DifferencesOutsideBaselineDefect, o.BaselineDefectsMatched, o.ReceiptID, boundSuffix)
 }
 
 // resultVacuityErrors names every declaration in result that matched
@@ -369,7 +369,15 @@ func run(f flags) error {
 
 	client := &http.Client{Timeout: f.timeout}
 
-	namedBuild, err := fetchNamedBuild(ctx, client, f.buildInfoURL, candidateCredential)
+	// candidateCredential -- the SAME credential every corpus request's
+	// own candidate leg uses below (doREST's own candidateCredential
+	// argument in proveOneRESTRequest) -- never a second, separately
+	// minted credential: /buildinfo is authenticated with the same
+	// bearer-envelope verifier the REST routes themselves use
+	// (buildinfo_route.go's own doc comment), so there is no "proof-
+	// plane" credential distinct from what this binary already mints for
+	// every other request in the run.
+	namedBuild, err := goapiproof.FetchBuildIdentity(ctx, client, f.buildInfoURL, candidateCredential)
 	if err != nil {
 		return fmt.Errorf("read the candidate build from /buildinfo: %w", err)
 	}
@@ -393,19 +401,62 @@ func run(f flags) error {
 	var outcomes []outcome
 	attempted, admitted, matched, mismatched := 0, 0, 0, 0
 
-	for _, operation := range goapiproof.KnownRESTOperations() {
+	// produced accumulates every id an earlier request's OWN Produces
+	// declaration yielded from its baseline (Python) response, keyed by
+	// producer name -- RESTRunOrder (not KnownRESTOperations' alphabetical
+	// order) guarantees a producer's operation is always visited before
+	// any operation that binds one of its ids; see restcorpus.go's own
+	// restRunOrder doc comment for why alphabetical order cannot make
+	// that guarantee.
+	produced := map[string]string{}
+
+	for _, operation := range goapiproof.RESTRunOrder() {
 		spec, err := goapiproof.SpecForREST(operation)
 		if err != nil {
 			return err
 		}
 		for _, request := range spec.Requests {
 			attempted++
-			out, err := proveOneRESTRequest(ctx, client, f, operation, spec, request, candidateCredential, baselineCredential, namedBuild, auth, observedAt, pgPool, f.dryRun)
+
+			resolvedSpec := spec
+			resolvedRequest := request
+			var boundIDs map[string]string
+			if len(request.IDBindings) > 0 {
+				resolvedPath, resolvedQuery, unresolved := goapiproof.ResolveRESTIDBindings(spec.Path, request, produced)
+				if len(unresolved) > 0 {
+					// An entry whose id does not resolve is refused by
+					// name and counts as unproven, never a tool failure
+					// -- neither leg is ever called.
+					out := outcome{
+						Operation: operation, Request: request.Name,
+						Admitted: false,
+						Refusal:  goapiproof.RESTRefusalIDBindingUnresolved,
+						Detail:   fmt.Sprintf("no earlier request in this run produced: %v", unresolved),
+					}
+					outcomes = append(outcomes, out)
+					fmt.Println(out.line())
+					continue
+				}
+				resolvedSpec.Path = resolvedPath
+				resolvedRequest.Query = resolvedQuery
+				boundIDs = make(map[string]string, len(request.IDBindings))
+				for _, binding := range request.IDBindings {
+					// Already confirmed present above (unresolved was
+					// empty): the same value ResolveRESTIDBindings just
+					// wrote into resolvedPath/resolvedQuery.
+					boundIDs[binding.Producer] = produced[binding.Producer]
+				}
+			}
+
+			out, err := proveOneRESTRequest(ctx, client, f, operation, resolvedSpec, resolvedRequest, candidateCredential, baselineCredential, namedBuild, auth, observedAt, pgPool, f.dryRun, boundIDs)
 			if err != nil {
 				return fmt.Errorf("%s/%s: %w", operation, request.Name, err)
 			}
 			outcomes = append(outcomes, out)
 			fmt.Println(out.line())
+			for name, id := range out.producedIDs {
+				produced[name] = id
+			}
 			if out.Admitted {
 				admitted++
 				switch out.TerminalState {
@@ -466,6 +517,7 @@ func proveOneRESTRequest(
 	observedAt time.Time,
 	writer receiptWriter,
 	dryRun bool,
+	boundIDs map[string]string,
 ) (outcome, error) {
 	if spec.PublicNoAuth {
 		candidateCredential, baselineCredential = nil, nil
@@ -488,7 +540,7 @@ func proveOneRESTRequest(
 		Baseline:            baselineLeg,
 	}, decodeBody)
 
-	out := outcome{Operation: operation, Request: request.Name, Admitted: admission.Admitted, Refusal: admission.Reason, Detail: admission.Detail}
+	out := outcome{Operation: operation, Request: request.Name, Admitted: admission.Admitted, Refusal: admission.Reason, Detail: admission.Detail, BoundIDs: boundIDs}
 	if !admission.Admitted {
 		return out, nil
 	}
@@ -510,6 +562,22 @@ func proveOneRESTRequest(
 		candidateData := goapiproof.InjectRESTDedupKeys(admission.CandidateSnap.Data, request.DedupListPath, request.DedupKeyFields)
 		admission.BaselineSnap.Data = baselineData
 		admission.CandidateSnap.Data = candidateData
+
+		// Extract every id this request Produces from the BASELINE
+		// (Python) leg -- see restidbind.go's own doc comment for why
+		// that plane, specifically. Populated unconditionally once the
+		// body has decoded, regardless of what Compare finds below: a
+		// producer's real id is still usable by a later consumer even
+		// when THIS entry's own comparison mismatches or is refused
+		// structurally just afterward.
+		if len(request.Produces) > 0 {
+			out.producedIDs = make(map[string]string, len(request.Produces))
+			for _, producer := range request.Produces {
+				if id, ok := goapiproof.ExtractRESTID(admission.BaselineSnap.Data, producer); ok {
+					out.producedIDs[producer.Name] = id
+				}
+			}
+		}
 
 		result := goapiproof.Compare(admission.BaselineSnap, admission.CandidateSnap, request.Parity)
 		if result.StructuralRefusal != "" {
@@ -574,6 +642,7 @@ func proveOneRESTRequest(
 		BaselineDefects:                  matchedDefects,
 		DifferencesOutsideBaselineDefect: differences,
 		BuildBinding:                     goapiproof.EdgeBuildPresent,
+		BoundIDs:                         boundIDs,
 	}
 	id, err := writer.WriteReceipt(ctx, receipt)
 	if err != nil {

@@ -11,6 +11,7 @@ import (
 	"os"
 	"slices"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -158,7 +159,7 @@ func TestProveOneRESTRequest_MatchWritesAReceipt(t *testing.T) {
 	writer := &fakeReceiptWriter{}
 
 	out, err := proveOneRESTRequest(context.Background(), http.DefaultClient, f, "REST:GET:/api/v1/filters/options", spec, request,
-		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, false)
+		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, false, nil)
 	if err != nil {
 		t.Fatalf("proveOneRESTRequest: %v", err)
 	}
@@ -199,7 +200,7 @@ func TestProveOneRESTRequest_DryRunWritesNoReceipt(t *testing.T) {
 	writer := &fakeReceiptWriter{}
 
 	out, err := proveOneRESTRequest(context.Background(), http.DefaultClient, f, "op", spec, request,
-		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, true)
+		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, true, nil)
 	if err != nil {
 		t.Fatalf("proveOneRESTRequest: %v", err)
 	}
@@ -228,7 +229,7 @@ func TestProveOneRESTRequest_RefusesOnUnexpectedStatus(t *testing.T) {
 	writer := &fakeReceiptWriter{}
 
 	out, err := proveOneRESTRequest(context.Background(), http.DefaultClient, f, "op", spec, request,
-		staticCredentialForTest(), staticCredentialForTest(), "abc123", goapiproof.AuthContext{}, time.Now().UTC(), writer, false)
+		staticCredentialForTest(), staticCredentialForTest(), "abc123", goapiproof.AuthContext{}, time.Now().UTC(), writer, false, nil)
 	if err != nil {
 		t.Fatalf("proveOneRESTRequest: %v", err)
 	}
@@ -280,7 +281,7 @@ func TestProveOneRESTRequest_VacuousComparisonIsRefusedNotCrashed(t *testing.T) 
 	writer := &fakeReceiptWriter{}
 
 	out, err := proveOneRESTRequest(context.Background(), http.DefaultClient, f, "REST:GET:/api/v1/drilldown/prs", spec, request,
-		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, false)
+		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, false, nil)
 	if err != nil {
 		t.Fatalf("proveOneRESTRequest: %v -- a vacuous comparison must be a clean refusal, never a tool error", err)
 	}
@@ -403,7 +404,7 @@ func TestProveOneRESTRequest_PublicNoAuthSendsNoAuthorizationHeader(t *testing.T
 	poisonedCredential := goapiproof.StaticCredential("Authorization", "poisoned", "")
 
 	out, err := proveOneRESTRequest(context.Background(), http.DefaultClient, f, "REST:GET:/api/v1/meta", spec, request,
-		poisonedCredential, poisonedCredential, build, goapiproof.AuthContext{}, time.Now().UTC(), nil, true)
+		poisonedCredential, poisonedCredential, build, goapiproof.AuthContext{}, time.Now().UTC(), nil, true, nil)
 	if err != nil {
 		t.Fatalf("proveOneRESTRequest: %v", err)
 	}
@@ -412,5 +413,171 @@ func TestProveOneRESTRequest_PublicNoAuthSendsNoAuthorizationHeader(t *testing.T
 	}
 	if gotCandidateAuth != "" || gotBaselineAuth != "" {
 		t.Fatalf("Authorization header sent on a PublicNoAuth route: candidate=%q baseline=%q", gotCandidateAuth, gotBaselineAuth)
+	}
+}
+
+// TestBuildInfoRead_RejectsUnauthenticatedAcceptsTheMintedBearer proves
+// run()'s own /buildinfo call site (goapiproof.FetchBuildIdentity, called
+// with candidateCredential -- see run()'s own doc comment on that call)
+// against a fake buildinfo route that requires a bearer: a request
+// carrying no credential, or the wrong one, is rejected exactly like a
+// prod query-api's own bearer-envelope verifier would reject an
+// unauthenticated or mismatched request, and the SAME credential every
+// corpus request's own candidate leg uses (staticCredentialForTest, the
+// same helper TestProveOneRESTRequest_MatchWritesAReceipt and its
+// siblings above already use in place of a real minting helper) is
+// accepted.
+func TestBuildInfoRead_RejectsUnauthenticatedAcceptsTheMintedBearer(t *testing.T) {
+	const wantCommit = "abc123def456abc123def456abc123def456ab"
+	const wantAuth = "Bearer test-token" // staticCredentialForTest's own value
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != wantAuth {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"commit":"` + wantCommit + `","modified":false}`))
+	}))
+	defer server.Close()
+
+	// No Authorization header at all -- an expired or never-configured
+	// credential.
+	if _, err := goapiproof.FetchBuildIdentity(context.Background(), http.DefaultClient, server.URL, nil); err == nil {
+		t.Fatal("want an error when no credential is applied")
+	}
+
+	// The wrong bearer -- rejected the same way a real bearer-envelope
+	// verifier would reject a mismatched or stale one.
+	wrongCredential := goapiproof.StaticCredential("Authorization", "candidate bearer", "Bearer not-the-right-token")
+	_, err := goapiproof.FetchBuildIdentity(context.Background(), http.DefaultClient, server.URL, wrongCredential)
+	if err == nil {
+		t.Fatal("want an error when the credential does not match")
+	}
+	// No token reaches any output: the error names the credential's KIND
+	// (a safe label), never its value.
+	if strings.Contains(err.Error(), "not-the-right-token") {
+		t.Fatalf("error leaked the credential value: %v", err)
+	}
+
+	// The SAME shape of credential run() actually applies to /buildinfo
+	// -- candidateCredential, the same one every corpus request's own
+	// candidate leg uses.
+	got, err := goapiproof.FetchBuildIdentity(context.Background(), http.DefaultClient, server.URL, staticCredentialForTest())
+	if err != nil {
+		t.Fatalf("FetchBuildIdentity: %v", err)
+	}
+	if got != wantCommit {
+		t.Fatalf("got %q, want %q", got, wantCommit)
+	}
+}
+
+// TestIDBinding_EndToEnd drives the full producer -> consumer pipeline
+// run()'s own loop implements: a fake Python ("baseline") /api/v1/people
+// returns a person list whose FIRST element's person_id is empty (an
+// unusable id, per this ticket's own "the first person_id" ruling --
+// ExtractRESTID must skip it), so the id actually bound is the SECOND
+// element's. That extracted id is then resolved into a consumer
+// request's PathParam binding (mirroring GET /api/v1/people/{person_id}/
+// summary's own corpus entry), and BOTH legs must receive the identical
+// resolved path -- "the same id is used on both legs", this ticket's own
+// ruling.
+func TestIDBinding_EndToEnd(t *testing.T) {
+	const build = "abc123def456"
+	const wantID = "p-777"
+
+	personListBody := `[{"person_id":"","display_name":"unusable"},{"person_id":"` + wantID + `","display_name":"usable"}]`
+
+	var candidatePaths, baselinePaths []string
+	candidate := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		candidatePaths = append(candidatePaths, r.URL.Path)
+		w.Header().Set("x-dev-health-build", build)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(personListBody))
+	}))
+	defer candidate.Close()
+	baseline := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		baselinePaths = append(baselinePaths, r.URL.Path)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(personListBody))
+	}))
+	defer baseline.Close()
+
+	f := flags{queryAPIURL: candidate.URL, pythonAPIURL: baseline.URL, org: "org-1", recordedBy: "chris", reviewEvidence: "test"}
+	writer := &fakeReceiptWriter{}
+	produced := map[string]string{}
+
+	// 1. The PRODUCER request: GET /api/v1/people, Produces person_id
+	// from the BASELINE leg's own first NON-EMPTY element.
+	producerSpec := goapiproof.RESTEndpointSpec{Method: http.MethodGet, Path: "/api/v1/people"}
+	producerRequest := goapiproof.RESTRequest{
+		Name: "query_string_search", WantCandidateStatus: 200, WantBaselineStatus: 200,
+		BodyMode: goapiproof.RESTBodyModeJSON,
+		Produces: []goapiproof.RESTIDProducer{{Name: "person_id", IDField: "person_id"}},
+	}
+	producerOut, err := proveOneRESTRequest(context.Background(), http.DefaultClient, f, "REST:GET:/api/v1/people", producerSpec, producerRequest,
+		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, false, nil)
+	if err != nil {
+		t.Fatalf("producer proveOneRESTRequest: %v", err)
+	}
+	if !producerOut.Admitted {
+		t.Fatalf("producer request refused: %s -- %s", producerOut.Refusal, producerOut.Detail)
+	}
+
+	// run()'s own loop merges out.producedIDs into `produced` -- the same
+	// step, done by hand here since this test drives proveOneRESTRequest
+	// directly rather than the whole corpus.
+	for name, id := range producerOut.producedIDs {
+		produced[name] = id
+	}
+	if produced["person_id"] != wantID {
+		t.Fatalf("produced[person_id] = %q, want %q (the first NON-EMPTY person_id, not the first element)", produced["person_id"], wantID)
+	}
+
+	// 2. The CONSUMER request: GET /api/v1/people/{person_id}/summary,
+	// PathParam-bound to the id the producer just yielded.
+	consumerSpec := goapiproof.RESTEndpointSpec{Method: http.MethodGet, Path: "/api/v1/people/{person_id}/summary"}
+	consumerRequest := goapiproof.RESTRequest{
+		Name: "summary_default", WantCandidateStatus: 200, WantBaselineStatus: 200,
+		BodyMode:   goapiproof.RESTBodyModeJSON,
+		IDBindings: []goapiproof.RESTIDBinding{{Producer: "person_id", PathParam: "person_id"}},
+	}
+
+	resolvedPath, resolvedQuery, unresolved := goapiproof.ResolveRESTIDBindings(consumerSpec.Path, consumerRequest, produced)
+	if len(unresolved) != 0 {
+		t.Fatalf("unresolved = %v, want none", unresolved)
+	}
+	resolvedSpec := consumerSpec
+	resolvedSpec.Path = resolvedPath
+	resolvedRequest := consumerRequest
+	resolvedRequest.Query = resolvedQuery
+
+	consumerOut, err := proveOneRESTRequest(context.Background(), http.DefaultClient, f, "REST:GET:/api/v1/people/{person_id}/summary", resolvedSpec, resolvedRequest,
+		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, false,
+		map[string]string{"person_id": produced["person_id"]})
+	if err != nil {
+		t.Fatalf("consumer proveOneRESTRequest: %v", err)
+	}
+	if !consumerOut.Admitted {
+		t.Fatalf("consumer request refused: %s -- %s", consumerOut.Refusal, consumerOut.Detail)
+	}
+	if consumerOut.BoundIDs["person_id"] != wantID {
+		t.Fatalf("consumer outcome BoundIDs[person_id] = %q, want %q -- must be recorded on the outcome (JSON report)", consumerOut.BoundIDs["person_id"], wantID)
+	}
+	if len(writer.receipts) == 0 || writer.receipts[len(writer.receipts)-1].BoundIDs["person_id"] != wantID {
+		t.Fatalf("consumer receipt's own BoundIDs[person_id] was not %q", wantID)
+	}
+
+	wantSuffix := "/api/v1/people/" + wantID + "/summary"
+	gotCandidatePath := candidatePaths[len(candidatePaths)-1]
+	gotBaselinePath := baselinePaths[len(baselinePaths)-1]
+	if gotCandidatePath != wantSuffix {
+		t.Fatalf("candidate leg path = %q, want %q", gotCandidatePath, wantSuffix)
+	}
+	if gotBaselinePath != wantSuffix {
+		t.Fatalf("baseline leg path = %q, want %q", gotBaselinePath, wantSuffix)
+	}
+	if gotCandidatePath != gotBaselinePath {
+		t.Fatalf("candidate and baseline legs used different resolved paths: %q vs %q -- the same id must be used on both legs", gotCandidatePath, gotBaselinePath)
 	}
 }

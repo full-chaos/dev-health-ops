@@ -272,10 +272,12 @@ ORDER BY a.subject_type, a.subject_id, a.source
 // # git_pull_requests dedup: A DELIBERATE DIVERGENCE (Finding A)
 //
 // Python LEFT JOINs git_pull_requests with NEITHER FINAL NOR any dedup
-// (loaders.py:241-245). That table is ReplacingMergeTree(last_synced) ORDER
-// BY (repo_id, number) -- and, again, org_id is not in the sorting key -- so
-// every un-merged duplicate PR row MULTIPLIES the artifact it joins to. The
-// duplicates inflate ai_artifacts/declared_artifacts/human_reviewed_prs/
+// (loaders.py:241-245). The table is ReplacingMergeTree(last_synced), keyed
+// org_id-first since migration 027 (ORDER BY (org_id, repo_id, number)), but
+// merges are eventual regardless of what the key contains: two physical
+// versions of the SAME org's SAME (repo_id, number) can still coexist
+// unmerged, so every un-merged duplicate PR row MULTIPLIES the artifact it
+// joins to. The duplicates inflate ai_artifacts/declared_artifacts/human_reviewed_prs/
 // security_scanned_prs/in_policy_artifacts and emit duplicate policy events,
 // by an amount that depends on when ClickHouse last merged the part. Python's
 // output for a fixed input is therefore NOT deterministic.

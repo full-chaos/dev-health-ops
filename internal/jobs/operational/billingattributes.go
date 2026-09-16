@@ -8,6 +8,8 @@ import (
 	"html"
 	"strconv"
 	"strings"
+
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
 // ErrMalformedAttributes is a permanent, data-shaped condition: a stored
@@ -92,13 +94,21 @@ func intField(fields map[string]json.RawMessage, name string, fallback int64) (i
 		if err := json.Unmarshal(raw, &text); err != nil {
 			return 0, fmt.Errorf("%w: %s is not decodable: %v", ErrMalformedAttributes, name, err)
 		}
-		// Python's int(str) tolerates surrounding whitespace and a sign, and
-		// rejects everything else -- including a decimal point.
-		value, err := strconv.ParseInt(strings.TrimSpace(text), 10, 64)
+		// Python's int(str) tolerates surrounding whitespace and a sign,
+		// PEP 515 underscores strictly between digits, and any Unicode
+		// Nd digit -- and rejects everything else, including a decimal
+		// point. strconv.ParseInt accepts none of the first three, which
+		// silently permanent-dropped a hand-edited row ("the other arms
+		// exist so a hand-edited row renders the way it used to", above)
+		// carrying e.g. amount_cents "1_000" instead of reading it as 1000.
+		parsed, err := pythonparity.ParseInt(text)
 		if err != nil {
 			return 0, fmt.Errorf("%w: %s is not an integer string", ErrMalformedAttributes, name)
 		}
-		return value, nil
+		if !parsed.IsInt64() {
+			return 0, fmt.Errorf("%w: %s is out of int64 range", ErrMalformedAttributes, name)
+		}
+		return parsed.Int64(), nil
 	}
 	if value, err := strconv.ParseInt(trimmed, 10, 64); err == nil {
 		return value, nil

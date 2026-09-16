@@ -4,7 +4,10 @@
   "families": {
     "daily/ai_governance": {
       "parity": {
-        "status": "unverified"
+        "status": "verified",
+        "ticket": "CHAOS-5794",
+        "sha": "cb9f5f48cece1ed836cd62f76854b9d6c9c73280",
+        "evidence": "internal/jobs/metrics/aigovernance/compute_test.go::TestGovernanceRowsMatchLivePythonProduction (live-Python full-row oracle over both ai_policy_events and ai_governance_coverage_daily, every persisted column except event_id/computed_at, gated by ci/check_go.sh live-python-oracles) plus TestDeriveEventIDMatchesItsFrozenGoldenValue (frozen event_id, the one field the oracle excludes)"
       },
       "deployed": {
         "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
@@ -18,7 +21,10 @@
     },
     "daily/ai_impact": {
       "parity": {
-        "status": "unverified"
+        "status": "verified",
+        "ticket": "CHAOS-5794",
+        "sha": "cb9f5f48cece1ed836cd62f76854b9d6c9c73280",
+        "evidence": "internal/jobs/metrics/aiimpact/compute_test.go::TestAIImpactMatchesFrozenPythonGolden (frozen golden tests/fixtures/ai_impact_python_golden.json, captured from the now-deleted compute_ai_impact_metrics_daily before its removal, compared field-for-field and bit-exact on floats)"
       },
       "deployed": {
         "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",

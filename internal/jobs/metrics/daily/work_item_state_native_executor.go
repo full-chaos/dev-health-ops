@@ -309,6 +309,11 @@ func computeWorkItemStateDurationsForRepo(
 	sort.SliceStable(sortedItems, func(i, j int) bool { return sortedItems[i].WorkItemID < sortedItems[j].WorkItemID })
 
 	totals := make(map[workItemStateTotalKey]float64)
+	// keys is built alongside totals, from the same key values, so the key
+	// set is available without a later range over totals -- a map that a
+	// zero-transition input leaves empty is never ranged over.
+	keys := make([]workItemStateTotalKey, 0)
+	keysSeen := make(map[workItemStateTotalKey]struct{})
 	itemsSeen := make(map[workItemStateTotalKey]map[string]struct{})
 	teamNameByKey := make(map[[3]string]string) // (provider, workScopeID, teamID) -> teamName
 	missingAttribution := 0
@@ -341,6 +346,10 @@ func computeWorkItemStateDurationsForRepo(
 			}
 			hours := overlapEnd.Sub(overlapStart).Hours()
 			key := workItemStateTotalKey{provider: item.Provider, workScopeID: workScopeID, teamID: teamID, status: segment.status}
+			if _, ok := keysSeen[key]; !ok {
+				keysSeen[key] = struct{}{}
+				keys = append(keys, key)
+			}
 			totals[key] += hours
 			seen := itemsSeen[key]
 			if seen == nil {
@@ -351,10 +360,6 @@ func computeWorkItemStateDurationsForRepo(
 		}
 	}
 
-	keys := make([]workItemStateTotalKey, 0, len(totals))
-	for key := range totals {
-		keys = append(keys, key)
-	}
 	sort.Slice(keys, func(i, j int) bool {
 		a, b := keys[i], keys[j]
 		if a.provider != b.provider {

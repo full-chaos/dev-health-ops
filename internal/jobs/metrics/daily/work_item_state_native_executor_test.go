@@ -326,6 +326,28 @@ func TestComputeWorkItemStateDurationsMissingAttributionCountsOnlyProcessedItems
 	}
 }
 
+// TestComputeWorkItemStateDurationsZeroItemsReturnsNoRows pins the shape of
+// the totals/keys aggregation when nothing is loaded for a repo at all: no
+// items means the totals map is never populated, so the key set derived
+// alongside it must also be empty -- the function must return zero rows,
+// not panic or range over anything left uninitialized.
+func TestComputeWorkItemStateDurationsZeroItemsReturnsNoRows(t *testing.T) {
+	day := mustParseUTC(t, "2025-12-18T00:00:00Z")
+	start := day
+	end := start.Add(24 * time.Hour)
+	computedAt := mustParseUTC(t, "2025-12-19T00:00:00Z")
+
+	rows, missingAttribution := computeWorkItemStateDurationsForRepo(
+		day, start, end, nil, nil, nil, computedAt,
+	)
+	if len(rows) != 0 {
+		t.Fatalf("got %#v, want no rows for zero items", rows)
+	}
+	if missingAttribution != 0 {
+		t.Fatalf("missingAttribution=%d, want 0", missingAttribution)
+	}
+}
+
 // TestWorkItemStatePartialWriteGuardPinsBothDirections is the codex round 2
 // F3 red-first proof (astra scale review, folded into CHAOS-5190 per
 // team-lead's ruling): ComputeFamily's per-repo loop used to

@@ -154,7 +154,15 @@ type metricRow struct {
 // metricFromClause's own doc comment). limit=6 matches explain.py's own
 // unqualified call (build_explain_response never overrides the keyword
 // default).
-func (reader *Reader) fetchMetricContributors(ctx context.Context, table, column, groupBy string, startDay, endDay time.Time, scopeFilterSQL string, scopeBindings []dhclickhouse.Binding, orgID string) ([]metricRow, error) {
+//
+// aggregator is the metric's OWN config.Aggregator (sum for a count-type
+// metric, avg for a ratio/duration-type one) -- the same choice
+// fetchMetricValue's headline read already makes. Python's own reader
+// hardcodes avg() here regardless of the metric, so a sum-aggregator
+// metric's ranking there silently averages a quantity its own headline
+// and label present as a total. This is a declared, required divergence,
+// not a data-semantics choice.
+func (reader *Reader) fetchMetricContributors(ctx context.Context, table, column, groupBy, aggregator string, startDay, endDay time.Time, scopeFilterSQL string, scopeBindings []dhclickhouse.Binding, orgID string) ([]metricRow, error) {
 	if reader == nil || reader.client == nil {
 		return nil, ErrUnavailable
 	}
@@ -164,13 +172,13 @@ func (reader *Reader) fetchMetricContributors(ctx context.Context, table, column
 	query := fmt.Sprintf(`
 SELECT
     toString(%s) AS id,
-    avg(%s) AS value
+    %s(%s) AS value
 FROM %s
 GROUP BY %s
 ORDER BY value DESC
 LIMIT {limit:UInt64}
 %s
-`, groupBy, column, fromClause, groupBy, settingsMaxExecutionTime())
+`, groupBy, aggregator, column, fromClause, groupBy, settingsMaxExecutionTime())
 
 	bindings := append([]dhclickhouse.Binding{
 		{Name: "start_day", Value: dateBindingValue(startDay)},
@@ -202,15 +210,18 @@ LIMIT {limit:UInt64}
 
 // fetchMetricDriverDelta ports fetch_metric_driver_delta
 // (api/queries/explain.py:60-149), dedup branch only. limit=3 matches
-// explain.py's own unqualified call. delta_pct is computed IN SQL, the
-// same CASE Python's own query uses (a NULL-safe fallback the naive
-// `(current-previous)/previous` would not have for previous=0) --
-// scanned as nullable and denulled the SAME way value is, matching
-// where Python's own safe_float(row.get("delta_pct")) applies AFTER the
-// SQL layer, not folded into the SQL itself: folding it in would change
-// which branch the CASE takes for a NULL current/previous pairing (see
-// this package's own PR RISK-NOTES for the worked example this avoids).
-func (reader *Reader) fetchMetricDriverDelta(ctx context.Context, table, column, groupBy string, startDay, endDay, compareStart, compareEnd time.Time, scopeFilterSQL string, scopeBindings []dhclickhouse.Binding, orgID string) ([]metricRow, error) {
+// explain.py's own unqualified call. aggregator is the metric's own
+// config.Aggregator -- the same declared divergence from Python's
+// hardcoded avg() that fetchMetricContributors' own doc comment states.
+// delta_pct is computed IN SQL, the same CASE Python's own query uses (a
+// NULL-safe fallback the naive `(current-previous)/previous` would not
+// have for previous=0) -- scanned as nullable and denulled the SAME way
+// value is, matching where Python's own safe_float(row.get("delta_pct"))
+// applies AFTER the SQL layer, not folded into the SQL itself: folding it
+// in would change which branch the CASE takes for a NULL current/previous
+// pairing (see this package's own PR RISK-NOTES for the worked example
+// this avoids).
+func (reader *Reader) fetchMetricDriverDelta(ctx context.Context, table, column, groupBy, aggregator string, startDay, endDay, compareStart, compareEnd time.Time, scopeFilterSQL string, scopeBindings []dhclickhouse.Binding, orgID string) ([]metricRow, error) {
 	if reader == nil || reader.client == nil {
 		return nil, ErrUnavailable
 	}
@@ -221,12 +232,12 @@ func (reader *Reader) fetchMetricDriverDelta(ctx context.Context, table, column,
 	query := fmt.Sprintf(`
 WITH
     current AS (
-        SELECT toString(%s) AS id, avg(%s) AS value
+        SELECT toString(%s) AS id, %s(%s) AS value
         FROM %s
         GROUP BY %s
     ),
     previous AS (
-        SELECT toString(%s) AS id, avg(%s) AS value
+        SELECT toString(%s) AS id, %s(%s) AS value
         FROM %s
         GROUP BY %s
     )
@@ -239,7 +250,7 @@ LEFT JOIN previous ON current.id = previous.id
 ORDER BY delta_pct DESC
 LIMIT {limit:UInt64}
 %s
-`, groupBy, column, currentFrom, groupBy, groupBy, column, previousFrom, groupBy, settingsMaxExecutionTime())
+`, groupBy, aggregator, column, currentFrom, groupBy, groupBy, aggregator, column, previousFrom, groupBy, settingsMaxExecutionTime())
 
 	bindings := append([]dhclickhouse.Binding{
 		{Name: "start_day", Value: dateBindingValue(startDay)},

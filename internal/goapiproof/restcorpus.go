@@ -210,8 +210,8 @@ var drilldownIssuesParity = Options{
 
 // explainParity is shared by every admissible (2xx) explain request, GET
 // and POST alike: both routes call the same BuildExplainResponse, so both
-// carry the same two declared, Intermittent Python-plane defects (see
-// restEndpointSpecs' own doc comment for the third, undeclared one).
+// carry the same four declared, Intermittent Python-plane defects (see
+// restEndpointSpecs' own doc comment for the fifth, undeclared one).
 var explainParity = Options{
 	BaselineDefects: []BaselineDefect{
 		{
@@ -238,6 +238,30 @@ var explainParity = Options{
 			},
 			Intermittent:       true,
 			IntermittentReason: "present only while the metric's own source table holds an unmerged physical version whose latest row is NULL for this column, and only for the cycle_time/review_latency metrics (the only two Nullable(Float64) columns this route reaches); a comparison taken after the next merge, or for any other metric, shows no divergence under these paths",
+		},
+		{
+			Ticket: "CHAOS-5818",
+			Reason: "fetch_metric_contributors and fetch_metric_driver_delta (api/queries/explain.py) rank every metric with a hardcoded avg(column), regardless of that metric's own aggregator in _METRIC_CONFIG -- this table's own headline reader, fetch_metric_value (api/queries/metrics.py), already keys off the metric's configured aggregator, so an avg-aggregator metric's ranking agrees with its own headline while a sum-aggregator metric's ranking (throughput, deploy_freq, churn, blocked_work) silently averages a quantity the metric's own label, unit and headline all present as a total. This port's fetchMetricContributors/fetchMetricDriverDelta (cmd/query-api/internal/explain/metrics.go) take the metric's own config.Aggregator, matching the headline read. Go is correct.",
+			Paths: []string{
+				"data.drivers.value",
+				"data.drivers.delta_pct",
+				"data.contributors.value",
+			},
+			Intermittent:       true,
+			IntermittentReason: "present only for a request whose metric resolves to a sum-aggregator config (throughput, deploy_freq, churn, blocked_work) and whose ranked group has more than one contributing daily row with differing values in the request window -- a single-row or uniform-value group leaves sum and avg equal, and an avg-aggregator metric (cycle_time, review_latency, wip_saturation, change_failure_rate) never reaches this path at all",
+		},
+		{
+			Ticket: "CHAOS-5819",
+			Reason: "blocked_work's table/column read (work_item_state_durations_daily.duration_hours) carries no status predicate in fetch_metric_value/fetch_metric_contributors/fetch_metric_driver_delta (api/queries/metrics.py, api/queries/explain.py), so the 'Blocked Work' headline, its drivers and its contributors sum/rank duration_hours across every status the table records (backlog/todo/in_progress/in_review/blocked/done/canceled/unknown) -- only this table's OTHER, unrelated reader (fetch_blocked_hours, used by home.py, never by /explain) restricts to status = 'blocked'. This port's blocked_work config carries a StatusFilter of 'blocked' (cmd/query-api/internal/explain/metricconfig.go), reaching every numeric field this route derives from that column for this one metric. Go is correct.",
+			Paths: []string{
+				"data.value",
+				"data.delta_pct",
+				"data.drivers.value",
+				"data.drivers.delta_pct",
+				"data.contributors.value",
+			},
+			Intermittent:       true,
+			IntermittentReason: "present only for a blocked_work request whose window/scope has at least one non-blocked-status row contributing duration_hours for a natural key (day, provider, work_scope_id, team_id) that also carries a blocked-status row; a window with no non-blocked duration recorded, or no data at all, shows no divergence under these paths, and no other metric ever reaches this path",
 		},
 	},
 }
@@ -286,10 +310,11 @@ var peopleParity = Options{
 // parameters at all (meta.go's own doc comment), so there is no caller
 // input for it to reject.
 //
-// explain declares two of its three known Python-plane divergences via
-// explainParity below (the display-name FINAL-dedup defect and the
-// Nullable-column tuple-argMax defect, both Intermittent -- their own
-// Reason strings have the citation trail). Its THIRD divergence --
+// explain declares four of its five known Python-plane divergences via
+// explainParity below (the display-name FINAL-dedup defect, the
+// Nullable-column tuple-argMax defect, the ranking-aggregator defect and
+// the blocked_work status-filter defect, all Intermittent -- their own
+// Reason strings have the citation trail). Its FIFTH divergence --
 // scope_filter_for_metric's own org_id omission silently dropping a
 // requested repo/team scope filter for review_latency/deploy_freq/churn/
 // change_failure_rate -- is declared nowhere in this table: like
@@ -614,6 +639,17 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				BodyMode: RESTBodyModeJSON, Parity: explainParity,
 			},
 			{
+				// throughput is a sum-aggregator, team-scoped metric --
+				// explainParity's ranking-aggregator entry (ranking by
+				// the metric's own aggregator) can only reach a
+				// divergence from a sum-aggregator metric's request,
+				// which neither review_latency nor cycle_time above is.
+				Name:                "throughput_default",
+				Query:               url.Values{"metric": {"throughput"}},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode: RESTBodyModeJSON, Parity: explainParity,
+			},
+			{
 				// metric has no default (api/main.py:542) -- the same
 				// missingFieldError shape quadrant's own missing_type
 				// entry already exercises for a required query param.
@@ -642,6 +678,19 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 						"scope": map[string]any{"level": "org"},
 						"time":  map[string]any{"range_days": 30, "compare_days": 30},
 					},
+				},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode: RESTBodyModeJSON, Parity: explainParity,
+			},
+			{
+				// blocked_work is the only metric explainParity's
+				// status-filter entry (status-restricted duration_hours)
+				// can ever reach; also a sum-aggregator metric, so it can
+				// reach the ranking-aggregator entry too.
+				Name: "blocked_work_default",
+				Body: map[string]any{
+					"metric":  "blocked_work",
+					"filters": map[string]any{},
 				},
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
 				BodyMode: RESTBodyModeJSON, Parity: explainParity,

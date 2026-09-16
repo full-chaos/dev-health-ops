@@ -10,7 +10,13 @@ type metricConfig struct {
 	GroupBy    string
 	Scope      string // "team" or "repo"
 	Aggregator string // "avg" or "sum"
-	Transform  func(float64) float64
+	// StatusFilter, when non-empty, is the exact Column-table status value
+	// every read of this metric restricts to (a plain `status = '<value>'`
+	// alongside the org/scope filter, same subquery, same nesting depth).
+	// "" applies no status restriction -- every metricConfigs entry other
+	// than blocked_work leaves this empty.
+	StatusFilter string
+	Transform    func(float64) float64
 }
 
 func identityTransform(v float64) float64 { return v }
@@ -56,18 +62,24 @@ var metricConfigs = map[string]metricConfig{
 	},
 	"blocked_work": {
 		Label: "Blocked Work", Unit: "hours",
-		// NB: duration_hours is summed across EVERY status this table
-		// carries (blocked/in_progress/waiting/done/...), not filtered to
-		// status='blocked' -- fetch_metric_value/fetch_metric_contributors/
-		// fetch_metric_driver_delta (api/queries/metrics.py,
-		// api/queries/explain.py) carry no status predicate at all; only
-		// the UNRELATED fetch_blocked_hours (metrics.py:207-248, used by
-		// home.py, never by /explain) adds one. Ported verbatim: this
-		// route's own "Blocked Work" headline is, today, actually a
-		// sum over all statuses, table/column choice included.
+		// duration_hours is summed only over rows whose status is
+		// "blocked" -- the sole blocked-shaped entry the status
+		// vocabulary carries (backlog/todo/in_progress/in_review/
+		// blocked/done/canceled/unknown; see
+		// internal/providerfoundation/normalization.go's WorkItemRecord
+		// and internal/streamhandlers/external_schema.go's own copy of
+		// the same closed set). This matches this table's other,
+		// UNRELATED reader over the same column (fetch_blocked_hours,
+		// api/queries/metrics.py, used by home.py's own blocked-hours
+		// panel, never by /explain) rather than fetch_metric_value/
+		// fetch_metric_contributors/fetch_metric_driver_delta
+		// (api/queries/metrics.py, api/queries/explain.py), which carry
+		// no status predicate at all and so sum/rank across every
+		// status the table records.
 		Table: "work_item_state_durations_daily", Column: "duration_hours",
 		GroupBy: "team_id", Scope: "team", Aggregator: "sum",
-		Transform: identityTransform,
+		StatusFilter: "blocked",
+		Transform:    identityTransform,
 	},
 	"change_failure_rate": {
 		Label: "Change Failure Rate", Unit: "%",

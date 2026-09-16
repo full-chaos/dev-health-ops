@@ -1,0 +1,47 @@
+{
+  "metric": "deploy_freq",
+  "label": "Deploy Frequency",
+  "unit": "deploys",
+  "value": 30.0,
+  "delta_pct": 50.0,
+  "drivers": [
+    {
+      "id": "repo-a",
+      "label": "webapp",
+      "value": 15.0,
+      "delta_pct": 20.0,
+      "evidence_link": "/api/v1/drilldown/prs?metric=deploy_freq&scope_type=org&scope_id=",
+      "display_name": "webapp"
+    },
+    {
+      "id": "44444444-4444-4444-4444-444444444444",
+      "label": "#44444444",
+      "value": 16.0,
+      "delta_pct": -5.0,
+      "evidence_link": "/api/v1/drilldown/prs?metric=deploy_freq&scope_type=org&scope_id=",
+      "display_name": null
+    }
+  ],
+  "contributors": [
+    {
+      "id": "repo-a",
+      "label": "webapp",
+      "value": 15.0,
+      "delta_pct": 0.0,
+      "evidence_link": "/api/v1/drilldown/prs?metric=deploy_freq&scope_type=org&scope_id=",
+      "display_name": "webapp"
+    },
+    {
+      "id": "44444444-4444-4444-4444-444444444444",
+      "label": "#44444444",
+      "value": 16.0,
+      "delta_pct": 0.0,
+      "evidence_link": "/api/v1/drilldown/prs?metric=deploy_freq&scope_type=org&scope_id=",
+      "display_name": null
+    }
+  ],
+  "drilldown_links": {
+    "prs": "/api/v1/drilldown/prs?metric=deploy_freq",
+    "issues": "/api/v1/drilldown/issues?metric=deploy_freq"
+  }
+}

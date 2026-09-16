@@ -101,21 +101,14 @@ func buildQuadrantRoute() (handler http.HandlerFunc, cleanup func(), ok bool, er
 	// registered handler via the request context.
 	entryHandler := func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
-			http.NotFound(w, r)
+			writeRESTMethodNotAllowed(w, r, "quadrant")
 			return
 		}
-		token, ok := bearerToken(r.Header.Get("Authorization"))
+		claims, ok := authenticateRESTRequest(w, r, verifier, "quadrant")
 		if !ok {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		verifyCtx := principal.WithRequestMeta(r.Context(), r.RemoteAddr, envelopeRequestID(r))
-		claims, err := verifier.Verify(verifyCtx, token)
-		if err != nil {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		r = r.WithContext(authctx.WithClaims(r.Context(), authctx.Claims{OrgID: claims.OrgID}))
+		r = r.WithContext(authctx.WithClaims(r.Context(), claims))
 		routeMux.Dispatch(quadrantOperation, w, r)
 	}
 
@@ -140,7 +133,12 @@ func newQuadrantWorkHandler(client quadrant.QueryClient) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		claims, ok := authctx.FromContext(r.Context())
 		if !ok {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			// Defensive only: buildQuadrantRoute's entryHandler always
+			// authenticates and attaches claims before Dispatch reaches this
+			// handler, so this branch has no live Python counterpart -- see
+			// authenticateRESTRequest's own doc comment for the three real
+			// 401 shapes this route actually answers.
+			writeRESTUnauthorized(w, r, "quadrant", "Not authenticated")
 			return
 		}
 
@@ -200,7 +198,7 @@ func newQuadrantWorkHandler(client quadrant.QueryClient) http.HandlerFunc {
 		resp, err := quadrant.BuildResponse(r.Context(), client, claims.OrgID, params)
 		if err != nil {
 			if reqErr, ok := quadrant.AsRequestError(err); ok {
-				http.Error(w, reqErr.Message, reqErr.Status)
+				writeRESTError(w, r, "quadrant", claims.OrgID, reqErr.Status, reqErr.Message)
 				return
 			}
 			// Python's outer `except Exception: raise HTTPException(503,
@@ -209,7 +207,7 @@ func newQuadrantWorkHandler(client quadrant.QueryClient) http.HandlerFunc {
 			// (unknown type, invalid scope/bucket, unsupported metric)
 			// degrades to a generic 503, never a raw ClickHouse error on
 			// the wire.
-			http.Error(w, "Data unavailable", http.StatusServiceUnavailable)
+			writeRESTDataUnavailable(w, r, "quadrant", claims.OrgID)
 			return
 		}
 

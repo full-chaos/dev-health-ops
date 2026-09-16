@@ -102,21 +102,14 @@ func buildFilterOptionsRoute() (handler http.HandlerFunc, cleanup func(), ok boo
 	// travel to the registered handler via the request context.
 	entryHandler := func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
-			http.NotFound(w, r)
+			writeRESTMethodNotAllowed(w, r, "filteroptions")
 			return
 		}
-		token, ok := bearerToken(r.Header.Get("Authorization"))
+		claims, ok := authenticateRESTRequest(w, r, verifier, "filteroptions")
 		if !ok {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		verifyCtx := principal.WithRequestMeta(r.Context(), r.RemoteAddr, envelopeRequestID(r))
-		claims, err := verifier.Verify(verifyCtx, token)
-		if err != nil {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		r = r.WithContext(authctx.WithClaims(r.Context(), authctx.Claims{OrgID: claims.OrgID}))
+		r = r.WithContext(authctx.WithClaims(r.Context(), claims))
 		routeMux.Dispatch(filterOptionsOperation, w, r)
 	}
 
@@ -133,7 +126,11 @@ func newFilterOptionsWorkHandler(client filteroptions.QueryClient) http.HandlerF
 	return func(w http.ResponseWriter, r *http.Request) {
 		claims, ok := authctx.FromContext(r.Context())
 		if !ok {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			// Defensive only: buildFilterOptionsRoute's entryHandler always
+			// authenticates and attaches claims before Dispatch reaches this
+			// handler -- see authenticateRESTRequest's own doc comment for
+			// the three real 401 shapes this route actually answers.
+			writeRESTUnauthorized(w, r, "filteroptions", "Not authenticated")
 			return
 		}
 
@@ -143,7 +140,7 @@ func newFilterOptionsWorkHandler(client filteroptions.QueryClient) http.HandlerF
 			// "Data unavailable")` (main.py:1466-1467) -- any ClickHouse
 			// failure degrades to a generic 503, never a raw error on the
 			// wire.
-			http.Error(w, "Data unavailable", http.StatusServiceUnavailable)
+			writeRESTDataUnavailable(w, r, "filteroptions", claims.OrgID)
 			return
 		}
 

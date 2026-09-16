@@ -73,7 +73,7 @@ func TestNewExplainGetHandlerRequiresAuthContext(t *testing.T) {
 	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
 		t.Fatalf("Content-Type = %q, want application/json", ct)
 	}
-	var body explainErrorBody
+	var body restErrorBody
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode body: %v (body=%s)", err, rec.Body.String())
 	}
@@ -159,14 +159,19 @@ func TestNewExplainPostHandlerHappyPathNoDeprecatedHeader(t *testing.T) {
 	}
 }
 
-// TestExplainErrorEnvelopesMatchPython pins the three non-2xx envelopes
-// this route builds itself (401/503/405) against bytes captured live
-// from FastAPI/Starlette's own default handlers (see this file's own
-// package doc comment in explain_route.go for the capture method).
+// TestExplainErrorEnvelopesMatchPython pins the three non-2xx envelope
+// shapes this route answers with (401/503/405) against bytes captured
+// live from FastAPI/Starlette's own default handlers (see this file's
+// own package doc comment in explain_route.go for the capture method) --
+// through this binary's one shared REST error-response path
+// (rest_error_response.go), the same helper every sibling REST route
+// uses; this route keeps no local copy of it.
 func TestExplainErrorEnvelopesMatchPython(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/explain", nil)
+
 	t.Run("401 not authenticated", func(t *testing.T) {
 		rec := httptest.NewRecorder()
-		writeExplainAuthError(rec, "Not authenticated")
+		writeRESTUnauthorized(rec, req, "explain", "Not authenticated")
 		assertExplainJSONBody(t, rec, http.StatusUnauthorized, `{"detail":{"message":"Not authenticated"}}`)
 		if got := rec.Header().Get("WWW-Authenticate"); got != "Bearer" {
 			t.Fatalf("WWW-Authenticate = %q, want Bearer", got)
@@ -174,22 +179,22 @@ func TestExplainErrorEnvelopesMatchPython(t *testing.T) {
 	})
 	t.Run("401 invalid authorization header", func(t *testing.T) {
 		rec := httptest.NewRecorder()
-		writeExplainAuthError(rec, "Invalid authorization header")
+		writeRESTUnauthorized(rec, req, "explain", "Invalid authorization header")
 		assertExplainJSONBody(t, rec, http.StatusUnauthorized, `{"detail":{"message":"Invalid authorization header"}}`)
 	})
 	t.Run("401 invalid or expired token", func(t *testing.T) {
 		rec := httptest.NewRecorder()
-		writeExplainAuthError(rec, "Invalid or expired token")
+		writeRESTUnauthorized(rec, req, "explain", "Invalid or expired token")
 		assertExplainJSONBody(t, rec, http.StatusUnauthorized, `{"detail":{"message":"Invalid or expired token"}}`)
 	})
 	t.Run("503 data unavailable", func(t *testing.T) {
 		rec := httptest.NewRecorder()
-		writeExplainDataUnavailable(rec)
+		writeRESTDataUnavailable(rec, req, "explain", "org-1")
 		assertExplainJSONBody(t, rec, http.StatusServiceUnavailable, `{"detail":"Data unavailable"}`)
 	})
 	t.Run("405 method not allowed", func(t *testing.T) {
 		rec := httptest.NewRecorder()
-		explainMethodNotAllowed(rec)
+		writeRESTMethodNotAllowed(rec, req, "explain", "POST")
 		assertExplainJSONBody(t, rec, http.StatusMethodNotAllowed, `{"detail":"Method Not Allowed"}`)
 		if got := rec.Header().Get("Allow"); got != "POST" {
 			t.Fatalf("Allow = %q, want POST (Starlette reports the FIRST registered route's methods for this path -- POST is registered before GET, main.py:521,537)", got)

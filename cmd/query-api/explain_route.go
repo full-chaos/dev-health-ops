@@ -14,19 +14,23 @@
 //
 // ERROR BODIES: every non-2xx response this route sends uses Python's
 // own FastAPI/Starlette contract -- {"detail": ...} JSON, never a plain-
-// text body -- captured live via an uncommitted `TestClient` one-off
-// against ad hoc FastAPI apps reproducing get_current_user's three 401
-// branches (api/auth/routers/dependencies.py:37-74), explain's own 503
-// (api/main.py:534,566) and a same-path GET+POST route's 405 (see this
-// PR's TEST-EVIDENCE for the exact script and captured bodies). The 405
-// case has one confirmed idiosyncrasy: Starlette's router reports the
+// text body -- via this binary's one shared REST error-response path
+// (rest_error_response.go: writeRESTError/writeRESTUnauthorized/
+// writeRESTMethodNotAllowed/writeRESTDataUnavailable/
+// authenticateRESTRequest), the same helper every sibling REST route in
+// this binary uses. The bodies themselves were captured live via an
+// uncommitted `TestClient` one-off against ad hoc FastAPI apps
+// reproducing get_current_user's three 401 branches (api/auth/routers/
+// dependencies.py:37-74), explain's own 503 (api/main.py:534,566) and a
+// same-path GET+POST route's 405. The 405 case has one confirmed
+// idiosyncrasy this route passes through to writeRESTMethodNotAllowed's
+// own optional Allow-header argument: Starlette's router reports the
 // Allow header/detail of the FIRST route it registered for the path, not
 // the union of every method registered there -- main.py registers POST
 // /api/v1/explain (line 521) BEFORE GET (line 537), so a third method
 // against the real Python route answers `Allow: POST` alone, GET absent.
-// Ported verbatim (explainMethodNotAllowed below), not "fixed" to list
-// both methods -- that would no longer match the live contract this port
-// exists to preserve.
+// Ported verbatim, not "fixed" to list both methods -- that would no
+// longer match the live contract this port exists to preserve.
 package main
 
 import (
@@ -118,7 +122,9 @@ func buildExplainRoute() (handler http.HandlerFunc, cleanup func(), ok bool, err
 	routeMux.Register(explainPostOperation, newExplainPostHandler(reader))
 
 	// Auth runs BEFORE Dispatch, same order every other route in this
-	// binary uses.
+	// binary uses. authenticateRESTRequest (rest_error_response.go) is the
+	// ONE place get_current_user's three 401 branches are classified --
+	// this route no longer keeps its own copy of that distinction.
 	entryHandler := func(w http.ResponseWriter, r *http.Request) {
 		var operation string
 		switch r.Method {
@@ -127,35 +133,22 @@ func buildExplainRoute() (handler http.HandlerFunc, cleanup func(), ok bool, err
 		case http.MethodPost:
 			operation = explainPostOperation
 		default:
-			explainMethodNotAllowed(w)
+			// Starlette reports the Allow header/detail of the FIRST route
+			// it registered for this path, not the union of every method
+			// registered there -- main.py registers POST /api/v1/explain
+			// (line 521) BEFORE GET (line 537), so a third method against
+			// the real Python route answers "Allow: POST" alone, GET
+			// absent (confirmed live). Passed through verbatim, not
+			// "fixed" to list both methods.
+			writeRESTMethodNotAllowed(w, r, "explain", "POST")
 			return
 		}
 
-		authHeader := r.Header.Get("Authorization")
-		token, ok := bearerToken(authHeader)
+		claims, ok := authenticateRESTRequest(w, r, verifier, "explain")
 		if !ok {
-			// get_current_user (api/auth/routers/dependencies.py:42-47,
-			// 50-55): "Not authenticated" when the header is absent,
-			// "Invalid authorization header" when present but not
-			// Bearer-shaped -- the ONE distinction this port's shared
-			// bearerToken (query_route.go) collapses into a single bool,
-			// re-derived here from the raw header alone.
-			msg := "Invalid authorization header"
-			if authHeader == "" {
-				msg = "Not authenticated"
-			}
-			writeExplainAuthError(w, msg)
 			return
 		}
-		verifyCtx := principal.WithRequestMeta(r.Context(), r.RemoteAddr, envelopeRequestID(r))
-		claims, err := verifier.Verify(verifyCtx, token)
-		if err != nil {
-			// get_current_user's third 401 branch (dependencies.py:67-72):
-			// "Invalid or expired token".
-			writeExplainAuthError(w, "Invalid or expired token")
-			return
-		}
-		r = r.WithContext(authctx.WithClaims(r.Context(), authctx.Claims{OrgID: claims.OrgID}))
+		r = r.WithContext(authctx.WithClaims(r.Context(), claims))
 		routeMux.Dispatch(operation, w, r)
 	}
 
@@ -163,48 +156,6 @@ func buildExplainRoute() (handler http.HandlerFunc, cleanup func(), ok bool, err
 		_ = readClient.Close()
 	}
 	return entryHandler, cleanupFn, true, nil
-}
-
-// explainErrorBody is FastAPI's default {"detail": ...} HTTPException
-// envelope -- Detail is `any` because Python's own detail value varies
-// by branch: a flat string (503, 405) or a nested {"message": ...} object
-// (401, error_detail()'s own shape, api/utils/errors.py:6-15).
-type explainErrorBody struct {
-	Detail any `json:"detail"`
-}
-
-func writeExplainJSONError(w http.ResponseWriter, status int, detail any, headers map[string]string) {
-	for name, value := range headers {
-		w.Header().Set(name, value)
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(explainErrorBody{Detail: detail}); err != nil {
-		log.Printf("query-api: explain: encode error response failed: status=%d err=%v", status, err)
-	}
-}
-
-// writeExplainAuthError ports get_current_user's 401 envelope --
-// {"detail": {"message": msg}}, WWW-Authenticate: Bearer (confirmed live,
-// see this file's own package doc comment for the capture method).
-func writeExplainAuthError(w http.ResponseWriter, msg string) {
-	writeExplainJSONError(w, http.StatusUnauthorized, map[string]string{"message": msg},
-		map[string]string{"WWW-Authenticate": "Bearer"})
-}
-
-// explainMethodNotAllowed ports Starlette's default 405 for this exact
-// path (see this file's own package doc comment for the Allow-header
-// idiosyncrasy this reproduces verbatim).
-func explainMethodNotAllowed(w http.ResponseWriter) {
-	writeExplainJSONError(w, http.StatusMethodNotAllowed, "Method Not Allowed", map[string]string{"Allow": "POST"})
-}
-
-// writeExplainDataUnavailable ports explain.py's outer
-// `except Exception: raise HTTPException(503, "Data unavailable")`
-// (main.py:533-534, 565-566) -- {"detail": "Data unavailable"}, a flat
-// string (no error_detail() wrapper on this one, unlike the 401 branches).
-func writeExplainDataUnavailable(w http.ResponseWriter) {
-	writeExplainJSONError(w, http.StatusServiceUnavailable, "Data unavailable", nil)
 }
 
 // writeExplainResponse writes resp as the final 200 JSON body via
@@ -286,7 +237,11 @@ func newExplainGetHandler(reader *explain.Reader) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		claims, ok := authctx.FromContext(r.Context())
 		if !ok {
-			writeExplainAuthError(w, "Not authenticated")
+			// Defensive only: buildExplainRoute's entryHandler always
+			// authenticates and attaches claims before Dispatch reaches
+			// this handler -- see authenticateRESTRequest's own doc
+			// comment for the three real 401 shapes this route answers.
+			writeRESTUnauthorized(w, r, "explain", "Not authenticated")
 			return
 		}
 
@@ -374,7 +329,7 @@ func newExplainGetHandler(reader *explain.Reader) http.HandlerFunc {
 
 		resp, err := explain.BuildExplainResponse(r.Context(), reader, claims.OrgID, params)
 		if err != nil {
-			writeExplainDataUnavailable(w)
+			writeRESTDataUnavailable(w, r, "explain", claims.OrgID)
 			return
 		}
 
@@ -391,13 +346,21 @@ func newExplainPostHandler(reader *explain.Reader) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		claims, ok := authctx.FromContext(r.Context())
 		if !ok {
-			writeExplainAuthError(w, "Not authenticated")
+			// Defensive only: buildExplainRoute's entryHandler always
+			// authenticates and attaches claims before Dispatch reaches
+			// this handler -- see authenticateRESTRequest's own doc
+			// comment for the three real 401 shapes this route answers.
+			writeRESTUnauthorized(w, r, "explain", "Not authenticated")
 			return
 		}
 
 		bodyBytes, readErr := io.ReadAll(r.Body)
 		if readErr != nil {
-			http.Error(w, "bad request", http.StatusBadRequest)
+			// A body-read I/O failure (e.g. a client disconnect
+			// mid-upload) has no Python counterpart to match -- see this
+			// file's sibling REST routes for the same reasoning. Status
+			// unchanged, only the wire body's encoding.
+			writeRESTError(w, r, "explain", claims.OrgID, http.StatusBadRequest, "bad request")
 			return
 		}
 
@@ -480,7 +443,7 @@ func newExplainPostHandler(reader *explain.Reader) http.HandlerFunc {
 
 		resp, err := explain.BuildExplainResponse(r.Context(), reader, claims.OrgID, params)
 		if err != nil {
-			writeExplainDataUnavailable(w)
+			writeRESTDataUnavailable(w, r, "explain", claims.OrgID)
 			return
 		}
 		writeExplainResponse(w, claims.OrgID, envelopeRequestID(r), resp)

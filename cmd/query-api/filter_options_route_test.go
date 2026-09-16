@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
@@ -117,6 +118,9 @@ func TestNewFilterOptionsWorkHandlerRequiresAuthContext(t *testing.T) {
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
+	if got, want := rec.Body.String(), `{"detail":{"message":"Not authenticated"}}`+"\n"; got != want {
+		t.Fatalf("body = %q, want %q", got, want)
+	}
 }
 
 // TestNewFilterOptionsWorkHandlerHappyPathShape pins the response
@@ -166,5 +170,41 @@ func TestNewFilterOptionsWorkHandlerClickHouseFailureIs503(t *testing.T) {
 	handler(rec, req)
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	}
+	if got, want := rec.Body.String(), `{"detail":"Data unavailable"}`+"\n"; got != want {
+		t.Fatalf("body = %q, want %q", got, want)
+	}
+}
+
+// TestBuildFilterOptionsRouteEntryHandlerRejectsNonGET pins the
+// entryHandler's own method guard: 405, not 404, with Starlette's own
+// default {"detail": "Method Not Allowed"} body -- confirmed live against
+// the real FastAPI app (see this route set's TEST-EVIDENCE). Every env
+// var here is a placeholder value: construction is lazy (no live
+// ClickHouse/JWKS dial happens for a request this entryHandler rejects
+// before Dispatch).
+func TestBuildFilterOptionsRouteEntryHandlerRejectsNonGET(t *testing.T) {
+	t.Setenv("CLICKHOUSE_URI", "clickhouse://localhost:8123/default")
+	t.Setenv("GO_API_ENVELOPE_JWKS_PATH", filepath.Join(t.TempDir(), "missing-jwks.json"))
+	t.Setenv("GO_API_ENVELOPE_ISSUER", "test-issuer")
+	t.Setenv("GO_API_ENVELOPE_AUDIENCE", "test-audience")
+
+	handler, cleanup, ok, err := buildFilterOptionsRoute()
+	if err != nil {
+		t.Fatalf("buildFilterOptionsRoute: %v", err)
+	}
+	if !ok {
+		t.Fatal("buildFilterOptionsRoute: ok = false, want true with every dependency env var set")
+	}
+	defer cleanup()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/filters/options", nil)
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
+	}
+	if got, want := rec.Body.String(), `{"detail":"Method Not Allowed"}`+"\n"; got != want {
+		t.Fatalf("body = %q, want %q", got, want)
 	}
 }

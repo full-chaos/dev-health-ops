@@ -94,7 +94,7 @@ func buildMetaRoute() (handler http.HandlerFunc, cleanup func(), ok bool, err er
 	// Dispatch runs directly off the method check.
 	entryHandler := func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
-			http.NotFound(w, r)
+			writeRESTMethodNotAllowed(w, r, "meta")
 			return
 		}
 		routeMux.Dispatch(metaOperation, w, r)

@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
@@ -32,6 +34,24 @@ func (emptyRowsDrilldownScanner) Close() error      { return nil }
 func newEmptyRowsDrilldownReader(t *testing.T) *drilldown.Reader {
 	t.Helper()
 	reader, err := drilldown.NewReader(emptyRowsDrilldownClient{})
+	if err != nil {
+		t.Fatalf("drilldown.NewReader: %v", err)
+	}
+	return reader
+}
+
+// erroringDrilldownClient fails every ClickHouse call -- used to pin
+// Python's blanket "except Exception: raise HTTPException(503, 'Data
+// unavailable')" (main.py:973-974) surfacing through the HTTP layer.
+type erroringDrilldownClient struct{}
+
+func (erroringDrilldownClient) Query(context.Context, string, []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+	return nil, errors.New("clickhouse unavailable")
+}
+
+func newErroringDrilldownReader(t *testing.T) *drilldown.Reader {
+	t.Helper()
+	reader, err := drilldown.NewReader(erroringDrilldownClient{})
 	if err != nil {
 		t.Fatalf("drilldown.NewReader: %v", err)
 	}
@@ -88,6 +108,9 @@ func TestNewDrilldownPRsGetHandlerRequiresAuthContext(t *testing.T) {
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
+	if got, want := rec.Body.String(), `{"detail":{"message":"Not authenticated"}}`+"\n"; got != want {
+		t.Fatalf("body = %q, want %q", got, want)
+	}
 }
 
 // TestNewDrilldownPRsGetHandlerHappyPathSetsDeprecatedHeader pins the
@@ -129,6 +152,9 @@ func TestNewDrilldownPRsPostHandlerRequiresAuthContext(t *testing.T) {
 	handler(rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+	if got, want := rec.Body.String(), `{"detail":{"message":"Not authenticated"}}`+"\n"; got != want {
+		t.Fatalf("body = %q, want %q", got, want)
 	}
 }
 
@@ -186,4 +212,70 @@ type fakeQueryClientFunc func(context.Context, string, []dhclickhouse.Binding) (
 
 func (f fakeQueryClientFunc) Query(ctx context.Context, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
 	return f(ctx, query, bindings)
+}
+
+// TestNewDrilldownPRsGetHandlerClickHouseFailureIs503 pins Python's
+// blanket "except Exception: raise HTTPException(503, 'Data unavailable')"
+// (main.py:973-974) surfacing through the HTTP layer for the GET route.
+func TestNewDrilldownPRsGetHandlerClickHouseFailureIs503(t *testing.T) {
+	handler := newDrilldownPRsGetHandler(newErroringDrilldownReader(t))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/drilldown/prs", nil)
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	}
+	if got, want := rec.Body.String(), `{"detail":"Data unavailable"}`+"\n"; got != want {
+		t.Fatalf("body = %q, want %q", got, want)
+	}
+}
+
+// TestNewDrilldownPRsPostHandlerClickHouseFailureIs503 mirrors the GET
+// handler's own ClickHouse-failure case for POST.
+func TestNewDrilldownPRsPostHandlerClickHouseFailureIs503(t *testing.T) {
+	handler := newDrilldownPRsPostHandler(newErroringDrilldownReader(t))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/drilldown/prs", bytes.NewReader([]byte(`{"filters":{}}`)))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	}
+	if got, want := rec.Body.String(), `{"detail":"Data unavailable"}`+"\n"; got != want {
+		t.Fatalf("body = %q, want %q", got, want)
+	}
+}
+
+// TestBuildDrilldownPRsRouteEntryHandlerRejectsUnknownMethod pins the
+// entryHandler's own method guard: 405, not 404, with Starlette's own
+// default {"detail": "Method Not Allowed"} body -- confirmed live against
+// the real FastAPI app (see this route set's TEST-EVIDENCE). Every env
+// var here is a placeholder value: construction is lazy (no live
+// ClickHouse/JWKS dial happens for a request this entryHandler rejects
+// before Dispatch).
+func TestBuildDrilldownPRsRouteEntryHandlerRejectsUnknownMethod(t *testing.T) {
+	t.Setenv("CLICKHOUSE_URI", "clickhouse://localhost:8123/default")
+	t.Setenv("GO_API_ENVELOPE_JWKS_PATH", filepath.Join(t.TempDir(), "missing-jwks.json"))
+	t.Setenv("GO_API_ENVELOPE_ISSUER", "test-issuer")
+	t.Setenv("GO_API_ENVELOPE_AUDIENCE", "test-audience")
+
+	handler, cleanup, ok, err := buildDrilldownPRsRoute()
+	if err != nil {
+		t.Fatalf("buildDrilldownPRsRoute: %v", err)
+	}
+	if !ok {
+		t.Fatal("buildDrilldownPRsRoute: ok = false, want true with every dependency env var set")
+	}
+	defer cleanup()
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/drilldown/prs", nil)
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
+	}
+	if got, want := rec.Body.String(), `{"detail":"Method Not Allowed"}`+"\n"; got != want {
+		t.Fatalf("body = %q, want %q", got, want)
+	}
 }

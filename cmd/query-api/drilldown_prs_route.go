@@ -119,21 +119,14 @@ func buildDrilldownPRsRoute() (handler http.HandlerFunc, cleanup func(), ok bool
 		case http.MethodPost:
 			operation = drilldownPRsPostOperation
 		default:
-			http.NotFound(w, r)
+			writeRESTMethodNotAllowed(w, r, "drilldown_prs")
 			return
 		}
-		token, ok := bearerToken(r.Header.Get("Authorization"))
+		claims, ok := authenticateRESTRequest(w, r, verifier, "drilldown_prs")
 		if !ok {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		verifyCtx := principal.WithRequestMeta(r.Context(), r.RemoteAddr, envelopeRequestID(r))
-		claims, err := verifier.Verify(verifyCtx, token)
-		if err != nil {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		r = r.WithContext(authctx.WithClaims(r.Context(), authctx.Claims{OrgID: claims.OrgID}))
+		r = r.WithContext(authctx.WithClaims(r.Context(), claims))
 		routeMux.Dispatch(operation, w, r)
 	}
 
@@ -192,7 +185,11 @@ func newDrilldownPRsGetHandler(reader *drilldown.Reader) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		claims, ok := authctx.FromContext(r.Context())
 		if !ok {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			// Defensive only: buildDrilldownPRsRoute's entryHandler always
+			// authenticates and attaches claims before Dispatch reaches this
+			// handler -- see authenticateRESTRequest's own doc comment for
+			// the three real 401 shapes this route actually answers.
+			writeRESTUnauthorized(w, r, "drilldown_prs", "Not authenticated")
 			return
 		}
 
@@ -267,7 +264,7 @@ func newDrilldownPRsGetHandler(reader *drilldown.Reader) http.HandlerFunc {
 		if err != nil {
 			// Python's outer `except Exception: raise HTTPException(503,
 			// "Data unavailable")` (main.py:973-974).
-			http.Error(w, "Data unavailable", http.StatusServiceUnavailable)
+			writeRESTDataUnavailable(w, r, "drilldown_prs", claims.OrgID)
 			return
 		}
 
@@ -285,13 +282,20 @@ func newDrilldownPRsPostHandler(reader *drilldown.Reader) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		claims, ok := authctx.FromContext(r.Context())
 		if !ok {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			// Defensive only -- see the GET handler's own comment above.
+			writeRESTUnauthorized(w, r, "drilldown_prs", "Not authenticated")
 			return
 		}
 
 		bodyBytes, readErr := io.ReadAll(r.Body)
 		if readErr != nil {
-			http.Error(w, "bad request", http.StatusBadRequest)
+			// A body-read I/O failure (e.g. a client disconnect mid-upload)
+			// has no Python counterpart to match -- ASGI/Starlette's own
+			// body-reading machinery fails differently and does not surface
+			// a clean HTTP response in that case. This keeps the existing
+			// 400 status, only replacing the plain-text wire body with this
+			// package's one JSON envelope.
+			writeRESTError(w, r, "drilldown_prs", claims.OrgID, http.StatusBadRequest, "bad request")
 			return
 		}
 
@@ -397,7 +401,7 @@ func newDrilldownPRsPostHandler(reader *drilldown.Reader) http.HandlerFunc {
 
 		resp, err := drilldown.BuildPRsResponse(r.Context(), reader, claims.OrgID, params)
 		if err != nil {
-			http.Error(w, "Data unavailable", http.StatusServiceUnavailable)
+			writeRESTDataUnavailable(w, r, "drilldown_prs", claims.OrgID)
 			return
 		}
 		writeDrilldownPRsResponse(w, r, claims.OrgID, resp)

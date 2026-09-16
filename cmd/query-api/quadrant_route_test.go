@@ -112,6 +112,9 @@ func TestNewQuadrantWorkHandlerRequiresAuthContext(t *testing.T) {
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
+	if got, want := rec.Body.String(), `{"detail":{"message":"Not authenticated"}}`+"\n"; got != want {
+		t.Fatalf("body = %q, want %q", got, want)
+	}
 }
 
 // TestNewQuadrantWorkHandlerRequiresType pins the missing-`type` 422,
@@ -213,6 +216,9 @@ func TestNewQuadrantWorkHandlerUnknownTypeIs404(t *testing.T) {
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
 	}
+	if got, want := rec.Body.String(), `{"detail":"Unknown quadrant type"}`+"\n"; got != want {
+		t.Fatalf("body = %q, want %q", got, want)
+	}
 }
 
 // TestNewQuadrantWorkHandlerHappyPathShape pins the response Content-Type
@@ -261,6 +267,9 @@ func TestNewQuadrantWorkHandlerPersonScopeRequiresScopeID(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
+	if got, want := rec.Body.String(), `{"detail":"Individual quadrants require a person id"}`+"\n"; got != want {
+		t.Fatalf("body = %q, want %q", got, want)
+	}
 }
 
 // TestNewQuadrantWorkHandlerPersonScopeIndividualNotFound pins the person
@@ -277,5 +286,41 @@ func TestNewQuadrantWorkHandlerPersonScopeIndividualNotFound(t *testing.T) {
 	handler(rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+	if got, want := rec.Body.String(), `{"detail":"Individual not found"}`+"\n"; got != want {
+		t.Fatalf("body = %q, want %q", got, want)
+	}
+}
+
+// TestBuildQuadrantRouteEntryHandlerRejectsNonGET pins the entryHandler's
+// own method guard: 405, not 404, with Starlette's own default
+// {"detail": "Method Not Allowed"} body -- confirmed live against the
+// real FastAPI app (see this route set's TEST-EVIDENCE for the capture
+// command). Every env var here is a placeholder value: construction is
+// lazy (no live ClickHouse/JWKS dial happens for a request this
+// entryHandler rejects before Dispatch).
+func TestBuildQuadrantRouteEntryHandlerRejectsNonGET(t *testing.T) {
+	t.Setenv("CLICKHOUSE_URI", "clickhouse://localhost:8123/default")
+	t.Setenv("GO_API_ENVELOPE_JWKS_PATH", filepath.Join(t.TempDir(), "missing-jwks.json"))
+	t.Setenv("GO_API_ENVELOPE_ISSUER", "test-issuer")
+	t.Setenv("GO_API_ENVELOPE_AUDIENCE", "test-audience")
+
+	handler, cleanup, ok, err := buildQuadrantRoute()
+	if err != nil {
+		t.Fatalf("buildQuadrantRoute: %v", err)
+	}
+	if !ok {
+		t.Fatal("buildQuadrantRoute: ok = false, want true with every dependency env var set")
+	}
+	defer cleanup()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/quadrant", nil)
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
+	}
+	if got, want := rec.Body.String(), `{"detail":"Method Not Allowed"}`+"\n"; got != want {
+		t.Fatalf("body = %q, want %q", got, want)
 	}
 }

@@ -217,21 +217,14 @@ func buildInvestmentExplainRoute() (handler http.HandlerFunc, cleanup func(), ok
 	// separate parameter Mux.Dispatch has no room for.
 	entryHandler := func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
-			http.NotFound(w, r)
+			writeRESTMethodNotAllowed(w, r, "investment_explain")
 			return
 		}
-		token, ok := bearerToken(r.Header.Get("Authorization"))
+		claims, ok := authenticateRESTRequest(w, r, verifier, "investment_explain")
 		if !ok {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		verifyCtx := principal.WithRequestMeta(r.Context(), r.RemoteAddr, envelopeRequestID(r))
-		claims, err := verifier.Verify(verifyCtx, token)
-		if err != nil {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		r = r.WithContext(authctx.WithClaims(r.Context(), authctx.Claims{OrgID: claims.OrgID}))
+		r = r.WithContext(authctx.WithClaims(r.Context(), claims))
 		routeMux.Dispatch(investmentExplainOperation, w, r)
 	}
 
@@ -389,7 +382,12 @@ func newInvestmentExplainWorkHandler(
 	return func(w http.ResponseWriter, r *http.Request) {
 		claims, ok := authctx.FromContext(r.Context())
 		if !ok {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			// Defensive only: buildInvestmentExplainRoute's entryHandler
+			// always authenticates and attaches claims before Dispatch
+			// reaches this handler -- see authenticateRESTRequest's own doc
+			// comment for the three real 401 shapes this route actually
+			// answers.
+			writeRESTUnauthorized(w, r, "investment_explain", "Not authenticated")
 			return
 		}
 
@@ -408,11 +406,18 @@ func newInvestmentExplainWorkHandler(
 		// would make it invalid). Caught by codex round 3 (P2).
 		bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, investmentExplainMaxBodyBytes+1))
 		if err != nil {
-			http.Error(w, "bad request", http.StatusBadRequest)
+			// A body-read I/O failure has no Python counterpart to match --
+			// see drilldown_prs_route.go's own POST handler for the same
+			// reasoning. Status unchanged, only the wire body's encoding.
+			writeRESTError(w, r, "investment_explain", claims.OrgID, http.StatusBadRequest, "bad request")
 			return
 		}
 		if len(bodyBytes) > investmentExplainMaxBodyBytes {
-			http.Error(w, "request body exceeds size limit", http.StatusRequestEntityTooLarge)
+			// This cap is a Go-side-only safety measure -- Python's real
+			// endpoint enforces none at all (see investmentExplainMaxBodyBytes's
+			// own doc comment), so there is no Python body to match here
+			// either. Status unchanged, only the wire body's encoding.
+			writeRESTError(w, r, "investment_explain", claims.OrgID, http.StatusRequestEntityTooLarge, "request body exceeds size limit")
 			return
 		}
 
@@ -430,7 +435,12 @@ func newInvestmentExplainWorkHandler(
 
 		opts, buildErr := buildExplainOptions(r.Context(), reader, claims.OrgID, reqBody, llmProvider, forceRefresh)
 		if buildErr != nil {
-			http.Error(w, buildErr.Error(), http.StatusBadRequest)
+			// Python's `except ValueError as exc: raise HTTPException(400,
+			// detail=str(exc))` (main.py:1345-1346) -- buildErr's own
+			// message text is already the ported parity string (see
+			// resolve_repo_filter_ids's citation in this file's own package
+			// doc comment), so only the encoding changes here.
+			writeRESTError(w, r, "investment_explain", claims.OrgID, http.StatusBadRequest, buildErr.Error())
 			return
 		}
 

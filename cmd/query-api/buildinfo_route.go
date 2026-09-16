@@ -151,7 +151,14 @@ func newBuildInfoHandler(verifier *principal.Verifier) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(body)
+		// Encoded rather than written raw: body is already the marshalled,
+		// constant response computed above, so json.RawMessage passes it
+		// through byte-for-byte (plus the encoder's trailing newline) --
+		// there is no second marshal to diverge from it. An encode failure
+		// is logged rather than dropped, matching writeRESTError's contract.
+		if encodeErr := json.NewEncoder(w).Encode(json.RawMessage(body)); encodeErr != nil {
+			log.Printf("query-api: /buildinfo: encode response failed: err=%v", encodeErr)
+		}
 	}
 }
 

@@ -116,15 +116,18 @@ func newRegistryHandler(schemaDigest string, digestByOperation map[string]string
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		// This body is a marshalled struct of repo-derived digests -- never
-		// HTML and never caller-supplied -- so the XSS-escaping advice a
-		// scanner attaches to a direct ResponseWriter.Write does not apply
-		// here. What DOES apply is content sniffing: nosniff makes a browser
-		// honour the declared type instead of guessing one, which closes the
-		// vector without pretending this endpoint renders a template.
+		// nosniff makes a browser honour the declared Content-Type instead
+		// of guessing one from the body.
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(body)
+		// Encoded rather than written raw: body is already the marshalled,
+		// constant response computed above, so json.RawMessage passes it
+		// through byte-for-byte (plus the encoder's trailing newline) --
+		// there is no second marshal to diverge from it. An encode failure
+		// is logged rather than dropped, matching writeRESTError's contract.
+		if encodeErr := json.NewEncoder(w).Encode(json.RawMessage(body)); encodeErr != nil {
+			log.Printf("query-api: /registry: encode response failed: err=%v", encodeErr)
+		}
 	}
 }
 

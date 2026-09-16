@@ -1,0 +1,40 @@
+{
+  "meta": {
+    "approximation": {
+      "method": "milestones",
+      "used": true
+    },
+    "filters": {
+      "provider": "prov-x"
+    },
+    "notes": [
+      "Detailed state transition data unavailable. Using milestone-based approximation."
+    ],
+    "window_end": "2024-02-15",
+    "window_start": "2024-02-01"
+  },
+  "mode": "cycle_breakdown",
+  "root": {
+    "children": [
+      {
+        "children": [
+          {
+            "children": [],
+            "name": "build",
+            "value": 44.0
+          },
+          {
+            "children": [],
+            "name": "design",
+            "value": 40.0
+          }
+        ],
+        "name": "Other",
+        "value": 84.0
+      }
+    ],
+    "name": "Cycle Time",
+    "value": 84.0
+  },
+  "unit": "hours"
+}

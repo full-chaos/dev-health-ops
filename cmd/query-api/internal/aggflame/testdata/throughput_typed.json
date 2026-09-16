@@ -1,0 +1,49 @@
+{
+  "meta": {
+    "approximation": {
+      "method": null,
+      "used": false
+    },
+    "filters": {
+      "repo_id": "repo-5"
+    },
+    "notes": [],
+    "window_end": "2024-05-31",
+    "window_start": "2024-05-01"
+  },
+  "mode": "throughput",
+  "root": {
+    "children": [
+      {
+        "children": [
+          {
+            "children": [],
+            "name": "Team Beta",
+            "value": 20.0
+          },
+          {
+            "children": [],
+            "name": "Team Alpha",
+            "value": 12.0
+          }
+        ],
+        "name": "Feature",
+        "value": 32.0
+      },
+      {
+        "children": [
+          {
+            "children": [],
+            "name": "Unassigned",
+            "value": 5.0
+          }
+        ],
+        "name": "Bug",
+        "value": 5.0
+      }
+    ],
+    "name": "Work Delivered",
+    "value": 37.0
+  },
+  "unit": "items"
+}

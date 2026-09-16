@@ -1,0 +1,24 @@
+{
+  "meta": {
+    "approximation": {
+      "method": "inferred",
+      "used": true
+    },
+    "filters": {
+      "team_id": "team-z"
+    },
+    "notes": [
+      "Work type classification unavailable. Using team-based grouping.",
+      "No throughput data available for this window/scope."
+    ],
+    "window_end": "2024-06-10",
+    "window_start": "2024-06-01"
+  },
+  "mode": "throughput",
+  "root": {
+    "children": [],
+    "name": "Work Delivered",
+    "value": 0.0
+  },
+  "unit": "items"
+}

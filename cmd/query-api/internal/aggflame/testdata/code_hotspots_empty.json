@@ -1,0 +1,23 @@
+{
+  "meta": {
+    "approximation": {
+      "method": null,
+      "used": false
+    },
+    "filters": {
+      "repo_id": "repo-9"
+    },
+    "notes": [
+      "No file churn data available for this window/scope."
+    ],
+    "window_end": "2024-04-05",
+    "window_start": "2024-04-01"
+  },
+  "mode": "code_hotspots",
+  "root": {
+    "children": [],
+    "name": "Code Churn",
+    "value": 0.0
+  },
+  "unit": "loc"
+}

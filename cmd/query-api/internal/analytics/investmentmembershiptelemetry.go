@@ -17,8 +17,9 @@ package analytics
 // under-scoped subset), records a Prometheus counter increment PLUS a
 // gauge set for lag_seconds, and logs a warning. Any other scope_mode
 // ("scoped" or "unscoped_no_marker") records nothing. Errors fetching
-// the state are swallowed to a debug log line -- the metric must never
-// be able to break the real query it decorates.
+// the state are reported through a warn log line (org id + error) and
+// never propagated -- the metric must never be able to break the real
+// query it decorates.
 //
 // GO EQUIVALENT: RecordStaleInvestmentMembershipScope below reproduces
 // that exact decision (fetch, check scope_mode=="unscoped_fallback",
@@ -156,11 +157,11 @@ func defaultRecordStaleInvestmentMembershipScope(ctx context.Context, state Inve
 
 // RecordStaleInvestmentMembershipScope ports
 // record_stale_investment_membership_scope (investment_membership_scope.py:120-141)
-// verbatim in decision shape: fetch the state; a fetch error is
-// swallowed (Python: `except Exception as exc: logger.debug(...); return`
-// -- this metric must never be able to break the real query it
-// decorates); a non-"unscoped_fallback" mode records nothing; only
-// "unscoped_fallback" fires the counter+gauge+log.
+// in decision shape: fetch the state; a fetch error is reported via a
+// warn log (org id + error) and never propagated -- this metric must
+// never be able to break the real query it decorates; a non-
+// "unscoped_fallback" mode records nothing; only "unscoped_fallback"
+// fires the counter+gauge+log.
 //
 // CALLED FROM: every investment-path Compile*/Execute* entry point that
 // resolves useInvestment=true, mirroring _query_investment_dicts
@@ -176,7 +177,12 @@ func RecordStaleInvestmentMembershipScope(ctx context.Context, client QueryClien
 	}
 	state, err := FetchInvestmentMembershipScopeState(ctx, client, orgID, timeoutSeconds)
 	if err != nil {
-		slog.DebugContext(ctx, "investment membership scope metric skipped", "error", err)
+		// A swallowed fetch error must still be operator-visible: at
+		// this platform's default log level a debug line is invisible,
+		// which would let a persistently broken fetch stop observing
+		// this org's membership scope forever with zero signal.
+		slog.WarnContext(ctx, "investment membership scope metric skipped",
+			"org_id", orgID, "error", err)
 		return
 	}
 	if state.ScopeMode != "unscoped_fallback" {

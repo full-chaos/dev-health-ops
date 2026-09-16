@@ -3,9 +3,60 @@ package analytics
 import (
 	"context"
 	"errors"
+	"log/slog"
+	"sync"
 	"testing"
 	"time"
 )
+
+// capturedLogRecord is one slog record captured by captureSlog, reduced to
+// the fields these tests assert on.
+type capturedLogRecord struct {
+	level slog.Level
+	msg   string
+	attrs map[string]any
+}
+
+// captureSlogHandler is a minimal slog.Handler that appends every record
+// it receives to a shared, mutex-guarded slice -- this package has no
+// existing slog capture helper, so this is the "handler in the test"
+// fallback.
+type captureSlogHandler struct {
+	mu      *sync.Mutex
+	records *[]capturedLogRecord
+}
+
+func (h *captureSlogHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *captureSlogHandler) Handle(_ context.Context, r slog.Record) error {
+	attrs := map[string]any{}
+	r.Attrs(func(a slog.Attr) bool {
+		attrs[a.Key] = a.Value.Any()
+		return true
+	})
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	*h.records = append(*h.records, capturedLogRecord{level: r.Level, msg: r.Message, attrs: attrs})
+	return nil
+}
+
+func (h *captureSlogHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *captureSlogHandler) WithGroup(string) slog.Handler      { return h }
+
+// captureSlog installs a capturing handler as the process-wide slog
+// default for the duration of the test and restores the original on
+// cleanup. This package's tests never run with -parallel (no
+// t.Parallel() call in the package), so swapping the process-wide
+// default for one test body is safe.
+func captureSlog(t *testing.T) *[]capturedLogRecord {
+	t.Helper()
+	var mu sync.Mutex
+	var records []capturedLogRecord
+	orig := slog.Default()
+	slog.SetDefault(slog.New(&captureSlogHandler{mu: &mu, records: &records}))
+	t.Cleanup(func() { slog.SetDefault(orig) })
+	return &records
+}
 
 // errInjectedCloseFailure is a fixed sentinel for fakeRowScanner.closeErr,
 // used across the table-driven Close()-only failure tests below -- the
@@ -105,6 +156,42 @@ func TestCloseOnlyFailure_IsReportedAcrossDecorators(t *testing.T) {
 		want := InvestmentMembershipScopeState{ScopeMode: "unscoped_no_marker"}
 		if got != want {
 			t.Errorf("state = %+v on a Close() failure, want the safe fallback %+v", got, want)
+		}
+	})
+
+	// RecordStaleInvestmentMembershipScope has no cooldown to shorten, so
+	// its only observable for a fetch failure is the warn log it reports
+	// through -- this decorator's own report path, per its doc comment.
+	t.Run("RecordStaleInvestmentMembershipScope_WarnsOnCloseOnlyFailure", func(t *testing.T) {
+		records := captureSlog(t)
+
+		client := &routingFakeClient{}
+		client.on("SELECT scope_mode, lag_seconds", &fakeRowScanner{
+			rows:     [][]any{{"unscoped_fallback", int64(4321)}},
+			closeErr: errInjectedCloseFailure,
+		})
+
+		RecordStaleInvestmentMembershipScope(context.Background(), client, "org-close-fail", 30)
+
+		var warn *capturedLogRecord
+		for i := range *records {
+			if (*records)[i].msg == "investment membership scope metric skipped" {
+				warn = &(*records)[i]
+				break
+			}
+		}
+		if warn == nil {
+			t.Fatalf("no %q record captured; records = %+v", "investment membership scope metric skipped", *records)
+		}
+		if warn.level != slog.LevelWarn {
+			t.Errorf("level = %v, want %v -- a swallowed fetch error must be operator-visible at this platform's default log level", warn.level, slog.LevelWarn)
+		}
+		if got, _ := warn.attrs["org_id"].(string); got != "org-close-fail" {
+			t.Errorf("org_id attr = %v, want %q", warn.attrs["org_id"], "org-close-fail")
+		}
+		gotErr, _ := warn.attrs["error"].(error)
+		if gotErr == nil || !errors.Is(gotErr, errInjectedCloseFailure) {
+			t.Errorf("error attr = %v, want it to wrap %v", warn.attrs["error"], errInjectedCloseFailure)
 		}
 	})
 }

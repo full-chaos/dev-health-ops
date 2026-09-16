@@ -144,7 +144,7 @@ func TestBuildOperationalIncidentEdgesRejectsPrecisionSensitiveConfidence(t *tes
 	_, err := BuildOperationalIncidentEdges(
 		context.Background(), nil, "70d529e0-3c06-4597-8480-794fd02328b6",
 		time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC),
-		7, 1.00000001, nil, nil, nil,
+		7, 1.00000001, nil, nil, nil, nil,
 	)
 	if err == nil {
 		t.Fatal("expected an error for heuristicConfidence=1.00000001 (outside [0,1] at float64 precision), got nil")
@@ -280,7 +280,7 @@ func TestReadServiceRepositoryMappingsLogsRepoIDOnFailure(t *testing.T) {
 
 	const orgID = "70d529e0-3c06-4597-8480-794fd02328b6"
 	repoID := uuid.MustParse("00000000-0000-0000-0000-0000000000aa")
-	_, err := ReadServiceRepositoryMappings(context.Background(), nil, orgID, time.Now(), &repoID)
+	_, err := ReadServiceRepositoryMappings(context.Background(), nil, orgID, time.Now(), &repoID, nil)
 	if err == nil {
 		t.Fatal("expected an error for an invalid ordering contract, got nil")
 	}

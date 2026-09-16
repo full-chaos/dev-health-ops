@@ -11,6 +11,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/edges"
@@ -147,6 +148,7 @@ type MappingRow struct {
 // lands only in the native Go port).
 func ReadServiceRepositoryMappings(
 	ctx context.Context, conn driver.Conn, organizationID string, now time.Time, repoID *uuid.UUID,
+	observer jobruntime.IncidentValidFromGuardObserver,
 ) ([]MappingRow, error) {
 	if err := investment.RequireOrganizationScope(organizationID); err != nil {
 		return nil, err
@@ -167,7 +169,7 @@ func ReadServiceRepositoryMappings(
 		filters = append(filters, "repo_id = {repo_id:UUID}")
 	}
 	query := "SELECT service_id, repo_id, provider, relationship_provenance, " +
-		"relationship_confidence, mapping_kind, rule_id, source_url FROM " +
+		"relationship_confidence, mapping_kind, rule_id, source_url, valid_from FROM " +
 		remaining.CurrentOperationalRowsSQL("operational_service_repository_mappings", filters, contract)
 
 	args := []any{
@@ -185,17 +187,24 @@ func ReadServiceRepositoryMappings(
 	defer rows.Close()
 
 	var out []MappingRow
+	validFromSet, validFromNullRecovered := 0, 0
 	for rows.Next() {
 		var (
 			r          MappingRow
 			repoIDStr  *string
 			confidence *float64
+			validFrom  *time.Time
 		)
 		if err := rows.Scan(
 			&r.ServiceID, &repoIDStr, &r.Provider, &r.RelationshipProvenance,
-			&confidence, &r.MappingKind, &r.RuleID, &r.SourceURL,
+			&confidence, &r.MappingKind, &r.RuleID, &r.SourceURL, &validFrom,
 		); err != nil {
 			return nil, logReadErr(ctx, "scan operational_service_repository_mappings row", organizationID, err, "repo_id", repoIDLogAttr(repoID))
+		}
+		if validFrom == nil {
+			validFromNullRecovered++
+		} else {
+			validFromSet++
 		}
 		r.RelationshipConfidence = confidence
 		if repoIDStr != nil && *repoIDStr != "" {
@@ -211,7 +220,35 @@ func ReadServiceRepositoryMappings(
 	if err := rows.Err(); err != nil {
 		return nil, logReadErr(ctx, "iterate operational_service_repository_mappings", organizationID, err, "repo_id", repoIDLogAttr(repoID))
 	}
+	reportValidFromGuard(ctx, organizationID, observer, validFromSet, validFromNullRecovered)
 	return out, nil
+}
+
+// reportValidFromGuard records how many operational_service_repository_mappings
+// rows this call's NULL-OK guard matched by a set valid_from versus one
+// recovered only because valid_from was NULL (a mapping row with no
+// valid_from means "valid since before records began" and must satisfy this
+// filter). Logs a WARN once per call when the guard actually mattered, so
+// the class stays observable if a future producer regresses it; a nil
+// observer only skips the counter, never the log.
+func reportValidFromGuard(
+	ctx context.Context, organizationID string,
+	observer jobruntime.IncidentValidFromGuardObserver, validFromSet, validFromNullRecovered int,
+) {
+	if validFromNullRecovered > 0 {
+		slog.Default().WarnContext(ctx,
+			"workgraph operationaledges: operational_service_repository_mappings rows matched only via NULL valid_from guard",
+			"org_id", organizationID, "count", validFromNullRecovered)
+	}
+	if observer == nil {
+		return
+	}
+	if validFromSet > 0 {
+		_ = observer.ObserveIncidentValidFromGuardRows(jobruntime.IncidentValidFromGuardReasonSet, validFromSet)
+	}
+	if validFromNullRecovered > 0 {
+		_ = observer.ObserveIncidentValidFromGuardRows(jobruntime.IncidentValidFromGuardReasonNullRecovered, validFromNullRecovered)
+	}
 }
 
 // IncidentRow is one operational_incidents row (this package's own shape --
@@ -777,6 +814,7 @@ func BuildOperationalIncidentEdges(
 	ctx context.Context, conn driver.Conn, organizationID string, now time.Time,
 	heuristicDaysWindow int, heuristicConfidence float64,
 	fromDate, toDate *time.Time, repoID *uuid.UUID,
+	validFromGuardObserver jobruntime.IncidentValidFromGuardObserver,
 ) ([]edges.Row, error) {
 	if err := investment.RequireOrganizationScope(organizationID); err != nil {
 		return nil, err
@@ -810,7 +848,7 @@ func BuildOperationalIncidentEdges(
 	// in THOSE tables' text. Measured row bounds on org 70d529e0 (2026-09-05,
 	// disclosed in the PR body): mappings 0, incidents 1, services 1, work_items
 	// 4944 (why the candidate-filtered read matters), deployments 699, repos 11.
-	mappings, err := ReadServiceRepositoryMappings(ctx, conn, organizationID, now, repoID)
+	mappings, err := ReadServiceRepositoryMappings(ctx, conn, organizationID, now, repoID, validFromGuardObserver)
 	if err != nil {
 		return nil, err
 	}

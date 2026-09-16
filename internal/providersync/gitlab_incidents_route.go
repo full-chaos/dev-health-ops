@@ -460,13 +460,20 @@ func buildGitLabIncidentServiceRows(
 	}
 	provenance, confidence := "native_repository_context", 1.0
 	repoProvider, mappingKind := "gitlab", "repository_derived"
+	// ValidFrom is stamped from this effect's own observation time
+	// (normalizedAt, already carried for ObservedAt/LastSynced above) rather
+	// than left NULL: a NULL valid_from means "valid since before records
+	// began", and every as-of reader honors that, but a producer that CAN
+	// stamp a real instant should, so new rows carry one rather than relying
+	// on every future reader's NULL-OK guard.
+	validFrom := normalizedAt
 	mapping := gitLabServiceRepositoryMappingRow{
 		OrgID: claim.OrgID, Provider: "gitlab", ProviderInstanceID: providerInstance,
 		SourceEntityType: "repository_mapping", ExternalID: repoFullName + ":" + repoID.String(),
 		SourceVersionAt: sourceVersionAt, ObservedAt: normalizedAt, LastSynced: normalizedAt,
 		RelationshipProvenance: &provenance, RelationshipConfidence: &confidence,
 		ServiceID: service.ID, RepoID: &repoID, RepoFullName: &repoFullName,
-		RepoProvider: &repoProvider, MappingKind: &mappingKind, IsActive: true,
+		RepoProvider: &repoProvider, MappingKind: &mappingKind, ValidFrom: &validFrom, IsActive: true,
 	}
 	if err := fillGitLabServiceMappingOrdering(&mapping); err != nil {
 		return gitLabOperationalServiceRow{}, gitLabServiceRepositoryMappingRow{}, err

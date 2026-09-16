@@ -220,6 +220,14 @@ func TestInternalIngestPersistsCanonicalIncidentGraph(t *testing.T) {
 	if got := mappingBatch.rows[0]; got[23] != "native_repository_context" || got[24] != 1.0 {
 		t.Fatalf("mapping provenance = %v %v", got[23], got[24])
 	}
+	// A repository_derived mapping must carry a non-NULL valid_from,
+	// stamped from this effect's own observation time (handler.now(),
+	// already carried for observed_at/last_synced) -- a NULL here is
+	// exactly the producer gap that makes an as-of reader with no NULL-OK
+	// guard silently drop the row.
+	if got := mappingBatch.rows[0][31]; got != handler.now() {
+		t.Fatalf("mapping valid_from = %v, want %v", got, handler.now())
+	}
 }
 
 func TestInternalIngestPersistsWorkItemPriorityAndOrg(t *testing.T) {

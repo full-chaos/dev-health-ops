@@ -84,6 +84,14 @@ func TestGitLabIncidentsRouteEmitsCompleteCanonicalBatch(t *testing.T) {
 		mapping.RelationshipConfidence == nil || *mapping.RelationshipConfidence != 1 || !mapping.IsActive {
 		t.Fatalf("mapping=%+v", mapping)
 	}
+	// A repository_derived mapping must carry a non-NULL valid_from,
+	// stamped from this effect's own observation time (the same
+	// truncated-to-microsecond instant ObservedAt already carries, Collect's
+	// own normalization) -- a NULL here is exactly the producer gap that
+	// makes an as-of reader with no NULL-OK guard silently drop the row.
+	if mapping.ValidFrom == nil || !mapping.ValidFrom.Equal(mapping.ObservedAt) {
+		t.Fatalf("mapping.ValidFrom = %v, want %v (mapping.ObservedAt)", mapping.ValidFrom, mapping.ObservedAt)
+	}
 	incidents := make(map[string]jiraIncidentRow)
 	for _, raw := range byDestination["operational_incidents"].Rows {
 		var row jiraIncidentRow

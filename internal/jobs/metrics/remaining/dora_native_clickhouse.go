@@ -12,6 +12,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/numerical"
 )
 
@@ -162,6 +163,14 @@ const (
 // (metrics/active_incidents.py:22). DORA uses RESOLVED; daily incident metrics
 // use STARTED. Keeping both on one builder prevents the service-mapping and
 // current-row predicates from drifting between metrics readers.
+//
+// The mapping-join predicate carries the same NULL-OK guard as
+// LoadIncidentsStarted (daily/incident_native_clickhouse.go): a NULL
+// valid_from means "valid since before records began" and must satisfy
+// every as-of filter, the same as the symmetric `valid_to IS NULL OR
+// valid_to > as_of` clause beside it. The projection also selects
+// mapping.valid_from as mapping_valid_from so a caller that scans it can
+// report how many matched rows were only admitted by the guard.
 func IncidentProjectionQuery(
 	window IncidentWindow, repoFilter string, contract OperationalOrderingContract,
 ) string {
@@ -188,13 +197,13 @@ func IncidentProjectionQuery(
 		[]string{
 			"repo_id IS NOT NULL",
 			"is_active = 1",
-			"valid_from <= {as_of:DateTime64(6, 'UTC')}",
+			"(valid_from IS NULL OR valid_from <= {as_of:DateTime64(6, 'UTC')})",
 			"(valid_to IS NULL OR valid_to > {as_of:DateTime64(6, 'UTC')})",
 		},
 		contract,
 	)
 	return fmt.Sprintf(`
-        SELECT repo_id, incident_id, status, started_at, resolved_at, last_synced
+        SELECT repo_id, incident_id, status, started_at, resolved_at, last_synced, mapping_valid_from
         FROM (
             SELECT
                 mapping.repo_id AS repo_id,
@@ -202,7 +211,8 @@ func IncidentProjectionQuery(
                 incident.normalized_status AS status,
                 incident.started_at,
                 incident.resolved_at,
-                incident.last_synced AS last_synced
+                incident.last_synced AS last_synced,
+                mapping.valid_from AS mapping_valid_from
             FROM %s AS incident
             INNER JOIN %s AS mapping
                 ON incident.org_id = mapping.org_id
@@ -313,6 +323,14 @@ func (executor *DORAExecutor) loadDeployments(
 
 // loadIncidents ports _load_incidents (job_dora.py:123) plus
 // deduplicate_active_incidents (active_incidents.py:89).
+//
+// A mapping row's valid_from is Nullable, and NULL means "valid since
+// before records began" -- IncidentProjectionQuery's mapping-join predicate
+// admits it via the same NULL-OK guard LoadIncidentsStarted uses. This
+// reader reports how many matched mapping rows fell into each case
+// (validFromSet vs. validFromNullRecovered) through the optional guard
+// observer, and logs a WARN once per query when it recovers any NULL row,
+// so the class stays observable if a future producer regresses it.
 func (executor *DORAExecutor) loadIncidents(
 	ctx context.Context, organizationID string, day time.Time, scope doraScope,
 ) ([]numerical.Incident, int, error) {
@@ -325,11 +343,7 @@ func (executor *DORAExecutor) loadIncidents(
 		"org_id": organizationID,
 		"start":  dateTime64Argument(start, millisecondPrecision),
 		"end":    dateTime64Argument(end, millisecondPrecision),
-		// Python binds now() here. CHAOS-4111: mappings whose valid_from is
-		// NULL match nothing, because NULL <= as_of is NULL -- a producer gap,
-		// not something this reader may paper over. Reproduced exactly so the
-		// two runtimes agree on which mappings are live.
-		"as_of": dateTime64Argument(asOf, microsecondPrecision),
+		"as_of":  dateTime64Argument(asOf, microsecondPrecision),
 	}
 	filter := repoFilterClause(scope, arguments)
 	query := resolvedIncidentsQuery(filter, executor.contract)
@@ -343,19 +357,26 @@ func (executor *DORAExecutor) loadIncidents(
 	var incidents []numerical.Incident
 	seen := make(map[string]struct{})
 	skipped := 0
+	validFromSet, validFromNullRecovered := 0, 0
 	for rows.Next() {
 		var (
-			repoID     *uuid.UUID
-			incidentID string
-			status     *string
-			startedAt  *time.Time
-			resolvedAt *time.Time
-			lastSynced time.Time
+			repoID           *uuid.UUID
+			incidentID       string
+			status           *string
+			startedAt        *time.Time
+			resolvedAt       *time.Time
+			lastSynced       time.Time
+			mappingValidFrom *time.Time
 		)
 		if err := rows.Scan(
-			&repoID, &incidentID, &status, &startedAt, &resolvedAt, &lastSynced,
+			&repoID, &incidentID, &status, &startedAt, &resolvedAt, &lastSynced, &mappingValidFrom,
 		); err != nil {
 			return nil, 0, fmt.Errorf("scan incident: %w", err)
+		}
+		if mappingValidFrom == nil {
+			validFromNullRecovered++
+		} else {
+			validFromSet++
 		}
 		if repoID == nil {
 			skipped++
@@ -378,7 +399,38 @@ func (executor *DORAExecutor) loadIncidents(
 	if err := rows.Err(); err != nil {
 		return nil, 0, fmt.Errorf("iterate incidents: %w", err)
 	}
+	executor.reportValidFromGuard(ctx, organizationID, validFromSet, validFromNullRecovered)
 	return incidents, skipped, nil
+}
+
+// reportValidFromGuard records how many operational_service_repository_mappings
+// rows this call's join matched via a set valid_from versus one recovered
+// only by the NULL-OK guard, and logs a WARN once per query when the guard
+// actually mattered -- the same observability contract
+// IncidentValidFromGuardObserver documents for LoadIncidentsStarted (the
+// daily incident reader), reused here rather than re-invented because it is
+// the same table and the same guard.
+func (executor *DORAExecutor) reportValidFromGuard(
+	ctx context.Context, organizationID string, validFromSet, validFromNullRecovered int,
+) {
+	if validFromNullRecovered > 0 {
+		executor.logger.WarnContext(ctx,
+			"dora: operational_service_repository_mappings rows matched only via NULL valid_from guard",
+			"org_id", organizationID, "count", validFromNullRecovered)
+	}
+	if executor.observer == nil {
+		return
+	}
+	guardObserver, ok := executor.observer.(jobruntime.IncidentValidFromGuardObserver)
+	if !ok {
+		return
+	}
+	if validFromSet > 0 {
+		_ = guardObserver.ObserveIncidentValidFromGuardRows(jobruntime.IncidentValidFromGuardReasonSet, validFromSet)
+	}
+	if validFromNullRecovered > 0 {
+		_ = guardObserver.ObserveIncidentValidFromGuardRows(jobruntime.IncidentValidFromGuardReasonNullRecovered, validFromNullRecovered)
+	}
 }
 
 // writeMetrics ports write_dora_metrics (sinks/clickhouse/dora.py:40) --

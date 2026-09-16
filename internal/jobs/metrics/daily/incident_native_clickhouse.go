@@ -3,6 +3,7 @@ package daily
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -179,6 +180,11 @@ ORDER BY repo_id, incident_id`,
 		return nil, fmt.Errorf("iterate incident rows: %w", err)
 	}
 
+	if nullRecoveredCount > 0 {
+		slog.Default().WarnContext(ctx,
+			"metrics daily: operational_service_repository_mappings rows matched only via NULL valid_from guard",
+			"org_id", organizationID, "count", nullRecoveredCount)
+	}
 	if observer != nil {
 		if setCount > 0 {
 			_ = observer.ObserveIncidentValidFromGuardRows(jobruntime.IncidentValidFromGuardReasonSet, setCount)

@@ -232,6 +232,9 @@ func workgraphBuildPreSteps(
 	if operationalIncidentStepErr != nil {
 		return nil, nil, errWorkerDependencyUnavailable
 	}
+	if guardObserver, ok := observer.(jobruntime.IncidentValidFromGuardObserver); ok {
+		operationalIncidentStep.SetValidFromGuardObserver(guardObserver)
+	}
 
 	// CHAOS-4924: issueIssueEdgesPreStep used to be registered as a POST-step
 	// (it had to run after Python's own bridge-invoked issue-issue stage, to

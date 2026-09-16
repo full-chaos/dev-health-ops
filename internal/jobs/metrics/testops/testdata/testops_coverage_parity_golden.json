@@ -1,0 +1,3 @@
+[
+  {"repo_id": "d29d160a-95fe-5b45-d4c1-fd1f5427b772", "day": "2026-08-25", "line_coverage_pct": 59.01236302332116, "branch_coverage_pct": 53.07480008491968, "lines_total": 14236, "lines_covered": 8401, "coverage_delta_pct": 0.002879356303239433, "uncovered_files_count": 0, "coverage_regression_count": 0, "team_id": null, "service_id": "src", "org_id": "70d529e0-3c06-4597-8480-794fd02328b6"}
+]

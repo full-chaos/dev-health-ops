@@ -196,7 +196,10 @@
     },
     "daily/testops_coverage": {
       "parity": {
-        "status": "unverified"
+        "status": "verified",
+        "ticket": "CHAOS-5794",
+        "sha": "d00f165f4bcbc3f7183d5403c256a38b5b7cde90",
+        "evidence": "internal/jobs/metrics/testops/parity_golden_test.go: TestComputeCoverageMetricMatchesFrozenPythonGolden (testdata/testops_coverage_parity_golden.json)"
       },
       "deployed": {
         "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
@@ -210,7 +213,10 @@
     },
     "daily/testops_pipeline": {
       "parity": {
-        "status": "unverified"
+        "status": "verified",
+        "ticket": "CHAOS-5794",
+        "sha": "d00f165f4bcbc3f7183d5403c256a38b5b7cde90",
+        "evidence": "internal/jobs/metrics/testops/parity_golden_test.go: TestComputePipelineMetricsMatchesFrozenPythonGolden (testdata/testops_pipeline_parity_golden.json)"
       },
       "deployed": {
         "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
@@ -224,7 +230,10 @@
     },
     "daily/testops_risk": {
       "parity": {
-        "status": "unverified"
+        "status": "verified",
+        "ticket": "CHAOS-5794",
+        "sha": "d00f165f4bcbc3f7183d5403c256a38b5b7cde90",
+        "evidence": "internal/jobs/metrics/daily/testops_risk_parity_golden_test.go: TestTestopsRiskComputeMatchesFrozenPythonGolden (testdata/testops_risk_parity_golden.json)"
       },
       "deployed": {
         "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
@@ -238,7 +247,10 @@
     },
     "daily/testops_test": {
       "parity": {
-        "status": "unverified"
+        "status": "verified",
+        "ticket": "CHAOS-5794",
+        "sha": "d00f165f4bcbc3f7183d5403c256a38b5b7cde90",
+        "evidence": "internal/jobs/metrics/testops/parity_golden_test.go: TestComputeTestMetricsMatchesFrozenPythonGolden (testdata/testops_test_parity_golden.json)"
       },
       "deployed": {
         "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",

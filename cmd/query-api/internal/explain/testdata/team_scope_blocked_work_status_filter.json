@@ -1,0 +1,31 @@
+{
+  "metric": "blocked_work",
+  "label": "Blocked Work",
+  "unit": "hours",
+  "value": 12.0,
+  "delta_pct": 50.0,
+  "drivers": [
+    {
+      "id": "team-ops",
+      "label": "Team Ops",
+      "value": 12.0,
+      "delta_pct": 50.0,
+      "evidence_link": "/api/v1/drilldown/prs?metric=blocked_work&scope_type=team&scope_id=team-ops",
+      "display_name": "Team Ops"
+    }
+  ],
+  "contributors": [
+    {
+      "id": "team-ops",
+      "label": "Team Ops",
+      "value": 12.0,
+      "delta_pct": 0.0,
+      "evidence_link": "/api/v1/drilldown/prs?metric=blocked_work&scope_type=team&scope_id=team-ops",
+      "display_name": "Team Ops"
+    }
+  ],
+  "drilldown_links": {
+    "prs": "/api/v1/drilldown/prs?metric=blocked_work",
+    "issues": "/api/v1/drilldown/issues?metric=blocked_work"
+  }
+}

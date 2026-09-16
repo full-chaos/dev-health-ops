@@ -205,3 +205,122 @@ func TestScopeFilterForMetricRepoUsesRealOrgID(t *testing.T) {
 		t.Fatalf("resolveRepoID org_id binding = %v, want org-real (Python's own explain.py bug passes \"\")", v)
 	}
 }
+
+// TestFetchMetricContributorsUsesMetricAggregator pins the class ruling
+// fix: contributor ranking uses the metric's OWN aggregator, never a
+// hardcoded avg -- Python's own fetch_metric_contributors
+// (api/queries/explain.py) hardcodes avg() regardless of the metric,
+// while this route's own headline read (fetch_metric_value/
+// fetchMetricValue) already keys off the metric's configured aggregator.
+func TestFetchMetricContributorsUsesMetricAggregator(t *testing.T) {
+	client := &queryCapturingClient{rows: [][]any{}}
+	reader, err := NewReader(client)
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	start := time.Date(2024, 3, 1, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2024, 3, 15, 0, 0, 0, 0, time.UTC)
+
+	if _, err := reader.fetchMetricContributors(context.Background(), "work_item_metrics_daily", "items_completed", "team_id", "sum", start, end, "", nil, "org-1"); err != nil {
+		t.Fatalf("fetchMetricContributors: %v", err)
+	}
+	if !strings.Contains(client.lastQuery, "sum(items_completed) AS value") {
+		t.Fatalf("sum-aggregator metric did not rank by sum():\n%s", client.lastQuery)
+	}
+	if strings.Contains(client.lastQuery, "avg(items_completed)") {
+		t.Fatalf("sum-aggregator metric still ranks by avg():\n%s", client.lastQuery)
+	}
+
+	if _, err := reader.fetchMetricContributors(context.Background(), "repo_metrics_daily", "pr_first_review_p50_hours", "repo_id", "avg", start, end, "", nil, "org-1"); err != nil {
+		t.Fatalf("fetchMetricContributors: %v", err)
+	}
+	if !strings.Contains(client.lastQuery, "avg(pr_first_review_p50_hours) AS value") {
+		t.Fatalf("avg-aggregator metric did not rank by avg():\n%s", client.lastQuery)
+	}
+}
+
+// TestFetchMetricDriverDeltaUsesMetricAggregator is
+// TestFetchMetricContributorsUsesMetricAggregator's own copy for
+// fetchMetricDriverDelta's current/previous CTE pair -- both must use the
+// metric's own aggregator, not just one of the two.
+func TestFetchMetricDriverDeltaUsesMetricAggregator(t *testing.T) {
+	client := &queryCapturingClient{rows: [][]any{}}
+	reader, err := NewReader(client)
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	start := time.Date(2024, 3, 1, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2024, 3, 15, 0, 0, 0, 0, time.UTC)
+	compareStart := time.Date(2024, 2, 15, 0, 0, 0, 0, time.UTC)
+	compareEnd := time.Date(2024, 3, 1, 0, 0, 0, 0, time.UTC)
+
+	if _, err := reader.fetchMetricDriverDelta(context.Background(), "work_item_metrics_daily", "items_completed", "team_id", "sum", start, end, compareStart, compareEnd, "", nil, "org-1"); err != nil {
+		t.Fatalf("fetchMetricDriverDelta: %v", err)
+	}
+	if got := strings.Count(client.lastQuery, "sum(items_completed) AS value"); got != 2 {
+		t.Fatalf("expected both current/previous CTEs to rank by sum(), found %d occurrences:\n%s", got, client.lastQuery)
+	}
+	if strings.Contains(client.lastQuery, "avg(items_completed)") {
+		t.Fatalf("sum-aggregator metric still ranks by avg() somewhere:\n%s", client.lastQuery)
+	}
+}
+
+// TestMetricStatusFilterSQL pins metricStatusFilterSQL's own two shapes:
+// empty for a metric with no StatusFilter, and a plain equality clause
+// for one that has one (blocked_work's "blocked").
+func TestMetricStatusFilterSQL(t *testing.T) {
+	if got := metricStatusFilterSQL(""); got != "" {
+		t.Fatalf("metricStatusFilterSQL(\"\") = %q, want empty", got)
+	}
+	if got, want := metricStatusFilterSQL("blocked"), " AND status = 'blocked'"; got != want {
+		t.Fatalf("metricStatusFilterSQL(\"blocked\") = %q, want %q", got, want)
+	}
+}
+
+// multiQueryCapturingClient is queryCapturingClient's own copy that keeps
+// every query BuildExplainResponse issues across one call, not just the
+// last one -- needed here because a single request issues four separate
+// reads (current value, previous value, drivers, contributors) that must
+// ALL carry blocked_work's status filter.
+type multiQueryCapturingClient struct {
+	rows    [][]any
+	queries []string
+}
+
+func (c *multiQueryCapturingClient) Query(_ context.Context, query string, _ []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+	c.queries = append(c.queries, query)
+	return &fixtureRowScanner{rows: c.rows}, nil
+}
+
+// TestBuildExplainResponseBlockedWorkAppliesStatusFilterEverywhere pins
+// that blocked_work's status filter reaches every one of the metric's
+// reads (the headline's current AND previous windows, the driver-delta
+// read, the contributor read) -- not just the headline, matching the
+// class ruling (a) placement (same subquery WHERE, same nesting depth as
+// org_id) at every one of those call sites.
+func TestBuildExplainResponseBlockedWorkAppliesStatusFilterEverywhere(t *testing.T) {
+	client := &multiQueryCapturingClient{rows: [][]any{}}
+	reader, err := NewReader(client)
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	if _, err := BuildExplainResponse(context.Background(), reader, "org-acme", Params{
+		Metric:       "blocked_work",
+		StartDay:     day(2024, 4, 1),
+		EndDay:       day(2024, 4, 15),
+		CompareStart: day(2024, 3, 18),
+		CompareEnd:   day(2024, 4, 1),
+		ScopeLevel:   "org",
+	}); err != nil {
+		t.Fatalf("BuildExplainResponse: %v", err)
+	}
+	if len(client.queries) != 4 {
+		t.Fatalf("expected 4 queries (value current, value previous, drivers, contributors), got %d:\n%v", len(client.queries), client.queries)
+	}
+	for _, query := range client.queries {
+		if !strings.Contains(query, "status = 'blocked'") {
+			t.Fatalf("query missing blocked_work's status filter:\n%s", query)
+		}
+		assertSameDepth(t, query, "status = 'blocked'", "org_id = {org_id:String}")
+	}
+}

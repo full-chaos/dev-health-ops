@@ -31,6 +31,20 @@ func scopeClauseTeam(teamIDs []string) (filterSQL string, bindings []dhclickhous
 	}
 }
 
+// metricStatusFilterSQL returns the WHERE-clause fragment restricting a
+// metric's read to its own config.StatusFilter status ("" when the metric
+// carries none). Appended to scopeFilterSQL so it lands inside
+// metricFromClause's own dedup subquery, at the SAME nesting depth as
+// org_id and any team/repo scope filter. status is a fixed metricConfigs
+// value, never caller input, so a literal is safe here the same way the
+// day-window/tenancy literals elsewhere in this package are.
+func metricStatusFilterSQL(status string) string {
+	if status == "" {
+		return ""
+	}
+	return fmt.Sprintf(" AND status = '%s'", status)
+}
+
 // scopeFilterForMetric ports scope_filter_for_metric (api/services/
 // filtering.py:129-147).
 //
@@ -93,6 +107,7 @@ func BuildExplainResponse(ctx context.Context, reader *Reader, orgID string, par
 	if err != nil {
 		return nil, err
 	}
+	scopeFilterSQL += metricStatusFilterSQL(config.StatusFilter)
 
 	currentRaw, err := reader.fetchMetricValue(ctx, config.Table, config.Column, config.Aggregator, params.StartDay, params.EndDay, scopeFilterSQL, scopeBindings, orgID)
 	if err != nil {
@@ -106,11 +121,11 @@ func BuildExplainResponse(ctx context.Context, reader *Reader, orgID string, par
 	previousValue := safeFloat(previousRaw)
 	pctChange := safeFloat(deltaPct(currentValue, previousValue))
 
-	drivers, err := reader.fetchMetricDriverDelta(ctx, config.Table, config.Column, config.GroupBy, params.StartDay, params.EndDay, params.CompareStart, params.CompareEnd, scopeFilterSQL, scopeBindings, orgID)
+	drivers, err := reader.fetchMetricDriverDelta(ctx, config.Table, config.Column, config.GroupBy, config.Aggregator, params.StartDay, params.EndDay, params.CompareStart, params.CompareEnd, scopeFilterSQL, scopeBindings, orgID)
 	if err != nil {
 		return nil, err
 	}
-	contributors, err := reader.fetchMetricContributors(ctx, config.Table, config.Column, config.GroupBy, params.StartDay, params.EndDay, scopeFilterSQL, scopeBindings, orgID)
+	contributors, err := reader.fetchMetricContributors(ctx, config.Table, config.Column, config.GroupBy, config.Aggregator, params.StartDay, params.EndDay, scopeFilterSQL, scopeBindings, orgID)
 	if err != nil {
 		return nil, err
 	}

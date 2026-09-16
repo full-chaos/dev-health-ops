@@ -282,3 +282,133 @@ func TestGoldenRepoScopeReviewLatency(t *testing.T) {
 		t.Fatalf("response mismatch\n got:  %s\nwant: %s", gotJSON, wantJSON)
 	}
 }
+
+// TestGoldenSumAggregatorMetricRanksBySum replays
+// testdata/repo_scope_deploy_freq_sum_ranking.json: metric="deploy_freq"
+// (repo scope, sum aggregator), scope.level="org" (no repo/team filter
+// applied). It pins the ranking-aggregator fix at the VALUE level: the
+// driver/contributor "value" fixtures below are not arbitrary -- each is
+// independently computed here, in this comment, from a stated set of raw
+// per-day deployments_count contributions a real fetchMetricContributors/
+// fetchMetricDriverDelta call would have summed:
+//
+//   - "repo-a": raw per-day values [3, 4, 5, 2, 1] -> sum = 15, avg = 3.0.
+//     The fixture uses 15.0 (sum) -- what fetchMetricContributors/
+//     fetchMetricDriverDelta now ask ClickHouse for, matching
+//     deploy_freq's own config.Aggregator="sum" and its headline read
+//     (fetchMetricValue already keyed off the same aggregator before this
+//     change). Python's own fetch_metric_contributors/
+//     fetch_metric_driver_delta hardcode avg() regardless of the metric,
+//     so the SAME raw rows would have ranked repo-a at 3.0 there --
+//     understating a repo that shipped 15 deploys as if it shipped 3.
+//   - the UUID-shaped id "44444444-4444-4444-4444-444444444444": raw
+//     per-day values [9, 7] -> sum = 16, avg = 8.0. The fixture uses 16.0
+//     (sum) for the same reason.
+//
+// The headline value/delta_pct (30.0/50.0) and the driver delta_pct
+// figures (20.0/-5.0) are not under this ruling (fetchMetricValue already
+// used config.Aggregator, and delta_pct is a SQL-side CASE this test
+// treats as opaque, same as every other golden in this file) -- picked
+// for readability only.
+func TestGoldenSumAggregatorMetricRanksBySum(t *testing.T) {
+	dispatch := &explainQueryDispatch{
+		t:               t,
+		valueCurrent:    30.0,
+		valuePrevious:   20.0,
+		currentStartDay: "2024-05-01",
+		displayNameRows: [][]any{{"repo-a", "webapp"}},
+		driverRows: [][]any{
+			{"repo-a", 15.0, 20.0},
+			{"44444444-4444-4444-4444-444444444444", 16.0, -5.0},
+		},
+		contributorRows: [][]any{
+			{"repo-a", 15.0},
+			{"44444444-4444-4444-4444-444444444444", 16.0},
+		},
+	}
+	client := fakeQueryClient{t: t, handler: dispatch.handle}
+	reader, err := NewReader(client)
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	got, err := BuildExplainResponse(context.Background(), reader, "org-acme", Params{
+		Metric:       "deploy_freq",
+		StartDay:     day(2024, 5, 1),
+		EndDay:       day(2024, 5, 15),
+		CompareStart: day(2024, 4, 17),
+		CompareEnd:   day(2024, 5, 1),
+		ScopeLevel:   "org",
+	})
+	if err != nil {
+		t.Fatalf("BuildExplainResponse: %v", err)
+	}
+	want := loadGolden(t, "repo_scope_deploy_freq_sum_ranking.json")
+	if gotJSON, wantJSON := mustMarshal(t, got), mustMarshal(t, want); gotJSON != wantJSON {
+		t.Fatalf("response mismatch\n got:  %s\nwant: %s", gotJSON, wantJSON)
+	}
+}
+
+// TestGoldenBlockedWorkSumsOnlyBlockedStatus replays
+// testdata/team_scope_blocked_work_status_filter.json: metric="blocked_work"
+// (team scope, sum aggregator), scope.level="team", scope.ids=["team-ops"].
+// It pins the status-filter fix at the VALUE level: team-ops's
+// work_item_state_durations_daily rows for the current window, by status,
+// are stated here and independently summed in this comment, never copied
+// from a Go run:
+//
+//	blocked:     [4, 3, 5]  -> sum 12
+//	in_progress: [2, 2]     -> sum 4
+//	done:        [1]        -> sum 1
+//	-----------------------------------
+//	blocked-only sum:            12  (this fixture's value, current window)
+//	every-status sum:            17  (what Python's own fetch_metric_value/
+//	                                  fetch_metric_contributors/
+//	                                  fetch_metric_driver_delta would have
+//	                                  summed instead -- none of the three
+//	                                  carries a status predicate)
+//
+// The headline value (12.0), the driver value (12.0) and the contributor
+// value (12.0) all agree because this fixture uses ONE team across all
+// three reads, so the same blocked-only total applies to the headline,
+// the one driver row and the one contributor row alike -- a real
+// blocked_work response would rarely show all three equal, but doing so
+// here keeps the arithmetic in one place. The previous window's
+// blocked-only total is taken as 8.0 (not decomposed by status; only the
+// CURRENT window's per-status split matters for this test), giving
+// delta_pct = (12-8)/8*100 = 50.0.
+func TestGoldenBlockedWorkSumsOnlyBlockedStatus(t *testing.T) {
+	dispatch := &explainQueryDispatch{
+		t:               t,
+		valueCurrent:    12.0,
+		valuePrevious:   8.0,
+		currentStartDay: "2024-06-01",
+		displayNameRows: [][]any{{"team-ops", "Team Ops"}},
+		driverRows: [][]any{
+			{"team-ops", 12.0, 50.0},
+		},
+		contributorRows: [][]any{
+			{"team-ops", 12.0},
+		},
+	}
+	client := fakeQueryClient{t: t, handler: dispatch.handle}
+	reader, err := NewReader(client)
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	got, err := BuildExplainResponse(context.Background(), reader, "org-acme", Params{
+		Metric:       "blocked_work",
+		StartDay:     day(2024, 6, 1),
+		EndDay:       day(2024, 6, 15),
+		CompareStart: day(2024, 5, 18),
+		CompareEnd:   day(2024, 6, 1),
+		ScopeLevel:   "team",
+		ScopeIDs:     []string{"team-ops"},
+	})
+	if err != nil {
+		t.Fatalf("BuildExplainResponse: %v", err)
+	}
+	want := loadGolden(t, "team_scope_blocked_work_status_filter.json")
+	if gotJSON, wantJSON := mustMarshal(t, got), mustMarshal(t, want); gotJSON != wantJSON {
+		t.Fatalf("response mismatch\n got:  %s\nwant: %s", gotJSON, wantJSON)
+	}
+}

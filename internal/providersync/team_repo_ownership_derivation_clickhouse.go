@@ -629,19 +629,15 @@ func writeTeamRepoOwnershipRows(
 			// is_primary=0, NEVER 1: the read path
 			// (providers/teams.py::load_team_repo_ownership_map) orders
 			// "ORDER BY is_primary DESC, specificity DESC" -- is_primary is
-			// checked BEFORE specificity, so an is_primary=1 inferred row
-			// would always outrank a real is_primary=0 direct GitHub grant
-			// (team_autoimport_github.py writes every row is_primary=0),
-			// silently overriding authoritative ownership with a weaker
-			// inferred signal. codex adversarial review, 2026-08-28,
-			// confirmed high-severity finding. teamRepoOwnershipInferredSpecificity's
-			// low value is what keeps this row losing to a direct row when
-			// both are is_primary=0; when this is the ONLY row for a repo,
-			// is_primary=0 does not stop it from being read -- there is no
-			// competing row to lose to.
+			// checked BEFORE specificity, so an is_primary=1 row would
+			// always outrank every other source regardless of specificity,
+			// which is exactly the dimension teamRepoOwnershipPrecedence
+			// governs. When this is the ONLY row for a repo, is_primary=0
+			// does not stop it from being read -- there is no competing row
+			// to lose to.
 			uint8(0),
 			row.Specificity,
-			int32(0),
+			teamRepoOwnershipPrecedence[teamRepoOwnershipSourceKindInferred].Priority,
 			now,
 			nil,
 			now,

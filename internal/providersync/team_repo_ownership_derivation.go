@@ -214,13 +214,11 @@ type TeamRepoOwnershipIssuePRLink struct {
 }
 
 // DerivedTeamRepoOwnershipRow is one team_repo_ownership row this producer
-// would write. Source is always "inferred" (CHAOS-4365 item 1b ruling:
-// reuse the existing, previously-unused enum value rather than add a new
-// one). Specificity is deliberately LOWER than a hypothetical direct
-// GitHub-team-derived row (never built in this PR -- "PR B", a separate
-// ticket) would carry, so a future direct signal can outrank this one via
-// the existing specificity/priority ownership-precedence read path,
-// without this producer needing to know that signal exists.
+// would write. Source is always "inferred" (reuse of an existing enum
+// value rather than a dedicated one). Specificity and priority come from
+// teamRepoOwnershipPrecedence below, the one place this producer and
+// github_team_catalog.go's provider_access writer agree on how the two
+// signals rank against each other.
 type DerivedTeamRepoOwnershipRow struct {
 	TeamID      string
 	RepoID      string
@@ -236,11 +234,39 @@ type DerivedTeamRepoOwnershipRow struct {
 	ResolutionArm string
 }
 
-// teamRepoOwnershipInferredSpecificity is deliberately lower than every
-// existing writer's specificity in this schema (provider_access rows use
-// BASE_SPECIFICITY=100 upward, migration 051's default is 0) so a future
-// direct signal always outranks an inferred one at the same priority tier.
-const teamRepoOwnershipInferredSpecificity = 10
+// teamRepoOwnershipSourceKind names a class of signal that writes
+// team_repo_ownership, keying teamRepoOwnershipPrecedence below.
+type teamRepoOwnershipSourceKind int
+
+const (
+	teamRepoOwnershipSourceKindProviderAccess teamRepoOwnershipSourceKind = iota
+	teamRepoOwnershipSourceKindInferred
+)
+
+// teamRepoOwnershipRank is one source kind's specificity and priority
+// values for a team_repo_ownership row.
+type teamRepoOwnershipRank struct {
+	Specificity uint16
+	Priority    int32
+}
+
+// teamRepoOwnershipPrecedence is the one place a team_repo_ownership row's
+// specificity and priority values are defined per source kind: this
+// producer's inferred rows and github_team_catalog.go's provider_access
+// rows both read from it, so the two writers cannot drift out of agreement
+// about which one outranks the other. Every reader that picks a single
+// owner for a repo orders specificity highest-first, so the engineering
+// team an inference names as doing the work outranks a repository access
+// grant -- a provider_access row records who may reach a repo, not who is
+// responsible for it. Priority stays ordered the way this package's other
+// candidate ranking (teamattribution.RankDerivationCandidates) already
+// treats it, lowest value wins a tie, so a provider_access row can only
+// ever win a team_repo_ownership tie by specificity itself tying, which
+// these two values never do.
+var teamRepoOwnershipPrecedence = map[teamRepoOwnershipSourceKind]teamRepoOwnershipRank{
+	teamRepoOwnershipSourceKindProviderAccess: {Specificity: 100, Priority: 300},
+	teamRepoOwnershipSourceKindInferred:       {Specificity: 150, Priority: 0},
+}
 
 // TeamRepoOwnershipResolutionArm* are the values deriveTeamRepoOwnership
 // tags each DerivedTeamRepoOwnershipRow.ResolutionArm with (CHAOS-4458 part
@@ -418,7 +444,7 @@ func deriveTeamRepoOwnership(
 		rows = append(rows, DerivedTeamRepoOwnershipRow{
 			TeamID:        teamID,
 			RepoID:        repoID,
-			Specificity:   teamRepoOwnershipInferredSpecificity,
+			Specificity:   teamRepoOwnershipPrecedence[teamRepoOwnershipSourceKindInferred].Specificity,
 			ResolutionArm: repoArm[repoID],
 		})
 	}

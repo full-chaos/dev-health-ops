@@ -57,6 +57,10 @@ const (
 	// RESTDeadByDesignStatus -- chris's word, on record, that this route is
 	// staying Python. See RESTDeadByDesign.
 	RESTDeadByDesignStatus RESTEndpointStatus = "dead-by-design"
+	// RESTProven -- RESTPorted, AND an admissible go-api-rest-prove receipt
+	// exists for this route at the candidate build ApplyRESTProof was given.
+	// See restproven.go.
+	RESTProven RESTEndpointStatus = "proven"
 )
 
 // RESTRoute is one route mechanically parsed from main.py: one (method,
@@ -83,8 +87,14 @@ type RESTEndpointRow struct {
 	Method    string
 	Path      string
 	Status    RESTEndpointStatus
-	GoHandler string // set only for RESTPorted rows
+	GoHandler string // set only for RESTPorted/RESTProven rows
 	Note      string // dead-by-design citation, set only for that status
+	// Proven is DERIVED, never asserted: the id of an admissible
+	// go-api-rest-prove receipt for this row, or goapiproof-equivalent
+	// NoProof. Empty (not NoProof) until ApplyRESTProof runs -- LoadRESTEndpoints
+	// itself never sets it, matching OperationRow.Proven's own "read live,
+	// never invented" discipline. See restproven.go.
+	Proven string
 }
 
 // RESTDeadByDesign is CURATED: the only hand-maintained input to this
@@ -382,7 +392,13 @@ func LoadRESTEndpoints(mainPyPath, queryAPIDir string) ([]RESTEndpointRow, error
 func RESTEndpointCounts(rows []RESTEndpointRow) (ported, pythonOnly, deadByDesign int) {
 	for _, r := range rows {
 		switch r.Status {
-		case RESTPorted:
+		case RESTPorted, RESTProven:
+			// RESTProven is RESTPorted plus an admissible receipt --
+			// tallied as ported here so this function's total
+			// (ported+pythonOnly+deadByDesign) always equals len(rows)
+			// regardless of whether ApplyRESTProof has run. The per-row
+			// Status column still renders "proven" distinctly; only this
+			// summary bucket treats the two as one.
 			ported++
 		case RESTPythonOnly:
 			pythonOnly++

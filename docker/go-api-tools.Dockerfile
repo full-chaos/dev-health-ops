@@ -55,6 +55,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # clear diff.
 COPY cmd/go-api-routing ./cmd/go-api-routing
 COPY cmd/go-api-prove ./cmd/go-api-prove
+COPY cmd/go-api-rest-prove ./cmd/go-api-rest-prove
 COPY cmd/mint-envelope ./cmd/mint-envelope
 COPY cmd/mint-edge-token ./cmd/mint-edge-token
 COPY cmd/query-api ./cmd/query-api
@@ -67,6 +68,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     for command in \
         go-api-routing \
         go-api-prove \
+        go-api-rest-prove \
         mint-envelope \
         mint-edge-token; do \
       GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build \
@@ -101,7 +103,7 @@ ARG COMMIT="unknown"
 ARG BUILD_TIME="1970-01-01T00:00:00Z"
 
 LABEL org.opencontainers.image.title="Dev Health Go-API tools" \
-      org.opencontainers.image.description="go-api-routing and go-api-prove operator binaries, mint-envelope and mint-edge-token (go-api-prove's local envelope and edge-token signing helpers), plus the documents dump and operation catalog they need, for the Go-API rollout's tools pod" \
+      org.opencontainers.image.description="go-api-routing, go-api-prove and go-api-rest-prove operator binaries, mint-envelope and mint-edge-token (go-api-prove's/go-api-rest-prove's local envelope and edge-token signing helpers), plus the documents dump and operation catalog they need, for the Go-API rollout's tools pod" \
       org.opencontainers.image.source="https://github.com/full-chaos/dev-health-ops" \
       org.opencontainers.image.version=${VERSION} \
       org.opencontainers.image.revision=${COMMIT} \
@@ -116,6 +118,13 @@ WORKDIR /app/go-api
 
 COPY --from=build /out/go-api-routing /usr/local/bin/go-api-routing
 COPY --from=build /out/go-api-prove /usr/local/bin/go-api-prove
+# go-api-rest-prove is go-api-prove's REST sibling: it proves a ported
+# /api/v1/* route by calling the Python api service and query-api
+# directly, in cluster, using the SAME two minting helpers below --
+# see internal/goapiproof/mintexec.go's own doc comment for why its
+# -*-bearer-exec flags name one of these two binaries by NAME, never
+# by a path this image (or an operator) could otherwise vary.
+COPY --from=build /out/go-api-rest-prove /usr/local/bin/go-api-rest-prove
 # The -proof-bearer-exec helper for go-api-prove (internal/envelopemint's
 # package doc has the design): mints the envelope LOCALLY from the same
 # Ed25519 signing key the api pod's environment holds

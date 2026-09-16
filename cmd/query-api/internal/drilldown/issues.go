@@ -46,9 +46,10 @@ type IssueParams struct {
 // serializes it with no "Z"/offset suffix -- confirmed live via a
 // DrilldownResponse construction with a naive datetime, not assumed.
 // Python is the declared baseline defect for this field pair too; Go's
-// RFC 3339 form is canonical. The existing declaration for the `pr` field
-// family does not name started_at/completed_at -- flagged in this PR's
-// RISK-NOTES so a sibling declaration can be filed for them.
+// RFC 3339 form is canonical. A sibling declaration for started_at/
+// completed_at, matching the shape of the `pr` field family's own
+// declaration, lives in internal/goapiproof/restcorpus.go's
+// drilldownIssuesParity.
 type IssueItem struct {
 	WorkItemID     string     `json:"work_item_id"`
 	Provider       string     `json:"provider"`

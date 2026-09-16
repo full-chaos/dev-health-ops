@@ -66,6 +66,21 @@ type RESTReceipt struct {
 	// an observation that already satisfies EdgeBuildPresent -- there is
 	// no REST equivalent of Receipt's RouteEdge/EdgeBuildAbsent fallback.
 	BuildBinding string
+
+	// BoundIDs names every id (restidbind.go's RESTIDBinding.Producer ->
+	// the resolved value) this request's Query/Path were bound to before
+	// either leg was sent, e.g. {"repo_id": "3fae..."}. NOT a database
+	// column -- go_api_rest_proof_run carries no bound_ids column, and
+	// alembic 0134 is fixed schema this ticket does not migrate: the same
+	// "no column, exists purely for operator visibility" precedent
+	// Receipt.Variant's own doc comment already establishes for a
+	// per-request value RequestIdentity already digests (the bound id is
+	// part of the resolved Query WriteREST's caller folds into
+	// RequestIdentity). Ids are not secrets -- unlike a bearer token, this
+	// is safe to carry on the struct and in the JSON report
+	// (cmd/go-api-rest-prove's own outcome.BoundIDs) even though it is
+	// never written to the row.
+	BoundIDs map[string]string
 }
 
 // WriteREST records one REST receipt. A single INSERT, not two statements

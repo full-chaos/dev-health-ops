@@ -584,7 +584,10 @@
     },
     "workgraph/workgraph.build": {
       "parity": {
-        "status": "unverified"
+        "status": "verified",
+        "ticket": "CHAOS-5801",
+        "sha": "cb78f7b67ea4cab335ce7559b7f35c3e16d6226e",
+        "evidence": "every one of the build's 12 native pre-steps has a frozen-Python-golden or live-Python-golden test: stale_pr_dependency_issue_edges_cleanup -\u003e internal/jobs/workgraph/edges/stale_dependency_edges_integration_test.go::TestDeleteStalePRDependencyIssueEdgesAgainstLiveClickHouse; issue_pr_links -\u003e internal/jobs/workgraph/issueprlinks/golden_full_test.go::TestDeriveMatchesFrozenPythonGoldenExhaustively; issue_pr_edges_fast_path and issue_pr_edges_text_parse -\u003e internal/jobs/workgraph/issuepredges/golden_test.go::TestDeriveFastPathAndTextParseEdgesMatchFrozenPythonGolden; issue_commit_edges -\u003e internal/jobs/workgraph/issuecommitedges/golden_test.go::TestDeriveMatchesFrozenPythonGolden; issue_pr_edges_heuristic -\u003e internal/jobs/workgraph/issuepredges/heuristic_golden_test.go::TestDeriveHeuristicEdgesMatchesFrozenPythonGolden; pr_commit_links and pr_commit_edges -\u003e internal/jobs/workgraph/prcommit/golden_test.go::TestDeriveAndBuildFastPathEdgesMatchFrozenPythonGolden; commit_file_edges -\u003e internal/jobs/workgraph/issuecommitedges/commit_file_edges_count_integration_test.go::TestCountCommitFileEdgesMatchesFrozenPythonGolden (new: seeds git_commit_stats and reproduces the frozen readback of the deleted _count_commit_file_edges query for the org-scoped, foreign-org and unscoped calls); flag_guards_edges -\u003e internal/jobs/workgraph/operationaledges/incidents_golden_integration_test.go::TestBuildOperationalEdgesMatchSyntheticGolden; operational_incident_edges -\u003e internal/jobs/workgraph/operationaledges/incidents_golden_integration_test.go::TestBuildOperationalIncidentEdgesMatchesOrg70d529e0Golden; issue_issue_edges -\u003e internal/jobs/workgraph/edges/canonical_golden_test.go::TestDerivationReproducesTheFrozenGolden"
       },
       "deployed": {
         "revision": "39e25d3665128976ebc79bd6b8f76e5efbe9806c",

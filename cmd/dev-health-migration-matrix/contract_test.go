@@ -72,12 +72,19 @@ func TestCheckFailsWhenTheDocIsEditedByHand(t *testing.T) {
 	// deployed cell's text legitimately changes when the fleet is rebuilt
 	// (it read "**unknown**" until the Compose COMMIT build-arg landed,
 	// and a real sha after), so a test anchored on it would fail
-	// for a reason that has nothing to do with tampering. "UNVERIFIED" is
-	// present for as long as any family is unverified, which is the state
-	// this whole section exists to keep visible.
+	// for a reason that has nothing to do with tampering.
+	//
+	// "UNVERIFIED" is present for as long as any family is unverified; once
+	// every family carries real parity evidence there is none left to
+	// soften in that direction, so the fallback tampers a VERIFIED cell's
+	// citation instead -- either edit is a generated cell disagreeing with
+	// its own ledger, which is exactly what the check exists to catch.
 	tampered := replaceFirst(string(raw), "| UNVERIFIED |", "| VERIFIED |")
 	if tampered == string(raw) {
-		t.Fatal("expected the rendered doc to contain an UNVERIFIED parity cell to tamper with")
+		tampered = replaceFirst(string(raw), "| VERIFIED (", "| DIVERGED (")
+	}
+	if tampered == string(raw) {
+		t.Fatal("expected the rendered doc to contain a parity cell to tamper with")
 	}
 	if err := os.WriteFile(docPath, []byte(tampered), 0o644); err != nil {
 		t.Fatalf("write tampered doc: %v", err)

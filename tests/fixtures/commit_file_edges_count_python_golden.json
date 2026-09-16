@@ -1,0 +1,17 @@
+{
+  "org_a": "22222222-2222-4222-8222-222222222222",
+  "org_b": "33333333-3333-4333-8333-333333333333",
+  "seed_rows": [
+    {"org_id": "22222222-2222-4222-8222-222222222222", "repo_id": "c7198fbc-1945-3717-05d8-eb78866b4e79", "commit_hash": "aaa111", "file_path": "src/main.go"},
+    {"org_id": "22222222-2222-4222-8222-222222222222", "repo_id": "c7198fbc-1945-3717-05d8-eb78866b4e79", "commit_hash": "aaa111", "file_path": "src/util.go"},
+    {"org_id": "22222222-2222-4222-8222-222222222222", "repo_id": "c7198fbc-1945-3717-05d8-eb78866b4e79", "commit_hash": "bbb222", "file_path": "src/main.go"},
+    {"org_id": "22222222-2222-4222-8222-222222222222", "repo_id": "c7198fbc-1945-3717-05d8-eb78866b4e79", "commit_hash": "ccc333", "file_path": "README.md"},
+    {"org_id": "33333333-3333-4333-8333-333333333333", "repo_id": "c7198fbc-1945-3717-05d8-eb78866b4e79", "commit_hash": "eee555", "file_path": "src/other.go"},
+    {"org_id": "33333333-3333-4333-8333-333333333333", "repo_id": "c7198fbc-1945-3717-05d8-eb78866b4e79", "commit_hash": "fff666", "file_path": "src/other2.go"}
+  ],
+  "counts": {
+    "org_a": 4,
+    "org_b": 2,
+    "unscoped": 6
+  }
+}

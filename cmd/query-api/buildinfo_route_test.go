@@ -1,12 +1,43 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 )
+
+// newBuildInfoHandler writes its response body through
+// json.NewEncoder(w).Encode(json.RawMessage(body)) rather than a raw
+// w.Write(body): this asserts what that substitution actually does to the
+// bytes on the wire -- the encoded form is the same marshalled body with
+// exactly one trailing newline appended, never a re-marshal of the struct
+// that could diverge from it.
+func TestBuildInfoResponseWireBytesAreTheMarshalledBodyPlusNewline(t *testing.T) {
+	info := version.Current("query-api")
+	body, err := json.Marshal(buildInfoResponse{
+		Service:   info.Service,
+		Version:   info.Version,
+		Commit:    info.Commit,
+		BuildTime: info.BuildTime,
+		GoVersion: info.GoVersion,
+		Modified:  info.Modified,
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal(buildInfoResponse): %v", err)
+	}
+
+	var wire bytes.Buffer
+	if err := json.NewEncoder(&wire).Encode(json.RawMessage(body)); err != nil {
+		t.Fatalf("json.NewEncoder.Encode(json.RawMessage): %v", err)
+	}
+	if wire.String() != string(body)+"\n" {
+		t.Fatalf("wire body = %q, want the marshalled body %q plus a trailing newline", wire.String(), body)
+	}
+}
 
 func mountedPaths(t *testing.T, mux *http.ServeMux, path string) bool {
 	t.Helper()

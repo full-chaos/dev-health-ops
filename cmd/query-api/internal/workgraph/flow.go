@@ -87,6 +87,10 @@ func ResolveFlow(ctx context.Context, client QueryClient, orgID string, filters 
 
 	inflow := map[model.WorkGraphNodeType]int{}
 	outflow := map[model.WorkGraphNodeType]int{}
+	// seen is built alongside inflow/outflow, from the same st/tt values, so
+	// the node-type set is available without a later range over either map --
+	// a map that a zero-row result leaves empty is never ranged over.
+	seen := map[model.WorkGraphNodeType]struct{}{}
 	for rows.Next() {
 		var sourceType, targetType string
 		var cnt uint64
@@ -103,18 +107,13 @@ func ResolveFlow(ctx context.Context, client QueryClient, orgID string, filters 
 		}
 		outflow[st] += int(cnt)
 		inflow[tt] += int(cnt)
+		seen[st] = struct{}{}
+		seen[tt] = struct{}{}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("workgraph: flow rows: %w", err)
 	}
 
-	seen := map[model.WorkGraphNodeType]struct{}{}
-	for nt := range inflow {
-		seen[nt] = struct{}{}
-	}
-	for nt := range outflow {
-		seen[nt] = struct{}{}
-	}
 	flowRows := make([]model.WorkGraphFlowRow, 0, len(seen))
 	for nt := range seen {
 		in, out := inflow[nt], outflow[nt]

@@ -125,6 +125,39 @@ func TestNewRegistryHandler_RejectsNonGET(t *testing.T) {
 	}
 }
 
+// newRegistryHandler writes its response body through
+// json.NewEncoder(w).Encode(json.RawMessage(body)) rather than a raw
+// w.Write(body). This asserts what that substitution actually puts on the
+// wire: the same bytes newRegistryHandler marshalled at construction, plus
+// exactly one trailing newline the encoder appends -- never a re-marshal
+// that could diverge from the constructed body.
+func TestNewRegistryHandler_WireBodyIsTheMarshalledResponsePlusNewline(t *testing.T) {
+	registered := map[string]string{
+		"featureFlags": "digest-feature-flags",
+		"reviewEdges":  "digest-review-edges",
+	}
+	handler := newRegistryHandler("sha256:test-digest", registered)
+
+	operations := make([]registryOperation, 0, len(registered))
+	for _, operation := range sortedOperationNames(registered) {
+		operations = append(operations, registryOperation{
+			Operation:      operation,
+			DocumentDigest: registered[operation],
+		})
+	}
+	want, err := json.Marshal(registryResponse{SchemaDigest: "sha256:test-digest", Operations: operations})
+	if err != nil {
+		t.Fatalf("json.Marshal(registryResponse): %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	handler(rec, httptest.NewRequest(http.MethodGet, "/registry", nil))
+
+	if rec.Body.String() != string(want)+"\n" {
+		t.Fatalf("wire body = %q, want the marshalled response %q plus a trailing newline", rec.Body.String(), want)
+	}
+}
+
 func TestNewRegistryHandler_EmptyRegistrationSetIsAnEmptyList(t *testing.T) {
 	// Not an error and not a null: the CLI distinguishes "reachable, serves
 	// nothing" (refuse preflight 3, naming the operations) from "unreachable"

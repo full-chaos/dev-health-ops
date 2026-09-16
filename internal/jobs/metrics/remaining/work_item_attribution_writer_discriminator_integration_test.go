@@ -100,13 +100,13 @@ func optimizeAttributionTable(t *testing.T, ctx context.Context, conn driver.Con
 
 // TestCrossWriterCollisionSurvivorNamesItsProducer is the collision case the
 // two producers can genuinely reach: both resolve the same
-// (org, repo, work_item, team, source) key and stamp the same millisecond,
-// so the engine's version comparison is a tie and the survivor is whichever
-// part the merge happens to keep. Which row wins is not what this test
-// pins -- it accepts either. What it pins is that the survivor says WHO
-// wrote it: without that, a divergence between the two producers is
-// undiagnosable after the merge, because the two rows are byte-identical in
-// every column an operator can read.
+// (org, repo, work_item, team, source) key and stamp the same millisecond.
+// The daily family's fixed rank wins that tie deterministically (see
+// workitemcontract.AttributionVersionFold), so the survivor is always the
+// daily row -- this test also pins that it names WHO wrote it: without that,
+// a divergence between the two producers is undiagnosable after the merge,
+// because the two rows are byte-identical in every other column an operator
+// can read.
 func TestCrossWriterCollisionSurvivorNamesItsProducer(t *testing.T) {
 	ctx := context.Background()
 	conn := workItemAttributionMigratedClickHouse(t, ctx)
@@ -138,14 +138,11 @@ func TestCrossWriterCollisionSurvivorNamesItsProducer(t *testing.T) {
 			"share a full sorting key and must collapse. Rows: %+v", len(probes), probes)
 	}
 	survivor := probes[0]
-	switch {
-	case survivor.writer == WorkItemAttributionWriterBackstop && survivor.runID == backstopRun:
-	case survivor.writer == WorkItemAttributionWriterDaily && survivor.runID == dailyRun:
-	default:
-		t.Fatalf("surviving row names writer=%q run_id=%q -- want one of the two runs that "+
-			"actually wrote it (backstop=%q, daily=%q). A row whose producer is not "+
-			"recoverable makes a cross-writer divergence undiagnosable. Row: %+v",
-			survivor.writer, survivor.runID, backstopRun, dailyRun, survivor)
+	if survivor.writer != WorkItemAttributionWriterDaily || survivor.runID != dailyRun {
+		t.Fatalf("surviving row names writer=%q run_id=%q, want writer=%q run_id=%q -- the "+
+			"daily family's fixed rank must win an exact computed_at tie regardless of which "+
+			"producer the server saw last. Row: %+v",
+			survivor.writer, survivor.runID, WorkItemAttributionWriterDaily, dailyRun, survivor)
 	}
 }
 
@@ -201,16 +198,17 @@ func TestCrossWriterDedupIsIndependentOfArrivalOrder(t *testing.T) {
 	}
 }
 
-// TestConcurrentProducersLeaveTwoPrimaryRowsAttributable is the reader-visible
-// harm. Two producers resolving the same work item to DIFFERENT teams under
-// different sources at the same millisecond do not collide on the sorting
-// key, so both rows stay resident, and every reader's
-// `is_primary = 1 AND (work_item_id, computed_at) IN (... max(computed_at))`
-// fence returns BOTH -- the join downstream fans the work item across two
-// teams. This test does not claim the duplicate is gone; it pins that each
-// of the two rows names the run that produced it, which is what turns an
-// unexplainable double-count into a traceable one.
-func TestConcurrentProducersLeaveTwoPrimaryRowsAttributable(t *testing.T) {
+// TestConcurrentProducersRankBreaksThePrimaryFenceTieToo is the reader-visible
+// half of the producer rank. Two producers resolving the same work item to
+// DIFFERENT teams under different sources at the same millisecond do not
+// collide on the ClickHouse sorting key, so both rows stay resident -- but
+// every reader's `is_primary = 1 AND (work_item_id, computed_at) IN
+// (... max(computed_at))` fence groups by work_item_id alone, one level
+// coarser than the sorting key, and that fence's own version comparison is
+// the SAME folded computed_at the engine uses. The daily family's rank wins
+// there too: the fence surfaces only its row, not the backstop's, exactly as
+// it would if the two rows had shared a sorting key.
+func TestConcurrentProducersRankBreaksThePrimaryFenceTieToo(t *testing.T) {
 	ctx := context.Background()
 	conn := workItemAttributionMigratedClickHouse(t, ctx)
 	writer, err := NewWorkItemAttributionClickHouseWriter(conn)
@@ -258,17 +256,16 @@ ORDER BY source`, orgID, orgID)
 	}
 
 	want := map[string]string{
-		"repo_ownership": WorkItemAttributionWriterBackstop + "/" + backstopRun,
-		"native_team":    WorkItemAttributionWriterDaily + "/" + dailyRun,
+		"native_team": WorkItemAttributionWriterDaily + "/" + dailyRun,
 	}
 	if len(producers) != len(want) {
-		t.Fatalf("primary fence returned %d rows (%+v), want both producers' rows -- this is "+
-			"the double-count two concurrent writers produce", len(producers), producers)
+		t.Fatalf("primary fence returned %d rows (%+v), want exactly the daily row %+v -- the "+
+			"daily family's rank must win the fence's own max(computed_at) tie the same way it "+
+			"wins the sorting-key tie", len(producers), producers, want)
 	}
 	for source, expected := range want {
 		if producers[source] != expected {
-			t.Fatalf("primary fence row source=%s names producer %q, want %q -- each row in a "+
-				"cross-writer double-count must identify the run that wrote it",
+			t.Fatalf("primary fence row source=%s names producer %q, want %q",
 				source, producers[source], expected)
 		}
 	}

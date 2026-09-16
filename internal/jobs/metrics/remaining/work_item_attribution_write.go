@@ -68,7 +68,9 @@ func (producer WorkItemAttributionProducer) Validate() error {
 // work_item_team_attributions column precision (githubTeamAttributionStampPrecision,
 // internal/providersync/github_work_item_derived_surfaces.go) -- both writers
 // target the same ReplacingMergeTree(computed_at) table, so a mismatched
-// truncation would make the two writers' versions non-comparable.
+// truncation would make the two writers' versions non-comparable. It is also
+// the unit workitemcontract.AttributionVersionFold folds each writer's rank
+// into, for the same reason.
 const workItemAttributionStampPrecision = time.Millisecond
 
 // WorkItemAttributionRow is one work_item_team_attributions candidate row --
@@ -175,7 +177,11 @@ func NewWorkItemAttributionClickHouseWriter(conn workItemAttributionWriterConn) 
 // matches the sync-time deriver's own INSERT
 // (internal/providersync/github_work_item_derived_effects_clickhouse.go)
 // exactly, so the two writers are byte-for-byte interchangeable at the
-// storage layer.
+// storage layer. The stored computed_at carries producer.Writer's fixed rank
+// folded in (workitemcontract.AttributionVersionFold), so a row this
+// producer writes and a colliding row the sync-time deriver or the other
+// remaining-family producer writes at the identical computed_at resolve to
+// the same survivor regardless of which one the server saw last.
 func (w *WorkItemAttributionClickHouseWriter) WriteAttributions(
 	ctx context.Context, producer WorkItemAttributionProducer, rows []WorkItemAttributionRow,
 ) (int, error) {
@@ -221,7 +227,7 @@ is_primary, confidence, evidence, computed_at, writer, run_id)`)
 			// is_primary is a 0/1 flag (IsPrimary is set to exactly 0 or 1),
 			// never anything else -- so it keeps a direct conversion.
 			uint8(row.IsPrimary), row.Confidence, row.Evidence,
-			row.ComputedAt.UTC().Truncate(workItemAttributionStampPrecision),
+			workitemcontract.AttributionVersionFold(row.ComputedAt, producer.Writer, workItemAttributionStampPrecision),
 			producer.Writer, producer.RunID,
 		); err != nil {
 			return 0, fmt.Errorf("append work_item_team_attributions row: %w", err)

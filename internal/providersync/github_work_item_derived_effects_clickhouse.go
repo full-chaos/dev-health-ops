@@ -484,7 +484,11 @@ func (sink GitHubWorkItemTeamAttributionsClickHouseEffects) WriteGitHubWorkItemE
 	// merge is untraceable without them. Neither column is in the sorting key:
 	// putting one there would stop two producers' rows for a single key from
 	// ever collapsing, and every reader's (work_item_id, max(computed_at))
-	// fence would start returning one row per producer.
+	// fence would start returning one row per producer. The stored computed_at
+	// itself carries this writer's fixed rank folded in
+	// (workitemcontract.AttributionVersionFold), so a collision with one of the
+	// other two producers at an identical computed_at resolves to the same
+	// survivor regardless of arrival order.
 	batch, err := sink.Conn.PrepareBatch(ctx, `INSERT INTO work_item_team_attributions
 (org_id, repo_id, work_item_id, provider, team_id, team_name, source,
 is_primary, confidence, evidence, computed_at, writer, run_id)`)
@@ -521,7 +525,9 @@ is_primary, confidence, evidence, computed_at, writer, run_id)`)
 			identity.OrgID, githubWorkItemDerivedRepoID(row.RepoID), row.WorkItemID,
 			row.Provider, row.TeamID, row.TeamName, row.Source,
 			uint8(row.IsPrimary), row.Confidence, row.Evidence,
-			githubWorkItemDerivedMillis(row.ComputedAt),
+			workitemcontract.AttributionVersionFold(
+				row.ComputedAt, workitemcontract.AttributionWriterSync, githubTeamAttributionStampPrecision,
+			),
 			workitemcontract.AttributionWriterSync, identity.Generation,
 		); err != nil {
 			return err
@@ -976,7 +982,9 @@ func compareGitHubWorkItemTeamAttributionVersion(
 		return EffectConflict
 	}
 	if verdict, decided := githubWorkItemDerivedVersionOrder(
-		actual.ComputedAt, githubWorkItemDerivedMillis(expected.ComputedAt),
+		actual.ComputedAt, workitemcontract.AttributionVersionFold(
+			expected.ComputedAt, workitemcontract.AttributionWriterSync, githubTeamAttributionStampPrecision,
+		),
 	); decided {
 		return verdict
 	}

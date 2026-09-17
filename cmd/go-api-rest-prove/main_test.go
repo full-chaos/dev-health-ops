@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -635,7 +636,7 @@ func TestDoREST_SendsQueryAndBodyAndReadsBuildHeader(t *testing.T) {
 	defer server.Close()
 
 	leg, err := doREST(context.Background(), http.DefaultClient, server.URL, http.MethodPost, "/p",
-		url.Values{"q": {"1"}}, map[string]any{"x": "y"}, staticCredentialForTest())
+		url.Values{"q": {"1"}}, map[string]any{"x": "y"}, staticCredentialForTest(), 0)
 	if err != nil {
 		t.Fatalf("doREST: %v", err)
 	}
@@ -1027,5 +1028,587 @@ func TestIDBinding_EndToEnd(t *testing.T) {
 	}
 	if gotCandidatePath != gotBaselinePath {
 		t.Fatalf("candidate and baseline legs used different resolved paths: %q vs %q -- the same id must be used on both legs", gotCandidatePath, gotBaselinePath)
+	}
+}
+
+// hijackAndCloseServer returns an httptest server whose handler accepts
+// the connection and closes it immediately, without writing any HTTP
+// response at all -- the "drops the connection" transport failure, as
+// opposed to a slow response the client's own timeout catches. The
+// client's own Do() call surfaces this as an io/EOF-shaped error, never
+// context.DeadlineExceeded, so it classifies to a DIFFERENT
+// TransportFailure class than a stall does -- see
+// TestDoREST_ConnectionDropClassifiesAsTransportError.
+func hijackAndCloseServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hijacker, ok := w.(http.Hijacker)
+		if !ok {
+			t.Fatal("response writer does not support hijacking")
+		}
+		conn, _, err := hijacker.Hijack()
+		if err != nil {
+			t.Fatalf("hijack: %v", err)
+		}
+		_ = conn.Close()
+	}))
+	return server
+}
+
+// stallingServer returns an httptest server whose handler blocks until
+// the request's own context is done, then writes nothing more (the
+// client has already given up by then) -- simulating a leg that is
+// genuinely still working, just past this run's own budget for it,
+// exactly the shape the production abort line (a baseline GET against
+// the Python api) reproduced: a slow response, not a dead one.
+func stallingServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+}
+
+// TestDoREST_TimeoutClassifiesAsTransportTimeout pins doREST's own
+// contract for a leg that never answers within its budget: the error is
+// a goapiproof.TransportFailure (not a bare wrapped string a caller would
+// have to pattern-match), classed TransportTimeout specifically -- the
+// class legTransportOutcome reads to choose *TimedOut over
+// *TransportError.
+func TestDoREST_TimeoutClassifiesAsTransportTimeout(t *testing.T) {
+	server := stallingServer(t)
+	defer server.Close()
+
+	_, err := doREST(context.Background(), http.DefaultClient, server.URL, http.MethodGet, "/p", nil, nil, nil, 30*time.Millisecond)
+	if err == nil {
+		t.Fatal("doREST: want an error from a leg that never answers, got nil")
+	}
+	var failure goapiproof.TransportFailure
+	if !errors.As(err, &failure) {
+		t.Fatalf("doREST error = %v (%T), want a goapiproof.TransportFailure", err, err)
+	}
+	if failure.Class != goapiproof.TransportTimeout {
+		t.Fatalf("failure.Class = %q, want %q", failure.Class, goapiproof.TransportTimeout)
+	}
+}
+
+// TestDoREST_ConnectionDropClassifiesAsTransportError pins the sibling
+// case: a connection that closes with NO response is a transport
+// failure too, but never classified TransportTimeout (this call's own
+// timeout is generous -- 5s -- so a false "timeout" classification here
+// would mean the class came from the wrong signal).
+func TestDoREST_ConnectionDropClassifiesAsTransportError(t *testing.T) {
+	server := hijackAndCloseServer(t)
+	defer server.Close()
+
+	_, err := doREST(context.Background(), http.DefaultClient, server.URL, http.MethodGet, "/p", nil, nil, nil, 5*time.Second)
+	if err == nil {
+		t.Fatal("doREST: want an error from a dropped connection, got nil")
+	}
+	var failure goapiproof.TransportFailure
+	if !errors.As(err, &failure) {
+		t.Fatalf("doREST error = %v (%T), want a goapiproof.TransportFailure", err, err)
+	}
+	if failure.Class == goapiproof.TransportTimeout {
+		t.Fatalf("failure.Class = %q, a dropped connection under a 5s budget must never classify as a timeout", failure.Class)
+	}
+}
+
+// TestProveOneRESTRequest_CandidateLegTimeoutIsRefusedPerCase is this
+// ticket's central proof: a candidate leg that stalls past its budget
+// must become a named, per-case refusal -- Admitted=false,
+// Refusal=RESTRefusalCandidateLegTimedOut -- and NOT a Go error. Before
+// the fix, doREST's own error propagated straight out of
+// proveOneRESTRequest, which is exactly what killed the whole run and
+// left the report empty; asserting err == nil here is the fix, not a
+// convenience -- run()'s own loop only stops when this returns a non-nil
+// error, so a nil error here is what "later cases still run" reduces to
+// at this call's own boundary.
+func TestProveOneRESTRequest_CandidateLegTimeoutIsRefusedPerCase(t *testing.T) {
+	candidate := stallingServer(t)
+	defer candidate.Close()
+	baseline := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer baseline.Close()
+
+	f := flags{queryAPIURL: candidate.URL, pythonAPIURL: baseline.URL, org: "org-1", recordedBy: "chris", reviewEvidence: "test", timeout: 30 * time.Millisecond}
+	spec := goapiproof.RESTEndpointSpec{Method: http.MethodGet, Path: "/api/v1/home"}
+	request := goapiproof.RESTRequest{Name: "home", WantCandidateStatus: 200, WantBaselineStatus: 200, BodyMode: goapiproof.RESTBodyModeJSON}
+	writer := &fakeReceiptWriter{}
+
+	out, err := proveOneRESTRequest(context.Background(), http.DefaultClient, f, "REST:GET:/api/v1/home", spec, request,
+		staticCredentialForTest(), staticCredentialForTest(), "build123", goapiproof.AuthContext{}, time.Now().UTC(), writer, nil, false, nil)
+	if err != nil {
+		t.Fatalf("proveOneRESTRequest: %v -- a leg timeout must be a refusal, never a tool error", err)
+	}
+	if out.Admitted {
+		t.Fatalf("out = %+v, want a refusal (a leg that never answered is not a match)", out)
+	}
+	if out.Refusal != goapiproof.RESTRefusalCandidateLegTimedOut {
+		t.Fatalf("out.Refusal = %q, want %q", out.Refusal, goapiproof.RESTRefusalCandidateLegTimedOut)
+	}
+	if out.Detail == "" {
+		t.Fatal("out.Detail is empty, want the transport failure's own detail")
+	}
+	if len(writer.receipts) != 0 {
+		t.Fatalf("wrote a receipt for a leg that never answered: %v", writer.receipts)
+	}
+}
+
+// TestProveOneRESTRequest_BaselineLegConnectionDropIsRefusedPerCase is
+// the sibling of the timeout test, for the OTHER leg and the OTHER
+// failure class: a baseline (Python) connection that drops mid-request
+// is refused by name too, distinctly from the candidate-leg reasons.
+func TestProveOneRESTRequest_BaselineLegConnectionDropIsRefusedPerCase(t *testing.T) {
+	candidate := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("x-dev-health-build", "build123")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer candidate.Close()
+	baseline := hijackAndCloseServer(t)
+	defer baseline.Close()
+
+	f := flags{queryAPIURL: candidate.URL, pythonAPIURL: baseline.URL, org: "org-1", recordedBy: "chris", reviewEvidence: "test", timeout: 5 * time.Second}
+	spec := goapiproof.RESTEndpointSpec{Method: http.MethodGet, Path: "/api/v1/home"}
+	request := goapiproof.RESTRequest{Name: "home", WantCandidateStatus: 200, WantBaselineStatus: 200, BodyMode: goapiproof.RESTBodyModeJSON}
+	writer := &fakeReceiptWriter{}
+
+	out, err := proveOneRESTRequest(context.Background(), http.DefaultClient, f, "REST:GET:/api/v1/home", spec, request,
+		staticCredentialForTest(), staticCredentialForTest(), "build123", goapiproof.AuthContext{}, time.Now().UTC(), writer, nil, false, nil)
+	if err != nil {
+		t.Fatalf("proveOneRESTRequest: %v -- a dropped baseline leg must be a refusal, never a tool error", err)
+	}
+	if out.Admitted {
+		t.Fatalf("out = %+v, want a refusal", out)
+	}
+	if out.Refusal != goapiproof.RESTRefusalBaselineLegTransportError {
+		t.Fatalf("out.Refusal = %q, want %q", out.Refusal, goapiproof.RESTRefusalBaselineLegTransportError)
+	}
+	if len(writer.receipts) != 0 {
+		t.Fatalf("wrote a receipt for a leg that never answered: %v", writer.receipts)
+	}
+}
+
+// TestProveOneRESTRequest_LaterRequestStillRunsAfterALegFailure proves
+// the loop-level claim directly: a leg failure on one request does not
+// poison the next one. run()'s own loop calls proveOneRESTRequest once
+// per planned request with independent state; this reproduces that at
+// the unit level -- one call that hits a leg timeout, then a second,
+// wholly independent call that matches cleanly -- and requires BOTH to
+// come back exactly as they would standing alone.
+func TestProveOneRESTRequest_LaterRequestStillRunsAfterALegFailure(t *testing.T) {
+	stalledCandidate := stallingServer(t)
+	defer stalledCandidate.Close()
+	firstBaseline := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer firstBaseline.Close()
+
+	okCandidate := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("x-dev-health-build", "build123")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"a":1}`))
+	}))
+	defer okCandidate.Close()
+	okBaseline := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"a":1}`))
+	}))
+	defer okBaseline.Close()
+
+	spec := goapiproof.RESTEndpointSpec{Method: http.MethodGet, Path: "/api/v1/home"}
+	request := goapiproof.RESTRequest{Name: "home", WantCandidateStatus: 200, WantBaselineStatus: 200, BodyMode: goapiproof.RESTBodyModeJSON}
+	writer := &fakeReceiptWriter{}
+
+	firstFlags := flags{queryAPIURL: stalledCandidate.URL, pythonAPIURL: firstBaseline.URL, org: "org-1", recordedBy: "chris", reviewEvidence: "test", timeout: 30 * time.Millisecond}
+	first, err := proveOneRESTRequest(context.Background(), http.DefaultClient, firstFlags, "REST:GET:/api/v1/home", spec, request,
+		staticCredentialForTest(), staticCredentialForTest(), "build123", goapiproof.AuthContext{}, time.Now().UTC(), writer, nil, false, nil)
+	if err != nil {
+		t.Fatalf("first proveOneRESTRequest: %v, want a refusal not an error", err)
+	}
+	if first.Admitted || first.Refusal != goapiproof.RESTRefusalCandidateLegTimedOut {
+		t.Fatalf("first = %+v, want an unadmitted candidate-leg-timeout refusal", first)
+	}
+
+	secondFlags := flags{queryAPIURL: okCandidate.URL, pythonAPIURL: okBaseline.URL, org: "org-1", recordedBy: "chris", reviewEvidence: "test", timeout: 5 * time.Second}
+	second, err := proveOneRESTRequest(context.Background(), http.DefaultClient, secondFlags, "REST:GET:/api/v1/home", spec, request,
+		staticCredentialForTest(), staticCredentialForTest(), "build123", goapiproof.AuthContext{}, time.Now().UTC(), writer, nil, false, nil)
+	if err != nil {
+		t.Fatalf("second proveOneRESTRequest: %v, want a clean match", err)
+	}
+	if !second.Admitted || second.TerminalState != goapiproof.TerminalStateMatch {
+		t.Fatalf("second = %+v, want an admitted match -- a leg timeout on the FIRST request must not affect the SECOND, independent one", second)
+	}
+	if len(writer.receipts) != 1 {
+		t.Fatalf("wrote %d receipts, want exactly 1 (only the second, admitted request)", len(writer.receipts))
+	}
+}
+
+// TestProveEdgeCredentialOnCandidate_LegTimeoutIsRefusedPerCase proves
+// item 1's "either credential" half: the edge-credential-on-candidate
+// leg is still a CANDIDATE leg (same query-api URL, different
+// credential), so a stall there gets the identical candidate-leg-timeout
+// reason, never a fatal error.
+func TestProveEdgeCredentialOnCandidate_LegTimeoutIsRefusedPerCase(t *testing.T) {
+	candidate := stallingServer(t)
+	defer candidate.Close()
+
+	f := flags{queryAPIURL: candidate.URL, timeout: 30 * time.Millisecond}
+	spec := goapiproof.RESTEndpointSpec{Method: http.MethodGet, Path: "/api/v1/home"}
+	request := goapiproof.RESTRequest{Name: "home", WantCandidateStatus: 200}
+
+	out, err := proveEdgeCredentialOnCandidate(context.Background(), http.DefaultClient, f,
+		"REST:GET:/api/v1/home", spec, request, staticCredentialForTest(), "build123", nil)
+	if err != nil {
+		t.Fatalf("proveEdgeCredentialOnCandidate: %v, want a refusal not an error", err)
+	}
+	if out.Admitted || out.Refusal != goapiproof.RESTRefusalCandidateLegTimedOut {
+		t.Fatalf("out = %+v, want an unadmitted candidate-leg-timeout refusal", out)
+	}
+}
+
+// TestResolveRESTTimeout pins the override rule: a corpus entry's own
+// Timeout wins whenever it is set, the run's -timeout default otherwise
+// -- never the other way, and never a mix of the two.
+func TestResolveRESTTimeout(t *testing.T) {
+	cases := []struct {
+		name       string
+		perRequest time.Duration
+		runDefault time.Duration
+		want       time.Duration
+	}{
+		{"unset entry uses the run default", 0, 5 * time.Second, 5 * time.Second},
+		{"a declared entry overrides the run default", 90 * time.Second, 5 * time.Second, 90 * time.Second},
+		{"both zero stays zero (no deadline)", 0, 0, 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := resolveRESTTimeout(c.perRequest, c.runDefault)
+			if got != c.want {
+				t.Fatalf("resolveRESTTimeout(%v, %v) = %v, want %v", c.perRequest, c.runDefault, got, c.want)
+			}
+		})
+	}
+}
+
+// TestLegFailuresIn_NamesOnlyTheFourTransportReasons proves the
+// exit-code check's own boundary: a leg-transport refusal is named, an
+// ORDINARY refusal (a business-as-usual outcome, e.g. an unresolved id
+// binding) and an admitted match are both left out -- so a normal run
+// full of ordinary refusals never trips the non-zero exit this ticket
+// reserves for an instrument that did not complete cleanly.
+func TestLegFailuresIn_NamesOnlyTheFourTransportReasons(t *testing.T) {
+	outcomes := []outcome{
+		{Operation: "REST:GET:/a", Request: "r1", Refusal: goapiproof.RESTRefusalCandidateLegTimedOut, Detail: "d1"},
+		{Operation: "REST:GET:/b", Request: "r2", Refusal: goapiproof.RESTRefusalBaselineLegTransportError, Detail: "d2"},
+		{Operation: "REST:GET:/c", Request: "r3", Refusal: goapiproof.RESTRefusalIDBindingUnresolved, Detail: "d3"},
+		{Operation: "REST:GET:/d", Request: "r4", Admitted: true, TerminalState: goapiproof.TerminalStateMatch},
+	}
+	got := legFailuresIn(outcomes)
+	if len(got) != 2 {
+		t.Fatalf("legFailuresIn = %v, want exactly 2 entries", got)
+	}
+	for _, want := range []string{"REST:GET:/a/r1", "REST:GET:/b/r2"} {
+		found := false
+		for _, line := range got {
+			if strings.HasPrefix(line, want+": ") {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("legFailuresIn = %v, missing a line for %q", got, want)
+		}
+	}
+}
+
+// TestNotRunKeys_ListsUnattemptedPlannedRequests pins the partial-run
+// bookkeeping: a request nobody attempted is named by its own key, and a
+// request that WAS attempted but whose edge-credential-on-candidate
+// sibling was not (the run stopped between the two) is named by that
+// sibling's own key -- never silently dropped because the base request
+// itself has an entry.
+func TestNotRunKeys_ListsUnattemptedPlannedRequests(t *testing.T) {
+	planned := []plannedRequest{
+		{operation: "REST:GET:/a", request: goapiproof.RESTRequest{Name: "r1"}, spec: goapiproof.RESTEndpointSpec{PublicNoAuth: false}},
+		{operation: "REST:GET:/a", request: goapiproof.RESTRequest{Name: "r2"}, spec: goapiproof.RESTEndpointSpec{PublicNoAuth: true}},
+	}
+	attempted := map[string]bool{
+		"REST:GET:/a/r1": true, // base request ran; its edge-credential sibling did not
+	}
+	got := notRunKeys(planned, attempted)
+	want := []string{"REST:GET:/a/r1 (edge-credential-on-candidate)", "REST:GET:/a/r2"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("notRunKeys = %v, want %v", got, want)
+	}
+}
+
+// TestWriteJSONReport_PartialRunMarksPartialAndListsNotRun proves the
+// report file itself -- not just stdout -- says a run is partial and
+// names what it never reached, in the shape a reader (or a later
+// process) can parse back.
+func TestWriteJSONReport_PartialRunMarksPartialAndListsNotRun(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/report.json"
+	outcomes := []outcome{
+		{Operation: "REST:GET:/a", Request: "r1", Admitted: true, TerminalState: goapiproof.TerminalStateMatch},
+		{Operation: "REST:GET:/b", Request: "r2", Refusal: goapiproof.RESTRefusalCandidateLegTimedOut, Detail: "timed out"},
+	}
+	notRun := []string{"REST:GET:/c/r3"}
+
+	if err := writeJSONReport(path, outcomes, notRun); err != nil {
+		t.Fatalf("writeJSONReport: %v", err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read report: %v", err)
+	}
+	var got jsonReport
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("decode report: %v (%s)", err, raw)
+	}
+	if !got.Partial {
+		t.Fatalf("report.Partial = false, want true (NotRun is non-empty)")
+	}
+	if !slices.Equal(got.NotRun, notRun) {
+		t.Fatalf("report.NotRun = %v, want %v", got.NotRun, notRun)
+	}
+	if len(got.Outcomes) != 2 {
+		t.Fatalf("report has %d outcomes, want 2 -- a partial report must still carry every outcome it DID measure", len(got.Outcomes))
+	}
+}
+
+// TestWriteJSONReport_CompleteRunIsNotPartial is the sibling case: a run
+// that reached the end of its plan writes Partial=false and no NotRun,
+// so "partial" is never true by omission of the check, only by an
+// actual gap.
+func TestWriteJSONReport_CompleteRunIsNotPartial(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/report.json"
+	outcomes := []outcome{{Operation: "REST:GET:/a", Request: "r1", Admitted: true, TerminalState: goapiproof.TerminalStateMatch}}
+
+	if err := writeJSONReport(path, outcomes, nil); err != nil {
+		t.Fatalf("writeJSONReport: %v", err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read report: %v", err)
+	}
+	var got jsonReport
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("decode report: %v (%s)", err, raw)
+	}
+	if got.Partial {
+		t.Fatal("report.Partial = true, want false -- nothing was left unattempted")
+	}
+	if len(got.NotRun) != 0 {
+		t.Fatalf("report.NotRun = %v, want empty", got.NotRun)
+	}
+}
+
+// captureStdout redirects os.Stdout for the duration of fn and returns
+// everything written to it -- runMeasurement prints its per-request
+// lines and its own summary/partial lines with fmt.Println/fmt.Printf,
+// straight to os.Stdout, so this is the only way a test can see them.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stdout = w
+	defer func() { os.Stdout = old }()
+
+	fn()
+
+	_ = w.Close()
+	raw, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("read captured stdout: %v", err)
+	}
+	return string(raw)
+}
+
+// genericRESTStubHandler answers every request with 200, the given
+// build header (candidate only -- pass "" for the baseline stub, which
+// never stamps one), and an empty JSON object body -- good enough
+// admission for a StatusOnly request and a clean "vacuous_empty_legs"
+// structural refusal for a JSON-body one, neither of which is a tool
+// error. stall, when non-nil, names one exact (method, path, raw query)
+// this handler blocks on until the request's own context is done,
+// instead of answering at all -- the "leg that stalls past the timeout"
+// this test drives through the REAL request loop, not a hand-built call.
+type stalledRequest struct {
+	method, path, rawQuery string
+}
+
+func genericRESTStubHandler(t *testing.T, build string, stall *stalledRequest) http.HandlerFunc {
+	t.Helper()
+	return func(w http.ResponseWriter, r *http.Request) {
+		if stall != nil && r.Method == stall.method && r.URL.Path == stall.path && r.URL.RawQuery == stall.rawQuery {
+			<-r.Context().Done()
+			return
+		}
+		if build != "" {
+			w.Header().Set("x-dev-health-build", build)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}
+}
+
+// TestRunMeasurement_BaselineLegTimeoutIsNonFatalReportedAndLaterCaseRuns
+// drives runMeasurement -- the exact loop/report/exit-code logic run()
+// itself calls -- over the REAL, full REST corpus (goapiproof.
+// RESTRunOrder), with one single baseline leg (GET /api/v1/home with no
+// query -- the "home_default_org" entry) stalling past its budget,
+// reproducing the shape of the production abort line this ticket closes
+// (a baseline GET home request hitting the client timeout). It proves,
+// through the real loop rather than a single hand-built call: the
+// process exits non-zero, the summary line reaches stdout, the report
+// file parses and is NOT partial (the loop reached the end of its plan),
+// the stalled case carries the new named refusal, and a case that runs
+// LATER in RESTRunOrder (work-units, the corpus's own last two entries)
+// is present with its own real outcome.
+func TestRunMeasurement_BaselineLegTimeoutIsNonFatalReportedAndLaterCaseRuns(t *testing.T) {
+	const build = "build123"
+	candidate := httptest.NewServer(genericRESTStubHandler(t, build, nil))
+	defer candidate.Close()
+	baseline := httptest.NewServer(genericRESTStubHandler(t, "", &stalledRequest{method: http.MethodGet, path: "/api/v1/home", rawQuery: ""}))
+	defer baseline.Close()
+
+	dir := t.TempDir()
+	reportPath := dir + "/report.json"
+	artifacts, err := goapiproof.NewArtifactStore(dir + "/artifacts")
+	if err != nil {
+		t.Fatalf("NewArtifactStore: %v", err)
+	}
+	f := flags{
+		queryAPIURL: candidate.URL, pythonAPIURL: baseline.URL,
+		org: "org-1", recordedBy: "chris", reviewEvidence: "test",
+		timeout: 50 * time.Millisecond, dryRun: true, reportPath: reportPath,
+	}
+
+	var runErr error
+	stdout := captureStdout(t, func() {
+		runErr = runMeasurement(context.Background(), http.DefaultClient, f,
+			staticCredentialForTest(), staticCredentialForTest(), build, nil, artifacts)
+	})
+
+	if runErr == nil {
+		t.Fatal("runMeasurement: want a non-nil error (non-zero exit) -- this run measured a leg that never answered")
+	}
+	if !strings.Contains(runErr.Error(), goapiproof.RESTRefusalBaselineLegTimedOut) {
+		t.Fatalf("runMeasurement error = %v, want it to name %q", runErr, goapiproof.RESTRefusalBaselineLegTimedOut)
+	}
+	if !strings.Contains(stdout, "attempted=") || !strings.Contains(stdout, "admitted=") {
+		t.Fatalf("stdout = %q, want the summary line (attempted=.../admitted=...)", stdout)
+	}
+
+	raw, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatalf("read report: %v", err)
+	}
+	var report jsonReport
+	if err := json.Unmarshal(raw, &report); err != nil {
+		t.Fatalf("decode report: %v (%s)", err, raw)
+	}
+	if report.Partial {
+		t.Fatalf("report.Partial = true, want false -- the loop reached the end of its plan despite the leg failure (not_run = %v)", report.NotRun)
+	}
+
+	var stalledOutcome, laterOutcome *outcome
+	for i := range report.Outcomes {
+		o := &report.Outcomes[i]
+		if o.Operation == "REST:GET:/api/v1/home" && o.Request == "home_default_org" {
+			stalledOutcome = o
+		}
+		if o.Operation == "REST:GET:/api/v1/work-units" {
+			laterOutcome = o
+		}
+	}
+	if stalledOutcome == nil {
+		t.Fatalf("report has no outcome for REST:GET:/api/v1/home/home_default_org among %d outcomes", len(report.Outcomes))
+	}
+	if stalledOutcome.Admitted || stalledOutcome.Refusal != goapiproof.RESTRefusalBaselineLegTimedOut {
+		t.Fatalf("stalled outcome = %+v, want an unadmitted %q refusal", stalledOutcome, goapiproof.RESTRefusalBaselineLegTimedOut)
+	}
+	if laterOutcome == nil {
+		t.Fatalf("report has no outcome for REST:GET:/api/v1/work-units (runs AFTER home in RESTRunOrder) among %d outcomes -- the loop must not have continued past the stalled case", len(report.Outcomes))
+	}
+}
+
+// TestRunMeasurement_NonTransportErrorMidRunStillWritesAPartialReport is
+// this fix's OTHER claim: item 2 says the report must be written on ANY
+// later error, not only a leg timeout. This makes the artifact directory
+// unwritable AFTER it is created (proveOneRESTRequest's very first call
+// stores a leg body to it, unconditionally, before admission even runs),
+// so the FIRST request in RESTRunOrder fails with a real filesystem
+// error -- the non-transport class this loop still treats as fatal (it
+// stops the loop, same as before this ticket), but the report/summary
+// write this ticket moved to run unconditionally must still happen, and
+// must say the run is partial and name what never ran.
+func TestRunMeasurement_NonTransportErrorMidRunStillWritesAPartialReport(t *testing.T) {
+	const build = "build123"
+	candidate := httptest.NewServer(genericRESTStubHandler(t, build, nil))
+	defer candidate.Close()
+	baseline := httptest.NewServer(genericRESTStubHandler(t, "", nil))
+	defer baseline.Close()
+
+	dir := t.TempDir()
+	reportPath := dir + "/report.json"
+	artifactDir := dir + "/artifacts"
+	artifacts, err := goapiproof.NewArtifactStore(artifactDir)
+	if err != nil {
+		t.Fatalf("NewArtifactStore: %v", err)
+	}
+	// Revoke write access AFTER the directory exists -- Put's own
+	// os.CreateTemp call then fails on the very first leg body this run
+	// tries to store, a real (not simulated) filesystem error.
+	if err := os.Chmod(artifactDir, 0o555); err != nil {
+		t.Fatalf("chmod artifact dir read-only: %v", err)
+	}
+	defer func() { _ = os.Chmod(artifactDir, 0o750) }()
+
+	f := flags{
+		queryAPIURL: candidate.URL, pythonAPIURL: baseline.URL,
+		org: "org-1", recordedBy: "chris", reviewEvidence: "test",
+		timeout: 5 * time.Second, dryRun: true, reportPath: reportPath,
+	}
+
+	var runErr error
+	captureStdout(t, func() {
+		runErr = runMeasurement(context.Background(), http.DefaultClient, f,
+			staticCredentialForTest(), staticCredentialForTest(), build, nil, artifacts)
+	})
+	if runErr == nil {
+		t.Fatal("runMeasurement: want a non-nil error from the unwritable artifact directory")
+	}
+
+	raw, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatalf("read report: %v -- the report must still be written when a NON-transport error stops the loop mid-run", err)
+	}
+	var report jsonReport
+	if err := json.Unmarshal(raw, &report); err != nil {
+		t.Fatalf("decode report: %v (%s)", err, raw)
+	}
+	if !report.Partial {
+		t.Fatal("report.Partial = false, want true -- the run stopped before its plan finished")
+	}
+	if len(report.NotRun) == 0 {
+		t.Fatal("report.NotRun is empty, want the requests this run never reached named by key")
+	}
+	found := false
+	for _, key := range report.NotRun {
+		if strings.HasPrefix(key, "REST:GET:/api/v1/work-units") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("report.NotRun = %v, want it to name a request from LATER in RESTRunOrder (e.g. work-units) that never ran", report.NotRun)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"time"
 )
 
 // This file is the REST sibling of operations.go: a committed, per-route
@@ -60,6 +61,17 @@ type RESTRequest struct {
 	// StatusDivergenceReason for the declared exception.
 	WantCandidateStatus int
 	WantBaselineStatus  int
+
+	// Timeout overrides go-api-rest-prove's own run-wide default
+	// (-timeout) for BOTH legs of this one request. Zero -- the value
+	// every entry that does not set this field carries -- means "use the
+	// run's default"; this field exists so ONE corpus entry with a
+	// legitimately slow baseline can declare its own longer budget
+	// without moving the ceiling every other request in the corpus is
+	// measured against. It can only ever ask for MORE time than the
+	// run's default, never less by a positive value, and nothing reads
+	// it to raise that default itself.
+	Timeout time.Duration
 	// StatusDivergenceReason states why WantCandidateStatus and
 	// WantBaselineStatus are allowed to differ -- a genuine, ACCEPTED
 	// Go-side status-code choice documented at the route's own request
@@ -3376,6 +3388,9 @@ func ValidateRESTCorpus() error {
 			}
 			if err := validateNumericLeaves(req.Parity); err != nil {
 				return fmt.Errorf("goapiproof: REST corpus entry %q request %q: %w", operation, req.Name, err)
+			}
+			if req.Timeout < 0 {
+				return fmt.Errorf("goapiproof: REST corpus entry %q request %q declares a negative Timeout", operation, req.Name)
 			}
 			if (req.DedupListPath == "") != (len(req.DedupKeyFields) == 0) {
 				return fmt.Errorf("goapiproof: REST corpus entry %q request %q sets DedupListPath and DedupKeyFields inconsistently -- both or neither", operation, req.Name)

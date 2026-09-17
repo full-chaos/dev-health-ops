@@ -61,6 +61,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -68,6 +69,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"sort"
 	"strings"
 	"time"
@@ -214,9 +216,27 @@ func buildCredential(header, kind, flagName, rawArgv string) (*goapiproof.Creden
 // see run()'s own call below.
 
 // doREST sends one leg of one corpus request and returns its observation.
-// A transport-level failure (the leg never answered at all) is a hard
-// error, not a refusal: RESTAdmit exists to judge a response that arrived,
-// never the absence of one.
+//
+// A transport-level failure -- the leg never answered at all, whether it
+// timed out or the connection failed some other way -- is returned as a
+// goapiproof.TransportFailure, never a bare wrapped error: RESTAdmit
+// exists to judge a response that arrived, never the absence of one, so
+// the ABSENCE is reported in a shape a caller can classify by name (which
+// leg, which failure class) and turn into a named, per-case refusal
+// instead of having to string-match an error message. See
+// proveOneRESTRequest/proveEdgeCredentialOnCandidate for where that
+// classification happens -- doREST itself does not know which leg
+// (baseline or candidate) it was called for, so it cannot name that part
+// of the refusal itself.
+//
+// timeout bounds THIS call alone, by wrapping ctx -- never client's own
+// Timeout, which go-api-rest-prove's own client leaves unset for exactly
+// this reason: a fixed client-level timeout is a hard ceiling under Go's
+// http.Client (it re-derives its own internal deadline from Timeout
+// regardless of what the passed context already carries), so a per-
+// request timeout LONGER than some other request's own budget would be
+// silently capped back down to it. Zero means "no deadline beyond ctx's
+// own", matching context.WithTimeout's own zero-is-unused convention.
 //
 // credential is nil for a PublicNoAuth route (goapiproof.RESTEndpointSpec.
 // PublicNoAuth) -- the request is then sent with NO Authorization header
@@ -224,7 +244,7 @@ func buildCredential(header, kind, flagName, rawArgv string) (*goapiproof.Creden
 // measuring meta WITH a bearer token would exercise a path real anonymous
 // traffic never takes, and a route that happens to also accept an
 // unrelated valid token is not proof of the public code path.
-func doREST(ctx context.Context, client *http.Client, baseURL, method, path string, query url.Values, body any, credential *goapiproof.Credential) (goapiproof.RESTLeg, error) {
+func doREST(ctx context.Context, client *http.Client, baseURL, method, path string, query url.Values, body any, credential *goapiproof.Credential, timeout time.Duration) (goapiproof.RESTLeg, error) {
 	target := strings.TrimRight(baseURL, "/") + path
 	if len(query) > 0 {
 		target += "?" + query.Encode()
@@ -237,6 +257,12 @@ func doREST(ctx context.Context, client *http.Client, baseURL, method, path stri
 			return goapiproof.RESTLeg{}, fmt.Errorf("encode request body: %w", err)
 		}
 		bodyReader = bytes.NewReader(encoded)
+	}
+
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
 	}
 
 	req, err := http.NewRequestWithContext(ctx, method, target, bodyReader)
@@ -254,14 +280,124 @@ func doREST(ctx context.Context, client *http.Client, baseURL, method, path stri
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return goapiproof.RESTLeg{}, fmt.Errorf("%s %s: %w", method, target, err)
+		return goapiproof.RESTLeg{}, goapiproof.NewTransportFailure(target, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return goapiproof.RESTLeg{}, fmt.Errorf("%s %s: read body: %w", method, target, err)
+		return goapiproof.RESTLeg{}, goapiproof.NewTransportFailure(target, err)
 	}
 	return goapiproof.RESTLeg{StatusCode: resp.StatusCode, Body: raw, Build: resp.Header.Get("x-dev-health-build")}, nil
+}
+
+// resolveRESTTimeout is the per-request timeout a leg actually gets: the
+// corpus entry's OWN declared Timeout when it set one -- a slow but
+// legitimate leg can declare its own longer budget -- else the run's
+// -timeout default.
+func resolveRESTTimeout(perRequest, runDefault time.Duration) time.Duration {
+	if perRequest > 0 {
+		return perRequest
+	}
+	return runDefault
+}
+
+// legTransportOutcome turns a leg's OWN transport failure into the
+// per-case refusal outcome this ticket exists to produce, naming the
+// FAILING LEG and the FAILURE CLASS rather than folding it into an
+// existing reason. ok is false when err is not itself a transport
+// failure -- something other than "the leg never answered" went wrong,
+// which is not this function's claim to make safe, and the caller keeps
+// treating it as a fatal error.
+func legTransportOutcome(operation, requestName, leg string, boundIDs map[string]string, err error) (outcome, bool) {
+	var failure goapiproof.TransportFailure
+	if !errors.As(err, &failure) {
+		return outcome{}, false
+	}
+	timedOut := failure.Class == goapiproof.TransportTimeout
+	var reason string
+	switch {
+	case leg == "candidate" && timedOut:
+		reason = goapiproof.RESTRefusalCandidateLegTimedOut
+	case leg == "candidate":
+		reason = goapiproof.RESTRefusalCandidateLegTransportError
+	case leg == "baseline" && timedOut:
+		reason = goapiproof.RESTRefusalBaselineLegTimedOut
+	default:
+		reason = goapiproof.RESTRefusalBaselineLegTransportError
+	}
+	return outcome{
+		Operation: operation, Request: requestName,
+		Admitted: false,
+		Refusal:  reason,
+		Detail:   err.Error(),
+		BoundIDs: boundIDs,
+	}, true
+}
+
+// isLegTransportRefusal reports whether reason is one of the four leg-
+// transport refusals legTransportOutcome names -- used after a run
+// completes to decide whether the process must exit non-zero even though
+// every case that hit this class was recorded as an ordinary refusal, not
+// a tool error.
+func isLegTransportRefusal(reason string) bool {
+	switch reason {
+	case goapiproof.RESTRefusalCandidateLegTimedOut,
+		goapiproof.RESTRefusalCandidateLegTransportError,
+		goapiproof.RESTRefusalBaselineLegTimedOut,
+		goapiproof.RESTRefusalBaselineLegTransportError:
+		return true
+	}
+	return false
+}
+
+// legFailuresIn names, one line each, every outcome in outcomes whose
+// Refusal is one of the four leg-transport reasons -- run()'s own,
+// isolated answer to "did this run measure a leg that never answered",
+// kept as its own function so that question is testable without driving
+// the whole CLI (credentials, Postgres, a live query-api and python-api)
+// through run() itself.
+func legFailuresIn(outcomes []outcome) []string {
+	var failures []string
+	for _, out := range outcomes {
+		if isLegTransportRefusal(out.Refusal) {
+			failures = append(failures, fmt.Sprintf("%s/%s: %s -- %s", out.Operation, out.Request, out.Refusal, out.Detail))
+		}
+	}
+	sort.Strings(failures)
+	return failures
+}
+
+// plannedRequest is one (operation, request) pair a run intends to
+// attempt, computed before any request is sent -- see run()'s own use of
+// it and notRunKeys below.
+type plannedRequest struct {
+	operation string
+	request   goapiproof.RESTRequest
+	spec      goapiproof.RESTEndpointSpec
+}
+
+// notRunKeys names, by "operation/request" key (and, for a request whose
+// spec is not PublicNoAuth, its own "... (edge-credential-on-candidate)"
+// sibling key too), every entry in planned that attemptedKeys does not
+// mark true -- kept as its own function, isolated from run()'s HTTP and
+// credential plumbing, so "what did a partial run never reach" is
+// checkable directly against a hand-built plan.
+func notRunKeys(planned []plannedRequest, attemptedKeys map[string]bool) []string {
+	var notRun []string
+	for _, p := range planned {
+		key := p.operation + "/" + p.request.Name
+		if !attemptedKeys[key] {
+			notRun = append(notRun, key)
+		}
+		if !p.spec.PublicNoAuth {
+			edgeKey := key + " (edge-credential-on-candidate)"
+			if !attemptedKeys[edgeKey] {
+				notRun = append(notRun, edgeKey)
+			}
+		}
+	}
+	sort.Strings(notRun)
+	return notRun
 }
 
 // restRequestVariables is what RequestIdentity digests for one corpus
@@ -450,7 +586,14 @@ func resultVacuityErrors(result goapiproof.Result) []string {
 }
 
 func run(f flags) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	// signal.NotifyContext gives an operator's Ctrl-C (or a SIGTERM from
+	// the surrounding orchestration) a chance to stop the run between
+	// requests rather than kill the process outright -- see the ctx.Err()
+	// checks in the request loop below. Cheap: this changes nothing for a
+	// run nobody interrupts.
+	sigCtx, stopSignal := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stopSignal()
+	ctx, cancel := context.WithTimeout(sigCtx, 30*time.Minute)
 	defer cancel()
 
 	// Checked FIRST, ahead of every credential/network step below: both
@@ -460,7 +603,8 @@ func run(f flags) error {
 	// incidentally, this ordering is what lets a smoke run from a
 	// directory with no source tree at all prove the coverage check on
 	// its own, before anything network-dependent has a chance to fail
-	// first for an unrelated reason.
+	// first for an unrelated reason. Nothing has been attempted yet at
+	// any of these steps, so there is no report to write if one refuses.
 	var mountedPaths []string
 	if f.queryAPISrc != "" {
 		// OPTIONAL dev-only override: read a REAL query-api checkout live,
@@ -509,7 +653,15 @@ func run(f flags) error {
 		return err
 	}
 
-	client := &http.Client{Timeout: f.timeout}
+	// No client-level Timeout: Go's http.Client re-derives its own
+	// internal deadline from a fixed Timeout regardless of what a
+	// request's own context already carries, so a client-level ceiling
+	// here would silently cap every per-request context.WithTimeout doREST
+	// builds back down to it -- defeating RESTRequest.Timeout's own point
+	// (a slow but legitimate entry declaring a LONGER budget than the
+	// run's default). Every request this run sends is bounded instead by
+	// its own context deadline -- see doREST and resolveRESTTimeout.
+	client := &http.Client{}
 
 	// candidateCredential -- the SAME credential every corpus request's
 	// own candidate leg uses below (doREST's own candidateCredential
@@ -519,7 +671,14 @@ func run(f flags) error {
 	// (buildinfo_route.go's own doc comment), so there is no "proof-
 	// plane" credential distinct from what this binary already mints for
 	// every other request in the run.
-	namedBuild, err := goapiproof.FetchBuildIdentity(ctx, client, f.buildInfoURL, candidateCredential)
+	//
+	// Bounded by the run's own -timeout default, same as every measured
+	// leg -- client carries no Timeout of its own any more (above), so
+	// this read would otherwise wait on ctx's 30-minute run-level bound
+	// alone.
+	buildInfoCtx, cancelBuildInfo := context.WithTimeout(ctx, f.timeout)
+	namedBuild, err := goapiproof.FetchBuildIdentity(buildInfoCtx, client, f.buildInfoURL, candidateCredential)
+	cancelBuildInfo()
 	if err != nil {
 		return fmt.Errorf("read the candidate build from /buildinfo: %w", err)
 	}
@@ -537,11 +696,49 @@ func run(f flags) error {
 		pgPool = pool
 	}
 
+	return runMeasurement(ctx, client, f, candidateCredential, baselineCredential, namedBuild, pgPool, artifacts)
+}
+
+// runMeasurement is run()'s own request loop, report write and exit-code
+// decision, factored out as its own seam: run() itself cannot be driven
+// in a test without a real minted credential (buildCredential execs a
+// FIXED path, /usr/local/bin/mint-envelope or /usr/local/bin/mint-edge-
+// token -- see mintexec.go's own doc comment for why that path can never
+// be a caller-supplied value) and, outside -dry-run, a real Postgres.
+// Every dependency runMeasurement itself needs is already a value or an
+// interface a test can fake -- staticCredentialForTest() (used
+// throughout this file's own tests already), an httptest server pair,
+// and (for -dry-run) a nil receiptWriter -- so the exact loop/report/
+// exit-code logic this ticket rewrote is reachable from a test without
+// reaching into run()'s own CLI wiring at all.
+func runMeasurement(ctx context.Context, client *http.Client, f flags, candidateCredential, baselineCredential *goapiproof.Credential, namedBuild string, pgPool receiptWriter, artifacts *goapiproof.ArtifactStore) error {
 	auth := goapiproof.AuthContext{PrincipalKind: f.principalKind, Audience: f.audience, KeyID: f.keyID}
 	observedAt := time.Now().UTC()
 
+	// planned is built in full BEFORE any request is sent, so a run that
+	// stops partway can still say by NAME what it never got to, not
+	// merely how many it skipped. specErr holds SpecForREST's own error
+	// when planning itself could not proceed -- unreachable in practice
+	// once ValidateRESTCorpus and ValidateRESTIDBindingOrder have already
+	// passed above (every RESTRunOrder entry is checked against
+	// restEndpointSpecs there), kept as a named, reported failure rather
+	// than a panic on the day that stops being true.
+	var planned []plannedRequest
+	var specErr error
+	for _, operation := range goapiproof.RESTRunOrder() {
+		spec, err := goapiproof.SpecForREST(operation)
+		if err != nil {
+			specErr = fmt.Errorf("%s: %w", operation, err)
+			break
+		}
+		for _, request := range spec.Requests {
+			planned = append(planned, plannedRequest{operation: operation, request: request, spec: spec})
+		}
+	}
+
 	var outcomes []outcome
 	attempted, admitted, matched, mismatched := 0, 0, 0, 0
+	attemptedKeys := map[string]bool{}
 
 	// produced accumulates every id an earlier request's OWN Produces
 	// declaration yielded from its baseline (Python) response, keyed by
@@ -552,95 +749,155 @@ func run(f flags) error {
 	// that guarantee.
 	produced := map[string]string{}
 
-	for _, operation := range goapiproof.RESTRunOrder() {
-		spec, err := goapiproof.SpecForREST(operation)
-		if err != nil {
-			return err
+	// runErr is the run-level failure -- distinct from a per-case
+	// refusal, which is never fatal -- that stops the loop early. Once
+	// set, the loop breaks and falls straight through to the summary
+	// line and report write below: EVERY exit from this function, early
+	// or not, reaches that write, which is the fix for the empty-report/
+	// no-summary failure mode this ticket exists to close. This file used
+	// to reach both only after the whole loop returned with no error at
+	// all, so ANY error that stopped the loop early -- not only a leg
+	// timeout -- silently dropped the run's own evidence with it.
+	runErr := specErr
+
+requestLoop:
+	for _, p := range planned {
+		if runErr != nil {
+			break requestLoop
 		}
-		for _, request := range spec.Requests {
+		if ctx.Err() != nil {
+			runErr = fmt.Errorf("run interrupted: %w", ctx.Err())
+			break requestLoop
+		}
+		operation, spec, request := p.operation, p.spec, p.request
+		attempted++
+		attemptedKeys[operation+"/"+request.Name] = true
+
+		resolvedSpec := spec
+		resolvedRequest := request
+		var boundIDs map[string]string
+		if len(request.IDBindings) > 0 {
+			resolvedPath, resolvedQuery, unresolved := goapiproof.ResolveRESTIDBindings(spec.Path, request, produced)
+			if len(unresolved) > 0 {
+				// An entry whose id does not resolve is refused by
+				// name and counts as unproven, never a tool failure
+				// -- neither leg is ever called. Its own edge-
+				// credential-on-candidate sibling is marked attempted
+				// here too, for the identical reason: this is a
+				// deliberate, named skip of BOTH legs for this one
+				// request, never the run stopping before it reached
+				// them -- notRunKeys must not read this the same way
+				// it reads a run that broke off early.
+				out := outcome{
+					Operation: operation, Request: request.Name,
+					Admitted: false,
+					Refusal:  goapiproof.RESTRefusalIDBindingUnresolved,
+					Detail:   fmt.Sprintf("no earlier request in this run produced: %v", unresolved),
+				}
+				outcomes = append(outcomes, out)
+				fmt.Println(out.line())
+				if !spec.PublicNoAuth {
+					attemptedKeys[operation+"/"+request.Name+" (edge-credential-on-candidate)"] = true
+				}
+				continue
+			}
+			resolvedSpec.Path = resolvedPath
+			resolvedRequest.Query = resolvedQuery
+			boundIDs = make(map[string]string, len(request.IDBindings))
+			for _, binding := range request.IDBindings {
+				// Already confirmed present above (unresolved was
+				// empty): the same value ResolveRESTIDBindings just
+				// wrote into resolvedPath/resolvedQuery.
+				boundIDs[binding.Producer] = produced[binding.Producer]
+			}
+		}
+
+		out, err := proveOneRESTRequest(ctx, client, f, operation, resolvedSpec, resolvedRequest, candidateCredential, baselineCredential, namedBuild, auth, observedAt, pgPool, artifacts, f.dryRun, boundIDs)
+		if err != nil {
+			runErr = fmt.Errorf("%s/%s: %w", operation, request.Name, err)
+			break requestLoop
+		}
+		outcomes = append(outcomes, out)
+		fmt.Println(out.line())
+		for name, id := range out.producedIDs {
+			produced[name] = id
+		}
+		if out.Admitted {
+			admitted++
+			switch out.TerminalState {
+			case goapiproof.TerminalStateMatch:
+				matched++
+			case goapiproof.TerminalStateMismatch:
+				mismatched++
+			}
+		}
+
+		// A real user's browser never carries an effective-principal
+		// envelope -- it carries the edge access token
+		// baselineCredential already holds for this request's
+		// baseline (Python) leg above. This third leg sends that SAME
+		// credential straight to query-api, proving THE CANDIDATE
+		// accepts the credential real traffic actually carries, not
+		// only the envelope the ordinary candidate leg above already
+		// exercises. Skipped for a PublicNoAuth route: meta.go's own
+		// "Auth: PUBLIC" contract sends no Authorization header on
+		// either leg, so there is no edge credential to re-send here.
+		if !resolvedSpec.PublicNoAuth {
 			attempted++
-
-			resolvedSpec := spec
-			resolvedRequest := request
-			var boundIDs map[string]string
-			if len(request.IDBindings) > 0 {
-				resolvedPath, resolvedQuery, unresolved := goapiproof.ResolveRESTIDBindings(spec.Path, request, produced)
-				if len(unresolved) > 0 {
-					// An entry whose id does not resolve is refused by
-					// name and counts as unproven, never a tool failure
-					// -- neither leg is ever called.
-					out := outcome{
-						Operation: operation, Request: request.Name,
-						Admitted: false,
-						Refusal:  goapiproof.RESTRefusalIDBindingUnresolved,
-						Detail:   fmt.Sprintf("no earlier request in this run produced: %v", unresolved),
-					}
-					outcomes = append(outcomes, out)
-					fmt.Println(out.line())
-					continue
-				}
-				resolvedSpec.Path = resolvedPath
-				resolvedRequest.Query = resolvedQuery
-				boundIDs = make(map[string]string, len(request.IDBindings))
-				for _, binding := range request.IDBindings {
-					// Already confirmed present above (unresolved was
-					// empty): the same value ResolveRESTIDBindings just
-					// wrote into resolvedPath/resolvedQuery.
-					boundIDs[binding.Producer] = produced[binding.Producer]
-				}
-			}
-
-			out, err := proveOneRESTRequest(ctx, client, f, operation, resolvedSpec, resolvedRequest, candidateCredential, baselineCredential, namedBuild, auth, observedAt, pgPool, artifacts, f.dryRun, boundIDs)
+			attemptedKeys[operation+"/"+request.Name+" (edge-credential-on-candidate)"] = true
+			edgeOut, err := proveEdgeCredentialOnCandidate(ctx, client, f, operation, resolvedSpec, resolvedRequest, baselineCredential, namedBuild, artifacts)
 			if err != nil {
-				return fmt.Errorf("%s/%s: %w", operation, request.Name, err)
+				runErr = fmt.Errorf("%s/%s (edge credential on candidate): %w", operation, request.Name, err)
+				break requestLoop
 			}
-			outcomes = append(outcomes, out)
-			fmt.Println(out.line())
-			for name, id := range out.producedIDs {
-				produced[name] = id
-			}
-			if out.Admitted {
+			outcomes = append(outcomes, edgeOut)
+			fmt.Println(edgeOut.line())
+			if edgeOut.Admitted {
 				admitted++
-				switch out.TerminalState {
-				case goapiproof.TerminalStateMatch:
-					matched++
-				case goapiproof.TerminalStateMismatch:
-					mismatched++
-				}
-			}
-
-			// A real user's browser never carries an effective-principal
-			// envelope -- it carries the edge access token
-			// baselineCredential already holds for this request's
-			// baseline (Python) leg above. This third leg sends that SAME
-			// credential straight to query-api, proving THE CANDIDATE
-			// accepts the credential real traffic actually carries, not
-			// only the envelope the ordinary candidate leg above already
-			// exercises. Skipped for a PublicNoAuth route: meta.go's own
-			// "Auth: PUBLIC" contract sends no Authorization header on
-			// either leg, so there is no edge credential to re-send here.
-			if !resolvedSpec.PublicNoAuth {
-				attempted++
-				edgeOut, err := proveEdgeCredentialOnCandidate(ctx, client, f, operation, resolvedSpec, resolvedRequest, baselineCredential, namedBuild, artifacts)
-				if err != nil {
-					return fmt.Errorf("%s/%s (edge credential on candidate): %w", operation, request.Name, err)
-				}
-				outcomes = append(outcomes, edgeOut)
-				fmt.Println(edgeOut.line())
-				if edgeOut.Admitted {
-					admitted++
-				}
 			}
 		}
 	}
 
+	// notRun names every planned request this run never reached, by
+	// NAME, so a partial run says exactly what it is missing rather than
+	// leaving a reader to infer it from attempted < len(planned). Empty
+	// whenever the loop reached the end of planned with no runErr.
+	notRun := notRunKeys(planned, attemptedKeys)
+
+	// The summary line and the JSON report are written HERE, before
+	// runErr (or any later check below) is ever returned -- the same
+	// "report first, error second" discipline cmd/go-api-prove's own
+	// run() already follows for the GraphQL sibling of this command (see
+	// that file's own comment on emitReport). Nothing below this point
+	// may skip either write.
+	if len(notRun) > 0 {
+		fmt.Printf("partial run: %d request(s) never attempted: %v\n", len(notRun), notRun)
+	}
 	fmt.Printf("attempted=%d admitted=%d match=%d mismatch=%d refused=%d\n",
 		attempted, admitted, matched, mismatched, attempted-admitted)
 
 	if f.reportPath != "" {
-		if err := writeJSONReport(f.reportPath, outcomes); err != nil {
-			return err
+		if writeErr := writeJSONReport(f.reportPath, outcomes, notRun); writeErr != nil {
+			if runErr == nil {
+				runErr = writeErr
+			} else {
+				runErr = fmt.Errorf("%w; additionally, writing the report failed: %v", runErr, writeErr)
+			}
 		}
+	}
+
+	if runErr != nil {
+		return runErr
+	}
+
+	// A leg that never answered is not a tool error (it is already
+	// recorded above as its own named refusal, per case), but a run
+	// containing one must still exit non-zero: it is evidence the
+	// instrument itself did not complete cleanly, distinct from an
+	// ordinary admission refusal, and an operator must not have to read
+	// every line of output to notice one happened.
+	if legFailures := legFailuresIn(outcomes); len(legFailures) > 0 {
+		return fmt.Errorf("this run measured a leg that never answered (fix the deployment, or for a legitimately slow baseline declare a longer RESTRequest.Timeout):\n%s", strings.Join(legFailures, "\n"))
 	}
 
 	var vacuityErrs []string
@@ -656,8 +913,25 @@ func run(f flags) error {
 	return nil
 }
 
-func writeJSONReport(path string, outcomes []outcome) error {
-	encoded, err := json.MarshalIndent(outcomes, "", "  ")
+// jsonReport is -report's own top-level shape: not a bare array of
+// outcomes any more, so a partial run can say it is partial IN the file
+// an operator reads back, not only on stdout.
+type jsonReport struct {
+	Outcomes []outcome `json:"outcomes"`
+	// Partial is true whenever NotRun is non-empty -- named separately
+	// rather than left for a reader to infer from an empty NotRun slice,
+	// the same discipline Summary.Attempted's own doc comment states for
+	// explicit zeroes elsewhere in this package: a fact worth knowing must
+	// never depend on a reader noticing an absence.
+	Partial bool `json:"partial"`
+	// NotRun names, by "operation/request" key, every planned request
+	// this run never reached -- empty on a run that completed its whole
+	// plan, whatever its outcomes.
+	NotRun []string `json:"not_run,omitempty"`
+}
+
+func writeJSONReport(path string, outcomes []outcome, notRun []string) error {
+	encoded, err := json.MarshalIndent(jsonReport{Outcomes: outcomes, Partial: len(notRun) > 0, NotRun: notRun}, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode report: %w", err)
 	}
@@ -688,12 +962,19 @@ func proveOneRESTRequest(
 	if spec.PublicNoAuth {
 		candidateCredential, baselineCredential = nil, nil
 	}
-	candidateLeg, err := doREST(ctx, client, f.queryAPIURL, spec.Method, spec.Path, request.Query, request.Body, candidateCredential)
+	timeout := resolveRESTTimeout(request.Timeout, f.timeout)
+	candidateLeg, err := doREST(ctx, client, f.queryAPIURL, spec.Method, spec.Path, request.Query, request.Body, candidateCredential, timeout)
 	if err != nil {
+		if out, ok := legTransportOutcome(operation, request.Name, "candidate", boundIDs, err); ok {
+			return out, nil
+		}
 		return outcome{}, fmt.Errorf("candidate leg: %w", err)
 	}
-	baselineLeg, err := doREST(ctx, client, f.pythonAPIURL, spec.Method, spec.Path, request.Query, request.Body, baselineCredential)
+	baselineLeg, err := doREST(ctx, client, f.pythonAPIURL, spec.Method, spec.Path, request.Query, request.Body, baselineCredential, timeout)
 	if err != nil {
+		if out, ok := legTransportOutcome(operation, request.Name, "baseline", boundIDs, err); ok {
+			return out, nil
+		}
 		return outcome{}, fmt.Errorf("baseline leg: %w", err)
 	}
 
@@ -939,12 +1220,17 @@ func proveEdgeCredentialOnCandidate(
 	namedBuild string,
 	artifacts *goapiproof.ArtifactStore,
 ) (outcome, error) {
-	leg, err := doREST(ctx, client, f.queryAPIURL, spec.Method, spec.Path, request.Query, request.Body, edgeCredential)
+	requestName := request.Name + " (edge-credential-on-candidate)"
+	timeout := resolveRESTTimeout(request.Timeout, f.timeout)
+	leg, err := doREST(ctx, client, f.queryAPIURL, spec.Method, spec.Path, request.Query, request.Body, edgeCredential, timeout)
 	if err != nil {
+		if out, ok := legTransportOutcome(operation, requestName, "candidate", nil, err); ok {
+			return out, nil
+		}
 		return outcome{}, fmt.Errorf("candidate leg (edge credential): %w", err)
 	}
 
-	out := outcome{Operation: operation, Request: request.Name + " (edge-credential-on-candidate)"}
+	out := outcome{Operation: operation, Request: requestName}
 	if artifacts != nil {
 		ref, refErr := artifacts.Put(leg.Body)
 		if refErr != nil {

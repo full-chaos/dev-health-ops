@@ -122,6 +122,22 @@ const (
 	RESTRefusalBodyNotJSON      = "rest_response_body_did_not_decode_as_json"
 )
 
+// REST leg transport refusal reasons: a leg that never produced a
+// response at all -- it timed out, or failed at the transport level some
+// other way -- is refused by one of these four, never by one of the
+// admission reasons above (those all judge a response that DID arrive).
+// Each name states both the FAILING LEG and the FAILURE CLASS, so a
+// report line naming one is never folded into, or mistaken for, a
+// different cause. See TransportFailure/TransportTimeout for the class
+// vocabulary a caller classifies its own error against before choosing
+// one of these four.
+const (
+	RESTRefusalCandidateLegTimedOut       = "rest_candidate_leg_timed_out"
+	RESTRefusalCandidateLegTransportError = "rest_candidate_leg_transport_error"
+	RESTRefusalBaselineLegTimedOut        = "rest_baseline_leg_timed_out"
+	RESTRefusalBaselineLegTransportError  = "rest_baseline_leg_transport_error"
+)
+
 // RESTAdmission is RESTAdmit's verdict.
 type RESTAdmission struct {
 	Admitted bool

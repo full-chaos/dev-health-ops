@@ -377,6 +377,17 @@ func NoRedirectClient(base *http.Client) *http.Client {
 // transportError builds the only error this package emits for a failed
 // request.
 func transportError(rawURL string, err error) error {
+	return NewTransportFailure(rawURL, err)
+}
+
+// NewTransportFailure builds the TransportFailure a leg's own transport
+// error maps to. Exported so a caller outside this package -- go-api-
+// rest-prove's own per-leg HTTP calls, which classify a candidate/baseline
+// leg failure by name (which leg, which class) rather than treat it as a
+// fatal error -- classifies a transport error the identical way this
+// package's own runner does, instead of duplicating classifyTransport's
+// rules a second time.
+func NewTransportFailure(rawURL string, err error) TransportFailure {
 	return TransportFailure{Endpoint: EndpointLabel(rawURL), Class: classifyTransport(err)}
 }
 

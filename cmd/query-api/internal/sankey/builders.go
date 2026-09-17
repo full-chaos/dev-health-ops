@@ -96,7 +96,7 @@ func buildExpenseFlow(ctx context.Context, client QueryClient, startDay, endDay 
 
 	unplanned := maxFloat(0, newBugs)
 	rework := maxFloat(0, minFloat(unplanned, bugCompleted))
-	abandoned := maxFloat(0, minFloat(rework, float64(canceledItems)))
+	abandoned := maxFloat(0, minFloat(rework, canceledItems))
 
 	nodes := newNodeAccumulator()
 	edges := newEdgeAccumulator()

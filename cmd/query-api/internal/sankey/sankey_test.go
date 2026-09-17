@@ -108,7 +108,7 @@ func TestBuildExpenseFlow(t *testing.T) {
 		case strings.Contains(query, "FROM work_item_metrics_daily FINAL"):
 			return &fixtureRowScanner{rows: [][]any{{10.0, 8.0, 5.0}}}, nil // new_items, new_bugs=8, bug_completed_estimate=5
 		case strings.Contains(query, "FROM work_item_cycle_times FINAL"):
-			return &fixtureRowScanner{rows: [][]any{{int64(2)}}}, nil // canceled_items
+			return &fixtureRowScanner{rows: [][]any{{2.0}}}, nil // canceled_items
 		default:
 			t.Fatalf("unexpected query for expense fixture:\n%s", query)
 			return nil, nil

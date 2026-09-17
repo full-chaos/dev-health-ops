@@ -98,7 +98,7 @@ var (
 		{"maintenance.debt", "repoA", "teamB", 7.0},
 		{"risk.security", "repoB", "", 3.0},
 	}
-	unassignedRow = [][]any{{int64(2), int64(1)}} // missing_repo, missing_team
+	unassignedRow = [][]any{{uint64(2), uint64(1)}} // missing_repo, missing_team
 )
 
 // flowFixtureHandler dispatches on the GROUP BY (and unit_team presence)

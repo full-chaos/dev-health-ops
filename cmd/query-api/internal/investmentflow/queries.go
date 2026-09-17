@@ -467,9 +467,19 @@ func fetchInvestmentTeamSubcategoryRepoEdges(ctx context.Context, client QueryCl
 }
 
 // unassignedCounts is fetch_investment_unassigned_counts' row shape.
+//
+// countDistinctIf always returns UInt64 in ClickHouse regardless of the
+// counted column's type -- the driver refuses to scan that into *int64.
+// api/queries/investment.py's fetch_investment_unassigned_counts wraps
+// both fields in int(...) before returning them, and this package's own
+// caller (investmentflow.go) immediately narrows both into a
+// map[string]int, so the wire contract for these two fields is a plain
+// integer, never a float. uint64 scans the driver's actual result type
+// directly instead of a SQL cast, matching that integer contract with no
+// intermediate float roundtrip.
 type unassignedCounts struct {
-	MissingTeam int64
-	MissingRepo int64
+	MissingTeam uint64
+	MissingRepo uint64
 }
 
 // fetchInvestmentUnassignedCounts ports fetch_investment_unassigned_counts

@@ -62,6 +62,15 @@ EXPECTED_PACKAGES = {
     # path actually works against the real column type (it didn't, see
     # workunitreader_seeded_integration_test.go's own header comment).
     "cmd/query-api/internal/investmentexplain",
+    # fetchInvestmentUnassignedCounts' countDistinctIf() columns: the
+    # aggregate returns UInt64 in ClickHouse regardless of the counted
+    # column's own type, and a fake RowScanner answers a Scan call by
+    # reflecting on the Go destination type it is handed rather than
+    # replaying the real clickhouse-go driver's own conversion rules, so
+    # it cannot prove a narrower scan destination actually works against
+    # the real driver (see unassignedcounts_seeded_integration_test.go's
+    # own header comment).
+    "cmd/query-api/internal/investmentflow",
     # The argMax dedup NULL-skip fix (Nullable(Float64) fields on
     # work_item_metrics_daily/repo_metrics_daily/incident_metrics_daily/
     # ai_impact_metrics_daily) has its own real-ClickHouse proof, since a
@@ -69,6 +78,13 @@ EXPECTED_PACKAGES = {
     # behaviour.
     "cmd/query-api/internal/operatingreview",
     "cmd/query-api/internal/routeswitch",
+    # sum()/countIf() aggregates over UInt32 columns (new_items_count,
+    # new_bugs_count, items_touched, churn) promote to UInt64 in
+    # ClickHouse, and a fake RowScanner cannot reproduce the real
+    # clickhouse-go driver's refusal to scan that into a narrower/
+    # mismatched Go destination (see
+    # aggregatescan_seeded_integration_test.go's own header comment).
+    "cmd/query-api/internal/sankey",
     # Same argMax dedup NULL-skip proof as operatingreview above, for
     # wip_age_p50/p90_hours and pr_first_review_p50_hours.
     "cmd/query-api/internal/throughputforecast",
@@ -494,10 +510,13 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # cmd/query-api/internal/explain carries integration-tagged tests
     # (team_scope_large_repo_set_integration_test.go and
     # blocked_work_status_filter_integration_test.go, four tests total),
-    # so it counts toward the total below.
-    # CURRENT TOTAL: 61 -- the one number to bump when a new
+    # and cmd/query-api/internal/investmentflow and cmd/query-api/internal/
+    # sankey each carry a real-ClickHouse recurrence guard for a
+    # UInt64-aggregate-scanned-into-a-mismatched-Go-type class of defect --
+    # all three count toward the total below.
+    # CURRENT TOTAL: 63 -- the one number to bump when a new
     # -tags=integration package is added.
-    assert "61 package(s) discovered, 0 denylisted, 61 will run" in result.stdout
+    assert "63 package(s) discovered, 0 denylisted, 63 will run" in result.stdout
     # Raised 4 -> 6: at four shards each balanced "packages" shard's own
     # estimated test time (2191s) already exceeded the hosted job's
     # 25-minute (1500s) timeout-minutes cap before any setup/teardown
@@ -506,7 +525,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # comfortably under the cap -- see the weight-derived isolation check
     # below for how a future regression here is caught instead of silently
     # re-balanced.
-    assert "integration shard plan: 6 shard(s), 61 package(s)" in result.stdout
+    assert "integration shard plan: 6 shard(s), 63 package(s)" in result.stdout
 
     output = dict(
         line.split("=", maxsplit=1)
@@ -582,11 +601,12 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # CHAOS-5560 added internal/platform/config: 55 -> 56.
     # CHAOS-5486 added cmd/go-api-routing: 56 -> 57 (see the
     # "package(s) discovered" comment above).
-    # cmd/query-api/internal/explain is discovered and runnable (see the
-    # "package(s) discovered" comment above), so it is one of the
-    # packages this flattened set must contain.
-    # CURRENT TOTAL: 61 -- the one number to bump.
-    assert len(flattened) == len(set(flattened)) == 61
+    # cmd/query-api/internal/explain, cmd/query-api/internal/investmentflow
+    # and cmd/query-api/internal/sankey are each discovered and runnable
+    # (see the "package(s) discovered" comment above), so each is one of
+    # the packages this flattened set must contain.
+    # CURRENT TOTAL: 63 -- the one number to bump.
+    assert len(flattened) == len(set(flattened)) == 63
     assert set(flattened) == EXPECTED_PACKAGES
 
     # internal/providersync's isolation in the lowest-numbered shard is a
@@ -2177,12 +2197,13 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
     # - 1 for the providersync shard-1 package).
     # CHAOS-5486 added cmd/go-api-routing: 55 -> 56 (57 discovered - 1 for
     # the providersync shard-1 package).
-    # cmd/query-api/internal/explain is discovered and is not the
-    # providersync shard-1 package, so it counts toward the total below
-    # (discovered-total minus one for that shard-1 package).
-    # CURRENT TOTAL: 60 (== discovered-total-minus-one -- keep this in
+    # cmd/query-api/internal/explain, cmd/query-api/internal/investmentflow
+    # and cmd/query-api/internal/sankey are each discovered and none is
+    # the providersync shard-1 package, so each counts toward the total
+    # below (discovered-total minus one for that shard-1 package).
+    # CURRENT TOTAL: 62 (== discovered-total-minus-one -- keep this in
     # sync with the discovered-total literal above when either changes).
-    assert len(selected_packages) == len(set(selected_packages)) == 60
+    assert len(selected_packages) == len(set(selected_packages)) == 62
     assert set(selected_packages) == EXPECTED_PACKAGES - {PROVIDER_PACKAGE}
 
     selected_tests: list[str] = []

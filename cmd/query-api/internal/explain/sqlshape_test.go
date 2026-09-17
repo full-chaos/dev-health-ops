@@ -2,6 +2,7 @@ package explain
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -13,14 +14,19 @@ import (
 
 // queryCapturingClient records the last statement/bindings it was asked
 // to run and answers with a fixed row set -- same convention as
-// drilldown/repofilter_test.go's own copy.
+// drilldown/repofilter_test.go's own copy. calls counts every Query
+// invocation, for a test that pins the ABSENCE of a round trip (a
+// pushed-down condition that never asks the client for an intermediate
+// id list makes zero calls of its own).
 type queryCapturingClient struct {
 	rows         [][]any
 	lastQuery    string
 	lastBindings []dhclickhouse.Binding
+	calls        int
 }
 
 func (c *queryCapturingClient) Query(_ context.Context, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+	c.calls++
 	c.lastQuery = query
 	c.lastBindings = bindings
 	return &fixtureRowScanner{rows: c.rows}, nil
@@ -78,19 +84,115 @@ func TestResolveRepoIDByUUIDQueryShape(t *testing.T) {
 	assertSameDepth(t, client.lastQuery, "FROM repos FINAL", "toString(id) = {repo_id:String}", "org_id = {org_id:String}")
 }
 
-// TestResolveRepoIDsForTeamsQueryShape pins that user_metrics_daily
-// (ReplacingMergeTree(computed_at), team_id outside its sorting key) is
-// read with FINAL, org filter at the same depth as FINAL and team_id.
-func TestResolveRepoIDsForTeamsQueryShape(t *testing.T) {
-	client := &queryCapturingClient{}
+// TestTeamRepoScopeConditionQueryShape pins teamRepoScopeCondition's own
+// query shape: the team -> repo_id membership test (user_metrics_daily,
+// ReplacingMergeTree(computed_at), team_id outside its sorting key) is
+// read with FINAL and sits ONE level deeper than the repos (also FINAL)
+// membership test it is nested inside -- the two reads are never
+// flattened into a single depth, which is what lets the outer condition
+// stay a single boolean the caller's own statement evaluates, rather than
+// a separate query whose own result rows the client must receive first.
+func TestTeamRepoScopeConditionQueryShape(t *testing.T) {
+	condition, bindings := teamRepoScopeCondition("org-1", []string{"team-x"})
+	assertSameDepth(t, condition, "FROM repos FINAL", "org_id = {team_repo_scope_org_id:String}")
+	assertSameDepth(t, condition, "FROM user_metrics_daily FINAL", "team_id IN {team_repo_scope_ids:Array(String)}")
+
+	depths := sqlshape.Depths(condition)
+	outerIdx := strings.Index(condition, "FROM repos FINAL")
+	innerIdx := strings.Index(condition, "FROM user_metrics_daily FINAL")
+	if outerIdx == -1 || innerIdx == -1 {
+		t.Fatalf("condition missing expected FROM clauses:\n%s", condition)
+	}
+	if depths[innerIdx] != depths[outerIdx]+1 {
+		t.Fatalf("user_metrics_daily read sits at depth %d, repos read at depth %d -- want exactly one level deeper (a nested subquery, not a flattened join):\n%s",
+			depths[innerIdx], depths[outerIdx], condition)
+	}
+
+	if v, _ := bindingValue(bindings, "team_repo_scope_ids"); fmt.Sprint(v) != "[team-x]" {
+		t.Fatalf("team_repo_scope_ids binding = %v, want [team-x]", v)
+	}
+	if v, _ := bindingValue(bindings, "team_repo_scope_org_id"); v != "org-1" {
+		t.Fatalf("team_repo_scope_org_id binding = %v, want org-1", v)
+	}
+}
+
+// TestTeamRepoScopeConditionEmptyTeamsNoCondition pins the empty-input
+// contract: no team ids (or only blank ones) means no condition and no
+// bindings, matching scopeClauseRepo's own "no ids -> no filter" shape.
+func TestTeamRepoScopeConditionEmptyTeamsNoCondition(t *testing.T) {
+	if condition, bindings := teamRepoScopeCondition("org-1", nil); condition != "" || bindings != nil {
+		t.Fatalf("nil teamIDs: condition=%q bindings=%v, want empty", condition, bindings)
+	}
+	if condition, bindings := teamRepoScopeCondition("org-1", []string{""}); condition != "" || bindings != nil {
+		t.Fatalf("blank-only teamIDs: condition=%q bindings=%v, want empty", condition, bindings)
+	}
+}
+
+// TestScopeFilterForMetricTeamScopeNeverRoundTripsForRepoIDs is a
+// regression pin: a repo-scoped metric filtered by team never asks the
+// client to resolve or verify a repo-id LIST for that team as its own
+// query. The prior shape did exactly that (one query to list every
+// matching repo_id, then one further query PER resolved id to re-verify
+// it) -- a team whose true matching-repo count is large made that first
+// query's own result set large enough to exceed the read-only client's
+// per-statement row ceiling, degrading the whole request instead of
+// answering it. With no explicit repo refs alongside the team scope, this
+// call must make ZERO client round trips: the team's repo_id membership
+// is a condition inside the CALLER's eventual statement, never a
+// standalone read of its own.
+func TestScopeFilterForMetricTeamScopeNeverRoundTripsForRepoIDs(t *testing.T) {
+	client := &queryCapturingClient{rows: [][]any{}}
 	reader, err := NewReader(client)
 	if err != nil {
 		t.Fatalf("NewReader: %v", err)
 	}
-	if _, err := reader.resolveRepoIDsForTeams(context.Background(), []string{"team-x"}, "org-1"); err != nil {
-		t.Fatalf("resolveRepoIDsForTeams: %v", err)
+	filterSQL, bindings, err := reader.scopeFilterForMetric(context.Background(), "repo", "team", []string{"team-x", "team-y"}, nil, "org-1")
+	if err != nil {
+		t.Fatalf("scopeFilterForMetric: %v", err)
 	}
-	assertSameDepth(t, client.lastQuery, "FROM user_metrics_daily FINAL", "team_id IN {team_ids:Array(String)}", "org_id = {org_id:String}")
+	if client.calls != 0 {
+		t.Fatalf("scopeFilterForMetric made %d client round trip(s) for a team-only scope, want 0:\nfilterSQL: %s", client.calls, filterSQL)
+	}
+	if !strings.Contains(filterSQL, "repo_id IN (") || !strings.Contains(filterSQL, "FROM user_metrics_daily FINAL") {
+		t.Fatalf("filterSQL missing the pushed-down team membership condition:\n%s", filterSQL)
+	}
+	if strings.Contains(filterSQL, "repo_id IN {scope_ids:Array(String)}") {
+		t.Fatalf("filterSQL carries an explicit-repo clause with no explicit repos requested:\n%s", filterSQL)
+	}
+	if v, _ := bindingValue(bindings, "team_repo_scope_ids"); fmt.Sprint(v) != "[team-x team-y]" {
+		t.Fatalf("team_repo_scope_ids binding = %v, want [team-x team-y]", v)
+	}
+}
+
+// TestScopeFilterForMetricUnionsExplicitReposWithTeamScope pins the union
+// semantics resolve_repo_filter_ids' own Python shape has: an explicit
+// what.repos ref alongside a team scope means EITHER condition can match,
+// not both required. The explicit ref still round-trips through
+// resolveRepoID (bounded: one call per explicit ref, not per matching
+// repo), the team side stays pushed down.
+func TestScopeFilterForMetricUnionsExplicitReposWithTeamScope(t *testing.T) {
+	const resolvedRepoID = "55555555-5555-5555-5555-555555555555"
+	client := &queryCapturingClient{rows: [][]any{{resolvedRepoID}}}
+	reader, err := NewReader(client)
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	filterSQL, bindings, err := reader.scopeFilterForMetric(context.Background(), "repo", "team", []string{"team-x"}, []string{resolvedRepoID}, "org-1")
+	if err != nil {
+		t.Fatalf("scopeFilterForMetric: %v", err)
+	}
+	if client.calls != 1 {
+		t.Fatalf("scopeFilterForMetric made %d client round trip(s), want exactly 1 (resolving the explicit ref)", client.calls)
+	}
+	if !strings.HasPrefix(filterSQL, " AND (repo_id IN {scope_ids:Array(String)} OR repo_id IN (") {
+		t.Fatalf("filterSQL does not OR the explicit-repo and team conditions together:\n%s", filterSQL)
+	}
+	if v, _ := bindingValue(bindings, "scope_ids"); fmt.Sprint(v) != "["+resolvedRepoID+"]" {
+		t.Fatalf("scope_ids binding = %v, want [%s]", v, resolvedRepoID)
+	}
+	if v, _ := bindingValue(bindings, "team_repo_scope_ids"); fmt.Sprint(v) != "[team-x]" {
+		t.Fatalf("team_repo_scope_ids binding = %v, want [team-x]", v)
+	}
 }
 
 // TestResolveScopeDisplayNamesRepoQueryShape pins that resolve_scope_

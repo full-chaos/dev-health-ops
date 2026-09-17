@@ -470,7 +470,7 @@ var cycleBreakdownFloats = map[string]string{
 
 // drilldownPRsParity is shared by every admissible (2xx) drilldown/prs
 // request, GET and POST alike: both routes call the same
-// BuildPRsResponse, so both carry the same two declared Python-plane
+// BuildPRsResponse, so both carry the same declared Python-plane
 // defects.
 var drilldownPRsParity = Options{
 	BaselineDefects: []BaselineDefect{
@@ -494,6 +494,18 @@ var drilldownPRsParity = Options{
 			WorkGraphEdgeDedupShape: &WorkGraphEdgeDedupShape{
 				EdgesListPath: "data.items",
 				IDField:       RESTDedupKeyField,
+			},
+		},
+		{
+			Ticket:             "CHAOS-5897",
+			Reason:             "Mechanism: git_pull_requests is ReplacingMergeTree(last_synced) keyed by (org_id, repo_id, number), and fetch_pull_requests (api/queries/drilldown.py) reads it without FINAL, so while an older physical version of a pull request is unmerged the baseline page carries both the older open copy (merged_at null) and the newer merged copy (merged_at populated) of the same (repo_id, number). The sync writer (internal/providersync, guardPullRequestMergedAtRegressions) refuses to write a null merged_at over a stored populated value for the same key, so the only transition between versions is null to populated, and a read that keeps the newest version per key returns the populated copy; this port's drilldown.Reader reads the table FINAL. Scope: drilldown/prs data.items only; admits an id only when its baseline copies differ in merged_at alone, with null on at least one copy and one identical populated value on every other copy, and the candidate row for that id is present and equal to the populated copy. Any other field difference between copies, two different populated values, a candidate null, a candidate with a different populated value, or an id absent from the candidate stays uncovered. The guard reads back and inserts in two statements with no lock between them: it closes a stale upstream null, not a concurrent writer for the same key. Blind spot: a pull request whose only stored versions carry a null merged_at is indistinguishable from an open one, so this entry cannot detect a merge the store never recorded.",
+			Paths:              []string{"data.items"},
+			Intermittent:       true,
+			IntermittentReason: "present only while git_pull_requests holds an unmerged older open version of a pull request that a newer version records as merged, and that pull request falls within the requested page; after the background merge the baseline carries one copy per pull request and this entry has nothing to admit",
+			WorkGraphEdgeDedupShape: &WorkGraphEdgeDedupShape{
+				EdgesListPath:  "data.items",
+				IDField:        RESTDedupKeyField,
+				WriteOnceField: "merged_at",
 			},
 		},
 	},

@@ -2,6 +2,7 @@ package goapiproof
 
 import (
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -87,6 +88,33 @@ type WorkGraphEdgeDedupShape struct {
 	// defect's own Paths name no such field -- as drilldown/prs's own
 	// entry does not, having no cursor at all.
 	TrailingCursorPath string
+	// WriteOnceField, when set, switches this shape to a second,
+	// narrower admission: it admits ONLY an id whose baseline copies
+	// DISAGREE, and only when that disagreement is exactly the one a
+	// write-once nullable column produces while an unmerged older
+	// physical version is still visible -- see writeOnceRepresentative.
+	// An id whose copies agree is left alone (neither admitted nor
+	// annotated): a sibling entry without WriteOnceField judges it by
+	// rules 1/2. Per id, in this mode:
+	//
+	//   - every copy carries the same key set, and every field other
+	//     than WriteOnceField is equal across copies (rule 1's by-value
+	//     comparison);
+	//   - WriteOnceField is null on at least one copy and, on every
+	//     other copy, one and the same timestamp string (exact text,
+	//     so two populated values never collapse into one);
+	//   - the id IS present in the candidate list, and the candidate
+	//     element equals the populated copy field for field (rule 2's
+	//     comparison), so a candidate null, a candidate carrying a
+	//     different populated value, or any other candidate field
+	//     difference refuses the id.
+	//
+	// The field is named per entry and never inferred: this is not a
+	// general "null loses" rule, and an entry names a field here only
+	// when the upstream writer itself refuses a null over a populated
+	// value for that field. Rules 3 and 4 gate this mode exactly as they
+	// gate the default one.
+	WriteOnceField string
 }
 
 // workGraphEdgeDedupPlan is one comparison's fully-evaluated admission
@@ -123,6 +151,12 @@ type workGraphEdgeDedupPlan struct {
 	// different logical edge entirely once any earlier duplicate has
 	// consumed a slot.
 	baselineIndexID []string
+	// writeOnceField is shape.WriteOnceField. When set, judgedIDs names
+	// the ids this plan evaluated at all (the ids whose baseline copies
+	// disagree); an id outside judgedIDs belongs to a sibling entry, so
+	// uncoveredEdgeID names nothing for it.
+	writeOnceField string
+	judgedIDs      map[string]bool
 }
 
 // edgeListIndex extracts the list-position index a finding's own path
@@ -188,14 +222,30 @@ func (p *workGraphEdgeDedupPlan) admits(finding Finding) bool {
 // covered" stays readable straight from the report, not only from a
 // count.
 func (p *workGraphEdgeDedupPlan) uncoveredEdgeID(finding Finding) (string, bool) {
-	return p.owningID(finding)
+	id, ok := p.owningID(finding)
+	if !ok {
+		return "", false
+	}
+	if p.writeOnceField != "" && !p.judgedIDs[id] {
+		return "", false
+	}
+	return id, true
+}
+
+// refusalDetail is the Detail suffix naming one not-admitted id and the
+// rule that refused it.
+func (p *workGraphEdgeDedupPlan) refusalDetail(id string) string {
+	if p.writeOnceField != "" {
+		return fmt.Sprintf(" (dedup id %q not admitted by the declared write-once %s rule: its baseline copies differ in more than null versus one populated %s value, or the candidate row is absent or differs from the populated copy)", id, p.writeOnceField, p.writeOnceField)
+	}
+	return fmt.Sprintf(" (dedup id %q not admitted by the declared duplicate-row shape: its own baseline copies disagree, or its shared content differs from the candidate)", id)
 }
 
 // buildWorkGraphEdgeDedupPlan evaluates every rule WorkGraphEdgeDedupShape
 // documents against one comparison's two decoded edge lists, producing a
 // PER-ID admission set rather than a single whole-comparison verdict.
 func buildWorkGraphEdgeDedupPlan(shape *WorkGraphEdgeDedupShape, baselineData, candidateData any) *workGraphEdgeDedupPlan {
-	plan := &workGraphEdgeDedupPlan{edgesListPath: shape.EdgesListPath, trailingCursorPath: shape.TrailingCursorPath}
+	plan := &workGraphEdgeDedupPlan{edgesListPath: shape.EdgesListPath, trailingCursorPath: shape.TrailingCursorPath, writeOnceField: shape.WriteOnceField}
 
 	baseList, ok1 := listAtDottedPath(baselineData, shape.EdgesListPath)
 	candList, ok2 := listAtDottedPath(candidateData, shape.EdgesListPath)
@@ -217,8 +267,14 @@ func buildWorkGraphEdgeDedupPlan(shape *WorkGraphEdgeDedupShape, baselineData, c
 	// Rule 1, evaluated PER ID: a repeated id whose own copies disagree
 	// is excluded below (agreeingIDs[id] stays false) rather than
 	// invalidating every other id's own verdict.
+	//
+	// In WriteOnceField mode the roles flip: only a DISAGREEING id is
+	// judged (judged[id]), it passes rule 1 only through
+	// writeOnceRepresentative, and its populated copy stands in for it in
+	// rule 2.
 	baseUnique := make(map[string]map[string]any, len(baseGroups))
 	agreeingIDs := make(map[string]bool, len(baseGroups))
+	judged := make(map[string]bool, len(baseGroups))
 	hasDuplicate := false
 	for id, group := range baseGroups {
 		first := group[0]
@@ -233,7 +289,18 @@ func buildWorkGraphEdgeDedupPlan(shape *WorkGraphEdgeDedupShape, baselineData, c
 			hasDuplicate = true
 		}
 		baseUnique[id] = first
-		agreeingIDs[id] = agree
+		if shape.WriteOnceField == "" {
+			agreeingIDs[id] = agree
+			continue
+		}
+		if agree {
+			continue
+		}
+		judged[id] = true
+		if representative, ok := writeOnceRepresentative(group, shape.WriteOnceField); ok {
+			baseUnique[id] = representative
+			agreeingIDs[id] = true
+		}
 	}
 	if !hasDuplicate {
 		return plan
@@ -266,7 +333,9 @@ func buildWorkGraphEdgeDedupPlan(shape *WorkGraphEdgeDedupShape, baselineData, c
 	for id, baseObject := range baseUnique {
 		candObject, ok := candByID[id]
 		if !ok {
-			admitted[id] = agreeingIDs[id]
+			// WriteOnceField mode needs the candidate's own row to
+			// confirm the populated copy; without it nothing is admitted.
+			admitted[id] = agreeingIDs[id] && shape.WriteOnceField == ""
 			continue
 		}
 		shared++
@@ -278,8 +347,65 @@ func buildWorkGraphEdgeDedupPlan(shape *WorkGraphEdgeDedupShape, baselineData, c
 
 	plan.applies = true
 	plan.admittedIDs = admitted
+	if shape.WriteOnceField != "" {
+		plan.judgedIDs = judged
+	}
 	plan.baselineIndexID = baselineIndexID
 	return plan
+}
+
+// writeOnceRepresentative reports the copy of one id that a
+// deduplicated read of a write-once nullable field returns, when the
+// group's copies differ ONLY in that field: every copy carries the same
+// key set, every other field agrees by value, field is null on at least
+// one copy, and every non-null copy carries the SAME timestamp string
+// (compared as exact text). ok is false for anything else -- two
+// different populated values, a non-timestamp value, a missing key, a
+// difference in any other field, or a group with no null copy or no
+// populated copy.
+func writeOnceRepresentative(group []map[string]any, field string) (map[string]any, bool) {
+	var populated map[string]any
+	var populatedValue string
+	sawNull := false
+	for _, copyObject := range group {
+		value, present := copyObject[field]
+		if !present {
+			return nil, false
+		}
+		switch typed := value.(type) {
+		case nil:
+			sawNull = true
+		case string:
+			if _, isTimestamp := parseTimestamp(typed); !isTimestamp {
+				return nil, false
+			}
+			if populated == nil {
+				populated, populatedValue = copyObject, typed
+			} else if typed != populatedValue {
+				return nil, false
+			}
+		default:
+			return nil, false
+		}
+	}
+	if !sawNull || populated == nil {
+		return nil, false
+	}
+	for _, copyObject := range group {
+		if len(copyObject) != len(populated) {
+			return nil, false
+		}
+		for key, value := range populated {
+			if key == field {
+				continue
+			}
+			other, present := copyObject[key]
+			if !present || !jsonValuesEqual(value, other) {
+				return nil, false
+			}
+		}
+	}
+	return populated, true
 }
 
 // edgeObjectAndID reads one edge list element as a decoded JSON object

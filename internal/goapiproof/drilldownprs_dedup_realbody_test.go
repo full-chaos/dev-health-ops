@@ -24,17 +24,14 @@ import (
 // baseline (Python) repeats 20 PRs as duplicate rows (an unmerged
 // ReplacingMergeTree physical version), every item's created_at/merged_at
 // differs by the naive-vs-aware wire form the sibling entry declares, and
-// ONE of the 20 duplicate groups (repo 7b9583ee.../PR 573) genuinely
-// DISAGREES between its own two copies: one physical version has
-// merged_at null, the other has a real timestamp -- the PR was merged
-// between the two row versions being read, a live instance of the exact
-// mechanism this citation names, not a pure duplicate. The other 19
-// duplicate groups are content-identical.
+// ONE of the 20 duplicate groups (repo 7b9583ee.../PR 573) DISAGREES
+// between its own two copies in merged_at alone: one physical version
+// has merged_at null, the other a timestamp, and the candidate carries
+// that timestamp. The other 19 duplicate groups are content-identical.
 //
-// Because admission is evaluated per id, the 19 agreeing groups are
-// admitted and PR 573's own fields -- the only ones a genuinely drifted
-// duplicate group can ever produce -- report as ordinary, uncovered
-// findings, each one's Detail naming PR 573's own dedup id.
+// Because admission is evaluated per id, the plain duplicate-row entry
+// admits the 19 agreeing groups and refuses PR 573, naming its dedup id;
+// the write-once merged_at entry admits PR 573 and nothing else.
 const (
 	drilldownPRsDedupBaselinePath  = "testdata/drilldownprs_dedup_baseline_aaab1cdc.json"
 	drilldownPRsDedupCandidatePath = "testdata/drilldownprs_dedup_candidate_eebfa15c.json"
@@ -44,6 +41,13 @@ const (
 	// restDedupKeySeparator (0x1f); built the same way here so the
 	// literal matches exactly what the shape itself computes.
 	drilldownPRsDedupDriftedID = "7b9583ee-4d24-2be7-4d09-34f815bebdd7" + restDedupKeySeparator + "573"
+)
+
+// drilldownPRsPlainDedupRefusal and drilldownPRsWriteOnceRefusal are the
+// Detail phrases refusalDetail writes for each dedup entry kind.
+const (
+	drilldownPRsPlainDedupRefusal = "not admitted by the declared duplicate-row shape"
+	drilldownPRsWriteOnceRefusal  = "not admitted by the declared write-once merged_at rule"
 )
 
 func drilldownPRsSnapshotFromFile(t *testing.T, path string) Snapshot {
@@ -72,19 +76,15 @@ func drilldownPRsWantMatched() []string {
 	return want
 }
 
-// TestDrilldownPRsParity_RealCapturedBodyAdmitsAgreeingGroupsAndCitesTheDriftedOneByID
+// TestDrilldownPRsParity_RealCapturedBodyAdmitsAgreeingGroupsAndTheMergedAtGroup
 // pins the per-id admission verdict against the real captured pair: the
-// 19 content-identical duplicate groups are admitted (jsonValuesEqual's
-// own instant-equality
-// fix lets their created_at/merged_at agree across legs), and PR 573's
-// own drifted group is excluded -- every remaining outside finding
-// belongs to PR 573 alone, and each one's own Detail names its dedup id,
-// so a reader of the report sees which id was not covered and why
-// without cross-referencing the raw bodies. A test that merely asserted
-// "zero differences" could not tell this fix apart from a bug that
-// admits everything indiscriminately -- this asserts the SHAPE of the
-// coverage, not just its size.
-func TestDrilldownPRsParity_RealCapturedBodyAdmitsAgreeingGroupsAndCitesTheDriftedOneByID(t *testing.T) {
+// 19 content-identical duplicate groups are admitted by the plain entry,
+// PR 573's null-then-populated merged_at group is admitted by the
+// write-once entry alone, and nothing stays outside. Every finding the
+// plain entry refused names PR 573's own dedup id, and no finding carries
+// the write-once refusal -- this asserts the SHAPE of the coverage, not
+// just its size.
+func TestDrilldownPRsParity_RealCapturedBodyAdmitsAgreeingGroupsAndTheMergedAtGroup(t *testing.T) {
 	baseline := drilldownPRsSnapshotFromFile(t, drilldownPRsDedupBaselinePath)
 	candidate := drilldownPRsSnapshotFromFile(t, drilldownPRsDedupCandidatePath)
 
@@ -95,36 +95,69 @@ func TestDrilldownPRsParity_RealCapturedBodyAdmitsAgreeingGroupsAndCitesTheDrift
 	}
 	wantMatched := drilldownPRsWantMatched()
 	if !equalStrings(result.BaselineDefectsMatched, wantMatched) {
-		t.Fatalf("matched = %v, want %v -- the 19 agreeing groups and the naive-datetime entry must still be live: idle %v stale %v",
+		t.Fatalf("matched = %v, want %v: idle %v stale %v",
 			result.BaselineDefectsMatched, wantMatched, result.IdleIntermittentBaselineDefects, result.StaleBaselineDefects)
 	}
-	// Exact and known for this captured pair: PR 573 has 4 fields (its
-	// own dedup key, number, repo_id, title) that no OTHER declared entry
-	// in drilldownPRsParity reaches, at both of its own two positions in
-	// the baseline (20 and 21) -- 2*4 = 8. Its remaining fields
-	// (created_at/merged_at) are ALSO excluded by the dedup shape, but
-	// stay covered anyway: drilldownPRsParity's sibling, unshaped
-	// naive-datetime entry cites those exact paths blanket-style and
-	// does not care which id a difference under them belongs to -- an
-	// id can be excluded by ONE citation and still covered by another
-	// that reaches the same field through a different, unrelated
-	// mechanism.
-	const wantOutside = 8
-	if result.DifferencesOutsideBaselineDefect != wantOutside {
-		t.Fatalf("outside = %d, want %d -- findings %+v", result.DifferencesOutsideBaselineDefect, wantOutside, result.Findings)
+	if result.DifferencesOutsideBaselineDefect != 0 {
+		t.Fatalf("outside = %d, want 0 -- findings %+v", result.DifferencesOutsideBaselineDefect, result.Findings)
 	}
-	// Every finding the dedup shape itself excluded must name PR 573's
-	// own dedup id -- no OTHER id may ever be excluded in this fixture,
-	// whether or not that finding also happens to be covered by the
-	// sibling blanket entry.
 	driftedIDQuoted := fmt.Sprintf("%q", drilldownPRsDedupDriftedID)
+	sawPlainRefusal := false
 	for _, f := range result.Findings {
-		if !strings.Contains(f.Detail, "not admitted by the declared duplicate-row shape") {
+		if strings.Contains(f.Detail, drilldownPRsWriteOnceRefusal) {
+			t.Errorf("write-once entry refused a finding it should admit: %s: %s", f.Path, f.Detail)
+		}
+		if !strings.Contains(f.Detail, drilldownPRsPlainDedupRefusal) {
 			continue
 		}
+		sawPlainRefusal = true
 		if !strings.Contains(f.Detail, driftedIDQuoted) {
-			t.Errorf("dedup-shape-excluded finding %s cites a different id than PR 573's own: %s", f.Path, f.Detail)
+			t.Errorf("plain-entry refusal %s cites a different id than PR 573's own: %s", f.Path, f.Detail)
 		}
+	}
+	if !sawPlainRefusal {
+		t.Error("the plain duplicate-row entry refused nothing; PR 573's copies disagree and it must refuse them")
+	}
+}
+
+// TestDrilldownPRsParity_RealCapturedBodyMergedAtGroupWithCandidateNullStaysUncovered
+// sets PR 573's candidate merged_at to null in the real captured pair: the
+// write-once entry must refuse the id, its findings stay outside, and each
+// names PR 573's own dedup id under the write-once refusal.
+func TestDrilldownPRsParity_RealCapturedBodyMergedAtGroupWithCandidateNullStaysUncovered(t *testing.T) {
+	baseline := drilldownPRsSnapshotFromFile(t, drilldownPRsDedupBaselinePath)
+	candidate := drilldownPRsSnapshotFromFile(t, drilldownPRsDedupCandidatePath)
+
+	mutated := false
+	for _, element := range candidate.Data.(map[string]any)["items"].([]any) {
+		object := element.(map[string]any)
+		if object[RESTDedupKeyField] == drilldownPRsDedupDriftedID {
+			object["merged_at"] = nil
+			mutated = true
+		}
+	}
+	if !mutated {
+		t.Fatal("candidate fixture carries no PR 573 row to mutate")
+	}
+
+	result := Compare(baseline, candidate, drilldownPRsParity)
+
+	if result.DifferencesOutsideBaselineDefect == 0 {
+		t.Fatalf("outside = 0, want > 0: a candidate null merged_at must not be admitted; findings %+v", result.Findings)
+	}
+	driftedIDQuoted := fmt.Sprintf("%q", drilldownPRsDedupDriftedID)
+	sawWriteOnceRefusal := false
+	for _, f := range result.Findings {
+		if !strings.Contains(f.Detail, drilldownPRsWriteOnceRefusal) {
+			continue
+		}
+		sawWriteOnceRefusal = true
+		if !strings.Contains(f.Detail, driftedIDQuoted) {
+			t.Errorf("write-once refusal %s cites a different id than PR 573's own: %s", f.Path, f.Detail)
+		}
+	}
+	if !sawWriteOnceRefusal {
+		t.Error("no finding carries the write-once refusal for PR 573")
 	}
 }
 
@@ -134,10 +167,9 @@ func TestDrilldownPRsParity_RealCapturedBodyAdmitsAgreeingGroupsAndCitesTheDrift
 // leg is a real per-field regression hiding behind an id the two pages
 // share. Admission is per id, so this excludes ONLY that one id -- the mutated finding
 // stays outside and cites the mutated PR's own id, while the 19 agreeing
-// duplicate groups and PR 573's own already-drifted group are judged
-// exactly as they are in the unmutated fixture, so the ticket still
-// reads as matched (something else really was admitted), never idle or
-// stale.
+// duplicate groups and PR 573's merged_at group are judged exactly as
+// they are in the unmutated fixture, so every ticket still reads as
+// matched (something else really was admitted), never idle or stale.
 func TestDrilldownPRsParity_RealCapturedBodyWithAGenuineRegressionStaysUncovered(t *testing.T) {
 	baseline := drilldownPRsSnapshotFromFile(t, drilldownPRsDedupBaselinePath)
 	candidate := drilldownPRsSnapshotFromFile(t, drilldownPRsDedupCandidatePath)

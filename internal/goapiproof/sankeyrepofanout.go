@@ -8,8 +8,9 @@ import "sort"
 // ReplacingMergeTree(last_synced), joined by the reference plane with no
 // FINAL or org_id scoping at all -- restcorpus.go's own
 // sankeyRepoDedupParity/investmentFlowRepoDedupParity doc comments) can
-// actually produce on a REST sankey response's links, instead of
-// admitting any value difference under the cited nodes/links paths.
+// actually produce on a REST sankey response's links (and, where the
+// route populates it, node values), instead of admitting any value
+// difference under the cited nodes/links paths.
 //
 // Why the blanket form was not enough, measured against a real capture
 // (captured from a production deployed-vs-deployed prove run, GET /api/v1/sankey investment_default_org and
@@ -49,6 +50,17 @@ import "sort"
 //     repo_id, not a specific repos row subject to this mechanism, and
 //     mechanically qualifying by Group alone would let it borrow a
 //     neighbouring anchor's multiplier dishonestly.
+//  4. OPTIONAL, only when NodeValuePath is set (see its own doc comment):
+//     an ANCHOR's own node value is admitted when baseline equals
+//     candidate times that SAME anchor's own verified k from rule 1,
+//     checked directly against the anchor's own value -- not re-summed
+//     through the graph. A NON-anchor node (one whose value aggregates
+//     over more than one repo, some fanned out and some not) is never
+//     admitted by this rule: proving that case needs a separate
+//     re-summation or conservation argument this shape does not attempt
+//     (RepoFanoutShape's own THEME/TEAM rules are that argument, for the
+//     harder GraphQL case where such aggregation is unavoidable), and
+//     leaving it uncovered is the safe default, not an oversight.
 //
 // TWO REPOS FANNING OUT IN THE SAME RESPONSE (ownership overlap), decided
 // explicitly rather than by traversal order: ownership (rule 2) is a SET
@@ -75,7 +87,11 @@ import "sort"
 // covered by ANY BaselineDefect shape (see compare.go's leafDifference
 // gate). A non-integer or non-uniform ratio on an anchor's own direct
 // edges is the same kind of miss, by design: this shape only ever
-// admits the ONE transform the mechanism can cleanly produce.
+// admits the ONE transform the mechanism can cleanly produce. When
+// NodeValuePath is set, a NON-anchor node's own value difference is
+// ALWAYS outside this shape (rule 4), even when it is entirely explained
+// by the SAME fan-out one hop away -- that is left as an uncovered
+// finding rather than a guessed re-summation.
 type SankeyRepoFanoutShape struct {
 	// NodesListPath/LinksListPath are the dotted, index-free paths to the
 	// sankey nodes/links LISTS themselves (no trailing field name), e.g.
@@ -85,6 +101,27 @@ type SankeyRepoFanoutShape struct {
 	// difference -- must equal one of the defect's own Paths entries,
 	// e.g. "data.links.value".
 	LinkValuePath string
+	// NodeValuePath is OPTIONAL: the leaf path findings carry for a node
+	// value difference -- must equal one of the defect's own Paths
+	// entries, e.g. "data.nodes.value". Leave empty for a response whose
+	// Node.Value is always null (GET/POST /api/v1/sankey's own
+	// sankeyRepoDedupParity entry -- cmd/query-api/internal/sankey's own
+	// Node struct doc comment: "_touch_node never sets it" -- citing a
+	// value path there would be the appearance of coverage rather than
+	// coverage itself, so that entry leaves this field unset and rule 4
+	// never runs). investment/flow and investment/flow/repo-team's own
+	// response (package investmentflow, reusing this SAME sankey.Response
+	// wire type) is different: nodeRunningTotal/nodePresence
+	// (investmentflow/builders.go) accumulate a real running total into
+	// every node's own Value, so a genuine per-repo fan-out there also
+	// moves an anchor's own node value, one hop from an edge this shape
+	// already admits -- leaving this field unset on that route would
+	// admit only the edge half of a real instance and leave the node half
+	// sitting right next to it as an uncovered finding. Unset (the zero
+	// value, "") is fully backward compatible: every existing caller that
+	// does not set this field keeps its exact prior behaviour, since rule
+	// 4 and admittedNodeKeys are both no-ops when it is empty.
+	NodeValuePath string
 	// RepoNodeGroups names the Node.Group values that mark a node as a
 	// repo-dimension anchor, e.g. []string{"project"} for investment
 	// mode's target-repo nodes, []string{"repo"} for hotspot mode's root
@@ -109,13 +146,17 @@ type sankeyRepoFanoutPlan struct {
 	// plan admits -- see the type doc comment's overlap rule for how an
 	// edge earns a place here.
 	admittedLinkKeys map[string]bool
+	// admittedNodeKeys is the set of anchor node names rule 4 admits.
+	// Always empty when shape.NodeValuePath == "" -- see that field's own
+	// doc comment.
+	admittedNodeKeys map[string]bool
 }
 
 // buildSankeyRepoFanoutPlan evaluates every rule SankeyRepoFanoutShape
 // documents against one comparison's decoded baseline/candidate `data`
 // values.
 func buildSankeyRepoFanoutPlan(shape *SankeyRepoFanoutShape, baselineData, candidateData any) *sankeyRepoFanoutPlan {
-	plan := &sankeyRepoFanoutPlan{shape: shape, admittedLinkKeys: map[string]bool{}}
+	plan := &sankeyRepoFanoutPlan{shape: shape, admittedLinkKeys: map[string]bool{}, admittedNodeKeys: map[string]bool{}}
 
 	candGroups, ok1 := sankeyNodeGroups(candidateData, shape.NodesListPath)
 	baseEdges, ok2 := sankeyEdgeInfoMap(baselineData, shape.LinksListPath)
@@ -232,6 +273,28 @@ func buildSankeyRepoFanoutPlan(shape *SankeyRepoFanoutShape, baselineData, candi
 		}
 	}
 
+	// Rule 4 (optional): an anchor's OWN node value, checked directly
+	// against its OWN verified k -- never attempted for a non-anchor
+	// node, and never attempted at all when the shape declares no
+	// NodeValuePath.
+	if shape.NodeValuePath != "" {
+		baseNodeValues, okB := sankeyNodeValuesByName(baselineData, shape.NodesListPath)
+		candNodeValues, okC := sankeyNodeValuesByName(candidateData, shape.NodesListPath)
+		if okB && okC {
+			for anchor, k := range anchorK {
+				candValue, hasCand := candNodeValues[anchor]
+				baseValue, hasBase := baseNodeValues[anchor]
+				if !hasCand || !hasBase {
+					continue
+				}
+				expected := candValue * float64(k)
+				if repoFanoutFloatsWithinTolerance(baseValue, expected) {
+					plan.admittedNodeKeys[anchor] = true
+				}
+			}
+		}
+	}
+
 	return plan
 }
 
@@ -240,14 +303,26 @@ func (p *sankeyRepoFanoutPlan) admits(finding Finding) bool {
 	if p == nil || !p.valid {
 		return false
 	}
-	if tieredPath(finding.Path) != p.shape.LinkValuePath {
-		return false
+	path := tieredPath(finding.Path)
+	switch path {
+	case p.shape.LinkValuePath:
+		key, ok := parseOrderInsensitiveDetailKey(finding.Detail)
+		if !ok {
+			return false
+		}
+		return p.admittedLinkKeys[key]
+	case p.shape.NodeValuePath:
+		// p.shape.NodeValuePath == "" can never match a real finding's
+		// path (tieredPath never produces the empty string), so this case
+		// is naturally unreachable when the shape leaves it unset -- no
+		// separate guard needed.
+		key, ok := parseOrderInsensitiveDetailKey(finding.Detail)
+		if !ok {
+			return false
+		}
+		return p.admittedNodeKeys[key]
 	}
-	key, ok := parseOrderInsensitiveDetailKey(finding.Detail)
-	if !ok {
-		return false
-	}
-	return p.admittedLinkKeys[key]
+	return false
 }
 
 // sankeyNodeGroups reads a sankey nodes list at listPath (dotted,
@@ -279,6 +354,45 @@ func sankeyNodeGroups(root any, listPath string) (map[string]string, bool) {
 		}
 		group, _ := object["group"].(string)
 		out[name] = group
+	}
+	return out, true
+}
+
+// sankeyNodeValuesByName reads a sankey nodes list at listPath (dotted,
+// index-free, under `data`) into a name -> value map, for rule 4's own
+// use only -- unlike sankeyNodeValues (repofanout.go, keyed by "id" for
+// investmentFull's GraphQL nodes), this response's own Node struct keys
+// by "name" (sankey.Node's own json tag). ok is false when the path does
+// not resolve to a list of objects each carrying a string "name" -- an
+// element whose "value" is null or missing is simply left out of the
+// returned map (a null Value is legitimate -- GET/POST /api/v1/sankey's
+// own nodes always carry one -- and an anchor with no numeric value on
+// either side is never admitted by rule 4, the same safe-default shape
+// every other lookup in this package uses).
+func sankeyNodeValuesByName(root any, listPath string) (map[string]float64, bool) {
+	listValue, ok := navigateSegments(root, citedSegments(listPath))
+	if !ok {
+		return nil, false
+	}
+	list, ok := listValue.([]any)
+	if !ok {
+		return nil, false
+	}
+	out := make(map[string]float64, len(list))
+	for _, element := range list {
+		object, ok := element.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		name, ok := object["name"].(string)
+		if !ok {
+			return nil, false
+		}
+		value, ok := asFloat(object["value"])
+		if !ok {
+			continue
+		}
+		out[name] = value
 	}
 	return out, true
 }

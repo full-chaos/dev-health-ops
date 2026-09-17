@@ -119,7 +119,9 @@ type RESTEndpointSpec struct {
 	PublicNoAuth bool
 }
 
-// investmentBaselineDefects is shared by GET and POST /api/v1/investment.
+// investmentBaselineDefects is shared by GET and POST /api/v1/investment
+// (and, by inheritance, investmentSunburstBaselineDefects below -- see
+// its own doc comment for why that inheritance is harmless there).
 // Both read internal/investment's shared source (the same
 // LATEST_WORK_UNIT_INVESTMENTS_CTE-derived query every other reader in
 // cmd/query-api/internal/analytics already composes from), which
@@ -129,17 +131,110 @@ type RESTEndpointSpec struct {
 // work unit still inside the request's time window, Python keeps
 // counting that unit's effort into theme_distribution/
 // subcategory_distribution/evidence_quality_distribution/
-// evidence_quality_stats; Go does not.
+// evidence_quality_stats; Go does not -- making candidate's own row
+// population a STRICT SUBSET of baseline's, the SAME structural fact
+// DictKeyDirectionShape/ScalarDirectionShape's own doc comments state.
+//
+// SPLIT ACROSS FIVE ENTRIES, one per aggregate, because each is a
+// different JSON shape: theme_distribution/subcategory_distribution/
+// evidence_quality_distribution are Go maps (response.go's own
+// map[string]float64 fields) -> DictKeyDirectionShape;
+// evidence_quality_stats.band_counts is the SAME map shape one level
+// deeper -> its own DictKeyDirectionShape entry; evidence_quality_stats.
+// total is a single scalar count -> ScalarDirectionShape.
+//
+// evidence_quality_stats.mean/.stddev are DELIBERATELY OUTSIDE every
+// entry below, even though they sit in the SAME struct: they are
+// AVERAGES, not sums or counts, and removing rows from a population
+// being averaged has no guaranteed direction (a removed value below the
+// mean raises it, one above lowers it) -- the same "no honest shape"
+// problem investmentFlowRepoDedupParity's own chosen_mode/label/
+// description note states for a threshold flip. investmentQualityStats
+// Floats already declares them Tier B for the UNRELATED engine-rounding
+// mechanism (this file's own doc comment above that table); a
+// supersession-driven shift beyond that tolerance is knowingly left
+// uncovered rather than folded into this citation by path proximity.
+//
+// quality_drivers is ALSO outside every entry below for the same
+// reason: computeQualityStats (response.go) appends each driver string
+// from an independent THRESHOLD test over totalCount/bandCounts/mean/
+// stddev (e.g. "missing_evidence_metadata" when
+// bandCounts["unknown"]/totalCount > 0.3) -- a threshold crossing is a
+// categorical flip, not a direction or a bound, the identical problem
+// chosen_mode's own drop documents on the sibling route. A real
+// quality_drivers divergence surfaces as an ordinary, uncovered finding;
+// that is correct and intended.
+//
+// NEVER OBSERVED FIRING ON A REAL CAPTURE: none of the three available
+// production deployed-vs-deployed prove runs (_records/deploy-71/r78/
+// step73, deploy-70/r77/step72, deploy-69/r76/step71) shows a genuine
+// instance of this mechanism on GET/POST /api/v1/investment -- step73's
+// only finding on this route (range_days_90) is evidence_quality_stats.
+// mean's own already-Tier-B-declared rounding difference, not this
+// mechanism; the other two runs show a clean match. Every shape below is
+// proven only by a deliberately injected fixture fault
+// (dictkeydirection_test.go, scalardirection_test.go), the same standard
+// sankeyInvestmentParity's own argMax-null-skip/ConservationShape entry
+// already documents. Zero firings across these three runs does not
+// establish the mechanism cannot occur here -- it is equally consistent
+// with these three captures simply not containing a supersession inside
+// the requested window; the shapes are unproven against real data
+// either way.
 var investmentBaselineDefects = []BaselineDefect{
 	{
-		Ticket: "CHAOS-4441",
-		Reason: "Go's read of work_unit_investments excludes any work unit a later regrouping run has recorded in work_unit_supersessions; the Python query this route ports has no knowledge of that table at all, so it can still count a superseded work unit's effort into these aggregates.",
-		Paths: []string{
-			"data.theme_distribution", "data.subcategory_distribution",
-			"data.evidence_quality_distribution", "data.evidence_quality_stats",
-		},
+		Ticket:             "CHAOS-4441",
+		Reason:             "Go's read of work_unit_investments excludes any work unit a later regrouping run has recorded in work_unit_supersessions; the Python query this route ports has no knowledge of that table at all, so it can still count a superseded work unit's effort into theme_distribution -- a Go map keyed by theme name, summing row.Value per theme (response.go's own BuildResponse). Candidate's row population is a strict subset of baseline's, so a theme's own sum can only be pulled up by an excluded row's effort, never down -- direction only, no magnitude bound. Never observed firing on a real capture across the three available production deployed-vs-deployed prove runs; proven here by injected fault only.",
+		Paths:              []string{"data.theme_distribution"},
 		Intermittent:       true,
-		IntermittentReason: "present only for an org that currently holds at least one superseded work unit still inside the request's time window; an org with no supersession rows (or none inside that window) shows no divergence under these paths, which is expected, not stale",
+		IntermittentReason: "present only for an org that currently holds at least one superseded work unit still inside the request's time window; an org with no supersession rows (or none inside that window) shows no divergence under this path, which is expected, not stale",
+		DictKeyDirectionShape: &DictKeyDirectionShape{
+			DictPath:  "data.theme_distribution",
+			ValuePath: "data.theme_distribution",
+		},
+	},
+	{
+		Ticket:             "CHAOS-4441",
+		Reason:             "the same work_unit_supersessions exclusion as this ticket's data.theme_distribution entry, over subcategory_distribution (the SAME per-row summation, keyed by subcategory instead of theme). Never observed firing on a real capture across the three available production deployed-vs-deployed prove runs; proven here by injected fault only.",
+		Paths:              []string{"data.subcategory_distribution"},
+		Intermittent:       true,
+		IntermittentReason: "present only for an org that currently holds at least one superseded work unit still inside the request's time window; an org with no supersession rows (or none inside that window) shows no divergence under this path, which is expected, not stale",
+		DictKeyDirectionShape: &DictKeyDirectionShape{
+			DictPath:  "data.subcategory_distribution",
+			ValuePath: "data.subcategory_distribution",
+		},
+	},
+	{
+		Ticket:             "CHAOS-4441",
+		Reason:             "the same work_unit_supersessions exclusion, over evidence_quality_distribution: response.go's own BuildResponse counts qualityStats.BandCounts per band into this map. A superseded work unit's own evidence-quality band, if it has one, can only be counted extra by baseline, never dropped by it -- direction only, no magnitude bound. Never observed firing on a real capture across the three available production deployed-vs-deployed prove runs; proven here by injected fault only.",
+		Paths:              []string{"data.evidence_quality_distribution"},
+		Intermittent:       true,
+		IntermittentReason: "present only for an org that currently holds at least one superseded work unit still inside the request's time window; an org with no supersession rows (or none inside that window) shows no divergence under this path, which is expected, not stale",
+		DictKeyDirectionShape: &DictKeyDirectionShape{
+			DictPath:  "data.evidence_quality_distribution",
+			ValuePath: "data.evidence_quality_distribution",
+		},
+	},
+	{
+		Ticket:             "CHAOS-4441",
+		Reason:             "the same work_unit_supersessions exclusion, over evidence_quality_stats.band_counts -- the SAME BandCounts map evidence_quality_distribution's own entry reads, one level deeper in the response. Never observed firing on a real capture across the three available production deployed-vs-deployed prove runs; proven here by injected fault only.",
+		Paths:              []string{"data.evidence_quality_stats.band_counts"},
+		Intermittent:       true,
+		IntermittentReason: "present only for an org that currently holds at least one superseded work unit still inside the request's time window; an org with no supersession rows (or none inside that window) shows no divergence under this path, which is expected, not stale",
+		DictKeyDirectionShape: &DictKeyDirectionShape{
+			DictPath:  "data.evidence_quality_stats.band_counts",
+			ValuePath: "data.evidence_quality_stats.band_counts",
+		},
+	},
+	{
+		Ticket:             "CHAOS-4441",
+		Reason:             "the same work_unit_supersessions exclusion, over evidence_quality_stats.total: computeQualityStats (response.go) sets it from the SAME strictly-subset row population's own count. Counting rows over a strict SUBSET of a population can only read less than or equal to the same count over the full population -- a structural fact, not an empirical skew -- so baseline is admitted only when strictly greater than candidate. Never observed firing on a real capture across the three available production deployed-vs-deployed prove runs; proven here by injected fault only.",
+		Paths:              []string{"data.evidence_quality_stats.total"},
+		Intermittent:       true,
+		IntermittentReason: "present only for an org that currently holds at least one superseded work unit still inside the request's time window; an org with no supersession rows (or none inside that window) shows no divergence under this path, which is expected, not stale",
+		ScalarDirectionShape: &ScalarDirectionShape{
+			Path:                  "data.evidence_quality_stats.total",
+			BaselineMustBeGreater: true,
+		},
 	},
 }
 
@@ -170,13 +265,67 @@ var investmentParity = Options{
 // join reads `repos` (ReplacingMergeTree, sorting key org_id/id) with
 // FINAL and an org_id predicate on Go's side; Python's own join carries
 // neither, so an unmerged physical version of a repo row can fan a
-// slice's value out by however many versions are still live for it.
+// slice's value out by however many versions are still live for it --
+// the same mechanism class already declared for sankey/heatmap's own
+// repos joins.
+//
+// SHAPED as a direction-only claim (KeyedDirectionShape), not a
+// multiplier: unlike the sankey/investment-flow graph, a sunburst row
+// carries no incident-edge structure to verify a uniform k against, only
+// its own (theme, subcategory, scope) key and value -- the SAME
+// row-population argument DictKeyDirectionShape's own doc comment
+// states (dictkeydirection.go) applies here too, just over a keyed LIST
+// rather than a plain object: Python's join can only ADD extra physical
+// copies of a matching repos row to a slice's sum, never remove one, so
+// baseline can only be pulled UP relative to candidate at a given key,
+// never down.
+//
+// Paths names data.value alone, not data.scope: once rows are paired by
+// (theme, subcategory, scope) -- investmentSunburstOrderInsensitiveLists,
+// below -- two paired elements share that SAME key by construction
+// (orderInsensitiveKey builds the pairing key from exactly those three
+// field values), so their own scope fields can never disagree at a
+// paired element; a genuine scope difference (a rename splitting one
+// repos row's contribution across two labels) always shows up as a
+// missing/extra KEY instead, a structural finding no BaselineDefect
+// shape ever covers (compare.go's leafDifference gate). Citing
+// data.scope covered nothing real and only advertised a guard this
+// citation cannot provide.
+//
+// NEVER OBSERVED FIRING ON A REAL CAPTURE: none of the three available
+// production deployed-vs-deployed prove runs (_records/deploy-71/r78/
+// step73, deploy-70/r77/step72, deploy-69/r76/step71) shows a genuine
+// instance of this mechanism -- step73's only sunburst mismatch is pure
+// position-shift noise (candidate[N] equals baseline[N+1] field-for-
+// field), the exact ordering artifact investmentSunburstOrderInsensitive
+// Lists above already resolves, not a value change; the other two runs
+// show a clean match. This shape is proven here only by a deliberately
+// injected fixture fault (investmentsunburst_direction_test.go), the same standard
+// sankeyInvestmentParity's own argMax-null-skip/ConservationShape entry
+// already documents. Zero firings across these three runs is consistent
+// with two different explanations -- the mechanism cannot occur on this
+// route, or it can and these three captures simply did not contain an
+// unmerged repos row -- and this shape does not distinguish between
+// them; it is unproven against real data either way.
+//
+// What this shape CANNOT catch: a real Go regression that under-counts
+// a slice's value (moving the SAME direction the mechanism itself
+// produces) is indistinguishable from a genuine instance from the two
+// response bodies alone -- only the sign is checked, never disproved,
+// the same known limit every direction-only shape in this package
+// documents.
 var investmentSunburstBaselineDefects = append(append([]BaselineDefect{}, investmentBaselineDefects...), BaselineDefect{
 	Ticket:             "CHAOS-4773",
-	Reason:             "the sunburst repo-name join reads repos with FINAL and an org_id predicate on Go's side; Python's own join has neither, so an unmerged physical version of a repo row can fan a slice's value out by however many versions are still live for it.",
-	Paths:              []string{"data.scope", "data.value"},
+	Reason:             "the sunburst repo-name join reads repos with FINAL and an org_id predicate on Go's side; Python's own join has neither, so an unmerged physical version of a repo row can fan a slice's value out by however many versions are still live for it. Direction only, no magnitude bound: Python's join can only add extra physical copies to a slice's sum, never remove one, so baseline is admitted only when strictly greater than candidate at the same (theme, subcategory, scope) key. Never observed firing on a real capture across the three available production deployed-vs-deployed prove runs; proven here by injected fault only.",
+	Paths:              []string{"data.value"},
 	Intermittent:       true,
 	IntermittentReason: "present only while a repo row referenced by this org's investment data still holds 2+ unmerged physical versions; once ClickHouse merges them the two planes agree and this citation covers nothing, which is expected, not stale",
+	KeyedDirectionShape: &KeyedDirectionShape{
+		ListPath:   "data",
+		ValueField: "value",
+		ValuePath:  "data.value",
+		KeyFields:  []string{"theme", "subcategory", "scope"},
+	},
 })
 
 // investmentSunburstOrderInsensitiveLists declares the sunburst list's
@@ -1069,31 +1218,210 @@ var sankeyCycleTimesDedupParity = Options{
 // (churn/throughput/review_load/review_latency), tracked under its own
 // BaselineDefect (quadrantRepoDedupParity) rather than folded in here,
 // since this ticket already covers four routes.
+//
+// ORDERING: unlike GET/POST /api/v1/sankey, this route's own nodes/links
+// carried NO OrderInsensitiveList declaration until now, even though it
+// reuses that SAME sankey.Response wire shape and the SAME first-touch
+// insertion order every one of this package's own builders produces
+// (investmentflow/builders.go's own doc comment: nodePresence/
+// nodeRunningTotal both build in first-touch order over a row set
+// neither plane's own SQL fully orders). Every shape below that reads a
+// finding's own keyed pairing (SankeyRepoFanoutShape, KeyedDirectionShape)
+// assumes this declaration already resolved that position-shift noise
+// into per-key findings -- see each shape's own doc comment.
+//
+// THREE ROOT CAUSES ON data.nodes/data.links, THREE DIFFERENT SHAPES: the
+// repos-join fan-out is a per-repo INTEGER MULTIPLIER, provable via each
+// anchor's own direct edges (SankeyRepoFanoutShape); the argMax
+// null-skip relabelling redistributes the SAME total across links with
+// no per-edge sign, provable only as a whole-list CONSERVED total
+// (ConservationShape); the supersession exclusion makes candidate's row
+// population a STRICT SUBSET of baseline's, provable only as a per-key
+// DIRECTION (baseline can only be pulled up, never down --
+// KeyedDirectionShape). All three can coexist on the SAME response (a
+// live org can hold unmerged repos rows, a re-categorizing work unit AND
+// a supersession, all at once), so all three are declared as SIBLING
+// entries under compare.go's own "a shaped defect's citation can
+// legitimately share Paths with a sibling declaration that explains the
+// same finding through a different mechanism" rule
+// (classifyBaselineDefects' own doc comment) -- never folded into one.
+//
+// THE SUPERSESSION EXCLUSION'S OWN CITATION IS FURTHER SPLIT ACROSS
+// SEVEN ENTRIES, one per field, because each field's own aggregate shape
+// differs: data.links/data.nodes are keyed lists (KeyedDirectionShape);
+// team_coverage/repo_coverage/distinct_team_targets/distinct_repo_targets
+// are single scalars (ScalarDirectionShape); unassigned_reasons is a
+// plain JSON object (DictKeyDirectionShape). data.chosen_mode/data.label/
+// data.description are DELIBERATELY DROPPED from every citation below
+// (see the note after the entries): the mechanism's effect on them is a
+// CATEGORICAL THRESHOLD FLIP, not a direction or a bound, and no shape
+// in this package can honestly cover that -- explainParity's own
+// precedent for an uncoverable structural manifestation
+// (explainScopeDropDefect's own "knowingly left uncovered" note) is the
+// same discipline applied here to a different kind of uncoverable
+// manifestation.
+//
+// NEVER OBSERVED FIRING ON A REAL CAPTURE: none of the three available
+// production deployed-vs-deployed prove runs (_records/deploy-71/r78/
+// step73, deploy-70/r77/step72, deploy-69/r76/step71) shows a genuine
+// instance of the repos-join fan-out, the argMax null-skip relabelling or
+// the supersession exclusion on investment/flow or investment/flow/
+// repo-team -- every admissible request in all three runs is a clean
+// match. Every shape below is proven only by a deliberately injected
+// fixture fault (sankeyrepofanout_nodevalue_test.go,
+// dictkeydirection_test.go, scalardirection_test.go), the same standard
+// sankeyInvestmentParity's own argMax-null-skip/ConservationShape entry
+// already documents. Zero firings across these three runs does not
+// establish the mechanisms cannot occur here -- it is equally consistent
+// with these three captures simply not containing an unmerged repos row,
+// a re-categorizing work unit or a supersession on these two routes; the
+// shapes are unproven against real data either way.
 var investmentFlowRepoDedupParity = Options{
+	OrderInsensitiveLists: []OrderInsensitiveList{
+		{
+			Path:      "data.nodes",
+			KeyFields: []string{"name"},
+			Reason:    "investmentflow/builders.go's own nodePresence/nodeRunningTotal both build nodes in first-touch order over a row set neither plane's own SQL fully orders, the same tie-break class already declared for GET/POST /api/v1/sankey's own data.nodes (sankeyRepoDedupParity). name is unique per node on each plane's own result set.",
+			Ticket:    "CHAOS-5873",
+		},
+		{
+			Path:      "data.links",
+			KeyFields: []string{"source", "target"},
+			Reason:    "the SAME first-touch insertion order as data.nodes, over the SAME under-ordered row set, the same tie-break class already declared for GET/POST /api/v1/sankey's own data.links (sankeyRepoDedupParity). (source, target) is unique per edge on each plane's own result set.",
+			Ticket:    "CHAOS-5873",
+		},
+	},
 	BaselineDefects: []BaselineDefect{
 		{
 			Ticket:             "CHAOS-5803",
-			Reason:             "repos is ReplacingMergeTree(last_synced) (000_raw_tables.sql); api/queries/investment.py's readers join it with no FINAL or org_id scoping at all, where this port (internal/investmentflow) reads it FINAL, org_id filtered inside the JOIN's own ON clause. An unmerged physical version of a repo row can surface as an extra or relabeled node. Go is correct.",
+			Reason:             "repos is ReplacingMergeTree(last_synced) (000_raw_tables.sql); api/queries/investment.py's readers join it with no FINAL or org_id scoping at all, where this port (internal/investmentflow) reads it FINAL, org_id filtered inside the JOIN's own ON clause. An unmerged physical version of a repo row fans out a clean, uniform integer multiplier across the whole repo-rooted subtree that repo's own edges reach -- the same mechanism already declared for GET/POST /api/v1/sankey's own repos join (sankeyRepoDedupParity), extended here to also admit the anchor's own NODE value: unlike plain sankey, this route's own node builders (nodePresence/nodeRunningTotal) populate a real running total per node, so a genuine instance moves an anchor's node value by the SAME k as its incident edges, not only the edges themselves. Go is correct. Never observed firing on a real capture across the three available production deployed-vs-deployed prove runs; proven here by injected fault only.",
 			Paths:              []string{"data.nodes", "data.links"},
 			Intermittent:       true,
 			IntermittentReason: "present only while repos holds an unmerged physical version inside the requested window; a comparison taken after the next background merge shows no divergence",
+			SankeyRepoFanoutShape: &SankeyRepoFanoutShape{
+				NodesListPath:       "data.nodes",
+				LinksListPath:       "data.links",
+				LinkValuePath:       "data.links.value",
+				NodeValuePath:       "data.nodes.value",
+				RepoNodeGroups:      []string{"repo"},
+				FallbackAnchorNames: []string{"Unassigned repo", "Other repos", "unassigned"},
+			},
 		},
 		{
 			Ticket:             "CHAOS-4547",
-			Reason:             "work_unit_investments.repo_id/work_unit_type/work_unit_name/provider are Nullable (017_investment_materialize_tables.sql, 019_work_unit_investment_labels.sql); api/queries/investment.py's own LATEST_WORK_UNIT_INVESTMENTS_CTE (the same definition api/queries/sankey.py imports by name for its own investment mode, already declared under this ticket as sankeyInvestmentParity) dedups them via a bare argMax(col, computed_at), which SKIPS a row whose column is NULL when picking the newest version, returning a STALE non-null value from an earlier generation instead of the true latest one. This port reuses analytics.LatestWorkUnitInvestmentsSource(), which tuple-wraps each of those columns -- (argMax(tuple(col), computed_at)).1 -- and therefore reads the true latest value. A work unit whose newest generation cleared one of those columns relative to an earlier one can change which node its effort lands on. Go is correct.",
-			Paths:              []string{"data.nodes", "data.links"},
+			Reason:             "work_unit_investments.repo_id/work_unit_type/work_unit_name/provider are Nullable (017_investment_materialize_tables.sql, 019_work_unit_investment_labels.sql); api/queries/investment.py's own LATEST_WORK_UNIT_INVESTMENTS_CTE (the same definition api/queries/sankey.py imports by name for its own investment mode, already declared under this ticket as sankeyInvestmentParity) dedups them via a bare argMax(col, computed_at), which SKIPS a row whose column is NULL when picking the newest version, returning a STALE non-null value from an earlier generation instead of the true latest one. This port reuses analytics.LatestWorkUnitInvestmentsSource(), which tuple-wraps each of those columns -- (argMax(tuple(col), computed_at)).1 -- and therefore reads the true latest value. A work unit whose newest generation cleared one of those columns relative to an earlier one moves its effort from one edge to another -- a redistribution, not an addition, so the response's own total link value is CONSERVED even though no single edge's sign is predictable, the same mechanism already declared for sankeyInvestmentParity's own data.links. Go is correct. Paths names data.links alone: a node's own value is a SUM/max over several edges (finishPresenceEdges/nodeRunningTotal), so this redistribution can move an individual node's total in either direction with no whole-node conservation to check -- ConservationShape's own whole-comparison rule only proves the LIST total is conserved, not any one node's share of it, and that gap is knowingly left uncovered (see the blind-spot note below) rather than guessed at. Never observed firing on a real capture across the three available production deployed-vs-deployed prove runs; proven here by injected fault only. BLIND SPOT: a node-value-only instance of this exact mechanism -- one whose links happen to stay within FloatTierB tolerance while the node total it feeds visibly moves -- is never covered by this entry; it would surface as an ordinary, uncovered data.nodes.value finding, which is correct and intended, not a gap in this citation's own scope.",
+			Paths:              []string{"data.links"},
 			Intermittent:       true,
 			IntermittentReason: "present only while at least one work unit in the requested window has a newer generation whose repo_id/work_unit_type/work_unit_name/provider differs (including a NULL transition) from an earlier generation's; a request whose work units never re-categorize shows no divergence",
+			ConservationShape: &ConservationShape{
+				ListPath:   "data.links",
+				ValueField: "value",
+				ValuePath:  "data.links.value",
+			},
 		},
 		{
 			Ticket:             "CHAOS-4441",
-			Reason:             "Every fetcher in this port composes analytics.LatestWorkUnitInvestmentsSource(), which appends `AND work_unit_id NOT IN (SELECT superseded_work_unit_id FROM work_unit_supersessions WHERE org_id = {org_id:String})` unconditionally (plan.md section 5a) -- a Go-only exclusion of work units a later regrouping run retired. work_unit_supersessions names no table anywhere in api/queries/investment.py or api/services/investment_flow.py: nothing in work_unit_investments/work_unit_repo_effort marks a superseded row dead on its own, so Python's own readers still include it, grouped under whatever repo_id/team/subcategory/theme it carried before being retired. A superseded work unit's effort can move a node's value, add or remove a node, change chosen_mode's own coverage-threshold decision, or shift the coverage/unassigned-reasons counts derived from the same filtered rows. Go is correct.",
-			Paths:              []string{"data.nodes", "data.links", "data.chosen_mode", "data.label", "data.description", "data.team_coverage", "data.repo_coverage", "data.distinct_team_targets", "data.distinct_repo_targets", "data.unassigned_reasons"},
+			Reason:             "every fetcher in this port composes analytics.LatestWorkUnitInvestmentsSource(), which appends `AND work_unit_id NOT IN (SELECT superseded_work_unit_id FROM work_unit_supersessions WHERE org_id = {org_id:String})` unconditionally -- a Go-only exclusion of work units a later regrouping run retired, making candidate's own row population a STRICT SUBSET of baseline's. A subtree/edge whose value sums that population can only be pulled UP by the rows Go excludes, never down, so baseline is admitted only when strictly greater than candidate at the same (source, target) key -- direction only, no magnitude bound. Go is correct. Never observed firing on a real capture across the three available production deployed-vs-deployed prove runs; proven here by injected fault only.",
+			Paths:              []string{"data.links"},
 			Intermittent:       true,
 			IntermittentReason: "present only while work_unit_supersessions holds at least one row for the org whose superseded_work_unit_id falls inside the requested window and scope; an org with no supersession rows in that window agrees on both planes",
+			KeyedDirectionShape: &KeyedDirectionShape{
+				ListPath:   "data.links",
+				ValueField: "value",
+				ValuePath:  "data.links.value",
+				KeyFields:  []string{"source", "target"},
+			},
+		},
+		{
+			Ticket:             "CHAOS-4441",
+			Reason:             "the same work_unit_supersessions exclusion as this ticket's data.links entry, over data.nodes: a node's own value sums the SAME strictly-subset row population, so it too can only be pulled up by an excluded row's effort, never down. Go is correct. Never observed firing on a real capture across the three available production deployed-vs-deployed prove runs; proven here by injected fault only.",
+			Paths:              []string{"data.nodes"},
+			Intermittent:       true,
+			IntermittentReason: "present only while work_unit_supersessions holds at least one row for the org whose superseded_work_unit_id falls inside the requested window and scope; an org with no supersession rows in that window agrees on both planes",
+			KeyedDirectionShape: &KeyedDirectionShape{
+				ListPath:   "data.nodes",
+				ValueField: "value",
+				ValuePath:  "data.nodes.value",
+				KeyFields:  []string{"name"},
+			},
+		},
+		{
+			Ticket:             "CHAOS-4441",
+			Reason:             "the same work_unit_supersessions exclusion, over team_coverage: coverageStats/edgeStats (builders.go) compute it as assignedValue/totalValue over this SAME strictly-subset population. A retired work unit is typically retired BECAUSE its earlier team/repo grouping was wrong, so the rows Python keeps and Go excludes skew disproportionately toward unassigned -- the SAME reasoning already established for investmentFull's own sankey coverage (SupersessionSkewShape). That gives a DIRECTION, not a magnitude: baseline is admitted only when strictly less than candidate. Go is correct. Never observed firing on a real capture across the three available production deployed-vs-deployed prove runs; proven here by injected fault only.",
+			Paths:              []string{"data.team_coverage"},
+			Intermittent:       true,
+			IntermittentReason: "present only while work_unit_supersessions holds at least one row for the org whose superseded_work_unit_id falls inside the requested window and scope; an org with no supersession rows in that window agrees on both planes",
+			ScalarDirectionShape: &ScalarDirectionShape{
+				Path:                  "data.team_coverage",
+				BaselineMustBeGreater: false,
+			},
+		},
+		{
+			Ticket:             "CHAOS-4441",
+			Reason:             "the same work_unit_supersessions exclusion and the same coverageStats/edgeStats formula as this ticket's data.team_coverage entry, over repo_coverage: a retired work unit typically skews Python's own ratio down relative to Go's, the same reasoning SupersessionSkewShape already establishes for investmentFull. Go is correct. Never observed firing on a real capture across the three available production deployed-vs-deployed prove runs; proven here by injected fault only.",
+			Paths:              []string{"data.repo_coverage"},
+			Intermittent:       true,
+			IntermittentReason: "present only while work_unit_supersessions holds at least one row for the org whose superseded_work_unit_id falls inside the requested window and scope; an org with no supersession rows in that window agrees on both planes",
+			ScalarDirectionShape: &ScalarDirectionShape{
+				Path:                  "data.repo_coverage",
+				BaselineMustBeGreater: false,
+			},
+		},
+		{
+			Ticket:             "CHAOS-4441",
+			Reason:             "the same work_unit_supersessions exclusion, over distinct_team_targets: coverageStats/edgeStats count DISTINCT assigned team names among the rows (builders.go's own teamSeen/seen sets). Removing a row from a population can only remove or preserve a distinct label already seen, never add one Go's own smaller population lacks -- a plain structural fact, not an empirical skew -- so baseline (over the LARGER population) is admitted only when strictly greater than candidate. Go is correct. Never observed firing on a real capture across the three available production deployed-vs-deployed prove runs; proven here by injected fault only.",
+			Paths:              []string{"data.distinct_team_targets"},
+			Intermittent:       true,
+			IntermittentReason: "present only while work_unit_supersessions holds at least one row for the org whose superseded_work_unit_id falls inside the requested window and scope, AND that row's own team is not otherwise represented among the org's non-superseded rows; an org with no such row agrees on both planes",
+			ScalarDirectionShape: &ScalarDirectionShape{
+				Path:                  "data.distinct_team_targets",
+				BaselineMustBeGreater: true,
+			},
+		},
+		{
+			Ticket:             "CHAOS-4441",
+			Reason:             "the same work_unit_supersessions exclusion and the same distinct-count structural argument as this ticket's data.distinct_team_targets entry, over distinct_repo_targets. Go is correct. Never observed firing on a real capture across the three available production deployed-vs-deployed prove runs; proven here by injected fault only.",
+			Paths:              []string{"data.distinct_repo_targets"},
+			Intermittent:       true,
+			IntermittentReason: "present only while work_unit_supersessions holds at least one row for the org whose superseded_work_unit_id falls inside the requested window and scope, AND that row's own repo is not otherwise represented among the org's non-superseded rows; an org with no such row agrees on both planes",
+			ScalarDirectionShape: &ScalarDirectionShape{
+				Path:                  "data.distinct_repo_targets",
+				BaselineMustBeGreater: true,
+			},
+		},
+		{
+			Ticket:             "CHAOS-4441",
+			Reason:             "the same work_unit_supersessions exclusion, over unassigned_reasons: fetchInvestmentUnassignedCounts composes the SAME strictly-subset population to count missing_team/missing_repo rows. Counting rows that share a key over a strict SUBSET of a population can only read less than or equal to the same count over the full population -- a structural fact, not an empirical skew -- so baseline is admitted only when strictly greater than candidate at each key. Go is correct. Never observed firing on a real capture across the three available production deployed-vs-deployed prove runs; proven here by injected fault only.",
+			Paths:              []string{"data.unassigned_reasons"},
+			Intermittent:       true,
+			IntermittentReason: "present only while work_unit_supersessions holds at least one row for the org whose superseded_work_unit_id falls inside the requested window and scope, AND that row is itself missing a team or repo assignment; an org with no such row agrees on both planes",
+			DictKeyDirectionShape: &DictKeyDirectionShape{
+				DictPath:  "data.unassigned_reasons",
+				ValuePath: "data.unassigned_reasons",
+			},
 		},
 	},
 }
+
+// investmentFlowRepoDedupParity DELIBERATELY carries no citation at all
+// for data.chosen_mode/data.label/data.description, even though the
+// SAME work_unit_supersessions exclusion above also feeds
+// buildDynamicModeResponse's own coverage-threshold decision
+// (distinctTeamTargets >= 2 && teamCoverage >= 0.70, else a repo_scope
+// test, else fallback -- investmentflow.go). Those inputs move under
+// this exact exclusion, so the CHOSEN MODE -- a categorical decision, not
+// a number -- can flip between the two planes with no direction and no
+// bound: a flip is not "a little wrong" or "a lot wrong" the way a ratio
+// or a count is, so no shape in this package (direction, tolerance,
+// multiplier or conservation) can honestly claim to explain it. label/
+// description are fixed 1:1 off chosen_mode in the dynamic branch and
+// fixed constants everywhere else, so they inherit the same problem.
+// Leaving these three blanket-covered would hide a genuine Go bug in the
+// >=0.70/>=2 threshold logic behind this citation -- exactly the failure
+// mode this shaping programme exists to remove. A real chosen_mode/
+// label/description divergence therefore surfaces as an ordinary,
+// uncovered finding on the next prove run; that is correct and intended,
+// not a regression.
 
 // quadrantRepoDedupParity is shared by every REPO_METRICS-grain quadrant
 // request whose fetcher joins repos -- churn_throughput's forced

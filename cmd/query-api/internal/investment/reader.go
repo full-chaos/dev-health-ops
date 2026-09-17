@@ -142,6 +142,24 @@ func scopeClause(repoIDs []string) (sql string, bindings []dhclickhouse.Binding)
 	}
 }
 
+// combinedScopeClause renders the explicit repo refs and a team scope's own
+// ownership condition as one clause. Both present means the union, matching
+// what a request naming a team and explicit repos asks for; neither present
+// means no clause, which is an org-wide read.
+func combinedScopeClause(repoIDs []string, teamCondition string, teamBindings []dhclickhouse.Binding) (sql string, bindings []dhclickhouse.Binding) {
+	explicitSQL, explicitBindings := scopeClause(repoIDs)
+	switch {
+	case explicitSQL != "" && teamCondition != "":
+		return " AND (repo_id IN {scope_ids:Array(String)} OR " + teamCondition + ")",
+			append(append([]dhclickhouse.Binding{}, explicitBindings...), teamBindings...)
+	case explicitSQL != "":
+		return explicitSQL, explicitBindings
+	case teamCondition != "":
+		return " AND " + teamCondition, teamBindings
+	}
+	return "", nil
+}
+
 func dedupeStrings(values []string) []string {
 	seen := make(map[string]struct{}, len(values))
 	result := make([]string, 0, len(values))

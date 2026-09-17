@@ -6,6 +6,8 @@ import (
 	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/teamscope"
 )
 
 // PRParams is the already-resolved request shape both
@@ -169,6 +171,15 @@ func BuildPRsResponse(ctx context.Context, reader *Reader, orgID string, params 
 		return nil, err
 	}
 	scopeSQL, scopeBindings := scopeClauseRepo(repoIDs)
+	if params.ScopeLevel == "team" && len(params.ScopeIDs) > 0 {
+		teamCondition, teamBindings := teamscope.RepoCondition(orgID, "pr.repo_id", params.ScopeIDs, time.Now().UTC())
+		if scopeSQL != "" {
+			scopeSQL = " AND (pr.repo_id IN {scope_ids:Array(String)} OR " + teamCondition + ")"
+		} else {
+			scopeSQL = " AND " + teamCondition
+		}
+		scopeBindings = append(scopeBindings, teamBindings...)
+	}
 
 	query := fmt.Sprintf(fetchPullRequestsQuery, scopeSQL, settingsMaxExecutionTime())
 	bindings := append([]dhclickhouse.Binding{

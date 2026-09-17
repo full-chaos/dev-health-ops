@@ -85,23 +85,3 @@ func TestResolveRepoIDByNameQueryShape(t *testing.T) {
 	}
 	assertSameDepth(t, client.lastQuery, "FROM repos FINAL", "repo = {repo_name:String}", "org_id = {org_id:String}")
 }
-
-// TestResolveRepoIDsForTeamsQueryShape pins that user_metrics_daily,
-// which migration 096 converts to ReplacingMergeTree(computed_at) with
-// team_id outside its sorting key, is read with FINAL (never raw) --
-// class ruling requirement (b) -- and that the org filter sits inside
-// this same read, at the SAME nesting depth as FINAL and team_id --
-// requirement (a). See this function's own doc comment in repofilter.go
-// for why team_id being outside the sorting key makes the FINAL dedup
-// load-bearing here, not just a style preference.
-func TestResolveRepoIDsForTeamsQueryShape(t *testing.T) {
-	client := &queryCapturingClient{}
-	reader, err := NewReader(client)
-	if err != nil {
-		t.Fatalf("NewReader: %v", err)
-	}
-	if _, err := reader.resolveRepoIDsForTeams(context.Background(), []string{"team-x"}, "org-1"); err != nil {
-		t.Fatalf("resolveRepoIDsForTeams: %v", err)
-	}
-	assertSameDepth(t, client.lastQuery, "FROM user_metrics_daily FINAL", "team_id IN {team_ids:Array(String)}", "org_id = {org_id:String}")
-}

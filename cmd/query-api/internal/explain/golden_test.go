@@ -146,7 +146,7 @@ func (d *explainQueryDispatch) handle(t *testing.T, query string, bindings []dhc
 // metric="throughput" (team scope, sum aggregator), scope.level="org" --
 // scopeFilterForMetric's "team" branch requires scope.level=="team", so
 // an org-level request applies NO scope filter and never touches
-// resolveRepoIDs/teamRepoScopeCondition. Exercises: fetchMetricValue
+// resolveRepoIDs/teamscope.RepoCondition. Exercises: fetchMetricValue
 // (current 120.0, previous 100.0 -> delta_pct 20.0), fetchMetricDriverDelta
 // (2 rows) and fetchMetricContributors (the SAME 2 ids, delta forced to
 // 0.0 by buildContributor), and resolveScopeDisplayNames("team", ...) for

@@ -18,9 +18,11 @@ package heatmap
 import (
 	"context"
 	"fmt"
+	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
@@ -100,76 +102,18 @@ func resolveRepoIDs(ctx context.Context, client QueryClient, repoRefs []string, 
 	return resolved, nil
 }
 
-// resolveRepoIDsForTeams ports resolve_repo_ids_for_teams (api/queries/
-// scopes.py:72-89). user_metrics_daily is ReplacingMergeTree(computed_at)
-// since migration 096 with team_id outside the sorting key; read FINAL.
-func resolveRepoIDsForTeams(ctx context.Context, client QueryClient, teamIDs []string, orgID string) ([]string, error) {
-	if client == nil {
-		return nil, ErrUnavailable
-	}
-
-	var teamList []string
-	for _, id := range teamIDs {
-		if id != "" {
-			teamList = append(teamList, id)
-		}
-	}
-	if len(teamList) == 0 {
-		return nil, nil
-	}
-
-	query := fmt.Sprintf(`
-SELECT DISTINCT toString(repo_id) AS id
-FROM user_metrics_daily FINAL
-WHERE org_id = {org_id:String}
-  AND team_id IN {team_ids:Array(String)}
-%s
-`, settingsMaxExecutionTime())
-	bindings := []dhclickhouse.Binding{
-		{Name: "team_ids", Value: teamList},
-		{Name: "org_id", Value: orgID},
-	}
-
-	rows, err := client.Query(ctx, query, bindings)
-	if err != nil {
-		return nil, fmt.Errorf("heatmap: resolve repo ids for teams: %w", err)
-	}
-	defer rows.Close()
-
-	var out []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("heatmap: scan resolve repo ids for teams row: %w", err)
-		}
-		if id != "" {
-			out = append(out, id)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("heatmap: iterate resolve repo ids for teams rows: %w", err)
-	}
-	return out, nil
-}
-
-// resolveRepoFilterIDs ports resolve_repo_filter_ids (api/services/
-// filtering.py:95-110). whatRepos is always nil for this route (heatmap's
-// MetricFilter never sets filters.what.repos -- build_heatmap_response
-// constructs MetricFilter with only time/scope set), kept as a parameter
-// for parity with the ported Python signature.
+// resolveRepoFilterIDs resolves the EXPLICIT repo refs a request names.
+// whatRepos is always nil for this route (heatmap's MetricFilter never sets
+// filters.what.repos -- build_heatmap_response constructs MetricFilter with
+// only time/scope set), kept as a parameter for parity with the ported
+// Python signature. A team scope resolves nowhere here: its repositories
+// come from team_repo_ownership, pushed into SQL by teamscope.RepoCondition.
 func resolveRepoFilterIDs(ctx context.Context, client QueryClient, scopeLevel string, scopeIDs, whatRepos []string, orgID string) ([]string, error) {
 	var repoRefs []string
 	if scopeLevel == "repo" {
 		repoRefs = append(repoRefs, scopeIDs...)
 	}
 	repoRefs = append(repoRefs, whatRepos...)
-	if scopeLevel == "team" && len(scopeIDs) > 0 {
-		teamRepoIDs, err := resolveRepoIDsForTeams(ctx, client, scopeIDs, orgID)
-		if err != nil {
-			return nil, err
-		}
-		repoRefs = append(repoRefs, teamRepoIDs...)
-	}
 	return resolveRepoIDs(ctx, client, repoRefs, orgID)
 }
 
@@ -197,7 +141,7 @@ func scopeClauseTeam(teamIDs []string) (filterSQL string, bindings []dhclickhous
 // unlike explain.py's own call site (explain/response.go's own declared
 // org_id-omission defect) -- there is no org_id-drop defect to declare
 // here: the real org id is threaded through on both planes.
-func scopeFilterForMetric(ctx context.Context, client QueryClient, metricScope, scopeLevel string, scopeIDs, whatRepos []string, orgID string) (filterSQL string, bindings []dhclickhouse.Binding, err error) {
+func scopeFilterForMetric(ctx context.Context, client QueryClient, metricScope, scopeLevel string, scopeIDs, whatRepos []string, orgID string, asOf time.Time) (filterSQL string, bindings []dhclickhouse.Binding, err error) {
 	if metricScope == "team" && scopeLevel == "team" {
 		filterSQL, bindings = scopeClauseTeam(scopeIDs)
 		return filterSQL, bindings, nil
@@ -207,8 +151,24 @@ func scopeFilterForMetric(ctx context.Context, client QueryClient, metricScope, 
 		if resolveErr != nil {
 			return "", nil, resolveErr
 		}
-		filterSQL, bindings = scopeClauseRepo(repoIDs)
-		return filterSQL, bindings, nil
+		explicitSQL, explicitBindings := scopeClauseRepo(repoIDs)
+
+		var teamCondition string
+		var teamBindings []dhclickhouse.Binding
+		if scopeLevel == "team" && len(scopeIDs) > 0 {
+			teamCondition, teamBindings = teamscope.RepoCondition(orgID, "repo_id", scopeIDs, asOf)
+		}
+
+		switch {
+		case explicitSQL != "" && teamCondition != "":
+			return " AND (repo_id IN {scope_ids:Array(String)} OR " + teamCondition + ")",
+				append(append([]dhclickhouse.Binding{}, explicitBindings...), teamBindings...), nil
+		case explicitSQL != "":
+			return explicitSQL, explicitBindings, nil
+		case teamCondition != "":
+			return " AND " + teamCondition, teamBindings, nil
+		}
+		return "", nil, nil
 	}
 	return "", nil, nil
 }

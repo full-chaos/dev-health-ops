@@ -295,7 +295,7 @@ func TestSankeyAggregateReads_SeededRealClickHouse_ScanFloat64(t *testing.T) {
 	})
 
 	t.Run("buildHotspotFlow", func(t *testing.T) {
-		_, links, err := buildHotspotFlow(ctx, client, startDay, endDay, "", nil, nil, orgID)
+		_, links, err := buildHotspotFlow(ctx, client, startDay, endDay, "", nil, nil, orgID, teamScopeAsOf)
 		if err != nil {
 			t.Fatalf("buildHotspotFlow: %v (this is the UInt64-scan defect if the message contains "+
 				"\"converting UInt64\" / \"unsupported\")", err)

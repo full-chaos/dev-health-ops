@@ -198,15 +198,20 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string, params
 	var links []Link
 	var err error
 
+	// One instant for the whole response: a repo-keyed mode builds several
+	// statements from one scope, so they resolve one team membership. The
+	// expense and state modes key on a team column and take no instant.
+	asOf := time.Now().UTC()
+
 	switch mode {
 	case "investment":
-		nodes, links, err = buildInvestmentFlow(ctx, client, params.StartDay, params.EndDay, scopeLevel, params.ScopeIDs, params.WhatRepos, params.WorkCategory, orgID)
+		nodes, links, err = buildInvestmentFlow(ctx, client, params.StartDay, params.EndDay, scopeLevel, params.ScopeIDs, params.WhatRepos, params.WorkCategory, orgID, asOf)
 	case "expense":
 		nodes, links, err = buildExpenseFlow(ctx, client, params.StartDay, params.EndDay, scopeLevel, params.ScopeIDs, params.WhatRepos, orgID)
 	case "state":
 		nodes, links, err = buildStateFlow(ctx, client, params.StartDay, params.EndDay, scopeLevel, params.ScopeIDs, params.WhatRepos, orgID)
 	case "hotspot":
-		nodes, links, err = buildHotspotFlow(ctx, client, params.StartDay, params.EndDay, scopeLevel, params.ScopeIDs, params.WhatRepos, orgID)
+		nodes, links, err = buildHotspotFlow(ctx, client, params.StartDay, params.EndDay, scopeLevel, params.ScopeIDs, params.WhatRepos, orgID, asOf)
 	}
 	if err != nil {
 		return nil, err

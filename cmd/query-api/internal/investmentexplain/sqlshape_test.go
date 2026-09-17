@@ -5,9 +5,17 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/sqlshape"
+
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/teamscope"
 )
+
+// teamScopeAsOf is the fixed instant every team-scope assertion in this
+// file resolves ownership at, so an assertion states the instant it is
+// about rather than depending on when the test ran.
+var teamScopeAsOf = time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
 
 // TestOrgIDScopesEveryFixedReadAtTheSameNestingDepthAsFinal pins the
 // class ruling for the readers this package's sweep fixed:
@@ -115,7 +123,7 @@ func TestOrgIDScopesEveryFixedReadAtTheSameNestingDepthAsFinal(t *testing.T) {
 // assertOrgIDSameDepthAsMarkerNamed is the same depth check as
 // TestOrgIDScopesEveryFixedReadAtTheSameNestingDepthAsFinal's own inline
 // check, generalised for a condition string that carries a caller-chosen
-// predicate (TeamRepoScopeCondition's own uniquely-named org-id binding)
+// predicate (teamscope.RepoCondition's own uniquely-named org-id binding)
 // instead of the package's plain org_id/{org_id:String} pair.
 func assertOrgIDSameDepthAsMarkerNamed(t *testing.T, query, marker, predicate string) {
 	t.Helper()
@@ -140,65 +148,6 @@ func assertOrgIDSameDepthAsMarkerNamed(t *testing.T, query, marker, predicate st
 	}
 }
 
-// TestTeamRepoScopeConditionQueryShape pins TeamRepoScopeCondition's own
-// query shape: the team -> repo_id membership test (user_metrics_daily,
-// ReplacingMergeTree(computed_at), team_id outside its sorting key) is
-// read with FINAL and sits ONE level deeper than the repos (also FINAL)
-// membership test it is nested inside -- the two reads are never
-// flattened into a single depth, which is what lets the outer condition
-// stay a single boolean the caller's own statement evaluates, rather than
-// a separate query whose own result rows the client must receive first.
-// Mirrors internal/home/sqlshape_test.go and
-// internal/explain/sqlshape_test.go's identical pin for the same fix in
-// sibling packages.
-func TestTeamRepoScopeConditionQueryShape(t *testing.T) {
-	condition, bindings := TeamRepoScopeCondition("org-1", "repo_id", []string{"team-x"})
-	assertOrgIDSameDepthAsMarkerNamed(t, condition, "FROM repos FINAL", "org_id = {team_repo_scope_org_id:String}")
-	assertOrgIDSameDepthAsMarkerNamed(t, condition, "FROM user_metrics_daily FINAL", "team_id IN {team_repo_scope_ids:Array(String)}")
-
-	depths := sqlshape.Depths(condition)
-	outerIdx := strings.Index(condition, "FROM repos FINAL")
-	innerIdx := strings.Index(condition, "FROM user_metrics_daily FINAL")
-	if outerIdx == -1 || innerIdx == -1 {
-		t.Fatalf("condition missing expected FROM clauses:\n%s", condition)
-	}
-	if depths[innerIdx] != depths[outerIdx]+1 {
-		t.Fatalf("user_metrics_daily read sits at depth %d, repos read at depth %d -- want exactly one level deeper (a nested subquery, not a flattened join):\n%s",
-			depths[innerIdx], depths[outerIdx], condition)
-	}
-
-	var sawIDs, sawOrgID bool
-	for _, b := range bindings {
-		if b.Name == "team_repo_scope_ids" {
-			sawIDs = true
-			if fmt.Sprint(b.Value) != "[team-x]" {
-				t.Fatalf("team_repo_scope_ids binding = %v, want [team-x]", b.Value)
-			}
-		}
-		if b.Name == "team_repo_scope_org_id" {
-			sawOrgID = true
-			if b.Value != "org-1" {
-				t.Fatalf("team_repo_scope_org_id binding = %v, want org-1", b.Value)
-			}
-		}
-	}
-	if !sawIDs || !sawOrgID {
-		t.Fatalf("bindings = %+v, want both team_repo_scope_ids and team_repo_scope_org_id", bindings)
-	}
-}
-
-// TestTeamRepoScopeConditionEmptyTeamsNoCondition pins the empty-input
-// contract: no team ids (or only blank ones) means no condition and no
-// bindings.
-func TestTeamRepoScopeConditionEmptyTeamsNoCondition(t *testing.T) {
-	if condition, bindings := TeamRepoScopeCondition("org-1", "repo_id", nil); condition != "" || bindings != nil {
-		t.Fatalf("nil teamIDs: condition=%q bindings=%v, want empty", condition, bindings)
-	}
-	if condition, bindings := TeamRepoScopeCondition("org-1", "repo_id", []string{""}); condition != "" || bindings != nil {
-		t.Fatalf("blank-only teamIDs: condition=%q bindings=%v, want empty", condition, bindings)
-	}
-}
-
 // TestBreakdownFiltersScopeClauseTeamScopeNeverRoundTripsForRepoIDs is a
 // regression pin: a repo-scoped breakdown filtered by team never asks the
 // client to resolve or verify a repo-id LIST for that team as its own
@@ -211,10 +160,10 @@ func TestTeamRepoScopeConditionEmptyTeamsNoCondition(t *testing.T) {
 // own: the team's repo_id membership is a condition inside the CALLER's
 // eventual statement, never a standalone read of its own.
 func TestBreakdownFiltersScopeClauseTeamScopeNeverRoundTripsForRepoIDs(t *testing.T) {
-	teamCondition, teamBindings := TeamRepoScopeCondition("org-1", "repo_id", []string{"team-x", "team-y"})
+	teamCondition, teamBindings := teamscope.RepoCondition("org-1", "repo_id", []string{"team-x", "team-y"}, teamScopeAsOf)
 	f := BreakdownFilters{TeamScopeCondition: teamCondition, TeamScopeBindings: teamBindings}
 	scopeSQL, bindings := f.scopeClause()
-	if !strings.Contains(scopeSQL, "repo_id IN (") || !strings.Contains(scopeSQL, "FROM user_metrics_daily FINAL") {
+	if !strings.Contains(scopeSQL, "repo_id IN (") || !strings.Contains(scopeSQL, teamscope.Marker) {
 		t.Fatalf("scopeSQL missing the pushed-down team membership condition:\n%s", scopeSQL)
 	}
 	if strings.Contains(scopeSQL, "repo_id IN {scope_ids:Array(String)}") {
@@ -222,15 +171,15 @@ func TestBreakdownFiltersScopeClauseTeamScopeNeverRoundTripsForRepoIDs(t *testin
 	}
 	var sawIDs bool
 	for _, b := range bindings {
-		if b.Name == "team_repo_scope_ids" {
+		if b.Name == teamscope.BindingTeamIDs {
 			sawIDs = true
 			if fmt.Sprint(b.Value) != "[team-x team-y]" {
-				t.Fatalf("team_repo_scope_ids binding = %v, want [team-x team-y]", b.Value)
+				t.Fatalf("%s binding = %v, want [team-x team-y]", teamscope.BindingTeamIDs, b.Value)
 			}
 		}
 	}
 	if !sawIDs {
-		t.Fatalf("bindings = %+v, want team_repo_scope_ids", bindings)
+		t.Fatalf("bindings = %+v, want %s", bindings, teamscope.BindingTeamIDs)
 	}
 }
 
@@ -239,7 +188,7 @@ func TestBreakdownFiltersScopeClauseTeamScopeNeverRoundTripsForRepoIDs(t *testin
 // explicit what.repos ref alongside a team scope means EITHER condition
 // can match, not both required.
 func TestBreakdownFiltersScopeClauseUnionsExplicitReposWithTeamScope(t *testing.T) {
-	teamCondition, teamBindings := TeamRepoScopeCondition("org-1", "repo_id", []string{"team-x"})
+	teamCondition, teamBindings := teamscope.RepoCondition("org-1", "repo_id", []string{"team-x"}, teamScopeAsOf)
 	f := BreakdownFilters{RepoIDs: []string{"repo-1"}, TeamScopeCondition: teamCondition, TeamScopeBindings: teamBindings}
 	scopeSQL, bindings := f.scopeClause()
 	if !strings.HasPrefix(scopeSQL, " AND (repo_id IN {scope_ids:Array(String)} OR repo_id IN (") {
@@ -253,11 +202,11 @@ func TestBreakdownFiltersScopeClauseUnionsExplicitReposWithTeamScope(t *testing.
 				t.Fatalf("scope_ids binding = %v, want [repo-1]", b.Value)
 			}
 		}
-		if b.Name == "team_repo_scope_ids" {
+		if b.Name == teamscope.BindingTeamIDs {
 			sawTeamIDs = true
 		}
 	}
 	if !sawScopeIDs || !sawTeamIDs {
-		t.Fatalf("bindings = %+v, want both scope_ids and team_repo_scope_ids", bindings)
+		t.Fatalf("bindings = %+v, want both scope_ids and %s", bindings, teamscope.BindingTeamIDs)
 	}
 }

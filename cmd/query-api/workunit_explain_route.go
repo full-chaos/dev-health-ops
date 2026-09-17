@@ -41,6 +41,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/investmentexplain"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/principal"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/routeswitch"
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/teamscope"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/workunitexplain"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
 	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
@@ -319,18 +320,18 @@ func newWorkUnitExplainHandler(
 			writeWorkUnitExplainUnavailable(w, r, claims.OrgID, err)
 			return
 		}
-		// ResolveRepoFilterIDs ignores a TEAM-level scope id by design (its
-		// own doc comment): a team's repositories are a membership test
-		// pushed into the read, not a materialised id list. Resolving repo
-		// ids alone would therefore apply no narrowing at all for
-		// scope_type=team, and a request for a unit outside the team would
-		// be answered instead of refused. Same shared function, same
-		// column, same shape as the work-units GET and the
+		// ResolveRepoFilterIDs resolves only the explicit repo refs a request
+		// names (its own doc comment): a team's repositories come from
+		// team_repo_ownership, as a membership test pushed into the read
+		// rather than a materialised id list. Resolving repo ids alone
+		// applies no narrowing at all for scope_type=team, and a request for
+		// a unit outside the team is answered instead of refused. Same shared
+		// condition, same column, same shape as the work-units GET and the
 		// investment-explain POST.
 		var teamCondition string
 		var teamBindings []dhclickhouse.Binding
 		if parsed.scopeType == "team" && len(scopeIDs) > 0 {
-			teamCondition, teamBindings = investmentexplain.TeamRepoScopeCondition(claims.OrgID, repoScopeColumn, scopeIDs)
+			teamCondition, teamBindings = teamscope.RepoCondition(claims.OrgID, repoScopeColumn, scopeIDs, time.Now().UTC())
 		}
 
 		investments, err := reader.BuildWorkUnitInvestments(r.Context(), investmentexplain.BuildWorkUnitInvestmentsOptions{

@@ -100,25 +100,16 @@ func (reader *Reader) resolveRepoIDs(ctx context.Context, repoRefs []string, org
 	return resolved, nil
 }
 
-// ResolveRepoFilterIDs ports resolve_repo_filter_ids' EXPLICIT-ref branch
-// (api/services/filtering.py:95-110): filters.scope.ids at scope="repo",
-// unioned with filters.what.repos, each resolved individually via
-// resolveRepoIDs. This list is bounded by what the caller named, not by
-// organization scale, so it stays a materialized id list.
+// ResolveRepoFilterIDs resolves the EXPLICIT repo refs a request names:
+// filters.scope.ids at scope="repo", unioned with filters.what.repos, each
+// verified individually via resolveRepoIDs (api/services/filtering.py:95-110's
+// own explicit-ref branch). This list is bounded by what the caller named, not
+// by organization scale, so it stays a materialized id list.
 //
-// The team-scope branch (team scope is the attribution use case; this
-// endpoint answers a team-level request rather than rejecting it) is NOT
-// resolved here -- see TeamRepoScopeCondition's own doc comment
-// for why a team's repo membership is pushed into SQL as a condition
-// instead of materialized as a second id list by this function. A prior
-// version of this function did materialize it, via a standalone
-// `SELECT DISTINCT repo_id FROM user_metrics_daily ...` -- a team's true
-// matching-repo count can exceed the read-only client's max_result_rows
-// ceiling (1,000 -- dev-health-go's clickhouse/options.go), which that
-// query hit directly in production (2,224 distinct repo ids for the
-// largest team). Callers combine this function's result with
-// TeamRepoScopeCondition's own condition (an OR of the two) to reproduce
-// the original union semantics without that risk.
+// A team scope resolves nowhere in this function. A team's repositories come
+// from team_repo_ownership, pushed into SQL as a condition by
+// cmd/query-api/internal/teamscope.RepoCondition, and callers OR the two
+// together. See that package's doc comment for the source and the semantics.
 func (reader *Reader) ResolveRepoFilterIDs(ctx context.Context, scopeLevel string, scopeIDs, whatRepos []string, orgID string) ([]string, error) {
 	var repoRefs []string
 	if scopeLevel == "repo" {
@@ -126,46 +117,4 @@ func (reader *Reader) ResolveRepoFilterIDs(ctx context.Context, scopeLevel strin
 	}
 	repoRefs = append(repoRefs, whatRepos...)
 	return reader.resolveRepoIDs(ctx, repoRefs, orgID)
-}
-
-// TeamRepoScopeCondition returns repoColumn's team-scope membership test
-// as a standalone boolean SQL condition (no leading "AND", no trailing
-// statement) -- same shape and rationale as internal/home/scopefilter.go
-// and internal/explain/repofilter.go's own copies of this exact fix: a
-// team's true matching-repo count can exceed the read-only client's
-// max_result_rows ceiling (1,000 -- dev-health-go's clickhouse/
-// options.go), which the prior materializing resolveRepoIDsForTeams'
-// standalone `SELECT DISTINCT repo_id FROM user_metrics_daily ...` hit
-// directly in production. Resolving the team's repo set entirely inside
-// this condition means the surrounding statement's own (small) result
-// set is the only thing that ever crosses back to the caller, instead of
-// asking the client to hand back every matching id as its OWN result
-// first. Duplicated here rather than imported, matching this package's
-// (and its siblings') "repeat, don't couple" convention for this narrow
-// a helper. Empty/blank team ids are dropped, matching resolveRepoIDs'
-// own blank-ref skip; the return is ("", nil) in that case.
-func TeamRepoScopeCondition(orgID, repoColumn string, teamIDs []string) (condition string, bindings []dhclickhouse.Binding) {
-	var teamList []string
-	for _, id := range teamIDs {
-		if id != "" {
-			teamList = append(teamList, id)
-		}
-	}
-	if len(teamList) == 0 {
-		return "", nil
-	}
-	return fmt.Sprintf(`%s IN (
-    SELECT toString(id) AS id
-    FROM repos FINAL
-    WHERE org_id = {team_repo_scope_org_id:String}
-      AND toString(id) IN (
-          SELECT DISTINCT toString(repo_id) AS id
-          FROM user_metrics_daily FINAL
-          WHERE org_id = {team_repo_scope_org_id:String}
-            AND team_id IN {team_repo_scope_ids:Array(String)}
-      )
-)`, repoColumn), []dhclickhouse.Binding{
-		{Name: "team_repo_scope_ids", Value: teamList},
-		{Name: "team_repo_scope_org_id", Value: orgID},
-	}
 }

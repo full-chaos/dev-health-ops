@@ -18,9 +18,11 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
@@ -102,63 +104,10 @@ func resolveRepoIDs(ctx context.Context, client QueryClient, repoRefs []string, 
 	return resolved, nil
 }
 
-// resolveRepoIDsForTeams ports resolve_repo_ids_for_teams (api/queries/
-// scopes.py:72-89). user_metrics_daily is read as a plain (undeduped) scan
-// by Python here too; this route's own class ruling scopes that to a
-// separate declared defect only if a live divergence is ever observed --
-// left as a plain read here, unchanged from Python, matching
-// heatmap/scopefilter.go's own copy of this exact function (its own doc
-// comment reads it FINAL; this package matches that precedent).
-func resolveRepoIDsForTeams(ctx context.Context, client QueryClient, teamIDs []string, orgID string) ([]string, error) {
-	if client == nil {
-		return nil, ErrUnavailable
-	}
-
-	var teamList []string
-	for _, id := range teamIDs {
-		if id != "" {
-			teamList = append(teamList, id)
-		}
-	}
-	if len(teamList) == 0 {
-		return nil, nil
-	}
-
-	query := fmt.Sprintf(`
-SELECT DISTINCT toString(repo_id) AS id
-FROM user_metrics_daily FINAL
-WHERE org_id = {org_id:String}
-  AND team_id IN {team_ids:Array(String)}
-%s
-`, settingsMaxExecutionTime())
-	bindings := []dhclickhouse.Binding{
-		{Name: "team_ids", Value: teamList},
-		{Name: "org_id", Value: orgID},
-	}
-
-	rows, err := client.Query(ctx, query, bindings)
-	if err != nil {
-		return nil, fmt.Errorf("sankey: resolve repo ids for teams: %w", err)
-	}
-	defer rows.Close()
-
-	var out []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("sankey: scan resolve repo ids for teams row: %w", err)
-		}
-		if id != "" {
-			out = append(out, id)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("sankey: iterate resolve repo ids for teams rows: %w", err)
-	}
-	return out, nil
-}
-
-// resolveRepoFilterIDs ports resolve_repo_filter_ids (api/services/
+// resolveRepoFilterIDs resolves the EXPLICIT repo refs a request names. A
+// team scope resolves nowhere here: its repositories come from
+// team_repo_ownership, pushed into SQL by teamscope.RepoCondition.
+// Mirrors the explicit-ref half of resolve_repo_filter_ids (api/services/
 // filtering.py:95-110).
 func resolveRepoFilterIDs(ctx context.Context, client QueryClient, scopeLevel string, scopeIDs, whatRepos []string, orgID string) ([]string, error) {
 	var repoRefs []string
@@ -166,13 +115,6 @@ func resolveRepoFilterIDs(ctx context.Context, client QueryClient, scopeLevel st
 		repoRefs = append(repoRefs, scopeIDs...)
 	}
 	repoRefs = append(repoRefs, whatRepos...)
-	if scopeLevel == "team" && len(scopeIDs) > 0 {
-		teamRepoIDs, err := resolveRepoIDsForTeams(ctx, client, scopeIDs, orgID)
-		if err != nil {
-			return nil, err
-		}
-		repoRefs = append(repoRefs, teamRepoIDs...)
-	}
 	return resolveRepoIDs(ctx, client, repoRefs, orgID)
 }
 
@@ -198,19 +140,34 @@ func scopeClauseTeam(teamIDs []string, teamColumn string) (filterSQL string, bin
 	}
 }
 
-// repoScopeFilter ports _repo_scope_filter (services/sankey.py:180-189):
-// resolve the request's scope down to concrete repo ids, then build an
-// " AND <repoColumn> IN (...)" clause -- empty when no repo id resolves.
-func repoScopeFilter(ctx context.Context, client QueryClient, scopeLevel string, scopeIDs, whatRepos []string, orgID, repoColumn string) (string, []dhclickhouse.Binding, error) {
+// repoScopeFilter narrows a repo-keyed read to the repositories a request
+// names: the explicit refs resolved to concrete ids, ORed with the
+// repositories a team scope OWNS (teamscope.RepoCondition, resolved inside
+// the statement rather than as a result of its own). Empty when the request
+// names neither.
+func repoScopeFilter(ctx context.Context, client QueryClient, scopeLevel string, scopeIDs, whatRepos []string, orgID, repoColumn string, asOf time.Time) (string, []dhclickhouse.Binding, error) {
 	repoIDs, err := resolveRepoFilterIDs(ctx, client, scopeLevel, scopeIDs, whatRepos, orgID)
 	if err != nil {
 		return "", nil, err
 	}
-	if len(repoIDs) == 0 {
-		return "", nil, nil
+	explicitSQL, explicitBindings := scopeClauseRepo(repoIDs, repoColumn)
+
+	var teamCondition string
+	var teamBindings []dhclickhouse.Binding
+	if scopeLevel == "team" && len(scopeIDs) > 0 {
+		teamCondition, teamBindings = teamscope.RepoCondition(orgID, repoColumn, scopeIDs, asOf)
 	}
-	filterSQL, bindings := scopeClauseRepo(repoIDs, repoColumn)
-	return filterSQL, bindings, nil
+
+	switch {
+	case explicitSQL != "" && teamCondition != "":
+		return fmt.Sprintf(" AND (%s IN {scope_ids:Array(String)} OR %s)", repoColumn, teamCondition),
+			append(append([]dhclickhouse.Binding{}, explicitBindings...), teamBindings...), nil
+	case explicitSQL != "":
+		return explicitSQL, explicitBindings, nil
+	case teamCondition != "":
+		return " AND " + teamCondition, teamBindings, nil
+	}
+	return "", nil, nil
 }
 
 // teamScopeFilter ports _team_scope_filter (services/sankey.py:192-198):

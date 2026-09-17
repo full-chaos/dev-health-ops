@@ -48,6 +48,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/sankey"
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/teamscope"
 )
 
 // QueryClient is the narrow ClickHouse read capability this package
@@ -142,7 +143,7 @@ func emptyInvestmentResponse() *sankey.Response {
 // always rendered as a "repo" (never "team") build_scope_filter_multi
 // clause, matching the fact every fetcher's own FROM projects a scalar/
 // fanned repo_id, never a team_id, column.
-func repoScopeFilterClause(ctx context.Context, client QueryClient, scopeLevel string, scopeIDs, whatRepos []string, orgID string) (string, []dhclickhouse.Binding, error) {
+func repoScopeFilterClause(ctx context.Context, client QueryClient, scopeLevel string, scopeIDs, whatRepos []string, orgID string, asOf time.Time) (string, []dhclickhouse.Binding, error) {
 	if scopeLevel != "team" && scopeLevel != "repo" {
 		return "", nil, nil
 	}
@@ -150,8 +151,24 @@ func repoScopeFilterClause(ctx context.Context, client QueryClient, scopeLevel s
 	if err != nil {
 		return "", nil, err
 	}
-	filterSQL, bindings := scopeClauseRepo(repoIDs, "repo_id")
-	return filterSQL, bindings, nil
+	explicitSQL, explicitBindings := scopeClauseRepo(repoIDs, "repo_id")
+
+	var teamCondition string
+	var teamBindings []dhclickhouse.Binding
+	if scopeLevel == "team" && len(scopeIDs) > 0 {
+		teamCondition, teamBindings = teamscope.RepoCondition(orgID, "repo_id", scopeIDs, asOf)
+	}
+
+	switch {
+	case explicitSQL != "" && teamCondition != "":
+		return " AND (repo_id IN {scope_ids:Array(String)} OR " + teamCondition + ")",
+			append(append([]dhclickhouse.Binding{}, explicitBindings...), teamBindings...), nil
+	case explicitSQL != "":
+		return explicitSQL, explicitBindings, nil
+	case teamCondition != "":
+		return " AND " + teamCondition, teamBindings, nil
+	}
+	return "", nil, nil
 }
 
 // flowRequiredColumns is the required-columns list both build_investment_
@@ -219,7 +236,7 @@ func buildFlowModeResponse(ctx context.Context, client QueryClient, params Param
 		return emptyInvestmentResponse(), nil
 	}
 
-	scopeFilter, scopeBindings, err := repoScopeFilterClause(ctx, client, params.ScopeLevel, params.ScopeIDs, params.WhatRepos, params.OrgID)
+	scopeFilter, scopeBindings, err := repoScopeFilterClause(ctx, client, params.ScopeLevel, params.ScopeIDs, params.WhatRepos, params.OrgID, time.Now().UTC())
 	if err != nil {
 		return nil, err
 	}
@@ -302,7 +319,7 @@ func buildDynamicModeResponse(ctx context.Context, client QueryClient, params Pa
 		return emptyInvestmentResponse(), nil
 	}
 
-	scopeFilter, scopeBindings, err := repoScopeFilterClause(ctx, client, params.ScopeLevel, params.ScopeIDs, params.WhatRepos, params.OrgID)
+	scopeFilter, scopeBindings, err := repoScopeFilterClause(ctx, client, params.ScopeLevel, params.ScopeIDs, params.WhatRepos, params.OrgID, time.Now().UTC())
 	if err != nil {
 		return nil, err
 	}
@@ -383,7 +400,7 @@ func BuildRepoTeamFlowResponse(ctx context.Context, client QueryClient, params R
 		return emptyInvestmentResponse(), nil
 	}
 
-	scopeFilter, scopeBindings, err := repoScopeFilterClause(ctx, client, params.ScopeLevel, params.ScopeIDs, params.WhatRepos, params.OrgID)
+	scopeFilter, scopeBindings, err := repoScopeFilterClause(ctx, client, params.ScopeLevel, params.ScopeIDs, params.WhatRepos, params.OrgID, time.Now().UTC())
 	if err != nil {
 		return nil, err
 	}

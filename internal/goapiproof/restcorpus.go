@@ -712,7 +712,7 @@ var explainParity = Options{
 // entries carry no citation for it.
 var explainScopeDropDefect = BaselineDefect{
 	Ticket:             "CHAOS-5813",
-	Reason:             "explain.py's own call site for scope_filter_for_metric (api/services/explain.py:150-152) is the only caller anywhere in the Python source that omits the org_id keyword -- it silently defaults to \"\". For a repo-scoped metric (review_latency/deploy_freq/churn/change_failure_rate) that flows into resolve_repo_id's own org_id filter, which no real org's repos row ever matches: every repo/team scope ref fails to resolve, repo_ids ends up [], and the scope filter is silently dropped, so the headline value/delta and every driver/contributor value are computed over the whole org rather than the requested scope. This port passes the real org id throughout. Go is correct. The reference's own team-to-repo resolver for this scope (resolve_repo_ids_for_teams, api/queries/scopes.py:72-89) reads DISTINCT repo_id straight off user_metrics_daily.team_id -- it bridges through the metrics table, never through team ownership -- and this port's own team-scope bridge (teamRepoScopeCondition, cmd/query-api/internal/explain/repofilter.go) reads the same table the same way to stay faithful to it, so a team whose recorded repo_id set does not overlap the metric's own source table (repo_metrics_daily/deploy_metrics_daily) is a dead end in the resolver BOTH planes share, not a Go defect. This same divergence can also manifest as a LIST-LENGTH difference: data.drivers/data.contributors come back shorter on the candidate side than the baseline's substituted org-wide list, and a scope with no matching rows in the window leaves them empty against a populated baseline, with data.value/data.delta_pct then reading 0 against a real number rather than a differently-scoped one -- a structural difference, never covered by ANY BaselineDefect shape (see compare.go's leafDifference gate), knowingly left uncovered and a real, visible finding on the receipt whenever a requested scope's resolved repo set is small or has no overlap with the metric's own source table. The same gap can also surface one layer earlier, before any field comparison runs: a resolved scope narrow enough widens the two response bodies past the proof comparator's own size-disagreement threshold, and the request is REFUSED as legs_do_not_overlap instead of reaching an admitted mismatch -- the same fallout, not a second defect.",
+	Reason:             "explain.py's own call site for scope_filter_for_metric (api/services/explain.py:150-152) is the only caller anywhere in the Python source that omits the org_id keyword -- it silently defaults to \"\". For a repo-scoped metric (review_latency/deploy_freq/churn/change_failure_rate) that flows into resolve_repo_id's own org_id filter, which no real org's repos row ever matches: every repo/team scope ref fails to resolve, repo_ids ends up [], and the scope filter is silently dropped, so the headline value/delta and every driver/contributor value are computed over the whole org rather than the requested scope. This port passes the real org id throughout. Go is correct. The reference's own team-to-repo resolver for this scope (resolve_repo_ids_for_teams, api/queries/scopes.py:72-89) reads DISTINCT repo_id straight off user_metrics_daily.team_id -- it bridges through the metrics table, never through team ownership -- while this port resolves a team's repositories from team_repo_ownership (cmd/query-api/internal/teamscope), so for a team scope the two planes read different tables: see this file's own TEAM SCOPE paragraph above for why that difference is a knowingly uncovered finding rather than a declared defect. This same divergence can also manifest as a LIST-LENGTH difference: data.drivers/data.contributors come back shorter on the candidate side than the baseline's substituted org-wide list, and a scope with no matching rows in the window leaves them empty against a populated baseline, with data.value/data.delta_pct then reading 0 against a real number rather than a differently-scoped one -- a structural difference, never covered by ANY BaselineDefect shape (see compare.go's leafDifference gate), knowingly left uncovered and a real, visible finding on the receipt whenever a requested scope's resolved repo set is small or has no overlap with the metric's own source table. The same gap can also surface one layer earlier, before any field comparison runs: a resolved scope narrow enough widens the two response bodies past the proof comparator's own size-disagreement threshold, and the request is REFUSED as legs_do_not_overlap instead of reaching an admitted mismatch -- the same fallout, not a second defect.",
 	Paths:              []string{"data.value", "data.delta_pct", "data.drivers.value", "data.drivers.delta_pct", "data.contributors.value"},
 	Intermittent:       true,
 	IntermittentReason: "present only while the requested repo/team scope's own aggregate actually differs from the whole org's aggregate for this metric and window; a scope whose narrowed value happens to equal the org-wide one shows no divergence under these paths",
@@ -1059,6 +1059,51 @@ var flamePRIDBoundParity = Options{
 // meta has no validation-error entry: main.py's meta() takes no
 // parameters at all (meta.go's own doc comment), so there is no caller
 // input for it to reject.
+//
+// TEAM SCOPE ON A REPO-KEYED ROUTE IS NOT PROVABLE BY EQUALITY, and every
+// team-scoped entry in this corpus is a knowingly uncovered finding rather
+// than a declared defect.
+//
+// The two planes resolve a team's repositories from different tables. This
+// port reads team_repo_ownership through one shared condition
+// (cmd/query-api/internal/teamscope), the source
+// migrations/clickhouse/081_team_cognitive_load_daily.sql names as the one
+// that defines a team's repositories. The reference reads DISTINCT repo_id
+// off user_metrics_daily.team_id (resolve_repo_ids_for_teams,
+// api/queries/scopes.py), which is per-author membership attribution and
+// falls back to author membership whenever repository-ownership resolution
+// misses. For the organization this proof runs against, none of the ids
+// that resolver produces for a real team exists in repos, so the
+// reference's verified list comes back EMPTY -- and an empty list is also
+// how the reference expresses "no filter". The baseline therefore answers
+// ORG-WIDE for a team-scoped request while the candidate answers over that
+// team's repositories.
+//
+// home and opportunities reach the same outcome by a second, independent
+// road: services/home.py's own scope_filter_for_metric call sites for a
+// metric delta and for the top delta's drivers pass no org_id, which
+// defaults to "", so every repo/team ref fails to resolve there too.
+//
+// No BaselineDefect shape can admit this, and none is declared. The
+// differences are list LENGTHS and changed aggregate values; a
+// BaselineDefect covers only LEAF differences (compare.go's leafDifference
+// gate), and a scoped average is not a subset of an unscoped one, it is a
+// different number. These entries stay mismatches whose differences fall
+// outside every citation. The evidence for the candidate's own behaviour is
+// the seeded suite instead: cmd/query-api/team_scope_ownership_integration_
+// test.go plus the team_scope_large_repo_set_integration_test.go files in
+// internal/home, internal/explain and internal/investmentexplain.
+//
+// The entries this reaches: home_team_scoped (GET and POST,
+// home_corpus.go), opportunities_team_scoped (GET and POST,
+// opportunities_corpus.go), work-units' team_scoped (GET and POST,
+// workunits_corpus.go) and investment/explain's team_scoped below.
+// quadrant's cycle_throughput_team_scoped and flame/aggregated's two
+// team_id entries bind a team COLUMN directly, resolve no repositories, and
+// are unaffected. explain, heatmap, sankey, drilldown/prs, investment,
+// investment/sunburst and investment/flow resolve a team the same new way
+// but carry no team-scoped entry here, so this corpus sees nothing change
+// for them; the same finding applies the moment one is added.
 //
 // explain declares four of its five known Python-plane divergences via
 // explainParity below (the display-name FINAL-dedup defect, the
@@ -2843,9 +2888,13 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				// (restidbind.go's BodyPath binding, the POST-body twin of
 				// the QueryParam binding every GET team-scoped entry in
 				// this corpus uses) -- exercises scopeRepoFilter's team
-				// branch (ResolveRepoFilterIDs + TeamRepoScopeCondition)
-				// against a team that genuinely resolves to repos, the
-				// same request shape a real team-scoped client sends.
+				// branch (ResolveRepoFilterIDs + teamscope.RepoCondition)
+				// against a team that genuinely resolves to repositories,
+				// the same request shape a real team-scoped client sends.
+				// The two planes resolve that team's repositories from
+				// different tables, so this entry is one of the knowingly
+				// uncovered findings this file's own TEAM SCOPE paragraph
+				// names, not a declared defect.
 				// llm_provider=mock is a query param BOTH planes honor
 				// identically: Python's investment_explain route
 				// (api/main.py) forwards it into is_llm_available/

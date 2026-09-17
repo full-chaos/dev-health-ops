@@ -111,13 +111,18 @@ var workUnitsGetEndpointSpec = RESTEndpointSpec{
 		},
 		{
 			// team scope, scope_id bound at run time to filters/
-			// options' own live team_id -- resolve_repo_filter_ids'
-			// team branch (ResolveRepoFilterIDs' own
-			// resolveRepoIDsForTeams), the same live id every other
+			// options' own live team_id -- the same live id every other
 			// team-scoped GET request in this corpus binds to. Timeout
 			// raised above the run default: the baseline leg's own
 			// team-to-repo resolution is an extra read the org-scope
 			// default entry never makes and can outrun the default budget.
+			//
+			// The two planes resolve that team's repositories from
+			// different tables, so this entry is one of the knowingly
+			// uncovered findings restcorpus.go's own TEAM SCOPE paragraph
+			// names, not a declared defect. It is visible on the wire as a
+			// LIST LENGTH: the baseline answers over the whole
+			// organization, the candidate over the team's repositories.
 			Name:                "team_scoped",
 			Query:               url.Values{"scope_type": {"team"}},
 			WantCandidateStatus: 200, WantBaselineStatus: 200,
@@ -181,9 +186,10 @@ var workUnitsPostEndpointSpec = RESTEndpointSpec{
 			// team scope bound to filters/options' own live team_id
 			// (restidbind.go's BodyPath binding, the POST-body twin of
 			// this route's own GET "team_scoped" QueryParam binding
-			// above) -- exercises the SAME resolve_repo_filter_ids team
-			// branch against a team that genuinely resolves to repos, the
-			// same request shape a real team-scoped client sends.
+			// above) -- exercises the same team branch against a team that
+			// genuinely resolves to repositories, the same request shape a
+			// real team-scoped client sends. Same knowingly uncovered
+			// team-scope finding as its GET twin above.
 			Name: "team_scoped",
 			Body: map[string]any{
 				"filters": map[string]any{"scope": map[string]any{"level": "team", "ids": []string{"11111111-1111-1111-1111-111111111111"}}},

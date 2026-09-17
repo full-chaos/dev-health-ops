@@ -104,12 +104,11 @@ func dateBindingValue(t time.Time) string {
 // the literal string "repo" is hardcoded at that call site regardless of
 // which scope level the request asked for. RepoIDs here carries only the
 // bounded, request-sized explicit refs (scope="repo" ids + what.repos);
-// TeamScopeCondition/TeamScopeBindings carry a team scope's own
-// membership test as a pushed-down SQL condition instead of a second,
-// organization-scale materialized id list -- see
-// TeamRepoScopeCondition's doc comment (repofilter.go) for why. The two
-// are ORed together in scopeClause, reproducing
-// resolve_repo_filter_ids' own union-of-refs semantics.
+// TeamScopeCondition/TeamScopeBindings carry the repositories a team owns
+// as a pushed-down SQL condition instead of a second materialized id list
+// -- see cmd/query-api/internal/teamscope's own doc comment for the source
+// and the semantics. The two are ORed together in scopeClause, so a request
+// naming a team and explicit repos sees the union.
 type BreakdownFilters struct {
 	OrgID              string
 	StartTS            time.Time

@@ -126,6 +126,12 @@ var homeGetEndpointSpec = RESTEndpointSpec{
 			// metrics (resolve_repo_ids_for_teams, api/queries/scopes.py),
 			// a read the org-scope default entry above never makes, and
 			// that extra read can outrun the run's own default budget.
+			//
+			// The two planes resolve that repository set from different
+			// tables, and this route's baseline additionally drops the
+			// filter outright for a repo-scoped metric, so this entry is
+			// one of the knowingly uncovered findings restcorpus.go's own
+			// TEAM SCOPE paragraph names, not a declared defect.
 			Name:                "home_team_scoped",
 			Query:               url.Values{"scope_type": {"team"}},
 			WantCandidateStatus: 200, WantBaselineStatus: 200,
@@ -181,7 +187,8 @@ var homePostEndpointSpec = RESTEndpointSpec{
 			// twin of the QueryParam binding home's own GET "home_team_scoped"
 			// entry above uses, same shape investment_explain's own
 			// "team_scoped" POST entry already established for this
-			// mechanism.
+			// mechanism. Same knowingly uncovered team-scope finding as its
+			// GET twin above.
 			Name:                "home_team_scoped",
 			Body:                map[string]any{"filters": map[string]any{"scope": map[string]any{"level": "team", "ids": []string{"ABC-123"}}}},
 			WantCandidateStatus: 200, WantBaselineStatus: 200,

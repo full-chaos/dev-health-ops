@@ -44,9 +44,8 @@ const (
 )
 
 // seedWorkUnitExplainTeamFixture puts two work units in ONE org: one in a
-// repository team-1 owns (via a user_metrics_daily attribution row, which
-// is how a team's repositories are established) and one in a repository
-// no team owns.
+// repository team-1 owns (a team_repo_ownership row, which is what
+// establishes a team's repositories) and one in a repository no team owns.
 func seedWorkUnitExplainTeamFixture(t *testing.T, conn interface {
 	Exec(ctx context.Context, query string, args ...any) error
 }, fromTS, toTS time.Time) {
@@ -62,16 +61,13 @@ func seedWorkUnitExplainTeamFixture(t *testing.T, conn interface {
 		t.Fatalf("seed repos: %v", err)
 	}
 	if err := conn.Exec(ctx, fmt.Sprintf(
-		`INSERT INTO user_metrics_daily (repo_id, day, author_email, commits_count, loc_added, loc_deleted,
-			files_changed, large_commits_count, avg_commit_size_loc, prs_authored, prs_merged,
-			avg_pr_cycle_hours, median_pr_cycle_hours, pr_cycle_p75_hours, pr_cycle_p90_hours,
-			prs_with_first_review, reviews_given, changes_requested_given, reviews_received,
-			review_reciprocity, team_id, team_name, computed_at, org_id)
-		VALUES ('%s', '2026-01-05', 'dev@example.com', 1, 0, 0, 1, 0, 0.0, 0, 0, 0.0, 0.0, 0.0, 0.0,
-			0, 0, 0, 0, 0.0, 'team-1', 'Team One', toDateTime('%s'), '%s')`,
-		workUnitExplainMemberRepoID, computedAt, workUnitsSeededOrgID,
+		`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type,
+			source, is_primary, specificity, priority, valid_from, valid_to, updated_at)
+		VALUES ('%s', 'github', 'team-1', toUUID('%s'), 'acme/member-repo', 'exact', 'inferred',
+			0, 0, 0, toDateTime64('%s',3), NULL, toDateTime64('%s',3))`,
+		workUnitsSeededOrgID, workUnitExplainMemberRepoID, computedAt, computedAt,
 	)); err != nil {
-		t.Fatalf("seed user_metrics_daily: %v", err)
+		t.Fatalf("seed team_repo_ownership: %v", err)
 	}
 
 	for _, seed := range []struct{ unitID, repoID string }{

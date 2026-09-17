@@ -17,6 +17,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/authctx"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/investmentexplain"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/routeswitch"
+
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/teamscope"
 )
 
 // TestWorkUnitsSwitchFromEnvDefaultsDisabled mirrors
@@ -705,7 +707,7 @@ func bindingValue(bindings []dhclickhouse.Binding, name string) (any, bool) {
 
 // TestNewWorkUnitsGetHandlerTeamScopePushesConditionIntoTheWorkUnitQuery
 // proves scope_type=team&scope_id=<id> reaches
-// investmentexplain.TeamRepoScopeCondition's pushed-down condition,
+// teamscope.RepoCondition's pushed-down condition,
 // nested inside the SAME work-unit investments statement rather than
 // issued as a separate, standalone user_metrics_daily query: a team's
 // own matching-repo count never crosses back to the caller as its own
@@ -729,24 +731,24 @@ func TestNewWorkUnitsGetHandlerTeamScopePushesConditionIntoTheWorkUnitQuery(t *t
 
 	found := false
 	for i, q := range client.queries {
-		if !strings.Contains(q, "FROM user_metrics_daily") {
+		if !strings.Contains(q, teamscope.Marker) {
 			continue
 		}
 		if !strings.Contains(q, "work_unit_investments") {
 			t.Fatalf("a query carries the team-scope membership subquery as its OWN standalone statement, not nested inside the work-unit investments read:\n%s", q)
 		}
 		found = true
-		teamIDs, ok := bindingValue(client.bindings[i], "team_repo_scope_ids")
+		teamIDs, ok := bindingValue(client.bindings[i], teamscope.BindingTeamIDs)
 		if !ok {
-			t.Fatalf("work-unit investments query carries no team_repo_scope_ids binding")
+			t.Fatalf("work-unit investments query carries no %s binding", teamscope.BindingTeamIDs)
 		}
 		ids, ok := teamIDs.([]string)
 		if !ok || len(ids) != 1 || ids[0] != "team-42" {
-			t.Errorf("team_repo_scope_ids binding = %#v, want [\"team-42\"]", teamIDs)
+			t.Errorf("%s binding = %#v, want [\"team-42\"]", teamscope.BindingTeamIDs, teamIDs)
 		}
 	}
 	if !found {
-		t.Fatal("no query carries the pushed-down team-scope condition -- scope_type=team never reached TeamRepoScopeCondition")
+		t.Fatal("no query carries the pushed-down team-scope condition -- scope_type=team never reached teamscope.RepoCondition")
 	}
 }
 

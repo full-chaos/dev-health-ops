@@ -93,11 +93,10 @@ type WorkUnitInvestmentRow struct {
 // WorkUnitInvestmentsFilter is fetch_work_unit_investments' filter
 // parameter set (work_unit_investments.py:26-35). RepoIDs carries the
 // bounded, request-sized explicit refs; TeamScopeCondition/
-// TeamScopeBindings carry a team scope's own membership test as a
-// pushed-down SQL condition instead of a second, organization-scale
-// materialized id list -- see TeamRepoScopeCondition's doc comment
-// (repofilter.go) and BreakdownFilters' own copy of this same shape
-// (reader.go).
+// TeamScopeBindings carry the repositories a team owns as a pushed-down
+// SQL condition instead of a second materialized id list -- see
+// cmd/query-api/internal/teamscope's own doc comment, and BreakdownFilters'
+// copy of this same shape (reader.go).
 type WorkUnitInvestmentsFilter struct {
 	OrgID              string
 	StartTS            time.Time

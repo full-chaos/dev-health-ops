@@ -275,9 +275,13 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string, params
 	var rows []metricRow
 	var evidence any // nil (Python's None) unless a branch below sets it
 
+	// One instant for the whole response: the branches below build several
+	// statements from one scope, so they must resolve one team membership.
+	asOf := time.Now().UTC()
+
 	switch definition.Metric {
 	case "review_wait_density":
-		scopeFilterSQL, scopeBindings, err := scopeFilterForMetric(ctx, client, "repo", scopeType, []string{params.ScopeID}, nil, orgID)
+		scopeFilterSQL, scopeBindings, err := scopeFilterForMetric(ctx, client, "repo", scopeType, []string{params.ScopeID}, nil, orgID, asOf)
 		if err != nil {
 			return nil, err
 		}
@@ -300,7 +304,7 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string, params
 		}
 
 	case "repo_touchpoints":
-		scopeFilterSQL, scopeBindings, err := scopeFilterForMetric(ctx, client, "repo", scopeType, []string{params.ScopeID}, nil, orgID)
+		scopeFilterSQL, scopeBindings, err := scopeFilterForMetric(ctx, client, "repo", scopeType, []string{params.ScopeID}, nil, orgID, asOf)
 		if err != nil {
 			return nil, err
 		}
@@ -311,7 +315,7 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string, params
 		rows = repoTouchpointsToMetricRows(touchRows)
 
 	case "hotspot_risk":
-		scopeFilterSQL, scopeBindings, err := scopeFilterForMetric(ctx, client, "repo", scopeType, []string{params.ScopeID}, nil, orgID)
+		scopeFilterSQL, scopeBindings, err := scopeFilterForMetric(ctx, client, "repo", scopeType, []string{params.ScopeID}, nil, orgID, asOf)
 		if err != nil {
 			return nil, err
 		}

@@ -17,7 +17,7 @@ func combineScope(sqlA string, bindingsA []dhclickhouse.Binding, sqlB string, bi
 
 // buildInvestmentFlow ports _build_investment_flow (services/sankey.py:
 // 236-297).
-func buildInvestmentFlow(ctx context.Context, client QueryClient, startDay, endDay time.Time, scopeLevel string, scopeIDs, whatRepos, workCategory []string, orgID string) ([]Node, []Link, error) {
+func buildInvestmentFlow(ctx context.Context, client QueryClient, startDay, endDay time.Time, scopeLevel string, scopeIDs, whatRepos, workCategory []string, orgID string, asOf time.Time) ([]Node, []Link, error) {
 	if !tablesPresent(ctx, client, []string{"work_unit_investments"}) {
 		return nil, nil, nil
 	}
@@ -27,7 +27,7 @@ func buildInvestmentFlow(ctx context.Context, client QueryClient, startDay, endD
 		return nil, nil, nil
 	}
 
-	repoFilterSQL, repoBindings, err := repoScopeFilter(ctx, client, scopeLevel, scopeIDs, whatRepos, orgID, "repo_id")
+	repoFilterSQL, repoBindings, err := repoScopeFilter(ctx, client, scopeLevel, scopeIDs, whatRepos, orgID, "repo_id", asOf)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -204,7 +204,7 @@ func buildStateFlow(ctx context.Context, client QueryClient, startDay, endDay ti
 }
 
 // buildHotspotFlow ports _build_hotspot_flow (services/sankey.py:476-534).
-func buildHotspotFlow(ctx context.Context, client QueryClient, startDay, endDay time.Time, scopeLevel string, scopeIDs, whatRepos []string, orgID string) ([]Node, []Link, error) {
+func buildHotspotFlow(ctx context.Context, client QueryClient, startDay, endDay time.Time, scopeLevel string, scopeIDs, whatRepos []string, orgID string, asOf time.Time) ([]Node, []Link, error) {
 	if !tablesPresent(ctx, client, []string{"file_metrics_daily", "repos"}) {
 		return nil, nil, nil
 	}
@@ -215,7 +215,7 @@ func buildHotspotFlow(ctx context.Context, client QueryClient, startDay, endDay 
 		return nil, nil, nil
 	}
 
-	scopeFilterSQL, scopeBindings, err := repoScopeFilter(ctx, client, scopeLevel, scopeIDs, whatRepos, orgID, "metrics.repo_id")
+	scopeFilterSQL, scopeBindings, err := repoScopeFilter(ctx, client, scopeLevel, scopeIDs, whatRepos, orgID, "metrics.repo_id", asOf)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -24,12 +24,11 @@ const (
 // repoFilterFixtureClient mirrors the Python generator's in-memory fixture
 // (REPOS) exactly, dispatching on the same distinguishing SQL substrings
 // repofilter.go's own explicit-ref queries produce. ResolveRepoFilterIDs
-// issues only these repos lookups, never a user_metrics_daily query (see
-// this package's TeamRepoScopeCondition/repofilter.go doc comments: a
-// team's repo membership is a condition the CALLER's own statement
-// evaluates, never resolved here as a standalone, organization-scale
-// query), so this fixture only needs to answer the repos lookups
-// explicit refs make.
+// issues only these repos lookups, never an ownership query (a team's
+// repositories are a condition the CALLER's own statement evaluates, never
+// resolved here as a standalone query -- see repofilter.go's own doc
+// comment), so this fixture only needs to answer the repos lookups explicit
+// refs make.
 type repoFilterFixtureClient struct{}
 
 func (repoFilterFixtureClient) Query(_ context.Context, statement string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
@@ -95,11 +94,10 @@ func loadResolveRepoFilterIDsGolden(t *testing.T, name string) resolveRepoFilter
 // EXPLICIT-ref cases only (org/repo scope, what.repos) -- the cases where
 // this Go function's contract matches resolve_repo_filter_ids'
 // (api/services/filtering.py:95-110) own materialized-list return shape.
-// The Python source's team-scope branch is covered elsewhere, as a
-// pushed-down SQL condition: TestTeamRepoScopeConditionQueryShape
-// (sqlshape_test.go) proves its structural correctness against a fake
-// client, and the team_scope_large_repo_set_integration_test.go suite
-// proves its behavioral correctness against a real ClickHouse engine. A
+// A team scope is covered elsewhere, as a pushed-down SQL condition:
+// cmd/query-api/internal/teamscope's own tests prove its structure, and
+// team_scope_large_repo_set_integration_test.go proves its behaviour
+// against a real ClickHouse engine. A
 // fake, in-memory client like repoFilterFixtureClient cannot evaluate a
 // condition nested inside another caller's own SQL statement, so that
 // branch's own correctness is not checked here.

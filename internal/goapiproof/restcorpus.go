@@ -2069,6 +2069,80 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				WantCandidateStatus: 422, WantBaselineStatus: 422,
 				BodyMode: RESTBodyModeJSON,
 			},
+			{
+				// type present but not one of QuadrantDefinitions'/
+				// QUADRANT_DEFINITIONS' four keys -- distinct from
+				// missing_type above (a MISSING type is a 422 at the
+				// framework/aggregation layer; a present-but-unknown
+				// type reaches build_quadrant_response/BuildResponse and
+				// answers this 404 instead).
+				Name:                "unknown_type",
+				Query:               url.Values{"type": {"not_a_real_quadrant_type"}},
+				WantCandidateStatus: 404, WantBaselineStatus: 404,
+				BodyMode: RESTBodyModeJSON,
+			},
+			{
+				// scope_type outside {org, team, repo, service, person,
+				// developer} -- Python's own ScopeFilter construction
+				// raises inside the `try/except Exception` around
+				// building MetricFilter/ScopeFilter (services/quadrant.py),
+				// answering the SAME "Invalid scope filter" 400 this
+				// port's normalizedScope switch (response.go) answers.
+				Name:                "invalid_scope_type",
+				Query:               url.Values{"type": {"wip_throughput"}, "scope_type": {"not_a_real_scope"}},
+				WantCandidateStatus: 400, WantBaselineStatus: 400,
+				BodyMode: RESTBodyModeJSON,
+			},
+			{
+				// range_days non-numeric -- this route's own instance of
+				// the same FastAPI-signature int_parsing 422 people
+				// summary's invalid_range_days entry already exercises
+				// for a different route.
+				Name:                "invalid_range_days",
+				Query:               url.Values{"type": {"wip_throughput"}, "range_days": {"not-a-number"}},
+				WantCandidateStatus: 422, WantBaselineStatus: 422,
+				BodyMode: RESTBodyModeJSON,
+			},
+			{
+				// bucket outside {week, month} -- build_quadrant_response's
+				// own explicit check (services/quadrant.py), answered
+				// after every FastAPI-signature validation above already
+				// passed.
+				Name:                "invalid_bucket",
+				Query:               url.Values{"type": {"wip_throughput"}, "bucket": {"day"}},
+				WantCandidateStatus: 400, WantBaselineStatus: 400,
+				BodyMode: RESTBodyModeJSON,
+			},
+			{
+				// person/developer scope with no scope_id -- checked
+				// before any ClickHouse call on both planes (quadrant.py:
+				// 500-503, response.go's own person-scope-id check).
+				Name:                "person_missing_scope_id",
+				Query:               url.Values{"type": {"wip_throughput"}, "scope_type": {"person"}},
+				WantCandidateStatus: 400, WantBaselineStatus: 400,
+				BodyMode: RESTBodyModeJSON,
+			},
+			{
+				// person scope, scope_id a neutral fixed string that can
+				// never be a real identity's md5 digest (resolvePersonIdentity's
+				// WHERE clause, identity.go) -- deterministically 404s on
+				// both planes, the same literal-value technique the
+				// people-summary spec's own person_not_found entry uses
+				// for its path segment.
+				Name:                "person_not_found",
+				Query:               url.Values{"type": {"wip_throughput"}, "scope_type": {"person"}, "scope_id": {"not-a-real-person-id"}},
+				WantCandidateStatus: 404, WantBaselineStatus: 404,
+				BodyMode: RESTBodyModeJSON,
+			},
+			{
+				// _reject_comparative_params (main.py:893) -- quadrant_route.go's
+				// own doc comment states this check's precedence: after every
+				// FastAPI-signature validation, before build_quadrant_response.
+				Name:                "forbidden_param",
+				Query:               url.Values{"type": {"wip_throughput"}, "rank": {"1"}},
+				WantCandidateStatus: 400, WantBaselineStatus: 400,
+				BodyMode: RESTBodyModeJSON,
+			},
 		},
 	},
 	// flame/aggregated: every query param this route takes is an OPTIONAL
@@ -3286,6 +3360,27 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
 				BodyMode:   RESTBodyModeJSON,
 				Parity:     peopleSummaryParity,
+				IDBindings: []RESTIDBinding{{Producer: "person_id", PathParam: "person_id"}},
+			},
+			{
+				// compare_days non-numeric -- this route's own second
+				// int-typed query param, the same int_parsing 422 shape
+				// invalid_range_days above already pins for range_days.
+				Name:                "invalid_compare_days",
+				Query:               url.Values{"compare_days": {"not-a-number"}},
+				WantCandidateStatus: 422, WantBaselineStatus: 422,
+				BodyMode: RESTBodyModeJSON,
+			},
+			{
+				// _reject_comparative_params (main.py:1081) -- bound to a
+				// real person_id so the 400 is proven on the same request
+				// shape summary_default's own 200 uses, not just against
+				// the literal "{person_id}" text every other entry here
+				// resolves to.
+				Name:                "forbidden_param",
+				Query:               url.Values{"rank": {"1"}},
+				WantCandidateStatus: 400, WantBaselineStatus: 400,
+				BodyMode:   RESTBodyModeJSON,
 				IDBindings: []RESTIDBinding{{Producer: "person_id", PathParam: "person_id"}},
 			},
 		},

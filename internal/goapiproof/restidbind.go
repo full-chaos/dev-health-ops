@@ -70,13 +70,20 @@ type RESTIDProducer struct {
 // RESTIDBinding binds one id an EARLIER request (per RESTRunOrder) has
 // Produced into THIS request, applied identically to BOTH legs before
 // either is sent -- see ResolveRESTIDBindings. Exactly one of
-// QueryParam/PathParam is set (ValidateRESTIDBindingOrder checks this);
+// QueryParam/PathParam/BodyPath is set (ValidateRESTCorpus checks this);
 // PathParam names a "{name}" placeholder in the route's own Path, for a
-// future path-scoped route this corpus does not yet mount live.
+// future path-scoped route this corpus does not yet mount live. BodyPath
+// names a dotted, index-free walk (the same convention
+// RESTIDProducer.ListPath already uses) into a POST request's own JSON
+// Body map, for a route whose scope id travels in the body rather than
+// the query string or path -- a POST-only route with no query/path
+// binding surface at all otherwise has no way to prove a scoped branch
+// live against a real id.
 type RESTIDBinding struct {
 	Producer   string
 	QueryParam string
 	PathParam  string
+	BodyPath   string
 }
 
 // ExtractRESTID walks body (typically a decoded Snapshot.Data) via
@@ -155,28 +162,75 @@ func numericRESTIDField(obj map[string]any, field string) (string, bool) {
 	return strconv.FormatInt(int64(num), 10), true
 }
 
+// setBodyPathID returns a copy of value with the leaf addressed by
+// segments (a dotted-path walk already split, the same "data."-free
+// convention RESTIDProducer.ListPath uses) replaced by id, and true --
+// or (nil, false) when segments does not address an existing map key at
+// every level, or the addressed leaf is neither a []string nor a string
+// (the only two shapes this corpus's own body literals use for a scope
+// id: a single-element list under "ids"/"repos", or a bare string field).
+// A []string leaf becomes a single-element []string{id} (a real request
+// naming exactly one id); a string leaf becomes id directly. Every map
+// ancestor ON the path is shallow-copied so the ORIGINAL corpus literal
+// (a package-level var, reused across every run and every request that
+// shares that literal) is never mutated in place; every sibling value is
+// shared, not copied, since only the walked path is ever written to.
+func setBodyPathID(value any, segments []string, id string) (any, bool) {
+	if len(segments) == 0 {
+		switch value.(type) {
+		case []string:
+			return []string{id}, true
+		case string:
+			return id, true
+		default:
+			return nil, false
+		}
+	}
+	obj, ok := value.(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	child, present := obj[segments[0]]
+	if !present {
+		return nil, false
+	}
+	updatedChild, ok := setBodyPathID(child, segments[1:], id)
+	if !ok {
+		return nil, false
+	}
+	copied := make(map[string]any, len(obj))
+	for k, v := range obj {
+		copied[k] = v
+	}
+	copied[segments[0]] = updatedChild
+	return copied, true
+}
+
 // ResolveRESTIDBindings applies request's declared IDBindings against
 // produced (a running producer-Name -> id map the run loop builds up
 // following RESTRunOrder), returning the resolved path (specPath with
-// every PathParam placeholder substituted) and a resolved COPY of
-// request.Query with every QueryParam binding set -- the same resolved
+// every PathParam placeholder substituted), a resolved COPY of
+// request.Query with every QueryParam binding set, and a resolved COPY
+// of request.Body with every BodyPath binding set -- the same resolved
 // values then build BOTH the candidate and the baseline request, so a
 // bound id never differs between the two legs. unresolved names every
 // binding whose Producer has not (yet, or ever) produced a usable id in
-// this run; the caller refuses the request by name rather than sending
-// it with an invented or stale value.
+// this run, OR whose BodyPath does not address an existing, id-shaped
+// leaf in request.Body; the caller refuses the request by name rather
+// than sending it with an invented, stale, or silently-unbound value.
 //
 // Only called when request.IDBindings is non-empty (see
 // cmd/go-api-rest-prove's own run loop): a request with no bindings
-// keeps its original request.Query untouched, byte-for-byte, so an
-// existing entry's RequestIdentity digest (which folds the query in)
-// never shifts just because this mechanism exists.
-func ResolveRESTIDBindings(specPath string, request RESTRequest, produced map[string]string) (resolvedPath string, resolvedQuery url.Values, unresolved []string) {
+// keeps its original request.Query/request.Body untouched, byte-for-
+// byte, so an existing entry's RequestIdentity digest (which folds the
+// query in) never shifts just because this mechanism exists.
+func ResolveRESTIDBindings(specPath string, request RESTRequest, produced map[string]string) (resolvedPath string, resolvedQuery url.Values, resolvedBody any, unresolved []string) {
 	resolvedPath = specPath
 	resolvedQuery = url.Values{}
 	for key, values := range request.Query {
 		resolvedQuery[key] = append([]string(nil), values...)
 	}
+	resolvedBody = request.Body
 	boundIDs := make(map[string]string, len(request.IDBindings))
 	for _, binding := range request.IDBindings {
 		id, ok := produced[binding.Producer]
@@ -189,10 +243,17 @@ func ResolveRESTIDBindings(specPath string, request RESTRequest, produced map[st
 			resolvedQuery.Set(binding.QueryParam, id)
 		case binding.PathParam != "":
 			resolvedPath = strings.ReplaceAll(resolvedPath, "{"+binding.PathParam+"}", id)
+		case binding.BodyPath != "":
+			updated, ok := setBodyPathID(resolvedBody, strings.Split(binding.BodyPath, "."), id)
+			if !ok {
+				unresolved = append(unresolved, binding.Producer)
+				continue
+			}
+			resolvedBody = updated
 		}
 		boundIDs[binding.Producer] = id
 	}
-	return resolvedPath, resolvedQuery, unresolved
+	return resolvedPath, resolvedQuery, resolvedBody, unresolved
 }
 
 // RESTRefusalIDBindingUnresolved is the named refusal reason for a

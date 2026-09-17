@@ -992,7 +992,7 @@ func TestIDBinding_EndToEnd(t *testing.T) {
 		IDBindings: []goapiproof.RESTIDBinding{{Producer: "person_id", PathParam: "person_id"}},
 	}
 
-	resolvedPath, resolvedQuery, unresolved := goapiproof.ResolveRESTIDBindings(consumerSpec.Path, consumerRequest, produced)
+	resolvedPath, resolvedQuery, resolvedBody, unresolved := goapiproof.ResolveRESTIDBindings(consumerSpec.Path, consumerRequest, produced)
 	if len(unresolved) != 0 {
 		t.Fatalf("unresolved = %v, want none", unresolved)
 	}
@@ -1000,6 +1000,7 @@ func TestIDBinding_EndToEnd(t *testing.T) {
 	resolvedSpec.Path = resolvedPath
 	resolvedRequest := consumerRequest
 	resolvedRequest.Query = resolvedQuery
+	resolvedRequest.Body = resolvedBody
 
 	consumerOut, err := proveOneRESTRequest(context.Background(), http.DefaultClient, f, "REST:GET:/api/v1/people/{person_id}/summary", resolvedSpec, resolvedRequest,
 		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil, false,

@@ -138,6 +138,91 @@ func TestFetchWorkUnitInvestmentsOmitsFiltersWhenUnset(t *testing.T) {
 	}
 }
 
+// TestFetchWorkUnitInvestmentsTeamScopeNeverRoundTripsForRepoIDs is a
+// regression pin, the same shape as
+// TestBreakdownFiltersScopeClauseTeamScopeNeverRoundTripsForRepoIDs
+// (sqlshape_test.go): a team-scoped work-unit read pushes the team's
+// repo_id membership down as a condition inside THIS query, never as a
+// standalone repo-id list query of its own.
+func TestFetchWorkUnitInvestmentsTeamScopeNeverRoundTripsForRepoIDs(t *testing.T) {
+	capture := &capturingClient{}
+	reader, err := NewReader(capture)
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+
+	teamCondition, teamBindings := TeamRepoScopeCondition("org-1", "work_unit_investments.repo_id", []string{"team-x"})
+	if _, err := reader.FetchWorkUnitInvestments(t.Context(), WorkUnitInvestmentsFilter{
+		OrgID:              "org-1",
+		TeamScopeCondition: teamCondition,
+		TeamScopeBindings:  teamBindings,
+		Limit:              10,
+	}); err != nil {
+		t.Fatalf("FetchWorkUnitInvestments: %v", err)
+	}
+
+	query := capture.lastQuery
+	if !strings.Contains(query, "work_unit_investments.repo_id IN (") || !strings.Contains(query, "FROM user_metrics_daily FINAL") {
+		t.Fatalf("query missing the pushed-down team membership condition:\n%s", query)
+	}
+	if strings.Contains(query, "work_unit_investments.repo_id IN {repo_ids:Array(String)}") {
+		t.Fatalf("query carries an explicit-repo clause with no explicit repos requested:\n%s", query)
+	}
+	var sawTeamIDs bool
+	for _, b := range capture.lastBindings {
+		if b.Name == "team_repo_scope_ids" {
+			sawTeamIDs = true
+		}
+	}
+	if !sawTeamIDs {
+		t.Fatalf("bindings = %+v, want team_repo_scope_ids", capture.lastBindings)
+	}
+}
+
+// TestFetchWorkUnitInvestmentsUnionsExplicitReposWithTeamScope pins
+// resolve_repo_filter_ids' (api/services/filtering.py:95-110) own union
+// semantics: an explicit repo ref alongside a team scope means EITHER
+// condition can match, not both required -- repo_refs there accumulates
+// what.repos AND the team's own resolved ids into ONE list before
+// resolving, so a repo reachable through EITHER source is included. The
+// pushed-down shape reproduces the identical set with an OR of the two
+// conditions.
+func TestFetchWorkUnitInvestmentsUnionsExplicitReposWithTeamScope(t *testing.T) {
+	capture := &capturingClient{}
+	reader, err := NewReader(capture)
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+
+	teamCondition, teamBindings := TeamRepoScopeCondition("org-1", "work_unit_investments.repo_id", []string{"team-x"})
+	if _, err := reader.FetchWorkUnitInvestments(t.Context(), WorkUnitInvestmentsFilter{
+		OrgID:              "org-1",
+		RepoIDs:            []string{"repo-1"},
+		TeamScopeCondition: teamCondition,
+		TeamScopeBindings:  teamBindings,
+		Limit:              10,
+	}); err != nil {
+		t.Fatalf("FetchWorkUnitInvestments: %v", err)
+	}
+
+	query := capture.lastQuery
+	if !strings.Contains(query, "work_unit_investments.repo_id IN {repo_ids:Array(String)} OR work_unit_investments.repo_id IN (") {
+		t.Fatalf("query does not OR the explicit-repo and team conditions together:\n%s", query)
+	}
+	var sawRepoIDs, sawTeamIDs bool
+	for _, b := range capture.lastBindings {
+		if b.Name == "repo_ids" {
+			sawRepoIDs = true
+		}
+		if b.Name == "team_repo_scope_ids" {
+			sawTeamIDs = true
+		}
+	}
+	if !sawRepoIDs || !sawTeamIDs {
+		t.Fatalf("bindings = %+v, want both repo_ids and team_repo_scope_ids", capture.lastBindings)
+	}
+}
+
 // TestFetchWorkUnitInvestmentQuotesDedupsByGroupBy pins the dedup fix's
 // own query shape: GROUP BY the table's dedup key
 // (work_unit_id, quote, source_id) with source_type/categorization_run_id

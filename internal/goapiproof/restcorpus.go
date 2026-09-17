@@ -2721,6 +2721,71 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				WantCandidateStatus: 422, WantBaselineStatus: 422,
 				BodyMode: RESTBodyModeJSON,
 			},
+			{
+				// team scope bound to filters/options' own live team_id
+				// (restidbind.go's BodyPath binding, the POST-body twin of
+				// the QueryParam binding every GET team-scoped entry in
+				// this corpus uses) -- exercises scopeRepoFilter's team
+				// branch (ResolveRepoFilterIDs + TeamRepoScopeCondition)
+				// against a team that genuinely resolves to repos, the
+				// same request shape a real team-scoped client sends.
+				// llm_provider=mock is a query param BOTH planes honor
+				// identically: Python's investment_explain route
+				// (api/main.py) forwards it into is_llm_available/
+				// resolve_provider_name unchanged; Go's investment_explain
+				// _route.go forwards it into IsLLMAvailableForOrg/
+				// ResolveProviderKindForOrg, the org-aware siblings of the
+				// same resolution chain. "mock" short-circuits both chains
+				// to the mock provider before either ever consults an
+				// operator/org-configured real provider (auto-detected env
+				// credentials, or an org's own BYO setting) -- confirmed
+				// from source: Python's resolve_provider_name (llm/
+				// providers/__init__.py) returns an explicit, non-"auto"
+				// request UNCHANGED, and Go's ResolveProviderKindForOrg
+				// (categorize/providerkind.go) does the identical thing at
+				// its own first line. The mock provider is always
+				// available and answers LOCALLY on both planes (Python's
+				// llm/providers/mock.py: "without external API calls"; Go
+				// providerHasRequiredConfig's ProviderKindMock case,
+				// provider.go), so this request never reaches an external
+				// LLM, unlike default_filters above (whose own "auto"
+				// resolution, unset here, can select a real, org/env-
+				// configured provider and a genuinely cached response).
+				Name:  "team_scoped",
+				Query: url.Values{"llm_provider": {"mock"}},
+				Body: map[string]any{
+					"filters": map[string]any{"scope": map[string]any{"level": "team", "ids": []string{"11111111-1111-1111-1111-111111111111"}}},
+				},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode:   RESTBodyModeJSON,
+				IDBindings: []RESTIDBinding{{Producer: "team_id", BodyPath: "filters.scope.ids"}},
+				Parity: Options{
+					VolatileFields:        investmentExplainProseFields,
+					NumericLeavesDeclared: true,
+					FloatTierB:            investmentExplainDeterministicFloats,
+					IntegerLeaves:         investmentExplainIntegerLeaves,
+				},
+			},
+			{
+				// repo scope via filters.what.repos -- the POST-only field
+				// this route's own body decode supports -- bound to
+				// filters/options' own live repo_id, same BodyPath and
+				// llm_provider=mock reasoning as team_scoped above.
+				Name:  "repo_scoped",
+				Query: url.Values{"llm_provider": {"mock"}},
+				Body: map[string]any{
+					"filters": map[string]any{"what": map[string]any{"repos": []string{"11111111-1111-1111-1111-111111111111"}}},
+				},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode:   RESTBodyModeJSON,
+				IDBindings: []RESTIDBinding{{Producer: "repo_id", BodyPath: "filters.what.repos"}},
+				Parity: Options{
+					VolatileFields:        investmentExplainProseFields,
+					NumericLeavesDeclared: true,
+					FloatTierB:            investmentExplainDeterministicFloats,
+					IntegerLeaves:         investmentExplainIntegerLeaves,
+				},
+			},
 		},
 	},
 	"REST:GET:/api/v1/drilldown/issues": {
@@ -3547,8 +3612,17 @@ func ValidateRESTCorpus() error {
 				if binding.Producer == "" {
 					return fmt.Errorf("goapiproof: REST corpus entry %q request %q declares an IDBinding with no Producer", operation, req.Name)
 				}
-				if (binding.QueryParam == "") == (binding.PathParam == "") {
-					return fmt.Errorf("goapiproof: REST corpus entry %q request %q binds id %q with QueryParam=%q PathParam=%q -- exactly one must be set", operation, req.Name, binding.Producer, binding.QueryParam, binding.PathParam)
+				setCount := 0
+				for _, set := range []bool{binding.QueryParam != "", binding.PathParam != "", binding.BodyPath != ""} {
+					if set {
+						setCount++
+					}
+				}
+				if setCount != 1 {
+					return fmt.Errorf("goapiproof: REST corpus entry %q request %q binds id %q with QueryParam=%q PathParam=%q BodyPath=%q -- exactly one of QueryParam/PathParam/BodyPath must be set", operation, req.Name, binding.Producer, binding.QueryParam, binding.PathParam, binding.BodyPath)
+				}
+				if binding.BodyPath != "" && req.Body == nil {
+					return fmt.Errorf("goapiproof: REST corpus entry %q request %q binds id %q to BodyPath %q, but this request carries no Body", operation, req.Name, binding.Producer, binding.BodyPath)
 				}
 			}
 		}

@@ -65,7 +65,7 @@ func TestResolveRESTIDBindings_SubstitutesQueryParamFromProduced(t *testing.T) {
 	}
 	produced := map[string]string{"repo_id": "r-42"}
 
-	path, query, unresolved := ResolveRESTIDBindings("/api/v1/quadrant", request, produced)
+	path, query, _, unresolved := ResolveRESTIDBindings("/api/v1/quadrant", request, produced)
 	if len(unresolved) != 0 {
 		t.Fatalf("unresolved = %v, want none", unresolved)
 	}
@@ -89,7 +89,7 @@ func TestResolveRESTIDBindings_SubstitutesPathParamPlaceholder(t *testing.T) {
 	}
 	produced := map[string]string{"person_id": "p-1"}
 
-	path, _, unresolved := ResolveRESTIDBindings("/api/v1/people/{person_id}/summary", request, produced)
+	path, _, _, unresolved := ResolveRESTIDBindings("/api/v1/people/{person_id}/summary", request, produced)
 	if len(unresolved) != 0 {
 		t.Fatalf("unresolved = %v, want none", unresolved)
 	}
@@ -108,7 +108,7 @@ func TestResolveRESTIDBindings_UnresolvedProducerNamesIt(t *testing.T) {
 		Query:      url.Values{"scope_type": {"team"}},
 		IDBindings: []RESTIDBinding{{Producer: "team_id", QueryParam: "scope_id"}},
 	}
-	path, query, unresolved := ResolveRESTIDBindings("/api/v1/quadrant", request, map[string]string{})
+	path, query, _, unresolved := ResolveRESTIDBindings("/api/v1/quadrant", request, map[string]string{})
 	if len(unresolved) != 1 || unresolved[0] != "team_id" {
 		t.Fatalf("unresolved = %v, want [team_id]", unresolved)
 	}
@@ -117,6 +117,68 @@ func TestResolveRESTIDBindings_UnresolvedProducerNamesIt(t *testing.T) {
 	}
 	if query.Has("scope_id") {
 		t.Fatalf("scope_id = %q, want it never set when the binding is unresolved", query.Get("scope_id"))
+	}
+}
+
+// TestResolveRESTIDBindings_BodyPathSubstitutesASingleElementList pins a
+// POST body's own scope id list ("ids"/"repos", the shape this corpus's
+// team/repo-scoped POST bodies both use) getting replaced by a real,
+// PRODUCED id -- the mechanism a POST-only route (no query/path binding
+// surface at all) needs to prove a scoped branch live against a real id
+// rather than a placeholder that matches nothing.
+func TestResolveRESTIDBindings_BodyPathSubstitutesASingleElementList(t *testing.T) {
+	originalBody := map[string]any{
+		"filters": map[string]any{
+			"scope": map[string]any{"level": "team", "ids": []string{"placeholder-does-not-exist"}},
+		},
+	}
+	request := RESTRequest{
+		Body:       originalBody,
+		IDBindings: []RESTIDBinding{{Producer: "team_id", BodyPath: "filters.scope.ids"}},
+	}
+	produced := map[string]string{"team_id": "team-live-42"}
+
+	_, _, resolvedBody, unresolved := ResolveRESTIDBindings("/api/v1/investment/explain", request, produced)
+	if len(unresolved) != 0 {
+		t.Fatalf("unresolved = %v, want none", unresolved)
+	}
+	body, ok := resolvedBody.(map[string]any)
+	if !ok {
+		t.Fatalf("resolvedBody = %#v, want a map[string]any", resolvedBody)
+	}
+	filters := body["filters"].(map[string]any)
+	scope := filters["scope"].(map[string]any)
+	ids, ok := scope["ids"].([]string)
+	if !ok || len(ids) != 1 || ids[0] != "team-live-42" {
+		t.Fatalf("filters.scope.ids = %#v, want [team-live-42]", scope["ids"])
+	}
+
+	// The ORIGINAL corpus literal (a package-level var, reused across
+	// every run) must never be mutated in place -- a second run must not
+	// observe a leftover live id from a prior resolution.
+	origScope := originalBody["filters"].(map[string]any)["scope"].(map[string]any)
+	origIDs := origScope["ids"].([]string)
+	if len(origIDs) != 1 || origIDs[0] != "placeholder-does-not-exist" {
+		t.Fatalf("ResolveRESTIDBindings mutated the corpus's own request.Body in place: filters.scope.ids = %#v", origIDs)
+	}
+}
+
+// TestResolveRESTIDBindings_BodyPathUnresolvedPathNamesTheProducer pins
+// the failure mode: a BodyPath that does not address an existing,
+// id-shaped leaf (a corpus authoring error -- a typo'd path, or a body
+// shape that changed under it) is reported via `unresolved`, exactly
+// like a producer that never ran -- never a silently-unbound request
+// sent with its original placeholder still in place.
+func TestResolveRESTIDBindings_BodyPathUnresolvedPathNamesTheProducer(t *testing.T) {
+	request := RESTRequest{
+		Body:       map[string]any{"filters": map[string]any{}},
+		IDBindings: []RESTIDBinding{{Producer: "team_id", BodyPath: "filters.scope.ids"}},
+	}
+	produced := map[string]string{"team_id": "team-live-42"}
+
+	_, _, _, unresolved := ResolveRESTIDBindings("/api/v1/investment/explain", request, produced)
+	if len(unresolved) != 1 || unresolved[0] != "team_id" {
+		t.Fatalf("unresolved = %v, want [team_id]", unresolved)
 	}
 }
 

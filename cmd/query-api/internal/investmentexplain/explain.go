@@ -17,6 +17,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/units"
 )
@@ -45,21 +47,26 @@ type AvailabilityFunc func(ctx context.Context, requestedProvider, orgID string)
 // ExplainInvestmentMixOptions bundles explain_investment_mix's parameters
 // (investment_mix_explain.py:177-187).
 //
-// RepoIDs is the CALLER-resolved repo-id list -- resolve_repo_filter_ids
-// (api/services/filtering.py:95-110) is NOT ported here, matching this
-// port's existing boundary (BreakdownFilters.RepoIDs, reader.go): it
-// needs its own ClickHouse (repo lookups) and Postgres (team->repo
-// resolution) reads this package doesn't otherwise touch, and every
-// reader in this package already treats repo-id resolution as the
-// caller's job.
+// RepoIDs is the CALLER-resolved EXPLICIT repo-id list -- resolve_repo_
+// filter_ids (api/services/filtering.py:95-110) is NOT ported here,
+// matching this port's existing boundary (BreakdownFilters.RepoIDs,
+// reader.go): it needs its own ClickHouse (repo lookups) and Postgres
+// (team->repo resolution) reads this package doesn't otherwise touch,
+// and every reader in this package already treats repo-id resolution as
+// the caller's job. TeamScopeCondition/TeamScopeBindings carry a team
+// scope's own membership test as a pushed-down SQL condition instead of
+// a second, organization-scale materialized id list -- see
+// TeamRepoScopeCondition's doc comment (repofilter.go) for why.
 //
 // FiltersForCacheKey is whatever filters.model_dump(mode="json") would
 // have produced -- see ComputeCacheKey's own doc comment.
 type ExplainInvestmentMixOptions struct {
-	OrgID   string
-	StartTS time.Time
-	EndTS   time.Time
-	RepoIDs []string
+	OrgID              string
+	StartTS            time.Time
+	EndTS              time.Time
+	RepoIDs            []string
+	TeamScopeCondition string
+	TeamScopeBindings  []dhclickhouse.Binding
 	// ScopeLevel is filters.scope.level verbatim ("org" when absent) --
 	// needed here, not just to compute RepoIDs, because
 	// build_investment_response (api/services/investment.py:175) only
@@ -331,6 +338,8 @@ func (reader *Reader) ExplainInvestmentMix(ctx context.Context, writer *CacheWri
 	// (P1).
 	if opts.ScopeLevel == "team" || opts.ScopeLevel == "repo" {
 		breakdownFilter.RepoIDs = opts.RepoIDs
+		breakdownFilter.TeamScopeCondition = opts.TeamScopeCondition
+		breakdownFilter.TeamScopeBindings = opts.TeamScopeBindings
 	}
 	breakdownRows, err := reader.FetchInvestmentBreakdown(ctx, breakdownFilter)
 	if err != nil {
@@ -363,6 +372,8 @@ func (reader *Reader) ExplainInvestmentMix(ctx context.Context, writer *CacheWri
 		StartTS:            opts.StartTS,
 		EndTS:              opts.EndTS,
 		RepoIDs:            opts.RepoIDs,
+		TeamScopeCondition: opts.TeamScopeCondition,
+		TeamScopeBindings:  opts.TeamScopeBindings,
 		Limit:              200,
 		IncludeText:        true,
 		ThemeFilters:       themeFilters,

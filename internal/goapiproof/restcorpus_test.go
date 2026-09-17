@@ -8,6 +8,87 @@ func TestRESTCorpusIsValid(t *testing.T) {
 	}
 }
 
+// TestValidateRESTCorpus_RefusesAnIDBindingWithNoLocationSet and its
+// sibling below pin the three-way BodyPath extension to the existing
+// QueryParam/PathParam exactly-one-of check.
+// restCorpusValidationFixture returns a minimal, self-consistent
+// producer+consumer corpus (mirroring
+// TestValidateRESTIDBindingOrder_RefusesAConsumerAheadOfItsProducer's own
+// shape) with consumerBindings substituted onto the consumer's one
+// request -- so the ONLY thing that can make ValidateRESTCorpus refuse it
+// is whatever consumerBindings itself declares, never an unrelated
+// run-order or unproduced-id mismatch.
+func restCorpusValidationFixture(consumerBindings []RESTIDBinding, consumerBody any) (map[string]RESTEndpointSpec, []string) {
+	return map[string]RESTEndpointSpec{
+		"REST:POST:/consumer": {
+			Method: "POST", Path: "/consumer",
+			Requests: []RESTRequest{{
+				Name: "req", WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode:   RESTBodyModeJSON,
+				Body:       consumerBody,
+				IDBindings: consumerBindings,
+			}},
+		},
+		"REST:GET:/producer": {
+			Method: "GET", Path: "/producer",
+			Requests: []RESTRequest{{
+				Name: "req", WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode: RESTBodyModeJSON,
+				Produces: []RESTIDProducer{{Name: "widget_id"}},
+			}},
+		},
+	}, []string{"REST:GET:/producer", "REST:POST:/consumer"}
+}
+
+func TestValidateRESTCorpus_RefusesAnIDBindingWithNoLocationSet(t *testing.T) {
+	saved := restEndpointSpecs
+	savedOrder := restRunOrder
+	t.Cleanup(func() { restEndpointSpecs = saved; restRunOrder = savedOrder })
+
+	restEndpointSpecs, restRunOrder = restCorpusValidationFixture([]RESTIDBinding{{Producer: "widget_id"}}, nil)
+
+	if err := ValidateRESTCorpus(); err == nil {
+		t.Fatal("want an error when an IDBinding sets none of QueryParam/PathParam/BodyPath")
+	}
+}
+
+// TestValidateRESTCorpus_RefusesABodyPathBindingWithNoBody pins the
+// BodyPath-specific requirement: a BodyPath binding on a request with no
+// Body at all (a GET, or a POST that forgot one) is a corpus authoring
+// error, caught here rather than silently no-op substituting nothing at
+// run time.
+func TestValidateRESTCorpus_RefusesABodyPathBindingWithNoBody(t *testing.T) {
+	saved := restEndpointSpecs
+	savedOrder := restRunOrder
+	t.Cleanup(func() { restEndpointSpecs = saved; restRunOrder = savedOrder })
+
+	restEndpointSpecs, restRunOrder = restCorpusValidationFixture(
+		[]RESTIDBinding{{Producer: "widget_id", BodyPath: "filters.scope.ids"}}, nil,
+	)
+
+	if err := ValidateRESTCorpus(); err == nil {
+		t.Fatal("want an error when a BodyPath binding names a request with no Body")
+	}
+}
+
+// TestValidateRESTCorpus_AcceptsAWellFormedBodyPathBinding is the
+// positive counterpart: a BodyPath binding naming exactly one location
+// and a request that DOES carry a Body passes.
+func TestValidateRESTCorpus_AcceptsAWellFormedBodyPathBinding(t *testing.T) {
+	saved := restEndpointSpecs
+	savedOrder := restRunOrder
+	t.Cleanup(func() { restEndpointSpecs = saved; restRunOrder = savedOrder })
+
+	restEndpointSpecs, restRunOrder = restCorpusValidationFixture(
+		[]RESTIDBinding{{Producer: "widget_id", BodyPath: "filters.scope.ids"}},
+		map[string]any{"filters": map[string]any{"scope": map[string]any{"ids": []string{"placeholder"}}}},
+	)
+
+	if err := ValidateRESTCorpus(); err != nil {
+		t.Fatalf("ValidateRESTCorpus: %v", err)
+	}
+}
+
 func TestSpecForREST_RefusesAnUncoveredOperation(t *testing.T) {
 	if _, err := SpecForREST("REST:GET:/api/v1/does-not-exist"); err == nil {
 		t.Fatal("want an error for an uncovered operation, got nil")

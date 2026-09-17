@@ -1,0 +1,251 @@
+//go:build integration
+
+// This file reproduces the team-scope repo-id row-cap defect class
+// against a real ClickHouse engine, not a fake: a fake client cannot
+// enforce max_result_rows at all, so the row-cap failure this pins can
+// only be shown against the genuine driver. Mirrors
+// internal/home/team_scope_large_repo_set_integration_test.go and
+// internal/explain/team_scope_large_repo_set_integration_test.go's own
+// copies of this exact reproduction for sibling packages hit by the same
+// production defect class.
+package investmentexplain
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"testing"
+	"time"
+
+	stdclickhouse "github.com/ClickHouse/clickhouse-go/v2"
+	chproto "github.com/ClickHouse/clickhouse-go/v2/lib/proto"
+	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/chquery"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+)
+
+// repoScopeColumn matches investment_explain_route.go's own constant of
+// the same name: both FetchInvestmentBreakdown and FetchWorkUnitInvestments
+// read FROM %s AS work_unit_investments (reader.go/workunitreader.go), so
+// one qualified column name is correct for either reader.
+const repoScopeColumn = "work_unit_investments.repo_id"
+
+// resultRowsExceededCode is ClickHouse's own numeric code for "Limit for
+// result exceeded" (max_result_rows) -- the exact code the production
+// telemetry this class was diagnosed from carries (code 396).
+const resultRowsExceededCode = 396
+
+// teamScopeLargeRepoCount exceeds the read-only client's default
+// max_result_rows ceiling (1,000 -- dev-health-go's clickhouse/options.go)
+// so the seeded team's own DISTINCT repo_id count genuinely cannot be
+// returned to a caller as a standalone query result, matching production
+// (2,224 distinct rows observed there for the failing team).
+const teamScopeLargeRepoCount = 1500
+
+// newInvestmentExplainTestClickHouse starts a real testcontainers
+// ClickHouse, migrates it to the real chain's head, and returns both an
+// admin connection (for seeding) and a QueryClient built through
+// chquery.NewProductionClient -- the SAME defaults production's readers
+// run through (no MaxResultRows override).
+func newInvestmentExplainTestClickHouse(ctx context.Context, t *testing.T) (admin stdclickhouse.Conn, client *dhclickhouse.Client) {
+	t.Helper()
+	ch, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatalf("start ClickHouse test dependency: %v", err)
+	}
+	t.Cleanup(func() { _ = ch.Close(context.Background()) })
+
+	chschema.Apply(ctx, t, ch)
+
+	options, err := stdclickhouse.ParseDSN(ch.URI)
+	if err != nil {
+		t.Fatalf("parse ClickHouse DSN: %v", err)
+	}
+	admin, err = stdclickhouse.Open(options)
+	if err != nil {
+		t.Fatalf("open ClickHouse admin connection: %v", err)
+	}
+	t.Cleanup(func() { _ = admin.Close() })
+
+	queryClient, err := chquery.NewProductionClient(ch.URI)
+	if err != nil {
+		t.Fatalf("construct query client: %v", err)
+	}
+	t.Cleanup(func() { _ = queryClient.Close() })
+
+	return admin, queryClient
+}
+
+// seedInvestmentExplainTeamScopedRepos writes n repos rows plus one
+// user_metrics_daily row per repo, all under the same org/team, giving
+// the team exactly n DISTINCT matching repo ids -- the shape the old
+// resolveRepoIDsForTeams query (and teamRepoScopeCondition's own nested
+// one) both select over.
+func seedInvestmentExplainTeamScopedRepos(ctx context.Context, t *testing.T, admin stdclickhouse.Conn, orgID, teamID string, n int) []string {
+	t.Helper()
+	day := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	computedAt := time.Date(2026, 9, 1, 6, 0, 0, 0, time.UTC)
+	syncedAt := time.Date(2026, 9, 1, 5, 0, 0, 0, time.UTC)
+
+	repoBatch, err := admin.PrepareBatch(ctx, `
+        INSERT INTO repos (id, repo, org_id, created_at, last_synced)
+    `)
+	if err != nil {
+		t.Fatalf("prepare repos batch: %v", err)
+	}
+	metricsBatch, err := admin.PrepareBatch(ctx, `
+        INSERT INTO user_metrics_daily (org_id, repo_id, day, author_email, team_id, computed_at)
+    `)
+	if err != nil {
+		t.Fatalf("prepare user_metrics_daily batch: %v", err)
+	}
+
+	ids := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		id := uuid.New()
+		idStr := id.String()
+		ids = append(ids, idStr)
+		if err := repoBatch.Append(id, fmt.Sprintf("acme/repo-%d", i), orgID, syncedAt, syncedAt); err != nil {
+			t.Fatalf("append repos row %d: %v", i, err)
+		}
+		if err := metricsBatch.Append(orgID, id, day, fmt.Sprintf("user-%d@example.com", i), teamID, computedAt); err != nil {
+			t.Fatalf("append user_metrics_daily row %d: %v", i, err)
+		}
+	}
+	if err := repoBatch.Send(); err != nil {
+		t.Fatalf("send repos batch: %v", err)
+	}
+	if err := metricsBatch.Send(); err != nil {
+		t.Fatalf("send user_metrics_daily batch: %v", err)
+	}
+	return ids
+}
+
+// TestInvestmentExplainLargeTeamRepoScope_OldMaterializedQueryHitsResultRowCap
+// reproduces the underlying defect directly: the EXACT statement text the
+// prior resolveRepoIDsForTeams sent (a standalone SELECT DISTINCT of
+// every matching repo_id) against a team whose true matching count
+// exceeds the read-only client's default row ceiling. This must fail
+// with ClickHouse's own code-396 "Limit for result exceeded" -- the same
+// failure production's own telemetry recorded for these two routes --
+// proving the defect is real against the genuine engine, not a
+// characteristic of a fake client that can't enforce max_result_rows at
+// all.
+func TestInvestmentExplainLargeTeamRepoScope_OldMaterializedQueryHitsResultRowCap(t *testing.T) {
+	ctx := context.Background()
+	admin, client := newInvestmentExplainTestClickHouse(ctx, t)
+
+	const orgID = "investmentexplain-org-scale-old"
+	const teamID = "investmentexplain-team-scale-old"
+	seedInvestmentExplainTeamScopedRepos(ctx, t, admin, orgID, teamID, teamScopeLargeRepoCount)
+
+	oldQuery := `
+SELECT DISTINCT toString(repo_id) AS id
+FROM user_metrics_daily FINAL
+WHERE team_id IN {team_ids:Array(String)}
+  AND org_id = {org_id:String}
+SETTINGS max_execution_time = 30
+`
+	rows, err := client.Query(ctx, oldQuery, []dhclickhouse.Binding{
+		{Name: "team_ids", Value: []string{teamID}},
+		{Name: "org_id", Value: orgID},
+	})
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+		}
+		err = rows.Err()
+	}
+	if err == nil {
+		t.Fatalf("old materialized query succeeded against %d distinct repos -- expected ClickHouse code %d (result row cap); the reproduction did not trigger, so this test cannot certify the fix against it", teamScopeLargeRepoCount, resultRowsExceededCode)
+	}
+	var exc *chproto.Exception
+	if !errors.As(err, &exc) || exc.Code != resultRowsExceededCode {
+		t.Fatalf("old materialized query failed with %v, want ClickHouse code %d (result row cap)", err, resultRowsExceededCode)
+	}
+}
+
+// TestInvestmentExplainLargeTeamRepoScope_ExplainRouteSucceeds is this
+// ticket's own proof for POST /api/v1/investment/explain: the SAME
+// oversized team scope, driven through the real route entry point
+// (ExplainInvestmentMix, exactly as the HTTP handler calls it via
+// scopeRepoFilter's ResolveRepoFilterIDs + TeamRepoScopeCondition pair),
+// against the SAME default-options client the reproduction above used,
+// must succeed -- the pushed-down team condition never asks the client to
+// materialize the team's own repo-id set as a standalone result.
+// LLMProvider "mock" needs no real credentials (IsLLMAvailable("mock", _)
+// is always true) and never reaches an external provider -- the point
+// here is not the LLM output, it is that every ClickHouse read along the
+// way succeeds against the real driver.
+func TestInvestmentExplainLargeTeamRepoScope_ExplainRouteSucceeds(t *testing.T) {
+	ctx := context.Background()
+	admin, client := newInvestmentExplainTestClickHouse(ctx, t)
+
+	const orgID = "investmentexplain-org-scale-new"
+	const teamID = "investmentexplain-team-scale-new"
+	seedInvestmentExplainTeamScopedRepos(ctx, t, admin, orgID, teamID, teamScopeLargeRepoCount)
+
+	reader, err := NewReader(client)
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+
+	teamCondition, teamBindings := TeamRepoScopeCondition(orgID, repoScopeColumn, []string{teamID})
+
+	got, err := reader.ExplainInvestmentMix(ctx, nil, availabilityFromIsLLMAvailable, CompleteInvestmentMixExplanation, ExplainInvestmentMixOptions{
+		OrgID:              orgID,
+		StartTS:            time.Date(2025, 12, 25, 0, 0, 0, 0, time.UTC),
+		EndTS:              time.Date(2026, 1, 10, 0, 0, 0, 0, time.UTC),
+		TeamScopeCondition: teamCondition,
+		TeamScopeBindings:  teamBindings,
+		ScopeLevel:         "team",
+		LLMProvider:        "mock",
+		ForceRefresh:       true,
+		Now:                time.Date(2026, 1, 6, 0, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("ExplainInvestmentMix with a %d-repo team scope: %v (this is the exact request shape production degraded to 503 for)", teamScopeLargeRepoCount, err)
+	}
+	if got.Status == nil {
+		t.Fatal("ExplainInvestmentMix returned a response with no status")
+	}
+}
+
+// TestInvestmentExplainLargeTeamRepoScope_WorkUnitsRouteSucceeds is this
+// ticket's own proof for GET/POST /api/v1/work-units: the SAME oversized
+// team scope, driven through BuildWorkUnitInvestments exactly as both the
+// GET and POST handlers call it, must succeed for the identical reason.
+func TestInvestmentExplainLargeTeamRepoScope_WorkUnitsRouteSucceeds(t *testing.T) {
+	ctx := context.Background()
+	admin, client := newInvestmentExplainTestClickHouse(ctx, t)
+
+	const orgID = "investmentexplain-org-scale-wu"
+	const teamID = "investmentexplain-team-scale-wu"
+	seedInvestmentExplainTeamScopedRepos(ctx, t, admin, orgID, teamID, teamScopeLargeRepoCount)
+
+	reader, err := NewReader(client)
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+
+	repoIDs, err := reader.ResolveRepoFilterIDs(ctx, "team", []string{teamID}, nil, orgID)
+	if err != nil {
+		t.Fatalf("ResolveRepoFilterIDs with a %d-repo team scope: %v", teamScopeLargeRepoCount, err)
+	}
+	teamCondition, teamBindings := TeamRepoScopeCondition(orgID, repoScopeColumn, []string{teamID})
+
+	if _, err := reader.BuildWorkUnitInvestments(ctx, BuildWorkUnitInvestmentsOptions{
+		OrgID:              orgID,
+		StartTS:            time.Date(2025, 12, 25, 0, 0, 0, 0, time.UTC),
+		EndTS:              time.Date(2026, 1, 10, 0, 0, 0, 0, time.UTC),
+		RepoIDs:            repoIDs,
+		TeamScopeCondition: teamCondition,
+		TeamScopeBindings:  teamBindings,
+		Limit:              200,
+	}); err != nil {
+		t.Fatalf("BuildWorkUnitInvestments with a %d-repo team scope: %v (this is the exact request shape production degraded to 503 for)", teamScopeLargeRepoCount, err)
+	}
+}

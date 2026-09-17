@@ -162,7 +162,7 @@ func TestResolveEvidenceQualityStats_QueryError_IsFatal(t *testing.T) {
 // level=TEAM sets team_scope_ids, which fetch_investment_quality_stats
 // (investment.py:1035-1046) turns into a LEFT JOIN over
 // build_unit_team_subquery plus a team_scope_ids-bound WHERE clause --
-// this port's compileInvestmentQualityStats via buildUnitTeamSubquery
+// this port's compileInvestmentQualityStats via BuildUnitTeamSubquery
 // (investment.go, already proven live by the breakdown/timeseries
 // investment paths). Asserted at the compiledQuery level (SQL text +
 // bindings), not by executing against a fake row, since the shape of

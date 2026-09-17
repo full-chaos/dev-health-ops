@@ -71,9 +71,18 @@ const resolvedEvidenceWorkItemIDExpr = `multiIf(
 
 // --- investment.py:399-510: build_unit_team_subquery -------------------
 
-// unitTeamSubqueryOptions is the Go equivalent of build_unit_team_subquery's
-// keyword arguments (investment.py:399-408).
-type unitTeamSubqueryOptions struct {
+// UnitTeamSubqueryOptions is the Go equivalent of build_unit_team_subquery's
+// keyword arguments (investment.py:399-408). Exported (same reasoning as
+// LatestWorkUnitInvestmentsSource's own export below) so cmd/query-api/
+// internal/investmentflow can reuse this exact,
+// already-fixed team-vote subquery for its own five fetchers -- Python's
+// build_unit_team_subquery (api/queries/investment.py:399-510) is the ONE
+// definition both this package's GraphQL compiler path and
+// investment.py's REST fetch_investment_* functions call, so the Go port
+// is equally canonical for both callers; a second copy would only
+// reintroduce the argMax(tuple()).1 null-vote fix this function's own doc
+// comment below describes.
+type UnitTeamSubqueryOptions struct {
 	Source         string
 	Where          string
 	InnerTeamAlias string
@@ -81,7 +90,7 @@ type unitTeamSubqueryOptions struct {
 	IncludeTeamID  bool
 }
 
-// buildUnitTeamSubquery ports build_unit_team_subquery (investment.py:
+// BuildUnitTeamSubquery ports build_unit_team_subquery (investment.py:
 // 399-510, e9ea257ff) -- the ONE per-work-unit team-resolution subquery
 // every investment team join in this package renders, inlined (no WITH,
 // no CTE name; embedded directly where Python would have referenced
@@ -110,7 +119,7 @@ type unitTeamSubqueryOptions struct {
 // wrapped: its own ifNull falls back to the LITERAL ' (never NULL), so
 // it carries no null-skip risk and wrapping it would be a no-op change
 // misrepresenting the audit.
-func buildUnitTeamSubquery(opts unitTeamSubqueryOptions) string {
+func BuildUnitTeamSubquery(opts UnitTeamSubqueryOptions) string {
 	outerAlias := opts.OuterTeamAlias
 	if outerAlias == "" {
 		outerAlias = opts.InnerTeamAlias
@@ -249,8 +258,15 @@ func LatestWorkUnitInvestmentsSource() string {
 
 // --- investment.py:90-127: LATEST_WORK_UNIT_REPO_EFFORT_CTE ------------
 
-// latestWorkUnitRepoEffortSource ports LATEST_WORK_UNIT_REPO_EFFORT_CTE
-// (investment.py:90-127, e9ea257ff), inlined.
+// LatestWorkUnitRepoEffortSource ports LATEST_WORK_UNIT_REPO_EFFORT_CTE
+// (investment.py:90-127, e9ea257ff), inlined. Exported (same reasoning as
+// LatestWorkUnitInvestmentsSource and UnitTeamSubqueryOptions above) so
+// cmd/query-api/internal/investmentflow can compose its own port of
+// REPO_ALLOCATED_WORK_UNIT_INVESTMENTS_SOURCE (investment.py:155-172,
+// a DIFFERENT source from this package's own repoAllocationInvestmentSource
+// below -- see that function's doc comment) from this exact,
+// already-argMax-tuple-fixed CTE instead of a second, unsynced copy of
+// this same history.
 //
 // CHAOS-4547 (AMENDED by CHAOS-5483 -- this comment previously claimed
 // "no CHAOS-4547 fix needed", which was true only while this source
@@ -278,7 +294,7 @@ func LatestWorkUnitInvestmentsSource() string {
 // (see LatestWorkUnitInvestmentsSource above, which wraps every nullable
 // column the same way) and is what makes the CHAOS-5483 coverage split an
 // exact partition rather than a best-effort one.
-func latestWorkUnitRepoEffortSource() string {
+func LatestWorkUnitRepoEffortSource() string {
 	return `(
         SELECT
             d.work_unit_id AS work_unit_id,
@@ -340,7 +356,7 @@ func latestWorkUnitRepoEffortSource() string {
 // `_get_context_params` (my actual scope) uses. No new argMax
 // nullability risk here: every column is a plain reference into
 // already-deduped LatestWorkUnitInvestmentsSource /
-// latestWorkUnitRepoEffortSource, not a fresh aggregate.
+// LatestWorkUnitRepoEffortSource, not a fresh aggregate.
 func repoAllocationInvestmentSource() string {
 	return fmt.Sprintf(`(
                 SELECT
@@ -368,7 +384,7 @@ func repoAllocationInvestmentSource() string {
                 LEFT JOIN %s AS wure
                     ON wure.org_id = wui.org_id
                     AND wure.work_unit_id = wui.work_unit_id
-            ) AS work_unit_investments`, LatestWorkUnitInvestmentsSource(), latestWorkUnitRepoEffortSource())
+            ) AS work_unit_investments`, LatestWorkUnitInvestmentsSource(), LatestWorkUnitRepoEffortSource())
 }
 
 // --- investment.py:214-256: LATEST_WORK_UNIT_AUTHORS_CTE ----------------
@@ -546,7 +562,7 @@ func investmentContextFor(dimensions []Dimension, needsTeamJoinFlag, needsAuthor
 	// faithfully here, so this embeds its OWN fresh copy of
 	// LatestWorkUnitInvestmentsSource() independent of `source` above.
 	if dimensionListHas(dimensions, DimensionTeam) || needsTeamJoinFlag {
-		unitTeamSQL := buildUnitTeamSubquery(unitTeamSubqueryOptions{
+		unitTeamSQL := BuildUnitTeamSubquery(UnitTeamSubqueryOptions{
 			Source:         fmt.Sprintf("%s AS work_unit_investments", LatestWorkUnitInvestmentsSource()),
 			InnerTeamAlias: "team_label",
 			IncludeTeamID:  true,
@@ -582,7 +598,7 @@ func investmentContextFor(dimensions []Dimension, needsTeamJoinFlag, needsAuthor
 	// every caller of this function).
 	//
 	// This is a Go-only fix (CHAOS-4547-class divergence, same routing as
-	// buildUnitTeamSubquery's argMax(tuple()).1 fix above): Python keeps
+	// BuildUnitTeamSubquery's argMax(tuple()).1 fix above): Python keeps
 	// the defect until CHAOS-2600 retires that read path -- see the parity
 	// note on CHAOS-4773.
 	if dimensionListHas(dimensions, DimensionRepo) {

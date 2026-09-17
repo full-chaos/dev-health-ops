@@ -1,0 +1,75 @@
+{
+  "chosen_mode": "repo_team",
+  "coverage": null,
+  "description": "Allocation flow with repo-to-team mapping from work items.",
+  "distinct_repo_targets": null,
+  "distinct_team_targets": null,
+  "drill_category": null,
+  "flow_mode": null,
+  "label": "Subcategory \u2192 Repo \u2192 Team",
+  "links": [
+    {
+      "source": "Feature Delivery \u00b7 Customer",
+      "target": "teamA",
+      "value": 4.0
+    },
+    {
+      "source": "Maintenance \u00b7 Debt",
+      "target": "repoA",
+      "value": 7.0
+    },
+    {
+      "source": "repoA",
+      "target": "teamB",
+      "value": 7.0
+    },
+    {
+      "source": "Risk \u00b7 Security",
+      "target": "repoB",
+      "value": 3.0
+    }
+  ],
+  "mode": "investment",
+  "nodes": [
+    {
+      "group": "subcategory",
+      "name": "Feature Delivery \u00b7 Customer",
+      "value": 4.0
+    },
+    {
+      "group": "team",
+      "name": "teamA",
+      "value": 4.0
+    },
+    {
+      "group": "subcategory",
+      "name": "Maintenance \u00b7 Debt",
+      "value": 7.0
+    },
+    {
+      "group": "repo",
+      "name": "repoA",
+      "value": 7.0
+    },
+    {
+      "group": "team",
+      "name": "teamB",
+      "value": 7.0
+    },
+    {
+      "group": "subcategory",
+      "name": "Risk \u00b7 Security",
+      "value": 3.0
+    },
+    {
+      "group": "repo",
+      "name": "repoB",
+      "value": 3.0
+    }
+  ],
+  "repo_coverage": null,
+  "team_coverage": null,
+  "top_n_repos": null,
+  "unassigned_reasons": null,
+  "unit": null
+}

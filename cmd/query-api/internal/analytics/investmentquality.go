@@ -228,7 +228,7 @@ func compileInvestmentQualityStats(orgID string, startDate, endDate graphqldate.
 	var teamJoin, teamFilter string
 	var teamBindings []clickhouse.Binding
 	if len(teamScopeIDs) > 0 {
-		unitTeamSQL := buildUnitTeamSubquery(unitTeamSubqueryOptions{
+		unitTeamSQL := BuildUnitTeamSubquery(UnitTeamSubqueryOptions{
 			Source:         fmt.Sprintf("%s AS work_unit_investments", LatestWorkUnitInvestmentsSource()),
 			Where:          unitTeamWindowFilter("", ""),
 			InnerTeamAlias: "team_label",

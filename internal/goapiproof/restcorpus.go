@@ -662,6 +662,66 @@ var sankeyCycleTimesDedupParity = Options{
 	},
 }
 
+// investmentFlowRepoDedupParity is shared by every admissible (2xx)
+// investment/flow and investment/flow/repo-team request whose fetcher
+// joins repos (every one of the five edge fetchers except fetch_
+// investment_team_edges, per queries.go's own package doc comment) --
+// the SAME defect class already declared for heatmap/sankey's own repos
+// joins (this file's heatmapDedupParity/sankeyRepoDedupParity, same
+// ticket): api/queries/investment.py's readers join `repos` with no
+// FINAL or org_id scoping at all, where this port (internal/
+// investmentflow) reads it FINAL, org_id inside the JOIN's own ON
+// clause. An unmerged physical version of a repo row can surface as an
+// extra/relabeled repo node anywhere in the response. Go is correct.
+//
+// STACKED with the SAME argMax-tuple-fix divergence sankeyInvestmentParity
+// already declares for the identical shared CTE: api/queries/investment.py
+// defines LATEST_WORK_UNIT_INVESTMENTS_CTE itself (api/queries/sankey.py
+// imports that SAME definition by name for its own investment mode), and
+// this port's every fetcher composes analytics.LatestWorkUnitInvestments
+// Source() -- the Go-fixed, tuple-wrapped port of that exact CTE -- so a
+// work unit whose newest generation cleared repo_id (or work_unit_type/
+// work_unit_name/provider) relative to an earlier generation reads the
+// TRUE latest (possibly-null) value here, where Python's own reader
+// null-skips to a stale non-null value from an earlier generation.
+//
+// STACKED a third time with the work_unit_supersessions exclusion
+// analytics.LatestWorkUnitInvestmentsSource() also carries unconditionally
+// (see investmentsupersessions.go's own doc comment for the design
+// citation): `work_unit_supersessions` names no table anywhere in
+// api/queries/investment.py or api/services/
+// investment_flow.py (confirmed against the whole src/ tree), so Python's
+// own readers still include a work unit a later regrouping run retired,
+// grouped under whatever repo_id/team/subcategory it carried before being
+// superseded. This port excludes it, at every fetcher, because every one
+// composes the same shared source. Go is correct -- the sidecar exists so
+// a retired work unit's stale grouping stops surfacing.
+var investmentFlowRepoDedupParity = Options{
+	BaselineDefects: []BaselineDefect{
+		{
+			Ticket:             "CHAOS-5803",
+			Reason:             "repos is ReplacingMergeTree(last_synced) (000_raw_tables.sql); api/queries/investment.py's readers join it with no FINAL or org_id scoping at all, where this port (internal/investmentflow) reads it FINAL, org_id filtered inside the JOIN's own ON clause. An unmerged physical version of a repo row can surface as an extra or relabeled node. Go is correct.",
+			Paths:              []string{"data.nodes", "data.links"},
+			Intermittent:       true,
+			IntermittentReason: "present only while repos holds an unmerged physical version inside the requested window; a comparison taken after the next background merge shows no divergence",
+		},
+		{
+			Ticket:             "CHAOS-4547",
+			Reason:             "work_unit_investments.repo_id/work_unit_type/work_unit_name/provider are Nullable (017_investment_materialize_tables.sql, 019_work_unit_investment_labels.sql); api/queries/investment.py's own LATEST_WORK_UNIT_INVESTMENTS_CTE (the same definition api/queries/sankey.py imports by name for its own investment mode, already declared under this ticket as sankeyInvestmentParity) dedups them via a bare argMax(col, computed_at), which SKIPS a row whose column is NULL when picking the newest version, returning a STALE non-null value from an earlier generation instead of the true latest one. This port reuses analytics.LatestWorkUnitInvestmentsSource(), which tuple-wraps each of those columns -- (argMax(tuple(col), computed_at)).1 -- and therefore reads the true latest value. A work unit whose newest generation cleared one of those columns relative to an earlier one can change which node its effort lands on. Go is correct.",
+			Paths:              []string{"data.nodes", "data.links"},
+			Intermittent:       true,
+			IntermittentReason: "present only while at least one work unit in the requested window has a newer generation whose repo_id/work_unit_type/work_unit_name/provider differs (including a NULL transition) from an earlier generation's; a request whose work units never re-categorize shows no divergence",
+		},
+		{
+			Ticket:             "CHAOS-4441",
+			Reason:             "Every fetcher in this port composes analytics.LatestWorkUnitInvestmentsSource(), which appends `AND work_unit_id NOT IN (SELECT superseded_work_unit_id FROM work_unit_supersessions WHERE org_id = {org_id:String})` unconditionally (plan.md section 5a) -- a Go-only exclusion of work units a later regrouping run retired. work_unit_supersessions names no table anywhere in api/queries/investment.py or api/services/investment_flow.py: nothing in work_unit_investments/work_unit_repo_effort marks a superseded row dead on its own, so Python's own readers still include it, grouped under whatever repo_id/team/subcategory/theme it carried before being retired. A superseded work unit's effort can move a node's value, add or remove a node, change chosen_mode's own coverage-threshold decision, or shift the coverage/unassigned-reasons counts derived from the same filtered rows. Go is correct.",
+			Paths:              []string{"data.nodes", "data.links", "data.chosen_mode", "data.label", "data.description", "data.team_coverage", "data.repo_coverage", "data.distinct_team_targets", "data.distinct_repo_targets", "data.unassigned_reasons"},
+			Intermittent:       true,
+			IntermittentReason: "present only while work_unit_supersessions holds at least one row for the org whose superseded_work_unit_id falls inside the requested window and scope; an org with no supersession rows in that window agrees on both planes",
+		},
+	},
+}
+
 var restEndpointSpecs = map[string]RESTEndpointSpec{
 	"REST:GET:/api/v1/quadrant": {
 		Method: "GET",
@@ -1062,6 +1122,110 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				// all -- unlike GET's unknown_mode_is_503 sibling above.
 				Name:                "invalid_mode_literal",
 				Body:                map[string]any{"mode": "not-a-real-mode", "filters": map[string]any{}},
+				WantCandidateStatus: 422, WantBaselineStatus: 422,
+				BodyMode: RESTBodyModeJSON,
+			},
+		},
+	},
+	"REST:POST:/api/v1/investment/flow": {
+		Method: "POST",
+		Path:   "/api/v1/investment/flow",
+		Requests: []RESTRequest{
+			{
+				// flow_mode omitted -- build_investment_flow_response's own
+				// dynamic (coverage-driven team/repo_scope/fallback)
+				// branch, org scope.
+				Name:                "dynamic_default_org",
+				Body:                map[string]any{"filters": map[string]any{}},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode: RESTBodyModeJSON, Parity: investmentFlowRepoDedupParity,
+			},
+			{
+				Name:                "team_category_repo_org",
+				Body:                map[string]any{"filters": map[string]any{}, "flow_mode": "team_category_repo"},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode: RESTBodyModeJSON, Parity: investmentFlowRepoDedupParity,
+			},
+			{
+				Name:                "team_category_subcategory_repo_org",
+				Body:                map[string]any{"filters": map[string]any{}, "flow_mode": "team_category_subcategory_repo"},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode: RESTBodyModeJSON, Parity: investmentFlowRepoDedupParity,
+			},
+			{
+				// flow_mode="team_subcategory_repo" WITH drill_category --
+				// the one flow_mode value that requires it (see the
+				// missing_drill_category_is_400 entry below for the ValueError
+				// branch when it is absent).
+				Name:                "team_subcategory_repo_with_drill_org",
+				Body:                map[string]any{"filters": map[string]any{}, "flow_mode": "team_subcategory_repo", "drill_category": "feature_delivery"},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode: RESTBodyModeJSON, Parity: investmentFlowRepoDedupParity,
+			},
+			{
+				// build_investment_flow_response's own ValueError -- the
+				// ONE case this route's error mapping answers 400 (str(exc)
+				// as the detail) rather than 503, confirmed byte-identical
+				// on both planes (the message is a fixed literal, not
+				// request-derived, so no Parity/BaselineDefect is needed).
+				Name:                "missing_drill_category_is_400",
+				Body:                map[string]any{"filters": map[string]any{}, "flow_mode": "team_subcategory_repo"},
+				WantCandidateStatus: 400, WantBaselineStatus: 400,
+				BodyMode: RESTBodyModeJSON,
+			},
+			{
+				// flow_mode outside the closed Literal set is a 422
+				// literal_error, never reaching build_investment_flow_
+				// response's own ValueError at all.
+				Name:                "invalid_flow_mode_literal",
+				Body:                map[string]any{"filters": map[string]any{}, "flow_mode": "not-a-real-mode"},
+				WantCandidateStatus: 422, WantBaselineStatus: 422,
+				BodyMode: RESTBodyModeJSON,
+			},
+			{
+				// No body at all -- InvestmentFlowRequest is a required
+				// body parameter even though every one of its own fields
+				// has a default; confirmed live (this route's own
+				// TEST-EVIDENCE) that FastAPI still answers a top-level
+				// "missing" 422 for a genuinely absent body.
+				Name:                "missing_body_is_422",
+				WantCandidateStatus: 422, WantBaselineStatus: 422,
+				BodyMode: RESTBodyModeJSON,
+			},
+		},
+	},
+	"REST:POST:/api/v1/investment/flow/repo-team": {
+		Method: "POST",
+		Path:   "/api/v1/investment/flow/repo-team",
+		Requests: []RESTRequest{
+			{
+				Name:                "default_org",
+				Body:                map[string]any{"filters": map[string]any{}},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode: RESTBodyModeJSON, Parity: investmentFlowRepoDedupParity,
+			},
+			{
+				Name:                "theme_scoped_org",
+				Body:                map[string]any{"filters": map[string]any{}, "theme": "feature_delivery"},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode: RESTBodyModeJSON, Parity: investmentFlowRepoDedupParity,
+			},
+			{
+				// investment_flow_repo_team has NO ValueError branch at all
+				// (unlike its investment/flow sibling): every failure this
+				// route's own body can raise is caught by the generic
+				// `except Exception: 503`. flow_mode/drill_category/top_n_repos
+				// are still validated (the wire model is shared) even though
+				// this route's own handler ignores them once parsing
+				// succeeds -- an invalid flow_mode here is still a 422, not
+				// a request that silently proceeds.
+				Name:                "invalid_flow_mode_literal_still_422",
+				Body:                map[string]any{"filters": map[string]any{}, "flow_mode": "not-a-real-mode"},
+				WantCandidateStatus: 422, WantBaselineStatus: 422,
+				BodyMode: RESTBodyModeJSON,
+			},
+			{
+				Name:                "missing_body_is_422",
 				WantCandidateStatus: 422, WantBaselineStatus: 422,
 				BodyMode: RESTBodyModeJSON,
 			},
@@ -1953,6 +2117,8 @@ var restRunOrder = []string{
 	"REST:GET:/api/v1/flame",
 	"REST:GET:/api/v1/flame/aggregated",
 	"REST:POST:/api/v1/investment/explain",
+	"REST:POST:/api/v1/investment/flow",
+	"REST:POST:/api/v1/investment/flow/repo-team",
 	"REST:GET:/api/v1/meta",
 	"REST:GET:/api/v1/quadrant",
 	"REST:GET:/api/v1/heatmap",

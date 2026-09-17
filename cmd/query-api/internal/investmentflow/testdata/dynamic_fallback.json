@@ -1,0 +1,24 @@
+{
+  "chosen_mode": "fallback",
+  "coverage": null,
+  "description": "Dynamic allocation target based on coverage metrics.",
+  "distinct_repo_targets": 0,
+  "distinct_team_targets": 0,
+  "drill_category": null,
+  "flow_mode": null,
+  "label": "Investment allocation",
+  "links": [],
+  "mode": "investment",
+  "nodes": [
+    {
+      "group": "subcategory",
+      "name": "Feature Delivery \u00b7 Customer",
+      "value": 5.0
+    }
+  ],
+  "repo_coverage": 0.0,
+  "team_coverage": 0.0,
+  "top_n_repos": null,
+  "unassigned_reasons": null,
+  "unit": null
+}

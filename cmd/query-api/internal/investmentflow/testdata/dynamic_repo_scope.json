@@ -1,0 +1,50 @@
+{
+  "chosen_mode": "repo_scope",
+  "coverage": null,
+  "description": "Dynamic allocation target based on coverage metrics.",
+  "distinct_repo_targets": 2,
+  "distinct_team_targets": 1,
+  "drill_category": null,
+  "flow_mode": null,
+  "label": "Subcategory \u2192 Repo scope",
+  "links": [
+    {
+      "source": "Feature Delivery \u00b7 Customer",
+      "target": "repoA",
+      "value": 9.0
+    },
+    {
+      "source": "Maintenance \u00b7 Debt",
+      "target": "repoB",
+      "value": 3.0
+    }
+  ],
+  "mode": "investment",
+  "nodes": [
+    {
+      "group": "subcategory",
+      "name": "Feature Delivery \u00b7 Customer",
+      "value": 9.0
+    },
+    {
+      "group": "repo",
+      "name": "repoA",
+      "value": 9.0
+    },
+    {
+      "group": "subcategory",
+      "name": "Maintenance \u00b7 Debt",
+      "value": 3.0
+    },
+    {
+      "group": "repo",
+      "name": "repoB",
+      "value": 3.0
+    }
+  ],
+  "repo_coverage": 1.0,
+  "team_coverage": 0.16666666666666666,
+  "top_n_repos": null,
+  "unassigned_reasons": null,
+  "unit": null
+}

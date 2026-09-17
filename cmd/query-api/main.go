@@ -420,6 +420,27 @@ func main() {
 		log.Print("query-api: /api/v1/sankey route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
 	}
 
+	// POST /api/v1/investment/flow and POST /api/v1/investment/flow/
+	// repo-team, gated by one shared routeswitch toggle (default OFF via
+	// GO_API_INVESTMENT_FLOW_ENABLED) -- see investment_flow_route.go's
+	// package doc comment for the reachability story and
+	// internal/investmentflow for the ported builders, their dynamic
+	// coverage-driven mode decision, and the declared ReplacingMergeTree
+	// dedup notes.
+	if flowHandler, flowRepoTeamHandler, flowCleanup, flowOK, flowErr := buildInvestmentFlowRoute(); flowErr != nil {
+		log.Fatalf("query-api: build /api/v1/investment/flow routes: %v", flowErr)
+	} else if flowOK {
+		defer flowCleanup()
+		// See the investment/explain mount above for why this is a
+		// reassignment, not an inlined wrapper.
+		flowHandler = withProofProvenance(flowHandler, runningBuild())
+		flowRepoTeamHandler = withProofProvenance(flowRepoTeamHandler, runningBuild())
+		mux.HandleFunc("/api/v1/investment/flow", flowHandler)
+		mux.HandleFunc("/api/v1/investment/flow/repo-team", flowRepoTeamHandler)
+	} else {
+		log.Print("query-api: /api/v1/investment/flow routes not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
+	}
+
 	// GET /api/v1/filters/options, gated by its own routeswitch
 	// entry (default OFF via GO_API_FILTER_OPTIONS_ENABLED) -- see
 	// filter_options_route.go's package doc comment for the reachability

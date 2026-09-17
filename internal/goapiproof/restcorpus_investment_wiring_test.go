@@ -1,6 +1,9 @@
 package goapiproof
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 // TestInvestmentDeclarationsCarryShapes pins the actual registered
 // corpus declarations for the rest of the investment family (GET/POST
@@ -161,5 +164,85 @@ func TestInvestmentDeclarationsCarryShapes(t *testing.T) {
 				t.Fatalf("investmentFlowRepoDedupParity[%d] cites %q -- chosen_mode/label/description must stay uncovered (categorical threshold flip, no honest shape)", i, path)
 			}
 		}
+	}
+}
+
+// TestInvestmentFlowSplitCarriesParentDeclarations is the
+// split-integrity pin: investmentFlowDynamicParity/ModeParity/
+// RepoTeamParity are each derived from investmentFlowRepoDedupParity by
+// VALUE (BaselineDefects/OrderInsensitiveLists copied at package-init
+// time, per-scenario numeric-leaf declarations added on top), exactly
+// the shape TestSankeyAndHeatmapDedupDeclarationsCarryShapes already
+// pins for heatmap's own four-way split. The risk a length-only check
+// would miss is not a conflict -- it is a declaration silently NOT
+// carried over (a dedup shape or citation present on the parent, absent
+// from one child): nothing would fail elsewhere, a finding would simply
+// stop being covered, surfacing later as a new uncovered case on a live
+// prove run with no visible cause here. reflect.DeepEqual on the full
+// slice, not a length comparison, is what actually catches that.
+func TestInvestmentFlowSplitCarriesParentDeclarations(t *testing.T) {
+	for name, opts := range map[string]Options{
+		"investmentFlowDynamicParity":  investmentFlowDynamicParity,
+		"investmentFlowModeParity":     investmentFlowModeParity,
+		"investmentFlowRepoTeamParity": investmentFlowRepoTeamParity,
+	} {
+		if !opts.NumericLeavesDeclared {
+			t.Fatalf("%s.NumericLeavesDeclared = false, want true", name)
+		}
+		if !reflect.DeepEqual(opts.OrderInsensitiveLists, investmentFlowRepoDedupParity.OrderInsensitiveLists) {
+			t.Fatalf("%s.OrderInsensitiveLists = %+v, want the same as investmentFlowRepoDedupParity's own %+v", name, opts.OrderInsensitiveLists, investmentFlowRepoDedupParity.OrderInsensitiveLists)
+		}
+		if !reflect.DeepEqual(opts.BaselineDefects, investmentFlowRepoDedupParity.BaselineDefects) {
+			t.Fatalf("%s.BaselineDefects = %+v, want the same as investmentFlowRepoDedupParity's own %+v -- a length-only check would miss a content change", name, opts.BaselineDefects, investmentFlowRepoDedupParity.BaselineDefects)
+		}
+	}
+
+	// Each split's own numeric-leaf declarations, present where that
+	// scenario group actually reaches the leaf.
+	for _, path := range []string{"data.links.value", "data.nodes.value", "data.team_coverage", "data.repo_coverage"} {
+		if _, ok := investmentFlowDynamicParity.FloatTierB[path]; !ok {
+			t.Fatalf("investmentFlowDynamicParity.FloatTierB missing %q", path)
+		}
+		if _, ok := investmentFlowModeParity.FloatTierB[path]; !ok {
+			t.Fatalf("investmentFlowModeParity.FloatTierB missing %q", path)
+		}
+	}
+	for _, path := range []string{"data.distinct_team_targets", "data.distinct_repo_targets"} {
+		if _, ok := investmentFlowDynamicParity.IntegerLeaves[path]; !ok {
+			t.Fatalf("investmentFlowDynamicParity.IntegerLeaves missing %q", path)
+		}
+		if _, ok := investmentFlowModeParity.IntegerLeaves[path]; !ok {
+			t.Fatalf("investmentFlowModeParity.IntegerLeaves missing %q", path)
+		}
+	}
+	// investmentFlowModeParity ALONE reaches coverage/unassigned_reasons/
+	// top_n_repos (BuildFlowResponse's flow_mode branch sets them; the
+	// dynamic branch and BuildRepoTeamFlowResponse never do -- see this
+	// section's own doc comment in restcorpus.go).
+	if _, ok := investmentFlowModeParity.FloatTierB["data.coverage"]; !ok {
+		t.Fatal("investmentFlowModeParity.FloatTierB missing data.coverage")
+	}
+	if _, ok := investmentFlowModeParity.IntegerLeaves["data.unassigned_reasons"]; !ok {
+		t.Fatal("investmentFlowModeParity.IntegerLeaves missing data.unassigned_reasons")
+	}
+	if _, ok := investmentFlowModeParity.IntegerLeaves["data.top_n_repos"]; !ok {
+		t.Fatal("investmentFlowModeParity.IntegerLeaves missing data.top_n_repos")
+	}
+	for _, path := range []string{"data.coverage", "data.team_coverage", "data.repo_coverage"} {
+		if _, ok := investmentFlowDynamicParity.FloatTierB["data.coverage"]; ok && path == "data.coverage" {
+			t.Fatal("investmentFlowDynamicParity must NOT declare data.coverage -- the dynamic branch never sets it, so a declaration here would always read as unused/undeclared-wrongly for that scenario group")
+		}
+	}
+
+	// investmentFlowRepoTeamParity reaches ONLY links/nodes -- asserting
+	// the negative half explicitly, since BuildRepoTeamFlowResponse
+	// leaves every scalar/map field nil and a declaration here would
+	// always read as unused for this scenario group (this section's own
+	// doc comment in restcorpus.go).
+	if len(investmentFlowRepoTeamParity.FloatTierB) != 2 {
+		t.Fatalf("investmentFlowRepoTeamParity.FloatTierB = %+v, want exactly data.links.value/data.nodes.value", investmentFlowRepoTeamParity.FloatTierB)
+	}
+	if len(investmentFlowRepoTeamParity.IntegerLeaves) != 0 {
+		t.Fatalf("investmentFlowRepoTeamParity.IntegerLeaves = %+v, want none", investmentFlowRepoTeamParity.IntegerLeaves)
 	}
 }

@@ -222,6 +222,20 @@ type Result struct {
 	// there, and the first person to trust it is trusting nothing.
 	UnusedTierB []string `json:"unused_tier_b,omitempty"`
 
+	// UndeclaredNumericLeaves names every numeric leaf path reached
+	// while opts.NumericLeavesDeclared was set that opts.FloatTierB,
+	// opts.FloatExactLeaves and opts.IntegerLeaves ALL leave undeclared.
+	// The per-entry numeric-leaf declaration is opt-out for tolerance (a
+	// float leaf is Tier-B by default) but never optional for TYPE: every
+	// numeric leaf an entry with the marker set actually
+	// reaches must be named as float or integer once, or this run cannot
+	// stand -- an entry that leaves one leaf unclassified is exactly the
+	// gap that let a real Tier-A/Tier-B mismatch on this route go
+	// unnoticed before. The comparison itself still runs Tier A for an
+	// undeclared leaf (the same default a route with no marker at all
+	// gets), so this field is the ONLY signal a corpus author sees.
+	UndeclaredNumericLeaves []string `json:"undeclared_numeric_leaves,omitempty"`
+
 	// BaselineDefectsMatched names the tickets whose declared paths cover
 	// at least one of this comparison's differences.
 	BaselineDefectsMatched []string `json:"baseline_defect,omitempty"`
@@ -319,7 +333,54 @@ type Options struct {
 	// mismatch. It is equally not a licence to relax any field that
 	// happens to differ: an entry here names a field whose value is a
 	// merged floating-point aggregate, and nothing else.
+	//
+	// For an entry with NumericLeavesDeclared set, FloatTierB is the
+	// default for every leaf whose DECLARED TYPE is float -- a float leaf
+	// compares Tier B unless it also appears in FloatExactLeaves.
+	// FloatTierB/FloatExactLeaves
+	// TOGETHER are the entry's float-leaf declaration; IntegerLeaves is
+	// its integer-leaf declaration. A route with NumericLeavesDeclared
+	// unset keeps today's plain opt-in behaviour, unchanged: FloatTierB
+	// is read exactly as this comment's first paragraph says, and
+	// FloatExactLeaves/IntegerLeaves are never consulted.
 	FloatTierB map[string]string
+
+	// FloatExactLeaves names float-DECLARED leaves (dotted, index-free
+	// path, same form as FloatTierB) that this entry opts back OUT of
+	// Tier-B tolerance despite their float provenance, mapped to the
+	// WRITTEN REASON exact comparison is still correct for that leaf.
+	// Only consulted when NumericLeavesDeclared is set. A leaf here
+	// still counts as declared-float for UndeclaredNumericLeaves; it
+	// simply does not get the tolerance FloatTierB would otherwise give
+	// it. Never used to relax an integer leaf -- that is IntegerLeaves'
+	// own, permanently-exact, declaration.
+	FloatExactLeaves map[string]string
+
+	// IntegerLeaves names leaves (same dotted, index-free path form)
+	// whose DECLARED TYPE is integer -- a bare count or id, never a
+	// merged ClickHouse floating-point aggregate, whatever its WIRE type
+	// happens to be (a count cast toFloat64(...) purely so the driver can
+	// scan it is still declared integer here; see FloatTierB/
+	// FloatExactLeaves for the converse). Mapped to the WRITTEN REASON
+	// the leaf is integer-valued. Comparison is Tier A (exact) either
+	// way -- this map exists so NumericLeavesDeclared's own enforcement
+	// can tell "declared integer" apart from "never reached a
+	// declaration at all". Only consulted when NumericLeavesDeclared is
+	// set.
+	IntegerLeaves map[string]string
+
+	// NumericLeavesDeclared marks this entry as having named EVERY
+	// numeric leaf its own response shape can reach, as float
+	// (FloatTierB/FloatExactLeaves) or integer (IntegerLeaves) -- the
+	// per-route marker. A numeric leaf this comparison
+	// actually reaches that appears in none of the three is recorded
+	// into Result.UndeclaredNumericLeaves and fails the run: the
+	// guarantee this marker buys is that every float leaf on a marked
+	// route is named, none inferred, which is what makes the opt-out
+	// default (FloatTierB's own doc comment) safe to apply. A route
+	// without this marker is unaffected: FloatTierB stays a plain opt-in
+	// and no leaf is ever required to appear anywhere.
+	NumericLeavesDeclared bool
 
 	// BaselineDefects declares differences that are known PYTHON defects
 	// with Go correct. See BaselineDefect.
@@ -536,6 +597,32 @@ func validateBaselineDefects(defects []BaselineDefect) error {
 	return nil
 }
 
+// validateNumericLeaves catches a contradictory declaration before it
+// ever reaches a live comparison: a path named in IntegerLeaves cannot
+// also appear in FloatTierB or FloatExactLeaves -- a declared type is a
+// property of the leaf's domain, never a runtime observation, and that
+// rule means a path is float or integer, never both. FloatTierB and
+// FloatExactLeaves overlapping is expected and fine (see
+// Options.FloatExactLeaves' own doc comment): together they ARE the
+// entry's float declaration, one naming the tolerant leaves and the
+// other the ones opted back to exact.
+func validateNumericLeaves(opts Options) error {
+	for path := range opts.IntegerLeaves {
+		if _, ok := opts.FloatTierB[path]; ok {
+			return fmt.Errorf("goapiproof: %q is declared in both IntegerLeaves and FloatTierB -- a leaf is float or integer, never both", path)
+		}
+		if _, ok := opts.FloatExactLeaves[path]; ok {
+			return fmt.Errorf("goapiproof: %q is declared in both IntegerLeaves and FloatExactLeaves -- a leaf is float or integer, never both", path)
+		}
+	}
+	for path := range opts.FloatExactLeaves {
+		if _, ok := opts.FloatTierB[path]; !ok {
+			return fmt.Errorf("goapiproof: %q is declared in FloatExactLeaves but not FloatTierB -- FloatExactLeaves opts a float-declared leaf back to exact, it does not declare a leaf float on its own", path)
+		}
+	}
+	return nil
+}
+
 // tracker records which declared entries actually matched something, so
 // a declaration that matched nothing can be reported rather than sitting
 // in the table reading as coverage.
@@ -548,6 +635,11 @@ type tracker struct {
 	// set: every occurrence is worth reporting, since it names which
 	// side and which list.
 	orderInsensitiveKeyMissing []string
+	// undeclaredNumeric collects every numeric leaf path reached, under
+	// an entry with NumericLeavesDeclared set, that FloatTierB,
+	// FloatExactLeaves and IntegerLeaves all leave unnamed -- see
+	// Result.UndeclaredNumericLeaves.
+	undeclaredNumeric map[string]bool
 }
 
 // Compare compares a baseline (Python) and candidate (Go) response under
@@ -602,7 +694,7 @@ func Compare(baseline, candidate Snapshot, opts Options) Result {
 		}
 	}
 
-	track := &tracker{volatile: map[string]bool{}, tierB: map[string]bool{}, orderInsensitive: map[string]bool{}}
+	track := &tracker{volatile: map[string]bool{}, tierB: map[string]bool{}, orderInsensitive: map[string]bool{}, undeclaredNumeric: map[string]bool{}}
 	findings := compareErrors(baseline.Errors, candidate.Errors, "$.errors")
 
 	switch {
@@ -629,6 +721,7 @@ func Compare(baseline, candidate Snapshot, opts Options) Result {
 	result := Result{TerminalState: terminal, Findings: findings}
 	result.UnusedExclusions = unmatched(opts.VolatileFields, track.volatile)
 	result.UnusedTierB = unmatched(opts.FloatTierB, track.tierB)
+	result.UndeclaredNumericLeaves = sortedSet(track.undeclaredNumeric)
 	var baselineData, candidateData any
 	if baseline.DataPresent {
 		baselineData = baseline.Data
@@ -1205,7 +1298,14 @@ func compareJSON(baseline, candidate any, path string, opts Options, envelopeKey
 		// tolerance-compared must stay tolerance-compared even when both
 		// sides happen to be whole numbers, or the declaration would mean
 		// different things depending on the data.
-		if _, isTierB := opts.FloatTierB[tieredPath(path)]; !isTierB {
+		//
+		// tolerant is decided ONCE here, by numericLeafTolerant (which
+		// also performs the undeclared-leaf bookkeeping): this
+		// is the only place every numeric leaf is guaranteed to pass
+		// through, since the int64 fast path below returns without ever
+		// reaching compareNumber when both sides parse as clean integers.
+		tolerant := numericLeafTolerant(tieredPath(path), opts, track)
+		if !tolerant {
 			if baselineInt, ok := asInt64(baseline); ok {
 				if candidateInt, ok := asInt64(candidate); ok {
 					if baselineInt != candidateInt {
@@ -1220,7 +1320,7 @@ func compareJSON(baseline, candidate any, path string, opts Options, envelopeKey
 				}
 			}
 		}
-		return compareNumber(baselineNumber, candidateNumber, path, opts, track)
+		return compareNumber(baselineNumber, candidateNumber, path, opts, track, tolerant)
 	}
 
 	if !sameScalar(baseline, candidate) {
@@ -1303,7 +1403,121 @@ func sameScalar(baseline, candidate any) bool {
 	return fmt.Sprintf("%T:%v", baseline, baseline) == fmt.Sprintf("%T:%v", candidate, candidate)
 }
 
-func compareNumber(baseline, candidate float64, path string, opts Options, track *tracker) []Finding {
+// classifyDeclaredLeaf looks up path EXACTLY (no parent fallback) across
+// FloatTierB/FloatExactLeaves/IntegerLeaves. ok reports whether path is
+// declared at all; tolerant reports its comparison mode when it is.
+func classifyDeclaredLeaf(path string, opts Options) (tolerant, ok bool) {
+	_, inTierB := opts.FloatTierB[path]
+	_, inExact := opts.FloatExactLeaves[path]
+	_, inInt := opts.IntegerLeaves[path]
+	if !inTierB && !inExact && !inInt {
+		return false, false
+	}
+	return inTierB && !inExact, true
+}
+
+// parentPath returns key's immediate dotted parent ("data.a.b" ->
+// "data.a", true), or ("", false) when key carries no "." to split on.
+func parentPath(key string) (string, bool) {
+	idx := strings.LastIndex(key, ".")
+	if idx < 0 {
+		return "", false
+	}
+	return key[:idx], true
+}
+
+// numericLeafTolerant reports whether the numeric leaf at the given
+// tiered path compares Tier B (tolerant) or Tier A (exact), and performs
+// the undeclared-leaf and Tier-B-usage bookkeeping as a side
+// effect. This is the ONE place FloatTierB/FloatExactLeaves/IntegerLeaves
+// are read; compareValue's integer fast path and compareNumber both go
+// through it rather than each re-deriving the same lookup, which would
+// let the two disagree on a leaf the fast path handles without ever
+// calling compareNumber.
+//
+// Tried in order: the leaf's OWN exact path, then (only if that finds
+// nothing) each ANCESTOR path in turn, climbing one "." segment at a
+// time until a declared one is found or none remain -- the fallback a
+// dynamically-keyed JSON object needs. A Go map[string]<number> with
+// data-dependent keys (theme_distribution, keyed by an org's own theme
+// names) produces a leaf path compareDict builds from the LITERAL key
+// ("data.theme_distribution.engineering"), which no per-leaf declaration
+// can name in advance -- unlike a LIST, where tieredPath already strips
+// the "[N]" index so one declaration covers every element. Declaring the
+// map's own path ("data.theme_distribution") once, with no child
+// segment, covers every value beneath it the same way.
+//
+// The climb cannot stop at one level: a map key can itself legitimately
+// contain a "." (subcategory_distribution's own keys are compound,
+// "<theme>.<subcategory>" -- response.go's own row.Subcategory filter
+// requires strings.Contains(row.Subcategory, ".")), and once baseline
+// and candidate key and path are both flattened into one dotted string
+// there is no way to tell a "." that separates JSON structure from a "."
+// inside a literal key -- the same ambiguity OrderInsensitiveList's own
+// pairing key deliberately keeps OUT of the path string entirely (see
+// listIndexSuffix's own doc comment). Climbing until a declared ancestor
+// is found is what actually matches "declare the map once" for every key
+// shape this corpus can produce, a one-dot subcategory or a plain,
+// dot-free theme alike, rather than silently undershooting whichever one
+// has more dots than assumed. track.tierB is marked at whichever path
+// actually matched (the leaf's own, or an ancestor) -- the same path a
+// corpus author wrote, so UnusedTierB reads against what was declared,
+// never a data-dependent child no declaration could have named.
+//
+// Tolerant iff the matched declaration is in FloatTierB and NOT also in
+// FloatExactLeaves -- FloatExactLeaves opts a float-declared leaf back
+// to exact without reclassifying it as integer (see Options.
+// FloatExactLeaves' own doc comment). When NumericLeavesDeclared is
+// unset, FloatExactLeaves/IntegerLeaves and the parent-path fallback are
+// never consulted, no bookkeeping happens, and FloatTierB is read as a
+// plain exact-match opt-in -- a route with no marker keeps today's
+// behaviour, unchanged.
+func numericLeafTolerant(key string, opts Options, track *tracker) bool {
+	if !opts.NumericLeavesDeclared {
+		_, inTierB := opts.FloatTierB[key]
+		if inTierB {
+			track.tierB[key] = true
+		}
+		return inTierB
+	}
+	matched := key
+	tolerant, ok := classifyDeclaredLeaf(key, opts)
+	// Climb ancestors -- NOT stopping at one level -- because a
+	// dynamically-keyed map's own key can itself legitimately contain a
+	// "." (subcategory_distribution's keys are compound,
+	// "<theme>.<subcategory>" -- response.go's own row.Subcategory
+	// filter requires strings.Contains(row.Subcategory, ".")), and this
+	// function has no way to tell a "." that separates JSON structure
+	// from a "." inside a literal key once both are flattened into one
+	// dotted string -- the same ambiguity OrderInsensitiveList's own
+	// pairing key deliberately keeps OUT of the path string entirely
+	// (see listIndexSuffix's own doc comment). One climb only handled
+	// theme_distribution (a plain, dot-free key); it silently
+	// undershot subcategory_distribution, whose compound keys need TWO
+	// climbs for a one-dot subcategory and more for further-nested
+	// taxonomy. Climbing until a declared ancestor is found, or none
+	// remain, is what actually matches "declare the map once" for every
+	// key shape this corpus can produce, not only the simplest one.
+	for candidate, hasParent := key, true; !ok && hasParent; {
+		candidate, hasParent = parentPath(candidate)
+		if !hasParent {
+			break
+		}
+		if candidateTolerant, candidateOK := classifyDeclaredLeaf(candidate, opts); candidateOK {
+			tolerant, ok, matched = candidateTolerant, true, candidate
+		}
+	}
+	if !ok {
+		track.undeclaredNumeric[key] = true
+		return false
+	}
+	if tolerant {
+		track.tierB[matched] = true
+	}
+	return tolerant
+}
+
+func compareNumber(baseline, candidate float64, path string, opts Options, track *tracker, tolerant bool) []Finding {
 	if math.IsNaN(baseline) || math.IsNaN(candidate) || math.IsInf(baseline, 0) || math.IsInf(candidate, 0) {
 		// Parity rule 3: NaN/Infinity ALWAYS mismatches, never
 		// tolerance-compared -- including when both sides agree. inf==inf
@@ -1317,8 +1531,7 @@ func compareNumber(baseline, candidate float64, path string, opts Options, track
 		}}
 	}
 
-	key := tieredPath(path)
-	if _, isTierB := opts.FloatTierB[key]; !isTierB {
+	if !tolerant {
 		if baseline != candidate {
 			return []Finding{{
 				Kind:   FindingMismatch,
@@ -1329,13 +1542,13 @@ func compareNumber(baseline, candidate float64, path string, opts Options, track
 		}
 		return nil
 	}
-	// Marked as soon as a Tier-B field is actually COMPARED, not only
-	// when its tolerance is exercised: the declaration's claim is "this
-	// field exists and is a merged aggregate", and a field that compares
-	// equal every run still satisfies it. Marking only on a tolerated
-	// difference would report every correctly-declared, currently-stable
-	// field as stale.
-	track.tierB[key] = true
+	// track.tierB is already marked -- by numericLeafTolerant, the one
+	// place that decides tolerant, at whichever path (the leaf's own, or
+	// a dynamically-keyed map's parent) the declaration actually matched.
+	// Marked as soon as the field is COMPARED, not only when its
+	// tolerance is exercised: the declaration's claim is "this field
+	// exists and is a merged aggregate", and a field that compares equal
+	// every run still satisfies it.
 
 	tolerance := math.Max(floatTolerance, floatTolerance*math.Max(math.Abs(baseline), math.Abs(candidate)))
 	if math.Abs(baseline-candidate) > tolerance {

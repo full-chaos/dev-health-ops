@@ -183,7 +183,7 @@ type RESTEndpointSpec struct {
 var investmentBaselineDefects = []BaselineDefect{
 	{
 		Ticket:             "CHAOS-4441",
-		Reason:             "Go's read of work_unit_investments excludes any work unit a later regrouping run has recorded in work_unit_supersessions; the Python query this route ports has no knowledge of that table at all, so it can still count a superseded work unit's effort into theme_distribution -- a Go map keyed by theme name, summing row.Value per theme (response.go's own BuildResponse). Candidate's row population is a strict subset of baseline's, so a theme's own sum can only be pulled up by an excluded row's effort, never down -- direction only, no magnitude bound. Never observed firing on a real capture across the three available production deployed-vs-deployed prove runs; proven here by injected fault only.",
+		Reason:             "Go's read of work_unit_investments excludes any work unit a later regrouping run has recorded in work_unit_supersessions; the Python query this route ports has no knowledge of that table at all, so it can still count a superseded work unit's effort into theme_distribution -- a Go map keyed by theme name, summing row.Value per theme (response.go's own BuildResponse). Candidate's row population is a strict subset of baseline's, so a theme's own sum can only be pulled up by an excluded row's effort, never down -- direction only, no magnitude bound.",
 		Paths:              []string{"data.theme_distribution"},
 		Intermittent:       true,
 		IntermittentReason: "present only for an org that currently holds at least one superseded work unit still inside the request's time window; an org with no supersession rows (or none inside that window) shows no divergence under this path, which is expected, not stale",
@@ -194,7 +194,7 @@ var investmentBaselineDefects = []BaselineDefect{
 	},
 	{
 		Ticket:             "CHAOS-4441",
-		Reason:             "the same work_unit_supersessions exclusion as this ticket's data.theme_distribution entry, over subcategory_distribution (the SAME per-row summation, keyed by subcategory instead of theme). Never observed firing on a real capture across the three available production deployed-vs-deployed prove runs; proven here by injected fault only.",
+		Reason:             "the same work_unit_supersessions exclusion as this ticket's data.theme_distribution entry, over subcategory_distribution (the SAME per-row summation, keyed by subcategory instead of theme).",
 		Paths:              []string{"data.subcategory_distribution"},
 		Intermittent:       true,
 		IntermittentReason: "present only for an org that currently holds at least one superseded work unit still inside the request's time window; an org with no supersession rows (or none inside that window) shows no divergence under this path, which is expected, not stale",
@@ -205,7 +205,7 @@ var investmentBaselineDefects = []BaselineDefect{
 	},
 	{
 		Ticket:             "CHAOS-4441",
-		Reason:             "the same work_unit_supersessions exclusion, over evidence_quality_distribution: response.go's own BuildResponse counts qualityStats.BandCounts per band into this map. A superseded work unit's own evidence-quality band, if it has one, can only be counted extra by baseline, never dropped by it -- direction only, no magnitude bound. Never observed firing on a real capture across the three available production deployed-vs-deployed prove runs; proven here by injected fault only.",
+		Reason:             "the same work_unit_supersessions exclusion, over evidence_quality_distribution: response.go's own BuildResponse counts qualityStats.BandCounts per band into this map. A superseded work unit's own evidence-quality band, if it has one, can only be counted extra by baseline, never dropped by it -- direction only, no magnitude bound.",
 		Paths:              []string{"data.evidence_quality_distribution"},
 		Intermittent:       true,
 		IntermittentReason: "present only for an org that currently holds at least one superseded work unit still inside the request's time window; an org with no supersession rows (or none inside that window) shows no divergence under this path, which is expected, not stale",
@@ -216,7 +216,7 @@ var investmentBaselineDefects = []BaselineDefect{
 	},
 	{
 		Ticket:             "CHAOS-4441",
-		Reason:             "the same work_unit_supersessions exclusion, over evidence_quality_stats.band_counts -- the SAME BandCounts map evidence_quality_distribution's own entry reads, one level deeper in the response. Never observed firing on a real capture across the three available production deployed-vs-deployed prove runs; proven here by injected fault only.",
+		Reason:             "the same work_unit_supersessions exclusion, over evidence_quality_stats.band_counts -- the SAME BandCounts map evidence_quality_distribution's own entry reads, one level deeper in the response.",
 		Paths:              []string{"data.evidence_quality_stats.band_counts"},
 		Intermittent:       true,
 		IntermittentReason: "present only for an org that currently holds at least one superseded work unit still inside the request's time window; an org with no supersession rows (or none inside that window) shows no divergence under this path, which is expected, not stale",
@@ -227,7 +227,7 @@ var investmentBaselineDefects = []BaselineDefect{
 	},
 	{
 		Ticket:             "CHAOS-4441",
-		Reason:             "the same work_unit_supersessions exclusion, over evidence_quality_stats.total: computeQualityStats (response.go) sets it from the SAME strictly-subset row population's own count. Counting rows over a strict SUBSET of a population can only read less than or equal to the same count over the full population -- a structural fact, not an empirical skew -- so baseline is admitted only when strictly greater than candidate. Never observed firing on a real capture across the three available production deployed-vs-deployed prove runs; proven here by injected fault only.",
+		Reason:             "the same work_unit_supersessions exclusion, over evidence_quality_stats.total: computeQualityStats (response.go) sets it from the SAME strictly-subset row population's own count. Counting rows over a strict SUBSET of a population can only read less than or equal to the same count over the full population -- a structural fact, not an empirical skew -- so baseline is admitted only when strictly greater than candidate.",
 		Paths:              []string{"data.evidence_quality_stats.total"},
 		Intermittent:       true,
 		IntermittentReason: "present only for an org that currently holds at least one superseded work unit still inside the request's time window; an org with no supersession rows (or none inside that window) shows no divergence under this path, which is expected, not stale",
@@ -316,7 +316,7 @@ var investmentParity = Options{
 // documents.
 var investmentSunburstBaselineDefects = append(append([]BaselineDefect{}, investmentBaselineDefects...), BaselineDefect{
 	Ticket:             "CHAOS-4773",
-	Reason:             "the sunburst repo-name join reads repos with FINAL and an org_id predicate on Go's side; Python's own join has neither, so an unmerged physical version of a repo row can fan a slice's value out by however many versions are still live for it. Direction only, no magnitude bound: Python's join can only add extra physical copies to a slice's sum, never remove one, so baseline is admitted only when strictly greater than candidate at the same (theme, subcategory, scope) key. Never observed firing on a real capture across the three available production deployed-vs-deployed prove runs; proven here by injected fault only.",
+	Reason:             "the sunburst repo-name join reads repos with FINAL and an org_id predicate on Go's side; Python's own join has neither, so an unmerged physical version of a repo row can fan a slice's value out by however many versions are still live for it. Direction only, no magnitude bound: Python's join can only add extra physical copies to a slice's sum, never remove one, so baseline is admitted only when strictly greater than candidate at the same (theme, subcategory, scope) key.",
 	Paths:              []string{"data.value"},
 	Intermittent:       true,
 	IntermittentReason: "present only while a repo row referenced by this org's investment data still holds 2+ unmerged physical versions; once ClickHouse merges them the two planes agree and this citation covers nothing, which is expected, not stale",
@@ -485,9 +485,58 @@ var drilldownIssuesParity = Options{
 
 // explainParity is shared by every admissible (2xx) explain request, GET
 // and POST alike: both routes call the same BuildExplainResponse, so both
-// carry the same four declared, Intermittent Python-plane defects (see
+// carry the same five declared, Intermittent Python-plane defects (see
 // restEndpointSpecs' own doc comment for the fifth, undeclared one).
+
+// explainAggregateFloats declares explain's own ClickHouse-derived
+// numeric leaves as Tier B: metricValueProjection's headline read and
+// fetchMetricContributors/fetchMetricDriverDelta's ranking read
+// (cmd/query-api/internal/explain/metrics.go) are each a merged Float64
+// ClickHouse aggregate over work_item_metrics_daily/repo_metrics_daily/
+// work_item_state_durations_daily, the same class every sibling
+// FloatTierB table in this service already declares (CHAOS-5451).
+// Undeclared here until now, which let a last-digit engine rounding
+// difference surface as a Tier-A exact mismatch that explainParity's own
+// CHAOS-5813 citation (unshaped, covering these same leaves by path
+// proximity) still admitted, by the wrong mechanism rather than the
+// right tolerance -- the flap cycle_time_range_days_90 showed between
+// runs is this: ULP-scale noise crossing the exact-equality boundary
+// run to run, not a change in the underlying data.
+var explainAggregateFloats = map[string]string{
+	"data.value":              "metricValueProjection's argMax(tuple(col), computed_at) read, a merged Float64 ClickHouse aggregate",
+	"data.delta_pct":          "derived from the same float aggregate as data.value",
+	"data.drivers.value":      "fetchMetricContributors'/fetchMetricDriverDelta's own aggregate read (sum() or avg() depending on the metric's configured aggregator), a merged Float64 ClickHouse aggregate",
+	"data.drivers.delta_pct":  "derived from the same float aggregates as data.drivers.value",
+	"data.contributors.value": "the same aggregate read as data.drivers.value",
+}
+
+// explainDriverRankOrderInsensitive declares data.drivers/data.contributors
+// order-insensitive for THIS ticket only, and only for as long as the
+// mechanism it is tied to exists: CHAOS-5818's own avg-vs-sum ranking
+// divergence means the two planes can rank a sum-aggregator metric's
+// contributing rows by DIFFERENT functions, so the top-N SET a plane
+// selects -- not merely each element's value -- can differ. Comparing
+// such a list positionally would not be a weaker check, it would be a
+// meaningless one: row 3 on one plane is not necessarily the same
+// logical driver/contributor as row 3 on the other, so a per-key
+// direction claim requires pairing by id first. BLIND SPOT, stated
+// plainly because it differs from every other OrderInsensitiveLists
+// entry in this file: drivers/contributors are RANKED lists and their
+// order is USER-VISIBLE -- it is the feature, not an internal
+// representation detail. This declaration means a genuine Go-side
+// ranking regression (the right rows, in the wrong order) is NOT caught
+// on this route while it stands. It is justified only for as long as
+// CHAOS-5818's own ranking divergence exists; once the two planes rank
+// by the same function, this declaration should come out along with it,
+// not be left behind as a permanent relaxation.
+var explainDriverRankOrderInsensitive = []OrderInsensitiveList{
+	{Path: "data.drivers", KeyFields: []string{"id"}, Reason: "CHAOS-5818's own avg-vs-sum ranking divergence can select a different top-N set, not just different values at the same rank -- see explainDriverRankOrderInsensitive's own doc comment", Ticket: "CHAOS-5818"},
+	{Path: "data.contributors", KeyFields: []string{"id"}, Reason: "the same ranking divergence as data.drivers, over contributors", Ticket: "CHAOS-5818"},
+}
+
 var explainParity = Options{
+	FloatTierB:            explainAggregateFloats,
+	OrderInsensitiveLists: explainDriverRankOrderInsensitive,
 	BaselineDefects: []BaselineDefect{
 		{
 			Ticket: "CHAOS-5813",
@@ -516,14 +565,34 @@ var explainParity = Options{
 		},
 		{
 			Ticket: "CHAOS-5818",
-			Reason: "fetch_metric_contributors and fetch_metric_driver_delta (api/queries/explain.py) rank every metric with a hardcoded avg(column), regardless of that metric's own aggregator in _METRIC_CONFIG -- this table's own headline reader, fetch_metric_value (api/queries/metrics.py), already keys off the metric's configured aggregator, so an avg-aggregator metric's ranking agrees with its own headline while a sum-aggregator metric's ranking (throughput, deploy_freq, churn, blocked_work) silently averages a quantity the metric's own label, unit and headline all present as a total. This port's fetchMetricContributors/fetchMetricDriverDelta (cmd/query-api/internal/explain/metrics.go) take the metric's own config.Aggregator, matching the headline read. Go is correct.",
+			Reason: "fetch_metric_contributors and fetch_metric_driver_delta (api/queries/explain.py) rank every metric with a hardcoded avg(column), regardless of that metric's own aggregator in _METRIC_CONFIG -- this table's own headline reader, fetch_metric_value (api/queries/metrics.py), already keys off the metric's configured aggregator, so an avg-aggregator metric's ranking agrees with its own headline while a sum-aggregator metric's ranking (throughput, deploy_freq, churn, blocked_work) silently averages a quantity the metric's own label, unit and headline all present as a total. This port's fetchMetricContributors/fetchMetricDriverDelta (cmd/query-api/internal/explain/metrics.go) take the metric's own config.Aggregator, matching the headline read. Go is correct. DIRECTION: a sum over N>=1 non-negative values is >= their average, equal only at N=1 -- every one of the four sum-aggregator metrics this entry covers reads a structurally non-negative column (metricconfig.go: throughput/items_completed and deploy_freq/deployments_count are counts, churn/total_loc_touched is touched-lines, blocked_work/duration_hours is a duration; none can go negative), so candidate (Go, sum) is admitted only when strictly greater than baseline (Python, avg) at the same driver/contributor id -- the reverse of every OTHER KeyedDirectionShape in this file, which is why this entry sets CandidateMustBeGreater. The non-negativity is this claim's own premise, not incidental: the same argument reverses for a signed quantity (see data.drivers.delta_pct's own drop below), and no metric this entry reaches carries one. Pairing is by id, over data.drivers/data.contributors declared order-insensitive under this ticket (explainDriverRankOrderInsensitive above) -- see that declaration's own doc comment for why positional pairing cannot be used here and what leaving it in costs.",
 			Paths: []string{
 				"data.drivers.value",
-				"data.drivers.delta_pct",
 				"data.contributors.value",
 			},
 			Intermittent:       true,
-			IntermittentReason: "present only for a request whose metric resolves to a sum-aggregator config (throughput, deploy_freq, churn, blocked_work) and whose ranked group has more than one contributing daily row with differing values in the request window -- a single-row or uniform-value group leaves sum and avg equal, and an avg-aggregator metric (cycle_time, review_latency, wip_saturation, change_failure_rate) never reaches this path at all",
+			IntermittentReason: "present only for a request whose metric resolves to a sum-aggregator config (throughput, deploy_freq, churn, blocked_work) and whose ranked group has more than one contributing daily row with differing values in the request window -- a single-row or uniform-value group leaves sum and avg equal, and an avg-aggregator metric (cycle_time, review_latency, wip_saturation, change_failure_rate) never reaches this path at all. data.drivers.delta_pct is deliberately NOT in Paths: verified against a real captured instance, delta_pct's own baseline value was LESS than candidate's at the same driver while value's own baseline was GREATER -- opposite signs under the SAME comparison, because a percentage-change ratio does not inherit sum-vs-avg's monotonic guarantee when the two compare windows' own row counts differ. No direction is provable for it, so it is left uncovered rather than blanket-admitted; a real divergence there surfaces as an ordinary, visible finding.",
+			KeyedDirectionShape: &KeyedDirectionShape{
+				ListPath:               "data.drivers",
+				ValueField:             "value",
+				ValuePath:              "data.drivers.value",
+				KeyFields:              []string{"id"},
+				CandidateMustBeGreater: true,
+			},
+		},
+		{
+			Ticket:             "CHAOS-5818",
+			Reason:             "the same avg-vs-sum mechanism and the same non-negativity premise as this ticket's data.drivers.value entry, over contributors. Go is correct.",
+			Paths:              []string{"data.contributors.value"},
+			Intermittent:       true,
+			IntermittentReason: "the same condition as this ticket's data.drivers.value entry, over the contributors ranking",
+			KeyedDirectionShape: &KeyedDirectionShape{
+				ListPath:               "data.contributors",
+				ValueField:             "value",
+				ValuePath:              "data.contributors.value",
+				KeyFields:              []string{"id"},
+				CandidateMustBeGreater: true,
+			},
 		},
 		{
 			Ticket: "CHAOS-5819",
@@ -571,7 +640,9 @@ var explainScopeDropDefect = BaselineDefect{
 // below that requests an explicit, live repo or team scope for one of
 // the four metrics explainScopeDropDefect names.
 var explainRepoTeamScopedParity = Options{
-	BaselineDefects: append(append([]BaselineDefect{}, explainParity.BaselineDefects...), explainScopeDropDefect),
+	FloatTierB:            explainAggregateFloats,
+	OrderInsensitiveLists: explainDriverRankOrderInsensitive,
+	BaselineDefects:       append(append([]BaselineDefect{}, explainParity.BaselineDefects...), explainScopeDropDefect),
 }
 
 // explainScopedRequest builds one repo- or team-scoped explain request
@@ -1002,6 +1073,41 @@ var flamePRIDBoundParity = Options{
 // it named coverage this citation could never actually check -- a
 // difference surfacing there stays outside every citation, correctly.
 // Go is correct.
+
+// heatmapCellFloats declares data.cells.value as Tier B: the response
+// wire shape (cmd/query-api/internal/heatmap/response.go's own Cell
+// struct, one Value float64 field, cellsFromRows) funnels all four
+// heatmap metrics through this ONE leaf, so the declaration is scoped to
+// exactly that leaf and nothing wider -- no other path on this route has
+// been examined. hotspot_risk's toFloat64(sum(hotspot_score)) and
+// review_wait_density's toFloat64(sum(dateDiff(...))/60.0) (queries.go)
+// are each a merged Float64 SUM ClickHouse aggregates over the same
+// engine, so the aggregate's own partial-state merge order is
+// nondeterministic thread-to-thread on BOTH planes -- the identical
+// class compare.go's own FloatTierB doc comment measures under CHAOS-5451
+// and every sibling FloatTierB table already declares
+// (investmentQualityStatsFloats, investmentExplainDeterministicFloats,
+// quadrantPointFloats, cycleBreakdownFloats): engine nondeterminism, not
+// a Go-vs-Python defect. Before this declaration, heatmapDedupParity's
+// own KeyedDirectionShape (below) admitted a real production run's
+// ULP-scale noise on hotspot_risk_org as if it were evidence of the
+// declared repos-dedup mechanism, by the wrong mechanism rather than the
+// right tolerance -- the same failure investmentQualityStatsFloats' own
+// doc comment already names for evidence_quality_stats.
+//
+// repo_touchpoints' and active_hours' toFloat64(count()) share this same
+// leaf but are exact integer aggregates, not floating-point sums -- a
+// COUNT never has a fractional partial-merge order to disagree over. The
+// tolerance still reaches them because the wire leaf is shared, but it is
+// harmless there: the smallest possible real difference between two
+// counts is 1, and at every magnitude file_metrics_daily/git_commits
+// buckets reach on this route the tolerance floor and relative term both
+// sit many orders of magnitude below 1, so no genuine count divergence
+// can fall inside it.
+var heatmapCellFloats = map[string]string{
+	"data.cells.value": "toFloat64(sum(hotspot_score)) (hotspot_risk) / toFloat64(sum(dateDiff('minute', created_at, first_review_at)) / 60.0) (review_wait_density) -- merged Float64 ClickHouse aggregate, order-nondeterministic across planes (CHAOS-5451); the same leaf also carries repo_touchpoints'/active_hours' toFloat64(count()), an exact integer aggregate the tolerance never actually affects at this route's magnitudes",
+}
+
 var heatmapDedupParity = Options{
 	OrderInsensitiveLists: []OrderInsensitiveList{
 		{
@@ -1011,6 +1117,7 @@ var heatmapDedupParity = Options{
 			Ticket:    "CHAOS-5803",
 		},
 	},
+	FloatTierB: heatmapCellFloats,
 	BaselineDefects: []BaselineDefect{
 		{
 			Ticket:             "CHAOS-5803",
@@ -1294,7 +1401,7 @@ var investmentFlowRepoDedupParity = Options{
 	BaselineDefects: []BaselineDefect{
 		{
 			Ticket:             "CHAOS-5803",
-			Reason:             "repos is ReplacingMergeTree(last_synced) (000_raw_tables.sql); api/queries/investment.py's readers join it with no FINAL or org_id scoping at all, where this port (internal/investmentflow) reads it FINAL, org_id filtered inside the JOIN's own ON clause. An unmerged physical version of a repo row fans out a clean, uniform integer multiplier across the whole repo-rooted subtree that repo's own edges reach -- the same mechanism already declared for GET/POST /api/v1/sankey's own repos join (sankeyRepoDedupParity), extended here to also admit the anchor's own NODE value: unlike plain sankey, this route's own node builders (nodePresence/nodeRunningTotal) populate a real running total per node, so a genuine instance moves an anchor's node value by the SAME k as its incident edges, not only the edges themselves. Go is correct. Never observed firing on a real capture across the three available production deployed-vs-deployed prove runs; proven here by injected fault only.",
+			Reason:             "repos is ReplacingMergeTree(last_synced) (000_raw_tables.sql); api/queries/investment.py's readers join it with no FINAL or org_id scoping at all, where this port (internal/investmentflow) reads it FINAL, org_id filtered inside the JOIN's own ON clause. An unmerged physical version of a repo row fans out a clean, uniform integer multiplier across the whole repo-rooted subtree that repo's own edges reach -- the same mechanism already declared for GET/POST /api/v1/sankey's own repos join (sankeyRepoDedupParity), extended here to also admit the anchor's own NODE value: unlike plain sankey, this route's own node builders (nodePresence/nodeRunningTotal) populate a real running total per node, so a genuine instance moves an anchor's node value by the SAME k as its incident edges, not only the edges themselves. Go is correct.",
 			Paths:              []string{"data.nodes", "data.links"},
 			Intermittent:       true,
 			IntermittentReason: "present only while repos holds an unmerged physical version inside the requested window; a comparison taken after the next background merge shows no divergence",
@@ -1309,7 +1416,7 @@ var investmentFlowRepoDedupParity = Options{
 		},
 		{
 			Ticket:             "CHAOS-4547",
-			Reason:             "work_unit_investments.repo_id/work_unit_type/work_unit_name/provider are Nullable (017_investment_materialize_tables.sql, 019_work_unit_investment_labels.sql); api/queries/investment.py's own LATEST_WORK_UNIT_INVESTMENTS_CTE (the same definition api/queries/sankey.py imports by name for its own investment mode, already declared under this ticket as sankeyInvestmentParity) dedups them via a bare argMax(col, computed_at), which SKIPS a row whose column is NULL when picking the newest version, returning a STALE non-null value from an earlier generation instead of the true latest one. This port reuses analytics.LatestWorkUnitInvestmentsSource(), which tuple-wraps each of those columns -- (argMax(tuple(col), computed_at)).1 -- and therefore reads the true latest value. A work unit whose newest generation cleared one of those columns relative to an earlier one moves its effort from one edge to another -- a redistribution, not an addition, so the response's own total link value is CONSERVED even though no single edge's sign is predictable, the same mechanism already declared for sankeyInvestmentParity's own data.links. Go is correct. Paths names data.links alone: a node's own value is a SUM/max over several edges (finishPresenceEdges/nodeRunningTotal), so this redistribution can move an individual node's total in either direction with no whole-node conservation to check -- ConservationShape's own whole-comparison rule only proves the LIST total is conserved, not any one node's share of it, and that gap is knowingly left uncovered (see the blind-spot note below) rather than guessed at. Never observed firing on a real capture across the three available production deployed-vs-deployed prove runs; proven here by injected fault only. BLIND SPOT: a node-value-only instance of this exact mechanism -- one whose links happen to stay within FloatTierB tolerance while the node total it feeds visibly moves -- is never covered by this entry; it would surface as an ordinary, uncovered data.nodes.value finding, which is correct and intended, not a gap in this citation's own scope.",
+			Reason:             "work_unit_investments.repo_id/work_unit_type/work_unit_name/provider are Nullable (017_investment_materialize_tables.sql, 019_work_unit_investment_labels.sql); api/queries/investment.py's own LATEST_WORK_UNIT_INVESTMENTS_CTE (the same definition api/queries/sankey.py imports by name for its own investment mode, already declared under this ticket as sankeyInvestmentParity) dedups them via a bare argMax(col, computed_at), which SKIPS a row whose column is NULL when picking the newest version, returning a STALE non-null value from an earlier generation instead of the true latest one. This port reuses analytics.LatestWorkUnitInvestmentsSource(), which tuple-wraps each of those columns -- (argMax(tuple(col), computed_at)).1 -- and therefore reads the true latest value. A work unit whose newest generation cleared one of those columns relative to an earlier one moves its effort from one edge to another -- a redistribution, not an addition, so the response's own total link value is CONSERVED even though no single edge's sign is predictable, the same mechanism already declared for sankeyInvestmentParity's own data.links. Go is correct. Paths names data.links alone: a node's own value is a SUM/max over several edges (finishPresenceEdges/nodeRunningTotal), so this redistribution can move an individual node's total in either direction with no whole-node conservation to check -- ConservationShape's own whole-comparison rule only proves the LIST total is conserved, not any one node's share of it, and that gap is knowingly left uncovered (see the blind-spot note below) rather than guessed at. BLIND SPOT: a node-value-only instance of this exact mechanism -- one whose links happen to stay within FloatTierB tolerance while the node total it feeds visibly moves -- is never covered by this entry; it would surface as an ordinary, uncovered data.nodes.value finding, which is correct and intended, not a gap in this citation's own scope.",
 			Paths:              []string{"data.links"},
 			Intermittent:       true,
 			IntermittentReason: "present only while at least one work unit in the requested window has a newer generation whose repo_id/work_unit_type/work_unit_name/provider differs (including a NULL transition) from an earlier generation's; a request whose work units never re-categorize shows no divergence",
@@ -1321,7 +1428,7 @@ var investmentFlowRepoDedupParity = Options{
 		},
 		{
 			Ticket:             "CHAOS-4441",
-			Reason:             "every fetcher in this port composes analytics.LatestWorkUnitInvestmentsSource(), which appends `AND work_unit_id NOT IN (SELECT superseded_work_unit_id FROM work_unit_supersessions WHERE org_id = {org_id:String})` unconditionally -- a Go-only exclusion of work units a later regrouping run retired, making candidate's own row population a STRICT SUBSET of baseline's. A subtree/edge whose value sums that population can only be pulled UP by the rows Go excludes, never down, so baseline is admitted only when strictly greater than candidate at the same (source, target) key -- direction only, no magnitude bound. Go is correct. Never observed firing on a real capture across the three available production deployed-vs-deployed prove runs; proven here by injected fault only.",
+			Reason:             "every fetcher in this port composes analytics.LatestWorkUnitInvestmentsSource(), which appends `AND work_unit_id NOT IN (SELECT superseded_work_unit_id FROM work_unit_supersessions WHERE org_id = {org_id:String})` unconditionally -- a Go-only exclusion of work units a later regrouping run retired, making candidate's own row population a STRICT SUBSET of baseline's. A subtree/edge whose value sums that population can only be pulled UP by the rows Go excludes, never down, so baseline is admitted only when strictly greater than candidate at the same (source, target) key -- direction only, no magnitude bound. Go is correct.",
 			Paths:              []string{"data.links"},
 			Intermittent:       true,
 			IntermittentReason: "present only while work_unit_supersessions holds at least one row for the org whose superseded_work_unit_id falls inside the requested window and scope; an org with no supersession rows in that window agrees on both planes",
@@ -1334,7 +1441,7 @@ var investmentFlowRepoDedupParity = Options{
 		},
 		{
 			Ticket:             "CHAOS-4441",
-			Reason:             "the same work_unit_supersessions exclusion as this ticket's data.links entry, over data.nodes: a node's own value sums the SAME strictly-subset row population, so it too can only be pulled up by an excluded row's effort, never down. Go is correct. Never observed firing on a real capture across the three available production deployed-vs-deployed prove runs; proven here by injected fault only.",
+			Reason:             "the same work_unit_supersessions exclusion as this ticket's data.links entry, over data.nodes: a node's own value sums the SAME strictly-subset row population, so it too can only be pulled up by an excluded row's effort, never down. Go is correct.",
 			Paths:              []string{"data.nodes"},
 			Intermittent:       true,
 			IntermittentReason: "present only while work_unit_supersessions holds at least one row for the org whose superseded_work_unit_id falls inside the requested window and scope; an org with no supersession rows in that window agrees on both planes",
@@ -1347,7 +1454,7 @@ var investmentFlowRepoDedupParity = Options{
 		},
 		{
 			Ticket:             "CHAOS-4441",
-			Reason:             "the same work_unit_supersessions exclusion, over team_coverage: coverageStats/edgeStats (builders.go) compute it as assignedValue/totalValue over this SAME strictly-subset population. A retired work unit is typically retired BECAUSE its earlier team/repo grouping was wrong, so the rows Python keeps and Go excludes skew disproportionately toward unassigned -- the SAME reasoning already established for investmentFull's own sankey coverage (SupersessionSkewShape). That gives a DIRECTION, not a magnitude: baseline is admitted only when strictly less than candidate. Go is correct. Never observed firing on a real capture across the three available production deployed-vs-deployed prove runs; proven here by injected fault only.",
+			Reason:             "the same work_unit_supersessions exclusion, over team_coverage: coverageStats/edgeStats (builders.go) compute it as assignedValue/totalValue over this SAME strictly-subset population. A retired work unit is typically retired BECAUSE its earlier team/repo grouping was wrong, so the rows Python keeps and Go excludes skew disproportionately toward unassigned -- the SAME reasoning already established for investmentFull's own sankey coverage (SupersessionSkewShape). That gives a DIRECTION, not a magnitude: baseline is admitted only when strictly less than candidate. Go is correct.",
 			Paths:              []string{"data.team_coverage"},
 			Intermittent:       true,
 			IntermittentReason: "present only while work_unit_supersessions holds at least one row for the org whose superseded_work_unit_id falls inside the requested window and scope; an org with no supersession rows in that window agrees on both planes",
@@ -1358,7 +1465,7 @@ var investmentFlowRepoDedupParity = Options{
 		},
 		{
 			Ticket:             "CHAOS-4441",
-			Reason:             "the same work_unit_supersessions exclusion and the same coverageStats/edgeStats formula as this ticket's data.team_coverage entry, over repo_coverage: a retired work unit typically skews Python's own ratio down relative to Go's, the same reasoning SupersessionSkewShape already establishes for investmentFull. Go is correct. Never observed firing on a real capture across the three available production deployed-vs-deployed prove runs; proven here by injected fault only.",
+			Reason:             "the same work_unit_supersessions exclusion and the same coverageStats/edgeStats formula as this ticket's data.team_coverage entry, over repo_coverage: a retired work unit typically skews Python's own ratio down relative to Go's, the same reasoning SupersessionSkewShape already establishes for investmentFull. Go is correct.",
 			Paths:              []string{"data.repo_coverage"},
 			Intermittent:       true,
 			IntermittentReason: "present only while work_unit_supersessions holds at least one row for the org whose superseded_work_unit_id falls inside the requested window and scope; an org with no supersession rows in that window agrees on both planes",
@@ -1369,7 +1476,7 @@ var investmentFlowRepoDedupParity = Options{
 		},
 		{
 			Ticket:             "CHAOS-4441",
-			Reason:             "the same work_unit_supersessions exclusion, over distinct_team_targets: coverageStats/edgeStats count DISTINCT assigned team names among the rows (builders.go's own teamSeen/seen sets). Removing a row from a population can only remove or preserve a distinct label already seen, never add one Go's own smaller population lacks -- a plain structural fact, not an empirical skew -- so baseline (over the LARGER population) is admitted only when strictly greater than candidate. Go is correct. Never observed firing on a real capture across the three available production deployed-vs-deployed prove runs; proven here by injected fault only.",
+			Reason:             "the same work_unit_supersessions exclusion, over distinct_team_targets: coverageStats/edgeStats count DISTINCT assigned team names among the rows (builders.go's own teamSeen/seen sets). Removing a row from a population can only remove or preserve a distinct label already seen, never add one Go's own smaller population lacks -- a plain structural fact, not an empirical skew -- so baseline (over the LARGER population) is admitted only when strictly greater than candidate. Go is correct.",
 			Paths:              []string{"data.distinct_team_targets"},
 			Intermittent:       true,
 			IntermittentReason: "present only while work_unit_supersessions holds at least one row for the org whose superseded_work_unit_id falls inside the requested window and scope, AND that row's own team is not otherwise represented among the org's non-superseded rows; an org with no such row agrees on both planes",
@@ -1380,7 +1487,7 @@ var investmentFlowRepoDedupParity = Options{
 		},
 		{
 			Ticket:             "CHAOS-4441",
-			Reason:             "the same work_unit_supersessions exclusion and the same distinct-count structural argument as this ticket's data.distinct_team_targets entry, over distinct_repo_targets. Go is correct. Never observed firing on a real capture across the three available production deployed-vs-deployed prove runs; proven here by injected fault only.",
+			Reason:             "the same work_unit_supersessions exclusion and the same distinct-count structural argument as this ticket's data.distinct_team_targets entry, over distinct_repo_targets. Go is correct.",
 			Paths:              []string{"data.distinct_repo_targets"},
 			Intermittent:       true,
 			IntermittentReason: "present only while work_unit_supersessions holds at least one row for the org whose superseded_work_unit_id falls inside the requested window and scope, AND that row's own repo is not otherwise represented among the org's non-superseded rows; an org with no such row agrees on both planes",
@@ -1391,7 +1498,7 @@ var investmentFlowRepoDedupParity = Options{
 		},
 		{
 			Ticket:             "CHAOS-4441",
-			Reason:             "the same work_unit_supersessions exclusion, over unassigned_reasons: fetchInvestmentUnassignedCounts composes the SAME strictly-subset population to count missing_team/missing_repo rows. Counting rows that share a key over a strict SUBSET of a population can only read less than or equal to the same count over the full population -- a structural fact, not an empirical skew -- so baseline is admitted only when strictly greater than candidate at each key. Go is correct. Never observed firing on a real capture across the three available production deployed-vs-deployed prove runs; proven here by injected fault only.",
+			Reason:             "the same work_unit_supersessions exclusion, over unassigned_reasons: fetchInvestmentUnassignedCounts composes the SAME strictly-subset population to count missing_team/missing_repo rows. Counting rows that share a key over a strict SUBSET of a population can only read less than or equal to the same count over the full population -- a structural fact, not an empirical skew -- so baseline is admitted only when strictly greater than candidate at each key. Go is correct.",
 			Paths:              []string{"data.unassigned_reasons"},
 			Intermittent:       true,
 			IntermittentReason: "present only while work_unit_supersessions holds at least one row for the org whose superseded_work_unit_id falls inside the requested window and scope, AND that row is itself missing a team or repo assignment; an org with no such row agrees on both planes",

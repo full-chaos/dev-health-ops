@@ -106,9 +106,22 @@ func (reader *Reader) fetchMetricValue(ctx context.Context, table, column, aggre
 	}
 
 	fromClause := metricFromClause(table, column, scopeFilterSQL, "start_day", "end_day")
+	// toFloat64(...) around the outer aggregator: a
+	// sum-aggregator metric over an integer column (deploy_freq's
+	// deployments_count, churn's total_loc_touched) makes ClickHouse's
+	// sum() return UInt64, not Float64 -- confirmed live, this binary's
+	// native driver rejects scanning that into the *float64 destination
+	// below outright ("converting UInt64 to **float64 is unsupported"),
+	// the same class of mismatch newUnrestrictedReadClickHouseOptions'
+	// own doc comment (query_route.go) and quadrant.go's own
+	// `toFloat64(%s) AS value` fix already document elsewhere in this
+	// binary. avg()-aggregated metrics (review_latency,
+	// change_failure_rate) already return Float64/Float32 on their own,
+	// so this cast is a no-op for them -- never a value change, only a
+	// static, driver-safe destination type.
 	query := fmt.Sprintf(`
 SELECT
-    %s(%s) AS value
+    toFloat64(%s(%s)) AS value
 FROM %s
 %s
 `, aggregator, column, fromClause, settingsMaxExecutionTime())
@@ -169,10 +182,14 @@ func (reader *Reader) fetchMetricContributors(ctx context.Context, table, column
 	const limit = 6
 
 	fromClause := metricFromClause(table, column, scopeFilterSQL, "start_day", "end_day")
+	// toFloat64(...) around the outer aggregator: same fix as
+	// fetchMetricValue's own doc comment -- a sum-aggregated integer
+	// column returns UInt64, which this binary's native driver refuses to
+	// scan into a *float64 destination.
 	query := fmt.Sprintf(`
 SELECT
     toString(%s) AS id,
-    %s(%s) AS value
+    toFloat64(%s(%s)) AS value
 FROM %s
 GROUP BY %s
 ORDER BY value DESC
@@ -229,24 +246,38 @@ func (reader *Reader) fetchMetricDriverDelta(ctx context.Context, table, column,
 
 	currentFrom := metricFromClause(table, column, scopeFilterSQL, "start_day", "end_day")
 	previousFrom := metricFromClause(table, column, scopeFilterSQL, "compare_start", "compare_end")
+	// current/previous were a `WITH current AS (...), previous AS (...)`
+	// CTE pair until this fix: dev-health-go's client-side read-only
+	// guard (clickhouse/client.go's validateReadOnlyStatement) requires a
+	// statement's FIRST token to be the literal "SELECT", so a query
+	// beginning "WITH ..." is rejected before it ever reaches ClickHouse
+	// -- ErrUnsafeStatement ("clickhouse runtime: unsafe statement"),
+	// wrapped into the generic 503 every /explain request degraded to,
+	// with nothing logged (the defect the telemetry sweep in this same change also
+	// fixes). Each CTE is referenced exactly once (current in FROM,
+	// previous in the LEFT JOIN), so inlining both as ordinary derived-
+	// table subqueries is a purely mechanical, semantically identical
+	// rewrite -- no materialization or multiple-reference concern applies.
+	// toFloat64(...) around each side's outer aggregator: same this defect class
+	// fix as fetchMetricValue's own doc comment -- a sum-aggregated
+	// integer column returns UInt64, which this binary's native driver
+	// refuses to scan into current.value/previous.value's *float64
+	// destinations.
 	query := fmt.Sprintf(`
-WITH
-    current AS (
-        SELECT toString(%s) AS id, %s(%s) AS value
-        FROM %s
-        GROUP BY %s
-    ),
-    previous AS (
-        SELECT toString(%s) AS id, %s(%s) AS value
-        FROM %s
-        GROUP BY %s
-    )
 SELECT
     current.id AS id,
     current.value AS value,
     CASE WHEN previous.value = 0 THEN 0 ELSE (current.value - previous.value) / previous.value * 100 END AS delta_pct
-FROM current
-LEFT JOIN previous ON current.id = previous.id
+FROM (
+    SELECT toString(%s) AS id, toFloat64(%s(%s)) AS value
+    FROM %s
+    GROUP BY %s
+) AS current
+LEFT JOIN (
+    SELECT toString(%s) AS id, toFloat64(%s(%s)) AS value
+    FROM %s
+    GROUP BY %s
+) AS previous ON current.id = previous.id
 ORDER BY delta_pct DESC
 LIMIT {limit:UInt64}
 %s

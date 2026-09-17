@@ -140,7 +140,7 @@ func newFilterOptionsWorkHandler(client filteroptions.QueryClient) http.HandlerF
 			// "Data unavailable")` (main.py:1466-1467) -- any ClickHouse
 			// failure degrades to a generic 503, never a raw error on the
 			// wire.
-			writeRESTDataUnavailable(w, r, "filteroptions", claims.OrgID)
+			writeRESTDataUnavailable(w, r, "filteroptions", claims.OrgID, err)
 			return
 		}
 

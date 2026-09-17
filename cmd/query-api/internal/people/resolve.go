@@ -29,9 +29,25 @@ import (
 // cmd/query-api/internal/quadrant/identity.go's own resolvePersonIdentity
 // (same Python source, same fix, different package -- see this file's own
 // package doc comment for why it is not shared).
+//
+// UNSAFE STATEMENT: this was also a `WITH identities AS (...) SELECT ...`
+// CTE until this fix: dev-health-go's client-side read-only guard
+// (clickhouse/client.go's validateReadOnlyStatement) requires a
+// statement's FIRST token to be the literal "SELECT", so a query
+// beginning "WITH ..." is rejected before it ever reaches ClickHouse
+// (ErrUnsafeStatement, "clickhouse runtime: unsafe statement") -- the
+// swallowed cause of the 503 every /people/{person_id}/* "person not
+// found" request degraded to (this function returning an error instead
+// of "", the not-found sentinel resolveIdentityContext's caller expects,
+// turns every 404 this route should answer into a 503). The "identities"
+// CTE is referenced exactly once (in the outer FROM), so inlining it as
+// an ordinary derived-table subquery is a purely mechanical, semantically
+// identical rewrite.
 func resolvePersonIdentity(ctx context.Context, client QueryClient, personID, orgID string) (string, error) {
 	query := fmt.Sprintf(`
-        WITH identities AS (
+        SELECT
+            identity AS identity_id
+        FROM (
             SELECT identity_id AS identity
             FROM user_metrics_daily FINAL
             WHERE identity_id != ''
@@ -43,10 +59,7 @@ func resolvePersonIdentity(ctx context.Context, client QueryClient, personID, or
             FROM work_item_user_metrics_daily FINAL
             WHERE user_identity != ''
               AND org_id = {org_id:String}
-        )
-        SELECT
-            identity AS identity_id
-        FROM identities
+        ) AS identities
         WHERE lower(hex(MD5(identity))) = {person_id:String}
         LIMIT 1
         %s

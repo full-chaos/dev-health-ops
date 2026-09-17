@@ -224,7 +224,7 @@ func TestFetchMetricContributorsUsesMetricAggregator(t *testing.T) {
 	if _, err := reader.fetchMetricContributors(context.Background(), "work_item_metrics_daily", "items_completed", "team_id", "sum", start, end, "", nil, "org-1"); err != nil {
 		t.Fatalf("fetchMetricContributors: %v", err)
 	}
-	if !strings.Contains(client.lastQuery, "sum(items_completed) AS value") {
+	if !strings.Contains(client.lastQuery, "toFloat64(sum(items_completed)) AS value") {
 		t.Fatalf("sum-aggregator metric did not rank by sum():\n%s", client.lastQuery)
 	}
 	if strings.Contains(client.lastQuery, "avg(items_completed)") {
@@ -234,7 +234,7 @@ func TestFetchMetricContributorsUsesMetricAggregator(t *testing.T) {
 	if _, err := reader.fetchMetricContributors(context.Background(), "repo_metrics_daily", "pr_first_review_p50_hours", "repo_id", "avg", start, end, "", nil, "org-1"); err != nil {
 		t.Fatalf("fetchMetricContributors: %v", err)
 	}
-	if !strings.Contains(client.lastQuery, "avg(pr_first_review_p50_hours) AS value") {
+	if !strings.Contains(client.lastQuery, "toFloat64(avg(pr_first_review_p50_hours)) AS value") {
 		t.Fatalf("avg-aggregator metric did not rank by avg():\n%s", client.lastQuery)
 	}
 }
@@ -257,7 +257,7 @@ func TestFetchMetricDriverDeltaUsesMetricAggregator(t *testing.T) {
 	if _, err := reader.fetchMetricDriverDelta(context.Background(), "work_item_metrics_daily", "items_completed", "team_id", "sum", start, end, compareStart, compareEnd, "", nil, "org-1"); err != nil {
 		t.Fatalf("fetchMetricDriverDelta: %v", err)
 	}
-	if got := strings.Count(client.lastQuery, "sum(items_completed) AS value"); got != 2 {
+	if got := strings.Count(client.lastQuery, "toFloat64(sum(items_completed)) AS value"); got != 2 {
 		t.Fatalf("expected both current/previous CTEs to rank by sum(), found %d occurrences:\n%s", got, client.lastQuery)
 	}
 	if strings.Contains(client.lastQuery, "avg(items_completed)") {

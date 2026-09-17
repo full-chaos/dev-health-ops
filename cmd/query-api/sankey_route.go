@@ -29,6 +29,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -268,7 +269,8 @@ func newSankeyGetHandler(client sankey.QueryClient) http.HandlerFunc {
 		// 400/404, and the X-DevHealth-Deprecated header (set only after
 		// build_sankey_response succeeds) is never attached to that 503.
 		if !sankeyValidScopeLevels[scopeType] {
-			writeRESTDataUnavailable(w, r, "sankey", claims.OrgID)
+			writeRESTDataUnavailable(w, r, "sankey", claims.OrgID,
+				fmt.Errorf("sankey: ScopeFilter construction: scope_type %q is not one of the valid levels", scopeType))
 			return
 		}
 
@@ -303,7 +305,7 @@ func newSankeyGetHandler(client sankey.QueryClient) http.HandlerFunc {
 		if err != nil {
 			// Python's outer `except Exception: raise HTTPException(503,
 			// "Data unavailable")` (main.py:1426-1428).
-			writeRESTDataUnavailable(w, r, "sankey", claims.OrgID)
+			writeRESTDataUnavailable(w, r, "sankey", claims.OrgID, err)
 			return
 		}
 
@@ -429,7 +431,7 @@ func newSankeyPostHandler(client sankey.QueryClient) http.HandlerFunc {
 		if err != nil {
 			// Python's outer `except Exception: raise HTTPException(503,
 			// "Data unavailable")` (main.py:1448-1452).
-			writeRESTDataUnavailable(w, r, "sankey", claims.OrgID)
+			writeRESTDataUnavailable(w, r, "sankey", claims.OrgID, err)
 			return
 		}
 		writeSankeyResponse(w, r, claims.OrgID, resp)

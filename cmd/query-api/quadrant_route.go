@@ -207,7 +207,7 @@ func newQuadrantWorkHandler(client quadrant.QueryClient) http.HandlerFunc {
 			// (unknown type, invalid scope/bucket, unsupported metric)
 			// degrades to a generic 503, never a raw ClickHouse error on
 			// the wire.
-			writeRESTDataUnavailable(w, r, "quadrant", claims.OrgID)
+			writeRESTDataUnavailable(w, r, "quadrant", claims.OrgID, err)
 			return
 		}
 

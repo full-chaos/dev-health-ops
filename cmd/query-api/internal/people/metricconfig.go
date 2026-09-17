@@ -4,16 +4,17 @@
 // aggregator/identity_column/extra_where/transform per metric, plus each
 // metric's own by_repo/by_work_type/by_stage breakdown config.
 //
-// DEDUP (class ruling, this package): every {table} this config names --
-// work_item_user_metrics_daily, user_metrics_daily, work_item_cycle_times
-// -- is ReplacingMergeTree(computed_at) (migrations 055/096/001). The
+// DEDUP: every {table} this config names -- work_item_user_metrics_daily,
+// user_metrics_daily, work_item_cycle_times -- is ReplacingMergeTree
+// (computed_at) (migrations 055/096/001), and this package reads every
+// one of them FINAL, never a bare LIMIT-1-BY (that shape sorts and
+// collapses the whole table with no per-tenant scope of its own). The
 // reference services/people.py hands {table} to queries/people.py's
 // fetch_person_metric_value/_series/_breakdown, which format it into SQL
 // via dedup_from(table) (clickhouse_dedup.py): work_item_user_metrics_daily
 // resolves to a FINAL read (it is in RERUN_DEDUPED_DAILY_TABLES), but
 // user_metrics_daily resolves to dedup_from's OTHER shape -- an
-// `ORDER BY computed_at DESC LIMIT 1 BY <key>` subquery, the shape this
-// package's own class ruling forbids ("never LIMIT 1 BY alone") -- and
+// `ORDER BY computed_at DESC LIMIT 1 BY <key>` subquery -- and
 // work_item_cycle_times is registered in NEITHER dedup_from table set at
 // all, so it falls through to `return table`, a RAW, undeduped read: a
 // re-run of a partition (a Celery retry, a rate-limit deferral re-enqueue)

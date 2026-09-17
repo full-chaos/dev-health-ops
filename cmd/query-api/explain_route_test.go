@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -189,7 +190,7 @@ func TestExplainErrorEnvelopesMatchPython(t *testing.T) {
 	})
 	t.Run("503 data unavailable", func(t *testing.T) {
 		rec := httptest.NewRecorder()
-		writeRESTDataUnavailable(rec, req, "explain", "org-1")
+		writeRESTDataUnavailable(rec, req, "explain", "org-1", errors.New("simulated downstream failure"))
 		assertExplainJSONBody(t, rec, http.StatusServiceUnavailable, `{"detail":"Data unavailable"}`)
 	})
 	t.Run("405 method not allowed", func(t *testing.T) {

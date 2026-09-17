@@ -270,7 +270,7 @@ func newFlameAggregatedWorkHandler(client aggflame.QueryClient) http.HandlerFunc
 			// not one of build_aggregated_flame_response's own typed
 			// errors degrades to a generic 503, never a raw ClickHouse
 			// error on the wire.
-			writeRESTDataUnavailable(w, r, "flame_aggregated", claims.OrgID)
+			writeRESTDataUnavailable(w, r, "flame_aggregated", claims.OrgID, err)
 			return
 		}
 

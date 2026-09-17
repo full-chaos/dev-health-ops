@@ -228,7 +228,7 @@ func newDrilldownIssuesGetHandler(reader *drilldown.Reader) http.HandlerFunc {
 		if err != nil {
 			// Python's outer `except Exception: raise HTTPException(503,
 			// "Data unavailable")` (main.py:1044-1045).
-			writeRESTDataUnavailable(w, r, "drilldown_issues", claims.OrgID)
+			writeRESTDataUnavailable(w, r, "drilldown_issues", claims.OrgID, err)
 			return
 		}
 
@@ -348,7 +348,7 @@ func newDrilldownIssuesPostHandler(reader *drilldown.Reader) http.HandlerFunc {
 
 		resp, err := drilldown.BuildIssuesResponse(r.Context(), reader, claims.OrgID, params)
 		if err != nil {
-			writeRESTDataUnavailable(w, r, "drilldown_issues", claims.OrgID)
+			writeRESTDataUnavailable(w, r, "drilldown_issues", claims.OrgID, err)
 			return
 		}
 		writeDrilldownIssuesResponse(w, r, claims.OrgID, resp)

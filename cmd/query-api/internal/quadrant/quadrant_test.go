@@ -115,21 +115,23 @@ func TestAttributionQuirkOnlyCycleThroughputTeam(t *testing.T) {
 // dedup_from reference text -- migration 096 converted
 // user_metrics_daily/repo_metrics_daily to ReplacingMergeTree(computed_at)
 // with a sorting key matching their reader dedup key, so a LIMIT-1-BY
-// subquery (the reference's own shape, and this file's own shape before
-// this fix) is no longer correct: it is an all-tenant sort with no org_id
-// predicate inside it, scanning every org's rows before the caller's
-// outer WHERE narrows to one. Declared Python-plane divergence: Python's
-// dedup_from was not updated for migration 096 and still emits the
-// LIMIT-1-BY shape for these two tables.
+// subquery (the reference's own shape) is no longer correct: it is an
+// all-tenant sort with no org_id predicate inside it, scanning every
+// org's rows before the caller's outer WHERE narrows to one. Declared
+// Python-plane divergence: Python's dedup_from was not updated for
+// migration 096 and still emits the LIMIT-1-BY shape for these two
+// tables. Alias comes before FINAL: "<table> FINAL AS <alias>" is a
+// ClickHouse syntax error (Code 62), confirmed live -- "<table> AS
+// <alias> FINAL" is the only accepted order.
 func TestDedupFromUsesFinalForEveryDailyTable(t *testing.T) {
 	cases := []struct {
 		table string
 		want  string
 	}{
-		{"work_item_metrics_daily AS m", "work_item_metrics_daily FINAL AS m"},
-		{"work_item_user_metrics_daily AS m", "work_item_user_metrics_daily FINAL AS m"},
-		{"user_metrics_daily AS m", "user_metrics_daily FINAL AS m"},
-		{"repo_metrics_daily AS m", "repo_metrics_daily FINAL AS m"},
+		{"work_item_metrics_daily AS m", "work_item_metrics_daily AS m FINAL"},
+		{"work_item_user_metrics_daily AS m", "work_item_user_metrics_daily AS m FINAL"},
+		{"user_metrics_daily AS m", "user_metrics_daily AS m FINAL"},
+		{"repo_metrics_daily AS m", "repo_metrics_daily AS m FINAL"},
 	}
 	for _, tc := range cases {
 		if got := dedupFrom(tc.table); got != tc.want {

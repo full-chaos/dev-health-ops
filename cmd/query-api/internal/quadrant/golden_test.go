@@ -82,13 +82,13 @@ func TestGoldenCycleThroughputTeamAttributionQuirk(t *testing.T) {
 		switch {
 		case strings.Contains(query, "FROM teams FINAL"):
 			return &fixtureRowScanner{rows: [][]any{{"team-a", "Team Alpha"}}}, nil
-		case strings.Contains(query, "WITH team_activity AS") && strings.Contains(query, "uniqExact(work_item_id)"):
+		case strings.Contains(query, "AS team_activity") && strings.Contains(query, "uniqExact(work_item_id)"):
 			return &fixtureRowScanner{rows: [][]any{
 				{day(2024, 1, 1), "team-a", "team-a", 5.0},
 				{day(2024, 1, 8), "team-a", "team-a", 9.0},
 				{day(2024, 1, 1), "team-b", "team-b", 3.0},
 			}}, nil
-		case strings.Contains(query, "WITH team_activity AS") && strings.Contains(query, "avg(cycle_time_hours)"):
+		case strings.Contains(query, "AS team_activity") && strings.Contains(query, "avg(cycle_time_hours)"):
 			return &fixtureRowScanner{rows: [][]any{
 				{day(2024, 1, 1), "team-a", "team-a", 48.0},
 				{day(2024, 1, 8), "team-a", "team-a", 24.0},
@@ -195,7 +195,7 @@ func TestGoldenPersonScopeTeamCohort(t *testing.T) {
 
 	client := fakeQueryClient{t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
 		switch {
-		case strings.Contains(query, "WITH identities AS"):
+		case strings.Contains(query, "lower(hex(MD5(identity)))"):
 			return &fixtureRowScanner{rows: [][]any{{"jane@example.com"}}}, nil
 		case strings.Contains(query, "FROM identities FINAL"):
 			return &fixtureRowScanner{rows: [][]any{{"team-x"}}}, nil
@@ -256,7 +256,7 @@ func TestGoldenPersonScopeIndividualNotFound(t *testing.T) {
 	t.Setenv("IDENTITY_MAPPING_PATH", filepath.Join(t.TempDir(), "missing.yaml"))
 
 	client := fakeQueryClient{t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
-		if strings.Contains(query, "WITH identities AS") {
+		if strings.Contains(query, "lower(hex(MD5(identity)))") {
 			return &fixtureRowScanner{}, nil
 		}
 		t.Fatalf("unexpected query for not-found person fixture (team lookup/metric reads must not run):\n%s", query)

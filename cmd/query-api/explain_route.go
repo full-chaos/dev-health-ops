@@ -329,7 +329,7 @@ func newExplainGetHandler(reader *explain.Reader) http.HandlerFunc {
 
 		resp, err := explain.BuildExplainResponse(r.Context(), reader, claims.OrgID, params)
 		if err != nil {
-			writeRESTDataUnavailable(w, r, "explain", claims.OrgID)
+			writeRESTDataUnavailable(w, r, "explain", claims.OrgID, err)
 			return
 		}
 
@@ -443,7 +443,7 @@ func newExplainPostHandler(reader *explain.Reader) http.HandlerFunc {
 
 		resp, err := explain.BuildExplainResponse(r.Context(), reader, claims.OrgID, params)
 		if err != nil {
-			writeRESTDataUnavailable(w, r, "explain", claims.OrgID)
+			writeRESTDataUnavailable(w, r, "explain", claims.OrgID, err)
 			return
 		}
 		writeExplainResponse(w, claims.OrgID, envelopeRequestID(r), resp)

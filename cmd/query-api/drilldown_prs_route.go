@@ -264,7 +264,7 @@ func newDrilldownPRsGetHandler(reader *drilldown.Reader) http.HandlerFunc {
 		if err != nil {
 			// Python's outer `except Exception: raise HTTPException(503,
 			// "Data unavailable")` (main.py:973-974).
-			writeRESTDataUnavailable(w, r, "drilldown_prs", claims.OrgID)
+			writeRESTDataUnavailable(w, r, "drilldown_prs", claims.OrgID, err)
 			return
 		}
 
@@ -401,7 +401,7 @@ func newDrilldownPRsPostHandler(reader *drilldown.Reader) http.HandlerFunc {
 
 		resp, err := drilldown.BuildPRsResponse(r.Context(), reader, claims.OrgID, params)
 		if err != nil {
-			writeRESTDataUnavailable(w, r, "drilldown_prs", claims.OrgID)
+			writeRESTDataUnavailable(w, r, "drilldown_prs", claims.OrgID, err)
 			return
 		}
 		writeDrilldownPRsResponse(w, r, claims.OrgID, resp)

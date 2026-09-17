@@ -220,7 +220,7 @@ func newPeopleSearchHandler(reader *people.Reader) http.HandlerFunc {
 		if err != nil {
 			// Python's outer `except Exception: raise HTTPException(503,
 			// "Data unavailable")` (main.py:1064-1065).
-			writeRESTDataUnavailable(w, r, "people", claims.OrgID)
+			writeRESTDataUnavailable(w, r, "people", claims.OrgID, err)
 			return
 		}
 		writePeopleSearchResponse(w, r, claims.OrgID, resp)

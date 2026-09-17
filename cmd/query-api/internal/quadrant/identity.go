@@ -255,18 +255,34 @@ func resolveIdentityVariants(ctx context.Context, client QueryClient, personID, 
 }
 
 // resolvePersonIdentity ports resolve_person_identity (queries/people.py:
-// 35-45) and its person_lookup.sql, inlined verbatim, with one declared
-// fix: the reference's load_sql call bypasses dedup_from for this read
-// (a duplicate identity/user_identity string collapses via UNION DISTINCT
-// regardless of which physical row it came from, so the VALUE was never
-// wrong), but user_metrics_daily is ReplacingMergeTree(computed_at)
-// (migration 096) and this package's own class ruling is one dedup shape
-// for every ReplacingMergeTree read, not a per-query exception -- so this
-// branch reads FINAL too, matching work_item_user_metrics_daily's branch
-// two lines below, which already carried it.
+// 35-45) and its person_lookup.sql, inlined verbatim, with two declared
+// fixes.
+//
+// UNION DISTINCT: the reference's load_sql call bypasses dedup_from for
+// this read (a duplicate identity/user_identity string collapses via
+// UNION DISTINCT regardless of which physical row it came from, so the
+// VALUE was never wrong).
+//
+// DEDUP: user_metrics_daily is ReplacingMergeTree(computed_at) (migration
+// 096), so this branch reads FINAL too, matching every other
+// ReplacingMergeTree read in this package and work_item_user_metrics_daily's
+// branch two lines below, which already carried it.
+//
+// UNSAFE STATEMENT: this was also a `WITH identities AS (...) SELECT ...`
+// CTE until this fix: dev-health-go's client-side read-only guard
+// (clickhouse/client.go's validateReadOnlyStatement) requires a
+// statement's FIRST token to be the literal "SELECT", so a query
+// beginning "WITH ..." is rejected before it ever reaches ClickHouse
+// (ErrUnsafeStatement, "clickhouse runtime: unsafe statement") -- the
+// swallowed cause of the 503 for quadrant's person/developer scope. The
+// "identities" CTE is referenced exactly once (in the outer FROM), so
+// inlining it as an ordinary derived-table subquery is a purely
+// mechanical, semantically identical rewrite.
 func resolvePersonIdentity(ctx context.Context, client QueryClient, personID, orgID string) (string, error) {
 	const query = `
-        WITH identities AS (
+        SELECT
+            identity AS identity_id
+        FROM (
             SELECT identity_id AS identity
             FROM user_metrics_daily FINAL
             WHERE identity_id != ''
@@ -278,10 +294,7 @@ func resolvePersonIdentity(ctx context.Context, client QueryClient, personID, or
             FROM work_item_user_metrics_daily FINAL
             WHERE user_identity != ''
               AND org_id = {org_id:String}
-        )
-        SELECT
-            identity AS identity_id
-        FROM identities
+        ) AS identities
         WHERE lower(hex(MD5(identity))) = {person_id:String}
         LIMIT 1
     `

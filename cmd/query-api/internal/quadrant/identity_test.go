@@ -124,7 +124,7 @@ identities:
 func TestResolveIdentityVariantsFoundIdentity(t *testing.T) {
 	t.Setenv("IDENTITY_MAPPING_PATH", filepath.Join(t.TempDir(), "missing.yaml"))
 	client := fakeQueryClient{t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
-		if strings.Contains(query, "WITH identities AS") {
+		if strings.Contains(query, "lower(hex(MD5(identity)))") {
 			return &fixtureRowScanner{rows: [][]any{{"jane@example.com"}}}, nil
 		}
 		t.Fatalf("unexpected query:\n%s", query)
@@ -148,7 +148,7 @@ func TestResolveIdentityVariantsFoundIdentity(t *testing.T) {
 func TestResolveIdentityVariantsNotFound(t *testing.T) {
 	t.Setenv("IDENTITY_MAPPING_PATH", filepath.Join(t.TempDir(), "missing.yaml"))
 	client := fakeQueryClient{t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
-		if strings.Contains(query, "WITH identities AS") {
+		if strings.Contains(query, "lower(hex(MD5(identity)))") {
 			return &fixtureRowScanner{}, nil
 		}
 		t.Fatalf("unexpected query:\n%s", query)

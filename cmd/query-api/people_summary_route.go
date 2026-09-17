@@ -210,7 +210,7 @@ func newPeopleSummaryHandler(reader *people.Reader) http.HandlerFunc {
 			}
 			// Python's outer `except Exception: raise HTTPException(503,
 			// "Data unavailable")` (main.py:1088-1089).
-			writeRESTDataUnavailable(w, r, "people_summary", claims.OrgID)
+			writeRESTDataUnavailable(w, r, "people_summary", claims.OrgID, err)
 			return
 		}
 		writePeopleSummaryResponse(w, r, claims.OrgID, resp)

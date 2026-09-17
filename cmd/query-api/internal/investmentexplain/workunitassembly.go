@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sort"
 	"time"
+
+	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 )
 
 // WorkUnitTimeRange ports api/models/schemas.py's WorkUnitTimeRange.
@@ -69,6 +71,8 @@ type BuildWorkUnitInvestmentsOptions struct {
 	StartTS            time.Time
 	EndTS              time.Time
 	RepoIDs            []string
+	TeamScopeCondition string
+	TeamScopeBindings  []dhclickhouse.Binding
 	Limit              int
 	IncludeText        bool
 	WorkUnitID         string
@@ -114,12 +118,14 @@ func (reader *Reader) BuildWorkUnitInvestments(ctx context.Context, opts BuildWo
 	}
 
 	rows, err := reader.FetchWorkUnitInvestments(ctx, WorkUnitInvestmentsFilter{
-		OrgID:      opts.OrgID,
-		StartTS:    opts.StartTS,
-		EndTS:      opts.EndTS,
-		RepoIDs:    opts.RepoIDs,
-		Limit:      limit,
-		WorkUnitID: opts.WorkUnitID,
+		OrgID:              opts.OrgID,
+		StartTS:            opts.StartTS,
+		EndTS:              opts.EndTS,
+		RepoIDs:            opts.RepoIDs,
+		TeamScopeCondition: opts.TeamScopeCondition,
+		TeamScopeBindings:  opts.TeamScopeBindings,
+		Limit:              limit,
+		WorkUnitID:         opts.WorkUnitID,
 	})
 	if err != nil {
 		return nil, err

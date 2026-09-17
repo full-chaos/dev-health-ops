@@ -237,7 +237,7 @@ A row that is live, reachable to real clients (`canary`/`primary`) and carries n
 is required before stage 4/5, and "a bare 200 does not qualify".
 
 <!-- BEGIN GENERATED GO API OPERATIONS -->
-_Rendered 2026-09-16T12:25:30Z against main merge-base `9742c2babd2ede60d993d2d924c20dad3736ea07`; SDL digest pin `sha256:19485ec136d04de0935717dca8b4f5fd27dd0351fe96b854d40f433229468fd0`; fleet read 2026-09-16T12:25:30Z via fleet file fleet-prod.json._
+_Rendered 2026-09-16T12:25:30Z against main merge-base `9a0949482a1cc992fb6fd6df2d375a513be95abc`; SDL digest pin `sha256:19485ec136d04de0935717dca8b4f5fd27dd0351fe96b854d40f433229468fd0`; fleet read 2026-09-16T12:25:30Z via fleet file fleet-prod.json._
 
 _Rows in `go_api_proof_run` at read time: **515**. Operations reachable to real clients with no deployed-executed proof: **0**. Rows whose mode says Go but whose schema digest no longer matches the pin, so every request silently falls back to Python: **0**._
 
@@ -299,7 +299,7 @@ _32 `/api/v1/*` routes in `src/dev_health_ops/api/main.py`: **31** ported, **1**
 | POST | `/api/v1/home` | ported | `cmd/query-api/home_route.go:59` |
 | GET | `/api/v1/investment` | ported | `cmd/query-api/investment_route.go:106` |
 | POST | `/api/v1/investment` | ported | `cmd/query-api/investment_route.go:106` |
-| POST | `/api/v1/investment/explain` | ported | `cmd/query-api/investment_explain_route.go:119` |
+| POST | `/api/v1/investment/explain` | ported | `cmd/query-api/investment_explain_route.go:122` |
 | POST | `/api/v1/investment/flow` | ported | `cmd/query-api/investment_flow_route.go:86` |
 | POST | `/api/v1/investment/flow/repo-team` | ported | `cmd/query-api/investment_flow_route.go:86` |
 | GET | `/api/v1/investment/sunburst` | ported | `cmd/query-api/investment_route.go:174` |

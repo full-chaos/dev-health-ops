@@ -432,12 +432,11 @@ func TestWorkUnitsSeededRealClickHouse_QuotesDedupReturnsOneEntry(t *testing.T) 
 // TestWorkUnitsSeededRealClickHouse_TeamScopeFiltersByResolvedRepoID is
 // mechanism 4: the team-scope branch this route's own "team_scoped"
 // corpus request exercises, run for real against user_metrics_daily AND
-// repos (ResolveRepoFilterIDs' own resolveRepoIDsForTeams, then
-// resolveRepoIDs re-validates every team-derived repo id against repos
-// FINAL) followed by FetchWorkUnitInvestments' own repo_id filter --
-// never previously executed: every other seeded test here (and the unit
-// test proving the query text) leaves the scope-resolution SQL
-// unexercised.
+// repos -- investmentexplain.TeamRepoScopeCondition's own nested
+// membership test, evaluated as part of FetchWorkUnitInvestments' own
+// statement, never a separate round trip of its own. No other seeded
+// test in this file (nor the unit test proving the query text) exercises
+// this scope-resolution SQL against a real engine.
 func TestWorkUnitsSeededRealClickHouse_TeamScopeFiltersByResolvedRepoID(t *testing.T) {
 	conn, reader, cleanup := startSeededWorkUnitsClickHouse(t)
 	defer cleanup()
@@ -499,16 +498,19 @@ func TestWorkUnitsSeededRealClickHouse_TeamScopeFiltersByResolvedRepoID(t *testi
 	if err != nil {
 		t.Fatalf("ResolveRepoFilterIDs: %v", err)
 	}
-	if len(repoIDs) != 1 || repoIDs[0] != memberRepoID {
-		t.Fatalf("ResolveRepoFilterIDs(team=team-1) = %v, want exactly [%s]", repoIDs, memberRepoID)
+	if len(repoIDs) != 0 {
+		t.Fatalf("ResolveRepoFilterIDs(team=team-1) = %v, want none -- this function never materializes team-scope membership; TeamRepoScopeCondition carries it as a pushed-down condition instead", repoIDs)
 	}
+	teamCondition, teamBindings := investmentexplain.TeamRepoScopeCondition(workUnitsSeededOrgID, "work_unit_investments.repo_id", []string{"team-1"})
 
 	investments, err := reader.BuildWorkUnitInvestments(ctx, investmentexplain.BuildWorkUnitInvestmentsOptions{
-		OrgID:   workUnitsSeededOrgID,
-		StartTS: fromTS,
-		EndTS:   toTS,
-		RepoIDs: repoIDs,
-		Limit:   200,
+		OrgID:              workUnitsSeededOrgID,
+		StartTS:            fromTS,
+		EndTS:              toTS,
+		RepoIDs:            repoIDs,
+		TeamScopeCondition: teamCondition,
+		TeamScopeBindings:  teamBindings,
+		Limit:              200,
 	})
 	if err != nil {
 		t.Fatalf("BuildWorkUnitInvestments: %v", err)

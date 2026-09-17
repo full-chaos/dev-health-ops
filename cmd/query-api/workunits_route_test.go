@@ -703,13 +703,15 @@ func bindingValue(bindings []dhclickhouse.Binding, name string) (any, bool) {
 	return nil, false
 }
 
-// TestNewWorkUnitsGetHandlerTeamScopeResolvesViaUserMetricsDaily proves
-// scope_type=team&scope_id=<id> reaches ResolveRepoFilterIDs' own team
-// branch (resolveRepoIDsForTeams, repofilter.go), which reads
-// user_metrics_daily keyed by team_id -- the same corpus request this
-// route's "team_scoped" GET entry (restcorpus.go) exercises against a
-// live baseline.
-func TestNewWorkUnitsGetHandlerTeamScopeResolvesViaUserMetricsDaily(t *testing.T) {
+// TestNewWorkUnitsGetHandlerTeamScopePushesConditionIntoTheWorkUnitQuery
+// proves scope_type=team&scope_id=<id> reaches
+// investmentexplain.TeamRepoScopeCondition's pushed-down condition,
+// nested inside the SAME work-unit investments statement rather than
+// issued as a separate, standalone user_metrics_daily query: a team's
+// own matching-repo count never crosses back to the caller as its own
+// query result, so it cannot exceed the read-only client's per-statement
+// row ceiling regardless of how large that count is.
+func TestNewWorkUnitsGetHandlerTeamScopePushesConditionIntoTheWorkUnitQuery(t *testing.T) {
 	client := &capturingWorkUnitsClient{}
 	reader, err := investmentexplain.NewReader(client)
 	if err != nil {
@@ -727,20 +729,24 @@ func TestNewWorkUnitsGetHandlerTeamScopeResolvesViaUserMetricsDaily(t *testing.T
 
 	found := false
 	for i, q := range client.queries {
-		if strings.Contains(q, "FROM user_metrics_daily") {
-			found = true
-			teamIDs, ok := bindingValue(client.bindings[i], "team_ids")
-			if !ok {
-				t.Fatalf("user_metrics_daily query carries no team_ids binding")
-			}
-			ids, ok := teamIDs.([]string)
-			if !ok || len(ids) != 1 || ids[0] != "team-42" {
-				t.Errorf("team_ids binding = %#v, want [\"team-42\"]", teamIDs)
-			}
+		if !strings.Contains(q, "FROM user_metrics_daily") {
+			continue
+		}
+		if !strings.Contains(q, "work_unit_investments") {
+			t.Fatalf("a query carries the team-scope membership subquery as its OWN standalone statement, not nested inside the work-unit investments read:\n%s", q)
+		}
+		found = true
+		teamIDs, ok := bindingValue(client.bindings[i], "team_repo_scope_ids")
+		if !ok {
+			t.Fatalf("work-unit investments query carries no team_repo_scope_ids binding")
+		}
+		ids, ok := teamIDs.([]string)
+		if !ok || len(ids) != 1 || ids[0] != "team-42" {
+			t.Errorf("team_repo_scope_ids binding = %#v, want [\"team-42\"]", teamIDs)
 		}
 	}
 	if !found {
-		t.Fatal("no query against user_metrics_daily -- scope_type=team never reached resolveRepoIDsForTeams")
+		t.Fatal("no query carries the pushed-down team-scope condition -- scope_type=team never reached TeamRepoScopeCondition")
 	}
 }
 

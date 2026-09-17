@@ -777,7 +777,7 @@ requestLoop:
 		resolvedRequest := request
 		var boundIDs map[string]string
 		if len(request.IDBindings) > 0 {
-			resolvedPath, resolvedQuery, unresolved := goapiproof.ResolveRESTIDBindings(spec.Path, request, produced)
+			resolvedPath, resolvedQuery, resolvedBody, unresolved := goapiproof.ResolveRESTIDBindings(spec.Path, request, produced)
 			if len(unresolved) > 0 {
 				// An entry whose id does not resolve is refused by
 				// name and counts as unproven, never a tool failure
@@ -803,6 +803,7 @@ requestLoop:
 			}
 			resolvedSpec.Path = resolvedPath
 			resolvedRequest.Query = resolvedQuery
+			resolvedRequest.Body = resolvedBody
 			boundIDs = make(map[string]string, len(request.IDBindings))
 			for _, binding := range request.IDBindings {
 				// Already confirmed present above (unresolved was

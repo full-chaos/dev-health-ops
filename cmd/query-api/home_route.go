@@ -287,7 +287,7 @@ func newHomePostHandler(client home.QueryClient, pgPool home.PGQueryClient) http
 // homeFiltersFromMap reads a validated MetricFilter map (already passed
 // validateMetricFilter) into home.Filters, applying TimeFilter/
 // ScopeFilter's own Pydantic defaults for an absent field/key, matching
-// investment_explain_route.go's timeWindow/scopeRepoIDs helpers'
+// investment_explain_route.go's timeWindow/scopeRepoFilter helpers'
 // established reading convention for the same shared MetricFilter shape.
 func homeFiltersFromMap(filters map[string]any) home.Filters {
 	timeFilter, _ := filters["time"].(map[string]any)

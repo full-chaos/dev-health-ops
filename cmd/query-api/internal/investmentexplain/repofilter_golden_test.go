@@ -22,8 +22,14 @@ const (
 )
 
 // repoFilterFixtureClient mirrors the Python generator's in-memory fixture
-// (REPOS / USER_METRICS_DAILY) exactly, dispatching on the same
-// distinguishing SQL substrings repofilter.go's own queries produce.
+// (REPOS) exactly, dispatching on the same distinguishing SQL substrings
+// repofilter.go's own explicit-ref queries produce. ResolveRepoFilterIDs
+// issues only these repos lookups, never a user_metrics_daily query (see
+// this package's TeamRepoScopeCondition/repofilter.go doc comments: a
+// team's repo membership is a condition the CALLER's own statement
+// evaluates, never resolved here as a standalone, organization-scale
+// query), so this fixture only needs to answer the repos lookups
+// explicit refs make.
 type repoFilterFixtureClient struct{}
 
 func (repoFilterFixtureClient) Query(_ context.Context, statement string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
@@ -56,27 +62,6 @@ func (repoFilterFixtureClient) Query(_ context.Context, statement string, bindin
 			}
 		}
 		return &fixtureRowScanner{}, nil
-
-	case strings.Contains(statement, "FROM user_metrics_daily"):
-		teamIDs, _ := binding("team_ids").([]string)
-		orgID, _ := binding("org_id").(string)
-		wanted := map[string]bool{}
-		for _, t := range teamIDs {
-			wanted[t] = true
-		}
-		var seen []string
-		seenSet := map[string]bool{}
-		for _, row := range repoFilterFixtureUserMetricsDaily {
-			if wanted[row.teamID] && row.orgID == orgID && !seenSet[row.repoID] {
-				seenSet[row.repoID] = true
-				seen = append(seen, row.repoID)
-			}
-		}
-		rows := make([][]any, len(seen))
-		for i, id := range seen {
-			rows[i] = []any{id}
-		}
-		return &fixtureRowScanner{rows: rows}, nil
 	}
 	panic("repoFilterFixtureClient: unexpected query: " + statement)
 }
@@ -85,12 +70,6 @@ var repoFilterFixtureRepos = []struct{ id, orgID, name string }{
 	{repoFilterFixtureRepoOneID, repoFilterFixtureOrgID, "myorg/repo-one"},
 	{repoFilterFixtureRepoTwoID, repoFilterFixtureOrgID, "myorg/repo-two"},
 	{repoFilterFixtureRepoThreeID, "org-2", "otherorg/repo-three"},
-}
-
-var repoFilterFixtureUserMetricsDaily = []struct{ teamID, orgID, repoID string }{
-	{"team-a", repoFilterFixtureOrgID, repoFilterFixtureRepoOneID},
-	{"team-a", repoFilterFixtureOrgID, repoFilterFixtureRepoTwoID},
-	{"team-b", repoFilterFixtureOrgID, repoFilterFixtureRepoOneID},
 }
 
 type resolveRepoFilterIDsGolden struct {
@@ -112,6 +91,18 @@ func loadResolveRepoFilterIDsGolden(t *testing.T, name string) resolveRepoFilter
 	return golden
 }
 
+// TestResolveRepoFilterIDsMatchesPythonGolden covers ResolveRepoFilterIDs'
+// EXPLICIT-ref cases only (org/repo scope, what.repos) -- the cases where
+// this Go function's contract matches resolve_repo_filter_ids'
+// (api/services/filtering.py:95-110) own materialized-list return shape.
+// The Python source's team-scope branch is covered elsewhere, as a
+// pushed-down SQL condition: TestTeamRepoScopeConditionQueryShape
+// (sqlshape_test.go) proves its structural correctness against a fake
+// client, and the team_scope_large_repo_set_integration_test.go suite
+// proves its behavioral correctness against a real ClickHouse engine. A
+// fake, in-memory client like repoFilterFixtureClient cannot evaluate a
+// condition nested inside another caller's own SQL statement, so that
+// branch's own correctness is not checked here.
 func TestResolveRepoFilterIDsMatchesPythonGolden(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -123,8 +114,6 @@ func TestResolveRepoFilterIDsMatchesPythonGolden(t *testing.T) {
 		{"repo_scope_mixed_uuid_and_slug", "repo", []string{repoFilterFixtureRepoOneID, "myorg/repo-two"}, nil},
 		{"repo_scope_unresolvable_slug_skipped", "repo", []string{"myorg/repo-one", "nonexistent/repo"}, nil},
 		{"org_scope_with_what_repos", "org", nil, []string{"myorg/repo-one"}},
-		{"team_scope", "team", []string{"team-a"}, nil},
-		{"team_scope_with_what_repos", "team", []string{"team-b"}, []string{"myorg/repo-two"}},
 	}
 
 	for _, tc := range cases {

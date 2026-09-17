@@ -100,20 +100,51 @@ func (reader *Reader) resolveRepoIDs(ctx context.Context, repoRefs []string, org
 	return resolved, nil
 }
 
-// resolveRepoIDsForTeams ports resolve_repo_ids_for_teams
-// (api/queries/scopes.py:72-89): every distinct repo_id worked on by any
-// user_metrics_daily row carrying one of teamIDs in this org, within the
-// table's own retention -- there is no time-window filter in the Python
-// source, so none is added here either. user_metrics_daily is
-// ReplacingMergeTree(computed_at) since migration 096; team_id is NOT part
-// of its sorting key, so a raw (non-FINAL) read here could keep returning
-// a repo under a team it was re-attributed away from until the next
-// merge. Read FINAL, with org_id in the same WHERE as the FINAL source.
-func (reader *Reader) resolveRepoIDsForTeams(ctx context.Context, teamIDs []string, orgID string) ([]string, error) {
-	if reader == nil || reader.client == nil {
-		return nil, ErrUnavailable
+// ResolveRepoFilterIDs ports resolve_repo_filter_ids' EXPLICIT-ref branch
+// (api/services/filtering.py:95-110): filters.scope.ids at scope="repo",
+// unioned with filters.what.repos, each resolved individually via
+// resolveRepoIDs. This list is bounded by what the caller named, not by
+// organization scale, so it stays a materialized id list.
+//
+// The team-scope branch (team scope is the attribution use case; this
+// endpoint answers a team-level request rather than rejecting it) is NOT
+// resolved here -- see TeamRepoScopeCondition's own doc comment
+// for why a team's repo membership is pushed into SQL as a condition
+// instead of materialized as a second id list by this function. A prior
+// version of this function did materialize it, via a standalone
+// `SELECT DISTINCT repo_id FROM user_metrics_daily ...` -- a team's true
+// matching-repo count can exceed the read-only client's max_result_rows
+// ceiling (1,000 -- dev-health-go's clickhouse/options.go), which that
+// query hit directly in production (2,224 distinct repo ids for the
+// largest team). Callers combine this function's result with
+// TeamRepoScopeCondition's own condition (an OR of the two) to reproduce
+// the original union semantics without that risk.
+func (reader *Reader) ResolveRepoFilterIDs(ctx context.Context, scopeLevel string, scopeIDs, whatRepos []string, orgID string) ([]string, error) {
+	var repoRefs []string
+	if scopeLevel == "repo" {
+		repoRefs = append(repoRefs, scopeIDs...)
 	}
+	repoRefs = append(repoRefs, whatRepos...)
+	return reader.resolveRepoIDs(ctx, repoRefs, orgID)
+}
 
+// TeamRepoScopeCondition returns repoColumn's team-scope membership test
+// as a standalone boolean SQL condition (no leading "AND", no trailing
+// statement) -- same shape and rationale as internal/home/scopefilter.go
+// and internal/explain/repofilter.go's own copies of this exact fix: a
+// team's true matching-repo count can exceed the read-only client's
+// max_result_rows ceiling (1,000 -- dev-health-go's clickhouse/
+// options.go), which the prior materializing resolveRepoIDsForTeams'
+// standalone `SELECT DISTINCT repo_id FROM user_metrics_daily ...` hit
+// directly in production. Resolving the team's repo set entirely inside
+// this condition means the surrounding statement's own (small) result
+// set is the only thing that ever crosses back to the caller, instead of
+// asking the client to hand back every matching id as its OWN result
+// first. Duplicated here rather than imported, matching this package's
+// (and its siblings') "repeat, don't couple" convention for this narrow
+// a helper. Empty/blank team ids are dropped, matching resolveRepoIDs'
+// own blank-ref skip; the return is ("", nil) in that case.
+func TeamRepoScopeCondition(orgID, repoColumn string, teamIDs []string) (condition string, bindings []dhclickhouse.Binding) {
 	var teamList []string
 	for _, id := range teamIDs {
 		if id != "" {
@@ -121,61 +152,20 @@ func (reader *Reader) resolveRepoIDsForTeams(ctx context.Context, teamIDs []stri
 		}
 	}
 	if len(teamList) == 0 {
-		return nil, nil
+		return "", nil
 	}
-
-	query := fmt.Sprintf(`
-SELECT DISTINCT toString(repo_id) AS id
-FROM user_metrics_daily FINAL
-WHERE team_id IN {team_ids:Array(String)}
-  AND org_id = {org_id:String}
-%s
-`, settingsMaxExecutionTime())
-	bindings := []dhclickhouse.Binding{
-		{Name: "team_ids", Value: teamList},
-		{Name: "org_id", Value: orgID},
+	return fmt.Sprintf(`%s IN (
+    SELECT toString(id) AS id
+    FROM repos FINAL
+    WHERE org_id = {team_repo_scope_org_id:String}
+      AND toString(id) IN (
+          SELECT DISTINCT toString(repo_id) AS id
+          FROM user_metrics_daily FINAL
+          WHERE org_id = {team_repo_scope_org_id:String}
+            AND team_id IN {team_repo_scope_ids:Array(String)}
+      )
+)`, repoColumn), []dhclickhouse.Binding{
+		{Name: "team_repo_scope_ids", Value: teamList},
+		{Name: "team_repo_scope_org_id", Value: orgID},
 	}
-
-	rows, err := reader.client.Query(ctx, query, bindings)
-	if err != nil {
-		return nil, fmt.Errorf("resolve repo ids for teams: %w", err)
-	}
-	defer rows.Close()
-
-	var out []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("scan resolve repo ids for teams row: %w", err)
-		}
-		if id != "" {
-			out = append(out, id)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate resolve repo ids for teams rows: %w", err)
-	}
-	return out, nil
-}
-
-// ResolveRepoFilterIDs ports resolve_repo_filter_ids
-// (api/services/filtering.py:95-110) exactly, including the "team"
-// branch investment_explain_route.go's scopeRepoIDs previously refused
-// with a 400 (team-lead ruling, CHAOS-4977: "team scope is the
-// attribution use case, a 400 on scope.level='team' is a parity break").
-// scopeIDs are filters.scope.ids; whatRepos are filters.what.repos.
-func (reader *Reader) ResolveRepoFilterIDs(ctx context.Context, scopeLevel string, scopeIDs, whatRepos []string, orgID string) ([]string, error) {
-	var repoRefs []string
-	if scopeLevel == "repo" {
-		repoRefs = append(repoRefs, scopeIDs...)
-	}
-	repoRefs = append(repoRefs, whatRepos...)
-	if scopeLevel == "team" && len(scopeIDs) > 0 {
-		teamRepoIDs, err := reader.resolveRepoIDsForTeams(ctx, scopeIDs, orgID)
-		if err != nil {
-			return nil, err
-		}
-		repoRefs = append(repoRefs, teamRepoIDs...)
-	}
-	return reader.resolveRepoIDs(ctx, repoRefs, orgID)
 }

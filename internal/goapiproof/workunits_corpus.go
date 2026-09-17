@@ -164,31 +164,34 @@ var workUnitsPostEndpointSpec = RESTEndpointSpec{
 			BodyMode: RESTBodyModeJSON, Parity: workUnitsParity,
 		},
 		{
-			// team scope over a NEUTRAL, not-necessarily-live id: the
-			// POST body has no id-binding mechanism (RESTIDBinding only
-			// resolves into a request's Query/PathParam, never a JSON
-			// Body field -- restidbind.go), so unlike this route's own
-			// GET "team_scoped" sibling this exercises the SAME
-			// resolve_repo_filter_ids team branch without asserting it
-			// resolves to any real team; both planes answer identically
-			// (zero matching repos) either way, which is what this
-			// request actually verifies.
+			// team scope bound to filters/options' own live team_id
+			// (restidbind.go's BodyPath binding, the POST-body twin of
+			// this route's own GET "team_scoped" QueryParam binding
+			// above) -- exercises the SAME resolve_repo_filter_ids team
+			// branch against a team that genuinely resolves to repos, the
+			// same request shape a real team-scoped client sends.
 			Name: "team_scoped",
 			Body: map[string]any{
 				"filters": map[string]any{"scope": map[string]any{"level": "team", "ids": []string{"11111111-1111-1111-1111-111111111111"}}},
 			},
 			WantCandidateStatus: 200, WantBaselineStatus: 200,
-			BodyMode: RESTBodyModeJSON, Parity: workUnitsParity,
+			BodyMode:   RESTBodyModeJSON,
+			IDBindings: []RESTIDBinding{{Producer: "team_id", BodyPath: "filters.scope.ids"}},
+			Parity:     workUnitsParity,
 		},
 		{
 			// repo scope via filters.what.repos -- the POST-only field
-			// _filters_from_query (GET) never populates.
+			// _filters_from_query (GET) never populates -- bound to
+			// filters/options' own live repo_id, same BodyPath reasoning
+			// as team_scoped above.
 			Name: "repo_scoped",
 			Body: map[string]any{
 				"filters": map[string]any{"what": map[string]any{"repos": []string{"11111111-1111-1111-1111-111111111111"}}},
 			},
 			WantCandidateStatus: 200, WantBaselineStatus: 200,
-			BodyMode: RESTBodyModeJSON, Parity: workUnitsParity,
+			BodyMode:   RESTBodyModeJSON,
+			IDBindings: []RESTIDBinding{{Producer: "repo_id", BodyPath: "filters.what.repos"}},
+			Parity:     workUnitsParity,
 		},
 		{
 			// why.work_category exercises _split_category_filters'

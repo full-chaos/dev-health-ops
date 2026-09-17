@@ -91,14 +91,22 @@ type WorkUnitInvestmentRow struct {
 }
 
 // WorkUnitInvestmentsFilter is fetch_work_unit_investments' filter
-// parameter set (work_unit_investments.py:26-35).
+// parameter set (work_unit_investments.py:26-35). RepoIDs carries the
+// bounded, request-sized explicit refs; TeamScopeCondition/
+// TeamScopeBindings carry a team scope's own membership test as a
+// pushed-down SQL condition instead of a second, organization-scale
+// materialized id list -- see TeamRepoScopeCondition's doc comment
+// (repofilter.go) and BreakdownFilters' own copy of this same shape
+// (reader.go).
 type WorkUnitInvestmentsFilter struct {
-	OrgID      string
-	StartTS    time.Time
-	EndTS      time.Time
-	RepoIDs    []string
-	Limit      int
-	WorkUnitID string
+	OrgID              string
+	StartTS            time.Time
+	EndTS              time.Time
+	RepoIDs            []string
+	TeamScopeCondition string
+	TeamScopeBindings  []dhclickhouse.Binding
+	Limit              int
+	WorkUnitID         string
 }
 
 // FetchWorkUnitInvestments ports fetch_work_unit_investments
@@ -112,9 +120,23 @@ func (reader *Reader) FetchWorkUnitInvestments(ctx context.Context, filter WorkU
 
 	var scopeSQL string
 	var scopeBindings []dhclickhouse.Binding
+	var explicitCondition string
+	var explicitBindings []dhclickhouse.Binding
 	if len(filter.RepoIDs) > 0 {
-		scopeSQL = " AND work_unit_investments.repo_id IN {repo_ids:Array(String)}"
-		scopeBindings = append(scopeBindings, dhclickhouse.Binding{Name: "repo_ids", Value: dedupeStrings(filter.RepoIDs)})
+		explicitCondition = "work_unit_investments.repo_id IN {repo_ids:Array(String)}"
+		explicitBindings = []dhclickhouse.Binding{{Name: "repo_ids", Value: dedupeStrings(filter.RepoIDs)}}
+	}
+	switch {
+	case explicitCondition != "" && filter.TeamScopeCondition != "":
+		scopeSQL = " AND (" + explicitCondition + " OR " + filter.TeamScopeCondition + ")"
+		scopeBindings = append(scopeBindings, explicitBindings...)
+		scopeBindings = append(scopeBindings, filter.TeamScopeBindings...)
+	case explicitCondition != "":
+		scopeSQL = " AND " + explicitCondition
+		scopeBindings = append(scopeBindings, explicitBindings...)
+	case filter.TeamScopeCondition != "":
+		scopeSQL = " AND " + filter.TeamScopeCondition
+		scopeBindings = append(scopeBindings, filter.TeamScopeBindings...)
 	}
 	var workUnitSQL string
 	if filter.WorkUnitID != "" {

@@ -96,26 +96,29 @@ func dateBindingValue(t time.Time) string {
 // (start_ts, end_ts, scope_filter/scope_params, org_id, themes,
 // subcategories) parameter list both Python functions repeat verbatim.
 //
-// RepoIDs replaces Python's generic scope_filter/scope_params pair:
-// build_investment_response (investment.py:141-246) is the ONLY caller of
-// both functions, and it ALWAYS resolves filters.scope.level in
-// {"team", "repo"} down to a concrete repo-id list before calling
-// build_scope_filter_multi("repo", repo_ids, ...) -- the literal string
-// "repo" is hardcoded at that call site regardless of which scope level the
-// request asked for (resolve_repo_filter_ids already did the team ->
-// repos translation). So for this specific, sole call path the only two
-// shapes scope_filter/scope_params ever take are "" (no scope) or
-// " AND repo_id IN %(scope_ids)s" -- accepting RepoIDs directly here is
-// behaviorally identical to porting build_scope_filter_multi's generic
-// team/repo branching, without carrying a dead "team" branch this call path
-// can never reach.
+// RepoIDs replaces Python's generic scope_filter/scope_params pair for
+// the EXPLICIT-ref case: build_investment_response (investment.py:
+// 141-246) is the ONLY caller of both functions, and it ALWAYS resolves
+// filters.scope.level in {"team", "repo"} down to a concrete repo-id
+// list before calling build_scope_filter_multi("repo", repo_ids, ...) --
+// the literal string "repo" is hardcoded at that call site regardless of
+// which scope level the request asked for. RepoIDs here carries only the
+// bounded, request-sized explicit refs (scope="repo" ids + what.repos);
+// TeamScopeCondition/TeamScopeBindings carry a team scope's own
+// membership test as a pushed-down SQL condition instead of a second,
+// organization-scale materialized id list -- see
+// TeamRepoScopeCondition's doc comment (repofilter.go) for why. The two
+// are ORed together in scopeClause, reproducing
+// resolve_repo_filter_ids' own union-of-refs semantics.
 type BreakdownFilters struct {
-	OrgID         string
-	StartTS       time.Time
-	EndTS         time.Time
-	RepoIDs       []string
-	Themes        []string
-	Subcategories []string
+	OrgID              string
+	StartTS            time.Time
+	EndTS              time.Time
+	RepoIDs            []string
+	TeamScopeCondition string
+	TeamScopeBindings  []dhclickhouse.Binding
+	Themes             []string
+	Subcategories      []string
 }
 
 func (f BreakdownFilters) categoryClause() (filterSQL string, bindings []dhclickhouse.Binding) {
@@ -135,12 +138,31 @@ func (f BreakdownFilters) categoryClause() (filterSQL string, bindings []dhclick
 	return filterSQL, bindings
 }
 
+// scopeClause ORs an explicit repo-id membership clause with
+// TeamScopeCondition's own bare boolean (no "AND"/"OR" of its own) into
+// ONE "AND (...)" fragment -- resolve_repo_filter_ids' own Python shape
+// unions explicit refs and team-resolved ids into a SINGLE id list
+// before filtering, so a repo matches when it is named directly OR
+// reachable through a scoped team; this keeps that same union semantics
+// across the two different condition shapes (see BreakdownFilters' own
+// doc comment).
 func (f BreakdownFilters) scopeClause() (filterSQL string, bindings []dhclickhouse.Binding) {
-	if len(f.RepoIDs) == 0 {
-		return "", nil
+	var explicitCondition string
+	var explicitBindings []dhclickhouse.Binding
+	if len(f.RepoIDs) > 0 {
+		explicitCondition = "repo_id IN {scope_ids:Array(String)}"
+		explicitBindings = []dhclickhouse.Binding{{Name: "scope_ids", Value: dedupeStrings(f.RepoIDs)}}
 	}
-	return " AND repo_id IN {scope_ids:Array(String)}", []dhclickhouse.Binding{
-		{Name: "scope_ids", Value: dedupeStrings(f.RepoIDs)},
+
+	switch {
+	case explicitCondition != "" && f.TeamScopeCondition != "":
+		return " AND (" + explicitCondition + " OR " + f.TeamScopeCondition + ")", append(explicitBindings, f.TeamScopeBindings...)
+	case explicitCondition != "":
+		return " AND " + explicitCondition, explicitBindings
+	case f.TeamScopeCondition != "":
+		return " AND " + f.TeamScopeCondition, f.TeamScopeBindings
+	default:
+		return "", nil
 	}
 }
 

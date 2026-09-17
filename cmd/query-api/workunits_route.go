@@ -440,14 +440,21 @@ func newWorkUnitsGetHandler(reader *investmentexplain.Reader) http.HandlerFunc {
 			writeRESTDataUnavailable(w, r, "work_units", claims.OrgID, err)
 			return
 		}
+		var teamCondition string
+		var teamBindings []dhclickhouse.Binding
+		if scopeType == "team" && len(scopeIDs) > 0 {
+			teamCondition, teamBindings = investmentexplain.TeamRepoScopeCondition(claims.OrgID, repoScopeColumn, scopeIDs)
+		}
 
 		investments, err := reader.BuildWorkUnitInvestments(r.Context(), investmentexplain.BuildWorkUnitInvestmentsOptions{
-			OrgID:       claims.OrgID,
-			StartTS:     startTS,
-			EndTS:       endTS,
-			RepoIDs:     repoIDs,
-			Limit:       boundedWorkUnitsLimit(limit),
-			IncludeText: includeTextual,
+			OrgID:              claims.OrgID,
+			StartTS:            startTS,
+			EndTS:              endTS,
+			RepoIDs:            repoIDs,
+			TeamScopeCondition: teamCondition,
+			TeamScopeBindings:  teamBindings,
+			Limit:              boundedWorkUnitsLimit(limit),
+			IncludeText:        includeTextual,
 			// _filters_from_query never populates why.work_category for the
 			// GET route (no query param for it), so ThemeFilters/
 			// SubcategoryFilters stay nil/empty here -- every unit passes
@@ -590,10 +597,10 @@ func newWorkUnitsPostHandler(reader *investmentexplain.Reader) http.HandlerFunc 
 
 		startTS, endTS := timeWindow(filters)
 
-		// scopeRepoIDs (investment_explain_route.go) already ports
+		// scopeRepoFilter (investment_explain_route.go) already ports
 		// resolve_repo_filter_ids's full team-scope branch over a raw
 		// filters map -- reused here rather than a second copy.
-		repoIDs, err := scopeRepoIDs(r.Context(), reader, filters, claims.OrgID)
+		repoIDs, teamCondition, teamBindings, err := scopeRepoFilter(r.Context(), reader, filters, claims.OrgID)
 		if err != nil {
 			writeRESTDataUnavailable(w, r, "work_units", claims.OrgID, err)
 			return
@@ -606,6 +613,8 @@ func newWorkUnitsPostHandler(reader *investmentexplain.Reader) http.HandlerFunc 
 			StartTS:            startTS,
 			EndTS:              endTS,
 			RepoIDs:            repoIDs,
+			TeamScopeCondition: teamCondition,
+			TeamScopeBindings:  teamBindings,
 			Limit:              boundedWorkUnitsLimit(rawLimit),
 			IncludeText:        includeTextual,
 			ThemeFilters:       themeFilters,

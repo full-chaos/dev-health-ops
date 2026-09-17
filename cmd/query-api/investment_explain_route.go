@@ -26,7 +26,10 @@
 // its team-scope branch, IS ported (investmentexplain/repofilter.go's
 // (*Reader).ResolveRepoFilterIDs) -- team-lead ruling, CHAOS-4977: "team
 // scope is the attribution use case, a 400 on scope.level='team' is a
-// parity break." scopeRepoIDs below is now a thin adapter over it.
+// parity break." scopeRepoFilter below is a thin adapter over that
+// resolution plus TeamRepoScopeCondition (a team scope's own membership
+// test as a pushed-down SQL condition, never a second materialized id
+// list -- see that function's own doc comment).
 package main
 
 import (
@@ -507,7 +510,7 @@ func newInvestmentExplainWorkHandler(
 // (api/services/filtering.py:78-92) verbatim.
 func buildExplainOptions(ctx context.Context, reader *investmentexplain.Reader, orgID string, body investmentExplainRequestBody, llmProvider string, forceRefresh bool) (investmentexplain.ExplainInvestmentMixOptions, error) {
 	startTS, endTS := timeWindow(body.Filters)
-	repoIDs, err := scopeRepoIDs(ctx, reader, body.Filters, orgID)
+	repoIDs, teamCondition, teamBindings, err := scopeRepoFilter(ctx, reader, body.Filters, orgID)
 	if err != nil {
 		return investmentexplain.ExplainInvestmentMixOptions{}, err
 	}
@@ -555,6 +558,8 @@ func buildExplainOptions(ctx context.Context, reader *investmentexplain.Reader, 
 		StartTS:            startTS,
 		EndTS:              endTS,
 		RepoIDs:            repoIDs,
+		TeamScopeCondition: teamCondition,
+		TeamScopeBindings:  teamBindings,
 		ScopeLevel:         scopeLevel,
 		WorkCategory:       workCategoryFromFilters(body.Filters),
 		Theme:              theme,
@@ -605,12 +610,23 @@ func timeWindow(filters map[string]any) (startTS, endTS time.Time) {
 	return startDay, endDay
 }
 
-// scopeRepoIDs reads filters.scope.level/ids and filters.what.repos out
-// of the raw request body and hands them to
-// (*investmentexplain.Reader).ResolveRepoFilterIDs, which ports
-// resolve_repo_filter_ids (api/services/filtering.py:95-110) in full,
-// team-scope branch included.
-func scopeRepoIDs(ctx context.Context, reader *investmentexplain.Reader, filters map[string]any, orgID string) ([]string, error) {
+// repoScopeColumn is the repo-id column both this route's breakdown query
+// and the work-unit query filter against -- both read FROM %s AS
+// work_unit_investments (investmentexplain's reader.go/workunitreader.go),
+// so one qualified column name is correct for either caller.
+const repoScopeColumn = "work_unit_investments.repo_id"
+
+// scopeRepoFilter reads filters.scope.level/ids and filters.what.repos
+// out of the raw request body and hands them to
+// (*investmentexplain.Reader).ResolveRepoFilterIDs (the bounded, explicit
+// refs) and investmentexplain.TeamRepoScopeCondition (a team scope's own
+// membership test, pushed down into SQL rather than materialized -- see
+// that function's own doc comment for why), reproducing
+// resolve_repo_filter_ids' (api/services/filtering.py:95-110) full
+// union-of-refs semantics, team-scope branch included, without ever
+// asking the client to hand back a team's whole repo-id set as a
+// standalone query result.
+func scopeRepoFilter(ctx context.Context, reader *investmentexplain.Reader, filters map[string]any, orgID string) (repoIDs []string, teamCondition string, teamBindings []dhclickhouse.Binding, err error) {
 	scope, _ := filters["scope"].(map[string]any)
 	level, _ := scope["level"].(string)
 	if level == "" {
@@ -619,7 +635,14 @@ func scopeRepoIDs(ctx context.Context, reader *investmentexplain.Reader, filters
 	scopeIDs := stringsFromAny(scope["ids"])
 	what, _ := filters["what"].(map[string]any)
 	whatRepos := stringsFromAny(what["repos"])
-	return reader.ResolveRepoFilterIDs(ctx, level, scopeIDs, whatRepos, orgID)
+	repoIDs, err = reader.ResolveRepoFilterIDs(ctx, level, scopeIDs, whatRepos, orgID)
+	if err != nil {
+		return nil, "", nil, err
+	}
+	if level == "team" && len(scopeIDs) > 0 {
+		teamCondition, teamBindings = investmentexplain.TeamRepoScopeCondition(orgID, repoScopeColumn, scopeIDs)
+	}
+	return repoIDs, teamCondition, teamBindings, nil
 }
 
 // workCategoryFromFilters reads filters.why.work_category verbatim --

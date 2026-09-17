@@ -150,7 +150,7 @@ func fetchPersonPullRequests(ctx context.Context, client QueryClient, identities
 		bindings = append(bindings, dhclickhouse.Binding{Name: "cursor", Value: *cursor})
 	}
 
-	query := fmt.Sprintf(fetchPersonPullRequestsQuery, cursorFilter, settingsMaxExecutionTime())
+	query := fmt.Sprintf(fetchPersonPullRequestsQuery, cursorFilter, settingsFinalTopNSafe())
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {
 		return nil, fmt.Errorf("people: fetch_person_pull_requests query: %w", err)

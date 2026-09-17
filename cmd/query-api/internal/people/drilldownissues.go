@@ -140,7 +140,7 @@ func fetchPersonIssues(ctx context.Context, client QueryClient, identities []str
 		bindings = append(bindings, dhclickhouse.Binding{Name: "cursor", Value: *cursor})
 	}
 
-	query := fmt.Sprintf(fetchPersonIssuesQuery, primaryWorkItemTeamAttributionSourceForPerson, cursorFilter, settingsMaxExecutionTime())
+	query := fmt.Sprintf(fetchPersonIssuesQuery, primaryWorkItemTeamAttributionSourceForPerson, cursorFilter, settingsFinalTopNSafe())
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {
 		return nil, fmt.Errorf("people: fetch_person_issues query: %w", err)

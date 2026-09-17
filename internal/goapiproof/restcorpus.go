@@ -2136,6 +2136,71 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
 				BodyMode: RESTBodyModeJSON,
 			},
+			{
+				// cycle_breakdown's team_id branch (fetchCycleBreakdown's
+				// own `AND team_id = {team_id:String}`, clickhouse.go) --
+				// team_id bound to filters/options' own live team_id, the
+				// same producer quadrant's team-scoped entries already
+				// consume. Same fixed two-level tree shape as
+				// cycle_breakdown_org_week, so the same three Tier B leaf
+				// depths apply.
+				Name:                "cycle_breakdown_team_scoped",
+				Query:               url.Values{"mode": {"cycle_breakdown"}, "range_days": {"7"}},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode:   RESTBodyModeJSON,
+				Parity:     Options{FloatTierB: cycleBreakdownFloats},
+				IDBindings: []RESTIDBinding{{Producer: "team_id", QueryParam: "team_id"}},
+			},
+			{
+				// cycle_breakdown's provider branch (fetchCycleBreakdown's
+				// own `AND provider = {provider:String}`) -- provider bound
+				// to GET /api/v1/people/{person_id}/drilldown/issues' own
+				// live provider value (IssueRow.Provider, wct.provider --
+				// see that entry's own Produces doc comment for why this is
+				// the same provider-taxonomy column work_item_state_
+				// durations_daily.provider carries).
+				Name:                "cycle_breakdown_provider_scoped",
+				Query:               url.Values{"mode": {"cycle_breakdown"}, "range_days": {"7"}},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode:   RESTBodyModeJSON,
+				Parity:     Options{FloatTierB: cycleBreakdownFloats},
+				IDBindings: []RESTIDBinding{{Producer: "provider", QueryParam: "provider"}},
+			},
+			{
+				// code_hotspots' repo_id branch (fetchCodeHotspots' own
+				// `AND toString(repo_id) = {repo_id:String}`) -- repo_id
+				// bound to filters/options' own live repo_id, the same
+				// producer code_hotspots_org_week_limit5's own sibling
+				// entries in this table already consume for other routes.
+				// No Parity: same reasoning as code_hotspots_org_week_limit5
+				// -- every leaf is an exact integer churn sum.
+				Name:                "code_hotspots_repo_scoped",
+				Query:               url.Values{"mode": {"code_hotspots"}, "range_days": {"7"}, "limit": {"5"}},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode:   RESTBodyModeJSON,
+				IDBindings: []RESTIDBinding{{Producer: "repo_id", QueryParam: "repo_id"}},
+			},
+			{
+				// Live happy path, throughput mode, org scope -- exercises
+				// fetchThroughputByType (buildThroughput's primary read).
+				// No Parity: ItemsCompleted is uniqExact(...), an exact
+				// distinct count, same Tier A reasoning as code_hotspots'
+				// own entries, not a merged float aggregate.
+				Name:                "throughput_org_week",
+				Query:               url.Values{"mode": {"throughput"}, "range_days": {"7"}},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode: RESTBodyModeJSON,
+			},
+			{
+				// throughput's team_id branch (fetchThroughputByType's own
+				// `AND t.team_id = {team_id:String}`) -- team_id bound to
+				// filters/options' own live team_id.
+				Name:                "throughput_team_scoped",
+				Query:               url.Values{"mode": {"throughput"}, "range_days": {"7"}},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode:   RESTBodyModeJSON,
+				IDBindings: []RESTIDBinding{{Producer: "team_id", QueryParam: "team_id"}},
+			},
 		},
 	},
 	"REST:GET:/api/v1/filters/options": {
@@ -3147,6 +3212,72 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				Parity:     peopleDetailParity,
 				IDBindings: []RESTIDBinding{{Producer: "person_id", PathParam: "person_id"}},
 			},
+			{
+				// metric=cycle_time: personMetricConfig's own table for
+				// this metric is work_item_user_metrics_daily (metric.go's
+				// series read), with ByWorkType AND ByStage breakdowns both
+				// on work_item_cycle_times (metricconfig.go) -- neither
+				// breakdown statement runs under any other live entry in
+				// this table. Same peopleDetailParity citation as
+				// metric_default: it names every one of this route's
+				// numeric leaves generically, not per metric.
+				Name:                "metric_cycle_time",
+				Query:               url.Values{"metric": {"cycle_time"}},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode:   RESTBodyModeJSON,
+				Parity:     peopleDetailParity,
+				IDBindings: []RESTIDBinding{{Producer: "person_id", PathParam: "person_id"}},
+			},
+			{
+				// metric=review_latency: table user_metrics_daily, ByRepo
+				// breakdown with its own "INNER JOIN repos FINAL"
+				// (metricconfig.go) -- a different join than churn's own
+				// ByRepo (different table/column), so this is a distinct
+				// statement from metric_default's.
+				Name:                "metric_review_latency",
+				Query:               url.Values{"metric": {"review_latency"}},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode:   RESTBodyModeJSON,
+				Parity:     peopleDetailParity,
+				IDBindings: []RESTIDBinding{{Producer: "person_id", PathParam: "person_id"}},
+			},
+			{
+				// metric=throughput: table work_item_user_metrics_daily
+				// (different column than cycle_time's own read of the same
+				// table), ByWorkType breakdown on work_item_cycle_times.
+				Name:                "metric_throughput",
+				Query:               url.Values{"metric": {"throughput"}},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode:   RESTBodyModeJSON,
+				Parity:     peopleDetailParity,
+				IDBindings: []RESTIDBinding{{Producer: "person_id", PathParam: "person_id"}},
+			},
+			{
+				// metric=wip_overlap: table work_item_user_metrics_daily,
+				// NO breakdown config at all (metricconfig.go) -- the only
+				// live entry in this table whose metric reaches
+				// BuildMetricResponse with cfg.ByRepo/ByWorkType/ByStage
+				// all nil, so breakdowns stays the static empty-lists value
+				// (metric.go) rather than running a breakdown statement.
+				Name:                "metric_wip_overlap",
+				Query:               url.Values{"metric": {"wip_overlap"}},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode:   RESTBodyModeJSON,
+				Parity:     peopleDetailParity,
+				IDBindings: []RESTIDBinding{{Producer: "person_id", PathParam: "person_id"}},
+			},
+			{
+				// metric=blocked_work: table work_item_cycle_times (the
+				// only metric whose SERIES read, not just its breakdown,
+				// targets this table), ByWorkType breakdown on the same
+				// table.
+				Name:                "metric_blocked_work",
+				Query:               url.Values{"metric": {"blocked_work"}},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode:   RESTBodyModeJSON,
+				Parity:     peopleDetailParity,
+				IDBindings: []RESTIDBinding{{Producer: "person_id", PathParam: "person_id"}},
+			},
 		},
 	},
 	"REST:GET:/api/v1/people/{person_id}/drilldown/prs": {
@@ -3234,6 +3365,15 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				BodyMode:   RESTBodyModeJSON,
 				Parity:     personDrilldownIssuesParity,
 				IDBindings: []RESTIDBinding{{Producer: "person_id", PathParam: "person_id"}},
+				// Produces provider from this response's own items list
+				// (IssueRow.Provider, drilldownissues.go -- wct.provider,
+				// the same column family flame/aggregated's cycle_breakdown
+				// mode filters on, work_item_state_durations_daily.provider:
+				// both are the provider taxonomy column of the work_item_*
+				// table family, home/metricspec.go's own TableColumns lists
+				// them with the identical column set). Consumed by
+				// flame/aggregated's own provider-scoped entry below.
+				Produces: []RESTIDProducer{{Name: "provider", ListPath: "items", IDField: "provider"}},
 			},
 		},
 	},

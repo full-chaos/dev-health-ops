@@ -458,6 +458,39 @@ func main() {
 		log.Print("query-api: /api/v1/filters/options route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
 	}
 
+	// GET+POST /api/v1/investment, gated by its own routeswitch entries
+	// (default OFF via GO_API_INVESTMENT_ENABLED) -- see
+	// investment_route.go's package doc comment for the reachability
+	// story and internal/investment for the ported builders and their
+	// declared ReplacingMergeTree-dedup/membership-scope notes.
+	if investmentHandler, investmentCleanup, investmentOK, investmentErr := buildInvestmentRoute(); investmentErr != nil {
+		log.Fatalf("query-api: build /api/v1/investment route: %v", investmentErr)
+	} else if investmentOK {
+		defer investmentCleanup()
+		// See the investment/explain mount above for why this is a
+		// reassignment, not an inlined wrapper.
+		investmentHandler = withProofProvenance(investmentHandler, runningBuild())
+		mux.HandleFunc("/api/v1/investment", investmentHandler)
+	} else {
+		log.Print("query-api: /api/v1/investment route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
+	}
+
+	// GET /api/v1/investment/sunburst, gated by its own routeswitch entry
+	// (default OFF via GO_API_INVESTMENT_SUNBURST_ENABLED) -- see
+	// investment_route.go's package doc comment and internal/investment
+	// for the ported resolver.
+	if investmentSunburstHandler, investmentSunburstCleanup, investmentSunburstOK, investmentSunburstErr := buildInvestmentSunburstRoute(); investmentSunburstErr != nil {
+		log.Fatalf("query-api: build /api/v1/investment/sunburst route: %v", investmentSunburstErr)
+	} else if investmentSunburstOK {
+		defer investmentSunburstCleanup()
+		// See the investment/explain mount above for why this is a
+		// reassignment, not an inlined wrapper.
+		investmentSunburstHandler = withProofProvenance(investmentSunburstHandler, runningBuild())
+		mux.HandleFunc("/api/v1/investment/sunburst", investmentSunburstHandler)
+	} else {
+		log.Print("query-api: /api/v1/investment/sunburst route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
+	}
+
 	// GET+POST /api/v1/drilldown/prs, gated by its own routeswitch
 	// entries (default OFF via GO_API_DRILLDOWN_PRS_ENABLED)
 	// -- see drilldown_prs_route.go's package doc comment for the

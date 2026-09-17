@@ -119,6 +119,44 @@ type RESTEndpointSpec struct {
 	PublicNoAuth bool
 }
 
+// investmentBaselineDefects is shared by GET and POST /api/v1/investment.
+// Both read internal/investment's shared source (the same
+// LATEST_WORK_UNIT_INVESTMENTS_CTE-derived query every other reader in
+// cmd/query-api/internal/analytics already composes from), which
+// excludes any work unit a later regrouping run has recorded in
+// work_unit_supersessions -- a table the Python query this route ports
+// has no knowledge of at all. Whenever a live org holds a superseded
+// work unit still inside the request's time window, Python keeps
+// counting that unit's effort into theme_distribution/
+// subcategory_distribution/evidence_quality_distribution/
+// evidence_quality_stats; Go does not.
+var investmentBaselineDefects = []BaselineDefect{
+	{
+		Ticket: "CHAOS-4441",
+		Reason: "Go's read of work_unit_investments excludes any work unit a later regrouping run has recorded in work_unit_supersessions; the Python query this route ports has no knowledge of that table at all, so it can still count a superseded work unit's effort into these aggregates.",
+		Paths: []string{
+			"data.theme_distribution", "data.subcategory_distribution",
+			"data.evidence_quality_distribution", "data.evidence_quality_stats",
+		},
+		Intermittent:       true,
+		IntermittentReason: "present only for an org that currently holds at least one superseded work unit still inside the request's time window; an org with no supersession rows (or none inside that window) shows no divergence under these paths, which is expected, not stale",
+	},
+}
+
+// investmentSunburstBaselineDefects extends investmentBaselineDefects
+// with the sunburst route's own additional divergence: its repo-name
+// join reads `repos` (ReplacingMergeTree, sorting key org_id/id) with
+// FINAL and an org_id predicate on Go's side; Python's own join carries
+// neither, so an unmerged physical version of a repo row can fan a
+// slice's value out by however many versions are still live for it.
+var investmentSunburstBaselineDefects = append(append([]BaselineDefect{}, investmentBaselineDefects...), BaselineDefect{
+	Ticket:             "CHAOS-4773",
+	Reason:             "the sunburst repo-name join reads repos with FINAL and an org_id predicate on Go's side; Python's own join has neither, so an unmerged physical version of a repo row can fan a slice's value out by however many versions are still live for it.",
+	Paths:              []string{"data.scope", "data.value"},
+	Intermittent:       true,
+	IntermittentReason: "present only while a repo row referenced by this org's investment data still holds 2+ unmerged physical versions; once ClickHouse merges them the two planes agree and this citation covers nothing, which is expected, not stale",
+})
+
 // investmentExplainProseFields names investment/explain's LLM-authored
 // paths -- text the model writes fresh per call, never reproducible
 // across two calls let alone across two planes calling two different
@@ -1316,6 +1354,80 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 			},
 		},
 	},
+	"REST:GET:/api/v1/investment": {
+		Method: "GET",
+		Path:   "/api/v1/investment",
+		Requests: []RESTRequest{
+			{
+				Name:                "default_window",
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode: RESTBodyModeJSON,
+				Parity:   Options{BaselineDefects: investmentBaselineDefects},
+			},
+			{
+				Name:                "range_days_90",
+				Query:               url.Values{"range_days": {"90"}},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode: RESTBodyModeJSON,
+				Parity:   Options{BaselineDefects: investmentBaselineDefects},
+			},
+			{
+				// Same shared int_parsing validator drilldown/prs's own
+				// GET already exercises (both routes share
+				// pydantic_validation_error.go unchanged).
+				Name:                "invalid_range_days",
+				Query:               url.Values{"range_days": {"not-a-number"}},
+				WantCandidateStatus: 422, WantBaselineStatus: 422,
+				BodyMode: RESTBodyModeJSON,
+			},
+		},
+	},
+	"REST:POST:/api/v1/investment": {
+		Method: "POST",
+		Path:   "/api/v1/investment",
+		Requests: []RESTRequest{
+			{
+				Name:                "default_filters",
+				Body:                map[string]any{"filters": map[string]any{}},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode: RESTBodyModeJSON,
+				Parity:   Options{BaselineDefects: investmentBaselineDefects},
+			},
+			{
+				// Same shared "missing filters key" validator drilldown/
+				// prs's own POST already exercises.
+				Name:                "missing_filters",
+				Body:                map[string]any{},
+				WantCandidateStatus: 422, WantBaselineStatus: 422,
+				BodyMode: RESTBodyModeJSON,
+			},
+		},
+	},
+	"REST:GET:/api/v1/investment/sunburst": {
+		Method: "GET",
+		Path:   "/api/v1/investment/sunburst",
+		Requests: []RESTRequest{
+			{
+				Name:                "default_window",
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode: RESTBodyModeJSON,
+				Parity:   Options{BaselineDefects: investmentSunburstBaselineDefects},
+			},
+			{
+				Name:                "explicit_limit",
+				Query:               url.Values{"limit": {"50"}},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode: RESTBodyModeJSON,
+				Parity:   Options{BaselineDefects: investmentSunburstBaselineDefects},
+			},
+			{
+				Name:                "invalid_limit",
+				Query:               url.Values{"limit": {"not-a-number"}},
+				WantCandidateStatus: 422, WantBaselineStatus: 422,
+				BodyMode: RESTBodyModeJSON,
+			},
+		},
+	},
 	"REST:POST:/api/v1/investment/explain": {
 		Method: "POST",
 		Path:   "/api/v1/investment/explain",
@@ -2119,6 +2231,9 @@ var restRunOrder = []string{
 	"REST:POST:/api/v1/investment/explain",
 	"REST:POST:/api/v1/investment/flow",
 	"REST:POST:/api/v1/investment/flow/repo-team",
+	"REST:GET:/api/v1/investment",
+	"REST:POST:/api/v1/investment",
+	"REST:GET:/api/v1/investment/sunburst",
 	"REST:GET:/api/v1/meta",
 	"REST:GET:/api/v1/quadrant",
 	"REST:GET:/api/v1/heatmap",

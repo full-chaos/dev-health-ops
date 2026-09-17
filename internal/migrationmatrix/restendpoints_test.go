@@ -611,15 +611,38 @@ func TestLoadRESTEndpointsOnTheRealRepo(t *testing.T) {
 		t.Fatalf("POST /api/v1/investment/flow/repo-team = %+v, want ported at investment_flow_route.go", investmentFlowRepoTeamPost)
 	}
 
+	investmentGet, ok := byKey["GET /api/v1/investment"]
+	if !ok {
+		t.Fatal("expected GET /api/v1/investment to be enumerated")
+	}
+	if investmentGet.Status != RESTPorted || !strings.Contains(investmentGet.GoHandler, "investment_route.go") {
+		t.Fatalf("GET /api/v1/investment = %+v, want ported at investment_route.go", investmentGet)
+	}
+	investmentPost, ok := byKey["POST /api/v1/investment"]
+	if !ok {
+		t.Fatal("expected POST /api/v1/investment to be enumerated")
+	}
+	if investmentPost.Status != RESTPorted || !strings.Contains(investmentPost.GoHandler, "investment_route.go") {
+		t.Fatalf("POST /api/v1/investment = %+v, want ported at investment_route.go", investmentPost)
+	}
+	investmentSunburstGet, ok := byKey["GET /api/v1/investment/sunburst"]
+	if !ok {
+		t.Fatal("expected GET /api/v1/investment/sunburst to be enumerated")
+	}
+	if investmentSunburstGet.Status != RESTPorted || !strings.Contains(investmentSunburstGet.GoHandler, "investment_route.go") {
+		t.Fatalf("GET /api/v1/investment/sunburst = %+v, want ported at investment_route.go", investmentSunburstGet)
+	}
+
 	ported, _, _ := RESTEndpointCounts(rows)
-	if ported != 22 {
-		t.Fatalf("got %d ported routes, want exactly 22 (POST /api/v1/investment/explain, GET /api/v1/quadrant, "+
+	if ported != 25 {
+		t.Fatalf("got %d ported routes, want exactly 25 (POST /api/v1/investment/explain, GET /api/v1/quadrant, "+
 			"GET /api/v1/filters/options, POST+GET /api/v1/drilldown/prs, GET /api/v1/meta, "+
 			"POST+GET /api/v1/drilldown/issues, POST+GET /api/v1/explain, GET /api/v1/people, "+
 			"GET /api/v1/people/{person_id}/summary, GET /api/v1/people/{person_id}/metric, GET /api/v1/flame, "+
 			"GET /api/v1/people/{person_id}/drilldown/prs, GET /api/v1/people/{person_id}/drilldown/issues, "+
 			"GET /api/v1/flame/aggregated, GET /api/v1/heatmap, POST+GET /api/v1/sankey, "+
-			"POST /api/v1/investment/flow, POST /api/v1/investment/flow/repo-team) -- "+
+			"POST /api/v1/investment/flow, POST /api/v1/investment/flow/repo-team, "+
+			"POST+GET /api/v1/investment, GET /api/v1/investment/sunburst) -- "+
 			"if this changed, a route was ported or un-ported; update this pin, it is not stale by accident", ported)
 	}
 }

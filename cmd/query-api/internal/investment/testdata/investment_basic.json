@@ -1,0 +1,39 @@
+{
+  "edges": [],
+  "evidence_quality_distribution": {
+    "high": 1.0,
+    "low": 9.0,
+    "moderate": 1.0,
+    "unknown": 10.0,
+    "very_low": 3.0
+  },
+  "evidence_quality_stats": {
+    "band_counts": {
+      "high": 1,
+      "low": 9,
+      "moderate": 1,
+      "unknown": 10,
+      "very_low": 3
+    },
+    "mean": 0.3,
+    "quality_drivers": [
+      "missing_evidence_metadata",
+      "low_text_signal",
+      "high_uncertainty_spread",
+      "weak_cross_links",
+      "thin_component"
+    ],
+    "stddev": 0.3,
+    "total": 20
+  },
+  "subcategory_distribution": {
+    "engineering.backend": 12.5,
+    "engineering.frontend": 7.5,
+    "growth.marketing": 3.0
+  },
+  "theme_distribution": {
+    "engineering": 20.0,
+    "growth": 3.0
+  },
+  "unit": null
+}

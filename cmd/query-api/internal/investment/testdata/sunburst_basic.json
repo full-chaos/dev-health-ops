@@ -1,0 +1,20 @@
+[
+  {
+    "scope": "repo-a",
+    "subcategory": "engineering.backend",
+    "theme": "engineering",
+    "value": 5.0
+  },
+  {
+    "scope": "repo-b",
+    "subcategory": "growth.marketing",
+    "theme": "growth",
+    "value": 2.0
+  },
+  {
+    "scope": "Unassigned",
+    "subcategory": "Other",
+    "theme": "Unassigned",
+    "value": 1.0
+  }
+]

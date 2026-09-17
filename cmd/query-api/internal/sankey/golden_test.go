@@ -143,7 +143,7 @@ func TestGoldenState(t *testing.T) {
 func TestGoldenHotspot(t *testing.T) {
 	want := loadGolden(t, "hotspot.json")
 	client := dispatchClient(t, func(t *testing.T, query string, _ []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
-		if strings.Contains(query, "FROM file_metrics_daily FINAL AS metrics") {
+		if strings.Contains(query, "FROM file_metrics_daily AS metrics FINAL") {
 			return &fixtureRowScanner{rows: [][]any{
 				{"repoA", "(root)", "README.md", "feature", 4.0},
 				{"repoA", "src", "src/main.go", "refactor", 40.0},

@@ -1,6 +1,7 @@
 package heatmap
 
 import (
+	"encoding/json"
 	"reflect"
 	"testing"
 	"time"
@@ -232,6 +233,48 @@ func TestAxisOrderDedupesPreservingFirstOccurrence(t *testing.T) {
 	want := []string{"a", "b", "c"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+// TestAxisOrderEmptyInputMarshalsAsEmptyArrayNeverNull pins a cross-plane
+// response contract: Python's sorted([])/list comprehension over no rows
+// is always [], never
+// None, so every axisOrder branch that can see zero rows (repo_touchpoints
+// and hotspot_risk both call it with an empty row set when the metric has
+// no data in range) must return a non-nil slice too -- a nil []string
+// marshals as JSON null, which is a real cross-plane response mismatch,
+// not merely a Go-internal nil-vs-empty distinction.
+func TestAxisOrderEmptyInputMarshalsAsEmptyArrayNeverNull(t *testing.T) {
+	for _, kind := range []string{"day", "week", "repo", "file", "status", "age_bucket"} {
+		got := axisOrder(kind, nil, map[string]float64{})
+		if got == nil {
+			t.Fatalf("axisOrder(%q, nil, ...) = nil, want non-nil empty slice", kind)
+		}
+		if len(got) != 0 {
+			t.Fatalf("axisOrder(%q, nil, ...) = %v, want empty", kind, got)
+		}
+		b, err := json.Marshal(got)
+		if err != nil {
+			t.Fatalf("axisOrder(%q, ...) json.Marshal error: %v", kind, err)
+		}
+		if string(b) != "[]" {
+			t.Fatalf("axisOrder(%q, ...) marshaled to %s, want []", kind, b)
+		}
+	}
+}
+
+// TestAxesJSONFieldsAreEmptyArrayNeverNull pins the same contract at the
+// wire-shape level: an Axes built from zero rows must
+// marshal both x and y as "[]", matching Python's HeatmapAxes(x=[], y=[]).
+func TestAxesJSONFieldsAreEmptyArrayNeverNull(t *testing.T) {
+	axes := Axes{X: axisValues(nil, true, "day"), Y: axisValues(nil, false, "repo")}
+	b, err := json.Marshal(axes)
+	if err != nil {
+		t.Fatalf("json.Marshal(axes) error: %v", err)
+	}
+	want := `{"x":[],"y":[]}`
+	if string(b) != want {
+		t.Fatalf("json.Marshal(axes) = %s, want %s", b, want)
 	}
 }
 

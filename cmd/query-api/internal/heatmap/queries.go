@@ -13,6 +13,22 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 )
 
+// dateBindingValue formats t as a bare "YYYY-MM-DD" string for binding
+// into a {name:Date}-typed native ClickHouse parameter -- REQUIRED, not
+// cosmetic: dev-health-go's clickHouseParameter formats every time.Time
+// value with a full DateTime literal regardless of the placeholder's
+// declared type, so a {start_day:Date}/{end_day:Date}/{week_start:Date}/
+// {week_end:Date} placeholder bound to a raw time.Time always fails live
+// with "Value ... cannot be parsed as Date ... only 10 of 23 bytes was
+// parsed", confirmed live against hotspot_risk's own two reads. Same fix
+// shape as analytics.dateBindingValue and every other package carrying
+// this class of bug; duplicated here per this binary's own "repeat,
+// don't couple" convention for a helper this narrow.
+func dateBindingValue(t time.Time) string {
+	year, month, day := t.Date()
+	return fmt.Sprintf("%04d-%02d-%02d", year, int(month), day)
+}
+
 // reviewWaitDensityRow is fetch_review_wait_density's row shape
 // (queries/heatmap.py:13-38).
 type reviewWaitDensityRow struct {
@@ -242,8 +258,8 @@ func fetchHotspotRisk(ctx context.Context, client QueryClient, startDay, endDay 
         %s
     `, scopeFilterSQL, settingsMaxExecutionTime())
 	topBindings := append([]dhclickhouse.Binding{
-		{Name: "start_day", Value: startDay},
-		{Name: "end_day", Value: endDay},
+		{Name: "start_day", Value: dateBindingValue(startDay)},
+		{Name: "end_day", Value: dateBindingValue(endDay)},
 		{Name: "org_id", Value: orgID},
 		{Name: "limit", Value: limit},
 	}, scopeBindings...)
@@ -290,8 +306,8 @@ func fetchHotspotRisk(ctx context.Context, client QueryClient, startDay, endDay 
         %s
     `, scopeFilterSQL, settingsMaxExecutionTime())
 	bindings := append([]dhclickhouse.Binding{
-		{Name: "start_day", Value: startDay},
-		{Name: "end_day", Value: endDay},
+		{Name: "start_day", Value: dateBindingValue(startDay)},
+		{Name: "end_day", Value: dateBindingValue(endDay)},
 		{Name: "org_id", Value: orgID},
 		{Name: "files", Value: files},
 	}, scopeBindings...)
@@ -354,8 +370,8 @@ func fetchHotspotEvidence(ctx context.Context, client QueryClient, weekStart, we
         %s
     `, scopeFilterSQL, settingsMaxExecutionTime())
 	bindings := append([]dhclickhouse.Binding{
-		{Name: "week_start", Value: weekStart},
-		{Name: "week_end", Value: weekEnd},
+		{Name: "week_start", Value: dateBindingValue(weekStart)},
+		{Name: "week_end", Value: dateBindingValue(weekEnd)},
 		{Name: "file_key", Value: fileKey},
 		{Name: "org_id", Value: orgID},
 		{Name: "limit", Value: limit},

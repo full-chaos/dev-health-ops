@@ -189,9 +189,23 @@ func resolveIdentityVariants(ctx context.Context, client QueryClient, personID, 
 // reference bypasses dedup_from for this read, but user_metrics_daily and
 // work_item_user_metrics_daily are both ReplacingMergeTree(computed_at)
 // (migration 096/055), so this branch reads both FINAL.
+//
+// NO LEADING WITH: this was also a `WITH identities AS (...)
+// SELECT ...` CTE. dev-health-go's client-side read-only guard
+// (clickhouse/client.go's validateReadOnlyStatement) requires a
+// statement's FIRST token to be the literal "SELECT", so a query
+// beginning "WITH ..." is rejected before it ever reaches ClickHouse
+// (ErrUnsafeStatement, "clickhouse runtime: unsafe statement") -- the
+// swallowed cause of the heatmap 503 for the individual/developer scope.
+// Same fix shape as quadrant/identity.go's own resolvePersonIdentity: the
+// "identities" CTE is referenced exactly once (in the outer FROM), so
+// inlining it as an ordinary derived-table subquery is a purely
+// mechanical, semantically identical rewrite.
 func resolvePersonIdentity(ctx context.Context, client QueryClient, personID, orgID string) (string, error) {
 	query := fmt.Sprintf(`
-        WITH identities AS (
+        SELECT
+            identity AS identity_id
+        FROM (
             SELECT identity_id AS identity
             FROM user_metrics_daily FINAL
             WHERE identity_id != ''
@@ -203,10 +217,7 @@ func resolvePersonIdentity(ctx context.Context, client QueryClient, personID, or
             FROM work_item_user_metrics_daily FINAL
             WHERE user_identity != ''
               AND org_id = {org_id:String}
-        )
-        SELECT
-            identity AS identity_id
-        FROM identities
+        ) AS identities
         WHERE lower(hex(MD5(identity))) = {person_id:String}
         LIMIT 1
         %s

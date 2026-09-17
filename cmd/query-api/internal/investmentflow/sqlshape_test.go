@@ -2,6 +2,8 @@ package investmentflow
 
 import (
 	"context"
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -90,9 +92,9 @@ func TestRepoJoinsAreFinalWithOrgIDInOwnONClause(t *testing.T) {
 
 	assertRepoFinal := func(t *testing.T, query string) {
 		t.Helper()
-		joinIdx := strings.Index(query, "LEFT JOIN repos FINAL AS r ON")
+		joinIdx := strings.Index(query, "LEFT JOIN repos AS r FINAL ON")
 		if joinIdx < 0 {
-			t.Fatalf("expected LEFT JOIN repos FINAL AS r ON:\n%s", query)
+			t.Fatalf("expected LEFT JOIN repos AS r FINAL ON (alias BEFORE FINAL, the only order ClickHouse accepts):\n%s", query)
 		}
 		onClauseEnd := strings.Index(query[joinIdx:], "\n")
 		if onClauseEnd < 0 {
@@ -129,11 +131,11 @@ func TestRepoJoinsAreFinalWithOrgIDInOwnONClause(t *testing.T) {
 	// BuildUnitTeamSubquery's own WORK_UNIT_EVIDENCE_REPO_SOURCE lookup
 	// (a different, evidence-ref-resolution join, not this test's
 	// concern), so the assertion below is specifically "no `LEFT JOIN
-	// repos FINAL AS r`", not "no `repos` substring at all".
+	// repos AS r FINAL`", not "no `repos` substring at all".
 	t.Run("fetchInvestmentTeamEdges never joins the target repo", func(t *testing.T) {
 		c := &capturingClient{}
 		_, _ = fetchInvestmentTeamEdges(ctx, c, now, now, "", nil, "org-1", nil, nil)
-		if strings.Contains(c.queries[0], "LEFT JOIN repos FINAL AS r") {
+		if strings.Contains(c.queries[0], "LEFT JOIN repos AS r FINAL") {
 			t.Fatalf("fetchInvestmentTeamEdges unexpectedly joins the target repo:\n%s", c.queries[0])
 		}
 	})
@@ -160,4 +162,28 @@ func TestUnitTeamSubqueryReused(t *testing.T) {
 			t.Fatalf("expected analytics.BuildUnitTeamSubquery's resolved_team_id column:\n%s", c.queries[0])
 		}
 	})
+}
+
+// finalBeforeAliasPattern matches `FINAL AS <alias>` -- ClickHouse accepts
+// only `<table> AS <alias> FINAL`, never `<table> FINAL AS <alias>` (Code
+// 62 syntax error, confirmed live). A source-text scan, not a
+// runtime-captured-query scan, so a NEW hand-written FINAL join added to
+// this file in the wrong order fails here regardless of which function it
+// lands in, without needing a matching runtime test added by hand --
+// same guard shape as sankey's own TestNoAliasAfterFinalInQueriesSource.
+var finalBeforeAliasPattern = regexp.MustCompile(`\bFINAL\s+AS\s+\w+`)
+
+// TestNoAliasAfterFinalInQueriesSource pins the alias-before-FINAL
+// ordering at the source level for this package's queries.go.
+func TestNoAliasAfterFinalInQueriesSource(t *testing.T) {
+	src, err := os.ReadFile("queries.go")
+	if err != nil {
+		t.Fatalf("read queries.go: %v -- this trip-wire's own input did not resolve", err)
+	}
+	if finalCount := strings.Count(string(src), "FINAL"); finalCount == 0 {
+		t.Fatalf("queries.go contains no FINAL at all -- this trip-wire's own input moved, was renamed, or the FINAL dedup convention regressed")
+	}
+	if bad := finalBeforeAliasPattern.FindAll(src, -1); len(bad) > 0 {
+		t.Fatalf("queries.go contains %d `<table> FINAL AS <alias>` site(s) -- ClickHouse SYNTAX error (Code 62); alias must come BEFORE FINAL (`<table> AS <alias> FINAL`): %v", len(bad), bad)
+	}
 }

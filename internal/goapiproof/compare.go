@@ -920,7 +920,7 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 				// referencing the raw bodies.
 				if !admitted {
 					if id, ok := dedupPlan.uncoveredEdgeID(result.Findings[findingRefs[i]]); ok {
-						result.Findings[findingRefs[i]].Detail += fmt.Sprintf(" (dedup id %q not admitted by the declared duplicate-row shape: its own baseline copies disagree, or its shared content differs from the candidate)", id)
+						result.Findings[findingRefs[i]].Detail += dedupPlan.refusalDetail(id)
 					}
 				}
 			case skewPlan != nil:

@@ -153,8 +153,8 @@ func TestDrilldownPRsParity_EmptyItemsIsAStructuralRefusalNotStale(t *testing.T)
 // TestDrilldownPRsParityDatetimeCitation_NonVacuousMatchIsIdleNotStale is
 // the concrete, corpus-level regression the Intermittent fix exists for:
 // a NON-vacuous response (real content: repo_id/number/created_at) where
-// baseline and candidate genuinely agree records drilldownPRsParity's two
-// entries as idle, never stale -- a stale verdict here is exactly the
+// baseline and candidate genuinely agree records every drilldownPRsParity
+// entry as idle, never stale -- a stale verdict here is exactly the
 // tool-failure-on-a-clean-run bug being fixed. (A live comparison's
 // created_at would normally itself diverge, per this citation's own
 // Reason -- this synthetic body holds it identical on both sides
@@ -171,8 +171,8 @@ func TestDrilldownPRsParityDatetimeCitation_NonVacuousMatchIsIdleNotStale(t *tes
 	if len(result.StaleBaselineDefects) != 0 {
 		t.Fatalf("a genuine, non-vacuous match must never go stale: %v", result.StaleBaselineDefects)
 	}
-	if !equalStrings(result.IdleIntermittentBaselineDefects, []string{"CHAOS-5803", "CHAOS-5803"}) {
-		t.Fatalf("idle = %v, want both drilldownPRsParity entries idle", result.IdleIntermittentBaselineDefects)
+	if !equalStrings(result.IdleIntermittentBaselineDefects, drilldownPRsWantMatched()) {
+		t.Fatalf("idle = %v, want every drilldownPRsParity entry idle", result.IdleIntermittentBaselineDefects)
 	}
 }
 

@@ -303,7 +303,7 @@ func BuildResponse(ctx context.Context, chClient QueryClient, pgClient PGQueryCl
 				eventType = "regression"
 			}
 			events = append(events, EventItem{
-				TS:   now,
+				TS:   MicroDateTime(now),
 				Type: eventType,
 				Text: fmt.Sprintf("%s shifted %.0f%% over the last %d days.", delta.Label, delta.DeltaPct, f.Time.RangeDays),
 				Link: evidenceLink(delta.Metric, f),
@@ -317,8 +317,8 @@ func BuildResponse(ctx context.Context, chClient QueryClient, pgClient PGQueryCl
 
 	return &Response{
 		Freshness: Freshness{
-			LastIngestedAt:         lastIngested,
-			LatestSuccessfulSyncAt: latestSuccessfulSyncAt,
+			LastIngestedAt:         (*NaiveDateTime)(lastIngested),
+			LatestSuccessfulSyncAt: (*MicroDateTime)(latestSuccessfulSyncAt),
 			Sources:                sources,
 			Coverage: Coverage{
 				ReposCoveredPct:          coverage["repos_covered_pct"],

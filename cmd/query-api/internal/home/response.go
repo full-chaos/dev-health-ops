@@ -19,8 +19,6 @@
 // internal/goapiproof/home_corpus.go for the specific citations.
 package home
 
-import "time"
-
 // Coverage is the wire shape of Coverage (schemas.py:9-12).
 type Coverage struct {
 	ReposCoveredPct          float64 `json:"repos_covered_pct"`
@@ -30,8 +28,8 @@ type Coverage struct {
 
 // Freshness is the wire shape of Freshness (schemas.py:15-19).
 type Freshness struct {
-	LastIngestedAt         *time.Time        `json:"last_ingested_at"`
-	LatestSuccessfulSyncAt *time.Time        `json:"latest_successful_sync_at"`
+	LastIngestedAt         *NaiveDateTime    `json:"last_ingested_at"`
+	LatestSuccessfulSyncAt *MicroDateTime    `json:"latest_successful_sync_at"`
 	Sources                map[string]string `json:"sources"`
 	Coverage               Coverage          `json:"coverage"`
 }
@@ -87,10 +85,10 @@ type ConstraintCard struct {
 
 // EventItem is the wire shape of EventItem (schemas.py:63-67).
 type EventItem struct {
-	TS   time.Time `json:"ts"`
-	Type string    `json:"type"`
-	Text string    `json:"text"`
-	Link string    `json:"link"`
+	TS   MicroDateTime `json:"ts"`
+	Type string        `json:"type"`
+	Text string        `json:"text"`
+	Link string        `json:"link"`
 }
 
 // ScopeEntityRef is the wire shape of ScopeEntityRef (schemas.py:70-78).
@@ -101,10 +99,10 @@ type ScopeEntityRef struct {
 
 // HealthState is the wire shape of HomeHealthState (schemas.py:81-85).
 type HealthState struct {
-	Status   string     `json:"status"`
-	Headline string     `json:"headline"`
-	Summary  string     `json:"summary"`
-	AsOf     *time.Time `json:"as_of"`
+	Status   string         `json:"status"`
+	Headline string         `json:"headline"`
+	Summary  string         `json:"summary"`
+	AsOf     *NaiveDateTime `json:"as_of"`
 }
 
 // Signal is the wire shape of HomeSignal (schemas.py:88-106).

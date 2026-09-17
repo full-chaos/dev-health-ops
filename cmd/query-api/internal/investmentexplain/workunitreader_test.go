@@ -4,6 +4,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/teamscope"
 )
 
 // TestChunkStringsMatchesPythonChunkBoundaries proves chunkStrings splits
@@ -151,7 +153,7 @@ func TestFetchWorkUnitInvestmentsTeamScopeNeverRoundTripsForRepoIDs(t *testing.T
 		t.Fatalf("NewReader: %v", err)
 	}
 
-	teamCondition, teamBindings := TeamRepoScopeCondition("org-1", "work_unit_investments.repo_id", []string{"team-x"})
+	teamCondition, teamBindings := teamscope.RepoCondition("org-1", "work_unit_investments.repo_id", []string{"team-x"}, teamScopeAsOf)
 	if _, err := reader.FetchWorkUnitInvestments(t.Context(), WorkUnitInvestmentsFilter{
 		OrgID:              "org-1",
 		TeamScopeCondition: teamCondition,
@@ -162,7 +164,7 @@ func TestFetchWorkUnitInvestmentsTeamScopeNeverRoundTripsForRepoIDs(t *testing.T
 	}
 
 	query := capture.lastQuery
-	if !strings.Contains(query, "work_unit_investments.repo_id IN (") || !strings.Contains(query, "FROM user_metrics_daily FINAL") {
+	if !strings.Contains(query, "work_unit_investments.repo_id IN (") || !strings.Contains(query, teamscope.Marker) {
 		t.Fatalf("query missing the pushed-down team membership condition:\n%s", query)
 	}
 	if strings.Contains(query, "work_unit_investments.repo_id IN {repo_ids:Array(String)}") {
@@ -170,12 +172,12 @@ func TestFetchWorkUnitInvestmentsTeamScopeNeverRoundTripsForRepoIDs(t *testing.T
 	}
 	var sawTeamIDs bool
 	for _, b := range capture.lastBindings {
-		if b.Name == "team_repo_scope_ids" {
+		if b.Name == teamscope.BindingTeamIDs {
 			sawTeamIDs = true
 		}
 	}
 	if !sawTeamIDs {
-		t.Fatalf("bindings = %+v, want team_repo_scope_ids", capture.lastBindings)
+		t.Fatalf("bindings = %+v, want %s", capture.lastBindings, teamscope.BindingTeamIDs)
 	}
 }
 
@@ -194,7 +196,7 @@ func TestFetchWorkUnitInvestmentsUnionsExplicitReposWithTeamScope(t *testing.T) 
 		t.Fatalf("NewReader: %v", err)
 	}
 
-	teamCondition, teamBindings := TeamRepoScopeCondition("org-1", "work_unit_investments.repo_id", []string{"team-x"})
+	teamCondition, teamBindings := teamscope.RepoCondition("org-1", "work_unit_investments.repo_id", []string{"team-x"}, teamScopeAsOf)
 	if _, err := reader.FetchWorkUnitInvestments(t.Context(), WorkUnitInvestmentsFilter{
 		OrgID:              "org-1",
 		RepoIDs:            []string{"repo-1"},
@@ -214,12 +216,12 @@ func TestFetchWorkUnitInvestmentsUnionsExplicitReposWithTeamScope(t *testing.T) 
 		if b.Name == "repo_ids" {
 			sawRepoIDs = true
 		}
-		if b.Name == "team_repo_scope_ids" {
+		if b.Name == teamscope.BindingTeamIDs {
 			sawTeamIDs = true
 		}
 	}
 	if !sawRepoIDs || !sawTeamIDs {
-		t.Fatalf("bindings = %+v, want both repo_ids and team_repo_scope_ids", capture.lastBindings)
+		t.Fatalf("bindings = %+v, want both repo_ids and %s", capture.lastBindings, teamscope.BindingTeamIDs)
 	}
 }
 

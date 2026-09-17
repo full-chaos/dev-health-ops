@@ -19,13 +19,15 @@ import (
 // resolves filters.scope.level in {"team","repo"} down to a concrete
 // repo-id list first.
 type SunburstFilters struct {
-	OrgID         string
-	StartTS       time.Time
-	EndTS         time.Time
-	RepoIDs       []string
-	Themes        []string
-	Subcategories []string
-	Limit         int
+	OrgID              string
+	StartTS            time.Time
+	EndTS              time.Time
+	RepoIDs            []string
+	TeamScopeCondition string
+	TeamScopeBindings  []dhclickhouse.Binding
+	Themes             []string
+	Subcategories      []string
+	Limit              int
 }
 
 func (f SunburstFilters) categoryFilters() categoryFilters {
@@ -66,7 +68,7 @@ func (r *Reader) FetchInvestmentSunburst(ctx context.Context, filters SunburstFi
 	categorySQL, categoryBindings := filters.categoryFilters().clause(
 		"splitByChar('.', subcategory_kv.1)[1]", "subcategory_kv.1",
 	)
-	scopeSQL, scopeBindings := scopeClause(filters.RepoIDs)
+	scopeSQL, scopeBindings := combinedScopeClause(filters.RepoIDs, filters.TeamScopeCondition, filters.TeamScopeBindings)
 
 	query := fmt.Sprintf(`
 SELECT

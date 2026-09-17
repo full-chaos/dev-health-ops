@@ -53,10 +53,10 @@ type AvailabilityFunc func(ctx context.Context, requestedProvider, orgID string)
 // reader.go): it needs its own ClickHouse (repo lookups) and Postgres
 // (team->repo resolution) reads this package doesn't otherwise touch,
 // and every reader in this package already treats repo-id resolution as
-// the caller's job. TeamScopeCondition/TeamScopeBindings carry a team
-// scope's own membership test as a pushed-down SQL condition instead of
-// a second, organization-scale materialized id list -- see
-// TeamRepoScopeCondition's doc comment (repofilter.go) for why.
+// the caller's job. TeamScopeCondition/TeamScopeBindings carry the
+// repositories a team owns as a pushed-down SQL condition instead of a
+// second materialized id list -- see cmd/query-api/internal/teamscope's
+// own doc comment for the source and the semantics.
 //
 // FiltersForCacheKey is whatever filters.model_dump(mode="json") would
 // have produced -- see ComputeCacheKey's own doc comment.

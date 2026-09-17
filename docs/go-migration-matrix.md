@@ -237,7 +237,7 @@ A row that is live, reachable to real clients (`canary`/`primary`) and carries n
 is required before stage 4/5, and "a bare 200 does not qualify".
 
 <!-- BEGIN GENERATED GO API OPERATIONS -->
-_Rendered 2026-09-16T12:25:30Z against main merge-base `0293d516891d479da5807f306ef1474ee50af31c`; SDL digest pin `sha256:19485ec136d04de0935717dca8b4f5fd27dd0351fe96b854d40f433229468fd0`; fleet read 2026-09-16T12:25:30Z via fleet file fleet-prod.json._
+_Rendered 2026-09-16T12:25:30Z against main merge-base `db4d78fa34e504ed78746184d2ba5b51a3dd5c54`; SDL digest pin `sha256:19485ec136d04de0935717dca8b4f5fd27dd0351fe96b854d40f433229468fd0`; fleet read 2026-09-16T12:25:30Z via fleet file fleet-prod.json._
 
 _Rows in `go_api_proof_run` at read time: **515**. Operations reachable to real clients with no deployed-executed proof: **0**. Rows whose mode says Go but whose schema digest no longer matches the pin, so every request silently falls back to Python: **0**._
 
@@ -299,7 +299,7 @@ _32 `/api/v1/*` routes in `src/dev_health_ops/api/main.py`: **32** ported, **0**
 | POST | `/api/v1/home` | ported | `cmd/query-api/home_route.go:59` |
 | GET | `/api/v1/investment` | ported | `cmd/query-api/investment_route.go:106` |
 | POST | `/api/v1/investment` | ported | `cmd/query-api/investment_route.go:106` |
-| POST | `/api/v1/investment/explain` | ported | `cmd/query-api/investment_explain_route.go:122` |
+| POST | `/api/v1/investment/explain` | ported | `cmd/query-api/investment_explain_route.go:123` |
 | POST | `/api/v1/investment/flow` | ported | `cmd/query-api/investment_flow_route.go:86` |
 | POST | `/api/v1/investment/flow/repo-team` | ported | `cmd/query-api/investment_flow_route.go:86` |
 | GET | `/api/v1/investment/sunburst` | ported | `cmd/query-api/investment_route.go:174` |
@@ -314,9 +314,9 @@ _32 `/api/v1/*` routes in `src/dev_health_ops/api/main.py`: **32** ported, **0**
 | GET | `/api/v1/quadrant` | ported | `cmd/query-api/quadrant_route.go:79` |
 | GET | `/api/v1/sankey` | ported | `cmd/query-api/sankey_route.go:80` |
 | POST | `/api/v1/sankey` | ported | `cmd/query-api/sankey_route.go:80` |
-| GET | `/api/v1/work-units` | ported | `cmd/query-api/workunits_route.go:110` |
-| POST | `/api/v1/work-units` | ported | `cmd/query-api/workunits_route.go:110` |
-| POST | `/api/v1/work-units/{work_unit_id}/explain` | ported | `cmd/query-api/workunit_explain_route.go:79` |
+| GET | `/api/v1/work-units` | ported | `cmd/query-api/workunits_route.go:111` |
+| POST | `/api/v1/work-units` | ported | `cmd/query-api/workunits_route.go:111` |
+| POST | `/api/v1/work-units/{work_unit_id}/explain` | ported | `cmd/query-api/workunit_explain_route.go:80` |
 <!-- END GENERATED REST ENDPOINTS -->
 
 ## SYNC

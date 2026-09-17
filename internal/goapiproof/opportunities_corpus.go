@@ -50,6 +50,15 @@ var opportunitiesGetEndpointSpec = RESTEndpointSpec{
 			// "home_team_scoped" entry: the baseline leg's team-scope
 			// repository resolution is an extra read the org-scope default
 			// entry above never makes.
+			//
+			// The two planes resolve that repository set from different
+			// tables, and the home builder this route composes additionally
+			// drops the filter outright on the baseline for a repo-scoped
+			// metric, so this entry is one of the knowingly uncovered
+			// findings restcorpus.go's own TEAM SCOPE paragraph names, not
+			// a declared defect. It is visible on the wire as an
+			// opportunity the baseline raises from an organization-wide
+			// movement and the candidate does not raise for the team.
 			Name:                "opportunities_team_scoped",
 			Query:               url.Values{"scope_type": {"team"}},
 			WantCandidateStatus: 200, WantBaselineStatus: 200,
@@ -104,7 +113,8 @@ var opportunitiesPostEndpointSpec = RESTEndpointSpec{
 			// team_id via restidbind.go's BodyPath binding -- the POST-body
 			// twin of the QueryParam binding this route's own GET
 			// "opportunities_team_scoped" entry above uses, matching home's
-			// own "home_team_scoped" POST entry's identical precedent.
+			// own "home_team_scoped" POST entry's identical precedent. Same
+			// knowingly uncovered team-scope finding as its GET twin above.
 			Name:                "opportunities_team_scoped",
 			Body:                map[string]any{"filters": map[string]any{"scope": map[string]any{"level": "team", "ids": []string{"ABC-123"}}}},
 			WantCandidateStatus: 200, WantBaselineStatus: 200,

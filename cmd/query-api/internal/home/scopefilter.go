@@ -1,22 +1,20 @@
 // Repo/team-scope resolution -- ports:
 //   - api/services/filtering.py's resolve_repo_filter_ids/scope_filter_for_metric
 //   - api/queries/scopes.py's resolve_repo_id/resolve_repo_ids/
-//     resolve_repo_ids_for_teams/build_scope_filter_multi
+//     build_scope_filter_multi
 //
-// Duplicated from cmd/query-api/internal/sankey/scopefilter.go rather
-// than imported -- same Python source, same "repeat, don't couple"
-// convention that package's own doc comment establishes.
+// A team scope is the exception: its repositories come from
+// team_repo_ownership through the one shared
+// cmd/query-api/internal/teamscope.RepoCondition, not from a per-package
+// copy. The rule is identical on every route, and a route resolving it its
+// own way answers a different question under the same word.
 //
-// DEDUP: repos and user_metrics_daily are
-// both ReplacingMergeTree tables (last_synced / computed_at
-// respectively, confirmed against prod system.tables). This package
-// reads both FINAL, org_id filtered in the same statement --
-// api/queries/scopes.py's resolve_repo_id/resolve_repo_ids read repos
-// with no dedup at all, and resolve_repo_ids_for_teams reads
-// user_metrics_daily the same way; both are declared Python-plane
-// defects (see internal/goapiproof/restcorpus.go's home declarations),
-// matching sankey/heatmap's own precedent of always reading these two
-// tables FINAL regardless of whether a given aggregate happens to be
+// DEDUP: repos is ReplacingMergeTree(last_synced) and is read FINAL here,
+// org_id filtered in the same statement -- api/queries/scopes.py's
+// resolve_repo_id/resolve_repo_ids read it with no dedup at all, a declared
+// Python-plane defect (see internal/goapiproof/restcorpus.go's home
+// declarations), matching sankey/heatmap's own precedent of always reading
+// this table FINAL regardless of whether a given aggregate happens to be
 // dedup-invariant.
 package home
 
@@ -24,9 +22,11 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
@@ -103,57 +103,18 @@ func resolveRepoIDs(ctx context.Context, client QueryClient, repoRefs []string, 
 	return resolved, nil
 }
 
-// teamRepoScopeCondition returns the repo-id membership test for a
-// team-level scope as a standalone boolean SQL condition (no leading
-// "AND", no trailing statement) -- same shape and rationale as
-// internal/explain/repofilter.go's own copy of this exact fix (see that
-// file's doc comment): a team's true matching-repo count can exceed the
-// read-only client's max_result_rows ceiling (1,000 -- dev-health-go's
-// clickhouse/options.go), which the prior resolveRepoIDsForTeams'
-// standalone `SELECT DISTINCT repo_id FROM user_metrics_daily ...` hit
-// directly in production. Resolving the team's repo set entirely inside
-// this condition means the surrounding statement's own (small) result
-// set is the only thing that ever crosses back to the caller, instead of
-// asking the client to hand back every matching id as its OWN result
-// first. Duplicated here rather than imported, matching this package's
-// own "repeat, don't couple" convention for scopefilter.go's other
-// duplicated helpers (see this file's package doc comment).
-func teamRepoScopeCondition(orgID, repoColumn string, teamIDs []string) (condition string, bindings []dhclickhouse.Binding) {
-	var teamList []string
-	for _, id := range teamIDs {
-		if id != "" {
-			teamList = append(teamList, id)
-		}
-	}
-	if len(teamList) == 0 {
-		return "", nil
-	}
-	return fmt.Sprintf(`%s IN (
-    SELECT toString(id) AS id
-    FROM repos FINAL
-    WHERE org_id = {team_repo_scope_org_id:String}
-      AND toString(id) IN (
-          SELECT DISTINCT toString(repo_id) AS id
-          FROM user_metrics_daily FINAL
-          WHERE org_id = {team_repo_scope_org_id:String}
-            AND team_id IN {team_repo_scope_ids:Array(String)}
-      )
-)`, repoColumn), []dhclickhouse.Binding{
-		{Name: "team_repo_scope_ids", Value: teamList},
-		{Name: "team_repo_scope_org_id", Value: orgID},
-	}
-}
-
-// repoScopeFilter ports resolve_repo_filter_ids (api/services/
-// filtering.py:95-110) as a SQL condition rather than a materialized id
-// list for the team-scope branch (see teamRepoScopeCondition's doc
-// comment for why). Explicit repo refs (an explicit scope.IDs at
-// scope="repo", or what.repos) are still resolved and verified one at a
-// time through resolveRepoIDs -- that list is bounded by what the caller
-// named, not by organization scale, so it stays a plain array binding.
-// The two conditions are ORed together when both are present, matching
-// resolve_repo_filter_ids' own union-of-refs semantics.
-func repoScopeFilter(ctx context.Context, client QueryClient, f Filters, orgID, repoColumn string) (string, []dhclickhouse.Binding, error) {
+// repoScopeFilter narrows a repo-keyed metric to the repositories a request
+// names. Explicit repo refs (scope.IDs at scope="repo", or what.repos) are
+// resolved and verified one at a time through resolveRepoIDs -- that list is
+// bounded by what the caller named, not by organization scale, so it stays a
+// plain array binding. A team scope contributes the repositories that team
+// OWNS, as teamscope.RepoCondition resolves them from team_repo_ownership.
+// The two are ORed when both are present, so a request naming a team and
+// explicit repos sees the union.
+//
+// asOf is the response's own instant, so every metric in one response
+// resolves the same team membership.
+func repoScopeFilter(ctx context.Context, client QueryClient, f Filters, orgID, repoColumn string, asOf time.Time) (string, []dhclickhouse.Binding, error) {
 	var repoRefs []string
 	if f.Scope.Level == "repo" {
 		repoRefs = append(repoRefs, f.Scope.IDs...)
@@ -168,7 +129,7 @@ func repoScopeFilter(ctx context.Context, client QueryClient, f Filters, orgID, 
 	var teamCondition string
 	var teamBindings []dhclickhouse.Binding
 	if f.Scope.Level == "team" && len(f.Scope.IDs) > 0 {
-		teamCondition, teamBindings = teamRepoScopeCondition(orgID, repoColumn, f.Scope.IDs)
+		teamCondition, teamBindings = teamscope.RepoCondition(orgID, repoColumn, f.Scope.IDs, asOf)
 	}
 
 	switch {
@@ -186,12 +147,12 @@ func repoScopeFilter(ctx context.Context, client QueryClient, f Filters, orgID, 
 
 // scopeFilterForMetric ports scope_filter_for_metric (api/services/
 // filtering.py:129-147).
-func scopeFilterForMetric(ctx context.Context, client QueryClient, metricScope string, f Filters, orgID, teamColumn, repoColumn string) (string, []dhclickhouse.Binding, error) {
+func scopeFilterForMetric(ctx context.Context, client QueryClient, metricScope string, f Filters, orgID, teamColumn, repoColumn string, asOf time.Time) (string, []dhclickhouse.Binding, error) {
 	if metricScope == "team" && f.Scope.Level == "team" {
 		return scopeClauseMulti(f.Scope.IDs, teamColumn), scopeBindingsMulti(f.Scope.IDs), nil
 	}
 	if metricScope == "repo" {
-		return repoScopeFilter(ctx, client, f, orgID, repoColumn)
+		return repoScopeFilter(ctx, client, f, orgID, repoColumn, asOf)
 	}
 	return "", nil, nil
 }

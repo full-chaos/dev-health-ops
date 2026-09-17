@@ -246,10 +246,21 @@ func TestHomeReaders_SeededRealClickHouse(t *testing.T) {
 		 ('team-1', generateUUIDv4(), 'Team One', [], toDateTime64('%s',6), '%s')`,
 		tNew, seededOrgID))
 
+	// --- team_repo_ownership: team-1 owns repoID and nothing else, written
+	// the way a re-running sync writes it -- two generations under distinct
+	// valid_from values, both still open. This is what a team scope
+	// resolves through; repoID2 carries no ownership row and must stay out
+	// of every team-scoped read below.
+	for _, validFrom := range []string{tOld, tNew} {
+		seededExec(ctx, t, conn, fmt.Sprintf(
+			`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES
+			 ('%s', 'github', 'team-1', toUUID('%s'), 'acme/checkout-service', 'exact', 'inferred', 0, 0, 0, toDateTime64('%s',3), NULL, toDateTime64('%s',3))`,
+			seededOrgID, repoID, validFrom, validFrom))
+	}
+
 	// --- user_metrics_daily: two versions, same (org_id, repo_id,
-	// author_email, day). Feeds only resolveRepoIDsForTeams' SELECT
-	// DISTINCT repo_id -- dedup-invariant (a duplicate repo_id collapses
-	// under DISTINCT regardless of FINAL).
+	// author_email, day). Its team_id is per-author membership attribution
+	// and feeds no scope resolution here.
 	seededExec(ctx, t, conn, fmt.Sprintf(
 		`INSERT INTO user_metrics_daily (repo_id, day, author_email, commits_count, loc_added, loc_deleted, files_changed, large_commits_count, avg_commit_size_loc, prs_authored, prs_merged, avg_pr_cycle_hours, median_pr_cycle_hours, pr_cycle_p75_hours, pr_cycle_p90_hours, team_id, computed_at, org_id) VALUES
 		 ('%s', '%s', 'dev@example.com', 1, 1, 1, 1, 0, 0, 1, 1, 0, 0, 0, 0, 'team-1', toDateTime('%s'), '%s')`,
@@ -387,17 +398,15 @@ func TestHomeReaders_SeededRealClickHouse(t *testing.T) {
 	})
 
 	t.Run("scopeFilterForMetric_teamScopePushesRepoResolutionIntoSQL", func(t *testing.T) {
-		// Replaces the old resolveRepoIDsForTeams subtest: the team's
-		// matching repo set is no longer materialized as a standalone
-		// query result (see scopefilter.go's teamRepoScopeCondition doc
-		// comment) -- it is now a condition inside the SAME statement the
-		// caller already runs. This proves that pushed-down condition
-		// still narrows correctly against the real engine at small scale;
-		// TestHomeLargeTeamRepoScope_ScopeFilterForMetricSucceeds proves
-		// it at the scale (>1,000 distinct repos) that broke the prior,
-		// materializing shape in production.
+		// The team's repository set is a condition inside the SAME
+		// statement the caller already runs, resolved from
+		// team_repo_ownership (teamscope.RepoCondition). This proves it
+		// narrows correctly against the real engine at small scale;
+		// TestHomeTeamOwnership_ScopeFilterForMetricNarrowsToTheOwnedRepos
+		// proves it with an ownership row count above the read-only
+		// client's result ceiling.
 		f := Filters{Scope: ScopeFilter{Level: "team", IDs: []string{"team-1"}}}
-		scopeFilter, scopeBindings, err := scopeFilterForMetric(ctx, client, "repo", f, seededOrgID, "team_id", "repo_id")
+		scopeFilter, scopeBindings, err := scopeFilterForMetric(ctx, client, "repo", f, seededOrgID, "team_id", "repo_id", teamScopeReadAsOf)
 		if err != nil {
 			t.Fatalf("scopeFilterForMetric: %v", err)
 		}
@@ -406,7 +415,7 @@ func TestHomeReaders_SeededRealClickHouse(t *testing.T) {
 			t.Fatalf("fetchMetricValue with team scope: %v", err)
 		}
 		if got != 1000 {
-			t.Errorf("fetchMetricValue with team-1's scope = %v, want 1000 (team-1's only repo is repoID; repoID2 belongs to no team and must not be counted)", got)
+			t.Errorf("fetchMetricValue with team-1's scope = %v, want 1000 (team-1 owns repoID and nothing else; repoID2 carries no ownership row and must not be counted)", got)
 		}
 	})
 

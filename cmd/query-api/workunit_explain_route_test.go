@@ -13,6 +13,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/authctx"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/investmentexplain"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
+
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/teamscope"
 )
 
 // newTestWorkUnitExplainHandler builds the work handler over the shared
@@ -519,7 +521,7 @@ func TestWorkUnitExplainTeamScopePushesConditionIntoTheWorkUnitQuery(t *testing.
 
 	found := false
 	for index, statement := range client.queries {
-		if !strings.Contains(statement, "FROM user_metrics_daily") {
+		if !strings.Contains(statement, teamscope.Marker) {
 			continue
 		}
 		// The membership test belongs INSIDE the work-unit investments
@@ -531,17 +533,17 @@ func TestWorkUnitExplainTeamScopePushesConditionIntoTheWorkUnitQuery(t *testing.
 			t.Fatalf("a query carries the team-scope membership subquery as its OWN standalone statement, not nested inside the work-unit investments read:\n%s", statement)
 		}
 		found = true
-		raw, present := bindingValue(client.bindings[index], "team_repo_scope_ids")
+		raw, present := bindingValue(client.bindings[index], teamscope.BindingTeamIDs)
 		if !present {
-			t.Fatalf("the work-unit investments query carries no team_repo_scope_ids binding")
+			t.Fatalf("the work-unit investments query carries no %s binding", teamscope.BindingTeamIDs)
 		}
 		ids, ok := raw.([]string)
 		if !ok || len(ids) != 1 || ids[0] != "team-42" {
-			t.Errorf("team_repo_scope_ids binding = %#v, want [\"team-42\"]", raw)
+			t.Errorf("%s binding = %#v, want [\"team-42\"]", teamscope.BindingTeamIDs, raw)
 		}
 	}
 	if !found {
-		t.Fatal("no emitted query carries the pushed-down team-scope condition -- scope_type=team never reached TeamRepoScopeCondition, so the team scope is silently dropped")
+		t.Fatal("no emitted query carries the pushed-down team-scope condition -- scope_type=team never reached teamscope.RepoCondition, so the team scope is silently dropped")
 	}
 }
 
@@ -560,11 +562,11 @@ func TestWorkUnitExplainOrgScopeEmitsNoTeamCondition(t *testing.T) {
 		t.Fatalf("status = %d, want %d\nbody=%s", rec.Code, http.StatusNotFound, rec.Body.String())
 	}
 	for index, statement := range client.queries {
-		if strings.Contains(statement, "FROM user_metrics_daily") {
+		if strings.Contains(statement, teamscope.Marker) {
 			t.Errorf("an org-scoped request emitted the team-scope membership subquery:\n%s", statement)
 		}
-		if _, present := bindingValue(client.bindings[index], "team_repo_scope_ids"); present {
-			t.Errorf("an org-scoped request carries a team_repo_scope_ids binding")
+		if _, present := bindingValue(client.bindings[index], teamscope.BindingTeamIDs); present {
+			t.Errorf("an org-scoped request carries a %s binding", teamscope.BindingTeamIDs)
 		}
 	}
 }

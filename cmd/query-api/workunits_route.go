@@ -40,6 +40,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/investmentexplain"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/principal"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/routeswitch"
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/teamscope"
 )
 
 // workUnitsGetOperation/workUnitsPostOperation are this route's
@@ -443,7 +444,7 @@ func newWorkUnitsGetHandler(reader *investmentexplain.Reader) http.HandlerFunc {
 		var teamCondition string
 		var teamBindings []dhclickhouse.Binding
 		if scopeType == "team" && len(scopeIDs) > 0 {
-			teamCondition, teamBindings = investmentexplain.TeamRepoScopeCondition(claims.OrgID, repoScopeColumn, scopeIDs)
+			teamCondition, teamBindings = teamscope.RepoCondition(claims.OrgID, repoScopeColumn, scopeIDs, time.Now().UTC())
 		}
 
 		investments, err := reader.BuildWorkUnitInvestments(r.Context(), investmentexplain.BuildWorkUnitInvestmentsOptions{
@@ -600,7 +601,7 @@ func newWorkUnitsPostHandler(reader *investmentexplain.Reader) http.HandlerFunc 
 		// scopeRepoFilter (investment_explain_route.go) already ports
 		// resolve_repo_filter_ids's full team-scope branch over a raw
 		// filters map -- reused here rather than a second copy.
-		repoIDs, teamCondition, teamBindings, err := scopeRepoFilter(r.Context(), reader, filters, claims.OrgID)
+		repoIDs, teamCondition, teamBindings, err := scopeRepoFilter(r.Context(), reader, filters, claims.OrgID, time.Now().UTC())
 		if err != nil {
 			writeRESTDataUnavailable(w, r, "work_units", claims.OrgID, err)
 			return

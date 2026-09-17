@@ -1,9 +1,9 @@
 //go:build integration
 
-// This file reproduces the team-scope repo-id row-cap defect class
-// against a real ClickHouse engine, not a fake: a fake client cannot
-// enforce max_result_rows at all, so the row-cap failure this pins can
-// only be shown against the genuine driver.
+// Team scope resolved from team_repo_ownership, against a real ClickHouse
+// engine rather than a fake: a fake client enforces no max_result_rows at
+// all, so the row ceiling these tests turn on can only be shown against the
+// genuine driver.
 package explain
 
 import (
@@ -23,22 +23,27 @@ import (
 )
 
 // resultRowsExceededCode is ClickHouse's own numeric code for "Limit for
-// result exceeded" (max_result_rows) -- the exact code the production
-// telemetry this class was diagnosed from carries (code 396).
+// result exceeded" (max_result_rows), the ceiling dev-health-go's
+// clickhouse/options.go applies to every read-only client at 1,000 rows.
 const resultRowsExceededCode = 396
 
-// teamScopeLargeRepoCount exceeds the read-only client's default
-// max_result_rows ceiling (1,000 -- dev-health-go's clickhouse/options.go)
-// so the seeded team's own DISTINCT repo_id count genuinely cannot be
-// returned to a caller as a standalone query result, matching production
-// (1.88k-2.22k distinct rows observed there for the failing requests).
-const teamScopeLargeRepoCount = 1500
+// A team above the read-only client's ceiling. teamOwnedRepoCount is the
+// number of repositories the seeded team owns, chosen above 1,000 so that
+// the team's own repository SET -- the list a caller materialises before it
+// can filter by it -- cannot be returned as a query result at all.
+// teamOwnershipRunCount is how many ownership generations each of those
+// repositories carries; valid_from is part of team_repo_ownership's sorting
+// key and every writer stamps it with its own run instant, so one
+// team/repository pair holds one row per sync run and FINAL collapses none
+// of them.
+const (
+	teamOwnedRepoCount    = 1200
+	teamOwnershipRunCount = 1
+)
 
 // newExplainTestClickHouse starts a real testcontainers ClickHouse,
 // migrates it to the real chain's head, and returns both an admin
-// connection (for seeding) and a QueryClient built with the SAME default
-// options production uses (no MaxResultRows override), matching
-// teamattribution_integration_test.go's own copy of this pattern.
+// connection (for seeding) and a QueryClient.
 func newExplainTestClickHouse(ctx context.Context, t *testing.T) (admin stdclickhouse.Conn, client QueryClient) {
 	t.Helper()
 	ch, err := containers.StartClickHouse(ctx)
@@ -68,77 +73,99 @@ func newExplainTestClickHouse(ctx context.Context, t *testing.T) (admin stdclick
 	return admin, queryClient
 }
 
-// seedTeamScopedRepos writes n repos rows plus one user_metrics_daily row
-// per repo, all under the same org/team, giving the team exactly n
-// DISTINCT matching repo ids -- the shape resolveRepoIDsForTeams'
-// original query (and teamRepoScopeCondition's own nested one) both
-// select over.
-func seedTeamScopedRepos(ctx context.Context, t *testing.T, admin stdclickhouse.Conn, orgID, teamID string, n int) []string {
+// seedExplainTeamOwnership writes repoCount repos, one repo_metrics_daily
+// row per repo inside the window the tests read, and runCount ownership
+// generations per repo -- each generation a distinct valid_from, exactly as
+// a re-running sync writes them.
+func seedExplainTeamOwnership(ctx context.Context, t *testing.T, admin stdclickhouse.Conn, orgID, teamID string, repoCount, runCount int) []string {
 	t.Helper()
 	day := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 	computedAt := time.Date(2026, 9, 1, 6, 0, 0, 0, time.UTC)
 	syncedAt := time.Date(2026, 9, 1, 5, 0, 0, 0, time.UTC)
 
 	repoBatch, err := admin.PrepareBatch(ctx, `
-        INSERT INTO repos (id, repo, org_id, created_at, last_synced)
+        INSERT INTO repos (id, repo, provider, org_id, created_at, last_synced)
     `)
 	if err != nil {
 		t.Fatalf("prepare repos batch: %v", err)
 	}
 	metricsBatch, err := admin.PrepareBatch(ctx, `
-        INSERT INTO user_metrics_daily (org_id, repo_id, day, author_email, team_id, computed_at)
+        INSERT INTO repo_metrics_daily (org_id, repo_id, day, pr_first_review_p50_hours, computed_at)
     `)
 	if err != nil {
-		t.Fatalf("prepare user_metrics_daily batch: %v", err)
+		t.Fatalf("prepare repo_metrics_daily batch: %v", err)
+	}
+	ownershipBatch, err := admin.PrepareBatch(ctx, `
+        INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)
+    `)
+	if err != nil {
+		t.Fatalf("prepare team_repo_ownership batch: %v", err)
 	}
 
-	ids := make([]string, 0, n)
-	for i := 0; i < n; i++ {
+	ids := make([]string, 0, repoCount)
+	for i := 0; i < repoCount; i++ {
 		id := uuid.New()
-		idStr := id.String()
-		ids = append(ids, idStr)
-		if err := repoBatch.Append(id, fmt.Sprintf("acme/repo-%d", i), orgID, syncedAt, syncedAt); err != nil {
+		name := fmt.Sprintf("acme/repo-%d", i)
+		ids = append(ids, id.String())
+		if err := repoBatch.Append(id, name, "github", orgID, syncedAt, syncedAt); err != nil {
 			t.Fatalf("append repos row %d: %v", i, err)
 		}
-		if err := metricsBatch.Append(orgID, id, day, fmt.Sprintf("user-%d@example.com", i), teamID, computedAt); err != nil {
-			t.Fatalf("append user_metrics_daily row %d: %v", i, err)
+		hours := float64(4)
+		if err := metricsBatch.Append(orgID, id, day, &hours, computedAt); err != nil {
+			t.Fatalf("append repo_metrics_daily row %d: %v", i, err)
+		}
+		for run := 0; run < runCount; run++ {
+			validFrom := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).Add(time.Duration(run) * time.Hour)
+			if err := ownershipBatch.Append(
+				orgID, "github", teamID, id, name, "exact", "inferred",
+				uint8(0), uint16(0), int32(0), validFrom, nil, validFrom,
+			); err != nil {
+				t.Fatalf("append team_repo_ownership row %d/%d: %v", i, run, err)
+			}
 		}
 	}
 	if err := repoBatch.Send(); err != nil {
 		t.Fatalf("send repos batch: %v", err)
 	}
 	if err := metricsBatch.Send(); err != nil {
-		t.Fatalf("send user_metrics_daily batch: %v", err)
+		t.Fatalf("send repo_metrics_daily batch: %v", err)
+	}
+	if err := ownershipBatch.Send(); err != nil {
+		t.Fatalf("send team_repo_ownership batch: %v", err)
 	}
 	return ids
 }
 
-// TestLargeTeamRepoScope_OldMaterializedQueryHitsResultRowCap reproduces
-// the underlying defect directly: the EXACT statement text the prior
-// resolveRepoIDsForTeams sent (a standalone SELECT DISTINCT of every
-// matching repo_id) against a team whose true matching count exceeds the
-// read-only client's default row ceiling. This must fail with ClickHouse's
-// own code-396 "Limit for result exceeded" -- the same failure production's
-// own query-api-503-causes.txt telemetry recorded for these requests --
-// proving the defect is real against the genuine engine, not a
-// characteristic of a fake client that can't enforce max_result_rows at
-// all.
-func TestLargeTeamRepoScope_OldMaterializedQueryHitsResultRowCap(t *testing.T) {
+// This is what the shared condition avoids having to do. The team's own
+// repository set, read as a query result of its own -- the list a caller must
+// hold before it can filter by it -- exceeds the read-only client's 1,000-row
+// ceiling and fails with ClickHouse code 396. The condition resolves the same
+// set inside the caller's own statement, where only that statement's own rows
+// cross back.
+func TestExplainTeamOwnership_MaterializingTheOwnedRepositorySetHitsTheResultRowCap(t *testing.T) {
 	ctx := context.Background()
 	admin, client := newExplainTestClickHouse(ctx, t)
 
-	const orgID = "org-scale-old"
-	const teamID = "team-scale-old"
-	seedTeamScopedRepos(ctx, t, admin, orgID, teamID, teamScopeLargeRepoCount)
+	const orgID = "explain-org-ownership-cap"
+	const teamID = "explain-team-ownership-cap"
+	seedExplainTeamOwnership(ctx, t, admin, orgID, teamID, teamOwnedRepoCount, teamOwnershipRunCount)
 
-	oldQuery := `
-SELECT DISTINCT toString(repo_id) AS id
-FROM user_metrics_daily FINAL
-WHERE org_id = {org_id:String}
-  AND team_id IN {team_ids:Array(String)}
+	rows, err := client.Query(ctx, `
+SELECT DISTINCT coalesce(toString(o.repo_id), toString(r.id)) AS owned_repo_id
+FROM team_repo_ownership AS o FINAL
+LEFT JOIN (
+    SELECT org_id, provider, id, repo, 1 AS matched
+    FROM repos FINAL
+    WHERE org_id = {org_id:String}
+) AS r
+    ON r.org_id = o.org_id
+       AND r.provider = o.provider
+       AND lower(r.repo) = lower(o.repo_full_name)
+WHERE o.org_id = {org_id:String}
+  AND o.team_id IN {team_ids:Array(String)}
+  AND (o.repo_id IS NOT NULL OR r.matched = 1)
 SETTINGS max_execution_time = 30
-`
-	rows, err := client.Query(ctx, oldQuery, []dhclickhouse.Binding{
+`, []dhclickhouse.Binding{
 		{Name: "team_ids", Value: []string{teamID}},
 		{Name: "org_id", Value: orgID},
 	})
@@ -149,51 +176,69 @@ SETTINGS max_execution_time = 30
 		err = rows.Err()
 	}
 	if err == nil {
-		t.Fatalf("old materialized query succeeded against %d distinct repos -- expected ClickHouse code %d (result row cap); the reproduction did not trigger, so this test cannot certify the fix against it", teamScopeLargeRepoCount, resultRowsExceededCode)
+		t.Fatalf("reading team %q's own repository set as a query result succeeded over %d repositories -- expected ClickHouse code %d (result row cap); without that failure this test states nothing about what the pushed-down condition avoids", teamID, teamOwnedRepoCount, resultRowsExceededCode)
 	}
 	var exc *chproto.Exception
 	if !errors.As(err, &exc) || exc.Code != resultRowsExceededCode {
-		t.Fatalf("old materialized query failed with %v, want ClickHouse code %d (result row cap)", err, resultRowsExceededCode)
+		t.Fatalf("materializing the owned repository set failed with %v, want ClickHouse code %d (result row cap)", err, resultRowsExceededCode)
 	}
 }
 
-// TestLargeTeamRepoScope_ExplainRouteSucceeds is this ticket's own proof:
-// the SAME oversized team scope, driven through the real route entry point
-// (BuildExplainResponse, exactly as the HTTP handler calls it), against
-// the SAME default-options client the reproduction above used, must
-// succeed -- the pushed-down team condition never asks the client to
-// materialize the team's own repo-id set as a standalone result.
-func TestLargeTeamRepoScope_ExplainRouteSucceeds(t *testing.T) {
+// TestExplainTeamOwnership_ExplainRouteNarrowsToTheOwnedRepos drives the
+// same team through the real route entry point, exactly as the HTTP handler
+// calls it. It answers over a repository count above the ceiling, and it
+// narrows: a repository the team does not own contributes nothing to
+// the headline value.
+func TestExplainTeamOwnership_ExplainRouteNarrowsToTheOwnedRepos(t *testing.T) {
 	ctx := context.Background()
 	admin, client := newExplainTestClickHouse(ctx, t)
 
-	const orgID = "org-scale-new"
-	const teamID = "team-scale-new"
-	seedTeamScopedRepos(ctx, t, admin, orgID, teamID, teamScopeLargeRepoCount)
+	const orgID = "explain-org-ownership-narrow"
+	const teamID = "explain-team-ownership-narrow"
+	seedExplainTeamOwnership(ctx, t, admin, orgID, teamID, teamOwnedRepoCount, teamOwnershipRunCount)
+	seedExplainUnownedRepo(ctx, t, admin, orgID)
 
 	reader, err := NewReader(client)
 	if err != nil {
 		t.Fatalf("NewReader: %v", err)
 	}
 
-	start := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
-	end := time.Date(2026, 9, 8, 0, 0, 0, 0, time.UTC)
-	compareStart := time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC)
-	compareEnd := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
-
 	got, err := BuildExplainResponse(ctx, reader, orgID, Params{
 		Metric:       "review_latency",
-		StartDay:     start,
-		EndDay:       end,
-		CompareStart: compareStart,
-		CompareEnd:   compareEnd,
+		StartDay:     time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC),
+		EndDay:       time.Date(2026, 9, 8, 0, 0, 0, 0, time.UTC),
+		CompareStart: time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC),
+		CompareEnd:   time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC),
 		ScopeLevel:   "team",
 		ScopeIDs:     []string{teamID},
 	})
 	if err != nil {
-		t.Fatalf("BuildExplainResponse with a %d-repo team scope: %v (this is the exact request shape production's query-api-503-causes.txt recorded degrading to 503)", teamScopeLargeRepoCount, err)
+		t.Fatalf("BuildExplainResponse over %d owned repositories: %v", teamOwnedRepoCount, err)
 	}
 	if got == nil {
 		t.Fatal("BuildExplainResponse returned a nil response with no error")
+	}
+	if got.Value != 4 {
+		t.Fatalf("review_latency for team %q = %v, want 4 (the owned repositories' own value -- the unowned repository's 400 must not move it)", teamID, got.Value)
+	}
+}
+
+// seedExplainUnownedRepo adds one repository with metric rows and no
+// ownership row at all, so a narrowing assertion can fail when narrowing
+// stops.
+func seedExplainUnownedRepo(ctx context.Context, t *testing.T, admin stdclickhouse.Conn, orgID string) {
+	t.Helper()
+	day := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	computedAt := time.Date(2026, 9, 1, 6, 0, 0, 0, time.UTC)
+	syncedAt := time.Date(2026, 9, 1, 5, 0, 0, 0, time.UTC)
+	id := uuid.New()
+	if err := admin.Exec(ctx, `INSERT INTO repos (id, repo, provider, org_id, created_at, last_synced) VALUES (?, ?, ?, ?, ?, ?)`,
+		id, "acme/unowned", "github", orgID, syncedAt, syncedAt); err != nil {
+		t.Fatalf("seed unowned repo: %v", err)
+	}
+	hours := float64(400)
+	if err := admin.Exec(ctx, `INSERT INTO repo_metrics_daily (org_id, repo_id, day, pr_first_review_p50_hours, computed_at) VALUES (?, ?, ?, ?, ?)`,
+		orgID, id, day, &hours, computedAt); err != nil {
+		t.Fatalf("seed unowned repo metrics: %v", err)
 	}
 }

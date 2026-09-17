@@ -10,6 +10,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/analytics"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/investmentexplain"
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/teamscope"
 )
 
 // Response is the wire shape of InvestmentResponse (api/models/schemas.py:
@@ -189,10 +190,16 @@ func BuildResponse(ctx context.Context, reader *Reader, orgID string, params Par
 			return nil, err
 		}
 	}
+	var teamCondition string
+	var teamBindings []dhclickhouse.Binding
+	if params.ScopeLevel == "team" && len(params.ScopeIDs) > 0 {
+		teamCondition, teamBindings = teamscope.RepoCondition(orgID, "repo_id", params.ScopeIDs, time.Now().UTC())
+	}
 
 	breakdownFilters := investmentexplain.BreakdownFilters{
 		OrgID: orgID, StartTS: params.StartTS, EndTS: params.EndTS,
-		RepoIDs: repoIDs, Themes: themes, Subcategories: subcategories,
+		RepoIDs: repoIDs, TeamScopeCondition: teamCondition, TeamScopeBindings: teamBindings,
+		Themes: themes, Subcategories: subcategories,
 	}
 	rows, err := reader.explainR.FetchInvestmentBreakdown(ctx, breakdownFilters)
 	if err != nil {
@@ -207,7 +214,8 @@ func BuildResponse(ctx context.Context, reader *Reader, orgID string, params Par
 
 	qualityRow, found, err := reader.FetchInvestmentQualityStats(ctx, QualityStatsFilters{
 		OrgID: orgID, StartTS: params.StartTS, EndTS: params.EndTS,
-		RepoIDs: repoIDs, Themes: themes, Subcategories: subcategories,
+		RepoIDs: repoIDs, TeamScopeCondition: teamCondition, TeamScopeBindings: teamBindings,
+		Themes: themes, Subcategories: subcategories,
 	})
 	if err != nil {
 		return nil, err
@@ -283,10 +291,16 @@ func BuildSunburstResponse(ctx context.Context, reader *Reader, orgID string, pa
 			return nil, err
 		}
 	}
+	var teamCondition string
+	var teamBindings []dhclickhouse.Binding
+	if params.ScopeLevel == "team" && len(params.ScopeIDs) > 0 {
+		teamCondition, teamBindings = teamscope.RepoCondition(orgID, "repo_id", params.ScopeIDs, time.Now().UTC())
+	}
 
 	mockFilters := investmentexplain.BreakdownFilters{
 		OrgID: orgID, StartTS: params.StartTS, EndTS: params.EndTS,
-		RepoIDs: repoIDs, Themes: themes, Subcategories: subcategories,
+		RepoIDs: repoIDs, TeamScopeCondition: teamCondition, TeamScopeBindings: teamBindings,
+		Themes: themes, Subcategories: subcategories,
 	}
 	mockCount, err := reader.explainR.FetchMockFixtureInvestmentRowCount(ctx, mockFilters)
 	if err != nil {
@@ -296,7 +310,8 @@ func BuildSunburstResponse(ctx context.Context, reader *Reader, orgID string, pa
 
 	rows, err := reader.FetchInvestmentSunburst(ctx, SunburstFilters{
 		OrgID: orgID, StartTS: params.StartTS, EndTS: params.EndTS,
-		RepoIDs: repoIDs, Themes: themes, Subcategories: subcategories, Limit: params.Limit,
+		RepoIDs: repoIDs, TeamScopeCondition: teamCondition, TeamScopeBindings: teamBindings,
+		Themes: themes, Subcategories: subcategories, Limit: params.Limit,
 	})
 	if err != nil {
 		return nil, err

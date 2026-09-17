@@ -11,22 +11,20 @@ import (
 )
 
 // QualityStatsFilters is fetch_investment_quality_stats' own parameter
-// list (api/queries/investment.py:1008-1079), minus team_scope_ids:
-// neither GET/POST /api/v1/investment nor GET
-// /api/v1/investment/sunburst ever passes a team scope through to this
-// query (that branch belongs to a different caller, api/services/
-// analytics.py's own _resolve_evidence_quality_stats), so this port
-// omits the unreachable parameter rather than carrying dead code for it
-// -- the same only-port-what's-reachable discipline
-// analytics.compileInvestmentQualityStats already documents for the same
-// reason.
+// list (api/queries/investment.py:1008-1079). RepoIDs carries the explicit
+// repo refs a request names; TeamScopeCondition/TeamScopeBindings carry a
+// team scope's owned repositories as a pushed-down condition, the same pair
+// investmentexplain.BreakdownFilters takes, so the quality stats are read
+// over the SAME rows the breakdown beside them is read over.
 type QualityStatsFilters struct {
-	OrgID         string
-	StartTS       time.Time
-	EndTS         time.Time
-	RepoIDs       []string
-	Themes        []string
-	Subcategories []string
+	OrgID              string
+	StartTS            time.Time
+	EndTS              time.Time
+	RepoIDs            []string
+	TeamScopeCondition string
+	TeamScopeBindings  []dhclickhouse.Binding
+	Themes             []string
+	Subcategories      []string
 }
 
 func (f QualityStatsFilters) categoryClause() (sql string, bindings []dhclickhouse.Binding) {
@@ -76,7 +74,7 @@ func (r *Reader) FetchInvestmentQualityStats(ctx context.Context, filters Qualit
 	}
 
 	categorySQL, categoryBindings := filters.categoryClause()
-	scopeSQL, scopeBindings := scopeClause(filters.RepoIDs)
+	scopeSQL, scopeBindings := combinedScopeClause(filters.RepoIDs, filters.TeamScopeCondition, filters.TeamScopeBindings)
 
 	query := fmt.Sprintf(`
 SELECT

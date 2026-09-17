@@ -102,60 +102,10 @@ func resolveRepoIDs(ctx context.Context, client QueryClient, repoRefs []string, 
 	return resolved, nil
 }
 
-// resolveRepoIDsForTeams ports resolve_repo_ids_for_teams (api/queries/
-// scopes.py:72-89). user_metrics_daily is read as a plain (undeduped) scan
-// by Python here too; this port matches that unchanged, same precedent as
-// sankey/scopefilter.go's own copy of this exact function.
-func resolveRepoIDsForTeams(ctx context.Context, client QueryClient, teamIDs []string, orgID string) ([]string, error) {
-	if client == nil {
-		return nil, ErrUnavailable
-	}
-
-	var teamList []string
-	for _, id := range teamIDs {
-		if id != "" {
-			teamList = append(teamList, id)
-		}
-	}
-	if len(teamList) == 0 {
-		return nil, nil
-	}
-
-	query := fmt.Sprintf(`
-SELECT DISTINCT toString(repo_id) AS id
-FROM user_metrics_daily FINAL
-WHERE org_id = {org_id:String}
-  AND team_id IN {team_ids:Array(String)}
-%s
-`, settingsMaxExecutionTime())
-	bindings := []dhclickhouse.Binding{
-		{Name: "team_ids", Value: teamList},
-		{Name: "org_id", Value: orgID},
-	}
-
-	rows, err := client.Query(ctx, query, bindings)
-	if err != nil {
-		return nil, fmt.Errorf("investmentflow: resolve repo ids for teams: %w", err)
-	}
-	defer rows.Close()
-
-	var out []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("investmentflow: scan resolve repo ids for teams row: %w", err)
-		}
-		if id != "" {
-			out = append(out, id)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("investmentflow: iterate resolve repo ids for teams rows: %w", err)
-	}
-	return out, nil
-}
-
-// resolveRepoFilterIDs ports resolve_repo_filter_ids (api/services/
+// resolveRepoFilterIDs resolves the EXPLICIT repo refs a request names. A
+// team scope resolves nowhere here: its repositories come from
+// team_repo_ownership, pushed into SQL by teamscope.RepoCondition.
+// Mirrors the explicit-ref half of resolve_repo_filter_ids (api/services/
 // filtering.py:95-110).
 func resolveRepoFilterIDs(ctx context.Context, client QueryClient, scopeLevel string, scopeIDs, whatRepos []string, orgID string) ([]string, error) {
 	var repoRefs []string
@@ -163,13 +113,6 @@ func resolveRepoFilterIDs(ctx context.Context, client QueryClient, scopeLevel st
 		repoRefs = append(repoRefs, scopeIDs...)
 	}
 	repoRefs = append(repoRefs, whatRepos...)
-	if scopeLevel == "team" && len(scopeIDs) > 0 {
-		teamRepoIDs, err := resolveRepoIDsForTeams(ctx, client, scopeIDs, orgID)
-		if err != nil {
-			return nil, err
-		}
-		repoRefs = append(repoRefs, teamRepoIDs...)
-	}
 	return resolveRepoIDs(ctx, client, repoRefs, orgID)
 }
 

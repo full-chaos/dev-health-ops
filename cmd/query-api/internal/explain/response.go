@@ -4,8 +4,11 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/teamscope"
 )
 
 // scopeClauseRepo/scopeClauseTeam port build_scope_filter_multi
@@ -25,7 +28,7 @@ func scopeClauseRepo(repoIDs []string) (filterSQL string, bindings []dhclickhous
 
 // combineRepoScopeConditions ORs an explicit repo-id membership clause
 // (scopeClauseRepo's own " AND ..." fragment) with a team-derived
-// condition (teamRepoScopeCondition's bare boolean, no "AND"/"OR" of its
+// condition (teamscope.RepoCondition's bare boolean, no "AND"/"OR" of its
 // own) into ONE "AND (...)" fragment -- resolve_repo_filter_ids' own
 // Python shape unions explicit refs and team-resolved ids into a SINGLE
 // id list before filtering, so a repo matches when it is named directly
@@ -102,7 +105,7 @@ func metricStatusFilterSQL(status string) string {
 // change_failure_rate now actually narrows to the requested scope, where
 // Python's real endpoint today does not. Flagged in RISK-NOTES for a
 // follow-up ticket against the Python route while it still exists.
-func (reader *Reader) scopeFilterForMetric(ctx context.Context, metricScope string, scopeLevel string, scopeIDs, whatRepos []string, orgID string) (filterSQL string, bindings []dhclickhouse.Binding, err error) {
+func (reader *Reader) scopeFilterForMetric(ctx context.Context, metricScope string, scopeLevel string, scopeIDs, whatRepos []string, orgID string, asOf time.Time) (filterSQL string, bindings []dhclickhouse.Binding, err error) {
 	if metricScope == "team" && scopeLevel == "team" {
 		filterSQL, bindings = scopeClauseTeam(scopeIDs)
 		return filterSQL, bindings, nil
@@ -122,7 +125,7 @@ func (reader *Reader) scopeFilterForMetric(ctx context.Context, metricScope stri
 		var teamCondition string
 		var teamBindings []dhclickhouse.Binding
 		if scopeLevel == "team" {
-			teamCondition, teamBindings = teamRepoScopeCondition(orgID, scopeIDs)
+			teamCondition, teamBindings = teamscope.RepoCondition(orgID, "repo_id", scopeIDs, asOf)
 		}
 
 		filterSQL, bindings = combineRepoScopeConditions(explicitSQL, explicitBindings, teamCondition, teamBindings)
@@ -146,7 +149,9 @@ func BuildExplainResponse(ctx context.Context, reader *Reader, orgID string, par
 
 	config := resolveMetricConfig(params.Metric)
 
-	scopeFilterSQL, scopeBindings, err := reader.scopeFilterForMetric(ctx, config.Scope, params.ScopeLevel, params.ScopeIDs, params.WhatRepos, orgID)
+	// One instant for the whole response: the current and comparison windows
+	// below share one scope filter, so they must share one team membership.
+	scopeFilterSQL, scopeBindings, err := reader.scopeFilterForMetric(ctx, config.Scope, params.ScopeLevel, params.ScopeIDs, params.WhatRepos, orgID, time.Now().UTC())
 	if err != nil {
 		return nil, err
 	}

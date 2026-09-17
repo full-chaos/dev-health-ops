@@ -45,6 +45,8 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/investmentexplain"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/teamscope"
 )
 
 func splitWorkUnitsSeededDDL(sql string) []string {
@@ -148,6 +150,23 @@ CREATE TABLE repos (
     provider String DEFAULT 'unknown'
 ) ENGINE = ReplacingMergeTree(last_synced)
 ORDER BY (org_id, id);
+
+CREATE TABLE team_repo_ownership (
+    org_id String,
+    provider String,
+    team_id String,
+    repo_id Nullable(UUID),
+    repo_full_name String,
+    match_type Enum8('exact' = 1, 'pattern' = 2),
+    source Enum8('native' = 1, 'jira_legacy' = 2, 'provider_access' = 3, 'manual' = 4, 'inferred' = 5),
+    is_primary UInt8 DEFAULT 0,
+    specificity UInt16 DEFAULT 0,
+    priority Int32 DEFAULT 0,
+    valid_from DateTime64(3, 'UTC'),
+    valid_to Nullable(DateTime64(3, 'UTC')),
+    updated_at DateTime64(3, 'UTC')
+) ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY (org_id, provider, repo_full_name, team_id, source, valid_from);
 
 CREATE TABLE work_item_team_attributions (
     org_id String,
@@ -429,15 +448,13 @@ func TestWorkUnitsSeededRealClickHouse_QuotesDedupReturnsOneEntry(t *testing.T) 
 	}
 }
 
-// TestWorkUnitsSeededRealClickHouse_TeamScopeFiltersByResolvedRepoID is
-// mechanism 4: the team-scope branch this route's own "team_scoped"
-// corpus request exercises, run for real against user_metrics_daily AND
-// repos -- investmentexplain.TeamRepoScopeCondition's own nested
-// membership test, evaluated as part of FetchWorkUnitInvestments' own
-// statement, never a separate round trip of its own. No other seeded
-// test in this file (nor the unit test proving the query text) exercises
-// this scope-resolution SQL against a real engine.
-func TestWorkUnitsSeededRealClickHouse_TeamScopeFiltersByResolvedRepoID(t *testing.T) {
+// TestWorkUnitsSeededRealClickHouse_TeamScopeFiltersByOwnedRepoID is
+// mechanism 4: the team-scope branch this route's own "team_scoped" corpus
+// request exercises, run for real against team_repo_ownership AND repos --
+// teamscope.RepoCondition's own membership test, evaluated as part of
+// FetchWorkUnitInvestments' own statement, never a separate round trip of
+// its own.
+func TestWorkUnitsSeededRealClickHouse_TeamScopeFiltersByOwnedRepoID(t *testing.T) {
 	conn, reader, cleanup := startSeededWorkUnitsClickHouse(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -454,16 +471,13 @@ func TestWorkUnitsSeededRealClickHouse_TeamScopeFiltersByResolvedRepoID(t *testi
 		t.Fatalf("seed repos: %v", err)
 	}
 	if err := conn.Exec(ctx, fmt.Sprintf(
-		`INSERT INTO user_metrics_daily (repo_id, day, author_email, commits_count, loc_added, loc_deleted,
-			files_changed, large_commits_count, avg_commit_size_loc, prs_authored, prs_merged,
-			avg_pr_cycle_hours, median_pr_cycle_hours, pr_cycle_p75_hours, pr_cycle_p90_hours,
-			prs_with_first_review, reviews_given, changes_requested_given, reviews_received,
-			review_reciprocity, team_id, team_name, computed_at, org_id)
-		VALUES ('%s', '2026-01-05', 'dev@example.com', 1, 0, 0, 1, 0, 0.0, 0, 0, 0.0, 0.0, 0.0, 0.0,
-			0, 0, 0, 0, 0.0, 'team-1', 'Team One', toDateTime('%s'), '%s')`,
-		memberRepoID, computedAt, workUnitsSeededOrgID,
+		`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type,
+			source, is_primary, specificity, priority, valid_from, valid_to, updated_at)
+		VALUES ('%s', 'github', 'team-1', toUUID('%s'), 'acme/member-repo', 'exact', 'inferred',
+			0, 0, 0, toDateTime64('%s',3), NULL, toDateTime64('%s',3))`,
+		workUnitsSeededOrgID, memberRepoID, computedAt, computedAt,
 	)); err != nil {
-		t.Fatalf("seed user_metrics_daily: %v", err)
+		t.Fatalf("seed team_repo_ownership: %v", err)
 	}
 
 	fromTS := time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC)
@@ -499,9 +513,9 @@ func TestWorkUnitsSeededRealClickHouse_TeamScopeFiltersByResolvedRepoID(t *testi
 		t.Fatalf("ResolveRepoFilterIDs: %v", err)
 	}
 	if len(repoIDs) != 0 {
-		t.Fatalf("ResolveRepoFilterIDs(team=team-1) = %v, want none -- this function never materializes team-scope membership; TeamRepoScopeCondition carries it as a pushed-down condition instead", repoIDs)
+		t.Fatalf("ResolveRepoFilterIDs(team=team-1) = %v, want none -- this function never materializes team-scope membership; teamscope.RepoCondition carries it as a pushed-down condition instead", repoIDs)
 	}
-	teamCondition, teamBindings := investmentexplain.TeamRepoScopeCondition(workUnitsSeededOrgID, "work_unit_investments.repo_id", []string{"team-1"})
+	teamCondition, teamBindings := teamscope.RepoCondition(workUnitsSeededOrgID, "work_unit_investments.repo_id", []string{"team-1"}, workUnitsTeamScopeAsOf)
 
 	investments, err := reader.BuildWorkUnitInvestments(ctx, investmentexplain.BuildWorkUnitInvestmentsOptions{
 		OrgID:              workUnitsSeededOrgID,
@@ -516,7 +530,7 @@ func TestWorkUnitsSeededRealClickHouse_TeamScopeFiltersByResolvedRepoID(t *testi
 		t.Fatalf("BuildWorkUnitInvestments: %v", err)
 	}
 	if len(investments) != 1 || investments[0].WorkUnitID != "wu-member-repo" {
-		t.Fatalf("investments = %+v, want exactly [wu-member-repo] (team scope must resolve via user_metrics_daily+repos and filter FetchWorkUnitInvestments' own repo_id predicate)", investments)
+		t.Fatalf("investments = %+v, want exactly [wu-member-repo] (team scope must resolve via team_repo_ownership+repos and filter FetchWorkUnitInvestments' own repo_id predicate)", investments)
 	}
 }
 

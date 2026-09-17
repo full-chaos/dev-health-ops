@@ -46,8 +46,8 @@ func sparkPoints(rows []dayValueRow, transform func(float64) float64) []SparkPoi
 
 // computeMetricDelta ports _metric_deltas' own _compute_one closure
 // (services/home.py:873-948).
-func computeMetricDelta(ctx context.Context, client QueryClient, spec metricSpec, startDay, endDay, compareStart, compareEnd time.Time, f Filters, orgID string) (MetricDelta, error) {
-	scopeFilter, scopeBindings, err := scopeFilterForMetric(ctx, client, spec.Scope, f, orgID, "team_id", "repo_id")
+func computeMetricDelta(ctx context.Context, client QueryClient, spec metricSpec, startDay, endDay, compareStart, compareEnd time.Time, f Filters, orgID string, asOf time.Time) (MetricDelta, error) {
+	scopeFilter, scopeBindings, err := scopeFilterForMetric(ctx, client, spec.Scope, f, orgID, "team_id", "repo_id", asOf)
 	if err != nil {
 		return MetricDelta{}, err
 	}
@@ -122,7 +122,7 @@ func computeMetricDelta(ctx context.Context, client QueryClient, spec metricSpec
 // asyncio.gather. Order is preserved (indexed, not append-order), so a
 // downstream "first max on tie" pick (topDeltaByMagnitude) matches
 // Python's own list-order tie-break.
-func computeMetricDeltas(ctx context.Context, client QueryClient, f Filters, startDay, endDay, compareStart, compareEnd time.Time, orgID string) ([]MetricDelta, error) {
+func computeMetricDeltas(ctx context.Context, client QueryClient, f Filters, startDay, endDay, compareStart, compareEnd time.Time, orgID string, asOf time.Time) ([]MetricDelta, error) {
 	out := make([]MetricDelta, len(metrics))
 	errs := make([]error, len(metrics))
 	var wg sync.WaitGroup
@@ -130,7 +130,7 @@ func computeMetricDeltas(ctx context.Context, client QueryClient, f Filters, sta
 		wg.Add(1)
 		go func(i int, spec metricSpec) {
 			defer wg.Done()
-			d, err := computeMetricDelta(ctx, client, spec, startDay, endDay, compareStart, compareEnd, f, orgID)
+			d, err := computeMetricDelta(ctx, client, spec, startDay, endDay, compareStart, compareEnd, f, orgID, asOf)
 			out[i] = d
 			errs[i] = err
 		}(i, spec)
@@ -167,7 +167,7 @@ func BuildResponse(ctx context.Context, chClient QueryClient, pgClient PGQueryCl
 	if f.Scope.Level == "repo" {
 		allocationScope = "repo"
 	}
-	allocationScopeFilter, allocationScopeBindings, err := scopeFilterForMetric(ctx, chClient, allocationScope, f, orgID, "team_id", "repo_id")
+	allocationScopeFilter, allocationScopeBindings, err := scopeFilterForMetric(ctx, chClient, allocationScope, f, orgID, "team_id", "repo_id", now)
 	if err != nil {
 		return nil, err
 	}
@@ -196,7 +196,7 @@ func BuildResponse(ctx context.Context, chClient QueryClient, pgClient PGQueryCl
 	}()
 	go func() {
 		defer wg.Done()
-		deltas, errDeltas = computeMetricDeltas(ctx, chClient, f, startDay, endDay, compareStart, compareEnd, orgID)
+		deltas, errDeltas = computeMetricDeltas(ctx, chClient, f, startDay, endDay, compareStart, compareEnd, orgID, now)
 	}()
 	go func() {
 		defer wg.Done()
@@ -256,7 +256,7 @@ func BuildResponse(ctx context.Context, chClient QueryClient, pgClient PGQueryCl
 	summary := []SummarySentence{}
 	topDelta, hasTopDelta := topDeltaByMagnitude(deltas)
 	if hasTopDelta {
-		scopeFilter, scopeBindings, err := scopeFilterForMetric(ctx, chClient, metricScope(topDelta.Metric), f, orgID, "team_id", "repo_id")
+		scopeFilter, scopeBindings, err := scopeFilterForMetric(ctx, chClient, metricScope(topDelta.Metric), f, orgID, "team_id", "repo_id", now)
 		if err != nil {
 			return nil, err
 		}

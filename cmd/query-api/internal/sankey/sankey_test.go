@@ -78,7 +78,7 @@ func TestBuildInvestmentFlow(t *testing.T) {
 		return nil, nil
 	})
 
-	nodes, links, err := buildInvestmentFlow(context.Background(), client, day(2024, 1, 1), day(2024, 1, 31), "org", nil, nil, nil, "org-1")
+	nodes, links, err := buildInvestmentFlow(context.Background(), client, day(2024, 1, 1), day(2024, 1, 31), "org", nil, nil, nil, "org-1", teamScopeAsOf)
 	if err != nil {
 		t.Fatalf("buildInvestmentFlow: %v", err)
 	}
@@ -231,7 +231,7 @@ func TestBuildHotspotFlow(t *testing.T) {
 		return nil, nil
 	})
 
-	nodes, links, err := buildHotspotFlow(context.Background(), client, day(2024, 1, 1), day(2024, 1, 31), "org", nil, nil, "org-1")
+	nodes, links, err := buildHotspotFlow(context.Background(), client, day(2024, 1, 1), day(2024, 1, 31), "org", nil, nil, "org-1", teamScopeAsOf)
 	if err != nil {
 		t.Fatalf("buildHotspotFlow: %v", err)
 	}

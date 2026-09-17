@@ -455,6 +455,21 @@ func TestLoadRESTEndpointsOnTheRealRepo(t *testing.T) {
 		t.Fatalf("POST /api/v1/home = %+v, want ported at home_route.go", homePost)
 	}
 
+	opportunitiesGet, ok := byKey["GET /api/v1/opportunities"]
+	if !ok {
+		t.Fatal("expected GET /api/v1/opportunities to be enumerated")
+	}
+	if opportunitiesGet.Status != RESTPorted || !strings.Contains(opportunitiesGet.GoHandler, "opportunities_route.go") {
+		t.Fatalf("GET /api/v1/opportunities = %+v, want ported at opportunities_route.go", opportunitiesGet)
+	}
+	opportunitiesPost, ok := byKey["POST /api/v1/opportunities"]
+	if !ok {
+		t.Fatal("expected POST /api/v1/opportunities to be enumerated")
+	}
+	if opportunitiesPost.Status != RESTPorted || !strings.Contains(opportunitiesPost.GoHandler, "opportunities_route.go") {
+		t.Fatalf("POST /api/v1/opportunities = %+v, want ported at opportunities_route.go", opportunitiesPost)
+	}
+
 	drilldownPRsPost, ok := byKey["POST /api/v1/drilldown/prs"]
 	if !ok {
 		t.Fatal("expected POST /api/v1/drilldown/prs to be enumerated")
@@ -641,8 +656,8 @@ func TestLoadRESTEndpointsOnTheRealRepo(t *testing.T) {
 	}
 
 	ported, _, _ := RESTEndpointCounts(rows)
-	if ported != 29 {
-		t.Fatalf("got %d ported routes, want exactly 29 (POST /api/v1/investment/explain, GET /api/v1/quadrant, "+
+	if ported != 31 {
+		t.Fatalf("got %d ported routes, want exactly 31 (POST /api/v1/investment/explain, GET /api/v1/quadrant, "+
 			"GET /api/v1/filters/options, POST+GET /api/v1/drilldown/prs, GET /api/v1/meta, "+
 			"POST+GET /api/v1/drilldown/issues, POST+GET /api/v1/explain, GET /api/v1/people, "+
 			"GET /api/v1/people/{person_id}/summary, GET /api/v1/people/{person_id}/metric, GET /api/v1/flame, "+
@@ -650,7 +665,7 @@ func TestLoadRESTEndpointsOnTheRealRepo(t *testing.T) {
 			"GET /api/v1/flame/aggregated, GET /api/v1/heatmap, POST+GET /api/v1/sankey, "+
 			"POST /api/v1/investment/flow, POST /api/v1/investment/flow/repo-team, "+
 			"POST+GET /api/v1/investment, GET /api/v1/investment/sunburst, POST+GET /api/v1/home, "+
-			"POST+GET /api/v1/work-units) -- "+
+			"POST+GET /api/v1/work-units, POST+GET /api/v1/opportunities) -- "+
 			"if this changed, a route was ported or un-ported; update this pin, it is not stale by accident", ported)
 	}
 }

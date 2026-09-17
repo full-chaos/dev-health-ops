@@ -190,10 +190,16 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # blocked_work_status_filter_integration_test.go, four tests total,
     # against a real ClickHouse container) -- the same package
     # test_go_integration_sharding.py's EXPECTED_PACKAGES also counts.
-    # CURRENT TOTAL: 61. Adding one -tags=integration package bumps every
+    # cmd/query-api/internal/investmentflow and cmd/query-api/internal/
+    # sankey each carry a real-ClickHouse recurrence guard for a
+    # UInt64-aggregate-scanned-into-a-mismatched-Go-type class of defect,
+    # same shape as the featureFlagEvents entry above -- a fake RowScanner
+    # cannot reproduce the real driver's own type-conversion refusal --
+    # and both count toward the total below.
+    # CURRENT TOTAL: 63. Adding one -tags=integration package bumps every
     # literal below by +1 -- this is the one number to change; the
     # narrative above is for someone auditing history, not for the bump.
-    assert "61 package(s) discovered, 0 denylisted, 61 will run" in result.stdout
+    assert "63 package(s) discovered, 0 denylisted, 63 will run" in result.stdout
     # Name the package explicitly (SET MEMBERSHIP), not just the count --
     # a bare count is exactly what let CHAOS-4643's own literal drift
     # 31 -> 32 -> 33 unnoticed.

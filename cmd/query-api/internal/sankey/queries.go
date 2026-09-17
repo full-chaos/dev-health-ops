@@ -196,11 +196,21 @@ type expenseCountsRow struct {
 
 // fetchExpenseCounts ports fetch_expense_counts verbatim: Python already
 // reads work_item_metrics_daily FINAL, no divergence.
+//
+// new_items_count and new_bugs_count are UInt32 per DDL, but sum() over
+// any unsigned integer column promotes to UInt64 in ClickHouse -- the
+// driver refuses to scan a UInt64 result into *float64. Python's
+// _build_expense_flow (services/sankey.py) wraps new_bugs in float(...)
+// before use, so the wire contract for these two sums is a float: CAST
+// to Float64 in SQL, not a widened Go scan target, keeps that contract
+// with a single float64 path end to end. bug_completed_estimate is
+// already a Float64-typed expression (UInt32 * Float64), so it needs no
+// cast.
 func fetchExpenseCounts(ctx context.Context, client QueryClient, startDay, endDay time.Time, scopeFilterSQL string, scopeBindings []dhclickhouse.Binding, orgID string) ([]expenseCountsRow, error) {
 	query := fmt.Sprintf(`
         SELECT
-            sum(new_items_count) AS new_items,
-            sum(new_bugs_count) AS new_bugs,
+            CAST(sum(new_items_count) AS Float64) AS new_items,
+            CAST(sum(new_bugs_count) AS Float64) AS new_bugs,
             sum(items_completed * bug_completed_ratio) AS bug_completed_estimate
         FROM work_item_metrics_daily FINAL
         WHERE day >= {start_day:Date} AND day < {end_day:Date}
@@ -242,10 +252,21 @@ func fetchExpenseCounts(ctx context.Context, client QueryClient, startDay, endDa
 // defect (sankeyCycleTimesDedupParity): a redrive/recompute leaving an
 // unmerged physical version of the same work item can double-count it
 // into canceled_items. This port reads FINAL.
-func fetchExpenseAbandoned(ctx context.Context, client QueryClient, startDay, endDay time.Time, scopeFilterSQL string, scopeBindings []dhclickhouse.Binding, orgID string) (int64, error) {
+//
+// canceled_items is countIf(...), a UInt64-returning aggregate over a
+// String-typed predicate column -- ClickHouse's aggregate result type,
+// not the source column's type, is what the driver scans. Python's own
+// _build_expense_flow (services/sankey.py) wraps this value in float(...)
+// before using it: the wire contract for this field is a float, matching
+// the other three counters this file sums out of work_item_metrics_daily
+// and work_item_state_durations_daily. CAST to Float64 in SQL rather than
+// widening the Go return type keeps a single float64 request-to-response
+// path, same choice this file makes for new_items/new_bugs/items_touched/
+// churn.
+func fetchExpenseAbandoned(ctx context.Context, client QueryClient, startDay, endDay time.Time, scopeFilterSQL string, scopeBindings []dhclickhouse.Binding, orgID string) (float64, error) {
 	query := fmt.Sprintf(`
         SELECT
-            countIf(status = 'canceled') AS canceled_items
+            CAST(countIf(status = 'canceled') AS Float64) AS canceled_items
         FROM work_item_cycle_times FINAL
         WHERE day >= {start_day:Date} AND day < {end_day:Date}
           AND org_id = {org_id:String}
@@ -264,7 +285,7 @@ func fetchExpenseAbandoned(ctx context.Context, client QueryClient, startDay, en
 	}
 	defer rows.Close()
 
-	var canceled int64
+	var canceled float64
 	if rows.Next() {
 		if err := rows.Scan(&canceled); err != nil {
 			return 0, fmt.Errorf("sankey: scan expense abandoned row: %w", err)
@@ -289,11 +310,17 @@ type stateStatusCountRow struct {
 // team_id, status, day), is equivalent to FINAL for this table -- and
 // items_touched is a non-nullable UInt32 per DDL, so no null-skip risk --
 // this port reads FINAL directly instead, no divergence.
+//
+// sum(items_touched) promotes UInt32 to UInt64, which the driver refuses
+// to scan into *float64. _build_state_flow reads this field with
+// float(row.get("items_touched") or 0.0): the wire contract is a float,
+// so this reader CASTs the sum to Float64 in SQL rather than widening the
+// Go scan target.
 func fetchStateStatusCounts(ctx context.Context, client QueryClient, startDay, endDay time.Time, scopeFilterSQL string, scopeBindings []dhclickhouse.Binding, orgID string) ([]stateStatusCountRow, error) {
 	query := fmt.Sprintf(`
         SELECT
             status,
-            sum(items_touched) AS items_touched
+            CAST(sum(items_touched) AS Float64) AS items_touched
         FROM work_item_state_durations_daily FINAL
         WHERE day >= {start_day:Date} AND day < {end_day:Date}
           AND org_id = {org_id:String}
@@ -363,6 +390,14 @@ type hotspotFlowRow struct {
 // instead of referenced by name, re-evaluated at each use rather than
 // shared. churn_hi/churn_mid are each used once, so each is inlined
 // exactly once, directly inside the multiIf predicate below.
+//
+// The main SELECT's sum(metrics.churn) promotes churn (UInt32 per DDL)
+// to UInt64, which the driver refuses to scan into *float64.
+// _build_hotspot_flow reads this field with float(row.get("churn") or
+// 0.0): the wire contract is a float, so this reader CASTs the outer
+// sum to Float64 in SQL. The two churn_hi/churn_mid subquery sums feed
+// quantileExact() only, never a Go scan destination, so they are left
+// as ClickHouse's native UInt64 -- no cast needed there.
 func fetchHotspotRows(ctx context.Context, client QueryClient, startDay, endDay time.Time, scopeFilterSQL string, scopeBindings []dhclickhouse.Binding, limit int, orgID string) ([]hotspotFlowRow, error) {
 	query := fmt.Sprintf(`
         SELECT
@@ -402,7 +437,7 @@ func fetchHotspotRows(ctx context.Context, client QueryClient, startDay, endDay 
                 'fix',
                 'feature'
             ) AS change_type,
-            sum(metrics.churn) AS churn
+            CAST(sum(metrics.churn) AS Float64) AS churn
         FROM file_metrics_daily AS metrics FINAL
         INNER JOIN repos AS r FINAL
             ON r.id = metrics.repo_id AND r.org_id = {org_id:String}

@@ -102,7 +102,7 @@ func TestGoldenExpense(t *testing.T) {
 		case strings.Contains(query, "FROM work_item_metrics_daily FINAL"):
 			return &fixtureRowScanner{rows: [][]any{{10.0, 8.0, 5.0}}}, nil
 		case strings.Contains(query, "FROM work_item_cycle_times FINAL"):
-			return &fixtureRowScanner{rows: [][]any{{int64(2)}}}, nil
+			return &fixtureRowScanner{rows: [][]any{{2.0}}}, nil
 		default:
 			t.Fatalf("unexpected query for expense golden:\n%s", query)
 			return nil, nil

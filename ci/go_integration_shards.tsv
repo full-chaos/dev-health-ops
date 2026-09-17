@@ -53,8 +53,10 @@ cmd/query-api/internal/explain	122
 cmd/query-api/internal/featureflags	22
 cmd/query-api/internal/hotspots	45
 cmd/query-api/internal/investmentexplain	22
+cmd/query-api/internal/investmentflow	12
 cmd/query-api/internal/operatingreview	112
 cmd/query-api/internal/routeswitch	17
+cmd/query-api/internal/sankey	12
 cmd/query-api/internal/throughputforecast	64
 cmd/query-api/internal/workgraph	380
 internal/cacheinvalidation	1

@@ -223,3 +223,69 @@ func TestValidateRESTIDBindingOrder_RefusesAPathParamWithNoPlaceholder(t *testin
 		t.Fatal("want an error when a PathParam binding names a placeholder the route's Path does not declare")
 	}
 }
+
+// TestExtractRESTID_JoinFieldComposesRepoIDAndNumber pins flame's own "pr"
+// entity_id shape: drilldown/prs' items carry repo_id (string) and number
+// (a JSON number, not a string) on the SAME element -- JoinField reads the
+// second field off that same element and appends it after IDField's own
+// value, joined by ":", formatting the number as a base-10 integer with
+// no fractional part or exponent.
+func TestExtractRESTID_JoinFieldComposesRepoIDAndNumber(t *testing.T) {
+	body := map[string]any{"items": []any{
+		map[string]any{"repo_id": "r1", "number": float64(42)},
+	}}
+	got, ok := ExtractRESTID(body, RESTIDProducer{Name: "pr_id", ListPath: "items", IDField: "repo_id", JoinField: "number"})
+	if !ok {
+		t.Fatal("want an id, got none")
+	}
+	if got != "r1:42" {
+		t.Fatalf("got %q, want r1:42", got)
+	}
+}
+
+// TestExtractRESTID_JoinFieldSkipsElementMissingTheSecondField pins the
+// "both fields from the SAME element" rule: an element whose JoinField is
+// absent, non-numeric or fractional must be skipped entirely -- never
+// joined with an empty or truncated tail -- so ExtractRESTID moves on to
+// the next element instead of returning a malformed composite id.
+func TestExtractRESTID_JoinFieldSkipsElementMissingTheSecondField(t *testing.T) {
+	cases := []struct {
+		name string
+		body map[string]any
+	}{
+		{"number field absent", map[string]any{"items": []any{
+			map[string]any{"repo_id": "r1"},
+		}}},
+		{"number field is a string", map[string]any{"items": []any{
+			map[string]any{"repo_id": "r1", "number": "42"},
+		}}},
+		{"number field has a fractional part", map[string]any{"items": []any{
+			map[string]any{"repo_id": "r1", "number": 42.5},
+		}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, ok := ExtractRESTID(tc.body, RESTIDProducer{Name: "pr_id", ListPath: "items", IDField: "repo_id", JoinField: "number"})
+			if ok {
+				t.Fatal("want a failed extraction, got ok")
+			}
+		})
+	}
+}
+
+// TestExtractRESTID_JoinFieldSkipsToNextElement pins that a first element
+// failing JoinField does not abort the whole search -- ExtractRESTID
+// still finds a LATER element whose own repo_id/number pair is complete,
+// the same "skip, don't stop" behaviour the existing empty-first-element
+// case (TestExtractRESTID_RootArrayOfObjects) already pins for IDField
+// alone.
+func TestExtractRESTID_JoinFieldSkipsToNextElement(t *testing.T) {
+	body := map[string]any{"items": []any{
+		map[string]any{"repo_id": "r1"},
+		map[string]any{"repo_id": "r2", "number": float64(7)},
+	}}
+	got, ok := ExtractRESTID(body, RESTIDProducer{Name: "pr_id", ListPath: "items", IDField: "repo_id", JoinField: "number"})
+	if !ok || got != "r2:7" {
+		t.Fatalf("got (%q, %v), want (r2:7, true)", got, ok)
+	}
+}

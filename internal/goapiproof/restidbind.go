@@ -1,7 +1,9 @@
 package goapiproof
 
 import (
+	"math"
 	"net/url"
+	"strconv"
 	"strings"
 )
 
@@ -50,6 +52,19 @@ type RESTIDProducer struct {
 	// Empty when an element IS the id, a bare string -- GET
 	// /api/v1/filters/options' team/repo lists are both []string.
 	IDField string
+	// JoinField, when set, names a SECOND field to read from the SAME
+	// array element and append after IDField's own value, joined by ":"
+	// -- flame's own "pr" entity_id shape ("<repo_id>:<number>",
+	// parseRepoEntity's own doc comment in cmd/query-api/internal/flame)
+	// needs BOTH a repo_id and a PR number from the SAME drilldown item,
+	// never two independently-produced ids that could each name a
+	// different PR. drilldown/prs' own PRItem.Number (prs.go) is a JSON
+	// NUMBER on the wire, not a string -- ExtractRESTID formats it as a
+	// base-10 integer via numericRESTIDField, the same "decoded body,
+	// never re-typed source" convention IDField's own string read
+	// already follows. Empty for every producer that names only one
+	// field (the overwhelming majority).
+	JoinField string
 }
 
 // RESTIDBinding binds one id an EARLIER request (per RESTRunOrder) has
@@ -71,7 +86,10 @@ type RESTIDBinding struct {
 // element yields a non-empty string: a malformed or empty producer
 // response is a failed extraction, never a panic, so a downstream
 // consumer refuses by name instead of this tool crashing on bad live
-// data it does not control.
+// data it does not control. When JoinField is set, BOTH fields must
+// extract from the SAME element for that element to count -- an element
+// carrying IDField but missing or malformed under JoinField is skipped,
+// never joined with an empty tail.
 func ExtractRESTID(body any, producer RESTIDProducer) (string, bool) {
 	value := body
 	if producer.ListPath != "" {
@@ -100,12 +118,41 @@ func ExtractRESTID(body any, producer RESTIDProducer) (string, bool) {
 			if present {
 				candidate, ok = raw.(string)
 			}
+			if ok && candidate != "" && producer.JoinField != "" {
+				joined, joinOK := numericRESTIDField(obj, producer.JoinField)
+				if !joinOK {
+					ok = false
+				} else {
+					candidate = candidate + ":" + joined
+				}
+			}
 		}
 		if ok && candidate != "" {
 			return candidate, true
 		}
 	}
 	return "", false
+}
+
+// numericRESTIDField reads field from obj as a JSON NUMBER (the float64
+// encoding/json's generic map[string]any decode produces for a bare
+// integer, the same decode ExtractRESTID's own ListPath/IDField walk
+// already reads every field through) and formats it as a base-10 integer
+// string. false for a non-numeric value, an absent field, or a number
+// with a fractional part -- drilldown/prs' own "number" field is always a
+// whole PR number (PRItem.Number is a Go uint32), so a fractional value
+// here means the producer's own ListPath/IDField named the wrong field,
+// never a real PR number.
+func numericRESTIDField(obj map[string]any, field string) (string, bool) {
+	raw, present := obj[field]
+	if !present {
+		return "", false
+	}
+	num, ok := raw.(float64)
+	if !ok || num != math.Trunc(num) {
+		return "", false
+	}
+	return strconv.FormatInt(int64(num), 10), true
 }
 
 // ResolveRESTIDBindings applies request's declared IDBindings against

@@ -224,27 +224,33 @@ type driverRow struct {
 // explain.py:60-149), the branch this package's one caller (the summary
 // sentence's driver-labels lookup) needs: the dedup-aware form, since
 // every metric _METRICS declares is in dedupByComputedAt.
+//
+// A bare SELECT, never a leading WITH: the pinned dev-health-go read-only
+// client rejects any statement whose first token is not SELECT
+// (clickhouse/client.go's validateReadOnlyStatement), so a WITH-leading
+// query never reaches ClickHouse at all -- it returns ErrUnsafeStatement
+// before the request does anything useful. The former `current`/
+// `previous` CTEs are inlined as FROM subqueries instead, matching
+// internal/analytics/flowmatrix.go's own identical fix for the same
+// guard (see that file's flowMatrixTeamActivitySelect doc comment).
 func fetchMetricDriverDelta(ctx context.Context, client QueryClient, table, column, groupBy string, startDay, endDay, compareStart, compareEnd time.Time, scopeFilter string, scopeBindings []dhclickhouse.Binding, orgID string, limit int) ([]driverRow, error) {
 	currentFrom := metricFromClause(table, column, scopeFilter, "start_day", "end_day")
 	previousFrom := metricFromClause(table, column, scopeFilter, "compare_start", "compare_end")
 	query := fmt.Sprintf(`
-        WITH
-            current AS (
-                SELECT %s AS id, avg(%s) AS value
-                FROM %s
-                GROUP BY %s
-            ),
-            previous AS (
-                SELECT %s AS id, avg(%s) AS value
-                FROM %s
-                GROUP BY %s
-            )
         SELECT
             current.id AS id,
             current.value AS value,
             CASE WHEN previous.value = 0 THEN 0 ELSE (current.value - previous.value) / previous.value * 100 END AS delta_pct
-        FROM current
-        LEFT JOIN previous ON current.id = previous.id
+        FROM (
+            SELECT %s AS id, avg(%s) AS value
+            FROM %s
+            GROUP BY %s
+        ) AS current
+        LEFT JOIN (
+            SELECT %s AS id, avg(%s) AS value
+            FROM %s
+            GROUP BY %s
+        ) AS previous ON current.id = previous.id
         ORDER BY delta_pct DESC
         LIMIT {limit:UInt32}
     `, groupBy, column, currentFrom, groupBy, groupBy, column, previousFrom, groupBy)

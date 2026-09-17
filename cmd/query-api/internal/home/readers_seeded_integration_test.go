@@ -43,8 +43,8 @@ import (
 	"time"
 
 	stdclickhouse "github.com/ClickHouse/clickhouse-go/v2"
-	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/chquery"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
@@ -82,7 +82,7 @@ func TestHomeReaders_SeededRealClickHouse(t *testing.T) {
 	}
 	defer func() { _ = conn.Close() }()
 
-	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: inst.URI})
+	client, err := chquery.NewProductionClient(inst.URI)
 	if err != nil {
 		t.Fatalf("construct ClickHouse query client: %v", err)
 	}
@@ -173,6 +173,18 @@ func TestHomeReaders_SeededRealClickHouse(t *testing.T) {
 		`INSERT INTO repo_metrics_daily (repo_id, day, commits_count, total_loc_touched, avg_commit_size_loc, large_commit_ratio, prs_merged, median_pr_cycle_hours, pr_cycle_p75_hours, pr_cycle_p90_hours, prs_with_first_review, large_pr_ratio, pr_rework_ratio, change_failure_rate, computed_at, org_id) VALUES
 		 ('%s', '%s', 1, 1000, 0, 0, 5, 0, 0, 0, 1, 0, 0.5, 0.2, toDateTime('%s'), '%s')`,
 		repoID, day1, tNew, seededOrgID))
+
+	// --- repo_metrics_daily, driver-delta COMPARE window: a single-version
+	// row for repoID on a day well before day1, feeding ONLY
+	// fetchMetricDriverDelta's "previous" side so its LEFT JOIN finds a
+	// real, non-NULL matching value for repoID -- proof that the fixed
+	// (bare SELECT, no leading WITH) statement actually executes and
+	// joins correctly, not just that it clears the unsafe-statement guard.
+	const dayCompare = "2025-12-25"
+	seededExec(ctx, t, conn, fmt.Sprintf(
+		`INSERT INTO repo_metrics_daily (repo_id, day, commits_count, total_loc_touched, avg_commit_size_loc, large_commit_ratio, prs_merged, median_pr_cycle_hours, pr_cycle_p75_hours, pr_cycle_p90_hours, prs_with_first_review, large_pr_ratio, pr_rework_ratio, change_failure_rate, computed_at, org_id) VALUES
+		 ('%s', '%s', 1, 500, 0, 0, 5, 0, 0, 0, 1, 0, 0.5, 0.2, toDateTime('%s'), '%s')`,
+		repoID, dayCompare, tNew, seededOrgID))
 
 	// --- work_item_state_durations_daily: two versions, same natural key
 	// (org_id, provider, work_scope_id, team_id, status, day). Old carries
@@ -374,13 +386,49 @@ func TestHomeReaders_SeededRealClickHouse(t *testing.T) {
 		}
 	})
 
-	t.Run("resolveRepoIDsForTeams_userMetricsDailyDistinctExecutes", func(t *testing.T) {
-		got, err := resolveRepoIDsForTeams(ctx, client, []string{"team-1"}, seededOrgID)
+	t.Run("scopeFilterForMetric_teamScopePushesRepoResolutionIntoSQL", func(t *testing.T) {
+		// Replaces the old resolveRepoIDsForTeams subtest: the team's
+		// matching repo set is no longer materialized as a standalone
+		// query result (see scopefilter.go's teamRepoScopeCondition doc
+		// comment) -- it is now a condition inside the SAME statement the
+		// caller already runs. This proves that pushed-down condition
+		// still narrows correctly against the real engine at small scale;
+		// TestHomeLargeTeamRepoScope_ScopeFilterForMetricSucceeds proves
+		// it at the scale (>1,000 distinct repos) that broke the prior,
+		// materializing shape in production.
+		f := Filters{Scope: ScopeFilter{Level: "team", IDs: []string{"team-1"}}}
+		scopeFilter, scopeBindings, err := scopeFilterForMetric(ctx, client, "repo", f, seededOrgID, "team_id", "repo_id")
 		if err != nil {
-			t.Fatalf("resolveRepoIDsForTeams: %v", err)
+			t.Fatalf("scopeFilterForMetric: %v", err)
 		}
-		if len(got) != 1 || got[0] != repoID {
-			t.Fatalf("resolveRepoIDsForTeams = %v, want [%s]", got, repoID)
+		got, err := fetchMetricValue(ctx, client, "repo_metrics_daily", "total_loc_touched", startDay, endDay, scopeFilter, scopeBindings, "sum", seededOrgID)
+		if err != nil {
+			t.Fatalf("fetchMetricValue with team scope: %v", err)
+		}
+		if got != 1000 {
+			t.Errorf("fetchMetricValue with team-1's scope = %v, want 1000 (team-1's only repo is repoID; repoID2 belongs to no team and must not be counted)", got)
+		}
+	})
+
+	t.Run("fetchMetricDriverDelta_bareSelectSatisfiesUnsafeStatementGuard", func(t *testing.T) {
+		// fetchMetricDriverDelta is the only reader in this package whose
+		// statement used to lead with WITH -- the pinned dev-health-go
+		// read-only client rejects any statement whose first token is not
+		// SELECT (clickhouse/client.go's validateReadOnlyStatement), so a
+		// WITH-leading query never reached ClickHouse at all in
+		// production. This is the only subtest in this file that reaches
+		// this reader through the REAL client, matching production's own
+		// path -- BuildResponse's own tests (golden_test.go,
+		// golden_scoped_test.go) replay this reader through a fixture-fed
+		// fake client, which never runs the real guard.
+		compareStart := time.Date(2025, 12, 24, 0, 0, 0, 0, time.UTC)
+		compareEnd := time.Date(2025, 12, 26, 0, 0, 0, 0, time.UTC)
+		got, err := fetchMetricDriverDelta(ctx, client, "repo_metrics_daily", "total_loc_touched", "repo_id", startDay, endDay, compareStart, compareEnd, "", nil, seededOrgID, 3)
+		if err != nil {
+			t.Fatalf("fetchMetricDriverDelta: %v", err)
+		}
+		if len(got) != 1 || got[0].ID != repoID {
+			t.Fatalf("fetchMetricDriverDelta = %+v, want exactly one row for repoID %s", got, repoID)
 		}
 	})
 

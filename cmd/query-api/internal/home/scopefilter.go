@@ -103,10 +103,22 @@ func resolveRepoIDs(ctx context.Context, client QueryClient, repoRefs []string, 
 	return resolved, nil
 }
 
-// resolveRepoIDsForTeams ports resolve_repo_ids_for_teams (api/queries/
-// scopes.py:72-89), reading user_metrics_daily FINAL (see this file's
-// own package doc comment for the dedup fix).
-func resolveRepoIDsForTeams(ctx context.Context, client QueryClient, teamIDs []string, orgID string) ([]string, error) {
+// teamRepoScopeCondition returns the repo-id membership test for a
+// team-level scope as a standalone boolean SQL condition (no leading
+// "AND", no trailing statement) -- same shape and rationale as
+// internal/explain/repofilter.go's own copy of this exact fix (see that
+// file's doc comment): a team's true matching-repo count can exceed the
+// read-only client's max_result_rows ceiling (1,000 -- dev-health-go's
+// clickhouse/options.go), which the prior resolveRepoIDsForTeams'
+// standalone `SELECT DISTINCT repo_id FROM user_metrics_daily ...` hit
+// directly in production. Resolving the team's repo set entirely inside
+// this condition means the surrounding statement's own (small) result
+// set is the only thing that ever crosses back to the caller, instead of
+// asking the client to hand back every matching id as its OWN result
+// first. Duplicated here rather than imported, matching this package's
+// own "repeat, don't couple" convention for scopefilter.go's other
+// duplicated helpers (see this file's package doc comment).
+func teamRepoScopeCondition(orgID, repoColumn string, teamIDs []string) (condition string, bindings []dhclickhouse.Binding) {
 	var teamList []string
 	for _, id := range teamIDs {
 		if id != "" {
@@ -114,59 +126,62 @@ func resolveRepoIDsForTeams(ctx context.Context, client QueryClient, teamIDs []s
 		}
 	}
 	if len(teamList) == 0 {
-		return nil, nil
+		return "", nil
 	}
-
-	query := fmt.Sprintf(`
-SELECT DISTINCT toString(repo_id) AS id
-FROM user_metrics_daily FINAL
-WHERE org_id = {org_id:String}
-  AND team_id IN {team_ids:Array(String)}
-%s
-`, settingsMaxExecutionTime())
-	bindings := []dhclickhouse.Binding{
-		{Name: "team_ids", Value: teamList},
-		{Name: "org_id", Value: orgID},
+	return fmt.Sprintf(`%s IN (
+    SELECT toString(id) AS id
+    FROM repos FINAL
+    WHERE org_id = {team_repo_scope_org_id:String}
+      AND toString(id) IN (
+          SELECT DISTINCT toString(repo_id) AS id
+          FROM user_metrics_daily FINAL
+          WHERE org_id = {team_repo_scope_org_id:String}
+            AND team_id IN {team_repo_scope_ids:Array(String)}
+      )
+)`, repoColumn), []dhclickhouse.Binding{
+		{Name: "team_repo_scope_ids", Value: teamList},
+		{Name: "team_repo_scope_org_id", Value: orgID},
 	}
-
-	rows, err := client.Query(ctx, query, bindings)
-	if err != nil {
-		return nil, fmt.Errorf("home: resolve repo ids for teams: %w", err)
-	}
-	defer rows.Close()
-
-	var out []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("home: scan resolve repo ids for teams row: %w", err)
-		}
-		if id != "" {
-			out = append(out, id)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("home: iterate resolve repo ids for teams rows: %w", err)
-	}
-	return out, nil
 }
 
-// resolveRepoFilterIDs ports resolve_repo_filter_ids (api/services/
-// filtering.py:95-110).
-func resolveRepoFilterIDs(ctx context.Context, client QueryClient, f Filters, orgID string) ([]string, error) {
+// repoScopeFilter ports resolve_repo_filter_ids (api/services/
+// filtering.py:95-110) as a SQL condition rather than a materialized id
+// list for the team-scope branch (see teamRepoScopeCondition's doc
+// comment for why). Explicit repo refs (an explicit scope.IDs at
+// scope="repo", or what.repos) are still resolved and verified one at a
+// time through resolveRepoIDs -- that list is bounded by what the caller
+// named, not by organization scale, so it stays a plain array binding.
+// The two conditions are ORed together when both are present, matching
+// resolve_repo_filter_ids' own union-of-refs semantics.
+func repoScopeFilter(ctx context.Context, client QueryClient, f Filters, orgID, repoColumn string) (string, []dhclickhouse.Binding, error) {
 	var repoRefs []string
 	if f.Scope.Level == "repo" {
 		repoRefs = append(repoRefs, f.Scope.IDs...)
 	}
 	repoRefs = append(repoRefs, f.What.Repos...)
-	if f.Scope.Level == "team" && len(f.Scope.IDs) > 0 {
-		teamRepoIDs, err := resolveRepoIDsForTeams(ctx, client, f.Scope.IDs, orgID)
-		if err != nil {
-			return nil, err
-		}
-		repoRefs = append(repoRefs, teamRepoIDs...)
+
+	explicitIDs, err := resolveRepoIDs(ctx, client, repoRefs, orgID)
+	if err != nil {
+		return "", nil, err
 	}
-	return resolveRepoIDs(ctx, client, repoRefs, orgID)
+
+	var teamCondition string
+	var teamBindings []dhclickhouse.Binding
+	if f.Scope.Level == "team" && len(f.Scope.IDs) > 0 {
+		teamCondition, teamBindings = teamRepoScopeCondition(orgID, repoColumn, f.Scope.IDs)
+	}
+
+	switch {
+	case len(explicitIDs) > 0 && teamCondition != "":
+		condition := fmt.Sprintf(" AND (%s IN {scope_ids:Array(String)} OR %s)", repoColumn, teamCondition)
+		return condition, append(scopeBindingsMulti(explicitIDs), teamBindings...), nil
+	case len(explicitIDs) > 0:
+		return scopeClauseMulti(explicitIDs, repoColumn), scopeBindingsMulti(explicitIDs), nil
+	case teamCondition != "":
+		return " AND " + teamCondition, teamBindings, nil
+	default:
+		return "", nil, nil
+	}
 }
 
 // scopeFilterForMetric ports scope_filter_for_metric (api/services/
@@ -176,11 +191,7 @@ func scopeFilterForMetric(ctx context.Context, client QueryClient, metricScope s
 		return scopeClauseMulti(f.Scope.IDs, teamColumn), scopeBindingsMulti(f.Scope.IDs), nil
 	}
 	if metricScope == "repo" {
-		repoIDs, err := resolveRepoFilterIDs(ctx, client, f, orgID)
-		if err != nil {
-			return "", nil, err
-		}
-		return scopeClauseMulti(repoIDs, repoColumn), scopeBindingsMulti(repoIDs), nil
+		return repoScopeFilter(ctx, client, f, orgID, repoColumn)
 	}
 	return "", nil, nil
 }

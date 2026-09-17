@@ -17,6 +17,12 @@ func TestSankeyAndHeatmapDedupDeclarationsCarryShapes(t *testing.T) {
 	if len(heatmapDedupParity.OrderInsensitiveLists) != 1 || heatmapDedupParity.OrderInsensitiveLists[0].Path != "data.cells" {
 		t.Fatalf("heatmapDedupParity.OrderInsensitiveLists = %+v, want one entry for data.cells", heatmapDedupParity.OrderInsensitiveLists)
 	}
+	if len(heatmapDedupParity.FloatTierB) != 1 {
+		t.Fatalf("heatmapDedupParity.FloatTierB = %+v, want exactly one entry (data.cells.value)", heatmapDedupParity.FloatTierB)
+	}
+	if _, ok := heatmapDedupParity.FloatTierB["data.cells.value"]; !ok {
+		t.Fatalf("heatmapDedupParity.FloatTierB = %+v, missing data.cells.value -- a future edit must not silently drop the Tier B declaration that keeps ULP noise off this route's findings", heatmapDedupParity.FloatTierB)
+	}
 
 	if len(sankeyRepoDedupParity.BaselineDefects) != 1 {
 		t.Fatalf("sankeyRepoDedupParity has %d BaselineDefects, want 1", len(sankeyRepoDedupParity.BaselineDefects))

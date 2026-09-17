@@ -77,6 +77,20 @@ type KeyedDirectionShape struct {
 	// tuples (index-free values, in KeyFields order) -- see rule 2. Nil
 	// or empty admits every key the list carries.
 	Keys [][]string
+	// CandidateMustBeGreater flips which side of the pair must be
+	// strictly greater to admit a key. The zero value (false) is the
+	// ADDITIVE-dedup direction every existing declaration in this corpus
+	// uses (baseline pulled UP by an extra unmerged row, so baseline must
+	// exceed candidate) -- unchanged by this field's addition. Setting it
+	// true is for the OPPOSITE, structural direction: a sum-vs-avg
+	// aggregator mismatch where candidate (Go, reading the metric's own
+	// configured aggregator) sums N>=1 non-negative values that baseline
+	// (Python, hardcoded to avg) only averages -- sum >= avg whenever
+	// N>=1 over non-negative values, so candidate must exceed baseline,
+	// never the reverse. Both directions share the same per-key,
+	// no-magnitude-bound admission rule; only which side must be larger
+	// differs.
+	CandidateMustBeGreater bool
 }
 
 // keyedDirectionPlan is one comparison's fully-evaluated admission
@@ -144,7 +158,11 @@ func buildKeyedDirectionPlan(shape *KeyedDirectionShape, baselineData, candidate
 		if !ok {
 			continue
 		}
-		if baseValue > candValue {
+		greater := baseValue > candValue
+		if shape.CandidateMustBeGreater {
+			greater = candValue > baseValue
+		}
+		if greater {
 			plan.admittedKeys[key] = true
 		}
 	}

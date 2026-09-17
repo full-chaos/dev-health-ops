@@ -420,6 +420,23 @@ func main() {
 		log.Print("query-api: /api/v1/sankey route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
 	}
 
+	// GET+POST /api/v1/home, gated by its own routeswitch entries
+	// (default OFF via GO_API_HOME_ENABLED) -- see home_route.go's
+	// package doc comment for the reachability story and internal/home
+	// for the ported resolver and its declared ReplacingMergeTree-dedup
+	// notes.
+	if homeHandler, homeCleanup, homeOK, homeErr := buildHomeRoute(); homeErr != nil {
+		log.Fatalf("query-api: build /api/v1/home route: %v", homeErr)
+	} else if homeOK {
+		defer homeCleanup()
+		// See the investment/explain mount above for why this is a
+		// reassignment, not an inlined wrapper.
+		homeHandler = withProofProvenance(homeHandler, runningBuild())
+		mux.HandleFunc("/api/v1/home", homeHandler)
+	} else {
+		log.Print("query-api: /api/v1/home route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_*/GO_API_REGISTRY_POSTGRES_URI unset) -- staying unmounted")
+	}
+
 	// POST /api/v1/investment/flow and POST /api/v1/investment/flow/
 	// repo-team, gated by one shared routeswitch toggle (default OFF via
 	// GO_API_INVESTMENT_FLOW_ENABLED) -- see investment_flow_route.go's

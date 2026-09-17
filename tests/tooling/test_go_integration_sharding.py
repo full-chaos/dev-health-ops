@@ -54,6 +54,16 @@ EXPECTED_PACKAGES = {
     # ORDER BY/count-not-limit-bound happy path and the real UNKNOWN_TABLE
     # degraded path, both against a real ClickHouse engine.
     "cmd/query-api/internal/featureflags",
+    # Every home reader runs once against a real ClickHouse container
+    # with the canonical migration chain applied, each ReplacingMergeTree
+    # table seeded with a duplicate physical version at its own natural
+    # key: sum()/count() aggregates over integer columns promote to
+    # UInt64 in ClickHouse, and a fake RowScanner cannot reproduce the
+    # real clickhouse-go driver's refusal to scan that into a narrower
+    # destination, nor can it prove FINAL/argMax actually collapses a
+    # duplicate row the way canned fixture rows already assume it does
+    # (see readers_seeded_integration_test.go's own header comment).
+    "cmd/query-api/internal/home",
     "cmd/query-api/internal/hotspots",
     # CHAOS-4977 step 7: the recurrence guard for FetchWorkUnitInvestments'
     # real Map(String, Float64) theme/subcategory columns -- a fake
@@ -514,9 +524,9 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # sankey each carry a real-ClickHouse recurrence guard for a
     # UInt64-aggregate-scanned-into-a-mismatched-Go-type class of defect --
     # all three count toward the total below.
-    # CURRENT TOTAL: 63 -- the one number to bump when a new
+    # CURRENT TOTAL: 64 -- the one number to bump when a new
     # -tags=integration package is added.
-    assert "63 package(s) discovered, 0 denylisted, 63 will run" in result.stdout
+    assert "64 package(s) discovered, 0 denylisted, 64 will run" in result.stdout
     # Raised 4 -> 6: at four shards each balanced "packages" shard's own
     # estimated test time (2191s) already exceeded the hosted job's
     # 25-minute (1500s) timeout-minutes cap before any setup/teardown
@@ -525,7 +535,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # comfortably under the cap -- see the weight-derived isolation check
     # below for how a future regression here is caught instead of silently
     # re-balanced.
-    assert "integration shard plan: 6 shard(s), 63 package(s)" in result.stdout
+    assert "integration shard plan: 6 shard(s), 64 package(s)" in result.stdout
 
     output = dict(
         line.split("=", maxsplit=1)
@@ -605,8 +615,8 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # and cmd/query-api/internal/sankey are each discovered and runnable
     # (see the "package(s) discovered" comment above), so each is one of
     # the packages this flattened set must contain.
-    # CURRENT TOTAL: 63 -- the one number to bump.
-    assert len(flattened) == len(set(flattened)) == 63
+    # CURRENT TOTAL: 64 -- the one number to bump.
+    assert len(flattened) == len(set(flattened)) == 64
     assert set(flattened) == EXPECTED_PACKAGES
 
     # internal/providersync's isolation in the lowest-numbered shard is a
@@ -2201,9 +2211,9 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
     # and cmd/query-api/internal/sankey are each discovered and none is
     # the providersync shard-1 package, so each counts toward the total
     # below (discovered-total minus one for that shard-1 package).
-    # CURRENT TOTAL: 62 (== discovered-total-minus-one -- keep this in
+    # CURRENT TOTAL: 63 (== discovered-total-minus-one -- keep this in
     # sync with the discovered-total literal above when either changes).
-    assert len(selected_packages) == len(set(selected_packages)) == 62
+    assert len(selected_packages) == len(set(selected_packages)) == 63
     assert set(selected_packages) == EXPECTED_PACKAGES - {PROVIDER_PACKAGE}
 
     selected_tests: list[str] = []

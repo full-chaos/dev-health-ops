@@ -3213,6 +3213,11 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 			},
 		},
 	},
+	// GET+POST /api/v1/home -- corpus content lives in home_corpus.go
+	// (this package); these two lines are the shared-map registration
+	// only.
+	"REST:GET:/api/v1/home":  homeGetEndpointSpec,
+	"REST:POST:/api/v1/home": homePostEndpointSpec,
 }
 
 // quadrantOrgRequest builds one of quadrant's four QuadrantDefinitions
@@ -3419,6 +3424,8 @@ var restRunOrder = []string{
 	"REST:GET:/api/v1/heatmap",
 	"REST:GET:/api/v1/sankey",
 	"REST:POST:/api/v1/sankey",
+	"REST:GET:/api/v1/home",
+	"REST:POST:/api/v1/home",
 }
 
 // RESTRunOrder returns a fresh copy of restRunOrder -- cmd/go-api-rest-

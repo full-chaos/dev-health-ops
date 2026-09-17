@@ -437,6 +437,24 @@ func main() {
 		log.Print("query-api: /api/v1/home route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_*/GO_API_REGISTRY_POSTGRES_URI unset) -- staying unmounted")
 	}
 
+	// GET+POST /api/v1/opportunities, gated by its own routeswitch entries
+	// (default OFF via GO_API_OPPORTUNITIES_ENABLED) -- see
+	// opportunities_route.go's package doc comment for the reachability
+	// story and internal/opportunities for the ported card-building
+	// logic, which composes internal/home's own exported builder rather
+	// than reading any table of its own.
+	if opportunitiesHandler, opportunitiesCleanup, opportunitiesOK, opportunitiesErr := buildOpportunitiesRoute(); opportunitiesErr != nil {
+		log.Fatalf("query-api: build /api/v1/opportunities route: %v", opportunitiesErr)
+	} else if opportunitiesOK {
+		defer opportunitiesCleanup()
+		// See the investment/explain mount above for why this is a
+		// reassignment, not an inlined wrapper.
+		opportunitiesHandler = withProofProvenance(opportunitiesHandler, runningBuild())
+		mux.HandleFunc("/api/v1/opportunities", opportunitiesHandler)
+	} else {
+		log.Print("query-api: /api/v1/opportunities route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
+	}
+
 	// POST /api/v1/investment/flow and POST /api/v1/investment/flow/
 	// repo-team, gated by one shared routeswitch toggle (default OFF via
 	// GO_API_INVESTMENT_FLOW_ENABLED) -- see investment_flow_route.go's

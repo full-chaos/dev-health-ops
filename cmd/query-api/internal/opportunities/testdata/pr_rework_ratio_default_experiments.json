@@ -1,0 +1,16 @@
+{
+  "items": [
+    {
+      "id": "opp-1",
+      "title": "Reduce PR Rework Ratio",
+      "rationale": "PR Rework Ratio climbed 15% in the last 14 days.",
+      "evidence_links": [
+        "/api/v1/explain?metric=pr_rework_ratio&scope_type=team&scope_id=team-9&range_days=14&compare_days=14"
+      ],
+      "suggested_experiments": [
+        "Triage the top 10 longest-running work items.",
+        "Introduce a rotating on-call reviewer for stalled PRs."
+      ]
+    }
+  ]
+}

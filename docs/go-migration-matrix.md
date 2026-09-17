@@ -281,7 +281,7 @@ sync with either side, so a route added, removed or newly wired on either plane 
 time the tool runs, and the doc-drift check below fails until it is re-rendered.
 
 <!-- BEGIN GENERATED REST ENDPOINTS -->
-_32 `/api/v1/*` routes in `src/dev_health_ops/api/main.py`: **29** ported, **3** python-only, **0** dead-by-design._
+_32 `/api/v1/*` routes in `src/dev_health_ops/api/main.py`: **31** ported, **1** python-only, **0** dead-by-design._
 
 | Method | Path | Status | Go handler |
 | --- | --- | --- | --- |
@@ -304,8 +304,8 @@ _32 `/api/v1/*` routes in `src/dev_health_ops/api/main.py`: **29** ported, **3**
 | POST | `/api/v1/investment/flow/repo-team` | ported | `cmd/query-api/investment_flow_route.go:86` |
 | GET | `/api/v1/investment/sunburst` | ported | `cmd/query-api/investment_route.go:174` |
 | GET | `/api/v1/meta` | ported | `cmd/query-api/meta_route.go:79` |
-| GET | `/api/v1/opportunities` | python-only | -- |
-| POST | `/api/v1/opportunities` | python-only | -- |
+| GET | `/api/v1/opportunities` | ported | `cmd/query-api/opportunities_route.go:67` |
+| POST | `/api/v1/opportunities` | ported | `cmd/query-api/opportunities_route.go:67` |
 | GET | `/api/v1/people` | ported | `cmd/query-api/people_route.go:93` |
 | GET | `/api/v1/people/{person_id}/drilldown/issues` | ported | `cmd/query-api/people_drilldown_issues_route.go:65` |
 | GET | `/api/v1/people/{person_id}/drilldown/prs` | ported | `cmd/query-api/people_drilldown_prs_route.go:67` |

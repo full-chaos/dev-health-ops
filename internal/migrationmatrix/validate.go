@@ -440,6 +440,48 @@ func CheckRenderAge(renderedAt, now time.Time, maxAge time.Duration) []Violation
 	return nil
 }
 
+// CheckOpsShaAncestry applies the anti-rot rule to ops_sha itself -- the
+// twin of CheckFreshness's rule for the "Last verified" stamp, but for the
+// value a human cannot type by hand. ops_sha is the merge-base with main
+// -render observed (see the Render.OpsSha field comment); it must still be
+// an ancestor of the tree -check is running against, or the committed
+// artefact is asserting a history this branch does not contain.
+//
+// Ancestry, not equality, is the rule on purpose. main moves on every push,
+// so a branch whose recorded merge-base has fallen behind the CURRENT
+// merge-base is the ordinary case -- it only means nobody has re-rendered
+// since main last moved, which the separate render-age budget (see
+// CheckRenderAge) already bounds, and failing it here would make every PR
+// that sat for more than a few minutes fail for no real reason. What
+// ancestry catches is the failure age cannot: a rebase that replays this
+// branch's commits onto a new base whose own history does not contain the
+// commit ops_sha names (most often because it was squashed into a
+// different commit on main), or a render carried forward across an
+// unrelated checkout. Either way the sha stops being an ancestor of HEAD
+// the moment it happens, however fresh its timestamp still reads -- which
+// is exactly how a rebase with "no conflicts at all" left a stale ops_sha
+// sitting behind a green -check.
+//
+// currentMergeBase -- what a fresh -render would write right now -- is
+// reported alongside the stale value purely so the failure names the fix
+// instead of making the next reader diff it out by hand; it is never
+// compared for equality, per the paragraph above.
+func CheckOpsShaAncestry(opsSha, headSha, currentMergeBase string, isAncestor bool) []Violation {
+	if isAncestor {
+		return nil
+	}
+	return []Violation{{
+		Subject: "ops_sha",
+		Rule:    "R9-ops-sha-not-ancestor",
+		Detail: fmt.Sprintf(
+			"ops_sha %s is not an ancestor of HEAD %s; the committed render asserts a merge-base with main "+
+				"that this branch's current history does not contain (a rebase after the last render, or a "+
+				"squash on main, are the usual causes). A render right now would write ops_sha %s. "+
+				"Re-render: go run ./cmd/dev-health-migration-matrix -render -root .",
+			opsSha, headSha, currentMergeBase),
+	}}
+}
+
 func roundDays(d time.Duration) string {
 	if d < 48*time.Hour {
 		return d.Round(time.Hour).String()

@@ -529,6 +529,43 @@ func TestRenderAgeIsCheckedSeparatelyFromTheStamp(t *testing.T) {
 	assertRule(t, CheckRenderAge(time.Time{}, now, 7*24*time.Hour), "R11-no-timestamp")
 }
 
+// RED: a rebase (or a squash on main) leaves a shape-valid ops_sha sitting
+// in last-render.json that no longer reaches HEAD, and nothing before this
+// rule noticed.
+func TestOpsShaAncestryRejectsAShaThisBranchNoLongerContains(t *testing.T) {
+	opsSha := strings.Repeat("a", 40)
+	head := strings.Repeat("b", 40)
+	currentBase := strings.Repeat("c", 40)
+
+	violations := CheckOpsShaAncestry(opsSha, head, currentBase, false)
+	assertRule(t, violations, "R9-ops-sha-not-ancestor")
+	if len(violations) != 1 {
+		t.Fatalf("expected exactly one violation, got %v", rules(violations))
+	}
+	detail := violations[0].Detail
+	// A checker that says only "mismatch" makes the next person do the diff
+	// by hand -- the failure must name BOTH the stale recorded value and
+	// what a fresh render would write instead.
+	for _, want := range []string{opsSha, head, currentBase} {
+		if !strings.Contains(detail, want) {
+			t.Fatalf("violation detail must name %q, got: %s", want, detail)
+		}
+	}
+}
+
+// GREEN, two shapes: a fresh render (ops_sha IS the current merge-base) and
+// a branch that has simply fallen behind main since its last render (ops_sha
+// is an older, but still reachable, merge-base). Both are ancestors of HEAD
+// and neither is the bug -- only losing ancestry is.
+func TestOpsShaAncestryAcceptsAnyAncestorNotOnlyTheCurrentMergeBase(t *testing.T) {
+	head := strings.Repeat("b", 40)
+	fresh := strings.Repeat("c", 40)
+	assertClean(t, CheckOpsShaAncestry(fresh, head, fresh, true))
+
+	stale := strings.Repeat("a", 40)
+	assertClean(t, CheckOpsShaAncestry(stale, head, fresh, true))
+}
+
 func TestReplaceBlockRefusesAMissingOrDuplicatedMarker(t *testing.T) {
 	if _, err := ReplaceBlock("no markers here", FamilyBlockBegin, FamilyBlockEnd, "x"); err == nil {
 		t.Fatal("want an error when the begin marker is absent")

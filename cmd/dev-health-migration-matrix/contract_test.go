@@ -290,6 +290,211 @@ func runCheckCapturingViolations(t *testing.T, root string) (error, string) {
 }
 
 // writeSnapshotAndPage commits `rows` as the render snapshot AND re-renders
+// writeOpsShaAndPage commits `opsSha` as the render snapshot's ops_sha AND
+// re-renders the ops block from it, exactly as -render would, so the page
+// and its snapshot still agree (R13 passes) and any failure is about
+// ops_sha's ancestry alone, not a doc/snapshot mismatch.
+func writeOpsShaAndPage(t *testing.T, root, opsSha string) {
+	t.Helper()
+	snapshot, err := migrationmatrix.LoadRender(filepath.Join(root, renderRelative))
+	if err != nil {
+		t.Fatalf("load the copied snapshot: %v", err)
+	}
+	snapshot.OpsSha = opsSha
+	if err := writeJSON(filepath.Join(root, renderRelative), snapshot); err != nil {
+		t.Fatalf("write the snapshot: %v", err)
+	}
+	catalog, err := migrationmatrix.LoadCatalog(filepath.Join(root, catalogRelative))
+	if err != nil {
+		t.Fatalf("load the copied catalog: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(root, docRelative))
+	if err != nil {
+		t.Fatalf("read the copied doc: %v", err)
+	}
+	doc, err := migrationmatrix.ReplaceBlock(string(raw), migrationmatrix.OpsBlockBegin, migrationmatrix.OpsBlockEnd,
+		migrationmatrix.RenderOpsBlock(snapshot, catalog))
+	if err != nil {
+		t.Fatalf("re-render the ops block: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, docRelative), []byte(doc), 0o644); err != nil {
+		t.Fatalf("write the doc: %v", err)
+	}
+}
+
+// TestCheckFailsWhenOpsShaIsNotAnAncestorOfHEAD is the RED half: a rebase
+// (or a squash on main) can leave a shape-valid ops_sha in last-render.json
+// that HEAD's own history no longer contains, with the rebase itself
+// reporting no conflicts at all -- so -check must not pass with the wrong
+// sha in the file. Reproduced with real git history, the same way
+// TestRenderFailsOnALiveRowTheCatalogCannotDispatch does for R14, rather
+// than asserted from the validator function alone.
+func TestCheckFailsWhenOpsShaIsNotAnAncestorOfHEAD(t *testing.T) {
+	root := copyContractTree(t)
+	run := func(args ...string) string {
+		t.Helper()
+		full := append([]string{"-C", root, "-c", "user.email=t@example.com",
+			"-c", "user.name=t", "-c", "commit.gpgsign=false"}, args...)
+		out, err := exec.Command("git", full...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	run("init", "-q", "-b", "main")
+	run("add", "-A")
+	run("commit", "-qm", "c1")
+	stale := run("rev-parse", "HEAD")
+
+	// A commit with no history in common with the first one -- the shape a
+	// rebase leaves behind when it replays this branch onto a base whose
+	// own history no longer contains the commit ops_sha names (most often
+	// because it was squashed into a different commit on main).
+	run("checkout", "-q", "--orphan", "tmp")
+	run("commit", "-q", "--allow-empty", "-m", "c2")
+	run("branch", "-f", "main", "tmp")
+	run("checkout", "-q", "main")
+	run("branch", "-D", "tmp")
+	head := run("rev-parse", "HEAD")
+	if stale == head {
+		t.Fatalf("test setup did not diverge HEAD from the stale commit")
+	}
+
+	// GREEN control: ops_sha == HEAD (what a fresh render just wrote) still
+	// passes -- the rule is ancestry, not the incident shape, and this is
+	// the ordinary case that must never false-positive.
+	writeOpsShaAndPage(t, root, head)
+	if err := runCheck(root); err != nil {
+		t.Fatalf("ops_sha == HEAD must pass ancestry: %v", err)
+	}
+
+	// RED: a real, resolvable commit that is no longer an ancestor of HEAD.
+	writeOpsShaAndPage(t, root, stale)
+	err, printed := runCheckCapturingViolations(t, root)
+	if err == nil {
+		t.Fatal("-check must fail when ops_sha is not an ancestor of HEAD")
+	}
+	if !strings.Contains(printed, "R9-ops-sha-not-ancestor") {
+		t.Fatalf("-check must name R9-ops-sha-not-ancestor, got:\n%s", printed)
+	}
+	// A checker that says only "mismatch" makes the next person do the diff
+	// by hand -- the failure must name BOTH the stale recorded value and
+	// HEAD it was checked against.
+	if !strings.Contains(printed, stale) || !strings.Contains(printed, head) {
+		t.Fatalf("the failure must name both the recorded ops_sha and HEAD, got:\n%s", printed)
+	}
+}
+
+func gitRunFor(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	full := append([]string{"-C", dir, "-c", "user.email=t@example.com",
+		"-c", "user.name=t", "-c", "commit.gpgsign=false"}, args...)
+	out, err := exec.Command("git", full...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v %s", args, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// TestOpsShaCheckFailsWhenHEADDoesNotResolve is the CI-shaped case a hosted
+// runner's checkout can actually be in: a REAL git repository (unlike a
+// synthetic fixture with no .git at all) whose HEAD does not resolve --
+// unborn branch, detached-and-broken, or corrupt refs. This is the gate's
+// own target environment misbehaving, so it must fail loudly rather than
+// take the "no git here" skip a fixture with no .git legitimately gets.
+func TestOpsShaCheckFailsWhenHEADDoesNotResolve(t *testing.T) {
+	root := t.TempDir()
+	gitRunFor(t, root, "init", "-q")
+
+	violations, err := checkOpsShaAncestry(root, strings.Repeat("a", 40))
+	if err != nil {
+		t.Fatalf("checkOpsShaAncestry returned an error instead of a violation: %v", err)
+	}
+	found := false
+	for _, v := range violations {
+		if v.Rule == "R9-ops-sha-unverifiable" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("a git repository with no resolvable HEAD must fail R9-ops-sha-unverifiable, not skip silently; got: %v", violations)
+	}
+}
+
+// TestOpsShaCheckDoesNotTrustAFalseNegativeFromAShallowClone reproduces,
+// with real git plumbing, the actual mechanism a hosted-runner CI checkout
+// hit: a LATER, unrelated `git fetch --depth=1` against a commit that is
+// ALREADY fully present re-shallows the checkout anyway (`.git/shallow`
+// records the fetched commit as having no parents, independent of whether
+// the real history is still present as objects), and every ancestry check
+// after it in the same checkout can then read a genuine ancestor as "not an
+// ancestor". Verified directly before writing this test: `git
+// merge-base --is-ancestor` on an ordinary full clone answers true for the
+// first commit; after `git fetch --depth=1 origin <a later commit that is
+// already present>` in that SAME clone, the identical command answers
+// false, while `git cat-file -e` on the same sha still succeeds. A checker
+// that trusted that negative would be the exact false pass this ticket
+// exists to close, wearing the fix's own name.
+func TestOpsShaCheckDoesNotTrustAFalseNegativeFromAShallowClone(t *testing.T) {
+	origin := t.TempDir()
+	gitRunFor(t, origin, "init", "-q", "-b", "main")
+	writeCommit := func(content, message string) string {
+		if err := os.WriteFile(filepath.Join(origin, "f"), []byte(content), 0o600); err != nil {
+			t.Fatalf("write f: %v", err)
+		}
+		gitRunFor(t, origin, "add", "-A")
+		gitRunFor(t, origin, "commit", "-qm", message)
+		return gitRunFor(t, origin, "rev-parse", "HEAD")
+	}
+	ancestorSha := writeCommit("1", "c1")
+	laterSha := writeCommit("2", "c2")
+	writeCommit("3", "c3")
+
+	clone := t.TempDir()
+	if out, err := exec.Command("git", "clone", "-q", origin, clone).CombinedOutput(); err != nil {
+		t.Fatalf("git clone: %v %s", err, out)
+	}
+	// Sanity: on an ordinary full clone, ancestry is real and true.
+	if isAncestor, err := gitIsAncestor(clone, ancestorSha, "HEAD"); err != nil || !isAncestor {
+		t.Fatalf("sanity check failed: a full clone should show ancestorSha as an ancestor of HEAD (isAncestor=%v, err=%v)", isAncestor, err)
+	}
+
+	// The re-shallow: a fetch of a commit the clone ALREADY has in full,
+	// exactly as the observed CI step did against its own already-fetched
+	// base sha.
+	if out, err := exec.Command("git", "-C", clone, "fetch", "-q", "--depth=1", "origin", laterSha).CombinedOutput(); err != nil {
+		t.Fatalf("git fetch --depth=1: %v %s", err, out)
+	}
+	if shallow, err := gitOutput(clone, "rev-parse", "--is-shallow-repository"); err != nil || shallow != "true" {
+		t.Fatalf("test setup did not actually re-shallow the clone (shallow=%q, err=%v)", shallow, err)
+	}
+	// The object is still there -- only the graph's parent link was cut.
+	if _, err := gitOutput(clone, "cat-file", "-e", ancestorSha+"^{commit}"); err != nil {
+		t.Fatalf("test setup lost the ancestor object entirely, not just its parent link: %v", err)
+	}
+
+	violations, err := checkOpsShaAncestry(clone, ancestorSha)
+	if err != nil {
+		t.Fatalf("checkOpsShaAncestry returned an error instead of a violation: %v", err)
+	}
+	var gotShallowRule, gotPlainNotAncestorRule bool
+	for _, v := range violations {
+		switch v.Rule {
+		case "R9-ops-sha-unverifiable-shallow":
+			gotShallowRule = true
+		case "R9-ops-sha-not-ancestor":
+			gotPlainNotAncestorRule = true
+		}
+	}
+	if !gotShallowRule {
+		t.Fatalf("a shallow clone's false-negative ancestry must fail R9-ops-sha-unverifiable-shallow, got: %v", violations)
+	}
+	if gotPlainNotAncestorRule {
+		t.Fatalf("a shallow clone's untrustworthy negative must not be reported as a real R9-ops-sha-not-ancestor violation (that message blames a rebase/squash, which did not happen here), got: %v", violations)
+	}
+}
+
+// writeSnapshotAndPage commits `rows` as the render snapshot AND re-renders
 // the ops block from them, exactly as -render would, so the page and its
 // snapshot agree (R13 passes) and any failure is about the rows themselves.
 func writeSnapshotAndPage(t *testing.T, root string, rows []migrationmatrix.OperationRow) {

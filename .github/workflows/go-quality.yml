@@ -198,7 +198,16 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
         run: |
           set -euo pipefail
-          git fetch --no-tags --depth=1 origin "${BASE_SHA}"
+          # Fetch only when the base commit is missing from this checkout,
+          # and never with --depth=1: even a redundant shallow fetch of a
+          # commit already present still writes a shallow boundary, and git
+          # then treats that boundary as "no parents beyond here" for every
+          # later merge-base/ancestor query against this checkout -- a
+          # silently WRONG answer, not a stale one, however complete the
+          # real history still is.
+          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            git fetch --no-tags origin "${BASE_SHA}"
+          fi
           if ! git cat-file -e "${BASE_SHA}:contracts/jobs/v1" 2>/dev/null; then
             echo "No v1 job contracts exist on the merge base; validating the additive tree only."
             exit 0

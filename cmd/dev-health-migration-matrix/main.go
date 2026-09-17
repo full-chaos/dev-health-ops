@@ -22,8 +22,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -287,6 +289,19 @@ func runCheck(root string) error {
 	violations := migrationmatrix.ValidateLedger(ledger, families)
 	violations = append(violations, migrationmatrix.ValidateRender(snapshot)...)
 	violations = append(violations, migrationmatrix.ValidateDocumentDrift(snapshot, catalog)...)
+
+	// ops_sha's SHAPE is checked above (R7); this checks its TRUTH -- that
+	// the merge-base -render recorded is still reachable from the tree
+	// -check is actually running against. A shape-valid sha that a rebase
+	// or a main squash left behind is exactly how a rendered artefact can
+	// assert a merge base no longer in this branch's history while every
+	// other rule here stays green.
+	opsShaViolations, err := checkOpsShaAncestry(root, snapshot.OpsSha)
+	if err != nil {
+		return err
+	}
+	violations = append(violations, opsShaViolations...)
+
 	if unjudged := migrationmatrix.UnjudgedLive(snapshot.Operations); unjudged > 0 {
 		fmt.Fprintf(os.Stderr, "warning: %d live routing row(s) in the committed render carry no document digest -- the snapshot predates the reader carrying the routing key -- so DOCUMENT_DRIFT / UNREGISTERED cannot be judged for them until the next -render. The page states the count.\n", unjudged)
 	}
@@ -715,13 +730,148 @@ func renderShas(root string) (string, string, error) {
 	return head, head, nil
 }
 
+// checkOpsShaAncestry re-derives the tree -check is actually running
+// against and applies migrationmatrix.CheckOpsShaAncestry to the committed
+// ops_sha. It shares renderShas' own git plumbing so the "a render right
+// now would write" value in a failure is computed the exact same way
+// -render itself would -- never a second, possibly-diverging lookup of the
+// same thing.
+//
+// Two ways a git answer can be untrustworthy are told apart, not folded
+// into one "warn and continue" branch:
+//
+//   - No git repository at all is a legitimate skip -- someone running the
+//     tool against an exported tree with no .git has genuinely given it
+//     nothing to check ancestry against, and every real -check target (in
+//     CI or on a contributor's machine) is a checkout, so this path is not
+//     the gate's own environment.
+//   - A real git repository that cannot resolve HEAD, or a shallow clone
+//     that answers "not an ancestor", is the gate's own environment
+//     behaving abnormally, and that is refused rather than silently
+//     skipped or silently trusted. A shallow clone in particular can give a
+//     confidently WRONG negative: `.git/shallow` records a boundary commit
+//     as having no parents at all, independent of whether the real history
+//     is still present as objects, so a commit that genuinely IS an
+//     ancestor reads as "not an ancestor" the moment anything on the path
+//     between them was ever fetched shallow -- observed directly: a later,
+//     unrelated `git fetch --depth=1` against an already-fully-fetched
+//     commit still re-shallowed the checkout and flipped a true ancestor to
+//     a false negative for every git command after it in the same job.
+func checkOpsShaAncestry(root, opsSha string) ([]migrationmatrix.Violation, error) {
+	if _, err := gitOutput(root, "rev-parse", "--git-dir"); err != nil {
+		fmt.Fprintf(os.Stderr,
+			"warning: %s has no git repository at all; ops_sha ancestry was NOT checked.\n", root)
+		return nil, nil
+	}
+
+	head, err := gitOutput(root, "rev-parse", "HEAD")
+	if err != nil {
+		return []migrationmatrix.Violation{{
+			Subject: "ops_sha",
+			Rule:    "R9-ops-sha-unverifiable",
+			Detail: fmt.Sprintf(
+				"ops_sha's ancestry could not be checked: this is a git repository, but HEAD does not "+
+					"resolve (%v). A real checkout with no usable HEAD is exactly the environment this rule "+
+					"protects, so this is refused rather than silently skipped -- a detached, unborn, or "+
+					"corrupt ref is the usual cause; fix the checkout and re-run.", err),
+		}}, nil
+	}
+
+	// Best-effort only: renderShas' own fallback (an unresolvable
+	// origin/main or main) is not fatal here -- it only weakens the
+	// "a render right now would write" value in a failure message, never
+	// the ancestry verdict itself, which is decided below from opsSha and
+	// head alone.
+	currentBase, _, err := renderShas(root)
+	if err != nil {
+		currentBase = "(could not be computed: " + err.Error() + ")"
+	}
+
+	if _, err := gitOutput(root, "cat-file", "-e", opsSha+"^{commit}"); err != nil {
+		return []migrationmatrix.Violation{{
+			Subject: "ops_sha",
+			Rule:    "R9-ops-sha-unknown",
+			Detail: fmt.Sprintf(
+				"ops_sha %s does not resolve to a commit in this checkout (a shallow clone with no "+
+					"fetch-depth: 0 is the usual CI cause; a render carried forward from an unrelated "+
+					"history is the other). A render right now would write ops_sha %s. "+
+					"Re-render: go run ./cmd/dev-health-migration-matrix -render -root .",
+				opsSha, currentBase),
+		}}, nil
+	}
+
+	isAncestor, err := gitIsAncestor(root, opsSha, head)
+	if err != nil {
+		return nil, fmt.Errorf("check ops_sha ancestry: %w", err)
+	}
+
+	if !isAncestor {
+		if shallow, shallowErr := gitOutput(root, "rev-parse", "--is-shallow-repository"); shallowErr == nil && shallow == "true" {
+			return []migrationmatrix.Violation{{
+				Subject: "ops_sha",
+				Rule:    "R9-ops-sha-unverifiable-shallow",
+				Detail: fmt.Sprintf(
+					"ops_sha %s's ancestry of HEAD %s could not be reliably determined: this checkout is a "+
+						"shallow clone, and a negative merge-base result from one is not trustworthy -- git "+
+						"records a shallow boundary as \"no parents beyond here\" even when the real history "+
+						"is still present as objects, so a true ancestor can read as false the moment anything "+
+						"on the path between them was ever fetched shallow. This is refused rather than either "+
+						"accepted as a real violation or silently skipped. Fetch full history (fetch-depth: 0, "+
+						"and no later step in the same checkout may re-shallow it) and re-run.",
+					opsSha, head),
+			}}, nil
+		}
+	}
+
+	return migrationmatrix.CheckOpsShaAncestry(opsSha, head, currentBase, isAncestor), nil
+}
+
+// gitIsAncestor reports whether ancestor is an ancestor of (or equal to)
+// descendant. `git merge-base --is-ancestor` documents exit code 1 as the
+// real "no" -- distinguished here from every other failure (an unknown ref,
+// a corrupt repo, ...), which is returned as an error instead of folding
+// into a false "no" that would read as a clean, ordinary staleness.
+func gitIsAncestor(root, ancestor, descendant string) (bool, error) {
+	cmd := exec.Command("git", "-C", root, "merge-base", "--is-ancestor", ancestor, descendant)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+			return false, nil
+		}
+		msg := strings.TrimSpace(stderr.String())
+		if msg != "" {
+			return false, fmt.Errorf("git merge-base --is-ancestor %s %s: %w: %s", ancestor, descendant, err, msg)
+		}
+		return false, fmt.Errorf("git merge-base --is-ancestor %s %s: %w", ancestor, descendant, err)
+	}
+	return true, nil
+}
+
 func gitOutput(root string, args ...string) (string, error) {
 	full := append([]string{"-C", root}, args...)
 	out, err := exec.Command("git", full...).Output()
 	if err != nil {
-		return "", fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
+		return "", fmt.Errorf("git %s: %w%s", strings.Join(args, " "), err, gitStderr(err))
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// gitStderr appends a command's captured stderr to an error message, when
+// there is one to show. (*exec.ExitError).Error() is just "exit status N" --
+// the diagnostic text git actually printed (e.g. "detected dubious
+// ownership", "not a git repository") lives in the Stderr field instead,
+// and dropping it is exactly what turned a two-minute diagnosis into a
+// raw-CI-log excavation the first time this mattered.
+func gitStderr(err error) string {
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		if msg := strings.TrimSpace(string(exitErr.Stderr)); msg != "" {
+			return ": " + msg
+		}
+	}
+	return ""
 }
 
 func splitCSV(value string) []string {

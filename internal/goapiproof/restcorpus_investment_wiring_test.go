@@ -59,38 +59,54 @@ func TestInvestmentDeclarationsCarryShapes(t *testing.T) {
 
 	// investmentSunburstBaselineDefects: the five inherited
 	// investmentBaselineDefects entries, PLUS its own repos-join-fan-out
-	// entry with a KeyedDirectionShape and Paths narrowed to data.value
-	// alone (data.scope dropped as an unreachable leaf once rows are
-	// paired by a key that already includes it).
-	if len(investmentSunburstBaselineDefects) != len(investmentBaselineDefects)+1 {
-		t.Fatalf("investmentSunburstBaselineDefects has %d entries, want %d (inherited) + 1 (its own fan-out entry)", len(investmentSunburstBaselineDefects), len(investmentBaselineDefects))
+	// entry (KeyedDirectionShape, Paths narrowed to data.value alone --
+	// data.scope dropped as an unreachable leaf once rows are paired by
+	// a key that already includes it), PLUS a limit-boundary displacement
+	// entry (LimitDisplacementShape) that admits the presence pair the
+	// SAME fan-out produces when it moves a row across the route's own
+	// LIMIT boundary.
+	if len(investmentSunburstBaselineDefects) != len(investmentBaselineDefects)+2 {
+		t.Fatalf("investmentSunburstBaselineDefects has %d entries, want %d (inherited) + 2 (fan-out + limit-displacement)", len(investmentSunburstBaselineDefects), len(investmentBaselineDefects))
 	}
-	sunburstDefect := investmentSunburstBaselineDefects[len(investmentSunburstBaselineDefects)-1]
+	sunburstDefect := investmentSunburstBaselineDefects[len(investmentSunburstBaselineDefects)-2]
 	if sunburstDefect.Ticket == firstTicket {
-		t.Fatalf("investmentSunburstBaselineDefects' own last entry shares investmentBaselineDefects' ticket (%q) -- it should carry its OWN, different mechanism's ticket", firstTicket)
+		t.Fatalf("investmentSunburstBaselineDefects' own fan-out entry shares investmentBaselineDefects' ticket (%q) -- it should carry its OWN, different mechanism's ticket", firstTicket)
 	}
 	if sunburstDefect.KeyedDirectionShape == nil {
-		t.Fatal("investmentSunburstBaselineDefects' own last entry carries no KeyedDirectionShape")
+		t.Fatal("investmentSunburstBaselineDefects' own fan-out entry carries no KeyedDirectionShape")
 	}
 	if len(sunburstDefect.Paths) != 1 || sunburstDefect.Paths[0] != "data.value" {
-		t.Fatalf("investmentSunburstBaselineDefects' own last entry Paths = %v, want exactly [data.value]", sunburstDefect.Paths)
+		t.Fatalf("investmentSunburstBaselineDefects' own fan-out entry Paths = %v, want exactly [data.value]", sunburstDefect.Paths)
+	}
+	displacementDefect := investmentSunburstBaselineDefects[len(investmentSunburstBaselineDefects)-1]
+	if displacementDefect.Ticket == firstTicket || displacementDefect.Ticket == sunburstDefect.Ticket {
+		t.Fatalf("investmentSunburstBaselineDefects' own last entry ticket (%q) must differ from both investmentBaselineDefects' (%q) and the fan-out entry's (%q)", displacementDefect.Ticket, firstTicket, sunburstDefect.Ticket)
+	}
+	if displacementDefect.LimitDisplacementShape == nil {
+		t.Fatal("investmentSunburstBaselineDefects' own last entry carries no LimitDisplacementShape")
+	}
+	if len(displacementDefect.Paths) != 1 || displacementDefect.Paths[0] != "data" {
+		t.Fatalf("investmentSunburstBaselineDefects' own last entry Paths = %v, want exactly [data]", displacementDefect.Paths)
 	}
 	if len(investmentSunburstOrderInsensitiveLists) != 1 || investmentSunburstOrderInsensitiveLists[0].Path != "data" {
 		t.Fatalf("investmentSunburstOrderInsensitiveLists = %+v, want one entry for data", investmentSunburstOrderInsensitiveLists)
 	}
 
-	// investmentFlowRepoDedupParity: ordering declarations plus seven
-	// BaselineDefects (a fan-out entry, a conservation entry, and five
-	// direction entries sharing one ticket), and NO entry anywhere citing
-	// chosen_mode/label/description OR team_coverage/repo_coverage (the
-	// latter pair carries no honest direction under this route's own
-	// subcategory-weighted, ARRAY-JOINed ratio -- see
-	// investmentFlowRepoDedupParity's own doc comment in restcorpus.go).
+	// investmentFlowRepoDedupParity: ordering declarations plus eight
+	// BaselineDefects (a fan-out entry, a conservation entry, five
+	// direction entries sharing one ticket, and a team-coverage identity
+	// entry), and NO entry anywhere citing chosen_mode/label/description
+	// OR repo_coverage (repo_coverage carries no honest direction under
+	// this route's own subcategory-weighted, ARRAY-JOINed ratio -- see
+	// investmentFlowRepoDedupParity's own doc comment in restcorpus.go --
+	// and no node-identity either, since repoRollupMap DOES bucket repos
+	// past TopNRepos, unlike the team dimension team_coverage's own
+	// identity relies on).
 	if len(investmentFlowRepoDedupParity.OrderInsensitiveLists) != 2 {
 		t.Fatalf("investmentFlowRepoDedupParity.OrderInsensitiveLists = %+v, want 2 entries (data.nodes, data.links)", investmentFlowRepoDedupParity.OrderInsensitiveLists)
 	}
-	if len(investmentFlowRepoDedupParity.BaselineDefects) != 7 {
-		t.Fatalf("investmentFlowRepoDedupParity has %d BaselineDefects, want 7", len(investmentFlowRepoDedupParity.BaselineDefects))
+	if len(investmentFlowRepoDedupParity.BaselineDefects) != 8 {
+		t.Fatalf("investmentFlowRepoDedupParity has %d BaselineDefects, want 8", len(investmentFlowRepoDedupParity.BaselineDefects))
 	}
 	fanout := investmentFlowRepoDedupParity.BaselineDefects[0]
 	if fanout.SankeyRepoFanoutShape == nil {
@@ -150,13 +166,34 @@ func TestInvestmentDeclarationsCarryShapes(t *testing.T) {
 
 	unassigned := investmentFlowRepoDedupParity.BaselineDefects[6]
 	if unassigned.DictKeyDirectionShape == nil {
-		t.Fatalf("investmentFlowRepoDedupParity[8] = %+v, want a DictKeyDirectionShape", unassigned)
+		t.Fatalf("investmentFlowRepoDedupParity[6] = %+v, want a DictKeyDirectionShape", unassigned)
 	}
 	if unassigned.Ticket != supersessionTicket {
-		t.Fatalf("investmentFlowRepoDedupParity[8].Ticket = %q, want the same supersession-exclusion ticket (%q)", unassigned.Ticket, supersessionTicket)
+		t.Fatalf("investmentFlowRepoDedupParity[6].Ticket = %q, want the same supersession-exclusion ticket (%q)", unassigned.Ticket, supersessionTicket)
 	}
 	if unassigned.DictKeyDirectionShape.DictPath != "data.unassigned_reasons" {
-		t.Fatalf("investmentFlowRepoDedupParity[8].DictKeyDirectionShape.DictPath = %q, want data.unassigned_reasons", unassigned.DictKeyDirectionShape.DictPath)
+		t.Fatalf("investmentFlowRepoDedupParity[6].DictKeyDirectionShape.DictPath = %q, want data.unassigned_reasons", unassigned.DictKeyDirectionShape.DictPath)
+	}
+
+	coverageIdentity := investmentFlowRepoDedupParity.BaselineDefects[7]
+	if coverageIdentity.TeamCoverageIdentityShape == nil {
+		t.Fatalf("investmentFlowRepoDedupParity[7] = %+v, want a TeamCoverageIdentityShape", coverageIdentity)
+	}
+	if coverageIdentity.Ticket == fanout.Ticket || coverageIdentity.Ticket == conserve.Ticket || coverageIdentity.Ticket == supersessionTicket {
+		t.Fatalf("investmentFlowRepoDedupParity[7].Ticket = %q, want its OWN ticket, distinct from the fan-out/conservation/supersession mechanisms it depends on but does not restate", coverageIdentity.Ticket)
+	}
+	wantCoveragePaths := []string{"data.team_coverage", "data.coverage.team_coverage"}
+	if !reflect.DeepEqual(coverageIdentity.Paths, wantCoveragePaths) {
+		t.Fatalf("investmentFlowRepoDedupParity[7].Paths = %v, want %v", coverageIdentity.Paths, wantCoveragePaths)
+	}
+	if !reflect.DeepEqual(coverageIdentity.TeamCoverageIdentityShape.CoveragePaths, wantCoveragePaths) {
+		t.Fatalf("investmentFlowRepoDedupParity[7].TeamCoverageIdentityShape.CoveragePaths = %v, want %v", coverageIdentity.TeamCoverageIdentityShape.CoveragePaths, wantCoveragePaths)
+	}
+	if coverageIdentity.TeamCoverageIdentityShape.TeamGroup != "team" {
+		t.Fatalf("investmentFlowRepoDedupParity[7].TeamCoverageIdentityShape.TeamGroup = %q, want %q", coverageIdentity.TeamCoverageIdentityShape.TeamGroup, "team")
+	}
+	if coverageIdentity.TeamCoverageIdentityShape.UnassignedTeamNodeName != "Unassigned team" {
+		t.Fatalf("investmentFlowRepoDedupParity[7].TeamCoverageIdentityShape.UnassignedTeamNodeName = %q, want %q", coverageIdentity.TeamCoverageIdentityShape.UnassignedTeamNodeName, "Unassigned team")
 	}
 
 	for i, defect := range investmentFlowRepoDedupParity.BaselineDefects {
@@ -164,8 +201,8 @@ func TestInvestmentDeclarationsCarryShapes(t *testing.T) {
 			if path == "data.chosen_mode" || path == "data.label" || path == "data.description" {
 				t.Fatalf("investmentFlowRepoDedupParity[%d] cites %q -- chosen_mode/label/description must stay uncovered (categorical threshold flip, no honest shape)", i, path)
 			}
-			if path == "data.team_coverage" || path == "data.repo_coverage" {
-				t.Fatalf("investmentFlowRepoDedupParity[%d] cites %q -- team_coverage/repo_coverage must stay uncovered (no direction derivable for this route's own subcategory-weighted, ARRAY-JOINed ratio under a subset exclusion that shrinks numerator and denominator together; a borrowed direction from a different query's own citation is not a valid re-derivation)", i, path)
+			if path == "data.repo_coverage" {
+				t.Fatalf("investmentFlowRepoDedupParity[%d] cites %q -- repo_coverage must stay uncovered (no direction derivable for this route's own subcategory-weighted, ARRAY-JOINed ratio under a subset exclusion that shrinks numerator and denominator together, and no node-group identity either since repoRollupMap buckets repos past TopNRepos, unlike the team dimension)", i, path)
 			}
 		}
 	}

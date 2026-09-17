@@ -36,14 +36,21 @@ func TestInvestmentSunburstFanout_BaselineGreaterIsAdmitted(t *testing.T) {
 	if result.DifferencesOutsideBaselineDefect != 0 {
 		t.Fatalf("outside = %d, want 0: findings %+v", result.DifferencesOutsideBaselineDefect, result.Findings)
 	}
+	// The fan-out entry is the second-to-last of investmentSunburstBaselineDefects:
+	// investmentBaselineDefects' five inherited entries, then the
+	// KeyedDirectionShape fan-out entry this test proves, then the
+	// LimitDisplacementShape entry (a single row has nothing to displace
+	// a limit boundary with, so that one stays idle here, which is
+	// expected, not stale).
+	fanoutTicket := investmentSunburstBaselineDefects[len(investmentSunburstBaselineDefects)-2].Ticket
 	matched := false
 	for _, ticket := range result.BaselineDefectsMatched {
-		if ticket == investmentSunburstBaselineDefects[len(investmentSunburstBaselineDefects)-1].Ticket {
+		if ticket == fanoutTicket {
 			matched = true
 		}
 	}
 	if !matched {
-		t.Fatalf("matched = %v, want the fan-out entry's own ticket present -- idle %v stale %v", result.BaselineDefectsMatched, result.IdleIntermittentBaselineDefects, result.StaleBaselineDefects)
+		t.Fatalf("matched = %v, want the fan-out entry's own ticket (%q) present -- idle %v stale %v", result.BaselineDefectsMatched, fanoutTicket, result.IdleIntermittentBaselineDefects, result.StaleBaselineDefects)
 	}
 }
 

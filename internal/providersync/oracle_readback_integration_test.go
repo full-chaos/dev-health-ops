@@ -280,7 +280,18 @@ func TestGenericComparatorMatchesCorrectReadback(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// This fixture supplies a null merged_at (winning.MergedAt above) over
+	// an already-populated one (older.MergedAt): exactly the shape the
+	// write-once guard exists to refuse. The production write path this
+	// test exercises therefore does not store winning's raw in-memory
+	// shape unmodified -- it preserves older's merged_at instead, and every
+	// other column still lands as winning specified. That is this test's
+	// own DECLARED divergence, asserted explicitly against the value the
+	// guard is now known to preserve (not excluded from comparison), so a
+	// future change to the guard's behaviour still fails this test instead
+	// of silently passing.
 	expected := expectedPullRequestRowMap(t, winning)
+	expected["merged_at"] = encodeOracleValue(t, older.MergedAt)
 	actual := readPullRequestRowCorrectly(ctx, t, harness, winning.RepoID, winning.Number)
 	messages := diffRows("winning-after-mixed-null-history", expected, actual,
 		nil, pullRequestReadbackComparisonExclusions)

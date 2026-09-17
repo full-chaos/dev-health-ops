@@ -238,22 +238,42 @@ func TestGitHubPullRequestReadbackDoesNotReconstructRowFromMixedVersions(t *test
 		t.Fatal(err)
 	}
 
-	// Winning version: the PR was reopened (state back to "open"), so
-	// merged_at, closed_at, AND first_review_at are all NULL on the row
-	// that must win -- while the older version above has non-NULL values in
-	// every one of those columns. A per-column argMax reconstruction would
-	// backfill some or all of them from the older row instead of correctly
-	// reading NULL.
+	// Winning version: merged_at, closed_at, AND first_review_at go from
+	// populated (older) to NULL. This row is inserted DIRECTLY, bypassing
+	// sink.WriteEffect: the merged_at write-once guard now refuses
+	// exactly this shape at the writer -- a null landing over a populated
+	// value for the same key -- so this shape can no longer be PRODUCED
+	// through the production write path. It is still a shape the READ side
+	// must handle correctly, because rows in exactly this shape already
+	// exist in the table from before that guard existed, and this test's
+	// claim is about FINAL's read behaviour, not about what the writer
+	// currently allows. A per-column argMax reconstruction would backfill
+	// some or all of these three columns from the older row instead of
+	// correctly reading NULL.
 	winning := pullRequestReadbackFixture(now)
 	winning.OrgID = claim.OrgID
 	winning.State = "open"
 	winning.MergedAt, winning.ClosedAt = nil, nil
 	winning.FirstReviewAt = nil
 	winning.ReviewsCount, winning.ChangesRequestedCount = 0, 0
-	effect := pullRequestEffect(t, winning)
-	if err := sink.WriteEffect(ctx, claim, effect); err != nil {
+	if err := harness.conn.Exec(ctx, `
+INSERT INTO git_pull_requests (
+  repo_id, number, title, body, state, author_name, author_email,
+  created_at, merged_at, closed_at, head_branch, base_branch,
+  additions, deletions, changed_files, first_review_at, first_comment_at,
+  changes_requested_count, reviews_count, comments_count, last_synced,
+  source_id, org_id
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		winning.RepoID, winning.Number, winning.Title, winning.Body, winning.State,
+		winning.AuthorName, winning.AuthorEmail, winning.CreatedAt, winning.MergedAt,
+		winning.ClosedAt, winning.HeadBranch, winning.BaseBranch, winning.Additions,
+		winning.Deletions, winning.ChangedFiles, winning.FirstReviewAt,
+		winning.FirstCommentAt, winning.ChangesRequestedCount, winning.ReviewsCount,
+		winning.CommentsCount, winning.LastSynced, winning.SourceID, winning.OrgID,
+	); err != nil {
 		t.Fatal(err)
 	}
+	effect := pullRequestEffect(t, winning)
 	assertPullRequestVersionCount(t, ctx, harness, winning.RepoID, winning.Number, 2)
 
 	inspection, err := sink.InspectEffect(ctx, claim, effect)

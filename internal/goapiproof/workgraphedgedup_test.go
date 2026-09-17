@@ -1,6 +1,9 @@
 package goapiproof
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // This file exercises WorkGraphEdgeDedupShape (workgraphedgedup.go)
 // directly through small, self-contained edge lists -- the shape-specific
@@ -52,7 +55,11 @@ func TestWorkGraphEdgeDedupShape_ContentIdenticalDuplicateIsAdmitted(t *testing.
 
 // Two rows sharing one edgeId that do NOT agree with each other are not a
 // duplicate physical version of the same edge -- something else changed
-// under that id, and nothing here may explain it away.
+// under that id, and nothing here may explain it away. Per this shape's own per-id verdict, this
+// excludes ONLY id "a": id "b" is a genuine, well-behaved shared id
+// elsewhere in the SAME comparison and is still admitted, so the ticket
+// still reads as matched -- one id's own disagreement narrows admission
+// to that id, it does not blind the shape to every other one.
 func TestWorkGraphEdgeDedupShape_DuplicateGroupThatDisagreesIsNotAdmitted(t *testing.T) {
 	edgeADifferentConfidence := `{"edgeId":"a","sourceId":"pr#1","confidence":0.5}`
 	baseline := snapshotFromJSON(t, edgesBody(edgeA+","+edgeADifferentConfidence+","+edgeB))
@@ -62,9 +69,16 @@ func TestWorkGraphEdgeDedupShape_DuplicateGroupThatDisagreesIsNotAdmitted(t *tes
 	if result.DifferencesOutsideBaselineDefect == 0 {
 		t.Fatalf("outside = 0, want at least 1 -- a duplicate group that disagrees must not be silently admitted: findings %+v", result.Findings)
 	}
-	for _, ticket := range result.BaselineDefectsMatched {
-		if ticket == "CHAOS-TEST-DEDUP" {
-			t.Fatalf("matched = %v, must not include CHAOS-TEST-DEDUP", result.BaselineDefectsMatched)
+	if !equalStrings(result.BaselineDefectsMatched, []string{"CHAOS-TEST-DEDUP"}) {
+		t.Fatalf("matched = %v, want [CHAOS-TEST-DEDUP] -- id \"b\" is well-behaved and shared, so it must still be admitted: idle %v stale %v",
+			result.BaselineDefectsMatched, result.IdleIntermittentBaselineDefects, result.StaleBaselineDefects)
+	}
+	for _, f := range result.Findings {
+		if f.Kind != FindingMismatch {
+			continue
+		}
+		if strings.Contains(f.Detail, `not admitted by the declared duplicate-row shape`) && !strings.Contains(f.Detail, `"a"`) {
+			t.Errorf("excluded finding %s cites a different id than \"a\": %s", f.Path, f.Detail)
 		}
 	}
 }

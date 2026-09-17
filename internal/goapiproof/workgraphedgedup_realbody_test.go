@@ -2,7 +2,9 @@ package goapiproof
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -61,22 +63,21 @@ func TestWorkGraphEdgeDedupShape_RealCapturedBodyIsFullyCovered(t *testing.T) {
 }
 
 // TestWorkGraphEdgeDedupShape_RealCapturedBodyWithAGenuineRegressionStaysUncovered
-// keeps the shape's safety intent: a shared id whose content really
-// differs must still leave the citation stale (or idle), never matched.
-// Starting from the same real captured pair the coverage test above
-// proves is otherwise fully explained, this mutates ONE shared, non-
-// duplicated edge's own field in the candidate leg -- a real per-field
-// regression hiding behind an id the two pages share -- and asserts the
-// whole plan refuses again, exactly as it did (for the wrong reason)
-// before the fix.
+// keeps the shape's safety intent against the real captured pair, per
+// this shape's per-id verdict: a shared id whose content really differs is
+// excluded from admission, but that exclusion is now scoped to that ONE
+// id -- every other edge in this 1000-element fixture is judged exactly
+// as the coverage test above shows, so the ticket still reads as
+// matched, and the mutated edge's own findings cite its own id.
 func TestWorkGraphEdgeDedupShape_RealCapturedBodyWithAGenuineRegressionStaysUncovered(t *testing.T) {
 	spec, err := SpecFor("workGraphEdges")
 	if err != nil {
 		t.Fatalf("SpecFor(workGraphEdges): %v", err)
 	}
 
+	mutatedPath, mutatedID := mutateSharedEdgeDisplayName(t, workGraphEdgesDedupCandidatePath)
 	baseline := snapshotFromFile(t, workGraphEdgesDedupBaselinePath)
-	candidate := snapshotFromFile(t, mutateSharedEdgeDisplayName(t, workGraphEdgesDedupCandidatePath))
+	candidate := snapshotFromFile(t, mutatedPath)
 
 	result := Compare(baseline, candidate, spec.Parity)
 
@@ -86,17 +87,33 @@ func TestWorkGraphEdgeDedupShape_RealCapturedBodyWithAGenuineRegressionStaysUnco
 	if result.DifferencesOutsideBaselineDefect == 0 {
 		t.Fatal("outside = 0 -- a genuine per-field regression on a shared id must not be admitted by the duplicate-row shape")
 	}
-	if len(result.BaselineDefectsMatched) != 0 {
-		t.Fatalf("matched = %v, want none -- a genuine regression must not read as the duplicate-row mechanism", result.BaselineDefectsMatched)
+	wantTicket := spec.Parity.BaselineDefects[0].Ticket
+	if !equalStrings(result.BaselineDefectsMatched, []string{wantTicket}) {
+		t.Fatalf("matched = %v, want [%s] -- a regression on ONE edge must not blind the citation to the other 999 it still explains: idle %v stale %v",
+			result.BaselineDefectsMatched, wantTicket, result.IdleIntermittentBaselineDefects, result.StaleBaselineDefects)
+	}
+	foundMutation := false
+	mutatedIDQuoted := fmt.Sprintf("%q", mutatedID)
+	for _, f := range result.Findings {
+		if f.Path != "$.data.workGraphEdges.edges[0].sourceDisplayName" {
+			continue
+		}
+		foundMutation = true
+		if !strings.Contains(f.Detail, mutatedIDQuoted) {
+			t.Errorf("mutated finding does not cite its own edge id: %s", f.Detail)
+		}
+	}
+	if !foundMutation {
+		t.Fatal("expected a finding at $.data.workGraphEdges.edges[0].sourceDisplayName -- the mutation did not produce one")
 	}
 }
 
 // mutateSharedEdgeDisplayName writes a copy of the candidate fixture with
-// its first edge's sourceDisplayName changed. That edge's id is present
-// exactly once on each side (a shared, non-duplicated id), so the
-// mutation is a real disagreement under rule 3, not a duplicate-group
-// disagreement under rule 1.
-func mutateSharedEdgeDisplayName(t *testing.T, path string) string {
+// its first edge's sourceDisplayName changed, and returns that edge's own
+// edgeId. That edge's id is present exactly once on each side (a shared,
+// non-duplicated id), so the mutation is a real disagreement under rule 2,
+// not a duplicate-group disagreement under rule 1.
+func mutateSharedEdgeDisplayName(t *testing.T, path string) (mutatedPath, edgeID string) {
 	t.Helper()
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -108,6 +125,10 @@ func mutateSharedEdgeDisplayName(t *testing.T, path string) string {
 	}
 	edges := body["data"].(map[string]any)["workGraphEdges"].(map[string]any)["edges"].([]any)
 	first := edges[0].(map[string]any)
+	id, _ := first["edgeId"].(string)
+	if id == "" {
+		t.Fatalf("edges[0] carries no edgeId to assert against")
+	}
 	original, _ := first["sourceDisplayName"].(string)
 	first["sourceDisplayName"] = original + " -- mutated for the regression test"
 
@@ -119,5 +140,5 @@ func mutateSharedEdgeDisplayName(t *testing.T, path string) string {
 	if err := os.WriteFile(out, mutated, 0o600); err != nil {
 		t.Fatalf("write mutated fixture: %v", err)
 	}
-	return out
+	return out, id
 }

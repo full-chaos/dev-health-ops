@@ -220,7 +220,7 @@ var drilldownPRsParity = Options{
 	BaselineDefects: []BaselineDefect{
 		{
 			Ticket: "CHAOS-5803",
-			Reason: "git_pull_requests' created_at/merged_at/first_review_at columns are ClickHouse DateTime64(3, 'UTC') (000_raw_tables.sql); Python's clickhouse_connect driver returns them NAIVE (no tzinfo), so the Pydantic response serializes them with no offset, while Go's driver attaches UTC location and this port's PRItem (encoding/json's default time.Time marshaling) emits RFC 3339 with an explicit offset -- the same class of divergence already declared for the operations.go GraphQL corpus's own capacityForecasts and pr entries. Go is correct.",
+			Reason: "git_pull_requests' created_at/merged_at/first_review_at columns are ClickHouse DateTime64(3, 'UTC') (000_raw_tables.sql); Python's clickhouse_connect driver returns them NAIVE (no tzinfo), so the Pydantic response serializes them with no offset, while Go's driver attaches UTC location and this port's PRItem (encoding/json's default time.Time marshaling) emits RFC 3339 with an explicit offset -- the same class of divergence already declared for the operations.go GraphQL corpus's own capacityForecasts and pr entries. Go is correct. The same naive-vs-aware rendering recurs on GET /api/v1/people/{person_id}/summary's deltas spark series ts field, reading a ClickHouse Date column through a different query path and declared separately, in peopleSummarySparkTimestampDefect below.",
 			Paths: []string{
 				"data.items.created_at",
 				"data.items.merged_at",
@@ -318,7 +318,7 @@ var explainParity = Options{
 		},
 		{
 			Ticket: "CHAOS-5819",
-			Reason: "blocked_work's table/column read (work_item_state_durations_daily.duration_hours) carries no status predicate in fetch_metric_value/fetch_metric_contributors/fetch_metric_driver_delta (api/queries/metrics.py, api/queries/explain.py), so the 'Blocked Work' headline, its drivers and its contributors sum/rank duration_hours across every status the table records (backlog/todo/in_progress/in_review/blocked/done/canceled/unknown) -- only this table's OTHER, unrelated reader (fetch_blocked_hours, used by home.py, never by /explain) restricts to status = 'blocked'. This port's blocked_work config carries a StatusFilter of 'blocked' (cmd/query-api/internal/explain/metricconfig.go), reaching every numeric field this route derives from that column for this one metric. Go is correct.",
+			Reason: "blocked_work's table/column read (work_item_state_durations_daily.duration_hours) carries no status predicate in fetch_metric_value/fetch_metric_contributors/fetch_metric_driver_delta (api/queries/metrics.py, api/queries/explain.py), so the 'Blocked Work' headline, its drivers and its contributors sum/rank duration_hours across every status the table records (backlog/todo/in_progress/in_review/blocked/done/canceled/unknown) -- only this table's OTHER, unrelated reader (fetch_blocked_hours, used by home.py, never by /explain) restricts to status = 'blocked'. This port's blocked_work config carries a StatusFilter of 'blocked' (cmd/query-api/internal/explain/metricconfig.go), reaching every numeric field this route derives from that column for this one metric. Go is correct. This same divergence can also manifest as a LIST-LENGTH difference: a window/scope whose blocked-status rows are fewer than its non-blocked ones leaves data.drivers/data.contributors shorter on the candidate side, and a window with no blocked-status row at all leaves them empty against a populated baseline. Paths above cannot reach that manifestation and no addition to them would: classifyBaselineDefects (compare.go) admits a finding only when leafDifference(shape) holds, which is exactly ShapeValue/ShapeNull/ShapeScalarType -- a length, presence or structure difference is categorically outside every BaselineDefect's coverage, independent of what its Paths name. A list-length instance of this divergence is therefore knowingly left uncovered and stays a visible, real finding on the receipt whenever it fires.",
 			Paths: []string{
 				"data.value",
 				"data.delta_pct",
@@ -421,6 +421,49 @@ var peopleDetailParity = Options{
 			IntermittentReason: "present only while one of the four source tables holds an unmerged physical version for THIS person_id's own rows since the last merge; a comparison taken after the next background merge shows no divergence",
 		},
 	},
+}
+
+// peopleSummarySparkTimestampDefect declares GET .../summary's own
+// deltas[].spark[].ts divergence: user_metrics_daily.day and
+// work_item_user_metrics_daily.day (001_metrics_v2.sql) are ClickHouse
+// Date columns, not DateTime64. _spark_points (services/people.py) sets
+// SparkPoint.ts directly from the driver's row value; clickhouse_connect
+// returns a Date column as a naive python date, and SparkPoint.ts's own
+// pydantic type (models/schemas.py: `ts: datetime`) coerces it to
+// midnight with no tzinfo, so the response serializes with no UTC
+// offset. This port's fetchPersonMetricSeries (metricqueries.go) scans
+// the same Date column into a time.Time the ClickHouse Go driver
+// locates in UTC, and encoding/json's default time.Time marshaling
+// always writes an explicit offset -- the same naive-vs-aware rendering
+// drilldownPRsParity's own datetime entry declares for git_pull_requests'
+// DateTime64 columns, recurring here on a Date column reached through a
+// different query path. Go is correct. Unlike peopleDetailParity's own
+// citation, this divergence does not depend on merge state -- every REST
+// citation in this table is Intermittent (TestEveryRESTBaselineDefect
+// IsIntermittent), but on RESULT CONTENT, not ClickHouse's: it is
+// present whenever this person's deltas actually carry a spark point,
+// the same content-triggered reading drilldownPRsParity's own datetime
+// entry already uses, and it goes idle (never stale) for a person whose
+// series happens to be empty this request -- never idle because a
+// background merge happened to run.
+var peopleSummarySparkTimestampDefect = BaselineDefect{
+	Ticket:             "CHAOS-5859",
+	Reason:             "user_metrics_daily.day and work_item_user_metrics_daily.day (001_metrics_v2.sql) are ClickHouse Date columns; _spark_points (services/people.py) assigns SparkPoint.ts from the driver's row value, and SparkPoint.ts's pydantic type (models/schemas.py: `ts: datetime`) coerces the naive python date clickhouse_connect returns for a Date column into a naive datetime with no tzinfo, so the response serializes with no UTC offset. This port's fetchPersonMetricSeries (metricqueries.go) scans the same Date column into a time.Time the ClickHouse Go driver locates in UTC, and encoding/json's default time.Time marshaling always writes an explicit offset. Go is correct.",
+	Paths:              []string{"data.deltas.spark.ts"},
+	Intermittent:       true,
+	IntermittentReason: "present only while this person's deltas actually carry at least one non-empty spark series; a person whose window returns an empty series for every metric shows no divergence under this path and is not a bug in this citation -- a result-content trigger, not ClickHouse merge state: a comparison taken after a background merge shows the identical divergence, because the underlying naive-vs-aware rendering the Reason describes never depends on which physical row version was read",
+}
+
+// peopleSummaryParity is GET /api/v1/people/{person_id}/summary's own
+// live (person_id-bound, 200) entry: peopleDetailParity's own citation
+// plus the content-triggered spark timestamp citation above. Not shared
+// with /metric's own entry below (peopleDetailParity itself): /metric's
+// response carries no deltas/spark shape at all (MetricResponse.
+// Timeseries' own day field is already a plain string, metric.go), so a
+// citation naming a path that route can never produce would cover
+// nothing there and refuse the run as stale.
+var peopleSummaryParity = Options{
+	BaselineDefects: append(append([]BaselineDefect{}, peopleDetailParity.BaselineDefects...), peopleSummarySparkTimestampDefect),
 }
 
 // personDrilldownPRsParity is shared by GET
@@ -1892,7 +1935,7 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				Name:                "summary_default",
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
 				BodyMode:   RESTBodyModeJSON,
-				Parity:     peopleDetailParity,
+				Parity:     peopleSummaryParity,
 				IDBindings: []RESTIDBinding{{Producer: "person_id", PathParam: "person_id"}},
 			},
 		},

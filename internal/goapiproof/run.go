@@ -40,6 +40,13 @@ const (
 	RefusalStaleExclusion      = "declared_exclusion_matched_nothing"
 	RefusalStaleTierB          = "declared_tier_b_field_matched_nothing"
 	RefusalStaleBaselineDefect = "declared_baseline_defect_matched_nothing"
+	// RefusalUndeclaredNumericLeaf: an entry with
+	// NumericLeavesDeclared set reached a numeric leaf that FloatTierB,
+	// FloatExactLeaves and IntegerLeaves all leave unnamed. This is the
+	// enforcement side of the marker: without it, a route could carry
+	// the marker and still silently compare an undeclared float leaf
+	// Tier A, which is worse than not having the marker at all.
+	RefusalUndeclaredNumericLeaf = "numeric_leaf_declared_in_neither_set"
 	// RefusalLiveBaselineDefectUnexplained: a SHAPED declared baseline
 	// defect's own cited Paths carried a real leaf-level difference this
 	// run -- the mechanism was live, not absent -- and the shape's own
@@ -875,6 +882,16 @@ func (r *Runner) proveRequest(ctx context.Context, operation string, variantName
 		// which this ordering guarantees, since the stale-declaration checks
 		// below are unreachable once this fires.
 		return refuse(result.StructuralRefusal, result.StructuralDetail)
+	}
+	if len(result.UndeclaredNumericLeaves) > 0 {
+		// Checked ahead of every declared-relaxation guard below, same
+		// priority as StructuralRefusal: an undeclared numeric leaf is a
+		// corpus-completeness defect, not a stale relaxation, and it is
+		// the check that makes NumericLeavesDeclared's opt-out default a
+		// guarantee rather than a hope -- a version of it that let a
+		// marked entry pass with an undeclared leaf would be worse than
+		// not having it.
+		return refuse(RefusalUndeclaredNumericLeaf, fmt.Sprintf("numeric leaves reached with no declared float/integer type: %v", result.UndeclaredNumericLeaves))
 	}
 	if len(result.UnusedTierB) > 0 {
 		// Same rule as a stale exclusion, one tier over: a Tier-B

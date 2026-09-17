@@ -249,15 +249,42 @@ var investmentBaselineDefects = []BaselineDefect{
 // covering the whole evidence_quality_stats subtree by path proximity)
 // still admitted, by the wrong mechanism rather than the right
 // tolerance.
+//
+// This table also names data.theme_distribution/
+// data.subcategory_distribution: FetchInvestmentBreakdown
+// (investmentexplain/reader.go, shared with investment/explain and
+// investment/sunburst) selects sum(theme_kv.2 * effort_value)/
+// sum(subcategory_kv.2 * effort_value) AS value over Float64
+// effort_value and Float32 theme/subcategory weights -- the identical
+// genuine merged ClickHouse float aggregate class sankeyInvestmentParity's
+// own data.links.value and investmentSunburstParity's own data.value
+// declare for the SAME underlying query shape. Both were undeclared
+// (Tier A exact) before this ticket.
 var investmentQualityStatsFloats = map[string]string{
 	"data.evidence_quality_stats.mean":   "avgIf(evidence_quality)-shaped ClickHouse float aggregate over the request's attributed work units",
 	"data.evidence_quality_stats.stddev": "stddevPopIf(evidence_quality)-shaped ClickHouse float aggregate",
+	"data.theme_distribution":            "sum(theme_kv.2 * effort_value) (investmentexplain/reader.go FetchInvestmentBreakdown) -- genuine merged ClickHouse float aggregate over Float64 effort_value/Float32 theme weight",
+	"data.subcategory_distribution":      "sum(subcategory_kv.2 * effort_value) (investmentexplain/reader.go FetchInvestmentBreakdown) -- genuine merged ClickHouse float aggregate over Float64 effort_value/Float32 subcategory weight",
+}
+
+// investmentIntegerLeaves declares GET/POST /api/v1/investment's
+// count-shaped numeric leaves. data.evidence_quality_distribution is Go's
+// own float64(count) cast (investment/response.go BuildResponse) from an
+// int band count -- not a ClickHouse aggregate at all, wire-typed
+// float64 purely as a map-value convenience; total/band_counts are
+// already Go int, straight from qualitystats.go's own count()/countIf().
+var investmentIntegerLeaves = map[string]string{
+	"data.evidence_quality_distribution":      "Go's own float64(count) cast (investment/response.go BuildResponse) from an int band count -- not a ClickHouse float aggregate, wire-typed float64 only as a map-value convenience.",
+	"data.evidence_quality_stats.total":       "count() (investment/qualitystats.go) -- a bare row count.",
+	"data.evidence_quality_stats.band_counts": "countIf() per quality band (investment/qualitystats.go) -- bare row counts.",
 }
 
 // investmentParity is GET and POST /api/v1/investment's own shared Parity.
 var investmentParity = Options{
-	BaselineDefects: investmentBaselineDefects,
-	FloatTierB:      investmentQualityStatsFloats,
+	BaselineDefects:       investmentBaselineDefects,
+	NumericLeavesDeclared: true,
+	FloatTierB:            investmentQualityStatsFloats,
+	IntegerLeaves:         investmentIntegerLeaves,
 }
 
 // investmentSunburstBaselineDefects extends investmentBaselineDefects
@@ -356,9 +383,20 @@ var investmentSunburstOrderInsensitiveLists = []OrderInsensitiveList{
 
 // investmentSunburstParity is GET /api/v1/investment/sunburst's own
 // shared Parity.
+//
+// data.value (SunburstSlice.Value) is FetchInvestmentSunburst's
+// own sum(subcategory_kv.2 * effort_value) (investment/sunburst.go) --
+// the SAME genuine merged ClickHouse float aggregate class
+// investmentQualityStatsFloats' own data.theme_distribution/
+// data.subcategory_distribution declare for the identical query shape.
+// Undeclared (Tier A exact) before this ticket.
 var investmentSunburstParity = Options{
 	BaselineDefects:       investmentSunburstBaselineDefects,
 	OrderInsensitiveLists: investmentSunburstOrderInsensitiveLists,
+	NumericLeavesDeclared: true,
+	FloatTierB: map[string]string{
+		"data.value": "sum(subcategory_kv.2 * effort_value) (investment/sunburst.go FetchInvestmentSunburst) -- genuine merged ClickHouse float aggregate.",
+	},
 }
 
 // investmentExplainProseFields names investment/explain's LLM-authored
@@ -391,6 +429,15 @@ var investmentExplainDeterministicFloats = map[string]string{
 	"data.top_findings.evidence.share_pct":             "derived from a ClickHouse float aggregate over attributed work-unit effort",
 	"data.top_findings.evidence.delta_pct_points":      "derived from the same float aggregates as share_pct",
 	"data.top_findings.evidence.evidence_quality_mean": "avgIf(evidence_quality)-shaped ClickHouse float aggregate",
+}
+
+// investmentExplainIntegerLeaves declares investment/explain's one
+// count-shaped numeric leaf: confidence.band_mix[].count is Go int
+// (investmentexplain/explanation.go's own BandCount struct), a plain
+// count of work units per evidence-quality band -- never a ClickHouse
+// aggregate.
+var investmentExplainIntegerLeaves = map[string]string{
+	"data.confidence.band_mix.count": "BandCount.Count (investmentexplain/explanation.go) -- a plain Go int count of work units per quality band.",
 }
 
 // quadrantPointFloats declares quadrant.Point's x/y as Tier B: both are
@@ -1074,40 +1121,6 @@ var flamePRIDBoundParity = Options{
 // difference surfacing there stays outside every citation, correctly.
 // Go is correct.
 
-// heatmapCellFloats declares data.cells.value as Tier B: the response
-// wire shape (cmd/query-api/internal/heatmap/response.go's own Cell
-// struct, one Value float64 field, cellsFromRows) funnels all four
-// heatmap metrics through this ONE leaf, so the declaration is scoped to
-// exactly that leaf and nothing wider -- no other path on this route has
-// been examined. hotspot_risk's toFloat64(sum(hotspot_score)) and
-// review_wait_density's toFloat64(sum(dateDiff(...))/60.0) (queries.go)
-// are each a merged Float64 SUM ClickHouse aggregates over the same
-// engine, so the aggregate's own partial-state merge order is
-// nondeterministic thread-to-thread on BOTH planes -- the identical
-// class compare.go's own FloatTierB doc comment measures under CHAOS-5451
-// and every sibling FloatTierB table already declares
-// (investmentQualityStatsFloats, investmentExplainDeterministicFloats,
-// quadrantPointFloats, cycleBreakdownFloats): engine nondeterminism, not
-// a Go-vs-Python defect. Before this declaration, heatmapDedupParity's
-// own KeyedDirectionShape (below) admitted a real production run's
-// ULP-scale noise on hotspot_risk_org as if it were evidence of the
-// declared repos-dedup mechanism, by the wrong mechanism rather than the
-// right tolerance -- the same failure investmentQualityStatsFloats' own
-// doc comment already names for evidence_quality_stats.
-//
-// repo_touchpoints' and active_hours' toFloat64(count()) share this same
-// leaf but are exact integer aggregates, not floating-point sums -- a
-// COUNT never has a fractional partial-merge order to disagree over. The
-// tolerance still reaches them because the wire leaf is shared, but it is
-// harmless there: the smallest possible real difference between two
-// counts is 1, and at every magnitude file_metrics_daily/git_commits
-// buckets reach on this route the tolerance floor and relative term both
-// sit many orders of magnitude below 1, so no genuine count divergence
-// can fall inside it.
-var heatmapCellFloats = map[string]string{
-	"data.cells.value": "toFloat64(sum(hotspot_score)) (hotspot_risk) / toFloat64(sum(dateDiff('minute', created_at, first_review_at)) / 60.0) (review_wait_density) -- merged Float64 ClickHouse aggregate, order-nondeterministic across planes (CHAOS-5451); the same leaf also carries repo_touchpoints'/active_hours' toFloat64(count()), an exact integer aggregate the tolerance never actually affects at this route's magnitudes",
-}
-
 var heatmapDedupParity = Options{
 	OrderInsensitiveLists: []OrderInsensitiveList{
 		{
@@ -1117,7 +1130,6 @@ var heatmapDedupParity = Options{
 			Ticket:    "CHAOS-5803",
 		},
 	},
-	FloatTierB: heatmapCellFloats,
 	BaselineDefects: []BaselineDefect{
 		{
 			Ticket:             "CHAOS-5803",
@@ -1132,6 +1144,93 @@ var heatmapDedupParity = Options{
 				KeyFields:  []string{"x", "y"},
 			},
 		},
+	},
+}
+
+// data.cells.value is heatmap's ONE numeric leaf, but its
+// declared type differs by REQUESTED METRIC -- the same dotted path is a
+// genuine ClickHouse float aggregate for one metric and a bare row count
+// for another. heatmapDedupParity's shared OrderInsensitiveLists/
+// BaselineDefects (both keyed on the response SHAPE, not the metric) are
+// inherited by value below unchanged; the numeric-leaf declaration is
+// per metric and cannot live on heatmapDedupParity itself, because
+// heatmapDedupParity is shared across metrics whose declared type
+// differs at this one path.
+//
+// An integer leaf compared under a tolerance because the tolerance
+// happens to be safe at this route's magnitudes is not a declared type
+// -- repo_touchpoints/active_hours (heatmapRepoTouchpointsParity/
+// heatmapActiveHoursParity below) are declared IntegerLeaves precisely
+// so that fact is stated rather than left to the tolerance's own
+// forgiveness. hotspot_risk/review_wait_density (heatmapHotspotRiskParity/
+// heatmapReviewWaitDensityParity below) are declared FloatTierB because
+// their own producing aggregate is genuinely float. Each of the four
+// Options values below carries the NumericLeavesDeclared marker, so a
+// numeric leaf this route's own comparison reaches that is named in
+// neither map fails the run rather than defaulting silently.
+//
+// heatmapcellfloats_test.go's captured evidence (a real 15-cell ULP
+// capture, a real ~2x repos-dedup capture) runs against
+// heatmapHotspotRiskParity/heatmapReviewWaitDensityParity below -- the
+// Options an admissible request actually carries -- so it proves
+// something about the live path.
+//
+// heatmapReviewWaitDensityParity: fetchReviewWaitDensity (heatmap/
+// queries.go) selects toFloat64(sum(dateDiff('minute', created_at,
+// first_review_at)) / 60.0) AS value -- a fractional-hours duration.
+// Declared float by DOMAIN: the leaf can and does land on a non-integer
+// value in the ordinary case, whatever a single request's own sum
+// happens to divide out to.
+var heatmapReviewWaitDensityParity = Options{
+	OrderInsensitiveLists: heatmapDedupParity.OrderInsensitiveLists,
+	BaselineDefects:       heatmapDedupParity.BaselineDefects,
+	NumericLeavesDeclared: true,
+	FloatTierB: map[string]string{
+		"data.cells.value": "review_wait_density's own toFloat64(sum(dateDiff('minute',created_at,first_review_at))/60.0) (heatmap/queries.go fetchReviewWaitDensity) -- a fractional-hours duration.",
+	},
+}
+
+// heatmapRepoTouchpointsParity: fetchRepoTouchpoints selects
+// toFloat64(count()) AS value -- a bare row count. Declared integer
+// despite the toFloat64(...) wrapper: the cast exists only so the
+// ClickHouse driver can scan the result into *float64 (see
+// heatmapActiveHoursParity's own doc comment, the identical pattern),
+// never because the quantity itself can take a fractional value.
+var heatmapRepoTouchpointsParity = Options{
+	OrderInsensitiveLists: heatmapDedupParity.OrderInsensitiveLists,
+	BaselineDefects:       heatmapDedupParity.BaselineDefects,
+	NumericLeavesDeclared: true,
+	IntegerLeaves: map[string]string{
+		"data.cells.value": "repo_touchpoints' own toFloat64(count()) (heatmap/queries.go fetchRepoTouchpoints) -- a bare row count, cast to float64 only so the driver can scan it, never a ClickHouse floating-point aggregate.",
+	},
+}
+
+// heatmapHotspotRiskParity: fetchHotspotRisk selects
+// toFloat64(sum(hotspot_score)) AS value/total -- hotspot_score is a
+// Float64 column (file_metrics_daily), so this is the SAME merged,
+// order-nondeterministic aggregate class investmentQualityStatsFloats
+// and every sibling FloatTierB table in this service already declares --
+// not a cast-for-scanning artefact the way repo_touchpoints'/active_
+// hours' count() is.
+var heatmapHotspotRiskParity = Options{
+	OrderInsensitiveLists: heatmapDedupParity.OrderInsensitiveLists,
+	BaselineDefects:       heatmapDedupParity.BaselineDefects,
+	NumericLeavesDeclared: true,
+	FloatTierB: map[string]string{
+		"data.cells.value": "hotspot_risk's own toFloat64(sum(hotspot_score)) (heatmap/queries.go fetchHotspotRisk) over the Float64 hotspot_score column -- a genuine merged ClickHouse float aggregate.",
+	},
+}
+
+// heatmapActiveHoursParity: fetchIndividualActiveHours selects
+// toFloat64(count()) AS value, the same bare-count-cast-for-scanning
+// shape as repo_touchpoints, over a different source table
+// (git_commits).
+var heatmapActiveHoursParity = Options{
+	OrderInsensitiveLists: heatmapDedupParity.OrderInsensitiveLists,
+	BaselineDefects:       heatmapDedupParity.BaselineDefects,
+	NumericLeavesDeclared: true,
+	IntegerLeaves: map[string]string{
+		"data.cells.value": "active_hours' own toFloat64(count()) (heatmap/queries.go fetchIndividualActiveHours) -- a bare row count, cast to float64 only so the driver can scan it.",
 	},
 }
 
@@ -1155,12 +1254,25 @@ var heatmapDedupParity = Options{
 // EXACTLY 2.0x, uniformly, across both the two theme->repo edges
 // targeting it in investment mode AND all three edges of its own
 // repo->directory->file->change_type chain in hotspot mode. Paths names
-// data.links alone: Node.Value is always null on this response's wire
-// form (response.go's own Node struct never sets it), so data.nodes
-// carries no numeric leaf any shape could reach, and citing it would be
-// the appearance of coverage rather than coverage itself -- a node-level
+// data.links alone: on GET/POST /api/v1/sankey SPECIFICALLY -- the only
+// two routes this Options value covers -- Node.Value is always null,
+// because THIS route's own node-building code (sankey/response.go's
+// nodeAccumulator.touchNode) never sets it, so data.nodes carries no
+// numeric leaf any shape could reach here, and citing it would be the
+// appearance of coverage rather than coverage itself -- a node-level
 // difference (an extra, missing or relabeled node name) is structural
 // and stays outside every citation, correctly. Go is correct.
+//
+// THIS DOES NOT GENERALIZE to every route answering the sankey.Response
+// struct: POST /api/v1/investment/flow and /investment/flow/repo-team
+// reuse the SAME Node type but populate it through a DIFFERENT
+// node-building code path (investmentflow/builders.go's own
+// nodePresence/nodeRunningTotal), which DOES set a real running-total
+// Value per node -- see investmentFlowRepoDedupParity's own
+// SankeyRepoFanoutShape entry (NodeValuePath: "data.nodes.value") for
+// where that route's own node-level coverage is declared. Reasoning from
+// THIS struct's field default to THAT route's wire behaviour would
+// produce exactly the wrong declaration.
 var sankeyRepoDedupParity = Options{
 	OrderInsensitiveLists: []OrderInsensitiveList{
 		{
@@ -1191,6 +1303,20 @@ var sankeyRepoDedupParity = Options{
 				FallbackAnchorNames: []string{"Other", "Unknown repo"},
 			},
 		},
+	},
+	// this Options value covers hotspot mode alone (both
+	// hotspot_org and hotspot_repo_scoped). data.links.value there is
+	// fetchHotspotRows' own CAST(sum(metrics.churn) AS Float64) (sankey/
+	// queries.go) -- churn is UInt32 per file_metrics_daily's own DDL, and
+	// the code comment at that call site says exactly why the Float64
+	// cast exists: "the driver refuses to scan a UInt64 result into
+	// *float64", never because the quantity itself can be fractional.
+	// Declared integer: a sum of an integer column is exact regardless of
+	// merge order, unlike hotspot_score's OWN Float64 sum on the
+	// heatmap.hotspot_risk route (see heatmapHotspotRiskParity).
+	NumericLeavesDeclared: true,
+	IntegerLeaves: map[string]string{
+		"data.links.value": "hotspot mode's own CAST(sum(metrics.churn) AS Float64) (sankey/queries.go fetchHotspotRows) over the UInt32 churn column -- a bare integer sum, cast to float64 only so the driver can scan it.",
 	},
 }
 
@@ -1230,7 +1356,7 @@ var sankeyInvestmentParity = Options{
 	BaselineDefects: append([]BaselineDefect{
 		{
 			Ticket:             "CHAOS-4547",
-			Reason:             "work_unit_investments.repo_id is Nullable(UUID) (017_investment_materialize_tables.sql); api/queries/investment.py's LATEST_WORK_UNIT_INVESTMENTS_CTE (imported unchanged by api/queries/sankey.py's fetch_investment_flow_items) dedups it via a bare argMax(repo_id, computed_at), which SKIPS a row whose repo_id is NULL when picking the newest version, returning a STALE non-null repo_id from an earlier generation instead of the true latest value. This port reuses analytics.LatestWorkUnitInvestmentsSource(), which tuple-wraps repo_id -- (argMax(tuple(repo_id), computed_at)).1 -- and therefore reads the true latest value. A work unit whose newest generation cleared repo_id relative to an earlier one changes which target node (a resolved repo, or the \"Other\" fallback) its effort lands on -- a redistribution of the SAME total effort, never a change in it. Paths names data.links alone, not data.nodes: Node.Value is always null on this response's wire form (response.go's own Node struct never sets it), so no numeric leaf under data.nodes exists for any shape to reach. Go is correct.",
+			Reason:             "work_unit_investments.repo_id is Nullable(UUID) (017_investment_materialize_tables.sql); api/queries/investment.py's LATEST_WORK_UNIT_INVESTMENTS_CTE (imported unchanged by api/queries/sankey.py's fetch_investment_flow_items) dedups it via a bare argMax(repo_id, computed_at), which SKIPS a row whose repo_id is NULL when picking the newest version, returning a STALE non-null repo_id from an earlier generation instead of the true latest value. This port reuses analytics.LatestWorkUnitInvestmentsSource(), which tuple-wraps repo_id -- (argMax(tuple(repo_id), computed_at)).1 -- and therefore reads the true latest value. A work unit whose newest generation cleared repo_id relative to an earlier one changes which target node (a resolved repo, or the \"Other\" fallback) its effort lands on -- a redistribution of the SAME total effort, never a change in it. Paths names data.links alone, not data.nodes: on GET/POST /api/v1/sankey specifically, Node.Value is always null (sankey/response.go's own nodeAccumulator.touchNode never sets it, unlike investment/flow's own node builders -- see sankeyRepoDedupParity's own doc comment for that contrast), so no numeric leaf under data.nodes exists for any shape to reach on THIS route. Go is correct.",
 			Paths:              []string{"data.links"},
 			Intermittent:       true,
 			IntermittentReason: "present only while at least one work unit in the requested window has a newer generation whose repo_id differs (including a NULL transition) from an earlier generation's; a request whose work units never re-categorize shows no divergence",
@@ -1241,6 +1367,18 @@ var sankeyInvestmentParity = Options{
 			},
 		},
 	}, sankeyRepoDedupParity.BaselineDefects...),
+	// investment mode's data.links.value is
+	// fetchInvestmentFlowItems' own sum(theme_kv.2 * work_unit_
+	// investments.effort_value) (sankey/queries.go) -- effort_value is
+	// Float64 (017_investment_materialize_tables.sql) and theme_kv.2 is
+	// Float32 (the ARRAY JOIN's own CAST(...AS Array(Tuple(String,
+	// Float32)))), so this is a genuine merged ClickHouse float
+	// aggregate, the same class investmentQualityStatsFloats and every
+	// sibling FloatTierB table in this service already declares.
+	NumericLeavesDeclared: true,
+	FloatTierB: map[string]string{
+		"data.links.value": "investment mode's own sum(theme_kv.2 * effort_value) (sankey/queries.go fetchInvestmentFlowItems) over Float64 effort_value/Float32 theme weight -- a genuine merged ClickHouse float aggregate.",
+	},
 }
 
 // sankeyCycleTimesDedupParity is the expense mode's own declared
@@ -1283,6 +1421,63 @@ var sankeyCycleTimesDedupParity = Options{
 				Keys:       [][]string{{"Rework", "Abandonment / rewrite"}},
 			},
 		},
+	},
+	// expense mode's data.links.value is shared by THREE
+	// edges (Planned->Unplanned, Unplanned->Rework, Rework->Abandonment),
+	// and FloatTierB/IntegerLeaves declare by DOTTED PATH, index-free --
+	// there is no per-element declaration, so the path's own declared type
+	// is the JOIN of all three edges' provenances (the same "join of
+	// provenances" rule that decides one edge's own type when it is itself
+	// built from several sources):
+	//   - Planned->Unplanned = max(0, newBugs); newBugs =
+	//     CAST(sum(new_bugs_count) AS Float64) (sankey/queries.go
+	//     fetchExpenseCounts) over UInt32 new_bugs_count -- integer
+	//     provenance.
+	//   - Unplanned->Rework = max(0, min(unplanned, bugCompleted));
+	//     bugCompleted = sum(items_completed * bug_completed_ratio) --
+	//     items_completed (count) times bug_completed_ratio (a Float64
+	//     ratio), summed -- genuine float provenance. min(integer-
+	//     provenance, float-provenance) has a domain that includes
+	//     non-integers, so THIS edge alone is float by the join rule.
+	//   - Rework->Abandonment = max(0, min(rework, canceledItems));
+	//     canceledItems = CAST(countIf(status='canceled') AS Float64) --
+	//     integer provenance, but rework (above) is already float, so this
+	//     edge is float too.
+	// Two of the three edges are float-domain, so the PATH's own declared
+	// type is float. Declaring it Tier B is safe for the one integer-only
+	// edge as well as the two mixed ones: at value V the tolerance is
+	// max(1e-9, 1e-9*V), so a genuine integer difference of 1 on
+	// Planned->Unplanned still clears the mismatch threshold for any V
+	// below one billion -- nothing real hides behind this tolerance at any
+	// count this route can plausibly carry.
+	NumericLeavesDeclared: true,
+	FloatTierB: map[string]string{
+		"data.links.value": "expense mode's data.links.value is shared by three edges (see this Options' own doc comment for the full derivation); Unplanned->Rework and Rework->Abandonment are each min() of an integer- and a float-provenance operand, which makes the path float by the join-of-provenances rule, and Planned->Unplanned's own integer-only value still clears a real 1-count difference under Tier B's tolerance for any value below ~1e9.",
+	},
+}
+
+// sankeyStateFlowParity is state mode's own declared numeric-leaf type
+// (GET+POST /api/v1/sankey mode=state): buildStateFlow (sankey/
+// builders.go) derives every one of its six edges (flowBacklog,
+// flowTodo, blockedFlow, reviewFlow, canceledFlow, doneFlow) purely via
+// min()/max()/subtraction over statusCounts, itself a sum of
+// fetchStateStatusCounts' own CAST(sum(items_touched) AS Float64)
+// (sankey/queries.go) -- items_touched is UInt32 per work_item_state_
+// durations_daily's own DDL, cast to float64 only so the driver can scan
+// it. Unlike expense mode, every operand every edge here composes shares
+// the SAME integer provenance -- no min()/max() here ever mixes an
+// integer- and a float-provenance operand -- so the join-of-provenances
+// rule gives a single, unambiguous answer: integer, for the whole path,
+// with no per-edge ambiguity to resolve.
+//
+// state mode carries no repos/git_pull_requests/git_commits join (it
+// reads work_item_state_durations_daily alone), so it has no baseline
+// defect or ordering declaration of its own -- this Options value exists
+// solely to carry the numeric-leaf declaration.
+var sankeyStateFlowParity = Options{
+	NumericLeavesDeclared: true,
+	IntegerLeaves: map[string]string{
+		"data.links.value": "state mode's six edges are all min()/max()/subtraction over statusCounts, itself a sum of CAST(sum(items_touched) AS Float64) (sankey/queries.go fetchStateStatusCounts) over the UInt32 items_touched column -- every operand shares the same integer provenance, no mixing.",
 	},
 }
 
@@ -1507,6 +1702,107 @@ var investmentFlowRepoDedupParity = Options{
 				ValuePath: "data.unassigned_reasons",
 			},
 		},
+	},
+}
+
+// POST /api/v1/investment/flow's own admissible scenarios
+// reach THREE DIFFERENT numeric-leaf shapes depending on flow_mode --
+// dynamic_default_org's own dynamic branch (buildDynamicModeResponse)
+// leaves data.coverage/data.unassigned_reasons/data.top_n_repos nil
+// (investmentflow.go's own comment: "Coverage/UnassignedReasons/
+// FlowMode/DrillCategory/TopNRepos stay nil -- ... only the flow_mode
+// branch does [set them]"), where the other three scenarios' shared
+// flow_mode branch sets every one of them -- and POST /investment/flow/
+// repo-team's own BuildRepoTeamFlowResponse sets NEITHER, only Nodes/
+// Links/Mode/Unit/Label/Description/ChosenMode. Since UnusedTierB/
+// IntegerLeaves enforcement is per COMPARISON (an entry unreached even
+// once in a request using that Options reads as stale, no intermittent
+// exemption the way BaselineDefects has one), one shared Options
+// declaring all three routes' numeric leaves would refuse the two
+// narrower routes' own runs the moment they don't reach a leaf the wider
+// route's declaration names. Three Options values, one per reachable
+// shape, all three still composing investmentFlowRepoDedupParity's own
+// BaselineDefects/OrderInsensitiveLists BY VALUE (those tolerate the
+// same variation already, via Intermittent).
+//
+// investmentFlowDynamicParity: dynamic_default_org. data.links.value/
+// data.nodes.value are investmentflow/queries.go's own sum(subcategory_kv.2
+// * effort_value) (all five fetchers share this shape) -- genuine merged
+// ClickHouse float aggregate. team_coverage/repo_coverage are
+// assignedValue/totalValue (investmentflow/builders.go edgeStats), a
+// ratio of two sums of that SAME float aggregate -- float-valued for a
+// less obvious reason than a bare aggregate: the numerator and
+// denominator are each independently drift-prone, and dividing them does
+// NOT cancel that drift (they are sums over different, data-dependent
+// row subsets, not the same value divided by itself). distinct_team_
+// targets/distinct_repo_targets are len(seen) set cardinalities -- integer.
+var investmentFlowDynamicParity = Options{
+	BaselineDefects:       investmentFlowRepoDedupParity.BaselineDefects,
+	OrderInsensitiveLists: investmentFlowRepoDedupParity.OrderInsensitiveLists,
+	NumericLeavesDeclared: true,
+	FloatTierB: map[string]string{
+		"data.links.value":   "sum(subcategory_kv.2 * effort_value) (investmentflow/queries.go, all five fetchers) -- genuine merged ClickHouse float aggregate.",
+		"data.nodes.value":   "the same float Value as data.links.value, accumulated per node (investmentflow/builders.go nodePresence/nodeRunningTotal) -- unlike plain /api/v1/sankey, this route's own node builders DO populate a real value; see sankeyRepoDedupParity's own doc comment for that contrast.",
+		"data.team_coverage": "assignedValue/totalValue (investmentflow/builders.go edgeStats) -- a ratio of two sums of the same float aggregate as data.links.value; the ratio does not cancel the sums' own drift, since numerator and denominator sum different, data-dependent row subsets.",
+		"data.repo_coverage": "the same edgeStats ratio shape as data.team_coverage, over the repo-scoped row set.",
+	},
+	IntegerLeaves: map[string]string{
+		"data.distinct_team_targets": "len(seen) (investmentflow/builders.go edgeStats) -- a set cardinality, not a ClickHouse aggregate.",
+		"data.distinct_repo_targets": "the same set-cardinality shape as data.distinct_team_targets, over the repo-scoped row set.",
+	},
+}
+
+// investmentFlowModeParity: team_category_repo_org, team_category_
+// subcategory_repo_org, team_subcategory_repo_with_drill_org -- the
+// three scenarios sharing BuildFlowResponse's own flow_mode branch.
+// Extends investmentFlowDynamicParity's own leaves with the three this
+// branch ALSO sets: data.coverage (map[string]float64{"team_coverage":
+// teamCoverage, "repo_coverage": repoCoverage} -- investmentflow.go --
+// the SAME two values as data.team_coverage/data.repo_coverage,
+// duplicated; declared via the map's own parent path since coverage's
+// keys, though fixed today, are string literals a corpus declaration
+// would otherwise have to name twice for no benefit), data.
+// unassigned_reasons (map[string]int{"missing_team":...,"missing_repo":
+// ...} -- both countIf()-shaped, integer), and data.top_n_repos (*int,
+// a pure echo of the request's own top_n_repos parameter/default,
+// integer, never touches ClickHouse at all).
+var investmentFlowModeParity = Options{
+	BaselineDefects:       investmentFlowRepoDedupParity.BaselineDefects,
+	OrderInsensitiveLists: investmentFlowRepoDedupParity.OrderInsensitiveLists,
+	NumericLeavesDeclared: true,
+	FloatTierB: map[string]string{
+		"data.links.value":   investmentFlowDynamicParity.FloatTierB["data.links.value"],
+		"data.nodes.value":   investmentFlowDynamicParity.FloatTierB["data.nodes.value"],
+		"data.team_coverage": investmentFlowDynamicParity.FloatTierB["data.team_coverage"],
+		"data.repo_coverage": investmentFlowDynamicParity.FloatTierB["data.repo_coverage"],
+		"data.coverage":      "map[string]float64{team_coverage, repo_coverage} (investmentflow.go) -- the SAME two ratio values as data.team_coverage/data.repo_coverage, duplicated under fixed (if data-independent) keys.",
+	},
+	IntegerLeaves: map[string]string{
+		"data.distinct_team_targets": investmentFlowDynamicParity.IntegerLeaves["data.distinct_team_targets"],
+		"data.distinct_repo_targets": investmentFlowDynamicParity.IntegerLeaves["data.distinct_repo_targets"],
+		"data.unassigned_reasons":    "map[string]int{missing_team, missing_repo} (investmentflow.go fetchInvestmentUnassignedCounts) -- both countIf()-shaped bare counts.",
+		"data.top_n_repos":           "a pure echo of the request's own top_n_repos parameter/default (investmentflow.go) -- never touches ClickHouse.",
+	},
+}
+
+// investmentFlowRepoTeamParity: POST /api/v1/investment/flow/repo-team's
+// own default_org/theme_scoped_org. BuildRepoTeamFlowResponse
+// (investmentflow.go) sets ONLY Nodes/Links/Mode/Unit/Label/Description/
+// ChosenMode -- team_coverage/repo_coverage/coverage/distinct_*_targets/
+// unassigned_reasons/top_n_repos all stay nil on both planes (never a
+// numeric leaf either plane's comparison reaches), so declaring them
+// here would make this Options value read as stale for every request
+// that actually uses it -- see this section's own opening comment.
+// data.links.value/data.nodes.value are fetchInvestmentRepoTeamEdges'
+// own sum(subcategory_kv.2 * effort_value) (investmentflow/queries.go),
+// the SAME shape every other investment-flow fetcher shares.
+var investmentFlowRepoTeamParity = Options{
+	BaselineDefects:       investmentFlowRepoDedupParity.BaselineDefects,
+	OrderInsensitiveLists: investmentFlowRepoDedupParity.OrderInsensitiveLists,
+	NumericLeavesDeclared: true,
+	FloatTierB: map[string]string{
+		"data.links.value": investmentFlowDynamicParity.FloatTierB["data.links.value"],
+		"data.nodes.value": investmentFlowDynamicParity.FloatTierB["data.nodes.value"],
 	},
 }
 
@@ -1830,7 +2126,7 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				Name:                "review_wait_density_org",
 				Query:               url.Values{"type": {"temporal_load"}, "metric": {"review_wait_density"}},
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
-				BodyMode: RESTBodyModeJSON, Parity: heatmapDedupParity,
+				BodyMode: RESTBodyModeJSON, Parity: heatmapReviewWaitDensityParity,
 			},
 			{
 				// repo scope, scope_id bound to filters/options' own
@@ -1840,14 +2136,14 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				Query:               url.Values{"type": {"context_switch"}, "metric": {"repo_touchpoints"}, "scope_type": {"repo"}},
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
 				BodyMode:   RESTBodyModeJSON,
-				Parity:     heatmapDedupParity,
+				Parity:     heatmapRepoTouchpointsParity,
 				IDBindings: []RESTIDBinding{{Producer: "repo_id", QueryParam: "scope_id"}},
 			},
 			{
 				Name:                "hotspot_risk_org",
 				Query:               url.Values{"type": {"risk"}, "metric": {"hotspot_risk"}},
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
-				BodyMode: RESTBodyModeJSON, Parity: heatmapDedupParity,
+				BodyMode: RESTBodyModeJSON, Parity: heatmapHotspotRiskParity,
 			},
 			{
 				// developer scope, scope_id bound to people's own live
@@ -1858,7 +2154,7 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				Query:               url.Values{"type": {"individual"}, "metric": {"active_hours"}, "scope_type": {"developer"}},
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
 				BodyMode:   RESTBodyModeJSON,
-				Parity:     heatmapDedupParity,
+				Parity:     heatmapActiveHoursParity,
 				IDBindings: []RESTIDBinding{{Producer: "person_id", QueryParam: "scope_id"}},
 			},
 			{
@@ -1923,7 +2219,7 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				Name:                "state_org",
 				Query:               url.Values{"mode": {"state"}},
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
-				BodyMode: RESTBodyModeJSON,
+				BodyMode: RESTBodyModeJSON, Parity: sankeyStateFlowParity,
 			},
 			{
 				Name:                "hotspot_org",
@@ -1988,7 +2284,7 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				Name:                "state_org",
 				Body:                map[string]any{"mode": "state", "filters": map[string]any{}},
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
-				BodyMode: RESTBodyModeJSON,
+				BodyMode: RESTBodyModeJSON, Parity: sankeyStateFlowParity,
 			},
 			{
 				Name:                "hotspot_org",
@@ -2028,19 +2324,19 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				Name:                "dynamic_default_org",
 				Body:                map[string]any{"filters": map[string]any{}},
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
-				BodyMode: RESTBodyModeJSON, Parity: investmentFlowRepoDedupParity,
+				BodyMode: RESTBodyModeJSON, Parity: investmentFlowDynamicParity,
 			},
 			{
 				Name:                "team_category_repo_org",
 				Body:                map[string]any{"filters": map[string]any{}, "flow_mode": "team_category_repo"},
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
-				BodyMode: RESTBodyModeJSON, Parity: investmentFlowRepoDedupParity,
+				BodyMode: RESTBodyModeJSON, Parity: investmentFlowModeParity,
 			},
 			{
 				Name:                "team_category_subcategory_repo_org",
 				Body:                map[string]any{"filters": map[string]any{}, "flow_mode": "team_category_subcategory_repo"},
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
-				BodyMode: RESTBodyModeJSON, Parity: investmentFlowRepoDedupParity,
+				BodyMode: RESTBodyModeJSON, Parity: investmentFlowModeParity,
 			},
 			{
 				// flow_mode="team_subcategory_repo" WITH drill_category --
@@ -2050,7 +2346,7 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				Name:                "team_subcategory_repo_with_drill_org",
 				Body:                map[string]any{"filters": map[string]any{}, "flow_mode": "team_subcategory_repo", "drill_category": "feature_delivery"},
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
-				BodyMode: RESTBodyModeJSON, Parity: investmentFlowRepoDedupParity,
+				BodyMode: RESTBodyModeJSON, Parity: investmentFlowModeParity,
 			},
 			{
 				// build_investment_flow_response's own ValueError -- the
@@ -2092,13 +2388,13 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				Name:                "default_org",
 				Body:                map[string]any{"filters": map[string]any{}},
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
-				BodyMode: RESTBodyModeJSON, Parity: investmentFlowRepoDedupParity,
+				BodyMode: RESTBodyModeJSON, Parity: investmentFlowRepoTeamParity,
 			},
 			{
 				Name:                "theme_scoped_org",
 				Body:                map[string]any{"filters": map[string]any{}, "theme": "feature_delivery"},
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
-				BodyMode: RESTBodyModeJSON, Parity: investmentFlowRepoDedupParity,
+				BodyMode: RESTBodyModeJSON, Parity: investmentFlowRepoTeamParity,
 			},
 			{
 				// investment_flow_repo_team has NO ValueError branch at all
@@ -2290,8 +2586,10 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
 				BodyMode: RESTBodyModeJSON,
 				Parity: Options{
-					VolatileFields: investmentExplainProseFields,
-					FloatTierB:     investmentExplainDeterministicFloats,
+					VolatileFields:        investmentExplainProseFields,
+					NumericLeavesDeclared: true,
+					FloatTierB:            investmentExplainDeterministicFloats,
+					IntegerLeaves:         investmentExplainIntegerLeaves,
 				},
 			},
 			{
@@ -3023,6 +3321,9 @@ func ValidateRESTCorpus() error {
 				return fmt.Errorf("goapiproof: REST corpus entry %q request %q has an unrecognised BodyMode %q", operation, req.Name, req.BodyMode)
 			}
 			if err := validateBaselineDefects(req.Parity.BaselineDefects); err != nil {
+				return fmt.Errorf("goapiproof: REST corpus entry %q request %q: %w", operation, req.Name, err)
+			}
+			if err := validateNumericLeaves(req.Parity); err != nil {
 				return fmt.Errorf("goapiproof: REST corpus entry %q request %q: %w", operation, req.Name, err)
 			}
 			if (req.DedupListPath == "") != (len(req.DedupKeyFields) == 0) {

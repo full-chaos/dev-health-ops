@@ -1,6 +1,9 @@
 package goapiproof
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 // TestSankeyAndHeatmapDedupDeclarationsCarryShapes pins the actual
 // registered corpus declarations -- not a hand-built Options -- so a
@@ -17,11 +20,43 @@ func TestSankeyAndHeatmapDedupDeclarationsCarryShapes(t *testing.T) {
 	if len(heatmapDedupParity.OrderInsensitiveLists) != 1 || heatmapDedupParity.OrderInsensitiveLists[0].Path != "data.cells" {
 		t.Fatalf("heatmapDedupParity.OrderInsensitiveLists = %+v, want one entry for data.cells", heatmapDedupParity.OrderInsensitiveLists)
 	}
-	if len(heatmapDedupParity.FloatTierB) != 1 {
-		t.Fatalf("heatmapDedupParity.FloatTierB = %+v, want exactly one entry (data.cells.value)", heatmapDedupParity.FloatTierB)
+	// heatmapDedupParity itself carries no numeric-leaf
+	// declaration (no admissible heatmap RESTRequest uses it
+	// directly) -- the Tier B/Integer declarations that keep ULP noise
+	// off this route's findings live on the four per-scenario Options
+	// values it seeds, pinned below by their own NumericLeavesDeclared
+	// marker and leaf maps, so a future edit still cannot silently drop
+	// one without this test failing.
+	if len(heatmapDedupParity.FloatTierB) != 0 {
+		t.Fatalf("heatmapDedupParity.FloatTierB = %+v, want none -- the numeric-leaf declaration belongs on the per-scenario Options values now", heatmapDedupParity.FloatTierB)
 	}
-	if _, ok := heatmapDedupParity.FloatTierB["data.cells.value"]; !ok {
-		t.Fatalf("heatmapDedupParity.FloatTierB = %+v, missing data.cells.value -- a future edit must not silently drop the Tier B declaration that keeps ULP noise off this route's findings", heatmapDedupParity.FloatTierB)
+	for name, opts := range map[string]Options{
+		"heatmapReviewWaitDensityParity": heatmapReviewWaitDensityParity,
+		"heatmapRepoTouchpointsParity":   heatmapRepoTouchpointsParity,
+		"heatmapHotspotRiskParity":       heatmapHotspotRiskParity,
+		"heatmapActiveHoursParity":       heatmapActiveHoursParity,
+	} {
+		if !opts.NumericLeavesDeclared {
+			t.Fatalf("%s.NumericLeavesDeclared = false, want true", name)
+		}
+		if !reflect.DeepEqual(opts.OrderInsensitiveLists, heatmapDedupParity.OrderInsensitiveLists) {
+			t.Fatalf("%s.OrderInsensitiveLists = %+v, want the same as heatmapDedupParity's own %+v -- a future edit must not silently drop the inherited dedup shape", name, opts.OrderInsensitiveLists, heatmapDedupParity.OrderInsensitiveLists)
+		}
+		if !reflect.DeepEqual(opts.BaselineDefects, heatmapDedupParity.BaselineDefects) {
+			t.Fatalf("%s.BaselineDefects = %+v, want the same as heatmapDedupParity's own %+v (a length-only check would miss a content change, e.g. a dropped shape field) -- a future edit must not silently drop or alter the inherited citation", name, opts.BaselineDefects, heatmapDedupParity.BaselineDefects)
+		}
+	}
+	if _, ok := heatmapReviewWaitDensityParity.FloatTierB["data.cells.value"]; !ok {
+		t.Fatalf("heatmapReviewWaitDensityParity.FloatTierB = %+v, missing data.cells.value", heatmapReviewWaitDensityParity.FloatTierB)
+	}
+	if _, ok := heatmapHotspotRiskParity.FloatTierB["data.cells.value"]; !ok {
+		t.Fatalf("heatmapHotspotRiskParity.FloatTierB = %+v, missing data.cells.value -- a future edit must not silently drop the Tier B declaration that keeps ULP noise off this route's findings", heatmapHotspotRiskParity.FloatTierB)
+	}
+	if _, ok := heatmapRepoTouchpointsParity.IntegerLeaves["data.cells.value"]; !ok {
+		t.Fatalf("heatmapRepoTouchpointsParity.IntegerLeaves = %+v, missing data.cells.value", heatmapRepoTouchpointsParity.IntegerLeaves)
+	}
+	if _, ok := heatmapActiveHoursParity.IntegerLeaves["data.cells.value"]; !ok {
+		t.Fatalf("heatmapActiveHoursParity.IntegerLeaves = %+v, missing data.cells.value", heatmapActiveHoursParity.IntegerLeaves)
 	}
 
 	if len(sankeyRepoDedupParity.BaselineDefects) != 1 {

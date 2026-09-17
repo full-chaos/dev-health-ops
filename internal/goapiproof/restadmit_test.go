@@ -44,6 +44,70 @@ func TestDecodeRESTSnapshot_TrailingBytes(t *testing.T) {
 	}
 }
 
+// TestDecodeRESTSnapshot_AdmitsInsignificantTrailingWhitespace covers
+// RFC 8259 insignificant whitespace (space, tab, CR, LF) after the first
+// JSON value: admissible on either leg, so a Go response's trailing
+// encoder newline must not read as different from a Python response
+// carrying none.
+func TestDecodeRESTSnapshot_AdmitsInsignificantTrailingWhitespace(t *testing.T) {
+	cases := map[string]string{
+		"trailing newline":       "{\"x\":1}\n",
+		"trailing spaces":        "{\"x\":1}   ",
+		"trailing tabs":          "{\"x\":1}\t\t",
+		"trailing CRLF":          "{\"x\":1}\r\n",
+		"trailing mixed run":     "{\"x\":1} \t\r\n \t",
+		"no trailing bytes":      `{"x":1}`,
+		"trailing newline array": "[1,2,3]\n",
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			snap := restSnapshotFromJSON(t, body)
+			if snap.TrailingBytes {
+				t.Fatalf("%s: TrailingBytes = true, want false (insignificant whitespace is admissible)", name)
+			}
+		})
+	}
+}
+
+// TestDecodeRESTSnapshot_RefusesNonWhitespaceTrailingByte covers the
+// other half of the rule: a trailing byte that is not RFC 8259
+// whitespace still refuses, even a single one right after an otherwise
+// clean whitespace run.
+func TestDecodeRESTSnapshot_RefusesNonWhitespaceTrailingByte(t *testing.T) {
+	cases := map[string]string{
+		"bare non-whitespace byte":       "{\"x\":1}x",
+		"whitespace then non-whitespace": "{\"x\":1}\n x",
+		"trailing comma":                 "{\"x\":1},",
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			snap := restSnapshotFromJSON(t, body)
+			if !snap.TrailingBytes {
+				t.Fatalf("%s: TrailingBytes = false, want true", name)
+			}
+		})
+	}
+}
+
+// TestDecodeRESTSnapshot_RefusesSecondJSONValue covers the explicit
+// carve-out: a second JSON value after the first still refuses, whether
+// or not RFC 8259 whitespace separates the two.
+func TestDecodeRESTSnapshot_RefusesSecondJSONValue(t *testing.T) {
+	cases := map[string]string{
+		"adjacent second object":       `{"x":1}{"y":2}`,
+		"whitespace-separated objects": "{\"x\":1}\n{\"y\":2}",
+		"second scalar":                "{\"x\":1} 2",
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			snap := restSnapshotFromJSON(t, body)
+			if !snap.TrailingBytes {
+				t.Fatalf("%s: TrailingBytes = false, want true", name)
+			}
+		})
+	}
+}
+
 func TestDecodeRESTSnapshot_BareNullIsDataPresent(t *testing.T) {
 	snap := restSnapshotFromJSON(t, `null`)
 	if !snap.DataPresent {
@@ -152,6 +216,54 @@ func TestRESTAdmit_AdmitsAndDecodesOnSuccess(t *testing.T) {
 	}
 	if !got.CandidateSnap.DataPresent || !got.BaselineSnap.DataPresent {
 		t.Fatalf("snapshots not decoded: %+v", got)
+	}
+}
+
+// TestRESTAdmit_AdmitsTrailingWhitespaceOnEitherLeg exercises the rule
+// at the RESTAdmit level, not just DecodeRESTSnapshot in isolation: a
+// trailing encoder newline on the candidate leg with none on the
+// baseline leg, or the reverse, must still admit.
+func TestRESTAdmit_AdmitsTrailingWhitespaceOnEitherLeg(t *testing.T) {
+	t.Run("candidate carries the trailing newline", func(t *testing.T) {
+		in := RESTAdmissionInput{
+			NamedBuild:          "abc123",
+			WantCandidateStatus: 200, WantBaselineStatus: 200,
+			Candidate: restLeg(200, "{\"x\":1}\n", "abc123"),
+			Baseline:  restLeg(200, `{"x":1}`, ""),
+		}
+		got := RESTAdmit(in, true)
+		if !got.Admitted {
+			t.Fatalf("got %+v, want admitted", got)
+		}
+	})
+	t.Run("baseline carries the trailing whitespace", func(t *testing.T) {
+		in := RESTAdmissionInput{
+			NamedBuild:          "abc123",
+			WantCandidateStatus: 200, WantBaselineStatus: 200,
+			Candidate: restLeg(200, `{"x":1}`, "abc123"),
+			Baseline:  restLeg(200, "{\"x\":1}  \t", ""),
+		}
+		got := RESTAdmit(in, true)
+		if !got.Admitted {
+			t.Fatalf("got %+v, want admitted", got)
+		}
+	})
+}
+
+// TestRESTAdmit_EmptyBodyOnOneLegOnlyStillRefusesBodyNotJSON pins the
+// existing contract for an empty body on one leg only: an empty body
+// does not decode to any JSON value, so it refuses as
+// RESTRefusalBodyNotJSON, unchanged by the whitespace-admission rule.
+func TestRESTAdmit_EmptyBodyOnOneLegOnlyStillRefusesBodyNotJSON(t *testing.T) {
+	in := RESTAdmissionInput{
+		NamedBuild:          "abc123",
+		WantCandidateStatus: 200, WantBaselineStatus: 200,
+		Candidate: restLeg(200, "", "abc123"),
+		Baseline:  restLeg(200, `{"x":1}`, ""),
+	}
+	got := RESTAdmit(in, true)
+	if got.Admitted || got.Reason != RESTRefusalBodyNotJSON {
+		t.Fatalf("got %+v, want RESTRefusalBodyNotJSON", got)
 	}
 }
 

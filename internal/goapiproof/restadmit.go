@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"unicode/utf8"
 )
 
@@ -36,7 +35,13 @@ import (
 // the same reason: a non-finite literal, invalid UTF-8, an unpaired
 // surrogate escape or trailing bytes after the first JSON value would
 // each let two materially different bodies decode to the same comparison
-// value.
+// value. Trailing bytes are judged against RFC 8259's insignificant
+// whitespace set (space, tab, CR, LF) ONLY: a Go response's trailing
+// encoder newline and a Python response's absent one both decode to the
+// same comparison value and are admissible on either leg, but any other
+// trailing byte -- including a second JSON value -- is not, because the
+// comparison is over decoded VALUES and RFC 8259 whitespace is the only
+// trailing content the spec itself calls insignificant.
 func DecodeRESTSnapshot(body []byte) (Snapshot, error) {
 	if nonFiniteLiteral.Match(body) {
 		return Snapshot{}, ErrNonFiniteNumber
@@ -55,12 +60,29 @@ func DecodeRESTSnapshot(body []byte) (Snapshot, error) {
 	if err := decoder.Decode(&value); err != nil {
 		return Snapshot{}, fmt.Errorf("goapiproof: decode REST response body: %w", err)
 	}
-	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+	if hasSignificantTrailingBytes(body[decoder.InputOffset():]) {
 		snapshot.TrailingBytes = true
 	}
 	snapshot.Data = value
 	snapshot.DataPresent = true
 	return snapshot, nil
+}
+
+// hasSignificantTrailingBytes reports whether trailing (everything after
+// the first decoded JSON value) carries any byte other than RFC 8259
+// insignificant whitespace (space, tab, CR, LF). A second JSON value is
+// significant regardless of what precedes it: its own leading bytes are
+// never themselves whitespace.
+func hasSignificantTrailingBytes(trailing []byte) bool {
+	for _, b := range trailing {
+		switch b {
+		case ' ', '\t', '\r', '\n':
+			continue
+		default:
+			return true
+		}
+	}
+	return false
 }
 
 // RESTLeg is one plane's raw HTTP observation for one REST request.

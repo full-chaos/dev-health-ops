@@ -370,6 +370,19 @@ var investmentSunburstBaselineDefects = append(append([]BaselineDefect{}, invest
 		ValuePath:  "data.value",
 		KeyFields:  []string{"theme", "subcategory", "scope"},
 	},
+}, BaselineDefect{
+	Ticket:             "CHAOS-5923",
+	Reason:             "fetch_investment_sunburst/FetchInvestmentSunburst both GROUP BY theme, subcategory, scope, ORDER BY value DESC and LIMIT :limit identically on both planes (investmentSunburstOrderInsensitiveLists' own doc comment). The sibling repos-join fan-out entry above can move a slice's rank in that ordering without either plane's own SQL changing which (theme, subcategory, scope) keys exist, so a row can cross the LIMIT boundary on one plane only, appearing on baseline's list while the row it displaces -- whichever one now ranks just past the limit -- disappears from it. Go's list is the correct one: it is EITHER plane's own true, undoubled ranking, and Python's is inflated by the same fan-out the sibling entry already establishes is a Python-only defect.",
+	Paths:              []string{"data"},
+	Intermittent:       true,
+	IntermittentReason: "present only while the sibling repos-join fan-out entry's own mechanism is live AND the affected repository has a row close enough to the requested limit's own boundary to cross it; a comparison with no such boundary crossing agrees on both planes",
+	LimitDisplacementShape: &LimitDisplacementShape{
+		ListPath:     "data",
+		KeyFields:    []string{"theme", "subcategory", "scope"},
+		RepoKeyField: "scope",
+		ValueField:   "value",
+		ValuePath:    "data.value",
+	},
 })
 
 // investmentSunburstOrderInsensitiveLists declares the sunburst list's
@@ -407,6 +420,14 @@ var investmentSunburstOrderInsensitiveLists = []OrderInsensitiveList{
 // investmentQualityStatsFloats' own data.theme_distribution/
 // data.subcategory_distribution declare for the identical query shape.
 // Undeclared (Tier A exact) before this ticket.
+//
+// Its own LimitDisplacementShape entry carries no usable Limit: every
+// corpus request must go through investmentSunburstParityWithLimit
+// instead, which fills in THAT request's own effective limit. A caller
+// reaching for this value directly gets a limit-displacement entry that
+// never admits anything (Limit's zero value matches no real list
+// length), which is the safe default for a Parity nothing has
+// specialised yet.
 var investmentSunburstParity = Options{
 	BaselineDefects:       investmentSunburstBaselineDefects,
 	OrderInsensitiveLists: investmentSunburstOrderInsensitiveLists,
@@ -414,6 +435,41 @@ var investmentSunburstParity = Options{
 	FloatTierB: map[string]string{
 		"data.value": "sum(subcategory_kv.2 * effort_value) (investment/sunburst.go FetchInvestmentSunburst) -- genuine merged ClickHouse float aggregate.",
 	},
+}
+
+// investmentSunburstDefaultLimit is investment_sunburst's own `limit:
+// int = 500` default (api/main.py, the investment_sunburst route
+// signature) mirrored by newInvestmentSunburstGetHandler's own `limit
+// := 500` (cmd/query-api/investment_route.go): applies only while the
+// request's own query carries no `limit` parameter at all. A PRESENT
+// value (including 0 or a negative number) passes straight through
+// unclamped on both planes; an invalid one is a 422 on both (this
+// route's own "invalid_limit" corpus entry), never JSON-compared at
+// all.
+const investmentSunburstDefaultLimit = 500
+
+// investmentSunburstParityWithLimit returns investmentSunburstParity
+// with a fresh copy of its own LimitDisplacementShape entry whose Limit
+// is set to THIS request's effective limit -- the value its own query
+// sends, or investmentSunburstDefaultLimit when it sends none. Every
+// other entry in BaselineDefects is the SAME slice element (copied by
+// value, unchanged), so this only ever changes what the limit-
+// displacement entry itself checks.
+func investmentSunburstParityWithLimit(limit int) Options {
+	opts := investmentSunburstParity
+	defects := make([]BaselineDefect, len(investmentSunburstParity.BaselineDefects))
+	copy(defects, investmentSunburstParity.BaselineDefects)
+	for i, defect := range defects {
+		if defect.LimitDisplacementShape == nil {
+			continue
+		}
+		shape := *defect.LimitDisplacementShape
+		shape.Limit = limit
+		defect.LimitDisplacementShape = &shape
+		defects[i] = defect
+	}
+	opts.BaselineDefects = defects
+	return opts
 }
 
 // investmentExplainProseFields names investment/explain's LLM-authored
@@ -1729,6 +1785,19 @@ var investmentFlowRepoDedupParity = Options{
 				ValuePath: "data.unassigned_reasons",
 			},
 		},
+		{
+			Ticket:             "CHAOS-5923",
+			Reason:             "team_coverage (and its coverage.team_coverage duplicate) is assignedTeamValue/totalValue, summed straight over the fetched rows (coverageStats, investmentflow/builders.go; investment_flow.py's identical sum). A team-group sankey node's own value is finishPresenceEdges' max(incoming, outgoing) with incoming always zero for a team node (no edge ever targets a team label), so it equals that team's own row-value sum -- the SAME sum coverageStats accumulates per team. Summing every team-group node therefore reproduces totalValue on that SAME plane, and summing every one except the unassigned-team bucket (\"Unassigned team\") reproduces assignedTeamValue, so team_coverage is a pure function of that plane's OWN nodes. The sibling repos-join fan-out and supersession-exclusion entries above are what move one or more team-group node values between planes; when every team-group node difference in a comparison is already covered by one of those, the team_coverage difference has no source other than the covered nodes. Go is correct.",
+			Paths:              []string{"data.team_coverage", "data.coverage.team_coverage"},
+			Intermittent:       true,
+			IntermittentReason: "present only under the same conditions the sibling fan-out/supersession-exclusion entries above state for their own node/link differences; a comparison with no covered team-group node difference agrees on both planes",
+			TeamCoverageIdentityShape: &TeamCoverageIdentityShape{
+				NodesListPath:          "data.nodes",
+				TeamGroup:              "team",
+				UnassignedTeamNodeName: "Unassigned team",
+				CoveragePaths:          []string{"data.team_coverage", "data.coverage.team_coverage"},
+			},
+		},
 	},
 }
 
@@ -2792,14 +2861,14 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				Name:                "default_window",
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
 				BodyMode: RESTBodyModeJSON,
-				Parity:   investmentSunburstParity,
+				Parity:   investmentSunburstParityWithLimit(investmentSunburstDefaultLimit),
 			},
 			{
 				Name:                "explicit_limit",
 				Query:               url.Values{"limit": {"50"}},
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
 				BodyMode: RESTBodyModeJSON,
-				Parity:   investmentSunburstParity,
+				Parity:   investmentSunburstParityWithLimit(50),
 			},
 			{
 				Name:                "invalid_limit",

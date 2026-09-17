@@ -598,6 +598,32 @@ type BaselineDefect struct {
 	// behaviour every other declared defect still uses. A defect never
 	// sets more than one shape field.
 	ScalarDirectionShape *ScalarDirectionShape
+
+	// TeamCoverageIdentityShape, when set, replaces this defect's blanket
+	// "any leaf difference under Paths is covered" rule with a per-leg
+	// arithmetic identity between a team_coverage leaf and its OWN
+	// response's team-group sankey nodes, admitted only once every
+	// team-group node difference in this comparison is already covered
+	// by another declared defect -- see TeamCoverageIdentityShape's own
+	// doc comment (teamcoverageidentity.go). Unlike every other shape in
+	// this file, it is evaluated in a SECOND pass, after every other
+	// defect's own `covered` decision is final (classifyBaselineDefects
+	// enforces this). nil is the default, unchanged blanket behaviour
+	// every other declared defect still uses. A defect never sets more
+	// than one shape field.
+	TeamCoverageIdentityShape *TeamCoverageIdentityShape
+
+	// LimitDisplacementShape, when set, replaces this defect's blanket
+	// "any leaf difference under Paths is covered" rule with a per-key
+	// admission of a LIMIT-boundary presence swap -- a row entering one
+	// plane's list and another leaving it, both explained by the SAME
+	// already-covered value-multiplying defect -- see
+	// LimitDisplacementShape's own doc comment (limitdisplacement.go).
+	// Like TeamCoverageIdentityShape, it is evaluated in a SECOND pass,
+	// after every other defect's own `covered` decision is final. nil is
+	// the default, unchanged blanket behaviour every other declared
+	// defect still uses. A defect never sets more than one shape field.
+	LimitDisplacementShape *LimitDisplacementShape
 }
 
 // validateBaselineDefects refuses a declaration that claims the
@@ -875,7 +901,17 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 		touched []int
 	}
 	verdicts := make([]perDefect, len(defects))
-	for d, defect := range defects {
+	// evaluateDefect runs the shared per-defect admission logic. Every
+	// existing shape is a pure function of the two decoded bodies (plus,
+	// for a whole-comparison shape, this run's own mismatch paths) and
+	// never needs to see what any OTHER defect decided -- so ordering
+	// among them has never mattered. TeamCoverageIdentityShape and
+	// LimitDisplacementShape are the first two exceptions: each one's own
+	// admission is DEFINED in terms of `covered` from every OTHER
+	// defect, so evaluateDefect is called for them ONLY in a second pass
+	// below, once every ordinary defect has already run and `covered` is
+	// final for everything else in this comparison.
+	evaluateDefect := func(d int, defect BaselineDefect) {
 		hit := false
 		// Built once per defect, not per finding: a shape's plan (its
 		// per-repo multiplier map and aggregate totals, or its
@@ -918,6 +954,14 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 		if defect.ScalarDirectionShape != nil {
 			scalarDirPlan = buildScalarDirectionPlan(defect.ScalarDirectionShape, baselineData, candidateData, mismatches)
 		}
+		var identityPlan *teamCoverageIdentityPlan
+		if defect.TeamCoverageIdentityShape != nil {
+			identityPlan = buildTeamCoverageIdentityPlan(defect.TeamCoverageIdentityShape, baselineData, candidateData, mismatches, findingRefs, result.Findings, covered)
+		}
+		var displacePlan *limitDisplacementPlan
+		if defect.LimitDisplacementShape != nil {
+			displacePlan = buildLimitDisplacementPlan(defect.LimitDisplacementShape, baselineData, candidateData, mismatches, findingRefs, result.Findings, covered)
+		}
 		// A SHAPED defect's citation is LIVE only when its shape actually
 		// admits something. A blanket (unshaped) citation stays live from
 		// path proximity alone -- any difference under Paths, covered or
@@ -931,7 +975,7 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 		// apart, and a shaped defect that hit on path alone would still
 		// double-report alongside the shape that actually explains the
 		// difference.
-		shaped := repoPlan != nil || covPlan != nil || dedupPlan != nil || skewPlan != nil || sankeyFanoutPlan != nil || keyedDirPlan != nil || conservePlan != nil || dictDirPlan != nil || scalarDirPlan != nil
+		shaped := repoPlan != nil || covPlan != nil || dedupPlan != nil || skewPlan != nil || sankeyFanoutPlan != nil || keyedDirPlan != nil || conservePlan != nil || dictDirPlan != nil || scalarDirPlan != nil || identityPlan != nil || displacePlan != nil
 		var touched []int
 		for i, path := range mismatches {
 			if !defectCovers(defect, path) {
@@ -944,7 +988,13 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 				// under a cited subtree stays outside every citation.
 				hit = true
 			}
-			if !leafDifference(shapes[i]) {
+			// LimitDisplacementShape is the one shape that admits a
+			// STRUCTURAL (ShapePresence) finding -- a row entering or
+			// leaving a limit-bounded list is a presence difference by
+			// construction, never a leaf one, and the shape's own doc
+			// comment states exactly what makes that admission safe. No
+			// other shape ever reaches past leafDifference.
+			if !leafDifference(shapes[i]) && !(displacePlan != nil && shapes[i] == ShapePresence) {
 				continue
 			}
 			if shaped {
@@ -982,6 +1032,10 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 				admitted = dictDirPlan.admits(result.Findings[findingRefs[i]])
 			case scalarDirPlan != nil:
 				admitted = scalarDirPlan.admits(result.Findings[findingRefs[i]])
+			case identityPlan != nil:
+				admitted = identityPlan.admits(result.Findings[findingRefs[i]])
+			case displacePlan != nil:
+				admitted = displacePlan.admits(result.Findings[findingRefs[i]])
 			}
 			if admitted {
 				covered[i] = true
@@ -989,6 +1043,18 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 			}
 		}
 		verdicts[d] = perDefect{hit: hit, shaped: shaped, touched: touched}
+	}
+	for d, defect := range defects {
+		if defect.TeamCoverageIdentityShape != nil || defect.LimitDisplacementShape != nil {
+			continue
+		}
+		evaluateDefect(d, defect)
+	}
+	for d, defect := range defects {
+		if defect.TeamCoverageIdentityShape == nil && defect.LimitDisplacementShape == nil {
+			continue
+		}
+		evaluateDefect(d, defect)
 	}
 
 	var matched, stale, idle, liveUnexplainedDefects []string

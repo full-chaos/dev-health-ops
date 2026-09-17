@@ -570,11 +570,15 @@ var operationSpecs = map[string]OperationSpec{
 	// duplicated baseline row whose copies agree with each other and with
 	// the candidate's own row for the same id -- rather than admitting
 	// any difference under the edges list, which would also excuse a
-	// genuine per-field regression sharing the same path. pageInfo's
-	// endCursor names whichever edge lands in the page's last slot, so
-	// the same slot-count shift that explains every reordered edge also
-	// determines it deterministically -- it is covered for exactly the
-	// comparisons the shape already validates, never on its own.
+	// genuine per-field regression sharing the same path. Admission is
+	// PER EDGE ID: one edge's duplicate copies disagreeing, or its
+	// shared content disagreeing with the candidate, excludes only that
+	// edge, leaving its own findings outside the citation, named by id --
+	// it does not widen or narrow any other edge's own verdict. pageInfo's
+	// endCursor (TrailingCursorPath below) names whichever edge lands in
+	// the page's last slot, so the same slot-count shift that explains
+	// every reordered edge also determines it deterministically, and its
+	// own admission is resolved through THAT edge's own id.
 	"workGraphEdges": {
 		ResponseRoot: "workGraphEdges",
 		Variables:    workGraphVariables,
@@ -585,8 +589,9 @@ var operationSpecs = map[string]OperationSpec{
 			Intermittent:       true,
 			IntermittentReason: "present only while the source table holds an unmerged duplicate physical version of some edge; a comparison taken after the background merge collapses it shows no repeated edgeId on the baseline side either",
 			WorkGraphEdgeDedupShape: &WorkGraphEdgeDedupShape{
-				EdgesListPath: "data.workGraphEdges.edges",
-				IDField:       "edgeId",
+				EdgesListPath:      "data.workGraphEdges.edges",
+				IDField:            "edgeId",
+				TrailingCursorPath: "data.workGraphEdges.pageInfo.endCursor",
 			},
 		}}},
 	},

@@ -696,6 +696,18 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 				admitted = covPlan.admits(result.Findings[findingRefs[i]])
 			case dedupPlan != nil:
 				admitted = dedupPlan.admits(result.Findings[findingRefs[i]])
+				// The dedup shape's verdict is per id, not a
+				// whole-comparison boolean, so a NOT-admitted finding
+				// here can sit right beside an admitted one at the very
+				// next index. Name the excluded id directly in the
+				// finding's own Detail -- a reader of the report can see
+				// which id was not covered and why without cross-
+				// referencing the raw bodies.
+				if !admitted {
+					if id, ok := dedupPlan.uncoveredEdgeID(result.Findings[findingRefs[i]]); ok {
+						result.Findings[findingRefs[i]].Detail += fmt.Sprintf(" (dedup id %q not admitted by the declared duplicate-row shape: its own baseline copies disagree, or its shared content differs from the candidate)", id)
+					}
+				}
 			}
 			if admitted {
 				covered[i] = true

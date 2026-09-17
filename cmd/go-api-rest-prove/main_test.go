@@ -62,6 +62,7 @@ func TestParseFlags_DefaultsBuildInfoURLFromQueryAPIURL(t *testing.T) {
 		"-org", "org-1",
 		"-recorded-by", "chris",
 		"-review-evidence", "test",
+		"-artifact-dir", t.TempDir(),
 		"-dry-run",
 	})
 	defer restoreArgs()
@@ -84,6 +85,7 @@ func TestParseFlags_DryRunDoesNotRequirePostgresURI(t *testing.T) {
 		"-org", "org-1",
 		"-recorded-by", "chris",
 		"-review-evidence", "test",
+		"-artifact-dir", t.TempDir(),
 		"-dry-run",
 	})
 	defer restoreArgs()
@@ -159,7 +161,7 @@ func TestProveOneRESTRequest_MatchWritesAReceipt(t *testing.T) {
 	writer := &fakeReceiptWriter{}
 
 	out, err := proveOneRESTRequest(context.Background(), http.DefaultClient, f, "REST:GET:/api/v1/filters/options", spec, request,
-		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, false, nil)
+		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil, false, nil)
 	if err != nil {
 		t.Fatalf("proveOneRESTRequest: %v", err)
 	}
@@ -177,6 +179,149 @@ func TestProveOneRESTRequest_MatchWritesAReceipt(t *testing.T) {
 	}
 	if writer.receipts[0].BuildBinding != goapiproof.EdgeBuildPresent {
 		t.Fatalf("receipt BuildBinding = %q, want %q", writer.receipts[0].BuildBinding, goapiproof.EdgeBuildPresent)
+	}
+}
+
+// readArtifactFile reads back a goapiproof.ArtifactStore ref exactly the
+// way a human reviewer would: strip the "file://" scheme Put returns and
+// read what is at the path, so a test that only holds the ref string can
+// still assert on the bytes actually written -- the same evidence a
+// reader needs to recover after this process exits.
+func readArtifactFile(t *testing.T, ref string) []byte {
+	t.Helper()
+	if ref == "" {
+		t.Fatal("artifact ref is empty")
+	}
+	const scheme = "file://"
+	if !strings.HasPrefix(ref, scheme) {
+		t.Fatalf("artifact ref %q does not carry the file:// scheme", ref)
+	}
+	body, err := os.ReadFile(strings.TrimPrefix(ref, scheme))
+	if err != nil {
+		t.Fatalf("read artifact %q: %v", ref, err)
+	}
+	return body
+}
+
+// TestProveOneRESTRequest_PersistsLegBodiesAndFindingsToTheArtifactDir
+// drives a real mismatch through proveOneRESTRequest with a real
+// (t.TempDir()-backed) ArtifactStore and reads every ref back from disk:
+// both legs' raw bodies byte-for-byte, and the finding list as the same
+// shape Compare returned -- so a receipt's own refs are provably not just
+// present but READABLE evidence, not a name pointing at nothing.
+func TestProveOneRESTRequest_PersistsLegBodiesAndFindingsToTheArtifactDir(t *testing.T) {
+	const build = "abc123def456"
+	const candidateBody = `{"teams":["a","b"]}`
+	const baselineBody = `{"teams":["a","c"]}`
+	candidate := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("x-dev-health-build", build)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(candidateBody))
+	}))
+	defer candidate.Close()
+	baseline := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(baselineBody))
+	}))
+	defer baseline.Close()
+
+	artifacts, err := goapiproof.NewArtifactStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewArtifactStore: %v", err)
+	}
+
+	f := flags{queryAPIURL: candidate.URL, pythonAPIURL: baseline.URL, org: "org-1", recordedBy: "chris", reviewEvidence: "why this ran"}
+	spec := goapiproof.RESTEndpointSpec{Method: http.MethodGet, Path: "/api/v1/filters/options"}
+	request := goapiproof.RESTRequest{Name: "options", WantCandidateStatus: 200, WantBaselineStatus: 200, BodyMode: goapiproof.RESTBodyModeJSON}
+	writer := &fakeReceiptWriter{}
+
+	out, err := proveOneRESTRequest(context.Background(), http.DefaultClient, f, "REST:GET:/api/v1/filters/options", spec, request,
+		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, artifacts, false, nil)
+	if err != nil {
+		t.Fatalf("proveOneRESTRequest: %v", err)
+	}
+	if out.TerminalState != goapiproof.TerminalStateMismatch {
+		t.Fatalf("out.TerminalState = %q, want mismatch (teams[1] differs)", out.TerminalState)
+	}
+
+	// The outcome's own refs (the JSON report a caller reads even for a
+	// refused or dry-run request, per FindingsRef's own doc comment).
+	if got := string(readArtifactFile(t, out.CandidateResponseRef)); got != candidateBody {
+		t.Fatalf("candidate artifact body = %q, want %q", got, candidateBody)
+	}
+	if got := string(readArtifactFile(t, out.BaselineResponseRef)); got != baselineBody {
+		t.Fatalf("baseline artifact body = %q, want %q", got, baselineBody)
+	}
+	var findings []goapiproof.Finding
+	if err := json.Unmarshal(readArtifactFile(t, out.FindingsRef), &findings); err != nil {
+		t.Fatalf("decode findings artifact: %v", err)
+	}
+	if len(findings) == 0 {
+		t.Fatal("findings artifact decoded to zero findings, want at least the teams[1] mismatch")
+	}
+
+	// The written RECEIPT: same two body refs on their own dedicated
+	// columns, and the findings ref folded into review_evidence's own
+	// JSON envelope (go_api_rest_proof_run carries no findings_ref
+	// column -- see encodeRESTReviewEvidence's own doc comment).
+	if len(writer.receipts) != 1 {
+		t.Fatalf("wrote %d receipts, want 1", len(writer.receipts))
+	}
+	receipt := writer.receipts[0]
+	if receipt.CandidateResponseRef != out.CandidateResponseRef {
+		t.Fatalf("receipt.CandidateResponseRef = %q, want %q", receipt.CandidateResponseRef, out.CandidateResponseRef)
+	}
+	if receipt.BaselineResponseRef != out.BaselineResponseRef {
+		t.Fatalf("receipt.BaselineResponseRef = %q, want %q", receipt.BaselineResponseRef, out.BaselineResponseRef)
+	}
+	var evidence restReviewEvidence
+	if err := json.Unmarshal([]byte(receipt.ReviewEvidence), &evidence); err != nil {
+		t.Fatalf("decode receipt.ReviewEvidence as JSON: %v (%q)", err, receipt.ReviewEvidence)
+	}
+	if evidence.Operator != f.reviewEvidence {
+		t.Fatalf("evidence.Operator = %q, want %q (the operator's own -review-evidence text, unmodified)", evidence.Operator, f.reviewEvidence)
+	}
+	if evidence.FindingsRef != out.FindingsRef {
+		t.Fatalf("evidence.FindingsRef = %q, want %q", evidence.FindingsRef, out.FindingsRef)
+	}
+}
+
+// TestProveOneRESTRequest_RefusedRequestStillPersistsLegBodies pins that
+// artifact storage happens BEFORE admission runs: a refused request is
+// exactly the case that most needs its bodies on disk, since a reader
+// cannot otherwise see what either plane actually answered with.
+func TestProveOneRESTRequest_RefusedRequestStillPersistsLegBodies(t *testing.T) {
+	const candidateBody = "unavailable"
+	candidate := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(candidateBody))
+	}))
+	defer candidate.Close()
+	baseline := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer baseline.Close()
+
+	artifacts, err := goapiproof.NewArtifactStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewArtifactStore: %v", err)
+	}
+
+	f := flags{queryAPIURL: candidate.URL, pythonAPIURL: baseline.URL, org: "org-1"}
+	spec := goapiproof.RESTEndpointSpec{Method: http.MethodGet, Path: "/api/v1/filters/options"}
+	request := goapiproof.RESTRequest{Name: "options", WantCandidateStatus: 200, WantBaselineStatus: 200, BodyMode: goapiproof.RESTBodyModeJSON}
+
+	out, err := proveOneRESTRequest(context.Background(), http.DefaultClient, f, "op", spec, request,
+		staticCredentialForTest(), staticCredentialForTest(), "abc123", goapiproof.AuthContext{}, time.Now().UTC(), nil, artifacts, false, nil)
+	if err != nil {
+		t.Fatalf("proveOneRESTRequest: %v", err)
+	}
+	if out.Admitted {
+		t.Fatalf("out = %+v, want a refusal", out)
+	}
+	if got := string(readArtifactFile(t, out.CandidateResponseRef)); got != candidateBody {
+		t.Fatalf("candidate artifact body = %q, want %q -- a refused request's own bodies must still be on disk", got, candidateBody)
 	}
 }
 
@@ -200,7 +345,7 @@ func TestProveOneRESTRequest_DryRunWritesNoReceipt(t *testing.T) {
 	writer := &fakeReceiptWriter{}
 
 	out, err := proveOneRESTRequest(context.Background(), http.DefaultClient, f, "op", spec, request,
-		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, true, nil)
+		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil, true, nil)
 	if err != nil {
 		t.Fatalf("proveOneRESTRequest: %v", err)
 	}
@@ -229,7 +374,7 @@ func TestProveOneRESTRequest_RefusesOnUnexpectedStatus(t *testing.T) {
 	writer := &fakeReceiptWriter{}
 
 	out, err := proveOneRESTRequest(context.Background(), http.DefaultClient, f, "op", spec, request,
-		staticCredentialForTest(), staticCredentialForTest(), "abc123", goapiproof.AuthContext{}, time.Now().UTC(), writer, false, nil)
+		staticCredentialForTest(), staticCredentialForTest(), "abc123", goapiproof.AuthContext{}, time.Now().UTC(), writer, nil, false, nil)
 	if err != nil {
 		t.Fatalf("proveOneRESTRequest: %v", err)
 	}
@@ -281,7 +426,7 @@ func TestProveOneRESTRequest_VacuousComparisonIsRefusedNotCrashed(t *testing.T) 
 	writer := &fakeReceiptWriter{}
 
 	out, err := proveOneRESTRequest(context.Background(), http.DefaultClient, f, "REST:GET:/api/v1/drilldown/prs", spec, request,
-		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, false, nil)
+		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil, false, nil)
 	if err != nil {
 		t.Fatalf("proveOneRESTRequest: %v -- a vacuous comparison must be a clean refusal, never a tool error", err)
 	}
@@ -404,7 +549,7 @@ func TestProveOneRESTRequest_PublicNoAuthSendsNoAuthorizationHeader(t *testing.T
 	poisonedCredential := goapiproof.StaticCredential("Authorization", "poisoned", "")
 
 	out, err := proveOneRESTRequest(context.Background(), http.DefaultClient, f, "REST:GET:/api/v1/meta", spec, request,
-		poisonedCredential, poisonedCredential, build, goapiproof.AuthContext{}, time.Now().UTC(), nil, true, nil)
+		poisonedCredential, poisonedCredential, build, goapiproof.AuthContext{}, time.Now().UTC(), nil, nil, true, nil)
 	if err != nil {
 		t.Fatalf("proveOneRESTRequest: %v", err)
 	}
@@ -516,7 +661,7 @@ func TestIDBinding_EndToEnd(t *testing.T) {
 		Produces: []goapiproof.RESTIDProducer{{Name: "person_id", IDField: "person_id"}},
 	}
 	producerOut, err := proveOneRESTRequest(context.Background(), http.DefaultClient, f, "REST:GET:/api/v1/people", producerSpec, producerRequest,
-		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, false, nil)
+		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil, false, nil)
 	if err != nil {
 		t.Fatalf("producer proveOneRESTRequest: %v", err)
 	}
@@ -553,7 +698,7 @@ func TestIDBinding_EndToEnd(t *testing.T) {
 	resolvedRequest.Query = resolvedQuery
 
 	consumerOut, err := proveOneRESTRequest(context.Background(), http.DefaultClient, f, "REST:GET:/api/v1/people/{person_id}/summary", resolvedSpec, resolvedRequest,
-		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, false,
+		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil, false,
 		map[string]string{"person_id": produced["person_id"]})
 	if err != nil {
 		t.Fatalf("consumer proveOneRESTRequest: %v", err)

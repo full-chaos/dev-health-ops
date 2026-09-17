@@ -1663,6 +1663,54 @@ func TestProveOneRESTRequest_StatusOnlyBaselineFailureProducesFromCandidateLeg(t
 	}
 }
 
+// TestProveOneRESTRequest_StatusOnlyBaselineFailureRefusedWhenCandidateBodyLacksTheDeclaredID
+// proves the check this ticket adds is not decoration: a StatusOnly,
+// declared-failing-baseline request whose CANDIDATE leg answers the
+// declared 200 but whose body does not yield a declared Produces id --
+// here, a real 200 body missing the "items" the declaration expects --
+// refuses the request outright, by its own named reason, rather than
+// leaving out.producedIDs silently short (the behaviour before this
+// ticket) or writing a receipt.
+func TestProveOneRESTRequest_StatusOnlyBaselineFailureRefusedWhenCandidateBodyLacksTheDeclaredID(t *testing.T) {
+	const build = "abc123def456"
+	candidate := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("x-dev-health-build", build)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"entity":{"work_item_id":"w1"},"timeline":{"start":"2024-01-01T00:00:00Z","end":"2024-01-02T00:00:00Z"},"frames":[]}`))
+	}))
+	defer candidate.Close()
+	baseline := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"detail":"Data unavailable"}`))
+	}))
+	defer baseline.Close()
+
+	f := flags{queryAPIURL: candidate.URL, pythonAPIURL: baseline.URL, org: "org-1", recordedBy: "chris", reviewEvidence: "test"}
+	spec := goapiproof.RESTEndpointSpec{Method: http.MethodGet, Path: "/api/v1/flame"}
+	request := goapiproof.RESTRequest{
+		Name: "issue_entity_id_bound_200", WantCandidateStatus: 200, WantBaselineStatus: 503,
+		StatusDivergenceReason: "constructed for this test",
+		BodyMode:               goapiproof.RESTBodyModeStatusOnly,
+		Produces:               []goapiproof.RESTIDProducer{{Name: "issue_flame_frame_id", ListPath: "frames", IDField: "id"}},
+	}
+	writer := &fakeReceiptWriter{}
+
+	out, err := proveOneRESTRequest(context.Background(), http.DefaultClient, f, "REST:GET:/api/v1/flame", spec, request,
+		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil, false, nil)
+	if err != nil {
+		t.Fatalf("proveOneRESTRequest: %v", err)
+	}
+	if out.Admitted || out.Refusal != goapiproof.RESTRefusalCandidateProducerUnresolved {
+		t.Fatalf("out = %+v, want a named RESTRefusalCandidateProducerUnresolved refusal, not an admitted request", out)
+	}
+	if len(out.producedIDs) != 0 {
+		t.Fatalf("producedIDs = %v, want none: a refused request produces nothing", out.producedIDs)
+	}
+	if len(writer.receipts) != 0 {
+		t.Fatalf("wrote %d receipts, want 0 for a refused request", len(writer.receipts))
+	}
+}
+
 // TestProveOneRESTRequest_StatusOnlyBaselineFailureRefusedWhenBaselineRecovers
 // proves the reversal is never silently absorbed: if the baseline this
 // entry declares as failing starts answering the CANDIDATE's own

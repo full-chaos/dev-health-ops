@@ -3036,11 +3036,18 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				StatusDivergenceReason: "CHAOS-5868: the baseline plane answers HTTP 503 for this request in production; the candidate plane answers HTTP 200 with real data; bodies are not compared.",
 				BodyMode:               RESTBodyModeStatusOnly,
 				// Produces declares work_item_id for flame's own
-				// issue_entity_id_bound_200 entry below, but this
-				// request's body is never decoded under BodyMode:
-				// status_only, so the id is never actually extracted --
-				// that consumer stays refused by name
-				// (rest_request_id_binding_unresolved), not hidden.
+				// issue_entity_id_bound_200 entry below. BodyMode:
+				// status_only means this request's body is never
+				// compared between planes, but it IS still decoded for
+				// this: ValidateRESTCorpus's isBaselineOnlyFailure
+				// exception lets a status-only, declared-failing-baseline
+				// request Produce ids read from the CANDIDATE leg
+				// (proveOneRESTRequest's own doc comment,
+				// cmd/go-api-rest-prove/main.go). A body that does not
+				// yield work_item_id refuses THIS request by name
+				// (RESTRefusalCandidateProducerUnresolved), and the
+				// consumer refuses separately, by name
+				// (rest_request_id_binding_unresolved).
 				Produces: []RESTIDProducer{{Name: "work_item_id", ListPath: "items", IDField: "work_item_id"}},
 			},
 			{
@@ -3339,18 +3346,35 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				// declares for "pr" has no counterpart here, the same
 				// asymmetry personDrilldownIssuesParity's own doc comment
 				// already states for the sibling person-scoped route).
-				// Its producer, GET /api/v1/drilldown/issues' own
-				// default_window entry, is presently declared
-				// baseline-only 503 (StatusDivergenceReason), so no
-				// work_item_id is ever produced -- this entry stays
-				// refused by name (rest_request_id_binding_unresolved),
-				// a standing gap, not a fix to this route's own real
-				// behaviour.
+				//
+				// The baseline plane answers HTTP 503 for this request in
+				// production (StatusDivergenceReason below) -- the same
+				// server exception the issue-drilldown routes' own 503
+				// entries share -- so this entry is declared status-only,
+				// the same shape those entries use. Its producer, GET
+				// /api/v1/drilldown/issues' own default_window entry,
+				// still Produces work_item_id: ValidateRESTCorpus's
+				// isBaselineOnlyFailure exception lets a status-only,
+				// declared-failing-baseline request read an id from the
+				// CANDIDATE leg's own body (that entry's own doc comment).
+				//
+				// This entry's own Produces declares a second id
+				// (issue_flame_frame_id, off `frames`) purely as a
+				// structural check on the candidate's own 200 body:
+				// BodyMode: status_only compares no body between planes,
+				// and this is the only live case of the "issue" branch,
+				// so nothing else confirms the shape flame.Response/
+				// Frame's own json tags promise on this route. Nothing
+				// downstream consumes issue_flame_frame_id; a candidate
+				// body that does not yield it refuses this request by
+				// name (RESTRefusalCandidateProducerUnresolved).
 				Name:                "issue_entity_id_bound_200",
 				Query:               url.Values{"entity_type": {"issue"}},
-				WantCandidateStatus: 200, WantBaselineStatus: 200,
-				BodyMode:   RESTBodyModeJSON,
-				IDBindings: []RESTIDBinding{{Producer: "work_item_id", QueryParam: "entity_id"}},
+				WantCandidateStatus: 200, WantBaselineStatus: 503,
+				StatusDivergenceReason: "CHAOS-5868: the baseline plane's issue reads -- fetch_issue here, fetch_issues for GET /api/v1/drilldown/issues, and the people-scoped issue drilldown -- fail with the same ClickHouse server exception (code 10, NOT_FOUND_COLUMN_IN_BLOCK) raised while planning the pushed-down conjunction over `work_item_cycle_times AS wct FINAL` LEFT JOINed to the primary team-attribution subquery; the handler catches it generically and answers HTTP 503 with no logging. The candidate plane answers HTTP 200 with real data; bodies are not compared.",
+				BodyMode:               RESTBodyModeStatusOnly,
+				IDBindings:             []RESTIDBinding{{Producer: "work_item_id", QueryParam: "entity_id"}},
+				Produces:               []RESTIDProducer{{Name: "issue_flame_frame_id", ListPath: "frames", IDField: "id"}},
 			},
 		},
 	},

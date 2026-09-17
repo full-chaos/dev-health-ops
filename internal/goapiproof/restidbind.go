@@ -16,12 +16,19 @@ import (
 // OperationSpec.InstanceVariable refuses the GraphQL `pr` operation's own
 // `$id` gap (operations.go) for want of any id this table could supply.
 //
-// The id is read from the BASELINE leg specifically -- never candidate --
-// because the ruling this file implements is "the same id proves both
-// planes were asked about the SAME row", and the baseline (Python) leg is
-// the one plane every corpus entry always calls regardless of routeswitch
-// enablement, so a producer's id is available even for an operation this
-// binary is still rolling out on the candidate side.
+// The id is read from the BASELINE leg for the overwhelming majority of
+// producers, because the ruling this file implements is "the same id
+// proves both planes were asked about the SAME row", and the baseline
+// (Python) leg is the one plane every corpus entry always calls
+// regardless of routeswitch enablement, so a producer's id is available
+// even for an operation this binary is still rolling out on the
+// candidate side. The one exception: a request whose declared
+// WantBaselineStatus differs from WantCandidateStatus with the
+// candidate's own want at 200 -- the baseline is declared failing in
+// production, so cmd/go-api-rest-prove reads that producer's id from the
+// CANDIDATE leg instead (proveOneRESTRequest's own doc comment) -- an id
+// is a request parameter, not evidence compared between planes, so it is
+// honest to read it from whichever leg actually answers with a body.
 //
 // An id is never invented: RESTIDBinding names a Producer, resolved at
 // run time from a package-level map ("produced") the run loop
@@ -268,3 +275,16 @@ func ResolveRESTIDBindings(specPath string, request RESTRequest, produced map[st
 // it fires BEFORE either leg is ever called, never from an HTTP
 // response.
 const RESTRefusalIDBindingUnresolved = "rest_request_id_binding_unresolved"
+
+// RESTRefusalCandidateProducerUnresolved is the named refusal reason for
+// a StatusOnly, declared-failing-baseline request (ValidateRESTCorpus's
+// isBaselineOnlyFailure exception) whose own Produces entries the
+// CANDIDATE leg's decoded body did not all yield -- the body failed to
+// decode, or ExtractRESTID found no value at a declared entry's path.
+// Fires from cmd/go-api-rest-prove's own proveOneRESTRequest, AFTER the
+// candidate leg answered (unlike RESTRefusalIDBindingUnresolved above,
+// which fires before either leg of a CONSUMER is ever called): a
+// producer that cannot resolve its own declared id would otherwise leave
+// a later consumer refused by RESTRefusalIDBindingUnresolved with no
+// visible reason on the request that actually failed to produce it.
+const RESTRefusalCandidateProducerUnresolved = "rest_candidate_body_did_not_produce_the_declared_id"

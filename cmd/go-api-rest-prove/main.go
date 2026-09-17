@@ -1114,19 +1114,39 @@ func proveOneRESTRequest(
 		// with a body: here that is the CANDIDATE, not the BASELINE the
 		// decodeBody branch above reads for every other request. Decoded
 		// through the same production decoder (DecodeRESTSnapshot) real
-		// evidence uses, never hand-built. A decode failure or a body
-		// that yields no id is not a tool error here -- it leaves
-		// out.producedIDs unset for this producer's name, and any
-		// consumer later in the run is refused by name
-		// (rest_request_id_binding_unresolved), exactly as an ordinary
-		// unresolved binding is.
-		if candidateSnap, decodeErr := goapiproof.DecodeRESTSnapshot(candidateLeg.Body); decodeErr == nil {
-			out.producedIDs = make(map[string]string, len(request.Produces))
-			for _, producer := range request.Produces {
-				if id, ok := goapiproof.ExtractRESTID(candidateSnap.Data, producer); ok {
-					out.producedIDs[producer.Name] = id
-				}
+		// evidence uses, never hand-built.
+		//
+		// A declared producer this branch cannot resolve -- a decode
+		// failure, or a body that yields no value at a declared entry's
+		// path -- refuses THIS request by name
+		// (goapiproof.RESTRefusalCandidateProducerUnresolved) rather than
+		// leaving out.producedIDs silently short: a check that can never
+		// fail a run proves nothing, and a later consumer's own
+		// IDBindings would otherwise be refused by name
+		// (rest_request_id_binding_unresolved) with no visible reason on
+		// the request that actually failed to produce it.
+		candidateSnap, decodeErr := goapiproof.DecodeRESTSnapshot(candidateLeg.Body)
+		if decodeErr != nil {
+			out.Admitted = false
+			out.Refusal = goapiproof.RESTRefusalCandidateProducerUnresolved
+			out.Detail = fmt.Sprintf("the candidate body did not decode: %s", decodeErr)
+			return out, nil
+		}
+		out.producedIDs = make(map[string]string, len(request.Produces))
+		var unresolved []string
+		for _, producer := range request.Produces {
+			id, ok := goapiproof.ExtractRESTID(candidateSnap.Data, producer)
+			if !ok {
+				unresolved = append(unresolved, producer.Name)
+				continue
 			}
+			out.producedIDs[producer.Name] = id
+		}
+		if len(unresolved) > 0 {
+			out.Admitted = false
+			out.Refusal = goapiproof.RESTRefusalCandidateProducerUnresolved
+			out.Detail = fmt.Sprintf("the candidate body did not yield: %v", unresolved)
+			return out, nil
 		}
 	}
 

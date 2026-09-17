@@ -88,33 +88,42 @@ type WorkGraphEdgeDedupShape struct {
 	// defect's own Paths name no such field -- as drilldown/prs's own
 	// entry does not, having no cursor at all.
 	TrailingCursorPath string
-	// WriteOnceField, when set, switches this shape to a second,
-	// narrower admission: it admits ONLY an id whose baseline copies
-	// DISAGREE, and only when that disagreement is exactly the one a
-	// write-once nullable column produces while an unmerged older
-	// physical version is still visible -- see writeOnceRepresentative.
-	// An id whose copies agree is left alone (neither admitted nor
-	// annotated): a sibling entry without WriteOnceField judges it by
-	// rules 1/2. Per id, in this mode:
+	// WriteOnceFields, when set, switches this shape to a second, narrower
+	// admission: it admits ONLY an id whose baseline copies DISAGREE, and
+	// only when every disagreement falls on a NAMED field and is exactly
+	// the one a write-once nullable column produces while an unmerged
+	// older physical version is still visible -- see
+	// writeOnceRepresentative. An id whose copies agree everywhere is left
+	// alone (neither admitted nor annotated): a sibling entry without
+	// WriteOnceFields judges it by rules 1/2. Per id, in this mode:
 	//
-	//   - every copy carries the same key set, and every field other
-	//     than WriteOnceField is equal across copies (rule 1's by-value
+	//   - every copy carries the same key set, and every field NOT in
+	//     WriteOnceFields is equal across copies (rule 1's by-value
 	//     comparison);
-	//   - WriteOnceField is null on at least one copy and, on every
-	//     other copy, one and the same timestamp string (exact text,
-	//     so two populated values never collapse into one);
+	//   - for each field IN WriteOnceFields, either every copy agrees
+	//     (including every copy null, e.g. a field a sibling write has not
+	//     populated yet), or the field is null on at least one copy and
+	//     one and the same value (by-value comparison, so a derived
+	//     numeric leaf compares by parsed value like any other) on every
+	//     other copy -- two different non-null values for the same field
+	//     refuses the whole id;
 	//   - the id IS present in the candidate list, and the candidate
-	//     element equals the populated copy field for field (rule 2's
-	//     comparison), so a candidate null, a candidate carrying a
+	//     element equals the resulting representative (the agreed value,
+	//     or the single populated value, per field) field for field (rule
+	//     2's comparison), so a candidate null, a candidate carrying a
 	//     different populated value, or any other candidate field
 	//     difference refuses the id.
 	//
-	// The field is named per entry and never inferred: this is not a
-	// general "null loses" rule, and an entry names a field here only
-	// when the upstream writer itself refuses a null over a populated
-	// value for that field. Rules 3 and 4 gate this mode exactly as they
-	// gate the default one.
-	WriteOnceField string
+	// The fields are named per entry and never inferred: this is not a
+	// general "null loses" rule, and an entry names a field here only when
+	// the upstream writer itself never regresses a populated value for
+	// that field back to null. A field whose value is a pure function of
+	// another named field (so it moves in lockstep, e.g. an hours-since
+	// duration derived from one of the timestamps) belongs in the set
+	// alongside the field it derives from, not left out, or its own
+	// paired transition would fail rule 1's by-value comparison. Rules 3
+	// and 4 gate this mode exactly as they gate the default one.
+	WriteOnceFields []string
 }
 
 // workGraphEdgeDedupPlan is one comparison's fully-evaluated admission
@@ -151,12 +160,12 @@ type workGraphEdgeDedupPlan struct {
 	// different logical edge entirely once any earlier duplicate has
 	// consumed a slot.
 	baselineIndexID []string
-	// writeOnceField is shape.WriteOnceField. When set, judgedIDs names
+	// writeOnceFields is shape.WriteOnceFields. When set, judgedIDs names
 	// the ids this plan evaluated at all (the ids whose baseline copies
 	// disagree); an id outside judgedIDs belongs to a sibling entry, so
 	// uncoveredEdgeID names nothing for it.
-	writeOnceField string
-	judgedIDs      map[string]bool
+	writeOnceFields []string
+	judgedIDs       map[string]bool
 }
 
 // edgeListIndex extracts the list-position index a finding's own path
@@ -226,7 +235,7 @@ func (p *workGraphEdgeDedupPlan) uncoveredEdgeID(finding Finding) (string, bool)
 	if !ok {
 		return "", false
 	}
-	if p.writeOnceField != "" && !p.judgedIDs[id] {
+	if len(p.writeOnceFields) > 0 && !p.judgedIDs[id] {
 		return "", false
 	}
 	return id, true
@@ -235,8 +244,9 @@ func (p *workGraphEdgeDedupPlan) uncoveredEdgeID(finding Finding) (string, bool)
 // refusalDetail is the Detail suffix naming one not-admitted id and the
 // rule that refused it.
 func (p *workGraphEdgeDedupPlan) refusalDetail(id string) string {
-	if p.writeOnceField != "" {
-		return fmt.Sprintf(" (dedup id %q not admitted by the declared write-once %s rule: its baseline copies differ in more than null versus one populated %s value, or the candidate row is absent or differs from the populated copy)", id, p.writeOnceField, p.writeOnceField)
+	if len(p.writeOnceFields) > 0 {
+		fields := strings.Join(p.writeOnceFields, "/")
+		return fmt.Sprintf(" (dedup id %q not admitted by the declared write-once %s rule: its baseline copies disagree outside that field set, carry more than one distinct populated value within it, or the candidate row is absent or differs from the populated copy)", id, fields)
 	}
 	return fmt.Sprintf(" (dedup id %q not admitted by the declared duplicate-row shape: its own baseline copies disagree, or its shared content differs from the candidate)", id)
 }
@@ -245,7 +255,7 @@ func (p *workGraphEdgeDedupPlan) refusalDetail(id string) string {
 // documents against one comparison's two decoded edge lists, producing a
 // PER-ID admission set rather than a single whole-comparison verdict.
 func buildWorkGraphEdgeDedupPlan(shape *WorkGraphEdgeDedupShape, baselineData, candidateData any) *workGraphEdgeDedupPlan {
-	plan := &workGraphEdgeDedupPlan{edgesListPath: shape.EdgesListPath, trailingCursorPath: shape.TrailingCursorPath, writeOnceField: shape.WriteOnceField}
+	plan := &workGraphEdgeDedupPlan{edgesListPath: shape.EdgesListPath, trailingCursorPath: shape.TrailingCursorPath, writeOnceFields: shape.WriteOnceFields}
 
 	baseList, ok1 := listAtDottedPath(baselineData, shape.EdgesListPath)
 	candList, ok2 := listAtDottedPath(candidateData, shape.EdgesListPath)
@@ -268,10 +278,10 @@ func buildWorkGraphEdgeDedupPlan(shape *WorkGraphEdgeDedupShape, baselineData, c
 	// is excluded below (agreeingIDs[id] stays false) rather than
 	// invalidating every other id's own verdict.
 	//
-	// In WriteOnceField mode the roles flip: only a DISAGREEING id is
+	// In WriteOnceFields mode the roles flip: only a DISAGREEING id is
 	// judged (judged[id]), it passes rule 1 only through
-	// writeOnceRepresentative, and its populated copy stands in for it in
-	// rule 2.
+	// writeOnceRepresentative, and its representative copy stands in for
+	// it in rule 2.
 	baseUnique := make(map[string]map[string]any, len(baseGroups))
 	agreeingIDs := make(map[string]bool, len(baseGroups))
 	judged := make(map[string]bool, len(baseGroups))
@@ -289,7 +299,7 @@ func buildWorkGraphEdgeDedupPlan(shape *WorkGraphEdgeDedupShape, baselineData, c
 			hasDuplicate = true
 		}
 		baseUnique[id] = first
-		if shape.WriteOnceField == "" {
+		if len(shape.WriteOnceFields) == 0 {
 			agreeingIDs[id] = agree
 			continue
 		}
@@ -297,7 +307,7 @@ func buildWorkGraphEdgeDedupPlan(shape *WorkGraphEdgeDedupShape, baselineData, c
 			continue
 		}
 		judged[id] = true
-		if representative, ok := writeOnceRepresentative(group, shape.WriteOnceField); ok {
+		if representative, ok := writeOnceRepresentative(group, shape.WriteOnceFields); ok {
 			baseUnique[id] = representative
 			agreeingIDs[id] = true
 		}
@@ -333,9 +343,9 @@ func buildWorkGraphEdgeDedupPlan(shape *WorkGraphEdgeDedupShape, baselineData, c
 	for id, baseObject := range baseUnique {
 		candObject, ok := candByID[id]
 		if !ok {
-			// WriteOnceField mode needs the candidate's own row to
-			// confirm the populated copy; without it nothing is admitted.
-			admitted[id] = agreeingIDs[id] && shape.WriteOnceField == ""
+			// WriteOnceFields mode needs the candidate's own row to
+			// confirm the representative; without it nothing is admitted.
+			admitted[id] = agreeingIDs[id] && len(shape.WriteOnceFields) == 0
 			continue
 		}
 		shared++
@@ -347,65 +357,83 @@ func buildWorkGraphEdgeDedupPlan(shape *WorkGraphEdgeDedupShape, baselineData, c
 
 	plan.applies = true
 	plan.admittedIDs = admitted
-	if shape.WriteOnceField != "" {
+	if len(shape.WriteOnceFields) > 0 {
 		plan.judgedIDs = judged
 	}
 	plan.baselineIndexID = baselineIndexID
 	return plan
 }
 
-// writeOnceRepresentative reports the copy of one id that a
-// deduplicated read of a write-once nullable field returns, when the
-// group's copies differ ONLY in that field: every copy carries the same
-// key set, every other field agrees by value, field is null on at least
-// one copy, and every non-null copy carries the SAME timestamp string
-// (compared as exact text). ok is false for anything else -- two
-// different populated values, a non-timestamp value, a missing key, a
-// difference in any other field, or a group with no null copy or no
-// populated copy.
-func writeOnceRepresentative(group []map[string]any, field string) (map[string]any, bool) {
-	var populated map[string]any
-	var populatedValue string
-	sawNull := false
+// writeOnceRepresentative reports the copy of one id that a deduplicated
+// read of a set of write-once nullable fields returns, when the group's
+// copies differ ONLY within that field set: every copy carries the same
+// key set, every field outside the set agrees by value (jsonValuesEqual,
+// so a naive-vs-aware timestamp pair or an int-vs-float pair still
+// agree), and for each field IN the set, either every copy already
+// agrees (including every copy null -- a sibling write-once field that
+// simply has not transitioned yet) or the field is null on at least one
+// copy and one and the same value, by jsonValuesEqual, on every other
+// copy. ok is false for anything else -- two different non-null values
+// for a field in the set, a missing key, a difference on a field outside
+// the set, or a group where no field in the set actually disagrees (rule
+// 1's plain by-value path already admits that case, so this function is
+// never called for it).
+func writeOnceRepresentative(group []map[string]any, fields []string) (map[string]any, bool) {
+	inSet := make(map[string]bool, len(fields))
+	for _, field := range fields {
+		inSet[field] = true
+	}
+
+	first := group[0]
 	for _, copyObject := range group {
-		value, present := copyObject[field]
-		if !present {
+		if len(copyObject) != len(first) {
 			return nil, false
 		}
-		switch typed := value.(type) {
-		case nil:
-			sawNull = true
-		case string:
-			if _, isTimestamp := parseTimestamp(typed); !isTimestamp {
+	}
+
+	representative := make(map[string]any, len(first))
+	for key, value := range first {
+		if inSet[key] {
+			continue
+		}
+		for _, other := range group[1:] {
+			otherValue, present := other[key]
+			if !present || !jsonValuesEqual(value, otherValue) {
 				return nil, false
 			}
+		}
+		representative[key] = value
+	}
+
+	for _, field := range fields {
+		var populated any
+		sawNull, sawPopulated := false, false
+		for _, copyObject := range group {
+			value, present := copyObject[field]
+			if !present {
+				return nil, false
+			}
+			if value == nil {
+				sawNull = true
+				continue
+			}
+			sawPopulated = true
 			if populated == nil {
-				populated, populatedValue = copyObject, typed
-			} else if typed != populatedValue {
+				populated = value
+			} else if !jsonValuesEqual(populated, value) {
 				return nil, false
 			}
+		}
+		switch {
+		case sawPopulated:
+			representative[field] = populated
+		case sawNull:
+			representative[field] = nil
 		default:
 			return nil, false
 		}
 	}
-	if !sawNull || populated == nil {
-		return nil, false
-	}
-	for _, copyObject := range group {
-		if len(copyObject) != len(populated) {
-			return nil, false
-		}
-		for key, value := range populated {
-			if key == field {
-				continue
-			}
-			other, present := copyObject[key]
-			if !present || !jsonValuesEqual(value, other) {
-				return nil, false
-			}
-		}
-	}
-	return populated, true
+	return representative, true
 }
 
 // edgeObjectAndID reads one edge list element as a decoded JSON object

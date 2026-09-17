@@ -33,10 +33,10 @@ func writeOnceID(number string) string {
 }
 
 // writeOnceOptions mirrors drilldownPRsParity's two dedup entries: a
-// plain duplicate-row entry and a write-once merged_at entry, without
-// the datetime entry, so a merged_at difference is judged by the dedup
-// entries alone.
-func writeOnceOptions(field string) Options {
+// plain duplicate-row entry and a write-once entry over the given
+// fields, without the datetime entry, so a difference on one of those
+// fields is judged by the dedup entries alone.
+func writeOnceOptions(fields ...string) Options {
 	return Options{BaselineDefects: []BaselineDefect{
 		{
 			Ticket: "ABC-123", Reason: "test fixture",
@@ -46,7 +46,7 @@ func writeOnceOptions(field string) Options {
 		{
 			Ticket: "ABC-456", Reason: "test fixture",
 			Paths: []string{"data.items"}, Intermittent: true, IntermittentReason: "test fixture",
-			WorkGraphEdgeDedupShape: &WorkGraphEdgeDedupShape{EdgesListPath: "data.items", IDField: RESTDedupKeyField, WriteOnceField: field},
+			WorkGraphEdgeDedupShape: &WorkGraphEdgeDedupShape{EdgesListPath: "data.items", IDField: RESTDedupKeyField, WriteOnceFields: fields},
 		},
 	}}
 }
@@ -125,8 +125,6 @@ func TestWriteOnceField_RefusesEveryNeighbouringCase(t *testing.T) {
 			writeOnceBody(writeOnceRow("2", "b", "null"), writeOnceRow("3", "c", "null"), writeOnceRow("4", "d", "null"), writeOnceRow("5", "e", "null"))},
 		{"a copy is missing the field", "merged_at",
 			baseRows(`{"repo_id":"ABC-123","number":1,"title":"a","created_at":"2024-01-01T00:00:00Z"}`, writeOnceRow("1", "a", writeOnceMerged)), mergedCandidate},
-		{"populated value is not a timestamp", "merged_at",
-			baseRows(writeOnceRow("1", "a", "null"), writeOnceRow("1", "a", `"yes"`)), candRows(writeOnceRow("1", "a", `"yes"`))},
 		{"null versus populated in an undeclared field", "created_at",
 			baseRows(writeOnceRow("1", "a", "null"), writeOnceRow("1", "a", writeOnceMerged)), mergedCandidate},
 	}
@@ -213,34 +211,43 @@ func TestWriteOnceField_CandidateRepeatedIDAdmitsNothing(t *testing.T) {
 	}
 }
 
-// TestWriteOnceRepresentative_RequiresANullAndOnePopulatedValue pins the
-// group rule directly: a group needs at least one null copy and at least
-// one populated copy, all populated copies carrying the same text.
-func TestWriteOnceRepresentative_RequiresANullAndOnePopulatedValue(t *testing.T) {
-	copyWith := func(mergedAt any) map[string]any {
-		return map[string]any{"number": "1", "title": "a", "merged_at": mergedAt}
+// TestWriteOnceRepresentative_PerFieldAgreementWithinTheSet pins the
+// group rule directly, one field at a time: within the declared set, a
+// field is fine whether every copy already agrees (including every copy
+// null -- the still-open, still-unreviewed case) or some copies are null
+// and the rest carry one identical value (by jsonValuesEqual, so a
+// naive-vs-aware pair still counts as one value); two different non-null
+// values for the same field refuses the whole group.
+func TestWriteOnceRepresentative_PerFieldAgreementWithinTheSet(t *testing.T) {
+	copyWith := func(mergedAt, firstReviewAt any) map[string]any {
+		return map[string]any{"number": "1", "title": "a", "merged_at": mergedAt, "first_review_at": firstReviewAt}
 	}
 	const merged = "2024-01-02T00:00:00Z"
+	const reviewed = "2024-01-01T12:00:00Z"
 	cases := []struct {
 		name  string
 		group []map[string]any
 		want  bool
 	}{
-		{"null and populated", []map[string]any{copyWith(nil), copyWith(merged)}, true},
-		{"populated only", []map[string]any{copyWith(merged), copyWith(merged)}, false},
-		{"null only", []map[string]any{copyWith(nil), copyWith(nil)}, false},
-		{"same instant, different text", []map[string]any{copyWith(nil), copyWith(merged), copyWith("2024-01-02T00:00:00")}, false},
-		{"non-string populated value", []map[string]any{copyWith(nil), copyWith(true)}, false},
+		{"null then populated", []map[string]any{copyWith(nil, nil), copyWith(merged, nil)}, true},
+		{"every copy already populated and agreeing", []map[string]any{copyWith(merged, nil), copyWith(merged, nil)}, true},
+		{"every copy null -- still open, not a disagreement", []map[string]any{copyWith(nil, nil), copyWith(nil, nil)}, true},
+		{"same instant, different wire form, still one value", []map[string]any{copyWith(nil, nil), copyWith(merged, nil), copyWith("2024-01-02T00:00:00", nil)}, true},
+		{"two fields in the set transition together", []map[string]any{copyWith(nil, nil), copyWith(merged, reviewed)}, true},
+		{"two different populated values for the same field", []map[string]any{copyWith(nil, nil), copyWith(merged, nil), copyWith("2024-01-03T00:00:00Z", nil)}, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			representative, ok := writeOnceRepresentative(c.group, "merged_at")
+			_, ok := writeOnceRepresentative(c.group, []string{"merged_at", "first_review_at"})
 			if ok != c.want {
 				t.Fatalf("ok = %v, want %v", ok, c.want)
 			}
-			if ok && representative["merged_at"] != merged {
-				t.Fatalf("representative merged_at = %v, want %s", representative["merged_at"], merged)
-			}
 		})
+	}
+	if _, ok := writeOnceRepresentative([]map[string]any{
+		{"number": "1", "title": "a", "merged_at": nil},
+		{"number": "1", "title": "retitled", "merged_at": merged},
+	}, []string{"merged_at"}); ok {
+		t.Fatal("a disagreement on a field outside the declared set must refuse the group")
 	}
 }

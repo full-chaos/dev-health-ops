@@ -60,7 +60,7 @@ func drilldownPRsParityWithout(drop func(BaselineDefect) bool) Options {
 }
 
 func isWriteOnceEntry(d BaselineDefect) bool {
-	return d.WorkGraphEdgeDedupShape != nil && d.WorkGraphEdgeDedupShape.WriteOnceField != ""
+	return d.WorkGraphEdgeDedupShape != nil && len(d.WorkGraphEdgeDedupShape.WriteOnceFields) > 0
 }
 
 // drilldownPRsWriteOnceShape reads the write-once entry's shape from the
@@ -79,8 +79,9 @@ func drilldownPRsWriteOnceShape(t *testing.T) *WorkGraphEdgeDedupShape {
 	if found == nil {
 		t.Fatal("drilldownPRsParity declares no write-once entry")
 	}
-	if found.WriteOnceField != "merged_at" {
-		t.Fatalf("write-once field = %q, want merged_at", found.WriteOnceField)
+	wantFields := []string{"merged_at", "first_review_at", "review_latency_hours"}
+	if !equalStrings(found.WriteOnceFields, wantFields) {
+		t.Fatalf("write-once fields = %q, want %q", found.WriteOnceFields, wantFields)
 	}
 	return found
 }

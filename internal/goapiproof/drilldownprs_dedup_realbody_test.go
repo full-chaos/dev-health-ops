@@ -47,7 +47,7 @@ const (
 // Detail phrases refusalDetail writes for each dedup entry kind.
 const (
 	drilldownPRsPlainDedupRefusal = "not admitted by the declared duplicate-row shape"
-	drilldownPRsWriteOnceRefusal  = "not admitted by the declared write-once merged_at rule"
+	drilldownPRsWriteOnceRefusal  = "not admitted by the declared write-once merged_at/first_review_at/review_latency_hours rule"
 )
 
 func drilldownPRsSnapshotFromFile(t *testing.T, path string) Snapshot {

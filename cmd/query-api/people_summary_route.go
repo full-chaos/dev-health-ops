@@ -96,6 +96,16 @@ func buildPeopleSummaryRoute() (handler http.HandlerFunc, cleanup func(), ok boo
 		return nil, nil, false, err
 	}
 
+	// Optional -- nil whenever the pod has not been given the edge
+	// credential's key material, in which case authenticateRESTRequest
+	// falls back to its pre-existing envelope-only behaviour. See
+	// buildEdgeVerifierFromEnv's own doc comment for the pod env
+	// contract this reads.
+	edgeVerifier, err := buildEdgeVerifierFromEnv()
+	if err != nil {
+		return nil, nil, false, err
+	}
+
 	readClient, err := dhclickhouse.NewClickHouseQueryClientWithOptions(newUnrestrictedReadClickHouseOptions(clickHouseURI))
 	if err != nil {
 		return nil, nil, false, err
@@ -115,7 +125,7 @@ func buildPeopleSummaryRoute() (handler http.HandlerFunc, cleanup func(), ok boo
 			writeRESTMethodNotAllowed(w, r, "people_summary")
 			return
 		}
-		claims, ok := authenticateRESTRequest(w, r, verifier, "people_summary")
+		claims, ok := authenticateRESTRequest(w, r, verifier, edgeVerifier, "people_summary")
 		if !ok {
 			return
 		}

@@ -13,6 +13,9 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/golang-jwt/jwt/v5"
 
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/principal"
 )
@@ -113,7 +116,7 @@ func TestAuthenticateRESTRequestMissingHeader(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/test", nil)
 	rec := httptest.NewRecorder()
 
-	_, ok := authenticateRESTRequest(rec, req, nil, "test")
+	_, ok := authenticateRESTRequest(rec, req, nil, nil, "test")
 	if ok {
 		t.Fatal("authenticateRESTRequest: ok = true, want false for a missing Authorization header")
 	}
@@ -137,7 +140,7 @@ func TestAuthenticateRESTRequestMalformedHeader(t *testing.T) {
 		req.Header.Set("Authorization", header)
 		rec := httptest.NewRecorder()
 
-		_, ok := authenticateRESTRequest(rec, req, nil, "test")
+		_, ok := authenticateRESTRequest(rec, req, nil, nil, "test")
 		if ok {
 			t.Fatalf("authenticateRESTRequest(%q): ok = true, want false", header)
 		}
@@ -169,7 +172,7 @@ func TestAuthenticateRESTRequestVerifyFailure(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer not-a-real-token")
 	rec := httptest.NewRecorder()
 
-	_, ok := authenticateRESTRequest(rec, req, verifier, "test")
+	_, ok := authenticateRESTRequest(rec, req, verifier, nil, "test")
 	if ok {
 		t.Fatal("authenticateRESTRequest: ok = true, want false for a token that fails verification")
 	}
@@ -181,6 +184,157 @@ func TestAuthenticateRESTRequestVerifyFailure(t *testing.T) {
 	}
 	if got := rec.Header().Get("WWW-Authenticate"); got != "Bearer" {
 		t.Fatalf("WWW-Authenticate = %q, want Bearer", got)
+	}
+}
+
+// edgeTestSecret is a fixture key built at runtime, never a literal --
+// a short, obviously-fake token repeated past NewEdgeVerifier's
+// 32-character floor. Never a real value, never read from any
+// environment or file.
+var edgeTestSecret = strings.Repeat("not-a-real-secret-", 3)
+
+// signTestEdgeToken signs claims with HS256 using edgeTestSecret,
+// mirroring AuthService.create_access_token's own jwt.encode call shape.
+func signTestEdgeToken(t *testing.T, claims jwt.MapClaims) string {
+	t.Helper()
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	signed, err := token.SignedString([]byte(edgeTestSecret))
+	if err != nil {
+		t.Fatalf("sign edge token: %v", err)
+	}
+	return signed
+}
+
+func validTestEdgeClaims(orgID string) jwt.MapClaims {
+	now := time.Now()
+	return jwt.MapClaims{
+		"sub":    "11111111-1111-1111-1111-111111111111",
+		"org_id": orgID,
+		"type":   "access",
+		"iss":    "dev-health-ops",
+		"aud":    "dev-health-api",
+		"exp":    now.Add(time.Hour).Unix(),
+	}
+}
+
+// TestAuthenticateRESTRequestEdgeTokenAccepted pins the core edge-token
+// contract: when edgeVerifier is configured, a well-formed HS256 edge
+// access token is accepted on a REST route, and its org_id claim is what
+// ends up in authctx.Claims -- get_current_user derives org_id the same
+// way, from the validated claims alone, never a second lookup.
+func TestAuthenticateRESTRequestEdgeTokenAccepted(t *testing.T) {
+	edgeVerifier, err := principal.NewEdgeVerifier(edgeTestSecret, "dev-health-ops", "dev-health-api")
+	if err != nil {
+		t.Fatalf("NewEdgeVerifier: %v", err)
+	}
+	envelopeVerifier, err := principal.NewVerifier(t.TempDir()+"/missing-jwks.json", "test-issuer", "test-audience")
+	if err != nil {
+		t.Fatalf("principal.NewVerifier: %v", err)
+	}
+
+	token := signTestEdgeToken(t, validTestEdgeClaims("org-edge-1"))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/test", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+
+	claims, ok := authenticateRESTRequest(rec, req, envelopeVerifier, edgeVerifier, "test")
+	if !ok {
+		t.Fatalf("authenticateRESTRequest: ok = false, want true; body=%s", rec.Body.String())
+	}
+	if claims.OrgID != "org-edge-1" {
+		t.Fatalf("OrgID = %q, want %q", claims.OrgID, "org-edge-1")
+	}
+}
+
+// TestAuthenticateRESTRequestEdgeTokenRejected pins the SAME 401 body an
+// envelope rejection produces -- get_current_user never distinguishes
+// WHY a token was rejected in its response, only THAT it was.
+func TestAuthenticateRESTRequestEdgeTokenRejected(t *testing.T) {
+	edgeVerifier, err := principal.NewEdgeVerifier(edgeTestSecret, "dev-health-ops", "dev-health-api")
+	if err != nil {
+		t.Fatalf("NewEdgeVerifier: %v", err)
+	}
+	envelopeVerifier, err := principal.NewVerifier(t.TempDir()+"/missing-jwks.json", "test-issuer", "test-audience")
+	if err != nil {
+		t.Fatalf("principal.NewVerifier: %v", err)
+	}
+
+	claims := validTestEdgeClaims("org-edge-1")
+	claims["exp"] = time.Now().Add(-time.Hour).Unix()
+	token := signTestEdgeToken(t, claims)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/test", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+
+	_, ok := authenticateRESTRequest(rec, req, envelopeVerifier, edgeVerifier, "test")
+	if ok {
+		t.Fatal("authenticateRESTRequest: ok = true, want false for an expired edge token")
+	}
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+	if got, want := rec.Body.String(), `{"detail":{"message":"Invalid or expired token"}}`+"\n"; got != want {
+		t.Fatalf("body = %q, want %q", got, want)
+	}
+}
+
+// TestAuthenticateRESTRequestNilEdgeVerifierUnchanged pins the
+// backward-compatibility contract: when edgeVerifier is nil (the pod has
+// not been given GO_API_EDGE_JWT_SECRET), an HS256 token that WOULD have
+// been accepted by an edge verifier is instead routed to the envelope
+// verifier -- exactly this function's pre-existing behaviour -- and is
+// refused, because it is not a valid EdDSA envelope.
+func TestAuthenticateRESTRequestNilEdgeVerifierUnchanged(t *testing.T) {
+	envelopeVerifier, err := principal.NewVerifier(t.TempDir()+"/missing-jwks.json", "test-issuer", "test-audience")
+	if err != nil {
+		t.Fatalf("principal.NewVerifier: %v", err)
+	}
+
+	token := signTestEdgeToken(t, validTestEdgeClaims("org-edge-1"))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/test", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+
+	_, ok := authenticateRESTRequest(rec, req, envelopeVerifier, nil, "test")
+	if ok {
+		t.Fatal("authenticateRESTRequest: ok = true, want false -- edgeVerifier is nil, so an HS256 token must fall through to (and be refused by) the envelope verifier")
+	}
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+	if got, want := rec.Body.String(), `{"detail":{"message":"Invalid or expired token"}}`+"\n"; got != want {
+		t.Fatalf("body = %q, want %q", got, want)
+	}
+}
+
+// TestJwtHeaderAlg pins jwtHeaderAlg's own contract: a legible alg header
+// is read back exactly, and anything else -- too few segments, non-base64
+// header, non-JSON header, an empty alg -- reports ok=false rather than
+// panicking or guessing.
+func TestJwtHeaderAlg(t *testing.T) {
+	tests := []struct {
+		name    string
+		token   string
+		wantAlg string
+		wantOK  bool
+	}{
+		{"HS256 token", signTestEdgeToken(t, validTestEdgeClaims("org-1")), "HS256", true},
+		{"too few segments", "abc.def", "", false},
+		{"empty header segment", ".def.ghi", "", false},
+		{"non-base64 header", "!!!.def.ghi", "", false},
+		{"not-a-jwt", "not-a-jwt-at-all", "", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			alg, ok := jwtHeaderAlg(tc.token)
+			if ok != tc.wantOK {
+				t.Fatalf("jwtHeaderAlg(%q): ok = %v, want %v", tc.token, ok, tc.wantOK)
+			}
+			if ok && alg != tc.wantAlg {
+				t.Fatalf("jwtHeaderAlg(%q): alg = %q, want %q", tc.token, alg, tc.wantAlg)
+			}
+		})
 	}
 }
 

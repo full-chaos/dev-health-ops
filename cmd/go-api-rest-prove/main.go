@@ -16,21 +16,37 @@
 // Operator command of record: run from the go-api-tools image,
 // in-cluster, with query-api-url and python-api-url pointed at each
 // service's own ClusterIP/Service address (never a host or an ingress
-// hostname). The two bearer helpers mint DIFFERENT credential CLASSES,
-// one per plane -- query-api's own REST routes and /buildinfo check the
-// effective-principal envelope, never the edge access token, and the
-// Python api service is the reverse (credential.go's own doc comment) --
-// so -candidate-bearer-exec always names mint-envelope and
-// -baseline-bearer-exec always names mint-edge-token, never the other way
-// round or the same helper twice:
+// hostname). The two bearer helpers mint DIFFERENT credential CLASSES:
+// -candidate-bearer-exec always names mint-envelope (the
+// effective-principal envelope query-api has always checked) and
+// -baseline-bearer-exec always names mint-edge-token (the edge access
+// token the Python api service checks), never the other way round or the
+// same helper twice:
 //
 //	go-api-rest-prove \
 //	  -query-api-url http://<query-api-service>:8090 \
 //	  -python-api-url http://<api-service>:8000 \
 //	  -candidate-bearer-exec '["mint-envelope","-org","<org>"]' \
 //	  -baseline-bearer-exec  '["mint-edge-token","-org","<org>"]' \
+//	  -artifact-dir "$ARTIFACT_DIR" \
 //	  -org <org> -recorded-by <operator> -review-evidence "<why>" \
 //	  -postgres-uri "$POSTGRES_URI"
+//
+// query-api's REST routes now ALSO accept the edge access token
+// directly (credential.go's own doc comment predates this and is now
+// only half the story) -- ingress path-splitting forwards that
+// credential, never a minted envelope, to a real user's request. Every
+// run of this command already proves that: -baseline-bearer-exec's own
+// value is, per request, additionally sent straight to query-api as a
+// THIRD leg (proveEdgeCredentialOnCandidate, run() below) -- no NEW flag
+// of its own: it reuses -baseline-bearer-exec (the SAME credential the
+// baseline leg already mints, just pointed at the other service) and
+// -artifact-dir (already required above, for the ordinary legs' own
+// bodies). Its own outcome line is suffixed
+// "(edge-credential-on-candidate)"; a status or build-header mismatch
+// there means query-api rejected the credential real traffic actually
+// carries, which is exactly the regression this whole binary exists to
+// catch before it reaches a real user.
 //
 // No host or secret is named above by design: an operator fills in the
 // service addresses and org from the deployment's own operator record.
@@ -545,6 +561,29 @@ func run(f flags) error {
 					mismatched++
 				}
 			}
+
+			// A real user's browser never carries an effective-principal
+			// envelope -- it carries the edge access token
+			// baselineCredential already holds for this request's
+			// baseline (Python) leg above. This third leg sends that SAME
+			// credential straight to query-api, proving THE CANDIDATE
+			// accepts the credential real traffic actually carries, not
+			// only the envelope the ordinary candidate leg above already
+			// exercises. Skipped for a PublicNoAuth route: meta.go's own
+			// "Auth: PUBLIC" contract sends no Authorization header on
+			// either leg, so there is no edge credential to re-send here.
+			if !resolvedSpec.PublicNoAuth {
+				attempted++
+				edgeOut, err := proveEdgeCredentialOnCandidate(ctx, client, f, operation, resolvedSpec, resolvedRequest, baselineCredential, namedBuild, artifacts)
+				if err != nil {
+					return fmt.Errorf("%s/%s (edge credential on candidate): %w", operation, request.Name, err)
+				}
+				outcomes = append(outcomes, edgeOut)
+				fmt.Println(edgeOut.line())
+				if edgeOut.Admitted {
+					admitted++
+				}
+			}
 		}
 	}
 
@@ -778,6 +817,78 @@ func proveOneRESTRequest(
 		return outcome{}, fmt.Errorf("write receipt: %w", err)
 	}
 	out.ReceiptID = id.String()
+	return out, nil
+}
+
+// proveEdgeCredentialOnCandidate sends this request's OWN edge access
+// token -- edgeCredential, the SAME credential value the baseline leg
+// already sent to the Python api service in proveOneRESTRequest above --
+// DIRECTLY to query-api (the candidate) -- the point measured live:
+// query-api must answer the credential a real user's browser actually
+// carries, not only the effective-principal envelope the ordinary
+// candidate leg already exercises.
+//
+// A STATUS-ONLY admission check (declared-admissible status code, plus
+// the same build-header binding RESTAdmit's own candidate check
+// enforces), never a body Compare: the ordinary candidate leg (still
+// envelope-authenticated, a few lines above in run()) already owns body
+// parity against the baseline snapshot, under this request's own
+// BaselineDefect/VolatileFields declarations. Running Compare a second
+// time here would score ONE baseline observation against TWO
+// differently-authenticated candidate observations under those SAME
+// declarations -- not what they were written to excuse, and not what
+// resultVacuityErrors' "did this declaration excuse anything" accounting
+// expects either. No receipt is written for this leg: go_api_rest_proof_
+// run's own schema is RESTReceipt's one-candidate-one-baseline shape
+// (see that struct's own doc comment); recording a second, structurally
+// different observation type there is a separate, larger change out of
+// scope here.
+//
+// Its own response body IS still stored to artifacts when one is given,
+// unconditionally and before the switch below -- the same
+// store-before-admission discipline proveOneRESTRequest's own bodies
+// follow (see its doc comment), so a refusal here leaves the SAME kind
+// of evidence behind a refusal on the ordinary candidate leg does.
+// artifacts is nil only in a test that does not care about the ref;
+// main() always builds one (run()'s own -artifact-dir, required).
+func proveEdgeCredentialOnCandidate(
+	ctx context.Context,
+	client *http.Client,
+	f flags,
+	operation string,
+	spec goapiproof.RESTEndpointSpec,
+	request goapiproof.RESTRequest,
+	edgeCredential *goapiproof.Credential,
+	namedBuild string,
+	artifacts *goapiproof.ArtifactStore,
+) (outcome, error) {
+	leg, err := doREST(ctx, client, f.queryAPIURL, spec.Method, spec.Path, request.Query, request.Body, edgeCredential)
+	if err != nil {
+		return outcome{}, fmt.Errorf("candidate leg (edge credential): %w", err)
+	}
+
+	out := outcome{Operation: operation, Request: request.Name + " (edge-credential-on-candidate)"}
+	if artifacts != nil {
+		ref, refErr := artifacts.Put(leg.Body)
+		if refErr != nil {
+			return outcome{}, fmt.Errorf("store candidate (edge credential) leg artifact: %w", refErr)
+		}
+		out.CandidateResponseRef = ref
+	}
+	switch {
+	case leg.StatusCode != request.WantCandidateStatus:
+		out.Refusal = goapiproof.RESTRefusalUnexpectedStatus
+		out.Detail = fmt.Sprintf("candidate (edge credential) answered HTTP %d, this request declared %d admissible", leg.StatusCode, request.WantCandidateStatus)
+	case leg.Build == "":
+		out.Refusal = goapiproof.RESTRefusalBuildUnbound
+		out.Detail = "the candidate response (edge credential) carried no x-dev-health-build header"
+	case leg.Build != namedBuild:
+		out.Refusal = goapiproof.RESTRefusalBuildUnbound
+		out.Detail = fmt.Sprintf("the process that served this request (edge credential) reports build %q, but /buildinfo named %q", leg.Build, namedBuild)
+	default:
+		out.Admitted = true
+		out.TerminalState = "edge_credential_admitted"
+	}
 	return out, nil
 }
 

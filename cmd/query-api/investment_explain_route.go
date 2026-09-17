@@ -127,6 +127,16 @@ func buildInvestmentExplainRoute() (handler http.HandlerFunc, cleanup func(), ok
 		return nil, nil, false, fmt.Errorf("investment/explain: build envelope verifier: %w", err)
 	}
 
+	// Optional -- nil whenever the pod has not been given the edge
+	// credential's key material, in which case authenticateRESTRequest
+	// falls back to its pre-existing envelope-only behaviour. See
+	// buildEdgeVerifierFromEnv's own doc comment for the pod env
+	// contract this reads.
+	edgeVerifier, err := buildEdgeVerifierFromEnv()
+	if err != nil {
+		return nil, nil, false, err
+	}
+
 	// newUnrestrictedReadClickHouseOptions (query_route.go): this route's
 	// read client hit the SAME CHAOS-4647 64 MiB default this bare-literal
 	// Options{DSN: ...} used to reproduce -- prod, code 307 at 64.46 MiB,
@@ -220,7 +230,7 @@ func buildInvestmentExplainRoute() (handler http.HandlerFunc, cleanup func(), ok
 			writeRESTMethodNotAllowed(w, r, "investment_explain")
 			return
 		}
-		claims, ok := authenticateRESTRequest(w, r, verifier, "investment_explain")
+		claims, ok := authenticateRESTRequest(w, r, verifier, edgeVerifier, "investment_explain")
 		if !ok {
 			return
 		}

@@ -11,9 +11,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
 
@@ -34,18 +32,15 @@ import (
 // operatingreview_test.go's "a real OTel SDK ManualReader ... not a bare
 // var-is-non-nil check" standard.
 //
-// All 8 requests share ONE MeterProvider/ManualReader for the whole test:
-// this package's counters are process-global singletons created once at
-// package load against whatever the ambient (delegating) MeterProvider
-// was at that time, and go.opentelemetry.io/otel's global package only
-// resolves that delegation against the FIRST real provider a process
-// ever installs via otel.SetMeterProvider -- every later SetMeterProvider
-// call only affects instruments created afterwards, not ones already
-// resolved (see cmd/query-api/internal/analytics/main_test.go's own doc
-// comment for the same fact from the other direction). A per-subtest
-// provider swap was tried first and silently produced a "not found" for
-// every case after the very first, for exactly this reason -- fixed by
-// installing one provider before all 8 calls and collecting once after.
+// All 8 requests share ONE MeterProvider/ManualReader for the whole test
+// -- sharedTestMetricReader (metrics_reader_test.go), installed once by
+// this package's TestMain, never a provider this function installs
+// itself. See sharedTestMetricReader's own doc comment for the full
+// mechanism (this package's counters are process-global singletons that
+// permanently resolve to the FIRST real MeterProvider ever installed)
+// and why a second, package-wide telemetry test made a per-function
+// install-and-restore version of this test fail unpredictably depending
+// on which one ran first.
 func TestVerify_RejectionsAreLoggedAndCountedByReason(t *testing.T) {
 	pub, priv, err := ed25519.GenerateKey(nil)
 	if err != nil {
@@ -153,12 +148,11 @@ func TestVerify_RejectionsAreLoggedAndCountedByReason(t *testing.T) {
 		},
 	}
 
-	reader := sdkmetric.NewManualReader()
-	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
-	prevProvider := otel.GetMeterProvider()
-	otel.SetMeterProvider(provider)
-	defer otel.SetMeterProvider(prevProvider)
-
+	// Uses sharedTestMetricReader (metrics_reader_test.go), never a
+	// private provider of its own -- see that var's own doc comment for
+	// why a second real MeterProvider installed here would silently
+	// break this test's own collection once this package gained a
+	// second telemetry test (the edge access token's).
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			var logBuf bytes.Buffer
@@ -231,8 +225,8 @@ func TestVerify_RejectionsAreLoggedAndCountedByReason(t *testing.T) {
 	// -- see the function doc comment for why this cannot be done
 	// per-subtest.
 	var rm metricdata.ResourceMetrics
-	if err := reader.Collect(context.Background(), &rm); err != nil {
-		t.Fatalf("reader.Collect: %v", err)
+	if err := sharedTestMetricReader.Collect(context.Background(), &rm); err != nil {
+		t.Fatalf("sharedTestMetricReader.Collect: %v", err)
 	}
 	var totalDataPoints int
 	for _, tc := range cases {

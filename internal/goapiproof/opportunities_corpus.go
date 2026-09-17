@@ -1,6 +1,9 @@
 package goapiproof
 
-import "net/url"
+import (
+	"net/url"
+	"time"
+)
 
 // This file holds GET+POST /api/v1/opportunities' own corpus content --
 // requests and (where a mechanism's own shape admits one)
@@ -42,13 +45,18 @@ var opportunitiesGetEndpointSpec = RESTEndpointSpec{
 			// team scope, scope_id bound at run time to filters/options'
 			// own live team_id -- same producer/binding shape home's own
 			// "home_team_scoped" entry uses (this route composes
-			// build_home_response the same way).
+			// build_home_response the same way). Timeout raised above the
+			// run default for the same reason as home's own
+			// "home_team_scoped" entry: the baseline leg's team-scope
+			// repository resolution is an extra read the org-scope default
+			// entry above never makes.
 			Name:                "opportunities_team_scoped",
 			Query:               url.Values{"scope_type": {"team"}},
 			WantCandidateStatus: 200, WantBaselineStatus: 200,
 			BodyMode:   RESTBodyModeJSON,
 			Parity:     opportunitiesNumericLeaves,
 			IDBindings: []RESTIDBinding{{Producer: "team_id", QueryParam: "scope_id"}},
+			Timeout:    180 * time.Second,
 		},
 		{
 			// repo scope, scope_id bound to filters/options' own live
@@ -92,22 +100,27 @@ var opportunitiesPostEndpointSpec = RESTEndpointSpec{
 			BodyMode: RESTBodyModeJSON, Parity: opportunitiesNumericLeaves,
 		},
 		{
-			// POST's own scope id has no body-path id-binding mechanism
-			// (RESTIDBinding only resolves into a query param or a path
-			// param) -- so, unlike the GET entries above, this carries a
-			// fixed, neutral, almost-certainly-nonexistent team id rather
-			// than a live one, matching home's own "home_team_scoped" POST
-			// entry's identical precedent and reasoning.
+			// team scope, bound at run time to filters/options' own live
+			// team_id via restidbind.go's BodyPath binding -- the POST-body
+			// twin of the QueryParam binding this route's own GET
+			// "opportunities_team_scoped" entry above uses, matching home's
+			// own "home_team_scoped" POST entry's identical precedent.
 			Name:                "opportunities_team_scoped",
-			Body:                map[string]any{"filters": map[string]any{"scope": map[string]any{"level": "team", "ids": []any{"ABC-123"}}}},
+			Body:                map[string]any{"filters": map[string]any{"scope": map[string]any{"level": "team", "ids": []string{"ABC-123"}}}},
 			WantCandidateStatus: 200, WantBaselineStatus: 200,
-			BodyMode: RESTBodyModeJSON, Parity: opportunitiesNumericLeaves,
+			BodyMode:   RESTBodyModeJSON,
+			Parity:     opportunitiesNumericLeaves,
+			IDBindings: []RESTIDBinding{{Producer: "team_id", BodyPath: "filters.scope.ids"}},
 		},
 		{
+			// repo scope, bound to filters/options' own live repo_id, same
+			// BodyPath and reasoning as opportunities_team_scoped above.
 			Name:                "opportunities_repo_scoped",
-			Body:                map[string]any{"filters": map[string]any{"scope": map[string]any{"level": "repo", "ids": []any{"ABC-123"}}}},
+			Body:                map[string]any{"filters": map[string]any{"scope": map[string]any{"level": "repo", "ids": []string{"ABC-123"}}}},
 			WantCandidateStatus: 200, WantBaselineStatus: 200,
-			BodyMode: RESTBodyModeJSON, Parity: opportunitiesNumericLeaves,
+			BodyMode:   RESTBodyModeJSON,
+			Parity:     opportunitiesNumericLeaves,
+			IDBindings: []RESTIDBinding{{Producer: "repo_id", BodyPath: "filters.scope.ids"}},
 		},
 		{
 			// HomeRequest's ONE field ("filters") is required with no

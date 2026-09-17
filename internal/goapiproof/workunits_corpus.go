@@ -1,6 +1,9 @@
 package goapiproof
 
-import "net/url"
+import (
+	"net/url"
+	"time"
+)
 
 // This file holds GET+POST /api/v1/work-units' own corpus content --
 // requests, numeric-leaf declarations and the two declared, structurally
@@ -104,13 +107,17 @@ var workUnitsGetEndpointSpec = RESTEndpointSpec{
 			// options' own live team_id -- resolve_repo_filter_ids'
 			// team branch (ResolveRepoFilterIDs' own
 			// resolveRepoIDsForTeams), the same live id every other
-			// team-scoped GET request in this corpus binds to.
+			// team-scoped GET request in this corpus binds to. Timeout
+			// raised above the run default: the baseline leg's own
+			// team-to-repo resolution is an extra read the org-scope
+			// default entry never makes and can outrun the default budget.
 			Name:                "team_scoped",
 			Query:               url.Values{"scope_type": {"team"}},
 			WantCandidateStatus: 200, WantBaselineStatus: 200,
 			BodyMode:   RESTBodyModeJSON,
 			Parity:     workUnitsParity,
 			IDBindings: []RESTIDBinding{{Producer: "team_id", QueryParam: "scope_id"}},
+			Timeout:    180 * time.Second,
 		},
 		{
 			// repo scope, scope_id bound to filters/options' own live

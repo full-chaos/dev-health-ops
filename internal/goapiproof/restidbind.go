@@ -1,7 +1,7 @@
 package goapiproof
 
 import (
-	"math"
+	"encoding/json"
 	"net/url"
 	"strconv"
 	"strings"
@@ -141,25 +141,31 @@ func ExtractRESTID(body any, producer RESTIDProducer) (string, bool) {
 	return "", false
 }
 
-// numericRESTIDField reads field from obj as a JSON NUMBER (the float64
-// encoding/json's generic map[string]any decode produces for a bare
-// integer, the same decode ExtractRESTID's own ListPath/IDField walk
-// already reads every field through) and formats it as a base-10 integer
-// string. false for a non-numeric value, an absent field, or a number
-// with a fractional part -- drilldown/prs' own "number" field is always a
-// whole PR number (PRItem.Number is a Go uint32), so a fractional value
-// here means the producer's own ListPath/IDField named the wrong field,
-// never a real PR number.
+// numericRESTIDField reads field from obj as a JSON NUMBER and formats it
+// as a base-10 integer string. The body ExtractRESTID walks is always
+// admission.BaselineSnap.Data, decoded by DecodeRESTSnapshot's own
+// json.Decoder with UseNumber set (restadmit.go) -- so a JSON number here
+// is an encoding/json.Number (a string under the hood), never a float64;
+// this is the ONLY numeric type this decode path ever produces. false for
+// a non-json.Number value, an absent field, or a value json.Number.Int64
+// rejects (a fractional part or an exponent) -- drilldown/prs' own
+// "number" field is always a whole PR number (PRItem.Number is a Go
+// uint32), so a rejected value here means the producer's own
+// ListPath/IDField named the wrong field, never a real PR number.
 func numericRESTIDField(obj map[string]any, field string) (string, bool) {
 	raw, present := obj[field]
 	if !present {
 		return "", false
 	}
-	num, ok := raw.(float64)
-	if !ok || num != math.Trunc(num) {
+	num, ok := raw.(json.Number)
+	if !ok {
 		return "", false
 	}
-	return strconv.FormatInt(int64(num), 10), true
+	whole, err := num.Int64()
+	if err != nil {
+		return "", false
+	}
+	return strconv.FormatInt(whole, 10), true
 }
 
 // setBodyPathID returns a copy of value with the leaf addressed by

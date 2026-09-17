@@ -2549,7 +2549,20 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				// from the SAME PR rather than an independently-produced
 				// repo_id that might name a different repo. Consumed by
 				// flame's own pr_entity_id_bound_200 entry below.
-				Produces: []RESTIDProducer{{Name: "pr_id", ListPath: "items", IDField: "repo_id", JoinField: "number"}},
+				//
+				// Also produces pr_repo_id: this SAME response's own FIRST
+				// item's repo_id alone, with no JoinField -- a repo known,
+				// from this response, to have at least one PR in-window,
+				// unlike filters/options' own repo_id (an arbitrary repo
+				// off the org's full repo list, with no PR-count signal at
+				// all). Consumed by this operation's own "repo_scoped"
+				// entry below, so that entry names a repo drilldown/prs can
+				// actually return something for instead of a repo whose
+				// only guarantee is existing.
+				Produces: []RESTIDProducer{
+					{Name: "pr_id", ListPath: "items", IDField: "repo_id", JoinField: "number"},
+					{Name: "pr_repo_id", ListPath: "items", IDField: "repo_id"},
+				},
 			},
 			{
 				Name:                "range_days_90",
@@ -2559,17 +2572,19 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				DedupListPath: drilldownPRsDedup.ListPath, DedupKeyFields: drilldownPRsDedup.KeyFields,
 			},
 			{
-				// scope_type=repo, scope_id bound at run time to
-				// filters/options' own live repo_id (restidbind.go) --
-				// the repo-scoped branch quadrant_route.go's own sibling
-				// doc comment on this table's uncovered non-org scope
-				// gap named, now actually exercised.
+				// scope_type=repo, scope_id bound at run time to this
+				// operation's own "default_window" entry above -- pr_repo_id,
+				// a repo that response's own PR list already showed to have
+				// a PR in-window (see that entry's own doc comment), rather
+				// than filters/options' own repo_id, which names an
+				// arbitrary org repo with no PR-count signal and can
+				// resolve to a repo with zero PRs.
 				Name:                "repo_scoped",
 				Query:               url.Values{"scope_type": {"repo"}},
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
 				BodyMode: RESTBodyModeJSON, Parity: drilldownPRsParity,
 				DedupListPath: drilldownPRsDedup.ListPath, DedupKeyFields: drilldownPRsDedup.KeyFields,
-				IDBindings: []RESTIDBinding{{Producer: "repo_id", QueryParam: "scope_id"}},
+				IDBindings: []RESTIDBinding{{Producer: "pr_repo_id", QueryParam: "scope_id"}},
 			},
 			{
 				// Confirmed live (pydantic_validation_error.go's own doc

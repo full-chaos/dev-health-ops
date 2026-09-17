@@ -1,0 +1,75 @@
+{
+  "chosen_mode": null,
+  "coverage": null,
+  "description": "Execution paths that reveal stalls, loops, and retry patterns.",
+  "distinct_repo_targets": null,
+  "distinct_team_targets": null,
+  "drill_category": null,
+  "flow_mode": null,
+  "label": "State flow",
+  "links": [
+    {
+      "source": "In Progress",
+      "target": "In Review",
+      "value": 12.0
+    },
+    {
+      "source": "In Review",
+      "target": "Done",
+      "value": 12.0
+    },
+    {
+      "source": "Todo",
+      "target": "In Progress",
+      "value": 10.0
+    },
+    {
+      "source": "Backlog",
+      "target": "Todo",
+      "value": 5.0
+    },
+    {
+      "source": "In Progress",
+      "target": "Blocked",
+      "value": 3.0
+    }
+  ],
+  "mode": "state",
+  "nodes": [
+    {
+      "group": "state",
+      "name": "In Progress",
+      "value": null
+    },
+    {
+      "group": "state",
+      "name": "Done",
+      "value": null
+    },
+    {
+      "group": "state",
+      "name": "Todo",
+      "value": null
+    },
+    {
+      "group": "state",
+      "name": "Backlog",
+      "value": null
+    },
+    {
+      "group": "state",
+      "name": "Blocked",
+      "value": null
+    },
+    {
+      "group": "state",
+      "name": "In Review",
+      "value": null
+    }
+  ],
+  "repo_coverage": null,
+  "team_coverage": null,
+  "top_n_repos": null,
+  "unassigned_reasons": null,
+  "unit": "items"
+}

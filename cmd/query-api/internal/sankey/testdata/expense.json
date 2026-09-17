@@ -1,0 +1,55 @@
+{
+  "chosen_mode": null,
+  "coverage": null,
+  "description": "How planned effort converts into unplanned work, rework, and rewrites.",
+  "distinct_repo_targets": null,
+  "distinct_team_targets": null,
+  "drill_category": null,
+  "flow_mode": null,
+  "label": "Investment expense",
+  "links": [
+    {
+      "source": "Planned work",
+      "target": "Unplanned work",
+      "value": 8.0
+    },
+    {
+      "source": "Unplanned work",
+      "target": "Rework",
+      "value": 5.0
+    },
+    {
+      "source": "Rework",
+      "target": "Abandonment / rewrite",
+      "value": 2.0
+    }
+  ],
+  "mode": "expense",
+  "nodes": [
+    {
+      "group": "planned",
+      "name": "Planned work",
+      "value": null
+    },
+    {
+      "group": "unplanned",
+      "name": "Unplanned work",
+      "value": null
+    },
+    {
+      "group": "rework",
+      "name": "Rework",
+      "value": null
+    },
+    {
+      "group": "abandonment",
+      "name": "Abandonment / rewrite",
+      "value": null
+    }
+  ],
+  "repo_coverage": null,
+  "team_coverage": null,
+  "top_n_repos": null,
+  "unassigned_reasons": null,
+  "unit": "items"
+}

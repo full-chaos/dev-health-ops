@@ -1,0 +1,55 @@
+{
+  "chosen_mode": null,
+  "coverage": null,
+  "description": "Where effort allocates across initiatives, areas, issue types, and work items.",
+  "distinct_repo_targets": null,
+  "distinct_team_targets": null,
+  "drill_category": null,
+  "flow_mode": null,
+  "label": "Investment flow",
+  "links": [
+    {
+      "source": "planned",
+      "target": "repoA",
+      "value": 12.5
+    },
+    {
+      "source": "planned",
+      "target": "repoB",
+      "value": 4.0
+    },
+    {
+      "source": "unplanned",
+      "target": "repoA",
+      "value": 2.0
+    }
+  ],
+  "mode": "investment",
+  "nodes": [
+    {
+      "group": "initiative",
+      "name": "planned",
+      "value": null
+    },
+    {
+      "group": "project",
+      "name": "repoA",
+      "value": null
+    },
+    {
+      "group": "project",
+      "name": "repoB",
+      "value": null
+    },
+    {
+      "group": "initiative",
+      "name": "unplanned",
+      "value": null
+    }
+  ],
+  "repo_coverage": null,
+  "team_coverage": null,
+  "top_n_repos": null,
+  "unassigned_reasons": null,
+  "unit": "items"
+}

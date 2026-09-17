@@ -1,0 +1,85 @@
+{
+  "chosen_mode": null,
+  "coverage": null,
+  "description": "Where change concentrates from repos to files and change intent.",
+  "distinct_repo_targets": null,
+  "distinct_team_targets": null,
+  "drill_category": null,
+  "flow_mode": null,
+  "label": "Code hotspot flow",
+  "links": [
+    {
+      "source": "repoA",
+      "target": "repoA / src",
+      "value": 40.0
+    },
+    {
+      "source": "repoA / src",
+      "target": "repoA / src/main.go",
+      "value": 40.0
+    },
+    {
+      "source": "repoA / src/main.go",
+      "target": "refactor",
+      "value": 40.0
+    },
+    {
+      "source": "repoA",
+      "target": "repoA / (root)",
+      "value": 4.0
+    },
+    {
+      "source": "repoA / (root)",
+      "target": "repoA / README.md",
+      "value": 4.0
+    },
+    {
+      "source": "repoA / README.md",
+      "target": "feature",
+      "value": 4.0
+    }
+  ],
+  "mode": "hotspot",
+  "nodes": [
+    {
+      "group": "repo",
+      "name": "repoA",
+      "value": null
+    },
+    {
+      "group": "directory",
+      "name": "repoA / (root)",
+      "value": null
+    },
+    {
+      "group": "file",
+      "name": "repoA / README.md",
+      "value": null
+    },
+    {
+      "group": "change_type",
+      "name": "feature",
+      "value": null
+    },
+    {
+      "group": "directory",
+      "name": "repoA / src",
+      "value": null
+    },
+    {
+      "group": "file",
+      "name": "repoA / src/main.go",
+      "value": null
+    },
+    {
+      "group": "change_type",
+      "name": "refactor",
+      "value": null
+    }
+  ],
+  "repo_coverage": null,
+  "team_coverage": null,
+  "top_n_repos": null,
+  "unassigned_reasons": null,
+  "unit": "changes"
+}

@@ -237,7 +237,7 @@ A row that is live, reachable to real clients (`canary`/`primary`) and carries n
 is required before stage 4/5, and "a bare 200 does not qualify".
 
 <!-- BEGIN GENERATED GO API OPERATIONS -->
-_Rendered 2026-09-16T12:25:30Z against main merge-base `9db52ba17f5e97397e09cf885c1352d98abbb4d0`; SDL digest pin `sha256:19485ec136d04de0935717dca8b4f5fd27dd0351fe96b854d40f433229468fd0`; fleet read 2026-09-16T12:25:30Z via fleet file fleet-prod.json._
+_Rendered 2026-09-16T12:25:30Z against main merge-base `e1b9941c4205e3cccd4740a228f79b3a2a58bd94`; SDL digest pin `sha256:19485ec136d04de0935717dca8b4f5fd27dd0351fe96b854d40f433229468fd0`; fleet read 2026-09-16T12:25:30Z via fleet file fleet-prod.json._
 
 _Rows in `go_api_proof_run` at read time: **515**. Operations reachable to real clients with no deployed-executed proof: **0**. Rows whose mode says Go but whose schema digest no longer matches the pin, so every request silently falls back to Python: **0**._
 
@@ -281,7 +281,7 @@ sync with either side, so a route added, removed or newly wired on either plane 
 time the tool runs, and the doc-drift check below fails until it is re-rendered.
 
 <!-- BEGIN GENERATED REST ENDPOINTS -->
-_32 `/api/v1/*` routes in `src/dev_health_ops/api/main.py`: **18** ported, **14** python-only, **0** dead-by-design._
+_32 `/api/v1/*` routes in `src/dev_health_ops/api/main.py`: **20** ported, **12** python-only, **0** dead-by-design._
 
 | Method | Path | Status | Go handler |
 | --- | --- | --- | --- |
@@ -312,8 +312,8 @@ _32 `/api/v1/*` routes in `src/dev_health_ops/api/main.py`: **18** ported, **14*
 | GET | `/api/v1/people/{person_id}/metric` | ported | `cmd/query-api/people_metric_route.go:69` |
 | GET | `/api/v1/people/{person_id}/summary` | ported | `cmd/query-api/people_summary_route.go:88` |
 | GET | `/api/v1/quadrant` | ported | `cmd/query-api/quadrant_route.go:79` |
-| GET | `/api/v1/sankey` | python-only | -- |
-| POST | `/api/v1/sankey` | python-only | -- |
+| GET | `/api/v1/sankey` | ported | `cmd/query-api/sankey_route.go:79` |
+| POST | `/api/v1/sankey` | ported | `cmd/query-api/sankey_route.go:79` |
 | GET | `/api/v1/work-units` | python-only | -- |
 | POST | `/api/v1/work-units` | python-only | -- |
 | POST | `/api/v1/work-units/{work_unit_id}/explain` | python-only | -- |

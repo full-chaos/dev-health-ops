@@ -403,6 +403,23 @@ func main() {
 		log.Print("query-api: /api/v1/heatmap route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
 	}
 
+	// GET+POST /api/v1/sankey, gated by its own routeswitch entries
+	// (default OFF via GO_API_SANKEY_ENABLED) -- see sankey_route.go's
+	// package doc comment for the reachability story and internal/sankey
+	// for the ported resolver and its declared ReplacingMergeTree-dedup
+	// notes.
+	if sankeyHandler, sankeyCleanup, sankeyOK, sankeyErr := buildSankeyRoute(); sankeyErr != nil {
+		log.Fatalf("query-api: build /api/v1/sankey route: %v", sankeyErr)
+	} else if sankeyOK {
+		defer sankeyCleanup()
+		// See the investment/explain mount above for why this is a
+		// reassignment, not an inlined wrapper.
+		sankeyHandler = withProofProvenance(sankeyHandler, runningBuild())
+		mux.HandleFunc("/api/v1/sankey", sankeyHandler)
+	} else {
+		log.Print("query-api: /api/v1/sankey route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
+	}
+
 	// GET /api/v1/filters/options, gated by its own routeswitch
 	// entry (default OFF via GO_API_FILTER_OPTIONS_ENABLED) -- see
 	// filter_options_route.go's package doc comment for the reachability

@@ -395,7 +395,7 @@ func BuildHealthState(signals []Signal, dataConfidence DataConfidence, asOf *tim
 			Status:   status,
 			Headline: "Cockpit signals appear sparse",
 			Summary:  "Available data suggests watching coverage before making operating changes.",
-			AsOf:     asOf,
+			AsOf:     (*NaiveDateTime)(asOf),
 		}
 	}
 	top := signals[0]
@@ -414,7 +414,7 @@ func BuildHealthState(signals []Signal, dataConfidence DataConfidence, asOf *tim
 		Status:   status,
 		Headline: fmt.Sprintf("%s across %s", top.Title, top.AffectedScope),
 		Summary:  fmt.Sprintf("The strongest signal suggests %s", top.WhyItMatters),
-		AsOf:     asOf,
+		AsOf:     (*NaiveDateTime)(asOf),
 	}
 }
 

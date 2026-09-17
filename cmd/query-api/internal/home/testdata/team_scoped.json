@@ -1,6 +1,6 @@
 {
   "freshness": {
-    "last_ingested_at": "2024-01-08T10:00:00Z",
+    "last_ingested_at": "2024-01-08T10:00:00",
     "latest_successful_sync_at": null,
     "sources": {
       "github": "ok",
@@ -305,7 +305,7 @@
     "status": "critical",
     "headline": "WIP saturation has been elevated for a week across team-1",
     "summary": "The strongest signal suggests Team One is carrying more active work than its cadence supports.",
-    "as_of": "2024-01-08T10:00:00Z"
+    "as_of": "2024-01-08T10:00:00"
   },
   "signals": [
     {

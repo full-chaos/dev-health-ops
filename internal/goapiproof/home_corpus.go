@@ -59,6 +59,23 @@ var homeNumericLeaves = Options{
 		"data.rework_theme_allocation.churn_loc":  "the same query's sum(churn_loc) -- a bare count sum.",
 		"data.signals.evidence_count":             "a row count / len(evidence) (services/home.py) -- never a floating aggregate.",
 	},
+	// data.events.ts is EventItem.ts (schemas.py's `EventItem(ts=datetime.
+	// now(timezone.utc), ...)`, services/home.py) -- a per-request wall-
+	// clock read on BOTH planes, so two calls to the SAME plane already
+	// disagree on it; cross-plane equality proves nothing.
+	// StochasticLeafClass (compare.go/stochasticleaf.go) cannot admit this
+	// leaf: its lookup refuses any path that crosses a list
+	// (stochasticleaf.go's own "%q crosses a list" check), and "events" is
+	// a list -- there is no wildcard or subtree form. VolatileFields is
+	// this package's only mechanism that reaches an array leaf (its
+	// dotted-path key is index-free by construction), and it excludes the
+	// leaf from comparison ENTIRELY: it does not itself assert a wire
+	// format the way StochasticLeafClass's type/order checks would. This
+	// PR's own cmd/query-api/internal/home wire-format test is what pins
+	// the byte shape instead.
+	VolatileFields: map[string]string{
+		"data.events.ts": "datetime.now(timezone.utc) read fresh per request on both planes (services/home.py) -- drawn, not derived, so it cannot agree across calls, same plane or cross-plane. Ticket: CHAOS-5907",
+	},
 }
 
 // homeGetEndpointSpec and homePostEndpointSpec's happy-path requests

@@ -1549,19 +1549,22 @@ var sankeyStateFlowParity = Options{
 // (classifyBaselineDefects' own doc comment) -- never folded into one.
 //
 // THE SUPERSESSION EXCLUSION'S OWN CITATION IS FURTHER SPLIT ACROSS
-// SEVEN ENTRIES, one per field, because each field's own aggregate shape
+// FIVE ENTRIES, one per field, because each field's own aggregate shape
 // differs: data.links/data.nodes are keyed lists (KeyedDirectionShape);
-// team_coverage/repo_coverage/distinct_team_targets/distinct_repo_targets
-// are single scalars (ScalarDirectionShape); unassigned_reasons is a
-// plain JSON object (DictKeyDirectionShape). data.chosen_mode/data.label/
-// data.description are DELIBERATELY DROPPED from every citation below
-// (see the note after the entries): the mechanism's effect on them is a
-// CATEGORICAL THRESHOLD FLIP, not a direction or a bound, and no shape
-// in this package can honestly cover that -- explainParity's own
-// precedent for an uncoverable structural manifestation
-// (explainScopeDropDefect's own "knowingly left uncovered" note) is the
-// same discipline applied here to a different kind of uncoverable
-// manifestation.
+// distinct_team_targets/distinct_repo_targets are single scalars
+// (ScalarDirectionShape); unassigned_reasons is a plain JSON object
+// (DictKeyDirectionShape). data.chosen_mode/data.label/data.description
+// AND data.team_coverage/data.repo_coverage are DELIBERATELY DROPPED
+// from every citation below (see the two notes after the entries): the
+// former because the mechanism's effect on them is a CATEGORICAL
+// THRESHOLD FLIP, not a direction or a bound; the latter because no
+// direction is derivable for this route's own ratio under this
+// exclusion at all (see the note's own detail). Neither is a gap in
+// authorship: no shape in this package can honestly cover either
+// manifestation -- explainParity's own precedent for an uncoverable
+// structural manifestation (explainScopeDropDefect's own "knowingly
+// left uncovered" note) is the same discipline applied here to two
+// further kinds of uncoverable manifestation.
 //
 // NEVER OBSERVED FIRING ON A REAL CAPTURE: none of the three available
 // production deployed-vs-deployed prove runs (_records/deploy-71/r78/
@@ -1645,28 +1648,6 @@ var investmentFlowRepoDedupParity = Options{
 				ValueField: "value",
 				ValuePath:  "data.nodes.value",
 				KeyFields:  []string{"name"},
-			},
-		},
-		{
-			Ticket:             "CHAOS-4441",
-			Reason:             "the same work_unit_supersessions exclusion, over team_coverage: coverageStats/edgeStats (builders.go) compute it as assignedValue/totalValue over this SAME strictly-subset population. A retired work unit is typically retired BECAUSE its earlier team/repo grouping was wrong, so the rows Python keeps and Go excludes skew disproportionately toward unassigned -- the SAME reasoning already established for investmentFull's own sankey coverage (SupersessionSkewShape). That gives a DIRECTION, not a magnitude: baseline is admitted only when strictly less than candidate. Go is correct.",
-			Paths:              []string{"data.team_coverage"},
-			Intermittent:       true,
-			IntermittentReason: "present only while work_unit_supersessions holds at least one row for the org whose superseded_work_unit_id falls inside the requested window and scope; an org with no supersession rows in that window agrees on both planes",
-			ScalarDirectionShape: &ScalarDirectionShape{
-				Path:                  "data.team_coverage",
-				BaselineMustBeGreater: false,
-			},
-		},
-		{
-			Ticket:             "CHAOS-4441",
-			Reason:             "the same work_unit_supersessions exclusion and the same coverageStats/edgeStats formula as this ticket's data.team_coverage entry, over repo_coverage: a retired work unit typically skews Python's own ratio down relative to Go's, the same reasoning SupersessionSkewShape already establishes for investmentFull. Go is correct.",
-			Paths:              []string{"data.repo_coverage"},
-			Intermittent:       true,
-			IntermittentReason: "present only while work_unit_supersessions holds at least one row for the org whose superseded_work_unit_id falls inside the requested window and scope; an org with no supersession rows in that window agrees on both planes",
-			ScalarDirectionShape: &ScalarDirectionShape{
-				Path:                  "data.repo_coverage",
-				BaselineMustBeGreater: false,
 			},
 		},
 		{
@@ -1825,6 +1806,52 @@ var investmentFlowRepoTeamParity = Options{
 // label/description divergence therefore surfaces as an ordinary,
 // uncovered finding on the next prove run; that is correct and intended,
 // not a regression.
+
+// investmentFlowRepoDedupParity ALSO deliberately carries no citation
+// for data.team_coverage/data.repo_coverage, even though the SAME
+// work_unit_supersessions exclusion above still fires on this route's
+// data.links/data.nodes/distinct_team_targets/distinct_repo_targets/
+// unassigned_reasons whenever a supersession falls inside the
+// requested window and scope.
+//
+// A prior version of this citation gave team_coverage/repo_coverage a
+// ScalarDirectionShape whose Reason borrowed its direction from
+// investmentFull's own SupersessionSkewShape (sankeycoverage.go /
+// resolvers/analytics.py's dedicated coverage_sql) without deriving it
+// from this route's own query. The two are not the same quantity:
+// coverageStats/edgeStats (investmentflow/builders.go) compute
+// team_coverage/repo_coverage as assignedValue/totalValue straight
+// from the SAME rows fetchInvestmentTeamCategoryRepoEdges/
+// fetchInvestmentTeamSubcategoryRepoEdges/fetchInvestmentRepoTeamEdges
+// (queries.go) fetch for data.links/data.nodes -- grouped by (team,
+// category|subcategory, repo), through an unconditional ARRAY JOIN
+// over subcategory_distribution_json, summing
+// subcategory_kv.2 * effort_value. investmentFull's own coverage query
+// (per sankeycoverage.go's own doc comment) has neither that
+// GROUP BY nor that ARRAY JOIN: it is a dedicated, un-grouped,
+// repo-effort-weighted sum over the whole org population, built that
+// way specifically because the ARRAY JOIN "re-weighted every
+// effort-weighted column" it would otherwise touch. A direction proven
+// for one aggregate shape does not carry to a structurally different
+// one under the SAME exclusion: a direction claim is valid only for
+// the query it was derived from.
+//
+// Nor does this route's own query supply a direction to derive
+// instead. The work_unit_supersessions exclusion removes rows from
+// BOTH the numerator (assignedValue) and the denominator (totalValue)
+// of the SAME ratio together -- unlike distinct_team_targets/distinct_
+// repo_targets/unassigned_reasons above (plain counts over a strict
+// subset, which can only fall or hold under row removal) or
+// data.links/data.nodes (a sum with no denominator at all), a ratio
+// whose numerator and denominator both shrink under the same row
+// removal has no direction fixed by that structure alone: which way it
+// moves depends on whether the excluded rows' own assigned share
+// differs from the surviving population's, a property this query's own
+// text does not establish and this package does not assume. No shape
+// here can honestly claim a direction, so team_coverage/repo_coverage
+// are left uncovered. A real divergence on either surfaces as an
+// ordinary, uncovered finding on the next prove run; that is this
+// citation working as intended, not a regression.
 
 // quadrantRepoDedupParity is shared by every REPO_METRICS-grain quadrant
 // request whose fetcher joins repos -- churn_throughput's forced

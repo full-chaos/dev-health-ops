@@ -8,26 +8,28 @@ import "math"
 // only when it lies on the declared side of candidate (strictly greater,
 // or strictly less -- see BaselineMustBeGreater), never by magnitude.
 //
-// Two DIFFERENT mechanism classes both need exactly this claim, on
-// different fields of the SAME work_unit_supersessions-exclusion citation
-// (investmentFlowRepoDedupParity, GET/POST /api/v1/investment's own
-// investmentBaselineDefects):
+// The mechanism class this shape currently covers is a PLAIN STRUCTURAL
+// FACT, not an empirical tendency: distinct_team_targets/distinct_repo_
+// targets (investment/flow, investment/flow/repo-team) and
+// evidence_quality_stats.total (GET/POST /api/v1/investment) are each a
+// COUNT over a row population the SAME work_unit_supersessions exclusion
+// makes a strict subset of the reference plane's own population -- the
+// same "candidate's row population is baseline's minus a subset"
+// argument DictKeyDirectionShape's own doc comment states. A count over
+// a strict subset can only read less than or equal to the same count
+// over the full population, hence BaselineMustBeGreater == true
+// (baseline pulled UP) on every entry that currently sets this shape.
 //
-//   - team_coverage/repo_coverage (investment/flow, investment/flow/
-//     repo-team): the SAME empirical "retired units typically skew
-//     toward unassigned" reasoning SupersessionSkewShape's own doc
-//     comment already establishes for investmentFull's coverage leaves
-//     -- an assumption about WHICH way a ratio moves, not a structural
-//     guarantee, hence BaselineMustBeGreater == false (baseline pulled
-//     DOWN).
-//   - distinct_team_targets/distinct_repo_targets (investment/flow,
-//     investment/flow/repo-team) and evidence_quality_stats.total
-//     (GET/POST /api/v1/investment): a PLAIN STRUCTURAL FACT, the same
-//     "candidate's row population is baseline's minus a subset" argument
-//     DictKeyDirectionShape's own doc comment states -- a count over a
-//     strict subset can only read less than or equal to the same count
-//     over the full population, hence BaselineMustBeGreater == true
-//     (baseline pulled UP).
+// This shape is NOT a home for an empirical "usually skews toward X"
+// claim borrowed from a different query's own citation -- BaselineMust
+// BeGreater has no default and must be re-derived from the citing
+// entry's OWN producing query every time; investmentFlowRepoDedupParity's
+// own doc comment records a prior instance of exactly that mistake
+// (team_coverage/repo_coverage borrowed investmentFull's own
+// SupersessionSkewShape direction without checking that investment/
+// flow's own query computes the ratio a structurally different way),
+// and why those two leaves carry no ScalarDirectionShape -- or any other
+// shape -- as a result.
 //
 // WHY NOT SupersessionSkewShape: that type's own rule 1 hardcodes "the
 // ONLY mismatch findings anywhere in the whole comparison are these two
@@ -36,16 +38,18 @@ import "math"
 // (investmentFull's teamCoverage/repoCoverage are ALSO cited by
 // CoverageShiftShape, CoverageShiftShape's own doc comment: "a blanket
 // citation... also matches the repos-join fan-out's own citation").
-// Reused as-is here, that gate would almost never admit: this exclusion's
-// own citation on investment/flow legitimately moves data.links/unassigned_reasons
-// alongside team_coverage/repo_coverage under the SAME root cause, so a
-// gate requiring NOTHING ELSE in the whole response to differ would read
-// a real instance as unexplained whenever its own sibling paths (which
-// the SAME BaselineDefect ALSO cites) also carry a live difference --
-// exactly the false negative the whole-comparison discipline exists to
-// prevent, not produce. The gate is scoping for a genuine collision
-// between two DIFFERENT citations at the SAME path, not this shape's
-// default posture -- see ContestedPaths' own doc comment.
+// Reused as-is on a structural-count leaf like this shape's own
+// distinct_team_targets/distinct_repo_targets/evidence_quality_stats.
+// total, that gate would almost never admit: their own BaselineDefect
+// legitimately moves data.links/unassigned_reasons alongside them under
+// the SAME root cause, so a gate requiring NOTHING ELSE in the whole
+// response to differ would read a real instance as unexplained whenever
+// a sibling path (which the SAME BaselineDefect ALSO cites) also carries
+// a live difference -- exactly the false negative the whole-comparison
+// discipline exists to prevent, not produce. The gate is scoping for a
+// genuine collision between two DIFFERENT citations at the SAME path,
+// not this shape's default posture -- see ContestedPaths' own doc
+// comment.
 //
 // The shape this type verifies, over the two DECODED response bodies:
 //
@@ -70,13 +74,16 @@ import "math"
 // doc comments each state for their own direction claim.
 type ScalarDirectionShape struct {
 	// Path is the leaf path findings carry for this field -- must equal
-	// one of the defect's own Paths entries, e.g. "data.team_coverage".
+	// one of the defect's own Paths entries, e.g.
+	// "data.distinct_team_targets".
 	Path string
 	// BaselineMustBeGreater selects which side of candidate baseline must
-	// fall on to be admitted: true admits only baseline > candidate (a
-	// strict-subset COUNT/SUM claim, see the type doc comment's second
-	// bullet), false admits only baseline < candidate (a ratio-skew
-	// claim, the type doc comment's first bullet).
+	// fall on to be admitted: true admits only baseline > candidate --
+	// the strict-subset COUNT claim the type doc comment states, the
+	// only claim any current entry sets this shape for. false (baseline
+	// pulled DOWN) has no current user; setting it requires the same
+	// re-derivation-from-the-citing-query's-own-mechanism discipline the
+	// type doc comment states, not a copy of another leaf's direction.
 	BaselineMustBeGreater bool
 	// ContestedPaths, when non-empty, restricts this shape's admission to
 	// comparisons whose ONLY mismatch findings anywhere are under these
@@ -90,13 +97,12 @@ type ScalarDirectionShape struct {
 	// make an otherwise-valid instance spuriously fail to admit merely
 	// because some UNRELATED, correctly-explained finding exists
 	// elsewhere in the same response (investment/flow's own supersession-
-	// exclusion entry is exactly this: team_coverage/repo_coverage,
-	// distinct_team_targets/distinct_repo_targets, data.links and
-	// unassigned_reasons all move under the ONE root cause, and neither
-	// of investment/flow's other declared defects -- the repos-join
-	// fan-out or the argMax null-skip relabelling -- cites
-	// team_coverage/repo_coverage/distinct_*_targets at all, so nothing
-	// here needs disambiguating and ContestedPaths stays unset).
+	// exclusion entry is exactly this: distinct_team_targets/distinct_
+	// repo_targets, data.links and unassigned_reasons all move under the
+	// ONE root cause, and neither of investment/flow's other declared
+	// defects -- the repos-join fan-out or the argMax null-skip
+	// relabelling -- cites distinct_*_targets at all, so nothing here
+	// needs disambiguating and ContestedPaths stays unset).
 	ContestedPaths []string
 }
 

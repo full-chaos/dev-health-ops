@@ -1,6 +1,9 @@
 package goapiproof
 
-import "net/url"
+import (
+	"net/url"
+	"time"
+)
 
 // This file holds GET+POST /api/v1/home's own corpus content --
 // requests, numeric-leaf declarations and (where a mechanism's own
@@ -117,13 +120,19 @@ var homeGetEndpointSpec = RESTEndpointSpec{
 		{
 			// team scope, scope_id bound at run time to filters/options'
 			// own live team_id -- same producer/binding shape quadrant's
-			// own "cycle_throughput_team_scoped" entry uses.
+			// own "cycle_throughput_team_scoped" entry uses. Timeout raised
+			// above the run default: the baseline (Python) leg resolves the
+			// team's own repository set before it reads this route's
+			// metrics (resolve_repo_ids_for_teams, api/queries/scopes.py),
+			// a read the org-scope default entry above never makes, and
+			// that extra read can outrun the run's own default budget.
 			Name:                "home_team_scoped",
 			Query:               url.Values{"scope_type": {"team"}},
 			WantCandidateStatus: 200, WantBaselineStatus: 200,
 			BodyMode:   RESTBodyModeJSON,
 			Parity:     homeNumericLeaves,
 			IDBindings: []RESTIDBinding{{Producer: "team_id", QueryParam: "scope_id"}},
+			Timeout:    180 * time.Second,
 		},
 		{
 			// repo scope, scope_id bound to filters/options' own live
@@ -167,28 +176,28 @@ var homePostEndpointSpec = RESTEndpointSpec{
 			BodyMode: RESTBodyModeJSON, Parity: homeNumericLeaves,
 		},
 		{
-			// POST's own scope id has no body-path id-binding mechanism
-			// (RESTIDBinding only resolves into a query param or a path
-			// param -- restidbind.go) -- so, unlike the GET entries above,
-			// this carries a fixed, neutral, almost-certainly-nonexistent
-			// team id rather than a live one. It still exercises the
-			// route's own team-scope branch (MetricFilter validation,
-			// scope_filter_for_metric's team clause, the recommendations_
-			// daily read, the resolve_repo_ids_for_teams call) end to end;
-			// an id that resolves to nothing degrades every scope-filtered
-			// read to the SAME empty-result shape on both planes, so this
-			// is a real, if data-thin, structural check rather than a
-			// value-comparison one.
+			// team scope, bound at run time to filters/options' own live
+			// team_id via restidbind.go's BodyPath binding -- the POST-body
+			// twin of the QueryParam binding home's own GET "home_team_scoped"
+			// entry above uses, same shape investment_explain's own
+			// "team_scoped" POST entry already established for this
+			// mechanism.
 			Name:                "home_team_scoped",
-			Body:                map[string]any{"filters": map[string]any{"scope": map[string]any{"level": "team", "ids": []any{"ABC-123"}}}},
+			Body:                map[string]any{"filters": map[string]any{"scope": map[string]any{"level": "team", "ids": []string{"ABC-123"}}}},
 			WantCandidateStatus: 200, WantBaselineStatus: 200,
-			BodyMode: RESTBodyModeJSON, Parity: homeNumericLeaves,
+			BodyMode:   RESTBodyModeJSON,
+			Parity:     homeNumericLeaves,
+			IDBindings: []RESTIDBinding{{Producer: "team_id", BodyPath: "filters.scope.ids"}},
 		},
 		{
+			// repo scope, bound to filters/options' own live repo_id, same
+			// BodyPath and reasoning as home_team_scoped above.
 			Name:                "home_repo_scoped",
-			Body:                map[string]any{"filters": map[string]any{"scope": map[string]any{"level": "repo", "ids": []any{"ABC-123"}}}},
+			Body:                map[string]any{"filters": map[string]any{"scope": map[string]any{"level": "repo", "ids": []string{"ABC-123"}}}},
 			WantCandidateStatus: 200, WantBaselineStatus: 200,
-			BodyMode: RESTBodyModeJSON, Parity: homeNumericLeaves,
+			BodyMode:   RESTBodyModeJSON,
+			Parity:     homeNumericLeaves,
+			IDBindings: []RESTIDBinding{{Producer: "repo_id", BodyPath: "filters.scope.ids"}},
 		},
 		{
 			// HomeRequest's ONE field ("filters") is required with no

@@ -561,3 +561,110 @@ func TestInvestmentSunburstOrderInsensitiveList_AnIdentityMismatchStaysFound(t *
 		t.Fatalf("outside = %d, want 2 -- an unpaired key on each side is a real, uncovered structural finding: findings %+v", result.DifferencesOutsideBaselineDefect, result.Findings)
 	}
 }
+
+// TestHomeAndOpportunitiesPOSTScopedEntries_BindThroughBodyPath pins the
+// corpus-level contract: home and opportunities'
+// own POST team/repo-scoped entries must bind their scope id through
+// BodyPath to the SAME producer their GET sibling uses (filters/options'
+// own team_id/repo_id), and resolving that binding must actually replace
+// the placeholder "ids" leaf -- not merely declare an IDBindings entry
+// that never applies because the body literal is still a []any a
+// BodyPath binding cannot address. A regression that drops the binding,
+// points it at the wrong producer, or leaves the leaf's type unfixed
+// fails here rather than only being noticed the next time an operator
+// runs go-api-rest-prove live against a nonexistent "ABC-123" scope id.
+func TestHomeAndOpportunitiesPOSTScopedEntries_BindThroughBodyPath(t *testing.T) {
+	for _, tc := range []struct {
+		operation string
+		request   string
+		producer  string
+		level     string
+	}{
+		{"REST:POST:/api/v1/home", "home_team_scoped", "team_id", "team"},
+		{"REST:POST:/api/v1/home", "home_repo_scoped", "repo_id", "repo"},
+		{"REST:POST:/api/v1/opportunities", "opportunities_team_scoped", "team_id", "team"},
+		{"REST:POST:/api/v1/opportunities", "opportunities_repo_scoped", "repo_id", "repo"},
+	} {
+		t.Run(tc.request, func(t *testing.T) {
+			spec, err := SpecForREST(tc.operation)
+			if err != nil {
+				t.Fatalf("SpecForREST(%s): %v", tc.operation, err)
+			}
+			var req *RESTRequest
+			for i := range spec.Requests {
+				if spec.Requests[i].Name == tc.request {
+					req = &spec.Requests[i]
+				}
+			}
+			if req == nil {
+				t.Fatalf("%s has no %q entry", tc.operation, tc.request)
+			}
+			if len(req.IDBindings) != 1 || req.IDBindings[0].Producer != tc.producer || req.IDBindings[0].BodyPath != "filters.scope.ids" {
+				t.Fatalf("%s IDBindings = %+v, want one BodyPath binding on filters.scope.ids to producer %q", tc.request, req.IDBindings, tc.producer)
+			}
+
+			produced := map[string]string{tc.producer: "live-42"}
+			_, _, resolvedBody, unresolved := ResolveRESTIDBindings(spec.Path, *req, produced)
+			if len(unresolved) != 0 {
+				t.Fatalf("%s unresolved = %v, want none", tc.request, unresolved)
+			}
+			body, ok := resolvedBody.(map[string]any)
+			if !ok {
+				t.Fatalf("%s resolvedBody = %#v, want a map[string]any", tc.request, resolvedBody)
+			}
+			filters, _ := body["filters"].(map[string]any)
+			scope, _ := filters["scope"].(map[string]any)
+			if scope["level"] != tc.level {
+				t.Fatalf("%s filters.scope.level = %#v, want %q", tc.request, scope["level"], tc.level)
+			}
+			ids, ok := scope["ids"].([]string)
+			if !ok || len(ids) != 1 || ids[0] != "live-42" {
+				t.Fatalf("%s filters.scope.ids = %#v, want [live-42]", tc.request, scope["ids"])
+			}
+		})
+	}
+}
+
+// TestDrilldownPRsRepoScoped_BindsToAPRProducingRepo pins the corpus-level
+// fix for the "repo_scoped" entry's own vacuous-refusal history: it must
+// bind scope_id to "pr_repo_id" -- a repo THIS OPERATION's own
+// "default_window" entry already showed, from a real PR item, to have a
+// PR in-window -- never back to filters/options' own "repo_id", an
+// arbitrary org repo with no PR-count signal that can resolve to zero
+// PRs. Also pins that "default_window" still declares the new producer
+// alongside its existing "pr_id" one, and that resolving the binding
+// actually substitutes scope_id in the request's query.
+func TestDrilldownPRsRepoScoped_BindsToAPRProducingRepo(t *testing.T) {
+	spec, err := SpecForREST("REST:GET:/api/v1/drilldown/prs")
+	if err != nil {
+		t.Fatalf("SpecForREST: %v", err)
+	}
+	if !producesID(spec, "default_window", "pr_repo_id") {
+		t.Error("GET /api/v1/drilldown/prs' default_window entry does not Produce pr_repo_id")
+	}
+	if !producesID(spec, "default_window", "pr_id") {
+		t.Error("GET /api/v1/drilldown/prs' default_window entry no longer Produces pr_id")
+	}
+
+	var repoScoped *RESTRequest
+	for i := range spec.Requests {
+		if spec.Requests[i].Name == "repo_scoped" {
+			repoScoped = &spec.Requests[i]
+		}
+	}
+	if repoScoped == nil {
+		t.Fatal("GET /api/v1/drilldown/prs has no repo_scoped entry")
+	}
+	if len(repoScoped.IDBindings) != 1 || repoScoped.IDBindings[0].Producer != "pr_repo_id" || repoScoped.IDBindings[0].QueryParam != "scope_id" {
+		t.Fatalf("repo_scoped IDBindings = %+v, want one QueryParam binding on scope_id to producer pr_repo_id", repoScoped.IDBindings)
+	}
+
+	produced := map[string]string{"pr_repo_id": "repo-with-a-pr"}
+	_, resolvedQuery, _, unresolved := ResolveRESTIDBindings(spec.Path, *repoScoped, produced)
+	if len(unresolved) != 0 {
+		t.Fatalf("unresolved = %v, want none", unresolved)
+	}
+	if got := resolvedQuery.Get("scope_id"); got != "repo-with-a-pr" {
+		t.Fatalf("resolved scope_id = %q, want repo-with-a-pr", got)
+	}
+}

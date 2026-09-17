@@ -291,12 +291,18 @@ func TestValidateRESTIDBindingOrder_RefusesAPathParamWithNoPlaceholder(t *testin
 // (a JSON number, not a string) on the SAME element -- JoinField reads the
 // second field off that same element and appends it after IDField's own
 // value, joined by ":", formatting the number as a base-10 integer with
-// no fractional part or exponent.
+// no fractional part or exponent. Decodes through DecodeRESTSnapshot, the
+// SAME json.Decoder(UseNumber) path admission.BaselineSnap.Data always
+// goes through in production (restadmit.go) -- a raw map[string]any{...,
+// "number": float64(42)} literal, as earlier versions of this test built
+// by hand, never occurs on that path and would have hidden
+// numericRESTIDField's own float64 assumption from this test entirely.
 func TestExtractRESTID_JoinFieldComposesRepoIDAndNumber(t *testing.T) {
-	body := map[string]any{"items": []any{
-		map[string]any{"repo_id": "r1", "number": float64(42)},
-	}}
-	got, ok := ExtractRESTID(body, RESTIDProducer{Name: "pr_id", ListPath: "items", IDField: "repo_id", JoinField: "number"})
+	snapshot, err := DecodeRESTSnapshot([]byte(`{"items":[{"repo_id":"r1","number":42}]}`))
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	got, ok := ExtractRESTID(snapshot.Data, RESTIDProducer{Name: "pr_id", ListPath: "items", IDField: "repo_id", JoinField: "number"})
 	if !ok {
 		t.Fatal("want an id, got none")
 	}
@@ -309,25 +315,25 @@ func TestExtractRESTID_JoinFieldComposesRepoIDAndNumber(t *testing.T) {
 // "both fields from the SAME element" rule: an element whose JoinField is
 // absent, non-numeric or fractional must be skipped entirely -- never
 // joined with an empty or truncated tail -- so ExtractRESTID moves on to
-// the next element instead of returning a malformed composite id.
+// the next element instead of returning a malformed composite id. Each
+// case decodes through DecodeRESTSnapshot, matching the JSON-number
+// decode path production always uses (see this test's own sibling above).
 func TestExtractRESTID_JoinFieldSkipsElementMissingTheSecondField(t *testing.T) {
 	cases := []struct {
 		name string
-		body map[string]any
+		json string
 	}{
-		{"number field absent", map[string]any{"items": []any{
-			map[string]any{"repo_id": "r1"},
-		}}},
-		{"number field is a string", map[string]any{"items": []any{
-			map[string]any{"repo_id": "r1", "number": "42"},
-		}}},
-		{"number field has a fractional part", map[string]any{"items": []any{
-			map[string]any{"repo_id": "r1", "number": 42.5},
-		}}},
+		{"number field absent", `{"items":[{"repo_id":"r1"}]}`},
+		{"number field is a string", `{"items":[{"repo_id":"r1","number":"42"}]}`},
+		{"number field has a fractional part", `{"items":[{"repo_id":"r1","number":42.5}]}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, ok := ExtractRESTID(tc.body, RESTIDProducer{Name: "pr_id", ListPath: "items", IDField: "repo_id", JoinField: "number"})
+			snapshot, err := DecodeRESTSnapshot([]byte(tc.json))
+			if err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			_, ok := ExtractRESTID(snapshot.Data, RESTIDProducer{Name: "pr_id", ListPath: "items", IDField: "repo_id", JoinField: "number"})
 			if ok {
 				t.Fatal("want a failed extraction, got ok")
 			}
@@ -340,13 +346,13 @@ func TestExtractRESTID_JoinFieldSkipsElementMissingTheSecondField(t *testing.T) 
 // still finds a LATER element whose own repo_id/number pair is complete,
 // the same "skip, don't stop" behaviour the existing empty-first-element
 // case (TestExtractRESTID_RootArrayOfObjects) already pins for IDField
-// alone.
+// alone. Decodes through DecodeRESTSnapshot, matching production.
 func TestExtractRESTID_JoinFieldSkipsToNextElement(t *testing.T) {
-	body := map[string]any{"items": []any{
-		map[string]any{"repo_id": "r1"},
-		map[string]any{"repo_id": "r2", "number": float64(7)},
-	}}
-	got, ok := ExtractRESTID(body, RESTIDProducer{Name: "pr_id", ListPath: "items", IDField: "repo_id", JoinField: "number"})
+	snapshot, err := DecodeRESTSnapshot([]byte(`{"items":[{"repo_id":"r1"},{"repo_id":"r2","number":7}]}`))
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	got, ok := ExtractRESTID(snapshot.Data, RESTIDProducer{Name: "pr_id", ListPath: "items", IDField: "repo_id", JoinField: "number"})
 	if !ok || got != "r2:7" {
 		t.Fatalf("got (%q, %v), want (r2:7, true)", got, ok)
 	}

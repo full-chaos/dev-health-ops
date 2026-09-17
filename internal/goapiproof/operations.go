@@ -188,10 +188,13 @@ var operationSpecs = map[string]OperationSpec{
 		Variables: func(orgID string, _ Window) map[string]any {
 			return map[string]any{"orgId": orgID, "input": map[string]any{}}
 		},
-		Parity: Options{VolatileFields: map[string]string{
-			"data.capacityForecast.forecastId": volatileForecastIdentity,
-			"data.capacityForecast.computedAt": volatileForecastIdentity,
-		}},
+		Parity: Options{
+			VolatileFields: map[string]string{
+				"data.capacityForecast.forecastId": volatileForecastIdentity,
+				"data.capacityForecast.computedAt": volatileForecastIdentity,
+			},
+			StochasticLeaves: capacityForecastStochasticLeaves,
+		},
 	},
 	// capacityForecasts (the LIST) declares no Tier-B and no volatile
 	// fields: its resolver reads stored columns back rather than
@@ -623,6 +626,43 @@ var operationSpecs = map[string]OperationSpec{
 		}}},
 	},
 	"workGraphFlow": {Variables: workGraphVariables, ResponseRoot: "workGraphFlow"},
+}
+
+// capacityForecastStochasticLeaves is the one StochasticLeafClass in this
+// table. Every capacityForecast leaf it does not name -- backlogSize,
+// targetItems, targetDate, throughputMean, historyDays and the rest -- is
+// still compared exactly.
+//
+// The items group is listed p95 first: the kernel takes the 50th, 15th and
+// 5th percentiles of simulated items and stores them as p50/p85/p95 (for
+// items the conservative answer is the LOW one), so p95Items <= p85Items <=
+// p50Items. Days and dates run the other way.
+var capacityForecastStochasticLeaves = &StochasticLeafClass{
+	Ticket: "CHAOS-5901",
+	Reason: "Mechanism: capacityForecast runs its Monte Carlo on every request with a fresh seed on both planes (the reference plane never seeds its generator; the Go resolver draws a seed from crypto/rand), so its percentile leaves are drawn values that differ between any two responses, including two from the same plane. Those leaves are not compared across planes; on each plane they are checked for type (date or integer), for order (p50 <= p85 <= p95 for days and dates, p95 <= p85 <= p50 for items), and each date for being the UTC date of computedAt plus its days leaf, and a null on one plane against a value on the other stays a finding. Scope: exactly the nine percentile leaves listed here; every other leaf of the operation is compared exactly. Blind spot: a plane drawing from the wrong distribution while keeping that order and those offsets passes; the distribution is pinned by the seeded golden fixtures tests/fixtures/capacity_forecast_golden.json (read by internal/jobs/metrics/numerical) and tests/fixtures/cpython_random_golden.json (read by internal/jobs/metrics/numerical/cpyrandom).",
+	Orderings: []StochasticOrdering{
+		{Type: StochasticTypeInteger, NonDecreasing: []string{
+			"data.capacityForecast.p50Days",
+			"data.capacityForecast.p85Days",
+			"data.capacityForecast.p95Days",
+		}},
+		{Type: StochasticTypeDate, NonDecreasing: []string{
+			"data.capacityForecast.p50Date",
+			"data.capacityForecast.p85Date",
+			"data.capacityForecast.p95Date",
+		}},
+		{Type: StochasticTypeInteger, NonDecreasing: []string{
+			"data.capacityForecast.p95Items",
+			"data.capacityForecast.p85Items",
+			"data.capacityForecast.p50Items",
+		}},
+	},
+	DateOffsets: []StochasticDateOffset{
+		{DatePath: "data.capacityForecast.p50Date", DaysPath: "data.capacityForecast.p50Days"},
+		{DatePath: "data.capacityForecast.p85Date", DaysPath: "data.capacityForecast.p85Days"},
+		{DatePath: "data.capacityForecast.p95Date", DaysPath: "data.capacityForecast.p95Days"},
+	},
+	BaseTimestampPath: "data.capacityForecast.computedAt",
 }
 
 // flowMatrixInvestmentVariant builds the TEAM or REPO flowMatrix Variant,

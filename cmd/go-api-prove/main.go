@@ -592,6 +592,7 @@ func emitReport(f flags, registry goapiproof.RegistryView, outcomes []goapiproof
 	for _, state := range sortedKeys(summary.ByTerminalState) {
 		fmt.Printf("go-api-prove:   terminal_state %s = %d\n", state, summary.ByTerminalState[state])
 	}
+	fmt.Printf("go-api-prove:   proven_under %s = %d\n", goapiproof.ProvenUnderStochasticLeafClass, summary.ProvenUnderStochasticLeafClass)
 	for _, reason := range sortedKeys(summary.ByRefusalReason) {
 		fmt.Printf("go-api-prove:   refused %s = %d\n", reason, summary.ByRefusalReason[reason])
 	}
@@ -1064,8 +1065,12 @@ func validateEndpointFlags(f flags) error {
 // names WHAT the citation covered and what it did not, by shape:
 // "one value differed" and "Go returned no rows" never print alike.
 func executedOutcomeLine(outcome goapiproof.Outcome) string {
+	verdict := outcome.TerminalState
+	if outcome.ProvenUnder != "" {
+		verdict += " PROVEN_UNDER=" + outcome.ProvenUnder
+	}
 	return fmt.Sprintf("go-api-prove:   %-22s mode=%-8s route=%-5s %s (%d findings, %d outside a declared baseline defect %v) %s",
-		outcome.Operation, outcome.Mode, outcome.Route, outcome.TerminalState,
+		outcome.Operation, outcome.Mode, outcome.Route, verdict,
 		len(outcome.Findings), outcome.DifferencesOutsideBaselineDefect, outcome.BaselineDefects,
 		goapiproof.FormatShapeCounts(outcome.CoveredByShape, outcome.OutsideByShape))
 }

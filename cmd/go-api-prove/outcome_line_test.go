@@ -35,3 +35,25 @@ func TestTheOutcomeLineNamesWhatTheCitationCovered(t *testing.T) {
 	t.Logf("leaf admission : %s", leafLine)
 	t.Logf("empty result   : %s", emptyLine)
 }
+
+// An operation proven under a stochastic leaf class prints its own word, so
+// its line never reads like one proven by equality or like a failed one.
+func TestTheOutcomeLineNamesAStochasticLeafClassProof(t *testing.T) {
+	classProven := goapiproof.Outcome{
+		Operation: "capacityForecast", Mode: "canary", Route: "edge", TerminalState: goapiproof.TerminalStateMismatch,
+		BaselineDefects: []string{goapiproof.StochasticLeafCitationPrefix + "ABC-123"},
+		ProvenUnder:     goapiproof.ProvenUnderStochasticLeafClass,
+		CoveredByShape:  map[string]int{goapiproof.ShapeStochasticLeaf: 2},
+	}
+	failed := classProven
+	failed.ProvenUnder = ""
+	failed.DifferencesOutsideBaselineDefect = 1
+	classLine, failedLine := executedOutcomeLine(classProven), executedOutcomeLine(failed)
+	if !strings.Contains(classLine, " mismatch PROVEN_UNDER=stochastic_leaf_class ") {
+		t.Fatalf("class-proven line does not name the class: %q", classLine)
+	}
+	if strings.Contains(failedLine, "PROVEN_UNDER") {
+		t.Fatalf("a line with no class proof names one: %q", failedLine)
+	}
+	t.Logf("class proven: %s", classLine)
+}

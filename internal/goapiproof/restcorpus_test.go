@@ -176,15 +176,21 @@ func TestRESTRequest_StatusDivergenceIsDeclaredOnlyWhereGenuine(t *testing.T) {
 		"REST:GET:/api/v1/drilldown/issues": {
 			// baseline answers 503 in production on the issue drilldown
 			// routes; query-api answers 200 with real data.
-			"default_window": true,
-			"range_days_90":  true,
+			"default_window":  true,
+			"range_days_90":   true,
+			"explicit_window": true,
+			"team_scoped":     true,
 		},
 		"REST:POST:/api/v1/drilldown/issues": {
 			"default_filters":         true,
 			"explicit_scope_and_sort": true,
+			"team_scoped":             true,
 		},
 		"REST:GET:/api/v1/people/{person_id}/drilldown/issues": {
-			"drilldown_issues_default": true,
+			"drilldown_issues_default":         true,
+			"valid_cursor":                     true,
+			"limit_above_ceiling":              true,
+			"limit_zero_falls_back_to_default": true,
 		},
 		"REST:GET:/api/v1/flame": {
 			// baseline answers 503 in production on the issue entity_type

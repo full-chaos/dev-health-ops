@@ -265,3 +265,38 @@ func TestBuildIssuesResponseTeamScopeBindsScopeIDs(t *testing.T) {
 		t.Fatalf("BuildIssuesResponse: %v", err)
 	}
 }
+
+// TestBuildIssuesResponseTeamScopeEmptyIDsNoFilter pins the third emitted-
+// statement shape scopeClauseTeam's own branch table covers -- team scope
+// with an EMPTY id list -- at the SAME full BuildIssuesResponse level
+// TestBuildIssuesResponseBindsExpectedParams (org) and
+// TestBuildIssuesResponseTeamScopeBindsScopeIDs (team, non-empty ids)
+// already pin, closing the gap TestScopeClauseTeamEmpty only covers at the
+// scopeClauseTeam unit level: no team predicate, no scope_ids binding,
+// same as an org-scoped request. Removing scopeClauseTeam's own `len(teamIDs)
+// == 0` guard turns this red.
+func TestBuildIssuesResponseTeamScopeEmptyIDsNoFilter(t *testing.T) {
+	client := fakeQueryClient{t: t, handler: func(_ *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+		if strings.Contains(query, "AND t.team_id IN {scope_ids:Array(String)}") {
+			t.Fatalf("team scope with no ids must not emit the team filter clause:\n%s", query)
+		}
+		if _, ok := bindingValue(bindings, "scope_ids"); ok {
+			t.Fatalf("team scope with no ids must not bind scope_ids")
+		}
+		return &fixtureRowScanner{rows: nil}, nil
+	}}
+	reader, err := NewReader(client)
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	_, err = BuildIssuesResponse(context.Background(), reader, "org-acme", IssueParams{
+		StartDay:   day(2024, 1, 1, 0, 0, 0),
+		EndDay:     day(2024, 1, 15, 0, 0, 0),
+		ScopeLevel: "team",
+		ScopeIDs:   nil,
+		Limit:      50,
+	})
+	if err != nil {
+		t.Fatalf("BuildIssuesResponse: %v", err)
+	}
+}

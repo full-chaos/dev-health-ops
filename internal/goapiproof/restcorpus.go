@@ -3047,16 +3047,24 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				// yield work_item_id refuses THIS request by name
 				// (RESTRefusalCandidateProducerUnresolved), and the
 				// consumer refuses separately, by name
-				// (rest_request_id_binding_unresolved).
+				// (rest_request_id_binding_unresolved). This request's
+				// own successful admission today is this entry's own
+				// structural evidence: an empty or malformed candidate
+				// body would have already refused it before this comment
+				// is ever reached.
 				Produces: []RESTIDProducer{{Name: "work_item_id", ListPath: "items", IDField: "work_item_id"}},
 			},
 			{
-				// Same baseline-only 503 as default_window above.
+				// Same baseline-only 503 as default_window above. Produces
+				// its own structural evidence (see default_window's own
+				// doc comment for the mechanism) on a different IssueItem
+				// field than default_window's own producer.
 				Name:                "range_days_90",
 				Query:               url.Values{"range_days": {"90"}},
 				WantCandidateStatus: 200, WantBaselineStatus: 503,
 				StatusDivergenceReason: "CHAOS-5868: the baseline plane answers HTTP 503 for this request in production; the candidate plane answers HTTP 200 with real data; bodies are not compared.",
 				BodyMode:               RESTBodyModeStatusOnly,
+				Produces:               []RESTIDProducer{{Name: "issues_range_days_90_provider", ListPath: "items", IDField: "provider"}},
 			},
 			{
 				// Same shared int_parsing validator drilldown/prs's own
@@ -3067,6 +3075,54 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				WantCandidateStatus: 422, WantBaselineStatus: 422,
 				BodyMode: RESTBodyModeJSON,
 			},
+			{
+				// start_date/end_date query params (route.go's own
+				// parseISODateQueryParam handling) -- the one branch of
+				// this GET route's own date parsing no other entry
+				// reaches. Same wide window GET /api/v1/quadrant's own
+				// custom_window_org entry already carries live, reused here
+				// rather than guessed fresh, to maximize the chance this
+				// range actually holds at least one issue. Same
+				// baseline-only 503 as default_window above.
+				Name:                "explicit_window",
+				Query:               url.Values{"start_date": {"2026-06-01"}, "end_date": {"2026-09-01"}},
+				WantCandidateStatus: 200, WantBaselineStatus: 503,
+				StatusDivergenceReason: "CHAOS-5868: the baseline plane answers HTTP 503 for this request in production; the candidate plane answers HTTP 200 with real data; bodies are not compared.",
+				BodyMode:               RESTBodyModeStatusOnly,
+				Produces:               []RESTIDProducer{{Name: "issues_explicit_window_status", ListPath: "items", IDField: "status"}},
+			},
+			{
+				// A malformed start_date -- the same shared
+				// parseISODateQueryParam/dateQueryParamError shape
+				// drilldown/prs' own GET and quadrant's own
+				// malformed_start_date entry already exercise
+				// (pydantic_validation_error.go unchanged): a real 422 on
+				// both planes, ahead of any ClickHouse call.
+				Name:                "malformed_start_date",
+				Query:               url.Values{"start_date": {"not-a-date"}},
+				WantCandidateStatus: 422, WantBaselineStatus: 422,
+				BodyMode: RESTBodyModeJSON,
+			},
+			{
+				// scope_type=team, scope_id bound to filters/options' own
+				// live team_id (restidbind.go) -- exercises scopeClauseTeam's
+				// own team branch (issues.go:98-105) live. This team_id
+				// carries no issue-count guarantee, so this alone does not
+				// prove the filter NARROWS the result -- only that the
+				// branch executes and answers a non-empty body (this
+				// entry's own Produces refuses it otherwise).
+				// TestBuildIssuesResponseTeamScopeBindsScopeIDs/
+				// TestBuildIssuesResponseBindsExpectedParams (issues_test.go)
+				// pin the emitted predicate/binding shape itself at the unit
+				// level. Same baseline-only 503 as default_window above.
+				Name:                "team_scoped",
+				Query:               url.Values{"scope_type": {"team"}},
+				WantCandidateStatus: 200, WantBaselineStatus: 503,
+				StatusDivergenceReason: "CHAOS-5868: the baseline plane answers HTTP 503 for this request in production; the candidate plane answers HTTP 200 with real data; bodies are not compared.",
+				BodyMode:               RESTBodyModeStatusOnly,
+				IDBindings:             []RESTIDBinding{{Producer: "team_id", QueryParam: "scope_id"}},
+				Produces:               []RESTIDProducer{{Name: "issues_team_scoped_work_item_id", ListPath: "items", IDField: "work_item_id"}},
+			},
 		},
 	},
 	"REST:POST:/api/v1/drilldown/issues": {
@@ -3075,12 +3131,15 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 		Requests: []RESTRequest{
 			{
 				// Same baseline-only 503 as GET /api/v1/drilldown/issues'
-				// own default_window entry.
+				// own default_window entry. Produces its own structural
+				// evidence (see that entry's own doc comment for the
+				// candidate-leg extraction mechanism).
 				Name:                "default_filters",
 				Body:                map[string]any{"filters": map[string]any{}},
 				WantCandidateStatus: 200, WantBaselineStatus: 503,
 				StatusDivergenceReason: "CHAOS-5868: the baseline plane answers HTTP 503 for this request in production; the candidate plane answers HTTP 200 with real data; bodies are not compared.",
 				BodyMode:               RESTBodyModeStatusOnly,
+				Produces:               []RESTIDProducer{{Name: "issues_post_default_filters_provider", ListPath: "items", IDField: "provider"}},
 			},
 			{
 				// This route's OWN documented asymmetry from drilldown/prs
@@ -3089,10 +3148,11 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				// means a "repo" scope level applies NO filter at all here
 				// -- a real behavioural difference, not a port defect, so
 				// no declaration covers it; this entry exercises exactly
-				// that no-op path (an org-level default scope) rather than
-				// a team scope this table has no live team id for.
+				// that no-op path (an org-level default scope). The team
+				// scope branch itself is exercised by this operation's own
+				// team_scoped entry below, live.
 				// Also baseline-only 503, same as this route's sibling
-				// entries.
+				// entries. Produces its own structural evidence.
 				Name: "explicit_scope_and_sort",
 				Body: map[string]any{
 					"filters": map[string]any{
@@ -3105,6 +3165,65 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				WantCandidateStatus: 200, WantBaselineStatus: 503,
 				StatusDivergenceReason: "CHAOS-5868: the baseline plane answers HTTP 503 for this request in production; the candidate plane answers HTTP 200 with real data; bodies are not compared.",
 				BodyMode:               RESTBodyModeStatusOnly,
+				Produces:               []RESTIDProducer{{Name: "issues_post_explicit_scope_and_sort_status", ListPath: "items", IDField: "status"}},
+			},
+			{
+				// filters.scope.level outside {org, team, repo, service,
+				// developer} -- the same Literal-enum 422 validateScopeFilter
+				// answers (pydantic_metric_filter.go), confirmed live by
+				// investment/explain's own sibling invalid_scope_level entry
+				// sharing the identical validator and error envelope.
+				Name: "invalid_scope_level",
+				Body: map[string]any{"filters": map[string]any{
+					"scope": map[string]any{"level": "not-a-real-scope-level"},
+				}},
+				WantCandidateStatus: 422, WantBaselineStatus: 422,
+				BodyMode: RESTBodyModeJSON,
+			},
+			{
+				// filters.scope.level="team" with a real, live team_id
+				// (filters/options' own producer) bound via BodyPath -- the
+				// POST-body twin of GET's own team_scoped entry above,
+				// exercising the SAME scopeClauseTeam branch. Same caveat as
+				// that entry: proves the branch executes and answers
+				// non-empty, not that the filter narrows.
+				Name: "team_scoped",
+				Body: map[string]any{"filters": map[string]any{
+					"scope": map[string]any{"level": "team", "ids": []string{"11111111-1111-1111-1111-111111111111"}},
+				}},
+				WantCandidateStatus: 200, WantBaselineStatus: 503,
+				StatusDivergenceReason: "CHAOS-5868: the baseline plane answers HTTP 503 for this request in production; the candidate plane answers HTTP 200 with real data; bodies are not compared.",
+				BodyMode:               RESTBodyModeStatusOnly,
+				IDBindings:             []RESTIDBinding{{Producer: "team_id", BodyPath: "filters.scope.ids"}},
+				Produces:               []RESTIDProducer{{Name: "issues_post_team_scoped_work_item_id", ListPath: "items", IDField: "work_item_id"}},
+			},
+			{
+				// sort is present but not a string -- newDrilldownIssuesPostHandler's
+				// stringBodyFieldError branch (drilldown_issues_route.go),
+				// the same shared validator drilldown/prs' own POST already
+				// uses (confirmed live for every non-string JSON type,
+				// stringBodyFieldError's own doc comment).
+				Name: "sort_wrong_type",
+				Body: map[string]any{
+					"filters": map[string]any{},
+					"sort":    123,
+				},
+				WantCandidateStatus: 422, WantBaselineStatus: 422,
+				BodyMode: RESTBodyModeJSON,
+			},
+			{
+				// limit is present but not int-coercible -- coerceIntBodyField's
+				// own int_parsing branch (drilldown_issues_route.go),
+				// confirmed live for every branch by that function's own
+				// doc comment; the same validator drilldown/prs' own POST
+				// already uses.
+				Name: "limit_wrong_type",
+				Body: map[string]any{
+					"filters": map[string]any{},
+					"limit":   "not-a-number",
+				},
+				WantCandidateStatus: 422, WantBaselineStatus: 422,
+				BodyMode: RESTBodyModeJSON,
 			},
 			{
 				// Same shared "missing filters key" validator drilldown/
@@ -3713,12 +3832,36 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				BodyMode: RESTBodyModeJSON,
 			},
 			{
+				// Same shared int_parsing validator drilldown/prs's own
+				// GET already exercises, for this route's OWN limit query
+				// param (people_drilldown_issues_route.go's own
+				// intQueryParamError call, distinct from range_days above).
+				Name:                "invalid_limit",
+				Query:               url.Values{"limit": {"not-a-number"}},
+				WantCandidateStatus: 422, WantBaselineStatus: 422,
+				BodyMode: RESTBodyModeJSON,
+			},
+			{
 				// Same shared cursor validator drilldown/prs's own GET
 				// already exercises (both routes share
 				// pydantic_validation_error.go unchanged).
 				Name:                "malformed_cursor",
 				Query:               url.Values{"cursor": {"not-a-date"}},
 				WantCandidateStatus: 422, WantBaselineStatus: 422,
+				BodyMode: RESTBodyModeJSON,
+			},
+			{
+				// _reject_comparative_params (main.py) runs BEFORE the
+				// try/except that produces this route's own 503 -- real and
+				// comparable on both planes even though every success path
+				// on this route is baseline-only 503. Same mechanism/body
+				// shape GET /api/v1/people's own comparative_param_rejected
+				// entry already exercises (people_route.go's own
+				// writeRESTError doc comment; peopleForbiddenQueryParams is
+				// this route's own copy of the identical set).
+				Name:                "comparative_param_rejected",
+				Query:               url.Values{"compare_to": {"1"}},
+				WantCandidateStatus: 400, WantBaselineStatus: 400,
 				BodyMode: RESTBodyModeJSON,
 			},
 			{
@@ -3732,13 +3875,75 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				StatusDivergenceReason: "CHAOS-5868: the baseline plane answers HTTP 503 for this request in production; the candidate plane answers HTTP 200 with real data; bodies are not compared.",
 				BodyMode:               RESTBodyModeStatusOnly,
 				IDBindings:             []RESTIDBinding{{Producer: "person_id", PathParam: "person_id"}},
-				// Produces declares provider for flame/aggregated's own
-				// cycle_breakdown_provider_scoped entry, but this
-				// request's body is never decoded under BodyMode:
-				// status_only, so the id is never actually extracted --
-				// that consumer stays refused by name
-				// (rest_request_id_binding_unresolved), not hidden.
-				Produces: []RESTIDProducer{{Name: "provider", ListPath: "items", IDField: "provider"}},
+				// Produces provider for flame/aggregated's own
+				// cycle_breakdown_provider_scoped entry AND, since
+				// WantCandidateStatus is 200 with WantBaselineStatus 503, as
+				// this entry's own structural evidence: a StatusOnly+Produces
+				// request extracts from the CANDIDATE leg's decoded body
+				// (proveOneRESTRequest, cmd/go-api-rest-prove/main.go). A body
+				// that does not yield provider refuses THIS request by name
+				// (RESTRefusalCandidateProducerUnresolved); a downstream
+				// consumer refuses separately, by name
+				// (rest_request_id_binding_unresolved). Also produces
+				// person_issue_completed_at, the FIRST returned issue's own
+				// completed_at (ExtractRESTID only ever returns the first
+				// non-empty match, restidbind.go's own doc comment) -- the
+				// real `next_cursor` shape a caller would actually send back
+				// (parseISODateTimeQueryParam's own doc comment: "always the
+				// next_cursor this same route's own previous response
+				// emitted"), consumed by this operation's own valid_cursor
+				// entry below.
+				Produces: []RESTIDProducer{
+					{Name: "provider", ListPath: "items", IDField: "provider"},
+					{Name: "person_issue_completed_at", ListPath: "items", IDField: "completed_at"},
+				},
+			},
+			{
+				// cursor bound to drilldown_issues_default's own first
+				// item's completed_at above -- reaches fetchPersonIssuesQuery's
+				// own cursor_filter branch (drilldownissues.go:138-141)
+				// live. A cursor at the FIRST item's own completed_at (the
+				// only item ExtractRESTID can ever supply) still returns
+				// every older issue behind it, so this is not vacuous. Same
+				// baseline-only 503 as drilldown_issues_default above.
+				Name:                "valid_cursor",
+				WantCandidateStatus: 200, WantBaselineStatus: 503,
+				StatusDivergenceReason: "CHAOS-5868: the baseline plane answers HTTP 503 for this request in production; the candidate plane answers HTTP 200 with real data; bodies are not compared.",
+				BodyMode:               RESTBodyModeStatusOnly,
+				IDBindings: []RESTIDBinding{
+					{Producer: "person_id", PathParam: "person_id"},
+					{Producer: "person_issue_completed_at", QueryParam: "cursor"},
+				},
+				Produces: []RESTIDProducer{{Name: "issues_valid_cursor_status", ListPath: "items", IDField: "status"}},
+			},
+			{
+				// limit above boundedDrilldownLimit's own 200 ceiling
+				// (drilldownprs.go:37-55, shared with this route) -- clamps
+				// rather than 422s. TestBoundedDrilldownLimitClamp
+				// (drilldownprs_test.go) pins the clamp function itself;
+				// this proves the route actually applies it live, against a
+				// real person_id. Same baseline-only 503 as
+				// drilldown_issues_default above.
+				Name:                "limit_above_ceiling",
+				Query:               url.Values{"limit": {"500"}},
+				WantCandidateStatus: 200, WantBaselineStatus: 503,
+				StatusDivergenceReason: "CHAOS-5868: the baseline plane answers HTTP 503 for this request in production; the candidate plane answers HTTP 200 with real data; bodies are not compared.",
+				BodyMode:               RESTBodyModeStatusOnly,
+				IDBindings:             []RESTIDBinding{{Producer: "person_id", PathParam: "person_id"}},
+				Produces:               []RESTIDProducer{{Name: "issues_limit_above_ceiling_work_item_id", ListPath: "items", IDField: "work_item_id"}},
+			},
+			{
+				// limit=0 -- boundedDrilldownLimit's own <=0 branch falls
+				// back to 50, the same "absent and zero share one fallback"
+				// contract that function's own doc comment states. Same
+				// baseline-only 503 as drilldown_issues_default above.
+				Name:                "limit_zero_falls_back_to_default",
+				Query:               url.Values{"limit": {"0"}},
+				WantCandidateStatus: 200, WantBaselineStatus: 503,
+				StatusDivergenceReason: "CHAOS-5868: the baseline plane answers HTTP 503 for this request in production; the candidate plane answers HTTP 200 with real data; bodies are not compared.",
+				BodyMode:               RESTBodyModeStatusOnly,
+				IDBindings:             []RESTIDBinding{{Producer: "person_id", PathParam: "person_id"}},
+				Produces:               []RESTIDProducer{{Name: "issues_limit_zero_provider", ListPath: "items", IDField: "provider"}},
 			},
 		},
 	},

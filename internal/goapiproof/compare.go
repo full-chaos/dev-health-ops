@@ -231,11 +231,27 @@ type Result struct {
 	// wrong. Either way the entry must go, so the caller fails the run.
 	StaleBaselineDefects []string `json:"stale_baseline_defects,omitempty"`
 
-	// IdleIntermittentBaselineDefects names intermittent entries that
-	// cover no difference here. Unlike a stale entry this does not fail
-	// the run: the defect is expected to be absent while the baseline's
-	// source table is merged. It is recorded so an idle declaration stays
-	// visible instead of silent.
+	// LiveBaselineDefectsUnexplained names SHAPED entries whose own cited
+	// Paths carried at least one real leaf-level difference this run --
+	// the mechanism was LIVE, not absent -- but whose shape admitted NONE
+	// of them. This is deliberately never folded into
+	// IdleIntermittentBaselineDefects, Intermittent or not: "idle" means
+	// the citation's own Paths carried nothing to explain, which is a
+	// property of the request (a merge happened, a population moved on);
+	// this means they carried something and the shape's own rules failed
+	// to account for it, which is a property of the SHAPE, and staying
+	// silent about that difference is exactly the failure mode this
+	// package's four fixed checks-that-cannot-fail were. The caller fails
+	// the run on this exactly as it does on a stale declaration.
+	LiveBaselineDefectsUnexplained []string `json:"live_baseline_defects_unexplained,omitempty"`
+
+	// IdleIntermittentBaselineDefects names intermittent entries whose
+	// own cited Paths carried NO difference here at all -- the true idle
+	// case: the mechanism is absent, there is nothing to explain. Unlike
+	// a stale entry (or a live-but-unexplained one, above) this does not
+	// fail the run: the defect is expected to be absent while the
+	// baseline's source table is merged. It is recorded so an idle
+	// declaration stays visible instead of silent.
 	IdleIntermittentBaselineDefects []string `json:"idle_intermittent_baseline_defects,omitempty"`
 
 	// DifferencesOutsideBaselineDefect counts the mismatch findings NOT
@@ -650,8 +666,30 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 	}
 
 	covered := make([]bool, len(mismatches))
-	var matched, stale, idle []string
-	for _, defect := range defects {
+	// perDefect records what each defect touched, for a SECOND pass below
+	// once `covered` is FINAL across every defect -- a shaped defect's own
+	// citation can legitimately share Paths with a SIBLING declaration
+	// that explains the same finding through a different mechanism
+	// (CoverageShiftShape's own doc comment: the repos-join fan-out cites
+	// the same two coverage leaves), and that sibling can run before or
+	// after this one in `defects`. Deciding "live but unexplained" from
+	// `covered` while it is still partially built would flag a citation
+	// as unexplained purely because ITS sibling had not been processed
+	// yet, or wrongly clear it because a defect processed later covers
+	// the same finding for an unrelated reason -- either way the wrong
+	// entry gets refused. So every defect's plans run first, `covered` is
+	// finished, and only THEN is each defect judged against the final
+	// state.
+	type perDefect struct {
+		hit    bool
+		shaped bool
+		// touched names the leaf-finding indices this SHAPED defect's own
+		// Paths covered (defectCovers matched, leafDifference true),
+		// admitted or not -- the set "live but unexplained" is drawn from.
+		touched []int
+	}
+	verdicts := make([]perDefect, len(defects))
+	for d, defect := range defects {
 		hit := false
 		// Built once per defect, not per finding: a shape's plan (its
 		// per-repo multiplier map and aggregate totals, or its
@@ -688,6 +726,7 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 		// double-report alongside the shape that actually explains the
 		// difference.
 		shaped := repoPlan != nil || covPlan != nil || dedupPlan != nil || skewPlan != nil
+		var touched []int
 		for i, path := range mismatches {
 			if !defectCovers(defect, path) {
 				continue
@@ -701,6 +740,9 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 			}
 			if !leafDifference(shapes[i]) {
 				continue
+			}
+			if shaped {
+				touched = append(touched, i)
 			}
 			admitted := !shaped
 			switch {
@@ -730,9 +772,40 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 				hit = true
 			}
 		}
+		verdicts[d] = perDefect{hit: hit, shaped: shaped, touched: touched}
+	}
+
+	var matched, stale, idle, liveUnexplainedDefects []string
+	for d, defect := range defects {
+		v := verdicts[d]
+		// liveUnexplained is decided against the FINAL `covered`, now that
+		// every defect (including a sibling sharing this one's Paths) has
+		// run: it means this shaped defect's own cited Paths carried at
+		// least one leaf-level finding this run (the mechanism was LIVE,
+		// not absent) that NOBODY -- this defect's own shape or any
+		// sibling's -- ended up covering.
+		liveUnexplained := false
+		if v.shaped && !v.hit {
+			for _, i := range v.touched {
+				if !covered[i] {
+					liveUnexplained = true
+					break
+				}
+			}
+		}
 		switch {
-		case hit:
+		case v.hit:
 			matched = append(matched, defect.Ticket)
+		case liveUnexplained:
+			// Refused ALWAYS, Intermittent or not: the Intermittent
+			// exemption below is for a citation whose Paths carried
+			// nothing at all this run, which is a different, honest state
+			// (the source table happened to be merged) from "carried
+			// something and nothing explained it" -- a declaration that
+			// explains nothing while live is either stale, wrong, or
+			// masking an unrelated difference by accident, and none of
+			// those may pass quietly.
+			liveUnexplainedDefects = append(liveUnexplainedDefects, defect.Ticket)
 		case defect.Intermittent && validateBaselineDefects([]BaselineDefect{defect}) == nil:
 			// Absent while the baseline's source table is merged: expected,
 			// so recorded as idle and never as stale.
@@ -744,6 +817,7 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 	sort.Strings(matched)
 	sort.Strings(stale)
 	sort.Strings(idle)
+	sort.Strings(liveUnexplainedDefects)
 
 	outside := 0
 	coveredByShape, outsideByShape := map[string]int{}, map[string]int{}
@@ -760,6 +834,7 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 	result.OutsideByShape = outsideByShape
 	result.BaselineDefectsMatched = matched
 	result.StaleBaselineDefects = stale
+	result.LiveBaselineDefectsUnexplained = liveUnexplainedDefects
 	result.IdleIntermittentBaselineDefects = idle
 	result.DifferencesOutsideBaselineDefect = outside
 }

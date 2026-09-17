@@ -33,15 +33,24 @@ import "math"
 //     read, so a real instance never coexists with a difference
 //     anywhere else in the response -- including the repos-join fan-out,
 //     which always also moves at least one sankey node or edge.
-//  2. sankey.nodes and sankey.edges carry byte-identical decoded values
-//     on both sides. Checked directly here, not merely inferred from
-//     rule 1's absence of a Finding: nodes/edges values are declared
-//     FloatTierB (CHAOS-5451) for this operation, so a difference small
-//     enough to sit inside that merged-aggregate tolerance produces no
-//     Finding at all, and this shape's own bound (rule 3) is tighter
-//     than that tolerance is meant to excuse -- rule 1 alone cannot see
-//     a sub-tolerance node/edge drift, so rule 2 reads the raw values
-//     independently.
+//  2. sankey.nodes and sankey.edges agree within the SAME Tier-B
+//     tolerance (floatTolerance, compareNumber's own max(abs, rel)
+//     shape) these two paths are already declared under this
+//     operation's own FloatTierB entry -- not byte equality. Checked
+//     directly here, not merely inferred from rule 1's absence of a
+//     Finding: a sub-tolerance node/edge drift produces no Finding at
+//     all, and rule 1 alone cannot see it, so rule 2 reads the raw
+//     values independently. Byte equality was measured to be
+//     unreachable against two independently-computed real values: this
+//     operation's own committed FloatTierB entry for repoCoverage
+//     already records a 1-ULP difference
+//     (0.9931181145418517 vs 0.9931181145418516) under otherwise
+//     MATCHING semantics, and this package's own job5 real-capture pair
+//     (testdata/investmentfull_{baseline,candidate}_job5_*.json) shows
+//     the identical shape on nodes and edges themselves (~1e-13,
+//     comfortably inside floatTolerance) -- so requiring byte-identical
+//     nodes/edges made this rule unable to admit its own claimed
+//     mechanism on real production data at all.
 //  3. Both coverage ratios lie in [0,1] and differ from each other by no
 //     more than coverageShiftMaxRelativeDelta. A single work unit
 //     transitioning moves one row between assigned and unassigned out of
@@ -103,7 +112,7 @@ func buildCoverageShiftPlan(shape *CoverageShiftShape, baselineData, candidateDa
 	if !ok1 || !ok2 || !ok3 || !ok4 {
 		return plan
 	}
-	if !nodeValuesExactlyEqual(baseNodes, candNodes) || !edgeValuesExactlyEqual(baseEdges, candEdges) {
+	if !nodeValuesMatchTiered(baseNodes, candNodes) || !edgeValuesMatchTiered(baseEdges, candEdges) {
 		return plan
 	}
 
@@ -147,35 +156,49 @@ func coverageShiftWithinBound(base, candidate float64) bool {
 	return math.Abs(base-candidate)/denominator <= coverageShiftMaxRelativeDelta
 }
 
-// nodeValuesExactlyEqual reports whether two id->value maps (as decoded
-// by sankeyNodeValues) carry the same ids and the same values. Keyed by
-// id rather than position, so this is unaffected by CHAOS-5546's
-// nodes/edges ordering nondeterminism the same way sankeyNodeValues
-// itself is.
-func nodeValuesExactlyEqual(a, b map[string]float64) bool {
+// nodeValuesMatchTiered reports whether two id->value maps (as decoded
+// by sankeyNodeValues) carry the same ids and values that agree within
+// floatTolerance -- see rule 2's own doc comment above for why this is
+// tiered, not byte equality. Keyed by id rather than position, so this
+// is unaffected by the sankey nodes/edges ordering nondeterminism the
+// same way sankeyNodeValues itself is.
+func nodeValuesMatchTiered(a, b map[string]float64) bool {
 	if len(a) != len(b) {
 		return false
 	}
 	for id, value := range a {
 		other, ok := b[id]
-		if !ok || value != other {
+		if !ok || !floatsMatchTiered(value, other) {
 			return false
 		}
 	}
 	return true
 }
 
-// edgeValuesExactlyEqual is nodeValuesExactlyEqual's edge-side twin, over
+// edgeValuesMatchTiered is nodeValuesMatchTiered's edge-side twin, over
 // the source\x1ftarget-keyed maps sankeyEdgeInfoMap decodes.
-func edgeValuesExactlyEqual(a, b map[string]repoFanoutEdge) bool {
+func edgeValuesMatchTiered(a, b map[string]repoFanoutEdge) bool {
 	if len(a) != len(b) {
 		return false
 	}
 	for key, edge := range a {
 		other, ok := b[key]
-		if !ok || edge.value != other.value {
+		if !ok || !floatsMatchTiered(edge.value, other.value) {
 			return false
 		}
 	}
 	return true
+}
+
+// floatsMatchTiered mirrors compareNumber's own FloatTierB tolerance
+// shape (max(abs, rel) against the package's floatTolerance constant) --
+// the SAME tolerance data.analytics.sankey.nodes.value/.edges.value are
+// already declared under in this operation's own FloatTierB entry, so
+// this rule never holds them to a tighter standard than the comparator
+// itself does. NaN/Infinity fall out of the ordinary comparison (math.Abs of a
+// NaN difference is never <= a finite tolerance), matching compareNumber's
+// own "NaN/Infinity always mismatches" rule without a separate check.
+func floatsMatchTiered(a, b float64) bool {
+	tolerance := math.Max(floatTolerance, floatTolerance*math.Max(math.Abs(a), math.Abs(b)))
+	return math.Abs(a-b) <= tolerance
 }

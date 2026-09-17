@@ -162,6 +162,98 @@ func TestRunHonoursTheIntermittentFlagOnlyForTheStaleRefusal(t *testing.T) {
 	}
 }
 
+// A SHAPED defect's own cited paths carrying a real leaf-level difference
+// this run -- the mechanism is LIVE, not absent -- that its shape does not
+// admit must refuse the run (LiveBaselineDefectsUnexplained), never read as
+// idle: "idle" is for a citation whose Paths carried nothing at all, and
+// conflating the two is exactly the silent-pass failure class this package
+// exists to close.
+func TestCompareShapedBaselineDefectLiveButUnexplainedRefusesEvenIntermittent(t *testing.T) {
+	// Only ONE coverage leaf moves in the required (downward) direction;
+	// the other moves the WRONG way, so SupersessionSkewShape's rule 2
+	// fails and admits nothing -- but both leaves are still under the
+	// defect's own Paths, and a leaf finding genuinely exists there.
+	baseline := `{"data":{"analytics":{"sankey":{"coverage":{"teamCoverage":0.85,"repoCoverage":0.9}}}}}`
+	candidate := `{"data":{"analytics":{"sankey":{"coverage":{"teamCoverage":0.9,"repoCoverage":0.85}}}}}`
+	defect := BaselineDefect{
+		Ticket: "ABC-123", Reason: "test fixture",
+		Paths: []string{
+			"data.analytics.sankey.coverage.teamCoverage",
+			"data.analytics.sankey.coverage.repoCoverage",
+		},
+		Intermittent:       true,
+		IntermittentReason: "test fixture",
+		SupersessionSkewShape: &SupersessionSkewShape{
+			TeamCoveragePath: "data.analytics.sankey.coverage.teamCoverage",
+			RepoCoveragePath: "data.analytics.sankey.coverage.repoCoverage",
+		},
+	}
+	result := Compare(snapshotFromJSON(t, baseline), snapshotFromJSON(t, candidate), Options{BaselineDefects: []BaselineDefect{defect}})
+	if len(result.BaselineDefectsMatched) != 0 {
+		t.Fatalf("the shape admits nothing here, so nothing matched: %v", result.BaselineDefectsMatched)
+	}
+	if len(result.IdleIntermittentBaselineDefects) != 0 {
+		t.Fatalf("the citation's own paths carried real findings -- it must not read as idle: %v", result.IdleIntermittentBaselineDefects)
+	}
+	if len(result.StaleBaselineDefects) != 0 {
+		t.Fatalf("a shaped, live-but-unexplained entry is its own bucket, not stale: %v", result.StaleBaselineDefects)
+	}
+	if !equalStrings(result.LiveBaselineDefectsUnexplained, []string{"ABC-123"}) {
+		t.Fatalf("liveBaselineDefectsUnexplained = %v, want [ABC-123]", result.LiveBaselineDefectsUnexplained)
+	}
+	if result.DifferencesOutsideBaselineDefect != 2 {
+		t.Fatalf("outside = %d, want 2 -- neither coverage leaf is covered: findings %+v", result.DifferencesOutsideBaselineDefect, result.Findings)
+	}
+}
+
+// The SAME live-but-unexplained shaped defect must NOT be flagged when a
+// SIBLING declaration -- covering the identical two paths through a
+// DIFFERENT, unshaped mechanism -- explains the finding instead. The shaped
+// defect's own mechanism genuinely did not fire; that is an honest idle,
+// not a masked failure, and the two-pass classification must tell them
+// apart regardless of which of the two defects happens to run first.
+func TestCompareShapedBaselineDefectIsIdleWhenASiblingExplainsTheSameFinding(t *testing.T) {
+	baseline := `{"data":{"analytics":{"sankey":{"coverage":{"teamCoverage":0.85,"repoCoverage":0.9}}}}}`
+	candidate := `{"data":{"analytics":{"sankey":{"coverage":{"teamCoverage":0.9,"repoCoverage":0.85}}}}}`
+	shaped := BaselineDefect{
+		Ticket: "ABC-123", Reason: "test fixture",
+		Paths: []string{
+			"data.analytics.sankey.coverage.teamCoverage",
+			"data.analytics.sankey.coverage.repoCoverage",
+		},
+		Intermittent:       true,
+		IntermittentReason: "test fixture",
+		SupersessionSkewShape: &SupersessionSkewShape{
+			TeamCoveragePath: "data.analytics.sankey.coverage.teamCoverage",
+			RepoCoveragePath: "data.analytics.sankey.coverage.repoCoverage",
+		},
+	}
+	blanket := BaselineDefect{
+		Ticket: "DEF-456", Reason: "test fixture",
+		Paths: []string{
+			"data.analytics.sankey.coverage.teamCoverage",
+			"data.analytics.sankey.coverage.repoCoverage",
+		},
+		Intermittent:       true,
+		IntermittentReason: "test fixture",
+	}
+	for _, order := range [][]BaselineDefect{{shaped, blanket}, {blanket, shaped}} {
+		result := Compare(snapshotFromJSON(t, baseline), snapshotFromJSON(t, candidate), Options{BaselineDefects: order})
+		if !equalStrings(result.BaselineDefectsMatched, []string{"DEF-456"}) {
+			t.Fatalf("matched = %v, want [DEF-456]", result.BaselineDefectsMatched)
+		}
+		if !equalStrings(result.IdleIntermittentBaselineDefects, []string{"ABC-123"}) {
+			t.Fatalf("idle = %v, want [ABC-123] -- the shaped defect's own mechanism genuinely did not fire", result.IdleIntermittentBaselineDefects)
+		}
+		if len(result.LiveBaselineDefectsUnexplained) != 0 {
+			t.Fatalf("liveBaselineDefectsUnexplained = %v, want none -- a sibling covered the finding", result.LiveBaselineDefectsUnexplained)
+		}
+		if result.DifferencesOutsideBaselineDefect != 0 {
+			t.Fatalf("outside = %d, want 0 -- the blanket sibling covers both leaves: findings %+v", result.DifferencesOutsideBaselineDefect, result.Findings)
+		}
+	}
+}
+
 func equalStrings(got, want []string) bool {
 	if len(got) != len(want) {
 		return false

@@ -393,6 +393,9 @@ func resultVacuityErrors(result goapiproof.Result) []string {
 	if len(result.StaleBaselineDefects) > 0 {
 		errs = append(errs, fmt.Sprintf("stale BaselineDefects: %v", result.StaleBaselineDefects))
 	}
+	if len(result.LiveBaselineDefectsUnexplained) > 0 {
+		errs = append(errs, fmt.Sprintf("live but unexplained BaselineDefects: %v", result.LiveBaselineDefectsUnexplained))
+	}
 	if len(result.UnusedOrderInsensitiveLists) > 0 {
 		errs = append(errs, fmt.Sprintf("unused OrderInsensitiveLists: %v", result.UnusedOrderInsensitiveLists))
 	}

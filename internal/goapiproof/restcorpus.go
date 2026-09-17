@@ -433,6 +433,31 @@ var personDrilldownIssuesParity = Options{
 	},
 }
 
+// flamePRIDBoundParity is GET /api/v1/flame's own live (pr_id-bound, 200)
+// "pr" entity_type entry below. flame_route.go's own package doc comment
+// (cmd/query-api/internal/flame) states the citation this mirrors: both
+// git_pull_requests and git_pull_request_reviews are ReplacingMergeTree(
+// last_synced) (000_raw_tables.sql, sort-keyed by migration 027), and
+// api/queries/flame.py's fetch_pull_request reads a bare `LIMIT 1` (no
+// ORDER BY, no FINAL) while fetch_pull_request_reviews reads `ORDER BY
+// submitted_at` with no FINAL either -- neither dedups an unmerged
+// physical version of the same logical row. This is the same declared
+// defect class drilldown/prs' own corpus entry (drilldownPRsParity)
+// already tracks for git_pull_requests, at a different query site over
+// the same table plus its review sibling. This port reads both FINAL
+// (flame.go's own doc comment). Go is correct.
+var flamePRIDBoundParity = Options{
+	BaselineDefects: []BaselineDefect{
+		{
+			Ticket:             "CHAOS-5803",
+			Reason:             "git_pull_requests and git_pull_request_reviews are both ReplacingMergeTree(last_synced) (000_raw_tables.sql, org_id added to both sorting keys by migration 027); api/queries/flame.py's fetch_pull_request reads git_pull_requests with a bare LIMIT 1 (no ORDER BY, no FINAL) and fetch_pull_request_reviews reads git_pull_request_reviews ordered by submitted_at with no FINAL either -- neither dedups an unmerged physical version of the same logical row. This port's fetchPullRequest/fetchPullRequestReviews (cmd/query-api/internal/flame) read both tables FINAL. An unmerged physical version can surface a stale PR field (entity/timeline/frame values derived from it) or a stale/duplicated review that shifts the rework-window frames this entity_type builds. Go is correct. This citation's Paths reach the divergence but, by this package's own leaf-only coverage rule (BaselineDefect's doc comment), never silently admit a length or structural difference: it stays a real, uncovered finding on the receipt whenever it fires.",
+			Paths:              []string{"data"},
+			Intermittent:       true,
+			IntermittentReason: "present only while git_pull_requests or git_pull_request_reviews holds an unmerged physical version for this PR's own rows since the last merge; a comparison taken after the next background merge shows no divergence",
+		},
+	},
+}
+
 // restEndpointSpecs is the committed per-route corpus, keyed by
 // routeswitch operation name.
 //
@@ -509,19 +534,30 @@ var personDrilldownIssuesParity = Options{
 // stays refused: an invented id is worse than no entry at all
 // (operations.go's own `pr` doc comment).
 //
-// flame's corpus is REFUSED-BY-NAME only, even with id binding now
-// available: every entry below is a deterministic 4xx that
+// flame's corpus covers both deterministic-refusal requests (every 4xx
 // build_flame_response/internal/flame.BuildResponse answers BEFORE any
-// ClickHouse call, never a live 200. The flame entity_id needs a PR
-// number, a work_item_id, or a deployment_id (a repo_id:number,
-// repo_id:deployment_id pair, or a bare work_item_id) -- none of which
-// any producer in this table supplies yet (GET /api/v1/people produces
-// person_id; GET /api/v1/filters/options produces team_id/repo_id; no
-// request anywhere in restRunOrder produces a PR number, work_item_id or
-// deployment_id). Until a producer for one of those exists, this table
-// cannot construct a request that reaches a row this org's live data
-// actually has, so it covers only the entity_type/entity_id validation
-// surface and the entity-id-shape guards, which need no live id at all.
+// ClickHouse call) AND, now that a producer exists for two of its three
+// entity_id shapes, two live 200 entries: pr_entity_id_bound_200 (entity_id
+// bound to pr_id, produced by GET /api/v1/drilldown/prs' own default_window
+// entry as "<repo_id>:<number>", parseRepoEntity's own shape) and
+// issue_entity_id_bound_200 (entity_id bound to work_item_id, produced by
+// GET /api/v1/drilldown/issues' own default_window entry, a bare string --
+// the flame "issue" entity_id IS the work_item_id, no repo prefix). Both
+// producers run strictly before flame in restRunOrder.
+//
+// The THIRD entity_type, "deployment", stays refused-by-name: its
+// entity_id is a "<repo_id>:<deployment_id>" pair (parseRepoEntity, same
+// shape as "pr"), and no route this corpus covers exposes a deployment_id
+// anywhere in its response body -- not GET /api/v1/heatmap (Cell/Evidence
+// carry PRs and commits, no deployments), not GET /api/v1/quadrant or
+// /api/v1/explain (metric values only), and no drilldown or people route
+// reads the deployments table at all. A producer would need a NEW route,
+// or a NEW field on an existing one, to read deployments (ReplacingMergeTree
+// (last_synced), sort-keyed (org_id, repo_id, deployment_id) since
+// migration 027) and expose deployment_id on the wire -- out of scope
+// here; this table cannot invent an id no ported route's response ever
+// carries (operations.go's own `pr` doc comment states the identical
+// rule for the GraphQL corpus's own unproducible id).
 // AssertRESTPathCoverage is satisfied by these entries' PATH regardless.
 
 // heatmapDedupParity is shared by every admissible (2xx) heatmap request:
@@ -1040,6 +1076,14 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
 				BodyMode: RESTBodyModeJSON, Parity: drilldownPRsParity,
 				DedupListPath: drilldownPRsDedup.ListPath, DedupKeyFields: drilldownPRsDedup.KeyFields,
+				// Produces pr_id from this response's own FIRST item as
+				// "<repo_id>:<number>" -- flame's own "pr" entity_id
+				// shape (parseRepoEntity, cmd/query-api/internal/flame)
+				// -- via restidbind.go's JoinField, so both halves come
+				// from the SAME PR rather than an independently-produced
+				// repo_id that might name a different repo. Consumed by
+				// flame's own pr_entity_id_bound_200 entry below.
+				Produces: []RESTIDProducer{{Name: "pr_id", ListPath: "items", IDField: "repo_id", JoinField: "number"}},
 			},
 			{
 				Name:                "range_days_90",
@@ -1145,6 +1189,13 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				Name:                "default_window",
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
 				BodyMode: RESTBodyModeJSON, Parity: drilldownIssuesParity,
+				// Produces work_item_id from this response's own FIRST
+				// item -- IssueItem.WorkItemID (issues.go) is already a
+				// bare string on the wire, so no JoinField is needed, the
+				// same shape person_id's own producer entry uses.
+				// Consumed by flame's own issue_entity_id_bound_200 entry
+				// below.
+				Produces: []RESTIDProducer{{Name: "work_item_id", ListPath: "items", IDField: "work_item_id"}},
 			},
 			{
 				Name:                "range_days_90",
@@ -1401,6 +1452,44 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				},
 				WantCandidateStatus: 404, WantBaselineStatus: 404,
 				BodyMode: RESTBodyModeJSON,
+			},
+			{
+				// The "pr" entity_type's own 200 path, reached at all
+				// only via id binding: entity_id is bound at run time to
+				// GET /api/v1/drilldown/prs' own live pr_id
+				// (restidbind.go's JoinField-composed "<repo_id>:<number>",
+				// this table's own doc comment above), the same
+				// pattern peopleDetailParity's own person_id binding
+				// already establishes for a path-segment id -- here a
+				// query-param id instead. Reaches fetchPullRequest/
+				// fetchPullRequestReviews' own declared FINAL-dedup fix
+				// (flamePRIDBoundParity's own doc comment), unreachable
+				// before a pr_id producer existed.
+				Name:                "pr_entity_id_bound_200",
+				Query:               url.Values{"entity_type": {"pr"}},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode:   RESTBodyModeJSON,
+				Parity:     flamePRIDBoundParity,
+				IDBindings: []RESTIDBinding{{Producer: "pr_id", QueryParam: "entity_id"}},
+			},
+			{
+				// The "issue" entity_type's own 200 path: entity_id is
+				// bound to GET /api/v1/drilldown/issues' own live
+				// work_item_id -- unlike "pr"/"deployment", the "issue"
+				// entity_id IS the work_item_id directly (no repo_id
+				// prefix; BuildResponse's own "issue" case passes
+				// params.EntityID straight to fetchIssue). No Parity:
+				// flame.go's own doc comment states fetch_issue already
+				// reads work_item_cycle_times FINAL on both planes for
+				// this route (the RMT-dedup fix flamePRIDBoundParity
+				// declares for "pr" has no counterpart here, the same
+				// asymmetry personDrilldownIssuesParity's own doc comment
+				// already states for the sibling person-scoped route).
+				Name:                "issue_entity_id_bound_200",
+				Query:               url.Values{"entity_type": {"issue"}},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode:   RESTBodyModeJSON,
+				IDBindings: []RESTIDBinding{{Producer: "work_item_id", QueryParam: "entity_id"}},
 			},
 		},
 	},

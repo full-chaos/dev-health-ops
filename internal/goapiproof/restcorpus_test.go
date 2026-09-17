@@ -196,3 +196,106 @@ func TestDrilldownIssuesParityDatetimeCitation_NonVacuousMatchIsIdleNotStale(t *
 		t.Fatalf("idle = %v, want [CHAOS-5808]", result.IdleIntermittentBaselineDefects)
 	}
 }
+
+// TestFlameCorpus_HasIDBoundLiveEntriesForPRAndIssue pins the corpus-level
+// contract that lets flame's 200 path actually be exercised: flame's spec
+// must carry exactly one live (200/200) entry per producible entity_type,
+// each id-bound to the producer restcorpus.go's own doc comment names --
+// pr_id (from GET /api/v1/drilldown/prs) for "pr", work_item_id (from GET
+// /api/v1/drilldown/issues) for "issue" -- and the "pr" entry must carry
+// flamePRIDBoundParity's own declared BaselineDefect. A silent
+// regression that drops either entry, or that binds the wrong producer,
+// fails here rather than only being noticed the next time an operator
+// runs go-api-rest-prove live.
+func TestFlameCorpus_HasIDBoundLiveEntriesForPRAndIssue(t *testing.T) {
+	spec, err := SpecForREST("REST:GET:/api/v1/flame")
+	if err != nil {
+		t.Fatalf("SpecForREST: %v", err)
+	}
+
+	var pr, issue *RESTRequest
+	for i := range spec.Requests {
+		switch spec.Requests[i].Name {
+		case "pr_entity_id_bound_200":
+			pr = &spec.Requests[i]
+		case "issue_entity_id_bound_200":
+			issue = &spec.Requests[i]
+		}
+	}
+	if pr == nil {
+		t.Fatal("flame corpus has no pr_entity_id_bound_200 entry")
+	}
+	if issue == nil {
+		t.Fatal("flame corpus has no issue_entity_id_bound_200 entry")
+	}
+
+	for _, tc := range []struct {
+		name     string
+		req      *RESTRequest
+		producer string
+	}{
+		{"pr", pr, "pr_id"},
+		{"issue", issue, "work_item_id"},
+	} {
+		if tc.req.WantCandidateStatus != 200 || tc.req.WantBaselineStatus != 200 {
+			t.Errorf("%s entry status = (%d, %d), want (200, 200)", tc.name, tc.req.WantCandidateStatus, tc.req.WantBaselineStatus)
+		}
+		if len(tc.req.IDBindings) != 1 || tc.req.IDBindings[0].Producer != tc.producer || tc.req.IDBindings[0].QueryParam != "entity_id" {
+			t.Errorf("%s entry IDBindings = %+v, want one binding on entity_id to producer %q", tc.name, tc.req.IDBindings, tc.producer)
+		}
+	}
+
+	if len(pr.Parity.BaselineDefects) != 1 || pr.Parity.BaselineDefects[0].Ticket != "CHAOS-5803" || !pr.Parity.BaselineDefects[0].Intermittent {
+		t.Errorf("pr entry BaselineDefects = %+v, want exactly one Intermittent CHAOS-5803 entry", pr.Parity.BaselineDefects)
+	}
+
+	drillPRs, err := SpecForREST("REST:GET:/api/v1/drilldown/prs")
+	if err != nil {
+		t.Fatalf("SpecForREST(drilldown/prs): %v", err)
+	}
+	drillIssues, err := SpecForREST("REST:GET:/api/v1/drilldown/issues")
+	if err != nil {
+		t.Fatalf("SpecForREST(drilldown/issues): %v", err)
+	}
+	if !producesID(drillPRs, "default_window", "pr_id") {
+		t.Error("GET /api/v1/drilldown/prs' default_window entry no longer Produces pr_id")
+	}
+	if !producesID(drillIssues, "default_window", "work_item_id") {
+		t.Error("GET /api/v1/drilldown/issues' default_window entry no longer Produces work_item_id")
+	}
+}
+
+func producesID(spec RESTEndpointSpec, requestName, producerName string) bool {
+	for _, req := range spec.Requests {
+		if req.Name != requestName {
+			continue
+		}
+		for _, p := range req.Produces {
+			if p.Name == producerName {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// TestFlamePRIDBoundParity_NonVacuousMatchIsIdleNotStale is
+// flamePRIDBoundParity's own version of
+// TestDrilldownPRsParityDatetimeCitation_NonVacuousMatchIsIdleNotStale: a
+// non-vacuous, identical flame "pr" body on both legs must record its
+// declared citation as idle, never stale -- the same regression class
+// pinned for every other declared Parity in this table.
+func TestFlamePRIDBoundParity_NonVacuousMatchIsIdleNotStale(t *testing.T) {
+	body := `{"entity":{"repo_id":"r1","number":42,"title":"t","state":"open"},"timeline":{"start":"2024-01-01T00:00:00Z","end":"2024-01-02T00:00:00Z"},"frames":[{"id":"pr:r1:42","parent_id":null,"label":"PR lifecycle","start":"2024-01-01T00:00:00Z","end":"2024-01-02T00:00:00Z","state":"active","category":"planned"}]}`
+	snap := restSnapshotFromJSON(t, body)
+	result := Compare(snap, snap, flamePRIDBoundParity)
+	if result.TerminalState != TerminalStateMatch {
+		t.Fatalf("identical non-vacuous bodies must match, got %s (structural refusal %q)", result.TerminalState, result.StructuralRefusal)
+	}
+	if len(result.StaleBaselineDefects) != 0 {
+		t.Fatalf("a genuine, non-vacuous match must never go stale: %v", result.StaleBaselineDefects)
+	}
+	if !equalStrings(result.IdleIntermittentBaselineDefects, []string{"CHAOS-5803"}) {
+		t.Fatalf("idle = %v, want [CHAOS-5803]", result.IdleIntermittentBaselineDefects)
+	}
+}

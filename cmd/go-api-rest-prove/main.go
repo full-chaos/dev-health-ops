@@ -90,6 +90,7 @@ type flags struct {
 	principalKind  string
 	audience       string
 	keyID          string
+	artifactDir    string
 
 	dryRun     bool
 	timeout    time.Duration
@@ -112,6 +113,7 @@ func parseFlags() (flags, error) {
 	flag.StringVar(&f.principalKind, "principal-kind", "stored_account", "auth-context SHAPE recorded in request_identity; never a credential")
 	flag.StringVar(&f.audience, "audience", "query-api", "envelope audience, part of the auth-context shape")
 	flag.StringVar(&f.keyID, "key-id", "", "envelope signing key id (kid) -- a public identifier")
+	flag.StringVar(&f.artifactDir, "artifact-dir", "", "directory for content-addressed leg bodies and finding lists; go_api_rest_proof_run's baseline/candidate_response_ref name the two legs, and review_evidence names the finding-list ref -- never an inlined body (required), matching go-api-prove's own -artifact-dir")
 	flag.BoolVar(&f.dryRun, "dry-run", false, "execute and compare, but write NO receipts")
 	flag.DurationVar(&f.timeout, "timeout", 60*time.Second, "per-request timeout")
 	flag.StringVar(&f.reportPath, "report", "", "write the full JSON report here in addition to stdout")
@@ -138,6 +140,9 @@ func parseFlags() (flags, error) {
 	}
 	if f.reviewEvidence == "" {
 		missing = append(missing, "-review-evidence")
+	}
+	if f.artifactDir == "" {
+		missing = append(missing, "-artifact-dir")
 	}
 	if !f.dryRun && f.postgresURI == "" {
 		missing = append(missing, "-postgres-uri (or -dry-run)")
@@ -251,6 +256,40 @@ func restRequestVariables(method string, query url.Values, body any) map[string]
 	return map[string]any{"method": method, "query": query, "body": body}
 }
 
+// restReviewEvidence is what go_api_rest_proof_run.review_evidence
+// actually carries -- a JSON envelope, not the operator's raw prose,
+// mirroring go-api-prove's own ReceiptProvenance (internal/goapiproof/
+// run.go's own doc comment: "a JSON OBJECT rather than prose ... a reader
+// cannot tell which half a machine wrote" was the earlier, rejected
+// design there too). go_api_rest_proof_run (alembic 0134) carries no
+// findings_ref column of its own -- this ticket does not migrate the
+// table -- so the finding-list artifact ref this run wrote rides inside
+// this already-durable Text column instead of nowhere at all.
+type restReviewEvidence struct {
+	// Operator is -review-evidence's own text, verbatim, in its own key --
+	// never modified or appended to, for the identical reason
+	// ReceiptProvenance.Operator's own doc comment gives.
+	Operator string `json:"operator,omitempty"`
+	// FindingsRef is the -artifact-dir reference to this comparison's
+	// decoded finding list (goapiproof.Result.Findings), set only when
+	// this request's BodyMode decoded and compared both legs.
+	FindingsRef string `json:"findings_ref,omitempty"`
+}
+
+// encodeRESTReviewEvidence renders restReviewEvidence for one receipt.
+// Falls back to the raw operator string on a marshal error (both fields
+// are plain strings, so this cannot actually fail) rather than writing
+// nothing -- same fallback ReceiptProvenance's own reviewEvidence method
+// uses, and the same reasoning: the operator's own words are worth more
+// than a dropped column.
+func encodeRESTReviewEvidence(operator, findingsRef string) string {
+	encoded, err := json.Marshal(restReviewEvidence{Operator: operator, FindingsRef: findingsRef})
+	if err != nil {
+		return operator
+	}
+	return string(encoded)
+}
+
 // outcome is one corpus request's result line.
 type outcome struct {
 	Operation string `json:"operation"`
@@ -264,6 +303,27 @@ type outcome struct {
 	BaselineDefectsMatched           []string `json:"baseline_defect,omitempty"`
 
 	ReceiptID string `json:"receipt_id,omitempty"`
+
+	// BaselineResponseRef/CandidateResponseRef mirror the identically
+	// named RESTReceipt fields (goapiproof.RESTReceipt's own doc
+	// comment) -- the content-addressed -artifact-dir reference to each
+	// leg's raw response body. Set whenever -artifact-dir stored a body,
+	// which is BEFORE admission runs (proveOneRESTRequest stores both
+	// legs first) -- so a REFUSED request's own outcome line still shows
+	// where its bodies landed, not only an admitted one's.
+	BaselineResponseRef  string `json:"baseline_response_ref,omitempty"`
+	CandidateResponseRef string `json:"candidate_response_ref,omitempty"`
+
+	// FindingsRef is the -artifact-dir reference to this comparison's
+	// decoded finding list (goapiproof.Result.Findings), set only when
+	// BodyMode decoded and compared both legs. go_api_rest_proof_run
+	// (alembic 0134) carries no findings_ref column -- this ticket does
+	// not migrate the table -- so the same ref is also folded into the
+	// written receipt's own review_evidence (see encodeRESTReviewEvidence),
+	// which DOES persist to the row; this field exists so the JSON report
+	// and a refused/dry-run outcome (neither of which reaches a receipt
+	// at all) can still show it.
+	FindingsRef string `json:"findings_ref,omitempty"`
 
 	// BoundIDs names every id (goapiproof.RESTIDBinding.Producer -> the
 	// resolved value) this request's Query/Path were bound to before
@@ -363,6 +423,20 @@ func run(f flags) error {
 		return err
 	}
 
+	// Built before any credential or network step for the same reason the
+	// coverage/corpus checks above are: a bad -artifact-dir is a
+	// configuration error, refused before this run spends a single
+	// request. Every leg body and finding list this run produces is
+	// stored here (see proveOneRESTRequest) -- go-api-rest-prove's own
+	// sibling to go-api-prove's identical -artifact-dir contract
+	// (cmd/go-api-prove/main.go), so a mismatch this run finds can be
+	// read back after the fact instead of existing only in this
+	// process's stdout.
+	artifacts, err := goapiproof.NewArtifactStore(f.artifactDir)
+	if err != nil {
+		return err
+	}
+
 	candidateCredential, err := buildCredential("Authorization", "candidate bearer", "-candidate-bearer-exec", f.candidateBearerExec)
 	if err != nil {
 		return err
@@ -453,7 +527,7 @@ func run(f flags) error {
 				}
 			}
 
-			out, err := proveOneRESTRequest(ctx, client, f, operation, resolvedSpec, resolvedRequest, candidateCredential, baselineCredential, namedBuild, auth, observedAt, pgPool, f.dryRun, boundIDs)
+			out, err := proveOneRESTRequest(ctx, client, f, operation, resolvedSpec, resolvedRequest, candidateCredential, baselineCredential, namedBuild, auth, observedAt, pgPool, artifacts, f.dryRun, boundIDs)
 			if err != nil {
 				return fmt.Errorf("%s/%s: %w", operation, request.Name, err)
 			}
@@ -521,6 +595,7 @@ func proveOneRESTRequest(
 	auth goapiproof.AuthContext,
 	observedAt time.Time,
 	writer receiptWriter,
+	artifacts *goapiproof.ArtifactStore,
 	dryRun bool,
 	boundIDs map[string]string,
 ) (outcome, error) {
@@ -536,6 +611,25 @@ func proveOneRESTRequest(
 		return outcome{}, fmt.Errorf("baseline leg: %w", err)
 	}
 
+	// Stored BEFORE admission runs, and unconditionally: a refused
+	// request's own bodies are exactly what a reader needs to see WHY it
+	// was refused, and the whole point of this ticket is that a mismatch
+	// used to leave no evidence behind once this process exited. Mirrors
+	// go-api-prove's own Runner.observe (internal/goapiproof/run.go),
+	// which stores every leg it fetches the same way, at the same layer,
+	// regardless of what Admit later decides. artifacts is nil only in a
+	// test that does not care about refs -- main() always builds one
+	// (run()'s own -artifact-dir, required).
+	var candidateRef, baselineRef string
+	if artifacts != nil {
+		if candidateRef, err = artifacts.Put(candidateLeg.Body); err != nil {
+			return outcome{}, fmt.Errorf("store candidate leg artifact: %w", err)
+		}
+		if baselineRef, err = artifacts.Put(baselineLeg.Body); err != nil {
+			return outcome{}, fmt.Errorf("store baseline leg artifact: %w", err)
+		}
+	}
+
 	decodeBody := request.BodyMode == goapiproof.RESTBodyModeJSON
 	admission := goapiproof.RESTAdmit(goapiproof.RESTAdmissionInput{
 		NamedBuild:          namedBuild,
@@ -545,7 +639,13 @@ func proveOneRESTRequest(
 		Baseline:            baselineLeg,
 	}, decodeBody)
 
-	out := outcome{Operation: operation, Request: request.Name, Admitted: admission.Admitted, Refusal: admission.Reason, Detail: admission.Detail, BoundIDs: boundIDs}
+	out := outcome{
+		Operation: operation, Request: request.Name,
+		Admitted: admission.Admitted, Refusal: admission.Reason, Detail: admission.Detail,
+		BoundIDs:             boundIDs,
+		BaselineResponseRef:  baselineRef,
+		CandidateResponseRef: candidateRef,
+	}
 	if !admission.Admitted {
 		return out, nil
 	}
@@ -561,6 +661,7 @@ func proveOneRESTRequest(
 		differences    int
 		matchedDefects []string
 		vacuity        []string
+		findingsRef    string
 	)
 	if decodeBody {
 		baselineData := goapiproof.InjectRESTDedupKeys(admission.BaselineSnap.Data, request.DedupListPath, request.DedupKeyFields)
@@ -585,6 +686,25 @@ func proveOneRESTRequest(
 		}
 
 		result := goapiproof.Compare(admission.BaselineSnap, admission.CandidateSnap, request.Parity)
+
+		// The finding list itself, not just the two bodies it was derived
+		// from: without it, a mismatch receipt names a verdict and a
+		// count with no way to see afterward WHICH paths differed or how.
+		// Stored whenever Compare ran at all, match or mismatch or
+		// structural refusal alike, so "nothing differed" is as much on
+		// record as a real divergence is. go_api_rest_proof_run carries
+		// no findings_ref column of its own -- see out.FindingsRef's own
+		// doc comment for where the ref actually lands.
+		if artifacts != nil {
+			encodedFindings, marshalErr := json.Marshal(result.Findings)
+			if marshalErr != nil {
+				return outcome{}, fmt.Errorf("encode finding list: %w", marshalErr)
+			}
+			if findingsRef, err = artifacts.Put(encodedFindings); err != nil {
+				return outcome{}, fmt.Errorf("store finding list artifact: %w", err)
+			}
+		}
+
 		if result.StructuralRefusal != "" {
 			// Mirrors goapiproof/run.go's own GraphQL runner: Compare
 			// returns immediately on a structural refusal (see
@@ -609,6 +729,7 @@ func proveOneRESTRequest(
 			out.Admitted = false
 			out.Refusal = result.StructuralRefusal
 			out.Detail = result.StructuralDetail
+			out.FindingsRef = findingsRef
 			return out, nil
 		}
 		terminalState = result.TerminalState
@@ -621,6 +742,7 @@ func proveOneRESTRequest(
 	out.DifferencesOutsideBaselineDefect = differences
 	out.BaselineDefectsMatched = matchedDefects
 	out.vacuityErrors = vacuity
+	out.FindingsRef = findingsRef
 
 	if dryRun || writer == nil {
 		return out, nil
@@ -640,7 +762,7 @@ func proveOneRESTRequest(
 		Stage:                            goapiproof.EnablementProofStage,
 		TerminalState:                    terminalState,
 		OrgID:                            f.org,
-		ReviewEvidence:                   f.reviewEvidence,
+		ReviewEvidence:                   encodeRESTReviewEvidence(f.reviewEvidence, findingsRef),
 		RecordedBy:                       f.recordedBy,
 		ObservedAt:                       observedAt,
 		MeasurementRoute:                 goapiproof.RouteProof,
@@ -648,6 +770,8 @@ func proveOneRESTRequest(
 		DifferencesOutsideBaselineDefect: differences,
 		BuildBinding:                     goapiproof.EdgeBuildPresent,
 		BoundIDs:                         boundIDs,
+		BaselineResponseRef:              baselineRef,
+		CandidateResponseRef:             candidateRef,
 	}
 	id, err := writer.WriteReceipt(ctx, receipt)
 	if err != nil {

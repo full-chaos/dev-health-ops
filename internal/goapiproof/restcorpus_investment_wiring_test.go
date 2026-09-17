@@ -79,15 +79,18 @@ func TestInvestmentDeclarationsCarryShapes(t *testing.T) {
 		t.Fatalf("investmentSunburstOrderInsensitiveLists = %+v, want one entry for data", investmentSunburstOrderInsensitiveLists)
 	}
 
-	// investmentFlowRepoDedupParity: ordering declarations plus nine
-	// BaselineDefects (a fan-out entry, a conservation entry, and seven
+	// investmentFlowRepoDedupParity: ordering declarations plus seven
+	// BaselineDefects (a fan-out entry, a conservation entry, and five
 	// direction entries sharing one ticket), and NO entry anywhere citing
-	// chosen_mode/label/description.
+	// chosen_mode/label/description OR team_coverage/repo_coverage (the
+	// latter pair carries no honest direction under this route's own
+	// subcategory-weighted, ARRAY-JOINed ratio -- see
+	// investmentFlowRepoDedupParity's own doc comment in restcorpus.go).
 	if len(investmentFlowRepoDedupParity.OrderInsensitiveLists) != 2 {
 		t.Fatalf("investmentFlowRepoDedupParity.OrderInsensitiveLists = %+v, want 2 entries (data.nodes, data.links)", investmentFlowRepoDedupParity.OrderInsensitiveLists)
 	}
-	if len(investmentFlowRepoDedupParity.BaselineDefects) != 9 {
-		t.Fatalf("investmentFlowRepoDedupParity has %d BaselineDefects, want 9", len(investmentFlowRepoDedupParity.BaselineDefects))
+	if len(investmentFlowRepoDedupParity.BaselineDefects) != 7 {
+		t.Fatalf("investmentFlowRepoDedupParity has %d BaselineDefects, want 7", len(investmentFlowRepoDedupParity.BaselineDefects))
 	}
 	fanout := investmentFlowRepoDedupParity.BaselineDefects[0]
 	if fanout.SankeyRepoFanoutShape == nil {
@@ -125,8 +128,6 @@ func TestInvestmentDeclarationsCarryShapes(t *testing.T) {
 		path    string
 		greater bool
 	}{
-		{"data.team_coverage", false},
-		{"data.repo_coverage", false},
 		{"data.distinct_team_targets", true},
 		{"data.distinct_repo_targets", true},
 	}
@@ -147,7 +148,7 @@ func TestInvestmentDeclarationsCarryShapes(t *testing.T) {
 		}
 	}
 
-	unassigned := investmentFlowRepoDedupParity.BaselineDefects[8]
+	unassigned := investmentFlowRepoDedupParity.BaselineDefects[6]
 	if unassigned.DictKeyDirectionShape == nil {
 		t.Fatalf("investmentFlowRepoDedupParity[8] = %+v, want a DictKeyDirectionShape", unassigned)
 	}
@@ -162,6 +163,9 @@ func TestInvestmentDeclarationsCarryShapes(t *testing.T) {
 		for _, path := range defect.Paths {
 			if path == "data.chosen_mode" || path == "data.label" || path == "data.description" {
 				t.Fatalf("investmentFlowRepoDedupParity[%d] cites %q -- chosen_mode/label/description must stay uncovered (categorical threshold flip, no honest shape)", i, path)
+			}
+			if path == "data.team_coverage" || path == "data.repo_coverage" {
+				t.Fatalf("investmentFlowRepoDedupParity[%d] cites %q -- team_coverage/repo_coverage must stay uncovered (no direction derivable for this route's own subcategory-weighted, ARRAY-JOINed ratio under a subset exclusion that shrinks numerator and denominator together; a borrowed direction from a different query's own citation is not a valid re-derivation)", i, path)
 			}
 		}
 	}

@@ -1,6 +1,10 @@
 package goapiproof
 
-import "testing"
+import (
+	"encoding/json"
+	"os"
+	"testing"
+)
 
 // This file exercises SupersessionSkewShape (supersessionskew.go) both in
 // isolation, against a scoped Options carrying only a synthetic
@@ -150,6 +154,56 @@ func TestSupersessionSkewShape_RegisteredDeclarationAdmitsThroughTheRealSpec(t *
 	result := compareAsInvestmentFull(t, marshalBody(t, baseline), candidateJSON)
 	if result.DifferencesOutsideBaselineDefect != 0 {
 		t.Fatalf("outside = %d, want 0 -- findings %+v", result.DifferencesOutsideBaselineDefect, result.Findings)
+	}
+	foundOwn := false
+	for _, ticket := range result.BaselineDefectsMatched {
+		if ticket == "CHAOS-5865" {
+			foundOwn = true
+		}
+	}
+	if !foundOwn {
+		t.Fatalf("matched = %v, want CHAOS-5865 present", result.BaselineDefectsMatched)
+	}
+}
+
+// Rule 1 must hold against two REAL, INDEPENDENTLY-COMPUTED sankey
+// subtrees, not loadSankeyCandidateCopy's own fixture (every test above):
+// rule 1 requires that no OTHER path in the comparison differs, and a
+// self-decoded copy can never exercise that -- nodes/edges are the
+// identical parsed float64 values by construction there, so rule 1 is
+// never actually asked to tolerate real engine noise elsewhere in the
+// response. testdata's job5 baseline/candidate pair are two SEPARATELY
+// EXECUTED query results: diffed directly, their sankey nodes/edges
+// values differ from each other on their own (measured ~1e-13, the same
+// ClickHouse summation-order noise this operation's own FloatTierB
+// entries document), which the operation's own declared FloatTierB
+// tolerance already absorbs -- rule
+// 1 reads the comparison's mismatch list, which is already Tier-B
+// filtered, so this real noise produces no Finding there and rule 1
+// holds against it exactly as it must. The coverage leaves are shifted a
+// further, clearly-citable downward amount so this exercises a real
+// direction-only divergence through the actual registered declaration.
+func TestSupersessionSkewShape_RealIndependentlyComputedNodesAndEdgesAreAdmitted(t *testing.T) {
+	const baselinePath = "testdata/investmentfull_baseline_job5_773418f7.json"
+	const candidatePath = "testdata/investmentfull_candidate_job5_7ae7cb5b.json"
+
+	candidateRaw, err := os.ReadFile(candidatePath)
+	if err != nil {
+		t.Fatalf("read %s: %v", candidatePath, err)
+	}
+	baselineRaw, err := os.ReadFile(baselinePath)
+	if err != nil {
+		t.Fatalf("read %s: %v", baselinePath, err)
+	}
+	var baseline map[string]any
+	if err := json.Unmarshal(baselineRaw, &baseline); err != nil {
+		t.Fatalf("decode %s: %v", baselinePath, err)
+	}
+	mutateCoverage(t, baseline, 0.3) // past CHAOS-4547's own 5% bound, downward-only
+
+	result := compareAsInvestmentFull(t, marshalBody(t, baseline), string(candidateRaw))
+	if result.DifferencesOutsideBaselineDefect != 0 {
+		t.Fatalf("outside = %d, want 0 -- rule 1 must tolerate two independently-computed real nodes/edges values, findings %+v", result.DifferencesOutsideBaselineDefect, result.Findings)
 	}
 	foundOwn := false
 	for _, ticket := range result.BaselineDefectsMatched {

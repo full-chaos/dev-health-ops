@@ -40,6 +40,14 @@ const (
 	RefusalStaleExclusion      = "declared_exclusion_matched_nothing"
 	RefusalStaleTierB          = "declared_tier_b_field_matched_nothing"
 	RefusalStaleBaselineDefect = "declared_baseline_defect_matched_nothing"
+	// RefusalLiveBaselineDefectUnexplained: a SHAPED declared baseline
+	// defect's own cited Paths carried a real leaf-level difference this
+	// run -- the mechanism was live, not absent -- and the shape's own
+	// rules admitted none of it. Distinct from RefusalStaleBaselineDefect
+	// (whose Paths carried nothing at all): this is refused even when the
+	// entry is marked Intermittent, because the Intermittent exemption is
+	// for an absent mechanism, not one that fired and went unexplained.
+	RefusalLiveBaselineDefectUnexplained = "declared_baseline_defect_live_but_explained_nothing"
 	// RefusalInvalidBaselineDefect: a declared baseline defect failed
 	// validateBaselineDefects, so no request is sent under it.
 	RefusalInvalidBaselineDefect = "declared_baseline_defect_is_invalid"
@@ -873,6 +881,13 @@ func (r *Runner) proveRequest(ctx context.Context, operation string, variantName
 		// declaration that relaxed nothing means the comparison that ran
 		// is not the comparison anybody declared.
 		return refuse(RefusalStaleTierB, fmt.Sprintf("declared Tier-B float fields matched nothing: %v", result.UnusedTierB))
+	}
+	if len(result.LiveBaselineDefectsUnexplained) > 0 {
+		// Checked ahead of RefusalStaleBaselineDefect: a live-but-
+		// unexplained entry is a stronger, more specific finding than a
+		// merely stale one, and a reader must not see the generic "matched
+		// nothing" text for an entry whose own Paths carried something.
+		return refuse(RefusalLiveBaselineDefectUnexplained, fmt.Sprintf("declared baseline defects' own cited paths carried a difference this run but their shape admitted none of it: %v", result.LiveBaselineDefectsUnexplained))
 	}
 	if len(result.StaleBaselineDefects) > 0 {
 		// The Python defect was fixed, or the cited paths are wrong.

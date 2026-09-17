@@ -143,6 +143,28 @@ var investmentBaselineDefects = []BaselineDefect{
 	},
 }
 
+// investmentQualityStatsFloats declares evidence_quality_stats.mean/
+// .stddev as Tier B: qualitystats.go's own avgIf(evidence_quality)/
+// stddevPopIf(evidence_quality) query is the SAME merged, order-
+// nondeterministic ClickHouse aggregate class investmentExplainDeterministicFloats
+// already declares for investment/explain's own confidence.quality_mean/
+// .quality_stddev -- undeclared here until now, which let a last-digit
+// engine rounding difference on this route surface as a Tier-A exact
+// mismatch that investmentBaselineDefects' own citation (unshaped,
+// covering the whole evidence_quality_stats subtree by path proximity)
+// still admitted, by the wrong mechanism rather than the right
+// tolerance.
+var investmentQualityStatsFloats = map[string]string{
+	"data.evidence_quality_stats.mean":   "avgIf(evidence_quality)-shaped ClickHouse float aggregate over the request's attributed work units",
+	"data.evidence_quality_stats.stddev": "stddevPopIf(evidence_quality)-shaped ClickHouse float aggregate",
+}
+
+// investmentParity is GET and POST /api/v1/investment's own shared Parity.
+var investmentParity = Options{
+	BaselineDefects: investmentBaselineDefects,
+	FloatTierB:      investmentQualityStatsFloats,
+}
+
 // investmentSunburstBaselineDefects extends investmentBaselineDefects
 // with the sunburst route's own additional divergence: its repo-name
 // join reads `repos` (ReplacingMergeTree, sorting key org_id/id) with
@@ -156,6 +178,39 @@ var investmentSunburstBaselineDefects = append(append([]BaselineDefect{}, invest
 	Intermittent:       true,
 	IntermittentReason: "present only while a repo row referenced by this org's investment data still holds 2+ unmerged physical versions; once ClickHouse merges them the two planes agree and this citation covers nothing, which is expected, not stale",
 })
+
+// investmentSunburstOrderInsensitiveLists declares the sunburst list's
+// own row order: fetch_investment_sunburst (api/queries/investment.py)
+// and FetchInvestmentSunburst (sunburst.go) both GROUP BY theme,
+// subcategory, scope and ORDER BY value DESC with no secondary sort,
+// IDENTICALLY on both planes. The ordering is UNCONSTRAINED IN BOTH
+// PLANES' OWN SQL, so it is a property of the engine's result for a
+// query with no secondary sort, not a divergence between the planes.
+// It matters here specifically because investmentSunburstBaselineDefects'
+// own repos-join fan-out (above) inflates one slice's value, which can
+// move that slice's RANK in the value-DESC order and shift every later
+// slice's own position -- a positional comparison then reports every
+// field of every shifted slice as a difference, not only the one slice
+// whose value actually changed, and the fan-out's own citation (Paths
+// naming only scope/value) has no way to explain a shifted theme or
+// subcategory. (theme, subcategory, scope) is the query's own GROUP BY
+// key, unique per row on each plane's own result set, and safe to pair
+// on for exactly that reason.
+var investmentSunburstOrderInsensitiveLists = []OrderInsensitiveList{
+	{
+		Path:      "data",
+		KeyFields: []string{"theme", "subcategory", "scope"},
+		Reason:    "fetch_investment_sunburst and FetchInvestmentSunburst both GROUP BY theme, subcategory, scope and ORDER BY value DESC with no secondary sort, identically on both planes; the ordering is unconstrained in both planes' own SQL, not a Go-vs-Python defect",
+		Ticket:    "CHAOS-5874",
+	},
+}
+
+// investmentSunburstParity is GET /api/v1/investment/sunburst's own
+// shared Parity.
+var investmentSunburstParity = Options{
+	BaselineDefects:       investmentSunburstBaselineDefects,
+	OrderInsensitiveLists: investmentSunburstOrderInsensitiveLists,
+}
 
 // investmentExplainProseFields names investment/explain's LLM-authored
 // paths -- text the model writes fresh per call, never reproducible
@@ -392,9 +447,18 @@ func explainScopedRequest(name, metric, scopeType, producerName string) RESTRequ
 var peopleParity = Options{
 	BaselineDefects: []BaselineDefect{
 		{
-			Ticket:             "CHAOS-5812",
-			Reason:             "user_metrics_daily is ReplacingMergeTree(computed_at) (migration 096, sorting key org_id/repo_id/author_email/day); the reference people/people_search.sql reads it with no FINAL/argMax dedup at all -- only its sibling work_item_user_metrics_daily branch already carries FINAL. identity_id defaults to author_email but is not itself part of the sorting key, so a later write correcting it for an existing key is possible: an unmerged physical version can then surface BOTH the stale and the corrected identity as separate search results for the same person -- a LIST-LENGTH divergence. This port reads BOTH UNION branches FINAL (searchPeopleQuery's own doc comment), matching quadrant/identity.go's resolvePersonIdentity for the same two tables. Go is correct. This citation's Paths reach the divergence but, by this package's own leaf-only coverage rule (BaselineDefect's doc comment), never silently admit it: a length difference stays a real, uncovered finding on the receipt whenever it fires -- the same declared shape as the filters/options citation above.",
-			Paths:              []string{"data"},
+			Ticket: "CHAOS-5812",
+			Reason: "user_metrics_daily is ReplacingMergeTree(computed_at) (migration 096, sorting key org_id/repo_id/author_email/day); the reference people/people_search.sql reads it with no FINAL/argMax dedup at all -- only its sibling work_item_user_metrics_daily branch already carries FINAL. identity_id defaults to author_email but is not itself part of the sorting key, so a later write correcting it for an existing key is possible: an unmerged physical version can then surface BOTH the stale and the corrected identity as separate search results for the same person -- a LIST-LENGTH divergence, and this list is compared POSITIONALLY (no OrderInsensitiveLists entry for it), so the inserted element also shifts every later element's own person_id/display_name/identities/active into an individual leaf mismatch. This port reads BOTH UNION branches FINAL (searchPeopleQuery's own doc comment), matching quadrant/identity.go's resolvePersonIdentity for the same two tables. Go is correct. This citation's Paths reach the divergence but, by this package's own leaf-only coverage rule (BaselineDefect's doc comment), never silently admit the length difference itself: it stays a real, uncovered finding on the receipt whenever it fires -- the same declared shape as the filters/options citation above.",
+			Paths: []string{
+				// SearchResult's whole field set (search.go): a
+				// positional-list insertion can shift any one of a
+				// later element's own fields, never a field this type
+				// does not carry.
+				"data.person_id",
+				"data.display_name",
+				"data.identities",
+				"data.active",
+			},
 			Intermittent:       true,
 			IntermittentReason: "present only while user_metrics_daily holds an unmerged physical version whose identity_id changed since the last merge for some (org_id, repo_id, author_email, day) key this request's org/text filter reaches; a comparison taken after the next background merge shows no divergence",
 		},
@@ -411,17 +475,60 @@ var peopleParity = Options{
 // An unmerged physical version on any of them can surface either a
 // LIST-LENGTH divergence (an extra stale row in a sparkline/work-mix
 // list) or a single STALE VALUE (a headline/coverage/freshness field read
-// from the wrong physical version) -- Paths names the whole payload
-// ("data") for the same reason peopleParity's own citation does: the
-// affected field or list element is not fixed to one path, it depends on
-// which of the several source tables happens to hold an unmerged version
-// for this specific person_id at request time.
+// from the wrong physical version).
+//
+// Paths is the union of every field either route actually derives from
+// one of the four tables' own read, NOT the whole payload: repos and
+// repo_metrics_daily are read FINAL only for countDistinct/maxOrNull
+// aggregates (fetchCoverage/fetchLastIngestedAt's own doc comments state
+// this is correctness-neutral for those specific aggregates -- an
+// unmerged duplicate changes neither a distinct count nor a max), so
+// freshness.last_ingested_at, freshness.sources (derived from it) and
+// freshness.coverage.repos_covered_pct carry no citable divergence from
+// this mechanism, and neither does data.person (resolvePersonIdentity's
+// own UNION DISTINCT collapses a duplicate identity string regardless of
+// which physical row it came from). deltas[].spark[].ts is excluded
+// too: it is peopleSummarySparkTimestampDefect's own, separately
+// declared divergence (a naive-vs-aware timestamp rendering, present or
+// absent by result content, never by merge state), and folding it into
+// this blanket citation would let this defect's own live/idle state
+// stand in for that one's, silently absorbing that divergence even on a
+// run where this table's own trigger is live for an unrelated reason.
 var peopleDetailParity = Options{
 	BaselineDefects: []BaselineDefect{
 		{
-			Ticket:             "CHAOS-5812",
-			Reason:             "repos, user_metrics_daily, work_item_user_metrics_daily and work_item_cycle_times are each ReplacingMergeTree (migrations 000/096/055); build_person_summary_response and build_person_metric_response (services/people.py) read every one of them without FINAL or argMax dedup, where this port's own summary.go/metric.go/resolve.go read all four FINAL, matching the identical fix peopleParity's own citation already declares for GET /api/v1/people's search read of the same two UNION branches. An unmerged physical version can surface a stale headline/coverage/freshness value or an extra, stale element in a sparkline or work-mix list for this person_id. Go is correct. This citation's Paths reach the divergence but, by this package's own leaf-only coverage rule (BaselineDefect's doc comment), never silently admit a length or structural difference: it stays a real, uncovered finding on the receipt whenever it fires.",
-			Paths:              []string{"data"},
+			Ticket: "CHAOS-5812",
+			Reason: "repos, user_metrics_daily, work_item_user_metrics_daily and work_item_cycle_times are each ReplacingMergeTree (migrations 000/096/055); build_person_summary_response and build_person_metric_response (services/people.py) read every one of them without FINAL or argMax dedup, where this port's own summary.go/metric.go/resolve.go read all four FINAL, matching the identical fix peopleParity's own citation already declares for GET /api/v1/people's search read of the same two UNION branches. An unmerged physical version can surface a stale headline/coverage/freshness value or an extra, stale element in a sparkline or work-mix list for this person_id. Go is correct. This citation's Paths reach the divergence but, by this package's own leaf-only coverage rule (BaselineDefect's doc comment), never silently admit a length or structural difference: it stays a real, uncovered finding on the receipt whenever it fires.",
+			Paths: []string{
+				// GET .../summary fields sourced from work_item_cycle_times
+				// (fetchCoverage's non-neutral counts).
+				"data.freshness.coverage.prs_linked_to_issues_pct",
+				"data.freshness.coverage.issues_with_cycle_states_pct",
+				// GET .../summary: fetchIdentityCoverage (user_metrics_daily/
+				// work_item_user_metrics_daily).
+				"data.identity_coverage_pct",
+				// GET .../summary: fetchPersonMetricValue/fetchPersonMetricSeries
+				// (personMetrics' own per-metric table), plus the narrative
+				// sentences derived from deltas' own values.
+				"data.deltas.value",
+				"data.deltas.delta_pct",
+				"data.deltas.spark.value",
+				"data.narrative",
+				// GET .../summary: fetchPersonWorkMix/fetchPersonFlowBreakdown
+				// (work_item_cycle_times), fetchPersonCollaboration
+				// (user_metrics_daily/work_item_user_metrics_daily).
+				"data.sections.work_mix",
+				"data.sections.flow_breakdown",
+				"data.sections.collaboration",
+				// GET .../metric: fetchPersonMetricSeries/fetchPersonBreakdown
+				// (personMetricConfig's own per-metric table), plus the
+				// driver sentence derived from breakdowns' own values.
+				"data.timeseries.value",
+				"data.breakdowns.by_repo.value",
+				"data.breakdowns.by_work_type.value",
+				"data.breakdowns.by_stage.value",
+				"data.drivers.text",
+			},
 			Intermittent:       true,
 			IntermittentReason: "present only while one of the four source tables holds an unmerged physical version for THIS person_id's own rows since the last merge; a comparison taken after the next background merge shows no divergence",
 		},
@@ -459,16 +566,75 @@ var peopleSummarySparkTimestampDefect = BaselineDefect{
 	IntermittentReason: "present only while this person's deltas actually carry at least one non-empty spark series; a person whose window returns an empty series for every metric shows no divergence under this path and is not a bug in this citation -- a result-content trigger, not ClickHouse merge state: a comparison taken after a background merge shows the identical divergence, because the underlying naive-vs-aware rendering the Reason describes never depends on which physical row version was read",
 }
 
+// peopleSummaryLastIngestedAtTimestampDefect declares GET .../summary's
+// own freshness.last_ingested_at divergence: the SAME naive-vs-aware
+// rendering class peopleSummarySparkTimestampDefect declares for a Date
+// column and drilldownPRsParity's own datetime entry declares for
+// DateTime64 columns, recurring here on repo_metrics_daily.computed_at
+// (migration 096), a plain ClickHouse DateTime column reached through
+// freshness's own query rather than either of those. fetch_last_ingested_at
+// (api/queries/freshness.py) returns the driver's row value with no
+// explicit timezone handling, and clickhouse_connect returns a DateTime
+// column NAIVE (no tzinfo), so the Pydantic response serializes it with
+// no UTC offset. This port's fetchLastIngestedAt (summary.go) scans the
+// same column into a time.Time the ClickHouse Go driver locates in UTC,
+// and encoding/json's default time.Time marshaling always writes an
+// explicit offset. Go is correct. A distinct declaration from the two
+// above because it is a different column on a different query, not a
+// restatement of either -- peopleDetailParity's own citation excludes
+// this path precisely because repos/repo_metrics_daily's FINAL read is
+// correctness-neutral for this aggregate (fetchCoverage/
+// fetchLastIngestedAt's own doc comments), so the merge-lag mechanism
+// never explains this divergence; only the rendering does.
+var peopleSummaryLastIngestedAtTimestampDefect = BaselineDefect{
+	Ticket:             "CHAOS-5871",
+	Reason:             "repo_metrics_daily.computed_at (migration 096) is a ClickHouse DateTime column; fetch_last_ingested_at (api/queries/freshness.py) returns the driver's row value through query_dicts with no explicit timezone handling, and Python's clickhouse_connect driver returns a DateTime column NAIVE (no tzinfo), so the response serializes it with no UTC offset. This port's fetchLastIngestedAt (summary.go) scans the same column into a time.Time the ClickHouse Go driver locates in UTC, and encoding/json's default time.Time marshaling always writes an explicit offset -- the same naive-vs-aware rendering class this table's own Date- and DateTime64-column entries already declare, recurring here on a plain DateTime column reached through freshness's own query. Go is correct.",
+	Paths:              []string{"data.freshness.last_ingested_at"},
+	Intermittent:       true,
+	IntermittentReason: "present only while this org's freshness reading actually carries a non-null last_ingested_at; an org with no repo_metrics_daily rows at all shows no divergence under this path -- a result-content trigger, not ClickHouse merge state, the same reading peopleSummarySparkTimestampDefect's own IntermittentReason uses",
+}
+
+// peopleSummaryCollaborationOrderInsensitiveLists declares GET
+// .../summary's own sections.collaboration row-order gap: fetchPersonCollaboration's
+// query (summary.go) and person_summary_collaboration.sql are both a
+// plain ClickHouse UNION ALL with no outer ORDER BY, over four review_load
+// branches and two handoff_points branches respectively. The row order
+// this produces is UNCONSTRAINED IN BOTH PLANES' OWN SQL -- a property of
+// the engine's result for a query with no secondary sort, not a
+// divergence between the planes, the same class investmentFull's own
+// sankey nodes/edges OrderInsensitiveLists (operations.go) already
+// declare for an identical unordered UNION ALL shape. label uniquely
+// identifies an element within each of the two lists (review_load's four
+// branches and handoff_points' two branches never repeat a label), so
+// pairing on it, rather than position, is sound.
+var peopleSummaryCollaborationOrderInsensitiveLists = []OrderInsensitiveList{
+	{
+		Path:      "data.sections.collaboration.review_load",
+		KeyFields: []string{"label"},
+		Reason:    "fetchPersonCollaboration's query (summary.go) and person_summary_collaboration.sql are both an unordered ClickHouse UNION ALL over review_load's four branches; the row order is unconstrained in both planes' own SQL, not a Go-vs-Python defect",
+		Ticket:    "CHAOS-5872",
+	},
+	{
+		Path:      "data.sections.collaboration.handoff_points",
+		KeyFields: []string{"label"},
+		Reason:    "handoff_points shares the same unordered-UNION shape as review_load, over its own two branches with no cross-branch ordering guarantee either",
+		Ticket:    "CHAOS-5872",
+	},
+}
+
 // peopleSummaryParity is GET /api/v1/people/{person_id}/summary's own
 // live (person_id-bound, 200) entry: peopleDetailParity's own citation
-// plus the content-triggered spark timestamp citation above. Not shared
-// with /metric's own entry below (peopleDetailParity itself): /metric's
-// response carries no deltas/spark shape at all (MetricResponse.
-// Timeseries' own day field is already a plain string, metric.go), so a
-// citation naming a path that route can never produce would cover
+// plus the two content-triggered timestamp citations above and the
+// collaboration ordering relaxation. Not shared with /metric's own entry
+// below (peopleDetailParity itself): /metric's response carries no
+// deltas/spark/sections shape at all (MetricResponse.Timeseries' own day
+// field is already a plain string, metric.go), so a citation or
+// relaxation naming a path that route can never produce would cover
 // nothing there and refuse the run as stale.
 var peopleSummaryParity = Options{
-	BaselineDefects: append(append([]BaselineDefect{}, peopleDetailParity.BaselineDefects...), peopleSummarySparkTimestampDefect),
+	BaselineDefects: append(append([]BaselineDefect{}, peopleDetailParity.BaselineDefects...),
+		peopleSummarySparkTimestampDefect, peopleSummaryLastIngestedAtTimestampDefect),
+	OrderInsensitiveLists: peopleSummaryCollaborationOrderInsensitiveLists,
 }
 
 // personDrilldownPRsParity is shared by GET
@@ -488,9 +654,17 @@ var personDrilldownPRsParity = Options{
 			IntermittentReason: "present only while this request's live result actually contains at least one returned PR with a non-null value under one of these three fields; an empty items list shows no divergence under these paths",
 		},
 		{
-			Ticket:             "CHAOS-5803",
-			Reason:             "git_pull_requests and repos are both ReplacingMergeTree(last_synced) (000_raw_tables.sql, org_id added to both sorting keys by migration 027); sql/people/person_drilldown_prs.sql reads git_pull_requests with no FINAL/argMax dedup and joins repos (also unFINALed) with the org filter only in the JOIN's outer WHERE, evaluated after the merge. This port's fetchPersonPullRequestsQuery reads BOTH tables FINAL, with the org boundary resolved through an org-scoped repos subquery bound to git_pull_requests.repo_id (drilldownprs.go's own doc comment, matching internal/drilldown/prs.go's identical fix for the sibling scope-based route). An unmerged physical version on either table can surface a stale field value or drop/duplicate a row among this identity's own pull requests. Go is correct. This citation's Paths reach the divergence but, by this package's own leaf-only coverage rule, never silently admit a length or structural difference.",
-			Paths:              []string{"data"},
+			Ticket: "CHAOS-5803",
+			Reason: "git_pull_requests and repos are both ReplacingMergeTree(last_synced) (000_raw_tables.sql, org_id added to both sorting keys by migration 027); sql/people/person_drilldown_prs.sql reads git_pull_requests with no FINAL/argMax dedup and joins repos (also unFINALed) with the org filter only in the JOIN's outer WHERE, evaluated after the merge. This port's fetchPersonPullRequestsQuery reads BOTH tables FINAL, with the org boundary resolved through an org-scoped repos subquery bound to git_pull_requests.repo_id (drilldownprs.go's own doc comment, matching internal/drilldown/prs.go's identical fix for the sibling scope-based route). An unmerged physical version on either table can surface a stale field value or drop/duplicate a row among this identity's own pull requests. Go is correct. This citation's Paths reach the divergence but, by this package's own leaf-only coverage rule, never silently admit a length or structural difference.",
+			// DrilldownPRsResponse's whole field set (drilldownprs.go):
+			// every element field is read off the SAME git_pull_requests
+			// row this mechanism can serve a stale physical version of,
+			// and next_cursor names whichever PR lands in the page's
+			// last slot, which the same row-selection shift determines.
+			Paths: []string{
+				"data.items",
+				"data.next_cursor",
+			},
 			Intermittent:       true,
 			IntermittentReason: "present only while git_pull_requests or repos holds an unmerged physical version for a PR this identity authored, since the last merge; a comparison taken after the next background merge shows no divergence",
 		},
@@ -535,9 +709,18 @@ var personDrilldownIssuesParity = Options{
 var flamePRIDBoundParity = Options{
 	BaselineDefects: []BaselineDefect{
 		{
-			Ticket:             "CHAOS-5803",
-			Reason:             "git_pull_requests and git_pull_request_reviews are both ReplacingMergeTree(last_synced) (000_raw_tables.sql, org_id added to both sorting keys by migration 027); api/queries/flame.py's fetch_pull_request reads git_pull_requests with a bare LIMIT 1 (no ORDER BY, no FINAL) and fetch_pull_request_reviews reads git_pull_request_reviews ordered by submitted_at with no FINAL either -- neither dedups an unmerged physical version of the same logical row. This port's fetchPullRequest/fetchPullRequestReviews (cmd/query-api/internal/flame) read both tables FINAL. An unmerged physical version can surface a stale PR field (entity/timeline/frame values derived from it) or a stale/duplicated review that shifts the rework-window frames this entity_type builds. Go is correct. This citation's Paths reach the divergence but, by this package's own leaf-only coverage rule (BaselineDefect's doc comment), never silently admit a length or structural difference: it stays a real, uncovered finding on the receipt whenever it fires.",
-			Paths:              []string{"data"},
+			Ticket: "CHAOS-5803",
+			Reason: "git_pull_requests and git_pull_request_reviews are both ReplacingMergeTree(last_synced) (000_raw_tables.sql, org_id added to both sorting keys by migration 027); api/queries/flame.py's fetch_pull_request reads git_pull_requests with a bare LIMIT 1 (no ORDER BY, no FINAL) and fetch_pull_request_reviews reads git_pull_request_reviews ordered by submitted_at with no FINAL either -- neither dedups an unmerged physical version of the same logical row. This port's fetchPullRequest/fetchPullRequestReviews (cmd/query-api/internal/flame) read both tables FINAL. An unmerged physical version can surface a stale PR field (entity/timeline/frame values derived from it) or a stale/duplicated review that shifts the rework-window frames this entity_type builds. Go is correct. This citation's Paths reach the divergence but, by this package's own leaf-only coverage rule (BaselineDefect's doc comment), never silently admit a length or structural difference: it stays a real, uncovered finding on the receipt whenever it fires.",
+			// flame.Response's whole field set (flame.go): the Reason
+			// names all three -- entity, timeline and frame values -- as
+			// directly derived from the one PR/review read this
+			// mechanism can serve a stale or duplicated physical version
+			// of.
+			Paths: []string{
+				"data.entity",
+				"data.timeline",
+				"data.frames",
+			},
 			Intermittent:       true,
 			IntermittentReason: "present only while git_pull_requests or git_pull_request_reviews holds an unmerged physical version for this PR's own rows since the last merge; a comparison taken after the next background merge shows no divergence",
 		},
@@ -1497,14 +1680,14 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				Name:                "default_window",
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
 				BodyMode: RESTBodyModeJSON,
-				Parity:   Options{BaselineDefects: investmentBaselineDefects},
+				Parity:   investmentParity,
 			},
 			{
 				Name:                "range_days_90",
 				Query:               url.Values{"range_days": {"90"}},
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
 				BodyMode: RESTBodyModeJSON,
-				Parity:   Options{BaselineDefects: investmentBaselineDefects},
+				Parity:   investmentParity,
 			},
 			{
 				// Same shared int_parsing validator drilldown/prs's own
@@ -1526,7 +1709,7 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				Body:                map[string]any{"filters": map[string]any{}},
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
 				BodyMode: RESTBodyModeJSON,
-				Parity:   Options{BaselineDefects: investmentBaselineDefects},
+				Parity:   investmentParity,
 			},
 			{
 				// Same shared "missing filters key" validator drilldown/
@@ -1546,14 +1729,14 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				Name:                "default_window",
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
 				BodyMode: RESTBodyModeJSON,
-				Parity:   Options{BaselineDefects: investmentSunburstBaselineDefects},
+				Parity:   investmentSunburstParity,
 			},
 			{
 				Name:                "explicit_limit",
 				Query:               url.Values{"limit": {"50"}},
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
 				BodyMode: RESTBodyModeJSON,
-				Parity:   Options{BaselineDefects: investmentSunburstBaselineDefects},
+				Parity:   investmentSunburstParity,
 			},
 			{
 				Name:                "invalid_limit",

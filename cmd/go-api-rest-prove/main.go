@@ -1104,6 +1104,30 @@ func proveOneRESTRequest(
 		differences = result.DifferencesOutsideBaselineDefect
 		matchedDefects = result.BaselineDefectsMatched
 		vacuity = resultVacuityErrors(result)
+	} else if len(request.Produces) > 0 {
+		// A StatusOnly request may still Produce ids, but only in the one
+		// shape ValidateRESTCorpus admits (goapiproof/restcorpus.go): the
+		// two Want statuses differ and the CANDIDATE's own want is 200 --
+		// this route's baseline is declared failing in production. An id
+		// is a request parameter, not evidence compared between planes,
+		// so it is honest to read it from whichever leg actually answers
+		// with a body: here that is the CANDIDATE, not the BASELINE the
+		// decodeBody branch above reads for every other request. Decoded
+		// through the same production decoder (DecodeRESTSnapshot) real
+		// evidence uses, never hand-built. A decode failure or a body
+		// that yields no id is not a tool error here -- it leaves
+		// out.producedIDs unset for this producer's name, and any
+		// consumer later in the run is refused by name
+		// (rest_request_id_binding_unresolved), exactly as an ordinary
+		// unresolved binding is.
+		if candidateSnap, decodeErr := goapiproof.DecodeRESTSnapshot(candidateLeg.Body); decodeErr == nil {
+			out.producedIDs = make(map[string]string, len(request.Produces))
+			for _, producer := range request.Produces {
+				if id, ok := goapiproof.ExtractRESTID(candidateSnap.Data, producer); ok {
+					out.producedIDs[producer.Name] = id
+				}
+			}
+		}
 	}
 
 	out.TerminalState = terminalState

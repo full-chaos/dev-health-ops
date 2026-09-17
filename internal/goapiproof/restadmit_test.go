@@ -284,3 +284,49 @@ func TestRESTAdmit_StatusOnlySkipsDecode(t *testing.T) {
 		t.Fatalf("status-only admission decoded a body: %+v", got)
 	}
 }
+
+// TestRESTAdmit_StatusDivergentCorpusEntriesRefuseBothReversalsByName is
+// corpus-derived, not a fixed list: it walks every REST corpus request
+// whose two Want statuses differ and proves RESTAdmit refuses by name, in
+// BOTH directions a real-world reversal could take -- the baseline
+// recovering to the candidate's own declared status, and the candidate
+// regressing to the baseline's own declared status -- so a FUTURE
+// divergent entry is covered by this test with no edit to it.
+func TestRESTAdmit_StatusDivergentCorpusEntriesRefuseBothReversalsByName(t *testing.T) {
+	for operation, spec := range restEndpointSpecs {
+		for _, req := range spec.Requests {
+			if req.WantCandidateStatus == req.WantBaselineStatus {
+				continue
+			}
+			decodeBody := req.BodyMode == RESTBodyModeJSON
+
+			t.Run(operation+"/"+req.Name+"/baseline_recovers_to_candidates_status", func(t *testing.T) {
+				in := RESTAdmissionInput{
+					NamedBuild:          "abc123",
+					WantCandidateStatus: req.WantCandidateStatus,
+					WantBaselineStatus:  req.WantBaselineStatus,
+					Candidate:           restLeg(req.WantCandidateStatus, `{}`, "abc123"),
+					Baseline:            restLeg(req.WantCandidateStatus, `{}`, ""),
+				}
+				got := RESTAdmit(in, decodeBody)
+				if got.Admitted || got.Reason != RESTRefusalUnexpectedStatus {
+					t.Fatalf("%s/%s: baseline answering %d (the candidate's own declared status) got %+v, want a named RESTRefusalUnexpectedStatus refusal, not a silent pass", operation, req.Name, req.WantCandidateStatus, got)
+				}
+			})
+
+			t.Run(operation+"/"+req.Name+"/candidate_regresses_to_baselines_status", func(t *testing.T) {
+				in := RESTAdmissionInput{
+					NamedBuild:          "abc123",
+					WantCandidateStatus: req.WantCandidateStatus,
+					WantBaselineStatus:  req.WantBaselineStatus,
+					Candidate:           restLeg(req.WantBaselineStatus, `{}`, "abc123"),
+					Baseline:            restLeg(req.WantBaselineStatus, `{}`, ""),
+				}
+				got := RESTAdmit(in, decodeBody)
+				if got.Admitted || got.Reason != RESTRefusalUnexpectedStatus {
+					t.Fatalf("%s/%s: candidate answering %d (the baseline's own declared status) got %+v, want a named RESTRefusalUnexpectedStatus refusal, not a silent pass", operation, req.Name, req.WantBaselineStatus, got)
+				}
+			})
+		}
+	}
+}

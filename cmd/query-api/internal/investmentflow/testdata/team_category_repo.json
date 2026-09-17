@@ -1,0 +1,101 @@
+{
+  "chosen_mode": "team_category_repo",
+  "coverage": {
+    "repo_coverage": 0.9,
+    "team_coverage": 0.9
+  },
+  "description": "Team burden flow with category rollups.",
+  "distinct_repo_targets": 2,
+  "distinct_team_targets": 2,
+  "drill_category": null,
+  "flow_mode": "team_category_repo",
+  "label": "Team \u2192 Category \u2192 Repo",
+  "links": [
+    {
+      "source": "teamA",
+      "target": "Feature Delivery",
+      "value": 15.0
+    },
+    {
+      "source": "Feature Delivery",
+      "target": "repoA",
+      "value": 10.0
+    },
+    {
+      "source": "Feature Delivery",
+      "target": "Other repos",
+      "value": 5.0
+    },
+    {
+      "source": "teamB",
+      "target": "Maintenance / Tech Debt",
+      "value": 3.0
+    },
+    {
+      "source": "Maintenance / Tech Debt",
+      "target": "repoA",
+      "value": 3.0
+    },
+    {
+      "source": "Unassigned team",
+      "target": "Feature Delivery",
+      "value": 2.0
+    },
+    {
+      "source": "Feature Delivery",
+      "target": "Unassigned repo",
+      "value": 2.0
+    }
+  ],
+  "mode": "investment",
+  "nodes": [
+    {
+      "group": "team",
+      "name": "teamA",
+      "value": 15.0
+    },
+    {
+      "group": "category",
+      "name": "Feature Delivery",
+      "value": 17.0
+    },
+    {
+      "group": "repo",
+      "name": "repoA",
+      "value": 13.0
+    },
+    {
+      "group": "repo",
+      "name": "Other repos",
+      "value": 5.0
+    },
+    {
+      "group": "team",
+      "name": "teamB",
+      "value": 3.0
+    },
+    {
+      "group": "category",
+      "name": "Maintenance / Tech Debt",
+      "value": 3.0
+    },
+    {
+      "group": "team",
+      "name": "Unassigned team",
+      "value": 2.0
+    },
+    {
+      "group": "repo",
+      "name": "Unassigned repo",
+      "value": 2.0
+    }
+  ],
+  "repo_coverage": 0.9,
+  "team_coverage": 0.9,
+  "top_n_repos": 1,
+  "unassigned_reasons": {
+    "missing_repo": 2,
+    "missing_team": 1
+  },
+  "unit": null
+}

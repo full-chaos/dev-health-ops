@@ -30,10 +30,16 @@ package analytics
 // this package composes FROM that source (repoAllocationInvestmentSource,
 // workUnitAuthorsSource, and the two direct call sites in flowmatrix.go)
 // rather than reading work_unit_investments or work_unit_repo_effort
-// directly, so filtering the one shared source is sufficient -- verified
-// by grep: latestWorkUnitRepoEffortSource, the only sibling source reading
-// a raw investment table, is itself only ever joined onto
-// LatestWorkUnitInvestmentsSource (investment.go:333), never read alone.
+// directly, so filtering the one shared source is sufficient. Within this
+// package, LatestWorkUnitRepoEffortSource is itself only ever joined onto
+// LatestWorkUnitInvestmentsSource (investment.go:333), never read alone
+// -- it reads work_unit_repo_effort, a DIFFERENT table with no
+// work_unit_supersessions column of its own, so this filter cannot reach
+// it directly either way. It is now also exported (see investment.go's
+// own doc comment on the export) for cmd/query-api/internal/
+// investmentflow to compose its own REPO_ALLOCATED_
+// WORK_UNIT_INVESTMENTS_SOURCE join, always still layered on top of an
+// already-superseded-filtered LatestWorkUnitInvestmentsSource read.
 func supersededWorkUnitIDsFilter() string {
 	return `
               AND work_unit_id NOT IN (

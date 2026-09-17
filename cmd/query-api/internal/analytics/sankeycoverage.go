@@ -158,13 +158,13 @@ func compileSankeyCoverage(req SankeyRequest, orgID string, timeoutSeconds int, 
 		// which joins other org_id-carrying tables.
 		orgFilter = "work_unit_investments.org_id = {org_id:String}"
 
-		unitTeamSQL := buildUnitTeamSubquery(unitTeamSubqueryOptions{
+		unitTeamSQL := BuildUnitTeamSubquery(UnitTeamSubqueryOptions{
 			Source:         fmt.Sprintf("%s AS work_unit_investments", LatestWorkUnitInvestmentsSource()),
 			InnerTeamAlias: "team",
 			OuterTeamAlias: "team_label",
 			IncludeTeamID:  true,
 		})
-		repoEffortSrc := latestWorkUnitRepoEffortSource()
+		repoEffortSrc := LatestWorkUnitRepoEffortSource()
 		joins = append(joins,
 			fmt.Sprintf("LEFT JOIN (%s) AS ut ON ut.work_unit_id = work_unit_investments.work_unit_id", unitTeamSQL),
 			fmt.Sprintf("LEFT JOIN %s AS wure ON wure.org_id = work_unit_investments.org_id AND wure.work_unit_id = work_unit_investments.work_unit_id", repoEffortSrc),

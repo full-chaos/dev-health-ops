@@ -1,0 +1,96 @@
+{
+  "chosen_mode": "team_subcategory_repo",
+  "coverage": {
+    "repo_coverage": 0.6666666666666666,
+    "team_coverage": 0.6666666666666666
+  },
+  "description": "Showing subcategories within Feature Delivery.",
+  "distinct_repo_targets": 2,
+  "distinct_team_targets": 1,
+  "drill_category": "feature_delivery",
+  "flow_mode": "team_subcategory_repo",
+  "label": "Team \u2192 Subcategory \u2192 Repo",
+  "links": [
+    {
+      "source": "teamA",
+      "target": "Feature Delivery \u00b7 Customer",
+      "value": 8.0
+    },
+    {
+      "source": "Feature Delivery \u00b7 Customer",
+      "target": "repoA",
+      "value": 8.0
+    },
+    {
+      "source": "teamA",
+      "target": "Feature Delivery \u00b7 Roadmap",
+      "value": 4.0
+    },
+    {
+      "source": "Feature Delivery \u00b7 Roadmap",
+      "target": "repoB",
+      "value": 4.0
+    },
+    {
+      "source": "Unassigned team",
+      "target": "Maintenance \u00b7 Debt",
+      "value": 6.0
+    },
+    {
+      "source": "Maintenance \u00b7 Debt",
+      "target": "Unassigned repo",
+      "value": 6.0
+    }
+  ],
+  "mode": "investment",
+  "nodes": [
+    {
+      "group": "team",
+      "name": "teamA",
+      "value": 12.0
+    },
+    {
+      "group": "subcategory",
+      "name": "Feature Delivery \u00b7 Customer",
+      "value": 8.0
+    },
+    {
+      "group": "repo",
+      "name": "repoA",
+      "value": 8.0
+    },
+    {
+      "group": "subcategory",
+      "name": "Feature Delivery \u00b7 Roadmap",
+      "value": 4.0
+    },
+    {
+      "group": "repo",
+      "name": "repoB",
+      "value": 4.0
+    },
+    {
+      "group": "team",
+      "name": "Unassigned team",
+      "value": 6.0
+    },
+    {
+      "group": "subcategory",
+      "name": "Maintenance \u00b7 Debt",
+      "value": 6.0
+    },
+    {
+      "group": "repo",
+      "name": "Unassigned repo",
+      "value": 6.0
+    }
+  ],
+  "repo_coverage": 0.6666666666666666,
+  "team_coverage": 0.6666666666666666,
+  "top_n_repos": 12,
+  "unassigned_reasons": {
+    "missing_repo": 2,
+    "missing_team": 1
+  },
+  "unit": null
+}

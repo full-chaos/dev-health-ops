@@ -1,0 +1,65 @@
+{
+  "chosen_mode": "team",
+  "coverage": null,
+  "description": "Dynamic allocation target based on coverage metrics.",
+  "distinct_repo_targets": 1,
+  "distinct_team_targets": 2,
+  "drill_category": null,
+  "flow_mode": null,
+  "label": "Subcategory \u2192 Team",
+  "links": [
+    {
+      "source": "Feature Delivery \u00b7 Customer",
+      "target": "teamA",
+      "value": 10.0
+    },
+    {
+      "source": "Maintenance \u00b7 Debt",
+      "target": "teamB",
+      "value": 5.0
+    },
+    {
+      "source": "Risk \u00b7 Security",
+      "target": "unassigned",
+      "value": 2.0
+    }
+  ],
+  "mode": "investment",
+  "nodes": [
+    {
+      "group": "subcategory",
+      "name": "Feature Delivery \u00b7 Customer",
+      "value": 10.0
+    },
+    {
+      "group": "team",
+      "name": "teamA",
+      "value": 10.0
+    },
+    {
+      "group": "subcategory",
+      "name": "Maintenance \u00b7 Debt",
+      "value": 5.0
+    },
+    {
+      "group": "team",
+      "name": "teamB",
+      "value": 5.0
+    },
+    {
+      "group": "subcategory",
+      "name": "Risk \u00b7 Security",
+      "value": 2.0
+    },
+    {
+      "group": "team",
+      "name": "unassigned",
+      "value": 2.0
+    }
+  ],
+  "repo_coverage": 0.4,
+  "team_coverage": 0.8823529411764706,
+  "top_n_repos": null,
+  "unassigned_reasons": null,
+  "unit": null
+}

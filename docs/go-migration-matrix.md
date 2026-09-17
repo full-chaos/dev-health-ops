@@ -237,7 +237,7 @@ A row that is live, reachable to real clients (`canary`/`primary`) and carries n
 is required before stage 4/5, and "a bare 200 does not qualify".
 
 <!-- BEGIN GENERATED GO API OPERATIONS -->
-_Rendered 2026-09-16T12:25:30Z against main merge-base `445450c5a9997e5f467c38b0411442bdafc1ea0a`; SDL digest pin `sha256:19485ec136d04de0935717dca8b4f5fd27dd0351fe96b854d40f433229468fd0`; fleet read 2026-09-16T12:25:30Z via fleet file fleet-prod.json._
+_Rendered 2026-09-16T12:25:30Z against main merge-base `9b77af3ba4316d5ae0204865335f7a62a6afa76d`; SDL digest pin `sha256:19485ec136d04de0935717dca8b4f5fd27dd0351fe96b854d40f433229468fd0`; fleet read 2026-09-16T12:25:30Z via fleet file fleet-prod.json._
 
 _Rows in `go_api_proof_run` at read time: **515**. Operations reachable to real clients with no deployed-executed proof: **0**. Rows whose mode says Go but whose schema digest no longer matches the pin, so every request silently falls back to Python: **0**._
 
@@ -281,7 +281,7 @@ sync with either side, so a route added, removed or newly wired on either plane 
 time the tool runs, and the doc-drift check below fails until it is re-rendered.
 
 <!-- BEGIN GENERATED REST ENDPOINTS -->
-_32 `/api/v1/*` routes in `src/dev_health_ops/api/main.py`: **20** ported, **12** python-only, **0** dead-by-design._
+_32 `/api/v1/*` routes in `src/dev_health_ops/api/main.py`: **22** ported, **10** python-only, **0** dead-by-design._
 
 | Method | Path | Status | Go handler |
 | --- | --- | --- | --- |
@@ -300,8 +300,8 @@ _32 `/api/v1/*` routes in `src/dev_health_ops/api/main.py`: **20** ported, **12*
 | GET | `/api/v1/investment` | python-only | -- |
 | POST | `/api/v1/investment` | python-only | -- |
 | POST | `/api/v1/investment/explain` | ported | `cmd/query-api/investment_explain_route.go:119` |
-| POST | `/api/v1/investment/flow` | python-only | -- |
-| POST | `/api/v1/investment/flow/repo-team` | python-only | -- |
+| POST | `/api/v1/investment/flow` | ported | `cmd/query-api/investment_flow_route.go:86` |
+| POST | `/api/v1/investment/flow/repo-team` | ported | `cmd/query-api/investment_flow_route.go:86` |
 | GET | `/api/v1/investment/sunburst` | python-only | -- |
 | GET | `/api/v1/meta` | ported | `cmd/query-api/meta_route.go:79` |
 | GET | `/api/v1/opportunities` | python-only | -- |

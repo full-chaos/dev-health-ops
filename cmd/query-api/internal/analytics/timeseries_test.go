@@ -122,7 +122,7 @@ func TestCompileTimeseries_Investment_CompilesInlinedSource(t *testing.T) {
 }
 
 // TestCompileTimeseries_Investment_TeamDimension_UsesTeamVoteTupleWrap
-// pins the CHAOS-4547 site-3 fix (buildUnitTeamSubquery's
+// pins the CHAOS-4547 site-3 fix (BuildUnitTeamSubquery's
 // resolved_team argMax) reaches the compiled SQL for a TEAM-dimensioned
 // investment timeseries query.
 func TestCompileTimeseries_Investment_TeamDimension_UsesTeamVoteTupleWrap(t *testing.T) {
@@ -142,7 +142,7 @@ func TestCompileTimeseries_Investment_TeamDimension_UsesTeamVoteTupleWrap(t *tes
 	}
 	// resolved_team_id must NOT be wrapped -- its own ifNull falls back
 	// to the literal '' (never NULL), so wrapping it would misrepresent
-	// the audit (buildUnitTeamSubquery's doc comment).
+	// the audit (BuildUnitTeamSubquery's doc comment).
 	if strings.Contains(q.sql, "tuple(resolved_team_id)") {
 		t.Errorf("resolved_team_id is never NULL -- tuple-wrapping it is an unneeded, unrepresentative change, got: %s", q.sql)
 	}

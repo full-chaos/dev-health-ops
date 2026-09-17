@@ -148,9 +148,15 @@ var ageBuckets = []string{"0-1d", "1-3d", "3-7d", "7-14d", "14-30d", "30d+"}
 // with the formatted label for every kind whose branch actually consults
 // totals -- the default/repo/file branch -- so using the formatted label
 // consistently changes nothing observable).
+//
+// axisOrder always returns a non-nil slice, even when values is empty --
+// Python's list.sort()/sorted()/list comprehension results are never None,
+// so every branch here must marshal to JSON "[]", never "null" (a bare
+// `append([]string(nil), empty...)` returns nil in Go, which is the bug
+// this shape guards against).
 func axisOrder(kind string, values []string, totals map[string]float64) []string {
 	seen := map[string]bool{}
-	var valuesList []string
+	valuesList := make([]string, 0, len(values))
 	for _, v := range values {
 		if !seen[v] {
 			seen[v] = true
@@ -162,7 +168,7 @@ func axisOrder(kind string, values []string, totals map[string]float64) []string
 	case "hour":
 		return hourLabels()
 	case "weekday":
-		var filtered []string
+		filtered := make([]string, 0, len(weekdayLabels))
 		presentSet := map[string]bool{}
 		for _, v := range valuesList {
 			presentSet[v] = true
@@ -173,15 +179,16 @@ func axisOrder(kind string, values []string, totals map[string]float64) []string
 			}
 		}
 		if len(filtered) == 0 {
-			return append([]string(nil), weekdayLabels...)
+			return append([]string{}, weekdayLabels...)
 		}
 		return filtered
 	case "day", "week":
-		out := append([]string(nil), valuesList...)
+		out := make([]string, len(valuesList))
+		copy(out, valuesList)
 		sort.Strings(out)
 		return out
 	case "status":
-		var filtered []string
+		filtered := make([]string, 0, len(statusOrder))
 		presentSet := map[string]bool{}
 		for _, v := range valuesList {
 			presentSet[v] = true
@@ -193,7 +200,7 @@ func axisOrder(kind string, values []string, totals map[string]float64) []string
 		}
 		return filtered
 	case "age_bucket":
-		var filtered []string
+		filtered := make([]string, 0, len(ageBuckets))
 		presentSet := map[string]bool{}
 		for _, v := range valuesList {
 			presentSet[v] = true
@@ -205,7 +212,8 @@ func axisOrder(kind string, values []string, totals map[string]float64) []string
 		}
 		return filtered
 	default:
-		out := append([]string(nil), valuesList...)
+		out := make([]string, len(valuesList))
+		copy(out, valuesList)
 		sort.SliceStable(out, func(i, j int) bool {
 			return totals[out[i]] > totals[out[j]]
 		})

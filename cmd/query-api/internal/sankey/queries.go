@@ -16,6 +16,21 @@ import (
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/analytics"
 )
 
+// dateBindingValue formats t as a bare "YYYY-MM-DD" string for binding
+// into a {name:Date}-typed native ClickHouse parameter -- REQUIRED, not
+// cosmetic: dev-health-go's clickHouseParameter formats every time.Time
+// value with a full DateTime literal regardless of the placeholder's
+// declared type, so a {start_day:Date}/{end_day:Date} placeholder bound
+// to a raw time.Time always fails live with "Value ... cannot be parsed
+// as Date ... only 10 of 23 bytes was parsed". Same fix shape as
+// analytics.dateBindingValue and every other package carrying
+// this class of bug; duplicated here per this binary's own
+// "repeat, don't couple" convention for a helper this narrow.
+func dateBindingValue(t time.Time) string {
+	year, month, day := t.Date()
+	return fmt.Sprintf("%04d-%02d-%02d", year, int(month), day)
+}
+
 // tablesPresent ports _tables_present (services/sankey.py:125-147): true
 // when every named table exists in the current database. A lookup
 // failure degrades to false (not present), matching Python's own
@@ -135,7 +150,7 @@ func fetchInvestmentFlowItems(ctx context.Context, client QueryClient, startTS, 
             r.repo AS target,
             sum(theme_kv.2 * work_unit_investments.effort_value) AS value
         FROM %s AS work_unit_investments
-        LEFT JOIN repos FINAL AS r ON toString(r.id) = toString(work_unit_investments.repo_id) AND r.org_id = {org_id:String}
+        LEFT JOIN repos AS r FINAL ON toString(r.id) = toString(work_unit_investments.repo_id) AND r.org_id = {org_id:String}
         ARRAY JOIN CAST(work_unit_investments.theme_distribution_json AS Array(Tuple(String, Float32))) AS theme_kv
         WHERE work_unit_investments.from_ts < {end_ts:DateTime64(3, 'UTC')} AND work_unit_investments.to_ts >= {start_ts:DateTime64(3, 'UTC')}
           AND work_unit_investments.org_id = {org_id:String}
@@ -194,8 +209,8 @@ func fetchExpenseCounts(ctx context.Context, client QueryClient, startDay, endDa
         %s
     `, scopeFilterSQL, settingsMaxExecutionTime())
 	bindings := append([]dhclickhouse.Binding{
-		{Name: "start_day", Value: startDay},
-		{Name: "end_day", Value: endDay},
+		{Name: "start_day", Value: dateBindingValue(startDay)},
+		{Name: "end_day", Value: dateBindingValue(endDay)},
 		{Name: "org_id", Value: orgID},
 	}, scopeBindings...)
 
@@ -238,8 +253,8 @@ func fetchExpenseAbandoned(ctx context.Context, client QueryClient, startDay, en
         %s
     `, scopeFilterSQL, settingsMaxExecutionTime())
 	bindings := append([]dhclickhouse.Binding{
-		{Name: "start_day", Value: startDay},
-		{Name: "end_day", Value: endDay},
+		{Name: "start_day", Value: dateBindingValue(startDay)},
+		{Name: "end_day", Value: dateBindingValue(endDay)},
 		{Name: "org_id", Value: orgID},
 	}, scopeBindings...)
 
@@ -288,8 +303,8 @@ func fetchStateStatusCounts(ctx context.Context, client QueryClient, startDay, e
         %s
     `, scopeFilterSQL, settingsMaxExecutionTime())
 	bindings := append([]dhclickhouse.Binding{
-		{Name: "start_day", Value: startDay},
-		{Name: "end_day", Value: endDay},
+		{Name: "start_day", Value: dateBindingValue(startDay)},
+		{Name: "end_day", Value: dateBindingValue(endDay)},
 		{Name: "org_id", Value: orgID},
 	}, scopeBindings...)
 
@@ -336,33 +351,20 @@ type hotspotFlowRow struct {
 // JOIN's own ON clause -- Python's own INNER JOIN neither dedups repos nor
 // scopes it to org_id, a declared Python-plane defect
 // (sankeyRepoDedupParity, same citation as fetchInvestmentFlowItems').
+//
+// NO LEADING WITH: Python's own reader names churn_hi/
+// churn_mid as a two-entry `WITH` CTE list. dev-health-go's ClickHouse
+// client requires a literal SELECT as the query's first token and
+// refuses anything else (clickhouse/client.go's validateReadOnlyStatement),
+// confirmed live -- the same restructuring
+// analytics/investmentmembershipscope.go's own doc comment documents for
+// the six flowMatrix CTEs already ported that way: every named CTE
+// becomes a bare `(SELECT ...)` scalar subquery inlined at its use site
+// instead of referenced by name, re-evaluated at each use rather than
+// shared. churn_hi/churn_mid are each used once, so each is inlined
+// exactly once, directly inside the multiIf predicate below.
 func fetchHotspotRows(ctx context.Context, client QueryClient, startDay, endDay time.Time, scopeFilterSQL string, scopeBindings []dhclickhouse.Binding, limit int, orgID string) ([]hotspotFlowRow, error) {
 	query := fmt.Sprintf(`
-        WITH
-            (
-                SELECT quantileExact(0.7)(churn) FROM (
-                    SELECT
-                        sum(metrics.churn) AS churn
-                    FROM file_metrics_daily FINAL AS metrics
-                    INNER JOIN repos FINAL AS r ON r.id = metrics.repo_id AND r.org_id = {org_id:String}
-                    WHERE metrics.day >= {start_day:Date} AND metrics.day < {end_day:Date}
-                        AND metrics.org_id = {org_id:String}
-                        %[1]s
-                    GROUP BY r.repo, metrics.path
-                )
-            ) AS churn_hi,
-            (
-                SELECT quantileExact(0.3)(churn) FROM (
-                    SELECT
-                        sum(metrics.churn) AS churn
-                    FROM file_metrics_daily FINAL AS metrics
-                    INNER JOIN repos FINAL AS r ON r.id = metrics.repo_id AND r.org_id = {org_id:String}
-                    WHERE metrics.day >= {start_day:Date} AND metrics.day < {end_day:Date}
-                        AND metrics.org_id = {org_id:String}
-                        %[1]s
-                    GROUP BY r.repo, metrics.path
-                )
-            ) AS churn_mid
         SELECT
             r.repo AS repo,
             if(
@@ -372,15 +374,37 @@ func fetchHotspotRows(ctx context.Context, client QueryClient, startDay, endDay 
             ) AS directory,
             metrics.path AS file_path,
             multiIf(
-                sum(metrics.churn) >= churn_hi,
+                sum(metrics.churn) >= (
+                    SELECT quantileExact(0.7)(churn) FROM (
+                        SELECT
+                            sum(metrics.churn) AS churn
+                        FROM file_metrics_daily AS metrics FINAL
+                        INNER JOIN repos AS r FINAL ON r.id = metrics.repo_id AND r.org_id = {org_id:String}
+                        WHERE metrics.day >= {start_day:Date} AND metrics.day < {end_day:Date}
+                            AND metrics.org_id = {org_id:String}
+                            %[1]s
+                        GROUP BY r.repo, metrics.path
+                    )
+                ),
                 'refactor',
-                sum(metrics.churn) >= churn_mid,
+                sum(metrics.churn) >= (
+                    SELECT quantileExact(0.3)(churn) FROM (
+                        SELECT
+                            sum(metrics.churn) AS churn
+                        FROM file_metrics_daily AS metrics FINAL
+                        INNER JOIN repos AS r FINAL ON r.id = metrics.repo_id AND r.org_id = {org_id:String}
+                        WHERE metrics.day >= {start_day:Date} AND metrics.day < {end_day:Date}
+                            AND metrics.org_id = {org_id:String}
+                            %[1]s
+                        GROUP BY r.repo, metrics.path
+                    )
+                ),
                 'fix',
                 'feature'
             ) AS change_type,
             sum(metrics.churn) AS churn
-        FROM file_metrics_daily FINAL AS metrics
-        INNER JOIN repos FINAL AS r
+        FROM file_metrics_daily AS metrics FINAL
+        INNER JOIN repos AS r FINAL
             ON r.id = metrics.repo_id AND r.org_id = {org_id:String}
         WHERE metrics.day >= {start_day:Date} AND metrics.day < {end_day:Date}
           AND metrics.path != ''
@@ -392,8 +416,8 @@ func fetchHotspotRows(ctx context.Context, client QueryClient, startDay, endDay 
         %[2]s
     `, scopeFilterSQL, settingsMaxExecutionTime())
 	bindings := append([]dhclickhouse.Binding{
-		{Name: "start_day", Value: startDay},
-		{Name: "end_day", Value: endDay},
+		{Name: "start_day", Value: dateBindingValue(startDay)},
+		{Name: "end_day", Value: dateBindingValue(endDay)},
 		{Name: "org_id", Value: orgID},
 		{Name: "limit", Value: limit},
 	}, scopeBindings...)

@@ -243,7 +243,7 @@ func fetchInvestmentSubcategoryEdges(ctx context.Context, client QueryClient, st
             ifNull(r.repo, if(repo_id IS NULL, 'unassigned', toString(repo_id))) AS target,
             sum(subcategory_kv.2 * effort_value) AS value
         FROM %s AS work_unit_investments
-        LEFT JOIN repos FINAL AS r ON toString(r.id) = toString(repo_id) AND r.org_id = {org_id:String}
+        LEFT JOIN repos AS r FINAL ON toString(r.id) = toString(repo_id) AND r.org_id = {org_id:String}
         ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
         WHERE work_unit_investments.from_ts < {end_ts:DateTime64(3, 'UTC')}
           AND work_unit_investments.to_ts >= {start_ts:DateTime64(3, 'UTC')}
@@ -321,7 +321,7 @@ func fetchInvestmentRepoTeamEdges(ctx context.Context, client QueryClient, start
             ifNull(nullIf(unit_team.team, ''), 'unassigned') AS team,
             sum(subcategory_kv.2 * effort_value) AS value
         FROM %s
-        LEFT JOIN repos FINAL AS r ON toString(r.id) = toString(repo_id) AND r.org_id = {org_id:String}
+        LEFT JOIN repos AS r FINAL ON toString(r.id) = toString(repo_id) AND r.org_id = {org_id:String}
         LEFT JOIN (%s) AS unit_team ON unit_team.work_unit_id = work_unit_investments.work_unit_id
         ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
         WHERE work_unit_investments.from_ts < {end_ts:DateTime64(3, 'UTC')}
@@ -378,7 +378,7 @@ func fetchInvestmentTeamCategoryRepoEdges(ctx context.Context, client QueryClien
             ifNull(r.repo, if(repo_id IS NULL, 'unassigned', toString(repo_id))) AS repo,
             sum(subcategory_kv.2 * effort_value) AS value
         FROM %s
-        LEFT JOIN repos FINAL AS r ON toString(r.id) = toString(repo_id) AND r.org_id = {org_id:String}
+        LEFT JOIN repos AS r FINAL ON toString(r.id) = toString(repo_id) AND r.org_id = {org_id:String}
         LEFT JOIN (%s) AS unit_team ON unit_team.work_unit_id = work_unit_investments.work_unit_id
         ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
         WHERE work_unit_investments.from_ts < {end_ts:DateTime64(3, 'UTC')}
@@ -435,7 +435,7 @@ func fetchInvestmentTeamSubcategoryRepoEdges(ctx context.Context, client QueryCl
             ifNull(r.repo, if(repo_id IS NULL, 'unassigned', toString(repo_id))) AS repo,
             sum(subcategory_kv.2 * effort_value) AS value
         FROM %s
-        LEFT JOIN repos FINAL AS r ON toString(r.id) = toString(repo_id) AND r.org_id = {org_id:String}
+        LEFT JOIN repos AS r FINAL ON toString(r.id) = toString(repo_id) AND r.org_id = {org_id:String}
         LEFT JOIN (%s) AS unit_team ON unit_team.work_unit_id = work_unit_investments.work_unit_id
         ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
         WHERE work_unit_investments.from_ts < {end_ts:DateTime64(3, 'UTC')}

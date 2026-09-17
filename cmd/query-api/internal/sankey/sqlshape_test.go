@@ -2,6 +2,8 @@ package sankey
 
 import (
 	"context"
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -81,9 +83,9 @@ func TestReplacingMergeTreeReadsAreFinalWithOrgIDInStatement(t *testing.T) {
 		_, _ = fetchInvestmentFlowItems(ctx, c, now, now, "", nil, 60, "org-1")
 		query := c.queries[0]
 		assertNoLimit1By(t, query)
-		joinIdx := strings.Index(query, "LEFT JOIN repos FINAL AS r ON")
+		joinIdx := strings.Index(query, "LEFT JOIN repos AS r FINAL ON")
 		if joinIdx < 0 {
-			t.Fatalf("expected LEFT JOIN repos FINAL AS r ON:\n%s", query)
+			t.Fatalf("expected LEFT JOIN repos AS r FINAL ON (alias BEFORE FINAL, the only order ClickHouse accepts):\n%s", query)
 		}
 		if !strings.Contains(query[joinIdx:joinIdx+200], "r.org_id = {org_id:String}") {
 			t.Fatalf("expected r.org_id inside the JOIN's own ON clause:\n%s", query)
@@ -95,14 +97,14 @@ func TestReplacingMergeTreeReadsAreFinalWithOrgIDInStatement(t *testing.T) {
 		_, _ = fetchHotspotRows(ctx, c, now, now, "", nil, 150, "org-1")
 		query := c.queries[0]
 		assertNoLimit1By(t, query)
-		if got := strings.Count(query, "FROM file_metrics_daily FINAL AS metrics"); got != 3 {
-			t.Fatalf("expected 3 FROM file_metrics_daily FINAL AS metrics (two quantile CTEs + main select), got %d:\n%s", got, query)
+		if got := strings.Count(query, "FROM file_metrics_daily AS metrics FINAL"); got != 3 {
+			t.Fatalf("expected 3 FROM file_metrics_daily AS metrics FINAL (alias BEFORE FINAL; two quantile subqueries + main select), got %d:\n%s", got, query)
 		}
-		if got := strings.Count(query, "INNER JOIN repos FINAL AS r"); got != 3 {
-			t.Fatalf("expected 3 INNER JOIN repos FINAL AS r, got %d:\n%s", got, query)
+		if got := strings.Count(query, "INNER JOIN repos AS r FINAL"); got != 3 {
+			t.Fatalf("expected 3 INNER JOIN repos AS r FINAL (alias BEFORE FINAL), got %d:\n%s", got, query)
 		}
 		depths := sqlshape.Depths(query)
-		for _, joinIdx := range allIndexes(query, "INNER JOIN repos FINAL AS r") {
+		for _, joinIdx := range allIndexes(query, "INNER JOIN repos AS r FINAL") {
 			onOrgIdx := strings.Index(query[joinIdx:], "r.org_id = {org_id:String}")
 			if onOrgIdx < 0 {
 				t.Fatalf("expected r.org_id inside every JOIN's own ON clause:\n%s", query)
@@ -114,6 +116,29 @@ func TestReplacingMergeTreeReadsAreFinalWithOrgIDInStatement(t *testing.T) {
 			}
 		}
 	})
+}
+
+// finalBeforeAliasPattern matches `FINAL AS <alias>` -- ClickHouse accepts
+// only `<table> AS <alias> FINAL`, never `<table> FINAL AS <alias>` (Code
+// 62 syntax error, confirmed live). A source-text scan, not a
+// runtime-captured-query scan, so a NEW hand-written FINAL join added to
+// this file in the wrong order fails here regardless of which function it
+// lands in, without needing a matching runtime test added by hand.
+var finalBeforeAliasPattern = regexp.MustCompile(`\bFINAL\s+AS\s+\w+`)
+
+// TestNoAliasAfterFinalInQueriesSource pins the alias-before-FINAL
+// ordering at the source level for this package's queries.go.
+func TestNoAliasAfterFinalInQueriesSource(t *testing.T) {
+	src, err := os.ReadFile("queries.go")
+	if err != nil {
+		t.Fatalf("read queries.go: %v -- this trip-wire's own input did not resolve", err)
+	}
+	if finalCount := strings.Count(string(src), "FINAL"); finalCount == 0 {
+		t.Fatalf("queries.go contains no FINAL at all -- this trip-wire's own input moved, was renamed, or the FINAL dedup convention regressed")
+	}
+	if bad := finalBeforeAliasPattern.FindAll(src, -1); len(bad) > 0 {
+		t.Fatalf("queries.go contains %d `<table> FINAL AS <alias>` site(s) -- ClickHouse SYNTAX error (Code 62); alias must come BEFORE FINAL (`<table> AS <alias> FINAL`): %v", len(bad), bad)
+	}
 }
 
 func allIndexes(s, substr string) []int {

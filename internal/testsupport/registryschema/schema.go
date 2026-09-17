@@ -19,8 +19,10 @@ import (
 // DDL mirrors alembic 0114 (the three go_api_* GraphQL tables), 0127 (the
 // review_evidence/recorded_by provenance columns), 0128 (the
 // measurement-route / baseline-defect provenance columns), 0129
-// (build_binding), and 0134 (go_api_rest_proof_run, the REST sibling
-// ledger go-api-rest-prove writes).
+// (build_binding), 0134 (go_api_rest_proof_run, the REST sibling
+// ledger go-api-rest-prove writes), and 0135 (go_api_rest_proof_run's
+// baseline_defect_declared column: which tickets a request DECLARED
+// that run, alongside baseline_defect's existing matched-only record).
 //
 // The constraints are not decoration and are NOT trimmed to "what the
 // test needs": the 4-column composite FK from go_api_proof_run to
@@ -140,6 +142,7 @@ CREATE TABLE go_api_rest_proof_run (
 	recorded_by TEXT,
 	measurement_route TEXT,
 	baseline_defect TEXT[],
+	baseline_defect_declared TEXT[],
 	differences_outside_baseline_defect INTEGER NOT NULL DEFAULT 0,
 	build_binding TEXT,
 	observed_at TIMESTAMPTZ NOT NULL DEFAULT now(),

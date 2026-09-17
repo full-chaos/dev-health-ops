@@ -55,6 +55,20 @@ type RESTReceipt struct {
 	// covered this comparison's differences.
 	BaselineDefects []string
 
+	// DeclaredDefects names every ticket this request's own corpus entry
+	// DECLARED at the moment this receipt was written -- alongside, never
+	// instead of, BaselineDefects' existing matched-only record (alembic
+	// 0135's own module doc comment: a silent citation and a
+	// not-yet-declared one used to read identically from this table; this
+	// is what tells them apart). nil writes SQL NULL, meaning "unknown"
+	// -- the caller did not populate this field, the same convention a
+	// pre-0135 row carries structurally. A non-nil slice, even empty,
+	// writes a real array meaning "known": this request declared exactly
+	// these tickets (possibly none) that run. cmd/go-api-rest-prove is
+	// the only writer today and always passes a non-nil slice, so every
+	// row it writes is "known" from the moment this column exists.
+	DeclaredDefects []string
+
 	// DifferencesOutsideBaselineDefect mirrors Receipt's own field of the
 	// same name -- written even when zero, for the same reason.
 	DifferencesOutsideBaselineDefect int
@@ -115,6 +129,11 @@ func WriteREST(ctx context.Context, db Querier, receipt RESTReceipt) (uuid.UUID,
 			return uuid.Nil, fmt.Errorf("goapiproof: refusing to write a REST receipt whose baseline_defect array contains an empty citation (%d entries) -- cardinality() counts it, so the enablement predicate would read this as a fully-cited mismatch while it cites nothing", len(receipt.BaselineDefects))
 		}
 	}
+	for _, ticket := range receipt.DeclaredDefects {
+		if NamesNothing(ticket) {
+			return uuid.Nil, fmt.Errorf("goapiproof: refusing to write a REST receipt whose baseline_defect_declared array contains an empty citation (%d entries)", len(receipt.DeclaredDefects))
+		}
+	}
 
 	id := uuid.New()
 	if _, err := db.Exec(ctx,
@@ -123,14 +142,15 @@ func WriteREST(ctx context.Context, db Querier, receipt RESTReceipt) (uuid.UUID,
 		    request_identity, stage, terminal_state,
 		    baseline_response_ref, candidate_response_ref,
 		    org_id, review_evidence, recorded_by, observed_at,
-		    measurement_route, baseline_defect, differences_outside_baseline_defect,
+		    measurement_route, baseline_defect, baseline_defect_declared,
+		    differences_outside_baseline_defect,
 		    build_binding)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
 		id, receipt.Method, receipt.Path, receipt.CandidateBuild,
 		receipt.RequestIdentity, receipt.Stage, receipt.TerminalState,
 		nullIfEmpty(receipt.BaselineResponseRef), nullIfEmpty(receipt.CandidateResponseRef),
 		nullIfEmpty(receipt.OrgID), nullIfEmpty(receipt.ReviewEvidence), nullIfEmpty(receipt.RecordedBy),
-		receipt.ObservedAt, nullIfEmpty(receipt.MeasurementRoute), receipt.BaselineDefects,
+		receipt.ObservedAt, nullIfEmpty(receipt.MeasurementRoute), receipt.BaselineDefects, receipt.DeclaredDefects,
 		receipt.DifferencesOutsideBaselineDefect, nullIfEmpty(receipt.BuildBinding),
 	); err != nil {
 		return uuid.Nil, fmt.Errorf("goapiproof: record REST proof run for %s %s: %w", receipt.Method, receipt.Path, err)

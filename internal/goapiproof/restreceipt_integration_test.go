@@ -121,3 +121,52 @@ func TestWriteREST_RefusesAnUnknownVocabularyAgainstTheRealCheckConstraints(t *t
 		t.Fatal("the database accepted an out-of-vocabulary terminal_state -- ck_go_api_rest_proof_run_terminal_state did not fire")
 	}
 }
+
+// TestWriteREST_DeclaredDefectsRoundTripsThroughTheMigratedSchema proves
+// alembic 0135's baseline_defect_declared column against a real,
+// migrated Postgres: nil writes SQL NULL, and a non-nil (even empty)
+// slice writes a real array -- read back exactly, not approximated by
+// either side collapsing the distinction.
+func TestWriteREST_DeclaredDefectsRoundTripsThroughTheMigratedSchema(t *testing.T) {
+	ctx := context.Background()
+	pool := startRegistryPostgres(t)
+
+	known := validRESTReceipt()
+	known.RequestIdentity = "rest-identity-declared-known"
+	known.DeclaredDefects = []string{"ABC-123", "DEF-456"}
+	knownID, err := WriteRESTAtomic(ctx, pool, known)
+	if err != nil {
+		t.Fatalf("WriteRESTAtomic (known): %v", err)
+	}
+
+	unknown := validRESTReceipt()
+	unknown.RequestIdentity = "rest-identity-declared-unknown"
+	unknown.DeclaredDefects = nil
+	unknownID, err := WriteRESTAtomic(ctx, pool, unknown)
+	if err != nil {
+		t.Fatalf("WriteRESTAtomic (unknown): %v", err)
+	}
+
+	var declared *[]string
+	if err := pool.QueryRow(ctx,
+		`SELECT baseline_defect_declared FROM go_api_rest_proof_run WHERE id = $1`, knownID,
+	).Scan(&declared); err != nil {
+		t.Fatalf("read back the known row: %v", err)
+	}
+	if declared == nil {
+		t.Fatal("baseline_defect_declared read back NULL, want the written array")
+	}
+	if len(*declared) != 2 || (*declared)[0] != "ABC-123" || (*declared)[1] != "DEF-456" {
+		t.Fatalf("baseline_defect_declared = %v, want [ABC-123 DEF-456]", *declared)
+	}
+
+	declared = nil
+	if err := pool.QueryRow(ctx,
+		`SELECT baseline_defect_declared FROM go_api_rest_proof_run WHERE id = $1`, unknownID,
+	).Scan(&declared); err != nil {
+		t.Fatalf("read back the unknown row: %v", err)
+	}
+	if declared != nil {
+		t.Fatalf("baseline_defect_declared = %v, want NULL (nil)", *declared)
+	}
+}

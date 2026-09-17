@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -132,13 +133,33 @@ func TestResultVacuityErrors_NamesEveryKind(t *testing.T) {
 
 // fakeReceiptWriter records what it was asked to write, so
 // proveOneRESTRequest can be driven end to end with no Postgres.
+// firingHistory/firingHistoryErr are canned ReadFiringHistory answers a
+// test can set; firingHistoryCalls records every call it received, so a
+// test can assert whether it was called at all, and with what.
 type fakeReceiptWriter struct {
 	receipts []goapiproof.RESTReceipt
+
+	firingHistory      []goapiproof.FiringHistory
+	firingHistoryErr   error
+	firingHistoryCalls []fakeFiringHistoryCall
+}
+
+type fakeFiringHistoryCall struct {
+	method, path, requestIdentity string
+	tickets                       []string
 }
 
 func (w *fakeReceiptWriter) WriteReceipt(_ context.Context, receipt goapiproof.RESTReceipt) (uuid.UUID, error) {
 	w.receipts = append(w.receipts, receipt)
 	return uuid.New(), nil
+}
+
+func (w *fakeReceiptWriter) ReadFiringHistory(_ context.Context, method, path, requestIdentity string, tickets []string) ([]goapiproof.FiringHistory, error) {
+	w.firingHistoryCalls = append(w.firingHistoryCalls, fakeFiringHistoryCall{method, path, requestIdentity, tickets})
+	if w.firingHistoryErr != nil {
+		return nil, w.firingHistoryErr
+	}
+	return w.firingHistory, nil
 }
 
 func TestProveOneRESTRequest_MatchWritesAReceipt(t *testing.T) {
@@ -179,6 +200,163 @@ func TestProveOneRESTRequest_MatchWritesAReceipt(t *testing.T) {
 	}
 	if writer.receipts[0].BuildBinding != goapiproof.EdgeBuildPresent {
 		t.Fatalf("receipt BuildBinding = %q, want %q", writer.receipts[0].BuildBinding, goapiproof.EdgeBuildPresent)
+	}
+	if writer.receipts[0].DeclaredDefects == nil || len(writer.receipts[0].DeclaredDefects) != 0 {
+		t.Fatalf("receipt DeclaredDefects = %#v, want a non-nil EMPTY slice -- this request declares no BaselineDefects, and that must write a KNOWN empty array, not NULL", writer.receipts[0].DeclaredDefects)
+	}
+	if len(writer.firingHistoryCalls) != 0 {
+		t.Fatalf("firingHistoryCalls = %v, want none -- this request declares no BaselineDefects", writer.firingHistoryCalls)
+	}
+	if out.DeclarationFiring != nil {
+		t.Fatalf("out.DeclarationFiring = %v, want nil", out.DeclarationFiring)
+	}
+}
+
+// TestProveOneRESTRequest_DeclaredDefectAttachesFiringHistoryFromTheReceiptTable
+// proves a request that DOES declare a BaselineDefect reads that
+// ticket's own firing history back, through the receiptWriter interface,
+// AFTER its own receipt is written -- with the exact (method, path,
+// request identity, tickets) proveOneRESTRequest computed for the
+// receipt itself, so a history read can never drift from the receipt it
+// is reporting on.
+func TestProveOneRESTRequest_DeclaredDefectAttachesFiringHistoryFromTheReceiptTable(t *testing.T) {
+	const build = "abc123def456"
+	candidate := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("x-dev-health-build", build)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"teams":["a","b"]}`))
+	}))
+	defer candidate.Close()
+	baseline := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"teams":["a","b"]}`))
+	}))
+	defer baseline.Close()
+
+	f := flags{queryAPIURL: candidate.URL, pythonAPIURL: baseline.URL, org: "org-1", recordedBy: "chris", reviewEvidence: "test"}
+	spec := goapiproof.RESTEndpointSpec{Method: http.MethodGet, Path: "/api/v1/filters/options"}
+	request := goapiproof.RESTRequest{
+		Name: "options", WantCandidateStatus: 200, WantBaselineStatus: 200,
+		BodyMode: goapiproof.RESTBodyModeJSON,
+		Parity: goapiproof.Options{
+			BaselineDefects: []goapiproof.BaselineDefect{
+				{Ticket: "ABC-123", Reason: "constructed for this test", Paths: []string{"data.teams"}},
+			},
+		},
+	}
+	wantHistory := []goapiproof.FiringHistory{
+		{Ticket: "ABC-123", RunsLive: 5, RunsFired: 0, LastFiredBuild: "", NeverFired: true},
+	}
+	writer := &fakeReceiptWriter{firingHistory: wantHistory}
+
+	out, err := proveOneRESTRequest(context.Background(), http.DefaultClient, f, "REST:GET:/api/v1/filters/options", spec, request,
+		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil, false, nil)
+	if err != nil {
+		t.Fatalf("proveOneRESTRequest: %v", err)
+	}
+	if len(writer.firingHistoryCalls) != 1 {
+		t.Fatalf("firingHistoryCalls = %v, want exactly 1", writer.firingHistoryCalls)
+	}
+	call := writer.firingHistoryCalls[0]
+	if call.method != spec.Method || call.path != spec.Path {
+		t.Fatalf("firing history call method/path = %q/%q, want %q/%q", call.method, call.path, spec.Method, spec.Path)
+	}
+	if len(call.tickets) != 1 || call.tickets[0] != "ABC-123" {
+		t.Fatalf("firing history call tickets = %v, want [ABC-123]", call.tickets)
+	}
+	wantIdentity, err := goapiproof.RequestIdentity(f.org, goapiproof.AuthContext{}, restRequestVariables(spec.Method, request.Query, request.Body))
+	if err != nil {
+		t.Fatalf("RequestIdentity: %v", err)
+	}
+	if call.requestIdentity != wantIdentity {
+		t.Fatalf("firing history call requestIdentity = %q, want %q (the SAME identity written onto the receipt)", call.requestIdentity, wantIdentity)
+	}
+	if len(out.DeclarationFiring) != 1 || out.DeclarationFiring[0] != wantHistory[0] {
+		t.Fatalf("out.DeclarationFiring = %+v, want %+v", out.DeclarationFiring, wantHistory)
+	}
+	if len(writer.receipts) != 1 || len(writer.receipts[0].DeclaredDefects) != 1 || writer.receipts[0].DeclaredDefects[0] != "ABC-123" {
+		t.Fatalf("receipt DeclaredDefects = %#v, want [ABC-123] -- the written receipt must carry what this request actually declares", writer.receipts[0].DeclaredDefects)
+	}
+}
+
+// TestProveOneRESTRequest_StatusOnlyRequestNeverReadsFiringHistory proves
+// a StatusOnly request -- whose body is never decoded or compared, so
+// Compare never runs and no declared defect could possibly have fired --
+// never reads firing history even if its Parity happens to carry a
+// BaselineDefect: no corpus entry does this today, but a request that
+// was never actually checked must never be read back as though it was.
+func TestProveOneRESTRequest_StatusOnlyRequestNeverReadsFiringHistory(t *testing.T) {
+	const build = "abc123def456"
+	candidate := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("x-dev-health-build", build)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer candidate.Close()
+	baseline := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer baseline.Close()
+
+	f := flags{queryAPIURL: candidate.URL, pythonAPIURL: baseline.URL, org: "org-1", recordedBy: "chris", reviewEvidence: "test"}
+	spec := goapiproof.RESTEndpointSpec{Method: http.MethodGet, Path: "/api/v1/filters/options"}
+	request := goapiproof.RESTRequest{
+		Name: "status_only", WantCandidateStatus: 200, WantBaselineStatus: 200,
+		BodyMode: goapiproof.RESTBodyModeStatusOnly,
+		Parity: goapiproof.Options{
+			BaselineDefects: []goapiproof.BaselineDefect{
+				{Ticket: "ABC-123", Reason: "constructed for this test", Paths: []string{"data.teams"}},
+			},
+		},
+	}
+	writer := &fakeReceiptWriter{}
+
+	out, err := proveOneRESTRequest(context.Background(), http.DefaultClient, f, "REST:GET:/api/v1/filters/options", spec, request,
+		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil, false, nil)
+	if err != nil {
+		t.Fatalf("proveOneRESTRequest: %v", err)
+	}
+	if len(writer.firingHistoryCalls) != 0 {
+		t.Fatalf("firingHistoryCalls = %v, want none -- a StatusOnly request never runs Compare", writer.firingHistoryCalls)
+	}
+	if out.DeclarationFiring != nil {
+		t.Fatalf("out.DeclarationFiring = %v, want nil", out.DeclarationFiring)
+	}
+}
+
+// TestProveOneRESTRequest_FiringHistoryReadErrorFailsTheRequest proves a
+// ReadFiringHistory failure surfaces as an error from proveOneRESTRequest
+// exactly like a WriteReceipt failure already does above it -- a broken
+// read is a tool failure, never silently dropped evidence.
+func TestProveOneRESTRequest_FiringHistoryReadErrorFailsTheRequest(t *testing.T) {
+	const build = "abc123def456"
+	candidate := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("x-dev-health-build", build)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"teams":["a","b"]}`))
+	}))
+	defer candidate.Close()
+	baseline := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"teams":["a","b"]}`))
+	}))
+	defer baseline.Close()
+
+	f := flags{queryAPIURL: candidate.URL, pythonAPIURL: baseline.URL, org: "org-1", recordedBy: "chris", reviewEvidence: "test"}
+	spec := goapiproof.RESTEndpointSpec{Method: http.MethodGet, Path: "/api/v1/filters/options"}
+	request := goapiproof.RESTRequest{
+		Name: "options", WantCandidateStatus: 200, WantBaselineStatus: 200,
+		BodyMode: goapiproof.RESTBodyModeJSON,
+		Parity: goapiproof.Options{
+			BaselineDefects: []goapiproof.BaselineDefect{
+				{Ticket: "ABC-123", Reason: "constructed for this test", Paths: []string{"data.teams"}},
+			},
+		},
+	}
+	writer := &fakeReceiptWriter{firingHistoryErr: fmt.Errorf("constructed read failure")}
+
+	if _, err := proveOneRESTRequest(context.Background(), http.DefaultClient, f, "REST:GET:/api/v1/filters/options", spec, request,
+		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil, false, nil); err == nil {
+		t.Fatal("want an error when ReadFiringHistory fails")
 	}
 }
 

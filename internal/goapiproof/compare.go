@@ -472,6 +472,34 @@ type BaselineDefect struct {
 	// declared defect still uses. A defect never sets more than one shape
 	// field.
 	SupersessionSkewShape *SupersessionSkewShape
+
+	// SankeyRepoFanoutShape, when set, replaces this defect's blanket
+	// "any leaf difference under Paths is covered" rule with a per-edge
+	// integer-multiplier admission built from the two DECODED sankey
+	// nodes/links subtrees -- see SankeyRepoFanoutShape's own doc comment
+	// (sankeyrepofanout.go). nil is the default, unchanged blanket
+	// behaviour every other declared defect still uses. A defect never
+	// sets more than one shape field.
+	SankeyRepoFanoutShape *SankeyRepoFanoutShape
+
+	// KeyedDirectionShape, when set, replaces this defect's blanket "any
+	// leaf difference under Paths is covered" rule with a per-key,
+	// direction-only admission built from the two DECODED lists at a
+	// declared path -- see KeyedDirectionShape's own doc comment
+	// (keyeddirection.go). nil is the default, unchanged blanket
+	// behaviour every other declared defect still uses. A defect never
+	// sets more than one shape field.
+	KeyedDirectionShape *KeyedDirectionShape
+
+	// ConservationShape, when set, replaces this defect's blanket "any
+	// leaf difference under Paths is covered" rule with a
+	// direction-agnostic, whole-comparison total-conserved admission
+	// built from the whole comparison's mismatch paths and the two
+	// DECODED lists at a declared path -- see ConservationShape's own
+	// doc comment (sankeyconservation.go). nil is the default, unchanged
+	// blanket behaviour every other declared defect still uses. A defect
+	// never sets more than one shape field.
+	ConservationShape *ConservationShape
 }
 
 // validateBaselineDefects refuses a declaration that claims the
@@ -712,6 +740,18 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 		if defect.SupersessionSkewShape != nil {
 			skewPlan = buildSupersessionSkewPlan(defect.SupersessionSkewShape, baselineData, candidateData, mismatches)
 		}
+		var sankeyFanoutPlan *sankeyRepoFanoutPlan
+		if defect.SankeyRepoFanoutShape != nil {
+			sankeyFanoutPlan = buildSankeyRepoFanoutPlan(defect.SankeyRepoFanoutShape, baselineData, candidateData)
+		}
+		var keyedDirPlan *keyedDirectionPlan
+		if defect.KeyedDirectionShape != nil {
+			keyedDirPlan = buildKeyedDirectionPlan(defect.KeyedDirectionShape, baselineData, candidateData)
+		}
+		var conservePlan *conservationPlan
+		if defect.ConservationShape != nil {
+			conservePlan = buildConservationPlan(defect.ConservationShape, baselineData, candidateData, mismatches)
+		}
 		// A SHAPED defect's citation is LIVE only when its shape actually
 		// admits something. A blanket (unshaped) citation stays live from
 		// path proximity alone -- any difference under Paths, covered or
@@ -725,7 +765,7 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 		// apart, and a shaped defect that hit on path alone would still
 		// double-report alongside the shape that actually explains the
 		// difference.
-		shaped := repoPlan != nil || covPlan != nil || dedupPlan != nil || skewPlan != nil
+		shaped := repoPlan != nil || covPlan != nil || dedupPlan != nil || skewPlan != nil || sankeyFanoutPlan != nil || keyedDirPlan != nil || conservePlan != nil
 		var touched []int
 		for i, path := range mismatches {
 			if !defectCovers(defect, path) {
@@ -766,6 +806,12 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 				}
 			case skewPlan != nil:
 				admitted = skewPlan.admits(result.Findings[findingRefs[i]])
+			case sankeyFanoutPlan != nil:
+				admitted = sankeyFanoutPlan.admits(result.Findings[findingRefs[i]])
+			case keyedDirPlan != nil:
+				admitted = keyedDirPlan.admits(result.Findings[findingRefs[i]])
+			case conservePlan != nil:
+				admitted = conservePlan.admits(result.Findings[findingRefs[i]])
 			}
 			if admitted {
 				covered[i] = true

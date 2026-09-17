@@ -324,3 +324,41 @@ func TestBuildQuadrantRouteEntryHandlerRejectsNonGET(t *testing.T) {
 		t.Fatalf("body = %q, want %q", got, want)
 	}
 }
+
+// TestNewQuadrantWorkHandlerRejectsComparativeParams pins
+// _reject_comparative_params (main.py:893, quadrant.py's own view) for
+// every key in peopleForbiddenQueryParams -- the same set
+// people_summary_route.go and heatmap_route.go each check.
+func TestNewQuadrantWorkHandlerRejectsComparativeParams(t *testing.T) {
+	for _, key := range []string{"compare_to", "rank", "percentile", "score", "leaderboard", "top", "bottom"} {
+		t.Run(key, func(t *testing.T) {
+			handler := newQuadrantWorkHandler(emptyRowsQuadrantClient{})
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/quadrant?type=wip_throughput&"+key+"=x", nil)
+			req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+			rec := httptest.NewRecorder()
+			handler(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+			}
+			if got, want := rec.Body.String(), `{"detail":"Comparative parameters are not supported."}`+"\n"; got != want {
+				t.Fatalf("body = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+// TestNewQuadrantWorkHandlerComparativeParamCheckedAfterValidation pins
+// that the aggregated 422 (framework-level in Python, since type/range_days/
+// start_date/end_date are FastAPI signature params resolved before the
+// view body ever runs) takes precedence over the comparative-param 400,
+// same precedence people_summary_route.go's own test establishes.
+func TestNewQuadrantWorkHandlerComparativeParamCheckedAfterValidation(t *testing.T) {
+	handler := newQuadrantWorkHandler(emptyRowsQuadrantClient{})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/quadrant?range_days=abc&rank=1", nil)
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusUnprocessableEntity, rec.Body.String())
+	}
+}

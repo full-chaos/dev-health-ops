@@ -191,6 +191,18 @@ func newQuadrantWorkHandler(client quadrant.QueryClient) http.HandlerFunc {
 			return
 		}
 
+		// _reject_comparative_params (main.py:893): runs AFTER every
+		// FastAPI-signature validation above (framework-level, so it always
+		// resolves first) and BEFORE build_quadrant_response -- reuses
+		// people_route.go's own peopleForbiddenQueryParams, the same set
+		// people_summary_route.go and heatmap_route.go already check.
+		for key := range query {
+			if peopleForbiddenQueryParams[key] {
+				writeRESTError(w, r, "quadrant", claims.OrgID, http.StatusBadRequest, "Comparative parameters are not supported.")
+				return
+			}
+		}
+
 		params := quadrant.Params{
 			Type:      quadrantType,
 			ScopeType: scopeType,

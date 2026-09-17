@@ -841,20 +841,40 @@ var flamePRIDBoundParity = Options{
 // those tables FINAL, with
 // org_id inside the same statement (heatmap.go's own package doc
 // comment). An unmerged physical version of a repo/PR/commit row can
-// surface as an extra bucket, a different aggregate total for an
-// existing weekday/hour/day/week/repo/file bucket, or an extra axis
-// label -- Paths names the whole axes/cells payload for the same reason
-// peopleParity/peopleDetailParity's own citations do: the affected
-// bucket is not fixed to one path, it depends on which source table
-// happens to hold an unmerged version at request time. Go is correct.
+// only ever ADD an extra row to what a bucket sums or counts, never
+// remove one -- a weekday/hour/day/week/repo/file bucket mixes rows from
+// MANY different source repos/PRs/commits, only some of which may carry
+// the affected table's own unmerged duplicate, so no clean multiplier of
+// a bucket's own total is provable in general; the one invariant the
+// mechanism DOES guarantee is direction -- the reference plane's cell
+// value is always >= this port's own, where they differ. Paths names
+// data.cells alone: data.axes carries only the bucket LABEL lists (the
+// x/y axis arrays), never a numeric leaf any shape can reach, so citing
+// it named coverage this citation could never actually check -- a
+// difference surfacing there stays outside every citation, correctly.
+// Go is correct.
 var heatmapDedupParity = Options{
+	OrderInsensitiveLists: []OrderInsensitiveList{
+		{
+			Path:      "data.cells",
+			KeyFields: []string{"x", "y"},
+			Reason:    "every one of heatmap.py's seven readers' own GROUP BY carries no secondary sort beyond its own bucket key, identically on both planes; the SAME repos/git_pull_requests/git_commits fan-out this Options' own BaselineDefect declares can move a cell's rank in whatever incidental order the query returns it, shifting every later cell's position under a purely positional comparison. (x, y) is the response's own bucket key, unique per element on each plane's own result set.",
+			Ticket:    "CHAOS-5803",
+		},
+	},
 	BaselineDefects: []BaselineDefect{
 		{
 			Ticket:             "CHAOS-5803",
-			Reason:             "repos, and (depending on the requested metric) git_pull_requests or git_commits, are each ReplacingMergeTree(last_synced) (000_raw_tables.sql); api/queries/heatmap.py's readers join repos with no FINAL or other merge-time dedup at all, where this port (internal/heatmap) reads every one of them FINAL, org_id filtered inside the same JOIN's ON clause. An unmerged physical version can change a weekday/hour/day/week/repo/file bucket's aggregate total, add an extra bucket, or add an extra axis label. Go is correct.",
-			Paths:              []string{"data.axes", "data.cells"},
+			Reason:             "repos, and (depending on the requested metric) git_pull_requests or git_commits, are each ReplacingMergeTree(last_synced) (000_raw_tables.sql); api/queries/heatmap.py's readers join repos with no FINAL or other merge-time dedup at all, where this port (internal/heatmap) reads every one of them FINAL, org_id filtered inside the same JOIN's ON clause. An unmerged physical version can only add extra rows to a weekday/hour/day/week/repo/file bucket's sum or count, never remove one, so the reference plane's cell value is always >= this port's own where they differ -- never a clean multiplier, since a bucket mixes rows from many unrelated repos/PRs/commits and only some may carry the duplicate. Go is correct.",
+			Paths:              []string{"data.cells"},
 			Intermittent:       true,
 			IntermittentReason: "present only while repos, git_pull_requests or git_commits (whichever this request's metric reads) holds an unmerged physical version inside the requested window; a comparison taken after the next background merge shows no divergence",
+			KeyedDirectionShape: &KeyedDirectionShape{
+				ListPath:   "data.cells",
+				ValueField: "value",
+				ValuePath:  "data.cells.value",
+				KeyFields:  []string{"x", "y"},
+			},
 		},
 	},
 }
@@ -870,19 +890,50 @@ var heatmapDedupParity = Options{
 // reads repos FINAL, org_id inside the same JOIN's ON clause (queries.go's
 // own doc comments). An unmerged physical version of a repo row can
 // surface as an extra/relabeled target node (investment mode) or an
-// extra/relabeled repo/directory/file node (hotspot mode) -- Paths names
-// the whole nodes/links payload for the same reason heatmapDedupParity's
-// own citation does: the affected node is not fixed to one path, it
-// depends on which source row happens to hold an unmerged version at
-// request time. Go is correct.
+// extra/relabeled repo/directory/file node (hotspot mode). Unlike
+// heatmap's own mechanism, HERE the join is keyed by one specific
+// repo_id feeding every row that touches it, so its fan-out is a CLEAN,
+// UNIFORM integer multiplier across the whole repo-rooted subtree that
+// repo's own edges reach -- confirmed live in a production deployed-
+// vs-deployed capture: repo full-chaos/script-manifest fanned out at
+// EXACTLY 2.0x, uniformly, across both the two theme->repo edges
+// targeting it in investment mode AND all three edges of its own
+// repo->directory->file->change_type chain in hotspot mode. Paths names
+// data.links alone: Node.Value is always null on this response's wire
+// form (response.go's own Node struct never sets it), so data.nodes
+// carries no numeric leaf any shape could reach, and citing it would be
+// the appearance of coverage rather than coverage itself -- a node-level
+// difference (an extra, missing or relabeled node name) is structural
+// and stays outside every citation, correctly. Go is correct.
 var sankeyRepoDedupParity = Options{
+	OrderInsensitiveLists: []OrderInsensitiveList{
+		{
+			Path:      "data.nodes",
+			KeyFields: []string{"name"},
+			Reason:    "_touch_node/_add_edge (services/sankey.py) and this port's own nodeAccumulator/edgeAccumulator (response.go) both build nodes in first-touch order over a row set neither plane's own SQL fully orders (investment mode's GROUP BY source, target ORDER BY value DESC, hotspot mode's per-file ranking), so a near-tied value can break the stable tie the same fan-out that changes a link's value also disturbs. name is unique per node on each plane's own result set.",
+			Ticket:    "CHAOS-5873",
+		},
+		{
+			Path:      "data.links",
+			KeyFields: []string{"source", "target"},
+			Reason:    "_links_from_edges (services/sankey.py) and this port's own edgeAccumulator.links() (response.go) both sort descending by value with no secondary key beyond first-touch insertion order, identically on both planes; confirmed live in a production deployed-vs-deployed capture (GET /api/v1/sankey investment_default_org and hotspot_org): once paired by (source, target) the two planes' link sets are IDENTICAL, and every reported difference that looked like a source/target mismatch was pure position-shift noise from this same unordered tie-break, not a real divergence. (source, target) is unique per edge on each plane's own result set.",
+			Ticket:    "CHAOS-5873",
+		},
+	},
 	BaselineDefects: []BaselineDefect{
 		{
 			Ticket:             "CHAOS-5803",
-			Reason:             "repos is ReplacingMergeTree(last_synced) (000_raw_tables.sql); api/queries/sankey.py's reader joins it with no FINAL or org_id scoping at all, where this port (internal/sankey) reads it FINAL, org_id filtered inside the JOIN's own ON clause. An unmerged physical version of a repo row can surface as an extra or relabeled node. Go is correct.",
-			Paths:              []string{"data.nodes", "data.links"},
+			Reason:             "repos is ReplacingMergeTree(last_synced) (000_raw_tables.sql); api/queries/sankey.py's reader joins it with no FINAL or org_id scoping at all, where this port (internal/sankey) reads it FINAL, org_id filtered inside the JOIN's own ON clause. An unmerged physical version of a repo row can surface as an extra or relabeled node, and fans out EVERY row that joins through it -- since the join is keyed by one repo_id, the resulting inflation is a clean, uniform integer multiplier across the whole repo-rooted subtree that repo's own edges reach, confirmed live: repo full-chaos/script-manifest fanned out at exactly 2.0x, uniformly, across both its investment-mode theme->repo edges and all three edges of its hotspot-mode repo->directory->file->change_type chain, in a production deployed-vs-deployed capture. Go is correct.",
+			Paths:              []string{"data.links"},
 			Intermittent:       true,
 			IntermittentReason: "present only while repos holds an unmerged physical version inside the requested window; a comparison taken after the next background merge shows no divergence",
+			SankeyRepoFanoutShape: &SankeyRepoFanoutShape{
+				NodesListPath:       "data.nodes",
+				LinksListPath:       "data.links",
+				LinkValuePath:       "data.links.value",
+				RepoNodeGroups:      []string{"project", "repo"},
+				FallbackAnchorNames: []string{"Other", "Unknown repo"},
+			},
 		},
 	},
 }
@@ -898,14 +949,40 @@ var sankeyRepoDedupParity = Options{
 // (possibly-null) value here, where api/queries/sankey.py's own
 // LATEST_WORK_UNIT_INVESTMENTS_CTE import null-skips to a stale non-null
 // repo_id -- changing which target node that work unit's effort lands on.
+// This is a RELABELLING, not an addition: the work unit's effort moves
+// from one target to another, it is not created or destroyed, so the
+// population's link-value total is CONSERVED even though an individual
+// edge's value is not -- unlike sankeyRepoDedupParity's own repos-join
+// mechanism (which can only ever add rows, so a per-edge direction or
+// multiplier holds), no single edge's sign is predictable here, only the
+// whole list's total.
 var sankeyInvestmentParity = Options{
+	OrderInsensitiveLists: []OrderInsensitiveList{
+		{
+			Path:      "data.nodes",
+			KeyFields: []string{"name"},
+			Reason:    "_touch_node/_add_edge (services/sankey.py) and this port's own nodeAccumulator/edgeAccumulator (response.go) both build nodes in first-touch order over a row set neither plane's own SQL fully orders (investment mode's GROUP BY source, target ORDER BY value DESC), so a near-tied value can break the stable tie the same fan-out that changes a link's value also disturbs. name is unique per node on each plane's own result set.",
+			Ticket:    "CHAOS-5873",
+		},
+		{
+			Path:      "data.links",
+			KeyFields: []string{"source", "target"},
+			Reason:    "_links_from_edges (services/sankey.py) and this port's own edgeAccumulator.links() (response.go) both sort descending by value with no secondary key beyond first-touch insertion order, identically on both planes; confirmed live in a production deployed-vs-deployed capture (GET /api/v1/sankey investment_default_org): once paired by (source, target) the two planes' link sets are IDENTICAL, and every reported difference that looked like a source/target mismatch was pure position-shift noise from this same unordered tie-break, not a real divergence. (source, target) is unique per edge on each plane's own result set.",
+			Ticket:    "CHAOS-5873",
+		},
+	},
 	BaselineDefects: append([]BaselineDefect{
 		{
 			Ticket:             "CHAOS-4547",
-			Reason:             "work_unit_investments.repo_id is Nullable(UUID) (017_investment_materialize_tables.sql); api/queries/investment.py's LATEST_WORK_UNIT_INVESTMENTS_CTE (imported unchanged by api/queries/sankey.py's fetch_investment_flow_items) dedups it via a bare argMax(repo_id, computed_at), which SKIPS a row whose repo_id is NULL when picking the newest version, returning a STALE non-null repo_id from an earlier generation instead of the true latest value. This port reuses analytics.LatestWorkUnitInvestmentsSource(), which tuple-wraps repo_id -- (argMax(tuple(repo_id), computed_at)).1 -- and therefore reads the true latest value. A work unit whose newest generation cleared repo_id relative to an earlier one changes which target node (a resolved repo, or the \"Other\" fallback) its effort lands on. Go is correct.",
-			Paths:              []string{"data.nodes", "data.links"},
+			Reason:             "work_unit_investments.repo_id is Nullable(UUID) (017_investment_materialize_tables.sql); api/queries/investment.py's LATEST_WORK_UNIT_INVESTMENTS_CTE (imported unchanged by api/queries/sankey.py's fetch_investment_flow_items) dedups it via a bare argMax(repo_id, computed_at), which SKIPS a row whose repo_id is NULL when picking the newest version, returning a STALE non-null repo_id from an earlier generation instead of the true latest value. This port reuses analytics.LatestWorkUnitInvestmentsSource(), which tuple-wraps repo_id -- (argMax(tuple(repo_id), computed_at)).1 -- and therefore reads the true latest value. A work unit whose newest generation cleared repo_id relative to an earlier one changes which target node (a resolved repo, or the \"Other\" fallback) its effort lands on -- a redistribution of the SAME total effort, never a change in it. Paths names data.links alone, not data.nodes: Node.Value is always null on this response's wire form (response.go's own Node struct never sets it), so no numeric leaf under data.nodes exists for any shape to reach. Go is correct.",
+			Paths:              []string{"data.links"},
 			Intermittent:       true,
 			IntermittentReason: "present only while at least one work unit in the requested window has a newer generation whose repo_id differs (including a NULL transition) from an earlier generation's; a request whose work units never re-categorize shows no divergence",
+			ConservationShape: &ConservationShape{
+				ListPath:   "data.links",
+				ValueField: "value",
+				ValuePath:  "data.links.value",
+			},
 		},
 	}, sankeyRepoDedupParity.BaselineDefects...),
 }
@@ -918,15 +995,37 @@ var sankeyInvestmentParity = Options{
 // divergence sankeyRepoDedupParity declares for repos, on a different
 // table. This port reads it FINAL. An unmerged physical version of a
 // work item's cycle-times row (a redrive/recompute) can double-count it
-// into canceled_items, changing the abandoned edge's value.
+// into canceled_items -- buildExpenseFlow (builders.go) computes
+// abandoned = max(0, min(rework, canceledItems)), and min() is
+// monotonic, so however the clamp lands, a double-counted canceledItems
+// can only push the Rework->Abandonment / rewrite edge's baseline value
+// UP relative to this port's own, never down. canceled_items feeds
+// EXACTLY that one edge in buildExpenseFlow -- no other edge derives
+// from it -- so the mechanism has a fixed, single (source, target) key,
+// not a family of them.
 var sankeyCycleTimesDedupParity = Options{
+	OrderInsensitiveLists: []OrderInsensitiveList{
+		{
+			Path:      "data.links",
+			KeyFields: []string{"source", "target"},
+			Reason:    "this port's own edgeAccumulator.links() (response.go) sorts every mode's links descending by value, expense mode's fixed four included, with no secondary key beyond first-touch insertion order; the SAME work_item_cycle_times dedup gap this Options' own BaselineDefect declares changes canceled_items' derived value, which can move the Rework->Abandonment / rewrite edge's own rank among the other three fixed edges and shift a later one's position under a purely positional comparison. (source, target) is unique per edge in this fixed four-edge set.",
+			Ticket:    "CHAOS-5803",
+		},
+	},
 	BaselineDefects: []BaselineDefect{
 		{
 			Ticket:             "CHAOS-5803",
-			Reason:             "work_item_cycle_times is ReplacingMergeTree(computed_at) (001_metrics_v2.sql); api/queries/sankey.py's fetch_expense_abandoned reads it with no FINAL or other dedup at all, where this port (internal/sankey) reads it FINAL. An unmerged physical version of a work item's cycle-times row can double-count it into canceled_items, changing the Rework->Abandonment / rewrite edge's value. Go is correct.",
+			Reason:             "work_item_cycle_times is ReplacingMergeTree(computed_at) (001_metrics_v2.sql); api/queries/sankey.py's fetch_expense_abandoned reads it with no FINAL or other dedup at all, where this port (internal/sankey) reads it FINAL. An unmerged physical version of a work item's cycle-times row can double-count it into canceled_items, changing the Rework->Abandonment / rewrite edge's value -- buildExpenseFlow's own abandoned = max(0, min(rework, canceledItems)) is monotonic in canceledItems, so this always pushes the reference plane's edge value UP relative to this port's own, never down. Go is correct.",
 			Paths:              []string{"data.links"},
 			Intermittent:       true,
 			IntermittentReason: "present only while work_item_cycle_times holds an unmerged physical version of some work item's row inside the requested window; a comparison taken after the next background merge shows no divergence",
+			KeyedDirectionShape: &KeyedDirectionShape{
+				ListPath:   "data.links",
+				ValueField: "value",
+				ValuePath:  "data.links.value",
+				KeyFields:  []string{"source", "target"},
+				Keys:       [][]string{{"Rework", "Abandonment / rewrite"}},
+			},
 		},
 	},
 }

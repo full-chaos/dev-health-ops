@@ -186,6 +186,12 @@ func TestRESTRequest_StatusDivergenceIsDeclaredOnlyWhereGenuine(t *testing.T) {
 		"REST:GET:/api/v1/people/{person_id}/drilldown/issues": {
 			"drilldown_issues_default": true,
 		},
+		"REST:GET:/api/v1/flame": {
+			// baseline answers 503 in production on the issue entity_type
+			// read (the same cause the issue-drilldown routes share);
+			// query-api answers 200 with real data.
+			"issue_entity_id_bound_200": true,
+		},
 	}
 	for operation, spec := range restEndpointSpecs {
 		for _, req := range spec.Requests {
@@ -307,14 +313,18 @@ func TestDrilldownIssuesParityDatetimeCitation_NonVacuousMatchIsIdleNotStale(t *
 
 // TestFlameCorpus_HasIDBoundLiveEntriesForPRAndIssue pins the corpus-level
 // contract that lets flame's 200 path actually be exercised: flame's spec
-// must carry exactly one live (200/200) entry per producible entity_type,
-// each id-bound to the producer restcorpus.go's own doc comment names --
-// pr_id (from GET /api/v1/drilldown/prs) for "pr", work_item_id (from GET
-// /api/v1/drilldown/issues) for "issue" -- and the "pr" entry must carry
-// flamePRIDBoundParity's own declared BaselineDefect. A silent
-// regression that drops either entry, or that binds the wrong producer,
-// fails here rather than only being noticed the next time an operator
-// runs go-api-rest-prove live.
+// must carry exactly one live entry per producible entity_type, each
+// id-bound to the producer restcorpus.go's own doc comment names -- pr_id
+// (from GET /api/v1/drilldown/prs) for "pr", work_item_id (from GET
+// /api/v1/drilldown/issues) for "issue" -- the "pr" entry must carry
+// flamePRIDBoundParity's own declared BaselineDefect, and the "issue"
+// entry, whose baseline is declared failing in production, must stay
+// status-only with its own one-leg structural check on the candidate
+// body. A silent regression that drops either entry, binds the
+// wrong producer, or reverts the issue entry to a (200, 200) JSON
+// comparison it would status-refuse against the real baseline, fails
+// here rather than only being noticed the next time an operator runs
+// go-api-rest-prove live.
 func TestFlameCorpus_HasIDBoundLiveEntriesForPRAndIssue(t *testing.T) {
 	spec, err := SpecForREST("REST:GET:/api/v1/flame")
 	if err != nil {
@@ -345,16 +355,40 @@ func TestFlameCorpus_HasIDBoundLiveEntriesForPRAndIssue(t *testing.T) {
 		{"pr", pr, "pr_id"},
 		{"issue", issue, "work_item_id"},
 	} {
-		if tc.req.WantCandidateStatus != 200 || tc.req.WantBaselineStatus != 200 {
-			t.Errorf("%s entry status = (%d, %d), want (200, 200)", tc.name, tc.req.WantCandidateStatus, tc.req.WantBaselineStatus)
-		}
 		if len(tc.req.IDBindings) != 1 || tc.req.IDBindings[0].Producer != tc.producer || tc.req.IDBindings[0].QueryParam != "entity_id" {
 			t.Errorf("%s entry IDBindings = %+v, want one binding on entity_id to producer %q", tc.name, tc.req.IDBindings, tc.producer)
 		}
 	}
 
+	if pr.WantCandidateStatus != 200 || pr.WantBaselineStatus != 200 {
+		t.Errorf("pr entry status = (%d, %d), want (200, 200)", pr.WantCandidateStatus, pr.WantBaselineStatus)
+	}
 	if len(pr.Parity.BaselineDefects) != 1 || pr.Parity.BaselineDefects[0].Ticket != "CHAOS-5803" || !pr.Parity.BaselineDefects[0].Intermittent {
 		t.Errorf("pr entry BaselineDefects = %+v, want exactly one Intermittent CHAOS-5803 entry", pr.Parity.BaselineDefects)
+	}
+
+	// issue's baseline is declared failing in production: status-only,
+	// diverging Want, no body comparison -- a regression back to (200,
+	// 200)/JSON would status-refuse every live run against the real
+	// baseline (RESTRefusalUnexpectedStatus).
+	if issue.WantCandidateStatus != 200 || issue.WantBaselineStatus != 503 {
+		t.Errorf("issue entry status = (%d, %d), want (200, 503)", issue.WantCandidateStatus, issue.WantBaselineStatus)
+	}
+	if issue.BodyMode != RESTBodyModeStatusOnly {
+		t.Errorf("issue entry BodyMode = %q, want status_only", issue.BodyMode)
+	}
+	if issue.StatusDivergenceReason == "" {
+		t.Error("issue entry declares a status divergence with no StatusDivergenceReason")
+	}
+	// issue_flame_frame_id is this entry's own one-leg structural check on
+	// the candidate's 200 body: status_only compares no body between
+	// planes, and this is the only live case of the "issue" branch, so
+	// nothing else confirms the shape flame.Response/Frame's own json
+	// tags promise here. A silent regression that drops it loses the
+	// only check left on this branch's response shape.
+	if len(issue.Produces) != 1 || issue.Produces[0].Name != "issue_flame_frame_id" ||
+		issue.Produces[0].ListPath != "frames" || issue.Produces[0].IDField != "id" {
+		t.Errorf("issue entry Produces = %+v, want exactly one issue_flame_frame_id producer off frames[].id", issue.Produces)
 	}
 
 	drillPRs, err := SpecForREST("REST:GET:/api/v1/drilldown/prs")
@@ -370,6 +404,62 @@ func TestFlameCorpus_HasIDBoundLiveEntriesForPRAndIssue(t *testing.T) {
 	}
 	if !producesID(drillIssues, "default_window", "work_item_id") {
 		t.Error("GET /api/v1/drilldown/issues' default_window entry no longer Produces work_item_id")
+	}
+}
+
+// TestFlameIssueFrameIDProducer_ExtractsFromAResponseShapedBody proves
+// issue_entity_id_bound_200's own issue_flame_frame_id producer (its
+// ListPath/IDField, read straight off the live corpus declaration, never
+// hand-copied) actually resolves against a body shaped like flame.Response
+// and flame.Frame's real json tags (cmd/query-api/internal/flame/flame.go)
+// -- entity/timeline/frames, each frame carrying id/parent_id/label/start/
+// end/state/category. A body missing frames, or an empty frames list (the
+// two ways a live candidate response can fail to carry this branch's own
+// evidence), yields no id -- exactly what leaves
+// RESTRefusalCandidateProducerUnresolved to refuse the request
+// (cmd/go-api-rest-prove's own proveOneRESTRequest).
+func TestFlameIssueFrameIDProducer_ExtractsFromAResponseShapedBody(t *testing.T) {
+	spec, err := SpecForREST("REST:GET:/api/v1/flame")
+	if err != nil {
+		t.Fatalf("SpecForREST: %v", err)
+	}
+	var producer RESTIDProducer
+	found := false
+	for _, req := range spec.Requests {
+		if req.Name != "issue_entity_id_bound_200" {
+			continue
+		}
+		for _, p := range req.Produces {
+			if p.Name == "issue_flame_frame_id" {
+				producer, found = p, true
+			}
+		}
+	}
+	if !found {
+		t.Fatal("issue_entity_id_bound_200 no longer declares an issue_flame_frame_id producer")
+	}
+
+	responseShaped := `{
+		"entity": {"work_item_id": "w1", "provider": "github", "type": "issue", "status": "done"},
+		"timeline": {"start": "2024-01-01T00:00:00Z", "end": "2024-01-02T00:00:00Z"},
+		"frames": [
+			{"id": "issue:w1", "parent_id": null, "label": "Issue lifecycle", "start": "2024-01-01T00:00:00Z", "end": "2024-01-02T00:00:00Z", "state": "active", "category": "planned"}
+		]
+	}`
+	snap := restSnapshotFromJSON(t, responseShaped)
+	id, ok := ExtractRESTID(snap.Data, producer)
+	if !ok || id != "issue:w1" {
+		t.Fatalf("ExtractRESTID = (%q, %v), want (\"issue:w1\", true) against a real Response/Frame-shaped body", id, ok)
+	}
+
+	noFrames := restSnapshotFromJSON(t, `{"entity": {"work_item_id": "w1"}, "timeline": {"start": "2024-01-01T00:00:00Z", "end": "2024-01-02T00:00:00Z"}, "frames": []}`)
+	if _, ok := ExtractRESTID(noFrames.Data, producer); ok {
+		t.Fatal("ExtractRESTID succeeded against an empty frames list, want false")
+	}
+
+	missingFrames := restSnapshotFromJSON(t, `{"entity": {"work_item_id": "w1"}, "timeline": {"start": "2024-01-01T00:00:00Z", "end": "2024-01-02T00:00:00Z"}}`)
+	if _, ok := ExtractRESTID(missingFrames.Data, producer); ok {
+		t.Fatal("ExtractRESTID succeeded against a body with no frames key, want false")
 	}
 }
 

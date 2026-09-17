@@ -427,6 +427,33 @@ var operationSpecs = map[string]OperationSpec{
 					TeamCoveragePath: "data.analytics.sankey.coverage.teamCoverage",
 					RepoCoveragePath: "data.analytics.sankey.coverage.repoCoverage",
 				},
+			}, {
+				Ticket: "CHAOS-5865",
+				Reason: "LatestWorkUnitInvestmentsSource (investment.go) unconditionally excludes a work unit retired by a later regrouping run, via work_unit_supersessions -- every reader in this package composes that source, including this operation's own coverage aggregate (sankeycoverage.go), which reads the whole org population with no row limit. The reference plane's own coverage query has no knowledge of the work_unit_supersessions table anywhere in its source, so it keeps counting a retired work unit under whatever repo or team it carried before being superseded. A work unit is retired because an earlier grouping run got it wrong, so the rows the reference plane keeps and Go excludes skew toward unassigned relative to the rest of the population -- pulling the reference plane's ratio strictly below Go's candidate ratio on both leaves, never above. sankey.nodes and sankey.edges compose the same shared source but are top-N truncated by value (sankey.go), so the same population difference that moves the untruncated coverage aggregate ordinarily lands on tail nodes the truncated, compared page never reaches, which is why this mechanism surfaces in coverage alone. Go is correct.",
+				Paths: []string{
+					"data.analytics.sankey.coverage.teamCoverage",
+					"data.analytics.sankey.coverage.repoCoverage",
+				},
+				Intermittent:       true,
+				IntermittentReason: "present only while work_unit_supersessions holds at least one row for this run's org whose superseded_work_unit_id falls within investmentFull's requested window; an org or window with no such row leaves both planes reading the identical population and agreeing",
+				// The blanket path citation above admits ANY coverage
+				// difference, including one the repos-join fan-out or the
+				// null-transition entry declared above already explains
+				// -- see SupersessionSkewShape's own doc comment
+				// (supersessionskew.go) for the shape that narrows
+				// admission to exactly the DIRECTION this mechanism can
+				// produce: the reference plane strictly below the
+				// candidate on both leaves, nothing else differing
+				// anywhere in the response. It checks direction, not
+				// magnitude -- a regrouping run can retire any number of
+				// work units, so nothing bounds how far this mechanism
+				// moves either ratio, and it does not attempt to. Paths
+				// is unchanged; this only tightens what counts as covered
+				// under it.
+				SupersessionSkewShape: &SupersessionSkewShape{
+					TeamCoveragePath: "data.analytics.sankey.coverage.teamCoverage",
+					RepoCoveragePath: "data.analytics.sankey.coverage.repoCoverage",
+				},
 			}},
 			// CHAOS-5546: sankey.go's nodes/edges queries are a plain
 			// ClickHouse UNION ALL with no outer ORDER BY. Measured live:

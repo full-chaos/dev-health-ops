@@ -8,34 +8,47 @@ import "github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/units"
 const (
 	categorizationResponseFormatName           = "categorization"
 	investmentMixExplanationResponseFormatName = "investment_mix_explanation"
+	// workUnitExplanationResponseFormatName has no Python counterpart on
+	// the wire, and never reaches a wire: openai.py selects a response
+	// format from a prompt marker (_response_format_kind), and the
+	// per-work-unit explanation prompt carries none, so Python sends
+	// `{"type": "json_object"}` with no schema name at all. Its Go twin is
+	// WorkUnitExplanationRequest's nil JSONSchema, which puts both
+	// OpenAIProvider and LocalProvider on that same schema-free branch and
+	// leaves ResponseFormatName unread. The name therefore exists for one
+	// reason: it is the discriminator MockProvider branches on, standing in
+	// for the prompt-content sniffing Python's own MockProvider does.
+	workUnitExplanationResponseFormatName = "work_unit_explanation"
 )
 
 // Per-format max_output_tokens floors -- openai.py's OpenAIGPT5Provider:
 // `max(self.cfg.max_output_tokens, 4096 if not is_schema_prompt else 2048)`.
-// Investment-mix explanation gets the higher floor because its narrative
+// The 4096 floor belongs to every prompt that is NOT a categorization
+// prompt (`is_schema_prompt` is is_json_schema_prompt, the categorization
+// marker alone), so both explanation formats share it -- narrative
 // payloads run larger than a categorization response (openai.py's own
 // comment: "Explanation payloads are large; start higher than 4096").
 // Combined with a provider's own configured floor via max(), never used
 // standalone -- see OpenAIProvider.Complete.
 const (
-	categorizationMaxOutputTokensFloor           = 2048
-	investmentMixExplanationMaxOutputTokensFloor = 4096
+	categorizationMaxOutputTokensFloor = 2048
+	explanationMaxOutputTokensFloor    = 4096
 )
 
-// categorizationSystemMessage and investmentMixExplanationSystemMessage
-// port openai.py's system_message: the JSON-schema branch (categorization)
-// gets a strict "generate only JSON" instruction; the other branch
-// (investment-mix explanation, an aggregate narrative over PRECOMPUTED
-// analytics -- no Go caller builds this prompt yet, see
-// CompletionRequest.InvestmentMixExplanationRequest) gets a softer
-// "explain what's already computed, hedge, don't editorialize"
-// instruction. Both are still requests for JSON; only the framing differs.
+// categorizationSystemMessage and explanationSystemMessage port
+// openai.py's system_message, which has exactly two branches: the
+// categorization prompt gets a strict "generate only JSON" instruction and
+// EVERY other prompt gets the softer "explain what's already computed,
+// hedge, don't editorialize" one. explanationSystemMessage is therefore
+// shared by both explanation formats, matching that function's own
+// structure -- it is the default branch, not the investment-mix branch.
+// Both are still requests for JSON; only the framing differs.
 const categorizationSystemMessage = "You are a specialized JSON generator.\n" +
 	"Return ONLY valid JSON.\n" +
 	"No markdown. No commentary.\n" +
 	"Output must start with { and end with }."
 
-const investmentMixExplanationSystemMessage = "You are an assistant that explains PRECOMPUTED work analytics.\n" +
+const explanationSystemMessage = "You are an assistant that explains PRECOMPUTED work analytics.\n" +
 	"Use probabilistic language (appears, suggests, leans).\n" +
 	"Do NOT introduce new conclusions or recommendations.\n" +
 	"Return ONLY valid JSON."

@@ -1,0 +1,189 @@
+{
+  "cases": [
+    {
+      "name": "typical_single_structural_type",
+      "work_unit_id": "wu-ABC-123",
+      "time_range_start": "2026-08-01T00:00:00+00:00",
+      "time_range_end": "2026-08-15T12:30:45.123456+00:00",
+      "categories": {
+        "quality": 0.3333333333333333,
+        "feature_delivery": 0.48,
+        "maintenance": 0.1866666666666667
+      },
+      "evidence_quality_value": 0.625,
+      "evidence_quality_band": "moderate",
+      "evidence": {
+        "structural": [
+          {
+            "type": "work_unit_nodes",
+            "issues": [
+              "ABC-123"
+            ]
+          }
+        ],
+        "contextual": [
+          {
+            "type": "time_range",
+            "start": "2026-08-01T00:00:00+00:00",
+            "end": "2026-08-15T12:30:45.123456+00:00",
+            "span_days": 14.520000000000001
+          },
+          {
+            "type": "repo_scope",
+            "repo_ids": [
+              "acme/fixture-repo"
+            ]
+          }
+        ],
+        "textual": [
+          {
+            "type": "evidence_quote",
+            "quote": "adds the export surface",
+            "source": "issue",
+            "id": "ABC-123"
+          },
+          {
+            "type": "evidence_quote",
+            "quote": "",
+            "source": "pr",
+            "id": "ABC-124"
+          }
+        ]
+      },
+      "evidence_summary": {
+        "structural": {
+          "count": 1,
+          "types": [
+            "work_unit_nodes"
+          ]
+        },
+        "contextual": {
+          "count": 2,
+          "span_days": 14.520000000000001,
+          "score": 0.0
+        },
+        "textual": {
+          "match_count": 2,
+          "categories_with_matches": []
+        }
+      },
+      "prompt": "You are explaining a precomputed investment view.\n\nYou are not allowed to:\n- Recalculate scores\n- Change categories\n- Introduce new conclusions\n- Be conversational (no \"Hello\", \"As an AI\", or interactive follow-ups)\n\nExplain the investment view in three distinct sections:\n\n1. **SUMMARY**: Provide a high-level narrative (max 3 sentences) using probabilistic language (appears, leans, suggests) explaining why the work leans toward the primary categories.\n2. **REASONS**: List the specific evidence (structural, contextual, textual) that contributed most to this interpretation.\n3. **UNCERTAINTY**: Disclose where uncertainty exists based on the evidence quality and evidence mix.\n\nAlways include evidence quality level and limits.\n---\nWORK UNIT DATA (precomputed, do not recalculate):\n\nWork Unit ID: wu-ABC-123\nTime Range: 2026-08-01T00:00:00+00:00 to 2026-08-15T12:30:45.123456+00:00\nTime Span: 14.5 days\n\nInvestment Vector:\n  - feature_delivery: 48.00%\n  - maintenance: 18.67%\n  - quality: 33.33%\n\nEvidence Quality: 0.62 (moderate)\n\nEvidence Summary:\n  - Structural evidence: 1 items, types: work_unit_nodes\n  - Contextual evidence: span 14.5 days, score 0.00\n  - Textual phrases cited: 2 matches.\n---\n\nBased on the above precomputed investment view, explain why this work leans toward certain categories.\nUse probabilistic language (appears, leans, suggests). Never use definitive language (is, was, detected).\n"
+    },
+    {
+      "name": "no_evidence_at_all",
+      "work_unit_id": "wu-ABC-124",
+      "time_range_start": "2026-08-01T00:00:00+00:00",
+      "time_range_end": "2026-08-01T00:00:00+00:00",
+      "categories": {},
+      "evidence_quality_value": 0.0,
+      "evidence_quality_band": "unknown",
+      "evidence": {
+        "structural": [],
+        "contextual": [],
+        "textual": []
+      },
+      "evidence_summary": {},
+      "prompt": "You are explaining a precomputed investment view.\n\nYou are not allowed to:\n- Recalculate scores\n- Change categories\n- Introduce new conclusions\n- Be conversational (no \"Hello\", \"As an AI\", or interactive follow-ups)\n\nExplain the investment view in three distinct sections:\n\n1. **SUMMARY**: Provide a high-level narrative (max 3 sentences) using probabilistic language (appears, leans, suggests) explaining why the work leans toward the primary categories.\n2. **REASONS**: List the specific evidence (structural, contextual, textual) that contributed most to this interpretation.\n3. **UNCERTAINTY**: Disclose where uncertainty exists based on the evidence quality and evidence mix.\n\nAlways include evidence quality level and limits.\n---\nWORK UNIT DATA (precomputed, do not recalculate):\n\nWork Unit ID: wu-ABC-124\nTime Range: 2026-08-01T00:00:00+00:00 to 2026-08-01T00:00:00+00:00\nTime Span: 0.0 days\n\nInvestment Vector:\n\n\nEvidence Quality: 0.00 (unknown)\n\nEvidence Summary:\n  (no evidence details)\n---\n\nBased on the above precomputed investment view, explain why this work leans toward certain categories.\nUse probabilistic language (appears, leans, suggests). Never use definitive language (is, was, detected).\n"
+    },
+    {
+      "name": "graph_density_last_entry_wins",
+      "work_unit_id": "wu-ABC-125",
+      "time_range_start": "2026-08-01T00:00:00+00:00",
+      "time_range_end": "2026-08-15T12:30:45.123456+00:00",
+      "categories": {
+        "risk": 1.0
+      },
+      "evidence_quality_value": 0.91,
+      "evidence_quality_band": "high",
+      "evidence": {
+        "structural": [
+          {
+            "type": "graph_density",
+            "value": 0.125
+          },
+          {
+            "type": "graph_density",
+            "value": "0.875"
+          }
+        ],
+        "contextual": [],
+        "textual": []
+      },
+      "evidence_summary": {
+        "structural": {
+          "count": 2,
+          "types": [
+            "graph_density"
+          ],
+          "density": 0.875
+        }
+      },
+      "prompt": "You are explaining a precomputed investment view.\n\nYou are not allowed to:\n- Recalculate scores\n- Change categories\n- Introduce new conclusions\n- Be conversational (no \"Hello\", \"As an AI\", or interactive follow-ups)\n\nExplain the investment view in three distinct sections:\n\n1. **SUMMARY**: Provide a high-level narrative (max 3 sentences) using probabilistic language (appears, leans, suggests) explaining why the work leans toward the primary categories.\n2. **REASONS**: List the specific evidence (structural, contextual, textual) that contributed most to this interpretation.\n3. **UNCERTAINTY**: Disclose where uncertainty exists based on the evidence quality and evidence mix.\n\nAlways include evidence quality level and limits.\n---\nWORK UNIT DATA (precomputed, do not recalculate):\n\nWork Unit ID: wu-ABC-125\nTime Range: 2026-08-01T00:00:00+00:00 to 2026-08-15T12:30:45.123456+00:00\nTime Span: 14.5 days\n\nInvestment Vector:\n  - risk: 100.00%\n\nEvidence Quality: 0.91 (high)\n\nEvidence Summary:\n  - Structural evidence: 2 items, types: graph_density\n    - Graph density: 0.88\n---\n\nBased on the above precomputed investment view, explain why this work leans toward certain categories.\nUse probabilistic language (appears, leans, suggests). Never use definitive language (is, was, detected).\n"
+    },
+    {
+      "name": "provenance_score",
+      "work_unit_id": "wu-ABC-126",
+      "time_range_start": "2026-08-01T00:00:00+00:00",
+      "time_range_end": "2026-08-15T12:30:45.123456+00:00",
+      "categories": {
+        "operational": 0.005
+      },
+      "evidence_quality_value": 0.08,
+      "evidence_quality_band": "very_low",
+      "evidence": {
+        "structural": [
+          {
+            "type": "provenance",
+            "value": true
+          }
+        ],
+        "contextual": [
+          {
+            "type": "time_range",
+            "span_days": 3,
+            "score": 0.5
+          }
+        ],
+        "textual": [
+          {
+            "type": "evidence_quote",
+            "subcategory": "quality.bugfix",
+            "phrase": "flaky"
+          },
+          {
+            "type": "evidence_quote",
+            "category": "risk.security",
+            "keyword": "cve"
+          },
+          {
+            "type": "evidence_quote",
+            "subcategory": "quality.bugfix",
+            "quote": "retry"
+          }
+        ]
+      },
+      "evidence_summary": {
+        "structural": {
+          "count": 1,
+          "types": [
+            "provenance"
+          ],
+          "provenance_score": 1.0
+        },
+        "contextual": {
+          "count": 1,
+          "span_days": 3.0,
+          "score": 0.5
+        },
+        "textual": {
+          "match_count": 3,
+          "categories_with_matches": [
+            "quality.bugfix",
+            "risk.security"
+          ]
+        }
+      },
+      "prompt": "You are explaining a precomputed investment view.\n\nYou are not allowed to:\n- Recalculate scores\n- Change categories\n- Introduce new conclusions\n- Be conversational (no \"Hello\", \"As an AI\", or interactive follow-ups)\n\nExplain the investment view in three distinct sections:\n\n1. **SUMMARY**: Provide a high-level narrative (max 3 sentences) using probabilistic language (appears, leans, suggests) explaining why the work leans toward the primary categories.\n2. **REASONS**: List the specific evidence (structural, contextual, textual) that contributed most to this interpretation.\n3. **UNCERTAINTY**: Disclose where uncertainty exists based on the evidence quality and evidence mix.\n\nAlways include evidence quality level and limits.\n---\nWORK UNIT DATA (precomputed, do not recalculate):\n\nWork Unit ID: wu-ABC-126\nTime Range: 2026-08-01T00:00:00+00:00 to 2026-08-15T12:30:45.123456+00:00\nTime Span: 14.5 days\n\nInvestment Vector:\n  - operational: 0.50%\n\nEvidence Quality: 0.08 (very_low)\n\nEvidence Summary:\n  - Structural evidence: 1 items, types: provenance\n    - Provenance score: 1.00\n  - Contextual evidence: span 3.0 days, score 0.50\n  - Textual phrases cited: 3 matches.\n---\n\nBased on the above precomputed investment view, explain why this work leans toward certain categories.\nUse probabilistic language (appears, leans, suggests). Never use definitive language (is, was, detected).\n"
+    }
+  ]
+}

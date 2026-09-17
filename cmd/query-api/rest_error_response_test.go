@@ -412,18 +412,34 @@ func TestNoAPIV1RoutePlainTextErrors(t *testing.T) {
 //     back to a swallowed cause, not just a missing log call.
 //  2. a call to writeRESTError (the lower-level, non-logging primitive)
 //     whose status argument is the literal http.StatusServiceUnavailable
-//     -- a 503 writer that bypasses writeRESTDataUnavailable entirely,
-//     the exact shape every route's degradation site had before this PR
-//     (nothing logged, ever, for any of them).
+//     -- a 503 writer that bypasses the logging wrappers entirely, the
+//     exact shape every route's degradation site had before this guard
+//     existed (nothing logged, ever, for any of them).
 //
-// rest_error_response.go itself is excluded from violation class 2: it
-// is the one legitimate place http.StatusServiceUnavailable is written
-// to the wire, inside writeRESTDataUnavailable's own body.
+// The BODIES of the logging wrappers themselves are excluded from
+// violation class 2: writing the 503 is what they are for, and each one
+// logs the cause first. loggingDegradationWrappers names them, and every
+// CALL to one of them is checked for a literal-nil cause the same way.
+// A route needs its own wrapper only when its Python counterpart's 503
+// carries a different detail literal than "Data unavailable" -- which is
+// why there is a set here rather than a single name.
 func TestDataUnavailableCallSitesLogTheCause(t *testing.T) {
 	const dir = "."
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatalf("read %s: %v", dir, err)
+	}
+
+	// loggingDegradationWrappers are the functions allowed to write a 503,
+	// mapped to their own argument count. Each logs the cause before
+	// writing the response, and each takes the cause as its LAST argument.
+	// Pinning the count per wrapper keeps a signature change from silently
+	// moving which argument the nil check below inspects.
+	loggingDegradationWrappers := map[string]int{
+		// (w, r, component, orgID, err)
+		"writeRESTDataUnavailable": 5,
+		// (w, r, orgID, err) -- route-local, so it names its own component.
+		"writeWorkUnitExplainUnavailable": 4,
 	}
 
 	var violations []string
@@ -446,7 +462,15 @@ func TestDataUnavailableCallSitesLogTheCause(t *testing.T) {
 			t.Fatalf("parse %s: %v", path, parseErr)
 		}
 
+		// enclosing is the name of the FuncDecl the walk is currently
+		// inside, so a 503 written inside a logging wrapper's own body can
+		// be told apart from one written in a handler.
+		enclosing := ""
 		ast.Inspect(file, func(n ast.Node) bool {
+			if decl, isDecl := n.(*ast.FuncDecl); isDecl {
+				enclosing = decl.Name.Name
+				return true
+			}
 			call, ok := n.(*ast.CallExpr)
 			if !ok {
 				return true
@@ -456,22 +480,25 @@ func TestDataUnavailableCallSitesLogTheCause(t *testing.T) {
 				return true
 			}
 
-			switch fnIdent.Name {
-			case "writeRESTDataUnavailable":
+			if wantArgs, isWrapper := loggingDegradationWrappers[fnIdent.Name]; isWrapper {
 				sawDataUnavailableCall = true
-				if len(call.Args) != 5 {
+				if len(call.Args) != wantArgs {
 					violations = append(violations, fmt.Sprintf(
-						"%s:%d: writeRESTDataUnavailable called with %d argument(s), want 5 (w, r, component, orgID, err)",
-						path, fset.Position(call.Pos()).Line, len(call.Args)))
+						"%s:%d: %s called with %d argument(s), want %d with the cause last",
+						path, fset.Position(call.Pos()).Line, fnIdent.Name, len(call.Args), wantArgs))
 					return true
 				}
-				if errIdent, ok := call.Args[4].(*ast.Ident); ok && errIdent.Name == "nil" {
+				if errIdent, ok := call.Args[wantArgs-1].(*ast.Ident); ok && errIdent.Name == "nil" {
 					violations = append(violations, fmt.Sprintf(
-						"%s:%d: writeRESTDataUnavailable's err argument is a literal nil -- the wrapped cause must be logged, not swallowed",
-						path, fset.Position(call.Pos()).Line))
+						"%s:%d: %s's err argument is a literal nil -- the wrapped cause must be logged, not swallowed",
+						path, fset.Position(call.Pos()).Line, fnIdent.Name))
 				}
+				return true
+			}
+
+			switch fnIdent.Name {
 			case "writeRESTError":
-				if name == "rest_error_response.go" {
+				if _, insideWrapper := loggingDegradationWrappers[enclosing]; insideWrapper {
 					return true
 				}
 				for _, arg := range call.Args {
@@ -492,12 +519,12 @@ func TestDataUnavailableCallSitesLogTheCause(t *testing.T) {
 	}
 
 	if !sawDataUnavailableCall {
-		t.Fatal("found zero writeRESTDataUnavailable call sites under cmd/query-api's package-main files -- this guard's premise (there are 503 degradation sites to check) no longer holds; investigate before trusting a green result")
+		t.Fatal("found zero logging-wrapper call sites under cmd/query-api's package-main files -- this guard's premise (there are 503 degradation sites to check) no longer holds; investigate before trusting a green result")
 	}
 
 	sort.Strings(violations)
 	if len(violations) > 0 {
-		t.Fatalf("every REST 503 degradation site must log its cause via writeRESTDataUnavailable(..., err); found %d violation(s):\n%s",
+		t.Fatalf("every REST 503 degradation site must log its cause through one of the logging wrappers (..., err); found %d violation(s):\n%s",
 			len(violations), strings.Join(violations, "\n"))
 	}
 }

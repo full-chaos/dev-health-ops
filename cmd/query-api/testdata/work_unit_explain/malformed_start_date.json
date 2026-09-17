@@ -1,0 +1,1 @@
+{"detail":[{"type":"date_from_datetime_parsing","loc":["query","start_date"],"msg":"Input should be a valid date or datetime, invalid character in year","input":"not-a-date","ctx":{"error":"invalid character in year"}}]}

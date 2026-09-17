@@ -1,0 +1,664 @@
+{
+  "cases": [
+    {
+      "name": "mock_typical",
+      "llm_provider": "mock",
+      "llm_model": null,
+      "investment": {
+        "work_unit_id": "wu-ABC-123",
+        "work_unit_type": "epic",
+        "work_unit_name": "Neutral Fixture Unit",
+        "time_range": {
+          "start": "2026-08-01T00:00:00Z",
+          "end": "2026-08-15T12:00:00Z"
+        },
+        "effort": {
+          "metric": "churn_loc",
+          "value": 1234.5
+        },
+        "investment": {
+          "themes": {
+            "feature_delivery": 0.48,
+            "quality": 0.32,
+            "maintenance": 0.2
+          },
+          "subcategories": {
+            "feature_delivery.customer": 0.48,
+            "quality.bugfix": 0.32,
+            "maintenance.refactor": 0.2
+          }
+        },
+        "evidence_quality": {
+          "value": 0.62,
+          "band": "moderate"
+        },
+        "evidence": {
+          "textual": [
+            {
+              "type": "evidence_quote",
+              "quote": "adds the new export surface",
+              "source": "issue",
+              "id": "ABC-123"
+            },
+            {
+              "type": "evidence_quote",
+              "quote": "fixes the flaky retry path",
+              "source": "pr",
+              "id": "ABC-124"
+            }
+          ],
+          "structural": [
+            {
+              "type": "work_unit_nodes",
+              "issues": [
+                "ABC-123"
+              ],
+              "prs": [
+                "11111111-1111-1111-1111-111111111111:7"
+              ]
+            }
+          ],
+          "contextual": [
+            {
+              "type": "time_range",
+              "start": "2026-08-01T00:00:00+00:00",
+              "end": "2026-08-15T12:00:00+00:00",
+              "span_days": 14.5
+            },
+            {
+              "type": "repo_scope",
+              "repo_ids": [
+                "acme/fixture-repo"
+              ]
+            },
+            {
+              "type": "team_scope",
+              "team_ids": [
+                "unassigned"
+              ],
+              "team_names": [
+                "Unassigned"
+              ]
+            }
+          ]
+        }
+      },
+      "explanation": {
+        "work_unit_id": "wu-ABC-123",
+        "ai_generated": true,
+        "summary": "{\"summary\": \"Based on the precomputed investment view, this work unit appears to lean toward feature_delivery work.\", \"dominant_themes\": [\"feature_delivery\"], \"key_drivers\": [\"Structural evidence appears to contribute most significantly to the categorization.\", \"Textual phrases appear to align with the investment interpretation.\"], \"operational_signals\": [\"Evidence quality bands indicate moderate uncertainty.\", \"Lower-weight categories may still represent meaningful aspects of the work.\"], \"confidence_note\": \"This analysis reflects moderate evidence quality. The categorization leans toward feature_delivery but may not fully capture the nuanced nature of the work.\"}",
+        "category_rationale": {
+          "feature_delivery": "feature_delivery work.",
+          "quality": "quality bands indicate moderate uncertainty.",
+          "maintenance": "Category leaning based on structural evidence."
+        },
+        "evidence_highlights": [
+          "Structural evidence appears most significant",
+          "Textual phrases align with the investment mix"
+        ],
+        "uncertainty_disclosure": "Moderate evidence quality suggests meaningful uncertainty exists in the categorization.",
+        "evidence_quality_limits": "With moderate evidence quality (62%), these results should be interpreted as probabilistic indicators. The categorization suggests tendencies rather than definitive classifications."
+      }
+    },
+    {
+      "name": "mock_band_high",
+      "llm_provider": "mock",
+      "llm_model": null,
+      "investment": {
+        "work_unit_id": "wu-ABC-123",
+        "work_unit_type": "epic",
+        "work_unit_name": "Neutral Fixture Unit",
+        "time_range": {
+          "start": "2026-08-01T00:00:00Z",
+          "end": "2026-08-15T12:00:00Z"
+        },
+        "effort": {
+          "metric": "churn_loc",
+          "value": 1234.5
+        },
+        "investment": {
+          "themes": {
+            "feature_delivery": 0.48,
+            "quality": 0.32,
+            "maintenance": 0.2
+          },
+          "subcategories": {
+            "feature_delivery.customer": 0.48,
+            "quality.bugfix": 0.32,
+            "maintenance.refactor": 0.2
+          }
+        },
+        "evidence_quality": {
+          "value": 0.91,
+          "band": "high"
+        },
+        "evidence": {
+          "textual": [
+            {
+              "type": "evidence_quote",
+              "quote": "adds the new export surface",
+              "source": "issue",
+              "id": "ABC-123"
+            },
+            {
+              "type": "evidence_quote",
+              "quote": "fixes the flaky retry path",
+              "source": "pr",
+              "id": "ABC-124"
+            }
+          ],
+          "structural": [
+            {
+              "type": "work_unit_nodes",
+              "issues": [
+                "ABC-123"
+              ],
+              "prs": [
+                "11111111-1111-1111-1111-111111111111:7"
+              ]
+            }
+          ],
+          "contextual": [
+            {
+              "type": "time_range",
+              "start": "2026-08-01T00:00:00+00:00",
+              "end": "2026-08-15T12:00:00+00:00",
+              "span_days": 14.5
+            },
+            {
+              "type": "repo_scope",
+              "repo_ids": [
+                "acme/fixture-repo"
+              ]
+            },
+            {
+              "type": "team_scope",
+              "team_ids": [
+                "unassigned"
+              ],
+              "team_names": [
+                "Unassigned"
+              ]
+            }
+          ]
+        }
+      },
+      "explanation": {
+        "work_unit_id": "wu-ABC-123",
+        "ai_generated": true,
+        "summary": "{\"summary\": \"Based on the precomputed investment view, this work unit appears to lean toward feature_delivery work.\", \"dominant_themes\": [\"feature_delivery\"], \"key_drivers\": [\"Structural evidence appears to contribute most significantly to the categorization.\", \"Textual phrases appear to align with the investment interpretation.\"], \"operational_signals\": [\"Evidence quality bands indicate high uncertainty.\", \"Lower-weight categories may still represent meaningful aspects of the work.\"], \"confidence_note\": \"This analysis reflects high evidence quality. The categorization leans toward feature_delivery but may not fully capture the nuanced nature of the work.\"}",
+        "category_rationale": {
+          "feature_delivery": "feature_delivery work.",
+          "quality": "quality bands indicate high uncertainty.",
+          "maintenance": "Category leaning based on structural evidence."
+        },
+        "evidence_highlights": [
+          "Structural evidence appears most significant",
+          "Textual phrases align with the investment mix"
+        ],
+        "uncertainty_disclosure": "With high evidence quality, uncertainty appears minimal but results should still be interpreted probabilistically.",
+        "evidence_quality_limits": "With high evidence quality (91%), these results should be interpreted as probabilistic indicators. The categorization suggests tendencies rather than definitive classifications."
+      }
+    },
+    {
+      "name": "mock_band_very_low",
+      "llm_provider": "mock",
+      "llm_model": null,
+      "investment": {
+        "work_unit_id": "wu-ABC-123",
+        "work_unit_type": "epic",
+        "work_unit_name": "Neutral Fixture Unit",
+        "time_range": {
+          "start": "2026-08-01T00:00:00Z",
+          "end": "2026-08-15T12:00:00Z"
+        },
+        "effort": {
+          "metric": "churn_loc",
+          "value": 1234.5
+        },
+        "investment": {
+          "themes": {
+            "feature_delivery": 0.48,
+            "quality": 0.32,
+            "maintenance": 0.2
+          },
+          "subcategories": {
+            "feature_delivery.customer": 0.48,
+            "quality.bugfix": 0.32,
+            "maintenance.refactor": 0.2
+          }
+        },
+        "evidence_quality": {
+          "value": 0.08,
+          "band": "very_low"
+        },
+        "evidence": {
+          "textual": [
+            {
+              "type": "evidence_quote",
+              "quote": "adds the new export surface",
+              "source": "issue",
+              "id": "ABC-123"
+            },
+            {
+              "type": "evidence_quote",
+              "quote": "fixes the flaky retry path",
+              "source": "pr",
+              "id": "ABC-124"
+            }
+          ],
+          "structural": [
+            {
+              "type": "work_unit_nodes",
+              "issues": [
+                "ABC-123"
+              ],
+              "prs": [
+                "11111111-1111-1111-1111-111111111111:7"
+              ]
+            }
+          ],
+          "contextual": [
+            {
+              "type": "time_range",
+              "start": "2026-08-01T00:00:00+00:00",
+              "end": "2026-08-15T12:00:00+00:00",
+              "span_days": 14.5
+            },
+            {
+              "type": "repo_scope",
+              "repo_ids": [
+                "acme/fixture-repo"
+              ]
+            },
+            {
+              "type": "team_scope",
+              "team_ids": [
+                "unassigned"
+              ],
+              "team_names": [
+                "Unassigned"
+              ]
+            }
+          ]
+        }
+      },
+      "explanation": {
+        "work_unit_id": "wu-ABC-123",
+        "ai_generated": true,
+        "summary": "{\"summary\": \"Based on the precomputed investment view, this work unit appears to lean toward feature_delivery work.\", \"dominant_themes\": [\"feature_delivery\"], \"key_drivers\": [\"Structural evidence appears to contribute most significantly to the categorization.\", \"Textual phrases appear to align with the investment interpretation.\"], \"operational_signals\": [\"Evidence quality bands indicate very_low uncertainty.\", \"Lower-weight categories may still represent meaningful aspects of the work.\"], \"confidence_note\": \"This analysis reflects very_low evidence quality. The categorization leans toward feature_delivery but may not fully capture the nuanced nature of the work.\"}",
+        "category_rationale": {
+          "feature_delivery": "feature_delivery work.",
+          "quality": "quality bands indicate very_low uncertainty.",
+          "maintenance": "Category leaning based on structural evidence."
+        },
+        "evidence_highlights": [
+          "Structural evidence appears most significant",
+          "Textual phrases align with the investment mix"
+        ],
+        "uncertainty_disclosure": "Very low evidence quality indicates high uncertainty; categorization leans toward estimates only.",
+        "evidence_quality_limits": "With very_low evidence quality (8%), these results should be interpreted as probabilistic indicators. The categorization suggests tendencies rather than definitive classifications."
+      }
+    },
+    {
+      "name": "mock_no_quotes",
+      "llm_provider": "mock",
+      "llm_model": null,
+      "investment": {
+        "work_unit_id": "wu-ABC-123",
+        "work_unit_type": "epic",
+        "work_unit_name": "Neutral Fixture Unit",
+        "time_range": {
+          "start": "2026-08-01T00:00:00Z",
+          "end": "2026-08-15T12:00:00Z"
+        },
+        "effort": {
+          "metric": "churn_loc",
+          "value": 1234.5
+        },
+        "investment": {
+          "themes": {
+            "feature_delivery": 0.48,
+            "quality": 0.32,
+            "maintenance": 0.2
+          },
+          "subcategories": {
+            "feature_delivery.customer": 0.48,
+            "quality.bugfix": 0.32,
+            "maintenance.refactor": 0.2
+          }
+        },
+        "evidence_quality": {
+          "value": 0.62,
+          "band": "moderate"
+        },
+        "evidence": {
+          "textual": [],
+          "structural": [
+            {
+              "type": "work_unit_nodes",
+              "issues": [
+                "ABC-123"
+              ],
+              "prs": [
+                "11111111-1111-1111-1111-111111111111:7"
+              ]
+            }
+          ],
+          "contextual": [
+            {
+              "type": "time_range",
+              "start": "2026-08-01T00:00:00+00:00",
+              "end": "2026-08-15T12:00:00+00:00",
+              "span_days": 14.5
+            },
+            {
+              "type": "repo_scope",
+              "repo_ids": [
+                "acme/fixture-repo"
+              ]
+            },
+            {
+              "type": "team_scope",
+              "team_ids": [
+                "unassigned"
+              ],
+              "team_names": [
+                "Unassigned"
+              ]
+            }
+          ]
+        }
+      },
+      "explanation": {
+        "work_unit_id": "wu-ABC-123",
+        "ai_generated": true,
+        "summary": "{\"summary\": \"Based on the precomputed investment view, this work unit appears to lean toward feature_delivery work.\", \"dominant_themes\": [\"feature_delivery\"], \"key_drivers\": [\"Structural evidence appears to contribute most significantly to the categorization.\", \"Textual phrases appear to align with the investment interpretation.\"], \"operational_signals\": [\"Evidence quality bands indicate moderate uncertainty.\", \"Lower-weight categories may still represent meaningful aspects of the work.\"], \"confidence_note\": \"This analysis reflects moderate evidence quality. The categorization leans toward feature_delivery but may not fully capture the nuanced nature of the work.\"}",
+        "category_rationale": {
+          "feature_delivery": "feature_delivery work.",
+          "quality": "quality bands indicate moderate uncertainty.",
+          "maintenance": "Category leaning based on structural evidence."
+        },
+        "evidence_highlights": [
+          "Structural evidence appears most significant",
+          "Textual phrases align with the investment mix"
+        ],
+        "uncertainty_disclosure": "Moderate evidence quality suggests meaningful uncertainty exists in the categorization.",
+        "evidence_quality_limits": "With moderate evidence quality (62%), these results should be interpreted as probabilistic indicators. The categorization suggests tendencies rather than definitive classifications."
+      }
+    },
+    {
+      "name": "mock_single_theme",
+      "llm_provider": "mock",
+      "llm_model": null,
+      "investment": {
+        "work_unit_id": "wu-ABC-123",
+        "work_unit_type": "epic",
+        "work_unit_name": "Neutral Fixture Unit",
+        "time_range": {
+          "start": "2026-08-01T00:00:00Z",
+          "end": "2026-08-15T12:00:00Z"
+        },
+        "effort": {
+          "metric": "churn_loc",
+          "value": 1234.5
+        },
+        "investment": {
+          "themes": {
+            "risk": 1.0
+          },
+          "subcategories": {
+            "risk.security": 1.0
+          }
+        },
+        "evidence_quality": {
+          "value": 0.62,
+          "band": "moderate"
+        },
+        "evidence": {
+          "textual": [
+            {
+              "type": "evidence_quote",
+              "quote": "adds the new export surface",
+              "source": "issue",
+              "id": "ABC-123"
+            },
+            {
+              "type": "evidence_quote",
+              "quote": "fixes the flaky retry path",
+              "source": "pr",
+              "id": "ABC-124"
+            }
+          ],
+          "structural": [
+            {
+              "type": "work_unit_nodes",
+              "issues": [
+                "ABC-123"
+              ],
+              "prs": [
+                "11111111-1111-1111-1111-111111111111:7"
+              ]
+            }
+          ],
+          "contextual": [
+            {
+              "type": "time_range",
+              "start": "2026-08-01T00:00:00+00:00",
+              "end": "2026-08-15T12:00:00+00:00",
+              "span_days": 14.5
+            },
+            {
+              "type": "repo_scope",
+              "repo_ids": [
+                "acme/fixture-repo"
+              ]
+            },
+            {
+              "type": "team_scope",
+              "team_ids": [
+                "unassigned"
+              ],
+              "team_names": [
+                "Unassigned"
+              ]
+            }
+          ]
+        }
+      },
+      "explanation": {
+        "work_unit_id": "wu-ABC-123",
+        "ai_generated": true,
+        "summary": "{\"summary\": \"Based on the precomputed investment view, this work unit appears to lean toward risk work.\", \"dominant_themes\": [\"risk\"], \"key_drivers\": [\"Structural evidence appears to contribute most significantly to the categorization.\", \"Textual phrases appear to align with the investment interpretation.\"], \"operational_signals\": [\"Evidence quality bands indicate moderate uncertainty.\", \"Lower-weight categories may still represent meaningful aspects of the work.\"], \"confidence_note\": \"This analysis reflects moderate evidence quality. The categorization leans toward risk but may not fully capture the nuanced nature of the work.\"}",
+        "category_rationale": {
+          "risk": "risk work."
+        },
+        "evidence_highlights": [
+          "Structural evidence appears most significant",
+          "Textual phrases align with the investment mix"
+        ],
+        "uncertainty_disclosure": "Moderate evidence quality suggests meaningful uncertainty exists in the categorization.",
+        "evidence_quality_limits": "With moderate evidence quality (62%), these results should be interpreted as probabilistic indicators. The categorization suggests tendencies rather than definitive classifications."
+      }
+    },
+    {
+      "name": "mock_null_evidence_quality",
+      "llm_provider": "mock",
+      "llm_model": null,
+      "investment": {
+        "work_unit_id": "wu-ABC-123",
+        "work_unit_type": "epic",
+        "work_unit_name": "Neutral Fixture Unit",
+        "time_range": {
+          "start": "2026-08-01T00:00:00Z",
+          "end": "2026-08-15T12:00:00Z"
+        },
+        "effort": {
+          "metric": "churn_loc",
+          "value": 1234.5
+        },
+        "investment": {
+          "themes": {
+            "feature_delivery": 0.48,
+            "quality": 0.32,
+            "maintenance": 0.2
+          },
+          "subcategories": {
+            "feature_delivery.customer": 0.48,
+            "quality.bugfix": 0.32,
+            "maintenance.refactor": 0.2
+          }
+        },
+        "evidence_quality": {
+          "value": null,
+          "band": "unknown"
+        },
+        "evidence": {
+          "textual": [
+            {
+              "type": "evidence_quote",
+              "quote": "adds the new export surface",
+              "source": "issue",
+              "id": "ABC-123"
+            },
+            {
+              "type": "evidence_quote",
+              "quote": "fixes the flaky retry path",
+              "source": "pr",
+              "id": "ABC-124"
+            }
+          ],
+          "structural": [
+            {
+              "type": "work_unit_nodes",
+              "issues": [
+                "ABC-123"
+              ],
+              "prs": [
+                "11111111-1111-1111-1111-111111111111:7"
+              ]
+            }
+          ],
+          "contextual": [
+            {
+              "type": "time_range",
+              "start": "2026-08-01T00:00:00+00:00",
+              "end": "2026-08-15T12:00:00+00:00",
+              "span_days": 14.5
+            },
+            {
+              "type": "repo_scope",
+              "repo_ids": [
+                "acme/fixture-repo"
+              ]
+            },
+            {
+              "type": "team_scope",
+              "team_ids": [
+                "unassigned"
+              ],
+              "team_names": [
+                "Unassigned"
+              ]
+            }
+          ]
+        }
+      },
+      "raises": "TypeError",
+      "raises_message": "unsupported format string passed to NoneType.__format__"
+    },
+    {
+      "name": "none_provider",
+      "llm_provider": "none",
+      "llm_model": null,
+      "investment": {
+        "work_unit_id": "wu-ABC-123",
+        "work_unit_type": "epic",
+        "work_unit_name": "Neutral Fixture Unit",
+        "time_range": {
+          "start": "2026-08-01T00:00:00Z",
+          "end": "2026-08-15T12:00:00Z"
+        },
+        "effort": {
+          "metric": "churn_loc",
+          "value": 1234.5
+        },
+        "investment": {
+          "themes": {
+            "feature_delivery": 0.48,
+            "quality": 0.32,
+            "maintenance": 0.2
+          },
+          "subcategories": {
+            "feature_delivery.customer": 0.48,
+            "quality.bugfix": 0.32,
+            "maintenance.refactor": 0.2
+          }
+        },
+        "evidence_quality": {
+          "value": 0.62,
+          "band": "moderate"
+        },
+        "evidence": {
+          "textual": [
+            {
+              "type": "evidence_quote",
+              "quote": "adds the new export surface",
+              "source": "issue",
+              "id": "ABC-123"
+            },
+            {
+              "type": "evidence_quote",
+              "quote": "fixes the flaky retry path",
+              "source": "pr",
+              "id": "ABC-124"
+            }
+          ],
+          "structural": [
+            {
+              "type": "work_unit_nodes",
+              "issues": [
+                "ABC-123"
+              ],
+              "prs": [
+                "11111111-1111-1111-1111-111111111111:7"
+              ]
+            }
+          ],
+          "contextual": [
+            {
+              "type": "time_range",
+              "start": "2026-08-01T00:00:00+00:00",
+              "end": "2026-08-15T12:00:00+00:00",
+              "span_days": 14.5
+            },
+            {
+              "type": "repo_scope",
+              "repo_ids": [
+                "acme/fixture-repo"
+              ]
+            },
+            {
+              "type": "team_scope",
+              "team_ids": [
+                "unassigned"
+              ],
+              "team_names": [
+                "Unassigned"
+              ]
+            }
+          ]
+        }
+      },
+      "explanation": {
+        "work_unit_id": "wu-ABC-123",
+        "ai_generated": false,
+        "summary": "",
+        "category_rationale": {},
+        "evidence_highlights": [],
+        "uncertainty_disclosure": "",
+        "evidence_quality_limits": ""
+      }
+    }
+  ]
+}

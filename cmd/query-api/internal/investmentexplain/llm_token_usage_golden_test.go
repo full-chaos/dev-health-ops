@@ -34,6 +34,15 @@ type llmTokenUsageGolden struct {
 
 var fixedComputedAt = time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 
+// goldenTokenUsageSource is the `source` these fixtures were captured
+// with. write_llm_token_usage has no default for that argument on either
+// plane -- every call site names its own surface -- so it is not part of
+// the captured INPUT and is supplied here instead; the expected record's
+// own source field below is what proves the value survives the builder
+// unchanged. TestBuildLLMTokenUsageRecordPassesSourceThrough covers the
+// other call site's value against the same inputs.
+const goldenTokenUsageSource = "investment_mix_explain"
+
 func TestBuildLLMTokenUsageRecordMatchesPythonGolden(t *testing.T) {
 	files, err := filepath.Glob(filepath.Join("testdata", "llm_token_usage__*.json"))
 	if err != nil {
@@ -57,6 +66,7 @@ func TestBuildLLMTokenUsageRecordMatchesPythonGolden(t *testing.T) {
 
 			record, ok := BuildLLMTokenUsageRecord(TokenUsageInput{
 				OrgID:        golden.Input.OrgID,
+				Source:       goldenTokenUsageSource,
 				Provider:     golden.Input.Provider,
 				Model:        golden.Input.Model,
 				InputTokens:  golden.Input.InputTokens,
@@ -88,5 +98,30 @@ func TestBuildLLMTokenUsageRecordMatchesPythonGolden(t *testing.T) {
 				t.Fatalf("case %q: computed_at mismatch: want %s, got %s", golden.Case, want.ComputedAt, gotISO)
 			}
 		})
+	}
+}
+
+// TestBuildLLMTokenUsageRecordPassesSourceThrough pins the ONE value this
+// builder neither defaults nor rewrites. provider, model and use_case all
+// fall back to "unknown"/"unknown"/"legacy" when empty; source does not,
+// because Python requires every call site to name it, so an empty source
+// must stay empty rather than acquire a fallback the reference has no
+// branch for. The two real call-site values are checked against each
+// other so a hardcoded constant reappearing in the builder fails here.
+func TestBuildLLMTokenUsageRecordPassesSourceThrough(t *testing.T) {
+	tokens := 7
+	for _, source := range []string{"investment_mix_explain", "work_unit_explain", ""} {
+		record, ok := BuildLLMTokenUsageRecord(TokenUsageInput{
+			OrgID:       "org-ABC-123",
+			Source:      source,
+			Provider:    "openai",
+			InputTokens: &tokens,
+		}, fixedComputedAt)
+		if !ok {
+			t.Fatalf("source %q: want a row for a non-zero input-token count", source)
+		}
+		if record.Source != source {
+			t.Errorf("source %q: record.Source = %q, want it unchanged", source, record.Source)
+		}
 	}
 }

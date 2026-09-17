@@ -655,9 +655,17 @@ func TestLoadRESTEndpointsOnTheRealRepo(t *testing.T) {
 		t.Fatalf("GET /api/v1/investment/sunburst = %+v, want ported at investment_route.go", investmentSunburstGet)
 	}
 
-	ported, _, _ := RESTEndpointCounts(rows)
-	if ported != 31 {
-		t.Fatalf("got %d ported routes, want exactly 31 (POST /api/v1/investment/explain, GET /api/v1/quadrant, "+
+	workUnitExplainPost, ok := byKey["POST /api/v1/work-units/{work_unit_id}/explain"]
+	if !ok {
+		t.Fatal("expected POST /api/v1/work-units/{work_unit_id}/explain to be enumerated")
+	}
+	if workUnitExplainPost.Status != RESTPorted || !strings.Contains(workUnitExplainPost.GoHandler, "workunit_explain_route.go") {
+		t.Fatalf("POST /api/v1/work-units/{work_unit_id}/explain = %+v, want ported at workunit_explain_route.go", workUnitExplainPost)
+	}
+
+	ported, pythonOnly, _ := RESTEndpointCounts(rows)
+	if ported != 32 {
+		t.Fatalf("got %d ported routes, want exactly 32 (POST /api/v1/investment/explain, GET /api/v1/quadrant, "+
 			"GET /api/v1/filters/options, POST+GET /api/v1/drilldown/prs, GET /api/v1/meta, "+
 			"POST+GET /api/v1/drilldown/issues, POST+GET /api/v1/explain, GET /api/v1/people, "+
 			"GET /api/v1/people/{person_id}/summary, GET /api/v1/people/{person_id}/metric, GET /api/v1/flame, "+
@@ -665,7 +673,17 @@ func TestLoadRESTEndpointsOnTheRealRepo(t *testing.T) {
 			"GET /api/v1/flame/aggregated, GET /api/v1/heatmap, POST+GET /api/v1/sankey, "+
 			"POST /api/v1/investment/flow, POST /api/v1/investment/flow/repo-team, "+
 			"POST+GET /api/v1/investment, GET /api/v1/investment/sunburst, POST+GET /api/v1/home, "+
-			"POST+GET /api/v1/work-units, POST+GET /api/v1/opportunities) -- "+
+			"POST+GET /api/v1/work-units, POST /api/v1/work-units/{work_unit_id}/explain, "+
+			"POST+GET /api/v1/opportunities) -- "+
 			"if this changed, a route was ported or un-ported; update this pin, it is not stale by accident", ported)
+	}
+	// Every REST route main.py declares is served by a Go handler. A
+	// python-only row reappearing means a route was added on the reference
+	// plane with no Go counterpart, or a Go handler stopped registering its
+	// path -- both of which this count catches where the ported pin above
+	// cannot, since a route added on BOTH planes keeps the ported total
+	// moving in step with the python-only one.
+	if pythonOnly != 0 {
+		t.Fatalf("got %d python-only routes, want 0: every /api/v1/* route main.py declares is registered by a Go handler", pythonOnly)
 	}
 }

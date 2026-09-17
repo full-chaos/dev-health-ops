@@ -1,0 +1,426 @@
+{
+  "header_sections": [
+    {
+      "name": "plain",
+      "text": "**SUMMARY** hello world",
+      "header": "SUMMARY",
+      "default": "",
+      "result": "hello world"
+    },
+    {
+      "name": "colon_suffix",
+      "text": "**SUMMARY:** hello world",
+      "header": "SUMMARY",
+      "default": "",
+      "result": "hello world"
+    },
+    {
+      "name": "many_stars",
+      "text": "**SUMMARY:*****  padded",
+      "header": "SUMMARY",
+      "default": "",
+      "result": "padded"
+    },
+    {
+      "name": "blank_line_after_header",
+      "text": "**SUMMARY**\n\nhello",
+      "header": "SUMMARY",
+      "default": "",
+      "result": "hello"
+    },
+    {
+      "name": "stops_at_blank_line",
+      "text": "**SUMMARY** first\n\nsecond",
+      "header": "SUMMARY",
+      "default": "",
+      "result": "first"
+    },
+    {
+      "name": "stops_at_next_bold",
+      "text": "**SUMMARY** first **REASONS** second",
+      "header": "SUMMARY",
+      "default": "",
+      "result": "first"
+    },
+    {
+      "name": "text_before_header",
+      "text": "preamble\n**SUMMARY** value",
+      "header": "SUMMARY",
+      "default": "",
+      "result": "value"
+    },
+    {
+      "name": "lowercase_header_matches",
+      "text": "**summary** lowered",
+      "header": "SUMMARY",
+      "default": "",
+      "result": "lowered"
+    },
+    {
+      "name": "whitespace_only_body",
+      "text": "**SUMMARY**    ",
+      "header": "SUMMARY",
+      "default": "",
+      "result": ""
+    },
+    {
+      "name": "trailing_newline",
+      "text": "**SUMMARY** value\n",
+      "header": "SUMMARY",
+      "default": "",
+      "result": "value"
+    },
+    {
+      "name": "multiple_blank_lines_then_text",
+      "text": "**SUMMARY**\n\n\n  padded  \n\ntail",
+      "header": "SUMMARY",
+      "default": "",
+      "result": "padded"
+    },
+    {
+      "name": "bold_terminator_no_newline",
+      "text": "**SUMMARY** a**b",
+      "header": "SUMMARY",
+      "default": "",
+      "result": "a"
+    },
+    {
+      "name": "unicode_whitespace_after_header",
+      "text": "**SUMMARY**  value",
+      "header": "SUMMARY",
+      "default": "",
+      "result": "value"
+    },
+    {
+      "name": "header_absent_uses_default",
+      "text": "nothing here",
+      "header": "SUMMARY",
+      "default": "THE-DEFAULT",
+      "result": "THE-DEFAULT"
+    },
+    {
+      "name": "header_absent_empty_default",
+      "text": "nothing here",
+      "header": "SUMMARY",
+      "default": "",
+      "result": ""
+    },
+    {
+      "name": "multiline_body",
+      "text": "**REASONS** line one\nline two\nline three\n\nafter",
+      "header": "REASONS",
+      "default": "",
+      "result": "line one\nline two\nline three"
+    },
+    {
+      "name": "space_in_header",
+      "text": "**Evidence Highlights**\n- one\n- two",
+      "header": "Evidence Highlights",
+      "default": "",
+      "result": "- one\n- two"
+    },
+    {
+      "name": "second_occurrence_ignored",
+      "text": "**SUMMARY** first\n\n**SUMMARY** second",
+      "header": "SUMMARY",
+      "default": "",
+      "result": "first"
+    },
+    {
+      "name": "header_at_end",
+      "text": "tail **UNCERTAINTY**",
+      "header": "UNCERTAINTY",
+      "default": "FALLBACK",
+      "result": ""
+    },
+    {
+      "name": "crlf_body",
+      "text": "**SUMMARY** value\r\n\r\nnext",
+      "header": "SUMMARY",
+      "default": "",
+      "result": "value\r\n\r\nnext"
+    }
+  ],
+  "first_paragraphs": [
+    {
+      "name": "leading_blank_paragraphs",
+      "text": "\n\n\n  first real  \n\nsecond",
+      "default": "DEF",
+      "result": "first real"
+    },
+    {
+      "name": "all_whitespace",
+      "text": "   \n\n  \t ",
+      "default": "DEF",
+      "result": "DEF"
+    },
+    {
+      "name": "single_paragraph",
+      "text": "only one",
+      "default": "DEF",
+      "result": "only one"
+    },
+    {
+      "name": "empty_text",
+      "text": "",
+      "default": "DEF",
+      "result": "DEF"
+    }
+  ],
+  "category_rationale": [
+    {
+      "name": "direct_sentence_match",
+      "text": "feature_delivery leans toward customer work. quality also appears.",
+      "categories": {
+        "feature_delivery": 0.5,
+        "quality": 0.5
+      },
+      "result": {
+        "feature_delivery": "feature_delivery leans toward customer work.",
+        "quality": "quality also appears."
+      }
+    },
+    {
+      "name": "no_match_no_analysis_section",
+      "text": "nothing relevant here",
+      "categories": {
+        "risk": 1.0
+      },
+      "result": {
+        "risk": "Category leaning based on structural evidence."
+      }
+    },
+    {
+      "name": "no_match_with_analysis_section",
+      "text": "**Category Analysis** something\n\nunrelated",
+      "categories": {
+        "risk": 1.0
+      },
+      "result": {
+        "risk": "Category appears in overall analysis."
+      }
+    },
+    {
+      "name": "regex_metacharacters_in_key",
+      "text": "feature_delivery.customer appears here. tail",
+      "categories": {
+        "feature_delivery.customer": 1.0
+      },
+      "result": {
+        "feature_delivery.customer": "feature_delivery.customer appears here."
+      }
+    },
+    {
+      "name": "case_insensitive",
+      "text": "QUALITY bands indicate moderate uncertainty.",
+      "categories": {
+        "quality": 1.0
+      },
+      "result": {
+        "quality": "QUALITY bands indicate moderate uncertainty."
+      }
+    },
+    {
+      "name": "match_without_period_falls_back",
+      "text": "quality has no terminator",
+      "categories": {
+        "quality": 1.0
+      },
+      "result": {
+        "quality": "Category leaning based on structural evidence."
+      }
+    }
+  ],
+  "evidence_highlights": [
+    {
+      "name": "bulleted_section",
+      "text": "**Evidence Highlights**\n- first item\n- second item\n\ntail",
+      "result": [
+        "first item",
+        "second item"
+      ]
+    },
+    {
+      "name": "unicode_bullets",
+      "text": "**Evidence Highlights**\n• first\n• second",
+      "result": [
+        "first",
+        "second"
+      ]
+    },
+    {
+      "name": "no_section_structural_only",
+      "text": "the structural signal dominates",
+      "result": [
+        "Structural evidence appears most significant"
+      ]
+    },
+    {
+      "name": "no_section_all_three_keywords",
+      "text": "structural, contextual and textual signals",
+      "result": [
+        "Structural evidence appears most significant",
+        "Contextual evidence provides corroboration",
+        "Textual phrases align with the investment mix"
+      ]
+    },
+    {
+      "name": "no_section_no_keywords",
+      "text": "nothing matches at all",
+      "result": [
+        "Structural evidence appears most significant"
+      ]
+    },
+    {
+      "name": "empty_section_falls_back",
+      "text": "**Evidence Highlights**\n\nstructural note",
+      "result": [
+        "Structural evidence appears most significant"
+      ]
+    },
+    {
+      "name": "bullets_with_blank_lines",
+      "text": "**Evidence Highlights**\n-   spaced\n\n- after blank",
+      "result": [
+        "spaced"
+      ]
+    }
+  ],
+  "uncertainty": [
+    {
+      "name": "disclosure_section",
+      "text": "**Uncertainty Disclosure** explicit text",
+      "band": "high",
+      "result": "explicit text"
+    },
+    {
+      "name": "bare_uncertainty_section",
+      "text": "**Uncertainty** explicit text",
+      "band": "low",
+      "result": "explicit text"
+    },
+    {
+      "name": "band_table_high",
+      "text": "no sections here",
+      "band": "high",
+      "result": "With high evidence quality, uncertainty appears minimal but results should still be interpreted probabilistically."
+    },
+    {
+      "name": "band_table_moderate",
+      "text": "no sections here",
+      "band": "moderate",
+      "result": "Moderate evidence quality suggests meaningful uncertainty exists in the categorization."
+    },
+    {
+      "name": "band_table_low",
+      "text": "no sections here",
+      "band": "low",
+      "result": "Low evidence quality indicates significant uncertainty; these results should be treated as tentative."
+    },
+    {
+      "name": "band_table_very_low",
+      "text": "no sections here",
+      "band": "very_low",
+      "result": "Very low evidence quality indicates high uncertainty; categorization leans toward estimates only."
+    },
+    {
+      "name": "band_table_unknown_falls_back",
+      "text": "no sections here",
+      "band": "unknown",
+      "result": "Moderate evidence quality suggests meaningful uncertainty exists in the categorization."
+    },
+    {
+      "name": "band_table_nonsense_falls_back",
+      "text": "no sections here",
+      "band": "not-a-band",
+      "result": "Moderate evidence quality suggests meaningful uncertainty exists in the categorization."
+    }
+  ],
+  "evidence_quality_limits": [
+    {
+      "name": "section_wins",
+      "text": "**Evidence Quality Limits** explicit limits",
+      "value": 0.62,
+      "band": "moderate",
+      "result": "explicit limits"
+    },
+    {
+      "name": "default_branch",
+      "text": "no section",
+      "value": 0.62,
+      "band": "moderate",
+      "result": "With moderate evidence quality (62%), these results should be interpreted as probabilistic indicators. The categorization suggests tendencies rather than definitive classifications."
+    },
+    {
+      "name": "default_branch_rounds_half",
+      "text": "no section",
+      "value": 0.625,
+      "band": "moderate",
+      "result": "With moderate evidence quality (62%), these results should be interpreted as probabilistic indicators. The categorization suggests tendencies rather than definitive classifications."
+    },
+    {
+      "name": "default_branch_zero",
+      "text": "no section",
+      "value": 0.0,
+      "band": "very_low",
+      "result": "With very_low evidence quality (0%), these results should be interpreted as probabilistic indicators. The categorization suggests tendencies rather than definitive classifications."
+    },
+    {
+      "name": "default_branch_one",
+      "text": "no section",
+      "value": 1.0,
+      "band": "high",
+      "result": "With high evidence quality (100%), these results should be interpreted as probabilistic indicators. The categorization suggests tendencies rather than definitive classifications."
+    },
+    {
+      "name": "default_branch_null_band",
+      "text": "no section",
+      "value": 0.5,
+      "band": null,
+      "result": "With None evidence quality (50%), these results should be interpreted as probabilistic indicators. The categorization suggests tendencies rather than definitive classifications."
+    }
+  ],
+  "language_validation": [
+    {
+      "name": "clean",
+      "text": "the work appears to lean toward delivery",
+      "result": []
+    },
+    {
+      "name": "standalone_is",
+      "text": "this is delivery work",
+      "result": [
+        "Forbidden word found: 'is'"
+      ]
+    },
+    {
+      "name": "substring_not_matched",
+      "text": "the island was registered",
+      "result": [
+        "Forbidden word found: 'was'"
+      ]
+    },
+    {
+      "name": "multiple",
+      "text": "it is determined and was detected",
+      "result": [
+        "Forbidden word found: 'detected'",
+        "Forbidden word found: 'was'",
+        "Forbidden word found: 'is'",
+        "Forbidden word found: 'determined'"
+      ]
+    },
+    {
+      "name": "uppercase",
+      "text": "IS this delivery",
+      "result": [
+        "Forbidden word found: 'is'"
+      ]
+    },
+    {
+      "name": "empty",
+      "text": "",
+      "result": []
+    }
+  ]
+}

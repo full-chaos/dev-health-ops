@@ -560,6 +560,26 @@ func main() {
 		log.Print("query-api: /api/v1/work-units route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
 	}
 
+	// POST /api/v1/work-units/{work_unit_id}/explain, gated by its own
+	// routeswitch entry (default OFF via
+	// GO_API_WORK_UNIT_EXPLAIN_ENABLED) -- see
+	// workunit_explain_route.go's package doc comment for the
+	// reachability story, why this LLM route answers one JSON body rather
+	// than a keep-alive stream, and the rate-limiting gap it shares with
+	// every other ported route. The path pattern carries its
+	// {work_unit_id} wildcard, the same mechanism the people routes use.
+	if workUnitExplainHandler, workUnitExplainCleanup, workUnitExplainOK, workUnitExplainErr := buildWorkUnitExplainRoute(); workUnitExplainErr != nil {
+		log.Fatalf("query-api: build /api/v1/work-units/{work_unit_id}/explain route: %v", workUnitExplainErr)
+	} else if workUnitExplainOK {
+		defer workUnitExplainCleanup()
+		// See the investment/explain mount above for why this is a
+		// reassignment, not an inlined wrapper.
+		workUnitExplainHandler = withProofProvenance(workUnitExplainHandler, runningBuild())
+		mux.HandleFunc("/api/v1/work-units/{work_unit_id}/explain", workUnitExplainHandler)
+	} else {
+		log.Print("query-api: /api/v1/work-units/{work_unit_id}/explain route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_*/GO_API_REGISTRY_POSTGRES_URI unset) -- staying unmounted")
+	}
+
 	// GET+POST /api/v1/drilldown/issues, gated by its own routeswitch
 	// entries (default OFF via GO_API_DRILLDOWN_ISSUES_ENABLED)
 	// -- see drilldown_issues_route.go's package doc comment for the

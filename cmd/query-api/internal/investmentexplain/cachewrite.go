@@ -86,11 +86,20 @@ type LLMTokenUsageRecord struct {
 	ComputedAt   time.Time
 }
 
-// TokenUsageInput bundles _write_investment_mix_token_usage's parameters
-// (investment_mix_explain.py:51-59) -- the values explain_investment_mix
-// has on hand after a provider.complete call, before any defaulting.
+// TokenUsageInput bundles the parameters a write_llm_token_usage call site
+// has on hand after a provider.complete call, before any defaulting --
+// _write_investment_mix_token_usage (investment_mix_explain.py:51-59) and
+// explain_work_unit's own call (api/services/work_unit_explain.py:125-141).
 type TokenUsageInput struct {
-	OrgID        string
+	OrgID string
+	// Source is write_llm_token_usage's own `source` argument, which has no
+	// default on either plane: each call site names the surface it is
+	// accounting for ("investment_mix_explain", "work_unit_explain"), and
+	// that value is stored verbatim in the llm_token_usage row's source
+	// column. BuildLLMTokenUsageRecord passes it through unchanged -- unlike
+	// provider/model/use_case it has no "unknown" fallback, matching Python,
+	// where `source` is a required keyword argument.
+	Source       string
 	Provider     string
 	Model        *string
 	InputTokens  *int
@@ -102,10 +111,11 @@ type TokenUsageInput struct {
 // separated from the actual insert so it can be golden-tested without a
 // live ClickHouse: token_count(None) -> 0, provider/model/use_case fall
 // back to "unknown"/"unknown"/"legacy" when falsy, calls is clamped to
-// >= 0 (write_llm_token_usage's own default is calls=1, and
-// _write_investment_mix_token_usage never overrides it, so this port's
-// source="investment_mix_explain", use_case="legacy" (the function
-// default, unpassed by this call site), run_id="" (ditto) match exactly).
+// >= 0 (write_llm_token_usage's own default is calls=1, and neither Python
+// call site overrides it, so this port's use_case="legacy" and run_id=""
+// -- both function defaults, unpassed by either call site -- match
+// exactly). source comes from the caller, which is the one value Python
+// requires every call site to name.
 // ok is false when there is nothing worth writing (calls<=0 AND both
 // token counts <=0), matching the Python function's own early
 // `return True` WITHOUT calling sink.write_llm_token_usage at all -- the
@@ -135,7 +145,7 @@ func BuildLLMTokenUsageRecord(input TokenUsageInput, computedAt time.Time) (reco
 		RunID:        "",
 		Provider:     provider,
 		Model:        model,
-		Source:       "investment_mix_explain",
+		Source:       input.Source,
 		UseCase:      "legacy",
 		InputTokens:  inputCount,
 		OutputTokens: outputCount,

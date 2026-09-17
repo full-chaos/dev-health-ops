@@ -1,0 +1,1 @@
+{"detail":"LLM provider 'anthropic' is not configured. Set ANTHROPIC_API_KEY or choose --llm-provider mock for fixtures/testing. | provider=anthropic | model=none"}

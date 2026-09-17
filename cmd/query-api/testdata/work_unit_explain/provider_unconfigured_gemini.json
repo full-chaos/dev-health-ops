@@ -1,0 +1,1 @@
+{"detail":"LLM provider 'gemini' is not configured. Set GEMINI_API_KEY or choose --llm-provider mock for fixtures/testing. | provider=gemini | model=none"}

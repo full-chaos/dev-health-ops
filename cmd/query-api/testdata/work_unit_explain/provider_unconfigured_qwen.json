@@ -1,0 +1,1 @@
+{"detail":"LLM provider 'qwen' is not configured. Set QWEN_API_KEY or DASHSCOPE_API_KEY or choose --llm-provider mock for fixtures/testing. | provider=qwen | model=none"}

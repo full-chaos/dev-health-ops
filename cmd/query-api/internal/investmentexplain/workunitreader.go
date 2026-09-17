@@ -381,7 +381,32 @@ type WorkUnitInvestmentQuoteRow struct {
 }
 
 // FetchWorkUnitInvestmentQuotes ports fetch_work_unit_investment_quotes
-// (work_unit_investments.py:217-244).
+// (work_unit_investments.py:217-244), with one deliberate correction:
+// work_unit_investment_quotes is a ReplacingMergeTree(computed_at) keyed
+// on (org_id, work_unit_id, source_id, quote) (017_investment_materialize_
+// tables.sql + 027_add_org_id_to_sorting_keys.py); the Python source this
+// ports reads it raw, with no argMax/FINAL dedup at all, so an unmerged
+// physical duplicate of a quote row can surface twice in that plane's own
+// textual-evidence list. This read GROUPs BY the table's own dedup key
+// and argMax's every other selected column by computed_at, so an unmerged
+// duplicate collapses to its latest version here regardless of physical
+// merge state -- Go's own list never carries the duplicate Python's list
+// can. work_unit_id/quote/source_id are the GROUP BY key itself (never
+// argMax'd, since they define the row's own identity); source_type and
+// categorization_run_id are the columns argMax'd. computed_at is read
+// only as the version column and is not part of this function's return
+// type.
+//
+// TABLE ALIAS + QUALIFIED WHERE (confirmed live against a real 26.7
+// container while adding this dedup): the WHERE clause's own
+// categorization_run_id reference must be qualified to the table
+// (wuiq.categorization_run_id), never bare -- ClickHouse resolves a bare
+// WHERE column name against the SELECT list first, and this SELECT
+// projects an aggregate alias of the SAME name
+// (argMax(categorization_run_id, computed_at) AS categorization_run_id),
+// which errors "Aggregate function ... is found in WHERE" outright. The
+// same class of alias-shadowing trap LatestWorkUnitInvestmentsSource's own
+// doc comment (investment.go) already documents for `computed_at`.
 //
 // CHAOS-4977 step 7's live-ClickHouse differential found the original
 // `{pairs:Array(Tuple(String, String))}` binding of a `[][2]string` fails
@@ -421,15 +446,16 @@ func (reader *Reader) FetchWorkUnitInvestmentQuotes(ctx context.Context, orgID s
 SELECT
     work_unit_id,
     quote,
-    source_type,
+    argMax(source_type, computed_at) AS source_type,
     source_id,
-    categorization_run_id
-FROM work_unit_investment_quotes
-WHERE org_id = {org_id:String}
-  AND (work_unit_id, categorization_run_id) IN (
+    argMax(categorization_run_id, computed_at) AS categorization_run_id
+FROM work_unit_investment_quotes AS wuiq
+WHERE wuiq.org_id = {org_id:String}
+  AND (wuiq.work_unit_id, wuiq.categorization_run_id) IN (
       SELECT unhex(splitByChar(':', p)[1]), unhex(splitByChar(':', p)[2])
       FROM (SELECT arrayJoin({pairs:Array(String)}) AS p)
   )
+GROUP BY work_unit_id, quote, source_id
 %s
 `, settingsMaxExecutionTime())
 

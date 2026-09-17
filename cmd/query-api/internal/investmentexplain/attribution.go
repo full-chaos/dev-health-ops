@@ -45,12 +45,12 @@ func evidenceQualityBand(value string) string {
 	}
 }
 
-// splitCategoryFilters ports work_units.py's _split_category_filters
+// SplitCategoryFilters ports work_units.py's _split_category_filters
 // (work_units.py:70-84), taking filters.why.work_category directly as a
 // []string rather than a MetricFilter -- the exact same substance the
 // Python function reads, since `for category in filters.why.work_category
 // or []` is the only field it touches.
-func splitCategoryFilters(workCategory []string) (themes, subcategories []string) {
+func SplitCategoryFilters(workCategory []string) (themes, subcategories []string) {
 	var themeList, subcategoryList []string
 	for _, category := range workCategory {
 		categoryStr := pythonparity.Strip(category)

@@ -137,3 +137,38 @@ func TestFetchWorkUnitInvestmentsOmitsFiltersWhenUnset(t *testing.T) {
 		}
 	}
 }
+
+// TestFetchWorkUnitInvestmentQuotesDedupsByGroupBy pins the dedup fix's
+// own query shape: GROUP BY the table's dedup key
+// (work_unit_id, quote, source_id) with source_type/categorization_run_id
+// read through argMax(..., computed_at), never a raw SELECT of those two
+// columns -- confirmed to actually change the answer only by a real
+// engine (see workunits_seeded_integration_test.go's own
+// TestWorkUnitsSeededRealClickHouse_QuotesDedupReturnsOneEntry, cmd/
+// query-api), which this fixture-backed shape check cannot exercise on
+// its own.
+func TestFetchWorkUnitInvestmentQuotesDedupsByGroupBy(t *testing.T) {
+	capture := &capturingClient{}
+	reader, err := NewReader(capture)
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+
+	if _, err := reader.FetchWorkUnitInvestmentQuotes(t.Context(), "org-1", []WorkUnitRunPair{
+		{WorkUnitID: "unit-1", RunID: "run-1"},
+	}); err != nil {
+		t.Fatalf("FetchWorkUnitInvestmentQuotes: %v", err)
+	}
+
+	query := capture.lastQuery
+	for _, fragment := range []string{
+		"GROUP BY work_unit_id, quote, source_id",
+		"argMax(source_type, computed_at) AS source_type",
+		"argMax(categorization_run_id, computed_at) AS categorization_run_id",
+		"wuiq.categorization_run_id",
+	} {
+		if !strings.Contains(query, fragment) {
+			t.Fatalf("query missing fragment %q:\n%s", fragment, query)
+		}
+	}
+}

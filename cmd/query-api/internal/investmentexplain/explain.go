@@ -311,7 +311,7 @@ func (reader *Reader) ExplainInvestmentMix(ctx context.Context, writer *CacheWri
 	// into BreakdownFilters at all, silently ignoring why.work_category for
 	// the top_themes/top_subcategories computation while still applying it
 	// to work units -- caught by codex round 1 (P1).
-	themeFilters, subcategoryFilters := splitCategoryFilters(opts.WorkCategory)
+	themeFilters, subcategoryFilters := SplitCategoryFilters(opts.WorkCategory)
 
 	breakdownFilter := BreakdownFilters{
 		OrgID:         opts.OrgID,

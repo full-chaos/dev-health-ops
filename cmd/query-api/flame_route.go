@@ -102,6 +102,16 @@ func buildFlameRoute() (handler http.HandlerFunc, cleanup func(), ok bool, err e
 		return nil, nil, false, err
 	}
 
+	// Optional -- nil whenever the pod has not been given the edge
+	// credential's key material, in which case authenticateRESTRequest
+	// falls back to its pre-existing envelope-only behaviour. See
+	// buildEdgeVerifierFromEnv's own doc comment for the pod env
+	// contract this reads.
+	edgeVerifier, err := buildEdgeVerifierFromEnv()
+	if err != nil {
+		return nil, nil, false, err
+	}
+
 	readClient, err := dhclickhouse.NewClickHouseQueryClientWithOptions(newUnrestrictedReadClickHouseOptions(clickHouseURI))
 	if err != nil {
 		return nil, nil, false, err
@@ -117,7 +127,7 @@ func buildFlameRoute() (handler http.HandlerFunc, cleanup func(), ok bool, err e
 			writeRESTMethodNotAllowed(w, r, "flame")
 			return
 		}
-		claims, ok := authenticateRESTRequest(w, r, verifier, "flame")
+		claims, ok := authenticateRESTRequest(w, r, verifier, edgeVerifier, "flame")
 		if !ok {
 			return
 		}

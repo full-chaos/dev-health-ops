@@ -106,6 +106,16 @@ func buildExplainRoute() (handler http.HandlerFunc, cleanup func(), ok bool, err
 		return nil, nil, false, err
 	}
 
+	// Optional -- nil whenever the pod has not been given the edge
+	// credential's key material, in which case authenticateRESTRequest
+	// falls back to its pre-existing envelope-only behaviour. See
+	// buildEdgeVerifierFromEnv's own doc comment for the pod env
+	// contract this reads.
+	edgeVerifier, err := buildEdgeVerifierFromEnv()
+	if err != nil {
+		return nil, nil, false, err
+	}
+
 	readClient, err := dhclickhouse.NewClickHouseQueryClientWithOptions(newUnrestrictedReadClickHouseOptions(clickHouseURI))
 	if err != nil {
 		return nil, nil, false, err
@@ -144,7 +154,7 @@ func buildExplainRoute() (handler http.HandlerFunc, cleanup func(), ok bool, err
 			return
 		}
 
-		claims, ok := authenticateRESTRequest(w, r, verifier, "explain")
+		claims, ok := authenticateRESTRequest(w, r, verifier, edgeVerifier, "explain")
 		if !ok {
 			return
 		}

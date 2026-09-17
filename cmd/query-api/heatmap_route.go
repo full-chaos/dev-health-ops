@@ -83,6 +83,16 @@ func buildHeatmapRoute() (handler http.HandlerFunc, cleanup func(), ok bool, err
 		return nil, nil, false, fmt.Errorf("heatmap: build envelope verifier: %w", err)
 	}
 
+	// Optional -- nil whenever the pod has not been given the edge
+	// credential's key material, in which case authenticateRESTRequest
+	// falls back to its pre-existing envelope-only behaviour. See
+	// buildEdgeVerifierFromEnv's own doc comment for the pod env
+	// contract this reads.
+	edgeVerifier, err := buildEdgeVerifierFromEnv()
+	if err != nil {
+		return nil, nil, false, err
+	}
+
 	readClient, err := dhclickhouse.NewClickHouseQueryClientWithOptions(newUnrestrictedReadClickHouseOptions(clickHouseURI))
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("heatmap: build read client: %w", err)
@@ -96,7 +106,7 @@ func buildHeatmapRoute() (handler http.HandlerFunc, cleanup func(), ok bool, err
 			writeRESTMethodNotAllowed(w, r, "heatmap")
 			return
 		}
-		claims, ok := authenticateRESTRequest(w, r, verifier, "heatmap")
+		claims, ok := authenticateRESTRequest(w, r, verifier, edgeVerifier, "heatmap")
 		if !ok {
 			return
 		}

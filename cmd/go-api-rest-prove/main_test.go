@@ -472,6 +472,131 @@ func TestDoREST_SendsQueryAndBodyAndReadsBuildHeader(t *testing.T) {
 	}
 }
 
+// TestProveEdgeCredentialOnCandidate_Admitted pins the whole reason this
+// leg exists: sending the edge credential DIRECTLY to query-api (never to the
+// baseline) is admitted when the candidate answers the declared status
+// with a matching build header -- exactly the same admission bar the
+// ordinary (envelope) candidate leg already clears.
+func TestProveEdgeCredentialOnCandidate_Admitted(t *testing.T) {
+	const build = "abc123def456"
+	var gotAuth string
+	candidate := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("x-dev-health-build", build)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer candidate.Close()
+
+	f := flags{queryAPIURL: candidate.URL}
+	spec := goapiproof.RESTEndpointSpec{Method: http.MethodGet, Path: "/api/v1/filters/options"}
+	request := goapiproof.RESTRequest{Name: "options", WantCandidateStatus: 200}
+
+	out, err := proveEdgeCredentialOnCandidate(context.Background(), http.DefaultClient, f,
+		"REST:GET:/api/v1/filters/options", spec, request, staticCredentialForTest(), build, nil)
+	if err != nil {
+		t.Fatalf("proveEdgeCredentialOnCandidate: %v", err)
+	}
+	if !out.Admitted {
+		t.Fatalf("out = %+v, want admitted", out)
+	}
+	if gotAuth != "Bearer test-token" {
+		t.Fatalf("candidate saw Authorization = %q, want the edge credential's own value", gotAuth)
+	}
+}
+
+// TestProveEdgeCredentialOnCandidate_PersistsBodyToArtifactDir proves this
+// leg's response body lands in the SAME artifact store proveOneRESTRequest's
+// own legs use, under CandidateResponseRef -- so a 401 here leaves the same
+// kind of evidence behind a refusal on the ordinary candidate leg does.
+func TestProveEdgeCredentialOnCandidate_PersistsBodyToArtifactDir(t *testing.T) {
+	const build = "abc123def456"
+	const body = `{"teams":["a","b"]}`
+	candidate := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("x-dev-health-build", build)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(body))
+	}))
+	defer candidate.Close()
+
+	artifacts, err := goapiproof.NewArtifactStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewArtifactStore: %v", err)
+	}
+
+	f := flags{queryAPIURL: candidate.URL}
+	spec := goapiproof.RESTEndpointSpec{Method: http.MethodGet, Path: "/api/v1/filters/options"}
+	request := goapiproof.RESTRequest{Name: "options", WantCandidateStatus: 200}
+
+	out, err := proveEdgeCredentialOnCandidate(context.Background(), http.DefaultClient, f,
+		"op", spec, request, staticCredentialForTest(), build, artifacts)
+	if err != nil {
+		t.Fatalf("proveEdgeCredentialOnCandidate: %v", err)
+	}
+	if !out.Admitted {
+		t.Fatalf("out = %+v, want admitted", out)
+	}
+	if got := string(readArtifactFile(t, out.CandidateResponseRef)); got != body {
+		t.Fatalf("candidate (edge credential) artifact body = %q, want %q", got, body)
+	}
+}
+
+// TestProveEdgeCredentialOnCandidate_RefusesOnUnexpectedStatus proves
+// this is a REAL admission check, not a rubber stamp: a candidate that
+// answers 401 for the edge credential is refused, with the SAME refusal
+// vocabulary RESTAdmit's own status check uses.
+func TestProveEdgeCredentialOnCandidate_RefusesOnUnexpectedStatus(t *testing.T) {
+	candidate := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("x-dev-health-build", "abc123")
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer candidate.Close()
+
+	f := flags{queryAPIURL: candidate.URL}
+	spec := goapiproof.RESTEndpointSpec{Method: http.MethodGet, Path: "/api/v1/filters/options"}
+	request := goapiproof.RESTRequest{Name: "options", WantCandidateStatus: 200}
+
+	out, err := proveEdgeCredentialOnCandidate(context.Background(), http.DefaultClient, f,
+		"op", spec, request, staticCredentialForTest(), "abc123", nil)
+	if err != nil {
+		t.Fatalf("proveEdgeCredentialOnCandidate: %v", err)
+	}
+	if out.Admitted {
+		t.Fatalf("out = %+v, want a refusal", out)
+	}
+	if out.Refusal != goapiproof.RESTRefusalUnexpectedStatus {
+		t.Fatalf("Refusal = %q, want %q", out.Refusal, goapiproof.RESTRefusalUnexpectedStatus)
+	}
+}
+
+// TestProveEdgeCredentialOnCandidate_RefusesOnBuildMismatch proves the
+// build-header binding is enforced on this leg too: an answer with no
+// x-dev-health-build header (or the wrong one) is refused rather than
+// silently admitted, matching RESTAdmit's own candidate build check.
+func TestProveEdgeCredentialOnCandidate_RefusesOnBuildMismatch(t *testing.T) {
+	candidate := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer candidate.Close()
+
+	f := flags{queryAPIURL: candidate.URL}
+	spec := goapiproof.RESTEndpointSpec{Method: http.MethodGet, Path: "/api/v1/filters/options"}
+	request := goapiproof.RESTRequest{Name: "options", WantCandidateStatus: 200}
+
+	out, err := proveEdgeCredentialOnCandidate(context.Background(), http.DefaultClient, f,
+		"op", spec, request, staticCredentialForTest(), "abc123", nil)
+	if err != nil {
+		t.Fatalf("proveEdgeCredentialOnCandidate: %v", err)
+	}
+	if out.Admitted {
+		t.Fatalf("out = %+v, want a refusal for a missing build header", out)
+	}
+	if out.Refusal != goapiproof.RESTRefusalBuildUnbound {
+		t.Fatalf("Refusal = %q, want %q", out.Refusal, goapiproof.RESTRefusalBuildUnbound)
+	}
+}
+
 func staticCredentialForTest() *goapiproof.Credential {
 	return goapiproof.StaticCredential("Authorization", "test", "Bearer test-token")
 }

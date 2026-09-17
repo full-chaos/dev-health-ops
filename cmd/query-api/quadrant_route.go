@@ -87,6 +87,16 @@ func buildQuadrantRoute() (handler http.HandlerFunc, cleanup func(), ok bool, er
 		return nil, nil, false, fmt.Errorf("quadrant: build envelope verifier: %w", err)
 	}
 
+	// Optional -- nil whenever the pod has not been given the edge
+	// credential's key material, in which case authenticateRESTRequest
+	// falls back to its pre-existing envelope-only behaviour. See
+	// buildEdgeVerifierFromEnv's own doc comment for the pod env
+	// contract this reads.
+	edgeVerifier, err := buildEdgeVerifierFromEnv()
+	if err != nil {
+		return nil, nil, false, err
+	}
+
 	readClient, err := dhclickhouse.NewClickHouseQueryClientWithOptions(newUnrestrictedReadClickHouseOptions(clickHouseURI))
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("quadrant: build read client: %w", err)
@@ -104,7 +114,7 @@ func buildQuadrantRoute() (handler http.HandlerFunc, cleanup func(), ok bool, er
 			writeRESTMethodNotAllowed(w, r, "quadrant")
 			return
 		}
-		claims, ok := authenticateRESTRequest(w, r, verifier, "quadrant")
+		claims, ok := authenticateRESTRequest(w, r, verifier, edgeVerifier, "quadrant")
 		if !ok {
 			return
 		}

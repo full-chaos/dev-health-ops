@@ -23,9 +23,11 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/authctx"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/principal"
@@ -126,6 +128,36 @@ func writeRESTDataUnavailable(w http.ResponseWriter, r *http.Request, component,
 	writeRESTError(w, r, component, orgID, http.StatusServiceUnavailable, "Data unavailable")
 }
 
+// jwtHeaderAlg is the credential-kind dispatch: it peeks a JWT's own
+// header segment for its `alg` claim WITHOUT verifying anything -- no
+// signature check, no key material touched, nothing logged -- purely to
+// decide which verifier a REST route's Authorization bearer token
+// belongs to before either one runs. Every other token shape (too few
+// segments, non-JSON header, no alg field, or an alg neither verifier
+// speaks) reports ok=false, which authenticateRESTRequest treats
+// identically to a token presented when no edge verifier is configured:
+// fall through to the envelope verifier, the SAME code path (telemetry
+// included) every unrecognisable token goes through. This keeps the
+// envelope path byte-identical for everything except a token that is
+// genuinely, legibly HS256.
+func jwtHeaderAlg(token string) (string, bool) {
+	segments := strings.Split(token, ".")
+	if len(segments) != 3 || segments[0] == "" {
+		return "", false
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(segments[0])
+	if err != nil {
+		return "", false
+	}
+	var header struct {
+		Alg string `json:"alg"`
+	}
+	if err := json.Unmarshal(raw, &header); err != nil || header.Alg == "" {
+		return "", false
+	}
+	return header.Alg, true
+}
+
 // authenticateRESTRequest reproduces get_current_user's own three-way
 // auth-failure classification (auth/routers/dependencies.py) ahead of a
 // REST route's business logic: an absent Authorization header, a header
@@ -137,7 +169,22 @@ func writeRESTDataUnavailable(w http.ResponseWriter, r *http.Request, component,
 // caller must return immediately; on success it returns the claims to
 // attach to the request context, matching every REST route's existing
 // entryHandler shape.
-func authenticateRESTRequest(w http.ResponseWriter, r *http.Request, verifier *principal.Verifier, component string) (authctx.Claims, bool) {
+//
+// A real user's browser never carries the effective-principal envelope
+// -- it carries the edge access token services/auth.py mints (HS256,
+// JWT_SECRET_KEY), which ingress path-splitting forwards to this binary
+// unchanged. edgeVerifier is that token's verifier; it is nil whenever
+// the pod has not been given the edge credential's key material yet (see
+// this repo's edge verifier env-var contract), in which case every
+// bearer token, whatever its shape, goes through the envelope verifier
+// alone. When edgeVerifier is non-nil, a token whose own JWT header names
+// alg=HS256 is routed to it instead of the envelope verifier (see
+// jwtHeaderAlg); every other token -- including a genuine EdDSA envelope
+// -- is verified exactly as before, unaffected by edgeVerifier's
+// presence. Either verifier's failure answers the identical
+// "Invalid or expired token" body: get_current_user never distinguishes
+// WHY a token was rejected, only THAT it was.
+func authenticateRESTRequest(w http.ResponseWriter, r *http.Request, verifier *principal.Verifier, edgeVerifier *principal.EdgeVerifier, component string) (authctx.Claims, bool) {
 	authHeader := r.Header.Get("Authorization")
 	if authHeader == "" {
 		writeRESTUnauthorized(w, r, component, "Not authenticated")
@@ -148,6 +195,19 @@ func authenticateRESTRequest(w http.ResponseWriter, r *http.Request, verifier *p
 		writeRESTUnauthorized(w, r, component, "Invalid authorization header")
 		return authctx.Claims{}, false
 	}
+
+	if edgeVerifier != nil {
+		if alg, ok := jwtHeaderAlg(token); ok && alg == principal.EdgeAlgorithm {
+			edgeVerifyCtx := principal.WithRequestMeta(r.Context(), r.RemoteAddr, envelopeRequestID(r))
+			claims, err := edgeVerifier.Verify(edgeVerifyCtx, token)
+			if err != nil {
+				writeRESTUnauthorized(w, r, component, "Invalid or expired token")
+				return authctx.Claims{}, false
+			}
+			return authctx.Claims{OrgID: claims.OrgID}, true
+		}
+	}
+
 	verifyCtx := principal.WithRequestMeta(r.Context(), r.RemoteAddr, envelopeRequestID(r))
 	claims, err := verifier.Verify(verifyCtx, token)
 	if err != nil {

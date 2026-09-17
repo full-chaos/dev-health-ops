@@ -90,15 +90,44 @@ func assertGolden(t *testing.T, got *Response, goldenName string) {
 	}
 }
 
+// assertBindingValue fails the test unless bindings carries exactly one
+// entry named name with the given string value -- a fixture handler's own
+// proof that a filter's bound value reached the query, not just that some
+// binding with that name exists.
+func assertBindingValue(t *testing.T, bindings []dhclickhouse.Binding, name, want string) {
+	t.Helper()
+	for _, b := range bindings {
+		if b.Name == name {
+			if b.Value != want {
+				t.Fatalf("binding %q: got %v, want %q", name, b.Value, want)
+			}
+			return
+		}
+	}
+	t.Fatalf("no binding named %q (have %+v)", name, bindings)
+}
+
 // TestGoldenCycleBreakdownBasic replays testdata/cycle_breakdown_basic.json:
 // fetch_cycle_breakdown returns five rows across four live categories (one
 // filtered out for total_hours<=0), team_id/work_scope_id filters set,
-// provider absent.
+// provider absent. The handler asserts both filter clauses are actually IN
+// the query text and both values actually reached the bindings -- not just
+// that Params.TeamID/WorkScopeID were set -- so this test fails if either
+// `AND team_id = ...`/`AND work_scope_id = ...` clause in fetchCycleBreakdown
+// (clickhouse.go) is ever deleted or its binding dropped.
 func TestGoldenCycleBreakdownBasic(t *testing.T) {
 	client := fakeQueryClient{t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
 		if !strings.Contains(query, "FROM work_item_state_durations_daily") {
 			t.Fatalf("unexpected query for cycle_breakdown_basic fixture:\n%s", query)
 		}
+		if !strings.Contains(query, "AND team_id = {team_id:String}") {
+			t.Fatalf("cycle_breakdown_basic fixture: query missing the team_id filter clause:\n%s", query)
+		}
+		if !strings.Contains(query, "AND work_scope_id = {work_scope_id:String}") {
+			t.Fatalf("cycle_breakdown_basic fixture: query missing the work_scope_id filter clause:\n%s", query)
+		}
+		assertBindingValue(t, bindings, "team_id", "team-a")
+		assertBindingValue(t, bindings, "work_scope_id", "scope-1")
 		return &fixtureRowScanner{rows: [][]any{
 			{"in_progress", 120.5, uint64(10)},
 			{"Blocked", 40.0, uint64(3)},

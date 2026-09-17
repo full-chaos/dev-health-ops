@@ -1,0 +1,570 @@
+{
+  "freshness": {
+    "last_ingested_at": "2024-01-08T10:00:00Z",
+    "latest_successful_sync_at": null,
+    "sources": {
+      "github": "ok",
+      "jira": "degraded",
+      "ci": "ok"
+    },
+    "coverage": {
+      "repos_covered_pct": 80.0,
+      "prs_linked_to_issues_pct": 80.0,
+      "issues_with_cycle_states_pct": 90.0
+    }
+  },
+  "deltas": [
+    {
+      "metric": "cycle_time",
+      "label": "Cycle Time",
+      "value": 2.0,
+      "unit": "days",
+      "delta_pct": -20.0,
+      "spark": [
+        {
+          "ts": "2024-01-02T00:00:00",
+          "value": 2.0833333333333335
+        },
+        {
+          "ts": "2024-01-05T00:00:00",
+          "value": 1.9166666666666667
+        }
+      ]
+    },
+    {
+      "metric": "review_latency",
+      "label": "Review Latency",
+      "value": 5.0,
+      "unit": "hours",
+      "delta_pct": 25.0,
+      "spark": [
+        {
+          "ts": "2024-01-02T00:00:00",
+          "value": 4.5
+        },
+        {
+          "ts": "2024-01-05T00:00:00",
+          "value": 5.5
+        }
+      ]
+    },
+    {
+      "metric": "throughput",
+      "label": "Throughput",
+      "value": 20.0,
+      "unit": "items",
+      "delta_pct": 33.33333333333333,
+      "spark": [
+        {
+          "ts": "2024-01-02T00:00:00",
+          "value": 9.0
+        },
+        {
+          "ts": "2024-01-05T00:00:00",
+          "value": 11.0
+        }
+      ]
+    },
+    {
+      "metric": "deploy_freq",
+      "label": "Deploy Frequency",
+      "value": 3.0,
+      "unit": "deploys",
+      "delta_pct": 0.0,
+      "spark": [
+        {
+          "ts": "2024-01-02T00:00:00",
+          "value": 1.0
+        },
+        {
+          "ts": "2024-01-05T00:00:00",
+          "value": 2.0
+        }
+      ]
+    },
+    {
+      "metric": "churn",
+      "label": "Code Churn",
+      "value": 1000.0,
+      "unit": "loc",
+      "delta_pct": 25.0,
+      "spark": [
+        {
+          "ts": "2024-01-02T00:00:00",
+          "value": 400.0
+        },
+        {
+          "ts": "2024-01-05T00:00:00",
+          "value": 600.0
+        }
+      ]
+    },
+    {
+      "metric": "wip_saturation",
+      "label": "WIP Saturation",
+      "value": 50.0,
+      "unit": "%",
+      "delta_pct": 24.999999999999993,
+      "spark": [
+        {
+          "ts": "2024-01-02T00:00:00",
+          "value": 45.0
+        },
+        {
+          "ts": "2024-01-05T00:00:00",
+          "value": 55.00000000000001
+        }
+      ]
+    },
+    {
+      "metric": "blocked_work",
+      "label": "Blocked Work",
+      "value": 10.0,
+      "unit": "hours",
+      "delta_pct": 25.0,
+      "spark": [
+        {
+          "ts": "2024-01-02T00:00:00",
+          "value": 6.0
+        },
+        {
+          "ts": "2024-01-05T00:00:00",
+          "value": 4.0
+        }
+      ]
+    },
+    {
+      "metric": "change_failure_rate",
+      "label": "Change Failure Rate",
+      "value": 10.0,
+      "unit": "%",
+      "delta_pct": 25.000000000000007,
+      "spark": [
+        {
+          "ts": "2024-01-02T00:00:00",
+          "value": 9.0
+        },
+        {
+          "ts": "2024-01-05T00:00:00",
+          "value": 11.0
+        }
+      ]
+    },
+    {
+      "metric": "rework_ratio",
+      "label": "Rework Ratio",
+      "value": 20.0,
+      "unit": "%",
+      "delta_pct": 33.33333333333335,
+      "spark": [
+        {
+          "ts": "2024-01-02T00:00:00",
+          "value": 18.0
+        },
+        {
+          "ts": "2024-01-05T00:00:00",
+          "value": 22.0
+        }
+      ]
+    },
+    {
+      "metric": "pr_rework_ratio",
+      "label": "PR Rework Ratio",
+      "value": 12.0,
+      "unit": "%",
+      "delta_pct": 19.99999999999999,
+      "spark": [
+        {
+          "ts": "2024-01-02T00:00:00",
+          "value": 11.0
+        },
+        {
+          "ts": "2024-01-05T00:00:00",
+          "value": 13.0
+        }
+      ]
+    },
+    {
+      "metric": "ci_success",
+      "label": "CI Success Rate",
+      "value": 95.0,
+      "unit": "%",
+      "delta_pct": 5.555555555555548,
+      "spark": [
+        {
+          "ts": "2024-01-02T00:00:00",
+          "value": 93.0
+        },
+        {
+          "ts": "2024-01-05T00:00:00",
+          "value": 97.0
+        }
+      ]
+    }
+  ],
+  "rework_theme_allocation": [
+    {
+      "theme": "feature_delivery",
+      "label": "Feature Delivery",
+      "allocation": 100.0,
+      "allocation_pct": 66.66666666666666,
+      "prs_merged": 20,
+      "churn_loc": 500
+    },
+    {
+      "theme": "maintenance",
+      "label": "Maintenance / Tech Debt",
+      "allocation": 50.0,
+      "allocation_pct": 33.33333333333333,
+      "prs_merged": 10,
+      "churn_loc": 300
+    }
+  ],
+  "summary": [
+    {
+      "id": "s1",
+      "text": "Rework Ratio rose 33% driven by team-alpha.",
+      "evidence_link": "/api/v1/explain?metric=rework_ratio&scope_type=team&scope_id=team-1&range_days=7&compare_days=7"
+    }
+  ],
+  "tiles": {
+    "understand": {
+      "title": "Understand",
+      "subtitle": "Flow stages",
+      "link": "/explore?view=understand"
+    },
+    "measure": {
+      "title": "Measure",
+      "subtitle": "Coverage & freshness",
+      "link": "/explore?view=measure"
+    },
+    "align": {
+      "title": "Align",
+      "subtitle": "Investment mix",
+      "link": "/investment"
+    },
+    "execute": {
+      "title": "Execute",
+      "subtitle": "Top opportunities",
+      "link": "/opportunities"
+    }
+  },
+  "constraint": {
+    "title": "This week's constraint: Rework Ratio",
+    "claim": "Rework Ratio rose 33% over the last 7 days.",
+    "evidence": [
+      {
+        "label": "Drill into Rework Ratio",
+        "link": "/api/v1/explain?metric=rework_ratio&scope_type=team&scope_id=team-1&range_days=7&compare_days=7"
+      }
+    ],
+    "experiments": [
+      "Rebalance reviewer rotation to reduce queueing.",
+      "Set WIP limits per team and auto-alert at saturation."
+    ]
+  },
+  "events": [
+    {
+      "ts": "2024-01-08T12:00:00Z",
+      "type": "regression",
+      "text": "Review Latency shifted 25% over the last 7 days.",
+      "link": "/api/v1/explain?metric=review_latency&scope_type=team&scope_id=team-1&range_days=7&compare_days=7"
+    },
+    {
+      "ts": "2024-01-08T12:00:00Z",
+      "type": "regression",
+      "text": "Throughput shifted 33% over the last 7 days.",
+      "link": "/api/v1/explain?metric=throughput&scope_type=team&scope_id=team-1&range_days=7&compare_days=7"
+    },
+    {
+      "ts": "2024-01-08T12:00:00Z",
+      "type": "regression",
+      "text": "Code Churn shifted 25% over the last 7 days.",
+      "link": "/api/v1/explain?metric=churn&scope_type=team&scope_id=team-1&range_days=7&compare_days=7"
+    },
+    {
+      "ts": "2024-01-08T12:00:00Z",
+      "type": "regression",
+      "text": "Blocked Work shifted 25% over the last 7 days.",
+      "link": "/api/v1/explain?metric=blocked_work&scope_type=team&scope_id=team-1&range_days=7&compare_days=7"
+    },
+    {
+      "ts": "2024-01-08T12:00:00Z",
+      "type": "regression",
+      "text": "Change Failure Rate shifted 25% over the last 7 days.",
+      "link": "/api/v1/explain?metric=change_failure_rate&scope_type=team&scope_id=team-1&range_days=7&compare_days=7"
+    },
+    {
+      "ts": "2024-01-08T12:00:00Z",
+      "type": "regression",
+      "text": "Rework Ratio shifted 33% over the last 7 days.",
+      "link": "/api/v1/explain?metric=rework_ratio&scope_type=team&scope_id=team-1&range_days=7&compare_days=7"
+    }
+  ],
+  "health_state": {
+    "status": "critical",
+    "headline": "WIP saturation has been elevated for a week across team-1",
+    "summary": "The strongest signal suggests Team One is carrying more active work than its cadence supports.",
+    "as_of": "2024-01-08T10:00:00Z"
+  },
+  "signals": [
+    {
+      "id": "recommendation:wip-saturation:team-1",
+      "title": "WIP saturation has been elevated for a week",
+      "metric": "wip-saturation",
+      "current_value": "2 refs",
+      "prior_value": null,
+      "delta": null,
+      "direction": "flat",
+      "severity": "critical",
+      "confidence": "medium",
+      "affected_scope": "team-1",
+      "evidence_count": 2,
+      "why_it_matters": "Team One is carrying more active work than its cadence supports.",
+      "recommended_action": "Bring WIP below the team's own historical p50 for three consecutive days.",
+      "evidence_ref": "/api/graphql?query=recommendations&team=team-1",
+      "category": "dynamics",
+      "scope_entity": null
+    },
+    {
+      "id": "risk:repo:repo-1",
+      "title": "Compounding risk appears high for checkout-service",
+      "metric": "compounding_risk",
+      "current_value": "80 %",
+      "prior_value": null,
+      "delta": null,
+      "direction": "flat",
+      "severity": "high",
+      "confidence": "low",
+      "affected_scope": "repos",
+      "evidence_count": 1,
+      "why_it_matters": "Compounding Risk appears flat; compounding risk combines churn, complexity, ownership, and review pressure into one persisted signal.",
+      "recommended_action": "Inspect the highest-risk scope and reduce the strongest component before adding scope.",
+      "evidence_ref": null,
+      "category": "durability",
+      "scope_entity": {
+        "id": "repo-1",
+        "display_name": "checkout-service"
+      }
+    },
+    {
+      "id": "metric:rework_ratio",
+      "title": "Rework Ratio appears up",
+      "metric": "rework_ratio",
+      "current_value": "20 %",
+      "prior_value": "15.0 %",
+      "delta": "+33%",
+      "direction": "up",
+      "severity": "medium",
+      "confidence": "medium",
+      "affected_scope": "team-1",
+      "evidence_count": 2,
+      "why_it_matters": "Rework Ratio appears rising; rework suggests unclear requirements or fragile implementation paths may be taxing focus.",
+      "recommended_action": "Review reopened or rewritten work and pick one root-cause experiment.",
+      "evidence_ref": "/api/v1/explain?metric=rework_ratio&scope_type=team&scope_id=team-1&range_days=7&compare_days=7",
+      "category": "durability",
+      "scope_entity": null
+    },
+    {
+      "id": "metric:review_latency",
+      "title": "Review Latency appears up",
+      "metric": "review_latency",
+      "current_value": "5 hours",
+      "prior_value": "4 hours",
+      "delta": "+25%",
+      "direction": "up",
+      "severity": "medium",
+      "confidence": "medium",
+      "affected_scope": "team-1",
+      "evidence_count": 2,
+      "why_it_matters": "Review Latency appears rising; review queues shape how quickly teams can learn from completed work.",
+      "recommended_action": "Rebalance reviewer rotation and clear stale review queues.",
+      "evidence_ref": "/api/v1/explain?metric=review_latency&scope_type=team&scope_id=team-1&range_days=7&compare_days=7",
+      "category": "dynamics",
+      "scope_entity": null
+    },
+    {
+      "id": "metric:churn",
+      "title": "Code Churn appears up",
+      "metric": "churn",
+      "current_value": "1000 loc",
+      "prior_value": "800 loc",
+      "delta": "+25%",
+      "direction": "up",
+      "severity": "medium",
+      "confidence": "medium",
+      "affected_scope": "team-1",
+      "evidence_count": 2,
+      "why_it_matters": "Code Churn appears rising; higher churn suggests effort may be cycling through rework rather than durable progress.",
+      "recommended_action": "Inspect hotspots and stabilize rework loops before expanding the change set.",
+      "evidence_ref": "/api/v1/explain?metric=churn&scope_type=team&scope_id=team-1&range_days=7&compare_days=7",
+      "category": "durability",
+      "scope_entity": null
+    },
+    {
+      "id": "metric:wip_saturation",
+      "title": "WIP Saturation appears up",
+      "metric": "wip_saturation",
+      "current_value": "50 %",
+      "prior_value": "40 %",
+      "delta": "+25%",
+      "direction": "up",
+      "severity": "medium",
+      "confidence": "medium",
+      "affected_scope": "team-1",
+      "evidence_count": 2,
+      "why_it_matters": "WIP Saturation appears rising; saturation suggests active work may exceed the team's coordination capacity.",
+      "recommended_action": "Set a short-term WIP limit and finish active items before starting more.",
+      "evidence_ref": "/api/v1/explain?metric=wip_saturation&scope_type=team&scope_id=team-1&range_days=7&compare_days=7",
+      "category": "dynamics",
+      "scope_entity": null
+    },
+    {
+      "id": "metric:blocked_work",
+      "title": "Blocked Work appears up",
+      "metric": "blocked_work",
+      "current_value": "10 hours",
+      "prior_value": "8 hours",
+      "delta": "+25%",
+      "direction": "up",
+      "severity": "medium",
+      "confidence": "medium",
+      "affected_scope": "team-1",
+      "evidence_count": 2,
+      "why_it_matters": "Blocked Work appears rising; blocked time suggests dependencies may be consuming delivery capacity.",
+      "recommended_action": "Triage blocked items by owner and unblock the oldest high-impact queue first.",
+      "evidence_ref": "/api/v1/explain?metric=blocked_work&scope_type=team&scope_id=team-1&range_days=7&compare_days=7",
+      "category": "delivery",
+      "scope_entity": null
+    },
+    {
+      "id": "metric:change_failure_rate",
+      "title": "Change Failure Rate appears up",
+      "metric": "change_failure_rate",
+      "current_value": "10 %",
+      "prior_value": "8 %",
+      "delta": "+25%",
+      "direction": "up",
+      "severity": "medium",
+      "confidence": "medium",
+      "affected_scope": "team-1",
+      "evidence_count": 2,
+      "why_it_matters": "Change Failure Rate appears rising; failed changes suggest reliability work may be competing with delivery.",
+      "recommended_action": "Inspect recent failed changes and tighten pre-release checks around the common failure mode.",
+      "evidence_ref": "/api/v1/explain?metric=change_failure_rate&scope_type=team&scope_id=team-1&range_days=7&compare_days=7",
+      "category": "durability",
+      "scope_entity": null
+    },
+    {
+      "id": "metric:pr_rework_ratio",
+      "title": "PR Rework Ratio appears up",
+      "metric": "pr_rework_ratio",
+      "current_value": "12 %",
+      "prior_value": "10 %",
+      "delta": "+20%",
+      "direction": "up",
+      "severity": "medium",
+      "confidence": "medium",
+      "affected_scope": "team-1",
+      "evidence_count": 2,
+      "why_it_matters": "PR Rework Ratio appears rising; PR Rework Ratio movement suggests an operating signal to inspect.",
+      "recommended_action": "Inspect supporting evidence and choose one reversible operating experiment.",
+      "evidence_ref": "/api/v1/explain?metric=pr_rework_ratio&scope_type=team&scope_id=team-1&range_days=7&compare_days=7",
+      "category": "durability",
+      "scope_entity": null
+    },
+    {
+      "id": "metric:throughput",
+      "title": "Throughput appears up",
+      "metric": "throughput",
+      "current_value": "20 items",
+      "prior_value": "15 items",
+      "delta": "+33%",
+      "direction": "up",
+      "severity": "low",
+      "confidence": "medium",
+      "affected_scope": "team-1",
+      "evidence_count": 2,
+      "why_it_matters": "Throughput appears rising; throughput movement changes the team's ability to keep commitments credible.",
+      "recommended_action": "Review WIP and dependency queues before changing delivery commitments.",
+      "evidence_ref": "/api/v1/explain?metric=throughput&scope_type=team&scope_id=team-1&range_days=7&compare_days=7",
+      "category": "delivery",
+      "scope_entity": null
+    },
+    {
+      "id": "metric:cycle_time",
+      "title": "Cycle Time appears down",
+      "metric": "cycle_time",
+      "current_value": "2 days",
+      "prior_value": "2.5 days",
+      "delta": "-20%",
+      "direction": "down",
+      "severity": "low",
+      "confidence": "medium",
+      "affected_scope": "team-1",
+      "evidence_count": 2,
+      "why_it_matters": "Cycle Time appears falling; longer cycle time suggests delivery work may spend more time waiting than moving.",
+      "recommended_action": "Inspect the slowest stage and rebalance active work before adding scope.",
+      "evidence_ref": "/api/v1/explain?metric=cycle_time&scope_type=team&scope_id=team-1&range_days=7&compare_days=7",
+      "category": "delivery",
+      "scope_entity": null
+    },
+    {
+      "id": "metric:ci_success",
+      "title": "CI Success Rate appears up",
+      "metric": "ci_success",
+      "current_value": "95 %",
+      "prior_value": "90 %",
+      "delta": "+6%",
+      "direction": "up",
+      "severity": "low",
+      "confidence": "medium",
+      "affected_scope": "team-1",
+      "evidence_count": 2,
+      "why_it_matters": "CI Success Rate appears rising; CI health suggests whether the delivery path is dependable.",
+      "recommended_action": "Inspect failing pipelines and restore the most common broken check first.",
+      "evidence_ref": "/api/v1/explain?metric=ci_success&scope_type=team&scope_id=team-1&range_days=7&compare_days=7",
+      "category": "durability",
+      "scope_entity": null
+    },
+    {
+      "id": "metric:deploy_freq",
+      "title": "Deploy Frequency appears flat",
+      "metric": "deploy_freq",
+      "current_value": "3 deploys",
+      "prior_value": "3 deploys",
+      "delta": "+0%",
+      "direction": "flat",
+      "severity": "low",
+      "confidence": "medium",
+      "affected_scope": "team-1",
+      "evidence_count": 2,
+      "why_it_matters": "Deploy Frequency appears flat; deployment cadence suggests whether finished work can reach users smoothly.",
+      "recommended_action": "Check release blockers and restore the smallest safe deployment path.",
+      "evidence_ref": "/api/v1/explain?metric=deploy_freq&scope_type=team&scope_id=team-1&range_days=7&compare_days=7",
+      "category": "delivery",
+      "scope_entity": null
+    }
+  ],
+  "limiting_factor": {
+    "claim": "WIP saturation has been elevated for a week appears to be the current limiting factor.",
+    "why_it_matters": "Team One is carrying more active work than its cadence supports.",
+    "recommended_action": "Bring WIP below the team's own historical p50 for three consecutive days.",
+    "confidence": "medium",
+    "evidence_ref": "/api/graphql?query=recommendations&team=team-1"
+  },
+  "data_confidence": {
+    "level": "medium",
+    "coverage_pct": 83.33333333333333,
+    "connected_sources": [
+      "ci",
+      "github"
+    ],
+    "missing_sources": [
+      "jira"
+    ],
+    "caveats": [
+      "Some source freshness checks are missing or stale."
+    ]
+  }
+}

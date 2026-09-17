@@ -444,8 +444,15 @@ func TestLoadRESTEndpointsOnTheRealRepo(t *testing.T) {
 	if !ok {
 		t.Fatal("expected GET /api/v1/home to be enumerated")
 	}
-	if homeGet.Status != RESTPythonOnly {
-		t.Fatalf("GET /api/v1/home = %+v, want python-only (query-api registers no such route)", homeGet)
+	if homeGet.Status != RESTPorted || !strings.Contains(homeGet.GoHandler, "home_route.go") {
+		t.Fatalf("GET /api/v1/home = %+v, want ported at home_route.go", homeGet)
+	}
+	homePost, ok := byKey["POST /api/v1/home"]
+	if !ok {
+		t.Fatal("expected POST /api/v1/home to be enumerated")
+	}
+	if homePost.Status != RESTPorted || !strings.Contains(homePost.GoHandler, "home_route.go") {
+		t.Fatalf("POST /api/v1/home = %+v, want ported at home_route.go", homePost)
 	}
 
 	drilldownPRsPost, ok := byKey["POST /api/v1/drilldown/prs"]
@@ -634,15 +641,15 @@ func TestLoadRESTEndpointsOnTheRealRepo(t *testing.T) {
 	}
 
 	ported, _, _ := RESTEndpointCounts(rows)
-	if ported != 25 {
-		t.Fatalf("got %d ported routes, want exactly 25 (POST /api/v1/investment/explain, GET /api/v1/quadrant, "+
+	if ported != 27 {
+		t.Fatalf("got %d ported routes, want exactly 27 (POST /api/v1/investment/explain, GET /api/v1/quadrant, "+
 			"GET /api/v1/filters/options, POST+GET /api/v1/drilldown/prs, GET /api/v1/meta, "+
 			"POST+GET /api/v1/drilldown/issues, POST+GET /api/v1/explain, GET /api/v1/people, "+
 			"GET /api/v1/people/{person_id}/summary, GET /api/v1/people/{person_id}/metric, GET /api/v1/flame, "+
 			"GET /api/v1/people/{person_id}/drilldown/prs, GET /api/v1/people/{person_id}/drilldown/issues, "+
 			"GET /api/v1/flame/aggregated, GET /api/v1/heatmap, POST+GET /api/v1/sankey, "+
 			"POST /api/v1/investment/flow, POST /api/v1/investment/flow/repo-team, "+
-			"POST+GET /api/v1/investment, GET /api/v1/investment/sunburst) -- "+
+			"POST+GET /api/v1/investment, GET /api/v1/investment/sunburst, POST+GET /api/v1/home) -- "+
 			"if this changed, a route was ported or un-ported; update this pin, it is not stale by accident", ported)
 	}
 }

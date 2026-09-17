@@ -446,6 +446,16 @@ type BaselineDefect struct {
 	// declared defect still uses. A defect never sets more than one shape
 	// field.
 	WorkGraphEdgeDedupShape *WorkGraphEdgeDedupShape
+
+	// SupersessionSkewShape, when set, replaces this defect's blanket
+	// "any leaf difference under Paths is covered" rule with a
+	// direction-only, whole-comparison admission built from the whole
+	// comparison's mismatch paths and the two DECODED coverage leaves --
+	// see SupersessionSkewShape's own doc comment (supersessionskew.go).
+	// nil is the default, unchanged blanket behaviour every other
+	// declared defect still uses. A defect never sets more than one shape
+	// field.
+	SupersessionSkewShape *SupersessionSkewShape
 }
 
 // validateBaselineDefects refuses a declaration that claims the
@@ -660,6 +670,10 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 		if defect.WorkGraphEdgeDedupShape != nil {
 			dedupPlan = buildWorkGraphEdgeDedupPlan(defect.WorkGraphEdgeDedupShape, baselineData, candidateData)
 		}
+		var skewPlan *supersessionSkewPlan
+		if defect.SupersessionSkewShape != nil {
+			skewPlan = buildSupersessionSkewPlan(defect.SupersessionSkewShape, baselineData, candidateData, mismatches)
+		}
 		// A SHAPED defect's citation is LIVE only when its shape actually
 		// admits something. A blanket (unshaped) citation stays live from
 		// path proximity alone -- any difference under Paths, covered or
@@ -673,7 +687,7 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 		// apart, and a shaped defect that hit on path alone would still
 		// double-report alongside the shape that actually explains the
 		// difference.
-		shaped := repoPlan != nil || covPlan != nil || dedupPlan != nil
+		shaped := repoPlan != nil || covPlan != nil || dedupPlan != nil || skewPlan != nil
 		for i, path := range mismatches {
 			if !defectCovers(defect, path) {
 				continue
@@ -708,6 +722,8 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 						result.Findings[findingRefs[i]].Detail += fmt.Sprintf(" (dedup id %q not admitted by the declared duplicate-row shape: its own baseline copies disagree, or its shared content differs from the candidate)", id)
 					}
 				}
+			case skewPlan != nil:
+				admitted = skewPlan.admits(result.Findings[findingRefs[i]])
 			}
 			if admitted {
 				covered[i] = true

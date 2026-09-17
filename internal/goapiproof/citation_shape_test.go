@@ -525,7 +525,16 @@ func TestEveryDeclaredCitationCoversOnlyValueDifferences(t *testing.T) {
 			// path is neither, so this generic sweep does not apply to
 			// it either. See workgraphedgedup_test.go for its own
 			// dedicated sweep.
-			if defect.RepoFanoutShape != nil || defect.CoverageShiftShape != nil || defect.WorkGraphEdgeDedupShape != nil {
+			// A SupersessionSkewShape defect (the work_unit_supersessions
+			// exclusion declared on investmentFull) replaces the same
+			// blanket rule with a direction-only, whole-comparison
+			// admission over the two real coverage ratios -- a bare
+			// "python"/"go" string pair satisfies neither ratio's numeric
+			// range nor its direction check, so this generic sweep does
+			// not apply to it either. See
+			// investmentfull_supersession_skew_shape_test.go for its own
+			// dedicated sweep.
+			if defect.RepoFanoutShape != nil || defect.CoverageShiftShape != nil || defect.WorkGraphEdgeDedupShape != nil || defect.SupersessionSkewShape != nil {
 				continue
 			}
 			for _, cited := range defect.Paths {

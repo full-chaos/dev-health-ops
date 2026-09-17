@@ -76,12 +76,13 @@ func TestInvestmentFullRepoJoinFanout_MergedStateCapturesMatchWithTheDeclaration
 		if len(result.StaleBaselineDefects) != 0 {
 			t.Fatalf("%s: stale = %v -- a merged-state run would refuse", pair[0], result.StaleBaselineDefects)
 		}
-		// Both declared defects cover no difference in a merged-state
-		// capture -- CHAOS-4547 (the argMax null-transition shift) is
-		// idle here for the same reason CHAOS-4773 is: nothing differs
-		// under either's cited paths.
-		if !equalStrings(result.IdleIntermittentBaselineDefects, []string{"CHAOS-4547", investmentFullRepoJoinFanoutTicket}) {
-			t.Fatalf("%s: idle = %v, want [CHAOS-4547 %s]", pair[0], result.IdleIntermittentBaselineDefects, investmentFullRepoJoinFanoutTicket)
+		// All three declared defects cover no difference in a
+		// merged-state capture -- CHAOS-4547 (the argMax null-transition
+		// shift) and CHAOS-5865 (the supersession skew) are idle here for
+		// the same reason CHAOS-4773 is: nothing differs under any of
+		// their cited paths.
+		if !equalStrings(result.IdleIntermittentBaselineDefects, []string{"CHAOS-4547", investmentFullRepoJoinFanoutTicket, "CHAOS-5865"}) {
+			t.Fatalf("%s: idle = %v, want [CHAOS-4547 %s CHAOS-5865]", pair[0], result.IdleIntermittentBaselineDefects, investmentFullRepoJoinFanoutTicket)
 		}
 	}
 }
@@ -156,12 +157,12 @@ func TestInvestmentFullRepoJoinFanout_FannedOutBaselineIsACoveredMismatch(t *tes
 	if len(result.StaleBaselineDefects) != 0 {
 		t.Fatalf("the fan-out entry matched, so it is not stale: %v", result.StaleBaselineDefects)
 	}
-	// CHAOS-4547 (the argMax null-transition shift) covers nothing here:
-	// this baseline's coverage shift is the fan-out's own uniform k=2
-	// (CoverageShiftShape's rule 1 sees the fanned-out node/edge
-	// differences too, so it refuses), and CHAOS-4547 is Intermittent, so
-	// it reads as idle rather than stale.
-	if !equalStrings(result.IdleIntermittentBaselineDefects, []string{"CHAOS-4547"}) {
-		t.Fatalf("idle = %v, want [CHAOS-4547]", result.IdleIntermittentBaselineDefects)
+	// CHAOS-4547 (the argMax null-transition shift) and CHAOS-5865 (the
+	// supersession skew) both cover nothing here: this baseline's
+	// coverage shift is the fan-out's own uniform k=2, and both shapes'
+	// rule 1 sees the fanned-out node/edge differences too and refuses --
+	// both are Intermittent, so both read as idle rather than stale.
+	if !equalStrings(result.IdleIntermittentBaselineDefects, []string{"CHAOS-4547", "CHAOS-5865"}) {
+		t.Fatalf("idle = %v, want [CHAOS-4547 CHAOS-5865]", result.IdleIntermittentBaselineDefects)
 	}
 }

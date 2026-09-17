@@ -194,10 +194,15 @@ var investmentExplainDeterministicFloats = map[string]string{
 // (quadrant.go's own package doc comment: "every value_expr is wrapped in
 // toFloat64(...)"), and the underlying aggregate is the same class of
 // merged, order-nondeterministic floating-point value every sibling
-// FloatTierB table in this service already declares.
+// FloatTierB table in this service already declares. data.points.
+// trajectory.x/.y carry the SAME per-window value data.points.x/.y expose
+// as the latest window only -- one tolerance covering two paths, not a
+// second one.
 var quadrantPointFloats = map[string]string{
-	"data.points.x": "quadrant.go's toFloat64(...)-wrapped ClickHouse aggregate expression",
-	"data.points.y": "quadrant.go's toFloat64(...)-wrapped ClickHouse aggregate expression",
+	"data.points.x":            "quadrant.go's toFloat64(...)-wrapped ClickHouse aggregate expression",
+	"data.points.y":            "quadrant.go's toFloat64(...)-wrapped ClickHouse aggregate expression",
+	"data.points.trajectory.x": "the same toFloat64(...)-wrapped ClickHouse aggregate value as data.points.x -- trajectory carries the identical per-window value, data.points.x is just its latest window",
+	"data.points.trajectory.y": "the same toFloat64(...)-wrapped ClickHouse aggregate value as data.points.y -- trajectory carries the identical per-window value, data.points.y is just its latest window",
 }
 
 // cycleBreakdownFloats declares the three fixed leaf-depths
@@ -734,6 +739,11 @@ var sankeyCycleTimesDedupParity = Options{
 // superseded. This port excludes it, at every fetcher, because every one
 // composes the same shared source. Go is correct -- the sidecar exists so
 // a retired work unit's stale grouping stops surfacing.
+//
+// The same repos-join gap recurs in quadrant's REPO_METRICS readers
+// (churn/throughput/review_load/review_latency), tracked under its own
+// BaselineDefect (quadrantRepoDedupParity) rather than folded in here,
+// since this ticket already covers four routes.
 var investmentFlowRepoDedupParity = Options{
 	BaselineDefects: []BaselineDefect{
 		{
@@ -760,14 +770,95 @@ var investmentFlowRepoDedupParity = Options{
 	},
 }
 
+// quadrantRepoDedupParity is shared by every REPO_METRICS-grain quadrant
+// request whose fetcher joins repos -- churn_throughput's forced
+// repo-grain (org/team scope for churn_throughput normalizes to repo
+// scope before any metric read, quadrant.go's own doc comment) and any
+// request that already asks for repo scope directly.
+//
+// api/services/quadrant.py's REPO_METRICS specs (churn, throughput,
+// review_load, review_latency) all share
+// `join_clause="INNER JOIN repos ON repos.id = m.repo_id"` -- no FINAL,
+// no org_id in the ON clause. This is the SAME repos dedup gap already
+// declared for investment flow's own repos join
+// (investmentFlowRepoDedupParity): repos is ReplacingMergeTree
+// (last_synced) (000_raw_tables.sql), so an unmerged physical version of
+// a repo row fans the join out and doubles every affected repo's summed
+// value. Filed under its own BaselineDefect rather than folded into
+// investmentFlowRepoDedupParity's -- that one already carries four
+// routes, and a fifth would make "is it fixed?" unanswerable;
+// investmentFlowRepoDedupParity itself carries a one-line cross-reference
+// noting the mechanism recurs here. Measured live: full-chaos/
+// dev-health-deploy's churn/throughput trajectory exactly halved between
+// planes on every window, reproduced across two separate prove runs.
+// quadrant.go's own RepoMetrics join already reads `repos FINAL ... AND
+// repos.org_id = {org_id:String}` -- Go is correct.
+//
+// The same requests also carry data.points' own order:
+// fetch_quadrant_metric's GROUP BY (api/queries/quadrant.py, quadrant.go)
+// ends `ORDER BY bucket` only, IDENTICALLY on both planes. ClickHouse
+// gives no order guarantee for entities tied within the same bucket, so
+// the identical SQL, run independently on each plane, can emit them in a
+// different order -- a property of the engine's result for a query with
+// no secondary sort, not a divergence between the planes (both planes'
+// SQL is unordered the same way; this is not "Go orders differently from
+// Python", and must never be closed by adding an ORDER BY to only one
+// side). Matched by entity_id every field agrees. Same precedent as the
+// sankey nodes/edges case (compare.go's own OrderInsensitiveList doc
+// comment).
+var quadrantRepoDedupParity = Options{
+	FloatTierB: quadrantPointFloats,
+	BaselineDefects: []BaselineDefect{
+		{
+			Ticket:             "CHAOS-5867",
+			Reason:             "REPO_METRICS' churn/throughput/review_load/review_latency specs (api/services/quadrant.py) join `repos` with `INNER JOIN repos ON repos.id = m.repo_id` -- no FINAL, no org_id in the ON clause, the same gap already declared for investment flow's own repos join (investmentFlowRepoDedupParity). An unmerged physical version of a repos row fans the join out, doubling the summed value for the affected repo/day. This port's RepoMetrics join (quadrant.go) already reads `repos FINAL` with org_id in the ON clause. Go is correct.",
+			Paths:              []string{"data.points.x", "data.points.y", "data.points.trajectory.x", "data.points.trajectory.y"},
+			Intermittent:       true,
+			IntermittentReason: "present only while repos holds an unmerged physical version of the affected repo row -- a merge-state trigger, not a content one: the next background merge to run on the repos table collapses the duplicate and the comparison shows no divergence, regardless of what the underlying metric data itself does",
+		},
+	},
+	OrderInsensitiveLists: []OrderInsensitiveList{
+		{
+			Path:      "data.points",
+			KeyFields: []string{"entity_id"},
+			Reason:    "fetch_quadrant_metric's GROUP BY (api/queries/quadrant.py, quadrant.go) ends `ORDER BY bucket` only, identically on both planes; ClickHouse gives no order guarantee for entities tied within the same bucket, so the identical SQL can emit them in a different order on separate executions. A property of the engine's result for a query with no secondary sort, not a divergence between the planes.",
+			Ticket:    "CHAOS-5857",
+		},
+	},
+}
+
 var restEndpointSpecs = map[string]RESTEndpointSpec{
 	"REST:GET:/api/v1/quadrant": {
 		Method: "GET",
 		Path:   "/api/v1/quadrant",
 		Requests: []RESTRequest{
-			quadrantOrgRequest("churn_throughput_org", "churn_throughput"),
+			{
+				// churn_throughput's org/team scope normalizes to repo grain
+				// before any metric read (quadrant.go's own
+				// forced-repo-grain override), so this request is
+				// already REPO_METRICS-grain -- quadrantOrgRequest's
+				// shared Options (FloatTierB only) is not enough here,
+				// so this entry is written out instead of using that
+				// helper.
+				Name:                "churn_throughput_org",
+				Query:               url.Values{"type": {"churn_throughput"}, "scope_type": {"org"}},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode: RESTBodyModeJSON,
+				Parity:   quadrantRepoDedupParity,
+			},
 			quadrantOrgRequest("cycle_throughput_org", "cycle_throughput"),
-			quadrantOrgRequest("wip_throughput_org", "wip_throughput"),
+			{
+				// baseline's wip_throughput read answers 503 "Data
+				// unavailable"; query-api answers 200 with real data (no
+				// matching entry in query-api-503-causes.txt) -- a
+				// baseline-only failure, encoded as the expected
+				// baseline status rather than hidden behind a refusal.
+				Name:                "wip_throughput_org",
+				Query:               url.Values{"type": {"wip_throughput"}, "scope_type": {"org"}},
+				WantCandidateStatus: 200, WantBaselineStatus: 503,
+				StatusDivergenceReason: "baseline answers 503 Data unavailable for this route; query-api answers 200 with real data. Confirmed baseline-side: query-api's own 503 telemetry carries no wip_throughput entry for the run this was measured in.",
+				BodyMode:               RESTBodyModeStatusOnly,
+			},
 			quadrantOrgRequest("review_load_latency_org", "review_load_latency"),
 			{
 				// team scope, scope_id bound at run time to
@@ -791,19 +882,20 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				Query:               url.Values{"type": {"churn_throughput"}, "scope_type": {"repo"}},
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
 				BodyMode:   RESTBodyModeJSON,
-				Parity:     Options{FloatTierB: quadrantPointFloats},
+				Parity:     quadrantRepoDedupParity,
 				IDBindings: []RESTIDBinding{{Producer: "repo_id", QueryParam: "scope_id"}},
 			},
 			{
 				// person scope, scope_id bound to people's own live
 				// person_id (GET /api/v1/people's query_string_search
 				// entry).
+				// Same baseline-only 503 as wip_throughput_org.
 				Name:                "wip_throughput_person_scoped",
 				Query:               url.Values{"type": {"wip_throughput"}, "scope_type": {"person"}},
-				WantCandidateStatus: 200, WantBaselineStatus: 200,
-				BodyMode:   RESTBodyModeJSON,
-				Parity:     Options{FloatTierB: quadrantPointFloats},
-				IDBindings: []RESTIDBinding{{Producer: "person_id", QueryParam: "scope_id"}},
+				WantCandidateStatus: 200, WantBaselineStatus: 503,
+				StatusDivergenceReason: "baseline answers 503 Data unavailable for this route; query-api answers 200 with real data. Confirmed baseline-side: query-api's own 503 telemetry carries no wip_throughput entry for the run this was measured in.",
+				BodyMode:               RESTBodyModeStatusOnly,
+				IDBindings:             []RESTIDBinding{{Producer: "person_id", QueryParam: "scope_id"}},
 			},
 			{
 				Name: "custom_window_org",
@@ -817,7 +909,7 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				},
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
 				BodyMode: RESTBodyModeJSON,
-				Parity:   Options{FloatTierB: quadrantPointFloats},
+				Parity:   quadrantRepoDedupParity,
 			},
 			{
 				// quadrant.go's own package doc comment states this port

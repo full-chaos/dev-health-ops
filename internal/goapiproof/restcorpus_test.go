@@ -78,16 +78,30 @@ func TestRESTRequest_StatusDivergenceIsDeclaredOnlyWhereGenuine(t *testing.T) {
 	// A regression test for the corpus's own data, not the validator: the
 	// shared Pydantic-shaped validator (pydantic_metric_filter.go,
 	// pydantic_validation_error.go) gives every route in this table the
-	// SAME status on both planes for every declared request today -- a
-	// status divergence is not currently a real, accepted gap anywhere in
-	// this corpus. This test pins that fact so a future entry that
-	// declares one is a deliberate, reviewed addition, not a silent
+	// SAME status on both planes for the overwhelming majority of
+	// declared requests -- a status divergence is not a casual thing to
+	// add to this corpus. This test pins the exact set accepted so far,
+	// by operation and request name, so a future entry that declares one
+	// is a deliberate, reviewed addition to this allowlist, not a silent
 	// regression this test stopped checking.
+	knownStatusDivergences := map[string]map[string]bool{
+		"REST:GET:/api/v1/quadrant": {
+			// baseline's wip_throughput read answers 503 Data unavailable
+			// on both scopes; query-api answers 200 with real data on
+			// both.
+			"wip_throughput_org":           true,
+			"wip_throughput_person_scoped": true,
+		},
+	}
 	for operation, spec := range restEndpointSpecs {
 		for _, req := range spec.Requests {
-			if req.WantCandidateStatus != req.WantBaselineStatus {
-				t.Errorf("unexpected status-divergent entry %s/%s (%d/%d) -- update this test if the corpus gains a new one deliberately", operation, req.Name, req.WantCandidateStatus, req.WantBaselineStatus)
+			if req.WantCandidateStatus == req.WantBaselineStatus {
+				continue
 			}
+			if knownStatusDivergences[operation][req.Name] {
+				continue
+			}
+			t.Errorf("unexpected status-divergent entry %s/%s (%d/%d) -- add it to knownStatusDivergences if the corpus gains a new one deliberately", operation, req.Name, req.WantCandidateStatus, req.WantBaselineStatus)
 		}
 	}
 }

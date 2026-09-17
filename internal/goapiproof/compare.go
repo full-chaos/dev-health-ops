@@ -500,6 +500,24 @@ type BaselineDefect struct {
 	// blanket behaviour every other declared defect still uses. A defect
 	// never sets more than one shape field.
 	ConservationShape *ConservationShape
+
+	// DictKeyDirectionShape, when set, replaces this defect's blanket
+	// "any leaf difference under Paths is covered" rule with a per-key,
+	// direction-only admission built from the two DECODED JSON OBJECTS at
+	// a declared path -- see DictKeyDirectionShape's own doc comment
+	// (dictkeydirection.go). nil is the default, unchanged blanket
+	// behaviour every other declared defect still uses. A defect never
+	// sets more than one shape field.
+	DictKeyDirectionShape *DictKeyDirectionShape
+
+	// ScalarDirectionShape, when set, replaces this defect's blanket "any
+	// leaf difference under Paths is covered" rule with a direction-only
+	// admission on ONE named scalar leaf, optionally whole-comparison
+	// gated -- see ScalarDirectionShape's own doc comment
+	// (scalardirection.go). nil is the default, unchanged blanket
+	// behaviour every other declared defect still uses. A defect never
+	// sets more than one shape field.
+	ScalarDirectionShape *ScalarDirectionShape
 }
 
 // validateBaselineDefects refuses a declaration that claims the
@@ -752,6 +770,14 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 		if defect.ConservationShape != nil {
 			conservePlan = buildConservationPlan(defect.ConservationShape, baselineData, candidateData, mismatches)
 		}
+		var dictDirPlan *dictKeyDirectionPlan
+		if defect.DictKeyDirectionShape != nil {
+			dictDirPlan = buildDictKeyDirectionPlan(defect.DictKeyDirectionShape, baselineData, candidateData)
+		}
+		var scalarDirPlan *scalarDirectionPlan
+		if defect.ScalarDirectionShape != nil {
+			scalarDirPlan = buildScalarDirectionPlan(defect.ScalarDirectionShape, baselineData, candidateData, mismatches)
+		}
 		// A SHAPED defect's citation is LIVE only when its shape actually
 		// admits something. A blanket (unshaped) citation stays live from
 		// path proximity alone -- any difference under Paths, covered or
@@ -765,7 +791,7 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 		// apart, and a shaped defect that hit on path alone would still
 		// double-report alongside the shape that actually explains the
 		// difference.
-		shaped := repoPlan != nil || covPlan != nil || dedupPlan != nil || skewPlan != nil || sankeyFanoutPlan != nil || keyedDirPlan != nil || conservePlan != nil
+		shaped := repoPlan != nil || covPlan != nil || dedupPlan != nil || skewPlan != nil || sankeyFanoutPlan != nil || keyedDirPlan != nil || conservePlan != nil || dictDirPlan != nil || scalarDirPlan != nil
 		var touched []int
 		for i, path := range mismatches {
 			if !defectCovers(defect, path) {
@@ -812,6 +838,10 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 				admitted = keyedDirPlan.admits(result.Findings[findingRefs[i]])
 			case conservePlan != nil:
 				admitted = conservePlan.admits(result.Findings[findingRefs[i]])
+			case dictDirPlan != nil:
+				admitted = dictDirPlan.admits(result.Findings[findingRefs[i]])
+			case scalarDirPlan != nil:
+				admitted = scalarDirPlan.admits(result.Findings[findingRefs[i]])
 			}
 			if admitted {
 				covered[i] = true

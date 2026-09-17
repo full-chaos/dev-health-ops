@@ -624,6 +624,20 @@ type BaselineDefect struct {
 	// the default, unchanged blanket behaviour every other declared
 	// defect still uses. A defect never sets more than one shape field.
 	LimitDisplacementShape *LimitDisplacementShape
+
+	// HotspotListBoundaryShape, when set, replaces this defect's blanket
+	// "any leaf difference under Paths is covered" rule with a
+	// LIMIT-boundary admission over a reconstructed file list AND its
+	// own repo->directory parent-sum consequence -- see
+	// HotspotListBoundaryShape's own doc comment
+	// (hotspotlistboundary.go). Its own repository multiplier is read
+	// from another defect's already-covered findings, so like
+	// TeamCoverageIdentityShape and LimitDisplacementShape it is
+	// evaluated in a SECOND pass, after every other defect's own
+	// `covered` decision is final. nil is the default, unchanged
+	// blanket behaviour every other declared defect still uses. A
+	// defect never sets more than one shape field.
+	HotspotListBoundaryShape *HotspotListBoundaryShape
 }
 
 // validateBaselineDefects refuses a declaration that claims the
@@ -905,12 +919,13 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 	// existing shape is a pure function of the two decoded bodies (plus,
 	// for a whole-comparison shape, this run's own mismatch paths) and
 	// never needs to see what any OTHER defect decided -- so ordering
-	// among them has never mattered. TeamCoverageIdentityShape and
-	// LimitDisplacementShape are the first two exceptions: each one's own
-	// admission is DEFINED in terms of `covered` from every OTHER
-	// defect, so evaluateDefect is called for them ONLY in a second pass
-	// below, once every ordinary defect has already run and `covered` is
-	// final for everything else in this comparison.
+	// among them has never mattered. TeamCoverageIdentityShape,
+	// LimitDisplacementShape and HotspotListBoundaryShape are the
+	// exceptions: each one's own admission is DEFINED in terms of
+	// `covered` from every OTHER defect, so evaluateDefect is called for
+	// them ONLY in a second pass below, once every ordinary defect has
+	// already run and `covered` is final for everything else in this
+	// comparison.
 	evaluateDefect := func(d int, defect BaselineDefect) {
 		hit := false
 		// Built once per defect, not per finding: a shape's plan (its
@@ -962,6 +977,10 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 		if defect.LimitDisplacementShape != nil {
 			displacePlan = buildLimitDisplacementPlan(defect.LimitDisplacementShape, baselineData, candidateData, mismatches, findingRefs, result.Findings, covered)
 		}
+		var hotspotBoundaryPlan *hotspotListBoundaryPlan
+		if defect.HotspotListBoundaryShape != nil {
+			hotspotBoundaryPlan = buildHotspotListBoundaryPlan(defect.HotspotListBoundaryShape, baselineData, candidateData, mismatches, findingRefs, result.Findings, covered)
+		}
 		// A SHAPED defect's citation is LIVE only when its shape actually
 		// admits something. A blanket (unshaped) citation stays live from
 		// path proximity alone -- any difference under Paths, covered or
@@ -975,7 +994,7 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 		// apart, and a shaped defect that hit on path alone would still
 		// double-report alongside the shape that actually explains the
 		// difference.
-		shaped := repoPlan != nil || covPlan != nil || dedupPlan != nil || skewPlan != nil || sankeyFanoutPlan != nil || keyedDirPlan != nil || conservePlan != nil || dictDirPlan != nil || scalarDirPlan != nil || identityPlan != nil || displacePlan != nil
+		shaped := repoPlan != nil || covPlan != nil || dedupPlan != nil || skewPlan != nil || sankeyFanoutPlan != nil || keyedDirPlan != nil || conservePlan != nil || dictDirPlan != nil || scalarDirPlan != nil || identityPlan != nil || displacePlan != nil || hotspotBoundaryPlan != nil
 		var touched []int
 		for i, path := range mismatches {
 			if !defectCovers(defect, path) {
@@ -988,13 +1007,14 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 				// under a cited subtree stays outside every citation.
 				hit = true
 			}
-			// LimitDisplacementShape is the one shape that admits a
-			// STRUCTURAL (ShapePresence) finding -- a row entering or
-			// leaving a limit-bounded list is a presence difference by
-			// construction, never a leaf one, and the shape's own doc
-			// comment states exactly what makes that admission safe. No
-			// other shape ever reaches past leafDifference.
-			if !leafDifference(shapes[i]) && !(displacePlan != nil && shapes[i] == ShapePresence) {
+			// LimitDisplacementShape and HotspotListBoundaryShape are the
+			// shapes that admit a STRUCTURAL (ShapePresence) finding -- a
+			// row entering or leaving a limit-bounded list is a presence
+			// difference by construction, never a leaf one, and each
+			// shape's own doc comment states exactly what makes that
+			// admission safe. No other shape ever reaches past
+			// leafDifference.
+			if !leafDifference(shapes[i]) && !(displacePlan != nil && shapes[i] == ShapePresence) && !(hotspotBoundaryPlan != nil && shapes[i] == ShapePresence) {
 				continue
 			}
 			if shaped {
@@ -1036,6 +1056,8 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 				admitted = identityPlan.admits(result.Findings[findingRefs[i]])
 			case displacePlan != nil:
 				admitted = displacePlan.admits(result.Findings[findingRefs[i]])
+			case hotspotBoundaryPlan != nil:
+				admitted = hotspotBoundaryPlan.admits(result.Findings[findingRefs[i]])
 			}
 			if admitted {
 				covered[i] = true
@@ -1045,13 +1067,13 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 		verdicts[d] = perDefect{hit: hit, shaped: shaped, touched: touched}
 	}
 	for d, defect := range defects {
-		if defect.TeamCoverageIdentityShape != nil || defect.LimitDisplacementShape != nil {
+		if defect.TeamCoverageIdentityShape != nil || defect.LimitDisplacementShape != nil || defect.HotspotListBoundaryShape != nil {
 			continue
 		}
 		evaluateDefect(d, defect)
 	}
 	for d, defect := range defects {
-		if defect.TeamCoverageIdentityShape == nil && defect.LimitDisplacementShape == nil {
+		if defect.TeamCoverageIdentityShape == nil && defect.LimitDisplacementShape == nil && defect.HotspotListBoundaryShape == nil {
 			continue
 		}
 		evaluateDefect(d, defect)

@@ -363,6 +363,14 @@ type outcome struct {
 	// outcome line (a later consumer's BoundIDs already reports the same
 	// value where it matters).
 	producedIDs map[string]string
+
+	// DeclarationFiring reports, one entry per BaselineDefect this
+	// request declares, that ticket's own firing history read back from
+	// go_api_rest_proof_run -- see goapiproof.FiringHistory's own doc
+	// comment. Empty when this request declares no BaselineDefects, or
+	// when no receipt was written for it this run (a refused or
+	// dry-run request extends no history to read back against).
+	DeclarationFiring []goapiproof.FiringHistory `json:"declaration_firing,omitempty"`
 }
 
 func (o outcome) line() string {
@@ -373,8 +381,44 @@ func (o outcome) line() string {
 	if len(o.BoundIDs) > 0 {
 		boundSuffix = fmt.Sprintf(" bound=%v", o.BoundIDs)
 	}
-	return fmt.Sprintf("%s/%s: %s outside=%d baseline_defect=%v receipt=%s%s",
-		o.Operation, o.Request, o.TerminalState, o.DifferencesOutsideBaselineDefect, o.BaselineDefectsMatched, o.ReceiptID, boundSuffix)
+	firingSuffix := ""
+	if len(o.DeclarationFiring) > 0 {
+		firingSuffix = " " + formatDeclarationFiring(o.DeclarationFiring)
+	}
+	return fmt.Sprintf("%s/%s: %s outside=%d baseline_defect=%v receipt=%s%s%s",
+		o.Operation, o.Request, o.TerminalState, o.DifferencesOutsideBaselineDefect, o.BaselineDefectsMatched, o.ReceiptID, boundSuffix, firingSuffix)
+}
+
+// formatDeclarationFiring renders one request's own declared defects'
+// firing history for the stdout line -- the JSON report
+// (outcome.DeclarationFiring) carries the same facts for a reader who
+// wants the exact numbers rather than a one-line summary. NEVER_FIRED is
+// printed as a plain word in this line, exactly like every other
+// terminal-state word already printed here: nothing about its presence
+// changes attempted/admitted/match/mismatch/refused counts, and nothing
+// here changes run()'s own exit status.
+//
+// Every declaration always prints its own "window: N of FiringWindow
+// known runs", flagged or not: a reader seeing no NEVER_FIRED word must
+// be able to tell an incomplete window (still filling, healthy or not)
+// apart from a complete, clean one -- an incomplete window that prints
+// nothing would reproduce, in miniature, the exact silence-reads-as-
+// health gap this whole report exists to close.
+func formatDeclarationFiring(histories []goapiproof.FiringHistory) string {
+	parts := make([]string, len(histories))
+	for i, h := range histories {
+		state := ""
+		if h.NeverFired {
+			state = " NEVER_FIRED"
+		}
+		lastFired := h.LastFiredBuild
+		if lastFired == "" {
+			lastFired = "-"
+		}
+		parts[i] = fmt.Sprintf("%s(live=%d fired=%d last_fired=%s window: %d of %d known runs%s)",
+			h.Ticket, h.RunsLive, h.RunsFired, lastFired, h.WindowKnownRuns, goapiproof.FiringWindow, state)
+	}
+	return "declarations[" + strings.Join(parts, " ") + "]"
 }
 
 // resultVacuityErrors names every declaration in result that matched
@@ -790,6 +834,18 @@ func proveOneRESTRequest(
 		return out, nil
 	}
 
+	// declaredTickets is every BaselineDefect THIS request's own corpus
+	// entry declares right now, always a non-nil slice (possibly empty)
+	// so RESTReceipt.DeclaredDefects writes a KNOWN, real array rather
+	// than SQL NULL -- see that field's own doc comment. Built
+	// unconditionally, not only when decodeBody: a StatusOnly request
+	// with no Parity set simply writes a known-empty array, which is
+	// the truth (nothing was, or could have been, checked for it).
+	declaredTickets := make([]string, len(request.Parity.BaselineDefects))
+	for i, defect := range request.Parity.BaselineDefects {
+		declaredTickets[i] = defect.Ticket
+	}
+
 	// MeasurementRoute/BuildBinding are always RouteProof/EdgeBuildPresent:
 	// RESTAdmit refuses admission outright when the candidate leg's build
 	// header is absent or mismatched (RESTRefusalBuildUnbound), so a
@@ -809,6 +865,7 @@ func proveOneRESTRequest(
 		ObservedAt:                       observedAt,
 		MeasurementRoute:                 goapiproof.RouteProof,
 		BaselineDefects:                  matchedDefects,
+		DeclaredDefects:                  declaredTickets,
 		DifferencesOutsideBaselineDefect: differences,
 		BuildBinding:                     goapiproof.EdgeBuildPresent,
 		BoundIDs:                         boundIDs,
@@ -820,6 +877,23 @@ func proveOneRESTRequest(
 		return outcome{}, fmt.Errorf("write receipt: %w", err)
 	}
 	out.ReceiptID = id.String()
+
+	// Read back every declared BaselineDefect's own firing history --
+	// AFTER the write above, so this run's own just-committed receipt is
+	// already part of what gets read: the report line for THIS run
+	// includes THIS run. Gated on decodeBody, not just on the
+	// declaration list being non-empty: a StatusOnly request's body is
+	// never decoded or compared (Compare never runs, so no declaration
+	// could possibly have fired this run), and reading history for one
+	// anyway would report every such run as "live" against a mechanism
+	// that was never actually checked.
+	if decodeBody && len(declaredTickets) > 0 {
+		firing, err := writer.ReadFiringHistory(ctx, spec.Method, spec.Path, identity, declaredTickets)
+		if err != nil {
+			return outcome{}, fmt.Errorf("read declaration firing history: %w", err)
+		}
+		out.DeclarationFiring = firing
+	}
 	return out, nil
 }
 
@@ -896,15 +970,24 @@ func proveEdgeCredentialOnCandidate(
 }
 
 // receiptWriter is the subset of *pgxpool.Pool this command needs, so a
-// test can supply a fake instead of a real Postgres.
+// test can supply a fake instead of a real Postgres. ReadFiringHistory
+// sits beside WriteReceipt rather than behind a second interface: both
+// are read/write halves of the SAME go_api_rest_proof_run table, and a
+// caller that can write a receipt to it always also needs to read its
+// own declarations' history back.
 type receiptWriter interface {
 	WriteReceipt(ctx context.Context, receipt goapiproof.RESTReceipt) (uuid.UUID, error)
+	ReadFiringHistory(ctx context.Context, method, path, requestIdentity string, tickets []string) ([]goapiproof.FiringHistory, error)
 }
 
 type pgxReceiptWriter struct{ pool *pgxpool.Pool }
 
 func (w *pgxReceiptWriter) WriteReceipt(ctx context.Context, receipt goapiproof.RESTReceipt) (uuid.UUID, error) {
 	return goapiproof.WriteRESTAtomic(ctx, w.pool, receipt)
+}
+
+func (w *pgxReceiptWriter) ReadFiringHistory(ctx context.Context, method, path, requestIdentity string, tickets []string) ([]goapiproof.FiringHistory, error) {
+	return goapiproof.ReadRESTFiringHistory(ctx, w.pool, method, path, requestIdentity, tickets)
 }
 
 func (w *pgxReceiptWriter) Close() { w.pool.Close() }

@@ -27,15 +27,12 @@ def _migration() -> ModuleType:
     return importlib.import_module(_MODULE)
 
 
-def test_0134_is_the_application_schema_head_and_chains_after_0133() -> None:
-    """The next migration author renumbers THIS check (or supersedes it,
-    the way this migration superseded test_0133_chains_after_0132's own
-    head-pin) rather than leaving a stale pin. See
-    tests/_alembic_heads.py's own docstring.
+def test_0134_chains_after_0133() -> None:
+    """0134 is no longer the application_schema head (0135 superseded it)
+    -- see tests/_alembic_heads.py and
+    test_0135_add_go_api_rest_proof_run_declared_defects_migration.py's
+    sibling check for the current head.
     """
     migration = _migration()
-    assert migration.revision == application_schema_head(), (
-        "0134 must be the application_schema head; if another migration "
-        "landed first, renumber this one and re-run"
-    )
+    assert migration.revision != application_schema_head()
     assert migration.down_revision == "0133"

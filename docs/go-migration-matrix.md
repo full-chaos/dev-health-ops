@@ -281,7 +281,7 @@ sync with either side, so a route added, removed or newly wired on either plane 
 time the tool runs, and the doc-drift check below fails until it is re-rendered.
 
 <!-- BEGIN GENERATED REST ENDPOINTS -->
-_32 `/api/v1/*` routes in `src/dev_health_ops/api/main.py`: **27** ported, **5** python-only, **0** dead-by-design._
+_32 `/api/v1/*` routes in `src/dev_health_ops/api/main.py`: **29** ported, **3** python-only, **0** dead-by-design._
 
 | Method | Path | Status | Go handler |
 | --- | --- | --- | --- |
@@ -314,8 +314,8 @@ _32 `/api/v1/*` routes in `src/dev_health_ops/api/main.py`: **27** ported, **5**
 | GET | `/api/v1/quadrant` | ported | `cmd/query-api/quadrant_route.go:79` |
 | GET | `/api/v1/sankey` | ported | `cmd/query-api/sankey_route.go:80` |
 | POST | `/api/v1/sankey` | ported | `cmd/query-api/sankey_route.go:80` |
-| GET | `/api/v1/work-units` | python-only | -- |
-| POST | `/api/v1/work-units` | python-only | -- |
+| GET | `/api/v1/work-units` | ported | `cmd/query-api/workunits_route.go:110` |
+| POST | `/api/v1/work-units` | ported | `cmd/query-api/workunits_route.go:110` |
 | POST | `/api/v1/work-units/{work_unit_id}/explain` | python-only | -- |
 <!-- END GENERATED REST ENDPOINTS -->
 

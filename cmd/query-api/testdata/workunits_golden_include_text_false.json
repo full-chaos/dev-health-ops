@@ -1,0 +1,58 @@
+[
+  {
+    "work_unit_id": "abc-123",
+    "work_unit_type": null,
+    "work_unit_name": "Some Name",
+    "time_range": {
+      "start": "2024-01-15T00:00:00Z",
+      "end": "2024-01-20T12:30:45.123000Z"
+    },
+    "effort": {
+      "metric": "churn_loc",
+      "value": 12.5
+    },
+    "investment": {
+      "themes": {
+        "feature_delivery": 0.8,
+        "maintenance": 0.2
+      },
+      "subcategories": {}
+    },
+    "evidence_quality": {
+      "value": 0.75,
+      "band": "high"
+    },
+    "evidence": {
+      "textual": [],
+      "structural": [
+        {
+          "type": "work_unit_nodes",
+          "note": "x"
+        }
+      ],
+      "contextual": [
+        {
+          "type": "time_range",
+          "start": "2024-01-15T00:00:00+00:00",
+          "end": "2024-01-20T12:30:45.123000+00:00",
+          "span_days": 5.5213555902777784
+        },
+        {
+          "type": "repo_scope",
+          "repo_ids": [
+            "unassigned"
+          ]
+        },
+        {
+          "type": "team_scope",
+          "team_ids": [
+            "unassigned"
+          ],
+          "team_names": [
+            "Unassigned"
+          ]
+        }
+      ]
+    }
+  }
+]

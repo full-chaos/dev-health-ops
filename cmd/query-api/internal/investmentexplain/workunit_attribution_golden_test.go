@@ -189,7 +189,7 @@ func TestSplitCategoryFiltersMatchesPythonGolden(t *testing.T) {
 	golden := loadAttributionGolden(t)
 	for name, tc := range golden.SplitCategoryFilters {
 		t.Run(name, func(t *testing.T) {
-			gotThemes, gotSubcategories := splitCategoryFilters(tc.Input.WorkCategory)
+			gotThemes, gotSubcategories := SplitCategoryFilters(tc.Input.WorkCategory)
 			// Order-sensitive: Python's list(dict.fromkeys(...)) preserves
 			// first-sighting order, and dedupeStrings does too -- both
 			// planes should produce the identical sequence, not just the

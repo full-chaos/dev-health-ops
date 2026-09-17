@@ -525,6 +525,23 @@ func main() {
 		log.Print("query-api: /api/v1/drilldown/prs route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
 	}
 
+	// GET+POST /api/v1/work-units, gated by its own routeswitch entries
+	// (default OFF via GO_API_WORK_UNITS_ENABLED) -- see
+	// workunits_route.go's package doc comment for the reachability story;
+	// business logic is internal/investmentexplain's own
+	// BuildWorkUnitInvestments, shared with POST /api/v1/investment/explain.
+	if workUnitsHandler, workUnitsCleanup, workUnitsOK, workUnitsErr := buildWorkUnitsRoute(); workUnitsErr != nil {
+		log.Fatalf("query-api: build /api/v1/work-units route: %v", workUnitsErr)
+	} else if workUnitsOK {
+		defer workUnitsCleanup()
+		// See the investment/explain mount above for why this is a
+		// reassignment, not an inlined wrapper.
+		workUnitsHandler = withProofProvenance(workUnitsHandler, runningBuild())
+		mux.HandleFunc("/api/v1/work-units", workUnitsHandler)
+	} else {
+		log.Print("query-api: /api/v1/work-units route not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
+	}
+
 	// GET+POST /api/v1/drilldown/issues, gated by its own routeswitch
 	// entries (default OFF via GO_API_DRILLDOWN_ISSUES_ENABLED)
 	// -- see drilldown_issues_route.go's package doc comment for the

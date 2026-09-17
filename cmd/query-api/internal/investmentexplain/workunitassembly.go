@@ -60,7 +60,7 @@ type WorkUnitInvestment struct {
 
 // BuildWorkUnitInvestmentsOptions ports build_work_unit_investments'
 // parameters (work_units.py:234-241). ThemeFilters/SubcategoryFilters are
-// the pre-split output of splitCategoryFilters -- callers that have a raw
+// the pre-split output of SplitCategoryFilters -- callers that have a raw
 // work_category list should call that first, matching how
 // build_work_unit_investments itself calls _split_category_filters(filters)
 // as its own first step.

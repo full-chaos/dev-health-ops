@@ -189,7 +189,7 @@ func newPeopleDrilldownIssuesHandler(reader *people.Reader) http.HandlerFunc {
 			}
 			// Python's outer `except Exception: raise HTTPException(503,
 			// "Data unavailable")` (main.py:1177-1178).
-			writeRESTDataUnavailable(w, r, "people_drilldown_issues", claims.OrgID)
+			writeRESTDataUnavailable(w, r, "people_drilldown_issues", claims.OrgID, err)
 			return
 		}
 		writePeopleDrilldownIssuesResponse(w, r, claims.OrgID, resp)

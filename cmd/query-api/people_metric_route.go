@@ -197,7 +197,7 @@ func newPeopleMetricHandler(reader *people.Reader) http.HandlerFunc {
 			}
 			// Python's outer `except Exception: raise HTTPException(503,
 			// "Data unavailable")` (main.py:1119-1120).
-			writeRESTDataUnavailable(w, r, "people_metric", claims.OrgID)
+			writeRESTDataUnavailable(w, r, "people_metric", claims.OrgID, err)
 			return
 		}
 		writePeopleMetricResponse(w, r, claims.OrgID, resp)

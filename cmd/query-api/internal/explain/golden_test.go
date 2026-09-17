@@ -126,7 +126,7 @@ func (d *explainQueryDispatch) handle(t *testing.T, query string, bindings []dhc
 		return &fixtureRowScanner{rows: d.displayNameRows}, nil
 	case strings.Contains(query, "FROM repos FINAL") && d.resolveRepoIDRow != nil:
 		return &fixtureRowScanner{rows: [][]any{d.resolveRepoIDRow}}, nil
-	case strings.Contains(query, "WITH\n    current AS ("):
+	case strings.Contains(query, "delta_pct"):
 		return &fixtureRowScanner{rows: d.driverRows}, nil
 	case strings.Contains(query, "ORDER BY value DESC"):
 		return &fixtureRowScanner{rows: d.contributorRows}, nil

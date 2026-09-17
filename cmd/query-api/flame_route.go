@@ -194,7 +194,7 @@ func newFlameWorkHandler(client flame.QueryClient) http.HandlerFunc {
 			// not one of build_flame_response's own typed HTTPExceptions
 			// degrades to a generic 503, never a raw ClickHouse error on
 			// the wire.
-			writeRESTDataUnavailable(w, r, "flame", claims.OrgID)
+			writeRESTDataUnavailable(w, r, "flame", claims.OrgID, err)
 			return
 		}
 

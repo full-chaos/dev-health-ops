@@ -224,7 +224,7 @@ func newHeatmapWorkHandler(client heatmap.QueryClient) http.HandlerFunc {
 			// not one of build_heatmap_response's own typed
 			// HTTPExceptions degrades to a generic 503, never a raw
 			// ClickHouse error on the wire.
-			writeRESTDataUnavailable(w, r, "heatmap", claims.OrgID)
+			writeRESTDataUnavailable(w, r, "heatmap", claims.OrgID, err)
 			return
 		}
 

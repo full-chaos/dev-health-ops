@@ -1,10 +1,16 @@
 package main
 
 import (
+	"errors"
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -26,7 +32,7 @@ func TestWriteRESTErrorBodyShapes(t *testing.T) {
 		{
 			name: "plain string detail (Data unavailable)",
 			write: func(w http.ResponseWriter, r *http.Request) {
-				writeRESTDataUnavailable(w, r, "test", "org-1")
+				writeRESTDataUnavailable(w, r, "test", "org-1", errors.New("simulated downstream failure"))
 			},
 			wantStatus: http.StatusServiceUnavailable,
 			wantBody:   `{"detail":"Data unavailable"}` + "\n",
@@ -235,5 +241,109 @@ func TestNoAPIV1RoutePlainTextErrors(t *testing.T) {
 	}
 	if checked == 0 {
 		t.Fatal("no *_route.go file matched an /api/v1/ path -- guard is not exercising anything")
+	}
+}
+
+// TestDataUnavailableCallSitesLogTheCause is a totality guard, same
+// method as unrestricted_read_options_test.go's
+// TestEveryClickHouseReadClientUsesTheSharedUnrestrictedOptions: it
+// derives its answer from the actual source on every run, walking every
+// non-test .go file directly under cmd/query-api for the two violation
+// shapes this guard exists to close, rather than a hand-maintained list
+// of known degradation sites --
+//
+//  1. a call to writeRESTDataUnavailable whose final (err) argument is
+//     the literal `nil`. writeRESTDataUnavailable now logs that argument
+//     before writing the response, so a nil there is a real regression
+//     back to a swallowed cause, not just a missing log call.
+//  2. a call to writeRESTError (the lower-level, non-logging primitive)
+//     whose status argument is the literal http.StatusServiceUnavailable
+//     -- a 503 writer that bypasses writeRESTDataUnavailable entirely,
+//     the exact shape every route's degradation site had before this PR
+//     (nothing logged, ever, for any of them).
+//
+// rest_error_response.go itself is excluded from violation class 2: it
+// is the one legitimate place http.StatusServiceUnavailable is written
+// to the wire, inside writeRESTDataUnavailable's own body.
+func TestDataUnavailableCallSitesLogTheCause(t *testing.T) {
+	const dir = "."
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read %s: %v", dir, err)
+	}
+
+	var violations []string
+	sawDataUnavailableCall := false
+
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		path := filepath.Join(dir, name)
+		src, readErr := os.ReadFile(path)
+		if readErr != nil {
+			t.Fatalf("read %s: %v", path, readErr)
+		}
+
+		fset := token.NewFileSet()
+		file, parseErr := parser.ParseFile(fset, path, src, 0)
+		if parseErr != nil {
+			t.Fatalf("parse %s: %v", path, parseErr)
+		}
+
+		ast.Inspect(file, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			fnIdent, ok := call.Fun.(*ast.Ident)
+			if !ok {
+				return true
+			}
+
+			switch fnIdent.Name {
+			case "writeRESTDataUnavailable":
+				sawDataUnavailableCall = true
+				if len(call.Args) != 5 {
+					violations = append(violations, fmt.Sprintf(
+						"%s:%d: writeRESTDataUnavailable called with %d argument(s), want 5 (w, r, component, orgID, err)",
+						path, fset.Position(call.Pos()).Line, len(call.Args)))
+					return true
+				}
+				if errIdent, ok := call.Args[4].(*ast.Ident); ok && errIdent.Name == "nil" {
+					violations = append(violations, fmt.Sprintf(
+						"%s:%d: writeRESTDataUnavailable's err argument is a literal nil -- the wrapped cause must be logged, not swallowed",
+						path, fset.Position(call.Pos()).Line))
+				}
+			case "writeRESTError":
+				if name == "rest_error_response.go" {
+					return true
+				}
+				for _, arg := range call.Args {
+					sel, ok := arg.(*ast.SelectorExpr)
+					if !ok {
+						continue
+					}
+					pkgIdent, ok := sel.X.(*ast.Ident)
+					if ok && pkgIdent.Name == "http" && sel.Sel.Name == "StatusServiceUnavailable" {
+						violations = append(violations, fmt.Sprintf(
+							"%s:%d: writeRESTError called directly with http.StatusServiceUnavailable -- a 503 must go through writeRESTDataUnavailable so its cause is logged",
+							path, fset.Position(call.Pos()).Line))
+					}
+				}
+			}
+			return true
+		})
+	}
+
+	if !sawDataUnavailableCall {
+		t.Fatal("found zero writeRESTDataUnavailable call sites under cmd/query-api's package-main files -- this guard's premise (there are 503 degradation sites to check) no longer holds; investigate before trusting a green result")
+	}
+
+	sort.Strings(violations)
+	if len(violations) > 0 {
+		t.Fatalf("every REST 503 degradation site must log its cause via writeRESTDataUnavailable(..., err); found %d violation(s):\n%s",
+			len(violations), strings.Join(violations, "\n"))
 	}
 }

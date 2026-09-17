@@ -31,17 +31,17 @@ func TestOrgIDScopesEveryQuadrantMetricReadAtTheSameNestingDepthAsFinal(t *testi
 		spec    MetricSpec
 		markers []string
 	}{
-		{"TeamMetrics churn (user_metrics_daily)", TeamMetrics["churn"], []string{"FROM user_metrics_daily FINAL"}},
-		{"TeamMetrics throughput (work_item_metrics_daily)", TeamMetrics["throughput"], []string{"FROM work_item_metrics_daily FINAL"}},
+		{"TeamMetrics churn (user_metrics_daily)", TeamMetrics["churn"], []string{"user_metrics_daily AS m FINAL"}},
+		{"TeamMetrics throughput (work_item_metrics_daily)", TeamMetrics["throughput"], []string{"work_item_metrics_daily AS m FINAL"}},
 		{"RepoMetrics churn (repo_metrics_daily + repos join)", RepoMetrics["churn"], []string{
-			"FROM repo_metrics_daily FINAL",
+			"repo_metrics_daily AS m FINAL",
 			"INNER JOIN repos FINAL ON repos.id = m.repo_id AND repos.org_id",
 		}},
 		{"RepoMetrics wip (work_item_metrics_daily + repos join on work_scope_id)", RepoMetrics["wip"], []string{
-			"FROM work_item_metrics_daily FINAL",
+			"work_item_metrics_daily AS m FINAL",
 			"INNER JOIN repos FINAL ON repos.repo = m.work_scope_id AND repos.org_id",
 		}},
-		{"PersonMetrics throughput (work_item_user_metrics_daily)", PersonMetrics["throughput"], []string{"FROM work_item_user_metrics_daily FINAL"}},
+		{"PersonMetrics throughput (work_item_user_metrics_daily)", PersonMetrics["throughput"], []string{"work_item_user_metrics_daily AS m FINAL"}},
 	}
 
 	for _, tc := range cases {
@@ -80,9 +80,9 @@ func TestOrgIDScopesEveryQuadrantMetricReadAtTheSameNestingDepthAsFinal(t *testi
 
 // TestOrgIDScopesResolvePersonIdentityAtTheSameNestingDepthAsFinal pins the
 // same ruling for identity.go's resolvePersonIdentity: both UNION DISTINCT
-// branches inside the "identities" CTE read a ReplacingMergeTree table
-// FINAL, with org_id filtered inside the SAME parenthesised branch, not
-// outside the WITH clause.
+// branches inside the "identities" subquery read a ReplacingMergeTree
+// table FINAL, with org_id filtered inside the SAME parenthesised branch,
+// not outside it.
 func TestOrgIDScopesResolvePersonIdentityAtTheSameNestingDepthAsFinal(t *testing.T) {
 	const orgIDPredicate = "org_id = {org_id:String}"
 

@@ -91,11 +91,25 @@ func boundedSearchLimit(limit int) int {
 // intended. This is a declared Python-plane defect, not a data-semantics
 // choice.
 //
+// UNSAFE STATEMENT: this query was also a `WITH identities AS (...)
+// SELECT ...` CTE until this fix: dev-health-go's client-side
+// read-only guard (clickhouse/client.go's validateReadOnlyStatement)
+// requires a statement's FIRST token to be the literal "SELECT", so a
+// query beginning "WITH ..." is rejected before it ever reaches
+// ClickHouse (ErrUnsafeStatement, "clickhouse runtime: unsafe
+// statement") -- the swallowed cause of the 503 for a non-empty-query
+// /people search request. The "identities" CTE is referenced exactly
+// once (in the outer FROM), so inlining it as an ordinary derived-table
+// subquery is a purely mechanical, semantically identical rewrite.
+//
 // ORG SCOPE sits INSIDE each UNION branch's own WHERE, at the same
 // nesting depth as its FINAL source (pinned by sqlshape_test.go) -- never
 // a filter applied only after a cross-tenant merge/scan.
 const searchPeopleQuery = `
-WITH identities AS (
+SELECT
+    identity AS identity_id,
+    max(last_seen) AS last_seen
+FROM (
     SELECT
         identity_id AS identity,
         max(day) AS last_seen
@@ -113,11 +127,7 @@ WITH identities AS (
     WHERE user_identity != ''
       AND org_id = {org_id:String}
     GROUP BY user_identity
-)
-SELECT
-    identity AS identity_id,
-    max(last_seen) AS last_seen
-FROM identities
+) AS identities
 WHERE identity != ''
   AND lower(identity) LIKE {query:String}
 GROUP BY identity

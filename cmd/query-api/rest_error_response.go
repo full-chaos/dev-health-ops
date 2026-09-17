@@ -109,7 +109,20 @@ func writeRESTMethodNotAllowed(w http.ResponseWriter, r *http.Request, component
 // ClickHouse-backed REST route in this binary's Python counterpart falls
 // back to on any unexpected downstream failure (`except Exception:
 // raise HTTPException(status_code=503, detail="Data unavailable")`).
-func writeRESTDataUnavailable(w http.ResponseWriter, r *http.Request, component, orgID string) {
+//
+// Unlike Python, this degradation site does not swallow the cause: err
+// (the wrapped error every caller already holds, from the failed
+// BuildResponse/BuildIssuesResponse/etc. call or, where no such error
+// exists, a locally constructed one describing the rejected input -- see
+// e.g. sankey_route.go's invalid-scope-level call site) is logged at
+// error level with the route, the org id and the caller-supplied
+// X-Request-Id BEFORE the response is written, so an operator can
+// correlate a live 503 back to the failure that produced it. err must
+// never be nil: TestDataUnavailableCallSitesLogTheCause guards every
+// call site in this package for that.
+func writeRESTDataUnavailable(w http.ResponseWriter, r *http.Request, component, orgID string, err error) {
+	log.Printf("query-api: %s: degraded to 503 Data unavailable: org_id=%s request_id=%s err=%v",
+		component, orgID, envelopeRequestID(r), err)
 	writeRESTError(w, r, component, orgID, http.StatusServiceUnavailable, "Data unavailable")
 }
 

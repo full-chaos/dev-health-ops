@@ -41,24 +41,33 @@
 // current text -- all four daily-family tables the ported metric specs
 // read (work_item_metrics_daily, work_item_user_metrics_daily,
 // user_metrics_daily, repo_metrics_daily) are ReplacingMergeTree
-// (computed_at) and are deduplicated the same way, with FINAL: the first
-// two since migration 055, the last two since migration 096
-// (src/dev_health_ops/migrations/clickhouse/096_daily_family_tables_
-// replacing_merge_tree.py -- TARGET_SORT_KEYS covers both with a sorting
-// key that matches this package's own dedup key). dedupFrom below used to
-// treat user_metrics_daily/repo_metrics_daily as legacy append-only
-// MergeTree, deduplicated through an all-tenant "latest computed_at per
-// natural key" LIMIT-1-BY subquery with no org_id predicate inside it --
-// stale since migration 096 landed, and the origin case this package's
-// class sweep exists to fix: a subquery that sorted and collapsed every
-// tenant's rows before the outer org filter narrowed the result, and (once
-// the table became ReplacingMergeTree) a raw multi-version read on top of
-// that. Every dedup read below now uses FINAL, with org_id filtered in the
-// SAME top-level statement as the FINAL source, never a separate
-// unfiltered subquery. teams is read with FINAL directly (not through
-// dedupFrom), matching _resolve_team_labels's own query; identities
-// (person-scope team-cohort lookup, identity.go) is likewise read with
-// FINAL directly, matching fetch_person_team_id's own query.
+// (computed_at) in prod (confirmed directly against prod's own
+// system.tables), the first two since migration 055, the last two since
+// migration 096 (src/dev_health_ops/migrations/clickhouse/
+// 096_daily_family_tables_replacing_merge_tree.py -- TARGET_SORT_KEYS
+// covers both with a sorting key that matches this package's own dedup
+// key), and take the identical FINAL treatment: a ReplacingMergeTree
+// table in this binary dedups with FINAL or
+// argMax(tuple(col), version)).1, never a bare LIMIT-1-BY, which sorts
+// and collapses the whole table with no per-tenant scope of its own. A
+// live
+// reproduction against a compose ClickHouse instance behind prod on
+// migration 096 (its own one-shot migrate run predates the last
+// conversion) surfaced a SEPARATE, genuinely broken bug this file still
+// fixes: dedupFrom's FINAL branch built `<table> FINAL AS <alias>` --
+// invalid ClickHouse GRAMMAR ("Code: 62. DB::Exception: Syntax error...
+// Expected one of:... JOIN..."), confirmed live and true for EVERY
+// aliased table this package reads, regardless of engine (`<table> AS
+// <alias> FINAL` is the only order ClickHouse accepts). Fixed below:
+// alias now comes before FINAL, matching every hand-written query
+// elsewhere in this tree that already got it right (e.g. "FROM
+// work_item_cycle_times AS wct FINAL"). Every dedup read below uses
+// FINAL, with org_id filtered in the SAME top-level statement as the
+// FINAL source, never a separate unfiltered subquery. teams is read with
+// FINAL directly (not through dedupFrom), matching _resolve_team_labels's
+// own query; identities (person-scope team-cohort lookup, identity.go) is
+// likewise read with FINAL directly, matching fetch_person_team_id's own
+// query.
 //
 // Go-side-only adaptation (does not change any computed value): every
 // value_expr is wrapped in toFloat64(...) in the outer SELECT so the Go
@@ -307,12 +316,14 @@ var QuadrantDefinitions = map[string]QuadrantDefinition{
 // ---------------------------------------------------------------------------
 // dedup_from -- ported subset of src/dev_health_ops/clickhouse_dedup.py's
 // dedup_from, restricted to the tables the three ported metric sets
-// actually name. All four are ReplacingMergeTree(computed_at) today
-// (work_item_metrics_daily/work_item_user_metrics_daily since migration
-// 055; user_metrics_daily/repo_metrics_daily since migration 096) and take
-// the identical FINAL treatment -- see the package doc comment for why
-// user_metrics_daily/repo_metrics_daily no longer take the LIMIT-1-BY path
-// dedup_from's reference text still describes for them.
+// actually name. All four are ReplacingMergeTree(computed_at) in prod
+// today (work_item_metrics_daily/work_item_user_metrics_daily since
+// migration 055; user_metrics_daily/repo_metrics_daily since migration
+// 096) and take the identical FINAL treatment -- see the package doc
+// comment for why user_metrics_daily/repo_metrics_daily no longer take
+// the LIMIT-1-BY path dedup_from's reference text still describes for
+// them: a bare LIMIT-1-BY sorts and collapses the whole table with no
+// per-tenant scope of its own, so FINAL is the correct dedup here.
 
 var replacingMergeTreeDailyTables = map[string]bool{
 	"work_item_metrics_daily":      true,
@@ -337,7 +348,13 @@ func dedupFrom(table string) string {
 	if hasAlias {
 		aliasSQL = " AS " + alias
 	}
-	return base + " FINAL" + aliasSQL
+	// Alias BEFORE FINAL: "<table> FINAL AS <alias>" is a ClickHouse
+	// SYNTAX error (Code 62), not merely an engine-support one --
+	// confirmed live against this exact ClickHouse version. "<table> AS
+	// <alias> FINAL" is the only accepted order, matching every
+	// hand-written query elsewhere in this tree that already gets it
+	// right (e.g. "FROM work_item_cycle_times AS wct FINAL").
+	return base + aliasSQL + " FINAL"
 }
 
 // ---------------------------------------------------------------------------
@@ -441,6 +458,19 @@ const primaryWorkItemTeamAttributionSource = `(
 // fetchWorkItemTeamQuadrantMetric ports fetch_work_item_team_quadrant_metric
 // (queries/quadrant.py:61-108) verbatim -- the cycle_throughput/team
 // attribution-quirk reader.
+//
+// UNSAFE STATEMENT: this query was a `WITH team_activity AS
+// (...) SELECT ...` CTE until this fix: dev-health-go's client-side
+// read-only guard (clickhouse/client.go's validateReadOnlyStatement)
+// requires a statement's FIRST token to be the literal "SELECT", so a
+// query beginning "WITH ..." is rejected before it ever reaches
+// ClickHouse (ErrUnsafeStatement, "clickhouse runtime: unsafe
+// statement"), wrapped into the generic 503 every cycle_throughput
+// quadrant request degraded to, with nothing logged (the defect this
+// ticket's telemetry sweep also fixes). "team_activity" is referenced
+// exactly once (in the outer FROM), so inlining it as an ordinary
+// derived-table subquery is a purely mechanical, semantically identical
+// rewrite.
 func fetchWorkItemTeamQuadrantMetric(ctx context.Context, client QueryClient, metric string, startDay, endDay time.Time, bucket, orgID string) ([]metricRow, error) {
 	var valueExpr, metricFilter string
 	switch metric {
@@ -454,7 +484,12 @@ func fetchWorkItemTeamQuadrantMetric(ctx context.Context, client QueryClient, me
 	}
 
 	query := fmt.Sprintf(`
-        WITH team_activity AS (
+        SELECT
+            %s AS bucket,
+            toString(team_id) AS entity_id,
+            ifNull(nullIf(any(team_name), ''), toString(team_id)) AS entity_label,
+            toFloat64(%s) AS value
+        FROM (
             SELECT
                 wct.day,
                 wct.work_item_id,
@@ -468,16 +503,10 @@ func fetchWorkItemTeamQuadrantMetric(ctx context.Context, client QueryClient, me
               AND wct.org_id = {org_id:String}
               AND t.team_id IS NOT NULL
               AND t.team_id != ''%s
-        )
-        SELECT
-            %s AS bucket,
-            toString(team_id) AS entity_id,
-            ifNull(nullIf(any(team_name), ''), toString(team_id)) AS entity_label,
-            toFloat64(%s) AS value
-        FROM team_activity
+        ) AS team_activity
         GROUP BY bucket, entity_id
         ORDER BY bucket
-    `, primaryWorkItemTeamAttributionSource, metricFilter, bucketExpr(bucket), valueExpr)
+    `, bucketExpr(bucket), valueExpr, primaryWorkItemTeamAttributionSource, metricFilter)
 
 	bindings := []dhclickhouse.Binding{
 		{Name: "start_day", Value: formatDay(startDay)},

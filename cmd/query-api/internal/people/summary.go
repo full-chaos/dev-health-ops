@@ -517,13 +517,32 @@ func fetchPersonFlowBreakdown(ctx context.Context, client QueryClient, identitie
 // see metricconfig.go's own doc comment on why this is NOT the
 // argMax-over-Nullable-column gap), and the work_item_user_metrics_daily branches
 // already carry FINAL.
+//
+// UNSAFE STATEMENT: this query was a `WITH
+// latest_user_metrics AS (...) SELECT ... UNION ALL ...` CTE until this
+// fix: dev-health-go's client-side read-only guard (clickhouse/client.go's
+// validateReadOnlyStatement) requires a statement's FIRST token to be the
+// literal "SELECT", so a query beginning "WITH ..." is rejected before it
+// ever reaches ClickHouse (ErrUnsafeStatement, "clickhouse runtime:
+// unsafe statement"), wrapped into the generic 503 every reachable
+// /people/{person_id}/summary request degraded to (unreachable in
+// practice until this same ticket's other fixes: every request that
+// could reach this far used to 503 earlier, at identity resolution --
+// see resolve.go's own doc comment -- so this defect was doubly
+// invisible). Unlike this file's other CTE fixes, "latest_user_metrics"
+// is referenced FOUR times (one per review_load UNION ALL branch), not
+// once, so it is inlined as a repeated derived-table subquery in each
+// branch rather than a single FROM substitution -- ClickHouse's own
+// non-recursive WITH is query-text substitution, not a materialized
+// temporary table, so four inlined copies of the same subquery is the
+// SAME execution shape the CTE form already had, not a behavioural or
+// performance regression.
 func fetchPersonCollaboration(ctx context.Context, client QueryClient, identities []string, startDay, endDay time.Time, orgID string) ([]struct {
 	Section string
 	Label   string
 	Value   float64
 }, error) {
-	query := fmt.Sprintf(`
-        WITH latest_user_metrics AS (
+	const latestUserMetrics = `(
             SELECT
                 day,
                 repo_id,
@@ -537,21 +556,21 @@ func fetchPersonCollaboration(ctx context.Context, client QueryClient, identitie
               AND identity_id IN {identities:Array(String)}
               AND org_id = {org_id:String}
             GROUP BY day, repo_id, author_email
-        )
-
-        SELECT 'review_load' AS section, 'Reviews given' AS label, toFloat64(sum(reviews_given)) AS value FROM latest_user_metrics
-
-        UNION ALL
-
-        SELECT 'review_load' AS section, 'Reviews received' AS label, toFloat64(sum(reviews_received)) AS value FROM latest_user_metrics
+        ) AS latest_user_metrics`
+	query := fmt.Sprintf(`
+        SELECT 'review_load' AS section, 'Reviews given' AS label, toFloat64(sum(reviews_given)) AS value FROM %[1]s
 
         UNION ALL
 
-        SELECT 'review_load' AS section, 'PRs authored' AS label, toFloat64(sum(prs_authored)) AS value FROM latest_user_metrics
+        SELECT 'review_load' AS section, 'Reviews received' AS label, toFloat64(sum(reviews_received)) AS value FROM %[1]s
 
         UNION ALL
 
-        SELECT 'review_load' AS section, 'PRs merged' AS label, toFloat64(sum(prs_merged)) AS value FROM latest_user_metrics
+        SELECT 'review_load' AS section, 'PRs authored' AS label, toFloat64(sum(prs_authored)) AS value FROM %[1]s
+
+        UNION ALL
+
+        SELECT 'review_load' AS section, 'PRs merged' AS label, toFloat64(sum(prs_merged)) AS value FROM %[1]s
 
         UNION ALL
 
@@ -568,8 +587,8 @@ func fetchPersonCollaboration(ctx context.Context, client QueryClient, identitie
         WHERE day >= {start_day:Date} AND day < {end_day:Date}
           AND user_identity IN {identities:Array(String)}
           AND org_id = {org_id:String}
-        %s
-    `, settingsMaxExecutionTime())
+        %[2]s
+    `, latestUserMetrics, settingsMaxExecutionTime())
 	rows, err := client.Query(ctx, query, []dhclickhouse.Binding{
 		{Name: "start_day", Value: formatDay(startDay)},
 		{Name: "end_day", Value: formatDay(endDay)},

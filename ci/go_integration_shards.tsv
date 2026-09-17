@@ -49,6 +49,7 @@ cmd/dev-health-workerctl	16
 cmd/go-api-routing	91
 cmd/query-api	209
 cmd/query-api/internal/analytics	218
+cmd/query-api/internal/explain	122
 cmd/query-api/internal/featureflags	22
 cmd/query-api/internal/hotspots	45
 cmd/query-api/internal/investmentexplain	22

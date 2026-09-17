@@ -41,6 +41,14 @@ EXPECTED_PACKAGES = {
     "cmd/go-api-routing",
     "cmd/query-api",
     "cmd/query-api/internal/analytics",
+    # cmd/query-api/internal/explain's integration-tagged tests exercise
+    # the team-scoped repo filter's pushed-down membership condition
+    # against a real ClickHouse: the query text that once returned every
+    # matching repo id as its own result set throws the read-only
+    # client's row ceiling when run standalone, while the route itself
+    # succeeds on the same data; a status-filtered metric's
+    # empty-vs-populated response is exercised in both directions too.
+    "cmd/query-api/internal/explain",
     # CHAOS-5523: the featureFlagEvents port's own Testcontainers-backed
     # tests (events_integration_test.go) -- the org-scoping/flagKey-filter/
     # ORDER BY/count-not-limit-bound happy path and the real UNKNOWN_TABLE
@@ -483,9 +491,13 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # through the real dispatch against a real Postgres and a real HTTP
     # server -- the two guards an adversarial round mutated at their real
     # call sites and watched survive the whole suite). 56 -> 57.
-    # CURRENT TOTAL: 60 -- the one number to bump when a new
+    # cmd/query-api/internal/explain carries integration-tagged tests
+    # (team_scope_large_repo_set_integration_test.go and
+    # blocked_work_status_filter_integration_test.go, four tests total),
+    # so it counts toward the total below.
+    # CURRENT TOTAL: 61 -- the one number to bump when a new
     # -tags=integration package is added.
-    assert "60 package(s) discovered, 0 denylisted, 60 will run" in result.stdout
+    assert "61 package(s) discovered, 0 denylisted, 61 will run" in result.stdout
     # Raised 4 -> 6: at four shards each balanced "packages" shard's own
     # estimated test time (2191s) already exceeded the hosted job's
     # 25-minute (1500s) timeout-minutes cap before any setup/teardown
@@ -494,7 +506,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # comfortably under the cap -- see the weight-derived isolation check
     # below for how a future regression here is caught instead of silently
     # re-balanced.
-    assert "integration shard plan: 6 shard(s), 60 package(s)" in result.stdout
+    assert "integration shard plan: 6 shard(s), 61 package(s)" in result.stdout
 
     output = dict(
         line.split("=", maxsplit=1)
@@ -570,8 +582,11 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # CHAOS-5560 added internal/platform/config: 55 -> 56.
     # CHAOS-5486 added cmd/go-api-routing: 56 -> 57 (see the
     # "package(s) discovered" comment above).
-    # CURRENT TOTAL: 60 -- the one number to bump.
-    assert len(flattened) == len(set(flattened)) == 60
+    # cmd/query-api/internal/explain is discovered and runnable (see the
+    # "package(s) discovered" comment above), so it is one of the
+    # packages this flattened set must contain.
+    # CURRENT TOTAL: 61 -- the one number to bump.
+    assert len(flattened) == len(set(flattened)) == 61
     assert set(flattened) == EXPECTED_PACKAGES
 
     # internal/providersync's isolation in the lowest-numbered shard is a
@@ -620,10 +635,11 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # The five non-isolated "packages" shards (2/3/4/5/6) are what the LPT
     # planner actually balances against each other -- shard 1 only ever
     # holds internal/providersync, checked above. Recounted directly from
-    # this run's own planner output (not hand-adjusted): 1316s/1315s/1314s/
-    # 1314s/1314s, a 2s spread. Re-tighten or loosen this to match a future
-    # re-time's actual output rather than forcing new weights to preserve
-    # today's gap.
+    # this run's own planner output (not hand-adjusted): 1340s/1339s/1340s/
+    # 1338s/1338s, a 2s spread (shard 2 carries cmd/query-api/internal/
+    # explain's 122s weight). Re-tighten or loosen this to match a future
+    # re-time's actual output rather than forcing new weights to
+    # preserve today's gap.
     packages_totals = [estimated[shard] for shard in (2, 3, 4, 5, 6)]
     assert max(packages_totals) - min(packages_totals) <= 2
 
@@ -2161,9 +2177,12 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
     # - 1 for the providersync shard-1 package).
     # CHAOS-5486 added cmd/go-api-routing: 55 -> 56 (57 discovered - 1 for
     # the providersync shard-1 package).
-    # CURRENT TOTAL: 59 (== discovered-total-minus-one -- keep this in
+    # cmd/query-api/internal/explain is discovered and is not the
+    # providersync shard-1 package, so it counts toward the total below
+    # (discovered-total minus one for that shard-1 package).
+    # CURRENT TOTAL: 60 (== discovered-total-minus-one -- keep this in
     # sync with the discovered-total literal above when either changes).
-    assert len(selected_packages) == len(set(selected_packages)) == 59
+    assert len(selected_packages) == len(set(selected_packages)) == 60
     assert set(selected_packages) == EXPECTED_PACKAGES - {PROVIDER_PACKAGE}
 
     selected_tests: list[str] = []

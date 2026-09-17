@@ -146,7 +146,7 @@ func (d *explainQueryDispatch) handle(t *testing.T, query string, bindings []dhc
 // metric="throughput" (team scope, sum aggregator), scope.level="org" --
 // scopeFilterForMetric's "team" branch requires scope.level=="team", so
 // an org-level request applies NO scope filter and never touches
-// ResolveRepoFilterIDs/resolveRepoIDsForTeams. Exercises: fetchMetricValue
+// resolveRepoIDs/teamRepoScopeCondition. Exercises: fetchMetricValue
 // (current 120.0, previous 100.0 -> delta_pct 20.0), fetchMetricDriverDelta
 // (2 rows) and fetchMetricContributors (the SAME 2 ids, delta forced to
 // 0.0 by buildContributor), and resolveScopeDisplayNames("team", ...) for
@@ -235,7 +235,7 @@ func TestGoldenUnknownMetricFallsBackToCycleTime(t *testing.T) {
 // testdata/repo_scope_review_latency.json: metric="review_latency"
 // (repo scope, avg aggregator), scope.level="repo", scope.ids=["acme/webapp"]
 // (a non-UUID ref, resolved by repos.repo name) -- exercises
-// scopeFilterForMetric's "repo" branch end to end: ResolveRepoFilterIDs
+// scopeFilterForMetric's "repo" branch end to end: resolveRepoIDs
 // -> resolveRepoID (the name branch) -> scopeClauseRepo, all threading
 // the REAL org id "org-acme" throughout (the declared divergence from
 // Python's own explain.py:150-152 bug, see response.go's

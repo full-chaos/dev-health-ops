@@ -185,10 +185,15 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # exactly the Trap #105 shape this comment block exists to prevent a
     # recurrence of: name every pin that carries this count, not just the
     # nearest one.
-    # CURRENT TOTAL: 60. Adding one -tags=integration package bumps every
+    # cmd/query-api/internal/explain carries integration-tagged tests
+    # (team_scope_large_repo_set_integration_test.go and
+    # blocked_work_status_filter_integration_test.go, four tests total,
+    # against a real ClickHouse container) -- the same package
+    # test_go_integration_sharding.py's EXPECTED_PACKAGES also counts.
+    # CURRENT TOTAL: 61. Adding one -tags=integration package bumps every
     # literal below by +1 -- this is the one number to change; the
     # narrative above is for someone auditing history, not for the bump.
-    assert "60 package(s) discovered, 0 denylisted, 60 will run" in result.stdout
+    assert "61 package(s) discovered, 0 denylisted, 61 will run" in result.stdout
     # Name the package explicitly (SET MEMBERSHIP), not just the count --
     # a bare count is exactly what let CHAOS-4643's own literal drift
     # 31 -> 32 -> 33 unnoticed.
@@ -198,4 +203,5 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     assert "  RUN  cmd/query-api/internal/analytics" in result.stdout
     assert "  RUN  cmd/query-api/internal/featureflags" in result.stdout
     assert "  RUN  cmd/go-api-routing" in result.stdout
+    assert "  RUN  cmd/query-api/internal/explain" in result.stdout
     assert "  SKIP cmd/query-api/internal/analytics: " not in result.stdout

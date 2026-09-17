@@ -98,8 +98,7 @@ type Params struct {
 	CompareStart time.Time
 	CompareEnd   time.Time
 	// ScopeLevel/ScopeIDs/WhatRepos are filters.scope.level, filters.scope.ids
-	// and filters.what.repos verbatim -- fed to ResolveRepoFilterIDs via
-	// scopeFilterForMetric.
+	// and filters.what.repos verbatim -- fed to scopeFilterForMetric.
 	ScopeLevel string
 	ScopeIDs   []string
 	WhatRepos  []string

@@ -173,6 +173,19 @@ func TestRESTRequest_StatusDivergenceIsDeclaredOnlyWhereGenuine(t *testing.T) {
 			"wip_throughput_org":           true,
 			"wip_throughput_person_scoped": true,
 		},
+		"REST:GET:/api/v1/drilldown/issues": {
+			// baseline answers 503 in production on the issue drilldown
+			// routes; query-api answers 200 with real data.
+			"default_window": true,
+			"range_days_90":  true,
+		},
+		"REST:POST:/api/v1/drilldown/issues": {
+			"default_filters":         true,
+			"explicit_scope_and_sort": true,
+		},
+		"REST:GET:/api/v1/people/{person_id}/drilldown/issues": {
+			"drilldown_issues_default": true,
+		},
 	}
 	for operation, spec := range restEndpointSpecs {
 		for _, req := range spec.Requests {

@@ -73,16 +73,21 @@ type RESTRequest struct {
 	// it to raise that default itself.
 	Timeout time.Duration
 	// StatusDivergenceReason states why WantCandidateStatus and
-	// WantBaselineStatus are allowed to differ -- a genuine, ACCEPTED
-	// Go-side status-code choice documented at the route's own request
-	// parser (e.g. quadrant_route.go's parseQuadrantDate: Go answers 400
-	// where Python's Pydantic answers 422 for the same malformed date,
-	// and the route's own doc comment calls this "a documented,
-	// Go-side-only status-code divergence; the DATA contract ... is
-	// unaffected"). This is never how a Python DEFECT is declared -- that
-	// is Parity.BaselineDefects, which never touches the status code.
-	// Required when the two Want values differ; forbidden when they
-	// agree (ValidateRESTCorpus checks both directions).
+	// WantBaselineStatus are allowed to differ. Two shapes exist today:
+	// a genuine ACCEPTED Go-side status-code choice documented at the
+	// route's own request parser (e.g. quadrant_route.go's
+	// parseQuadrantDate: Go answers 400 where Python's Pydantic answers
+	// 422 for the same malformed date, and the route's own doc comment
+	// calls this "a documented, Go-side-only status-code divergence; the
+	// DATA contract ... is unaffected"); and a baseline-only failing
+	// status, where the Python plane answers a non-2xx status for a
+	// request the candidate answers with real data (e.g. the quadrant
+	// route's wip_throughput entries, and the issue-drilldown routes'
+	// own 503 entries below). A baseline-only failing status is always
+	// paired with BodyMode: RESTBodyModeStatusOnly, since there is no
+	// baseline body worth decoding. Required when the two Want values
+	// differ; forbidden when they agree (ValidateRESTCorpus checks both
+	// directions).
 	StatusDivergenceReason string
 
 	// BodyMode controls whether the two bodies are compared at all.
@@ -531,14 +536,21 @@ var drilldownPRsDedup = struct {
 	KeyFields []string
 }{ListPath: "items", KeyFields: []string{"repo_id", "number"}}
 
-// drilldownIssuesParity is shared by every admissible (2xx) drilldown/
+// drilldownIssuesParity was shared by every admissible (2xx) drilldown/
 // issues request, GET and POST alike: both routes call the same
-// BuildIssuesResponse, so both carry the same declared Python-plane
+// BuildIssuesResponse, so both carried the same declared Python-plane
 // defect. Unlike drilldownPRsParity there is only one BaselineDefect here:
 // work_item_cycle_times is already read FINAL on both planes
 // (fetchIssuesQuery's own doc comment in internal/drilldown/issues.go), so
 // the RMT-dedup shape drilldownPRsParity's own second entry declares has
-// no counterpart on this route.
+// no counterpart on this route. No corpus entry below sets this Parity
+// today: every candidate-200 request on this route is declared
+// baseline-only 503 (StatusDivergenceReason), so no body is ever
+// compared. Still exercised directly, by name, by
+// TestDrilldownIssuesParity_EmptyItemsIsAStructuralRefusalNotStale and
+// TestDrilldownIssuesParityDatetimeCitation_NonVacuousMatchIsIdleNotStale,
+// which pin the shape this citation would take if a future entry sets
+// it again.
 var drilldownIssuesParity = Options{
 	BaselineDefects: []BaselineDefect{
 		{
@@ -962,13 +974,16 @@ var personDrilldownPRsParity = Options{
 	},
 }
 
-// personDrilldownIssuesParity is shared by GET
+// personDrilldownIssuesParity was shared by GET
 // /api/v1/people/{person_id}/drilldown/issues's own live (person_id-bound,
 // 200) entry below. Unlike personDrilldownPRsParity there is only one
 // BaselineDefect here: work_item_cycle_times is already read FINAL on both
 // planes for this route (sql/people/person_drilldown_issues.sql:10,
 // drilldownissues.go's own doc comment), so the RMT-dedup shape
-// personDrilldownPRsParity's own second entry declares has no counterpart.
+// personDrilldownPRsParity's own second entry declares has no
+// counterpart. No corpus entry below sets this Parity today: that entry
+// is declared baseline-only 503 (StatusDivergenceReason), so no body is
+// ever compared.
 var personDrilldownIssuesParity = Options{
 	BaselineDefects: []BaselineDefect{
 		{
@@ -1071,9 +1086,12 @@ var flamePRIDBoundParity = Options{
 // a body a live comparison already gets from the real route.
 //
 // drilldown/issues' own started_at/completed_at naive-datetime divergence
-// is declared via drilldownIssuesParity above, the same shape drilldown/
-// prs's own corpus entry already cites for its created_at/merged_at/
-// first_review_at fields.
+// (drilldownIssuesParity above, the same shape drilldown/prs's own corpus
+// entry already cites for its created_at/merged_at/first_review_at
+// fields) is presently declared nowhere in this table's live requests:
+// every candidate-200 entry on GET/POST /api/v1/drilldown/issues is
+// declared baseline-only 503 (StatusDivergenceReason), so no body on
+// this route is ever compared.
 //
 // people/{person_id}/summary, people/{person_id}/metric,
 // people/{person_id}/drilldown/prs and people/{person_id}/drilldown/issues
@@ -1092,7 +1110,11 @@ var flamePRIDBoundParity = Options{
 // user_metrics_daily gap) -- unreachable before the id-binding mechanism
 // existed, for the same reason the GraphQL corpus's own `pr` operation
 // stays refused: an invented id is worse than no entry at all
-// (operations.go's own `pr` doc comment).
+// (operations.go's own `pr` doc comment). The one exception is
+// people/{person_id}/drilldown/issues' own 200 entry, presently declared
+// baseline-only 503 (StatusDivergenceReason): its body is never decoded,
+// so it reaches none of this route's declared checks right now -- see
+// its own doc comment.
 //
 // flame's corpus covers both deterministic-refusal requests (every 4xx
 // build_flame_response/internal/flame.BuildResponse answers BEFORE any
@@ -2158,7 +2180,13 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				// live provider value (IssueRow.Provider, wct.provider --
 				// see that entry's own Produces doc comment for why this is
 				// the same provider-taxonomy column work_item_state_
-				// durations_daily.provider carries).
+				// durations_daily.provider carries). That producer
+				// request is presently declared baseline-only 503
+				// (StatusDivergenceReason), so its body is never
+				// decoded and no provider id is ever extracted --
+				// this entry stays refused by name
+				// (rest_request_id_binding_unresolved), a standing
+				// gap, not a fix to this route's own real behaviour.
 				Name:                "cycle_breakdown_provider_scoped",
 				Query:               url.Values{"mode": {"cycle_breakdown"}, "range_days": {"7"}},
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
@@ -2808,22 +2836,28 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 		Path:   "/api/v1/drilldown/issues",
 		Requests: []RESTRequest{
 			{
+				// The baseline plane answers HTTP 503 for this request in
+				// production; the candidate answers HTTP 200 with real
+				// data (see StatusDivergenceReason below).
 				Name:                "default_window",
-				WantCandidateStatus: 200, WantBaselineStatus: 200,
-				BodyMode: RESTBodyModeJSON, Parity: drilldownIssuesParity,
-				// Produces work_item_id from this response's own FIRST
-				// item -- IssueItem.WorkItemID (issues.go) is already a
-				// bare string on the wire, so no JoinField is needed, the
-				// same shape person_id's own producer entry uses.
-				// Consumed by flame's own issue_entity_id_bound_200 entry
-				// below.
+				WantCandidateStatus: 200, WantBaselineStatus: 503,
+				StatusDivergenceReason: "CHAOS-5868: the baseline plane answers HTTP 503 for this request in production; the candidate plane answers HTTP 200 with real data; bodies are not compared.",
+				BodyMode:               RESTBodyModeStatusOnly,
+				// Produces declares work_item_id for flame's own
+				// issue_entity_id_bound_200 entry below, but this
+				// request's body is never decoded under BodyMode:
+				// status_only, so the id is never actually extracted --
+				// that consumer stays refused by name
+				// (rest_request_id_binding_unresolved), not hidden.
 				Produces: []RESTIDProducer{{Name: "work_item_id", ListPath: "items", IDField: "work_item_id"}},
 			},
 			{
+				// Same baseline-only 503 as default_window above.
 				Name:                "range_days_90",
 				Query:               url.Values{"range_days": {"90"}},
-				WantCandidateStatus: 200, WantBaselineStatus: 200,
-				BodyMode: RESTBodyModeJSON, Parity: drilldownIssuesParity,
+				WantCandidateStatus: 200, WantBaselineStatus: 503,
+				StatusDivergenceReason: "CHAOS-5868: the baseline plane answers HTTP 503 for this request in production; the candidate plane answers HTTP 200 with real data; bodies are not compared.",
+				BodyMode:               RESTBodyModeStatusOnly,
 			},
 			{
 				// Same shared int_parsing validator drilldown/prs's own
@@ -2841,10 +2875,13 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 		Path:   "/api/v1/drilldown/issues",
 		Requests: []RESTRequest{
 			{
+				// Same baseline-only 503 as GET /api/v1/drilldown/issues'
+				// own default_window entry.
 				Name:                "default_filters",
 				Body:                map[string]any{"filters": map[string]any{}},
-				WantCandidateStatus: 200, WantBaselineStatus: 200,
-				BodyMode: RESTBodyModeJSON, Parity: drilldownIssuesParity,
+				WantCandidateStatus: 200, WantBaselineStatus: 503,
+				StatusDivergenceReason: "CHAOS-5868: the baseline plane answers HTTP 503 for this request in production; the candidate plane answers HTTP 200 with real data; bodies are not compared.",
+				BodyMode:               RESTBodyModeStatusOnly,
 			},
 			{
 				// This route's OWN documented asymmetry from drilldown/prs
@@ -2855,6 +2892,8 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				// no declaration covers it; this entry exercises exactly
 				// that no-op path (an org-level default scope) rather than
 				// a team scope this table has no live team id for.
+				// Also baseline-only 503, same as this route's sibling
+				// entries.
 				Name: "explicit_scope_and_sort",
 				Body: map[string]any{
 					"filters": map[string]any{
@@ -2864,8 +2903,9 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 					"sort":  "started_at",
 					"limit": 25,
 				},
-				WantCandidateStatus: 200, WantBaselineStatus: 200,
-				BodyMode: RESTBodyModeJSON, Parity: drilldownIssuesParity,
+				WantCandidateStatus: 200, WantBaselineStatus: 503,
+				StatusDivergenceReason: "CHAOS-5868: the baseline plane answers HTTP 503 for this request in production; the candidate plane answers HTTP 200 with real data; bodies are not compared.",
+				BodyMode:               RESTBodyModeStatusOnly,
 			},
 			{
 				// Same shared "missing filters key" validator drilldown/
@@ -3107,6 +3147,13 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				// declares for "pr" has no counterpart here, the same
 				// asymmetry personDrilldownIssuesParity's own doc comment
 				// already states for the sibling person-scoped route).
+				// Its producer, GET /api/v1/drilldown/issues' own
+				// default_window entry, is presently declared
+				// baseline-only 503 (StatusDivergenceReason), so no
+				// work_item_id is ever produced -- this entry stays
+				// refused by name (rest_request_id_binding_unresolved),
+				// a standing gap, not a fix to this route's own real
+				// behaviour.
 				Name:                "issue_entity_id_bound_200",
 				Query:               url.Values{"entity_type": {"issue"}},
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
@@ -3439,20 +3486,21 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 			},
 			{
 				// Same live person_id binding as drilldown/prs' own
-				// "drilldown_prs_default" entry above.
+				// "drilldown_prs_default" entry above. The baseline
+				// plane answers HTTP 503 for this request in
+				// production; the candidate answers HTTP 200 with
+				// real data (see StatusDivergenceReason below).
 				Name:                "drilldown_issues_default",
-				WantCandidateStatus: 200, WantBaselineStatus: 200,
-				BodyMode:   RESTBodyModeJSON,
-				Parity:     personDrilldownIssuesParity,
-				IDBindings: []RESTIDBinding{{Producer: "person_id", PathParam: "person_id"}},
-				// Produces provider from this response's own items list
-				// (IssueRow.Provider, drilldownissues.go -- wct.provider,
-				// the same column family flame/aggregated's cycle_breakdown
-				// mode filters on, work_item_state_durations_daily.provider:
-				// both are the provider taxonomy column of the work_item_*
-				// table family, home/metricspec.go's own TableColumns lists
-				// them with the identical column set). Consumed by
-				// flame/aggregated's own provider-scoped entry below.
+				WantCandidateStatus: 200, WantBaselineStatus: 503,
+				StatusDivergenceReason: "CHAOS-5868: the baseline plane answers HTTP 503 for this request in production; the candidate plane answers HTTP 200 with real data; bodies are not compared.",
+				BodyMode:               RESTBodyModeStatusOnly,
+				IDBindings:             []RESTIDBinding{{Producer: "person_id", PathParam: "person_id"}},
+				// Produces declares provider for flame/aggregated's own
+				// cycle_breakdown_provider_scoped entry, but this
+				// request's body is never decoded under BodyMode:
+				// status_only, so the id is never actually extracted --
+				// that consumer stays refused by name
+				// (rest_request_id_binding_unresolved), not hidden.
 				Produces: []RESTIDProducer{{Name: "provider", ListPath: "items", IDField: "provider"}},
 			},
 		},
@@ -3616,7 +3664,21 @@ func ValidateRESTCorpus() error {
 				return fmt.Errorf("goapiproof: REST corpus entry %q request %q sets DedupListPath and DedupKeyFields inconsistently -- both or neither", operation, req.Name)
 			}
 			if len(req.Produces) > 0 && req.BodyMode != RESTBodyModeJSON {
-				return fmt.Errorf("goapiproof: REST corpus entry %q request %q declares Produces with BodyMode %q -- an id can only be extracted from a decoded JSON body", operation, req.Name, req.BodyMode)
+				// The one exception: a request whose baseline is declared
+				// failing (Wants differ, and the CANDIDATE's own want is
+				// 200) may still Produce ids, extracted from the
+				// candidate leg's decoded body instead of the baseline's
+				// -- an id is a request parameter, not evidence compared
+				// between planes, so it is honest to read it from
+				// whichever leg actually answers with a body (see
+				// proveOneRESTRequest's own doc comment in cmd/go-api-
+				// rest-prove/main.go). Every other StatusOnly+Produces
+				// combination stays refused: there is no body to read an
+				// id from at all.
+				isBaselineOnlyFailure := diverges && req.WantCandidateStatus == 200
+				if !isBaselineOnlyFailure {
+					return fmt.Errorf("goapiproof: REST corpus entry %q request %q declares Produces with BodyMode %q -- an id can only be extracted from a decoded JSON body", operation, req.Name, req.BodyMode)
+				}
 			}
 			for _, prod := range req.Produces {
 				if prod.Name == "" {

@@ -1613,3 +1613,141 @@ func TestRunMeasurement_NonTransportErrorMidRunStillWritesAPartialReport(t *test
 		t.Fatalf("report.NotRun = %v, want it to name a request from LATER in RESTRunOrder (e.g. work-units) that never ran", report.NotRun)
 	}
 }
+
+// TestProveOneRESTRequest_StatusOnlyBaselineFailureProducesFromCandidateLeg
+// proves the one exception ValidateRESTCorpus allows (goapiproof/
+// restcorpus.go): a StatusOnly request whose two Want statuses diverge
+// with the CANDIDATE's own want at 200 -- this route's baseline is
+// declared failing in production -- still Produces an id, read from the
+// CANDIDATE leg's decoded body through the real production decoder
+// (DecodeRESTSnapshot), never a hand-built value, since the baseline is
+// declared to carry no usable body at all.
+func TestProveOneRESTRequest_StatusOnlyBaselineFailureProducesFromCandidateLeg(t *testing.T) {
+	const build = "abc123def456"
+	const wantID = "wi-777"
+	candidate := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("x-dev-health-build", build)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"items":[{"work_item_id":"` + wantID + `"}]}`))
+	}))
+	defer candidate.Close()
+	baseline := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"detail":"Data unavailable"}`))
+	}))
+	defer baseline.Close()
+
+	f := flags{queryAPIURL: candidate.URL, pythonAPIURL: baseline.URL, org: "org-1", recordedBy: "chris", reviewEvidence: "test"}
+	spec := goapiproof.RESTEndpointSpec{Method: http.MethodGet, Path: "/api/v1/drilldown/issues"}
+	request := goapiproof.RESTRequest{
+		Name: "default_window", WantCandidateStatus: 200, WantBaselineStatus: 503,
+		StatusDivergenceReason: "constructed for this test",
+		BodyMode:               goapiproof.RESTBodyModeStatusOnly,
+		Produces:               []goapiproof.RESTIDProducer{{Name: "work_item_id", ListPath: "items", IDField: "work_item_id"}},
+	}
+	writer := &fakeReceiptWriter{}
+
+	out, err := proveOneRESTRequest(context.Background(), http.DefaultClient, f, "REST:GET:/api/v1/drilldown/issues", spec, request,
+		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil, false, nil)
+	if err != nil {
+		t.Fatalf("proveOneRESTRequest: %v", err)
+	}
+	if !out.Admitted {
+		t.Fatalf("request refused: %s -- %s", out.Refusal, out.Detail)
+	}
+	if got := out.producedIDs["work_item_id"]; got != wantID {
+		t.Fatalf("producedIDs[work_item_id] = %q, want %q (from the CANDIDATE leg)", got, wantID)
+	}
+	if len(writer.receipts) != 1 || writer.receipts[0].TerminalState != goapiproof.TerminalStateMatch {
+		t.Fatalf("receipts = %+v, want exactly one Match receipt -- a StatusOnly request never compares bodies", writer.receipts)
+	}
+}
+
+// TestProveOneRESTRequest_StatusOnlyBaselineFailureRefusedWhenBaselineRecovers
+// proves the reversal is never silently absorbed: if the baseline this
+// entry declares as failing starts answering the CANDIDATE's own
+// declared status instead, admission refuses by name before this
+// request's Produces logic ever runs, so no id is produced either.
+func TestProveOneRESTRequest_StatusOnlyBaselineFailureRefusedWhenBaselineRecovers(t *testing.T) {
+	const build = "abc123def456"
+	candidate := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("x-dev-health-build", build)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"items":[{"work_item_id":"wi-777"}]}`))
+	}))
+	defer candidate.Close()
+	baseline := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The baseline has recovered: it now answers the CANDIDATE's own
+		// declared 200, not the 503 this entry declares for it.
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"items":[{"work_item_id":"wi-777"}]}`))
+	}))
+	defer baseline.Close()
+
+	f := flags{queryAPIURL: candidate.URL, pythonAPIURL: baseline.URL, org: "org-1", recordedBy: "chris", reviewEvidence: "test"}
+	spec := goapiproof.RESTEndpointSpec{Method: http.MethodGet, Path: "/api/v1/drilldown/issues"}
+	request := goapiproof.RESTRequest{
+		Name: "default_window", WantCandidateStatus: 200, WantBaselineStatus: 503,
+		StatusDivergenceReason: "constructed for this test",
+		BodyMode:               goapiproof.RESTBodyModeStatusOnly,
+		Produces:               []goapiproof.RESTIDProducer{{Name: "work_item_id", ListPath: "items", IDField: "work_item_id"}},
+	}
+	writer := &fakeReceiptWriter{}
+
+	out, err := proveOneRESTRequest(context.Background(), http.DefaultClient, f, "REST:GET:/api/v1/drilldown/issues", spec, request,
+		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil, false, nil)
+	if err != nil {
+		t.Fatalf("proveOneRESTRequest: %v", err)
+	}
+	if out.Admitted || out.Refusal != goapiproof.RESTRefusalUnexpectedStatus {
+		t.Fatalf("out = %+v, want a named RESTRefusalUnexpectedStatus refusal, not an admitted request", out)
+	}
+	if len(out.producedIDs) != 0 {
+		t.Fatalf("producedIDs = %v, want none: a refused request produces nothing", out.producedIDs)
+	}
+	if len(writer.receipts) != 0 {
+		t.Fatalf("wrote %d receipts, want 0 for a refused request", len(writer.receipts))
+	}
+}
+
+// TestProveOneRESTRequest_OrdinaryRequestStillProducesFromBaselineLeg pins
+// the unchanged case: a request whose two Want statuses agree (not the
+// baseline-only-failure shape) still takes its Produces id from the
+// BASELINE leg, exactly as before -- the candidate-leg exception above is
+// scoped to the one divergent shape and must not leak into the ordinary
+// path.
+func TestProveOneRESTRequest_OrdinaryRequestStillProducesFromBaselineLeg(t *testing.T) {
+	const build = "abc123def456"
+	candidate := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("x-dev-health-build", build)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"items":[{"work_item_id":"from-candidate"}]}`))
+	}))
+	defer candidate.Close()
+	baseline := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"items":[{"work_item_id":"from-baseline"}]}`))
+	}))
+	defer baseline.Close()
+
+	f := flags{queryAPIURL: candidate.URL, pythonAPIURL: baseline.URL, org: "org-1", recordedBy: "chris", reviewEvidence: "test"}
+	spec := goapiproof.RESTEndpointSpec{Method: http.MethodGet, Path: "/api/v1/drilldown/issues"}
+	request := goapiproof.RESTRequest{
+		Name: "default_window", WantCandidateStatus: 200, WantBaselineStatus: 200,
+		BodyMode: goapiproof.RESTBodyModeJSON,
+		Produces: []goapiproof.RESTIDProducer{{Name: "work_item_id", ListPath: "items", IDField: "work_item_id"}},
+	}
+	writer := &fakeReceiptWriter{}
+
+	out, err := proveOneRESTRequest(context.Background(), http.DefaultClient, f, "REST:GET:/api/v1/drilldown/issues", spec, request,
+		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil, false, nil)
+	if err != nil {
+		t.Fatalf("proveOneRESTRequest: %v", err)
+	}
+	if !out.Admitted {
+		t.Fatalf("request refused: %s -- %s", out.Refusal, out.Detail)
+	}
+	if got := out.producedIDs["work_item_id"]; got != "from-baseline" {
+		t.Fatalf("producedIDs[work_item_id] = %q, want %q (still the BASELINE leg for an ordinary request)", got, "from-baseline")
+	}
+}

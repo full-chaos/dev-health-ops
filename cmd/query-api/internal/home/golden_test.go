@@ -137,7 +137,7 @@ func orgGoldenHandler(t *testing.T) func(t *testing.T, query string, bindings []
 			}
 			return &fixtureRowScanner{rows: [][]any{{day(2023, 12, 26), 8.0}}}, nil
 
-		case strings.Contains(q, "delta_pct") && strings.Contains(q, "LEFT JOIN previous"):
+		case strings.Contains(q, "delta_pct") && strings.Contains(q, "AS previous ON"):
 			return &fixtureRowScanner{rows: [][]any{{"team-alpha", 10.0, 20.0}}}, nil
 
 		case strings.Contains(q, "FROM recommendations_daily"):

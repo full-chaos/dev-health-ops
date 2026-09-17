@@ -6,9 +6,13 @@
 // filters.scope set to ScopeFilter(level="team", ids=["team-1"]) (team
 // fixture) or ScopeFilter(level="repo", ids=["checkout-service"]) (repo
 // fixture) respectively. The team fixture additionally seeds a real
-// recommendations_daily row (recommendations only fire at team scope)
-// and a resolve_repo_ids_for_teams read that resolves to no repos, so
-// repo-grain metrics stay unscoped for this fixture; the repo fixture
+// recommendations_daily row (recommendations only fire at team scope);
+// team-1 has no matching repos in the captured scenario, so repo-grain
+// metrics stay unscoped for this fixture -- the fake client dispatches
+// purely on a query's column marker, not on its WHERE clause, so this
+// fixture's canned column values answer every repo-grain metric read
+// regardless of the (pushed-down, not a separate round trip) team->repo
+// condition scopeFilterForMetric adds to each one. The repo fixture
 // seeds a resolve_repo_id name-lookup row ("checkout-service" ->
 // "repo-1") and asserts recommendations_daily is never queried at all
 // (the Python guard returns [] before any read runs at that scope).
@@ -28,8 +32,6 @@ func teamGoldenHandler(t *testing.T) func(t *testing.T, query string, bindings [
 	return func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
 		q := query
 		switch {
-		case strings.Contains(q, "FROM user_metrics_daily FINAL") && strings.Contains(q, "SELECT DISTINCT"):
-			return &fixtureRowScanner{}, nil
 		case strings.Contains(q, "FROM recommendations_daily"):
 			return &fixtureRowScanner{rows: [][]any{
 				{

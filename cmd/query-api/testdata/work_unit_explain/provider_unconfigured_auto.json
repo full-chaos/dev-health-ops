@@ -1,0 +1,1 @@
+{"detail":"No LLM provider is configured for auto. Set --llm-provider mock for fixtures/testing, or configure LLM_PROVIDER plus provider credentials such as OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, QWEN_API_KEY/DASHSCOPE_API_KEY, LOCAL_LLM_BASE_URL, OLLAMA_BASE_URL, or OLLAMA_MODEL. | provider=auto | model=none"}

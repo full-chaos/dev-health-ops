@@ -23,23 +23,36 @@ var mockSourceHeaders = map[string]struct{}{"issue": {}, "pr": {}, "commit": {}}
 // branches on CompletionRequest.ResponseFormatName, the explicit
 // discriminator CompletionRequest exists to provide -- the caller already
 // knows which format it asked for, so there is no need to re-derive it by
-// parsing prompt text. A deterministic, dev/test-only stand-in: never a
-// real provider, never a byte-exact parity target the way the
-// prompt/schema ports are, so this file uses Go's plain strings.ToLower
-// for keyword matching rather than a Python-parity fold -- the worst case
-// is a different mock top-category pick for exotic non-ASCII input, which
-// affects no real product path.
+// parsing prompt text. A deterministic, dev/test-only stand-in, never a
+// real provider.
+//
+// The EXPLANATION branch's text is byte-exact against Python's, because a
+// caller puts it on the wire verbatim: the per-work-unit explanation
+// parser (query-api's workunitexplain.parseLLMResponse) finds no markdown
+// section headers in this JSON, falls through to its
+// first-paragraph default, and so returns the whole response text as the
+// explanation's own `summary` field. mockExplanation therefore encodes
+// through pythonparity.MarshalPythonJSONInsertionOrder rather than
+// encoding/json -- key order and `", "`/`": "` separators are observable.
+// The CATEGORIZATION branch has no such caller (its consumer decodes the
+// JSON), which is why this file still uses Go's plain strings.ToLower for
+// that branch's keyword matching rather than a Python-parity fold -- the
+// worst case there is a different mock top-category pick for exotic
+// non-ASCII input, which affects no real product path.
 type MockProvider struct{}
 
 // Complete ports mock.py's MockProvider.complete's two branches:
-// categorization (investment.categorize's only caller today) and
-// investment-mix explanation (CHAOS-4977's future caller). Anything else
+// categorization, and the explanation shape Python returns for every
+// prompt its categorization sniff does not match. Both explanation
+// response formats -- the aggregate investment mix and the per-work-unit
+// narrative -- select that single explanation branch, exactly as Python's
+// own sniff sends both of those prompts down one `else`. Anything else
 // requested falls back to the categorization shape, matching Python's own
-// default branch (its sniff only special-cases the mix-explanation shape;
-// everything else it treats as categorization).
+// default for a prompt that DOES match the categorization sniff.
 func (MockProvider) Complete(_ context.Context, request CompletionRequest) (CompletionResult, error) {
-	if request.ResponseFormatName == investmentMixExplanationResponseFormatName {
-		text, err := mockInvestmentMixExplanation(request.Prompt)
+	if request.ResponseFormatName == investmentMixExplanationResponseFormatName ||
+		request.ResponseFormatName == workUnitExplanationResponseFormatName {
+		text, err := mockExplanation(request.Prompt)
 		if err != nil {
 			return CompletionResult{}, err
 		}
@@ -184,14 +197,20 @@ func containsAny(haystack string, tokens ...string) bool {
 	return false
 }
 
-// mockInvestmentMixExplanation ports mock.py's MockProvider.complete's
+// mockExplanation ports mock.py's MockProvider.complete's
 // non-categorization branch: parse the prompt for an "Evidence Quality:
 // (band)" marker and "  - category: NN.NN%" lines, keep whichever category
 // scores highest (defaulting to feature_delivery.customer at 0.25 if none
 // beats that), and build a canned narrative using only approved
 // probabilistic language ("appears", "leans", "suggests" -- never "is",
 // "was", "detected", "determined").
-func mockInvestmentMixExplanation(prompt string) (string, error) {
+//
+// Both the aggregate investment-mix prompt and the per-work-unit
+// explanation prompt carry the "Evidence Quality: N.NN (band)" line and
+// the "  - category: NN.NN%" investment-vector lines this parses, so one
+// branch serves both -- the same single branch Python's sniff sends them
+// both to.
+func mockExplanation(prompt string) (string, error) {
 	// Python: prompt.split("\n") -- a plain literal-separator split, NOT
 	// splitlines() (the categorization branch below uses splitlines()
 	// instead, via pythonparity.SplitLines -- the two Python methods
@@ -248,26 +267,29 @@ func mockInvestmentMixExplanation(prompt string) (string, error) {
 		dominantTheme = topCategory[:idx]
 	}
 
-	response := map[string]any{
-		"summary": fmt.Sprintf(
+	// Member order is mock.py's response_data literal order, and the
+	// encoder is the json.dumps(value) equivalent -- see MockProvider's own
+	// doc comment for the caller that puts these bytes on the wire verbatim.
+	response := pythonparity.OrderedObject{
+		{Key: "summary", Value: fmt.Sprintf(
 			"Based on the precomputed investment view, this work unit appears to lean toward %s work.",
 			topCategory,
-		),
-		"dominant_themes": []string{dominantTheme},
-		"key_drivers": []string{
+		)},
+		{Key: "dominant_themes", Value: []any{dominantTheme}},
+		{Key: "key_drivers", Value: []any{
 			"Structural evidence appears to contribute most significantly to the categorization.",
 			"Textual phrases appear to align with the investment interpretation.",
-		},
-		"operational_signals": []string{
+		}},
+		{Key: "operational_signals", Value: []any{
 			fmt.Sprintf("Evidence quality bands indicate %s uncertainty.", evidenceQualityBand),
 			"Lower-weight categories may still represent meaningful aspects of the work.",
-		},
-		"confidence_note": fmt.Sprintf(
+		}},
+		{Key: "confidence_note", Value: fmt.Sprintf(
 			"This analysis reflects %s evidence quality. The categorization leans toward %s but may not fully capture the nuanced nature of the work.",
 			evidenceQualityBand, topCategory,
-		),
+		)},
 	}
-	encoded, err := json.Marshal(response)
+	encoded, err := pythonparity.MarshalPythonJSONInsertionOrder(response)
 	if err != nil {
 		return "", err
 	}

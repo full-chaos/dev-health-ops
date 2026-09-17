@@ -8,7 +8,7 @@ import (
 
 // TestCompleteInvestmentMixExplanationMockProviderEndToEnd proves the
 // wiring actually reaches categorize.MockProvider's investment-mix-
-// explanation branch (mockInvestmentMixExplanation) and returns its
+// explanation branch (mockExplanation) and returns its
 // canned, schema-shaped-but-NOT-parser-shaped JSON -- confirmed against
 // investment_mix_validation.py's TOP_LEVEL_KEYS: the mock's real Python
 // response ({"summary", "dominant_themes", "key_drivers",

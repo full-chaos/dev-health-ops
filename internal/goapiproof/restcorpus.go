@@ -3608,10 +3608,13 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 	// GET+POST /api/v1/work-units -- corpus content lives in
 	// workunits_corpus.go (this package); these two lines are the
 	// shared-map registration only.
-	"REST:GET:/api/v1/work-units":     workUnitsGetEndpointSpec,
-	"REST:POST:/api/v1/work-units":    workUnitsPostEndpointSpec,
-	"REST:GET:/api/v1/opportunities":  opportunitiesGetEndpointSpec,
-	"REST:POST:/api/v1/opportunities": opportunitiesPostEndpointSpec,
+	"REST:GET:/api/v1/work-units":  workUnitsGetEndpointSpec,
+	"REST:POST:/api/v1/work-units": workUnitsPostEndpointSpec,
+	// POST /api/v1/work-units/{work_unit_id}/explain -- corpus content lives
+	// in workunitexplain_corpus.go.
+	"REST:POST:/api/v1/work-units/{work_unit_id}/explain": workUnitExplainPostEndpointSpec,
+	"REST:GET:/api/v1/opportunities":                      opportunitiesGetEndpointSpec,
+	"REST:POST:/api/v1/opportunities":                     opportunitiesPostEndpointSpec,
 }
 
 // quadrantOrgRequest builds one of quadrant's four QuadrantDefinitions
@@ -3848,6 +3851,9 @@ var restRunOrder = []string{
 	"REST:POST:/api/v1/home",
 	"REST:GET:/api/v1/work-units",
 	"REST:POST:/api/v1/work-units",
+	// After both work-units entries: its GET default_window is what
+	// produces the live work_unit_id the bound entries here consume.
+	"REST:POST:/api/v1/work-units/{work_unit_id}/explain",
 	"REST:GET:/api/v1/opportunities",
 	"REST:POST:/api/v1/opportunities",
 }

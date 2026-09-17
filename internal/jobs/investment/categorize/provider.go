@@ -75,10 +75,32 @@ func CategorizationRequest(prompt string) CompletionRequest {
 func InvestmentMixExplanationRequest(prompt string) CompletionRequest {
 	return CompletionRequest{
 		Prompt:             prompt,
-		SystemMessage:      investmentMixExplanationSystemMessage,
+		SystemMessage:      explanationSystemMessage,
 		ResponseFormatName: investmentMixExplanationResponseFormatName,
 		JSONSchema:         investmentMixExplanationJSONSchema(),
-		MaxOutputTokens:    investmentMixExplanationMaxOutputTokensFloor,
+		MaxOutputTokens:    explanationMaxOutputTokensFloor,
+	}
+}
+
+// WorkUnitExplanationRequest builds the CompletionRequest for the
+// per-work-unit explanation prompt (llm/explainers/work_unit_explainer.py's
+// build_explanation_prompt). It is the SCHEMA-FREE explanation request:
+// JSONSchema is nil because that prompt carries no
+// DEV_HEALTH_RESPONSE_FORMAT marker (openai.py's _response_format_kind),
+// so Python asks for a bare `{"type": "json_object"}` response and names no
+// schema. Both OpenAIProvider and LocalProvider take their own
+// schema-free branch for a nil JSONSchema and never read
+// ResponseFormatName, so the name below reaches no provider API; it exists
+// to select MockProvider's explanation branch. SystemMessage and the token
+// floor are Python's own defaults for a non-categorization prompt, which
+// is why both are the shared explanation values rather than new ones.
+func WorkUnitExplanationRequest(prompt string) CompletionRequest {
+	return CompletionRequest{
+		Prompt:             prompt,
+		SystemMessage:      explanationSystemMessage,
+		ResponseFormatName: workUnitExplanationResponseFormatName,
+		JSONSchema:         nil,
+		MaxOutputTokens:    explanationMaxOutputTokensFloor,
 	}
 }
 

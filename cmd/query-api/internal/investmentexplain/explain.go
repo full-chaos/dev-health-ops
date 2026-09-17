@@ -536,6 +536,7 @@ func (reader *Reader) ExplainInvestmentMix(ctx context.Context, writer *CacheWri
 		}
 		if record, ok := BuildLLMTokenUsageRecord(TokenUsageInput{
 			OrgID:        opts.OrgID,
+			Source:       "investment_mix_explain",
 			Provider:     resolvedProvider,
 			Model:        &completionModel,
 			InputTokens:  completion.InputTokens,

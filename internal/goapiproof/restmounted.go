@@ -67,6 +67,7 @@ var mountedRESTPaths = []string{
 	"/api/v1/quadrant",                            // GET
 	"/api/v1/sankey",                              // GET, POST
 	"/api/v1/work-units",                          // GET, POST
+	"/api/v1/work-units/{work_unit_id}/explain",   // POST
 }
 
 // MountedRESTPaths returns a fresh, sorted copy of the checked-in mounted

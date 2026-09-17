@@ -43,6 +43,21 @@ func orgResolverFunc(orgSettings llmorgsettings.Resolver) categorize.OrgProvider
 	return orgSettings.ResolveUsableProvider
 }
 
+// ResolveProviderKindForOrg resolves a requested provider name to its kind
+// for this org, taking the llmorgsettings.Resolver a caller already holds
+// instead of the bare categorize.OrgProviderResolver that package speaks.
+// It exists so orgResolverFunc's narrowing stays the one place those two
+// types meet -- a caller outside this package that reached for
+// categorize.ResolveProviderKindForOrg directly would have to repeat it,
+// and a caller that repeated it slightly differently (passing a non-nil
+// resolver wrapper around a nil Resolver, say) would resolve org BYO
+// differently from every other entry point here.
+func ResolveProviderKindForOrg(
+	ctx context.Context, requested, orgID string, orgSettings llmorgsettings.Resolver,
+) (categorize.ProviderKind, error) {
+	return categorize.ResolveProviderKindForOrg(ctx, requested, orgID, orgResolverFunc(orgSettings))
+}
+
 // availabilityFromIsLLMAvailable adapts the org-unaware IsLLMAvailable to
 // AvailabilityFunc's shape (explain.go), for a caller/test with no org
 // context to thread through ExplainInvestmentMix -- IsLLMAvailable takes
@@ -290,6 +305,48 @@ func CompleteInvestmentMixExplanationForOrg(
 	defer func() { _ = provider.Close() }()
 
 	result, err = provider.Complete(ctx, categorize.InvestmentMixExplanationRequest(fullPrompt))
+	if err != nil {
+		return categorize.CompletionResult{}, resolvedProvider, resolvedModel, err
+	}
+	return result, resolvedProvider, resolvedModel, nil
+}
+
+// CompleteWorkUnitExplanationForOrg is CompleteInvestmentMixExplanationForOrg
+// for the per-work-unit explanation prompt. It differs in exactly one
+// expression -- the CompletionRequest constructor -- because the provider
+// resolution, org-BYO model resolution and credential sourcing a
+// per-work-unit explanation needs are the SAME ones the aggregate
+// explanation needs; only the response format differs, and that belongs to
+// the request, not to the resolution. Kept as its own function rather than
+// a format parameter on the existing one so each entry point names exactly
+// one request shape, matching how categorize's own constructors are
+// separate functions rather than one switch.
+func CompleteWorkUnitExplanationForOrg(
+	ctx context.Context, requestedProvider, requestedModel, orgID string,
+	orgSettings llmorgsettings.Resolver, fullPrompt string,
+) (result categorize.CompletionResult, resolvedProvider string, resolvedModel string, err error) {
+	kind, err := categorize.ResolveProviderKindForOrg(ctx, requestedProvider, orgID, orgResolverFunc(orgSettings))
+	if err != nil {
+		return categorize.CompletionResult{}, "", "", err
+	}
+	resolvedProvider = string(kind)
+
+	model, found := ResolveModelNameForOrg(ctx, kind, requestedModel, orgID, orgSettings)
+	resolvedModel = model
+	if !found {
+		resolvedModel = requestedModel
+		if resolvedModel == "" {
+			resolvedModel = resolvedProvider
+		}
+	}
+
+	provider, err := newProviderForOrg(ctx, kind, orgID, model, orgSettings)
+	if err != nil {
+		return categorize.CompletionResult{}, resolvedProvider, resolvedModel, fmt.Errorf("construct llm provider: %w", err)
+	}
+	defer func() { _ = provider.Close() }()
+
+	result, err = provider.Complete(ctx, categorize.WorkUnitExplanationRequest(fullPrompt))
 	if err != nil {
 		return categorize.CompletionResult{}, resolvedProvider, resolvedModel, err
 	}

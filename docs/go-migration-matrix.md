@@ -237,7 +237,7 @@ A row that is live, reachable to real clients (`canary`/`primary`) and carries n
 is required before stage 4/5, and "a bare 200 does not qualify".
 
 <!-- BEGIN GENERATED GO API OPERATIONS -->
-_Rendered 2026-09-16T12:25:30Z against main merge-base `9a0949482a1cc992fb6fd6df2d375a513be95abc`; SDL digest pin `sha256:19485ec136d04de0935717dca8b4f5fd27dd0351fe96b854d40f433229468fd0`; fleet read 2026-09-16T12:25:30Z via fleet file fleet-prod.json._
+_Rendered 2026-09-16T12:25:30Z against main merge-base `0293d516891d479da5807f306ef1474ee50af31c`; SDL digest pin `sha256:19485ec136d04de0935717dca8b4f5fd27dd0351fe96b854d40f433229468fd0`; fleet read 2026-09-16T12:25:30Z via fleet file fleet-prod.json._
 
 _Rows in `go_api_proof_run` at read time: **515**. Operations reachable to real clients with no deployed-executed proof: **0**. Rows whose mode says Go but whose schema digest no longer matches the pin, so every request silently falls back to Python: **0**._
 
@@ -281,7 +281,7 @@ sync with either side, so a route added, removed or newly wired on either plane 
 time the tool runs, and the doc-drift check below fails until it is re-rendered.
 
 <!-- BEGIN GENERATED REST ENDPOINTS -->
-_32 `/api/v1/*` routes in `src/dev_health_ops/api/main.py`: **31** ported, **1** python-only, **0** dead-by-design._
+_32 `/api/v1/*` routes in `src/dev_health_ops/api/main.py`: **32** ported, **0** python-only, **0** dead-by-design._
 
 | Method | Path | Status | Go handler |
 | --- | --- | --- | --- |
@@ -316,7 +316,7 @@ _32 `/api/v1/*` routes in `src/dev_health_ops/api/main.py`: **31** ported, **1**
 | POST | `/api/v1/sankey` | ported | `cmd/query-api/sankey_route.go:80` |
 | GET | `/api/v1/work-units` | ported | `cmd/query-api/workunits_route.go:110` |
 | POST | `/api/v1/work-units` | ported | `cmd/query-api/workunits_route.go:110` |
-| POST | `/api/v1/work-units/{work_unit_id}/explain` | python-only | -- |
+| POST | `/api/v1/work-units/{work_unit_id}/explain` | ported | `cmd/query-api/workunit_explain_route.go:79` |
 <!-- END GENERATED REST ENDPOINTS -->
 
 ## SYNC

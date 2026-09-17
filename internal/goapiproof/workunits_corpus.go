@@ -95,6 +95,13 @@ var workUnitsGetEndpointSpec = RESTEndpointSpec{
 			Name:                "default_window",
 			WantCandidateStatus: 200, WantBaselineStatus: 200,
 			BodyMode: RESTBodyModeJSON, Parity: workUnitsParity,
+			// Produces the work_unit_id that POST
+			// /api/v1/work-units/{work_unit_id}/explain's own bound entries
+			// consume. This response is a bare JSON array of work-unit
+			// records, so there is no ListPath to walk -- the array IS the
+			// decoded body -- and work_unit_id is already a bare string on
+			// the wire, so no JoinField is needed either.
+			Produces: []RESTIDProducer{{Name: "work_unit_id", IDField: "work_unit_id"}},
 		},
 		{
 			Name:                "range_days_90",

@@ -1,0 +1,48 @@
+{
+  "operation": "capacityForecast",
+  "document_digest": "b4fb8f075aba9954714f10f7f4451242d969548d6392d778dae1177759f80780",
+  "mode": "canary",
+  "executed": true,
+  "admitted": true,
+  "route": "edge",
+  "edge_build_binding": "per_request",
+  "terminal_state": "mismatch",
+  "findings": [
+    {
+      "kind": "mismatch",
+      "path": "$.data.capacityForecast.p85Date",
+      "detail": "2026-09-20 != 2026-09-21",
+      "shape": "value"
+    },
+    {
+      "kind": "mismatch",
+      "path": "$.data.capacityForecast.p85Days",
+      "detail": "3 != 4 (Tier A, exact integer)",
+      "shape": "value"
+    }
+  ],
+  "differences_outside_baseline_defect": 2,
+  "outside_by_shape": {
+    "value": 2
+  },
+  "candidate": {
+    "status_code": 200,
+    "plane": "go",
+    "build": "d97abf74e6d20194446b30c19e7013a44306b4aa",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body_ref": "file:///tmp/proof/bodies/733c9435e39a45194d36db595b3aa2b37f4bf179fe5c2ed1344986a1984ad187.json",
+    "elapsed_ns": 168542225
+  },
+  "baseline": {
+    "status_code": 200,
+    "plane": "python",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body_ref": "file:///tmp/proof/bodies/34263e6e9276f1a4da2876dba73ef0c449c2acaf93d0ecb07c4b9ff51d45c0be.json",
+    "elapsed_ns": 125494134
+  },
+  "receipt_written": true
+}

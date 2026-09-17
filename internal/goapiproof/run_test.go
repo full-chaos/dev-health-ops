@@ -274,7 +274,16 @@ func TestRunTreatsAStatusCodeDifferenceAsAMismatch(t *testing.T) {
 
 // A declared exclusion that matched nothing invalidates the verdict: the
 // comparison that ran is not the comparison anybody declared.
+//
+// capacityForecast's parity is narrowed to its volatile fields alone: its
+// stochastic leaf class names fields this one-field document does not
+// select, and would be refused first for that reason.
 func TestRunRefusesOnAStaleDeclaredExclusion(t *testing.T) {
+	spec, err := SpecFor("capacityForecast")
+	if err != nil {
+		t.Fatalf("SpecFor: %v", err)
+	}
+	withOverriddenParity(t, "capacityForecast", Options{VolatileFields: spec.Parity.VolatileFields})
 	body := `{"data":{"capacityForecast":{"backlogSize":8}}}`
 	edge := &fakeEdge{goBody: body, pythonBody: body}
 	runner := newRunner(t, edge, "canary")

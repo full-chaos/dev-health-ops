@@ -310,6 +310,19 @@ type Result struct {
 	// that failed to overlap, or the body-size ratio, so a reader does
 	// not have to reproduce the run to see why.
 	StructuralDetail string `json:"structural_detail,omitempty"`
+
+	// StochasticLeafCitation is set when Options.StochasticLeaves applied
+	// and described the response: the covered leaves were NOT compared by
+	// value, so the terminal state is mismatch and never match, and a
+	// receipt carries this string in its baseline_defect array. Empty
+	// otherwise.
+	StochasticLeafCitation string `json:"stochastic_leaf_class,omitempty"`
+
+	// StochasticLeafRefusals names every way Options.StochasticLeaves did
+	// not describe this comparison: an invalid declaration, a covered path
+	// that crosses a list or ends on a container, or a path neither plane
+	// carries. The caller fails the run on a non-empty value.
+	StochasticLeafRefusals []string `json:"stochastic_leaf_refusals,omitempty"`
 }
 
 // IsMatch reports whether the verdict is a clean match.
@@ -413,6 +426,12 @@ type Options struct {
 	// underlying data source has no order guarantee. See
 	// OrderInsensitiveList.
 	OrderInsensitiveLists []OrderInsensitiveList
+
+	// StochasticLeaves names leaves whose values are drawn per request and
+	// are therefore checked for type, order and date offset instead of
+	// compared across planes. nil for every operation that does not draw
+	// its answer. See StochasticLeafClass.
+	StochasticLeaves *StochasticLeafClass
 }
 
 // OrderInsensitiveList declares that a list at Path must be compared by
@@ -710,18 +729,6 @@ func Compare(baseline, candidate Snapshot, opts Options) Result {
 	// Neither side present: two responses that never reached execution.
 	// Absence on both sides is not itself a finding.
 
-	terminal := TerminalStateMatch
-	for _, f := range findings {
-		if f.Kind == FindingMismatch {
-			terminal = TerminalStateMismatch
-			break
-		}
-	}
-
-	result := Result{TerminalState: terminal, Findings: findings}
-	result.UnusedExclusions = unmatched(opts.VolatileFields, track.volatile)
-	result.UnusedTierB = unmatched(opts.FloatTierB, track.tierB)
-	result.UndeclaredNumericLeaves = sortedSet(track.undeclaredNumeric)
 	var baselineData, candidateData any
 	if baseline.DataPresent {
 		baselineData = baseline.Data
@@ -729,7 +736,47 @@ func Compare(baseline, candidate Snapshot, opts Options) Result {
 	if candidate.DataPresent {
 		candidateData = candidate.Data
 	}
+
+	// Applied before the terminal state is decided: it turns drawn-value
+	// differences on the named leaves into observations and adds its own
+	// per-plane check findings as mismatches.
+	var stochasticCovered int
+	var stochasticRefusals []string
+	if opts.StochasticLeaves != nil {
+		if err := validateStochasticLeafClass(opts); err != nil {
+			stochasticRefusals = []string{err.Error()}
+		} else {
+			findings, stochasticCovered, stochasticRefusals = applyStochasticLeafClass(opts.StochasticLeaves, baselineData, candidateData, findings)
+		}
+	}
+
+	terminal := TerminalStateMatch
+	for _, f := range findings {
+		if f.Kind == FindingMismatch {
+			terminal = TerminalStateMismatch
+			break
+		}
+	}
+	// A class that applied left its leaves uncompared, so equality over the
+	// whole response was not established: the verdict is mismatch even when
+	// the draws happened to agree, and the citation says why.
+	stochasticApplied := opts.StochasticLeaves != nil && len(stochasticRefusals) == 0
+	if stochasticApplied {
+		terminal = TerminalStateMismatch
+	}
+
+	result := Result{TerminalState: terminal, Findings: findings}
+	result.UnusedExclusions = unmatched(opts.VolatileFields, track.volatile)
+	result.UnusedTierB = unmatched(opts.FloatTierB, track.tierB)
+	result.UndeclaredNumericLeaves = sortedSet(track.undeclaredNumeric)
 	classifyBaselineDefects(&result, opts.BaselineDefects, baselineData, candidateData)
+	result.StochasticLeafRefusals = stochasticRefusals
+	if stochasticApplied {
+		result.StochasticLeafCitation = opts.StochasticLeaves.Citation()
+		if stochasticCovered > 0 {
+			result.CoveredByShape[ShapeStochasticLeaf] = stochasticCovered
+		}
+	}
 
 	declaredOrderInsensitive := make(map[string]string, len(opts.OrderInsensitiveLists))
 	for _, decl := range opts.OrderInsensitiveLists {

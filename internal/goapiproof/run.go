@@ -97,6 +97,15 @@ const (
 	// non-null leaves: an empty result on both sides is not evidence the
 	// two planes agree, because the comparison found nothing to check.
 	RefusalVacuousEmptyLegs = "vacuous_empty_legs"
+
+	// RefusalInvalidStochasticLeafClass: a declared StochasticLeafClass is
+	// malformed, overlaps another declaration, or names a path the
+	// registered document does not select as a leaf. No request is sent.
+	RefusalInvalidStochasticLeafClass = "declared_stochastic_leaf_class_is_invalid"
+	// RefusalStochasticLeafClassUnfit: a declared StochasticLeafClass does
+	// not describe the responses -- a covered path crosses a list, ends on
+	// a container, or is carried by neither plane.
+	RefusalStochasticLeafClassUnfit = "declared_stochastic_leaf_class_does_not_describe_the_response"
 )
 
 // Measurement routes. Recorded on every receipt so a proof-route
@@ -272,9 +281,15 @@ type Outcome struct {
 	// "unbound_edge").
 	CoveredByShape map[string]int `json:"covered_by_shape,omitempty"`
 	OutsideByShape map[string]int `json:"outside_by_shape,omitempty"`
-	Candidate      *Observation   `json:"candidate,omitempty"`
-	Baseline       *Observation   `json:"baseline,omitempty"`
-	ReceiptWritten bool           `json:"receipt_written"`
+	// ProvenUnder is ProvenUnderStochasticLeafClass when the measurement's
+	// only departures from equality are the drawn values of a declared
+	// StochasticLeafClass and nothing lies outside a citation. Empty for an
+	// operation proven by equality or not proven at all, so a reader can
+	// always tell the two kinds of proof apart.
+	ProvenUnder    string       `json:"proven_under,omitempty"`
+	Candidate      *Observation `json:"candidate,omitempty"`
+	Baseline       *Observation `json:"baseline,omitempty"`
+	ReceiptWritten bool         `json:"receipt_written"`
 }
 
 // sealedOutcome is what a measurement ACTUALLY established, captured by
@@ -348,7 +363,11 @@ type Summary struct {
 	StaleRoutingRows int            `json:"stale_routing_rows"`
 	ReceiptsWritten  int            `json:"receipts_written"`
 	ByTerminalState  map[string]int `json:"by_terminal_state"`
-	ByRefusalReason  map[string]int `json:"by_refusal_reason"`
+	// ProvenUnderStochasticLeafClass counts executed outcomes whose
+	// ProvenUnder is ProvenUnderStochasticLeafClass. Serialised even when
+	// zero.
+	ProvenUnderStochasticLeafClass int            `json:"proven_under_stochastic_leaf_class"`
+	ByRefusalReason                map[string]int `json:"by_refusal_reason"`
 }
 
 // RegistryView is what the RUNNING query-api reports about itself.
@@ -494,6 +513,9 @@ func (r *Runner) Run(ctx context.Context) ([]Outcome, Summary, error) {
 		if outcome.Executed {
 			summary.Executed++
 			summary.ByTerminalState[outcome.TerminalState]++
+			if outcome.ProvenUnder == ProvenUnderStochasticLeafClass {
+				summary.ProvenUnderStochasticLeafClass++
+			}
 		} else {
 			summary.Refused++
 			if outcome.RefusalReason == "" {
@@ -770,6 +792,9 @@ func (r *Runner) proveRequest(ctx context.Context, operation string, variantName
 	if !ok {
 		return refuse(RefusalDocumentDigestDrift, "this checkout enumerates no document for the operation the running process registers")
 	}
+	if err := ValidateStochasticLeafClassAgainstDocument(parity, document); err != nil {
+		return refuse(RefusalInvalidStochasticLeafClass, err.Error())
+	}
 
 	// The candidate leg's URL is decided by the operation's MODE, because
 	// the production route switch admits canary/primary only
@@ -930,11 +955,22 @@ func (r *Runner) proveRequest(ctx context.Context, operation string, variantName
 		// be built, so nothing here can stand as a verdict either.
 		return refuse(RefusalOrderInsensitiveListKeyMissing, fmt.Sprintf("order-insensitive list comparison could not pair elements: %v", result.OrderInsensitiveListRefusals))
 	}
+	if len(result.StochasticLeafRefusals) > 0 {
+		return refuse(RefusalStochasticLeafClassUnfit, fmt.Sprintf("declared stochastic leaf class does not describe these responses: %v", result.StochasticLeafRefusals))
+	}
 
 	outcome.Executed = true
 	outcome.TerminalState = result.TerminalState
 	outcome.Findings = result.Findings
 	outcome.BaselineDefects = result.BaselineDefectsMatched
+	if result.StochasticLeafCitation != "" {
+		// The class citation rides in the same array as the baseline-defect
+		// tickets, prefixed so the row says which one it is. This is what
+		// makes a class-proven receipt admissible to `enable`: the
+		// predicate's cited-mismatch arm (EnablementProofClause) admits a
+		// mismatch with a non-blank citation and nothing outside it.
+		outcome.BaselineDefects = append(append([]string(nil), result.BaselineDefectsMatched...), result.StochasticLeafCitation)
+	}
 	outcome.DifferencesOutsideBaselineDefect = result.DifferencesOutsideBaselineDefect
 	outcome.CoveredByShape = copyCounts(result.CoveredByShape)
 	outcome.OutsideByShape = copyCounts(result.OutsideByShape)
@@ -1056,6 +1092,12 @@ func (r *Runner) proveRequest(ctx context.Context, operation string, variantName
 			outcome.DifferencesOutsideBaselineDefect++
 			countOutside("unbound_edge")
 		}
+	}
+	// Decided after every adjustment above, so an HTTP or binding
+	// difference keeps the operation from reading as class-proven.
+	if result.StochasticLeafCitation != "" && outcome.TerminalState == TerminalStateMismatch &&
+		outcome.DifferencesOutsideBaselineDefect == 0 {
+		outcome.ProvenUnder = ProvenUnderStochasticLeafClass
 	}
 	// Sealed LAST, from whatever the run concluded after every adjustment
 	// above. Assigning any exported field afterwards changes the report

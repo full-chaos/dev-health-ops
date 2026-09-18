@@ -62,6 +62,36 @@ var workUnitExplainParity = Options{
 // restRunOrder.
 var workUnitExplainLiveUnit = []RESTIDBinding{{Producer: "work_unit_id", PathParam: "work_unit_id"}}
 
+// workUnitExplainRepoScopedLiveUnit binds scope_id to the same live
+// repo_id GET /api/v1/work-units' own repo_scoped entry narrowed to, and
+// work_unit_id to a unit THAT SAME repo_scoped entry actually returned
+// (its own work_unit_id_repo_scoped producer, workunits_corpus.go) --
+// unlike workUnitExplainLiveUnit's own org-scope unit, guaranteed inside
+// the bound repository, so the scoped resolver's read actually reaches
+// it instead of 404ing before ever touching real data.
+var workUnitExplainRepoScopedLiveUnit = []RESTIDBinding{
+	{Producer: "repo_id", QueryParam: "scope_id"},
+	{Producer: "work_unit_id_repo_scoped", PathParam: "work_unit_id"},
+}
+
+// workUnitExplainTeamScopedLiveUnit is the team-scope twin. Both
+// producers are read from GET /api/v1/work-units' own team_scoped
+// entry's BASELINE leg (that request's own WantBaselineStatus equals its
+// WantCandidateStatus, 200/200 -- not a declared-differing-baseline
+// entry, so restidbind.go's own default "read the baseline leg" rule
+// applies, same as workunits_corpus.go's own doc comment on this
+// producer states). That baseline leg intermittently times out in
+// production: when it does, GET /api/v1/work-units' own team_scoped
+// request is never admitted, so team_id/work_unit_id_team_scoped are
+// simply absent from that run's own produced map -- this entry's own
+// IDBindings then resolve nothing and it is refused BY NAME,
+// RESTRefusalIDBindingUnresolved (ResolveRESTIDBindings' own doc
+// comment), never silently skipped.
+var workUnitExplainTeamScopedLiveUnit = []RESTIDBinding{
+	{Producer: "team_id", QueryParam: "scope_id"},
+	{Producer: "work_unit_id_team_scoped", PathParam: "work_unit_id"},
+}
+
 var workUnitExplainPostEndpointSpec = RESTEndpointSpec{
 	Method: "POST",
 	Path:   "/api/v1/work-units/{work_unit_id}/explain",
@@ -107,6 +137,33 @@ var workUnitExplainPostEndpointSpec = RESTEndpointSpec{
 			BodyMode:   RESTBodyModeJSON,
 			Parity:     workUnitExplainParity,
 			IDBindings: workUnitExplainLiveUnit,
+		},
+		{
+			// repo scope reaching a REAL explanation (not the vacuous
+			// repo_scoped_absent_work_unit 404 below): scope_id and
+			// work_unit_id are both bound from GET /api/v1/work-units'
+			// own repo_scoped entry, so the bound unit is guaranteed
+			// inside the bound repository and the scoped read actually
+			// reaches it.
+			Name:                "repo_scoped_live_work_unit",
+			Query:               url.Values{"llm_provider": {"mock"}, "scope_type": {"repo"}},
+			WantCandidateStatus: 200, WantBaselineStatus: 200,
+			BodyMode:   RESTBodyModeJSON,
+			Parity:     workUnitExplainParity,
+			IDBindings: workUnitExplainRepoScopedLiveUnit,
+		},
+		{
+			// team scope, the team-scope twin of repo_scoped_live_work_unit
+			// above. Timeout raised for the same reason GET /api/v1/
+			// work-units' own team_scoped entry raises it: the producer
+			// this binds to comes from that same slow read.
+			Name:                "team_scoped_live_work_unit",
+			Query:               url.Values{"llm_provider": {"mock"}, "scope_type": {"team"}},
+			WantCandidateStatus: 200, WantBaselineStatus: 200,
+			BodyMode:   RESTBodyModeJSON,
+			Parity:     workUnitExplainParity,
+			IDBindings: workUnitExplainTeamScopedLiveUnit,
+			Timeout:    180 * time.Second,
 		},
 		{
 			// The not-found body interpolates the caller's own id, so this

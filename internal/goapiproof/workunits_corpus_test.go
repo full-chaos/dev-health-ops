@@ -133,3 +133,63 @@ func TestWorkUnitsTeamScopedFixtures_DecodeAsJSONArrays(t *testing.T) {
 		}
 	}
 }
+
+// TestWorkUnitsScopedEntries_ProduceAWorkUnitIDInsideTheirOwnScope pins the
+// corpus-level fix for POST /api/v1/work-units/{work_unit_id}/explain's own
+// vacuous scope coverage: GET /api/v1/work-units' own repo_scoped/
+// team_scoped entries each declare a Produces entry (work_unit_id_repo_
+// scoped/work_unit_id_team_scoped) alongside their existing scope_id
+// IDBinding, and each producer actually extracts a work_unit_id from a
+// body shaped like this route's own bare JSON array of work-unit records
+// -- the same array default_window's own work_unit_id producer already
+// reads.
+func TestWorkUnitsScopedEntries_ProduceAWorkUnitIDInsideTheirOwnScope(t *testing.T) {
+	spec, err := SpecForREST("REST:GET:/api/v1/work-units")
+	if err != nil {
+		t.Fatalf("SpecForREST(REST:GET:/api/v1/work-units): %v", err)
+	}
+	for _, tc := range []struct {
+		request      string
+		producerName string
+	}{
+		{"repo_scoped", "work_unit_id_repo_scoped"},
+		{"team_scoped", "work_unit_id_team_scoped"},
+	} {
+		t.Run(tc.request, func(t *testing.T) {
+			var req *RESTRequest
+			for i := range spec.Requests {
+				if spec.Requests[i].Name == tc.request {
+					req = &spec.Requests[i]
+				}
+			}
+			if req == nil {
+				t.Fatalf("GET /api/v1/work-units has no %q entry", tc.request)
+			}
+			var producer RESTIDProducer
+			found := false
+			for _, p := range req.Produces {
+				if p.Name == tc.producerName {
+					producer, found = p, true
+				}
+			}
+			if !found {
+				t.Fatalf("%s does not declare a %q producer", tc.request, tc.producerName)
+			}
+			if producer.IDField != "work_unit_id" || producer.ListPath != "" {
+				t.Fatalf("%s producer = %+v, want IDField=work_unit_id ListPath=\"\" (a bare JSON array, same shape as default_window's own work_unit_id producer)", tc.request, producer)
+			}
+
+			bodyShaped := `[{"work_unit_id": "wu-live-42", "work_unit_type": "pr"}]`
+			snap := restSnapshotFromJSON(t, bodyShaped)
+			id, ok := ExtractRESTID(snap.Data, producer)
+			if !ok || id != "wu-live-42" {
+				t.Fatalf("ExtractRESTID = (%q, %v), want (\"wu-live-42\", true) against a real work-units-shaped bare array", id, ok)
+			}
+
+			empty := restSnapshotFromJSON(t, `[]`)
+			if _, ok := ExtractRESTID(empty.Data, producer); ok {
+				t.Fatalf("ExtractRESTID succeeded against an empty %s list, want false", tc.request)
+			}
+		})
+	}
+}

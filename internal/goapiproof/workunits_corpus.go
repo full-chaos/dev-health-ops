@@ -283,6 +283,22 @@ var workUnitsGetEndpointSpec = RESTEndpointSpec{
 			Parity:     workUnitsTeamScopedParity,
 			IDBindings: []RESTIDBinding{{Producer: "team_id", QueryParam: "scope_id"}},
 			Timeout:    180 * time.Second,
+			// Produces work_unit_id_team_scoped from this response's
+			// own bare JSON array of team-scoped work-unit records --
+			// the same shape as default_window's own work_unit_id
+			// producer above, just narrowed to this scope. Read from
+			// this request's BASELINE leg (WantBaselineStatus equals
+			// WantCandidateStatus: 200/200, not a declared-differing-
+			// baseline entry, so restidbind.go's own default rule
+			// applies). That baseline leg intermittently times out in
+			// production; when it does, this request is never admitted
+			// and work_unit_id_team_scoped is simply absent from a
+			// later run's own produced map -- a consumer bound to it
+			// then refuses by name (RESTRefusalIDBindingUnresolved),
+			// never silently skipped. Consumed by POST /api/v1/
+			// work-units/{work_unit_id}/explain's own
+			// team_scoped_live_work_unit entry.
+			Produces: []RESTIDProducer{{Name: "work_unit_id_team_scoped", IDField: "work_unit_id"}},
 		},
 		{
 			// repo scope, scope_id bound to filters/options' own live
@@ -293,6 +309,14 @@ var workUnitsGetEndpointSpec = RESTEndpointSpec{
 			BodyMode:   RESTBodyModeJSON,
 			Parity:     workUnitsParity,
 			IDBindings: []RESTIDBinding{{Producer: "repo_id", QueryParam: "scope_id"}},
+			// Produces work_unit_id_repo_scoped -- the repo-scope twin
+			// of team_scoped's own producer above, read from the same
+			// BASELINE leg for the same reason. This route's repo
+			// scope carries no known intermittent-timeout mechanism,
+			// unlike its team-scoped sibling. Consumed by POST
+			// /api/v1/work-units/{work_unit_id}/explain's own
+			// repo_scoped_live_work_unit entry.
+			Produces: []RESTIDProducer{{Name: "work_unit_id_repo_scoped", IDField: "work_unit_id"}},
 		},
 		{
 			// include_textual=false skips the quotes fetch entirely

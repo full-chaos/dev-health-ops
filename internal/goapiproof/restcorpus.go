@@ -1420,6 +1420,19 @@ var heatmapActiveHoursParity = Options{
 // where that route's own node-level coverage is declared. Reasoning from
 // THIS struct's field default to THAT route's wire behaviour would
 // produce exactly the wrong declaration.
+//
+// maxHotspotRowsCorpus mirrors maxHotspotRows (sankey.go:97) and
+// MAX_HOTSPOT_ROWS (services/sankey.py:59) -- neither package is
+// importable from here (sankey.go's constant is unexported inside
+// cmd/query-api/internal/sankey, and this package never imports a cmd
+// tree), so HotspotListBoundaryShape's own Limit field is set from this
+// mirrored value rather than the source constant directly. Hotspot's own
+// query params carry no limit field on either plane (established from
+// source: services/sankey.py's own _build_hotspot_flow never reads
+// filters.limit), so this is the route's one fixed value, never a
+// per-request override.
+const maxHotspotRowsCorpus = 150
+
 var sankeyRepoDedupParity = Options{
 	OrderInsensitiveLists: []OrderInsensitiveList{
 		{
@@ -1465,6 +1478,53 @@ var sankeyRepoDedupParity = Options{
 	IntegerLeaves: map[string]string{
 		"data.links.value": "hotspot mode's own CAST(sum(metrics.churn) AS Float64) (sankey/queries.go fetchHotspotRows) over the UInt32 churn column -- a bare integer sum, cast to float64 only so the driver can scan it.",
 	},
+}
+
+// sankeyHotspotParity extends sankeyRepoDedupParity with hotspot mode's
+// own two-level consequence of the SAME repos-join fan-out:
+// fetch_hotspot_rows/fetchHotspotRows (queries.go:401-478, api/queries/
+// sankey.py:136-208) both GROUP BY repo, directory, file_path, ORDER BY
+// churn DESC and LIMIT maxHotspotRows/MAX_HOTSPOT_ROWS (sankey.go:97,
+// services/sankey.py:59) identically -- never a per-request override,
+// hotspot's own query params carry no limit field. A value-multiplying
+// row from the sibling SankeyRepoFanoutShape entry can (a) cross that
+// file-list boundary, the same rank-displacement LimitDisplacementShape
+// (limitdisplacement.go) admits for a flat list, and (b) shift a
+// repo->directory parent link's own value, which _build_hotspot_flow/
+// buildHotspotFlow (services/sankey.py:513-532, sankey/builders.go:
+// 230-249) build as the SUM of every LISTED file's own churn under that
+// directory -- a consequence a flat list has no parent to produce. This
+// is the ONLY route in this file whose sankey response carries that
+// second, hierarchical level, so this extension is kept OFF
+// sankeyRepoDedupParity itself (and therefore off sankeyInvestmentParity
+// below, which inherits from it): investment mode's own nodes never
+// carry a "directory"/"file" group (services/sankey.py's own
+// _build_investment_flow touches only "initiative"/"project"), so the
+// shape would find nothing to reconstruct there and admit nothing --
+// harmless, but a defect entry that can never fire on a route it is
+// nominally attached to is exactly the kind of stale-looking citation
+// this package's own liveUnexplainedDefects accounting exists to flag,
+// so it is scoped to hotspot's own Parity instead. Go is correct.
+var sankeyHotspotParity = Options{
+	OrderInsensitiveLists: sankeyRepoDedupParity.OrderInsensitiveLists,
+	BaselineDefects: append(append([]BaselineDefect{}, sankeyRepoDedupParity.BaselineDefects...), BaselineDefect{
+		Ticket:             "CHAOS-5803",
+		Reason:             "the SAME unmerged repos row the sibling SankeyRepoFanoutShape entry above declares also moves which files rank inside hotspot's own bounded, value-DESC list, and shifts a repo->directory parent link's own value by the leaving/entering files' contribution plus the fan-out's own inflation of the children still shared by both legs -- see HotspotListBoundaryShape's own doc comment (hotspotlistboundary.go) for the full derivation. Go is correct.",
+		Paths:              []string{"data.links", "data.nodes"},
+		Intermittent:       true,
+		IntermittentReason: "present only while repos holds an unmerged physical version inside the requested window AND the affected repository has a file close enough to hotspot's own list boundary to cross it; a comparison taken after the next background merge, or with no such boundary crossing, shows no divergence",
+		HotspotListBoundaryShape: &HotspotListBoundaryShape{
+			NodesListPath:      "data.nodes",
+			LinksListPath:      "data.links",
+			LinkValuePath:      "data.links.value",
+			RepoNodeGroup:      "repo",
+			DirectoryNodeGroup: "directory",
+			FileNodeGroup:      "file",
+			Limit:              maxHotspotRowsCorpus,
+		},
+	}),
+	NumericLeavesDeclared: sankeyRepoDedupParity.NumericLeavesDeclared,
+	IntegerLeaves:         sankeyRepoDedupParity.IntegerLeaves,
 }
 
 // sankeyInvestmentParity extends sankeyRepoDedupParity with the
@@ -2557,7 +2617,7 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				Name:                "hotspot_org",
 				Query:               url.Values{"mode": {"hotspot"}},
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
-				BodyMode: RESTBodyModeJSON, Parity: sankeyRepoDedupParity,
+				BodyMode: RESTBodyModeJSON, Parity: sankeyHotspotParity,
 			},
 			{
 				// scope_type=repo, scope_id bound to filters/options' own
@@ -2568,7 +2628,7 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				Query:               url.Values{"mode": {"hotspot"}, "scope_type": {"repo"}},
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
 				BodyMode:   RESTBodyModeJSON,
-				Parity:     sankeyRepoDedupParity,
+				Parity:     sankeyHotspotParity,
 				IDBindings: []RESTIDBinding{{Producer: "repo_id", QueryParam: "scope_id"}},
 			},
 			{
@@ -2622,7 +2682,7 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				Name:                "hotspot_org",
 				Body:                map[string]any{"mode": "hotspot", "filters": map[string]any{}},
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
-				BodyMode: RESTBodyModeJSON, Parity: sankeyRepoDedupParity,
+				BodyMode: RESTBodyModeJSON, Parity: sankeyHotspotParity,
 			},
 			{
 				// Confirmed live shape (pydantic_validation_error.go): a

@@ -120,12 +120,50 @@ var workUnitsParity = Options{
 // structurally distinguishable here.
 var workUnitsTeamScopeSubsetDefect = BaselineDefect{
 	Ticket: "CHAOS-5920",
-	Reason: "GET/POST /api/v1/work-units' team scope resolves a team's repositories from team_repo_ownership through one shared condition (cmd/query-api/internal/teamscope.RepoCondition), while the reference plane resolves the same scope from user_metrics_daily.team_id (resolve_repo_ids_for_teams, api/queries/scopes.py) -- a per-author-attribution table, not a repository-ownership one. For a genuinely narrower team the candidate's list is therefore a subset of the baseline's own organization-wide list: every unit the candidate returns is also in the baseline's list, under the same work_unit_id, with identical work_unit_type/work_unit_name/time_range/effort/investment/evidence_quality/evidence -- none of which this route's own assembly resums across a repository set (see this var's own doc comment). Go is correct.",
+	Reason: "GET/POST /api/v1/work-units' team scope resolves a team's repositories from team_repo_ownership through one shared condition (cmd/query-api/internal/teamscope.RepoCondition), while the reference plane resolves the same scope from user_metrics_daily.team_id (resolve_repo_ids_for_teams, api/queries/scopes.py) -- a per-author-attribution table, not a repository-ownership one. For a genuinely narrower team the candidate's list is therefore a subset of the baseline's own organization-wide list: every unit the candidate returns is also in the baseline's list, under the same work_unit_id, with identical work_unit_type/work_unit_name/time_range/effort/investment/evidence_quality -- none of which this route's own assembly resums across a repository set (see this var's own doc comment). evidence is intrinsic the same way but is not named below (see EqualLeaves' own doc comment on this declaration): Go is correct.",
 	Paths:  []string{"data"},
 	TeamRepoSubsetShape: &TeamRepoSubsetShape{
-		ListPath:    "data",
-		KeyFields:   []string{"work_unit_id"},
-		EqualLeaves: []string{"work_unit_type", "work_unit_name", "time_range", "effort", "investment", "evidence_quality", "evidence"},
+		ListPath:  "data",
+		KeyFields: []string{"work_unit_id"},
+		// evidence is deliberately NOT named here, unlike every other
+		// intrinsic per-unit field this var's own Reason lists: one of
+		// its own leaves, evidence.contextual[].span_days, is exactly
+		// workUnitsFloats' own declared Tier B leaf ("data.evidence.
+		// contextual.span_days", this file's own workUnitsFloats var
+		// above) -- a genuinely different float computation per plane
+		// (toTS.Sub(fromTS).Hours()/24 vs Python's (to_ts-from_ts).
+		// total_seconds()/86400.0) that the route's own
+		// NumericLeavesDeclared/FloatTierB tolerance already admits
+		// everywhere else in this comparison, wire-encoded as a STRING
+		// (not a JSON number). subsetValueEqual (teamreposubset.go) has
+		// no such tolerance -- it compares a string leaf byte for byte --
+		// so naming "evidence" here would refuse this shape's own WHOLE
+		// plan on a difference the rest of this comparison already
+		// admits as expected, for every matched pair whose span_days
+		// happens to differ past the last few digits (most of them, in
+		// practice). Confirmed against this route's own captured
+		// team_scoped evidence: every one of that capture's EqualLeaves
+		// disagreements was this exact leaf, none of them a genuine
+		// work_unit_type/work_unit_name/time_range/effort/investment/
+		// evidence_quality/evidence.textual/evidence.structural
+		// difference. Omitting "evidence" leaves it unchecked by THIS
+		// shape only (its own doc comment: a leaf named nowhere here "is
+		// not checked by this shape at all") -- a genuine evidence
+		// content divergence on a matched pair still reaches the
+		// ordinary comparison uncovered, exactly as intended.
+		EqualLeaves: []string{"work_unit_type", "work_unit_name", "time_range", "effort", "investment", "evidence_quality"},
+		// DisplacementLimit/DisplacementValueField (teamreposubset.go's
+		// own package-level doc comment): both `data` lists share the
+		// route's own default LIMIT 200 (boundedWorkUnitsLimit,
+		// workunits_route.go), and effort.value is exactly the leaf
+		// effort_value DESC, work_unit_id ASC (workunitreader.go) ranks
+		// both queries by -- the SAME quantity a candidate-only work
+		// unit's own rank-below-the-cutoff claim needs. Established from
+		// this route's own captured team_scoped evidence: every
+		// candidate-only work unit observed there carried an effort.value
+		// at or below the baseline list's own minimum.
+		DisplacementLimit:      200,
+		DisplacementValueField: "effort.value",
 	},
 	Intermittent:       true,
 	IntermittentReason: "present only while the requested team's own repositories are a PROPER subset of the organization's; a team that happens to own every repository in the organization leaves the two lists identical, and a narrow enough window can return zero units on both legs -- either way there is nothing under data for this citation to explain, and a comparison taken then shows no divergence",

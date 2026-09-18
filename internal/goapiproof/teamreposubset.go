@@ -2,6 +2,36 @@ package goapiproof
 
 import "strings"
 
+// DisplacementLimit/DisplacementValueField (below, on TeamRepoSubsetShape)
+// relax rule 3 for ONE further case: a candidate-only key is admitted,
+// instead of refusing the whole plan, when BOTH lists are exactly
+// DisplacementLimit long and the key's own DisplacementValueField value
+// (a dotted, index-free path under one list element, e.g. "effort.value")
+// ranks at or below the baseline list's own minimum DisplacementValueField
+// value (ties admitted) -- the same "ranks at or below the boundary"
+// reasoning LimitDisplacementShape's own rule 2-3 already apply to a
+// value-multiplying row crossing a LIMIT boundary (limitdisplacement.go),
+// transplanted here to a genuinely narrower candidate POPULATION instead
+// of an inflated value: a candidate-only row this far below the
+// baseline's own cutoff is consistent with a row that would rank below
+// the same LIMIT on an unbounded organization-wide read, not a Go
+// regression. Established from GET/POST /api/v1/work-units' own captured
+// team_scoped evidence: baseline and candidate both saturate LIMIT 200,
+// and every one of that run's candidate-only work units carried an
+// effort.value at or below the baseline list's own minimum.
+//
+// Both fields' own Go zero value (DisplacementLimit == 0) leaves this
+// admission OFF -- every declaration that does not set both fields keeps
+// rule 3's own unconditional refusal, byte-identical to before this
+// admission existed.
+//
+// UNVERIFIABLE, stated rather than assumed (the same caveat
+// LimitDisplacementShape's own doc comment carries for its own
+// mechanism): an admitted candidate-only key's true rank in an unbounded
+// organization-wide read is never independently confirmed here, only
+// inferred from its own observed value sitting at or below wherever the
+// baseline's own LIMIT-bounded list happened to cut off.
+
 // TeamRepoSubsetShape, set on a BaselineDefect, narrows that defect's
 // blanket "any leaf difference under Paths is covered" rule to a BOUNDED
 // SUBSET claim over one list: the candidate's list is admitted only when
@@ -73,7 +103,13 @@ import "strings"
 //     one element, and refuses every admission this plan would otherwise
 //     grant -- the same "one bad key invalidates the whole plan" caution
 //     LimitDisplacementShape's own rule 1 already applies to an unequal
-//     baseline/candidate-only count.
+//     baseline/candidate-only count. A declaration that sets
+//     DisplacementLimit/DisplacementValueField (this file's own
+//     package-level doc comment above) relaxes this rule for ONE further
+//     case, a candidate-only key ranking at or below the baseline's own
+//     minimum while both lists sit at the declared Limit; every
+//     declaration that leaves those two fields unset keeps this rule
+//     exactly as stated here.
 //  4. For every element the candidate and baseline both carry: each name
 //     in EqualLeaves must be equal (recursively, through nested objects
 //     and arrays, numeric leaves compared as numbers so an int/float
@@ -170,6 +206,13 @@ type TeamRepoSubsetShape struct {
 	// unsupported and its own behaviour is undefined -- name a leaf in
 	// exactly one of the two.
 	BoundedLeavesAllKeys []string
+	// DisplacementLimit and DisplacementValueField, together, opt this
+	// shape into a further rule-3 admission -- see this file's own
+	// package-level doc comment above (DisplacementLimit/
+	// DisplacementValueField) for the full rule and its gap. Left at
+	// their Go zero values, rule 3 keeps its unconditional refusal.
+	DisplacementLimit      int
+	DisplacementValueField string
 }
 
 // teamRepoSubsetPlan is one comparison's fully-evaluated admission
@@ -203,13 +246,21 @@ type teamRepoSubsetPlan struct {
 	// not in BoundedLeaves) means "not this shape's concern" -- admits()
 	// returns false for it, the safe default.
 	boundedAdmits map[string]map[string]bool
+	// candidateOnlyAdmitted are candidate-only keys (rule 3's own
+	// "absent in baseline" case) admitted through the DisplacementLimit/
+	// DisplacementValueField relaxation instead of refusing the whole
+	// plan -- empty whenever that relaxation is unconfigured or its own
+	// preconditions did not hold, in which case a candidate-only key
+	// always sets plan.subset to false exactly as before this field
+	// existed.
+	candidateOnlyAdmitted map[string]bool
 }
 
 // buildTeamRepoSubsetPlan evaluates every rule TeamRepoSubsetShape
 // documents against one comparison's decoded baseline/candidate `data`
 // values.
 func buildTeamRepoSubsetPlan(shape *TeamRepoSubsetShape, baselineData, candidateData any) *teamRepoSubsetPlan {
-	plan := &teamRepoSubsetPlan{shape: shape, baselineOnlyKeys: map[string]bool{}, boundedAdmits: map[string]map[string]bool{}}
+	plan := &teamRepoSubsetPlan{shape: shape, baselineOnlyKeys: map[string]bool{}, boundedAdmits: map[string]map[string]bool{}, candidateOnlyAdmitted: map[string]bool{}}
 
 	baseList, ok1 := teamRepoSubsetList(baselineData, shape.ListPath)
 	candList, ok2 := teamRepoSubsetList(candidateData, shape.ListPath)
@@ -232,11 +283,34 @@ func buildTeamRepoSubsetPlan(shape *TeamRepoSubsetShape, baselineData, candidate
 		boundedAt[key] = true
 	}
 
+	// DisplacementLimit/DisplacementValueField precondition (this file's
+	// own package-level doc comment): both DECODED lists, not merely the
+	// indexed maps, must be exactly DisplacementLimit long. A length
+	// mismatch off that Limit leaves displacementReady false, and rule 3
+	// below keeps its unconditional refusal for every candidate-only key.
+	displacementReady := false
+	var displacementBaselineMin float64
+	if shape.DisplacementLimit > 0 && shape.DisplacementValueField != "" &&
+		len(baseList) == shape.DisplacementLimit && len(candList) == shape.DisplacementLimit {
+		displacementBaselineMin, displacementReady = teamRepoSubsetMinValue(baseList, shape.DisplacementValueField)
+	}
+
 	subset := true
 	for _, key := range candOrder {
 		baseElement, present := baseByKey[key]
 		if !present {
-			// Rule 3.
+			// Rule 3, narrowed by an active displacement admission: admit
+			// this candidate-only key instead of refusing the whole plan
+			// when its own DisplacementValueField value ranks at or below
+			// the baseline list's own minimum (ties admitted) -- see this
+			// file's own package-level doc comment for what this does and
+			// does not certify.
+			if displacementReady {
+				if value, ok := teamRepoSubsetDottedValue(candByKey[key], shape.DisplacementValueField); ok && value <= displacementBaselineMin+subsetBoundTolerance {
+					plan.candidateOnlyAdmitted[key] = true
+					continue
+				}
+			}
 			subset = false
 			continue
 		}
@@ -305,22 +379,23 @@ func (p *teamRepoSubsetPlan) admits(finding Finding) bool {
 		if !ok {
 			return false
 		}
-		if !strings.Contains(finding.Detail, "absent in candidate") {
-			// "absent in baseline": a candidate-only element. Provably
-			// unreachable here while p.subset is true -- rule 3 already
-			// sets subset to false the moment any candidate-only key
-			// exists anywhere in this comparison (buildTeamRepoSubsetPlan
-			// above), and THAT is exactly the condition that produces an
-			// "absent in baseline" finding at all, so this branch's own
-			// guard is redundant with the top-of-function subset check by
-			// construction, not by coincidence -- kept as an explicit,
-			// named refusal rather than relied upon to be unreachable.
-			// TestTeamRepoSubsetShape_PresenceCandidateOnlyKeyNeverAdmitted
-			// pins rule 3 itself; this branch has nothing left to add to
-			// that pin.
-			return false
+		if strings.Contains(finding.Detail, "absent in candidate") {
+			return p.baselineOnlyKeys[key]
 		}
-		return p.baselineOnlyKeys[key]
+		// "absent in baseline": a candidate-only element. Admitted only
+		// when buildTeamRepoSubsetPlan's own displacement pass placed
+		// this exact key in candidateOnlyAdmitted (DisplacementLimit/
+		// DisplacementValueField, this file's own package-level doc
+		// comment) -- every OTHER candidate-only key in this same
+		// comparison already refused the whole plan (p.subset would be
+		// false, and admits() would never be reached at all) unless it
+		// passed that identical check, so reaching this branch means
+		// every candidate-only key here was independently admitted or the
+		// map is simply empty (the relaxation unconfigured -- the
+		// unchanged, pre-existing behaviour
+		// TestTeamRepoSubsetShape_PresenceCandidateOnlyKeyNeverAdmitted
+		// pins).
+		return p.candidateOnlyAdmitted[key]
 	case ShapeValue:
 		// A BoundedLeaves leaf that is WITHIN bound still differs
 		// numerically from its baseline counterpart, so it carries its
@@ -414,6 +489,39 @@ func subsetValueEqual(a, b any) bool {
 		}
 		return sameScalar(a, b)
 	}
+}
+
+// teamRepoSubsetDottedValue reads a numeric leaf at a dotted, index-free
+// path under one decoded list element (e.g. "effort.value" for
+// {"effort":{"value":9}}) -- DisplacementValueField's own form. ok is
+// false when the path does not resolve or the value there is not a
+// number.
+func teamRepoSubsetDottedValue(element any, dottedPath string) (float64, bool) {
+	value, ok := navigateSegments(element, strings.Split(dottedPath, "."))
+	if !ok {
+		return 0, false
+	}
+	return asFloat(value)
+}
+
+// teamRepoSubsetMinValue returns the smallest DisplacementValueField
+// value across every element of a decoded list. ok is false when the
+// list is empty or any element's own value fails to parse as a number --
+// an unreadable baseline minimum certifies nothing, the safe default.
+func teamRepoSubsetMinValue(list []any, dottedPath string) (float64, bool) {
+	found := false
+	var min float64
+	for _, element := range list {
+		value, ok := teamRepoSubsetDottedValue(element, dottedPath)
+		if !ok {
+			return 0, false
+		}
+		if !found || value < min {
+			min = value
+			found = true
+		}
+	}
+	return min, found
 }
 
 // subsetBoundTolerance absorbs summation-order float noise the same way

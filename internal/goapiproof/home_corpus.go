@@ -82,20 +82,22 @@ var homeNumericLeaves = Options{
 }
 
 // homeGetEndpointSpec and homePostEndpointSpec's happy-path requests
-// carry NO BaselineDefect citation. Three ReplacingMergeTree reads in
-// the Python plane omit dedup entirely (fetch_coverage's two
+// carry no BLANKET BaselineDefect citation. Three ReplacingMergeTree
+// reads in the Python plane omit dedup entirely (fetch_coverage's two
 // work_item_cycle_times reads, fetch_source_statuses' ci_pipeline_runs
 // branch, _resolve_scope_labels' repos/teams reads) and are fixed here
 // (internal/home's own queries_freshness.go/queries_signals.go doc
 // comments, both reading the affected tables FINAL) -- but none of the
-// three reaches a leaf a shape can admit under this package's coverage
-// rules:
+// three reaches a leaf a blanket or magnitude/direction shape can admit
+// under this package's coverage rules:
 //
 //   - fetch_coverage's two ratios (prs_linked_to_issues_pct,
 //     issues_with_cycle_states_pct) have numerator AND denominator drawn
 //     from the SAME undeduped scan, and different physical versions of
 //     one work item can carry different work_scope_id/cycle_time_hours
-//     values -- the ratio has no guaranteed direction. Left uncovered.
+//     values -- the ratio has no guaranteed direction. Left uncovered,
+//     same as data.data_confidence.coverage_pct (_coverage_pct_from_
+//     coverage's mean of it and the other two ratios, home.py:437-441).
 //   - fetch_source_statuses' ci_pipeline_runs branch reaches only
 //     max(last_synced) and a count()>0 HAVING gate, both dedup-INVARIANT
 //     (an extra physical version cannot move a max(), and cannot flip a
@@ -104,6 +106,50 @@ var homeNumericLeaves = Options{
 //   - _resolve_scope_labels' stale repos/teams display name is a
 //     categorical swap (one string for another), which no numeric or
 //     keyed-direction shape can admit. Left uncovered.
+//
+// homeConfidenceTierDefect (below) is narrower than a blanket citation on
+// the coverage_pct leaf itself: it never re-derives or bounds the
+// uncovered ratio, only the MECHANICAL tier/confidence consequence a
+// straddling coverage_pct produces elsewhere in the same body -- see
+// HomeConfidenceTierShape's own doc comment (homeconfidencetier.go).
+// Wired only onto home_default_org/home_repo_scoped (both methods): the
+// mechanism is independent of scope_type (fetch_coverage/fetch_
+// source_statuses never take a repo/team filter), but home_team_scoped
+// carries its own, separate, knowingly-uncovered scope-resolution
+// difference (this file's own comment on that request below) that was
+// never verified alongside this one, so this citation stays off it.
+var homeConfidenceTierDefect = BaselineDefect{
+	Ticket: "CHAOS-5448",
+	Reason: "fetch_coverage's two work_item_cycle_times reads (api/queries/freshness.py:83-115) run raw (no FINAL) against a ReplacingMergeTree(computed_at) table whose sorting key (org_id, provider, work_item_id) does not include `day` (cmd/query-api/internal/home/queries_freshness.go:1-24, reading it FINAL) -- a physical stale/live version pair can straddle the day-window filter independently, so issues_with_cycle_states_pct, and through it data.data_confidence.coverage_pct (_coverage_pct_from_coverage's mean of three ratios, home.py:437-441), can differ between planes with no provable direction (left outside every citation, see this file's own package doc comment above). When that drift straddles the level/confidence thresholds (build_data_confidence, home.py:444-473 / BuildDataConfidence, cmd/query-api/internal/home/signals.go:261-289; _confidence_from_evidence, home.py:359-366 / signals.go:150), every downstream tier/confidence leaf is a MECHANICAL, recomputable function of its own leg's own coverage_pct/evidence_count -- HomeConfidenceTierShape verifies exactly that recomputation, never the base drift's own magnitude or direction. Go is correct.",
+	Paths: []string{
+		"data.data_confidence.level",
+		"data.limiting_factor.confidence",
+		"data.signals.confidence",
+	},
+	Intermittent:       true,
+	IntermittentReason: "present only while work_item_cycle_times holds an unmerged physical version whose own day value straddles the requested window AND the resulting coverage_pct drift crosses a tier threshold; most drifts land on the same side of every threshold and produce no finding at all",
+	HomeConfidenceTierShape: &HomeConfidenceTierShape{
+		CoveragePctPath:              "data.data_confidence.coverage_pct",
+		MissingSourcesPath:           "data.data_confidence.missing_sources",
+		ConnectedSourcesPath:         "data.data_confidence.connected_sources",
+		LevelPath:                    "data.data_confidence.level",
+		LimitingFactorConfidencePath: "data.limiting_factor.confidence",
+		SignalsListPath:              "data.signals",
+	},
+}
+
+// homeConfidenceTierParity is homeNumericLeaves plus
+// homeConfidenceTierDefect -- the Parity value home_default_org/
+// home_repo_scoped (GET and POST) carry; every other request keeps
+// homeNumericLeaves unchanged.
+var homeConfidenceTierParity = Options{
+	NumericLeavesDeclared: homeNumericLeaves.NumericLeavesDeclared,
+	FloatTierB:            homeNumericLeaves.FloatTierB,
+	IntegerLeaves:         homeNumericLeaves.IntegerLeaves,
+	VolatileFields:        homeNumericLeaves.VolatileFields,
+	BaselineDefects:       []BaselineDefect{homeConfidenceTierDefect},
+}
+
 var homeGetEndpointSpec = RESTEndpointSpec{
 	Method: "GET",
 	Path:   "/api/v1/home",
@@ -115,7 +161,7 @@ var homeGetEndpointSpec = RESTEndpointSpec{
 			Name:                "home_default_org",
 			Query:               url.Values{},
 			WantCandidateStatus: 200, WantBaselineStatus: 200,
-			BodyMode: RESTBodyModeJSON, Parity: homeNumericLeaves,
+			BodyMode: RESTBodyModeJSON, Parity: homeConfidenceTierParity,
 		},
 		{
 			// team scope, scope_id bound at run time to filters/options'
@@ -147,7 +193,7 @@ var homeGetEndpointSpec = RESTEndpointSpec{
 			Query:               url.Values{"scope_type": {"repo"}},
 			WantCandidateStatus: 200, WantBaselineStatus: 200,
 			BodyMode:   RESTBodyModeJSON,
-			Parity:     homeNumericLeaves,
+			Parity:     homeConfidenceTierParity,
 			IDBindings: []RESTIDBinding{{Producer: "repo_id", QueryParam: "scope_id"}},
 		},
 		{
@@ -179,7 +225,7 @@ var homePostEndpointSpec = RESTEndpointSpec{
 			Name:                "home_default_org",
 			Body:                map[string]any{"filters": map[string]any{}},
 			WantCandidateStatus: 200, WantBaselineStatus: 200,
-			BodyMode: RESTBodyModeJSON, Parity: homeNumericLeaves,
+			BodyMode: RESTBodyModeJSON, Parity: homeConfidenceTierParity,
 		},
 		{
 			// team scope, bound at run time to filters/options' own live
@@ -203,7 +249,7 @@ var homePostEndpointSpec = RESTEndpointSpec{
 			Body:                map[string]any{"filters": map[string]any{"scope": map[string]any{"level": "repo", "ids": []string{"ABC-123"}}}},
 			WantCandidateStatus: 200, WantBaselineStatus: 200,
 			BodyMode:   RESTBodyModeJSON,
-			Parity:     homeNumericLeaves,
+			Parity:     homeConfidenceTierParity,
 			IDBindings: []RESTIDBinding{{Producer: "repo_id", BodyPath: "filters.scope.ids"}},
 		},
 		{

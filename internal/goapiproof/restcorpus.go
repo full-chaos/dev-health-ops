@@ -2172,6 +2172,48 @@ var heatmapRepoTouchpointsTeamScopeSubsetDefect = BaselineDefect{
 	TeamRepoSubsetShape: &TeamRepoSubsetShape{ListPath: "data.cells", KeyFields: []string{"x", "y"}, EqualLeaves: []string{"value"}},
 }
 
+// heatmapRepoTouchpointsAxisOrderDefect narrows heatmapDedupParity's own
+// repos-join fan-out mechanism (inherited into heatmapRepoTouchpointsParity
+// via its own shared KeyedDirectionShape entry, which already admits the
+// value-cell consequence on data.cells.value directionally) to the ONE
+// leaf that KeyedDirectionShape's own magnitude-unbounded admission can
+// never reach: data.axes.y, repo_touchpoints' own y-axis, which IS the
+// repository identity directly (y_field="repo") sorted by per-repo total
+// descending (_axis_order's/axisOrder's generic branch). A physically-
+// duplicated repos row inflates every commit-count cell that repository
+// owns by the SAME integer factor, which can shift that repository's own
+// axis rank relative to a repository whose own cells are untouched --
+// confirmed against a real production capture (team_scoped): one
+// repository's own three shared cells each differed by EXACTLY 2.0x, and
+// that inflation alone swapped its own axis position with its
+// immediately-lower-ranked neighbour, whose own cells were byte-identical
+// on both legs.
+//
+// This is narrower than HeatmapCellBoundaryShape's own axis rule
+// (heatmapcellboundary.go), which HotspotListBoundaryShape's own
+// LIMIT-boundary reasoning depends on: that shape's rule 3 requires both
+// reconstructed totals maps to be EXACTLY the route's fixed Limit (20)
+// long, which a team-scoped repo_touchpoints request never reaches when
+// the team owns fewer repositories than the cap (confirmed live: this
+// same capture sits at 6 repositories, not 20) -- there is no boundary to
+// reason about, only a reorder among the SAME repository set both legs
+// already agree on. See HeatmapAxisRepoOrderShape's own doc comment
+// (heatmapaxisrepoorder.go) for the full derivation and its own tie
+// refusal.
+var heatmapRepoTouchpointsAxisOrderDefect = BaselineDefect{
+	Ticket:             "CHAOS-5955",
+	Reason:             "fetchRepoTouchpoints' own top-repository selection and per-day detail query (api/queries/heatmap.py:85-135, heatmap/queries.go:143-188) both derive from repos, ReplacingMergeTree(last_synced), joined without FINAL on the reference plane and FINAL on this port. A physically-duplicated repos row inflates every commit-count cell that repository owns by the same integer factor -- already admitted directionally on data.cells.value by heatmapDedupParity's own KeyedDirectionShape entry above -- which can also reorder data.axes.y, whose own sort key (_axis_order's/axisOrder's generic branch) is the SAME per-repository total the fan-out inflates. Go is correct.",
+	Paths:              []string{"data.axes.y"},
+	Intermittent:       true,
+	IntermittentReason: "present only while repos holds an unmerged physical version of a repository whose own inflated total crosses a neighbouring repository's total in this window's axis ranking; a comparison taken after the next background merge shows no divergence",
+	HeatmapAxisRepoOrderShape: &HeatmapAxisRepoOrderShape{
+		CellsListPath: "data.cells",
+		CellKeyFields: []string{"x", "y"},
+		RepoField:     "y",
+		AxisListPath:  "data.axes.y",
+	},
+}
+
 var heatmapHotspotRiskTeamScopeSubsetDefect = BaselineDefect{
 	Ticket:              "CHAOS-5940",
 	Reason:              "the same team-repository-resolution mechanism as heatmapRepoTouchpointsTeamScopeSubsetDefect, over hotspot_risk. hotspot_risk's own GROUP BY key already names the bucket's own repo (concat(repos.repo,':',path) AS file_key, heatmap/queries.go fetchHotspotRisk), so a matched (x, y) key's own value is untouched by a narrower repo scope; only whole keys for a repository outside the team disappear. Go is correct.",
@@ -2219,7 +2261,7 @@ var heatmapRepoTouchpointsTeamScopedParity = Options{
 	OrderInsensitiveLists: heatmapRepoTouchpointsParity.OrderInsensitiveLists,
 	NumericLeavesDeclared: true,
 	IntegerLeaves:         heatmapRepoTouchpointsParity.IntegerLeaves,
-	BaselineDefects:       append(append([]BaselineDefect{}, heatmapRepoTouchpointsParity.BaselineDefects...), heatmapRepoTouchpointsTeamScopeSubsetDefect),
+	BaselineDefects:       append(append([]BaselineDefect{}, heatmapRepoTouchpointsParity.BaselineDefects...), heatmapRepoTouchpointsTeamScopeSubsetDefect, heatmapRepoTouchpointsAxisOrderDefect),
 }
 
 var heatmapHotspotRiskTeamScopedParity = Options{

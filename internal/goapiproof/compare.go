@@ -723,6 +723,28 @@ type BaselineDefect struct {
 	// behaviour every other declared defect still uses. A defect never
 	// sets more than one shape field.
 	DuplicateCollapseLengthShape *DuplicateCollapseLengthShape
+
+	// HomeConfidenceTierShape, when set, replaces this defect's blanket
+	// "any leaf difference under Paths is covered" rule with a
+	// recomputed-tier admission over home's own data_confidence.level,
+	// limiting_factor.confidence and signals[].confidence leaves -- see
+	// HomeConfidenceTierShape's own doc comment (homeconfidencetier.go).
+	// It is self-contained (a pure function of the two decoded bodies),
+	// evaluated in the FIRST pass like every other unshaped shape in this
+	// file. nil is the default, unchanged blanket behaviour every other
+	// declared defect still uses. A defect never sets more than one shape
+	// field.
+	HomeConfidenceTierShape *HomeConfidenceTierShape
+
+	// HeatmapAxisRepoOrderShape, when set, replaces this defect's blanket
+	// "any leaf difference under Paths is covered" rule with a
+	// whole-list, verified-integer-multiplier admission over a heatmap
+	// repo axis reorder -- see HeatmapAxisRepoOrderShape's own doc
+	// comment (heatmapaxisrepoorder.go). It is self-contained, evaluated
+	// in the FIRST pass. nil is the default, unchanged blanket behaviour
+	// every other declared defect still uses. A defect never sets more
+	// than one shape field.
+	HeatmapAxisRepoOrderShape *HeatmapAxisRepoOrderShape
 }
 
 // validateBaselineDefects refuses a declaration that claims the
@@ -1141,6 +1163,14 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 		if defect.DuplicateCollapseLengthShape != nil {
 			dupLenPlan = buildDuplicateCollapseLengthPlan(defect.DuplicateCollapseLengthShape, baselineData, candidateData)
 		}
+		var homeTierPlan *homeConfidenceTierPlan
+		if defect.HomeConfidenceTierShape != nil {
+			homeTierPlan = buildHomeConfidenceTierPlan(defect.HomeConfidenceTierShape, baselineData, candidateData)
+		}
+		var axisRepoOrderPlan *heatmapAxisRepoOrderPlan
+		if defect.HeatmapAxisRepoOrderShape != nil {
+			axisRepoOrderPlan = buildHeatmapAxisRepoOrderPlan(defect.HeatmapAxisRepoOrderShape, baselineData, candidateData)
+		}
 		// A SHAPED defect's citation is LIVE only when its shape actually
 		// admits something. A blanket (unshaped) citation stays live from
 		// path proximity alone -- any difference under Paths, covered or
@@ -1154,7 +1184,7 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 		// apart, and a shaped defect that hit on path alone would still
 		// double-report alongside the shape that actually explains the
 		// difference.
-		shaped := repoPlan != nil || covPlan != nil || dedupPlan != nil || skewPlan != nil || sankeyFanoutPlan != nil || keyedDirPlan != nil || conservePlan != nil || dictDirPlan != nil || scalarDirPlan != nil || identityPlan != nil || displacePlan != nil || hotspotBoundaryPlan != nil || subsetPlan != nil || zeroValueEmptyListPlan != nil || tiePlan != nil || heatmapCellPlan != nil || dupLenPlan != nil
+		shaped := repoPlan != nil || covPlan != nil || dedupPlan != nil || skewPlan != nil || sankeyFanoutPlan != nil || keyedDirPlan != nil || conservePlan != nil || dictDirPlan != nil || scalarDirPlan != nil || identityPlan != nil || displacePlan != nil || hotspotBoundaryPlan != nil || subsetPlan != nil || zeroValueEmptyListPlan != nil || tiePlan != nil || heatmapCellPlan != nil || dupLenPlan != nil || homeTierPlan != nil || axisRepoOrderPlan != nil
 		var touched []int
 		for i, path := range mismatches {
 			if !defectCovers(defect, path) {
@@ -1260,6 +1290,10 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 				admitted = heatmapCellPlan.admits(result.Findings[findingRefs[i]])
 			case dupLenPlan != nil:
 				admitted = dupLenPlan.admits(result.Findings[findingRefs[i]])
+			case homeTierPlan != nil:
+				admitted = homeTierPlan.admits(result.Findings[findingRefs[i]])
+			case axisRepoOrderPlan != nil:
+				admitted = axisRepoOrderPlan.admits(result.Findings[findingRefs[i]])
 			}
 			if admitted {
 				covered[i] = true

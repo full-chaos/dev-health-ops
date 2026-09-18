@@ -457,11 +457,24 @@ func (repository *PostgresRepository) ResetPreparedEffectsForReplan(
 	if len(expectedEncoded) == 0 {
 		return ErrEffectLedgerConflict
 	}
-	return repository.mutateGenerationJournal(ctx, claim, now, func(document map[string]json.RawMessage) error {
+	return repository.mutateGenerationJournalTx(ctx, claim, now, func(tx pgx.Tx, document map[string]json.RawMessage) error {
 		current, err := decodeEffectLedgerState(document[effectLedgerResultKey])
 		if err != nil || !bytes.Equal(encodeEffectLedgerState(current), expectedEncoded) ||
 			!isSafeReplanState(claim, current) {
 			return ErrEffectLedgerConflict
+		}
+		// A snapshot ledger's sidecar row goes with it: the route's replacement
+		// prepare inserts a new row for the same generation.
+		if current.PreparedSnapshot != nil {
+			deleted, err := tx.Exec(
+				ctx, deletePreparedRouteSnapshotSQL, claim.OrgID, claim.ID, claim.GenerationKey(),
+			)
+			if err != nil {
+				return err
+			}
+			if deleted.RowsAffected() != 1 {
+				return ErrEffectLedgerConflict
+			}
 		}
 		delete(document, effectLedgerResultKey)
 		return nil
@@ -474,7 +487,7 @@ func (repository *PostgresRepository) ResetPreparedEffectsForReplan(
 // separate predicates rather than one relaxed to cover both.
 func isSafeReplanState(claim Claim, state EffectLedgerState) bool {
 	return isSafeGitHubBlameReplanState(claim, state) ||
-		isSafeWorkItemsManifestReplanState(claim, state)
+		isSafePreparedManifestReplanState(claim, state)
 }
 
 // isSafeWorkItemsManifestReplanState admits a github work-items document whose
@@ -508,6 +521,28 @@ func isSafeWorkItemsManifestReplanState(claim Claim, state EffectLedgerState) bo
 	for _, effect := range state.Effects {
 		if effect.Status == GenerationBlockCommitted ||
 			effect.Recovery == EffectRecoveryBlocked {
+			return false
+		}
+	}
+	return true
+}
+
+// isSafePreparedManifestReplanState is the discard check for any route in
+// preparedManifestRouteDestinations: a superseded snapshot may be thrown away
+// and the route re-run only while nothing in its ledger has committed and
+// nothing is recovery-blocked.
+func isSafePreparedManifestReplanState(claim Claim, state EffectLedgerState) bool {
+	if claim.Provider == "github" && isWorkItemFamilyDataset(claim.Dataset) {
+		return isSafeWorkItemsManifestReplanState(claim, state)
+	}
+	if _, ok := preparedManifestRouteDestinations(claim.Provider, claim.Dataset); !ok ||
+		claim.Validate() != nil || state.validate() != nil ||
+		state.Generation != claim.GenerationKey() || state.Provider != claim.Provider ||
+		state.Dataset != claim.Dataset {
+		return false
+	}
+	for _, effect := range state.Effects {
+		if effect.Status == GenerationBlockCommitted || effect.Recovery == EffectRecoveryBlocked {
 			return false
 		}
 	}

@@ -4,7 +4,9 @@ package providersync
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -235,7 +237,7 @@ func TestChunkedPostgresCursorSurvivesEmptyContinuationAndFailReclaimsSidecars(t
 	finalChunk, err := repository.PrepareChunk(ctx, claim, PreparedProviderChunk{
 		SchemaVersion: chunkPayloadSchemaVersion, RouteVersion: chunkRouteVersion,
 		Ordinal: 2, TotalChunks: 0, CursorAfter: "cursor-page-2", Effects: []EffectBatch{finalEffect},
-		InventoryComplete: true, Result: map[string]any{"pipeline_runs_synced": 3},
+		InventoryComplete: true, Result: map[string]any{"pipeline_runs_synced": 3, "project_id": int64(9007199254740993)},
 	}, now.Add(9*time.Second))
 	if err != nil {
 		t.Fatal(err)
@@ -248,6 +250,11 @@ func TestChunkedPostgresCursorSurvivesEmptyContinuationAndFailReclaimsSidecars(t
 		checkpoint.AggregateDigest == chunkResultDigest(nil) {
 		t.Fatalf("final aggregate was not persisted: result=%v digest=%q",
 			checkpoint.AggregateResult, checkpoint.AggregateDigest)
+	}
+	// An integer past 2^53 survives the checkpoint's decode exactly.
+	if encoded, err := json.Marshal(checkpoint.AggregateResult); err != nil ||
+		!strings.Contains(string(encoded), `"project_id":9007199254740993`) {
+		t.Fatalf("aggregate project_id not preserved exactly: %s err=%v", encoded, err)
 	}
 	if err := repository.BeginChunkEffect(ctx, claim, 2, 0, finalEffect.ContentDigest, now.Add(11*time.Second)); err != nil {
 		t.Fatal(err)

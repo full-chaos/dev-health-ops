@@ -706,7 +706,8 @@ func (m *Metrics) RecordDuplicateNaturalKeyCollision(provider, dataset, table st
 // dimension.
 var metricSnapshotDiscardReasonVocabulary = map[string]struct{}{
 	"manifest_mismatch": {}, "manifest_mismatch_unreplayable": {},
-	"manifest_mismatch_partially_committed": {},
+	"manifest_mismatch_partially_committed": {}, "manifest_mismatch_write_landed": {},
+	"manifest_mismatch_readback_failed": {}, "manifest_mismatch_readback_unavailable": {},
 }
 
 // MetricSnapshotDiscardReasonLabel bounds a discard reason.
@@ -728,11 +729,16 @@ func MetricSnapshotDiscardReasonLabel(value string) string {
 // claim, so the provider is fetched again. A rate that is anything but a brief
 // spike after a deploy means something is wrong with the manifest contract.
 //
-// The two reasons are NOT interchangeable. `manifest_mismatch` is the expected,
-// self-healing case: a document written before a destination was added, thrown
-// away and replayed. `manifest_mismatch_unreplayable` is the same staleness on
-// a document that also contains a recovery-BLOCKED effect, which cannot be
-// safely redone -- that unit stops rather than replays, and needs a person.
+// Only `manifest_mismatch` is a discard: the expected, self-healing case of a
+// document written before a destination was added, thrown away and replayed.
+// Every other reason is a refusal on the same staleness -- the unit stops
+// rather than replays, and needs a person: `manifest_mismatch_unreplayable`
+// (a recovery-BLOCKED effect cannot be safely redone),
+// `manifest_mismatch_partially_committed` (an effect committed),
+// `manifest_mismatch_write_landed` (a writing effect's rows read back present),
+// `manifest_mismatch_readback_failed` and
+// `manifest_mismatch_readback_unavailable` (a writing effect could not be read
+// back, which is never taken as absent).
 func (m *Metrics) RecordPreparedSnapshotDiscarded(provider, dataset, reason string) {
 	if m == nil {
 		return

@@ -82,7 +82,7 @@ func (repository *PostgresRepository) LoadChunkCheckpoint(
 		return ChunkCheckpoint{}, ErrChunkCheckpointConflict
 	}
 	if len(aggregateRaw) > 0 {
-		if json.Unmarshal(aggregateRaw, &checkpoint.AggregateResult) != nil {
+		if decodeResultObjectExact(aggregateRaw, &checkpoint.AggregateResult) != nil {
 			return ChunkCheckpoint{}, ErrChunkCheckpointConflict
 		}
 	}
@@ -616,7 +616,7 @@ func loadChunkCheckpointTx(ctx context.Context, tx pgx.Tx, claim Claim, now time
 	if err != nil {
 		return ChunkCheckpoint{}, ErrChunkCheckpointConflict
 	}
-	if len(aggregateRaw) > 0 && json.Unmarshal(aggregateRaw, &checkpoint.AggregateResult) != nil {
+	if len(aggregateRaw) > 0 && decodeResultObjectExact(aggregateRaw, &checkpoint.AggregateResult) != nil {
 		return ChunkCheckpoint{}, ErrChunkCheckpointConflict
 	}
 	if err := checkpoint.Validate(claim); err != nil {

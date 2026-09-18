@@ -33,6 +33,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 )
@@ -140,6 +141,23 @@ func AuthoritativeOwnerByRepo(
 	if orgID == "" {
 		return nil, fmt.Errorf("AuthoritativeOwnerByRepo: orgID is required")
 	}
+	// Named {org_id:String}/{as_of:DateTime64(3, 'UTC')} parameters, not
+	// positional `?`: this driver round-trips a positional `?` bound to a
+	// time.Time at whole-SECOND precision (confirmed empirically -- SELECT
+	// toString(?) with a sub-second time.Time argument returns the value
+	// with its fraction dropped), so `o.valid_from <= ?` can read a row
+	// written earlier in the SAME wall-clock second as not-yet-valid, and
+	// `o.valid_to > ?` can read a just-closed row as still open, both for up
+	// to a full second. The named form preserves the DateTime64(3) scale --
+	// same established fix as cmd/query-api/internal/teamscope's
+	// RepoCondition and team_repo_ownership_derivation_clickhouse.go's
+	// loadTeamRepoOwnershipProjectLinks. asOf is formatted to a literal
+	// string (dateTime64Literal), not bound as a raw time.Time: clickhouse-go
+	// renders a bare time.Time bound to a {name:DateTime64(...)} placeholder
+	// as a `toDateTime(...)` expression, and the server REJECTS that
+	// ("cannot be parsed as DateTime64(3, 'UTC')... isn't parsed
+	// completely") -- a named parameter is parsed as a literal, not
+	// evaluated as an expression.
 	rows, err := conn.Query(ctx, `
         SELECT
             toString(coalesce(o.repo_id, r.id)) AS repo_id,
@@ -152,12 +170,12 @@ func AuthoritativeOwnerByRepo(
             ON r.org_id = o.org_id
                AND r.provider = o.provider
                AND lower(r.repo) = lower(o.repo_full_name)
-        WHERE o.org_id = ?
+        WHERE o.org_id = {org_id:String}
           AND (o.repo_id IS NOT NULL OR r.matched = 1)
-          AND o.valid_from <= ?
-          AND (o.valid_to IS NULL OR o.valid_to > ?)
+          AND o.valid_from <= {as_of:DateTime64(3, 'UTC')}
+          AND (o.valid_to IS NULL OR o.valid_to > {as_of:DateTime64(3, 'UTC')})
         ORDER BY o.is_primary DESC, o.specificity DESC, o.updated_at DESC, o.team_id ASC
-    `, orgID, asOf, asOf)
+    `, clickhouse.Named("org_id", orgID), clickhouse.Named("as_of", dateTime64Literal(asOf)))
 	if err != nil {
 		return nil, err
 	}
@@ -230,6 +248,11 @@ func ownedRepoIDText(
 	// type clickhouse-go resolves coalesce(Nullable(UUID), UUID) to on the
 	// wire -- a string round-trips unambiguously through uuid.Parse in the
 	// caller regardless.
+	// Named {org_id:String}/{team_id:String}/{as_of:DateTime64(3, 'UTC')}
+	// parameters, not positional `?` -- same whole-second truncation this
+	// package's AuthoritativeOwnerByRepo doc comment above now explains, and
+	// the same dateTime64Literal formatting that comment's toDateTime(...)
+	// rejection note requires.
 	rows, err := conn.Query(ctx, `
         SELECT DISTINCT toString(coalesce(o.repo_id, r.id)) AS repo_id
         FROM team_repo_ownership AS o FINAL
@@ -240,12 +263,12 @@ func ownedRepoIDText(
             ON r.org_id = o.org_id
                AND r.provider = o.provider
                AND lower(r.repo) = lower(o.repo_full_name)
-        WHERE o.org_id = ?
-          AND o.team_id = ?
+        WHERE o.org_id = {org_id:String}
+          AND o.team_id = {team_id:String}
           AND (o.repo_id IS NOT NULL OR r.matched = 1)
-          AND o.valid_from <= ?
-          AND (o.valid_to IS NULL OR o.valid_to > ?)
-    `, orgID, teamID, asOf, asOf)
+          AND o.valid_from <= {as_of:DateTime64(3, 'UTC')}
+          AND (o.valid_to IS NULL OR o.valid_to > {as_of:DateTime64(3, 'UTC')})
+    `, clickhouse.Named("org_id", orgID), clickhouse.Named("team_id", teamID), clickhouse.Named("as_of", dateTime64Literal(asOf)))
 	if err != nil {
 		return nil, err
 	}
@@ -260,4 +283,19 @@ func ownedRepoIDText(
 		repoIDTexts = append(repoIDTexts, repoIDText)
 	}
 	return repoIDTexts, rows.Err()
+}
+
+// dateTime64Literal renders asOf as the literal text a {name:DateTime64(3,
+// 'UTC')} named parameter's PARSER accepts. clickhouse-go's own encoding of
+// a bare time.Time bound to a named DateTime64 placeholder is a
+// `toDateTime(...)` function-call expression, and ClickHouse's named
+// parameter mechanism only ever parses a literal, never evaluates an
+// expression -- binding the raw value fails closed with "cannot be parsed
+// as DateTime64(3, 'UTC')... isn't parsed completely" on every call. Same
+// documented fix and literal format (millisecond precision, matching the
+// column's own DateTime64(3) scale) as
+// internal/jobs/metrics/remaining/dora_native_clickhouse.go's
+// dateTime64Argument/DateTime64Argument.
+func dateTime64Literal(asOf time.Time) string {
+	return asOf.UTC().Format("2006-01-02 15:04:05.000")
 }

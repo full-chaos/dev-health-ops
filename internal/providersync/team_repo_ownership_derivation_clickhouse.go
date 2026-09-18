@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 )
@@ -215,17 +216,124 @@ func (service TeamRepoOwnershipDerivationService) Derive(ctx context.Context, or
 	if len(derived) == 0 {
 		return 0, retracted, true, nil, nil
 	}
+	// A run writes a new open row only for a fact this org's activeRows
+	// snapshot (loaded above, before this run's own retractions) does not
+	// already carry unchanged -- see filterUnchangedTeamRepoOwnershipRows'
+	// doc comment for exactly what "unchanged" compares. A fact whose
+	// attributes changed, or that has no active row at all (new, or
+	// previously retracted and now derived again), is left in toWrite and
+	// gets a fresh open row exactly like today's unconditional write did.
+	toWrite := filterUnchangedTeamRepoOwnershipRows(derived, repos, activeRows)
+	if len(toWrite) == 0 {
+		return 0, retracted, true, nil, nil
+	}
 	// armCounts (CHAOS-4458 part (b)) is computed by writeTeamRepoOwnershipRows
 	// itself from the rows it actually COMMITS, not from `derived` up front
 	// (codex adversarial review, 2026-08-29, confirmed finding): a derived
 	// candidate can still be dropped (unresolvable repo_id) or the whole
 	// batch can fail before Send() -- counting from `derived` would report a
 	// linear_team_key/project_id row that was never actually written.
-	written, armCounts, err = writeTeamRepoOwnershipRows(ctx, service.Conn, orgID, now, derived, repos)
+	written, armCounts, err = writeTeamRepoOwnershipRows(ctx, service.Conn, orgID, now, toWrite, repos)
 	if err != nil {
 		return 0, retracted, true, nil, err
 	}
 	return written, retracted, true, armCounts, nil
+}
+
+// teamRepoOwnershipRowSignature is the full set of values a written
+// team_repo_ownership row carries beyond its identity key (org_id,
+// provider, repo_full_name, team_id, source) -- the ATTRIBUTES
+// filterUnchangedTeamRepoOwnershipRows compares to decide whether a fact
+// this run derives is the SAME fact an already-open row already records,
+// or a changed one that needs its own new generation. repo_id is included
+// because a repo can be deleted and re-synced under a new UUID while
+// keeping the same repo_full_name -- the identity key alone would then
+// wrongly call that unchanged.
+type teamRepoOwnershipRowSignature struct {
+	TeamID       string
+	RepoFullName string
+	Provider     string
+	RepoID       uuid.UUID
+	IsPrimary    bool
+	Specificity  uint16
+	Priority     int32
+	MatchType    string
+}
+
+// filterUnchangedTeamRepoOwnershipRows returns the subset of derived that
+// this run must actually write: a derived row whose full
+// teamRepoOwnershipRowSignature (identity: team_id, repo_full_name,
+// provider; attributes: repo_id, is_primary, specificity, priority,
+// match_type) already matches SOME row in activeRows is left out -- the
+// existing open row already records exactly this fact, so writing again
+// would only stamp a new valid_from over an unchanged truth (the growth
+// this producer exists to stop). Every other derived row -- a genuinely
+// new fact, a fact whose attributes changed since its active row was
+// written, or a fact that was previously retracted (closed, so it is no
+// longer in activeRows at all) and is derived again -- is kept, and gets a
+// fresh open row exactly like today's unconditional write produced for
+// every row; a changed attribute is NOT a special case; it is simply a row
+// with no matching signature in activeRows, so it reaches the same "write
+// it" path a new fact does.
+//
+// Compares against activeRows as loaded before this run's own
+// retractions: a fact this run is about to retract is, by construction
+// (diffTeamRepoOwnershipRetractions), never also present in derived, so
+// there is no ordering hazard in reading that snapshot here.
+//
+// Pure, no I/O, exhaustively unit-testable -- mirrors
+// diffTeamRepoOwnershipRetractions' shape.
+func filterUnchangedTeamRepoOwnershipRows(
+	derived []DerivedTeamRepoOwnershipRow,
+	repos map[uuid.UUID]teamRepoOwnershipRepoInfo,
+	activeRows []teamRepoOwnershipActiveRow,
+) []DerivedTeamRepoOwnershipRow {
+	unchanged := make(map[teamRepoOwnershipRowSignature]bool, len(activeRows))
+	for _, row := range activeRows {
+		unchanged[teamRepoOwnershipRowSignature{
+			TeamID:       row.TeamID,
+			RepoFullName: row.RepoFullName,
+			Provider:     row.Provider,
+			RepoID:       row.RepoID,
+			IsPrimary:    row.IsPrimary,
+			Specificity:  row.Specificity,
+			Priority:     row.Priority,
+			MatchType:    row.MatchType,
+		}] = true
+	}
+	toWrite := make([]DerivedTeamRepoOwnershipRow, 0, len(derived))
+	for _, row := range derived {
+		repoID, err := uuid.Parse(row.RepoID)
+		if err != nil || repoID == uuid.Nil {
+			// Same unresolvable-repo_id case writeTeamRepoOwnershipRows
+			// itself skips -- keep it in toWrite so that existing skip
+			// logic (and its own doc comment) stays the one place this is
+			// handled, rather than silently dropping it here under a
+			// different name.
+			toWrite = append(toWrite, row)
+			continue
+		}
+		info, ok := repos[repoID]
+		if !ok || info.FullName == "" {
+			toWrite = append(toWrite, row)
+			continue
+		}
+		signature := teamRepoOwnershipRowSignature{
+			TeamID:       row.TeamID,
+			RepoFullName: info.FullName,
+			Provider:     info.Provider,
+			RepoID:       repoID,
+			IsPrimary:    false, // writeTeamRepoOwnershipRows always writes is_primary=0
+			Specificity:  row.Specificity,
+			Priority:     teamRepoOwnershipPrecedence[teamRepoOwnershipSourceKindInferred].Priority,
+			MatchType:    "exact", // writeTeamRepoOwnershipRows always writes match_type="exact"
+		}
+		if unchanged[signature] {
+			continue
+		}
+		toWrite = append(toWrite, row)
+	}
+	return toWrite
 }
 
 func loadTeamRepoOwnershipProjectLinks(
@@ -249,6 +357,24 @@ func loadTeamRepoOwnershipProjectLinks(
 	// Mirrors metrics/loaders/clickhouse.py's load_team_attribution_context
 	// (same GROUP BY + argMax shape, same tie-break tuple) exactly (codex
 	// adversarial review, 2026-08-28, confirmed finding).
+	// Named {org_id:String}/{as_of:DateTime64(3, 'UTC')} parameters, not
+	// positional `?`: this driver round-trips a positional `?` bound to a
+	// time.Time at whole-SECOND precision (confirmed empirically -- SELECT
+	// toString(?) with a sub-second time.Time argument returns the value
+	// with its fraction dropped), so `valid_from <= ?` can read a row
+	// written earlier in the SAME wall-clock second as not-yet-valid for up
+	// to a full second. The named form preserves the DateTime64(3) scale
+	// teamscope.go's RepoCondition already established for exactly this
+	// reason (see its own doc comment on the same table).
+	//
+	// asOf is formatted as a literal string, not bound as a raw time.Time:
+	// clickhouse-go renders a bare time.Time bound to a {name:DateTime64(...)}
+	// placeholder as a `toDateTime(...)` expression, and the server REJECTS
+	// that ("cannot be parsed as DateTime64(3, 'UTC')... isn't parsed
+	// completely") -- a named parameter is parsed as a literal, not
+	// evaluated as an expression. Same documented fix as
+	// internal/jobs/metrics/remaining/dora_native_clickhouse.go's
+	// dateTime64Argument/DateTime64Argument.
 	rows, err := conn.Query(ctx, `
 SELECT
     provider,
@@ -257,13 +383,13 @@ SELECT
     argMax(is_primary, (updated_at, valid_from)) AS is_primary,
     argMax(specificity, (updated_at, valid_from)) AS specificity
 FROM team_project_ownership
-WHERE org_id = ?
+WHERE org_id = {org_id:String}
   AND project_id != ''
   AND team_id != ''
-  AND valid_from <= ?
-  AND (valid_to IS NULL OR valid_to > ?)
+  AND valid_from <= {as_of:DateTime64(3, 'UTC')}
+  AND (valid_to IS NULL OR valid_to > {as_of:DateTime64(3, 'UTC')})
 GROUP BY provider, project_id, team_id`,
-		orgID, asOf, asOf)
+		clickhouse.Named("org_id", orgID), clickhouse.Named("as_of", asOf.UTC().Format("2006-01-02 15:04:05.000")))
 	if err != nil {
 		return nil, err
 	}

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/google/uuid"
 
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
@@ -537,5 +538,102 @@ func TestAuthoritativeOwnerByRepoSkipsAnEmptyTeamIDRow(t *testing.T) {
 		t.Fatalf("repo with a top-ranked empty-team_id claim and a lower-ranked "+
 			"real claim: owner=%q, want team-real -- the empty claim must not "+
 			"suppress the real one further down the ranked order", got)
+	}
+}
+
+// TestOwnedRepoIDsResolvesASameSecondWrite proves a team_repo_ownership row
+// written with a valid_from EARLIER than asOf, but sharing its wall-clock
+// SECOND, still resolves through OwnedRepoIDs. A positional `?` DateTime64
+// parameter round-trips at whole-SECOND precision on this driver (confirmed
+// empirically against this same ClickHouse image: `SELECT toString(?)` with
+// a sub-second time.Time argument returns the value with its fraction
+// dropped), which would compare the row's real millisecond offset against a
+// truncated asOf and could read a genuinely-valid row as not-yet-valid for
+// up to a full second after it was written. The named
+// {as_of:DateTime64(3, 'UTC')} parameter OwnedRepoIDs binds instead
+// preserves the DateTime64(3) scale end to end, so this stays exact.
+//
+// Deterministic, not timing-luck: both instants are hand-authored a fixed
+// 400ms apart inside the SAME second, not captured from real execution
+// speed. The seed itself binds a native-protocol batch, not a positional
+// `?` in an INSERT ... VALUES statement -- the same whole-second rounding
+// this test exists to catch on the READ side would just as easily hide
+// itself on the WRITE side, storing .000 instead of .100 and making every
+// assertion below pass regardless of what OwnedRepoIDs does with asOf. The
+// stored valid_from is read back and checked against the seeded value
+// before OwnedRepoIDs is ever called, so a regression in either direction
+// is caught at its own layer.
+func TestOwnedRepoIDsResolvesASameSecondWrite(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	instance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatalf("start clickhouse: %v", err)
+	}
+	t.Cleanup(func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("terminate clickhouse: %v", err)
+		}
+	})
+	chschema.Apply(ctx, t, instance)
+
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(instance.URI))
+	if err != nil {
+		t.Fatalf("open clickhouse: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	const orgID = "org-teamownership-same-second"
+	const teamID = "team-platform"
+	repoID := uuid.New()
+
+	second := time.Date(2026, 1, 1, 0, 0, 10, 0, time.UTC) // a whole second, no sub-second component
+	validFrom := second.Add(100 * time.Millisecond)        // .100 into that second
+	asOf := second.Add(500 * time.Millisecond)             // .500 into the SAME second, strictly later
+
+	// Seeded via PrepareBatch (the native binary protocol), never a
+	// positional `?` bound in an INSERT ... VALUES statement: `?` round-trips
+	// a time.Time argument at whole-SECOND precision on this driver just
+	// like a SELECT-side positional parameter does, so seeding validFrom
+	// that way would silently store .000 instead of .100 and the assertions
+	// below would pass regardless of whether OwnedRepoIDs itself preserves
+	// sub-second precision -- exactly the gap a mutation of dateTime64Literal
+	// to second precision would otherwise slip through undetected.
+	batch, err := conn.PrepareBatch(ctx, `INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)`)
+	if err != nil {
+		t.Fatalf("prepare team_repo_ownership batch: %v", err)
+	}
+	if err := batch.Append(
+		orgID, "github", teamID, repoID, repoID.String(), "exact", "inferred",
+		uint8(0), uint16(1), int32(0), validFrom, nil, validFrom,
+	); err != nil {
+		t.Fatalf("append team_repo_ownership row: %v", err)
+	}
+	if err := batch.Send(); err != nil {
+		t.Fatalf("send team_repo_ownership batch: %v", err)
+	}
+
+	// Read the stored valid_from back RAW (no FINAL/argMax, no OwnedRepoIDs
+	// involved) and assert it still carries the .100 fraction -- proves the
+	// seed itself is the sub-second fixture this test claims, before trusting
+	// what OwnedRepoIDs makes of it.
+	var storedValidFrom time.Time
+	if err := conn.QueryRow(ctx, `SELECT valid_from FROM team_repo_ownership WHERE org_id = {org_id:String} AND team_id = {team_id:String}`,
+		clickhouse.Named("org_id", orgID), clickhouse.Named("team_id", teamID)).Scan(&storedValidFrom); err != nil {
+		t.Fatalf("read back valid_from: %v", err)
+	}
+	if !storedValidFrom.Equal(validFrom) {
+		t.Fatalf("seed lost sub-second precision: stored valid_from=%s, want %s (the .100 fraction)", storedValidFrom, validFrom)
+	}
+
+	got, err := OwnedRepoIDs(ctx, conn, orgID, teamID, asOf)
+	if err != nil {
+		t.Fatalf("OwnedRepoIDs: %v", err)
+	}
+	if len(got) != 1 || got[0] != repoID {
+		t.Fatalf("expected OwnedRepoIDs to resolve [%s] for a row written .100 into a second when asOf is .500 into the SAME second, got %v", repoID, got)
 	}
 }

@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
@@ -1350,6 +1351,25 @@ LIMIT ?`, orgID, asOf, asOf, GithubWorkItemDerivationContextLimit+1)
 
 // team_repo_ownership.repo_id is Nullable(UUID); tuple-wrapped below so
 // argMax cannot skip the newest row when it carries NULL.
+//
+// Named {org_id:String}/{as_of:DateTime64(3, 'UTC')} parameters, not
+// positional `?`: this driver round-trips a positional `?` bound to a
+// time.Time at whole-SECOND precision (confirmed empirically -- SELECT
+// toString(?) with a sub-second time.Time argument returns the value
+// with its fraction dropped), so `o.valid_from <= ?` can read a row written
+// earlier in the SAME wall-clock second as not-yet-valid for up to a full
+// second. The named form preserves the DateTime64(3) scale -- same
+// established fix as internal/teamownership's OwnedRepoIDs/
+// AuthoritativeOwnerByRepo and cmd/query-api/internal/teamscope's
+// RepoCondition, all readers of this same table. asOf is formatted as a
+// literal string, not bound as a raw time.Time: clickhouse-go renders a
+// bare time.Time bound to a {name:DateTime64(...)} placeholder as a
+// `toDateTime(...)` expression, and the server REJECTS that ("cannot be
+// parsed as DateTime64(3, 'UTC')... isn't parsed completely") -- a named
+// parameter is parsed as a literal, not evaluated as an expression. Same
+// documented fix as
+// internal/jobs/metrics/remaining/dora_native_clickhouse.go's
+// dateTime64Argument/DateTime64Argument.
 func (source ClickHouseFactSource) LoadRepos(
 	ctx context.Context, orgID string, asOf time.Time,
 ) ([]GithubWorkItemDerivationRepoFact, error) {
@@ -1364,7 +1384,7 @@ FROM (
          argMax(o.priority, (o.updated_at, o.valid_from)) AS priority,
          max(o.updated_at) AS updated_at
   FROM team_repo_ownership AS o
-  WHERE o.org_id = ? AND o.valid_from <= ? AND (o.valid_to IS NULL OR o.valid_to > ?)
+  WHERE o.org_id = {org_id:String} AND o.valid_from <= {as_of:DateTime64(3, 'UTC')} AND (o.valid_to IS NULL OR o.valid_to > {as_of:DateTime64(3, 'UTC')})
   GROUP BY o.org_id, o.provider, o.repo_full_name, o.team_id
 ) AS g
 LEFT JOIN (
@@ -1373,7 +1393,9 @@ LEFT JOIN (
   GROUP BY org_id, id
 ) AS t ON t.org_id = g.org_id AND t.id = g.team_id
 ORDER BY g.provider, g.repo_full_name, g.team_id
-LIMIT ?`, orgID, asOf, asOf, GithubWorkItemDerivationContextLimit+1)
+LIMIT {row_limit:UInt64}`,
+		clickhouse.Named("org_id", orgID), clickhouse.Named("as_of", asOf.UTC().Format("2006-01-02 15:04:05.000")),
+		clickhouse.Named("row_limit", uint64(GithubWorkItemDerivationContextLimit+1)))
 	if err != nil {
 		return nil, err
 	}

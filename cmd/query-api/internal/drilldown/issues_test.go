@@ -147,6 +147,19 @@ func TestFetchIssuesQueryNoJoinOnWct(t *testing.T) {
 	}
 }
 
+// TestFetchIssuesQueryOrderByWorkItemIDTiebreak pins the deterministic
+// tiebreak appended after completed_at DESC: this statement's own tie
+// order (and therefore this plane's own cursor pagination) stays stable
+// and reproducible across repeated calls, independent of ClickHouse's
+// own unspecified order among rows sharing one completed_at value.
+func TestFetchIssuesQueryOrderByWorkItemIDTiebreak(t *testing.T) {
+	rendered := renderFetchIssuesQuery()
+	const want = "ORDER BY wct.completed_at DESC, wct.work_item_id ASC"
+	if !strings.Contains(rendered, want) {
+		t.Fatalf("fetchIssuesQuery missing %q:\n%s", want, rendered)
+	}
+}
+
 func TestBuildIssuesResponseNilReader(t *testing.T) {
 	_, err := BuildIssuesResponse(context.Background(), nil, "org-1", IssueParams{})
 	if !errors.Is(err, ErrUnavailable) {

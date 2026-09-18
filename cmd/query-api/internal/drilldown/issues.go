@@ -162,6 +162,17 @@ const primaryWorkItemTeamAttributionSource = `(
 // the SAME migration-024 DEFAULT 'default' backfill caveat prs.go's doc
 // comment already flags for git_pull_requests.org_id (no alternative
 // exists here to route around it).
+//
+// ORDER BY: `wct.completed_at DESC, wct.work_item_id ASC`. Python's own
+// fetch_issues carries only `ORDER BY wct.completed_at DESC`, with no
+// secondary sort key -- ClickHouse gives no ordering guarantee among rows
+// sharing one completed_at value, so a tie can put a different subset of
+// those rows on each side of this statement's own LIMIT. Appending
+// wct.work_item_id ASC makes THIS statement's own tie order, and
+// therefore this plane's own cursor pagination across repeated calls,
+// stable and reproducible -- it does not, and cannot, make this
+// statement agree with Python's own unordered tie, which carries no
+// secondary key to match against.
 const fetchIssuesQuery = `
 SELECT
     wct.work_item_id AS work_item_id,
@@ -178,7 +189,7 @@ LEFT JOIN %s AS t
 WHERE wct.day >= {start_day:Date} AND wct.day < {end_day:Date}
   AND wct.org_id = {org_id:String}
 %s
-ORDER BY wct.completed_at DESC
+ORDER BY wct.completed_at DESC, wct.work_item_id ASC
 LIMIT {limit:UInt64}
 %s
 `

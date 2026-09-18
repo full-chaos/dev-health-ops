@@ -356,6 +356,22 @@ type Options struct {
 	// unset keeps today's plain opt-in behaviour, unchanged: FloatTierB
 	// is read exactly as this comment's first paragraph says, and
 	// FloatExactLeaves/IntegerLeaves are never consulted.
+	//
+	// A key here (same for FloatExactLeaves/IntegerLeaves) may name ONE
+	// segment with a trailing "+" (e.g. "data.root.children+.value") --
+	// the ONE repeat-marker form these three tables accept, for a
+	// RECURSIVE tree of UNBOUNDED depth a fixed dotted path cannot
+	// enumerate (flame/aggregated's own code_hotspots mode, a real
+	// repository file path split on "/"). It matches a tiered leaf path
+	// whose corresponding position holds one or MORE consecutive
+	// occurrences of the base segment name ("children"), never zero --
+	// a depth-0 leaf (no repeated segment at all) needs its own,
+	// separate, plain entry. Picked because a real JSON key this
+	// package's own leaf paths are built from (a Go struct's json tag or
+	// a Python field name) never contains "+". validateNumericLeaves
+	// rejects a "+" anywhere but as the sole trailing character of a
+	// non-terminal segment. See matchRepeatDeclaration's own doc comment
+	// for the matching rule itself.
 	FloatTierB map[string]string
 
 	// FloatExactLeaves names float-DECLARED leaves (dotted, index-free
@@ -676,8 +692,17 @@ func validateBaselineDefects(defects []BaselineDefect) error {
 // FloatExactLeaves overlapping is expected and fine (see
 // Options.FloatExactLeaves' own doc comment): together they ARE the
 // entry's float declaration, one naming the tolerant leaves and the
-// other the ones opted back to exact.
+// other the ones opted back to exact. It also catches a malformed
+// repeat-segment marker (validateRepeatMarker) in any of the three
+// tables' own keys, before that key ever reaches matchRepeatDeclaration.
 func validateNumericLeaves(opts Options) error {
+	for _, table := range []map[string]string{opts.FloatTierB, opts.FloatExactLeaves, opts.IntegerLeaves} {
+		for path := range table {
+			if err := validateRepeatMarker(path); err != nil {
+				return err
+			}
+		}
+	}
 	for path := range opts.IntegerLeaves {
 		if _, ok := opts.FloatTierB[path]; ok {
 			return fmt.Errorf("goapiproof: %q is declared in both IntegerLeaves and FloatTierB -- a leaf is float or integer, never both", path)
@@ -689,6 +714,33 @@ func validateNumericLeaves(opts Options) error {
 	for path := range opts.FloatExactLeaves {
 		if _, ok := opts.FloatTierB[path]; !ok {
 			return fmt.Errorf("goapiproof: %q is declared in FloatExactLeaves but not FloatTierB -- FloatExactLeaves opts a float-declared leaf back to exact, it does not declare a leaf float on its own", path)
+		}
+	}
+	return nil
+}
+
+// validateRepeatMarker rejects a malformed repeat-segment marker in a
+// declared numeric-leaf path (FloatTierB/FloatExactLeaves/IntegerLeaves'
+// own doc comment): the ONE accepted form is a whole dotted segment
+// ending in exactly one trailing "+", with at least one character
+// before it, and it can never be the path's own LAST segment -- a
+// repeat segment names a recursive STRUCTURAL node (e.g. "children+"),
+// never the leaf itself, so at least one segment (the leaf's own field
+// name) must follow it. A "+" anywhere else -- mid-segment, doubled, or
+// with an empty base -- is rejected rather than silently matching
+// nothing or matching something a corpus author did not intend.
+func validateRepeatMarker(path string) error {
+	segments := strings.Split(path, ".")
+	for i, segment := range segments {
+		if !strings.Contains(segment, "+") {
+			continue
+		}
+		base, isRepeat := strings.CutSuffix(segment, "+")
+		if !isRepeat || base == "" || strings.Contains(base, "+") {
+			return fmt.Errorf("goapiproof: %q has a malformed repeat marker in segment %q -- the one accepted form is a whole segment ending in exactly one trailing plus sign with a non-empty base name (e.g. children+)", path, segment)
+		}
+		if i == len(segments)-1 {
+			return fmt.Errorf("goapiproof: %q marks its own last segment %q as repeating -- a repeat segment names a recursive structural node, never the leaf itself, so at least one segment must follow it", path, segment)
 		}
 	}
 	return nil
@@ -1573,17 +1625,92 @@ func sameScalar(baseline, candidate any) bool {
 	return fmt.Sprintf("%T:%v", baseline, baseline) == fmt.Sprintf("%T:%v", candidate, candidate)
 }
 
-// classifyDeclaredLeaf looks up path EXACTLY (no parent fallback) across
-// FloatTierB/FloatExactLeaves/IntegerLeaves. ok reports whether path is
-// declared at all; tolerant reports its comparison mode when it is.
-func classifyDeclaredLeaf(path string, opts Options) (tolerant, ok bool) {
+// matchRepeatingSegments reports whether actual's dot-segments satisfy
+// declared's own segments under the ONE repeat-marker form
+// (FloatTierB's own doc comment): a declared segment ending in "+"
+// consumes one or MORE consecutive actual segments equal to its own
+// base name (zero is never accepted -- a depth-0 leaf needs its own,
+// separate, plain entry); every other declared segment must equal the
+// actual segment at that exact position; the two segment lists must
+// consume each other completely start to finish, with nothing left
+// over on either side.
+func matchRepeatingSegments(declared, actual []string) bool {
+	ai := 0
+	for _, segment := range declared {
+		base, isRepeat := strings.CutSuffix(segment, "+")
+		if isRepeat {
+			start := ai
+			for ai < len(actual) && actual[ai] == base {
+				ai++
+			}
+			if ai == start {
+				return false
+			}
+			continue
+		}
+		if ai >= len(actual) || actual[ai] != segment {
+			return false
+		}
+		ai++
+	}
+	return ai == len(actual)
+}
+
+// matchRepeatDeclaration scans declared's own keys for one containing a
+// repeat-marker segment that matches path under matchRepeatingSegments,
+// returning that key. Only ever consulted AFTER an exact-key lookup on
+// the same table already missed -- the repeat form is a fallback for
+// the one recursive, unbounded-depth tree shape a literal dotted path
+// cannot enumerate (code_hotspots' own real-file-path tree,
+// flame/aggregated), never a replacement for the plain map lookup every
+// other leaf still uses, and never itself consulted when path contains
+// no "." at all (a repeat-marked declaration always has a structural
+// segment plus the leaf's own name that follows it, so a bare,
+// dot-free path can never match one -- validateRepeatMarker's own
+// last-segment rule guarantees every declared key has this shape).
+func matchRepeatDeclaration(path string, declared map[string]string) (string, bool) {
+	if len(declared) == 0 || !strings.Contains(path, ".") {
+		return "", false
+	}
+	actual := strings.Split(path, ".")
+	for key := range declared {
+		if !strings.Contains(key, "+") {
+			continue
+		}
+		if matchRepeatingSegments(strings.Split(key, "."), actual) {
+			return key, true
+		}
+	}
+	return "", false
+}
+
+// classifyDeclaredLeaf looks up path across FloatTierB/FloatExactLeaves/
+// IntegerLeaves, first by EXACT key match and then, only on a miss, by
+// the ONE repeat-segment form (matchRepeatDeclaration) -- the fallback a
+// recursive tree needs, playing the same role for THAT shape that
+// numericLeafTolerant's own ancestor climb plays for a
+// dynamically-keyed map. ok reports whether path is declared at all;
+// tolerant reports its comparison mode when it is; matchedKey is the
+// declared key that actually matched -- path itself for an exact hit,
+// the repeat-marked pattern for a repeat hit -- the string
+// Result.UnusedTierB tracks usage against.
+func classifyDeclaredLeaf(path string, opts Options) (tolerant, ok bool, matchedKey string) {
 	_, inTierB := opts.FloatTierB[path]
 	_, inExact := opts.FloatExactLeaves[path]
 	_, inInt := opts.IntegerLeaves[path]
-	if !inTierB && !inExact && !inInt {
-		return false, false
+	if inTierB || inExact || inInt {
+		return inTierB && !inExact, true, path
 	}
-	return inTierB && !inExact, true
+	if key, matched := matchRepeatDeclaration(path, opts.FloatExactLeaves); matched {
+		return false, true, key
+	}
+	if key, matched := matchRepeatDeclaration(path, opts.FloatTierB); matched {
+		return true, true, key
+	}
+	if key, matched := matchRepeatDeclaration(path, opts.IntegerLeaves); matched {
+		return false, true, key
+	}
+	return false, false, ""
 }
 
 // parentPath returns key's immediate dotted parent ("data.a.b" ->
@@ -1605,10 +1732,13 @@ func parentPath(key string) (string, bool) {
 // let the two disagree on a leaf the fast path handles without ever
 // calling compareNumber.
 //
-// Tried in order: the leaf's OWN exact path, then (only if that finds
-// nothing) each ANCESTOR path in turn, climbing one "." segment at a
-// time until a declared one is found or none remain -- the fallback a
-// dynamically-keyed JSON object needs. A Go map[string]<number> with
+// Tried in order: the leaf's OWN exact path (which classifyDeclaredLeaf
+// itself also tries the repeat-segment form for, see its own doc
+// comment -- the fallback a RECURSIVE tree of unbounded depth needs),
+// then (only if that finds nothing) each ANCESTOR path in turn, climbing
+// one "." segment at a time until a declared one is found or none
+// remain -- the fallback a dynamically-keyed JSON object needs. A Go
+// map[string]<number> with
 // data-dependent keys (theme_distribution, keyed by an org's own theme
 // names) produces a leaf path compareDict builds from the LITERAL key
 // ("data.theme_distribution.engineering"), which no per-leaf declaration
@@ -1650,8 +1780,10 @@ func numericLeafTolerant(key string, opts Options, track *tracker) bool {
 		}
 		return inTierB
 	}
-	matched := key
-	tolerant, ok := classifyDeclaredLeaf(key, opts)
+	tolerant, ok, matched := classifyDeclaredLeaf(key, opts)
+	if !ok {
+		matched = key
+	}
 	// Climb ancestors -- NOT stopping at one level -- because a
 	// dynamically-keyed map's own key can itself legitimately contain a
 	// "." (subcategory_distribution's keys are compound,
@@ -1673,8 +1805,8 @@ func numericLeafTolerant(key string, opts Options, track *tracker) bool {
 		if !hasParent {
 			break
 		}
-		if candidateTolerant, candidateOK := classifyDeclaredLeaf(candidate, opts); candidateOK {
-			tolerant, ok, matched = candidateTolerant, true, candidate
+		if candidateTolerant, candidateOK, candidateMatched := classifyDeclaredLeaf(candidate, opts); candidateOK {
+			tolerant, ok, matched = candidateTolerant, true, candidateMatched
 		}
 	}
 	if !ok {

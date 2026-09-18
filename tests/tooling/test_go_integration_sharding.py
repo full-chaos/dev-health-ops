@@ -2112,10 +2112,15 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # columns, applied on both the write path and the recovery readback,
     # added 18 ordinary tests and 7 integration-tagged tests:
     # +25 top-level (1443 -> 1468), integration-tagged 165 -> 172.
-    # 1468 top-level provider tests, 172 of them integration-tagged; both
+    # Making FetchEvidence.Requests a single source (the counting Doer at the
+    # HTTP boundary) across every REST/GraphQL-paginated provider-sync route,
+    # instead of a decoded-page or per-loop tally, added 30 ordinary tests,
+    # none integration-tagged: +30 top-level (1468 -> 1498), integration-tagged
+    # unchanged at 172.
+    # 1498 top-level provider tests, 172 of them integration-tagged; both
     # pins move with any top-level test added to or removed from
     # internal/providersync.
-    assert len(expected_provider_tests) == 1468
+    assert len(expected_provider_tests) == 1498
 
     assert len(expected_integration_tests) == 172
     assert expected_integration_tests < expected_provider_tests
@@ -2133,7 +2138,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1468
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1498
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -2251,7 +2256,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1468
+    assert len(selected_tests) == len(set(selected_tests)) == 1498
     assert set(selected_tests) == expected_tests
 
 

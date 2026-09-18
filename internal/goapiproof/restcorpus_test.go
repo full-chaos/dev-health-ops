@@ -105,6 +105,136 @@ func TestValidateRESTCorpus_AcceptsAWellFormedBodyPathBinding(t *testing.T) {
 	}
 }
 
+// TestValidateRESTCorpus_RefusesCandidatesWithNoExposeAs and its sibling
+// below pin RESTIDBinding's own "both or neither" rule for
+// Candidates/ExposeAs (restidbind.go's own doc comment).
+func TestValidateRESTCorpus_RefusesCandidatesWithNoExposeAs(t *testing.T) {
+	saved := restEndpointSpecs
+	savedOrder := restRunOrder
+	t.Cleanup(func() { restEndpointSpecs = saved; restRunOrder = savedOrder })
+	clearRESTOperatorSuppliedProducers(t)
+
+	restEndpointSpecs, restRunOrder = restCorpusValidationFixture(
+		[]RESTIDBinding{{Producer: "widget_id", QueryParam: "id", Candidates: 5}}, nil,
+	)
+
+	if err := ValidateRESTCorpus(); err == nil {
+		t.Fatal("want an error when Candidates > 0 but ExposeAs is empty")
+	}
+}
+
+// TestValidateRESTCorpus_RefusesExposeAsWithNoCandidates is the other
+// direction: an ExposeAs with no bound is equally a corpus authoring
+// error, never a silent no-op.
+func TestValidateRESTCorpus_RefusesExposeAsWithNoCandidates(t *testing.T) {
+	saved := restEndpointSpecs
+	savedOrder := restRunOrder
+	t.Cleanup(func() { restEndpointSpecs = saved; restRunOrder = savedOrder })
+	clearRESTOperatorSuppliedProducers(t)
+
+	restEndpointSpecs, restRunOrder = restCorpusValidationFixture(
+		[]RESTIDBinding{{Producer: "widget_id", QueryParam: "id", ExposeAs: "picked_widget_id"}}, nil,
+	)
+
+	if err := ValidateRESTCorpus(); err == nil {
+		t.Fatal("want an error when ExposeAs is set but Candidates is zero")
+	}
+}
+
+// TestValidateRESTCorpus_RefusesTwoIteratingBindingsOnOneRequest pins
+// that a request declares AT MOST one bounded-candidate binding --
+// combinatorial iteration across two independent candidate pools is not
+// supported, and a corpus author who declares two gets a startup error,
+// not a silently-ignored second binding.
+func TestValidateRESTCorpus_RefusesTwoIteratingBindingsOnOneRequest(t *testing.T) {
+	saved := restEndpointSpecs
+	savedOrder := restRunOrder
+	t.Cleanup(func() { restEndpointSpecs = saved; restRunOrder = savedOrder })
+	clearRESTOperatorSuppliedProducers(t)
+
+	restEndpointSpecs, restRunOrder = restCorpusValidationFixture(
+		[]RESTIDBinding{
+			{Producer: "widget_id", QueryParam: "id", Candidates: 5, ExposeAs: "picked_widget_id"},
+			{Producer: "widget_id", BodyPath: "filters.scope.ids", Candidates: 5, ExposeAs: "other_widget_id"},
+		},
+		map[string]any{"filters": map[string]any{"scope": map[string]any{"ids": []string{"placeholder"}}}},
+	)
+
+	if err := ValidateRESTCorpus(); err == nil {
+		t.Fatal("want an error when a request declares two bounded-candidate IDBindings")
+	}
+}
+
+// TestValidateRESTCorpus_AcceptsAWellFormedIteratingBinding is the
+// positive counterpart: Candidates and ExposeAs both set, alone on the
+// request, passes.
+func TestValidateRESTCorpus_AcceptsAWellFormedIteratingBinding(t *testing.T) {
+	saved := restEndpointSpecs
+	savedOrder := restRunOrder
+	t.Cleanup(func() { restEndpointSpecs = saved; restRunOrder = savedOrder })
+	clearRESTOperatorSuppliedProducers(t)
+
+	restEndpointSpecs, restRunOrder = restCorpusValidationFixture(
+		[]RESTIDBinding{{Producer: "widget_id", QueryParam: "id", Candidates: 5, ExposeAs: "picked_widget_id"}}, nil,
+	)
+
+	if err := ValidateRESTCorpus(); err != nil {
+		t.Fatalf("ValidateRESTCorpus: %v", err)
+	}
+}
+
+// TestValidateRESTIDBindingOrder_ExposeAsIsAvailableToALaterConsumer
+// pins that an iterating binding's own ExposeAs registers exactly like
+// an ordinary Produces entry: a request placed AFTER the iterating
+// request, binding to ExposeAs by name, passes ordering validation.
+func TestValidateRESTIDBindingOrder_ExposeAsIsAvailableToALaterConsumer(t *testing.T) {
+	saved := restEndpointSpecs
+	savedOrder := restRunOrder
+	t.Cleanup(func() { restEndpointSpecs = saved; restRunOrder = savedOrder })
+	clearRESTOperatorSuppliedProducers(t)
+
+	restEndpointSpecs = map[string]RESTEndpointSpec{
+		"REST:GET:/producer": {
+			Method: "GET", Path: "/producer",
+			Requests: []RESTRequest{{
+				Name: "req", WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode: RESTBodyModeJSON,
+				Produces: []RESTIDProducer{{Name: "widget_id"}},
+			}},
+		},
+		"REST:GET:/iterating-consumer": {
+			Method: "GET", Path: "/iterating-consumer",
+			Requests: []RESTRequest{{
+				Name: "req", WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode:   RESTBodyModeJSON,
+				IDBindings: []RESTIDBinding{{Producer: "widget_id", QueryParam: "id", Candidates: 5, ExposeAs: "picked_widget_id"}},
+			}},
+		},
+		"REST:GET:/downstream-consumer": {
+			Method: "GET", Path: "/downstream-consumer",
+			Requests: []RESTRequest{{
+				Name: "req", WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode:   RESTBodyModeJSON,
+				IDBindings: []RESTIDBinding{{Producer: "picked_widget_id", QueryParam: "id"}},
+			}},
+		},
+	}
+	restRunOrder = []string{"REST:GET:/producer", "REST:GET:/iterating-consumer", "REST:GET:/downstream-consumer"}
+
+	if err := ValidateRESTIDBindingOrder(); err != nil {
+		t.Fatalf("ValidateRESTIDBindingOrder: %v -- ExposeAs must be available to a later request exactly like an ordinary Produces entry", err)
+	}
+
+	// The mirror-image failure: the SAME downstream consumer placed
+	// BEFORE the iterating request that exposes its id must still be
+	// refused, at startup, the identical "consumer ahead of its
+	// producer" rule an ordinary Produces entry is already held to.
+	restRunOrder = []string{"REST:GET:/producer", "REST:GET:/downstream-consumer", "REST:GET:/iterating-consumer"}
+	if err := ValidateRESTIDBindingOrder(); err == nil {
+		t.Fatal("want an error when a consumer of ExposeAs runs before the iterating request that produces it")
+	}
+}
+
 func TestSpecForREST_RefusesAnUncoveredOperation(t *testing.T) {
 	if _, err := SpecForREST("REST:GET:/api/v1/does-not-exist"); err == nil {
 		t.Fatal("want an error for an uncovered operation, got nil")

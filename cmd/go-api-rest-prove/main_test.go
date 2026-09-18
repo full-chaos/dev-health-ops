@@ -1095,6 +1095,346 @@ func TestIDBinding_EndToEnd(t *testing.T) {
 	}
 }
 
+// iteratingFixtureServers builds the candidate/baseline pair
+// resolveIteratingRequest's own tests below drive: GET /people Produces
+// person_id from EVERY search result (not just the first); GET
+// /people/{person_id}/issues is StatusOnly (baseline declared failing,
+// 503 on every path), and its own candidate leg's response depends on
+// WHICH person_id is in the path -- candidateIssues maps a person_id to
+// the "items" the candidate answers for it, so a test can control exactly
+// which candidates win and which lose.
+func iteratingFixtureServers(t *testing.T, build string, personIDs []string, candidateIssues map[string]string) (candidateURL, baselineURL string, candidatePaths *[]string) {
+	t.Helper()
+	var paths []string
+
+	people := `[`
+	for i, id := range personIDs {
+		if i > 0 {
+			people += ","
+		}
+		people += `{"person_id":"` + id + `"}`
+	}
+	people += `]`
+
+	candidate := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		w.Header().Set("x-dev-health-build", build)
+		if r.URL.Path == "/people" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(people))
+			return
+		}
+		items, ok := candidateIssues[r.URL.Path]
+		if !ok {
+			items = "[]"
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"items":` + items + `}`))
+	}))
+	t.Cleanup(candidate.Close)
+
+	baseline := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/people" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(people))
+			return
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(baseline.Close)
+
+	return candidate.URL, baseline.URL, &paths
+}
+
+// runIteratingProducer drives the real producer request (GET /people)
+// through proveOneRESTRequest exactly the way run()'s own loop does, and
+// returns the produced/producedCandidates maps a consumer's own
+// resolveIteratingRequest call reads from -- the same hand-merge
+// TestIDBinding_EndToEnd above already performs for the single-shot case.
+func runIteratingProducer(t *testing.T, f flags, build string, writer receiptWriter) (map[string]string, map[string][]string) {
+	t.Helper()
+	producerSpec := goapiproof.RESTEndpointSpec{Method: http.MethodGet, Path: "/people"}
+	producerRequest := goapiproof.RESTRequest{
+		Name: "search", WantCandidateStatus: 200, WantBaselineStatus: 200,
+		BodyMode: goapiproof.RESTBodyModeJSON,
+		Produces: []goapiproof.RESTIDProducer{{Name: "person_id", IDField: "person_id"}},
+	}
+	out, err := proveOneRESTRequest(context.Background(), http.DefaultClient, f, "REST:GET:/people", producerSpec, producerRequest,
+		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil, false, nil)
+	if err != nil {
+		t.Fatalf("producer proveOneRESTRequest: %v", err)
+	}
+	if !out.Admitted {
+		t.Fatalf("producer request refused: %s -- %s", out.Refusal, out.Detail)
+	}
+	produced := map[string]string{}
+	for name, id := range out.producedIDs {
+		produced[name] = id
+	}
+	producedCandidates := map[string][]string{}
+	for name, ids := range out.producedCandidateIDs {
+		producedCandidates[name] = ids
+	}
+	return produced, producedCandidates
+}
+
+func iteratingConsumerRequest() (goapiproof.RESTEndpointSpec, goapiproof.RESTRequest, goapiproof.RESTIDBinding) {
+	spec := goapiproof.RESTEndpointSpec{Method: http.MethodGet, Path: "/people/{person_id}/issues"}
+	binding := goapiproof.RESTIDBinding{Producer: "person_id", PathParam: "person_id", Candidates: 10, ExposeAs: "issues_person_id"}
+	request := goapiproof.RESTRequest{
+		Name: "issues_default", WantCandidateStatus: 200, WantBaselineStatus: 503,
+		StatusDivergenceReason: "test fixture",
+		BodyMode:               goapiproof.RESTBodyModeStatusOnly,
+		IDBindings:             []goapiproof.RESTIDBinding{binding},
+		Produces:               []goapiproof.RESTIDProducer{{Name: "issue_status", ListPath: "items", IDField: "status"}},
+	}
+	return spec, request, binding
+}
+
+// TestResolveIteratingRequest_SelectsTheFirstCandidateWhoseConsumerYieldsItsProducers
+// is this ticket's central claim: the FIRST search result (p-1) has no
+// issues (the candidate leg answers empty items, so this request's own
+// declared Produces -- issue_status -- cannot extract), so it LOSES; the
+// SECOND (p-2) has one, and wins. The winning candidate is exposed as
+// issues_person_id, and exactly one receipt is written -- for the winner,
+// never for the losing attempt.
+func TestResolveIteratingRequest_SelectsTheFirstCandidateWhoseConsumerYieldsItsProducers(t *testing.T) {
+	const build = "abc123def456"
+	candidateURL, baselineURL, paths := iteratingFixtureServers(t, build,
+		[]string{"p-1", "p-2"},
+		map[string]string{"/people/p-1/issues": "[]", "/people/p-2/issues": `[{"status":"open"}]`},
+	)
+	f := flags{queryAPIURL: candidateURL, pythonAPIURL: baselineURL, org: "org-1", recordedBy: "chris", reviewEvidence: "test"}
+	produced, producedCandidates := runIteratingProducer(t, f, build, &fakeReceiptWriter{})
+	if len(producedCandidates["person_id"]) != 2 {
+		t.Fatalf("producedCandidates[person_id] = %v, want both p-1 and p-2", producedCandidates["person_id"])
+	}
+
+	writer := &fakeReceiptWriter{}
+	spec, request, binding := iteratingConsumerRequest()
+	attempt, err := resolveIteratingRequest(context.Background(), http.DefaultClient, f, "REST:GET:/people/{person_id}/issues",
+		spec, request, binding, produced, producedCandidates,
+		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil)
+	if err != nil {
+		t.Fatalf("resolveIteratingRequest: %v", err)
+	}
+	if !attempt.out.Admitted || !attempt.legsSent {
+		t.Fatalf("attempt = %+v, want an admitted win", attempt.out)
+	}
+	if attempt.out.producedIDs["issues_person_id"] != "p-2" {
+		t.Fatalf("producedIDs[issues_person_id] = %q, want p-2 (the winning candidate, not p-1)", attempt.out.producedIDs["issues_person_id"])
+	}
+	if len(attempt.out.Attempts) != 1 || attempt.out.Attempts[0].CandidateID != "p-1" {
+		t.Fatalf("Attempts = %+v, want exactly one losing attempt naming p-1", attempt.out.Attempts)
+	}
+	if attempt.out.Attempts[0].Refusal != goapiproof.RESTRefusalCandidateProducerUnresolved {
+		t.Fatalf("Attempts[0].Refusal = %q, want %q", attempt.out.Attempts[0].Refusal, goapiproof.RESTRefusalCandidateProducerUnresolved)
+	}
+	if len(writer.receipts) != 1 {
+		t.Fatalf("wrote %d receipts, want exactly 1 -- one per corpus request, for the winner only", len(writer.receipts))
+	}
+	if !slices.Contains(*paths, "/people/p-1/issues") || !slices.Contains(*paths, "/people/p-2/issues") {
+		t.Fatalf("candidate paths = %v, want both p-1 and p-2 tried", *paths)
+	}
+}
+
+// TestResolveIteratingRequest_SiblingBoundToExposeAsReceivesTheWinner
+// proves a SIBLING request's own IDBindings, bound to issues_person_id
+// (never the raw person_id producer), resolves to the WINNING candidate
+// -- not candidate 0 -- exactly the way run()'s own loop would apply it
+// after merging this outcome's producedIDs into `produced`.
+func TestResolveIteratingRequest_SiblingBoundToExposeAsReceivesTheWinner(t *testing.T) {
+	const build = "abc123def456"
+	candidateURL, baselineURL, _ := iteratingFixtureServers(t, build,
+		[]string{"p-1", "p-2"},
+		map[string]string{"/people/p-1/issues": "[]", "/people/p-2/issues": `[{"status":"open"}]`},
+	)
+	f := flags{queryAPIURL: candidateURL, pythonAPIURL: baselineURL, org: "org-1", recordedBy: "chris", reviewEvidence: "test"}
+	produced, producedCandidates := runIteratingProducer(t, f, build, &fakeReceiptWriter{})
+
+	spec, request, binding := iteratingConsumerRequest()
+	attempt, err := resolveIteratingRequest(context.Background(), http.DefaultClient, f, "REST:GET:/people/{person_id}/issues",
+		spec, request, binding, produced, producedCandidates,
+		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), &fakeReceiptWriter{}, nil)
+	if err != nil {
+		t.Fatalf("resolveIteratingRequest: %v", err)
+	}
+
+	// The run loop's own produced-merge step (runMeasurement), performed
+	// by hand here exactly like TestIDBinding_EndToEnd already does for
+	// the single-shot case.
+	for name, id := range attempt.out.producedIDs {
+		produced[name] = id
+	}
+
+	siblingSpec := goapiproof.RESTEndpointSpec{Method: http.MethodGet, Path: "/people/{person_id}/issues"}
+	siblingRequest := goapiproof.RESTRequest{
+		Name: "valid_cursor", WantCandidateStatus: 200, WantBaselineStatus: 503,
+		IDBindings: []goapiproof.RESTIDBinding{{Producer: "issues_person_id", PathParam: "person_id"}},
+	}
+	resolvedPath, _, _, unresolved := goapiproof.ResolveRESTIDBindings(siblingSpec.Path, siblingRequest, produced)
+	if len(unresolved) != 0 {
+		t.Fatalf("unresolved = %v, want none", unresolved)
+	}
+	if resolvedPath != "/people/p-2/issues" {
+		t.Fatalf("sibling resolved path = %q, want /people/p-2/issues (the winner, not candidate 0)", resolvedPath)
+	}
+}
+
+// TestResolveIteratingRequest_RefusesByNameAfterExhaustingTheBound
+// proves that when NO candidate's own declared Produces resolve, the
+// request refuses by name (RESTRefusalCandidateIterationExhausted),
+// naming every candidate tried, and writes NO receipt at all.
+func TestResolveIteratingRequest_RefusesByNameAfterExhaustingTheBound(t *testing.T) {
+	const build = "abc123def456"
+	candidateURL, baselineURL, _ := iteratingFixtureServers(t, build,
+		[]string{"p-1", "p-2"},
+		map[string]string{"/people/p-1/issues": "[]", "/people/p-2/issues": "[]"},
+	)
+	f := flags{queryAPIURL: candidateURL, pythonAPIURL: baselineURL, org: "org-1", recordedBy: "chris", reviewEvidence: "test"}
+	produced, producedCandidates := runIteratingProducer(t, f, build, &fakeReceiptWriter{})
+
+	writer := &fakeReceiptWriter{}
+	spec, request, binding := iteratingConsumerRequest()
+	attempt, err := resolveIteratingRequest(context.Background(), http.DefaultClient, f, "REST:GET:/people/{person_id}/issues",
+		spec, request, binding, produced, producedCandidates,
+		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil)
+	if err != nil {
+		t.Fatalf("resolveIteratingRequest: %v", err)
+	}
+	if attempt.out.Admitted || attempt.legsSent {
+		t.Fatalf("attempt = %+v, want a refusal with legsSent=false", attempt.out)
+	}
+	if attempt.out.Refusal != goapiproof.RESTRefusalCandidateIterationExhausted {
+		t.Fatalf("Refusal = %q, want %q", attempt.out.Refusal, goapiproof.RESTRefusalCandidateIterationExhausted)
+	}
+	if !strings.Contains(attempt.out.Detail, "p-1") || !strings.Contains(attempt.out.Detail, "p-2") {
+		t.Fatalf("Detail = %q, want it to name both tried candidates", attempt.out.Detail)
+	}
+	if len(attempt.out.Attempts) != 2 {
+		t.Fatalf("Attempts = %+v, want exactly 2 (both candidates tried)", attempt.out.Attempts)
+	}
+	if len(writer.receipts) != 0 {
+		t.Fatalf("wrote %d receipts, want 0 -- exhaustion writes no receipt at all", len(writer.receipts))
+	}
+
+	// The exhausted-binding cascade: a sibling bound to issues_person_id
+	// refuses through the SAME EXISTING RESTRefusalIDBindingUnresolved
+	// path an ordinary unresolved binding already uses -- no new
+	// mechanism, since exhaustion never sets produced[ExposeAs].
+	siblingSpec := goapiproof.RESTEndpointSpec{Method: http.MethodGet, Path: "/people/{person_id}/issues"}
+	siblingRequest := goapiproof.RESTRequest{
+		Name:       "valid_cursor",
+		IDBindings: []goapiproof.RESTIDBinding{{Producer: "issues_person_id", PathParam: "person_id"}},
+	}
+	_, _, _, unresolved := goapiproof.ResolveRESTIDBindings(siblingSpec.Path, siblingRequest, produced)
+	if len(unresolved) != 1 || unresolved[0] != "issues_person_id" {
+		t.Fatalf("unresolved = %v, want [issues_person_id] -- the existing unresolved-binding path, not a new mechanism", unresolved)
+	}
+}
+
+// TestResolveIteratingRequest_StopsAtTheDeclaredBoundNeverTriesBeyondIt
+// isolates the bound itself: Candidates is set to 3 against a pool of 5
+// candidates. The FIRST 3 (p-1..p-3) lose; a winner DOES exist, but only
+// at position 4 (p-4) -- one past the declared bound. This proves the
+// bound is actually honoured, not merely present in the struct: a
+// mutant that iterated the whole pool regardless of Candidates would
+// find that winner and pass every OTHER test in this file (none of them
+// puts a winner beyond N), but must fail HERE -- the request must
+// refuse by exhaustion after EXACTLY 3 attempts, never reach p-4 or p-5
+// at all, and write no receipt.
+func TestResolveIteratingRequest_StopsAtTheDeclaredBoundNeverTriesBeyondIt(t *testing.T) {
+	const build = "abc123def456"
+	candidateURL, baselineURL, paths := iteratingFixtureServers(t, build,
+		[]string{"p-1", "p-2", "p-3", "p-4", "p-5"},
+		map[string]string{
+			"/people/p-1/issues": "[]",
+			"/people/p-2/issues": "[]",
+			"/people/p-3/issues": "[]",
+			"/people/p-4/issues": `[{"status":"open"}]`,
+			"/people/p-5/issues": `[{"status":"open"}]`,
+		},
+	)
+	f := flags{queryAPIURL: candidateURL, pythonAPIURL: baselineURL, org: "org-1", recordedBy: "chris", reviewEvidence: "test"}
+	produced, producedCandidates := runIteratingProducer(t, f, build, &fakeReceiptWriter{})
+	if len(producedCandidates["person_id"]) != 5 {
+		t.Fatalf("producedCandidates[person_id] = %v, want all 5", producedCandidates["person_id"])
+	}
+
+	writer := &fakeReceiptWriter{}
+	spec, request, binding := iteratingConsumerRequest()
+	binding.Candidates = 3
+	request.IDBindings = []goapiproof.RESTIDBinding{binding}
+	attempt, err := resolveIteratingRequest(context.Background(), http.DefaultClient, f, "REST:GET:/people/{person_id}/issues",
+		spec, request, binding, produced, producedCandidates,
+		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil)
+	if err != nil {
+		t.Fatalf("resolveIteratingRequest: %v", err)
+	}
+	if attempt.out.Admitted || attempt.legsSent {
+		t.Fatalf("attempt = %+v, want exhaustion at the bound -- a winner exists at p-4, one PAST the declared bound of 3, and must never be reached", attempt.out)
+	}
+	if attempt.out.Refusal != goapiproof.RESTRefusalCandidateIterationExhausted {
+		t.Fatalf("Refusal = %q, want %q", attempt.out.Refusal, goapiproof.RESTRefusalCandidateIterationExhausted)
+	}
+	wantTried := []string{"p-1", "p-2", "p-3"}
+	if len(attempt.out.Attempts) != len(wantTried) {
+		t.Fatalf("Attempts = %+v, want exactly %d (the declared bound), not the whole 5-candidate pool", attempt.out.Attempts, len(wantTried))
+	}
+	for i, want := range wantTried {
+		if attempt.out.Attempts[i].CandidateID != want {
+			t.Fatalf("Attempts[%d].CandidateID = %q, want %q", i, attempt.out.Attempts[i].CandidateID, want)
+		}
+	}
+	if len(writer.receipts) != 0 {
+		t.Fatalf("wrote %d receipts, want 0", len(writer.receipts))
+	}
+	if slices.Contains(*paths, "/people/p-4/issues") || slices.Contains(*paths, "/people/p-5/issues") {
+		t.Fatalf("candidate paths = %v, want p-4/p-5 NEVER tried -- both sit past the declared bound of 3", *paths)
+	}
+}
+
+// TestResolveSingleShotRequest_UnaffectedByTheIterationMechanism is the
+// regression pin ruling 1 requires: a binding with no Candidates opt-in
+// (the zero value every existing corpus entry carries) still resolves to
+// the single first-extracted candidate, byte for byte, whether or not
+// producedCandidates happens to hold more than one -- proving the two
+// mechanisms are genuinely independent, not "iteration always tried,
+// short-circuited when Candidates==0".
+func TestResolveSingleShotRequest_UnaffectedByTheIterationMechanism(t *testing.T) {
+	const build = "abc123def456"
+	candidateURL, baselineURL, _ := iteratingFixtureServers(t, build,
+		[]string{"p-1", "p-2"},
+		map[string]string{"/people/p-1/issues": "[]", "/people/p-2/issues": `[{"status":"open"}]`},
+	)
+	f := flags{queryAPIURL: candidateURL, pythonAPIURL: baselineURL, org: "org-1", recordedBy: "chris", reviewEvidence: "test"}
+	writer := &fakeReceiptWriter{}
+	produced, _ := runIteratingProducer(t, f, build, writer)
+	if produced["person_id"] != "p-1" {
+		t.Fatalf("produced[person_id] = %q, want p-1 (the first search result, single-shot rule)", produced["person_id"])
+	}
+
+	spec := goapiproof.RESTEndpointSpec{Method: http.MethodGet, Path: "/people/{person_id}/issues"}
+	request := goapiproof.RESTRequest{
+		Name: "issues_default", WantCandidateStatus: 200, WantBaselineStatus: 503,
+		StatusDivergenceReason: "test fixture",
+		BodyMode:               goapiproof.RESTBodyModeStatusOnly,
+		IDBindings:             []goapiproof.RESTIDBinding{{Producer: "person_id", PathParam: "person_id"}},
+	}
+	attempt, err := resolveSingleShotRequest(context.Background(), http.DefaultClient, f, "REST:GET:/people/{person_id}/issues",
+		spec, request, produced,
+		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil)
+	if err != nil {
+		t.Fatalf("resolveSingleShotRequest: %v", err)
+	}
+	if !attempt.legsSent {
+		t.Fatal("legsSent = false, want true -- person_id resolved from produced")
+	}
+	if attempt.spec.Path != "/people/p-1/issues" {
+		t.Fatalf("resolved path = %q, want /people/p-1/issues -- the single-shot binding must still take the FIRST candidate, never iterate", attempt.spec.Path)
+	}
+}
+
 // hijackAndCloseServer returns an httptest server whose handler accepts
 // the connection and closes it immediately, without writing any HTTP
 // response at all -- the "drops the connection" transport failure, as

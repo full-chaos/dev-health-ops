@@ -91,6 +91,29 @@ type RESTIDBinding struct {
 	QueryParam string
 	PathParam  string
 	BodyPath   string
+
+	// Candidates opts this binding into bounded candidate iteration:
+	// instead of taking Producer's single first-extracted id (today's
+	// only behaviour, unchanged when this is zero), the run loop tries
+	// up to Candidates of Producer's own candidate pool
+	// (ExtractRESTIDCandidates' full, ordered result, not just its first
+	// match), sending this request in full for each, until one
+	// candidate's OWN declared Produces all resolve -- that candidate
+	// wins -- or the bound is exhausted. Zero, the field every existing
+	// binding carries, is the explicit "no iteration" default: this
+	// binding keeps single-shot first-element behaviour byte for byte.
+	// Required together with ExposeAs (ValidateRESTCorpus checks both
+	// directions); at most one iterating binding is supported per
+	// request.
+	Candidates int
+	// ExposeAs, only meaningful with Candidates > 0, names the id under
+	// which the WINNING candidate itself -- not anything read from a
+	// response body -- becomes available to a LATER request's own
+	// IDBindings, exactly like an ordinary RESTIDProducer.Name would.
+	// Distinct from Producer's own name on purpose: Producer keeps
+	// naming the single first-extracted value every OTHER (non-
+	// iterating) consumer still binds to, untouched by this mechanism.
+	ExposeAs string
 }
 
 // ExtractRESTID walks body (typically a decoded Snapshot.Data) via
@@ -105,45 +128,86 @@ type RESTIDBinding struct {
 // carrying IDField but missing or malformed under JoinField is skipped,
 // never joined with an empty tail.
 func ExtractRESTID(body any, producer RESTIDProducer) (string, bool) {
+	list, ok := restIDListAt(body, producer)
+	if !ok {
+		return "", false
+	}
+	for _, element := range list {
+		if candidate, ok := restIDFromElement(element, producer); ok {
+			return candidate, true
+		}
+	}
+	return "", false
+}
+
+// ExtractRESTIDCandidates walks body the same way ExtractRESTID does, but
+// returns EVERY non-empty id it finds, in array order, instead of only
+// the first -- the candidate pool a bounded-iteration consumer
+// (RESTIDBinding.Candidates) draws from. nil (never a false-but-non-nil
+// distinction ExtractRESTID's own bool return needs) whenever the
+// addressed value is not a JSON array, or no element yields a usable id
+// -- the same "failed extraction, never a panic" contract ExtractRESTID's
+// own doc comment states.
+func ExtractRESTIDCandidates(body any, producer RESTIDProducer) []string {
+	list, ok := restIDListAt(body, producer)
+	if !ok {
+		return nil
+	}
+	var candidates []string
+	for _, element := range list {
+		if candidate, ok := restIDFromElement(element, producer); ok {
+			candidates = append(candidates, candidate)
+		}
+	}
+	return candidates
+}
+
+// restIDListAt walks body via producer's ListPath and returns the decoded
+// JSON array at that address -- the list-addressing half ExtractRESTID
+// and ExtractRESTIDCandidates share, so both read the identical path.
+func restIDListAt(body any, producer RESTIDProducer) ([]any, bool) {
 	value := body
 	if producer.ListPath != "" {
 		for _, segment := range strings.Split(producer.ListPath, ".") {
 			obj, ok := value.(map[string]any)
 			if !ok {
-				return "", false
+				return nil, false
 			}
 			value, ok = obj[segment]
 			if !ok {
-				return "", false
+				return nil, false
 			}
 		}
 	}
 	list, ok := value.([]any)
-	if !ok {
-		return "", false
+	return list, ok
+}
+
+// restIDFromElement extracts ONE candidate id from a single list element
+// per producer's IDField/JoinField -- the per-element half ExtractRESTID
+// and ExtractRESTIDCandidates share, so both apply the identical
+// IDField/JoinField rule to every element they consider.
+func restIDFromElement(element any, producer RESTIDProducer) (string, bool) {
+	var candidate string
+	var ok bool
+	if producer.IDField == "" {
+		candidate, ok = element.(string)
+	} else if obj, isObj := element.(map[string]any); isObj {
+		raw, present := obj[producer.IDField]
+		if present {
+			candidate, ok = raw.(string)
+		}
+		if ok && candidate != "" && producer.JoinField != "" {
+			joined, joinOK := numericRESTIDField(obj, producer.JoinField)
+			if !joinOK {
+				ok = false
+			} else {
+				candidate = candidate + ":" + joined
+			}
+		}
 	}
-	for _, element := range list {
-		var candidate string
-		var ok bool
-		if producer.IDField == "" {
-			candidate, ok = element.(string)
-		} else if obj, isObj := element.(map[string]any); isObj {
-			raw, present := obj[producer.IDField]
-			if present {
-				candidate, ok = raw.(string)
-			}
-			if ok && candidate != "" && producer.JoinField != "" {
-				joined, joinOK := numericRESTIDField(obj, producer.JoinField)
-				if !joinOK {
-					ok = false
-				} else {
-					candidate = candidate + ":" + joined
-				}
-			}
-		}
-		if ok && candidate != "" {
-			return candidate, true
-		}
+	if ok && candidate != "" {
+		return candidate, true
 	}
 	return "", false
 }
@@ -288,3 +352,13 @@ const RESTRefusalIDBindingUnresolved = "rest_request_id_binding_unresolved"
 // a later consumer refused by RESTRefusalIDBindingUnresolved with no
 // visible reason on the request that actually failed to produce it.
 const RESTRefusalCandidateProducerUnresolved = "rest_candidate_body_did_not_produce_the_declared_id"
+
+// RESTRefusalCandidateIterationExhausted is the named refusal reason for
+// an iterating consumer (RESTIDBinding.Candidates > 0) whose own declared
+// Produces did not resolve for ANY of the bounded candidates it tried --
+// distinct from RESTRefusalCandidateProducerUnresolved (a single-shot
+// consumer's own producer failure, one candidate, no alternative tried):
+// this name marks that the whole bounded search came up empty, with
+// every individual attempt's own reason recorded separately (see
+// cmd/go-api-rest-prove's own outcome.Attempts).
+const RESTRefusalCandidateIterationExhausted = "rest_candidate_iteration_exhausted_no_candidate_produced_the_declared_ids"

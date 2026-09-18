@@ -406,3 +406,50 @@ func TestExtractRESTID_JoinFieldSkipsToNextElement(t *testing.T) {
 		t.Fatalf("got (%q, %v), want (r2:7, true)", got, ok)
 	}
 }
+
+// TestExtractRESTIDCandidates_ReturnsEveryNonEmptyIDInOrder pins the
+// bounded-candidate-iteration mechanism's own candidate pool: unlike
+// ExtractRESTID (which stops at the first non-empty match, the existing
+// single-shot rule TestExtractRESTID_RootArrayOfObjects above pins),
+// ExtractRESTIDCandidates returns EVERY non-empty id, in array order --
+// including the FIRST one, so a consumer with no opt-in still finds its
+// single candidate at index 0.
+func TestExtractRESTIDCandidates_ReturnsEveryNonEmptyIDInOrder(t *testing.T) {
+	body := []any{
+		map[string]any{"person_id": "", "display_name": "empty first"},
+		map[string]any{"person_id": "p-1", "display_name": "second"},
+		map[string]any{"person_id": "p-2", "display_name": "third"},
+	}
+	got := ExtractRESTIDCandidates(body, RESTIDProducer{Name: "person_id", IDField: "person_id"})
+	want := []string{"p-1", "p-2"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+// TestExtractRESTIDCandidates_AgreesWithExtractRESTIDOnTheFirstMatch pins
+// that the two functions share the identical walk: ExtractRESTID's own
+// single result is always ExtractRESTIDCandidates' own first element,
+// never a different rule applied to the same body.
+func TestExtractRESTIDCandidates_AgreesWithExtractRESTIDOnTheFirstMatch(t *testing.T) {
+	body := map[string]any{"teams": []any{"team-a", "team-b"}}
+	producer := RESTIDProducer{Name: "team_id", ListPath: "teams"}
+	single, ok := ExtractRESTID(body, producer)
+	if !ok {
+		t.Fatal("ExtractRESTID: want an id")
+	}
+	candidates := ExtractRESTIDCandidates(body, producer)
+	if len(candidates) == 0 || candidates[0] != single {
+		t.Fatalf("ExtractRESTIDCandidates = %v, want its first element to equal ExtractRESTID's own %q", candidates, single)
+	}
+}
+
+// TestExtractRESTIDCandidates_MalformedProducerResponseReturnsNil mirrors
+// TestExtractRESTID_MalformedProducerResponse's own "failed extraction,
+// never a panic" contract for the candidates form.
+func TestExtractRESTIDCandidates_MalformedProducerResponseReturnsNil(t *testing.T) {
+	got := ExtractRESTIDCandidates(map[string]any{"teams": "not-a-list"}, RESTIDProducer{Name: "team_id", ListPath: "teams"})
+	if got != nil {
+		t.Fatalf("got %v, want nil", got)
+	}
+}

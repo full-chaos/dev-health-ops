@@ -896,6 +896,28 @@ func (r *Runner) proveRequest(ctx context.Context, operation string, variantName
 	outcome.EdgeBuildBinding = admission.EdgeBuildBinding
 
 	result := Compare(baselineSnapshot, candidateSnapshot, parity)
+	// Compare sees only the decoded bodies; the HTTP answer (status and
+	// every compared header) is part of what each plane answered. When it
+	// differs, the planes did not give the same answer, so no body-level
+	// refusal may stand in for the verdict: the HTTP difference recorded
+	// below is a mismatch. A vacuous body contributes nothing further; any
+	// other structural refusal is kept as a $.data finding outside every
+	// declaration, so the body's own reason stays on the receipt.
+	if result.StructuralRefusal != "" && httpAnswersDiffer(baseline, candidate) {
+		structural := result
+		result = Result{TerminalState: TerminalStateMatch}
+		if structural.StructuralRefusal != RefusalVacuousEmptyLegs {
+			result = Result{
+				TerminalState: TerminalStateMismatch,
+				Findings: []Finding{{
+					Kind:   FindingMismatch,
+					Path:   "$.data",
+					Detail: structural.StructuralRefusal + ": " + structural.StructuralDetail,
+				}},
+				DifferencesOutsideBaselineDefect: 1,
+			}
+		}
+	}
 	if result.StructuralRefusal != "" {
 		// Checked FIRST, ahead of every declared-relaxation guard below:
 		// Compare returns immediately on a structural refusal (see
@@ -1195,6 +1217,21 @@ func terminalStateForRefusal(reason string) string {
 	default:
 		return "proof_failed"
 	}
+}
+
+// httpAnswersDiffer reports whether the two legs' HTTP answers differ in
+// status or in any compared header -- the same comparison the runner
+// records as $.http.* findings.
+func httpAnswersDiffer(baseline, candidate Observation) bool {
+	if baseline.StatusCode != candidate.StatusCode {
+		return true
+	}
+	for _, header := range comparedHeaders {
+		if baseline.Headers[header] != candidate.Headers[header] {
+			return true
+		}
+	}
+	return false
 }
 
 // comparedHeaders is the bounded set of response headers treated as part

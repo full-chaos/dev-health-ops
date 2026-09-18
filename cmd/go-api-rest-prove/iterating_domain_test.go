@@ -131,12 +131,12 @@ func TestIterationDecision_JSONBodyModeInputDomain(t *testing.T) {
 		{"empty on baseline only", ok(goodJSON), ok(`{"label":"x","items":[]}`), "win-mismatch"},
 		{"empty on candidate only", ok(`{"label":"x","items":[]}`), ok(goodJSON), "win-mismatch"},
 		{"vacuous both legs", ok(`{"items":[]}`), ok(`{"items":[]}`), "next"},
-		{"vacuous both legs, list null on the candidate", ok(`{"items":null}`), ok(`{"items":[]}`), "stop:" + goapiproof.RESTRefusalVacuousLegsDisagree},
-		{"vacuous both legs, list null on the baseline", ok(`{"items":[]}`), ok(`{"items":null}`), "stop:" + goapiproof.RESTRefusalVacuousLegsDisagree},
-		{"vacuous both legs, list absent on the candidate", ok(`{"other":[]}`), ok(`{"items":[]}`), "stop:" + goapiproof.RESTRefusalVacuousLegsDisagree},
-		{"vacuous both legs, lists empty, other zero-leaf field differs", ok(`{"items":[],"meta":[]}`), ok(`{"items":[],"meta":{}}`), "stop:" + goapiproof.RESTRefusalVacuousLegsDisagree},
+		{"vacuous both legs, list null on the candidate", ok(`{"items":null}`), ok(`{"items":[]}`), "win-mismatch"},
+		{"vacuous both legs, list null on the baseline", ok(`{"items":[]}`), ok(`{"items":null}`), "win-mismatch"},
+		{"vacuous both legs, list absent on the candidate", ok(`{"other":[]}`), ok(`{"items":[]}`), "win-mismatch"},
+		{"vacuous both legs, lists empty, other zero-leaf field differs", ok(`{"items":[],"meta":[]}`), ok(`{"items":[],"meta":{}}`), "win-mismatch"},
 		{"vacuous both legs, identical, non-empty but leafless", ok(`{"items":[],"meta":{"tags":[]}}`), ok(`{"items":[],"meta":{"tags":[]}}`), "next"},
-		{"vacuous both legs, identical, list null", ok(`{"items":null}`), ok(`{"items":null}`), "stop:" + goapiproof.RESTRefusalVacuousLegsDisagree},
+		{"vacuous both legs, identical, list null", ok(`{"items":null}`), ok(`{"items":null}`), "stop:" + goapiproof.RESTRefusalDeclaredIDListUnrecognised},
 		{"candidate 404", legReply{status: 404, body: `{"detail":"x"}`}, ok(goodJSON), "stop:" + goapiproof.RESTRefusalUnexpectedStatus},
 		{"candidate 500", legReply{status: 500, body: `{"detail":"x"}`}, ok(goodJSON), "stop:" + goapiproof.RESTRefusalUnexpectedStatus},
 		{"baseline 404", ok(goodJSON), legReply{status: 404, body: `{"detail":"x"}`}, "stop:" + goapiproof.RESTRefusalUnexpectedStatus},
@@ -522,4 +522,133 @@ func TestIterationDecision_EveryCorpusSearchSkipsNoDataAndStopsOnFailure(t *test
 		t.Fatalf("swept %d bounded-candidate corpus entries, want every one (at least the 4 declared today)", swept)
 	}
 	t.Logf("swept %d bounded-candidate corpus entries", swept)
+}
+
+// TestRunMeasurement_NullVersusEmptyPullRequestsIsReportedAsAMismatch
+// runs the full corpus the way an operator does. The first person listed
+// answers {"items":[]} on the baseline and {"items":null} on the
+// candidate: zero non-null leaves on both legs under a parity that arms
+// the vacuity check, and the legs differ. The report carries that
+// person's drilldown_prs_default outcome as a mismatch; the search does
+// not move on to the person with pull requests.
+func TestRunMeasurement_NullVersusEmptyPullRequestsIsReportedAsAMismatch(t *testing.T) {
+	const build = "build123"
+	prs := `{"items":[{"repo_id":"ABC-123","number":7,"title":"ABC-123","created_at":"2026-01-01T00:00:00"}]}`
+	handler := func(candidate bool) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if candidate {
+				w.Header().Set("x-dev-health-build", build)
+			}
+			switch {
+			case r.URL.Path == "/api/v1/people":
+				_, _ = w.Write([]byte(`[{"person_id":"p-first"},{"person_id":"p-data"}]`))
+			case r.URL.Path == "/api/v1/people/p-first/drilldown/prs" && candidate:
+				_, _ = w.Write([]byte(`{"items":null}`))
+			case r.URL.Path == "/api/v1/people/p-first/drilldown/prs":
+				_, _ = w.Write([]byte(`{"items":[]}`))
+			case r.URL.Path == "/api/v1/people/p-data/drilldown/prs":
+				_, _ = w.Write([]byte(prs))
+			default:
+				_, _ = w.Write([]byte(`{}`))
+			}
+		}
+	}
+	candidate := httptest.NewServer(handler(true))
+	defer candidate.Close()
+	baseline := httptest.NewServer(handler(false))
+	defer baseline.Close()
+	dir := t.TempDir()
+	reportPath := dir + "/report.json"
+	artifacts, err := goapiproof.NewArtifactStore(dir + "/artifacts")
+	if err != nil {
+		t.Fatalf("NewArtifactStore: %v", err)
+	}
+	f := flags{
+		queryAPIURL: candidate.URL, pythonAPIURL: baseline.URL,
+		org: "org-1", recordedBy: "chris", reviewEvidence: "test",
+		timeout: 5 * time.Second, dryRun: true, reportPath: reportPath,
+	}
+	_ = captureStdout(t, func() {
+		_ = runMeasurement(context.Background(), http.DefaultClient, f,
+			staticCredentialForTest(), staticCredentialForTest(), build, nil, artifacts)
+	})
+	raw, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatalf("read report: %v", err)
+	}
+	var report jsonReport
+	if err := json.Unmarshal(raw, &report); err != nil {
+		t.Fatalf("decode report: %v", err)
+	}
+	for _, o := range report.Outcomes {
+		if o.Operation == "REST:GET:/api/v1/people/{person_id}/drilldown/prs" && o.Request == "drilldown_prs_default" {
+			t.Logf("drilldown_prs_default -> admitted=%v terminal=%q refusal=%q bound=%v attempts=%v", o.Admitted, o.TerminalState, o.Refusal, o.BoundIDs, o.Attempts)
+			if !o.Admitted || o.TerminalState != goapiproof.TerminalStateMismatch || o.BoundIDs["person_id"] != "p-first" || len(o.Attempts) != 0 {
+				t.Fatalf("drilldown_prs_default = %+v, want a mismatch on p-first with no skipped attempt", o)
+			}
+			return
+		}
+	}
+	t.Fatal("report has no drilldown_prs_default outcome")
+}
+
+// TestProveOneRESTRequest_AllNullRowsUnderDedupAreNeverAMatch sweeps every
+// real corpus request that injects synthetic dedup keys before Compare.
+// Both legs answer the declared list with one row whose every field is
+// null: the planes' own bodies carry no evidence, so the request must not
+// be admitted as a match (the synthetic key built from those nulls is not
+// a leaf of either answer).
+func TestProveOneRESTRequest_AllNullRowsUnderDedupAreNeverAMatch(t *testing.T) {
+	const build = "abc123def456"
+	swept := 0
+	for _, operation := range goapiproof.RESTRunOrder() {
+		spec, err := goapiproof.SpecForREST(operation)
+		if err != nil {
+			t.Fatalf("SpecForREST(%s): %v", operation, err)
+		}
+		for _, request := range spec.Requests {
+			if request.DedupListPath == "" || request.BodyMode != goapiproof.RESTBodyModeJSON {
+				continue
+			}
+			swept++
+			row := map[string]any{}
+			for _, field := range request.DedupKeyFields {
+				row[field] = nil
+			}
+			body := bodyAtPath(request.DedupListPath, []any{row})
+			t.Run(operation+"/"+request.Name, func(t *testing.T) {
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("x-dev-health-build", build)
+					_, _ = w.Write([]byte(body))
+				}))
+				defer srv.Close()
+				f := flags{queryAPIURL: srv.URL, pythonAPIURL: srv.URL, org: "org-1", recordedBy: "chris", reviewEvidence: "test", timeout: 5 * time.Second}
+				resolved := spec
+				resolved.Path = strings.NewReplacer("{person_id}", "ABC-123", "{team_id}", "ABC-123", "{work_unit_id}", "ABC-123").Replace(spec.Path)
+				out, err := proveOneRESTRequest(context.Background(), http.DefaultClient, f, operation, resolved, request,
+					staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), &fakeReceiptWriter{}, nil, false, nil)
+				if err != nil {
+					t.Fatalf("proveOneRESTRequest: %v", err)
+				}
+				t.Logf("%s/%s all-null rows -> admitted=%v terminal=%q refusal=%q", operation, request.Name, out.Admitted, out.TerminalState, out.Refusal)
+				if out.Admitted && out.TerminalState == goapiproof.TerminalStateMatch {
+					t.Fatalf("all-null rows admitted as a match")
+				}
+			})
+		}
+	}
+	if swept == 0 {
+		t.Fatal("no corpus request injects dedup keys; the sweep covered nothing")
+	}
+	t.Logf("swept %d dedup-injecting corpus requests", swept)
+}
+
+func bodyAtPath(path string, list []any) string {
+	var out any = list
+	segments := strings.Split(path, ".")
+	for i := len(segments) - 1; i >= 0; i-- {
+		out = map[string]any{segments[i]: out}
+	}
+	raw, _ := json.Marshal(out)
+	return string(raw)
 }

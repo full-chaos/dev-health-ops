@@ -402,12 +402,3 @@ const RESTRefusalCandidateBodyUndecodable = "rest_candidate_body_did_not_decode"
 // is a failure of a plane, never "no rows", so a bounded candidate search
 // ends on it instead of moving to the next candidate.
 const RESTRefusalDeclaredIDListUnrecognised = "rest_body_did_not_carry_the_declared_id_list"
-
-// RESTRefusalVacuousLegsDisagree is the named refusal reason for an
-// attempt of a bounded candidate search that the comparator refused as
-// vacuous (zero non-null leaves on both legs) while the two legs are not
-// the same empty answer: the decoded legs differ, or a declared Produces
-// list is not an empty array on both legs. Zero leaves is judged before
-// the legs' structure is compared, so vacuity alone cannot mean "no
-// data"; this refusal ends the search as a failure of a plane.
-const RESTRefusalVacuousLegsDisagree = "rest_vacuous_legs_disagree"

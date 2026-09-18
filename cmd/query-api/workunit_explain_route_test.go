@@ -2,13 +2,18 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
+
+	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/authctx"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/investmentexplain"
@@ -568,5 +573,172 @@ func TestWorkUnitExplainOrgScopeEmitsNoTeamCondition(t *testing.T) {
 		if _, present := bindingValue(client.bindings[index], teamscope.BindingTeamIDs); present {
 			t.Errorf("an org-scoped request carries a %s binding", teamscope.BindingTeamIDs)
 		}
+	}
+}
+
+// ollamaFixtureRowScanner is a RowScanner over a single fixed row, its
+// values matching one query's Scan destination count/order exactly --
+// package main's own copy of the same fixture-row pattern
+// cmd/query-api/internal/investmentexplain/explain_golden_test.go uses,
+// needed here because that package's version is unexported.
+type ollamaFixtureRowScanner struct {
+	rows  [][]any
+	index int
+}
+
+func (s *ollamaFixtureRowScanner) Next() bool {
+	if s.index >= len(s.rows) {
+		return false
+	}
+	s.index++
+	return true
+}
+
+func (s *ollamaFixtureRowScanner) Scan(dest ...any) error {
+	row := s.rows[s.index-1]
+	for i, d := range dest {
+		switch typed := d.(type) {
+		case *string:
+			*typed, _ = row[i].(string)
+		case **string:
+			if v, ok := row[i].(*string); ok {
+				*typed = v
+			} else {
+				*typed = nil
+			}
+		case *float64:
+			*typed, _ = row[i].(float64)
+		case **float64:
+			if v, ok := row[i].(*float64); ok {
+				*typed = v
+			} else {
+				*typed = nil
+			}
+		case *time.Time:
+			*typed, _ = row[i].(time.Time)
+		case *[]string:
+			*typed, _ = row[i].([]string)
+		case *[]float64:
+			*typed, _ = row[i].([]float64)
+		}
+	}
+	return nil
+}
+
+func (s *ollamaFixtureRowScanner) Err() error   { return nil }
+func (s *ollamaFixtureRowScanner) Close() error { return nil }
+
+// ollamaSingleWorkUnitClient answers the work-unit-investments query
+// (identified the same way explain_golden_test.go's explainFixtureClient
+// does, by its distinctive ORDER BY clause) with exactly one real row for
+// work_unit_id "wu-ABC-123", and every other query with zero rows -- the
+// auxiliary lookups (repo scopes, repo identities, team assignments,
+// evidence quotes) all degrade to their own documented empty-result
+// defaults ("unassigned", no textual quotes) when they return nothing,
+// which is enough for ExplainWorkUnit's prompt to build without error.
+type ollamaSingleWorkUnitClient struct{}
+
+func (ollamaSingleWorkUnitClient) Query(_ context.Context, statement string, _ []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+	if strings.Contains(statement, "ORDER BY effort_value DESC, work_unit_id ASC") {
+		fromTS := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+		toTS := time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC)
+		return &ollamaFixtureRowScanner{rows: [][]any{
+			{
+				"wu-ABC-123", strPtrForTest("issue"), strPtrForTest("Ship the new thing"),
+				fromTS, toTS,
+				strPtrForTest("repo-1"), strPtrForTest("github"),
+				strPtrForTest("churn_loc"), floatPtrForTest(40.0),
+				[]string{"velocity"}, []float64{40.0}, []string{"velocity.feature"}, []float64{40.0},
+				strPtrForTest(`{"issues": [], "prs": []}`),
+				floatPtrForTest(0.8), strPtrForTest("high"),
+				strPtrForTest("complete"), strPtrForTest("v1"), strPtrForTest("run-1"),
+				toTS,
+			},
+		}}, nil
+	}
+	return &ollamaFixtureRowScanner{}, nil
+}
+
+func strPtrForTest(s string) *string     { return &s }
+func floatPtrForTest(f float64) *float64 { return &f }
+
+// TestWorkUnitExplainOllamaExplicitProviderSucceeds is the work-unit-explain
+// sibling of TestInvestmentExplainWorkHandlerOllamaExplicitProviderSucceeds:
+// an explicit llm_provider=ollama request, with OLLAMA_BASE_URL pointed at a
+// real server standing in for Ollama's native /api/chat endpoint and a real
+// (non-zero-row) work unit to explain, must reach a genuine completion
+// through the SAME production constructor
+// (investmentexplain.CompleteWorkUnitExplanationForOrg ->
+// categorize.NewOllamaProvider) rather than stop at the 422
+// missingLLMProviderDetail body providerHasRequiredConfig's missing ollama
+// case used to force regardless of configuration.
+func TestWorkUnitExplainOllamaExplicitProviderSucceeds(t *testing.T) {
+	const completionText = "SUMMARY: This work unit shipped a small fix.\n\nREASONS: Primarily velocity work.\n"
+
+	requestReached := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/chat" {
+			t.Errorf("ollama request path = %q, want /api/chat", r.URL.Path)
+		}
+		requestReached = true
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"message":{"role":"assistant","content":` + strconv.Quote(completionText) + `},"done":true}`))
+	}))
+	defer server.Close()
+	t.Setenv("OLLAMA_BASE_URL", server.URL)
+
+	reader, err := investmentexplain.NewReader(ollamaSingleWorkUnitClient{})
+	if err != nil {
+		t.Fatalf("investmentexplain.NewReader: %v", err)
+	}
+	handler := newWorkUnitExplainHandler(reader, nil, nil)
+
+	rec := httptest.NewRecorder()
+	handler(rec, newWorkUnitExplainRequest(t, "wu-ABC-123", "llm_provider=ollama"))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d\nbody=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if !requestReached {
+		t.Fatal("the fake ollama server never received a request -- the availability gate refused the request before any completion was attempted")
+	}
+	var decoded struct {
+		WorkUnitID  string `json:"work_unit_id"`
+		AIGenerated bool   `json:"ai_generated"`
+		Summary     string `json:"summary"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &decoded); err != nil {
+		t.Fatalf("decode response: %v\nbody=%s", err, rec.Body.String())
+	}
+	if !decoded.AIGenerated {
+		t.Fatalf("ai_generated = false, want true -- got the non-AI/refusal shape instead of a real completion\nbody=%s", rec.Body.String())
+	}
+	if decoded.WorkUnitID != "wu-ABC-123" {
+		t.Errorf("work_unit_id = %q, want %q", decoded.WorkUnitID, "wu-ABC-123")
+	}
+	if decoded.Summary == "" {
+		t.Fatalf("summary is empty -- want the completion's real summary text\nbody=%s", rec.Body.String())
+	}
+}
+
+// TestWorkUnitExplainOpenAIUnconfiguredStaysRefused is the negative half on
+// this route: TestWorkUnitExplainUnconfiguredProviderBodiesMatchPython's
+// "openai" case above already pins this exact 422 body byte for byte, so
+// this test only asserts the property that fix must not disturb --
+// providerHasRequiredConfig's openai branch is unaffected by widening the
+// switch to also cover ollama.
+func TestWorkUnitExplainOpenAIUnconfiguredStaysRefused(t *testing.T) {
+	clearLLMProviderEnv(t)
+
+	rec := httptest.NewRecorder()
+	newTestWorkUnitExplainHandler(t).ServeHTTP(rec,
+		newWorkUnitExplainRequest(t, "wu-ABC-123", "llm_provider=openai"))
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d\nbody=%s", rec.Code, http.StatusUnprocessableEntity, rec.Body.String())
+	}
+	want := readWorkUnitExplainFixture(t, "testdata/work_unit_explain/provider_unconfigured_openai.json")
+	if got := bytes.TrimRight(rec.Body.Bytes(), "\n"); !bytes.Equal(got, bytes.TrimRight(want, "\n")) {
+		t.Errorf("body mismatch\n got=%s\nwant=%s", got, want)
 	}
 }

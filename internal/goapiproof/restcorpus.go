@@ -1843,13 +1843,18 @@ var flamePRIDBoundParity = Options{
 // no drilldown or people route reads the deployments table at all: this
 // corpus cannot Produce this id itself (operations.go's own `pr` doc
 // comment states the identical rule for the GraphQL corpus's own
-// unproducible id). Its live 200 path, deployment_entity_id_bound_200,
+// unproducible id). Its declared 200 path, deployment_entity_id_bound_200,
 // instead binds entity_id to deployment_entity_id, a
 // restOperatorSuppliedProducers entry (this file's own doc comment above
 // ValidateRESTIDBindingOrder) resolved from the run invocation's own
 // -bind flag rather than from any request here -- a run whose invocation
 // omits it refuses that one request by name, the same as any other
-// unresolved id.
+// unresolved id. On production data, 0 of the proof organisation's
+// 1135 deployments satisfy end > start: every one carries only
+// deployed_at (started_at, merged_at, finished_at all NULL), so this
+// entry's own -bind has no live value today, and
+// deployment_gap_entity_id_bound_422 below is the deployment branch's
+// only live case.
 // AssertRESTPathCoverage is satisfied by these entries' PATH regardless.
 //
 // Branches this corpus cannot provably reach, and why:
@@ -1860,10 +1865,15 @@ var flamePRIDBoundParity = Options{
 //     no request this corpus can construct triggers deterministically.
 //   - validateFlameFrames' own "Flame frames have gaps" 422 (services/
 //     flame.py:64-82 and 201/265/351; internal/flame/flame.go's own
-//     validateFlameFrames, called at flame.go:354, 399, 462) for every
-//     entity_type: only a malformed timeline (frames that do not cover
-//     [timeline.start, timeline.end) contiguously) reaches it, and no live
-//     production row is known to be malformed this way.
+//     validateFlameFrames, called at flame.go:354, 399, 462) for the "pr"
+//     and "issue" entity_types: only a malformed timeline (frames that do
+//     not cover [timeline.start, timeline.end) contiguously) reaches it,
+//     and no live production row is known to be malformed this way for
+//     either. The "deployment" entity_type's own 422 IS reached, by
+//     deployment_gap_entity_id_bound_422 below (see that entry's own doc
+//     comment for the mechanism: a deployment row carrying only
+//     deployed_at leaves buildDeploymentFlameResponse's root frame nil,
+//     which is the only frame its own validateFlameFrames call can see).
 //   - buildPRFlameResponse's own end selection (flame.go:316-322: MergedAt
 //     / ClosedAt / the nowLike() default) and its "Review waiting" frame's
 //     presence/absence (flame.go:331-335, FirstReviewAt after start or
@@ -4884,7 +4894,7 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				BodyMode:               RESTBodyModeStatusOnly,
 			},
 			{
-				// The "deployment" entity_type's own live 200 path
+				// The "deployment" entity_type's own declared 200 path
 				// (services/flame.py:409-424, buildDeploymentFlameResponse
 				// in cmd/query-api/internal/flame/flame.go:414-473):
 				// entity_id is bound to deployment_entity_id, a
@@ -4893,7 +4903,14 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				// request's Produces -- no route this corpus covers reads
 				// the deployments table, so no corpus request could ever
 				// Produce this id itself (this file's own doc comment on
-				// the flame corpus entry, above). fetch_deployment's own
+				// the flame corpus entry, above). On production data, 0 of
+				// the proof organisation's 1135 deployments satisfy end >
+				// start: every one carries only deployed_at, so this entry's
+				// own -bind names a value no live deployment satisfies --
+				// deployment_gap_entity_id_bound_422 below is the deployment
+				// branch's only live case; this entry stays declared for a
+				// deployment that does satisfy end > start.
+				// fetch_deployment's own
 				// WHERE already fully specifies deployments' ReplacingMergeTree
 				// sort key (org_id, repo_id, deployment_id), so its ORDER
 				// BY last_synced DESC LIMIT 1 read is already a
@@ -4910,6 +4927,50 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
 				BodyMode:   RESTBodyModeJSON,
 				IDBindings: []RESTIDBinding{{Producer: "deployment_entity_id", QueryParam: "entity_id"}},
+			},
+			{
+				// The gap-declared counterpart to deployment_entity_id_
+				// bound_200 above. buildDeploymentFlameResponse's own root
+				// frame (flame.go:438, newFrame at flame.go:187-195;
+				// _build_deployment_flame_response's own root, services/
+				// flame.py:298-308, _frame at flame.py:26-48) is nil
+				// whenever end <= start -- and queue/pipeline/deploy
+				// (flame.go:443-459 / flame.py:310-348) all carry a
+				// non-nil ParentID, so root is the ONLY frame
+				// validateFlameFrames' own top_level filter (flame.go:
+				// 228-233 / flame.py:67) can ever see for this
+				// entity_type. A nil root leaves top_level empty, and
+				// validateFlameFrames refuses an empty top_level
+				// immediately (flame.go:234-236 / flame.py:68-69) --
+				// before its own start/end coverage check ever runs. A
+				// deployment row carrying only deployed_at (started_at,
+				// merged_at, finished_at all NULL) hits exactly this:
+				// start = end = deployed_at (flame.go:415-434 / flame.py:
+				// 283-294's own coalesce chains), so end is never after
+				// start and root is nil. On production data, 0 of the proof
+				// organisation's 1135 deployments satisfy end > start: every
+				// one carries only deployed_at, so every one hits this path
+				// (see this file's own "Branches this corpus cannot provably
+				// reach" doc comment above). This entry, not
+				// deployment_entity_id_bound_200 above, is the deployment
+				// branch's live comparing case. Same operator-supplied-producer
+				// shape as
+				// deployment_entity_id_bound_200: no route this corpus
+				// covers exposes a deployment_id on the wire, so this id
+				// is bound via -bind deployment_gap_entity_id=... (this
+				// file's own restOperatorSuppliedProducers, below) rather
+				// than any request's Produces. Both planes answer the
+				// identical literal body regardless of which specific
+				// frame went missing -- validate_flame_frames/
+				// validateFlameFrames both raise the same "Flame frames
+				// have gaps" 422 -- so BodyMode is JSON, not status_only,
+				// and no Parity is declared: there is no data-dependent
+				// field left to diverge on.
+				Name:                "deployment_gap_entity_id_bound_422",
+				Query:               url.Values{"entity_type": {"deployment"}},
+				WantCandidateStatus: 422, WantBaselineStatus: 422,
+				BodyMode:   RESTBodyModeJSON,
+				IDBindings: []RESTIDBinding{{Producer: "deployment_gap_entity_id", QueryParam: "entity_id"}},
 			},
 		},
 	},
@@ -5697,18 +5758,24 @@ func RESTRunOrder() []string {
 // the first case: no route this corpus covers exposes a deployment_id on
 // the wire (this file's own doc comment on the flame corpus entry, above),
 // so deployment_entity_id_bound_200's own IDBindings names a producer no
-// request here Produces at all. validateIDBindingOrder accepts a
-// binding.Producer that resolves in EITHER this set or an earlier
-// request's own Produces, and separately REQUIRES every name declared
-// here to be consumed by at least one request's own IDBindings -- an
-// entry naming an id nothing binds is a dead allowlist entry, refused the
-// same as any other corpus inconsistency. A run whose invocation omits
-// the matching -bind refuses that one request by name
-// (RESTRefusalIDBindingUnresolved, restidbind.go), the same as any other
-// unproduced id -- never an invented value, and no production literal
-// ever appears in this file.
+// request here Produces at all. deployment_gap_entity_id_bound_422 (same
+// doc comment) is the second: a distinct deployment_id, chosen to hit
+// buildDeploymentFlameResponse's own gap branch rather than its happy
+// path, so it needs its own producer name -- binding both entries to the
+// same name would make one request's -bind value the other's, which is
+// never true for two entries declaring different WantCandidateStatus.
+// validateIDBindingOrder accepts a binding.Producer that resolves in
+// EITHER this set or an earlier request's own Produces, and separately
+// REQUIRES every name declared here to be consumed by at least one
+// request's own IDBindings -- an entry naming an id nothing binds is a
+// dead allowlist entry, refused the same as any other corpus
+// inconsistency. A run whose invocation omits the matching -bind refuses
+// that one request by name (RESTRefusalIDBindingUnresolved, restidbind.go),
+// the same as any other unproduced id -- never an invented value, and no
+// production literal ever appears in this file.
 var restOperatorSuppliedProducers = map[string]bool{
-	"deployment_entity_id": true,
+	"deployment_entity_id":     true,
+	"deployment_gap_entity_id": true,
 }
 
 // IsOperatorSuppliedIDProducer reports whether name is declared in

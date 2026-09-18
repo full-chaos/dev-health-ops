@@ -2113,6 +2113,69 @@ func TestRunMeasurement_OperatorSuppliedBindingSuppliedResolves(t *testing.T) {
 	}
 }
 
+// TestRunMeasurement_DeploymentGapBindingUnsuppliedRefusesByName is
+// TestRunMeasurement_OperatorSuppliedBindingUnsuppliedRefusesByName's
+// sibling for GET /api/v1/flame's OTHER operator-supplied deployment
+// producer: deployment_gap_entity_id_bound_422's own IDBindings names
+// deployment_gap_entity_id (restcorpus.go's own restOperatorSuppliedProducers),
+// a distinct id from deployment_entity_id_bound_200's deployment_entity_id
+// -- an unsupplied run must refuse THIS request too, by name, independent
+// of whether -bind deployment_entity_id was supplied.
+func TestRunMeasurement_DeploymentGapBindingUnsuppliedRefusesByName(t *testing.T) {
+	const build = "build123"
+	candidate := httptest.NewServer(genericRESTStubHandler(t, build, nil))
+	defer candidate.Close()
+	baseline := httptest.NewServer(genericRESTStubHandler(t, "", nil))
+	defer baseline.Close()
+
+	dir := t.TempDir()
+	reportPath := dir + "/report.json"
+	artifacts, err := goapiproof.NewArtifactStore(dir + "/artifacts")
+	if err != nil {
+		t.Fatalf("NewArtifactStore: %v", err)
+	}
+	f := flags{
+		queryAPIURL: candidate.URL, pythonAPIURL: baseline.URL,
+		org: "org-1", recordedBy: "chris", reviewEvidence: "test",
+		timeout: 2 * time.Second, dryRun: true, reportPath: reportPath,
+	}
+
+	// See TestRunMeasurement_OperatorSuppliedBindingUnsuppliedRefusesByName
+	// for why runMeasurement's own returned error is not asserted here.
+	_ = captureStdout(t, func() {
+		_ = runMeasurement(context.Background(), http.DefaultClient, f,
+			staticCredentialForTest(), staticCredentialForTest(), build, nil, artifacts)
+	})
+
+	raw, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatalf("read report: %v", err)
+	}
+	var report jsonReport
+	if err := json.Unmarshal(raw, &report); err != nil {
+		t.Fatalf("decode report: %v (%s)", err, raw)
+	}
+
+	var gapOutcome *outcome
+	for i := range report.Outcomes {
+		if report.Outcomes[i].Operation == "REST:GET:/api/v1/flame" && report.Outcomes[i].Request == "deployment_gap_entity_id_bound_422" {
+			gapOutcome = &report.Outcomes[i]
+		}
+	}
+	if gapOutcome == nil {
+		t.Fatalf("report has no outcome for REST:GET:/api/v1/flame/deployment_gap_entity_id_bound_422 among %d outcomes", len(report.Outcomes))
+	}
+	if gapOutcome.Admitted {
+		t.Fatalf("deployment gap outcome = %+v, want unadmitted (no -bind supplied)", gapOutcome)
+	}
+	if gapOutcome.Refusal != goapiproof.RESTRefusalIDBindingUnresolved {
+		t.Fatalf("deployment gap outcome Refusal = %q, want %q", gapOutcome.Refusal, goapiproof.RESTRefusalIDBindingUnresolved)
+	}
+	if !strings.Contains(gapOutcome.Detail, "supply -bind deployment_gap_entity_id=") {
+		t.Fatalf("deployment gap outcome Detail = %q, want it to name the flag to supply", gapOutcome.Detail)
+	}
+}
+
 // TestRunMeasurement_NonTransportErrorMidRunStillWritesAPartialReport is
 // this fix's OTHER claim: item 2 says the report must be written on ANY
 // later error, not only a leg timeout. This makes the artifact directory

@@ -487,7 +487,7 @@ func TestFlameCorpus_HasIDBoundLiveEntriesForPRIssueAndDeployment(t *testing.T) 
 		t.Fatalf("SpecForREST: %v", err)
 	}
 
-	var pr, issue, deployment *RESTRequest
+	var pr, issue, deployment, deploymentGap *RESTRequest
 	for i := range spec.Requests {
 		switch spec.Requests[i].Name {
 		case "pr_entity_id_bound_200":
@@ -496,6 +496,8 @@ func TestFlameCorpus_HasIDBoundLiveEntriesForPRIssueAndDeployment(t *testing.T) 
 			issue = &spec.Requests[i]
 		case "deployment_entity_id_bound_200":
 			deployment = &spec.Requests[i]
+		case "deployment_gap_entity_id_bound_422":
+			deploymentGap = &spec.Requests[i]
 		}
 	}
 	if pr == nil {
@@ -506,6 +508,9 @@ func TestFlameCorpus_HasIDBoundLiveEntriesForPRIssueAndDeployment(t *testing.T) 
 	}
 	if deployment == nil {
 		t.Fatal("flame corpus has no deployment_entity_id_bound_200 entry")
+	}
+	if deploymentGap == nil {
+		t.Fatal("flame corpus has no deployment_gap_entity_id_bound_422 entry")
 	}
 
 	for _, tc := range []struct {
@@ -536,6 +541,31 @@ func TestFlameCorpus_HasIDBoundLiveEntriesForPRIssueAndDeployment(t *testing.T) 
 	}
 	if len(deployment.Parity.BaselineDefects) != 0 {
 		t.Errorf("deployment entry Parity.BaselineDefects = %+v, want none -- fetch_deployment carries no declared divergence", deployment.Parity.BaselineDefects)
+	}
+
+	// deployment_gap_entity_id_bound_422 proves validateFlameFrames' own
+	// "Flame frames have gaps" 422 branch for the "deployment" entity_type
+	// (restcorpus.go's own "Branches this corpus cannot provably reach"
+	// doc comment). On production data, 0 of the proof organisation's
+	// 1135 deployments satisfy end > start, so this is the deployment
+	// branch's only live comparing case. It needs its OWN
+	// operator-supplied producer -- a distinct deployment_id from
+	// deployment_entity_id_bound_200's -- since the two entries declare
+	// different WantCandidateStatus and cannot share a bound value.
+	if !IsOperatorSuppliedIDProducer("deployment_gap_entity_id") {
+		t.Error("deployment_gap_entity_id is not declared in restOperatorSuppliedProducers")
+	}
+	if deploymentGap.WantCandidateStatus != 422 || deploymentGap.WantBaselineStatus != 422 {
+		t.Errorf("deployment gap entry status = (%d, %d), want (422, 422)", deploymentGap.WantCandidateStatus, deploymentGap.WantBaselineStatus)
+	}
+	if deploymentGap.BodyMode != RESTBodyModeJSON {
+		t.Errorf("deployment gap entry BodyMode = %q, want json", deploymentGap.BodyMode)
+	}
+	if len(deploymentGap.IDBindings) != 1 || deploymentGap.IDBindings[0].Producer != "deployment_gap_entity_id" || deploymentGap.IDBindings[0].QueryParam != "entity_id" {
+		t.Errorf("deployment gap entry IDBindings = %+v, want one binding on entity_id to producer %q", deploymentGap.IDBindings, "deployment_gap_entity_id")
+	}
+	if len(deploymentGap.Parity.BaselineDefects) != 0 {
+		t.Errorf("deployment gap entry Parity.BaselineDefects = %+v, want none -- both planes raise the identical literal body", deploymentGap.Parity.BaselineDefects)
 	}
 
 	if pr.WantCandidateStatus != 200 || pr.WantBaselineStatus != 200 {

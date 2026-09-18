@@ -110,8 +110,8 @@ func TestPersonDrilldownPRsParity_RefusesWhenDeclarationsRemoved(t *testing.T) {
 }
 
 // TestPersonDrilldownIssuesParity_CycleTimeHoursULPDifferenceIsAFinding
-// pins personDrilldownIssuesFloatExact's own Tier-A behaviour, the same
-// class drilldownIssuesParity's own twin declares.
+// pins personDrilldownIssuesParity's own Tier-A behaviour for its float
+// leaves, which it binds from drilldownIssuesParity.
 func TestPersonDrilldownIssuesParity_CycleTimeHoursULPDifferenceIsAFinding(t *testing.T) {
 	body := func(hours float64) string {
 		return `{"items":[{"work_item_id":"w1","provider":"github","status":"done","team_id":null,"cycle_time_hours":` + jsonFloat(hours) + `,"lead_time_hours":null,"started_at":null,"completed_at":null}]}`

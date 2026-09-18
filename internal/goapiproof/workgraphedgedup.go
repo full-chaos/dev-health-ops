@@ -123,7 +123,30 @@ type WorkGraphEdgeDedupShape struct {
 	// alongside the field it derives from, not left out, or its own
 	// paired transition would fail rule 1's by-value comparison. Rules 3
 	// and 4 gate this mode exactly as they gate the default one.
+	//
+	// In this mode the judged id is admitted through DuplicateCopyRule
+	// (duplicatecopyrule.go) with WriteOnceFields and RewrittenFields as
+	// its two field sets: the candidate row must also equal one baseline
+	// copy field for field, since a FINAL read returns one whole physical
+	// version.
 	WriteOnceFields []string
+	// RewrittenFields, when set, also switches this shape to the mode
+	// WriteOnceFields describes, and names fields the writer overwrites
+	// with the upstream's current value on every write of the same key,
+	// in no fixed direction: the copies may carry different values for
+	// them, and the candidate carries the value of the copy it equals.
+	// Named per entry from the writer, never inferred.
+	RewrittenFields []string
+}
+
+// copyRule returns the shape's judged-mode rule, or nil in the default
+// mode.
+func (s *WorkGraphEdgeDedupShape) copyRule() *DuplicateCopyRule {
+	rule := &DuplicateCopyRule{WriteOnceFields: s.WriteOnceFields, RewrittenFields: s.RewrittenFields}
+	if !rule.declared() {
+		return nil
+	}
+	return rule
 }
 
 // workGraphEdgeDedupPlan is one comparison's fully-evaluated admission
@@ -160,12 +183,13 @@ type workGraphEdgeDedupPlan struct {
 	// different logical edge entirely once any earlier duplicate has
 	// consumed a slot.
 	baselineIndexID []string
-	// writeOnceFields is shape.WriteOnceFields. When set, judgedIDs names
-	// the ids this plan evaluated at all (the ids whose baseline copies
-	// disagree); an id outside judgedIDs belongs to a sibling entry, so
-	// uncoveredEdgeID names nothing for it.
-	writeOnceFields []string
-	judgedIDs       map[string]bool
+	// copyRule is the shape's judged-mode rule (copyRule()), nil in the
+	// default mode. When set, judgedIDs names the ids this plan evaluated
+	// at all (the ids whose baseline copies disagree); an id outside
+	// judgedIDs belongs to a sibling entry, so uncoveredEdgeID names
+	// nothing for it.
+	copyRule  *DuplicateCopyRule
+	judgedIDs map[string]bool
 }
 
 // edgeListIndex extracts the list-position index a finding's own path
@@ -235,7 +259,7 @@ func (p *workGraphEdgeDedupPlan) uncoveredEdgeID(finding Finding) (string, bool)
 	if !ok {
 		return "", false
 	}
-	if len(p.writeOnceFields) > 0 && !p.judgedIDs[id] {
+	if p.copyRule != nil && !p.judgedIDs[id] {
 		return "", false
 	}
 	return id, true
@@ -244,9 +268,8 @@ func (p *workGraphEdgeDedupPlan) uncoveredEdgeID(finding Finding) (string, bool)
 // refusalDetail is the Detail suffix naming one not-admitted id and the
 // rule that refused it.
 func (p *workGraphEdgeDedupPlan) refusalDetail(id string) string {
-	if len(p.writeOnceFields) > 0 {
-		fields := strings.Join(p.writeOnceFields, "/")
-		return fmt.Sprintf(" (dedup id %q not admitted by the declared write-once %s rule: its baseline copies disagree outside that field set, carry more than one distinct populated value within it, or the candidate row is absent or differs from the populated copy)", id, fields)
+	if p.copyRule != nil {
+		return fmt.Sprintf(" (dedup id %q not admitted by the declared %s rule: its baseline copies disagree outside those fields, carry more than one distinct populated write-once value, or the candidate row is absent, equals no baseline copy, or lacks the populated write-once value)", id, p.copyRule.describe())
 	}
 	return fmt.Sprintf(" (dedup id %q not admitted by the declared duplicate-row shape: its own baseline copies disagree, or its shared content differs from the candidate)", id)
 }
@@ -255,7 +278,8 @@ func (p *workGraphEdgeDedupPlan) refusalDetail(id string) string {
 // documents against one comparison's two decoded edge lists, producing a
 // PER-ID admission set rather than a single whole-comparison verdict.
 func buildWorkGraphEdgeDedupPlan(shape *WorkGraphEdgeDedupShape, baselineData, candidateData any) *workGraphEdgeDedupPlan {
-	plan := &workGraphEdgeDedupPlan{edgesListPath: shape.EdgesListPath, trailingCursorPath: shape.TrailingCursorPath, writeOnceFields: shape.WriteOnceFields}
+	rule := shape.copyRule()
+	plan := &workGraphEdgeDedupPlan{edgesListPath: shape.EdgesListPath, trailingCursorPath: shape.TrailingCursorPath, copyRule: rule}
 
 	baseList, ok1 := listAtDottedPath(baselineData, shape.EdgesListPath)
 	candList, ok2 := listAtDottedPath(candidateData, shape.EdgesListPath)
@@ -278,10 +302,9 @@ func buildWorkGraphEdgeDedupPlan(shape *WorkGraphEdgeDedupShape, baselineData, c
 	// is excluded below (agreeingIDs[id] stays false) rather than
 	// invalidating every other id's own verdict.
 	//
-	// In WriteOnceFields mode the roles flip: only a DISAGREEING id is
-	// judged (judged[id]), it passes rule 1 only through
-	// writeOnceRepresentative, and its representative copy stands in for
-	// it in rule 2.
+	// In the judged mode (a copy rule is declared) the roles flip: only a
+	// DISAGREEING id is judged (judged[id]), and rule 2 admits it only
+	// through the copy rule against the candidate row.
 	baseUnique := make(map[string]map[string]any, len(baseGroups))
 	agreeingIDs := make(map[string]bool, len(baseGroups))
 	judged := make(map[string]bool, len(baseGroups))
@@ -299,17 +322,12 @@ func buildWorkGraphEdgeDedupPlan(shape *WorkGraphEdgeDedupShape, baselineData, c
 			hasDuplicate = true
 		}
 		baseUnique[id] = first
-		if len(shape.WriteOnceFields) == 0 {
+		if rule == nil {
 			agreeingIDs[id] = agree
 			continue
 		}
-		if agree {
-			continue
-		}
-		judged[id] = true
-		if representative, ok := writeOnceRepresentative(group, shape.WriteOnceFields); ok {
-			baseUnique[id] = representative
-			agreeingIDs[id] = true
+		if !agree {
+			judged[id] = true
 		}
 	}
 	if !hasDuplicate {
@@ -343,12 +361,16 @@ func buildWorkGraphEdgeDedupPlan(shape *WorkGraphEdgeDedupShape, baselineData, c
 	for id, baseObject := range baseUnique {
 		candObject, ok := candByID[id]
 		if !ok {
-			// WriteOnceFields mode needs the candidate's own row to
-			// confirm the representative; without it nothing is admitted.
-			admitted[id] = agreeingIDs[id] && len(shape.WriteOnceFields) == 0
+			// The judged mode needs the candidate's own row to confirm
+			// which copy it serves; without it nothing is admitted.
+			admitted[id] = rule == nil && agreeingIDs[id]
 			continue
 		}
 		shared++
+		if rule != nil {
+			admitted[id] = judged[id] && rule.candidateIsServedCopy(baseGroups[id], candObject)
+			continue
+		}
 		admitted[id] = agreeingIDs[id] && jsonValuesEqual(baseObject, candObject)
 	}
 	if shared == 0 {
@@ -357,7 +379,7 @@ func buildWorkGraphEdgeDedupPlan(shape *WorkGraphEdgeDedupShape, baselineData, c
 
 	plan.applies = true
 	plan.admittedIDs = admitted
-	if len(shape.WriteOnceFields) > 0 {
+	if rule != nil {
 		plan.judgedIDs = judged
 	}
 	plan.baselineIndexID = baselineIndexID
@@ -373,11 +395,11 @@ func buildWorkGraphEdgeDedupPlan(shape *WorkGraphEdgeDedupShape, baselineData, c
 // agrees (including every copy null -- a sibling write-once field that
 // simply has not transitioned yet) or the field is null on at least one
 // copy and one and the same value, by jsonValuesEqual, on every other
-// copy. ok is false for anything else -- two different non-null values
-// for a field in the set, a missing key, a difference on a field outside
-// the set, or a group where no field in the set actually disagrees (rule
-// 1's plain by-value path already admits that case, so this function is
-// never called for it).
+// copy. A group whose copies already agree everywhere returns that
+// agreed copy, and an empty field set reduces the rule to that
+// everywhere-agreement. ok is false for anything else -- two different
+// non-null values for a field in the set, a missing key, or a
+// difference on a field outside the set.
 func writeOnceRepresentative(group []map[string]any, fields []string) (map[string]any, bool) {
 	inSet := make(map[string]bool, len(fields))
 	for _, field := range fields {

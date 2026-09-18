@@ -45,9 +45,14 @@ const (
 
 // drilldownPRsPlainDedupRefusal and drilldownPRsWriteOnceRefusal are the
 // Detail phrases refusalDetail writes for each dedup entry kind.
+// drilldownPRsAccountingRefusal is the Detail phrase a finding carries
+// when the family's shared candidate accounting refused a candidate row
+// that equals no baseline copy; the phrase is followed by that row's id.
+const drilldownPRsAccountingRefusal = "candidate accounting refused: candidate row "
+
 const (
 	drilldownPRsPlainDedupRefusal = "not admitted by the declared duplicate-row shape"
-	drilldownPRsWriteOnceRefusal  = "not admitted by the declared write-once merged_at/first_review_at/review_latency_hours rule"
+	drilldownPRsWriteOnceRefusal  = "not admitted by the declared rewritten title/author/author_name/merged_at/first_review_at/review_latency_hours rule"
 )
 
 func drilldownPRsSnapshotFromFile(t *testing.T, path string) Snapshot {
@@ -162,11 +167,12 @@ func TestDrilldownPRsParity_RealCapturedBodyAdmitsAgreeingGroupsAndTheMergedAtGr
 	}
 }
 
-// TestDrilldownPRsParity_RealCapturedBodyMergedAtGroupWithCandidateNullStaysUncovered
-// sets PR 573's candidate merged_at to null in the real captured pair: the
-// write-once entry must refuse the id, its findings stay outside, and each
-// names PR 573's own dedup id under the write-once refusal.
-func TestDrilldownPRsParity_RealCapturedBodyMergedAtGroupWithCandidateNullStaysUncovered(t *testing.T) {
+// TestDrilldownPRsParity_RealCapturedBodyMergedAtGroupWithAnUncarriedValueStaysUncovered
+// sets PR 573's candidate merged_at to a timestamp neither baseline copy
+// carries in the real captured pair: the copy-rule entry must refuse the
+// id, its findings stay outside, and each names PR 573's own dedup id
+// under the copy-rule refusal.
+func TestDrilldownPRsParity_RealCapturedBodyMergedAtGroupWithAnUncarriedValueStaysUncovered(t *testing.T) {
 	baseline := drilldownPRsSnapshotFromFile(t, drilldownPRsDedupBaselinePath)
 	candidate := drilldownPRsSnapshotFromFile(t, drilldownPRsDedupCandidatePath)
 
@@ -174,7 +180,7 @@ func TestDrilldownPRsParity_RealCapturedBodyMergedAtGroupWithCandidateNullStaysU
 	for _, element := range candidate.Data.(map[string]any)["items"].([]any) {
 		object := element.(map[string]any)
 		if object[RESTDedupKeyField] == drilldownPRsDedupDriftedID {
-			object["merged_at"] = nil
+			object["merged_at"] = "2020-01-01T00:00:00Z"
 			mutated = true
 		}
 	}
@@ -185,12 +191,12 @@ func TestDrilldownPRsParity_RealCapturedBodyMergedAtGroupWithCandidateNullStaysU
 	result := Compare(baseline, candidate, drilldownPRsParity)
 
 	if result.DifferencesOutsideBaselineDefect == 0 {
-		t.Fatalf("outside = 0, want > 0: a candidate null merged_at must not be admitted; findings %+v", result.Findings)
+		t.Fatalf("outside = 0, want > 0: a candidate merged_at no copy carries must not be admitted; findings %+v", result.Findings)
 	}
 	driftedIDQuoted := fmt.Sprintf("%q", drilldownPRsDedupDriftedID)
 	sawWriteOnceRefusal := false
 	for _, f := range result.Findings {
-		if !strings.Contains(f.Detail, drilldownPRsWriteOnceRefusal) {
+		if !strings.Contains(f.Detail, drilldownPRsAccountingRefusal) {
 			continue
 		}
 		sawWriteOnceRefusal = true
@@ -204,22 +210,11 @@ func TestDrilldownPRsParity_RealCapturedBodyMergedAtGroupWithCandidateNullStaysU
 }
 
 // TestDrilldownPRsParity_RealCapturedBodyWithAGenuineRegressionStaysUncovered
-// keeps the dedup shape's safety intent against the real captured pair:
-// mutating one shared, non-duplicated PR's own title in the candidate
-// leg is a real per-field regression hiding behind an id the two pages
-// share. Admission is per id, so this excludes ONLY that one id -- the mutated finding
-// stays outside and cites the mutated PR's own id, while the 19 agreeing
-// duplicate groups and PR 573's merged_at group are judged exactly as
-// they are in the unmutated fixture, so every ONE OF THOSE TWO tickets
-// still reads as matched (something else really was admitted), never
-// idle or stale. The length-collapse entry is different: it
-// never admits anything in this fixture (both legs share one length --
-// see drilldownPRsWantIdleLengthTickets), and its own Paths ("data.items")
-// still reach the mutated, genuinely-uncovered finding, so it correctly
-// reads live-unexplained here rather than idle -- a length-collapse
-// citation with nothing to admit, sitting next to a live, unexplained
-// difference under the same path, must say so rather than quietly
-// passing as idle.
+// keeps the dedup shapes' safety intent against the real captured pair:
+// mutating one shared, non-duplicated PR's own title in the candidate leg
+// is a real per-field regression hiding behind an id the two pages share.
+// The family's candidate accounting refuses the whole list, so the
+// mutated finding stays outside and names the refused candidate row.
 func TestDrilldownPRsParity_RealCapturedBodyWithAGenuineRegressionStaysUncovered(t *testing.T) {
 	baseline := drilldownPRsSnapshotFromFile(t, drilldownPRsDedupBaselinePath)
 	candidate := drilldownPRsSnapshotFromFile(t, drilldownPRsDedupCandidatePath)
@@ -246,16 +241,8 @@ func TestDrilldownPRsParity_RealCapturedBodyWithAGenuineRegressionStaysUncovered
 	if result.TerminalState != TerminalStateMismatch {
 		t.Fatalf("terminal = %q, want mismatch", result.TerminalState)
 	}
-	wantMatched := drilldownPRsWantMatched()
-	if !equalStrings(result.BaselineDefectsMatched, wantMatched) {
-		t.Fatalf("matched = %v, want %v -- a regression on ONE id must not blind the citation to every other id it still explains: idle %v stale %v",
-			result.BaselineDefectsMatched, wantMatched, result.IdleIntermittentBaselineDefects, result.StaleBaselineDefects)
-	}
-	if len(result.IdleIntermittentBaselineDefects) != 0 {
-		t.Fatalf("idle = %v, want none -- the mutation leaves a genuinely live, unexplained difference under data.items", result.IdleIntermittentBaselineDefects)
-	}
-	if want := drilldownPRsWantIdleLengthTickets(); !equalStrings(result.LiveBaselineDefectsUnexplained, want) {
-		t.Fatalf("live-unexplained = %v, want %v -- the length-collapse entry admits nothing here and its own Paths still reach the mutated, uncovered finding", result.LiveBaselineDefectsUnexplained, want)
+	if result.DifferencesOutsideBaselineDefect == 0 {
+		t.Fatal("outside = 0: a candidate row that equals no baseline copy must never be admitted")
 	}
 	foundMutation := false
 	for _, f := range result.Findings {
@@ -263,8 +250,8 @@ func TestDrilldownPRsParity_RealCapturedBodyWithAGenuineRegressionStaysUncovered
 			continue
 		}
 		foundMutation = true
-		if strings.Contains(f.Detail, "not admitted by the declared duplicate-row shape") && !strings.Contains(f.Detail, fmt.Sprintf("%q", mutatedID)) {
-			t.Errorf("mutated finding cites the wrong id: %s", f.Detail)
+		if !strings.Contains(f.Detail, drilldownPRsAccountingRefusal+fmt.Sprintf("%q", mutatedID)) {
+			t.Errorf("mutated finding does not name the refused candidate row %q: %s", mutatedID, f.Detail)
 		}
 	}
 	if !foundMutation {

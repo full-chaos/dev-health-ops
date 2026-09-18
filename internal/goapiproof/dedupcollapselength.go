@@ -85,6 +85,13 @@ type DuplicateCollapseLengthShape struct {
 	// whether a further, unobserved page exists beyond what was
 	// captured.
 	RequestLimit int
+	// CopyRule, when declared, replaces rules 1 and 3's byte-identity
+	// with DuplicateCopyRule (duplicatecopyrule.go): an id's copies may
+	// disagree in the rule's named fields, and the candidate element must
+	// be the copy a FINAL read serves. Rule 4 already requires every
+	// baseline id in the candidate, so every repeated id is judged
+	// against its candidate row. Nil keeps rules 1 and 3 as stated.
+	CopyRule *DuplicateCopyRule
 }
 
 // duplicateCollapseLengthPlan is one comparison's fully-evaluated
@@ -124,11 +131,15 @@ func buildDuplicateCollapseLengthPlan(shape *DuplicateCollapseLengthShape, basel
 
 	// Rule 1: every physical copy of a repeated id agrees, byte for
 	// byte. A single-copy id trivially satisfies this (nothing to
-	// disagree with).
+	// disagree with). Under a declared CopyRule the copies are judged
+	// against the candidate row in rule 3 instead.
 	hasDuplicate := false
 	for _, group := range baseGroups {
 		if len(group) > 1 {
 			hasDuplicate = true
+		}
+		if shape.CopyRule.declared() {
+			continue
 		}
 		first := group[0]
 		for _, other := range group[1:] {
@@ -155,13 +166,14 @@ func buildDuplicateCollapseLengthPlan(shape *DuplicateCollapseLengthShape, basel
 	}
 
 	// Rule 3: every id shared between the two (deduplicated) sides
-	// agrees, byte for byte.
+	// agrees, byte for byte, or under a declared CopyRule the candidate
+	// row is the copy a FINAL read serves.
 	for id, group := range baseGroups {
 		candObject, ok := candByID[id]
 		if !ok {
 			continue
 		}
-		if !jsonValuesEqual(group[0], candObject) {
+		if !shape.CopyRule.candidateIsServedCopy(group, candObject) {
 			return plan
 		}
 	}

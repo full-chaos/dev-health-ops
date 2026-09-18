@@ -62,18 +62,16 @@ func TestDrilldownPRsTeamScopedParityWithLimit_RealCaptureAdmitsUnderCHAOS5988(t
 }
 
 // drilldownPRsUncutLimitFixture builds a synthetic team-scoped
-// drilldown/prs body with n distinct ids, every one duplicated exactly
-// once on the baseline side (byte-identical copies -- no created_at
-// field at all, so CHAOS-5968's own SortField read can never resolve
-// against this data either), and an exact collapse on the candidate
-// side.
+// drilldown/prs body with n distinct ids in created_at DESC order, every
+// one duplicated exactly once on the baseline side (byte-identical
+// copies), and an exact collapse on the candidate side.
 func drilldownPRsUncutLimitFixture(t *testing.T, n int) (baseline, candidate Snapshot) {
 	t.Helper()
 	var baseItems, candItems []string
 	for i := 0; i < n; i++ {
 		id := fmt.Sprintf("id-%02d", i)
-		baseItems = append(baseItems, dedupCollapseItem(id, "x"), dedupCollapseItem(id, "x"))
-		candItems = append(candItems, dedupCollapseItem(id, "x"))
+		baseItems = append(baseItems, pageCutItem(id, "x", i), pageCutItem(id, "x", i))
+		candItems = append(candItems, pageCutItem(id, "x", i))
 	}
 	base, err := DecodeRESTSnapshot([]byte(dedupCollapseBody(baseItems)))
 	if err != nil {
@@ -86,23 +84,18 @@ func drilldownPRsUncutLimitFixture(t *testing.T, n int) (baseline, candidate Sna
 	return base, cand
 }
 
-// TestDrilldownPRsTeamScopedParity_LimitReachedGoesIdleNotMatchedNotPageCut
+// TestDrilldownPRsTeamScopedParity_LimitReachedGoesIdleNotMatched
 // pins the exact behavior team-lead's own ruling requires: a synthetic
 // baseline whose own raw length (50) reaches drilldownPRsTeamScopedParity's
 // own default RequestLimit (50, CHAOS-5988's own baseline configuration)
 // exactly, with an otherwise-clean exact collapse (25 distinct ids, each
 // duplicated once). CHAOS-5988 must go IDLE (not matched) -- "page
-// possibly cut" -- and CHAOS-5968 (the page-cut shape, also declared on
-// this Options) must NOT pick it up as a fallback either: this synthetic
-// body carries no created_at field at all, so CHAOS-5968's own SortField
-// read (rule 6) can never resolve against it, structurally refusing on
-// its own, independent terms. The list's own length finding still ends
-// up covered here -- CHAOS-5959 (DuplicateCollapseLengthShape, no
-// RequestLimit set, this table's own pre-existing entry) admits the
-// SAME exact-collapse structure independently, on its own unrelated,
-// already-verified terms; that is CHAOS-5959's own scope, not a fallback
-// for CHAOS-5988's own refusal.
-func TestDrilldownPRsTeamScopedParity_LimitReachedGoesIdleNotMatchedNotPageCut(t *testing.T) {
+// possibly cut". The list's own length finding is still covered: a
+// baseline at the limit with every duplicate collapsed onto the
+// candidate's own prefix is exactly the page cut the page-cut entry
+// names, and the exact-collapse entry admits the same structure on its
+// own terms; neither is a fallback for the uncut entry's own refusal.
+func TestDrilldownPRsTeamScopedParity_LimitReachedGoesIdleNotMatched(t *testing.T) {
 	baseline, candidate := drilldownPRsUncutLimitFixture(t, 25)
 
 	result := Compare(baseline, candidate, drilldownPRsTeamScopedParity)
@@ -121,11 +114,8 @@ func TestDrilldownPRsTeamScopedParity_LimitReachedGoesIdleNotMatchedNotPageCut(t
 	if !foundIdle {
 		t.Fatalf("idle = %v, want %s among them -- a limit-reaching baseline goes idle by name, not silently unmentioned", result.IdleIntermittentBaselineDefects, wantTicket)
 	}
-	pageCutTicket := drilldownPRsPageCutTicket(t)
-	for _, ticket := range result.BaselineDefectsMatched {
-		if ticket == pageCutTicket {
-			t.Fatalf("matched = %v, must not include the page-cut ticket %s either -- this synthetic body carries no created_at field, so that shape cannot resolve against it and must never pick this case up as a fallback", result.BaselineDefectsMatched, pageCutTicket)
-		}
+	if result.DifferencesOutsideBaselineDefect != 0 {
+		t.Fatalf("outside = %d, want 0: the length finding is a page cut at the limit, which the page-cut entry covers -- findings %+v", result.DifferencesOutsideBaselineDefect, result.Findings)
 	}
 }
 

@@ -268,7 +268,8 @@ func TestCapturedCapacityForecastPairsPassUnderTheStochasticLeafClass(t *testing
 				t.Fatalf("rebuilt findings %v, captured %v", before.Findings, captured.Findings)
 			}
 			for i := range captured.Findings {
-				if before.Findings[i] != captured.Findings[i] {
+				got, want := before.Findings[i], captured.Findings[i]
+				if got.Kind != want.Kind || got.Path != want.Path || got.Detail != want.Detail || got.Shape != want.Shape {
 					t.Fatalf("rebuilt finding %+v, captured %+v", before.Findings[i], captured.Findings[i])
 				}
 			}

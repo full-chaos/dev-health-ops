@@ -5,10 +5,10 @@ import (
 	"testing"
 )
 
-// This file pins drilldownPRsParity's write-once entry (restcorpus.go)
+// This file pins drilldownPRsParity's copy-rule entry (restcorpus.go)
 // against small, self-contained neutral fixtures built
 // straight from the shape's own declaration, so a field ever added to or
-// dropped from WriteOnceFields is exercised here without needing a fresh
+// dropped from its field set is exercised here without needing a fresh
 // production capture. Every fixture goes through the real REST decode
 // path (DecodeRESTSnapshot, then InjectRESTDedupKeys), never a hand-built
 // Go value. Baseline and candidate carry the SAME total item count in
@@ -17,7 +17,7 @@ import (
 // never reaches an id the candidate's own, undeduplicated-length page
 // does -- a bare item-count difference is a structural finding no shape
 // in this package explains, so a length mismatch here would test nothing
-// about the write-once rule itself.
+// about the copy rule itself.
 
 // prItem renders one synthetic drilldown/prs item over a single neutral
 // identity (repo_id "ABC-123"); mergedAt, firstReviewAt and
@@ -48,7 +48,9 @@ func prSnapshots(t *testing.T, baselineBody, candidateBody string) (Snapshot, Sn
 	return baseline, candidate
 }
 
-// prWriteOnceOptions wraps the corpus's OWN declared write-once shape
+// prWriteOnceOptions wraps the corpus's OWN declared copy-rule shape, both
+// entries gated by the family's accounting over the three-row page every
+// fixture in this file models,
 // (drilldownPRsWriteOnceShape, drilldownprs_mergedat_realbody_test.go)
 // alongside a plain duplicate-row sibling, mirroring drilldownPRsParity's
 // own pairing: the write-once entry only ever judges a disagreeing id
@@ -63,11 +65,13 @@ func prWriteOnceOptions(t *testing.T) Options {
 			Ticket: "ABC-123", Reason: "test fixture",
 			Paths: []string{"data.items"}, Intermittent: true, IntermittentReason: "test fixture",
 			WorkGraphEdgeDedupShape: &WorkGraphEdgeDedupShape{EdgesListPath: "data.items", IDField: RESTDedupKeyField},
+			Accounting:              pullRequestAccounting(3),
 		},
 		{
 			Ticket: "ABC-456", Reason: "test fixture",
 			Paths: []string{"data.items"}, Intermittent: true, IntermittentReason: "test fixture",
 			WorkGraphEdgeDedupShape: drilldownPRsWriteOnceShape(t),
+			Accounting:              pullRequestAccounting(3),
 		},
 	}}
 }
@@ -177,9 +181,9 @@ func TestPRItemWriteOnce_ReproducesTheStillOpenCapturedCase(t *testing.T) {
 }
 
 // TestPRItemWriteOnce_RefusesEachNeighbouringCase keeps the refusals the
-// declaration must never blur: two different populated values for a
-// leaf in the set, a candidate that regresses a populated leaf to null,
-// and a disagreement on a leaf outside the set.
+// declaration must never blur: a candidate value no baseline copy
+// carries, a candidate mixing fields of two copies, and a disagreement on
+// a leaf outside the set.
 func TestPRItemWriteOnce_RefusesEachNeighbouringCase(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -187,27 +191,27 @@ func TestPRItemWriteOnce_RefusesEachNeighbouringCase(t *testing.T) {
 		candidate string
 	}{
 		{
-			"two different populated values for a leaf in the set",
+			"candidate value no copy carries",
 			prBody(
 				prItem("1", "t", "null", "null", "null"),
 				prItem("1", "t", "null", `"2024-01-01T10:00:00Z"`, "10"),
 				prItem("1", "t", "null", `"2024-01-01T14:00:00Z"`, "14"),
 			),
 			prBody(
-				prItem("1", "t", "null", `"2024-01-01T14:00:00Z"`, "14"),
+				prItem("1", "t", "null", `"2024-01-01T12:00:00Z"`, "12"),
 				prItem("2", "u", "null", "null", "null"),
 				tailItem,
 			),
 		},
 		{
-			"candidate regresses a populated leaf to null",
+			"candidate mixes fields of two copies",
 			prBody(
 				prItem("1", "t", "null", "null", "null"),
-				prItem("1", "t", `"2024-01-02T05:00:00Z"`, "null", "null"),
+				prItem("1", "retitled", `"2024-01-02T05:00:00Z"`, "null", "null"),
 				tailItem,
 			),
 			prBody(
-				prItem("1", "t", "null", "null", "null"),
+				prItem("1", "t", `"2024-01-02T05:00:00Z"`, "null", "null"),
 				tailItem,
 				prItem("2", "u", "null", "null", "null"),
 			),
@@ -216,11 +220,11 @@ func TestPRItemWriteOnce_RefusesEachNeighbouringCase(t *testing.T) {
 			"disagreement on a leaf outside the set",
 			prBody(
 				prItem("1", "t", "null", "null", "null"),
-				prItem("1", "retitled", `"2024-01-02T05:00:00Z"`, "null", "null"),
+				strings.Replace(prItem("1", "t", "null", "null", "null"), `"created_at":"2024-01-01T00:00:00Z"`, `"created_at":"2024-01-01T00:00:01Z"`, 1),
 				tailItem,
 			),
 			prBody(
-				prItem("1", "t", `"2024-01-02T05:00:00Z"`, "null", "null"),
+				prItem("1", "t", "null", "null", "null"),
 				tailItem,
 				prItem("2", "u", "null", "null", "null"),
 			),
@@ -244,5 +248,27 @@ func TestPRItemWriteOnce_RefusesEachNeighbouringCase(t *testing.T) {
 				t.Errorf("no finding names id 1 -- findings %+v", result.Findings)
 			}
 		})
+	}
+}
+
+// TestPRItemWriteOnce_AdmitsTheOlderWholeCopy pins the declared blind
+// spot: no writer gives a field a direction, so a candidate equal to the
+// older physical copy (merged_at still null) equals one whole baseline
+// copy and is admitted.
+func TestPRItemWriteOnce_AdmitsTheOlderWholeCopy(t *testing.T) {
+	baseline := prBody(
+		prItem("1", "t", "null", "null", "null"),
+		prItem("1", "t", `"2024-01-02T05:00:00Z"`, "null", "null"),
+		tailItem,
+	)
+	candidate := prBody(
+		prItem("1", "t", "null", "null", "null"),
+		tailItem,
+		prItem("2", "u", "null", "null", "null"),
+	)
+	baselineSnap, candidateSnap := prSnapshots(t, baseline, candidate)
+	result := Compare(baselineSnap, candidateSnap, prWriteOnceOptions(t))
+	if result.DifferencesOutsideBaselineDefect != 0 {
+		t.Fatalf("outside = %d, want 0 -- findings %+v", result.DifferencesOutsideBaselineDefect, result.Findings)
 	}
 }

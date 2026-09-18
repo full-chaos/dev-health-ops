@@ -1,6 +1,9 @@
 package goapiproof
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // This file exercises the ACTUAL corpus Options vars this ticket adds
 // (restcorpus.go), not the underlying shapes in isolation (teamreposubset_
@@ -303,21 +306,37 @@ func drilldownPRsTeamScopeBody(items string) string {
 	return `{"data":{"items":[` + items + `]}}`
 }
 
+// drilldownPRsTeamScopeSnapshot decodes body and injects the dedup key the
+// runner writes before every drilldown/prs comparison.
+func drilldownPRsTeamScopeSnapshot(t *testing.T, body string) Snapshot {
+	t.Helper()
+	snapshot := snapshotFromJSON(t, body)
+	snapshot.Data = InjectRESTDedupKeys(snapshot.Data, drilldownPRsDedup.ListPath, drilldownPRsDedup.KeyFields)
+	return snapshot
+}
+
 // TestDrilldownPRsTeamScopedParity_NarrowerTeamAdmitted pins
 // drilldownPRsTeamScopeSubsetDefect: a team-scoped candidate missing an
 // entire PR from a non-team repository, with the kept PR's own fields
 // UNCHANGED (every field besides the (repo_id, number) key is a per-PR
 // property, never resummed), is a bounded subset.
 func TestDrilldownPRsTeamScopedParity_NarrowerTeamAdmitted(t *testing.T) {
-	baseline := snapshotFromJSON(t, drilldownPRsTeamScopeBody(
+	baseline := drilldownPRsTeamScopeSnapshot(t, drilldownPRsTeamScopeBody(
 		drilldownPRsTeamScopeItem("11111111-1111-1111-1111-111111111111", 42, "Fix bug", "alice", 3)+","+
 			drilldownPRsTeamScopeItem("22222222-2222-2222-2222-222222222222", 7, "Other team's PR", "bob", 5)))
-	candidate := snapshotFromJSON(t, drilldownPRsTeamScopeBody(
+	candidate := drilldownPRsTeamScopeSnapshot(t, drilldownPRsTeamScopeBody(
 		drilldownPRsTeamScopeItem("11111111-1111-1111-1111-111111111111", 42, "Fix bug", "alice", 3)))
 
 	result := Compare(baseline, candidate, drilldownPRsTeamScopedParity)
 	if result.DifferencesOutsideBaselineDefect != 0 {
 		t.Fatalf("outside = %d, want 0: findings %+v", result.DifferencesOutsideBaselineDefect, result.Findings)
+	}
+	// The duplicate-row entries' accounting refuses the dropped row; the
+	// team-subset entry covers it, so no covered finding names a refusal.
+	for _, f := range result.Findings {
+		if strings.Contains(f.Detail, "candidate accounting refused") {
+			t.Errorf("covered finding %s names a refusal: %s", f.Path, f.Detail)
+		}
 	}
 }
 
@@ -330,8 +349,8 @@ func TestDrilldownPRsTeamScopedParity_EqualPopulationIsACleanMatch(t *testing.T)
 	body := drilldownPRsTeamScopeBody(
 		drilldownPRsTeamScopeItem("11111111-1111-1111-1111-111111111111", 42, "Fix bug", "alice", 3) + "," +
 			drilldownPRsTeamScopeItem("22222222-2222-2222-2222-222222222222", 7, "Team PR too", "bob", 5))
-	baseline := snapshotFromJSON(t, body)
-	candidate := snapshotFromJSON(t, body)
+	baseline := drilldownPRsTeamScopeSnapshot(t, body)
+	candidate := drilldownPRsTeamScopeSnapshot(t, body)
 
 	result := Compare(baseline, candidate, drilldownPRsTeamScopedParity)
 	if result.TerminalState != TerminalStateMatch {
@@ -344,9 +363,9 @@ func TestDrilldownPRsTeamScopedParity_EqualPopulationIsACleanMatch(t *testing.T)
 // never resummed across a repository set, so a matched PR's own title
 // changing must NOT be silently admitted.
 func TestDrilldownPRsTeamScopedParity_ChangedKeptFieldStaysOutside(t *testing.T) {
-	baseline := snapshotFromJSON(t, drilldownPRsTeamScopeBody(
+	baseline := drilldownPRsTeamScopeSnapshot(t, drilldownPRsTeamScopeBody(
 		drilldownPRsTeamScopeItem("11111111-1111-1111-1111-111111111111", 42, "Fix bug", "alice", 3)))
-	candidate := snapshotFromJSON(t, drilldownPRsTeamScopeBody(
+	candidate := drilldownPRsTeamScopeSnapshot(t, drilldownPRsTeamScopeBody(
 		drilldownPRsTeamScopeItem("11111111-1111-1111-1111-111111111111", 42, "A different title", "alice", 3)))
 
 	result := Compare(baseline, candidate, drilldownPRsTeamScopedParity)

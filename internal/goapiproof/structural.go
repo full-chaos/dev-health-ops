@@ -198,6 +198,58 @@ func bodySizeDisagreement(baselineBytes, candidateBytes int) (reason, detail str
 		ratio, baselineBytes, candidateBytes, bodySizeRatioThreshold)
 }
 
+// bodySizeGateDeferred reports whether at least one declared BaselineDefect's
+// structural shape -- TeamRepoSubsetShape, HotspotListBoundaryShape,
+// LimitDisplacementShape, or DictKeyDirectionShape with its own
+// AdmitBaselineOnlyKeys opt-in set -- builds a VALID plan against the two
+// already-decoded response bodies. These are the only shapes whose own
+// admission rule can ever cover a ShapeLength or ShapePresence finding
+// (classifyBaselineDefects' own shape-field gate, compare.go), so they are
+// the only ones consulted here; every other shape only ever admits a leaf
+// difference and can never explain a gross body-size disagreement.
+//
+// Each shape's own structural precondition -- the same one its own admits()
+// method refuses everything on when it does not hold -- is a pure function
+// of the two decoded bodies, so it is evaluated here with no mismatch or
+// coverage information at all: none exists yet at this point in Compare,
+// since the ordinary comparison has not run. LimitDisplacementShape and
+// HotspotListBoundaryShape accept a mismatches/covered argument for their
+// OWN later per-key admission decisions; their own validity check runs
+// first, before either argument is read, so passing nil for both here
+// changes nothing about what this function reports.
+//
+// An undeclared request, or a declared shape whose plan does not hold -- an
+// empty candidate list, a boundary length off the route's own limit, a
+// candidate-only key that breaks the subset claim, a list or object this
+// shape cannot even read -- reports false, and the size-ratio refusal stands
+// exactly as it always has.
+func bodySizeGateDeferred(opts Options, baselineData, candidateData any) bool {
+	for _, defect := range opts.BaselineDefects {
+		if shape := defect.TeamRepoSubsetShape; shape != nil {
+			plan := buildTeamRepoSubsetPlan(shape, baselineData, candidateData)
+			if plan.valid && plan.subset {
+				return true
+			}
+		}
+		if shape := defect.DictKeyDirectionShape; shape != nil && shape.AdmitBaselineOnlyKeys {
+			if buildDictKeyDirectionPlan(shape, baselineData, candidateData).valid {
+				return true
+			}
+		}
+		if shape := defect.LimitDisplacementShape; shape != nil {
+			if buildLimitDisplacementPlan(shape, baselineData, candidateData, nil, nil, nil, nil).valid {
+				return true
+			}
+		}
+		if shape := defect.HotspotListBoundaryShape; shape != nil {
+			if buildHotspotListBoundaryPlan(shape, baselineData, candidateData, nil, nil, nil, nil).valid {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // countNonNullLeaves counts every non-null scalar reachable under value,
 // with no path restriction -- the whole-tree form of compare.go's
 // nonNullLeaves, which is scoped to one cited path. Used by

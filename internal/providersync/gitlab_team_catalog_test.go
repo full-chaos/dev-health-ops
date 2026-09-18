@@ -280,6 +280,52 @@ func TestGitLabTeamCatalogCollectCountsFailedAndRetriedAttempts(t *testing.T) {
 	}
 }
 
+// TestGitLabTeamCatalogCollectNonStrictWalkFailureStampsRequestsOnTheSkipBatch
+// proves that gitlabTeamCatalogWalkFailure must not
+// discard the counting Doer's running total along with the rest of the
+// walk's state -- the physical requests already spent before a non-strict
+// abort are real wire cost regardless of the abort. The root group fetch
+// fails every attempt through to the retry policy's exhaustion.
+func TestGitLabTeamCatalogCollectNonStrictWalkFailureStampsRequestsOnTheSkipBatch(t *testing.T) {
+	rootAttempts := 0
+	doer := jiraWorkItemsDoerFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Path != "/api/v4/groups/org" {
+			t.Fatalf("unexpected request path %q", request.URL.Path)
+		}
+		rootAttempts++
+		return nil, errors.New("simulated transient transport failure")
+	})
+	client, err := providerfoundation.NewHTTPClient(
+		"gitlab", "https://gitlab.example.com", doer,
+		func(*http.Request) error { return nil },
+		providerfoundation.RetryPolicy{
+			MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
+		},
+		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := TeamCatalogReference{OrgID: "org-1", SyncRunID: "run-1", Strict: false}
+	selections := TeamCatalogSelections{Teams: true}
+	credential := providerfoundation.Credential{Provider: "gitlab", Config: map[string]string{"group_path": "org"}}
+	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+
+	batch, err := (GitLabTeamCatalogRouteHandler{}).CollectTeamCatalog(context.Background(), ref, credential, client, selections, now)
+	if err != nil {
+		t.Fatalf("non-strict must not error on a walk failure: %v", err)
+	}
+	if !batch.Result.WalkSkipped || batch.Result.WalkSkipReason != "root_group_fetch_failed" {
+		t.Fatalf("Result=%+v, want WalkSkipped=true reason=root_group_fetch_failed", batch.Result)
+	}
+	if rootAttempts != 2 {
+		t.Fatalf("root attempts=%d want 2 (both exhausted by the retry policy)", rootAttempts)
+	}
+	if batch.Evidence.Requests != 2 {
+		t.Fatalf("evidence=%+v want Requests=2 (the skip batch must carry the real wire cost, not discard it)", batch.Evidence)
+	}
+}
+
 func TestGitLabTeamCatalogCollectAllSelections(t *testing.T) {
 	fake := newGitLabTeamCatalogFakeServer(t)
 	client := gitlabTeamCatalogTestClient(t, fake.URL)

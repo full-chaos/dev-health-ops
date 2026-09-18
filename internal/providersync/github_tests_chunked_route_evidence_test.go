@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strconv"
 	"testing"
 	"time"
 
@@ -63,6 +64,67 @@ func TestGitHubTestsChunkRouteCountsFailedAndRetriedAttempts(t *testing.T) {
 	// (artifacts-phase listing) + 1 (artifacts listing) = 6.
 	if walk.cursor.Requests != 6 {
 		t.Fatalf("cursor=%+v want Requests=6 (every physical attempt, from one source)", walk.cursor)
+	}
+}
+
+// TestGitHubTestsChunkRouteCountsListingPagesWhoseRunsAllFailNormalization
+// proves that a runs-listing page fetch is a real
+// physical wire attempt even when every run on it is normalize-excluded
+// (normalizeGitHubTestsPipeline's include=false, here because the run has
+// neither created_at nor run_started_at) before it can ever reach a per-run
+// job or artifact fetch -- the OLD code's ONLY two cursor.Requests refresh
+// points, one per phase. Two listing pages, each with one such run, so
+// NEITHER phase's refresh ever fires under the old code -- yet two real
+// listing requests were made per phase.
+func TestGitHubTestsChunkRouteCountsListingPagesWhoseRunsAllFailNormalization(t *testing.T) {
+	unnormalizableRun := func(id int) string {
+		return `{"id":` + strconv.Itoa(id) + `,"name":"CI","status":"completed","conclusion":"success","event":"push","head_sha":"abc","head_branch":"main","html_url":"https://github.com/acme/api/actions/runs/` + strconv.Itoa(id) + `","pull_requests":[]}`
+	}
+	runsPage := 0
+	doer := jiraWorkItemsDoerFunc(func(request *http.Request) (*http.Response, error) {
+		header := http.Header{"Content-Type": {"application/json"}}
+		switch request.URL.Path {
+		case "/repos/acme/api":
+			return githubTestsHTTPResponse(request, header, gitHubRepositoryFixture), nil
+		case "/repos/acme/api/actions/runs":
+			runsPage++
+			if runsPage == 1 {
+				header.Set("Link", `<https://api.github.com/repos/acme/api/actions/runs?page=2>; rel="next"`)
+				return githubTestsHTTPResponse(request, header, `{"workflow_runs":[`+unnormalizableRun(9001)+`]}`), nil
+			}
+			return githubTestsHTTPResponse(request, header, `{"workflow_runs":[`+unnormalizableRun(9002)+`]}`), nil
+		default:
+			t.Fatalf("unexpected request %s (every run fails normalization; no job/artifact fetch should ever fire)", request.URL.String())
+			return nil, nil
+		}
+	})
+	client, err := providerfoundation.NewHTTPClient(
+		"github", "https://api.github.com", doer,
+		func(*http.Request) error { return nil },
+		providerfoundation.RetryPolicy{
+			MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
+		},
+		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim := nativeTestClaim("github", "tests")
+	walk := walkGitHubTestsChunks(t, GitHubTestsRouteHandler{}, claim, client, 10)
+
+	// The artifacts phase re-lists the same /actions/runs endpoint (a 3rd
+	// hit) -- runsPage covers both phases.
+	if runsPage != 3 {
+		t.Fatalf("runs listing pages served=%d want 3 (2 runs-phase + 1 artifacts-phase)", runsPage)
+	}
+	if walk.cursor.Phase != "done" {
+		t.Fatalf("terminal phase=%q, want done", walk.cursor.Phase)
+	}
+	// 1 (repo) + 2 (runs-phase listing pages) + 1 (artifacts-phase listing) =
+	// 4. No job or artifact fetch ever fires because every run fails
+	// normalization in both phases.
+	if walk.cursor.Requests != 4 {
+		t.Fatalf("cursor=%+v want Requests=4 (every listing page counted even though no item ever reached the old refresh point)", walk.cursor)
 	}
 }
 

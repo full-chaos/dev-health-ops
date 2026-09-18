@@ -107,8 +107,11 @@ type JiraTeamCatalogBatch struct {
 	Evidence JiraTeamCatalogEvidence `json:"evidence"`
 }
 
-func jiraTeamCatalogWalkSkipBatch(reason string) JiraTeamCatalogBatch {
-	return JiraTeamCatalogBatch{Result: JiraTeamCatalogResult{WalkSkipped: true, WalkSkipReason: reason}}
+func jiraTeamCatalogWalkSkipBatch(reason string, requests int) JiraTeamCatalogBatch {
+	return JiraTeamCatalogBatch{
+		Result:   JiraTeamCatalogResult{WalkSkipped: true, WalkSkipReason: reason},
+		Evidence: JiraTeamCatalogEvidence{Provider: jiraTeamCatalogProvider, Requests: requests},
+	}
 }
 
 // jiraTeamCatalogWalkFailure is the whole-walk abort branch point (project
@@ -117,16 +120,20 @@ func jiraTeamCatalogWalkSkipBatch(reason string) JiraTeamCatalogBatch {
 // successful skip -- mirrors team_autoimport_jira.py's populate() catching
 // discover_jira's failure (and run_team_autoimport's own outer catch-all for
 // every OTHER exception the function raises, including a member lookup
-// failure) and returning a zero summary instead of a partial write.
+// failure) and returning a zero summary instead of a partial write. The
+// physical requests already made against the provider before the abort are
+// real wire cost regardless of the abort, so requests (the counting Doer's
+// running total) is stamped onto the skip batch rather than discarded with
+// the rest of the walk's state.
 func jiraTeamCatalogWalkFailure(
-	ctx context.Context, ref TeamCatalogReference, reason string, err error,
+	ctx context.Context, ref TeamCatalogReference, reason string, requests int, err error,
 ) (JiraTeamCatalogBatch, error) {
 	if ref.Strict {
 		return JiraTeamCatalogBatch{}, err
 	}
 	slog.Default().WarnContext(ctx, "jira_team_catalog_walk_skipped",
 		"org_id", ref.OrgID, "reason", reason, "error", err)
-	return jiraTeamCatalogWalkSkipBatch(reason), nil
+	return jiraTeamCatalogWalkSkipBatch(reason, requests), nil
 }
 
 func (handler JiraTeamCatalogRouteHandler) CollectTeamCatalog(
@@ -166,7 +173,7 @@ func (handler JiraTeamCatalogRouteHandler) CollectTeamCatalog(
 	}.Encode()
 	var search jiraTeamCatalogProjectSearchPayload
 	if err := jiraFetchObject(ctx, client, http.MethodGet, searchPath, nil, &search); err != nil {
-		return jiraTeamCatalogWalkFailure(ctx, ref, "project_discovery_failed", err)
+		return jiraTeamCatalogWalkFailure(ctx, ref, "project_discovery_failed", requests, err)
 	}
 
 	rows := JiraTeamCatalogRows{}
@@ -189,7 +196,7 @@ func (handler JiraTeamCatalogRouteHandler) CollectTeamCatalog(
 			var detail jiraTeamCatalogProjectDetailPayload
 			detailPath := "/rest/api/3/project/" + url.PathEscape(team.ID)
 			if err := jiraFetchObject(ctx, client, http.MethodGet, detailPath, nil, &detail); err != nil {
-				return jiraTeamCatalogWalkFailure(ctx, ref, "project_lead_lookup_failed", err)
+				return jiraTeamCatalogWalkFailure(ctx, ref, "project_lead_lookup_failed", requests, err)
 			}
 			if detail.Lead == nil {
 				continue

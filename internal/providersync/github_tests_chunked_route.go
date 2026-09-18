@@ -1213,6 +1213,12 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	}
 	emitRunPage := func(page providerfoundation.PageVisit) error {
 		cursor.Pages++
+		// Every physical page fetch, including one with zero items or every
+		// item filtered before it can trigger a per-run request, must land in
+		// cursor.Requests immediately: a scattered per-item-only refresh
+		// missed this listing page's own wire attempt when no item on it ever
+		// reached the job-fetch branch below.
+		cursor.Requests = invocationBaseRequests + requests
 		// Count a page against the CUMULATIVE budget only on first entry.
 		// A continuation re-GETs the page it stopped inside and discards the
 		// already-consumed prefix, so at MaxChunksPerAttempt=8 a 100-item page
@@ -1402,6 +1408,10 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		}
 		artifactPage := func(page providerfoundation.PageVisit) error {
 			cursor.Pages++
+			// See emitRunPage's identical unconditional refresh above: this
+			// listing page's own wire attempt must land in cursor.Requests even
+			// when no item on it reaches a per-artifact download below.
+			cursor.Requests = invocationBaseRequests + requests
 			// First-entry-only counting, exactly as in emitRunPage above. This
 			// twin has never fired in production only because no unit has ever
 			// survived the runs phase to reach it (CHAOS-4130).

@@ -500,6 +500,53 @@ func TestJiraTeamCatalogCollectNonStrictWalkFailureSkipsCleanly(t *testing.T) {
 	}
 }
 
+// TestJiraTeamCatalogCollectNonStrictWalkFailureStampsRequestsOnTheSkipBatch
+// proves that jiraTeamCatalogWalkFailure must not
+// discard the counting Doer's running total along with the rest of the
+// walk's state -- the physical requests already spent before a non-strict
+// abort are real wire cost regardless of the abort. The project search fails
+// every attempt through to the retry policy's exhaustion.
+func TestJiraTeamCatalogCollectNonStrictWalkFailureStampsRequestsOnTheSkipBatch(t *testing.T) {
+	t.Parallel()
+	searchAttempts := 0
+	doer := jiraWorkItemsDoerFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.RequestURI() != jiraTeamCatalogProjectSearchURI {
+			t.Fatalf("unexpected request %q", request.URL.RequestURI())
+		}
+		searchAttempts++
+		return nil, errors.New("simulated transient transport failure")
+	})
+	client, err := providerfoundation.NewHTTPClient(
+		"jira", "https://jira.example.com", doer,
+		func(*http.Request) error { return nil },
+		providerfoundation.RetryPolicy{MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond},
+		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := JiraTeamCatalogRouteHandler{}
+	batch, err := handler.CollectTeamCatalog(
+		context.Background(),
+		TeamCatalogReference{OrgID: "org-1", SyncRunID: "run-1", Strict: false},
+		providerfoundation.Credential{Provider: "jira"}, client,
+		TeamCatalogSelections{Teams: true},
+		time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC),
+	)
+	if err != nil {
+		t.Fatalf("a non-strict discovery failure must degrade to a clean skip, not propagate: %v", err)
+	}
+	if !batch.Result.WalkSkipped || batch.Result.WalkSkipReason != "project_discovery_failed" {
+		t.Fatalf("result=%+v", batch.Result)
+	}
+	if searchAttempts != 2 {
+		t.Fatalf("search attempts=%d want 2 (both exhausted by the retry policy)", searchAttempts)
+	}
+	if batch.Evidence.Requests != 2 {
+		t.Fatalf("evidence=%+v want Requests=2 (the skip batch must carry the real wire cost, not discard it)", batch.Evidence)
+	}
+}
+
 // TestJiraTeamCatalogCollectorSkipsCleanlyWithNothingSelectedNonStrict is the
 // collector-level contract test (mirrors GitHub's
 // TestGitHubCollectTeamCatalogSkipsCleanlyUnderStrictWithNothingUsableSelected):

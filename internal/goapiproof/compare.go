@@ -638,6 +638,18 @@ type BaselineDefect struct {
 	// blanket behaviour every other declared defect still uses. A
 	// defect never sets more than one shape field.
 	HotspotListBoundaryShape *HotspotListBoundaryShape
+
+	// TeamRepoSubsetShape, when set, replaces this defect's blanket "any
+	// leaf difference under Paths is covered" rule with a bounded-subset
+	// admission built from the two DECODED lists at a declared path -- see
+	// TeamRepoSubsetShape's own doc comment (teamreposubset.go). Unlike
+	// every other shape in this file except LimitDisplacementShape, it can
+	// admit a STRUCTURAL finding (ShapeLength or a one-directional
+	// ShapePresence), never only a leaf one -- see the gate in
+	// classifyBaselineDefects. nil is the default, unchanged blanket
+	// behaviour every other declared defect still uses. A defect never sets
+	// more than one shape field.
+	TeamRepoSubsetShape *TeamRepoSubsetShape
 }
 
 // validateBaselineDefects refuses a declaration that claims the
@@ -981,6 +993,10 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 		if defect.HotspotListBoundaryShape != nil {
 			hotspotBoundaryPlan = buildHotspotListBoundaryPlan(defect.HotspotListBoundaryShape, baselineData, candidateData, mismatches, findingRefs, result.Findings, covered)
 		}
+		var subsetPlan *teamRepoSubsetPlan
+		if defect.TeamRepoSubsetShape != nil {
+			subsetPlan = buildTeamRepoSubsetPlan(defect.TeamRepoSubsetShape, baselineData, candidateData)
+		}
 		// A SHAPED defect's citation is LIVE only when its shape actually
 		// admits something. A blanket (unshaped) citation stays live from
 		// path proximity alone -- any difference under Paths, covered or
@@ -994,7 +1010,7 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 		// apart, and a shaped defect that hit on path alone would still
 		// double-report alongside the shape that actually explains the
 		// difference.
-		shaped := repoPlan != nil || covPlan != nil || dedupPlan != nil || skewPlan != nil || sankeyFanoutPlan != nil || keyedDirPlan != nil || conservePlan != nil || dictDirPlan != nil || scalarDirPlan != nil || identityPlan != nil || displacePlan != nil || hotspotBoundaryPlan != nil
+		shaped := repoPlan != nil || covPlan != nil || dedupPlan != nil || skewPlan != nil || sankeyFanoutPlan != nil || keyedDirPlan != nil || conservePlan != nil || dictDirPlan != nil || scalarDirPlan != nil || identityPlan != nil || displacePlan != nil || hotspotBoundaryPlan != nil || subsetPlan != nil
 		var touched []int
 		for i, path := range mismatches {
 			if !defectCovers(defect, path) {
@@ -1007,14 +1023,31 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 				// under a cited subtree stays outside every citation.
 				hit = true
 			}
-			// LimitDisplacementShape and HotspotListBoundaryShape are the
-			// shapes that admit a STRUCTURAL (ShapePresence) finding -- a
-			// row entering or leaving a limit-bounded list is a presence
-			// difference by construction, never a leaf one, and each
-			// shape's own doc comment states exactly what makes that
-			// admission safe. No other shape ever reaches past
-			// leafDifference.
-			if !leafDifference(shapes[i]) && !(displacePlan != nil && shapes[i] == ShapePresence) && !(hotspotBoundaryPlan != nil && shapes[i] == ShapePresence) {
+			// LimitDisplacementShape, HotspotListBoundaryShape and
+			// TeamRepoSubsetShape are the only shapes that admit a
+			// STRUCTURAL finding -- a row entering or leaving a
+			// limit-bounded list, or a candidate list narrower than its
+			// baseline, is a presence or length difference by
+			// construction, never a leaf one, and each shape's own doc
+			// comment states exactly what makes its own admission safe. No
+			// other shape ever reaches past leafDifference. This gate is
+			// deliberately named BY SHAPE FIELD, never by "some shape is
+			// set": widening it to let ANY shaped defect's structural
+			// finding reach its own admits() would change nothing
+			// observable today, because every OTHER shape's own admits()
+			// dispatches on a leaf value path (KeyedDirectionShape,
+			// ScalarDirectionShape, DictKeyDirectionShape, ...) and simply
+			// returns false for a ShapeLength/ShapePresence finding it was
+			// never written to recognise -- but naming the gate by field
+			// keeps that safety a property of THIS switch, not an
+			// incidental fact about every other shape's own dispatch that
+			// a future shape's admits() could quietly stop upholding.
+			// TestGate_OtherShapesNeverAdmitAStructuralFinding pins the
+			// observable behaviour either phrasing produces today.
+			if !leafDifference(shapes[i]) &&
+				!(displacePlan != nil && shapes[i] == ShapePresence) &&
+				!(hotspotBoundaryPlan != nil && shapes[i] == ShapePresence) &&
+				!(subsetPlan != nil && (shapes[i] == ShapePresence || shapes[i] == ShapeLength)) {
 				continue
 			}
 			if shaped {
@@ -1058,6 +1091,8 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 				admitted = displacePlan.admits(result.Findings[findingRefs[i]])
 			case hotspotBoundaryPlan != nil:
 				admitted = hotspotBoundaryPlan.admits(result.Findings[findingRefs[i]])
+			case subsetPlan != nil:
+				admitted = subsetPlan.admits(result.Findings[findingRefs[i]])
 			}
 			if admitted {
 				covered[i] = true

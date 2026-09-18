@@ -87,6 +87,60 @@ var workUnitsParity = Options{
 	FloatExactLeaves:      workUnitsFloatExact,
 }
 
+// workUnitsTeamScopeSubsetDefect declares the team-scoped candidate list
+// as a bounded subset of the baseline's own organization-wide list: the
+// two planes resolve a team's repositories from different tables (this
+// route's own team_scoped request doc comment below states the two
+// tables), so a genuinely narrower team reads fewer work units on the
+// candidate side by design. Every field workUnitInvestmentWire carries
+// besides its own key (work_unit_id) is an intrinsic, per-unit property
+// this route's own assembly computes the same way regardless of scope --
+// RepoIDs narrows WHICH units the read returns, never resums a returned
+// unit's own effort/investment/evidence fields across a repository set
+// (cmd/query-api/workunits_route.go's own RepoIDs wiring is a WHERE-filter
+// input only) -- so every one of those fields is declared EQUAL, never
+// bounded: this route carries no per-unit sum-type leaf a narrower scope
+// could legitimately shrink.
+//
+// What this citation does NOT certify: that an admitted baseline-only
+// work unit is absent from the candidate BECAUSE it falls outside the
+// team's repositories, as opposed to the route's own, separately
+// undeclared work_unit_supersessions/evidence-quotes dedup divergences
+// this file's own package doc comment states above (points 1 and 2) --
+// both of which can also manifest as a baseline-only list element. This
+// shape cannot tell the two mechanisms apart from the wire alone; it
+// admits either one under the same "baseline carries an element the
+// candidate's list does not" rule. Accepted here because the two
+// mechanisms differ enormously in scale in practice (a scope narrowing to
+// one team's repositories typically removes most of an organization's
+// units; an unmerged dedup exclusion removes at most the handful of
+// units a single unmerged physical row affects) and in cause (this
+// citation's own mechanism is a permanent property of a genuinely
+// narrower team, never tied to an unmerged row), not because the two are
+// structurally distinguishable here.
+var workUnitsTeamScopeSubsetDefect = BaselineDefect{
+	Ticket: "CHAOS-5920",
+	Reason: "GET/POST /api/v1/work-units' team scope resolves a team's repositories from team_repo_ownership through one shared condition (cmd/query-api/internal/teamscope.RepoCondition), while the reference plane resolves the same scope from user_metrics_daily.team_id (resolve_repo_ids_for_teams, api/queries/scopes.py) -- a per-author-attribution table, not a repository-ownership one. For a genuinely narrower team the candidate's list is therefore a subset of the baseline's own organization-wide list: every unit the candidate returns is also in the baseline's list, under the same work_unit_id, with identical work_unit_type/work_unit_name/time_range/effort/investment/evidence_quality/evidence -- none of which this route's own assembly resums across a repository set (see this var's own doc comment). Go is correct.",
+	Paths:  []string{"data"},
+	TeamRepoSubsetShape: &TeamRepoSubsetShape{
+		ListPath:    "data",
+		KeyFields:   []string{"work_unit_id"},
+		EqualLeaves: []string{"work_unit_type", "work_unit_name", "time_range", "effort", "investment", "evidence_quality", "evidence"},
+	},
+	Intermittent:       true,
+	IntermittentReason: "present only while the requested team's own repositories are a PROPER subset of the organization's; a team that happens to own every repository in the organization leaves the two lists identical, and a narrow enough window can return zero units on both legs -- either way there is nothing under data for this citation to explain, and a comparison taken then shows no divergence",
+}
+
+// workUnitsTeamScopedParity is workUnitsParity plus
+// workUnitsTeamScopeSubsetDefect -- shared by GET and POST's own
+// team_scoped entries.
+var workUnitsTeamScopedParity = Options{
+	NumericLeavesDeclared: true,
+	FloatTierB:            workUnitsFloats,
+	FloatExactLeaves:      workUnitsFloatExact,
+	BaselineDefects:       []BaselineDefect{workUnitsTeamScopeSubsetDefect},
+}
+
 var workUnitsGetEndpointSpec = RESTEndpointSpec{
 	Method: "GET",
 	Path:   "/api/v1/work-units",
@@ -118,16 +172,17 @@ var workUnitsGetEndpointSpec = RESTEndpointSpec{
 			// default entry never makes and can outrun the default budget.
 			//
 			// The two planes resolve that team's repositories from
-			// different tables, so this entry is one of the knowingly
-			// uncovered findings restcorpus.go's own TEAM SCOPE paragraph
-			// names, not a declared defect. It is visible on the wire as a
-			// LIST LENGTH: the baseline answers over the whole
-			// organization, the candidate over the team's repositories.
+			// different tables, so a genuinely narrower team's candidate
+			// list is a bounded subset of the baseline's own
+			// organization-wide list (workUnitsTeamScopeSubsetDefect
+			// above). It is visible on the wire as a LIST LENGTH: the
+			// baseline answers over the whole organization, the candidate
+			// over the team's repositories.
 			Name:                "team_scoped",
 			Query:               url.Values{"scope_type": {"team"}},
 			WantCandidateStatus: 200, WantBaselineStatus: 200,
 			BodyMode:   RESTBodyModeJSON,
-			Parity:     workUnitsParity,
+			Parity:     workUnitsTeamScopedParity,
 			IDBindings: []RESTIDBinding{{Producer: "team_id", QueryParam: "scope_id"}},
 			Timeout:    180 * time.Second,
 		},
@@ -188,8 +243,8 @@ var workUnitsPostEndpointSpec = RESTEndpointSpec{
 			// this route's own GET "team_scoped" QueryParam binding
 			// above) -- exercises the same team branch against a team that
 			// genuinely resolves to repositories, the same request shape a
-			// real team-scoped client sends. Same knowingly uncovered
-			// team-scope finding as its GET twin above.
+			// real team-scoped client sends. Same bounded-subset finding as
+			// its GET twin above.
 			Name: "team_scoped",
 			Body: map[string]any{
 				"filters": map[string]any{"scope": map[string]any{"level": "team", "ids": []string{"11111111-1111-1111-1111-111111111111"}}},
@@ -197,7 +252,7 @@ var workUnitsPostEndpointSpec = RESTEndpointSpec{
 			WantCandidateStatus: 200, WantBaselineStatus: 200,
 			BodyMode:   RESTBodyModeJSON,
 			IDBindings: []RESTIDBinding{{Producer: "team_id", BodyPath: "filters.scope.ids"}},
-			Parity:     workUnitsParity,
+			Parity:     workUnitsTeamScopedParity,
 		},
 		{
 			// repo scope via filters.what.repos -- the POST-only field

@@ -85,16 +85,34 @@ func (s *ClickHouseExternalBatchSink) Write(ctx context.Context, source external
 				return ExternalRecomputeScope{}, fmt.Errorf("preserve existing team.v1 manual_members: %w", err)
 			}
 		}
-		batch, err := s.conn.PrepareBatch(ctx, query)
-		if err != nil {
-			return ExternalRecomputeScope{}, fmt.Errorf("prepare external %s sink: %w", kind, err)
-		}
+		rows := make([]storedVersionRow, 0, len(grouped[kind]))
 		for _, record := range grouped[kind] {
 			values, err := externalRecordValues(source, record, now, &scope, existingManualMembers)
 			if err != nil {
 				return ExternalRecomputeScope{}, fmt.Errorf("translate external %s record %d: %w", kind, record.Index, err)
 			}
-			if err := batch.Append(values...); err != nil {
+			rows = append(rows, storedVersionRow{values: values})
+		}
+		if contract, ok := externalContract(kind, source.Pointer.SourceSystem); ok && contract.reads() {
+			extended, appended, err := withContractColumns(query, contract)
+			if err != nil {
+				return ExternalRecomputeScope{}, fmt.Errorf("carry external %s: %w", kind, err)
+			}
+			query = extended
+			for i, record := range grouped[kind] {
+				rows[i].values = append(rows[i].values, contract.appendedValues(appended, record.Payload)...)
+				rows[i].carry = externalCarry(contract, record.Payload)
+			}
+			if err := contract.versions().apply(ctx, s.conn, source.Pointer.OrgID, query, rows); err != nil {
+				return ExternalRecomputeScope{}, fmt.Errorf("carry external %s: %w", kind, err)
+			}
+		}
+		batch, err := s.conn.PrepareBatch(ctx, query)
+		if err != nil {
+			return ExternalRecomputeScope{}, fmt.Errorf("prepare external %s sink: %w", kind, err)
+		}
+		for _, row := range rows {
+			if err := batch.Append(row.values...); err != nil {
 				return ExternalRecomputeScope{}, fmt.Errorf("append external %s: %w", kind, err)
 			}
 		}

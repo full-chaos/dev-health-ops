@@ -163,6 +163,72 @@ func TestDeploymentLifecycleFromStatusesNoSignalStaysNil(t *testing.T) {
 	}
 }
 
+// TestDeploymentLatestStatusIsOrderIndependent pins deploymentLatestStatus'
+// own doc comment: it picks the entry with the greatest created_at
+// regardless of response order, sharing the exact forward/reversed fixture
+// TestDeploymentLifecycleFromStatusesIsOrderIndependent uses above (the
+// last entry by time, "success" at 10:01:00, must win in either order).
+func TestDeploymentLatestStatusIsOrderIndependent(t *testing.T) {
+	t.Parallel()
+	forward := []gitHubDeploymentStatusPayload{
+		{State: "queued", CreatedAt: strPtr("2026-07-22T09:58:00Z")},
+		{State: "in_progress", CreatedAt: strPtr("2026-07-22T09:59:00Z")},
+		{State: "in_progress", CreatedAt: strPtr("2026-07-22T09:59:30Z")},
+		{State: "failure", CreatedAt: strPtr("2026-07-22T10:00:30Z")},
+		{State: "success", CreatedAt: strPtr("2026-07-22T10:01:00Z")},
+	}
+	reversed := []gitHubDeploymentStatusPayload{forward[4], forward[3], forward[2], forward[1], forward[0]}
+
+	for _, testCase := range []struct {
+		name     string
+		statuses []gitHubDeploymentStatusPayload
+	}{
+		{name: "forward", statuses: forward},
+		{name: "reversed", statuses: reversed},
+	} {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			got := deploymentLatestStatus(testCase.statuses)
+			if got == nil || *got != "success" {
+				t.Fatalf("deploymentLatestStatus=%v want=%q", got, "success")
+			}
+		})
+	}
+}
+
+// TestDeploymentLatestStatusStillInProgressReturnsInProgress proves the
+// running case directly: when the latest entry by created_at is
+// in_progress (no terminal entry exists yet), that is exactly the string
+// deploymentStatusIsRunning must see for the flame reader's request-clock
+// fallback to fire.
+func TestDeploymentLatestStatusStillInProgressReturnsInProgress(t *testing.T) {
+	t.Parallel()
+	got := deploymentLatestStatus([]gitHubDeploymentStatusPayload{
+		{State: "queued", CreatedAt: strPtr("2026-07-22T09:58:00Z")},
+		{State: "in_progress", CreatedAt: strPtr("2026-07-22T09:59:00Z")},
+	})
+	if got == nil || *got != "in_progress" {
+		t.Fatalf("deploymentLatestStatus=%v want=%q", got, "in_progress")
+	}
+}
+
+// TestDeploymentLatestStatusNoSignalStaysNil mirrors
+// TestDeploymentLifecycleFromStatusesNoSignalStaysNil for the status
+// derivation: no entries, and entries whose created_at fails to parse,
+// both leave the status nil -- never an invented value.
+func TestDeploymentLatestStatusNoSignalStaysNil(t *testing.T) {
+	t.Parallel()
+	if got := deploymentLatestStatus(nil); got != nil {
+		t.Fatalf("empty input produced status=%v", got)
+	}
+	if got := deploymentLatestStatus([]gitHubDeploymentStatusPayload{
+		{State: "in_progress", CreatedAt: strPtr("not-a-timestamp")},
+	}); got != nil {
+		t.Fatalf("unparseable-timestamp-only input produced status=%v", got)
+	}
+}
+
 // githubDeploymentStatusPagedDoer serves a Link-headered, two-page statuses
 // response -- the in_progress and terminal entries land on different
 // pages, so a correct fetch must aggregate both pages before
@@ -223,6 +289,9 @@ func TestGitHubDeploymentsRouteAggregatesStatusesAcrossPages(t *testing.T) {
 	wantFinished := time.Date(2026, 7, 22, 10, 1, 0, 0, time.UTC)
 	if row.StartedAt == nil || !row.StartedAt.Equal(wantStarted) || row.FinishedAt == nil || !row.FinishedAt.Equal(wantFinished) {
 		t.Fatalf("row started/finished not aggregated across pages: %+v", row)
+	}
+	if row.Status == nil || *row.Status != "success" {
+		t.Fatalf("row status not derived from the statuses lookup: %+v -- want %q (the latest entry by created_at, page 1's own success at 10:01:00)", row, "success")
 	}
 	sawPage2 := false
 	for _, path := range doer.requests {
@@ -317,6 +386,68 @@ func (doer *githubDeploymentStatusEmptyDoer) Do(request *http.Request) (*http.Re
 		return &http.Response{StatusCode: http.StatusOK, Header: header, Body: io.NopCloser(strings.NewReader(`[]`)), Request: request}, nil
 	}
 	return &http.Response{StatusCode: http.StatusOK, Header: header, Body: io.NopCloser(strings.NewReader(`[]`)), Request: request}, nil
+}
+
+// githubDeploymentStatusStillRunningDoer serves one deployment whose
+// statuses history has only an in_progress entry -- no terminal entry
+// exists yet, the shape a deployment carries while it is genuinely still
+// running.
+type githubDeploymentStatusStillRunningDoer struct{}
+
+func (doer *githubDeploymentStatusStillRunningDoer) Do(request *http.Request) (*http.Response, error) {
+	header := http.Header{"Content-Type": {"application/json"}}
+	switch request.URL.Path {
+	case "/repos/acme/api":
+		return &http.Response{StatusCode: http.StatusOK, Header: header, Body: io.NopCloser(strings.NewReader(gitHubRepositoryFixture)), Request: request}, nil
+	case "/repos/acme/api/releases":
+		return &http.Response{StatusCode: http.StatusOK, Header: header, Body: io.NopCloser(strings.NewReader(`[]`)), Request: request}, nil
+	case "/repos/acme/api/deployments":
+		return &http.Response{StatusCode: http.StatusOK, Header: header, Body: io.NopCloser(strings.NewReader(`[{"id":501,"created_at":"2026-07-22T10:00:00Z"}]`)), Request: request}, nil
+	case "/repos/acme/api/deployments/501/statuses":
+		return &http.Response{StatusCode: http.StatusOK, Header: header, Body: io.NopCloser(strings.NewReader(`[{"id":1,"state":"in_progress","created_at":"2026-07-22T10:01:00Z"}]`)), Request: request}, nil
+	}
+	return &http.Response{StatusCode: http.StatusOK, Header: header, Body: io.NopCloser(strings.NewReader(`[]`)), Request: request}, nil
+}
+
+// TestGitHubDeploymentsRoutePersistsRunningStatusForFlameReader is this
+// PR's own load-bearing proof: a genuinely still-running GitHub deployment
+// (no terminal status entry recorded yet) must persist a real "in_progress"
+// status, not nil -- cmd/query-api/internal/flame's own
+// deploymentStatusIsRunning treats a nil Status as terminal (its own doc
+// comment: "never invents a duration for a status it cannot affirmatively
+// confirm is still running"), so a writer that leaves Status nil for a
+// running deployment silently defeats the reader's entire fix. Note this
+// deployment's own list-response payload carries NO state/status field at
+// all (github.com's List Deployments response never does -- only a
+// statuses_url) -- deploymentLatestStatus, not normalizeGitHubDeployment's
+// list-derived optionalString(deployment.State, deployment.Status), is the
+// only source that can ever produce a non-nil Status for a GitHub row.
+func TestGitHubDeploymentsRoutePersistsRunningStatusForFlameReader(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC)
+	doer := &githubDeploymentStatusStillRunningDoer{}
+	client := gitHubRepositoryClient(t, doer, "https://api.github.com")
+	claim := nativeTestClaim("github", "deployments")
+	batch, err := (GitHubDeploymentsRouteHandler{}).Collect(context.Background(), claim, providerfoundation.Credential{}, client, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(batch.Effects) != 1 || len(batch.Effects[0].Rows) != 1 {
+		t.Fatalf("effects=%+v", batch.Effects)
+	}
+	var row deploymentRow
+	if err := json.Unmarshal(batch.Effects[0].Rows[0], &row); err != nil {
+		t.Fatal(err)
+	}
+	if row.Status == nil || *row.Status != "in_progress" {
+		t.Fatalf("row.Status=%v want=%q -- a still-running deployment must persist its real status, or the flame reader's request-clock fallback can never fire for it", row.Status, "in_progress")
+	}
+	if row.StartedAt == nil {
+		t.Fatalf("row.StartedAt is nil despite an in_progress status entry: %+v", row)
+	}
+	if row.FinishedAt != nil {
+		t.Fatalf("row.FinishedAt=%v want nil: no terminal status entry exists yet", row.FinishedAt)
+	}
 }
 
 // TestGitHubDeploymentsRouteSkipsRemainingStatusLookupsAfterRateLimitExhaustion

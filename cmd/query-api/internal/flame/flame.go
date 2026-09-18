@@ -409,6 +409,27 @@ func buildIssueFlameResponse(entityID string, issue issueRow) (*Response, error)
 	return &Response{Entity: entity, Timeline: timeline, Frames: frames}, nil
 }
 
+// deploymentStatusIsRunning reports whether status names a state a
+// deployment passes through before its own outcome is known -- GitHub's
+// pending/queued/in_progress (docs.github.com/en/rest/deployments/statuses)
+// and GitLab's created/running (docs.gitlab.com/api/deployments/), the
+// complement of each provider's own terminal set (GitHub's
+// githubDeploymentTerminalStates in internal/providersync; GitLab's
+// success/failed/canceled/blocked). A nil, empty, or unrecognized status is
+// treated as terminal: this reader never invents a duration for a status it
+// cannot affirmatively confirm is still running.
+func deploymentStatusIsRunning(status *string) bool {
+	if status == nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(*status)) {
+	case "pending", "queued", "in_progress", "created", "running":
+		return true
+	default:
+		return false
+	}
+}
+
 // buildDeploymentFlameResponse ports _build_deployment_flame_response
 // (services/flame.py:277-360).
 func buildDeploymentFlameResponse(repoID, deploymentID string, deployment deploymentRow) (*Response, error) {
@@ -427,6 +448,8 @@ func buildDeploymentFlameResponse(repoID, deploymentID string, deployment deploy
 	switch {
 	case deployment.FinishedAt != nil:
 		end = *deployment.FinishedAt
+	case deploymentStatusIsRunning(deployment.Status):
+		end = nowLike()
 	case deployment.DeployedAt != nil:
 		end = *deployment.DeployedAt
 	default:

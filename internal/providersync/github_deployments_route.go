@@ -187,6 +187,7 @@ func (handler GitHubDeploymentsRouteHandler) Collect(
 				slog.Warn("github_deployments.status_lookup_empty", "deployment_id", row.DeploymentID, "cause", "no deployment statuses returned")
 			default:
 				row.StartedAt, row.FinishedAt = deploymentLifecycleFromStatuses(statuses)
+				row.Status = deploymentLatestStatus(statuses)
 				if statusesTruncated {
 					// The provider had more status pages than
 					// maxDeploymentStatusPages fetched -- an earlier
@@ -236,6 +237,19 @@ func fetchGitHubDeploymentsPage[T any](ctx context.Context, client *providerfoun
 	return items, page.Pages, page.PageBudgetExhausted, nil
 }
 
+// normalizeGitHubDeployment's own Status candidates (deployment.State,
+// deployment.Status) always resolve nil against GitHub's real List
+// Deployments response (docs.github.com/en/rest/deployments/deployments):
+// that endpoint carries no state/status field on the deployment object
+// itself, only a statuses_url -- deploymentLatestStatus, read from the
+// separate statuses sub-resource in the Collect loop below, is the only
+// source that ever sets a real Status for a GitHub row. This list-level
+// read is kept, harmlessly, because it is always overwritten once that
+// lookup succeeds, and because it is what this package's own oracle
+// parity harness (testdata/oracle_pairs/github_deployments_row.py) relies
+// on to match the Python oracle's identical read of its own synthetic
+// fixture -- neither side's fixture supplies a statuses history, so both
+// read the (equally synthetic) list-level field instead.
 func normalizeGitHubDeployment(claim Claim, repoID string, deployment gitHubDeploymentPayload, releases []gitHubReleasePayload, normalizedAt time.Time) (deploymentRow, bool) {
 	deployedAt := parseGitHubWorkflowTime(deployment.CreatedAt)
 	if deployedAt == nil {
@@ -269,6 +283,36 @@ func deploymentLifecycleFromStatuses(statuses []gitHubDeploymentStatusPayload) (
 		}
 	}
 	return startedAt, finishedAt
+}
+
+// deploymentLatestStatus derives the deployment's own current status from
+// the same status history deploymentLifecycleFromStatuses reads --
+// GitHub's List Deployments response (docs.github.com/en/rest/deployments/
+// deployments) carries no state/status field on the deployment object
+// itself, only a statuses_url; the deployment's current status lives on
+// its separate statuses sub-resource (docs.github.com/en/rest/deployments/
+// statuses), the same one this writer already fetches for started_at/
+// finished_at. The latest entry by its own created_at (never response
+// order, for the same reordering reasons deploymentLifecycleFromStatuses
+// documents) is the deployment's current status; nil when the history is
+// empty or every entry's timestamp fails to parse.
+func deploymentLatestStatus(statuses []gitHubDeploymentStatusPayload) *string {
+	var latestAt *time.Time
+	var latestState string
+	for _, status := range statuses {
+		at := parseGitHubWorkflowTime(status.CreatedAt)
+		if at == nil {
+			continue
+		}
+		if latestAt == nil || at.After(*latestAt) {
+			latestAt = at
+			latestState = strings.TrimSpace(stringValue(status.State))
+		}
+	}
+	if latestAt == nil || latestState == "" {
+		return nil
+	}
+	return &latestState
 }
 
 // isRateLimitExhausted reports whether err is the HTTP client's own retry

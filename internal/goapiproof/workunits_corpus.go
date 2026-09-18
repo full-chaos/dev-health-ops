@@ -131,14 +131,74 @@ var workUnitsTeamScopeSubsetDefect = BaselineDefect{
 	IntermittentReason: "present only while the requested team's own repositories are a PROPER subset of the organization's; a team that happens to own every repository in the organization leaves the two lists identical, and a narrow enough window can return zero units on both legs -- either way there is nothing under data for this citation to explain, and a comparison taken then shows no divergence",
 }
 
+// workUnitsTeamScopeOrderInsensitiveLists keys `data` by work_unit_id for
+// team_scoped alone (never workUnitsParity's own org-wide/repo-scoped
+// entries, which carry no membership-subset defect and stay positional):
+// workUnitsTeamScopeSubsetDefect's own TeamRepoSubsetShape can only ever
+// admit a genuine membership gap as a ShapePresence finding (one
+// work_unit_id present in baseline, absent in candidate) when `data`
+// itself is compared by key rather than position (compareList,
+// compare.go) -- a raw positional compareList reports a length mismatch
+// only when the two lists are actually different LENGTHS, which a gap at
+// or before the shared default LIMIT never produces (both legs still
+// saturate it), and otherwise cascades one baseline-only unit into a
+// positional value mismatch on every following index instead of the one
+// admittable presence difference.
+//
+// structuralAgreementFailure's own list-alignment rule (structural.go)
+// reads a route's declared identity from the SAME two places this
+// package already declares one: a request's own DedupListPath/
+// DedupKeyFields (the synthetic key InjectRESTDedupKeys writes), or a
+// BaselineDefect's own TeamRepoSubsetShape.KeyFields at a matching
+// ListPath. Read-only audit of every TeamRepoSubsetShape this package
+// declares whose KeyFields is not literal "id" -- each one is keyed for
+// structural alignment by that rule:
+//   - GET/POST /api/v1/work-units team_scoped -- `data`, work_unit_id
+//     (this entry). Gains a NEW OrderInsensitiveLists entry here too
+//     (below): without it, compareList's own VALUE comparison stays
+//     positional even once the structural pre-check stops misfiring, and
+//     the one genuine gap cascades into a wall of positional value
+//     mismatches instead of the one admittable ShapePresence finding.
+//   - investment/sunburst, the three heatmap variants (repo touchpoints,
+//     hotspot risk, review-wait density), sankey nodes/links (both
+//     modes), investment/flow nodes/links (both modes) -- each already
+//     declares its own OrderInsensitiveLists entry at the same
+//     ListPath/KeyFields for an unrelated ordering reason, so only their
+//     structural alignment was ever the gap; this rule closes it with no
+//     further corpus change.
+//   - GET/POST /api/v1/drilldown/prs and GET/POST /api/v1/opportunities
+//     team_scoped -- neither declares an OrderInsensitiveLists entry at
+//     their own TeamRepoSubsetShape's ListPath, so they carry the SAME
+//     two-part gap this route did; both are also declared Intermittent
+//     with a doc comment stating the citation has never yet been
+//     exercised against a genuinely narrowing live window, unlike this
+//     route's own confirmed recurrence. Left undeclared here: closing
+//     them needs the same live confirmation this route already has, not
+//     assumed from the shape alone.
+//
+// explain's own contributors/drivers team_scoped subset defects key by
+// literal "id" already, so they were already aligned correctly before
+// this rule existed and are unaffected by it.
+var workUnitsTeamScopeOrderInsensitiveLists = []OrderInsensitiveList{
+	{
+		Path:      "data",
+		KeyFields: []string{"work_unit_id"},
+		Reason:    "team_scoped's own list membership can genuinely differ by one work_unit_id with no length change while both legs saturate the shared default LIMIT; keying by work_unit_id turns that into the ShapePresence finding workUnitsTeamScopeSubsetDefect's own TeamRepoSubsetShape is built to admit, instead of a positional cascade.",
+		Ticket:    "CHAOS-5920",
+	},
+}
+
 // workUnitsTeamScopedParity is workUnitsParity plus
-// workUnitsTeamScopeSubsetDefect -- shared by GET and POST's own
-// team_scoped entries.
+// workUnitsTeamScopeSubsetDefect, with `data` keyed by work_unit_id -- see
+// workUnitsTeamScopeOrderInsensitiveLists' own doc comment for why the
+// keying is required for the defect to admit anything at all. Shared by
+// GET and POST's own team_scoped entries.
 var workUnitsTeamScopedParity = Options{
 	NumericLeavesDeclared: true,
 	FloatTierB:            workUnitsFloats,
 	FloatExactLeaves:      workUnitsFloatExact,
 	BaselineDefects:       []BaselineDefect{workUnitsTeamScopeSubsetDefect},
+	OrderInsensitiveLists: workUnitsTeamScopeOrderInsensitiveLists,
 }
 
 var workUnitsGetEndpointSpec = RESTEndpointSpec{

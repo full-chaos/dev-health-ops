@@ -191,6 +191,102 @@ func TestCompareRefusesOnBodySizeDisagreement(t *testing.T) {
 	}
 }
 
+// The measured shape behind this rule: GET /api/v1/work-units
+// team_scoped, one work unit present in baseline and genuinely absent
+// from candidate under an already-declared, already-admitted team-scope
+// subset defect. Both legs' own `data` lists are the SAME length, so the
+// one missing unit shows as a one-position SHIFT, never a length
+// difference. `data`'s elements key on `unit_id`, never literal "id";
+// nested `evidence` lists DO carry "id". Pre-fix, structuralAgreementFailure
+// fell through to a raw positional walk, paired baseline's shifted-out
+// unit against candidate's next (unrelated) unit, and refused on THEIR
+// nested evidence lists sharing no "id" -- true, but for the wrong
+// reason. With the fix, `data` is keyed by `unit_id`
+// (TeamRepoSubsetShape.KeyFields, declared alongside a matching
+// OrderInsensitiveLists entry so compareList also pairs by key rather
+// than position), every unit sharing a key on both legs is compared
+// correctly, the one baseline-only unit surfaces as a ShapePresence
+// finding, and TeamRepoSubsetShape's own subset admission covers it: the
+// comparison reaches an ADMITTED MISMATCH, never a structural refusal.
+func TestCompareAlignsSubsetListByDeclaredIdentityInsteadOfPosition(t *testing.T) {
+	baseline := `{"data":[
+		{"unit_id":"u1","name":"first","evidence":[{"id":"e1"}]},
+		{"unit_id":"u-extra","name":"baseline only unit","evidence":[{"id":"ABC-123"}]},
+		{"unit_id":"u2","name":"second","evidence":[{"id":"e2"}]}
+	]}`
+	candidate := `{"data":[
+		{"unit_id":"u1","name":"first","evidence":[{"id":"e1"}]},
+		{"unit_id":"u2","name":"second","evidence":[{"id":"e2"}]}
+	]}`
+	const ticket = "CHAOS-0000"
+	opts := Options{
+		OrderInsensitiveLists: []OrderInsensitiveList{{
+			Path: "data", KeyFields: []string{"unit_id"}, Reason: "test", Ticket: ticket,
+		}},
+		BaselineDefects: []BaselineDefect{{
+			Ticket: ticket, Reason: "test", Paths: []string{"data"},
+			TeamRepoSubsetShape: &TeamRepoSubsetShape{
+				ListPath:    "data",
+				KeyFields:   []string{"unit_id"},
+				EqualLeaves: []string{"name", "evidence"},
+			},
+		}},
+	}
+	result := Compare(snapshotFromJSON(t, baseline), snapshotFromJSON(t, candidate), opts)
+	if result.StructuralRefusal != "" {
+		t.Fatalf("expected no structural refusal once `data` aligns by unit_id, got %s (%s)", result.StructuralRefusal, result.StructuralDetail)
+	}
+	if result.TerminalState != TerminalStateMismatch {
+		t.Fatalf("a declared defect never promotes to match, expected %s, got %s", TerminalStateMismatch, result.TerminalState)
+	}
+	if result.DifferencesOutsideBaselineDefect != 0 {
+		t.Fatalf("the one missing unit must be fully covered by the declared subset shape, got %d difference(s) outside it: %+v", result.DifferencesOutsideBaselineDefect, result.Findings)
+	}
+	if len(result.BaselineDefectsMatched) != 1 {
+		t.Fatalf("expected the one declared defect to match the one baseline-only unit, matched=%v", result.BaselineDefectsMatched)
+	}
+}
+
+// A list whose declared identity shares NOT ONE key between the two legs
+// still refuses -- idOverlapFailure's own rule, generalized to a
+// non-"id" identity rather than bypassed by one.
+func TestCompareRefusesOnDisjointDeclaredIdentity(t *testing.T) {
+	baseline := `{"data":[{"unit_id":"u1","name":"a"},{"unit_id":"u2","name":"b"}]}`
+	candidate := `{"data":[{"unit_id":"u3","name":"c"},{"unit_id":"u4","name":"d"}]}`
+	opts := Options{
+		BaselineDefects: []BaselineDefect{{
+			Ticket: "CHAOS-0000", Reason: "test", Paths: []string{"data"},
+			TeamRepoSubsetShape: &TeamRepoSubsetShape{
+				ListPath: "data", KeyFields: []string{"unit_id"}, EqualLeaves: []string{"name"},
+			},
+		}},
+	}
+	result := Compare(snapshotFromJSON(t, baseline), snapshotFromJSON(t, candidate), opts)
+	if result.StructuralRefusal != RefusalLegsDoNotOverlap {
+		t.Fatalf("expected %s, got %q (terminal=%s)", RefusalLegsDoNotOverlap, result.StructuralRefusal, result.TerminalState)
+	}
+}
+
+// The nested "id" gate still fires on a truly disjoint NESTED list inside
+// an element the outer identity correctly paired -- the fix changes
+// ALIGNMENT, never idOverlapFailure's own disjoint-entities rule.
+func TestCompareStillRefusesOnDisjointNestedIdsInsideACorrectlyPairedElement(t *testing.T) {
+	baseline := `{"data":[{"unit_id":"u1","name":"first","evidence":[{"id":"e1"}]}]}`
+	candidate := `{"data":[{"unit_id":"u1","name":"first","evidence":[{"id":"wholly-different"}]}]}`
+	opts := Options{
+		BaselineDefects: []BaselineDefect{{
+			Ticket: "CHAOS-0000", Reason: "test", Paths: []string{"data"},
+			TeamRepoSubsetShape: &TeamRepoSubsetShape{
+				ListPath: "data", KeyFields: []string{"unit_id"}, EqualLeaves: []string{"name"},
+			},
+		}},
+	}
+	result := Compare(snapshotFromJSON(t, baseline), snapshotFromJSON(t, candidate), opts)
+	if result.StructuralRefusal != RefusalLegsDoNotOverlap {
+		t.Fatalf("the SAME unit_id's own nested evidence sharing no id must still refuse, got %s (terminal=%s)", result.StructuralRefusal, result.TerminalState)
+	}
+}
+
 // jsonRepeat builds a JSON array of n copies of one element, so its
 // caller controls the encoded body's byte length precisely without
 // tripping the id-overlap check (plain numbers, not "id"-carrying

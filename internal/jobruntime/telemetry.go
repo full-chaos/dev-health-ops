@@ -3073,6 +3073,7 @@ const (
 	MembershipRefusedUnavailable        = "clickhouse_unavailable"
 	MembershipRefusedWriterUnavailable  = "writer_unavailable"
 	MembershipRefusedSchemaIncompatible = "schema_incompatible"
+	MembershipRefusedConfigInvalid      = "config_invalid"
 	MembershipRefusedInspectFailed      = "inspect_failed"
 )
 
@@ -3080,6 +3081,7 @@ var membershipRefusalReasons = []string{
 	MembershipRefusedUnavailable,
 	MembershipRefusedWriterUnavailable,
 	MembershipRefusedSchemaIncompatible,
+	MembershipRefusedConfigInvalid,
 	MembershipRefusedInspectFailed,
 }
 

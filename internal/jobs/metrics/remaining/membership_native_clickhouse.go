@@ -47,7 +47,8 @@ type MembershipObserver interface {
 	ObserveMembershipPruneFailed(orgID string)
 	// ObserveMembershipMarkerLagExceeded reports a freshly published
 	// marker whose own lag behind the newest investment computation
-	// exceeds membershipMarkerLagAlertBound -- the operational backstop
+	// exceeds the executor's configured alert bound (see
+	// resolveMembershipMarkerLagAlertBound) -- the operational backstop
 	// for the read-side policy that scopes investment totals to the
 	// latest complete marker rather than ever falling back to unscoped
 	// on a time bound.
@@ -246,14 +247,15 @@ func (executor *MembershipExecutor) ComputeOrg(
 		// the investment materializer and this membership run are
 		// two independent writers, and while the ordinary gap between them
 		// is a few seconds, a marker stuck well behind the newest investment
-		// computation is exactly the condition the read-side scope gate's
-		// own "stale correct number over a live wrong one" policy
-		// depends on someone noticing. Best-effort, same
-		// swallow-and-report shape as the prune failure just below: a lag
-		// check failure or an alert-worthy lag must never fail an otherwise
-		// complete, correctly published run.
+		// computation means the read-side scope gate's own "stale correct
+		// number over a live wrong one" policy is now serving investment
+		// reads scoped to a membership generation older than the rows by
+		// more than the alert bound. Best-effort, same swallow-and-report
+		// shape as the prune failure just below: a lag check failure or an
+		// alert-worthy lag must never fail an otherwise complete, correctly
+		// published run.
 		if executor.markerLag != nil {
-			if lag, exceeds, lagErr := executor.markerLag.CheckMembershipMarkerLag(ctx, orgID, markerCompletedAt); lagErr != nil {
+			if result, lagErr := executor.markerLag.CheckMembershipMarkerLag(ctx, orgID, markerCompletedAt); lagErr != nil {
 				if executor.logger != nil {
 					executor.logger.Warn(
 						"membership marker lag check failed; the marker itself "+
@@ -262,8 +264,8 @@ func (executor *MembershipExecutor) ComputeOrg(
 						"org_id", orgID, "error", lagErr,
 					)
 				}
-			} else if exceeds {
-				lagSeconds := int64(lag.Seconds())
+			} else if result.Exceeds {
+				lagSeconds := int64(result.Lag.Seconds())
 				if executor.logger != nil {
 					executor.logger.Warn(
 						"membership marker lags the newest investment computation "+
@@ -272,8 +274,9 @@ func (executor *MembershipExecutor) ComputeOrg(
 							"than it until a later run catches up",
 						"org_id", orgID, "run_id", runID,
 						"lag_seconds", lagSeconds,
-						"bound_seconds", int64(membershipMarkerLagAlertBound.Seconds()),
+						"bound_seconds", int64(result.Bound.Seconds()),
 						"marker_completed_at", markerCompletedAt,
+						"latest_investment_computed_at", result.LatestInvestmentComputedAt,
 					)
 				}
 				if executor.observer != nil {

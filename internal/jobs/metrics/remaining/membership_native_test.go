@@ -365,19 +365,26 @@ func TestComputeOrgReportsAPruneFailure(t *testing.T) {
 // these tests exercise, not the SQL that produces it (checkMembershipMarkerLag
 // has its own direct tests below).
 type fakeMembershipMarkerLagChecker struct {
-	lag     time.Duration
-	exceeds bool
-	err     error
-	calls   int
-	gotOrg  string
+	lag          time.Duration
+	exceeds      bool
+	bound        time.Duration
+	investmentAt *time.Time
+	err          error
+	calls        int
+	gotOrg       string
 }
 
 func (f *fakeMembershipMarkerLagChecker) CheckMembershipMarkerLag(
 	_ context.Context, orgID string, _ time.Time,
-) (time.Duration, bool, error) {
+) (membershipMarkerLagResult, error) {
 	f.calls++
 	f.gotOrg = orgID
-	return f.lag, f.exceeds, f.err
+	if f.err != nil {
+		return membershipMarkerLagResult{}, f.err
+	}
+	return membershipMarkerLagResult{
+		Lag: f.lag, Exceeds: f.exceeds, Bound: f.bound, LatestInvestmentComputedAt: f.investmentAt,
+	}, nil
 }
 
 // TestComputeOrgReportsMarkerLagExceeded is the emitted signal this file's
@@ -396,7 +403,10 @@ func TestComputeOrgReportsMarkerLagExceeded(t *testing.T) {
 	writer := &fakeMembershipWriter{}
 	observer := &fakeMembershipObserver{}
 	logger := &fakeMembershipLogger{}
-	checker := &fakeMembershipMarkerLagChecker{lag: 3 * time.Hour, exceeds: true}
+	investmentAt := time.Date(2026, 1, 1, 15, 0, 0, 0, time.UTC)
+	checker := &fakeMembershipMarkerLagChecker{
+		lag: 3 * time.Hour, exceeds: true, bound: membershipMarkerLagAlertBoundDefault, investmentAt: &investmentAt,
+	}
 	executor := newTestMembershipExecutor(
 		fakeMembershipEdges{rows: twoDisjointComponentEdges()},
 		fakeMembershipDistributions{byUnit: map[string]membershipDistribution{matchedID: distribution}},
@@ -426,11 +436,17 @@ func TestComputeOrgReportsMarkerLagExceeded(t *testing.T) {
 	if got := logger.warnArg(0, "lag_seconds"); got != int64((3 * time.Hour).Seconds()) {
 		t.Errorf("Warn lag_seconds = %v, want %d", got, int64((3 * time.Hour).Seconds()))
 	}
-	if got := logger.warnArg(0, "bound_seconds"); got != int64(membershipMarkerLagAlertBound.Seconds()) {
-		t.Errorf("Warn bound_seconds = %v, want %d", got, int64(membershipMarkerLagAlertBound.Seconds()))
+	if got := logger.warnArg(0, "bound_seconds"); got != int64(membershipMarkerLagAlertBoundDefault.Seconds()) {
+		t.Errorf("Warn bound_seconds = %v, want %d", got, int64(membershipMarkerLagAlertBoundDefault.Seconds()))
 	}
 	if got := logger.warnArg(0, "org_id"); got != "org-1" {
 		t.Errorf("Warn org_id = %v, want org-1", got)
+	}
+	if got, ok := logger.warnArg(0, "latest_investment_computed_at").(*time.Time); !ok || got == nil || !got.Equal(investmentAt) {
+		t.Errorf("Warn latest_investment_computed_at = %v, want %v", got, investmentAt)
+	}
+	if got := logger.warnArg(0, "marker_completed_at"); got == nil {
+		t.Error("Warn marker_completed_at is missing")
 	}
 }
 

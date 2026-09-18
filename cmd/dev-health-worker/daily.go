@@ -1501,11 +1501,12 @@ type membershipRefusalObserver interface {
 }
 
 // membershipRefusalReason maps a construction error onto the closed label
-// set. The three are distinguished because they call for different actions:
-// an unavailable ClickHouse connection is transient and self-heals, a missing
+// set. These are distinguished because they call for different actions: an
+// unavailable ClickHouse connection is transient and self-heals, a missing
 // writer is a wiring bug in THIS file (never a database fault), an
-// incompatible schema means finish or roll back a migration, and anything
-// else means look at ClickHouse itself.
+// incompatible schema means finish or roll back a migration, an invalid
+// marker-lag-alert-bound override means fix or unset that one environment
+// variable, and anything else means look at ClickHouse itself.
 func membershipRefusalReason(err error) string {
 	switch {
 	case errors.Is(err, remaining.ErrMembershipUnavailable):
@@ -1514,6 +1515,8 @@ func membershipRefusalReason(err error) string {
 		return jobruntime.MembershipRefusedWriterUnavailable
 	case errors.Is(err, remaining.ErrMembershipSchemaIncompatible):
 		return jobruntime.MembershipRefusedSchemaIncompatible
+	case errors.Is(err, remaining.ErrMembershipMarkerLagAlertBoundInvalid):
+		return jobruntime.MembershipRefusedConfigInvalid
 	default:
 		return jobruntime.MembershipRefusedInspectFailed
 	}

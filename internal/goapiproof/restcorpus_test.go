@@ -175,16 +175,16 @@ func TestRESTRequest_StatusDivergenceIsDeclaredOnlyWhereGenuine(t *testing.T) {
 		},
 		"REST:GET:/api/v1/drilldown/issues": {
 			// baseline answers 503 in production on the issue drilldown
-			// routes; query-api answers 200 with real data.
+			// routes; query-api answers 200 with real data. team_scoped
+			// is not in this set: its statement avoids the exception, so
+			// its baseline genuinely answers 200 and its body compares.
 			"default_window":  true,
 			"range_days_90":   true,
 			"explicit_window": true,
-			"team_scoped":     true,
 		},
 		"REST:POST:/api/v1/drilldown/issues": {
 			"default_filters":         true,
 			"explicit_scope_and_sort": true,
-			"team_scoped":             true,
 		},
 		"REST:GET:/api/v1/people/{person_id}/drilldown/issues": {
 			"drilldown_issues_default":         true,
@@ -775,5 +775,120 @@ func TestDrilldownPRsRepoScoped_BindsToAPRProducingRepo(t *testing.T) {
 	}
 	if got := resolvedQuery.Get("scope_id"); got != "repo-with-a-pr" {
 		t.Fatalf("resolved scope_id = %q, want repo-with-a-pr", got)
+	}
+}
+
+// TestDrilldownIssuesTeamScoped_ComparesUnderDrilldownIssuesParity pins
+// GET/POST /api/v1/drilldown/issues' own "team_scoped" entry: the
+// team-scoped statement does not raise the org-wide exception, so its
+// baseline answers 200 in production, and this entry must compare bodies
+// under drilldownIssuesParity like every other admissible request on this
+// route, never take the status-only baseline-failure path. A regression
+// that reverts either entry to a declared 503 baseline, or drops its
+// BodyMode/Parity, fails here rather than only being noticed against the
+// real baseline, which answers 200 on this team-scoped read.
+func TestDrilldownIssuesTeamScoped_ComparesUnderDrilldownIssuesParity(t *testing.T) {
+	for _, op := range []string{"REST:GET:/api/v1/drilldown/issues", "REST:POST:/api/v1/drilldown/issues"} {
+		spec, err := SpecForREST(op)
+		if err != nil {
+			t.Fatalf("SpecForREST(%s): %v", op, err)
+		}
+		var req *RESTRequest
+		for i := range spec.Requests {
+			if spec.Requests[i].Name == "team_scoped" {
+				req = &spec.Requests[i]
+			}
+		}
+		if req == nil {
+			t.Fatalf("%s has no team_scoped entry", op)
+		}
+		if req.WantCandidateStatus != 200 || req.WantBaselineStatus != 200 {
+			t.Errorf("%s team_scoped wants = %d/%d, want 200/200", op, req.WantCandidateStatus, req.WantBaselineStatus)
+		}
+		if req.StatusDivergenceReason != "" {
+			t.Errorf("%s team_scoped StatusDivergenceReason = %q, want empty -- wants no longer diverge", op, req.StatusDivergenceReason)
+		}
+		if req.BodyMode != RESTBodyModeJSON {
+			t.Errorf("%s team_scoped BodyMode = %q, want RESTBodyModeJSON", op, req.BodyMode)
+		}
+		if len(req.Parity.BaselineDefects) != 1 || req.Parity.BaselineDefects[0].Ticket != drilldownIssuesParity.BaselineDefects[0].Ticket {
+			t.Fatalf("%s team_scoped Parity = %+v, want drilldownIssuesParity's own datetime defect", op, req.Parity)
+		}
+
+		identical := `{"items":[{"work_item_id":"w1","provider":"linear","status":"done","team_id":"T1","cycle_time_hours":1.5,"lead_time_hours":2.5,"started_at":"2026-01-01T00:00:00","completed_at":"2026-01-02T00:00:00"}]}`
+		snap := restSnapshotFromJSON(t, identical)
+		if result := Compare(snap, snap, req.Parity); result.TerminalState != TerminalStateMatch {
+			t.Errorf("%s team_scoped identical bodies terminal = %s (refusal %q), want match", op, result.TerminalState, result.StructuralRefusal)
+		}
+
+		mismatched := `{"items":[{"work_item_id":"w1","provider":"linear","status":"open","team_id":"T1","cycle_time_hours":1.5,"lead_time_hours":2.5,"started_at":"2026-01-01T00:00:00","completed_at":"2026-01-02T00:00:00"}]}`
+		msnap := restSnapshotFromJSON(t, mismatched)
+		if result := Compare(snap, msnap, req.Parity); result.TerminalState != TerminalStateMismatch {
+			t.Errorf("%s team_scoped differing-status bodies terminal = %s (refusal %q), want mismatch", op, result.TerminalState, result.StructuralRefusal)
+		}
+	}
+}
+
+// TestFlameAggregatedProviderScoped_ResolvesFromDrilldownIssuesOrgRead pins
+// the corpus-level contract: flame/aggregated's own "cycle_breakdown_provider_scoped"
+// entry binds its provider query param to a producer declared on GET
+// /api/v1/drilldown/issues' own org-wide "default_window" entry -- not on
+// the person-scoped issues route, which cannot prove-select a person with
+// issues and stays refused. A regression that repoints this binding back at
+// a person-scoped producer, or drops the org-wide producer, fails here.
+func TestFlameAggregatedProviderScoped_ResolvesFromDrilldownIssuesOrgRead(t *testing.T) {
+	drillIssues, err := SpecForREST("REST:GET:/api/v1/drilldown/issues")
+	if err != nil {
+		t.Fatalf("SpecForREST(drilldown/issues): %v", err)
+	}
+	var defaultWindow *RESTRequest
+	for i := range drillIssues.Requests {
+		if drillIssues.Requests[i].Name == "default_window" {
+			defaultWindow = &drillIssues.Requests[i]
+		}
+	}
+	if defaultWindow == nil {
+		t.Fatal("GET /api/v1/drilldown/issues has no default_window entry")
+	}
+	var providerProducer *RESTIDProducer
+	for i := range defaultWindow.Produces {
+		if defaultWindow.Produces[i].Name == "issues_org_provider" {
+			providerProducer = &defaultWindow.Produces[i]
+		}
+	}
+	if providerProducer == nil {
+		t.Fatal("GET /api/v1/drilldown/issues' default_window entry does not Produce issues_org_provider")
+	}
+	if providerProducer.ListPath != "items" || providerProducer.IDField != "provider" {
+		t.Errorf("issues_org_provider = %+v, want ListPath items IDField provider", providerProducer)
+	}
+
+	body := map[string]any{"items": []any{map[string]any{"work_item_id": "w1", "provider": "github"}}}
+	got, ok := ExtractRESTID(body, *providerProducer)
+	if !ok || got != "github" {
+		t.Fatalf("ExtractRESTID(issues_org_provider) = (%q, %v), want (github, true)", got, ok)
+	}
+
+	flameAgg, err := SpecForREST("REST:GET:/api/v1/flame/aggregated")
+	if err != nil {
+		t.Fatalf("SpecForREST(flame/aggregated): %v", err)
+	}
+	var providerScoped *RESTRequest
+	for i := range flameAgg.Requests {
+		if flameAgg.Requests[i].Name == "cycle_breakdown_provider_scoped" {
+			providerScoped = &flameAgg.Requests[i]
+		}
+	}
+	if providerScoped == nil {
+		t.Fatal("GET /api/v1/flame/aggregated has no cycle_breakdown_provider_scoped entry")
+	}
+	found := false
+	for _, b := range providerScoped.IDBindings {
+		if b.Producer == "issues_org_provider" && b.QueryParam == "provider" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("cycle_breakdown_provider_scoped IDBindings = %+v, want a QueryParam=provider binding to producer issues_org_provider", providerScoped.IDBindings)
 	}
 }

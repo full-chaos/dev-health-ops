@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"net/url"
 	"path"
 	"strconv"
@@ -15,6 +16,21 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
+
+// gitHubFilesCountingDoer observes actual wire attempts, including
+// transport failures and retries the wrapped HTTPClient makes internally --
+// unlike a logical-fetch-call tally, it increments once per Doer.Do call
+// regardless of whether that call ever produced a usable response. It is
+// the single source of truth for this Collect run's FetchEvidence.Requests.
+type gitHubFilesCountingDoer struct {
+	delegate providerfoundation.HTTPDoer
+	attempts *int
+}
+
+func (doer gitHubFilesCountingDoer) Do(request *http.Request) (*http.Response, error) {
+	*doer.attempts++
+	return doer.delegate.Do(request)
+}
 
 const (
 	gitHubFileContentMaxBytes = 1_000_000
@@ -94,6 +110,10 @@ func (GitHubFilesRouteHandler) Collect(
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
+	requests := 0
+	counted := *client
+	counted.Doer = gitHubFilesCountingDoer{delegate: client.Doer, attempts: &requests}
+	client = &counted
 	root := providerRelativePath(client, "repos", owner, repository)
 	var repoPayload gitHubRepositoryPayload
 	if err := fetchObject(ctx, client, root, &repoPayload); err != nil {
@@ -107,7 +127,7 @@ func (GitHubFilesRouteHandler) Collect(
 	if branch == "" {
 		branch = "main"
 	}
-	treeRef, requests, err := gitHubFilesTreeRef(ctx, client, root, branch, claim.BeforeAt)
+	treeRef, err := gitHubFilesTreeRef(ctx, client, root, branch, claim.BeforeAt)
 	if err != nil {
 		if err := continueGitHubFilesTraversal(err, repoPayload.FullName); err != nil {
 			return CompleteRouteBatch{}, err
@@ -124,12 +144,11 @@ func (GitHubFilesRouteHandler) Collect(
 		}
 		return gitHubFilesBatch(claim, repoPayload.FullName, nil, normalizedAt, requests, 0, false, false)
 	}
-	requests++
 	var paths []string
 	var sizes map[string]*int
 	subtreeWalked := tree.Truncated
 	if tree.Truncated {
-		walkedPaths, walkedSizes, walkErr := gitHubWalkTree(ctx, client, root, treeRef, "", &requests)
+		walkedPaths, walkedSizes, walkErr := gitHubWalkTree(ctx, client, root, treeRef, "")
 		if walkErr != nil {
 			err := fmt.Errorf("ref=%s: %w", treeRef, walkErr)
 			if err := continueGitHubFilesTraversal(err, repoPayload.FullName); err != nil {
@@ -149,14 +168,13 @@ func (GitHubFilesRouteHandler) Collect(
 			sizes[entry.Path] = entry.Size
 		}
 	}
-	contents, contentRequests, err := fetchGitHubFileContents(ctx, client, owner, repository, treeRef, paths, sizes)
+	contents, err := fetchGitHubFileContents(ctx, client, owner, repository, treeRef, paths, sizes)
 	if err != nil {
 		if err := continueGitHubFilesTraversal(err, repoPayload.FullName); err != nil {
 			return CompleteRouteBatch{}, err
 		}
-		return gitHubFilesBatch(claim, repoPayload.FullName, nil, normalizedAt, requests+contentRequests, 0, false, subtreeWalked)
+		return gitHubFilesBatch(claim, repoPayload.FullName, nil, normalizedAt, requests, 0, false, subtreeWalked)
 	}
-	requests += contentRequests
 	rows := make([]gitFileRow, 0, len(paths))
 	for _, filePath := range paths {
 		row := newGitHubFileRow(claim, repoID, filePath, contents[filePath], normalizedAt)
@@ -179,13 +197,11 @@ func gitHubWalkTree(
 	ctx context.Context,
 	client *providerfoundation.HTTPClient,
 	root, sha, prefix string,
-	requests *int,
 ) ([]string, map[string]*int, error) {
 	var tree gitHubTreePayload
 	if err := fetchObject(ctx, client, root+"/git/trees/"+url.PathEscape(sha), &tree); err != nil {
 		return nil, nil, fmt.Errorf("path=%q: %w", prefix, err)
 	}
-	*requests++
 	if tree.Truncated {
 		return nil, nil, fmt.Errorf("path=%q: %w", prefix, ErrGitHubFilesSubtreeTruncated)
 	}
@@ -207,7 +223,7 @@ func gitHubWalkTree(
 			if entry.SHA == "" {
 				return nil, nil, fmt.Errorf("path=%q: %w", fullPath, providerfoundation.ErrNormalizationInvalid)
 			}
-			childPaths, childSizes, err := gitHubWalkTree(ctx, client, root, entry.SHA, fullPath, requests)
+			childPaths, childSizes, err := gitHubWalkTree(ctx, client, root, entry.SHA, fullPath)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -245,25 +261,25 @@ func gitHubFilesTreeRef(
 	client *providerfoundation.HTTPClient,
 	root, branch string,
 	beforeAt *time.Time,
-) (string, int, error) {
+) (string, error) {
 	if beforeAt != nil {
 		query := url.Values{"per_page": {"1"}, "sha": {branch}, "until": {beforeAt.UTC().Format(time.RFC3339Nano)}}
 		var commits []struct {
 			SHA string `json:"sha"`
 		}
 		if err := fetchObject(ctx, client, root+"/commits?"+query.Encode(), &commits); err != nil {
-			return "", 0, err
+			return "", err
 		}
 		if len(commits) == 0 {
-			return "", 1, nil
+			return "", nil
 		}
-		return commits[0].SHA, 1, nil
+		return commits[0].SHA, nil
 	}
 	var branchPayload gitHubBranchPayload
 	if err := fetchObject(ctx, client, root+"/branches/"+url.PathEscape(branch), &branchPayload); err != nil {
-		return "", 0, err
+		return "", err
 	}
-	return branchPayload.Commit.SHA, 1, nil
+	return branchPayload.Commit.SHA, nil
 }
 
 func gitHubFilesBatch(
@@ -309,7 +325,7 @@ func fetchGitHubFileContents(
 	owner, repository, ref string,
 	paths []string,
 	sizes map[string]*int,
-) (map[string]string, int, error) {
+) (map[string]string, error) {
 	scannable := make([]string, 0, min(len(paths), gitHubFileContentMaxFiles))
 	for _, filePath := range paths {
 		if !gitHubFileContentEligible(filePath, sizes[filePath]) {
@@ -321,7 +337,6 @@ func fetchGitHubFileContents(
 		}
 	}
 	contents := make(map[string]string)
-	requests := 0
 	for start := 0; start < len(scannable); start += gitHubFileContentBatch {
 		end := min(start+gitHubFileContentBatch, len(scannable))
 		chunk := scannable[start:end]
@@ -330,13 +345,12 @@ func fetchGitHubFileContents(
 			"variables": map[string]string{"owner": owner, "repo": repository},
 		})
 		if err != nil {
-			return nil, requests, providerfoundation.ErrNormalizationInvalid
+			return nil, providerfoundation.ErrNormalizationInvalid
 		}
 		response, err := client.Do(ctx, "POST", gitHubGraphQLPath(client), bytes.NewReader(body))
 		if err != nil {
-			return nil, requests, err
+			return nil, err
 		}
-		requests++
 		var envelope struct {
 			Data struct {
 				Repository map[string]struct {
@@ -350,7 +364,7 @@ func fetchGitHubFileContents(
 		decodeErr := json.NewDecoder(response.Body).Decode(&envelope)
 		closeErr := response.Body.Close()
 		if decodeErr != nil || closeErr != nil || len(envelope.Errors) > 0 {
-			return nil, requests, providerfoundation.ErrNormalizationInvalid
+			return nil, providerfoundation.ErrNormalizationInvalid
 		}
 		for index, filePath := range chunk {
 			blob, ok := envelope.Data.Repository["f"+strconv.Itoa(index)]
@@ -360,7 +374,7 @@ func fetchGitHubFileContents(
 			contents[filePath] = *blob.Text
 		}
 	}
-	return contents, requests, nil
+	return contents, nil
 }
 
 func gitHubFileContentEligible(filePath string, size *int) bool {

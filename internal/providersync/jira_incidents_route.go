@@ -22,6 +22,21 @@ import (
 	"github.com/google/uuid"
 )
 
+// jiraIncidentsCountingDoer observes actual wire attempts, including
+// transport failures and retries the wrapped HTTPClient makes internally --
+// unlike a decoded-page-plus-loop-iteration tally, it increments once per
+// Doer.Do call regardless of whether that call ever produced a usable
+// response.
+type jiraIncidentsCountingDoer struct {
+	delegate providerfoundation.HTTPDoer
+	attempts *int
+}
+
+func (doer jiraIncidentsCountingDoer) Do(request *http.Request) (*http.Response, error) {
+	*doer.attempts++
+	return doer.delegate.Do(request)
+}
+
 const (
 	jiraIncidentAPIOrigin = "https://api.atlassian.com"
 	jiraIncidentMaxPages  = 1_000
@@ -146,10 +161,13 @@ func (handler JiraIncidentRouteHandler) Collect(
 		return CompleteRouteBatch{}, providerfoundation.ErrInvalidScope
 	}
 
+	requests := 0
+	counted := *client
+	counted.Doer = jiraIncidentsCountingDoer{delegate: client.Doer, attempts: &requests}
 	var tenant struct {
 		CloudID string `json:"cloudId"`
 	}
-	if err := jiraIncidentFetchObject(ctx, client, http.MethodGet, "/_edge/tenant_info", nil, &tenant); err != nil {
+	if err := jiraIncidentFetchObject(ctx, &counted, http.MethodGet, "/_edge/tenant_info", nil, &tenant); err != nil {
 		return CompleteRouteBatch{}, err
 	}
 	cloudID := strings.TrimSpace(tenant.CloudID)
@@ -160,28 +178,26 @@ func (handler JiraIncidentRouteHandler) Collect(
 		return CompleteRouteBatch{}, providerfoundation.ErrInvalidScope
 	}
 
-	servicePages, serviceRequests, err := verifyJiraServiceProject(
-		ctx, client, projectKey, maxPages, maxRows, perPage,
+	servicePages, _, err := verifyJiraServiceProject(
+		ctx, &counted, projectKey, maxPages, maxRows, perPage,
 	)
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
 	issues, searchPages, err := collectJiraIncidentIssues(
-		ctx, client, projectKey, *claim.SinceAt, *claim.BeforeAt,
+		ctx, &counted, projectKey, *claim.SinceAt, *claim.BeforeAt,
 		maxPages, maxRows, perPage,
 	)
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
-	admissionClient, err := jiraIncidentAdmissionClient(client, claim)
+	admissionClient, err := jiraIncidentAdmissionClient(&counted, claim)
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
 	rows := make([]jiraIncidentRow, 0, len(issues))
-	admissionRequests := 0
 	for _, issue := range issues {
 		admitted, err := admitJiraIncident(ctx, admissionClient, cloudID, issue.ID)
-		admissionRequests++
 		if err != nil {
 			return CompleteRouteBatch{}, err
 		}
@@ -205,7 +221,7 @@ func (handler JiraIncidentRouteHandler) Collect(
 		Watermark: &watermark,
 		Evidence: FetchEvidence{
 			Provider: claim.Provider, Dataset: claim.Dataset,
-			Requests: 1 + serviceRequests + searchPages + admissionRequests,
+			Requests: requests,
 			Pages:    servicePages + searchPages, Records: len(rows),
 		},
 	}, nil

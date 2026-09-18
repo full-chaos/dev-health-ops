@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"net/http"
 	"net/url"
 	"sort"
 	"strings"
@@ -12,6 +13,22 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/identityalias"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
+
+// gitlabTeamCatalogCountingDoer observes actual wire attempts, including
+// transport failures and retries the wrapped HTTPClient makes internally --
+// unlike a decoded-page or hardcoded-per-call tally, it increments once per
+// Doer.Do call regardless of whether that call ever produced a usable
+// response. It is the single source of truth for one CollectTeamCatalog
+// call's GitLabTeamCatalogEvidence.Requests.
+type gitlabTeamCatalogCountingDoer struct {
+	delegate providerfoundation.HTTPDoer
+	attempts *int
+}
+
+func (doer gitlabTeamCatalogCountingDoer) Do(request *http.Request) (*http.Response, error) {
+	*doer.attempts++
+	return doer.delegate.Do(request)
+}
 
 const (
 	gitlabTeamCatalogListPerPage         = 100
@@ -153,9 +170,10 @@ func (handler GitLabTeamCatalogRouteHandler) resolveGroupPath(
 // GitLabTeamCatalogResult.WalkSkipped's doc comment. Complete is true so
 // this never also trips the collector adapter's separate pagination-cap
 // fail-closed gate.
-func gitlabTeamCatalogWalkSkipBatch(reason string) GitLabTeamCatalogBatch {
+func gitlabTeamCatalogWalkSkipBatch(reason string, requests int) GitLabTeamCatalogBatch {
 	return GitLabTeamCatalogBatch{
-		Result: GitLabTeamCatalogResult{Complete: true, WalkSkipped: true, WalkSkipReason: reason},
+		Result:   GitLabTeamCatalogResult{Complete: true, WalkSkipped: true, WalkSkipReason: reason},
+		Evidence: GitLabTeamCatalogEvidence{Provider: gitlabTeamCatalogProvider, Requests: requests},
 	}
 }
 
@@ -164,16 +182,20 @@ func gitlabTeamCatalogWalkSkipBatch(reason string) GitLabTeamCatalogBatch {
 // re-raise); under non-strict, log at warn and return a clean, successful
 // skip instead of propagating the error -- matches team_autoimport_gitlab.
 // py's outer try/except around discover_gitlab's single unified walk
-// (_zero_summary(reason=...) on any exception, non-strict).
+// (_zero_summary(reason=...) on any exception, non-strict). The physical
+// requests already made against the provider before the abort are real wire
+// cost regardless of the abort, so requests (the counting Doer's running
+// total) is stamped onto the skip batch rather than discarded with the rest
+// of the walk's state.
 func gitlabTeamCatalogWalkFailure(
-	ctx context.Context, ref TeamCatalogReference, reason string, err error,
+	ctx context.Context, ref TeamCatalogReference, reason string, requests int, err error,
 ) (GitLabTeamCatalogBatch, error) {
 	if ref.Strict {
 		return GitLabTeamCatalogBatch{}, err
 	}
 	slog.Default().WarnContext(ctx, "gitlab_team_catalog_walk_skipped",
 		"org_id", ref.OrgID, "reason", reason, "error", err)
-	return gitlabTeamCatalogWalkSkipBatch(reason), nil
+	return gitlabTeamCatalogWalkSkipBatch(reason, requests), nil
 }
 
 func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
@@ -204,6 +226,10 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 	claim := Claim{Unit: Unit{OrgID: ref.OrgID, Provider: gitlabTeamCatalogProvider}}
 	normalizedAt = normalizedAt.UTC().Truncate(time.Millisecond)
 	evidence := GitLabTeamCatalogEvidence{Provider: gitlabTeamCatalogProvider}
+	requests := 0
+	counted := *client
+	counted.Doer = gitlabTeamCatalogCountingDoer{delegate: client.Doer, attempts: &requests}
+	client = &counted
 	// Loaded once per walk: every member this run normalizes
 	// shares the same org alias config.
 	resolver := identityalias.LoadDefault()
@@ -211,9 +237,8 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 	rootPath := providerRelativePath(client, "api", "v4", "groups", groupPath)
 	var root gitlabTeamCatalogGroupPayload
 	if err := fetchObject(ctx, client, rootPath, &root); err != nil {
-		return gitlabTeamCatalogWalkFailure(ctx, ref, "root_group_fetch_failed", err)
+		return gitlabTeamCatalogWalkFailure(ctx, ref, "root_group_fetch_failed", requests, err)
 	}
-	evidence.Requests++
 	if strings.TrimSpace(root.FullPath) == "" {
 		return GitLabTeamCatalogBatch{}, providerfoundation.ErrNormalizationInvalid
 	}
@@ -222,9 +247,8 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 		Path: rootPath + "/subgroups", PerPage: gitlabTeamCatalogListPerPage, MaxPages: gitlabTeamCatalogSubgroupsMaxPages,
 	})
 	if err != nil {
-		return gitlabTeamCatalogWalkFailure(ctx, ref, "subgroups_fetch_failed", err)
+		return gitlabTeamCatalogWalkFailure(ctx, ref, "subgroups_fetch_failed", requests, err)
 	}
-	evidence.Requests += subgroupPages.Pages
 	evidence.Pages += subgroupPages.Pages
 	if subgroupPages.PageBudgetExhausted {
 		evidence.Truncated = true
@@ -268,9 +292,8 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 				Path: groupPathValue + "/projects", PerPage: gitlabTeamCatalogListPerPage, MaxPages: gitlabTeamCatalogProjectsMaxPages,
 			})
 			if err != nil {
-				return gitlabTeamCatalogWalkFailure(ctx, ref, "group_projects_fetch_failed", err)
+				return gitlabTeamCatalogWalkFailure(ctx, ref, "group_projects_fetch_failed", requests, err)
 			}
-			evidence.Requests += projectPages.Pages
 			evidence.Pages += projectPages.Pages
 			if projectPages.PageBudgetExhausted {
 				evidence.Truncated = true
@@ -336,7 +359,6 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 				slog.Default().WarnContext(ctx, "gitlab_team_catalog_member_fetch_failed",
 					"org_id", ref.OrgID, "team_id", teamID, "error", memberErr)
 			} else {
-				evidence.Requests += memberPages.Pages
 				evidence.Pages += memberPages.Pages
 				if memberPages.PageBudgetExhausted {
 					evidence.Truncated = true
@@ -420,9 +442,8 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 			Query: url.Values{"include_subgroups": {"true"}},
 		})
 		if err != nil {
-			return gitlabTeamCatalogWalkFailure(ctx, ref, "native_projects_fetch_failed", err)
+			return gitlabTeamCatalogWalkFailure(ctx, ref, "native_projects_fetch_failed", requests, err)
 		}
-		evidence.Requests += allProjectPages.Pages
 		evidence.Pages += allProjectPages.Pages
 		if allProjectPages.PageBudgetExhausted {
 			evidence.Truncated = true
@@ -497,6 +518,7 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 		MembersImported:  len(distinctGitLabMembershipMembers(rows.Memberships)),
 		Complete:         !evidence.Truncated && len(evidence.MissingSelectedSources) == 0,
 	}
+	evidence.Requests = requests
 	return GitLabTeamCatalogBatch{Rows: rows, Effects: effects, Result: result, Evidence: evidence}, nil
 }
 

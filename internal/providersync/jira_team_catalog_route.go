@@ -47,6 +47,22 @@ var jiraTeamCatalogNoBoardProjectTypes = map[string]bool{
 	"product_discovery": true,
 }
 
+// jiraTeamCatalogCountingDoer observes actual wire attempts, including
+// transport failures and retries the wrapped HTTPClient makes internally --
+// unlike a decoded-page or hardcoded-per-call tally, it increments once per
+// Doer.Do call regardless of whether that call ever produced a usable
+// response. It is the single source of truth for one CollectTeamCatalog
+// call's JiraTeamCatalogEvidence.Requests.
+type jiraTeamCatalogCountingDoer struct {
+	delegate providerfoundation.HTTPDoer
+	attempts *int
+}
+
+func (doer jiraTeamCatalogCountingDoer) Do(request *http.Request) (*http.Response, error) {
+	*doer.attempts++
+	return doer.delegate.Do(request)
+}
+
 // JiraTeamCatalogRouteHandler owns the provider-only team/project-ownership/
 // membership/sprint catalog walk that ports
 // src/dev_health_ops/workers/team_autoimport_jira.py. Claim-free by design:
@@ -91,8 +107,11 @@ type JiraTeamCatalogBatch struct {
 	Evidence JiraTeamCatalogEvidence `json:"evidence"`
 }
 
-func jiraTeamCatalogWalkSkipBatch(reason string) JiraTeamCatalogBatch {
-	return JiraTeamCatalogBatch{Result: JiraTeamCatalogResult{WalkSkipped: true, WalkSkipReason: reason}}
+func jiraTeamCatalogWalkSkipBatch(reason string, requests int) JiraTeamCatalogBatch {
+	return JiraTeamCatalogBatch{
+		Result:   JiraTeamCatalogResult{WalkSkipped: true, WalkSkipReason: reason},
+		Evidence: JiraTeamCatalogEvidence{Provider: jiraTeamCatalogProvider, Requests: requests},
+	}
 }
 
 // jiraTeamCatalogWalkFailure is the whole-walk abort branch point (project
@@ -101,16 +120,20 @@ func jiraTeamCatalogWalkSkipBatch(reason string) JiraTeamCatalogBatch {
 // successful skip -- mirrors team_autoimport_jira.py's populate() catching
 // discover_jira's failure (and run_team_autoimport's own outer catch-all for
 // every OTHER exception the function raises, including a member lookup
-// failure) and returning a zero summary instead of a partial write.
+// failure) and returning a zero summary instead of a partial write. The
+// physical requests already made against the provider before the abort are
+// real wire cost regardless of the abort, so requests (the counting Doer's
+// running total) is stamped onto the skip batch rather than discarded with
+// the rest of the walk's state.
 func jiraTeamCatalogWalkFailure(
-	ctx context.Context, ref TeamCatalogReference, reason string, err error,
+	ctx context.Context, ref TeamCatalogReference, reason string, requests int, err error,
 ) (JiraTeamCatalogBatch, error) {
 	if ref.Strict {
 		return JiraTeamCatalogBatch{}, err
 	}
 	slog.Default().WarnContext(ctx, "jira_team_catalog_walk_skipped",
 		"org_id", ref.OrgID, "reason", reason, "error", err)
-	return jiraTeamCatalogWalkSkipBatch(reason), nil
+	return jiraTeamCatalogWalkSkipBatch(reason, requests), nil
 }
 
 func (handler JiraTeamCatalogRouteHandler) CollectTeamCatalog(
@@ -137,6 +160,10 @@ func (handler JiraTeamCatalogRouteHandler) CollectTeamCatalog(
 	claim := Claim{Unit: Unit{OrgID: ref.OrgID, Provider: jiraTeamCatalogProvider}}
 	normalizedAt = normalizedAt.UTC().Truncate(time.Millisecond)
 	evidence := JiraTeamCatalogEvidence{Provider: jiraTeamCatalogProvider}
+	requests := 0
+	counted := *client
+	counted.Doer = jiraTeamCatalogCountingDoer{delegate: client.Doer, attempts: &requests}
+	client = &counted
 	// Loaded once per walk: every project lead this run
 	// normalizes shares the same org alias config.
 	resolver := identityalias.LoadDefault()
@@ -146,9 +173,8 @@ func (handler JiraTeamCatalogRouteHandler) CollectTeamCatalog(
 	}.Encode()
 	var search jiraTeamCatalogProjectSearchPayload
 	if err := jiraFetchObject(ctx, client, http.MethodGet, searchPath, nil, &search); err != nil {
-		return jiraTeamCatalogWalkFailure(ctx, ref, "project_discovery_failed", err)
+		return jiraTeamCatalogWalkFailure(ctx, ref, "project_discovery_failed", requests, err)
 	}
-	evidence.Requests++
 
 	rows := JiraTeamCatalogRows{}
 	projectKeys := make([]string, 0, len(search.Values))
@@ -170,9 +196,8 @@ func (handler JiraTeamCatalogRouteHandler) CollectTeamCatalog(
 			var detail jiraTeamCatalogProjectDetailPayload
 			detailPath := "/rest/api/3/project/" + url.PathEscape(team.ID)
 			if err := jiraFetchObject(ctx, client, http.MethodGet, detailPath, nil, &detail); err != nil {
-				return jiraTeamCatalogWalkFailure(ctx, ref, "project_lead_lookup_failed", err)
+				return jiraTeamCatalogWalkFailure(ctx, ref, "project_lead_lookup_failed", requests, err)
 			}
-			evidence.Requests++
 			if detail.Lead == nil {
 				continue
 			}
@@ -186,8 +211,7 @@ func (handler JiraTeamCatalogRouteHandler) CollectTeamCatalog(
 		rows.Teams = jiraStampMembersAuthoritative(rows.Teams)
 	}
 
-	sprints, sprintRequests, sprintErr := handler.collectSprints(ctx, client, claim, projectKeys, normalizedAt)
-	evidence.Requests += sprintRequests
+	sprints, sprintErr := handler.collectSprints(ctx, client, claim, projectKeys, normalizedAt)
 	if sprintErr != nil {
 		if ref.Strict {
 			return JiraTeamCatalogBatch{}, sprintErr
@@ -230,6 +254,7 @@ func (handler JiraTeamCatalogRouteHandler) CollectTeamCatalog(
 		MembersImported: len(distinctJiraMembershipMembers(rows.Memberships)),
 		SprintsImported: len(rows.Sprints),
 	}
+	evidence.Requests = requests
 	return JiraTeamCatalogBatch{Rows: rows, Result: result, Evidence: evidence}, nil
 }
 
@@ -257,43 +282,39 @@ func jiraStampMembersAuthoritative(teams []jiraTeamCatalogTeamRow) []jiraTeamCat
 // handling of that returned error; this function itself never distinguishes.
 func (handler JiraTeamCatalogRouteHandler) collectSprints(
 	ctx context.Context, client *providerfoundation.HTTPClient, claim Claim, projectKeys []string, normalizedAt time.Time,
-) ([]jiraSprintRow, int, error) {
+) ([]jiraSprintRow, error) {
 	sprints := make([]jiraSprintRow, 0)
-	requests := 0
 	for _, key := range projectKeys {
 		var detail jiraTeamCatalogProjectDetailPayload
 		detailPath := "/rest/api/3/project/" + url.PathEscape(key)
 		if err := jiraFetchObject(ctx, client, http.MethodGet, detailPath, nil, &detail); err != nil {
-			return nil, requests, err
+			return nil, err
 		}
-		requests++
 		projectType := strings.ToLower(strings.TrimSpace(detail.ProjectTypeKey))
 		if jiraTeamCatalogNoBoardProjectTypes[projectType] {
 			continue
 		}
 		if !jiraTeamCatalogBoardCapableProjectTypes[projectType] {
-			return nil, requests, fmt.Errorf("%w: unrecognized jira project type %q for project_key=%q",
+			return nil, fmt.Errorf("%w: unrecognized jira project type %q for project_key=%q",
 				providerfoundation.ErrNormalizationInvalid, detail.ProjectTypeKey, key)
 		}
-		boards, boardRequests, err := handler.iterBoards(ctx, client, key)
-		requests += boardRequests
+		boards, err := handler.iterBoards(ctx, client, key)
 		if err != nil {
-			return nil, requests, err
+			return nil, err
 		}
 		for _, board := range boards {
 			boardID := strings.TrimSpace(board.ID.String())
 			if boardID == "" {
 				continue
 			}
-			boardSprints, sprintRequests, skipDetail, err := handler.iterBoardSprints(ctx, client, boardID)
-			requests += sprintRequests
+			boardSprints, skipDetail, err := handler.iterBoardSprints(ctx, client, boardID)
 			if err != nil {
-				return nil, requests, err
+				return nil, err
 			}
 			for _, raw := range boardSprints {
 				var payload map[string]any
 				if err := decodeJiraJSON(raw, &payload); err != nil {
-					return nil, requests, providerfoundation.ErrNormalizationInvalid
+					return nil, providerfoundation.ErrNormalizationInvalid
 				}
 				sprint, sprintErr := normalizeJiraSprint(claim, payload, normalizedAt)
 				if sprintErr != nil {
@@ -307,18 +328,17 @@ func (handler JiraTeamCatalogRouteHandler) collectSprints(
 			}
 		}
 	}
-	return sprints, requests, nil
+	return sprints, nil
 }
 
 func (handler JiraTeamCatalogRouteHandler) iterBoards(
 	ctx context.Context, client *providerfoundation.HTTPClient, projectKey string,
-) ([]jiraTeamCatalogBoardPayload, int, error) {
+) ([]jiraTeamCatalogBoardPayload, error) {
 	boards := make([]jiraTeamCatalogBoardPayload, 0)
 	startAt := 0
-	requests := 0
 	for pages := 0; ; pages++ {
 		if pages >= jiraTeamCatalogBoardsMaxPages {
-			return nil, requests, ErrPaginationCapExceeded
+			return nil, ErrPaginationCapExceeded
 		}
 		query := url.Values{
 			"startAt": {strconv.Itoa(startAt)}, "maxResults": {strconv.Itoa(jiraTeamCatalogPerPage)},
@@ -326,9 +346,8 @@ func (handler JiraTeamCatalogRouteHandler) iterBoards(
 		}
 		var page jiraTeamCatalogBoardsPage
 		if err := jiraFetchObject(ctx, client, http.MethodGet, "/rest/agile/1.0/board?"+query.Encode(), nil, &page); err != nil {
-			return nil, requests, err
+			return nil, err
 		}
-		requests++
 		if len(page.Values) == 0 {
 			break
 		}
@@ -338,7 +357,7 @@ func (handler JiraTeamCatalogRouteHandler) iterBoards(
 			break
 		}
 	}
-	return boards, requests, nil
+	return boards, nil
 }
 
 // iterBoardSprints returns the sprints gathered before an optional
@@ -355,25 +374,24 @@ func (handler JiraTeamCatalogRouteHandler) iterBoards(
 // below type-asserts the returned error rather than reading a response.
 func (handler JiraTeamCatalogRouteHandler) iterBoardSprints(
 	ctx context.Context, client *providerfoundation.HTTPClient, boardID string,
-) (sprints []json.RawMessage, requests int, skipDetail string, err error) {
+) (sprints []json.RawMessage, skipDetail string, err error) {
 	startAt := 0
 	for pages := 0; ; pages++ {
 		if pages >= jiraTeamCatalogSprintsMaxPages {
-			return sprints, requests, "", ErrPaginationCapExceeded
+			return sprints, "", ErrPaginationCapExceeded
 		}
 		query := url.Values{"startAt": {strconv.Itoa(startAt)}, "maxResults": {strconv.Itoa(jiraTeamCatalogPerPage)}}
 		path := "/rest/agile/1.0/board/" + url.PathEscape(boardID) + "/sprint?" + query.Encode()
 		var page jiraTeamCatalogSprintsPage
 		fetchErr := jiraFetchObject(ctx, client, http.MethodGet, path, nil, &page)
-		requests++
 		if fetchErr != nil {
 			var providerErr *providerfoundation.ProviderError
 			if errors.As(fetchErr, &providerErr) && providerErr.StatusCode == http.StatusBadRequest {
 				if detail := jiraTeamCatalogSkippable400Detail([]byte(providerErr.Body)); detail != "" {
-					return sprints, requests, detail, nil
+					return sprints, detail, nil
 				}
 			}
-			return sprints, requests, "", fetchErr
+			return sprints, "", fetchErr
 		}
 		if len(page.Values) == 0 {
 			break
@@ -384,7 +402,7 @@ func (handler JiraTeamCatalogRouteHandler) iterBoardSprints(
 			break
 		}
 	}
-	return sprints, requests, "", nil
+	return sprints, "", nil
 }
 
 // jiraTeamCatalogSkippable400Detail mirrors

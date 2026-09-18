@@ -243,6 +243,82 @@ func TestGitLabCommitsRouteFailsClosedOnCapMalformedAndPartialFetch(t *testing.T
 	}
 }
 
+// gitLabCommitsRetryOnceDoer fails the first physical attempt for exactly
+// one path with a transport error (forcing HTTPClient.Do's own retry loop to
+// spend a second wire attempt), then serves the queued fixture responses
+// normally.
+type gitLabCommitsRetryOnceDoer struct {
+	t          *testing.T
+	responses  []gitLabCommitsResponse
+	failPath   string
+	failedOnce bool
+	requests   int
+}
+
+func (doer *gitLabCommitsRetryOnceDoer) Do(request *http.Request) (*http.Response, error) {
+	doer.t.Helper()
+	doer.requests++
+	if request.URL.Path == doer.failPath && !doer.failedOnce {
+		doer.failedOnce = true
+		return nil, errors.New("simulated transient transport failure")
+	}
+	if len(doer.responses) == 0 {
+		doer.t.Fatalf("unexpected request %s", request.URL)
+	}
+	response := doer.responses[0]
+	doer.responses = doer.responses[1:]
+	status := response.status
+	if status == 0 {
+		status = http.StatusOK
+	}
+	return &http.Response{
+		StatusCode: status,
+		Header:     response.headers,
+		Body:       io.NopCloser(strings.NewReader(response.body)),
+		Request:    request,
+	}, nil
+}
+
+// TestGitLabCommitsRouteCountsFailedAndRetriedAttempts verifies that a
+// project fetch that fails its first wire attempt and
+// succeeds on retry must count that extra attempt, not just the decoded
+// page total.
+func TestGitLabCommitsRouteCountsFailedAndRetriedAttempts(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	doer := &gitLabCommitsRetryOnceDoer{
+		t: t, failPath: "/api/v4/projects/123",
+		responses: []gitLabCommitsResponse{
+			{body: gitLabRepositoryFixture},
+			{body: `[]`},
+		},
+	}
+	client, err := providerfoundation.NewHTTPClient(
+		"gitlab", "https://gitlab.example", doer,
+		func(*http.Request) error { return nil },
+		providerfoundation.RetryPolicy{
+			MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
+		},
+		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch, err := (GitLabCommitsRouteHandler{}).Collect(
+		context.Background(), nativeTestClaim("gitlab", "commits"),
+		providerfoundation.Credential{}, client, now,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doer.requests != 3 {
+		t.Fatalf("doer.requests=%d want 3 (failed project attempt, retried project attempt, one commits page)", doer.requests)
+	}
+	if batch.Evidence.Requests != 3 {
+		t.Fatalf("evidence=%+v want Requests=3 (every physical attempt)", batch.Evidence)
+	}
+}
+
 func TestGitLabCommitsRouteRejectsCrossScopeAndProjectMismatch(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)

@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -209,6 +210,120 @@ func gitlabTeamCatalogTestClient(t *testing.T, baseURL string) *providerfoundati
 		t.Fatalf("new http client: %v", err)
 	}
 	return client
+}
+
+// TestGitLabTeamCatalogCollectCountsFailedAndRetriedAttempts verifies that
+// GitLabTeamCatalogEvidence.Requests has a single source -- the counting
+// Doer at the HTTP boundary -- across two distinct paths in one
+// CollectTeamCatalog call: the root group fetch fails its first wire
+// attempt and succeeds on retry, and the root group's members fetch fails
+// every attempt through to the retry policy's exhaustion (a best-effort
+// failure under Strict=false, which skips just that group's memberships
+// rather than aborting the whole walk). A double count or a dropped count
+// makes the exact assertion below go red.
+func TestGitLabTeamCatalogCollectCountsFailedAndRetriedAttempts(t *testing.T) {
+	rootAttempts := 0
+	membersAttempts := 0
+	doer := jiraWorkItemsDoerFunc(func(request *http.Request) (*http.Response, error) {
+		header := http.Header{"Content-Type": {"application/json"}}
+		switch request.URL.Path {
+		case "/api/v4/groups/org":
+			rootAttempts++
+			if rootAttempts == 1 {
+				return nil, errors.New("simulated transient transport failure")
+			}
+			return githubTestsHTTPResponse(request, header, `{"id":1,"full_path":"org","name":"Org"}`), nil
+		case "/api/v4/groups/org/subgroups":
+			return githubTestsHTTPResponse(request, header, `[]`), nil
+		case "/api/v4/groups/org/projects":
+			return githubTestsHTTPResponse(request, header, `[]`), nil
+		case "/api/v4/groups/org/members":
+			membersAttempts++
+			return nil, errors.New("simulated transient transport failure")
+		default:
+			t.Fatalf("unexpected request path %q", request.URL.Path)
+			return nil, nil
+		}
+	})
+	client, err := providerfoundation.NewHTTPClient(
+		"gitlab", "https://gitlab.example.com", doer,
+		func(*http.Request) error { return nil },
+		providerfoundation.RetryPolicy{
+			MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
+		},
+		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := TeamCatalogReference{OrgID: "org-1", SyncRunID: "run-1", Strict: false}
+	selections := TeamCatalogSelections{Teams: true, Members: true}
+	credential := providerfoundation.Credential{Provider: "gitlab", Config: map[string]string{"group_path": "org"}}
+	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+
+	batch, err := (GitLabTeamCatalogRouteHandler{}).CollectTeamCatalog(context.Background(), ref, credential, client, selections, now)
+	if err != nil {
+		t.Fatalf("collect should soft-fail, not error, under non-strict: %v", err)
+	}
+	if rootAttempts != 2 {
+		t.Fatalf("root attempts=%d want 2 (one failed, one retried)", rootAttempts)
+	}
+	if membersAttempts != 2 {
+		t.Fatalf("members attempts=%d want 2 (both exhausted by the retry policy)", membersAttempts)
+	}
+	if batch.Evidence.SkippedTeamMemberships != 1 {
+		t.Fatalf("evidence=%+v want SkippedTeamMemberships=1", batch.Evidence)
+	}
+	// 2 (root, retried) + 1 (subgroups) + 1 (projects) + 2 (members, exhausted) = 6.
+	if batch.Evidence.Requests != 6 {
+		t.Fatalf("evidence=%+v want Requests=6 (every physical attempt, from one source)", batch.Evidence)
+	}
+}
+
+// TestGitLabTeamCatalogCollectNonStrictWalkFailureStampsRequestsOnTheSkipBatch
+// proves that gitlabTeamCatalogWalkFailure must not
+// discard the counting Doer's running total along with the rest of the
+// walk's state -- the physical requests already spent before a non-strict
+// abort are real wire cost regardless of the abort. The root group fetch
+// fails every attempt through to the retry policy's exhaustion.
+func TestGitLabTeamCatalogCollectNonStrictWalkFailureStampsRequestsOnTheSkipBatch(t *testing.T) {
+	rootAttempts := 0
+	doer := jiraWorkItemsDoerFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Path != "/api/v4/groups/org" {
+			t.Fatalf("unexpected request path %q", request.URL.Path)
+		}
+		rootAttempts++
+		return nil, errors.New("simulated transient transport failure")
+	})
+	client, err := providerfoundation.NewHTTPClient(
+		"gitlab", "https://gitlab.example.com", doer,
+		func(*http.Request) error { return nil },
+		providerfoundation.RetryPolicy{
+			MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
+		},
+		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := TeamCatalogReference{OrgID: "org-1", SyncRunID: "run-1", Strict: false}
+	selections := TeamCatalogSelections{Teams: true}
+	credential := providerfoundation.Credential{Provider: "gitlab", Config: map[string]string{"group_path": "org"}}
+	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+
+	batch, err := (GitLabTeamCatalogRouteHandler{}).CollectTeamCatalog(context.Background(), ref, credential, client, selections, now)
+	if err != nil {
+		t.Fatalf("non-strict must not error on a walk failure: %v", err)
+	}
+	if !batch.Result.WalkSkipped || batch.Result.WalkSkipReason != "root_group_fetch_failed" {
+		t.Fatalf("Result=%+v, want WalkSkipped=true reason=root_group_fetch_failed", batch.Result)
+	}
+	if rootAttempts != 2 {
+		t.Fatalf("root attempts=%d want 2 (both exhausted by the retry policy)", rootAttempts)
+	}
+	if batch.Evidence.Requests != 2 {
+		t.Fatalf("evidence=%+v want Requests=2 (the skip batch must carry the real wire cost, not discard it)", batch.Evidence)
+	}
 }
 
 func TestGitLabTeamCatalogCollectAllSelections(t *testing.T) {

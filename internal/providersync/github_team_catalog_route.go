@@ -25,6 +25,22 @@ const (
 	githubTeamCatalogMaxPages       = 10_000
 )
 
+// githubTeamCatalogCountingDoer observes actual wire attempts, including
+// transport failures and retries the wrapped HTTPClient makes internally --
+// unlike a decoded-page or hardcoded-per-call tally, it increments once per
+// Doer.Do call regardless of whether that call ever produced a usable
+// response. It is the single source of truth for one Collect call's
+// GitHubTeamCatalogEvidence.Requests.
+type githubTeamCatalogCountingDoer struct {
+	delegate providerfoundation.HTTPDoer
+	attempts *int
+}
+
+func (doer githubTeamCatalogCountingDoer) Do(request *http.Request) (*http.Response, error) {
+	*doer.attempts++
+	return doer.delegate.Do(request)
+}
+
 // GitHubTeamCatalogEvidence is the executed-proof surface for one collection
 // pass: request/page counts and whether each surface (teams, repos-per-team,
 // members-per-team) completed without hitting a pagination cap.
@@ -114,8 +130,7 @@ func (collector GitHubTeamCatalogRouteHandler) Collect(
 	ctx context.Context,
 	orgID string,
 	wantTeams, wantMembers bool,
-) (githubTeamCatalogRows, GitHubTeamCatalogEvidence, error) {
-	evidence := GitHubTeamCatalogEvidence{}
+) (rows githubTeamCatalogRows, evidence GitHubTeamCatalogEvidence, err error) {
 	if ctx == nil || collector.Client == nil || collector.Client.Provider != "github" ||
 		collector.Client.BaseURL == nil || strings.TrimSpace(orgID) == "" ||
 		strings.TrimSpace(collector.OrgName) == "" || (!wantTeams && !wantMembers) {
@@ -125,6 +140,11 @@ func (collector GitHubTeamCatalogRouteHandler) Collect(
 	if err != nil {
 		return githubTeamCatalogRows{}, evidence, err
 	}
+	requests := 0
+	counted := *collector.Client
+	counted.Doer = githubTeamCatalogCountingDoer{delegate: collector.Client.Doer, attempts: &requests}
+	collector.Client = &counted
+	defer func() { evidence.Requests = requests }()
 	normalizedAt := collector.now().Truncate(time.Microsecond)
 	org := strings.TrimSpace(collector.OrgName)
 	// Loaded once per Collect call: every member this run
@@ -137,7 +157,6 @@ func (collector GitHubTeamCatalogRouteHandler) Collect(
 		Path: "/orgs/" + url.PathEscape(org) + "/teams", Query: perPageQuery(perPage),
 		MaxPages: maxPages,
 	})
-	evidence.Requests += teamPages.Pages
 	evidence.Pages += teamPages.Pages
 	if err != nil {
 		return githubTeamCatalogRows{}, evidence, err
@@ -147,7 +166,7 @@ func (collector GitHubTeamCatalogRouteHandler) Collect(
 	}
 	evidence.TeamsObserved = len(teamPages.Items)
 
-	rows := githubTeamCatalogRows{Teams: make([]githubTeamRow, 0, len(teamPages.Items))}
+	rows = githubTeamCatalogRows{Teams: make([]githubTeamRow, 0, len(teamPages.Items))}
 	emailCache := make(map[string]*string)
 
 	for _, raw := range teamPages.Items {
@@ -166,7 +185,6 @@ func (collector GitHubTeamCatalogRouteHandler) Collect(
 				Path:  "/orgs/" + url.PathEscape(org) + "/teams/" + url.PathEscape(slug) + "/repos",
 				Query: perPageQuery(perPage), MaxPages: maxPages,
 			})
-			evidence.Requests += repoPages.Pages
 			evidence.Pages += repoPages.Pages
 			if err != nil {
 				return githubTeamCatalogRows{}, evidence, err
@@ -217,10 +235,9 @@ func (collector GitHubTeamCatalogRouteHandler) Collect(
 			// default) skips only this team's memberships and keeps going;
 			// Strict=true (reference discovery) re-raises, matching Python
 			// exactly.
-			memberships, requests, ok, memberErr := collector.collectTeamMemberships(
+			memberships, ok, memberErr := collector.collectTeamMemberships(
 				ctx, orgID, org, slug, perPage, maxPages, resolver, normalizedAt, emailCache,
 			)
-			evidence.Requests += requests
 			if ok {
 				rows.Memberships = append(rows.Memberships, memberships...)
 				evidence.MembersObserved += len(memberships)
@@ -264,45 +281,42 @@ func (collector GitHubTeamCatalogRouteHandler) collectTeamMemberships(
 	resolver *identityalias.Resolver,
 	normalizedAt time.Time,
 	emailCache map[string]*string,
-) ([]githubMembershipRow, int, bool, error) {
-	requests := 0
+) ([]githubMembershipRow, bool, error) {
 	pages, err := providerfoundation.CollectGitHubLinkPages(ctx, collector.Client, providerfoundation.GitHubPageOptions{
 		Path:  "/orgs/" + url.PathEscape(org) + "/teams/" + url.PathEscape(slug) + "/members",
 		Query: perPageQuery(perPage), MaxPages: maxPages,
 	})
-	requests += pages.Pages
 	if err != nil {
-		return nil, requests, false, err
+		return nil, false, err
 	}
 	if pages.PageBudgetExhausted {
-		return nil, requests, false, ErrPaginationCapExceeded
+		return nil, false, ErrPaginationCapExceeded
 	}
 	memberships := make([]githubMembershipRow, 0, len(pages.Items))
 	for _, memberRaw := range pages.Items {
 		var memberPayload githubTeamMemberPayload
 		if err := json.Unmarshal(memberRaw, &memberPayload); err != nil {
-			return nil, requests, false, providerfoundation.ErrNormalizationInvalid
+			return nil, false, providerfoundation.ErrNormalizationInvalid
 		}
 		login := strings.TrimSpace(memberPayload.Login)
 		if login == "" {
 			continue
 		}
 		email := ""
-		resolved, emailRequests, err := collector.resolveEmail(ctx, emailCache, login)
-		requests += emailRequests
+		resolved, err := collector.resolveEmail(ctx, emailCache, login)
 		if err != nil {
-			return nil, requests, false, err
+			return nil, false, err
 		}
 		if resolved != nil {
 			email = *resolved
 		}
 		membership, err := normalizeGitHubMembership(orgID, slug, login, email, resolver, normalizedAt)
 		if err != nil {
-			return nil, requests, false, err
+			return nil, false, err
 		}
 		memberships = append(memberships, membership)
 	}
-	return memberships, requests, true, nil
+	return memberships, true, nil
 }
 
 // resolveEmail fetches GET /users/{login} once per login per collection
@@ -311,33 +325,33 @@ func (collector GitHubTeamCatalogRouteHandler) collectTeamMemberships(
 // the same account today.
 func (collector GitHubTeamCatalogRouteHandler) resolveEmail(
 	ctx context.Context, cache map[string]*string, login string,
-) (*string, int, error) {
+) (*string, error) {
 	if !collector.ResolveEmail {
-		return nil, 0, nil
+		return nil, nil
 	}
 	if cached, ok := cache[login]; ok {
-		return cached, 0, nil
+		return cached, nil
 	}
 	// A single user resource, not a list -- CollectGitHubLinkPages expects a
 	// bare-array or DataKey-wrapped page and cannot decode this shape, so the
 	// request goes straight through the client.
 	response, err := collector.Client.Do(ctx, http.MethodGet, "/users/"+url.PathEscape(login), nil)
 	if err != nil {
-		return nil, 1, err
+		return nil, err
 	}
 	defer response.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(response.Body, maxGitHubUserResponseBytes+1))
 	if err != nil || len(body) > maxGitHubUserResponseBytes {
-		return nil, 1, providerfoundation.ErrPaginationInvalid
+		return nil, providerfoundation.ErrPaginationInvalid
 	}
 	var payload struct {
 		Email *string `json:"email"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil {
-		return nil, 1, providerfoundation.ErrNormalizationInvalid
+		return nil, providerfoundation.ErrNormalizationInvalid
 	}
 	cache[login] = payload.Email
-	return payload.Email, 1, nil
+	return payload.Email, nil
 }
 
 func perPageQuery(perPage int) url.Values {

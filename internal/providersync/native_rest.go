@@ -40,6 +40,20 @@ type DatasetHandler interface {
 	Fetch(context.Context, Claim, *providerfoundation.HTTPClient) (FetchResult, error)
 }
 
+// nativeRESTCountingDoer observes actual wire attempts, including transport
+// failures and retries the wrapped HTTPClient makes internally -- unlike a
+// decoded-page tally, it increments once per Doer.Do call regardless of
+// whether that call ever produces a usable response.
+type nativeRESTCountingDoer struct {
+	delegate providerfoundation.HTTPDoer
+	attempts *int
+}
+
+func (doer nativeRESTCountingDoer) Do(request *http.Request) (*http.Response, error) {
+	*doer.attempts++
+	return doer.delegate.Do(request)
+}
+
 // NativeRESTHandler owns the GitHub/GitLab reference and work-item REST
 // surfaces. Other datasets remain on their named Python compatibility
 // adapters until their semantic sinks have independent parity evidence.
@@ -88,6 +102,9 @@ func (handler NativeRESTHandler) fetchGitHub(
 	claim Claim,
 	client *providerfoundation.HTTPClient,
 ) (FetchResult, error) {
+	requests := 0
+	counted := *client
+	counted.Doer = nativeRESTCountingDoer{delegate: client.Doer, attempts: &requests}
 	owner, repository, err := splitGitHubRepository(claim.SourceExternalID)
 	if err != nil {
 		return FetchResult{}, err
@@ -96,34 +113,35 @@ func (handler NativeRESTHandler) fetchGitHub(
 	switch claim.Dataset {
 	case "repo-metadata":
 		var payload repositoryPayload
-		if err := fetchObject(ctx, client, root, &payload); err != nil {
+		if err := fetchObject(ctx, &counted, root, &payload); err != nil {
 			return FetchResult{}, err
 		}
 		envelope, err := handler.normalizeRepository(claim, "github:repo:"+claim.SourceExternalID, payload)
-		return singleFetchResult(claim, envelope, err)
+		return singleFetchResult(claim, envelope, err, requests)
 	case "work-items":
-		items, evidence, err := collectGitHubWorkItems(ctx, claim, client, root)
+		items, evidence, err := collectGitHubWorkItems(ctx, claim, &counted, root)
 		if err != nil {
 			return FetchResult{}, err
 		}
+		evidence.Requests = requests
 		envelopes, err := handler.normalizeGitHubWorkItems(claim, items)
 		return resultWithEvidence(claim, envelopes, evidence, err)
 	case "work-item-labels":
-		page, err := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
+		page, err := providerfoundation.CollectGitHubLinkPages(ctx, &counted, providerfoundation.GitHubPageOptions{
 			Path: root + "/labels", Query: url.Values{"per_page": {"100"}},
 			MaxPages: nativeMaxPages,
 		})
 		envelopes, normalizeErr := handler.normalizeNamedRecords(claim, "work_item_label", "label", page.Items)
-		return pageFetchResult(claim, envelopes, page, err, normalizeErr)
+		return pageFetchResult(claim, envelopes, page, err, normalizeErr, requests)
 	case "work-item-projects":
-		page, err := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
+		page, err := providerfoundation.CollectGitHubLinkPages(ctx, &counted, providerfoundation.GitHubPageOptions{
 			Path: root + "/milestones", Query: url.Values{"state": {"all"}, "per_page": {"100"}},
 			MaxPages: nativeMaxPages,
 		})
 		envelopes, normalizeErr := handler.normalizeProjects(claim, page.Items)
-		return pageFetchResult(claim, envelopes, page, err, normalizeErr)
+		return pageFetchResult(claim, envelopes, page, err, normalizeErr, requests)
 	case "work-item-history", "work-item-comments":
-		return handler.fetchGitHubChildren(ctx, claim, client, root)
+		return handler.fetchGitHubChildren(ctx, claim, &counted, root, &requests)
 	default:
 		return FetchResult{}, ErrCompatibilityRequired
 	}
@@ -134,6 +152,9 @@ func (handler NativeRESTHandler) fetchGitLab(
 	claim Claim,
 	client *providerfoundation.HTTPClient,
 ) (FetchResult, error) {
+	requests := 0
+	counted := *client
+	counted.Doer = nativeRESTCountingDoer{delegate: client.Doer, attempts: &requests}
 	projectID, err := gitLabProjectID(claim.SourceExternalID)
 	if err != nil {
 		return FetchResult{}, err
@@ -142,34 +163,35 @@ func (handler NativeRESTHandler) fetchGitLab(
 	switch claim.Dataset {
 	case "repo-metadata":
 		var payload repositoryPayload
-		if err := fetchObject(ctx, client, root, &payload); err != nil {
+		if err := fetchObject(ctx, &counted, root, &payload); err != nil {
 			return FetchResult{}, err
 		}
 		sourceID := "gitlab:project:" + projectID
 		envelope, err := handler.normalizeRepository(claim, sourceID, payload)
-		return singleFetchResult(claim, envelope, err)
+		return singleFetchResult(claim, envelope, err, requests)
 	case "work-items":
-		items, evidence, err := collectGitLabWorkItems(ctx, claim, client, root)
+		items, evidence, err := collectGitLabWorkItems(ctx, claim, &counted, root)
 		if err != nil {
 			return FetchResult{}, err
 		}
+		evidence.Requests = requests
 		envelopes, err := handler.normalizeGitLabWorkItems(claim, items)
 		return resultWithEvidence(claim, envelopes, evidence, err)
 	case "work-item-labels":
-		page, err := providerfoundation.CollectGitLabPageParamPages(ctx, client, providerfoundation.GitLabPageOptions{
+		page, err := providerfoundation.CollectGitLabPageParamPages(ctx, &counted, providerfoundation.GitLabPageOptions{
 			Path: root + "/labels", PerPage: nativePerPage, MaxPages: nativeMaxPages,
 		})
 		envelopes, normalizeErr := handler.normalizeNamedRecords(claim, "work_item_label", "label", page.Items)
-		return pageFetchResult(claim, envelopes, page, err, normalizeErr)
+		return pageFetchResult(claim, envelopes, page, err, normalizeErr, requests)
 	case "work-item-projects":
-		page, err := providerfoundation.CollectGitLabPageParamPages(ctx, client, providerfoundation.GitLabPageOptions{
+		page, err := providerfoundation.CollectGitLabPageParamPages(ctx, &counted, providerfoundation.GitLabPageOptions{
 			Path: root + "/milestones", Query: url.Values{"state": {"all"}},
 			PerPage: nativePerPage, MaxPages: nativeMaxPages,
 		})
 		envelopes, normalizeErr := handler.normalizeProjects(claim, page.Items)
-		return pageFetchResult(claim, envelopes, page, err, normalizeErr)
+		return pageFetchResult(claim, envelopes, page, err, normalizeErr, requests)
 	case "work-item-history", "work-item-comments":
-		return handler.fetchGitLabChildren(ctx, claim, client, root)
+		return handler.fetchGitLabChildren(ctx, claim, &counted, root, &requests)
 	default:
 		return FetchResult{}, ErrCompatibilityRequired
 	}
@@ -248,7 +270,7 @@ func collectGitHubIssues(
 	page, err := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
 		Path: root + "/issues", Query: query, MaxPages: nativeMaxPages,
 	})
-	evidence := FetchEvidence{Provider: claim.Provider, Dataset: claim.Dataset, Requests: page.Pages, Pages: page.Pages, CapReached: page.PageBudgetExhausted}
+	evidence := FetchEvidence{Provider: claim.Provider, Dataset: claim.Dataset, Pages: page.Pages, CapReached: page.PageBudgetExhausted}
 	if err != nil {
 		return nil, evidence, err
 	}
@@ -288,7 +310,6 @@ func collectGitHubWorkItems(
 	page, err := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
 		Path: root + "/pulls", Query: query, MaxPages: nativeMaxPages,
 	})
-	evidence.Requests += page.Pages
 	evidence.Pages += page.Pages
 	evidence.CapReached = evidence.CapReached || page.PageBudgetExhausted
 	if err != nil {
@@ -317,7 +338,6 @@ func collectGitLabWorkItems(
 		page, err := providerfoundation.CollectGitLabPageParamPages(ctx, client, providerfoundation.GitLabPageOptions{
 			Path: path, Query: query, PerPage: nativePerPage, MaxPages: nativeMaxPages,
 		})
-		evidence.Requests += page.Pages
 		evidence.Pages += page.Pages
 		evidence.CapReached = evidence.CapReached || page.PageBudgetExhausted
 		if err != nil {
@@ -502,6 +522,7 @@ func (handler NativeRESTHandler) fetchGitHubChildren(
 	claim Claim,
 	client *providerfoundation.HTTPClient,
 	root string,
+	requests *int,
 ) (FetchResult, error) {
 	parents, evidence, err := collectGitHubWorkItems(ctx, claim, client, root)
 	if err != nil {
@@ -521,7 +542,6 @@ func (handler NativeRESTHandler) fetchGitHubChildren(
 			Path:  root + "/issues/" + strconv.Itoa(item.Number) + suffix,
 			Query: url.Values{"per_page": {"100"}}, MaxPages: maxPages,
 		})
-		evidence.Requests += page.Pages
 		evidence.Pages += page.Pages
 		evidence.CapReached = evidence.CapReached || page.PageBudgetExhausted
 		if pageErr != nil {
@@ -533,6 +553,7 @@ func (handler NativeRESTHandler) fetchGitHubChildren(
 		}
 		envelopes = append(envelopes, child...)
 	}
+	evidence.Requests = *requests
 	return resultWithEvidence(claim, envelopes, evidence, nil)
 }
 
@@ -541,6 +562,7 @@ func (handler NativeRESTHandler) fetchGitLabChildren(
 	claim Claim,
 	client *providerfoundation.HTTPClient,
 	root string,
+	requests *int,
 ) (FetchResult, error) {
 	parents, evidence, err := collectGitLabWorkItems(ctx, claim, client, root)
 	if err != nil {
@@ -569,7 +591,6 @@ func (handler NativeRESTHandler) fetchGitLabChildren(
 			page, pageErr := providerfoundation.CollectGitLabPageParamPages(ctx, client, providerfoundation.GitLabPageOptions{
 				Path: path, PerPage: nativePerPage, MaxPages: maxPages,
 			})
-			evidence.Requests += page.Pages
 			evidence.Pages += page.Pages
 			evidence.CapReached = evidence.CapReached || page.PageBudgetExhausted
 			if pageErr != nil {
@@ -582,6 +603,7 @@ func (handler NativeRESTHandler) fetchGitLabChildren(
 			envelopes = append(envelopes, child...)
 		}
 	}
+	evidence.Requests = *requests
 	return resultWithEvidence(claim, envelopes, evidence, nil)
 }
 
@@ -797,9 +819,10 @@ func singleFetchResult(
 	claim Claim,
 	envelope providerfoundation.NormalizedEnvelope,
 	err error,
+	requests int,
 ) (FetchResult, error) {
 	return resultWithEvidence(claim, []providerfoundation.NormalizedEnvelope{envelope}, FetchEvidence{
-		Provider: claim.Provider, Dataset: claim.Dataset, Requests: 1, Pages: 1,
+		Provider: claim.Provider, Dataset: claim.Dataset, Requests: requests, Pages: 1,
 	}, err)
 }
 
@@ -809,12 +832,13 @@ func pageFetchResult(
 	page providerfoundation.PageCollection,
 	requestErr error,
 	normalizeErr error,
+	requests int,
 ) (FetchResult, error) {
 	if requestErr != nil {
 		return FetchResult{}, requestErr
 	}
 	return resultWithEvidence(claim, envelopes, FetchEvidence{
-		Provider: claim.Provider, Dataset: claim.Dataset, Requests: page.Pages,
+		Provider: claim.Provider, Dataset: claim.Dataset, Requests: requests,
 		Pages: page.Pages, CapReached: page.PageBudgetExhausted,
 	}, normalizeErr)
 }

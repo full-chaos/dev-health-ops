@@ -7,12 +7,28 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"slices"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
+
+// gitHubBlameCountingDoer observes actual wire attempts, including
+// transport failures and retries the wrapped HTTPClient makes internally --
+// unlike a logical-fetch-call tally, it increments once per Doer.Do call
+// regardless of whether that call ever produced a usable response. It is
+// the single source of truth for this Collect run's FetchEvidence.Requests.
+type gitHubBlameCountingDoer struct {
+	delegate providerfoundation.HTTPDoer
+	attempts *int
+}
+
+func (doer gitHubBlameCountingDoer) Do(request *http.Request) (*http.Response, error) {
+	*doer.attempts++
+	return doer.delegate.Do(request)
+}
 
 const gitHubBlameMaxFiles = 500
 
@@ -229,6 +245,10 @@ func collectGitHubBlame(
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
+	requests := 0
+	counted := *client
+	counted.Doer = gitHubBlameCountingDoer{delegate: client.Doer, attempts: &requests}
+	client = &counted
 	root := providerRelativePath(client, "repos", owner, repository)
 	var repoPayload gitHubRepositoryPayload
 	if err := fetchObject(ctx, client, root, &repoPayload); err != nil {
@@ -242,7 +262,7 @@ func collectGitHubBlame(
 	if branch == "" {
 		branch = "main"
 	}
-	treeRef, requests, err := gitHubFilesTreeRef(ctx, client, root, branch, claim.BeforeAt)
+	treeRef, err := gitHubFilesTreeRef(ctx, client, root, branch, claim.BeforeAt)
 	if err != nil {
 		return CompleteRouteBatch{}, fmt.Errorf("%w: %w", ErrGitHubBlameTraversalFailed, err)
 	}
@@ -253,7 +273,6 @@ func collectGitHubBlame(
 	if err := fetchObject(ctx, client, root+"/git/trees/"+url.PathEscape(treeRef)+"?recursive=true", &tree); err != nil {
 		return CompleteRouteBatch{}, fmt.Errorf("%w: %w", ErrGitHubBlameTraversalFailed, err)
 	}
-	requests++
 	paths := make([]string, 0, len(tree.Tree))
 	for _, entry := range tree.Tree {
 		if entry.Type == "blob" && entry.Path != "" {
@@ -300,7 +319,6 @@ func collectGitHubBlame(
 			continue
 		}
 		ranges, err := fetchGitHubBlame(ctx, client, owner, repository, treeRef, filePath)
-		requests++
 		if err != nil {
 			if isRateLimited(err) {
 				return CompleteRouteBatch{}, fmt.Errorf("%w for %s: %w", ErrGitHubBlameTraversalFailed, filePath, err)

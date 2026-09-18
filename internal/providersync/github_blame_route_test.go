@@ -289,6 +289,90 @@ func TestGitHubBlameFoundationFailsClosedBeforeFetchingPartialInventory(t *testi
 	}
 }
 
+// TestGitHubBlameRouteCountsFailedAndRetriedAttempts verifies that
+// FetchEvidence.Requests has a single source -- the counting Doer at the
+// HTTP boundary -- across two distinct paths in one Collect run: one file's
+// blame fetch fails its first wire attempt and succeeds on retry, and a
+// second file's blame fetch fails every attempt through to the retry
+// policy's exhaustion (a retryable per-file failure, which continues to the
+// next file rather than aborting the run). A double count or a dropped
+// count makes the exact assertion below go red.
+func TestGitHubBlameRouteCountsFailedAndRetriedAttempts(t *testing.T) {
+	fileAAttempts := 0
+	fileBAttempts := 0
+	doer := jiraWorkItemsDoerFunc(func(request *http.Request) (*http.Response, error) {
+		switch request.URL.Path {
+		case "/repos/acme/api":
+			body := `{"full_name":"acme/api","default_branch":"main"}`
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+		case "/repos/acme/api/commits":
+			body := `[{"sha":"tree-sha"}]`
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+		case "/repos/acme/api/git/trees/tree-sha":
+			body := `{"tree":[{"path":"src/a.go","type":"blob","size":20},{"path":"src/b.go","type":"blob","size":20}]}`
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+		case "/graphql":
+			var requestBody struct {
+				Variables map[string]string `json:"variables"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&requestBody); err != nil {
+				t.Fatal(err)
+			}
+			switch requestBody.Variables["path"] {
+			case "src/a.go":
+				fileAAttempts++
+				if fileAAttempts == 1 {
+					return nil, errors.New("simulated transient transport failure")
+				}
+				body := `{"data":{"repository":{"object":{"blame":{"ranges":[{"startingLine":1,"endingLine":1,"commit":{"oid":"abc","author":{"name":"Ada","email":"ada@example.com"}}}]}}}}}`
+				return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+			case "src/b.go":
+				fileBAttempts++
+				return nil, errors.New("simulated transient transport failure")
+			default:
+				t.Fatalf("unexpected blame path %q", requestBody.Variables["path"])
+				return nil, nil
+			}
+		default:
+			t.Fatalf("unexpected request %s", request.URL.String())
+			return nil, nil
+		}
+	})
+	client, err := providerfoundation.NewHTTPClient(
+		"github", "https://api.github.com", doer,
+		func(*http.Request) error { return nil },
+		providerfoundation.RetryPolicy{
+			MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
+		},
+		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch, err := (GitHubBlameRouteHandler{
+		Coverage: staticGitHubBlameCoverage{}, MaxFiles: 2,
+	}).Collect(
+		context.Background(), nativeTestClaim("github", "blame"), providerfoundation.Credential{}, client,
+		time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fileAAttempts != 2 {
+		t.Fatalf("file A attempts=%d want 2 (one failed, one retried)", fileAAttempts)
+	}
+	if fileBAttempts != 2 {
+		t.Fatalf("file B attempts=%d want 2 (both exhausted by the retry policy)", fileBAttempts)
+	}
+	if batch.Result["retryable_path_failures"] != 1 {
+		t.Fatalf("result=%v want one retryable path failure (file B)", batch.Result)
+	}
+	// 1 repo + 1 commits + 1 tree + 2 (file A) + 2 (file B) = 7.
+	if batch.Evidence.Requests != 7 {
+		t.Fatalf("evidence=%+v want Requests=7 (every physical attempt, from one source)", batch.Evidence)
+	}
+}
+
 func TestGitHubBlameRouteContinuesAfterPerFileGraphQLError(t *testing.T) {
 	claim := nativeTestClaim("github", "blame")
 	blamePaths := []string{}

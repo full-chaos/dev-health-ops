@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -113,8 +114,7 @@ func TestJiraProjectMembershipDropsAndCountsOnlyWhenTheIDItselfIsBlank(t *testin
 // how the function is actually called from Collect.
 func resolveJiraProjectCatalogForTest(id, changelogName string) (jiraProjectCatalogEntry, bool) {
 	cache := make(map[string]jiraProjectCatalogEntry)
-	requests := 0
-	return resolveJiraProjectCatalog(nil, nil, cache, &requests, id, changelogName, "", "")
+	return resolveJiraProjectCatalog(nil, nil, cache, id, changelogName, "", "")
 }
 
 // When the id being resolved is the issue's OWN current project (already
@@ -141,9 +141,8 @@ func TestResolveJiraProjectCatalogPreservesTheKnownKeyOnALookupFailure(t *testin
 		t.Fatal(err)
 	}
 	cache := make(map[string]jiraProjectCatalogEntry)
-	requests := 0
 	entry, ok := resolveJiraProjectCatalog(
-		context.Background(), client, cache, &requests,
+		context.Background(), client, cache,
 		"10001", "Operations (changelog name)", "10001", "OPS",
 	)
 	if !ok {
@@ -178,9 +177,8 @@ func TestResolveJiraProjectCatalogLeavesTheKeyBlankWhenNoCurrentProjectIsKnown(t
 		t.Fatal(err)
 	}
 	cache := make(map[string]jiraProjectCatalogEntry)
-	requests := 0
 	entry, ok := resolveJiraProjectCatalog(
-		context.Background(), client, cache, &requests,
+		context.Background(), client, cache,
 		"10114", "Operations (changelog name)", "10001", "OPS",
 	)
 	if !ok {
@@ -216,12 +214,11 @@ func TestResolveJiraProjectCatalogDoesNotFreezeAnIncompleteCacheEntry(t *testing
 		t.Fatal(err)
 	}
 	cache := make(map[string]jiraProjectCatalogEntry)
-	requests := 0
 
 	// First issue: id "10001" is only its FROM side, not its current
 	// project -- no fallback applies, and the live lookup fails.
 	first, ok := resolveJiraProjectCatalog(
-		context.Background(), client, cache, &requests,
+		context.Background(), client, cache,
 		"10001", "Operations (changelog name)", "10999", "OTHER",
 	)
 	if !ok || first.Key != "" {
@@ -231,7 +228,7 @@ func TestResolveJiraProjectCatalogDoesNotFreezeAnIncompleteCacheEntry(t *testing
 	// Second issue: id "10001" IS its current project -- must still get the
 	// known-key fallback, not the first call's cached blank-key entry.
 	second, ok := resolveJiraProjectCatalog(
-		context.Background(), client, cache, &requests,
+		context.Background(), client, cache,
 		"10001", "Operations (changelog name)", "10001", "OPS",
 	)
 	if !ok {
@@ -263,8 +260,74 @@ func TestResolveJiraProjectCatalogResolvesAKnownIDWithNoNameAnywhere(t *testing.
 // this same id still upgrades the stored entry via the known-key fallback,
 // so caching failures never regresses the round-3 ordering fix (codex review
 // finding, CHAOS-4193).
-func TestResolveJiraProjectCatalogCachesAndUpgradesAFallbackEntry(t *testing.T) {
+// TestResolveJiraProjectCatalogCountsFailedAndRetriedAttempts verifies that
+// resolveJiraProjectCatalog's real wire cost is visible only through the
+// counting Doer at the HTTP boundary -- not any per-call increment inside
+// the function itself. One project id fails its first attempt and succeeds
+// on retry; a second, different project id fails every attempt through to
+// the retry policy's exhaustion (falling back to the changelog name, per
+// resolveJiraProjectCatalog's own documented contract). Both are still
+// resolved; only the wire cost differs.
+func TestResolveJiraProjectCatalogCountsFailedAndRetriedAttempts(t *testing.T) {
+	callsForA, callsForB := 0, 0
 	doer := jiraWorkItemsDoerFunc(func(request *http.Request) (*http.Response, error) {
+		switch {
+		case strings.HasSuffix(request.URL.Path, "/project/A"):
+			callsForA++
+			if callsForA == 1 {
+				return nil, errors.New("simulated transient transport failure")
+			}
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"key":"A","name":"Alpha"}`)), Request: request}, nil
+		case strings.HasSuffix(request.URL.Path, "/project/B"):
+			callsForB++
+			return &http.Response{StatusCode: http.StatusServiceUnavailable, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"errorMessages":["temporarily unavailable"]}`)), Request: request}, nil
+		default:
+			t.Fatalf("unexpected request %s", request.URL.String())
+			return nil, nil
+		}
+	})
+	client, err := providerfoundation.NewHTTPClient(
+		"jira", "https://acme.atlassian.net", doer,
+		func(request *http.Request) error { return nil },
+		providerfoundation.RetryPolicy{MaxAttempts: 2, InitialWait: time.Millisecond, MaxWait: time.Millisecond},
+		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requests := 0
+	counted := *client
+	counted.Doer = jiraWorkItemsCountingDoer{delegate: client.Doer, attempts: &requests}
+	countedClient := &counted
+
+	cache := make(map[string]jiraProjectCatalogEntry)
+	entryA, ok := resolveJiraProjectCatalog(
+		context.Background(), countedClient, cache, "A", "Alpha (changelog)", "", "",
+	)
+	if !ok || entryA.Key != "A" {
+		t.Fatalf("entryA=%+v ok=%v, want the live key resolved after one retry", entryA, ok)
+	}
+	entryB, ok := resolveJiraProjectCatalog(
+		context.Background(), countedClient, cache, "B", "Beta (changelog)", "", "",
+	)
+	if !ok || entryB.Name != "Beta (changelog)" {
+		t.Fatalf("entryB=%+v ok=%v, want the changelog fallback after every attempt fails", entryB, ok)
+	}
+	if callsForA != 2 {
+		t.Fatalf("project A attempts=%d want 2 (one failed, one retried)", callsForA)
+	}
+	if callsForB != 2 {
+		t.Fatalf("project B attempts=%d want 2 (both exhausted by the retry policy)", callsForB)
+	}
+	if requests != 4 {
+		t.Fatalf("requests=%d want 4 (every physical attempt, from one source)", requests)
+	}
+}
+
+func TestResolveJiraProjectCatalogCachesAndUpgradesAFallbackEntry(t *testing.T) {
+	calls := 0
+	doer := jiraWorkItemsDoerFunc(func(request *http.Request) (*http.Response, error) {
+		calls++
 		return &http.Response{
 			StatusCode: http.StatusInternalServerError,
 			Header:     http.Header{"Content-Type": []string{"application/json"}},
@@ -281,28 +344,27 @@ func TestResolveJiraProjectCatalogCachesAndUpgradesAFallbackEntry(t *testing.T) 
 		t.Fatal(err)
 	}
 	cache := make(map[string]jiraProjectCatalogEntry)
-	requests := 0
 
 	for i := 0; i < 3; i++ {
 		if _, ok := resolveJiraProjectCatalog(
-			context.Background(), client, cache, &requests,
+			context.Background(), client, cache,
 			"10001", "Operations (changelog name)", "10999", "OTHER",
 		); !ok {
 			t.Fatalf("iteration %d: want resolved", i)
 		}
 	}
-	if requests != 1 {
-		t.Fatalf("requests=%d, want exactly 1 -- the failing entry must be cached after its first lookup", requests)
+	if calls != 1 {
+		t.Fatalf("calls=%d, want exactly 1 -- the failing entry must be cached after its first lookup", calls)
 	}
 
 	upgraded, ok := resolveJiraProjectCatalog(
-		context.Background(), client, cache, &requests,
+		context.Background(), client, cache,
 		"10001", "Operations (changelog name)", "10001", "OPS",
 	)
 	if !ok || upgraded.Key != "OPS" {
 		t.Fatalf("upgraded=%+v ok=%v, want key OPS -- a cache hit must still upgrade via the known-key fallback", upgraded, ok)
 	}
-	if requests != 1 {
-		t.Fatalf("requests=%d, want still exactly 1 -- upgrading a cache hit must not issue a new live lookup", requests)
+	if calls != 1 {
+		t.Fatalf("calls=%d, want still exactly 1 -- upgrading a cache hit must not issue a new live lookup", calls)
 	}
 }

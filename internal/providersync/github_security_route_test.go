@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -68,6 +69,59 @@ func TestGitHubSecurityRouteEmitsEachPythonSource(t *testing.T) {
 	advisory := byID["advisory:GHSA-demo"]
 	if advisory.State == nil || *advisory.State != "published" {
 		t.Fatalf("advisory=%+v", advisory)
+	}
+}
+
+// gitHubSecurityRetryOnceDoer wraps gitHubSecurityDoer's fixtures but fails
+// the first physical attempt for exactly one path with a transport error,
+// forcing HTTPClient.Do's own retry loop to spend a second wire attempt for
+// that logical fetch.
+type gitHubSecurityRetryOnceDoer struct {
+	gitHubSecurityDoer
+	failPath   string
+	failedOnce bool
+}
+
+func (doer *gitHubSecurityRetryOnceDoer) Do(request *http.Request) (*http.Response, error) {
+	if request.URL.Path == doer.failPath && !doer.failedOnce {
+		doer.failedOnce = true
+		doer.requests = append(doer.requests, request.URL.Path)
+		return nil, errors.New("simulated transient transport failure")
+	}
+	return doer.gitHubSecurityDoer.Do(request)
+}
+
+// TestGitHubSecurityRouteCountsFailedAndRetriedAttempts verifies that a
+// best-effort source fetch that fails its first wire attempt
+// and succeeds on retry must count that extra attempt, not just the
+// decoded-page total.
+func TestGitHubSecurityRouteCountsFailedAndRetriedAttempts(t *testing.T) {
+	t.Parallel()
+	doer := &gitHubSecurityRetryOnceDoer{failPath: "/repos/acme/api/dependabot/alerts"}
+	claim := nativeTestClaim("github", "security")
+	client, err := providerfoundation.NewHTTPClient(
+		"github", "https://api.github.com", doer,
+		func(*http.Request) error { return nil },
+		providerfoundation.RetryPolicy{
+			MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
+		},
+		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch, err := (GitHubSecurityRouteHandler{}).Collect(
+		context.Background(), claim, providerfoundation.Credential{}, client,
+		time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(doer.requests) != 5 {
+		t.Fatalf("requests=%v want 5 (repo, failed dependabot attempt, retried dependabot attempt, code scanning, advisory)", doer.requests)
+	}
+	if batch.Evidence.Requests != 5 {
+		t.Fatalf("evidence=%+v want Requests=5 (every physical attempt)", batch.Evidence)
 	}
 }
 

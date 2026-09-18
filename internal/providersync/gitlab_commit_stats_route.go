@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"math"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -11,6 +12,21 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
+
+// gitLabCommitStatsCountingDoer observes actual wire attempts, including
+// transport failures and retries the wrapped HTTPClient makes internally --
+// unlike a decoded-page-plus-attempted-detail tally, it increments once per
+// Doer.Do call regardless of whether that call ever produced a usable
+// response.
+type gitLabCommitStatsCountingDoer struct {
+	delegate providerfoundation.HTTPDoer
+	attempts *int
+}
+
+func (doer gitLabCommitStatsCountingDoer) Do(request *http.Request) (*http.Response, error) {
+	*doer.attempts++
+	return doer.delegate.Do(request)
+}
 
 const (
 	defaultGitLabCommitStatsPerPage  = 100
@@ -50,9 +66,12 @@ func (handler GitLabCommitStatsRouteHandler) Collect(
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
-	root := providerRelativePath(client, "api", "v4", "projects", projectID)
+	requests := 0
+	counted := *client
+	counted.Doer = gitLabCommitStatsCountingDoer{delegate: client.Doer, attempts: &requests}
+	root := providerRelativePath(&counted, "api", "v4", "projects", projectID)
 	var project repositoryPayload
-	if err := fetchObject(ctx, client, root, &project); err != nil {
+	if err := fetchObject(ctx, &counted, root, &project); err != nil {
 		return CompleteRouteBatch{}, err
 	}
 	parsedProjectID, err := project.ID.Int64()
@@ -89,7 +108,7 @@ func (handler GitLabCommitStatsRouteHandler) Collect(
 	}
 	page, err := providerfoundation.CollectGitLabPageParamPages(
 		ctx,
-		client,
+		&counted,
 		providerfoundation.GitLabPageOptions{
 			Path: root + "/repository/commits", Query: query,
 			PerPage: perPage, MaxPages: maxPages,
@@ -134,12 +153,10 @@ func (handler GitLabCommitStatsRouteHandler) Collect(
 
 	normalizedAt = normalizedAt.UTC().Truncate(time.Millisecond)
 	rows := make([]commitStatsRow, 0, statsLimit)
-	detailRequests := 0
 	for _, commitHash := range commitHashes[:statsLimit] {
-		detailRequests++
 		var detail gitLabCommitStatsPayload
 		if err := fetchObject(
-			ctx, client, root+"/repository/commits/"+url.PathEscape(commitHash), &detail,
+			ctx, &counted, root+"/repository/commits/"+url.PathEscape(commitHash), &detail,
 		); err != nil {
 			// Preserve Python's accepted soft degradation only for ordinary
 			// per-commit detail failures. Authentication, rate limits, lease or
@@ -172,7 +189,7 @@ func (handler GitLabCommitStatsRouteHandler) Collect(
 		Watermark: claim.BeforeAt,
 		Evidence: FetchEvidence{
 			Provider: claim.Provider, Dataset: claim.Dataset,
-			Requests: page.Pages + 1 + detailRequests,
+			Requests: requests,
 			Pages:    page.Pages,
 			Records:  len(rows),
 		},

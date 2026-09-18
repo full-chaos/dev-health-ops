@@ -4,12 +4,28 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
+
+// gitHubCommitStatsCountingDoer observes actual wire attempts, including
+// transport failures and retries the wrapped HTTPClient makes internally --
+// unlike a decoded-page-plus-successful-detail tally, it increments once per
+// Doer.Do call regardless of whether that call ever produced a usable
+// response.
+type gitHubCommitStatsCountingDoer struct {
+	delegate providerfoundation.HTTPDoer
+	attempts *int
+}
+
+func (doer gitHubCommitStatsCountingDoer) Do(request *http.Request) (*http.Response, error) {
+	*doer.attempts++
+	return doer.delegate.Do(request)
+}
 
 const (
 	defaultGitHubCommitStatsMaxCommits = 300
@@ -80,9 +96,12 @@ func (handler GitHubCommitStatsRouteHandler) Collect(
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
-	root := providerRelativePath(client, "repos", owner, repository)
+	requests := 0
+	counted := *client
+	counted.Doer = gitHubCommitStatsCountingDoer{delegate: client.Doer, attempts: &requests}
+	root := providerRelativePath(&counted, "repos", owner, repository)
 	var repoPayload gitHubRepositoryPayload
-	if err := fetchObject(ctx, client, root, &repoPayload); err != nil {
+	if err := fetchObject(ctx, &counted, root, &repoPayload); err != nil {
 		return CompleteRouteBatch{}, err
 	}
 	repoID, err := repositoryIdentity(repoPayload.FullName)
@@ -108,7 +127,7 @@ func (handler GitHubCommitStatsRouteHandler) Collect(
 	}
 	page, err := providerfoundation.CollectGitHubLinkPages(
 		ctx,
-		client,
+		&counted,
 		providerfoundation.GitHubPageOptions{
 			Path: root + "/commits", Query: query, MaxPages: pages,
 		},
@@ -121,7 +140,7 @@ func (handler GitHubCommitStatsRouteHandler) Collect(
 		page.Items = page.Items[:maxCommits]
 	}
 	if claim.SinceAt != nil && (windowTruncated || len(page.Items) > defaultGitHubCommitStatsMaxCommits) {
-		return handler.completeBatch(claim, repoPayload.FullName, nil, page.Pages, page.Pages+1, true)
+		return handler.completeBatch(claim, repoPayload.FullName, nil, page.Pages, requests, true)
 	}
 
 	statsLimit := defaultGitHubCommitStatsSampleSize
@@ -135,7 +154,6 @@ func (handler GitHubCommitStatsRouteHandler) Collect(
 		statsLimit = defaultGitHubCommitStatsMaxCommits
 	}
 	rows := make([]commitStatsRow, 0)
-	detailRequests := 0
 	for _, raw := range page.Items[:min(statsLimit, len(page.Items))] {
 		var commit gitHubCommitListPayload
 		decoder := json.NewDecoder(strings.NewReader(string(raw)))
@@ -147,13 +165,12 @@ func (handler GitHubCommitStatsRouteHandler) Collect(
 			continue
 		}
 		var detail gitHubCommitDetailPayload
-		if err := fetchObject(ctx, client, root+"/commits/"+url.PathEscape(commit.SHA), &detail); err != nil {
+		if err := fetchObject(ctx, &counted, root+"/commits/"+url.PathEscape(commit.SHA), &detail); err != nil {
 			if isRateLimited(err) {
 				return CompleteRouteBatch{}, err
 			}
 			continue
 		}
-		detailRequests++
 		for _, file := range detail.Files {
 			if file.Filename == "" {
 				continue
@@ -165,7 +182,7 @@ func (handler GitHubCommitStatsRouteHandler) Collect(
 			})
 		}
 	}
-	return handler.completeBatch(claim, repoPayload.FullName, rows, page.Pages, page.Pages+1+detailRequests, page.PageBudgetExhausted)
+	return handler.completeBatch(claim, repoPayload.FullName, rows, page.Pages, requests, page.PageBudgetExhausted)
 }
 
 func (handler GitHubCommitStatsRouteHandler) completeBatch(

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -11,6 +12,20 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
+
+// gitHubPullRequestCountingDoer observes actual wire attempts, including
+// transport failures and retries the wrapped HTTPClient makes internally --
+// unlike a decoded-page tally, it increments once per Doer.Do call
+// regardless of whether that call ever produced a usable response.
+type gitHubPullRequestCountingDoer struct {
+	delegate providerfoundation.HTTPDoer
+	attempts *int
+}
+
+func (doer gitHubPullRequestCountingDoer) Do(request *http.Request) (*http.Response, error) {
+	*doer.attempts++
+	return doer.delegate.Do(request)
+}
 
 // pullRequestRow is the frozen `git_pull_requests` projection. Field order and
 // JSON names mirror the Python ClickHouse sink
@@ -135,7 +150,10 @@ func (handler GitHubPullRequestRouteHandler) Collect(
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
-	root := providerRelativePath(client, "repos", owner, repository)
+	requests := 0
+	counted := *client
+	counted.Doer = gitHubPullRequestCountingDoer{delegate: client.Doer, attempts: &requests}
+	root := providerRelativePath(&counted, "repos", owner, repository)
 
 	// repo_id is derived from the repository's API-reported full_name, not
 	// claim.SourceExternalID: Python's db_repo.id = get_repo_uuid_from_repo
@@ -162,7 +180,7 @@ func (handler GitHubPullRequestRouteHandler) Collect(
 	// branch for a mutation to hide behind. One fail-closed check, not two
 	// that must be kept in sync.
 	var repoPayload gitHubRepositoryPayload
-	if err := fetchObject(ctx, client, root, &repoPayload); err != nil {
+	if err := fetchObject(ctx, &counted, root, &repoPayload); err != nil {
 		return CompleteRouteBatch{}, err
 	}
 	repoID, err := repositoryIdentity(repoPayload.FullName)
@@ -188,7 +206,7 @@ func (handler GitHubPullRequestRouteHandler) Collect(
 	// PRs but only one page inside the window would cap (and now fail the
 	// unit) on every attempt, forever, even though Python syncs it fine.
 	page, err := providerfoundation.CollectGitHubLinkPages(
-		ctx, client, providerfoundation.GitHubPageOptions{
+		ctx, &counted, providerfoundation.GitHubPageOptions{
 			Path: root + "/pulls", Query: query, MaxPages: maxPages,
 			StopAt: func(raw json.RawMessage) bool {
 				return pullCrossedSinceBoundary(raw, claim)
@@ -215,15 +233,13 @@ func (handler GitHubPullRequestRouteHandler) Collect(
 	}
 
 	rows := make([]pullRequestRow, 0, len(listed))
-	detailRequests := 0
 	for _, number := range listed {
 		var detail gitHubPullDetailPayload
 		if err := fetchObject(
-			ctx, client, root+"/pulls/"+strconv.Itoa(number), &detail,
+			ctx, &counted, root+"/pulls/"+strconv.Itoa(number), &detail,
 		); err != nil {
 			return CompleteRouteBatch{}, err
 		}
-		detailRequests++
 		row, err := normalizeGitHubPullRequest(claim, repoID, detail, normalizedAt)
 		if err != nil {
 			return CompleteRouteBatch{}, err
@@ -247,7 +263,7 @@ func (handler GitHubPullRequestRouteHandler) Collect(
 		Watermark: watermark,
 		Evidence: FetchEvidence{
 			Provider: claim.Provider, Dataset: claim.Dataset,
-			Requests:   page.Pages + 1 + detailRequests,
+			Requests:   requests,
 			Pages:      page.Pages,
 			Records:    len(rows),
 			CapReached: page.PageBudgetExhausted,

@@ -3,12 +3,27 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
+
+// gitHubSecurityCountingDoer observes actual wire attempts, including
+// transport failures and retries the wrapped HTTPClient makes internally --
+// unlike a decoded-page tally, it increments once per Doer.Do call
+// regardless of whether that call ever produced a usable response.
+type gitHubSecurityCountingDoer struct {
+	delegate providerfoundation.HTTPDoer
+	attempts *int
+}
+
+func (doer gitHubSecurityCountingDoer) Do(request *http.Request) (*http.Response, error) {
+	*doer.attempts++
+	return doer.delegate.Do(request)
+}
 
 const defaultGitHubSecurityMaxAlerts = 1_000
 
@@ -63,9 +78,12 @@ func (handler GitHubSecurityRouteHandler) Collect(ctx context.Context, claim Cla
 		return CompleteRouteBatch{}, err
 	}
 	normalizedAt = normalizedAt.UTC().Truncate(time.Millisecond)
-	root := providerRelativePath(client, "repos", owner, repository)
+	requests := 0
+	counted := *client
+	counted.Doer = gitHubSecurityCountingDoer{delegate: client.Doer, attempts: &requests}
+	root := providerRelativePath(&counted, "repos", owner, repository)
 	var repo gitHubRepositoryPayload
-	if err := fetchObject(ctx, client, root, &repo); err != nil {
+	if err := fetchObject(ctx, &counted, root, &repo); err != nil {
 		return CompleteRouteBatch{}, err
 	}
 	repoID, err := repositoryIdentity(repo.FullName)
@@ -81,7 +99,7 @@ func (handler GitHubSecurityRouteHandler) Collect(ctx context.Context, claim Cla
 	}
 	pages := (maxAlerts + nativePerPage - 1) / nativePerPage
 	rows := make([]securityAlertRow, 0)
-	requests := 1
+	decodedPages := 0
 	for _, source := range []struct {
 		name, path string
 		query      url.Values
@@ -90,8 +108,8 @@ func (handler GitHubSecurityRouteHandler) Collect(ctx context.Context, claim Cla
 		{"code_scanning", root + "/code-scanning/alerts", url.Values{"state": {"open"}, "per_page": {"100"}}},
 		{"advisory", root + "/security-advisories", url.Values{"per_page": {"100"}}},
 	} {
-		items, fetched, ok := fetchGitHubSecurityPage(ctx, client, source.path, source.query, pages)
-		requests += fetched
+		items, fetched, ok := fetchGitHubSecurityPage(ctx, &counted, source.path, source.query, pages)
+		decodedPages += fetched
 		if !ok {
 			continue
 		}
@@ -110,7 +128,7 @@ func (handler GitHubSecurityRouteHandler) Collect(ctx context.Context, claim Cla
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
-	return CompleteRouteBatch{Effects: []EffectBatch{effect}, Result: map[string]any{"security_alerts_synced": len(rows), "repo": repo.FullName}, Watermark: claim.BeforeAt, Evidence: FetchEvidence{Provider: claim.Provider, Dataset: claim.Dataset, Requests: requests, Pages: requests - 1, Records: len(rows)}}, nil
+	return CompleteRouteBatch{Effects: []EffectBatch{effect}, Result: map[string]any{"security_alerts_synced": len(rows), "repo": repo.FullName}, Watermark: claim.BeforeAt, Evidence: FetchEvidence{Provider: claim.Provider, Dataset: claim.Dataset, Requests: requests, Pages: decodedPages, Records: len(rows)}}, nil
 }
 
 func fetchGitHubSecurityPage(ctx context.Context, client *providerfoundation.HTTPClient, path string, query url.Values, maxPages int) ([]gitHubSecurityPayload, int, bool) {

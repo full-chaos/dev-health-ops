@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -408,6 +410,85 @@ func TestLinearReferenceCatalogPaginatesLargeTeamMemberships(t *testing.T) {
 	if len(batch.Rows.Teams) != 1 || len(batch.Rows.Teams[0].Members) != 4 ||
 		!containsString(batch.Rows.Teams[0].Members, "linear:bob@example.com") {
 		t.Fatalf("roster truncated to page 1: teams=%+v", batch.Rows.Teams)
+	}
+}
+
+// TestLinearReferenceCatalogCollectCountsFailedAndRetriedAttempts verifies
+// that LinearReferenceCatalogEvidence.Requests has a single source -- the
+// counting Doer at the HTTP boundary -- across two distinct paths in one
+// CollectReferenceCatalog call: the teams query fails its first wire attempt
+// and succeeds on retry, and the one team's cycles/sprints query fails every
+// attempt through to the retry policy's exhaustion (a best-effort failure
+// under Strict=false, which discards just the sprint walk rather than
+// aborting the whole collection). A double count or a dropped count makes
+// the exact assertion below go red.
+func TestLinearReferenceCatalogCollectCountsFailedAndRetriedAttempts(t *testing.T) {
+	t.Parallel()
+	teamsAttempts := 0
+	cyclesAttempts := 0
+	doer := jiraWorkItemsDoerFunc(func(request *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(request.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var envelope struct {
+			Query string `json:"query"`
+		}
+		if err := json.Unmarshal(body, &envelope); err != nil {
+			t.Fatal(err)
+		}
+		switch {
+		case strings.Contains(envelope.Query, "cycles("):
+			cyclesAttempts++
+			return nil, errors.New("simulated transient transport failure")
+		case strings.Contains(envelope.Query, "projects("):
+			respBody := `{"data":{"projects":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(respBody)), Request: request}, nil
+		case strings.Contains(envelope.Query, "teams("):
+			teamsAttempts++
+			if teamsAttempts == 1 {
+				return nil, errors.New("simulated transient transport failure")
+			}
+			respBody := `{"data":{"teams":{"nodes":[{"id":"team-raw-1","key":"ENG","name":"Engineering","members":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(respBody)), Request: request}, nil
+		default:
+			t.Fatalf("unexpected query %q", envelope.Query)
+			return nil, nil
+		}
+	})
+	client, err := providerfoundation.NewHTTPClient(
+		"linear", "https://api.linear.app", doer,
+		func(*http.Request) error { return nil },
+		providerfoundation.RetryPolicy{MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond},
+		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := LinearReferenceCatalogRouteHandler{PerPage: 50, MaxPages: 10}
+	batch, err := handler.CollectReferenceCatalog(
+		context.Background(),
+		TeamCatalogReference{OrgID: "org-1", SyncRunID: "run-1", Strict: false},
+		providerfoundation.Credential{Provider: "linear", ID: "cred-1"},
+		client,
+		TeamCatalogSelections{Teams: true, Members: true, Projects: true},
+		time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC),
+	)
+	if err != nil {
+		t.Fatalf("a non-strict cycles failure must not abort the whole call: %v", err)
+	}
+	if teamsAttempts != 2 {
+		t.Fatalf("teams attempts=%d want 2 (one failed, one retried)", teamsAttempts)
+	}
+	if cyclesAttempts != 2 {
+		t.Fatalf("cycles attempts=%d want 2 (both exhausted by the retry policy)", cyclesAttempts)
+	}
+	if len(batch.Rows.Sprints) != 0 {
+		t.Fatalf("sprints=%+v want none (the cycles fetch never recovered)", batch.Rows.Sprints)
+	}
+	// 2 (teams, retried) + 2 (cycles, exhausted) + 1 (projects) = 5.
+	if batch.Evidence.Requests != 5 {
+		t.Fatalf("evidence=%+v want Requests=5 (every physical attempt, from one source)", batch.Evidence)
 	}
 }
 

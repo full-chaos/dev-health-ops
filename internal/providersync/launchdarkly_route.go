@@ -19,6 +19,20 @@ import (
 
 const launchDarklyCodeReferenceConfidence = 0.95
 
+// launchDarklyCountingDoer observes actual wire attempts, including
+// transport failures and retries the wrapped HTTPClient makes internally --
+// unlike a decoded-page tally, it increments once per Doer.Do call
+// regardless of whether that call ever produced a usable response.
+type launchDarklyCountingDoer struct {
+	delegate providerfoundation.HTTPDoer
+	attempts *int
+}
+
+func (doer launchDarklyCountingDoer) Do(request *http.Request) (*http.Response, error) {
+	*doer.attempts++
+	return doer.delegate.Do(request)
+}
+
 type launchDarklyFlagRow struct {
 	OrgID       string     `json:"org_id"`
 	Provider    string     `json:"provider"`
@@ -131,9 +145,12 @@ func (handler LaunchDarklyRouteHandler) Collect(
 	if maxPages == 0 {
 		maxPages = nativeMaxPages
 	}
+	requests := 0
+	counted := *client
+	counted.Doer = launchDarklyCountingDoer{delegate: client.Doer, attempts: &requests}
 	flagsPage, err := providerfoundation.CollectLaunchDarklyOffsetPages(
 		ctx,
-		client,
+		&counted,
 		providerfoundation.LaunchDarklyOffsetOptions{
 			Path: "/api/v2/flags/" + url.PathEscape(projectKey), MaxPages: maxPages,
 		},
@@ -146,7 +163,7 @@ func (handler LaunchDarklyRouteHandler) Collect(
 	}
 	auditPage, err := providerfoundation.CollectLaunchDarklyAuditPages(
 		ctx,
-		client,
+		&counted,
 		providerfoundation.LaunchDarklyAuditOptions{
 			Since: claim.SinceAt, MaxItems: 1_000,
 		},
@@ -155,7 +172,7 @@ func (handler LaunchDarklyRouteHandler) Collect(
 		return CompleteRouteBatch{}, fmt.Errorf("launchdarkly audit pagination: %w", err)
 	}
 	codeReferencePayload, codeReferenceErr := fetchLaunchDarklyCodeReferences(
-		ctx, client, projectKey,
+		ctx, &counted, projectKey,
 	)
 	if codeReferenceErr != nil {
 		if ctx.Err() != nil {
@@ -241,7 +258,7 @@ func (handler LaunchDarklyRouteHandler) Collect(
 		Result:  result, Watermark: watermark,
 		Evidence: FetchEvidence{
 			Provider: claim.Provider, Dataset: claim.Dataset,
-			Requests:   flagsPage.Pages + auditPage.Pages + 1,
+			Requests:   requests,
 			Pages:      flagsPage.Pages + auditPage.Pages,
 			Records:    len(flags) + len(events) + len(links) + len(edges),
 			CapReached: flagsPage.PageBudgetExhausted || auditPage.PageBudgetExhausted,

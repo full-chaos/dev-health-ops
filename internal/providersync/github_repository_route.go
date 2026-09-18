@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"strconv"
@@ -16,6 +17,20 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
+
+// gitHubRepositoryCountingDoer observes actual wire attempts, including
+// transport failures and retries the wrapped HTTPClient makes internally --
+// unlike a hardcoded single-request assumption, it increments once per
+// Doer.Do call regardless of whether that call ever produced a response.
+type gitHubRepositoryCountingDoer struct {
+	delegate providerfoundation.HTTPDoer
+	attempts *int
+}
+
+func (doer gitHubRepositoryCountingDoer) Do(request *http.Request) (*http.Response, error) {
+	*doer.attempts++
+	return doer.delegate.Do(request)
+}
 
 // marshalRepositoryJSON matches the canonical Python ClickHouse repository
 // encoder: sorted keys, compact separators, UTF-8 preserved, and no HTML-only
@@ -127,9 +142,12 @@ func (handler GitHubRepositoryRouteHandler) Collect(
 	if !ok {
 		return CompleteRouteBatch{}, ErrInvalidConfiguration
 	}
+	requests := 0
+	counted := *client
+	counted.Doer = gitHubRepositoryCountingDoer{delegate: client.Doer, attempts: &requests}
 	var payload gitHubRepositoryPayload
-	path := providerRelativePath(client, "repos", owner, repository)
-	if err := fetchObject(ctx, client, path, &payload); err != nil {
+	path := providerRelativePath(&counted, "repos", owner, repository)
+	if err := fetchObject(ctx, &counted, path, &payload); err != nil {
 		return CompleteRouteBatch{}, err
 	}
 	fullName := payload.FullName
@@ -207,7 +225,7 @@ func (handler GitHubRepositoryRouteHandler) Collect(
 		Watermark: nil,
 		Evidence: FetchEvidence{
 			Provider: claim.Provider, Dataset: claim.Dataset,
-			Requests: 1, Pages: 1, Records: 1,
+			Requests: requests, Pages: 1, Records: 1,
 		},
 	}, nil
 }

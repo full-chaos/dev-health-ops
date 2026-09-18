@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"context"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -9,6 +10,20 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
+
+// gitLabRepositoryCountingDoer observes actual wire attempts, including
+// transport failures and retries the wrapped HTTPClient makes internally --
+// unlike a hardcoded single-request assumption, it increments once per
+// Doer.Do call regardless of whether that call ever produced a response.
+type gitLabRepositoryCountingDoer struct {
+	delegate providerfoundation.HTTPDoer
+	attempts *int
+}
+
+func (doer gitLabRepositoryCountingDoer) Do(request *http.Request) (*http.Response, error) {
+	*doer.attempts++
+	return doer.delegate.Do(request)
+}
 
 // gitLabRepositorySettings defines the GitLab repository settings fields. The
 // shared encoder canonicalizes their persisted order across runtimes.
@@ -43,9 +58,12 @@ func (GitLabRepositoryRouteHandler) Collect(
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
+	requests := 0
+	counted := *client
+	counted.Doer = gitLabRepositoryCountingDoer{delegate: client.Doer, attempts: &requests}
 	var payload repositoryPayload
-	path := providerRelativePath(client, "api", "v4", "projects", projectID)
-	if err := fetchObject(ctx, client, path, &payload); err != nil {
+	path := providerRelativePath(&counted, "api", "v4", "projects", projectID)
+	if err := fetchObject(ctx, &counted, path, &payload); err != nil {
 		return CompleteRouteBatch{}, err
 	}
 	parsedProjectID, err := payload.ID.Int64()
@@ -108,7 +126,7 @@ func (GitLabRepositoryRouteHandler) Collect(
 		Watermark: nil,
 		Evidence: FetchEvidence{
 			Provider: claim.Provider, Dataset: claim.Dataset,
-			Requests: 1, Pages: 1, Records: 1,
+			Requests: requests, Pages: 1, Records: 1,
 		},
 	}, nil
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"net/url"
 	"sort"
 	"strconv"
@@ -15,6 +16,24 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
+
+// githubTestsChunkCountingDoer observes actual wire attempts, including
+// transport failures and retries the wrapped HTTPClient makes internally --
+// unlike a decoded-page or per-logical-call tally, it increments once per
+// Doer.Do call regardless of whether that call ever produced a usable
+// response. It also sees every DoUnauthenticated call (artifact downloads),
+// since HTTPClient.DoUnauthenticated shares the same underlying Doer. It is
+// the single source of truth for this chunk invocation's own contribution
+// to cursor.Requests.
+type githubTestsChunkCountingDoer struct {
+	delegate providerfoundation.HTTPDoer
+	attempts *int
+}
+
+func (doer githubTestsChunkCountingDoer) Do(request *http.Request) (*http.Response, error) {
+	*doer.attempts++
+	return doer.delegate.Do(request)
+}
 
 // githubTestsMaxJobsPerRun bounds the items committed for ONE run: jobs, and
 // separately the suites+cases+coverage rows parsed from its artifacts.
@@ -1099,6 +1118,17 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	if err != nil {
 		return err
 	}
+	// invocationBaseRequests is the running total every PRIOR chunk
+	// invocation already persisted onto the cursor. requests below counts
+	// only THIS invocation's physical wire attempts (via the counting Doer
+	// wrapping client.Doer, below) -- cursor.Requests is stamped as their
+	// sum at every point this invocation reports it, so a retried or
+	// ultimately-failed attempt is never dropped from the total.
+	invocationBaseRequests := cursor.Requests
+	requests := 0
+	counted := *client
+	counted.Doer = githubTestsChunkCountingDoer{delegate: client.Doer, attempts: &requests}
+	client = &counted
 	emitFinalMetadata := func(cursor githubTestsChunkCursor) error {
 		cursor.Phase = "done"
 		// The totality gate runs here, not inline in the artifacts loop below,
@@ -1168,9 +1198,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	if err != nil {
 		return err
 	}
-	if cursor.Requests == 0 {
-		cursor.Requests = 1 // repository lookup above
-	}
+	cursor.Requests = invocationBaseRequests + requests
 	policyCache := map[string]githubTestsPolicy{}
 	emitCursor := func(before, after githubTestsChunkCursor, batch CompleteRouteBatch, final bool) error {
 		beforeRaw, beforeErr := encodeGitHubTestsChunkCursor(before)
@@ -1185,6 +1213,12 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	}
 	emitRunPage := func(page providerfoundation.PageVisit) error {
 		cursor.Pages++
+		// Every physical page fetch, including one with zero items or every
+		// item filtered before it can trigger a per-run request, must land in
+		// cursor.Requests immediately: a scattered per-item-only refresh
+		// missed this listing page's own wire attempt when no item on it ever
+		// reached the job-fetch branch below.
+		cursor.Requests = invocationBaseRequests + requests
 		// Count a page against the CUMULATIVE budget only on first entry.
 		// A continuation re-GETs the page it stopped inside and discards the
 		// already-consumed prefix, so at MaxChunksPerAttempt=8 a 100-item page
@@ -1224,7 +1258,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 				if pageErr != nil {
 					return pageErr
 				}
-				cursor.Requests += jobPage.Pages
+				cursor.Requests = invocationBaseRequests + requests
 				cursor.Pages += jobPage.Pages
 				// The paginator reports WHICH bound stopped it, so this reads
 				// the reason instead of inferring one from len(). MaxItems is
@@ -1277,7 +1311,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 					cached, ok := policyCache[*targetBranch]
 					if !ok {
 						cached, err = fetchGitHubTestsPolicy(ctx, client, root, *targetBranch)
-						cursor.Requests++
+						cursor.Requests = invocationBaseRequests + requests
 						if err != nil {
 							return err
 						}
@@ -1374,6 +1408,10 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 		}
 		artifactPage := func(page providerfoundation.PageVisit) error {
 			cursor.Pages++
+			// See emitRunPage's identical unconditional refresh above: this
+			// listing page's own wire attempt must land in cursor.Requests even
+			// when no item on it reaches a per-artifact download below.
+			cursor.Requests = invocationBaseRequests + requests
 			// First-entry-only counting, exactly as in emitRunPage above. This
 			// twin has never fired in production only because no unit has ever
 			// survived the runs phase to reach it (CHAOS-4130).
@@ -1433,7 +1471,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 					if pageErr != nil {
 						return pageErr
 					}
-					cursor.Requests += artPage.Pages
+					cursor.Requests = invocationBaseRequests + requests
 					cursor.Pages += artPage.Pages
 					// Same two-facts split as the jobs cap above, except this
 					// collection passes no MaxItems, so ItemCapReached can
@@ -1489,8 +1527,8 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 						if artifact.Expired {
 							continue
 						}
-						archive, used, notFound, downloadErr := downloadGitHubTestsArtifact(ctx, client, root, string(artifact.ID), maxArtifactBytes)
-						cursor.Requests += used
+						archive, _, notFound, downloadErr := downloadGitHubTestsArtifact(ctx, client, root, string(artifact.ID), maxArtifactBytes)
+						cursor.Requests = invocationBaseRequests + requests
 						if downloadErr != nil {
 							// An artifact whose bytes could never be
 							// downloaded is provider data, not a fault of

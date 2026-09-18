@@ -163,6 +163,133 @@ func TestJiraAtlassianRouteCollectsWorklogsBoardsAndCanonicalEdges(t *testing.T)
 	}
 }
 
+// TestJiraAtlassianRouteCountsFailedAndRetriedAttemptsAcrossPaths verifies
+// that FetchEvidence.Requests has a single source -- the counting Doer at
+// the HTTP boundary -- covering two distinct paths in one Collect run: the
+// changelog fetch fails its first wire attempt and succeeds on retry (proving
+// a retry inside one logical fetch is counted), and the boards fetch fails
+// every attempt through to the retry policy's exhaustion (proving a failed
+// final attempt is counted, and that the now-skipped board-sprints call
+// contributes nothing). Search, comments and worklogs each succeed on their
+// first attempt. A double count (from any leftover per-loop accumulation)
+// or a dropped count would make the exact assertion below go red.
+func TestJiraAtlassianRouteCountsFailedAndRetriedAttemptsAcrossPaths(t *testing.T) {
+	changelogAttempts := 0
+	boardAttempts := 0
+	doer := jiraWorkItemsDoerFunc(func(request *http.Request) (*http.Response, error) {
+		switch {
+		case request.URL.Path == "/rest/api/3/search/jql":
+			body := `{"issues":[{"id":"10060","key":"OPS-201","self":"https://acme.atlassian.net/rest/api/3/issue/OPS-201","fields":{"project":{"key":"OPS"},"summary":"Atlassian path","status":{"name":"Done","statusCategory":{"key":"done"}},"issuetype":{"name":"Task"},"labels":[],"created":"2026-08-01T08:00:00Z","updated":"2026-08-02T09:00:00Z"}}],"isLast":true}`
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+		case strings.HasPrefix(request.URL.Path, "/rest/api/3/issue/OPS-201/changelog"):
+			changelogAttempts++
+			if changelogAttempts == 1 {
+				return nil, errors.New("simulated transient transport failure")
+			}
+			body := `{"values":[],"total":0,"isLast":true}`
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+		case strings.HasPrefix(request.URL.Path, "/rest/api/3/issue/OPS-201/comment"):
+			body := `{"comments":[],"isLast":true}`
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+		case strings.HasPrefix(request.URL.Path, "/rest/api/3/issue/OPS-201/worklog"):
+			body := `{"startAt":0,"maxResults":100,"total":0,"worklogs":[]}`
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+		case request.URL.Path == "/rest/agile/1.0/board":
+			boardAttempts++
+			return &http.Response{StatusCode: http.StatusServiceUnavailable, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"errorMessages":["temporarily unavailable"]}`)), Request: request}, nil
+		default:
+			t.Fatalf("unexpected Atlassian request %s", request.URL.String())
+			return nil, nil
+		}
+	})
+	claim := jiraAtlassianClaim()
+	client := jiraDevStatusTestClientWithRetries(t, doer, 2)
+	batch, err := jiraAtlassianCompleteHandler(t).Collect(
+		context.Background(), claim, providerfoundation.Credential{}, client,
+		time.Date(2026, 8, 10, 12, 0, 0, 123456000, time.UTC),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changelogAttempts != 2 {
+		t.Fatalf("changelog attempts=%d want 2 (one failed, one retried)", changelogAttempts)
+	}
+	if boardAttempts != 2 {
+		t.Fatalf("board attempts=%d want 2 (both exhausted by the retry policy)", boardAttempts)
+	}
+	if batch.Result["sprints_synced"] != 0 {
+		t.Fatalf("result=%#v: a failed boards fetch must skip the board-sprints call entirely", batch.Result)
+	}
+	// 1 search + 2 changelog + 1 comments + 1 worklog + 2 boards = 7. Board
+	// sprints never fires because the boards fetch never returns any boards.
+	if batch.Evidence.Requests != 7 {
+		t.Fatalf("evidence=%+v want Requests=7 (every physical attempt, from one source)", batch.Evidence)
+	}
+}
+
+// TestJiraAtlassianRouteCountsFailedAndRetriedWorklogAndSprintAttempts is the
+// same single-source-of-truth proof as
+// TestJiraAtlassianRouteCountsFailedAndRetriedAttemptsAcrossPaths, rotated
+// onto the two paths that test leaves at baseline: the worklog fetch fails
+// its first wire attempt and succeeds on retry, and the per-board sprint
+// fetch fails every attempt through to the retry policy's exhaustion (a
+// best-effort failure that skips only that board's sprints, not the run).
+func TestJiraAtlassianRouteCountsFailedAndRetriedWorklogAndSprintAttempts(t *testing.T) {
+	worklogAttempts := 0
+	sprintAttempts := 0
+	doer := jiraWorkItemsDoerFunc(func(request *http.Request) (*http.Response, error) {
+		switch {
+		case request.URL.Path == "/rest/api/3/search/jql":
+			body := `{"issues":[{"id":"10060","key":"OPS-201","self":"https://acme.atlassian.net/rest/api/3/issue/OPS-201","fields":{"project":{"key":"OPS"},"summary":"Atlassian path","status":{"name":"Done","statusCategory":{"key":"done"}},"issuetype":{"name":"Task"},"labels":[],"created":"2026-08-01T08:00:00Z","updated":"2026-08-02T09:00:00Z"}}],"isLast":true}`
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+		case strings.HasPrefix(request.URL.Path, "/rest/api/3/issue/OPS-201/changelog"):
+			body := `{"values":[],"total":0,"isLast":true}`
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+		case strings.HasPrefix(request.URL.Path, "/rest/api/3/issue/OPS-201/comment"):
+			body := `{"comments":[],"isLast":true}`
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+		case strings.HasPrefix(request.URL.Path, "/rest/api/3/issue/OPS-201/worklog"):
+			worklogAttempts++
+			if worklogAttempts == 1 {
+				return nil, errors.New("simulated transient transport failure")
+			}
+			body := `{"startAt":0,"maxResults":100,"total":0,"worklogs":[]}`
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+		case request.URL.Path == "/rest/agile/1.0/board":
+			body := `{"values":[{"id":77,"name":"Operations"}],"isLast":true}`
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+		case request.URL.Path == "/rest/agile/1.0/board/77/sprint":
+			sprintAttempts++
+			return &http.Response{StatusCode: http.StatusServiceUnavailable, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"errorMessages":["temporarily unavailable"]}`)), Request: request}, nil
+		default:
+			t.Fatalf("unexpected Atlassian request %s", request.URL.String())
+			return nil, nil
+		}
+	})
+	claim := jiraAtlassianClaim()
+	client := jiraDevStatusTestClientWithRetries(t, doer, 2)
+	batch, err := jiraAtlassianCompleteHandler(t).Collect(
+		context.Background(), claim, providerfoundation.Credential{}, client,
+		time.Date(2026, 8, 10, 12, 0, 0, 123456000, time.UTC),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if worklogAttempts != 2 {
+		t.Fatalf("worklog attempts=%d want 2 (one failed, one retried)", worklogAttempts)
+	}
+	if sprintAttempts != 2 {
+		t.Fatalf("sprint attempts=%d want 2 (both exhausted by the retry policy)", sprintAttempts)
+	}
+	if batch.Result["sprints_synced"] != 0 {
+		t.Fatalf("result=%#v: a failed board-sprints fetch must not synthesize a sprint", batch.Result)
+	}
+	// 1 search + 1 changelog + 1 comments + 2 worklog + 1 board + 2 sprint = 8.
+	if batch.Evidence.Requests != 8 {
+		t.Fatalf("evidence=%+v want Requests=8 (every physical attempt, from one source)", batch.Evidence)
+	}
+}
+
 // TestJiraAtlassianRouteDevStatusSyncsPrimaryDependencyRow is red on
 // origin/main -- the fetch_dev_status option does not exist on
 // JiraAtlassianRouteHandler there. codex round 1 (P1) found the first
@@ -297,6 +424,13 @@ func TestJiraAtlassianRouteDevStatusCapLimitsRealWireAttempts(t *testing.T) {
 	// error, not the clean no-op), so the watermark is withheld.
 	if batch.Watermark != nil {
 		t.Fatalf("a genuine dev-status fetch failure must withhold the watermark: batch=%+v", batch)
+	}
+	// 6 baseline requests (search, changelog, comments, worklog, board,
+	// board-sprint) plus the 1 capped dev-status attempt: the counting Doer
+	// at the HTTP boundary is the only source, so the cap that limited the
+	// real wire attempts is exactly what FetchEvidence.Requests reports too.
+	if batch.Evidence.Requests != 7 {
+		t.Fatalf("evidence=%+v want Requests=7 (every physical attempt, from one source)", batch.Evidence)
 	}
 }
 

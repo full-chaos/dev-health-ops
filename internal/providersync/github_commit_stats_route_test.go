@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -44,6 +45,77 @@ func (doer *gitHubCommitStatsDoer) Do(request *http.Request) (*http.Response, er
 		Body:       io.NopCloser(strings.NewReader(body)),
 		Request:    request,
 	}, nil
+}
+
+// githubCommitStatsRetryOnceDoer fails the first physical attempt for
+// exactly one path with a transport error (forcing HTTPClient.Do's own
+// retry loop to spend a second wire attempt), then serves the normal
+// fixtures.
+type githubCommitStatsRetryOnceDoer struct {
+	t          *testing.T
+	failPath   string
+	failedOnce bool
+	requests   int
+}
+
+func (doer *githubCommitStatsRetryOnceDoer) Do(request *http.Request) (*http.Response, error) {
+	doer.t.Helper()
+	doer.requests++
+	if request.URL.Path == doer.failPath && !doer.failedOnce {
+		doer.failedOnce = true
+		return nil, errors.New("simulated transient transport failure")
+	}
+	body := ""
+	switch request.URL.Path {
+	case "/repos/acme/api":
+		body = gitHubRepositoryFixture
+	case "/repos/acme/api/commits":
+		body = `[{"sha":"first","commit":{"committer":{"date":"2026-07-22T10:00:00Z"}}}]`
+	case "/repos/acme/api/commits/first":
+		body = `{"files":[{"filename":"src/main.go","additions":4,"deletions":2}]}`
+	default:
+		doer.t.Fatalf("unexpected request %s", request.URL.RequestURI())
+	}
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Request:    request,
+	}, nil
+}
+
+// TestGitHubCommitStatsRouteCountsFailedAndRetriedAttempts verifies that a
+// per-commit detail fetch that fails its first wire attempt
+// and succeeds on retry must count that extra attempt, not just the decoded
+// page and successful-detail total.
+func TestGitHubCommitStatsRouteCountsFailedAndRetriedAttempts(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC)
+	doer := &githubCommitStatsRetryOnceDoer{t: t, failPath: "/repos/acme/api/commits/first"}
+	client, err := providerfoundation.NewHTTPClient(
+		"github", "https://api.github.com", doer,
+		func(*http.Request) error { return nil },
+		providerfoundation.RetryPolicy{
+			MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
+		},
+		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch, err := (GitHubCommitStatsRouteHandler{MaxCommits: 3}).Collect(
+		context.Background(), nativeTestClaim("github", "commit-stats"),
+		providerfoundation.Credential{}, client, now,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doer.requests != 4 {
+		t.Fatalf("doer.requests=%d want 4 (repo, list, failed detail attempt, retried detail attempt)", doer.requests)
+	}
+	if batch.Evidence.Requests != 4 {
+		t.Fatalf("evidence=%+v want Requests=4 (every physical attempt)", batch.Evidence)
+	}
 }
 
 func TestGitHubCommitStatsRouteListsThenFetchesEachCommitDetail(t *testing.T) {

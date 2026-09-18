@@ -71,6 +71,112 @@ func TestGitHubFilesRouteTraversesTreeAndWritesNonEmptyInventory(t *testing.T) {
 	}
 }
 
+// TestGitHubFilesRouteCountsFailedAndRetriedAttempts verifies that
+// FetchEvidence.Requests has a single source -- the counting Doer at the
+// HTTP boundary -- not a per-call logical tally: the initial repo fetch
+// fails its first wire attempt and succeeds on retry, and the exact count
+// below (which includes that extra attempt) would go red on a double count
+// or a dropped one.
+func TestGitHubFilesRouteCountsFailedAndRetriedAttempts(t *testing.T) {
+	repoAttempts := 0
+	doer := jiraWorkItemsDoerFunc(func(request *http.Request) (*http.Response, error) {
+		switch request.URL.Path {
+		case "/repos/acme/api":
+			repoAttempts++
+			if repoAttempts == 1 {
+				return nil, errors.New("simulated transient transport failure")
+			}
+			body := `{"full_name":"acme/api","default_branch":"main"}`
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+		case "/repos/acme/api/commits":
+			body := `[{"sha":"tree-sha"}]`
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+		case "/repos/acme/api/git/trees/tree-sha":
+			body := `{"tree":[{"path":"README.md","type":"blob","size":20}]}`
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+		default:
+			t.Fatalf("unexpected request %s", request.URL.String())
+			return nil, nil
+		}
+	})
+	client, err := providerfoundation.NewHTTPClient(
+		"github", "https://api.github.com", doer,
+		func(*http.Request) error { return nil },
+		providerfoundation.RetryPolicy{
+			MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
+		},
+		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch, err := (GitHubFilesRouteHandler{}).Collect(
+		context.Background(), nativeTestClaim("github", "files"), providerfoundation.Credential{}, client,
+		time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repoAttempts != 2 {
+		t.Fatalf("repo attempts=%d want 2 (one failed, one retried)", repoAttempts)
+	}
+	// 2 (repo, retried) + 1 (commits) + 1 (tree) = 4. README.md has no scan
+	// extension, so no GraphQL content batch fires.
+	if batch.Evidence.Requests != 4 {
+		t.Fatalf("evidence=%+v want Requests=4 (every physical attempt, from one source)", batch.Evidence)
+	}
+}
+
+// TestGitHubFilesRouteContentFetchExhaustsTheRetryPolicyOnPermanentFailure
+// is the failed-final-attempt half of the same proof: a content fetch that
+// fails every attempt spends exactly the retry policy's attempt budget on
+// the shared counting Doer, not a single logical try -- the route fails
+// closed here (github_files has no best-effort content path), so this
+// checks the real wire attempts directly rather than FetchEvidence.
+func TestGitHubFilesRouteContentFetchExhaustsTheRetryPolicyOnPermanentFailure(t *testing.T) {
+	contentAttempts := 0
+	doer := jiraWorkItemsDoerFunc(func(request *http.Request) (*http.Response, error) {
+		switch request.URL.Path {
+		case "/repos/acme/api":
+			body := `{"full_name":"acme/api","default_branch":"main"}`
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+		case "/repos/acme/api/commits":
+			body := `[{"sha":"tree-sha"}]`
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+		case "/repos/acme/api/git/trees/tree-sha":
+			body := `{"tree":[{"path":"src/main.go","type":"blob","size":20}]}`
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+		case "/graphql":
+			contentAttempts++
+			return nil, errors.New("simulated transient transport failure")
+		default:
+			t.Fatalf("unexpected request %s", request.URL.String())
+			return nil, nil
+		}
+	})
+	client, err := providerfoundation.NewHTTPClient(
+		"github", "https://api.github.com", doer,
+		func(*http.Request) error { return nil },
+		providerfoundation.RetryPolicy{
+			MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
+		},
+		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = (GitHubFilesRouteHandler{}).Collect(
+		context.Background(), nativeTestClaim("github", "files"), providerfoundation.Credential{}, client,
+		time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC),
+	)
+	if !errors.Is(err, ErrGitHubFilesTraversalFailed) {
+		t.Fatalf("content fetch error=%v, want ErrGitHubFilesTraversalFailed", err)
+	}
+	if contentAttempts != 2 {
+		t.Fatalf("content attempts=%d want 2 (both exhausted by the retry policy, none dropped)", contentAttempts)
+	}
+}
+
 func TestGitHubFilesRouteReturnsTraversalFailureWhenContentFetchFails(t *testing.T) {
 	claim := nativeTestClaim("github", "files")
 	client := gitHubRepositoryClient(t, gitHubFilesDoer{

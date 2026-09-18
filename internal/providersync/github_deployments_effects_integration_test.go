@@ -169,6 +169,49 @@ func TestGitLabDeploymentsEffectsAgainstMigratedSchema(t *testing.T) {
 	})
 }
 
+// TestGitHubDeploymentsEffectsCarriesLifecycleForwardAgainstMigratedSchema
+// is the real-ClickHouse proof of the write-once lifecycle guard: a
+// deployment with real started_at/finished_at is re-synced with a
+// LifecycleLookupFailed row (a transient statuses failure), and the
+// winning physical version, read back FINAL against the actual migrated
+// schema, still carries the original timestamps -- never NULL.
+func TestGitHubDeploymentsEffectsCarriesLifecycleForwardAgainstMigratedSchema(t *testing.T) {
+	ctx, conn := newDeploymentsIntegrationConn(t)
+	lease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
+	github := GitHubDeploymentsClickHouseEffects{Conn: conn, Lease: lease}
+	claim := nativeTestClaim("github", "deployments")
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+
+	good := deploymentIntegrationFullRow(claim, "lifecycle-carry-forward", now, 42)
+	if err := github.WriteEffect(ctx, claim, deploymentEffect(t, good)); err != nil {
+		t.Fatal(err)
+	}
+
+	regressed := good
+	regressed.StartedAt = nil
+	regressed.FinishedAt = nil
+	regressed.LifecycleLookupFailed = true
+	regressed.LastSynced = now.Add(time.Minute)
+	if err := github.WriteEffect(ctx, claim, deploymentEffect(t, regressed)); err != nil {
+		t.Fatal(err)
+	}
+
+	var startedAt, finishedAt *time.Time
+	if err := conn.QueryRow(
+		ctx,
+		`SELECT started_at, finished_at FROM deployments FINAL WHERE org_id = ? AND repo_id = ? AND deployment_id = ?`,
+		claim.OrgID, good.RepoID, good.DeploymentID,
+	).Scan(&startedAt, &finishedAt); err != nil {
+		t.Fatal(err)
+	}
+	if startedAt == nil || !startedAt.Equal(*good.StartedAt) {
+		t.Fatalf("started_at=%v want=%v (carried forward, not NULLed by the failed re-sync)", startedAt, good.StartedAt)
+	}
+	if finishedAt == nil || !finishedAt.Equal(*good.FinishedAt) {
+		t.Fatalf("finished_at=%v want=%v (carried forward, not NULLed by the failed re-sync)", finishedAt, good.FinishedAt)
+	}
+}
+
 type deploymentEffectsIntegrationSink interface {
 	WriteEffect(context.Context, Claim, EffectBatch) error
 	InspectEffect(context.Context, Claim, EffectBatch) (EffectInspection, error)

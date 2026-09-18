@@ -55,6 +55,8 @@ oracle_registry.register(
         excluded_fields={
             "org_id": "carried from the Go claim for tenant-scoped persistence",
             "last_synced": "stamped by the Go handler at its normalized collection instant",
+            "started_at": "Go derives started_at from the deployment's own status history (an in_progress entry) rather than copying deployed_at; Python's fixed copy is the declared baseline defect this row diverges from -- this oracle harness never supplies a statuses fixture, so Go's own row leaves it nil here",
+            "lifecycle_lookup_failed": "writer-internal signaling for the write-once lifecycle carry-forward guard -- never an INSERT column, Python has no equivalent field",
         },
     )
 )

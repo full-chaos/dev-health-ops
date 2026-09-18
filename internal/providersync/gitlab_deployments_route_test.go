@@ -52,9 +52,9 @@ func TestGitLabDeploymentsRouteMirrorsPythonReleaseMRWindowSinglePageAndEvidence
 		{body: gitLabRepositoryFixture},
 		{body: `[{"tag_name":"v1.2.3"}]`, headers: http.Header{"X-Next-Page": []string{"2"}}},
 		{body: `[
-			{"id":501,"iid":7,"status":"success","environment":{"name":"future"},"created_at":"2026-08-01T10:00:00Z","finished_at":"2026-08-01T10:05:00Z","sha":"future","ref":"future"},
-			{"id":502,"iid":8,"status":"success","environment":{"name":"production"},"created_at":"2026-07-22T10:00:00Z","finished_at":"2026-07-22T10:05:00Z","sha":"main","ref":"v1.2.3"},
-			{"id":503,"iid":9,"status":"success","environment":{"name":"old"},"created_at":"2026-06-30T10:00:00Z","finished_at":"2026-06-30T10:05:00Z","sha":"old","ref":"old"}
+			{"id":501,"iid":7,"status":"success","environment":{"name":"future"},"created_at":"2026-08-01T10:00:00Z","deployable":{"started_at":"2026-08-01T09:58:00Z","finished_at":"2026-08-01T10:05:00Z","status":"success"},"sha":"future","ref":"future"},
+			{"id":502,"iid":8,"status":"success","environment":{"name":"production"},"created_at":"2026-07-22T10:00:00Z","deployable":{"started_at":"2026-07-22T09:58:00Z","finished_at":"2026-07-22T10:05:00Z","status":"success"},"sha":"main","ref":"v1.2.3"},
+			{"id":503,"iid":9,"status":"success","environment":{"name":"old"},"created_at":"2026-06-30T10:00:00Z","deployable":{"started_at":"2026-06-30T09:58:00Z","finished_at":"2026-06-30T10:05:00Z","status":"success"},"sha":"old","ref":"old"}
 		]`, headers: http.Header{"X-Next-Page": []string{"2"}}},
 		{body: `[{"iid":11,"state":"merged","merged_at":"2026-08-01T09:00:00Z"}]`},
 		{body: `[{"iid":44,"state":"opened","merged_at":""},{"iid":45,"state":"merged","merged_at":"2026-07-21T10:00:00Z"}]`},
@@ -81,9 +81,13 @@ func TestGitLabDeploymentsRouteMirrorsPythonReleaseMRWindowSinglePageAndEvidence
 	if err := json.Unmarshal(batch.Effects[0].Rows[0], &row); err != nil {
 		t.Fatal(err)
 	}
+	wantStartedAt := time.Date(2026, 7, 22, 9, 58, 0, 0, time.UTC)
+	wantFinishedAt := time.Date(2026, 7, 22, 10, 5, 0, 0, time.UTC)
 	if row.RepoID != "c7198fbc-1945-3717-05d8-eb78866b4e79" || row.DeploymentID != "502" ||
 		row.Status == nil || *row.Status != "success" || row.Environment == nil || *row.Environment != "production" ||
-		row.StartedAt == nil || row.FinishedAt == nil || row.DeployedAt == nil ||
+		row.StartedAt == nil || !row.StartedAt.Equal(wantStartedAt) ||
+		row.FinishedAt == nil || !row.FinishedAt.Equal(wantFinishedAt) ||
+		row.DeployedAt == nil ||
 		row.PullRequestNumber == nil || *row.PullRequestNumber != 45 || row.MergedAt == nil ||
 		row.ReleaseRef != "v1.2.3" || row.ReleaseRefConfidence != 1 ||
 		row.OrgID != claim.OrgID ||

@@ -411,3 +411,112 @@ func TestTeamRepoSubsetShape_BoundedAllKeysUndeclaredLeafNeverAdmitted(t *testin
 		t.Fatalf("outside = %d, want 1 -- \"other\" is named in no leaf list at all and must stay outside regardless of \"value\"'s own admitted bound: findings %+v", result.DifferencesOutsideBaselineDefect, result.Findings)
 	}
 }
+
+// TestTeamRepoSubsetShape_DisplacementCandidateOnlyAtOrBelowMinAdmitted
+// pins the new opt-in rule-3 relaxation: both lists sit at the declared
+// DisplacementLimit, and the one candidate-only key's own
+// DisplacementValueField value ties the baseline list's own minimum --
+// admitted (ties admitted, this shape's own doc comment).
+func TestTeamRepoSubsetShape_DisplacementCandidateOnlyAtOrBelowMinAdmitted(t *testing.T) {
+	shape := &TeamRepoSubsetShape{
+		ListPath:               "data.items",
+		KeyFields:              []string{"key"},
+		DisplacementLimit:      2,
+		DisplacementValueField: "effort.value",
+	}
+	baseline := snapshotFromJSON(t, `{"data":{"items":[
+		{"key":"ABC-1","effort":{"value":10}},
+		{"key":"ABC-2","effort":{"value":5}}
+	]}}`)
+	candidate := snapshotFromJSON(t, `{"data":{"items":[
+		{"key":"ABC-1","effort":{"value":10}},
+		{"key":"ABC-3","effort":{"value":5}}
+	]}}`)
+
+	result := Compare(baseline, candidate, teamRepoSubsetPresenceOptions(shape))
+	if result.DifferencesOutsideBaselineDefect != 0 {
+		t.Fatalf("outside = %d, want 0 -- a candidate-only key at the baseline minimum, with both lists at the declared Limit, must be admitted: findings %+v", result.DifferencesOutsideBaselineDefect, result.Findings)
+	}
+}
+
+// TestTeamRepoSubsetShape_DisplacementCandidateOnlyAboveMinStaysOutside
+// is the negative twin: the candidate-only key's own value is ABOVE the
+// baseline list's own minimum, so it cannot be a row ranking below the
+// baseline's own LIMIT cutoff -- refused. Both lists sit at the declared
+// Limit (the precondition this test isolates), so ABC-2's own paired
+// baseline-only absence is forced by the equal lengths too; refusing the
+// whole plan (rule 3) leaves BOTH its own finding and the candidate-only
+// one outside, exactly as an ordinary (non-displacement) candidate-only
+// key already leaves a paired baseline-only key outside today.
+func TestTeamRepoSubsetShape_DisplacementCandidateOnlyAboveMinStaysOutside(t *testing.T) {
+	shape := &TeamRepoSubsetShape{
+		ListPath:               "data.items",
+		KeyFields:              []string{"key"},
+		DisplacementLimit:      2,
+		DisplacementValueField: "effort.value",
+	}
+	baseline := snapshotFromJSON(t, `{"data":{"items":[
+		{"key":"ABC-1","effort":{"value":10}},
+		{"key":"ABC-2","effort":{"value":5}}
+	]}}`)
+	candidate := snapshotFromJSON(t, `{"data":{"items":[
+		{"key":"ABC-1","effort":{"value":10}},
+		{"key":"ABC-3","effort":{"value":6}}
+	]}}`)
+
+	result := Compare(baseline, candidate, teamRepoSubsetPresenceOptions(shape))
+	if result.DifferencesOutsideBaselineDefect != 2 {
+		t.Fatalf("outside = %d, want 2 -- a candidate-only key above the baseline minimum refuses the whole plan, leaving its own finding and ABC-2's paired baseline-only absence both outside: findings %+v", result.DifferencesOutsideBaselineDefect, result.Findings)
+	}
+}
+
+// TestTeamRepoSubsetShape_DisplacementShortOfLimitStaysOutside pins the
+// Limit precondition: the candidate-only key's own value sits below what
+// would be the baseline minimum, but neither list reaches the declared
+// DisplacementLimit -- there is no LIMIT boundary here for a
+// rank-below-cutoff claim to mean anything, so the relaxation never
+// activates and rule 3 refuses exactly as it did before this admission
+// existed. Unequal list lengths (baseline's one key is also candidate's,
+// so there is no paired baseline-only absence here, unlike the
+// AboveMin case above) isolates the one candidate-only finding.
+func TestTeamRepoSubsetShape_DisplacementShortOfLimitStaysOutside(t *testing.T) {
+	shape := &TeamRepoSubsetShape{
+		ListPath:               "data.items",
+		KeyFields:              []string{"key"},
+		DisplacementLimit:      5,
+		DisplacementValueField: "effort.value",
+	}
+	baseline := snapshotFromJSON(t, `{"data":{"items":[{"key":"ABC-1","effort":{"value":10}}]}}`)
+	candidate := snapshotFromJSON(t, `{"data":{"items":[
+		{"key":"ABC-1","effort":{"value":10}},
+		{"key":"ABC-3","effort":{"value":1}}
+	]}}`)
+
+	result := Compare(baseline, candidate, teamRepoSubsetPresenceOptions(shape))
+	if result.DifferencesOutsideBaselineDefect != 1 {
+		t.Fatalf("outside = %d, want 1 -- neither list reaches the declared DisplacementLimit, so the relaxation must not activate: findings %+v", result.DifferencesOutsideBaselineDefect, result.Findings)
+	}
+}
+
+// TestTeamRepoSubsetShape_DisplacementUnconfiguredCandidateOnlyStaysOutside
+// pins the opt-in default: a shape that never sets DisplacementLimit/
+// DisplacementValueField keeps rule 3's own unconditional refusal, even
+// when the candidate-only key's own value would satisfy the relaxed rule
+// if it were configured. Same unequal-length shape as ShortOfLimit above,
+// isolating the one candidate-only finding.
+func TestTeamRepoSubsetShape_DisplacementUnconfiguredCandidateOnlyStaysOutside(t *testing.T) {
+	shape := &TeamRepoSubsetShape{
+		ListPath:  "data.items",
+		KeyFields: []string{"key"},
+	}
+	baseline := snapshotFromJSON(t, `{"data":{"items":[{"key":"ABC-1","effort":{"value":10}}]}}`)
+	candidate := snapshotFromJSON(t, `{"data":{"items":[
+		{"key":"ABC-1","effort":{"value":10}},
+		{"key":"ABC-3","effort":{"value":1}}
+	]}}`)
+
+	result := Compare(baseline, candidate, teamRepoSubsetPresenceOptions(shape))
+	if result.DifferencesOutsideBaselineDefect != 1 {
+		t.Fatalf("outside = %d, want 1 -- with DisplacementLimit/DisplacementValueField unset, a candidate-only key must stay outside regardless of its own value: findings %+v", result.DifferencesOutsideBaselineDefect, result.Findings)
+	}
+}

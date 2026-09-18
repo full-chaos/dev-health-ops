@@ -90,9 +90,16 @@ import "strings"
 //     restcorpus.go), so it stays named in EqualLeaves (or unnamed
 //     entirely, in which case it is not checked by this shape at all --
 //     see below) and any real narrowing leaves it outside every
-//     citation, correctly.
+//     citation, correctly. BoundedLeavesAllKeys names element field(s)
+//     that must satisfy baseline >= candidate for EVERY matched element,
+//     with no BoundedLeafKeys restriction: the opt-in for a leaf that is
+//     a sum of non-negative per-repo contributions, where every matched
+//     key's own sum -- not merely the ones a caller happens to name -- is
+//     bounded downward by construction (established from the route's own
+//     producing query, same as BoundedLeaves).
 //
-// A leaf named in neither EqualLeaves nor BoundedLeaves is not checked by
+// A leaf named in neither EqualLeaves, BoundedLeaves nor
+// BoundedLeavesAllKeys is not checked by
 // this shape at all: naming every wire leaf is not required, only every
 // leaf whose disagreement should NOT silently block the subset admission
 // needs a rule. A shape declared with both lists empty checks membership
@@ -148,6 +155,21 @@ type TeamRepoSubsetShape struct {
 	// own producing query for each key named here. A key not named here
 	// gets the equal rule for those same leaf names instead.
 	BoundedLeafKeys []string
+	// BoundedLeavesAllKeys names element field(s) that must satisfy
+	// baseline >= candidate (numeric) for EVERY matched pair, with no
+	// BoundedLeafKeys restriction at all -- the opt-in for a leaf that is
+	// a SUM of non-negative per-repo contributions over the route's own
+	// producing query, where a narrower candidate population can only
+	// ever pull that sum down (or leave it unchanged) at every key that
+	// still has one, never merely some of them. Confirm the sum shape
+	// from the route's own SQL before naming a leaf here: a leaf that is
+	// a ratio, average, or any other non-additive aggregate must never be
+	// named here (the same restriction BoundedLeaves/BoundedLeafKeys
+	// already carries, teamreposubset.go's own package doc comment rule
+	// 4). A leaf named in BOTH BoundedLeaves and BoundedLeavesAllKeys is
+	// unsupported and its own behaviour is undefined -- name a leaf in
+	// exactly one of the two.
+	BoundedLeavesAllKeys []string
 }
 
 // teamRepoSubsetPlan is one comparison's fully-evaluated admission
@@ -243,6 +265,21 @@ func buildTeamRepoSubsetPlan(shape *TeamRepoSubsetShape, baselineData, candidate
 			} else if !subsetValueEqual(baseValue, candValue) {
 				subset = false
 			}
+		}
+		// BoundedLeavesAllKeys: the same bounded rule as BoundedLeaves,
+		// unconditionally for EVERY matched key -- no BoundedLeafKeys
+		// gate to consult, by construction (this field's own doc comment
+		// on TeamRepoSubsetShape).
+		for _, leaf := range shape.BoundedLeavesAllKeys {
+			baseValue, candValue := baseObject[leaf], candObject[leaf]
+			held := subsetLeafBounded(baseValue, candValue)
+			if !held {
+				subset = false
+			}
+			if plan.boundedAdmits[key] == nil {
+				plan.boundedAdmits[key] = map[string]bool{}
+			}
+			plan.boundedAdmits[key][leaf] = held
 		}
 	}
 	plan.subset = subset

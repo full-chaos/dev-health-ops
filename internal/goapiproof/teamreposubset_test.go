@@ -340,3 +340,74 @@ func TestGate_OtherShapesNeverAdmitAStructuralFinding(t *testing.T) {
 		t.Fatalf("outside = %d, want 1 -- a length finding must never reach a KeyedDirectionShape's own admits(): findings %+v", result.DifferencesOutsideBaselineDefect, result.Findings)
 	}
 }
+
+// TestTeamRepoSubsetShape_BoundedAllKeysCandidateGreaterStaysOutside pins
+// BoundedLeavesAllKeys' own bound: a leaf named there must satisfy
+// baseline >= candidate on EVERY matched key, with no BoundedLeafKeys
+// restriction narrowing which keys the bound applies to -- ABC-2 is not
+// named anywhere, yet its own value reading candidate > baseline must
+// still stay outside, exactly like a BoundedLeafKeys-named key would.
+func TestTeamRepoSubsetShape_BoundedAllKeysCandidateGreaterStaysOutside(t *testing.T) {
+	shape := &TeamRepoSubsetShape{
+		ListPath:             "data.items",
+		KeyFields:            []string{"key"},
+		BoundedLeavesAllKeys: []string{"value"},
+	}
+	// ABC-1 is identical on both sides (no finding of its own to leak
+	// through); ABC-2 is not named in any BoundedLeafKeys list yet reads
+	// candidate > baseline, which must still violate the bound and poison
+	// the whole plan (the same one-bad-key rule rule 3 already states for
+	// membership) -- so ABC-2's own value finding is the only one, and it
+	// must stay outside.
+	baseline := snapshotFromJSON(t, `{"data":{"items":[{"key":"ABC-1","value":9},{"key":"ABC-2","value":5}]}}`)
+	candidate := snapshotFromJSON(t, `{"data":{"items":[{"key":"ABC-1","value":9},{"key":"ABC-2","value":9}]}}`)
+
+	result := Compare(baseline, candidate, teamRepoSubsetPresenceOptions(shape))
+	if result.DifferencesOutsideBaselineDefect != 1 {
+		t.Fatalf("outside = %d, want 1 -- ABC-2's own candidate > baseline value must stay outside even though it is not named in any BoundedLeafKeys list: findings %+v", result.DifferencesOutsideBaselineDefect, result.Findings)
+	}
+}
+
+// TestTeamRepoSubsetShape_BoundedAllKeysCandidateLessOrEqualAdmittedOnEveryKey
+// is the positive twin: BOTH keys shrink (or stay equal) on the candidate
+// side with no BoundedLeafKeys entry naming either one, and both are
+// admitted -- the whole point of the opt-in is that every matched key
+// gets the bounded rule, not only the ones a caller enumerates.
+func TestTeamRepoSubsetShape_BoundedAllKeysCandidateLessOrEqualAdmittedOnEveryKey(t *testing.T) {
+	shape := &TeamRepoSubsetShape{
+		ListPath:             "data.items",
+		KeyFields:            []string{"key"},
+		BoundedLeavesAllKeys: []string{"value"},
+	}
+	// BOTH keys genuinely shrink on the candidate side, and NEITHER is
+	// named in any BoundedLeafKeys list -- the whole point of the opt-in
+	// is that every matched key gets the bounded rule, not only the ones
+	// a caller enumerates.
+	baseline := snapshotFromJSON(t, `{"data":{"items":[{"key":"ABC-1","value":9},{"key":"ABC-2","value":7}]}}`)
+	candidate := snapshotFromJSON(t, `{"data":{"items":[{"key":"ABC-1","value":5},{"key":"ABC-2","value":3}]}}`)
+
+	result := Compare(baseline, candidate, teamRepoSubsetPresenceOptions(shape))
+	if result.DifferencesOutsideBaselineDefect != 0 {
+		t.Fatalf("outside = %d, want 0 -- every matched key shrinking on the candidate side must be admitted with no BoundedLeafKeys entry at all: findings %+v", result.DifferencesOutsideBaselineDefect, result.Findings)
+	}
+}
+
+// TestTeamRepoSubsetShape_BoundedAllKeysUndeclaredLeafNeverAdmitted pins
+// the opt-in's own refusal: a leaf named in NEITHER EqualLeaves,
+// BoundedLeaves nor BoundedLeavesAllKeys is not this shape's concern at
+// all (rule 4's own "not checked by this shape at all" clause) -- its own
+// ShapeValue finding stays outside, whichever direction it moved.
+func TestTeamRepoSubsetShape_BoundedAllKeysUndeclaredLeafNeverAdmitted(t *testing.T) {
+	shape := &TeamRepoSubsetShape{
+		ListPath:             "data.items",
+		KeyFields:            []string{"id"},
+		BoundedLeavesAllKeys: []string{"value"},
+	}
+	baseline := snapshotFromJSON(t, `{"data":{"items":[{"id":"ABC-1","value":9,"other":1}]}}`)
+	candidate := snapshotFromJSON(t, `{"data":{"items":[{"id":"ABC-1","value":5,"other":2}]}}`)
+
+	result := Compare(baseline, candidate, teamRepoSubsetPresenceOptions(shape))
+	if result.DifferencesOutsideBaselineDefect != 1 {
+		t.Fatalf("outside = %d, want 1 -- \"other\" is named in no leaf list at all and must stay outside regardless of \"value\"'s own admitted bound: findings %+v", result.DifferencesOutsideBaselineDefect, result.Findings)
+	}
+}

@@ -50,20 +50,30 @@ import "strings"
 // A CANDIDATE-ONLY KEY IS NEVER ADMITTED, and must not be: a key present
 // in the candidate map but absent from the baseline's would mean Go's
 // STRICT SUBSET somehow contains a key the SUPERSET lacks entirely --
-// the subset claim's own contradiction, not an instance of it. In
-// practice this can never even reach admission: compareDict reports a
-// key present on only one side as ShapePresence (compare.go), and
-// compare.go's own classifyBaselineDefects only ever asks a shape's
-// admits() about a LEAF finding (leafDifference(shape) gates every
-// shape in this package identically, see compare.go's own doc comment).
-// This shape does not additionally special-case it in code -- doing so
-// would be a second, redundant gate on a condition already enforced one
-// layer up -- but see dictkeydirection_test.go's own
-// TestDictKeyDirectionShape_CandidateOnlyKeyNeverAdmitted: that
-// upstream gate is a property of a DIFFERENT file, maintained by someone
-// who does not know this shape depends on it, so this shape's own test
-// suite asserts the behaviour directly rather than inheriting it
-// silently.
+// the subset claim's own contradiction, not an instance of it. For every
+// declaration that leaves AdmitBaselineOnlyKeys false (every declaration
+// that existed before that field did, and any new one that does not name
+// a genuinely narrower candidate population), this can never even reach
+// admission: compareDict reports a key present on only one side as
+// ShapePresence (compare.go), and compare.go's own classifyBaselineDefects
+// only ever asks such a declaration's admits() about a LEAF finding
+// (leafDifference(shape) gates every shape in this package identically
+// by default, see compare.go's own doc comment) -- this shape does not
+// additionally special-case it in code for that case, the same
+// "redundant gate" reasoning as before.
+//
+// A DECLARATION WITH AdmitBaselineOnlyKeys SET is the one exception:
+// compare.go's own gate (classifyBaselineDefects) widens by that field,
+// named explicitly, to let a ShapePresence finding under this
+// declaration's own Paths reach admits() too -- for the case a strict
+// subset population is missing an ENTIRE key the wider population
+// carries, not merely shrinking one it still has (the JSON-OBJECT
+// counterpart of TeamRepoSubsetShape's own rule 3 for a JSON ARRAY).
+// admits() still refuses a candidate-only key unconditionally even then
+// (see the type's own AdmitBaselineOnlyKeys doc comment) --
+// TestDictKeyDirectionShape_CandidateOnlyKeyNeverAdmitted asserts that
+// refusal directly, as its own rule, rather than trusting the upstream
+// gate alone to keep holding for a declaration that opted in.
 //
 // What this shape CANNOT catch: a real Go regression that UNDER-counts
 // or UNDER-sums at the SAME key (moving further below baseline, in the
@@ -82,6 +92,21 @@ type DictKeyDirectionShape struct {
 	// segment, so there is no separate ".value" suffix the way a list
 	// element's own named field needs one).
 	ValuePath string
+	// AdmitBaselineOnlyKeys opts this ONE declaration into a second,
+	// independent claim: a key the baseline's own object carries and the
+	// candidate's does not (compareDict's own "present in baseline,
+	// absent in candidate" ShapePresence finding) is admitted too -- the
+	// same "a strict subset can be missing an ENTIRE key, not merely
+	// shrink one it still has" case TeamRepoSubsetShape's own rule 3
+	// already admits for a JSON ARRAY, here for a JSON OBJECT. Default
+	// false: every EXISTING DictKeyDirectionShape declaration keeps its
+	// current power exactly -- this is opt-in per declaration, not a
+	// change to what any declaration already in production admits. A
+	// candidate-only key ("present in candidate, absent in baseline")
+	// is NEVER admitted regardless of this field -- the subset claim's
+	// own contradiction, exactly as a candidate-only key is refused for
+	// every matched-key value admission above.
+	AdmitBaselineOnlyKeys bool
 }
 
 // dictKeyDirectionPlan is one comparison's fully-evaluated admission
@@ -96,6 +121,12 @@ type dictKeyDirectionPlan struct {
 	// admittedKeys is the set of object keys this plan admits: present on
 	// both sides, both numeric, and baseline > candidate.
 	admittedKeys map[string]bool
+	// baselineOnlyKeys is the set of keys the baseline's own object
+	// carries and the candidate's does not -- populated only when
+	// shape.AdmitBaselineOnlyKeys is true (nil, and therefore admitting
+	// nothing, otherwise: the safe default for every existing
+	// declaration that never opted in).
+	baselineOnlyKeys map[string]bool
 }
 
 // buildDictKeyDirectionPlan evaluates DictKeyDirectionShape's rule
@@ -128,6 +159,15 @@ func buildDictKeyDirectionPlan(shape *DictKeyDirectionShape, baselineData, candi
 		}
 	}
 
+	if shape.AdmitBaselineOnlyKeys {
+		plan.baselineOnlyKeys = map[string]bool{}
+		for key := range baseObject {
+			if _, present := candObject[key]; !present {
+				plan.baselineOnlyKeys[key] = true
+			}
+		}
+	}
+
 	return plan
 }
 
@@ -136,6 +176,15 @@ func buildDictKeyDirectionPlan(shape *DictKeyDirectionShape, baselineData, candi
 // last segment), never off Detail -- unlike KeyedDirectionShape, this
 // shape's findings never carry a "[key=...] " prefix, because compareDict
 // (not compareListByKey) produced them.
+//
+// A ShapePresence finding only ever reaches this function at all when
+// compare.go's own gate let it through, which it does only for a
+// declaration with AdmitBaselineOnlyKeys set (classifyBaselineDefects'
+// own shape-field gate, compare.go) -- so the shape.AdmitBaselineOnlyKeys
+// check below is a second, redundant refusal for a non-opted-in
+// declaration, kept explicit rather than relied upon to be unreachable,
+// the same discipline TeamRepoSubsetShape.admits() already applies to
+// its own ShapePresence branch (teamreposubset.go).
 func (p *dictKeyDirectionPlan) admits(finding Finding) bool {
 	if p == nil || !p.valid {
 		return false
@@ -143,6 +192,21 @@ func (p *dictKeyDirectionPlan) admits(finding Finding) bool {
 	key, ok := dictKeyFromPath(finding.Path, p.shape.ValuePath)
 	if !ok {
 		return false
+	}
+	if finding.Shape == ShapePresence {
+		if !p.shape.AdmitBaselineOnlyKeys {
+			return false
+		}
+		if !strings.Contains(finding.Detail, "absent in candidate") {
+			// "present in candidate, absent in baseline": a
+			// candidate-only key. Never admitted, in either direction --
+			// the subset claim's own contradiction (this type's own doc
+			// comment on AdmitBaselineOnlyKeys).
+			// TestDictKeyDirectionShape_CandidateOnlyKeyNeverAdmitted
+			// pins this even with AdmitBaselineOnlyKeys set.
+			return false
+		}
+		return p.baselineOnlyKeys[key]
 	}
 	return p.admittedKeys[key]
 }

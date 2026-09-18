@@ -2021,10 +2021,10 @@ var flamePRIDBoundParity = Options{
 // omits it refuses that one request by name, the same as any other
 // unresolved id. On production data, 0 of the proof organisation's
 // 1135 deployments satisfy end > start: every one carries only
-// deployed_at (started_at, merged_at, finished_at all NULL), so this
-// entry's own -bind has no live value today, and
-// deployment_gap_entity_id_bound_422 below is the deployment branch's
-// only live case.
+// deployed_at (started_at, merged_at, finished_at all NULL) with a
+// terminal status, so this entry's own -bind has no live value today,
+// and deployment_gap_entity_id_bound_422 below is the deployment
+// branch's only live case.
 // AssertRESTPathCoverage is satisfied by these entries' PATH regardless.
 //
 // Branches this corpus cannot provably reach, and why:
@@ -2035,7 +2035,7 @@ var flamePRIDBoundParity = Options{
 //     no request this corpus can construct triggers deterministically.
 //   - validateFlameFrames' own "Flame frames have gaps" 422 (services/
 //     flame.py:64-82 and 201/265/351; internal/flame/flame.go's own
-//     validateFlameFrames, called at flame.go:354, 399, 462) for the "pr"
+//     validateFlameFrames, called at flame.go:354, 399, 487) for the "pr"
 //     and "issue" entity_types: only a malformed timeline (frames that do
 //     not cover [timeline.start, timeline.end) contiguously) reaches it,
 //     and no live production row is known to be malformed this way for
@@ -2044,6 +2044,12 @@ var flamePRIDBoundParity = Options{
 //     comment for the mechanism: a deployment row carrying only
 //     deployed_at leaves buildDeploymentFlameResponse's root frame nil,
 //     which is the only frame its own validateFlameFrames call can see).
+//     A genuinely non-terminal (running) status instead reaches
+//     deploymentStatusIsRunning's own branch (flame.go:421-431, 453-454)
+//     and answers 200 -- an intentional candidate/baseline divergence, not
+//     a defect -- but no known production row carries a non-terminal
+//     status with no other signal to bind to, so this corpus asserts no
+//     live entry for it.
 //   - buildPRFlameResponse's own end selection (flame.go:316-322: MergedAt
 //     / ClosedAt / the nowLike() default) and its "Review waiting" frame's
 //     presence/absence (flame.go:331-335, FirstReviewAt after start or
@@ -5383,11 +5389,11 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 			{
 				// The gap-declared counterpart to deployment_entity_id_
 				// bound_200 above. buildDeploymentFlameResponse's own root
-				// frame (flame.go:438, newFrame at flame.go:187-195;
+				// frame (flame.go:463, newFrame at flame.go:187-195;
 				// _build_deployment_flame_response's own root, services/
 				// flame.py:298-308, _frame at flame.py:26-48) is nil
 				// whenever end <= start -- and queue/pipeline/deploy
-				// (flame.go:443-459 / flame.py:310-348) all carry a
+				// (flame.go:468-484 / flame.py:310-348) all carry a
 				// non-nil ParentID, so root is the ONLY frame
 				// validateFlameFrames' own top_level filter (flame.go:
 				// 228-233 / flame.py:67) can ever see for this
@@ -5396,17 +5402,21 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				// immediately (flame.go:234-236 / flame.py:68-69) --
 				// before its own start/end coverage check ever runs. A
 				// deployment row carrying only deployed_at (started_at,
-				// merged_at, finished_at all NULL) hits exactly this:
-				// start = end = deployed_at (flame.go:415-434 / flame.py:
-				// 283-294's own coalesce chains), so end is never after
-				// start and root is nil. On production data, 0 of the proof
-				// organisation's 1135 deployments satisfy end > start: every
-				// one carries only deployed_at, so every one hits this path
-				// (see this file's own "Branches this corpus cannot provably
-				// reach" doc comment above). This entry, not
-				// deployment_entity_id_bound_200 above, is the deployment
-				// branch's live comparing case. Same operator-supplied-producer
-				// shape as
+				// merged_at, finished_at all NULL) with a terminal status
+				// hits exactly this: start = end = deployed_at (flame.go:
+				// 436-459 / flame.py:283-294's own coalesce chains) --
+				// deployment.DeployedAt is not strictly after start, and
+				// deploymentStatusIsRunning (flame.go:421-431) is false
+				// for a terminal status, so end falls through to the same
+				// unconditional deployed_at this route always used, never
+				// to nowLike(). On production data, 0 of the proof
+				// organisation's 1135 deployments satisfy end > start:
+				// every one carries only deployed_at with a terminal
+				// status, so every one hits this path (see this file's
+				// own "Branches this corpus cannot provably reach" doc
+				// comment above). This entry, not deployment_entity_id_
+				// bound_200 above, is the deployment branch's live
+				// comparing case. Same operator-supplied-producer shape as
 				// deployment_entity_id_bound_200: no route this corpus
 				// covers exposes a deployment_id on the wire, so this id
 				// is bound via -bind deployment_gap_entity_id=... (this
@@ -5417,7 +5427,13 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				// validateFlameFrames both raise the same "Flame frames
 				// have gaps" 422 -- so BodyMode is JSON, not status_only,
 				// and no Parity is declared: there is no data-dependent
-				// field left to diverge on.
+				// field left to diverge on. A row bound to this same
+				// producer but carrying a genuinely non-terminal status
+				// (deploymentStatusIsRunning true) would instead answer
+				// candidate 200 / baseline 422, a real declared divergence
+				// -- see this file's own "Branches this corpus cannot
+				// provably reach" doc comment above for why no live entry
+				// asserts that case today.
 				Name:                "deployment_gap_entity_id_bound_422",
 				Query:               url.Values{"entity_type": {"deployment"}},
 				WantCandidateStatus: 422, WantBaselineStatus: 422,

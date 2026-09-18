@@ -171,10 +171,16 @@ func TestGitLabDeploymentsEffectsAgainstMigratedSchema(t *testing.T) {
 
 // TestGitHubDeploymentsEffectsCarriesLifecycleForwardAgainstMigratedSchema
 // is the real-ClickHouse proof of the write-once lifecycle guard: a
-// deployment with real started_at/finished_at is re-synced with a
+// deployment with real started_at/finished_at/status is re-synced with a
 // LifecycleLookupFailed row (a transient statuses failure), and the
 // winning physical version, read back FINAL against the actual migrated
-// schema, still carries the original timestamps -- never NULL.
+// schema, still carries the original timestamps and status -- never NULL.
+// It then proves the SAME carried-forward row is recoverable, not
+// ambiguous: InspectEffect, given the exact same still-nil `regressed`
+// effect a crash-recovery pass would rebuild, must answer EffectExact, not
+// EffectConflict -- the guard's correction has to reach InspectEffect's
+// own `expected` rows, not only the physical INSERT, or every recovery
+// after a carried-forward write reads as an unresolvable divergence.
 func TestGitHubDeploymentsEffectsCarriesLifecycleForwardAgainstMigratedSchema(t *testing.T) {
 	ctx, conn := newDeploymentsIntegrationConn(t)
 	lease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
@@ -190,18 +196,21 @@ func TestGitHubDeploymentsEffectsCarriesLifecycleForwardAgainstMigratedSchema(t 
 	regressed := good
 	regressed.StartedAt = nil
 	regressed.FinishedAt = nil
+	regressed.Status = nil
 	regressed.LifecycleLookupFailed = true
 	regressed.LastSynced = now.Add(time.Minute)
-	if err := github.WriteEffect(ctx, claim, deploymentEffect(t, regressed)); err != nil {
+	regressedEffect := deploymentEffect(t, regressed)
+	if err := github.WriteEffect(ctx, claim, regressedEffect); err != nil {
 		t.Fatal(err)
 	}
 
 	var startedAt, finishedAt *time.Time
+	var status *string
 	if err := conn.QueryRow(
 		ctx,
-		`SELECT started_at, finished_at FROM deployments FINAL WHERE org_id = ? AND repo_id = ? AND deployment_id = ?`,
+		`SELECT started_at, finished_at, status FROM deployments FINAL WHERE org_id = ? AND repo_id = ? AND deployment_id = ?`,
 		claim.OrgID, good.RepoID, good.DeploymentID,
-	).Scan(&startedAt, &finishedAt); err != nil {
+	).Scan(&startedAt, &finishedAt, &status); err != nil {
 		t.Fatal(err)
 	}
 	if startedAt == nil || !startedAt.Equal(*good.StartedAt) {
@@ -210,6 +219,15 @@ func TestGitHubDeploymentsEffectsCarriesLifecycleForwardAgainstMigratedSchema(t 
 	if finishedAt == nil || !finishedAt.Equal(*good.FinishedAt) {
 		t.Fatalf("finished_at=%v want=%v (carried forward, not NULLed by the failed re-sync)", finishedAt, good.FinishedAt)
 	}
+	if status == nil || *status != *good.Status {
+		t.Fatalf("status=%v want=%v (carried forward, not NULLed by the failed re-sync)", status, good.Status)
+	}
+
+	// Recovery: a fresh Collect() pass that hit the exact same lookup
+	// failure rebuilds byte-identical rows to `regressedEffect` -- still
+	// showing the pre-guard nils. InspectEffect must still call this a
+	// match against the physical row the guard actually wrote.
+	assertDeploymentInspection(t, ctx, github, claim, regressedEffect, EffectExact)
 }
 
 type deploymentEffectsIntegrationSink interface {

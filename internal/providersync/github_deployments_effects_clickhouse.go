@@ -119,6 +119,25 @@ func (sink deploymentsClickHouseEffects) InspectEffect(ctx context.Context, clai
 	if sink.Conn == nil {
 		return EffectConflict, ErrInvalidConfiguration
 	}
+	// A row this batch could not honestly derive a lifecycle for
+	// (LifecycleLookupFailed, decoded straight from the original effect
+	// bytes -- the field survives JSON round-tripping) had its
+	// started_at/finished_at/status carried forward from the stored row at
+	// WriteEffect time (guardDeploymentLifecycleRegressions above). Recovery
+	// rebuilds `expected` from a fresh Collect() pass that knows nothing of
+	// that carry-forward, so without applying the identical correction here
+	// too, `expected` still shows the pre-guard nils while the actually
+	// persisted row shows the carried-forward values -- a real row, freshly
+	// re-verified, would read as EffectConflict (ErrEffectRecoveryAmbiguous)
+	// purely from this mismatch, never from any genuine data divergence. A
+	// guard-read failure here is non-fatal, the same as WriteEffect's own
+	// choice: `expected` is compared uncorrected rather than failing the
+	// whole inspection outright.
+	if stored, storedErr := loadStoredDeploymentLifecycle(ctx, sink.Conn, claim.OrgID, expected); storedErr != nil {
+		slog.Warn("providersync.deployment.lifecycle_regression_guard_read_failed", "org_id", claim.OrgID, "provider", claim.Provider, "unit_id", claim.ID, "cause", storedErr.Error())
+	} else {
+		guardDeploymentLifecycleRegressions(expected, stored)
+	}
 	exact, absent := 0, 0
 	for _, row := range expected {
 		inspection, err := sink.inspectDeployment(ctx, row)
@@ -218,13 +237,14 @@ type deploymentLifecycleGuardKey struct {
 type storedDeploymentLifecycle struct {
 	StartedAt  *time.Time
 	FinishedAt *time.Time
+	Status     *string
 }
 
 // deploymentLifecycleCarriedForward is one row where a stored started_at/
-// finished_at was carried forward over a nil this pass's statuses lookup
-// produced by failing (never over an honest, successful-but-empty nil). It
-// carries only the row's own key -- never status/environment or any other
-// row content -- the same minimal shape
+// finished_at/status was carried forward over a nil this pass's statuses
+// lookup produced by failing (never over an honest, successful-but-empty
+// nil). It carries only the row's own key -- never environment or any
+// other row content -- the same minimal shape
 // pullRequestMergedAtRegressionGuarded already uses for its own write-once
 // guard.
 type deploymentLifecycleCarriedForward struct {
@@ -261,7 +281,7 @@ func loadStoredDeploymentLifecycle(
 		return nil, nil
 	}
 	dbRows, err := conn.Query(ctx, `
-SELECT repo_id, deployment_id, started_at, finished_at
+SELECT repo_id, deployment_id, started_at, finished_at, status
 FROM deployments FINAL
 WHERE org_id = ? AND repo_id IN (?) AND deployment_id IN (?)`,
 		orgID, repoIDs, deploymentIDs,
@@ -274,10 +294,11 @@ WHERE org_id = ? AND repo_id IN (?) AND deployment_id IN (?)`,
 	for dbRows.Next() {
 		var repoID, deploymentID string
 		var startedAt, finishedAt *time.Time
-		if err := dbRows.Scan(&repoID, &deploymentID, &startedAt, &finishedAt); err != nil {
+		var status *string
+		if err := dbRows.Scan(&repoID, &deploymentID, &startedAt, &finishedAt, &status); err != nil {
 			return nil, err
 		}
-		stored[deploymentLifecycleGuardKey{RepoID: repoID, DeploymentID: deploymentID}] = storedDeploymentLifecycle{StartedAt: startedAt, FinishedAt: finishedAt}
+		stored[deploymentLifecycleGuardKey{RepoID: repoID, DeploymentID: deploymentID}] = storedDeploymentLifecycle{StartedAt: startedAt, FinishedAt: finishedAt, Status: status}
 	}
 	return stored, dbRows.Err()
 }
@@ -306,11 +327,12 @@ func guardDeploymentLifecycleRegressions(
 			continue
 		}
 		prior, ok := stored[deploymentLifecycleGuardKey{RepoID: row.RepoID, DeploymentID: row.DeploymentID}]
-		if !ok || (prior.StartedAt == nil && prior.FinishedAt == nil) {
+		if !ok || (prior.StartedAt == nil && prior.FinishedAt == nil && prior.Status == nil) {
 			continue
 		}
 		rows[i].StartedAt = prior.StartedAt
 		rows[i].FinishedAt = prior.FinishedAt
+		rows[i].Status = prior.Status
 		carried = append(carried, deploymentLifecycleCarriedForward{RepoID: row.RepoID, DeploymentID: row.DeploymentID})
 	}
 	return carried

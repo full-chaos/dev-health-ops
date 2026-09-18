@@ -48,10 +48,12 @@ import (
 //     declared fan-out. A repository whose shared cells disagree, or
 //     whose only shared-cell ratio is non-integer, has NO verified k and
 //     explains nothing below.
+//
 //  2. A shared-key (present on both sides) cell VALUE difference is
 //     admitted only when the baseline value equals the candidate value
 //     times its OWN repository's verified k, exactly (within
 //     repoFanoutFloatsWithinTolerance).
+//
 //  3. Both `data.cells` lists are reconstructed into per-FILE totals
 //     (summing every cell's own value across the weeks it appears in --
 //     the SAME total `data.axes.y`'s own sort key uses) and required to
@@ -59,6 +61,7 @@ import (
 //     WHOLE plan, never a partial guess -- the same discipline
 //     HotspotListBoundaryShape's own rule 1 applies to the sankey
 //     route's file list.
+//
 //  4. A baseline-only (leaving) file is an ENTRANT admission candidate
 //     when its own repository carries a verified k>1 and its total
 //     divided by k -- its true, undoubled total -- sits at or under the
@@ -69,16 +72,92 @@ import (
 //     minimum excluding every baseline-only file) -- identical to
 //     HotspotListBoundaryShape's own rules 2/3, applied to a
 //     reconstructed FILE list instead of a sankey graph.
+//
 //  5. Once rule 4 decides the file sets: every one of an admitted file's
 //     own cells (every week it appears in, on its own leg) is admitted
 //     as a presence finding.
-//  6. A `data.axes.y[N]` difference is admitted only when BOTH the
-//     baseline name and the candidate name occupying position N are
-//     names this SAME plan already admitted -- as a rule-4 entrant/
-//     leaver, or as a rule-2 shared-value admission. Never a bare "any
+//
+//  6. A `data.axes.y[N]` difference is admitted when BOTH the baseline
+//     name and the candidate name occupying position N are names this
+//     SAME plan already admitted -- as a rule-4 entrant/leaver, or as a
+//     rule-2 shared-value admission -- OR when the TWO-SIDED whole-list
+//     identity below holds for the whole comparison. Never a bare "any
 //     axis diff is fine": a swap between two names this plan has no
 //     opinion about (a genuine Go regression, or an unrelated ordering
-//     artifact) stays outside.
+//     artifact) stays outside either way.
+//
+//     TWO-SIDED WHOLE-LIST IDENTITY (rule 6b): rules 1-5 above admit
+//     every axis position EXCEPT one whose own file is untouched by any
+//     repository's fan-out but whose RANK still moves because its
+//     touched neighbours' own ranks move around it -- neither name at
+//     such a position is ever a rule-4/rule-2 admission, so rule 6 alone
+//     leaves it outside. This identity recovers that residual, over the
+//     UNION of baseFileTotal's and candFileTotal's own file sets (every
+//     file either page names):
+//
+//     - per file f, the true total t(f) is: candFileTotal[f] when f is
+//     on the candidate page (present in candFileTotal, whether
+//     shared or rule-4 entrant); otherwise baseFileTotal[f] divided
+//     by f's own repository's verified k (a baseline-only file of a
+//     corroborated repository); otherwise baseFileTotal[f] itself (a
+//     baseline-only file of a repository with no verified k --
+//     untouched, so its baseline value already IS its true value).
+//     - b(f) is t(f) times f's own repository's verified k (t(f)
+//     unchanged for an uncorroborated repository) -- re-inflating t(f)
+//     by the SAME verified multiplier rule 1 already established.
+//
+//     TIE-GROUP AWARE, per the route's own deterministic tiebreak: this
+//     port's own axisOrder breaks a total-value tie name-ascending
+//     (heatmap/response.go); the reference plane's own tie-break is
+//     unverifiable row-encounter order. This identity therefore never
+//     demands a strict order across a genuine tie -- it groups the union
+//     by EQUAL t(f) into "true groups" (identity (i)'s own key) and,
+//     SEPARATELY, by EQUAL b(f) into "base groups" (identity (ii)'s own
+//     key), and checks:
+//
+//     NOT REQUIRED: the two groupings need never be the identical
+//     partition. Identity (i) checks the candidate's own axis against
+//     ONLY the t(f) grouping; identity (ii) checks the baseline's own
+//     axis against ONLY the b(f) grouping -- each is a complete,
+//     self-contained claim about its own target axis, and nothing in
+//     either claim reads what the OTHER key's own grouping looks like.
+//     A file whose own repository is untouched (no verified k) tying
+//     under t(f) with an unrelated untouched file at the exact value a
+//     TOUCHED file's own b(f) (t(f) times its verified k) coincidentally
+//     lands on is not a genuine cross-plane ambiguity -- it is simply
+//     two DIFFERENT, independently well-defined rankings that happen to
+//     share a number: a corroborated repository's own leaver file's true
+//     total, divided out by its verified k, can equal an unrelated
+//     untouched file's own total purely by coincidence of the two
+//     underlying quantities, with no shared mechanism linking them and
+//     no ambiguity for either identity to resolve on its own terms.
+//
+//     - identity (i): concatenating the true groups in t(f)-descending
+//     order, each group's own names sorted ASCENDING internally (the
+//     route's own deterministic tiebreak), and cutting at Limit,
+//     reproduces the candidate's own axis EXACTLY, position for
+//     position.
+//     - identity (ii): concatenating the base groups in b(f)-descending
+//     order and cutting at Limit reproduces the SAME axis positions
+//     the baseline's own axis occupies over that same contiguous
+//     range, group for group, as SETS -- the reference's own order
+//     INSIDE one tied group is never constrained, only which
+//     contiguous range of positions that group's own names occupy.
+//
+//     A group whose own members straddle the Limit cut -- the cut falls
+//     strictly inside it under that identity's own group order, not on
+//     a group boundary -- refuses that identity outright: the listed
+//     subset of a straddling group is not determined by anything this
+//     shape can verify.
+//
+//     Both identities must hold, over the WHOLE axis, for rule 6b to
+//     admit anything -- it is an all-or-nothing property of this ONE
+//     comparison, never evaluated position by position. When it holds,
+//     every `data.axes.y[N]` finding is admitted, including the
+//     residual positions rules 1-5 alone could not reach. When either
+//     identity fails to reproduce its own target exactly, rule 6b
+//     admits NOTHING and axis admission falls back to rule 6's own
+//     per-position rule unchanged.
 //
 // What this shape CANNOT catch: a repository whose shared cells carry a
 // non-integer or non-uniform ratio (the same kind of miss
@@ -90,6 +169,25 @@ import (
 // a team-scoped hotspot_risk request where BOTH this mechanism and the
 // team-repo-subset mechanism touch the SAME cell in the SAME comparison
 // is outside this shape's current scope.
+//
+// PROVENANCE LIMIT, shared with rule 1 (repoFanoutIntegerMultiplier) and
+// rule 4, both pre-existing: an integer ratio corroborated by two
+// independent shared cells, and a leaver/entrant pair each sitting at or
+// under the other side's own floor, are STRUCTURAL evidence consistent
+// with the declared repos-join mechanism -- they are not, and cannot be,
+// proof that THIS SPECIFIC candidate value was produced by that
+// mechanism rather than by an unrelated regression that happens to
+// produce the identical numbers. Rule 6b never raises or lowers this
+// bar: it only ever propagates a comparison rule 1/4 has ALREADY
+// admitted to the one further axis-position consequence that
+// admission's own arithmetic implies (an untouched neighbour's own rank
+// moving because the admitted leaver/entrant's rank moved past it) --
+// see TestHeatmapCellBoundaryShape_TwoSidedAxisIdentityAdmitsACorroboratedLeaverEntrantRankShift.
+// A comparison rule 1/4 does not admit gets no help from rule 6b either;
+// this shape's only defense against an unrelated regression sharing the
+// same numbers is rule 1's own two-independent-cells requirement, the
+// same defense every shape built on repoFanoutIntegerMultiplier in this
+// package already carries.
 type HeatmapCellBoundaryShape struct {
 	// CellsListPath is the dotted, index-free path to the cells LIST
 	// itself, e.g. "data.cells".
@@ -146,6 +244,26 @@ type heatmapCellBoundaryPlan struct {
 	// axis finding's own two names directly, rather than re-parsing them
 	// out of the finding's own Detail string.
 	axisBaseline, axisCandidate []string
+	// axisIdentityHolds is rule 6b's own whole-comparison verdict: the
+	// union's t(f)/b(f) groupings are the identical partition, and both
+	// tie-group-aware identities reproduced their own target axis EXACTLY.
+	// true admits every data.axes.y[N] finding unconditionally; false
+	// (the default) leaves axis admission on rule 6's own per-position
+	// rule alone.
+	axisIdentityHolds bool
+}
+
+// heatmapCellRowsSortedByKey returns cells' own rows ordered by their
+// own pairing key (heatmapCellRow.key), ascending -- a deterministic,
+// run-to-run reproducible iteration order over a map whose own Go
+// iteration order is randomized per process.
+func heatmapCellRowsSortedByKey(cells map[string]heatmapCellRow) []heatmapCellRow {
+	rows := make([]heatmapCellRow, 0, len(cells))
+	for _, row := range cells {
+		rows = append(rows, row)
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].key < rows[j].key })
+	return rows
 }
 
 // heatmapFileRepo reads a file_key's own repository ("<repo>:<path>" ->
@@ -263,14 +381,27 @@ func buildHeatmapCellBoundaryPlan(shape *HeatmapCellBoundaryShape, baselineData,
 	plan.axisBaseline = axisBase
 	plan.axisCandidate = axisCand
 
+	// Both totals accumulate over baseCells/candCells' own KEY-SORTED
+	// order, never raw map iteration: Go's own map iteration order is
+	// randomized per run, and floating-point addition is not
+	// associative, so summing the SAME cell values in two different
+	// orders can differ in the LAST bit. Rules 1-5 below only ever
+	// compare these totals with a tolerance (repoFanoutFloatsWithinTolerance),
+	// which absorbs that noise invisibly, but rule 6b's own tie-group
+	// partitioning needs an EXACT, run-to-run REPRODUCIBLE total -- the
+	// same premise HeatmapAxisTieGroupShape's own cross-leg equality
+	// check already carries (heatmapaxistiegroup.go's own
+	// heatmapSumTotalsByName has the identical latent exposure, unfixed
+	// here since this file owns baseFileTotal/candFileTotal, not that
+	// one's own re-derivation).
 	baseFileTotal := map[string]float64{}
 	baseFileRepo := map[string]string{}
-	for _, row := range baseCells {
+	for _, row := range heatmapCellRowsSortedByKey(baseCells) {
 		baseFileTotal[row.file] += row.value
 		baseFileRepo[row.file] = heatmapFileRepo(row.file)
 	}
 	candFileTotal := map[string]float64{}
-	for _, row := range candCells {
+	for _, row := range heatmapCellRowsSortedByKey(candCells) {
 		candFileTotal[row.file] += row.value
 	}
 
@@ -382,7 +513,199 @@ func buildHeatmapCellBoundaryPlan(shape *HeatmapCellBoundaryShape, baselineData,
 		}
 	}
 
+	// Rule 6b: the two-sided whole-list identity -- see the type doc
+	// comment's own derivation. Built over the UNION of baseFileTotal's
+	// and candFileTotal's own file sets, independent of which files rules
+	// 3/4 happened to admit: a tie or a reconstruction mismatch here
+	// refuses rule 6b outright and axis admission falls back to rule 6's
+	// own per-position rule, already fully evaluated above.
+	plan.axisIdentityHolds = heatmapAxisTwoSidedIdentityHolds(
+		baseFileTotal, candFileTotal, repoMultiplier, axisBase, axisCand, shape.Limit,
+	)
+
 	return plan
+}
+
+// heatmapAxisRow is one union file's own true total (identity (i)'s own
+// grouping/sort key) alongside its own repository-reinflated total
+// (identity (ii)'s own grouping/sort key) -- computed once per file, so
+// both identities group and sort from the SAME pair of numbers rather
+// than two independent passes that could drift apart under
+// floating-point rounding.
+type heatmapAxisRow struct {
+	file    string
+	trueKey float64 // identity (i)'s own key: t(f).
+	baseKey float64 // identity (ii)'s own key: t(f) * k (or t(f)).
+}
+
+// heatmapAxisTwoSidedIdentityHolds evaluates rule 6b in full: it builds
+// t(f)/b(f) for the union of baseFileTotal's and candFileTotal's own
+// file sets (see the type doc comment's own definitions) and reports
+// whether identity (i) (candidate, grouped and sorted by t(f)) and
+// identity (ii) (baseline, grouped and sorted by b(f)) EACH
+// independently hold -- see the type doc comment's own F5 note for why
+// the two groupings are never required to be the identical partition:
+// each identity checks its OWN target axis against its OWN key's own
+// grouping, and nothing about that check depends on what the OTHER
+// key's own grouping happens to look like.
+func heatmapAxisTwoSidedIdentityHolds(
+	baseFileTotal, candFileTotal map[string]float64,
+	repoMultiplier map[string]int,
+	axisBaseline, axisCandidate []string,
+	limit int,
+) bool {
+	// limit <= 0 is already refused by this plan's own rule 3 (the
+	// shape.Limit <= 0 branch, evaluated before this function is ever
+	// called from buildHeatmapCellBoundaryPlan) -- kept here anyway as
+	// this function's own explicit precondition, since it is a
+	// substantial, independently-reasoned algorithm, not a trivial
+	// private helper whose every precondition is safe to assume from a
+	// single call site. len(axisBaseline)/len(axisCandidate) != limit is
+	// NOT similarly shadowed: nothing else in this file requires the
+	// route's own data.axes.y array to carry exactly Limit entries, so a
+	// response whose axis array length disagrees with its own cell-total
+	// count is a genuine, reachable case this check refuses.
+	if limit <= 0 || len(axisBaseline) != limit || len(axisCandidate) != limit {
+		return false
+	}
+
+	union := make(map[string]bool, len(baseFileTotal)+len(candFileTotal))
+	if len(baseFileTotal) > 0 {
+		for file := range baseFileTotal {
+			union[file] = true
+		}
+	}
+	if len(candFileTotal) > 0 {
+		for file := range candFileTotal {
+			union[file] = true
+		}
+	}
+
+	rows := make([]heatmapAxisRow, 0, len(union))
+	if len(union) > 0 {
+		for file := range union {
+			var trueValue float64
+			if value, onCandidate := candFileTotal[file]; onCandidate {
+				trueValue = value
+			} else if k, ok := repoMultiplier[heatmapFileRepo(file)]; ok {
+				trueValue = baseFileTotal[file] / float64(k)
+			} else {
+				trueValue = baseFileTotal[file]
+			}
+			baseValue := trueValue
+			if k, ok := repoMultiplier[heatmapFileRepo(file)]; ok {
+				baseValue = trueValue * float64(k)
+			}
+			rows = append(rows, heatmapAxisRow{file: file, trueKey: trueValue, baseKey: baseValue})
+		}
+	}
+	// This is already shadowed by the SAME rule-3 guarantee the top-level
+	// limit check above states: len(baseFileTotal) == len(candFileTotal)
+	// == limit, so the union (rows) can never be SHORTER than limit --
+	// kept for the same explicit-precondition reason.
+	if len(rows) < limit {
+		return false
+	}
+
+	trueGroups := heatmapAxisGroupByKeyDesc(rows, func(r heatmapAxisRow) float64 { return r.trueKey })
+	if !heatmapAxisIdentityICandidateMatches(trueGroups, axisCandidate, limit) {
+		return false
+	}
+
+	baseGroups := heatmapAxisGroupByKeyDesc(rows, func(r heatmapAxisRow) float64 { return r.baseKey })
+	return heatmapAxisIdentityIIBaselineMatches(baseGroups, axisBaseline, limit)
+}
+
+// heatmapAxisGroupByKeyDesc sorts rows by key descending (stable) and
+// splits the result into contiguous runs of EXACTLY equal key value --
+// each run is one tie group, in descending-key order.
+func heatmapAxisGroupByKeyDesc(rows []heatmapAxisRow, key func(heatmapAxisRow) float64) [][]string {
+	sorted := append([]heatmapAxisRow(nil), rows...)
+	sort.SliceStable(sorted, func(i, j int) bool { return key(sorted[i]) > key(sorted[j]) })
+	var groups [][]string
+	for i := 0; i < len(sorted); {
+		j := i + 1
+		for j < len(sorted) && key(sorted[j]) == key(sorted[i]) {
+			j++
+		}
+		group := make([]string, 0, j-i)
+		for _, row := range sorted[i:j] {
+			group = append(group, row.file)
+		}
+		groups = append(groups, group)
+		i = j
+	}
+	return groups
+}
+
+// heatmapAxisIdentityICandidateMatches walks trueGroups (already in
+// t(f)-descending order) accumulating position count; a group straddling
+// the Limit cut refuses outright. Otherwise the groups fully inside the
+// cut, each sorted name-ascending internally (this port's own
+// deterministic tiebreak), concatenate to EXACTLY Limit names, compared
+// byte-for-byte to axisCandidate.
+func heatmapAxisIdentityICandidateMatches(trueGroups [][]string, axisCandidate []string, limit int) bool {
+	// A group straddling the Limit cut is NOT refused with its own early
+	// exit here: this loop always accumulates a group's own members
+	// WHOLE whenever pos < limit, so a straddling group (pos < limit,
+	// end > limit) always overshoots -- len(prefix) ends up STRICTLY
+	// GREATER than limit, caught by the length check right below the
+	// loop. No input reaches an early exit at this exact point that the
+	// length check does not already reach -- proven by direct mutation.
+	prefix := make([]string, 0, limit)
+	pos := 0
+	for _, group := range trueGroups {
+		if pos < limit {
+			sortedGroup := append([]string(nil), group...)
+			sort.Strings(sortedGroup)
+			prefix = append(prefix, sortedGroup...)
+		}
+		pos += len(group)
+		if pos >= limit {
+			break
+		}
+	}
+	if len(prefix) != limit {
+		return false
+	}
+	for i := 0; i < limit; i++ {
+		if prefix[i] != axisCandidate[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// heatmapAxisIdentityIIBaselineMatches walks baseGroups (already in
+// b(f)-descending order) the same way: a straddling group refuses
+// outright. Otherwise, for every group fully inside the cut, the SAME
+// contiguous position range in axisBaseline must hold EXACTLY that
+// group's own file set -- any order inside the range, since the
+// reference's own tiebreak among a genuine tie is unverifiable.
+func heatmapAxisIdentityIIBaselineMatches(baseGroups [][]string, axisBaseline []string, limit int) bool {
+	// A group straddling the Limit cut is NOT refused with its own early
+	// exit here either: the caller already guarantees len(axisBaseline)
+	// == limit, so "end > limit" (a straddle) and "end > len(axisBaseline)"
+	// right below are the IDENTICAL condition -- proven by direct
+	// mutation, the same discipline identity (i)'s own sibling check
+	// states.
+	pos := 0
+	for _, group := range baseGroups {
+		end := pos + len(group)
+		if pos < limit {
+			if end > len(axisBaseline) {
+				return false
+			}
+			if !heatmapNameSetsEqual(heatmapNameSet(axisBaseline[pos:end]), heatmapNameSet(group)) {
+				return false
+			}
+		}
+		pos = end
+		if pos >= limit {
+			break
+		}
+	}
+	return pos >= limit
 }
 
 // admits reports whether one Finding is covered by this plan.
@@ -407,6 +730,9 @@ func (p *heatmapCellBoundaryPlan) admits(finding Finding) bool {
 		idx, ok := edgeListIndex(finding.Path, p.shape.AxisListPath)
 		if !ok || idx < 0 || idx >= len(p.axisBaseline) || idx >= len(p.axisCandidate) {
 			return false
+		}
+		if p.axisIdentityHolds {
+			return true
 		}
 		return p.admittedFileNames[p.axisBaseline[idx]] && p.admittedFileNames[p.axisCandidate[idx]]
 	}

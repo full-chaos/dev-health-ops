@@ -756,7 +756,55 @@ var drilldownPRsParity = Options{
 				IDField:  RESTDedupKeyField,
 			},
 		},
+		{
+			Ticket:             "CHAOS-5968",
+			Reason:             "the same repos-join fan-out mechanism as this table's own CHAOS-5959 length entry above, over the case CHAOS-5959's own exact-collapse rule cannot reach: fetch_pull_requests' own INNER JOIN repos (api/queries/drilldown.py) reads repos WITHOUT FINAL, so while one or more repos rows sit unmerged (ReplacingMergeTree(last_synced), any repo a sync has recently written to, not confined to one particular repo or a fixed cadence) the join doubles every pull request belonging to one of those repos; fetchPullRequestsQuery's own ORDER BY created_at DESC LIMIT (drilldown/prs.go) means each doubled row spends one extra slot a genuinely distinct, later-ranked pull request would otherwise have occupied, so the candidate page -- reading the same table FINAL, never spending a slot on a duplicate -- reaches further and lists distinct ids the baseline's own page never got to. Confirmed against two real production captures (team_scoped), both outside any single fixed sync cadence: a PARTIAL capture, baseline 50 items at the route's own limit, 28 distinct ids, 22 of them duplicated exactly 2x each, byte-identical, candidate 36 items with 8 candidate-only ids in its own tail (the true, deduplicated population, 36, itself under the route's own limit, 50); and an ALL-DOUBLED capture, baseline 50 items, 25 distinct ids ACROSS TWO repos, every one of the 25 duplicated exactly 2x each, byte-identical (the window's own population entirely covered by repos with an unmerged repos row at capture time, not merely some of it), candidate 36 items with dedup(baseline)'s own 25 ids as its own literal prefix and 11 candidate-only ids in the tail. No property of a candidate-only tail row is a content check -- uniqueness and ordering are the only structural properties available for a row the baseline page never reached, never a check on whether that row's own id or timestamp is correct. Go is correct.",
+			Paths:              []string{"data.items"},
+			Intermittent:       true,
+			IntermittentReason: "present only while the baseline page is both truncated at the route's own limit AND holds an unmerged physical version that duplicates a returned pull request's own identity; a comparison taken after the next background merge, or one whose baseline page never reaches the limit at all, shows no length divergence for this entry",
+			DuplicateCollapsePageCutShape: &DuplicateCollapsePageCutShape{
+				ListPath:  "data.items",
+				IDField:   RESTDedupKeyField,
+				SortField: "created_at",
+				Limit:     drilldownPRsDefaultLimit,
+			},
+		},
 	},
+}
+
+// drilldownPRsDefaultLimit is fetchPullRequestsQuery's own page size when
+// a request sends no `limit` at all -- drilldown.py's own `limit: int =
+// 50` keyword default (api/queries/drilldown.py) and drilldown/prs.go's
+// own doc comment stating the identical GET-hardcoded/POST-`or 50`
+// resolution (PRParams.Limit's own doc comment, prs.go:33-38). GET never
+// accepts a `limit` query param at all, so every GET request in this
+// corpus reaches this same value; POST's own "explicit_scope_and_sort"
+// entry is the one request in this corpus that sends a different value,
+// and reaches drilldownPRsParityWithLimit instead.
+const drilldownPRsDefaultLimit = 50
+
+// drilldownPRsParityWithLimit returns drilldownPRsParity with a fresh
+// copy of its own DuplicateCollapsePageCutShape entry whose Limit is set
+// to THIS request's effective limit -- the same convention
+// investmentSunburstParityWithLimit already establishes for the
+// identical class of per-request LIMIT field. Every other entry in
+// BaselineDefects is the SAME slice element (copied by value, unchanged),
+// so this only ever changes what the page-cut entry itself checks.
+func drilldownPRsParityWithLimit(limit int) Options {
+	opts := drilldownPRsParity
+	defects := make([]BaselineDefect, len(drilldownPRsParity.BaselineDefects))
+	copy(defects, drilldownPRsParity.BaselineDefects)
+	for i, defect := range defects {
+		if defect.DuplicateCollapsePageCutShape == nil {
+			continue
+		}
+		shape := *defect.DuplicateCollapsePageCutShape
+		shape.Limit = limit
+		defect.DuplicateCollapsePageCutShape = &shape
+		defects[i] = defect
+	}
+	opts.BaselineDefects = defects
+	return opts
 }
 
 // drilldownPRsDedup is every admissible drilldown/prs request's dedup
@@ -4265,7 +4313,7 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 					"limit": 25,
 				},
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
-				BodyMode: RESTBodyModeJSON, Parity: drilldownPRsParity,
+				BodyMode: RESTBodyModeJSON, Parity: drilldownPRsParityWithLimit(25),
 				DedupListPath: drilldownPRsDedup.ListPath, DedupKeyFields: drilldownPRsDedup.KeyFields,
 			},
 			{

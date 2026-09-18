@@ -31,13 +31,18 @@ import "sort"
 // The shape this type verifies, over the two DECODED `data.cells`/
 // `data.axes.y` values:
 //
-//  1. The two legs' `data.axes.y` name lists are the EXACT SAME SET (no
-//     entrant, no leaver -- that boundary-crossing case belongs to
-//     HeatmapAxisRepoOrderShape/HeatmapCellBoundaryShape, not here), and
-//     each leg's own list is a valid descending-by-its-own-total order
-//     (ties permitted, a strict increase anywhere is not) -- a list this
-//     shape's model of `_axis_order`/`axisOrder` does not actually
-//     describe is refused outright rather than guessed at.
+//  1. Neither leg's own `data.axes.y` list carries a repeated name (a
+//     list this shape's model does not describe, refused outright
+//     before the set comparison below -- a repeat silently collapses
+//     into one set entry, which would otherwise hide that some OTHER
+//     name is missing from the same list). The two legs' `data.axes.y`
+//     name lists are then the EXACT SAME SET (no entrant, no leaver --
+//     that boundary-crossing case belongs to HeatmapAxisRepoOrderShape/
+//     HeatmapCellBoundaryShape, not here), and each leg's own list is a
+//     valid descending-by-its-own-total order (ties permitted, a strict
+//     increase anywhere is not) -- a list this shape's model of
+//     `_axis_order`/`axisOrder` does not actually describe is refused
+//     outright rather than guessed at.
 //  2. `data.cells` is reconstructed into per-name totals on EACH leg
 //     independently (summing every cell's own value across the buckets
 //     it appears in -- the SAME total the axis sort key uses). A
@@ -148,13 +153,19 @@ func heatmapNamesSortedAscending(names []string) bool {
 // heatmapSumTotalsByName sums every decoded cell's own value into its
 // own name (the SAME total the axis sort key uses). An empty cells map
 // carries nothing to sum, and returns the empty totals map with no
-// iteration at all.
+// iteration at all. Cells are summed in the cells' own sorted-key order
+// (heatmapCellRowsSortedByKey, shared with HeatmapCellBoundaryShape's
+// own rule 6) rather than Go's randomized map iteration order: float64
+// addition is not associative, so summing the same cells in a different
+// order can change the total's own last bit run to run, which this
+// shape's own exact float64 equality checks (the contiguous equal-total
+// run walk and heatmapAxisTieGroupAdmits, both below) are sensitive to.
 func heatmapSumTotalsByName(cells map[string]heatmapCellRow) map[string]float64 {
 	totals := map[string]float64{}
 	if len(cells) == 0 {
 		return totals
 	}
-	for _, row := range cells {
+	for _, row := range heatmapCellRowsSortedByKey(cells) {
 		totals[row.file] = totals[row.file] + row.value
 	}
 	return totals
@@ -190,6 +201,18 @@ func buildHeatmapAxisTieGroupPlan(shape *HeatmapAxisTieGroupShape, baselineData,
 	}
 	baseAxisSet := heatmapNameSet(axisBase)
 	candAxisSet := heatmapNameSet(axisCand)
+	// A name repeated within one leg's own axis list collapses into a
+	// single entry once turned into a set, silently losing the
+	// information that some OTHER name is missing from that same list --
+	// two distinct malformations (a repeat, an omission) that heatmap
+	// NameSetsEqual's own set-vs-set comparison below cannot tell apart
+	// from a genuine, well-formed match. Refuse outright: a leg's own
+	// axis list carrying a repeated name is not a list this shape's
+	// model of `_axis_order`/`axisOrder` (one entry per distinct file)
+	// actually describes.
+	if len(axisBase) != len(baseAxisSet) || len(axisCand) != len(candAxisSet) {
+		return plan
+	}
 	if !heatmapNameSetsEqual(baseAxisSet, candAxisSet) {
 		return plan
 	}

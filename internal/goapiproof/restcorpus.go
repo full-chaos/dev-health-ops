@@ -882,12 +882,76 @@ var drilldownPRsTeamScopeSubsetDefect = BaselineDefect{
 	},
 }
 
+// drilldownPRsTeamScopeUncutDefect names the ONE further consequence of
+// the SAME repos-join duplicate-row mechanism this table's own CHAOS-
+// 5959/CHAOS-5968 entries already declare, over the case neither of
+// them content-verifies: a candidate-only tail row's own field, id
+// included (CHAOS-5968's own doc comment states why -- no baseline
+// value for it exists to check against once the page is genuinely cut).
+// GET carries no limit parameter at all -- its own effective limit is
+// fixed at 50, on both planes, immovable by any request. POST's own
+// limit has no ceiling on either plane. So a request whose effective
+// limit is high enough, or whose window is short enough, can keep the
+// true team population -- doubled by the fan-out or not -- entirely
+// under that limit; when it does, collapsing baseline's own duplicate
+// rows content-verifies every field of every row, byte for byte, under
+// the SAME exact-collapse rule CHAOS-5959 already applies to the
+// unbounded case. RequestLimit's own precondition (DuplicateCollapse
+// LengthShape's own doc comment) refuses this entry outright, rather
+// than admit a match, whenever the baseline's own raw length reaches
+// the request's own effective limit -- that reach is the one signal
+// available from the response bodies alone that candidate's own leg
+// might be independently truncated at the identical boundary, which
+// would make an exact-collapse match prove only that the two leading
+// pages agree, never that the whole population was compared.
+var drilldownPRsTeamScopeUncutDefect = BaselineDefect{
+	Ticket:             "CHAOS-5988",
+	Reason:             "the same repos-join fan-out mechanism this table's own CHAOS-5959/CHAOS-5968 entries declare, over the request shapes -- an explicit high limit, or a short enough window -- that keep a team's own true population strictly under the request's own effective limit even fully doubled: GET's own limit is fixed at 50 on both planes (no limit parameter exists at all); POST's own limit has no ceiling on either plane. When the true population fits, every field of every row is content-verified by the exact-collapse rule, id included -- the one property CHAOS-5968's own page-cut case cannot ever check. A baseline whose own raw length reaches the request's own effective limit goes idle under this entry instead, never falling back to CHAOS-5968's own admission: reaching the limit is the one signal available from the response bodies alone that candidate's own leg might share the identical truncation boundary, which would make an exact-collapse match prove only that the two leading pages agree. Go is correct.",
+	Paths:              []string{"data.items"},
+	Intermittent:       true,
+	IntermittentReason: "present only while the requested team's own true population, doubled by an in-flight repos-join fan-out or not, fits strictly under the request's own effective limit; a baseline whose own raw length reaches that limit goes idle under this entry (\"page possibly cut\") rather than risk admitting a match neither leg's own truncation boundary can rule out",
+	DuplicateCollapseLengthShape: &DuplicateCollapseLengthShape{
+		ListPath:     "data.items",
+		IDField:      RESTDedupKeyField,
+		RequestLimit: drilldownPRsDefaultLimit,
+	},
+}
+
 // drilldownPRsTeamScopedParity is drilldownPRsParity plus
-// drilldownPRsTeamScopeSubsetDefect.
+// drilldownPRsTeamScopeSubsetDefect and drilldownPRsTeamScopeUncutDefect.
 var drilldownPRsTeamScopedParity = Options{
 	NumericLeavesDeclared: true,
 	IntegerLeaves:         drilldownPRsIntegerLeaves,
-	BaselineDefects:       append(append([]BaselineDefect{}, drilldownPRsParity.BaselineDefects...), drilldownPRsTeamScopeSubsetDefect),
+	BaselineDefects:       append(append([]BaselineDefect{}, drilldownPRsParity.BaselineDefects...), drilldownPRsTeamScopeSubsetDefect, drilldownPRsTeamScopeUncutDefect),
+}
+
+// drilldownPRsTeamScopedParityWithLimit returns drilldownPRsTeamScopedParity
+// with a fresh copy of its own CHAOS-5968 (DuplicateCollapsePageCutShape)
+// and CHAOS-5988 (DuplicateCollapseLengthShape, by ticket -- never the
+// table's OTHER DuplicateCollapseLengthShape entry, CHAOS-5959, which
+// stays RequestLimit-unset) entries, both set to THIS request's own
+// effective limit -- the same per-request-limit convention
+// drilldownPRsParityWithLimit already establishes for CHAOS-5968 alone.
+func drilldownPRsTeamScopedParityWithLimit(limit int) Options {
+	opts := drilldownPRsTeamScopedParity
+	defects := make([]BaselineDefect, len(drilldownPRsTeamScopedParity.BaselineDefects))
+	copy(defects, drilldownPRsTeamScopedParity.BaselineDefects)
+	for i, defect := range defects {
+		if defect.DuplicateCollapsePageCutShape != nil {
+			shape := *defect.DuplicateCollapsePageCutShape
+			shape.Limit = limit
+			defect.DuplicateCollapsePageCutShape = &shape
+			defects[i] = defect
+		}
+		if defect.Ticket == "CHAOS-5988" && defect.DuplicateCollapseLengthShape != nil {
+			shape := *defect.DuplicateCollapseLengthShape
+			shape.RequestLimit = limit
+			defect.DuplicateCollapseLengthShape = &shape
+			defects[i] = defect
+		}
+	}
+	opts.BaselineDefects = defects
+	return opts
 }
 
 // drilldownIssuesFloats declares this route's two numeric leaves:
@@ -4281,6 +4345,21 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				Timeout:    180 * time.Second,
 			},
 			{
+				// CHAOS-5988: the SAME team as this operation's own
+				// team_scoped entry above, over a window ONE day wide
+				// instead of two (start_date == end_date's own day) --
+				// GET carries no limit parameter at all, so a short
+				// enough window is the ONLY way to keep this route's own
+				// fixed 50-row limit from ever risking a genuine cut.
+				Name:                "team_scoped_short_window",
+				Query:               url.Values{"scope_type": {"team"}, "start_date": {"2026-08-15"}, "end_date": {"2026-08-16"}},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode: RESTBodyModeJSON, Parity: drilldownPRsTeamScopedParity,
+				DedupListPath: drilldownPRsDedup.ListPath, DedupKeyFields: drilldownPRsDedup.KeyFields,
+				IDBindings: []RESTIDBinding{{Producer: "team_id", QueryParam: "scope_id"}},
+				Timeout:    180 * time.Second,
+			},
+			{
 				// Confirmed live (pydantic_validation_error.go's own doc
 				// comment): a non-numeric query param produces byte-parity
 				// 422 int_parsing envelopes on both planes.
@@ -4330,6 +4409,46 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				},
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
 				BodyMode: RESTBodyModeJSON, Parity: drilldownPRsTeamScopedParity,
+				DedupListPath: drilldownPRsDedup.ListPath, DedupKeyFields: drilldownPRsDedup.KeyFields,
+				IDBindings: []RESTIDBinding{{Producer: "team_id", BodyPath: "filters.scope.ids"}},
+				Timeout:    180 * time.Second,
+			},
+			{
+				// CHAOS-5988: the SAME team and window as this operation's
+				// own team_scoped entry above, over a window ONE day wide
+				// instead of two -- POST's own short-window twin of GET's
+				// own team_scoped_short_window sibling.
+				Name: "team_scoped_short_window",
+				Body: map[string]any{
+					"filters": map[string]any{
+						"scope": map[string]any{"level": "team", "ids": []string{"11111111-1111-1111-1111-111111111111"}},
+						"time":  map[string]any{"start_date": "2026-08-15", "end_date": "2026-08-16"},
+					},
+				},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode: RESTBodyModeJSON, Parity: drilldownPRsTeamScopedParity,
+				DedupListPath: drilldownPRsDedup.ListPath, DedupKeyFields: drilldownPRsDedup.KeyFields,
+				IDBindings: []RESTIDBinding{{Producer: "team_id", BodyPath: "filters.scope.ids"}},
+				Timeout:    180 * time.Second,
+			},
+			{
+				// CHAOS-5988: the SAME team and window as this operation's
+				// own team_scoped entry above, with an explicit `limit`
+				// high enough (500) that the true population -- doubled by
+				// the fan-out or not -- has ample headroom under it. POST's
+				// own limit has no ceiling on either plane (see
+				// drilldownPRsTeamScopeUncutDefect's own Reason), unlike
+				// GET, which carries no limit parameter at all.
+				Name: "team_scoped_high_limit",
+				Body: map[string]any{
+					"filters": map[string]any{
+						"scope": map[string]any{"level": "team", "ids": []string{"11111111-1111-1111-1111-111111111111"}},
+						"time":  map[string]any{"start_date": "2026-08-15", "end_date": "2026-08-17"},
+					},
+					"limit": 500,
+				},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode: RESTBodyModeJSON, Parity: drilldownPRsTeamScopedParityWithLimit(500),
 				DedupListPath: drilldownPRsDedup.ListPath, DedupKeyFields: drilldownPRsDedup.KeyFields,
 				IDBindings: []RESTIDBinding{{Producer: "team_id", BodyPath: "filters.scope.ids"}},
 				Timeout:    180 * time.Second,

@@ -201,3 +201,86 @@ func TestDuplicateCollapseLengthShape_AdmitsOnlyTheLengthFinding(t *testing.T) {
 		t.Fatal("this shape must never admit a presence finding, only the list's own length")
 	}
 }
+
+// dedupCollapseLimitFixture builds a baseline/candidate pair with n
+// distinct ids, every one of them duplicated exactly once (byte-
+// identical copies) on the baseline side, and an exact collapse on the
+// candidate side -- rules 1-4 all clean, so any refusal this fixture
+// produces is rule 0's own RequestLimit precondition alone.
+func dedupCollapseLimitFixture(t *testing.T, n int) (baseline, candidate Snapshot) {
+	t.Helper()
+	var baseItems, candItems []string
+	for i := 0; i < n; i++ {
+		id := fmt.Sprintf("id-%02d", i)
+		baseItems = append(baseItems, dedupCollapseItem(id, "x"), dedupCollapseItem(id, "x"))
+		candItems = append(candItems, dedupCollapseItem(id, "x"))
+	}
+	base, err := DecodeRESTSnapshot([]byte(dedupCollapseBody(baseItems)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cand, err := DecodeRESTSnapshot([]byte(dedupCollapseBody(candItems)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return base, cand
+}
+
+// TestDuplicateCollapseLengthShape_RequestLimitZeroPreservesExistingBehavior
+// pins RequestLimit's own default: unset (zero), a baseline whose own
+// raw length happens to equal what WOULD be a request limit elsewhere
+// (10 distinct ids, 20 raw rows) still admits -- every entry declared
+// before this field existed keeps its own unchanged behavior.
+func TestDuplicateCollapseLengthShape_RequestLimitZeroPreservesExistingBehavior(t *testing.T) {
+	baseline, candidate := dedupCollapseLimitFixture(t, 10)
+	shape := &DuplicateCollapseLengthShape{ListPath: "data.items", IDField: RESTDedupKeyField}
+	plan := buildDuplicateCollapseLengthPlan(shape, baseline.Data, candidate.Data)
+	if !plan.applies {
+		t.Fatal("plan should apply -- RequestLimit is unset (zero), rule 0 must not run at all")
+	}
+}
+
+// TestDuplicateCollapseLengthShape_RequestLimitJustBelowAdmits is the
+// ceiling-1 cell: baseline's own raw length (20, from 10 duplicated
+// ids) sits ONE below RequestLimit (21) -- genuinely short of the
+// limit, so ClickHouse itself would have returned more rows had more
+// existed. Rules 1-4 are all clean; the plan must apply.
+func TestDuplicateCollapseLengthShape_RequestLimitJustBelowAdmits(t *testing.T) {
+	baseline, candidate := dedupCollapseLimitFixture(t, 10)
+	shape := &DuplicateCollapseLengthShape{ListPath: "data.items", IDField: RESTDedupKeyField, RequestLimit: 21}
+	plan := buildDuplicateCollapseLengthPlan(shape, baseline.Data, candidate.Data)
+	if !plan.applies {
+		t.Fatal("plan should apply -- baseline's own raw length (20) sits strictly below RequestLimit (21)")
+	}
+}
+
+// TestDuplicateCollapseLengthShape_RequestLimitReachedRefuses is rule
+// 0's own isolation cell: baseline's own raw length (20) EQUALS
+// RequestLimit (20) exactly, with rules 1-4 otherwise all clean (a
+// genuine exact collapse, every id duplicated once, byte-identical).
+// The plan must still refuse -- reaching the limit means candidate's
+// own leg could equally have been truncated at the SAME boundary, so
+// the exact-collapse match alone never proves the whole population was
+// compared. Mutation-verified: disabling rule 0 alone flips this test.
+func TestDuplicateCollapseLengthShape_RequestLimitReachedRefuses(t *testing.T) {
+	baseline, candidate := dedupCollapseLimitFixture(t, 10)
+	shape := &DuplicateCollapseLengthShape{ListPath: "data.items", IDField: RESTDedupKeyField, RequestLimit: 20}
+	plan := buildDuplicateCollapseLengthPlan(shape, baseline.Data, candidate.Data)
+	if plan.applies {
+		t.Fatal("plan should refuse -- baseline's own raw length (20) reaches RequestLimit (20) exactly, an unverifiable page boundary")
+	}
+}
+
+// TestDuplicateCollapseLengthShape_RequestLimitExceededRefuses is the
+// ceiling+1 cell, defensive: baseline's own raw length (20) EXCEEDS
+// RequestLimit (19), a shape the route's own LIMIT clause should never
+// itself produce. The plan must still refuse rather than treat it as a
+// clean case to admit.
+func TestDuplicateCollapseLengthShape_RequestLimitExceededRefuses(t *testing.T) {
+	baseline, candidate := dedupCollapseLimitFixture(t, 10)
+	shape := &DuplicateCollapseLengthShape{ListPath: "data.items", IDField: RESTDedupKeyField, RequestLimit: 19}
+	plan := buildDuplicateCollapseLengthPlan(shape, baseline.Data, candidate.Data)
+	if plan.applies {
+		t.Fatal("plan should refuse -- baseline's own raw length (20) exceeds RequestLimit (19)")
+	}
+}

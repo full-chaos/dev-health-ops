@@ -119,6 +119,7 @@ func (handler GitLabDeploymentsRouteHandler) Collect(
 		deployments = deployments[:maxDeployments]
 	}
 	mergeRequestsByDeploymentID := make(map[string][]map[string]any, len(deployments))
+	mergeRequestLookupFailed := make(map[string]bool, len(deployments))
 	pages := releasePages + deploymentPages
 	for _, deployment := range deployments {
 		sha := stringValue(deployment["sha"])
@@ -137,7 +138,10 @@ func (handler GitLabDeploymentsRouteHandler) Collect(
 		}
 		if mergeRequestErr != nil {
 			// Python permits a failed MR lookup for one deployed SHA to leave
-			// only that deployment unattributed.
+			// only that deployment unattributed in this batch; the effects
+			// sink carries a stored attribution forward over it.
+			slog.Warn("gitlab_deployments.merge_request_lookup_failed", "deployment_id", stringValue(deployment["id"]), "cause", mergeRequestErr.Error())
+			mergeRequestLookupFailed[stringValue(deployment["id"])] = true
 			continue
 		}
 		pages += mergeRequestPages
@@ -167,6 +171,7 @@ func (handler GitLabDeploymentsRouteHandler) Collect(
 		row.PullRequestNumber, row.MergedAt = resolveGitLabDeploymentMergeRequest(
 			mergeRequestsByDeploymentID[row.DeploymentID],
 		)
+		row.PullRequestLookupFailed = mergeRequestLookupFailed[row.DeploymentID]
 		rows = append(rows, row)
 	}
 	return gitLabDeploymentsBatch(

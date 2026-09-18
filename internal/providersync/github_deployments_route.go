@@ -60,6 +60,11 @@ type deploymentRow struct {
 	// this to decide whether a nil is worth carrying a prior value forward
 	// over -- see guardDeploymentLifecycleRegressions.
 	LifecycleLookupFailed bool `json:"lifecycle_lookup_failed,omitempty"`
+	// PullRequestLookupFailed is writer-internal signaling of the same
+	// kind: true exactly when MergedAt/PullRequestNumber are nil because
+	// the per-SHA pull request lookup FAILED this pass. See
+	// guardDeploymentPullRequestRegressions.
+	PullRequestLookupFailed bool `json:"pull_request_lookup_failed,omitempty"`
 }
 
 type gitHubDeploymentPayload struct {
@@ -159,7 +164,10 @@ func (handler GitHubDeploymentsRouteHandler) Collect(
 		if deployment.SHA != nil && strings.TrimSpace(*deployment.SHA) != "" {
 			pulls, pullPages, _, pullErr := fetchGitHubDeploymentsPage[gitHubPullPayload](ctx, client, root+"/commits/"+url.PathEscape(*deployment.SHA)+"/pulls", 1)
 			enrichmentPages += pullPages
-			if pullErr == nil {
+			if pullErr != nil {
+				slog.Warn("github_deployments.pull_request_lookup_failed", "deployment_id", row.DeploymentID, "cause", pullErr.Error())
+				row.PullRequestLookupFailed = true
+			} else {
 				row.PullRequestNumber, row.MergedAt = chooseDeploymentPullRequest(pulls, *deployment.SHA)
 			}
 		}

@@ -28,7 +28,7 @@ func TestGuardDeploymentLifecycleRegressionsCarriesForwardOnFailure(t *testing.T
 	row.LifecycleLookupFailed = true
 	rows := []deploymentRow{row}
 
-	stored := map[deploymentLifecycleGuardKey]storedDeploymentLifecycle{
+	stored := map[deploymentGuardKey]storedDeploymentGuardValues{
 		{RepoID: row.RepoID, DeploymentID: row.DeploymentID}: {StartedAt: &priorStarted, FinishedAt: &priorFinished, Status: &priorStatus},
 	}
 
@@ -65,7 +65,7 @@ func TestGuardDeploymentLifecycleRegressionsCarriesForwardStatusAloneOnFailure(t
 	row.LifecycleLookupFailed = true
 	rows := []deploymentRow{row}
 
-	stored := map[deploymentLifecycleGuardKey]storedDeploymentLifecycle{
+	stored := map[deploymentGuardKey]storedDeploymentGuardValues{
 		{RepoID: row.RepoID, DeploymentID: row.DeploymentID}: {Status: &priorStatus},
 	}
 
@@ -95,7 +95,7 @@ func TestGuardDeploymentLifecycleRegressionsAllowsHonestEmptySuccess(t *testing.
 	row.LifecycleLookupFailed = false // the lookup succeeded and found nothing
 	rows := []deploymentRow{row}
 
-	stored := map[deploymentLifecycleGuardKey]storedDeploymentLifecycle{
+	stored := map[deploymentGuardKey]storedDeploymentGuardValues{
 		{RepoID: row.RepoID, DeploymentID: row.DeploymentID}: {StartedAt: &priorStarted, Status: &priorStatus},
 	}
 
@@ -120,7 +120,7 @@ func TestGuardDeploymentLifecycleRegressionsAllowsBrandNewDeployment(t *testing.
 	row.LifecycleLookupFailed = true
 	rows := []deploymentRow{row}
 
-	carried := guardDeploymentLifecycleRegressions(rows, map[deploymentLifecycleGuardKey]storedDeploymentLifecycle{})
+	carried := guardDeploymentLifecycleRegressions(rows, map[deploymentGuardKey]storedDeploymentGuardValues{})
 
 	if rows[0].StartedAt != nil || rows[0].FinishedAt != nil || rows[0].Status != nil {
 		t.Fatalf("StartedAt=%v FinishedAt=%v Status=%v want all nil: nothing to carry forward for a brand-new deployment", rows[0].StartedAt, rows[0].FinishedAt, rows[0].Status)
@@ -146,7 +146,7 @@ func TestGuardDeploymentLifecycleRegressionsLeavesEveryOtherColumnUntouched(t *t
 	row.Environment = &freshEnvironment
 	rows := []deploymentRow{row}
 
-	stored := map[deploymentLifecycleGuardKey]storedDeploymentLifecycle{
+	stored := map[deploymentGuardKey]storedDeploymentGuardValues{
 		{RepoID: row.RepoID, DeploymentID: row.DeploymentID}: {StartedAt: &priorStarted},
 	}
 	guardDeploymentLifecycleRegressions(rows, stored)
@@ -188,11 +188,13 @@ func (conn *deploymentLifecycleGuardConn) PrepareBatch(
 }
 
 // deploymentLifecycleGuardRows is a single-row driver.Rows fake carrying
-// exactly the columns loadStoredDeploymentLifecycle's SELECT projects.
+// exactly the columns loadStoredDeploymentGuardValues's SELECT projects.
 type deploymentLifecycleGuardRows struct {
 	repoID, deploymentID  string
 	startedAt, finishedAt *time.Time
 	status                *string
+	mergedAt              *time.Time
+	pullRequestNumber     *uint32
 	served                bool
 }
 
@@ -210,6 +212,8 @@ func (r *deploymentLifecycleGuardRows) Scan(dest ...any) error {
 	*dest[2].(**time.Time) = r.startedAt
 	*dest[3].(**time.Time) = r.finishedAt
 	*dest[4].(**string) = r.status
+	*dest[5].(**time.Time) = r.mergedAt
+	*dest[6].(**uint32) = r.pullRequestNumber
 	return nil
 }
 

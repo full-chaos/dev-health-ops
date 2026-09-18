@@ -49,6 +49,12 @@ type pullRequestRow struct {
 	LastSynced            time.Time  `json:"last_synced"`
 	SourceID              *string    `json:"source_id"`
 	OrgID                 string     `json:"org_id"`
+	// ReviewsLookupFailed is writer-internal signaling, never an INSERT
+	// column: true exactly when FirstReviewAt/ReviewsCount/
+	// ChangesRequestedCount hold the base collector's zero values because
+	// the review enrichment FAILED this pass. See
+	// guardPullRequestReviewRegressions.
+	ReviewsLookupFailed bool `json:"reviews_lookup_failed,omitempty"`
 }
 
 // gitHubPullListItem is the subset of a GET /repos/{owner}/{repo}/pulls list

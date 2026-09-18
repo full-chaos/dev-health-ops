@@ -89,6 +89,7 @@ func TestGitLabDeploymentsRouteMirrorsPythonReleaseMRWindowSinglePageAndEvidence
 		row.FinishedAt == nil || !row.FinishedAt.Equal(wantFinishedAt) ||
 		row.DeployedAt == nil ||
 		row.PullRequestNumber == nil || *row.PullRequestNumber != 45 || row.MergedAt == nil ||
+		row.PullRequestLookupFailed ||
 		row.ReleaseRef != "v1.2.3" || row.ReleaseRefConfidence != 1 ||
 		row.OrgID != claim.OrgID ||
 		!row.LastSynced.Equal(normalizedAt.UTC().Truncate(time.Millisecond)) {
@@ -198,7 +199,7 @@ func TestGitLabDeploymentsRouteMirrorsPythonBestEffortReleaseAndMRErrors(t *test
 		t.Fatal(err)
 	}
 	if row.ReleaseRef != "7" || row.ReleaseRefConfidence != 0.3 ||
-		row.PullRequestNumber != nil || row.MergedAt != nil {
+		row.PullRequestNumber != nil || row.MergedAt != nil || !row.PullRequestLookupFailed {
 		t.Fatalf("row=%+v", row)
 	}
 }

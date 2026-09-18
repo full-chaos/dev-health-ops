@@ -81,12 +81,15 @@ func (sink GitHubPullRequestClickHouseEffects) writePullRequestEffect(
 	// a stored value is transport/API noise (a stale or racing upstream
 	// read), never a legitimate state transition, and must not be allowed
 	// to win.
-	stored, err := loadStoredPullRequestMergedAt(ctx, sink.Conn, claim.OrgID, rows)
+	stored, storedReviews, err := loadStoredPullRequestGuardValues(ctx, sink.Conn, claim.OrgID, rows)
 	if err != nil {
 		return err
 	}
 	logPullRequestMergedAtRegressionGuarded(
 		ctx, claim, guardPullRequestMergedAtRegressions(rows, stored),
+	)
+	logPullRequestReviewRegressionGuarded(
+		ctx, claim, guardPullRequestReviewRegressions(rows, storedReviews),
 	)
 	// org_id is appended last, mirroring _insert_rows' auto-injection order in
 	// storage/clickhouse.py (`columns = [*columns, "org_id"]` when org_id is
@@ -143,8 +146,17 @@ type pullRequestMergedAtRegressionGuarded struct {
 	StoredMergedAt time.Time
 }
 
-// loadStoredPullRequestMergedAt is the guard's one extra read per
-// WriteEffect call -- not per row. It is a single FINAL point lookup keyed
+// storedPullRequestReviews is the currently winning row's three
+// review-derived columns for one key.
+type storedPullRequestReviews struct {
+	FirstReviewAt         *time.Time
+	ChangesRequestedCount int
+	ReviewsCount          int
+}
+
+// loadStoredPullRequestGuardValues is the guards' one extra read per
+// WriteEffect call -- not per row. It returns the stored merged_at and the
+// stored review-derived columns per key from the same row. It is a single FINAL point lookup keyed
 // on the table's own ORDER BY prefix (org_id, repo_id) and its trailing
 // number column, scoped with IN(...) to exactly the keys this batch is
 // about to write (repo_id is included defensively in case a future caller
@@ -154,9 +166,9 @@ type pullRequestMergedAtRegressionGuarded struct {
 // scanWinningPullRequestVersion above uses it: only the
 // merge-time-equivalent winning row can be trusted for merged_at, not an
 // independent per-row aggregate.
-func loadStoredPullRequestMergedAt(
+func loadStoredPullRequestGuardValues(
 	ctx context.Context, conn driver.Conn, orgID string, rows []pullRequestRow,
-) (map[pullRequestMergedAtGuardKey]*time.Time, error) {
+) (map[pullRequestMergedAtGuardKey]*time.Time, map[pullRequestMergedAtGuardKey]storedPullRequestReviews, error) {
 	repoIDs := make([]string, 0, len(rows))
 	numbers := make([]int, 0, len(rows))
 	seenRepo := make(map[string]bool, len(rows))
@@ -172,29 +184,39 @@ func loadStoredPullRequestMergedAt(
 		}
 	}
 	dbRows, err := conn.Query(ctx, `
-SELECT repo_id, number, merged_at
+SELECT repo_id, number, merged_at, first_review_at, changes_requested_count, reviews_count
 FROM git_pull_requests FINAL
 WHERE org_id = ? AND repo_id IN (?) AND number IN (?)`,
 		orgID, repoIDs, numbers,
 	)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer dbRows.Close()
 	stored := make(map[pullRequestMergedAtGuardKey]*time.Time, len(rows))
+	storedReviews := make(map[pullRequestMergedAtGuardKey]storedPullRequestReviews, len(rows))
 	for dbRows.Next() {
 		var repoID string
-		// number is a non-nullable UInt32 primary-key column; clickhouse-go
-		// requires scanning into *uint32, not *int (see the identical note
-		// on scanWinningPullRequestVersion's additions/deletions/etc scan).
-		var number uint32
-		var mergedAt *time.Time
-		if err := dbRows.Scan(&repoID, &number, &mergedAt); err != nil {
-			return nil, err
+		// number and the two review counts are non-nullable UInt32 columns;
+		// clickhouse-go requires scanning into *uint32, not *int (see the
+		// identical note on scanWinningPullRequestVersion's scan).
+		var number, changesRequestedCount, reviewsCount uint32
+		var mergedAt, firstReviewAt *time.Time
+		if err := dbRows.Scan(&repoID, &number, &mergedAt, &firstReviewAt, &changesRequestedCount, &reviewsCount); err != nil {
+			return nil, nil, err
 		}
-		stored[pullRequestMergedAtGuardKey{RepoID: repoID, Number: int(number)}] = mergedAt
+		key := pullRequestMergedAtGuardKey{RepoID: repoID, Number: int(number)}
+		stored[key] = mergedAt
+		storedReviews[key] = storedPullRequestReviews{
+			FirstReviewAt:         firstReviewAt,
+			ChangesRequestedCount: int(changesRequestedCount),
+			ReviewsCount:          int(reviewsCount),
+		}
 	}
-	return stored, dbRows.Err()
+	if err := dbRows.Err(); err != nil {
+		return nil, nil, err
+	}
+	return stored, storedReviews, nil
 }
 
 // guardPullRequestMergedAtRegressions is the pure decision at the center of
@@ -207,7 +229,7 @@ WHERE org_id = ? AND repo_id IN (?) AND number IN (?)`,
 // forward into the row that is about to be appended, in memory, before the
 // insert -- every other column on that row still lands exactly as the
 // upstream fetch produced it. `stored` holds the current winning merged_at
-// per key exactly as loadStoredPullRequestMergedAt read it back; a key
+// per key exactly as loadStoredPullRequestGuardValues read it back; a key
 // absent from that map has no prior row (a brand-new pull request) and is
 // never guarded because there is nothing yet to protect.
 //
@@ -239,6 +261,62 @@ func guardPullRequestMergedAtRegressions(
 		})
 	}
 	return guarded
+}
+
+// pullRequestReviewsCarriedForward is one row whose stored review-derived
+// columns were carried forward over a failed review enrichment.
+type pullRequestReviewsCarriedForward struct {
+	RepoID string
+	Number int
+}
+
+// guardPullRequestReviewRegressions carries the stored first_review_at,
+// changes_requested_count and reviews_count into a row whose review
+// enrichment FAILED this pass (ReviewsLookupFailed), so the base
+// collector's zero values never replace a known review history. A
+// successful enrichment, including one that honestly found no reviews, is
+// never touched; a key absent from `stored`, or one whose stored review
+// columns are themselves empty, has nothing to protect. The three columns
+// move as a unit because they are derived from one review collection. The
+// same read-then-insert limitation as guardPullRequestMergedAtRegressions
+// applies.
+func guardPullRequestReviewRegressions(
+	rows []pullRequestRow, stored map[pullRequestMergedAtGuardKey]storedPullRequestReviews,
+) []pullRequestReviewsCarriedForward {
+	var carried []pullRequestReviewsCarriedForward
+	for i, row := range rows {
+		if !row.ReviewsLookupFailed {
+			continue
+		}
+		prior, ok := stored[pullRequestMergedAtGuardKey{RepoID: row.RepoID, Number: row.Number}]
+		if !ok || (prior.FirstReviewAt == nil && prior.ReviewsCount == 0 && prior.ChangesRequestedCount == 0) {
+			continue
+		}
+		rows[i].FirstReviewAt = prior.FirstReviewAt
+		rows[i].ChangesRequestedCount = prior.ChangesRequestedCount
+		rows[i].ReviewsCount = prior.ReviewsCount
+		carried = append(carried, pullRequestReviewsCarriedForward{RepoID: row.RepoID, Number: row.Number})
+	}
+	return carried
+}
+
+const pullRequestReviewRegressionGuardedEvent = "providersync.pull_request.review_regression_guarded"
+
+// logPullRequestReviewRegressionGuarded emits one WARN line per carried
+// row, keyed by the row's own identity only.
+func logPullRequestReviewRegressionGuarded(
+	ctx context.Context, claim Claim, carried []pullRequestReviewsCarriedForward,
+) {
+	for _, event := range carried {
+		slog.Default().LogAttrs(ctx, slog.LevelWarn, pullRequestReviewRegressionGuardedEvent,
+			slog.String("org_id", claim.OrgID),
+			slog.String("provider", claim.Provider),
+			slog.String("dataset", claim.Dataset),
+			slog.String("unit_id", claim.ID),
+			slog.String("repo_id", event.RepoID),
+			slog.Int("number", event.Number),
+		)
+	}
 }
 
 // pullRequestMergedAtRegressionGuardedEvent is this guard's stable log event
@@ -322,6 +400,18 @@ func (sink GitHubPullRequestClickHouseEffects) inspectPullRequestEffect(
 	if sink.Conn == nil {
 		return EffectConflict, ErrInvalidConfiguration
 	}
+	// WriteEffect carried stored merged_at and review columns into the rows
+	// it inserted. Recovery rebuilds `expected` from a fresh Collect() pass
+	// that knows nothing of that correction, so the same guards run here
+	// against the same stored state; otherwise a row the guard itself wrote
+	// reads back as EffectConflict. A guard-read failure fails the
+	// inspection, the same as it fails WriteEffect.
+	stored, storedReviews, err := loadStoredPullRequestGuardValues(ctx, sink.Conn, claim.OrgID, expected)
+	if err != nil {
+		return EffectConflict, err
+	}
+	guardPullRequestMergedAtRegressions(expected, stored)
+	guardPullRequestReviewRegressions(expected, storedReviews)
 	exact, absent := 0, 0
 	for _, row := range expected {
 		inspection, err := sink.inspectPullRequest(ctx, row)

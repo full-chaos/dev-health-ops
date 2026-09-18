@@ -75,12 +75,16 @@ func (sink deploymentsClickHouseEffects) WriteEffect(ctx context.Context, claim 
 	if sink.Conn == nil {
 		return ErrInvalidConfiguration
 	}
-	stored, storedErr := loadStoredDeploymentLifecycle(ctx, sink.Conn, claim.OrgID, rows)
-	if storedErr != nil {
-		slog.Warn("providersync.deployment.lifecycle_regression_guard_read_failed", "org_id", claim.OrgID, "provider", claim.Provider, "unit_id", claim.ID, "cause", storedErr.Error())
-	} else {
-		logDeploymentLifecycleRegressionGuarded(ctx, claim, guardDeploymentLifecycleRegressions(rows, stored))
+	// A row marked with a failed lookup is never written without the stored
+	// values it must carry: a guard-read failure fails the write, and the
+	// unit retries, instead of inserting the uncorrected NULLs.
+	stored, err := loadStoredDeploymentGuardValues(ctx, sink.Conn, claim.OrgID, rows)
+	if err != nil {
+		slog.Warn("providersync.deployment.carry_forward_guard_read_failed", "org_id", claim.OrgID, "provider", claim.Provider, "unit_id", claim.ID, "phase", "write", "cause", err.Error())
+		return err
 	}
+	logDeploymentLifecycleRegressionGuarded(ctx, claim, guardDeploymentLifecycleRegressions(rows, stored))
+	logDeploymentPullRequestRegressionGuarded(ctx, claim, guardDeploymentPullRequestRegressions(rows, stored))
 	batch, err := sink.Conn.PrepareBatch(ctx, `INSERT INTO deployments (repo_id, deployment_id, status, environment, started_at, finished_at, deployed_at, merged_at, pull_request_number, release_ref, release_ref_confidence, org_id, last_synced)`)
 	if err != nil {
 		return err
@@ -119,25 +123,27 @@ func (sink deploymentsClickHouseEffects) InspectEffect(ctx context.Context, clai
 	if sink.Conn == nil {
 		return EffectConflict, ErrInvalidConfiguration
 	}
-	// A row this batch could not honestly derive a lifecycle for
-	// (LifecycleLookupFailed, decoded straight from the original effect
-	// bytes -- the field survives JSON round-tripping) had its
-	// started_at/finished_at/status carried forward from the stored row at
-	// WriteEffect time (guardDeploymentLifecycleRegressions above). Recovery
+	// A row this batch could not honestly derive a lifecycle or pull request
+	// for (LifecycleLookupFailed / PullRequestLookupFailed, decoded straight
+	// from the original effect bytes -- the fields survive JSON
+	// round-tripping) had its started_at/finished_at/status or its
+	// merged_at/pull_request_number carried forward from the stored row at
+	// WriteEffect time (the two guards above). Recovery
 	// rebuilds `expected` from a fresh Collect() pass that knows nothing of
 	// that carry-forward, so without applying the identical correction here
 	// too, `expected` still shows the pre-guard nils while the actually
 	// persisted row shows the carried-forward values -- a real row, freshly
 	// re-verified, would read as EffectConflict (ErrEffectRecoveryAmbiguous)
 	// purely from this mismatch, never from any genuine data divergence. A
-	// guard-read failure here is non-fatal, the same as WriteEffect's own
-	// choice: `expected` is compared uncorrected rather than failing the
-	// whole inspection outright.
-	if stored, storedErr := loadStoredDeploymentLifecycle(ctx, sink.Conn, claim.OrgID, expected); storedErr != nil {
-		slog.Warn("providersync.deployment.lifecycle_regression_guard_read_failed", "org_id", claim.OrgID, "provider", claim.Provider, "unit_id", claim.ID, "cause", storedErr.Error())
-	} else {
-		guardDeploymentLifecycleRegressions(expected, stored)
+	// guard-read failure fails the inspection, the same as it fails
+	// WriteEffect.
+	stored, err := loadStoredDeploymentGuardValues(ctx, sink.Conn, claim.OrgID, expected)
+	if err != nil {
+		slog.Warn("providersync.deployment.carry_forward_guard_read_failed", "org_id", claim.OrgID, "provider", claim.Provider, "unit_id", claim.ID, "phase", "inspect", "cause", err.Error())
+		return EffectConflict, err
 	}
+	guardDeploymentLifecycleRegressions(expected, stored)
+	guardDeploymentPullRequestRegressions(expected, stored)
 	exact, absent := 0, 0
 	for _, row := range expected {
 		inspection, err := sink.inspectDeployment(ctx, row)
@@ -225,19 +231,25 @@ func nullableUInt32(value *int) *uint32 {
 	return &converted
 }
 
-// deploymentLifecycleGuardKey is the lifecycle regression guard's own
+// deploymentGuardKey is the lifecycle regression guard's own
 // lookup key. org_id is applied once as the query's WHERE clause, not per
 // key, because row.validate already requires every row in a batch to
 // share claim.OrgID.
-type deploymentLifecycleGuardKey struct {
+type deploymentGuardKey struct {
 	RepoID       string
 	DeploymentID string
 }
 
-type storedDeploymentLifecycle struct {
-	StartedAt  *time.Time
-	FinishedAt *time.Time
-	Status     *string
+// storedDeploymentGuardValues is the currently winning row's carried
+// columns for one key: the lifecycle triple read for a
+// LifecycleLookupFailed row and the pull request pair read for a
+// PullRequestLookupFailed row.
+type storedDeploymentGuardValues struct {
+	StartedAt         *time.Time
+	FinishedAt        *time.Time
+	Status            *string
+	MergedAt          *time.Time
+	PullRequestNumber *int
 }
 
 // deploymentLifecycleCarriedForward is one row where a stored started_at/
@@ -252,20 +264,21 @@ type deploymentLifecycleCarriedForward struct {
 	DeploymentID string
 }
 
-// loadStoredDeploymentLifecycle is the guard's one extra read per
+// loadStoredDeploymentGuardValues is the guards' one extra read per
 // WriteEffect call -- not per row, and not issued at all when no row in
-// the batch has LifecycleLookupFailed set. It is a single FINAL point
-// lookup scoped with IN(...) to exactly the deployment ids this pass
-// could not honestly derive a lifecycle for.
-func loadStoredDeploymentLifecycle(
+// the batch has LifecycleLookupFailed or PullRequestLookupFailed set. It
+// is a single FINAL point lookup scoped with IN(...) to exactly the
+// deployment ids this pass could not honestly derive a lifecycle or a
+// pull request for.
+func loadStoredDeploymentGuardValues(
 	ctx context.Context, conn driver.Conn, orgID string, rows []deploymentRow,
-) (map[deploymentLifecycleGuardKey]storedDeploymentLifecycle, error) {
+) (map[deploymentGuardKey]storedDeploymentGuardValues, error) {
 	repoIDs := make([]string, 0, len(rows))
 	deploymentIDs := make([]string, 0, len(rows))
 	seenRepo := make(map[string]bool, len(rows))
 	seenDeployment := make(map[string]bool, len(rows))
 	for _, row := range rows {
-		if !row.LifecycleLookupFailed {
+		if !row.LifecycleLookupFailed && !row.PullRequestLookupFailed {
 			continue
 		}
 		if !seenRepo[row.RepoID] {
@@ -281,7 +294,7 @@ func loadStoredDeploymentLifecycle(
 		return nil, nil
 	}
 	dbRows, err := conn.Query(ctx, `
-SELECT repo_id, deployment_id, started_at, finished_at, status
+SELECT repo_id, deployment_id, started_at, finished_at, status, merged_at, pull_request_number
 FROM deployments FINAL
 WHERE org_id = ? AND repo_id IN (?) AND deployment_id IN (?)`,
 		orgID, repoIDs, deploymentIDs,
@@ -290,15 +303,16 @@ WHERE org_id = ? AND repo_id IN (?) AND deployment_id IN (?)`,
 		return nil, err
 	}
 	defer dbRows.Close()
-	stored := make(map[deploymentLifecycleGuardKey]storedDeploymentLifecycle, len(deploymentIDs))
+	stored := make(map[deploymentGuardKey]storedDeploymentGuardValues, len(deploymentIDs))
 	for dbRows.Next() {
 		var repoID, deploymentID string
-		var startedAt, finishedAt *time.Time
+		var startedAt, finishedAt, mergedAt *time.Time
 		var status *string
-		if err := dbRows.Scan(&repoID, &deploymentID, &startedAt, &finishedAt, &status); err != nil {
+		var pullRequestNumber *uint32
+		if err := dbRows.Scan(&repoID, &deploymentID, &startedAt, &finishedAt, &status, &mergedAt, &pullRequestNumber); err != nil {
 			return nil, err
 		}
-		stored[deploymentLifecycleGuardKey{RepoID: repoID, DeploymentID: deploymentID}] = storedDeploymentLifecycle{StartedAt: startedAt, FinishedAt: finishedAt, Status: status}
+		stored[deploymentGuardKey{RepoID: repoID, DeploymentID: deploymentID}] = storedDeploymentGuardValues{StartedAt: startedAt, FinishedAt: finishedAt, Status: status, MergedAt: mergedAt, PullRequestNumber: uint32PointerAsInt(pullRequestNumber)}
 	}
 	return stored, dbRows.Err()
 }
@@ -319,14 +333,14 @@ WHERE org_id = ? AND repo_id IN (?) AND deployment_id IN (?)`,
 // INSERT that follows are two separate statements with no lock between
 // them.
 func guardDeploymentLifecycleRegressions(
-	rows []deploymentRow, stored map[deploymentLifecycleGuardKey]storedDeploymentLifecycle,
+	rows []deploymentRow, stored map[deploymentGuardKey]storedDeploymentGuardValues,
 ) []deploymentLifecycleCarriedForward {
 	var carried []deploymentLifecycleCarriedForward
 	for i, row := range rows {
 		if !row.LifecycleLookupFailed {
 			continue
 		}
-		prior, ok := stored[deploymentLifecycleGuardKey{RepoID: row.RepoID, DeploymentID: row.DeploymentID}]
+		prior, ok := stored[deploymentGuardKey{RepoID: row.RepoID, DeploymentID: row.DeploymentID}]
 		if !ok || (prior.StartedAt == nil && prior.FinishedAt == nil && prior.Status == nil) {
 			continue
 		}
@@ -352,6 +366,60 @@ func logDeploymentLifecycleRegressionGuarded(
 ) {
 	for _, event := range carried {
 		slog.Default().LogAttrs(ctx, slog.LevelWarn, deploymentLifecycleRegressionGuardedEvent,
+			slog.String("org_id", claim.OrgID),
+			slog.String("provider", claim.Provider),
+			slog.String("dataset", claim.Dataset),
+			slog.String("unit_id", claim.ID),
+			slog.String("repo_id", event.RepoID),
+			slog.String("deployment_id", event.DeploymentID),
+		)
+	}
+}
+
+// deploymentPullRequestCarriedForward is one row where a stored
+// merged_at/pull_request_number was carried forward over the nils a
+// failed per-SHA pull request lookup produced this pass.
+type deploymentPullRequestCarriedForward struct {
+	RepoID       string
+	DeploymentID string
+}
+
+// guardDeploymentPullRequestRegressions carries the stored
+// merged_at/pull_request_number pair into a row whose pull request lookup
+// FAILED this pass. A lookup that succeeded and found no pull request is
+// an honest nil and is never touched; a key absent from `stored`, or one
+// whose stored pair is itself empty, has nothing to protect. The pair
+// moves as a unit because both columns come from one chosen pull request.
+// The read and the INSERT are two statements with no lock between them,
+// the same limitation guardDeploymentLifecycleRegressions documents.
+func guardDeploymentPullRequestRegressions(
+	rows []deploymentRow, stored map[deploymentGuardKey]storedDeploymentGuardValues,
+) []deploymentPullRequestCarriedForward {
+	var carried []deploymentPullRequestCarriedForward
+	for i, row := range rows {
+		if !row.PullRequestLookupFailed {
+			continue
+		}
+		prior, ok := stored[deploymentGuardKey{RepoID: row.RepoID, DeploymentID: row.DeploymentID}]
+		if !ok || (prior.MergedAt == nil && prior.PullRequestNumber == nil) {
+			continue
+		}
+		rows[i].MergedAt = prior.MergedAt
+		rows[i].PullRequestNumber = prior.PullRequestNumber
+		carried = append(carried, deploymentPullRequestCarriedForward{RepoID: row.RepoID, DeploymentID: row.DeploymentID})
+	}
+	return carried
+}
+
+const deploymentPullRequestRegressionGuardedEvent = "providersync.deployment.pull_request_regression_guarded"
+
+// logDeploymentPullRequestRegressionGuarded emits one WARN line per
+// carried row, keyed by the row's own identity only.
+func logDeploymentPullRequestRegressionGuarded(
+	ctx context.Context, claim Claim, carried []deploymentPullRequestCarriedForward,
+) {
+	for _, event := range carried {
+		slog.Default().LogAttrs(ctx, slog.LevelWarn, deploymentPullRequestRegressionGuardedEvent,
 			slog.String("org_id", claim.OrgID),
 			slog.String("provider", claim.Provider),
 			slog.String("dataset", claim.Dataset),

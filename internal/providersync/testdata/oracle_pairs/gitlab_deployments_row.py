@@ -36,6 +36,7 @@ oracle_registry.register(
             "merged_at": "Go only attributes merged_at/pull_request_number to a merge request whose own state is merged; Python's first-nonmerged-MR fallback is the declared baseline defect this row diverges from",
             "pull_request_number": "see merged_at",
             "lifecycle_lookup_failed": "writer-internal signaling for the write-once lifecycle carry-forward guard -- never an INSERT column, Python has no equivalent field",
+            "pull_request_lookup_failed": "writer-internal signaling for the merged_at/pull_request_number carry-forward guard -- never an INSERT column, Python has no equivalent field",
         },
     )
 )

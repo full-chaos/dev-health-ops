@@ -91,10 +91,12 @@ var _ MembershipWriter = (*fakeMembershipWriter)(nil)
 
 // fakeMembershipObserver records the outcome passed to it.
 type fakeMembershipObserver struct {
-	orgID           string
-	outcome         MembershipOutcome
-	called          bool
-	pruneFailedOrgs []string
+	orgID            string
+	outcome          MembershipOutcome
+	called           bool
+	pruneFailedOrgs  []string
+	markerLagOrgs    []string
+	markerLagSeconds []int64
 }
 
 func (f *fakeMembershipObserver) ObserveMembershipPruneFailed(orgID string) {
@@ -105,6 +107,11 @@ func (f *fakeMembershipObserver) ObserveMembershipRun(orgID string, outcome Memb
 	f.called = true
 	f.orgID = orgID
 	f.outcome = outcome
+}
+
+func (f *fakeMembershipObserver) ObserveMembershipMarkerLagExceeded(orgID string, lagSeconds int64) {
+	f.markerLagOrgs = append(f.markerLagOrgs, orgID)
+	f.markerLagSeconds = append(f.markerLagSeconds, lagSeconds)
 }
 
 func newTestMembershipExecutor(
@@ -282,13 +289,35 @@ func TestComputeOrgRepoScopedNeverPublishesOrgMarker(t *testing.T) {
 }
 
 // fakeMembershipLogger records every Warn call, so a test can assert a
-// prune failure is actually reported rather than merely tolerated.
+// prune failure (or a marker-lag alert) is actually reported rather than
+// merely tolerated. args is captured alongside msg (not discarded) so a
+// test can assert on the emitted VALUES, not just that some line fired.
 type fakeMembershipLogger struct {
 	warnings []string
+	args     [][]any
 }
 
-func (f *fakeMembershipLogger) Warn(msg string, _ ...any) {
+func (f *fakeMembershipLogger) Warn(msg string, args ...any) {
 	f.warnings = append(f.warnings, msg)
+	f.args = append(f.args, args)
+}
+
+// warnArg returns the value immediately following the given key in the
+// most recent Warn call's args, or nil if that call never happened or
+// never carried that key -- a small helper so a test can assert
+// "lag_seconds came through as 10800" without hand-rolling a key/value
+// scan at every call site.
+func (f *fakeMembershipLogger) warnArg(callIndex int, key string) any {
+	if callIndex < 0 || callIndex >= len(f.args) {
+		return nil
+	}
+	args := f.args[callIndex]
+	for i := 0; i+1 < len(args); i += 2 {
+		if keyName, ok := args[i].(string); ok && keyName == key {
+			return args[i+1]
+		}
+	}
+	return nil
 }
 
 // TestComputeOrgReportsAPruneFailure is the fix for codex round 1's P2 on
@@ -329,6 +358,163 @@ func TestComputeOrgReportsAPruneFailure(t *testing.T) {
 		t.Errorf("expected exactly one Warn call, got %v", logger.warnings)
 	}
 }
+
+// fakeMembershipMarkerLagChecker is a membershipMarkerLagChecker
+// returning a fixed (lag, exceeds, err) triple, ignoring its own inputs
+// -- ComputeOrg's own decision of WHAT to do with the result is what
+// these tests exercise, not the SQL that produces it (checkMembershipMarkerLag
+// has its own direct tests below).
+type fakeMembershipMarkerLagChecker struct {
+	lag     time.Duration
+	exceeds bool
+	err     error
+	calls   int
+	gotOrg  string
+}
+
+func (f *fakeMembershipMarkerLagChecker) CheckMembershipMarkerLag(
+	_ context.Context, orgID string, _ time.Time,
+) (time.Duration, bool, error) {
+	f.calls++
+	f.gotOrg = orgID
+	return f.lag, f.exceeds, f.err
+}
+
+// TestComputeOrgReportsMarkerLagExceeded is the emitted signal this file's
+// own class of alert exists for: a freshly published marker whose lag
+// behind the newest investment computation exceeds the bound must warn,
+// with the lag/bound values in the emitted line, and must record the
+// alert through the observer -- the partition itself still succeeds
+// (best-effort, the marker already published correctly).
+func TestComputeOrgReportsMarkerLagExceeded(t *testing.T) {
+	matchedID, _ := matchedAndSkippedUnitIDs(t)
+	distribution := membershipDistribution{
+		ThemeDistribution:       units.NewDistribution(units.CategoryWeight{Category: "feature_delivery", Weight: 1.0}),
+		SubcategoryDistribution: units.NewDistribution(),
+		CategorizationStatus:    "completed",
+	}
+	writer := &fakeMembershipWriter{}
+	observer := &fakeMembershipObserver{}
+	logger := &fakeMembershipLogger{}
+	checker := &fakeMembershipMarkerLagChecker{lag: 3 * time.Hour, exceeds: true}
+	executor := newTestMembershipExecutor(
+		fakeMembershipEdges{rows: twoDisjointComponentEdges()},
+		fakeMembershipDistributions{byUnit: map[string]membershipDistribution{matchedID: distribution}},
+		writer,
+	)
+	executor.conn = fakeDriverConnSentinel{}
+	executor.markerLag = checker
+	executor.SetObserver(observer)
+	executor.SetLogger(logger)
+
+	_, err := executor.ComputeOrg(context.Background(), "org-1", nil, time.Now())
+	if err != nil {
+		t.Fatalf("ComputeOrg must still succeed on an alert-worthy lag (best-effort by design): %v", err)
+	}
+	if checker.calls != 1 || checker.gotOrg != "org-1" {
+		t.Fatalf("expected exactly one CheckMembershipMarkerLag(org-1) call, got calls=%d org=%q", checker.calls, checker.gotOrg)
+	}
+	if len(observer.markerLagOrgs) != 1 || observer.markerLagOrgs[0] != "org-1" {
+		t.Errorf("expected exactly one ObserveMembershipMarkerLagExceeded(org-1) call, got %v", observer.markerLagOrgs)
+	}
+	if len(observer.markerLagSeconds) != 1 || observer.markerLagSeconds[0] != int64((3*time.Hour).Seconds()) {
+		t.Errorf("observer lagSeconds = %v, want [%d]", observer.markerLagSeconds, int64((3 * time.Hour).Seconds()))
+	}
+	if len(logger.warnings) != 1 {
+		t.Fatalf("expected exactly one Warn call, got %v", logger.warnings)
+	}
+	if got := logger.warnArg(0, "lag_seconds"); got != int64((3 * time.Hour).Seconds()) {
+		t.Errorf("Warn lag_seconds = %v, want %d", got, int64((3 * time.Hour).Seconds()))
+	}
+	if got := logger.warnArg(0, "bound_seconds"); got != int64(membershipMarkerLagAlertBound.Seconds()) {
+		t.Errorf("Warn bound_seconds = %v, want %d", got, int64(membershipMarkerLagAlertBound.Seconds()))
+	}
+	if got := logger.warnArg(0, "org_id"); got != "org-1" {
+		t.Errorf("Warn org_id = %v, want org-1", got)
+	}
+}
+
+// TestComputeOrgAllowsMarkerLagWithinBound is the class ruling's own
+// distinguishing case: a lag the checker reports as NOT exceeding the
+// bound must warn nothing and record nothing -- the ordinary few-second
+// gap between the two writers is ROUTINE, not an alert.
+func TestComputeOrgAllowsMarkerLagWithinBound(t *testing.T) {
+	matchedID, _ := matchedAndSkippedUnitIDs(t)
+	distribution := membershipDistribution{
+		ThemeDistribution:       units.NewDistribution(units.CategoryWeight{Category: "feature_delivery", Weight: 1.0}),
+		SubcategoryDistribution: units.NewDistribution(),
+		CategorizationStatus:    "completed",
+	}
+	writer := &fakeMembershipWriter{}
+	observer := &fakeMembershipObserver{}
+	logger := &fakeMembershipLogger{}
+	checker := &fakeMembershipMarkerLagChecker{lag: 5 * time.Second, exceeds: false}
+	executor := newTestMembershipExecutor(
+		fakeMembershipEdges{rows: twoDisjointComponentEdges()},
+		fakeMembershipDistributions{byUnit: map[string]membershipDistribution{matchedID: distribution}},
+		writer,
+	)
+	executor.conn = fakeDriverConnSentinel{}
+	executor.markerLag = checker
+	executor.SetObserver(observer)
+	executor.SetLogger(logger)
+
+	_, err := executor.ComputeOrg(context.Background(), "org-1", nil, time.Now())
+	if err != nil {
+		t.Fatalf("ComputeOrg: %v", err)
+	}
+	if checker.calls != 1 {
+		t.Fatalf("expected exactly one CheckMembershipMarkerLag call, got %d", checker.calls)
+	}
+	if len(observer.markerLagOrgs) != 0 {
+		t.Errorf("expected no ObserveMembershipMarkerLagExceeded calls for a within-bound lag, got %v", observer.markerLagOrgs)
+	}
+	if len(logger.warnings) != 0 {
+		t.Errorf("expected no Warn calls for a within-bound lag, got %v", logger.warnings)
+	}
+}
+
+// TestComputeOrgReportsMarkerLagCheckFailure is the third named case: the
+// check itself failing (a query error) must warn -- distinctly from an
+// exceeded-bound alert, so an operator can tell "we don't know" from "we
+// know and it's bad" -- but must never record an ObserveMembershipMarkerLagExceeded
+// call (there is no confirmed lag to report) and must never fail the
+// partition (the marker already published correctly; this is purely an
+// observability concern).
+func TestComputeOrgReportsMarkerLagCheckFailure(t *testing.T) {
+	matchedID, _ := matchedAndSkippedUnitIDs(t)
+	distribution := membershipDistribution{
+		ThemeDistribution:       units.NewDistribution(units.CategoryWeight{Category: "feature_delivery", Weight: 1.0}),
+		SubcategoryDistribution: units.NewDistribution(),
+		CategorizationStatus:    "completed",
+	}
+	writer := &fakeMembershipWriter{}
+	observer := &fakeMembershipObserver{}
+	logger := &fakeMembershipLogger{}
+	checker := &fakeMembershipMarkerLagChecker{err: errMarkerLagCheckRepro}
+	executor := newTestMembershipExecutor(
+		fakeMembershipEdges{rows: twoDisjointComponentEdges()},
+		fakeMembershipDistributions{byUnit: map[string]membershipDistribution{matchedID: distribution}},
+		writer,
+	)
+	executor.conn = fakeDriverConnSentinel{}
+	executor.markerLag = checker
+	executor.SetObserver(observer)
+	executor.SetLogger(logger)
+
+	_, err := executor.ComputeOrg(context.Background(), "org-1", nil, time.Now())
+	if err != nil {
+		t.Fatalf("ComputeOrg must still succeed on a lag-check failure (best-effort by design): %v", err)
+	}
+	if len(observer.markerLagOrgs) != 0 {
+		t.Errorf("a check failure must never be reported as a confirmed exceeded-bound alert, got %v", observer.markerLagOrgs)
+	}
+	if len(logger.warnings) != 1 {
+		t.Fatalf("expected exactly one Warn call, got %v", logger.warnings)
+	}
+}
+
+var errMarkerLagCheckRepro = errors.New("forced marker-lag check failure")
 
 var errPruneRepro = errors.New("forced prune failure")
 

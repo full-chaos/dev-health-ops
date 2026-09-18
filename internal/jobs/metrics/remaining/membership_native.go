@@ -81,6 +81,7 @@ type MembershipExecutor struct {
 	edges         chqueryEdgeReader
 	distributions membershipDistributionFetcher
 	writer        MembershipWriter
+	markerLag     membershipMarkerLagChecker
 	nowUTC        func() time.Time
 
 	observer MembershipObserver
@@ -117,6 +118,7 @@ func NewMembershipExecutor(
 		edges:         edges,
 		distributions: chConnDistributionFetcher{conn: conn},
 		writer:        writer,
+		markerLag:     chConnMarkerLagChecker{conn: conn},
 		nowUTC:        func() time.Time { return time.Now().UTC() },
 	}, nil
 }

@@ -122,6 +122,61 @@ func TestMembershipEndToEndAgainstRealClickHouse(t *testing.T) {
 	}, "expected exactly 6*keep membership rows to survive retention (the pruned generation's 6 rows deleted, the kept generations' rows -- 6 each -- are byte-identical re-writes of the same seed)")
 }
 
+// TestCheckMembershipMarkerLagAgainstRealClickHouse is the real-engine
+// proof for the marker-lag alert: checkMembershipMarkerLag's own
+// max(computed_at) query, executed against the actual migrated
+// work_unit_investments schema, not a fake. A fake conn can only assert
+// what this package's own code does with a canned answer it is handed;
+// this proves the query text itself round-trips a real DateTime64 column
+// and the lag/exceeds decision comes out right on both sides of the
+// bound.
+func TestCheckMembershipMarkerLagAgainstRealClickHouse(t *testing.T) {
+	ctx := context.Background()
+	conn := membershipMigratedClickHouse(t, ctx)
+	orgID := "org-" + uuid.NewString()
+	matchedID, _ := membershipSeedUnitIDs(t)
+
+	t.Run("no investment rows: no lag", func(t *testing.T) {
+		lag, exceeds, err := checkMembershipMarkerLag(ctx, conn, orgID, time.Now().UTC())
+		if err != nil {
+			t.Fatalf("checkMembershipMarkerLag: %v", err)
+		}
+		if lag != 0 || exceeds {
+			t.Fatalf("lag=%s exceeds=%v, want 0/false for an org with no investment rows at all", lag, exceeds)
+		}
+	})
+
+	seedMembershipInvestment(t, ctx, conn, orgID, matchedID)
+
+	t.Run("marker just behind a real investment row: within bound", func(t *testing.T) {
+		// seedMembershipInvestment stamps computed_at at time.Now().UTC() at
+		// call time, a few seconds before this assertion runs -- the
+		// ordinary gap the two writers finish within, matching the
+		// deployment ticket's own "4-9s before the scope marker" framing.
+		lag, exceeds, err := checkMembershipMarkerLag(ctx, conn, orgID, time.Now().UTC())
+		if err != nil {
+			t.Fatalf("checkMembershipMarkerLag: %v", err)
+		}
+		if exceeds {
+			t.Fatalf("lag=%s exceeds=%v, want exceeds=false for an ordinary few-second gap", lag, exceeds)
+		}
+	})
+
+	t.Run("marker published well before the real investment row: exceeds", func(t *testing.T) {
+		staleMarker := time.Now().UTC().Add(-3 * time.Hour)
+		lag, exceeds, err := checkMembershipMarkerLag(ctx, conn, orgID, staleMarker)
+		if err != nil {
+			t.Fatalf("checkMembershipMarkerLag: %v", err)
+		}
+		if !exceeds {
+			t.Fatalf("lag=%s exceeds=%v, want exceeds=true for a marker ~3h behind the real investment row", lag, exceeds)
+		}
+		if lag < 2*time.Hour+55*time.Minute || lag > 3*time.Hour+5*time.Minute {
+			t.Fatalf("lag=%s, want approximately 3h (allowing for the seed-to-assertion gap)", lag)
+		}
+	})
+}
+
 func waitForCondition(t *testing.T, timeout time.Duration, check func() bool, message string) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)

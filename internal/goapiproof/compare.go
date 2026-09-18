@@ -823,7 +823,12 @@ func Compare(baseline, candidate Snapshot, opts Options) Result {
 		if reason, detail := structuralAgreementFailure(baseline.Data, candidate.Data, "$.data", opts); reason != "" {
 			return Result{StructuralRefusal: reason, StructuralDetail: detail}
 		}
-		if reason, detail := bodySizeDisagreement(baseline.BodyBytes, candidate.BodyBytes); reason != "" {
+		// A declared structural shape's own valid plan against these two
+		// decoded bodies defers this size-ratio refusal to the ordinary
+		// comparison below, which then judges the difference through that
+		// shape's own admission rule (classifyBaselineDefects) -- see
+		// bodySizeGateDeferred's own doc comment.
+		if reason, detail := bodySizeDisagreement(baseline.BodyBytes, candidate.BodyBytes); reason != "" && !bodySizeGateDeferred(opts, baseline.Data, candidate.Data) {
 			return Result{StructuralRefusal: reason, StructuralDetail: detail}
 		}
 	}

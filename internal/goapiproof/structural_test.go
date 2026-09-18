@@ -3,6 +3,8 @@ package goapiproof
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -300,4 +302,139 @@ func jsonRepeat(element string, n int) string {
 		out += element
 	}
 	return out + "]"
+}
+
+// A declaration whose Paths overlap a size-disagreeing pair but names no
+// structural shape (TeamRepoSubsetShape, HotspotListBoundaryShape,
+// LimitDisplacementShape, DictKeyDirectionShape) must never defer the
+// size-ratio refusal: only those four shapes' own admission rule can ever
+// cover a ShapeLength/ShapePresence finding, and an ordinary blanket
+// citation is leaf-only.
+func TestBodySizeGateStillRefusesForADeclarationWithNoStructuralShape(t *testing.T) {
+	small := `{"data":{"x":` + jsonRepeat("1", 200) + `}}`
+	large := `{"data":{"x":` + jsonRepeat("1", 2000) + `}}`
+	opts := Options{BaselineDefects: []BaselineDefect{{
+		Ticket: "CHAOS-TEST-SIZEGATE", Reason: "test fixture", Paths: []string{"data.x"},
+	}}}
+	result := Compare(snapshotFromJSON(t, small), snapshotFromJSON(t, large), opts)
+	if result.StructuralRefusal != RefusalLegsDoNotOverlap {
+		t.Fatalf("a leaf-only declaration must never defer the size gate, got %q", result.StructuralRefusal)
+	}
+}
+
+// sizeGateItem builds one list element with a long enough label that a
+// small handful of elements alone crosses bodySizeDisagreement's own
+// minBodySizeForRatioCheck floor, so a caller can build a genuinely small
+// (but still ratio-checked) candidate list alongside a much longer baseline
+// list.
+func sizeGateItem(key string) string {
+	return fmt.Sprintf(`{"key":%q,"label":%q}`, key, strings.Repeat("x", 60))
+}
+
+func sizeGateItems(keys ...string) string {
+	elements := make([]string, len(keys))
+	for i, key := range keys {
+		elements[i] = sizeGateItem(key)
+	}
+	return "[" + strings.Join(elements, ",") + "]"
+}
+
+// requireSizeGateFixtureTripsTheRatio guards every test below against a
+// fixture that stops actually exercising bodySizeDisagreement: without this,
+// a change to bodySizeRatioThreshold or minBodySizeForRatioCheck could turn
+// these tests into false passes (the gate never firing at all) rather than
+// red failures.
+func requireSizeGateFixtureTripsTheRatio(t *testing.T, baseline, candidate Snapshot) {
+	t.Helper()
+	if baseline.BodyBytes < minBodySizeForRatioCheck || candidate.BodyBytes < minBodySizeForRatioCheck {
+		t.Fatalf("fixture body below the ratio check's own floor: baseline=%d candidate=%d, want both >= %d", baseline.BodyBytes, candidate.BodyBytes, minBodySizeForRatioCheck)
+	}
+	larger, smaller := float64(baseline.BodyBytes), float64(candidate.BodyBytes)
+	if smaller > larger {
+		larger, smaller = smaller, larger
+	}
+	if larger/smaller <= bodySizeRatioThreshold {
+		t.Fatalf("fixture does not trip the size ratio: baseline=%d candidate=%d", baseline.BodyBytes, candidate.BodyBytes)
+	}
+}
+
+// A declared TeamRepoSubsetShape whose plan is VALID on the two decoded
+// bodies -- the candidate's list is a genuine, non-empty, bounded subset of
+// the baseline's -- defers the size-ratio refusal to the ordinary
+// comparison, which then admits the resulting length difference through the
+// same declaration. The verdict still lands on an admitted MISMATCH, never a
+// match: a declared defect never promotes a verdict.
+func TestBodySizeGateDeferredForValidDeclaredSubsetShape(t *testing.T) {
+	baseline := snapshotFromJSON(t, `{"data":{"items":`+sizeGateItems("ABC-0", "ABC-1", "ABC-2", "ABC-3", "ABC-4", "ABC-5", "ABC-6", "ABC-7", "ABC-8", "ABC-9", "ABC-10", "ABC-11", "ABC-12", "ABC-13", "ABC-14", "ABC-15", "ABC-16", "ABC-17", "ABC-18", "ABC-19", "ABC-20", "ABC-21", "ABC-22", "ABC-23", "ABC-24", "ABC-25", "ABC-26", "ABC-27", "ABC-28", "ABC-29")+`}}`)
+	candidate := snapshotFromJSON(t, `{"data":{"items":`+sizeGateItems("ABC-0", "ABC-1", "ABC-2")+`}}`)
+	requireSizeGateFixtureTripsTheRatio(t, baseline, candidate)
+
+	shape := &TeamRepoSubsetShape{ListPath: "data.items", KeyFields: []string{"key"}, EqualLeaves: []string{"label"}}
+	result := Compare(baseline, candidate, teamRepoSubsetLengthOptions(shape))
+
+	if result.StructuralRefusal != "" {
+		t.Fatalf("expected the size gate to defer to the valid declared shape, got refusal %s (%s)", result.StructuralRefusal, result.StructuralDetail)
+	}
+	if result.TerminalState != TerminalStateMismatch {
+		t.Fatalf("a declared defect never promotes to match, got %s", result.TerminalState)
+	}
+	if result.DifferencesOutsideBaselineDefect != 0 {
+		t.Fatalf("outside = %d, want 0 -- the subset length difference must be admitted: findings %+v", result.DifferencesOutsideBaselineDefect, result.Findings)
+	}
+}
+
+// An EMPTY candidate list proves nothing about the claimed scope
+// (TeamRepoSubsetShape's own rule 2): the plan stays invalid, so the size
+// gate must keep refusing exactly as an undeclared request would. This is
+// the "a scope predicate dropped everything" regression the deferral must
+// never paper over.
+func TestBodySizeGateStillRefusesWhenDeclaredSubsetCandidateIsEmpty(t *testing.T) {
+	baseline := snapshotFromJSON(t, `{"data":{"items":`+sizeGateItems("ABC-0", "ABC-1", "ABC-2", "ABC-3", "ABC-4", "ABC-5", "ABC-6", "ABC-7", "ABC-8", "ABC-9", "ABC-10", "ABC-11", "ABC-12", "ABC-13", "ABC-14", "ABC-15", "ABC-16", "ABC-17", "ABC-18", "ABC-19", "ABC-20", "ABC-21", "ABC-22", "ABC-23", "ABC-24", "ABC-25", "ABC-26", "ABC-27", "ABC-28", "ABC-29")+`}}`)
+	candidate := snapshotFromJSON(t, `{"data":{"items":[],"padding":"`+strings.Repeat("y", 280)+`"}}`)
+	requireSizeGateFixtureTripsTheRatio(t, baseline, candidate)
+
+	shape := &TeamRepoSubsetShape{ListPath: "data.items", KeyFields: []string{"key"}, EqualLeaves: []string{"label"}}
+	result := Compare(baseline, candidate, teamRepoSubsetLengthOptions(shape))
+
+	if result.StructuralRefusal != RefusalLegsDoNotOverlap {
+		t.Fatalf("an empty candidate subset certifies nothing, the size gate must still refuse, got %q", result.StructuralRefusal)
+	}
+}
+
+// A candidate-only key disproves the subset claim for the WHOLE comparison
+// (TeamRepoSubsetShape's own rule 3): the plan is VALID (both lists read
+// fine) but NOT a subset, and the size gate must still refuse -- pinning
+// that the deferral checks the shape's full admission precondition, not
+// merely that its two lists were readable.
+func TestBodySizeGateStillRefusesWhenSubsetClaimIsBroken(t *testing.T) {
+	baseline := snapshotFromJSON(t, `{"data":{"items":`+sizeGateItems("ABC-0", "ABC-1", "ABC-2", "ABC-3", "ABC-4", "ABC-5", "ABC-6", "ABC-7", "ABC-8", "ABC-9", "ABC-10", "ABC-11", "ABC-12", "ABC-13", "ABC-14", "ABC-15", "ABC-16", "ABC-17", "ABC-18", "ABC-19", "ABC-20", "ABC-21", "ABC-22", "ABC-23", "ABC-24", "ABC-25", "ABC-26", "ABC-27", "ABC-28", "ABC-29")+`}}`)
+	candidate := snapshotFromJSON(t, `{"data":{"items":`+sizeGateItems("ABC-0", "ABC-1", "ZZZ-not-in-baseline")+`}}`)
+	requireSizeGateFixtureTripsTheRatio(t, baseline, candidate)
+
+	shape := &TeamRepoSubsetShape{ListPath: "data.items", KeyFields: []string{"key"}, EqualLeaves: []string{"label"}}
+	result := Compare(baseline, candidate, teamRepoSubsetLengthOptions(shape))
+
+	if result.StructuralRefusal != RefusalLegsDoNotOverlap {
+		t.Fatalf("a candidate-only key breaks the subset claim, the size gate must still refuse, got %q", result.StructuralRefusal)
+	}
+}
+
+// bodySizeGateDeferred must decide LimitDisplacementShape/
+// HotspotListBoundaryShape validity from the two decoded bodies ALONE:
+// nothing else exists yet at this point in Compare. This pins that directly
+// against the plan builder itself, passing nil for every mismatch/coverage
+// argument -- exactly what bodySizeGateDeferred passes -- and asserts the
+// structural rule (both lists exactly Limit long) still decides validity.
+func TestBodySizeGateShapeValidityIsComputedWithoutMismatches(t *testing.T) {
+	shape := &LimitDisplacementShape{
+		ListPath: "data.items", KeyFields: []string{"key"}, RepoKeyField: "repo",
+		ValueField: "value", ValuePath: "data.items.value", Limit: 2,
+	}
+	baselineData := snapshotFromJSON(t, `{"data":{"items":[{"key":"a","repo":"r","value":1},{"key":"b","repo":"r","value":2}]}}`).Data
+	candidateData := snapshotFromJSON(t, `{"data":{"items":[{"key":"a","repo":"r","value":1},{"key":"c","repo":"r","value":2}]}}`).Data
+
+	plan := buildLimitDisplacementPlan(shape, baselineData, candidateData, nil, nil, nil, nil)
+	if !plan.valid {
+		t.Fatalf("rule 1 (both lists exactly Limit long) must decide validity with zero mismatches supplied: %+v", plan)
+	}
 }

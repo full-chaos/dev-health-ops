@@ -31,6 +31,11 @@ oracle_registry.register(
         reflected_fields=_reflected_fields,
         excluded_fields={
             "last_synced": "stamped from the Go handler normalized collection instant",
+            "started_at": "Go derives started_at/finished_at from the deployment's own nested deployable object rather than copying created_at; Python's fixed copy is the declared baseline defect this row diverges from -- this oracle harness never supplies a deployable fixture, so Go's own row leaves it nil here",
+            "finished_at": "see started_at",
+            "merged_at": "Go only attributes merged_at/pull_request_number to a merge request whose own state is merged; Python's first-nonmerged-MR fallback is the declared baseline defect this row diverges from",
+            "pull_request_number": "see merged_at",
+            "lifecycle_lookup_failed": "writer-internal signaling for the write-once lifecycle carry-forward guard -- never an INSERT column, Python has no equivalent field",
         },
     )
 )

@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -274,13 +276,14 @@ func normalizeGitLabDeployment(
 		environment = rawEnvironment["name"]
 	}
 	releaseRef, confidence := gitLabDeploymentReleaseRef(payload, deploymentID, releases)
+	startedAt, finishedAt := gitLabDeploymentLifecycle(deploymentID, payload)
 	row := deploymentRow{
 		RepoID:               repoID,
 		DeploymentID:         deploymentID,
 		Status:               optionalString(payload["status"]),
 		Environment:          optionalString(environment),
-		StartedAt:            createdAt,
-		FinishedAt:           parseGitLabDeploymentTime(payload["finished_at"]),
+		StartedAt:            startedAt,
+		FinishedAt:           finishedAt,
 		DeployedAt:           createdAt,
 		ReleaseRef:           releaseRef,
 		ReleaseRefConfidence: confidence,
@@ -291,6 +294,30 @@ func normalizeGitLabDeployment(
 		return deploymentRow{}, false, err
 	}
 	return row, true, nil
+}
+
+// gitLabDeploymentLifecycle reads started_at/finished_at from the
+// deployment's own CI job (docs.gitlab.com/api/deployments/, "List project
+// deployments" example response: the "deployable" nested object carries
+// created_at/started_at/finished_at/status for the job that ran the
+// deployment -- the deployment object itself has no top-level
+// started_at/finished_at). A deployment created without a CI job (a manual
+// API-triggered deployment) carries no "deployable" at all; that is a
+// legitimate absence, not a lookup failure, so nothing is invented for it
+// and nothing is logged. A "deployable" key that IS present but is not an
+// object (a shape GitLab's own API never documents) is a distinct,
+// worth-logging case -- the deployment's lifecycle stays nil either way.
+func gitLabDeploymentLifecycle(deploymentID string, payload map[string]any) (startedAt, finishedAt *time.Time) {
+	raw, present := payload["deployable"]
+	if !present {
+		return nil, nil
+	}
+	deployable, ok := raw.(map[string]any)
+	if !ok {
+		slog.Warn("gitlab_deployments.deployable_shape_unexpected", "deployment_id", deploymentID, "cause", fmt.Sprintf("deployable is %T, want an object", raw))
+		return nil, nil
+	}
+	return parseGitLabDeploymentTime(deployable["started_at"]), parseGitLabDeploymentTime(deployable["finished_at"])
 }
 
 func parseGitLabDeploymentTime(value any) *time.Time {
@@ -382,9 +409,6 @@ func resolveGitLabDeploymentMergeRequest(
 			chosen = mergeRequest
 			break
 		}
-	}
-	if chosen == nil && len(mergeRequests) > 0 {
-		chosen = mergeRequests[0]
 	}
 	if chosen == nil {
 		return nil, nil

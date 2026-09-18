@@ -27,6 +27,8 @@ func (doer *gitHubDeploymentsDoer) Do(request *http.Request) (*http.Response, er
 		body = `[{"id":101,"state":"success","environment":"production","created_at":"2026-07-22T10:00:00Z","ref":"v1.2.3","sha":"abc"},{"id":102,"status":"pending","created_at":"2026-06-20T10:00:00Z"}]`
 	case "/repos/acme/api/commits/abc/pulls":
 		body = `[{"number":42,"merge_commit_sha":"abc","merged_at":"2026-07-21T10:00:00Z"}]`
+	case "/repos/acme/api/deployments/101/statuses":
+		body = `[{"id":1,"state":"queued","created_at":"2026-07-22T09:58:00Z"},{"id":2,"state":"in_progress","created_at":"2026-07-22T09:59:00Z"},{"id":3,"state":"success","created_at":"2026-07-22T10:01:00Z"}]`
 	}
 	return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
 }
@@ -58,10 +60,13 @@ func TestGitHubDeploymentsRouteMirrorsPythonEnrichmentAndWindow(t *testing.T) {
 	if err := json.Unmarshal(batch.Effects[0].Rows[0], &row); err != nil {
 		t.Fatal(err)
 	}
-	if row.OrgID != claim.OrgID || row.DeploymentID != "101" || row.ReleaseRef != "v1.2.3" || row.ReleaseRefConfidence != 1 || row.PullRequestNumber == nil || *row.PullRequestNumber != 42 || row.MergedAt == nil || row.DeployedAt == nil {
+	wantStartedAt := time.Date(2026, 7, 22, 9, 59, 0, 0, time.UTC)
+	wantFinishedAt := time.Date(2026, 7, 22, 10, 1, 0, 0, time.UTC)
+	if row.OrgID != claim.OrgID || row.DeploymentID != "101" || row.ReleaseRef != "v1.2.3" || row.ReleaseRefConfidence != 1 || row.PullRequestNumber == nil || *row.PullRequestNumber != 42 || row.MergedAt == nil || row.DeployedAt == nil ||
+		row.StartedAt == nil || !row.StartedAt.Equal(wantStartedAt) || row.FinishedAt == nil || !row.FinishedAt.Equal(wantFinishedAt) {
 		t.Fatalf("row=%+v", row)
 	}
-	want := []string{"/repos/acme/api", "/repos/acme/api/releases", "/repos/acme/api/deployments", "/repos/acme/api/commits/abc/pulls"}
+	want := []string{"/repos/acme/api", "/repos/acme/api/releases", "/repos/acme/api/deployments", "/repos/acme/api/commits/abc/pulls", "/repos/acme/api/deployments/101/statuses"}
 	if len(doer.requests) != len(want) {
 		t.Fatalf("requests=%v want=%v", doer.requests, want)
 	}
@@ -69,6 +74,9 @@ func TestGitHubDeploymentsRouteMirrorsPythonEnrichmentAndWindow(t *testing.T) {
 		if doer.requests[index] != want[index] {
 			t.Fatalf("requests=%v want=%v", doer.requests, want)
 		}
+	}
+	if batch.Evidence.Requests != len(doer.requests) || batch.Evidence.Pages != len(doer.requests)-1 {
+		t.Fatalf("evidence=%+v, want Requests=%d (every physical request, including the PR lookup and the statuses lookup)", batch.Evidence, len(doer.requests))
 	}
 }
 

@@ -3,9 +3,13 @@ package investmentexplain
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
@@ -75,7 +79,24 @@ type capturedConstruction struct {
 
 	envCalled bool
 	envKind   categorize.ProviderKind
+	envModel  string
 }
+
+// fakeCapturingProvider is a categorize.Provider whose Model() reports
+// EXACTLY the model it was constructed with -- a real provider's Model()
+// contract (categorize/provider.go's Provider interface doc comment), so
+// a test asserting resolvedModel is testing the same read-back path
+// production does, not a fake that always answers "mock" regardless of
+// what construction actually received.
+type fakeCapturingProvider struct {
+	model string
+}
+
+func (f fakeCapturingProvider) Complete(context.Context, categorize.CompletionRequest) (categorize.CompletionResult, error) {
+	return categorize.CompletionResult{Model: f.model}, nil
+}
+func (f fakeCapturingProvider) Close() error  { return nil }
+func (f fakeCapturingProvider) Model() string { return f.model }
 
 func withCapturedProviderConstruction(t *testing.T, fn func(*capturedConstruction)) *capturedConstruction {
 	t.Helper()
@@ -94,12 +115,13 @@ func withCapturedProviderConstruction(t *testing.T, fn func(*capturedConstructio
 		captured.credentialsAPIKey = apiKey
 		captured.credentialsBase = baseURL
 		captured.credentialsModel = model
-		return categorize.MockProvider{}, nil
+		return fakeCapturingProvider{model: model}, nil
 	}
-	newProviderFromEnv = func(kind categorize.ProviderKind) (categorize.Provider, error) {
+	newProviderFromEnv = func(kind categorize.ProviderKind, model string) (categorize.Provider, error) {
 		captured.envCalled = true
 		captured.envKind = kind
-		return categorize.MockProvider{}, nil
+		captured.envModel = model
+		return fakeCapturingProvider{model: model}, nil
 	}
 
 	fn(captured)
@@ -265,6 +287,87 @@ func TestNewProviderForOrg_FallsBackToEnvWhenNotMatched(t *testing.T) {
 				t.Errorf("kind = %q, want openai", captured.envKind)
 			}
 		})
+	}
+}
+
+// TestNewProviderForOrg_FallsBackToEnvWithCallerModel is the executed
+// proof for the defect this file's own doc comment on newProviderForOrg
+// now documents: the platform-env fallback branch called
+// newProviderFromEnv(kind) with NO model argument, silently discarding
+// whatever model CompleteInvestmentMixExplanationForOrg/
+// CompleteWorkUnitExplanationForOrg had already resolved (explicit
+// request override, org's stored model, or documented default) --
+// Python's get_provider resolves the model once and threads it into
+// EVERY provider constructor on its one path; this branch was the one
+// place Go did not. Both explain routes
+// (POST /api/v1/investment/explain, POST /api/v1/work-units/{id}/explain)
+// share this single newProviderForOrg call, so one fix and one test here
+// cover both -- confirmed by the caller sweep in this file's package doc
+// comment / codegraph: no other construction site in this package drops
+// model on a fallback branch.
+func TestNewProviderForOrg_FallsBackToEnvWithCallerModel(t *testing.T) {
+	cases := []struct {
+		name        string
+		orgSettings llmorgsettings.Resolver
+	}{
+		{"nil orgSettings (no Postgres wiring)", nil},
+		{"org has no usable BYO credentials for this kind", &fakeOrgResolver{credentialsOK: false}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			captured := withCapturedProviderConstruction(t, func(c *capturedConstruction) {
+				if _, err := newProviderForOrg(context.Background(), categorize.ProviderKindOpenAI, "org-1", "caller-chosen-model", tc.orgSettings); err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+			})
+			if !captured.envCalled {
+				t.Fatal("expected newProviderFromEnv to be called")
+			}
+			if captured.envModel != "caller-chosen-model" {
+				t.Errorf("env fallback constructed with model = %q, want %q (the caller's already-resolved model must not be dropped)", captured.envModel, "caller-chosen-model")
+			}
+		})
+	}
+}
+
+// TestCompleteInvestmentMixExplanationForOrg_EnvResolvedModelReachesConstructionConsistently
+// is the second executed proof the defect this file's newProviderForOrg
+// doc comment documents needs: TestNewProviderForOrg_FallsBackToEnvWithCallerModel
+// proves an EXPLICIT caller model reaches construction; this proves the
+// SAME consistency when no explicit model is given and ResolveModelNameForOrg
+// resolves one from environment variables instead (LLM_MODEL_OPENAI, the
+// provider-specific var, beating generic LLM_MODEL -- ResolveModelNameForOrg's
+// own Python-parity precedence, pinned by resolve_model_name_golden_test.go
+// and unrelated to/unchanged by this fix). What must hold either way: the
+// model this function REPORTS as resolvedModel is the model construction
+// ACTUALLY receives -- a report/actual mismatch here is the identical
+// stamping defect class newProviderForOrg's own doc comment already
+// describes (see categorize.ResolveModelName's own doc comment on
+// "matching what runs"), just reachable through env-var resolution
+// instead of an explicit request.
+func TestCompleteInvestmentMixExplanationForOrg_EnvResolvedModelReachesConstructionConsistently(t *testing.T) {
+	t.Setenv("LLM_MODEL", "generic-model")
+	t.Setenv("LLM_MODEL_OPENAI", "specific-model")
+
+	captured := withCapturedProviderConstruction(t, func(c *capturedConstruction) {
+		_, resolvedProvider, resolvedModel, err := CompleteInvestmentMixExplanationForOrg(
+			context.Background(), "openai", "", "org-1", nil, "prompt text")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if resolvedProvider != "openai" {
+			t.Fatalf("resolvedProvider = %q, want openai", resolvedProvider)
+		}
+		if resolvedModel != "specific-model" {
+			t.Fatalf("resolvedModel = %q, want specific-model (ResolveModelNameForOrg's own precedence, provider-specific env wins -- see resolve_model_name_golden_test.go)", resolvedModel)
+		}
+	})
+
+	if !captured.envCalled {
+		t.Fatal("expected newProviderFromEnv to be called (no org settings)")
+	}
+	if captured.envModel != "specific-model" {
+		t.Errorf("provider constructed with model = %q, want %q (must match the reported resolvedModel -- a mismatch here is the report/actual stamping defect this fix closes)", captured.envModel, "specific-model")
 	}
 }
 
@@ -525,5 +628,196 @@ func TestLogOrgBaseURLSSRFFallback_NoFireWhenLookupErrors(t *testing.T) {
 
 	if buf.Len() != 0 {
 		t.Fatalf("expected no log output on a RawBaseURL lookup error, got: %q", buf.String())
+	}
+}
+
+// modelCapturingServer runs a real HTTP server and records the "model"
+// field of the last request body it received -- every wire protocol this
+// package's providers speak (OpenAI's Responses API, the OpenAI-compatible
+// Chat Completions API LocalProvider/org-BYO-ollama use, Ollama's native
+// /api/chat) puts the model on a top-level "model" JSON field, so one
+// generic handler captures all three. The response status/body do not
+// matter: resolvedModel is read back from the constructed Provider BEFORE
+// Complete's result is used, so a failed or malformed response never
+// affects what this test asserts.
+type modelCapturingServer struct {
+	*httptest.Server
+	mu    sync.Mutex
+	model string
+}
+
+func newModelCapturingServer(t *testing.T) *modelCapturingServer {
+	t.Helper()
+	s := &modelCapturingServer{}
+	s.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		s.mu.Lock()
+		if m, ok := body["model"].(string); ok {
+			s.model = m
+		}
+		s.mu.Unlock()
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(s.Close)
+	return s
+}
+
+func (s *modelCapturingServer) lastModel() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.model
+}
+
+func (s *modelCapturingServer) reset() {
+	s.mu.Lock()
+	s.model = ""
+	s.mu.Unlock()
+}
+
+// TestResolvedModelAlwaysMatchesConstructedProviderModel is the enumerated
+// proof for the design this file's newProviderForOrg/ResolveModelNameForOrg
+// doc comments and the Provider interface's own doc comment
+// (categorize/provider.go) now state: the model CompleteInvestmentMixExplanationForOrg/
+// CompleteWorkUnitExplanationForOrg report is read back from the
+// CONSTRUCTED provider (provider.Model()), never computed by a second,
+// independent resolver -- so report and actual cannot diverge, regardless
+// of whether this package's OWN resolver (ResolveModelNameForOrg, with its
+// Python-parity-pinned env precedence and its own, necessarily incomplete
+// per-kind maps) has an entry for the requested provider kind at all.
+//
+// The kind list comes from categorize.ImplementedProviderKinds(), not a
+// literal list here -- a kind categorize gains in the future is swept
+// into every scenario below automatically, closing exactly the gap the
+// round that found the ollama instance of this defect class exposed: this
+// package's own maps not knowing about a kind categorize can construct.
+//
+// For openai/local/ollama (real network-shaped providers) the assertion
+// is against the ACTUAL outgoing request body's "model" field, captured
+// by a real HTTP server -- not against a second read of the same
+// in-memory value, which would prove nothing beyond "this function
+// returns what it returns."
+func TestResolvedModelAlwaysMatchesConstructedProviderModel(t *testing.T) {
+	srv := newModelCapturingServer(t)
+
+	wireBacked := map[categorize.ProviderKind]bool{
+		categorize.ProviderKindOpenAI: true,
+		categorize.ProviderKindLocal:  true,
+		categorize.ProviderKindOllama: true,
+	}
+	// noWireExpected pins mock/none's fixed, config-independent model --
+	// both ignore any requested/resolved model entirely (categorize's own
+	// ResolveModelName/NewProviderFromEnvWithModel special-case both
+	// before touching model at all).
+	noWireExpected := map[categorize.ProviderKind]string{
+		categorize.ProviderKindMock: "mock",
+		categorize.ProviderKindNone: "none",
+	}
+	// providerSpecificEnvVar is the REAL categorize-level env var for the
+	// kinds that have one (categorize/providerkind.go's modelEnvByKind,
+	// unexported -- named here as the axis under test, same as any test
+	// that sets a specific env var to exercise a specific branch).
+	// ollama's deliberately has NO entry in THIS package's OWN
+	// modelEnvByProvider map (provider.go/provider_org.go) -- that gap is
+	// exactly what the enumerated "provider_specific_env_unknown_to_this_package"
+	// scenario below proves no longer breaks the invariant.
+	providerSpecificEnvVar := map[categorize.ProviderKind]string{
+		categorize.ProviderKindOpenAI: "LLM_MODEL_OPENAI",
+		categorize.ProviderKindLocal:  "LLM_MODEL_LOCAL",
+		categorize.ProviderKindOllama: "OLLAMA_MODEL",
+	}
+
+	for _, kind := range categorize.ImplementedProviderKinds() {
+		kind := kind
+
+		t.Run(string(kind)+"/nothing_set_defaults_only", func(t *testing.T) {
+			srv.reset()
+			if wireBacked[kind] {
+				t.Setenv("LLM_BASE_URL", srv.URL)
+				t.Setenv("LLM_API_KEY", "dummy-test-key")
+			}
+			_, _, resolvedModel, _ := CompleteInvestmentMixExplanationForOrg(
+				context.Background(), string(kind), "", "org-1", nil, "prompt text")
+			assertResolvedModelMatchesWire(t, kind, resolvedModel, srv, wireBacked[kind], noWireExpected)
+		})
+
+		if envVar, ok := providerSpecificEnvVar[kind]; ok {
+			t.Run(string(kind)+"/provider_specific_env_unknown_to_this_package", func(t *testing.T) {
+				srv.reset()
+				t.Setenv(envVar, "env-resolved-"+string(kind))
+				if wireBacked[kind] {
+					t.Setenv("LLM_BASE_URL", srv.URL)
+					t.Setenv("LLM_API_KEY", "dummy-test-key")
+				}
+				_, _, resolvedModel, _ := CompleteInvestmentMixExplanationForOrg(
+					context.Background(), string(kind), "", "org-1", nil, "prompt text")
+				assertResolvedModelMatchesWire(t, kind, resolvedModel, srv, wireBacked[kind], noWireExpected)
+			})
+		}
+
+		t.Run(string(kind)+"/explicit_request_override", func(t *testing.T) {
+			srv.reset()
+			if wireBacked[kind] {
+				t.Setenv("LLM_BASE_URL", srv.URL)
+				t.Setenv("LLM_API_KEY", "dummy-test-key")
+			}
+			explicit := "explicit-" + string(kind)
+			_, _, resolvedModel, _ := CompleteInvestmentMixExplanationForOrg(
+				context.Background(), string(kind), explicit, "org-1", nil, "prompt text")
+			assertResolvedModelMatchesWire(t, kind, resolvedModel, srv, wireBacked[kind], noWireExpected)
+			if _, isFixed := noWireExpected[kind]; !isFixed && resolvedModel != explicit {
+				t.Errorf("resolvedModel = %q, want the explicit override %q", resolvedModel, explicit)
+			}
+		})
+
+		t.Run(string(kind)+"/org_byo_stored_model", func(t *testing.T) {
+			srv.reset()
+			resolver := &fakeOrgResolver{
+				credentials: llmorgsettings.Credentials{
+					APIKey:  "org-secret-key",
+					BaseURL: srv.URL,
+				},
+				credentialsOK: true,
+				matches:       true,
+				model:         "org-stored-" + string(kind),
+			}
+			_, _, resolvedModel, _ := CompleteInvestmentMixExplanationForOrg(
+				context.Background(), string(kind), "", "org-1", resolver, "prompt text")
+			assertResolvedModelMatchesWire(t, kind, resolvedModel, srv, wireBacked[kind], noWireExpected)
+		})
+
+		t.Run(string(kind)+"/work_unit_explain_route_shares_the_same_invariant", func(t *testing.T) {
+			srv.reset()
+			if wireBacked[kind] {
+				t.Setenv("LLM_BASE_URL", srv.URL)
+				t.Setenv("LLM_API_KEY", "dummy-test-key")
+			}
+			_, _, resolvedModel, _ := CompleteWorkUnitExplanationForOrg(
+				context.Background(), string(kind), "", "org-1", nil, "prompt text")
+			assertResolvedModelMatchesWire(t, kind, resolvedModel, srv, wireBacked[kind], noWireExpected)
+		})
+	}
+}
+
+func assertResolvedModelMatchesWire(
+	t *testing.T, kind categorize.ProviderKind, resolvedModel string,
+	srv *modelCapturingServer, isWireBacked bool, noWireExpected map[categorize.ProviderKind]string,
+) {
+	t.Helper()
+	if want, ok := noWireExpected[kind]; ok {
+		if resolvedModel != want {
+			t.Errorf("kind %q: resolvedModel = %q, want the fixed %q", kind, resolvedModel, want)
+		}
+		return
+	}
+	if !isWireBacked {
+		t.Fatalf("kind %q: neither wire-backed nor a fixed no-wire expectation -- test is missing a case for this kind", kind)
+	}
+	wireModel := srv.lastModel()
+	if wireModel == "" {
+		t.Fatalf("kind %q: the request never reached the capturing server (or sent no model field) -- construction likely failed before Complete, invalidating this scenario", kind)
+	}
+	if resolvedModel != wireModel {
+		t.Errorf("kind %q: resolvedModel = %q, but the ACTUAL outgoing request's model = %q -- report/actual mismatch", kind, resolvedModel, wireModel)
 	}
 }

@@ -113,7 +113,19 @@ func WorkUnitExplanationRequest(prompt string) CompletionRequest {
 // LocalProvider (localprovider.go, an OpenAI-compatible endpoint such as
 // LM Studio/Ollama). Anthropic/gemini/qwen have no Go port yet -- add one
 // by implementing this same interface, not by widening it.
+//
+// Model is the one exception to that "don't widen it" rule: it is the
+// SINGLE source of truth for the model this Provider was constructed to
+// use, read back by any caller that must report the model it will
+// actually send before, or regardless of, calling Complete -- whose own
+// CompletionResult.Model reflects the identical value only on the return
+// paths that set it, and is empty on an early error return. A caller that
+// computes its own, second, independent notion of "the model" (env-var
+// resolution duplicated outside this package, a hardcoded default) can
+// drift from what Complete actually sends; reading it back from the
+// constructed Provider cannot.
 type Provider interface {
 	Complete(ctx context.Context, request CompletionRequest) (CompletionResult, error)
 	Close() error
+	Model() string
 }

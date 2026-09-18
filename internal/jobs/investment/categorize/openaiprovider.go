@@ -286,6 +286,13 @@ func (p *OpenAIProvider) Close() error {
 	return nil
 }
 
+// Model returns the model this provider was constructed with -- the
+// value every Complete request body's own "model" field carries
+// (p.cfg.Model), read back before/regardless of any Complete call.
+func (p *OpenAIProvider) Model() string {
+	return p.cfg.Model
+}
+
 func minInt(a, b int) int {
 	if a < b {
 		return a

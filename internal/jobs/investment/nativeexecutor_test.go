@@ -596,6 +596,8 @@ func (p *blockingProvider) Complete(ctx context.Context, _ categorize.Completion
 
 func (p *blockingProvider) Close() error { return nil }
 
+func (p *blockingProvider) Model() string { return "blocking" }
+
 func (p *blockingProvider) inFlight() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()

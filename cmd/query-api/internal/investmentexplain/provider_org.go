@@ -152,9 +152,14 @@ func ResolveModelNameForOrg(
 
 // newProviderForOrg constructs a Provider for kind, sourced from the
 // org's own BYO credentials when org BYO is the active source for kind,
-// else from the platform environment (NewProviderFromEnv) -- exactly
+// else from the platform environment (NewProviderFromEnvWithModel,
+// passed the same already-resolved model as the BYO branch) -- exactly
 // resolve_llm_credentials' own source-bound precedence (CHAOS-2550):
 // never mix an org api_key with a platform base_url, or vice versa.
+// Python's get_provider resolves the caller's model once and threads it
+// into every provider constructor on its one path; this function has two
+// branches (BYO credentials, platform env) and both now receive the same
+// verbatim model, matching that single-resolution guarantee.
 // orgSettings.Credentials' own ok=false return (unconfigured, mismatched
 // provider, incomplete, or SSRF-rejected) IS "org BYO is not the active
 // source for kind" -- the same signal org_byo_provider_matches/
@@ -207,7 +212,7 @@ func newProviderForOrg(
 		// credential value.
 		logOrgBaseURLSSRFFallback(ctx, orgSettings, orgID, string(kind))
 	}
-	return newProviderFromEnv(kind)
+	return newProviderFromEnv(kind, model)
 }
 
 // logOrgBaseURLSSRFFallback re-checks the org's RAW (unvalidated)
@@ -260,15 +265,19 @@ func schemeAndHostForLogging(rawURL string) (scheme, host string) {
 // newProviderFromCredentials/newProviderFromEnv are newProviderForOrg's
 // own construction calls, indirected through package vars so a test can
 // substitute a capturing fake and prove WHICH ONE fired and with what
-// arguments -- categorize.NewProviderFromCredentials' own construction
-// correctness (explicit values win, no ambient-env leakage) is already
-// proven in categorize's own test suite
-// (providerkind_credentials_test.go); what THIS package's tests need to
-// prove is that its OWN wiring picks the right one and passes it the
-// org's real values, not that the constructor itself is correct.
+// arguments -- categorize.NewProviderFromCredentials'/
+// NewProviderFromEnvWithModel's own construction correctness (explicit
+// values win, no ambient-env leakage) is already proven in categorize's
+// own test suite (providerkind_credentials_test.go); what THIS package's
+// tests need to prove is that its OWN wiring picks the right one and
+// passes it the org's real values, not that the constructor itself is
+// correct. newProviderFromEnv takes model explicitly (not
+// categorize.NewProviderFromEnv, which always resolves an empty model)
+// so the platform-env fallback branch receives the same verbatim,
+// already-resolved model the BYO-credentials branch does.
 var (
 	newProviderFromCredentials = categorize.NewProviderFromCredentials
-	newProviderFromEnv         = categorize.NewProviderFromEnv
+	newProviderFromEnv         = categorize.NewProviderFromEnvWithModel
 )
 
 // CompleteInvestmentMixExplanationForOrg is CompleteInvestmentMixExplanation
@@ -289,20 +298,30 @@ func CompleteInvestmentMixExplanationForOrg(
 	}
 	resolvedProvider = string(kind)
 
-	model, found := ResolveModelNameForOrg(ctx, kind, requestedModel, orgID, orgSettings)
-	resolvedModel = model
-	if !found {
-		resolvedModel = requestedModel
-		if resolvedModel == "" {
-			resolvedModel = resolvedProvider
-		}
-	}
+	// model is investmentexplain's own resolution -- the input threaded
+	// into construction, still exactly the caller's explicit request, the
+	// org's stored model, or investmentexplain's env-var-precedence
+	// default, per ResolveModelNameForOrg's own doc comment. It is NOT
+	// what gets reported below: resolvedModel comes from the CONSTRUCTED
+	// provider's own Model() -- the provider is the single source of
+	// truth for what it will actually send, whether or not
+	// ResolveModelNameForOrg resolved anything (a kind with no entry in
+	// this package's own maps still gets a real model from categorize's
+	// OWN, complete resolution, and Model() reports THAT, not a
+	// placeholder). found is unused for the same reason: no fallback
+	// guess is needed once the report comes from construction itself.
+	model, _ := ResolveModelNameForOrg(ctx, kind, requestedModel, orgID, orgSettings)
 
 	provider, err := newProviderForOrg(ctx, kind, orgID, model, orgSettings)
 	if err != nil {
-		return categorize.CompletionResult{}, resolvedProvider, resolvedModel, fmt.Errorf("construct llm provider: %w", err)
+		// No provider was constructed, so there is nothing to read Model()
+		// from; model is investmentexplain's own best-effort resolution,
+		// reported only because a failed construction never reaches an
+		// LLM call for it to diverge from.
+		return categorize.CompletionResult{}, resolvedProvider, model, fmt.Errorf("construct llm provider: %w", err)
 	}
 	defer func() { _ = provider.Close() }()
+	resolvedModel = provider.Model()
 
 	result, err = provider.Complete(ctx, categorize.InvestmentMixExplanationRequest(fullPrompt))
 	if err != nil {
@@ -331,20 +350,30 @@ func CompleteWorkUnitExplanationForOrg(
 	}
 	resolvedProvider = string(kind)
 
-	model, found := ResolveModelNameForOrg(ctx, kind, requestedModel, orgID, orgSettings)
-	resolvedModel = model
-	if !found {
-		resolvedModel = requestedModel
-		if resolvedModel == "" {
-			resolvedModel = resolvedProvider
-		}
-	}
+	// model is investmentexplain's own resolution -- the input threaded
+	// into construction, still exactly the caller's explicit request, the
+	// org's stored model, or investmentexplain's env-var-precedence
+	// default, per ResolveModelNameForOrg's own doc comment. It is NOT
+	// what gets reported below: resolvedModel comes from the CONSTRUCTED
+	// provider's own Model() -- the provider is the single source of
+	// truth for what it will actually send, whether or not
+	// ResolveModelNameForOrg resolved anything (a kind with no entry in
+	// this package's own maps still gets a real model from categorize's
+	// OWN, complete resolution, and Model() reports THAT, not a
+	// placeholder). found is unused for the same reason: no fallback
+	// guess is needed once the report comes from construction itself.
+	model, _ := ResolveModelNameForOrg(ctx, kind, requestedModel, orgID, orgSettings)
 
 	provider, err := newProviderForOrg(ctx, kind, orgID, model, orgSettings)
 	if err != nil {
-		return categorize.CompletionResult{}, resolvedProvider, resolvedModel, fmt.Errorf("construct llm provider: %w", err)
+		// No provider was constructed, so there is nothing to read Model()
+		// from; model is investmentexplain's own best-effort resolution,
+		// reported only because a failed construction never reaches an
+		// LLM call for it to diverge from.
+		return categorize.CompletionResult{}, resolvedProvider, model, fmt.Errorf("construct llm provider: %w", err)
 	}
 	defer func() { _ = provider.Close() }()
+	resolvedModel = provider.Model()
 
 	result, err = provider.Complete(ctx, categorize.WorkUnitExplanationRequest(fullPrompt))
 	if err != nil {

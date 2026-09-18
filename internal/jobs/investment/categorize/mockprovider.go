@@ -68,6 +68,11 @@ func (MockProvider) Complete(_ context.Context, request CompletionRequest) (Comp
 // Close is a no-op, matching mock.py's MockProvider.aclose.
 func (MockProvider) Close() error { return nil }
 
+// Model is always "mock" -- MockProvider takes no configured model (it
+// never reads env or an explicit override), matching every Complete
+// branch's own hardcoded CompletionResult.Model above.
+func (MockProvider) Model() string { return "mock" }
+
 // mockCategorization ports mock.py's _mock_categorization.
 func mockCategorization(prompt string) (string, error) {
 	sourceType, sourceID, sourceText := firstMockSourceBlock(prompt)

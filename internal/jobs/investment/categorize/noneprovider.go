@@ -14,4 +14,7 @@ func (NoneProvider) Complete(_ context.Context, _ CompletionRequest) (Completion
 
 func (NoneProvider) Close() error { return nil }
 
+// Model is always "none", matching Complete's own CompletionResult.Model.
+func (NoneProvider) Model() string { return "none" }
+
 var _ Provider = NoneProvider{}

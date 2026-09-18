@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"testing"
 )
 
@@ -220,6 +221,51 @@ func TestHeatmapCellBoundaryShape_SyntheticCompareLeavesCellsFullyCovered(t *tes
 	}
 	if !equalStrings(result.BaselineDefectsMatched, []string{"CHAOS-TEST-BOUNDARY"}) {
 		t.Fatalf("matched = %v, want [CHAOS-TEST-BOUNDARY]", result.BaselineDefectsMatched)
+	}
+}
+
+// TestHeatmapFileSetDifference pins heatmapFileSetDifference's own
+// contract directly: every file in a but not in b, nothing else, and an
+// empty a returns nil with no iteration.
+func TestHeatmapFileSetDifference(t *testing.T) {
+	a := map[string]float64{"x": 1, "y": 2, "shared": 3}
+	b := map[string]float64{"shared": 3, "z": 4}
+	got := heatmapFileSetDifference(a, b)
+	sort.Strings(got)
+	if !equalStrings(got, []string{"x", "y"}) {
+		t.Fatalf("difference = %v, want [x y]", got)
+	}
+	if got := heatmapFileSetDifference(map[string]float64{}, b); got != nil {
+		t.Fatalf("difference over an empty map = %v, want nil", got)
+	}
+	if got := heatmapFileSetDifference(a, a); len(got) != 0 {
+		t.Fatalf("difference of a set from itself = %v, want none", got)
+	}
+}
+
+// TestHeatmapCellBoundaryShape_NonPositiveLimitRefusesThePlan pins rule
+// 3's own Limit guard directly: a shape declaring a zero Limit refuses
+// the whole plan, never reaching heatmapFileSetDifference's own loop at
+// all.
+func TestHeatmapCellBoundaryShape_NonPositiveLimitRefusesThePlan(t *testing.T) {
+	baseBody := heatmapBoundaryBody(t, "", []string{})
+	candBody := heatmapBoundaryBody(t, "", []string{})
+	baseline, err := DecodeRESTSnapshot([]byte(baseBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := DecodeRESTSnapshot([]byte(candBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	shape := &HeatmapCellBoundaryShape{
+		CellsListPath: "data.cells", CellKeyFields: []string{"x", "y"}, FileField: "y",
+		CellValuePath: "data.cells.value", AxisListPath: "data.axes.y", Limit: 0,
+	}
+	plan := buildHeatmapCellBoundaryPlan(shape, baseline.Data, candidate.Data)
+	if plan.valid {
+		t.Fatal("plan should refuse a zero Limit")
 	}
 }
 

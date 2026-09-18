@@ -221,6 +221,26 @@ func heatmapMinFileTotal(totals map[string]float64, exclude []string) (float64, 
 	return min, found
 }
 
+// heatmapFileSetDifference returns the set of file names present in a but
+// not in b -- rule 3's own baseline-only/candidate-only file sets, one
+// call per direction. ok is guarded directly against a's own length,
+// immediately before the range that reads it: an empty a returns nil
+// with no iteration at all, the same explicit, adjacent-to-the-loop
+// invariant every map range in this file states rather than leaving it
+// to a caller's own, more distant guard.
+func heatmapFileSetDifference(a, b map[string]float64) []string {
+	if len(a) == 0 {
+		return nil
+	}
+	var out []string
+	for file := range a {
+		if _, ok := b[file]; !ok {
+			out = append(out, file)
+		}
+	}
+	return out
+}
+
 // buildHeatmapCellBoundaryPlan evaluates every rule HeatmapCellBoundaryShape
 // documents against one comparison's decoded baseline/candidate `data`
 // values.
@@ -254,22 +274,21 @@ func buildHeatmapCellBoundaryPlan(shape *HeatmapCellBoundaryShape, baselineData,
 		candFileTotal[row.file] += row.value
 	}
 
-	// Rule 3: both reconstructed file lists exactly Limit long.
-	if len(baseFileTotal) != shape.Limit || len(candFileTotal) != shape.Limit {
+	// Rule 3: both reconstructed file lists exactly Limit long, and Limit
+	// itself positive -- the route's own top-N bound is never zero or
+	// negative for any admissible request this package declares, and
+	// stating that directly here (rather than leaving it implicit in
+	// Limit's own declared value, many lines away from where it is used)
+	// is what tells a reader, human or automated, that
+	// heatmapFileSetDifference's own loop below can never range over an
+	// empty map: the equality check just above already pins each map's
+	// cardinality to Limit, and Limit is pinned positive right here.
+	if shape.Limit <= 0 || len(baseFileTotal) != shape.Limit || len(candFileTotal) != shape.Limit {
 		return plan
 	}
 
-	var baselineOnlyFiles, candidateOnlyFiles []string
-	for file := range baseFileTotal {
-		if _, ok := candFileTotal[file]; !ok {
-			baselineOnlyFiles = append(baselineOnlyFiles, file)
-		}
-	}
-	for file := range candFileTotal {
-		if _, ok := baseFileTotal[file]; !ok {
-			candidateOnlyFiles = append(candidateOnlyFiles, file)
-		}
-	}
+	baselineOnlyFiles := heatmapFileSetDifference(baseFileTotal, candFileTotal)
+	candidateOnlyFiles := heatmapFileSetDifference(candFileTotal, baseFileTotal)
 	if len(baselineOnlyFiles) == 0 || len(baselineOnlyFiles) != len(candidateOnlyFiles) {
 		return plan
 	}

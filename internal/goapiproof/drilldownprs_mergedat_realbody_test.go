@@ -113,6 +113,9 @@ func TestDrilldownPRsParity_CapturedMergedAtCasesHaveNothingOutside(t *testing.T
 				t.Fatalf("matched = %v, want %v: idle %v stale %v live-unexplained %v", result.BaselineDefectsMatched, want,
 					result.IdleIntermittentBaselineDefects, result.StaleBaselineDefects, result.LiveBaselineDefectsUnexplained)
 			}
+			if want := drilldownPRsWantIdleLengthTickets(); !equalStrings(result.IdleIntermittentBaselineDefects, want) {
+				t.Fatalf("idle = %v, want %v -- both legs share one length here, so the length-collapse entry has nothing to admit", result.IdleIntermittentBaselineDefects, want)
+			}
 			for _, f := range result.Findings {
 				if strings.Contains(f.Detail, drilldownPRsWriteOnceRefusal) {
 					t.Errorf("write-once entry refused %s: %s", f.Path, f.Detail)

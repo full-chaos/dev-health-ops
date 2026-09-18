@@ -745,6 +745,17 @@ var drilldownPRsParity = Options{
 				WriteOnceFields: []string{"merged_at", "first_review_at", "review_latency_hours"},
 			},
 		},
+		{
+			Ticket:             "CHAOS-5959",
+			Reason:             "the same repos-join fan-out mechanism as this table's own CHAOS-5803 duplicate-row entry above, over data.items' own LENGTH: a physically-duplicated (repo_id, number) row spends an extra slot of the page limit, so the reference plane's own items list carries more elements than the candidate's for the SAME logical set of pull requests. Confirmed against a real production capture (team_scoped): every one of 6 duplicated ids in a 42-item baseline page was exactly 2 byte-identical copies, all for the same physically-duplicated repository, and collapsing them id for id reproduced the candidate's own 36-item page exactly, content included. Go is correct.",
+			Paths:              []string{"data.items"},
+			Intermittent:       true,
+			IntermittentReason: "present only while git_pull_requests or repos holds an unmerged physical version that duplicates a returned pull request's own identity within the requested page; a comparison taken after the next background merge shows no length divergence",
+			DuplicateCollapseLengthShape: &DuplicateCollapseLengthShape{
+				ListPath: "data.items",
+				IDField:  RESTDedupKeyField,
+			},
+		},
 	},
 }
 
@@ -2065,9 +2076,44 @@ var heatmapRepoTouchpointsParity = Options{
 // and every sibling FloatTierB table in this service already declares --
 // not a cast-for-scanning artefact the way repo_touchpoints'/active_
 // hours' count() is.
+// heatmapHotspotRiskCellBoundaryDefect narrows heatmapDedupParity's own
+// repos-join fan-out mechanism (inherited into heatmapHotspotRiskParity
+// below via its own shared KeyedDirectionShape entry) to the FULL
+// consequence set it produces specifically on hotspot_risk's own
+// two-level structure: fetchHotspotRisk's own top_query (api/queries/
+// heatmap.py:161-178, cmd/query-api/internal/heatmap/queries.go:244-257)
+// selects the top 20 files (services/heatmap.py:367, heatmap.go:322) by
+// sum(hotspot_score) BEFORE the per-week detail query builds data.cells,
+// and data.axes.y (services/heatmap.py's own `_axis_order` default
+// branch; heatmap/response.go's own `axisOrder`) sorts by that SAME
+// per-file total. A physically-duplicated repos row inflates every file
+// that repository owns by the same integer factor (measured against a
+// real production capture, GET /api/v1/heatmap hotspot_risk: one
+// repository's own 24 differing shared cells each differed by EXACTLY
+// 2.0x, and that same repository alone supplied every one of 30
+// baseline-only and 30 candidate-only cells), which can cross the fixed
+// top-20 boundary and reorder the file-name axis built from the same
+// totals -- see HeatmapCellBoundaryShape's own doc comment
+// (heatmapcellboundary.go) for the full derivation.
+var heatmapHotspotRiskCellBoundaryDefect = BaselineDefect{
+	Ticket:             "CHAOS-5955",
+	Reason:             "fetchHotspotRisk's own top-20 file selection and per-week detail query (api/queries/heatmap.py:142-205, heatmap/queries.go:244-305) both derive from repos, ReplacingMergeTree(last_synced), joined without FINAL on the reference plane (api/queries/heatmap.py) and FINAL on this port (heatmap/queries.go). A physically-duplicated repos row inflates every file that repository owns by the same integer factor, which can cross the fixed top-20 boundary -- entering one plane's data.cells at the cost of whichever file currently ranks last on the other plane -- and reorder data.axes.y, whose own sort key is the same per-file total the fan-out inflates. Go is correct.",
+	Paths:              []string{"data.cells", "data.axes.y"},
+	Intermittent:       true,
+	IntermittentReason: "present only while repos holds an unmerged physical version of a repository owning at least one file in this window's top-20 hotspot list; a comparison taken after the next background merge shows no divergence",
+	HeatmapCellBoundaryShape: &HeatmapCellBoundaryShape{
+		CellsListPath: "data.cells",
+		CellKeyFields: []string{"x", "y"},
+		FileField:     "y",
+		CellValuePath: "data.cells.value",
+		AxisListPath:  "data.axes.y",
+		Limit:         20,
+	},
+}
+
 var heatmapHotspotRiskParity = Options{
 	OrderInsensitiveLists: heatmapDedupParity.OrderInsensitiveLists,
-	BaselineDefects:       heatmapDedupParity.BaselineDefects,
+	BaselineDefects:       append(append([]BaselineDefect{}, heatmapDedupParity.BaselineDefects...), heatmapHotspotRiskCellBoundaryDefect),
 	NumericLeavesDeclared: true,
 	FloatTierB: map[string]string{
 		"data.cells.value": "hotspot_risk's own toFloat64(sum(hotspot_score)) (heatmap/queries.go fetchHotspotRisk) over the Float64 hotspot_score column -- a genuine merged ClickHouse float aggregate.",

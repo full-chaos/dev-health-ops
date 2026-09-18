@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -63,6 +64,78 @@ func jiraTeamCatalogTestClient(t *testing.T, doer providerfoundation.HTTPDoer) *
 }
 
 const jiraTeamCatalogProjectSearchURI = "/rest/api/3/project/search?maxResults=100"
+
+// TestJiraTeamCatalogCollectCountsFailedAndRetriedAttempts verifies that
+// JiraTeamCatalogEvidence.Requests has a single source -- the counting Doer
+// at the HTTP boundary -- across two distinct paths in one
+// CollectTeamCatalog call: the project search fails its first wire attempt
+// and succeeds on retry, and the boards listing fails every attempt
+// through to the retry policy's exhaustion (a best-effort failure under
+// Strict=false, which skips just the sprint walk rather than aborting the
+// whole collection). A double count or a dropped count makes the exact
+// assertion below go red.
+func TestJiraTeamCatalogCollectCountsFailedAndRetriedAttempts(t *testing.T) {
+	t.Parallel()
+	searchAttempts := 0
+	boardsAttempts := 0
+	doer := jiraWorkItemsDoerFunc(func(request *http.Request) (*http.Response, error) {
+		uri := request.URL.RequestURI()
+		switch uri {
+		case jiraTeamCatalogProjectSearchURI:
+			searchAttempts++
+			if searchAttempts == 1 {
+				return nil, errors.New("simulated transient transport failure")
+			}
+			body := `{"values":[{"key":"OPS","name":"Ops Project"}]}`
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+		case "/rest/api/3/project/OPS":
+			body := `{"projectTypeKey":"software"}`
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+		case "/rest/agile/1.0/board?maxResults=100&projectKeyOrId=OPS&startAt=0":
+			boardsAttempts++
+			return nil, errors.New("simulated transient transport failure")
+		default:
+			t.Fatalf("unexpected request %q", uri)
+			return nil, nil
+		}
+	})
+	client, err := providerfoundation.NewHTTPClient(
+		"jira", "https://jira.example.com", doer,
+		func(*http.Request) error { return nil },
+		providerfoundation.RetryPolicy{
+			MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
+		},
+		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := JiraTeamCatalogRouteHandler{}
+	credential := providerfoundation.Credential{Provider: "jira"}
+	batch, err := handler.CollectTeamCatalog(
+		context.Background(),
+		TeamCatalogReference{OrgID: "org-1", SyncRunID: "run-1", Strict: false},
+		credential, client,
+		TeamCatalogSelections{Teams: true},
+		time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC),
+	)
+	if err != nil {
+		t.Fatalf("a board-listing failure must soft-skip the sprint walk under non-strict: %v", err)
+	}
+	if searchAttempts != 2 {
+		t.Fatalf("search attempts=%d want 2 (one failed, one retried)", searchAttempts)
+	}
+	if boardsAttempts != 2 {
+		t.Fatalf("boards attempts=%d want 2 (both exhausted by the retry policy)", boardsAttempts)
+	}
+	if len(batch.Rows.Sprints) != 0 {
+		t.Fatalf("sprints=%+v want none (the board listing never recovered)", batch.Rows.Sprints)
+	}
+	// 2 (search, retried) + 1 (project detail) + 2 (boards, exhausted) = 5.
+	if batch.Evidence.Requests != 5 {
+		t.Fatalf("evidence=%+v want Requests=5 (every physical attempt, from one source)", batch.Evidence)
+	}
+}
 
 // TestJiraTeamCatalogCollectSkipsOneBoardsSprint400UnderStrict ports
 // team_autoimport_jira's test_jira_populate_skips_one_boards_sprint_400_

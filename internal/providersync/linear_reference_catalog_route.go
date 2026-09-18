@@ -127,6 +127,19 @@ type LinearReferenceCatalogRouteHandler struct {
 	Now func() time.Time
 }
 
+// linearReferenceCatalogCountingDoer counts every real wire attempt at the
+// HTTP boundary, including failed and retried ones, so FetchEvidence.Requests
+// reflects actual provider request cost rather than decoded-page counts.
+type linearReferenceCatalogCountingDoer struct {
+	delegate providerfoundation.HTTPDoer
+	attempts *int
+}
+
+func (doer linearReferenceCatalogCountingDoer) Do(request *http.Request) (*http.Response, error) {
+	*doer.attempts++
+	return doer.delegate.Do(request)
+}
+
 func (handler LinearReferenceCatalogRouteHandler) observedAt() time.Time {
 	if handler.Now != nil {
 		return handler.Now().UTC().Truncate(time.Millisecond)
@@ -165,7 +178,7 @@ func (handler LinearReferenceCatalogRouteHandler) CollectReferenceCatalog(
 	client *providerfoundation.HTTPClient,
 	selections TeamCatalogSelections,
 	normalizedAt time.Time,
-) (LinearReferenceCatalogBatch, error) {
+) (batch LinearReferenceCatalogBatch, err error) {
 	if ctx == nil || ref.validate() != nil || credential.Provider != "linear" ||
 		credential.ID == "" || client == nil ||
 		client.Provider != "linear" || client.BaseURL == nil || client.Doer == nil ||
@@ -173,15 +186,24 @@ func (handler LinearReferenceCatalogRouteHandler) CollectReferenceCatalog(
 		return LinearReferenceCatalogBatch{}, ErrInvalidConfiguration
 	}
 	claim := Claim{Unit: Unit{OrgID: ref.OrgID, Provider: "linear"}}
-	perPage, maxPages, err := handler.limits()
-	if err != nil {
-		return LinearReferenceCatalogBatch{}, err
+	perPage, maxPages, limitsErr := handler.limits()
+	if limitsErr != nil {
+		return LinearReferenceCatalogBatch{}, limitsErr
 	}
 	normalizedAt = normalizedAt.UTC().Truncate(time.Millisecond)
 	// Loaded once per walk: every member this run normalizes
 	// shares the same org alias config.
 	resolver := identityalias.LoadDefault()
 	evidence := LinearReferenceCatalogEvidence{Provider: "linear", Dataset: "reference-catalog"}
+	// Requests has ONE source: real wire attempts observed at the HTTP
+	// boundary, including failed/retried ones. The defer stamps it onto
+	// whatever batch this call returns through, success or any of the
+	// many linearReferenceCatalogFailureBatch exit points below.
+	requests := 0
+	counted := *client
+	counted.Doer = linearReferenceCatalogCountingDoer{delegate: client.Doer, attempts: &requests}
+	client = &counted
+	defer func() { batch.Evidence.Requests = requests }()
 	rows := LinearReferenceCatalogRows{
 		Teams: make([]linearReferenceTeamRow, 0), Members: make([]linearReferenceMemberRow, 0),
 		Memberships: make([]linearReferenceMembershipRow, 0), Projects: make([]linearReferenceProjectRow, 0),
@@ -196,7 +218,6 @@ func (handler LinearReferenceCatalogRouteHandler) CollectReferenceCatalog(
 		ctx, client, linearReferenceCatalogTeamsQuery, linearReferenceConnectionTeams,
 		linearReferenceConnectionVariables{First: perPage}, perPage, maxPages,
 	)
-	evidence.Requests += pages
 	evidence.Pages += pages
 	if collectErr != nil || capReached {
 		return linearReferenceCatalogFailureBatch(evidence, "teams", pages, 0, collectErr, capReached)
@@ -233,7 +254,6 @@ func (handler LinearReferenceCatalogRouteHandler) CollectReferenceCatalog(
 					ctx, client, linearReferenceCatalogMembersQuery, linearReferenceConnectionTeamMembers,
 					linearReferenceConnectionVariables{TeamID: payload.ID}, linearReferenceCatalogMemberPageSize, maxPages,
 				)
-				evidence.Requests += memberPages
 				evidence.Pages += memberPages
 				if memberErr != nil || memberCap {
 					return linearReferenceCatalogFailureBatch(evidence, "members", evidence.Pages, evidence.Records, memberErr, memberCap)
@@ -302,7 +322,6 @@ func (handler LinearReferenceCatalogRouteHandler) CollectReferenceCatalog(
 		// entire per-team cycles loop there.
 		if !cyclesAbandoned {
 			cyclePayloads, cyclePages, cycleErr := collectLinearCycles(ctx, client, payload.ID)
-			evidence.Requests += cyclePages
 			evidence.Pages += cyclePages
 			if cycleErr != nil {
 				if ref.Strict {
@@ -341,7 +360,6 @@ func (handler LinearReferenceCatalogRouteHandler) CollectReferenceCatalog(
 			ctx, client, linearReferenceCatalogProjectsQuery, linearReferenceConnectionProjects,
 			linearReferenceConnectionVariables{First: perPage, IncludeArchived: true}, perPage, maxPages,
 		)
-		evidence.Requests += projectPages
 		evidence.Pages += projectPages
 		// CHAOS-4431 codex review round 3, P2: team_autoimport_linear.py:
 		// 605-623's except clause keeps whatever native_project_rows already

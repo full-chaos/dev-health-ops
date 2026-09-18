@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -114,6 +115,73 @@ func TestGitHubTeamCatalogCollectWritesTeamsAndMemberships(t *testing.T) {
 	}
 	if rows.RepoOwnership[0].RepoFullName != "acme/api" || rows.RepoOwnership[1].RepoFullName != "acme/web" {
 		t.Fatalf("repo ownership=%+v", rows.RepoOwnership)
+	}
+}
+
+// TestGitHubTeamCatalogCollectCountsFailedAndRetriedAttempts verifies that
+// GitHubTeamCatalogEvidence.Requests has a single source -- the counting
+// Doer at the HTTP boundary -- across two distinct paths in one Collect
+// call: the teams listing fails its first wire attempt and succeeds on
+// retry, and the one team's members fetch fails every attempt through to
+// the retry policy's exhaustion (a best-effort failure under
+// Strict=false, which skips just that team's memberships rather than
+// aborting the whole collection). A double count or a dropped count makes
+// the exact assertion below go red.
+func TestGitHubTeamCatalogCollectCountsFailedAndRetriedAttempts(t *testing.T) {
+	t.Parallel()
+	teamsAttempts := 0
+	membersAttempts := 0
+	doer := jiraWorkItemsDoerFunc(func(request *http.Request) (*http.Response, error) {
+		switch request.URL.Path {
+		case "/orgs/acme/teams":
+			teamsAttempts++
+			if teamsAttempts == 1 {
+				return nil, errors.New("simulated transient transport failure")
+			}
+			body := `[{"slug":"platform","name":"Platform"}]`
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+		case "/orgs/acme/teams/platform/repos":
+			body := `[{"name":"api"}]`
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+		case "/orgs/acme/teams/platform/members":
+			membersAttempts++
+			return nil, errors.New("simulated transient transport failure")
+		default:
+			t.Fatalf("unexpected request path %q", request.URL.Path)
+			return nil, nil
+		}
+	})
+	client, err := providerfoundation.NewHTTPClient(
+		"github", "https://api.github.com", doer,
+		func(*http.Request) error { return nil },
+		providerfoundation.RetryPolicy{
+			MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
+		},
+		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	collector := GitHubTeamCatalogRouteHandler{
+		Client: client, OrgName: "acme",
+		Now: func() time.Time { return time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC) },
+	}
+	_, evidence, err := collector.Collect(context.Background(), "org-1", true, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if teamsAttempts != 2 {
+		t.Fatalf("teams attempts=%d want 2 (one failed, one retried)", teamsAttempts)
+	}
+	if membersAttempts != 2 {
+		t.Fatalf("members attempts=%d want 2 (both exhausted by the retry policy)", membersAttempts)
+	}
+	if evidence.SkippedTeamMemberships != 1 {
+		t.Fatalf("evidence=%+v want SkippedTeamMemberships=1", evidence)
+	}
+	// 2 (teams, retried) + 1 (repos) + 2 (members, exhausted) = 5.
+	if evidence.Requests != 5 {
+		t.Fatalf("evidence=%+v want Requests=5 (every physical attempt, from one source)", evidence)
 	}
 }
 

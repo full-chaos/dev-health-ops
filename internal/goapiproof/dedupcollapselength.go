@@ -52,6 +52,23 @@ package goapiproof
 // drops or substitutes an unrelated, non-duplicated row -- rule 4's own
 // set-equality check refuses that case rather than guessing which half
 // of the length difference the duplication actually explains.
+//
+// RequestLimit's own precondition (rule 0, evaluated before rules 1-4):
+// when RequestLimit is set, a baseline whose own raw length REACHES it
+// refuses outright, before rule 4's own set-equality is even computed.
+// Rule 4 alone is not sufficient here: both legs of a comparison are
+// requested under the SAME limit, so if the TRUE population exceeds
+// RequestLimit on BOTH planes, candidate's own list is independently
+// truncated at RequestLimit too -- reading FINAL, with no duplication,
+// candidate's own truncated list is exactly its own top-RequestLimit
+// distinct rows in order, and baseline's own dedup, if honestly
+// ordered, names the SAME top rows. Rule 4's set-equality would then
+// hold EXACTLY, admitting a match that only proves the two leading
+// pages agree, never that the whole population was compared -- the
+// claim this shape's own RequestLimit callers make. A baseline
+// genuinely SHORT of RequestLimit carries no such ambiguity (ClickHouse
+// itself would have returned more rows had more existed), so the
+// precondition never refuses that case.
 type DuplicateCollapseLengthShape struct {
 	// ListPath is the dotted, index-free path to the list itself, e.g.
 	// "data.items".
@@ -60,6 +77,14 @@ type DuplicateCollapseLengthShape struct {
 	// within an element of the list at ListPath, e.g.
 	// RESTDedupKeyField for a REST route's synthetic dedup key.
 	IDField string
+	// RequestLimit, when > 0, is the request's own effective LIMIT the
+	// baseline was captured under -- see rule 0's own doc comment above.
+	// Zero (the default, every entry declared before this field existed)
+	// disables rule 0 entirely, preserving that entry's own unchanged
+	// behavior: a bare exact-collapse claim with no premise about
+	// whether a further, unobserved page exists beyond what was
+	// captured.
+	RequestLimit int
 }
 
 // duplicateCollapseLengthPlan is one comparison's fully-evaluated
@@ -78,6 +103,13 @@ func buildDuplicateCollapseLengthPlan(shape *DuplicateCollapseLengthShape, basel
 	baseList, ok1 := listAtDottedPath(baselineData, shape.ListPath)
 	candList, ok2 := listAtDottedPath(candidateData, shape.ListPath)
 	if !ok1 || !ok2 {
+		return plan
+	}
+
+	// Rule 0: RequestLimit's own precondition -- see the field's own doc
+	// comment. A baseline whose own raw length REACHES (or, defensively,
+	// exceeds) RequestLimit refuses before anything else is computed.
+	if shape.RequestLimit > 0 && len(baseList) >= shape.RequestLimit {
 		return plan
 	}
 

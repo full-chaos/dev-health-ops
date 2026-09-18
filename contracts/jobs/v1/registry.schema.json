@@ -67,7 +67,8 @@
         "domain_link": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$", "maxLength": 64},
         "organization_scope": {"enum": ["global", "tenant"]},
         "schema_versions": {"type": "object", "minProperties": 1, "patternProperties": {"^[1-9][0-9]*$": {"type": "string"}}, "additionalProperties": false},
-        "fixtures": {"type": "object", "minProperties": 1, "patternProperties": {"^[1-9][0-9]*$": {"type": "array", "minItems": 1, "items": {"type": "string"}}}, "additionalProperties": false}
+        "fixtures": {"type": "object", "minProperties": 1, "patternProperties": {"^[1-9][0-9]*$": {"type": "array", "minItems": 1, "items": {"type": "string"}}}, "additionalProperties": false},
+        "go_only": {"const": true}
       }
     },
     "retired_kind": {

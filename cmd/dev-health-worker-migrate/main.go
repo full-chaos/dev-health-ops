@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	jobsv1 "github.com/full-chaos/dev-health-ops/contracts/jobs/v1"
+	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	platformsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
@@ -151,6 +153,11 @@ func execute(
 	if migrateBuildID == "" || migrateBuildID == "unknown" {
 		migrateBuildID = "manifest:" + postureManifestDigest
 	}
+	nativeRoutes, err := jobcontract.NativeRiverRouteKinds(jobsv1.MigrationState)
+	if err != nil {
+		fmt.Fprintln(stderr, "migration error: embedded job migration policy is invalid")
+		return 1
+	}
 	migrationOptions := riverstore.MigrationOptions{
 		Schema:                  schema,
 		DomainRole:              domainRole,
@@ -161,6 +168,7 @@ func execute(
 		CoordinatorSequences:    coordinatorSequences,
 		PostureManifestDigest:   postureManifestDigest,
 		PostureManifestBuildID:  migrateBuildID,
+		NativeRiverRoutes:       nativeRoutes,
 	}
 	if err := riverstore.ValidateMigrationOptions(migrationOptions); err != nil ||
 		migrationRole == domainRole || migrationRole == queueRole || migrationRole == coordinatorRole {
@@ -206,6 +214,7 @@ func execute(
 	// instead of reporting success on a partially-applied grant set the
 	// way the prod incident's `go-river-provision` REVOKE ALL once did
 	// silently.
+	logRouteSeed(ctx, infoLogger, result)
 	postureResult := checkExecutedGrantPosture(ctx, pool, domainRole, queueRole, coordinatorRole, logger)
 	writePostureTelemetry(stdout, postureResult)
 	if !postureResult.OK {
@@ -226,6 +235,25 @@ func execute(
 		len(result.AppliedVersions),
 	)
 	return 0
+}
+
+// logRouteSeed records, per kind, whether this run created its route row or
+// found one already there. A route table that does not exist yet is a warning:
+// every River-only kind then still lacks its row, and the relay and reconciler
+// resolve such a kind as unknown until the next migrate run after the
+// application schema migration has created the table.
+func logRouteSeed(ctx context.Context, logger *slog.Logger, result riverstore.MigrationResult) {
+	if result.RouteTableAbsent {
+		logger.WarnContext(ctx, "worker job route seeding skipped",
+			"reason", "worker_job_routes_absent")
+		return
+	}
+	for _, kind := range result.SeededRoutes {
+		logger.InfoContext(ctx, "worker job route seeded", "job_kind", kind, "transport", "river")
+	}
+	for _, kind := range result.PresentRoutes {
+		logger.InfoContext(ctx, "worker job route present", "job_kind", kind)
+	}
 }
 
 // reportSchemaCheck is --check's reporting half, split out from execute so

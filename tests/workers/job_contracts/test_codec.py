@@ -149,8 +149,12 @@ def test_registry_fixtures_all_cross_decode() -> None:
     root = default_contract_root()
     registry_document = json.loads((root / "registry.json").read_text())
     registered = load_registry(root)
-    assert len(registry_document["jobs"]) == len(registered.contracts)
-    for job in registry_document["jobs"]:
+    python_jobs = [job for job in registry_document["jobs"] if not job.get("go_only")]
+    assert len(python_jobs) == len(registered.contracts)
+    assert len(registry_document["jobs"]) - len(python_jobs) == len(
+        registered.go_only_kinds
+    )
+    for job in python_jobs:
         for version, fixtures in job["fixtures"].items():
             assert int(version) in registered.by_kind(job["kind"]).supported_versions
             for fixture in fixtures:

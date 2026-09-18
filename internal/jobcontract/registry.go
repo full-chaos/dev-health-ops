@@ -67,6 +67,23 @@ type JobDefinition struct {
 	OrganizationScope string              `json:"organization_scope"`
 	SchemaVersions    map[string]string   `json:"schema_versions"`
 	Fixtures          map[string][]string `json:"fixtures"`
+	// GoOnly marks a kind that only Go produces and consumes. The Python
+	// contract loader accepts such a kind without a Python payload type and
+	// refuses to enqueue or decode it. Absent means the kind is shared.
+	GoOnly GoOnlyFlag `json:"go_only,omitempty"`
+}
+
+// GoOnlyFlag decodes only the literal true, so the marker has one spelling:
+// false, null, and every non-boolean are rejected rather than read as "shared"
+// the way an absent field is. The Python loader applies the same rule.
+type GoOnlyFlag bool
+
+func (flag *GoOnlyFlag) UnmarshalJSON(data []byte) error {
+	if string(data) != "true" {
+		return errors.New("go_only must be true when present")
+	}
+	*flag = true
+	return nil
 }
 
 type Registry struct {
@@ -807,4 +824,42 @@ func sortedKeys[V any](values map[string]V) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// NativeRiverRouteKinds decodes migration-state.json bytes and returns, in
+// file order, every kind whose policy is route "river" with rollback route
+// "none": the kinds that run only on River and have no other transport to
+// fall back to. It checks the policy's own shape (strict decoding, known
+// schema version, sorted unique kinds, known route values) but not its
+// agreement with the registry, which LoadMigrationState owns.
+func NativeRiverRouteKinds(data []byte) ([]string, error) {
+	var state MigrationState
+	if err := decodeStrict(data, 512*1024, &state); err != nil {
+		return nil, fmt.Errorf("decode %s: %w", migrationFilename, err)
+	}
+	if state.SchemaVersion != 1 {
+		return nil, errors.New("unsupported migration-state schema_version")
+	}
+	if len(state.Jobs) == 0 {
+		return nil, errors.New("migration state has no jobs")
+	}
+	kinds := make([]string, 0, len(state.Jobs))
+	previous := ""
+	for _, job := range state.Jobs {
+		if !matchesBounded(kindPattern, job.Kind, 96) {
+			return nil, fmt.Errorf("migration job kind %q is invalid", job.Kind)
+		}
+		if job.Kind <= previous {
+			return nil, errors.New("migration jobs must be sorted by kind")
+		}
+		previous = job.Kind
+		if !containsString([]string{"celery", "shadow", "river_canary", "river", "removed"}, job.Route) ||
+			!containsString([]string{"celery", "river", "none"}, job.RollbackRoute) {
+			return nil, fmt.Errorf("migration job %s has invalid routing", job.Kind)
+		}
+		if job.Route == "river" && job.RollbackRoute == "none" {
+			kinds = append(kinds, job.Kind)
+		}
+	}
+	return kinds, nil
 }

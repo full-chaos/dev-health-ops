@@ -260,7 +260,21 @@ def test_pinned_kinds_match_the_checked_in_migration_state() -> None:
     # unnoticed. sync.provider_unit was the one still-canary kind when this
     # comparison was written; its own migration has since completed to the
     # same celery_removed/river/none shape as its three siblings here.
-    assert set(by_kind) - pinned == {
+    # A go_only kind's route row is written by dev-health-worker-migrate, never
+    # by an Alembic revision, so it is neither pinned here nor a gap; its own
+    # policy must still be the River-only shape that seeding covers.
+    registry = json.loads(
+        (Path(__file__).parents[1] / "contracts/jobs/v1/registry.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    go_only = {job["kind"] for job in registry["jobs"] if job.get("go_only") is True}
+    for kind in go_only:
+        assert (by_kind[kind]["route"], by_kind[kind]["rollback_route"]) == (
+            "river",
+            "none",
+        ), kind
+    assert set(by_kind) - pinned - go_only == {
         "sync.provider_unit",
         "system.sync_coverage_refresh",
         "sync.team_repo_ownership_derivation",

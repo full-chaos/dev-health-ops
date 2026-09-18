@@ -70,6 +70,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -937,7 +938,10 @@ func resolveSingleShotRequest(
 // producer's own candidate pool (producedCandidates), in order, actually
 // sending BOTH legs for each -- exactly proveOneRESTRequest's own cost,
 // paid once per candidate -- until one candidate's own request.Produces
-// all resolve (that candidate wins) or the bound is exhausted.
+// all resolve (that candidate wins) or the bound is exhausted. Only a
+// candidate refused for having no data (candidateHasNoData) moves the
+// search on; any other refusal ends it and is reported as this request's
+// own outcome.
 //
 // A losing attempt writes no receipt: proveOneRESTRequest's own
 // Produces-unresolved branch returns a refused outcome before ever
@@ -1021,6 +1025,15 @@ func resolveIteratingRequest(
 			return resolvedAttempt{}, err
 		}
 		if !out.Admitted {
+			if !candidateHasNoData(out.Refusal) {
+				// A failure of a plane (a status, transport or structural
+				// refusal) ends the search on this candidate: trying the
+				// next one could only replace this real failure with a
+				// later match. Nothing is exposed, so siblings bound to
+				// ExposeAs refuse by name.
+				out.Attempts = attempts
+				return resolvedAttempt{out: out, spec: resolvedSpec, request: resolvedRequest, legsSent: true}, nil
+			}
 			attempts = append(attempts, attemptRecord{CandidateID: candidateID, Refusal: out.Refusal, Detail: out.Detail})
 			continue
 		}
@@ -1052,6 +1065,37 @@ func resolveIteratingRequest(
 		Attempts: attempts,
 	}
 	return resolvedAttempt{out: out, spec: spec, request: request, legsSent: false}, nil
+}
+
+// vacuousLegsAgree reports whether two vacuous legs are the same empty
+// answer: identical decoded bodies, and every declared Produces list an
+// empty array on both.
+func vacuousLegsAgree(baseline, candidate any, produces []goapiproof.RESTIDProducer) bool {
+	if !reflect.DeepEqual(baseline, candidate) {
+		return false
+	}
+	for _, producer := range produces {
+		if !goapiproof.RESTIDListIsEmpty(baseline, producer) || !goapiproof.RESTIDListIsEmpty(candidate, producer) {
+			return false
+		}
+	}
+	return true
+}
+
+// candidateHasNoData reports whether a refused attempt of a bounded-
+// candidate search refused because the candidate has no data to compare
+// -- both legs the same empty answer (vacuousLegsAgree), a clean match with the declared
+// list an empty array on both legs, or (status-only) the declared list an
+// empty array on the candidate leg -- which moves the search to the next
+// candidate. Every other refusal is a failure of a plane and ends it.
+func candidateHasNoData(refusal string) bool {
+	switch refusal {
+	case goapiproof.RefusalVacuousEmptyLegs,
+		goapiproof.RESTRefusalNoLegProducedTheDeclaredID,
+		goapiproof.RESTRefusalCandidateProducerUnresolved:
+		return true
+	}
+	return false
 }
 
 func runMeasurement(ctx context.Context, client *http.Client, f flags, candidateCredential, baselineCredential *goapiproof.Credential, namedBuild string, pgPool receiptWriter, artifacts *goapiproof.ArtifactStore) error {
@@ -1446,12 +1490,60 @@ func proveOneRESTRequest(
 			out.Refusal = result.StructuralRefusal
 			out.Detail = result.StructuralDetail
 			out.FindingsRef = findingsRef
+			// Vacuity is judged before the legs' structure is compared,
+			// so for a bounded candidate search it is "no data" only when
+			// both legs are the same empty answer: identical decoded
+			// bodies with every declared list an empty array. Anything
+			// else ends the search (candidateHasNoData).
+			if _, iterating := findIteratingBinding(request.IDBindings); iterating && result.StructuralRefusal == goapiproof.RefusalVacuousEmptyLegs && !vacuousLegsAgree(admission.BaselineSnap.Data, admission.CandidateSnap.Data, request.Produces) {
+				out.Refusal = goapiproof.RESTRefusalVacuousLegsDisagree
+				out.Detail = "both legs carry zero non-null leaves but are not the same empty answer"
+			}
 			return out, nil
 		}
 		terminalState = result.TerminalState
 		differences = result.DifferencesOutsideBaselineDefect
 		matchedDefects = result.BaselineDefectsMatched
 		vacuity = resultVacuityErrors(result)
+
+		// Compare first, classify after. A bounded-candidate attempt is
+		// "no data" -- it loses, writes no receipt, and the search moves
+		// to the next candidate (candidateHasNoData) -- ONLY when its
+		// comparison is clean (a match: nothing differs, admitted or
+		// outside) AND every declared id it lacks has its declared list as
+		// an empty array on BOTH legs. Any difference, structural
+		// refusal or admission failure never reaches this point as "no
+		// data": it is the attempt's own result and ends the search. A
+		// clean match whose bodies lack a declared id in any other shape
+		// (the list missing, null, not an array, or elements without the
+		// id) refuses as a failure and ends the search as well.
+		if _, iterating := findIteratingBinding(request.IDBindings); iterating && terminalState == goapiproof.TerminalStateMatch {
+			var empty, unrecognised []string
+			for _, producer := range request.Produces {
+				if _, ok := out.producedIDs[producer.Name]; ok {
+					continue
+				}
+				if goapiproof.RESTIDListIsEmpty(admission.BaselineSnap.Data, producer) && goapiproof.RESTIDListIsEmpty(admission.CandidateSnap.Data, producer) {
+					empty = append(empty, producer.Name)
+					continue
+				}
+				unrecognised = append(unrecognised, producer.Name)
+			}
+			if len(unrecognised) > 0 {
+				out.Admitted = false
+				out.Refusal = goapiproof.RESTRefusalDeclaredIDListUnrecognised
+				out.Detail = fmt.Sprintf("both legs matched without the declared id, and not as an empty list: %v", unrecognised)
+				out.FindingsRef = findingsRef
+				return out, nil
+			}
+			if len(empty) > 0 {
+				out.Admitted = false
+				out.Refusal = goapiproof.RESTRefusalNoLegProducedTheDeclaredID
+				out.Detail = fmt.Sprintf("both legs matched with the declared list empty: %v", empty)
+				out.FindingsRef = findingsRef
+				return out, nil
+			}
+		}
 	} else if len(request.Produces) > 0 {
 		// A StatusOnly request may still Produce ids, but only in the one
 		// shape ValidateRESTCorpus admits (goapiproof/restcorpus.go): the
@@ -1464,11 +1556,13 @@ func proveOneRESTRequest(
 		// through the same production decoder (DecodeRESTSnapshot) real
 		// evidence uses, never hand-built.
 		//
-		// A declared producer this branch cannot resolve -- a decode
-		// failure, or a body that yields no value at a declared entry's
-		// path -- refuses THIS request by name
-		// (goapiproof.RESTRefusalCandidateProducerUnresolved) rather than
-		// leaving out.producedIDs silently short: a check that can never
+		// A declared producer this branch cannot resolve refuses THIS
+		// request by name -- a body that does not decode as
+		// goapiproof.RESTRefusalCandidateBodyUndecodable (a failure of
+		// the candidate plane), a decoded body that yields no value at a
+		// declared entry's path as
+		// goapiproof.RESTRefusalCandidateProducerUnresolved (no data) --
+		// rather than leaving out.producedIDs silently short: a check that can never
 		// fail a run proves nothing, and a later consumer's own
 		// IDBindings would otherwise be refused by name
 		// (rest_request_id_binding_unresolved) with no visible reason on
@@ -1476,21 +1570,41 @@ func proveOneRESTRequest(
 		candidateSnap, decodeErr := goapiproof.DecodeRESTSnapshot(candidateLeg.Body)
 		if decodeErr != nil {
 			out.Admitted = false
-			out.Refusal = goapiproof.RESTRefusalCandidateProducerUnresolved
+			out.Refusal = goapiproof.RESTRefusalCandidateBodyUndecodable
 			out.Detail = fmt.Sprintf("the candidate body did not decode: %s", decodeErr)
+			return out, nil
+		}
+		if candidateSnap.TrailingBytes {
+			out.Admitted = false
+			out.Refusal = goapiproof.RESTRefusalTrailingBytes
+			out.Detail = "the candidate body carried bytes after its JSON value"
 			return out, nil
 		}
 		out.producedIDs = make(map[string]string, len(request.Produces))
 		out.producedCandidateIDs = make(map[string][]string, len(request.Produces))
-		var unresolved []string
+		var unresolved, unrecognised []string
 		for _, producer := range request.Produces {
 			candidates := goapiproof.ExtractRESTIDCandidates(candidateSnap.Data, producer)
 			out.producedCandidateIDs[producer.Name] = candidates
 			if len(candidates) == 0 {
-				unresolved = append(unresolved, producer.Name)
+				if goapiproof.RESTIDListIsEmpty(candidateSnap.Data, producer) {
+					unresolved = append(unresolved, producer.Name)
+				} else {
+					unrecognised = append(unrecognised, producer.Name)
+				}
 				continue
 			}
 			out.producedIDs[producer.Name] = candidates[0]
+		}
+		// Only an empty declared list is "no data"
+		// (RESTRefusalCandidateProducerUnresolved); any other shape
+		// without the id is a failure of the candidate plane.
+		if len(unrecognised) > 0 {
+			out.Admitted = false
+			out.producedIDs = nil
+			out.Refusal = goapiproof.RESTRefusalDeclaredIDListUnrecognised
+			out.Detail = fmt.Sprintf("the candidate body did not carry the declared id, and not as an empty list: %v", unrecognised)
+			return out, nil
 		}
 		if len(unresolved) > 0 {
 			out.Admitted = false

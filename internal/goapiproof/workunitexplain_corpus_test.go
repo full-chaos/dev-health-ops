@@ -119,8 +119,8 @@ func TestWorkUnitExplainBoundEntriesConsumeTheWorkUnitsProducer(t *testing.T) {
 // pins the corpus-level fix for this route's own vacuous scope coverage:
 // repo_scoped_live_work_unit/team_scoped_live_work_unit each bind
 // scope_id AND work_unit_id from the SAME GET /api/v1/work-units scoped
-// entry (repo_id/work_unit_id_repo_scoped, or team_id/work_unit_id_team_
-// scoped) -- unlike the pre-existing repo_scoped_absent_work_unit/
+// entry (work_units_repo_id/work_unit_id_repo_scoped, or team_id/
+// work_unit_id_team_scoped) -- unlike the pre-existing repo_scoped_absent_work_unit/
 // team_scoped_absent_work_unit entries, which bind scope_id alone and so
 // can never bind a unit actually inside that scope. A regression that
 // drops either binding, or points work_unit_id back at the org-wide
@@ -133,7 +133,7 @@ func TestWorkUnitExplainScopedLiveEntries_BindScopeIDAndTheScopedWorkUnit(t *tes
 		unitProducer  string
 		wantTimeout   time.Duration
 	}{
-		{"repo_scoped_live_work_unit", "repo_id", "work_unit_id_repo_scoped", 0},
+		{"repo_scoped_live_work_unit", "work_units_repo_id", "work_unit_id_repo_scoped", 0},
 		{"team_scoped_live_work_unit", "team_id", "work_unit_id_team_scoped", 180 * time.Second},
 	} {
 		t.Run(tc.request, func(t *testing.T) {
@@ -193,5 +193,47 @@ func TestWorkUnitExplainScopedLiveEntries_BindScopeIDAndTheScopedWorkUnit(t *tes
 				t.Fatalf("%s unresolved (unit producer missing) = %v, want [%s]", tc.request, unresolvedPartial, tc.unitProducer)
 			}
 		})
+	}
+}
+
+// TestWorkUnitExplainRepoScopedLiveUnit_ScopeIsTheRepositoryThatProducedTheUnit
+// pins that repo_scoped_live_work_unit's scope_id is the repository GET
+// /api/v1/work-units' own repo_scoped entry SELECTED (its bounded
+// candidate binding's ExposeAs), the same entry that produces
+// work_unit_id_repo_scoped. Binding scope_id to the raw repo_id producer
+// instead would pair a unit from the winning repository with the first
+// listed repository, which need not contain it.
+func TestWorkUnitExplainRepoScopedLiveUnit_ScopeIsTheRepositoryThatProducedTheUnit(t *testing.T) {
+	var exposeAs string
+	for _, req := range restEndpointSpecs["REST:GET:/api/v1/work-units"].Requests {
+		if req.Name != "repo_scoped" {
+			continue
+		}
+		for _, binding := range req.IDBindings {
+			if binding.Candidates > 0 {
+				exposeAs = binding.ExposeAs
+			}
+		}
+		producesUnit := false
+		for _, producer := range req.Produces {
+			if producer.Name == "work_unit_id_repo_scoped" {
+				producesUnit = true
+			}
+		}
+		if !producesUnit {
+			t.Fatalf("GET /api/v1/work-units repo_scoped Produces = %+v, want work_unit_id_repo_scoped", req.Produces)
+		}
+	}
+	if exposeAs == "" {
+		t.Fatal("GET /api/v1/work-units repo_scoped declares no bounded-candidate binding with an ExposeAs")
+	}
+	var scopeProducer string
+	for _, binding := range workUnitExplainRepoScopedLiveUnit {
+		if binding.QueryParam == "scope_id" {
+			scopeProducer = binding.Producer
+		}
+	}
+	if scopeProducer != exposeAs {
+		t.Fatalf("repo_scoped_live_work_unit scope_id producer = %q, want %q (the repository that produced the unit)", scopeProducer, exposeAs)
 	}
 }

@@ -62,15 +62,16 @@ var workUnitExplainParity = Options{
 // restRunOrder.
 var workUnitExplainLiveUnit = []RESTIDBinding{{Producer: "work_unit_id", PathParam: "work_unit_id"}}
 
-// workUnitExplainRepoScopedLiveUnit binds scope_id to the same live
-// repo_id GET /api/v1/work-units' own repo_scoped entry narrowed to, and
-// work_unit_id to a unit THAT SAME repo_scoped entry actually returned
-// (its own work_unit_id_repo_scoped producer, workunits_corpus.go) --
-// unlike workUnitExplainLiveUnit's own org-scope unit, guaranteed inside
-// the bound repository, so the scoped resolver's read actually reaches
-// it instead of 404ing before ever touching real data.
+// workUnitExplainRepoScopedLiveUnit binds scope_id to the repository GET
+// /api/v1/work-units' own repo_scoped entry selected (work_units_repo_id,
+// the winner of that entry's bounded candidate search), and work_unit_id
+// to a unit THAT SAME repo_scoped entry actually returned (its own
+// work_unit_id_repo_scoped producer, workunits_corpus.go) -- unlike
+// workUnitExplainLiveUnit's own org-scope unit, guaranteed inside the
+// bound repository, so the scoped resolver's read actually reaches it
+// instead of 404ing before ever touching real data.
 var workUnitExplainRepoScopedLiveUnit = []RESTIDBinding{
-	{Producer: "repo_id", QueryParam: "scope_id"},
+	{Producer: "work_units_repo_id", QueryParam: "scope_id"},
 	{Producer: "work_unit_id_repo_scoped", PathParam: "work_unit_id"},
 }
 

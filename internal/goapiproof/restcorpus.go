@@ -4132,13 +4132,16 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 			{
 				// repo scope: BOUNDED CANDIDATE ITERATION over filters/
 				// options' own repo_id list (up to 10), exposed as
-				// investment_repo_id once a candidate's own compare is
-				// admitted (not refused as vacuous) -- filters/options'
-				// first repo alone can easily hold zero investment rows
-				// for the requested window, which this route's own
-				// declared BaselineDefects (investmentFlowRepoDedupParity)
-				// would otherwise refuse as vacuous_empty_legs before ever
-				// reaching real data. investment_repo_id is the winning
+				// investment_repo_id once either leg of a candidate yields
+				// investment_repo_flow_node below and its compare is
+				// admitted. filters/options' first repo alone can
+				// easily hold zero investment rows for the requested
+				// window; this route then answers empty nodes/links with
+				// non-null labels and zeroed coverage, which is not a
+				// vacuous body, so the declared node list -- empty on
+				// both legs -- is what makes that candidate lose
+				// (RESTRefusalNoLegProducedTheDeclaredID) and the search
+				// move on. investment_repo_id is the winning
 				// candidate, consumed by every other repo_scoped entry on
 				// the sibling investment-family routes below (restRunOrder
 				// runs this operation first among them) instead of each
@@ -4154,6 +4157,12 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				BodyMode:   RESTBodyModeJSON,
 				Parity:     investmentFlowDynamicParity,
 				IDBindings: []RESTIDBinding{{Producer: "repo_id", BodyPath: "filters.scope.ids", Candidates: 10, ExposeAs: "investment_repo_id"}},
+				// The win condition above: a node in the candidate
+				// repository's own flow, on either plane. A repository
+				// with investment rows in the window always answers at
+				// least one node (a subcategory node on the single-
+				// repository fallback branch); one without answers none.
+				Produces: []RESTIDProducer{{Name: "investment_repo_flow_node", ListPath: "nodes", IDField: "name"}},
 			},
 			{
 				Name:                "team_category_repo_org",
@@ -4742,7 +4751,9 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				// (proveOneRESTRequest's own doc comment,
 				// cmd/go-api-rest-prove/main.go). A body that does not
 				// yield work_item_id refuses THIS request by name
-				// (RESTRefusalCandidateProducerUnresolved), and the
+				// (RESTRefusalCandidateProducerUnresolved for an empty
+				// list, RESTRefusalDeclaredIDListUnrecognised for any
+				// other shape), and the
 				// consumer refuses separately, by name
 				// (rest_request_id_binding_unresolved). This request's
 				// own successful admission today is this entry's own
@@ -5203,7 +5214,9 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				// Frame's own json tags promise on this route. Nothing
 				// downstream consumes issue_flame_frame_id; a candidate
 				// body that does not yield it refuses this request by
-				// name (RESTRefusalCandidateProducerUnresolved).
+				// name (RESTRefusalCandidateProducerUnresolved for an
+				// empty list, RESTRefusalDeclaredIDListUnrecognised for
+				// any other shape).
 				Name:                "issue_entity_id_bound_200",
 				Query:               url.Values{"entity_type": {"issue"}},
 				WantCandidateStatus: 200, WantBaselineStatus: 503,

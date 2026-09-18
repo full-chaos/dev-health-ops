@@ -1,0 +1,1 @@
+{"mode":"investment","nodes":[],"links":[],"unit":null,"label":"Investment allocation","description":"Dynamic allocation target based on coverage metrics.","team_coverage":0,"repo_coverage":0,"distinct_team_targets":0,"distinct_repo_targets":0,"chosen_mode":"fallback","coverage":null,"unassigned_reasons":null,"flow_mode":null,"drill_category":null,"top_n_repos":null}

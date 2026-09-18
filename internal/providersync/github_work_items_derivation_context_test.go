@@ -45,6 +45,24 @@ func (conn *recordingGitHubWorkItemDerivationConn) Query(
 	return emptyGitHubWorkItemDerivationRows{}, nil
 }
 
+// queryArgsCarryOrgID reports whether a recorded query's args scope it to
+// orgID, regardless of whether that query binds positional `?` placeholders
+// (org_id is args[0]) or named {org_id:String} parameters (team_repo_ownership's
+// readers -- see LoadRepos/OwnedRepoIDs/AuthoritativeOwnerByRepo -- bind
+// named parameters, so org_id can appear anywhere in args as a
+// driver.NamedValue{Name: "org_id"}).
+func queryArgsCarryOrgID(args []any, orgID string) bool {
+	if args[0] == orgID {
+		return true
+	}
+	for _, arg := range args {
+		if named, ok := arg.(driver.NamedValue); ok && named.Name == "org_id" && named.Value == orgID {
+			return true
+		}
+	}
+	return false
+}
+
 type emptyGitHubWorkItemDerivationRows struct{}
 
 func (emptyGitHubWorkItemDerivationRows) Next() bool                       { return false }
@@ -458,9 +476,47 @@ func TestGitHubWorkItemDerivationQueriesCollapseTeamVersionsAndOrderStably(t *te
 			!strings.Contains(query, "GROUP BY org_id, id") || !strings.Contains(query, order) {
 			t.Fatalf("query %d lacks deterministic latest-team join/order:\n%s", index, query)
 		}
-		args := conn.args[index]
-		if len(args) != 4 || args[0] != orgID || args[1] != asOf || args[2] != asOf || args[3] != teamattribution.GithubWorkItemDerivationContextLimit+1 {
-			t.Fatalf("query %d args = %#v", index, args)
+	}
+	// LoadProjects (index 0, team_project_ownership) still binds positional
+	// `?` placeholders -- team_project_ownership's readers are out of this
+	// change's scope, which touches team_repo_ownership's readers only.
+	if args := conn.args[0]; len(args) != 4 || args[0] != orgID || args[1] != asOf || args[2] != asOf || args[3] != teamattribution.GithubWorkItemDerivationContextLimit+1 {
+		t.Fatalf("query 0 args = %#v", args)
+	}
+	// LoadRepos (index 1, team_repo_ownership) binds named
+	// {org_id:String}/{as_of:DateTime64(3, 'UTC')}/{row_limit:UInt64}
+	// parameters instead of positional `?`: a positional `?` bound to a
+	// time.Time round-trips at whole-SECOND precision on this driver
+	// (confirmed empirically), so `o.valid_from <= ?` could read a row
+	// written earlier in the SAME wall-clock second as not-yet-valid.
+	if args := conn.args[1]; len(args) != 3 {
+		t.Fatalf("query 1 args = %#v, want 3 named parameters", args)
+	} else {
+		wantNamed := map[string]any{
+			"org_id": orgID,
+			// A formatted literal string, not the raw asOf time.Time --
+			// clickhouse-go renders a bare time.Time bound to a
+			// {name:DateTime64(...)} placeholder as a toDateTime(...)
+			// expression the server rejects as unparseable.
+			"as_of":     asOf.UTC().Format("2006-01-02 15:04:05.000"),
+			"row_limit": uint64(teamattribution.GithubWorkItemDerivationContextLimit + 1),
+		}
+		for _, arg := range args {
+			named, ok := arg.(driver.NamedValue)
+			if !ok {
+				t.Fatalf("query 1 arg %#v is not a driver.NamedValue", arg)
+			}
+			want, known := wantNamed[named.Name]
+			if !known {
+				t.Fatalf("query 1 has unexpected named parameter %q", named.Name)
+			}
+			if named.Value != want {
+				t.Fatalf("query 1 parameter %q = %#v, want %#v", named.Name, named.Value, want)
+			}
+			delete(wantNamed, named.Name)
+		}
+		if len(wantNamed) != 0 {
+			t.Fatalf("query 1 is missing named parameters: %#v", wantNamed)
 		}
 	}
 

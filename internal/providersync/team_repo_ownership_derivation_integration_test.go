@@ -4,11 +4,15 @@ package providersync
 
 import (
 	"context"
+	"reflect"
+	"sort"
 	"testing"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/teamownership"
 )
 
 // TestTeamRepoOwnershipDerivationAgainstMigratedSchema is the standing
@@ -106,22 +110,373 @@ func TestTeamRepoOwnershipDerivationAgainstMigratedSchema(t *testing.T) {
 	}
 
 	// Idempotent per (org, sync run): calling Derive() again for the same
-	// already-derived state does not duplicate rows -- ReplacingMergeTree
-	// dedup on (org_id, provider, repo_full_name, team_id, source,
-	// valid_from) collapses re-derivation to the same logical row set once
-	// merged, and this read path uses FINAL, so it must already read back
-	// exactly the same 3 rows.
-	written2, _, _, _, err := service.Derive(ctx, orgID)
+	// already-derived state writes NOTHING -- filterUnchangedTeamRepoOwnershipRows
+	// (team_repo_ownership_derivation_clickhouse.go) finds every derived row's
+	// signature already matches its open activeRows row and drops it, so the
+	// three rows already on disk stay exactly as they are: same count, same
+	// valid_from.
+	written2, retracted2, _, _, err := service.Derive(ctx, orgID)
 	if err != nil {
 		t.Fatalf("second Derive: %v", err)
 	}
-	if written2 != 3 {
-		t.Fatalf("expected the second Derive to also write 3 rows (re-derivation is a no-op in effect, not in row count -- FINAL read confirms it below), got %d", written2)
+	if written2 != 0 {
+		t.Fatalf("expected the second Derive to write 0 rows (every derived fact already matches its open row), got %d", written2)
 	}
+	if retracted2 != 0 {
+		t.Fatalf("expected the second Derive to retract 0 rows (every fact is still derived), got %d", retracted2)
+	}
+	assertTeamRepoOwnershipRowCount(t, ctx, conn, orgID, len(want))
 	gotAfterSecondRun := readTeamRepoOwnership(t, ctx, conn, orgID)
 	if len(gotAfterSecondRun) != len(want) {
-		t.Fatalf("re-derivation duplicated rows under FINAL dedup: expected %d, got %d: %+v", len(want), len(gotAfterSecondRun), gotAfterSecondRun)
+		t.Fatalf("re-derivation changed the resolved set: expected %d, got %d: %+v", len(want), len(gotAfterSecondRun), gotAfterSecondRun)
 	}
+}
+
+// TestTeamRepoOwnershipDerivationUnchangedFactWritesNothing is the red/green
+// proof of filterUnchangedTeamRepoOwnershipRows against a real migrated
+// schema: a re-run over an unchanged input snapshot must leave the table's
+// row count untouched, a repo/team pair that stops being derived is still
+// retracted exactly as before, and a fact that returns after being
+// retracted opens a brand new row while its closed generation stays
+// closed.
+//
+// Also checks that every reader this producer's own doc comments name as
+// consulting team_repo_ownership (internal/teamownership.OwnedRepoIDs,
+// the FINAL+DISTINCT membership shape, and .AuthoritativeOwnerByRepo, the
+// FINAL+ORDER BY tie-break shape) resolves the identical answer before and
+// after an unchanged re-run -- the two query shapes every other reader in
+// this table's PHASE 1 audit also uses (GROUP BY + argMax is the third
+// shape, proven correct by construction: argMax picks the same value
+// whether one or many identical-valued rows feed it, so it needs no
+// separate before/after proof here).
+// clickHouseTimeParamGranularity is the safety margin this file's tests
+// wait after a write before treating "now" as a bitemporal read cutoff
+// (asOf) or seeding a LATER valid_from against real wall time. Every
+// team_repo_ownership read this file and its writer path exercise now binds
+// named {as_of:DateTime64(3, 'UTC')} parameters (loadTeamRepoOwnershipProjectLinks,
+// OwnedRepoIDs, AuthoritativeOwnerByRepo), which preserve millisecond
+// precision end to end -- but a positional `?` DateTime64 parameter on this
+// driver round-trips a Go time.Time at whole-SECOND precision (confirmed
+// empirically against this same ClickHouse image: SELECT toString(?) with a
+// sub-second time.Time argument returns the value with its fraction
+// dropped), and other positional-`?` DateTime64 reads of this table remain
+// elsewhere in this codebase. This margin keeps every seeded instant here
+// safely separated regardless of which binding style a given read uses, the
+// same way every already-merged integration test in this file avoids the
+// question entirely by seeding hours-to-days apart; a test that captures
+// "now" between real Derive() calls, which run in well under a second
+// against a local container, needs this margin explicitly instead.
+const clickHouseTimeParamGranularity = 1100 * time.Millisecond
+
+func TestTeamRepoOwnershipDerivationUnchangedFactWritesNothing(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	orgID := "chaos-5919-unchanged-writer-org"
+	// A fixed instant safely in the past relative to Derive()'s own asOf
+	// (real wall time, not a caller-supplied one) -- a seeded valid_from
+	// after the real clock's current instant would never pass
+	// loadTeamRepoOwnershipProjectLinks' valid_from <= asOf filter.
+	seedAt := time.Now().UTC().Add(-24 * time.Hour)
+
+	repoA := uuid.New()
+	seedTeamRepoOwnershipRepos(t, ctx, conn, orgID, map[uuid.UUID]string{repoA: "acme/repo-a"})
+	seedTeamProjectOwnership(t, ctx, conn, orgID, "github", "proj-1", "team-platform", true, seedAt)
+	seedWorkItem(t, ctx, conn, orgID, "gh:acme/repo-a#1", "github", repoA, "proj-1", seedAt)
+
+	service := TeamRepoOwnershipDerivationService{Conn: conn}
+
+	written1, retracted1, ready1, _, err := service.Derive(ctx, orgID)
+	if err != nil {
+		t.Fatalf("first Derive: %v", err)
+	}
+	if written1 != 1 || retracted1 != 0 || !ready1 {
+		t.Fatalf("expected written=1 retracted=0 ready=true, got written=%d retracted=%d ready=%v", written1, retracted1, ready1)
+	}
+	assertTeamRepoOwnershipRowCount(t, ctx, conn, orgID, 1)
+	time.Sleep(clickHouseTimeParamGranularity)
+
+	asOf := time.Now().UTC()
+	beforeOwned := mustOwnedRepoIDs(t, ctx, conn, orgID, "team-platform", asOf)
+	beforeAuth := mustAuthoritativeOwner(t, ctx, conn, orgID, asOf)
+
+	// Unchanged re-run: same inputs, same derived fact, same attributes --
+	// filterUnchangedTeamRepoOwnershipRows must find the fact's signature
+	// already matches its open row and write nothing.
+	written2, retracted2, _, _, err := service.Derive(ctx, orgID)
+	if err != nil {
+		t.Fatalf("second Derive: %v", err)
+	}
+	if written2 != 0 || retracted2 != 0 {
+		t.Fatalf("expected the unchanged re-run to write 0 and retract 0, got written=%d retracted=%d", written2, retracted2)
+	}
+	assertTeamRepoOwnershipRowCount(t, ctx, conn, orgID, 1)
+	time.Sleep(clickHouseTimeParamGranularity)
+
+	asOf2 := time.Now().UTC()
+	afterOwned := mustOwnedRepoIDs(t, ctx, conn, orgID, "team-platform", asOf2)
+	afterAuth := mustAuthoritativeOwner(t, ctx, conn, orgID, asOf2)
+	if !reflect.DeepEqual(sortedUUIDs(beforeOwned), sortedUUIDs(afterOwned)) {
+		t.Fatalf("OwnedRepoIDs changed across the unchanged re-run: before=%v after=%v", beforeOwned, afterOwned)
+	}
+	if !reflect.DeepEqual(beforeAuth, afterAuth) {
+		t.Fatalf("AuthoritativeOwnerByRepo changed across the unchanged re-run: before=%v after=%v", beforeAuth, afterAuth)
+	}
+
+	// Retract: the work item no longer carries a project_id (a later
+	// last_synced replaces the ReplacingMergeTree row under the same
+	// (repo_id, work_item_id) key), so the own-project_id arm can no longer
+	// resolve team-platform for repo-a -- the fact drops out of `derived`
+	// and its active row is closed exactly as diffTeamRepoOwnershipRetractions
+	// already did before this ticket.
+	seedWorkItem(t, ctx, conn, orgID, "gh:acme/repo-a#1", "github", repoA, "", time.Now().UTC())
+	written3, retracted3, _, _, err := service.Derive(ctx, orgID)
+	if err != nil {
+		t.Fatalf("third Derive (retraction): %v", err)
+	}
+	if written3 != 0 || retracted3 != 1 {
+		t.Fatalf("expected the retraction run to write 0 and retract 1, got written=%d retracted=%d", written3, retracted3)
+	}
+	assertTeamRepoOwnershipRowCount(t, ctx, conn, orgID, 1)
+	time.Sleep(clickHouseTimeParamGranularity)
+	// readTeamRepoOwnership carries no valid_to filter (it answers "what
+	// rows exist", not "what is active"), so a closed row still appears in
+	// it -- the open/closed split below is what actually proves retraction.
+	if openCount, closedCount := countOpenAndClosedTeamRepoOwnershipRows(t, ctx, conn, orgID); openCount != 0 || closedCount != 1 {
+		t.Fatalf("expected 0 open rows and 1 closed row after retraction, got open=%d closed=%d", openCount, closedCount)
+	}
+	if got := mustOwnedRepoIDs(t, ctx, conn, orgID, "team-platform", time.Now().UTC()); len(got) != 0 {
+		t.Fatalf("expected OwnedRepoIDs to resolve to nothing for team-platform after retraction, got %v", got)
+	}
+
+	// Returning: restore the work item's project_id -- the fact is derived
+	// again. Its prior row is closed (valid_to set) and excluded from
+	// activeRows by loadTeamRepoOwnershipActiveInferredRows' own valid_to
+	// filter, so filterUnchangedTeamRepoOwnershipRows finds no matching
+	// signature and this must open exactly one brand NEW row rather than
+	// resurrecting the closed one.
+	seedWorkItem(t, ctx, conn, orgID, "gh:acme/repo-a#1", "github", repoA, "proj-1", time.Now().UTC())
+	written4, retracted4, _, _, err := service.Derive(ctx, orgID)
+	if err != nil {
+		t.Fatalf("fourth Derive (return): %v", err)
+	}
+	if written4 != 1 || retracted4 != 0 {
+		t.Fatalf("expected the returning fact to write 1 new row and retract 0, got written=%d retracted=%d", written4, retracted4)
+	}
+	time.Sleep(clickHouseTimeParamGranularity)
+	if got, ok := readTeamRepoOwnership(t, ctx, conn, orgID)["acme/repo-a"]; !ok || got.teamID != "team-platform" {
+		t.Fatalf("expected acme/repo-a -> team-platform to resolve again, got %+v", readTeamRepoOwnership(t, ctx, conn, orgID))
+	}
+	// The retraction replacement row (run 3) is written under the SAME key
+	// as the ORIGINAL open row it closes (retractTeamRepoOwnershipRows uses
+	// the retracted row's own valid_from, not "now") -- the returning row
+	// (run 4) is a brand new key stamped with run 4's own "now". These
+	// collide under team_repo_ownership's ReplacingMergeTree sort key
+	// (org_id, provider, repo_full_name, team_id, source, valid_from) only
+	// if run 1's instant and run 4's instant truncate to the SAME
+	// millisecond (DateTime64(3)) -- unrepresentable in that one case.
+	// Assert they are actually distinct here, proving this run landed in
+	// the representable case real, sequenced sync runs always fall in.
+	generationValidFroms := mustTeamRepoOwnershipValidFroms(t, ctx, conn, orgID)
+	if len(generationValidFroms) != 2 {
+		t.Fatalf("expected 2 physical generations (1 closed, 1 open), got %d: %v", len(generationValidFroms), generationValidFroms)
+	}
+	if generationValidFroms[0].Equal(generationValidFroms[1]) {
+		t.Fatalf("the closed and open generations share the same valid_from %v -- they would collide under the ReplacingMergeTree key", generationValidFroms[0])
+	}
+	if got := mustOwnedRepoIDs(t, ctx, conn, orgID, "team-platform", time.Now().UTC()); len(got) != 1 {
+		t.Fatalf("expected OwnedRepoIDs to resolve exactly 1 repo for team-platform again, got %v", got)
+	}
+	// The closed generation from the retraction step is never resurrected:
+	// exactly one open row (the new generation) plus the one closed row
+	// left behind by retraction -- a returning fact gets a brand new row,
+	// the closed one stays closed.
+	openCount, closedCount := countOpenAndClosedTeamRepoOwnershipRows(t, ctx, conn, orgID)
+	if openCount != 1 || closedCount != 1 {
+		t.Fatalf("expected 1 open row (the new generation) and 1 closed row (the retracted one, left closed) after the fact returned, got open=%d closed=%d", openCount, closedCount)
+	}
+}
+
+// TestTeamRepoOwnershipDerivationAsOfHistoryAcrossChangeAndRetraction is the
+// product owner's pin: filterUnchangedTeamRepoOwnershipRows only changes
+// whether an UNCHANGED fact gets a fresh row -- it does not touch how a
+// CHANGE or a RETRACTION is recorded, so the ownership timeline (which team
+// owned this repo at instant T, and when it changed) must stay exactly
+// queryable via valid_from/valid_to for every instant this test captures,
+// even after later runs have moved the fact on. Three instants, two events:
+// instant1 (team-old owns it) -> a CHANGE (reassigned to team-new,
+// team_project_ownership's existing cross-writer non-retraction behaviour,
+// unchanged by this ticket) -> instant2 (team-new owns it) -> a RETRACTION
+// (the work item stops carrying a project_id) -> instant3 (nobody owns it).
+// Every instant is queried at the END, after all three runs, proving the
+// PAST answers do not move just because MORE has since happened.
+func TestTeamRepoOwnershipDerivationAsOfHistoryAcrossChangeAndRetraction(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	orgID := "chaos-5919-asof-history-org"
+	t0 := time.Now().UTC().Add(-48 * time.Hour)
+
+	repoID := uuid.New()
+	seedTeamRepoOwnershipRepos(t, ctx, conn, orgID, map[uuid.UUID]string{repoID: "acme/history-repo"})
+	seedTeamProjectOwnershipGeneration(t, ctx, conn, orgID, "linear", "proj-1", "team-old", true, 100, t0)
+	seedWorkItem(t, ctx, conn, orgID, "linear:HIST-1", "linear", repoID, "proj-1", t0)
+
+	service := TeamRepoOwnershipDerivationService{Conn: conn}
+
+	written, retracted, _, _, err := service.Derive(ctx, orgID)
+	if err != nil {
+		t.Fatalf("first Derive: %v", err)
+	}
+	if written != 1 || retracted != 0 {
+		t.Fatalf("first Derive: expected written=1 retracted=0, got written=%d retracted=%d", written, retracted)
+	}
+	time.Sleep(clickHouseTimeParamGranularity)
+	instant1 := time.Now().UTC()
+
+	// CHANGE: team-new's claim on proj-1 now outranks team-old's (higher
+	// specificity, same is_primary) -- same reassignment shape
+	// TestTeamRepoOwnershipDerivationRetractsAReassignedRepo already proves
+	// closes team-old's row.
+	seedTeamProjectOwnershipGeneration(t, ctx, conn, orgID, "linear", "proj-1", "team-new", true, 200, time.Now().UTC())
+	time.Sleep(clickHouseTimeParamGranularity)
+	written, retracted, _, _, err = service.Derive(ctx, orgID)
+	if err != nil {
+		t.Fatalf("second Derive (change): %v", err)
+	}
+	if written != 1 || retracted != 1 {
+		t.Fatalf("second Derive (change): expected written=1 retracted=1, got written=%d retracted=%d", written, retracted)
+	}
+	time.Sleep(clickHouseTimeParamGranularity)
+	instant2 := time.Now().UTC()
+
+	// RETRACTION: the work item stops carrying a project_id -- ownership
+	// disappears entirely, no replacement.
+	seedWorkItem(t, ctx, conn, orgID, "linear:HIST-1", "linear", repoID, "", time.Now().UTC())
+	time.Sleep(clickHouseTimeParamGranularity)
+	written, retracted, _, _, err = service.Derive(ctx, orgID)
+	if err != nil {
+		t.Fatalf("third Derive (retraction): %v", err)
+	}
+	if written != 0 || retracted != 1 {
+		t.Fatalf("third Derive (retraction): expected written=0 retracted=1, got written=%d retracted=%d", written, retracted)
+	}
+	time.Sleep(clickHouseTimeParamGranularity)
+	instant3 := time.Now().UTC()
+
+	// AS-OF instant1: only team-old owned it, before the change.
+	if got := mustOwnedRepoIDs(t, ctx, conn, orgID, "team-old", instant1); len(got) != 1 || got[0] != repoID {
+		t.Fatalf("as-of instant1: expected team-old to own [%s], got %v", repoID, got)
+	}
+	if got := mustOwnedRepoIDs(t, ctx, conn, orgID, "team-new", instant1); len(got) != 0 {
+		t.Fatalf("as-of instant1: expected team-new to own nothing yet, got %v", got)
+	}
+	if auth := mustAuthoritativeOwner(t, ctx, conn, orgID, instant1); auth[repoID.String()] != "team-old" {
+		t.Fatalf("as-of instant1: expected AuthoritativeOwnerByRepo[%s]=team-old, got %v", repoID, auth)
+	}
+
+	// AS-OF instant2: only team-new owns it, after the change, before the
+	// retraction -- team-old's claim from instant1 must NOT still show,
+	// even though this query runs after instant3's retraction has since
+	// closed team-new's row too.
+	if got := mustOwnedRepoIDs(t, ctx, conn, orgID, "team-old", instant2); len(got) != 0 {
+		t.Fatalf("as-of instant2: expected team-old to own nothing after the change, got %v", got)
+	}
+	if got := mustOwnedRepoIDs(t, ctx, conn, orgID, "team-new", instant2); len(got) != 1 || got[0] != repoID {
+		t.Fatalf("as-of instant2: expected team-new to own [%s], got %v", repoID, got)
+	}
+	if auth := mustAuthoritativeOwner(t, ctx, conn, orgID, instant2); auth[repoID.String()] != "team-new" {
+		t.Fatalf("as-of instant2: expected AuthoritativeOwnerByRepo[%s]=team-new, got %v", repoID, auth)
+	}
+
+	// AS-OF instant3: nobody owns it, after the retraction.
+	if got := mustOwnedRepoIDs(t, ctx, conn, orgID, "team-new", instant3); len(got) != 0 {
+		t.Fatalf("as-of instant3: expected team-new to own nothing after the retraction, got %v", got)
+	}
+	if auth := mustAuthoritativeOwner(t, ctx, conn, orgID, instant3); auth[repoID.String()] != "" {
+		t.Fatalf("as-of instant3: expected no authoritative owner for %s, got %v", repoID, auth)
+	}
+
+	// The CURRENT state (as-of now, after everything) must also show no
+	// owner -- the retraction's effect is not itself something this ticket
+	// changed, but it is the last link in the timeline this test pins.
+	if got := mustOwnedRepoIDs(t, ctx, conn, orgID, "team-new", time.Now().UTC()); len(got) != 0 {
+		t.Fatalf("expected team-new to currently own nothing, got %v", got)
+	}
+}
+
+// mustTeamRepoOwnershipValidFroms returns every physical generation's
+// valid_from for orgID, ordered -- used to pin that a retracted generation
+// and the generation that replaces it after the fact returns land under
+// DISTINCT ReplacingMergeTree keys (see the collision this guards against
+// in TestTeamRepoOwnershipDerivationUnchangedFactWritesNothing).
+func mustTeamRepoOwnershipValidFroms(t *testing.T, ctx context.Context, conn driver.Conn, orgID string) []time.Time {
+	t.Helper()
+	rows, err := conn.Query(ctx, `
+SELECT valid_from
+FROM team_repo_ownership FINAL
+WHERE org_id = ?
+ORDER BY valid_from`, orgID)
+	if err != nil {
+		t.Fatalf("read team_repo_ownership valid_from values: %v", err)
+	}
+	defer rows.Close()
+	var out []time.Time
+	for rows.Next() {
+		var validFrom time.Time
+		if err := rows.Scan(&validFrom); err != nil {
+			t.Fatalf("scan valid_from: %v", err)
+		}
+		out = append(out, validFrom)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("valid_from rows.Err: %v", err)
+	}
+	return out
+}
+
+func mustOwnedRepoIDs(t *testing.T, ctx context.Context, conn driver.Conn, orgID, teamID string, asOf time.Time) []uuid.UUID {
+	t.Helper()
+	ids, err := teamownership.OwnedRepoIDs(ctx, conn, orgID, teamID, asOf)
+	if err != nil {
+		t.Fatalf("OwnedRepoIDs: %v", err)
+	}
+	return ids
+}
+
+func mustAuthoritativeOwner(t *testing.T, ctx context.Context, conn driver.Conn, orgID string, asOf time.Time) map[string]string {
+	t.Helper()
+	owners, err := teamownership.AuthoritativeOwnerByRepo(ctx, conn, orgID, asOf)
+	if err != nil {
+		t.Fatalf("AuthoritativeOwnerByRepo: %v", err)
+	}
+	return owners
+}
+
+func sortedUUIDs(ids []uuid.UUID) []uuid.UUID {
+	out := make([]uuid.UUID, len(ids))
+	copy(out, ids)
+	sort.Slice(out, func(i, j int) bool { return out[i].String() < out[j].String() })
+	return out
+}
+
+func countOpenAndClosedTeamRepoOwnershipRows(t *testing.T, ctx context.Context, conn driver.Conn, orgID string) (open int, closed int) {
+	t.Helper()
+	rows, err := conn.Query(ctx, `
+SELECT countIf(valid_to IS NULL) AS open_count, countIf(valid_to IS NOT NULL) AS closed_count
+FROM team_repo_ownership FINAL
+WHERE org_id = ?`, orgID)
+	if err != nil {
+		t.Fatalf("count open/closed team_repo_ownership: %v", err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		t.Fatalf("count open/closed team_repo_ownership: no row")
+	}
+	var openCount, closedCount uint64
+	if err := rows.Scan(&openCount, &closedCount); err != nil {
+		t.Fatalf("scan open/closed count: %v", err)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("count rows.Err: %v", err)
+	}
+	return int(openCount), int(closedCount)
 }
 
 // TestTeamRepoOwnershipDerivationResolvesLinearTeamKeyShapedOwnership is the

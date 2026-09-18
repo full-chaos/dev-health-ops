@@ -4,6 +4,8 @@ import (
 	"sort"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 func sortedDerivedRows(rows []DerivedTeamRepoOwnershipRow) []DerivedTeamRepoOwnershipRow {
@@ -911,6 +913,96 @@ func TestHasResolvableLinearNativeTeamKey(t *testing.T) {
 			got := hasResolvableLinearNativeTeamKey(tc.workItems, tc.knownTeams)
 			if got != tc.want {
 				t.Fatalf("hasResolvableLinearNativeTeamKey() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestFilterUnchangedTeamRepoOwnershipRows is the pure, no-ClickHouse proof
+// of the writer's unchanged-fact filter: a derived row is dropped only when
+// SOME already-open activeRows row matches it on both identity (team_id,
+// repo_full_name, provider -- resolved via the repos snapshot, same as
+// writeTeamRepoOwnershipRows) and every attribute writeTeamRepoOwnershipRows
+// stamps (repo_id, is_primary, specificity, priority, match_type). Every
+// other shape -- a brand new fact, a fact whose only active row has a
+// DIFFERENT attribute (simulating a repo deleted and re-synced under a new
+// UUID, the one realistic way this producer's otherwise-constant
+// is_primary/specificity/priority/match_type values could still differ), or
+// a fact with no active row at all (never derived before, or derived again
+// after a prior retraction closed its old row) -- is kept, exactly like a
+// brand new fact was always kept.
+func TestFilterUnchangedTeamRepoOwnershipRows(t *testing.T) {
+	teamX := "team-x"
+	repoFullName := "acme/repo-a"
+	provider := "github"
+	specificity := teamRepoOwnershipPrecedence[teamRepoOwnershipSourceKindInferred].Specificity
+	priority := teamRepoOwnershipPrecedence[teamRepoOwnershipSourceKindInferred].Priority
+
+	activeRepoID := uuid.New()
+	replacedRepoID := uuid.New() // simulates the SAME repo re-synced under a NEW id
+	newFactRepoID := uuid.New()
+
+	repos := map[uuid.UUID]teamRepoOwnershipRepoInfo{
+		activeRepoID:   {FullName: repoFullName, Provider: provider},
+		replacedRepoID: {FullName: repoFullName, Provider: provider},
+		newFactRepoID:  {FullName: "acme/repo-b", Provider: provider},
+	}
+
+	activeRows := []teamRepoOwnershipActiveRow{
+		{
+			Provider: provider, TeamID: teamX, RepoID: activeRepoID,
+			RepoFullName: repoFullName, MatchType: "exact",
+			IsPrimary: false, Specificity: specificity, Priority: priority,
+		},
+	}
+
+	unchanged := DerivedTeamRepoOwnershipRow{TeamID: teamX, RepoID: activeRepoID.String(), Specificity: specificity}
+	changedAttribute := DerivedTeamRepoOwnershipRow{TeamID: teamX, RepoID: replacedRepoID.String(), Specificity: specificity}
+	newFact := DerivedTeamRepoOwnershipRow{TeamID: "team-y", RepoID: newFactRepoID.String(), Specificity: specificity}
+	unresolvableRepoID := DerivedTeamRepoOwnershipRow{TeamID: teamX, RepoID: "not-a-uuid", Specificity: specificity}
+
+	cases := []struct {
+		name    string
+		derived []DerivedTeamRepoOwnershipRow
+		want    []DerivedTeamRepoOwnershipRow
+	}{
+		{
+			name:    "unchanged fact matching the active row's full signature is dropped",
+			derived: []DerivedTeamRepoOwnershipRow{unchanged},
+			want:    nil,
+		},
+		{
+			name:    "changed attribute (repo_id differs) writes a new row",
+			derived: []DerivedTeamRepoOwnershipRow{changedAttribute},
+			want:    []DerivedTeamRepoOwnershipRow{changedAttribute},
+		},
+		{
+			name:    "a fact with no active row at all (new, or returned after retraction) writes a new row",
+			derived: []DerivedTeamRepoOwnershipRow{newFact},
+			want:    []DerivedTeamRepoOwnershipRow{newFact},
+		},
+		{
+			name:    "an unresolvable repo_id is never filtered here -- left for writeTeamRepoOwnershipRows' own skip",
+			derived: []DerivedTeamRepoOwnershipRow{unresolvableRepoID},
+			want:    []DerivedTeamRepoOwnershipRow{unresolvableRepoID},
+		},
+		{
+			name:    "mixed: the unchanged fact is dropped, the changed and new ones are kept",
+			derived: []DerivedTeamRepoOwnershipRow{unchanged, changedAttribute, newFact},
+			want:    []DerivedTeamRepoOwnershipRow{changedAttribute, newFact},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := filterUnchangedTeamRepoOwnershipRows(tc.derived, repos, activeRows)
+			if len(got) != len(tc.want) {
+				t.Fatalf("filterUnchangedTeamRepoOwnershipRows() = %+v, want %+v", got, tc.want)
+			}
+			gotSorted, wantSorted := sortedDerivedRows(got), sortedDerivedRows(tc.want)
+			for i := range wantSorted {
+				if gotSorted[i] != wantSorted[i] {
+					t.Fatalf("filterUnchangedTeamRepoOwnershipRows() = %+v, want %+v", gotSorted, wantSorted)
+				}
 			}
 		})
 	}

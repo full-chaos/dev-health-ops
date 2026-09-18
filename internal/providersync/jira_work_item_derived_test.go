@@ -364,7 +364,7 @@ func TestJiraClickHouseDerivationSourceUsesTenantScopedLoadersAndLease(t *testin
 		t.Fatalf("migrated context queries=%d want=8", len(conn.queries))
 	}
 	for index, args := range conn.args {
-		if len(args) == 0 || args[0] != claim.OrgID {
+		if len(args) == 0 || !queryArgsCarryOrgID(args, claim.OrgID) {
 			t.Fatalf("query %d lost tenant fence: %#v", index, args)
 		}
 	}

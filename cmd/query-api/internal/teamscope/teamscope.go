@@ -77,10 +77,16 @@ const Marker = "FROM team_repo_ownership AS o FINAL"
 // repository whose ownership was revoked. FINAL resolves the version first,
 // so the window below tests only the current row's valid_to.
 //
-// valid_from is part of that sorting key and every writer stamps it with its
-// own run instant, so each run writes a new key and FINAL collapses nothing
-// across runs: one team/repository pair carries one row per run it survived.
-// SELECT DISTINCT is what makes the resolved set a set.
+// valid_from is part of that sorting key. The pre-existing github/jira/
+// linear/gitlab autoimport writers each stamp it with their own run instant
+// on every run and never collapse an unchanged fact's prior row, so one
+// team/repository pair from those sources can carry more than one open row
+// at once (internal/providersync/team_repo_ownership_derivation_clickhouse.go's
+// filterUnchangedTeamRepoOwnershipRows is the one writer that does not: it
+// skips writing a new row for a fact whose active row already matches it
+// exactly). This condition does not depend on which shape produced the
+// rows -- SELECT DISTINCT is what makes the resolved set a set regardless
+// of how many open rows one fact carries.
 //
 // A NULL repo_id does not mean unresolved. The GitHub team-autoimport writer
 // (internal/providersync/github_team_catalog.go's

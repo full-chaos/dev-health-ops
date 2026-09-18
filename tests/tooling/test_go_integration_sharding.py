@@ -2094,9 +2094,12 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # `-tags=integration` tests against real ClickHouse
     # (github_tests_report_window_integration_test.go): +6 top-level
     # (1383 -> 1389), integration-tagged 155 -> 159.
-    assert len(expected_provider_tests) == 1415
+    # 1418 top-level provider tests, 164 of them integration-tagged; both
+    # pins move with any top-level test added to or removed from
+    # internal/providersync.
+    assert len(expected_provider_tests) == 1418
 
-    assert len(expected_integration_tests) == 162
+    assert len(expected_integration_tests) == 164
     assert expected_integration_tests < expected_provider_tests
 
     provider_assignments: dict[int, set[str]] = {}
@@ -2112,7 +2115,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1415
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1418
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -2230,7 +2233,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1415
+    assert len(selected_tests) == len(set(selected_tests)) == 1418
     assert set(selected_tests) == expected_tests
 
 

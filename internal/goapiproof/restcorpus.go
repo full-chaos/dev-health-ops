@@ -1816,15 +1816,19 @@ var flamePRIDBoundParity = Options{
 // build_flame_response/internal/flame.BuildResponse answers BEFORE any
 // ClickHouse call, or after a ClickHouse call whose zero-row answer is
 // itself deterministic for a guaranteed-absent id -- pr_entity_id_bound_
-// not_found, issue_entity_id_not_found) AND, now that a producer exists
-// for two of its three entity_id shapes, two live 200 entries:
+// not_found) AND, now that a producer exists for two of its three
+// entity_id shapes, two live 200 entries:
 // pr_entity_id_bound_200 (entity_id bound to pr_id, produced by GET
 // /api/v1/drilldown/prs' own default_window entry as "<repo_id>:<number>",
 // parseRepoEntity's own shape) and issue_entity_id_bound_200 (entity_id
 // bound to work_item_id, produced by GET /api/v1/drilldown/issues' own
 // default_window entry, a bare string -- the flame "issue" entity_id IS
 // the work_item_id, no repo prefix). Both producers run strictly before
-// flame in restRunOrder.
+// flame in restRunOrder. issue_entity_id_not_found shares the same
+// declared-failing baseline as issue_entity_id_bound_200 (its own doc
+// comment above) rather than the deterministic zero-row shape
+// pr_entity_id_bound_not_found uses: the "issue" statement fails in the
+// planner before any row lookup happens, found or not.
 //
 // The THIRD entity_type, "deployment": its own three deterministic-refusal
 // branches (missing repo prefix, invalid repo uuid, missing suffix -- the
@@ -4860,12 +4864,24 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				// no shape constraint (it IS the work_item_id, no repo
 				// prefix -- flame.go's own package doc comment), so a
 				// neutral, guaranteed-absent literal needs no producer.
+				//
+				// The baseline plane never reaches that branch: it shares
+				// fetch_issue with issue_entity_id_bound_200 above, so the
+				// same organisation-wide statement raises the same
+				// ClickHouse code 10 exception while planning the
+				// pushed-down conjunction, before any row lookup (found or
+				// not) happens. The handler answers HTTP 503 regardless of
+				// whether ABC-0 would have matched a row, so this entry is
+				// declared status-only, the same shape issue_entity_id_
+				// bound_200 uses. The candidate plane reaches its own
+				// not-found branch and answers 404.
 				Name: "issue_entity_id_not_found",
 				Query: url.Values{
 					"entity_type": {"issue"}, "entity_id": {"ABC-0"},
 				},
-				WantCandidateStatus: 404, WantBaselineStatus: 404,
-				BodyMode: RESTBodyModeJSON,
+				WantCandidateStatus: 404, WantBaselineStatus: 503,
+				StatusDivergenceReason: "CHAOS-5868: the baseline plane's issue read -- shared with issue_entity_id_bound_200 above -- fails with the same ClickHouse server exception (code 10, NOT_FOUND_COLUMN_IN_BLOCK) raised while planning the pushed-down conjunction over `work_item_cycle_times AS wct FINAL` LEFT JOINed to the primary team-attribution subquery, before it ever reaches the not-found check; the handler catches it generically and answers HTTP 503 with no logging. The candidate plane reaches its own not-found branch and answers HTTP 404; bodies are not compared.",
+				BodyMode:               RESTBodyModeStatusOnly,
 			},
 			{
 				// The "deployment" entity_type's own live 200 path

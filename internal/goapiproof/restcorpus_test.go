@@ -341,8 +341,12 @@ func TestRESTRequest_StatusDivergenceIsDeclaredOnlyWhereGenuine(t *testing.T) {
 		"REST:GET:/api/v1/flame": {
 			// baseline answers 503 in production on the issue entity_type
 			// read (the same cause the issue-drilldown routes share);
-			// query-api answers 200 with real data.
+			// query-api answers 200 with real data. issue_entity_id_not_found
+			// shares the same cause: the baseline never reaches its own
+			// not-found branch, so it answers 503 there too, while
+			// query-api reaches its not-found branch and answers 404.
 			"issue_entity_id_bound_200": true,
+			"issue_entity_id_not_found": true,
 		},
 	}
 	for operation, spec := range restEndpointSpecs {

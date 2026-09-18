@@ -1012,6 +1012,28 @@ var explainParity = Options{
 			Intermittent:       true,
 			IntermittentReason: "present only for a blocked_work request whose window/scope has at least one non-blocked-status row contributing duration_hours for a natural key (day, provider, work_scope_id, team_id) that also carries a blocked-status row; a window with no non-blocked duration recorded, or no data at all, shows no divergence under these paths, and no other metric ever reaches this path",
 		},
+		{
+			Ticket:             "CHAOS-5819",
+			Reason:             "the same status-filter divergence as this ticket's own value entry above (restcorpus.go), taken to its full consequence on the drivers list: a window with no status='blocked' row leaves the candidate's blocked-only fetchMetricDriverDelta GROUP BY empty (metrics.go), so data.value/data.delta_pct read 0 on the candidate (covered by the sibling value entry) while data.drivers, ranked from the SAME all-status avg() the value entry's own baseline reads (explain.py), still carries whatever driver a blocked_work window with non-blocked duration surfaces -- a baseline-only PRESENCE difference this entry's own ZeroValueEmptyListShape admits, categorically outside the sibling entry's leaf-only Paths (leafDifference, compare.go). Go is correct.",
+			Paths:              []string{"data.drivers"},
+			Intermittent:       true,
+			IntermittentReason: "present only under the exact condition the sibling value entry's own IntermittentReason states, and only when that window's candidate blocked-only GROUP BY resolves to zero rows for every group_by key (an empty drivers list, not merely a smaller one) -- a window whose blocked-status rows still populate at least one group_by key shows a value/leaf divergence there instead, still covered by the sibling entry, never by this one",
+			ZeroValueEmptyListShape: &ZeroValueEmptyListShape{
+				ValuePath: "data.value",
+				ListPath:  "data.drivers",
+			},
+		},
+		{
+			Ticket:             "CHAOS-5819",
+			Reason:             "the same status-filter divergence and the same value-collapse consequence as this ticket's own drivers entry above, over contributors (fetchMetricContributors, metrics.go). Go is correct.",
+			Paths:              []string{"data.contributors"},
+			Intermittent:       true,
+			IntermittentReason: "the same condition as this ticket's own drivers entry above, over the contributors ranking",
+			ZeroValueEmptyListShape: &ZeroValueEmptyListShape{
+				ValuePath: "data.value",
+				ListPath:  "data.contributors",
+			},
+		},
 	},
 }
 

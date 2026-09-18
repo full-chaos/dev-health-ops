@@ -666,6 +666,17 @@ type BaselineDefect struct {
 	// behaviour every other declared defect still uses. A defect never sets
 	// more than one shape field.
 	TeamRepoSubsetShape *TeamRepoSubsetShape
+
+	// ZeroValueEmptyListShape, when set, replaces this defect's blanket "any
+	// leaf difference under Paths is covered" rule with a value-collapse-
+	// consequence admission of a ShapePresence finding at ONE declared list
+	// path -- see ZeroValueEmptyListShape's own doc comment
+	// (zerovalueemptylist.go). Like TeamRepoSubsetShape, it can admit a
+	// STRUCTURAL finding (a one-directional ShapePresence), never only a
+	// leaf one -- see the gate in classifyBaselineDefects. nil is the
+	// default, unchanged blanket behaviour every other declared defect
+	// still uses. A defect never sets more than one shape field.
+	ZeroValueEmptyListShape *ZeroValueEmptyListShape
 }
 
 // validateBaselineDefects refuses a declaration that claims the
@@ -1049,6 +1060,10 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 		if defect.TeamRepoSubsetShape != nil {
 			subsetPlan = buildTeamRepoSubsetPlan(defect.TeamRepoSubsetShape, baselineData, candidateData)
 		}
+		var zeroValueEmptyListPlan *zeroValueEmptyListPlan
+		if defect.ZeroValueEmptyListShape != nil {
+			zeroValueEmptyListPlan = buildZeroValueEmptyListPlan(defect.ZeroValueEmptyListShape, baselineData, candidateData)
+		}
 		// A SHAPED defect's citation is LIVE only when its shape actually
 		// admits something. A blanket (unshaped) citation stays live from
 		// path proximity alone -- any difference under Paths, covered or
@@ -1062,7 +1077,7 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 		// apart, and a shaped defect that hit on path alone would still
 		// double-report alongside the shape that actually explains the
 		// difference.
-		shaped := repoPlan != nil || covPlan != nil || dedupPlan != nil || skewPlan != nil || sankeyFanoutPlan != nil || keyedDirPlan != nil || conservePlan != nil || dictDirPlan != nil || scalarDirPlan != nil || identityPlan != nil || displacePlan != nil || hotspotBoundaryPlan != nil || subsetPlan != nil
+		shaped := repoPlan != nil || covPlan != nil || dedupPlan != nil || skewPlan != nil || sankeyFanoutPlan != nil || keyedDirPlan != nil || conservePlan != nil || dictDirPlan != nil || scalarDirPlan != nil || identityPlan != nil || displacePlan != nil || hotspotBoundaryPlan != nil || subsetPlan != nil || zeroValueEmptyListPlan != nil
 		var touched []int
 		for i, path := range mismatches {
 			if !defectCovers(defect, path) {
@@ -1110,7 +1125,8 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 				!(displacePlan != nil && shapes[i] == ShapePresence) &&
 				!(hotspotBoundaryPlan != nil && shapes[i] == ShapePresence) &&
 				!(subsetPlan != nil && (shapes[i] == ShapePresence || shapes[i] == ShapeLength)) &&
-				!(dictDirPlan != nil && defect.DictKeyDirectionShape.AdmitBaselineOnlyKeys && shapes[i] == ShapePresence) {
+				!(dictDirPlan != nil && defect.DictKeyDirectionShape.AdmitBaselineOnlyKeys && shapes[i] == ShapePresence) &&
+				!(zeroValueEmptyListPlan != nil && shapes[i] == ShapePresence) {
 				continue
 			}
 			if shaped {
@@ -1156,6 +1172,8 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 				admitted = hotspotBoundaryPlan.admits(result.Findings[findingRefs[i]])
 			case subsetPlan != nil:
 				admitted = subsetPlan.admits(result.Findings[findingRefs[i]])
+			case zeroValueEmptyListPlan != nil:
+				admitted = zeroValueEmptyListPlan.admits(result.Findings[findingRefs[i]])
 			}
 			if admitted {
 				covered[i] = true

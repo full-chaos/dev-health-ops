@@ -66,8 +66,47 @@ func drilldownPRsSnapshotFromFile(t *testing.T, path string) Snapshot {
 
 // drilldownPRsWantMatched reads the tickets drilldownPRsParity's own
 // declared entries carry, rather than a literal copy that could drift
-// out of sync with restcorpus.go.
+// out of sync with restcorpus.go -- EXCEPT the DuplicateCollapseLengthShape
+// entry: every fixture this file and drilldownprs_mergedat_
+// realbody_test.go carry is bounded to the SAME page limit on both legs
+// (this file's own doc comment, drilldownprs_mergedat_realbody_test.go's
+// own doc comment), so baseline and candidate always share one LENGTH --
+// there is no ShapeLength finding for that entry to admit here, and it
+// correctly reads idle rather than matched. See
+// drilldownPRsWantIdleLengthTickets.
 func drilldownPRsWantMatched() []string {
+	var want []string
+	for _, d := range drilldownPRsParity.BaselineDefects {
+		if d.DuplicateCollapseLengthShape != nil {
+			continue
+		}
+		want = append(want, d.Ticket)
+	}
+	sort.Strings(want)
+	return want
+}
+
+// drilldownPRsWantIdleLengthTickets reads the tickets of every
+// DuplicateCollapseLengthShape entry drilldownPRsParity declares -- the
+// tickets drilldownPRsWantMatched excludes, expected to show up as idle
+// instead in a fixture with no length mismatch.
+func drilldownPRsWantIdleLengthTickets() []string {
+	var want []string
+	for _, d := range drilldownPRsParity.BaselineDefects {
+		if d.DuplicateCollapseLengthShape != nil {
+			want = append(want, d.Ticket)
+		}
+	}
+	sort.Strings(want)
+	return want
+}
+
+// drilldownPRsAllTickets reads every ticket drilldownPRsParity's own
+// declared entries carry, with no exclusion -- for a comparison with
+// NOTHING live anywhere (an identical, non-vacuous body on both legs),
+// where every entry, length-collapse included, has nothing to admit and
+// reads idle.
+func drilldownPRsAllTickets() []string {
 	want := make([]string, len(drilldownPRsParity.BaselineDefects))
 	for i, d := range drilldownPRsParity.BaselineDefects {
 		want[i] = d.Ticket
@@ -97,6 +136,9 @@ func TestDrilldownPRsParity_RealCapturedBodyAdmitsAgreeingGroupsAndTheMergedAtGr
 	if !equalStrings(result.BaselineDefectsMatched, wantMatched) {
 		t.Fatalf("matched = %v, want %v: idle %v stale %v",
 			result.BaselineDefectsMatched, wantMatched, result.IdleIntermittentBaselineDefects, result.StaleBaselineDefects)
+	}
+	if want := drilldownPRsWantIdleLengthTickets(); !equalStrings(result.IdleIntermittentBaselineDefects, want) {
+		t.Fatalf("idle = %v, want %v -- both legs share one length here, so the length-collapse entry has nothing to admit", result.IdleIntermittentBaselineDefects, want)
 	}
 	if result.DifferencesOutsideBaselineDefect != 0 {
 		t.Fatalf("outside = %d, want 0 -- findings %+v", result.DifferencesOutsideBaselineDefect, result.Findings)
@@ -168,8 +210,16 @@ func TestDrilldownPRsParity_RealCapturedBodyMergedAtGroupWithCandidateNullStaysU
 // share. Admission is per id, so this excludes ONLY that one id -- the mutated finding
 // stays outside and cites the mutated PR's own id, while the 19 agreeing
 // duplicate groups and PR 573's merged_at group are judged exactly as
-// they are in the unmutated fixture, so every ticket still reads as
-// matched (something else really was admitted), never idle or stale.
+// they are in the unmutated fixture, so every ONE OF THOSE TWO tickets
+// still reads as matched (something else really was admitted), never
+// idle or stale. The length-collapse entry is different: it
+// never admits anything in this fixture (both legs share one length --
+// see drilldownPRsWantIdleLengthTickets), and its own Paths ("data.items")
+// still reach the mutated, genuinely-uncovered finding, so it correctly
+// reads live-unexplained here rather than idle -- a length-collapse
+// citation with nothing to admit, sitting next to a live, unexplained
+// difference under the same path, must say so rather than quietly
+// passing as idle.
 func TestDrilldownPRsParity_RealCapturedBodyWithAGenuineRegressionStaysUncovered(t *testing.T) {
 	baseline := drilldownPRsSnapshotFromFile(t, drilldownPRsDedupBaselinePath)
 	candidate := drilldownPRsSnapshotFromFile(t, drilldownPRsDedupCandidatePath)
@@ -200,6 +250,12 @@ func TestDrilldownPRsParity_RealCapturedBodyWithAGenuineRegressionStaysUncovered
 	if !equalStrings(result.BaselineDefectsMatched, wantMatched) {
 		t.Fatalf("matched = %v, want %v -- a regression on ONE id must not blind the citation to every other id it still explains: idle %v stale %v",
 			result.BaselineDefectsMatched, wantMatched, result.IdleIntermittentBaselineDefects, result.StaleBaselineDefects)
+	}
+	if len(result.IdleIntermittentBaselineDefects) != 0 {
+		t.Fatalf("idle = %v, want none -- the mutation leaves a genuinely live, unexplained difference under data.items", result.IdleIntermittentBaselineDefects)
+	}
+	if want := drilldownPRsWantIdleLengthTickets(); !equalStrings(result.LiveBaselineDefectsUnexplained, want) {
+		t.Fatalf("live-unexplained = %v, want %v -- the length-collapse entry admits nothing here and its own Paths still reach the mutated, uncovered finding", result.LiveBaselineDefectsUnexplained, want)
 	}
 	foundMutation := false
 	for _, f := range result.Findings {

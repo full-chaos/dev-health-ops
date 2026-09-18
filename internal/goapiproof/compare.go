@@ -700,6 +700,29 @@ type BaselineDefect struct {
 	// default, unchanged blanket behaviour every other declared defect
 	// still uses. A defect never sets more than one shape field.
 	ZeroValueEmptyListShape *ZeroValueEmptyListShape
+
+	// HeatmapCellBoundaryShape, when set, replaces this defect's blanket
+	// "any leaf difference under Paths is covered" rule with a
+	// LIMIT-boundary admission over a reconstructed heatmap file list AND
+	// its own axis-reordering consequence -- see HeatmapCellBoundaryShape's
+	// own doc comment (heatmapcellboundary.go). Like LimitDisplacementShape
+	// and HotspotListBoundaryShape, it can admit a STRUCTURAL finding (a
+	// ShapePresence cell), never only a leaf one -- see the gate in
+	// classifyBaselineDefects. nil is the default, unchanged blanket
+	// behaviour every other declared defect still uses. A defect never
+	// sets more than one shape field.
+	HeatmapCellBoundaryShape *HeatmapCellBoundaryShape
+
+	// DuplicateCollapseLengthShape, when set, replaces this defect's
+	// blanket "any leaf difference under Paths is covered" rule with a
+	// whole-list admission of a ShapeLength finding, built from the two
+	// DECODED lists -- see DuplicateCollapseLengthShape's own doc comment
+	// (dedupcollapselength.go). It can admit a STRUCTURAL finding (a
+	// ShapeLength on the list itself), never a leaf one -- see the gate
+	// in classifyBaselineDefects. nil is the default, unchanged blanket
+	// behaviour every other declared defect still uses. A defect never
+	// sets more than one shape field.
+	DuplicateCollapseLengthShape *DuplicateCollapseLengthShape
 }
 
 // validateBaselineDefects refuses a declaration that claims the
@@ -1110,6 +1133,14 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 		if defect.ZeroValueEmptyListShape != nil {
 			zeroValueEmptyListPlan = buildZeroValueEmptyListPlan(defect.ZeroValueEmptyListShape, baselineData, candidateData)
 		}
+		var heatmapCellPlan *heatmapCellBoundaryPlan
+		if defect.HeatmapCellBoundaryShape != nil {
+			heatmapCellPlan = buildHeatmapCellBoundaryPlan(defect.HeatmapCellBoundaryShape, baselineData, candidateData)
+		}
+		var dupLenPlan *duplicateCollapseLengthPlan
+		if defect.DuplicateCollapseLengthShape != nil {
+			dupLenPlan = buildDuplicateCollapseLengthPlan(defect.DuplicateCollapseLengthShape, baselineData, candidateData)
+		}
 		// A SHAPED defect's citation is LIVE only when its shape actually
 		// admits something. A blanket (unshaped) citation stays live from
 		// path proximity alone -- any difference under Paths, covered or
@@ -1123,7 +1154,7 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 		// apart, and a shaped defect that hit on path alone would still
 		// double-report alongside the shape that actually explains the
 		// difference.
-		shaped := repoPlan != nil || covPlan != nil || dedupPlan != nil || skewPlan != nil || sankeyFanoutPlan != nil || keyedDirPlan != nil || conservePlan != nil || dictDirPlan != nil || scalarDirPlan != nil || identityPlan != nil || displacePlan != nil || hotspotBoundaryPlan != nil || subsetPlan != nil || zeroValueEmptyListPlan != nil || tiePlan != nil
+		shaped := repoPlan != nil || covPlan != nil || dedupPlan != nil || skewPlan != nil || sankeyFanoutPlan != nil || keyedDirPlan != nil || conservePlan != nil || dictDirPlan != nil || scalarDirPlan != nil || identityPlan != nil || displacePlan != nil || hotspotBoundaryPlan != nil || subsetPlan != nil || zeroValueEmptyListPlan != nil || tiePlan != nil || heatmapCellPlan != nil || dupLenPlan != nil
 		var touched []int
 		for i, path := range mismatches {
 			if !defectCovers(defect, path) {
@@ -1173,7 +1204,9 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 				!(subsetPlan != nil && (shapes[i] == ShapePresence || shapes[i] == ShapeLength)) &&
 				!(dictDirPlan != nil && defect.DictKeyDirectionShape.AdmitBaselineOnlyKeys && shapes[i] == ShapePresence) &&
 				!(zeroValueEmptyListPlan != nil && shapes[i] == ShapePresence) &&
-				!(tiePlan != nil && shapes[i] == ShapePresence) {
+				!(tiePlan != nil && shapes[i] == ShapePresence) &&
+				!(heatmapCellPlan != nil && shapes[i] == ShapePresence) &&
+				!(dupLenPlan != nil && shapes[i] == ShapeLength) {
 				continue
 			}
 			if shaped {
@@ -1223,6 +1256,10 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 				admitted = zeroValueEmptyListPlan.admits(result.Findings[findingRefs[i]])
 			case tiePlan != nil:
 				admitted = tiePlan.admits(result.Findings[findingRefs[i]])
+			case heatmapCellPlan != nil:
+				admitted = heatmapCellPlan.admits(result.Findings[findingRefs[i]])
+			case dupLenPlan != nil:
+				admitted = dupLenPlan.admits(result.Findings[findingRefs[i]])
 			}
 			if admitted {
 				covered[i] = true

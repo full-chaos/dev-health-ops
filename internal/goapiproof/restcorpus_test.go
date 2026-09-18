@@ -427,7 +427,7 @@ func TestDrilldownPRsParityDatetimeCitation_NonVacuousMatchIsIdleNotStale(t *tes
 	if len(result.StaleBaselineDefects) != 0 {
 		t.Fatalf("a genuine, non-vacuous match must never go stale: %v", result.StaleBaselineDefects)
 	}
-	if !equalStrings(result.IdleIntermittentBaselineDefects, drilldownPRsWantMatched()) {
+	if !equalStrings(result.IdleIntermittentBaselineDefects, drilldownPRsAllTickets()) {
 		t.Fatalf("idle = %v, want every drilldownPRsParity entry idle", result.IdleIntermittentBaselineDefects)
 	}
 }

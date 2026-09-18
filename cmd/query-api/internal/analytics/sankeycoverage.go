@@ -128,10 +128,20 @@ func compileSankeyCoverage(req SankeyRequest, orgID string, timeoutSeconds int, 
 
 	var baseTable, dateFilter, orgFilter string
 	var joins []string
-	totalExpr := "count()"
+	// count()/countIf() are UInt64 in ClickHouse; the native Go
+	// driver's UInt64.ScanRow only recognises *uint64/**uint64 as a scan
+	// destination, so a bare *float64 (resolveSankeyCoverage's total/
+	// assignedTeam/repoTotal/assignedRepo, unconditionally float64 to match
+	// the investment path's sum()/sumIf() Float64 columns) fails the scan
+	// outright on a real ClickHouse -- the mock destination-type check
+	// accepts anything, which is why this shipped undetected. toFloat64(...)
+	// is the same coercion breakdown.go/flowmatrix.go/sankey.go/timeseries.go
+	// already apply to every count-shaped measure expression in this
+	// package; this query was the one site missing it.
+	totalExpr := "toFloat64(count())"
 	repoTotalExpr := totalExpr
-	assignedTeamCountExpr := fmt.Sprintf("countIf(%s)", assignedTeamExpr)
-	assignedRepoCountExpr := fmt.Sprintf("countIf(%s IS NOT NULL)", repoCol)
+	assignedTeamCountExpr := fmt.Sprintf("toFloat64(countIf(%s))", assignedTeamExpr)
+	assignedRepoCountExpr := fmt.Sprintf("toFloat64(countIf(%s IS NOT NULL))", repoCol)
 
 	// CHAOS-5483: the three split columns. The non-investment path reads
 	// the raw investment_metrics_daily table, which has no wure join and

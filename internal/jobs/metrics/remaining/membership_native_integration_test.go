@@ -4,6 +4,7 @@ package remaining
 
 import (
 	"context"
+	"errors"
 	"net/url"
 	"strings"
 	"testing"
@@ -120,6 +121,154 @@ func TestMembershipEndToEndAgainstRealClickHouse(t *testing.T) {
 	waitForCondition(t, 10*time.Second, func() bool {
 		return len(queryMembershipRows(t, ctx, conn, orgID)) == 6*membershipRetentionKeep
 	}, "expected exactly 6*keep membership rows to survive retention (the pruned generation's 6 rows deleted, the kept generations' rows -- 6 each -- are byte-identical re-writes of the same seed)")
+}
+
+// TestCheckMembershipMarkerLagAgainstRealClickHouse is the real-engine
+// proof for the marker-lag alert: checkMembershipMarkerLag's own
+// max(computed_at) query, executed against the actual migrated
+// work_unit_investments schema, not a fake. A fake conn can only assert
+// what this package's own code does with a canned answer it is handed;
+// this proves the query text itself round-trips a real DateTime64 column
+// and the lag/exceeds decision comes out right on both sides of the
+// bound.
+func TestCheckMembershipMarkerLagAgainstRealClickHouse(t *testing.T) {
+	ctx := context.Background()
+	conn := membershipMigratedClickHouse(t, ctx)
+	orgID := "org-" + uuid.NewString()
+	matchedID, _ := membershipSeedUnitIDs(t)
+
+	t.Run("no investment rows: no lag", func(t *testing.T) {
+		result, err := checkMembershipMarkerLag(ctx, conn, orgID, time.Now().UTC(), membershipMarkerLagAlertBoundDefault)
+		if err != nil {
+			t.Fatalf("checkMembershipMarkerLag: %v", err)
+		}
+		if result.Lag != 0 || result.Exceeds || result.LatestInvestmentComputedAt != nil {
+			t.Fatalf("result=%+v, want zero lag, exceeds=false, no investment timestamp for an org with no investment rows at all", result)
+		}
+	})
+
+	seedMembershipInvestment(t, ctx, conn, orgID, matchedID)
+
+	t.Run("marker just behind a real investment row: within bound", func(t *testing.T) {
+		// seedMembershipInvestment stamps computed_at at time.Now().UTC() at
+		// call time, a few seconds before this assertion runs -- the
+		// ordinary gap the two writers finish within, matching the
+		// deployment ticket's own "4-9s before the scope marker" framing.
+		result, err := checkMembershipMarkerLag(ctx, conn, orgID, time.Now().UTC(), membershipMarkerLagAlertBoundDefault)
+		if err != nil {
+			t.Fatalf("checkMembershipMarkerLag: %v", err)
+		}
+		if result.Exceeds {
+			t.Fatalf("result=%+v, want exceeds=false for an ordinary few-second gap", result)
+		}
+		if result.LatestInvestmentComputedAt == nil {
+			t.Fatal("result.LatestInvestmentComputedAt is nil, want the real investment row's computed_at")
+		}
+	})
+
+	t.Run("marker published well before the real investment row: exceeds", func(t *testing.T) {
+		staleMarker := time.Now().UTC().Add(-3 * time.Hour)
+		result, err := checkMembershipMarkerLag(ctx, conn, orgID, staleMarker, membershipMarkerLagAlertBoundDefault)
+		if err != nil {
+			t.Fatalf("checkMembershipMarkerLag: %v", err)
+		}
+		if !result.Exceeds {
+			t.Fatalf("result=%+v, want exceeds=true for a marker ~3h behind the real investment row", result)
+		}
+		if result.Lag < 2*time.Hour+55*time.Minute || result.Lag > 3*time.Hour+5*time.Minute {
+			t.Fatalf("lag=%s, want approximately 3h (allowing for the seed-to-assertion gap)", result.Lag)
+		}
+	})
+
+	t.Run("a smaller configured bound is honoured: the same real positive lag now exceeds", func(t *testing.T) {
+		// A marker ~90m older than the real investment row: a genuine
+		// positive lag (unlike the "within bound" case above, where the
+		// marker is NEWER than the investment and the lag clamps to zero
+		// regardless of bound). Checked once against the default 2h bound
+		// (not exceeded) and once against a 30m bound (exceeded) -- same
+		// real lag, only the bound argument differs -- proving the bound
+		// reaching checkMembershipMarkerLag is the one passed in, not a
+		// hardcoded constant re-appearing here.
+		staleMarker := time.Now().UTC().Add(-90 * time.Minute)
+
+		wide, err := checkMembershipMarkerLag(ctx, conn, orgID, staleMarker, membershipMarkerLagAlertBoundDefault)
+		if err != nil {
+			t.Fatalf("checkMembershipMarkerLag (2h bound): %v", err)
+		}
+		if wide.Exceeds {
+			t.Fatalf("result=%+v, want exceeds=false against the 2h default for a ~90m lag", wide)
+		}
+
+		narrow, err := checkMembershipMarkerLag(ctx, conn, orgID, staleMarker, 30*time.Minute)
+		if err != nil {
+			t.Fatalf("checkMembershipMarkerLag (30m bound): %v", err)
+		}
+		if !narrow.Exceeds {
+			t.Fatalf("result=%+v, want exceeds=true against a 30m bound for a ~90m lag", narrow)
+		}
+		if wide.Lag != narrow.Lag {
+			t.Errorf("wide.Lag=%s narrow.Lag=%s, want the same measured lag under both bounds", wide.Lag, narrow.Lag)
+		}
+	})
+}
+
+// TestNewMembershipExecutorMarkerLagAlertBoundFromEnv is the real-engine
+// proof that WORKER_REMAINING_MEMBERSHIP_MARKER_LAG_ALERT_BOUND actually
+// reaches NewMembershipExecutor's construction path and controls the bound
+// its checker uses -- not merely that resolveMembershipMarkerLagAlertBound
+// computes the right value in isolation. Every named cell (unset, valid
+// override, unparsable, zero, negative) is executed against the real
+// migrated schema, since construction validates against the real conn.
+func TestNewMembershipExecutorMarkerLagAlertBoundFromEnv(t *testing.T) {
+	ctx := context.Background()
+	const envKey = "WORKER_REMAINING_MEMBERSHIP_MARKER_LAG_ALERT_BOUND"
+
+	newExecutorWithEnv := func(t *testing.T) (*MembershipExecutor, error) {
+		t.Helper()
+		conn := membershipMigratedClickHouse(t, ctx)
+		writer, err := NewMembershipClickHouseWriter(conn)
+		if err != nil {
+			t.Fatalf("new writer: %v", err)
+		}
+		return NewMembershipExecutor(ctx, conn, writer)
+	}
+
+	t.Run("unset: the default applies, construction succeeds", func(t *testing.T) {
+		t.Setenv(envKey, "")
+		executor, err := newExecutorWithEnv(t)
+		if err != nil {
+			t.Fatalf("new executor: %v", err)
+		}
+		checker, ok := executor.markerLag.(chConnMarkerLagChecker)
+		if !ok || checker.bound != membershipMarkerLagAlertBoundDefault {
+			t.Fatalf("markerLag checker bound = %+v, want the default %s", executor.markerLag, membershipMarkerLagAlertBoundDefault)
+		}
+	})
+
+	t.Run("valid override: construction succeeds and the checker uses it, not the default", func(t *testing.T) {
+		t.Setenv(envKey, "45m")
+		executor, err := newExecutorWithEnv(t)
+		if err != nil {
+			t.Fatalf("new executor: %v", err)
+		}
+		checker, ok := executor.markerLag.(chConnMarkerLagChecker)
+		if !ok || checker.bound != 45*time.Minute {
+			t.Fatalf("markerLag checker bound = %+v, want 45m", executor.markerLag)
+		}
+	})
+
+	for _, invalid := range []string{"not-a-duration", "0s", "-30m"} {
+		t.Run("refused, by name: "+invalid, func(t *testing.T) {
+			t.Setenv(envKey, invalid)
+			_, err := newExecutorWithEnv(t)
+			if err == nil {
+				t.Fatalf("new executor with %s=%q: want a refusal, got none", envKey, invalid)
+			}
+			if !errors.Is(err, ErrMembershipMarkerLagAlertBoundInvalid) {
+				t.Fatalf("new executor with %s=%q: err=%v, want ErrMembershipMarkerLagAlertBoundInvalid", envKey, invalid, err)
+			}
+		})
+	}
 }
 
 func waitForCondition(t *testing.T, timeout time.Duration, check func() bool, message string) {

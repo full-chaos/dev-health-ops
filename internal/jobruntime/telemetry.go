@@ -1373,7 +1373,16 @@ type MetricsCollector struct {
 	// PERSISTENT prune failure was invisible: old generations would
 	// accumulate with no signal anywhere.
 	membershipPruneFailures uint64
-	membershipRefusals      map[string]uint64
+	// membershipMarkerLagAlerts counts a freshly published completion
+	// marker whose own lag behind the newest investment computation
+	// exceeded the alert bound. membershipMarkerLagSecondsLast is the
+	// most recent such lag, in seconds -- a gauge (last-observed value,
+	// overwritten on every alert-worthy run), not an accumulating sum,
+	// so an operator reads how far behind the marker currently is, not
+	// a total that only ever grows.
+	membershipMarkerLagAlerts      uint64
+	membershipMarkerLagSecondsLast uint64
+	membershipRefusals             map[string]uint64
 
 	streamLag                 map[StreamLabels]int64
 	streamPending             map[StreamLabels]int64
@@ -3064,6 +3073,7 @@ const (
 	MembershipRefusedUnavailable        = "clickhouse_unavailable"
 	MembershipRefusedWriterUnavailable  = "writer_unavailable"
 	MembershipRefusedSchemaIncompatible = "schema_incompatible"
+	MembershipRefusedConfigInvalid      = "config_invalid"
 	MembershipRefusedInspectFailed      = "inspect_failed"
 )
 
@@ -3071,6 +3081,7 @@ var membershipRefusalReasons = []string{
 	MembershipRefusedUnavailable,
 	MembershipRefusedWriterUnavailable,
 	MembershipRefusedSchemaIncompatible,
+	MembershipRefusedConfigInvalid,
 	MembershipRefusedInspectFailed,
 }
 
@@ -3122,6 +3133,24 @@ func (collector *MetricsCollector) ObserveMembershipPruneFailed() {
 	collector.mu.Lock()
 	defer collector.mu.Unlock()
 	collector.membershipPruneFailures++
+}
+
+// ObserveMembershipMarkerLagExceeded records one freshly published
+// membership completion marker whose own lag behind the newest investment
+// computation exceeded the alert bound -- the operational backstop for
+// the read-side policy that scopes investment totals to the latest
+// complete marker rather than ever falling back to unscoped on a time
+// bound. A negative lagSeconds is clamped to zero rather than refused:
+// the caller's own decision (membershipMarkerLag) never produces one, so
+// treating it as "no lag" here is defensive, not load-bearing.
+func (collector *MetricsCollector) ObserveMembershipMarkerLagExceeded(lagSeconds int64) {
+	if lagSeconds < 0 {
+		lagSeconds = 0
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.membershipMarkerLagAlerts++
+	collector.membershipMarkerLagSecondsLast = uint64(lagSeconds)
 }
 
 func (collector *MetricsCollector) SetExecutionSaturation(queue string, ratio float64) error {
@@ -4023,6 +4052,10 @@ func (collector *MetricsCollector) writeRemainingMetricsLease(output *strings.Bu
 	writeUintSample(output, "worker_membership_backfill_native_dropped_nodes_total", nil, collector.membershipDroppedNodes)
 	writeMetadata(output, "worker_membership_backfill_native_prune_failures_total", "Failed retention prunes (keep-latest-2) the native membership-backfill executor tolerated -- the partition still succeeds, but old generations accumulate until a later prune succeeds.", "counter")
 	writeUintSample(output, "worker_membership_backfill_native_prune_failures_total", nil, collector.membershipPruneFailures)
+	writeMetadata(output, "worker_membership_backfill_native_marker_lag_alerts_total", "Freshly published completion markers whose own lag behind the newest investment computation exceeded the alert bound.", "counter")
+	writeUintSample(output, "worker_membership_backfill_native_marker_lag_alerts_total", nil, collector.membershipMarkerLagAlerts)
+	writeMetadata(output, "worker_membership_backfill_native_marker_lag_seconds", "Seconds by which the most recently published completion marker trailed the newest investment computation, at the moment it last exceeded the alert bound.", "gauge")
+	writeUintSample(output, "worker_membership_backfill_native_marker_lag_seconds", nil, collector.membershipMarkerLagSecondsLast)
 	writeMetadata(output, "worker_membership_backfill_native_refused_total", "Native membership-backfill executor construction refusals, by reason.", "counter")
 	for _, reason := range membershipRefusalReasons {
 		writeUintSample(output, "worker_membership_backfill_native_refused_total",

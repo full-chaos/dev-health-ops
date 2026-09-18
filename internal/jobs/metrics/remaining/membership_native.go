@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -24,6 +25,13 @@ var ErrMembershipSchemaIncompatible = errors.New(
 // ErrMembershipUnavailable is the nil-connection refusal.
 var ErrMembershipUnavailable = errors.New(
 	"membership_backfill: clickhouse connection unavailable")
+
+// ErrMembershipMarkerLagAlertBoundInvalid is the refusal when
+// membershipMarkerLagAlertBoundEnv is set but not a positive duration --
+// distinct from the other three so an operator's config typo reports as a
+// config fault, never a database fault.
+var ErrMembershipMarkerLagAlertBoundInvalid = errors.New(
+	"membership_backfill: marker lag alert bound invalid")
 
 // ErrMembershipWriterUnavailable is the nil-writer refusal. Distinct from the
 // connection refusal so the two report under different reasons -- a missing
@@ -81,6 +89,7 @@ type MembershipExecutor struct {
 	edges         chqueryEdgeReader
 	distributions membershipDistributionFetcher
 	writer        MembershipWriter
+	markerLag     membershipMarkerLagChecker
 	nowUTC        func() time.Time
 
 	observer MembershipObserver
@@ -112,11 +121,16 @@ func NewMembershipExecutor(
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrMembershipUnavailable, err)
 	}
+	markerLagAlertBound, err := resolveMembershipMarkerLagAlertBound(os.LookupEnv)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrMembershipMarkerLagAlertBoundInvalid, err)
+	}
 	return &MembershipExecutor{
 		conn:          conn,
 		edges:         edges,
 		distributions: chConnDistributionFetcher{conn: conn},
 		writer:        writer,
+		markerLag:     chConnMarkerLagChecker{conn: conn, bound: markerLagAlertBound},
 		nowUTC:        func() time.Time { return time.Now().UTC() },
 	}, nil
 }

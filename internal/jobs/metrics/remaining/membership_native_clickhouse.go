@@ -45,6 +45,14 @@ type MembershipObserver interface {
 	// partition); this is what makes a PERSISTENT failure visible instead
 	// of merely tolerated.
 	ObserveMembershipPruneFailed(orgID string)
+	// ObserveMembershipMarkerLagExceeded reports a freshly published
+	// marker whose own lag behind the newest investment computation
+	// exceeds the executor's configured alert bound (see
+	// resolveMembershipMarkerLagAlertBound) -- the operational backstop
+	// for the read-side policy that scopes investment totals to the
+	// latest complete marker rather than ever falling back to unscoped
+	// on a time bound.
+	ObserveMembershipMarkerLagExceeded(orgID string, lagSeconds int64)
 }
 
 // CollectorMembershipObserver adapts the metrics collector to
@@ -75,6 +83,13 @@ func (observer CollectorMembershipObserver) ObserveMembershipPruneFailed(_ strin
 		return
 	}
 	observer.Collector.ObserveMembershipPruneFailed()
+}
+
+func (observer CollectorMembershipObserver) ObserveMembershipMarkerLagExceeded(_ string, lagSeconds int64) {
+	if observer.Collector == nil {
+		return
+	}
+	observer.Collector.ObserveMembershipMarkerLagExceeded(lagSeconds)
 }
 
 // membershipDistribution is one work_unit_id's latest persisted
@@ -227,6 +242,51 @@ func (executor *MembershipExecutor) ComputeOrg(
 			OrgID: orgID, RunID: runID, CompletedAt: markerCompletedAt,
 		}); err != nil {
 			return MembershipOutcome{}, fmt.Errorf("write completion marker: %w", err)
+		}
+		// The marker just published above is not automatically fresh --
+		// the investment materializer and this membership run are
+		// two independent writers, and while the ordinary gap between them
+		// is a few seconds, a marker stuck well behind the newest investment
+		// computation means the read-side scope gate
+		// (investmentMembershipScopeStateSource) is now in its
+		// unscoped_fallback branch for this org: investment reads are NOT
+		// filtered to this marker's membership generation at all, every
+		// investment row is read unscoped instead -- the opposite of
+		// "stale but correctly scoped", and exactly the condition worth an
+		// operator's attention. Best-effort, same swallow-and-report shape
+		// as the prune failure just below: a lag check failure or an
+		// alert-worthy lag must never fail an otherwise complete, correctly
+		// published run.
+		if executor.markerLag != nil {
+			if result, lagErr := executor.markerLag.CheckMembershipMarkerLag(ctx, orgID, markerCompletedAt); lagErr != nil {
+				if executor.logger != nil {
+					executor.logger.Warn(
+						"membership marker lag check failed; the marker itself "+
+							"published successfully, only its own freshness could "+
+							"not be verified this run",
+						"org_id", orgID, "error", lagErr,
+					)
+				}
+			} else if result.Exceeds {
+				lagSeconds := int64(result.Lag.Seconds())
+				if executor.logger != nil {
+					executor.logger.Warn(
+						"membership marker lags the newest investment computation "+
+							"beyond the alert bound; the read-side scope gate has "+
+							"fallen back to unscoped for this org, so investment "+
+							"reads are no longer filtered to this marker's "+
+							"membership generation until a later run catches up",
+						"org_id", orgID, "run_id", runID,
+						"lag_seconds", lagSeconds,
+						"bound_seconds", int64(result.Bound.Seconds()),
+						"marker_completed_at", markerCompletedAt,
+						"latest_investment_computed_at", result.LatestInvestmentComputedAt,
+					)
+				}
+				if executor.observer != nil {
+					executor.observer.ObserveMembershipMarkerLagExceeded(orgID, lagSeconds)
+				}
+			}
 		}
 		// Retention is best-effort (CHAOS-2433 round-5): a prune failure must
 		// not FAIL the projection -- the marker is already published and

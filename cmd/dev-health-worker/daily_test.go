@@ -1,6 +1,8 @@
 package main
 
 import (
+	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/deploymentcontract"
@@ -117,5 +119,34 @@ func TestHeavyMetricsQueueFitsReviewedPostgresPools(t *testing.T) {
 			process.DomainMaxConnections,
 			process.QueueControlMaxConnections,
 		)
+	}
+}
+
+// TestMembershipRefusalReasonMapsEveryNamedSentinel closes a real coverage
+// gap: the closed label set membershipRefusalReason maps onto had no
+// behavioral test at all, so a swapped or dropped case in the switch would
+// pass every existing test. Every named sentinel is checked against its
+// own reason label here, by name, plus the default (an error matching
+// none of them) falling through to the ClickHouse catch-all.
+func TestMembershipRefusalReasonMapsEveryNamedSentinel(t *testing.T) {
+	unmatched := errors.New("some other construction failure")
+	cases := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"unavailable", remaining.ErrMembershipUnavailable, jobruntime.MembershipRefusedUnavailable},
+		{"writer unavailable", remaining.ErrMembershipWriterUnavailable, jobruntime.MembershipRefusedWriterUnavailable},
+		{"schema incompatible", remaining.ErrMembershipSchemaIncompatible, jobruntime.MembershipRefusedSchemaIncompatible},
+		{"marker lag alert bound invalid", remaining.ErrMembershipMarkerLagAlertBoundInvalid, jobruntime.MembershipRefusedConfigInvalid},
+		{"wrapped marker lag alert bound invalid", fmt.Errorf("wrap: %w", remaining.ErrMembershipMarkerLagAlertBoundInvalid), jobruntime.MembershipRefusedConfigInvalid},
+		{"unmatched: the inspect-failed catch-all", unmatched, jobruntime.MembershipRefusedInspectFailed},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := membershipRefusalReason(tc.err); got != tc.want {
+				t.Errorf("membershipRefusalReason(%v) = %q, want %q", tc.err, got, tc.want)
+			}
+		})
 	}
 }

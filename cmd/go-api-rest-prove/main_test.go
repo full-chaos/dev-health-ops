@@ -96,6 +96,69 @@ func TestParseFlags_DryRunDoesNotRequirePostgresURI(t *testing.T) {
 	}
 }
 
+// TestParseFlags_AcceptsAWellFormedBind is -bind's positive counterpart to
+// the three malformed cases below: NAME=VALUE lands in flags.binds under
+// NAME, unaltered.
+func TestParseFlags_AcceptsAWellFormedBind(t *testing.T) {
+	resetFlagsForTest(t)
+	restoreArgs := setOSArgs(t, []string{
+		"go-api-rest-prove",
+		"-python-api-url", "http://api:8000",
+		"-candidate-bearer-exec", `["/bin/true"]`,
+		"-baseline-bearer-exec", `["/bin/true"]`,
+		"-org", "org-1",
+		"-recorded-by", "chris",
+		"-review-evidence", "test",
+		"-artifact-dir", t.TempDir(),
+		"-dry-run",
+		"-bind", "deployment_entity_id=00000000-0000-0000-0000-000000000000:d-1",
+	})
+	defer restoreArgs()
+	f, err := parseFlags()
+	if err != nil {
+		t.Fatalf("parseFlags: %v", err)
+	}
+	if f.binds["deployment_entity_id"] != "00000000-0000-0000-0000-000000000000:d-1" {
+		t.Fatalf("f.binds[deployment_entity_id] = %q, want the value after \"=\"", f.binds["deployment_entity_id"])
+	}
+}
+
+// TestParseFlags_RejectsMalformedBind pins -bind's own eager validation:
+// a malformed value is rejected AT PARSE TIME (parseFlags returns an
+// error before ever reaching the post-parse required-flag check, let
+// alone runMeasurement's own request loop), for every one of the three
+// ways NAME=VALUE can be malformed.
+func TestParseFlags_RejectsMalformedBind(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		bind string
+	}{
+		{"no equals sign", "deployment_entity_id"},
+		{"empty name", "=some-value"},
+		{"empty value", "deployment_entity_id="},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resetFlagsForTest(t)
+			restoreArgs := setOSArgs(t, []string{
+				"go-api-rest-prove",
+				"-python-api-url", "http://api:8000",
+				"-candidate-bearer-exec", `["/bin/true"]`,
+				"-baseline-bearer-exec", `["/bin/true"]`,
+				"-org", "org-1",
+				"-recorded-by", "chris",
+				"-review-evidence", "test",
+				"-artifact-dir", t.TempDir(),
+				"-dry-run",
+				"-bind", tc.bind,
+			})
+			defer restoreArgs()
+			if _, err := parseFlags(); err == nil {
+				t.Fatalf("parseFlags: want an error for -bind %q", tc.bind)
+			}
+		})
+	}
+}
+
 func TestParseHelperArgv_RefusesNonJSON(t *testing.T) {
 	if _, err := parseHelperArgv("-x", "not json"); err == nil {
 		t.Fatal("want an error for non-JSON argv")
@@ -1575,6 +1638,138 @@ func TestRunMeasurement_BaselineLegTimeoutIsNonFatalReportedAndLaterCaseRuns(t *
 	}
 	if laterOutcome == nil {
 		t.Fatalf("report has no outcome for REST:GET:/api/v1/work-units (runs AFTER home in RESTRunOrder) among %d outcomes -- the loop must not have continued past the stalled case", len(report.Outcomes))
+	}
+}
+
+// TestRunMeasurement_OperatorSuppliedBindingUnsuppliedRefusesByName drives
+// runMeasurement over the REAL, full REST corpus with NO -bind flags at
+// all: GET /api/v1/flame's own deployment_entity_id_bound_200 entry binds
+// entity_id to deployment_entity_id, an operator-supplied producer
+// (goapiproof.IsOperatorSuppliedIDProducer) no request in this corpus
+// Produces -- an unsupplied run must refuse that one request by the SAME
+// RESTRefusalIDBindingUnresolved reason any other unproduced id gets, with
+// Detail naming the flag to supply, not the generic "no earlier request"
+// wording that would mislead an operator into looking for a missing
+// producer request that can never exist.
+func TestRunMeasurement_OperatorSuppliedBindingUnsuppliedRefusesByName(t *testing.T) {
+	const build = "build123"
+	candidate := httptest.NewServer(genericRESTStubHandler(t, build, nil))
+	defer candidate.Close()
+	baseline := httptest.NewServer(genericRESTStubHandler(t, "", nil))
+	defer baseline.Close()
+
+	dir := t.TempDir()
+	reportPath := dir + "/report.json"
+	artifacts, err := goapiproof.NewArtifactStore(dir + "/artifacts")
+	if err != nil {
+		t.Fatalf("NewArtifactStore: %v", err)
+	}
+	f := flags{
+		queryAPIURL: candidate.URL, pythonAPIURL: baseline.URL,
+		org: "org-1", recordedBy: "chris", reviewEvidence: "test",
+		timeout: 2 * time.Second, dryRun: true, reportPath: reportPath,
+	}
+
+	// runMeasurement's own returned error is NOT asserted here: driving
+	// the REAL, full corpus against a generic {} stub body leaves plenty
+	// of OTHER operations' own FloatTierB/VolatileFields declarations
+	// genuinely unused (their real fields never appear in a bare {}
+	// body), which independently fails the run via its own vacuity check
+	// -- orthogonal to this test's own claim. The JSON report is written
+	// unconditionally before that check runs (runMeasurement's own
+	// "report first, error second" discipline), so it is still complete
+	// and worth reading regardless.
+	_ = captureStdout(t, func() {
+		_ = runMeasurement(context.Background(), http.DefaultClient, f,
+			staticCredentialForTest(), staticCredentialForTest(), build, nil, artifacts)
+	})
+
+	raw, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatalf("read report: %v", err)
+	}
+	var report jsonReport
+	if err := json.Unmarshal(raw, &report); err != nil {
+		t.Fatalf("decode report: %v (%s)", err, raw)
+	}
+
+	var deploymentOutcome *outcome
+	for i := range report.Outcomes {
+		if report.Outcomes[i].Operation == "REST:GET:/api/v1/flame" && report.Outcomes[i].Request == "deployment_entity_id_bound_200" {
+			deploymentOutcome = &report.Outcomes[i]
+		}
+	}
+	if deploymentOutcome == nil {
+		t.Fatalf("report has no outcome for REST:GET:/api/v1/flame/deployment_entity_id_bound_200 among %d outcomes", len(report.Outcomes))
+	}
+	if deploymentOutcome.Admitted {
+		t.Fatalf("deployment outcome = %+v, want unadmitted (no -bind supplied)", deploymentOutcome)
+	}
+	if deploymentOutcome.Refusal != goapiproof.RESTRefusalIDBindingUnresolved {
+		t.Fatalf("deployment outcome Refusal = %q, want %q", deploymentOutcome.Refusal, goapiproof.RESTRefusalIDBindingUnresolved)
+	}
+	if !strings.Contains(deploymentOutcome.Detail, "supply -bind deployment_entity_id=") {
+		t.Fatalf("deployment outcome Detail = %q, want it to name the flag to supply", deploymentOutcome.Detail)
+	}
+}
+
+// TestRunMeasurement_OperatorSuppliedBindingSuppliedResolves is the
+// positive counterpart: f.binds carries deployment_entity_id, so
+// deployment_entity_id_bound_200 resolves and runs like any other bound
+// request, and its own outcome records the name and value it bound --
+// the run record must show what was bound without reading the driver
+// that produced it.
+func TestRunMeasurement_OperatorSuppliedBindingSuppliedResolves(t *testing.T) {
+	const build = "build123"
+	const boundValue = "00000000-0000-0000-0000-000000000000:d-1"
+	candidate := httptest.NewServer(genericRESTStubHandler(t, build, nil))
+	defer candidate.Close()
+	baseline := httptest.NewServer(genericRESTStubHandler(t, "", nil))
+	defer baseline.Close()
+
+	dir := t.TempDir()
+	reportPath := dir + "/report.json"
+	artifacts, err := goapiproof.NewArtifactStore(dir + "/artifacts")
+	if err != nil {
+		t.Fatalf("NewArtifactStore: %v", err)
+	}
+	f := flags{
+		queryAPIURL: candidate.URL, pythonAPIURL: baseline.URL,
+		org: "org-1", recordedBy: "chris", reviewEvidence: "test",
+		timeout: 2 * time.Second, dryRun: true, reportPath: reportPath,
+		binds: map[string]string{"deployment_entity_id": boundValue},
+	}
+
+	// See the sibling test above for why runMeasurement's own returned
+	// error is not asserted here.
+	_ = captureStdout(t, func() {
+		_ = runMeasurement(context.Background(), http.DefaultClient, f,
+			staticCredentialForTest(), staticCredentialForTest(), build, nil, artifacts)
+	})
+
+	raw, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatalf("read report: %v", err)
+	}
+	var report jsonReport
+	if err := json.Unmarshal(raw, &report); err != nil {
+		t.Fatalf("decode report: %v (%s)", err, raw)
+	}
+
+	var deploymentOutcome *outcome
+	for i := range report.Outcomes {
+		if report.Outcomes[i].Operation == "REST:GET:/api/v1/flame" && report.Outcomes[i].Request == "deployment_entity_id_bound_200" {
+			deploymentOutcome = &report.Outcomes[i]
+		}
+	}
+	if deploymentOutcome == nil {
+		t.Fatalf("report has no outcome for REST:GET:/api/v1/flame/deployment_entity_id_bound_200 among %d outcomes", len(report.Outcomes))
+	}
+	if deploymentOutcome.Refusal == goapiproof.RESTRefusalIDBindingUnresolved {
+		t.Fatalf("deployment outcome = %+v, want the id to resolve (a -bind was supplied)", deploymentOutcome)
+	}
+	if deploymentOutcome.BoundIDs["deployment_entity_id"] != boundValue {
+		t.Fatalf("deployment outcome BoundIDs[deployment_entity_id] = %q, want %q -- the run record must carry the supplied value", deploymentOutcome.BoundIDs["deployment_entity_id"], boundValue)
 	}
 }
 

@@ -18,6 +18,19 @@ func TestRESTCorpusIsValid(t *testing.T) {
 // request -- so the ONLY thing that can make ValidateRESTCorpus refuse it
 // is whatever consumerBindings itself declares, never an unrelated
 // run-order or unproduced-id mismatch.
+// clearRESTOperatorSuppliedProducers empties restOperatorSuppliedProducers
+// for the duration of a test that swaps restEndpointSpecs/restRunOrder to
+// a fixture too small to consume the real corpus's own operator-supplied
+// producer names (e.g. "deployment_entity_id") -- validateIDBindingOrder's
+// own dead-name check would otherwise fail every such fixture-based test,
+// for a check that fixture was never testing in the first place.
+func clearRESTOperatorSuppliedProducers(t *testing.T) {
+	t.Helper()
+	saved := restOperatorSuppliedProducers
+	restOperatorSuppliedProducers = map[string]bool{}
+	t.Cleanup(func() { restOperatorSuppliedProducers = saved })
+}
+
 func restCorpusValidationFixture(consumerBindings []RESTIDBinding, consumerBody any) (map[string]RESTEndpointSpec, []string) {
 	return map[string]RESTEndpointSpec{
 		"REST:POST:/consumer": {
@@ -44,6 +57,7 @@ func TestValidateRESTCorpus_RefusesAnIDBindingWithNoLocationSet(t *testing.T) {
 	saved := restEndpointSpecs
 	savedOrder := restRunOrder
 	t.Cleanup(func() { restEndpointSpecs = saved; restRunOrder = savedOrder })
+	clearRESTOperatorSuppliedProducers(t)
 
 	restEndpointSpecs, restRunOrder = restCorpusValidationFixture([]RESTIDBinding{{Producer: "widget_id"}}, nil)
 
@@ -61,6 +75,7 @@ func TestValidateRESTCorpus_RefusesABodyPathBindingWithNoBody(t *testing.T) {
 	saved := restEndpointSpecs
 	savedOrder := restRunOrder
 	t.Cleanup(func() { restEndpointSpecs = saved; restRunOrder = savedOrder })
+	clearRESTOperatorSuppliedProducers(t)
 
 	restEndpointSpecs, restRunOrder = restCorpusValidationFixture(
 		[]RESTIDBinding{{Producer: "widget_id", BodyPath: "filters.scope.ids"}}, nil,
@@ -78,6 +93,7 @@ func TestValidateRESTCorpus_AcceptsAWellFormedBodyPathBinding(t *testing.T) {
 	saved := restEndpointSpecs
 	savedOrder := restRunOrder
 	t.Cleanup(func() { restEndpointSpecs = saved; restRunOrder = savedOrder })
+	clearRESTOperatorSuppliedProducers(t)
 
 	restEndpointSpecs, restRunOrder = restCorpusValidationFixture(
 		[]RESTIDBinding{{Producer: "widget_id", BodyPath: "filters.scope.ids"}},
@@ -331,19 +347,21 @@ func TestDrilldownIssuesParityDatetimeCitation_NonVacuousMatchIsIdleNotStale(t *
 // comparison it would status-refuse against the real baseline, fails
 // here rather than only being noticed the next time an operator runs
 // go-api-rest-prove live.
-func TestFlameCorpus_HasIDBoundLiveEntriesForPRAndIssue(t *testing.T) {
+func TestFlameCorpus_HasIDBoundLiveEntriesForPRIssueAndDeployment(t *testing.T) {
 	spec, err := SpecForREST("REST:GET:/api/v1/flame")
 	if err != nil {
 		t.Fatalf("SpecForREST: %v", err)
 	}
 
-	var pr, issue *RESTRequest
+	var pr, issue, deployment *RESTRequest
 	for i := range spec.Requests {
 		switch spec.Requests[i].Name {
 		case "pr_entity_id_bound_200":
 			pr = &spec.Requests[i]
 		case "issue_entity_id_bound_200":
 			issue = &spec.Requests[i]
+		case "deployment_entity_id_bound_200":
+			deployment = &spec.Requests[i]
 		}
 	}
 	if pr == nil {
@@ -351,6 +369,9 @@ func TestFlameCorpus_HasIDBoundLiveEntriesForPRAndIssue(t *testing.T) {
 	}
 	if issue == nil {
 		t.Fatal("flame corpus has no issue_entity_id_bound_200 entry")
+	}
+	if deployment == nil {
+		t.Fatal("flame corpus has no deployment_entity_id_bound_200 entry")
 	}
 
 	for _, tc := range []struct {
@@ -360,10 +381,27 @@ func TestFlameCorpus_HasIDBoundLiveEntriesForPRAndIssue(t *testing.T) {
 	}{
 		{"pr", pr, "pr_id"},
 		{"issue", issue, "work_item_id"},
+		{"deployment", deployment, "deployment_entity_id"},
 	} {
 		if len(tc.req.IDBindings) != 1 || tc.req.IDBindings[0].Producer != tc.producer || tc.req.IDBindings[0].QueryParam != "entity_id" {
 			t.Errorf("%s entry IDBindings = %+v, want one binding on entity_id to producer %q", tc.name, tc.req.IDBindings, tc.producer)
 		}
+	}
+
+	// deployment_entity_id is operator-supplied (no corpus request Produces
+	// it), not another Produces entry this file forgot to wire -- see
+	// restOperatorSuppliedProducers' own doc comment.
+	if !IsOperatorSuppliedIDProducer("deployment_entity_id") {
+		t.Error("deployment_entity_id is not declared in restOperatorSuppliedProducers")
+	}
+	if deployment.WantCandidateStatus != 200 || deployment.WantBaselineStatus != 200 {
+		t.Errorf("deployment entry status = (%d, %d), want (200, 200)", deployment.WantCandidateStatus, deployment.WantBaselineStatus)
+	}
+	if deployment.BodyMode != RESTBodyModeJSON {
+		t.Errorf("deployment entry BodyMode = %q, want json", deployment.BodyMode)
+	}
+	if len(deployment.Parity.BaselineDefects) != 0 {
+		t.Errorf("deployment entry Parity.BaselineDefects = %+v, want none -- fetch_deployment carries no declared divergence", deployment.Parity.BaselineDefects)
 	}
 
 	if pr.WantCandidateStatus != 200 || pr.WantBaselineStatus != 200 {

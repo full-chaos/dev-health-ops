@@ -191,6 +191,7 @@ func TestValidateRESTIDBindingOrder_RefusesAConsumerAheadOfItsProducer(t *testin
 	saved := restRunOrder
 	savedSpecs := restEndpointSpecs
 	t.Cleanup(func() { restRunOrder = saved; restEndpointSpecs = savedSpecs })
+	clearRESTOperatorSuppliedProducers(t)
 
 	restEndpointSpecs = map[string]RESTEndpointSpec{
 		"REST:GET:/consumer": {
@@ -225,6 +226,7 @@ func TestValidateRESTIDBindingOrder_AcceptsProducerBeforeConsumer(t *testing.T) 
 	saved := restRunOrder
 	savedSpecs := restEndpointSpecs
 	t.Cleanup(func() { restRunOrder = saved; restEndpointSpecs = savedSpecs })
+	clearRESTOperatorSuppliedProducers(t)
 
 	restEndpointSpecs = map[string]RESTEndpointSpec{
 		"REST:GET:/consumer": {
@@ -260,6 +262,7 @@ func TestValidateRESTIDBindingOrder_RefusesAPathParamWithNoPlaceholder(t *testin
 	saved := restRunOrder
 	savedSpecs := restEndpointSpecs
 	t.Cleanup(func() { restRunOrder = saved; restEndpointSpecs = savedSpecs })
+	clearRESTOperatorSuppliedProducers(t)
 
 	restEndpointSpecs = map[string]RESTEndpointSpec{
 		"REST:GET:/consumer": {
@@ -283,6 +286,52 @@ func TestValidateRESTIDBindingOrder_RefusesAPathParamWithNoPlaceholder(t *testin
 
 	if err := ValidateRESTIDBindingOrder(); err == nil {
 		t.Fatal("want an error when a PathParam binding names a placeholder the route's Path does not declare")
+	}
+}
+
+// TestValidateIDBindingOrder_AcceptsAnOperatorSuppliedProducerConsumedByARequest
+// proves the core operator-supplied-id mechanism directly against
+// validateIDBindingOrder (no earlier Produces at all, unlike every other
+// test in this file): a Producer name declared in operatorSupplied
+// resolves without any request in runOrder ever producing it.
+func TestValidateIDBindingOrder_AcceptsAnOperatorSuppliedProducerConsumedByARequest(t *testing.T) {
+	specs := map[string]RESTEndpointSpec{
+		"REST:GET:/consumer": {
+			Method: "GET", Path: "/consumer",
+			Requests: []RESTRequest{{
+				Name: "req", WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode:   RESTBodyModeJSON,
+				IDBindings: []RESTIDBinding{{Producer: "widget_id", QueryParam: "id"}},
+			}},
+		},
+	}
+	runOrder := []string{"REST:GET:/consumer"}
+	operatorSupplied := map[string]bool{"widget_id": true}
+
+	if err := validateIDBindingOrder(runOrder, specs, operatorSupplied); err != nil {
+		t.Fatalf("validateIDBindingOrder: %v", err)
+	}
+}
+
+// TestValidateIDBindingOrder_RefusesADeadOperatorSuppliedProducer pins the
+// allowlist's own vacuity guard: a name declared in operatorSupplied that
+// no request's own IDBindings ever consumes is a corpus authoring error,
+// caught here rather than silently carrying a name nothing binds.
+func TestValidateIDBindingOrder_RefusesADeadOperatorSuppliedProducer(t *testing.T) {
+	specs := map[string]RESTEndpointSpec{
+		"REST:GET:/consumer": {
+			Method: "GET", Path: "/consumer",
+			Requests: []RESTRequest{{
+				Name: "req", WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode: RESTBodyModeJSON,
+			}},
+		},
+	}
+	runOrder := []string{"REST:GET:/consumer"}
+	operatorSupplied := map[string]bool{"widget_id": true}
+
+	if err := validateIDBindingOrder(runOrder, specs, operatorSupplied); err == nil {
+		t.Fatal("want an error when an operator-supplied producer name is declared but consumed by no request")
 	}
 }
 

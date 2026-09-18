@@ -1606,19 +1606,21 @@ var flamePRIDBoundParity = Options{
 // same parseRepoEntity, services/flame.py:51-61, the "pr" entries above
 // already exercise, reached here via the "deployment" call site instead)
 // are covered by deployment_entity_id_missing_repo_prefix/_invalid_repo_
-// uuid/_missing_suffix, needing no id at all. Its live 200 path stays
-// refused-by-name: entity_id is a "<repo_id>:<deployment_id>" pair, and no
-// route this corpus covers exposes a deployment_id anywhere in its
-// response body -- not GET /api/v1/heatmap (Cell/Evidence carry PRs and
-// commits, no deployments), not GET /api/v1/quadrant or /api/v1/explain
-// (metric values only), and no drilldown or people route reads the
-// deployments table at all. A producer would need a NEW route, or a NEW
-// field on an existing one, to read deployments (ReplacingMergeTree
-// (last_synced), sort-keyed (org_id, repo_id, deployment_id) since
-// migration 027) and expose deployment_id on the wire -- this table cannot
-// invent an id no ported route's response ever carries (operations.go's
-// own `pr` doc comment states the identical rule for the GraphQL corpus's
-// own unproducible id).
+// uuid/_missing_suffix, needing no id at all. entity_id is a
+// "<repo_id>:<deployment_id>" pair, and no route this corpus covers
+// exposes a deployment_id anywhere in its response body -- not GET
+// /api/v1/heatmap (Cell/Evidence carry PRs and commits, no deployments),
+// not GET /api/v1/quadrant or /api/v1/explain (metric values only), and
+// no drilldown or people route reads the deployments table at all: this
+// corpus cannot Produce this id itself (operations.go's own `pr` doc
+// comment states the identical rule for the GraphQL corpus's own
+// unproducible id). Its live 200 path, deployment_entity_id_bound_200,
+// instead binds entity_id to deployment_entity_id, a
+// restOperatorSuppliedProducers entry (this file's own doc comment above
+// ValidateRESTIDBindingOrder) resolved from the run invocation's own
+// -bind flag rather than from any request here -- a run whose invocation
+// omits it refuses that one request by name, the same as any other
+// unresolved id.
 // AssertRESTPathCoverage is satisfied by these entries' PATH regardless.
 //
 // Branches this corpus cannot provably reach, and why:
@@ -4151,6 +4153,34 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				WantCandidateStatus: 404, WantBaselineStatus: 404,
 				BodyMode: RESTBodyModeJSON,
 			},
+			{
+				// The "deployment" entity_type's own live 200 path
+				// (services/flame.py:409-424, buildDeploymentFlameResponse
+				// in cmd/query-api/internal/flame/flame.go:414-473):
+				// entity_id is bound to deployment_entity_id, a
+				// restOperatorSuppliedProducers entry supplied by the run
+				// invocation's own -bind flag rather than by an earlier
+				// request's Produces -- no route this corpus covers reads
+				// the deployments table, so no corpus request could ever
+				// Produce this id itself (this file's own doc comment on
+				// the flame corpus entry, above). fetch_deployment's own
+				// WHERE already fully specifies deployments' ReplacingMergeTree
+				// sort key (org_id, repo_id, deployment_id), so its ORDER
+				// BY last_synced DESC LIMIT 1 read is already a
+				// deterministic pick -- no BaselineDefect is declared for
+				// this table (flame.go's own DATA-LAYER NOTE), unlike the
+				// "pr" entity_type's own flamePRIDBoundParity. The
+				// "deployment" entity dict (repo_id, deployment_id,
+				// status, environment) carries no numeric field either
+				// (same doc comment), so no IntegerLeaves declaration
+				// applies. No Parity is declared here, the same as
+				// issue_entity_id_bound_200 above.
+				Name:                "deployment_entity_id_bound_200",
+				Query:               url.Values{"entity_type": {"deployment"}},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode:   RESTBodyModeJSON,
+				IDBindings: []RESTIDBinding{{Producer: "deployment_entity_id", QueryParam: "entity_id"}},
+			},
 		},
 	},
 	"REST:GET:/api/v1/people": {
@@ -4898,42 +4928,89 @@ func RESTRunOrder() []string {
 	return out
 }
 
+// restOperatorSuppliedProducers names every id this corpus consumes via
+// an operator-supplied -bind NAME=VALUE flag on cmd/go-api-rest-prove
+// (that binary's own flags.binds, resolved into the SAME produced map an
+// earlier request's own Produces declaration would populate) rather than
+// an earlier request's Produces. flame's own "deployment" entity_type is
+// the first case: no route this corpus covers exposes a deployment_id on
+// the wire (this file's own doc comment on the flame corpus entry, above),
+// so deployment_entity_id_bound_200's own IDBindings names a producer no
+// request here Produces at all. validateIDBindingOrder accepts a
+// binding.Producer that resolves in EITHER this set or an earlier
+// request's own Produces, and separately REQUIRES every name declared
+// here to be consumed by at least one request's own IDBindings -- an
+// entry naming an id nothing binds is a dead allowlist entry, refused the
+// same as any other corpus inconsistency. A run whose invocation omits
+// the matching -bind refuses that one request by name
+// (RESTRefusalIDBindingUnresolved, restidbind.go), the same as any other
+// unproduced id -- never an invented value, and no production literal
+// ever appears in this file.
+var restOperatorSuppliedProducers = map[string]bool{
+	"deployment_entity_id": true,
+}
+
+// IsOperatorSuppliedIDProducer reports whether name is declared in
+// restOperatorSuppliedProducers -- cmd/go-api-rest-prove's own run loop
+// uses this to name the flag (-bind NAME=...) in an unresolved-producer
+// refusal's own Detail, rather than the generic "no earlier request"
+// wording that describes only the OTHER kind of producer.
+func IsOperatorSuppliedIDProducer(name string) bool {
+	return restOperatorSuppliedProducers[name]
+}
+
 // ValidateRESTIDBindingOrder checks restRunOrder against restEndpointSpecs
-// and every declared Produces/IDBindings pair: restRunOrder must be
-// exactly a permutation of restEndpointSpecs' own keys, no id name may be
-// Produced twice, and every IDBindings.Producer must already have been
-// Produced by a request strictly earlier in restRunOrder (or earlier in
-// the same operation's own Requests slice) -- a consumer placed ahead of
-// its producer is refused here, at startup, rather than discovered as an
-// always-refused request in a live run. Run by TestRESTCorpusIsValid via
+// and every declared Produces/IDBindings pair against
+// restOperatorSuppliedProducers -- see validateIDBindingOrder's own doc
+// comment for the checks themselves. Run by TestRESTCorpusIsValid via
 // ValidateRESTCorpus, which calls this directly.
 func ValidateRESTIDBindingOrder() error {
-	if len(restRunOrder) != len(restEndpointSpecs) {
-		return fmt.Errorf("goapiproof: restRunOrder has %d entries, restEndpointSpecs has %d -- every corpus operation must appear in the run order exactly once", len(restRunOrder), len(restEndpointSpecs))
+	return validateIDBindingOrder(restRunOrder, restEndpointSpecs, restOperatorSuppliedProducers)
+}
+
+// validateIDBindingOrder is ValidateRESTIDBindingOrder's own logic,
+// parameterised so a test can exercise it against a small fixture corpus
+// and a small operator-supplied set instead of this package's full, real
+// ones. runOrder must be exactly a permutation of specs' own keys, no id
+// name may be Produced twice, and every IDBindings.Producer must either
+// already have been Produced by a request strictly earlier in runOrder
+// (or earlier in the same operation's own Requests slice) or be named in
+// operatorSupplied -- a consumer placed ahead of its producer, or naming
+// neither, is refused here, at startup, rather than discovered as an
+// always-refused request in a live run. Every name operatorSupplied
+// itself declares must be consumed by at least one request's own
+// IDBindings, checked last -- the allowlist cannot carry a dead name no
+// request ever binds.
+func validateIDBindingOrder(runOrder []string, specs map[string]RESTEndpointSpec, operatorSupplied map[string]bool) error {
+	if len(runOrder) != len(specs) {
+		return fmt.Errorf("goapiproof: restRunOrder has %d entries, restEndpointSpecs has %d -- every corpus operation must appear in the run order exactly once", len(runOrder), len(specs))
 	}
-	seenOps := make(map[string]bool, len(restRunOrder))
-	for _, op := range restRunOrder {
+	seenOps := make(map[string]bool, len(runOrder))
+	for _, op := range runOrder {
 		if seenOps[op] {
 			return fmt.Errorf("goapiproof: restRunOrder lists operation %q twice", op)
 		}
 		seenOps[op] = true
-		if _, ok := restEndpointSpecs[op]; !ok {
+		if _, ok := specs[op]; !ok {
 			return fmt.Errorf("goapiproof: restRunOrder names operation %q, which restEndpointSpecs does not declare", op)
 		}
 	}
-	for op := range restEndpointSpecs {
+	for op := range specs {
 		if !seenOps[op] {
 			return fmt.Errorf("goapiproof: restEndpointSpecs declares operation %q, which restRunOrder never lists", op)
 		}
 	}
 
 	produced := map[string]string{} // producer Name -> "operation/request" that declares it
-	for _, op := range restRunOrder {
-		spec := restEndpointSpecs[op]
+	operatorSuppliedUsed := make(map[string]bool, len(operatorSupplied))
+	for _, op := range runOrder {
+		spec := specs[op]
 		for _, req := range spec.Requests {
 			for _, binding := range req.IDBindings {
-				if _, ok := produced[binding.Producer]; !ok {
-					return fmt.Errorf("goapiproof: REST corpus entry %q request %q binds id %q, which no earlier request in restRunOrder Produces -- a consumer must run strictly after its producer", op, req.Name, binding.Producer)
+				if operatorSupplied[binding.Producer] {
+					operatorSuppliedUsed[binding.Producer] = true
+				} else if _, ok := produced[binding.Producer]; !ok {
+					return fmt.Errorf("goapiproof: REST corpus entry %q request %q binds id %q, which no earlier request in restRunOrder Produces and restOperatorSuppliedProducers does not declare -- a consumer must run strictly after its producer, or the id must be operator-supplied", op, req.Name, binding.Producer)
 				}
 				if binding.PathParam != "" && !strings.Contains(spec.Path, "{"+binding.PathParam+"}") {
 					return fmt.Errorf("goapiproof: REST corpus entry %q request %q binds id %q to PathParam %q, but %q has no {%s} placeholder", op, req.Name, binding.Producer, binding.PathParam, spec.Path, binding.PathParam)
@@ -4945,6 +5022,11 @@ func ValidateRESTIDBindingOrder() error {
 				}
 				produced[prod.Name] = op + "/" + req.Name
 			}
+		}
+	}
+	for name := range operatorSupplied {
+		if !operatorSuppliedUsed[name] {
+			return fmt.Errorf("goapiproof: restOperatorSuppliedProducers declares %q, which no corpus request consumes via IDBindings -- remove it", name)
 		}
 	}
 	return nil

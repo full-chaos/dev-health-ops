@@ -21,6 +21,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
 	"github.com/full-chaos/dev-health-ops/internal/migrationmatrix"
+	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 )
 
 // resetFlagsForTest gives parseFlags a fresh, silent flag.CommandLine --
@@ -1972,7 +1973,7 @@ func TestWriteJSONReport_PartialRunMarksPartialAndListsNotRun(t *testing.T) {
 	}
 	notRun := []string{"REST:GET:/c/r3"}
 
-	if err := writeJSONReport(path, outcomes, notRun); err != nil {
+	if err := writeJSONReport(path, sameProverBuildForTest("abc123"), outcomes, notRun); err != nil {
 		t.Fatalf("writeJSONReport: %v", err)
 	}
 	raw, err := os.ReadFile(path)
@@ -2003,7 +2004,7 @@ func TestWriteJSONReport_CompleteRunIsNotPartial(t *testing.T) {
 	path := dir + "/report.json"
 	outcomes := []outcome{{Operation: "REST:GET:/a", Request: "r1", Admitted: true, TerminalState: goapiproof.TerminalStateMatch}}
 
-	if err := writeJSONReport(path, outcomes, nil); err != nil {
+	if err := writeJSONReport(path, sameProverBuildForTest("abc123"), outcomes, nil); err != nil {
 		t.Fatalf("writeJSONReport: %v", err)
 	}
 	raw, err := os.ReadFile(path)
@@ -2145,7 +2146,7 @@ func TestRunMeasurement_BaselineLegTimeoutIsNonFatalReportedAndLaterCaseRuns(t *
 	var runErr error
 	stdout := captureStdout(t, func() {
 		runErr = runMeasurement(context.Background(), http.DefaultClient, f,
-			staticCredentialForTest(), staticCredentialForTest(), build, nil, artifacts)
+			staticCredentialForTest(), staticCredentialForTest(), sameProverBuildForTest(build), nil, artifacts)
 	})
 
 	if runErr == nil {
@@ -2168,6 +2169,9 @@ func TestRunMeasurement_BaselineLegTimeoutIsNonFatalReportedAndLaterCaseRuns(t *
 	}
 	if report.Partial {
 		t.Fatalf("report.Partial = true, want false -- the loop reached the end of its plan despite the leg failure (not_run = %v)", report.NotRun)
+	}
+	if report.ProverBuild != sameProverBuildForTest(build) {
+		t.Fatalf("report builds = %+v, want %+v", report.ProverBuild, sameProverBuildForTest(build))
 	}
 
 	var stalledOutcome, laterOutcome *outcome
@@ -2231,7 +2235,7 @@ func TestRunMeasurement_OperatorSuppliedBindingUnsuppliedRefusesByName(t *testin
 	// and worth reading regardless.
 	_ = captureStdout(t, func() {
 		_ = runMeasurement(context.Background(), http.DefaultClient, f,
-			staticCredentialForTest(), staticCredentialForTest(), build, nil, artifacts)
+			staticCredentialForTest(), staticCredentialForTest(), sameProverBuildForTest(build), nil, artifacts)
 	})
 
 	raw, err := os.ReadFile(reportPath)
@@ -2294,7 +2298,7 @@ func TestRunMeasurement_OperatorSuppliedBindingSuppliedResolves(t *testing.T) {
 	// error is not asserted here.
 	_ = captureStdout(t, func() {
 		_ = runMeasurement(context.Background(), http.DefaultClient, f,
-			staticCredentialForTest(), staticCredentialForTest(), build, nil, artifacts)
+			staticCredentialForTest(), staticCredentialForTest(), sameProverBuildForTest(build), nil, artifacts)
 	})
 
 	raw, err := os.ReadFile(reportPath)
@@ -2354,7 +2358,7 @@ func TestRunMeasurement_DeploymentGapBindingUnsuppliedRefusesByName(t *testing.T
 	// for why runMeasurement's own returned error is not asserted here.
 	_ = captureStdout(t, func() {
 		_ = runMeasurement(context.Background(), http.DefaultClient, f,
-			staticCredentialForTest(), staticCredentialForTest(), build, nil, artifacts)
+			staticCredentialForTest(), staticCredentialForTest(), sameProverBuildForTest(build), nil, artifacts)
 	})
 
 	raw, err := os.ReadFile(reportPath)
@@ -2415,7 +2419,7 @@ func TestRunMeasurement_PRGapBindingUnsuppliedRefusesByName(t *testing.T) {
 	// for why runMeasurement's own returned error is not asserted here.
 	_ = captureStdout(t, func() {
 		_ = runMeasurement(context.Background(), http.DefaultClient, f,
-			staticCredentialForTest(), staticCredentialForTest(), build, nil, artifacts)
+			staticCredentialForTest(), staticCredentialForTest(), sameProverBuildForTest(build), nil, artifacts)
 	})
 
 	raw, err := os.ReadFile(reportPath)
@@ -2476,7 +2480,7 @@ func TestRunMeasurement_IssueGapBindingUnsuppliedRefusesByName(t *testing.T) {
 	// for why runMeasurement's own returned error is not asserted here.
 	_ = captureStdout(t, func() {
 		_ = runMeasurement(context.Background(), http.DefaultClient, f,
-			staticCredentialForTest(), staticCredentialForTest(), build, nil, artifacts)
+			staticCredentialForTest(), staticCredentialForTest(), sameProverBuildForTest(build), nil, artifacts)
 	})
 
 	raw, err := os.ReadFile(reportPath)
@@ -2549,7 +2553,7 @@ func TestRunMeasurement_NonTransportErrorMidRunStillWritesAPartialReport(t *test
 	var runErr error
 	captureStdout(t, func() {
 		runErr = runMeasurement(context.Background(), http.DefaultClient, f,
-			staticCredentialForTest(), staticCredentialForTest(), build, nil, artifacts)
+			staticCredentialForTest(), staticCredentialForTest(), sameProverBuildForTest(build), nil, artifacts)
 	})
 	if runErr == nil {
 		t.Fatal("runMeasurement: want a non-nil error from the unwritable artifact directory")
@@ -2763,5 +2767,157 @@ func TestProveOneRESTRequest_OrdinaryRequestStillProducesFromBaselineLeg(t *test
 	}
 	if got := out.producedIDs["work_item_id"]; got != "from-baseline" {
 		t.Fatalf("producedIDs[work_item_id] = %q, want %q (still the BASELINE leg for an ordinary request)", got, "from-baseline")
+	}
+}
+
+func sameProverBuildForTest(build string) goapiproof.ProverBuild {
+	return goapiproof.NewProverBuild(version.Info{Commit: build}, build, false)
+}
+
+func decodeReportForTest(t *testing.T, path string) (jsonReport, map[string]any) {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read report: %v", err)
+	}
+	var got jsonReport
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("decode report: %v (%s)", err, raw)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		t.Fatalf("decode report fields: %v (%s)", err, raw)
+	}
+	return got, fields
+}
+
+func TestWriteJSONReport_RecordsProverAndCandidateBuild(t *testing.T) {
+	path := t.TempDir() + "/report.json"
+	builds := goapiproof.NewProverBuild(version.Info{Commit: "1111111"}, "2222222", true)
+	if err := writeJSONReport(path, builds, nil, nil); err != nil {
+		t.Fatalf("writeJSONReport: %v", err)
+	}
+	got, fields := decodeReportForTest(t, path)
+	if got.ProverBuild != builds {
+		t.Fatalf("report builds = %+v, want %+v", got.ProverBuild, builds)
+	}
+	for field, want := range map[string]any{
+		"prover_build":              "1111111",
+		"prover_build_modified":     false,
+		"candidate_build":           "2222222",
+		"prover_build_skew":         true,
+		"prover_build_skew_allowed": true,
+	} {
+		if fields[field] != want {
+			t.Fatalf("report field %s = %v, want %v", field, fields[field], want)
+		}
+	}
+}
+
+func TestResolveBuilds(t *testing.T) {
+	const candidate = "94527a87f9aa9f7e4a1d6956d62b78093038ca0b"
+	buildinfo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"commit":"` + candidate + `","modified":false}`))
+	}))
+	defer buildinfo.Close()
+	for _, tc := range []struct {
+		name     string
+		prover   version.Info
+		allow    bool
+		wantErr  bool
+		wantSkew bool
+	}{
+		{"same commit runs", version.Info{Commit: candidate}, false, false, false},
+		{"different commit refuses", version.Info{Commit: "a38c5bb70bc926e10059f8b13d63d098d6756ba5"}, false, true, true},
+		{"different commit with override runs", version.Info{Commit: "a38c5bb70bc926e10059f8b13d63d098d6756ba5"}, true, false, true},
+		{"unstamped prover refuses", version.Info{Commit: "unknown"}, false, true, true},
+		{"unstamped prover with override runs", version.Info{Commit: "unknown"}, true, false, true},
+		{"modified prover refuses", version.Info{Commit: candidate, Modified: true}, false, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := flags{buildInfoURL: buildinfo.URL + "/buildinfo", timeout: 5 * time.Second, allowProverBuildSkew: tc.allow}
+			var builds goapiproof.ProverBuild
+			var err error
+			stdout := captureStdout(t, func() {
+				builds, err = resolveBuilds(context.Background(), http.DefaultClient, f, staticCredentialForTest(), tc.prover)
+			})
+			want := goapiproof.NewProverBuild(tc.prover, candidate, tc.allow)
+			if firstLine, _, _ := strings.Cut(stdout, "\n"); firstLine != want.Line() {
+				t.Fatalf("stdout = %q, want the build line %q printed before the check", stdout, want.Line())
+			}
+			if tc.wantErr {
+				if !errors.Is(err, goapiproof.ErrProverBuildSkew) || !strings.Contains(err.Error(), proverBuildSkewFlag) {
+					t.Fatalf("resolveBuilds error = %v, want ErrProverBuildSkew naming %s", err, proverBuildSkewFlag)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("resolveBuilds error = %v, want nil", err)
+			}
+			if builds != want || builds.Skew != tc.wantSkew || builds.SkewAllowed != (tc.wantSkew && tc.allow) {
+				t.Fatalf("builds = %+v, want %+v", builds, want)
+			}
+		})
+	}
+}
+
+// A -timeout of zero or less leaves the /buildinfo read without its own
+// deadline, as on every request leg; a positive -timeout still bounds it.
+func TestResolveBuilds_TimeoutZeroOrNegativeMeansNoDeadline(t *testing.T) {
+	const candidate = "94527a87f9aa9f7e4a1d6956d62b78093038ca0b"
+	release := make(chan struct{})
+	buildinfo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("slow") == "1" {
+			<-release
+		}
+		_, _ = w.Write([]byte(`{"commit":"` + candidate + `","modified":false}`))
+	}))
+	defer buildinfo.Close()
+	defer close(release)
+	for _, timeout := range []time.Duration{0, -time.Second} {
+		f := flags{buildInfoURL: buildinfo.URL, timeout: timeout}
+		_ = captureStdout(t, func() {
+			if _, err := resolveBuilds(context.Background(), http.DefaultClient, f, staticCredentialForTest(), version.Info{Commit: candidate}); err != nil {
+				t.Errorf("timeout %v: resolveBuilds error = %v, want nil", timeout, err)
+			}
+		})
+	}
+	f := flags{buildInfoURL: buildinfo.URL + "?slow=1", timeout: 50 * time.Millisecond}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	start := time.Now()
+	_ = captureStdout(t, func() {
+		if _, err := resolveBuilds(ctx, http.DefaultClient, f, staticCredentialForTest(), version.Info{Commit: candidate}); err == nil {
+			t.Error("a positive -timeout must still bound the /buildinfo read")
+		}
+	})
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Errorf("the /buildinfo read took %s, want it bounded by -timeout (50ms)", elapsed)
+	}
+}
+
+// -candidate-build stays a cross-check ahead of the prover comparison.
+func TestResolveBuilds_CandidateBuildCrossCheckStillRefuses(t *testing.T) {
+	buildinfo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"commit":"abc","modified":false}`))
+	}))
+	defer buildinfo.Close()
+	f := flags{buildInfoURL: buildinfo.URL, timeout: 5 * time.Second, candidateBuild: "def"}
+	_ = captureStdout(t, func() {
+		_, err := resolveBuilds(context.Background(), http.DefaultClient, f, staticCredentialForTest(), version.Info{Commit: "abc"})
+		if err == nil || !strings.Contains(err.Error(), "-candidate-build") {
+			t.Errorf("resolveBuilds error = %v, want the -candidate-build mismatch", err)
+		}
+	})
+}
+
+func TestProverBuildSkewFlagIsRegistered(t *testing.T) {
+	resetFlagsForTest(t)
+	defer setOSArgs(t, []string{"go-api-rest-prove", proverBuildSkewFlag})()
+	_, _ = parseFlags()
+	registered := flag.CommandLine.Lookup(strings.TrimPrefix(proverBuildSkewFlag, "-"))
+	if registered == nil || registered.Value.String() != "true" {
+		t.Fatalf("%s is not a registered boolean flag set by its own name: %+v", proverBuildSkewFlag, registered)
 	}
 }

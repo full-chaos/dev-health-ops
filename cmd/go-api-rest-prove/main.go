@@ -80,6 +80,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
 	"github.com/full-chaos/dev-health-ops/internal/migrationmatrix"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 )
 
 func main() {
@@ -104,6 +105,8 @@ type flags struct {
 	buildInfoURL   string
 	candidateBuild string
 	queryAPISrc    string
+
+	allowProverBuildSkew bool
 
 	candidateBearerExec string
 	baselineBearerExec  string
@@ -151,6 +154,7 @@ func parseFlags() (flags, error) {
 	flag.StringVar(&f.queryAPIURL, "query-api-url", "http://localhost:8090", "query-api's OWN in-cluster address -- the candidate leg. Never an edge or ingress URL: every request this tool sends goes DIRECTLY to this service")
 	flag.StringVar(&f.pythonAPIURL, "python-api-url", "", "the Python api service's OWN in-cluster address -- the baseline leg (required). Never an edge or ingress URL, for the same reason as -query-api-url")
 	flag.StringVar(&f.buildInfoURL, "buildinfo-url", "", "GET /buildinfo on query-api -- the ONLY source of the build identity every receipt names. Defaults to -query-api-url + \"/buildinfo\"")
+	flag.BoolVar(&f.allowProverBuildSkew, proverBuildSkewFlag[1:], false, "measure even when this binary was not built from the candidate build's commit (or carries no commit at all): its declarations, shapes and corpus are then another commit's, and the report records the skew as prover_build_skew_allowed")
 	flag.StringVar(&f.candidateBuild, "candidate-build", "", "optional CROSS-CHECK: fail if the running build is not this sha. Never the source of the value written -- the value written always comes from /buildinfo, matching go-api-prove's own -candidate-build flag")
 	flag.StringVar(&f.queryAPISrc, "query-api-src", "", "OPTIONAL dev-only override: path to a REAL query-api source checkout, read LIVE to confirm this corpus's paths match what the mux actually mounts (migrationmatrix.LoadQueryAPIMuxRoutes). Empty (the default) uses goapiproof.MountedRESTPaths, the checked-in snapshot this binary ships with -- the operator tools image carries no Go source tree at all, so that is the ONLY option available there. Set this only when running from a real repo checkout, to catch drift immediately instead of waiting for TestMountedRESTPathsMatchesTheRealQueryAPIMux's own CI run")
 	flag.StringVar(&f.candidateBearerExec, "candidate-bearer-exec", "", "JSON array whose first element is an ALLOWLISTED HELPER NAME (\"mint-envelope\" or \"mint-edge-token\", never a path -- see goapiproof.MintViaAllowlistedHelper) printing a FRESH bearer credential for query-api on stdout, e.g. [\"mint-envelope\",\"-org\",\"<org>\"]. Re-run as the credential ages. The helper reads any secret it needs from ITS OWN environment -- never from an argument here. The remaining elements are the helper's own argv, never a shell string: nothing is interpolated into a shell. The helper's stdout and stderr are NEVER reported by this command")
@@ -792,6 +796,33 @@ func run(f flags) (err error) {
 	// its own context deadline -- see doREST and resolveRESTTimeout.
 	client := &http.Client{}
 
+	builds, err := resolveBuilds(ctx, client, f, candidateCredential, version.Current("go-api-rest-prove"))
+	if err != nil {
+		return err
+	}
+
+	var pgPool receiptWriter
+	if f.postgresURI != "" {
+		pool, err := newPGXPool(ctx, f.postgresURI)
+		if err != nil {
+			return err
+		}
+		defer pool.Close()
+		pgPool = pool
+	}
+
+	return runMeasurement(ctx, client, f, candidateCredential, baselineCredential, builds, pgPool, artifacts)
+}
+
+// proverBuildSkewFlag permits a run whose prover build is not the
+// candidate's.
+const proverBuildSkewFlag = "-allow-prover-build-skew"
+
+// resolveBuilds reads the candidate build from /buildinfo, prints the
+// prover/candidate build line and refuses a skewed run unless
+// proverBuildSkewFlag allowed it. It runs before any request is
+// measured, so a refused run spends nothing.
+func resolveBuilds(ctx context.Context, client *http.Client, f flags, candidateCredential *goapiproof.Credential, prover version.Info) (goapiproof.ProverBuild, error) {
 	// candidateCredential -- the SAME credential every corpus request's
 	// own candidate leg uses below (doREST's own candidateCredential
 	// argument in proveOneRESTRequest) -- never a second, separately
@@ -805,27 +836,26 @@ func run(f flags) (err error) {
 	// leg -- client carries no Timeout of its own any more (above), so
 	// this read would otherwise wait on ctx's 30-minute run-level bound
 	// alone.
-	buildInfoCtx, cancelBuildInfo := context.WithTimeout(ctx, f.timeout)
+	// A -timeout of zero or less means no per-read deadline, as on every
+	// request leg (doREST).
+	buildInfoCtx, cancelBuildInfo := ctx, context.CancelFunc(func() {})
+	if f.timeout > 0 {
+		buildInfoCtx, cancelBuildInfo = context.WithTimeout(ctx, f.timeout)
+	}
 	namedBuild, err := goapiproof.FetchBuildIdentity(buildInfoCtx, client, f.buildInfoURL, candidateCredential)
 	cancelBuildInfo()
 	if err != nil {
-		return fmt.Errorf("read the candidate build from /buildinfo: %w", err)
+		return goapiproof.ProverBuild{}, fmt.Errorf("read the candidate build from /buildinfo: %w", err)
 	}
 	if f.candidateBuild != "" && f.candidateBuild != namedBuild {
-		return fmt.Errorf("-candidate-build %q does not match the running build %q reported by %s", f.candidateBuild, namedBuild, f.buildInfoURL)
+		return goapiproof.ProverBuild{}, fmt.Errorf("-candidate-build %q does not match the running build %q reported by %s", f.candidateBuild, namedBuild, f.buildInfoURL)
 	}
-
-	var pgPool receiptWriter
-	if f.postgresURI != "" {
-		pool, err := newPGXPool(ctx, f.postgresURI)
-		if err != nil {
-			return err
-		}
-		defer pool.Close()
-		pgPool = pool
+	builds := goapiproof.NewProverBuild(prover, namedBuild, f.allowProverBuildSkew)
+	fmt.Println(builds.Line())
+	if err := builds.Check(proverBuildSkewFlag); err != nil {
+		return goapiproof.ProverBuild{}, err
 	}
-
-	return runMeasurement(ctx, client, f, candidateCredential, baselineCredential, namedBuild, pgPool, artifacts)
+	return builds, nil
 }
 
 // runMeasurement is run()'s own request loop, report write and exit-code
@@ -1090,7 +1120,8 @@ func candidateHasNoData(refusal string) bool {
 	return false
 }
 
-func runMeasurement(ctx context.Context, client *http.Client, f flags, candidateCredential, baselineCredential *goapiproof.Credential, namedBuild string, pgPool receiptWriter, artifacts *goapiproof.ArtifactStore) error {
+func runMeasurement(ctx context.Context, client *http.Client, f flags, candidateCredential, baselineCredential *goapiproof.Credential, builds goapiproof.ProverBuild, pgPool receiptWriter, artifacts *goapiproof.ArtifactStore) error {
+	namedBuild := builds.Candidate
 	auth := goapiproof.AuthContext{PrincipalKind: f.principalKind, Audience: f.audience, KeyID: f.keyID}
 	observedAt := time.Now().UTC()
 
@@ -1259,7 +1290,7 @@ requestLoop:
 		attempted, admitted, matched, mismatched, attempted-admitted)
 
 	if f.reportPath != "" {
-		if writeErr := writeJSONReport(f.reportPath, outcomes, notRun); writeErr != nil {
+		if writeErr := writeJSONReport(f.reportPath, builds, outcomes, notRun); writeErr != nil {
 			if runErr == nil {
 				runErr = writeErr
 			} else {
@@ -1299,6 +1330,9 @@ requestLoop:
 // outcomes any more, so a partial run can say it is partial IN the file
 // an operator reads back, not only on stdout.
 type jsonReport struct {
+	// ProverBuild names the commit whose declarations, shapes and corpus
+	// the run applied, beside the candidate build it measured.
+	goapiproof.ProverBuild
 	Outcomes []outcome `json:"outcomes"`
 	// Partial is true whenever NotRun is non-empty -- named separately
 	// rather than left for a reader to infer from an empty NotRun slice,
@@ -1312,8 +1346,8 @@ type jsonReport struct {
 	NotRun []string `json:"not_run,omitempty"`
 }
 
-func writeJSONReport(path string, outcomes []outcome, notRun []string) error {
-	encoded, err := json.MarshalIndent(jsonReport{Outcomes: outcomes, Partial: len(notRun) > 0, NotRun: notRun}, "", "  ")
+func writeJSONReport(path string, builds goapiproof.ProverBuild, outcomes []outcome, notRun []string) error {
+	encoded, err := json.MarshalIndent(jsonReport{ProverBuild: builds, Outcomes: outcomes, Partial: len(notRun) > 0, NotRun: notRun}, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode report: %w", err)
 	}

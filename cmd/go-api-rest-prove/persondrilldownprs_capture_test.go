@@ -78,7 +78,7 @@ func TestRunMeasurement_PersonDrilldownPRsCapturedBodiesHaveNothingOutside(t *te
 	}
 	_ = captureStdout(t, func() {
 		_ = runMeasurement(context.Background(), http.DefaultClient, f,
-			staticCredentialForTest(), staticCredentialForTest(), build, nil, artifacts)
+			staticCredentialForTest(), staticCredentialForTest(), sameProverBuildForTest(build), nil, artifacts)
 	})
 	raw, err := os.ReadFile(reportPath)
 	if err != nil {

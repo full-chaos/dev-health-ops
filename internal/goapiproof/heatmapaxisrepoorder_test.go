@@ -162,28 +162,64 @@ func TestHeatmapAxisRepoOrderShape_AdmitsATieBrokenByAxisOrdersOwnDeterministicN
 	}
 }
 
-// TestHeatmapAxisRepoOrderShape_RefusesOnATieInTheBaselinesOwnTotalsEvenWhenCoincidental
-// pins the remaining half of rule 4: a tie in the BASELINE's own totals
-// (row-encounter tie-break, genuinely unverifiable from the wire) refuses
-// the whole plan even when both legs' observed axis order happens to
-// coincide with what a name-ascending tie-break would also produce --
-// this shape's own model of `_axis_order` never uses name order as a
-// tie-break on the reference plane, and has no way to know THIS run's
-// real row-encounter order coincided with it. repoEven1's own verified
-// k=2 makes its own expected-baseline total (8) tie repoEven2's untouched
-// one (also 8) too, so both disjuncts fire together here -- removing
-// EITHER one from rule 4 would wrongly admit this exact case, since every
-// rule 3 check below happens to pass on its own.
-func TestHeatmapAxisRepoOrderShape_RefusesOnATieInTheBaselinesOwnTotalsEvenWhenCoincidental(t *testing.T) {
+// A verified k=2 lifts repoEven1's baseline total (8) onto repoEven2's
+// untouched one (8): a tie on the reference plane, whose order inside
+// the tie is its own row encounter order. Either baseline order inside
+// the run is admitted; the candidate (4 < 8) is exact.
+func TestHeatmapAxisRepoOrderShape_AdmitsEitherBaselineOrderInsideAFanoutTie(t *testing.T) {
 	baseCells := heatmapBoundaryCell("w1", "repoEven1", 4) + "," + heatmapBoundaryCell("w2", "repoEven1", 4) + "," + heatmapBoundaryCell("w1", "repoEven2", 8)
 	candCells := heatmapBoundaryCell("w1", "repoEven1", 2) + "," + heatmapBoundaryCell("w2", "repoEven1", 2) + "," + heatmapBoundaryCell("w1", "repoEven2", 8)
+	for _, axisBase := range [][]string{{"repoEven1", "repoEven2"}, {"repoEven2", "repoEven1"}} {
+		baseData := heatmapAxisOrderBody(t, baseCells, axisBase)
+		candData := heatmapAxisOrderBody(t, candCells, []string{"repoEven2", "repoEven1"})
+		plan := buildHeatmapAxisRepoOrderPlan(heatmapAxisOrderTestShape(), baseData, candData)
+		if !plan.valid {
+			t.Errorf("baseline axis %v: plan refused a baseline tie (8/8) produced by a verified k=2", axisBase)
+		}
+	}
+}
 
-	baseData := heatmapAxisOrderBody(t, baseCells, []string{"repoEven1", "repoEven2"})
-	candData := heatmapAxisOrderBody(t, candCells, []string{"repoEven2", "repoEven1"})
-
+// A repository placed outside its own tie run on the baseline axis is
+// not an order inside a tie: repoLow (1) sits between the tied repoEven1/
+// repoEven2 (8/8), so the run at positions [0,2) is not {Even1, Even2}.
+func TestHeatmapAxisRepoOrderShape_RefusesARepositoryOutsideItsOwnTieRun(t *testing.T) {
+	baseCells := heatmapBoundaryCell("w1", "repoEven1", 4) + "," + heatmapBoundaryCell("w2", "repoEven1", 4) + "," + heatmapBoundaryCell("w1", "repoEven2", 8) + "," + heatmapBoundaryCell("w1", "repoLow", 1)
+	candCells := heatmapBoundaryCell("w1", "repoEven1", 2) + "," + heatmapBoundaryCell("w2", "repoEven1", 2) + "," + heatmapBoundaryCell("w1", "repoEven2", 8) + "," + heatmapBoundaryCell("w1", "repoLow", 1)
+	baseData := heatmapAxisOrderBody(t, baseCells, []string{"repoEven1", "repoLow", "repoEven2"})
+	candData := heatmapAxisOrderBody(t, candCells, []string{"repoEven2", "repoEven1", "repoLow"})
 	plan := buildHeatmapAxisRepoOrderPlan(heatmapAxisOrderTestShape(), baseData, candData)
 	if plan.valid {
-		t.Error("plan must refuse: baseline's own totals tie (repoEven1=8, repoEven2=8) and the expected-baseline totals tie identically -- neither is verifiable from the wire, even though the observed axes happen to match a name-ascending order")
+		t.Error("plan must refuse: repoLow sits inside the baseline's own 8/8 tie run")
+	}
+}
+
+// A baseline tie whose run matches the observed totals but NOT the
+// candidate totals scaled by k refuses: repoA and repoB tie at 8 on the
+// baseline, but repoB carries no fan-out and its candidate total is 6,
+// so the expected baseline run is {repoA}=8 then {repoB}=6.
+func TestHeatmapAxisRepoOrderShape_RefusesATieTheMultiplierDoesNotProduce(t *testing.T) {
+	baseCells := heatmapBoundaryCell("w1", "repoA", 4) + "," + heatmapBoundaryCell("w2", "repoA", 4) + "," + heatmapBoundaryCell("w1", "repoB", 8)
+	candCells := heatmapBoundaryCell("w1", "repoA", 2) + "," + heatmapBoundaryCell("w2", "repoA", 2) + "," + heatmapBoundaryCell("w1", "repoB", 6)
+	baseData := heatmapAxisOrderBody(t, baseCells, []string{"repoB", "repoA"})
+	candData := heatmapAxisOrderBody(t, candCells, []string{"repoB", "repoA"})
+	plan := buildHeatmapAxisRepoOrderPlan(heatmapAxisOrderTestShape(), baseData, candData)
+	if plan.valid {
+		t.Error("plan must refuse: repoB's baseline total (8) is not its candidate total (6) with no verified k")
+	}
+}
+
+// The baseline axis must also follow the baseline's own observed
+// totals: expected (candidate x k) totals tie repoA/repoB at 8, but the
+// baseline's own repoB total is 7, so [repoB, repoA] is out of its own
+// order.
+func TestHeatmapAxisRepoOrderShape_RefusesABaselineAxisOutOfItsOwnTotalOrder(t *testing.T) {
+	baseCells := heatmapBoundaryCell("w1", "repoA", 4) + "," + heatmapBoundaryCell("w2", "repoA", 4) + "," + heatmapBoundaryCell("w1", "repoB", 7)
+	candCells := heatmapBoundaryCell("w1", "repoA", 2) + "," + heatmapBoundaryCell("w2", "repoA", 2) + "," + heatmapBoundaryCell("w1", "repoB", 8)
+	baseData := heatmapAxisOrderBody(t, baseCells, []string{"repoB", "repoA"})
+	candData := heatmapAxisOrderBody(t, candCells, []string{"repoB", "repoA"})
+	plan := buildHeatmapAxisRepoOrderPlan(heatmapAxisOrderTestShape(), baseData, candData)
+	if plan.valid {
+		t.Error("plan must refuse: the baseline's own totals (8/7) order repoA first")
 	}
 }
 
@@ -379,5 +415,155 @@ func TestHeatmapAxisRepoOrderShape_RealCapturedCellsWithoutTheTieAdmit(t *testin
 		if !plan.admits(Finding{Path: fmt.Sprintf("$.data.axes.y[%d]", idx), Shape: ShapeValue}) {
 			t.Errorf("data.axes.y[%d] should be admitted once the tie is broken", idx)
 		}
+	}
+}
+
+// A real production pair (team_scoped) where TWO repositories fan out at
+// a verified k=2 each (dev-health-web: 2/1, 4/2, 2/1; dev-health-go: 4/2,
+// 2/1, 2/1), so their true totals tie at 4 on the candidate (name
+// ascending: dev-health-go first) and their inflated totals tie at 8 on
+// the baseline (reference encounter order: dev-health-web first).
+const (
+	heatmapFanoutTieBaselinePath  = "testdata/heatmap_repo_touchpoints_fanout_tie_team_scoped_baseline_234f5d43.json"
+	heatmapFanoutTieCandidatePath = "testdata/heatmap_repo_touchpoints_fanout_tie_team_scoped_candidate_a0c7c3ee.json"
+)
+
+func TestHeatmapRepoTouchpointsTeamScopedParity_RealFanoutTieAdmitsTheAxisSwap(t *testing.T) {
+	baseline := heatmapAxisOrderSnapshotFromFile(t, heatmapFanoutTieBaselinePath)
+	candidate := heatmapAxisOrderSnapshotFromFile(t, heatmapFanoutTieCandidatePath)
+
+	result := Compare(baseline, candidate, heatmapRepoTouchpointsTeamScopedParity)
+	if len(result.Findings) != 8 {
+		t.Fatalf("findings = %d, want 8 (6 value + 2 axis): %+v", len(result.Findings), result.Findings)
+	}
+	if result.DifferencesOutsideBaselineDefect != 0 {
+		t.Fatalf("outside = %d, want 0 -- covered %v outside %v findings %+v", result.DifferencesOutsideBaselineDefect, result.CoveredByShape, result.OutsideByShape, result.Findings)
+	}
+	axisTicket := heatmapAxisOrderTicket(t)
+	sawAxis := false
+	for _, ticket := range result.BaselineDefectsMatched {
+		if ticket == axisTicket {
+			sawAxis = true
+		}
+	}
+	if !sawAxis {
+		t.Fatalf("matched = %v, want %s among them", result.BaselineDefectsMatched, axisTicket)
+	}
+}
+
+// The same real pair with both legs' tied repositories swapped, so the
+// candidate carries them name-DESCENDING: not axisOrder's rule, so both
+// axis findings stay outside while the six value findings stay covered.
+func TestHeatmapRepoTouchpointsTeamScopedParity_RealFanoutTieNameDescendingCandidateStaysOutside(t *testing.T) {
+	baseline := heatmapAxisOrderSnapshotFromFile(t, heatmapFanoutTieBaselinePath)
+	candidate := heatmapAxisOrderSnapshotFromFile(t, heatmapFanoutTieCandidatePath)
+	axis := candidate.Data.(map[string]any)["axes"].(map[string]any)["y"].([]any)
+	if axis[4] != "full-chaos/dev-health-go" || axis[5] != "full-chaos/dev-health-web" {
+		t.Fatalf("fixture candidate axis[4:6] = %v, want [dev-health-go dev-health-web]", axis[4:6])
+	}
+	axis[4], axis[5] = axis[5], axis[4]
+	baseAxis := baseline.Data.(map[string]any)["axes"].(map[string]any)["y"].([]any)
+	if baseAxis[4] != "full-chaos/dev-health-web" || baseAxis[5] != "full-chaos/dev-health-go" {
+		t.Fatalf("fixture baseline axis[4:6] = %v, want [dev-health-web dev-health-go]", baseAxis[4:6])
+	}
+	baseAxis[4], baseAxis[5] = baseAxis[5], baseAxis[4]
+
+	result := Compare(baseline, candidate, heatmapRepoTouchpointsTeamScopedParity)
+	if result.DifferencesOutsideBaselineDefect != 2 {
+		t.Fatalf("outside = %d, want 2: findings %+v", result.DifferencesOutsideBaselineDefect, result.Findings)
+	}
+	if got, want := findingPathSet(result)[:2], []string{"$.data.axes.y[4]", "$.data.axes.y[5]"}; len(result.Findings) != 8 || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("findings %v, want the two axis positions among 8", findingPathSet(result))
+	}
+}
+
+// A name whose value moved without a verified multiplier refuses the
+// plan even where the k-scaled totals put it inside a tie: repoC fans out
+// at k=2, repoB's baseline cell is 3 against 2 with no verified k, and the
+// candidate's name-ascending tie (A, B at 2) would otherwise explain the
+// baseline order C, B, A.
+func TestHeatmapRepoTouchpointsParity_UnexplainedValueInsideATieStaysOutside(t *testing.T) {
+	base := []string{
+		heatmapBoundaryCell("w1", "repoA", 2), heatmapBoundaryCell("w1", "repoB", 3),
+		heatmapBoundaryCell("w1", "repoC", 20), heatmapBoundaryCell("w2", "repoC", 20),
+	}
+	cand := []string{
+		heatmapBoundaryCell("w1", "repoA", 2), heatmapBoundaryCell("w1", "repoB", 2),
+		heatmapBoundaryCell("w1", "repoC", 10), heatmapBoundaryCell("w2", "repoC", 10),
+	}
+	baseline, candidate := heatmapAxisSnapshotsFromCells(t, base, cand, []string{"repoC", "repoB", "repoA"}, []string{"repoC", "repoA", "repoB"})
+	for _, opts := range []Options{heatmapRepoTouchpointsParity, heatmapRepoTouchpointsTeamScopedParity} {
+		result := Compare(baseline, candidate, opts)
+		if result.DifferencesOutsideBaselineDefect != 2 {
+			t.Fatalf("outside = %d, want 2 (both axis positions): findings %v", result.DifferencesOutsideBaselineDefect, findingPathSet(result))
+		}
+	}
+
+	// The same shape over hotspot_risk file keys: rc's two files carry
+	// the verified k=2, rb:b.go moved 3 against 2 with none.
+	base = []string{
+		heatmapBoundaryCell("w1", "o/ra:a.go", 2), heatmapBoundaryCell("w1", "o/rb:b.go", 3),
+		heatmapBoundaryCell("w1", "o/rc:c1.go", 20), heatmapBoundaryCell("w1", "o/rc:c2.go", 20),
+	}
+	cand = []string{
+		heatmapBoundaryCell("w1", "o/ra:a.go", 2), heatmapBoundaryCell("w1", "o/rb:b.go", 2),
+		heatmapBoundaryCell("w1", "o/rc:c1.go", 10), heatmapBoundaryCell("w1", "o/rc:c2.go", 10),
+	}
+	baseline, candidate = heatmapAxisSnapshotsFromCells(t, base, cand,
+		[]string{"o/rc:c1.go", "o/rc:c2.go", "o/rb:b.go", "o/ra:a.go"},
+		[]string{"o/rc:c1.go", "o/rc:c2.go", "o/ra:a.go", "o/rb:b.go"})
+	for _, opts := range []Options{heatmapHotspotRiskParity, heatmapHotspotRiskTeamScopedParity} {
+		result := Compare(baseline, candidate, opts)
+		if result.DifferencesOutsideBaselineDefect != 2 {
+			t.Fatalf("hotspot_risk: outside = %d, want 2 (both axis positions): findings %v", result.DifferencesOutsideBaselineDefect, findingPathSet(result))
+		}
+	}
+}
+
+func TestHeatmapCellExplained(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		base, cand float64
+		k          int
+		want       bool
+	}{
+		{"k=1 equal", 5, 5, 1, true},
+		{"k=1 unexplained", 3, 2, 1, false},
+		{"k=1 within float tolerance", 241.41495059667758, 241.41495059667756, 1, true},
+		{"k=0 (no verified k) equal", 5, 5, 0, true},
+		{"k=0 differs", 6, 5, 0, false},
+		{"k=2 doubled", 8, 4, 2, true},
+		{"k=2 tripled", 12, 4, 2, false},
+		{"k=2 unchanged nonzero", 4, 4, 2, false},
+		{"k=2 both zero", 0, 0, 2, true},
+		{"k=2 candidate zero", 4, 0, 2, false},
+		{"k=3 tripled", 12, 4, 3, true},
+		{"k=2 candidate larger", 4, 8, 2, false},
+	} {
+		if got := heatmapCellExplained(tc.base, tc.cand, tc.k); got != tc.want {
+			t.Errorf("%s: heatmapCellExplained(%v, %v, %d) = %t, want %t", tc.name, tc.base, tc.cand, tc.k, got, tc.want)
+		}
+	}
+}
+
+// A cell present on one leg only is not a multiplied cell: the plan
+// refuses.
+func TestHeatmapAxisRepoOrderShape_RefusesACellOnOneLegOnly(t *testing.T) {
+	baseCells := heatmapBoundaryCell("w1", "repoA", 4) + "," + heatmapBoundaryCell("w2", "repoA", 4) + "," + heatmapBoundaryCell("w1", "repoB", 6) + "," + heatmapBoundaryCell("w3", "repoB", 1)
+	candCells := heatmapBoundaryCell("w1", "repoA", 2) + "," + heatmapBoundaryCell("w2", "repoA", 2) + "," + heatmapBoundaryCell("w1", "repoB", 6)
+	baseData := heatmapAxisOrderBody(t, baseCells, []string{"repoA", "repoB"})
+	candData := heatmapAxisOrderBody(t, candCells, []string{"repoB", "repoA"})
+	if plan := buildHeatmapAxisRepoOrderPlan(heatmapAxisOrderTestShape(), baseData, candData); plan.valid {
+		t.Error("plan must refuse: repoB's w3 cell exists on the baseline only")
+	}
+	candCells = heatmapBoundaryCell("w1", "repoA", 2) + "," + heatmapBoundaryCell("w2", "repoA", 2) + "," + heatmapBoundaryCell("w1", "repoB", 6) + "," + heatmapBoundaryCell("w3", "repoB", 1) + "," + heatmapBoundaryCell("w4", "repoB", 1)
+	candData = heatmapAxisOrderBody(t, candCells, []string{"repoB", "repoA"})
+	if plan := buildHeatmapAxisRepoOrderPlan(heatmapAxisOrderTestShape(), baseData, candData); plan.valid {
+		t.Error("plan must refuse: repoB's w4 cell exists on the candidate only")
+	}
+	candCells = heatmapBoundaryCell("w1", "repoA", 2) + "," + heatmapBoundaryCell("w2", "repoA", 2) + "," + heatmapBoundaryCell("w1", "repoB", 6) + "," + heatmapBoundaryCell("w4", "repoB", 1)
+	candData = heatmapAxisOrderBody(t, candCells, []string{"repoB", "repoA"})
+	if plan := buildHeatmapAxisRepoOrderPlan(heatmapAxisOrderTestShape(), baseData, candData); plan.valid {
+		t.Error("plan must refuse: equal cell counts, different keys (w3 baseline, w4 candidate)")
 	}
 }

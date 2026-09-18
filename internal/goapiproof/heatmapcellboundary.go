@@ -77,23 +77,20 @@ import (
 //     own cells (every week it appears in, on its own leg) is admitted
 //     as a presence finding.
 //
-//  6. A `data.axes.y[N]` difference is admitted when BOTH the baseline
-//     name and the candidate name occupying position N are names this
-//     SAME plan already admitted -- as a rule-4 entrant/leaver, or as a
-//     rule-2 shared-value admission -- OR when the TWO-SIDED whole-list
-//     identity below holds for the whole comparison. Never a bare "any
-//     axis diff is fine": a swap between two names this plan has no
-//     opinion about (a genuine Go regression, or an unrelated ordering
-//     artifact) stays outside either way.
+//  6. A `data.axes.y[N]` difference is admitted only when the
+//     candidate's whole axis is axisOrder's own order of its totals
+//     (heatmapCandidateAxisInGoOrder), every cell present on both legs
+//     is explained by its repository's verified k
+//     (heatmapSharedCellsExplained), and the TWO-SIDED whole-list
+//     identity below holds for the whole comparison. There is no
+//     per-position admission: a position is never admitted because its
+//     two names were admitted elsewhere, which would admit a wrong top-N
+//     membership, an unexplained value or an unexplained baseline order
+//     around them.
 //
-//     TWO-SIDED WHOLE-LIST IDENTITY (rule 6b): rules 1-5 above admit
-//     every axis position EXCEPT one whose own file is untouched by any
-//     repository's fan-out but whose RANK still moves because its
-//     touched neighbours' own ranks move around it -- neither name at
-//     such a position is ever a rule-4/rule-2 admission, so rule 6 alone
-//     leaves it outside. This identity recovers that residual, over the
-//     UNION of baseFileTotal's and candFileTotal's own file sets (every
-//     file either page names):
+//     TWO-SIDED WHOLE-LIST IDENTITY (rule 6b), over the UNION of
+//     baseFileTotal's and candFileTotal's own file sets (every file
+//     either page names):
 //
 //     - per file f, the true total t(f) is: candFileTotal[f] when f is
 //     on the candidate page (present in candFileTotal, whether
@@ -154,10 +151,10 @@ import (
 //     admit anything -- it is an all-or-nothing property of this ONE
 //     comparison, never evaluated position by position. When it holds,
 //     every `data.axes.y[N]` finding is admitted, including the
-//     residual positions rules 1-5 alone could not reach. When either
-//     identity fails to reproduce its own target exactly, rule 6b
-//     admits NOTHING and axis admission falls back to rule 6's own
-//     per-position rule unchanged.
+//     positions whose own file is untouched but whose rank moved
+//     because its touched neighbours' ranks moved. When either identity
+//     fails to reproduce its own target exactly, no axis position is
+//     admitted.
 //
 // What this shape CANNOT catch: a repository whose shared cells carry a
 // non-integer or non-uniform ratio (the same kind of miss
@@ -236,8 +233,8 @@ type heatmapCellBoundaryPlan struct {
 	// 2).
 	admittedSharedValueCells map[string]bool
 	// admittedFileNames is the set of file names (the y-part of a cell
-	// key) rule 6's axis admission reads: every file rule 4 or rule 2
-	// admitted, regardless of which side it belongs to.
+	// key) rule 4 or rule 2 admitted, regardless of which side it
+	// belongs to.
 	admittedFileNames map[string]bool
 	// axisBaseline/axisCandidate are the decoded data.axes.y arrays
 	// themselves, kept on the plan so admits() can resolve a positional
@@ -247,10 +244,14 @@ type heatmapCellBoundaryPlan struct {
 	// axisIdentityHolds is rule 6b's own whole-comparison verdict: the
 	// union's t(f)/b(f) groupings are the identical partition, and both
 	// tie-group-aware identities reproduced their own target axis EXACTLY.
-	// true admits every data.axes.y[N] finding unconditionally; false
-	// (the default) leaves axis admission on rule 6's own per-position
-	// rule alone.
+	// Together with candidateAxisInGoOrder it is the only axis
+	// admission: true admits every data.axes.y[N] finding, false admits
+	// none.
 	axisIdentityHolds bool
+	// candidateAxisInGoOrder is the axis admission gate
+	// (heatmapCandidateAxisInGoOrder): rule 6 admits no axis position
+	// without it.
+	candidateAxisInGoOrder bool
 }
 
 // heatmapCellRowsSortedByKey returns cells' own rows ordered by their
@@ -380,6 +381,7 @@ func buildHeatmapCellBoundaryPlan(shape *HeatmapCellBoundaryShape, baselineData,
 	}
 	plan.axisBaseline = axisBase
 	plan.axisCandidate = axisCand
+	plan.candidateAxisInGoOrder = heatmapCandidateAxisInGoOrder(axisCand, candCells)
 
 	// Both totals accumulate over baseCells/candCells' own KEY-SORTED
 	// order, never raw map iteration: Go's own map iteration order is
@@ -517,11 +519,11 @@ func buildHeatmapCellBoundaryPlan(shape *HeatmapCellBoundaryShape, baselineData,
 	// comment's own derivation. Built over the UNION of baseFileTotal's
 	// and candFileTotal's own file sets, independent of which files rules
 	// 3/4 happened to admit: a tie or a reconstruction mismatch here
-	// refuses rule 6b outright and axis admission falls back to rule 6's
-	// own per-position rule, already fully evaluated above.
-	plan.axisIdentityHolds = heatmapAxisTwoSidedIdentityHolds(
-		baseFileTotal, candFileTotal, repoMultiplier, axisBase, axisCand, shape.Limit,
-	)
+	// refuses rule 6b outright and no axis position is admitted.
+	plan.axisIdentityHolds = heatmapSharedCellsExplained(baseCells, candCells, heatmapFileRepo, repoMultiplier) &&
+		heatmapAxisTwoSidedIdentityHolds(
+			baseFileTotal, candFileTotal, repoMultiplier, axisBase, axisCand, shape.Limit,
+		)
 
 	return plan
 }
@@ -727,14 +729,14 @@ func (p *heatmapCellBoundaryPlan) admits(finding Finding) bool {
 		}
 		return p.admittedBaselineOnlyCells[key] || p.admittedCandidateOnlyCells[key]
 	case p.shape.AxisListPath:
+		if !p.candidateAxisInGoOrder {
+			return false
+		}
 		idx, ok := edgeListIndex(finding.Path, p.shape.AxisListPath)
 		if !ok || idx < 0 || idx >= len(p.axisBaseline) || idx >= len(p.axisCandidate) {
 			return false
 		}
-		if p.axisIdentityHolds {
-			return true
-		}
-		return p.admittedFileNames[p.axisBaseline[idx]] && p.admittedFileNames[p.axisCandidate[idx]]
+		return p.axisIdentityHolds
 	}
 	return false
 }

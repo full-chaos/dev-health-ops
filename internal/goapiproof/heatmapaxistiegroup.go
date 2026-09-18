@@ -100,6 +100,22 @@ type heatmapAxisTieGroupPlan struct {
 	// rule 1 already pins them to the same length) inside a verified
 	// tie-group (rule 4).
 	admittedPositions map[int]bool
+	// candidateAxisInGoOrder is the axis admission gate
+	// (heatmapCandidateAxisInGoOrder); no position is admitted without it.
+	candidateAxisInGoOrder bool
+}
+
+// heatmapCandidateAxisInGoOrder is the check every heatmap axis
+// admission path requires before it admits any data.axes.y position:
+// the candidate's WHOLE axis equals axisOrder's own order of the
+// candidate's own per-name totals (descending, ties by name ascending).
+// A route list cut at a Limit carries cells for exactly its listed
+// names, so the same comparison pins the listed names to their own
+// sorted order. An admission path that checks only the positions that
+// differ between the legs would pass a candidate misordered identically
+// to the baseline elsewhere on the axis.
+func heatmapCandidateAxisInGoOrder(axisCand []string, candCells map[string]heatmapCellRow) bool {
+	return stringSlicesEqual(heatmapSortDescByTotal(heatmapSumTotalsByName(candCells)), axisCand)
 }
 
 // heatmapNameSet builds a set from a name list.
@@ -160,6 +176,11 @@ func heatmapNamesSortedAscending(names []string) bool {
 // order can change the total's own last bit run to run, which this
 // shape's own exact float64 equality checks (the contiguous equal-total
 // run walk and heatmapAxisTieGroupAdmits, both below) are sensitive to.
+// Sorted by key, one name's cells are summed x ascending: both planes'
+// own detail query returns one row per (x, name) ORDER BY x and sums its
+// axis totals in that row order, so this reproduces each plane's own
+// axis sort key bit for bit. HeatmapAxisRepoOrderShape reads its totals
+// from here for the same reason.
 func heatmapSumTotalsByName(cells map[string]heatmapCellRow) map[string]float64 {
 	totals := map[string]float64{}
 	if len(cells) == 0 {
@@ -190,6 +211,7 @@ func buildHeatmapAxisTieGroupPlan(shape *HeatmapAxisTieGroupShape, baselineData,
 		return plan
 	}
 
+	plan.candidateAxisInGoOrder = heatmapCandidateAxisInGoOrder(axisCand, candCells)
 	baseTotal := heatmapSumTotalsByName(baseCells)
 	candTotal := heatmapSumTotalsByName(candCells)
 
@@ -239,13 +261,17 @@ func buildHeatmapAxisTieGroupPlan(shape *HeatmapAxisTieGroupShape, baselineData,
 	plan.valid = true
 
 	// Rule 2/3: walk the candidate list's own contiguous equal-total
-	// runs; each is a tie-group CANDIDATE.
+	// runs; each is a tie-group CANDIDATE. A name is untouched when every
+	// one of its cells is present on both legs with the same value
+	// (heatmapCellExplained at k=1) -- an equal total alone is not an
+	// equal name: (1, 3) and (2, 2) share a total.
+	untouched := heatmapUntouchedNames(baseCells, candCells)
 	for lo := 0; lo < len(axisCand); {
 		hi := lo + 1
 		for hi < len(axisCand) && candTotal[axisCand[hi]] == candTotal[axisCand[lo]] {
 			hi++
 		}
-		if hi-lo > 1 && heatmapAxisTieGroupAdmits(axisBase, axisCand, baseTotal, candTotal, lo, hi) {
+		if hi-lo > 1 && heatmapAxisTieGroupAdmits(axisBase, axisCand, baseTotal, candTotal, untouched, lo, hi) {
 			for i := lo; i < hi; i++ {
 				plan.admittedPositions[i] = true
 			}
@@ -256,12 +282,44 @@ func buildHeatmapAxisTieGroupPlan(shape *HeatmapAxisTieGroupShape, baselineData,
 	return plan
 }
 
+// heatmapUntouchedNames reports, per name, whether every one of its cells
+// is present on both legs with the same value.
+func heatmapUntouchedNames(baseCells, candCells map[string]heatmapCellRow) map[string]bool {
+	untouched := map[string]bool{}
+	touched := map[string]bool{}
+	if len(baseCells) == 0 {
+		return untouched
+	}
+	for key, baseRow := range baseCells {
+		candRow, ok := candCells[key]
+		if !ok || !heatmapCellExplained(baseRow.value, candRow.value, 1) {
+			touched[baseRow.file] = true
+		}
+		untouched[baseRow.file] = true
+	}
+	if len(candCells) == 0 {
+		return map[string]bool{}
+	}
+	for key, candRow := range candCells {
+		if _, ok := baseCells[key]; !ok {
+			touched[candRow.file] = true
+		}
+	}
+	if len(touched) == 0 {
+		return untouched
+	}
+	for name := range touched {
+		untouched[name] = false
+	}
+	return untouched
+}
+
 // heatmapAxisTieGroupAdmits evaluates rules 2/3 for one candidate
 // contiguous equal-total run [lo, hi): the same name set occupies [lo,
 // hi) on the baseline leg, every one of those names' own total is
 // byte-identical across both legs, and the candidate's own order inside
 // [lo, hi) is name ascending.
-func heatmapAxisTieGroupAdmits(axisBase, axisCand []string, baseTotal, candTotal map[string]float64, lo, hi int) bool {
+func heatmapAxisTieGroupAdmits(axisBase, axisCand []string, baseTotal, candTotal map[string]float64, untouched map[string]bool, lo, hi int) bool {
 	if hi > len(axisBase) {
 		return false
 	}
@@ -271,7 +329,7 @@ func heatmapAxisTieGroupAdmits(axisBase, axisCand []string, baseTotal, candTotal
 		return false
 	}
 	for _, name := range candGroup {
-		if baseTotal[name] != candTotal[name] {
+		if baseTotal[name] != candTotal[name] || !untouched[name] {
 			return false
 		}
 	}
@@ -280,7 +338,7 @@ func heatmapAxisTieGroupAdmits(axisBase, axisCand []string, baseTotal, candTotal
 
 // admits reports whether one Finding is covered by this plan.
 func (p *heatmapAxisTieGroupPlan) admits(finding Finding) bool {
-	if p == nil || !p.valid {
+	if p == nil || !p.valid || !p.candidateAxisInGoOrder {
 		return false
 	}
 	if tieredPath(finding.Path) != p.shape.AxisListPath {

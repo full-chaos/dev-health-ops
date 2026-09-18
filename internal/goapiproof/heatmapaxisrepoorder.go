@@ -5,30 +5,30 @@ import "sort"
 // HeatmapAxisRepoOrderShape, set on a BaselineDefect, narrows that
 // defect's blanket "any leaf difference under Paths is covered" rule to
 // the axis-reordering consequence a verified per-repo integer fan-out
-// multiplier produces on a heatmap metric whose own y-axis IS the
-// repository identity directly (repo_touchpoints: y_field="repo",
-// services/heatmap.py's HEATMAP_METRICS entry), sorted by per-repo total
-// value descending, the generic branch of `_axis_order` (heatmap.py:
-// 122-139) / `axisOrder` (heatmap/response.go:157-222).
+// multiplier produces on a heatmap metric whose y-axis is sorted by
+// per-name total value descending, the generic branch of `_axis_order`
+// (heatmap.py:122-139) / `axisOrder` (heatmap/response.go:157-222). The
+// axis name is either the repository itself (repo_touchpoints:
+// y_field="repo") or a "<repo>:<path>" file key whose multiplier is its
+// repository's (hotspot_risk: y_field="file_key", FileKeyNames).
 //
 // This is DELIBERATELY narrower than HeatmapCellBoundaryShape
 // (heatmapcellboundary.go), which exists for hotspot_risk's own
-// LIMIT-bounded file list: HeatmapCellBoundaryShape's rule 3 requires
-// both reconstructed totals maps to be EXACTLY the route's fixed Limit
-// long, which a team-scoped repo_touchpoints request never reaches when
-// the team owns fewer repositories than the cap (confirmed live: a
-// 6-repository capture against Limit=20) -- there is no LIMIT boundary
-// to reason about at all when nothing entered or left either plane's
-// list, only a value-driven REORDER among the SAME repositories both
-// legs already agree on. This shape never admits a presence
-// (entrant/leaver) finding; that stays HeatmapCellBoundaryShape's own
-// job for the metrics/requests where a boundary is actually in play.
+// LIMIT-bounded file list crossing its boundary: HeatmapCellBoundaryShape's
+// rule 3 requires both reconstructed totals maps to be EXACTLY the
+// route's fixed Limit long, which a request never reaches when the scope
+// holds fewer names than the cap (confirmed live: a 6-repository
+// capture against Limit=20) -- there is no LIMIT boundary to reason
+// about when nothing entered or left either plane's list, only a
+// value-driven REORDER among the SAME names both legs already agree on.
+// This shape never admits a presence (entrant/leaver) finding; that
+// stays HeatmapCellBoundaryShape's own job where a boundary is in play.
 //
 // The shape this type verifies, over the two DECODED `data.cells`/
 // `data.axes.y` values:
 //
 //  1. The two legs' `data.cells` reconstruct to the EXACT SAME set of
-//     repository names (summing each repo's own cell values), and
+//     axis names (summing each name's own cell values), and
 //     `data.axes.y` on each leg is exactly that same name set, no more
 //     and no fewer. Anything else -- an entrant, a leaver, an axis name
 //     absent from the reconstructed set -- refuses the WHOLE plan: this
@@ -39,44 +39,25 @@ import "sort"
 //     (intsAgree) -- the SAME discipline HeatmapCellBoundaryShape's own
 //     rule 1 and SankeyRepoFanoutShape's own rule 1 already apply. A
 //     repository with no verified k defaults to k=1 (no known fan-out)
-//     for rule 3 below. At least one repository must carry a verified k,
+//     for rule 4 below. At least one repository must carry a verified k,
 //     or there is nothing this shape's own mechanism could have caused.
-//  3. The baseline's own axis is re-derived from the CANDIDATE's own
-//     per-repo totals, scaled by each repository's own verified k (k=1
-//     where unverified) -- never a fresh recomputation of the baseline's
-//     real totals, which is what proves the reorder is EXACTLY what the
-//     verified multiplier(s) alone produce, nothing more. This
-//     re-derived order must equal the OBSERVED baseline `data.axes.y`
-//     EXACTLY, position for position, whole list -- never a per-position
-//     "these two names happen to be admitted elsewhere" guess. The
-//     candidate's own observed axis, and the baseline's own observed
-//     axis against its own TRUE (unscaled) totals, are both checked the
-//     same way first, as a sanity precondition: a route whose own axis
-//     does not match a plain descending sort of its own totals is not
-//     one this shape's model of `_axis_order`/`axisOrder` actually
-//     describes, and is refused rather than guessed at.
-//  4. A tie refuses the whole plan only where its own placement is
-//     genuinely unverifiable -- never where rule 3's own re-derivation
-//     below already pins it down exactly. `_axis_order`'s (services/
-//     heatmap.py) own default branch breaks a tie on the REFERENCE
-//     plane's row ENCOUNTER order, which this shape cannot independently
-//     verify from the response body alone (ClickHouse's own row order
-//     for an un-ORDER-BY'd GROUP BY is not guaranteed to agree between
-//     the two planes even absent any fan-out) -- so a tie anywhere in
-//     the baseline's own totals, OR the candidate-scaled-by-k
-//     expected-baseline totals (the same uncertainty, one step removed:
-//     it predicts what the reference plane's own totals should be),
-//     refuses the whole plan outright. `axisOrder`'s (heatmap/
-//     response.go) own default branch is DIFFERENT: its own tie-break is
-//     name ascending, a deterministic function of (name, total) alone
-//     (see HeatmapAxisTieGroupShape's own doc comment, heatmapaxistie
-//     group.go) -- so a tie purely in the CANDIDATE's own totals is never
-//     refused here. Rule 3 below re-derives the candidate's own expected
-//     order with that SAME deterministic tie-break
-//     (heatmapSortDescByTotal) and requires an exact whole-list match
-//     against the observed candidate axis, which fails on its own the
-//     moment the real output disagrees with that mechanism -- never a
-//     guess, and no weaker than the baseline-side refusal above.
+//  3. The candidate's own axis must equal, position for position, a
+//     descending sort of its own per-repo totals with ties broken by
+//     name ascending -- `axisOrder`'s (heatmap/response.go) own
+//     deterministic rule, a function of (name, total) alone.
+//  4. Every cell is present on both legs, and every cell's baseline
+//     value is its candidate value under its repository's verified k
+//     (heatmapCellExplained; k=1 where unverified) -- the fan-out
+//     multiplies every cell of a repository and changes nothing else,
+//     so an order agreement never stands in for a value agreement. The
+//     baseline's own axis is then its own totals sorted descending and
+//     split into runs of exactly equal total: the SAME position range of
+//     the observed baseline axis must hold exactly that run's name set,
+//     any order inside a run. `_axis_order`'s (services/heatmap.py) own
+//     default branch breaks a tie on the reference plane's row encounter
+//     order, which the response body does not carry -- the same rule
+//     HeatmapAxisTieGroupShape and HeatmapCellBoundaryShape's rule 6b
+//     apply.
 //
 // What this shape CANNOT, and does not try to, certify: an axis reorder
 // caused by anything other than a verified integer per-repo multiplier
@@ -94,12 +75,25 @@ type HeatmapAxisRepoOrderShape struct {
 	// []string{"x", "y"}.
 	CellKeyFields []string
 	// RepoField names which of CellKeyFields' own object fields carries
-	// the repository identity DIRECTLY -- no "<repo>:<path>" parsing, e.g.
-	// "y" for repo_touchpoints (y_field="repo").
+	// the axis name, e.g. "y" (repo_touchpoints: y_field="repo";
+	// hotspot_risk: y_field="file_key").
 	RepoField string
+	// FileKeyNames marks axis names as "<repo>:<path>" file keys
+	// (hotspot_risk): a name's multiplier is its repository's
+	// (heatmapFileRepo), verified across every file of that repository.
+	// When false the name IS the repository (repo_touchpoints).
+	FileKeyNames bool
 	// AxisListPath is the dotted, index-free path to the repository-name
 	// axis LIST itself, e.g. "data.axes.y".
 	AxisListPath string
+}
+
+// repoOf is the repository an axis name belongs to.
+func (shape *HeatmapAxisRepoOrderShape) repoOf(name string) string {
+	if shape.FileKeyNames {
+		return heatmapFileRepo(name)
+	}
+	return name
 }
 
 // heatmapAxisRepoOrderPlan is one comparison's fully-evaluated admission
@@ -110,27 +104,65 @@ type heatmapAxisRepoOrderPlan struct {
 	valid bool
 }
 
-// heatmapHasTie reports whether two distinct keys of totals share the
-// exact same value -- see HeatmapAxisRepoOrderShape's own rule 4.
-func heatmapHasTie(totals map[string]float64) bool {
-	seen := make(map[float64]bool, len(totals))
-	for _, value := range totals {
-		if seen[value] {
-			return true
-		}
-		seen[value] = true
+// heatmapCellExplained reports whether a shared cell's baseline value is
+// its candidate value under its repository's verified multiplier k: for
+// k <= 1 equal within the comparator's own Tier B float tolerance (exact
+// for integer counts), for k >= 2 the same integer ratio
+// repoFanoutIntegerMultiplier verified k from, or both zero.
+func heatmapCellExplained(baseline, candidate float64, k int) bool {
+	if k <= 1 {
+		return withinFloatTolerance(baseline, candidate)
 	}
-	return false
+	if baseline == 0 && candidate == 0 {
+		return true
+	}
+	got, ok := repoFanoutIntegerMultiplier(baseline, candidate)
+	return ok && got == k
+}
+
+// heatmapSharedCellsExplained reports whether every cell present on both
+// legs is explained by its own repository's verified multiplier.
+func heatmapSharedCellsExplained(baseCells, candCells map[string]heatmapCellRow, repoOf func(string) string, repoMultiplier map[string]int) bool {
+	if len(candCells) == 0 {
+		return true
+	}
+	for key, candRow := range candCells {
+		baseRow, shared := baseCells[key]
+		if !shared {
+			continue
+		}
+		if !heatmapCellExplained(baseRow.value, candRow.value, repoMultiplier[repoOf(candRow.file)]) {
+			return false
+		}
+	}
+	return true
+}
+
+// heatmapAxisMatchesTieRuns reports whether axis lists exactly totals'
+// own names, descending by total, where each run of exactly equal total
+// occupies the same position range on axis as a name set (any order
+// inside the run).
+func heatmapAxisMatchesTieRuns(axis []string, totals map[string]float64) bool {
+	names := heatmapSortDescByTotal(totals)
+	if len(names) != len(axis) {
+		return false
+	}
+	for lo := 0; lo < len(names); {
+		hi := lo + 1
+		for hi < len(names) && totals[names[hi]] == totals[names[lo]] {
+			hi++
+		}
+		if !heatmapNameSetsEqual(heatmapNameSet(axis[lo:hi]), heatmapNameSet(names[lo:hi])) {
+			return false
+		}
+		lo = hi
+	}
+	return true
 }
 
 // heatmapSortDescByTotal returns totals' own keys sorted by value
-// descending, ties (should any survive the caller's own heatmapHasTie
-// check) broken by name ascending purely for a DETERMINISTIC result --
-// Go's own map iteration order is randomized per run, so an unbroken tie
-// fed through a non-stable sort would otherwise make this function's own
-// result (and any caller comparing it) flaky rather than reliably wrong.
-// Only meaningful as a TOTAL (unique, tie-break-independent) order when
-// totals carries no tie at all -- callers check heatmapHasTie first.
+// descending, ties broken by name ascending -- axisOrder's own rule, and
+// a deterministic result whatever Go's map iteration order.
 func heatmapSortDescByTotal(totals map[string]float64) []string {
 	names := make([]string, 0, len(totals))
 	for name := range totals {
@@ -178,14 +210,8 @@ func buildHeatmapAxisRepoOrderPlan(shape *HeatmapAxisRepoOrderShape, baselineDat
 		return plan
 	}
 
-	baseRepoTotal := map[string]float64{}
-	for _, row := range baseCells {
-		baseRepoTotal[row.file] = baseRepoTotal[row.file] + row.value
-	}
-	candRepoTotal := map[string]float64{}
-	for _, row := range candCells {
-		candRepoTotal[row.file] = candRepoTotal[row.file] + row.value
-	}
+	baseRepoTotal := heatmapSumTotalsByName(baseCells)
+	candRepoTotal := heatmapSumTotalsByName(candCells)
 
 	// Rule 1: identical repository sets, no entrant/leaver, on both
 	// data.cells and data.axes.y.
@@ -236,7 +262,8 @@ func buildHeatmapAxisRepoOrderPlan(shape *HeatmapAxisRepoOrderShape, baselineDat
 			continue
 		}
 		if k, ok := repoFanoutIntegerMultiplier(baseRow.value, candRow.value); ok {
-			repoKs[candRow.file] = append(repoKs[candRow.file], k)
+			repo := shape.repoOf(candRow.file)
+			repoKs[repo] = append(repoKs[repo], k)
 		}
 	}
 	repoMultiplier := map[string]int{}
@@ -252,38 +279,31 @@ func buildHeatmapAxisRepoOrderPlan(shape *HeatmapAxisRepoOrderShape, baselineDat
 		return plan
 	}
 
-	// Rule 3: expected baseline totals, scaled from the candidate's own
-	// totals by each repository's own verified k (k=1 where unverified).
-	expectedBaseTotal := make(map[string]float64, len(candRepoTotal))
-	for repo, total := range candRepoTotal {
-		k := 1
-		if kk, ok := repoMultiplier[repo]; ok {
-			k = kk
+	// Rule 4, values: every cell is present on both legs and explained by its
+	// repository's own verified k (k=1 where none) -- a name whose value
+	// moved for any other reason refuses the plan, whatever the axis
+	// order looks like.
+	if len(baseCells) != len(candCells) {
+		return plan
+	}
+	for key := range baseCells {
+		if _, ok := candCells[key]; !ok {
+			return plan
 		}
-		expectedBaseTotal[repo] = total * float64(k)
 	}
-
-	// Rule 4: refuse on a tie whose placement this plan cannot verify --
-	// see this shape's own doc comment. A tie purely in the candidate's
-	// own totals is NOT refused here: rule 3 immediately below already
-	// re-derives the candidate's own expected order with axisOrder's own
-	// deterministic name-ascending tie-break and requires an exact
-	// whole-list match, so a candidate order that disagrees with that
-	// mechanism refuses on its own.
-	if heatmapHasTie(baseRepoTotal) || heatmapHasTie(expectedBaseTotal) {
+	if !heatmapSharedCellsExplained(baseCells, candCells, shape.repoOf, repoMultiplier) {
 		return plan
 	}
 
-	// Rule 3, continued: sanity precondition (both legs' own observed
-	// axis matches a plain descending sort of their own real totals),
-	// then the actual cross-leg re-derivation.
-	if !stringSlicesEqual(heatmapSortDescByTotal(baseRepoTotal), axisBase) {
+	// Rule 3: the candidate's own axis is axisOrder's own deterministic
+	// order of its own totals, whole list -- the axis admission gate.
+	if !heatmapCandidateAxisInGoOrder(axisCand, candCells) {
 		return plan
 	}
-	if !stringSlicesEqual(heatmapSortDescByTotal(candRepoTotal), axisCand) {
-		return plan
-	}
-	if !stringSlicesEqual(heatmapSortDescByTotal(expectedBaseTotal), axisBase) {
+	// Rule 4, order: the baseline's own axis matches its own totals run
+	// by run as name sets; the values rule above already pinned those
+	// totals to the candidate's scaled by k.
+	if !heatmapAxisMatchesTieRuns(axisBase, baseRepoTotal) {
 		return plan
 	}
 

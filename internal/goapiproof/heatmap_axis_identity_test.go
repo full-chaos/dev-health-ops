@@ -358,11 +358,10 @@ func TestHeatmapAxisIdentityIIBaselineMatches_OvershootingGroupRefuses(t *testin
 // sharing the exact same hotspot_risk total on both legs) predates this
 // port's own name-ascending tiebreak: the candidate's own order inside
 // it is "internal/..." before "contracts/...", the OPPOSITE of
-// name-ascending, so identity (i) refuses for exactly that reason. The
-// outcome is UNCHANGED from before rule 6b existed: exactly 2
-// axis-position findings stay outside every declaration -- the same
-// ripple mechanism TestHeatmapCellBoundaryShape_TwoSidedAxisIdentityAdmitsCleanRipple
-// proves rule 6b DOES resolve once its own premises hold.
+// name-ascending, so identity (i) refuses for exactly that reason, and
+// the axis admission gate (heatmapCandidateAxisInGoOrder) refuses every
+// axis position: the candidate axis is not axisOrder's own order. All 20
+// axis findings stay outside; every cell-level finding stays covered.
 func TestHeatmapHotspotRiskParity_RealPageCutCaptureAxisRippleStaysOutside(t *testing.T) {
 	baseline := heatmapDirectionSnapshotFromFileT(t, heatmapAxisIdentityBaselinePath)
 	candidate := heatmapDirectionSnapshotFromFileT(t, heatmapAxisIdentityCandidatePath)
@@ -383,11 +382,11 @@ func TestHeatmapHotspotRiskParity_RealPageCutCaptureAxisRippleStaysOutside(t *te
 	if len(result.Findings) != 98 {
 		t.Fatalf("findings = %d, want 98", len(result.Findings))
 	}
-	if result.DifferencesOutsideBaselineDefect != 2 {
-		t.Fatalf("outside = %d, want 2 (the axis ripple, unresolved because the capture predates the name-ascending tiebreak) -- findings %+v", result.DifferencesOutsideBaselineDefect, result.Findings)
+	if result.DifferencesOutsideBaselineDefect != 20 {
+		t.Fatalf("outside = %d, want 20 (every axis finding: the capture predates the name-ascending tiebreak) -- findings %+v", result.DifferencesOutsideBaselineDefect, result.Findings)
 	}
-	if result.OutsideByShape["value"] != 2 || len(result.OutsideByShape) != 1 {
-		t.Fatalf("outsideByShape = %v, want exactly {value: 2}", result.OutsideByShape)
+	if result.OutsideByShape["value"] != 20 || len(result.OutsideByShape) != 1 {
+		t.Fatalf("outsideByShape = %v, want exactly {value: 20}", result.OutsideByShape)
 	}
 }
 
@@ -505,5 +504,35 @@ func TestHeatmapCellBoundaryShape_TwoSidedAxisIdentityAdmitsACorroboratedLeaverE
 	result := Compare(base, cand, heatmapBoundaryOptions("CHAOS-TEST-RANKSHIFT", 20))
 	if result.DifferencesOutsideBaselineDefect != 0 {
 		t.Fatalf("outside = %d, want 0: findings %+v", result.DifferencesOutsideBaselineDefect, result.Findings)
+	}
+}
+
+// Rule 6b refuses when a shared file's value moved without its
+// repository's verified multiplier, even where the k-scaled totals put
+// it inside a tie: ops:y.go's baseline 9 against candidate 8 (no verified
+// k for ops) would otherwise sit in the 8/8 run with ops:x.go.
+func TestHeatmapCellBoundaryShape_TwoSidedAxisIdentityRefusesAnUnexplainedValueInsideATie(t *testing.T) {
+	shared := []heatmapAxisEntry{
+		{"repo-a:big.go", 20, 10},
+		{"repo-a:mid.go", 16, 8},
+		{"ops:x.go", 8, 8},
+		{"ops:y.go", 9, 8},
+	}
+	baseline, candidate := heatmapAxisEntrantLeaverFixture(t, shared,
+		"repo-a:leaver.go", 0.002, "repo-x:entrant.go", 0.0015,
+		[]string{"repo-a:big.go", "repo-a:mid.go", "ops:y.go", "ops:x.go", "repo-a:leaver.go"},
+		[]string{"repo-a:big.go", "ops:x.go", "ops:y.go", "repo-a:mid.go", "repo-x:entrant.go"},
+	)
+	plan := buildHeatmapCellBoundaryPlan(heatmapAxisShape(5), baseline.Data, candidate.Data)
+	if !plan.valid {
+		t.Fatal("plan should be valid: both legs carry exactly 5 distinct files")
+	}
+	if plan.axisIdentityHolds {
+		t.Fatal("rule 6b must refuse: ops:y.go's value moved with no verified multiplier for ops")
+	}
+	for _, idx := range []int{1, 2, 3} {
+		if plan.admits(Finding{Kind: FindingMismatch, Path: fmt.Sprintf("$.data.axes.y[%d]", idx), Shape: ShapeValue}) {
+			t.Errorf("axis position %d must stay outside", idx)
+		}
 	}
 }

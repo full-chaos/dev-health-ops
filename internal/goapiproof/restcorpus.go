@@ -2336,7 +2336,7 @@ var heatmapRepoTouchpointsAxisTieGroupDefect = BaselineDefect{
 // never because the quantity itself can take a fractional value.
 var heatmapRepoTouchpointsParity = Options{
 	OrderInsensitiveLists: heatmapDedupParity.OrderInsensitiveLists,
-	BaselineDefects:       append(append([]BaselineDefect{}, heatmapDedupParity.BaselineDefects...), heatmapRepoTouchpointsAxisTieGroupDefect),
+	BaselineDefects:       append(append([]BaselineDefect{}, heatmapDedupParity.BaselineDefects...), heatmapRepoTouchpointsAxisTieGroupDefect, heatmapRepoTouchpointsAxisOrderDefect),
 	NumericLeavesDeclared: true,
 	IntegerLeaves: map[string]string{
 		"data.cells.value": "repo_touchpoints' own toFloat64(count()) (heatmap/queries.go fetchRepoTouchpoints) -- a bare row count, cast to float64 only so the driver can scan it, never a ClickHouse floating-point aggregate.",
@@ -2410,7 +2410,7 @@ var heatmapHotspotRiskAxisTieGroupDefect = BaselineDefect{
 
 var heatmapHotspotRiskParity = Options{
 	OrderInsensitiveLists: heatmapDedupParity.OrderInsensitiveLists,
-	BaselineDefects:       append(append([]BaselineDefect{}, heatmapDedupParity.BaselineDefects...), heatmapHotspotRiskCellBoundaryDefect, heatmapHotspotRiskAxisTieGroupDefect),
+	BaselineDefects:       append(append([]BaselineDefect{}, heatmapDedupParity.BaselineDefects...), heatmapHotspotRiskCellBoundaryDefect, heatmapHotspotRiskAxisTieGroupDefect, heatmapHotspotRiskAxisOrderDefect),
 	NumericLeavesDeclared: true,
 	FloatTierB: map[string]string{
 		"data.cells.value": "hotspot_risk's own toFloat64(sum(hotspot_score)) (heatmap/queries.go fetchHotspotRisk) over the Float64 hotspot_score column -- a genuine merged ClickHouse float aggregate.",
@@ -2495,10 +2495,11 @@ var heatmapRepoTouchpointsTeamScopeSubsetDefect = BaselineDefect{
 // same capture sits at 6 repositories, not 20) -- there is no boundary to
 // reason about, only a reorder among the SAME repository set both legs
 // already agree on. See HeatmapAxisRepoOrderShape's own doc comment
-// (heatmapaxisrepoorder.go) for the full derivation and its own
-// baseline-side tie refusal -- a tie purely in the candidate's own
-// totals is admitted whenever it matches axisOrder's own deterministic
-// name-ascending tie-break exactly.
+// (heatmapaxisrepoorder.go) for the full derivation: the candidate's axis
+// must be axisOrder's own name-ascending order of its totals exactly, and
+// the baseline's axis must match its own and the k-scaled totals run by
+// run, any order inside a run of equal totals. Bound at every scope: the
+// reference plane joins repos without FINAL whatever the scope.
 var heatmapRepoTouchpointsAxisOrderDefect = BaselineDefect{
 	Ticket:             "CHAOS-5955",
 	Reason:             "fetchRepoTouchpoints' own top-repository selection and per-day detail query (api/queries/heatmap.py:85-135, heatmap/queries.go:143-188) both derive from repos, ReplacingMergeTree(last_synced), joined without FINAL on the reference plane and FINAL on this port. A physically-duplicated repos row inflates every commit-count cell that repository owns by the same integer factor -- already admitted directionally on data.cells.value by heatmapDedupParity's own KeyedDirectionShape entry above -- which can also reorder data.axes.y, whose own sort key (_axis_order's/axisOrder's generic branch) is the SAME per-repository total the fan-out inflates. Go is correct.",
@@ -2509,6 +2510,27 @@ var heatmapRepoTouchpointsAxisOrderDefect = BaselineDefect{
 		CellsListPath: "data.cells",
 		CellKeyFields: []string{"x", "y"},
 		RepoField:     "y",
+		AxisListPath:  "data.axes.y",
+	},
+}
+
+// heatmapHotspotRiskAxisOrderDefect is heatmapRepoTouchpointsAxisOrderDefect's
+// own mechanism over hotspot_risk's file axis, where no file enters or
+// leaves either plane's list (a list shorter than the top-20 cap, or a
+// full list whose file set is unchanged): each file's multiplier is its
+// repository's, verified by at least two agreeing shared cells of that
+// repository. A boundary crossing stays heatmapHotspotRiskCellBoundaryDefect's.
+var heatmapHotspotRiskAxisOrderDefect = BaselineDefect{
+	Ticket:             "CHAOS-5955",
+	Reason:             "fetchHotspotRisk's own per-week detail query (api/queries/heatmap.py, heatmap/queries.go) joins repos, ReplacingMergeTree(last_synced), without FINAL on the reference plane and FINAL on this port. A physically-duplicated repos row inflates every hotspot cell of that repository's files by the same integer factor -- admitted directionally on data.cells.value by heatmapDedupParity's own KeyedDirectionShape entry -- which can also reorder data.axes.y, whose own sort key is the same per-file total the fan-out inflates. Go is correct.",
+	Paths:              []string{"data.axes.y"},
+	Intermittent:       true,
+	IntermittentReason: "present only while repos holds an unmerged physical version of a repository whose files' inflated totals cross a neighbouring file's total in this window's axis ranking; a comparison taken after the next background merge shows no divergence",
+	HeatmapAxisRepoOrderShape: &HeatmapAxisRepoOrderShape{
+		CellsListPath: "data.cells",
+		CellKeyFields: []string{"x", "y"},
+		RepoField:     "y",
+		FileKeyNames:  true,
 		AxisListPath:  "data.axes.y",
 	},
 }
@@ -2560,7 +2582,7 @@ var heatmapRepoTouchpointsTeamScopedParity = Options{
 	OrderInsensitiveLists: heatmapRepoTouchpointsParity.OrderInsensitiveLists,
 	NumericLeavesDeclared: true,
 	IntegerLeaves:         heatmapRepoTouchpointsParity.IntegerLeaves,
-	BaselineDefects:       append(append([]BaselineDefect{}, heatmapRepoTouchpointsParity.BaselineDefects...), heatmapRepoTouchpointsTeamScopeSubsetDefect, heatmapRepoTouchpointsAxisOrderDefect),
+	BaselineDefects:       append(append([]BaselineDefect{}, heatmapRepoTouchpointsParity.BaselineDefects...), heatmapRepoTouchpointsTeamScopeSubsetDefect),
 }
 
 var heatmapHotspotRiskTeamScopedParity = Options{

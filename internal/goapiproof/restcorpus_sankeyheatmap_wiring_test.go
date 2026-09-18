@@ -48,10 +48,11 @@ func TestSankeyAndHeatmapDedupDeclarationsCarryShapes(t *testing.T) {
 	// heatmapRepoTouchpointsParity and heatmapHotspotRiskParity are the
 	// two heatmap Options values that do NOT carry heatmapDedupParity's
 	// own BaselineDefects unchanged: each ADDS its own
-	// HeatmapAxisTieGroupShape entry on top (a genuine axis-total tie's
-	// deterministic tiebreak, heatmapaxistiegroup.go), and
-	// heatmapHotspotRiskParity carries a SECOND appended entry besides
-	// (HeatmapCellBoundaryShape, narrowing hotspot_risk's own
+	// HeatmapAxisTieGroupShape entry (a genuine axis-total tie's
+	// deterministic tiebreak, heatmapaxistiegroup.go) and its own
+	// HeatmapAxisRepoOrderShape entry (a verified fan-out reorder with no
+	// entrant or leaver), and heatmapHotspotRiskParity carries a
+	// HeatmapCellBoundaryShape entry besides (hotspot_risk's own
 	// top-N-boundary consequence the shared KeyedDirectionShape entry
 	// cannot reach). Distinguished by WHICH shape each entry carries,
 	// not by ticket string or slice length alone, the same discipline
@@ -62,14 +63,17 @@ func TestSankeyAndHeatmapDedupDeclarationsCarryShapes(t *testing.T) {
 	if !reflect.DeepEqual(heatmapRepoTouchpointsParity.OrderInsensitiveLists, heatmapDedupParity.OrderInsensitiveLists) {
 		t.Fatalf("heatmapRepoTouchpointsParity.OrderInsensitiveLists = %+v, want the same as heatmapDedupParity's own %+v", heatmapRepoTouchpointsParity.OrderInsensitiveLists, heatmapDedupParity.OrderInsensitiveLists)
 	}
-	if len(heatmapRepoTouchpointsParity.BaselineDefects) != len(heatmapDedupParity.BaselineDefects)+1 {
-		t.Fatalf("heatmapRepoTouchpointsParity has %d BaselineDefects, want %d (heatmapDedupParity's own plus its own appended entry)", len(heatmapRepoTouchpointsParity.BaselineDefects), len(heatmapDedupParity.BaselineDefects)+1)
+	if len(heatmapRepoTouchpointsParity.BaselineDefects) != len(heatmapDedupParity.BaselineDefects)+2 {
+		t.Fatalf("heatmapRepoTouchpointsParity has %d BaselineDefects, want %d (heatmapDedupParity's own plus its own two appended entries)", len(heatmapRepoTouchpointsParity.BaselineDefects), len(heatmapDedupParity.BaselineDefects)+2)
 	}
 	if !reflect.DeepEqual(heatmapRepoTouchpointsParity.BaselineDefects[:len(heatmapDedupParity.BaselineDefects)], heatmapDedupParity.BaselineDefects) {
 		t.Fatalf("heatmapRepoTouchpointsParity.BaselineDefects[:%d] = %+v, want the same as heatmapDedupParity's own %+v -- a future edit must not silently drop or alter the inherited citation", len(heatmapDedupParity.BaselineDefects), heatmapRepoTouchpointsParity.BaselineDefects[:len(heatmapDedupParity.BaselineDefects)], heatmapDedupParity.BaselineDefects)
 	}
 	if heatmapRepoTouchpointsParity.BaselineDefects[len(heatmapDedupParity.BaselineDefects)].HeatmapAxisTieGroupShape == nil {
-		t.Fatal("heatmapRepoTouchpointsParity's own appended entry carries no HeatmapAxisTieGroupShape")
+		t.Fatal("heatmapRepoTouchpointsParity's own first appended entry carries no HeatmapAxisTieGroupShape")
+	}
+	if shape := heatmapRepoTouchpointsParity.BaselineDefects[len(heatmapDedupParity.BaselineDefects)+1].HeatmapAxisRepoOrderShape; shape == nil || shape.FileKeyNames {
+		t.Fatalf("heatmapRepoTouchpointsParity's own second appended entry = %+v, want a HeatmapAxisRepoOrderShape over repository names", shape)
 	}
 
 	if !heatmapHotspotRiskParity.NumericLeavesDeclared {
@@ -78,8 +82,8 @@ func TestSankeyAndHeatmapDedupDeclarationsCarryShapes(t *testing.T) {
 	if !reflect.DeepEqual(heatmapHotspotRiskParity.OrderInsensitiveLists, heatmapDedupParity.OrderInsensitiveLists) {
 		t.Fatalf("heatmapHotspotRiskParity.OrderInsensitiveLists = %+v, want the same as heatmapDedupParity's own %+v", heatmapHotspotRiskParity.OrderInsensitiveLists, heatmapDedupParity.OrderInsensitiveLists)
 	}
-	if len(heatmapHotspotRiskParity.BaselineDefects) != len(heatmapDedupParity.BaselineDefects)+2 {
-		t.Fatalf("heatmapHotspotRiskParity has %d BaselineDefects, want %d (heatmapDedupParity's own plus its own two appended entries)", len(heatmapHotspotRiskParity.BaselineDefects), len(heatmapDedupParity.BaselineDefects)+2)
+	if len(heatmapHotspotRiskParity.BaselineDefects) != len(heatmapDedupParity.BaselineDefects)+3 {
+		t.Fatalf("heatmapHotspotRiskParity has %d BaselineDefects, want %d (heatmapDedupParity's own plus its own three appended entries)", len(heatmapHotspotRiskParity.BaselineDefects), len(heatmapDedupParity.BaselineDefects)+3)
 	}
 	if !reflect.DeepEqual(heatmapHotspotRiskParity.BaselineDefects[:len(heatmapDedupParity.BaselineDefects)], heatmapDedupParity.BaselineDefects) {
 		t.Fatalf("heatmapHotspotRiskParity.BaselineDefects[:%d] = %+v, want the same as heatmapDedupParity's own %+v -- a future edit must not silently drop or alter the inherited citation", len(heatmapDedupParity.BaselineDefects), heatmapHotspotRiskParity.BaselineDefects[:len(heatmapDedupParity.BaselineDefects)], heatmapDedupParity.BaselineDefects)
@@ -89,6 +93,9 @@ func TestSankeyAndHeatmapDedupDeclarationsCarryShapes(t *testing.T) {
 	}
 	if heatmapHotspotRiskParity.BaselineDefects[len(heatmapDedupParity.BaselineDefects)+1].HeatmapAxisTieGroupShape == nil {
 		t.Fatal("heatmapHotspotRiskParity's own second appended entry carries no HeatmapAxisTieGroupShape")
+	}
+	if shape := heatmapHotspotRiskParity.BaselineDefects[len(heatmapDedupParity.BaselineDefects)+2].HeatmapAxisRepoOrderShape; shape == nil || !shape.FileKeyNames {
+		t.Fatalf("heatmapHotspotRiskParity's own third appended entry = %+v, want a HeatmapAxisRepoOrderShape over file keys", shape)
 	}
 	if _, ok := heatmapReviewWaitDensityParity.FloatTierB["data.cells.value"]; !ok {
 		t.Fatalf("heatmapReviewWaitDensityParity.FloatTierB = %+v, missing data.cells.value", heatmapReviewWaitDensityParity.FloatTierB)

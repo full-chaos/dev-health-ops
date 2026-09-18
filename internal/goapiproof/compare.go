@@ -2253,8 +2253,8 @@ func compareNumber(baseline, candidate float64, path string, opts Options, track
 	// exists and is a merged aggregate", and a field that compares equal
 	// every run still satisfies it.
 
-	tolerance := math.Max(floatTolerance, floatTolerance*math.Max(math.Abs(baseline), math.Abs(candidate)))
-	if math.Abs(baseline-candidate) > tolerance {
+	if !withinFloatTolerance(baseline, candidate) {
+		tolerance := math.Max(floatTolerance, floatTolerance*math.Max(math.Abs(baseline), math.Abs(candidate)))
 		return []Finding{{
 			Kind:   FindingMismatch,
 			Path:   path,
@@ -2263,6 +2263,13 @@ func compareNumber(baseline, candidate float64, path string, opts Options, track
 		}}
 	}
 	return nil
+}
+
+// withinFloatTolerance is the Tier B float comparison: equal up to
+// floatTolerance, relative to the larger magnitude (absolute below 1).
+func withinFloatTolerance(baseline, candidate float64) bool {
+	tolerance := math.Max(floatTolerance, floatTolerance*math.Max(math.Abs(baseline), math.Abs(candidate)))
+	return math.Abs(baseline-candidate) <= tolerance
 }
 
 // compareDict applies envelopeKeys to THIS dict's own key-presence check

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/goapidigest"
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
+	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 )
 
 // This file drives run() and parseFlags() end to end, against httptest
@@ -244,8 +246,32 @@ func TestRunBoundsTheOpeningBuildinfoReadToTheConfiguredTimeout(t *testing.T) {
 // refused by name (document_digest_drift) rather than measured, which is
 // the correct, expected shape for an operation this run was not asked to
 // exercise.
+const e2eBuildSHA = "b18e56fa79cfe20ce0f75df148144b832d92be36"
+
+// withProverCommit stamps this test binary's own build commit the way
+// -ldflags stamps a released prover, restored on cleanup.
+func withProverCommit(t *testing.T, commit string) {
+	t.Helper()
+	previous := version.Commit
+	version.Commit = commit
+	t.Cleanup(func() { version.Commit = previous })
+}
+
 func TestRunProvesTwoOperationsEndToEnd(t *testing.T) {
-	const buildSHA = "b18e56fa79cfe20ce0f75df148144b832d92be36"
+	withProverCommit(t, e2eBuildSHA)
+	stdout, runErr, reportPath, pool := runTwoOperationsEndToEnd(t)
+	if runErr != nil {
+		t.Fatalf("run(): %v\nstdout:\n%s", runErr, stdout)
+	}
+	assertTwoOperationsProven(t, stdout, reportPath, pool)
+}
+
+// runTwoOperationsEndToEnd drives run() against fake registry,
+// /buildinfo and edge servers plus a fake receipt store; extraArgs are
+// appended to the operator's own flags.
+func runTwoOperationsEndToEnd(t *testing.T, extraArgs ...string) (stdout string, runErr error, reportPath string, pool *e2ePool) {
+	t.Helper()
+	const buildSHA = e2eBuildSHA
 
 	featureFlagsDoc := "query FeatureFlags { featureFlags { key } }"
 	hotspotsDoc := "query Hotspots { hotspots { rows { filePath repoId churnCommits30d blameConcentration riskScore } } }"
@@ -342,7 +368,7 @@ func TestRunProvesTwoOperationsEndToEnd(t *testing.T) {
 		t.Fatalf("write documents file: %v", err)
 	}
 
-	pool := &e2ePool{routingRows: [][]any{
+	pool = &e2ePool{routingRows: [][]any{
 		{"featureFlags", featureFlagsDigest, "canary", buildSHA},
 		{"hotspots", hotspotsDigest, "canary", buildSHA},
 	}}
@@ -350,11 +376,10 @@ func TestRunProvesTwoOperationsEndToEnd(t *testing.T) {
 
 	edgeToken := syntheticJWT(t, map[string]string{"sub": "edge"})
 	proofToken := syntheticJWT(t, map[string]string{"sub": "proof"})
-	reportPath := filepath.Join(t.TempDir(), "report.json")
+	reportPath = filepath.Join(t.TempDir(), "report.json")
 
-	var runErr error
-	stdout := captureStdout(t, func() {
-		runErr = runCLI(t, []string{
+	stdout = captureStdout(t, func() {
+		runErr = runCLI(t, append([]string{
 			"-registry-url=" + registry.URL + "/registry",
 			"-buildinfo-url=" + buildinfo.URL + "/buildinfo",
 			"-edge-url=" + edge.URL + "/graphql",
@@ -368,12 +393,13 @@ func TestRunProvesTwoOperationsEndToEnd(t *testing.T) {
 			"-proof-bearer-exec=" + jsonArgv(t, e2eBearerHelper(t, proofToken)),
 			"-report=" + reportPath,
 			"-timeout=5s",
-		})
+		}, extraArgs...))
 	})
-	if runErr != nil {
-		t.Fatalf("run(): %v\nstdout:\n%s", runErr, stdout)
-	}
+	return stdout, runErr, reportPath, pool
+}
 
+func assertTwoOperationsProven(t *testing.T, stdout, reportPath string, pool *e2ePool) {
+	t.Helper()
 	if !strings.Contains(stdout, "executed=2") {
 		t.Fatalf("stdout summary line must report executed=2: %s", stdout)
 	}
@@ -442,4 +468,69 @@ func TestRunProvesTwoOperationsEndToEnd(t *testing.T) {
 	if inserts := pool.proofRunInserts(); len(inserts) != 2 {
 		t.Fatalf("fake pool recorded %d go_api_proof_run inserts, want 2: %+v", len(inserts), inserts)
 	}
+}
+
+// A prover built from another commit than the candidate refuses by name
+// before measuring anything: no report, no receipt.
+func TestRunRefusesAProverBuiltFromAnotherCommit(t *testing.T) {
+	for _, commit := range []string{"a38c5bb70bc926e10059f8b13d63d098d6756ba5", "unknown", ""} {
+		t.Run("prover="+commit, func(t *testing.T) {
+			withProverCommit(t, commit)
+			stdout, runErr, reportPath, pool := runTwoOperationsEndToEnd(t)
+			if !errors.Is(runErr, goapiproof.ErrProverBuildSkew) || !strings.Contains(runErr.Error(), proverBuildSkewFlag) {
+				t.Fatalf("run() = %v, want ErrProverBuildSkew naming %s\nstdout:\n%s", runErr, proverBuildSkewFlag, stdout)
+			}
+			if want := goapiproof.NewProverBuild(version.Info{Commit: commit}, e2eBuildSHA, false).Line(); !strings.Contains(stdout, "go-api-prove: "+want) {
+				t.Fatalf("stdout must carry the build line %q before refusing:\n%s", want, stdout)
+			}
+			if _, err := os.Stat(reportPath); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("a refused run wrote a report (stat err %v)", err)
+			}
+			if inserts := pool.proofRunInserts(); len(inserts) != 0 {
+				t.Fatalf("a refused run wrote %d receipts", len(inserts))
+			}
+		})
+	}
+}
+
+// The override runs the skewed prover and the report names both commits
+// and the allowed skew.
+func TestRunWithSkewOverrideRecordsBothCommits(t *testing.T) {
+	const proverCommit = "a38c5bb70bc926e10059f8b13d63d098d6756ba5"
+	withProverCommit(t, proverCommit)
+	stdout, runErr, reportPath, pool := runTwoOperationsEndToEnd(t, proverBuildSkewFlag)
+	if runErr != nil {
+		t.Fatalf("run(): %v\nstdout:\n%s", runErr, stdout)
+	}
+	assertTwoOperationsProven(t, stdout, reportPath, pool)
+	raw, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatalf("read report: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("decode report: %v", err)
+	}
+	for field, want := range map[string]any{
+		"prover_build":              proverCommit,
+		"candidate_build":           e2eBuildSHA,
+		"prover_build_skew":         true,
+		"prover_build_skew_allowed": true,
+		"prover_build_modified":     false,
+	} {
+		if decoded[field] != want {
+			t.Fatalf("report %s = %v, want %v", field, decoded[field], want)
+		}
+	}
+}
+
+// -timeout=0 means no per-read deadline on every bounded read of the run
+// (/registry, /buildinfo, the stability re-read and each leg).
+func TestRunWithZeroTimeoutRunsEndToEnd(t *testing.T) {
+	withProverCommit(t, e2eBuildSHA)
+	stdout, runErr, reportPath, pool := runTwoOperationsEndToEnd(t, "-timeout=0")
+	if runErr != nil {
+		t.Fatalf("run(): %v\nstdout:\n%s", runErr, stdout)
+	}
+	assertTwoOperationsProven(t, stdout, reportPath, pool)
 }

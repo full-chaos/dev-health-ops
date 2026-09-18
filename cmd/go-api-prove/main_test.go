@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
+	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 )
 
 // D15/R4's output contract: a run that measured NOTHING must say so in
@@ -34,7 +35,8 @@ func TestEmitReportCarriesExplicitZeros(t *testing.T) {
 		RefusalDetail: `mode="python" is not a Go-serving mode`,
 	}}
 
-	if err := emitReport(f, registry, outcomes, summary, nil, nil); err != nil {
+	builds := goapiproof.NewProverBuild(version.Info{Commit: "c0ffee1"}, registry.BuildIdentity, true)
+	if err := emitReport(f, registry, builds, outcomes, summary, nil, nil); err != nil {
 		t.Fatalf("emitReport: %v", err)
 	}
 
@@ -67,6 +69,9 @@ func TestEmitReportCarriesExplicitZeros(t *testing.T) {
 	}
 	if decoded["stage"] != goapiproof.Stage {
 		t.Fatalf("the report must record the stage, got %v", decoded["stage"])
+	}
+	if decoded["prover_build"] != "c0ffee1" || decoded["prover_build_skew"] != true || decoded["prover_build_skew_allowed"] != true {
+		t.Fatalf("the report must record the prover's own build and the allowed skew, got %v/%v/%v", decoded["prover_build"], decoded["prover_build_skew"], decoded["prover_build_skew_allowed"])
 	}
 }
 

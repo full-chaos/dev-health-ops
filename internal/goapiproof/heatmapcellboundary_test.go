@@ -106,32 +106,32 @@ func TestHeatmapCellBoundaryShape_RealHotspotRiskOrgCaptureExactCounts(t *testin
 	}
 }
 
-// heatmapBoundaryAssertOnlyAxisRippleOutside asserts the honest residue
-// rule 6 leaves by design: exactly 4 data.axes.y findings stay outside,
-// each pairing at least one UNTOUCHED name (never fanned out, never a
-// boundary crossing, its own total identical on both legs) whose rank
-// among the top-20 still shifted because a NEIGHBOURING file's total
-// changed -- a real consequence of the SAME mechanism, but one rule 6
-// deliberately never claims ("admitted only for names whose cell status
-// this plan already admitted", never a bare axis admission). Every one
-// of the 84 remaining findings (60 presence + 24 value at the cell
-// level) is covered.
+// heatmapBoundaryAssertOnlyAxisRippleOutside asserts what the real
+// fan-out captures leave outside: every one of their 19 data.axes.y
+// findings. The captures predate this port's name-ascending tiebreak --
+// their candidate lists one tied pair (the two
+// mcp_investigation_result_response.v1.schema.json files) in the other
+// order -- so the candidate axis is not axisOrder's own order and the
+// axis admission gate (heatmapCandidateAxisInGoOrder) admits no
+// position. Every one of the 84 cell-level findings (60 presence + 24
+// value) is covered.
 func heatmapBoundaryAssertOnlyAxisRippleOutside(t *testing.T, result Result) {
 	t.Helper()
-	if result.DifferencesOutsideBaselineDefect != 4 {
-		t.Fatalf("outside = %d, want 4 (the axis-ripple residue) -- covered %v outside %v findings %+v",
+	if result.DifferencesOutsideBaselineDefect != 19 {
+		t.Fatalf("outside = %d, want 19 (every axis finding) -- covered %v outside %v findings %+v",
 			result.DifferencesOutsideBaselineDefect, result.CoveredByShape, result.OutsideByShape, result.Findings)
 	}
-	if result.OutsideByShape["value"] != 4 || len(result.OutsideByShape) != 1 {
-		t.Fatalf("outsideByShape = %v, want exactly {value: 4}", result.OutsideByShape)
+	if result.OutsideByShape["value"] != 19 || len(result.OutsideByShape) != 1 {
+		t.Fatalf("outsideByShape = %v, want exactly {value: 19}", result.OutsideByShape)
 	}
 }
 
 // TestHeatmapHotspotRiskParity_RealOrgCaptureLeavesOnlyAxisRippleOutside
 // runs the real captured pair through the actual registered
 // heatmapHotspotRiskParity (not a hand-built stand-in): every cell-level
-// finding (60 presence, 24 value) is covered, the new entry reads
-// matched, and only the 4-finding axis-ripple residue stays outside.
+// finding (60 presence, 24 value) is covered, the entry reads matched,
+// and every axis finding stays outside (the gate: the candidate's tie
+// order predates the name-ascending tiebreak).
 func TestHeatmapHotspotRiskParity_RealOrgCaptureLeavesOnlyAxisRippleOutside(t *testing.T) {
 	baseline := heatmapDirectionSnapshotFromFileT(t, "testdata/heatmap_hotspot_risk_fanout_org_baseline_4b4fe21c.json")
 	candidate := heatmapDirectionSnapshotFromFileT(t, "testdata/heatmap_hotspot_risk_fanout_org_candidate_b690c4c5.json")
@@ -370,7 +370,7 @@ func TestHeatmapCellBoundaryShape_NonIntegerRatioDerivesNoK(t *testing.T) {
 // block at a clean, repeated 2x ratio (4 agreeing samples, comfortably
 // past rule 1's minimum of 2), establishing k=2; ONE repo-a leaver
 // (baseline-only, true value 2, at or under the candidate's own
-// minimum) and ONE repo-b entrant (candidate-only, value 2) admitted by
+// minimum) and ONE repo-b entrant (candidate-only, value 3) admitted by
 // rule 4.
 func heatmapBoundarySyntheticPlan(t *testing.T) (*HeatmapCellBoundaryShape, *heatmapCellBoundaryPlan) {
 	t.Helper()
@@ -390,14 +390,32 @@ func heatmapBoundarySyntheticPlan(t *testing.T) (*HeatmapCellBoundaryShape, *hea
 		}
 	}
 	baseCells = append(baseCells, heatmapBoundaryCell(weeks[0], "repo-a:leaver.go", 4))
-	candCells = append(candCells, heatmapBoundaryCell(weeks[0], "repo-b:entrant.go", 2))
+	candCells = append(candCells, heatmapBoundaryCell(weeks[0], "repo-b:entrant.go", 3))
 
 	shape := &HeatmapCellBoundaryShape{
 		CellsListPath: "data.cells", CellKeyFields: []string{"x", "y"}, FileField: "y",
 		CellValuePath: "data.cells.value", AxisListPath: "data.axes.y", Limit: 20,
 	}
-	baseBody := heatmapBoundaryBody(t, joinJSON(baseCells), []string{"repo-a:leaver.go", "pad:file0.go"})
-	candBody := heatmapBoundaryBody(t, joinJSON(candCells), []string{"repo-b:entrant.go", "pad:file1.go"})
+	// Both axes are each plane's own sort of its own totals: the
+	// candidate's is axisOrder's (ties by name), the baseline's keeps the
+	// same order except two tied padding files swapped -- an order
+	// Python's row-encounter tiebreak can produce.
+	candTotals := map[string]float64{"repo-b:entrant.go": 3}
+	baseTotals := map[string]float64{"repo-a:leaver.go": 4}
+	for i := 0; i < 17; i++ {
+		file := fmt.Sprintf("pad:file%d.go", i)
+		candTotals[file], baseTotals[file] = 10, 10
+	}
+	for i := 0; i < 2; i++ {
+		file := fmt.Sprintf("repo-a:shared%d.go", i)
+		candTotals[file] = 2 * (10 + float64(i))
+		baseTotals[file] = 4 * (10 + float64(i))
+	}
+	axisCand := heatmapSortDescByTotal(candTotals)
+	axisBase := heatmapSortDescByTotal(baseTotals)
+	axisBase[2], axisBase[3] = axisBase[3], axisBase[2]
+	baseBody := heatmapBoundaryBody(t, joinJSON(baseCells), axisBase)
+	candBody := heatmapBoundaryBody(t, joinJSON(candCells), axisCand)
 	baseline, err := DecodeRESTSnapshot([]byte(baseBody))
 	if err != nil {
 		t.Fatal(err)
@@ -415,8 +433,8 @@ func heatmapBoundarySyntheticPlan(t *testing.T) (*HeatmapCellBoundaryShape, *hea
 
 // TestHeatmapCellBoundaryShape_EntrantLeaverAdmitted pins rule 4's own
 // admission on the synthetic 20-file fixture: the leaver's true value
-// (4/k=2) sits at the candidate's own minimum (the entrant's own value,
-// 2), so both are admitted.
+// (4/k=2) sits under the candidate's own minimum (the entrant's own
+// value, 3), so both are admitted.
 func TestHeatmapCellBoundaryShape_EntrantLeaverAdmitted(t *testing.T) {
 	_, plan := heatmapBoundarySyntheticPlan(t)
 	if !plan.admittedFileNames["repo-a:leaver.go"] {
@@ -427,24 +445,32 @@ func TestHeatmapCellBoundaryShape_EntrantLeaverAdmitted(t *testing.T) {
 	}
 }
 
-// TestHeatmapCellBoundaryShape_AxisNameWithoutAdmittedCellStaysOutside is
-// the synthetic guard for rule 6: an axis position whose two names ARE
-// ones this plan's own cell-level admission reached is admitted; a
-// position whose two names are UNTOUCHED padding files (never fanned
-// out, never boundary-crossing) stays outside -- never a bare "any axis
-// diff is fine".
-func TestHeatmapCellBoundaryShape_AxisNameWithoutAdmittedCellStaysOutside(t *testing.T) {
-	shape, plan := heatmapBoundarySyntheticPlan(t)
-
-	boundaryFinding := Finding{Kind: FindingMismatch, Path: "$.data.axes.y[0]", Detail: "repo-a:leaver.go != repo-b:entrant.go", Shape: ShapeValue}
-	if !plan.admits(boundaryFinding) {
-		t.Error("axis position pairing the admitted leaver against the admitted entrant should be admitted")
+// Axis admission runs only through rule 6b's whole-list identity: on
+// the synthetic 20-file pair it holds and the leaver/entrant position is
+// admitted; with the identity set aside, no position is admitted even
+// though both names at the leaver/entrant position were admitted at the
+// cell level.
+func TestHeatmapCellBoundaryShape_AxisAdmissionOnlyThroughTheWholeListIdentity(t *testing.T) {
+	_, plan := heatmapBoundarySyntheticPlan(t)
+	if !plan.candidateAxisInGoOrder || !plan.axisIdentityHolds {
+		t.Fatalf("fixture premise: gate %t, identity %t", plan.candidateAxisInGoOrder, plan.axisIdentityHolds)
 	}
-	unrelatedFinding := Finding{Kind: FindingMismatch, Path: "$.data.axes.y[1]", Detail: "pad:file0.go != pad:file1.go", Shape: ShapeValue}
-	if plan.admits(unrelatedFinding) {
-		t.Error("axis position pairing two untouched padding files must stay outside -- neither name is a boundary-crossing admission")
+	if !plan.admittedFileNames["repo-a:leaver.go"] || !plan.admittedFileNames["repo-b:entrant.go"] {
+		t.Fatal("fixture premise: the leaver and the entrant are cell-level admissions")
 	}
-	_ = shape
+	boundaryFinding := Finding{Kind: FindingMismatch, Path: "$.data.axes.y[19]", Detail: "repo-a:leaver.go != repo-b:entrant.go", Shape: ShapeValue}
+	padFinding := Finding{Kind: FindingMismatch, Path: "$.data.axes.y[2]", Detail: "pad:file1.go != pad:file0.go", Shape: ShapeValue}
+	for _, finding := range []Finding{boundaryFinding, padFinding} {
+		if !plan.admits(finding) {
+			t.Errorf("%s should be admitted while the whole-list identity holds", finding.Path)
+		}
+	}
+	plan.axisIdentityHolds = false
+	for _, finding := range []Finding{boundaryFinding, padFinding} {
+		if plan.admits(finding) {
+			t.Errorf("%s admitted without the whole-list identity", finding.Path)
+		}
+	}
 }
 
 func joinJSON(items []string) string {

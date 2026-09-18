@@ -798,6 +798,69 @@ func explainScopedRequest(name, metric, scopeType, producerName string) RESTRequ
 	}
 }
 
+// explainContributorsSubsetDefect/explainDriversSubsetDefect declare
+// data.contributors/data.drivers as containing only a bounded-subset
+// PRESENCE admission for a team-scoped request on one of
+// explainScopeDropDefect's four metrics: a genuinely narrower team's
+// candidate list is missing exactly the contributors/drivers whose work
+// falls outside the team's own repositories, which the candidate resolves
+// through team_repo_ownership via one shared condition
+// (cmd/query-api/internal/teamscope.RepoCondition) while the reference
+// resolves the same scope from user_metrics_daily.team_id
+// (resolve_repo_ids_for_teams, api/queries/scopes.py) -- explainScopeDropDefect's
+// own Reason states the two tables. Neither declares an EqualLeaves or
+// BoundedLeaves entry: a matched contributor/driver's own "value"/
+// "delta_pct" leaf is already reached by explainScopeDropDefect's own
+// blanket Paths citation above (data.contributors.value, data.drivers.value)
+// for every author BOTH planes return, so this pair of declarations adds
+// only the membership admission that citation's leaf-only coverage
+// cannot reach (compare.go's leafDifference gate) -- it never re-cites,
+// or narrows, a leaf explainScopeDropDefect already explains.
+var explainContributorsSubsetDefect = BaselineDefect{
+	Ticket:              "CHAOS-5920",
+	Reason:              "GET /api/v1/explain's team scope resolves a team's repositories from team_repo_ownership through one shared condition, while the reference plane resolves the same scope from user_metrics_daily.team_id -- a per-author-attribution table, not a repository-ownership one (explainScopeDropDefect's own Reason, above, states the two tables in full). For a genuinely narrower team the candidate's contributors list is therefore a subset of the baseline's own organization-wide list, paired by id (author). Go is correct.",
+	Paths:               []string{"data.contributors"},
+	TeamRepoSubsetShape: &TeamRepoSubsetShape{ListPath: "data.contributors", KeyFields: []string{"id"}},
+	Intermittent:        true,
+	IntermittentReason:  "present only while the requested team's own repositories are a PROPER subset of the organization's and at least one contributor's own work falls entirely outside that subset; a team owning every repository, or a window whose every contributing author touches only repositories the team owns, leaves the two lists identical, and shows no divergence under this Path",
+}
+
+var explainDriversSubsetDefect = BaselineDefect{
+	Ticket:              "CHAOS-5920",
+	Reason:              "The same mechanism and citation as explainContributorsSubsetDefect above, over data.drivers rather than data.contributors. Go is correct.",
+	Paths:               []string{"data.drivers"},
+	TeamRepoSubsetShape: &TeamRepoSubsetShape{ListPath: "data.drivers", KeyFields: []string{"id"}},
+	Intermittent:        true,
+	IntermittentReason:  "the same condition as explainContributorsSubsetDefect's own IntermittentReason, over the drivers ranking",
+}
+
+// explainTeamScopedParity is explainRepoTeamScopedParity plus
+// explainContributorsSubsetDefect/explainDriversSubsetDefect -- shared by
+// every explain team-scoped entry below. Kept separate from
+// explainRepoTeamScopedParity (which repo-scoped entries still use
+// unchanged) because the membership admission these two declarations add
+// is specific to a team's repository resolution, not a repo-scoped
+// request's own single, directly-bound repository.
+var explainTeamScopedParity = Options{
+	FloatTierB:            explainAggregateFloats,
+	OrderInsensitiveLists: explainDriverRankOrderInsensitive,
+	BaselineDefects:       append(append(append([]BaselineDefect{}, explainRepoTeamScopedParity.BaselineDefects...), explainContributorsSubsetDefect), explainDriversSubsetDefect),
+}
+
+// explainTeamScopedRequest builds one team-scoped explain request for a
+// metric explainScopeDropDefect covers, its scope_id bound at run time to
+// producerName's own live id (see restidbind.go).
+func explainTeamScopedRequest(name, metric, producerName string) RESTRequest {
+	return RESTRequest{
+		Name:                name,
+		Query:               url.Values{"metric": {metric}, "scope_type": {"team"}},
+		WantCandidateStatus: 200, WantBaselineStatus: 200,
+		BodyMode:   RESTBodyModeJSON,
+		Parity:     explainTeamScopedParity,
+		IDBindings: []RESTIDBinding{{Producer: producerName, QueryParam: "scope_id"}},
+	}
+}
+
 // peopleParity is shared by every admissible (2xx) people request whose
 // query string actually reaches ClickHouse -- a genuinely empty q
 // short-circuits BEFORE the client is touched (BuildSearchResponse's own
@@ -1116,13 +1179,10 @@ var flamePRIDBoundParity = Options{
 // parameters at all (meta.go's own doc comment), so there is no caller
 // input for it to reject.
 //
-// TEAM SCOPE ON A REPO-KEYED ROUTE IS NOT PROVABLE BY EQUALITY, and every
-// team-scoped entry in this corpus is a knowingly uncovered finding rather
-// than a declared defect.
-//
-// The two planes resolve a team's repositories from different tables. This
-// port reads team_repo_ownership through one shared condition
-// (cmd/query-api/internal/teamscope), the source
+// TEAM SCOPE ON A REPO-KEYED ROUTE IS NOT PROVABLE BY EQUALITY. The two
+// planes resolve a team's repositories from different tables. This port
+// reads team_repo_ownership through one shared condition
+// (cmd/query-api/internal/teamscope.RepoCondition), the source
 // migrations/clickhouse/081_team_cognitive_load_daily.sql names as the one
 // that defines a team's repositories. The reference reads DISTINCT repo_id
 // off user_metrics_daily.team_id (resolve_repo_ids_for_teams,
@@ -1140,41 +1200,56 @@ var flamePRIDBoundParity = Options{
 // metric delta and for the top delta's drivers pass no org_id, which
 // defaults to "", so every repo/team ref fails to resolve there too.
 //
-// No BaselineDefect shape can admit this, and none is declared. The
-// differences are list LENGTHS and changed aggregate values; a
-// BaselineDefect covers only LEAF differences (compare.go's leafDifference
-// gate), and a scoped average is not a subset of an unscoped one, it is a
-// different number. These entries stay mismatches whose differences fall
-// outside every citation. The evidence for the candidate's own behaviour is
-// the seeded suite instead: cmd/query-api/team_scope_ownership_integration_
-// test.go plus the team_scope_large_repo_set_integration_test.go files in
-// internal/home, internal/explain and internal/investmentexplain.
+// A CHANGED AGGREGATE VALUE stays outside every citation on purpose: a
+// scoped average is not a subset of an unscoped one, it is a different
+// number, and no shape in this package claims otherwise for a ratio or
+// average leaf (TeamRepoSubsetShape's own doc comment, teamreposubset.go,
+// states this for the leaves it declares; explainScopeDropDefect below
+// already blanket-admits explain's own data.value/data.delta_pct and
+// matched-author data.contributors.value/data.drivers.value for a MATCHED
+// author regardless of direction, which is a wider admission than a
+// direction-only shape would grant and is unchanged by this file).
 //
-// The entries this reaches: home_team_scoped (GET and POST,
-// home_corpus.go), opportunities_team_scoped (GET and POST,
-// opportunities_corpus.go), work-units' team_scoped (GET and POST,
-// workunits_corpus.go) and investment/explain's team_scoped below.
-// quadrant's cycle_throughput_team_scoped and flame/aggregated's two
-// team_id entries bind a team COLUMN directly, resolve no repositories, and
-// are unaffected. explain, heatmap, sankey, drilldown/prs, investment,
-// investment/sunburst and investment/flow resolve a team the same new way
-// but carry no team-scoped entry here, so this corpus sees nothing change
-// for them; the same finding applies the moment one is added.
+// A LIST MEMBERSHIP difference -- an element the organization-wide
+// baseline carries that a genuinely narrower team-scoped candidate does
+// not -- IS admissible: TeamRepoSubsetShape (teamreposubset.go) certifies
+// the candidate's list as a bounded subset of the baseline's, by key,
+// wherever a route's own BaselineDefect declares it. Declared today for
+// GET/POST work-units' whole list (workUnitsTeamScopeSubsetDefect,
+// workunits_corpus.go), GET/POST opportunities' items list
+// (opportunitiesTeamScopeSubsetDefect, opportunities_corpus.go) and
+// explain's data.contributors/data.drivers on review_latency/deploy_freq/
+// churn/change_failure_rate's own team-scoped entries
+// (explainContributorsSubsetDefect/explainDriversSubsetDefect above).
+// NOT declared for home_team_scoped/opportunities_team_scoped's own GET
+// leg or work-units' own POST leg: the baseline leg on each currently
+// answers nothing at all (a request timeout, see each entry's own Timeout
+// field), so there is no live comparison to establish a declaration
+// against, and none is guessed. quadrant's cycle_throughput_team_scoped
+// and flame/aggregated's two team_id entries bind a team COLUMN directly,
+// resolve no repositories, and are unaffected. investment/explain's
+// team_scoped entry below resolves a team the same new way but its
+// response is majority LLM-authored prose with few numeric leaves, and
+// carries no declared list membership shape either. heatmap, sankey,
+// drilldown/prs, investment, investment/sunburst and investment/flow
+// resolve a team the same new way but carry no team-scoped entry here, so
+// this corpus sees nothing change for them; the same finding applies the
+// moment one is added.
 //
-// explain declares four of its five known Python-plane divergences via
-// explainParity below (the display-name FINAL-dedup defect, the
-// Nullable-column tuple-argMax defect, the ranking-aggregator defect and
-// the blocked_work status-filter defect, all Intermittent -- their own
-// Reason strings have the citation trail). Its FIFTH divergence --
-// scope_filter_for_metric's own org_id omission silently dropping a
-// requested repo/team scope filter for review_latency/deploy_freq/churn/
-// change_failure_rate -- is declared nowhere in this table: like
-// quadrant's and drilldown/prs's own uncovered non-org scope branches, it
-// only fires for an explicitly repo/team-scoped request, and exercising
-// it needs a real, live repo/team id from the target org's own data,
-// which this corpus does not have. A default (org-scoped) request never
-// reaches the branch that drops the filter, so no entry below is
-// affected either way.
+// explain declares five of its five known Python-plane divergences via
+// explainParity/explainScopeDropDefect below (the display-name FINAL-dedup
+// defect, the Nullable-column tuple-argMax defect, the ranking-aggregator
+// defect and the blocked_work status-filter defect, all Intermittent --
+// their own Reason strings have the citation trail; and
+// scope_filter_for_metric's own org_id omission for
+// review_latency/deploy_freq/churn/change_failure_rate, explainScopeDropDefect,
+// not Intermittent -- it fires on every explicitly repo/team-scoped
+// request for one of those four metrics, not only while some table holds
+// an unmerged row). explainScopeDropDefect's own list-membership
+// manifestation (data.contributors/data.drivers coming back shorter, or
+// empty, on the candidate side) is declared, for the team-scoped entries
+// only, via explainContributorsSubsetDefect/explainDriversSubsetDefect
+// above; its repo-scoped entries carry no such membership shape.
 //
 // people declares its one known Python-plane divergence via peopleParity
 // below: a LIST-LENGTH shape (an extra, stale search result), the same
@@ -3344,13 +3419,13 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 			// third, undeclared divergence for want of a live id;
 			// restidbind.go closes that gap.
 			explainScopedRequest("review_latency_repo_scoped", "review_latency", "repo", "repo_id"),
-			explainScopedRequest("review_latency_team_scoped", "review_latency", "team", "team_id"),
+			explainTeamScopedRequest("review_latency_team_scoped", "review_latency", "team_id"),
 			explainScopedRequest("deploy_freq_repo_scoped", "deploy_freq", "repo", "repo_id"),
-			explainScopedRequest("deploy_freq_team_scoped", "deploy_freq", "team", "team_id"),
+			explainTeamScopedRequest("deploy_freq_team_scoped", "deploy_freq", "team_id"),
 			explainScopedRequest("churn_repo_scoped", "churn", "repo", "repo_id"),
-			explainScopedRequest("churn_team_scoped", "churn", "team", "team_id"),
+			explainTeamScopedRequest("churn_team_scoped", "churn", "team_id"),
 			explainScopedRequest("change_failure_rate_repo_scoped", "change_failure_rate", "repo", "repo_id"),
-			explainScopedRequest("change_failure_rate_team_scoped", "change_failure_rate", "team", "team_id"),
+			explainTeamScopedRequest("change_failure_rate_team_scoped", "change_failure_rate", "team_id"),
 			{
 				// throughput is a sum-aggregator, team-scoped metric --
 				// explainParity's ranking-aggregator entry (ranking by

@@ -28,6 +28,51 @@ var opportunitiesNumericLeaves = Options{
 	NumericLeavesDeclared: true,
 }
 
+// opportunitiesTeamScopeSubsetDefect declares the team-scoped candidate
+// list as a bounded subset of the baseline's own organization-wide list,
+// paired by TITLE rather than the response's own "id" field: id is
+// assigned by RANK POSITION within one response (confirmed against a
+// live capture: the SAME opportunity, byte-identical title/rationale/
+// evidence_links/suggested_experiments, carried "id":"opp-2" in the
+// organization-wide baseline and "id":"opp-1" in the team-scoped
+// candidate, because it ranked second org-wide and first within the
+// team), so it is not a stable identity across two differently-scoped
+// responses and is excluded from both KeyFields and EqualLeaves here.
+// title is the one field this route's own opportunity-selection can be
+// expected to hold stable across a scope narrowing that keeps an
+// opportunity relevant at all (services/opportunities.py labels each
+// candidate cause by its own metric, one title per metric); rationale,
+// evidence_links and suggested_experiments are declared EQUAL because
+// this route computes no per-item aggregate a narrower scope could
+// legitimately shrink -- opportunitiesNumericLeaves' own doc comment
+// above already establishes that delta_pct, this route's one numeric
+// value, is only ever interpolated into the rationale STRING, never its
+// own leaf, so an admitted opportunity's rationale is expected to read
+// identically whether the underlying delta was computed org-wide or over
+// the team's own narrower repository set for a genuinely stable driver;
+// a rationale that in fact differs (a real percentage change) simply
+// fails the equality check and stays outside, correctly.
+var opportunitiesTeamScopeSubsetDefect = BaselineDefect{
+	Ticket: "CHAOS-5920",
+	Reason: "GET/POST /api/v1/opportunities' team scope resolves a team's repositories from team_repo_ownership through one shared condition (cmd/query-api/internal/teamscope.RepoCondition), while the reference plane resolves the same scope from user_metrics_daily.team_id (resolve_repo_ids_for_teams, api/queries/scopes.py) and, for this route's own home-response composition, additionally drops the filter outright before an org_id ever reaches it -- either way the baseline answers organization-wide for a request the candidate answers over the team's own narrower repository set. For a genuinely narrower team the candidate's item list is therefore a subset of the baseline's own list, paired by title rather than the response's own rank-assigned id (see this var's own doc comment). Go is correct.",
+	Paths:  []string{"data.items"},
+	TeamRepoSubsetShape: &TeamRepoSubsetShape{
+		ListPath:    "data.items",
+		KeyFields:   []string{"title"},
+		EqualLeaves: []string{"rationale", "evidence_links", "suggested_experiments"},
+	},
+	Intermittent:       true,
+	IntermittentReason: "present only while the requested team's own repositories are a PROPER subset of the organization's and at least one opportunity the whole organization raises does not also apply to the team's own narrower repository set; a team owning every repository, or a window whose every raised opportunity applies unchanged to the team, leaves the two lists identical, and shows no divergence under this Path",
+}
+
+// opportunitiesTeamScopedParity is opportunitiesNumericLeaves plus
+// opportunitiesTeamScopeSubsetDefect -- shared by GET and POST's own
+// opportunities_team_scoped entries.
+var opportunitiesTeamScopedParity = Options{
+	NumericLeavesDeclared: true,
+	BaselineDefects:       []BaselineDefect{opportunitiesTeamScopeSubsetDefect},
+}
+
 var opportunitiesGetEndpointSpec = RESTEndpointSpec{
 	Method: "GET",
 	Path:   "/api/v1/opportunities",
@@ -54,16 +99,17 @@ var opportunitiesGetEndpointSpec = RESTEndpointSpec{
 			// The two planes resolve that repository set from different
 			// tables, and the home builder this route composes additionally
 			// drops the filter outright on the baseline for a repo-scoped
-			// metric, so this entry is one of the knowingly uncovered
-			// findings restcorpus.go's own TEAM SCOPE paragraph names, not
-			// a declared defect. It is visible on the wire as an
-			// opportunity the baseline raises from an organization-wide
-			// movement and the candidate does not raise for the team.
+			// metric, so a genuinely narrower team's candidate item list is
+			// a bounded subset of the baseline's own organization-wide list
+			// (opportunitiesTeamScopeSubsetDefect above). It is visible on
+			// the wire as an opportunity the baseline raises from an
+			// organization-wide movement and the candidate does not raise
+			// for the team.
 			Name:                "opportunities_team_scoped",
 			Query:               url.Values{"scope_type": {"team"}},
 			WantCandidateStatus: 200, WantBaselineStatus: 200,
 			BodyMode:   RESTBodyModeJSON,
-			Parity:     opportunitiesNumericLeaves,
+			Parity:     opportunitiesTeamScopedParity,
 			IDBindings: []RESTIDBinding{{Producer: "team_id", QueryParam: "scope_id"}},
 			Timeout:    180 * time.Second,
 		},
@@ -114,12 +160,12 @@ var opportunitiesPostEndpointSpec = RESTEndpointSpec{
 			// twin of the QueryParam binding this route's own GET
 			// "opportunities_team_scoped" entry above uses, matching home's
 			// own "home_team_scoped" POST entry's identical precedent. Same
-			// knowingly uncovered team-scope finding as its GET twin above.
+			// bounded-subset finding as its GET twin above.
 			Name:                "opportunities_team_scoped",
 			Body:                map[string]any{"filters": map[string]any{"scope": map[string]any{"level": "team", "ids": []string{"ABC-123"}}}},
 			WantCandidateStatus: 200, WantBaselineStatus: 200,
 			BodyMode:   RESTBodyModeJSON,
-			Parity:     opportunitiesNumericLeaves,
+			Parity:     opportunitiesTeamScopedParity,
 			IDBindings: []RESTIDBinding{{Producer: "team_id", BodyPath: "filters.scope.ids"}},
 		},
 		{

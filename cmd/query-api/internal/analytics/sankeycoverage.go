@@ -20,17 +20,31 @@ package analytics
 // with identical semantics, not a divergence; the same trade-off
 // investmentContextFor already makes for the team-vote subquery.
 //
-// WHAT THIS PORT DELIBERATELY DOES NOT "FIX": Python's coverage query
-// reads the RAW `investment_metrics_daily` table on the non-investment
-// path, NOT the dedup source timeseries.go's
-// nonInvestmentSourceAndDateFilter uses (analytics.py:673-677:
-// `table = ... if request.use_investment else "investment_metrics_daily"`).
-// Ported as written. The ONE place this file no longer follows Python is
-// the work-category filter: Python appends an ARRAY JOIN over
-// subcategory_distribution_json (analytics.py:829-834) and this query does
-// not, because that join silently re-weighted every effort-weighted column
-// (CHAOS-5498 -- see the long note at the filter site). Selection is
-// identical; only the row multiplicity differs.
+// TWO deliberate divergences from Python on the non-investment path,
+// both because Go is held to Go's own correctness, not to matching a
+// known-wrong Python read:
+//
+//  1. The non-investment FROM source is investmentMetricsDailyDedupSource
+//     (timeseries.go), NOT the raw `investment_metrics_daily` table
+//     Python's coverage query reads (analytics.py:673-677: `table = ...
+//     if request.use_investment else "investment_metrics_daily"`).
+//     investment_metrics_daily is a plain MergeTree that does not
+//     self-merge duplicate (re)writes of the same natural key -- a
+//     row re-synced more than once for the same
+//     (org, day, team, repo, theme, subcategory) key is counted once per
+//     generation on the raw table, inflating both the numerator and
+//     denominator. timeseries.go/breakdown.go's non-investment paths
+//     already read this table through the deduped source; the coverage
+//     query is now the third, not an intentional exception.
+//  2. Python appends an ARRAY JOIN over subcategory_distribution_json
+//     (analytics.py:829-834) and this query does not, because that join
+//     silently re-weighted every effort-weighted column -- see the long
+//     note at the filter site.
+//
+// Both are computed, direction-known differences (Go corrects a
+// generation-count/row-multiplication defect; Python does not), not
+// arbitrary drift -- see the two-plane proof declarations for either
+// path this reaches.
 
 import (
 	"context"
@@ -370,8 +384,15 @@ func compileSankeyCoverage(req SankeyRequest, orgID string, timeoutSeconds int, 
 		// inside that same branch. Pinned by
 		// TestCompileSankeyCoverage_UnfilteredSQLUnchangedByUnitSelection.
 	} else {
-		// analytics.py:673-679 -- the RAW daily table and its own date filter.
-		baseTable = "investment_metrics_daily"
+		// analytics.py:673-679's own date filter, over the DEDUPED source
+		// (this file's own doc comment above) rather than the raw table
+		// Python reads -- investmentMetricsDailyDedupSource (timeseries.go)
+		// is already an aliased `(SELECT ... argMax(col, computed_at) ...)
+		// AS investment_metrics_daily` subquery, so teamCol/repoCol's
+		// unqualified "team_id"/"repo_id" references below resolve against
+		// its projected columns unchanged; only the FROM source's row
+		// multiplicity across duplicate generations changes.
+		baseTable = investmentMetricsDailyDedupSource
 		dateFilter = "day >= {start_date:Date} AND day <= {end_date:Date}"
 		orgFilter = "org_id = {org_id:String}"
 	}

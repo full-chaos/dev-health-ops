@@ -37,6 +37,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/migrationmatrix"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
 const (
@@ -84,6 +85,11 @@ const (
 // worker images unrelated to query-api) to agree.
 const queryAPIContainerName = "dev-health-query-api-1"
 
+// postgresURIEnvVar is the ONLY place the DSN may come from other than the
+// -dsn flag -- named so the usage text and the flag-parsing path can name
+// the variable without ever naming its value.
+const postgresURIEnvVar = "POSTGRES_URI"
+
 var defaultFleetContainers = []string{
 	"dev-health-go-worker-1",
 	"dev-health-go-worker-heavy-1",
@@ -94,24 +100,53 @@ var defaultFleetContainers = []string{
 	"dev-health-api-1",
 }
 
+// matrixFlags holds the pointers registerFlags binds. A struct rather than
+// main's own local vars so a test can register on a private *flag.FlagSet
+// instead of the process-global flag.CommandLine.
+type matrixFlags struct {
+	root, fleet, routing, containers, dsn *string
+	render, check, printSQL               *bool
+}
+
+// registerFlags binds every flag this command accepts on set. -dsn is
+// registered through secrets.BindFlag: an EMPTY default, never
+// os.Getenv(postgresURIEnvVar), so `flag`'s usage text (printed on -h or
+// any parse error) never carries the DSN's value. Call
+// secrets.ResolveFlag(set, f.dsn, "dsn", postgresURIEnvVar) after set.Parse to apply
+// the environment fallback.
+func registerFlags(set *flag.FlagSet) *matrixFlags {
+	f := &matrixFlags{}
+	f.root = set.String("root", ".", "repository root")
+	f.render = set.Bool("render", false, "read live sources and rewrite the generated blocks")
+	f.check = set.Bool("check", false, "validate the committed doc against the committed sources")
+	f.dsn = new(string)
+	secrets.BindFlag(set, f.dsn, "dsn", postgresURIEnvVar, "Postgres DSN for the go_api_registry tables")
+	f.fleet = set.String("fleet", "docker", `how to read the fleet: "docker", "none", or a path to a JSON {container: revision} file`)
+	f.routing = set.String("routing", "", "path to a JSON routing snapshot, INSTEAD of -dsn (for hosts where the operator has no DSN; build it with -print-routing-sql)")
+	f.containers = set.String("containers", strings.Join(defaultFleetContainers, ","), "comma-separated container names to inspect")
+	f.printSQL = set.Bool("print-routing-sql", false, "print the statement ReadRoutingState runs and exit; `psql -At -f -` on it writes a -routing snapshot file as-is")
+	return f
+}
+
 func main() {
-	var (
-		root       = flag.String("root", ".", "repository root")
-		render     = flag.Bool("render", false, "read live sources and rewrite the generated blocks")
-		check      = flag.Bool("check", false, "validate the committed doc against the committed sources")
-		dsn        = flag.String("dsn", os.Getenv("POSTGRES_URI"), "Postgres DSN for the go_api_registry tables (default $POSTGRES_URI)")
-		fleet      = flag.String("fleet", "docker", `how to read the fleet: "docker", "none", or a path to a JSON {container: revision} file`)
-		routing    = flag.String("routing", "", "path to a JSON routing snapshot, INSTEAD of -dsn (for hosts where the operator has no DSN; build it with -print-routing-sql)")
-		containers = flag.String("containers", strings.Join(defaultFleetContainers, ","), "comma-separated container names to inspect")
-		printSQL   = flag.Bool("print-routing-sql", false, "print the statement ReadRoutingState runs and exit; `psql -At -f -` on it writes a -routing snapshot file as-is")
-	)
+	f := registerFlags(flag.CommandLine)
 	flag.Parse()
+	secrets.ResolveFlag(flag.CommandLine, f.dsn, "dsn", postgresURIEnvVar)
+
+	// A single boundary, applied at every error print in this function
+	// from here on, covers every error this command can print, no matter
+	// which layer produced it or whether that layer remembered the DSN
+	// could be inside -- construct it once, from the DSN this run
+	// actually resolved (registerFlags/ResolveFlag above), and apply it
+	// to each print rather than trusting every call site downstream to
+	// redact its own.
+	boundary := secrets.NewBoundary(*f.dsn)
 
 	explicit := map[string]bool{}
-	flag.Visit(func(f *flag.Flag) { explicit[f.Name] = true })
-	notice, err := checkFlagCombination(explicit, *printSQL, *render, *check, *fleet, os.Getenv("POSTGRES_URI") != "")
+	flag.Visit(func(fl *flag.Flag) { explicit[fl.Name] = true })
+	notice, err := checkFlagCombination(explicit, *f.printSQL, *f.render, *f.check, *f.fleet, os.Getenv(postgresURIEnvVar) != "")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "dev-health-migration-matrix: %v\n", err)
+		fmt.Fprintf(os.Stderr, "dev-health-migration-matrix: %v\n", boundary.Redact(err))
 		os.Exit(2)
 	}
 	if notice != "" {
@@ -121,26 +156,26 @@ func main() {
 	// Printing the statement is not a render or a check, so it is answered
 	// before the -render/-check exclusivity rule: an operator asking how to
 	// produce a routing snapshot has neither yet.
-	if *printSQL {
+	if *f.printSQL {
 		if err := printRoutingSQL(os.Stdout); err != nil {
-			fmt.Fprintf(os.Stderr, "dev-health-migration-matrix: %v\n", err)
+			fmt.Fprintf(os.Stderr, "dev-health-migration-matrix: %v\n", boundary.Redact(err))
 			os.Exit(1)
 		}
 		return
 	}
 
-	if *render == *check {
+	if *f.render == *f.check {
 		fmt.Fprintln(os.Stderr, "exactly one of -render or -check is required")
 		os.Exit(2)
 	}
 
-	if *render {
-		err = runRender(*root, *dsn, *routing, *fleet, splitCSV(*containers))
+	if *f.render {
+		err = runRender(*f.root, *f.dsn, *f.routing, *f.fleet, splitCSV(*f.containers))
 	} else {
-		err = runCheck(*root)
+		err = runCheck(*f.root)
 	}
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "dev-health-migration-matrix: %v\n", err)
+		fmt.Fprintf(os.Stderr, "dev-health-migration-matrix: %v\n", boundary.Redact(err))
 		os.Exit(1)
 	}
 }

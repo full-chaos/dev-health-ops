@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
 // "proven" is DERIVED from go_api_proof_run, never stored as a column: a
@@ -244,7 +245,7 @@ func ParseRoutingSnapshot(raw []byte, currentDigest string) ([]OperationRow, int
 func ReadRoutingState(ctx context.Context, dsn, currentDigest string) ([]OperationRow, int, error) {
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
-		return nil, 0, fmt.Errorf("connect to postgres: %w", err)
+		return nil, 0, secrets.RedactedConnectError("connect to postgres", "dsn", "POSTGRES_URI")
 	}
 	defer func() { _ = conn.Close(ctx) }()
 

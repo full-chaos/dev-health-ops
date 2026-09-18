@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
 // This file adds the REST surface's "proven" state -- the fourth column
@@ -82,7 +83,7 @@ func ReadRESTProof(ctx context.Context, dsn, candidateBuild string) (map[string]
 
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
-		return nil, fmt.Errorf("connect to postgres: %w", err)
+		return nil, secrets.RedactedConnectError("connect to postgres", "dsn", "POSTGRES_URI")
 	}
 	defer func() { _ = conn.Close(ctx) }()
 

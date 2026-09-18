@@ -77,7 +77,7 @@ func drilldownPRsSnapshotFromFile(t *testing.T, path string) Snapshot {
 func drilldownPRsWantMatched() []string {
 	var want []string
 	for _, d := range drilldownPRsParity.BaselineDefects {
-		if d.DuplicateCollapseLengthShape != nil {
+		if d.DuplicateCollapseLengthShape != nil || d.DuplicateCollapsePageCutShape != nil {
 			continue
 		}
 		want = append(want, d.Ticket)
@@ -93,7 +93,7 @@ func drilldownPRsWantMatched() []string {
 func drilldownPRsWantIdleLengthTickets() []string {
 	var want []string
 	for _, d := range drilldownPRsParity.BaselineDefects {
-		if d.DuplicateCollapseLengthShape != nil {
+		if d.DuplicateCollapseLengthShape != nil || d.DuplicateCollapsePageCutShape != nil {
 			want = append(want, d.Ticket)
 		}
 	}

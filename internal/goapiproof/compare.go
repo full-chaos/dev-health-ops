@@ -756,6 +756,19 @@ type BaselineDefect struct {
 	// unchanged blanket behaviour every other declared defect still
 	// uses. A defect never sets more than one shape field.
 	HeatmapAxisTieGroupShape *HeatmapAxisTieGroupShape
+
+	// DuplicateCollapsePageCutShape, when set, replaces this defect's
+	// blanket "any leaf difference under Paths is covered" rule with a
+	// whole-list admission of a ShapeLength finding for the SECOND,
+	// LIMIT-truncated consequence of the same duplicate-row mechanism --
+	// see DuplicateCollapsePageCutShape's own doc comment
+	// (duplicatecollapsepagecut.go). Like its sibling
+	// DuplicateCollapseLengthShape, it can admit a STRUCTURAL finding (a
+	// ShapeLength on the list itself), never a leaf one -- see the gate
+	// in classifyBaselineDefects. nil is the default, unchanged blanket
+	// behaviour every other declared defect still uses. A defect never
+	// sets more than one shape field.
+	DuplicateCollapsePageCutShape *DuplicateCollapsePageCutShape
 }
 
 // validateBaselineDefects refuses a declaration that claims the
@@ -1186,6 +1199,10 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 		if defect.HeatmapAxisTieGroupShape != nil {
 			axisTieGroupPlan = buildHeatmapAxisTieGroupPlan(defect.HeatmapAxisTieGroupShape, baselineData, candidateData)
 		}
+		var dupPageCutPlan *duplicateCollapsePageCutPlan
+		if defect.DuplicateCollapsePageCutShape != nil {
+			dupPageCutPlan = buildDuplicateCollapsePageCutPlan(defect.DuplicateCollapsePageCutShape, baselineData, candidateData)
+		}
 		// A SHAPED defect's citation is LIVE only when its shape actually
 		// admits something. A blanket (unshaped) citation stays live from
 		// path proximity alone -- any difference under Paths, covered or
@@ -1199,7 +1216,7 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 		// apart, and a shaped defect that hit on path alone would still
 		// double-report alongside the shape that actually explains the
 		// difference.
-		shaped := repoPlan != nil || covPlan != nil || dedupPlan != nil || skewPlan != nil || sankeyFanoutPlan != nil || keyedDirPlan != nil || conservePlan != nil || dictDirPlan != nil || scalarDirPlan != nil || identityPlan != nil || displacePlan != nil || hotspotBoundaryPlan != nil || subsetPlan != nil || zeroValueEmptyListPlan != nil || tiePlan != nil || heatmapCellPlan != nil || dupLenPlan != nil || homeTierPlan != nil || axisRepoOrderPlan != nil || axisTieGroupPlan != nil
+		shaped := repoPlan != nil || covPlan != nil || dedupPlan != nil || skewPlan != nil || sankeyFanoutPlan != nil || keyedDirPlan != nil || conservePlan != nil || dictDirPlan != nil || scalarDirPlan != nil || identityPlan != nil || displacePlan != nil || hotspotBoundaryPlan != nil || subsetPlan != nil || zeroValueEmptyListPlan != nil || tiePlan != nil || heatmapCellPlan != nil || dupLenPlan != nil || homeTierPlan != nil || axisRepoOrderPlan != nil || axisTieGroupPlan != nil || dupPageCutPlan != nil
 		var touched []int
 		for i, path := range mismatches {
 			if !defectCovers(defect, path) {
@@ -1251,7 +1268,8 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 				!(zeroValueEmptyListPlan != nil && shapes[i] == ShapePresence) &&
 				!(tiePlan != nil && shapes[i] == ShapePresence) &&
 				!(heatmapCellPlan != nil && shapes[i] == ShapePresence) &&
-				!(dupLenPlan != nil && shapes[i] == ShapeLength) {
+				!(dupLenPlan != nil && shapes[i] == ShapeLength) &&
+				!(dupPageCutPlan != nil && shapes[i] == ShapeLength) {
 				continue
 			}
 			if shaped {
@@ -1311,6 +1329,8 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 				admitted = axisRepoOrderPlan.admits(result.Findings[findingRefs[i]])
 			case axisTieGroupPlan != nil:
 				admitted = axisTieGroupPlan.admits(result.Findings[findingRefs[i]])
+			case dupPageCutPlan != nil:
+				admitted = dupPageCutPlan.admits(result.Findings[findingRefs[i]])
 			}
 			if admitted {
 				covered[i] = true

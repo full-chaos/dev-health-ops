@@ -297,3 +297,85 @@ func TestHeatmapRepoTouchpointsAxisTieGroupDefect_CompareRefusesASetDifference(t
 		}
 	}
 }
+
+// TestHeatmapSumTotalsByName_DeterministicAcrossMapOrder pins this
+// review round's own reproduction against heatmapSumTotalsByName as it
+// stood before this fix (heatmapaxistiegroup.go, previously summing in
+// Go's own randomized map iteration order): ten fractional values that
+// are not exactly representable in float64, summed into the SAME name
+// across 500 independently constructed maps (each fresh map's own
+// iteration order is independently randomized by the Go runtime), must
+// produce the byte-identical total every run -- float64 addition is not
+// associative, and this shape's own tie-group classification depends on
+// exact equality between two such totals.
+func TestHeatmapSumTotalsByName_DeterministicAcrossMapOrder(t *testing.T) {
+	values := []float64{0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.1}
+
+	var want float64
+	for i := 0; i < 500; i++ {
+		cells := map[string]heatmapCellRow{}
+		for j, v := range values {
+			key := fmt.Sprintf("x%02d\x1ffileA", j)
+			cells[key] = heatmapCellRow{key: key, file: "fileA", value: v}
+		}
+		totals := heatmapSumTotalsByName(cells)
+		got, ok := totals["fileA"]
+		if !ok {
+			t.Fatalf("run %d: fileA missing from totals %+v", i, totals)
+		}
+		if i == 0 {
+			want = got
+			continue
+		}
+		if got != want {
+			t.Fatalf("run %d: total = %v, want %v (byte-identical across every run)", i, got, want)
+		}
+	}
+}
+
+// TestHeatmapAxisTieGroupShape_DuplicateAxisNameRefuses pins rule 1's
+// own no-repeated-name gate: baseline's own `data.axes.y` lists A twice
+// and omits C entirely ([A, B, B]); candidate's own list lists A twice
+// too, in place of B's own second occurrence ([A, A, B]). Both cells
+// legs actually carry THREE distinct files (A, B, C) tied at the same
+// total, so heatmapNameSet's own set-collapse would otherwise make
+// baseline's {A, B} and candidate's {A, B} compare EQUAL, silently
+// certifying a malformed axis (a repeated name, a missing one) as a
+// clean tie-group reorder. Real `heatmapRepoTouchpointsParity`
+// declaration, matching how the route actually wires this shape.
+func TestHeatmapAxisTieGroupShape_DuplicateAxisNameRefuses(t *testing.T) {
+	body := func(axis []string) Snapshot {
+		axisValues := make([]any, len(axis))
+		for i, name := range axis {
+			axisValues[i] = name
+		}
+		return Snapshot{DataPresent: true, Data: map[string]any{
+			"cells": []any{
+				map[string]any{"x": "w1", "y": "A", "value": float64(4)},
+				map[string]any{"x": "w1", "y": "B", "value": float64(4)},
+				map[string]any{"x": "w1", "y": "C", "value": float64(4)},
+			},
+			"axes": map[string]any{"y": axisValues},
+		}}
+	}
+	baseline := body([]string{"A", "B", "B"})
+	candidate := body([]string{"A", "A", "B"})
+
+	var tiePlan *heatmapAxisTieGroupPlan
+	for _, defect := range heatmapRepoTouchpointsParity.BaselineDefects {
+		if defect.HeatmapAxisTieGroupShape != nil {
+			tiePlan = buildHeatmapAxisTieGroupPlan(defect.HeatmapAxisTieGroupShape, baseline.Data, candidate.Data)
+		}
+	}
+	if tiePlan == nil {
+		t.Fatal("heatmapRepoTouchpointsParity declares no HeatmapAxisTieGroupShape entry")
+	}
+	if tiePlan.valid {
+		t.Fatal("plan should refuse -- baseline's own axis list repeats a name and omits a distinct file the cells data actually carries")
+	}
+
+	result := Compare(baseline, candidate, heatmapRepoTouchpointsParity)
+	if result.DifferencesOutsideBaselineDefect == 0 {
+		t.Fatalf("outside = 0, want > 0 -- a malformed, repeated-name axis must never read as a clean tie-group reorder: findings %+v", result.Findings)
+	}
+}

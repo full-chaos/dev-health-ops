@@ -68,6 +68,24 @@ func ClampUnit(value float64) float64 {
 	return Clamp(value, 0.0, 1.0)
 }
 
+// EvidenceQualityBandFloor is one evidence-quality band and the least value
+// it holds: a band holds [Floor, next band's Floor), the highest band
+// [Floor, 1] after ClampUnit.
+type EvidenceQualityBandFloor struct {
+	Name  string
+	Floor float64
+}
+
+// EvidenceQualityBandFloors are utils.normalization.evidence_quality_band's
+// thresholds, lowest band first. EvidenceQualityBand reads them, and so does
+// every reader that needs the bands' value intervals.
+var EvidenceQualityBandFloors = []EvidenceQualityBandFloor{
+	{Name: "very_low", Floor: 0.0},
+	{Name: "low", Floor: 0.4},
+	{Name: "moderate", Floor: 0.6},
+	{Name: "high", Floor: 0.8},
+}
+
 // EvidenceQualityBand is utils.normalization.evidence_quality_band.
 //
 // Unlike Clamp, this one needs no special handling: every `>=` against NaN is
@@ -76,16 +94,12 @@ func ClampUnit(value float64) float64 {
 // in the pipeline Clamp runs first, so a NaN quality reaches this function as
 // 1.0 and is banded "high", never "very_low".
 func EvidenceQualityBand(value float64) string {
-	switch {
-	case value >= 0.8:
-		return "high"
-	case value >= 0.6:
-		return "moderate"
-	case value >= 0.4:
-		return "low"
-	default:
-		return "very_low"
+	for i := len(EvidenceQualityBandFloors) - 1; i > 0; i-- {
+		if value >= EvidenceQualityBandFloors[i].Floor {
+			return EvidenceQualityBandFloors[i].Name
+		}
 	}
+	return EvidenceQualityBandFloors[0].Name
 }
 
 // GraphDensity is evidence._graph_density.

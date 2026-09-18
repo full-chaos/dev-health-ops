@@ -376,15 +376,56 @@ var investmentTeamScopeDictSubsetDefects = []BaselineDefect{
 	},
 }
 
+// investmentTeamScopeQualityStatsDefects cover the three
+// evidence_quality_stats leaves investmentBaselineDefects leaves outside
+// on purpose (mean, stddev, quality_drivers -- see that table's own doc
+// comment), for a team-scoped request only. Under a team scope the
+// baseline aggregates the whole organisation and the candidate the
+// team's own repositories (investmentTeamScopeDictSubsetDefects' own
+// doc comment states both resolutions), so the two legs average
+// different populations and apply the driver thresholds to different
+// inputs. Neither mechanism has a direction. Each entry below checks
+// its leaves against the two bodies' own contents instead:
+// QualityDriversRecomputeShape recomputes each leg's list from that
+// leg's own counts, mean and stddev; BandMomentSubsetShape bounds each
+// (mean, E[x^2]) pair jointly by each leg's own band counts and by the
+// excluded population's band counts. See qualitystatsrecompute.go.
+var investmentTeamScopeQualityStatsDefects = []BaselineDefect{
+	{
+		Ticket:             "CHAOS-5967",
+		Reason:             "GET/POST /api/v1/investment's team scope resolves a team's repositories from team_repo_ownership through teamscope.RepoCondition on the candidate, user_metrics_daily.team_id (empty for this org's real team) on the reference -- the reference aggregates the whole organisation, the candidate the team's own repositories. evidence_quality_stats.mean/stddev are avgIf/stddevPopIf over those two different populations (investment/qualitystats.go, api/queries/investment.py fetch_investment_quality_stats), so they differ with no direction. The check bounds both leaves from the two bodies, jointly: for each leg and for the baseline-minus-candidate excluded population, the mean lies inside the interval its own band counts allow and E[x^2] lies between the exact least and the exact greatest E[x^2] that mean allows; stddev >= 0 and the excluded variance >= 0. Each bound allows only the float64 rounding avgIf/stddevPopIf and the check's own arithmetic can carry, derived in the variance domain: 4*gamma_(n+3) for n >= 2 (4.6e-13 at n = 1029, 7.7e-13 at n = 1732) and exactly 0 for n = 1, whose variance x*x - x*x is computed exactly; so a one-row leg must report stddev 0, and near variance 0 a stddev up to about 1.3e-6 (n = 1029) or 1.6e-6 (n = 1732) is admitted because the planes' own cancellation produces values of that size. A correct pair on a bound, such as a zero-variance excluded set, is admitted on every run. It requires unknown == 0 on both legs and candidate band counts <= baseline band counts. It does not exclude a wrong stddev that stays inside that exact range, such as a sample stddev in place of a population stddev on a large population. Go is correct.",
+		Paths:              []string{"data.evidence_quality_stats.mean", "data.evidence_quality_stats.stddev"},
+		Intermittent:       true,
+		IntermittentReason: "present only while the requested team's own repositories are a PROPER subset of the organization's AND the work units outside them move the average; a team owning every repository leaves both populations identical.",
+		BandMomentSubsetShape: &BandMomentSubsetShape{
+			StatsPath:  "data.evidence_quality_stats",
+			MeanPath:   "data.evidence_quality_stats.mean",
+			StddevPath: "data.evidence_quality_stats.stddev",
+		},
+	},
+	{
+		Ticket:             "CHAOS-5967",
+		Reason:             "the same team-repository-resolution mechanism as this ticket's mean/stddev entry, over evidence_quality_stats.quality_drivers: computeQualityStats (investment/response.go) and _compute_quality_stats (api/services/investment.py) apply the same five thresholds to each plane's own total, band_counts, mean and stddev, so different populations can cross a threshold on one plane only. Admitted only when each leg's list equals, in order, the list recomputed from that leg's own body. Go is correct.",
+		Paths:              []string{"data.evidence_quality_stats.quality_drivers"},
+		Intermittent:       true,
+		IntermittentReason: "present only while the requested team's own repositories are a PROPER subset of the organization's AND the two populations fall on different sides of a driver threshold; a team owning every repository leaves both lists identical",
+		QualityDriversRecomputeShape: &QualityDriversRecomputeShape{
+			StatsPath:   "data.evidence_quality_stats",
+			DriversPath: "data.evidence_quality_stats.quality_drivers",
+		},
+	},
+}
+
 // investmentTeamScopedParity is investmentParity plus
-// investmentTeamScopeDictSubsetDefects. evidence_quality_stats.total
+// investmentTeamScopeDictSubsetDefects and
+// investmentTeamScopeQualityStatsDefects. evidence_quality_stats.total
 // needs no new entry here: investmentBaselineDefects' own existing
 // ScalarDirectionShape citation for it is a single scalar (no "whole key
 // vanishes" case exists for a value with no keys at all) and already
 // admits team scope's own baseline->candidate direction with no change,
 // the same mechanism-agnostic reasoning as the four dict entries above.
 var investmentTeamScopedParity = Options{
-	BaselineDefects:       append(append([]BaselineDefect{}, investmentParity.BaselineDefects...), investmentTeamScopeDictSubsetDefects...),
+	BaselineDefects:       append(append(append([]BaselineDefect{}, investmentParity.BaselineDefects...), investmentTeamScopeDictSubsetDefects...), investmentTeamScopeQualityStatsDefects...),
 	NumericLeavesDeclared: true,
 	FloatTierB:            investmentParity.FloatTierB,
 	IntegerLeaves:         investmentParity.IntegerLeaves,

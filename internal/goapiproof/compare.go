@@ -662,9 +662,16 @@ type BaselineDefect struct {
 	// every other shape in this file except LimitDisplacementShape, it can
 	// admit a STRUCTURAL finding (ShapeLength or a one-directional
 	// ShapePresence), never only a leaf one -- see the gate in
-	// classifyBaselineDefects. nil is the default, unchanged blanket
-	// behaviour every other declared defect still uses. A defect never sets
-	// more than one shape field.
+	// classifyBaselineDefects. Its own EqualLeaves check on a matched
+	// element also reads another defect's already-covered findings (an
+	// element whose own leaf difference a sibling shape already explains,
+	// e.g. sankeyRepoDedupParity's own SankeyRepoFanoutShape, never
+	// invalidates the SUBSET claim for the rest of the list), so like
+	// TeamCoverageIdentityShape, LimitDisplacementShape and
+	// HotspotListBoundaryShape it is evaluated in a SECOND pass, after
+	// every other defect's own `covered` decision is final. nil is the
+	// default, unchanged blanket behaviour every other declared defect
+	// still uses. A defect never sets more than one shape field.
 	TeamRepoSubsetShape *TeamRepoSubsetShape
 
 	// ZeroValueEmptyListShape, when set, replaces this defect's blanket "any
@@ -972,6 +979,20 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 	}
 
 	covered := make([]bool, len(mismatches))
+	// repoMultiplierCovered mirrors `covered`, but is set ONLY for a
+	// finding SankeyRepoFanoutShape or HotspotListBoundaryShape itself
+	// admitted -- the two shapes whose own admission is grounded in a
+	// verified repository fan-out multiplier. TeamRepoSubsetShape's own
+	// second-pass composition (teamreposubset.go) reads THIS slice, never
+	// the generic `covered`: a blanket (unshaped) citation, or a
+	// directional shape with no magnitude bound (e.g. KeyedDirectionShape,
+	// used by heatmap's own team-scope declarations), can cover a finding
+	// of ANY size in either direction, and validating a subset plan on
+	// that alone would let an unrelated, unbounded undercount silently
+	// clear the whole list's subset claim -- a hole confirmed live by an
+	// independent review. Only a verified, integer repository multiplier
+	// is narrow enough a claim to compose with TeamRepoSubsetShape's own.
+	repoMultiplierCovered := make([]bool, len(mismatches))
 	// perDefect records what each defect touched, for a SECOND pass below
 	// once `covered` is FINAL across every defect -- a shaped defect's own
 	// citation can legitimately share Paths with a SIBLING declaration
@@ -1000,12 +1021,12 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 	// for a whole-comparison shape, this run's own mismatch paths) and
 	// never needs to see what any OTHER defect decided -- so ordering
 	// among them has never mattered. TeamCoverageIdentityShape,
-	// LimitDisplacementShape and HotspotListBoundaryShape are the
-	// exceptions: each one's own admission is DEFINED in terms of
-	// `covered` from every OTHER defect, so evaluateDefect is called for
-	// them ONLY in a second pass below, once every ordinary defect has
-	// already run and `covered` is final for everything else in this
-	// comparison.
+	// LimitDisplacementShape, HotspotListBoundaryShape and
+	// TeamRepoSubsetShape are the exceptions: each one's own admission is
+	// DEFINED in terms of `covered` from every OTHER defect, so
+	// evaluateDefect is called for them ONLY in a second pass below, once
+	// every ordinary defect has already run and `covered` is final for
+	// everything else in this comparison.
 	evaluateDefect := func(d int, defect BaselineDefect) {
 		hit := false
 		// Built once per defect, not per finding: a shape's plan (its
@@ -1063,7 +1084,7 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 		}
 		var subsetPlan *teamRepoSubsetPlan
 		if defect.TeamRepoSubsetShape != nil {
-			subsetPlan = buildTeamRepoSubsetPlan(defect.TeamRepoSubsetShape, baselineData, candidateData)
+			subsetPlan = buildTeamRepoSubsetPlan(defect.TeamRepoSubsetShape, baselineData, candidateData, mismatches, findingRefs, result.Findings, repoMultiplierCovered)
 		}
 		var zeroValueEmptyListPlan *zeroValueEmptyListPlan
 		if defect.ZeroValueEmptyListShape != nil {
@@ -1183,18 +1204,21 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 			if admitted {
 				covered[i] = true
 				hit = true
+				if sankeyFanoutPlan != nil || hotspotBoundaryPlan != nil {
+					repoMultiplierCovered[i] = true
+				}
 			}
 		}
 		verdicts[d] = perDefect{hit: hit, shaped: shaped, touched: touched}
 	}
 	for d, defect := range defects {
-		if defect.TeamCoverageIdentityShape != nil || defect.LimitDisplacementShape != nil || defect.HotspotListBoundaryShape != nil {
+		if defect.TeamCoverageIdentityShape != nil || defect.LimitDisplacementShape != nil || defect.HotspotListBoundaryShape != nil || defect.TeamRepoSubsetShape != nil {
 			continue
 		}
 		evaluateDefect(d, defect)
 	}
 	for d, defect := range defects {
-		if defect.TeamCoverageIdentityShape == nil && defect.LimitDisplacementShape == nil && defect.HotspotListBoundaryShape == nil {
+		if defect.TeamCoverageIdentityShape == nil && defect.LimitDisplacementShape == nil && defect.HotspotListBoundaryShape == nil && defect.TeamRepoSubsetShape == nil {
 			continue
 		}
 		evaluateDefect(d, defect)

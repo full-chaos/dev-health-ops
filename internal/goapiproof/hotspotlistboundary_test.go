@@ -281,6 +281,10 @@ func TestHotspotListBoundaryShape_ExcessEntrantsBeyondAdmittedLeaversStayOutside
 // never matches either leg's own reconstructed file count (5) -- the
 // whole plan must refuse, leaving every leaver/entrant/parent finding
 // that TestClosedFixtureIsFullyAdmitted shows CAN close, closed or not.
+// A team-scoped request bounded short of Limit never reaches this shape
+// at all (every production capture this shape is verified against sits
+// at Limit on both legs, team-scoped or not); this Limit mismatch is
+// purely a wrong declaration, and stays a hard refusal.
 func TestHotspotListBoundaryShape_WrongDeclaredLimitStaysOutside(t *testing.T) {
 	p := defaultHotspotBoundaryFixtureParams()
 	baseline, candidate := buildHotspotBoundaryFixture(p, true, true)
@@ -533,5 +537,509 @@ func TestHotspotListBoundaryShape_RealCapturedPOST_EarlierRunStillMatches(t *tes
 
 	if !result.IsMatch() {
 		t.Fatalf("terminal = %q, want match: findings %+v", result.TerminalState, result.Findings)
+	}
+}
+
+// TestHotspotListBoundaryShape_RealCapturedPOST_TwoLevelBoundaryFullyAdmitted
+// pins a THIRD production capture, distinct from the two pairs above: a
+// repository (full-chaos/ask-dev) whose OWN two directly-owned directory
+// edges read 2.8x and 3.1x -- neither a clean integer ratio, so the
+// sibling SankeyRepoFanoutShape entry establishes NO anchor k for it at
+// all -- while every one of its four SHARED (non-boundary) files reads an
+// identical 2.0x. Twelve of its own files are baseline-only, admitted
+// against the response's global candidate minimum, and two of its
+// directories ((root) is not one of them; corpus/scripts/tests each lose
+// every one of their listed children and vanish outright). Proves rule
+// 2's shared-file-ratio source and rule 4's shared-file value admission
+// together, not just the parent identity the two pairs above already
+// pin.
+func TestHotspotListBoundaryShape_RealCapturedPOST_TwoLevelBoundaryFullyAdmitted(t *testing.T) {
+	baseline := hotspotBoundarySnapshotFromFile(t, "testdata/hotspot_org_post_step93_baseline_04b49201.json")
+	candidate := hotspotBoundarySnapshotFromFile(t, "testdata/hotspot_org_post_step93_candidate_831338a4.json")
+
+	result := Compare(baseline, candidate, sankeyHotspotParity)
+
+	if result.TerminalState != TerminalStateMismatch {
+		t.Fatalf("terminal = %q, want mismatch", result.TerminalState)
+	}
+	if result.DifferencesOutsideBaselineDefect != 0 {
+		t.Fatalf("outside = %d, want 0: findings %+v", result.DifferencesOutsideBaselineDefect, result.Findings)
+	}
+}
+
+// TestHotspotListBoundaryShape_RealCapturedGET_TeamScopedFullyAdmitted pins
+// the SAME mechanism as the two production captures above, but under
+// hotspot_team_scoped's OWN Options (sankeyHotspotTeamScopedParity, which
+// layers sankeyNodesTeamScopeSubsetDefect/sankeyLinksTeamScopeSubsetDefect
+// on top of sankeyHotspotParity's own two entries) -- proving the
+// off-Limit relaxation is not needed for THIS production org (team CHAOS
+// owns every repository the corpus's own hotspot query can see, so both
+// legs still land exactly at maxHotspotRowsCorpus), while the shared-file
+// multiplier fix still must fire for the SAME ask-dev fan-out this GET
+// capture also carries.
+func TestHotspotListBoundaryShape_RealCapturedGET_TeamScopedFullyAdmitted(t *testing.T) {
+	baseline := hotspotBoundarySnapshotFromFile(t, "testdata/hotspot_team_scoped_get_step93_baseline_3f4d5c05.json")
+	candidate := hotspotBoundarySnapshotFromFile(t, "testdata/hotspot_org_get_step93_candidate_afd5dfa5.json")
+
+	result := Compare(baseline, candidate, sankeyHotspotTeamScopedParity)
+
+	if result.TerminalState != TerminalStateMismatch {
+		t.Fatalf("terminal = %q, want mismatch", result.TerminalState)
+	}
+	if result.DifferencesOutsideBaselineDefect != 0 {
+		t.Fatalf("outside = %d, want 0: findings %+v", result.DifferencesOutsideBaselineDefect, result.Findings)
+	}
+}
+
+// TestHotspotListBoundaryShape_RealCapturedPOST_TeamScopedFullyAdmitted is
+// the POST sibling of the team-scoped case above.
+func TestHotspotListBoundaryShape_RealCapturedPOST_TeamScopedFullyAdmitted(t *testing.T) {
+	baseline := hotspotBoundarySnapshotFromFile(t, "testdata/hotspot_org_post_step93_baseline_04b49201.json")
+	candidate := hotspotBoundarySnapshotFromFile(t, "testdata/hotspot_team_scoped_post_step93_candidate_4f0a5a7c.json")
+
+	result := Compare(baseline, candidate, sankeyHotspotTeamScopedParity)
+
+	if result.TerminalState != TerminalStateMismatch {
+		t.Fatalf("terminal = %q, want mismatch", result.TerminalState)
+	}
+	if result.DifferencesOutsideBaselineDefect != 0 {
+		t.Fatalf("outside = %d, want 0: findings %+v", result.DifferencesOutsideBaselineDefect, result.Findings)
+	}
+}
+
+// TestHotspotListBoundaryShape_SharedFileValueAdmittedFromTwoAgreeingFiles is
+// RED for the OLD rule 2 (sibling-covered-anchor-edge-only source) AND
+// the old admits() (parent-value only): repoX's ONLY directory is dir1,
+// and dir1's own repo->directory edge is ITSELF contaminated by a leaver
+// (200 vs 80 = 2.5x, not a clean integer ratio) -- exactly the production
+// shape (a repository's own directly-owned directory sums a mix of
+// doubled shared files plus leavers) -- so the sibling SankeyRepoFanoutShape
+// entry establishes NO anchor k for repoX at all; nothing under it is its
+// own to admit. repoX's own k=2 is derivable ONLY from TWO independently
+// agreeing shared files (dir1/shared.go, 100 vs 50; dir1/shared2.go, 60
+// vs 30) -- neither alone, nor any single uncorroborated ratio, may ever
+// derive k (see TestSingleUncorroboratedFileRatioNeverDerivesK for the
+// negative twin) -- and each shared file's own two link values must be
+// admitted directly by rule 4's shared-file half, not merely folded into
+// dir1's own parent re-sum (which this fixture also exercises, closing
+// at 200).
+func TestHotspotListBoundaryShape_SharedFileValueAdmittedFromTwoAgreeingFiles(t *testing.T) {
+	baseNodes := sankeyNode("repoX", "repo") + "," +
+		sankeyNode("repoX / dir1", "directory") + "," +
+		sankeyNode("repoX / dir1/shared.go", "file") + "," +
+		sankeyNode("repoX / dir1/shared2.go", "file") + "," +
+		sankeyNode("repoX / dir1/leaver1.go", "file") + "," +
+		sankeyNode("repoY", "repo") + "," +
+		sankeyNode("repoY / stable", "directory") + "," +
+		sankeyNode("repoY / stable/stable.go", "file") + "," +
+		sankeyNode("refactor", "change_type")
+	baseLinks := sankeyLink("repoX", "repoX / dir1", 200) + "," +
+		sankeyLink("repoX / dir1", "repoX / dir1/shared.go", 100) + "," +
+		sankeyLink("repoX / dir1/shared.go", "refactor", 100) + "," +
+		sankeyLink("repoX / dir1", "repoX / dir1/shared2.go", 60) + "," +
+		sankeyLink("repoX / dir1/shared2.go", "refactor", 60) + "," +
+		sankeyLink("repoX / dir1", "repoX / dir1/leaver1.go", 40) + "," +
+		sankeyLink("repoX / dir1/leaver1.go", "refactor", 40) + "," +
+		sankeyLink("repoY", "repoY / stable", 900) + "," +
+		sankeyLink("repoY / stable", "repoY / stable/stable.go", 900) + "," +
+		sankeyLink("repoY / stable/stable.go", "refactor", 900)
+
+	candNodes := sankeyNode("repoX", "repo") + "," +
+		sankeyNode("repoX / dir1", "directory") + "," +
+		sankeyNode("repoX / dir1/shared.go", "file") + "," +
+		sankeyNode("repoX / dir1/shared2.go", "file") + "," +
+		sankeyNode("repoY", "repo") + "," +
+		sankeyNode("repoY / stable", "directory") + "," +
+		sankeyNode("repoY / stable/stable.go", "file") + "," +
+		sankeyNode("repoY / dir2", "directory") + "," +
+		sankeyNode("repoY / dir2/entrant1.go", "file") + "," +
+		sankeyNode("refactor", "change_type")
+	candLinks := sankeyLink("repoX", "repoX / dir1", 80) + "," +
+		sankeyLink("repoX / dir1", "repoX / dir1/shared.go", 50) + "," +
+		sankeyLink("repoX / dir1/shared.go", "refactor", 50) + "," +
+		sankeyLink("repoX / dir1", "repoX / dir1/shared2.go", 30) + "," +
+		sankeyLink("repoX / dir1/shared2.go", "refactor", 30) + "," +
+		sankeyLink("repoY", "repoY / stable", 900) + "," +
+		sankeyLink("repoY / stable", "repoY / stable/stable.go", 900) + "," +
+		sankeyLink("repoY / stable/stable.go", "refactor", 900) + "," +
+		sankeyLink("repoY", "repoY / dir2", 25) + "," +
+		sankeyLink("repoY / dir2", "repoY / dir2/entrant1.go", 25) + "," +
+		sankeyLink("repoY / dir2/entrant1.go", "refactor", 25)
+
+	baseline := sankeyBody(baseNodes, baseLinks)
+	candidate := sankeyBody(candNodes, candLinks)
+
+	result := Compare(snapshotFromJSON(t, baseline), snapshotFromJSON(t, candidate), hotspotBoundaryOptions(4))
+
+	if result.DifferencesOutsideBaselineDefect != 0 {
+		t.Fatalf("outside = %d, want 0 -- two independently agreeing shared files are the ONLY source available for repoX's multiplier (its own dir1 parent edge is contaminated by leaver1 and never validates alone), and each shared file's own two link values must be admitted directly: findings %+v", result.DifferencesOutsideBaselineDefect, result.Findings)
+	}
+}
+
+// TestHotspotListBoundaryShape_SingleUncorroboratedFileRatioNeverDerivesK
+// is RED for rule 2's own single-file discipline: the IDENTICAL fixture
+// to the two-agreeing-files case above, but shared2.go is dropped (only
+// dir1/shared.go's own 2.0x ratio remains, uncorroborated by any second
+// shared file or by the sibling SankeyRepoFanoutShape, whose own anchor
+// edge -- dir1's parent, 140 vs 50 -- is not a clean integer ratio
+// either). A single, self-consistent ratio must never derive k on its
+// own: leaver1 stays unadmitted, and the otherwise-unrelated repoY
+// entrant loses its own one-leaver-per-entrant admission with it.
+func TestHotspotListBoundaryShape_SingleUncorroboratedFileRatioNeverDerivesK(t *testing.T) {
+	baseNodes := sankeyNode("repoX", "repo") + "," +
+		sankeyNode("repoX / dir1", "directory") + "," +
+		sankeyNode("repoX / dir1/shared.go", "file") + "," +
+		sankeyNode("repoX / dir1/leaver1.go", "file") + "," +
+		sankeyNode("repoY", "repo") + "," +
+		sankeyNode("repoY / stable", "directory") + "," +
+		sankeyNode("repoY / stable/stable.go", "file") + "," +
+		sankeyNode("refactor", "change_type")
+	baseLinks := sankeyLink("repoX", "repoX / dir1", 140) + "," +
+		sankeyLink("repoX / dir1", "repoX / dir1/shared.go", 100) + "," +
+		sankeyLink("repoX / dir1/shared.go", "refactor", 100) + "," +
+		sankeyLink("repoX / dir1", "repoX / dir1/leaver1.go", 40) + "," +
+		sankeyLink("repoX / dir1/leaver1.go", "refactor", 40) + "," +
+		sankeyLink("repoY", "repoY / stable", 900) + "," +
+		sankeyLink("repoY / stable", "repoY / stable/stable.go", 900) + "," +
+		sankeyLink("repoY / stable/stable.go", "refactor", 900)
+
+	candNodes := sankeyNode("repoX", "repo") + "," +
+		sankeyNode("repoX / dir1", "directory") + "," +
+		sankeyNode("repoX / dir1/shared.go", "file") + "," +
+		sankeyNode("repoY", "repo") + "," +
+		sankeyNode("repoY / stable", "directory") + "," +
+		sankeyNode("repoY / stable/stable.go", "file") + "," +
+		sankeyNode("repoY / dir2", "directory") + "," +
+		sankeyNode("repoY / dir2/entrant1.go", "file") + "," +
+		sankeyNode("refactor", "change_type")
+	candLinks := sankeyLink("repoX", "repoX / dir1", 50) + "," +
+		sankeyLink("repoX / dir1", "repoX / dir1/shared.go", 50) + "," +
+		sankeyLink("repoX / dir1/shared.go", "refactor", 50) + "," +
+		sankeyLink("repoY", "repoY / stable", 900) + "," +
+		sankeyLink("repoY / stable", "repoY / stable/stable.go", 900) + "," +
+		sankeyLink("repoY / stable/stable.go", "refactor", 900) + "," +
+		sankeyLink("repoY", "repoY / dir2", 25) + "," +
+		sankeyLink("repoY / dir2", "repoY / dir2/entrant1.go", 25) + "," +
+		sankeyLink("repoY / dir2/entrant1.go", "refactor", 25)
+
+	baseline := sankeyBody(baseNodes, baseLinks)
+	candidate := sankeyBody(candNodes, candLinks)
+
+	result := Compare(snapshotFromJSON(t, baseline), snapshotFromJSON(t, candidate), hotspotBoundaryOptions(3))
+
+	if result.DifferencesOutsideBaselineDefect == 0 {
+		t.Fatalf("outside = 0, want > 0 -- a single, uncorroborated shared-file ratio must never derive a repository's multiplier on its own: findings %+v", result.Findings)
+	}
+}
+
+// TestHotspotListBoundaryShape_SingleFileCorroboratedBySiblingDerivesK
+// pins rule 2's own remaining source-(b) path: dir1's parent edge (140
+// vs 70 = clean 2.0x this time) lets the sibling SankeyRepoFanoutShape
+// establish repoX's anchor k directly, and dir1's single shared file
+// (100 vs 50) independently agrees with that SAME integer -- one shared
+// file, corroborated by the sibling, still derives k and admits the
+// file's own two link values.
+func TestHotspotListBoundaryShape_SingleFileCorroboratedBySiblingDerivesK(t *testing.T) {
+	baseNodes := sankeyNode("repoX", "repo") + "," +
+		sankeyNode("repoX / dir1", "directory") + "," +
+		sankeyNode("repoX / dir1/shared.go", "file") + "," +
+		sankeyNode("refactor", "change_type")
+	baseLinks := sankeyLink("repoX", "repoX / dir1", 140) + "," +
+		sankeyLink("repoX / dir1", "repoX / dir1/shared.go", 100) + "," +
+		sankeyLink("repoX / dir1/shared.go", "refactor", 100)
+
+	candNodes := sankeyNode("repoX", "repo") + "," +
+		sankeyNode("repoX / dir1", "directory") + "," +
+		sankeyNode("repoX / dir1/shared.go", "file") + "," +
+		sankeyNode("refactor", "change_type")
+	candLinks := sankeyLink("repoX", "repoX / dir1", 70) + "," +
+		sankeyLink("repoX / dir1", "repoX / dir1/shared.go", 50) + "," +
+		sankeyLink("repoX / dir1/shared.go", "refactor", 50)
+
+	baseline := sankeyBody(baseNodes, baseLinks)
+	candidate := sankeyBody(candNodes, candLinks)
+
+	result := Compare(snapshotFromJSON(t, baseline), snapshotFromJSON(t, candidate), hotspotBoundaryOptions(1))
+
+	if result.DifferencesOutsideBaselineDefect != 0 {
+		t.Fatalf("outside = %d, want 0 -- one shared file corroborated by the sibling's own anchor k must still derive the repository's multiplier: findings %+v", result.DifferencesOutsideBaselineDefect, result.Findings)
+	}
+}
+
+// TestHotspotListBoundaryShape_DirToFileOwnCheckRejectsMismatch is RED
+// for mutation (a): deleting the directory->file link's own k*candidate
+// check (hotspotlistboundary.go, the repoFanoutFloatsWithinTolerance call
+// admitting cf.dirToFileLinkKey) and admitting it unconditionally once a
+// repository multiplier exists. repoX's k=2 is derived from TWO clean
+// shared files (a.go, b.go, dir1's own parent edge deliberately
+// contaminated by leaver1 so the sibling SankeyRepoFanoutShape
+// contributes nothing); t.go is a THIRD shared file under the SAME
+// directory whose own directory->file value does NOT satisfy k*candidate
+// (90 vs 60*2=120) even though its own file->change_type value DOES
+// (200 vs 100*2=200, admitted independently -- proving this test isolates
+// the directory->file check alone, not the change_type one). Exactly two
+// findings stay outside: t.go's own directory->file value, and dir1's own
+// parent value (unable to close, since t.go's own contamination breaks
+// the uniform-k re-sum identity too) -- an EXACT count, not merely > 0.
+func TestHotspotListBoundaryShape_DirToFileOwnCheckRejectsMismatch(t *testing.T) {
+	baseNodes := sankeyNode("repoX", "repo") + "," +
+		sankeyNode("repoX / dir1", "directory") + "," +
+		sankeyNode("repoX / dir1/a.go", "file") + "," +
+		sankeyNode("repoX / dir1/b.go", "file") + "," +
+		sankeyNode("repoX / dir1/leaver1.go", "file") + "," +
+		sankeyNode("repoX / dir1/t.go", "file") + "," +
+		sankeyNode("repoY", "repo") + "," +
+		sankeyNode("refactor", "change_type")
+	baseLinks := sankeyLink("repoX", "repoX / dir1", 314) + "," +
+		sankeyLink("repoX / dir1", "repoX / dir1/a.go", 100) + "," +
+		sankeyLink("repoX / dir1/a.go", "refactor", 100) + "," +
+		sankeyLink("repoX / dir1", "repoX / dir1/b.go", 80) + "," +
+		sankeyLink("repoX / dir1/b.go", "refactor", 80) + "," +
+		sankeyLink("repoX / dir1", "repoX / dir1/leaver1.go", 44) + "," +
+		sankeyLink("repoX / dir1/leaver1.go", "refactor", 44) + "," +
+		sankeyLink("repoX / dir1", "repoX / dir1/t.go", 90) + "," +
+		sankeyLink("repoX / dir1/t.go", "refactor", 200)
+
+	candNodes := sankeyNode("repoX", "repo") + "," +
+		sankeyNode("repoX / dir1", "directory") + "," +
+		sankeyNode("repoX / dir1/a.go", "file") + "," +
+		sankeyNode("repoX / dir1/b.go", "file") + "," +
+		sankeyNode("repoX / dir1/t.go", "file") + "," +
+		sankeyNode("repoY", "repo") + "," +
+		sankeyNode("repoY / dir2", "directory") + "," +
+		sankeyNode("repoY / dir2/entrant1.go", "file") + "," +
+		sankeyNode("refactor", "change_type")
+	candLinks := sankeyLink("repoX", "repoX / dir1", 150) + "," +
+		sankeyLink("repoX / dir1", "repoX / dir1/a.go", 50) + "," +
+		sankeyLink("repoX / dir1/a.go", "refactor", 50) + "," +
+		sankeyLink("repoX / dir1", "repoX / dir1/b.go", 40) + "," +
+		sankeyLink("repoX / dir1/b.go", "refactor", 40) + "," +
+		sankeyLink("repoX / dir1", "repoX / dir1/t.go", 60) + "," +
+		sankeyLink("repoX / dir1/t.go", "refactor", 100) + "," +
+		sankeyLink("repoY", "repoY / dir2", 25) + "," +
+		sankeyLink("repoY / dir2", "repoY / dir2/entrant1.go", 25) + "," +
+		sankeyLink("repoY / dir2/entrant1.go", "refactor", 25)
+
+	baseline := sankeyBody(baseNodes, baseLinks)
+	candidate := sankeyBody(candNodes, candLinks)
+
+	result := Compare(snapshotFromJSON(t, baseline), snapshotFromJSON(t, candidate), hotspotBoundaryOptions(4))
+
+	if result.DifferencesOutsideBaselineDefect != 2 {
+		t.Fatalf("outside = %d, want 2 (t.go's own directory->file value, and dir1's own parent value): findings %+v", result.DifferencesOutsideBaselineDefect, result.Findings)
+	}
+	sawTGoDirToFile := false
+	for _, f := range result.Findings {
+		if f.Shape == ShapeValue {
+			if key, ok := parseOrderInsensitiveDetailKey(f.Detail); ok && key == "repoX / dir1\x1frepoX / dir1/t.go" {
+				sawTGoDirToFile = true
+			}
+		}
+	}
+	if !sawTGoDirToFile {
+		t.Fatalf("expected t.go's own directory->file value finding in the findings set: findings %+v", result.Findings)
+	}
+}
+
+// TestHotspotListBoundaryShape_FileToChangeTypeValueCheckedIndependently
+// is RED for mutation (b): deleting the file->change_type link's own
+// SEPARATE check and admitting it unconditionally once the
+// directory->file link admits. dir1's TWO shared files (shared.go,
+// shared2.go) both derive repoX's k=2 via rule 2 (dir1's own parent edge,
+// 200 vs 80 = 2.5x, is contaminated by leaver1 and never validates
+// alone), and shared.go's own directory->file value matches that k
+// exactly -- but shared.go's own file->change_type edge carries a
+// DIFFERENT, unrelated value pair (970 vs 500) that does NOT satisfy
+// k*candidate at all (500*2=1000, not 970). Exactly ONE finding stays
+// outside: shared.go's own file->change_type value -- an EXACT count.
+func TestHotspotListBoundaryShape_FileToChangeTypeValueCheckedIndependently(t *testing.T) {
+	baseNodes := sankeyNode("repoX", "repo") + "," +
+		sankeyNode("repoX / dir1", "directory") + "," +
+		sankeyNode("repoX / dir1/shared.go", "file") + "," +
+		sankeyNode("repoX / dir1/shared2.go", "file") + "," +
+		sankeyNode("repoX / dir1/leaver1.go", "file") + "," +
+		sankeyNode("repoY", "repo") + "," +
+		sankeyNode("refactor", "change_type")
+	baseLinks := sankeyLink("repoX", "repoX / dir1", 200) + "," +
+		sankeyLink("repoX / dir1", "repoX / dir1/shared.go", 100) + "," +
+		sankeyLink("repoX / dir1/shared.go", "refactor", 970) + "," +
+		sankeyLink("repoX / dir1", "repoX / dir1/shared2.go", 60) + "," +
+		sankeyLink("repoX / dir1/shared2.go", "refactor", 30) + "," +
+		sankeyLink("repoX / dir1", "repoX / dir1/leaver1.go", 40) + "," +
+		sankeyLink("repoX / dir1/leaver1.go", "refactor", 40)
+
+	candNodes := sankeyNode("repoX", "repo") + "," +
+		sankeyNode("repoX / dir1", "directory") + "," +
+		sankeyNode("repoX / dir1/shared.go", "file") + "," +
+		sankeyNode("repoX / dir1/shared2.go", "file") + "," +
+		sankeyNode("repoY", "repo") + "," +
+		sankeyNode("repoY / dir2", "directory") + "," +
+		sankeyNode("repoY / dir2/entrant1.go", "file") + "," +
+		sankeyNode("refactor", "change_type")
+	candLinks := sankeyLink("repoX", "repoX / dir1", 80) + "," +
+		sankeyLink("repoX / dir1", "repoX / dir1/shared.go", 50) + "," +
+		sankeyLink("repoX / dir1/shared.go", "refactor", 500) + "," +
+		sankeyLink("repoX / dir1", "repoX / dir1/shared2.go", 30) + "," +
+		sankeyLink("repoX / dir1/shared2.go", "refactor", 15) + "," +
+		sankeyLink("repoY", "repoY / dir2", 25) + "," +
+		sankeyLink("repoY / dir2", "repoY / dir2/entrant1.go", 25) + "," +
+		sankeyLink("repoY / dir2/entrant1.go", "refactor", 25)
+
+	baseline := sankeyBody(baseNodes, baseLinks)
+	candidate := sankeyBody(candNodes, candLinks)
+
+	result := Compare(snapshotFromJSON(t, baseline), snapshotFromJSON(t, candidate), hotspotBoundaryOptions(3))
+
+	if result.DifferencesOutsideBaselineDefect != 1 {
+		t.Fatalf("outside = %d, want 1 (shared.go's own file->change_type value, 970 vs 500): findings %+v", result.DifferencesOutsideBaselineDefect, result.Findings)
+	}
+	sawSharedGoChangeType := false
+	for _, f := range result.Findings {
+		if f.Shape == ShapeValue {
+			if key, ok := parseOrderInsensitiveDetailKey(f.Detail); ok && key == "repoX / dir1/shared.go\x1frefactor" {
+				sawSharedGoChangeType = true
+			}
+		}
+	}
+	if !sawSharedGoChangeType {
+		t.Fatalf("expected shared.go's own file->change_type value finding in the findings set: findings %+v", result.Findings)
+	}
+}
+
+// TestHotspotListBoundaryShape_SiblingDisagreementIgnoredStaysOutside is
+// RED for mutation (c): deleting the disagreement guard between source
+// (a) (the sibling's own covered anchor edge) and source (b) (two
+// agreeing shared files) and setting the repository's multiplier from
+// source (b) alone. repoX has an "anchor" directory with NO file
+// children (so it can never itself pollute fileKs) whose own direct edge
+// reads a clean 210 vs 70 = 3.0x -- the sibling SankeyRepoFanoutShape
+// establishes k=3 and admits that ONE edge. dir1's own two shared files
+// (a.go, b.go) independently agree on a DIFFERENT k=2. The two sources
+// disagree, so repoX's multiplier must never be established at all:
+// EXACTLY 13 findings stay outside (every leaver/entrant/parent/file
+// consequence under dir1, none admitted), and a.go's own directory->file
+// value is among them.
+func TestHotspotListBoundaryShape_SiblingDisagreementIgnoredStaysOutside(t *testing.T) {
+	baseNodes := sankeyNode("repoX", "repo") + "," +
+		sankeyNode("repoX / anchor", "directory") + "," +
+		sankeyNode("repoX / dir1", "directory") + "," +
+		sankeyNode("repoX / dir1/a.go", "file") + "," +
+		sankeyNode("repoX / dir1/b.go", "file") + "," +
+		sankeyNode("repoX / dir1/leaver1.go", "file") + "," +
+		sankeyNode("repoY", "repo") + "," +
+		sankeyNode("refactor", "change_type")
+	baseLinks := sankeyLink("repoX", "repoX / anchor", 210) + "," +
+		sankeyLink("repoX", "repoX / dir1", 224) + "," +
+		sankeyLink("repoX / dir1", "repoX / dir1/a.go", 100) + "," +
+		sankeyLink("repoX / dir1/a.go", "refactor", 100) + "," +
+		sankeyLink("repoX / dir1", "repoX / dir1/b.go", 80) + "," +
+		sankeyLink("repoX / dir1/b.go", "refactor", 80) + "," +
+		sankeyLink("repoX / dir1", "repoX / dir1/leaver1.go", 44) + "," +
+		sankeyLink("repoX / dir1/leaver1.go", "refactor", 44)
+
+	candNodes := sankeyNode("repoX", "repo") + "," +
+		sankeyNode("repoX / anchor", "directory") + "," +
+		sankeyNode("repoX / dir1", "directory") + "," +
+		sankeyNode("repoX / dir1/a.go", "file") + "," +
+		sankeyNode("repoX / dir1/b.go", "file") + "," +
+		sankeyNode("repoY", "repo") + "," +
+		sankeyNode("repoY / dir2", "directory") + "," +
+		sankeyNode("repoY / dir2/entrant1.go", "file") + "," +
+		sankeyNode("refactor", "change_type")
+	candLinks := sankeyLink("repoX", "repoX / anchor", 70) + "," +
+		sankeyLink("repoX", "repoX / dir1", 90) + "," +
+		sankeyLink("repoX / dir1", "repoX / dir1/a.go", 50) + "," +
+		sankeyLink("repoX / dir1/a.go", "refactor", 50) + "," +
+		sankeyLink("repoX / dir1", "repoX / dir1/b.go", 40) + "," +
+		sankeyLink("repoX / dir1/b.go", "refactor", 40) + "," +
+		sankeyLink("repoY", "repoY / dir2", 25) + "," +
+		sankeyLink("repoY / dir2", "repoY / dir2/entrant1.go", 25) + "," +
+		sankeyLink("repoY / dir2/entrant1.go", "refactor", 25)
+
+	baseline := sankeyBody(baseNodes, baseLinks)
+	candidate := sankeyBody(candNodes, candLinks)
+
+	result := Compare(snapshotFromJSON(t, baseline), snapshotFromJSON(t, candidate), hotspotBoundaryOptions(3))
+
+	if result.DifferencesOutsideBaselineDefect != 13 {
+		t.Fatalf("outside = %d, want 13: findings %+v", result.DifferencesOutsideBaselineDefect, result.Findings)
+	}
+	sawAGoDirToFile := false
+	for _, f := range result.Findings {
+		if f.Shape == ShapeValue {
+			if key, ok := parseOrderInsensitiveDetailKey(f.Detail); ok && key == "repoX / dir1\x1frepoX / dir1/a.go" {
+				sawAGoDirToFile = true
+			}
+		}
+	}
+	if !sawAGoDirToFile {
+		t.Fatalf("expected a.go's own directory->file value finding in the findings set: findings %+v", result.Findings)
+	}
+}
+
+// TestHotspotListBoundaryShape_NonIntegerRatioNeverDerivesKEvenWithAgreement
+// is RED for mutation (d): computing a file's own ratio as the NEAREST
+// integer with no tolerance check at all, in place of
+// repoFanoutIntegerMultiplier. TWO shared files both read the SAME
+// non-integer ratio (a.go 160/100, b.go 136/85, both exactly 1.6) --
+// naive nearest-integer rounding would round 1.6 to a MEANINGFUL k=2
+// (able to admit leaver1 below); repoFanoutIntegerMultiplier's own
+// tolerance instead rejects 1.6 outright (nowhere near clean), so this
+// repository never derives ANY k, agreeing samples or not. Exactly 11
+// findings stay outside (every leaver/entrant/parent/file consequence
+// under dir1), and a.go's own directory->file value is among them.
+func TestHotspotListBoundaryShape_NonIntegerRatioNeverDerivesKEvenWithAgreement(t *testing.T) {
+	baseNodes := sankeyNode("repoX", "repo") + "," +
+		sankeyNode("repoX / dir1", "directory") + "," +
+		sankeyNode("repoX / dir1/a.go", "file") + "," +
+		sankeyNode("repoX / dir1/b.go", "file") + "," +
+		sankeyNode("repoX / dir1/leaver1.go", "file") + "," +
+		sankeyNode("repoY", "repo") + "," +
+		sankeyNode("repoY / dir2", "directory") + "," +
+		sankeyNode("repoY / dir2/entrant1.go", "file") + "," +
+		sankeyNode("refactor", "change_type")
+	baseLinks := sankeyLink("repoX", "repoX / dir1", 336) + "," +
+		sankeyLink("repoX / dir1", "repoX / dir1/a.go", 160) + "," +
+		sankeyLink("repoX / dir1/a.go", "refactor", 160) + "," +
+		sankeyLink("repoX / dir1", "repoX / dir1/b.go", 136) + "," +
+		sankeyLink("repoX / dir1/b.go", "refactor", 136) + "," +
+		sankeyLink("repoX / dir1", "repoX / dir1/leaver1.go", 40) + "," +
+		sankeyLink("repoX / dir1/leaver1.go", "refactor", 40)
+
+	candNodes := sankeyNode("repoX", "repo") + "," +
+		sankeyNode("repoX / dir1", "directory") + "," +
+		sankeyNode("repoX / dir1/a.go", "file") + "," +
+		sankeyNode("repoX / dir1/b.go", "file") + "," +
+		sankeyNode("repoY", "repo") + "," +
+		sankeyNode("repoY / dir2", "directory") + "," +
+		sankeyNode("repoY / dir2/entrant1.go", "file") + "," +
+		sankeyNode("refactor", "change_type")
+	candLinks := sankeyLink("repoX", "repoX / dir1", 185) + "," +
+		sankeyLink("repoX / dir1", "repoX / dir1/a.go", 100) + "," +
+		sankeyLink("repoX / dir1/a.go", "refactor", 100) + "," +
+		sankeyLink("repoX / dir1", "repoX / dir1/b.go", 85) + "," +
+		sankeyLink("repoX / dir1/b.go", "refactor", 85) + "," +
+		sankeyLink("repoY", "repoY / dir2", 25) + "," +
+		sankeyLink("repoY / dir2", "repoY / dir2/entrant1.go", 25) + "," +
+		sankeyLink("repoY / dir2/entrant1.go", "refactor", 25)
+
+	baseline := sankeyBody(baseNodes, baseLinks)
+	candidate := sankeyBody(candNodes, candLinks)
+
+	result := Compare(snapshotFromJSON(t, baseline), snapshotFromJSON(t, candidate), hotspotBoundaryOptions(3))
+
+	if result.DifferencesOutsideBaselineDefect != 11 {
+		t.Fatalf("outside = %d, want 11: findings %+v", result.DifferencesOutsideBaselineDefect, result.Findings)
+	}
+	sawAGoDirToFile := false
+	for _, f := range result.Findings {
+		if f.Shape == ShapeValue {
+			if key, ok := parseOrderInsensitiveDetailKey(f.Detail); ok && key == "repoX / dir1\x1frepoX / dir1/a.go" {
+				sawAGoDirToFile = true
+			}
+		}
+	}
+	if !sawAGoDirToFile {
+		t.Fatalf("expected a.go's own directory->file value finding in the findings set: findings %+v", result.Findings)
 	}
 }

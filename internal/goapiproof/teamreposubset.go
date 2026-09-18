@@ -259,7 +259,7 @@ type teamRepoSubsetPlan struct {
 // buildTeamRepoSubsetPlan evaluates every rule TeamRepoSubsetShape
 // documents against one comparison's decoded baseline/candidate `data`
 // values.
-func buildTeamRepoSubsetPlan(shape *TeamRepoSubsetShape, baselineData, candidateData any) *teamRepoSubsetPlan {
+func buildTeamRepoSubsetPlan(shape *TeamRepoSubsetShape, baselineData, candidateData any, mismatches []string, findingRefs []int, findings []Finding, covered []bool) *teamRepoSubsetPlan {
 	plan := &teamRepoSubsetPlan{shape: shape, baselineOnlyKeys: map[string]bool{}, boundedAdmits: map[string]map[string]bool{}, candidateOnlyAdmitted: map[string]bool{}}
 
 	baseList, ok1 := teamRepoSubsetList(baselineData, shape.ListPath)
@@ -277,6 +277,61 @@ func buildTeamRepoSubsetPlan(shape *TeamRepoSubsetShape, baselineData, candidate
 		return plan
 	}
 	plan.valid = true
+
+	// siblingAdmittedEqualLeaf records, per matched key and EqualLeaves
+	// leaf name, whether SankeyRepoFanoutShape or HotspotListBoundaryShape
+	// (the two shapes whose own admission is grounded in a VERIFIED,
+	// INTEGER repository fan-out multiplier -- never any other shape) in
+	// the SAME comparison already covered that exact leaf's own ShapeValue
+	// finding. The caller passes repoMultiplierCovered (compare.go), a
+	// narrower slice than the generic `covered` set ONLY by those two
+	// shapes' own admission -- a blanket (unshaped) citation or a
+	// directional shape with no magnitude bound (e.g. heatmap's own
+	// KeyedDirectionShape) must NEVER validate a subset plan: either could
+	// cover a finding of ANY size in either direction, and trusting one
+	// here would let an unrelated, unbounded undercount silently clear the
+	// whole list's subset claim (a hole confirmed by independent review).
+	// classifyBaselineDefects' own second-pass ordering runs THIS shape
+	// only after repoMultiplierCovered is final for every first-pass
+	// defect (SankeyRepoFanoutShape among them). Rule 4 below reads this
+	// map instead of a raw value comparison for such a leaf: an
+	// already-explained value difference on one matched element must
+	// never cascade into refusing the whole list's SUBSET claim for every
+	// OTHER element -- confirmed live, a team-scoped investment response
+	// where one repository's own edge value differs by exactly its
+	// sibling-validated fan-out multiplier, and that single difference
+	// otherwise blocked the org-wide-only "theme -> Other" links from ever
+	// being admitted as a legitimate subset absence. A leaf difference NO
+	// such sibling explains still fails the raw comparison exactly as
+	// before.
+	siblingAdmittedEqualLeaf := map[string]map[string]bool{}
+	for i, path := range mismatches {
+		if !covered[i] {
+			continue
+		}
+		leaf, ok := strings.CutPrefix(path, shape.ListPath+".")
+		if !ok {
+			continue
+		}
+		isEqualLeaf := false
+		for _, name := range shape.EqualLeaves {
+			if name == leaf {
+				isEqualLeaf = true
+				break
+			}
+		}
+		if !isEqualLeaf {
+			continue
+		}
+		key, ok := parseOrderInsensitiveDetailKey(findings[findingRefs[i]].Detail)
+		if !ok {
+			continue
+		}
+		if siblingAdmittedEqualLeaf[key] == nil {
+			siblingAdmittedEqualLeaf[key] = map[string]bool{}
+		}
+		siblingAdmittedEqualLeaf[key][leaf] = true
+	}
 
 	boundedAt := make(map[string]bool, len(shape.BoundedLeafKeys))
 	for _, key := range shape.BoundedLeafKeys {
@@ -322,6 +377,9 @@ func buildTeamRepoSubsetPlan(shape *TeamRepoSubsetShape, baselineData, candidate
 		}
 		for _, leaf := range shape.EqualLeaves {
 			if !subsetValueEqual(baseObject[leaf], candObject[leaf]) {
+				if siblingAdmittedEqualLeaf[key][leaf] {
+					continue
+				}
 				subset = false
 			}
 		}

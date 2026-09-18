@@ -50,17 +50,33 @@ import (
 //  1. Both reconstructed file lists are EXACTLY Limit long -- the route's
 //     own fixed LIMIT, never a per-request value (see the type doc
 //     comment above). Anything else refuses the WHOLE plan, the same
-//     discipline as LimitDisplacementShape's own rule 1.
-//  2. A repository's multiplier k is read ONLY from this comparison's
-//     ALREADY-COVERED LinkValuePath findings whose edge source is a
-//     repo-group node -- the sibling SankeyRepoFanoutShape entry's own
-//     admitted anchor edges (same BaselineDefect list, evaluated first;
-//     classifyBaselineDefects' own second pass, compare.go, is what
-//     makes this legal). Never a fixed repository, never independently
-//     re-derived: a repository with no such covered finding gets no
-//     multiplier, and every rule below then treats it as k=1 (no known
-//     fan-out), exactly LimitDisplacementShape's own repoRatios
-//     discipline.
+//     discipline as LimitDisplacementShape's own rule 1. A team-scoped
+//     request bounded short of Limit therefore never reaches this shape
+//     at all -- confirmed live, every production capture this shape was
+//     verified against, team-scoped or not, sits at Limit on both legs.
+//  2. A repository's multiplier k is the ONE INTEGER >= 2
+//     (repoFanoutIntegerMultiplier, the same check sankeyrepofanout.go's
+//     own anchor rule already applies) two independent sources agree on.
+//     Source (a): already-covered LinkValuePath findings whose edge
+//     source is a repo-group node -- the sibling SankeyRepoFanoutShape
+//     entry's own admitted anchor edges (same BaselineDefect list,
+//     evaluated first; classifyBaselineDefects' own second pass,
+//     compare.go, is what makes this legal). Source (b): a file listed
+//     on both legs under the SAME repository whose own directory->file
+//     edge value differs, each file checked independently. k is
+//     established only when TWO OR MORE files from source (b)
+//     independently derive the SAME integer, OR exactly one file from
+//     source (b) is corroborated by source (a)'s own integer for the
+//     SAME repository, OR source (a) alone agrees with itself across
+//     every edge it covers for that repository. A SINGLE, uncorroborated
+//     file from source (b) never establishes k on its own: a plain,
+//     unrelated undercount can produce one ratio that happens to be
+//     self-consistent (there is nothing else to disagree with) without
+//     being a whole-number multiple at all, and admitting it there would
+//     paper over a genuine Go regression as if it were the declared
+//     fan-out. A repository with no established k is treated as k=1 (no
+//     known fan-out) by every rule below, exactly LimitDisplacementShape's
+//     own repoRatios discipline.
 //  3. A baseline-only (leaving) file is an ENTRANT admission candidate
 //     when its own repository carries a verified k>1 and its value
 //     divided by k -- its true, undoubled value -- sits at or under the
@@ -153,6 +169,20 @@ type hotspotListBoundaryPlan struct {
 	// admittedParentValue holds every repo->directory link key whose own
 	// VALUE finding re-sums exactly (rule 4's parent identity).
 	admittedParentValue map[string]bool
+	// admittedSharedFileValue holds every directory->file / file->
+	// change_type link key belonging to a file listed on BOTH legs (never
+	// a leaver or entrant) whose own value differs from its counterpart
+	// by EXACTLY its repository's rule-2 verified multiplier -- the
+	// cleanest possible consequence of the same repos-join fan-out this
+	// shape's sibling SankeyRepoFanoutShape entry exists to admit, one
+	// level deeper than that shape's own anchor-rooted walk ever reaches
+	// when the anchor's OWN direct edges are themselves contaminated by a
+	// boundary crossing (rule 2's own doc comment). Never a parent
+	// (repo->directory) link -- that is admittedParentValue's own,
+	// stricter re-sum identity -- and never a leaver/entrant's own link,
+	// which rule 4's file half already folds into admittedBaselineOnly/
+	// admittedCandidateOnly by direction.
+	admittedSharedFileValue map[string]bool
 }
 
 // decodeHotspotGraph reconstructs one leg's file/directory projections
@@ -206,10 +236,11 @@ func buildHotspotListBoundaryPlan(
 	covered []bool,
 ) *hotspotListBoundaryPlan {
 	plan := &hotspotListBoundaryPlan{
-		shape:                 shape,
-		admittedBaselineOnly:  map[string]bool{},
-		admittedCandidateOnly: map[string]bool{},
-		admittedParentValue:   map[string]bool{},
+		shape:                   shape,
+		admittedBaselineOnly:    map[string]bool{},
+		admittedCandidateOnly:   map[string]bool{},
+		admittedParentValue:     map[string]bool{},
+		admittedSharedFileValue: map[string]bool{},
 	}
 
 	baseGroups, ok1 := sankeyNodeGroups(baselineData, shape.NodesListPath)
@@ -223,10 +254,6 @@ func buildHotspotListBoundaryPlan(
 	baseFiles, baseDirs := decodeHotspotGraph(baseGroups, baseEdges, shape)
 	candFiles, candDirs := decodeHotspotGraph(candGroups, candEdges, shape)
 
-	// Rule 1.
-	if len(baseFiles) != shape.Limit || len(candFiles) != shape.Limit {
-		return plan
-	}
 	var baselineOnly, candidateOnly []string
 	for name := range baseFiles {
 		if _, ok := candFiles[name]; !ok {
@@ -238,6 +265,11 @@ func buildHotspotListBoundaryPlan(
 			candidateOnly = append(candidateOnly, name)
 		}
 	}
+
+	// Rule 1.
+	if len(baseFiles) != shape.Limit || len(candFiles) != shape.Limit {
+		return plan
+	}
 	if len(baselineOnly) == 0 || len(baselineOnly) != len(candidateOnly) {
 		return plan
 	}
@@ -245,8 +277,10 @@ func buildHotspotListBoundaryPlan(
 	sort.Strings(candidateOnly)
 	plan.valid = true
 
-	// Rule 2: per-repository multiplier from already-covered
-	// LinkValuePath findings whose edge source is a repo-group node.
+	// Rule 2: per-repository multiplier from TWO independent sources,
+	// each an INTEGER (repoFanoutIntegerMultiplier) -- see the type doc
+	// comment's own rule 2 for the full derivation and why a single,
+	// uncorroborated shared file never establishes k alone.
 	repoNames := map[string]bool{}
 	for _, d := range baseDirs {
 		repoNames[d.repo] = true
@@ -254,7 +288,7 @@ func buildHotspotListBoundaryPlan(
 	for _, d := range candDirs {
 		repoNames[d.repo] = true
 	}
-	repoRatios := map[string][]float64{}
+	siblingKs := map[string][]int{}
 	for i, path := range mismatches {
 		if path != shape.LinkValuePath || !covered[i] {
 			continue
@@ -269,22 +303,44 @@ func buildHotspotListBoundaryPlan(
 		}
 		baseEdge, okB := baseEdges[key]
 		candEdge, okC := candEdges[key]
-		if !okB || !okC || candEdge.value == 0 {
+		if !okB || !okC {
 			continue
 		}
-		repoRatios[source] = append(repoRatios[source], baseEdge.value/candEdge.value)
+		if k, ok := repoFanoutIntegerMultiplier(baseEdge.value, candEdge.value); ok {
+			siblingKs[source] = append(siblingKs[source], k)
+		}
+	}
+	fileKs := map[string][]int{}
+	for name, cf := range candFiles {
+		bf, ok := baseFiles[name]
+		if !ok || bf.repo != cf.repo {
+			continue
+		}
+		if k, ok := repoFanoutIntegerMultiplier(bf.value, cf.value); ok {
+			fileKs[bf.repo] = append(fileKs[bf.repo], k)
+		}
+	}
+	allRepos := map[string]bool{}
+	for repo := range siblingKs {
+		allRepos[repo] = true
+	}
+	for repo := range fileKs {
+		allRepos[repo] = true
 	}
 	repoMultiplier := map[string]float64{}
-	for repo, ratios := range repoRatios {
-		consistent := true
-		for _, ratio := range ratios[1:] {
-			if !repoFanoutFloatsWithinTolerance(ratio, ratios[0]) {
-				consistent = false
-				break
+	for repo := range allRepos {
+		siblingAgree, siblingK := intsAgree(siblingKs[repo])
+		filesAgree, filesK := intsAgree(fileKs[repo])
+		switch {
+		case len(fileKs[repo]) >= 2 && filesAgree:
+			if len(siblingKs[repo]) > 0 && (!siblingAgree || siblingK != filesK) {
+				continue
 			}
-		}
-		if consistent && ratios[0] > 1 {
-			repoMultiplier[repo] = ratios[0]
+			repoMultiplier[repo] = float64(filesK)
+		case len(fileKs[repo]) == 1 && siblingAgree && siblingK == filesK:
+			repoMultiplier[repo] = float64(filesK)
+		case len(fileKs[repo]) == 0 && siblingAgree:
+			repoMultiplier[repo] = float64(siblingK)
 		}
 	}
 
@@ -432,6 +488,39 @@ func buildHotspotListBoundaryPlan(
 		}
 	}
 
+	// Rule 4, shared-file half: a file listed on BOTH legs under a
+	// repository with a rule-2 verified multiplier k -- admits that
+	// file's own directory->file link when the file's OWN value (already
+	// that edge's own value, hotspotFileRow.value) is k times its
+	// candidate counterpart, and its own file->change_type link
+	// SEPARATELY, checked against THAT edge's own baseline/candidate
+	// values read independently from baseEdges/candEdges -- never assumed
+	// identical to the directory->file edge's own check, even though the
+	// two normally carry the same underlying churn value by construction.
+	// The same single-edge multiply SankeyRepoFanoutShape's own rule 1
+	// verifies an anchor's k FROM when the anchor's direct edges are
+	// clean; here the file itself carries the clean signal instead.
+	for name, cf := range candFiles {
+		bf, ok := baseFiles[name]
+		if !ok || bf.repo != cf.repo {
+			continue
+		}
+		k, ok := repoMultiplier[bf.repo]
+		if !ok {
+			continue
+		}
+		if repoFanoutFloatsWithinTolerance(bf.value, cf.value*k) {
+			plan.admittedSharedFileValue[cf.dirToFileLinkKey] = true
+		}
+		if cf.fileToTypeLinkKey != "" && bf.fileToTypeLinkKey != "" {
+			baseTypeEdge, okB := baseEdges[bf.fileToTypeLinkKey]
+			candTypeEdge, okC := candEdges[cf.fileToTypeLinkKey]
+			if okB && okC && repoFanoutFloatsWithinTolerance(baseTypeEdge.value, candTypeEdge.value*k) {
+				plan.admittedSharedFileValue[cf.fileToTypeLinkKey] = true
+			}
+		}
+	}
+
 	return plan
 }
 
@@ -445,7 +534,7 @@ func (p *hotspotListBoundaryPlan) admits(finding Finding) bool {
 		if !ok {
 			return false
 		}
-		return p.admittedParentValue[key]
+		return p.admittedParentValue[key] || p.admittedSharedFileValue[key]
 	}
 	key, ok := parsePresenceDetailKey(finding.Detail)
 	if !ok {
@@ -458,6 +547,23 @@ func (p *hotspotListBoundaryPlan) admits(finding Finding) bool {
 		return p.admittedCandidateOnly[key]
 	}
 	return false
+}
+
+// intsAgree reports whether ks is non-empty and every element is equal,
+// returning that shared value. An empty slice never agrees with itself --
+// there is nothing to corroborate -- the same "no samples, no claim"
+// default every other lookup in this file uses.
+func intsAgree(ks []int) (bool, int) {
+	if len(ks) == 0 {
+		return false, 0
+	}
+	first := ks[0]
+	for _, k := range ks[1:] {
+		if k != first {
+			return false, 0
+		}
+	}
+	return true, first
 }
 
 // hotspotMin returns the smallest value among files, excluding any name

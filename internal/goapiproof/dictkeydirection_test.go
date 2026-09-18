@@ -118,3 +118,80 @@ func TestDictKeyDirectionShape_PerKeyIndependentAdmission(t *testing.T) {
 		t.Fatalf("outside = %d, want 1 (backend stays uncovered, frontend is admitted): findings %+v", result.DifferencesOutsideBaselineDefect, result.Findings)
 	}
 }
+
+// themeDistributionBaselineOnlyOptions is themeDistributionOptions' own
+// twin with AdmitBaselineOnlyKeys set -- exercising the opt-in this file's
+// other tests never touch.
+func themeDistributionBaselineOnlyOptions(ticket string) Options {
+	return Options{
+		BaselineDefects: []BaselineDefect{{
+			Ticket: ticket, Reason: "test fixture",
+			Paths:        []string{"data.theme_distribution"},
+			Intermittent: true, IntermittentReason: "test fixture",
+			DictKeyDirectionShape: &DictKeyDirectionShape{
+				DictPath:              "data.theme_distribution",
+				ValuePath:             "data.theme_distribution",
+				AdmitBaselineOnlyKeys: true,
+			},
+		}},
+	}
+}
+
+// TestDictKeyDirectionShape_BaselineOnlyKeyAdmittedWhenOptedIn pins the
+// new opt-in itself: a key the baseline carries and the candidate does
+// not at all (not merely a smaller value at a shared key) is admitted
+// once a declaration sets AdmitBaselineOnlyKeys -- the JSON-OBJECT
+// counterpart of TeamRepoSubsetShape's own rule 3 for a JSON ARRAY.
+func TestDictKeyDirectionShape_BaselineOnlyKeyAdmittedWhenOptedIn(t *testing.T) {
+	baseline := snapshotFromJSON(t, themeDistBody(themePair("frontend", 100)+","+themePair("backend", 50)))
+	candidate := snapshotFromJSON(t, themeDistBody(themePair("frontend", 100)))
+
+	result := Compare(baseline, candidate, themeDistributionBaselineOnlyOptions("CHAOS-TEST-DICTDIR-PRESENCE"))
+	if result.DifferencesOutsideBaselineDefect != 0 {
+		t.Fatalf("outside = %d, want 0 -- a key entirely missing from the candidate map must be admitted once AdmitBaselineOnlyKeys is set: findings %+v", result.DifferencesOutsideBaselineDefect, result.Findings)
+	}
+	if !equalStrings(result.BaselineDefectsMatched, []string{"CHAOS-TEST-DICTDIR-PRESENCE"}) {
+		t.Fatalf("matched = %v, want [CHAOS-TEST-DICTDIR-PRESENCE]", result.BaselineDefectsMatched)
+	}
+}
+
+// TestDictKeyDirectionShape_BaselineOnlyKeyNotAdmittedWhenNotOptedIn is
+// the opt-in's own negative twin, over the SAME fixture as the test
+// above: a declaration that never sets AdmitBaselineOnlyKeys must see
+// EXACTLY the pre-existing gate behaviour -- the missing key stays an
+// ordinary, uncovered finding, not silently admitted by merely declaring
+// DictKeyDirectionShape at all. THREE independent checks each refuse this
+// on their own, and this test's own pass proves all three still hold
+// together: compare.go's own shape-field gate (classifyBaselineDefects)
+// blocks a ShapePresence finding from reaching this declaration's
+// admits() at all; buildDictKeyDirectionPlan never populates
+// baselineOnlyKeys in the first place; and admits() itself carries its
+// own redundant `if !p.shape.AdmitBaselineOnlyKeys { return false }`
+// refusal (dictkeydirection.go). Any ONE of the three alone is already
+// sufficient to keep this test green; only all three open at once turns
+// it red.
+func TestDictKeyDirectionShape_BaselineOnlyKeyNotAdmittedWhenNotOptedIn(t *testing.T) {
+	baseline := snapshotFromJSON(t, themeDistBody(themePair("frontend", 100)+","+themePair("backend", 50)))
+	candidate := snapshotFromJSON(t, themeDistBody(themePair("frontend", 100)))
+
+	result := Compare(baseline, candidate, themeDistributionOptions("CHAOS-TEST-DICTDIR"))
+	if result.DifferencesOutsideBaselineDefect != 1 {
+		t.Fatalf("outside = %d, want 1 -- a key missing entirely from the candidate map must stay outside for a declaration that never opted in: findings %+v", result.DifferencesOutsideBaselineDefect, result.Findings)
+	}
+}
+
+// TestDictKeyDirectionShape_CandidateOnlyKeyNeverAdmittedEvenOptedIn
+// extends the file's own CandidateOnlyKeyNeverAdmitted pin to the
+// opted-in declaration: AdmitBaselineOnlyKeys widens compare.go's own
+// gate to let a ShapePresence finding reach admits() at all for THIS
+// declaration, so this direction's own refusal here is admits()'s own
+// property, not the upstream gate's.
+func TestDictKeyDirectionShape_CandidateOnlyKeyNeverAdmittedEvenOptedIn(t *testing.T) {
+	baseline := snapshotFromJSON(t, themeDistBody(themePair("frontend", 100)))
+	candidate := snapshotFromJSON(t, themeDistBody(themePair("frontend", 100)+","+themePair("backend", 50)))
+
+	result := Compare(baseline, candidate, themeDistributionBaselineOnlyOptions("CHAOS-TEST-DICTDIR-PRESENCE"))
+	if result.DifferencesOutsideBaselineDefect != 1 {
+		t.Fatalf("outside = %d, want 1 -- a candidate-only key must stay outside even for an opted-in declaration: findings %+v", result.DifferencesOutsideBaselineDefect, result.Findings)
+	}
+}

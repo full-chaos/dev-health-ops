@@ -304,6 +304,92 @@ var investmentParity = Options{
 	IntegerLeaves:         investmentIntegerLeaves,
 }
 
+// investmentTeamScopeDictSubsetDefects extends FOUR of
+// investmentBaselineDefects' own five existing dict/scalar-direction
+// citations (theme_distribution, subcategory_distribution,
+// evidence_quality_distribution, evidence_quality_stats.band_counts) with
+// a SIBLING declaration for the team-scope mechanism this ticket adds:
+// BuildResponse (investment/response.go:186-197) splices
+// teamscope.RepoCondition(orgID,"repo_id",params.ScopeIDs,...) for a
+// team scope, resolving a team's repositories from team_repo_ownership,
+// while the reference resolves the same scope from user_metrics_daily.
+// team_id (resolve_repo_filter_ids -> resolve_repo_ids_for_teams,
+// api/queries/scopes.py:72-89) -- empty for this org's real team, so the
+// reference answers organization-wide while the candidate answers over
+// the team's own repositories.
+//
+// A MATCHED key's own value shrinking (or staying equal) under this
+// narrower population is ALREADY admitted by the existing sibling
+// DictKeyDirectionShape entries above with no change at all:
+// DictKeyDirectionShape's own claim (baseline >= candidate at a matched
+// key) is a structural fact about ANY strict-subset population, not
+// specific to the work_unit_supersessions mechanism those entries were
+// first written for -- the SAME reasoning explainContributorsSubsetDefect/
+// explainDriversSubsetDefect (restcorpus.go, above) already establish for
+// reusing a mechanism-agnostic shape across two unrelated root causes.
+//
+// What the EXISTING entries cannot admit is a theme/subcategory/quality-
+// band that exists organization-wide but has ZERO effort inside the
+// team's own repositories: BuildResponse's own per-row accumulation
+// (`if row.Theme != "" && row.Value > 0`, response.go) never writes a Go
+// map entry for a value that never appears at all, so the WHOLE KEY is
+// absent from the candidate map, not merely smaller -- a ShapePresence
+// finding, which DictKeyDirectionShape's own pre-existing gate refuses
+// for every declaration that never opts in (dictkeydirection.go's own
+// AdmitBaselineOnlyKeys doc comment). These four sibling entries opt
+// their own Paths into that admission for exactly this ticket's own
+// mechanism; the four EXISTING sibling entries above are left untouched
+// (AdmitBaselineOnlyKeys stays false there), so their own behaviour for
+// the supersession mechanism is unchanged.
+var investmentTeamScopeDictSubsetDefects = []BaselineDefect{
+	{
+		Ticket:                "CHAOS-5940",
+		Reason:                "GET/POST /api/v1/investment's team scope resolves a team's repositories from team_repo_ownership through teamscope.RepoCondition on the candidate, user_metrics_daily.team_id (empty for this org's real team) on the reference -- the reference answers organization-wide, the candidate over the team's own repositories. A theme with zero effort inside the team's own repositories is absent from the candidate map entirely, not merely smaller (BuildResponse's own `row.Value > 0` guard, response.go). Go is correct.",
+		Paths:                 []string{"data.theme_distribution"},
+		Intermittent:          true,
+		IntermittentReason:    "present only while the requested team's own repositories are a PROPER subset of the organization's AND at least one theme's own effort falls entirely outside that subset; a team owning every repository, or a window whose every theme touches the team's own repositories, shows no divergence under this path",
+		DictKeyDirectionShape: &DictKeyDirectionShape{DictPath: "data.theme_distribution", ValuePath: "data.theme_distribution", AdmitBaselineOnlyKeys: true},
+	},
+	{
+		Ticket:                "CHAOS-5940",
+		Reason:                "the same team-repository-resolution mechanism as this ticket's data.theme_distribution entry, over subcategory_distribution. Go is correct.",
+		Paths:                 []string{"data.subcategory_distribution"},
+		Intermittent:          true,
+		IntermittentReason:    "present only while the requested team's own repositories are a PROPER subset of the organization's AND at least one subcategory's own effort falls entirely outside that subset; a team owning every repository, or a window whose every subcategory touches the team's own repositories, shows no divergence under this path",
+		DictKeyDirectionShape: &DictKeyDirectionShape{DictPath: "data.subcategory_distribution", ValuePath: "data.subcategory_distribution", AdmitBaselineOnlyKeys: true},
+	},
+	{
+		Ticket:                "CHAOS-5940",
+		Reason:                "the same team-repository-resolution mechanism as this ticket's data.theme_distribution entry, over evidence_quality_distribution: a quality band with zero attributed work inside the team's own repositories is absent from the candidate map entirely. Go is correct.",
+		Paths:                 []string{"data.evidence_quality_distribution"},
+		Intermittent:          true,
+		IntermittentReason:    "present only while the requested team's own repositories are a PROPER subset of the organization's AND at least one quality band's own attributed work falls entirely outside that subset; a team owning every repository, or a window whose every band touches the team's own repositories, shows no divergence under this path",
+		DictKeyDirectionShape: &DictKeyDirectionShape{DictPath: "data.evidence_quality_distribution", ValuePath: "data.evidence_quality_distribution", AdmitBaselineOnlyKeys: true},
+	},
+	{
+		Ticket:                "CHAOS-5940",
+		Reason:                "the same team-repository-resolution mechanism as this ticket's data.theme_distribution entry, over evidence_quality_stats.band_counts -- the SAME BandCounts map evidence_quality_distribution's own entry reads, one level deeper. Go is correct.",
+		Paths:                 []string{"data.evidence_quality_stats.band_counts"},
+		Intermittent:          true,
+		IntermittentReason:    "present only while the requested team's own repositories are a PROPER subset of the organization's AND at least one quality band's own attributed work falls entirely outside that subset; a team owning every repository, or a window whose every band touches the team's own repositories, shows no divergence under this path",
+		DictKeyDirectionShape: &DictKeyDirectionShape{DictPath: "data.evidence_quality_stats.band_counts", ValuePath: "data.evidence_quality_stats.band_counts", AdmitBaselineOnlyKeys: true},
+	},
+}
+
+// investmentTeamScopedParity is investmentParity plus
+// investmentTeamScopeDictSubsetDefects. evidence_quality_stats.total
+// needs no new entry here: investmentBaselineDefects' own existing
+// ScalarDirectionShape citation for it is a single scalar (no "whole key
+// vanishes" case exists for a value with no keys at all) and already
+// admits team scope's own baseline->candidate direction with no change,
+// the same mechanism-agnostic reasoning as the four dict entries above.
+var investmentTeamScopedParity = Options{
+	BaselineDefects:       append(append([]BaselineDefect{}, investmentParity.BaselineDefects...), investmentTeamScopeDictSubsetDefects...),
+	NumericLeavesDeclared: true,
+	FloatTierB:            investmentParity.FloatTierB,
+	IntegerLeaves:         investmentParity.IntegerLeaves,
+}
+
 // investmentSunburstBaselineDefects extends investmentBaselineDefects
 // with the sunburst route's own additional divergence: its repo-name
 // join reads `repos` (ReplacingMergeTree, sorting key org_id/id) with
@@ -472,6 +558,48 @@ func investmentSunburstParityWithLimit(limit int) Options {
 	return opts
 }
 
+// investmentSunburstTeamScopeSubsetDefect declares data as a bounded
+// subset (membership only -- see below) for a team-scoped GET
+// /api/v1/investment/sunburst request: BuildSunburstResponse
+// (investment/response.go:294-298) splices teamscope.RepoCondition(orgID,
+// "repo_id",params.ScopeIDs,...) for a team scope, resolving a team's
+// repositories from team_repo_ownership, while the reference resolves
+// the same scope from user_metrics_daily.team_id (resolve_repo_filter_ids
+// -> resolve_repo_ids_for_teams, api/queries/scopes.py:72-89) -- empty
+// for this org's real team, so the reference answers organization-wide
+// while the candidate answers over the team's own repositories.
+//
+// EqualLeaves/BoundedLeaves left EMPTY (membership only), the SAME
+// pattern explainContributorsSubsetDefect/explainDriversSubsetDefect
+// use above: data.value at a matched (theme, subcategory, scope) key is
+// ALREADY covered by this route's own two sibling entries
+// (investmentSunburstBaselineDefects' own KeyedDirectionShape/
+// LimitDisplacementShape, both declared for the repos-join fan-out/LIMIT-
+// boundary mechanism) -- FetchInvestmentSunburst's own GROUP BY theme,
+// subcategory, scope already names one specific repository per key
+// (scope = r.repo, sunburst.go), so a matched key's own value is
+// untouched by a narrower repo scope in the first place; this entry adds
+// only the membership admission neither sibling shape reaches (both are
+// gated to leaf/value findings, never a whole missing key -- compare.go's
+// own shape-field gate). Go is correct.
+var investmentSunburstTeamScopeSubsetDefect = BaselineDefect{
+	Ticket:              "CHAOS-5940",
+	Reason:              "GET /api/v1/investment/sunburst's team scope resolves a team's repositories from team_repo_ownership through teamscope.RepoCondition on the candidate, user_metrics_daily.team_id (empty for this org's real team) on the reference -- the reference answers organization-wide, the candidate over the team's own repositories. GROUP BY theme, subcategory, scope already names one specific repository per key (scope = r.repo), so a matched key's own value is untouched by a narrower repo scope; only whole keys for a repository outside the team disappear. Go is correct.",
+	Paths:               []string{"data"},
+	Intermittent:        true,
+	IntermittentReason:  "present only while the requested team's own repositories are a PROPER subset of the organization's; a team owning every repository leaves the two lists identical",
+	TeamRepoSubsetShape: &TeamRepoSubsetShape{ListPath: "data", KeyFields: []string{"theme", "subcategory", "scope"}},
+}
+
+// investmentSunburstTeamScopedParityWithLimit is
+// investmentSunburstParityWithLimit plus
+// investmentSunburstTeamScopeSubsetDefect.
+func investmentSunburstTeamScopedParityWithLimit(limit int) Options {
+	opts := investmentSunburstParityWithLimit(limit)
+	opts.BaselineDefects = append(append([]BaselineDefect{}, opts.BaselineDefects...), investmentSunburstTeamScopeSubsetDefect)
+	return opts
+}
+
 // investmentExplainProseFields names investment/explain's LLM-authored
 // paths -- text the model writes fresh per call, never reproducible
 // across two calls let alone across two planes calling two different
@@ -627,6 +755,81 @@ var drilldownPRsDedup = struct {
 	ListPath  string
 	KeyFields []string
 }{ListPath: "items", KeyFields: []string{"repo_id", "number"}}
+
+// drilldownPRsTeamScopeSubsetDefect declares data.items as a bounded
+// subset for a team-scoped GET/POST /api/v1/drilldown/prs request:
+// BuildPRsResponse (drilldown/prs.go:164-182) splices
+// teamscope.RepoCondition(orgID,"pr.repo_id",params.ScopeIDs,...) for a
+// team scope, the same shared team_repo_ownership condition every
+// repo-keyed route in this corpus reads; the reference resolves the
+// identical scope through resolve_repo_filter_ids (metric_scope="repo"
+// hardcoded at both GET/POST call sites, api/main.py:918-919,956-957) ->
+// resolve_repo_ids_for_teams (api/queries/scopes.py:72-89) -- empty for
+// this org's real team, so the reference answers organization-wide while
+// the candidate answers over the team's own repositories.
+//
+// RANK-TRUNCATION GUARD: fetchPullRequestsQuery's own ORDER BY
+// created_at DESC LIMIT 50 (drilldown/prs.go:134-155) means a
+// team-scoped top-50 slice and an org-scoped top-50 slice are only
+// safely comparable as a subset when the ORG-WIDE row count for the
+// requested window stays under the limit on BOTH legs -- otherwise a row
+// present in the team's own top 50 could be crowded out of the org's own
+// top 50 by a non-team repository's more recent PR, an ordinary
+// consequence of the LIMIT boundary, not a real divergence, and
+// indistinguishable from one by this shape alone (teamreposubset.go's
+// own rule 3: a single candidate-only key refuses the WHOLE plan).
+// Verified against live production counts (read-only, FINAL) rather than
+// assumed: every already-captured window (the default window, 90 days,
+// a single repository) saturates at exactly 50/50 on both legs, and
+// range_days alone never drops the org-wide count below 50 within the
+// first two weeks. The team-scoped case below instead binds a FIXED
+// three-day window (2026-08-15 through 2026-08-17, half-open at
+// 2026-08-18) that a live count confirms carries 36 organization-wide
+// rows, none of them near the boundary.
+//
+// EqualLeaves, not bounded: every field besides the (repo_id, number)
+// key is an intrinsic, per-PR property this route's own assembly reads
+// verbatim (fetchPullRequestsQuery's own SELECT, never a cross-PR
+// aggregate a narrower repository set could resum), the same "no
+// per-unit sum-type leaf a narrower scope could legitimately shrink"
+// reasoning workUnitsTeamScopeSubsetDefect's own doc comment (above)
+// already establishes for the identical class of route. created_at/
+// merged_at/first_review_at are DELIBERATELY left unnamed here: those
+// three already carry their own unshaped, always-live citation for the
+// naive-vs-aware wire-format rendering (drilldownPRsParity's own first
+// entry, above), and naming them in EqualLeaves here would test raw
+// string equality against a wire form that citation already knows can
+// legitimately differ -- poisoning this shape's own admission on every
+// comparison that entry alone would have covered cleanly.
+//
+// On the window this ticket verified, the team owns every repository
+// with any pull request at all inside it: team_prs equals org_prs for
+// every day recorded, so the "subset" this run actually observes is the
+// FULL set, not a proper one -- this shape's own rules 1-4 hold
+// unconditionally for an equal population (nothing is missing, nothing
+// needs bounding), so it is admitted the same way a genuine narrowing
+// would be, but this run's own IntermittentReason states plainly that it
+// does not itself demonstrate narrowing on this data.
+var drilldownPRsTeamScopeSubsetDefect = BaselineDefect{
+	Ticket:             "CHAOS-5940",
+	Reason:             "GET/POST /api/v1/drilldown/prs' team scope resolves a team's repositories from team_repo_ownership through teamscope.RepoCondition on the candidate, user_metrics_daily.team_id (empty for this org's real team) on the reference -- the reference answers organization-wide, the candidate over the team's own repositories. Every field besides (repo_id, number) is a per-PR property read verbatim, never resummed across a repository set. Go is correct.",
+	Paths:              []string{"data.items"},
+	Intermittent:       true,
+	IntermittentReason: "present only while the requested window's own organization-wide row count stays under fetchPullRequestsQuery's own LIMIT 50 on both legs (verified for the one fixed window this corpus binds; not assumed to hold for range_days or an unverified window) AND the requested team's own repositories are a PROPER subset of the organization's; on the verified window the team happens to own every repository with a pull request at all, so this citation is exercised as an EQUAL-population case, never observed narrowing a real list on this org's own data",
+	TeamRepoSubsetShape: &TeamRepoSubsetShape{
+		ListPath:    "data.items",
+		KeyFields:   []string{"repo_id", "number"},
+		EqualLeaves: []string{"title", "author_name", "review_latency_hours"},
+	},
+}
+
+// drilldownPRsTeamScopedParity is drilldownPRsParity plus
+// drilldownPRsTeamScopeSubsetDefect.
+var drilldownPRsTeamScopedParity = Options{
+	NumericLeavesDeclared: true,
+	IntegerLeaves:         drilldownPRsIntegerLeaves,
+	BaselineDefects:       append(append([]BaselineDefect{}, drilldownPRsParity.BaselineDefects...), drilldownPRsTeamScopeSubsetDefect),
+}
 
 // drilldownIssuesFloats declares this route's two numeric leaves:
 // cycle_time_hours/lead_time_hours are `wct.cycle_time_hours`/
@@ -1799,6 +2002,102 @@ var heatmapActiveHoursParity = Options{
 	},
 }
 
+// heatmapRepoTouchpointsTeamScopeSubsetDefect/heatmapHotspotRiskTeamScope
+// SubsetDefect/heatmapReviewWaitDensityTeamScopeSubsetDefect declare
+// data.cells as a bounded subset for the three team-scoped heatmap
+// metrics: cmd/query-api/internal/heatmap/scopefilter.go's own
+// scopeFilterForMetric splices teamscope.RepoCondition(orgID,"repo_id",
+// scopeIDs,asOf) (scopefilter.go:144-174) for a team scope, resolving a
+// team's repositories from team_repo_ownership through the one shared
+// condition every repo-keyed route in this corpus uses. The reference
+// plane's own scope_filter_for_metric (api/services/filtering.py:129-147,
+// all three metrics call it with metric_scope="repo", services/heatmap.py:
+// 299,335,353) resolves the identical team scope through
+// resolve_repo_filter_ids -> resolve_repo_ids_for_teams
+// (api/queries/scopes.py:72-89), reading DISTINCT repo_id off
+// user_metrics_daily.team_id -- a per-author-attribution table, not a
+// repository-ownership one (5916-prod-team-scope-facts.tsv: the real
+// team's own 2224 distinct ids there match zero rows in repos, so
+// resolve_repo_id discards every one of them and the reference's own
+// verified repo-id list comes back empty, which build_scope_filter_multi
+// reads as "no filter" -- the reference answers ORG-WIDE for a
+// team-scoped request while the candidate answers over that team's own
+// repositories, team_repo_ownership FINAL: 10 of the organization's 11
+// repositories).
+//
+// repo_touchpoints/hotspot_risk's own GROUP BY already carries the
+// bucket's repo/file identity (repos.repo/concat(repos.repo,':',path),
+// heatmap/queries.go fetchRepoTouchpoints/fetchHotspotRisk) -- a matched
+// (x, y) key's own rows are therefore ALREADY confined to one repository
+// before any team scope narrows the read further, so team scope can only
+// ever remove a whole key (a repository outside the team), never shrink
+// one it keeps: EqualLeaves, not bounded.
+var heatmapRepoTouchpointsTeamScopeSubsetDefect = BaselineDefect{
+	Ticket:              "CHAOS-5940",
+	Reason:              "GET /api/v1/heatmap's repo_touchpoints metric resolves team scope through team_repo_ownership (teamscope.RepoCondition) on the candidate, user_metrics_daily.team_id (empty for this org's real team) on the reference -- the reference answers organization-wide, the candidate over the team's own repositories. repo_touchpoints' own GROUP BY key already names the bucket's own repo (repos.repo), so a matched (x, y) key's own value is untouched by a narrower repo scope; only whole keys for a repository outside the team disappear. Go is correct.",
+	Paths:               []string{"data.cells"},
+	Intermittent:        true,
+	IntermittentReason:  "present only while the requested team's own repositories are a PROPER subset of the organization's; a team owning every repository leaves the two lists identical",
+	TeamRepoSubsetShape: &TeamRepoSubsetShape{ListPath: "data.cells", KeyFields: []string{"x", "y"}, EqualLeaves: []string{"value"}},
+}
+
+var heatmapHotspotRiskTeamScopeSubsetDefect = BaselineDefect{
+	Ticket:              "CHAOS-5940",
+	Reason:              "the same team-repository-resolution mechanism as heatmapRepoTouchpointsTeamScopeSubsetDefect, over hotspot_risk. hotspot_risk's own GROUP BY key already names the bucket's own repo (concat(repos.repo,':',path) AS file_key, heatmap/queries.go fetchHotspotRisk), so a matched (x, y) key's own value is untouched by a narrower repo scope; only whole keys for a repository outside the team disappear. Go is correct.",
+	Paths:               []string{"data.cells"},
+	Intermittent:        true,
+	IntermittentReason:  "present only while the requested team's own repositories are a PROPER subset of the organization's; a team owning every repository leaves the two lists identical",
+	TeamRepoSubsetShape: &TeamRepoSubsetShape{ListPath: "data.cells", KeyFields: []string{"x", "y"}, EqualLeaves: []string{"value"}},
+}
+
+// heatmapReviewWaitDensityTeamScopeSubsetDefect differs from its two
+// siblings above in exactly one way: review_wait_density's own GROUP BY
+// (weekday, hour) (heatmap/queries.go fetchReviewWaitDensity) carries NO
+// repo identity at all -- a matched (x, y) key's own
+// sum(dateDiff('minute', created_at, first_review_at))/60.0 is a sum
+// over EVERY pull request across every repo the request's own scope
+// admits that shares that (weekday, hour) bucket, so a narrower team
+// scope can genuinely shrink a matched key's own value, never merely
+// remove a whole key. dateDiff('minute', created_at, first_review_at) is
+// bound non-negative in practice by definition_wait_evidence's own
+// caller (a PR's first review cannot precede its own creation on
+// admissible data, the same domain assumption heatmapReviewWaitDensity
+// Parity's own FloatTierB entry already carries for this leaf) --
+// BoundedLeavesAllKeys, not BoundedLeafKeys naming individual (weekday,
+// hour) keys one by one: every one of the 7*24 buckets this metric can
+// ever produce is a repo-spanning sum by construction, with no
+// repo-specific bucket among them the way repo_touchpoints/hotspot_risk
+// carry.
+var heatmapReviewWaitDensityTeamScopeSubsetDefect = BaselineDefect{
+	Ticket:              "CHAOS-5940",
+	Reason:              "GET /api/v1/heatmap's review_wait_density metric resolves team scope the same way as repo_touchpoints/hotspot_risk (heatmapRepoTouchpointsTeamScopeSubsetDefect's own Reason states the two tables in full), but its own GROUP BY (weekday, hour) carries no repo identity: a matched key's own value is a sum of non-negative per-repo contributions (dateDiff('minute', created_at, first_review_at)/60.0 summed over every admitted PR sharing that bucket), so a genuinely narrower team scope can only ever pull a matched key's own sum down, never up. Go is correct.",
+	Paths:               []string{"data.cells"},
+	Intermittent:        true,
+	IntermittentReason:  "present only while the requested team's own repositories are a PROPER subset of the organization's AND at least one (weekday, hour) bucket mixes a team-owned repository's own pull requests with a non-team repository's; a team owning every repository, or a window whose every bucket's own PRs all belong to the team, leaves the two lists identical",
+	TeamRepoSubsetShape: &TeamRepoSubsetShape{ListPath: "data.cells", KeyFields: []string{"x", "y"}, BoundedLeavesAllKeys: []string{"value"}},
+}
+
+var heatmapReviewWaitDensityTeamScopedParity = Options{
+	OrderInsensitiveLists: heatmapReviewWaitDensityParity.OrderInsensitiveLists,
+	NumericLeavesDeclared: true,
+	FloatTierB:            heatmapReviewWaitDensityParity.FloatTierB,
+	BaselineDefects:       append(append([]BaselineDefect{}, heatmapReviewWaitDensityParity.BaselineDefects...), heatmapReviewWaitDensityTeamScopeSubsetDefect),
+}
+
+var heatmapRepoTouchpointsTeamScopedParity = Options{
+	OrderInsensitiveLists: heatmapRepoTouchpointsParity.OrderInsensitiveLists,
+	NumericLeavesDeclared: true,
+	IntegerLeaves:         heatmapRepoTouchpointsParity.IntegerLeaves,
+	BaselineDefects:       append(append([]BaselineDefect{}, heatmapRepoTouchpointsParity.BaselineDefects...), heatmapRepoTouchpointsTeamScopeSubsetDefect),
+}
+
+var heatmapHotspotRiskTeamScopedParity = Options{
+	OrderInsensitiveLists: heatmapHotspotRiskParity.OrderInsensitiveLists,
+	NumericLeavesDeclared: true,
+	FloatTierB:            heatmapHotspotRiskParity.FloatTierB,
+	BaselineDefects:       append(append([]BaselineDefect{}, heatmapHotspotRiskParity.BaselineDefects...), heatmapHotspotRiskTeamScopeSubsetDefect),
+}
+
 // sankeyRepoDedupParity is shared by every admissible (2xx) sankey
 // request whose mode joins repos: investment (fetch_investment_flow_items'
 // own LEFT JOIN repos) and hotspot (fetch_hotspot_rows' two quantile CTEs
@@ -2105,6 +2404,84 @@ var sankeyStateFlowParity = Options{
 		"data.links.value": "state mode's six edges are all min()/max()/subtraction over statusCounts, itself a sum of CAST(sum(items_touched) AS Float64) (sankey/queries.go fetchStateStatusCounts) over the UInt32 items_touched column -- every operand shares the same integer provenance, no mixing.",
 	},
 }
+
+// sankeyNodesTeamScopeSubsetDefect/sankeyLinksTeamScopeSubsetDefect
+// declare data.nodes/data.links as a bounded subset for a team-scoped
+// GET/POST /api/v1/sankey request under investment or hotspot mode --
+// the two modes whose team scope resolves a repo set at all
+// (repoScopeFilter, sankey/scopefilter.go:148-171, splicing
+// teamscope.RepoCondition the same way every other repo-keyed route in
+// this corpus does). expense/state mode resolve team scope through a
+// DIFFERENT, unaffected mechanism (see sankeyExpenseStateTeamScoped
+// Parity's own doc comment below) and carry no citation here.
+//
+// The reference plane resolves the identical scope through
+// resolve_repo_filter_ids -> resolve_repo_ids_for_teams
+// (api/queries/scopes.py:72-89, the same user_metrics_daily.team_id read
+// every sibling team-scope defect in this file cites) -- empty for this
+// org's real team, so the reference answers organization-wide while the
+// candidate answers over the team's own repositories.
+//
+// EqualLeaves, not BoundedLeavesAllKeys, for data.links.value: unlike
+// heatmap's review_wait_density or investment/flow's category/team-level
+// nodes, EVERY edge either mode produces is already GROUPED BY a column
+// that names one specific repository -- investment mode's own GROUP BY
+// source, target with target = r.repo (sankey/queries.go
+// fetchInvestmentFlowItems:158), hotspot mode's own repo/directory/file
+// chain rooted at one repo per row (fetchHotspotRows, same file) -- so a
+// matched (source, target) key's own value is untouched by a narrower
+// repo scope; only whole edges for a repository outside the team
+// disappear. data.nodes carries no numeric leaf on THIS route at all
+// (sankeyRepoDedupParity's own doc comment: Node.Value is always null
+// here), so its own citation is membership plus group equality only.
+var sankeyNodesTeamScopeSubsetDefect = BaselineDefect{
+	Ticket:              "CHAOS-5940",
+	Reason:              "GET/POST /api/v1/sankey's investment/hotspot modes resolve team scope through team_repo_ownership (teamscope.RepoCondition) on the candidate, user_metrics_daily.team_id (empty for this org's real team) on the reference -- the reference answers organization-wide, the candidate over the team's own repositories. Node.Value is always null on this route (sankeyRepoDedupParity's own doc comment), so this citation is membership plus group equality only. Go is correct.",
+	Paths:               []string{"data.nodes"},
+	Intermittent:        true,
+	IntermittentReason:  "present only while the requested team's own repositories are a PROPER subset of the organization's; a team owning every repository leaves the two lists identical",
+	TeamRepoSubsetShape: &TeamRepoSubsetShape{ListPath: "data.nodes", KeyFields: []string{"name"}, EqualLeaves: []string{"group"}},
+}
+
+var sankeyLinksTeamScopeSubsetDefect = BaselineDefect{
+	Ticket:              "CHAOS-5940",
+	Reason:              "the same team-repository-resolution mechanism as sankeyNodesTeamScopeSubsetDefect, over data.links. Both modes' own GROUP BY already names one specific repository per edge (investment mode's target = r.repo, hotspot mode's whole chain rooted at one repo per row), so a matched (source, target) key's own value is untouched by a narrower repo scope; only whole edges for a repository outside the team disappear. Go is correct.",
+	Paths:               []string{"data.links"},
+	Intermittent:        true,
+	IntermittentReason:  "present only while the requested team's own repositories are a PROPER subset of the organization's; a team owning every repository leaves the two lists identical",
+	TeamRepoSubsetShape: &TeamRepoSubsetShape{ListPath: "data.links", KeyFields: []string{"source", "target"}, EqualLeaves: []string{"value"}},
+}
+
+// sankeyInvestmentTeamScopedParity/sankeyHotspotTeamScopedParity: GET/POST
+// /api/v1/sankey's own team_scoped entries for the two modes above.
+var sankeyInvestmentTeamScopedParity = Options{
+	OrderInsensitiveLists: sankeyInvestmentParity.OrderInsensitiveLists,
+	NumericLeavesDeclared: sankeyInvestmentParity.NumericLeavesDeclared,
+	FloatTierB:            sankeyInvestmentParity.FloatTierB,
+	BaselineDefects: append(append([]BaselineDefect{}, sankeyInvestmentParity.BaselineDefects...),
+		sankeyNodesTeamScopeSubsetDefect, sankeyLinksTeamScopeSubsetDefect),
+}
+
+var sankeyHotspotTeamScopedParity = Options{
+	OrderInsensitiveLists: sankeyHotspotParity.OrderInsensitiveLists,
+	NumericLeavesDeclared: sankeyHotspotParity.NumericLeavesDeclared,
+	IntegerLeaves:         sankeyHotspotParity.IntegerLeaves,
+	BaselineDefects: append(append([]BaselineDefect{}, sankeyHotspotParity.BaselineDefects...),
+		sankeyNodesTeamScopeSubsetDefect, sankeyLinksTeamScopeSubsetDefect),
+}
+
+// expense/state mode's own team_scoped requests (below, in the GET/POST
+// /api/v1/sankey endpoint specs) reuse sankeyCycleTimesDedupParity/
+// sankeyStateFlowParity UNCHANGED -- FREE COVERAGE, not part of this
+// ticket's own defect class: _team_scope_filter (services/sankey.py:
+// 192-198) and this port's own teamScopeFilter (sankey/scopefilter.go:
+// 175-180) both filter the SAME team_id column directly
+// (ifNull(nullIf(team_id, ''), 'unassigned'), sankey/builders.go:
+// 77-79,152-154 -- the identical column expression, confirmed by reading
+// both call sites), never team_repo_ownership/user_metrics_daily at all
+// -- these two modes never had the defect the other four routes in this
+// ticket share, so a team-scoped request here is expected to be a PLAIN
+// MATCH, and needs no new Shape or Parity variant.
 
 // investmentFlowRepoDedupParity is shared by every admissible (2xx)
 // investment/flow and investment/flow/repo-team request whose fetcher
@@ -2423,6 +2800,87 @@ var investmentFlowRepoTeamParity = Options{
 		"data.links.value": investmentFlowDynamicParity.FloatTierB["data.links.value"],
 		"data.nodes.value": investmentFlowDynamicParity.FloatTierB["data.nodes.value"],
 	},
+}
+
+// investmentFlowNodesTeamScopeSubsetDefect/investmentFlowLinksTeamScope
+// SubsetDefect declare data.nodes/data.links as a bounded subset for a
+// team-scoped POST /api/v1/investment/flow (+/repo-team) request:
+// repoScopeFilterClause (investmentflow.go:143-171) splices
+// teamscope.RepoCondition(orgID,"repo_id",scopeIDs,asOf) for a team
+// scope, the same shared condition and the same team_repo_ownership
+// source every repo-keyed route in this corpus reads (heatmapRepo
+// TouchpointsTeamScopeSubsetDefect's own Reason states the two tables in
+// full). The reference plane resolves the identical scope through
+// resolve_repo_filter_ids -> resolve_repo_ids_for_teams
+// (api/queries/scopes.py:72-89, the same user_metrics_daily.team_id read
+// every sibling team-scope defect in this file cites) -- empty for this
+// org's real team, so the reference answers organization-wide while the
+// candidate answers over the team's own repositories.
+//
+// buildDynamicFlowSankey/buildRepoTeamSankey (investmentflow/builders.go)
+// both build a node's own value as a RUNNING SUM over every row that
+// touches it (nodeRunningTotal.add) and a link's own value directly off
+// one qualifying row -- every row is already scoped to a single admitted
+// repository (the SQL's own repo_id filter), so a SOURCE (subcategory)
+// node's own value sums across however many repositories the request's
+// scope admits, a non-negative per-repo contribution the SAME class the
+// class ruling this ticket's own card states covers: a genuinely
+// narrower team scope can only pull that sum down, never up, at a
+// (sub)category node or link this response still carries -- ADMITTED
+// via BoundedLeavesAllKeys, not enumerated BoundedLeafKeys, since every
+// node/link this response can ever produce is built the same running-sum
+// way, with no separate leaf-name-only-sometimes-bounded case to carve
+// out. group is EqualLeaves: a matched node's own group label
+// (subcategory/repo/team) is fixed by which BRANCH produced it, never by
+// how many repositories fed its value.
+var investmentFlowNodesTeamScopeSubsetDefect = BaselineDefect{
+	Ticket:             "CHAOS-5940",
+	Reason:             "POST /api/v1/investment/flow (+/repo-team)'s team scope resolves a team's repositories from team_repo_ownership through teamscope.RepoCondition on the candidate, user_metrics_daily.team_id (empty for this org's real team) on the reference -- the reference answers organization-wide, the candidate over the team's own repositories. A node's own value is a running sum over every admitted row that touches it (nodeRunningTotal.add, investmentflow/builders.go), a non-negative per-repo contribution, so a genuinely narrower team scope can only pull a matched node's own sum down, never up. Go is correct.",
+	Paths:              []string{"data.nodes"},
+	Intermittent:       true,
+	IntermittentReason: "present only while the requested team's own repositories are a PROPER subset of the organization's; a team owning every repository leaves the two lists identical",
+	TeamRepoSubsetShape: &TeamRepoSubsetShape{
+		ListPath:             "data.nodes",
+		KeyFields:            []string{"name"},
+		EqualLeaves:          []string{"group"},
+		BoundedLeavesAllKeys: []string{"value"},
+	},
+}
+
+var investmentFlowLinksTeamScopeSubsetDefect = BaselineDefect{
+	Ticket:             "CHAOS-5940",
+	Reason:             "the same team-repository-resolution mechanism as investmentFlowNodesTeamScopeSubsetDefect, over data.links: a link's own value is one qualifying row's own contribution (or, for the flow_mode branch's own accumulators, a running sum over the rows sharing that (source, target) pair), always confined to the request's own admitted repositories, so a genuinely narrower team scope can only pull a matched link's own value down, never up. Go is correct.",
+	Paths:              []string{"data.links"},
+	Intermittent:       true,
+	IntermittentReason: "present only while the requested team's own repositories are a PROPER subset of the organization's; a team owning every repository leaves the two lists identical",
+	TeamRepoSubsetShape: &TeamRepoSubsetShape{
+		ListPath:             "data.links",
+		KeyFields:            []string{"source", "target"},
+		BoundedLeavesAllKeys: []string{"value"},
+	},
+}
+
+// investmentFlowDynamicTeamScopedParity: POST /api/v1/investment/flow's
+// own team_scoped entry (the dynamic, non-flow_mode branch --
+// investmentFlowDynamicParity's own doc comment states this branch's
+// numeric leaves in full).
+var investmentFlowDynamicTeamScopedParity = Options{
+	OrderInsensitiveLists: investmentFlowDynamicParity.OrderInsensitiveLists,
+	NumericLeavesDeclared: true,
+	FloatTierB:            investmentFlowDynamicParity.FloatTierB,
+	IntegerLeaves:         investmentFlowDynamicParity.IntegerLeaves,
+	BaselineDefects: append(append([]BaselineDefect{}, investmentFlowDynamicParity.BaselineDefects...),
+		investmentFlowNodesTeamScopeSubsetDefect, investmentFlowLinksTeamScopeSubsetDefect),
+}
+
+// investmentFlowRepoTeamTeamScopedParity: POST /api/v1/investment/flow/
+// repo-team's own team_scoped entry.
+var investmentFlowRepoTeamTeamScopedParity = Options{
+	OrderInsensitiveLists: investmentFlowRepoTeamParity.OrderInsensitiveLists,
+	NumericLeavesDeclared: true,
+	FloatTierB:            investmentFlowRepoTeamParity.FloatTierB,
+	BaselineDefects: append(append([]BaselineDefect{}, investmentFlowRepoTeamParity.BaselineDefects...),
+		investmentFlowNodesTeamScopeSubsetDefect, investmentFlowLinksTeamScopeSubsetDefect),
 }
 
 // investmentFlowRepoDedupParity DELIBERATELY carries no citation at all
@@ -3006,6 +3464,42 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				BodyMode: RESTBodyModeJSON, Parity: heatmapHotspotRiskParity,
 			},
 			{
+				// team scope, scope_id bound to filters/options' own live
+				// team_id. Timeout raised: the baseline leg's own
+				// team-to-repo resolution is an extra read the org-scope
+				// default entry never makes (heatmapRepoTouchpointsTeamScope
+				// SubsetDefect's own Reason states the two tables).
+				Name:                "repo_touchpoints_team_scoped",
+				Query:               url.Values{"type": {"context_switch"}, "metric": {"repo_touchpoints"}, "scope_type": {"team"}},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode:   RESTBodyModeJSON,
+				Parity:     heatmapRepoTouchpointsTeamScopedParity,
+				IDBindings: []RESTIDBinding{{Producer: "team_id", QueryParam: "scope_id"}},
+				Timeout:    180 * time.Second,
+			},
+			{
+				// team scope, same binding as repo_touchpoints_team_scoped
+				// above.
+				Name:                "hotspot_risk_team_scoped",
+				Query:               url.Values{"type": {"risk"}, "metric": {"hotspot_risk"}, "scope_type": {"team"}},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode:   RESTBodyModeJSON,
+				Parity:     heatmapHotspotRiskTeamScopedParity,
+				IDBindings: []RESTIDBinding{{Producer: "team_id", QueryParam: "scope_id"}},
+				Timeout:    180 * time.Second,
+			},
+			{
+				// team scope, same binding as repo_touchpoints_team_scoped
+				// above.
+				Name:                "review_wait_density_team_scoped",
+				Query:               url.Values{"type": {"temporal_load"}, "metric": {"review_wait_density"}, "scope_type": {"team"}},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode:   RESTBodyModeJSON,
+				Parity:     heatmapReviewWaitDensityTeamScopedParity,
+				IDBindings: []RESTIDBinding{{Producer: "team_id", QueryParam: "scope_id"}},
+				Timeout:    180 * time.Second,
+			},
+			{
 				// developer scope, scope_id bound to people's own live
 				// person_id (GET /api/v1/people's query_string_search
 				// entry) -- exercises identity resolution plus the
@@ -3100,6 +3594,52 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				IDBindings: []RESTIDBinding{{Producer: "repo_id", QueryParam: "scope_id"}},
 			},
 			{
+				// team scope, scope_id bound to filters/options' own live
+				// team_id. Timeout raised: the baseline leg's own
+				// team-to-repo resolution is an extra read the org-scope
+				// default entry never makes (sankeyNodesTeamScopeSubsetDefect's
+				// own Reason states the two tables).
+				Name:                "investment_team_scoped",
+				Query:               url.Values{"scope_type": {"team"}},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode:   RESTBodyModeJSON,
+				Parity:     sankeyInvestmentTeamScopedParity,
+				IDBindings: []RESTIDBinding{{Producer: "team_id", QueryParam: "scope_id"}},
+				Timeout:    180 * time.Second,
+			},
+			{
+				// team scope, same binding as investment_team_scoped above.
+				Name:                "hotspot_team_scoped",
+				Query:               url.Values{"mode": {"hotspot"}, "scope_type": {"team"}},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode:   RESTBodyModeJSON,
+				Parity:     sankeyHotspotTeamScopedParity,
+				IDBindings: []RESTIDBinding{{Producer: "team_id", QueryParam: "scope_id"}},
+				Timeout:    180 * time.Second,
+			},
+			{
+				// team scope on expense mode -- FREE COVERAGE, expected
+				// PLAIN MATCH (this Options value's own doc comment).
+				Name:                "expense_team_scoped",
+				Query:               url.Values{"mode": {"expense"}, "scope_type": {"team"}},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode:   RESTBodyModeJSON,
+				Parity:     sankeyCycleTimesDedupParity,
+				IDBindings: []RESTIDBinding{{Producer: "team_id", QueryParam: "scope_id"}},
+				Timeout:    180 * time.Second,
+			},
+			{
+				// team scope on state mode -- FREE COVERAGE, expected PLAIN
+				// MATCH.
+				Name:                "state_team_scoped",
+				Query:               url.Values{"mode": {"state"}, "scope_type": {"team"}},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode:   RESTBodyModeJSON,
+				Parity:     sankeyStateFlowParity,
+				IDBindings: []RESTIDBinding{{Producer: "team_id", QueryParam: "scope_id"}},
+				Timeout:    180 * time.Second,
+			},
+			{
 				// build_sankey_response's own ValueError for an unknown
 				// mode string reaches sankey_get's generic
 				// `except Exception: 503`, never a 400/404 -- no dedicated
@@ -3153,6 +3693,58 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				BodyMode: RESTBodyModeJSON, Parity: sankeyHotspotParity,
 			},
 			{
+				// team scope, bound to filters/options' own live team_id --
+				// the POST-body twin of GET's own investment_team_scoped
+				// sibling above.
+				Name: "investment_team_scoped",
+				Body: map[string]any{
+					"mode": "investment", "filters": map[string]any{"scope": map[string]any{"level": "team", "ids": []string{"11111111-1111-1111-1111-111111111111"}}},
+				},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode:   RESTBodyModeJSON,
+				Parity:     sankeyInvestmentTeamScopedParity,
+				IDBindings: []RESTIDBinding{{Producer: "team_id", BodyPath: "filters.scope.ids"}},
+				Timeout:    180 * time.Second,
+			},
+			{
+				// team scope, same binding as investment_team_scoped above.
+				Name: "hotspot_team_scoped",
+				Body: map[string]any{
+					"mode": "hotspot", "filters": map[string]any{"scope": map[string]any{"level": "team", "ids": []string{"11111111-1111-1111-1111-111111111111"}}},
+				},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode:   RESTBodyModeJSON,
+				Parity:     sankeyHotspotTeamScopedParity,
+				IDBindings: []RESTIDBinding{{Producer: "team_id", BodyPath: "filters.scope.ids"}},
+				Timeout:    180 * time.Second,
+			},
+			{
+				// team scope on expense mode -- FREE COVERAGE, expected
+				// PLAIN MATCH.
+				Name: "expense_team_scoped",
+				Body: map[string]any{
+					"mode": "expense", "filters": map[string]any{"scope": map[string]any{"level": "team", "ids": []string{"11111111-1111-1111-1111-111111111111"}}},
+				},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode:   RESTBodyModeJSON,
+				Parity:     sankeyCycleTimesDedupParity,
+				IDBindings: []RESTIDBinding{{Producer: "team_id", BodyPath: "filters.scope.ids"}},
+				Timeout:    180 * time.Second,
+			},
+			{
+				// team scope on state mode -- FREE COVERAGE, expected PLAIN
+				// MATCH.
+				Name: "state_team_scoped",
+				Body: map[string]any{
+					"mode": "state", "filters": map[string]any{"scope": map[string]any{"level": "team", "ids": []string{"11111111-1111-1111-1111-111111111111"}}},
+				},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode:   RESTBodyModeJSON,
+				Parity:     sankeyStateFlowParity,
+				IDBindings: []RESTIDBinding{{Producer: "team_id", BodyPath: "filters.scope.ids"}},
+				Timeout:    180 * time.Second,
+			},
+			{
 				// Confirmed live shape (pydantic_validation_error.go): a
 				// body with neither "mode" nor "filters" produces
 				// byte-parity 422 `missing` envelopes on both planes, in
@@ -3185,6 +3777,22 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				Body:                map[string]any{"filters": map[string]any{}},
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
 				BodyMode: RESTBodyModeJSON, Parity: investmentFlowDynamicParity,
+			},
+			{
+				// team scope, bound to filters/options' own live team_id --
+				// the POST-body twin of every other team_scoped entry's own
+				// BodyPath binding in this corpus. Timeout raised: the
+				// baseline leg's own team-to-repo resolution is an extra read
+				// the org-scope default entry never makes.
+				Name: "team_scoped",
+				Body: map[string]any{
+					"filters": map[string]any{"scope": map[string]any{"level": "team", "ids": []string{"11111111-1111-1111-1111-111111111111"}}},
+				},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode:   RESTBodyModeJSON,
+				Parity:     investmentFlowDynamicTeamScopedParity,
+				IDBindings: []RESTIDBinding{{Producer: "team_id", BodyPath: "filters.scope.ids"}},
+				Timeout:    180 * time.Second,
 			},
 			{
 				Name:                "team_category_repo_org",
@@ -3255,6 +3863,19 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				Body:                map[string]any{"filters": map[string]any{}, "theme": "feature_delivery"},
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
 				BodyMode: RESTBodyModeJSON, Parity: investmentFlowRepoTeamParity,
+			},
+			{
+				// team scope, same binding as investment/flow's own
+				// team_scoped entry above.
+				Name: "team_scoped",
+				Body: map[string]any{
+					"filters": map[string]any{"scope": map[string]any{"level": "team", "ids": []string{"11111111-1111-1111-1111-111111111111"}}},
+				},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode:   RESTBodyModeJSON,
+				Parity:     investmentFlowRepoTeamTeamScopedParity,
+				IDBindings: []RESTIDBinding{{Producer: "team_id", BodyPath: "filters.scope.ids"}},
+				Timeout:    180 * time.Second,
 			},
 			{
 				// investment_flow_repo_team has NO ValueError branch at all
@@ -3331,6 +3952,23 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				IDBindings: []RESTIDBinding{{Producer: "pr_repo_id", QueryParam: "scope_id"}},
 			},
 			{
+				// team scope, scope_id bound to filters/options' own live
+				// team_id, bound to a FIXED window (start_date/end_date, both
+				// GET query params drilldown_prs itself accepts, api/main.py:
+				// 940-947) rather than range_days -- drilldownPRsTeamScope
+				// SubsetDefect's own doc comment states why this window and
+				// no other. Timeout raised: the baseline leg's own
+				// team-to-repo resolution is an extra read the org-scope
+				// default entry never makes.
+				Name:                "team_scoped",
+				Query:               url.Values{"scope_type": {"team"}, "start_date": {"2026-08-15"}, "end_date": {"2026-08-17"}},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode: RESTBodyModeJSON, Parity: drilldownPRsTeamScopedParity,
+				DedupListPath: drilldownPRsDedup.ListPath, DedupKeyFields: drilldownPRsDedup.KeyFields,
+				IDBindings: []RESTIDBinding{{Producer: "team_id", QueryParam: "scope_id"}},
+				Timeout:    180 * time.Second,
+			},
+			{
 				// Confirmed live (pydantic_validation_error.go's own doc
 				// comment): a non-numeric query param produces byte-parity
 				// 422 int_parsing envelopes on both planes.
@@ -3367,6 +4005,24 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				DedupListPath: drilldownPRsDedup.ListPath, DedupKeyFields: drilldownPRsDedup.KeyFields,
 			},
 			{
+				// team scope, bound to filters/options' own live team_id, over
+				// the SAME fixed window as GET's own team_scoped sibling
+				// above (filters.time.start_date/end_date, the POST-body
+				// twin of GET's own start_date/end_date query params).
+				Name: "team_scoped",
+				Body: map[string]any{
+					"filters": map[string]any{
+						"scope": map[string]any{"level": "team", "ids": []string{"11111111-1111-1111-1111-111111111111"}},
+						"time":  map[string]any{"start_date": "2026-08-15", "end_date": "2026-08-17"},
+					},
+				},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode: RESTBodyModeJSON, Parity: drilldownPRsTeamScopedParity,
+				DedupListPath: drilldownPRsDedup.ListPath, DedupKeyFields: drilldownPRsDedup.KeyFields,
+				IDBindings: []RESTIDBinding{{Producer: "team_id", BodyPath: "filters.scope.ids"}},
+				Timeout:    180 * time.Second,
+			},
+			{
 				// Confirmed live (pydantic_validation_error.go): a body
 				// with no "filters" key produces byte-parity 422 `missing`
 				// envelopes on both planes.
@@ -3395,6 +4051,19 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				Parity:   investmentParity,
 			},
 			{
+				// team scope, scope_id bound to filters/options' own live
+				// team_id. Timeout raised: the baseline leg's own
+				// team-to-repo resolution is an extra read the org-scope
+				// default entry never makes.
+				Name:                "team_scoped",
+				Query:               url.Values{"scope_type": {"team"}},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode:   RESTBodyModeJSON,
+				Parity:     investmentTeamScopedParity,
+				IDBindings: []RESTIDBinding{{Producer: "team_id", QueryParam: "scope_id"}},
+				Timeout:    180 * time.Second,
+			},
+			{
 				// Same shared int_parsing validator drilldown/prs's own
 				// GET already exercises (both routes share
 				// pydantic_validation_error.go unchanged).
@@ -3415,6 +4084,18 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
 				BodyMode: RESTBodyModeJSON,
 				Parity:   investmentParity,
+			},
+			{
+				// team scope, bound to filters/options' own live team_id.
+				Name: "team_scoped",
+				Body: map[string]any{
+					"filters": map[string]any{"scope": map[string]any{"level": "team", "ids": []string{"11111111-1111-1111-1111-111111111111"}}},
+				},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode:   RESTBodyModeJSON,
+				Parity:     investmentTeamScopedParity,
+				IDBindings: []RESTIDBinding{{Producer: "team_id", BodyPath: "filters.scope.ids"}},
+				Timeout:    180 * time.Second,
 			},
 			{
 				// Same shared "missing filters key" validator drilldown/
@@ -3442,6 +4123,17 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
 				BodyMode: RESTBodyModeJSON,
 				Parity:   investmentSunburstParityWithLimit(50),
+			},
+			{
+				// team scope, scope_id bound to filters/options' own live
+				// team_id.
+				Name:                "team_scoped",
+				Query:               url.Values{"scope_type": {"team"}},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode:   RESTBodyModeJSON,
+				Parity:     investmentSunburstTeamScopedParityWithLimit(investmentSunburstDefaultLimit),
+				IDBindings: []RESTIDBinding{{Producer: "team_id", QueryParam: "scope_id"}},
+				Timeout:    180 * time.Second,
 			},
 			{
 				Name:                "invalid_limit",

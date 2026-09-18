@@ -1077,29 +1077,40 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 			}
 			// LimitDisplacementShape, HotspotListBoundaryShape and
 			// TeamRepoSubsetShape are the only shapes that admit a
-			// STRUCTURAL finding -- a row entering or leaving a
-			// limit-bounded list, or a candidate list narrower than its
-			// baseline, is a presence or length difference by
+			// STRUCTURAL finding UNCONDITIONALLY -- a row entering or
+			// leaving a limit-bounded list, or a candidate list narrower
+			// than its baseline, is a presence or length difference by
 			// construction, never a leaf one, and each shape's own doc
-			// comment states exactly what makes its own admission safe. No
-			// other shape ever reaches past leafDifference. This gate is
+			// comment states exactly what makes its own admission safe.
+			// DictKeyDirectionShape joins them, but ONLY for one declared
+			// defect at a time: a ShapePresence finding reaches such a
+			// declaration's own admits() when, and only when, that ONE
+			// declaration set AdmitBaselineOnlyKeys (dictkeydirection.go's
+			// own doc comment on that field) -- unlike the other three,
+			// this is not "the shape is declared at all", so the
+			// condition below reads defect.DictKeyDirectionShape's own
+			// field directly rather than testing dictDirPlan != nil (a
+			// declaration with the field left false must see EXACTLY the
+			// gate behaviour it saw before that field existed). No other
+			// shape ever reaches past leafDifference. This gate is
 			// deliberately named BY SHAPE FIELD, never by "some shape is
 			// set": widening it to let ANY shaped defect's structural
 			// finding reach its own admits() would change nothing
 			// observable today, because every OTHER shape's own admits()
 			// dispatches on a leaf value path (KeyedDirectionShape,
-			// ScalarDirectionShape, DictKeyDirectionShape, ...) and simply
-			// returns false for a ShapeLength/ShapePresence finding it was
-			// never written to recognise -- but naming the gate by field
-			// keeps that safety a property of THIS switch, not an
-			// incidental fact about every other shape's own dispatch that
-			// a future shape's admits() could quietly stop upholding.
+			// ScalarDirectionShape, ...) and simply returns false for a
+			// ShapeLength/ShapePresence finding it was never written to
+			// recognise -- but naming the gate by field keeps that safety
+			// a property of THIS switch, not an incidental fact about
+			// every other shape's own dispatch that a future shape's
+			// admits() could quietly stop upholding.
 			// TestGate_OtherShapesNeverAdmitAStructuralFinding pins the
 			// observable behaviour either phrasing produces today.
 			if !leafDifference(shapes[i]) &&
 				!(displacePlan != nil && shapes[i] == ShapePresence) &&
 				!(hotspotBoundaryPlan != nil && shapes[i] == ShapePresence) &&
-				!(subsetPlan != nil && (shapes[i] == ShapePresence || shapes[i] == ShapeLength)) {
+				!(subsetPlan != nil && (shapes[i] == ShapePresence || shapes[i] == ShapeLength)) &&
+				!(dictDirPlan != nil && defect.DictKeyDirectionShape.AdmitBaselineOnlyKeys && shapes[i] == ShapePresence) {
 				continue
 			}
 			if shaped {

@@ -2035,33 +2035,57 @@ var flamePRIDBoundParity = Options{
 //     no request this corpus can construct triggers deterministically.
 //   - validateFlameFrames' own "Flame frames have gaps" 422 (services/
 //     flame.py:64-82 and 201/265/351; internal/flame/flame.go's own
-//     validateFlameFrames, called at flame.go:354, 399, 487) for the "pr"
-//     and "issue" entity_types: only a malformed timeline (frames that do
-//     not cover [timeline.start, timeline.end) contiguously) reaches it,
-//     and no live production row is known to be malformed this way for
-//     either. The "deployment" entity_type's own 422 IS reached, by
-//     deployment_gap_entity_id_bound_422 below (see that entry's own doc
-//     comment for the mechanism: a deployment row carrying only
-//     deployed_at leaves buildDeploymentFlameResponse's root frame nil,
-//     which is the only frame its own validateFlameFrames call can see).
-//     A genuinely non-terminal (running) status instead reaches
-//     deploymentStatusIsRunning's own branch (flame.go:421-431, 453-454)
-//     and answers 200 -- an intentional candidate/baseline divergence, not
-//     a defect -- but no known production row carries a non-terminal
-//     status with no other signal to bind to, so this corpus asserts no
-//     live entry for it.
-//   - buildPRFlameResponse's own end selection (flame.go:316-322: MergedAt
-//     / ClosedAt / the nowLike() default) and its "Review waiting" frame's
-//     presence/absence (flame.go:331-335, FirstReviewAt after start or
-//     not): the one live "pr" case (pr_entity_id_bound_200) exercises
-//     exactly one arm of each per run, determined by whichever PR GET
-//     /api/v1/drilldown/prs' own default_window entry names that run --
-//     not independently selectable without a second, differently-shaped
-//     producer.
-//   - buildIssueFlameResponse's own end selection (flame.go:371-376:
-//     CompletedAt / the nowLike() default) and its "Backlog waiting" frame's
-//     presence/absence (flame.go:384-388, StartedAt after start or not):
-//     the same per-run, one-arm-only limitation as the "pr" case above.
+//     validateFlameFrames, called at flame.go:413, 453, 529) IS reached
+//     for all three entity_types now, each by its own gap entry below
+//     (deployment_gap_entity_id_bound_422, pr_gap_entity_id_bound_status_
+//     divergence, issue_gap_entity_id_bound_status_divergence): a
+//     terminal row with no real end signal leaves flameIntervalEnd's own
+//     start-as-end branch in play, which is never After(start), so
+//     newFrame's own root frame is nil -- the only frame each builder's
+//     own validateFlameFrames call can see. A genuinely non-terminal
+//     (running/open/in-progress-category) status instead reaches the
+//     request-clock branch and answers 200 -- an intentional candidate/
+//     baseline divergence for "pr" and "issue" (baseline has no such
+//     gate at all), not a defect. Deployment's own running-status
+//     divergence is the one case still unasserted: no known production
+//     row carries a non-terminal deployment status with no other signal
+//     to bind to, so this corpus asserts no live entry for that specific
+//     arm.
+//   - buildPRFlameResponse's own end selection (flame.go:374-382: MergedAt
+//     / ClosedAt / flameIntervalEnd's shared status-gated request-clock
+//     fallback, prStatusIsRunning's own "open" check) and its "Review
+//     waiting" frame's presence/absence (flame.go:390-394, FirstReviewAt
+//     after start or not): the one live "pr" case (pr_entity_id_bound_200)
+//     exercises exactly one arm of each per run, determined by whichever
+//     PR GET /api/v1/drilldown/prs' own default_window entry names that
+//     run (that route's own query orders by newest creation time only,
+//     with no status/end-time qualification -- pr_entity_id_bound_200's
+//     own declared 200/200 assumes, not guarantees, that the newest PR is
+//     not itself a gap row; if it ever is, this entry's own live run
+//     reports the mismatch, the authoritative check, not a claim made
+//     here) -- not independently selectable without a second,
+//     differently-shaped producer. A terminal ("merged" or "closed") PR
+//     with neither merged_at nor closed_at set (a sync/lookup gap) instead
+//     reaches flameIntervalEnd's own start-as-end branch and answers 422 --
+//     the baseline's identical fallback chain (services/flame.py:140) has
+//     no such gate and still answers 200 for that shape, an intentional
+//     divergence declared live by pr_gap_entity_id_bound_status_divergence
+//     below, bound to a deliberately chosen PR rather than relying on
+//     whichever row a fresh default_window happens to return.
+//   - buildIssueFlameResponse's own end selection (flame.go:429-430:
+//     CompletedAt / the same shared flameIntervalEnd, issueStatusIsRunning's
+//     own five-category non-terminal set) and its "Backlog waiting" frame's
+//     presence/absence (flame.go:438-442, StartedAt after start or not):
+//     the same per-run, one-arm-only limitation as the "pr" case above,
+//     though GET /api/v1/drilldown/issues' own query (fetchIssuesQuery,
+//     drilldown/issues.go) orders by `wct.completed_at DESC` rather than
+//     creation time -- ClickHouse sorts a NULL completed_at last in a
+//     DESC order, so the pick prefers any row with a real completed_at
+//     over a gap row whenever one exists in the window, a narrower
+//     exposure than the "pr" case's own creation-time-only order, not a
+//     guarantee. Same declared-live "done"/"canceled"-with-no-completed_at
+//     divergence class either way, by
+//     issue_gap_entity_id_bound_status_divergence below.
 //   - reworkWindows' own "requested_changes"/"request_changes" state-alias
 //     branches (flame.go:287, alongside the accepted "changes_requested"):
 //     unreachable for any row this system has ever written. GitHub's own
@@ -5187,6 +5211,37 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				IDBindings: []RESTIDBinding{{Producer: "pr_id", QueryParam: "entity_id"}},
 			},
 			{
+				// The gap-declared counterpart to pr_entity_id_bound_200
+				// above, the "pr" entity_type's own status divergence:
+				// buildPRFlameResponse's end selection (flame.go:374-382)
+				// now answers 422 for a terminal ("merged" or "closed") PR
+				// with neither merged_at nor closed_at set -- a sync/lookup
+				// gap, the same shape already fixed for deployments --
+				// while the baseline's identical
+				// fallback chain (services/flame.py:140) has no status
+				// gate and still answers 200 for that row, unconditionally.
+				// This is a real, reachable divergence at a route already
+				// live in production (unlike deployment's own gap case,
+				// this shape needs no transient "still running" window to
+				// exist -- a legacy sync gap on a closed PR persists
+				// indefinitely), so it is declared with its own live
+				// comparing entry rather than left undeclared: entity_id
+				// is bound via -bind pr_gap_id=... (this file's own
+				// restOperatorSuppliedProducers, below), a deliberately
+				// chosen PR known to carry this exact shape, distinct from
+				// pr_entity_id_bound_200's own dynamically-resolved
+				// default_window pick. Bodies are never compared
+				// (RESTBodyModeStatusOnly): the baseline's is a real flame
+				// response and the candidate's is a 422 error payload, two
+				// different shapes by construction.
+				Name:                "pr_gap_entity_id_bound_status_divergence",
+				Query:               url.Values{"entity_type": {"pr"}},
+				WantCandidateStatus: 422, WantBaselineStatus: 200,
+				StatusDivergenceReason: "a terminal PR (state=\"merged\" or \"closed\") with neither merged_at nor closed_at set has no measurable duration on the candidate plane -- buildPRFlameResponse's end selection only falls back to the request clock for a genuinely non-terminal (\"open\") state, so this row's root frame is nil and validateFlameFrames refuses it: HTTP 422. The baseline plane's identical fallback chain (services/flame.py:140, merged_at or closed_at or now()) has no status gate at all and still resolves a real, non-empty interval ending at the request clock for the same row: HTTP 200. An intentional divergence, not a defect -- a closed PR must never render as still under review just because its own real end timestamp was never recorded.",
+				BodyMode:               RESTBodyModeStatusOnly,
+				IDBindings:             []RESTIDBinding{{Producer: "pr_gap_id", QueryParam: "entity_id"}},
+			},
+			{
 				// The "issue" entity_type's own 200 path: entity_id is
 				// bound to GET /api/v1/drilldown/issues' own live
 				// work_item_id -- unlike "pr"/"deployment", the "issue"
@@ -5230,6 +5285,41 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				BodyMode:               RESTBodyModeStatusOnly,
 				IDBindings:             []RESTIDBinding{{Producer: "work_item_id", QueryParam: "entity_id"}},
 				Produces:               []RESTIDProducer{{Name: "issue_flame_frame_id", ListPath: "frames", IDField: "id"}},
+			},
+			{
+				// The gap-declared counterpart to issue_entity_id_bound_200
+				// above, the "issue" entity_type's own status divergence:
+				// buildIssueFlameResponse's end selection (flame.go:429-430)
+				// now answers 422 for a terminal ("done" or "canceled")
+				// work item with no completed_at set -- a sync/lookup gap,
+				// the same class deployment's own ruling fixed. The
+				// baseline's OWN divergence here is dominated by the
+				// unrelated, already-declared route-level 503
+				// (issue_entity_id_bound_200's own StatusDivergenceReason,
+				// above): that failure happens at ClickHouse's query-
+				// PLANNING stage, before any row's own content is ever
+				// evaluated, so it fires identically for this row too --
+				// baseline never reaches its own "invented duration"
+				// branch (services/flame.py:221) to compare against here.
+				// Declared anyway, not left undeclared, because this
+				// entry's real job is proving the CANDIDATE side of the
+				// new gate fires for a genuinely gap-shaped row at a route
+				// already live in production (this shape persists
+				// indefinitely, no transient window needed) -- entity_id
+				// is bound via -bind issue_gap_id=... (this file's own
+				// restOperatorSuppliedProducers, below), a deliberately
+				// chosen work item known to carry this exact shape,
+				// distinct from issue_entity_id_bound_200's own
+				// dynamically-resolved default_window pick. Bodies are
+				// never compared (RESTBodyModeStatusOnly): the baseline's
+				// is a generic 503 error payload and the candidate's is a
+				// 422 error payload, two different shapes by construction.
+				Name:                "issue_gap_entity_id_bound_status_divergence",
+				Query:               url.Values{"entity_type": {"issue"}},
+				WantCandidateStatus: 422, WantBaselineStatus: 503,
+				StatusDivergenceReason: "the baseline plane's issue reads fail unconditionally with the same route-level 503 issue_entity_id_bound_200 already declares (a ClickHouse query-planning exception raised before any row's own content is evaluated), so this entry cannot observe whether baseline would also invent a duration for a terminal work item with no completed_at the way its own fallback chain (services/flame.py:221) has no gate against -- only that baseline never reaches 200 for ANY issue read today. The candidate plane's own gate (buildIssueFlameResponse, flame.go:429-430) does reach and correctly refuse this row: no completed_at and a terminal status category (\"done\"/\"canceled\", not one of backlog/todo/in_progress/in_review/blocked) leaves the root frame nil, and validateFlameFrames answers 422. Declared so a genuinely gap-shaped production row is proven to reach the new gate at all, not left unverified.",
+				BodyMode:               RESTBodyModeStatusOnly,
+				IDBindings:             []RESTIDBinding{{Producer: "issue_gap_id", QueryParam: "entity_id"}},
 			},
 			{
 				// entity_id present, entity_type absent -- FastAPI's own
@@ -5389,11 +5479,11 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 			{
 				// The gap-declared counterpart to deployment_entity_id_
 				// bound_200 above. buildDeploymentFlameResponse's own root
-				// frame (flame.go:463, newFrame at flame.go:187-195;
+				// frame (flame.go:505, newFrame at flame.go:187-195;
 				// _build_deployment_flame_response's own root, services/
 				// flame.py:298-308, _frame at flame.py:26-48) is nil
 				// whenever end <= start -- and queue/pipeline/deploy
-				// (flame.go:468-484 / flame.py:310-348) all carry a
+				// (flame.go:510-526 / flame.py:310-348) all carry a
 				// non-nil ParentID, so root is the ONLY frame
 				// validateFlameFrames' own top_level filter (flame.go:
 				// 228-233 / flame.py:67) can ever see for this
@@ -5403,13 +5493,14 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				// before its own start/end coverage check ever runs. A
 				// deployment row carrying only deployed_at (started_at,
 				// merged_at, finished_at all NULL) with a terminal status
-				// hits exactly this: start = end = deployed_at (flame.go:
-				// 436-459 / flame.py:283-294's own coalesce chains) --
-				// deployment.DeployedAt is not strictly after start, and
-				// deploymentStatusIsRunning (flame.go:421-431) is false
-				// for a terminal status, so end falls through to the same
-				// unconditional deployed_at this route always used, never
-				// to nowLike(). On production data, 0 of the proof
+				// hits exactly this: start = end = deployed_at
+				// (flameIntervalEnd, flame.go:322-331, called at
+				// flame.go:501 / flame.py:283-294's own coalesce chains)
+				// -- there is no real end (FinishedAt nil), and
+				// deploymentStatusIsRunning (flame.go:475-485) is false
+				// for a terminal status, so flameIntervalEnd's own
+				// default branch returns start itself, never nowLike().
+				// On production data, 0 of the proof
 				// organisation's 1135 deployments satisfy end > start:
 				// every one carries only deployed_at with a terminal
 				// status, so every one hits this path (see this file's
@@ -6314,10 +6405,21 @@ func RESTRunOrder() []string {
 // inconsistency. A run whose invocation omits the matching -bind refuses
 // that one request by name (RESTRefusalIDBindingUnresolved, restidbind.go),
 // the same as any other unproduced id -- never an invented value, and no
-// production literal ever appears in this file.
+// production literal ever appears in this file. pr_gap_id and
+// issue_gap_id are the third and fourth cases, the same shape as
+// deployment_gap_entity_id: unlike pr_entity_id_bound_200/
+// issue_entity_id_bound_200 (which consume the regular pr_id/work_item_id
+// a normal GET /api/v1/drilldown/prs'/`/issues`' own default_window entry
+// Produces), pr_gap_entity_id_bound_status_divergence and
+// issue_gap_entity_id_bound_status_divergence (flame corpus entry, above)
+// each need a DELIBERATELY chosen row known to carry a terminal status
+// with no real end timestamp, not whatever a fresh window happens to
+// return -- so each needs its own producer name.
 var restOperatorSuppliedProducers = map[string]bool{
 	"deployment_entity_id":     true,
 	"deployment_gap_entity_id": true,
+	"pr_gap_id":                true,
+	"issue_gap_id":             true,
 }
 
 // IsOperatorSuppliedIDProducer reports whether name is declared in

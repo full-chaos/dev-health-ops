@@ -541,11 +541,47 @@ var cycleBreakdownFloats = map[string]string{
 	"data.root.children.children.value": "sum(duration_hours)-shaped ClickHouse float aggregate for one status row",
 }
 
+// aggFlameThroughputInts declares throughput mode's own three fixed leaf
+// depths as integer: buildThroughputTree (aggflame.go) is root -> work
+// type -> team, exactly two levels deep like cycle_breakdown's own tree
+// (never deeper -- the team level's own Children is always []Node{}),
+// and every value at every depth is uniqExact(wct.work_item_id) (an exact
+// distinct count, clickhouse.go) summed in Go (typeValue/rootValue) --
+// integer arithmetic throughout, never a merged float aggregate.
+var aggFlameThroughputInts = map[string]string{
+	"data.root.value":                   "sum of uniqExact(work_item_id) across every work-type node -- an exact count sum",
+	"data.root.children.value":          "sum of uniqExact(work_item_id) across a work type's own team rows -- an exact count sum",
+	"data.root.children.children.value": "uniqExact(work_item_id) for one team's own row -- an exact distinct count",
+}
+
+var aggFlameThroughputParity = Options{
+	NumericLeavesDeclared: true,
+	IntegerLeaves:         aggFlameThroughputInts,
+}
+
+// drilldownPRsIntegerLeaves declares this route's two numeric leaves,
+// both integer domain despite Go's own wire typing choice for one of
+// them: data.items.number is a plain PR number column; data.items.
+// review_latency_hours is `dateDiff('hour', created_at, first_review_at)`
+// (drilldown.py, drilldown/prs.go) -- always a whole number of hours on
+// both planes. This port types it *int64 (prs.go); Python's Pydantic
+// model types the SAME quantity `float`, so the wire emits "5" on one
+// plane and "5.0" on the other -- a WIRE-SHAPE difference the JSON number
+// comparator already treats as equal, never a provenance one: dateDiff
+// performs no cross-row arithmetic either plane's merge order could
+// perturb, so this is integer, not float.
+var drilldownPRsIntegerLeaves = map[string]string{
+	"data.items.number":               "a plain PR number column, never aggregated.",
+	"data.items.review_latency_hours": "dateDiff('hour', created_at, first_review_at) -- always a whole number of hours; Go types it int64 where Python's pydantic model types the same quantity float, a wire-shape difference, not a provenance one.",
+}
+
 // drilldownPRsParity is shared by every admissible (2xx) drilldown/prs
 // request, GET and POST alike: both routes call the same
 // BuildPRsResponse, so both carry the same declared Python-plane
 // defects.
 var drilldownPRsParity = Options{
+	NumericLeavesDeclared: true,
+	IntegerLeaves:         drilldownPRsIntegerLeaves,
 	BaselineDefects: []BaselineDefect{
 		{
 			Ticket: "CHAOS-5803",
@@ -592,6 +628,28 @@ var drilldownPRsDedup = struct {
 	KeyFields []string
 }{ListPath: "items", KeyFields: []string{"repo_id", "number"}}
 
+// drilldownIssuesFloats declares this route's two numeric leaves:
+// cycle_time_hours/lead_time_hours are `wct.cycle_time_hours`/
+// `wct.lead_time_hours`, PLAIN per-row column reads off work_item_cycle_
+// times (issues.go) -- Nullable(Float64) (001_metrics_v2.sql), never
+// summed or averaged, so two planes reading the SAME latest version must
+// agree bit for bit, the same "one row's own stored value, no cross-row
+// arithmetic" class work-units' own workUnitsFloatExact already declares.
+// Float-DECLARED (named here, satisfying validateNumericLeaves' own rule
+// that a FloatExactLeaves key also appear in FloatTierB) but opted back
+// to Tier A exact by drilldownIssuesFloatExact below.
+var drilldownIssuesFloats = map[string]string{
+	"data.items.cycle_time_hours": "wct.cycle_time_hours, a plain per-row Nullable(Float64) column read (issues.go) -- no cross-row arithmetic, opted back to exact below",
+	"data.items.lead_time_hours":  "wct.lead_time_hours, the same plain per-row read as cycle_time_hours, opted back to exact below",
+}
+
+// drilldownIssuesFloatExact opts both leaves back to Tier A: each is one
+// physical row's own stored value, never merged across rows.
+var drilldownIssuesFloatExact = map[string]string{
+	"data.items.cycle_time_hours": "a plain per-row column read; no cross-row arithmetic on either plane",
+	"data.items.lead_time_hours":  "a plain per-row column read; no cross-row arithmetic on either plane",
+}
+
 // drilldownIssuesParity was shared by every admissible (2xx) drilldown/
 // issues request, GET and POST alike: both routes call the same
 // BuildIssuesResponse, so both carried the same declared Python-plane
@@ -601,13 +659,19 @@ var drilldownPRsDedup = struct {
 // the RMT-dedup shape drilldownPRsParity's own second entry declares has
 // no counterpart on this route. No corpus entry below sets this Parity
 // today: every candidate-200 request on this route is declared
-// baseline-only 503 (StatusDivergenceReason), so no body is ever
-// compared. Still exercised directly, by name, by
+// baseline-only 503 (StatusDivergenceReason), so no body is
+// ever compared and neither numeric leaf above is ever reached live --
+// declared here so the day that status divergence clears, the leaves
+// are already typed rather than a fresh gap. Still exercised directly, by
+// name, by
 // TestDrilldownIssuesParity_EmptyItemsIsAStructuralRefusalNotStale and
 // TestDrilldownIssuesParityDatetimeCitation_NonVacuousMatchIsIdleNotStale,
 // which pin the shape this citation would take if a future entry sets
 // it again.
 var drilldownIssuesParity = Options{
+	NumericLeavesDeclared: true,
+	FloatTierB:            drilldownIssuesFloats,
+	FloatExactLeaves:      drilldownIssuesFloatExact,
 	BaselineDefects: []BaselineDefect{
 		{
 			Ticket: "CHAOS-5808",
@@ -642,11 +706,12 @@ var drilldownIssuesParity = Options{
 // runs is this: ULP-scale noise crossing the exact-equality boundary
 // run to run, not a change in the underlying data.
 var explainAggregateFloats = map[string]string{
-	"data.value":              "metricValueProjection's argMax(tuple(col), computed_at) read, a merged Float64 ClickHouse aggregate",
-	"data.delta_pct":          "derived from the same float aggregate as data.value",
-	"data.drivers.value":      "fetchMetricContributors'/fetchMetricDriverDelta's own aggregate read (sum() or avg() depending on the metric's configured aggregator), a merged Float64 ClickHouse aggregate",
-	"data.drivers.delta_pct":  "derived from the same float aggregates as data.drivers.value",
-	"data.contributors.value": "the same aggregate read as data.drivers.value",
+	"data.value":                  "metricValueProjection's argMax(tuple(col), computed_at) read, a merged Float64 ClickHouse aggregate",
+	"data.delta_pct":              "derived from the same float aggregate as data.value",
+	"data.drivers.value":          "fetchMetricContributors'/fetchMetricDriverDelta's own aggregate read (sum() or avg() depending on the metric's configured aggregator), a merged Float64 ClickHouse aggregate",
+	"data.drivers.delta_pct":      "derived from the same float aggregates as data.drivers.value",
+	"data.contributors.value":     "the same aggregate read as data.drivers.value",
+	"data.contributors.delta_pct": "derived from the same float aggregates as data.contributors.value -- the same Contributor struct backs both drivers and contributors (schemas.py's Contributor model), so this leaf shares data.drivers.delta_pct's own provenance.",
 }
 
 // explainDriverRankOrderInsensitive declares data.drivers/data.contributors
@@ -674,6 +739,7 @@ var explainDriverRankOrderInsensitive = []OrderInsensitiveList{
 }
 
 var explainParity = Options{
+	NumericLeavesDeclared: true,
 	FloatTierB:            explainAggregateFloats,
 	OrderInsensitiveLists: explainDriverRankOrderInsensitive,
 	BaselineDefects: []BaselineDefect{
@@ -779,6 +845,7 @@ var explainScopeDropDefect = BaselineDefect{
 // below that requests an explicit, live repo or team scope for one of
 // the four metrics explainScopeDropDefect names.
 var explainRepoTeamScopedParity = Options{
+	NumericLeavesDeclared: true,
 	FloatTierB:            explainAggregateFloats,
 	OrderInsensitiveLists: explainDriverRankOrderInsensitive,
 	BaselineDefects:       append(append([]BaselineDefect{}, explainParity.BaselineDefects...), explainScopeDropDefect),
@@ -866,7 +933,14 @@ func explainTeamScopedRequest(name, metric, producerName string) RESTRequest {
 // short-circuits BEFORE the client is touched (BuildSearchResponse's own
 // early return), so the "default" entry below carries no Parity at all:
 // there is nothing this citation could ever cover there.
+//
+// NumericLeavesDeclared is set with both numeric tables absent: SearchResult
+// (schemas.py's PersonSearchResult -- person_id/display_name/identities/
+// active) carries zero numeric leaves, so a future field added to this
+// shape becomes a reported, undeclared leaf rather than a silent exact
+// comparison.
 var peopleParity = Options{
+	NumericLeavesDeclared: true,
 	BaselineDefects: []BaselineDefect{
 		{
 			Ticket: "CHAOS-5812",
@@ -916,6 +990,24 @@ var peopleParity = Options{
 // this blanket citation would let this defect's own live/idle state
 // stand in for that one's, silently absorbing that divergence even on a
 // run where this table's own trigger is live for an unrelated reason.
+// peopleDetailParity is a BASELINE-DEFECTS-ONLY template: GET .../summary
+// and .../metric's own six per-metric live entries each derive their own
+// Options from it BY VALUE (the same split heatmapDedupParity's own four
+// per-scenario Options and investmentFlowRepoDedupParity's own three
+// per-shape Options already establish), adding their own numeric-leaf
+// declaration on top. It is never assigned directly to a request's Parity
+// itself: .../summary's six personMetrics entries share ONE wire path per
+// field (data.deltas.value etc, safe to declare once since exactly one
+// request reaches it), but .../metric's six entries are SIX SEPARATE
+// requests, one per metric, each populating a DIFFERENT subset of
+// data.breakdowns.by_repo/by_work_type/by_stage (metricconfig.go's own
+// ByRepo/ByWorkType/ByStage configs never all three together) -- a
+// FloatTierB/IntegerLeaves entry has no Intermittent escape the way
+// BaselineDefect does (Options.FloatTierB's own doc comment), so a
+// breakdown path declared but never reached by a GIVEN metric's own
+// request would report UnusedTierB and refuse that request by name. Each
+// metric's own Options below declares only the leaves that metric's own
+// response can actually carry.
 var peopleDetailParity = Options{
 	BaselineDefects: []BaselineDefect{
 		{
@@ -1047,22 +1139,192 @@ var peopleSummaryCollaborationOrderInsensitiveLists = []OrderInsensitiveList{
 // peopleSummaryParity is GET /api/v1/people/{person_id}/summary's own
 // live (person_id-bound, 200) entry: peopleDetailParity's own citation
 // plus the two content-triggered timestamp citations above and the
-// collaboration ordering relaxation. Not shared with /metric's own entry
-// below (peopleDetailParity itself): /metric's response carries no
-// deltas/spark/sections shape at all (MetricResponse.Timeseries' own day
-// field is already a plain string, metric.go), so a citation or
-// relaxation naming a path that route can never produce would cover
-// nothing there and refuse the run as stale.
+// collaboration ordering relaxation. Not shared with /metric's own six
+// entries below (each its own per-metric Options, peopleMetricChurnParity
+// etc.): /metric's response carries no deltas/spark/sections shape at all
+// (MetricResponse.Timeseries' own day field is already a plain string,
+// metric.go), so a citation or relaxation naming a path that route can
+// never produce would cover nothing there and refuse the run as stale --
+// the identical reasoning that also splits /metric's OWN numeric-leaf
+// declaration one Options per metric, since a breakdown path one metric
+// never populates is the same kind of gap for FloatTierB/IntegerLeaves.
+// peopleSummaryNumericFloats/peopleSummaryNumericInts declare GET
+// .../summary's OWN numeric leaves -- exactly one request
+// (summary_default) ever carries this Options value, so declaring the
+// full set together, once, is safe (unlike .../metric below): every path
+// here is reachable in that single response.
+//   - data.freshness.coverage.*: fetchCoverage's toFloat64(countDistinct/
+//     count) ratios (summary.go) -- genuine ratios, the same fetchCoverage
+//     shape home_corpus.go's own homeNumericLeaves already declares float.
+//   - data.identity_coverage_pct: coverage_sources/2.0*100.0
+//     (services/people.py:497) -- a genuine ratio over an exact
+//     countDistinct (summary.go's fetchIdentityCoverage).
+//   - data.deltas.value/delta_pct/spark.value: ONE wire path shared by
+//     all six personMetrics entries WITHIN THIS SINGLE RESPONSE
+//     (metricconfig.go), whose producing aggregates are NOT uniform --
+//     cycle_time/review_latency/wip_overlap use avg() (always Float64 in
+//     ClickHouse regardless of the underlying column's own type), while
+//     throughput/churn/blocked_work sum() an integer-domain column
+//     (items_completed/loc_touched/if(status='blocked',1,0)). Declared
+//     float for the whole shared path -- the same "declare the more
+//     permissive classification" convention homeNumericLeaves already
+//     uses for its own identically mixed data.deltas.value/spark.value.
+//   - data.sections.flow_breakdown.value (summary.go's
+//     fetchPersonFlowBreakdown): coalesce(toFloat64(avg(cycle_time_hours)
+//     ),0) / avg(lead_time_hours-cycle_time_hours) -- genuine avg()
+//     aggregates over Float64 columns.
+var peopleSummaryNumericFloats = map[string]string{
+	"data.freshness.coverage.repos_covered_pct":            "fetchCoverage's covered/total ratio *100 (summary.go) -- a genuine ratio.",
+	"data.freshness.coverage.prs_linked_to_issues_pct":     "fetchCoverage's linked/total ratio *100 -- a genuine ratio.",
+	"data.freshness.coverage.issues_with_cycle_states_pct": "fetchCoverage's with_cycle/total ratio *100 -- a genuine ratio.",
+	"data.identity_coverage_pct":                           "coverage_sources/2.0*100.0 (services/people.py:497) -- a genuine ratio over fetchIdentityCoverage's exact countDistinct.",
+	"data.deltas.value":                                    "shared by all six personMetrics entries within this one response, whose producing aggregates mix avg() over Float64 columns and sum() over integer-domain columns on this ONE wire path -- declared float for the whole path, the same mixed-provenance convention homeNumericLeaves uses for its own identical shape.",
+	"data.deltas.delta_pct":                                "derived from the same mixed-provenance aggregate as data.deltas.value.",
+	"data.deltas.spark.value":                              "the same per-row mixed provenance as data.deltas.value, one point per day.",
+	"data.sections.flow_breakdown.value":                   "fetchPersonFlowBreakdown's avg(cycle_time_hours) / avg(lead_time_hours-cycle_time_hours) (summary.go) -- genuine Float64 avg() aggregates.",
+}
+
+// peopleSummaryNumericInts declares GET .../summary's own integer leaves:
+// each is a `toFloat64(...)`-wrapped count/sum whose cast exists only so
+// the ClickHouse driver can scan the result into *float64, never because
+// the quantity is fractional -- the same "cast for scan" class heatmap's
+// own repo_touchpoints/active_hours and home's own
+// rework_theme_allocation sums already declare integer.
+var peopleSummaryNumericInts = map[string]string{
+	"data.sections.work_mix.value":                     "fetchPersonWorkMix's toFloat64(count()) (summary.go) -- an exact row count, cast for scan only.",
+	"data.sections.collaboration.review_load.value":    "fetchPersonCollaboration's toFloat64(sum(reviews_given/reviews_received/prs_authored/prs_merged)) (summary.go) -- sums of integer-domain count columns, cast for scan only.",
+	"data.sections.collaboration.handoff_points.value": "fetchPersonCollaboration's toFloat64(sum(items_started/items_completed)) (summary.go) -- sums of integer-domain count columns, cast for scan only.",
+}
+
 var peopleSummaryParity = Options{
+	NumericLeavesDeclared: true,
+	FloatTierB:            peopleSummaryNumericFloats,
+	IntegerLeaves:         peopleSummaryNumericInts,
 	BaselineDefects: append(append([]BaselineDefect{}, peopleDetailParity.BaselineDefects...),
 		peopleSummarySparkTimestampDefect, peopleSummaryLastIngestedAtTimestampDefect),
 	OrderInsensitiveLists: peopleSummaryCollaborationOrderInsensitiveLists,
+}
+
+// The six Options below are GET .../metric's own per-metric live
+// entries: personMetricConfig (metricconfig.go) resolves "metric" to
+// exactly one of six personMetrics rows, so each request is its OWN
+// comparison reaching its OWN subset of data.timeseries.value and
+// data.breakdowns.by_repo/by_work_type/by_stage -- never all three
+// breakdowns together, and wip_overlap reaches none of them at all
+// (metric.go's own cfg.ByRepo/ByWorkType/ByStage all nil check leaves
+// breakdowns the static empty-lists value). Each Options here inherits
+// peopleDetailParity's own BaselineDefects BY VALUE and adds only the
+// numeric declarations that metric's own request can actually reach.
+
+// peopleMetricChurnInts: metric_default requests "churn" -- sum(loc_touched)
+// over a UInt32 count column (005_ic_metrics.sql) for both the series and
+// its ByRepo breakdown -- integer, never a merged float aggregate.
+var peopleMetricChurnInts = map[string]string{
+	"data.timeseries.value":         "personMetrics' churn entry: sum(loc_touched), a UInt32 count column (005_ic_metrics.sql) -- integer.",
+	"data.breakdowns.by_repo.value": "churn's own ByRepo breakdown: the same sum(loc_touched) shape, grouped by repo, joined to repos FINAL.",
+}
+
+var peopleMetricChurnParity = Options{
+	NumericLeavesDeclared: true,
+	IntegerLeaves:         peopleMetricChurnInts,
+	BaselineDefects:       append([]BaselineDefect{}, peopleDetailParity.BaselineDefects...),
+}
+
+// peopleMetricCycleTimeFloats: metric_cycle_time -- avg(cycle_time_p50_hours)
+// / avg(cycle_time_hours), both Nullable(Float64) columns (001_metrics_v2.
+// sql) -- avg() is always Float64 in ClickHouse regardless of the source
+// column's own type, so this is float by aggregator, not merely by column.
+var peopleMetricCycleTimeFloats = map[string]string{
+	"data.timeseries.value":              "personMetrics' cycle_time entry: avg(cycle_time_p50_hours) over work_item_user_metrics_daily -- avg() is always Float64.",
+	"data.breakdowns.by_work_type.value": "cycle_time's own ByWorkType breakdown: avg(cycle_time_hours) over work_item_cycle_times, grouped by type.",
+	"data.breakdowns.by_stage.value":     "cycle_time's own ByStage breakdown: the same avg(cycle_time_hours) shape, grouped by status.",
+}
+
+var peopleMetricCycleTimeParity = Options{
+	NumericLeavesDeclared: true,
+	FloatTierB:            peopleMetricCycleTimeFloats,
+	BaselineDefects:       append([]BaselineDefect{}, peopleDetailParity.BaselineDefects...),
+}
+
+// peopleMetricReviewLatencyFloats: metric_review_latency --
+// avg(pr_first_review_p50_hours), a Nullable(Float64) column
+// (001_metrics_v2.sql) -- avg() is always Float64.
+var peopleMetricReviewLatencyFloats = map[string]string{
+	"data.timeseries.value":         "personMetrics' review_latency entry: avg(pr_first_review_p50_hours) over user_metrics_daily -- avg() is always Float64.",
+	"data.breakdowns.by_repo.value": "review_latency's own ByRepo breakdown: the same avg(pr_first_review_p50_hours) shape, joined to repos FINAL.",
+}
+
+var peopleMetricReviewLatencyParity = Options{
+	NumericLeavesDeclared: true,
+	FloatTierB:            peopleMetricReviewLatencyFloats,
+	BaselineDefects:       append([]BaselineDefect{}, peopleDetailParity.BaselineDefects...),
+}
+
+// peopleMetricThroughputInts: metric_throughput -- sum(items_completed),
+// a UInt32 count column (001_metrics_v2.sql), and its ByWorkType
+// breakdown's sum(if(completed_at IS NULL,0,1)) -- both integer, never a
+// merged float aggregate.
+var peopleMetricThroughputInts = map[string]string{
+	"data.timeseries.value":              "personMetrics' throughput entry: sum(items_completed), a UInt32 count column (001_metrics_v2.sql) -- integer.",
+	"data.breakdowns.by_work_type.value": "throughput's own ByWorkType breakdown: sum(if(completed_at IS NULL,0,1)) over work_item_cycle_times -- a plain 0/1 count sum, integer.",
+}
+
+var peopleMetricThroughputParity = Options{
+	NumericLeavesDeclared: true,
+	IntegerLeaves:         peopleMetricThroughputInts,
+	BaselineDefects:       append([]BaselineDefect{}, peopleDetailParity.BaselineDefects...),
+}
+
+// peopleMetricWipOverlapFloats: metric_wip_overlap -- avg(wip_count_end_of_day)
+// over a UInt32 column (001_metrics_v2.sql) -- avg() is always Float64 in
+// ClickHouse regardless of the source column's own integer type. This
+// metric configures NO breakdown at all (metricconfig.go), so
+// by_repo/by_work_type/by_stage stay the static empty-lists value and
+// carry no leaf to declare -- declaring one here would report it unused
+// and refuse this request by name.
+var peopleMetricWipOverlapFloats = map[string]string{
+	"data.timeseries.value": "personMetrics' wip_overlap entry: avg(wip_count_end_of_day) over work_item_user_metrics_daily -- avg() is always Float64.",
+}
+
+var peopleMetricWipOverlapParity = Options{
+	NumericLeavesDeclared: true,
+	FloatTierB:            peopleMetricWipOverlapFloats,
+	BaselineDefects:       append([]BaselineDefect{}, peopleDetailParity.BaselineDefects...),
+}
+
+// peopleMetricBlockedWorkInts: metric_blocked_work --
+// sum(if(status='blocked',1,0)) over work_item_cycle_times, for both the
+// series and its ByWorkType breakdown -- a plain 0/1 count sum, integer.
+var peopleMetricBlockedWorkInts = map[string]string{
+	"data.timeseries.value":              "personMetrics' blocked_work entry: sum(if(status='blocked',1,0)) over work_item_cycle_times -- integer.",
+	"data.breakdowns.by_work_type.value": "blocked_work's own ByWorkType breakdown: the same sum(if(status='blocked',1,0)) shape, grouped by type.",
+}
+
+var peopleMetricBlockedWorkParity = Options{
+	NumericLeavesDeclared: true,
+	IntegerLeaves:         peopleMetricBlockedWorkInts,
+	BaselineDefects:       append([]BaselineDefect{}, peopleDetailParity.BaselineDefects...),
+}
+
+// personDrilldownPRsIntegerLeaves declares this route's two numeric
+// leaves, both integer domain: data.items.number is a plain PR number
+// column (uint32, drilldownprs.go); data.items.review_latency_hours is
+// `toFloat64(dateDiff('hour', pr.created_at, pr.first_review_at))`
+// (drilldownprs.go) -- dateDiff is always a whole number of hours, and
+// the toFloat64 wrap exists only so this port types the field *float64
+// on the wire (unlike drilldown/prs' own *int64 choice for the identical
+// quantity) -- a wire-shape choice, not a provenance one.
+var personDrilldownPRsIntegerLeaves = map[string]string{
+	"data.items.number":               "a plain PR number column (uint32), never aggregated.",
+	"data.items.review_latency_hours": "dateDiff('hour', created_at, first_review_at) -- always a whole number of hours; toFloat64()-wrapped for this port's own *float64 wire typing, a wire-shape choice, not a provenance one.",
 }
 
 // personDrilldownPRsParity is shared by GET
 // /api/v1/people/{person_id}/drilldown/prs's own live (person_id-bound,
 // 200) entry below.
 var personDrilldownPRsParity = Options{
+	NumericLeavesDeclared: true,
+	IntegerLeaves:         personDrilldownPRsIntegerLeaves,
 	BaselineDefects: []BaselineDefect{
 		{
 			Ticket: "CHAOS-5803",
@@ -1093,6 +1355,21 @@ var personDrilldownPRsParity = Options{
 	},
 }
 
+// personDrilldownIssuesFloats/personDrilldownIssuesFloatExact declare
+// this route's two numeric leaves the same way drilldownIssuesFloats/
+// drilldownIssuesFloatExact do for the sibling scope-based route: a
+// plain per-row Nullable(Float64) column read off work_item_cycle_times,
+// never summed or averaged, so declared float and opted back to exact.
+var personDrilldownIssuesFloats = map[string]string{
+	"data.items.cycle_time_hours": "a plain per-row Nullable(Float64) column read -- no cross-row arithmetic, opted back to exact below",
+	"data.items.lead_time_hours":  "the same plain per-row read as cycle_time_hours, opted back to exact below",
+}
+
+var personDrilldownIssuesFloatExact = map[string]string{
+	"data.items.cycle_time_hours": "a plain per-row column read; no cross-row arithmetic on either plane",
+	"data.items.lead_time_hours":  "a plain per-row column read; no cross-row arithmetic on either plane",
+}
+
 // personDrilldownIssuesParity was shared by GET
 // /api/v1/people/{person_id}/drilldown/issues's own live (person_id-bound,
 // 200) entry below. Unlike personDrilldownPRsParity there is only one
@@ -1101,9 +1378,14 @@ var personDrilldownPRsParity = Options{
 // drilldownissues.go's own doc comment), so the RMT-dedup shape
 // personDrilldownPRsParity's own second entry declares has no
 // counterpart. No corpus entry below sets this Parity today: that entry
-// is declared baseline-only 503 (StatusDivergenceReason), so no body is
-// ever compared.
+// is declared baseline-only 503 (StatusDivergenceReason), so
+// no body is ever compared and neither numeric leaf above is ever
+// reached live -- declared here for the day that status divergence
+// clears.
 var personDrilldownIssuesParity = Options{
+	NumericLeavesDeclared: true,
+	FloatTierB:            personDrilldownIssuesFloats,
+	FloatExactLeaves:      personDrilldownIssuesFloatExact,
 	BaselineDefects: []BaselineDefect{
 		{
 			Ticket: "CHAOS-5808",
@@ -1131,7 +1413,21 @@ var personDrilldownIssuesParity = Options{
 // already tracks for git_pull_requests, at a different query site over
 // the same table plus its review sibling. This port reads both FINAL
 // (flame.go's own doc comment). Go is correct.
+// flamePRIDBoundEntityInts declares the "pr" entity_type's own
+// data.entity.number leaf: services/flame.py's _build_pr_flame_response
+// (entity["number"] = number) and this port's buildPRFlameResponse
+// (cmd/query-api/internal/flame/flame.go's entity map, line 360) both
+// assign it a plain int parsed off the "<repo_id>:<number>" entity_id --
+// never aggregated -- so it is integer, not float. "issue"/"deployment"
+// entity dicts carry no numeric field at all (services/flame.py's own
+// entity dict literals for those two branches).
+var flamePRIDBoundEntityInts = map[string]string{
+	"data.entity.number": "the PR number parsed off the entity_id's own <repo_id>:<number> suffix, a plain int on both planes, never aggregated",
+}
+
 var flamePRIDBoundParity = Options{
+	NumericLeavesDeclared: true,
+	IntegerLeaves:         flamePRIDBoundEntityInts,
 	BaselineDefects: []BaselineDefect{
 		{
 			Ticket: "CHAOS-5803",
@@ -2185,7 +2481,8 @@ var investmentFlowRepoTeamParity = Options{
 // sankey nodes/edges case (compare.go's own OrderInsensitiveList doc
 // comment).
 var quadrantRepoDedupParity = Options{
-	FloatTierB: quadrantPointFloats,
+	NumericLeavesDeclared: true,
+	FloatTierB:            quadrantPointFloats,
 	BaselineDefects: []BaselineDefect{
 		{
 			Ticket:             "CHAOS-5867",
@@ -2203,6 +2500,25 @@ var quadrantRepoDedupParity = Options{
 			Ticket:    "CHAOS-5857",
 		},
 	},
+}
+
+// codeHotspotsInts declares code_hotspots' own two leaf shapes: the
+// root's own churn sum (depth zero) and every deeper directory's own
+// churn sum, reached at ANY nesting depth through the one repeat form
+// this ticket adds (see the flame/aggregated spec's own doc comment
+// below). Both are `sum(churn)` over `file_metrics_daily`'s `churn
+// UInt32` (001_metrics_v2.sql) -- an INTEGER ClickHouse aggregate, not a
+// merged float one. Both code_hotspots entries below share this one
+// Options value, the same convention cycleBreakdownFloats/
+// aggFlameThroughputInts already use for their own sibling modes.
+var codeHotspotsInts = map[string]string{
+	"data.root.value":           "sum(churn) over file_metrics_daily's churn UInt32 column, the org-wide total across every top-level entry -- integer.",
+	"data.root.children+.value": "the same sum(churn) shape at any nesting depth beneath the root, one or more directory levels deep -- integer.",
+}
+
+var codeHotspotsParity = Options{
+	NumericLeavesDeclared: true,
+	IntegerLeaves:         codeHotspotsInts,
 }
 
 var restEndpointSpecs = map[string]RESTEndpointSpec{
@@ -2248,7 +2564,7 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				Query:               url.Values{"type": {"cycle_throughput"}, "scope_type": {"team"}},
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
 				BodyMode:   RESTBodyModeJSON,
-				Parity:     Options{FloatTierB: quadrantPointFloats},
+				Parity:     Options{NumericLeavesDeclared: true, FloatTierB: quadrantPointFloats},
 				IDBindings: []RESTIDBinding{{Producer: "team_id", QueryParam: "scope_id"}},
 			},
 			{
@@ -2408,21 +2724,40 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 	// `churn UInt32` (001_metrics_v2.sql) -- an INTEGER ClickHouse
 	// aggregate, and compare.go's own compareJSON takes an exact-int64
 	// fast path for any whole-number pair not declared Tier B (see its own
-	// "DELIBERATE DIVERGENCE" doc comment) -- so this mode's live entry
-	// below declares nothing, matching this file's own "declare nothing
-	// when every leaf is an exact count" convention (quadrant's own
-	// missing_type/malformed_start_date entries carry no Parity either).
+	// "DELIBERATE DIVERGENCE" doc comment).
 	// cycle_breakdown's leaves ARE genuine merged Float64 aggregates
 	// (`sum(duration_hours)` over an argMax-deduped subquery,
 	// work_item_state_durations_daily.duration_hours Float64) -- the same
 	// risk class quadrantPointFloats' own doc comment names by name
-	// ("avg/sum/stddevPop over Float64"). Unlike code_hotspots'
-	// UNBOUNDED directory-depth tree, cycle_breakdown's own tree shape is
-	// FIXED at exactly two levels (buildCycleBreakdownTree: root ->
+	// ("avg/sum/stddevPop over Float64"). cycle_breakdown's own tree shape
+	// is FIXED at exactly two levels (buildCycleBreakdownTree: root ->
 	// category -> status leaf, no category or leaf ever has further
 	// children), so its three possible leaf depths are enumerable as
 	// concrete dotted paths -- cycleBreakdownFloats below declares all
-	// three.
+	// three, and its three live entries carry NumericLeavesDeclared.
+	// throughput's tree (buildThroughputTree) is the SAME fixed
+	// two-level shape (root -> work type -> team, the team level's own
+	// Children always []Node{}), so its three leaf depths are equally
+	// enumerable -- aggFlameThroughputParity above declares them integer
+	// (uniqExact-derived counts, never a float aggregate) and both live
+	// throughput entries below carry it.
+	//
+	// code_hotspots' own tree is DIFFERENT IN KIND from either of those:
+	// buildCodeHotspotsTree splits a real repository file path on "/"
+	// (aggflame.go), so its depth is UNBOUNDED by any fixed number of
+	// directory segments a real repo can have -- no FIXED set of dotted
+	// paths, however many, could enumerate every depth. Options'
+	// FloatTierB/FloatExactLeaves/IntegerLeaves accept exactly one
+	// escape from that: a declared segment ending in a single trailing
+	// "+" (FloatTierB's own doc comment; matchRepeatDeclaration,
+	// compare.go) matches one or more consecutive occurrences of its own
+	// base segment name at that position -- "data.root.children+.value"
+	// reaches every depth from one directory level to any number.
+	// codeHotspotsInts below declares the root's own value (depth zero,
+	// no repeated segment -- the repeat form never matches zero
+	// occurrences, so this needs its own entry) plus that one repeat
+	// entry for every deeper value, and both live entries carry
+	// NumericLeavesDeclared.
 	"REST:GET:/api/v1/flame/aggregated": {
 		Method: "GET",
 		Path:   "/api/v1/flame/aggregated",
@@ -2469,17 +2804,18 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				Query:               url.Values{"mode": {"cycle_breakdown"}, "range_days": {"7"}},
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
 				BodyMode: RESTBodyModeJSON,
-				Parity:   Options{FloatTierB: cycleBreakdownFloats},
+				Parity:   Options{NumericLeavesDeclared: true, FloatTierB: cycleBreakdownFloats},
 			},
 			{
 				// Live happy path, code_hotspots mode, org scope, a small
-				// bounded window and a small limit. No Parity: see this
-				// spec's own doc comment -- every leaf here is an exact
-				// integer churn sum, compared Tier A.
+				// bounded window and a small limit. codeHotspotsParity:
+				// every leaf is an exact integer churn sum, declared at any
+				// depth through the one repeat form (this table's own doc
+				// comment above).
 				Name:                "code_hotspots_org_week_limit5",
 				Query:               url.Values{"mode": {"code_hotspots"}, "range_days": {"7"}, "limit": {"5"}},
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
-				BodyMode: RESTBodyModeJSON,
+				BodyMode: RESTBodyModeJSON, Parity: codeHotspotsParity,
 			},
 			{
 				// cycle_breakdown's team_id branch (fetchCycleBreakdown's
@@ -2493,7 +2829,7 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				Query:               url.Values{"mode": {"cycle_breakdown"}, "range_days": {"7"}},
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
 				BodyMode:   RESTBodyModeJSON,
-				Parity:     Options{FloatTierB: cycleBreakdownFloats},
+				Parity:     Options{NumericLeavesDeclared: true, FloatTierB: cycleBreakdownFloats},
 				IDBindings: []RESTIDBinding{{Producer: "team_id", QueryParam: "team_id"}},
 			},
 			{
@@ -2514,7 +2850,7 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				Query:               url.Values{"mode": {"cycle_breakdown"}, "range_days": {"7"}},
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
 				BodyMode:   RESTBodyModeJSON,
-				Parity:     Options{FloatTierB: cycleBreakdownFloats},
+				Parity:     Options{NumericLeavesDeclared: true, FloatTierB: cycleBreakdownFloats},
 				IDBindings: []RESTIDBinding{{Producer: "provider", QueryParam: "provider"}},
 			},
 			{
@@ -2523,24 +2859,28 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				// bound to filters/options' own live repo_id, the same
 				// producer code_hotspots_org_week_limit5's own sibling
 				// entries in this table already consume for other routes.
-				// No Parity: same reasoning as code_hotspots_org_week_limit5
-				// -- every leaf is an exact integer churn sum.
+				// codeHotspotsParity, same reasoning as
+				// code_hotspots_org_week_limit5 above.
 				Name:                "code_hotspots_repo_scoped",
 				Query:               url.Values{"mode": {"code_hotspots"}, "range_days": {"7"}, "limit": {"5"}},
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
 				BodyMode:   RESTBodyModeJSON,
+				Parity:     codeHotspotsParity,
 				IDBindings: []RESTIDBinding{{Producer: "repo_id", QueryParam: "repo_id"}},
 			},
 			{
 				// Live happy path, throughput mode, org scope -- exercises
 				// fetchThroughputByType (buildThroughput's primary read).
-				// No Parity: ItemsCompleted is uniqExact(...), an exact
-				// distinct count, same Tier A reasoning as code_hotspots'
-				// own entries, not a merged float aggregate.
+				// aggFlameThroughputParity: ItemsCompleted is uniqExact(...),
+				// an exact distinct count summed at each of this tree's own
+				// two fixed levels -- integer, never a merged float
+				// aggregate. See this spec's own doc comment for why
+				// throughput's fixed shape can carry NumericLeavesDeclared
+				// where code_hotspots' unbounded one cannot.
 				Name:                "throughput_org_week",
 				Query:               url.Values{"mode": {"throughput"}, "range_days": {"7"}},
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
-				BodyMode: RESTBodyModeJSON,
+				BodyMode: RESTBodyModeJSON, Parity: aggFlameThroughputParity,
 			},
 			{
 				// throughput's team_id branch (fetchThroughputByType's own
@@ -2550,6 +2890,7 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				Query:               url.Values{"mode": {"throughput"}, "range_days": {"7"}},
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
 				BodyMode:   RESTBodyModeJSON,
+				Parity:     aggFlameThroughputParity,
 				IDBindings: []RESTIDBinding{{Producer: "team_id", QueryParam: "team_id"}},
 			},
 		},
@@ -2562,7 +2903,15 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				Name:                "options",
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
 				BodyMode: RESTBodyModeJSON,
-				Parity: Options{BaselineDefects: []BaselineDefect{{
+				// FilterOptionsResponse (models/filters.py) is all list[str] --
+				// teams/repos/services/developers/work_category/issue_type/
+				// flow_stage carry zero numeric leaves. NumericLeavesDeclared
+				// is set with both numeric tables absent on purpose, the
+				// same "declared empty" convention opportunities/
+				// work-unit-explain's own corpus use: it turns a future
+				// numeric field added to this shape into a reported,
+				// undeclared leaf rather than a silent exact comparison.
+				Parity: Options{NumericLeavesDeclared: true, BaselineDefects: []BaselineDefect{{
 					Ticket:             "CHAOS-5798",
 					Reason:             "teams (the user_metrics_daily UNION branch), developers (author_email), repos and flow_stage (work_item_state_durations_daily) are each read from a ReplacingMergeTree table without FINAL (api/queries/filters.py) where this port's five reads all apply FINAL, bounded to the requesting org in the same statement (filteroptions package doc comment). An unmerged physical version whose VALUE changed since the last merge (a team rename, a re-attributed author_email) can leave an extra, stale distinct value in Python's list that this port's FINAL read excludes -- a LIST-LENGTH divergence, which this citation's Paths reach but, by this package's own leaf-only coverage rule (BaselineDefect's doc comment), never silently admit: it stays a real, uncovered finding on the receipt whenever it fires. Go is correct.",
 					Paths:              []string{"data.teams", "data.developers", "data.repos", "data.flow_stage"},
@@ -3823,11 +4172,13 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				// "summary_default" entry uses -- "churn" is a supported
 				// metric (metricconfig.go's own personMetricConfigs), so
 				// this reaches identity resolution and the 200 path.
+				// peopleMetricChurnParity: churn's own sum(loc_touched)
+				// shape, integer.
 				Name:                "metric_default",
 				Query:               url.Values{"metric": {"churn"}},
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
 				BodyMode:   RESTBodyModeJSON,
-				Parity:     peopleDetailParity,
+				Parity:     peopleMetricChurnParity,
 				IDBindings: []RESTIDBinding{{Producer: "person_id", PathParam: "person_id"}},
 			},
 			{
@@ -3836,14 +4187,13 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				// series read), with ByWorkType AND ByStage breakdowns both
 				// on work_item_cycle_times (metricconfig.go) -- neither
 				// breakdown statement runs under any other live entry in
-				// this table. Same peopleDetailParity citation as
-				// metric_default: it names every one of this route's
-				// numeric leaves generically, not per metric.
+				// this table. peopleMetricCycleTimeParity: avg() over
+				// Nullable(Float64) columns throughout, float.
 				Name:                "metric_cycle_time",
 				Query:               url.Values{"metric": {"cycle_time"}},
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
 				BodyMode:   RESTBodyModeJSON,
-				Parity:     peopleDetailParity,
+				Parity:     peopleMetricCycleTimeParity,
 				IDBindings: []RESTIDBinding{{Producer: "person_id", PathParam: "person_id"}},
 			},
 			{
@@ -3851,23 +4201,26 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				// breakdown with its own "INNER JOIN repos FINAL"
 				// (metricconfig.go) -- a different join than churn's own
 				// ByRepo (different table/column), so this is a distinct
-				// statement from metric_default's.
+				// statement from metric_default's. peopleMetricReviewLatencyParity:
+				// avg() over a Nullable(Float64) column, float.
 				Name:                "metric_review_latency",
 				Query:               url.Values{"metric": {"review_latency"}},
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
 				BodyMode:   RESTBodyModeJSON,
-				Parity:     peopleDetailParity,
+				Parity:     peopleMetricReviewLatencyParity,
 				IDBindings: []RESTIDBinding{{Producer: "person_id", PathParam: "person_id"}},
 			},
 			{
 				// metric=throughput: table work_item_user_metrics_daily
 				// (different column than cycle_time's own read of the same
 				// table), ByWorkType breakdown on work_item_cycle_times.
+				// peopleMetricThroughputParity: sum() over integer-domain
+				// count columns throughout, integer.
 				Name:                "metric_throughput",
 				Query:               url.Values{"metric": {"throughput"}},
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
 				BodyMode:   RESTBodyModeJSON,
-				Parity:     peopleDetailParity,
+				Parity:     peopleMetricThroughputParity,
 				IDBindings: []RESTIDBinding{{Producer: "person_id", PathParam: "person_id"}},
 			},
 			{
@@ -3877,23 +4230,26 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				// BuildMetricResponse with cfg.ByRepo/ByWorkType/ByStage
 				// all nil, so breakdowns stays the static empty-lists value
 				// (metric.go) rather than running a breakdown statement.
+				// peopleMetricWipOverlapParity declares data.timeseries.value
+				// only, float (avg()), for exactly that reason.
 				Name:                "metric_wip_overlap",
 				Query:               url.Values{"metric": {"wip_overlap"}},
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
 				BodyMode:   RESTBodyModeJSON,
-				Parity:     peopleDetailParity,
+				Parity:     peopleMetricWipOverlapParity,
 				IDBindings: []RESTIDBinding{{Producer: "person_id", PathParam: "person_id"}},
 			},
 			{
 				// metric=blocked_work: table work_item_cycle_times (the
 				// only metric whose SERIES read, not just its breakdown,
 				// targets this table), ByWorkType breakdown on the same
-				// table.
+				// table. peopleMetricBlockedWorkParity: sum() over a plain
+				// 0/1 count expression throughout, integer.
 				Name:                "metric_blocked_work",
 				Query:               url.Values{"metric": {"blocked_work"}},
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
 				BodyMode:   RESTBodyModeJSON,
-				Parity:     peopleDetailParity,
+				Parity:     peopleMetricBlockedWorkParity,
 				IDBindings: []RESTIDBinding{{Producer: "person_id", PathParam: "person_id"}},
 			},
 		},

@@ -11,16 +11,22 @@ import "testing"
 // noticed by a live prove run reporting false findings or an
 // unexplained refusal again.
 func TestExplainParityDeclarationsCarryShapes(t *testing.T) {
-	if len(explainParity.FloatTierB) != 5 {
-		t.Fatalf("explainParity.FloatTierB = %+v, want 5 entries", explainParity.FloatTierB)
+	if len(explainParity.FloatTierB) != 6 {
+		t.Fatalf("explainParity.FloatTierB = %+v, want 6 entries", explainParity.FloatTierB)
 	}
-	for _, path := range []string{"data.value", "data.delta_pct", "data.drivers.value", "data.drivers.delta_pct", "data.contributors.value"} {
+	for _, path := range []string{"data.value", "data.delta_pct", "data.drivers.value", "data.drivers.delta_pct", "data.contributors.value", "data.contributors.delta_pct"} {
 		if _, ok := explainParity.FloatTierB[path]; !ok {
 			t.Fatalf("explainParity.FloatTierB missing %q", path)
 		}
 	}
-	if len(explainRepoTeamScopedParity.FloatTierB) != 5 {
-		t.Fatalf("explainRepoTeamScopedParity.FloatTierB = %+v, want 5 entries -- Options fields do not cascade, this must be wired independently", explainRepoTeamScopedParity.FloatTierB)
+	if len(explainRepoTeamScopedParity.FloatTierB) != 6 {
+		t.Fatalf("explainRepoTeamScopedParity.FloatTierB = %+v, want 6 entries -- Options fields do not cascade, this must be wired independently", explainRepoTeamScopedParity.FloatTierB)
+	}
+	if !explainParity.NumericLeavesDeclared {
+		t.Fatal("explainParity.NumericLeavesDeclared = false, want true -- Options fields do not cascade, this must be wired independently")
+	}
+	if !explainRepoTeamScopedParity.NumericLeavesDeclared {
+		t.Fatal("explainRepoTeamScopedParity.NumericLeavesDeclared = false, want true -- Options fields do not cascade, this must be wired independently")
 	}
 
 	if len(explainParity.OrderInsensitiveLists) != 2 {

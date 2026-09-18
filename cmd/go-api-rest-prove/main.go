@@ -113,10 +113,34 @@ type flags struct {
 	dryRun     bool
 	timeout    time.Duration
 	reportPath string
+
+	// binds is every -bind NAME=VALUE the run invocation supplied, keyed
+	// by NAME -- an id for a corpus request whose IDBindings names a
+	// goapiproof.IsOperatorSuppliedIDProducer producer, resolved from the
+	// run invocation itself rather than an earlier request's own
+	// Produces (restcorpus.go's own restOperatorSuppliedProducers doc
+	// comment). Never populated from anything but this flag: no
+	// production literal lives in this binary's own source.
+	binds map[string]string
 }
 
 func parseFlags() (flags, error) {
 	var f flags
+	f.binds = map[string]string{}
+	flag.Func("bind", "an operator-supplied id binding for a corpus request whose IDBindings names a goapiproof.IsOperatorSuppliedIDProducer producer, as NAME=VALUE. Repeatable, once per name. NAME must match a producer the corpus actually declares operator-suppliable (an unmatched NAME is simply never consumed); VALUE is never validated beyond being non-empty, since its shape is the corpus request's own concern. Rejected immediately, before any request is planned or sent, when the argument carries no \"=\" or either side of it is empty", func(raw string) error {
+		name, value, ok := strings.Cut(raw, "=")
+		if !ok {
+			return fmt.Errorf("-bind %q: want NAME=VALUE", raw)
+		}
+		if name == "" {
+			return fmt.Errorf("-bind %q: empty NAME", raw)
+		}
+		if value == "" {
+			return fmt.Errorf("-bind %q: empty VALUE", raw)
+		}
+		f.binds[name] = value
+		return nil
+	})
 	flag.StringVar(&f.queryAPIURL, "query-api-url", "http://localhost:8090", "query-api's OWN in-cluster address -- the candidate leg. Never an edge or ingress URL: every request this tool sends goes DIRECTLY to this service")
 	flag.StringVar(&f.pythonAPIURL, "python-api-url", "", "the Python api service's OWN in-cluster address -- the baseline leg (required). Never an edge or ingress URL, for the same reason as -query-api-url")
 	flag.StringVar(&f.buildInfoURL, "buildinfo-url", "", "GET /buildinfo on query-api -- the ONLY source of the build identity every receipt names. Defaults to -query-api-url + \"/buildinfo\"")
@@ -135,7 +159,19 @@ func parseFlags() (flags, error) {
 	flag.BoolVar(&f.dryRun, "dry-run", false, "execute and compare, but write NO receipts")
 	flag.DurationVar(&f.timeout, "timeout", 60*time.Second, "per-request timeout")
 	flag.StringVar(&f.reportPath, "report", "", "write the full JSON report here in addition to stdout")
-	flag.Parse()
+	// flag.CommandLine.Parse, not the package-level flag.Parse (which
+	// discards Parse's own returned error): -bind's own Func callback
+	// above is the first flag in this command that can fail AT PARSE
+	// TIME rather than only in the post-parse required-flag check below,
+	// and that error must reach the caller -- under the default
+	// ExitOnError handling this changes nothing (Parse still never
+	// returns on an error, since Set already called os.Exit), but under
+	// a test's ContinueOnError flag.CommandLine (resetFlagsForTest) it is
+	// the only way a malformed -bind is ever observed at all, rather than
+	// silently discarded.
+	if err := flag.CommandLine.Parse(os.Args[1:]); err != nil {
+		return flags{}, err
+	}
 
 	if f.buildInfoURL == "" {
 		f.buildInfoURL = strings.TrimRight(f.queryAPIURL, "/") + "/buildinfo"
@@ -299,6 +335,34 @@ func resolveRESTTimeout(perRequest, runDefault time.Duration) time.Duration {
 		return perRequest
 	}
 	return runDefault
+}
+
+// unresolvedIDBindingDetail builds the RESTRefusalIDBindingUnresolved
+// Detail for one or more Producer names ResolveRESTIDBindings could not
+// resolve, naming EACH name's own cause: an operator-supplied producer
+// (goapiproof.IsOperatorSuppliedIDProducer) reads as an operator
+// omission -- the fix is a flag on THIS run's own invocation -- while any
+// other name reads as a corpus-ordering fact, exactly as before. A run
+// record built from this text names what an operator did or did not
+// supply, never leaving a reader to guess whether a missing id was this
+// run's own omission or a genuine corpus defect.
+func unresolvedIDBindingDetail(unresolved []string) string {
+	var operatorNames, producedNames []string
+	for _, name := range unresolved {
+		if goapiproof.IsOperatorSuppliedIDProducer(name) {
+			operatorNames = append(operatorNames, name)
+		} else {
+			producedNames = append(producedNames, name)
+		}
+	}
+	var parts []string
+	if len(producedNames) > 0 {
+		parts = append(parts, fmt.Sprintf("no earlier request in this run produced: %v", producedNames))
+	}
+	for _, name := range operatorNames {
+		parts = append(parts, fmt.Sprintf("supply -bind %s=…", name))
+	}
+	return strings.Join(parts, "; ")
 }
 
 // legTransportOutcome turns a leg's OWN transport failure into the
@@ -746,8 +810,16 @@ func runMeasurement(ctx context.Context, client *http.Client, f flags, candidate
 	// order) guarantees a producer's operation is always visited before
 	// any operation that binds one of its ids; see restcorpus.go's own
 	// restRunOrder doc comment for why alphabetical order cannot make
-	// that guarantee.
-	produced := map[string]string{}
+	// that guarantee. Seeded from f.binds before the loop starts: an
+	// operator-supplied id (goapiproof.IsOperatorSuppliedIDProducer) is,
+	// from ResolveRESTIDBindings' own point of view, already produced --
+	// it just never came from a request in this run. A shallow copy, not
+	// f.binds itself, since this map also accumulates real Produces
+	// entries below as the loop runs.
+	produced := make(map[string]string, len(f.binds))
+	for name, value := range f.binds {
+		produced[name] = value
+	}
 
 	// runErr is the run-level failure -- distinct from a per-case
 	// refusal, which is never fatal -- that stops the loop early. Once
@@ -792,7 +864,7 @@ requestLoop:
 					Operation: operation, Request: request.Name,
 					Admitted: false,
 					Refusal:  goapiproof.RESTRefusalIDBindingUnresolved,
-					Detail:   fmt.Sprintf("no earlier request in this run produced: %v", unresolved),
+					Detail:   unresolvedIDBindingDetail(unresolved),
 				}
 				outcomes = append(outcomes, out)
 				fmt.Println(out.line())

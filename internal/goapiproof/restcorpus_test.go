@@ -347,6 +347,19 @@ func TestRESTRequest_StatusDivergenceIsDeclaredOnlyWhereGenuine(t *testing.T) {
 			// query-api reaches its not-found branch and answers 404.
 			"issue_entity_id_bound_200": true,
 			"issue_entity_id_not_found": true,
+			// pr_gap_entity_id_bound_status_divergence: a terminal PR
+			// (merged/closed) with neither merged_at nor closed_at set
+			// answers 422 on the candidate plane (no measurable duration)
+			// and 200 on the baseline plane (its fallback chain has no
+			// status gate). See that entry's own doc comment in
+			// restcorpus.go.
+			"pr_gap_entity_id_bound_status_divergence": true,
+			// issue_gap_entity_id_bound_status_divergence: candidate
+			// answers 422 for the same reason; baseline answers 503, the
+			// same route-level ClickHouse planning failure
+			// issue_entity_id_bound_200 already declares, unconditional
+			// on this row's own content. See that entry's own doc comment.
+			"issue_gap_entity_id_bound_status_divergence": true,
 		},
 	}
 	for operation, spec := range restEndpointSpecs {

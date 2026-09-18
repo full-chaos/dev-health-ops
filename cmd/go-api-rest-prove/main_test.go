@@ -2308,6 +2308,128 @@ func TestRunMeasurement_DeploymentGapBindingUnsuppliedRefusesByName(t *testing.T
 	}
 }
 
+// TestRunMeasurement_PRGapBindingUnsuppliedRefusesByName is
+// TestRunMeasurement_DeploymentGapBindingUnsuppliedRefusesByName's own
+// sibling for GET /api/v1/flame's "pr" operator-supplied gap producer:
+// pr_gap_entity_id_bound_status_divergence's own IDBindings names
+// pr_gap_id (restcorpus.go's own restOperatorSuppliedProducers) -- an
+// unsupplied run must refuse this request too, by name.
+func TestRunMeasurement_PRGapBindingUnsuppliedRefusesByName(t *testing.T) {
+	const build = "build123"
+	candidate := httptest.NewServer(genericRESTStubHandler(t, build, nil))
+	defer candidate.Close()
+	baseline := httptest.NewServer(genericRESTStubHandler(t, "", nil))
+	defer baseline.Close()
+
+	dir := t.TempDir()
+	reportPath := dir + "/report.json"
+	artifacts, err := goapiproof.NewArtifactStore(dir + "/artifacts")
+	if err != nil {
+		t.Fatalf("NewArtifactStore: %v", err)
+	}
+	f := flags{
+		queryAPIURL: candidate.URL, pythonAPIURL: baseline.URL,
+		org: "org-1", recordedBy: "chris", reviewEvidence: "test",
+		timeout: 2 * time.Second, dryRun: true, reportPath: reportPath,
+	}
+
+	// See TestRunMeasurement_OperatorSuppliedBindingUnsuppliedRefusesByName
+	// for why runMeasurement's own returned error is not asserted here.
+	_ = captureStdout(t, func() {
+		_ = runMeasurement(context.Background(), http.DefaultClient, f,
+			staticCredentialForTest(), staticCredentialForTest(), build, nil, artifacts)
+	})
+
+	raw, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatalf("read report: %v", err)
+	}
+	var report jsonReport
+	if err := json.Unmarshal(raw, &report); err != nil {
+		t.Fatalf("decode report: %v (%s)", err, raw)
+	}
+
+	var gapOutcome *outcome
+	for i := range report.Outcomes {
+		if report.Outcomes[i].Operation == "REST:GET:/api/v1/flame" && report.Outcomes[i].Request == "pr_gap_entity_id_bound_status_divergence" {
+			gapOutcome = &report.Outcomes[i]
+		}
+	}
+	if gapOutcome == nil {
+		t.Fatalf("report has no outcome for REST:GET:/api/v1/flame/pr_gap_entity_id_bound_status_divergence among %d outcomes", len(report.Outcomes))
+	}
+	if gapOutcome.Admitted {
+		t.Fatalf("pr gap outcome = %+v, want unadmitted (no -bind supplied)", gapOutcome)
+	}
+	if gapOutcome.Refusal != goapiproof.RESTRefusalIDBindingUnresolved {
+		t.Fatalf("pr gap outcome Refusal = %q, want %q", gapOutcome.Refusal, goapiproof.RESTRefusalIDBindingUnresolved)
+	}
+	if !strings.Contains(gapOutcome.Detail, "supply -bind pr_gap_id=") {
+		t.Fatalf("pr gap outcome Detail = %q, want it to name the flag to supply", gapOutcome.Detail)
+	}
+}
+
+// TestRunMeasurement_IssueGapBindingUnsuppliedRefusesByName is
+// TestRunMeasurement_DeploymentGapBindingUnsuppliedRefusesByName's own
+// sibling for GET /api/v1/flame's "issue" operator-supplied gap producer:
+// issue_gap_entity_id_bound_status_divergence's own IDBindings names
+// issue_gap_id (restcorpus.go's own restOperatorSuppliedProducers) -- an
+// unsupplied run must refuse this request too, by name.
+func TestRunMeasurement_IssueGapBindingUnsuppliedRefusesByName(t *testing.T) {
+	const build = "build123"
+	candidate := httptest.NewServer(genericRESTStubHandler(t, build, nil))
+	defer candidate.Close()
+	baseline := httptest.NewServer(genericRESTStubHandler(t, "", nil))
+	defer baseline.Close()
+
+	dir := t.TempDir()
+	reportPath := dir + "/report.json"
+	artifacts, err := goapiproof.NewArtifactStore(dir + "/artifacts")
+	if err != nil {
+		t.Fatalf("NewArtifactStore: %v", err)
+	}
+	f := flags{
+		queryAPIURL: candidate.URL, pythonAPIURL: baseline.URL,
+		org: "org-1", recordedBy: "chris", reviewEvidence: "test",
+		timeout: 2 * time.Second, dryRun: true, reportPath: reportPath,
+	}
+
+	// See TestRunMeasurement_OperatorSuppliedBindingUnsuppliedRefusesByName
+	// for why runMeasurement's own returned error is not asserted here.
+	_ = captureStdout(t, func() {
+		_ = runMeasurement(context.Background(), http.DefaultClient, f,
+			staticCredentialForTest(), staticCredentialForTest(), build, nil, artifacts)
+	})
+
+	raw, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatalf("read report: %v", err)
+	}
+	var report jsonReport
+	if err := json.Unmarshal(raw, &report); err != nil {
+		t.Fatalf("decode report: %v (%s)", err, raw)
+	}
+
+	var gapOutcome *outcome
+	for i := range report.Outcomes {
+		if report.Outcomes[i].Operation == "REST:GET:/api/v1/flame" && report.Outcomes[i].Request == "issue_gap_entity_id_bound_status_divergence" {
+			gapOutcome = &report.Outcomes[i]
+		}
+	}
+	if gapOutcome == nil {
+		t.Fatalf("report has no outcome for REST:GET:/api/v1/flame/issue_gap_entity_id_bound_status_divergence among %d outcomes", len(report.Outcomes))
+	}
+	if gapOutcome.Admitted {
+		t.Fatalf("issue gap outcome = %+v, want unadmitted (no -bind supplied)", gapOutcome)
+	}
+	if gapOutcome.Refusal != goapiproof.RESTRefusalIDBindingUnresolved {
+		t.Fatalf("issue gap outcome Refusal = %q, want %q", gapOutcome.Refusal, goapiproof.RESTRefusalIDBindingUnresolved)
+	}
+	if !strings.Contains(gapOutcome.Detail, "supply -bind issue_gap_id=") {
+		t.Fatalf("issue gap outcome Detail = %q, want it to name the flag to supply", gapOutcome.Detail)
+	}
+}
+
 // TestRunMeasurement_NonTransportErrorMidRunStillWritesAPartialReport is
 // this fix's OTHER claim: item 2 says the report must be written on ANY
 // later error, not only a leg timeout. This makes the artifact directory

@@ -71,11 +71,11 @@
 // one row per work_item_id), so it could not have affected row count
 // either.
 //
-// ID-BINDING GAP: the flame entity_id is itself an id, and this branch has
-// no id-binding producer yet (a sibling PR is adding one) -- see
+// ID-BINDING: the flame entity_id is itself an id; see
 // internal/goapiproof/restcorpus.go's own REST:GET:/api/v1/flame entry for
-// the corpus consequence (deterministic-refusal requests only, no live
-// happy-path fixture).
+// how each entity_type's own live happy-path and gap fixtures are bound
+// (a mix of regular Produces from earlier drilldown requests and
+// operator-supplied -bind flags).
 package flame
 
 import (
@@ -308,19 +308,78 @@ func reworkWindows(reviews []reviewRow, reviewStart, reviewEnd time.Time) []rewo
 	return windows
 }
 
+// flameIntervalEnd selects a flame timeline's end for every entity type
+// this reader builds one for (PR, issue, deployment): the entity's own
+// known end when set; otherwise the request clock, but only when the
+// entity's own status is genuinely non-terminal (still in progress, per
+// the caller's own status classifier); otherwise start itself. Returning
+// start rather than inventing "now" makes end==start, which newFrame's
+// own !end.After(start) guard refuses -- the identical "no frames, 422"
+// answer a terminal entity with no real end signal has always had,
+// whether or not a particular caller's own fallback chain used to reach
+// this branch a different way. A duration is never invented for an
+// entity whose outcome is already decided.
+func flameIntervalEnd(start time.Time, realEnd *time.Time, statusIsRunning bool) time.Time {
+	switch {
+	case realEnd != nil:
+		return *realEnd
+	case statusIsRunning:
+		return nowLike()
+	default:
+		return start
+	}
+}
+
+// prStatusIsRunning reports whether state names a PR/MR that has not yet
+// reached a terminal outcome. The persisted state column is not the raw
+// provider enum -- internal/providersync's normalizePRState (a byte-for-
+// byte port of providers/pr_state.py's normalize_pr_state) collapses
+// GitHub's open/closed and GitLab's opened/closed/merged/locked down to
+// exactly "open", "merged", or "closed" before it is ever stored, so this
+// reader only ever needs to recognize "open" as running. A nil, empty, or
+// unrecognized value is treated as terminal, the same fail-safe
+// deploymentStatusIsRunning documents below.
+func prStatusIsRunning(state *string) bool {
+	if state == nil {
+		return false
+	}
+	return strings.ToLower(strings.TrimSpace(*state)) == "open"
+}
+
+// issueStatusIsRunning reports whether status names a work item that has
+// not yet reached a terminal outcome. The persisted status column is the
+// normalized WorkItemStatusCategory every provider's own ingestion
+// collapses raw board/column text down to (src/dev_health_ops/models/
+// work_items.py; internal/providerfoundation/normalization.go's own
+// workItemStatuses validates the identical eight-value set): backlog,
+// todo, in_progress, in_review, and blocked are non-terminal; done and
+// canceled are terminal. A nil, empty, or unrecognized value (including
+// the category's own literal "unknown") is treated as terminal, the same
+// fail-safe deploymentStatusIsRunning documents below.
+func issueStatusIsRunning(status *string) bool {
+	if status == nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(*status)) {
+	case "backlog", "todo", "in_progress", "in_review", "blocked":
+		return true
+	default:
+		return false
+	}
+}
+
 // buildPRFlameResponse ports _build_pr_flame_response (services/flame.py:
 // 132-210).
 func buildPRFlameResponse(repoID string, number int, pr pullRequestRow, reviews []reviewRow) (*Response, error) {
 	start := pr.CreatedAt
-	var end time.Time
+	var realEnd *time.Time
 	switch {
 	case pr.MergedAt != nil:
-		end = *pr.MergedAt
+		realEnd = pr.MergedAt
 	case pr.ClosedAt != nil:
-		end = *pr.ClosedAt
-	default:
-		end = nowLike()
+		realEnd = pr.ClosedAt
 	}
+	end := flameIntervalEnd(start, realEnd, prStatusIsRunning(pr.State))
 
 	rootID := fmt.Sprintf("pr:%s:%d", repoID, number)
 	frames := make([]Frame, 0, 4)
@@ -368,12 +427,7 @@ func buildPRFlameResponse(repoID string, number int, pr pullRequestRow, reviews 
 // flame.py:213-274).
 func buildIssueFlameResponse(entityID string, issue issueRow) (*Response, error) {
 	start := issue.CreatedAt
-	var end time.Time
-	if issue.CompletedAt != nil {
-		end = *issue.CompletedAt
-	} else {
-		end = nowLike()
-	}
+	end := flameIntervalEnd(start, issue.CompletedAt, issueStatusIsRunning(issue.Status))
 
 	rootID := "issue:" + entityID
 	frames := make([]Frame, 0, 3)
@@ -416,8 +470,8 @@ func buildIssueFlameResponse(entityID string, issue issueRow) (*Response, error)
 // complement of each provider's own terminal set (GitHub's
 // githubDeploymentTerminalStates in internal/providersync; GitLab's
 // success/failed/canceled/blocked). A nil, empty, or unrecognized status is
-// treated as terminal: this reader never invents a duration for a status it
-// cannot affirmatively confirm is still running.
+// treated as terminal, the same fail-safe prStatusIsRunning and
+// issueStatusIsRunning document above.
 func deploymentStatusIsRunning(status *string) bool {
 	if status == nil {
 		return false
@@ -444,17 +498,7 @@ func buildDeploymentFlameResponse(repoID, deploymentID string, deployment deploy
 	default:
 		return nil, notFound("Deployment timeline unavailable")
 	}
-	var end time.Time
-	switch {
-	case deployment.FinishedAt != nil:
-		end = *deployment.FinishedAt
-	case deploymentStatusIsRunning(deployment.Status):
-		end = nowLike()
-	case deployment.DeployedAt != nil:
-		end = *deployment.DeployedAt
-	default:
-		end = nowLike()
-	}
+	end := flameIntervalEnd(start, deployment.FinishedAt, deploymentStatusIsRunning(deployment.Status))
 
 	rootID := fmt.Sprintf("deploy:%s:%s", repoID, deploymentID)
 	frames := make([]Frame, 0, 4)

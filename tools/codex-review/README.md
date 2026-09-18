@@ -5,30 +5,50 @@
 
 ## Install paths
 
-- Installed on bigboy: `~/.local/lib/dev-health-review/`
-- Installed locally: `dev-health/scripts/codex-review.sh`
+`codex-review.sh` and `verify-round-repros.py` install differently; do not
+conflate them.
+
+`codex-review.sh`'s wrapper of record is the newest un-RETIRED
+`codex-review.sh.v*` under `/var/lib/oci-cache/lane-scratch/_shared/` on
+bigboy — the filename itself carries the version and a content hash, so
+there is no single fixed installed path to keep in sync with this doc. A
+`.RETIRED` marker beside an older version means a newer one has taken
+over; never launch a `.RETIRED` version. `~/.local/lib/dev-health-review/
+codex-review.sh` and `dev-health/scripts/codex-review.sh` are both retired
+copies of the WRAPPER — do not launch either.
+
+`verify-round-repros.py` is still installed at the one fixed path,
+`~/.local/lib/dev-health-review/verify-round-repros.py` on bigboy, per the
+"Install convention" and canonical hash below — that has not changed.
+
+Launch `codex-review.sh` with `CODEX_REVIEW_PERMS=codex-review
+CODEX_REVIEW_SANDBOX=workspace-write` set explicitly: an unset
+`CODEX_REVIEW_PERMS` defaults to `legacy` mode (closed network, no
+docker), and an unset/wrong `CODEX_REVIEW_SANDBOX` in `codex-review` mode
+silently downgrades the round to read-only. The prompt of record is
+filled from its own path, never retyped; see the `codex-review` skill for
+the current pin and the fill rules.
 
 ## Install convention
 
-Never edit the installed file in place. Write the new version as a sibling
-`.new` file, set the exec bit (`chmod 755 file.new`, or `install -m 755
-file.new target`), then atomically `mv` it over the installed path. This
-avoids a partial-write window for any review running mid-copy, and a
-non-executable install.
+Applies to `verify-round-repros.py`'s single fixed install path above
+(`codex-review.sh` instead publishes a new versioned file under `_shared/`
+with a `.RETIRED` marker on the version it supersedes, never an in-place
+overwrite of an existing one). Never edit the installed file in place.
+Write the new version as a sibling `.new` file, set the exec bit (`chmod
+755 file.new`, or `install -m 755 file.new target`), then atomically `mv`
+it over the installed path. This avoids a partial-write window for any
+review running mid-copy, and a non-executable install.
 
 After the `mv`, read back: `sha256sum` (must match the canonical hash
 below), `stat -c %a` (must read `755`), and `bash -n` (must parse clean).
 
-Canonical v4.8.1 hashes:
-
-- `codex-review.sh`:
-  `7eab082c157a48f3eb0960d729d6569b039ee671491a196fa0581e5c59db4cfb`
-- `verify-round-repros.py` (installed on bigboy):
-  `4572dd0b5d8ae3cbd0e5054c50f69a75cdeec8f6a3f593258614fbb9c39e31c0`
+Canonical hash for `verify-round-repros.py` (installed on bigboy):
+`4572dd0b5d8ae3cbd0e5054c50f69a75cdeec8f6a3f593258614fbb9c39e31c0`.
 
 The in-repo `verify-round-repros.py` is ruff-formatted (AST-identical to
-the installed copy above; installed sha `4572dd0b...`), so its committed
-bytes differ from that hash — that is expected.
+the installed copy above), so its committed bytes differ from that hash —
+that is expected.
 
 ## Sandbox by OS
 

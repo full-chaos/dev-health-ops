@@ -247,11 +247,14 @@ func (executor *MembershipExecutor) ComputeOrg(
 		// the investment materializer and this membership run are
 		// two independent writers, and while the ordinary gap between them
 		// is a few seconds, a marker stuck well behind the newest investment
-		// computation means the read-side scope gate's own "stale correct
-		// number over a live wrong one" policy is now serving investment
-		// reads scoped to a membership generation older than the rows by
-		// more than the alert bound. Best-effort, same swallow-and-report
-		// shape as the prune failure just below: a lag check failure or an
+		// computation means the read-side scope gate
+		// (investmentMembershipScopeStateSource) is now in its
+		// unscoped_fallback branch for this org: investment reads are NOT
+		// filtered to this marker's membership generation at all, every
+		// investment row is read unscoped instead -- the opposite of
+		// "stale but correctly scoped", and exactly the condition worth an
+		// operator's attention. Best-effort, same swallow-and-report shape
+		// as the prune failure just below: a lag check failure or an
 		// alert-worthy lag must never fail an otherwise complete, correctly
 		// published run.
 		if executor.markerLag != nil {
@@ -269,9 +272,10 @@ func (executor *MembershipExecutor) ComputeOrg(
 				if executor.logger != nil {
 					executor.logger.Warn(
 						"membership marker lags the newest investment computation "+
-							"beyond the alert bound; investment reads for this org "+
-							"stay scoped to this marker and may omit units newer "+
-							"than it until a later run catches up",
+							"beyond the alert bound; the read-side scope gate has "+
+							"fallen back to unscoped for this org, so investment "+
+							"reads are no longer filtered to this marker's "+
+							"membership generation until a later run catches up",
 						"org_id", orgID, "run_id", runID,
 						"lag_seconds", lagSeconds,
 						"bound_seconds", int64(result.Bound.Seconds()),

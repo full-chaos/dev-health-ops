@@ -18,11 +18,15 @@ const membershipMarkerLagAlertBoundEnv = "WORKER_REMAINING_MEMBERSHIP_MARKER_LAG
 // membershipMarkerLagAlertBoundDefault is the overturnable default for
 // membershipMarkerLagAlertBoundEnv. Its meaning: once a freshly published
 // marker trails the newest investment computation by more than this, the
-// read-side scope gate's "stale correct number over a live wrong one"
-// policy is now serving investment reads scoped to a membership
-// generation older than the rows by more than this bound -- a degradation
-// worth an operator's attention, not the ordinary few-second gap the two
-// independent writers ordinarily finish within.
+// read-side scope gate (investmentMembershipScopeStateSource,
+// cmd/query-api/internal/analytics/investmentmembershipscope.go) is in
+// its unscoped_fallback branch for this org -- latest_investment_computed_at
+// is past latest_run_completed_at, so investment reads are NOT filtered to
+// this marker's membership generation at all; every investment row is
+// read unscoped instead, trading the marker's precision (excluding units
+// this generation has not yet integrated) for freshness. That is the
+// degradation worth an operator's attention, not the ordinary few-second
+// gap the two independent writers ordinarily finish within.
 const membershipMarkerLagAlertBoundDefault = 2 * time.Hour
 
 // resolveMembershipMarkerLagAlertBound reads membershipMarkerLagAlertBoundEnv

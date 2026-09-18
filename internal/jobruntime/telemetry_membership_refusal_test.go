@@ -74,3 +74,62 @@ func TestMembershipRunRefusesNegativeCounts(t *testing.T) {
 		t.Fatal("expected an error for a negative count")
 	}
 }
+
+// TestObserveMembershipMarkerLagExceededReachesTheExposition is the
+// direct-collector proof CollectorMembershipObserver's own tests do not
+// give: those exercise ONLY the adapter with a fake Collector field,
+// never MetricsCollector.ObserveMembershipMarkerLagExceeded itself or
+// its two exposition lines. Pins: a fresh collector publishes both
+// series pre-seeded at zero; each call increments the counter and
+// OVERWRITES the gauge with the latest value (never accumulates it,
+// unlike the counter); a negative lagSeconds clamps to zero rather than
+// going negative in the exposition.
+func TestObserveMembershipMarkerLagExceededReachesTheExposition(t *testing.T) {
+	collector, err := NewMetricsCollector(MetricDimensions{})
+	if err != nil {
+		t.Fatalf("new collector: %v", err)
+	}
+
+	fresh := collector.PrometheusText()
+	for _, want := range []string{
+		"worker_membership_backfill_native_marker_lag_alerts_total 0",
+		"worker_membership_backfill_native_marker_lag_seconds 0",
+	} {
+		if !strings.Contains(fresh, want) {
+			t.Errorf("a never-alerted collector must still publish %q\nfull exposition:\n%s", want, fresh)
+		}
+	}
+
+	collector.ObserveMembershipMarkerLagExceeded(10800)
+	exposition := collector.PrometheusText()
+	for _, want := range []string{
+		"worker_membership_backfill_native_marker_lag_alerts_total 1",
+		"worker_membership_backfill_native_marker_lag_seconds 10800",
+	} {
+		if !strings.Contains(exposition, want) {
+			t.Errorf("exposition is missing %q after one alert\nfull exposition:\n%s", want, exposition)
+		}
+	}
+
+	// A second, SMALLER lag: the counter accumulates, the gauge does not
+	// -- it reflects only the most recently observed lag.
+	collector.ObserveMembershipMarkerLagExceeded(3600)
+	exposition = collector.PrometheusText()
+	for _, want := range []string{
+		"worker_membership_backfill_native_marker_lag_alerts_total 2",
+		"worker_membership_backfill_native_marker_lag_seconds 3600",
+	} {
+		if !strings.Contains(exposition, want) {
+			t.Errorf("exposition is missing %q after a second, smaller alert\nfull exposition:\n%s", want, exposition)
+		}
+	}
+
+	collector.ObserveMembershipMarkerLagExceeded(-5)
+	exposition = collector.PrometheusText()
+	if !strings.Contains(exposition, "worker_membership_backfill_native_marker_lag_seconds 0") {
+		t.Errorf("a negative lagSeconds must clamp to 0 in the exposition, not go negative or panic\nfull exposition:\n%s", exposition)
+	}
+	if !strings.Contains(exposition, "worker_membership_backfill_native_marker_lag_alerts_total 3") {
+		t.Errorf("a negative lagSeconds still counts as one more alert call\nfull exposition:\n%s", exposition)
+	}
+}

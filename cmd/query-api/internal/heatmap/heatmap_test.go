@@ -226,6 +226,58 @@ func TestAxisOrderDefaultSortsByTotalDescending(t *testing.T) {
 	}
 }
 
+// TestAxisOrderDefaultBreaksTiesByNameAscending pins the tiebreak this
+// port adds beyond a plain stable sort: "b" and "a" tie at total 10:
+// name-ascending order ("a" before "b") wins regardless of which one the
+// caller's own values slice happened to list first -- a bare
+// sort.SliceStable keyed on total alone would keep the FIRST-SEEN
+// order among ties instead (here, "b" first), which is a property of
+// the caller's row-scan order, not of the data.
+func TestAxisOrderDefaultBreaksTiesByNameAscending(t *testing.T) {
+	totals := map[string]float64{"a": 10, "b": 10, "c": 5}
+	want := []string{"a", "b", "c"}
+
+	got := axisOrder("repo", []string{"b", "a", "c"}, totals)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("scan order [b,a,c]: got %v, want %v", got, want)
+	}
+
+	got = axisOrder("repo", []string{"a", "b", "c"}, totals)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("scan order [a,b,c]: got %v, want %v", got, want)
+	}
+}
+
+// TestAxisValuesTieOrderIsIndependentOfRowScanOrder pins PHASE 1's own
+// promise at the axisValues level, the function repo_touchpoints/
+// hotspot_risk actually call: the same rows, fed in two different scan
+// orders (the shape a ClickHouse GROUP BY with no secondary ORDER BY key
+// can legally return run to run), must produce the exact same axis --
+// two repos tying on total commits never depend on which one the query
+// happened to return first.
+func TestAxisValuesTieOrderIsIndependentOfRowScanOrder(t *testing.T) {
+	rowsA := []metricRow{
+		{Y: "repoB", Value: 4},
+		{Y: "repoA", Value: 4},
+		{Y: "repoC", Value: 1},
+	}
+	rowsB := []metricRow{
+		{Y: "repoA", Value: 4},
+		{Y: "repoC", Value: 1},
+		{Y: "repoB", Value: 4},
+	}
+
+	want := []string{"repoA", "repoB", "repoC"}
+	gotA := axisValues(rowsA, false, "repo")
+	gotB := axisValues(rowsB, false, "repo")
+	if !reflect.DeepEqual(gotA, want) {
+		t.Fatalf("scan order A: got %v, want %v", gotA, want)
+	}
+	if !reflect.DeepEqual(gotB, want) {
+		t.Fatalf("scan order B: got %v, want %v", gotB, want)
+	}
+}
+
 // TestAxisOrderDedupesPreservingFirstOccurrence pins values_list's own
 // dict.fromkeys-style de-dup (order of first occurrence).
 func TestAxisOrderDedupesPreservingFirstOccurrence(t *testing.T) {

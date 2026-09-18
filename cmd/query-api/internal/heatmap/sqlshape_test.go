@@ -142,6 +142,47 @@ func assertFinalDedupShape(t *testing.T, query, table string, index int) {
 	}
 }
 
+// TestTopNQueriesOrderByCarriesADeterministicTiebreak pins the fix at
+// the SQL text level: fetchRepoTouchpoints' and
+// fetchHotspotRisk's own top-N queries each carry a secondary ORDER BY
+// key after `total DESC`, so a tie AT the LIMIT boundary resolves to the
+// same set of names on every run -- unlike a bare `ORDER BY total DESC`,
+// which ClickHouse is free to break differently run to run. This is a
+// SQL-text guard only: the set-stability it produces cannot be proven
+// from Go alone (ClickHouse decides the tie, not this process), so a
+// passing run here says the query CARRIES the tiebreak, not that a live
+// ClickHouse tie was ever exercised.
+func TestTopNQueriesOrderByCarriesADeterministicTiebreak(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	t.Run("fetchRepoTouchpoints top-N query", func(t *testing.T) {
+		c := &capturingClient{}
+		if _, err := fetchRepoTouchpoints(ctx, c, now, now, "", nil, 20, "org-1"); err != nil {
+			t.Fatalf("fetchRepoTouchpoints: %v", err)
+		}
+		if len(c.queries) == 0 {
+			t.Fatal("no query captured")
+		}
+		if !strings.Contains(c.queries[0], "ORDER BY total DESC, repo ASC") {
+			t.Fatalf("top-N query carries no secondary ORDER BY key:\n%s", c.queries[0])
+		}
+	})
+
+	t.Run("fetchHotspotRisk top-N query", func(t *testing.T) {
+		c := &capturingClient{}
+		if _, err := fetchHotspotRisk(ctx, c, now, now, "", nil, 20, "org-1"); err != nil {
+			t.Fatalf("fetchHotspotRisk: %v", err)
+		}
+		if len(c.queries) == 0 {
+			t.Fatal("no query captured")
+		}
+		if !strings.Contains(c.queries[0], "ORDER BY total DESC, file_key ASC") {
+			t.Fatalf("top-N query carries no secondary ORDER BY key:\n%s", c.queries[0])
+		}
+	})
+}
+
 // topNPassThroughClient answers the FIRST query (a top-N query selecting
 // one string column plus a numeric total) with one row naming col, and
 // every subsequent query with zero rows -- enough to make

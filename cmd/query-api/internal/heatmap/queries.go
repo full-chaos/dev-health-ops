@@ -137,9 +137,14 @@ type repoTouchpointsRow struct {
 	Value float64
 }
 
-// fetchRepoTouchpoints ports fetch_repo_touchpoints verbatim: a top-N
-// query picks the busiest `limit` repos, then a second query returns
-// every day/repo pair for exactly those repos.
+// fetchRepoTouchpoints ports fetch_repo_touchpoints: a top-N query picks
+// the busiest `limit` repos, then a second query returns every day/repo
+// pair for exactly those repos. The top-N query's own ORDER BY carries a
+// secondary `repo ASC` key the reference query does not: two repos tying
+// on total commits resolve to the SAME set and order on every run, where
+// the reference's own `ORDER BY total DESC` alone leaves ClickHouse free
+// to settle a tie at the LIMIT boundary, or between two returned repos,
+// differently run to run.
 func fetchRepoTouchpoints(ctx context.Context, client QueryClient, startTS, endTS time.Time, scopeFilterSQL string, scopeBindings []dhclickhouse.Binding, limit int, orgID string) ([]repoTouchpointsRow, error) {
 	topQuery := fmt.Sprintf(`
         SELECT
@@ -151,7 +156,7 @@ func fetchRepoTouchpoints(ctx context.Context, client QueryClient, startTS, endT
           AND author_when < {end_ts:DateTime64(3, 'UTC')}
         %s
         GROUP BY repos.repo
-        ORDER BY total DESC
+        ORDER BY total DESC, repo ASC
         LIMIT {limit:UInt64}
         %s
     `, scopeFilterSQL, settingsMaxExecutionTime())
@@ -237,8 +242,11 @@ type hotspotRiskRow struct {
 	Value   float64
 }
 
-// fetchHotspotRisk ports fetch_hotspot_risk verbatim (top-N files by
-// summed hotspot_score, then the same set's per-week series).
+// fetchHotspotRisk ports fetch_hotspot_risk (top-N files by summed
+// hotspot_score, then the same set's per-week series), with the same
+// secondary `file_key ASC` ORDER BY key fetchRepoTouchpoints' own top-N
+// query carries and the reference query does not -- see
+// fetchRepoTouchpoints' own doc comment for why.
 // file_metrics_daily is ReplacingMergeTree(computed_at) since migration
 // 096: read FINAL, org_id filtered in the same statement.
 func fetchHotspotRisk(ctx context.Context, client QueryClient, startDay, endDay time.Time, scopeFilterSQL string, scopeBindings []dhclickhouse.Binding, limit int, orgID string) ([]hotspotRiskRow, error) {
@@ -253,7 +261,7 @@ func fetchHotspotRisk(ctx context.Context, client QueryClient, startDay, endDay 
           AND file_metrics_daily.org_id = {org_id:String}
         %s
         GROUP BY file_key
-        ORDER BY total DESC
+        ORDER BY total DESC, file_key ASC
         LIMIT {limit:UInt64}
         %s
     `, scopeFilterSQL, settingsMaxExecutionTime())

@@ -2246,8 +2246,10 @@ var heatmapRepoTouchpointsTeamScopeSubsetDefect = BaselineDefect{
 // same capture sits at 6 repositories, not 20) -- there is no boundary to
 // reason about, only a reorder among the SAME repository set both legs
 // already agree on. See HeatmapAxisRepoOrderShape's own doc comment
-// (heatmapaxisrepoorder.go) for the full derivation and its own tie
-// refusal.
+// (heatmapaxisrepoorder.go) for the full derivation and its own
+// baseline-side tie refusal -- a tie purely in the candidate's own
+// totals is admitted whenever it matches axisOrder's own deterministic
+// name-ascending tie-break exactly.
 var heatmapRepoTouchpointsAxisOrderDefect = BaselineDefect{
 	Ticket:             "CHAOS-5955",
 	Reason:             "fetchRepoTouchpoints' own top-repository selection and per-day detail query (api/queries/heatmap.py:85-135, heatmap/queries.go:143-188) both derive from repos, ReplacingMergeTree(last_synced), joined without FINAL on the reference plane and FINAL on this port. A physically-duplicated repos row inflates every commit-count cell that repository owns by the same integer factor -- already admitted directionally on data.cells.value by heatmapDedupParity's own KeyedDirectionShape entry above -- which can also reorder data.axes.y, whose own sort key (_axis_order's/axisOrder's generic branch) is the SAME per-repository total the fan-out inflates. Go is correct.",

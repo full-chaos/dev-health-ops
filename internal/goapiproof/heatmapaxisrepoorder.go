@@ -55,18 +55,28 @@ import "sort"
 //     does not match a plain descending sort of its own totals is not
 //     one this shape's model of `_axis_order`/`axisOrder` actually
 //     describes, and is refused rather than guessed at.
-//  4. Sort ties are refused, not guessed. `_axis_order`'s default branch
-//     and `axisOrder`'s own default branch are both a STABLE sort keyed
-//     on total value descending -- ties break on each plane's own row
-//     ENCOUNTER order, which this shape cannot independently verify from
-//     the two response bodies alone (ClickHouse's own row order for an
-//     un-ORDER-BY'd GROUP BY is not guaranteed to agree between the two
-//     planes even absent any fan-out). So: a tie anywhere in the
-//     baseline's own totals, the candidate's own totals, OR the
-//     candidate-scaled-by-k expected-baseline totals refuses the WHOLE
-//     plan outright -- the descending-by-total order this shape computes
-//     is a well-defined TOTAL order (unique, tie-break-independent) only
-//     when no such tie exists.
+//  4. A tie refuses the whole plan only where its own placement is
+//     genuinely unverifiable -- never where rule 3's own re-derivation
+//     below already pins it down exactly. `_axis_order`'s (services/
+//     heatmap.py) own default branch breaks a tie on the REFERENCE
+//     plane's row ENCOUNTER order, which this shape cannot independently
+//     verify from the response body alone (ClickHouse's own row order
+//     for an un-ORDER-BY'd GROUP BY is not guaranteed to agree between
+//     the two planes even absent any fan-out) -- so a tie anywhere in
+//     the baseline's own totals, OR the candidate-scaled-by-k
+//     expected-baseline totals (the same uncertainty, one step removed:
+//     it predicts what the reference plane's own totals should be),
+//     refuses the whole plan outright. `axisOrder`'s (heatmap/
+//     response.go) own default branch is DIFFERENT: its own tie-break is
+//     name ascending, a deterministic function of (name, total) alone
+//     (see HeatmapAxisTieGroupShape's own doc comment, heatmapaxistie
+//     group.go) -- so a tie purely in the CANDIDATE's own totals is never
+//     refused here. Rule 3 below re-derives the candidate's own expected
+//     order with that SAME deterministic tie-break
+//     (heatmapSortDescByTotal) and requires an exact whole-list match
+//     against the observed candidate axis, which fails on its own the
+//     moment the real output disagrees with that mechanism -- never a
+//     guess, and no weaker than the baseline-side refusal above.
 //
 // What this shape CANNOT, and does not try to, certify: an axis reorder
 // caused by anything other than a verified integer per-repo multiplier
@@ -253,8 +263,14 @@ func buildHeatmapAxisRepoOrderPlan(shape *HeatmapAxisRepoOrderShape, baselineDat
 		expectedBaseTotal[repo] = total * float64(k)
 	}
 
-	// Rule 4: refuse on any tie -- see this shape's own doc comment.
-	if heatmapHasTie(baseRepoTotal) || heatmapHasTie(candRepoTotal) || heatmapHasTie(expectedBaseTotal) {
+	// Rule 4: refuse on a tie whose placement this plan cannot verify --
+	// see this shape's own doc comment. A tie purely in the candidate's
+	// own totals is NOT refused here: rule 3 immediately below already
+	// re-derives the candidate's own expected order with axisOrder's own
+	// deterministic name-ascending tie-break and requires an exact
+	// whole-list match, so a candidate order that disagrees with that
+	// mechanism refuses on its own.
+	if heatmapHasTie(baseRepoTotal) || heatmapHasTie(expectedBaseTotal) {
 		return plan
 	}
 

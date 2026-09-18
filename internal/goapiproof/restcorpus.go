@@ -5380,14 +5380,88 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 			},
 			{
 				// person_id bound at run time to GET /api/v1/people's own
-				// live person_id, same binding the summary/metric specs'
-				// own 200 entries use -- this reaches identity resolution
-				// and the 200 path.
+				// live person_id producer, via bounded candidate iteration
+				// (restidbind.go's own RESTIDBinding.Candidates doc
+				// comment): the run loop tries each search result, in
+				// order, against this request until one candidate's own
+				// compare against personDrilldownPRsParity is genuinely
+				// admitted -- not vacuously refused -- or 10 candidates are
+				// exhausted. A candidate whose pull requests are empty on
+				// both planes is refused as vacuous_empty_legs
+				// (structural.go's own vacuousEmptyLegs, armed by
+				// personDrilldownPRsParity's own declared BaselineDefects)
+				// and the loop tries the next candidate; a candidate with
+				// real pull requests on either plane is admitted, whether
+				// its own compare matches or finds a genuine divergence --
+				// iteration never substitutes a later, fully-matching
+				// candidate for an earlier one that already surfaced real
+				// data. The winning candidate is exposed as prs_person_id,
+				// consumed by every sibling entry below instead of the raw
+				// person_id producer, so they all share the SAME selected
+				// person.
 				Name:                "drilldown_prs_default",
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode: RESTBodyModeJSON,
+				Parity:   personDrilldownPRsParity,
+				IDBindings: []RESTIDBinding{
+					{Producer: "person_id", PathParam: "person_id", Candidates: 10, ExposeAs: "prs_person_id"},
+				},
+				// Produces prs_person_created_at from this response's own
+				// FIRST returned item's created_at (ExtractRESTID only
+				// ever returns the first non-empty match, restidbind.go's
+				// own doc comment) -- a real value the cursor query param
+				// actually accepts, consumed by this operation's own
+				// valid_cursor entry below.
+				Produces: []RESTIDProducer{{Name: "prs_person_created_at", ListPath: "items", IDField: "created_at"}},
+			},
+			{
+				// cursor bound to drilldown_prs_default's own WINNING
+				// candidate's first item's created_at above -- reaches
+				// fetchPersonPullRequestsQuery's own cursor filter branch
+				// (drilldownprs.go's own fetchPersonPullRequests) live.
+				// person_id is bound to prs_person_id, not the raw
+				// person_id producer, so this request is scoped to the
+				// SAME person drilldown_prs_default selected -- the one
+				// with real pull requests, when one exists among the
+				// bounded candidates.
+				Name:                "valid_cursor",
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode: RESTBodyModeJSON,
+				Parity:   personDrilldownPRsParity,
+				IDBindings: []RESTIDBinding{
+					{Producer: "prs_person_id", PathParam: "person_id"},
+					{Producer: "prs_person_created_at", QueryParam: "cursor"},
+				},
+			},
+			{
+				// limit above boundedDrilldownLimit's own 200 ceiling
+				// (drilldownprs.go's own maxDrilldownLimit) -- clamps
+				// rather than 422s. TestBoundedDrilldownLimitClamp
+				// (drilldownprs_test.go) pins the clamp function itself;
+				// this proves the route actually applies it live, against
+				// a real person with pull requests. person_id is bound to
+				// prs_person_id (the same selected person as
+				// drilldown_prs_default), not the raw person_id producer.
+				Name:                "limit_above_ceiling",
+				Query:               url.Values{"limit": {"500"}},
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
 				BodyMode:   RESTBodyModeJSON,
 				Parity:     personDrilldownPRsParity,
-				IDBindings: []RESTIDBinding{{Producer: "person_id", PathParam: "person_id"}},
+				IDBindings: []RESTIDBinding{{Producer: "prs_person_id", PathParam: "person_id"}},
+			},
+			{
+				// limit=0 -- boundedDrilldownLimit's own <=0 branch falls
+				// back to 50, the same "absent and zero share one
+				// fallback" contract that function's own doc comment
+				// states. person_id is bound to prs_person_id (the same
+				// selected person as drilldown_prs_default), not the raw
+				// person_id producer.
+				Name:                "limit_zero_falls_back_to_default",
+				Query:               url.Values{"limit": {"0"}},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode:   RESTBodyModeJSON,
+				Parity:     personDrilldownPRsParity,
+				IDBindings: []RESTIDBinding{{Producer: "prs_person_id", PathParam: "person_id"}},
 			},
 		},
 	},

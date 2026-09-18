@@ -1394,6 +1394,138 @@ func TestResolveIteratingRequest_StopsAtTheDeclaredBoundNeverTriesBeyondIt(t *te
 	}
 }
 
+// jsonBodyModeIteratingFixtureServers is iteratingFixtureServers' own
+// sibling for a JSON-body-mode consumer: unlike that helper (whose
+// baseline always answers 503 off the /people path, the StatusOnly shape),
+// BOTH planes answer real 200 JSON bodies for every consumer path, from
+// candidateBodies/baselineBodies respectively -- so a genuine value
+// divergence between the two legs, not just an empty-vs-non-empty split,
+// can be exercised.
+func jsonBodyModeIteratingFixtureServers(t *testing.T, build string, personIDs []string, candidateBodies, baselineBodies map[string]string) (candidateURL, baselineURL string, candidatePaths *[]string) {
+	t.Helper()
+	var paths []string
+
+	people := `[`
+	for i, id := range personIDs {
+		if i > 0 {
+			people += ","
+		}
+		people += `{"person_id":"` + id + `"}`
+	}
+	people += `]`
+
+	respond := func(bodies map[string]string, path string) string {
+		if body, ok := bodies[path]; ok {
+			return body
+		}
+		return `{"items":[]}`
+	}
+
+	candidate := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		w.Header().Set("x-dev-health-build", build)
+		if r.URL.Path == "/people" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(people))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(respond(candidateBodies, r.URL.Path)))
+	}))
+	t.Cleanup(candidate.Close)
+
+	baseline := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/people" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(people))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(respond(baselineBodies, r.URL.Path)))
+	}))
+	t.Cleanup(baseline.Close)
+
+	return candidate.URL, baseline.URL, &paths
+}
+
+// TestResolveIteratingRequest_JSONBodyModeMismatchWinsOverALaterMatch
+// proves the class ruling for a JSON-body-mode (real-compare, not
+// StatusOnly) consumer: a candidate whose legs are both empty is refused
+// as vacuous (structural.go's own vacuousEmptyLegs, armed here by a
+// declared BaselineDefect) and the loop tries the next candidate -- but a
+// candidate whose legs are non-empty and disagree on a field OUTSIDE
+// every declared defect is an ADMITTED mismatch, not a refusal: iteration
+// stops there and reports that mismatch, never trying a THIRD candidate
+// whose legs would have matched cleanly. Only a named refusal
+// (vacuous_empty_legs here) ever advances the loop; a real finding,
+// inside or outside a declaration, wins.
+func TestResolveIteratingRequest_JSONBodyModeMismatchWinsOverALaterMatch(t *testing.T) {
+	const build = "abc123def456"
+	candidateURL, baselineURL, paths := jsonBodyModeIteratingFixtureServers(t, build,
+		[]string{"p-1", "p-2", "p-3"},
+		map[string]string{
+			"/people/p-1/prs": `{"items":[]}`,
+			"/people/p-2/prs": `{"items":[{"title":"candidate-title"}]}`,
+			"/people/p-3/prs": `{"items":[{"title":"same-title"}]}`,
+		},
+		map[string]string{
+			"/people/p-1/prs": `{"items":[]}`,
+			"/people/p-2/prs": `{"items":[{"title":"baseline-title"}]}`,
+			"/people/p-3/prs": `{"items":[{"title":"same-title"}]}`,
+		},
+	)
+	f := flags{queryAPIURL: candidateURL, pythonAPIURL: baselineURL, org: "org-1", recordedBy: "chris", reviewEvidence: "test"}
+	produced, producedCandidates := runIteratingProducer(t, f, build, &fakeReceiptWriter{})
+	if len(producedCandidates["person_id"]) != 3 {
+		t.Fatalf("producedCandidates[person_id] = %v, want all three of p-1/p-2/p-3", producedCandidates["person_id"])
+	}
+
+	spec := goapiproof.RESTEndpointSpec{Method: http.MethodGet, Path: "/people/{person_id}/prs"}
+	binding := goapiproof.RESTIDBinding{Producer: "person_id", PathParam: "person_id", Candidates: 10, ExposeAs: "prs_person_id"}
+	request := goapiproof.RESTRequest{
+		Name: "prs_default", WantCandidateStatus: 200, WantBaselineStatus: 200,
+		BodyMode:   goapiproof.RESTBodyModeJSON,
+		IDBindings: []goapiproof.RESTIDBinding{binding},
+		Parity: goapiproof.Options{
+			BaselineDefects: []goapiproof.BaselineDefect{
+				{Ticket: "ABC-123", Reason: "test fixture", Paths: []string{"data.items.unused_field"}},
+			},
+		},
+	}
+
+	writer := &fakeReceiptWriter{}
+	attempt, err := resolveIteratingRequest(context.Background(), http.DefaultClient, f, "REST:GET:/people/{person_id}/prs",
+		spec, request, binding, produced, producedCandidates,
+		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil)
+	if err != nil {
+		t.Fatalf("resolveIteratingRequest: %v", err)
+	}
+	if !attempt.out.Admitted || !attempt.legsSent {
+		t.Fatalf("attempt = %+v, want an admitted win", attempt.out)
+	}
+	if attempt.out.TerminalState != goapiproof.TerminalStateMismatch {
+		t.Fatalf("TerminalState = %q, want mismatch -- a real divergence must win, not be treated as a refusal", attempt.out.TerminalState)
+	}
+	if attempt.out.DifferencesOutsideBaselineDefect == 0 {
+		t.Fatalf("DifferencesOutsideBaselineDefect = 0, want at least 1 for the title divergence")
+	}
+	if attempt.out.producedIDs["prs_person_id"] != "p-2" {
+		t.Fatalf("producedIDs[prs_person_id] = %q, want p-2 (the first candidate with real, non-vacuous data) -- not p-3's later, fully-matching candidate", attempt.out.producedIDs["prs_person_id"])
+	}
+	if len(attempt.out.Attempts) != 1 || attempt.out.Attempts[0].CandidateID != "p-1" {
+		t.Fatalf("Attempts = %+v, want exactly one losing attempt naming p-1", attempt.out.Attempts)
+	}
+	if attempt.out.Attempts[0].Refusal != goapiproof.RefusalVacuousEmptyLegs {
+		t.Fatalf("Attempts[0].Refusal = %q, want %q", attempt.out.Attempts[0].Refusal, goapiproof.RefusalVacuousEmptyLegs)
+	}
+	if len(writer.receipts) != 1 {
+		t.Fatalf("wrote %d receipts, want exactly 1 -- one per corpus request, for the winner only", len(writer.receipts))
+	}
+	if slices.Contains(*paths, "/people/p-3/prs") {
+		t.Fatalf("candidate paths = %v, want p-3 never tried -- p-2 already won", *paths)
+	}
+}
+
 // TestResolveSingleShotRequest_UnaffectedByTheIterationMechanism is the
 // regression pin ruling 1 requires: a binding with no Candidates opt-in
 // (the zero value every existing corpus entry carries) still resolves to

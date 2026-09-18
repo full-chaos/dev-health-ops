@@ -2,8 +2,42 @@ package remaining
 
 import (
 	"reflect"
+	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 )
+
+// TestCollectorMembershipObserverForwardsMarkerLagExceeded closes a real
+// coverage gap: every existing test exercised either a fake
+// MembershipObserver (ComputeOrg's own decision) or the collector's
+// ObserveMembershipMarkerLagExceeded method directly, never the
+// production adapter that sits between them. A dropped or miswired
+// forward here would pass every one of those tests while silently
+// suppressing the metric in production.
+func TestCollectorMembershipObserverForwardsMarkerLagExceeded(t *testing.T) {
+	collector, err := jobruntime.NewMetricsCollector(jobruntime.MetricDimensions{})
+	if err != nil {
+		t.Fatalf("new collector: %v", err)
+	}
+	observer := CollectorMembershipObserver{Collector: collector}
+
+	observer.ObserveMembershipMarkerLagExceeded("org-1", 7200)
+
+	exposition := collector.PrometheusText()
+	for _, want := range []string{
+		"worker_membership_backfill_native_marker_lag_alerts_total 1",
+		"worker_membership_backfill_native_marker_lag_seconds 7200",
+	} {
+		if !strings.Contains(exposition, want) {
+			t.Errorf("exposition is missing %q after one forwarded call\nfull exposition:\n%s", want, exposition)
+		}
+	}
+
+	// A nil Collector must not panic -- same optionality every other
+	// CollectorMembershipObserver method already guards.
+	CollectorMembershipObserver{}.ObserveMembershipMarkerLagExceeded("org-1", 7200)
+}
 
 func TestDistributionFromPairsPreservesOrder(t *testing.T) {
 	distribution := distributionFromPairs(

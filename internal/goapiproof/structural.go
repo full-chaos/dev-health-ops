@@ -65,12 +65,40 @@ const (
 // construction, so id disjointness there is never an artefact of one
 // side returning a different, smaller field set -- it is genuinely two
 // different sets of entities (JOB 7's measured shape).
-func structuralAgreementFailure(baseline, candidate any, path string) (reason, detail string) {
+//
+// Descent into a list's ELEMENTS pairs by the list's own DECLARED
+// identity when one exists, never by raw position -- the same class of
+// bug this file's own top comment already names for the list itself
+// (JOB 7), one level down. Measured shape: GET /api/v1/work-units
+// team_scoped, where Go's team-repository resolution genuinely omits one
+// PR baseline includes (already declared and admitted by
+// workUnitsTeamScopeSubsetDefect's own TeamRepoSubsetShape) -- both legs'
+// own `data` lists carry the SAME LENGTH (both saturate the request's
+// LIMIT), so the one missing baseline unit does not show as a length
+// difference, only as a one-position SHIFT for everything past it.
+// `data`'s own elements key on `work_unit_id`, never literal "id", so the
+// PREVIOUS code fell through this function's positional loop below,
+// paired baseline's PR at its shifted index against candidate's unrelated
+// next unit at the same index, and then found their nested
+// evidence.textual lists shared no "id" -- true, but for the wrong
+// reason: not because the same unit's evidence diverged, but because they
+// were never the same unit. structuralListIdentity resolves the field(s)
+// a list's elements
+// are keyed by for THIS alignment purpose alone; when it finds one, every
+// element sharing a key on BOTH legs is paired by that key instead of
+// position, and a key present on only one side is left to the ordinary
+// compareJSON/BaselineDefect pipeline (a presence difference, never this
+// check's business) rather than corrupting every later index. Sharing NOT
+// ONE key under a resolved identity still refuses, exactly like
+// idOverlapFailure's own literal-"id" rule above -- generalized to
+// whichever identity a list resolves, not a new, separate rule. A list
+// with no resolvable identity keeps today's exact positional walk.
+func structuralAgreementFailure(baseline, candidate any, path string, opts Options) (reason, detail string) {
 	baselineMap, baselineIsMap := baseline.(map[string]any)
 	candidateMap, candidateIsMap := candidate.(map[string]any)
 	if baselineIsMap && candidateIsMap {
 		for _, key := range unionOfMapKeys(baselineMap, candidateMap) {
-			if reason, detail := structuralAgreementFailure(baselineMap[key], candidateMap[key], path+"."+key); reason != "" {
+			if reason, detail := structuralAgreementFailure(baselineMap[key], candidateMap[key], path+"."+key, opts); reason != "" {
 				return reason, detail
 			}
 		}
@@ -83,8 +111,46 @@ func structuralAgreementFailure(baseline, candidate any, path string) (reason, d
 		if reason, detail := idOverlapFailure(baselineList, candidateList, path); reason != "" {
 			return reason, detail
 		}
+		if fields, ok := structuralListIdentity(baselineList, candidateList, path, opts); ok {
+			baselineByKey, ok1 := pairListElementsByKey(baselineList, fields)
+			candidateByKey, ok2 := pairListElementsByKey(candidateList, fields)
+			if ok1 && ok2 {
+				var matched []string
+				for key := range baselineByKey {
+					if _, present := candidateByKey[key]; present {
+						matched = append(matched, key)
+					}
+				}
+				// Zero overlap under a NON-"id" identity is the same
+				// disjoint-entities signal idOverlapFailure already reports
+				// above for literal "id" -- generalized to whichever
+				// identity this list resolved. Unreachable when fields is
+				// exactly ["id"]: idOverlapFailure already returned above
+				// the moment that case shares nothing, so matched can never
+				// be empty here for it; stated as a plain length check
+				// rather than special-cased on the source, since the
+				// mathematics already make it a no-op there.
+				if len(matched) == 0 && len(baselineList) > 0 && len(candidateList) > 0 {
+					return RefusalLegsDoNotOverlap, fmt.Sprintf(
+						"%s: baseline has %d element(s) keyed by %v, candidate has %d element(s) keyed by %v -- not one key is shared, so this is not two legs disagreeing about the same entities",
+						path, len(baselineList), fields, len(candidateList), fields)
+				}
+				sort.Strings(matched)
+				for i, key := range matched {
+					elementPath := fmt.Sprintf("%s[%d]", path, i)
+					if reason, detail := structuralAgreementFailure(baselineByKey[key], candidateByKey[key], elementPath, opts); reason != "" {
+						return reason, detail
+					}
+				}
+				return "", ""
+			}
+			// fields resolved but a duplicate key on one side means those
+			// fields do not uniquely identify elements in THIS data --
+			// fall through to the positional walk below, the same safe
+			// default an unresolved identity gets.
+		}
 		for i := 0; i < len(baselineList) && i < len(candidateList); i++ {
-			if reason, detail := structuralAgreementFailure(baselineList[i], candidateList[i], fmt.Sprintf("%s[%d]", path, i)); reason != "" {
+			if reason, detail := structuralAgreementFailure(baselineList[i], candidateList[i], fmt.Sprintf("%s[%d]", path, i), opts); reason != "" {
 				return reason, detail
 			}
 		}
@@ -95,6 +161,96 @@ func structuralAgreementFailure(baseline, candidate any, path string) (reason, d
 	// compareJSON already reports a kind mismatch (ShapeStructure) or a
 	// scalar difference on its own, uncoverable when structural.
 	return "", ""
+}
+
+// structuralListIdentity resolves the field(s) elements of the list at
+// path are keyed by, for ALIGNMENT purposes only -- never for the whole-
+// list overlap refusal idOverlapFailure performs above, which stays
+// literal-"id"-only and unchanged. Three sources, checked in this order:
+//
+//  1. literal "id", when every element on BOTH legs carries it -- this
+//     file's own original, longest-standing convention, unchanged in
+//     meaning here (idOverlapFailure already required this for the
+//     overlap check; this reuses the same field for pairing too).
+//  2. the synthetic RESTDedupKeyField a request's own DedupListPath/
+//     DedupKeyFields already wrote onto every element before Compare ran
+//     (InjectRESTDedupKeys, restdedup.go, cmd/go-api-rest-prove/main.go's
+//     own call site precedes goapiproof.Compare), when every element on
+//     BOTH legs carries it. Covers every route declaring
+//     WorkGraphEdgeDedupShape today (drilldown/prs), which already relies
+//     on this exact synthetic field for its OWN admission -- no separate
+//     handling needed here.
+//  3. a BaselineDefect's own TeamRepoSubsetShape whose ListPath equals
+//     this path (dotted, index-free form, tieredPath), when every element
+//     on BOTH legs carries every one of its KeyFields. Covers every route
+//     declaring one across this package -- see workunits_corpus.go's own
+//     doc comment on workUnitsTeamScopeOrderInsensitiveLists for the full
+//     list this rule now keys.
+//
+// Returns nil, false when none apply: the caller keeps today's raw
+// positional walk, exactly as before this function existed.
+func structuralListIdentity(baseline, candidate []any, path string, opts Options) ([]string, bool) {
+	if _, ok := elementIDs(baseline); ok {
+		if _, ok := elementIDs(candidate); ok {
+			return []string{"id"}, true
+		}
+	}
+	if listElementKeys(baseline, []string{RESTDedupKeyField}) && listElementKeys(candidate, []string{RESTDedupKeyField}) {
+		return []string{RESTDedupKeyField}, true
+	}
+	if shape := teamRepoSubsetShapeAt(opts, path); shape != nil && len(shape.KeyFields) > 0 {
+		if listElementKeys(baseline, shape.KeyFields) && listElementKeys(candidate, shape.KeyFields) {
+			return shape.KeyFields, true
+		}
+	}
+	return nil, false
+}
+
+// teamRepoSubsetShapeAt returns the declared TeamRepoSubsetShape whose own
+// ListPath equals path (dotted, index-free), or nil when none of opts'
+// BaselineDefects declares one there.
+func teamRepoSubsetShapeAt(opts Options, path string) *TeamRepoSubsetShape {
+	normalized := tieredPath(path)
+	for _, defect := range opts.BaselineDefects {
+		if defect.TeamRepoSubsetShape != nil && defect.TeamRepoSubsetShape.ListPath == normalized {
+			return defect.TeamRepoSubsetShape
+		}
+	}
+	return nil
+}
+
+// listElementKeys reports whether EVERY element of elements is an object
+// carrying every one of fields -- the same all-or-nothing discipline
+// elementIDs already applies to literal "id". A caller never keys a list
+// by a field only SOME elements carry.
+func listElementKeys(elements []any, fields []string) (ok bool) {
+	for _, element := range elements {
+		if _, keyOK := orderInsensitiveKey(element, fields); !keyOK {
+			return false
+		}
+	}
+	return true
+}
+
+// pairListElementsByKey indexes elements by fields' joined values
+// (orderInsensitiveKey). ok is false when two elements on the SAME list
+// share a key -- fields do not uniquely identify elements in this data,
+// and the caller falls back to the positional walk rather than guessing a
+// partial pairing (the same discipline compareListByKey's own "index"
+// closure applies, compare.go).
+func pairListElementsByKey(elements []any, fields []string) (map[string]any, bool) {
+	byKey := make(map[string]any, len(elements))
+	for _, element := range elements {
+		key, ok := orderInsensitiveKey(element, fields)
+		if !ok {
+			return nil, false
+		}
+		if _, duplicate := byKey[key]; duplicate {
+			return nil, false
+		}
+		byKey[key] = element
+	}
+	return byKey, true
 }
 
 // idOverlapFailure checks ONE list: when every element on BOTH non-empty

@@ -820,7 +820,7 @@ func Compare(baseline, candidate Snapshot, opts Options) Result {
 				StructuralDetail:  "both legs resolved to zero non-null leaves under data: an empty result on both sides is not evidence the two planes agree, because nothing was actually compared",
 			}
 		}
-		if reason, detail := structuralAgreementFailure(baseline.Data, candidate.Data, "$.data"); reason != "" {
+		if reason, detail := structuralAgreementFailure(baseline.Data, candidate.Data, "$.data", opts); reason != "" {
 			return Result{StructuralRefusal: reason, StructuralDetail: detail}
 		}
 		if reason, detail := bodySizeDisagreement(baseline.BodyBytes, candidate.BodyBytes); reason != "" {

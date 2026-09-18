@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"errors"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -46,32 +47,298 @@ func TestExpiredLeaseRecoveryUsesNewOwnerAndStableGeneration(t *testing.T) {
 	}
 }
 
-func TestLeaseSessionCancelsWorkWhenHeartbeatLosesClaim(t *testing.T) {
-	t.Parallel()
+// scriptedLeaseRepository answers Assert from the claim owner and delegates
+// Renew to a per-test function, so each test decides exactly when and how a
+// renewal ends instead of racing a wall-clock ticker.
+type scriptedLeaseRepository struct {
+	owner string
+	renew func(ctx context.Context, call int) error
+	mu    sync.Mutex
+	calls int
+}
+
+func (repository *scriptedLeaseRepository) Claim(context.Context, ClaimRequest) (Claim, error) {
+	return Claim{}, ErrUnitNotClaimable
+}
+
+func (repository *scriptedLeaseRepository) Assert(_ context.Context, claim Claim, _ time.Time) error {
+	if claim.Owner != repository.owner {
+		return ErrLeaseLost
+	}
+	return nil
+}
+
+func (repository *scriptedLeaseRepository) Renew(ctx context.Context, claim Claim, now, expiresAt time.Time) error {
+	repository.mu.Lock()
+	repository.calls++
+	call := repository.calls
+	repository.mu.Unlock()
+	if claim.Owner != repository.owner || !expiresAt.After(now) {
+		return ErrLeaseLost
+	}
+	return repository.renew(ctx, call)
+}
+
+func scriptedLeaseSession(t *testing.T, renew func(context.Context, int) error) (*LeaseSession, Claim) {
+	t.Helper()
 	now := time.Now().UTC()
-	repository := newMemoryLeaseRepository(testUnit(), "dispatching")
-	claim, err := repository.Claim(context.Background(), ClaimRequest{
-		UnitID: firstUnitID, Owner: uuid.NewString(), Now: now, LeaseDuration: time.Second,
-	})
-	if err != nil {
+	claim := Claim{Unit: testUnit(), Owner: uuid.NewString(), Attempt: 1, LeaseExpiresAt: now.Add(time.Second)}
+	if err := claim.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	repository.loseAfterRenewals = 1
-	session := &LeaseSession{
-		Repository: repository, Claim: claim, LeaseDuration: time.Second,
-		Deadline: now.Add(time.Minute),
-	}
-	workObservedCancellation := false
-	err = session.Run(context.Background(), time.Millisecond, func(ctx context.Context, guard providerfoundation.LeaseGuard) error {
-		if assertErr := guard.Assert(ctx); assertErr != nil {
-			return assertErr
+	return &LeaseSession{
+		Repository:    &scriptedLeaseRepository{owner: claim.Owner, renew: renew},
+		Claim:         claim,
+		LeaseDuration: time.Second,
+		Deadline:      now.Add(time.Minute),
+	}, claim
+}
+
+func TestLeaseSessionCancelsWorkWhenHeartbeatLosesClaim(t *testing.T) {
+	t.Parallel()
+	session, _ := scriptedLeaseSession(t, func(_ context.Context, call int) error {
+		if call >= 2 {
+			return ErrLeaseLost
 		}
+		return nil
+	})
+	var cause error
+	err := session.Run(context.Background(), time.Millisecond, func(ctx context.Context, _ providerfoundation.LeaseGuard) error {
 		<-ctx.Done()
-		workObservedCancellation = true
+		cause = context.Cause(ctx)
 		return ctx.Err()
 	})
-	if !errors.Is(err, ErrLeaseLost) || !workObservedCancellation {
-		t.Fatalf("run error=%v cancellation=%v", err, workObservedCancellation)
+	if !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("run error=%v", err)
+	}
+	if !errors.Is(cause, ErrLeaseLost) || !errors.Is(cause, providerfoundation.ErrLeaseLost) {
+		t.Fatalf("work cancellation cause=%v", cause)
+	}
+}
+
+func TestLeaseSessionRunReportsLeaseLossOnHeartbeatStoreError(t *testing.T) {
+	t.Parallel()
+	storeErr := errors.New("connection reset by peer")
+	session, _ := scriptedLeaseSession(t, func(context.Context, int) error { return storeErr })
+	workErr := errors.New("work stopped")
+	var cause error
+	err := session.Run(context.Background(), time.Millisecond, func(ctx context.Context, _ providerfoundation.LeaseGuard) error {
+		<-ctx.Done()
+		cause = context.Cause(ctx)
+		return workErr
+	})
+	if !errors.Is(err, ErrLeaseLost) || errors.Is(err, workErr) || errors.Is(err, storeErr) {
+		t.Fatalf("run error=%v", err)
+	}
+	if !errors.Is(cause, ErrLeaseLost) || !errors.Is(cause, providerfoundation.ErrLeaseLost) {
+		t.Fatalf("work cancellation cause=%v", cause)
+	}
+}
+
+func TestLeaseSessionRunReportsLeaseLossWhenDeadlinePasses(t *testing.T) {
+	t.Parallel()
+	session, _ := scriptedLeaseSession(t, func(context.Context, int) error { return nil })
+	start := time.Now().UTC()
+	var ticks sync.Mutex
+	calls := 0
+	session.Now = func() time.Time {
+		ticks.Lock()
+		defer ticks.Unlock()
+		calls++
+		if calls > 1 {
+			return session.Deadline
+		}
+		return start
+	}
+	var cause error
+	err := session.Run(context.Background(), time.Millisecond, func(ctx context.Context, _ providerfoundation.LeaseGuard) error {
+		<-ctx.Done()
+		cause = context.Cause(ctx)
+		return nil
+	})
+	if !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("run error=%v", err)
+	}
+	if !errors.Is(cause, ErrLeaseLost) || !errors.Is(cause, providerfoundation.ErrLeaseLost) {
+		t.Fatalf("work cancellation cause=%v", cause)
+	}
+}
+
+func TestLeaseSessionRunReturnsWorkResultWhenWorkEndsFirst(t *testing.T) {
+	t.Parallel()
+	workErr := errors.New("provider returned 422")
+	for _, want := range []error{nil, workErr} {
+		session, _ := scriptedLeaseSession(t, func(context.Context, int) error { return nil })
+		var workContext context.Context
+		err := session.Run(context.Background(), 500*time.Millisecond, func(ctx context.Context, _ providerfoundation.LeaseGuard) error {
+			workContext = ctx
+			return want
+		})
+		if err != want {
+			t.Fatalf("want=%v run error=%v", want, err)
+		}
+		if cause := context.Cause(workContext); cause != context.Canceled {
+			t.Fatalf("want=%v work context cause=%v", want, cause)
+		}
+	}
+}
+
+// A renewal in flight when the work returns is awaited, and the store's
+// answer to it decides the outcome. The renewal runs on the caller's context,
+// so the work returning does not cancel it.
+func TestLeaseSessionRunKeepsWorkResultWhenInFlightRenewalIsGrantedAfterWorkReturns(t *testing.T) {
+	t.Parallel()
+	for _, want := range []error{nil, errors.New("provider returned 422")} {
+		entered := make(chan struct{})
+		workFinished := make(chan struct{})
+		var once sync.Once
+		session, _ := scriptedLeaseSession(t, func(ctx context.Context, _ int) error {
+			once.Do(func() { close(entered) })
+			<-workFinished
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(50 * time.Millisecond):
+				return nil
+			}
+		})
+		err := session.Run(context.Background(), time.Millisecond, func(context.Context, providerfoundation.LeaseGuard) error {
+			defer close(workFinished)
+			<-entered
+			return want
+		})
+		if err != want {
+			t.Fatalf("want=%v run error=%v", want, err)
+		}
+	}
+}
+
+func TestLeaseSessionRunReportsLeaseLossWhenInFlightRenewalIsRefusedAfterWorkReturns(t *testing.T) {
+	t.Parallel()
+	entered := make(chan struct{})
+	workFinished := make(chan struct{})
+	var once sync.Once
+	session, _ := scriptedLeaseSession(t, func(context.Context, int) error {
+		once.Do(func() { close(entered) })
+		<-workFinished
+		return ErrLeaseLost
+	})
+	err := session.Run(context.Background(), time.Millisecond, func(context.Context, providerfoundation.LeaseGuard) error {
+		defer close(workFinished)
+		<-entered
+		return nil
+	})
+	if !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("run error=%v", err)
+	}
+}
+
+// sessionClockAhead makes the session's clock run offset ahead of the wall
+// clock, so the claim-time grant has only a short time left on that clock.
+func sessionClockAhead(session *LeaseSession, offset time.Duration) {
+	session.Now = func() time.Time { return time.Now().UTC().Add(offset) }
+}
+
+func TestLeaseSessionRunReportsLeaseLossWhenRenewalOutlivesGrantedExpiry(t *testing.T) {
+	t.Parallel()
+	entered := make(chan struct{})
+	var once sync.Once
+	session, _ := scriptedLeaseSession(t, func(ctx context.Context, _ int) error {
+		once.Do(func() { close(entered) })
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	sessionClockAhead(session, 900*time.Millisecond)
+	result := make(chan error, 1)
+	go func() {
+		result <- session.Run(context.Background(), time.Millisecond, func(context.Context, providerfoundation.LeaseGuard) error {
+			<-entered
+			return nil
+		})
+	}()
+	select {
+	case err := <-result:
+		if !errors.Is(err, ErrLeaseLost) {
+			t.Fatalf("run error=%v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("run did not return after the granted expiry passed")
+	}
+}
+
+func TestLeaseSessionRunKeepsRenewingPastTheClaimTimeExpiry(t *testing.T) {
+	t.Parallel()
+	session, _ := scriptedLeaseSession(t, func(ctx context.Context, _ int) error { return ctx.Err() })
+	sessionClockAhead(session, 900*time.Millisecond)
+	err := session.Run(context.Background(), 20*time.Millisecond, func(ctx context.Context, guard providerfoundation.LeaseGuard) error {
+		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		case <-time.After(300 * time.Millisecond):
+		}
+		return guard.Assert(ctx)
+	})
+	if err != nil {
+		t.Fatalf("run error=%v", err)
+	}
+}
+
+func TestLeaseSessionRunReturnsWorkResultWhenCallerContextEnds(t *testing.T) {
+	t.Parallel()
+	callerCause := errors.New("worker shutting down")
+	entered := make(chan struct{})
+	var once sync.Once
+	session, _ := scriptedLeaseSession(t, func(ctx context.Context, _ int) error {
+		once.Do(func() { close(entered) })
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	parent, cancelParent := context.WithCancelCause(context.Background())
+	var cause error
+	err := session.Run(parent, time.Millisecond, func(ctx context.Context, _ providerfoundation.LeaseGuard) error {
+		<-entered
+		cancelParent(callerCause)
+		<-ctx.Done()
+		cause = context.Cause(ctx)
+		return ctx.Err()
+	})
+	if !errors.Is(err, context.Canceled) || errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("run error=%v", err)
+	}
+	if cause != callerCause {
+		t.Fatalf("work cancellation cause=%v", cause)
+	}
+}
+
+// Work functions read session.Claim while the heartbeat renews; the claim a
+// session was built with is the claim it keeps.
+func TestLeaseSessionRunLeavesClaimUnchangedAcrossRenewals(t *testing.T) {
+	t.Parallel()
+	renewed := make(chan struct{}, 8)
+	session, claim := scriptedLeaseSession(t, func(context.Context, int) error {
+		select {
+		case renewed <- struct{}{}:
+		default:
+		}
+		return nil
+	})
+	err := session.Run(context.Background(), time.Millisecond, func(ctx context.Context, guard providerfoundation.LeaseGuard) error {
+		for range 3 {
+			<-renewed
+			if observed := session.Claim; !reflect.DeepEqual(observed, claim) {
+				t.Errorf("claim during work=%+v want=%+v", observed, claim)
+			}
+			if err := guard.Assert(ctx); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("run error=%v", err)
+	}
+	if !reflect.DeepEqual(session.Claim, claim) {
+		t.Fatalf("claim after run=%+v want=%+v", session.Claim, claim)
 	}
 }
 
@@ -163,15 +430,14 @@ func testUnit() Unit {
 }
 
 type memoryLeaseRepository struct {
-	mu                sync.Mutex
-	unit              Unit
-	status            string
-	owner             string
-	expiresAt         time.Time
-	attempts          int
-	terminal          bool
-	renewals          int
-	loseAfterRenewals int
+	mu        sync.Mutex
+	unit      Unit
+	status    string
+	owner     string
+	expiresAt time.Time
+	attempts  int
+	terminal  bool
+	renewals  int
 }
 
 func newMemoryLeaseRepository(unit Unit, status string) *memoryLeaseRepository {
@@ -213,8 +479,7 @@ func (repository *memoryLeaseRepository) Renew(_ context.Context, claim Claim, n
 	defer repository.mu.Unlock()
 	repository.renewals++
 	if repository.terminal || repository.status != "running" || repository.owner != claim.Owner ||
-		!repository.expiresAt.After(now) ||
-		(repository.loseAfterRenewals > 0 && repository.renewals > repository.loseAfterRenewals) {
+		!repository.expiresAt.After(now) {
 		return ErrLeaseLost
 	}
 	repository.expiresAt = expiresAt

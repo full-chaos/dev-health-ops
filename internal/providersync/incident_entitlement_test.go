@@ -62,9 +62,7 @@ func TestPostgresIncidentEntitlementSeparatesUnavailableFromDisabled(t *testing.
 // counted as a refusal. Not parallel: it swaps the process default logger.
 func TestIncidentEntitlementRefusalEmitsOneStructuredLogLine(t *testing.T) {
 	var output bytes.Buffer
-	previous := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&output, nil)))
-	t.Cleanup(func() { slog.SetDefault(previous) })
+	swapDefaultLogger(t, slog.New(slog.NewJSONHandler(&output, nil)))
 	metrics := providerfoundation.NewMetrics()
 	claim := nativeTestClaim("pagerduty", "schedules")
 	err := requireIncidentEntitlement(context.Background(), incidentEntitlementFunc(func(context.Context, string) error {

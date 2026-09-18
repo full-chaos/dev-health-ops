@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -199,6 +200,11 @@ type LeaseRepository interface {
 
 // LeaseSession is both the heartbeat owner and the LeaseGuard passed through
 // credential resolution, HTTP requests, and sink writes.
+//
+// Every field is read-only while Run executes: the work function reads
+// session.Claim concurrently with the heartbeat goroutine, so Heartbeat never
+// writes it. Claim.LeaseExpiresAt stays the expiry granted at claim time; the
+// renewed expiry lives only in the repository row that Renew and Assert check.
 type LeaseSession struct {
 	Repository    LeaseRepository
 	Claim         Claim
@@ -238,30 +244,58 @@ func (session *LeaseSession) Assert(ctx context.Context) error {
 }
 
 func (session *LeaseSession) Heartbeat(ctx context.Context) error {
+	_, err := session.renew(ctx)
+	return err
+}
+
+func (session *LeaseSession) renew(ctx context.Context) (time.Time, error) {
 	if !session.valid() || ctx == nil {
-		return ErrLeaseLost
+		return time.Time{}, ErrLeaseLost
 	}
 	now := session.now()
 	if !now.Before(session.Deadline) {
-		return ErrLeaseLost
+		return time.Time{}, ErrLeaseLost
 	}
 	expiresAt := now.Add(session.LeaseDuration)
 	if expiresAt.After(session.Deadline) {
 		expiresAt = session.Deadline
 	}
 	if !expiresAt.After(now) {
-		return ErrLeaseLost
+		return time.Time{}, ErrLeaseLost
 	}
 	if err := session.Repository.Renew(ctx, session.Claim, now, expiresAt); err != nil {
-		return ErrLeaseLost
+		return time.Time{}, ErrLeaseLost
 	}
-	session.Claim.LeaseExpiresAt = expiresAt
-	return nil
+	return expiresAt, nil
 }
+
+// errLeaseSessionHeartbeatLost cancels the work context when a renewal fails
+// while work runs. It wraps both lease-loss sentinels because work code
+// classifies a lost lease by either the provider foundation's or this
+// package's.
+var errLeaseSessionHeartbeatLost = fmt.Errorf(
+	"heartbeat could not renew the claim: %w: %w", ErrLeaseLost, providerfoundation.ErrLeaseLost,
+)
 
 // Run starts a heartbeat loop and cooperatively cancels work on lease loss.
 // It cannot forcibly stop a provider call that ignores context; clients in the
 // provider foundation all bind requests and retry waits to this context.
+//
+// The outcome follows the repository's answer to every renewal the heartbeat
+// started while work ran, never the order in which goroutines notice it.
+// Renewals run on the caller's context bounded by the last granted expiry, not
+// on the work context, so the work returning cannot make a renewal fail:
+//   - a renewal is refused, fails in the store, or cannot start because the
+//     deadline is reached: the work context is cancelled with a cause matching
+//     ErrLeaseLost and providerfoundation.ErrLeaseLost, and Run returns
+//     ErrLeaseLost whatever the work returns, even when the work returned
+//     while that renewal was in flight;
+//   - a renewal still in flight when the work returns is awaited; if the
+//     store grants it, Run returns the work's error, including nil;
+//   - a renewal that outlives the last granted expiry is a lost lease;
+//   - a renewal that fails because the caller's context ended is not a lost
+//     lease: Run returns the work's error, and the work context carries the
+//     caller's cause.
 func (session *LeaseSession) Run(
 	ctx context.Context,
 	interval time.Duration,
@@ -275,30 +309,40 @@ func (session *LeaseSession) Run(
 		interval > session.LeaseDuration/2 || work == nil {
 		return ErrInvalidConfiguration
 	}
-	workContext, cancel := context.WithCancel(ctx)
-	defer cancel()
-	heartbeatResult := make(chan error, 1)
+	workContext, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	// Written only by the heartbeat goroutine and read only after it exits.
+	leaseLost := false
+	heartbeatDone := make(chan struct{})
 	go func() {
+		defer close(heartbeatDone)
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
+		grantedUntil := session.Claim.LeaseExpiresAt
 		for {
 			select {
 			case <-workContext.Done():
-				heartbeatResult <- nil
 				return
 			case <-ticker.C:
-				if err := session.Heartbeat(workContext); err != nil {
-					cancel()
-					heartbeatResult <- err
+			}
+			renewContext, cancelRenew := context.WithTimeout(ctx, grantedUntil.Sub(session.now()))
+			expiresAt, err := session.renew(renewContext)
+			cancelRenew()
+			if err != nil {
+				if ctx.Err() != nil {
 					return
 				}
+				leaseLost = true
+				cancel(errLeaseSessionHeartbeatLost)
+				return
 			}
+			grantedUntil = expiresAt
 		}
 	}()
 	workErr := work(workContext, session)
-	cancel()
-	heartbeatErr := <-heartbeatResult
-	if heartbeatErr != nil {
+	cancel(nil)
+	<-heartbeatDone
+	if leaseLost {
 		return ErrLeaseLost
 	}
 	return workErr

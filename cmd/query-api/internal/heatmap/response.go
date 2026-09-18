@@ -212,10 +212,20 @@ func axisOrder(kind string, values []string, totals map[string]float64) []string
 		}
 		return filtered
 	default:
+		// A stable sort by total alone leaves ties ordered by first
+		// appearance in valuesList -- the incidental scan order the
+		// query returning rows produced, which ClickHouse gives no
+		// guarantee over among rows tying on the query's own ORDER BY.
+		// Breaking a tie by name, ascending, makes the result a pure
+		// function of (name, total): two calls fed the same rows in two
+		// different scan orders always agree.
 		out := make([]string, len(valuesList))
 		copy(out, valuesList)
-		sort.SliceStable(out, func(i, j int) bool {
-			return totals[out[i]] > totals[out[j]]
+		sort.Slice(out, func(i, j int) bool {
+			if totals[out[i]] != totals[out[j]] {
+				return totals[out[i]] > totals[out[j]]
+			}
+			return out[i] < out[j]
 		})
 		return out
 	}

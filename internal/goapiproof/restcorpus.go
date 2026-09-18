@@ -2054,6 +2054,31 @@ var heatmapReviewWaitDensityParity = Options{
 	},
 }
 
+// heatmapRepoTouchpointsAxisTieGroupDefect narrows this route's own
+// generic-branch axis sort (_axis_order's/axisOrder's default case) to
+// the ONE consequence a genuine total-value TIE produces on data.axes.y:
+// axisOrder's stable sort breaks a tie by name ascending
+// (heatmap/response.go), where _axis_order's own stable sort (services/
+// heatmap.py) keeps breaking it by row-encounter order -- unverifiable
+// from the wire, and never fixed to match. See HeatmapAxisTieGroupShape's
+// own doc comment (heatmapaxistiegroup.go) for the full derivation; it
+// stays inert on any name whose own total genuinely differs between the
+// two legs, leaving that case to heatmapRepoTouchpointsTeamScopeSubsetDefect
+// or an unrelated, genuinely uncovered difference.
+var heatmapRepoTouchpointsAxisTieGroupDefect = BaselineDefect{
+	Ticket:             "CHAOS-5965",
+	Reason:             "_axis_order's (services/heatmap.py) and axisOrder's (heatmap/response.go) own generic branch are both a stable sort by per-repo total descending; two repositories whose own totals genuinely tie keep whatever order the reference plane's own row-encounter order gives them, where this port breaks the same tie by name ascending. Go is correct.",
+	Paths:              []string{"data.axes.y"},
+	Intermittent:       true,
+	IntermittentReason: "present only while a request's repo_touchpoints result carries at least two repositories whose own total commit counts genuinely tie in this window; a window whose repository totals happen to be pairwise distinct shows no divergence",
+	HeatmapAxisTieGroupShape: &HeatmapAxisTieGroupShape{
+		CellsListPath: "data.cells",
+		CellKeyFields: []string{"x", "y"},
+		NameField:     "y",
+		AxisListPath:  "data.axes.y",
+	},
+}
+
 // heatmapRepoTouchpointsParity: fetchRepoTouchpoints selects
 // toFloat64(count()) AS value -- a bare row count. Declared integer
 // despite the toFloat64(...) wrapper: the cast exists only so the
@@ -2062,7 +2087,7 @@ var heatmapReviewWaitDensityParity = Options{
 // never because the quantity itself can take a fractional value.
 var heatmapRepoTouchpointsParity = Options{
 	OrderInsensitiveLists: heatmapDedupParity.OrderInsensitiveLists,
-	BaselineDefects:       heatmapDedupParity.BaselineDefects,
+	BaselineDefects:       append(append([]BaselineDefect{}, heatmapDedupParity.BaselineDefects...), heatmapRepoTouchpointsAxisTieGroupDefect),
 	NumericLeavesDeclared: true,
 	IntegerLeaves: map[string]string{
 		"data.cells.value": "repo_touchpoints' own toFloat64(count()) (heatmap/queries.go fetchRepoTouchpoints) -- a bare row count, cast to float64 only so the driver can scan it, never a ClickHouse floating-point aggregate.",
@@ -2111,9 +2136,32 @@ var heatmapHotspotRiskCellBoundaryDefect = BaselineDefect{
 	},
 }
 
+// heatmapHotspotRiskAxisTieGroupDefect is heatmapRepoTouchpointsAxisTie
+// GroupDefect's own mechanism over hotspot_risk's file axis instead of
+// repo_touchpoints' repo axis: two files whose own totals genuinely tie.
+// It composes with heatmapHotspotRiskCellBoundaryDefect above rather than
+// overlapping it -- that defect's own rule 6 only admits an axis position
+// occupied by a file its own rule 4/2 already admitted (an entrant/
+// leaver or a verified fan-out value), never a pure tie between two files
+// neither the top-20 boundary nor a repos-join fan-out ever touched; this
+// defect covers exactly that remaining case.
+var heatmapHotspotRiskAxisTieGroupDefect = BaselineDefect{
+	Ticket:             "CHAOS-5965",
+	Reason:             "_axis_order's (services/heatmap.py) and axisOrder's (heatmap/response.go) own generic branch are both a stable sort by per-file total descending; two files whose own totals genuinely tie keep whatever order the reference plane's own row-encounter order gives them, where this port breaks the same tie by name ascending. Go is correct.",
+	Paths:              []string{"data.axes.y"},
+	Intermittent:       true,
+	IntermittentReason: "present only while a request's hotspot_risk result carries at least two files whose own total hotspot scores genuinely tie in this window; a window whose file totals happen to be pairwise distinct shows no divergence",
+	HeatmapAxisTieGroupShape: &HeatmapAxisTieGroupShape{
+		CellsListPath: "data.cells",
+		CellKeyFields: []string{"x", "y"},
+		NameField:     "y",
+		AxisListPath:  "data.axes.y",
+	},
+}
+
 var heatmapHotspotRiskParity = Options{
 	OrderInsensitiveLists: heatmapDedupParity.OrderInsensitiveLists,
-	BaselineDefects:       append(append([]BaselineDefect{}, heatmapDedupParity.BaselineDefects...), heatmapHotspotRiskCellBoundaryDefect),
+	BaselineDefects:       append(append([]BaselineDefect{}, heatmapDedupParity.BaselineDefects...), heatmapHotspotRiskCellBoundaryDefect, heatmapHotspotRiskAxisTieGroupDefect),
 	NumericLeavesDeclared: true,
 	FloatTierB: map[string]string{
 		"data.cells.value": "hotspot_risk's own toFloat64(sum(hotspot_score)) (heatmap/queries.go fetchHotspotRisk) over the Float64 hotspot_score column -- a genuine merged ClickHouse float aggregate.",

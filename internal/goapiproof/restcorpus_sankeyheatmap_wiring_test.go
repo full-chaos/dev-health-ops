@@ -32,7 +32,6 @@ func TestSankeyAndHeatmapDedupDeclarationsCarryShapes(t *testing.T) {
 	}
 	for name, opts := range map[string]Options{
 		"heatmapReviewWaitDensityParity": heatmapReviewWaitDensityParity,
-		"heatmapRepoTouchpointsParity":   heatmapRepoTouchpointsParity,
 		"heatmapActiveHoursParity":       heatmapActiveHoursParity,
 	} {
 		if !opts.NumericLeavesDeclared {
@@ -46,28 +45,50 @@ func TestSankeyAndHeatmapDedupDeclarationsCarryShapes(t *testing.T) {
 		}
 	}
 
-	// heatmapHotspotRiskParity is the one heatmap Options value that does
-	// NOT carry heatmapDedupParity's own BaselineDefects unchanged: it
-	// ADDS its own HeatmapCellBoundaryShape entry on top, narrowing
-	// hotspot_risk's own top-N-boundary consequence the shared
-	// KeyedDirectionShape entry cannot reach (heatmapcellboundary.go).
-	// Distinguished by WHICH shape each entry carries, not by ticket
-	// string or slice length alone, the same discipline
+	// heatmapRepoTouchpointsParity and heatmapHotspotRiskParity are the
+	// two heatmap Options values that do NOT carry heatmapDedupParity's
+	// own BaselineDefects unchanged: each ADDS its own
+	// HeatmapAxisTieGroupShape entry on top (a genuine axis-total tie's
+	// deterministic tiebreak, heatmapaxistiegroup.go), and
+	// heatmapHotspotRiskParity carries a SECOND appended entry besides
+	// (HeatmapCellBoundaryShape, narrowing hotspot_risk's own
+	// top-N-boundary consequence the shared KeyedDirectionShape entry
+	// cannot reach). Distinguished by WHICH shape each entry carries,
+	// not by ticket string or slice length alone, the same discipline
 	// sankeyInvestmentParity's own inherited-entry check below uses.
+	if !heatmapRepoTouchpointsParity.NumericLeavesDeclared {
+		t.Fatal("heatmapRepoTouchpointsParity.NumericLeavesDeclared = false, want true")
+	}
+	if !reflect.DeepEqual(heatmapRepoTouchpointsParity.OrderInsensitiveLists, heatmapDedupParity.OrderInsensitiveLists) {
+		t.Fatalf("heatmapRepoTouchpointsParity.OrderInsensitiveLists = %+v, want the same as heatmapDedupParity's own %+v", heatmapRepoTouchpointsParity.OrderInsensitiveLists, heatmapDedupParity.OrderInsensitiveLists)
+	}
+	if len(heatmapRepoTouchpointsParity.BaselineDefects) != len(heatmapDedupParity.BaselineDefects)+1 {
+		t.Fatalf("heatmapRepoTouchpointsParity has %d BaselineDefects, want %d (heatmapDedupParity's own plus its own appended entry)", len(heatmapRepoTouchpointsParity.BaselineDefects), len(heatmapDedupParity.BaselineDefects)+1)
+	}
+	if !reflect.DeepEqual(heatmapRepoTouchpointsParity.BaselineDefects[:len(heatmapDedupParity.BaselineDefects)], heatmapDedupParity.BaselineDefects) {
+		t.Fatalf("heatmapRepoTouchpointsParity.BaselineDefects[:%d] = %+v, want the same as heatmapDedupParity's own %+v -- a future edit must not silently drop or alter the inherited citation", len(heatmapDedupParity.BaselineDefects), heatmapRepoTouchpointsParity.BaselineDefects[:len(heatmapDedupParity.BaselineDefects)], heatmapDedupParity.BaselineDefects)
+	}
+	if heatmapRepoTouchpointsParity.BaselineDefects[len(heatmapDedupParity.BaselineDefects)].HeatmapAxisTieGroupShape == nil {
+		t.Fatal("heatmapRepoTouchpointsParity's own appended entry carries no HeatmapAxisTieGroupShape")
+	}
+
 	if !heatmapHotspotRiskParity.NumericLeavesDeclared {
 		t.Fatal("heatmapHotspotRiskParity.NumericLeavesDeclared = false, want true")
 	}
 	if !reflect.DeepEqual(heatmapHotspotRiskParity.OrderInsensitiveLists, heatmapDedupParity.OrderInsensitiveLists) {
 		t.Fatalf("heatmapHotspotRiskParity.OrderInsensitiveLists = %+v, want the same as heatmapDedupParity's own %+v", heatmapHotspotRiskParity.OrderInsensitiveLists, heatmapDedupParity.OrderInsensitiveLists)
 	}
-	if len(heatmapHotspotRiskParity.BaselineDefects) != len(heatmapDedupParity.BaselineDefects)+1 {
-		t.Fatalf("heatmapHotspotRiskParity has %d BaselineDefects, want %d (heatmapDedupParity's own plus its own appended entry)", len(heatmapHotspotRiskParity.BaselineDefects), len(heatmapDedupParity.BaselineDefects)+1)
+	if len(heatmapHotspotRiskParity.BaselineDefects) != len(heatmapDedupParity.BaselineDefects)+2 {
+		t.Fatalf("heatmapHotspotRiskParity has %d BaselineDefects, want %d (heatmapDedupParity's own plus its own two appended entries)", len(heatmapHotspotRiskParity.BaselineDefects), len(heatmapDedupParity.BaselineDefects)+2)
 	}
 	if !reflect.DeepEqual(heatmapHotspotRiskParity.BaselineDefects[:len(heatmapDedupParity.BaselineDefects)], heatmapDedupParity.BaselineDefects) {
 		t.Fatalf("heatmapHotspotRiskParity.BaselineDefects[:%d] = %+v, want the same as heatmapDedupParity's own %+v -- a future edit must not silently drop or alter the inherited citation", len(heatmapDedupParity.BaselineDefects), heatmapHotspotRiskParity.BaselineDefects[:len(heatmapDedupParity.BaselineDefects)], heatmapDedupParity.BaselineDefects)
 	}
 	if heatmapHotspotRiskParity.BaselineDefects[len(heatmapDedupParity.BaselineDefects)].HeatmapCellBoundaryShape == nil {
-		t.Fatal("heatmapHotspotRiskParity's own appended entry carries no HeatmapCellBoundaryShape")
+		t.Fatal("heatmapHotspotRiskParity's own first appended entry carries no HeatmapCellBoundaryShape")
+	}
+	if heatmapHotspotRiskParity.BaselineDefects[len(heatmapDedupParity.BaselineDefects)+1].HeatmapAxisTieGroupShape == nil {
+		t.Fatal("heatmapHotspotRiskParity's own second appended entry carries no HeatmapAxisTieGroupShape")
 	}
 	if _, ok := heatmapReviewWaitDensityParity.FloatTierB["data.cells.value"]; !ok {
 		t.Fatalf("heatmapReviewWaitDensityParity.FloatTierB = %+v, missing data.cells.value", heatmapReviewWaitDensityParity.FloatTierB)

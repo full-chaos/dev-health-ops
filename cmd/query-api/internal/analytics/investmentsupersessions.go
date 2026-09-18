@@ -9,14 +9,11 @@ package analytics
 //
 // BINDING CONDITION (plan.md section 5a, verified against
 // investment_membership_scope.py:26-68 at source): this exclusion applies
-// INDEPENDENTLY of investmentMembershipScopeFilter()'s own scope_enabled
+// INDEPENDENTLY of investmentMembershipScopeFilter()'s own membership
 // gate, not folded into that gate's OR-condition. Folding it in would
-// make the sidecar inherit the exact bypass window it exists to close --
-// investmentMembershipScopeStateSource's own scope_enabled is 0
-// ("unscoped_fallback"/"unscoped_no_marker") for part of EVERY
-// materialize run and indefinitely whenever the membership projection
-// lags or fails (CHAOS-4312), which is precisely when a superseded id
-// would otherwise resurrect.
+// make the sidecar inherit the gate's unscoped case -- an organisation with
+// no complete membership run ("unscoped_no_marker") reads every work unit,
+// which is precisely when a superseded id would otherwise resurrect.
 
 // supersededWorkUnitIDsFilter returns the WHERE-clause fragment
 // LatestWorkUnitInvestmentsSource appends, unconditionally, alongside its

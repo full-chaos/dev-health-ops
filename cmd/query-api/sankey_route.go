@@ -39,6 +39,7 @@ import (
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/analytics"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/authctx"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/principal"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/routeswitch"
@@ -104,8 +105,8 @@ func buildSankeyRoute() (handler http.HandlerFunc, cleanup func(), ok bool, err 
 	}
 
 	routeMux := routeswitch.NewMux(sankeySwitchFromEnv())
-	routeMux.Register(sankeyGetOperation, newSankeyGetHandler(readClient))
-	routeMux.Register(sankeyPostOperation, newSankeyPostHandler(readClient))
+	routeMux.Register(sankeyGetOperation, newSankeyGetHandler(analytics.PinInvestmentMembershipScope(readClient)))
+	routeMux.Register(sankeyPostOperation, newSankeyPostHandler(analytics.PinInvestmentMembershipScope(readClient)))
 
 	entryHandler := func(w http.ResponseWriter, r *http.Request) {
 		var operation string

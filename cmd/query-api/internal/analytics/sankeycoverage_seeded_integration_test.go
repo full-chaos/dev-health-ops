@@ -31,7 +31,7 @@ package analytics
 //     two, a constant 1.0 sums to 2.0 and the total becomes 5.0.
 //
 // Membership-scope tables are created but left EMPTY, so marker_count = 0,
-// scope_enabled = 0 and the scope filter is a no-op -- this test isolates
+// the membership run id is empty and the scope filter is a no-op -- this test isolates
 // coverage arithmetic rather than re-testing the scope gate, which
 // investmentmembershipscope_test.go already covers.
 

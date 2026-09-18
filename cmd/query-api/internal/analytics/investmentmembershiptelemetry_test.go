@@ -2,6 +2,7 @@ package analytics
 
 import (
 	"context"
+	"log/slog"
 	"testing"
 
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
@@ -36,8 +37,12 @@ import (
 // delegation is the first thing to re-check, not a red herring.
 func TestDefaultRecordStaleInvestmentMembershipScope_RecordsToRealMeter(t *testing.T) {
 	ctx := context.Background()
-	state := InvestmentMembershipScopeState{ScopeMode: "unscoped_fallback", LagSeconds: 4321}
-	defaultRecordStaleInvestmentMembershipScope(ctx, state)
+	state := InvestmentMembershipScopeState{ScopeMode: "scoped_projection_lag", LagSeconds: 4321, RunID: "run-1"}
+	// The reader is process-wide and cumulative: seeded tests in this
+	// package that read through a lagging projection record on the same
+	// counter, so this test asserts its own increment, not the total.
+	before := staleScopeCounterValue(t, ctx)
+	defaultRecordStaleInvestmentMembershipScope(ctx, "org-1", state)
 
 	var rm metricdata.ResourceMetrics
 	if err := realMeterReader.Collect(ctx, &rm); err != nil {
@@ -55,11 +60,11 @@ func TestDefaultRecordStaleInvestmentMembershipScope_RecordsToRealMeter(t *testi
 					t.Fatalf("counter data shape = %+v, want one int64 sum data point", m.Data)
 				}
 				dp := data.DataPoints[0]
-				if dp.Value != 1 {
-					t.Errorf("counter value = %d, want 1", dp.Value)
+				if dp.Value-before != 1 {
+					t.Errorf("counter increment = %d, want 1", dp.Value-before)
 				}
-				if got, ok := dp.Attributes.Value("scope_mode"); !ok || got.AsString() != "unscoped_fallback" {
-					t.Errorf("counter scope_mode attribute = %v (present=%v), want unscoped_fallback", got, ok)
+				if got, ok := dp.Attributes.Value("scope_mode"); !ok || got.AsString() != "scoped_projection_lag" {
+					t.Errorf("counter scope_mode attribute = %v (present=%v), want scoped_projection_lag", got, ok)
 				}
 			case "devhealth_query_api_investment_membership_scope_lag_seconds":
 				sawGauge = true
@@ -71,8 +76,8 @@ func TestDefaultRecordStaleInvestmentMembershipScope_RecordsToRealMeter(t *testi
 				if dp.Value != 4321 {
 					t.Errorf("gauge value = %d, want 4321", dp.Value)
 				}
-				if got, ok := dp.Attributes.Value("scope_mode"); !ok || got.AsString() != "unscoped_fallback" {
-					t.Errorf("gauge scope_mode attribute = %v (present=%v), want unscoped_fallback", got, ok)
+				if got, ok := dp.Attributes.Value("scope_mode"); !ok || got.AsString() != "scoped_projection_lag" {
+					t.Errorf("gauge scope_mode attribute = %v (present=%v), want scoped_projection_lag", got, ok)
 				}
 			}
 		}
@@ -85,27 +90,28 @@ func TestDefaultRecordStaleInvestmentMembershipScope_RecordsToRealMeter(t *testi
 	}
 }
 
-// TestRecordStaleInvestmentMembershipScope_OnlyFiresOnUnscopedFallback
+// TestRecordStaleInvestmentMembershipScope_OnlyFiresOnProjectionLag
 // pins RecordStaleInvestmentMembershipScope's own decision logic (the
 // exported wrapper, not the recorder it calls) via the injectable
 // package-var seam -- the same shape TestResolve_FlowMatrixDegradation_IsReported
 // already uses for recordDegradation. Removing the
-// `if state.ScopeMode != "unscoped_fallback" { return }` guard in
+// `if state.ScopeMode != scopeModeProjectionLag { return }` guard in
 // RecordStaleInvestmentMembershipScope must turn this red.
-func TestRecordStaleInvestmentMembershipScope_OnlyFiresOnUnscopedFallback(t *testing.T) {
+func TestRecordStaleInvestmentMembershipScope_OnlyFiresOnProjectionLag(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		scopeMode  string
+		runID      string
 		wantRecord bool
 	}{
-		{"scoped_does_not_fire", "scoped", false},
-		{"unscoped_no_marker_does_not_fire", "unscoped_no_marker", false},
-		{"unscoped_fallback_fires", "unscoped_fallback", true},
+		{"scoped_does_not_fire", "scoped", "run-1", false},
+		{"unscoped_no_marker_does_not_fire", "unscoped_no_marker", "", false},
+		{"projection_lag_fires", "scoped_projection_lag", "run-1", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var captured *InvestmentMembershipScopeState
 			orig := recordStaleInvestmentMembershipScope
-			recordStaleInvestmentMembershipScope = func(_ context.Context, state InvestmentMembershipScopeState) {
+			recordStaleInvestmentMembershipScope = func(_ context.Context, _ string, state InvestmentMembershipScopeState) {
 				c := state
 				captured = &c
 			}
@@ -119,8 +125,8 @@ func TestRecordStaleInvestmentMembershipScope_OnlyFiresOnUnscopedFallback(t *tes
 			// before this test, which surfaced when the
 			// wantRecord=false cases could not distinguish a genuine
 			// "did not fire" from a swallowed scan error.
-			client.on("SELECT scope_mode, lag_seconds", &fakeRowScanner{rows: [][]any{
-				{tc.scopeMode, int64(99)},
+			client.on("SELECT scope_mode, lag_seconds, latest_run_id", &fakeRowScanner{rows: [][]any{
+				{tc.scopeMode, int64(99), tc.runID},
 			}})
 
 			RecordStaleInvestmentMembershipScope(context.Background(), client, "org-1", 30)
@@ -131,9 +137,50 @@ func TestRecordStaleInvestmentMembershipScope_OnlyFiresOnUnscopedFallback(t *tes
 			if !tc.wantRecord && captured != nil {
 				t.Fatalf("scope_mode=%q: expected the recorder NOT to fire, got %+v", tc.scopeMode, *captured)
 			}
-			if tc.wantRecord && captured.ScopeMode != tc.scopeMode {
-				t.Fatalf("captured ScopeMode = %q, want %q", captured.ScopeMode, tc.scopeMode)
+			if tc.wantRecord && (captured.ScopeMode != tc.scopeMode || captured.LagSeconds != 99 || captured.RunID != tc.runID) {
+				t.Fatalf("captured = %+v, want {%s 99 %s}", *captured, tc.scopeMode, tc.runID)
 			}
 		})
 	}
+}
+
+// staleScopeCounterValue reads the stale-scope counter's current cumulative
+// value from the shared reader (0 before its first increment).
+func staleScopeCounterValue(t *testing.T, ctx context.Context) int64 {
+	t.Helper()
+	var rm metricdata.ResourceMetrics
+	if err := realMeterReader.Collect(ctx, &rm); err != nil {
+		t.Fatalf("reader.Collect error = %v", err)
+	}
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name != "devhealth_query_api_investment_membership_scope_stale_total" {
+				continue
+			}
+			if data, ok := m.Data.(metricdata.Sum[int64]); ok && len(data.DataPoints) == 1 {
+				return data.DataPoints[0].Value
+			}
+		}
+	}
+	return 0
+}
+
+// TestDefaultRecordStaleInvestmentMembershipScope_LogsLagAndRun: the warn
+// line names the organisation, the lag and the membership run the reads
+// stayed on.
+func TestDefaultRecordStaleInvestmentMembershipScope_LogsLagAndRun(t *testing.T) {
+	records := captureSlog(t)
+	defaultRecordStaleInvestmentMembershipScope(context.Background(), "org-1", InvestmentMembershipScopeState{
+		ScopeMode: "scoped_projection_lag", LagSeconds: 6, RunID: "run-1",
+	})
+	for _, record := range *records {
+		if record.level != slog.LevelWarn {
+			continue
+		}
+		if record.attrs["org_id"] != "org-1" || record.attrs["lag_seconds"] != int64(6) || record.attrs["membership_run_id"] != "run-1" || record.attrs["scope_mode"] != "scoped_projection_lag" {
+			t.Fatalf("warn attrs = %v, want org_id=org-1 lag_seconds=6 membership_run_id=run-1 scope_mode=scoped_projection_lag", record.attrs)
+		}
+		return
+	}
+	t.Fatal("no warn line recorded for a lagging projection")
 }

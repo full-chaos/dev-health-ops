@@ -27,59 +27,12 @@
                   WHERE org_id = {org_id:String}
               )
               AND (
-                  (SELECT scope_enabled FROM (
-        SELECT
-            if(
-                marker_count > 0
-                AND latest_run_id != ''
-                AND (
-                    latest_investment_computed_at IS NULL
-                    OR latest_investment_computed_at <= latest_run_completed_at
-                ),
-                1,
-                0
-            ) AS scope_enabled,
-            multiIf(
-                marker_count = 0 OR latest_run_id = '', 'unscoped_no_marker',
-                latest_investment_computed_at IS NOT NULL
-                AND latest_investment_computed_at > latest_run_completed_at,
-                'unscoped_fallback',
-                'scoped'
-            ) AS scope_mode,
-            toInt64(greatest(
-                0,
-                if(
-                    latest_investment_computed_at IS NULL,
-                    0,
-                    dateDiff('second', latest_run_completed_at, latest_investment_computed_at)
-                )
-            )) AS lag_seconds
-        FROM (
-        SELECT
-            argMax(run_id, completed_at) AS latest_run_id,
-            max(completed_at) AS latest_run_completed_at,
-            count() AS marker_count
-        FROM work_unit_membership_runs
-        WHERE org_id = {org_id:String}
-    ) AS lcmr
-        CROSS JOIN (
-        SELECT max(computed_at) AS latest_investment_computed_at
-        FROM work_unit_investments
-        WHERE org_id = {org_id:String}
-    ) AS lic
-    )) = 0
+                  (SELECT argMax(run_id, completed_at) FROM work_unit_membership_runs WHERE org_id = {org_id:String}) = ''
                   OR work_unit_id IN (
                       SELECT work_unit_id FROM (
         SELECT DISTINCT m.work_unit_id AS work_unit_id
         FROM work_unit_membership AS m
-        INNER JOIN (
-        SELECT
-            argMax(run_id, completed_at) AS latest_run_id,
-            max(completed_at) AS latest_run_completed_at,
-            count() AS marker_count
-        FROM work_unit_membership_runs
-        WHERE org_id = {org_id:String}
-    ) AS latest_run ON 1 = 1
+        INNER JOIN (SELECT (SELECT argMax(run_id, completed_at) FROM work_unit_membership_runs WHERE org_id = {org_id:String}) AS latest_run_id) AS latest_run ON 1 = 1
         
             LEFT JOIN (
                 SELECT

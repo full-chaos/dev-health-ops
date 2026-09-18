@@ -43,6 +43,7 @@ import (
 	chdriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/analytics"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/investmentexplain"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 
@@ -66,7 +67,7 @@ func splitWorkUnitsSeededDDL(sql string) []string {
 // that differs from what the migration chain alone would suggest.
 // work_unit_membership_runs is created but left EMPTY: with no
 // completed-run marker, investmentMembershipScopeStateSource's own
-// scope_enabled evaluates to 0 and the membership-scope OR short-circuits
+// run id is empty and the membership-scope OR short-circuits
 // (investment.go/investmentmembershipscope.go), so every seeded
 // investment row passes that gate regardless -- the same posture
 // investmentexplain's own sibling seeded test already takes, and
@@ -255,7 +256,8 @@ func startSeededWorkUnitsClickHouse(t *testing.T) (chdriver.Conn, *investmentexp
 		_ = inst.Close(context.Background())
 		t.Fatalf("construct ClickHouse query client: %v", err)
 	}
-	reader, err := investmentexplain.NewReader(client)
+	// Same wiring as the production route: the reader gets a pinned client.
+	reader, err := investmentexplain.NewReader(analytics.PinInvestmentMembershipScope(client))
 	if err != nil {
 		_ = client.Close()
 		_ = conn.Close()
@@ -675,13 +677,13 @@ func TestWorkUnitsSeededRealClickHouse_WorkCategoryFilterNarrowsRealRows(t *test
 
 // TestWorkUnitsSeededRealClickHouse_MembershipScopeEnabledFiltersNonMembers
 // is mechanism 7: every other seeded test in this file leaves
-// work_unit_membership_runs EMPTY, so investmentMembershipScopeStateSource's
-// own scope_enabled always evaluates to 0 and the OR short-circuits --
-// the membership-scope-ENABLED branch (a completed run marker present)
-// has never run. This test publishes one completed run and one
+// work_unit_membership_runs EMPTY, so the membership gate reads every work
+// unit (no complete run). This test publishes one completed run and one
 // membership row for a single work unit, with a SECOND work unit's own
 // investment row left out of that run's membership set entirely, and
-// proves the second is excluded once scope_enabled=1.
+// proves the second is excluded. It then writes a newer investment row for
+// the second unit (the materializer running ahead of the next marker) and
+// proves the read stays on the published run.
 func TestWorkUnitsSeededRealClickHouse_MembershipScopeEnabledFiltersNonMembers(t *testing.T) {
 	conn, reader, cleanup := startSeededWorkUnitsClickHouse(t)
 	defer cleanup()
@@ -741,6 +743,35 @@ func TestWorkUnitsSeededRealClickHouse_MembershipScopeEnabledFiltersNonMembers(t
 		t.Fatalf("BuildWorkUnitInvestments: %v", err)
 	}
 	if len(investments) != 1 || investments[0].WorkUnitID != "wu-in-scope" {
-		t.Fatalf("investments = %+v, want exactly [wu-in-scope] -- with a completed membership run published, scope_enabled=1 must exclude wu-not-in-scope from membership_scoped_work_unit_ids", investments)
+		t.Fatalf("investments = %+v, want exactly [wu-in-scope] -- with a completed membership run published, the gate must exclude wu-not-in-scope from membership_scoped_work_unit_ids", investments)
+	}
+
+	// Projection lag: a newer investment row lands before the next marker.
+	if err := conn.Exec(ctx, fmt.Sprintf(
+		`INSERT INTO work_unit_investments
+			(work_unit_id, work_unit_type, work_unit_name, from_ts, to_ts, repo_id, provider,
+			 effort_metric, effort_value, theme_distribution_json, subcategory_distribution_json,
+			 structural_evidence_json, evidence_quality, evidence_quality_band, categorization_status,
+			 categorization_errors_json, categorization_model_version, categorization_input_hash,
+			 categorization_run_id, computed_at, org_id)
+		VALUES
+			('wu-not-in-scope', 'issue', 'Membership scope fixture', toDateTime64('%s',3), toDateTime64('%s',3),
+			 NULL, NULL, 'churn_loc', 2.0, map(), map(), '{}',
+			 0.5, 'moderate', 'ok', '', 'v1', 'hash', '', toDateTime64('2026-01-06 00:00:07',3), '%s')`,
+		fromTS.Format("2006-01-02 15:04:05"), toTS.Format("2006-01-02 15:04:05"), workUnitsSeededOrgID,
+	)); err != nil {
+		t.Fatalf("seed lagging work_unit_investments row: %v", err)
+	}
+	lagging, err := reader.BuildWorkUnitInvestments(analytics.WithInvestmentMembershipScopeRequest(ctx), investmentexplain.BuildWorkUnitInvestmentsOptions{
+		OrgID:   workUnitsSeededOrgID,
+		StartTS: fromTS,
+		EndTS:   toTS,
+		Limit:   200,
+	})
+	if err != nil {
+		t.Fatalf("BuildWorkUnitInvestments (projection lag): %v", err)
+	}
+	if len(lagging) != 1 || lagging[0].WorkUnitID != "wu-in-scope" {
+		t.Fatalf("investments during projection lag = %+v, want exactly [wu-in-scope] -- reads stay on the latest complete run", lagging)
 	}
 }

@@ -6,7 +6,7 @@ package analytics
 // obligation: a work_unit_id present in work_unit_supersessions must be
 // invisible to every reader composed from LatestWorkUnitInvestmentsSource,
 // UNCONDITIONALLY -- independent of investmentMembershipScopeFilter's own
-// scope_enabled gate (investmentsupersessions.go's binding condition).
+// membership gate (investmentsupersessions.go's binding condition).
 //
 // Reuses investmentquality_seeded_integration_test.go's harness
 // (seededQualitySchemaDDL, seedQualityRows, splitSQLStatements) and its
@@ -14,15 +14,15 @@ package analytics
 // inventing a second one -- this test's only new claim is the exclusion,
 // not the aggregate arithmetic that file already covers.
 //
-// SCOPE STATE: the test runs the claim under BOTH scope_enabled values.
-// Phase 1 leaves work_unit_membership_runs empty (scope_enabled = 0,
+// SCOPE STATE: the test runs the claim under BOTH gate states.
+// Phase 1 leaves work_unit_membership_runs empty (no membership run id,
 // scope_mode = "unscoped_no_marker") -- investmentMembershipScopeFilter's
 // own OR-condition passes every row through regardless of membership
 // scoping, isolating the supersession exclusion from the membership gate.
 // Phase 2 (oci-image's peer-read finding, the only prior gap) then seeds a
 // completed membership run with BOTH work units present in
 // work_unit_membership under it, flipping scope_mode to "scoped"
-// (scope_enabled = 1) -- so the membership filter's own IN-clause would, on
+// (run id set) -- so the membership filter's own IN-clause would, on
 // its own, ADMIT wu-superseded. Only phase 2 proves the binding condition
 // for real: that the exclusion holds even when the scope gate would not
 // have provided it, not merely when the scope gate is inert.
@@ -52,10 +52,10 @@ func seedSupersession(t *testing.T, ctx context.Context, conn stdclickhouse.Conn
 }
 
 // TestSupersededWorkUnitsAreExcludedFromInvestmentQuality proves the
-// exclusion under both scope_enabled values: a control (no supersession
+// exclusion under both gate states: a control (no supersession
 // seeded -- count still includes the row, so the test cannot pass
-// vacuously), the claim under scope_enabled=0, then the claim under
-// scope_enabled=1 with membership rows present for the superseded unit
+// vacuously), the claim unscoped, then the claim under
+// the scoped gate with membership rows present for the superseded unit
 // too -- proving the exclusion is not merely redundant with the scope
 // gate.
 func TestSupersededWorkUnitsAreExcludedFromInvestmentQuality(t *testing.T) {
@@ -136,7 +136,7 @@ func TestSupersededWorkUnitsAreExcludedFromInvestmentQuality(t *testing.T) {
 		t.Fatalf("Mean = %v, want 0.90 (only wu-survives' evidence_quality should remain)", after.Mean)
 	}
 
-	// PHASE 2: flip scope_enabled to 1 ("scoped" mode). A completed
+	// PHASE 2: turn the gate on ("scoped" mode). A completed
 	// membership run whose completed_at is >= the investments' computed_at
 	// (2026-01-06, the fixed value seedQualityRows uses), with BOTH work
 	// units -- including wu-superseded -- present in work_unit_membership
@@ -162,27 +162,27 @@ func TestSupersededWorkUnitsAreExcludedFromInvestmentQuality(t *testing.T) {
 		}
 	}
 
-	// Control on the control: confirm scope_enabled genuinely flipped,
+	// Control on the control: confirm the gate genuinely turned on,
 	// using the same telemetry helper the standing scope-gate contract
 	// relies on -- a mistake in the membership seed (wrong run_id, an
 	// earlier completed_at) would silently leave this phase testing
-	// scope_enabled=0 again under a different name.
+	// the unscoped gate again under a different name.
 	scopeState, err := FetchInvestmentMembershipScopeState(ctx, client, orgID, 5)
 	if err != nil {
 		t.Fatalf("FetchInvestmentMembershipScopeState: %v", err)
 	}
 	if scopeState.ScopeMode != "scoped" {
-		t.Fatalf("scope_mode = %q, want %q -- this phase proves nothing unless scope_enabled is actually 1", scopeState.ScopeMode, "scoped")
+		t.Fatalf("scope_mode = %q, want %q -- this phase proves nothing unless the gate is actually scoped", scopeState.ScopeMode, "scoped")
 	}
 
 	scoped, err := resolveEvidenceQualityStats(ctx, client, orgID, batch, true, nil)
 	if err != nil {
-		t.Fatalf("resolveEvidenceQualityStats (scope_enabled=1): %v", err)
+		t.Fatalf("resolveEvidenceQualityStats (scoped): %v", err)
 	}
 	if scoped == nil || scoped.Total != 1 {
-		t.Fatalf("scope_enabled=1: Total = %+v, want 1 (wu-superseded stays excluded even though the membership filter alone would admit it)", scoped)
+		t.Fatalf("scoped: Total = %+v, want 1 (wu-superseded stays excluded even though the membership filter alone would admit it)", scoped)
 	}
 	if scoped.Mean == nil || *scoped.Mean != 0.90 {
-		t.Fatalf("scope_enabled=1: Mean = %v, want 0.90", scoped.Mean)
+		t.Fatalf("scoped: Mean = %v, want 0.90", scoped.Mean)
 	}
 }

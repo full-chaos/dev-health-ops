@@ -37,6 +37,7 @@ import (
 	gqlhandler "github.com/99designs/gqlgen/graphql/handler"
 	"go.opentelemetry.io/otel"
 
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/analytics"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/platform/tracing"
@@ -766,7 +767,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              addr(),
-		Handler:           mux,
+		Handler:           analytics.InvestmentMembershipScopeRequestMiddleware(mux),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

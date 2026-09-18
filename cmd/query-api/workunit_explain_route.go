@@ -37,6 +37,7 @@ import (
 
 	chclickhouse "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/analytics"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/authctx"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/investmentexplain"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/principal"
@@ -106,7 +107,7 @@ func buildWorkUnitExplainRoute() (handler http.HandlerFunc, cleanup func(), ok b
 		return nil, nil, false, fmt.Errorf("work-unit explain: build write connection: %w", err)
 	}
 
-	reader, err := investmentexplain.NewReader(readClient)
+	reader, err := investmentexplain.NewReader(analytics.PinInvestmentMembershipScope(readClient))
 	if err != nil {
 		_ = readClient.Close()
 		_ = writeConn.Close()

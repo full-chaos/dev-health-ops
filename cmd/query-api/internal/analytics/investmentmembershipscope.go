@@ -87,45 +87,54 @@ func latestInvestmentClockSource() string {
     )`
 }
 
+// investmentScopeRunIDSQL is the scalar the scope filter reads its run from:
+// the run_id of the organisation's latest complete membership marker, or ”
+// when the organisation has none (argMax over an empty set yields the
+// String default). It is also the exact text PinInvestmentMembershipScope
+// (investmentmembershipscopepin.go) replaces with a request-resolved query
+// parameter, so a filter built here and a pinned filter differ only in
+// where the run id comes from.
+func investmentScopeRunIDSQL() string {
+	return `(SELECT argMax(run_id, completed_at) FROM work_unit_membership_runs WHERE org_id = {org_id:String})`
+}
+
 // investmentMembershipScopeStateSource ports
 // investment_membership_scope.py:39-68's `investment_membership_scope_state`
-// CTE, inlined as a derived table exposing (scope_enabled, scope_mode,
-// lag_seconds) -- the same three columns
-// fetch_investment_membership_scope_state selects, so this one function
-// serves both the WHERE-clause gate (investmentMembershipScopeEnabledExpr
-// below, which reads only scope_enabled) and the telemetry query
-// (FetchInvestmentMembershipScopeState, which reads scope_mode +
-// lag_seconds) -- exactly mirroring how Python's single CTE feeds both
-// INVESTMENT_MEMBERSHIP_SCOPE_FILTER and
-// fetch_investment_membership_scope_state's own standalone SELECT.
+// CTE, inlined as a derived table exposing (scope_mode, lag_seconds,
+// latest_run_id).
+//
+// scope_mode:
+//   - unscoped_no_marker: the organisation has no complete membership run;
+//     the scope filter reads every work unit.
+//   - scoped_projection_lag: the newest investment row is newer than the
+//     latest complete marker. The materializer writes investments seconds
+//     before the membership projection publishes its marker on every cycle,
+//     so this is the normal state for that gap. Reads stay scoped to the
+//     latest complete run; units newer than it are absent until the next
+//     marker lands. lag_seconds carries the gap.
+//   - scoped: the marker is at least as new as every investment row.
+//
+// Lag never turns the scope off: an unscoped read counts every earlier
+// work-unit generation still stored beside the current one.
 func investmentMembershipScopeStateSource() string {
 	return fmt.Sprintf(`(
         SELECT
-            if(
-                marker_count > 0
-                AND latest_run_id != ''
-                AND (
-                    latest_investment_computed_at IS NULL
-                    OR latest_investment_computed_at <= latest_run_completed_at
-                ),
-                1,
-                0
-            ) AS scope_enabled,
             multiIf(
                 marker_count = 0 OR latest_run_id = '', 'unscoped_no_marker',
                 latest_investment_computed_at IS NOT NULL
                 AND latest_investment_computed_at > latest_run_completed_at,
-                'unscoped_fallback',
+                'scoped_projection_lag',
                 'scoped'
             ) AS scope_mode,
             toInt64(greatest(
                 0,
                 if(
-                    latest_investment_computed_at IS NULL,
+                    latest_investment_computed_at IS NULL OR marker_count = 0,
                     0,
                     dateDiff('second', latest_run_completed_at, latest_investment_computed_at)
                 )
-            )) AS lag_seconds
+            )) AS lag_seconds,
+            latest_run_id
         FROM %s AS lcmr
         CROSS JOIN %s AS lic
     )`, latestCompleteMembershipRunSource(), latestInvestmentClockSource())
@@ -166,35 +175,39 @@ func runScopePredicateSQL() string {
 
 // membershipScopedWorkUnitIDsSource ports
 // investment_membership_scope.py:71-81's
-// `membership_scoped_work_unit_ids` CTE, inlined -- its own reference to
-// `latest_complete_membership_run AS latest_run` becomes a fresh call to
-// latestCompleteMembershipRunSource() rather than a name lookup.
+// `membership_scoped_work_unit_ids` CTE, inlined -- the run it scopes to is
+// investmentScopeRunIDSQL(), the same scalar the filter's no-marker test
+// reads, so both halves of the filter always name one run.
 func membershipScopedWorkUnitIDsSource() string {
 	return fmt.Sprintf(`(
         SELECT DISTINCT m.work_unit_id AS work_unit_id
         FROM work_unit_membership AS m
-        INNER JOIN %s AS latest_run ON 1 = 1
+        INNER JOIN (SELECT %s AS latest_run_id) AS latest_run ON 1 = 1
         %s
         WHERE m.org_id = {org_id:String}
           AND latest_run.latest_run_id != ''
           AND (%s)
-    )`, latestCompleteMembershipRunSource(), legacyNodeMaxJoinSQL(), runScopePredicateSQL())
+    )`, investmentScopeRunIDSQL(), legacyNodeMaxJoinSQL(), runScopePredicateSQL())
 }
 
-// investmentMembershipScopeFilter ports
-// investment_membership_scope.py:88-95's INVESTMENT_MEMBERSHIP_SCOPE_FILTER
-// -- the WHERE-clause fragment LATEST_WORK_UNIT_INVESTMENTS_CTE appends
-// after its own `WHERE org_id = %(org_id)s`. Returned WITH its leading
-// "AND (" so callers splice it directly after their own WHERE predicate,
-// matching Python's exact indentation-independent semantics.
+// investmentMembershipScopeFilter is the WHERE-clause fragment
+// LatestWorkUnitInvestmentsSource appends after its own
+// `WHERE org_id = {org_id:String}`: work units of the latest complete
+// membership run, or every work unit when the organisation has no complete
+// run. Returned WITH its leading "AND (" so callers splice it directly after
+// their own WHERE predicate.
+//
+// The investment clock plays no part here (see
+// investmentMembershipScopeStateSource): a projection that trails the newest
+// investment rows keeps the read on its latest complete run.
 func investmentMembershipScopeFilter() string {
 	return fmt.Sprintf(`
               AND (
-                  (SELECT scope_enabled FROM %s) = 0
+                  %s = ''
                   OR work_unit_id IN (
                       SELECT work_unit_id FROM %s
                   )
-              )`, investmentMembershipScopeStateSource(), membershipScopedWorkUnitIDsSource())
+              )`, investmentScopeRunIDSQL(), membershipScopedWorkUnitIDsSource())
 }
 
 // membershipScopeStateQuery is the standalone query
@@ -202,10 +215,11 @@ func investmentMembershipScopeFilter() string {
 // investment_membership_scope.py:103-107's
 // `WITH {STATE_CTES} SELECT scope_mode, lag_seconds FROM
 // investment_membership_scope_state`, inlined to a bare SELECT FROM the
-// derived table directly (no WITH, no intermediate name).
+// derived table directly (no WITH, no intermediate name), plus the run id
+// the scope resolves to.
 func membershipScopeStateQuery(timeoutSeconds int) string {
 	return fmt.Sprintf(`
-SELECT scope_mode, lag_seconds
+SELECT scope_mode, lag_seconds, latest_run_id
 FROM %s
 %s
 `, investmentMembershipScopeStateSource(), settingsMaxExecutionTime(timeoutSeconds))

@@ -36,6 +36,7 @@ import (
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/analytics"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/authctx"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/investment"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/principal"
@@ -129,7 +130,7 @@ func buildInvestmentRoute() (handler http.HandlerFunc, cleanup func(), ok bool, 
 		return nil, nil, false, err
 	}
 
-	reader, err := investment.NewReader(readClient)
+	reader, err := investment.NewReader(analytics.PinInvestmentMembershipScope(readClient))
 	if err != nil {
 		_ = readClient.Close()
 		return nil, nil, false, err
@@ -197,7 +198,7 @@ func buildInvestmentSunburstRoute() (handler http.HandlerFunc, cleanup func(), o
 		return nil, nil, false, err
 	}
 
-	reader, err := investment.NewReader(readClient)
+	reader, err := investment.NewReader(analytics.PinInvestmentMembershipScope(readClient))
 	if err != nil {
 		_ = readClient.Close()
 		return nil, nil, false, err

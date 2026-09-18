@@ -89,10 +89,10 @@ func TestCompileTimeseries_Investment_CompilesInlinedSource(t *testing.T) {
 	// Membership-scope gate must be present (investmentmembershipscope.go).
 	// membershipScopedWorkUnitIDsSource has no literal CTE name in the
 	// inlined SQL text (it is a bare subquery), so assert on structural
-	// markers instead: the scope_enabled scalar subquery and the
+	// markers instead: the membership-run scalar subquery and the
 	// legacy-run predicate.
-	if !strings.Contains(q.sql, "scope_enabled") {
-		t.Errorf("expected investment membership scope gate (scope_enabled), got: %s", q.sql)
+	if !strings.Contains(q.sql, investmentScopeRunIDSQL()) {
+		t.Errorf("expected investment membership scope gate (membership-run scalar), got: %s", q.sql)
 	}
 	if !strings.Contains(q.sql, "__legacy__") {
 		t.Errorf("expected legacy run-id predicate from the membership scope gate, got: %s", q.sql)

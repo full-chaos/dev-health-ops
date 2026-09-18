@@ -47,6 +47,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/analytics"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/authctx"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/investmentexplain"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/principal"
@@ -160,7 +161,7 @@ func buildInvestmentExplainRoute() (handler http.HandlerFunc, cleanup func(), ok
 		return nil, nil, false, fmt.Errorf("investment/explain: build write connection: %w", err)
 	}
 
-	reader, err := investmentexplain.NewReader(readClient)
+	reader, err := investmentexplain.NewReader(analytics.PinInvestmentMembershipScope(readClient))
 	if err != nil {
 		_ = readClient.Close()
 		_ = writeConn.Close()

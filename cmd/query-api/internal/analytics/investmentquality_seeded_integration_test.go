@@ -34,9 +34,9 @@
 // work_unit_membership_runs, work_unit_membership and
 // work_unit_supersessions are created but never seeded.
 // latestCompleteMembershipRunSource's marker_count is then 0 for every
-// org, so investmentMembershipScopeStateSource's scope_enabled evaluates
-// to 0 (scope_mode="unscoped_no_marker") and
-// investmentMembershipScopeFilter's `(SELECT scope_enabled ...) = 0 OR ...`
+// org, so the membership run id investmentMembershipScopeFilter reads is
+// empty (scope_mode="unscoped_no_marker") and
+// investmentMembershipScopeFilter's empty-run branch
 // passes every row through regardless of membership_scoped_work_unit_ids'
 // (empty) contents; supersededWorkUnitIDsFilter's `NOT IN (SELECT ...
 // FROM work_unit_supersessions ...)` is vacuously true against an empty

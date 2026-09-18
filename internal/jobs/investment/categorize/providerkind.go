@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sort"
 	"strings"
 )
 
@@ -216,6 +217,21 @@ func IsProviderKindImplemented(kind ProviderKind) bool {
 	return ok
 }
 
+// ImplementedProviderKinds returns every ProviderKind NewProviderFromEnv
+// can construct a working client for, in a stable (sorted) order -- a
+// caller that must prove a property holds for every real kind ranges
+// over this rather than naming kinds itself, so a kind added to
+// goImplementedProviderKinds is picked up automatically, not silently
+// skipped.
+func ImplementedProviderKinds() []ProviderKind {
+	kinds := make([]ProviderKind, 0, len(goImplementedProviderKinds))
+	for kind := range goImplementedProviderKinds {
+		kinds = append(kinds, kind)
+	}
+	sort.Slice(kinds, func(i, j int) bool { return kinds[i] < kinds[j] })
+	return kinds
+}
+
 // unimplementedProvider satisfies Provider for a kind Python supports that
 // this port does not yet -- so a caller resolving "any of the six" always
 // gets a Provider value back, with the refusal happening explicitly at the
@@ -235,6 +251,10 @@ func (p unimplementedProvider) Complete(_ context.Context, _ CompletionRequest) 
 }
 
 func (p unimplementedProvider) Close() error { return nil }
+
+// Model is always empty: this stub never resolves or holds a real model --
+// Complete refuses outright before any model would matter.
+func (p unimplementedProvider) Model() string { return "" }
 
 var _ Provider = unimplementedProvider{}
 

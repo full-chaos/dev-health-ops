@@ -231,20 +231,24 @@ func CompleteInvestmentMixExplanation(ctx context.Context, requestedProvider, re
 	}
 	resolvedProvider = string(kind)
 
-	model, found := ResolveModelName(kind, requestedModel)
-	resolvedModel = model
-	if !found {
-		resolvedModel = requestedModel
-		if resolvedModel == "" {
-			resolvedModel = resolvedProvider
-		}
-	}
+	// model is this package's own resolution -- the input threaded into
+	// construction (Python-parity env-var order, pinned by
+	// resolve_model_name_golden_test.go). resolvedModel does NOT come
+	// from here: it is read back from the CONSTRUCTED provider's own
+	// Model() below, the single source of truth for what it will
+	// actually send -- see the Provider interface's own doc comment
+	// (categorize/provider.go) and this file's sibling
+	// CompleteInvestmentMixExplanationForOrg (provider_org.go) for why a
+	// second, independently-computed report can diverge from what
+	// construction resolves.
+	model, _ := ResolveModelName(kind, requestedModel)
 
-	provider, err := categorize.NewProviderFromEnv(kind)
+	provider, err := categorize.NewProviderFromEnvWithModel(kind, model)
 	if err != nil {
-		return categorize.CompletionResult{}, resolvedProvider, resolvedModel, fmt.Errorf("construct llm provider: %w", err)
+		return categorize.CompletionResult{}, resolvedProvider, model, fmt.Errorf("construct llm provider: %w", err)
 	}
 	defer func() { _ = provider.Close() }()
+	resolvedModel = provider.Model()
 
 	result, err = provider.Complete(ctx, categorize.InvestmentMixExplanationRequest(fullPrompt))
 	if err != nil {

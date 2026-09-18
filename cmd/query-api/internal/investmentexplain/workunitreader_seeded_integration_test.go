@@ -37,7 +37,7 @@
 // the three tables LatestWorkUnitInvestmentsSource's generated SQL
 // references but this test deliberately leaves EMPTY (same reasoning as
 // investmentquality_seeded_integration_test.go's own DDL: an empty
-// work_unit_membership_runs makes scope_enabled evaluate to 0, so the
+// work_unit_membership_runs leaves the membership run id empty, so the
 // membership-scope OR short-circuits and every seeded row passes
 // through; an empty work_unit_supersessions makes the NOT IN filter
 // vacuously true). ClickHouse still resolves every referenced table at

@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "rendered_at": "2026-09-16T12:25:30Z",
-  "ops_sha": "db4d78fa34e504ed78746184d2ba5b51a3dd5c54",
-  "render_commit": "05ff997726edc024fe2492111532ef4b5d4ec028",
+  "ops_sha": "3e4c366c88c87c647c03704b2d992e1abec6b3f9",
+  "render_commit": "3e4c366c88c87c647c03704b2d992e1abec6b3f9",
   "schema_digest": "sha256:19485ec136d04de0935717dca8b4f5fd27dd0351fe96b854d40f433229468fd0",
   "fleet_read_at": "2026-09-16T12:25:30.426971807Z",
   "fleet_source": "fleet file fleet-prod.json",

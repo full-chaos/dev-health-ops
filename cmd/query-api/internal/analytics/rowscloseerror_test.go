@@ -144,8 +144,8 @@ func TestCloseOnlyFailure_IsReportedAcrossDecorators(t *testing.T) {
 
 	t.Run("FetchInvestmentMembershipScopeState", func(t *testing.T) {
 		client := &routingFakeClient{}
-		client.on("SELECT scope_mode, lag_seconds", &fakeRowScanner{
-			rows:     [][]any{{"unscoped_fallback", int64(4321)}},
+		client.on("SELECT scope_mode, lag_seconds, latest_run_id", &fakeRowScanner{
+			rows:     [][]any{{"scoped_projection_lag", int64(4321), "run-1"}},
 			closeErr: errInjectedCloseFailure,
 		})
 
@@ -166,8 +166,8 @@ func TestCloseOnlyFailure_IsReportedAcrossDecorators(t *testing.T) {
 		records := captureSlog(t)
 
 		client := &routingFakeClient{}
-		client.on("SELECT scope_mode, lag_seconds", &fakeRowScanner{
-			rows:     [][]any{{"unscoped_fallback", int64(4321)}},
+		client.on("SELECT scope_mode, lag_seconds, latest_run_id", &fakeRowScanner{
+			rows:     [][]any{{"scoped_projection_lag", int64(4321), "run-1"}},
 			closeErr: errInjectedCloseFailure,
 		})
 

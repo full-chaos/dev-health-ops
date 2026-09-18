@@ -36,6 +36,7 @@ import (
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/analytics"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/authctx"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/investmentexplain"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/principal"
@@ -132,7 +133,7 @@ func buildWorkUnitsRoute() (handler http.HandlerFunc, cleanup func(), ok bool, e
 		return nil, nil, false, err
 	}
 
-	reader, err := investmentexplain.NewReader(readClient)
+	reader, err := investmentexplain.NewReader(analytics.PinInvestmentMembershipScope(readClient))
 	if err != nil {
 		_ = readClient.Close()
 		return nil, nil, false, err

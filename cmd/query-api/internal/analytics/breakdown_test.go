@@ -51,8 +51,8 @@ func TestCompileBreakdown_Investment_CompilesInlinedSource(t *testing.T) {
 		t.Errorf("effort_value is non-nullable Float64 -- tuple-wrapping it misrepresents the CHAOS-4547 audit, got: %s", q.sql)
 	}
 	// Membership-scope gate must be present (investmentmembershipscope.go).
-	if !strings.Contains(q.sql, "scope_enabled") {
-		t.Errorf("expected investment membership scope gate (scope_enabled), got: %s", q.sql)
+	if !strings.Contains(q.sql, investmentScopeRunIDSQL()) {
+		t.Errorf("expected investment membership scope gate (membership-run scalar), got: %s", q.sql)
 	}
 }
 

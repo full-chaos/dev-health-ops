@@ -217,7 +217,7 @@ func BuildUnitTeamSubquery(opts UnitTeamSubqueryOptions) string {
 // CHAOS-4441 plan.md section 5a: also excludes any work_unit_id present in
 // work_unit_supersessions (supersededWorkUnitIDsFilter(),
 // investmentsupersessions.go), UNCONDITIONALLY -- independent of
-// investmentMembershipScopeFilter()'s own scope_enabled gate, per that
+// investmentMembershipScopeFilter()'s own membership gate, per that
 // section's binding condition. See investmentsupersessions.go for why
 // folding the two together would defeat the sidecar's purpose.
 // Exported (CHAOS-4977) so cmd/query-api/internal/investmentexplain can

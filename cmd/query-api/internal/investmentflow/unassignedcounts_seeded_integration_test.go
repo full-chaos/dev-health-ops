@@ -22,7 +22,7 @@
 // / analytics.BuildUnitTeamSubquery: work_unit_supersessions and
 // work_unit_membership_runs/work_unit_membership stay EMPTY (same trick
 // investmentexplain's own DDL doc comment uses -- an empty
-// work_unit_membership_runs makes scope_enabled evaluate to 0, so the
+// work_unit_membership_runs leaves the membership run id empty, so the
 // membership-scope OR short-circuits and the seeded row passes through;
 // an empty work_unit_supersessions makes the NOT IN filter vacuously
 // true); work_unit_repo_effort, repos and work_item_team_attributions

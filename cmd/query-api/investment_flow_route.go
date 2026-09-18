@@ -39,6 +39,7 @@ import (
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/analytics"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/authctx"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/investmentflow"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/principal"
@@ -110,8 +111,8 @@ func buildInvestmentFlowRoute() (flowHandler, repoTeamHandler http.HandlerFunc, 
 	}
 
 	routeMux := routeswitch.NewMux(investmentFlowSwitchFromEnv())
-	routeMux.Register(investmentFlowOperation, newInvestmentFlowHandler(readClient))
-	routeMux.Register(investmentFlowRepoTeamOperation, newInvestmentFlowRepoTeamHandler(readClient))
+	routeMux.Register(investmentFlowOperation, newInvestmentFlowHandler(analytics.PinInvestmentMembershipScope(readClient)))
+	routeMux.Register(investmentFlowRepoTeamOperation, newInvestmentFlowRepoTeamHandler(analytics.PinInvestmentMembershipScope(readClient)))
 
 	flowEntry := func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {

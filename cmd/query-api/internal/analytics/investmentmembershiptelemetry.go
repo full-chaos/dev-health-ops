@@ -10,20 +10,20 @@ package analytics
 // WHAT PYTHON DOES, exactly: every investment query goes through
 // _query_investment_dicts (investment.py:175-181), which -- BEFORE
 // running the caller's real query -- fires a SEPARATE query
-// (fetch_investment_membership_scope_state) and, only if that state is
-// "unscoped_fallback" (the membership materializer has fallen stale
-// relative to a newer investment computation, so the scope filter is
-// disabled and every work unit becomes visible rather than an
-// under-scoped subset), records a Prometheus counter increment PLUS a
-// gauge set for lag_seconds, and logs a warning. Any other scope_mode
-// ("scoped" or "unscoped_no_marker") records nothing. Errors fetching
-// the state are reported through a warn log line (org id + error) and
-// never propagated -- the metric must never be able to break the real
-// query it decorates.
+// (fetch_investment_membership_scope_state) and, only if the membership
+// projection trails a newer investment computation, records a Prometheus
+// counter increment PLUS a gauge set for lag_seconds, and logs a warning.
+// Errors fetching the state are reported through a warn log line (org id +
+// error) and never propagated -- the metric must never be able to break the
+// real query it decorates.
 //
-// GO EQUIVALENT: RecordStaleInvestmentMembershipScope below reproduces
-// that exact decision (fetch, check scope_mode=="unscoped_fallback",
-// record-or-not, swallow fetch errors) using OTel instead of
+// GO BEHAVIOUR: the lagging state is "scoped_projection_lag" here, and the
+// read stays scoped to the latest complete membership run through it
+// (investmentMembershipScopeStateSource). The telemetry is recorded by the
+// request's one scope resolution (investmentmembershipscopepin.go) -- every
+// scope-filtered read resolves through it, and so does
+// RecordStaleInvestmentMembershipScope below -- so the state reported is the
+// state every query of that request used, recorded once, using OTel instead of
 // Prometheus -- this package's established telemetry substrate
 // (telemetry.go's degradedCounter). A counter mirrors
 // INVESTMENT_MEMBERSHIP_SCOPE_STALE_TOTAL's .inc(); a gauge mirrors
@@ -34,6 +34,7 @@ package analytics
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -45,25 +46,40 @@ import (
 // InvestmentMembershipScopeState is the Go port of
 // investment_membership_scope.py's InvestmentMembershipScopeState
 // NamedTuple (:20-22).
+//
+// RunID is the latest complete membership run the scope resolves to; it is
+// empty exactly when ScopeMode is "unscoped_no_marker".
 type InvestmentMembershipScopeState struct {
 	ScopeMode  string
 	LagSeconds int64
+	RunID      string
 }
 
+// Scope modes membershipScopeStateQuery reports; see
+// investmentMembershipScopeStateSource for their meaning.
+const (
+	scopeModeScoped         = "scoped"
+	scopeModeProjectionLag  = "scoped_projection_lag"
+	scopeModeUnscopedNoRuns = "unscoped_no_marker"
+)
+
 var validScopeModes = map[string]bool{
-	"scoped":             true,
-	"unscoped_no_marker": true,
-	"unscoped_fallback":  true,
+	scopeModeScoped:         true,
+	scopeModeProjectionLag:  true,
+	scopeModeUnscopedNoRuns: true,
 }
 
 // FetchInvestmentMembershipScopeState ports
 // fetch_investment_membership_scope_state (investment_membership_scope.py:98-117)
 // -- runs membershipScopeStateQuery() (this file's sibling,
-// investmentmembershipscope.go) and normalizes an empty/unrecognized
-// scope_mode to "unscoped_no_marker", matching Python's exact fallback
-// (`if mode not in {...}: mode = "unscoped_no_marker"`, :112-114 -- the
-// SAME normalization extract_scope_state_from_rows applies at :144-155
-// for a caller that already has rows in hand).
+// investmentmembershipscope.go). Only a state the query positively reports
+// is accepted: "unscoped_no_marker" (carrying no run id), or a scoped mode
+// naming its run. Anything else -- no row, an empty or unrecognized
+// scope_mode, a scoped mode with an empty run id -- is an error, never an
+// unscoped read: an unscoped read counts every stored work-unit
+// generation, so the gate fails closed on a state it cannot interpret.
+// (The Python plane normalizes those cases to "unscoped_no_marker"; Go
+// does not.)
 func FetchInvestmentMembershipScopeState(ctx context.Context, client QueryClient, orgID string, timeoutSeconds int) (state InvestmentMembershipScopeState, err error) {
 	state = InvestmentMembershipScopeState{ScopeMode: "unscoped_no_marker"}
 
@@ -85,18 +101,19 @@ func FetchInvestmentMembershipScopeState(ctx context.Context, client QueryClient
 	}()
 
 	if !rows.Next() {
-		// Python: `if not rows: return InvestmentMembershipScopeState("unscoped_no_marker", 0)`
-		// (:109-110) -- zero rows is the SAME fallback as an
-		// unrecognized mode, not a distinct error.
+		// The state query aggregates over single-row derived tables, so it
+		// always answers one row; none means the answer cannot be read.
 		if rowsErr := rows.Err(); rowsErr != nil {
 			err = fmt.Errorf("rows: %w", rowsErr)
+			return
 		}
+		err = errors.New("scope state query returned no row")
 		return
 	}
 
-	var mode string
+	var mode, runID string
 	var lagSeconds int64
-	if scanErr := rows.Scan(&mode, &lagSeconds); scanErr != nil {
+	if scanErr := rows.Scan(&mode, &lagSeconds, &runID); scanErr != nil {
 		err = fmt.Errorf("scan: %w", scanErr)
 		return
 	}
@@ -105,9 +122,16 @@ func FetchInvestmentMembershipScopeState(ctx context.Context, client QueryClient
 		return
 	}
 	if !validScopeModes[mode] {
-		mode = "unscoped_no_marker"
+		err = fmt.Errorf("unrecognized scope_mode %q", mode)
+		return
 	}
-	state = InvestmentMembershipScopeState{ScopeMode: mode, LagSeconds: lagSeconds}
+	if mode == scopeModeUnscopedNoRuns {
+		runID = ""
+	} else if runID == "" {
+		err = fmt.Errorf("scope_mode %q reported without a membership run id", mode)
+		return
+	}
+	state = InvestmentMembershipScopeState{ScopeMode: mode, LagSeconds: lagSeconds, RunID: runID}
 	return
 }
 
@@ -115,7 +139,7 @@ func FetchInvestmentMembershipScopeState(ctx context.Context, client QueryClient
 // INVESTMENT_MEMBERSHIP_SCOPE_STALE_TOTAL (metrics/prometheus.py:~1016).
 var membershipScopeStaleCounter = mustAnalyticsCounter(
 	"devhealth_query_api_investment_membership_scope_stale_total",
-	"investment membership scope checks that fell back unscoped because the membership materializer is stale relative to a newer investment computation, by scope_mode",
+	"investment membership scope resolutions whose latest complete membership run trails a newer investment computation (reads stay scoped to that run), by scope_mode",
 )
 
 // membershipScopeLagGauge mirrors INVESTMENT_MEMBERSHIP_SCOPE_LAG_SECONDS
@@ -123,7 +147,7 @@ var membershipScopeStaleCounter = mustAnalyticsCounter(
 // Python's .set() semantics rather than an accumulating .observe()/.inc().
 var membershipScopeLagGauge = mustAnalyticsInt64Gauge(
 	"devhealth_query_api_investment_membership_scope_lag_seconds",
-	"seconds by which the latest investment computation trails the latest complete membership run, at the moment scope fell back unscoped",
+	"seconds by which the latest complete membership run trails the latest investment computation, at the last lagging scope resolution",
 )
 
 func mustAnalyticsInt64Gauge(name, description string) metric.Int64Gauge {
@@ -147,21 +171,22 @@ func mustAnalyticsInt64Gauge(name, description string) metric.Int64Gauge {
 // spy here.
 var recordStaleInvestmentMembershipScope = defaultRecordStaleInvestmentMembershipScope
 
-func defaultRecordStaleInvestmentMembershipScope(ctx context.Context, state InvestmentMembershipScopeState) {
+func defaultRecordStaleInvestmentMembershipScope(ctx context.Context, orgID string, state InvestmentMembershipScopeState) {
 	attrs := metric.WithAttributes(attribute.String("scope_mode", state.ScopeMode))
 	membershipScopeStaleCounter.Add(ctx, 1, attrs)
 	membershipScopeLagGauge.Record(ctx, state.LagSeconds, attrs)
-	slog.WarnContext(ctx, "investment membership scope stale; falling back unscoped",
-		"lag_seconds", state.LagSeconds, "scope_mode", state.ScopeMode)
+	slog.WarnContext(ctx, "investment membership projection trails the latest investment computation; reads stay scoped to the latest complete membership run",
+		"org_id", orgID, "lag_seconds", state.LagSeconds, "scope_mode", state.ScopeMode, "membership_run_id", state.RunID)
 }
 
 // RecordStaleInvestmentMembershipScope ports
 // record_stale_investment_membership_scope (investment_membership_scope.py:120-141)
-// in decision shape: fetch the state; a fetch error is reported via a
-// warn log (org id + error) and never propagated -- this metric must
-// never be able to break the real query it decorates; a non-
-// "unscoped_fallback" mode records nothing; only "unscoped_fallback"
-// fires the counter+gauge+log.
+// in decision shape: resolve the state (once per request, shared with the
+// request's queries -- resolveInvestmentMembershipScope, which records the
+// counter+gauge+log for "scoped_projection_lag" as part of the resolution);
+// a resolution error is reported via a warn log (org id + error) and never
+// propagated -- this metric must never be able to break the real query it
+// decorates.
 //
 // CALLED FROM: every investment-path Compile*/Execute* entry point that
 // resolves useInvestment=true, mirroring _query_investment_dicts
@@ -175,18 +200,12 @@ func RecordStaleInvestmentMembershipScope(ctx context.Context, client QueryClien
 	if orgID == "" {
 		return
 	}
-	state, err := FetchInvestmentMembershipScopeState(ctx, client, orgID, timeoutSeconds)
-	if err != nil {
+	if _, err := resolveInvestmentMembershipScope(ctx, client, orgID, timeoutSeconds); err != nil {
 		// A swallowed fetch error must still be operator-visible: at
 		// this platform's default log level a debug line is invisible,
 		// which would let a persistently broken fetch stop observing
 		// this org's membership scope forever with zero signal.
 		slog.WarnContext(ctx, "investment membership scope metric skipped",
 			"org_id", orgID, "error", err)
-		return
 	}
-	if state.ScopeMode != "unscoped_fallback" {
-		return
-	}
-	recordStaleInvestmentMembershipScope(ctx, state)
 }

@@ -237,7 +237,7 @@ A row that is live, reachable to real clients (`canary`/`primary`) and carries n
 is required before stage 4/5, and "a bare 200 does not qualify".
 
 <!-- BEGIN GENERATED GO API OPERATIONS -->
-_Rendered 2026-09-16T12:25:30Z against main merge-base `db4d78fa34e504ed78746184d2ba5b51a3dd5c54`; SDL digest pin `sha256:19485ec136d04de0935717dca8b4f5fd27dd0351fe96b854d40f433229468fd0`; fleet read 2026-09-16T12:25:30Z via fleet file fleet-prod.json._
+_Rendered 2026-09-16T12:25:30Z against main merge-base `3e4c366c88c87c647c03704b2d992e1abec6b3f9`; SDL digest pin `sha256:19485ec136d04de0935717dca8b4f5fd27dd0351fe96b854d40f433229468fd0`; fleet read 2026-09-16T12:25:30Z via fleet file fleet-prod.json._
 
 _Rows in `go_api_proof_run` at read time: **515**. Operations reachable to real clients with no deployed-executed proof: **0**. Rows whose mode says Go but whose schema digest no longer matches the pin, so every request silently falls back to Python: **0**._
 
@@ -297,12 +297,12 @@ _32 `/api/v1/*` routes in `src/dev_health_ops/api/main.py`: **32** ported, **0**
 | GET | `/api/v1/heatmap` | ported | `cmd/query-api/heatmap_route.go:75` |
 | GET | `/api/v1/home` | ported | `cmd/query-api/home_route.go:59` |
 | POST | `/api/v1/home` | ported | `cmd/query-api/home_route.go:59` |
-| GET | `/api/v1/investment` | ported | `cmd/query-api/investment_route.go:106` |
-| POST | `/api/v1/investment` | ported | `cmd/query-api/investment_route.go:106` |
-| POST | `/api/v1/investment/explain` | ported | `cmd/query-api/investment_explain_route.go:123` |
-| POST | `/api/v1/investment/flow` | ported | `cmd/query-api/investment_flow_route.go:86` |
-| POST | `/api/v1/investment/flow/repo-team` | ported | `cmd/query-api/investment_flow_route.go:86` |
-| GET | `/api/v1/investment/sunburst` | ported | `cmd/query-api/investment_route.go:174` |
+| GET | `/api/v1/investment` | ported | `cmd/query-api/investment_route.go:107` |
+| POST | `/api/v1/investment` | ported | `cmd/query-api/investment_route.go:107` |
+| POST | `/api/v1/investment/explain` | ported | `cmd/query-api/investment_explain_route.go:124` |
+| POST | `/api/v1/investment/flow` | ported | `cmd/query-api/investment_flow_route.go:87` |
+| POST | `/api/v1/investment/flow/repo-team` | ported | `cmd/query-api/investment_flow_route.go:87` |
+| GET | `/api/v1/investment/sunburst` | ported | `cmd/query-api/investment_route.go:175` |
 | GET | `/api/v1/meta` | ported | `cmd/query-api/meta_route.go:79` |
 | GET | `/api/v1/opportunities` | ported | `cmd/query-api/opportunities_route.go:67` |
 | POST | `/api/v1/opportunities` | ported | `cmd/query-api/opportunities_route.go:67` |
@@ -312,11 +312,11 @@ _32 `/api/v1/*` routes in `src/dev_health_ops/api/main.py`: **32** ported, **0**
 | GET | `/api/v1/people/{person_id}/metric` | ported | `cmd/query-api/people_metric_route.go:69` |
 | GET | `/api/v1/people/{person_id}/summary` | ported | `cmd/query-api/people_summary_route.go:88` |
 | GET | `/api/v1/quadrant` | ported | `cmd/query-api/quadrant_route.go:79` |
-| GET | `/api/v1/sankey` | ported | `cmd/query-api/sankey_route.go:80` |
-| POST | `/api/v1/sankey` | ported | `cmd/query-api/sankey_route.go:80` |
-| GET | `/api/v1/work-units` | ported | `cmd/query-api/workunits_route.go:111` |
-| POST | `/api/v1/work-units` | ported | `cmd/query-api/workunits_route.go:111` |
-| POST | `/api/v1/work-units/{work_unit_id}/explain` | ported | `cmd/query-api/workunit_explain_route.go:80` |
+| GET | `/api/v1/sankey` | ported | `cmd/query-api/sankey_route.go:81` |
+| POST | `/api/v1/sankey` | ported | `cmd/query-api/sankey_route.go:81` |
+| GET | `/api/v1/work-units` | ported | `cmd/query-api/workunits_route.go:112` |
+| POST | `/api/v1/work-units` | ported | `cmd/query-api/workunits_route.go:112` |
+| POST | `/api/v1/work-units/{work_unit_id}/explain` | ported | `cmd/query-api/workunit_explain_route.go:81` |
 <!-- END GENERATED REST ENDPOINTS -->
 
 ## SYNC

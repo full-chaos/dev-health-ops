@@ -32,6 +32,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/analytics"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/authctx"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/digest"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/featureflags"
@@ -1148,7 +1149,7 @@ func buildQueryRoute(cfg queryRouteConfig) (queryRouteHandlers, func(context.Con
 		return queryRouteHandlers{}, nil, nil, fmt.Errorf("query-api: JWKS readiness check failed (GO_API_ENVELOPE_JWKS_PATH must point to a readable, non-empty, valid Ed25519 JWKS document): %w", err)
 	}
 
-	handler, proofHandler, registryHandler := newQueryHandler(chClient, pgPool, verifier, schemaDigest)
+	handler, proofHandler, registryHandler := newQueryHandler(analytics.PinInvestmentMembershipScope(chClient), pgPool, verifier, schemaDigest)
 	handlers := queryRouteHandlers{
 		Query:     handler,
 		Proof:     proofHandler,

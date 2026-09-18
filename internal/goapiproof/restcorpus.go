@@ -5251,39 +5251,59 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 			},
 			{
 				// Same live person_id binding as drilldown/prs' own
-				// "drilldown_prs_default" entry above. The baseline
-				// plane answers HTTP 503 for this request in
-				// production; the candidate answers HTTP 200 with
-				// real data (see StatusDivergenceReason below). The
-				// bound person is GET /api/v1/people's own FIRST
-				// people-search result and may have no issues at all --
-				// this route's own producers below then yield nothing
-				// and the case refuses by name, until a producer exists
-				// that can select a person with issue activity
-				// specifically.
+				// "drilldown_prs_default" entry above, with one
+				// difference: this binding is bounded-candidate (Candidates
+				// > 0, restidbind.go's own RESTIDBinding.Candidates doc
+				// comment). GET /api/v1/people's own person_id producer
+				// yields every non-empty person_id in search-result order,
+				// not only the first; the run loop tries each, in order,
+				// against THIS request until one candidate's own Produces
+				// below (provider, person_issue_completed_at) actually
+				// resolve -- i.e. until it finds a person who has issues --
+				// or 10 candidates are exhausted. The winning candidate is
+				// exposed as issues_person_id (ExposeAs below), consumed by
+				// every sibling entry in this operation instead of the raw
+				// person_id producer, so they all share the SAME selected
+				// person, not independently the first search result. The
+				// baseline plane answers HTTP 503 for this request in
+				// production; the candidate answers HTTP 200 with real data
+				// (see StatusDivergenceReason below). A production run
+				// against a search result set that contains at least one
+				// person with issue activity within the bounded candidate
+				// count now admits this request AND every sibling entry
+				// below (valid_cursor, limit_above_ceiling,
+				// limit_zero_falls_back_to_default) instead of refusing all
+				// four by name; a search result set with no such person
+				// among the bounded candidates still refuses this request,
+				// now by RESTRefusalCandidateIterationExhausted, and every
+				// sibling still cascades by rest_request_id_binding_unresolved.
 				Name:                "drilldown_issues_default",
 				WantCandidateStatus: 200, WantBaselineStatus: 503,
 				StatusDivergenceReason: "CHAOS-5868: the baseline plane answers HTTP 503 for this request in production; the candidate plane answers HTTP 200 with real data; bodies are not compared.",
 				BodyMode:               RESTBodyModeStatusOnly,
-				IDBindings:             []RESTIDBinding{{Producer: "person_id", PathParam: "person_id"}},
-				// Produces person_issue_completed_at, the FIRST returned
-				// issue's own completed_at (ExtractRESTID only ever
-				// returns the first non-empty match, restidbind.go's own
-				// doc comment) -- the real `next_cursor` shape a caller
-				// would actually send back (parseISODateTimeQueryParam's
-				// own doc comment: "always the next_cursor this same
-				// route's own previous response emitted"), consumed by
-				// this operation's own valid_cursor entry below. Since
-				// WantCandidateStatus is 200 with WantBaselineStatus 503,
-				// this also doubles as this entry's own structural
-				// evidence: a StatusOnly+Produces request extracts from
-				// the CANDIDATE leg's decoded body (proveOneRESTRequest,
-				// cmd/go-api-rest-prove/main.go). A body that does not
-				// yield person_issue_completed_at refuses THIS request by
-				// name (RESTRefusalCandidateProducerUnresolved); a
-				// downstream consumer refuses separately, by name
-				// (rest_request_id_binding_unresolved) -- flame/
-				// aggregated's own provider producer lives on GET
+				IDBindings: []RESTIDBinding{
+					{Producer: "person_id", PathParam: "person_id", Candidates: 10, ExposeAs: "issues_person_id"},
+				},
+				// Produces person_issue_completed_at, the WINNING
+				// candidate's own FIRST returned issue's completed_at
+				// (ExtractRESTID only ever returns the first non-empty
+				// match, restidbind.go's own doc comment) -- the real
+				// `next_cursor` shape a caller would actually send back
+				// (parseISODateTimeQueryParam's own doc comment: "always
+				// the next_cursor this same route's own previous response
+				// emitted"), consumed by this operation's own valid_cursor
+				// entry below. Since WantCandidateStatus is 200 with
+				// WantBaselineStatus 503, this also doubles as this
+				// entry's own structural evidence: a StatusOnly+Produces
+				// request extracts from the CANDIDATE leg's decoded body
+				// (proveOneRESTRequest, cmd/go-api-rest-prove/main.go). A
+				// candidate whose body does not yield BOTH declared ids
+				// loses (the run loop tries the next candidate); every
+				// candidate failing exhausts the bound and refuses THIS
+				// request by name (RESTRefusalCandidateIterationExhausted).
+				// A downstream sibling bound to issues_person_id refuses
+				// separately, by name (rest_request_id_binding_unresolved)
+				// -- flame/aggregated's own provider producer lives on GET
 				// /api/v1/drilldown/issues' org-wide default_window entry
 				// instead (see that entry's own doc comment), so it does
 				// not depend on this route's own person selection.
@@ -5293,23 +5313,24 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				},
 			},
 			{
-				// cursor bound to drilldown_issues_default's own first
-				// item's completed_at above -- reaches fetchPersonIssuesQuery's
-				// own cursor_filter branch (drilldownissues.go:138-141)
-				// live. A cursor at the FIRST item's own completed_at (the
-				// only item ExtractRESTID can ever supply) still returns
-				// every older issue behind it, so this is not vacuous. Same
-				// baseline-only 503 as drilldown_issues_default above. The
-				// bound person is the same first people-search result
-				// drilldown_issues_default above binds and may have no
-				// issues at all, so its own cursor producer yields nothing
-				// and this case refuses by name, same reason as that entry.
+				// cursor bound to drilldown_issues_default's own WINNING
+				// candidate's first item's completed_at above -- reaches
+				// fetchPersonIssuesQuery's own cursor_filter branch
+				// (drilldownissues.go:138-141) live. A cursor at the FIRST
+				// item's own completed_at (the only item ExtractRESTID can
+				// ever supply) still returns every older issue behind it,
+				// so this is not vacuous. Same baseline-only 503 as
+				// drilldown_issues_default above. person_id is bound to
+				// issues_person_id, not the raw person_id producer, so
+				// this request is scoped to the SAME person
+				// drilldown_issues_default selected -- the one with issue
+				// activity, when one exists among the bounded candidates.
 				Name:                "valid_cursor",
 				WantCandidateStatus: 200, WantBaselineStatus: 503,
 				StatusDivergenceReason: "CHAOS-5868: the baseline plane answers HTTP 503 for this request in production; the candidate plane answers HTTP 200 with real data; bodies are not compared.",
 				BodyMode:               RESTBodyModeStatusOnly,
 				IDBindings: []RESTIDBinding{
-					{Producer: "person_id", PathParam: "person_id"},
+					{Producer: "issues_person_id", PathParam: "person_id"},
 					{Producer: "person_issue_completed_at", QueryParam: "cursor"},
 				},
 				Produces: []RESTIDProducer{{Name: "issues_valid_cursor_status", ListPath: "items", IDField: "status"}},
@@ -5321,34 +5342,31 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				// (drilldownprs_test.go) pins the clamp function itself;
 				// this proves the route actually applies it live, against a
 				// real person_id. Same baseline-only 503 as
-				// drilldown_issues_default above. The bound person is the
-				// same first people-search result drilldown_issues_default
-				// above binds and may have no issues at all, so this case's
-				// own producer yields nothing and it refuses by name, same
-				// reason as that entry.
+				// drilldown_issues_default above. person_id is bound to
+				// issues_person_id (the same selected person as that
+				// entry), not the raw person_id producer.
 				Name:                "limit_above_ceiling",
 				Query:               url.Values{"limit": {"500"}},
 				WantCandidateStatus: 200, WantBaselineStatus: 503,
 				StatusDivergenceReason: "CHAOS-5868: the baseline plane answers HTTP 503 for this request in production; the candidate plane answers HTTP 200 with real data; bodies are not compared.",
 				BodyMode:               RESTBodyModeStatusOnly,
-				IDBindings:             []RESTIDBinding{{Producer: "person_id", PathParam: "person_id"}},
+				IDBindings:             []RESTIDBinding{{Producer: "issues_person_id", PathParam: "person_id"}},
 				Produces:               []RESTIDProducer{{Name: "issues_limit_above_ceiling_work_item_id", ListPath: "items", IDField: "work_item_id"}},
 			},
 			{
 				// limit=0 -- boundedDrilldownLimit's own <=0 branch falls
 				// back to 50, the same "absent and zero share one fallback"
 				// contract that function's own doc comment states. Same
-				// baseline-only 503 as drilldown_issues_default above. The
-				// bound person is the same first people-search result
-				// drilldown_issues_default above binds and may have no
-				// issues at all, so this case's own producer yields nothing
-				// and it refuses by name, same reason as that entry.
+				// baseline-only 503 as drilldown_issues_default above.
+				// person_id is bound to issues_person_id (the same
+				// selected person as that entry), not the raw person_id
+				// producer.
 				Name:                "limit_zero_falls_back_to_default",
 				Query:               url.Values{"limit": {"0"}},
 				WantCandidateStatus: 200, WantBaselineStatus: 503,
 				StatusDivergenceReason: "CHAOS-5868: the baseline plane answers HTTP 503 for this request in production; the candidate plane answers HTTP 200 with real data; bodies are not compared.",
 				BodyMode:               RESTBodyModeStatusOnly,
-				IDBindings:             []RESTIDBinding{{Producer: "person_id", PathParam: "person_id"}},
+				IDBindings:             []RESTIDBinding{{Producer: "issues_person_id", PathParam: "person_id"}},
 				Produces:               []RESTIDProducer{{Name: "issues_limit_zero_provider", ListPath: "items", IDField: "provider"}},
 			},
 		},
@@ -5536,6 +5554,7 @@ func ValidateRESTCorpus() error {
 					return fmt.Errorf("goapiproof: REST corpus entry %q request %q declares a Produces entry with no Name", operation, req.Name)
 				}
 			}
+			iteratingBindings := 0
 			for _, binding := range req.IDBindings {
 				if binding.Producer == "" {
 					return fmt.Errorf("goapiproof: REST corpus entry %q request %q declares an IDBinding with no Producer", operation, req.Name)
@@ -5552,6 +5571,18 @@ func ValidateRESTCorpus() error {
 				if binding.BodyPath != "" && req.Body == nil {
 					return fmt.Errorf("goapiproof: REST corpus entry %q request %q binds id %q to BodyPath %q, but this request carries no Body", operation, req.Name, binding.Producer, binding.BodyPath)
 				}
+				if binding.Candidates < 0 {
+					return fmt.Errorf("goapiproof: REST corpus entry %q request %q binds id %q with a negative Candidates", operation, req.Name, binding.Producer)
+				}
+				if (binding.Candidates > 0) != (binding.ExposeAs != "") {
+					return fmt.Errorf("goapiproof: REST corpus entry %q request %q binds id %q with Candidates=%d ExposeAs=%q -- both or neither must be set", operation, req.Name, binding.Producer, binding.Candidates, binding.ExposeAs)
+				}
+				if binding.Candidates > 0 {
+					iteratingBindings++
+				}
+			}
+			if iteratingBindings > 1 {
+				return fmt.Errorf("goapiproof: REST corpus entry %q request %q declares %d bounded-candidate IDBindings -- at most one is supported per request", operation, req.Name, iteratingBindings)
 			}
 		}
 	}
@@ -5713,6 +5744,21 @@ func validateIDBindingOrder(runOrder []string, specs map[string]RESTEndpointSpec
 					return fmt.Errorf("goapiproof: id %q is Produced by both %s and %s/%s -- give it one producer", prod.Name, existing, op, req.Name)
 				}
 				produced[prod.Name] = op + "/" + req.Name
+			}
+			// A bounded-candidate binding's own ExposeAs makes the
+			// WINNING candidate itself available to a later request's
+			// own IDBindings, exactly like an ordinary Produces entry --
+			// registered here, at THIS request's position, so a consumer
+			// of it is held to the identical "strictly after" ordering
+			// rule the check above already enforces for Producer.
+			for _, binding := range req.IDBindings {
+				if binding.ExposeAs == "" {
+					continue
+				}
+				if existing, dup := produced[binding.ExposeAs]; dup {
+					return fmt.Errorf("goapiproof: id %q is Produced by both %s and %s/%s -- give it one producer", binding.ExposeAs, existing, op, req.Name)
+				}
+				produced[binding.ExposeAs] = op + "/" + req.Name
 			}
 		}
 	}

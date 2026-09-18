@@ -520,6 +520,18 @@ type outcome struct {
 
 	ReceiptID string `json:"receipt_id,omitempty"`
 
+	// Attempts names every LOSING candidate a bounded-candidate binding
+	// (goapiproof.RESTIDBinding.Candidates > 0) tried on THIS request
+	// before either the winning candidate or exhaustion -- see
+	// resolveIteratingRequest's own doc comment. Empty for every request
+	// with no bounded-candidate binding, the overwhelming majority: this
+	// is a deliberate ONE outcome row per corpus request, even when
+	// finding its winner (or exhausting its bound) took several tries --
+	// attempted/admitted bookkeeping and the JSON report's one-row-per-
+	// request shape stay exactly as they were before this mechanism
+	// existed.
+	Attempts []attemptRecord `json:"attempts,omitempty"`
+
 	// BaselineResponseRef/CandidateResponseRef mirror the identically
 	// named RESTReceipt fields (goapiproof.RESTReceipt's own doc
 	// comment) -- the content-addressed -artifact-dir reference to each
@@ -564,6 +576,20 @@ type outcome struct {
 	// value where it matters).
 	producedIDs map[string]string
 
+	// producedCandidateIDs names, for every producer this request's OWN
+	// baseline (or, for a StatusOnly+Produces request, candidate)
+	// response yielded, EVERY non-empty candidate id it found, in array
+	// order -- goapiproof.ExtractRESTIDCandidates' full result, not only
+	// producedIDs' first-element value. Never serialised, same bookkeeping
+	// discipline as producedIDs; the run loop merges this into its own
+	// producedCandidates map so a LATER request's own bounded-candidate
+	// binding (goapiproof.RESTIDBinding.Candidates) has a pool to draw
+	// from. Populated for every producer regardless of whether anything
+	// downstream ever uses more than the first candidate -- computing the
+	// full list costs nothing ExtractRESTID was not already paying to
+	// walk the same body.
+	producedCandidateIDs map[string][]string
+
 	// DeclarationFiring reports, one entry per BaselineDefect this
 	// request declares, that ticket's own firing history read back from
 	// go_api_rest_proof_run -- see goapiproof.FiringHistory's own doc
@@ -573,9 +599,32 @@ type outcome struct {
 	DeclarationFiring []goapiproof.FiringHistory `json:"declaration_firing,omitempty"`
 }
 
+// attemptRecord is one losing candidate a bounded-candidate binding
+// (goapiproof.RESTIDBinding.Candidates > 0) tried before either the
+// winning candidate or exhaustion -- see resolveIteratingRequest's own
+// doc comment. Attached to the FINAL outcome for that request (the
+// winner's, or an exhaustion refusal's), never emitted as its own
+// outcome/receipt.
+type attemptRecord struct {
+	CandidateID string `json:"candidate_id"`
+	Refusal     string `json:"refusal"`
+	Detail      string `json:"detail,omitempty"`
+}
+
+func attemptsSuffix(attempts []attemptRecord) string {
+	if len(attempts) == 0 {
+		return ""
+	}
+	ids := make([]string, len(attempts))
+	for i, a := range attempts {
+		ids[i] = a.CandidateID
+	}
+	return fmt.Sprintf(" attempts=%v", ids)
+}
+
 func (o outcome) line() string {
 	if !o.Admitted {
-		return fmt.Sprintf("%s/%s: REFUSED %s -- %s", o.Operation, o.Request, o.Refusal, o.Detail)
+		return fmt.Sprintf("%s/%s: REFUSED %s -- %s%s", o.Operation, o.Request, o.Refusal, o.Detail, attemptsSuffix(o.Attempts))
 	}
 	boundSuffix := ""
 	if len(o.BoundIDs) > 0 {
@@ -585,8 +634,8 @@ func (o outcome) line() string {
 	if len(o.DeclarationFiring) > 0 {
 		firingSuffix = " " + formatDeclarationFiring(o.DeclarationFiring)
 	}
-	return fmt.Sprintf("%s/%s: %s outside=%d baseline_defect=%v receipt=%s%s%s",
-		o.Operation, o.Request, o.TerminalState, o.DifferencesOutsideBaselineDefect, o.BaselineDefectsMatched, o.ReceiptID, boundSuffix, firingSuffix)
+	return fmt.Sprintf("%s/%s: %s outside=%d baseline_defect=%v receipt=%s%s%s%s",
+		o.Operation, o.Request, o.TerminalState, o.DifferencesOutsideBaselineDefect, o.BaselineDefectsMatched, o.ReceiptID, boundSuffix, firingSuffix, attemptsSuffix(o.Attempts))
 }
 
 // formatDeclarationFiring renders one request's own declared defects'
@@ -775,6 +824,217 @@ func run(f flags) error {
 // and (for -dry-run) a nil receiptWriter -- so the exact loop/report/
 // exit-code logic this ticket rewrote is reachable from a test without
 // reaching into run()'s own CLI wiring at all.
+// resolvedAttempt is what resolveSingleShotRequest and
+// resolveIteratingRequest both return: the request loop's own
+// post-processing (outcomes append, produced/producedCandidates merge,
+// admitted counting, the edge-credential leg) runs identically over
+// either one, never caring which binding shape produced it.
+type resolvedAttempt struct {
+	out     outcome
+	spec    goapiproof.RESTEndpointSpec
+	request goapiproof.RESTRequest
+	// legsSent is false when this request was refused before either leg
+	// was ever sent -- an unresolved binding (single-shot) or an
+	// exhausted bounded-candidate search -- in which case spec/request
+	// are the UNRESOLVED originals and the edge-credential leg must be
+	// skipped (there is nothing resolved to send it against).
+	legsSent bool
+}
+
+// findIteratingBinding returns request's own bounded-candidate binding
+// (goapiproof.RESTIDBinding.Candidates > 0) and true, or the zero value
+// and false when none is declared. ValidateRESTCorpus enforces at most
+// one such binding per request, so the first match is the only one there
+// can ever be.
+func findIteratingBinding(bindings []goapiproof.RESTIDBinding) (goapiproof.RESTIDBinding, bool) {
+	for _, b := range bindings {
+		if b.Candidates > 0 {
+			return b, true
+		}
+	}
+	return goapiproof.RESTIDBinding{}, false
+}
+
+// resolveSingleShotRequest is run()'s own pre-iteration request
+// resolution, unchanged: it takes every IDBindings.Producer's single
+// first-extracted id from produced and, if every binding resolves, runs
+// proveOneRESTRequest exactly once. This is still the ONLY path a request
+// with no bounded-candidate binding ever takes -- byte-for-byte the same
+// behaviour this file always had.
+func resolveSingleShotRequest(
+	ctx context.Context,
+	client *http.Client,
+	f flags,
+	operation string,
+	spec goapiproof.RESTEndpointSpec,
+	request goapiproof.RESTRequest,
+	produced map[string]string,
+	candidateCredential, baselineCredential *goapiproof.Credential,
+	namedBuild string,
+	auth goapiproof.AuthContext,
+	observedAt time.Time,
+	writer receiptWriter,
+	artifacts *goapiproof.ArtifactStore,
+) (resolvedAttempt, error) {
+	resolvedSpec := spec
+	resolvedRequest := request
+	var boundIDs map[string]string
+	if len(request.IDBindings) > 0 {
+		resolvedPath, resolvedQuery, resolvedBody, unresolved := goapiproof.ResolveRESTIDBindings(spec.Path, request, produced)
+		if len(unresolved) > 0 {
+			// An entry whose id does not resolve is refused by name and
+			// counts as unproven, never a tool failure -- neither leg is
+			// ever called.
+			out := outcome{
+				Operation: operation, Request: request.Name,
+				Admitted: false,
+				Refusal:  goapiproof.RESTRefusalIDBindingUnresolved,
+				Detail:   unresolvedIDBindingDetail(unresolved),
+			}
+			return resolvedAttempt{out: out, spec: resolvedSpec, request: resolvedRequest, legsSent: false}, nil
+		}
+		resolvedSpec.Path = resolvedPath
+		resolvedRequest.Query = resolvedQuery
+		resolvedRequest.Body = resolvedBody
+		boundIDs = make(map[string]string, len(request.IDBindings))
+		for _, binding := range request.IDBindings {
+			// Already confirmed present above (unresolved was empty):
+			// the same value ResolveRESTIDBindings just wrote into
+			// resolvedPath/resolvedQuery.
+			boundIDs[binding.Producer] = produced[binding.Producer]
+		}
+	}
+
+	out, err := proveOneRESTRequest(ctx, client, f, operation, resolvedSpec, resolvedRequest, candidateCredential, baselineCredential, namedBuild, auth, observedAt, writer, artifacts, f.dryRun, boundIDs)
+	if err != nil {
+		return resolvedAttempt{}, err
+	}
+	return resolvedAttempt{out: out, spec: resolvedSpec, request: resolvedRequest, legsSent: true}, nil
+}
+
+// resolveIteratingRequest is the bounded-candidate-iteration sibling of
+// resolveSingleShotRequest: instead of taking iterating's own Producer's
+// single first-extracted id, it tries up to iterating.Candidates of that
+// producer's own candidate pool (producedCandidates), in order, actually
+// sending BOTH legs for each -- exactly proveOneRESTRequest's own cost,
+// paid once per candidate -- until one candidate's own request.Produces
+// all resolve (that candidate wins) or the bound is exhausted.
+//
+// A losing attempt writes no receipt: proveOneRESTRequest's own
+// Produces-unresolved branch returns a refused outcome before ever
+// reaching WriteReceipt (see that function's own doc comment), so only
+// the eventual winner -- or nothing, on exhaustion -- is ever persisted.
+// Every losing attempt is recorded on the WINNING (or exhausted)
+// outcome's own Attempts field, never as a separate outcome/receipt of
+// its own, so attempted/admitted bookkeeping and the JSON report's
+// one-row-per-request shape are unaffected by how many candidates it
+// took.
+//
+// On a win, iterating.ExposeAs (required non-empty by ValidateRESTCorpus
+// whenever Candidates > 0) is added to the winning outcome's own
+// producedIDs, mapped to the WINNING candidate's id -- not anything
+// extracted from a response body -- so the request loop's ordinary
+// produced-merge step (identical for both this and the single-shot path)
+// makes it available to a later request's own IDBindings exactly like an
+// ordinary producer would. On exhaustion, ExposeAs is never set in
+// produced: a sibling bound to it refuses separately, through the
+// EXISTING RESTRefusalIDBindingUnresolved path resolveSingleShotRequest
+// above already implements -- no special-casing needed for that cascade.
+func resolveIteratingRequest(
+	ctx context.Context,
+	client *http.Client,
+	f flags,
+	operation string,
+	spec goapiproof.RESTEndpointSpec,
+	request goapiproof.RESTRequest,
+	iterating goapiproof.RESTIDBinding,
+	produced map[string]string,
+	producedCandidates map[string][]string,
+	candidateCredential, baselineCredential *goapiproof.Credential,
+	namedBuild string,
+	auth goapiproof.AuthContext,
+	observedAt time.Time,
+	writer receiptWriter,
+	artifacts *goapiproof.ArtifactStore,
+) (resolvedAttempt, error) {
+	pool := producedCandidates[iterating.Producer]
+	bound := iterating.Candidates
+	if bound > len(pool) {
+		bound = len(pool)
+	}
+
+	var attempts []attemptRecord
+	for i := 0; i < bound; i++ {
+		candidateID := pool[i]
+		attemptProduced := make(map[string]string, len(produced)+1)
+		for k, v := range produced {
+			attemptProduced[k] = v
+		}
+		attemptProduced[iterating.Producer] = candidateID
+
+		resolvedPath, resolvedQuery, resolvedBody, unresolved := goapiproof.ResolveRESTIDBindings(spec.Path, request, attemptProduced)
+		if len(unresolved) > 0 {
+			// A SIBLING binding on this same request (never the
+			// iterating one -- candidateID always resolves it) has not
+			// itself produced an id. Every candidate would fail
+			// identically, but recording it per-candidate keeps this
+			// function's own "every attempt recorded" contract uniform
+			// rather than special-casing an early exit.
+			attempts = append(attempts, attemptRecord{
+				CandidateID: candidateID,
+				Refusal:     goapiproof.RESTRefusalIDBindingUnresolved,
+				Detail:      unresolvedIDBindingDetail(unresolved),
+			})
+			continue
+		}
+		resolvedSpec := spec
+		resolvedSpec.Path = resolvedPath
+		resolvedRequest := request
+		resolvedRequest.Query = resolvedQuery
+		resolvedRequest.Body = resolvedBody
+		boundIDs := make(map[string]string, len(request.IDBindings))
+		for _, binding := range request.IDBindings {
+			boundIDs[binding.Producer] = attemptProduced[binding.Producer]
+		}
+
+		out, err := proveOneRESTRequest(ctx, client, f, operation, resolvedSpec, resolvedRequest, candidateCredential, baselineCredential, namedBuild, auth, observedAt, writer, artifacts, f.dryRun, boundIDs)
+		if err != nil {
+			return resolvedAttempt{}, err
+		}
+		if !out.Admitted {
+			attempts = append(attempts, attemptRecord{CandidateID: candidateID, Refusal: out.Refusal, Detail: out.Detail})
+			continue
+		}
+
+		// This candidate's own request.Produces all resolved -- the win
+		// condition.
+		if iterating.ExposeAs != "" {
+			if out.producedIDs == nil {
+				out.producedIDs = map[string]string{}
+			}
+			out.producedIDs[iterating.ExposeAs] = candidateID
+		}
+		out.Attempts = attempts
+		return resolvedAttempt{out: out, spec: resolvedSpec, request: resolvedRequest, legsSent: true}, nil
+	}
+
+	// Exhausted: no candidate's own Produces resolved (or the pool was
+	// empty/shorter than the bound to begin with). Refused by name,
+	// naming every candidate tried.
+	tried := make([]string, len(attempts))
+	for i, a := range attempts {
+		tried[i] = a.CandidateID
+	}
+	out := outcome{
+		Operation: operation, Request: request.Name,
+		Admitted: false,
+		Refusal:  goapiproof.RESTRefusalCandidateIterationExhausted,
+		Detail:   fmt.Sprintf("tried %d candidate(s) %v, none produced this request's own declared ids", len(attempts), tried),
+		Attempts: attempts,
+	}
+	return resolvedAttempt{out: out, spec: spec, request: request, legsSent: false}, nil
+}
+
 func runMeasurement(ctx context.Context, client *http.Client, f flags, candidateCredential, baselineCredential *goapiproof.Credential, namedBuild string, pgPool receiptWriter, artifacts *goapiproof.ArtifactStore) error {
 	auth := goapiproof.AuthContext{PrincipalKind: f.principalKind, Audience: f.audience, KeyID: f.keyID}
 	observedAt := time.Now().UTC()
@@ -821,6 +1081,14 @@ func runMeasurement(ctx context.Context, client *http.Client, f flags, candidate
 		produced[name] = value
 	}
 
+	// producedCandidates accumulates, per producer name, EVERY non-empty
+	// candidate id an earlier request's own Produces declaration yielded
+	// (goapiproof.ExtractRESTIDCandidates' full result), not only the
+	// first -- the pool a LATER request's own bounded-candidate binding
+	// (goapiproof.RESTIDBinding.Candidates) draws from. Merged the same
+	// way, and at the same point, as produced above.
+	producedCandidates := map[string][]string{}
+
 	// runErr is the run-level failure -- distinct from a per-case
 	// refusal, which is never fatal -- that stops the loop early. Once
 	// set, the loop breaks and falls straight through to the summary
@@ -845,64 +1113,50 @@ requestLoop:
 		attempted++
 		attemptedKeys[operation+"/"+request.Name] = true
 
-		resolvedSpec := spec
-		resolvedRequest := request
-		var boundIDs map[string]string
-		if len(request.IDBindings) > 0 {
-			resolvedPath, resolvedQuery, resolvedBody, unresolved := goapiproof.ResolveRESTIDBindings(spec.Path, request, produced)
-			if len(unresolved) > 0 {
-				// An entry whose id does not resolve is refused by
-				// name and counts as unproven, never a tool failure
-				// -- neither leg is ever called. Its own edge-
-				// credential-on-candidate sibling is marked attempted
-				// here too, for the identical reason: this is a
-				// deliberate, named skip of BOTH legs for this one
-				// request, never the run stopping before it reached
-				// them -- notRunKeys must not read this the same way
-				// it reads a run that broke off early.
-				out := outcome{
-					Operation: operation, Request: request.Name,
-					Admitted: false,
-					Refusal:  goapiproof.RESTRefusalIDBindingUnresolved,
-					Detail:   unresolvedIDBindingDetail(unresolved),
-				}
-				outcomes = append(outcomes, out)
-				fmt.Println(out.line())
-				if !spec.PublicNoAuth {
-					attemptedKeys[operation+"/"+request.Name+" (edge-credential-on-candidate)"] = true
-				}
-				continue
-			}
-			resolvedSpec.Path = resolvedPath
-			resolvedRequest.Query = resolvedQuery
-			resolvedRequest.Body = resolvedBody
-			boundIDs = make(map[string]string, len(request.IDBindings))
-			for _, binding := range request.IDBindings {
-				// Already confirmed present above (unresolved was
-				// empty): the same value ResolveRESTIDBindings just
-				// wrote into resolvedPath/resolvedQuery.
-				boundIDs[binding.Producer] = produced[binding.Producer]
-			}
+		var attempt resolvedAttempt
+		var err error
+		if iterating, ok := findIteratingBinding(request.IDBindings); ok {
+			attempt, err = resolveIteratingRequest(ctx, client, f, operation, spec, request, iterating, produced, producedCandidates, candidateCredential, baselineCredential, namedBuild, auth, observedAt, pgPool, artifacts)
+		} else {
+			attempt, err = resolveSingleShotRequest(ctx, client, f, operation, spec, request, produced, candidateCredential, baselineCredential, namedBuild, auth, observedAt, pgPool, artifacts)
 		}
-
-		out, err := proveOneRESTRequest(ctx, client, f, operation, resolvedSpec, resolvedRequest, candidateCredential, baselineCredential, namedBuild, auth, observedAt, pgPool, artifacts, f.dryRun, boundIDs)
 		if err != nil {
 			runErr = fmt.Errorf("%s/%s: %w", operation, request.Name, err)
 			break requestLoop
 		}
-		outcomes = append(outcomes, out)
-		fmt.Println(out.line())
-		for name, id := range out.producedIDs {
+		outcomes = append(outcomes, attempt.out)
+		fmt.Println(attempt.out.line())
+		for name, id := range attempt.out.producedIDs {
 			produced[name] = id
 		}
-		if out.Admitted {
+		for name, candidates := range attempt.out.producedCandidateIDs {
+			producedCandidates[name] = candidates
+		}
+		if attempt.out.Admitted {
 			admitted++
-			switch out.TerminalState {
+			switch attempt.out.TerminalState {
 			case goapiproof.TerminalStateMatch:
 				matched++
 			case goapiproof.TerminalStateMismatch:
 				mismatched++
 			}
+		}
+
+		if !attempt.legsSent {
+			// Refused before either leg was ever sent -- an unresolved
+			// binding (single-shot) or an exhausted bounded-candidate
+			// search (see resolveSingleShotRequest/resolveIteratingRequest's
+			// own doc comments). Its own edge-credential-on-candidate
+			// sibling is marked attempted here too, for the identical
+			// reason the pre-iteration code already stated: this is a
+			// deliberate, named skip of BOTH legs for this one request,
+			// never the run stopping before it reached them -- notRunKeys
+			// must not read this the same way it reads a run that broke
+			// off early.
+			if !spec.PublicNoAuth {
+				attemptedKeys[operation+"/"+request.Name+" (edge-credential-on-candidate)"] = true
+			}
+			continue
 		}
 
 		// A real user's browser never carries an effective-principal
@@ -915,10 +1169,10 @@ requestLoop:
 		// exercises. Skipped for a PublicNoAuth route: meta.go's own
 		// "Auth: PUBLIC" contract sends no Authorization header on
 		// either leg, so there is no edge credential to re-send here.
-		if !resolvedSpec.PublicNoAuth {
+		if !attempt.spec.PublicNoAuth {
 			attempted++
 			attemptedKeys[operation+"/"+request.Name+" (edge-credential-on-candidate)"] = true
-			edgeOut, err := proveEdgeCredentialOnCandidate(ctx, client, f, operation, resolvedSpec, resolvedRequest, baselineCredential, namedBuild, artifacts)
+			edgeOut, err := proveEdgeCredentialOnCandidate(ctx, client, f, operation, attempt.spec, attempt.request, baselineCredential, namedBuild, artifacts)
 			if err != nil {
 				runErr = fmt.Errorf("%s/%s (edge credential on candidate): %w", operation, request.Name, err)
 				break requestLoop
@@ -1118,9 +1372,12 @@ func proveOneRESTRequest(
 		// structurally just afterward.
 		if len(request.Produces) > 0 {
 			out.producedIDs = make(map[string]string, len(request.Produces))
+			out.producedCandidateIDs = make(map[string][]string, len(request.Produces))
 			for _, producer := range request.Produces {
-				if id, ok := goapiproof.ExtractRESTID(admission.BaselineSnap.Data, producer); ok {
-					out.producedIDs[producer.Name] = id
+				candidates := goapiproof.ExtractRESTIDCandidates(admission.BaselineSnap.Data, producer)
+				out.producedCandidateIDs[producer.Name] = candidates
+				if len(candidates) > 0 {
+					out.producedIDs[producer.Name] = candidates[0]
 				}
 			}
 		}
@@ -1205,14 +1462,16 @@ func proveOneRESTRequest(
 			return out, nil
 		}
 		out.producedIDs = make(map[string]string, len(request.Produces))
+		out.producedCandidateIDs = make(map[string][]string, len(request.Produces))
 		var unresolved []string
 		for _, producer := range request.Produces {
-			id, ok := goapiproof.ExtractRESTID(candidateSnap.Data, producer)
-			if !ok {
+			candidates := goapiproof.ExtractRESTIDCandidates(candidateSnap.Data, producer)
+			out.producedCandidateIDs[producer.Name] = candidates
+			if len(candidates) == 0 {
 				unresolved = append(unresolved, producer.Name)
 				continue
 			}
-			out.producedIDs[producer.Name] = id
+			out.producedIDs[producer.Name] = candidates[0]
 		}
 		if len(unresolved) > 0 {
 			out.Admitted = false

@@ -3968,6 +3968,32 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				Timeout:    180 * time.Second,
 			},
 			{
+				// repo scope: BOUNDED CANDIDATE ITERATION over filters/
+				// options' own repo_id list (up to 10), exposed as
+				// investment_repo_id once a candidate's own compare is
+				// admitted (not refused as vacuous) -- filters/options'
+				// first repo alone can easily hold zero investment rows
+				// for the requested window, which this route's own
+				// declared BaselineDefects (investmentFlowRepoDedupParity)
+				// would otherwise refuse as vacuous_empty_legs before ever
+				// reaching real data. investment_repo_id is the winning
+				// candidate, consumed by every other repo_scoped entry on
+				// the sibling investment-family routes below (restRunOrder
+				// runs this operation first among them) instead of each
+				// running its own independent search -- the same single-
+				// resolution-then-reuse shape drilldown/prs' own
+				// drilldown_prs_default person_id iteration already
+				// establishes for the sibling person routes.
+				Name: "repo_scoped",
+				Body: map[string]any{
+					"filters": map[string]any{"scope": map[string]any{"level": "repo", "ids": []string{"11111111-1111-1111-1111-111111111111"}}},
+				},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode:   RESTBodyModeJSON,
+				Parity:     investmentFlowDynamicParity,
+				IDBindings: []RESTIDBinding{{Producer: "repo_id", BodyPath: "filters.scope.ids", Candidates: 10, ExposeAs: "investment_repo_id"}},
+			},
+			{
 				Name:                "team_category_repo_org",
 				Body:                map[string]any{"filters": map[string]any{}, "flow_mode": "team_category_repo"},
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
@@ -4049,6 +4075,21 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				Parity:     investmentFlowRepoTeamTeamScopedParity,
 				IDBindings: []RESTIDBinding{{Producer: "team_id", BodyPath: "filters.scope.ids"}},
 				Timeout:    180 * time.Second,
+			},
+			{
+				// repo scope, bound to investment/flow's own winning
+				// investment_repo_id (POST /api/v1/investment/flow runs
+				// strictly before this operation in restRunOrder) -- the
+				// same repo every repo_scoped entry on these two routes
+				// reuses, never a second independent candidate search.
+				Name: "repo_scoped",
+				Body: map[string]any{
+					"filters": map[string]any{"scope": map[string]any{"level": "repo", "ids": []string{"11111111-1111-1111-1111-111111111111"}}},
+				},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode:   RESTBodyModeJSON,
+				Parity:     investmentFlowRepoTeamParity,
+				IDBindings: []RESTIDBinding{{Producer: "investment_repo_id", BodyPath: "filters.scope.ids"}},
 			},
 			{
 				// investment_flow_repo_team has NO ValueError branch at all
@@ -4237,6 +4278,24 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				Timeout:    180 * time.Second,
 			},
 			{
+				// repo scope, bound to investment/flow's own winning
+				// investment_repo_id -- both planes resolve an explicit
+				// repo ref through the identical FINAL-and-org-scoped
+				// resolver (investmentexplain/repofilter.go's own doc
+				// comment claims an exact Python port for this branch), so
+				// this reuses plain investmentParity, never the team-only
+				// investmentTeamScopedParity (its own dict-subset citations
+				// name the team_repo_ownership-vs-user_metrics_daily.
+				// team_id divergence, which an explicit repo ref never
+				// reaches).
+				Name:                "repo_scoped",
+				Query:               url.Values{"scope_type": {"repo"}},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode:   RESTBodyModeJSON,
+				Parity:     investmentParity,
+				IDBindings: []RESTIDBinding{{Producer: "investment_repo_id", QueryParam: "scope_id"}},
+			},
+			{
 				// Same shared int_parsing validator drilldown/prs's own
 				// GET already exercises (both routes share
 				// pydantic_validation_error.go unchanged).
@@ -4269,6 +4328,19 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				Parity:     investmentTeamScopedParity,
 				IDBindings: []RESTIDBinding{{Producer: "team_id", BodyPath: "filters.scope.ids"}},
 				Timeout:    180 * time.Second,
+			},
+			{
+				// repo scope, bound to investment/flow's own winning
+				// investment_repo_id -- see GET /api/v1/investment's own
+				// repo_scoped entry for why plain investmentParity applies.
+				Name: "repo_scoped",
+				Body: map[string]any{
+					"filters": map[string]any{"scope": map[string]any{"level": "repo", "ids": []string{"11111111-1111-1111-1111-111111111111"}}},
+				},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode:   RESTBodyModeJSON,
+				Parity:     investmentParity,
+				IDBindings: []RESTIDBinding{{Producer: "investment_repo_id", BodyPath: "filters.scope.ids"}},
 			},
 			{
 				// Same shared "missing filters key" validator drilldown/
@@ -4307,6 +4379,21 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				Parity:     investmentSunburstTeamScopedParityWithLimit(investmentSunburstDefaultLimit),
 				IDBindings: []RESTIDBinding{{Producer: "team_id", QueryParam: "scope_id"}},
 				Timeout:    180 * time.Second,
+			},
+			{
+				// repo scope, bound to investment/flow's own winning
+				// investment_repo_id -- see GET /api/v1/investment's own
+				// repo_scoped entry for why plain investmentSunburstParity
+				// (no team-only subset defect) applies: GROUP BY theme,
+				// subcategory, scope already names one repository per key,
+				// and the explicit-ref resolver is the same exact port as
+				// investment's own.
+				Name:                "repo_scoped",
+				Query:               url.Values{"scope_type": {"repo"}},
+				WantCandidateStatus: 200, WantBaselineStatus: 200,
+				BodyMode:   RESTBodyModeJSON,
+				Parity:     investmentSunburstParityWithLimit(investmentSunburstDefaultLimit),
+				IDBindings: []RESTIDBinding{{Producer: "investment_repo_id", QueryParam: "scope_id"}},
 			},
 			{
 				Name:                "invalid_limit",

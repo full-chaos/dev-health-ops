@@ -79,6 +79,34 @@ func gitLabRequestPlan(dataset string, spanDays int) []RequestEstimate {
 			Dimension: BudgetRESTCore, Units: max(6, 6*spanDays),
 			Confidence: "low", RouteFamily: "pipelines",
 		}}
+	case "deployments":
+		// Same base "cicd"/"tests" shape Python's gitlab/budget.py still
+		// has for this dataset, unchanged, PLUS one term Python does not:
+		// fetchGitLabDeploymentObjects' per-deployment merge-request
+		// lookup (gitlab_deployments_route.go's Collect loop,
+		// /repository/commits/{sha}/merge_requests, SinglePage: true, so
+		// exactly one REST request per in-window deployment) has no
+		// Python equivalent -- no GitLab deployments-sync module exists
+		// under src/dev_health_ops/providers/gitlab/ beyond budget.py.
+		//
+		// The added term scales by gitLabDeploymentsMaximumPerPage, NOT
+		// defaultGitLabDeploymentsMax: fetchGitLabDeploymentObjects
+		// (the same helper both the deployments list fetch and the
+		// per-deployment merge-request lookup use) is unconditionally
+		// SinglePage, so the deployments list itself can never return
+		// more than perPage records however large MaxDeployments is set
+		// -- an executed probe with 100 deployments measured the real
+		// per-deployment request count exactly, proving
+		// defaultGitLabDeploymentsMax (1000) over-reserved this term by
+		// roughly 10x against what the route can ever actually request in
+		// one Collect call.
+		// request_plan_test.go's live-oracle comparison states this exact
+		// delta (mechanism + direction) rather than leaving this dataset
+		// out of the strict comparison.
+		return []RequestEstimate{
+			{BudgetRESTCore, max(6, 6*spanDays), "low", "pipelines"},
+			{BudgetRESTCore, gitLabDeploymentsMaximumPerPage, "low", "pipelines"},
+		}
 	case "incidents":
 		return []RequestEstimate{
 			{Dimension: BudgetRESTCore, Units: max(1, spanDays), Confidence: "medium", RouteFamily: "issues"},
@@ -91,6 +119,29 @@ func gitLabRequestPlan(dataset string, spanDays int) []RequestEstimate {
 
 func githubRequestPlan(dataset string, spanDays int, flags map[string]bool) []RequestEstimate {
 	switch dataset {
+	case "prs", "pr-reviews", "pr-comments":
+		// github/prs is a dispatched, plannable route; its GraphQL and
+		// abuse-risk terms are Python's own (github/budget.py). The GraphQL
+		// term holds inside githubPRsAssumedReviewsPerPR for every spanDays:
+		// ceil(prs/50) + prs*(ceil(reviews/100)-1) = 1 + prs <= 4*spanDays.
+		// Every input below is one Collect does not bound, so each is a
+		// NAMED assumption with a stated range (github_prs_plan.go), not a
+		// derived cap. Reserving for Collect's hard caps instead
+		// (nativeMaxPages list pages, up to nativeMaxPages*nativePerPage
+		// detail fetches, gitHubPullRequestReviewMaxPages GraphQL requests)
+		// would reserve about 10,101 REST units against the 5 this term
+		// reserves at spanDays=1 (roughly 2,000x) and 100 GraphQL requests
+		// against 4 (25x) for a route whose ordinary run is a handful of
+		// requests -- the over-reservation starves every other unit sharing
+		// the bucket, which is the failure a reservation exists to prevent.
+		// The executed cells past each range
+		// (TestGitHubPRsOutsideStatedDomain*) show the deficit an input
+		// outside its range produces.
+		return []RequestEstimate{
+			{BudgetRESTCore, githubPRsRESTUnits(spanDays), "medium", "prs"},
+			{BudgetGraphQLCost, max(4, 4*spanDays), "medium", "pr_social"},
+			{BudgetSecondaryAbuseRisk, 1, "low", "pr_social"},
+		}
 	case "work-items", "work-item-labels", "work-item-projects", "work-item-history", "work-item-comments":
 		floor := 1
 		if dataset == "work-items" {
@@ -113,14 +164,57 @@ func githubRequestPlan(dataset string, spanDays int, flags map[string]bool) []Re
 			)
 		}
 		return estimates
-	case "cicd", "tests", "deployments":
-		routeFamily := dataset
-		if dataset == "cicd" {
-			routeFamily = "tests"
-		}
+	case "cicd", "tests":
+		routeFamily := "tests"
 		return []RequestEstimate{
 			{BudgetRESTCore, 4 * spanDays, "low", routeFamily},
 			{BudgetContentsBlob, 2 * spanDays, "low", routeFamily},
+		}
+	case "deployments":
+		// Same base shape "cicd"/"tests" always had (and Python's own
+		// github/budget.py still has, unchanged) -- this dataset's TWO
+		// terms Python does not, both from github_deployments_route.go's
+		// Collect loop and neither with a Python equivalent (no
+		// deployments sync module exists under
+		// src/dev_health_ops/providers/github/ beyond budget.py/
+		// code_client.go): fetchGitHubDeploymentsPage's per-deployment
+		// statuses lookup (up to maxDeploymentStatusPages REST requests
+		// per deployment, deriving started_at/finished_at/status) and its
+		// per-deployment SHA-to-pull-request lookup (exactly one REST
+		// request per deployment, page-bounded at 1 in the Collect loop
+		// itself, finding the PR that merged the deployed commit).
+		//
+		// All three REST_CORE terms below scale by the Collect loop's own
+		// hard per-call cap (defaultGitHubDeploymentsMax), not spanDays:
+		// deployment volume is not bounded by calendar window length the
+		// way this file's other spanDays-scaled terms assume (a burst of
+		// many deployments in one day is common and ordinary, unlike e.g.
+		// commit or work-item volume).
+		//
+		// The first term replaces a flat 4*spanDays this dataset inherited,
+		// unexamined, from the "cicd"/"tests" shape: an executed registry-
+		// enumerated kind-coverage proof (request_budget_kind_coverage_test.go)
+		// showed the repo-metadata fetch, the releases list, and the
+		// deployments list are each real REST_CORE requests this dataset's
+		// Collect makes that no earlier term counted at all -- at
+		// defaultGitHubDeploymentsMax=1000 deployments the deployments-list
+		// and releases-list fetches can each cost up to
+		// githubDeploymentsListPageBudget (10) requests, proven by a 1000-
+		// deployment executed run measuring 4012 real requests against a
+		// 4004-unit plan (the flat 4 accounted for none of the list
+		// pagination). githubDeploymentsListPageBudget is exactly the pages
+		// value Collect itself derives from maxDeployments for both list
+		// fetches (see its doc comment) at the domain
+		// TestGitHubDeploymentsPlannedCoversCountedInsideStatedDomain holds
+		// to: handler.MaxDeployments left at its zero value. A handler
+		// constructed with a larger override moves the route's real pages
+		// past this constant -- see
+		// TestGitHubDeploymentsOutsideStatedDomainOvershootsWithNoReconciliation.
+		return []RequestEstimate{
+			{BudgetRESTCore, 1 + 2*githubDeploymentsListPageBudget, "low", "deployments"},
+			{BudgetContentsBlob, 2 * spanDays, "low", "deployments"},
+			{BudgetRESTCore, maxDeploymentStatusPages * defaultGitHubDeploymentsMax, "low", "deployments"},
+			{BudgetRESTCore, defaultGitHubDeploymentsMax, "low", "deployments"},
 		}
 	default:
 		return nil

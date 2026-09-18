@@ -70,7 +70,14 @@ def _linear_cases(linear: Any) -> list[dict[str, object]]:
 def _github_cases(github: Any) -> list[dict[str, object]]:
     cases: list[dict[str, object]] = []
     for span_days in (1, 3):
-        for dataset in ("cicd", "tests", "deployments"):
+        for dataset in (
+            "cicd",
+            "tests",
+            "deployments",
+            "prs",
+            "pr-reviews",
+            "pr-comments",
+        ):
             cases.append(
                 {
                     "provider": "github",
@@ -121,7 +128,14 @@ def _github_cases(github: Any) -> list[dict[str, object]]:
 def _gitlab_cases(gitlab: Any) -> list[dict[str, object]]:
     cases: list[dict[str, object]] = []
     for span_days in (1, 3):
-        for dataset in ("commits", "commit-stats", "cicd", "tests", "incidents"):
+        for dataset in (
+            "commits",
+            "commit-stats",
+            "cicd",
+            "tests",
+            "deployments",
+            "incidents",
+        ):
             case: dict[str, object] = {
                 "provider": "gitlab",
                 "dataset": dataset,

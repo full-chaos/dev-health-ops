@@ -70,7 +70,6 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
-	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -1067,15 +1066,11 @@ func resolveIteratingRequest(
 	return resolvedAttempt{out: out, spec: spec, request: request, legsSent: false}, nil
 }
 
-// vacuousLegsAgree reports whether two vacuous legs are the same empty
-// answer: identical decoded bodies, and every declared Produces list an
-// empty array on both.
-func vacuousLegsAgree(baseline, candidate any, produces []goapiproof.RESTIDProducer) bool {
-	if !reflect.DeepEqual(baseline, candidate) {
-		return false
-	}
+// declaredListsEmpty reports whether every declared Produces list is an
+// empty array in body.
+func declaredListsEmpty(body any, produces []goapiproof.RESTIDProducer) bool {
 	for _, producer := range produces {
-		if !goapiproof.RESTIDListIsEmpty(baseline, producer) || !goapiproof.RESTIDListIsEmpty(candidate, producer) {
+		if !goapiproof.RESTIDListIsEmpty(body, producer) {
 			return false
 		}
 	}
@@ -1084,7 +1079,7 @@ func vacuousLegsAgree(baseline, candidate any, produces []goapiproof.RESTIDProdu
 
 // candidateHasNoData reports whether a refused attempt of a bounded-
 // candidate search refused because the candidate has no data to compare
-// -- both legs the same empty answer (vacuousLegsAgree), a clean match with the declared
+// -- both legs the same empty answer with every declared list empty, a clean match with the declared
 // list an empty array on both legs, or (status-only) the declared list an
 // empty array on the candidate leg -- which moves the search to the next
 // candidate. Every other refusal is a failure of a plane and ends it.
@@ -1490,14 +1485,15 @@ func proveOneRESTRequest(
 			out.Refusal = result.StructuralRefusal
 			out.Detail = result.StructuralDetail
 			out.FindingsRef = findingsRef
-			// Vacuity is judged before the legs' structure is compared,
-			// so for a bounded candidate search it is "no data" only when
-			// both legs are the same empty answer: identical decoded
-			// bodies with every declared list an empty array. Anything
-			// else ends the search (candidateHasNoData).
-			if _, iterating := findIteratingBinding(request.IDBindings); iterating && result.StructuralRefusal == goapiproof.RefusalVacuousEmptyLegs && !vacuousLegsAgree(admission.BaselineSnap.Data, admission.CandidateSnap.Data, request.Produces) {
-				out.Refusal = goapiproof.RESTRefusalVacuousLegsDisagree
-				out.Detail = "both legs carry zero non-null leaves but are not the same empty answer"
+			// A vacuous refusal is always the same empty answer on both
+			// legs (Compare judges vacuity only on equal decoded legs).
+			// For a bounded candidate search it is "no data" only when
+			// every declared list is also an empty array; any other
+			// shape of the declared list is a failure and ends the search
+			// (candidateHasNoData), the same as after a clean match.
+			if _, iterating := findIteratingBinding(request.IDBindings); iterating && result.StructuralRefusal == goapiproof.RefusalVacuousEmptyLegs && !declaredListsEmpty(admission.BaselineSnap.Data, request.Produces) {
+				out.Refusal = goapiproof.RESTRefusalDeclaredIDListUnrecognised
+				out.Detail = "both legs are the same empty answer without the declared list as an empty array"
 			}
 			return out, nil
 		}

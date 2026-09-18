@@ -374,6 +374,8 @@ type planeStampingEdge struct {
 	candidateType   string
 	baselineType    string
 	candidateStatus int
+	// candidateBody, when set, replaces body on the candidate leg only.
+	candidateBody string
 }
 
 func (e *planeStampingEdge) server(t *testing.T) *httptest.Server {
@@ -404,7 +406,11 @@ func (e *planeStampingEdge) server(t *testing.T) *httptest.Server {
 			status = http.StatusOK
 		}
 		w.WriteHeader(status)
-		_, _ = w.Write([]byte(e.body))
+		body := e.body
+		if !isBaseline && e.candidateBody != "" {
+			body = e.candidateBody
+		}
+		_, _ = w.Write([]byte(body))
 	}))
 	t.Cleanup(server.Close)
 	return server

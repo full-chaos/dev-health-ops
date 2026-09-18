@@ -2,6 +2,7 @@ package goapiproof
 
 import (
 	"fmt"
+	"reflect"
 	"sort"
 )
 
@@ -432,12 +433,18 @@ func bodySizeGateDeferred(opts Options, baselineData, candidateData any) bool {
 // countNonNullLeaves counts every non-null scalar reachable under value,
 // with no path restriction -- the whole-tree form of compare.go's
 // nonNullLeaves, which is scoped to one cited path. Used by
-// vacuousEmptyLegs to judge whether a LEG carries any signal at all.
+// vacuousEmptyLegs to judge whether a LEG carries any signal at all, so
+// it counts only what the plane answered: RESTDedupKeyField is written by
+// this tool (InjectRESTDedupKeys) before Compare, is built from the row's
+// own key values even when they are all null, and is never evidence.
 func countNonNullLeaves(value any) int {
 	switch typed := value.(type) {
 	case map[string]any:
 		total := 0
-		for _, child := range typed {
+		for key, child := range typed {
+			if key == RESTDedupKeyField {
+				continue
+			}
 			total += countNonNullLeaves(child)
 		}
 		return total
@@ -484,9 +491,16 @@ func countNonNullLeaves(value any) int {
 // FloatTierB/VolatileFields have their OWN accurately-worded "matched
 // nothing" refusals (UnusedTierB/UnusedExclusions) already, so leaving
 // them out of this gate loses no coverage.
+//
+// It is also only the SAME empty answer on both legs: the two decoded
+// legs must be equal. Zero leaves is judged before structural agreement
+// and value comparison, so two zero-leaf legs that differ -- null vs [],
+// a key absent on one leg, [] vs {} -- would otherwise be refused here as
+// "nothing to compare" while they are in fact a difference between the
+// planes; those legs go on to the comparison below, which reports it.
 func vacuousEmptyLegs(baseline, candidate any, opts Options) bool {
 	if len(opts.BaselineDefects) == 0 && len(opts.OrderInsensitiveLists) == 0 {
 		return false
 	}
-	return countNonNullLeaves(baseline) == 0 && countNonNullLeaves(candidate) == 0
+	return countNonNullLeaves(baseline) == 0 && countNonNullLeaves(candidate) == 0 && reflect.DeepEqual(baseline, candidate)
 }

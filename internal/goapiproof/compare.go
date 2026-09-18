@@ -769,6 +769,30 @@ type BaselineDefect struct {
 	// behaviour every other declared defect still uses. A defect never
 	// sets more than one shape field.
 	DuplicateCollapsePageCutShape *DuplicateCollapsePageCutShape
+
+	// QualityDriversRecomputeShape, when set, replaces this defect's
+	// blanket "any leaf difference under Paths is covered" rule with a
+	// per-leg recomputation of evidence_quality_stats.quality_drivers from
+	// that leg's own counts, mean and stddev -- see
+	// QualityDriversRecomputeShape's own doc comment
+	// (qualitystatsrecompute.go). It can admit a STRUCTURAL finding (a
+	// ShapeLength on the list itself) -- see the gate in
+	// classifyBaselineDefects. nil is the default, unchanged blanket
+	// behaviour every other declared defect still uses. A defect never
+	// sets more than one shape field.
+	QualityDriversRecomputeShape *QualityDriversRecomputeShape
+
+	// BandMomentSubsetShape, when set, replaces this defect's blanket
+	// "any leaf difference under Paths is covered" rule with a
+	// consistency check of evidence_quality_stats.mean/stddev against both
+	// legs' own band counts and their baseline-minus-candidate excluded
+	// population -- see BandMomentSubsetShape's own doc comment
+	// (qualitystatsrecompute.go). It can admit an empty-result finding,
+	// only for a candidate with no rows (rule 0 there) -- see the gate in
+	// classifyBaselineDefects. nil is the default, unchanged blanket
+	// behaviour every other declared defect still uses. A defect never
+	// sets more than one shape field.
+	BandMomentSubsetShape *BandMomentSubsetShape
 }
 
 // validateBaselineDefects refuses a declaration that claims the
@@ -1203,6 +1227,14 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 		if defect.DuplicateCollapsePageCutShape != nil {
 			dupPageCutPlan = buildDuplicateCollapsePageCutPlan(defect.DuplicateCollapsePageCutShape, baselineData, candidateData)
 		}
+		var driversPlan *qualityDriversRecomputePlan
+		if defect.QualityDriversRecomputeShape != nil {
+			driversPlan = buildQualityDriversRecomputePlan(defect.QualityDriversRecomputeShape, baselineData, candidateData)
+		}
+		var momentPlan *bandMomentSubsetPlan
+		if defect.BandMomentSubsetShape != nil {
+			momentPlan = buildBandMomentSubsetPlan(defect.BandMomentSubsetShape, baselineData, candidateData)
+		}
 		// A SHAPED defect's citation is LIVE only when its shape actually
 		// admits something. A blanket (unshaped) citation stays live from
 		// path proximity alone -- any difference under Paths, covered or
@@ -1216,7 +1248,7 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 		// apart, and a shaped defect that hit on path alone would still
 		// double-report alongside the shape that actually explains the
 		// difference.
-		shaped := repoPlan != nil || covPlan != nil || dedupPlan != nil || skewPlan != nil || sankeyFanoutPlan != nil || keyedDirPlan != nil || conservePlan != nil || dictDirPlan != nil || scalarDirPlan != nil || identityPlan != nil || displacePlan != nil || hotspotBoundaryPlan != nil || subsetPlan != nil || zeroValueEmptyListPlan != nil || tiePlan != nil || heatmapCellPlan != nil || dupLenPlan != nil || homeTierPlan != nil || axisRepoOrderPlan != nil || axisTieGroupPlan != nil || dupPageCutPlan != nil
+		shaped := repoPlan != nil || covPlan != nil || dedupPlan != nil || skewPlan != nil || sankeyFanoutPlan != nil || keyedDirPlan != nil || conservePlan != nil || dictDirPlan != nil || scalarDirPlan != nil || identityPlan != nil || displacePlan != nil || hotspotBoundaryPlan != nil || subsetPlan != nil || zeroValueEmptyListPlan != nil || tiePlan != nil || heatmapCellPlan != nil || dupLenPlan != nil || homeTierPlan != nil || axisRepoOrderPlan != nil || axisTieGroupPlan != nil || dupPageCutPlan != nil || driversPlan != nil || momentPlan != nil
 		var touched []int
 		for i, path := range mismatches {
 			if !defectCovers(defect, path) {
@@ -1269,7 +1301,9 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 				!(tiePlan != nil && shapes[i] == ShapePresence) &&
 				!(heatmapCellPlan != nil && shapes[i] == ShapePresence) &&
 				!(dupLenPlan != nil && shapes[i] == ShapeLength) &&
-				!(dupPageCutPlan != nil && shapes[i] == ShapeLength) {
+				!(dupPageCutPlan != nil && shapes[i] == ShapeLength) &&
+				!(driversPlan != nil && shapes[i] == ShapeLength) &&
+				!(momentPlan != nil && shapes[i] == ShapeEmptyResult) {
 				continue
 			}
 			if shaped {
@@ -1331,6 +1365,10 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 				admitted = axisTieGroupPlan.admits(result.Findings[findingRefs[i]])
 			case dupPageCutPlan != nil:
 				admitted = dupPageCutPlan.admits(result.Findings[findingRefs[i]])
+			case driversPlan != nil:
+				admitted = driversPlan.admits(result.Findings[findingRefs[i]])
+			case momentPlan != nil:
+				admitted = momentPlan.admits(result.Findings[findingRefs[i]])
 			}
 			if admitted {
 				covered[i] = true

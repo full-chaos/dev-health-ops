@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"context"
+	"log/slog"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
@@ -87,6 +88,11 @@ func (handler GitHubPullRequestSocialRouteHandler) Collect(
 	if reviews.Complete() {
 		if err := enrichPullRequestsWithReviews(rows, reviews.Rows); err != nil {
 			return CompleteRouteBatch{}, err
+		}
+	} else {
+		slog.Warn("github_pr_reviews.review_lookup_failed", "unit_id", claim.ID, "prs", len(rows), "cause", reviews.Incomplete.Cause)
+		for index := range rows {
+			rows[index].ReviewsLookupFailed = true
 		}
 	}
 	prEffect, err := effectBatchFromValues(

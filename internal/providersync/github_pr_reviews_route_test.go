@@ -72,7 +72,7 @@ func TestGitHubPullRequestReviewRouteComposesOneCompletePRRow(t *testing.T) {
 	first := time.Date(2026, 7, 10, 11, 0, 0, 0, time.UTC)
 	if pull.FirstReviewAt == nil || !pull.FirstReviewAt.Equal(first) ||
 		pull.ReviewsCount != 2 || pull.ChangesRequestedCount != 1 ||
-		pull.CommentsCount != 3 || pull.FirstCommentAt != nil {
+		pull.CommentsCount != 3 || pull.FirstCommentAt != nil || pull.ReviewsLookupFailed {
 		t.Fatalf("enriched pull=%+v", pull)
 	}
 	reviews, err := decodeEffectRows[pullRequestReviewRow](batch.Effects[1])
@@ -194,6 +194,9 @@ func TestGitHubPullRequestReviewRoutePreservesBaseRowOnOptionalReviewFailure(t *
 	if pull.FirstReviewAt != nil || pull.ReviewsCount != 0 || pull.ChangesRequestedCount != 0 ||
 		len(batch.Effects[1].Rows) != 0 || batch.Result["pr_reviews_incomplete"] != "transient" {
 		t.Fatalf("batch=%+v pull=%+v", batch, pull)
+	}
+	if !pull.ReviewsLookupFailed {
+		t.Fatalf("pull=%+v: a failed review enrichment must mark the row so the sink carries stored review columns forward", pull)
 	}
 }
 

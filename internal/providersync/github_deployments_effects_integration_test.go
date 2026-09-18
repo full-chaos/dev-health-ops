@@ -230,6 +230,77 @@ func TestGitHubDeploymentsEffectsCarriesLifecycleForwardAgainstMigratedSchema(t 
 	assertDeploymentInspection(t, ctx, github, claim, regressedEffect, EffectExact)
 }
 
+// TestDeploymentsEffectsCarryPullRequestForwardAgainstMigratedSchema proves
+// both providers' sinks carry a stored merged_at/pull_request_number over a
+// failed per-SHA lookup through the real insert, that crash recovery of the
+// same effect reads back exact, and that a successful empty lookup still
+// writes its honest nil pair.
+func TestDeploymentsEffectsCarryPullRequestForwardAgainstMigratedSchema(t *testing.T) {
+	ctx, conn := newDeploymentsIntegrationConn(t)
+	lease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	for _, provider := range []string{"github", "gitlab"} {
+		claim := nativeTestClaim(provider, "deployments")
+		var sink deploymentEffectsIntegrationSink = GitHubDeploymentsClickHouseEffects{Conn: conn, Lease: lease}
+		if provider == "gitlab" {
+			sink = GitLabDeploymentsClickHouseEffects{Conn: conn, Lease: lease}
+		}
+
+		good := deploymentIntegrationFullRow(claim, provider+"-pull-request-carry", now, 42)
+		if err := sink.WriteEffect(ctx, claim, deploymentEffect(t, good)); err != nil {
+			t.Fatal(err)
+		}
+		failed := good
+		failed.MergedAt, failed.PullRequestNumber = nil, nil
+		failed.PullRequestLookupFailed = true
+		failed.LastSynced = now.Add(time.Minute)
+		freshEnvironment := "staging"
+		failed.Environment = &freshEnvironment
+		failedEffect := deploymentEffect(t, failed)
+		if err := sink.WriteEffect(ctx, claim, failedEffect); err != nil {
+			t.Fatal(err)
+		}
+		mergedAt, number, environment := readDeploymentPullRequestPair(t, ctx, conn, good)
+		if mergedAt == nil || !mergedAt.Equal(*good.MergedAt) || number == nil || *number != 42 {
+			t.Fatalf("%s: merged_at=%v pull_request_number=%v want %v/42 carried forward", provider, mergedAt, number, good.MergedAt)
+		}
+		if environment == nil || *environment != freshEnvironment {
+			t.Fatalf("%s: environment=%v want %q: every other column must land fresh", provider, environment, freshEnvironment)
+		}
+		assertDeploymentInspection(t, ctx, sink, claim, failedEffect, EffectExact)
+
+		honest := failed
+		honest.PullRequestLookupFailed = false
+		honest.LastSynced = now.Add(2 * time.Minute)
+		honestEffect := deploymentEffect(t, honest)
+		if err := sink.WriteEffect(ctx, claim, honestEffect); err != nil {
+			t.Fatal(err)
+		}
+		mergedAt, number, _ = readDeploymentPullRequestPair(t, ctx, conn, good)
+		if mergedAt != nil || number != nil {
+			t.Fatalf("%s: merged_at=%v pull_request_number=%v want nil: a successful empty lookup writes its honest nil", provider, mergedAt, number)
+		}
+		assertDeploymentInspection(t, ctx, sink, claim, honestEffect, EffectExact)
+	}
+}
+
+func readDeploymentPullRequestPair(
+	t *testing.T, ctx context.Context, conn driver.Conn, row deploymentRow,
+) (*time.Time, *uint32, *string) {
+	t.Helper()
+	var mergedAt *time.Time
+	var number *uint32
+	var environment *string
+	if err := conn.QueryRow(
+		ctx,
+		`SELECT merged_at, pull_request_number, environment FROM deployments FINAL WHERE org_id = ? AND repo_id = ? AND deployment_id = ?`,
+		row.OrgID, row.RepoID, row.DeploymentID,
+	).Scan(&mergedAt, &number, &environment); err != nil {
+		t.Fatal(err)
+	}
+	return mergedAt, number, environment
+}
+
 type deploymentEffectsIntegrationSink interface {
 	WriteEffect(context.Context, Claim, EffectBatch) error
 	InspectEffect(context.Context, Claim, EffectBatch) (EffectInspection, error)

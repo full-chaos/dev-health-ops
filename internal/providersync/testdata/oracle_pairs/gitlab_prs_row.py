@@ -25,6 +25,7 @@ oracle_registry.register(
             "deletions": "GitLab MR sync does not provide GitHub diff-stat fields to build_git_pull_request",
             "changed_files": "GitLab MR sync does not provide GitHub diff-stat fields to build_git_pull_request",
             "first_comment_at": "GitLab MR sync does not populate comment-event timestamps in the PR row",
+            "reviews_lookup_failed": "writer-internal signaling for the review-column carry-forward guard -- never an INSERT column, Python has no equivalent field",
         },
     )
 )

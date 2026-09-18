@@ -2107,12 +2107,17 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # the write-once carry-forward guard to protect it the same way it
     # already protects started_at/finished_at, added 5 ordinary tests:
     # +5 top-level (1438 -> 1443), integration-tagged unchanged at 165.
-    # 1443 top-level provider tests, 165 of them integration-tagged; both
+    # The same carry-forward over a failed lookup for a deployment's
+    # merged_at/pull_request_number and a pull request's review-derived
+    # columns, applied on both the write path and the recovery readback,
+    # added 18 ordinary tests and 7 integration-tagged tests:
+    # +25 top-level (1443 -> 1468), integration-tagged 165 -> 172.
+    # 1468 top-level provider tests, 172 of them integration-tagged; both
     # pins move with any top-level test added to or removed from
     # internal/providersync.
-    assert len(expected_provider_tests) == 1443
+    assert len(expected_provider_tests) == 1468
 
-    assert len(expected_integration_tests) == 165
+    assert len(expected_integration_tests) == 172
     assert expected_integration_tests < expected_provider_tests
 
     provider_assignments: dict[int, set[str]] = {}
@@ -2128,7 +2133,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1443
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1468
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -2246,7 +2251,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1443
+    assert len(selected_tests) == len(set(selected_tests)) == 1468
     assert set(selected_tests) == expected_tests
 
 

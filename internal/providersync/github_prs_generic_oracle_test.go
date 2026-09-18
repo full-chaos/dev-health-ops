@@ -30,9 +30,10 @@ import (
 // are deliberately not shared code, so a change to one does not silently
 // widen the other.
 var oraclePullRequestGoOnlyFields = map[string]string{
-	"last_synced": "stamped by Collect from normalizedAt, not part of build_git_pull_request's inputs or outputs",
-	"source_id":   "native sink always writes null; build_git_pull_request has no equivalent parameter",
-	"org_id":      "stamped from claim.OrgID by normalizeGitHubPullRequest, not part of the built row's own fields conceptually",
+	"last_synced":           "stamped by Collect from normalizedAt, not part of build_git_pull_request's inputs or outputs",
+	"source_id":             "native sink always writes null; build_git_pull_request has no equivalent parameter",
+	"org_id":                "stamped from claim.OrgID by normalizeGitHubPullRequest, not part of the built row's own fields conceptually",
+	"reviews_lookup_failed": "writer-internal signaling for the review-column carry-forward guard, set by the PR-social route after row construction; never an INSERT column",
 }
 
 // oraclePullRequestClaim and oraclePullRequestNormalizedAt are the fixed

@@ -1413,6 +1413,11 @@ func TestWriteJSONReport_CompleteRunIsNotPartial(t *testing.T) {
 // everything written to it -- runMeasurement prints its per-request
 // lines and its own summary/partial lines with fmt.Println/fmt.Printf,
 // straight to os.Stdout, so this is the only way a test can see them.
+// The reader drains the pipe on its OWN goroutine, started before fn
+// runs: an os.Pipe carries a fixed OS buffer (64KiB on Linux), and fn
+// can write past it -- a reader started only after fn returns would
+// block fn's own write forever the moment total output exceeds that
+// buffer, since nothing would ever be there to drain it.
 func captureStdout(t *testing.T, fn func()) string {
 	t.Helper()
 	old := os.Stdout
@@ -1423,14 +1428,45 @@ func captureStdout(t *testing.T, fn func()) string {
 	os.Stdout = w
 	defer func() { os.Stdout = old }()
 
+	type readResult struct {
+		data []byte
+		err  error
+	}
+	done := make(chan readResult, 1)
+	go func() {
+		data, readErr := io.ReadAll(r)
+		done <- readResult{data: data, err: readErr}
+	}()
+
 	fn()
 
 	_ = w.Close()
-	raw, err := io.ReadAll(r)
-	if err != nil {
-		t.Fatalf("read captured stdout: %v", err)
+	result := <-done
+	if result.err != nil {
+		t.Fatalf("read captured stdout: %v", result.err)
 	}
-	return string(raw)
+	return string(result.data)
+}
+
+// TestCaptureStdoutDrainsMoreThanOnePipeBufferOfOutput writes past the OS
+// pipe's own buffer (64KiB on Linux) from inside fn, in one line long
+// enough that a single fmt.Println already exceeds it -- captureStdout's
+// own doc comment states why a reader started only after fn returns
+// would block that write forever. This test completing at all, within
+// its normal timeout, is the assertion; it also checks the exact byte
+// count survives the round trip.
+func TestCaptureStdoutDrainsMoreThanOnePipeBufferOfOutput(t *testing.T) {
+	const lineLen = 70000 // > 65536, the default Linux pipe buffer.
+	line := strings.Repeat("x", lineLen)
+
+	got := captureStdout(t, func() {
+		fmt.Println(line)
+	})
+
+	want := line + "\n"
+	if got != want {
+		t.Fatalf("captureStdout: got %d bytes, want %d bytes", len(got), len(want))
+	}
 }
 
 // genericRESTStubHandler answers every request with 200, the given

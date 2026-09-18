@@ -1589,29 +1589,77 @@ var flamePRIDBoundParity = Options{
 //
 // flame's corpus covers both deterministic-refusal requests (every 4xx
 // build_flame_response/internal/flame.BuildResponse answers BEFORE any
-// ClickHouse call) AND, now that a producer exists for two of its three
-// entity_id shapes, two live 200 entries: pr_entity_id_bound_200 (entity_id
-// bound to pr_id, produced by GET /api/v1/drilldown/prs' own default_window
-// entry as "<repo_id>:<number>", parseRepoEntity's own shape) and
-// issue_entity_id_bound_200 (entity_id bound to work_item_id, produced by
-// GET /api/v1/drilldown/issues' own default_window entry, a bare string --
-// the flame "issue" entity_id IS the work_item_id, no repo prefix). Both
-// producers run strictly before flame in restRunOrder.
+// ClickHouse call, or after a ClickHouse call whose zero-row answer is
+// itself deterministic for a guaranteed-absent id -- pr_entity_id_bound_
+// not_found, issue_entity_id_not_found) AND, now that a producer exists
+// for two of its three entity_id shapes, two live 200 entries:
+// pr_entity_id_bound_200 (entity_id bound to pr_id, produced by GET
+// /api/v1/drilldown/prs' own default_window entry as "<repo_id>:<number>",
+// parseRepoEntity's own shape) and issue_entity_id_bound_200 (entity_id
+// bound to work_item_id, produced by GET /api/v1/drilldown/issues' own
+// default_window entry, a bare string -- the flame "issue" entity_id IS
+// the work_item_id, no repo prefix). Both producers run strictly before
+// flame in restRunOrder.
 //
-// The THIRD entity_type, "deployment", stays refused-by-name: its
-// entity_id is a "<repo_id>:<deployment_id>" pair (parseRepoEntity, same
-// shape as "pr"), and no route this corpus covers exposes a deployment_id
-// anywhere in its response body -- not GET /api/v1/heatmap (Cell/Evidence
-// carry PRs and commits, no deployments), not GET /api/v1/quadrant or
-// /api/v1/explain (metric values only), and no drilldown or people route
-// reads the deployments table at all. A producer would need a NEW route,
-// or a NEW field on an existing one, to read deployments (ReplacingMergeTree
+// The THIRD entity_type, "deployment": its own three deterministic-refusal
+// branches (missing repo prefix, invalid repo uuid, missing suffix -- the
+// same parseRepoEntity, services/flame.py:51-61, the "pr" entries above
+// already exercise, reached here via the "deployment" call site instead)
+// are covered by deployment_entity_id_missing_repo_prefix/_invalid_repo_
+// uuid/_missing_suffix, needing no id at all. Its live 200 path stays
+// refused-by-name: entity_id is a "<repo_id>:<deployment_id>" pair, and no
+// route this corpus covers exposes a deployment_id anywhere in its
+// response body -- not GET /api/v1/heatmap (Cell/Evidence carry PRs and
+// commits, no deployments), not GET /api/v1/quadrant or /api/v1/explain
+// (metric values only), and no drilldown or people route reads the
+// deployments table at all. A producer would need a NEW route, or a NEW
+// field on an existing one, to read deployments (ReplacingMergeTree
 // (last_synced), sort-keyed (org_id, repo_id, deployment_id) since
-// migration 027) and expose deployment_id on the wire -- out of scope
-// here; this table cannot invent an id no ported route's response ever
-// carries (operations.go's own `pr` doc comment states the identical
-// rule for the GraphQL corpus's own unproducible id).
+// migration 027) and expose deployment_id on the wire -- this table cannot
+// invent an id no ported route's response ever carries (operations.go's
+// own `pr` doc comment states the identical rule for the GraphQL corpus's
+// own unproducible id).
 // AssertRESTPathCoverage is satisfied by these entries' PATH regardless.
+//
+// Branches this corpus cannot provably reach, and why:
+//   - The candidate-side 503 (flame_route.go:201-208, the generic
+//     fallback the route layer answers for any internal/flame.BuildResponse
+//     error that is not one of its own typed *RequestErrors) for every
+//     entity_type: this requires an actual ClickHouse read failure, which
+//     no request this corpus can construct triggers deterministically.
+//   - validateFlameFrames' own "Flame frames have gaps" 422 (services/
+//     flame.py:64-82 and 201/265/351; internal/flame/flame.go's own
+//     validateFlameFrames, called at flame.go:354, 399, 462) for every
+//     entity_type: only a malformed timeline (frames that do not cover
+//     [timeline.start, timeline.end) contiguously) reaches it, and no live
+//     production row is known to be malformed this way.
+//   - buildPRFlameResponse's own end selection (flame.go:316-322: MergedAt
+//     / ClosedAt / the nowLike() default) and its "Review waiting" frame's
+//     presence/absence (flame.go:331-335, FirstReviewAt after start or
+//     not): the one live "pr" case (pr_entity_id_bound_200) exercises
+//     exactly one arm of each per run, determined by whichever PR GET
+//     /api/v1/drilldown/prs' own default_window entry names that run --
+//     not independently selectable without a second, differently-shaped
+//     producer.
+//   - buildIssueFlameResponse's own end selection (flame.go:371-376:
+//     CompletedAt / the nowLike() default) and its "Backlog waiting" frame's
+//     presence/absence (flame.go:384-388, StartedAt after start or not):
+//     the same per-run, one-arm-only limitation as the "pr" case above.
+//   - reworkWindows' own "requested_changes"/"request_changes" state-alias
+//     branches (flame.go:287, alongside the accepted "changes_requested"):
+//     unreachable for any row this system has ever written. GitHub's own
+//     review ingestion writes the provider's raw state string verbatim
+//     (processors/github.py:833,838, `state=str(r.state or "")`), and that
+//     provider's own Literal type (api/external_ingest/schemas.py:321) is
+//     "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" | "DISMISSED" |
+//     "PENDING" -- never "REQUESTED_CHANGES" or "REQUEST_CHANGES" in any
+//     case. GitLab's own mapper (processors/gitlab.py:379-467) never emits
+//     a changes-requested-equivalent state at all: GitLab has no native
+//     request-changes action, and an unapproval note maps to DISMISSED
+//     (gitlab.py:461-467's own comment), not to any changes-requested
+//     spelling. reviewState/_review_state (flame.go:255-257, services/
+//     flame.py:85-86) only lowercases whatever was written; it invents
+//     nothing.
 
 // heatmapDedupParity is shared by every admissible (2xx) heatmap request:
 // repos (ReplacingMergeTree(last_synced)) is joined without FINAL by
@@ -3994,6 +4042,114 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				BodyMode:               RESTBodyModeStatusOnly,
 				IDBindings:             []RESTIDBinding{{Producer: "work_item_id", QueryParam: "entity_id"}},
 				Produces:               []RESTIDProducer{{Name: "issue_flame_frame_id", ListPath: "frames", IDField: "id"}},
+			},
+			{
+				// entity_id present, entity_type absent -- FastAPI's own
+				// required-query-param validation (main.py:785-787, no
+				// default on either param) answers a ONE-error 422 body,
+				// distinct from missing_entity_type_and_id's two-error
+				// body above. newFlameWorkHandler's own two independent
+				// Query.Has checks (flame_route.go:173-174) mirror this:
+				// only the entity_type branch fires here.
+				Name:                "entity_type_missing_only",
+				Query:               url.Values{"entity_id": {"whatever"}},
+				WantCandidateStatus: 422, WantBaselineStatus: 422,
+				BodyMode: RESTBodyModeJSON,
+			},
+			{
+				// entity_type present, entity_id absent -- the mirror of
+				// entity_type_missing_only above; flame_route.go:176-177's
+				// own independent Query.Has check.
+				Name:                "entity_id_missing_only",
+				Query:               url.Values{"entity_type": {"issue"}},
+				WantCandidateStatus: 422, WantBaselineStatus: 422,
+				BodyMode: RESTBodyModeJSON,
+			},
+			{
+				// _parse_repo_entity's own empty-suffix branch
+				// (services/flame.py:59-60, "Entity id missing suffix"),
+				// reached only after the separator AND repo-uuid checks
+				// above already passed -- a syntactically valid repo id
+				// with nothing after the colon. No corpus entry has
+				// reached this branch before (pr_entity_id_missing_repo_
+				// prefix and pr_entity_id_invalid_repo_uuid both fail
+				// earlier in the same function). parseRepoEntity's own Go
+				// port: cmd/query-api/internal/flame/flame.go:178-180.
+				Name: "pr_entity_id_missing_suffix",
+				Query: url.Values{
+					"entity_type": {"pr"}, "entity_id": {"00000000-0000-0000-0000-000000000000:"},
+				},
+				WantCandidateStatus: 400, WantBaselineStatus: 400,
+				BodyMode: RESTBodyModeJSON,
+			},
+			{
+				// The "deployment" entity_type's own call into
+				// _parse_repo_entity (services/flame.py:410, same function
+				// pr_entity_id_missing_repo_prefix already covers via the
+				// "pr" call site at services/flame.py:372) -- deterministic,
+				// no ClickHouse call, no producer needed. BuildResponse's
+				// own "deployment" case: cmd/query-api/internal/flame/
+				// flame.go:512-516.
+				Name: "deployment_entity_id_missing_repo_prefix",
+				Query: url.Values{
+					"entity_type": {"deployment"}, "entity_id": {"not-prefixed-42"},
+				},
+				WantCandidateStatus: 400, WantBaselineStatus: 400,
+				BodyMode: RESTBodyModeJSON,
+			},
+			{
+				// The "deployment" call site's own invalid-repo-uuid branch
+				// (services/flame.py:57-58 via line 410).
+				Name: "deployment_entity_id_invalid_repo_uuid",
+				Query: url.Values{
+					"entity_type": {"deployment"}, "entity_id": {"not-a-uuid:42"},
+				},
+				WantCandidateStatus: 400, WantBaselineStatus: 400,
+				BodyMode: RESTBodyModeJSON,
+			},
+			{
+				// The "deployment" call site's own empty-suffix branch
+				// (services/flame.py:59-60 via line 410) -- the deployment
+				// counterpart to pr_entity_id_missing_suffix above.
+				Name: "deployment_entity_id_missing_suffix",
+				Query: url.Values{
+					"entity_type": {"deployment"}, "entity_id": {"00000000-0000-0000-0000-000000000000:"},
+				},
+				WantCandidateStatus: 400, WantBaselineStatus: 400,
+				BodyMode: RESTBodyModeJSON,
+			},
+			{
+				// build_flame_response's own PR-not-found branch
+				// (services/flame.py:386-387, "PR not found"), reached
+				// after a syntactically valid repo id and numeric suffix
+				// both already parsed -- fetchPullRequest (cmd/query-api/
+				// internal/flame/clickhouse.go:96-120) returns nil, nil for
+				// a query that matches no row. No producer is needed: the
+				// all-zero UUID is already this corpus's own convention for
+				// a syntactically-valid, guaranteed-absent repo id (see
+				// pr_entity_id_non_numeric_suffix above), paired here with
+				// a PR number no live repo could plausibly reach.
+				Name: "pr_entity_id_bound_not_found",
+				Query: url.Values{
+					"entity_type": {"pr"}, "entity_id": {"00000000-0000-0000-0000-000000000000:999999999"},
+				},
+				WantCandidateStatus: 404, WantBaselineStatus: 404,
+				BodyMode: RESTBodyModeJSON,
+			},
+			{
+				// build_flame_response's own issue-not-found branch
+				// (services/flame.py:404-405, "Issue not found") --
+				// fetchIssue (clickhouse.go:192-212) returns nil, nil for a
+				// work_item_id matching no row. The issue entity_id carries
+				// no shape constraint (it IS the work_item_id, no repo
+				// prefix -- flame.go's own package doc comment), so a
+				// neutral, guaranteed-absent literal needs no producer.
+				Name: "issue_entity_id_not_found",
+				Query: url.Values{
+					"entity_type": {"issue"}, "entity_id": {"ABC-0"},
+				},
+				WantCandidateStatus: 404, WantBaselineStatus: 404,
+				BodyMode: RESTBodyModeJSON,
 			},
 		},
 	},

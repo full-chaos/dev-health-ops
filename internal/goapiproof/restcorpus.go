@@ -868,10 +868,56 @@ var drilldownIssuesFloatExact = map[string]string{
 // unreached there. Also exercised directly, by name, by
 // TestDrilldownIssuesParity_EmptyItemsIsAStructuralRefusalNotStale and
 // TestDrilldownIssuesParityDatetimeCitation_NonVacuousMatchIsIdleNotStale.
+// drilldownIssuesItemsOrderInsensitiveLists declares GET/POST
+// /api/v1/drilldown/issues' own data.items list keyed by work_item_id:
+// fetch_issues/fetchIssuesQuery both ORDER BY wct.completed_at DESC with
+// no secondary sort, identically on both planes (fetchIssuesQuery's own
+// doc comment, internal/drilldown/issues.go) -- the ordering is
+// UNCONSTRAINED IN BOTH PLANES' OWN SQL for any group of rows sharing
+// the same completed_at, the same "unconstrained, not a Go-vs-Python
+// defect" property investmentSunburstOrderInsensitiveLists already
+// documents for its own unordered-tie list. Pairing by work_item_id
+// means a pure reordering of a SHARED subset of items (the common case)
+// compares equal with no declaration needed at all; drilldownIssuesBoundaryTie
+// below covers what keyed pairing still reports on its own: a
+// work_item_id present on only one side, at the request's own LIMIT
+// boundary.
+var drilldownIssuesItemsOrderInsensitiveLists = []OrderInsensitiveList{
+	{
+		Path:      "data.items",
+		KeyFields: []string{"work_item_id"},
+		Reason:    "fetch_issues and fetchIssuesQuery both ORDER BY wct.completed_at DESC with no secondary sort, identically on both planes; the ordering is unconstrained in both planes' own SQL for any tied completed_at, not a Go-vs-Python defect",
+		Ticket:    "CHAOS-5957",
+	},
+}
+
+// drilldownIssuesBoundaryTie declares the ONE structural consequence of
+// that same unordered tie: when strictly more rows share the list's own
+// trailing completed_at value than remain before LIMIT cuts the list
+// off, each plane's own ClickHouse execution can admit a DIFFERENT
+// subset of that tied group, not merely a different order of the same
+// subset -- a work_item_id present on only one side. See
+// BoundaryTieShape's own doc comment (boundarytie.go) for the full rule
+// set this citation's admission follows.
+var drilldownIssuesBoundaryTie = BaselineDefect{
+	Ticket:             "CHAOS-5957",
+	Reason:             "fetch_issues (api/queries/drilldown.py) and fetchIssuesQuery (internal/drilldown/issues.go) both carry ORDER BY wct.completed_at DESC with no secondary sort key, then LIMIT :limit, identically on both planes -- when the tied group at that trailing completed_at value is larger than the number of slots remaining under the limit, each plane's own execution admits an unspecified subset of it, never guaranteed the same one. This is a genuine SQL-level tie, not a Go-vs-Python defect: neither plane's own query text differs for this clause. BoundaryTieShape admits ONLY a baseline-only/candidate-only work_item_id pair whose own completed_at agrees, on both sides, with the single shared tie value the swap actually happened at -- never a presence difference at any other completed_at, and never a leaf mismatch on a key both planes still return.",
+	Paths:              []string{"data.items"},
+	Intermittent:       true,
+	IntermittentReason: "present only while the tied group at this request's own LIMIT boundary is strictly larger than the number of slots remaining under LIMIT -- a run whose boundary completed_at is held by exactly enough rows to fill those slots, or fewer, shows no divergence under this mechanism and is not a bug in this citation",
+	BoundaryTieShape: &BoundaryTieShape{
+		ListPath:  "data.items",
+		KeyFields: []string{"work_item_id"},
+		TieField:  "completed_at",
+		Limit:     50,
+	},
+}
+
 var drilldownIssuesParity = Options{
 	NumericLeavesDeclared: true,
 	FloatTierB:            drilldownIssuesFloats,
 	FloatExactLeaves:      drilldownIssuesFloatExact,
+	OrderInsensitiveLists: drilldownIssuesItemsOrderInsensitiveLists,
 	BaselineDefects: []BaselineDefect{
 		{
 			Ticket: "CHAOS-5808",
@@ -883,6 +929,7 @@ var drilldownIssuesParity = Options{
 			Intermittent:       true,
 			IntermittentReason: "present only while this request's live result actually contains at least one returned issue with a non-null started_at or completed_at -- both columns are themselves Nullable, so an empty items list, or a window whose only issues have not yet started/completed, shows no divergence under these paths and is not a bug in this citation",
 		},
+		drilldownIssuesBoundaryTie,
 	},
 }
 

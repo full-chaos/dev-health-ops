@@ -641,6 +641,22 @@ type BaselineDefect struct {
 	// defect still uses. A defect never sets more than one shape field.
 	LimitDisplacementShape *LimitDisplacementShape
 
+	// BoundaryTieShape, when set, replaces this defect's blanket "any
+	// leaf difference under Paths is covered" rule with a per-key
+	// admission of a presence swap caused by a genuinely UNORDERED tie at
+	// a LIMIT-bounded list's own cutoff -- unlike LimitDisplacementShape,
+	// there is no value-inflating root cause or direction: the swap is
+	// admitted purely because every displaced key, on both sides, shares
+	// the SAME tie value -- see BoundaryTieShape's own doc comment
+	// (boundarytie.go). It reads nothing from any other defect's own
+	// `covered` state, so unlike TeamCoverageIdentityShape/
+	// LimitDisplacementShape/HotspotListBoundaryShape/TeamRepoSubsetShape
+	// it is evaluated in the FIRST pass, the same as every other
+	// self-contained shape in this file. nil is the default, unchanged
+	// blanket behaviour every other declared defect still uses. A defect
+	// never sets more than one shape field.
+	BoundaryTieShape *BoundaryTieShape
+
 	// HotspotListBoundaryShape, when set, replaces this defect's blanket
 	// "any leaf difference under Paths is covered" rule with a
 	// LIMIT-boundary admission over a reconstructed file list AND its
@@ -1078,6 +1094,10 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 		if defect.LimitDisplacementShape != nil {
 			displacePlan = buildLimitDisplacementPlan(defect.LimitDisplacementShape, baselineData, candidateData, mismatches, findingRefs, result.Findings, covered)
 		}
+		var tiePlan *boundaryTiePlan
+		if defect.BoundaryTieShape != nil {
+			tiePlan = buildBoundaryTiePlan(defect.BoundaryTieShape, baselineData, candidateData)
+		}
 		var hotspotBoundaryPlan *hotspotListBoundaryPlan
 		if defect.HotspotListBoundaryShape != nil {
 			hotspotBoundaryPlan = buildHotspotListBoundaryPlan(defect.HotspotListBoundaryShape, baselineData, candidateData, mismatches, findingRefs, result.Findings, covered)
@@ -1103,7 +1123,7 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 		// apart, and a shaped defect that hit on path alone would still
 		// double-report alongside the shape that actually explains the
 		// difference.
-		shaped := repoPlan != nil || covPlan != nil || dedupPlan != nil || skewPlan != nil || sankeyFanoutPlan != nil || keyedDirPlan != nil || conservePlan != nil || dictDirPlan != nil || scalarDirPlan != nil || identityPlan != nil || displacePlan != nil || hotspotBoundaryPlan != nil || subsetPlan != nil || zeroValueEmptyListPlan != nil
+		shaped := repoPlan != nil || covPlan != nil || dedupPlan != nil || skewPlan != nil || sankeyFanoutPlan != nil || keyedDirPlan != nil || conservePlan != nil || dictDirPlan != nil || scalarDirPlan != nil || identityPlan != nil || displacePlan != nil || hotspotBoundaryPlan != nil || subsetPlan != nil || zeroValueEmptyListPlan != nil || tiePlan != nil
 		var touched []int
 		for i, path := range mismatches {
 			if !defectCovers(defect, path) {
@@ -1152,7 +1172,8 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 				!(hotspotBoundaryPlan != nil && shapes[i] == ShapePresence) &&
 				!(subsetPlan != nil && (shapes[i] == ShapePresence || shapes[i] == ShapeLength)) &&
 				!(dictDirPlan != nil && defect.DictKeyDirectionShape.AdmitBaselineOnlyKeys && shapes[i] == ShapePresence) &&
-				!(zeroValueEmptyListPlan != nil && shapes[i] == ShapePresence) {
+				!(zeroValueEmptyListPlan != nil && shapes[i] == ShapePresence) &&
+				!(tiePlan != nil && shapes[i] == ShapePresence) {
 				continue
 			}
 			if shaped {
@@ -1200,6 +1221,8 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 				admitted = subsetPlan.admits(result.Findings[findingRefs[i]])
 			case zeroValueEmptyListPlan != nil:
 				admitted = zeroValueEmptyListPlan.admits(result.Findings[findingRefs[i]])
+			case tiePlan != nil:
+				admitted = tiePlan.admits(result.Findings[findingRefs[i]])
 			}
 			if admitted {
 				covered[i] = true

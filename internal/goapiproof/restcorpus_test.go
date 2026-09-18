@@ -462,8 +462,12 @@ func TestDrilldownIssuesParityDatetimeCitation_NonVacuousMatchIsIdleNotStale(t *
 	if len(result.StaleBaselineDefects) != 0 {
 		t.Fatalf("a genuine, non-vacuous match must never go stale: %v", result.StaleBaselineDefects)
 	}
-	if !equalStrings(result.IdleIntermittentBaselineDefects, []string{"CHAOS-5808"}) {
-		t.Fatalf("idle = %v, want [CHAOS-5808]", result.IdleIntermittentBaselineDefects)
+	wantIdle := []string{
+		drilldownIssuesParity.BaselineDefects[0].Ticket,
+		drilldownIssuesParity.BaselineDefects[1].Ticket,
+	}
+	if !equalStrings(result.IdleIntermittentBaselineDefects, wantIdle) {
+		t.Fatalf("idle = %v, want %v", result.IdleIntermittentBaselineDefects, wantIdle)
 	}
 }
 
@@ -1013,8 +1017,10 @@ func TestDrilldownIssuesTeamScoped_ComparesUnderDrilldownIssuesParity(t *testing
 		if req.BodyMode != RESTBodyModeJSON {
 			t.Errorf("%s team_scoped BodyMode = %q, want RESTBodyModeJSON", op, req.BodyMode)
 		}
-		if len(req.Parity.BaselineDefects) != 1 || req.Parity.BaselineDefects[0].Ticket != drilldownIssuesParity.BaselineDefects[0].Ticket {
-			t.Fatalf("%s team_scoped Parity = %+v, want drilldownIssuesParity's own datetime defect", op, req.Parity)
+		if len(req.Parity.BaselineDefects) != 2 ||
+			req.Parity.BaselineDefects[0].Ticket != drilldownIssuesParity.BaselineDefects[0].Ticket ||
+			req.Parity.BaselineDefects[1].Ticket != drilldownIssuesParity.BaselineDefects[1].Ticket {
+			t.Fatalf("%s team_scoped Parity BaselineDefects = %+v, want drilldownIssuesParity's own datetime and boundary-tie defects", op, req.Parity.BaselineDefects)
 		}
 
 		identical := `{"items":[{"work_item_id":"w1","provider":"linear","status":"done","team_id":"T1","cycle_time_hours":1.5,"lead_time_hours":2.5,"started_at":"2026-01-01T00:00:00","completed_at":"2026-01-02T00:00:00"}]}`

@@ -110,11 +110,12 @@ func TestHeatmapAxisRepoOrderShape_RefusesWhenAnUnrelatedRepoAlsoDiffers(t *test
 }
 
 // TestHeatmapAxisRepoOrderShape_RefusesOnATieInEitherLegsTotals is the
-// team-lead-requested guard test: `_axis_order`'s/`axisOrder`'s own
-// stable sort breaks a tie on row ENCOUNTER order, which this shape
-// cannot verify from the two response bodies alone -- a tie anywhere in
-// baseline's own totals, candidate's own totals, or the candidate-scaled-
-// by-k expected-baseline totals must refuse the whole plan, never guess.
+// team-lead-requested guard test, narrowed to what rule 4 actually
+// refuses on unaided: candidate's own totals tie (repoA=4, repoB=4), and
+// the observed candidate axis ([repoB, repoA]) disagrees with
+// `axisOrder`'s own deterministic name-ascending tie-break (which orders
+// repoA before repoB) -- rule 3's whole-list re-derivation catches the
+// mismatch on its own, so the plan refuses regardless.
 func TestHeatmapAxisRepoOrderShape_RefusesOnATieInEitherLegsTotals(t *testing.T) {
 	// candidate's own totals: repoA=4, repoB=4 -- a genuine tie.
 	baseCells := heatmapBoundaryCell("w1", "repoA", 4) + "," + heatmapBoundaryCell("w2", "repoA", 4) + "," + heatmapBoundaryCell("w1", "repoB", 4)
@@ -125,33 +126,64 @@ func TestHeatmapAxisRepoOrderShape_RefusesOnATieInEitherLegsTotals(t *testing.T)
 
 	plan := buildHeatmapAxisRepoOrderPlan(heatmapAxisOrderTestShape(), baseData, candData)
 	if plan.valid {
-		t.Error("plan must refuse: candidate's own totals tie (repoA=4, repoB=4) -- the tie-break is unverifiable from the wire alone")
+		t.Error("plan must refuse: candidate's own totals tie (repoA=4, repoB=4) and the observed order disagrees with axisOrder's own deterministic tie-break")
 	}
 }
 
-// TestHeatmapAxisRepoOrderShape_RefusesATieEvenWhenACoincidentalOrderWouldOtherwisePass
-// isolates heatmapHasTie's own necessity from the whole-list re-derivation
-// check alone: a tie whose candidate names happen to occupy an order the
-// re-derivation would ALSO accept on its own (both legs' own axis already
-// matches a name-ascending tie-break, purely by coincidence -- this
-// shape's own model of `_axis_order`/`axisOrder` never uses name order as
-// a tie-break, and has no way to know THIS run's real row-encounter order
-// coincided with it) must still be refused. Without heatmapHasTie, this
-// exact case would be wrongly admitted.
-func TestHeatmapAxisRepoOrderShape_RefusesATieEvenWhenACoincidentalOrderWouldOtherwisePass(t *testing.T) {
-	baseCells := heatmapBoundaryCell("w1", "repoA", 4) + "," + heatmapBoundaryCell("w2", "repoA", 4) + "," + heatmapBoundaryCell("w1", "repoB", 4)
-	candCells := heatmapBoundaryCell("w1", "repoA", 2) + "," + heatmapBoundaryCell("w2", "repoA", 2) + "," + heatmapBoundaryCell("w1", "repoB", 4)
+// TestHeatmapAxisRepoOrderShape_AdmitsATieBrokenByAxisOrdersOwnDeterministicNameOrder
+// replaces a former guard that assumed a tie purely in the candidate's
+// own totals was as unverifiable as one in the baseline's -- it is not.
+// `axisOrder`'s (heatmap/response.go) own default branch breaks a tie by
+// name ascending, ALWAYS, a deterministic function of (name, total)
+// alone (see HeatmapAxisTieGroupShape's own doc comment). repoFanned
+// carries a verified k=2 (two agreeing shared cells), so its own
+// baseline total (8) sits cleanly above repoEven's untouched one (4) --
+// no tie on that leg at all -- but its own candidate-side total (4) ties
+// repoEven's exactly, and "repoEven" sorts before "repoFanned", so the
+// candidate's own axis swaps relative to the baseline's. Rule 3's
+// whole-list re-derivation checks the candidate's observed order against
+// `heatmapSortDescByTotal`'s SAME deterministic tie-break -- an exact
+// match, never a guess -- so the plan admits both axis positions.
+func TestHeatmapAxisRepoOrderShape_AdmitsATieBrokenByAxisOrdersOwnDeterministicNameOrder(t *testing.T) {
+	baseCells := heatmapBoundaryCell("w1", "repoFanned", 4) + "," + heatmapBoundaryCell("w2", "repoFanned", 4) + "," + heatmapBoundaryCell("w1", "repoEven", 4)
+	candCells := heatmapBoundaryCell("w1", "repoFanned", 2) + "," + heatmapBoundaryCell("w2", "repoFanned", 2) + "," + heatmapBoundaryCell("w1", "repoEven", 4)
 
-	// baseline: repoA=8, repoB=4 -- no tie, unambiguous. candidate:
-	// repoA=4, repoB=4 -- a genuine tie, whose two names happen to sit in
-	// alphabetical order on the wire ([repoA, repoB]) on BOTH legs, which
-	// coincides with what a name-ascending tie-break would also produce.
-	baseData := heatmapAxisOrderBody(t, baseCells, []string{"repoA", "repoB"})
-	candData := heatmapAxisOrderBody(t, candCells, []string{"repoA", "repoB"})
+	baseData := heatmapAxisOrderBody(t, baseCells, []string{"repoFanned", "repoEven"})
+	candData := heatmapAxisOrderBody(t, candCells, []string{"repoEven", "repoFanned"})
+
+	plan := buildHeatmapAxisRepoOrderPlan(heatmapAxisOrderTestShape(), baseData, candData)
+	if !plan.valid {
+		t.Fatal("plan should be valid: repoFanned's k=2 verified by 2 agreeing cells, no tie in baseline (8/4) or expected-baseline (8/4) totals -- the tie sits only in the candidate's own totals (4/4), broken by axisOrder's own deterministic name-ascending rule exactly as observed")
+	}
+	for _, idx := range []int{0, 1} {
+		if !plan.admits(Finding{Path: fmt.Sprintf("$.data.axes.y[%d]", idx), Shape: ShapeValue}) {
+			t.Errorf("data.axes.y[%d] should be admitted", idx)
+		}
+	}
+}
+
+// TestHeatmapAxisRepoOrderShape_RefusesOnATieInTheBaselinesOwnTotalsEvenWhenCoincidental
+// pins the remaining half of rule 4: a tie in the BASELINE's own totals
+// (row-encounter tie-break, genuinely unverifiable from the wire) refuses
+// the whole plan even when both legs' observed axis order happens to
+// coincide with what a name-ascending tie-break would also produce --
+// this shape's own model of `_axis_order` never uses name order as a
+// tie-break on the reference plane, and has no way to know THIS run's
+// real row-encounter order coincided with it. repoEven1's own verified
+// k=2 makes its own expected-baseline total (8) tie repoEven2's untouched
+// one (also 8) too, so both disjuncts fire together here -- removing
+// EITHER one from rule 4 would wrongly admit this exact case, since every
+// rule 3 check below happens to pass on its own.
+func TestHeatmapAxisRepoOrderShape_RefusesOnATieInTheBaselinesOwnTotalsEvenWhenCoincidental(t *testing.T) {
+	baseCells := heatmapBoundaryCell("w1", "repoEven1", 4) + "," + heatmapBoundaryCell("w2", "repoEven1", 4) + "," + heatmapBoundaryCell("w1", "repoEven2", 8)
+	candCells := heatmapBoundaryCell("w1", "repoEven1", 2) + "," + heatmapBoundaryCell("w2", "repoEven1", 2) + "," + heatmapBoundaryCell("w1", "repoEven2", 8)
+
+	baseData := heatmapAxisOrderBody(t, baseCells, []string{"repoEven1", "repoEven2"})
+	candData := heatmapAxisOrderBody(t, candCells, []string{"repoEven2", "repoEven1"})
 
 	plan := buildHeatmapAxisRepoOrderPlan(heatmapAxisOrderTestShape(), baseData, candData)
 	if plan.valid {
-		t.Error("plan must refuse: candidate's own totals tie (repoA=4, repoB=4) even though the observed axis coincidentally matches a name-ascending order")
+		t.Error("plan must refuse: baseline's own totals tie (repoEven1=8, repoEven2=8) and the expected-baseline totals tie identically -- neither is verifiable from the wire, even though the observed axes happen to match a name-ascending order")
 	}
 }
 
@@ -259,6 +291,68 @@ func TestHeatmapRepoTouchpointsTeamScopedParity_RealCapturedBodyRefusesOnATie(t 
 // consequence once the tie is broken, isolating the tie itself (not some
 // other flaw) as the reason TestHeatmapRepoTouchpointsTeamScopedParity_
 // RealCapturedBodyRefusesOnATie stays outside.
+const (
+	heatmapAxisOrderRecurringBaselinePath  = "testdata/heatmap_repo_touchpoints_axis_order_baseline_d5282133.json"
+	heatmapAxisOrderRecurringCandidatePath = "testdata/heatmap_repo_touchpoints_axis_order_candidate_f86df743.json"
+)
+
+// TestHeatmapRepoTouchpointsTeamScopedParity_RecurringCapturedBodyAdmitsTheAxisSwap
+// runs a SECOND real captured pair (a later production run than
+// heatmapAxisOrderBaselinePath/heatmapAxisOrderCandidatePath's own STEP
+// 97 capture) through the actual registered
+// heatmapRepoTouchpointsTeamScopedParity. Same mechanism, same ticket,
+// different repository: full-chaos/dev-health-web's own 3 shared cells
+// all agree on k=2 exactly (2/1, 4/2, 2/1), and its own true (candidate-
+// side) total (4) ties full-chaos/dev-health-go's own untouched total
+// (also 4) -- but this time the CANDIDATE's own observed axis order
+// ([..., "full-chaos/dev-health-go", "full-chaos/dev-health-web"]) IS
+// exactly axisOrder's own deterministic name-ascending tie-break ("go" <
+// "web"), so rule 3's whole-list re-derivation matches it exactly and
+// the plan admits both axis findings -- unlike
+// TestHeatmapRepoTouchpointsTeamScopedParity_RealCapturedBodyRefusesOnATie's
+// own STEP 97 capture, whose candidate axis order does NOT match that
+// tie-break and stays outside.
+func TestHeatmapRepoTouchpointsTeamScopedParity_RecurringCapturedBodyAdmitsTheAxisSwap(t *testing.T) {
+	baseline := heatmapAxisOrderSnapshotFromFile(t, heatmapAxisOrderRecurringBaselinePath)
+	candidate := heatmapAxisOrderSnapshotFromFile(t, heatmapAxisOrderRecurringCandidatePath)
+
+	result := Compare(baseline, candidate, heatmapRepoTouchpointsTeamScopedParity)
+
+	if result.TerminalState != TerminalStateMismatch {
+		t.Fatalf("terminal = %q, want mismatch", result.TerminalState)
+	}
+	if len(result.Findings) != 5 {
+		t.Fatalf("findings = %d, want 5 (3 value + 2 axis): %+v", len(result.Findings), result.Findings)
+	}
+	if result.DifferencesOutsideBaselineDefect != 0 {
+		t.Fatalf("outside = %d, want 0 (the 2 axis findings are now admitted) -- covered %v outside %v findings %+v",
+			result.DifferencesOutsideBaselineDefect, result.CoveredByShape, result.OutsideByShape, result.Findings)
+	}
+	dedupTicket := ""
+	for _, d := range heatmapDedupParity.BaselineDefects {
+		if d.KeyedDirectionShape != nil {
+			dedupTicket = d.Ticket
+		}
+	}
+	if dedupTicket == "" {
+		t.Fatal("heatmapDedupParity declares no KeyedDirectionShape entry")
+	}
+	axisTicket := heatmapAxisOrderTicket(t)
+	sawDedup := false
+	sawAxis := false
+	for _, ticket := range result.BaselineDefectsMatched {
+		if ticket == dedupTicket {
+			sawDedup = true
+		}
+		if ticket == axisTicket {
+			sawAxis = true
+		}
+	}
+	if !sawDedup || !sawAxis {
+		t.Fatalf("matched = %v, want both %s (value cells) and %s (axis swap) among them", result.BaselineDefectsMatched, dedupTicket, axisTicket)
+	}
+}
+
 func TestHeatmapAxisRepoOrderShape_RealCapturedCellsWithoutTheTieAdmit(t *testing.T) {
 	baseline := heatmapAxisOrderSnapshotFromFile(t, heatmapAxisOrderBaselinePath)
 	candidate := heatmapAxisOrderSnapshotFromFile(t, heatmapAxisOrderCandidatePath)

@@ -619,6 +619,75 @@ func TestFlameCorpus_HasIDBoundLiveEntriesForPRIssueAndDeployment(t *testing.T) 
 	}
 }
 
+// TestPersonDrilldownPRsDefault_UsesBoundedCandidateIteration pins the
+// declaration change that lets GET
+// /api/v1/people/{person_id}/drilldown/prs's own default case compare on a
+// person who actually has pull requests: the route's real 200/200 baseline
+// (unlike the person issue drilldown's declared-failing 503) means an
+// empty-legs person is a genuine vacuous_empty_legs structural refusal, not
+// a status divergence, so the FIRST person a plain single-shot binding
+// reaches is refused on every production run whose first search result
+// happens to have none. A regression back to a single-shot Producer
+// binding (Candidates==0) fails here.
+func TestPersonDrilldownPRsDefault_UsesBoundedCandidateIteration(t *testing.T) {
+	spec, err := SpecForREST("REST:GET:/api/v1/people/{person_id}/drilldown/prs")
+	if err != nil {
+		t.Fatalf("SpecForREST: %v", err)
+	}
+	var defaultReq *RESTRequest
+	for i := range spec.Requests {
+		if spec.Requests[i].Name == "drilldown_prs_default" {
+			defaultReq = &spec.Requests[i]
+		}
+	}
+	if defaultReq == nil {
+		t.Fatal("drilldown_prs_default entry not found")
+	}
+	if len(defaultReq.IDBindings) != 1 {
+		t.Fatalf("drilldown_prs_default IDBindings = %+v, want exactly one binding", defaultReq.IDBindings)
+	}
+	binding := defaultReq.IDBindings[0]
+	if binding.Producer != "person_id" || binding.Candidates != 10 || binding.ExposeAs != "prs_person_id" {
+		t.Fatalf("drilldown_prs_default binding = %+v, want Producer=person_id Candidates=10 ExposeAs=prs_person_id", binding)
+	}
+}
+
+// TestPersonDrilldownPRsSiblings_BindToTheExposedWinner pins that every
+// sibling case needing a person WITH pull requests -- a cursor filter, the
+// limit ceiling clamp, and limit=0's fallback -- binds person_id to
+// prs_person_id (the winning candidate drilldown_prs_default's own
+// iteration selected), never to the raw person_id producer a sibling
+// bound to would independently, and probably differently, resolve. A
+// regression that reverts any sibling to the raw producer fails here.
+func TestPersonDrilldownPRsSiblings_BindToTheExposedWinner(t *testing.T) {
+	spec, err := SpecForREST("REST:GET:/api/v1/people/{person_id}/drilldown/prs")
+	if err != nil {
+		t.Fatalf("SpecForREST: %v", err)
+	}
+	byName := map[string]RESTRequest{}
+	for _, req := range spec.Requests {
+		byName[req.Name] = req
+	}
+	for _, name := range []string{"valid_cursor", "limit_above_ceiling", "limit_zero_falls_back_to_default"} {
+		req, ok := byName[name]
+		if !ok {
+			t.Fatalf("%s entry not found", name)
+		}
+		if req.WantBaselineStatus != 200 {
+			t.Fatalf("%s WantBaselineStatus = %d, want 200 -- this route's baseline is not declared failing in production", name, req.WantBaselineStatus)
+		}
+		found := false
+		for _, binding := range req.IDBindings {
+			if binding.PathParam == "person_id" && binding.Producer == "prs_person_id" {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("%s IDBindings = %+v, want a PathParam=person_id binding on Producer=prs_person_id", name, req.IDBindings)
+		}
+	}
+}
+
 // TestFlameIssueFrameIDProducer_ExtractsFromAResponseShapedBody proves
 // issue_entity_id_bound_200's own issue_flame_frame_id producer (its
 // ListPath/IDField, read straight off the live corpus declaration, never

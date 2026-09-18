@@ -2,6 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -9,7 +14,9 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/goapidigest"
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
 // F4: readRoutingState had ZERO tests, and both of its guards survived
@@ -135,5 +142,151 @@ func TestReadRoutingStateHandlesATypedNilPool(t *testing.T) {
 	source := fakeQuerier{rows: &fakeRoutingRows{}}
 	if isNilSource(source) {
 		t.Fatal("a live source was treated as absent")
+	}
+}
+
+// fakeErrQuerier simulates a pool that opened successfully (a Ping would
+// pass) but whose FIRST real operation -- exactly readRoutingState's own
+// Query -- fails with a driver error that still carries the DSN. This is
+// the class a Ping at pool-open time does not close by itself: a
+// connection that drops, or a driver that only discovers the DSN is bad
+// on first real use, after Ping already succeeded.
+type fakeErrQuerier struct{ err error }
+
+func (f fakeErrQuerier) Query(context.Context, string, ...any) (pgx.Rows, error) {
+	return nil, f.err
+}
+
+// TestRunRedactsALaterQueryErrorEvenAfterASuccessfulOpen pins the
+// boundary run() applies: the DSN this run resolved is redacted from
+// WHATEVER error readRoutingState's own Query returns, not only from
+// openPostgresPool's own. Composed the same way run() itself composes
+// it -- secrets.NewBoundary(the resolved DSN).Redact(the returned error)
+// -- against a fake Querier standing in for a pool whose Query call is
+// the first to discover the DSN is unreachable.
+func TestRunRedactsALaterQueryErrorEvenAfterASuccessfulOpen(t *testing.T) {
+	dsn := "postgres://user:" + postgresURIMarker + "@host/db"
+	registry := goapiproof.RegistryView{
+		BuildIdentity:  "running-build",
+		DocumentDigest: map[string]string{"featureFlags": "live-digest"},
+	}
+	source := fakeErrQuerier{err: errors.New("read go_api_routing_state: failed to connect to `" + dsn + "`: server closed the connection")}
+
+	_, err := readRoutingState(context.Background(), source, registry, "")
+	if err == nil {
+		t.Fatal("want a non-nil error from a failing Query")
+	}
+
+	redacted := secrets.NewBoundary(dsn).Redact(err)
+
+	if strings.Contains(redacted.Error(), postgresURIMarker) {
+		t.Fatalf("the boundary left the marker in a later-call error: %v", redacted)
+	}
+	if strings.Contains(redacted.Error(), dsn) {
+		t.Fatalf("the boundary left the DSN in a later-call error: %v", redacted)
+	}
+}
+
+// failingDBPool satisfies dbPool: Query (routingRowSource, the only
+// method run() reaches before returning on a failing readRoutingState)
+// returns the injected DSN-carrying error; the rest are never called on
+// this path and panic if they ever are, so a future change routing
+// further than expected fails loudly instead of silently passing.
+type failingDBPool struct{ queryErr error }
+
+func (p failingDBPool) Query(context.Context, string, ...any) (pgx.Rows, error) {
+	return nil, p.queryErr
+}
+func (failingDBPool) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
+	panic("not reached: run() returns on readRoutingState's error first")
+}
+func (failingDBPool) QueryRow(context.Context, string, ...any) pgx.Row {
+	panic("not reached: run() returns on readRoutingState's error first")
+}
+func (failingDBPool) Close() {}
+
+// TestRun_RedactsALaterQueryErrorEvenAfterASuccessfulOpen drives run()
+// itself (not just readRoutingState in isolation) against a pool that
+// opens successfully -- withFakePool substitutes openPostgresPool
+// entirely, standing in for a Ping that already passed -- but whose
+// first real operation, readRoutingState's own Query, fails with a
+// driver error carrying the DSN. Proves the production wiring: run()'s
+// own defer redacts it, not a hand-composed call in the test.
+func TestRun_RedactsALaterQueryErrorEvenAfterASuccessfulOpen(t *testing.T) {
+	dsn := "postgres://user:" + postgresURIMarker + "@host/db"
+
+	featureFlagsDoc := "query FeatureFlags { featureFlags { key } }"
+	featureFlagsDigest := goapidigest.Document(featureFlagsDoc)
+
+	type registryOp struct {
+		Operation      string `json:"operation"`
+		DocumentDigest string `json:"document_digest"`
+	}
+	var ops []registryOp
+	for _, name := range goapiproof.KnownOperations() {
+		if name == "featureFlags" {
+			ops = append(ops, registryOp{Operation: name, DocumentDigest: featureFlagsDigest})
+			continue
+		}
+		// Registered (AssertCoverage requires it) but never matched by a
+		// document below; this run never reaches an operation that would
+		// refuse on that, since it fails at readRoutingState first.
+		ops = append(ops, registryOp{Operation: name, DocumentDigest: "sha256:unused-" + name})
+	}
+	registryBody, err := json.Marshal(struct {
+		SchemaDigest string       `json:"schema_digest"`
+		Operations   []registryOp `json:"operations"`
+	}{SchemaDigest: "sha256:redact-e2e", Operations: ops})
+	if err != nil {
+		t.Fatalf("marshal registry body: %v", err)
+	}
+	registry := httptest.NewServer(writeStaticJSONHandler(string(registryBody)))
+	t.Cleanup(registry.Close)
+
+	buildinfo := httptest.NewServer(writeStaticJSONHandler(`{"commit":"b18e56fa79cfe20ce0f75df148144b832d92be36","modified":false}`))
+	t.Cleanup(buildinfo.Close)
+
+	type documentEntry struct {
+		Operation string `json:"operation"`
+		Document  string `json:"document"`
+	}
+	docsJSON, err := json.Marshal([]documentEntry{{Operation: "featureFlags", Document: featureFlagsDoc}})
+	if err != nil {
+		t.Fatalf("marshal documents: %v", err)
+	}
+	docsPath := filepath.Join(t.TempDir(), "documents.json")
+	if err := os.WriteFile(docsPath, docsJSON, 0o600); err != nil {
+		t.Fatalf("write documents file: %v", err)
+	}
+
+	withFakePool(t, failingDBPool{
+		queryErr: errors.New("read go_api_routing_state: failed to connect to `" + dsn + "`: server closed the connection"),
+	})
+
+	edgeToken := syntheticJWT(t, map[string]string{"sub": "edge"})
+	proofToken := syntheticJWT(t, map[string]string{"sub": "proof"})
+
+	err = runCLI(t, []string{
+		"-registry-url=" + registry.URL + "/registry",
+		"-buildinfo-url=" + buildinfo.URL + "/buildinfo",
+		"-documents=" + docsPath,
+		"-postgres-uri=" + dsn,
+		"-org=70d529e0",
+		"-artifact-dir=" + t.TempDir(),
+		"-recorded-by=harness",
+		"-review-evidence=e2e harness run",
+		"-edge-bearer-exec=" + jsonArgv(t, e2eBearerHelper(t, edgeToken)),
+		"-proof-bearer-exec=" + jsonArgv(t, e2eBearerHelper(t, proofToken)),
+		"-timeout=5s",
+	})
+
+	if err == nil {
+		t.Fatal("want the run to fail on the injected query error")
+	}
+	if strings.Contains(err.Error(), postgresURIMarker) {
+		t.Fatalf("run()'s own error leaked the DSN's marker password: %v", err)
+	}
+	if strings.Contains(err.Error(), dsn) {
+		t.Fatalf("run()'s own error leaked the DSN: %v", err)
 	}
 }

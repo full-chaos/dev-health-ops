@@ -60,6 +60,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/goapidigest"
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
 // The proof-plane credential environment variable. VALUES never appear in
@@ -71,6 +72,11 @@ import (
 // The edge leg has no env var: -edge-bearer-exec is its only source, since
 // mint-edge-token can mint a fresh access token for every run.
 const proofBearerEnvVar = "GO_API_PROVE_PROOF_BEARER"
+
+// postgresURIEnvVar is the ONLY place the DSN may come from other than the
+// -postgres-uri flag -- named so the usage text and the flag-parsing path
+// can name the variable without ever naming its value.
+const postgresURIEnvVar = "POSTGRES_URI"
 
 // proofCredentialFreshness is how long a minted envelope is reused before
 // a fresh one is requested.
@@ -158,7 +164,7 @@ func parseFlags() (flags, error) {
 	flag.StringVar(&f.edgeBearerExec, "edge-bearer-exec", "", "JSON argv of a helper printing a FRESH edge access token on stdout, e.g. '[\"/usr/local/bin/mint-edge-token\",\"-org\",\"<org>\"]'. Re-run as the token ages. This is the ONLY source for the edge credential (required). The same argv rules as -proof-bearer-exec apply: no secret may appear as an element (the helper reads its key from its own environment). The helper's stdout and stderr are NEVER reported by this command")
 	flag.StringVar(&f.proofBearerSecretFile, "proof-bearer-secret-file", "", "path to a file holding the credential the -proof-bearer-exec helper needs. Its bytes are handed to the helper on an inherited fd (3, env PROOF_BEARER_SECRET_FD=3) -- never in argv, an env VALUE, a log, or an error. The file must be owner-only (refused if group- or other-readable) and non-empty")
 	flag.StringVar(&f.documentsPath, "documents", "", "path to `registrydump -file cmd/query-api/query_route.go` JSON output (required)")
-	flag.StringVar(&f.postgresURI, "postgres-uri", os.Getenv("POSTGRES_URI"), "domain Postgres DSN holding go_api_routing_state / go_api_proof_run")
+	secrets.BindFlag(flag.CommandLine, &f.postgresURI, "postgres-uri", postgresURIEnvVar, "domain Postgres DSN holding go_api_routing_state / go_api_proof_run")
 	flag.StringVar(&f.orgID, "org", "", "org id every request is made for (required)")
 	flag.StringVar(&f.artifactDir, "artifact-dir", "", "directory for content-addressed response bodies; receipts store a reference, never an inlined body (required)")
 	flag.StringVar(&f.recordedBy, "recorded-by", "", "WHO is running this, recorded on every receipt (required)")
@@ -177,13 +183,14 @@ func parseFlags() (flags, error) {
 	flag.StringVar(&f.window.UntilDate, "until-date", defaults.UntilDate, "request window end (YYYY-MM-DD)")
 	flag.StringVar(&f.window.WeekStart, "week-start", defaults.WeekStart, "operatingReview week start (YYYY-MM-DD)")
 	flag.Parse()
+	secrets.ResolveFlag(flag.CommandLine, &f.postgresURI, "postgres-uri", postgresURIEnvVar)
 
 	missing := map[string]string{
 		"-documents": f.documentsPath, "-org": f.orgID, "-artifact-dir": f.artifactDir,
 		"-recorded-by": f.recordedBy, "-review-evidence": f.reviewEvidence,
 	}
 	if !f.dryRun {
-		missing["-postgres-uri (or POSTGRES_URI)"] = f.postgresURI
+		missing["-postgres-uri (or "+postgresURIEnvVar+")"] = f.postgresURI
 	}
 	var absent []string
 	for name, value := range missing {
@@ -198,11 +205,22 @@ func parseFlags() (flags, error) {
 	return f, f.window.Validate()
 }
 
-func run() error {
-	f, err := parseFlags()
+func run() (err error) {
+	var f flags
+	f, err = parseFlags()
 	if err != nil {
 		return err
 	}
+	// A single boundary, applied here via defer, covers every error this
+	// function returns from this point on, no matter which layer
+	// produced it or whether that layer remembered the DSN could be
+	// inside -- construct it once, from the DSN this run actually
+	// resolved, and apply it to the named return AFTER the fact rather
+	// than trusting every call site downstream to redact its own. A
+	// bare `return expr` still assigns expr to `err` before this defer
+	// runs, so every return in the rest of the function is covered.
+	boundary := secrets.NewBoundary(f.postgresURI)
+	defer func() { err = boundary.Redact(err) }()
 
 	// Refused before anything is measured: the note is stored inside a
 	// JSON provenance object on EVERY receipt the run writes, so an
@@ -289,7 +307,7 @@ func run() error {
 	if !f.dryRun {
 		pool, err = openPostgresPool(ctx, f.postgresURI)
 		if err != nil {
-			return fmt.Errorf("connect to Postgres: %w", err)
+			return secrets.RedactedConnectError("connect to Postgres", "postgres-uri", postgresURIEnvVar)
 		}
 		defer pool.Close()
 	}
@@ -445,7 +463,22 @@ type dbPool interface {
 }
 
 var openPostgresPool = func(ctx context.Context, uri string) (dbPool, error) {
-	return pgxpool.New(ctx, uri)
+	pool, err := pgxpool.New(ctx, uri)
+	if err != nil {
+		return nil, err
+	}
+	// pgxpool.New never dials -- the first real operation does, and
+	// readRoutingState's own pool.Query would otherwise be the first
+	// thing to discover a bad DSN, with pgx's connection error (which can
+	// carry the DSN itself) surfacing through THAT call's %w wrap instead
+	// of the redacted one right below. Ping forces the dial here, while
+	// the caller is still one `if err != nil` away from
+	// secrets.RedactedConnectError.
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		return nil, err
+	}
+	return pool, nil
 }
 
 // refuseEmptyRegistry is this command's own copy of the guard

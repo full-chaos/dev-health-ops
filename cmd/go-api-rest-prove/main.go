@@ -79,6 +79,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
 	"github.com/full-chaos/dev-health-ops/internal/migrationmatrix"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
 func main() {
@@ -90,6 +91,12 @@ func main() {
 		log.Fatalf("go-api-rest-prove: %v", err)
 	}
 }
+
+// postgresURIEnvVar is the ONLY place the DSN may come from other than the
+// -postgres-uri flag, and it is named rather than inlined so the usage
+// text and the flag-parsing path can name the variable without ever
+// naming its value.
+const postgresURIEnvVar = "POSTGRES_URI"
 
 type flags struct {
 	queryAPIURL    string
@@ -148,7 +155,7 @@ func parseFlags() (flags, error) {
 	flag.StringVar(&f.queryAPISrc, "query-api-src", "", "OPTIONAL dev-only override: path to a REAL query-api source checkout, read LIVE to confirm this corpus's paths match what the mux actually mounts (migrationmatrix.LoadQueryAPIMuxRoutes). Empty (the default) uses goapiproof.MountedRESTPaths, the checked-in snapshot this binary ships with -- the operator tools image carries no Go source tree at all, so that is the ONLY option available there. Set this only when running from a real repo checkout, to catch drift immediately instead of waiting for TestMountedRESTPathsMatchesTheRealQueryAPIMux's own CI run")
 	flag.StringVar(&f.candidateBearerExec, "candidate-bearer-exec", "", "JSON array whose first element is an ALLOWLISTED HELPER NAME (\"mint-envelope\" or \"mint-edge-token\", never a path -- see goapiproof.MintViaAllowlistedHelper) printing a FRESH bearer credential for query-api on stdout, e.g. [\"mint-envelope\",\"-org\",\"<org>\"]. Re-run as the credential ages. The helper reads any secret it needs from ITS OWN environment -- never from an argument here. The remaining elements are the helper's own argv, never a shell string: nothing is interpolated into a shell. The helper's stdout and stderr are NEVER reported by this command")
 	flag.StringVar(&f.baselineBearerExec, "baseline-bearer-exec", "", "JSON array, same allowlisted-helper-name-plus-argv shape as -candidate-bearer-exec, printing a FRESH bearer credential for the Python api service on stdout -- see credential.go's own doc comment for why one credential kind cannot be assumed to reach both planes")
-	flag.StringVar(&f.postgresURI, "postgres-uri", os.Getenv("POSTGRES_URI"), "domain Postgres DSN holding go_api_proof_run. Required unless -dry-run")
+	secrets.BindFlag(flag.CommandLine, &f.postgresURI, "postgres-uri", postgresURIEnvVar, "domain Postgres DSN holding go_api_proof_run. Required unless -dry-run")
 	flag.StringVar(&f.org, "org", "", "org id every request is made for (required)")
 	flag.StringVar(&f.recordedBy, "recorded-by", "", "WHO is running this, recorded on every receipt (required)")
 	flag.StringVar(&f.reviewEvidence, "review-evidence", "", "WHY, in your own words, recorded on every receipt (required)")
@@ -172,6 +179,7 @@ func parseFlags() (flags, error) {
 	if err := flag.CommandLine.Parse(os.Args[1:]); err != nil {
 		return flags{}, err
 	}
+	secrets.ResolveFlag(flag.CommandLine, &f.postgresURI, "postgres-uri", postgresURIEnvVar)
 
 	if f.buildInfoURL == "" {
 		f.buildInfoURL = strings.TrimRight(f.queryAPIURL, "/") + "/buildinfo"
@@ -698,7 +706,18 @@ func resultVacuityErrors(result goapiproof.Result) []string {
 	return errs
 }
 
-func run(f flags) error {
+func run(f flags) (err error) {
+	// A single boundary, applied here via defer, covers every error this
+	// function returns, no matter which layer produced it or whether
+	// that layer remembered the DSN could be inside -- construct it
+	// once, from the DSN this run actually resolved, and apply it to
+	// the named return AFTER the fact rather than trusting every call
+	// site downstream to redact its own. A bare `return expr` still
+	// assigns expr to `err` before this defer runs, so every return in
+	// the rest of the function is covered.
+	boundary := secrets.NewBoundary(f.postgresURI)
+	defer func() { err = boundary.Redact(err) }()
+
 	// signal.NotifyContext gives an operator's Ctrl-C (or a SIGTERM from
 	// the surrounding orchestration) a chance to stop the run between
 	// requests rather than kill the process outright -- see the ctx.Err()
@@ -803,7 +822,7 @@ func run(f flags) error {
 	if f.postgresURI != "" {
 		pool, err := newPGXPool(ctx, f.postgresURI)
 		if err != nil {
-			return fmt.Errorf("connect to postgres: %w", err)
+			return err
 		}
 		defer pool.Close()
 		pgPool = pool
@@ -1654,10 +1673,31 @@ func (w *pgxReceiptWriter) ReadFiringHistory(ctx context.Context, method, path, 
 
 func (w *pgxReceiptWriter) Close() { w.pool.Close() }
 
-func newPGXPool(ctx context.Context, dsn string) (*pgxReceiptWriter, error) {
+// receiptWriterCloser is what newPGXPool returns: receiptWriter plus the
+// Close the caller's own defer needs. A var of this (interface) type,
+// not a direct pgxpool.New call at the call site, so a test can
+// substitute a fake writer and drive run() end to end without a real
+// database -- the same reason openPostgresPool is a var in
+// cmd/go-api-prove.
+type receiptWriterCloser interface {
+	receiptWriter
+	Close()
+}
+
+var newPGXPool = func(ctx context.Context, dsn string) (receiptWriterCloser, error) {
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
-		return nil, err
+		return nil, secrets.RedactedConnectError("connect to postgres", "postgres-uri", postgresURIEnvVar)
+	}
+	// pgxpool.New never dials -- the first real operation does, and
+	// WriteReceipt's own goapiproof.WriteRESTAtomic (Begin, then the
+	// insert) would otherwise be the first thing to discover a bad DSN,
+	// with pgx's connection error (which can carry the DSN itself)
+	// surfacing through THAT call's own %w wrap. Ping forces the dial
+	// here, still behind the redacted error above.
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		return nil, secrets.RedactedConnectError("connect to postgres", "postgres-uri", postgresURIEnvVar)
 	}
 	return &pgxReceiptWriter{pool: pool}, nil
 }

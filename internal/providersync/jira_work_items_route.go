@@ -23,6 +23,22 @@ const (
 	jiraWorkItemsPerPage  = 100
 )
 
+// jiraWorkItemsCountingDoer observes actual wire attempts, including
+// transport failures and retries the wrapped HTTPClient makes internally --
+// unlike a decoded-page or logical-fetch-loop tally, it increments once per
+// Doer.Do call regardless of whether that call ever produced a usable
+// response. It is the single source of truth for this Collect run's
+// FetchEvidence.Requests.
+type jiraWorkItemsCountingDoer struct {
+	delegate providerfoundation.HTTPDoer
+	attempts *int
+}
+
+func (doer jiraWorkItemsCountingDoer) Do(request *http.Request) (*http.Response, error) {
+	*doer.attempts++
+	return doer.delegate.Do(request)
+}
+
 // JiraWorkItemsRouteHandler is intentionally unregistered.  It owns the
 // provider-local canonical work-items family while registry/activation remains
 // a separate migration slice.
@@ -75,6 +91,11 @@ func (handler JiraWorkItemsRouteHandler) Collect(
 		return CompleteRouteBatch{}, providerfoundation.ErrInvalidScope
 	}
 
+	requests := 0
+	counted := *client
+	counted.Doer = jiraWorkItemsCountingDoer{delegate: client.Doer, attempts: &requests}
+	client = &counted
+
 	jql := jiraWorkItemsJQL(claim, projectKey)
 	fetchAll := jiraOptionBool(claim, "fetch_all", false)
 	if !fetchAll && (claim.SinceAt == nil || claim.BeforeAt == nil) {
@@ -98,7 +119,6 @@ func (handler JiraWorkItemsRouteHandler) Collect(
 		Projects:           make([]projectmembership.CatalogRow, 0),
 	}
 	optionalIncomplete := make([]string, 0)
-	requests := searchPages
 	fetchComments := jiraOptionBool(claim, "fetch_comments", true)
 	commentsLimit := jiraOptionInt(claim, "comments_limit", 0)
 	sprintIDs := make(map[string]struct{})
@@ -141,7 +161,7 @@ func (handler JiraWorkItemsRouteHandler) Collect(
 				continue
 			}
 			toEntry, ok := resolveJiraProjectCatalog(
-				ctx, client, jiraProjectCache, &requests, move.ToProjectID, move.ToProjectName,
+				ctx, client, jiraProjectCache, move.ToProjectID, move.ToProjectName,
 				derefString(item.ProjectID), derefString(item.ProjectKey),
 			)
 			if !ok {
@@ -159,7 +179,7 @@ func (handler JiraWorkItemsRouteHandler) Collect(
 				// what it moved from" shape the first-assignment sentinel
 				// already carries, not a fabricated value.
 				if fromEntry, ok := resolveJiraProjectCatalog(
-					ctx, client, jiraProjectCache, &requests, move.FromProjectID, move.FromProjectName,
+					ctx, client, jiraProjectCache, move.FromProjectID, move.FromProjectName,
 					derefString(item.ProjectID), derefString(item.ProjectKey),
 				); ok {
 					rows.Projects = append(rows.Projects, projectmembership.EnsureProjectsRow(
@@ -184,10 +204,9 @@ func (handler JiraWorkItemsRouteHandler) Collect(
 		}
 
 		if fetchComments {
-			comments, commentPages, commentErr := collectJiraIssueComments(
+			comments, _, commentErr := collectJiraIssueComments(
 				ctx, client, item.WorkItemID, maxPages, perPage, commentsLimit,
 			)
-			requests += commentPages
 			if commentErr != nil {
 				optionalIncomplete = append(optionalIncomplete, "comments:"+item.WorkItemID)
 			} else {
@@ -207,7 +226,6 @@ func (handler JiraWorkItemsRouteHandler) Collect(
 			continue
 		}
 		payload, sprintErr := fetchJiraSprint(ctx, client, sprintID)
-		requests++
 		if sprintErr != nil {
 			optionalIncomplete = append(optionalIncomplete, "sprint:"+sprintID)
 			continue
@@ -476,7 +494,6 @@ func resolveJiraProjectCatalog(
 	ctx context.Context,
 	client *providerfoundation.HTTPClient,
 	cache map[string]jiraProjectCatalogEntry,
-	requests *int,
 	id, changelogName string,
 	currentProjectID, currentProjectKey string,
 ) (jiraProjectCatalogEntry, bool) {
@@ -491,7 +508,6 @@ func resolveJiraProjectCatalog(
 		return cached, true
 	}
 	key, name, err := fetchJiraProject(ctx, client, id)
-	*requests++
 	if err != nil || name == "" {
 		name = changelogName
 	}

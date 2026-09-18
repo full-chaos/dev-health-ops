@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strconv"
@@ -196,6 +197,61 @@ func TestGitHubPullRequestRouteEmitsOneBoundedEffect(t *testing.T) {
 		return
 	}
 	t.Fatalf("row=%+v", row)
+}
+
+// gitHubPullRequestRetryOnceDoer wraps gitHubPullRequestDoer's fixtures but
+// fails the first physical attempt for exactly one path with a transport
+// error, forcing HTTPClient.Do's own retry loop to spend a second wire
+// attempt for that logical fetch.
+type gitHubPullRequestRetryOnceDoer struct {
+	gitHubPullRequestDoer
+	failPath   string
+	failedOnce bool
+}
+
+func (doer *gitHubPullRequestRetryOnceDoer) Do(request *http.Request) (*http.Response, error) {
+	if request.URL.Path == doer.failPath && !doer.failedOnce {
+		doer.failedOnce = true
+		doer.requests = append(doer.requests, request.URL.Path)
+		return nil, errors.New("simulated transient transport failure")
+	}
+	return doer.gitHubPullRequestDoer.Do(request)
+}
+
+// TestGitHubPullRequestRouteCountsFailedAndRetriedAttempts verifies that a
+// per-PR detail fetch that fails its first wire attempt and
+// succeeds on retry must count that extra attempt, not just the decoded
+// page-plus-detail total.
+func TestGitHubPullRequestRouteCountsFailedAndRetriedAttempts(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC)
+	doer := &gitHubPullRequestRetryOnceDoer{
+		gitHubPullRequestDoer: gitHubPullRequestDoer{t: t, bodies: defaultGitHubPullRequestFixtures()},
+		failPath:              "/repos/acme/api/pulls/42",
+	}
+	client, err := providerfoundation.NewHTTPClient(
+		"github", "https://api.github.com", doer,
+		func(*http.Request) error { return nil },
+		providerfoundation.RetryPolicy{
+			MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
+		},
+		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch, err := (GitHubPullRequestRouteHandler{
+		Now: func() time.Time { return now },
+	}).Collect(context.Background(), nativeTestClaim("github", "prs"), providerfoundation.Credential{}, client, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(doer.requests) != 4 {
+		t.Fatalf("requests=%v want 4 (repo, list, failed detail attempt, retried detail attempt)", doer.requests)
+	}
+	if batch.Evidence.Requests != 4 {
+		t.Fatalf("evidence=%+v want Requests=4 (every physical attempt)", batch.Evidence)
+	}
 }
 
 // TestGitHubPullRequestRouteAppliesWindowFilter is the same evidence as the

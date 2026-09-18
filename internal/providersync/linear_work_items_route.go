@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/url"
 	"os"
 	"strconv"
@@ -13,6 +14,20 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/google/uuid"
 )
+
+// linearWorkItemsCountingDoer observes actual wire attempts, including
+// transport failures and retries the wrapped HTTPClient makes internally --
+// unlike a decoded-page tally, it increments once per Doer.Do call
+// regardless of whether that call ever produced a usable response.
+type linearWorkItemsCountingDoer struct {
+	delegate providerfoundation.HTTPDoer
+	attempts *int
+}
+
+func (doer linearWorkItemsCountingDoer) Do(request *http.Request) (*http.Response, error) {
+	*doer.attempts++
+	return doer.delegate.Do(request)
+}
 
 const (
 	linearWorkItemsDefaultPerPage = 50
@@ -1086,6 +1101,10 @@ func (handler LinearWorkItemsRouteHandler) Collect(
 	fetchComments := linearWorkItemsFlag(handler.FetchComments)
 	fetchHistory := linearWorkItemsFlag(handler.FetchHistory)
 	fetchCycles := linearWorkItemsFlag(handler.FetchCycles)
+	requests := 0
+	counted := *client
+	counted.Doer = linearWorkItemsCountingDoer{delegate: client.Doer, attempts: &requests}
+	client = &counted
 	pagesSeen := 0
 	rows := linearWorkItemRows{
 		WorkItems:         make([]linearWorkItemRow, 0),
@@ -1341,7 +1360,7 @@ func (handler LinearWorkItemsRouteHandler) Collect(
 		},
 		Watermark: &watermark,
 		Evidence: FetchEvidence{Provider: "linear", Dataset: "work-items",
-			Requests: pagesSeen, Pages: pagesSeen,
+			Requests: requests, Pages: pagesSeen,
 			Records: len(rows.WorkItems) + len(rows.StatusTransitions) + len(rows.Dependencies) +
 				len(rows.ReopenEvents) + len(rows.Interactions) + len(rows.Sprints) +
 				len(rows.ProjectMemberships) + len(rows.Projects)},

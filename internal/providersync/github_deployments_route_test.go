@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"math"
 	"net/http"
@@ -77,6 +78,59 @@ func TestGitHubDeploymentsRouteMirrorsPythonEnrichmentAndWindow(t *testing.T) {
 	}
 	if batch.Evidence.Requests != len(doer.requests) || batch.Evidence.Pages != len(doer.requests)-1 {
 		t.Fatalf("evidence=%+v, want Requests=%d (every physical request, including the PR lookup and the statuses lookup)", batch.Evidence, len(doer.requests))
+	}
+}
+
+// gitHubDeploymentsRetryOnceDoer wraps gitHubDeploymentsDoer's fixtures but
+// fails the first physical attempt for exactly one path with a transport
+// error, forcing HTTPClient.Do's own retry loop to spend a second wire
+// attempt for that logical fetch.
+type gitHubDeploymentsRetryOnceDoer struct {
+	gitHubDeploymentsDoer
+	failPath   string
+	failedOnce bool
+}
+
+func (doer *gitHubDeploymentsRetryOnceDoer) Do(request *http.Request) (*http.Response, error) {
+	if request.URL.Path == doer.failPath && !doer.failedOnce {
+		doer.failedOnce = true
+		doer.requests = append(doer.requests, request.URL.Path)
+		return nil, errors.New("simulated transient transport failure")
+	}
+	return doer.gitHubDeploymentsDoer.Do(request)
+}
+
+// TestGitHubDeploymentsRouteCountsFailedAndRetriedAttempts verifies that an
+// enrichment lookup (the statuses sub-resource) that fails
+// its first wire attempt and succeeds on retry must count that extra
+// attempt, not just the decoded page total.
+func TestGitHubDeploymentsRouteCountsFailedAndRetriedAttempts(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC)
+	doer := &gitHubDeploymentsRetryOnceDoer{failPath: "/repos/acme/api/deployments/101/statuses"}
+	client, err := providerfoundation.NewHTTPClient(
+		"github", "https://api.github.com", doer,
+		func(*http.Request) error { return nil },
+		providerfoundation.RetryPolicy{
+			MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
+		},
+		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch, err := (GitHubDeploymentsRouteHandler{}).Collect(
+		context.Background(), nativeTestClaim("github", "deployments"),
+		providerfoundation.Credential{}, client, now,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(doer.requests) != 6 {
+		t.Fatalf("requests=%v want 6 (5 successful fixture requests, plus the failed statuses attempt)", doer.requests)
+	}
+	if batch.Evidence.Requests != 6 {
+		t.Fatalf("evidence=%+v want Requests=6 (every physical attempt)", batch.Evidence)
 	}
 }
 

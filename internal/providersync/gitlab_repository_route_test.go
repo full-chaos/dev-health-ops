@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -107,6 +108,64 @@ func TestGitLabRepositoryRouteEmitsCompleteReposEffect(t *testing.T) {
 	}
 	if row.Tags != `["gitlab"]` {
 		t.Fatalf("tags=%s", row.Tags)
+	}
+}
+
+// gitlabRetryOnceDoer fails the first physical attempt with a transport
+// error then serves the fixture body, forcing HTTPClient.Do's own retry loop
+// to spend a second wire attempt for the same logical fetch.
+type gitlabRetryOnceDoer struct {
+	t          *testing.T
+	body       string
+	failedOnce bool
+	requests   int
+}
+
+func (doer *gitlabRetryOnceDoer) Do(request *http.Request) (*http.Response, error) {
+	doer.t.Helper()
+	doer.requests++
+	if !doer.failedOnce {
+		doer.failedOnce = true
+		return nil, errors.New("simulated transient transport failure")
+	}
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(doer.body)),
+		Request:    request,
+	}, nil
+}
+
+// TestGitLabRepositoryRouteCountsFailedAndRetriedAttempts verifies that a
+// repo-metadata fetch that fails its first wire attempt and succeeds on
+// retry reports 2 requests, not a single hardcoded logical-fetch count.
+func TestGitLabRepositoryRouteCountsFailedAndRetriedAttempts(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC)
+	doer := &gitlabRetryOnceDoer{t: t, body: gitLabRepositoryFixture}
+	client, err := providerfoundation.NewHTTPClient(
+		"gitlab", "https://gitlab.example", doer,
+		func(*http.Request) error { return nil },
+		providerfoundation.RetryPolicy{
+			MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
+		},
+		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch, err := (GitLabRepositoryRouteHandler{}).Collect(
+		context.Background(), nativeTestClaim("gitlab", "repo-metadata"),
+		providerfoundation.Credential{}, client, now,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doer.requests != 2 {
+		t.Fatalf("doer.requests=%d want 2 (one failed attempt, one successful retry)", doer.requests)
+	}
+	if batch.Evidence.Requests != 2 {
+		t.Fatalf("evidence=%+v want Requests=2 (every physical attempt)", batch.Evidence)
 	}
 }
 

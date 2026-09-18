@@ -4,12 +4,27 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/url"
 	"strconv"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
+
+// gitLabCommitsCountingDoer observes actual wire attempts, including
+// transport failures and retries the wrapped HTTPClient makes internally --
+// unlike a decoded-page tally, it increments once per Doer.Do call
+// regardless of whether that call ever produced a usable response.
+type gitLabCommitsCountingDoer struct {
+	delegate providerfoundation.HTTPDoer
+	attempts *int
+}
+
+func (doer gitLabCommitsCountingDoer) Do(request *http.Request) (*http.Response, error) {
+	*doer.attempts++
+	return doer.delegate.Do(request)
+}
 
 const (
 	defaultGitLabCommitsPerPage  = 100
@@ -53,9 +68,12 @@ func (handler GitLabCommitsRouteHandler) Collect(
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
-	root := providerRelativePath(client, "api", "v4", "projects", projectID)
+	requests := 0
+	counted := *client
+	counted.Doer = gitLabCommitsCountingDoer{delegate: client.Doer, attempts: &requests}
+	root := providerRelativePath(&counted, "api", "v4", "projects", projectID)
 	var project repositoryPayload
-	if err := fetchObject(ctx, client, root, &project); err != nil {
+	if err := fetchObject(ctx, &counted, root, &project); err != nil {
 		return CompleteRouteBatch{}, err
 	}
 	parsedProjectID, err := project.ID.Int64()
@@ -85,7 +103,7 @@ func (handler GitLabCommitsRouteHandler) Collect(
 	}
 	page, err := providerfoundation.CollectGitLabPageParamPages(
 		ctx,
-		client,
+		&counted,
 		providerfoundation.GitLabPageOptions{
 			Path: root + "/repository/commits", Query: query,
 			PerPage: perPage, MaxPages: maxPages,
@@ -132,7 +150,7 @@ func (handler GitLabCommitsRouteHandler) Collect(
 		Watermark: claim.BeforeAt,
 		Evidence: FetchEvidence{
 			Provider: claim.Provider, Dataset: claim.Dataset,
-			Requests: page.Pages + 1, Pages: page.Pages, Records: len(rows),
+			Requests: requests, Pages: page.Pages, Records: len(rows),
 		},
 	}, nil
 }

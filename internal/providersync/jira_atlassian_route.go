@@ -31,6 +31,25 @@ const (
 	jiraAtlassianWorklogPerPage = 100
 )
 
+// jiraAtlassianCountingDoer observes actual wire attempts, including
+// transport failures and retries the wrapped HTTPClient makes internally --
+// unlike a decoded-page or logical-fetch-loop tally, it increments once per
+// Doer.Do call regardless of whether that call ever produced a usable
+// response. It is the single source of truth for this Collect run's
+// FetchEvidence.Requests; every helper below (search, changelog, comments,
+// worklogs, boards, sprints, dev-status, project-catalog resolution) shares
+// one instance via the *HTTPClient(s) reassigned at the top of Collect, so no
+// caller adds its own per-page or per-loop count on top of it.
+type jiraAtlassianCountingDoer struct {
+	delegate providerfoundation.HTTPDoer
+	attempts *int
+}
+
+func (doer jiraAtlassianCountingDoer) Do(request *http.Request) (*http.Response, error) {
+	*doer.attempts++
+	return doer.delegate.Do(request)
+}
+
 // jiraWorklogRow mirrors models.work_items.Worklog and the worklogs sink
 // projection.  Unlike the six direct work-item tables, worklogs are
 // DateTime64(6); the adapter below therefore preserves microsecond precision.
@@ -171,6 +190,16 @@ func (handler JiraAtlassianRouteHandler) Collect(
 		return CompleteRouteBatch{}, providerfoundation.ErrInvalidScope
 	}
 
+	requests := 0
+	counted := *client
+	counted.Doer = jiraAtlassianCountingDoer{delegate: client.Doer, attempts: &requests}
+	client = &counted
+	if handler.GraphQLClient != nil {
+		countedGraphQL := *handler.GraphQLClient
+		countedGraphQL.Doer = jiraAtlassianCountingDoer{delegate: handler.GraphQLClient.Doer, attempts: &requests}
+		handler.GraphQLClient = &countedGraphQL
+	}
+
 	jql := jiraWorkItemsJQL(claim, projectKey)
 	issues, searchPages, err := collectJiraAtlassianIssues(ctx, client, jql, maxPages, maxRows, perPage)
 	if err != nil {
@@ -189,7 +218,6 @@ func (handler JiraAtlassianRouteHandler) Collect(
 	}, Worklogs: make([]jiraWorklogRow, 0)}
 	optionalIncomplete := make([]string, 0)
 	worklogObservations := make([]JiraWorklogFetchObservation, 0)
-	requests := searchPages
 	fetchComments := jiraOptionBool(claim, "fetch_comments", false)
 	commentsLimit := jiraOptionInt(claim, "comments_limit", 0)
 	fetchWorklogs := jiraOptionBool(claim, "fetch_worklogs", false)
@@ -224,8 +252,7 @@ func (handler JiraAtlassianRouteHandler) Collect(
 		if key == "" {
 			return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
 		}
-		changelog, changelogPages, changelogErr := collectJiraAtlassianChangelog(ctx, client, key, maxPages)
-		requests += changelogPages
+		changelog, _, changelogErr := collectJiraAtlassianChangelog(ctx, client, key, maxPages)
 		if changelogErr != nil {
 			// Changelog is part of the required canonical transition boundary.
 			return CompleteRouteBatch{}, changelogErr
@@ -263,7 +290,6 @@ func (handler JiraAtlassianRouteHandler) Collect(
 					ctx, client, issueID, devStatusMaxRequests-devStatusRequestsIssued,
 				)
 				devStatusRequestsIssued += devStatusAttempts
-				requests += devStatusAttempts
 				switch {
 				case devStatusErr != nil:
 					optionalIncomplete = append(optionalIncomplete, "dev_status:"+item.WorkItemID)
@@ -288,7 +314,7 @@ func (handler JiraAtlassianRouteHandler) Collect(
 				continue
 			}
 			toEntry, ok := resolveJiraProjectCatalog(
-				ctx, client, jiraProjectCache, &requests, move.ToProjectID, move.ToProjectName,
+				ctx, client, jiraProjectCache, move.ToProjectID, move.ToProjectName,
 				derefString(item.ProjectID), derefString(item.ProjectKey),
 			)
 			if !ok {
@@ -301,7 +327,7 @@ func (handler JiraAtlassianRouteHandler) Collect(
 			fromProjectID, fromProjectKey := "", ""
 			if move.FromProjectID != "" {
 				if fromEntry, ok := resolveJiraProjectCatalog(
-					ctx, client, jiraProjectCache, &requests, move.FromProjectID, move.FromProjectName,
+					ctx, client, jiraProjectCache, move.FromProjectID, move.FromProjectName,
 					derefString(item.ProjectID), derefString(item.ProjectKey),
 				); ok {
 					rows.Projects = append(rows.Projects, projectmembership.EnsureProjectsRow(
@@ -326,10 +352,9 @@ func (handler JiraAtlassianRouteHandler) Collect(
 		}
 
 		if fetchComments {
-			comments, commentPages, commentErr := collectJiraIssueComments(
+			comments, _, commentErr := collectJiraIssueComments(
 				ctx, client, item.WorkItemID, maxPages, perPage, commentsLimit,
 			)
-			requests += commentPages
 			if commentErr != nil {
 				optionalIncomplete = append(optionalIncomplete, "comments:"+item.WorkItemID)
 			} else {
@@ -343,10 +368,9 @@ func (handler JiraAtlassianRouteHandler) Collect(
 			if handler.GraphQLClient != nil {
 				worklogClient = handler.GraphQLClient
 			}
-			worklogs, worklogRequests, worklogObservation, worklogErr := collectJiraAtlassianWorklogs(
+			worklogs, _, worklogObservation, worklogErr := collectJiraAtlassianWorklogs(
 				ctx, client, worklogClient, key, useGraphQL, maxPages, handler.CloudID,
 			)
-			requests += worklogRequests
 			worklogObservations = append(worklogObservations, worklogObservation)
 			if worklogErr != nil {
 				optionalIncomplete = append(optionalIncomplete, "worklogs:"+item.WorkItemID)
@@ -367,15 +391,13 @@ func (handler JiraAtlassianRouteHandler) Collect(
 	// the only source for new sprint rows. This mirrors the Python producer's
 	// `reference_sprints` guard and keeps cache behavior tenant-scoped.
 	if fetchBoardSprints && len(rows.Sprints) == 0 {
-		boards, boardPages, boardErr := collectJiraBoards(ctx, client, maxPages, perPage)
-		requests += boardPages
+		boards, _, boardErr := collectJiraBoards(ctx, client, maxPages, perPage)
 		if boardErr != nil {
 			optionalIncomplete = append(optionalIncomplete, "boards")
 		} else {
 			fetched := make([]jiraSprintRow, 0)
 			for _, board := range boards {
-				sprints, sprintPages, sprintErr := collectJiraBoardSprints(ctx, client, board.ID, maxPages, perPage)
-				requests += sprintPages
+				sprints, _, sprintErr := collectJiraBoardSprints(ctx, client, board.ID, maxPages, perPage)
 				if sprintErr != nil {
 					optionalIncomplete = append(optionalIncomplete, "board_sprints:"+strconv.FormatInt(board.ID, 10))
 					continue

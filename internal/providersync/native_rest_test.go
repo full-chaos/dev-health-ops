@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -218,6 +219,67 @@ func TestGitHubWorkItemsHonorFrozenSyncPRsFlag(t *testing.T) {
 		withPRs.Envelopes[1].SourceID != "ghpr:acme/api#43" ||
 		withPRs.Envelopes[1].Attributes["type"] != "pr" {
 		t.Fatalf("with_prs=%+v requests=%d", withPRs, withPRRequests)
+	}
+}
+
+// retryOnceDoer fails the first physical attempt for exactly one path with a
+// transport error (forcing HTTPClient.Do's own retry loop to spend a second
+// wire attempt) then serves the fixture normally. It exists to prove
+// FetchEvidence.Requests counts every physical attempt, including one that
+// never produced a decoded page, rather than deriving from
+// PageCollection.Pages (successfully decoded pages only).
+type retryOnceDoer struct {
+	t          *testing.T
+	provider   string
+	failPath   string
+	failedOnce bool
+	requests   int
+}
+
+func (doer *retryOnceDoer) Do(request *http.Request) (*http.Response, error) {
+	doer.t.Helper()
+	doer.requests++
+	if request.URL.Path == doer.failPath && !doer.failedOnce {
+		doer.failedOnce = true
+		return nil, errors.New("simulated transient transport failure")
+	}
+	body := fixtureResponse(doer.t, doer.provider, request.URL.Path)
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Request:    request,
+	}, nil
+}
+
+// TestNativeRESTHandlerCountsFailedAndRetriedAttempts verifies that a page
+// that fails its first wire attempt and succeeds on retry counts 2
+// requests, not the 1 successfully decoded page.
+func TestNativeRESTHandlerCountsFailedAndRetriedAttempts(t *testing.T) {
+	t.Parallel()
+	doer := &retryOnceDoer{t: t, provider: "github", failPath: "/repos/acme/api/labels"}
+	client, err := providerfoundation.NewHTTPClient(
+		"github", "https://fixture.test", doer,
+		func(*http.Request) error { return nil },
+		providerfoundation.RetryPolicy{
+			MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
+		},
+		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim := nativeTestClaim("github", "work-item-labels")
+	handler := NativeRESTHandler{}
+	result, err := handler.Fetch(context.Background(), claim, client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doer.requests != 2 {
+		t.Fatalf("doer.requests=%d want 2 (one failed attempt, one successful retry)", doer.requests)
+	}
+	if result.Evidence.Requests != 2 || result.Evidence.Pages != 1 {
+		t.Fatalf("evidence=%+v want Requests=2 (every physical attempt) Pages=1 (one decoded page)", result.Evidence)
 	}
 }
 

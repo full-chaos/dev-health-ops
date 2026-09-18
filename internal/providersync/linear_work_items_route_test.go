@@ -149,6 +149,65 @@ func TestLinearWorkItemsRouteNormalizesLiveIssueAndHistory(t *testing.T) {
 	}
 }
 
+// linearWorkItemsRetryOnceDoer wraps linearWorkItemsDoer's queued responses
+// but fails the very first physical attempt with a transport error, forcing
+// HTTPClient.Do's own retry loop to spend a second wire attempt for that
+// logical fetch.
+type linearWorkItemsRetryOnceDoer struct {
+	linearWorkItemsDoer
+	failedOnce bool
+}
+
+func (doer *linearWorkItemsRetryOnceDoer) Do(request *http.Request) (*http.Response, error) {
+	if !doer.failedOnce {
+		doer.failedOnce = true
+		return nil, errors.New("simulated transient transport failure")
+	}
+	return doer.linearWorkItemsDoer.Do(request)
+}
+
+// TestLinearWorkItemsRouteCountsFailedAndRetriedAttempts verifies that a
+// team lookup that fails its first wire attempt and succeeds on retry
+// counts that extra attempt, not just the decoded page total.
+func TestLinearWorkItemsRouteCountsFailedAndRetriedAttempts(t *testing.T) {
+	t.Parallel()
+	doer := &linearWorkItemsRetryOnceDoer{
+		linearWorkItemsDoer: linearWorkItemsDoer{responses: []string{
+			linearTeamResponse(),
+			`{"data":{"issues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
+		}},
+	}
+	claim := nativeTestClaim("linear", "work-items")
+	claim.SourceExternalID = "ENG"
+	normalizedAt := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	noCycles := false
+	client, err := providerfoundation.NewHTTPClient(
+		"linear", "https://api.linear.app", doer,
+		func(*http.Request) error { return nil },
+		providerfoundation.RetryPolicy{
+			MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
+		},
+		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch, err := (LinearWorkItemsRouteHandler{PerPage: 50, MaxPages: 10, FetchCycles: &noCycles}).Collect(
+		context.Background(), claim,
+		providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
+		client, normalizedAt,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(doer.requests) != 2 {
+		t.Fatalf("requests=%d want 2 successful fixture requests", len(doer.requests))
+	}
+	if batch.Evidence.Requests != 3 {
+		t.Fatalf("evidence=%+v want Requests=3 (every physical attempt, including the failed team lookup)", batch.Evidence)
+	}
+}
+
 func TestLinearWorkItemsRouteFailsClosedOnGraphQLErrorsAndCaps(t *testing.T) {
 	t.Parallel()
 	claim := nativeTestClaim("linear", "work-items")

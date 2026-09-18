@@ -131,6 +131,65 @@ func TestJiraIncidentsRouteCollectsOnlyNativelyAdmittedJSMIncidents(t *testing.T
 	}
 }
 
+// jiraIncidentRetryOnceDoer wraps jiraIncidentDoer's fixtures but fails the
+// first physical attempt for exactly one URL with a transport error,
+// forcing HTTPClient.Do's own retry loop to spend a second wire attempt for
+// that logical fetch.
+type jiraIncidentRetryOnceDoer struct {
+	jiraIncidentDoer
+	failURL    string
+	failedOnce bool
+}
+
+func (doer *jiraIncidentRetryOnceDoer) Do(request *http.Request) (*http.Response, error) {
+	if request.URL.String() == doer.failURL && !doer.failedOnce {
+		doer.failedOnce = true
+		doer.requests = append(doer.requests, request.URL.String())
+		return nil, errors.New("simulated transient transport failure")
+	}
+	return doer.jiraIncidentDoer.Do(request)
+}
+
+// TestJiraIncidentsRouteCountsFailedAndRetriedAttempts verifies that a
+// tenant lookup that fails its first wire attempt and
+// succeeds on retry must count that extra attempt, not just the decoded
+// page and loop-iteration total.
+func TestJiraIncidentsRouteCountsFailedAndRetriedAttempts(t *testing.T) {
+	t.Parallel()
+	normalizedAt := time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC)
+	claim := nativeTestClaim("jira", "incidents")
+	claim.SourceExternalID = "JSM"
+	doer := &jiraIncidentRetryOnceDoer{
+		jiraIncidentDoer: jiraIncidentDoer{t: t},
+		failURL:          "https://acme.atlassian.net/_edge/tenant_info",
+	}
+	client, err := providerfoundation.NewHTTPClient(
+		"jira", "https://acme.atlassian.net", doer,
+		func(request *http.Request) error {
+			request.Header.Set("Accept", "application/json")
+			request.Header.Set("Content-Type", "application/json")
+			return nil
+		},
+		providerfoundation.RetryPolicy{MaxAttempts: 2, InitialWait: time.Millisecond, MaxWait: time.Millisecond},
+		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch, err := (JiraIncidentRouteHandler{Entitlement: allowIncidentEntitlement}).Collect(
+		context.Background(), claim, providerfoundation.Credential{}, client, normalizedAt,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(doer.requests); got != 6 {
+		t.Fatalf("requests=%d want=6 (5 successful fixture requests, plus the failed tenant_info attempt): %v", got, doer.requests)
+	}
+	if batch.Evidence.Requests != 6 {
+		t.Fatalf("evidence=%+v want Requests=6 (every physical attempt)", batch.Evidence)
+	}
+}
+
 func TestJiraIncidentsRouteFailsClosedBeforeWatermarkOnIncompleteTraversal(t *testing.T) {
 	t.Parallel()
 	claim := nativeTestClaim("jira", "incidents")

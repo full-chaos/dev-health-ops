@@ -75,6 +75,45 @@ func (doer *gitLabCommitStatsDoer) Do(request *http.Request) (*http.Response, er
 	}, nil
 }
 
+// TestGitLabCommitStatsRouteCountsFailedAndRetriedAttempts verifies that a
+// per-commit detail fetch that fails its first wire attempt
+// and succeeds on retry must count that extra attempt, not just the decoded
+// page and successful-detail total.
+func TestGitLabCommitStatsRouteCountsFailedAndRetriedAttempts(t *testing.T) {
+	t.Parallel()
+	normalizedAt := time.Date(2026, 8, 3, 15, 0, 0, 0, time.UTC)
+	doer := &gitLabCommitStatsDoer{t: t, responses: []gitLabCommitStatsResponse{
+		{body: `{"id":123,"name":"api","path":"group/api","path_with_namespace":"group/api"}`},
+		{body: `[{"id":"sha-1","committed_date":"2026-07-22T10:00:00Z"}]`},
+		{err: errors.New("simulated transient transport failure")},
+		{body: `{"id":"sha-1","stats":{"additions":4,"deletions":2}}`},
+	}}
+	client, err := providerfoundation.NewHTTPClient(
+		"gitlab", "https://gitlab.example", doer,
+		func(*http.Request) error { return nil },
+		providerfoundation.RetryPolicy{
+			MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
+		},
+		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch, err := (GitLabCommitStatsRouteHandler{}).Collect(
+		context.Background(), nativeTestClaim("gitlab", "commit-stats"),
+		providerfoundation.Credential{}, client, normalizedAt,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(doer.requests) != 4 {
+		t.Fatalf("requests=%d want 4 (project, list, failed detail attempt, retried detail attempt)", len(doer.requests))
+	}
+	if batch.Evidence.Requests != 4 {
+		t.Fatalf("evidence=%+v want Requests=4 (every physical attempt)", batch.Evidence)
+	}
+}
+
 func TestGitLabCommitStatsRouteFetchesAggregateStatsAcrossCommitPages(t *testing.T) {
 	t.Parallel()
 	normalizedAt := time.Date(2026, 8, 3, 15, 0, 0, 987654321, time.UTC)

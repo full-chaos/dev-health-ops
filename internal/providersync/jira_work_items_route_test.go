@@ -169,6 +169,72 @@ func TestJiraWorkItemsRouteCollectsCanonicalFamilyAndWithholdsWatermarkOnOptiona
 	}
 }
 
+// TestJiraWorkItemsRouteCountsFailedAndRetriedAttempts verifies that
+// FetchEvidence.Requests has a single source -- the counting Doer at the
+// HTTP boundary -- in this genuinely-unconstructed handler too: the comments
+// fetch fails its first wire attempt and succeeds on retry, and the sprint
+// fetch fails every attempt through to the retry policy's exhaustion (a
+// best-effort failure that must not synthesize a sprint row).
+func TestJiraWorkItemsRouteCountsFailedAndRetriedAttempts(t *testing.T) {
+	claim := nativeTestClaim("jira", "work-items")
+	claim.SourceExternalID = "OPS"
+	claim.DatasetOptions = map[string]any{
+		"fetch_comments": true,
+		"comments_limit": 10,
+		"sprint_field":   "customfield_10020",
+	}
+	commentAttempts := 0
+	sprintAttempts := 0
+	doer := jiraWorkItemsDoerFunc(func(request *http.Request) (*http.Response, error) {
+		switch {
+		case request.URL.Path == "/rest/api/3/search/jql":
+			body := `{"issues":[{"key":"OPS-101","self":"https://acme.atlassian.net/rest/api/3/issue/OPS-101","fields":{"project":{"key":"OPS","id":"10001","name":"Operations"},"summary":"Repair the delivery path","status":{"name":"Done","statusCategory":{"key":"done"}},"issuetype":{"name":"Bug"},"labels":["bug"],"created":"2026-07-20T08:00:00Z","updated":"2026-07-21T09:30:00Z","customfield_10020":[{"id":"9001","name":"July support"}]},"changelog":{"histories":[]}}],"isLast":true}`
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+		case strings.HasPrefix(request.URL.Path, "/rest/api/3/issue/OPS-101/comment"):
+			commentAttempts++
+			if commentAttempts == 1 {
+				return nil, errors.New("simulated transient transport failure")
+			}
+			body := `{"comments":[],"isLast":true}`
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+		case request.URL.Path == "/rest/agile/1.0/sprint/9001":
+			sprintAttempts++
+			return &http.Response{StatusCode: http.StatusServiceUnavailable, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"errorMessages":["temporarily unavailable"]}`)), Request: request}, nil
+		default:
+			t.Fatalf("unexpected Jira request %s", request.URL.String())
+			return nil, nil
+		}
+	})
+	client, err := providerfoundation.NewHTTPClient(
+		"jira", "https://acme.atlassian.net", doer,
+		func(request *http.Request) error { return nil },
+		providerfoundation.RetryPolicy{MaxAttempts: 2, InitialWait: time.Millisecond, MaxWait: time.Millisecond},
+		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch, err := (JiraWorkItemsRouteHandler{
+		StatusMapping: loadRealStatusMapping(t), Identity: jiraRouteIdentity,
+	}).Collect(context.Background(), claim, providerfoundation.Credential{}, client, time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if commentAttempts != 2 {
+		t.Fatalf("comment attempts=%d want 2 (one failed, one retried)", commentAttempts)
+	}
+	if sprintAttempts != 2 {
+		t.Fatalf("sprint attempts=%d want 2 (both exhausted by the retry policy)", sprintAttempts)
+	}
+	if batch.Result["sprints_synced"] != 0 {
+		t.Fatalf("result=%#v: a failed sprint fetch must not synthesize a row", batch.Result)
+	}
+	// 1 search + 2 comments + 2 sprint = 5.
+	if batch.Evidence.Requests != 5 {
+		t.Fatalf("evidence=%+v want Requests=5 (every physical attempt, from one source)", batch.Evidence)
+	}
+}
+
 func TestJiraWorkItemsRouteOptionalCommentFailureIsTypedAndDoesNotAdvance(t *testing.T) {
 	claim := nativeTestClaim("jira", "work-items")
 	claim.SourceExternalID = "OPS"

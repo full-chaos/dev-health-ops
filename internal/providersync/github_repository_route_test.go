@@ -151,6 +151,66 @@ func TestGitHubRepositoryRouteEmitsOneBoundedReposEffect(t *testing.T) {
 	}
 }
 
+// githubRetryOnceDoer fails the first physical attempt with a transport
+// error then serves the fixture body, forcing HTTPClient.Do's own retry loop
+// to spend a second wire attempt for the same logical fetch.
+type githubRetryOnceDoer struct {
+	t          *testing.T
+	body       string
+	failedOnce bool
+	requests   int
+}
+
+func (doer *githubRetryOnceDoer) Do(request *http.Request) (*http.Response, error) {
+	doer.t.Helper()
+	doer.requests++
+	if !doer.failedOnce {
+		doer.failedOnce = true
+		return nil, errors.New("simulated transient transport failure")
+	}
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(doer.body)),
+		Request:    request,
+	}, nil
+}
+
+// TestGitHubRepositoryRouteCountsFailedAndRetriedAttempts verifies that a
+// repo-metadata fetch that fails its first wire attempt and succeeds on
+// retry reports 2 requests, not a single hardcoded logical-fetch count.
+func TestGitHubRepositoryRouteCountsFailedAndRetriedAttempts(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC)
+	doer := &githubRetryOnceDoer{t: t, body: gitHubRepositoryFixture}
+	client, err := providerfoundation.NewHTTPClient(
+		"github", "https://api.github.com", doer,
+		func(*http.Request) error { return nil },
+		providerfoundation.RetryPolicy{
+			MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
+		},
+		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch, err := (GitHubRepositoryRouteHandler{
+		Now: func() time.Time { return now },
+	}).Collect(
+		context.Background(), nativeTestClaim("github", "repo-metadata"),
+		providerfoundation.Credential{}, client, now,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doer.requests != 2 {
+		t.Fatalf("doer.requests=%d want 2 (one failed attempt, one successful retry)", doer.requests)
+	}
+	if batch.Evidence.Requests != 2 {
+		t.Fatalf("evidence=%+v want Requests=2 (every physical attempt)", batch.Evidence)
+	}
+}
+
 // TestRepositoryIdentityMatchesPythonDerivation pins the repo_id derivation to
 // Python's get_repo_uuid_from_repo for the ASCII names GitHub issues. A
 // divergence here silently forks every downstream repo_id foreign key.

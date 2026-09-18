@@ -137,6 +137,72 @@ func TestLaunchDarklyRouteFetchesCompleteUnitAndUsesEventReadbackPolicy(t *testi
 	}
 }
 
+// launchDarklyRetryOnceDoer wraps launchDarklyRouteDoer's queued responses
+// but fails the first physical attempt for exactly one path with a
+// transport error, forcing HTTPClient.Do's own retry loop to spend a
+// second wire attempt for that logical fetch.
+type launchDarklyRetryOnceDoer struct {
+	launchDarklyRouteDoer
+	failPath   string
+	failedOnce bool
+}
+
+func (doer *launchDarklyRetryOnceDoer) Do(request *http.Request) (*http.Response, error) {
+	if request.URL.Path == doer.failPath && !doer.failedOnce {
+		doer.failedOnce = true
+		return nil, errors.New("simulated transient transport failure")
+	}
+	return doer.launchDarklyRouteDoer.Do(request)
+}
+
+// TestLaunchDarklyRouteCountsFailedAndRetriedAttempts verifies that a
+// flags-page fetch that fails its first wire attempt and
+// succeeds on retry must count that extra attempt, not just the decoded
+// page total.
+func TestLaunchDarklyRouteCountsFailedAndRetriedAttempts(t *testing.T) {
+	t.Parallel()
+	normalizedAt := time.Date(2026, 7, 23, 12, 34, 56, 789000000, time.UTC)
+	doer := &launchDarklyRetryOnceDoer{
+		launchDarklyRouteDoer: launchDarklyRouteDoer{responses: []launchDarklyRouteResponse{
+			{status: http.StatusOK, body: `{"items":[{"key":"checkout","_projectKey":"payments","creationDate":1725000000123}],"totalCount":1}`},
+			{status: http.StatusOK, body: `{"items":[]}`},
+			{status: http.StatusOK, body: `{"items":[]}`},
+		}},
+		failPath: "/api/v2/flags/payments",
+	}
+	client, err := providerfoundation.NewHTTPClient(
+		"launchdarkly", "https://app.launchdarkly.com", doer,
+		func(*http.Request) error { return nil },
+		providerfoundation.RetryPolicy{
+			MaxAttempts: 2, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond,
+		},
+		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim := nativeTestClaim("launchdarkly", "feature-flags")
+	claim.DatasetOptions = map[string]any{
+		"project_key": "payments", "environment": "production",
+	}
+	batch, err := (LaunchDarklyRouteHandler{
+		CodeReferences: staticLaunchDarklyReferenceResolver{},
+	}).Collect(
+		context.Background(), claim,
+		providerfoundation.Credential{Provider: "launchdarkly", Config: map[string]string{}},
+		client, normalizedAt,
+	)
+	if err != nil {
+		t.Fatalf("collect error=%v requests=%v", err, requestURLs(doer.requests))
+	}
+	if len(doer.requests) != 3 {
+		t.Fatalf("requests=%v want 3 successful fixture requests", requestURLs(doer.requests))
+	}
+	if batch.Evidence.Requests != 4 {
+		t.Fatalf("evidence=%+v want Requests=4 (every physical attempt, including the failed flags attempt)", batch.Evidence)
+	}
+}
+
 func TestLaunchDarklyRouteKeepsCodeReferencesBestEffort(t *testing.T) {
 	t.Parallel()
 	doer := &launchDarklyRouteDoer{responses: []launchDarklyRouteResponse{

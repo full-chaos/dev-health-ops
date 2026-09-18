@@ -162,6 +162,15 @@ func ExtractRESTIDCandidates(body any, producer RESTIDProducer) []string {
 	return candidates
 }
 
+// RESTIDListIsEmpty reports whether body carries producer's declared list
+// (ListPath) as a JSON array with no elements -- the one shape that means
+// "no rows" to a bounded candidate search. A missing, null or non-array
+// value, or a non-empty array, is not empty.
+func RESTIDListIsEmpty(body any, producer RESTIDProducer) bool {
+	list, ok := restIDListAt(body, producer)
+	return ok && len(list) == 0
+}
+
 // restIDListAt walks body via producer's ListPath and returns the decoded
 // JSON array at that address -- the list-addressing half ExtractRESTID
 // and ExtractRESTIDCandidates share, so both read the identical path.
@@ -343,8 +352,9 @@ const RESTRefusalIDBindingUnresolved = "rest_request_id_binding_unresolved"
 // RESTRefusalCandidateProducerUnresolved is the named refusal reason for
 // a StatusOnly, declared-failing-baseline request (ValidateRESTCorpus's
 // isBaselineOnlyFailure exception) whose own Produces entries the
-// CANDIDATE leg's decoded body did not all yield -- the body failed to
-// decode, or ExtractRESTID found no value at a declared entry's path.
+// CANDIDATE leg's decoded body did not all yield -- ExtractRESTID found
+// no value at a declared entry's path. A body that does not decode at
+// all refuses as RESTRefusalCandidateBodyUndecodable instead.
 // Fires from cmd/go-api-rest-prove's own proveOneRESTRequest, AFTER the
 // candidate leg answered (unlike RESTRefusalIDBindingUnresolved above,
 // which fires before either leg of a CONSUMER is ever called): a
@@ -362,3 +372,42 @@ const RESTRefusalCandidateProducerUnresolved = "rest_candidate_body_did_not_prod
 // every individual attempt's own reason recorded separately (see
 // cmd/go-api-rest-prove's own outcome.Attempts).
 const RESTRefusalCandidateIterationExhausted = "rest_candidate_iteration_exhausted_no_candidate_produced_the_declared_ids"
+
+// RESTRefusalNoLegProducedTheDeclaredID is the named refusal reason for
+// one attempt of a bounded-candidate request (RESTIDBinding.Candidates >
+// 0) in JSON body mode where a declared Produces id is yielded by
+// NEITHER leg's body AND the declared list is an empty array on both
+// legs (RESTIDListIsEmpty); any other shape without the id refuses as
+// RESTRefusalDeclaredIDListUnrecognised instead. The attempt loses before its bodies are compared
+// and writes no receipt, and the search moves to the next candidate: a
+// candidate with no rows on either plane (a repository with no data on
+// this route, for example) is not the candidate the request's siblings
+// need. An id yielded by the candidate leg alone does not refuse: the
+// attempt is compared, so that difference between the planes surfaces.
+const RESTRefusalNoLegProducedTheDeclaredID = "rest_neither_leg_produced_the_declared_id"
+
+// RESTRefusalCandidateBodyUndecodable is the named refusal reason for a
+// StatusOnly, declared-failing-baseline request whose CANDIDATE leg
+// answered its wanted status with a body that does not decode as JSON.
+// Distinct from RESTRefusalCandidateProducerUnresolved (a decoded body
+// with no value at a declared path, i.e. no data): a body that does not
+// decode is a failure of the candidate plane, and a bounded candidate
+// search ends on it instead of moving to the next candidate.
+const RESTRefusalCandidateBodyUndecodable = "rest_candidate_body_did_not_decode"
+
+// RESTRefusalDeclaredIDListUnrecognised is the named refusal reason for a
+// request whose declared Produces id is carried by neither leg it reads,
+// where the body does NOT carry the declared list as an empty array: the
+// list is missing, null or not an array, or its elements lack the id. It
+// is a failure of a plane, never "no rows", so a bounded candidate search
+// ends on it instead of moving to the next candidate.
+const RESTRefusalDeclaredIDListUnrecognised = "rest_body_did_not_carry_the_declared_id_list"
+
+// RESTRefusalVacuousLegsDisagree is the named refusal reason for an
+// attempt of a bounded candidate search that the comparator refused as
+// vacuous (zero non-null leaves on both legs) while the two legs are not
+// the same empty answer: the decoded legs differ, or a declared Produces
+// list is not an empty array on both legs. Zero leaves is judged before
+// the legs' structure is compared, so vacuity alone cannot mean "no
+// data"; this refusal ends the search as a failure of a plane.
+const RESTRefusalVacuousLegsDisagree = "rest_vacuous_legs_disagree"

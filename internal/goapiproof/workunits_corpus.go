@@ -301,19 +301,29 @@ var workUnitsGetEndpointSpec = RESTEndpointSpec{
 			Produces: []RESTIDProducer{{Name: "work_unit_id_team_scoped", IDField: "work_unit_id"}},
 		},
 		{
-			// repo scope, scope_id bound to filters/options' own live
-			// repo_id.
+			// repo scope: BOUNDED CANDIDATE ITERATION over filters/
+			// options' own repo_id list (up to 10). A repository with no
+			// work units in the window answers `[]` on both planes -- the
+			// declared list empty on both legs -- so that candidate loses
+			// (RESTRefusalNoLegProducedTheDeclaredID) and the next is
+			// tried; any other body without work_unit_id_repo_scoped
+			// ends the search (RESTRefusalDeclaredIDListUnrecognised); the first repository where either plane
+			// returns a work unit is compared, wins, and is exposed as
+			// work_units_repo_id, so the explain sibling that consumes
+			// work_unit_id_repo_scoped (read from the baseline leg) is
+			// scoped to the SAME repository.
 			Name:                "repo_scoped",
 			Query:               url.Values{"scope_type": {"repo"}},
 			WantCandidateStatus: 200, WantBaselineStatus: 200,
 			BodyMode:   RESTBodyModeJSON,
 			Parity:     workUnitsParity,
-			IDBindings: []RESTIDBinding{{Producer: "repo_id", QueryParam: "scope_id"}},
+			IDBindings: []RESTIDBinding{{Producer: "repo_id", QueryParam: "scope_id", Candidates: 10, ExposeAs: "work_units_repo_id"}},
 			// Produces work_unit_id_repo_scoped -- the repo-scope twin
 			// of team_scoped's own producer above, read from the same
-			// BASELINE leg for the same reason. This route's repo
-			// scope carries no known intermittent-timeout mechanism,
-			// unlike its team-scoped sibling. Consumed by POST
+			// BASELINE leg for the same reason, and this entry's own
+			// win condition above. This route's repo scope carries no
+			// known intermittent-timeout mechanism, unlike its
+			// team-scoped sibling. Consumed by POST
 			// /api/v1/work-units/{work_unit_id}/explain's own
 			// repo_scoped_live_work_unit entry.
 			Produces: []RESTIDProducer{{Name: "work_unit_id_repo_scoped", IDField: "work_unit_id"}},

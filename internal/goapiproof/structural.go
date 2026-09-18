@@ -369,10 +369,33 @@ func bodySizeDisagreement(baselineBytes, candidateBytes int) (reason, detail str
 // of the two decoded bodies, so it is evaluated here with no mismatch or
 // coverage information at all: none exists yet at this point in Compare,
 // since the ordinary comparison has not run. LimitDisplacementShape and
-// HotspotListBoundaryShape accept a mismatches/covered argument for their
-// OWN later per-key admission decisions; their own validity check runs
-// first, before either argument is read, so passing nil for both here
-// changes nothing about what this function reports.
+// HotspotListBoundaryShape each accept a mismatches/findingRefs/findings/
+// covered argument for their OWN later per-key admission decisions; their
+// own validity check runs first, before any of those arguments is read,
+// so passing nil for all four here changes nothing about what this
+// function reports for those two.
+//
+// TeamRepoSubsetShape is different: its own `subset` verdict (not just
+// `valid`) can depend on repoMultiplierCovered (teamreposubset.go,
+// compare.go) -- a matched element's EqualLeaves difference that a
+// sibling SankeyRepoFanoutShape/HotspotListBoundaryShape admission would
+// explain in the real comparison reads here, with covered forced to nil,
+// as an ORDINARY unexplained difference, which can only ever make
+// `subset` MORE conservative (false where the real comparison would find
+// true), never the reverse -- there is no comparison result yet at this
+// point for repoMultiplierCovered to even be built from, so this is not
+// a shortcut taken for convenience, it is the earliest this signal can
+// exist. The consequence is narrow and safe: `bodySizeGateDeferred` can
+// decline to defer (and let bodySizeDisagreement's own >3x refusal stand)
+// in a case where composing with a sibling would have let the real
+// comparison succeed -- a false REFUSAL, never a false ADMISSION, and
+// only when the two response bodies ALSO differ in size by more than
+// bodySizeRatioThreshold with both past minBodySizeForRatioCheck. Every
+// production capture this shape is verified against (the sankey
+// team-scoped investment/hotspot routes) carries baseline/candidate
+// bodies within ~15% of each other's size, nowhere near that threshold --
+// TestBodySizeGateDeferred_TeamScopedInvestmentCaptureNeverReachesRatioCheck
+// pins it.
 //
 // An undeclared request, or a declared shape whose plan does not hold -- an
 // empty candidate list, a boundary length off the route's own limit, a
@@ -382,7 +405,7 @@ func bodySizeDisagreement(baselineBytes, candidateBytes int) (reason, detail str
 func bodySizeGateDeferred(opts Options, baselineData, candidateData any) bool {
 	for _, defect := range opts.BaselineDefects {
 		if shape := defect.TeamRepoSubsetShape; shape != nil {
-			plan := buildTeamRepoSubsetPlan(shape, baselineData, candidateData)
+			plan := buildTeamRepoSubsetPlan(shape, baselineData, candidateData, nil, nil, nil, nil)
 			if plan.valid && plan.subset {
 				return true
 			}

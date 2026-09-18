@@ -21,6 +21,7 @@ package analytics
 // is why the scan-type mismatch went undetected.
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -114,5 +115,119 @@ func TestResolveSankeyCoverage_NonInvestment_SeededRealClickHouse_ExactShares(t 
 	}
 	if diff := got.RepoCoverage - wantRepoCoverage; diff > 1e-9 || diff < -1e-9 {
 		t.Errorf("RepoCoverage = %v, want %v", got.RepoCoverage, wantRepoCoverage)
+	}
+}
+
+// seedInvestmentMetricsDailyGeneration inserts one investment_metrics_daily
+// row with an EXPLICIT computed_at, unlike seedInvestmentMetricsDailyRows
+// (breakdown_seeded_integration_test.go), which always writes now() and so
+// cannot produce two distinct physical rows for the same natural key
+// (org_id, day, repo_id, team_id, investment_area, project_stream) with a
+// deterministic newest generation. repoID == "" writes a NULL repo_id.
+func seedInvestmentMetricsDailyGeneration(t *testing.T, ctx context.Context, conn stdclickhouse.Conn, orgID, day, repoID, teamID, investmentArea, projectStream, computedAt string, workItemsDone uint32) {
+	t.Helper()
+	repo := "NULL"
+	if repoID != "" {
+		repo = fmt.Sprintf("toUUID('%s')", repoID)
+	}
+	insert := fmt.Sprintf(
+		"INSERT INTO investment_metrics_daily (repo_id, day, team_id, investment_area, project_stream, delivery_units, work_items_completed, prs_merged, churn_loc, cycle_p50_hours, computed_at, org_id) VALUES (%s, toDate('%s'), '%s', '%s', '%s', 1, %d, 1, 10, 2.0, toDateTime('%s'), '%s')",
+		repo, day, teamID, investmentArea, projectStream, workItemsDone, computedAt, orgID,
+	)
+	if err := conn.Exec(ctx, insert); err != nil {
+		t.Fatalf("seed investment_metrics_daily generation: %v", err)
+	}
+}
+
+// TestResolveSankeyCoverage_NonInvestment_SeededRealClickHouse_DedupesDailyGenerations
+// proves the non-investment coverage query reads investment_metrics_daily
+// through its deduped source (investmentMetricsDailyDedupSource,
+// timeseries.go), not the raw table: investment_metrics_daily is a plain
+// MergeTree that does not self-merge duplicate (re)writes of the same
+// natural key, so a row re-synced more than once must be
+// counted ONCE, at its newest generation, not once per physical row.
+//
+// Fixture: two distinct natural keys, deliberately split so team and
+// repo assignment disagree between them -- a fixture where both keys
+// carry the same repo/team shape would leave TeamCoverage and
+// RepoCoverage moving together, and a regression in only one of the two
+// scan/count sites would pass. Key A (team-assigned "t1", repo NULL) is
+// written as TWO physical rows sharing the same (day, repo_id, team_id,
+// investment_area, project_stream) -- two generations of the same sync,
+// an hour apart. Key B (team-unassigned, repo-assigned) is written once.
+// A raw, undeduped read counts THREE rows (A's two generations both
+// survive): assignedTeam=2 (A counted twice), total=3 -> TeamCoverage
+// 0.667; assignedRepo=1 (only B), repoTotal=3 -> RepoCoverage 0.333.
+// Both are wrong, and wrong in the specific way a generation re-sync
+// inflates a coverage ratio, not a uniform scale a reader could shrug
+// off. The deduped read collapses A to its one logical key: total=2,
+// assignedTeam=1 -> TeamCoverage 0.5; repoTotal=2, assignedRepo=1 ->
+// RepoCoverage 0.5.
+func TestResolveSankeyCoverage_NonInvestment_SeededRealClickHouse_DedupesDailyGenerations(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	defer cancel()
+
+	inst, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatalf("start ClickHouse test dependency: %v", err)
+	}
+	defer func() { _ = inst.Close(context.Background()) }()
+
+	opts, err := stdclickhouse.ParseDSN(inst.URI)
+	if err != nil {
+		t.Fatalf("parse ClickHouse DSN: %v", err)
+	}
+	conn, err := stdclickhouse.Open(opts)
+	if err != nil {
+		t.Fatalf("open raw ClickHouse connection: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	if err := conn.Exec(ctx, investmentMetricsDailyDDL); err != nil {
+		t.Fatalf("create investment_metrics_daily: %v", err)
+	}
+
+	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: inst.URI})
+	if err != nil {
+		t.Fatalf("construct ClickHouse query client: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	const orgID = "seeded-sankeycoverage-dedup"
+	const day = "2026-01-05"
+	const repoB = "77777777-7777-7777-7777-777777777777"
+
+	// Key A, generation 1 (older): team-assigned, repo NULL.
+	seedInvestmentMetricsDailyGeneration(t, ctx, conn, orgID, day, "", "t1", "feature", "ps1", "2026-01-05 01:00:00", 5)
+	// Key A, generation 2 (newer, same natural key) -- the re-sync.
+	seedInvestmentMetricsDailyGeneration(t, ctx, conn, orgID, day, "", "t1", "feature", "ps1", "2026-01-05 02:00:00", 6)
+	// Key B, one generation: team-unassigned, repo-assigned.
+	seedInvestmentMetricsDailyGeneration(t, ctx, conn, orgID, day, repoB, "", "feature", "ps2", "2026-01-05 01:00:00", 3)
+
+	req, err := SankeyRequestFromInput(model.SankeyRequestInput{
+		Path:    []model.DimensionInput{model.DimensionInputTeam, model.DimensionInputTheme},
+		Measure: model.MeasureInputCount,
+		DateRange: &model.DateRangeInput{
+			StartDate: mustGraphQLDate("2026-01-01"),
+			EndDate:   mustGraphQLDate("2026-01-08"),
+		},
+		MaxNodes: 16,
+		MaxEdges: 100,
+	})
+	if err != nil {
+		t.Fatalf("SankeyRequestFromInput: %v", err)
+	}
+
+	got := resolveSankeyCoverage(ctx, client, orgID, req, 60, false, nil)
+	if got == nil {
+		t.Fatal("resolveSankeyCoverage returned nil on a real ClickHouse")
+	}
+	const wantTeamCoverage = 0.5
+	const wantRepoCoverage = 0.5
+	if diff := got.TeamCoverage - wantTeamCoverage; diff > 1e-9 || diff < -1e-9 {
+		t.Errorf("TeamCoverage = %v, want %v (a re-synced generation must be counted once, not once per physical row)", got.TeamCoverage, wantTeamCoverage)
+	}
+	if diff := got.RepoCoverage - wantRepoCoverage; diff > 1e-9 || diff < -1e-9 {
+		t.Errorf("RepoCoverage = %v, want %v (a re-synced generation must be counted once, not once per physical row)", got.RepoCoverage, wantRepoCoverage)
 	}
 }

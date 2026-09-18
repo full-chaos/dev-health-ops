@@ -451,25 +451,25 @@ func NewProviderFromCredentials(kind ProviderKind, apiKey, baseURL, model string
 		}), nil
 
 	case ProviderKindOllama:
-		// codex round 3 (#2234), P1: an org's stored "ollama" base_url
-		// follows Python's own contract -- local.py's OllamaProvider is a
-		// LocalProvider subclass, OpenAI-compatible /v1/chat/completions,
-		// defaulting to "http://localhost:11434/v1" (local.py:42,:283-298)
-		// -- NOT the native /api/chat wire protocol NewOllamaProvider
-		// speaks. Routing org-BYO "ollama" through NewOllamaProvider (as
-		// this case originally did, mirroring NewProviderFromEnv below for
-		// symmetry) sends a `/v1`-shaped stored base_url to the wrong path
-		// (".../v1/api/chat", a 404) and breaks every completion.
-		// NewProviderFromEnv's own ProviderKindOllama case is NOT changed
-		// here: it predates this PR (CHAOS-4978/#2189, already shipped on
-		// main) and has the SAME mismatch for an operator-set
-		// OLLAMA_BASE_URL/LLM_BASE_URL ending in /v1 -- team-lead's ruling
-		// was to fix org-BYO's newly-reachable path now and track the
-		// platform-env path as its own follow-up (see RISK NOTES in this
-		// PR's body for the ticket), not to re-litigate #2189's shipped
-		// decision here. The asymmetry between this case and
-		// NewProviderFromEnv's is therefore deliberate and temporary, not
-		// an oversight.
+		// An org's stored "ollama" base_url follows Python's own contract
+		// -- local.py's OllamaProvider is a LocalProvider subclass,
+		// OpenAI-compatible /v1/chat/completions, defaulting to
+		// "http://localhost:11434/v1" (local.py:42,:283-298) -- NOT the
+		// native /api/chat wire protocol NewOllamaProvider speaks. Routing
+		// org-BYO "ollama" through NewOllamaProvider would send a stored
+		// /v1-shaped base_url to the wrong path. NewLocalProvider (the
+		// OpenAI-compatible client) is the correct match for what an
+		// org's stored ollama base_url actually is.
+		//
+		// NewProviderFromEnv's own ProviderKindOllama case stays on
+		// NewOllamaProvider's native protocol, unchanged here -- that path
+		// now normalizes away a /v1 suffix before joining its own native
+		// route (see normalizeOllamaBaseURL's doc comment), so an
+		// operator-set OLLAMA_BASE_URL/LLM_BASE_URL works whether or not
+		// it carries the /v1 suffix. The two cases route to different
+		// clients (native here vs. OpenAI-compatible for org-BYO) by
+		// design -- that wire-protocol split is unaffected by the URL
+		// normalization.
 		return NewLocalProvider(LocalProviderConfig{
 			BaseURL: baseURL,
 			Model:   model,

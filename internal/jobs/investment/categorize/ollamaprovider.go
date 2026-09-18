@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 )
 
 // OllamaProviderConfig configures OllamaProvider.
@@ -60,11 +61,34 @@ type OllamaProvider struct {
 	client *http.Client
 }
 
+// normalizeOllamaBaseURL strips a trailing OpenAI-compatible "/v1" suffix
+// (and any trailing slash around it) from a base URL before OllamaProvider
+// joins its own native "/api/chat" path onto it.
+//
+// The documented platform configuration (docs/operate/configure/environment-
+// and-secrets.md) sets OLLAMA_BASE_URL to the SAME "http://host:11434/v1"
+// form Python's own OllamaProvider defaults to (llm/providers/local.py:42,
+// 283-298) -- because Python's "ollama" is a LocalProvider subclass speaking
+// the OpenAI-compatible Chat Completions wire under /v1, while this
+// (a deliberately different choice from Python's) native client speaks
+// Ollama's own /api/chat route at the server root. Joining that same,
+// correctly-documented value onto "/api/chat" unnormalized produces
+// ".../v1/api/chat", which 404s against a real Ollama server -- confirmed
+// live. Stripping the suffix here keeps both env-var spellings pointed at
+// the same server reachable, without changing the wire protocol itself:
+// this is a URL-form tolerance, not a change to which protocol this
+// client speaks.
+func normalizeOllamaBaseURL(raw string) string {
+	trimmed := trimBaseURL(raw)
+	trimmed = strings.TrimSuffix(trimmed, "/v1")
+	return trimBaseURL(trimmed)
+}
+
 func NewOllamaProvider(cfg OllamaProviderConfig) *OllamaProvider {
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = defaultOllamaBaseURL
 	}
-	cfg.BaseURL = trimBaseURL(cfg.BaseURL)
+	cfg.BaseURL = normalizeOllamaBaseURL(cfg.BaseURL)
 	if cfg.Model == "" {
 		cfg.Model = defaultOllamaModel
 	}

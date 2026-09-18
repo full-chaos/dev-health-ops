@@ -3,6 +3,7 @@ package investmentexplain
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"testing"
 )
 
@@ -91,6 +92,92 @@ func TestResolveUnsupportedProviderKindCoversFullPythonKnownSet(t *testing.T) {
 			_, unsupported := ResolveUnsupportedProviderKind(requested)
 			if unsupported {
 				t.Fatalf("ResolveUnsupportedProviderKind(%q) = unsupported=true, want false (this port implements it)", requested)
+			}
+		})
+	}
+}
+
+// TestProviderHasRequiredConfigCoversFullPythonKnownSet is the
+// providerHasRequiredConfig/IsLLMAvailable sibling of
+// TestResolveUnsupportedProviderKindCoversFullPythonKnownSet above: a table
+// over every kind either function above resolves, so the next kind that
+// moves from goUnsupportedButPythonKnownProviderKinds into
+// goImplementedProviderKinds cannot silently skip the availability gate the
+// way ollama did -- the availability check has its own switch, separate
+// from the unsupported-kind check, and only ONE of the two switches was
+// widened when ollama's native Go client landed. mock/none need no env
+// control (their branches never read one); openai/local/ollama/the six
+// BYO-only kinds each get their own subtest so env clearing stays scoped to
+// the case that needs it, matching resolve_model_name_golden_test.go's own
+// "clear before every subtest" idiom.
+func TestProviderHasRequiredConfigCoversFullPythonKnownSet(t *testing.T) {
+	envNames := []string{
+		"OPENAI_API_KEY", "LLM_API_KEY", "LLM_BASE_URL", "OPENAI_BASE_URL",
+		"LOCAL_LLM_BASE_URL", "LOCAL_LLM_API_KEY",
+		"OLLAMA_BASE_URL", "OLLAMA_API_KEY", "OLLAMA_MODEL", "LLM_MODEL_OLLAMA",
+	}
+	clearEnv := func(t *testing.T) {
+		t.Helper()
+		for _, name := range envNames {
+			t.Setenv(name, "")
+			_ = os.Unsetenv(name)
+		}
+	}
+
+	t.Run("mock", func(t *testing.T) {
+		clearEnv(t)
+		if !IsLLMAvailable("mock", "") {
+			t.Fatal("IsLLMAvailable(mock) = false, want true (always available)")
+		}
+	})
+	t.Run("none", func(t *testing.T) {
+		clearEnv(t)
+		if IsLLMAvailable("none", "") {
+			t.Fatal("IsLLMAvailable(none) = true, want false (never available)")
+		}
+	})
+	t.Run("local_with_nothing_configured", func(t *testing.T) {
+		clearEnv(t)
+		if !IsLLMAvailable("local", "") {
+			t.Fatal("IsLLMAvailable(local) = false, want true (NewProviderFromEnv never errors for local)")
+		}
+	})
+	t.Run("ollama_with_nothing_configured", func(t *testing.T) {
+		clearEnv(t)
+		// This is the regression: ollama's native Go client (categorize.
+		// NewOllamaProvider) never errors -- no required field, same shape as
+		// local -- so, exactly like Python's own _provider_has_required_config
+		// (ollama is not in _API_KEY_REQUIRED_PROVIDERS), an explicit ollama
+		// request is available with zero configuration. Before
+		// providerHasRequiredConfig's switch carries ProviderKindOllama, this
+		// falls to the default case and reports unavailable -- the bug this
+		// test exists to pin shut.
+		if !IsLLMAvailable("ollama", "") {
+			t.Fatal("IsLLMAvailable(ollama) = false, want true (NewProviderFromEnv never errors for ollama)")
+		}
+	})
+	t.Run("openai_unconfigured", func(t *testing.T) {
+		clearEnv(t)
+		if IsLLMAvailable("openai", "") {
+			t.Fatal("IsLLMAvailable(openai) = true, want false (no OPENAI_API_KEY/LLM_API_KEY set)")
+		}
+	})
+	t.Run("openai_configured", func(t *testing.T) {
+		clearEnv(t)
+		t.Setenv("OPENAI_API_KEY", "sk-test-not-real")
+		if !IsLLMAvailable("openai", "") {
+			t.Fatal("IsLLMAvailable(openai) = false, want true (OPENAI_API_KEY set)")
+		}
+	})
+
+	for _, requested := range []string{
+		"anthropic", "gemini", "qwen", "lmstudio", "qwen-local", "qwen-lmstudio",
+	} {
+		requested := requested
+		t.Run(requested, func(t *testing.T) {
+			clearEnv(t)
+			if IsLLMAvailable(requested, "") {
+				t.Fatalf("IsLLMAvailable(%q) = true, want false (this port has no client for it)", requested)
 			}
 		})
 	}

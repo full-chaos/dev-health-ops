@@ -3,9 +3,12 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strconv"
 	"testing"
 	"time"
 
@@ -272,7 +275,7 @@ var errBoom = boomError{}
 // TestInvestmentExplainWorkHandlerRejectsUnsupportedProviderPreStream
 // regresses codex round 1's #5, ruled by team-lead as a required fix, not
 // a RISK-NOTES-only item: a request for a provider Python genuinely
-// supports (anthropic/gemini/qwen/ollama/lmstudio) but this Go port
+// supports (anthropic/gemini/qwen/lmstudio) but this Go port
 // cannot construct a client for must get a plain 501 BEFORE any
 // streaming begins -- not the normal streamed llm_unavailable body --
 // so the Python REST forwarder's own non-200 fallback routes the
@@ -325,6 +328,96 @@ func TestInvestmentExplainWorkHandlerSupportedProviderStillStreams(t *testing.T)
 
 	if rec.Code == http.StatusNotImplemented {
 		t.Fatalf("mock provider incorrectly hit the pre-stream 501 path")
+	}
+}
+
+// TestInvestmentExplainWorkHandlerOpenAIUnconfiguredStaysRefused is the
+// negative half of the ollama availability fix: an unconfigured openai
+// request must keep answering the exact same 200 llm_unavailable body it
+// answers today -- providerHasRequiredConfig's openai branch still tries a
+// real construction and still reports unavailable when that construction
+// fails, unaffected by widening the switch to also cover ollama.
+func TestInvestmentExplainWorkHandlerOpenAIUnconfiguredStaysRefused(t *testing.T) {
+	for _, name := range []string{"OPENAI_API_KEY", "LLM_API_KEY", "LLM_BASE_URL", "OPENAI_BASE_URL"} {
+		t.Setenv(name, "")
+		_ = os.Unsetenv(name)
+	}
+
+	reader, err := investmentexplain.NewReader(emptyRowsQueryClient{})
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	handler := newInvestmentExplainWorkHandler(reader, nil, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/investment/explain?llm_provider=openai", nil)
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	rec := httptest.NewRecorder()
+
+	handler(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d\nbody=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	want := `{"summary":"","top_findings":[],"confidence":{"level":"unknown","quality_mean":null,"quality_stddev":null,"band_mix":{},"drivers":[]},"what_to_check_next":[],"anti_claims":[],"status":"llm_unavailable"}` + "\n"
+	if got := rec.Body.String(); got != want {
+		t.Fatalf("body mismatch\n got=%s\nwant=%s", got, want)
+	}
+}
+
+// TestInvestmentExplainWorkHandlerOllamaExplicitProviderSucceeds is the
+// SUCCESS half of the ollama availability gate: an explicit
+// llm_provider=ollama request, with OLLAMA_BASE_URL pointed at a real
+// server standing in for Ollama's native /api/chat endpoint, must reach a
+// genuine completion through the SAME production constructor every other
+// provider in this file uses (categorize.NewOllamaProvider via
+// investmentexplain.CompleteInvestmentMixExplanationForOrg) -- not stop at
+// the llm_unavailable body providerHasRequiredConfig's missing ollama case
+// used to force regardless of configuration.
+func TestInvestmentExplainWorkHandlerOllamaExplicitProviderSucceeds(t *testing.T) {
+	const validCompletionText = `{"summary": "Effort leans toward velocity work with a smaller quality share.", "top_findings": [], "confidence": {"level": "unknown", "quality_mean": null, "quality_stddev": null, "band_mix": {"high": 0, "moderate": 0, "low": 0, "very_low": 0, "unknown": 0}, "drivers": []}, "what_to_check_next": [], "anti_claims": []}`
+
+	requestReached := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/chat" {
+			t.Errorf("ollama request path = %q, want /api/chat", r.URL.Path)
+		}
+		requestReached = true
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"message":{"role":"assistant","content":` + strconv.Quote(validCompletionText) + `},"done":true}`))
+	}))
+	defer server.Close()
+	t.Setenv("OLLAMA_BASE_URL", server.URL)
+
+	reader, err := investmentexplain.NewReader(emptyRowsQueryClient{})
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	handler := newInvestmentExplainWorkHandler(reader, nil, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/investment/explain?llm_provider=ollama", nil)
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	rec := httptest.NewRecorder()
+
+	handler(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d\nbody=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if !requestReached {
+		t.Fatal("the fake ollama server never received a request -- the availability gate refused the request before any completion was attempted")
+	}
+	var decoded struct {
+		Summary string  `json:"summary"`
+		Status  *string `json:"status"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &decoded); err != nil {
+		t.Fatalf("decode response: %v\nbody=%s", err, rec.Body.String())
+	}
+	if decoded.Status == nil || *decoded.Status != "valid" {
+		t.Fatalf("status = %v, want \"valid\" -- got the refusal/fallback shape instead of a real completion\nbody=%s", decoded.Status, rec.Body.String())
+	}
+	if decoded.Summary == "" {
+		t.Fatalf("summary is empty -- want the completion's real summary text\nbody=%s", rec.Body.String())
 	}
 }
 

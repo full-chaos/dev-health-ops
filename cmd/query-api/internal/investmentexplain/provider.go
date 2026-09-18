@@ -12,7 +12,7 @@
 //
 // SCOPE, matching categorize.ResolveProviderKind's own documented
 // narrowing: this file resolves and constructs a provider for the
-// platform-default path only (mock, none, openai, local) -- org BYO
+// platform-default path only (mock, none, openai, local, ollama) -- org BYO
 // credential/model resolution (llm/credentials.py's
 // resolve_llm_org_settings_model / org_byo_provider_matches /
 // resolve_llm_credentials) and the anthropic/gemini/qwen backends have
@@ -99,15 +99,15 @@ func IsLLMAvailable(requested string, _ string) bool {
 }
 
 // providerHasRequiredConfig ports _provider_has_required_config
-// (llm/providers/__init__.py:95-112), narrowed to the four kinds this
+// (llm/providers/__init__.py:95-112), narrowed to the five kinds this
 // port can construct: mock is always available, none is never
-// available, openai/local match NewProviderFromEnv's own real
+// available, openai/local/ollama match NewProviderFromEnv's own real
 // construction attempt (the cheapest correct way to answer "would this
 // succeed" is to actually try, matching resolve_llm_credentials'
 // approach of attempting resolution and catching the auth error). Any
 // other kind (a BYO provider this port doesn't implement) is refused,
 // matching Python's `name not in _KNOWN_PROVIDERS` catch-all -- except
-// Python's _KNOWN_PROVIDERS DOES include anthropic/gemini/qwen/ollama/
+// Python's _KNOWN_PROVIDERS DOES include anthropic/gemini/qwen/
 // lmstudio (they're known, just not necessarily configured); this port
 // has no way to check THEIR credentials at all, so it reports them
 // unavailable rather than guessing, a narrower answer than Python's for
@@ -118,7 +118,7 @@ func providerHasRequiredConfig(kind categorize.ProviderKind) bool {
 		return true
 	case categorize.ProviderKindNone:
 		return false
-	case categorize.ProviderKindOpenAI, categorize.ProviderKindLocal:
+	case categorize.ProviderKindOpenAI, categorize.ProviderKindLocal, categorize.ProviderKindOllama:
 		provider, err := categorize.NewProviderFromEnv(kind)
 		if err != nil {
 			return false

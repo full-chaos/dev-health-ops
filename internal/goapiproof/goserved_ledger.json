@@ -81,6 +81,15 @@
         {"file": "cmd/query-api/internal/hotspots/hotspots_test.go", "test": "TestQuotePython_MatchesPythonQuoteDefaultSafeSet"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
       ]
+    },
+    {
+      "operation": "cognitiveLoad",
+      "two_plane_ops_sha": "12a6fa86fb59f2c6fe3aeec0ca44d040fc9e216f",
+      "guards": [
+        {"file": "cmd/query-api/internal/cognitiveload/cognitiveload_golden_test.go", "test": "TestCognitiveLoadMatchesTheFrozenGolden"},
+        {"file": "cmd/query-api/internal/cognitiveload/cognitiveload_test.go", "test": "TestResolve_TeamAndRepoCombined_OwnedByADifferentTeam_NeverPatternFallback_ReturnsEmpty"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
+      ]
     }
   ]
 }

@@ -1,0 +1,73 @@
+package graph
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"github.com/full-chaos/dev-health-go/clickhouse"
+
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/authctx"
+)
+
+// scopeRecordingClient records every statement's bindings and fails, so a
+// test sees exactly which org a resolver asked ClickHouse about.
+type scopeRecordingClient struct{ calls [][]clickhouse.Binding }
+
+func (c *scopeRecordingClient) Query(_ context.Context, _ string, b []clickhouse.Binding) (clickhouse.RowScanner, error) {
+	c.calls = append(c.calls, b)
+	return nil, errors.New("scopeRecordingClient: reached")
+}
+
+type securityCall func(r *Resolver, ctx context.Context, orgID string) error
+
+func securityCalls() map[string]securityCall {
+	return map[string]securityCall{
+		"securityAlerts": func(r *Resolver, ctx context.Context, orgID string) error {
+			_, err := r.Query().SecurityAlerts(ctx, orgID, nil, nil)
+			return err
+		},
+		"securityOverview": func(r *Resolver, ctx context.Context, orgID string) error {
+			_, err := r.Query().SecurityOverview(ctx, orgID, nil)
+			return err
+		},
+	}
+}
+
+// Every security field denies a missing identity, an empty org, and an
+// orgId argument that names another org, and reaches ClickHouse for none of them.
+func TestSecurityFields_DenyForeignAndMissingOrg(t *testing.T) {
+	for name, call := range securityCalls() {
+		for label, ctx := range map[string]context.Context{
+			"no claims":     context.Background(),
+			"empty org":     authctx.WithClaims(context.Background(), authctx.Claims{OrgID: ""}),
+			"foreign orgId": authctx.WithClaims(context.Background(), authctx.Claims{OrgID: "org-1"}),
+		} {
+			ch := &scopeRecordingClient{}
+			orgArg := "org-1"
+			if label == "foreign orgId" {
+				orgArg = "org-2"
+			}
+			err := call(&Resolver{ClickHouse: ch}, ctx, orgArg)
+			asAuthorizationError(t, err)
+			if len(ch.calls) != 0 {
+				t.Errorf("%s/%s: ClickHouse reached past the guard", name, label)
+			}
+		}
+	}
+}
+
+// With a matching org the resolver reaches ClickHouse and scopes to it.
+func TestSecurityFields_ScopeToAuthenticatedOrg(t *testing.T) {
+	for name, call := range securityCalls() {
+		ch := &scopeRecordingClient{}
+		ctx := authctx.WithClaims(context.Background(), authctx.Claims{OrgID: "org-1"})
+		_ = call(&Resolver{ClickHouse: ch}, ctx, "org-1")
+		if len(ch.calls) == 0 {
+			t.Fatalf("%s: never reached ClickHouse", name)
+		}
+		if v, _ := bindingValueByName(ch.calls[0], "org_id"); v != "org-1" {
+			t.Errorf("%s: org_id binding = %v", name, v)
+		}
+	}
+}

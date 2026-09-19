@@ -1,0 +1,35 @@
+query SecurityAlerts($orgId: String!, $filters: SecurityAlertFilterInput, $pagination: SecurityPaginationInput) {
+  securityAlerts(orgId: $orgId, filters: $filters, pagination: $pagination) {
+    edges {
+      node {
+        alertId
+        repoId
+        repoName
+        repoUrl
+        source
+        severity
+        state
+        packageName
+        cveId
+        url
+        title
+        description
+        createdAt
+        fixedAt
+        dismissedAt
+        __typename
+      }
+      cursor
+      __typename
+    }
+    totalCount
+    pageInfo {
+      hasNextPage
+      hasPreviousPage
+      startCursor
+      endCursor
+      __typename
+    }
+    __typename
+  }
+}

@@ -95,6 +95,7 @@ EXPECTED_PACKAGES = {
     # mismatched Go destination (see
     # aggregatescan_seeded_integration_test.go's own header comment).
     "cmd/query-api/internal/sankey",
+    "cmd/query-api/internal/security",
     # Same argMax dedup NULL-skip proof as operatingreview above, for
     # wip_age_p50/p90_hours and pr_first_review_p50_hours.
     "cmd/query-api/internal/throughputforecast",

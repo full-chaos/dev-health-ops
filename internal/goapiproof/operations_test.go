@@ -31,7 +31,7 @@ var registeredOperations = []string{
 	"capacityForecast", "capacityForecasts", "cognitiveLoad", "complexityTimeseries",
 	"featureFlagEvents", "featureFlags", "flowMatrix", "hotspots",
 	"investmentBreakdown", "investmentFull", "operatingReview", "pr",
-	"reviewEdges", "throughputForecast",
+	"reviewEdges", "securityAlerts", "securityOverview", "throughputForecast",
 	"workGraphArtifacts", "workGraphEdges", "workGraphFlow",
 }
 
@@ -118,6 +118,7 @@ func TestWindowedSpecsUseTheWindow(t *testing.T) {
 	windowless := map[string]bool{
 		"capacityForecast": true, "capacityForecasts": true,
 		"featureFlagEvents": true, "featureFlags": true, "pr": true,
+		"securityAlerts": true, "securityOverview": true,
 		"throughputForecast": true, "workGraphArtifacts": true, "workGraphEdges": true,
 		"workGraphFlow": true,
 	}

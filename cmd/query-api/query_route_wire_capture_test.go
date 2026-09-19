@@ -143,3 +143,22 @@ func TestRegisteredPrDetailDocument_MatchesCapturedWireFixture(t *testing.T) {
 		)
 	}
 }
+
+// TestRegisteredSecurityDocuments_MatchCapturedWireFixtures proves each
+// registered security document digests to the wire-form text produced by
+// the web repo's own wire-parity tooling, so a real client's request is
+// accepted by the route.
+func TestRegisteredSecurityDocuments_MatchCapturedWireFixtures(t *testing.T) {
+	for _, c := range []struct{ fixture, registered string }{
+		{"testdata/wire_capture/securityoverview_captured.graphql", registeredSecurityOverviewDocument},
+		{"testdata/wire_capture/securityalerts_captured.graphql", registeredSecurityAlertsDocument},
+	} {
+		captured, err := os.ReadFile(c.fixture)
+		if err != nil {
+			t.Fatalf("read captured wire fixture: %v", err)
+		}
+		if got, want := digestHex(string(captured)), digestHex(c.registered); got != want {
+			t.Errorf("%s: registered document digest %s does not match the captured wire form %s", c.fixture, want, got)
+		}
+	}
+}

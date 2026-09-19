@@ -52,6 +52,14 @@
     "digest": "4a759f9e3d3e903b03a3aae8039b3bdca2ed69b3af25a0b20f01c1da55d97123"
   },
   {
+    "operation": "securityAlerts",
+    "digest": "c7660e4db9d230cee45deb465db15fb795965bf66a1cefd2a8f51555dac376cf"
+  },
+  {
+    "operation": "securityOverview",
+    "digest": "3b76c20e6950094356311d84f4288a7ce9e1e936c60c2b867b6e083f2d709884"
+  },
+  {
     "operation": "throughputForecast",
     "digest": "fc08dea094ec832290b4f528141eacb5bbc463beea45794cf205fe43952379f9"
   },

@@ -49,8 +49,6 @@ var notImplementedResolverNames = []string{
 	"queryResolver.ReportRuns",
 	"queryResolver.SavedReport",
 	"queryResolver.SavedReports",
-	"queryResolver.SecurityAlerts",
-	"queryResolver.SecurityOverview",
 	"queryResolver.TestopsRisk",
 	"queryResolver.WorkItemTeamAttributions",
 	"subscriptionResolver.MetricsUpdated",

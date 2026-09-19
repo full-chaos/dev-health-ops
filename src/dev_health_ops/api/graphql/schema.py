@@ -117,7 +117,6 @@ from .resolvers.reports import (
     resolve_trigger_report,
     resolve_update_saved_report,
 )
-from .resolvers.review_edges import resolve_review_edges
 from .subscriptions import Subscription
 from .types.bus_factor import BusFactor, BusFactorScopeInput
 from .types.cognitive_load import (
@@ -821,8 +820,7 @@ class Query:
         info: Info,
         input: ReviewEdgesInput,
     ) -> ReviewEdgesResult:
-        context = get_context(info)
-        return await resolve_review_edges(context, input)
+        _raise_served_by_query_api("reviewEdges", input.org_id, info)
 
     @strawberry.field(
         description="Latest rule-based recommendations for a team within a lookback window."

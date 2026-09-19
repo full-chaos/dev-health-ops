@@ -28,6 +28,11 @@ _QUERIES = {
         'input: {historyWeeks: 12, teamIds: ["team-1"]}) { forecastId } }',
         None,
     ),
+    "reviewEdges": (
+        'query { reviewEdges(input: {orgId: "org-1", sinceDate: "2026-01-01", '
+        'untilDate: "2026-01-31"}) { totalCount } }',
+        None,
+    ),
     "operatingReview": (
         'query { operatingReview(orgId: "org-1", '
         'input: {weekStart: "2026-01-05"}) { orgId } }',

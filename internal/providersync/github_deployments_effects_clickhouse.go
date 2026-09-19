@@ -85,7 +85,7 @@ func (sink deploymentsClickHouseEffects) WriteEffect(ctx context.Context, claim 
 	}
 	logDeploymentLifecycleRegressionGuarded(ctx, claim, guardDeploymentLifecycleRegressions(rows, stored))
 	logDeploymentPullRequestRegressionGuarded(ctx, claim, guardDeploymentPullRequestRegressions(rows, stored))
-	batch, err := sink.Conn.PrepareBatch(ctx, `INSERT INTO deployments (repo_id, deployment_id, status, environment, started_at, finished_at, deployed_at, merged_at, pull_request_number, release_ref, release_ref_confidence, org_id, last_synced)`)
+	batch, err := sink.Conn.PrepareBatch(ctx, deploymentsInsert)
 	if err != nil {
 		return err
 	}
@@ -434,3 +434,5 @@ var _ EffectSink = GitHubDeploymentsClickHouseEffects{}
 var _ EffectReadback = GitHubDeploymentsClickHouseEffects{}
 var _ EffectSink = GitLabDeploymentsClickHouseEffects{}
 var _ EffectReadback = GitLabDeploymentsClickHouseEffects{}
+
+const deploymentsInsert = `INSERT INTO deployments (repo_id, deployment_id, status, environment, started_at, finished_at, deployed_at, merged_at, pull_request_number, release_ref, release_ref_confidence, org_id, last_synced)`

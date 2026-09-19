@@ -519,6 +519,18 @@ func (executor CompleteRouteExecutor) executeRoute(
 		// persist a later time than the rows were built with, so the next
 		// attempt would reload that later time, rebuild different rows, and be
 		// rejected on digest — the wedge in a second disguise.
+		if descriptor.PreparedManifestRecovery {
+			var unprojectedLedger *EffectLedgerState
+			if legacyLedger {
+				unprojectedLedger = recoveredEffects
+			}
+			batch.Effects, err = preparedRouteEffectsForCommit(
+				session.Claim, batch.Effects, unprojectedLedger,
+			)
+			if err != nil {
+				return err
+			}
+		}
 		preparedCommit := descriptor.PreparedManifestRecovery && !legacyLedger
 		if preparedCommit {
 			prepared, prepareErr := preparedLedger.PrepareRouteSnapshot(

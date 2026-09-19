@@ -13,6 +13,19 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
+// preparedFixtureColumn is a column the destination's sink INSERTs, other than
+// org_id, so a fixture row survives the commit projection.
+func preparedFixtureColumn(t *testing.T, destination string) string {
+	t.Helper()
+	for _, column := range insertStatementColumns(preparedRouteInsertStatements[destination]) {
+		if column != "org_id" {
+			return column
+		}
+	}
+	t.Fatalf("no INSERT column for %s", destination)
+	return ""
+}
+
 func preparedDeploymentsBatch(t *testing.T, claim Claim) CompleteRouteBatch {
 	t.Helper()
 	effect, err := effectBatchFromValues("deployments", EffectReadbackRequired, []deploymentRow{deploymentEffectsUnitRow(claim, "901")})
@@ -144,7 +157,7 @@ func preparedPaddedBatch(t *testing.T, claim Claim, destinations []string, targe
 			if index == 0 {
 				size = pad
 			}
-			effect, err := effectBatchFromValues(destination, EffectReadbackRequired, []map[string]string{{"pad": strings.Repeat("a", size)}})
+			effect, err := effectBatchFromValues(destination, EffectReadbackRequired, []map[string]string{{preparedFixtureColumn(t, destination): strings.Repeat("a", size)}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -209,11 +222,11 @@ func TestPreparedSnapshotSizeCapBoundary(t *testing.T) {
 	// Two effects that each fit the per-effect cap but not one snapshot.
 	prsClaim, _ := preparedWorkItemsSession(t, now, "github", "prs")
 	half := maxEffectPayloadBytes/2 + 1024
-	pulls, err := effectBatchFromValues("git_pull_requests", EffectReadbackRequired, []map[string]string{{"pad": strings.Repeat("a", half)}})
+	pulls, err := effectBatchFromValues("git_pull_requests", EffectReadbackRequired, []map[string]string{{preparedFixtureColumn(t, "git_pull_requests"): strings.Repeat("a", half)}})
 	if err != nil {
 		t.Fatalf("a half-cap effect was refused on its own: %v", err)
 	}
-	reviews, err := effectBatchFromValues("git_pull_request_reviews", EffectReadbackRequired, []map[string]string{{"pad": strings.Repeat("b", half)}})
+	reviews, err := effectBatchFromValues("git_pull_request_reviews", EffectReadbackRequired, []map[string]string{{preparedFixtureColumn(t, "git_pull_request_reviews"): strings.Repeat("b", half)}})
 	if err != nil {
 		t.Fatalf("a half-cap effect was refused on its own: %v", err)
 	}
@@ -282,12 +295,14 @@ func TestWorkItemsStillRefusesAnOversizeSnapshot(t *testing.T) {
 	over := preparedGitHubWorkItemsFixture(t, claim)
 	// Two effects padded to just over half the cap each: each still fits its
 	// own effect cap, together they cannot be snapshotted.
-	pad, err := json.Marshal(map[string]string{"pad": strings.Repeat("a", maxPreparedRouteSnapshotBytes/2+1024)})
-	if err != nil {
-		t.Fatal(err)
-	}
 	for index := range 2 {
 		effect := over.Effects[index]
+		pad, err := json.Marshal(map[string]string{
+			preparedFixtureColumn(t, effect.Destination): strings.Repeat("a", maxPreparedRouteSnapshotBytes/2+1024),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
 		rebuilt, err := BuildEffectBatch(effect.Destination, effect.Recovery, append(append([]json.RawMessage(nil), effect.Rows...), pad))
 		if err != nil {
 			t.Fatal(err)
@@ -297,7 +312,7 @@ func TestWorkItemsStillRefusesAnOversizeSnapshot(t *testing.T) {
 	descriptor, _ := Descriptor("github", "work-items")
 	ledger := &memoryEffectLedger{}
 	sink := &memoryEffectSink{}
-	_, err = preparedGitHubExecutor(now, &staticCompleteRouteHandler{batch: over}, ledger, sink).
+	_, err := preparedGitHubExecutor(now, &staticCompleteRouteHandler{batch: over}, ledger, sink).
 		Execute(context.Background(), session, descriptor)
 	if !errors.Is(err, ErrPreparedRouteSnapshotOversize) || len(sink.destinations) != 0 ||
 		ledger.state.SchemaVersion != "" || strings.Contains(log.String(), "oversize_fallback") {

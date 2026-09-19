@@ -439,7 +439,7 @@ func preparedGitHubWorkItemsFixture(t *testing.T, claim Claim) CompleteRouteBatc
 			policy = EffectReadbackRequired
 		}
 		row, err := json.Marshal(map[string]any{
-			"org_id": claim.OrgID, "destination": destination, "record": 1,
+			"org_id": claim.OrgID, preparedFixtureColumn(t, destination): destination,
 		})
 		if err != nil {
 			t.Fatal(err)

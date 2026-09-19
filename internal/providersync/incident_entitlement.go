@@ -83,7 +83,7 @@ func requireIncidentEntitlement(
 	if err == nil {
 		return nil
 	}
-	attributes := []any{
+	attributes := []slog.Attr{
 		slog.String("org_id", claim.OrgID),
 		slog.String("provider", claim.Provider),
 		slog.String("dataset", claim.Dataset),
@@ -94,11 +94,11 @@ func requireIncidentEntitlement(
 	if errors.Is(err, ErrIncidentEntitlementDisabled) {
 		metrics.RecordIncidentEntitlementRefused(claim.Provider, claim.Dataset, seam)
 		slog.Default().LogAttrs(ctx, slog.LevelWarn, incidentEntitlementRefusedEvent,
-			attrsOf(attributes)...)
+			attributes...)
 		return err
 	}
 	slog.Default().LogAttrs(ctx, slog.LevelError, incidentEntitlementUnavailableEvent,
-		append(attrsOf(attributes), slog.String("error", err.Error()))...)
+		append(attributes, slog.String("error", err.Error()))...)
 	return err
 }
 
@@ -106,16 +106,6 @@ const (
 	incidentEntitlementRefusedEvent     = "sync_provider_unit.entitlement_refused"
 	incidentEntitlementUnavailableEvent = "sync_provider_unit.entitlement_unavailable"
 )
-
-func attrsOf(values []any) []slog.Attr {
-	attributes := make([]slog.Attr, 0, len(values))
-	for _, value := range values {
-		if attribute, ok := value.(slog.Attr); ok {
-			attributes = append(attributes, attribute)
-		}
-	}
-	return attributes
-}
 
 type PostgresIncidentEntitlement struct {
 	Pool *pgxpool.Pool

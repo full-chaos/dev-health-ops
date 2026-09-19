@@ -9,12 +9,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"slices"
 	"sort"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -32,26 +30,6 @@ const (
 var ErrPreparedRouteSnapshotOversize = fmt.Errorf(
 	"%w: prepared route snapshot exceeds its size cap", ErrEffectRecoveryUnsafe,
 )
-
-// ErrPreparedRouteSnapshotSensitiveKey is a manifest whose rows or result
-// carry a key the snapshot must never store. Like the oversize error it is an
-// ErrEffectRecoveryUnsafe; the executor tells it apart to commit such a batch
-// without a snapshot on routes that allow that.
-var ErrPreparedRouteSnapshotSensitiveKey = fmt.Errorf(
-	"%w: prepared route snapshot would store a sensitive key", ErrEffectRecoveryUnsafe,
-)
-
-// preparedSnapshotSensitiveKeyError names the matched key -- the key name
-// only, never its value -- so the fallback line can say which key it was.
-type preparedSnapshotSensitiveKeyError struct{ key string }
-
-func (err preparedSnapshotSensitiveKeyError) Error() string {
-	return ErrPreparedRouteSnapshotSensitiveKey.Error() + ": key " + err.key
-}
-
-func (err preparedSnapshotSensitiveKeyError) Unwrap() error {
-	return ErrPreparedRouteSnapshotSensitiveKey
-}
 
 type PreparedRouteSnapshotReference struct {
 	SchemaVersion string `json:"schema_version"`
@@ -98,13 +76,6 @@ type storedPreparedRouteSnapshot struct {
 	Comparison    ShadowComparison       `json:"comparison"`
 }
 
-// preparedSnapshotWorklogResultKey carries a batch's Jira worklog
-// observations inside the stored result object rather than as a field of its
-// own: an earlier binary's strict decoder accepts any result key, so it
-// replays such a snapshot (without the observations) instead of refusing it,
-// and this binary takes the observations back out of the result on decode.
-const preparedSnapshotWorklogResultKey = "_prepared_snapshot_worklog_observations"
-
 type storedPreparedEffect struct {
 	Destination   string               `json:"destination"`
 	ContentDigest string               `json:"content_digest"`
@@ -138,27 +109,12 @@ func encodePreparedRouteManifest(
 		!comparison.Match {
 		return nil, PreparedRouteSnapshotReference{}, ErrEffectRecoveryUnsafe
 	}
-	if _, reserved := batch.Result[preparedSnapshotWorklogResultKey]; reserved {
-		return nil, PreparedRouteSnapshotReference{}, ErrEffectRecoveryUnsafe
-	}
-	storedResult := batch.Result
-	if len(batch.WorklogObservations) > 0 {
-		storedResult = make(map[string]any, len(batch.Result)+1)
-		maps.Copy(storedResult, batch.Result)
-		storedResult[preparedSnapshotWorklogResultKey] = batch.WorklogObservations
-	}
-	result, err := json.Marshal(storedResult)
+	result, err := json.Marshal(batch.Result)
 	if err != nil || len(result) == 0 || bytes.Equal(result, []byte("null")) {
 		return nil, PreparedRouteSnapshotReference{}, ErrEffectRecoveryUnsafe
 	}
 	var resultValue any
-	if json.Unmarshal(result, &resultValue) != nil {
-		return nil, PreparedRouteSnapshotReference{}, ErrEffectRecoveryUnsafe
-	}
-	// The result is built by the route, not taken from provider content: a
-	// protected key there is a defect in the route, so it keeps refusing
-	// rather than committing without a snapshot.
-	if containsPreparedRouteSensitiveKey(resultValue) {
+	if json.Unmarshal(result, &resultValue) != nil || containsPreparedRouteSensitiveKey(resultValue) {
 		return nil, PreparedRouteSnapshotReference{}, ErrEffectRecoveryUnsafe
 	}
 	ordered := append([]EffectBatch(nil), batch.Effects...)
@@ -167,11 +123,8 @@ func encodePreparedRouteManifest(
 	for _, effect := range ordered {
 		for _, row := range effect.Rows {
 			var rowValue any
-			if json.Unmarshal(row, &rowValue) != nil {
+			if json.Unmarshal(row, &rowValue) != nil || containsPreparedRouteSensitiveKey(rowValue) {
 				return nil, PreparedRouteSnapshotReference{}, ErrEffectRecoveryUnsafe
-			}
-			if key, found := preparedRouteSensitiveKey(rowValue); found {
-				return nil, PreparedRouteSnapshotReference{}, preparedSnapshotSensitiveKeyError{key: key}
 			}
 		}
 		// Same sensitive-key scrub as Rows above, applied to
@@ -180,11 +133,8 @@ func encodePreparedRouteManifest(
 		// is not part of the ContentDigest/RowCount identity below.
 		for _, rejection := range effect.MembershipRejections {
 			var rejectionValue any
-			if json.Unmarshal(rejection, &rejectionValue) != nil {
+			if json.Unmarshal(rejection, &rejectionValue) != nil || containsPreparedRouteSensitiveKey(rejectionValue) {
 				return nil, PreparedRouteSnapshotReference{}, ErrEffectRecoveryUnsafe
-			}
-			if key, found := preparedRouteSensitiveKey(rejectionValue); found {
-				return nil, PreparedRouteSnapshotReference{}, preparedSnapshotSensitiveKeyError{key: key}
 			}
 		}
 		effects = append(effects, storedPreparedEffect{
@@ -264,19 +214,6 @@ func decodePreparedRouteManifest(
 		containsPreparedRouteSensitiveKey(result) {
 		return PreparedRouteManifest{}, ErrEffectLedgerConflict
 	}
-	var worklogObservations []JiraWorklogFetchObservation
-	if stored, present := result[preparedSnapshotWorklogResultKey]; present {
-		encoded, err := json.Marshal(stored)
-		if err != nil {
-			return PreparedRouteManifest{}, ErrEffectLedgerConflict
-		}
-		decoder := json.NewDecoder(bytes.NewReader(encoded))
-		decoder.DisallowUnknownFields()
-		if decoder.Decode(&worklogObservations) != nil || len(worklogObservations) == 0 {
-			return PreparedRouteManifest{}, ErrEffectLedgerConflict
-		}
-		delete(result, preparedSnapshotWorklogResultKey)
-	}
 	effects := make([]EffectBatch, 0, len(snapshot.Effects))
 	for index, stored := range snapshot.Effects {
 		rebuilt, err := BuildEffectBatch(stored.Destination, stored.Recovery, stored.Rows)
@@ -299,7 +236,7 @@ func decodePreparedRouteManifest(
 	}
 	batch := CompleteRouteBatch{
 		Effects: effects, Result: result, Watermark: snapshot.Watermark,
-		Evidence: snapshot.Evidence, WorklogObservations: worklogObservations,
+		Evidence: snapshot.Evidence,
 	}
 	// By here the payload is authentically this claim's: its digest matched
 	// the ledger and its tenant, generation and route matched the claim. A
@@ -450,152 +387,28 @@ func validatePreparedRouteManifestIdentity(
 }
 
 func containsPreparedRouteSensitiveKey(value any) bool {
-	_, found := preparedRouteSensitiveKey(value)
-	return found
-}
-
-// protectedKeyWords and protectedKeyWordPairs are the one list of what makes
-// a key protected: a key is protected when any of its words, or any two
-// adjacent words, is listed. Wide on purpose -- over-matching only costs the
-// unit its snapshot (it commits without one and recovers by re-collecting),
-// while under-matching stores or logs a secret.
-var protectedKeyWords = map[string]bool{
-	"token": true, "secret": true, "password": true, "passwd": true, "credential": true,
-	"authorization": true, "auth": true, "bearer": true, "cookie": true, "session": true,
-	"signature": true, "apikey": true, "header": true, "ciphertext": true, "cert": true, "pem": true,
-}
-
-var protectedKeyWordPairs = map[[2]string]bool{
-	{"api", "key"}: true, {"private", "key"}: true, {"client", "secret"}: true, {"access", "key"}: true,
-	{"raw", "payload"}: true, {"response", "body"}: true, {"request", "body"}: true,
-	{"source", "metadata"}: true, {"integration", "config"}: true,
-}
-
-// protectedKeyFragments are matched inside the key's letters and digits run
-// together, so a key whose words carry no separator ("apitoken",
-// "ACCESSTOKEN", "userpassword") is still caught. Only fragments that are not
-// ordinary parts of other words are listed; "auth", "pem" or "cert" stay
-// word-level so "author" or "concert" are not protected.
-var protectedKeyFragments = []string{
-	"token", "secret", "password", "passwd", "credential", "authorization", "bearer",
-	"apikey", "privatekey", "clientsecret", "accesskey", "ciphertext",
-}
-
-// keyWords splits a key into lower-case words at every separator (anything
-// but a letter or digit: "_", "-", ".", spaces) and at camelCase boundaries,
-// including an acronym followed by a word ("APIKey" -> "api", "key"). Every
-// word is folded by singularProtectedWord before either lookup.
-func keyWords(key string) []string {
-	var words []string
-	var current []rune
-	runes := []rune(key)
-	flush := func() {
-		if len(current) > 0 {
-			words = append(words, strings.ToLower(string(current)))
-			current = current[:0]
-		}
-	}
-	for index, r := range runes {
-		if !unicode.IsLetter(r) && !unicode.IsDigit(r) {
-			flush()
-			continue
-		}
-		if unicode.IsUpper(r) && len(current) > 0 {
-			previous := current[len(current)-1]
-			nextIsLower := index+1 < len(runes) && unicode.IsLower(runes[index+1])
-			if unicode.IsLower(previous) || unicode.IsDigit(previous) || (unicode.IsUpper(previous) && nextIsLower) {
-				flush()
-			}
-		}
-		current = append(current, r)
-	}
-	flush()
-	for index, word := range words {
-		words[index] = singularProtectedWord(word)
-	}
-	return words
-}
-
-// singularProtectedWord folds a plural ("-s", "-es", "-ies") onto the listed
-// word it spells, whether that word stands alone or is one half of a listed
-// pair, so "raw_payloads" and "response_bodies" match as "raw_payload" and
-// "response_body". A word that is not a plural of a listed word is returned
-// unchanged, so the run-together fragment check still sees its letters.
-func singularProtectedWord(word string) string {
-	candidates := make([]string, 0, 3)
-	if stem, found := strings.CutSuffix(word, "ies"); found {
-		candidates = append(candidates, stem+"y")
-	}
-	if stem, found := strings.CutSuffix(word, "es"); found {
-		candidates = append(candidates, stem)
-	}
-	if stem, found := strings.CutSuffix(word, "s"); found {
-		candidates = append(candidates, stem)
-	}
-	for _, candidate := range candidates {
-		if protectedKeyWords[candidate] || protectedKeyPairWords[candidate] {
-			return candidate
-		}
-	}
-	return word
-}
-
-// protectedKeyPairWords holds every word that is one half of a listed pair.
-var protectedKeyPairWords = func() map[string]bool {
-	words := make(map[string]bool, 2*len(protectedKeyWordPairs))
-	for pair := range protectedKeyWordPairs {
-		words[pair[0]] = true
-		words[pair[1]] = true
-	}
-	return words
-}()
-
-// isPreparedRouteSensitiveKeyName reports whether a key is protected, and
-// returns the words that made it so, joined by "_": a name built only from
-// the protected vocabulary, safe to log.
-func isPreparedRouteSensitiveKeyName(key string) (string, bool) {
-	words := keyWords(key)
-	for index, word := range words {
-		if protectedKeyWords[word] {
-			return word, true
-		}
-		if index+1 < len(words) && protectedKeyWordPairs[[2]string{word, words[index+1]}] {
-			return word + "_" + words[index+1], true
-		}
-	}
-	joined := strings.Join(words, "")
-	for _, fragment := range protectedKeyFragments {
-		if strings.Contains(joined, fragment) {
-			return fragment, true
-		}
-	}
-	return "", false
-}
-
-// preparedRouteSensitiveKey returns the first key, at any depth, whose
-// normalized name the snapshot must never store.
-func preparedRouteSensitiveKey(value any) (string, bool) {
 	switch typed := value.(type) {
 	case map[string]any:
-		if len(typed) == 0 {
-			return "", false
-		}
 		for key, nested := range typed {
-			if normalized, sensitive := isPreparedRouteSensitiveKeyName(key); sensitive {
-				return normalized, true
+			normalized := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(key), "-", "_"))
+			switch normalized {
+			case "authorization", "credential", "credentials", "token", "headers",
+				"source_metadata", "integration_config", "ciphertext", "raw_payload",
+				"response_body":
+				return true
 			}
-			if found, ok := preparedRouteSensitiveKey(nested); ok {
-				return found, true
+			if containsPreparedRouteSensitiveKey(nested) {
+				return true
 			}
 		}
 	case []any:
 		for _, nested := range typed {
-			if found, ok := preparedRouteSensitiveKey(nested); ok {
-				return found, true
+			if containsPreparedRouteSensitiveKey(nested) {
+				return true
 			}
 		}
 	}
-	return "", false
+	return false
 }
 
 func (repository *PostgresRepository) PrepareRouteSnapshot(

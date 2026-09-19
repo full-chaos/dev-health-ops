@@ -138,6 +138,18 @@ const (
 	RESTRefusalBaselineLegTransportError  = "rest_baseline_leg_transport_error"
 )
 
+// REST leg refusals for a leg the run itself cut short: the run's own
+// deadline, or a signal, ended the leg's request, so nothing is known
+// about how the plane would have answered. Never folded into the
+// timed_out/transport_error names above, which state that the plane did
+// not answer.
+const (
+	RESTRefusalCandidateLegCutByRunDeadline = "rest_candidate_leg_cut_by_run_deadline"
+	RESTRefusalBaselineLegCutByRunDeadline  = "rest_baseline_leg_cut_by_run_deadline"
+	RESTRefusalCandidateLegCutBySignal      = "rest_candidate_leg_cut_by_signal"
+	RESTRefusalBaselineLegCutBySignal       = "rest_baseline_leg_cut_by_signal"
+)
+
 // RESTAdmission is RESTAdmit's verdict.
 type RESTAdmission struct {
 	Admitted bool

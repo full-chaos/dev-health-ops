@@ -72,6 +72,7 @@ import (
 	"os/signal"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -89,6 +90,22 @@ func main() {
 	}
 	if err := run(f); err != nil {
 		log.Fatalf("go-api-rest-prove: %v", err)
+	}
+}
+
+// defaultRunDeadline is -run-deadline's default.
+const defaultRunDeadline = 30 * time.Minute
+
+// runContext is the run's context: cancelled by SIGINT or SIGTERM (the
+// signal an orchestrator sends before it kills a pod), so the loop stops
+// between requests and the report is still written, and bounded by
+// deadline (-run-deadline).
+func runContext(deadline time.Duration) (context.Context, context.CancelFunc) {
+	sigCtx, stopSignal := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, cancel := context.WithTimeout(sigCtx, deadline)
+	return ctx, func() {
+		cancel()
+		stopSignal()
 	}
 }
 
@@ -117,9 +134,11 @@ type flags struct {
 	keyID          string
 	artifactDir    string
 
-	dryRun     bool
-	timeout    time.Duration
-	reportPath string
+	dryRun  bool
+	timeout time.Duration
+	// runDeadline bounds the whole run (-run-deadline).
+	runDeadline time.Duration
+	reportPath  string
 
 	// binds is every -bind NAME=VALUE the run invocation supplied, keyed
 	// by NAME -- an id for a corpus request whose IDBindings names a
@@ -165,6 +184,7 @@ func parseFlags() (flags, error) {
 	flag.StringVar(&f.artifactDir, "artifact-dir", "", "directory for content-addressed leg bodies and finding lists; go_api_rest_proof_run's baseline/candidate_response_ref name the two legs, and review_evidence names the finding-list ref -- never an inlined body (required), matching go-api-prove's own -artifact-dir")
 	flag.BoolVar(&f.dryRun, "dry-run", false, "execute and compare, but write NO receipts")
 	flag.DurationVar(&f.timeout, "timeout", 60*time.Second, "per-request timeout")
+	flag.DurationVar(&f.runDeadline, "run-deadline", defaultRunDeadline, "how long the whole run may take; at the deadline the run stops between requests, names a leg in flight as cut by the run deadline, names every request it did not reach in the report's not_run, writes partial_cause run_deadline and exits non-zero. Must be greater than zero")
 	flag.StringVar(&f.reportPath, "report", "", "write the full JSON report here in addition to stdout")
 	// flag.CommandLine.Parse, not the package-level flag.Parse (which
 	// discards Parse's own returned error): -bind's own Func callback
@@ -211,6 +231,9 @@ func parseFlags() (flags, error) {
 	}
 	if len(missing) > 0 {
 		return flags{}, fmt.Errorf("missing required flag(s): %s", strings.Join(missing, ", "))
+	}
+	if f.runDeadline <= 0 {
+		return flags{}, fmt.Errorf("-run-deadline must be greater than zero, got %s", f.runDeadline)
 	}
 	return f, nil
 }
@@ -380,14 +403,26 @@ func unresolvedIDBindingDetail(unresolved []string) string {
 // failure -- something other than "the leg never answered" went wrong,
 // which is not this function's claim to make safe, and the caller keeps
 // treating it as a fatal error.
-func legTransportOutcome(operation, requestName, leg string, boundIDs map[string]string, err error) (outcome, bool) {
+func legTransportOutcome(runCtx context.Context, operation, requestName, leg string, boundIDs map[string]string, err error) (outcome, bool) {
 	var failure goapiproof.TransportFailure
 	if !errors.As(err, &failure) {
 		return outcome{}, false
 	}
 	timedOut := failure.Class == goapiproof.TransportTimeout
+	// The run's own context is read first: a leg whose request ended
+	// because the run did (its deadline, or a signal) says nothing about
+	// the plane, and is named for what cut it, never as a leg timeout.
+	runEnded := runCtx.Err()
 	var reason string
 	switch {
+	case errors.Is(runEnded, context.DeadlineExceeded) && leg == "candidate":
+		reason = goapiproof.RESTRefusalCandidateLegCutByRunDeadline
+	case errors.Is(runEnded, context.DeadlineExceeded):
+		reason = goapiproof.RESTRefusalBaselineLegCutByRunDeadline
+	case runEnded != nil && leg == "candidate":
+		reason = goapiproof.RESTRefusalCandidateLegCutBySignal
+	case runEnded != nil:
+		reason = goapiproof.RESTRefusalBaselineLegCutBySignal
 	case leg == "candidate" && timedOut:
 		reason = goapiproof.RESTRefusalCandidateLegTimedOut
 	case leg == "candidate":
@@ -446,6 +481,26 @@ type plannedRequest struct {
 	operation string
 	request   goapiproof.RESTRequest
 	spec      goapiproof.RESTEndpointSpec
+}
+
+// planRESTRequests is every request a run sends, in run order, built in
+// full BEFORE any request is sent, so a run that stops partway -- or
+// before its first request -- can still say by NAME what it never got
+// to. Its error is SpecForREST's, unreachable once ValidateRESTCorpus and
+// ValidateRESTIDBindingOrder have passed, kept as a named failure rather
+// than a panic on the day that stops being true.
+func planRESTRequests() ([]plannedRequest, error) {
+	var planned []plannedRequest
+	for _, operation := range goapiproof.RESTRunOrder() {
+		spec, err := goapiproof.SpecForREST(operation)
+		if err != nil {
+			return planned, fmt.Errorf("%s: %w", operation, err)
+		}
+		for _, request := range spec.Requests {
+			planned = append(planned, plannedRequest{operation: operation, request: request, spec: spec})
+		}
+	}
+	return planned, nil
 }
 
 // notRunKeys names, by "operation/request" key (and, for a request whose
@@ -704,6 +759,24 @@ func resultVacuityErrors(result goapiproof.Result) []string {
 }
 
 func run(f flags) (err error) {
+	// A run that stops before its request loop still writes -report: it
+	// names every planned request in not_run and says why in
+	// partial_cause. Registered first, so it runs last, on the redacted
+	// error; from the loop on, runMeasurement writes the report itself.
+	// runEnded is the run context's own Err() as the run exits, read
+	// before this function's own cancel() runs (which would otherwise
+	// read as a signal).
+	var runEnded error
+	measuring := false
+	defer func() {
+		if err == nil || measuring || f.reportPath == "" {
+			return
+		}
+		if writeErr := writeStoppedBeforeMeasuringReport(f, runEnded, err); writeErr != nil {
+			err = fmt.Errorf("%w; additionally, writing the report failed: %v", err, writeErr)
+		}
+	}()
+
 	// A single boundary, applied here via defer, covers every error this
 	// function returns, no matter which layer produced it or whether
 	// that layer remembered the DSN could be inside -- construct it
@@ -720,10 +793,11 @@ func run(f flags) (err error) {
 	// requests rather than kill the process outright -- see the ctx.Err()
 	// checks in the request loop below. Cheap: this changes nothing for a
 	// run nobody interrupts.
-	sigCtx, stopSignal := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stopSignal()
-	ctx, cancel := context.WithTimeout(sigCtx, 30*time.Minute)
-	defer cancel()
+	ctx, cancel := runContext(f.runDeadline)
+	defer func() {
+		runEnded = ctx.Err()
+		cancel()
+	}()
 
 	// Checked FIRST, ahead of every credential/network step below: both
 	// need no network and (in the default, -query-api-src-unset case) no
@@ -825,7 +899,29 @@ func run(f flags) (err error) {
 		pgPool = pool
 	}
 
+	measuring = true
 	return runMeasurement(ctx, client, f, candidateCredential, baselineCredential, namedBuild, pgPool, artifacts)
+}
+
+// writeStoppedBeforeMeasuringReport writes the report of a run that
+// stopped before its first request: every planned request in not_run,
+// and partial_cause from the run context's own state (run_deadline,
+// signal), else refused_before_measuring. runEnded is the run context's
+// own Err() as the run exited.
+func writeStoppedBeforeMeasuringReport(f flags, runEnded, stopErr error) error {
+	planned, _ := planRESTRequests()
+	cause := stopCause(runEnded, nil)
+	if cause == "" {
+		cause = partialCauseRefusedBeforeMeasuring
+	}
+	fmt.Printf("partial run: %d request(s) never attempted\npartial_cause=%s\n", len(notRunKeys(planned, nil)), cause)
+	return writeJSONReport(f.reportPath, jsonReport{
+		Outcomes:     []outcome{},
+		NotRun:       notRunKeys(planned, nil),
+		PartialCause: cause,
+		PartialError: stopErr.Error(),
+		RunDeadline:  f.runDeadline.String(),
+	})
 }
 
 // runMeasurement is run()'s own request loop, report write and exit-code
@@ -1091,6 +1187,9 @@ func candidateHasNoData(refusal string) bool {
 }
 
 func runMeasurement(ctx context.Context, client *http.Client, f flags, candidateCredential, baselineCredential *goapiproof.Credential, namedBuild string, pgPool receiptWriter, artifacts *goapiproof.ArtifactStore) error {
+	// Printed before the first request, so a run cut by the deadline
+	// shows on its own log what it was given.
+	fmt.Printf("run_deadline=%s\n", f.runDeadline)
 	auth := goapiproof.AuthContext{PrincipalKind: f.principalKind, Audience: f.audience, KeyID: f.keyID}
 	observedAt := time.Now().UTC()
 
@@ -1102,18 +1201,7 @@ func runMeasurement(ctx context.Context, client *http.Client, f flags, candidate
 	// passed above (every RESTRunOrder entry is checked against
 	// restEndpointSpecs there), kept as a named, reported failure rather
 	// than a panic on the day that stops being true.
-	var planned []plannedRequest
-	var specErr error
-	for _, operation := range goapiproof.RESTRunOrder() {
-		spec, err := goapiproof.SpecForREST(operation)
-		if err != nil {
-			specErr = fmt.Errorf("%s: %w", operation, err)
-			break
-		}
-		for _, request := range spec.Requests {
-			planned = append(planned, plannedRequest{operation: operation, request: request, spec: spec})
-		}
-	}
+	planned, specErr := planRESTRequests()
 
 	var outcomes []outcome
 	attempted, admitted, matched, mismatched := 0, 0, 0, 0
@@ -1177,6 +1265,10 @@ requestLoop:
 		}
 		if err != nil {
 			runErr = fmt.Errorf("%s/%s: %w", operation, request.Name, err)
+			// Not measured: named in not_run, never counted as attempted
+			// with no outcome of its own.
+			attempted--
+			delete(attemptedKeys, operation+"/"+request.Name)
 			break requestLoop
 		}
 		outcomes = append(outcomes, attempt.out)
@@ -1225,11 +1317,20 @@ requestLoop:
 		// "Auth: PUBLIC" contract sends no Authorization header on
 		// either leg, so there is no edge credential to re-send here.
 		if !attempt.spec.PublicNoAuth {
+			// The run may have ended during this case's own legs: its
+			// edge-credential leg is then never sent, and is named in
+			// not_run like every other request the run did not reach.
+			if ctx.Err() != nil {
+				runErr = fmt.Errorf("run interrupted: %w", ctx.Err())
+				break requestLoop
+			}
 			attempted++
 			attemptedKeys[operation+"/"+request.Name+" (edge-credential-on-candidate)"] = true
 			edgeOut, err := proveEdgeCredentialOnCandidate(ctx, client, f, operation, attempt.spec, attempt.request, baselineCredential, namedBuild, artifacts)
 			if err != nil {
 				runErr = fmt.Errorf("%s/%s (edge credential on candidate): %w", operation, request.Name, err)
+				attempted--
+				delete(attemptedKeys, operation+"/"+request.Name+" (edge-credential-on-candidate)")
 				break requestLoop
 			}
 			outcomes = append(outcomes, edgeOut)
@@ -1252,14 +1353,26 @@ requestLoop:
 	// run() already follows for the GraphQL sibling of this command (see
 	// that file's own comment on emitReport). Nothing below this point
 	// may skip either write.
+	// partialCause says WHY a run stopped short, read from the run's own
+	// context -- never from an error chain, since a single request's own
+	// timeout also wraps context.DeadlineExceeded. A run the deadline or
+	// a signal ended always exits non-zero, even when it had reached its
+	// last case: a leg in flight was cut, not measured.
+	partialCause := stopCause(ctx.Err(), runErr)
+	if runErr == nil && ctx.Err() != nil {
+		runErr = fmt.Errorf("run interrupted: %w", ctx.Err())
+	}
 	if len(notRun) > 0 {
 		fmt.Printf("partial run: %d request(s) never attempted: %v\n", len(notRun), notRun)
+	}
+	if partialCause != "" {
+		fmt.Printf("partial_cause=%s\n", partialCause)
 	}
 	fmt.Printf("attempted=%d admitted=%d match=%d mismatch=%d refused=%d\n",
 		attempted, admitted, matched, mismatched, attempted-admitted)
 
 	if f.reportPath != "" {
-		if writeErr := writeJSONReport(f.reportPath, outcomes, notRun); writeErr != nil {
+		if writeErr := writeJSONReport(f.reportPath, jsonReport{Outcomes: outcomes, NotRun: notRun, PartialCause: partialCause, PartialError: partialError(f, runErr), RunDeadline: f.runDeadline.String()}); writeErr != nil {
 			if runErr == nil {
 				runErr = writeErr
 			} else {
@@ -1310,10 +1423,58 @@ type jsonReport struct {
 	// this run never reached -- empty on a run that completed its whole
 	// plan, whatever its outcomes.
 	NotRun []string `json:"not_run,omitempty"`
+	// PartialCause names why the run stopped short of its plan, or cut a
+	// leg in flight: one of the partialCause* constants. Empty when the
+	// run reached the end of its plan with the run itself still live.
+	PartialCause string `json:"partial_cause,omitempty"`
+	// PartialError is the redacted run-level error behind PartialCause,
+	// when there was one.
+	PartialError string `json:"partial_error,omitempty"`
+	// RunDeadline is this run's -run-deadline.
+	RunDeadline string `json:"run_deadline"`
 }
 
-func writeJSONReport(path string, outcomes []outcome, notRun []string) error {
-	encoded, err := json.MarshalIndent(jsonReport{Outcomes: outcomes, Partial: len(notRun) > 0, NotRun: notRun}, "", "  ")
+// Partial causes, read from the run's own context first.
+const (
+	partialCauseRunDeadline = "run_deadline"
+	partialCauseSignal      = "signal"
+	partialCauseToolError   = "tool_error"
+	// partialCauseRefusedBeforeMeasuring: the run stopped before its first
+	// request for a reason of its own (configuration, a credential, the
+	// build read), with the run itself still live.
+	partialCauseRefusedBeforeMeasuring = "refused_before_measuring"
+)
+
+// stopCause decides why a run stopped short. runEnded is the run
+// context's own Err(): the run deadline and a signal are read from the
+// context that carries them. Otherwise a run-level error that stopped the
+// loop is a tool error; a run that neither ended nor erred has none.
+func stopCause(runEnded, runErr error) string {
+	switch {
+	case errors.Is(runEnded, context.DeadlineExceeded):
+		return partialCauseRunDeadline
+	case runEnded != nil:
+		return partialCauseSignal
+	case runErr != nil:
+		return partialCauseToolError
+	}
+	return ""
+}
+
+// partialError is runErr's redacted text, or empty.
+func partialError(f flags, runErr error) string {
+	if runErr == nil {
+		return ""
+	}
+	return secrets.NewBoundary(f.postgresURI).Redact(runErr).Error()
+}
+
+func writeJSONReport(path string, report jsonReport) error {
+	report.Partial = len(report.NotRun) > 0
+	if report.Outcomes == nil {
+		report.Outcomes = []outcome{}
+	}
+	encoded, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode report: %w", err)
 	}
@@ -1347,14 +1508,14 @@ func proveOneRESTRequest(
 	timeout := resolveRESTTimeout(request.Timeout, f.timeout)
 	candidateLeg, err := doREST(ctx, client, f.queryAPIURL, spec.Method, spec.Path, request.Query, request.Body, candidateCredential, timeout)
 	if err != nil {
-		if out, ok := legTransportOutcome(operation, request.Name, "candidate", boundIDs, err); ok {
+		if out, ok := legTransportOutcome(ctx, operation, request.Name, "candidate", boundIDs, err); ok {
 			return out, nil
 		}
 		return outcome{}, fmt.Errorf("candidate leg: %w", err)
 	}
 	baselineLeg, err := doREST(ctx, client, f.pythonAPIURL, spec.Method, spec.Path, request.Query, request.Body, baselineCredential, timeout)
 	if err != nil {
-		if out, ok := legTransportOutcome(operation, request.Name, "baseline", boundIDs, err); ok {
+		if out, ok := legTransportOutcome(ctx, operation, request.Name, "baseline", boundIDs, err); ok {
 			return out, nil
 		}
 		return outcome{}, fmt.Errorf("baseline leg: %w", err)
@@ -1749,7 +1910,7 @@ func proveEdgeCredentialOnCandidate(
 	timeout := resolveRESTTimeout(request.Timeout, f.timeout)
 	leg, err := doREST(ctx, client, f.queryAPIURL, spec.Method, spec.Path, request.Query, request.Body, edgeCredential, timeout)
 	if err != nil {
-		if out, ok := legTransportOutcome(operation, requestName, "candidate", nil, err); ok {
+		if out, ok := legTransportOutcome(ctx, operation, requestName, "candidate", nil, err); ok {
 			return out, nil
 		}
 		return outcome{}, fmt.Errorf("candidate leg (edge credential): %w", err)

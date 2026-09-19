@@ -93,7 +93,6 @@ from .resolvers.dev_status_change import (
 )
 from .resolvers.dev_work_graph import resolve_dev_work_graph_neighbors
 from .resolvers.improve import resolve_improve_opportunities
-from .resolvers.pr import resolve_pr
 from .resolvers.product_telemetry import (
     resolve_product_telemetry_dashboard,
     resolve_product_telemetry_platform_dashboard,
@@ -475,8 +474,7 @@ class Query:
         org_id: str,
         id: strawberry.ID,
     ) -> PullRequestDetail | None:
-        context = get_context(info)
-        return await resolve_pr(context, str(id))
+        _raise_served_by_query_api("pr", org_id, info)
 
     @strawberry.field(
         description="Per-node-type inflow/outflow over the full work graph"

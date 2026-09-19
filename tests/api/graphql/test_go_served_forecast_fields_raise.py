@@ -28,6 +28,11 @@ _QUERIES = {
         'input: {historyWeeks: 12, teamIds: ["team-1"]}) { forecastId } }',
         None,
     ),
+    "pr": (
+        'query { pr(orgId: "org-1", id: "11111111-1111-1111-1111-111111111111#pr1") '
+        "{ id } }",
+        None,
+    ),
     "cognitiveLoad": (
         'query { cognitiveLoad(input: {orgId: "org-1", '
         'sinceDate: "2026-01-05", untilDate: "2026-01-11"}) { totalDays } }',

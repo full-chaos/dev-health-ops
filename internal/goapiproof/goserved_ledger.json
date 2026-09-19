@@ -90,6 +90,15 @@
         {"file": "cmd/query-api/internal/cognitiveload/cognitiveload_test.go", "test": "TestResolve_TeamAndRepoCombined_OwnedByADifferentTeam_NeverPatternFallback_ReturnsEmpty"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
       ]
+    },
+    {
+      "operation": "pr",
+      "two_plane_ops_sha": "12a6fa86fb59f2c6fe3aeec0ca44d040fc9e216f",
+      "guards": [
+        {"file": "cmd/query-api/internal/graph/pr_golden_test.go", "test": "TestPrMatchesTheFrozenGolden"},
+        {"file": "cmd/query-api/internal/workgraph/pr_test.go", "test": "TestParsePRDetailID"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
+      ]
     }
   ]
 }

@@ -370,6 +370,10 @@ func run() (err error) {
 	if err != nil {
 		return err
 	}
+	goServed, err := goapiproof.DefaultGoServedLedger()
+	if err != nil {
+		return err
+	}
 	// A routing row naming a build the running process is not is a
 	// REFUSAL again. The demotion assumed /buildinfo identifies
 	// the replica that served the MEASURED request; with multiple
@@ -377,6 +381,7 @@ func run() (err error) {
 	// header, it does not. Re-pointing the rows after a deploy is an
 	// operator step, and the refusal below says so.
 	runner := &goapiproof.Runner{
+		GoServed:  goServed,
 		Client:    client,
 		Documents: documents,
 		Registry:  registry,
@@ -728,6 +733,7 @@ func emitReport(f flags, registry goapiproof.RegistryView, builds goapiproof.Pro
 		fmt.Printf("go-api-prove:   terminal_state %s = %d\n", state, summary.ByTerminalState[state])
 	}
 	fmt.Printf("go-api-prove:   proven_under %s = %d\n", goapiproof.ProvenUnderStochasticLeafClass, summary.ProvenUnderStochasticLeafClass)
+	fmt.Printf("go-api-prove:   %s = %d\n", goapiproof.VerdictGoOnly, summary.ProvenGoOnly)
 	for _, reason := range sortedKeys(summary.ByRefusalReason) {
 		fmt.Printf("go-api-prove:   refused %s = %d\n", reason, summary.ByRefusalReason[reason])
 	}
@@ -1219,7 +1225,12 @@ func originOf(raw string) string {
 // "one value differed" and "Go returned no rows" never print alike.
 func executedOutcomeLine(outcome goapiproof.Outcome) string {
 	verdict := outcome.TerminalState
-	if outcome.ProvenUnder != "" {
+	switch outcome.ProvenUnder {
+	case "":
+	case goapiproof.ProvenUnderGoOnly:
+		// Never printed as a two-plane word: no baseline answered.
+		verdict = goapiproof.VerdictGoOnly + " (no two-plane baseline)"
+	default:
 		verdict += " PROVEN_UNDER=" + outcome.ProvenUnder
 	}
 	return fmt.Sprintf("go-api-prove:   %-22s mode=%-8s route=%-5s %s (%d findings, %d outside a declared baseline defect %v) %s",

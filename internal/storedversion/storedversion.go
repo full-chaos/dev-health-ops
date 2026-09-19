@@ -217,9 +217,9 @@ func (c Contract) check(insert string, rows []Row) (map[string]int, [][]any, err
 			return nil, nil, fmt.Errorf("stored version of %s: %s is kept with %s, which is not terminal", c.Table, column.Name, column.With)
 		}
 	}
-	for _, column := range append(append([]string{}, keys...), c.Kept()...) {
-		if _, ok := positions[column]; !ok {
-			return nil, nil, fmt.Errorf("stored version of %s: column %s is not written by %q", c.Table, column, insert)
+	for _, column := range c.Columns {
+		if _, ok := positions[column.Name]; !ok {
+			return nil, nil, fmt.Errorf("stored version of %s: column %s is not written by %q", c.Table, column.Name, insert)
 		}
 	}
 	rowKeys := make([][]any, len(rows))

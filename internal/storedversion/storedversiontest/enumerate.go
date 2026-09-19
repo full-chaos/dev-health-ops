@@ -90,7 +90,7 @@ func columns(writers []Writer, positions []map[string]int) []string {
 func Fingerprint(contract storedversion.Contract) string {
 	out := contract.Table
 	for _, c := range contract.Columns {
-		out += fmt.Sprintf("|%s:%d:%v:%v", c.Name, c.Rule, c.Fields, c.Terminal)
+		out += fmt.Sprintf("|%s:%d:%v:%v:%s", c.Name, c.Rule, c.Fields, c.Terminal, c.With)
 	}
 	return out
 }

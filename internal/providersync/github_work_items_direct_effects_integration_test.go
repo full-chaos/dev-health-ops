@@ -365,12 +365,12 @@ func TestWorkItemsPartlyLandedBatchIsAConflict(t *testing.T) {
 // D16 omissions, observed in storage rather than in the SQL string
 // -----------------------------------------------------------------------------
 
-// write_work_items never writes description/priority_raw/service_class/due_at
-// and write_work_item_transitions never writes provider. A ReplacingMergeTree
-// replaces whole rows, so a Go adapter that "helpfully" filled these in would
-// store values the running Python system never stores. Asserting the stored
-// columns proves the omission reached the table, which reading the INSERT
-// string cannot.
+// A provider row never supplies description/priority_raw/service_class/due_at
+// to work_items, and write_work_item_transitions never writes provider. The
+// work_items write carries the value a key already holds for the four
+// columns and never the provider row's own; with nothing held they stay at
+// their defaults. Asserting the stored columns proves it reached the table,
+// which reading the INSERT string cannot.
 func TestDirectAdaptersLeaveThePythonOmittedColumnsAtTheirDefaults(t *testing.T) {
 	orgID := workItemTestOrgID(t)
 	now := time.Date(2026, 8, 31, 23, 30, 0, 123456789, time.UTC)
@@ -401,6 +401,26 @@ func TestDirectAdaptersLeaveThePythonOmittedColumnsAtTheirDefaults(t *testing.T)
 		if description != nil || priorityRaw != nil || serviceClass != nil || dueAt != nil {
 			t.Fatalf("this unit wrote a column write_work_items omits: description=%v priority_raw=%v service_class=%v due_at=%v",
 				description, priorityRaw, serviceClass, dueAt)
+		}
+	})
+
+	t.Run("work_items keeps the held values", func(t *testing.T) {
+		ctx, conn := newWorkItemEffectsConn(t)
+		adapter := GitHubWorkItemsClickHouseAdapter{Conn: conn}
+		row := workItemTestRow(orgID, now)
+		row.Description = stringPointer("provider body")
+		row.PriorityRaw = stringPointer("p3")
+		projected := projectWorkItem(row)
+		heldDue := now.Add(-24 * time.Hour)
+		insertHeldWorkItemColumns(ctx, t, conn, orgID, projected, now.Add(-time.Hour), heldDue)
+
+		identity, effect := workItemEffect(t, "work_items", row)
+		if err := adapter.WriteGitHubWorkItemEffect(ctx, identity, effect); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		expectHeldWorkItemColumns(ctx, t, conn, orgID, projected, heldDue)
+		if inspection, err := adapter.InspectGitHubWorkItemEffect(ctx, identity, effect); err != nil || inspection != EffectExact {
+			t.Fatalf("inspection=%s err=%v, want exact", inspection, err)
 		}
 	})
 
@@ -813,4 +833,39 @@ func clickHouseColumnPrecision(columnType string) (time.Duration, error) {
 		return time.Second, nil
 	}
 	return 0, fmt.Errorf("not a date/time column type: %q", columnType)
+}
+
+// insertHeldWorkItemColumns stores an earlier version of the row's key that
+// holds the four columns, as the ingest writers do.
+func insertHeldWorkItemColumns(ctx context.Context, t *testing.T, conn driver.Conn, orgID string, row workItemStoredRow, lastSynced, due time.Time) {
+	t.Helper()
+	batch, err := conn.PrepareBatch(ctx, "INSERT INTO work_items (org_id, repo_id, work_item_id, provider, title, type, status, status_raw, project_key, project_id, native_team_key, project_name, assignees, reporter, created_at, updated_at, labels, sprint_id, sprint_name, parent_id, epic_id, url, last_synced, description, priority_raw, service_class, due_at)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := batch.Append(orgID, row.RepoID, row.WorkItemID, row.Provider, "held", row.Type, row.Status, "", "", "", "", "", []string{}, "",
+		row.CreatedAt, row.CreatedAt, []string{}, "", "", "", "", "", lastSynced, "held body", "p0", "expedite", due); err != nil {
+		t.Fatal(err)
+	}
+	if err := batch.Send(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func expectHeldWorkItemColumns(ctx context.Context, t *testing.T, conn driver.Conn, orgID string, row workItemStoredRow, due time.Time) {
+	t.Helper()
+	var description, priorityRaw, serviceClass *string
+	var dueAt *time.Time
+	var title string
+	if err := conn.QueryRow(ctx,
+		`SELECT title, description, priority_raw, service_class, due_at FROM work_items FINAL WHERE org_id = ? AND work_item_id = ?`,
+		orgID, row.WorkItemID,
+	).Scan(&title, &description, &priorityRaw, &serviceClass, &dueAt); err != nil {
+		t.Fatal(err)
+	}
+	if title != row.Title || description == nil || *description != "held body" || priorityRaw == nil || *priorityRaw != "p0" ||
+		serviceClass == nil || *serviceClass != "expedite" || dueAt == nil || !dueAt.Equal(due.Truncate(time.Millisecond)) {
+		t.Fatalf("FINAL title=%q description=%v priority_raw=%v service_class=%v due_at=%v; want the sync's title and the held four",
+			title, description, priorityRaw, serviceClass, dueAt)
+	}
 }

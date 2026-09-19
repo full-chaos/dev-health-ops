@@ -17,11 +17,12 @@ import (
 // column.
 //
 // Every column list below is the Python sink's own column list, in the Python
-// sink's own order, including its omissions. Under D16 an omission is behavior:
-// `work_items` never writes description/priority_raw/service_class/due_at and
-// `work_item_transitions` never writes provider, even though all five columns
-// exist on the tables. Writing them here would diverge from the running system
-// on a whole-row ReplacingMergeTree replacement.
+// sink's own order, including its omissions. A provider row never supplies a
+// value for work_items description/priority_raw/service_class/due_at, and
+// `work_item_transitions` never writes provider. The work_items write appends
+// those four columns carrying the value the key already holds (the
+// stored-version contract in stored_version.go), so a sync never writes a
+// provider value for them and never clears one another writer set.
 
 // workItemReadbackVerdict folds a readback row count into a comparator answer.
 //
@@ -201,17 +202,11 @@ func (adapter GitHubWorkItemsClickHouseAdapter) WriteGitHubWorkItemEffect(
 	if len(rows) == 0 {
 		return nil
 	}
-	batch, err := adapter.Conn.PrepareBatch(ctx, gitHubWorkItemsInsert)
-	if err != nil {
-		return err
+	projected := make([]workItemStoredRow, len(rows))
+	for i, row := range rows {
+		projected[i] = projectWorkItem(row)
 	}
-	defer batch.Abort()
-	for _, row := range rows {
-		if err := batch.Append(projectWorkItem(row).values()...); err != nil {
-			return err
-		}
-	}
-	return batch.Send()
+	return writeWorkItemsKeepingHeldColumns(ctx, adapter.Conn, identity.OrgID, gitHubWorkItemsInsert, projected)
 }
 
 func (adapter GitHubWorkItemsClickHouseAdapter) InspectGitHubWorkItemEffect(

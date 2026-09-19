@@ -150,3 +150,35 @@ func TestPullRequestOutcomesKeepTheNamedGuardEvents(t *testing.T) {
 		t.Errorf("a named refusal also logged the generic refusal event:\n%s", text)
 	}
 }
+
+// A failed read of the held versions fails the work-item write before any
+// insert: the connection's PrepareBatch is never reached.
+func TestWorkItemsWriteFailsWhenTheHeldVersionReadFails(t *testing.T) {
+	conn := &pullRequestGuardReadFailsConn{}
+	row := workItemStoredRow{WorkItemID: "gh:acme/api#1", Provider: "github", Assignees: []string{}, Labels: []string{}}
+	err := writeWorkItemsKeepingHeldColumns(context.Background(), conn, "org-1", gitHubWorkItemsInsert, []workItemStoredRow{row})
+	if !errors.Is(err, errPullRequestGuardReadFailed) || conn.queries != 1 {
+		t.Fatalf("err=%v queries=%d want the read error and no insert", err, conn.queries)
+	}
+}
+
+// The held columns are appended to the Python-parity column list, in order,
+// and the contract names every column of the extended insert.
+func TestWorkItemsInsertAppendsTheHeldColumns(t *testing.T) {
+	positions, err := storedversion.Positions(withHeldWorkItemColumns(gitHubWorkItemsInsert))
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := storedversion.Positions(gitHubWorkItemsInsert)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, column := range workItemsHeldColumns {
+		if positions[column] != len(base)+i {
+			t.Errorf("%s at %d, want %d", column, positions[column], len(base)+i)
+		}
+	}
+	if len(positions) != len(workItemsContract.Columns) {
+		t.Errorf("insert has %d columns, contract %d", len(positions), len(workItemsContract.Columns))
+	}
+}

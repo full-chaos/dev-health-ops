@@ -37,6 +37,22 @@ const defaultGitHubDeploymentsMax = 1_000
 // unbounded per-deployment request budget.
 const maxDeploymentStatusPages = 3
 
+// githubDeploymentsListPageBudget is the page cap request_plan.go's
+// github/deployments base term assumes for BOTH the releases and the
+// deployments-list fetch: Collect (below) derives its own `pages` value from
+// `maxDeployments` the same way, `pages := (maxDeployments + nativePerPage -
+// 1) / nativePerPage`, and passes that SAME pages value as MaxPages to both
+// fetchGitHubDeploymentsPage calls -- so at the domain this term is scoped
+// to (handler.MaxDeployments left at its zero value, i.e.
+// defaultGitHubDeploymentsMax), this is the true worst case either list
+// fetch can cost, not an estimate independent of the loop's own cap. A
+// handler constructed with a larger MaxDeployments override raises the
+// route's own real pages value past this constant -- the base term does not
+// see that override (ProviderRequestPlan takes no MaxDeployments parameter)
+// and under-reserves outside this stated domain; see
+// TestGitHubDeploymentsOutsideStatedDomainOvershootsWithNoReconciliation.
+const githubDeploymentsListPageBudget = (defaultGitHubDeploymentsMax + nativePerPage - 1) / nativePerPage
+
 // githubDeploymentTerminalStates are the states that represent THIS
 // deployment's own pipeline actually finishing (docs.github.com/en/rest/
 // deployments/statuses, "state" enum): success, failure, error. "inactive"

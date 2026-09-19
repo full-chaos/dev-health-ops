@@ -2140,10 +2140,28 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # Moving the PagerDuty readback shape check into each statement on the
     # executing server removed 1 ordinary test: -1 top-level (1528 -> 1527),
     # integration-tagged unchanged at 177.
-    # 1527 top-level provider tests, 177 of them integration-tagged; both
+    # Proving the GitHub/GitLab deployments request-budget estimate scales
+    # with real per-deployment enrichment cost, not the request window,
+    # added 2 ordinary tests: +2 top-level (1527 -> 1529), integration-
+    # tagged unchanged at 177.
+    # Enumerating the capability registry's RouteReady+Plannable routes
+    # against the request-budget plan, and pinning the ones with no plan
+    # to a named-reason list that can only be entered or left on purpose,
+    # added 1 ordinary test: +1 top-level (1529 -> 1530), integration-
+    # tagged unchanged at 177.
+    # Replacing the two-test bidirectional-bound proof with a registry-
+    # enumerated request-kind-coverage proof (every RouteReady+Plannable
+    # route's real Collect run through a fixture provider and a kind-
+    # classifying counting transport, not a hand-picked case list) removed
+    # 2 ordinary tests and added 8: +6 top-level (1530 -> 1536),
+    # integration-tagged unchanged at 177.
+    # Requiring every planned route to be either harness-proven or named in a
+    # pinned remainder list added 1 ordinary test: +1 top-level (1536 ->
+    # 1537), integration-tagged unchanged at 177.
+    # 1537 top-level provider tests, 177 of them integration-tagged; both
     # pins move with any top-level test added to or removed from
     # internal/providersync.
-    assert len(expected_provider_tests) == 1527
+    assert len(expected_provider_tests) == 1537
 
     assert len(expected_integration_tests) == 177
     assert expected_integration_tests < expected_provider_tests
@@ -2161,7 +2179,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1527
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1537
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -2279,7 +2297,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1527
+    assert len(selected_tests) == len(set(selected_tests)) == 1537
     assert set(selected_tests) == expected_tests
 
 

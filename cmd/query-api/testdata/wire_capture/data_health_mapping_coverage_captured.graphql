@@ -1,0 +1,20 @@
+query GetMappingCoverageHealth($teamId: ID!) {
+  dataHealth(team: $teamId) {
+    mappingCoverage {
+      deployments {
+        totalRepos
+        coveredRepos
+        coveragePct
+        __typename
+      }
+      workItems {
+        totalRepos
+        coveredRepos
+        coveragePct
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}

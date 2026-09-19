@@ -28,6 +28,14 @@
     "digest": "c74c904d99fe75a770cdacd5371112b46d9c2dcc0d8aef3dd2da108415c4aaf7"
   },
   {
+    "operation": "connectorsDataHealth",
+    "digest": "0e43d67d571539081b2006ae8b2148dd4ea31c959be22be1db9e927083060baa"
+  },
+  {
+    "operation": "dataHealthIdentity",
+    "digest": "a31987266aad8c1e9eb7cb1b572cc45aecc417f566773e9b5ba6e1bf10ec1a94"
+  },
+  {
     "operation": "featureFlagEvents",
     "digest": "e5e5fd3aba6d00c5413407046dfa68acadeb72c6ff1bb5f40b983bd0ddc3b632"
   },
@@ -50,6 +58,14 @@
   {
     "operation": "investmentFull",
     "digest": "663e516c6152c81e28780d27809fcbe5aeae8c92b07d34b19978b7d59913cb3d"
+  },
+  {
+    "operation": "mappingCoverageHealth",
+    "digest": "f87ebae2df502280d389cfd3bf6452e2e1ef8ed6965280f5ba809350ac6a0d01"
+  },
+  {
+    "operation": "metricLineage",
+    "digest": "4d93b59c335d6b8e5709f60bf4186030aa1b6b454c438e73c9177c675ccd705d"
   },
   {
     "operation": "operatingReview",

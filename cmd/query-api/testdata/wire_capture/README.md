@@ -166,3 +166,23 @@ document's source text, so `@urql/core` resolved from the web repo's pinned
 `query_route_wire_capture_test.go`'s
 `TestRegisteredCatalogDocuments_MatchCapturedWireFixtures` asserts each
 registered const digests to its fixture.
+
+# data-health wire-capture fixtures
+
+`data_health_connectors_captured.graphql` (`GetConnectorsDataHealth`),
+`data_health_identity_captured.graphql` (`DataHealthIdentity`),
+`data_health_metric_lineage_captured.graphql` (`MetricLineage`) and
+`data_health_mapping_coverage_captured.graphql` (`GetMappingCoverageHealth`)
+are the wire-form text of the four documents that select `dataHealth`. Each was
+produced by importing the web repo's own `wireForm()`
+(`scripts/graphql-wire-parity.ts`) and applying it to the `toString()` of the
+generated document the page sends. The literal `team: "ALL"` argument of the
+lineage document prints across two lines; that is what the pinned printer
+emits, and the fixture keeps it byte for byte.
+
+| fixture | sha256(wire form) |
+| --- | --- |
+| `data_health_connectors_captured.graphql` | `0e43d67d571539081b2006ae8b2148dd4ea31c959be22be1db9e927083060baa` |
+| `data_health_identity_captured.graphql` | `a31987266aad8c1e9eb7cb1b572cc45aecc417f566773e9b5ba6e1bf10ec1a94` |
+| `data_health_metric_lineage_captured.graphql` | `4d93b59c335d6b8e5709f60bf4186030aa1b6b454c438e73c9177c675ccd705d` |
+| `data_health_mapping_coverage_captured.graphql` | `f87ebae2df502280d389cfd3bf6452e2e1ef8ed6965280f5ba809350ac6a0d01` |

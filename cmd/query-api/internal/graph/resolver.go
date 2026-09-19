@@ -4,7 +4,10 @@ package graph
 //
 // It serves as dependency injection for your app, add any dependencies you require here.
 
-import "github.com/full-chaos/dev-health-ops/cmd/query-api/internal/featureflags"
+import (
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/datahealth"
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/featureflags"
+)
 
 // Resolver holds every dependency a field resolver needs. ClickHouse is
 // the shared dev-health-go query client (main.go builds the real one;
@@ -19,4 +22,7 @@ import "github.com/full-chaos/dev-health-ops/cmd/query-api/internal/featureflags
 // set, not a shared declared type.
 type Resolver struct {
 	ClickHouse featureflags.QueryClient
+	// Postgres is the read-only Postgres surface the data-health connector
+	// read uses; nil answers an empty connector list.
+	Postgres datahealth.PGQuerier
 }

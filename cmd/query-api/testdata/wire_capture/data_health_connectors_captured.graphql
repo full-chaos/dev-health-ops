@@ -1,0 +1,18 @@
+query GetConnectorsDataHealth($teamId: ID!) {
+  dataHealth(team: $teamId) {
+    connectors {
+      provider
+      scope
+      lastSyncAt
+      rowsIngested
+      lastFailure {
+        occurredAt
+        message
+        stage
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}

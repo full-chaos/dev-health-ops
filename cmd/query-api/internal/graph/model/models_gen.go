@@ -644,13 +644,6 @@ type CreateSavedReportInput struct {
 	ScheduleTimezone string           `json:"scheduleTimezone"`
 }
 
-type DataHealth struct {
-	Connectors      []ConnectorStatus      `json:"connectors"`
-	IdentityMapping *IdentityMappingHealth `json:"identityMapping"`
-	MappingCoverage *MappingCoverage       `json:"mappingCoverage"`
-	MetricLineage   *MetricLineage         `json:"metricLineage,omitempty"`
-}
-
 type DateRangeInput struct {
 	StartDate graphqldate.Date `json:"startDate"`
 	EndDate   graphqldate.Date `json:"endDate"`

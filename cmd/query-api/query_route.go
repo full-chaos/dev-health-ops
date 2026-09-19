@@ -995,6 +995,113 @@ const registeredAcrRepositoryScopesDocument = `query ACRRepositoryScopes($orgId:
   }
 }`
 
+// registeredConnectorsDataHealthDocument is the registered document for the connector-health read on the data-health connectors page: the
+// urql wire form of the web client's query, captured under
+// testdata/wire_capture/data_health_connectors_captured.graphql and asserted equal by
+// TestRegisteredDataHealthDocuments_MatchCapturedWireFixtures. Registration is
+// not enablement: PostgresSwitch.Enabled() is fail-closed.
+const registeredConnectorsDataHealthDocument = `query GetConnectorsDataHealth($teamId: ID!) {
+  dataHealth(team: $teamId) {
+    connectors {
+      provider
+      scope
+      lastSyncAt
+      rowsIngested
+      lastFailure {
+        occurredAt
+        message
+        stage
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredDataHealthIdentityDocument is the registered document for the identity-mapping read on the data-health identity page: the
+// urql wire form of the web client's query, captured under
+// testdata/wire_capture/data_health_identity_captured.graphql and asserted equal by
+// TestRegisteredDataHealthDocuments_MatchCapturedWireFixtures. Registration is
+// not enablement: PostgresSwitch.Enabled() is fail-closed.
+const registeredDataHealthIdentityDocument = `query DataHealthIdentity($team: ID!) {
+  dataHealth(team: $team) {
+    identityMapping {
+      unmappedCount
+      unmappedIdentities {
+        provider
+        email
+        displayName
+        observedCount
+        __typename
+      }
+      suggestedAliases {
+        unmappedIdentity {
+          provider
+          email
+          displayName
+          __typename
+        }
+        suggestedCanonicalId
+        confidence
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredMetricLineageDocument is the registered document for the metric-lineage read the data-health popover issues under team ALL: the
+// urql wire form of the web client's query, captured under
+// testdata/wire_capture/data_health_metric_lineage_captured.graphql and asserted equal by
+// TestRegisteredDataHealthDocuments_MatchCapturedWireFixtures. Registration is
+// not enablement: PostgresSwitch.Enabled() is fail-closed.
+const registeredMetricLineageDocument = `query MetricLineage($metricId: ID!) {
+  dataHealth(team: 
+"ALL") {
+    metricLineage(metricId: $metricId) {
+      metricId
+      sourceTables
+      computeWindow {
+        kind
+        durationDays
+        __typename
+      }
+      computedAt
+      rowCount
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredMappingCoverageHealthDocument is the registered document for the mapping-coverage read on the data-health mapping page: the
+// urql wire form of the web client's query, captured under
+// testdata/wire_capture/data_health_mapping_coverage_captured.graphql and asserted equal by
+// TestRegisteredDataHealthDocuments_MatchCapturedWireFixtures. Registration is
+// not enablement: PostgresSwitch.Enabled() is fail-closed.
+const registeredMappingCoverageHealthDocument = `query GetMappingCoverageHealth($teamId: ID!) {
+  dataHealth(team: $teamId) {
+    mappingCoverage {
+      deployments {
+        totalRepos
+        coveredRepos
+        coveragePct
+        __typename
+      }
+      workItems {
+        totalRepos
+        coveredRepos
+        coveragePct
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}`
+
 // digestHex is a thin wrapper over the ONE canonical document-digest
 // algorithm (CHAOS-4696): sha256(strings.TrimSpace(text)), hex-encoded,
 // now shared code in cmd/query-api/internal/digest so
@@ -1516,28 +1623,32 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 	// exact shape (a single `digestByOperation := map[string]string{...}`
 	// assignment) must stay untouched.
 	digestByOperation := map[string]string{
-		"featureFlags":         digestHex(registeredFeatureFlagsDocument),
-		"reviewEdges":          digestHex(registeredReviewEdgesDocument),
-		"cognitiveLoad":        digestHex(registeredCognitiveLoadDocument),
-		"complexityTimeseries": digestHex(registeredComplexityTimeseriesDocument),
-		"hotspots":             digestHex(registeredHotspotsDocument),
-		"operatingReview":      digestHex(registeredOperatingReviewDocument),
-		"workGraphEdges":       digestHex(registeredWorkGraphEdgesDocument),
-		"workGraphFlow":        digestHex(registeredWorkGraphFlowDocument),
-		"workGraphArtifacts":   digestHex(registeredWorkGraphArtifactsDocument),
-		"flowMatrix":           digestHex(registeredFlowMatrixDocument),
-		"investmentBreakdown":  digestHex(registeredInvestmentBreakdownDocument),
-		"investmentFull":       digestHex(registeredInvestmentFullDocument),
-		"capacityForecast":     digestHex(registeredCapacityForecastDocument),
-		"capacityForecasts":    digestHex(registeredCapacityForecastsDocument),
-		"throughputForecast":   digestHex(registeredThroughputForecastDocument),
-		"featureFlagEvents":    digestHex(registeredFeatureFlagEventsDocument),
-		"pr":                   digestHex(registeredPrDetailDocument),
-		"securityOverview":     digestHex(registeredSecurityOverviewDocument),
-		"securityAlerts":       digestHex(registeredSecurityAlertsDocument),
-		"catalogValues":        digestHex(registeredCatalogValuesDocument),
-		"acrRepositoryScopes":  digestHex(registeredAcrRepositoryScopesDocument),
-		"busFactor":            digestHex(registeredBusFactorDocument),
+		"featureFlags":          digestHex(registeredFeatureFlagsDocument),
+		"reviewEdges":           digestHex(registeredReviewEdgesDocument),
+		"cognitiveLoad":         digestHex(registeredCognitiveLoadDocument),
+		"complexityTimeseries":  digestHex(registeredComplexityTimeseriesDocument),
+		"hotspots":              digestHex(registeredHotspotsDocument),
+		"operatingReview":       digestHex(registeredOperatingReviewDocument),
+		"workGraphEdges":        digestHex(registeredWorkGraphEdgesDocument),
+		"workGraphFlow":         digestHex(registeredWorkGraphFlowDocument),
+		"workGraphArtifacts":    digestHex(registeredWorkGraphArtifactsDocument),
+		"flowMatrix":            digestHex(registeredFlowMatrixDocument),
+		"investmentBreakdown":   digestHex(registeredInvestmentBreakdownDocument),
+		"investmentFull":        digestHex(registeredInvestmentFullDocument),
+		"capacityForecast":      digestHex(registeredCapacityForecastDocument),
+		"capacityForecasts":     digestHex(registeredCapacityForecastsDocument),
+		"throughputForecast":    digestHex(registeredThroughputForecastDocument),
+		"featureFlagEvents":     digestHex(registeredFeatureFlagEventsDocument),
+		"pr":                    digestHex(registeredPrDetailDocument),
+		"securityOverview":      digestHex(registeredSecurityOverviewDocument),
+		"securityAlerts":        digestHex(registeredSecurityAlertsDocument),
+		"connectorsDataHealth":  digestHex(registeredConnectorsDataHealthDocument),
+		"dataHealthIdentity":    digestHex(registeredDataHealthIdentityDocument),
+		"metricLineage":         digestHex(registeredMetricLineageDocument),
+		"mappingCoverageHealth": digestHex(registeredMappingCoverageHealthDocument),
+		"catalogValues":         digestHex(registeredCatalogValuesDocument),
+		"acrRepositoryScopes":   digestHex(registeredAcrRepositoryScopesDocument),
+		"busFactor":             digestHex(registeredBusFactorDocument),
 	}
 	// CHAOS-4710 deliverable 3: log the mounted set HERE, where
 	// digestByOperation actually lives, rather than handing main.go a
@@ -1564,7 +1675,7 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		operationByDigest[digest] = operation
 	}
 
-	schema := graph.NewExecutableSchema(graph.Config{Resolvers: &graph.Resolver{ClickHouse: chClient}})
+	schema := graph.NewExecutableSchema(graph.Config{Resolvers: &graph.Resolver{ClickHouse: chClient, Postgres: pgPool}})
 	gqlHandler := gqlhandler.NewDefaultServer(schema)
 	// CHAOS-4647 diagnostic: the process log carries nothing per-request,
 	// and gqlgen's default presenter surfaces only err.Error() -- which for
@@ -1694,7 +1805,7 @@ func newDocumentDispatchHandler(routeMux *routeswitch.Mux, operationByDigest map
 			return
 		}
 
-		r = r.WithContext(authctx.WithClaims(r.Context(), authctx.Claims{OrgID: claims.OrgID}))
+		r = r.WithContext(authctx.WithClaims(r.Context(), authctx.Claims{OrgID: claims.OrgID, Role: claims.Role, IsSuperuser: claims.IsSuperuser}))
 		r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 
 		routeMux.Dispatch(operation, w, r)

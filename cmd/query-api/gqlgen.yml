@@ -101,6 +101,15 @@ models:
   SankeyCoverage:
     model:
       - github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph/model.SankeyCoverage
+  # DataHealth carries the requested team so its argument-taking
+  # `metricLineage` field, resolved by a field resolver, reads the same scope
+  # the parent was resolved under.
+  DataHealth:
+    model:
+      - github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph/model.DataHealth
+    fields:
+      metricLineage:
+        resolver: true
 
 # autobind intentionally omitted: Wave 0 has no Go domain model package to
 # bind generated GraphQL types to yet (no resolver logic exists). Every

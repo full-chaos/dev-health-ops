@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"go/ast"
+	"go/constant"
 	"go/types"
 	"maps"
 	"reflect"
@@ -73,6 +74,19 @@ var preparedRouteProviderRowTypes = map[string]map[string][]any{
 	"linear": {
 		"work_items":            {linearWorkItemRow{}},
 		"work_item_transitions": {linearWorkItemTransitionRow{}},
+	},
+	"pagerduty": {
+		"operational_services":                    {pagerDutyServiceRow{}, pagerDutyBusinessServiceRow{}},
+		"operational_service_repository_mappings": {pagerDutyServiceRepositoryMappingRow{}},
+		"operational_escalation_policies":         {pagerDutyEscalationPolicyRow{}},
+		"operational_incidents":                   {pagerDutyIncidentRow{}},
+		"operational_alerts":                      {pagerDutyAlertRow{}},
+		"operational_incident_timeline_events":    {pagerDutyLogEntryRow{}},
+		"operational_incident_notes":              {pagerDutyNoteRow{}},
+		"operational_on_call_assignments":         {pagerDutyOnCallRow{}},
+		"operational_on_call_schedules":           {pagerDutyScheduleRow{}},
+		"operational_teams":                       {pagerDutyTeamRow{}},
+		"operational_users":                       {pagerDutyUserRow{}},
 	},
 }
 
@@ -204,8 +218,10 @@ func TestSinkReadKeysAreRouteSignalsNotText(t *testing.T) {
 }
 
 // TestProjectionStatementsAreTheSinksOwnInserts pins that each destination's
-// mapped statement is the one its own sink writes with: some function passes
-// the statement to a call AND decodes that destination's pinned row type.
+// projected statement is the one its own sink writes with: some function
+// passes a constant with the statement's value (or, for an ordering-contract
+// table, the base column list's value) to a call AND decodes that
+// destination's pinned row type.
 func TestProjectionStatementsAreTheSinksOwnInserts(t *testing.T) {
 	loaded, err := packages.Load(&packages.Config{
 		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo,
@@ -214,89 +230,44 @@ func TestProjectionStatementsAreTheSinksOwnInserts(t *testing.T) {
 	if err != nil || packages.PrintErrors(loaded) > 0 {
 		t.Fatalf("load: %v", err)
 	}
-	mapped := map[string]string{}
-	providerMapped := map[string]map[string]string{}
-	type writer struct{ arguments, indexes, calls map[string]bool }
+	type writer struct{ constants, indexes, calls map[string]bool }
 	var writers []writer
 	indexesByFunction := map[string]map[string]bool{}
 	for _, pkg := range loaded {
 		for _, file := range pkg.Syntax {
 			for _, declaration := range file.Decls {
-				switch typed := declaration.(type) {
-				case *ast.GenDecl:
-					for _, spec := range typed.Specs {
-						value, ok := spec.(*ast.ValueSpec)
-						if !ok || len(value.Names) != 1 || len(value.Values) != 1 {
-							continue
+				function, ok := declaration.(*ast.FuncDecl)
+				if !ok || function.Body == nil {
+					continue
+				}
+				found := writer{constants: map[string]bool{}, indexes: map[string]bool{}, calls: map[string]bool{}}
+				// A writer handed its decoded rows as a parameter decodes them
+				// in its caller: a typed []Row parameter counts as the decode.
+				for _, field := range function.Type.Params.List {
+					found.indexes[strings.TrimPrefix(types.ExprString(field.Type), "[]")] = true
+				}
+				ast.Inspect(function.Body, func(node ast.Node) bool {
+					switch inner := node.(type) {
+					case *ast.CallExpr:
+						if name, ok := inner.Fun.(*ast.Ident); ok {
+							found.calls[name.Name] = true
 						}
-						literal, ok := value.Values[0].(*ast.CompositeLit)
-						if !ok {
-							continue
-						}
-						switch value.Names[0].Name {
-						case "preparedRouteInsertStatements":
-							for _, element := range literal.Elts {
-								if pair, ok := element.(*ast.KeyValueExpr); ok {
-									mapped[strings.Trim(types.ExprString(pair.Key), `"`)] = types.ExprString(pair.Value)
-								}
-							}
-						case "preparedRouteProviderInsertStatements":
-							for _, element := range literal.Elts {
-								outer, ok := element.(*ast.KeyValueExpr)
-								if !ok {
-									continue
-								}
-								inner, ok := outer.Value.(*ast.CompositeLit)
-								if !ok {
-									continue
-								}
-								provider := strings.Trim(types.ExprString(outer.Key), `"`)
-								providerMapped[provider] = map[string]string{}
-								for _, entry := range inner.Elts {
-									if pair, ok := entry.(*ast.KeyValueExpr); ok {
-										providerMapped[provider][strings.Trim(types.ExprString(pair.Key), `"`)] = types.ExprString(pair.Value)
-									}
-								}
+						for _, argument := range inner.Args {
+							if value := pkg.TypesInfo.Types[argument].Value; value != nil && value.Kind() == constant.String {
+								found.constants[constant.StringVal(value)] = true
 							}
 						}
+					case *ast.IndexExpr:
+						found.indexes[types.ExprString(inner.Index)] = true
 					}
-				case *ast.FuncDecl:
-					if typed.Body == nil {
-						continue
-					}
-					found := writer{arguments: map[string]bool{}, indexes: map[string]bool{}, calls: map[string]bool{}}
-					// A writer handed its decoded rows as a parameter decodes them
-					// in its caller: a typed []Row parameter counts as the decode.
-					for _, field := range typed.Type.Params.List {
-						found.indexes[strings.TrimPrefix(types.ExprString(field.Type), "[]")] = true
-					}
-					ast.Inspect(typed.Body, func(node ast.Node) bool {
-						switch inner := node.(type) {
-						case *ast.CallExpr:
-							if name, ok := inner.Fun.(*ast.Ident); ok {
-								found.calls[name.Name] = true
-							}
-							for _, argument := range inner.Args {
-								found.arguments[types.ExprString(argument)] = true
-							}
-						case *ast.IndexExpr:
-							found.indexes[types.ExprString(inner.Index)] = true
-						}
-						return true
-					})
-					writers = append(writers, found)
-					if typed.Recv == nil {
-						indexesByFunction[typed.Name.Name] = found.indexes
-					}
+					return true
+				})
+				writers = append(writers, found)
+				if function.Recv == nil {
+					indexesByFunction[function.Name.Name] = found.indexes
 				}
 			}
 		}
-	}
-	if len(mapped) != len(preparedRouteInsertStatements) {
-		t.Fatalf("mapped statements=%d want %d", len(mapped), len(preparedRouteInsertStatements))
-	}
-	if len(mapped) == 0 {
-		t.Fatal("no mapped statements")
 	}
 	// A writer decodes a row type itself or through a package function it
 	// calls (one hop: a decode helper).
@@ -311,33 +282,36 @@ func TestProjectionStatementsAreTheSinksOwnInserts(t *testing.T) {
 		}
 		return false
 	}
-	if len(providerMapped) != len(preparedRouteProviderInsertStatements) {
-		t.Fatalf("provider statements=%d want %d", len(providerMapped), len(preparedRouteProviderInsertStatements))
-	}
-	for provider, destinations := range preparedRouteProviderRowTypes {
-		for destination := range destinations {
-			if _, ok := providerMapped[provider][destination]; !ok {
-				t.Errorf("%s/%s: a provider row type is pinned without its own INSERT", provider, destination)
-			}
-		}
-	}
 	type ownedStatement struct {
-		destination, statement string
-		rows                   []any
+		name, value string
+		rows        []any
 	}
 	var owned []ownedStatement
-	for destination, statement := range mapped {
+	for destination, statement := range preparedRouteInsertStatements {
 		owned = append(owned, ownedStatement{destination, statement, preparedRouteRowTypes[destination]})
 	}
-	for provider, statements := range providerMapped {
+	for provider, statements := range preparedRouteProviderInsertStatements {
 		for destination, statement := range statements {
 			owned = append(owned, ownedStatement{provider + "/" + destination, statement, preparedRouteProviderRowTypes[provider][destination]})
 		}
 	}
+	for provider, lists := range preparedRouteProviderOrderedColumns {
+		for destination, columns := range lists {
+			owned = append(owned, ownedStatement{provider + "/" + destination, columns, preparedRouteProviderRowTypes[provider][destination]})
+		}
+	}
+	for provider, destinations := range preparedRouteProviderRowTypes {
+		for destination := range destinations {
+			_, statement := preparedRouteProviderInsertStatements[provider][destination]
+			_, ordered := preparedRouteProviderOrderedColumns[provider][destination]
+			if !statement && !ordered {
+				t.Errorf("%s/%s: a provider row type is pinned without its own INSERT", provider, destination)
+			}
+		}
+	}
 	for _, entry := range owned {
-		destination, statement := entry.destination, entry.statement
 		if len(entry.rows) == 0 {
-			t.Errorf("%s: no pinned row type", destination)
+			t.Errorf("%s: no pinned row type", entry.name)
 		}
 		for _, row := range entry.rows {
 			rowType := reflect.TypeOf(row)
@@ -345,12 +319,12 @@ func TestProjectionStatementsAreTheSinksOwnInserts(t *testing.T) {
 			if strings.HasSuffix(rowType.PkgPath(), "/projectmembership") {
 				rowName = "projectmembership." + rowName
 			}
-			owned := false
+			found := false
 			for _, candidate := range writers {
-				owned = owned || (candidate.arguments[statement] && decodes(candidate, rowName))
+				found = found || (candidate.constants[entry.value] && decodes(candidate, rowName))
 			}
-			if !owned {
-				t.Errorf("%s: no function writes with %s and decodes %s", destination, statement, rowName)
+			if !found {
+				t.Errorf("%s: no function writes with its statement and decodes %s", entry.name, rowName)
 			}
 		}
 	}

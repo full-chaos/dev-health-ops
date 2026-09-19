@@ -17,7 +17,15 @@ import (
 // org_id, so a fixture row survives the commit projection.
 func preparedFixtureColumn(t *testing.T, destination string) string {
 	t.Helper()
-	for _, column := range insertStatementColumns(preparedRouteInsertStatements[destination]) {
+	return preparedFixtureColumnFor(t, "", destination)
+}
+
+// preparedFixtureColumnFor is preparedFixtureColumn for the sink a provider
+// writes the destination with.
+func preparedFixtureColumnFor(t *testing.T, provider, destination string) string {
+	t.Helper()
+	statement, _ := preparedRouteStatement(provider, destination)
+	for _, column := range insertStatementColumns(statement) {
 		if column != "org_id" {
 			return column
 		}
@@ -80,7 +88,8 @@ func TestPreparedManifestRouteListIsExactlyTheEnrolledCanonicalRoutes(t *testing
 		{"gitlab", "work-items", true}, {"jira", "work-items", true}, {"linear", "work-items", true},
 		{"gitlab", "feature-flags", true}, {"launchdarkly", "feature-flags", true},
 		{"gitlab", "incidents", true}, {"jira", "incidents", true},
-		{"gitlab", "blame", false}, {"pagerduty", "incidents", false},
+		{"gitlab", "blame", false}, {"pagerduty", "incidents", true}, {"pagerduty", "business-services", true},
+		{"pagerduty", "users", true},
 	} {
 		destinations, ok := preparedManifestRouteDestinations(pair.provider, pair.dataset)
 		descriptor, _ := Descriptor(pair.provider, pair.dataset)
@@ -396,17 +405,17 @@ func TestEveryPlannableRouteStatesItsRecoveryMode(t *testing.T) {
 		"jira/work-items":                "prepared snapshot",
 		"launchdarkly/feature-flags":     "prepared snapshot",
 		"linear/work-items":              "prepared snapshot",
-		"pagerduty/business-services":    "re-collect",
-		"pagerduty/escalation-policies":  "re-collect",
-		"pagerduty/incident-alerts":      "re-collect",
-		"pagerduty/incident-log-entries": "re-collect",
-		"pagerduty/incident-notes":       "re-collect",
-		"pagerduty/incidents":            "re-collect",
-		"pagerduty/on-calls":             "re-collect",
-		"pagerduty/schedules":            "re-collect",
-		"pagerduty/services":             "re-collect",
-		"pagerduty/teams":                "re-collect",
-		"pagerduty/users":                "re-collect",
+		"pagerduty/business-services":    "prepared snapshot",
+		"pagerduty/escalation-policies":  "prepared snapshot",
+		"pagerduty/incident-alerts":      "prepared snapshot",
+		"pagerduty/incident-log-entries": "prepared snapshot",
+		"pagerduty/incident-notes":       "prepared snapshot",
+		"pagerduty/incidents":            "prepared snapshot",
+		"pagerduty/on-calls":             "prepared snapshot",
+		"pagerduty/schedules":            "prepared snapshot",
+		"pagerduty/services":             "prepared snapshot",
+		"pagerduty/teams":                "prepared snapshot",
+		"pagerduty/users":                "prepared snapshot",
 	}
 	seen := map[string]bool{}
 	for _, provider := range MatrixProviders() {
@@ -492,6 +501,12 @@ func TestEnrolledRoutesReplayTheirSnapshotWithoutRecollecting(t *testing.T) {
 		{"gitlab", "incidents"}, {"jira", "incidents"},
 		{"gitlab", "work-items"}, {"jira", "work-items"}, {"linear", "work-items"},
 	}
+	for _, dataset := range []string{
+		"business-services", "escalation-policies", "incident-alerts", "incident-log-entries",
+		"incident-notes", "incidents", "on-calls", "schedules", "services", "teams", "users",
+	} {
+		routes = append(routes, [2]string{"pagerduty", dataset})
+	}
 	for _, provider := range []string{"github", "gitlab"} {
 		for _, dataset := range []string{"commit-stats", "commits", "files", "repo-metadata", "security"} {
 			routes = append(routes, [2]string{provider, dataset})
@@ -509,7 +524,7 @@ func TestEnrolledRoutesReplayTheirSnapshotWithoutRecollecting(t *testing.T) {
 			effects := make([]EffectBatch, 0, len(descriptor.Destinations))
 			for _, destination := range descriptor.Destinations {
 				effect, err := effectBatchFromValues(destination, EffectReadbackRequired,
-					[]map[string]string{{"org_id": claim.OrgID, preparedFixtureColumn(t, destination): destination}})
+					[]map[string]string{{"org_id": claim.OrgID, preparedFixtureColumnFor(t, provider, destination): destination}})
 				if err != nil {
 					t.Fatal(err)
 				}

@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fullchaos.dev/contracts/auth/v1/jsonschema/jwks.v1.schema.json",
+  "title": "Auth Control Plane signing JWKS (v1 wire format)",
+  "description": "The JWKS document carrying the PUBLIC half of the Ed25519 key that signs the effective-principal envelope. Python's dev_health_ops.api.graphql.principal_envelope.build_envelope_jwks() produces it; Go's dev-health-go authverify.Ed25519JWKSVerifier.Keys() consumes it. Unlike the other v1 surfaces this is a PRODUCER/CONSUMER pair rather than two independent parsers, so the contract's job is to pin a handshake that currently agrees, and to stop a schema from being LOOSER than the consumer that already exists.\n\nIt travels as a mounted file (GO_API_ENVELOPE_JWKS_PATH), not over HTTP. Nothing in this repository serves /.well-known/openid-configuration or a jwks_uri, so no discovery document is contracted here; the OIDC discovery code in src/dev_health_ops/api/services/sso.py consumes THIRD-PARTY identity providers and is a different surface with a different trust model.\n\nEVERY CONSTRAINT BELOW WAS READ OFF THE CONSUMER, NOT CHOSEN. authverify.Keys() rejects the whole document unless every key satisfies kty=OKP, crv=Ed25519, alg=EdDSA, use empty or \"sig\", a kid that is non-empty after TrimSpace and at most 256 BYTES, and an x that base64.RawURLEncoding decodes to exactly 32 bytes; it decodes with DisallowUnknownFields, refuses an empty keys array, and refuses a repeated kid. A schema that permits more than that would certify documents the only consumer refuses.\n\nTHIS SCHEMA IS DELIBERATELY NARROWER THAN THE CONSUMER, AND THE LIST IS A CORPUS RATHER THAN A SENTENCE. Every narrowing has a fixture under examples/jwks/ in the manifest's narrower_than_consumer category, and a test asserts BOTH halves of each: the consumer accepts it, this schema refuses it.\n\nThe first version of this file listed the narrowings in prose here and got the list wrong -- it declared two and there were five. Codex round 1 blocked it. The list moved into fixtures because a sentence cannot be executed, and the test that was supposed to police this direction passed the whole time: none of the twenty reject fixtures happened to exercise any of the missing four.\n\nThe narrowings, each with a fixture AND a predicate. Round 2 blocked this contract because `use: \"\"` had a predicate and this sentence and no fixture -- the round-1 defect committed inside its own fix. A test now enforces the correspondence in both directions, because remembering to add both is what failed twice.\n\nThe narrowings:\n  * CASE-VARIANT MEMBER NAMES. Go's encoding/json matches struct field names case-INSENSITIVELY, and DisallowUnknownFields compares after that match, so the consumer reads {\"KEYS\":[{\"KTY\":...}]} as an ordinary document and accepts it. Refused here because JSON Schema matches property names EXACTLY: admitting case variants would mean enumerating every casing of every member in `properties` and rewriting `required` as a disjunction over all of them, and would leave the wire form with no canonical spelling for a producer to target. An earlier version of this note said instead that admitting casings makes additionalProperties:false unenforceable -- executed and FALSE, a schema declaring both `keys` and `KEYS` still rejects an undeclared `issuer`. The narrowing is right; that reason was not.\n  * `use: null`. Decodes to Go's zero string, so the consumer sees an empty use. Refused here; absence is how this contract says nothing.\n  * A `kid` with surrounding whitespace. The consumer trims before testing for empty, so it accepts, and an envelope's kid header would then have to carry the UNTRIMMED value to resolve.\n  * A `kid` containing NUL. unicode.IsSpace(NUL) is false, so TrimSpace does not strip it and the consumer accepts.\n  * `use: \"\"`. Tolerated by the consumer alongside \"sig\"; refused here for the same reason as null -- a field present and blank says nothing its absence does not.\n\n`kid` IS RESTRICTED TO PRINTABLE NON-SPACE ASCII, and the reason is a counting mismatch, not aesthetics. The consumer bounds kid at 256 BYTES; JSON Schema's maxLength counts CODE POINTS. A kid of 256 U+00E9 characters is 256 code points and 512 bytes: maxLength 256 accepts it and the consumer refuses it. A one-byte-per-character alphabet makes the two counts the same number. Excluding space ALSO refuses a whitespace-only kid, which minLength cannot -- but note this is NOT equivalent to the consumer's TrimSpace rule, and an earlier version of this file claimed it was: the class is strictly narrower, which is why two of the fixtures above exist.\n\n`x` IS PINNED TO 43 CHARACTERS rather than described as \"base64url\". 43 characters of the base64url alphabet always decode to exactly 32 bytes, so one pattern closes three classes at once: padding (the consumer's RawURLEncoding rejects `=`, Python's urlsafe_b64decode accepts it), the standard `+/` alphabet (same split), and wrong key length. Verified by sampling 200000 random 43-character base64url strings: every one decoded to exactly 32 bytes, none errored.\n\nON THE WRONG-LENGTH CASE SPECIFICALLY, because the first version of this file overstated it: ed25519.Verify does PANIC on a 31- or 33-byte public key rather than returning an error, and both languages' base64 decoders do accept those lengths. But THE CONSUMER GUARDS THIS ITSELF -- Keys() compares the decoded length against ed25519.PublicKeySize before returning a key -- so the panic is not reachable through it. This pattern is defence-in-depth and a statement of the wire form, not the only thing standing between a malformed document and a crash. That claim was written after reading the very function that disproves it.\n\nTWO CLASSES THIS SCHEMA CANNOT REACH, both enforced by the consumer or by nothing, both in the manifest:\n  * A REPEATED kid. uniqueItems compares whole array items, so two keys sharing a kid but carrying different key material are distinct items and pass. The consumer refuses the document. Covered by the reject_by_client corpus.\n  * TRAILING CONTENT. A file may carry a second JSON value after a valid document and the consumer silently ignores it -- Keys() uses a streaming decoder that reads one value. Nothing here can see it; recorded as a known gap for a dev-health-go change.",
+  "type": "object",
+  "required": [
+    "keys"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "keys": {
+      "type": "array",
+      "minItems": 1,
+      "description": "The signing keys, most commonly one. Two appear during a rotation, while envelopes signed by the outgoing kid are still within their TTL. The consumer refuses an EMPTY array rather than treating it as \"no keys yet\": a JWKS that parses but yields nothing would make every verification fail with a lookup miss instead of a configuration error, which is the same symptom as an unknown kid and sends the reader to the wrong place.",
+      "items": {
+        "type": "object",
+        "required": [
+          "kty",
+          "crv",
+          "alg",
+          "kid",
+          "x"
+        ],
+        "additionalProperties": false,
+        "description": "One Ed25519 public signing key (RFC 8037 OKP). `additionalProperties: false` mirrors the consumer's json.Decoder.DisallowUnknownFields, which rejects the ENTIRE document on one unrecognised member. That is stricter than RFC 7517, which says an unrecognised JWK member must be ignored, and the strictness is inherited deliberately rather than softened: a schema that ignored unknown members would accept documents the only consumer refuses, which is the failure this contract exists to prevent. It also makes the subtractive guarantee automatic -- `d`, the private scalar, is refused because it is not listed, so a JWKS cannot carry the private half even by accident.",
+        "properties": {
+          "kty": {
+            "const": "OKP",
+            "description": "RFC 8037 octet key pair. The consumer compares this literally; RSA and EC keys are refused before any key material is examined."
+          },
+          "crv": {
+            "const": "Ed25519",
+            "description": "The signing curve. X25519 is the same key TYPE (OKP) and is for key agreement, never signatures, so it is refused here rather than later at a confusing verification failure."
+          },
+          "alg": {
+            "const": "EdDSA",
+            "description": "REQUIRED, though RFC 7517 makes `alg` optional. The consumer compares it literally against \"EdDSA\", so an absent `alg` reads as \"\" and the document is refused. Pinning it also removes the algorithm-confusion question at the key level rather than only at the token header."
+          },
+          "use": {
+            "const": "sig",
+            "description": "OPTIONAL. Present, it must say `sig`; the consumer refuses any other value. Its absence is the ordinary case and means the same thing."
+          },
+          "kid": {
+            "type": "string",
+            "pattern": "^[!-~]{1,256}$",
+            "description": "The key identifier an envelope's `kid` header is matched against. Printable non-space ASCII, 1..256 characters -- which is also 1..256 BYTES, and that equality is the point: see the schema-level note on why maxLength cannot express the consumer's byte bound. Operator-settable via GO_API_ENVELOPE_KEY_ID, so the alphabet is kept wide enough for any reasonable value rather than pinned to the default's shape."
+          },
+          "x": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "description": "The raw 32-byte Ed25519 public key, base64url, unpadded (RFC 7515 section 2). Exactly 43 characters of the URL-safe alphabet: see the schema-level note for why the character count rather than a `format` or a prose description is what makes this safe. Carries the PUBLIC half only -- the private scalar `d` is not a permitted member."
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "KEYS": [
+    {
+      "KTY": "OKP",
+      "CRV": "Ed25519",
+      "ALG": "EdDSA",
+      "KID": "example-signing-key",
+      "X": "ExamplePublicKeyForContractFixturesOnlyAAAA"
+    }
+  ]
+}

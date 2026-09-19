@@ -32,9 +32,7 @@ func (h *membershipLogHandler) WithGroup(string) slog.Handler { return h }
 func captureMembershipLogs(t *testing.T) *[]slog.Record {
 	t.Helper()
 	records := []slog.Record{}
-	previous := slog.Default()
-	slog.SetDefault(slog.New(&membershipLogHandler{records: &records}))
-	t.Cleanup(func() { slog.SetDefault(previous) })
+	swapDefaultLogger(t, slog.New(&membershipLogHandler{records: &records}))
 	return &records
 }
 

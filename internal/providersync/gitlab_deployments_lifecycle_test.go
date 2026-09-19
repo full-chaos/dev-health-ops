@@ -49,8 +49,8 @@ func TestResolveGitLabDeploymentMergeRequestRequiresMergedState(t *testing.T) {
 // docs.gitlab.com/api/deployments/ "List project deployments" shape: the
 // deployment object itself carries no top-level started_at/finished_at --
 // both live under its nested "deployable" (CI job) object.
+// Not t.Parallel(): one subtest swaps the process default logger.
 func TestGitLabDeploymentLifecycleReadsDeployableObject(t *testing.T) {
-	t.Parallel()
 
 	t.Run("deployable present supplies both timestamps", func(t *testing.T) {
 		t.Parallel()

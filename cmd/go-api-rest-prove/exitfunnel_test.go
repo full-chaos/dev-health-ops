@@ -163,7 +163,7 @@ func TestTheRunEndingWhileItsReportIsWrittenEndsTheRun(t *testing.T) {
 			}()
 			var runErr error
 			stdout := captureStdout(t, func() {
-				runErr = runMeasurement(ctx, goapiproof.NewLegClient(0), f, staticCredentialForTest(), staticCredentialForTest(), build, nil, artifacts)
+				runErr = runMeasurement(ctx, goapiproof.NewLegClient(0), f, staticCredentialForTest(), staticCredentialForTest(), sameProverBuildForTest(build), nil, artifacts)
 			})
 			wantErr, wantCause := context.DeadlineExceeded, exitStoppedByRunDeadline
 			if cancelDuringWrite {

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
+	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 )
 
 const legContractOrg = "11111111-1111-4111-8111-111111111111"
@@ -231,12 +232,16 @@ func TestPrepareLegs_RefusesEveryPrincipalThatIsNotTheNamedOrg(t *testing.T) {
 		f := flags{queryAPIURL: query.URL, pythonAPIURL: python.URL, buildInfoURL: query.URL + "/buildinfo", org: legContractOrg, timeout: 5 * time.Second}
 		candidate := goapiproof.StaticCredential("Authorization", "candidate", orgToken(cell.candidateOrg))
 		baseline := goapiproof.StaticCredential("Authorization", "baseline", orgToken(cell.baselineOrg))
-		named, err := prepareLegs(context.Background(), goapiproof.NewLegClient(0), f, candidate, baseline)
+		var builds *goapiproof.ProverBuild
+		var err error
+		_ = captureStdout(t, func() {
+			builds, err = prepareLegs(context.Background(), goapiproof.NewLegClient(0), f, candidate, baseline, version.Info{Commit: build})
+		})
 		query.Close()
 		python.Close()
 		if cell.want == nil {
-			if err != nil || named != build {
-				t.Errorf("%s: named=%q err=%v, want %q and no error", cell.name, named, err, build)
+			if err != nil || builds == nil || builds.Candidate != build {
+				t.Errorf("%s: builds=%+v err=%v, want %q and no error", cell.name, builds, err, build)
 			}
 			continue
 		}

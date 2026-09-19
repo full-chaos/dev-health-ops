@@ -62,6 +62,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/goapidigest"
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 )
 
 // The proof-plane credential environment variable. VALUES never appear in
@@ -107,6 +108,7 @@ type flags struct {
 	buildInfoURL          string
 	edgeURL               string
 	candidateBuild        string
+	allowProverBuildSkew  bool
 	proofURL              string
 	documentsPath         string
 	postgresURI           string
@@ -158,6 +160,7 @@ func parseFlags() (flags, error) {
 	var f flags
 	flag.StringVar(&f.registryURL, "registry-url", "http://localhost:8090/registry", "GET /registry on the DEPLOYED query-api -- the only authority on which operations and document digests it serves")
 	flag.StringVar(&f.buildInfoURL, "buildinfo-url", "http://localhost:8090/buildinfo", "GET /buildinfo on the DEPLOYED query-api -- the ONLY source of the build identity every receipt names")
+	flag.BoolVar(&f.allowProverBuildSkew, proverBuildSkewFlag[1:], false, "measure even when this binary was not built from the candidate build's commit (or carries no commit at all): its declarations and parity rules are then another commit's, and the report records the skew as prover_build_skew_allowed")
 	flag.StringVar(&f.candidateBuild, "candidate-build", "", "optional CROSS-CHECK: fail if the running build is not this sha. Never the source of the value written (team-lead ruling R51)")
 	flag.StringVar(&f.edgeURL, "edge-url", "http://localhost:8000/graphql", "the real product GraphQL edge; both the canary/primary candidate leg and every baseline leg go through it")
 	flag.StringVar(&f.proofURL, "proof-url", "", "measurement-only route able to execute a SHADOW-mode operation on the deployed Go build; empty means shadow operations are refused by name rather than skipped")
@@ -212,11 +215,18 @@ func run() (err error) {
 	// was given), with exit_cause refused_before_measuring and the
 	// redacted error: registered first, so it runs last.
 	reported := false
+	// resolved is both builds once /buildinfo has named the candidate:
+	// every report written after that carries them.
+	var resolved *goapiproof.ProverBuild
 	defer func() {
 		if err == nil || reported || f.reportPath == "" {
 			return
 		}
-		if writeErr := writeReportFile(f.reportPath, report{OrgID: f.orgID, Window: f.window, Stage: goapiproof.Stage, Outcomes: []goapiproof.Outcome{}, ExitCause: exitRefusedBeforeMeasuring, ExitDetail: err.Error()}); writeErr != nil {
+		refused := report{OrgID: f.orgID, Window: f.window, Stage: goapiproof.Stage, Outcomes: []goapiproof.Outcome{}, ExitCause: exitRefusedBeforeMeasuring, ExitDetail: err.Error()}
+		if resolved != nil {
+			refused.ProverBuild, refused.CandidateBuild = resolved, resolved.Candidate
+		}
+		if writeErr := writeReportFile(f.reportPath, refused); writeErr != nil {
 			err = fmt.Errorf("%w; additionally, writing the report failed: %v", err, writeErr)
 		}
 	}()
@@ -306,6 +316,12 @@ func run() (err error) {
 		if errors.Is(err, goapiproof.ErrNoBuildIdentity) {
 			return fmt.Errorf("%w\n  the deployed query-api must identify its build at %s before any receipt can be written", err, goapiproof.EndpointLabel(f.buildInfoURL))
 		}
+		return err
+	}
+	builds := goapiproof.NewProverBuild(version.Current("go-api-prove"), registry.BuildIdentity, f.allowProverBuildSkew)
+	fmt.Printf("go-api-prove: %s\n", builds.Line())
+	resolved = &builds
+	if err := builds.Check(proverBuildSkewFlag); err != nil {
 		return err
 	}
 
@@ -457,7 +473,7 @@ func run() (err error) {
 		exitCause = exitCompletedWithRunError
 	}
 	reported = true
-	if err := emitReport(f, registry, outcomes, summary, proofCredential, edgeCredential, exitCause, runErr); err != nil {
+	if err := emitReport(f, registry, builds, outcomes, summary, proofCredential, edgeCredential, exitCause, runErr); err != nil {
 		if runErr == nil {
 			return err
 		}
@@ -615,13 +631,17 @@ func readRoutingState(ctx context.Context, pool routingRowSource, registry goapi
 }
 
 type report struct {
-	SchemaDigest   string               `json:"schema_digest"`
-	CandidateBuild string               `json:"candidate_build"`
-	Stage          string               `json:"stage"`
-	OrgID          string               `json:"org_id"`
-	Window         goapiproof.Window    `json:"window"`
-	Summary        goapiproof.Summary   `json:"summary"`
-	Outcomes       []goapiproof.Outcome `json:"outcomes"`
+	SchemaDigest   string `json:"schema_digest"`
+	CandidateBuild string `json:"candidate_build"`
+	// ProverBuild names the commit whose declarations and parity rules
+	// the run applied beside the candidate's (its candidate_build is
+	// CandidateBuild's); absent until /buildinfo named the candidate.
+	*goapiproof.ProverBuild
+	Stage    string               `json:"stage"`
+	OrgID    string               `json:"org_id"`
+	Window   goapiproof.Window    `json:"window"`
+	Summary  goapiproof.Summary   `json:"summary"`
+	Outcomes []goapiproof.Outcome `json:"outcomes"`
 	// ExitCause names how the run ended (one of the exit* constants), so
 	// a report read after the fact says whether it is a whole run, a run
 	// stopped early, or one refused before it measured anything.
@@ -649,9 +669,10 @@ func writeReportFile(path string, r report) error {
 // measured nothing" and "prove measured everything and found nothing
 // wrong" are different facts, and the shape of the output must never let
 // them look alike.
-func emitReport(f flags, registry goapiproof.RegistryView, outcomes []goapiproof.Outcome, summary goapiproof.Summary, proofCredential, edgeCredential *goapiproof.Credential, exitCause string, runErr error) error {
+func emitReport(f flags, registry goapiproof.RegistryView, builds goapiproof.ProverBuild, outcomes []goapiproof.Outcome, summary goapiproof.Summary, proofCredential, edgeCredential *goapiproof.Credential, exitCause string, runErr error) error {
 	fmt.Printf("go-api-prove: schema_digest=%s candidate_build=%s stage=%s org=%s\n",
 		registry.SchemaDigest, registry.BuildIdentity, goapiproof.Stage, f.orgID)
+	fmt.Printf("go-api-prove: %s\n", builds.Line())
 	// admitted is printed alongside the others, including when it is zero:
 	// it is the count that says whether anything got past the preconditions
 	// at all, and "nothing was admissible" reads nothing like "everything
@@ -726,6 +747,7 @@ func emitReport(f flags, registry goapiproof.RegistryView, outcomes []goapiproof
 	r := report{
 		SchemaDigest:   registry.SchemaDigest,
 		CandidateBuild: registry.BuildIdentity,
+		ProverBuild:    &builds,
 		Stage:          goapiproof.Stage,
 		OrgID:          f.orgID,
 		Window:         f.window,
@@ -742,6 +764,10 @@ func emitReport(f flags, registry goapiproof.RegistryView, outcomes []goapiproof
 	fmt.Printf("go-api-prove: report written to %s\n", f.reportPath)
 	return nil
 }
+
+// proverBuildSkewFlag permits a run whose prover build is not the
+// candidate's.
+const proverBuildSkewFlag = "-allow-prover-build-skew"
 
 func sortedKeys[V any](m map[string]V) []string {
 	keys := make([]string, 0, len(m))

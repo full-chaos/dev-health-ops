@@ -2092,14 +2092,20 @@ func TestCaptureStdoutDrainsMoreThanOnePipeBufferOfOutput(t *testing.T) {
 // this handler blocks on until the request's own context is done,
 // instead of answering at all -- the "leg that stalls past the timeout"
 // this test drives through the REAL request loop, not a hand-built call.
+// reached, when set, is called as the stalled request arrives, before
+// the handler blocks: a test ends its run there, at the event itself.
 type stalledRequest struct {
 	method, path, rawQuery string
+	reached                func()
 }
 
 func genericRESTStubHandler(t *testing.T, build string, stall *stalledRequest) http.HandlerFunc {
 	t.Helper()
 	return func(w http.ResponseWriter, r *http.Request) {
 		if stall != nil && r.Method == stall.method && r.URL.Path == stall.path && r.URL.RawQuery == stall.rawQuery {
+			if stall.reached != nil {
+				stall.reached()
+			}
 			<-r.Context().Done()
 			return
 		}

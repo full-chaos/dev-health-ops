@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -116,11 +115,15 @@ func TestStdoutCarriesTheAccountingWithoutReport(t *testing.T) {
 }
 
 // TestTheRunEndingWhileItsReportIsWrittenEndsTheRun makes the report path
-// a FIFO whose reader opens only after the run deadline has passed: the
-// run reaches the end of its loop with the run live, blocks writing the
-// report, and the deadline passes during the write. The report the
-// reader finally receives, and the error the run exits with, both name
-// the run deadline.
+// a FIFO. The run reaches the end of its loop with the run live and opens
+// the FIFO to write its report; only that open lets the reader's open
+// return, and only then does the test end the run. The run re-reads its
+// context after the write, so it writes a second report naming the end.
+// The reader holds its own write end open for the whole run, so every
+// report the run writes lands in ONE stream and no report depends on
+// whether the reader reopened the FIFO in time; the test closes that
+// write end once the run has returned, and the reader then reads to EOF.
+// No step waits on a timer.
 func TestTheRunEndingWhileItsReportIsWrittenEndsTheRun(t *testing.T) {
 	for name, cancelDuringWrite := range map[string]bool{"run deadline": false, "signal": true} {
 		t.Run(name, func(t *testing.T) {
@@ -145,49 +148,66 @@ func TestTheRunEndingWhileItsReportIsWrittenEndsTheRun(t *testing.T) {
 				wantErr, wantCause = context.Canceled, exitStoppedBySignal
 			}
 			ctx := newEndableContext()
-			reports := make(chan []byte, 2)
+			keepAlive := make(chan *os.File, 1)
+			var reports []jsonReport
+			var readErr error
 			readerDone := make(chan struct{})
 			go func() {
 				defer close(readerDone)
-				// Opening the read end blocks until the run opens the
-				// write end: its loop is over and it is writing its
-				// report. Only then does the run end, so the end always
-				// lands during the write, however slow the host is.
-				first, err := os.Open(fifo)
+				defer close(keepAlive)
+				// Blocks until the run opens the write end: its loop is
+				// over and it is writing its report.
+				stream, err := os.Open(fifo)
 				if err != nil {
+					readErr = err
 					return
 				}
+				defer stream.Close()
+				// A reader exists, so this open returns at once. While it
+				// is open the stream never reaches EOF between the run's
+				// writes, and each later write of the run joins it.
+				writer, err := os.OpenFile(fifo, os.O_WRONLY, 0)
+				if err != nil {
+					readErr = err
+					return
+				}
+				keepAlive <- writer
 				ctx.end(wantErr)
-				raw, _ := io.ReadAll(first)
-				_ = first.Close()
-				reports <- raw
-				raw, err = os.ReadFile(fifo)
-				if err != nil {
-					return
+				decoder := json.NewDecoder(stream)
+				for {
+					var report jsonReport
+					if err := decoder.Decode(&report); err != nil {
+						if !errors.Is(err, io.EOF) {
+							readErr = err
+						}
+						return
+					}
+					reports = append(reports, report)
 				}
-				reports <- raw
 			}()
 			var runErr error
 			stdout := captureStdout(t, func() {
 				runErr = runMeasurement(ctx, goapiproof.NewLegClient(0), f, staticCredentialForTest(), staticCredentialForTest(), sameProverBuildForTest(build), nil, artifacts)
 			})
+			// Every write of the run has gone into the pipe; closing the
+			// reader's own write end lets it read the rest and reach EOF.
+			if writer, ok := <-keepAlive; ok {
+				_ = writer.Close()
+			}
+			awaitEvent(t, readerDone, "the report reader reaching the end of the stream")
+			if readErr != nil {
+				t.Fatalf("read the reports: %v", readErr)
+			}
 			if !errors.Is(runErr, wantErr) {
 				t.Fatalf("err = %v, want %v: the run ended during its report write", runErr, wantErr)
 			}
-			// The run returns once its last write has gone into the pipe;
-			// the reader may still be receiving it.
-			select {
-			case <-readerDone:
-			case <-time.After(10 * time.Second):
-				t.Fatal("the report reader did not finish")
+			if len(reports) != 2 {
+				t.Fatalf("the run wrote %d report(s), want 2: the report of the run as it reached its loop's end, then the one naming the end", len(reports))
 			}
-			var last jsonReport
-			for len(reports) > 0 {
-				if err := json.Unmarshal(<-reports, &last); err != nil {
-					t.Fatal(err)
-				}
+			if first := reports[0].ExitCause; first == exitStoppedByRunDeadline || first == exitStoppedBySignal {
+				t.Fatalf("the first report says exit_cause=%q: the run was live when it began the write", first)
 			}
-			if last.ExitCause != wantCause {
+			if last := reports[1]; last.ExitCause != wantCause {
 				t.Fatalf("the last report written says exit_cause=%q, want %q", last.ExitCause, wantCause)
 			}
 			if !strings.Contains(stdout, "exit_cause="+wantCause) {
@@ -195,38 +215,6 @@ func TestTheRunEndingWhileItsReportIsWrittenEndsTheRun(t *testing.T) {
 			}
 		})
 	}
-}
-
-// endableContext is a run context the test ends at a moment of its
-// choosing, with the error the run's own deadline (DeadlineExceeded) or a
-// signal (Canceled) would carry.
-type endableContext struct {
-	context.Context
-	done chan struct{}
-	once sync.Once
-	mu   sync.Mutex
-	err  error
-}
-
-func newEndableContext() *endableContext {
-	return &endableContext{Context: context.Background(), done: make(chan struct{})}
-}
-
-func (c *endableContext) Done() <-chan struct{} { return c.done }
-
-func (c *endableContext) Err() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.err
-}
-
-func (c *endableContext) end(err error) {
-	c.once.Do(func() {
-		c.mu.Lock()
-		c.err = err
-		c.mu.Unlock()
-		close(c.done)
-	})
 }
 
 // TestExitCauseForEveryRunEnding pins each exit cause of a run that

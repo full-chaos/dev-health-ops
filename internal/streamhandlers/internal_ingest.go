@@ -53,7 +53,7 @@ func (h *InternalIngestHandler) Handle(ctx context.Context, message streamrunner
 	now := h.now().UTC()
 	switch entity {
 	case "commits":
-		batch, err := h.conn.PrepareBatch(ctx, "INSERT INTO git_commits (org_id,repo_id,hash,message,author_name,author_email,author_when,committer_name,committer_email,committer_when,parents,last_synced)")
+		batch, err := h.conn.PrepareBatch(ctx, internalCommitInsert)
 		if err != nil {
 			return fmt.Errorf("prepare commits: %w", err)
 		}
@@ -72,10 +72,7 @@ func (h *InternalIngestHandler) Handle(ctx context.Context, message streamrunner
 		}
 		return sendBatch(batch)
 	case "pull-requests":
-		batch, err := h.conn.PrepareBatch(ctx, "INSERT INTO git_pull_requests (org_id,repo_id,number,title,body,state,author_name,author_email,created_at,merged_at,closed_at,head_branch,base_branch,additions,deletions,changed_files,last_synced)")
-		if err != nil {
-			return fmt.Errorf("prepare pull requests: %w", err)
-		}
+		rows := make([]storedVersionRow, 0, len(envelope.Items))
 		type reviewRow struct {
 			number      uint32
 			reviewID    string
@@ -92,9 +89,10 @@ func (h *InternalIngestHandler) Handle(ctx context.Context, message streamrunner
 			merged, _ := itemTime(item, "merged_at")
 			closed, _ := itemTime(item, "closed_at")
 			prNumber := uint32(number(item, "number", 0))
-			if err := batch.Append(envelope.OrgID, repoID, prNumber, nullable(item, "title"), nullable(item, "body"), nullable(item, "state"), nullable(item, "author_name"), nullable(item, "author_email"), created, nullableTime(merged), nullableTime(closed), nullable(item, "head_branch"), nullable(item, "base_branch"), nullableUint(item, "additions"), nullableUint(item, "deletions"), nullableUint(item, "changed_files"), now); err != nil {
-				return fmt.Errorf("append pull request: %w", err)
-			}
+			rows = append(rows, storedVersionRow{
+				values: []any{envelope.OrgID, repoID, prNumber, nullable(item, "title"), nullable(item, "body"), nullable(item, "state"), nullable(item, "author_name"), nullable(item, "author_email"), created, nullableTime(merged), nullableTime(closed), nullable(item, "head_branch"), nullable(item, "base_branch"), nullableUint(item, "additions"), nullableUint(item, "deletions"), nullableUint(item, "changed_files"), nil, nil, uint32(0), uint32(0), uint32(0), now},
+				carry:  internalCarry(internalPullRequestContract, item),
+			})
 			rawReviews, ok := item["reviews"].([]any)
 			if !ok && item["reviews"] != nil {
 				return &streamrunner.PermanentError{Reason: "invalid_pull_request_review"}
@@ -117,13 +115,16 @@ func (h *InternalIngestHandler) Handle(ctx context.Context, message streamrunner
 				})
 			}
 		}
-		if err := sendBatch(batch); err != nil {
+		if err := internalPullRequestVersions.apply(ctx, h.conn, envelope.OrgID, internalPullRequestInsert, rows); err != nil {
+			return err
+		}
+		if err := appendAndSend(ctx, h.conn, internalPullRequestInsert, "pull request", rows); err != nil {
 			return err
 		}
 		if len(reviews) == 0 {
 			return nil
 		}
-		reviewBatch, err := h.conn.PrepareBatch(ctx, "INSERT INTO git_pull_request_reviews (org_id,repo_id,number,review_id,reviewer,state,submitted_at,last_synced)")
+		reviewBatch, err := h.conn.PrepareBatch(ctx, internalReviewInsert)
 		if err != nil {
 			return fmt.Errorf("prepare pull request reviews: %w", err)
 		}
@@ -134,10 +135,7 @@ func (h *InternalIngestHandler) Handle(ctx context.Context, message streamrunner
 		}
 		return sendBatch(reviewBatch)
 	case "deployments":
-		batch, err := h.conn.PrepareBatch(ctx, "INSERT INTO deployments (org_id,repo_id,deployment_id,status,environment,started_at,finished_at,deployed_at,pull_request_number,release_ref,release_ref_confidence,last_synced)")
-		if err != nil {
-			return fmt.Errorf("prepare deployments: %w", err)
-		}
+		rows := make([]storedVersionRow, 0, len(envelope.Items))
 		for _, item := range envelope.Items {
 			if stringValue(item, "deployment_id") == "" || stringValue(item, "status") == "" || stringValue(item, "environment") == "" {
 				return &streamrunner.PermanentError{Reason: "invalid_deployment"}
@@ -145,16 +143,17 @@ func (h *InternalIngestHandler) Handle(ctx context.Context, message streamrunner
 			started, _ := itemTime(item, "started_at")
 			finished, _ := itemTime(item, "finished_at")
 			deployed, _ := itemTime(item, "deployed_at")
-			if err := batch.Append(envelope.OrgID, repoID, stringValue(item, "deployment_id"), nullable(item, "status"), nullable(item, "environment"), nullableTime(started), nullableTime(finished), nullableTime(deployed), nullableUint(item, "pull_request_number"), stringValue(item, "release_ref"), floatValue(item, "release_ref_confidence"), now); err != nil {
-				return fmt.Errorf("append deployment: %w", err)
-			}
+			rows = append(rows, storedVersionRow{
+				values: []any{envelope.OrgID, repoID, stringValue(item, "deployment_id"), nullable(item, "status"), nullable(item, "environment"), nullableTime(started), nullableTime(finished), nullableTime(deployed), nil, nullableUint(item, "pull_request_number"), stringValue(item, "release_ref"), floatValue(item, "release_ref_confidence"), now},
+				carry:  internalCarry(internalDeploymentContract, item),
+			})
 		}
-		return sendBatch(batch)
+		if err := internalDeploymentVersions.apply(ctx, h.conn, envelope.OrgID, internalDeploymentInsert, rows); err != nil {
+			return err
+		}
+		return appendAndSend(ctx, h.conn, internalDeploymentInsert, "deployment", rows)
 	case "work-items":
-		batch, err := h.conn.PrepareBatch(ctx, "INSERT INTO work_items (org_id,repo_id,work_item_id,provider,title,description,type,status,status_raw,project_key,project_id,native_team_key,project_name,assignees,reporter,created_at,updated_at,started_at,completed_at,closed_at,labels,story_points,sprint_id,sprint_name,parent_id,epic_id,url,priority_raw,service_class,due_at,last_synced)")
-		if err != nil {
-			return fmt.Errorf("prepare work items: %w", err)
-		}
+		rows := make([]storedVersionRow, 0, len(envelope.Items))
 		for _, item := range envelope.Items {
 			created, ok := itemTime(item, "created_at")
 			if !ok || stringValue(item, "work_item_id") == "" || stringValue(item, "provider") == "" || stringValue(item, "title") == "" || !validWorkItem(item) {
@@ -166,11 +165,15 @@ func (h *InternalIngestHandler) Handle(ctx context.Context, message streamrunner
 			}
 			started, _ := itemTime(item, "started_at")
 			completed, _ := itemTime(item, "completed_at")
-			if err := batch.Append(envelope.OrgID, uuid.Nil, stringValue(item, "work_item_id"), stringValue(item, "provider"), stringValue(item, "title"), nullable(item, "description"), stringValue(item, "type"), stringValue(item, "status"), stringValue(item, "status_raw"), stringValue(item, "project_key"), "", "", "", stringsValue(item, "assignees"), stringValue(item, "reporter"), created, updated, nullableTime(started), nullableTime(completed), nil, stringsValue(item, "labels"), nullableFloat(item, "story_points"), "", "", "", "", stringValue(item, "url"), stringValue(item, "priority_raw"), "", nil, now); err != nil {
-				return fmt.Errorf("append work item: %w", err)
-			}
+			rows = append(rows, storedVersionRow{
+				values: []any{envelope.OrgID, uuid.Nil, stringValue(item, "work_item_id"), stringValue(item, "provider"), stringValue(item, "title"), nullable(item, "description"), stringValue(item, "type"), stringValue(item, "status"), stringValue(item, "status_raw"), stringValue(item, "project_key"), "", "", "", stringsValue(item, "assignees"), stringValue(item, "reporter"), created, updated, nullableTime(started), nullableTime(completed), nil, stringsValue(item, "labels"), nullableFloat(item, "story_points"), "", "", "", "", stringValue(item, "url"), stringValue(item, "priority_raw"), "", nil, now},
+				carry:  internalCarry(internalWorkItemContract, item),
+			})
 		}
-		return sendBatch(batch)
+		if err := internalWorkItemVersions.apply(ctx, h.conn, envelope.OrgID, internalWorkItemInsert, rows); err != nil {
+			return err
+		}
+		return appendAndSend(ctx, h.conn, internalWorkItemInsert, "work item", rows)
 	case "incidents":
 		return h.persistIncidents(ctx, envelope.OrgID, envelope.RepoURL, repoID, envelope.Items, now)
 	default:
@@ -343,13 +346,13 @@ func number(item map[string]any, key string, fallback float64) float64 {
 }
 func floatValue(item map[string]any, key string) float64 { return number(item, key, 0) }
 func nullableUint(item map[string]any, key string) any {
-	if _, ok := item[key]; !ok {
+	if item[key] == nil {
 		return nil
 	}
 	return uint32(number(item, key, 0))
 }
 func nullableFloat(item map[string]any, key string) any {
-	if _, ok := item[key]; !ok {
+	if item[key] == nil {
 		return nil
 	}
 	return number(item, key, 0)
@@ -384,4 +387,131 @@ func validWorkItem(item map[string]any) bool {
 	_, kind := map[string]struct{}{"story": {}, "task": {}, "bug": {}, "epic": {}, "issue": {}, "incident": {}, "chore": {}, "unknown": {}}[stringValue(item, "type")]
 	_, status := map[string]struct{}{"backlog": {}, "todo": {}, "in_progress": {}, "in_review": {}, "blocked": {}, "done": {}, "canceled": {}, "unknown": {}}[stringValue(item, "status")]
 	return provider && kind && status
+}
+
+const (
+	internalCommitInsert      = "INSERT INTO git_commits (org_id,repo_id,hash,message,author_name,author_email,author_when,committer_name,committer_email,committer_when,parents,last_synced)"
+	internalReviewInsert      = "INSERT INTO git_pull_request_reviews (org_id,repo_id,number,review_id,reviewer,state,submitted_at,last_synced)"
+	internalPullRequestInsert = "INSERT INTO git_pull_requests (org_id,repo_id,number,title,body,state,author_name,author_email,created_at,merged_at,closed_at,head_branch,base_branch,additions,deletions,changed_files,first_review_at,first_comment_at,changes_requested_count,reviews_count,comments_count,last_synced)"
+	internalDeploymentInsert  = "INSERT INTO deployments (org_id,repo_id,deployment_id,status,environment,started_at,finished_at,deployed_at,merged_at,pull_request_number,release_ref,release_ref_confidence,last_synced)"
+	internalWorkItemInsert    = "INSERT INTO work_items (org_id,repo_id,work_item_id,provider,title,description,type,status,status_raw,project_key,project_id,native_team_key,project_name,assignees,reporter,created_at,updated_at,started_at,completed_at,closed_at,labels,story_points,sprint_id,sprint_name,parent_id,epic_id,url,priority_raw,service_class,due_at,last_synced)"
+)
+
+// stated rows are translated from the ingest field of the same name.
+func stated(columns ...string) []columnContract {
+	out := make([]columnContract, 0, len(columns))
+	for _, column := range columns {
+		out = append(out, columnContract{column: column, rule: columnStated, fields: []string{column}})
+	}
+	return out
+}
+
+func contractColumns(groups ...[]columnContract) []columnContract {
+	var out []columnContract
+	for _, group := range groups {
+		out = append(out, group...)
+	}
+	return out
+}
+
+var (
+	idOrg        = columnContract{column: "org_id", rule: columnWriter}
+	idLastSynced = columnContract{column: "last_synced", rule: columnWriter}
+	idSource     = columnContract{column: "source_id", rule: columnWriter}
+)
+
+// identity rows are translated from the ingest field of the same name;
+// repo_id comes from the envelope's repo_url.
+func identity(columns ...string) []columnContract {
+	out := make([]columnContract, 0, len(columns))
+	for _, column := range columns {
+		row := columnContract{column: column, rule: columnIdentity, fields: []string{column}}
+		if column == "repo_id" {
+			row.fields = nil
+		}
+		out = append(out, row)
+	}
+	return out
+}
+
+func noField(columns ...string) []columnContract {
+	out := make([]columnContract, 0, len(columns))
+	for _, column := range columns {
+		out = append(out, columnContract{column: column, rule: columnNoField})
+	}
+	return out
+}
+
+var (
+	internalCommitContract = writerContract{writer: "internal_ingest", table: "git_commits", columns: contractColumns(
+		[]columnContract{idOrg}, identity("repo_id", "hash"),
+		stated("message", "author_name", "author_email", "author_when", "committer_name", "committer_email", "committer_when", "parents"),
+		[]columnContract{idLastSynced},
+	)}
+	internalReviewContract = writerContract{writer: "internal_ingest", table: "git_pull_request_reviews", columns: contractColumns(
+		[]columnContract{idOrg}, identity("repo_id", "number", "review_id"),
+		stated("reviewer", "state", "submitted_at"), []columnContract{idLastSynced},
+	)}
+	internalPullRequestContract = writerContract{writer: "internal_ingest", table: "git_pull_requests", columns: contractColumns(
+		[]columnContract{idOrg}, identity("repo_id", "number"),
+		stated("title", "body", "state", "author_name", "author_email", "created_at"),
+		[]columnContract{
+			{column: "merged_at", rule: columnStated, fields: []string{"merged_at"}, terminal: true},
+			{column: "closed_at", rule: columnStateCoupled, fields: []string{"closed_at"}},
+		},
+		stated("head_branch", "base_branch", "additions", "deletions", "changed_files"),
+		[]columnContract{{column: "first_review_at", rule: columnNoField, terminal: true}},
+		noField("first_comment_at", "changes_requested_count", "reviews_count", "comments_count"),
+		[]columnContract{idLastSynced},
+	)}
+	internalDeploymentContract = writerContract{writer: "internal_ingest", table: "deployments", columns: contractColumns(
+		[]columnContract{idOrg}, identity("repo_id", "deployment_id"),
+		stated("status", "environment", "started_at", "finished_at", "deployed_at"),
+		[]columnContract{{column: "merged_at", rule: columnNoField, terminal: true}},
+		stated("pull_request_number", "release_ref", "release_ref_confidence"),
+		[]columnContract{idLastSynced},
+	)}
+	internalWorkItemContract = writerContract{writer: "internal_ingest", table: "work_items", columns: contractColumns(
+		[]columnContract{idOrg}, identity("repo_id", "work_item_id"),
+		stated("provider", "title", "description", "type", "status", "status_raw", "project_key"),
+		noField("project_id", "native_team_key", "project_name"),
+		stated("assignees", "reporter", "created_at"),
+		[]columnContract{
+			{column: "updated_at", rule: columnUnstated, fields: []string{"updated_at"}},
+			{column: "started_at", rule: columnStateCoupled, fields: []string{"started_at"}},
+			{column: "completed_at", rule: columnStateCoupled, fields: []string{"completed_at"}},
+		},
+		noField("closed_at"), stated("labels", "story_points"),
+		noField("sprint_id", "sprint_name", "parent_id", "epic_id"),
+		stated("url", "priority_raw"), noField("service_class", "due_at"),
+		[]columnContract{idLastSynced},
+	)}
+	internalPullRequestVersions = internalPullRequestContract.versions()
+	internalDeploymentVersions  = internalDeploymentContract.versions()
+	internalWorkItemVersions    = internalWorkItemContract.versions()
+)
+
+// internalUnstoredFields names each ingest field that reaches no column of
+// the entity's own table, with the reason.
+var internalUnstoredFields = map[string]map[string]string{
+	"IngestPullRequest": {"reviews": "written as git_pull_request_reviews rows"},
+}
+
+// internalCarry applies the contract to one ingest item: the ingest API
+// serialises every declared field, so an unstated field arrives null.
+func internalCarry(contract writerContract, item map[string]any) map[string]bool {
+	return contract.carry(func(field string) bool { return item[field] == nil })
+}
+
+func appendAndSend(ctx context.Context, conn productClickHouse, insert, noun string, rows []storedVersionRow) error {
+	batch, err := conn.PrepareBatch(ctx, insert)
+	if err != nil {
+		return fmt.Errorf("prepare %s: %w", noun, err)
+	}
+	for _, row := range rows {
+		if err := batch.Append(row.values...); err != nil {
+			return fmt.Errorf("append %s: %w", noun, err)
+		}
+	}
+	return sendBatch(batch)
 }

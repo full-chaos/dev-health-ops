@@ -125,6 +125,13 @@ type carryForwardLedgerHarness struct {
 
 func startCarryForwardLedgerHarness(t *testing.T, ctx context.Context, dataset, flags string) *carryForwardLedgerHarness {
 	t.Helper()
+	return startProviderLedgerHarness(t, ctx, "github", dataset, flags)
+}
+
+// startProviderLedgerHarness points the fixture unit at provider/dataset; a
+// gitlab unit's source carries the numeric project id the GitLab routes read.
+func startProviderLedgerHarness(t *testing.T, ctx context.Context, provider, dataset, flags string) *carryForwardLedgerHarness {
+	t.Helper()
 	postgres, err := containers.StartPostgres(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -157,10 +164,15 @@ func startCarryForwardLedgerHarness(t *testing.T, ctx context.Context, dataset, 
 	seedProviderSyncFixture(t, ctx, pool)
 	if _, err := pool.Exec(ctx, `
 UPDATE public.sync_run_units
-SET provider = 'github', dataset_key = $2, cost_class = 'medium', processor_flags = $3::jsonb,
+SET provider = $4, dataset_key = $2, cost_class = 'medium', processor_flags = $3::jsonb,
     since_at = '2026-07-01T00:00:00Z', before_at = '2026-07-31T23:59:59Z'
-WHERE id = $1`, firstUnitID, dataset, flags); err != nil {
+WHERE id = $1`, firstUnitID, dataset, flags, provider); err != nil {
 		t.Fatal(err)
+	}
+	if provider == "gitlab" {
+		if _, err := pool.Exec(ctx, `UPDATE public.integration_sources SET external_id = '123' WHERE id = $1`, firstSourceID); err != nil {
+			t.Fatal(err)
+		}
 	}
 	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(clickhouseInstance.URI))
 	if err != nil {

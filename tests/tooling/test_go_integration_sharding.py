@@ -2123,12 +2123,19 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # claim-time expiry, and the claim staying read-only) added 9 ordinary
     # tests, none integration-tagged: +9 top-level (1498 -> 1507),
     # integration-tagged unchanged at 172.
-    # 1507 top-level provider tests, 172 of them integration-tagged; both
+    # Prepared-snapshot recovery for deployments and PR-social (the route
+    # allow-list, the legacy-ledger and oversize fallbacks, the size-cap
+    # boundary, the rollback cell, the per-route recovery-mode pin, the
+    # provider-drift table, the superseded-snapshot discard and its decision
+    # table, exact large integers on replay, and the discard reason labels)
+    # added 13 ordinary tests and 2 integration-tagged tests: +15 top-level
+    # (1507 -> 1522), integration-tagged 172 -> 174.
+    # 1522 top-level provider tests, 174 of them integration-tagged; both
     # pins move with any top-level test added to or removed from
     # internal/providersync.
-    assert len(expected_provider_tests) == 1507
+    assert len(expected_provider_tests) == 1522
 
-    assert len(expected_integration_tests) == 172
+    assert len(expected_integration_tests) == 174
     assert expected_integration_tests < expected_provider_tests
 
     provider_assignments: dict[int, set[str]] = {}
@@ -2144,7 +2151,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1507
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1522
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -2262,7 +2269,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1507
+    assert len(selected_tests) == len(set(selected_tests)) == 1522
     assert set(selected_tests) == expected_tests
 
 

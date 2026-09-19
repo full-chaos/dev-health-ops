@@ -129,8 +129,9 @@ type CompleteRouteDescriptor struct {
 	// never implies routing.
 	NativeShadow bool
 	// PreparedManifestRecovery requires an exact Postgres sidecar snapshot
-	// before the first sink effect. It is currently reserved for GitHub's
-	// mutable, multi-source work-items composition and does not imply routing.
+	// before the first sink effect, so crash recovery replays the stored rows
+	// instead of re-collecting them. preparedManifestRouteDestinations lists
+	// the routes that may set it; it does not imply routing.
 	PreparedManifestRecovery bool
 	// Chunked opts a route into the additive durable checkpoint/sidecar path.
 	// It is independent from PreparedManifestRecovery: the former persists a
@@ -371,6 +372,7 @@ func Descriptor(
 		descriptor.Destinations = []string{"deployments"}
 		descriptor.RouteReady = true
 		descriptor.Plannable = true
+		descriptor.PreparedManifestRecovery = true
 	case provider == "gitlab" && dataset == "feature-flags":
 		descriptor.Destinations = []string{"feature_flag", "feature_flag_event", "work_graph_edges"}
 		descriptor.RouteReady = true
@@ -387,6 +389,7 @@ func Descriptor(
 		descriptor.Destinations = githubPRSocialRouteDestinations()
 		descriptor.RouteReady = true
 		descriptor.Plannable = true
+		descriptor.PreparedManifestRecovery = true
 	case provider == "gitlab" && dataset == "pr-reviews":
 		descriptor.Destinations = githubPRSocialRouteDestinations()
 		descriptor.RouteReady = true
@@ -452,6 +455,7 @@ func Descriptor(
 		descriptor.Destinations = githubPRSocialRouteDestinations()
 		descriptor.RouteReady = true
 		descriptor.Plannable = true
+		descriptor.PreparedManifestRecovery = true
 	case provider == "github" && dataset == "pr-reviews":
 		descriptor.Destinations = githubPRSocialRouteDestinations()
 		descriptor.RouteReady = true
@@ -475,6 +479,7 @@ func Descriptor(
 		descriptor.Destinations = []string{"deployments"}
 		descriptor.RouteReady = true
 		descriptor.Plannable = true
+		descriptor.PreparedManifestRecovery = true
 	case provider == "github" && dataset == "security":
 		descriptor.Destinations = []string{"security_alerts"}
 		descriptor.RouteReady = true

@@ -258,7 +258,7 @@ func TestCompleteRouteExecutorRecoversPreparedManifestWithoutRecollection(t *tes
 		credentials.calls != 0 || decryptor.calls != 0 || doer.requests != 0 ||
 		result.Effects.Skipped != 1 || result.Effects.MarkedCommitted != 1 ||
 		result.Effects.Written != len(githubWorkItemRouteDestinations())-2 ||
-		result.Result["records"] != float64(16) {
+		result.Result["records"] != json.Number("16") {
 		t.Fatalf(
 			"handler_at=%s loads=%d prepares=%d credential_calls=%d decrypt_calls=%d requests=%d result=%+v stored_result=%v",
 			handler.normalizedAt, ledger.preparedLoads, ledger.preparedPrepares,
@@ -624,8 +624,9 @@ func TestPreparedRecoveryRefusesLegacyV1LedgerForGitHubWorkItems(t *testing.T) {
 	}
 }
 
-// PreparedManifestRecovery is a github/work-items contract, not a general
-// capability. A descriptor carrying it for any other pair is a wiring mistake
+// PreparedManifestRecovery is a contract of the routes in
+// preparedManifestRouteDestinations, not a general capability. A descriptor
+// carrying it for any other pair is a wiring mistake
 // that must fail before the route touches credentials, not a route that
 // quietly runs without its snapshot.
 //
@@ -636,7 +637,7 @@ func TestPreparedRecoveryRefusesLegacyV1LedgerForGitHubWorkItems(t *testing.T) {
 // claim that agree with each other on some other pair while still carrying the
 // recovery flag. Measured, not assumed: an earlier version of this test used
 // the incoherent form, and both R17 and R18 survived against it.
-func TestPreparedManifestRecoveryIsRefusedOutsideGitHubWorkItems(t *testing.T) {
+func TestPreparedManifestRecoveryIsRefusedOutsideItsRouteList(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
 	// Both pairs must be ones a real claim can carry. "github/work-item-labels"
@@ -646,7 +647,7 @@ func TestPreparedManifestRecoveryIsRefusedOutsideGitHubWorkItems(t *testing.T) {
 	// which is how R18 survived a version of this test that used it.
 	for name, pair := range map[string]struct{ provider, dataset string }{
 		"another provider": {provider: "linear", dataset: "work-items"},
-		"another dataset":  {provider: "github", dataset: "prs"},
+		"another dataset":  {provider: "github", dataset: "commits"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			claim, session := preparedWorkItemsSession(t, now, pair.provider, pair.dataset)
@@ -1165,12 +1166,12 @@ func TestASupersededDestinationManifestIsDistinguishableFromTampering(t *testing
 	}
 	superseded.Effects = kept
 
-	if err := preparedRouteManifestDestinationsMatch(superseded); !errors.Is(
+	if err := preparedRouteManifestDestinationsMatch(claim, superseded); !errors.Is(
 		err, ErrPreparedSnapshotManifestMismatch,
 	) {
 		t.Fatalf("superseded manifest error=%v, want ErrPreparedSnapshotManifestMismatch", err)
 	}
-	if err := preparedRouteManifestDestinationsMatch(current); err != nil {
+	if err := preparedRouteManifestDestinationsMatch(claim, current); err != nil {
 		t.Fatalf("current manifest was rejected: %v", err)
 	}
 	// The distinction is only worth anything if the OTHER failures still refuse.

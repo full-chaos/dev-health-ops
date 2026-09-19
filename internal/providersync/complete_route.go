@@ -192,9 +192,10 @@ func (executor CompleteRouteExecutor) Execute(
 		(executor.Committer.Sink == nil && executor.EffectsFactory == nil) {
 		return CompleteRouteExecutionResult{}, ErrInvalidConfiguration
 	}
-	if descriptor.PreparedManifestRecovery &&
-		(descriptor.Provider != "github" || descriptor.RouteDataset != "work-items") {
-		return CompleteRouteExecutionResult{}, ErrInvalidConfiguration
+	if descriptor.PreparedManifestRecovery {
+		if _, ok := preparedManifestRouteDestinations(descriptor.Provider, descriptor.RouteDataset); !ok {
+			return CompleteRouteExecutionResult{}, ErrInvalidConfiguration
+		}
 	}
 	if descriptor.Chunked && descriptor.PreparedManifestRecovery {
 		return CompleteRouteExecutionResult{}, ErrInvalidConfiguration
@@ -207,6 +208,10 @@ func (executor CompleteRouteExecutor) Execute(
 		return CompleteRouteExecutionResult{}, ErrInvalidConfiguration
 	}
 	var result CompleteRouteExecutionResult
+	// recovery names how this attempt produced the batch it committed, for
+	// the completion line: "none" on a first attempt, otherwise the recovery
+	// path the persisted ledger sent it down.
+	recovery := "none"
 	err := session.Run(ctx, executor.HeartbeatInterval, func(
 		workContext context.Context,
 		guard providerfoundation.LeaseGuard,
@@ -229,22 +234,37 @@ func (executor CompleteRouteExecutor) Execute(
 			}
 			normalizedAt = state.CreatedAt.UTC()
 			recoveredEffects = &state
+			recovery = "recollect"
 		case errors.Is(loadErr, ErrEffectLedgerNotFound):
 		default:
 			return loadErr
 		}
-		if recoveredEffects != nil && descriptor.PreparedManifestRecovery {
-			// Contract point 7. New workers may continue an existing route from
-			// a legacy v1 ledger, but a route that requires prepared recovery
-			// must never resume from a document written before that contract
+		// legacyLedger is set when a route enrolled in prepared recovery finds a
+		// ledger written without a snapshot. That unit finishes the way its
+		// ledger was written: re-collect and Commit, never PrepareRouteSnapshot,
+		// whose v2 manifest could not match the persisted v1 one.
+		legacyLedger := false
+		if recoveredEffects != nil && descriptor.PreparedManifestRecovery &&
+			(recoveredEffects.SchemaVersion != "v2" || recoveredEffects.PreparedSnapshot == nil) {
+			// Contract point 7. A route that requires prepared recovery must
+			// never resume from a document written before that contract
 			// existed. Both decoders below also refuse it; the policy belongs
 			// here, where the route declares the requirement, rather than
 			// surviving only as a side effect of two independent decoders that
 			// a later change could relax one at a time.
-			if recoveredEffects.SchemaVersion != "v2" ||
-				recoveredEffects.PreparedSnapshot == nil {
+			if preparedManifestRouteRequiresSnapshot(session.Claim.Provider, session.Claim.Dataset) {
 				return ErrEffectRecoveryUnsafe
 			}
+			legacyLedger = true
+			recovery = "legacy_ledger"
+			slog.Warn(
+				"provider_sync.prepared_recovery_legacy_ledger",
+				"provider", session.Claim.Provider, "dataset", session.Claim.Dataset,
+				"unit", session.Claim.ID, "generation", session.Claim.GenerationKey(),
+				"schema_version", recoveredEffects.SchemaVersion,
+			)
+		}
+		if recoveredEffects != nil && descriptor.PreparedManifestRecovery && !legacyLedger {
 			manifest, err := preparedLedger.LoadRouteSnapshot(
 				workContext, session.Claim, *recoveredEffects, executor.now(),
 			)
@@ -275,13 +295,22 @@ func (executor CompleteRouteExecutor) Execute(
 				switch {
 				case !preparedSnapshotReplayable(*recoveredEffects):
 					reason = "manifest_mismatch_unreplayable"
-				case !isSafeWorkItemsManifestReplanState(session.Claim, *recoveredEffects):
+				case !isSafePreparedManifestReplanState(session.Claim, *recoveredEffects):
 					// Something in the document already committed. Discarding
 					// would delete the generation journal that records it, so
 					// the evidence a write landed would go with it. Stops
 					// loudly instead -- a partially committed generation is
 					// exactly when a person should look.
 					reason = "manifest_mismatch_partially_committed"
+				default:
+					// A writing effect's sink write may already have landed.
+					// Discarding would erase the only record of it, so each
+					// one is read back against the superseded snapshot's own
+					// rows first; only a ledger whose writing effects all read
+					// back absent is discarded.
+					reason = supersededSnapshotWritingEffectsVerdict(
+						workContext, committer.Readback, session.Claim, manifest, *recoveredEffects,
+					)
 				}
 				executor.Metrics.RecordPreparedSnapshotDiscarded(
 					session.Claim.Provider, session.Claim.Dataset, reason,
@@ -309,6 +338,7 @@ func (executor CompleteRouteExecutor) Execute(
 				}
 				recoveredEffects = nil
 				normalizedAt = replannedAt
+				recovery = "snapshot_discarded"
 			} else if err != nil {
 				return err
 			}
@@ -329,6 +359,7 @@ func (executor CompleteRouteExecutor) Execute(
 					manifest.Batch.Evidence, manifest.Batch.Result, manifest.Batch.Watermark
 				result.WorklogObservations = manifest.Batch.WorklogObservations
 				result.Comparison = manifest.Comparison
+				recovery = "snapshot_replay"
 				result.Effects, err = committer.CommitPrepared(
 					workContext, session.Claim, manifest.Batch.Effects, *recoveredEffects,
 				)
@@ -403,6 +434,7 @@ func (executor CompleteRouteExecutor) Execute(
 					}
 					recoveredEffects = nil
 					normalizedAt = replannedAt
+					recovery = "replanned"
 				}
 			}
 		}
@@ -453,17 +485,33 @@ func (executor CompleteRouteExecutor) Execute(
 		// persist a later time than the rows were built with, so the next
 		// attempt would reload that later time, rebuild different rows, and be
 		// rejected on digest — the wedge in a second disguise.
-		if descriptor.PreparedManifestRecovery {
+		preparedCommit := descriptor.PreparedManifestRecovery && !legacyLedger
+		if preparedCommit {
 			prepared, prepareErr := preparedLedger.PrepareRouteSnapshot(
 				workContext, session.Claim, batch, comparison, normalizedAt,
 			)
-			if prepareErr != nil {
+			switch {
+			case prepareErr == nil:
+				result.Effects, err = committer.CommitPrepared(
+					workContext, session.Claim, batch.Effects, prepared,
+				)
+			case errors.Is(prepareErr, ErrPreparedRouteSnapshotOversize) &&
+				!preparedManifestRouteRequiresSnapshot(session.Claim.Provider, session.Claim.Dataset):
+				// A batch whose effects each fit their own cap can still exceed
+				// the one snapshot cap. It commits the way it would without a
+				// snapshot, so its recovery re-collects.
+				slog.Warn(
+					"provider_sync.prepared_snapshot_oversize_fallback",
+					"provider", session.Claim.Provider, "dataset", session.Claim.Dataset,
+					"unit", session.Claim.ID, "generation", session.Claim.GenerationKey(),
+					"cause", prepareErr.Error(),
+				)
+				preparedCommit = false
+			default:
 				return prepareErr
 			}
-			result.Effects, err = committer.CommitPrepared(
-				workContext, session.Claim, batch.Effects, prepared,
-			)
-		} else {
+		}
+		if !preparedCommit {
 			result.Effects, err = committer.Commit(
 				workContext, session.Claim, batch.Effects, normalizedAt,
 			)
@@ -484,9 +532,49 @@ func (executor CompleteRouteExecutor) Execute(
 		slog.Info(
 			"provider_sync.route_completed",
 			"provider", session.Claim.Provider, "dataset", session.Claim.Dataset,
-			"unit", session.Claim.ID, "effects_written", result.Effects.Written,
+			"unit", session.Claim.ID, "recovery", recovery, "effects_written", result.Effects.Written,
 			"result", result.Result,
 		)
 	}
 	return result, err
+}
+
+// supersededSnapshotWritingEffectsVerdict judges the writing effects of a
+// superseded snapshot's ledger by reading each one back against the snapshot's
+// own rows. It answers "manifest_mismatch" (discard) only when every writing
+// effect reads back absent: an exact or conflicting readback means the write
+// landed, and a readback that fails or cannot be made is never taken as
+// absent. The ledger and snapshot effects are index-aligned: the snapshot
+// decoder refuses a payload whose effects differ from the ledger's by
+// destination, digest or row count.
+func supersededSnapshotWritingEffectsVerdict(
+	ctx context.Context,
+	readback EffectReadback,
+	claim Claim,
+	manifest PreparedRouteManifest,
+	state EffectLedgerState,
+) string {
+	if len(manifest.Batch.Effects) != len(state.Effects) {
+		return "manifest_mismatch_readback_failed"
+	}
+	for index, effect := range state.Effects {
+		if effect.Status != GenerationBlockWriting {
+			continue
+		}
+		if readback == nil {
+			return "manifest_mismatch_readback_unavailable"
+		}
+		inspection, err := readback.InspectEffect(ctx, claim, manifest.Batch.Effects[index])
+		if err != nil {
+			return "manifest_mismatch_readback_failed"
+		}
+		switch inspection {
+		case EffectAbsent:
+		case EffectExact, EffectConflict:
+			return "manifest_mismatch_write_landed"
+		default:
+			return "manifest_mismatch_readback_failed"
+		}
+	}
+	return "manifest_mismatch"
 }

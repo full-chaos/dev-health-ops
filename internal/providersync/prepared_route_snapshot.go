@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"slices"
 	"sort"
@@ -19,6 +20,15 @@ import (
 const (
 	preparedRouteSnapshotSchemaVersion = "v1"
 	maxPreparedRouteSnapshotBytes      = 64 << 20
+)
+
+// ErrPreparedRouteSnapshotOversize is a manifest that encodes past
+// maxPreparedRouteSnapshotBytes. It is an ErrEffectRecoveryUnsafe, so every
+// caller that refuses an unsafe snapshot still refuses it; the executor
+// alone tells it apart, to commit such a batch without a snapshot on routes
+// that allow that.
+var ErrPreparedRouteSnapshotOversize = fmt.Errorf(
+	"%w: prepared route snapshot exceeds its size cap", ErrEffectRecoveryUnsafe,
 )
 
 type PreparedRouteSnapshotReference struct {
@@ -146,8 +156,13 @@ func encodePreparedRouteManifest(
 		Watermark: watermark, Evidence: batch.Evidence, Comparison: comparison,
 	}
 	encoded, err := json.Marshal(snapshot)
-	if err != nil || len(encoded) < 1 || len(encoded) > maxPreparedRouteSnapshotBytes {
+	if err != nil || len(encoded) < 1 {
 		return nil, PreparedRouteSnapshotReference{}, ErrEffectRecoveryUnsafe
+	}
+	if len(encoded) > maxPreparedRouteSnapshotBytes {
+		return nil, PreparedRouteSnapshotReference{}, fmt.Errorf(
+			"%w: %d bytes", ErrPreparedRouteSnapshotOversize, len(encoded),
+		)
 	}
 	digest := sha256.Sum256(encoded)
 	reference := PreparedRouteSnapshotReference{
@@ -195,7 +210,7 @@ func decodePreparedRouteManifest(
 		return PreparedRouteManifest{}, ErrEffectLedgerConflict
 	}
 	var result map[string]any
-	if json.Unmarshal(snapshot.Result, &result) != nil || result == nil ||
+	if decodeResultObjectExact(snapshot.Result, &result) != nil || result == nil ||
 		containsPreparedRouteSensitiveKey(result) {
 		return PreparedRouteManifest{}, ErrEffectLedgerConflict
 	}
@@ -223,13 +238,38 @@ func decodePreparedRouteManifest(
 		Effects: effects, Result: result, Watermark: snapshot.Watermark,
 		Evidence: snapshot.Evidence,
 	}
-	if validatePreparedRouteManifestIdentity(claim, batch, snapshot.NormalizedAt) != nil {
+	// By here the payload is authentically this claim's: its digest matched
+	// the ledger and its tenant, generation and route matched the claim. A
+	// destination set that differs from the route's descriptor is therefore a
+	// document written before a manifest change, and it keeps its own error so
+	// the executor can discard it; every other identity failure refuses.
+	if err := validatePreparedRouteManifestIdentity(claim, batch, snapshot.NormalizedAt); err != nil {
+		if errors.Is(err, ErrPreparedSnapshotManifestMismatch) {
+			// The superseded document's own rows travel with the error: a
+			// discard must read back any effect that may already have landed.
+			return PreparedRouteManifest{
+				Batch: batch, Comparison: snapshot.Comparison,
+				NormalizedAt: snapshot.NormalizedAt.UTC(),
+			}, ErrPreparedSnapshotManifestMismatch
+		}
 		return PreparedRouteManifest{}, ErrEffectLedgerConflict
 	}
 	return PreparedRouteManifest{
 		Batch: batch, Comparison: snapshot.Comparison,
 		NormalizedAt: snapshot.NormalizedAt.UTC(),
 	}, nil
+}
+
+// decodeResultObjectExact decodes a persisted result object keeping every
+// number as written, so an integer past 2^53 (a GitLab project_id) survives a
+// decode and re-encode byte for byte instead of rounding through float64.
+func decodeResultObjectExact(raw []byte, target *map[string]any) error {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	return requirePreparedRouteSnapshotEOF(decoder)
 }
 
 func requirePreparedRouteSnapshotEOF(decoder *json.Decoder) error {
@@ -240,8 +280,45 @@ func requirePreparedRouteSnapshotEOF(decoder *json.Decoder) error {
 	return nil
 }
 
+// preparedManifestRouteDestinations is the allow-list of routes that recover
+// from a prepared snapshot: github/work-items, github and gitlab deployments,
+// and github and gitlab prs. A route qualifies when its re-collected rows can
+// differ from the crashed pass for reasons outside the ledger's control -- a
+// mutable provider selection (work-items), or a best-effort per-row lookup
+// whose outcome can change between the crash and the retry (the deployments'
+// pull request and statuses lookups, the PR-social review enrichment).
+// Replaying the stored rows is the only recovery that does not need the
+// provider to answer the same way twice. Only canonical dataset identities
+// are listed: aliases are never planned or executed on their own. The
+// destination set is the route's descriptor's, so a manifest is checked
+// against exactly what the route declares it emits.
+func preparedManifestRouteDestinations(provider, dataset string) ([]string, bool) {
+	switch {
+	case provider == "github" && dataset == "work-items",
+		(provider == "github" || provider == "gitlab") && dataset == "deployments",
+		(provider == "github" || provider == "gitlab") && dataset == "prs":
+	default:
+		return nil, false
+	}
+	descriptor, ok := Descriptor(provider, dataset)
+	if !ok || len(descriptor.Destinations) == 0 {
+		return nil, false
+	}
+	return append([]string(nil), descriptor.Destinations...), true
+}
+
+// preparedManifestRouteRequiresSnapshot reports whether a recovering unit of
+// this route must refuse a ledger written without a prepared snapshot.
+// github/work-items has required one since its recovery contract existed
+// (contract point 7). The other routes enrolled later: a ledger written
+// without a snapshot by an earlier binary, still in flight at deploy, recovers
+// the way it was written -- by re-collecting -- rather than stranding the unit.
+func preparedManifestRouteRequiresSnapshot(provider, dataset string) bool {
+	return provider == "github" && dataset == "work-items"
+}
+
 // preparedRouteManifestDestinationsMatch compares a manifest's destination set
-// against the one github emits TODAY.
+// against the one the claim's route emits TODAY.
 //
 // It is split out of the identity check, and returns its OWN error, because the
 // two failures need different answers. Every other identity failure means the
@@ -250,19 +327,17 @@ func requirePreparedRouteSnapshotEOF(decoder *json.Decoder) error {
 // entirely: the document is authentically ours and simply predates a manifest
 // change. Collapsing them into one error forced the caller to treat a routine
 // deploy like tampering.
-//
-// The GITHUB list. This validator refuses any other provider outright, so the
-// shared family list was never right here -- and once github grew two
-// destinations of its own (CHAOS-4194) it became actively wrong: a run that
-// persisted an eighteen-effect snapshot and crashed would reload it, compare
-// eighteen against sixteen, and refuse to replay or complete the unit.
-func preparedRouteManifestDestinationsMatch(batch CompleteRouteBatch) error {
+func preparedRouteManifestDestinationsMatch(claim Claim, batch CompleteRouteBatch) error {
+	want, ok := preparedManifestRouteDestinations(claim.Provider, claim.Dataset)
+	if !ok {
+		return ErrEffectRecoveryUnsafe
+	}
 	got := make([]string, 0, len(batch.Effects))
 	for _, effect := range batch.Effects {
 		got = append(got, effect.Destination)
 	}
 	sort.Strings(got)
-	want := githubWorkItemRouteDestinations()
+	want = append([]string(nil), want...)
 	sort.Strings(want)
 	if !slices.Equal(got, want) {
 		return ErrPreparedSnapshotManifestMismatch
@@ -300,12 +375,12 @@ func validatePreparedRouteManifestIdentity(
 	batch CompleteRouteBatch,
 	normalizedAt time.Time,
 ) error {
-	if claim.Validate() != nil || claim.Provider != "github" || claim.Dataset != "work-items" ||
+	if _, ok := preparedManifestRouteDestinations(claim.Provider, claim.Dataset); claim.Validate() != nil || !ok ||
 		normalizedAt.IsZero() || batch.Result == nil ||
 		batch.Evidence.Provider != claim.Provider || batch.Evidence.Dataset != claim.Dataset {
 		return ErrEffectRecoveryUnsafe
 	}
-	if err := preparedRouteManifestDestinationsMatch(batch); err != nil {
+	if err := preparedRouteManifestDestinationsMatch(claim, batch); err != nil {
 		return err
 	}
 	return nil
@@ -356,16 +431,30 @@ func (repository *PostgresRepository) PrepareRouteSnapshot(
 	if err != nil {
 		return EffectLedgerState{}, err
 	}
+	return repository.prepareRouteSnapshotPayload(ctx, claim, desired, payload, reference, normalizedAt)
+}
+
+// prepareRouteSnapshotPayload writes an encoded snapshot and its v2 ledger in
+// one transaction, or verifies an existing pair is exactly this one.
+func (repository *PostgresRepository) prepareRouteSnapshotPayload(
+	ctx context.Context,
+	claim Claim,
+	desired EffectLedgerState,
+	payload []byte,
+	reference PreparedRouteSnapshotReference,
+	normalizedAt time.Time,
+) (EffectLedgerState, error) {
 	desired.SchemaVersion = "v2"
 	desired.PreparedSnapshot = &reference
 	var prepared EffectLedgerState
-	err = repository.mutateGenerationJournalTx(
+	err := repository.mutateGenerationJournalTx(
 		ctx, claim, normalizedAt,
 		func(tx pgx.Tx, document map[string]json.RawMessage) error {
 			raw := document[effectLedgerResultKey]
 			if len(raw) != 0 {
-				prepared, err = decodeEffectLedgerState(raw)
-				if err != nil || !sameEffectManifest(prepared, desired) {
+				current, decodeErr := decodeEffectLedgerState(raw)
+				prepared = current
+				if decodeErr != nil || !sameEffectManifest(prepared, desired) {
 					return ErrEffectLedgerConflict
 				}
 				return verifyPreparedRouteSnapshotRow(ctx, tx, claim, prepared, payload)
@@ -477,21 +566,17 @@ func verifyPreparedRouteSnapshotRow(
 	return nil
 }
 
+// A superseded snapshot is discarded and its route re-prepared for the SAME
+// generation. ResetPreparedEffectsForReplan deletes the old row
+// (deletePreparedRouteSnapshotSQL) in the transaction that deletes the ledger,
+// so the replacement insert below never meets it.
+//
 // A plain INSERT, deliberately without ON CONFLICT. The primary key is
 // (org_id, sync_run_unit_id, generation), and this statement runs only on the
 // branch where the ledger key was absent -- so a conflict would mean a
 // snapshot row exists for a generation whose ledger does not, which is a state
 // no code path produces and which should fail loudly rather than be papered
 // over by an upsert.
-//
-// One interaction is worth naming because it is unreachable today and would
-// not be obvious later: EffectLedgerReplanner lets a route discard a prepared
-// manifest and build a new one for the SAME generation. A route that both
-// replans and prepares snapshots would hit this insert with the old row still
-// present. github/work-items has no replanner (only GitHub blame does, and it
-// does not use snapshots), so the combination cannot occur -- but whoever
-// gives a snapshot route a replanner must delete the old snapshot inside the
-// replan transaction first.
 const insertPreparedRouteSnapshotSQL = `
 INSERT INTO public.sync_run_unit_effect_snapshots (
     org_id, sync_run_unit_id, generation, provider, dataset_key,

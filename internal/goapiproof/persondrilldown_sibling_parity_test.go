@@ -36,7 +36,7 @@ var personRoutesWithoutSibling = map[string]string{
 // perRequestShapeFields are shape fields that legitimately differ between
 // two routes sharing one mechanism: a page's own effective limit and the
 // name of a route's own trailing cursor field.
-var perRequestShapeFields = map[string]bool{"Limit": true, "RequestLimit": true, "TrailingCursorPath": true}
+var perRequestShapeFields = map[string]bool{"Limit": true, "RequestLimit": true, "TrailingCursorPath": true, "CursorPath": true}
 
 // mechanismSignatures renders every declared mechanism of opts as one
 // comparable string: each BaselineDefect's ticket plus every shape it

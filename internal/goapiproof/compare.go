@@ -847,8 +847,10 @@ type BaselineDefect struct {
 	// see DuplicateCollapsePageCutShape's own doc comment
 	// (duplicatecollapsepagecut.go). Like its sibling
 	// DuplicateCollapseLengthShape, it can admit a STRUCTURAL finding (a
-	// ShapeLength on the list itself), never a leaf one -- see the gate
-	// in classifyBaselineDefects. nil is the default, unchanged blanket
+	// ShapeLength on the list itself) -- see the gate in
+	// classifyBaselineDefects -- and its one leaf admission is the
+	// declared CursorPath's ShapeValue finding under that shape's own
+	// rule 7. nil is the default, unchanged blanket
 	// behaviour every other declared defect still uses. A defect never
 	// sets more than one shape field.
 	DuplicateCollapsePageCutShape *DuplicateCollapsePageCutShape

@@ -853,8 +853,10 @@ func pullRequestDrilldownDefects(route pullRequestDrilldownRoute) []BaselineDefe
 		"data.items.merged_at",
 		"data.items.first_review_at",
 	}
+	pageCutPaths := []string{"data.items"}
 	if route.cursorPath != "" {
 		datetimePaths = append(datetimePaths, route.cursorPath)
+		pageCutPaths = append(pageCutPaths, route.cursorPath)
 	}
 	return gatePullRequestDefects([]BaselineDefect{
 		{
@@ -904,16 +906,18 @@ func pullRequestDrilldownDefects(route pullRequestDrilldownRoute) []BaselineDefe
 		},
 		{
 			Ticket:             "CHAOS-5968",
-			Reason:             "the same repos-join fan-out mechanism as this table's own CHAOS-5959 length entry above, over the case CHAOS-5959's own exact-collapse rule cannot reach: the reference readers' own INNER JOIN repos reads repos WITHOUT FINAL, so while one or more repos rows sit unmerged (ReplacingMergeTree(last_synced), any repo a sync has recently written to, not confined to one particular repo or a fixed cadence) the join doubles every pull request belonging to one of those repos; both routes' ORDER BY created_at DESC LIMIT means each doubled row spends one extra slot a genuinely distinct, later-ranked pull request would otherwise have occupied, so the candidate page -- reading the same table FINAL, never spending a slot on a duplicate -- reaches further and lists distinct ids the baseline's own page never got to. Copies of one id are judged by pullRequestRowCopyRule, the same rule the CHAOS-5897 entry above applies per id. Confirmed against two real production captures (team_scoped), both outside any single fixed sync cadence: a PARTIAL capture, baseline 50 items at the route's own limit, 28 distinct ids, 22 of them duplicated exactly 2x each, byte-identical, candidate 36 items with 8 candidate-only ids in its own tail (the true, deduplicated population, 36, itself under the route's own limit, 50); and an ALL-DOUBLED capture, baseline 50 items, 25 distinct ids ACROSS TWO repos, every one of the 25 duplicated exactly 2x each, byte-identical (the window's own population entirely covered by repos with an unmerged repos row at capture time, not merely some of it), candidate 36 items with dedup(baseline)'s own 25 ids as its own literal prefix and 11 candidate-only ids in the tail. No property of a candidate-only tail row is a content check -- uniqueness and ordering are the only structural properties available for a row the baseline page never reached, never a check on whether that row's own id or timestamp is correct. Go is correct.",
-			Paths:              []string{"data.items"},
+			Reason:             "the same repos-join fan-out mechanism as this table's own CHAOS-5959 length entry above, over the case CHAOS-5959's own exact-collapse rule cannot reach: the reference readers' own INNER JOIN repos reads repos WITHOUT FINAL, so while one or more repos rows sit unmerged (ReplacingMergeTree(last_synced), any repo a sync has recently written to, not confined to one particular repo or a fixed cadence) the join doubles every pull request belonging to one of those repos; both routes' ORDER BY created_at DESC LIMIT means each doubled row spends one extra slot a genuinely distinct, later-ranked pull request would otherwise have occupied, so the candidate page -- reading the same table FINAL, never spending a slot on a duplicate -- reaches further and lists distinct ids the baseline's own page never got to. Copies of one id are judged by pullRequestRowCopyRule, the same rule the CHAOS-5897 entry above applies per id. Confirmed against two real production captures (team_scoped), both outside any single fixed sync cadence: a PARTIAL capture, baseline 50 items at the route's own limit, 28 distinct ids, 22 of them duplicated exactly 2x each, byte-identical, candidate 36 items with 8 candidate-only ids in its own tail (the true, deduplicated population, 36, itself under the route's own limit, 50); and an ALL-DOUBLED capture, baseline 50 items, 25 distinct ids ACROSS TWO repos, every one of the 25 duplicated exactly 2x each, byte-identical (the window's own population entirely covered by repos with an unmerged repos row at capture time, not merely some of it), candidate 36 items with dedup(baseline)'s own 25 ids as its own literal prefix and 11 candidate-only ids in the tail. No property of a candidate-only tail row is a content check -- uniqueness and ordering are the only structural properties available for a row the baseline page never reached, never a check on whether that row's own id or timestamp is correct. On a route whose response carries a next-page cursor copied from the page's last row's created_at, the same spent slots move that last row: the reference pages over undeduplicated copies, so its page ends earlier and its cursor names a later instant than the candidate's. Confirmed against a real production capture of GET /api/v1/people/{person_id}/drilldown/prs: baseline 50 rows carrying 37 distinct pull requests (13 of them as two physical copies), candidate 50 distinct rows with dedup(baseline) as its literal prefix, each cursor equal to its own leg's last created_at, the candidate's the earlier. A cursor difference is admitted only as that computed consequence: every page-cut rule holds, each leg's cursor names its own last row's created_at instant, and the candidate's is not later than the baseline's. Go is correct.",
+			Paths:              pageCutPaths,
 			Intermittent:       true,
-			IntermittentReason: "present only while the baseline page is both truncated at the route's own limit AND holds an unmerged physical version that duplicates a returned pull request's own identity; a comparison taken after the next background merge, or one whose baseline page never reaches the limit at all, shows no length divergence for this entry",
+			IntermittentReason: "present only while the baseline page is both truncated at the route's own limit AND holds an unmerged physical version that duplicates a returned pull request's own identity; a comparison taken after the next background merge, or one whose baseline page never reaches the limit at all, shows no length or cursor divergence for this entry",
 			DuplicateCollapsePageCutShape: &DuplicateCollapsePageCutShape{
 				ListPath:  "data.items",
 				IDField:   RESTDedupKeyField,
 				SortField: "created_at",
 				Limit:     drilldownPRsDefaultLimit,
 				CopyRule:  &pullRequestRowCopyRule,
+				// Empty on a route with no cursor.
+				CursorPath: route.cursorPath,
 			},
 		},
 	}, drilldownPRsDefaultLimit)

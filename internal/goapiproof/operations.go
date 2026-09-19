@@ -182,6 +182,25 @@ const volatileForecastIdentity = "freshly generated per request: an identical re
 // name would have produced entries that match nothing -- which fails the
 // run, correctly, but for a reason nobody would have understood.
 var operationSpecs = map[string]OperationSpec{
+	"busFactor": {
+		ResponseRoot: "busFactor",
+		Variables: func(orgID string, _ Window) map[string]any {
+			return map[string]any{"orgId": orgID, "scope": nil}
+		},
+		// Every variant below compares exactly. The team variants name a
+		// team that owns nothing and that no member has authored for, so
+		// both planes answer an empty window; a team that owns repositories
+		// is not a corpus case because the two planes select its
+		// repositories differently (ownership on Go, member authorship on
+		// Python).
+		Variants: []Variant{
+			busFactorVariant("REPO_UNKNOWN", map[string]any{"repoId": "00000000-0000-0000-0000-000000000001"}),
+			busFactorVariant("REPO_MALFORMED", map[string]any{"repoId": "not-a-uuid"}),
+			busFactorVariant("TEAM_UNKNOWN", map[string]any{"teamId": "team-abc-123"}),
+			busFactorVariant("TEAM_BLANK", map[string]any{"teamId": ""}),
+			busFactorVariant("REPO_AND_TEAM_UNKNOWN", map[string]any{"repoId": "00000000-0000-0000-0000-000000000001", "teamId": "team-abc-123"}),
+		},
+	},
 	"capacityForecast": {
 		ResponseRoot: "capacityForecast",
 		RootNullable: true,
@@ -943,4 +962,13 @@ func catalogDimensionVariants(dimensions ...string) []Variant {
 		})
 	}
 	return variants
+}
+
+func busFactorVariant(name string, scope map[string]any) Variant {
+	return Variant{
+		Name: name,
+		Variables: func(orgID string, _ Window) map[string]any {
+			return map[string]any{"orgId": orgID, "scope": scope}
+		},
+	}
 }

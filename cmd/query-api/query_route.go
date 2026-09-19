@@ -755,6 +755,40 @@ const registeredFeatureFlagEventsDocument = `query FeatureFlagEvents($orgId: Str
   }
 }`
 
+// registeredBusFactorDocument is the registered document for the
+// `busFactor` operation, the exact wire-form text a real web client sends
+// (testdata/wire_capture/busfactor_captured.graphql).
+const registeredBusFactorDocument = `query BusFactor($orgId: String!, $scope: BusFactorScopeInput = null) {
+  busFactor(orgId: $orgId, scope: $scope) {
+    orgId
+    scope {
+      repoId
+      teamId
+      __typename
+    }
+    value
+    evidenceSampleCount
+    topMaintainers {
+      author
+      sharePercent
+      __typename
+    }
+    repos {
+      repoId
+      repoName
+      value
+      evidenceSampleCount
+      topMaintainers {
+        author
+        sharePercent
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}`
+
 // registeredSecurityOverviewDocument is the registered document for the
 // `securityOverview` operation, the exact wire-form text a real web client
 // sends (testdata/wire_capture/securityoverview_captured.graphql).
@@ -1503,6 +1537,7 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		"securityAlerts":       digestHex(registeredSecurityAlertsDocument),
 		"catalogValues":        digestHex(registeredCatalogValuesDocument),
 		"acrRepositoryScopes":  digestHex(registeredAcrRepositoryScopesDocument),
+		"busFactor":            digestHex(registeredBusFactorDocument),
 	}
 	// CHAOS-4710 deliverable 3: log the mounted set HERE, where
 	// digestByOperation actually lives, rather than handing main.go a

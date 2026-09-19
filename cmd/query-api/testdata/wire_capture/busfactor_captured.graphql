@@ -1,0 +1,30 @@
+query BusFactor($orgId: String!, $scope: BusFactorScopeInput = null) {
+  busFactor(orgId: $orgId, scope: $scope) {
+    orgId
+    scope {
+      repoId
+      teamId
+      __typename
+    }
+    value
+    evidenceSampleCount
+    topMaintainers {
+      author
+      sharePercent
+      __typename
+    }
+    repos {
+      repoId
+      repoName
+      value
+      evidenceSampleCount
+      topMaintainers {
+        author
+        sharePercent
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}

@@ -233,8 +233,8 @@ func TestGitHubDeploymentsEffectsCarriesLifecycleForwardAgainstMigratedSchema(t 
 // TestDeploymentsEffectsCarryPullRequestForwardAgainstMigratedSchema proves
 // both providers' sinks carry a stored merged_at/pull_request_number over a
 // failed per-SHA lookup through the real insert, that crash recovery of the
-// same effect reads back exact, and that a successful empty lookup still
-// writes its honest nil pair.
+// same effect reads back exact, that a successful empty lookup over a held
+// merge keeps the pair as one unit, and that a found pull request is written.
 func TestDeploymentsEffectsCarryPullRequestForwardAgainstMigratedSchema(t *testing.T) {
 	ctx, conn := newDeploymentsIntegrationConn(t)
 	lease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
@@ -277,10 +277,24 @@ func TestDeploymentsEffectsCarryPullRequestForwardAgainstMigratedSchema(t *testi
 			t.Fatal(err)
 		}
 		mergedAt, number, _ = readDeploymentPullRequestPair(t, ctx, conn, good)
-		if mergedAt != nil || number != nil {
-			t.Fatalf("%s: merged_at=%v pull_request_number=%v want nil: a successful empty lookup writes its honest nil", provider, mergedAt, number)
+		if mergedAt == nil || !mergedAt.Equal(*good.MergedAt) || number == nil || *number != 42 {
+			t.Fatalf("%s: merged_at=%v pull_request_number=%v want %v/42: an empty lookup over a held merge keeps the pair", provider, mergedAt, number, good.MergedAt)
 		}
 		assertDeploymentInspection(t, ctx, sink, claim, honestEffect, EffectExact)
+
+		foundMerged := now.Add(3 * time.Minute)
+		found := honest
+		found.MergedAt, found.PullRequestNumber = &foundMerged, intPointer(7)
+		found.LastSynced = now.Add(3 * time.Minute)
+		foundEffect := deploymentEffect(t, found)
+		if err := sink.WriteEffect(ctx, claim, foundEffect); err != nil {
+			t.Fatal(err)
+		}
+		mergedAt, number, _ = readDeploymentPullRequestPair(t, ctx, conn, good)
+		if mergedAt == nil || !mergedAt.Equal(foundMerged) || number == nil || *number != 7 {
+			t.Fatalf("%s: merged_at=%v pull_request_number=%v want %v/7: a found pull request is written", provider, mergedAt, number, foundMerged)
+		}
+		assertDeploymentInspection(t, ctx, sink, claim, foundEffect, EffectExact)
 	}
 }
 

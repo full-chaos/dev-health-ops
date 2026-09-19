@@ -400,3 +400,57 @@ SELECT count() FROM repos WHERE org_id = 'org-acme' AND id = ?`,
 		t.Fatalf("physical repos versions=%d want %d", rows, want)
 	}
 }
+
+// TestGitHubRepositoryWriteKeepsTheHeldRef executes the provider writer after
+// an external-ingest version that holds a default branch: the provider row
+// never carries ref, so the new version keeps the held one, every stated
+// column lands as the provider states it, and the readback is exact. With
+// nothing held, ref stays NULL.
+func TestGitHubRepositoryWriteKeepsTheHeldRef(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	harness := startRepositoryReadbackHarness(t, ctx)
+	claim, sink, now := harness.claim, harness.sink, harness.now
+	row := repositoryFixtureRow(claim.OrgID, now)
+	if err := harness.conn.Exec(ctx, `
+INSERT INTO repos (
+  id, org_id, repo, ref, created_at, settings, tags, provider, source_id,
+  last_synced
+) VALUES (?, ?, ?, 'main', ?, ?, '[]', ?, ?, ?)`,
+		row.ID, row.OrgID, row.Repo, row.CreatedAt, `{"external":true}`, row.Provider,
+		"22222222-2222-4222-8222-222222222222", now.Add(-time.Hour),
+	); err != nil {
+		t.Fatal(err)
+	}
+	effect := repositoryEffect(t, claim, row)
+	if err := sink.WriteEffect(ctx, claim, effect); err != nil {
+		t.Fatal(err)
+	}
+	var ref, settings string
+	if err := harness.conn.QueryRow(ctx,
+		`SELECT ifNull(ref, 'NULL'), ifNull(settings, 'NULL') FROM repos FINAL WHERE org_id = ? AND id = ?`,
+		row.OrgID, row.ID,
+	).Scan(&ref, &settings); err != nil {
+		t.Fatal(err)
+	}
+	if ref != "main" || settings != row.Settings {
+		t.Fatalf("FINAL ref=%q settings=%q, want the held ref and the provider's settings %q", ref, settings, row.Settings)
+	}
+	if inspection, err := sink.InspectEffect(ctx, claim, effect); err != nil || inspection != EffectExact {
+		t.Fatalf("inspection=%s error=%v, want exact", inspection, err)
+	}
+
+	fresh := repositoryFixtureRow(claim.OrgID, now)
+	fresh.ID = "33333333-3333-4333-8333-333333333333"
+	if err := sink.WriteEffect(ctx, claim, repositoryEffect(t, claim, fresh)); err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.conn.QueryRow(ctx,
+		`SELECT ifNull(ref, 'NULL') FROM repos FINAL WHERE org_id = ? AND id = ?`, fresh.OrgID, fresh.ID,
+	).Scan(&ref); err != nil {
+		t.Fatal(err)
+	}
+	if ref != "NULL" {
+		t.Fatalf("FINAL ref=%q with nothing held, want NULL", ref)
+	}
+}

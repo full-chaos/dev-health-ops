@@ -265,6 +265,24 @@ func StoredVersionSpecs() map[string][]storedversion.Spec {
 			Name: "provider sync reviews", Contract: pullRequestReviewContract, Insert: pullRequestReviewInsert,
 			Carry: func(map[string]any) map[string]bool { return map[string]bool{} },
 		}},
+		"deployments": {{
+			Name: "provider sync deployments", Contract: deploymentsContract, Insert: deploymentsInsert,
+			Carry: func(payload map[string]any) map[string]bool {
+				_, lifecycle := payload[lifecycleLookupField]
+				_, pullRequest := payload[pullRequestLookupField]
+				return deploymentCarry(deploymentRow{LifecycleLookupFailed: !lifecycle, PullRequestLookupFailed: !pullRequest})
+			},
+		}},
+		"repos": {{
+			Name: "provider sync repositories", Contract: repositoryContract, Insert: repositoryInsert,
+			Carry: func(map[string]any) map[string]bool {
+				return repositoryContract.Carry(func(string) bool { return false })
+			},
+		}},
+		"git_commits": {{
+			Name: "provider sync commits", Contract: gitCommitsContract, Insert: gitCommitsInsert,
+			Carry: func(map[string]any) map[string]bool { return map[string]bool{} },
+		}},
 		"work_items": {
 			{
 				Name: "provider sync work items", Contract: workItemsContract, Insert: withHeldWorkItemColumns(gitHubWorkItemsInsert),
@@ -340,4 +358,245 @@ func writeWorkItemsKeepingHeldColumns(
 		}
 	}
 	return batch.Send()
+}
+
+const repositoryInsert = `
+INSERT INTO repos (
+  id, org_id, repo, ref, created_at, settings, tags, provider, last_synced
+)`
+
+// repositoryContract is the provider-sync repository writer's contract table
+// (github and gitlab share it). The provider row never carries a default
+// branch, so ref is R1 and keeps the value the key already holds; every other
+// column is stated by the provider fetch. source_id is not written: a
+// provider version names no external source.
+var repositoryContract = storedversion.Contract{Writer: "provider_sync", Table: "repos", Columns: joinColumns(
+	contractColumns(storedversion.Identity, "id"),
+	contractColumns(storedversion.Writer, "org_id"),
+	contractColumns(storedversion.Stated, "repo"),
+	[]storedversion.Column{{Name: "ref", Rule: storedversion.NoField}},
+	contractColumns(storedversion.Stated, "created_at", "settings", "tags"),
+	contractColumns(storedversion.Writer, "provider", "last_synced"),
+)}
+
+// applyRepositoryContract reads the held version of every row's key and
+// writes the kept ref back into the rows; WriteEffect and the recovery
+// readback's expected rows both go through it.
+func applyRepositoryContract(ctx context.Context, conn storedversion.Querier, claim Claim, rows []repositoryRow, log bool) error {
+	stored := make([]storedversion.Row, len(rows))
+	for i, row := range rows {
+		stored[i] = storedversion.Row{
+			Values: []any{row.ID, row.OrgID, row.Repo, nullableStringPointer(row.Ref), row.CreatedAt, row.Settings, row.Tags, row.Provider, row.LastSynced},
+			Carry:  repositoryContract.Carry(func(string) bool { return false }),
+		}
+	}
+	outcomes, err := repositoryContract.Apply(ctx, conn, claim.OrgID, repositoryInsert, stored)
+	if err != nil {
+		return err
+	}
+	positions, err := storedversion.Positions(repositoryInsert)
+	if err != nil {
+		return err
+	}
+	for i := range rows {
+		switch held := stored[i].Values[positions["ref"]].(type) {
+		case nil:
+			rows[i].Ref = nil
+		case string:
+			rows[i].Ref = &held
+		default:
+			return fmt.Errorf("stored version: repos ref %T is not a string", held)
+		}
+	}
+	if log {
+		repositoryContract.Log(ctx, claim.OrgID, storedVersionCarriedEvent, storedVersionRefusedEvent, outcomes)
+	}
+	return nil
+}
+
+const gitCommitsInsert = `INSERT INTO git_commits (org_id, repo_id, hash, message, author_name, author_email, author_when, committer_name, committer_email, committer_when, parents, last_synced)`
+
+// gitCommitsContract: a commit is immutable and the provider fetch states
+// every column; source_id is not written, as for repositories.
+var gitCommitsContract = storedversion.Contract{Writer: "provider_sync", Table: "git_commits", Columns: joinColumns(
+	contractColumns(storedversion.Writer, "org_id"),
+	contractColumns(storedversion.Identity, "repo_id", "hash"),
+	contractColumns(storedversion.Stated, "message", "author_name", "author_email", "author_when",
+		"committer_name", "committer_email", "committer_when", "parents"),
+	contractColumns(storedversion.Writer, "last_synced"),
+)}
+
+// Source fields of the lookup-derived deployment columns: unstated for a row
+// whose statuses or per-SHA pull request lookup failed this pass.
+const (
+	lifecycleLookupField   = "lifecycle_lookup"
+	pullRequestLookupField = "pull_request_lookup"
+)
+
+const deploymentsInsert = `INSERT INTO deployments (repo_id, deployment_id, status, environment, started_at, finished_at, deployed_at, merged_at, pull_request_number, release_ref, release_ref_confidence, org_id, last_synced)`
+
+// deploymentsContract is the provider-sync deployment writer's contract table
+// (github and gitlab share it). The lifecycle columns are unstated when the
+// statuses lookup failed and the merged pull request pair when the per-SHA
+// lookup failed; every other column is stated. merged_at is terminal and
+// pull_request_number is kept together with it: a lookup that succeeds with
+// no pull request over a held merge keeps both, since a deployed commit's
+// merged pull request cannot un-merge.
+var deploymentsContract = storedversion.Contract{Writer: "provider_sync", Table: "deployments", Columns: joinColumns(
+	contractColumns(storedversion.Identity, "repo_id", "deployment_id"),
+	[]storedversion.Column{{Name: "status", Rule: storedversion.Unstated, Fields: []string{lifecycleLookupField}}},
+	contractColumns(storedversion.Stated, "environment"),
+	[]storedversion.Column{
+		{Name: "started_at", Rule: storedversion.Unstated, Fields: []string{lifecycleLookupField}},
+		{Name: "finished_at", Rule: storedversion.Unstated, Fields: []string{lifecycleLookupField}},
+	},
+	contractColumns(storedversion.Stated, "deployed_at"),
+	[]storedversion.Column{
+		{Name: "merged_at", Rule: storedversion.Unstated, Fields: []string{pullRequestLookupField}, Terminal: true},
+		{Name: "pull_request_number", Rule: storedversion.Unstated, Fields: []string{pullRequestLookupField}, With: "merged_at"},
+	},
+	contractColumns(storedversion.Stated, "release_ref", "release_ref_confidence"),
+	contractColumns(storedversion.Writer, "org_id", "last_synced"),
+)}
+
+func deploymentCarry(row deploymentRow) map[string]bool {
+	return deploymentsContract.Carry(func(field string) bool {
+		return (field == lifecycleLookupField && row.LifecycleLookupFailed) ||
+			(field == pullRequestLookupField && row.PullRequestLookupFailed)
+	})
+}
+
+func deploymentValues(row deploymentRow) []any {
+	var number any
+	if row.PullRequestNumber != nil {
+		number = uint32(*row.PullRequestNumber)
+	}
+	return []any{
+		row.RepoID, row.DeploymentID, nullableStringPointer(row.Status), nullableStringPointer(row.Environment),
+		nullableTimePointer(row.StartedAt), nullableTimePointer(row.FinishedAt), nullableTimePointer(row.DeployedAt),
+		nullableTimePointer(row.MergedAt), number, row.ReleaseRef, row.ReleaseRefConfidence, row.OrgID, row.LastSynced,
+	}
+}
+
+// setDeploymentKept writes a kept column's value back into the typed row.
+func setDeploymentKept(row *deploymentRow, column string, value any) error {
+	var err error
+	switch column {
+	case "status":
+		switch held := value.(type) {
+		case nil:
+			row.Status = nil
+		case string:
+			row.Status = &held
+		default:
+			err = fmt.Errorf("stored version: deployments status %T is not a string", value)
+		}
+	case "started_at":
+		row.StartedAt, err = heldTime(value)
+	case "finished_at":
+		row.FinishedAt, err = heldTime(value)
+	case "merged_at":
+		row.MergedAt, err = heldTime(value)
+	case "pull_request_number":
+		switch held := value.(type) {
+		case nil:
+			row.PullRequestNumber = nil
+		case uint32:
+			number := int(held)
+			row.PullRequestNumber = &number
+		default:
+			err = fmt.Errorf("stored version: deployments pull_request_number %T is not a count", value)
+		}
+	default:
+		err = fmt.Errorf("stored version: deployments column %s is not kept", column)
+	}
+	return err
+}
+
+// deploymentPullRequestRegressionRefusedEvent names a successful per-SHA
+// lookup that found no pull request over a held merge; the held merged_at and
+// pull_request_number are kept as one unit.
+const deploymentPullRequestRegressionRefusedEvent = "providersync.deployment.pull_request_regression_refused"
+
+// applyDeploymentContract reads the held version of every row's key and
+// rewrites the rows in place as the contract says. WriteEffect and the
+// recovery readback's expected rows both go through it; a failed read fails
+// the caller.
+func applyDeploymentContract(ctx context.Context, conn storedversion.Querier, claim Claim, rows []deploymentRow, log bool) error {
+	stored := make([]storedversion.Row, len(rows))
+	for i, row := range rows {
+		stored[i] = storedversion.Row{Values: deploymentValues(row), Carry: deploymentCarry(row)}
+	}
+	outcomes, err := deploymentsContract.Apply(ctx, conn, claim.OrgID, deploymentsInsert, stored)
+	if err != nil {
+		return err
+	}
+	positions, err := storedversion.Positions(deploymentsInsert)
+	if err != nil {
+		return err
+	}
+	for i := range rows {
+		for _, column := range deploymentsContract.Kept() {
+			if err := setDeploymentKept(&rows[i], column, stored[i].Values[positions[column]]); err != nil {
+				return err
+			}
+		}
+	}
+	if log {
+		logDeploymentOutcomes(ctx, claim, rows, outcomes)
+	}
+	return nil
+}
+
+// logDeploymentOutcomes keeps the named guard events: the lifecycle and the
+// pull request pair carried over a failed lookup, and the pair refused over
+// an empty lookup. Other kept columns log under the stored-version events.
+func logDeploymentOutcomes(ctx context.Context, claim Claim, rows []deploymentRow, outcomes []storedversion.Outcome) {
+	var lifecycle []deploymentLifecycleCarriedForward
+	var pullRequests []deploymentPullRequestCarriedForward
+	rest := make([]storedversion.Outcome, 0, len(outcomes))
+	for i, outcome := range outcomes {
+		other := storedversion.Outcome{Key: outcome.Key}
+		lifecycleCarried, pullRequestCarried := false, false
+		for _, column := range outcome.Carried {
+			switch {
+			case rows[i].LifecycleLookupFailed && (column == "status" || column == "started_at" || column == "finished_at"):
+				lifecycleCarried = true
+			case rows[i].PullRequestLookupFailed && (column == "merged_at" || column == "pull_request_number"):
+				pullRequestCarried = true
+			default:
+				other.Carried = append(other.Carried, column)
+			}
+		}
+		if lifecycleCarried {
+			lifecycle = append(lifecycle, deploymentLifecycleCarriedForward{RepoID: rows[i].RepoID, DeploymentID: rows[i].DeploymentID})
+		}
+		if pullRequestCarried {
+			pullRequests = append(pullRequests, deploymentPullRequestCarriedForward{RepoID: rows[i].RepoID, DeploymentID: rows[i].DeploymentID})
+		}
+		pairRefused := false
+		for _, column := range outcome.Refused {
+			if column == "merged_at" || column == "pull_request_number" {
+				pairRefused = true
+				continue
+			}
+			other.Refused = append(other.Refused, column)
+		}
+		if pairRefused && rows[i].MergedAt != nil {
+			attrs := []slog.Attr{
+				slog.String("org_id", claim.OrgID), slog.String("provider", claim.Provider),
+				slog.String("dataset", claim.Dataset), slog.String("unit_id", claim.ID),
+				slog.String("repo_id", rows[i].RepoID), slog.String("deployment_id", rows[i].DeploymentID),
+				slog.Time("stored_merged_at", rows[i].MergedAt.UTC()),
+			}
+			if rows[i].PullRequestNumber != nil {
+				attrs = append(attrs, slog.Int("stored_pull_request_number", *rows[i].PullRequestNumber))
+			}
+			slog.Default().LogAttrs(ctx, slog.LevelWarn, deploymentPullRequestRegressionRefusedEvent, attrs...)
+		}
+		rest = append(rest, other)
+	}
+	logDeploymentLifecycleRegressionGuarded(ctx, claim, lifecycle)
+	logDeploymentPullRequestRegressionGuarded(ctx, claim, pullRequests)
+	deploymentsContract.Log(ctx, claim.OrgID, storedVersionCarriedEvent, storedVersionRefusedEvent, rest)
 }

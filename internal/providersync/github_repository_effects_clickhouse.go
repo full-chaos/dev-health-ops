@@ -103,7 +103,10 @@ func (sink repositoryClickHouseEffects) WriteEffect(
 	if sink.Conn == nil {
 		return ErrInvalidConfiguration
 	}
-	batch, err := sink.Conn.PrepareBatch(ctx, reposInsert)
+	if err := applyRepositoryContract(ctx, sink.Conn, claim, rows, true); err != nil {
+		return err
+	}
+	batch, err := sink.Conn.PrepareBatch(ctx, repositoryInsert)
 	if err != nil {
 		return err
 	}
@@ -154,6 +157,12 @@ func (sink repositoryClickHouseEffects) InspectEffect(
 	if sink.Conn == nil {
 		return EffectConflict, ErrInvalidConfiguration
 	}
+	// WriteEffect carried the held ref into the rows it inserted; the same
+	// contract runs here against the same stored state, so a row the
+	// contract wrote reads back exact. A read failure fails the inspection.
+	if err := applyRepositoryContract(ctx, sink.Conn, claim, expected, false); err != nil {
+		return EffectConflict, err
+	}
 	exact, absent := 0, 0
 	for _, row := range expected {
 		inspection, err := sink.inspectRepository(ctx, row)
@@ -194,7 +203,8 @@ func (sink repositoryClickHouseEffects) inspectRepository(
 	expected repositoryRow,
 ) (EffectInspection, error) {
 	// ifNull keeps Nullable(String)/Nullable(UUID) out of the scan contract;
-	// the native sink always writes ref and source_id as NULL.
+	// the native sink writes source_id as NULL and ref as the key's held
+	// value.
 	//
 	// The version aggregate is aliased `winning_version`, never `last_synced`:
 	// an alias that shadows the column makes the sibling argMax calls resolve
@@ -297,8 +307,3 @@ var _ EffectSink = GitHubRepositoryClickHouseEffects{}
 var _ EffectReadback = GitHubRepositoryClickHouseEffects{}
 var _ EffectSink = GitLabRepositoryClickHouseEffects{}
 var _ EffectReadback = GitLabRepositoryClickHouseEffects{}
-
-const reposInsert = `
-INSERT INTO repos (
-  id, org_id, repo, ref, created_at, settings, tags, provider, last_synced
-)`

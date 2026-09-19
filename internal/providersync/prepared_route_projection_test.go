@@ -21,30 +21,35 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 )
 
-// preparedRouteRowTypes is the Go type each enrolled destination's sink
-// decodes its rows into.
-var preparedRouteRowTypes = map[string]any{
-	"deployments":                      deploymentRow{},
-	"git_pull_requests":                pullRequestRow{},
-	"git_pull_request_reviews":         pullRequestReviewRow{},
-	"ai_attribution":                   githubAIAttributionRow{},
-	"estimate_coverage_metrics_daily":  githubEstimateCoverageMetricsDailyRow{},
-	"investment_classifications_daily": githubInvestmentClassificationDailyRow{},
-	"investment_metrics_daily":         githubInvestmentMetricsDailyRow{},
-	"issue_type_metrics_daily":         githubIssueTypeMetricsDailyRow{},
-	"sprints":                          githubSprintRow{},
-	"work_item_cycle_times":            githubWorkItemCycleTimePersistenceRow{},
-	"work_item_dependencies":           githubWorkItemDependencyRow{},
-	"work_item_interactions":           githubWorkItemInteractionRow{},
-	"work_item_metrics_daily":          githubWorkItemMetricsDailyRow{},
-	"work_item_reopen_events":          githubWorkItemReopenRow{},
-	"work_item_state_durations_daily":  githubWorkItemStateDurationDailyRow{},
-	"work_item_team_attributions":      githubWorkItemTeamAttributionRow{},
-	"work_item_transitions":            githubWorkItemTransitionRow{},
-	"work_item_user_metrics_daily":     githubWorkItemUserMetricsDailyRow{},
-	"project_membership_transitions":   projectmembership.Row{},
-	"projects":                         projectmembership.CatalogRow{},
-	"work_items":                       githubWorkItemRow{},
+// preparedRouteRowTypes are the Go types each enrolled destination's sinks
+// decode their rows into, one per sink when providers' sinks differ.
+var preparedRouteRowTypes = map[string][]any{
+	"deployments":                      {deploymentRow{}},
+	"git_pull_requests":                {pullRequestRow{}},
+	"git_pull_request_reviews":         {pullRequestReviewRow{}},
+	"ai_attribution":                   {githubAIAttributionRow{}},
+	"estimate_coverage_metrics_daily":  {githubEstimateCoverageMetricsDailyRow{}},
+	"investment_classifications_daily": {githubInvestmentClassificationDailyRow{}},
+	"investment_metrics_daily":         {githubInvestmentMetricsDailyRow{}},
+	"issue_type_metrics_daily":         {githubIssueTypeMetricsDailyRow{}},
+	"sprints":                          {githubSprintRow{}},
+	"work_item_cycle_times":            {githubWorkItemCycleTimePersistenceRow{}},
+	"work_item_dependencies":           {githubWorkItemDependencyRow{}},
+	"work_item_interactions":           {githubWorkItemInteractionRow{}},
+	"work_item_metrics_daily":          {githubWorkItemMetricsDailyRow{}},
+	"work_item_reopen_events":          {githubWorkItemReopenRow{}},
+	"work_item_state_durations_daily":  {githubWorkItemStateDurationDailyRow{}},
+	"work_item_team_attributions":      {githubWorkItemTeamAttributionRow{}},
+	"work_item_transitions":            {githubWorkItemTransitionRow{}},
+	"work_item_user_metrics_daily":     {githubWorkItemUserMetricsDailyRow{}},
+	"project_membership_transitions":   {projectmembership.Row{}},
+	"projects":                         {projectmembership.CatalogRow{}},
+	"work_items":                       {githubWorkItemRow{}},
+	"git_commit_stats":                 {commitStatsRow{}},
+	"git_commits":                      {gitCommitRow{}},
+	"git_files":                        {gitFileRow{}},
+	"repos":                            {repositoryRow{}},
+	"security_alerts":                  {securityAlertRow{}, gitLabSecurityAlertRow{}},
 }
 
 // preparedRouteDroppedKeys are the row keys the projection drops: keys a
@@ -106,19 +111,21 @@ func TestEveryEnrolledDestinationProjectsOntoItsSinkInsert(t *testing.T) {
 		for key := range preparedRouteSinkReadKeys[destination] {
 			keys[key] = true
 		}
-		rowType, ok := preparedRouteRowTypes[destination]
-		if !ok {
+		rowTypes := preparedRouteRowTypes[destination]
+		if len(rowTypes) == 0 {
 			t.Fatalf("enrolled destination %q has no pinned row type", destination)
 		}
-		var dropped []string
-		for _, name := range jsonTagNames(reflect.TypeOf(rowType)) {
-			if !keys[name] {
-				dropped = append(dropped, name)
+		for _, rowType := range rowTypes {
+			var dropped []string
+			for _, name := range jsonTagNames(reflect.TypeOf(rowType)) {
+				if !keys[name] {
+					dropped = append(dropped, name)
+				}
 			}
-		}
-		sort.Strings(dropped)
-		if strings.Join(dropped, ",") != strings.Join(preparedRouteDroppedKeys[destination], ",") {
-			t.Errorf("%s: projection drops %v, pinned %v", destination, dropped, preparedRouteDroppedKeys[destination])
+			sort.Strings(dropped)
+			if strings.Join(dropped, ",") != strings.Join(preparedRouteDroppedKeys[destination], ",") {
+				t.Errorf("%s %T: projection drops %v, pinned %v", destination, rowType, dropped, preparedRouteDroppedKeys[destination])
+			}
 		}
 	}
 }
@@ -137,7 +144,10 @@ func TestSinkReadKeysAreRouteSignalsNotText(t *testing.T) {
 		t.Fatal("no sink-read keys")
 	}
 	for destination, keys := range preparedRouteSinkReadKeys {
-		rowType := reflect.TypeOf(preparedRouteRowTypes[destination])
+		if len(preparedRouteRowTypes[destination]) != 1 {
+			t.Fatalf("%s: sink-read keys need exactly one pinned row type", destination)
+		}
+		rowType := reflect.TypeOf(preparedRouteRowTypes[destination][0])
 		if len(keys) == 0 {
 			t.Fatalf("%s: empty sink-read list", destination)
 		}
@@ -175,8 +185,9 @@ func TestProjectionStatementsAreTheSinksOwnInserts(t *testing.T) {
 		t.Fatalf("load: %v", err)
 	}
 	mapped := map[string]string{}
-	type writer struct{ arguments, indexes map[string]bool }
+	type writer struct{ arguments, indexes, calls map[string]bool }
 	var writers []writer
+	indexesByFunction := map[string]map[string]bool{}
 	for _, pkg := range loaded {
 		for _, file := range pkg.Syntax {
 			for _, declaration := range file.Decls {
@@ -201,10 +212,13 @@ func TestProjectionStatementsAreTheSinksOwnInserts(t *testing.T) {
 					if typed.Body == nil {
 						continue
 					}
-					found := writer{arguments: map[string]bool{}, indexes: map[string]bool{}}
+					found := writer{arguments: map[string]bool{}, indexes: map[string]bool{}, calls: map[string]bool{}}
 					ast.Inspect(typed.Body, func(node ast.Node) bool {
 						switch inner := node.(type) {
 						case *ast.CallExpr:
+							if name, ok := inner.Fun.(*ast.Ident); ok {
+								found.calls[name.Name] = true
+							}
 							for _, argument := range inner.Args {
 								found.arguments[types.ExprString(argument)] = true
 							}
@@ -214,6 +228,9 @@ func TestProjectionStatementsAreTheSinksOwnInserts(t *testing.T) {
 						return true
 					})
 					writers = append(writers, found)
+					if typed.Recv == nil {
+						indexesByFunction[typed.Name.Name] = found.indexes
+					}
 				}
 			}
 		}
@@ -224,18 +241,33 @@ func TestProjectionStatementsAreTheSinksOwnInserts(t *testing.T) {
 	if len(mapped) == 0 {
 		t.Fatal("no mapped statements")
 	}
+	// A writer decodes a row type itself or through a package function it
+	// calls (one hop: a decode helper).
+	decodes := func(candidate writer, rowName string) bool {
+		if candidate.indexes[rowName] {
+			return true
+		}
+		for called := range candidate.calls {
+			if indexesByFunction[called][rowName] {
+				return true
+			}
+		}
+		return false
+	}
 	for destination, statement := range mapped {
-		rowType := reflect.TypeOf(preparedRouteRowTypes[destination])
-		rowName := rowType.Name()
-		if strings.HasSuffix(rowType.PkgPath(), "/projectmembership") {
-			rowName = "projectmembership." + rowName
-		}
-		owned := false
-		for _, candidate := range writers {
-			owned = owned || (candidate.arguments[statement] && candidate.indexes[rowName])
-		}
-		if !owned {
-			t.Errorf("%s: no function writes with %s and decodes %s", destination, statement, rowName)
+		for _, row := range preparedRouteRowTypes[destination] {
+			rowType := reflect.TypeOf(row)
+			rowName := rowType.Name()
+			if strings.HasSuffix(rowType.PkgPath(), "/projectmembership") {
+				rowName = "projectmembership." + rowName
+			}
+			owned := false
+			for _, candidate := range writers {
+				owned = owned || (candidate.arguments[statement] && decodes(candidate, rowName))
+			}
+			if !owned {
+				t.Errorf("%s: no function writes with %s and decodes %s", destination, statement, rowName)
+			}
 		}
 	}
 }

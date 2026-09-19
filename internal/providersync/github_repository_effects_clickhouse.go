@@ -103,10 +103,7 @@ func (sink repositoryClickHouseEffects) WriteEffect(
 	if sink.Conn == nil {
 		return ErrInvalidConfiguration
 	}
-	batch, err := sink.Conn.PrepareBatch(ctx, `
-INSERT INTO repos (
-  id, org_id, repo, ref, created_at, settings, tags, provider, last_synced
-)`)
+	batch, err := sink.Conn.PrepareBatch(ctx, reposInsert)
 	if err != nil {
 		return err
 	}
@@ -300,3 +297,8 @@ var _ EffectSink = GitHubRepositoryClickHouseEffects{}
 var _ EffectReadback = GitHubRepositoryClickHouseEffects{}
 var _ EffectSink = GitLabRepositoryClickHouseEffects{}
 var _ EffectReadback = GitLabRepositoryClickHouseEffects{}
+
+const reposInsert = `
+INSERT INTO repos (
+  id, org_id, repo, ref, created_at, settings, tags, provider, last_synced
+)`

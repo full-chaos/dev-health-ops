@@ -38,6 +38,11 @@ var preparedRouteInsertStatements = map[string]string{
 	"project_membership_transitions":   projectmembership.TransitionsInsert,
 	"projects":                         projectmembership.ProjectsInsert,
 	"work_items":                       gitHubWorkItemsInsert,
+	"git_commit_stats":                 gitCommitStatsInsert,
+	"git_commits":                      gitCommitsInsert,
+	"git_files":                        gitFilesInsert,
+	"repos":                            reposInsert,
+	"security_alerts":                  securityAlertsInsert,
 }
 
 // preparedRouteSinkReadKeys are row keys a sink reads but does not INSERT:

@@ -44,7 +44,7 @@ func (sink GitLabSecurityClickHouseEffects) WriteEffect(
 	if sink.Conn == nil {
 		return ErrInvalidConfiguration
 	}
-	batch, err := sink.Conn.PrepareBatch(ctx, `INSERT INTO security_alerts (org_id, repo_id, alert_id, source, severity, state, package_name, cve_id, url, title, description, created_at, fixed_at, dismissed_at, last_synced)`)
+	batch, err := sink.Conn.PrepareBatch(ctx, securityAlertsInsert)
 	if err != nil {
 		return err
 	}

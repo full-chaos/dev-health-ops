@@ -48,7 +48,7 @@ func writeGitCommitsEffect(ctx context.Context, conn driver.Conn, lease provider
 	if conn == nil {
 		return ErrInvalidConfiguration
 	}
-	batch, err := conn.PrepareBatch(ctx, `INSERT INTO git_commits (org_id, repo_id, hash, message, author_name, author_email, author_when, committer_name, committer_email, committer_when, parents, last_synced)`)
+	batch, err := conn.PrepareBatch(ctx, gitCommitsInsert)
 	if err != nil {
 		return err
 	}
@@ -164,3 +164,5 @@ var _ EffectSink = GitHubCommitsClickHouseEffects{}
 var _ EffectReadback = GitHubCommitsClickHouseEffects{}
 var _ EffectSink = GitLabCommitsClickHouseEffects{}
 var _ EffectReadback = GitLabCommitsClickHouseEffects{}
+
+const gitCommitsInsert = `INSERT INTO git_commits (org_id, repo_id, hash, message, author_name, author_email, author_when, committer_name, committer_email, committer_when, parents, last_synced)`

@@ -72,7 +72,12 @@ func TestPreparedManifestRouteListIsExactlyTheEnrolledCanonicalRoutes(t *testing
 		{"github", "prs", true}, {"gitlab", "prs", true},
 		{"github", "pr-reviews", false}, {"github", "pr-comments", false},
 		{"gitlab", "pr-reviews", false}, {"gitlab", "pr-comments", false},
-		{"github", "commits", false}, {"gitlab", "work-items", false}, {"linear", "work-items", false},
+		{"github", "commits", true}, {"gitlab", "commits", true}, {"github", "commit-stats", true},
+		{"gitlab", "commit-stats", true}, {"github", "files", true}, {"gitlab", "files", true},
+		{"github", "repo-metadata", true}, {"gitlab", "repo-metadata", true},
+		{"github", "security", true}, {"gitlab", "security", true},
+		{"github", "blame", false}, {"github", "cicd", false},
+		{"gitlab", "work-items", false}, {"linear", "work-items", false},
 	} {
 		destinations, ok := preparedManifestRouteDestinations(pair.provider, pair.dataset)
 		descriptor, _ := Descriptor(pair.provider, pair.dataset)
@@ -343,13 +348,13 @@ func TestPreparedManifestDiscardIsSafeOnlyForAnUntouchedEnrolledLedger(t *testin
 	if isSafePreparedManifestReplanState(claim, blocked) {
 		t.Fatal("a ledger with a recovery-blocked effect was judged safe to discard")
 	}
-	commits := claim
-	commits.Dataset = "commits"
-	commitsState, err := NewEffectLedgerState(commits, preparedDeploymentsBatch(t, commits).Effects, now)
+	unlisted := claim
+	unlisted.Dataset = "cicd"
+	unlistedState, err := NewEffectLedgerState(unlisted, preparedDeploymentsBatch(t, unlisted).Effects, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if isSafePreparedManifestReplanState(commits, commitsState) {
+	if isSafePreparedManifestReplanState(unlisted, unlistedState) {
 		t.Fatal("a route outside the prepared list was judged safe to discard")
 	}
 }
@@ -364,25 +369,25 @@ func TestEveryPlannableRouteStatesItsRecoveryMode(t *testing.T) {
 	want := map[string]string{
 		"github/blame":                   "re-collect",
 		"github/cicd":                    "chunked checkpoints",
-		"github/commit-stats":            "re-collect",
-		"github/commits":                 "re-collect",
+		"github/commit-stats":            "prepared snapshot",
+		"github/commits":                 "prepared snapshot",
 		"github/deployments":             "prepared snapshot",
-		"github/files":                   "re-collect",
+		"github/files":                   "prepared snapshot",
 		"github/prs":                     "prepared snapshot",
-		"github/repo-metadata":           "re-collect",
-		"github/security":                "re-collect",
+		"github/repo-metadata":           "prepared snapshot",
+		"github/security":                "prepared snapshot",
 		"github/work-items":              "prepared snapshot",
 		"gitlab/blame":                   "re-collect",
 		"gitlab/cicd":                    "chunked checkpoints",
-		"gitlab/commit-stats":            "re-collect",
-		"gitlab/commits":                 "re-collect",
+		"gitlab/commit-stats":            "prepared snapshot",
+		"gitlab/commits":                 "prepared snapshot",
 		"gitlab/deployments":             "prepared snapshot",
 		"gitlab/feature-flags":           "re-collect",
-		"gitlab/files":                   "re-collect",
+		"gitlab/files":                   "prepared snapshot",
 		"gitlab/incidents":               "re-collect",
 		"gitlab/prs":                     "prepared snapshot",
-		"gitlab/repo-metadata":           "re-collect",
-		"gitlab/security":                "re-collect",
+		"gitlab/repo-metadata":           "prepared snapshot",
+		"gitlab/security":                "prepared snapshot",
 		"gitlab/work-items":              "re-collect",
 		"jira/incidents":                 "re-collect",
 		"jira/work-items":                "re-collect",
@@ -469,6 +474,57 @@ func TestPreparedSnapshotDiscardReasonsAreCountedByName(t *testing.T) {
 	} {
 		if got := providerfoundation.MetricSnapshotDiscardReasonLabel(reason); got != reason {
 			t.Fatalf("discard reason %q is counted as %q", reason, got)
+		}
+	}
+}
+
+// TestCodeFamilyRoutesReplayTheirSnapshotWithoutRecollecting runs each GitHub
+// and GitLab repository code route through a crash after prepare: the retry
+// replays the stored snapshot, never calls the route's collector, and writes
+// every effect.
+func TestCodeFamilyRoutesReplayTheirSnapshotWithoutRecollecting(t *testing.T) {
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	for _, provider := range []string{"github", "gitlab"} {
+		for _, dataset := range []string{"commit-stats", "commits", "files", "repo-metadata", "security"} {
+			t.Run(provider+"/"+dataset, func(t *testing.T) {
+				log := captureSlog(t)
+				descriptor, ok := Descriptor(provider, dataset)
+				if !ok || !descriptor.PreparedManifestRecovery {
+					t.Fatalf("%s/%s is not enrolled", provider, dataset)
+				}
+				claim, session := preparedWorkItemsSession(t, now, provider, dataset)
+				effects := make([]EffectBatch, 0, len(descriptor.Destinations))
+				for _, destination := range descriptor.Destinations {
+					effect, err := effectBatchFromValues(destination, EffectReadbackRequired,
+						[]map[string]string{{"org_id": claim.OrgID, preparedFixtureColumn(t, destination): destination}})
+					if err != nil {
+						t.Fatal(err)
+					}
+					effects = append(effects, effect)
+				}
+				batch := CompleteRouteBatch{
+					Effects: effects, Result: map[string]any{"synced": 1}, Watermark: claim.BeforeAt,
+					Evidence: FetchEvidence{Provider: provider, Dataset: dataset, Records: len(effects)},
+				}
+				ledger := &memoryEffectLedger{}
+				if _, err := ledger.PrepareRouteSnapshot(context.Background(), claim, batch, ShadowComparison{Match: true}, now); err != nil {
+					t.Fatal(err)
+				}
+				handler := &staticCompleteRouteHandler{batch: CompleteRouteBatch{Result: map[string]any{"live_provider": "drifted"}}}
+				sink := &memoryEffectSink{}
+				executor := completeRouteExecutor(now.Add(time.Hour), handler, ledger, sink)
+				executor.BudgetLimits = map[CostClass]int{claim.CostClass: 1}
+				result, err := executor.Execute(context.Background(), session, descriptor)
+				if err != nil {
+					t.Fatalf("snapshot recovery err=%v", err)
+				}
+				if !handler.normalizedAt.IsZero() || ledger.preparedLoads != 1 ||
+					result.Effects.Written != len(descriptor.Destinations) ||
+					!strings.Contains(log.String(), "recovery=snapshot_replay") {
+					t.Fatalf("handler_at=%s loads=%d result=%+v log=%s, want the snapshot replayed without re-collect",
+						handler.normalizedAt, ledger.preparedLoads, result.Effects, log.String())
+				}
+			})
 		}
 	}
 }

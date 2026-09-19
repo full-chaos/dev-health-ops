@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -201,6 +202,7 @@ func rowsString(rows []enumRow) string {
 // without a page cut, through each duplicate shape of each route's bound
 // Options. The integration build runs the same enumeration up to four rows.
 func TestCandidateAccounting_EnumeratedAdmissionImpliesTheInvariant(t *testing.T) {
+	t.Parallel()
 	runAccountingEnumeration(t, 3)
 }
 
@@ -227,48 +229,69 @@ func runAccountingEnumeration(t *testing.T, maxLen int) {
 	}
 	admitted := map[string]int{}
 	compared := 0
-	for routeName, bind := range routes {
-		for _, cut := range []bool{false, true} {
-			for bi, base := range baselines {
-				limit := drilldownPRsDefaultLimit
-				if cut {
-					limit = len(base)
-				}
-				for _, shape := range shapes {
-					// The team-subset declaration exists on the team-scoped
-					// route alone; there, and in that route's whole
-					// Options, a dropped row is the one permitted
-					// violation.
-					if shape == "TeamRepoSubsetShape" && routeName != "team-scoped route" {
-						continue
+	var mu sync.Mutex
+	// Each route and page-cut choice is an independent shard: the snapshots
+	// are read-only, so the shards run in parallel and their counts are
+	// merged after every shard finishes.
+	t.Run("shards", func(t *testing.T) {
+		for routeName, bind := range routes {
+			for _, cut := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/cut=%v", routeName, cut), func(t *testing.T) {
+					t.Parallel()
+					shardAdmitted := map[string]int{}
+					shardCompared := 0
+					for bi, base := range baselines {
+						limit := drilldownPRsDefaultLimit
+						if cut {
+							limit = len(base)
+						}
+						for _, shape := range shapes {
+							// The team-subset declaration exists on the team-scoped
+							// route alone; there, and in that route's whole
+							// Options, a dropped row is the one permitted
+							// violation.
+							if shape == "TeamRepoSubsetShape" && routeName != "team-scoped route" {
+								continue
+							}
+							allowDropped := routeName == "team-scoped route" && (shape == "TeamRepoSubsetShape" || shape == enumWholeFamily)
+							opts := enumOnlyShape(bind(limit), shape)
+							for ci, cand := range candidates {
+								shardCompared++
+								result := Compare(baseSnaps[bi], candSnaps[ci], opts)
+								// Admitted: at least one finding, every one of them
+								// covered. A pair with no finding at all is equal
+								// bodies, which no declaration admits.
+								if result.DifferencesOutsideBaselineDefect != 0 || result.StructuralRefusal != "" || !hasMismatch(result) {
+									continue
+								}
+								relation := "equal"
+								switch {
+								case len(cand) < len(base):
+									relation = "shorter"
+								case len(cand) > len(base):
+									relation = "longer"
+								}
+								key := fmt.Sprintf("%s/%s/cut=%v", shape, relation, cut)
+								shardAdmitted[key] = shardAdmitted[key] + 1
+								if !enumInvariant(base, cand, limit, allowDropped) {
+									t.Fatalf("%s %s cut=%v: baseline %s candidate %s admitted, invariant broken", routeName, shape, cut, rowsString(base), rowsString(cand))
+								}
+							}
+						}
 					}
-					allowDropped := routeName == "team-scoped route" && (shape == "TeamRepoSubsetShape" || shape == enumWholeFamily)
-					opts := enumOnlyShape(bind(limit), shape)
-					for ci, cand := range candidates {
-						compared++
-						result := Compare(baseSnaps[bi], candSnaps[ci], opts)
-						// Admitted: at least one finding, every one of them
-						// covered. A pair with no finding at all is equal
-						// bodies, which no declaration admits.
-						if result.DifferencesOutsideBaselineDefect != 0 || result.StructuralRefusal != "" || !hasMismatch(result) {
-							continue
-						}
-						relation := "equal"
-						switch {
-						case len(cand) < len(base):
-							relation = "shorter"
-						case len(cand) > len(base):
-							relation = "longer"
-						}
-						admitted[fmt.Sprintf("%s/%s/cut=%v", shape, relation, cut)]++
-						if !enumInvariant(base, cand, limit, allowDropped) {
-							t.Fatalf("%s %s cut=%v: baseline %s candidate %s admitted, invariant broken", routeName, shape, cut, rowsString(base), rowsString(cand))
-						}
+					mu.Lock()
+					defer mu.Unlock()
+					compared += shardCompared
+					if len(shardAdmitted) == 0 {
+						return
 					}
-				}
+					for key, n := range shardAdmitted {
+						admitted[key] = admitted[key] + n
+					}
+				})
 			}
 		}
-	}
+	})
 	t.Logf("compared %d, admitted by class %v", compared, admitted)
 	for _, shape := range shapes {
 		any := 0

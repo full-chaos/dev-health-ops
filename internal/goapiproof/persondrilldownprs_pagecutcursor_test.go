@@ -291,6 +291,7 @@ func cursorOracle(base, cand []enumRow, baseCursor, candCursor any, limit int) b
 // satisfy cursorOracle. The integration build runs candidates up to three
 // rows.
 func TestPersonDrilldownPRs_EnumeratedCursorAdmissionImpliesTheInvariant(t *testing.T) {
+	t.Parallel()
 	runCursorEnumeration(t, 2)
 }
 

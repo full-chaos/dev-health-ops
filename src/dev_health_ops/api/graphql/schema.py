@@ -80,7 +80,6 @@ from .resolvers.analytics import resolve_analytics
 from .resolvers.bus_factor import resolve_bus_factor
 from .resolvers.catalog import resolve_catalog
 from .resolvers.cognitive_load import resolve_cognitive_load
-from .resolvers.complexity import resolve_complexity_timeseries, resolve_hotspots
 from .resolvers.compounding_risk import resolve_compounding_risk
 from .resolvers.data_health import resolve_data_health
 from .resolvers.dev_evidence import (
@@ -757,8 +756,7 @@ class Query:
         info: Info,
         input: ComplexityTimeseriesInput,
     ) -> ComplexityTimeseriesResult:
-        context = get_context(info)
-        return await resolve_complexity_timeseries(context, input)
+        _raise_served_by_query_api("complexityTimeseries", input.org_id, info)
 
     @strawberry.field(
         description=(
@@ -772,8 +770,7 @@ class Query:
         info: Info,
         input: HotspotsInput,
     ) -> HotspotsResult:
-        context = get_context(info)
-        return await resolve_hotspots(context, input)
+        _raise_served_by_query_api("hotspots", input.org_id, info)
 
     @strawberry.field(
         description=(

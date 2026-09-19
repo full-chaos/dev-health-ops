@@ -44,6 +44,8 @@ var (
 	capacityForecastsOutcomeCounter    = mustCounter("devhealth_query_api_capacity_forecasts_outcome_total", "capacityForecasts resolver outcomes, by result")
 	throughputForecastCallCounter      = mustCounter("devhealth_query_api_throughput_forecast_calls_total", "throughputForecast resolver invocations")
 	throughputForecastOutcomeCounter   = mustCounter("devhealth_query_api_throughput_forecast_outcome_total", "throughputForecast resolver outcomes, by result")
+	catalogCallCounter                 = mustCounter("devhealth_query_api_catalog_calls_total", "catalog resolver invocations")
+	catalogOutcomeCounter              = mustCounter("devhealth_query_api_catalog_outcome_total", "catalog resolver outcomes, by result")
 	featureFlagEventsCallCounter       = mustCounter("devhealth_query_api_feature_flag_events_calls_total", "featureFlagEvents resolver invocations")
 	featureFlagEventsOutcomeCounter    = mustCounter("devhealth_query_api_feature_flag_events_outcome_total", "featureFlagEvents resolver outcomes, by result")
 
@@ -504,4 +506,22 @@ func startThroughputForecastSpan(ctx context.Context) (context.Context, func(out
 // be erased by counting it as "ok".
 func recordThroughputForecastOutcome(outcome string) {
 	throughputForecastOutcomeCounter.Add(context.Background(), 1, metric.WithAttributes(attribute.String("outcome", outcome)))
+}
+
+// startCatalogSpan counts the call and starts the span before the
+// authorization guard, so a rejected request is still visible.
+func startCatalogSpan(ctx context.Context) (context.Context, func(outcome string, extra ...attribute.KeyValue)) {
+	catalogCallCounter.Add(ctx, 1)
+	spanCtx, span := tracer.Start(ctx, "query-api.catalog")
+	return spanCtx, func(outcome string, extra ...attribute.KeyValue) {
+		span.SetAttributes(attribute.String("outcome", outcome))
+		if len(extra) > 0 {
+			span.SetAttributes(extra...)
+		}
+		if outcome == "error" {
+			span.SetStatus(codes.Error, "catalog resolver error")
+		}
+		span.End()
+		catalogOutcomeCounter.Add(context.Background(), 1, metric.WithAttributes(attribute.String("outcome", outcome)))
+	}
 }

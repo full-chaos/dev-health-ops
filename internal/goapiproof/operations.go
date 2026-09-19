@@ -215,6 +215,31 @@ var operationSpecs = map[string]OperationSpec{
 			Paths:  []string{"data.capacityForecasts.edges.node.computedAt"},
 		}}},
 	},
+	// Both catalog documents select the `catalog` root field. The web
+	// client's dimension picker sends any DimensionInput, so the base
+	// request asks for TEAM (the roster read) and every other dimension is a
+	// variant: each one compiles different SQL (repos slug read, investment
+	// event sources). AUTHOR is a rejection on both planes -- an error body,
+	// not data -- so it has no comparable response and is covered by the
+	// resolver's own tests.
+	// The document declares no `filters` variable, so a filtered catalog
+	// cannot be sent through a registered document and is covered by the
+	// resolver's own tests instead.
+	"catalogValues": {
+		ResponseRoot: "catalog",
+		Variables: func(orgID string, _ Window) map[string]any {
+			return map[string]any{"orgId": orgID, "dimension": "TEAM"}
+		},
+		Variants: catalogDimensionVariants("REPO", "THEME", "WORK_TYPE", "SUBCATEGORY"),
+	},
+	// The repository-scope read fixes REPO in the document text, so its
+	// only variable is the org.
+	"acrRepositoryScopes": {
+		ResponseRoot: "catalog",
+		Variables: func(orgID string, _ Window) map[string]any {
+			return map[string]any{"orgId": orgID}
+		},
+	},
 	"cognitiveLoad": {
 		ResponseRoot: "cognitiveLoad",
 		Variables: func(orgID string, w Window) map[string]any {
@@ -903,4 +928,19 @@ func securityOverviewVariant(name string, filters map[string]any) Variant {
 			return map[string]any{"orgId": orgID, "filters": filters}
 		},
 	}
+}
+
+// catalogDimensionVariants builds one catalogValues variant per dimension,
+// named by the dimension.
+func catalogDimensionVariants(dimensions ...string) []Variant {
+	variants := make([]Variant, 0, len(dimensions))
+	for _, dimension := range dimensions {
+		variants = append(variants, Variant{
+			Name: dimension,
+			Variables: func(orgID string, _ Window) map[string]any {
+				return map[string]any{"orgId": orgID, "dimension": dimension}
+			},
+		})
+	}
+	return variants
 }

@@ -92,9 +92,46 @@ func (r *queryResolver) DevWorkGraphNeighbors(ctx context.Context, orgID string,
 	panic(fmt.Errorf("not implemented: DevWorkGraphNeighbors - devWorkGraphNeighbors"))
 }
 
-// Catalog is the resolver for the catalog field.
+// Catalog is the resolver for the catalog field. The values query reads only
+// the authorized org's rows; a differing orgId is denied, the same guard
+// Analytics applies. A values query that fails answers empty values and finishes the span as
+// "degraded".
 func (r *queryResolver) Catalog(ctx context.Context, orgID string, dimension *model.DimensionInput, filters *model.FilterInput) (*model.CatalogResult, error) {
-	panic(fmt.Errorf("not implemented: Catalog - catalog"))
+	spanCtx, finish := startCatalogSpan(ctx)
+
+	claims, ok := authctx.FromContext(ctx)
+	if !ok || claims.OrgID == "" {
+		finish("denied", attribute.String("denial_reason", "no_org"))
+		return nil, &gqlerror.Error{
+			Message: "org_id is required for all analytics queries",
+			Path:    graphql.GetPath(ctx),
+			Extensions: map[string]interface{}{
+				"code": "AUTHORIZATION_ERROR",
+			},
+		}
+	}
+	if claims.OrgID != orgID {
+		finish("denied", attribute.String("denial_reason", "org_mismatch"), attribute.String("org_id", claims.OrgID))
+		return nil, &gqlerror.Error{
+			Message: "cannot query analytics for a different organization",
+			Path:    graphql.GetPath(ctx),
+			Extensions: map[string]interface{}{
+				"code": "AUTHORIZATION_ERROR",
+			},
+		}
+	}
+
+	result, degraded, err := analytics.ResolveCatalog(spanCtx, r.ClickHouse, claims.OrgID, dimension, filters)
+	if err != nil {
+		finish("error")
+		return nil, fmt.Errorf("catalog: %w", err)
+	}
+	if degraded {
+		finish("degraded")
+	} else {
+		finish("ok")
+	}
+	return result, nil
 }
 
 // Analytics is the resolver for the analytics field (CHAOS-4506,

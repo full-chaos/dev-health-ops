@@ -23,6 +23,6 @@ digest same cmd/query-api/internal/graph/generated.go tree=d55918fb82c3ee1ae3116
 digest same cmd/query-api/internal/graph/model/models_gen.go tree=231731462a2fab09e7e6d7c5ea96d9466db69c9e5c3109a13479218cee2ee091 generated=231731462a2fab09e7e6d7c5ea96d9466db69c9e5c3109a13479218cee2ee091
 digest absent cmd/query-api/internal/graph/prelude.resolvers.go tree=- generated=-
 digest same cmd/query-api/internal/graph/resolver.go tree=768c5b27c8e49a52b3063947cf659a96d87c72dab66b5f8d88f2cb9632993814 generated=768c5b27c8e49a52b3063947cf659a96d87c72dab66b5f8d88f2cb9632993814
-digest same cmd/query-api/internal/graph/schema.resolvers.go tree=476ee286a65a0a32b055c6d177af07363155a777f2283eae895651aa98b1a3ee generated=476ee286a65a0a32b055c6d177af07363155a777f2283eae895651aa98b1a3ee
+digest same cmd/query-api/internal/graph/schema.resolvers.go tree=d354cbacb1b57c80298a2e2560c00c7297246fdb206fb04b70c53e5fb49a4d0b generated=d354cbacb1b57c80298a2e2560c00c7297246fdb206fb04b70c53e5fb49a4d0b
 
 # no drift: a fresh generation reproduces every checked-in output exactly.

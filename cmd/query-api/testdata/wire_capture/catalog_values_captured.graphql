@@ -1,0 +1,10 @@
+query CatalogValues($orgId: String!, $dimension: DimensionInput!) {
+  catalog(orgId: $orgId, dimension: $dimension) {
+    values {
+      value
+      count
+      __typename
+    }
+    __typename
+  }
+}

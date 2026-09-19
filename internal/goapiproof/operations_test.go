@@ -28,6 +28,7 @@ import (
 // perturb, and because a second, independent statement of the set is
 // what makes a drift legible rather than merely detected.
 var registeredOperations = []string{
+	"acrRepositoryScopes", "catalogValues",
 	"capacityForecast", "capacityForecasts", "cognitiveLoad", "complexityTimeseries",
 	"featureFlagEvents", "featureFlags", "flowMatrix", "hotspots",
 	"investmentBreakdown", "investmentFull", "operatingReview", "pr",
@@ -116,6 +117,7 @@ func TestWindowedSpecsUseTheWindow(t *testing.T) {
 	// but its Variables func is still checked here -- a spec that quietly
 	// ignored the window would be wrong whether or not the run sends it.
 	windowless := map[string]bool{
+		"acrRepositoryScopes": true, "catalogValues": true,
 		"capacityForecast": true, "capacityForecasts": true,
 		"featureFlagEvents": true, "featureFlags": true, "pr": true,
 		"securityAlerts": true, "securityOverview": true,
@@ -336,12 +338,13 @@ func TestEverySpecDeclaresItsResponseRoot(t *testing.T) {
 		}
 	}
 	// flowMatrix, investmentBreakdown and investmentFull all select
-	// `analytics`. If this ever reads 0, either the documents changed or
+	// `analytics`; catalogValues and acrRepositoryScopes both select
+	// `catalog`. If this ever reads 0, either the documents changed or
 	// someone "tidied" ResponseRoot into a copy of the operation name --
 	// and the parity-path checks above would silently start passing for
 	// paths that can never match.
-	if sharedRoots != 3 {
-		t.Fatalf("expected 3 operations whose response root differs from their name, got %d", sharedRoots)
+	if sharedRoots != 5 {
+		t.Fatalf("expected 5 operations whose response root differs from their name, got %d", sharedRoots)
 	}
 }
 

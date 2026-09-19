@@ -923,6 +923,44 @@ const registeredPrDetailDocument = `query PrDetail($orgId: String!, $id: ID!) {
   }
 }`
 
+// registeredCatalogValuesDocument is the registered document for the
+// filter-dropdown read of the `catalog` operation: the distinct values of
+// one dimension for the authorized org. It is the urql WIRE FORM of the
+// web client's CatalogValues query (`$orgId: String!`,
+// `$dimension: DimensionInput!`), captured under
+// testdata/wire_capture/catalog_values_captured.graphql and asserted equal
+// by TestRegisteredCatalogDocuments_MatchCapturedWireFixtures.
+//
+// Registration is not enablement: PostgresSwitch.Enabled() is fail-closed,
+// so Python keeps answering until a routing row is enabled.
+const registeredCatalogValuesDocument = `query CatalogValues($orgId: String!, $dimension: DimensionInput!) {
+  catalog(orgId: $orgId, dimension: $dimension) {
+    values {
+      value
+      count
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredAcrRepositoryScopesDocument is the registered document for the
+// repository-scope read the agent-context runtime performs: `catalog` with
+// the REPO dimension fixed in the document text. It is a separate operation
+// from registeredCatalogValuesDocument because each registered document
+// carries its own digest and routing row. Wire form captured under
+// testdata/wire_capture/acr_repository_scopes_captured.graphql.
+const registeredAcrRepositoryScopesDocument = `query ACRRepositoryScopes($orgId: String!) {
+  catalog(orgId: $orgId, dimension: REPO) {
+    values {
+      value
+      count
+      __typename
+    }
+    __typename
+  }
+}`
+
 // digestHex is a thin wrapper over the ONE canonical document-digest
 // algorithm (CHAOS-4696): sha256(strings.TrimSpace(text)), hex-encoded,
 // now shared code in cmd/query-api/internal/digest so
@@ -1463,6 +1501,8 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		"pr":                   digestHex(registeredPrDetailDocument),
 		"securityOverview":     digestHex(registeredSecurityOverviewDocument),
 		"securityAlerts":       digestHex(registeredSecurityAlertsDocument),
+		"catalogValues":        digestHex(registeredCatalogValuesDocument),
+		"acrRepositoryScopes":  digestHex(registeredAcrRepositoryScopesDocument),
 	}
 	// CHAOS-4710 deliverable 3: log the mounted set HERE, where
 	// digestByOperation actually lives, rather than handing main.go a

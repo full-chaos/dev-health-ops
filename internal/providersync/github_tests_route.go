@@ -552,7 +552,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 				slog.Info(
 					"within-suite duplicate test-case names disambiguated with an ordinal suffix",
 					"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
-					"repository", repo.FullName, "run", pipeline.RunID, "count", rows.DuplicateCases,
+					"repository", repo.FullName, logging.ProviderIDAttr("run", pipeline.RunID), "count", rows.DuplicateCases,
 				)
 			}
 			client.Metrics.RecordDuplicateTestSuite(claim.Provider, claim.Dataset, rows.DuplicateSuites)
@@ -560,7 +560,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 				slog.Info(
 					"sibling suite collision resolved: same-named suite objects disambiguated with an ordinal suffix",
 					"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
-					"repository", repo.FullName, "run", pipeline.RunID, "count", rows.DuplicateSuites,
+					"repository", repo.FullName, logging.ProviderIDAttr("run", pipeline.RunID), "count", rows.DuplicateSuites,
 				)
 			}
 			suites = append(suites, rows.Suites...)

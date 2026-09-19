@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/identityalias"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
@@ -324,7 +325,7 @@ func (handler JiraTeamCatalogRouteHandler) collectSprints(
 			}
 			if skipDetail != "" {
 				slog.Default().WarnContext(ctx, "jira_team_catalog_board_sprints_skipped",
-					"org_id", claim.OrgID, "board_id", boardID, "detail", skipDetail)
+					"org_id", claim.OrgID, logging.ProviderIDAttr("board_id", boardID), "skip_reason", "board_rejects_sprints")
 			}
 		}
 	}

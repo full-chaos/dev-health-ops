@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -30,6 +31,22 @@ var formatCalls = map[string]map[string]bool{
 	"fmt":     {"Errorf": true, "Sprintf": true, "Sprint": true, "Sprintln": true},
 	"errors":  {"New": true},
 	"strings": {"Join": true},
+}
+
+// providerAssignedIDKeys are the log keys that carry an id a provider
+// assigned (read from a provider response or webhook payload) in the
+// provider-facing packages, taken from every id-named key logged in the
+// worker tree.
+var providerAssignedIDKeys = map[string]bool{
+	"deployment_id": true, "event_id": true, "incident_id": true,
+	"board_id": true, "team_id": true, "team_ids": true, "run": true,
+}
+
+// providerFacing reports whether a file belongs to the packages that read
+// provider responses and webhooks; elsewhere a team_id is our own.
+func providerFacing(file string) bool {
+	return strings.HasPrefix(file, "internal/providersync/") || strings.HasPrefix(file, "internal/jobs/pagerduty/") ||
+		strings.HasPrefix(file, "internal/providerfoundation/")
 }
 
 // logCalls are slog logger methods, package-level slog functions and slog
@@ -78,6 +95,28 @@ func scanProviderOriginSinks(t *testing.T, root string, files []string) ([]provi
 	}
 	var sinks []providerOriginSink
 	for index, file := range parsed {
+		// An attribute named like a provider-assigned id is built by
+		// logging.ProviderIDAttr / ProviderIDsAttr, never from a literal key.
+		ast.Inspect(file, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			selector, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || !logCalls[selector.Sel.Name] {
+				return true
+			}
+			for _, argument := range call.Args {
+				literal, ok := argument.(*ast.BasicLit)
+				if !ok || literal.Kind != token.STRING {
+					continue
+				}
+				if key, _ := strconv.Unquote(literal.Value); providerAssignedIDKeys[key] && providerFacing(names[index]) {
+					sinks = append(sinks, providerOriginSink{file: names[index], call: "log key " + key, source: "provider-assigned id", line: fileSet.Position(literal.Pos()).Line})
+				}
+			}
+			return true
+		})
 		// The body accessor has no caller in the worker tree: no log path
 		// calls it.
 		ast.Inspect(file, func(node ast.Node) bool {
@@ -280,9 +319,17 @@ func functionSinks(function *ast.FuncDecl, errorTypes map[string]bool, imports m
 			return true
 		}
 		if statement, ok := node.(*ast.ReturnStmt); ok {
+			// return client.Do(request): the transport error returned as is.
+			// A providerfoundation.HTTPDoer's own Do passes its delegate's
+			// error to the provider clients, which replace any Doer error
+			// with their own class (pinned by
+			// TestHTTPClientsReplaceEveryDoerErrorWithTheirOwnClass).
+			if len(statement.Results) == 1 && transportCall(statement.Results[0]) && !httpDoerMethod(function) {
+				sinks = append(sinks, providerOriginSink{function: function.Name.Name, call: "return", source: "transport error", line: int(statement.Pos())})
+			}
 			for _, result := range statement.Results {
 				if ident, ok := result.(*ast.Ident); ok && errorName(ident.Name) {
-					if source := state.at(ident.Name, ident.Pos()); source != "" {
+					if source := state.at(ident.Name, ident.Pos()); source != "" && !(source == "transport error" && httpDoerMethod(function)) {
 						sinks = append(sinks, providerOriginSink{function: function.Name.Name, call: "return", source: source, line: int(statement.Pos())})
 					}
 				}
@@ -437,6 +484,20 @@ func taintOfAt(expression ast.Expr, state taintState) string {
 		return true
 	})
 	return found
+}
+
+// httpDoerMethod reports whether function implements
+// providerfoundation.HTTPDoer: a method Do(request *http.Request).
+func httpDoerMethod(function *ast.FuncDecl) bool {
+	if function.Recv == nil || function.Name.Name != "Do" || len(function.Type.Params.List) != 1 {
+		return false
+	}
+	star, ok := function.Type.Params.List[0].Type.(*ast.StarExpr)
+	if !ok {
+		return false
+	}
+	selector, ok := star.X.(*ast.SelectorExpr)
+	return ok && selector.Sel.Name == "Request"
 }
 
 // transportCall reports whether expression is a net/http request call:

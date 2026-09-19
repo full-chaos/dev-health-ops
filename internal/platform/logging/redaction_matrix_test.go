@@ -768,3 +768,25 @@ func TestStructuredKeysAreDecodedBeforeTheyAreClassified(t *testing.T) {
 		}
 	}
 }
+
+// TestProviderIDAttrs: a well-shaped id is logged under its key; any other
+// value is replaced by <key>_dropped=true, or by "[id_dropped]" in a list.
+func TestProviderIDAttrs(t *testing.T) {
+	t.Parallel()
+	var output bytes.Buffer
+	NewJSON(&output, slog.LevelInfo).Info("m",
+		ProviderIDAttr("deployment_id", "4ef9a1c2-8b3d"),
+		ProviderIDAttr("event_id", "canary id"),
+		ProviderIDAttr("board_id", strings.Repeat("9", 65)),
+		ProviderIDsAttr("team_ids", []string{"team-a", "canary/team", "team_b"}),
+	)
+	line := output.String()
+	for _, want := range []string{`"deployment_id":"4ef9a1c2-8b3d"`, `"event_id_dropped":true`, `"board_id_dropped":true`, `"team_ids":["team-a","[id_dropped]","team_b"]`} {
+		if !strings.Contains(line, want) {
+			t.Errorf("missing %s: %s", want, line)
+		}
+	}
+	if strings.Contains(line, "canary") || strings.Contains(line, strings.Repeat("9", 65)) {
+		t.Fatalf("a malformed id reached the line: %s", line)
+	}
+}

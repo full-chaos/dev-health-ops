@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
@@ -500,7 +501,7 @@ func recordGitHubTestsPerRunTruncation(
 		"provider per-run item cap reached; run committed with partial items",
 		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
 		"repository", cursor.Repo, "component", component, "cause", cause,
-		"run", runID, "kept", kept,
+		logging.ProviderIDAttr("run", runID), "kept", kept,
 	)
 	return cursor
 }
@@ -712,8 +713,10 @@ func githubTestsSkippedArtifactLogSample(markers []GitHubTestsSkippedArtifact) [
 	}
 	sample := make([]string, 0, limit)
 	for _, marker := range markers[:limit] {
-		name := marker.Name
-		if name == "" {
+		// Name, run and artifact ids are provider-assigned: each is logged
+		// only in the id shape, otherwise as "[id_dropped]".
+		name := sampleID(marker.Name)
+		if marker.Name == "" {
 			name = "unknown"
 		}
 		entry := name + " (" + marker.Cause
@@ -731,15 +734,26 @@ func githubTestsSkippedArtifactLogSample(markers []GitHubTestsSkippedArtifact) [
 		// already on the durable marker (RunID/ArtifactID) -- this renders
 		// what was already collected, not new data.
 		if marker.RunID != "" {
-			entry += ", run=" + marker.RunID
+			entry += ", run=" + sampleID(marker.RunID)
 		}
 		if marker.ArtifactID != "" {
-			entry += ", artifact=" + marker.ArtifactID
+			entry += ", artifact=" + sampleID(marker.ArtifactID)
 		}
 		entry += ")"
 		sample = append(sample, entry)
 	}
 	return sample
+}
+
+// sampleID is a provider-assigned id or name in a skipped-artifact sample
+// entry: the value when it passes logging.ProviderAssignedID, otherwise
+// "[id_dropped]".
+func sampleID(raw string) string {
+	id, dropped := logging.ProviderAssignedID(raw)
+	if dropped {
+		return "[id_dropped]"
+	}
+	return id
 }
 
 // The two phases whose resume cursors carry a positional index. Closed set:
@@ -1758,7 +1772,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 							slog.Info(
 								"within-suite duplicate test-case names disambiguated with an ordinal suffix",
 								"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
-								"repository", cursor.Repo, "run", pipeline.RunID, "count", rows.DuplicateCases,
+								"repository", cursor.Repo, logging.ProviderIDAttr("run", pipeline.RunID), "count", rows.DuplicateCases,
 							)
 						}
 						client.Metrics.RecordDuplicateTestSuite(claim.Provider, claim.Dataset, rows.DuplicateSuites)
@@ -1766,7 +1780,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 							slog.Info(
 								"sibling suite collision resolved: same-named suite objects disambiguated with an ordinal suffix",
 								"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
-								"repository", cursor.Repo, "run", pipeline.RunID, "count", rows.DuplicateSuites,
+								"repository", cursor.Repo, logging.ProviderIDAttr("run", pipeline.RunID), "count", rows.DuplicateSuites,
 							)
 						}
 						// Bound the run's committed report rows WITHOUT splitting

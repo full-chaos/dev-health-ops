@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
@@ -167,7 +168,7 @@ func recordGitLabTestsPerRunTruncation(
 	slog.Warn(
 		"provider per-run item cap reached; run committed with partial items",
 		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
-		"repository", cursor.Repo, "component", component, "run", runID, "kept", kept,
+		"repository", cursor.Repo, "component", component, logging.ProviderIDAttr("run", runID), "kept", kept,
 	)
 	return cursor
 }
@@ -568,7 +569,7 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 						slog.Info(
 							"within-suite duplicate test-case names disambiguated with an ordinal suffix",
 							"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
-							"repository", cursor.Repo, "run", runID, "count", duplicates,
+							"repository", cursor.Repo, logging.ProviderIDAttr("run", runID), "count", duplicates,
 						)
 					}
 					if duplicates := countDuplicateTestSuites(reportSuites); duplicates > 0 {
@@ -576,7 +577,7 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 						slog.Info(
 							"sibling suite collision resolved: same-named suite objects disambiguated with an ordinal suffix",
 							"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
-							"repository", cursor.Repo, "run", runID, "count", duplicates,
+							"repository", cursor.Repo, logging.ProviderIDAttr("run", runID), "count", duplicates,
 						)
 					}
 					suites, cases = reportSuites, reportCases

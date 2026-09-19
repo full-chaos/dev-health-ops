@@ -239,8 +239,10 @@ type ProviderError struct {
 	// maxProviderErrorBody), kept for classification parsers that need the
 	// provider's own rejection detail. Error() never formats it: error text
 	// flows into logs and durable results unfiltered by key. No log path
-	// reads it.
-	Body string
+	// reads it, and it is never marshalled: a ProviderError inside a
+	// structured log value (a map, a struct, a struct value) carries class,
+	// status, path and retry delay only.
+	Body string `json:"-"`
 }
 
 const maxProviderErrorBodyInMessage = 500

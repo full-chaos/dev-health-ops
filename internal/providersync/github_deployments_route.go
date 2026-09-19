@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
@@ -199,7 +200,7 @@ func (handler GitHubDeploymentsRouteHandler) Collect(
 			pulls, pullPages, _, pullErr := fetchGitHubDeploymentsPage[gitHubPullPayload](ctx, &counted, root+"/commits/"+url.PathEscape(*deployment.SHA)+"/pulls", 1)
 			enrichmentPages += pullPages
 			if pullErr != nil {
-				slog.Warn("github_deployments.pull_request_lookup_failed", "deployment_id", row.DeploymentID, "cause", pullErr.Error())
+				slog.Warn("github_deployments.pull_request_lookup_failed", logging.ProviderIDAttr("deployment_id", row.DeploymentID), "cause", pullErr.Error())
 				row.PullRequestLookupFailed = true
 			} else {
 				row.PullRequestNumber, row.MergedAt = chooseDeploymentPullRequest(pulls, *deployment.SHA)
@@ -220,13 +221,13 @@ func (handler GitHubDeploymentsRouteHandler) Collect(
 			enrichmentPages += statusPages
 			switch {
 			case statusErr != nil:
-				slog.Warn("github_deployments.status_lookup_failed", "deployment_id", row.DeploymentID, "cause", statusErr.Error())
+				slog.Warn("github_deployments.status_lookup_failed", logging.ProviderIDAttr("deployment_id", row.DeploymentID), "cause", statusErr.Error())
 				row.LifecycleLookupFailed = true
 				if isRateLimitExhausted(statusErr) {
 					statusesRateLimited = true
 				}
 			case len(statuses) == 0:
-				slog.Warn("github_deployments.status_lookup_empty", "deployment_id", row.DeploymentID, "cause", "no deployment statuses returned")
+				slog.Warn("github_deployments.status_lookup_empty", logging.ProviderIDAttr("deployment_id", row.DeploymentID), "cause", "no deployment statuses returned")
 			default:
 				row.StartedAt, row.FinishedAt = deploymentLifecycleFromStatuses(statuses)
 				row.Status = deploymentLatestStatus(statuses)
@@ -236,7 +237,7 @@ func (handler GitHubDeploymentsRouteHandler) Collect(
 					// in_progress entry (or a later terminal one) may exist
 					// past the budget, so the derived value above is
 					// honest but possibly not the true earliest/latest.
-					slog.Warn("github_deployments.status_lookup_truncated", "deployment_id", row.DeploymentID, "cause", "statuses page budget exhausted before the provider ran out of pages")
+					slog.Warn("github_deployments.status_lookup_truncated", logging.ProviderIDAttr("deployment_id", row.DeploymentID), "cause", "statuses page budget exhausted before the provider ran out of pages")
 				}
 			}
 		}

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/full-chaos/dev-health-ops/internal/streamrunner"
@@ -383,7 +384,7 @@ func (reconciler *NativeReconciler) logSuccess(
 		slog.String("binding_id", graph.BindingID),
 		slog.String("provider_instance_id", graph.ProviderInstanceID),
 		slog.String("event_type", envelope.Event.EventType),
-		slog.String("event_id", envelope.Event.ID),
+		logging.ProviderIDAttr("event_id", envelope.Event.ID),
 		slog.String("receipt_id", event.ReceiptID),
 		slog.Int("rows", outcome.Rows()),
 		slog.Bool("hydrated_via_rest", outcome.Hydrated),
@@ -413,7 +414,7 @@ func logTransient(ctx context.Context, event Event, eventType string, cause erro
 		slog.String("provider", "pagerduty"),
 		slog.String("binding_id", event.BindingID),
 		slog.String("event_type", eventType),
-		slog.String("event_id", event.EventID),
+		logging.ProviderIDAttr("event_id", event.EventID),
 		slog.String("receipt_id", event.ReceiptID),
 		slog.String("error", cause.Error()),
 	)
@@ -447,7 +448,7 @@ func (reconciler *NativeReconciler) logRefusal(
 		slog.String("org_id", orgID),
 		slog.String("binding_id", event.BindingID),
 		slog.String("event_type", envelope.Event.EventType),
-		slog.String("event_id", envelope.Event.ID),
+		logging.ProviderIDAttr("event_id", envelope.Event.ID),
 		slog.String("receipt_id", event.ReceiptID),
 		slog.String("reason", reason),
 		slog.String("error", cause.Error()),
@@ -465,7 +466,7 @@ func (reconciler *NativeReconciler) logFailure(
 		slog.String("org_id", orgID),
 		slog.String("binding_id", event.BindingID),
 		slog.String("event_type", envelope.Event.EventType),
-		slog.String("event_id", envelope.Event.ID),
+		logging.ProviderIDAttr("event_id", envelope.Event.ID),
 		slog.String("receipt_id", event.ReceiptID),
 		slog.String("error", cause.Error()),
 	)
@@ -500,7 +501,7 @@ func (hydrator CredentialIncidentHydrator) HydrateIncident(
 	slog.WarnContext(ctx, "pagerduty webhook payload was too sparse, hydrating over REST",
 		slog.String("provider", "pagerduty"),
 		slog.String("org_id", hydrator.OrgID),
-		slog.String("incident_id", incidentID),
+		logging.ProviderIDAttr("incident_id", incidentID),
 	)
 	credential, err := hydrator.Resolver.Resolve(ctx, hydrator.Lease, providerfoundation.TenantScope{
 		OrgID: hydrator.OrgID, Provider: "pagerduty", CredentialID: hydrator.CredentialID,

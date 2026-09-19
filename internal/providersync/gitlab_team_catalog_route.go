@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/identityalias"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
@@ -357,7 +358,7 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 				// CHAOS-4461 fix uses ("pending a shared telemetry field"),
 				// not a new interface field of its own.
 				slog.Default().WarnContext(ctx, "gitlab_team_catalog_member_fetch_failed",
-					"org_id", ref.OrgID, "team_id", teamID, "error", memberErr)
+					"org_id", ref.OrgID, logging.ProviderIDAttr("team_id", teamID), "error", memberErr)
 			} else {
 				evidence.Pages += memberPages.Pages
 				if memberPages.PageBudgetExhausted {
@@ -665,7 +666,7 @@ func (collector GitLabTeamCatalogCollector) CollectTeamCatalog(
 			existingRoster, rosterErr := gitlabExistingTeamRoster(ctx, collector.Sink.Conn, ref.OrgID, unauthoritative)
 			if rosterErr != nil {
 				slog.Default().WarnContext(ctx, "gitlab_team_catalog_drift_review_roster_preservation_failed",
-					"org_id", ref.OrgID, "team_ids", unauthoritative, "error", rosterErr)
+					"org_id", ref.OrgID, logging.ProviderIDsAttr("team_ids", unauthoritative), "error", rosterErr)
 				teamRows = gitlabTeamsSafeToWriteAfterRosterPreservationFailure(teamRows)
 			} else {
 				for index := range teamRows {

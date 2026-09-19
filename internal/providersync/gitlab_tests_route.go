@@ -263,7 +263,7 @@ func (handler GitLabTestsRouteHandler) Collect(
 				slog.Info(
 					"within-suite duplicate test-case names disambiguated with an ordinal suffix",
 					"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
-					"repository", fullName, "run", runID, "count", duplicates,
+					"repository", fullName, logging.ProviderIDAttr("run", runID), "count", duplicates,
 				)
 			}
 			if duplicates := countDuplicateTestSuites(reportSuites); duplicates > 0 {
@@ -271,7 +271,7 @@ func (handler GitLabTestsRouteHandler) Collect(
 				slog.Info(
 					"sibling suite collision resolved: same-named suite objects disambiguated with an ordinal suffix",
 					"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
-					"repository", fullName, "run", runID, "count", duplicates,
+					"repository", fullName, logging.ProviderIDAttr("run", runID), "count", duplicates,
 				)
 			}
 			suites = append(suites, reportSuites...)

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
@@ -140,7 +141,7 @@ func (handler GitLabDeploymentsRouteHandler) Collect(
 			// Python permits a failed MR lookup for one deployed SHA to leave
 			// only that deployment unattributed in this batch; the effects
 			// sink carries a stored attribution forward over it.
-			slog.Warn("gitlab_deployments.merge_request_lookup_failed", "deployment_id", stringValue(deployment["id"]), "cause", mergeRequestErr.Error())
+			slog.Warn("gitlab_deployments.merge_request_lookup_failed", logging.ProviderIDAttr("deployment_id", stringValue(deployment["id"])), "cause", mergeRequestErr.Error())
 			mergeRequestLookupFailed[stringValue(deployment["id"])] = true
 			continue
 		}
@@ -319,7 +320,7 @@ func gitLabDeploymentLifecycle(deploymentID string, payload map[string]any) (sta
 	}
 	deployable, ok := raw.(map[string]any)
 	if !ok {
-		slog.Warn("gitlab_deployments.deployable_shape_unexpected", "deployment_id", deploymentID, "cause", fmt.Sprintf("deployable is %T, want an object", raw))
+		slog.Warn("gitlab_deployments.deployable_shape_unexpected", logging.ProviderIDAttr("deployment_id", deploymentID), "cause", fmt.Sprintf("deployable is %T, want an object", raw))
 		return nil, nil
 	}
 	return parseGitLabDeploymentTime(deployable["started_at"]), parseGitLabDeploymentTime(deployable["finished_at"])

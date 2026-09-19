@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -611,5 +612,32 @@ func TestProviderErrorResponseBodySnippetIsRedactedAndBounded(t *testing.T) {
 	}
 	if (&ProviderError{}).ResponseBodySnippet() != "" || (*ProviderError)(nil).ResponseBodySnippet() != "" {
 		t.Fatal("an empty body or nil error must give an empty snippet")
+	}
+}
+
+// TestHTTPClientsReplaceEveryDoerErrorWithTheirOwnClass pins the seam every
+// HTTPDoer (and every counting doer that wraps one) returns its error
+// through: the provider client never passes a Doer's error text on, whatever
+// it quotes.
+func TestHTTPClientsReplaceEveryDoerErrorWithTheirOwnClass(t *testing.T) {
+	t.Parallel()
+	doer := HTTPDoerFunc(func(*http.Request) (*http.Response, error) {
+		return nil, &url.Error{Op: "Get", URL: "https://api.example.test/x?token=canary-query", Err: errors.New(`malformed HTTP status code "canary-status"`)}
+	})
+	client, err := NewHTTPClient("github", "https://api.example.test", doer, func(*http.Request) error { return nil },
+		RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond}, LeaseGuardFunc(func(context.Context) error { return nil }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, doErr := client.Do(context.Background(), http.MethodGet, "/repos/octo/hello", nil)
+	_, unauthenticatedErr := client.DoUnauthenticated(context.Background(), http.MethodGet, "https://api.example.test/download")
+	for name, got := range map[string]error{"Do": doErr, "DoUnauthenticated": unauthenticatedErr} {
+		var providerErr *ProviderError
+		if !errors.As(got, &providerErr) || providerErr.Class != ErrorTransient {
+			t.Errorf("%s: %v, want a transient ProviderError", name, got)
+		}
+		if got != nil && strings.Contains(got.Error(), "canary") {
+			t.Errorf("%s: %q passes the Doer's text on", name, got.Error())
+		}
 	}
 }

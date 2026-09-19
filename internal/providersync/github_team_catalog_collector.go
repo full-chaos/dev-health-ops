@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
@@ -218,7 +219,7 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 					}
 					rows.Teams = filtered
 					slog.Default().WarnContext(ctx, "github_team_catalog_roster_preservation_failed",
-						"org_id", ref.OrgID, "team_ids", rows.FailedMemberFetchTeamIDs)
+						"org_id", ref.OrgID, logging.ProviderIDsAttr("team_ids", rows.FailedMemberFetchTeamIDs))
 				} else {
 					for index := range rows.Teams {
 						if _, isFailed := failed[rows.Teams[index].ID]; !isFailed {
@@ -234,7 +235,7 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 						rows.Teams[index].Members = members
 					}
 					slog.Default().InfoContext(ctx, "github_team_catalog_roster_preserved_after_fetch_failure",
-						"org_id", ref.OrgID, "team_ids", rows.FailedMemberFetchTeamIDs)
+						"org_id", ref.OrgID, logging.ProviderIDsAttr("team_ids", rows.FailedMemberFetchTeamIDs))
 				}
 			}
 		} else {

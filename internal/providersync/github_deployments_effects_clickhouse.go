@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
@@ -371,7 +372,7 @@ func logDeploymentLifecycleRegressionGuarded(
 			slog.String("dataset", claim.Dataset),
 			slog.String("unit_id", claim.ID),
 			slog.String("repo_id", event.RepoID),
-			slog.String("deployment_id", event.DeploymentID),
+			logging.ProviderIDAttr("deployment_id", event.DeploymentID),
 		)
 	}
 }
@@ -425,7 +426,7 @@ func logDeploymentPullRequestRegressionGuarded(
 			slog.String("dataset", claim.Dataset),
 			slog.String("unit_id", claim.ID),
 			slog.String("repo_id", event.RepoID),
-			slog.String("deployment_id", event.DeploymentID),
+			logging.ProviderIDAttr("deployment_id", event.DeploymentID),
 		)
 	}
 }

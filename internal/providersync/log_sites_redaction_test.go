@@ -34,6 +34,12 @@ var slogScalarAttrConstructors = map[string]bool{
 func logArgumentIsSafe(info *types.Info, expression ast.Expr) (bool, string) {
 	if call, ok := ast.Unparen(expression).(*ast.CallExpr); ok {
 		if callee := typeutilCallee(info, call); callee != nil {
+			// logging.ProviderIDAttr / ProviderIDsAttr build a string or a
+			// []string attribute from an id that passed the id shape.
+			if callee.Pkg() != nil && callee.Pkg().Path() == "github.com/full-chaos/dev-health-ops/internal/platform/logging" &&
+				(callee.Name() == "ProviderIDAttr" || callee.Name() == "ProviderIDsAttr") {
+				return true, ""
+			}
 			if callee.Pkg() != nil && callee.Pkg().Path() == "log/slog" {
 				switch {
 				case slogScalarAttrConstructors[callee.Name()]:

@@ -9,6 +9,7 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/google/uuid"
 )
@@ -284,7 +285,7 @@ func (sink GitLabTeamCatalogClickHouseEffects) writeTeams(ctx context.Context, c
 		existingRoster, rosterErr = gitlabExistingTeamRoster(ctx, sink.Conn, claim.OrgID, rosterTeamIDs)
 		if rosterErr != nil {
 			slog.Default().WarnContext(ctx, "gitlab_team_catalog_roster_preservation_failed",
-				"org_id", claim.OrgID, "team_ids", rosterTeamIDs, "error", rosterErr)
+				"org_id", claim.OrgID, logging.ProviderIDsAttr("team_ids", rosterTeamIDs), "error", rosterErr)
 			rows = gitlabTeamsSafeToWriteAfterRosterPreservationFailure(rows)
 			if len(rows) == 0 {
 				return nil

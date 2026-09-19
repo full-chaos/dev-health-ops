@@ -230,9 +230,21 @@ func TestPagerDutyRacedShapeIsRefusedAndTheNextCallSucceeds(t *testing.T) {
 				}
 				return rows
 			}
-			if inspection, err := raced().InspectEffect(ctx, sinkCase.claim, sinkCase.effect); err == nil || inspection != EffectConflict {
-				t.Fatalf("%s: raced readback before write inspection=%s err=%v", label, inspection, err)
+			// The raced readback is refused by the executing server: a
+			// contract-2 SELECT on a contract-1 table names unknown columns, and
+			// a legacy SELECT on a contract-2 table trips the shape guard.
+			wantRefusal := "source_revision"
+			if direction.stale == probeTableLegacy {
+				wantRefusal = "legacy readback refused"
 			}
+			racedReadback := func(when string) {
+				inspection, err := raced().InspectEffect(ctx, sinkCase.claim, sinkCase.effect)
+				if err == nil || inspection != EffectConflict || !strings.Contains(err.Error(), wantRefusal) {
+					t.Fatalf("%s: raced readback %s inspection=%s err=%v want refusal %q", label, when, inspection, err, wantRefusal)
+				}
+				t.Logf("%s: raced readback %s refused: %.160s", label, when, err.Error())
+			}
+			racedReadback("before write")
 			err := raced().WriteEffect(ctx, sinkCase.claim, sinkCase.effect)
 			if err == nil {
 				t.Fatalf("%s: raced write was accepted", label)
@@ -247,9 +259,7 @@ func TestPagerDutyRacedShapeIsRefusedAndTheNextCallSucceeds(t *testing.T) {
 			if inspection, err := honest.InspectEffect(ctx, sinkCase.claim, sinkCase.effect); err != nil || inspection != EffectExact {
 				t.Fatalf("%s: honest inspection=%s err=%v", label, inspection, err)
 			}
-			if inspection, err := raced().InspectEffect(ctx, sinkCase.claim, sinkCase.effect); err == nil || inspection != EffectConflict {
-				t.Fatalf("%s: raced readback after write inspection=%s err=%v", label, inspection, err)
-			}
+			racedReadback("after write")
 			if inspection, err := honest.InspectEffect(ctx, sinkCase.claim, sinkCase.effect); err != nil || inspection != EffectExact {
 				t.Fatalf("%s: honest inspection after raced readback=%s err=%v", label, inspection, err)
 			}

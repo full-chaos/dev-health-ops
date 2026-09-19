@@ -1972,7 +1972,7 @@ func TestWriteJSONReport_PartialRunMarksPartialAndListsNotRun(t *testing.T) {
 	}
 	notRun := []string{"REST:GET:/c/r3"}
 
-	if err := writeJSONReport(path, outcomes, notRun); err != nil {
+	if err := writeJSONReport(path, jsonReport{Outcomes: outcomes, NotRun: notRun}); err != nil {
 		t.Fatalf("writeJSONReport: %v", err)
 	}
 	raw, err := os.ReadFile(path)
@@ -2003,7 +2003,7 @@ func TestWriteJSONReport_CompleteRunIsNotPartial(t *testing.T) {
 	path := dir + "/report.json"
 	outcomes := []outcome{{Operation: "REST:GET:/a", Request: "r1", Admitted: true, TerminalState: goapiproof.TerminalStateMatch}}
 
-	if err := writeJSONReport(path, outcomes, nil); err != nil {
+	if err := writeJSONReport(path, jsonReport{Outcomes: outcomes}); err != nil {
 		t.Fatalf("writeJSONReport: %v", err)
 	}
 	raw, err := os.ReadFile(path)

@@ -13,12 +13,19 @@
 //     dict in first-insertion order to build the links list (no sort by
 //     value) and compute each node's value as max(incoming, outgoing)
 //     AFTER every link is known.
-//   - the dynamic-mode fallback and the repo-team builder append ONE
-//     SankeyLink per qualifying row directly (rows already arrive
-//     pre-grouped by the SQL's own GROUP BY, so no further accumulation
-//     is needed or performed), and a node's value is the running SUM of
-//     every value that touched it, updated as each row is processed, not
-//     a final max(incoming, outgoing) pass.
+//   - the dynamic-mode fallback appends ONE SankeyLink per qualifying
+//     row directly (its rows already arrive grouped by (source, target)
+//     from the SQL's own GROUP BY, so no further accumulation is needed),
+//     and a node's value is the running SUM of every value that touched
+//     it, updated as each row is processed, not a final max(incoming,
+//     outgoing) pass.
+//   - the repo-team builder keeps that running-sum node shape, but its
+//     rows are grouped by (subcategory, repo, team), one level finer than
+//     either link it draws: several rows reach the same subcategory->repo
+//     or repo->team pair. It accumulates its links through the SAME
+//     orderedEdges accumulator the link_totals builders use, so the
+//     response carries one link per (source, target), valued at the sum
+//     of every row that reaches it, in first-insertion order.
 //
 // Reusing cmd/query-api/internal/sankey's own nodeAccumulator/
 // edgeAccumulator (response.go) would silently apply THAT package's own
@@ -73,7 +80,8 @@ type orderedEdgeKey struct{ Source, Target string }
 
 // orderedEdges accumulates a value per (source, target) pair, insertion
 // order preserved -- backs _build_team_burden_sankey/_build_team_theme_
-// subcategory_repo_sankey's own link_totals dict.
+// subcategory_repo_sankey's own link_totals dict, and buildRepoTeamSankey's
+// links.
 type orderedEdges struct {
 	order  []orderedEdgeKey
 	values map[orderedEdgeKey]float64
@@ -89,6 +97,21 @@ func (e *orderedEdges) add(source, target string, value float64) {
 		e.order = append(e.order, key)
 	}
 	e.values[key] += value
+}
+
+// links returns one sankey.Link per accumulated (source, target) pair, in
+// first-insertion order, dropping a non-positive total (defensive: every
+// caller adds only value > 0).
+func (e *orderedEdges) links() []sankey.Link {
+	out := make([]sankey.Link, 0, len(e.order))
+	for _, key := range e.order {
+		value := e.values[key]
+		if value <= 0 {
+			continue
+		}
+		out = append(out, sankey.Link{Source: key.Source, Target: key.Target, Value: value})
+	}
+	return out
 }
 
 // nodePresence tracks first-touch node name/group, insertion order
@@ -308,15 +331,10 @@ func buildTeamBurdenSankey(rows []teamBurdenRow, categoryGroup string, categoryL
 func finishPresenceEdges(presence *nodePresence, edges *orderedEdges) ([]sankey.Node, []sankey.Link) {
 	incoming := map[string]float64{}
 	outgoing := map[string]float64{}
-	links := make([]sankey.Link, 0, len(edges.order))
-	for _, key := range edges.order {
-		value := edges.values[key]
-		if value <= 0 {
-			continue
-		}
-		links = append(links, sankey.Link{Source: key.Source, Target: key.Target, Value: value})
-		outgoing[key.Source] += value
-		incoming[key.Target] += value
+	links := edges.links()
+	for _, link := range links {
+		outgoing[link.Source] = outgoing[link.Source] + link.Value
+		incoming[link.Target] = incoming[link.Target] + link.Value
 	}
 
 	nodes := make([]sankey.Node, 0, len(presence.order))
@@ -436,11 +454,17 @@ func buildDynamicFlowSankey(rows []edgeRow, chosenMode string) ([]sankey.Node, [
 // node/link loop directly (there is no separate top-level Python
 // function for it, the same way buildDynamicFlowSankey above ports an
 // inline loop rather than a named function). Same running-total node
-// shape as buildDynamicFlowSankey -- one link appended per qualifying
-// row, no accumulation.
+// shape as buildDynamicFlowSankey. Links differ from the Python loop,
+// which appends one link per row: a row is one (subcategory, repo, team)
+// group, so that loop repeats a repo->team link once per subcategory and
+// a subcategory->repo link once per team. Here every link is accumulated
+// through orderedEdges, so each (source, target) pair appears once,
+// valued at the sum of the rows that reach it, in first-insertion order.
+// Node values are the same either way: each node already sums every row
+// that touches it.
 func buildRepoTeamSankey(rows []repoTeamEdgeRow) ([]sankey.Node, []sankey.Link) {
 	nodes := newNodeRunningTotal()
-	links := make([]sankey.Link, 0)
+	edges := newOrderedEdges()
 	for _, row := range rows {
 		subKey := row.Subcategory
 		if subKey == "" {
@@ -464,19 +488,19 @@ func buildRepoTeamSankey(rows []repoTeamEdgeRow) ([]sankey.Node, []sankey.Link) 
 
 		if repoLabel == unassignedRepo && teamLabel != unassignedTeam {
 			nodes.add(teamLabel, "team", value)
-			links = append(links, sankey.Link{Source: sourceLabel, Target: teamLabel, Value: value})
+			edges.add(sourceLabel, teamLabel, value)
 			continue
 		}
 
 		nodes.add(repoLabel, "repo", value)
-		links = append(links, sankey.Link{Source: sourceLabel, Target: repoLabel, Value: value})
+		edges.add(sourceLabel, repoLabel, value)
 
 		if teamLabel != unassignedTeam {
 			nodes.add(teamLabel, "team", value)
-			links = append(links, sankey.Link{Source: repoLabel, Target: teamLabel, Value: value})
+			edges.add(repoLabel, teamLabel, value)
 		}
 	}
-	return nodes.nodes(), links
+	return nodes.nodes(), edges.links()
 }
 
 // --- shared coverage-stats computation (investment_flow.py:322-341, the

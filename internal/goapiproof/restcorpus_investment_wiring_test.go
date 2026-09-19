@@ -223,9 +223,8 @@ func TestInvestmentDeclarationsCarryShapes(t *testing.T) {
 // slice, not a length comparison, is what actually catches that.
 func TestInvestmentFlowSplitCarriesParentDeclarations(t *testing.T) {
 	for name, opts := range map[string]Options{
-		"investmentFlowDynamicParity":  investmentFlowDynamicParity,
-		"investmentFlowModeParity":     investmentFlowModeParity,
-		"investmentFlowRepoTeamParity": investmentFlowRepoTeamParity,
+		"investmentFlowDynamicParity": investmentFlowDynamicParity,
+		"investmentFlowModeParity":    investmentFlowModeParity,
 	} {
 		if !opts.NumericLeavesDeclared {
 			t.Fatalf("%s.NumericLeavesDeclared = false, want true", name)
@@ -235,6 +234,35 @@ func TestInvestmentFlowSplitCarriesParentDeclarations(t *testing.T) {
 		}
 		if !reflect.DeepEqual(opts.BaselineDefects, investmentFlowRepoDedupParity.BaselineDefects) {
 			t.Fatalf("%s.BaselineDefects = %+v, want the same as investmentFlowRepoDedupParity's own %+v -- a length-only check would miss a content change", name, opts.BaselineDefects, investmentFlowRepoDedupParity.BaselineDefects)
+		}
+	}
+
+	// investmentFlowRepoTeamParity carries the parent's declarations plus
+	// its own link-copies defect, and re-declares data.links with the
+	// parent's path, key and ticket (its Reason states this route's own
+	// link identity).
+	repoTeam := investmentFlowRepoTeamParity
+	if !repoTeam.NumericLeavesDeclared {
+		t.Fatal("investmentFlowRepoTeamParity.NumericLeavesDeclared = false, want true")
+	}
+	wantDefects := append(append([]BaselineDefect{}, investmentFlowRepoDedupParity.BaselineDefects...), investmentFlowRepoTeamLinkCopiesDefect)
+	if !reflect.DeepEqual(repoTeam.BaselineDefects, wantDefects) {
+		t.Fatalf("investmentFlowRepoTeamParity.BaselineDefects = %+v, want the parent's own plus investmentFlowRepoTeamLinkCopiesDefect %+v", repoTeam.BaselineDefects, wantDefects)
+	}
+	parentLists := investmentFlowRepoDedupParity.OrderInsensitiveLists
+	if len(repoTeam.OrderInsensitiveLists) != len(parentLists) {
+		t.Fatalf("investmentFlowRepoTeamParity.OrderInsensitiveLists = %+v, want one entry per parent entry %+v", repoTeam.OrderInsensitiveLists, parentLists)
+	}
+	for i, parent := range parentLists {
+		got := repoTeam.OrderInsensitiveLists[i]
+		if parent.Path == "data.links" {
+			if got.Path != parent.Path || !reflect.DeepEqual(got.KeyFields, parent.KeyFields) || got.Ticket != parent.Ticket {
+				t.Fatalf("investmentFlowRepoTeamParity data.links = %+v, want the parent's path/key/ticket %+v", got, parent)
+			}
+			continue
+		}
+		if !reflect.DeepEqual(got, parent) {
+			t.Fatalf("investmentFlowRepoTeamParity.OrderInsensitiveLists[%d] = %+v, want the parent's own %+v", i, got, parent)
 		}
 	}
 

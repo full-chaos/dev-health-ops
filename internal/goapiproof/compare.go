@@ -893,6 +893,19 @@ type BaselineDefect struct {
 	// Options builder sets it on every declaration whose Paths reach the
 	// list, so a new declaration cannot admit under the list without it.
 	Accounting *CandidateAccounting
+
+	// BaselineCopySumShape, when set, collapses the baseline side's several
+	// elements under one pairing key into ONE element whose declared
+	// numeric field is their sum, before Compare compares anything, and
+	// replaces this defect's blanket rule with an admission of exactly the
+	// ShapeBaselineCopies finding that collapse reports, only for a key
+	// whose element carries no other uncovered difference -- see
+	// BaselineCopySumShape's own doc comment (baselinecopysum.go). It can
+	// admit a STRUCTURAL finding (ShapeBaselineCopies) -- see the gate in
+	// classifyBaselineDefects. nil is the default, unchanged blanket
+	// behaviour every other declared defect still uses. A defect never
+	// sets more than one shape field.
+	BaselineCopySumShape *BaselineCopySumShape
 }
 
 // validateBaselineDefects refuses a declaration that claims the
@@ -990,6 +1003,9 @@ type tracker struct {
 	// FloatExactLeaves and IntegerLeaves all leave unnamed -- see
 	// Result.UndeclaredNumericLeaves.
 	undeclaredNumeric map[string]bool
+	// baselineCopies holds, per declared list path, the baseline keys a
+	// BaselineCopySumShape collapsed before the comparison ran.
+	baselineCopies map[string]baselineCopyList
 }
 
 // Compare compares a baseline (Python) and candidate (Go) response under
@@ -1022,6 +1038,17 @@ func Compare(baseline, candidate Snapshot, opts Options) Result {
 		}
 	}
 
+	// A declared BaselineCopySumShape collapses the baseline's copies of
+	// one list key into one element FIRST, so the structural checks, the
+	// ordinary comparison and every declared shape all read one baseline
+	// (baselinecopysum.go). baseline is this function's own copy of the
+	// snapshot; the decoded body it came from is never mutated.
+	var copiedLists map[string]baselineCopyList
+	var copyRefusals []string
+	if baseline.DataPresent {
+		baseline.Data, copiedLists, copyRefusals = collapseDeclaredBaselineCopies(baseline.Data, opts)
+	}
+
 	// CHAOS-5661: judged BEFORE anything below, and over the RAW decoded
 	// bodies -- never the view VolatileFields/exclusions would leave.
 	// Skipping a whole collection because it is declared volatile is
@@ -1049,7 +1076,7 @@ func Compare(baseline, candidate Snapshot, opts Options) Result {
 		}
 	}
 
-	track := &tracker{volatile: map[string]bool{}, tierB: map[string]bool{}, orderInsensitive: map[string]bool{}, undeclaredNumeric: map[string]bool{}}
+	track := &tracker{volatile: map[string]bool{}, tierB: map[string]bool{}, orderInsensitive: map[string]bool{}, undeclaredNumeric: map[string]bool{}, baselineCopies: copiedLists, orderInsensitiveKeyMissing: copyRefusals}
 	findings := compareErrors(baseline.Errors, candidate.Errors, "$.errors")
 
 	switch {
@@ -1347,6 +1374,10 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 		if defect.TimestampRenderingShape != nil {
 			renderingPlan = &timestampRenderingPlan{}
 		}
+		var copySumPlan *baselineCopySumPlan
+		if defect.BaselineCopySumShape != nil {
+			copySumPlan = buildBaselineCopySumPlan(defect.BaselineCopySumShape, result.Findings, findingRefs, covered)
+		}
 		// A SHAPED defect's citation is LIVE only when its shape actually
 		// admits something. A blanket (unshaped) citation stays live from
 		// path proximity alone -- any difference under Paths, covered or
@@ -1360,7 +1391,7 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 		// apart, and a shaped defect that hit on path alone would still
 		// double-report alongside the shape that actually explains the
 		// difference.
-		shaped := repoPlan != nil || covPlan != nil || dedupPlan != nil || skewPlan != nil || sankeyFanoutPlan != nil || keyedDirPlan != nil || conservePlan != nil || dictDirPlan != nil || scalarDirPlan != nil || identityPlan != nil || displacePlan != nil || hotspotBoundaryPlan != nil || subsetPlan != nil || zeroValueEmptyListPlan != nil || tiePlan != nil || heatmapCellPlan != nil || dupLenPlan != nil || homeTierPlan != nil || axisRepoOrderPlan != nil || axisTieGroupPlan != nil || dupPageCutPlan != nil || driversPlan != nil || momentPlan != nil || renderingPlan != nil
+		shaped := repoPlan != nil || covPlan != nil || dedupPlan != nil || skewPlan != nil || sankeyFanoutPlan != nil || keyedDirPlan != nil || conservePlan != nil || dictDirPlan != nil || scalarDirPlan != nil || identityPlan != nil || displacePlan != nil || hotspotBoundaryPlan != nil || subsetPlan != nil || zeroValueEmptyListPlan != nil || tiePlan != nil || heatmapCellPlan != nil || dupLenPlan != nil || homeTierPlan != nil || axisRepoOrderPlan != nil || axisTieGroupPlan != nil || dupPageCutPlan != nil || driversPlan != nil || momentPlan != nil || renderingPlan != nil || copySumPlan != nil
 		var touched []int
 		for i, path := range mismatches {
 			if !defectCovers(defect, path) {
@@ -1415,7 +1446,8 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 				!(dupLenPlan != nil && shapes[i] == ShapeLength) &&
 				!(dupPageCutPlan != nil && shapes[i] == ShapeLength) &&
 				!(driversPlan != nil && shapes[i] == ShapeLength) &&
-				!(momentPlan != nil && shapes[i] == ShapeEmptyResult) {
+				!(momentPlan != nil && shapes[i] == ShapeEmptyResult) &&
+				!(copySumPlan != nil && shapes[i] == ShapeBaselineCopies) {
 				continue
 			}
 			if shaped {
@@ -1483,6 +1515,8 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 				admitted = momentPlan.admits(result.Findings[findingRefs[i]])
 			case renderingPlan != nil:
 				admitted = renderingPlan.admits(result.Findings[findingRefs[i]])
+			case copySumPlan != nil:
+				admitted = copySumPlan.admits(result.Findings[findingRefs[i]])
 			}
 			if gateRefusal != "" {
 				admitted = false
@@ -1501,13 +1535,21 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 		verdicts[d] = perDefect{hit: hit, shaped: shaped, touched: touched}
 	}
 	for d, defect := range defects {
-		if defect.TeamCoverageIdentityShape != nil || defect.LimitDisplacementShape != nil || defect.HotspotListBoundaryShape != nil || defect.TeamRepoSubsetShape != nil {
+		if defect.TeamCoverageIdentityShape != nil || defect.LimitDisplacementShape != nil || defect.HotspotListBoundaryShape != nil || defect.TeamRepoSubsetShape != nil || defect.BaselineCopySumShape != nil {
 			continue
 		}
 		evaluateDefect(d, defect)
 	}
 	for d, defect := range defects {
 		if defect.TeamCoverageIdentityShape == nil && defect.LimitDisplacementShape == nil && defect.HotspotListBoundaryShape == nil && defect.TeamRepoSubsetShape == nil {
+			continue
+		}
+		evaluateDefect(d, defect)
+	}
+	// BaselineCopySumShape reads every other defect's final coverage of
+	// the collapsed element's own findings, so it runs last.
+	for d, defect := range defects {
+		if defect.BaselineCopySumShape == nil {
 			continue
 		}
 		evaluateDefect(d, defect)
@@ -2365,6 +2407,10 @@ func compareListByKey(baseline, candidate []any, path string, decl OrderInsensit
 
 	baselineByKey, baselineOK := index(baseline, "baseline")
 	candidateByKey, candidateOK := index(candidate, "candidate")
+	// A declared BaselineCopySumShape already collapsed the BASELINE
+	// side's copies of a key into one element before Compare compared
+	// anything (baselinecopysum.go); each such key reports its copies here.
+	copied := track.baselineCopies[decl.Path]
 	if !baselineOK || !candidateOK {
 		return nil
 	}
@@ -2398,6 +2444,14 @@ func compareListByKey(baseline, candidate []any, path string, decl OrderInsensit
 		// use, so it needs no special-casing in tieredPath at all. The
 		// human-readable key still appears in every finding's Detail.
 		elementPath := fmt.Sprintf("%s[%d]", path, i)
+		if n := copied.counts[key]; n > 1 {
+			findings = append(findings, Finding{
+				Kind:   FindingMismatch,
+				Path:   elementPath,
+				Detail: fmt.Sprintf("[key=%q] the baseline side carries %d elements under this key, compared as one element whose %q is their sum (ticket %s)", key, n, copied.sumField, copied.ticket),
+				Shape:  ShapeBaselineCopies,
+			})
+		}
 		baselineElement, inBaseline := baselineByKey[key]
 		candidateElement, inCandidate := candidateByKey[key]
 		if inBaseline != inCandidate {

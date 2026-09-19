@@ -189,7 +189,7 @@ func TestRegistryDescriptorsAreCompleteSortedDefensiveCopies(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 	descriptors := registry.Descriptors()
-	if len(descriptors) != 22 || descriptors[0].Kind != jobcontract.KindInvestmentMaterialize ||
+	if len(descriptors) != 23 || descriptors[0].Kind != jobcontract.KindInvestmentMaterialize ||
 		descriptors[1].Kind != jobcontract.KindDailyMetricsDispatch ||
 		descriptors[2].Kind != jobcontract.KindDailyMetricsFinalize ||
 		descriptors[3].Kind != jobcontract.KindDailyMetricsPartition ||
@@ -207,10 +207,11 @@ func TestRegistryDescriptorsAreCompleteSortedDefensiveCopies(t *testing.T) {
 		descriptors[15].Kind != jobcontract.KindSyncProviderUnit ||
 		descriptors[16].Kind != jobcontract.KindTeamAutoimport ||
 		descriptors[17].Kind != jobcontract.KindTeamRepoOwnershipDerivation ||
-		descriptors[18].Kind != jobcontract.KindHeartbeat ||
-		descriptors[19].Kind != jobcontract.KindRetentionCleanup ||
-		descriptors[20].Kind != jobcontract.KindSyncCoverageRefresh ||
-		descriptors[21].Kind != jobcontract.KindWorkGraphBuild {
+		descriptors[18].Kind != jobcontract.KindDimensionFold ||
+		descriptors[19].Kind != jobcontract.KindHeartbeat ||
+		descriptors[20].Kind != jobcontract.KindRetentionCleanup ||
+		descriptors[21].Kind != jobcontract.KindSyncCoverageRefresh ||
+		descriptors[22].Kind != jobcontract.KindWorkGraphBuild {
 		t.Fatalf("Descriptors() = %#v", descriptors)
 	}
 	// Every checked-in kind is executable, and no kind is Celery-routed any

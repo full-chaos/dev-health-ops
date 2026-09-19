@@ -69,6 +69,7 @@ internal/jobrescue	3
 internal/jobroute	23
 internal/jobruntime	57
 internal/migrationmatrix	25
+internal/jobs/dimensionfold	130
 internal/jobs/investment	62
 internal/jobs/investment/categorize	5
 internal/jobs/investment/chquery	458

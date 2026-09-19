@@ -116,6 +116,10 @@ EXPECTED_PACKAGES = {
     # hierarchycascade_integration_test.go -- proves the repo-hierarchy
     # cascade's Materializer.Run end-to-end wiring, and the sankeycoverage.go
     # repo-resolution expression it feeds, against a real ClickHouse.
+    # The dimension-table fold's OPTIMIZE FINAL and its single-partition and
+    # row-bound guard are properties of a real ClickHouse engine, run
+    # against the migrated repos and teams tables.
+    "internal/jobs/dimensionfold",
     "internal/jobs/investment",
     "internal/jobs/investment/categorize",
     "internal/jobs/investment/chquery",
@@ -524,9 +528,9 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # sankey each carry a real-ClickHouse recurrence guard for a
     # UInt64-aggregate-scanned-into-a-mismatched-Go-type class of defect --
     # all three count toward the total below.
-    # CURRENT TOTAL: 64 -- the one number to bump when a new
+    # CURRENT TOTAL: 65 -- the one number to bump when a new
     # -tags=integration package is added.
-    assert "64 package(s) discovered, 0 denylisted, 64 will run" in result.stdout
+    assert "65 package(s) discovered, 0 denylisted, 65 will run" in result.stdout
     # Raised 4 -> 6: at four shards each balanced "packages" shard's own
     # estimated test time (2191s) already exceeded the hosted job's
     # 25-minute (1500s) timeout-minutes cap before any setup/teardown
@@ -535,7 +539,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # comfortably under the cap -- see the weight-derived isolation check
     # below for how a future regression here is caught instead of silently
     # re-balanced.
-    assert "integration shard plan: 6 shard(s), 64 package(s)" in result.stdout
+    assert "integration shard plan: 6 shard(s), 65 package(s)" in result.stdout
 
     output = dict(
         line.split("=", maxsplit=1)
@@ -615,8 +619,8 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # and cmd/query-api/internal/sankey are each discovered and runnable
     # (see the "package(s) discovered" comment above), so each is one of
     # the packages this flattened set must contain.
-    # CURRENT TOTAL: 64 -- the one number to bump.
-    assert len(flattened) == len(set(flattened)) == 64
+    # CURRENT TOTAL: 65 -- the one number to bump.
+    assert len(flattened) == len(set(flattened)) == 65
     assert set(flattened) == EXPECTED_PACKAGES
 
     # internal/providersync's isolation in the lowest-numbered shard is a
@@ -2237,9 +2241,9 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
     # and cmd/query-api/internal/sankey are each discovered and none is
     # the providersync shard-1 package, so each counts toward the total
     # below (discovered-total minus one for that shard-1 package).
-    # CURRENT TOTAL: 63 (== discovered-total-minus-one -- keep this in
+    # CURRENT TOTAL: 64 (== discovered-total-minus-one -- keep this in
     # sync with the discovered-total literal above when either changes).
-    assert len(selected_packages) == len(set(selected_packages)) == 63
+    assert len(selected_packages) == len(set(selected_packages)) == 64
     assert set(selected_packages) == EXPECTED_PACKAGES - {PROVIDER_PACKAGE}
 
     selected_tests: list[str] = []

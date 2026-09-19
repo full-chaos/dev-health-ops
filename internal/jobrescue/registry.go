@@ -157,6 +157,8 @@ func registerKind(workers *river.Workers, kind string, descriptor jobruntime.Des
 		return add[jobruntime.RetentionCleanupArgs](workers, descriptor)
 	case jobcontract.KindSyncCoverageRefresh:
 		return add[jobruntime.SyncCoverageRefreshArgs](workers, descriptor)
+	case jobcontract.KindDimensionFold:
+		return add[jobruntime.DimensionFoldArgs](workers, descriptor)
 	case jobcontract.KindWorkGraphBuild:
 		return add[jobruntime.WorkGraphBuildArgs](workers, descriptor)
 	case syncdispatchcontract.KindDispatchSyncRun:

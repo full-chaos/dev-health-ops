@@ -2,7 +2,10 @@ package fixed
 
 import (
 	"fmt"
+	"os"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
@@ -17,6 +20,7 @@ const (
 	ProducerScheduledReports       = "scheduled_reports"
 	ProducerHeartbeat              = "heartbeat"
 	ProducerSyncCoverageRefresh    = "sync_coverage_refresh"
+	ProducerDimensionFold          = "dimension_fold"
 	ProducerRetentionCleanup       = "retention_cleanup"
 )
 
@@ -285,6 +289,22 @@ func checkedInSchedules() []Schedule {
 				"next tick, so replaying an older bucket adds no recovery value.",
 		},
 		{
+			ID:               dimensionFoldScheduleID,
+			Native:           true,
+			Cadence:          EveryInterval(defaultDimensionFoldInterval),
+			Timezone:         inventoryTimezone,
+			CatchUp:          CatchUpSkip,
+			UniquenessWindow: dimensionFoldUniquenessWindow,
+			TargetKind:       jobcontract.KindDimensionFold,
+			ProducerID:       ProducerDimensionFold,
+			MaxAttempts:      2,
+			AlertThreshold:   dimensionFoldAlertThreshold(defaultDimensionFoldInterval),
+			Rationale: "Folds superseded versions of the small dimension tables provider " +
+				"syncs rewrite, so readers without FINAL see one row per key within one " +
+				"interval. Only the newest boundary matters: a missed run is repaired by " +
+				"the next one.",
+		},
+		{
 			ID: "phone_home_heartbeat",
 			// The legacy Beat entry "phone-home-heartbeat" was deleted --
 			// Celery is retired; see RetiredBeatInventory. The compute body
@@ -425,6 +445,16 @@ func checkedInSchedules() []Schedule {
 // silently reduce coverage.
 func Schedules() ([]Schedule, error) {
 	schedules := checkedInSchedules()
+	interval, err := dimensionFoldInterval()
+	if err != nil {
+		return nil, err
+	}
+	for index := range schedules {
+		if schedules[index].ID == dimensionFoldScheduleID {
+			schedules[index].Cadence = EveryInterval(interval)
+			schedules[index].AlertThreshold = dimensionFoldAlertThreshold(interval)
+		}
+	}
 	seenID := make(map[string]struct{}, len(schedules))
 	seenBeat := make(map[string]struct{}, len(schedules))
 	for _, schedule := range schedules {
@@ -854,4 +884,46 @@ func ValidateInventory() error {
 		}
 	}
 	return nil
+}
+
+const (
+	dimensionFoldScheduleID = "dimension_fold"
+	// DimensionFoldIntervalEnv overrides the fold cadence in whole seconds.
+	DimensionFoldIntervalEnv     = "DIMENSION_FOLD_INTERVAL_SECONDS"
+	defaultDimensionFoldInterval = 60 * time.Second
+	minDimensionFoldInterval     = 10 * time.Second
+	maxDimensionFoldInterval     = time.Hour
+	// dimensionFoldUniquenessWindow holds the alert threshold for the longest
+	// accepted interval (three periods of one hour).
+	dimensionFoldUniquenessWindow = 4 * time.Hour
+)
+
+// dimensionFoldInterval reads DimensionFoldIntervalEnv. A value that is set
+// but cannot be honoured refuses the schedule table rather than falling back
+// to the default, so an operator never runs a cadence they did not choose.
+func dimensionFoldInterval() (time.Duration, error) {
+	raw, present := os.LookupEnv(DimensionFoldIntervalEnv)
+	if !present || strings.TrimSpace(raw) == "" {
+		return defaultDimensionFoldInterval, nil
+	}
+	seconds, err := strconv.Atoi(strings.TrimSpace(raw))
+	interval := time.Duration(seconds) * time.Second
+	if err != nil || interval < minDimensionFoldInterval || interval > maxDimensionFoldInterval {
+		return 0, fmt.Errorf(
+			"%w: %s must be a whole number of seconds between %d and %d",
+			ErrInvalidSchedule, DimensionFoldIntervalEnv,
+			int(minDimensionFoldInterval.Seconds()), int(maxDimensionFoldInterval.Seconds()),
+		)
+	}
+	return interval, nil
+}
+
+// dimensionFoldAlertThreshold reports the schedule missing after three
+// periods, and never sooner than ten minutes.
+func dimensionFoldAlertThreshold(interval time.Duration) time.Duration {
+	threshold := 3 * interval
+	if threshold < 10*time.Minute {
+		threshold = 10 * time.Minute
+	}
+	return threshold
 }

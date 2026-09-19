@@ -17,11 +17,9 @@ resources:
   # naive `kubectl apply -k` cannot serve against an unmigrated schema.
   - migrate-job.yaml
   - api.yaml
-  # go-workers.yaml (CHAOS-3052) is the only worker topology this tree
-  # renders -- the Celery worker.yaml/beat.yaml manifests it replaced were
-  # deleted in CHAOS-4195 (production stopped running them 2026-08-19,
-  # CHAOS-4026). Every group deploys at replicas: 0; scale the ones you need
-  # (see README.md).
+  # go-workers.yaml is the only worker topology this tree renders. Every
+  # group's Deployment declares replicas: 1; the sync-provider HPA keeps a
+  # floor of one (see README.md).
   - go-workers.yaml
   - cronjobs.yaml
   - ingress.yaml

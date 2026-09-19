@@ -333,7 +333,13 @@ def test_go_worker_groups_are_enabled_by_default_under_go_default_state() -> Non
         "RIVER_QUEUE_DATABASE_ROLE",
     ]
     for process in manifest["processes"]:
-        assert process["min_replicas"] == 0
+        # sync-provider keeps a floor of one replica: its queue carries
+        # system.dimension_fold, a scheduled job whose occurrences are dropped
+        # as stale once no consumer claims them, so a zero-replica window
+        # leaves the dimension tables unfolded with nothing to wake the pool.
+        # Every other process may idle at zero.
+        want_floor = 1 if process["name"] == "sync-provider" else 0
+        assert process["min_replicas"] == want_floor
         assert process["enabled_by_default"]
         assert process["desired_replicas"] == 1
     for process in manifest["processes"]:

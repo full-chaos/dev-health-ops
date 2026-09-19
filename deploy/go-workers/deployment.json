@@ -325,7 +325,7 @@
       "binary": "dev-health-worker",
       "runtime": "river",
       "enabled_by_default": true,
-      "min_replicas": 0,
+      "min_replicas": 1,
       "desired_replicas": 1,
       "max_replicas": 2,
       "shutdown_grace_seconds": 960,
@@ -339,7 +339,8 @@
         }
       ],
       "job_kinds": [
-        "sync.provider_unit"
+        "sync.provider_unit",
+        "system.dimension_fold"
       ],
       "queue_control_max_connections": 2,
       "domain_max_connections": 4,

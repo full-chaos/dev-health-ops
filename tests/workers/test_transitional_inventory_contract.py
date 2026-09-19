@@ -358,7 +358,8 @@ def test_inventory_is_non_empty_and_matches_audit_row_count():
     # and the sync.provider_unit registry_kind row, are also re-anchored to
     # their new lines -- untouched in surface, just shifted up by the
     # deletion. Net: 35 - 2 = 33.
-    assert inventory["row_count"] == 33
+    # One row owns the Go-only system.dimension_fold registry kind: 34.
+    assert inventory["row_count"] == 34
 
 
 def test_retired_beat_entries_are_evidenced_and_absent_from_source():

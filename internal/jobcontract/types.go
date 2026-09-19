@@ -20,6 +20,7 @@ const (
 	KindBillingNotification          = "operational.billing_notification"
 	KindWebhookDelivery              = "operational.webhook_delivery"
 	KindHeartbeat                    = "system.heartbeat"
+	KindDimensionFold                = "system.dimension_fold"
 	KindSyncCoverageRefresh          = "system.sync_coverage_refresh"
 	KindRetentionCleanup             = "system.retention_cleanup"
 	KindReportExecuteOnDemand        = "report.execute_on_demand"
@@ -120,6 +121,13 @@ type Envelope struct {
 	TraceParent string     `json:"trace_parent,omitempty"`
 	Domain      DomainLink `json:"domain"`
 	Payload     any        `json:"payload"`
+}
+
+// DimensionFoldPayload is the periodic fold of the small dimension tables
+// provider syncs rewrite. The worker reads the declared table list and every
+// guard from its own configuration; River carries only the due time.
+type DimensionFoldPayload struct {
+	ScheduledFor string `json:"scheduled_for"`
 }
 
 // HeartbeatPayload is the v1 payload for the unique periodic heartbeat pilot.
@@ -271,6 +279,13 @@ var definitions = map[string]contractDefinition{
 		DomainLink:        "schedule_occurrence",
 		OrganizationScope: "global",
 	},
+	KindDimensionFold: {
+		Kind:              KindDimensionFold,
+		CurrentVersion:    ContractVersionV1,
+		SupportedVersions: []int{ContractVersionV1},
+		DomainLink:        "schedule_occurrence",
+		OrganizationScope: "global",
+	},
 	KindSyncCoverageRefresh: {
 		Kind:              KindSyncCoverageRefresh,
 		CurrentVersion:    ContractVersionV1,
@@ -410,6 +425,15 @@ func Decode(kind string, data []byte) (Envelope, error) {
 		payload = value
 	case KindWebhookDelivery:
 		var value WebhookDeliveryPayload
+		if err := decodeStrict(wire.Payload, MaxEnvelopeBytes, &value); err != nil {
+			return Envelope{}, fmt.Errorf("decode %s payload: %w", kind, err)
+		}
+		if err := value.validate(); err != nil {
+			return Envelope{}, fmt.Errorf("validate %s payload: %w", kind, err)
+		}
+		payload = value
+	case KindDimensionFold:
+		var value DimensionFoldPayload
 		if err := decodeStrict(wire.Payload, MaxEnvelopeBytes, &value); err != nil {
 			return Envelope{}, fmt.Errorf("decode %s payload: %w", kind, err)
 		}
@@ -572,6 +596,8 @@ func MarshalCanonical(envelope Envelope) ([]byte, error) {
 		kind = KindWebhookDelivery
 	case HeartbeatPayload:
 		kind = KindHeartbeat
+	case DimensionFoldPayload:
+		kind = KindDimensionFold
 	case SyncCoverageRefreshPayload:
 		kind = KindSyncCoverageRefresh
 	case RetentionCleanupPayload:
@@ -671,6 +697,10 @@ func validateSafeID(name, value string, maxLength int) error {
 		return fmt.Errorf("%s must be a bounded safe identifier", name)
 	}
 	return nil
+}
+
+func (payload DimensionFoldPayload) validate() error {
+	return validateUTCTimestamp("scheduled_for", payload.ScheduledFor)
 }
 
 func (payload HeartbeatPayload) validate() error {

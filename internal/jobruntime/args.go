@@ -60,6 +60,21 @@ func (args HeartbeatArgs) ContractEnvelope() jobcontract.Envelope {
 	return args.envelope()
 }
 
+// DimensionFoldArgs is the River-facing typed form of system.dimension_fold.v1.
+type DimensionFoldArgs struct {
+	EnvelopeArgs[jobcontract.DimensionFoldPayload]
+}
+
+func (DimensionFoldArgs) Kind() string { return jobcontract.KindDimensionFold }
+
+func (DimensionFoldArgs) SupportedContractVersions() []int {
+	return []int{jobcontract.ContractVersionV1}
+}
+
+func (args DimensionFoldArgs) ContractEnvelope() jobcontract.Envelope {
+	return args.envelope()
+}
+
 // SyncCoverageRefreshArgs is the River-facing typed form of
 // system.sync_coverage_refresh.v1.
 type SyncCoverageRefreshArgs struct {

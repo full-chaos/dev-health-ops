@@ -322,6 +322,16 @@ KIND_LEDGER: dict[str, dict[str, str]] = {
         "state": "native",
         "ticket": "n/a — no gap",
     },
+    "system.dimension_fold": {
+        "producer": "`internal/jobs/dimensionfold/handler.go:42 (*Handler).Work`",
+        "trigger": "schedule",
+        "gate": "`descriptor.Executable()` (route=river, rollback=none); `go_only` in registry.json",
+        "writer": "`internal/jobs/dimensionfold/fold.go` (`OPTIMIZE TABLE ... FINAL`, single-partition and row-bound guard)",
+        "tables": "ClickHouse `repos`, `teams` (merge only; no rows written)",
+        "evidence": "argued \u2014 code read; Go-only kind with no Python producer or decoder",
+        "state": "native",
+        "ticket": "n/a \u2014 no gap",
+    },
     "system.sync_coverage_refresh": {
         "producer": "`internal/jobs/synccoverage/handler.go:34 (*Handler).Work`",
         "trigger": "schedule",

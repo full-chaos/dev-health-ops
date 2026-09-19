@@ -118,6 +118,36 @@ func (producer SyncCoverageRefreshProducer) Produce(
 	return Outcome{Requests: []JobRequest{{Kind: jobcontract.KindSyncCoverageRefresh, Envelope: envelope}}}, nil
 }
 
+// DimensionFoldProducer emits one fold of the declared dimension tables. The
+// worker owns the table list and every guard, so the envelope carries only the
+// due time.
+type DimensionFoldProducer struct{}
+
+// NewDimensionFoldProducer constructs the dimension-fold producer.
+func NewDimensionFoldProducer() Producer { return DimensionFoldProducer{} }
+
+func (DimensionFoldProducer) ID() string { return ProducerDimensionFold }
+
+func (DimensionFoldProducer) Produce(
+	_ context.Context,
+	_ pgx.Tx,
+	schedule Schedule,
+	occurrence Occurrence,
+) (Outcome, error) {
+	scheduledFor := occurrence.ScheduledFor.UTC().Format(time.RFC3339)
+	envelope := jobcontract.Envelope{
+		ContractVersion: jobcontract.ContractVersionV1,
+		CorrelationID:   "fixed-schedule:" + schedule.ID + ":" + scheduledFor,
+		IdempotencyKey:  "dimension-fold:" + scheduledFor,
+		Domain: jobcontract.DomainLink{
+			Type: "schedule_occurrence",
+			ID:   OccurrenceDomainID(occurrence),
+		},
+		Payload: jobcontract.DimensionFoldPayload{ScheduledFor: scheduledFor},
+	}
+	return Outcome{Requests: []JobRequest{{Kind: jobcontract.KindDimensionFold, Envelope: envelope}}}, nil
+}
+
 // RetentionSpec binds one schedule to one bounded deletion scope.
 type RetentionSpec struct {
 	// Policy is the checked-in retention policy value.

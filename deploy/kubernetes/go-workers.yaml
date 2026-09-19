@@ -351,7 +351,7 @@ kind: HorizontalPodAutoscaler
 metadata: {name: dev-health-go-worker-sync-provider, namespace: dev-health}
 spec:
   scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: dev-health-go-worker-sync-provider}
-  minReplicas: 0
+  minReplicas: 1
   maxReplicas: 2
   metrics:
     - type: External

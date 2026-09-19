@@ -196,15 +196,16 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # same shape as the featureFlagEvents entry above -- a fake RowScanner
     # cannot reproduce the real driver's own type-conversion refusal --
     # and both count toward the total below.
-    # CURRENT TOTAL: 64. Adding one -tags=integration package bumps every
+    # CURRENT TOTAL: 65. Adding one -tags=integration package bumps every
     # literal below by +1 -- this is the one number to change; the
     # narrative above is for someone auditing history, not for the bump.
-    assert "64 package(s) discovered, 0 denylisted, 64 will run" in result.stdout
+    assert "65 package(s) discovered, 0 denylisted, 65 will run" in result.stdout
     # Name the package explicitly (SET MEMBERSHIP), not just the count --
     # a bare count is exactly what let CHAOS-4643's own literal drift
     # 31 -> 32 -> 33 unnoticed.
     assert "  RUN  internal/jobs/investment" in result.stdout
     assert "  RUN  internal/goapiproof" in result.stdout
+    assert "  RUN  internal/jobs/dimensionfold" in result.stdout
     assert "  RUN  internal/platform/config" in result.stdout
     assert "  RUN  cmd/query-api/internal/analytics" in result.stdout
     assert "  RUN  cmd/query-api/internal/featureflags" in result.stdout

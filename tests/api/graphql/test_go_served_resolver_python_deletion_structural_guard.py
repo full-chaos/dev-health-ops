@@ -112,6 +112,14 @@ DELETED_GO_SERVED_RESOLVER_MODULES: dict[str, Path] = {
     / "graphql"
     / "resolvers"
     / "review_edges.py",
+    # featureFlags and featureFlagEvents.
+    "feature flags resolver": ROOT
+    / "src"
+    / "dev_health_ops"
+    / "api"
+    / "graphql"
+    / "resolvers"
+    / "feature_flags.py",
     # The operating review computation; its only importer was the resolver.
     "operating review computation": ROOT
     / "src"
@@ -157,6 +165,8 @@ SDL_LOAD_BEARING_SYMBOLS: dict[str, frozenset[str]] = {
             "throughput_forecast",
             "operating_review",
             "review_edges",
+            "feature_flags",
+            "feature_flag_events",
         }
     ),
     "inputs.py": frozenset(
@@ -181,6 +191,10 @@ SDL_LOAD_BEARING_SYMBOLS: dict[str, frozenset[str]] = {
             "OperatingReviewSection",
             "OperatingReviewMetric",
             "OperatingReviewDelta",
+            "FeatureFlagItem",
+            "FeatureFlagRegistryResult",
+            "FeatureFlagEventItem",
+            "FeatureFlagEventsResult",
         }
     ),
 }

@@ -57,14 +57,30 @@ var preparedRouteRowTypes = map[string][]any{
 	"operational_services":                    {gitLabOperationalServiceRow{}},
 	"operational_service_repository_mappings": {gitLabServiceRepositoryMappingRow{}},
 	"operational_incidents":                   {jiraIncidentRow{}},
+	"worklogs":                                {jiraWorklogRow{}},
 }
 
 // preparedRouteDroppedKeys are the row keys the projection drops: keys a
 // route builds that no sink writes or reads. A change here is a change to what
 // a prepared route persists.
 var preparedRouteDroppedKeys = map[string][]string{
-	"work_item_transitions": {"provider"},
-	"work_items":            {"description", "due_at", "priority_raw", "service_class"},
+	"work_items": {"description", "due_at", "priority_raw", "service_class"},
+}
+
+// preparedRouteProviderRowTypes are the row types of a provider whose sink
+// for a destination decodes its own type with its own INSERT.
+var preparedRouteProviderRowTypes = map[string]map[string][]any{
+	"linear": {
+		"work_items":            {linearWorkItemRow{}},
+		"work_item_transitions": {linearWorkItemTransitionRow{}},
+	},
+}
+
+func preparedRouteRowTypesFor(provider, destination string) []any {
+	if rows, ok := preparedRouteProviderRowTypes[provider][destination]; ok {
+		return rows
+	}
+	return preparedRouteRowTypes[destination]
 }
 
 func jsonTagNames(typ reflect.Type) []string {
@@ -87,6 +103,8 @@ func jsonTagNames(typ reflect.Type) []string {
 	return names
 }
 
+// enrolledPreparedRouteDestinations returns every enrolled provider and
+// destination pair as "provider/destination".
 func enrolledPreparedRouteDestinations(t *testing.T) []string {
 	t.Helper()
 	seen := map[string]bool{}
@@ -97,7 +115,7 @@ func enrolledPreparedRouteDestinations(t *testing.T) []string {
 				continue
 			}
 			for _, destination := range destinations {
-				seen[destination] = true
+				seen[provider+"/"+destination] = true
 			}
 		}
 	}
@@ -109,18 +127,19 @@ func TestEveryEnrolledDestinationProjectsOntoItsSinkInsert(t *testing.T) {
 	if len(destinations) == 0 {
 		t.Fatal("no enrolled destinations")
 	}
-	for _, destination := range destinations {
-		keys, ok := preparedRouteColumns(destination)
+	for _, pair := range destinations {
+		provider, destination, _ := strings.Cut(pair, "/")
+		keys, ok := preparedRouteColumns(provider, destination)
 		if !ok {
-			t.Fatalf("enrolled destination %q has no INSERT to project onto", destination)
+			t.Fatalf("enrolled destination %q has no INSERT to project onto", pair)
 		}
 		keys = maps.Clone(keys)
 		for key := range preparedRouteSinkReadKeys[destination] {
 			keys[key] = true
 		}
-		rowTypes := preparedRouteRowTypes[destination]
+		rowTypes := preparedRouteRowTypesFor(provider, destination)
 		if len(rowTypes) == 0 {
-			t.Fatalf("enrolled destination %q has no pinned row type", destination)
+			t.Fatalf("enrolled destination %q has no pinned row type", pair)
 		}
 		for _, rowType := range rowTypes {
 			var dropped []string
@@ -131,7 +150,7 @@ func TestEveryEnrolledDestinationProjectsOntoItsSinkInsert(t *testing.T) {
 			}
 			sort.Strings(dropped)
 			if strings.Join(dropped, ",") != strings.Join(preparedRouteDroppedKeys[destination], ",") {
-				t.Errorf("%s %T: projection drops %v, pinned %v", destination, rowType, dropped, preparedRouteDroppedKeys[destination])
+				t.Errorf("%s %T: projection drops %v, pinned %v", pair, rowType, dropped, preparedRouteDroppedKeys[destination])
 			}
 		}
 	}
@@ -142,6 +161,7 @@ func TestSinkReadKeysAreRouteSignalsNotText(t *testing.T) {
 		"deployments":                 {"lifecycle_lookup_failed": reflect.Bool, "pull_request_lookup_failed": reflect.Bool},
 		"git_pull_requests":           {"reviews_lookup_failed": reflect.Bool},
 		"work_item_team_attributions": {"ownership_reason": reflect.String, "priority": reflect.Int},
+		"work_item_transitions":       {"provider": reflect.String},
 	}
 	kinds := map[sinkReadKind]reflect.Kind{sinkReadBool: reflect.Bool, sinkReadInt: reflect.Int, sinkReadEnum: reflect.String}
 	if len(preparedRouteSinkReadKeys) != len(allowed) {
@@ -151,10 +171,10 @@ func TestSinkReadKeysAreRouteSignalsNotText(t *testing.T) {
 		t.Fatal("no sink-read keys")
 	}
 	for destination, keys := range preparedRouteSinkReadKeys {
-		if len(preparedRouteRowTypes[destination]) != 1 {
-			t.Fatalf("%s: sink-read keys need exactly one pinned row type", destination)
+		rowTypes := slices.Clone(preparedRouteRowTypes[destination])
+		for provider := range preparedRouteProviderRowTypes {
+			rowTypes = append(rowTypes, preparedRouteProviderRowTypes[provider][destination]...)
 		}
-		rowType := reflect.TypeOf(preparedRouteRowTypes[destination][0])
 		if len(keys) == 0 {
 			t.Fatalf("%s: empty sink-read list", destination)
 		}
@@ -166,15 +186,18 @@ func TestSinkReadKeysAreRouteSignalsNotText(t *testing.T) {
 			if (signal.kind == sinkReadEnum) != (len(signal.values) > 0) {
 				t.Fatalf("%s: sink-read key %q: a string signal needs a closed value set, and only a string signal has one", destination, key)
 			}
-			found := false
-			for index := range rowType.NumField() {
-				field := rowType.Field(index)
-				if name, _, _ := strings.Cut(field.Tag.Get("json"), ","); name == key {
-					found = field.Type.Kind() == want
+			for _, row := range rowTypes {
+				rowType := reflect.TypeOf(row)
+				found := false
+				for index := range rowType.NumField() {
+					field := rowType.Field(index)
+					if name, _, _ := strings.Cut(field.Tag.Get("json"), ","); name == key {
+						found = field.Type.Kind() == want
+					}
 				}
-			}
-			if !found {
-				t.Fatalf("%s: sink-read key %q is not a %s field of %s", destination, key, want, rowType)
+				if !found {
+					t.Fatalf("%s: sink-read key %q is not a %s field of %s", destination, key, want, rowType)
+				}
 			}
 		}
 	}
@@ -192,6 +215,7 @@ func TestProjectionStatementsAreTheSinksOwnInserts(t *testing.T) {
 		t.Fatalf("load: %v", err)
 	}
 	mapped := map[string]string{}
+	providerMapped := map[string]map[string]string{}
 	type writer struct{ arguments, indexes, calls map[string]bool }
 	var writers []writer
 	indexesByFunction := map[string]map[string]bool{}
@@ -202,16 +226,37 @@ func TestProjectionStatementsAreTheSinksOwnInserts(t *testing.T) {
 				case *ast.GenDecl:
 					for _, spec := range typed.Specs {
 						value, ok := spec.(*ast.ValueSpec)
-						if !ok || len(value.Names) != 1 || value.Names[0].Name != "preparedRouteInsertStatements" || len(value.Values) != 1 {
+						if !ok || len(value.Names) != 1 || len(value.Values) != 1 {
 							continue
 						}
 						literal, ok := value.Values[0].(*ast.CompositeLit)
 						if !ok {
 							continue
 						}
-						for _, element := range literal.Elts {
-							if pair, ok := element.(*ast.KeyValueExpr); ok {
-								mapped[strings.Trim(types.ExprString(pair.Key), `"`)] = types.ExprString(pair.Value)
+						switch value.Names[0].Name {
+						case "preparedRouteInsertStatements":
+							for _, element := range literal.Elts {
+								if pair, ok := element.(*ast.KeyValueExpr); ok {
+									mapped[strings.Trim(types.ExprString(pair.Key), `"`)] = types.ExprString(pair.Value)
+								}
+							}
+						case "preparedRouteProviderInsertStatements":
+							for _, element := range literal.Elts {
+								outer, ok := element.(*ast.KeyValueExpr)
+								if !ok {
+									continue
+								}
+								inner, ok := outer.Value.(*ast.CompositeLit)
+								if !ok {
+									continue
+								}
+								provider := strings.Trim(types.ExprString(outer.Key), `"`)
+								providerMapped[provider] = map[string]string{}
+								for _, entry := range inner.Elts {
+									if pair, ok := entry.(*ast.KeyValueExpr); ok {
+										providerMapped[provider][strings.Trim(types.ExprString(pair.Key), `"`)] = types.ExprString(pair.Value)
+									}
+								}
 							}
 						}
 					}
@@ -266,8 +311,35 @@ func TestProjectionStatementsAreTheSinksOwnInserts(t *testing.T) {
 		}
 		return false
 	}
+	if len(providerMapped) != len(preparedRouteProviderInsertStatements) {
+		t.Fatalf("provider statements=%d want %d", len(providerMapped), len(preparedRouteProviderInsertStatements))
+	}
+	for provider, destinations := range preparedRouteProviderRowTypes {
+		for destination := range destinations {
+			if _, ok := providerMapped[provider][destination]; !ok {
+				t.Errorf("%s/%s: a provider row type is pinned without its own INSERT", provider, destination)
+			}
+		}
+	}
+	type ownedStatement struct {
+		destination, statement string
+		rows                   []any
+	}
+	var owned []ownedStatement
 	for destination, statement := range mapped {
-		for _, row := range preparedRouteRowTypes[destination] {
+		owned = append(owned, ownedStatement{destination, statement, preparedRouteRowTypes[destination]})
+	}
+	for provider, statements := range providerMapped {
+		for destination, statement := range statements {
+			owned = append(owned, ownedStatement{provider + "/" + destination, statement, preparedRouteProviderRowTypes[provider][destination]})
+		}
+	}
+	for _, entry := range owned {
+		destination, statement := entry.destination, entry.statement
+		if len(entry.rows) == 0 {
+			t.Errorf("%s: no pinned row type", destination)
+		}
+		for _, row := range entry.rows {
 			rowType := reflect.TypeOf(row)
 			rowName := rowType.Name()
 			if strings.HasSuffix(rowType.PkgPath(), "/projectmembership") {
@@ -285,7 +357,7 @@ func TestProjectionStatementsAreTheSinksOwnInserts(t *testing.T) {
 }
 
 func TestProjectionFollowsTheInsertColumnList(t *testing.T) {
-	keys, ok := preparedRouteColumns("work_items")
+	keys, ok := preparedRouteColumns("github", "work_items")
 	if !ok || keys["description"] || !keys["title"] || !keys["org_id"] {
 		t.Fatalf("work_items keys=%v", keys)
 	}
@@ -353,7 +425,7 @@ func TestPreparedRouteCommitsAndSnapshotsOnlyTheProjection(t *testing.T) {
 	if len(ledger.preparedSnapshot) == 0 || strings.Contains(string(ledger.preparedSnapshot), "provider-text-not-written") {
 		t.Fatalf("snapshot=%s, want a snapshot without the dropped key", ledger.preparedSnapshot)
 	}
-	projected, err := projectPreparedRouteEffects(batch.Effects)
+	projected, err := projectPreparedRouteEffects(claim.Provider, batch.Effects)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -369,7 +441,7 @@ func TestSnapshotRefusesAnUnprojectedRow(t *testing.T) {
 	if _, _, err := encodePreparedRouteManifest(claim, batch, ShadowComparison{Match: true}, now); !errors.Is(err, ErrEffectRecoveryUnsafe) {
 		t.Fatalf("err=%v, want a refusal of a row the sink does not write", err)
 	}
-	projected, err := projectPreparedRouteEffects(batch.Effects)
+	projected, err := projectPreparedRouteEffects(claim.Provider, batch.Effects)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -388,7 +460,7 @@ func TestProjectionKeepsMembershipRejections(t *testing.T) {
 			batch.Effects[index].MembershipRejections = []json.RawMessage{rejection}
 		}
 	}
-	projected, err := projectPreparedRouteEffects(batch.Effects)
+	projected, err := projectPreparedRouteEffects(claim.Provider, batch.Effects)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -430,6 +502,8 @@ func TestProjectionRefusesASignalOutsideItsKindOrSet(t *testing.T) {
 		{"deployments", map[string]any{"lifecycle_lookup_failed": true}, true},
 		{"deployments", map[string]any{"lifecycle_lookup_failed": "provider text"}, false},
 		{"git_pull_requests", map[string]any{"reviews_lookup_failed": map[string]any{"x": 1}}, false},
+		{"work_item_transitions", map[string]any{"provider": "linear"}, true},
+		{"work_item_transitions", map[string]any{"provider": "provider text"}, false},
 		{"deployments", map[string]any{"lifecycle_lookup_failed": nil}, false},
 		{"work_item_team_attributions", map[string]any{"priority": nil}, false},
 		{"work_item_team_attributions", map[string]any{"ownership_reason": nil}, false},
@@ -438,7 +512,7 @@ func TestProjectionRefusesASignalOutsideItsKindOrSet(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, err = projectPreparedRouteEffects([]EffectBatch{effect})
+		_, err = projectPreparedRouteEffects("github", []EffectBatch{effect})
 		if (err == nil) != cell.admitted {
 			t.Errorf("%s %v err=%v admitted=%v", cell.destination, cell.row, err, cell.admitted)
 		}
@@ -471,7 +545,7 @@ func TestProjectionKeepsOneAdmittedValueForADuplicatedKey(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		projected, err := projectPreparedRouteEffects([]EffectBatch{effect})
+		projected, err := projectPreparedRouteEffects("github", []EffectBatch{effect})
 		if (err == nil) != cell.admitted {
 			t.Fatalf("row %s err=%v admitted=%v", cell.row, err, cell.admitted)
 		}
@@ -494,7 +568,7 @@ func TestProjectionRefusesADestinationWithNoInsert(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := projectPreparedRouteEffects([]EffectBatch{effect}); !errors.Is(err, ErrEffectRecoveryUnsafe) {
+	if _, err := projectPreparedRouteEffects("github", []EffectBatch{effect}); !errors.Is(err, ErrEffectRecoveryUnsafe) {
 		t.Fatalf("err=%v", err)
 	}
 }
@@ -515,7 +589,7 @@ func TestLedgerWithoutSnapshotFinishesOnTheRowsItWasWrittenWith(t *testing.T) {
 			batch := deploymentsBatchWithRouteText(t, claim)
 			effects := batch.Effects
 			if !cell.unprojected {
-				projected, err := projectPreparedRouteEffects(batch.Effects)
+				projected, err := projectPreparedRouteEffects(claim.Provider, batch.Effects)
 				if err != nil {
 					t.Fatal(err)
 				}

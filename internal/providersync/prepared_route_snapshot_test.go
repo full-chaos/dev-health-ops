@@ -649,7 +649,7 @@ func TestPreparedManifestRecoveryIsRefusedOutsideItsRouteList(t *testing.T) {
 	// Execute refuses at its first check without ever reaching this guard --
 	// which is how R18 survived a version of this test that used it.
 	for name, pair := range map[string]struct{ provider, dataset string }{
-		"another provider": {provider: "linear", dataset: "work-items"},
+		"another provider": {provider: "gitlab", dataset: "blame"},
 		"another dataset":  {provider: "github", dataset: "cicd"},
 	} {
 		t.Run(name, func(t *testing.T) {

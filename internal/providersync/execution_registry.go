@@ -286,12 +286,14 @@ func Descriptor(
 		descriptor.RouteReady = true
 		if dataset == "work-items" {
 			descriptor.Plannable = true
+			descriptor.PreparedManifestRecovery = true
 		}
 	case provider == "gitlab" && workItemAlias:
 		descriptor.Destinations = workItemRouteDestinations()
 		descriptor.RouteReady = true
 		if dataset == "work-items" {
 			descriptor.Plannable = true
+			descriptor.PreparedManifestRecovery = true
 		}
 	case provider == "jira" && workItemAlias:
 		// CHAOS-4193: same addition as linear, immediately above.
@@ -300,6 +302,7 @@ func Descriptor(
 		descriptor.RouteReady = true
 		if dataset == "work-items" {
 			descriptor.Plannable = true
+			descriptor.PreparedManifestRecovery = true
 		}
 	case provider == "jira" && dataset == "incidents":
 		descriptor.Destinations = []string{"operational_incidents"}

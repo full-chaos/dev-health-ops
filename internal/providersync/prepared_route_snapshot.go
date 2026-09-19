@@ -143,7 +143,7 @@ func encodePreparedRouteManifest(
 	}
 	// A snapshot row holds only what its sink writes or reads: the route's
 	// effects are projected before the ledger digest is taken.
-	if !preparedRouteRowsAreProjected(batch.Effects) {
+	if !preparedRouteRowsAreProjected(claim.Provider, batch.Effects) {
 		return nil, PreparedRouteSnapshotReference{}, ErrEffectRecoveryUnsafe
 	}
 	storedResult := batch.Result
@@ -367,7 +367,8 @@ func preparedManifestRouteDestinations(provider, dataset string) ([]string, bool
 		(provider == "github" || provider == "gitlab") && dataset == "prs",
 		(provider == "github" || provider == "gitlab") && preparedCodeFamilyDataset(dataset),
 		(provider == "gitlab" || provider == "launchdarkly") && dataset == "feature-flags",
-		(provider == "gitlab" || provider == "jira") && dataset == "incidents":
+		(provider == "gitlab" || provider == "jira") && dataset == "incidents",
+		(provider == "gitlab" || provider == "jira" || provider == "linear") && dataset == "work-items":
 	default:
 		return nil, false
 	}

@@ -417,46 +417,57 @@ func Descriptor(
 		descriptor.Destinations = []string{"operational_services", "operational_service_repository_mappings"}
 		descriptor.RouteReady = true
 		descriptor.Plannable = true
+		descriptor.PreparedManifestRecovery = true
 	case provider == "pagerduty" && dataset == "business-services":
 		descriptor.Destinations = []string{"operational_services"}
 		descriptor.RouteReady = true
 		descriptor.Plannable = true
+		descriptor.PreparedManifestRecovery = true
 	case provider == "pagerduty" && dataset == "escalation-policies":
 		descriptor.Destinations = []string{"operational_escalation_policies"}
 		descriptor.RouteReady = true
 		descriptor.Plannable = true
+		descriptor.PreparedManifestRecovery = true
 	case provider == "pagerduty" && dataset == "schedules":
 		descriptor.Destinations = []string{"operational_on_call_schedules"}
 		descriptor.RouteReady = true
 		descriptor.Plannable = true
+		descriptor.PreparedManifestRecovery = true
 	case provider == "pagerduty" && dataset == "on-calls":
 		descriptor.Destinations = []string{"operational_on_call_assignments"}
 		descriptor.RouteReady = true
 		descriptor.Plannable = true
+		descriptor.PreparedManifestRecovery = true
 	case provider == "pagerduty" && dataset == "users":
 		descriptor.Destinations = []string{"operational_users"}
 		descriptor.RouteReady = true
 		descriptor.Plannable = true
+		descriptor.PreparedManifestRecovery = true
 	case provider == "pagerduty" && dataset == "teams":
 		descriptor.Destinations = []string{"operational_teams"}
 		descriptor.RouteReady = true
 		descriptor.Plannable = true
+		descriptor.PreparedManifestRecovery = true
 	case provider == "pagerduty" && dataset == "incidents":
 		descriptor.Destinations = []string{"operational_incidents"}
 		descriptor.RouteReady = true
 		descriptor.Plannable = true
+		descriptor.PreparedManifestRecovery = true
 	case provider == "pagerduty" && dataset == "incident-alerts":
 		descriptor.Destinations = []string{"operational_alerts"}
 		descriptor.RouteReady = true
 		descriptor.Plannable = true
+		descriptor.PreparedManifestRecovery = true
 	case provider == "pagerduty" && dataset == "incident-log-entries":
 		descriptor.Destinations = []string{"operational_incident_timeline_events"}
 		descriptor.RouteReady = true
 		descriptor.Plannable = true
+		descriptor.PreparedManifestRecovery = true
 	case provider == "pagerduty" && dataset == "incident-notes":
 		descriptor.Destinations = []string{"operational_incident_notes"}
 		descriptor.RouteReady = true
 		descriptor.Plannable = true
+		descriptor.PreparedManifestRecovery = true
 	case provider == "github" && dataset == "prs":
 		// The PR-social route mirrors Python's one
 		// _sync_github_prs_to_store_async boundary: REST PR detail (including

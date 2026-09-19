@@ -368,7 +368,8 @@ func preparedManifestRouteDestinations(provider, dataset string) ([]string, bool
 		(provider == "github" || provider == "gitlab") && preparedCodeFamilyDataset(dataset),
 		(provider == "gitlab" || provider == "launchdarkly") && dataset == "feature-flags",
 		(provider == "gitlab" || provider == "jira") && dataset == "incidents",
-		(provider == "gitlab" || provider == "jira" || provider == "linear") && dataset == "work-items":
+		(provider == "gitlab" || provider == "jira" || provider == "linear") && dataset == "work-items",
+		provider == "pagerduty" && preparedPagerDutyDataset(dataset):
 	default:
 		return nil, false
 	}
@@ -384,6 +385,18 @@ func preparedManifestRouteDestinations(provider, dataset string) ([]string, bool
 func preparedCodeFamilyDataset(dataset string) bool {
 	switch dataset {
 	case "commit-stats", "commits", "files", "repo-metadata", "security":
+		return true
+	default:
+		return false
+	}
+}
+
+// preparedPagerDutyDataset reports whether a PagerDuty dataset is one of the
+// routes enrolled in prepared-snapshot recovery: every plannable one.
+func preparedPagerDutyDataset(dataset string) bool {
+	switch dataset {
+	case "business-services", "escalation-policies", "incident-alerts", "incident-log-entries",
+		"incident-notes", "incidents", "on-calls", "schedules", "services", "teams", "users":
 		return true
 	default:
 		return false

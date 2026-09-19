@@ -151,13 +151,38 @@ func insertStatementColumns(statement string) []string {
 }
 
 // preparedRouteStatement returns the INSERT a provider's sink for a
-// destination writes with.
+// destination writes with; for an ordering-contract table, the parenthesised
+// contract-2 column list its sink builds the INSERT from.
 func preparedRouteStatement(provider, destination string) (string, bool) {
 	if statement, ok := preparedRouteProviderInsertStatements[provider][destination]; ok {
 		return statement, true
 	}
+	if columns, ok := preparedRouteProviderOrderedColumns[provider][destination]; ok {
+		return "(" + operationalCurrentContract.columns(columns) + ")", true
+	}
 	statement, ok := preparedRouteInsertStatements[destination]
 	return statement, ok
+}
+
+// preparedRouteProviderOrderedColumns names, for a provider whose sinks write
+// an operational table through its ordering contract, the base column list the
+// sink passes to that contract. The projection is the contract-2 statement:
+// the base columns plus the four ordering columns, all of which the route's
+// rows carry.
+var preparedRouteProviderOrderedColumns = map[string]map[string]string{
+	"pagerduty": {
+		"operational_services":                    pagerDutyServicesLegacyServiceColumns,
+		"operational_service_repository_mappings": pagerDutyServicesLegacyMappingColumns,
+		"operational_escalation_policies":         pagerDutyEscalationPoliciesColumns,
+		"operational_incidents":                   pagerDutyIncidentColumns,
+		"operational_alerts":                      pagerDutyAlertColumns,
+		"operational_incident_timeline_events":    pagerDutyLogEntryColumns,
+		"operational_incident_notes":              pagerDutyNoteColumns,
+		"operational_on_call_assignments":         pagerDutyOnCallsColumns,
+		"operational_on_call_schedules":           pagerDutySchedulesColumns,
+		"operational_teams":                       pagerDutyTeamsColumns,
+		"operational_users":                       pagerDutyUsersColumns,
+	},
 }
 
 // preparedRouteColumns returns the columns a provider's sink for a

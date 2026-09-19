@@ -133,14 +133,15 @@ func countingCredential(calls *atomic.Int32) *goapiproof.Credential {
 }
 
 // mintOnCall returns a baseline credential that mints at once on every
-// call except the nth, where it waits for its request's context to end
-// and then either returns a token (the deadline passes between the
-// candidate leg and the baseline leg's send) or the context's error (the
-// deadline passes during the mint).
-func mintOnCall(n int32, returnToken bool) *goapiproof.Credential {
+// call except the nth, where it calls reached, waits for its request's
+// context to end and then either returns a token (the run ends between
+// the candidate leg and the baseline leg's send) or the context's error
+// (the run ends during the mint).
+func mintOnCall(n int32, returnToken bool, reached func()) *goapiproof.Credential {
 	var calls atomic.Int32
 	return goapiproof.MintedCredential("Authorization", "baseline bearer", time.Nanosecond, func(ctx context.Context) (string, error) {
 		if calls.Add(1) == n {
+			reached()
 			<-ctx.Done()
 			if !returnToken {
 				return "", ctx.Err()
@@ -153,8 +154,8 @@ func mintOnCall(n int32, returnToken bool) *goapiproof.Credential {
 // stallTheRunsLastLeg holds, until its request ends, the edge-credential
 // leg of the last request in RESTRunOrder -- the last leg a complete run
 // sends -- recognised by the baseline credential's token on the candidate
-// plane and by that request's own body.
-func stallTheRunsLastLeg(t *testing.T, edgeToken string) func(http.Handler) http.Handler {
+// plane and by that request's own body -- calling reached as it arrives.
+func stallTheRunsLastLeg(t *testing.T, edgeToken string, reached func()) func(http.Handler) http.Handler {
 	t.Helper()
 	order := goapiproof.RESTRunOrder()
 	last := order[len(order)-1]
@@ -175,6 +176,7 @@ func stallTheRunsLastLeg(t *testing.T, edgeToken string) func(http.Handler) http
 				_ = json.Unmarshal(raw, &got)
 				_ = json.Unmarshal(want, &wanted)
 				if reflect.DeepEqual(got, wanted) {
+					reached()
 					<-r.Context().Done()
 					return
 				}
@@ -193,10 +195,15 @@ func stallTheRunsLastLeg(t *testing.T, edgeToken string) func(http.Handler) http
 // between a case's candidate and baseline legs, during a credential
 // mint, and after the last case; plus a signal mid-leg.
 func TestRunDeadlineEveryPointAtWhichItCanStrike(t *testing.T) {
-	home := &stalledRequest{method: http.MethodGet, path: "/api/v1/home", rawQuery: ""}
-	short := func() (context.Context, context.CancelFunc) {
-		return context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	// Every cell ends its run at the event it names -- the leg reaching
+	// its server, the mint being asked for -- with the error the run's own
+	// deadline or a signal carries; none waits on a clock, so a slow host
+	// cannot move the end to another point of the run.
+	stallHome := func(ctx *endableContext, err error) *stalledRequest {
+		return &stalledRequest{method: http.MethodGet, path: "/api/v1/home", rawQuery: "", reached: func() { ctx.end(err) }}
 	}
+	endsAt := func(ctx *endableContext, err error) func() { return func() { ctx.end(err) } }
+	const runDeadline = 1500 * time.Millisecond
 	cells := []struct {
 		name      string
 		run       func(t *testing.T) deadlineRun
@@ -204,55 +211,43 @@ func TestRunDeadlineEveryPointAtWhichItCanStrike(t *testing.T) {
 		wantCut   string
 	}{
 		{"before the first case", func(t *testing.T) deadlineRun {
-			ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
-			defer cancel()
+			ctx := newEndableContext()
+			ctx.end(context.DeadlineExceeded)
 			return runUnderDeadline(t, ctx, nil, false, staticCredentialForTest(), time.Nanosecond)
 		}, partialCauseRunDeadline, ""},
 		{"mid candidate leg", func(t *testing.T) deadlineRun {
-			ctx, cancel := short()
-			defer cancel()
-			return runUnderDeadline(t, ctx, home, true, staticCredentialForTest(), 1500*time.Millisecond)
+			ctx := newEndableContext()
+			return runUnderDeadline(t, ctx, stallHome(ctx, context.DeadlineExceeded), true, staticCredentialForTest(), runDeadline)
 		}, partialCauseRunDeadline, goapiproof.RESTRefusalCandidateLegCutByRunDeadline},
 		{"mid baseline leg", func(t *testing.T) deadlineRun {
-			ctx, cancel := short()
-			defer cancel()
-			return runUnderDeadline(t, ctx, home, false, staticCredentialForTest(), 1500*time.Millisecond)
+			ctx := newEndableContext()
+			return runUnderDeadline(t, ctx, stallHome(ctx, context.DeadlineExceeded), false, staticCredentialForTest(), runDeadline)
 		}, partialCauseRunDeadline, goapiproof.RESTRefusalBaselineLegCutByRunDeadline},
 		{"between a case's candidate and baseline legs", func(t *testing.T) deadlineRun {
-			ctx, cancel := short()
-			defer cancel()
-			return runUnderDeadline(t, ctx, nil, false, mintOnCall(5, true), 1500*time.Millisecond)
+			ctx := newEndableContext()
+			return runUnderDeadline(t, ctx, nil, false, mintOnCall(5, true, endsAt(ctx, context.DeadlineExceeded)), runDeadline)
 		}, partialCauseRunDeadline, goapiproof.RESTRefusalBaselineLegCutByRunDeadline},
 		{"during a credential mint", func(t *testing.T) deadlineRun {
-			ctx, cancel := short()
-			defer cancel()
-			return runUnderDeadline(t, ctx, nil, false, mintOnCall(5, false), 1500*time.Millisecond)
+			ctx := newEndableContext()
+			return runUnderDeadline(t, ctx, nil, false, mintOnCall(5, false, endsAt(ctx, context.DeadlineExceeded)), runDeadline)
 		}, partialCauseRunDeadline, ""},
 		{"during the run's last credential mint", func(t *testing.T) deadlineRun {
 			var calls atomic.Int32
-			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-			runUnderDeadline(t, ctx, nil, false, countingCredential(&calls), time.Minute)
-			cancel()
-			ctx, cancel = short()
-			defer cancel()
-			return runUnderDeadline(t, ctx, nil, false, mintOnCall(calls.Load(), false), 1500*time.Millisecond)
+			runUnderDeadline(t, context.Background(), nil, false, countingCredential(&calls), time.Minute)
+			ctx := newEndableContext()
+			return runUnderDeadline(t, ctx, nil, false, mintOnCall(calls.Load(), false, endsAt(ctx, context.DeadlineExceeded)), runDeadline)
 		}, partialCauseRunDeadline, ""},
 		{"a signal mid-leg", func(t *testing.T) deadlineRun {
-			ctx, cancel := context.WithCancel(context.Background())
-			timer := time.AfterFunc(1500*time.Millisecond, cancel)
-			defer timer.Stop()
-			return runUnderDeadline(t, ctx, home, false, staticCredentialForTest(), defaultRunDeadline)
+			ctx := newEndableContext()
+			return runUnderDeadline(t, ctx, stallHome(ctx, context.Canceled), false, staticCredentialForTest(), defaultRunDeadline)
 		}, partialCauseSignal, goapiproof.RESTRefusalBaselineLegCutBySignal},
 		{"mid the run's last leg", func(t *testing.T) deadlineRun {
-			ctx, cancel := short()
-			defer cancel()
+			ctx := newEndableContext()
 			edge := goapiproof.StaticCredential("Authorization", "baseline bearer", "Bearer edge-token")
-			return runUnderDeadlineWith(t, ctx, nil, false, edge, 1500*time.Millisecond, stallTheRunsLastLeg(t, "Bearer edge-token"))
+			return runUnderDeadlineWith(t, ctx, nil, false, edge, runDeadline, stallTheRunsLastLeg(t, "Bearer edge-token", endsAt(ctx, context.DeadlineExceeded)))
 		}, partialCauseRunDeadline, goapiproof.RESTRefusalCandidateLegCutByRunDeadline},
 		{"after the last case", func(t *testing.T) deadlineRun {
-			ctx, cancel := context.WithTimeout(context.Background(), defaultRunDeadline)
-			defer cancel()
-			return runUnderDeadline(t, ctx, nil, false, staticCredentialForTest(), defaultRunDeadline)
+			return runUnderDeadline(t, context.Background(), nil, false, staticCredentialForTest(), defaultRunDeadline)
 		}, "", ""},
 	}
 	for _, cell := range cells {
@@ -428,13 +423,9 @@ func TestLegTransportOutcomeNamesWhatCutTheLeg(t *testing.T) {
 func TestRunDeadlineFlagBoundsTheRunContext(t *testing.T) {
 	ctx, cancel := runContext(50 * time.Millisecond)
 	defer cancel()
-	select {
-	case <-ctx.Done():
-		if !errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			t.Fatalf("ctx.Err() = %v, want context.DeadlineExceeded", ctx.Err())
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("the run context outlived its deadline")
+	awaitEvent(t, ctx.Done(), "the run context reaching its deadline")
+	if !errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		t.Fatalf("ctx.Err() = %v, want context.DeadlineExceeded", ctx.Err())
 	}
 }
 
@@ -513,13 +504,9 @@ func TestRunContextIsCancelledBySIGTERM(t *testing.T) {
 	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
 		t.Fatalf("send SIGTERM: %v", err)
 	}
-	select {
-	case <-ctx.Done():
-		if !errors.Is(ctx.Err(), context.Canceled) {
-			t.Fatalf("ctx.Err() = %v, want context.Canceled", ctx.Err())
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("SIGTERM did not cancel the run context")
+	awaitEvent(t, ctx.Done(), "SIGTERM cancelling the run context")
+	if !errors.Is(ctx.Err(), context.Canceled) {
+		t.Fatalf("ctx.Err() = %v, want context.Canceled", ctx.Err())
 	}
 }
 

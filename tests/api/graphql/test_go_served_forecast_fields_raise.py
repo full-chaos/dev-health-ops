@@ -1,4 +1,4 @@
-"""The three query-api-served forecast fields never answer from Python."""
+"""The query-api-served fields never answer from Python."""
 
 from __future__ import annotations
 
@@ -26,6 +26,11 @@ _QUERIES = {
     "throughputForecast": (
         'query { throughputForecast(orgId: "org-1", '
         'input: {historyWeeks: 12, teamIds: ["team-1"]}) { forecastId } }',
+        None,
+    ),
+    "operatingReview": (
+        'query { operatingReview(orgId: "org-1", '
+        'input: {weekStart: "2026-01-05"}) { orgId } }',
         None,
     ),
 }

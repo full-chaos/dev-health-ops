@@ -27,9 +27,8 @@ from dev_health_ops.metrics.sinks.clickhouse.ai_impact import AIImpactMixin
 # compute_ai_impact_metrics_daily (through this file's old _rows/_pr/_attr
 # helpers) purely as a convenient way to get a populated
 # AIImpactMetricsDailyRecord. write_ai_impact_metrics itself still has a
-# real caller (tests/api/graphql/test_go_api_dual_run_operating_review.py
-# seeds data through it), so this sink-level coverage is preserved by
-# constructing the record directly instead.
+# real caller (the live Go proof seeds data through it), so this sink-level
+# coverage is preserved by constructing the record directly instead.
 
 DAY = date(2026, 5, 18)
 COMPUTED_AT = datetime(2026, 5, 18, 12, tzinfo=timezone.utc)

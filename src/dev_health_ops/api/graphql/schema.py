@@ -647,7 +647,8 @@ class Query:
     ) -> ReportRunConnection:
         return await resolve_report_runs(org_id, report_id, limit)
 
-    # These three fields are SERVED BY query-api, not by Python.
+    # The fields whose bodies call _raise_served_by_query_api are SERVED BY
+    # query-api, not by Python.
     #
     # The DECLARATIONS below are load-bearing and must not be deleted. They are
     # what `dev_health_ops.api.graphql.export_schema` emits into
@@ -655,13 +656,12 @@ class Query:
     # query-api, web's codegen schema, AND half of both planes' routing key --
     # routeswitch.PostgresSwitch looks up go_api_routing_state by
     # (schema_digest, document_digest, selected_operation). Measured:
-    # removing these three field registrations drops 116 lines from the export
-    # and moves its sha256 from 29d509cd... to 5e2150ef..., which would
-    # invalidate the routing row of EVERY registered operation at once.
+    # removing a field registration changes the export and its sha256, which
+    # would invalidate the routing row of EVERY registered operation at once.
     #
     # The BODIES raise. They have no Python implementation, so there is no
-    # Python fallback for these three operations. Every other delegated
-    # operation keeps its fallback.
+    # Python fallback for these operations. Every other delegated operation
+    # keeps its fallback.
     #
     # In normal operation nothing below ever runs: go_api_dispatcher intercepts
     # at the HTTP layer, before Strawberry executes, whenever the operation's
@@ -707,10 +707,7 @@ class Query:
         org_id: str,
         input: OperatingReviewInput,
     ) -> OperatingReview:
-        from .resolvers.operating_review import resolve_operating_review
-
-        context = get_context(info)
-        return await resolve_operating_review(context, input)
+        _raise_served_by_query_api("operatingReview", org_id, info)
 
     @strawberry.field(description="Operator data-health and trust surface")
     async def data_health(

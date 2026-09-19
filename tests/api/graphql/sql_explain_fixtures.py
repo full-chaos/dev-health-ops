@@ -192,28 +192,6 @@ async def _fixture_recommendations(sink: CapturingSink) -> None:
 
 
 # ---------------------------------------------------------------------------
-# operating_review
-# ---------------------------------------------------------------------------
-
-
-async def _fixture_operating_review(sink: CapturingSink) -> None:
-    from dev_health_ops.api.graphql.resolvers.operating_review import (
-        _fetch_period_rows,
-    )
-    from dev_health_ops.api.queries.client import query_dicts
-
-    # Sample week_start = Monday.
-    week_start = date(2026, 5, 18)
-    await _fetch_period_rows(
-        sink,
-        query_dicts,
-        org_id=SAMPLE_ORG_ID,
-        team_id=SAMPLE_TEAM_ID,
-        start=week_start,
-    )
-
-
-# ---------------------------------------------------------------------------
 # security
 # ---------------------------------------------------------------------------
 
@@ -507,8 +485,9 @@ async def _fixture_analytics(sink: CapturingSink) -> None:
 # ---------------------------------------------------------------------------
 
 
-# There are no "forecast" or "capacity" fixtures: query-api serves
-# capacityForecast/capacityForecasts/throughputForecast natively, so there is
+# There are no "forecast", "capacity" or "operating_review" fixtures: query-api
+# serves capacityForecast/capacityForecasts/throughputForecast/operatingReview
+# natively, so there is
 # no Python SQL for this EXPLAIN contract to plan. The equivalent coverage
 # lives on the Go side: cmd/query-api/capacity_forecast_seeded_integration_
 # test.go runs those reads against a real, migrated ClickHouse.
@@ -518,7 +497,6 @@ ALL_RESOLVER_SQL_FIXTURES: list[tuple[str, ResolverSQLFixture]] = [
     ("home", _fixture_home),
     ("work_graph", _fixture_work_graph),
     ("recommendations", _fixture_recommendations),
-    ("operating_review", _fixture_operating_review),
     ("security", _fixture_security),
     ("bus_factor", _fixture_bus_factor),
     ("data_health", _fixture_data_health),

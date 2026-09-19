@@ -516,6 +516,23 @@ type Options struct {
 	// entry matching nothing fails the run via UnusedExclusions.
 	VolatileFields map[string]string
 
+	// RequireNonEmpty names collections (dotted, index-free paths in the
+	// same form as VolatileFields) that a request measures only when they
+	// hold at least one element. A request whose named collection is empty
+	// or absent on BOTH legs is refused as vacuous: two empty answers agree
+	// without either plane having read anything, which is not evidence for
+	// the scope the request exists to exercise. A collection empty on only
+	// one leg is left to the comparison, which reports the difference.
+	RequireNonEmpty []string
+
+	// ScopeEcho declares how a request's own answer proves the scope it
+	// asked for was applied: every element of the named list, on each leg
+	// that has any, must carry the requested value in the named field(s).
+	// A non-empty answer that does not echo the scope (both planes ignoring
+	// a filter, an org-wide list returned for one repository) is refused as
+	// scope_not_reflected_in_answer instead of recorded as a match.
+	ScopeEcho []ScopeEcho
+
 	// EnvelopeKeys excuses named keys from the null-vs-omission check at
 	// the TOP LEVEL of `data` only -- parity rule 2's stated exception for
 	// transport-envelope keys one framework omits when empty. Never
@@ -1071,6 +1088,12 @@ func Compare(baseline, candidate Snapshot, opts Options) Result {
 	// structure has to be judged on what the response actually carries,
 	// not on what the value comparator was told to ignore.
 	if baseline.DataPresent && candidate.DataPresent {
+		if detail := emptyOnBothLegs(baseline.Data, candidate.Data, opts.RequireNonEmpty); detail != "" {
+			return Result{StructuralRefusal: RefusalVacuousEmptyLegs, StructuralDetail: detail}
+		}
+		if detail := scopeNotReflected(baseline.Data, candidate.Data, opts.ScopeEcho); detail != "" {
+			return Result{StructuralRefusal: RefusalScopeNotReflected, StructuralDetail: detail}
+		}
 		if vacuousEmptyLegs(baseline.Data, candidate.Data, opts) {
 			return Result{
 				StructuralRefusal: RefusalVacuousEmptyLegs,

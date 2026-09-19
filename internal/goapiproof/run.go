@@ -103,6 +103,10 @@ const (
 	// two planes agree, because the comparison found nothing to check.
 	RefusalVacuousEmptyLegs = "vacuous_empty_legs"
 
+	// RefusalScopeNotReflected fires when a declared list is non-empty but
+	// an element does not carry the scope the request asked for.
+	RefusalScopeNotReflected = "scope_not_reflected_in_answer"
+
 	// RefusalInvalidStochasticLeafClass: a declared StochasticLeafClass is
 	// malformed, overlaps another declaration, or names a path the
 	// registered document does not select as a leaf. No request is sent.
@@ -592,7 +596,8 @@ func (r *Runner) Run(ctx context.Context) ([]Outcome, Summary, error) {
 		for i := range spec.Variants {
 			variant := spec.Variants[i]
 			variantOutcome := r.proveVariant(ctx, operation, variant)
-			if err := record(operation, variantOutcome, variant.Variables(r.Config.OrgID, r.Config.Window)); err != nil {
+			variantVariables, _, _ := r.variantRequest(operation, variant)
+			if err := record(operation, variantOutcome, variantVariables); err != nil {
 				return outcomes, summary, err
 			}
 		}
@@ -761,7 +766,26 @@ func (r *Runner) proveOne(ctx context.Context, operation string) Outcome {
 			variables[spec.InstanceVariable] = id
 		}
 	}
-	return r.proveRequest(ctx, operation, "", spec, variables, spec.Parity)
+	return r.proveRequest(ctx, operation, "", spec, variables, spec.Parity, "", "")
+}
+
+// variantRequest resolves one variant's variables, binding the run-supplied
+// identifier when the variant needs one. The returned key is non-empty only
+// when the variant needs an identifier and the run supplied none.
+func (r *Runner) variantRequest(operation string, variant Variant) (variables map[string]any, parity Options, missingKey string) {
+	variables = variant.Variables(r.Config.OrgID, r.Config.Window)
+	parity = variant.Parity
+	if variant.Instance == nil {
+		return variables, parity, ""
+	}
+	key := InstanceKey(operation, variant.Name)
+	value := r.Config.InstanceIDs[key]
+	if value == "" {
+		return variables, parity, key
+	}
+	variant.Instance.Bind(variables, value)
+	parity.ScopeEcho = append(append([]ScopeEcho(nil), parity.ScopeEcho...), variant.Instance.Echo(value)...)
+	return variables, parity, ""
 }
 
 // proveVariant proves ONE OperationSpec.Variants entry, under the SAME
@@ -777,7 +801,8 @@ func (r *Runner) proveVariant(ctx context.Context, operation string, variant Var
 		// for any other caller this method is not currently keeping safe.
 		return r.refuseNoSpec(operation, variant.Name, err)
 	}
-	return r.proveRequest(ctx, operation, variant.Name, spec, variant.Variables(r.Config.OrgID, r.Config.Window), variant.Parity)
+	variables, parity, missingKey := r.variantRequest(operation, variant)
+	return r.proveRequest(ctx, operation, variant.Name, spec, variables, parity, variant.Instance.kindFor(missingKey), missingKey)
 }
 
 // refuseNoSpec builds the refusal Outcome for an operation (or variant)
@@ -806,7 +831,7 @@ func (r *Runner) refuseNoSpec(operation, variantName string, err error) Outcome 
 // THIS request; every other field (ResponseRoot, RootNullable,
 // InstanceVariable) comes from spec because it describes the registered
 // document, which a variant shares with the base request by definition.
-func (r *Runner) proveRequest(ctx context.Context, operation string, variantName string, spec OperationSpec, variables map[string]any, parity Options) Outcome {
+func (r *Runner) proveRequest(ctx context.Context, operation string, variantName string, spec OperationSpec, variables map[string]any, parity Options, missingInstanceKind string, missingInstanceKey string) Outcome {
 	registryDigest := r.Registry.DocumentDigest[operation]
 	row := r.Routing[operation]
 	outcome := Outcome{Operation: operation, Variant: variantName, DocumentDigest: registryDigest, Mode: row.Mode}
@@ -870,6 +895,11 @@ func (r *Runner) proveRequest(ctx context.Context, operation string, variantName
 	// the operative fact about it today; this fires the day such an
 	// operation is routed and would otherwise be compared with an
 	// invented identifier.
+	if missingInstanceKey != "" {
+		return refuse(RefusalNeedsInstanceID, fmt.Sprintf(
+			"this variant needs %s and the run supplied none (-instance-id %s=<value>): any value it invented would match nothing and return an empty answer on BOTH planes, so the run would record a match having compared nothing",
+			missingInstanceKind, missingInstanceKey))
+	}
 	if spec.InstanceVariable != "" {
 		// Checked against the RESOLVED request, not the table: proveOne
 		// (the only caller that can supply one, via Config.InstanceIDs)

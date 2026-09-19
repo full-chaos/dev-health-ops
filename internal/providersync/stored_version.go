@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/storedversion"
 )
 
@@ -586,7 +587,7 @@ func logDeploymentOutcomes(ctx context.Context, claim Claim, rows []deploymentRo
 			attrs := []slog.Attr{
 				slog.String("org_id", claim.OrgID), slog.String("provider", claim.Provider),
 				slog.String("dataset", claim.Dataset), slog.String("unit_id", claim.ID),
-				slog.String("repo_id", rows[i].RepoID), slog.String("deployment_id", rows[i].DeploymentID),
+				slog.String("repo_id", rows[i].RepoID), logging.ProviderIDAttr("deployment_id", rows[i].DeploymentID),
 				slog.Time("stored_merged_at", rows[i].MergedAt.UTC()),
 			}
 			if rows[i].PullRequestNumber != nil {

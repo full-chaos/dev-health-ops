@@ -164,5 +164,3 @@ var _ EffectSink = GitHubCommitsClickHouseEffects{}
 var _ EffectReadback = GitHubCommitsClickHouseEffects{}
 var _ EffectSink = GitLabCommitsClickHouseEffects{}
 var _ EffectReadback = GitLabCommitsClickHouseEffects{}
-
-const gitCommitsInsert = `INSERT INTO git_commits (org_id, repo_id, hash, message, author_name, author_email, author_when, committer_name, committer_email, committer_when, parents, last_synced)`

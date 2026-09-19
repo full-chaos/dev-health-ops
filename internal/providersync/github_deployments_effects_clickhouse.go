@@ -3,7 +3,6 @@ package providersync
 import (
 	"context"
 	"log/slog"
-	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
@@ -75,16 +74,13 @@ func (sink deploymentsClickHouseEffects) WriteEffect(ctx context.Context, claim 
 	if sink.Conn == nil {
 		return ErrInvalidConfiguration
 	}
-	// A row marked with a failed lookup is never written without the stored
-	// values it must carry: a guard-read failure fails the write, and the
-	// unit retries, instead of inserting the uncorrected NULLs.
-	stored, err := loadStoredDeploymentGuardValues(ctx, sink.Conn, claim.OrgID, rows)
-	if err != nil {
+	// Every write reads the held version of its keys (the terminal merged_at
+	// pair needs it even when no lookup failed). A read failure fails the
+	// write, and the unit retries, instead of inserting uncorrected values.
+	if err := applyDeploymentContract(ctx, sink.Conn, claim, rows, true); err != nil {
 		slog.Warn("providersync.deployment.carry_forward_guard_read_failed", "org_id", claim.OrgID, "provider", claim.Provider, "unit_id", claim.ID, "phase", "write", "cause", err.Error())
 		return err
 	}
-	logDeploymentLifecycleRegressionGuarded(ctx, claim, guardDeploymentLifecycleRegressions(rows, stored))
-	logDeploymentPullRequestRegressionGuarded(ctx, claim, guardDeploymentPullRequestRegressions(rows, stored))
 	batch, err := sink.Conn.PrepareBatch(ctx, deploymentsInsert)
 	if err != nil {
 		return err
@@ -123,27 +119,16 @@ func (sink deploymentsClickHouseEffects) InspectEffect(ctx context.Context, clai
 	if sink.Conn == nil {
 		return EffectConflict, ErrInvalidConfiguration
 	}
-	// A row this batch could not honestly derive a lifecycle or pull request
-	// for (LifecycleLookupFailed / PullRequestLookupFailed, decoded straight
-	// from the original effect bytes -- the fields survive JSON
-	// round-tripping) had its started_at/finished_at/status or its
-	// merged_at/pull_request_number carried forward from the stored row at
-	// WriteEffect time (the two guards above). Recovery
+	// WriteEffect carried held columns into the rows it inserted. Recovery
 	// rebuilds `expected` from a fresh Collect() pass that knows nothing of
-	// that carry-forward, so without applying the identical correction here
-	// too, `expected` still shows the pre-guard nils while the actually
-	// persisted row shows the carried-forward values -- a real row, freshly
-	// re-verified, would read as EffectConflict (ErrEffectRecoveryAmbiguous)
-	// purely from this mismatch, never from any genuine data divergence. A
-	// guard-read failure fails the inspection, the same as it fails
-	// WriteEffect.
-	stored, err := loadStoredDeploymentGuardValues(ctx, sink.Conn, claim.OrgID, expected)
-	if err != nil {
+	// that correction, so the same contract runs here against the same
+	// stored state; otherwise a row the contract wrote reads back as
+	// EffectConflict. A read failure fails the inspection, the same as it
+	// fails WriteEffect.
+	if err := applyDeploymentContract(ctx, sink.Conn, claim, expected, false); err != nil {
 		slog.Warn("providersync.deployment.carry_forward_guard_read_failed", "org_id", claim.OrgID, "provider", claim.Provider, "unit_id", claim.ID, "phase", "inspect", "cause", err.Error())
 		return EffectConflict, err
 	}
-	guardDeploymentLifecycleRegressions(expected, stored)
-	guardDeploymentPullRequestRegressions(expected, stored)
 	exact, absent := 0, 0
 	for _, row := range expected {
 		inspection, err := sink.inspectDeployment(ctx, row)
@@ -231,27 +216,6 @@ func nullableUInt32(value *int) *uint32 {
 	return &converted
 }
 
-// deploymentGuardKey is the lifecycle regression guard's own
-// lookup key. org_id is applied once as the query's WHERE clause, not per
-// key, because row.validate already requires every row in a batch to
-// share claim.OrgID.
-type deploymentGuardKey struct {
-	RepoID       string
-	DeploymentID string
-}
-
-// storedDeploymentGuardValues is the currently winning row's carried
-// columns for one key: the lifecycle triple read for a
-// LifecycleLookupFailed row and the pull request pair read for a
-// PullRequestLookupFailed row.
-type storedDeploymentGuardValues struct {
-	StartedAt         *time.Time
-	FinishedAt        *time.Time
-	Status            *string
-	MergedAt          *time.Time
-	PullRequestNumber *int
-}
-
 // deploymentLifecycleCarriedForward is one row where a stored started_at/
 // finished_at/status was carried forward over a nil this pass's statuses
 // lookup produced by failing (never over an honest, successful-but-empty
@@ -262,94 +226,6 @@ type storedDeploymentGuardValues struct {
 type deploymentLifecycleCarriedForward struct {
 	RepoID       string
 	DeploymentID string
-}
-
-// loadStoredDeploymentGuardValues is the guards' one extra read per
-// WriteEffect call -- not per row, and not issued at all when no row in
-// the batch has LifecycleLookupFailed or PullRequestLookupFailed set. It
-// is a single FINAL point lookup scoped with IN(...) to exactly the
-// deployment ids this pass could not honestly derive a lifecycle or a
-// pull request for.
-func loadStoredDeploymentGuardValues(
-	ctx context.Context, conn driver.Conn, orgID string, rows []deploymentRow,
-) (map[deploymentGuardKey]storedDeploymentGuardValues, error) {
-	repoIDs := make([]string, 0, len(rows))
-	deploymentIDs := make([]string, 0, len(rows))
-	seenRepo := make(map[string]bool, len(rows))
-	seenDeployment := make(map[string]bool, len(rows))
-	for _, row := range rows {
-		if !row.LifecycleLookupFailed && !row.PullRequestLookupFailed {
-			continue
-		}
-		if !seenRepo[row.RepoID] {
-			seenRepo[row.RepoID] = true
-			repoIDs = append(repoIDs, row.RepoID)
-		}
-		if !seenDeployment[row.DeploymentID] {
-			seenDeployment[row.DeploymentID] = true
-			deploymentIDs = append(deploymentIDs, row.DeploymentID)
-		}
-	}
-	if len(deploymentIDs) == 0 {
-		return nil, nil
-	}
-	dbRows, err := conn.Query(ctx, `
-SELECT repo_id, deployment_id, started_at, finished_at, status, merged_at, pull_request_number
-FROM deployments FINAL
-WHERE org_id = ? AND repo_id IN (?) AND deployment_id IN (?)`,
-		orgID, repoIDs, deploymentIDs,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer dbRows.Close()
-	stored := make(map[deploymentGuardKey]storedDeploymentGuardValues, len(deploymentIDs))
-	for dbRows.Next() {
-		var repoID, deploymentID string
-		var startedAt, finishedAt, mergedAt *time.Time
-		var status *string
-		var pullRequestNumber *uint32
-		if err := dbRows.Scan(&repoID, &deploymentID, &startedAt, &finishedAt, &status, &mergedAt, &pullRequestNumber); err != nil {
-			return nil, err
-		}
-		stored[deploymentGuardKey{RepoID: repoID, DeploymentID: deploymentID}] = storedDeploymentGuardValues{StartedAt: startedAt, FinishedAt: finishedAt, Status: status, MergedAt: mergedAt, PullRequestNumber: uint32PointerAsInt(pullRequestNumber)}
-	}
-	return stored, dbRows.Err()
-}
-
-// guardDeploymentLifecycleRegressions is the pure decision at the center
-// of the write-once lifecycle invariant, deliberately separated from the
-// ClickHouse call above so it can be exercised without a live connection
-// (the pull request contract in stored_version.go keeps git_pull_requests'
-// own write-once merged_at the same way). A row is only ever
-// touched when LifecycleLookupFailed marks its nil as a FAILURE, never a
-// successful-but-empty lookup -- that nil is the honest value the ticket's
-// own class ruling requires, and carrying a stale value over it would
-// contradict "never a copied value." A key absent from `stored` (a
-// brand-new deployment, or the guard's own read failing upstream) is
-// never carried forward because there is nothing yet to protect. Not a
-// transactional compare-and-swap, the same limitation the storedversion
-// package documents: the read above and the
-// INSERT that follows are two separate statements with no lock between
-// them.
-func guardDeploymentLifecycleRegressions(
-	rows []deploymentRow, stored map[deploymentGuardKey]storedDeploymentGuardValues,
-) []deploymentLifecycleCarriedForward {
-	var carried []deploymentLifecycleCarriedForward
-	for i, row := range rows {
-		if !row.LifecycleLookupFailed {
-			continue
-		}
-		prior, ok := stored[deploymentGuardKey{RepoID: row.RepoID, DeploymentID: row.DeploymentID}]
-		if !ok || (prior.StartedAt == nil && prior.FinishedAt == nil && prior.Status == nil) {
-			continue
-		}
-		rows[i].StartedAt = prior.StartedAt
-		rows[i].FinishedAt = prior.FinishedAt
-		rows[i].Status = prior.Status
-		carried = append(carried, deploymentLifecycleCarriedForward{RepoID: row.RepoID, DeploymentID: row.DeploymentID})
-	}
-	return carried
 }
 
 // deploymentLifecycleRegressionGuardedEvent is this guard's stable log
@@ -384,33 +260,6 @@ type deploymentPullRequestCarriedForward struct {
 	DeploymentID string
 }
 
-// guardDeploymentPullRequestRegressions carries the stored
-// merged_at/pull_request_number pair into a row whose pull request lookup
-// FAILED this pass. A lookup that succeeded and found no pull request is
-// an honest nil and is never touched; a key absent from `stored`, or one
-// whose stored pair is itself empty, has nothing to protect. The pair
-// moves as a unit because both columns come from one chosen pull request.
-// The read and the INSERT are two statements with no lock between them,
-// the same limitation guardDeploymentLifecycleRegressions documents.
-func guardDeploymentPullRequestRegressions(
-	rows []deploymentRow, stored map[deploymentGuardKey]storedDeploymentGuardValues,
-) []deploymentPullRequestCarriedForward {
-	var carried []deploymentPullRequestCarriedForward
-	for i, row := range rows {
-		if !row.PullRequestLookupFailed {
-			continue
-		}
-		prior, ok := stored[deploymentGuardKey{RepoID: row.RepoID, DeploymentID: row.DeploymentID}]
-		if !ok || (prior.MergedAt == nil && prior.PullRequestNumber == nil) {
-			continue
-		}
-		rows[i].MergedAt = prior.MergedAt
-		rows[i].PullRequestNumber = prior.PullRequestNumber
-		carried = append(carried, deploymentPullRequestCarriedForward{RepoID: row.RepoID, DeploymentID: row.DeploymentID})
-	}
-	return carried
-}
-
 const deploymentPullRequestRegressionGuardedEvent = "providersync.deployment.pull_request_regression_guarded"
 
 // logDeploymentPullRequestRegressionGuarded emits one WARN line per
@@ -434,5 +283,3 @@ var _ EffectSink = GitHubDeploymentsClickHouseEffects{}
 var _ EffectReadback = GitHubDeploymentsClickHouseEffects{}
 var _ EffectSink = GitLabDeploymentsClickHouseEffects{}
 var _ EffectReadback = GitLabDeploymentsClickHouseEffects{}
-
-const deploymentsInsert = `INSERT INTO deployments (repo_id, deployment_id, status, environment, started_at, finished_at, deployed_at, merged_at, pull_request_number, release_ref, release_ref_confidence, org_id, last_synced)`

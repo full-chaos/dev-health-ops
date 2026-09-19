@@ -41,7 +41,7 @@ var preparedRouteInsertStatements = map[string]string{
 	"git_commit_stats":                 gitCommitStatsInsert,
 	"git_commits":                      gitCommitsInsert,
 	"git_files":                        gitFilesInsert,
-	"repos":                            reposInsert,
+	"repos":                            repositoryInsert,
 	"security_alerts":                  securityAlertsInsert,
 }
 

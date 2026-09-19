@@ -39,15 +39,9 @@ var contractedWriters = map[string]string{
 	"internal/providersync/stored_version.go|git_pull_request_reviews":                "provider sync reviews",
 	"internal/providersync/github_work_items_direct_effects_clickhouse.go|work_items": "provider sync work items (github, gitlab, jira rows)",
 	"internal/providersync/linear_work_items_effects.go|work_items":                   "provider sync linear work items",
-}
-
-// pendingWriters write an in-scope table without a contract yet: the table,
-// the columns a write can erase, and the stacked change that brings the
-// writer under a contract. The list is empty once every step has landed.
-var pendingWriters = map[string]string{
-	"internal/providersync/github_deployments_effects_clickhouse.go|deployments": "columns outside a failed lifecycle or pull request lookup; deployments, commits and repos step",
-	"internal/providersync/github_commits_effects_clickhouse.go|git_commits":     "source_id (not in the insert); deployments, commits and repos step",
-	"internal/providersync/github_repository_effects_clickhouse.go|repos":        "ref, settings, tags when the provider row leaves them empty, source_id (not in the insert); deployments, commits and repos step",
+	"internal/providersync/stored_version.go|repos":                                   "provider sync repositories (github, gitlab)",
+	"internal/providersync/stored_version.go|git_commits":                             "provider sync commits",
+	"internal/providersync/stored_version.go|deployments":                             "provider sync deployments (github, gitlab)",
 }
 
 // outOfScopeWriters write operational_* tables: revisioned snapshots under
@@ -166,14 +160,14 @@ func scanInserts(t *testing.T) map[string]bool {
 	return found
 }
 
-// Every Go writer of an in-scope key is either under a stored-version contract
-// or named as pending with its reason; every operational writer and every
-// run-time table name is named too. The lists equal the module scan exactly,
-// so a new writer, or a stale row, fails.
+// Every Go writer of an in-scope key is under a stored-version contract;
+// every operational writer and every run-time table name is named with its
+// reason. The lists equal the module scan exactly, so a new writer of an
+// in-scope key without a contract, or a stale row, fails.
 func TestEveryWriterOfAnInScopeKeyIsContractedOrListed(t *testing.T) {
 	found := scanInserts(t)
 	listed := map[string]string{}
-	for _, list := range []map[string]string{contractedWriters, pendingWriters, outOfScopeWriters, unresolvedWriters} {
+	for _, list := range []map[string]string{contractedWriters, outOfScopeWriters, unresolvedWriters} {
 		for key, reason := range list {
 			if _, dup := listed[key]; dup {
 				t.Errorf("%s is on more than one list", key)
@@ -209,11 +203,6 @@ func TestEveryWriterOfAnInScopeKeyIsContractedOrListed(t *testing.T) {
 			t.Errorf("contracted writer %s is not an in-scope table", key)
 		}
 	}
-	for key := range pendingWriters {
-		if !inScopeTables[key[strings.IndexByte(key, '|')+1:]] {
-			t.Errorf("pending writer %s is not an in-scope table", key)
-		}
-	}
-	t.Logf("module scan: %d INSERT sites; contracted %d, pending %d, out of scope %d, unresolved %d",
-		len(found), len(contractedWriters), len(pendingWriters), len(outOfScopeWriters), len(unresolvedWriters))
+	t.Logf("module scan: %d INSERT sites; contracted %d, out of scope %d, unresolved %d",
+		len(found), len(contractedWriters), len(outOfScopeWriters), len(unresolvedWriters))
 }

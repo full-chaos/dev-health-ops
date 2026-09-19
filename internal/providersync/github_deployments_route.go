@@ -87,14 +87,14 @@ type deploymentRow struct {
 	// column: true exactly when this row's StartedAt/FinishedAt are nil
 	// because the statuses lookup FAILED or was skipped by the rate-limit
 	// path this pass, as opposed to a successful lookup that honestly
-	// found no signal. The effects sink's write-once lifecycle guard reads
-	// this to decide whether a nil is worth carrying a prior value forward
-	// over -- see guardDeploymentLifecycleRegressions.
+	// found no signal. deploymentsContract (stored_version.go) reads this to
+	// decide whether the lifecycle columns are unstated, so the held values
+	// are kept.
 	LifecycleLookupFailed bool `json:"lifecycle_lookup_failed,omitempty"`
 	// PullRequestLookupFailed is writer-internal signaling of the same
 	// kind: true exactly when MergedAt/PullRequestNumber are nil because
-	// the per-SHA pull request lookup FAILED this pass. See
-	// guardDeploymentPullRequestRegressions.
+	// the per-SHA pull request lookup FAILED this pass; deploymentsContract
+	// then keeps the held pair.
 	PullRequestLookupFailed bool `json:"pull_request_lookup_failed,omitempty"`
 }
 

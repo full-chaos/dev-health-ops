@@ -553,6 +553,41 @@ var operationSpecs = map[string]OperationSpec{
 			}}
 		},
 	},
+	"securityAlerts": {
+		ResponseRoot: "securityAlerts",
+		Variables: func(orgID string, _ Window) map[string]any {
+			return securityAlertsVariables(orgID, nil, nil)
+		},
+		Parity: securityAlertsParity,
+		Variants: []Variant{
+			securityAlertsVariant("OPEN_ONLY", map[string]any{"openOnly": true}, nil),
+			securityAlertsVariant("STATES", map[string]any{"states": []any{"FIXED", "DISMISSED"}}, nil),
+			securityAlertsVariant("OPEN_ONLY_OVER_STATES", map[string]any{"openOnly": true, "states": []any{"FIXED"}}, nil),
+			securityAlertsVariant("SEVERITIES", map[string]any{"severities": []any{"CRITICAL", "HIGH", "UNKNOWN"}}, nil),
+			securityAlertsVariant("SOURCES", map[string]any{"sources": []any{"DEPENDABOT", "GITLAB_DEPENDENCY"}}, nil),
+			securityAlertsVariant("REPO_IDS", map[string]any{"repoIds": []any{"00000000-0000-0000-0000-000000000001"}}, nil),
+			securityAlertsVariant("SINCE_UNTIL", map[string]any{"since": "2026-06-01", "until": "2026-08-31"}, nil),
+			securityAlertsVariant("SEARCH", map[string]any{"search": "ABC-123"}, nil),
+			securityAlertsVariant("PAGE_FIRST", nil, map[string]any{"first": 5}),
+			securityAlertsVariant("PAGE_AFTER", nil, map[string]any{"first": 5, "after": "5"}),
+			securityAlertsVariant("PAGE_ZERO", nil, map[string]any{"first": 0}),
+		},
+	},
+	"securityOverview": {
+		ResponseRoot: "securityOverview",
+		Variables: func(orgID string, _ Window) map[string]any {
+			return map[string]any{"orgId": orgID, "filters": nil}
+		},
+		Variants: []Variant{
+			securityOverviewVariant("OPEN_ONLY", map[string]any{"openOnly": true}),
+			securityOverviewVariant("STATES", map[string]any{"states": []any{"FIXED", "DISMISSED"}}),
+			securityOverviewVariant("SEVERITIES", map[string]any{"severities": []any{"CRITICAL", "HIGH", "UNKNOWN"}}),
+			securityOverviewVariant("SOURCES", map[string]any{"sources": []any{"DEPENDABOT", "GITLAB_DEPENDENCY"}}),
+			securityOverviewVariant("REPO_IDS", map[string]any{"repoIds": []any{"00000000-0000-0000-0000-000000000001"}}),
+			securityOverviewVariant("SINCE_UNTIL", map[string]any{"since": "2026-06-01", "until": "2026-08-31"}),
+			securityOverviewVariant("SEARCH", map[string]any{"search": "ABC-123"}),
+		},
+	},
 	// The overlay `threshold` fields, estimateCoverage.ratio and
 	// rollingWindows.meanWeeklyThroughput are deliberately absent: the
 	// thresholds are hardcoded constants (kernel.go:70), and the other two
@@ -823,4 +858,49 @@ func AssertCoverage(registered []string) error {
 		return fmt.Errorf("goapiproof: this table covers operations the running query-api does not register: %v", stale)
 	}
 	return nil
+}
+
+// securityAlertsParity declares the one divergence on the alert list: the
+// three timestamp columns are ClickHouse DateTime64(3, 'UTC'); Python's
+// driver returns them naive and strawberry prints no offset, while the Go
+// plane prints RFC3339 with an explicit offset -- the same DateTime class
+// the pr operation declares.
+var securityAlertsParity = Options{BaselineDefects: []BaselineDefect{{
+	Ticket: "CHAOS-5780",
+	Reason: "security_alerts' created_at/fixed_at/dismissed_at are ClickHouse DateTime64(3, 'UTC'); Python's clickhouse_connect driver returns them NAIVE, so strawberry's DateTime scalar isoformat()s them with no offset, while Go's driver attaches UTC and gqlgen's graphql.Time scalar prints RFC3339 with an explicit offset -- the same declared DateTime class as pr's fields. Go is correct.",
+	Paths: []string{
+		"data.securityAlerts.edges.node.createdAt",
+		"data.securityAlerts.edges.node.fixedAt",
+		"data.securityAlerts.edges.node.dismissedAt",
+	},
+}}}
+
+func securityAlertsVariables(orgID string, filters, pagination map[string]any) map[string]any {
+	vars := map[string]any{"orgId": orgID, "filters": nil, "pagination": nil}
+	if filters != nil {
+		vars["filters"] = filters
+	}
+	if pagination != nil {
+		vars["pagination"] = pagination
+	}
+	return vars
+}
+
+func securityAlertsVariant(name string, filters, pagination map[string]any) Variant {
+	return Variant{
+		Name: name,
+		Variables: func(orgID string, _ Window) map[string]any {
+			return securityAlertsVariables(orgID, filters, pagination)
+		},
+		Parity: securityAlertsParity,
+	}
+}
+
+func securityOverviewVariant(name string, filters map[string]any) Variant {
+	return Variant{
+		Name: name,
+		Variables: func(orgID string, _ Window) map[string]any {
+			return map[string]any{"orgId": orgID, "filters": filters}
+		},
+	}
 }

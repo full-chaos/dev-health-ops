@@ -735,7 +735,10 @@ func recordFieldSite(oracle *populatabilityOracle, typeName, fieldName string, v
 // together. Adding a new entry here means shipping a registered document
 // with a field the resolver cannot populate; that needs a ticket and a
 // written reason, not a quiet append.
-var expectedUnpopulatedFields = map[string]string{}
+var expectedUnpopulatedFields = map[string]string{
+	"SecurityAlertNode.repoUrl": "the ClickHouse repos table has no url column, so the field is null for every row on both planes; Python selects a literal NULL for it (resolvers/security.py)",
+	"RepoAlertCount.repoUrl":    "the ClickHouse repos table has no url column, so the field is null for every row on both planes; Python selects a literal NULL for it (resolvers/security.py)",
+}
 
 // TestRegisteredDocumentFieldsArePopulatable is CHAOS-4723's
 // class-closing gate. See this file's package doc comment for the full

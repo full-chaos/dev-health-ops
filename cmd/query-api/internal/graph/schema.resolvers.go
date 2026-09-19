@@ -20,6 +20,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/hotspots"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/operatingreview"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/reviewedges"
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/security"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/throughputforecast"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/workgraph"
 	"github.com/vektah/gqlparser/v2/gqlerror"
@@ -568,14 +569,32 @@ func (r *queryResolver) WorkUnitTeamAttributions(ctx context.Context, orgID stri
 	return results, nil
 }
 
-// SecurityAlerts is the resolver for the securityAlerts field.
+// SecurityAlerts is the resolver for the securityAlerts field. It reads
+// only the caller's own org: the orgId argument must equal the org of the
+// request identity, otherwise the request is denied.
 func (r *queryResolver) SecurityAlerts(ctx context.Context, orgID string, filters *model.SecurityAlertFilterInput, pagination *model.SecurityPaginationInput) (*model.SecurityAlertConnection, error) {
-	panic(fmt.Errorf("not implemented: SecurityAlerts - securityAlerts"))
+	if err := requireOwnOrg(ctx, orgID); err != nil {
+		return nil, err
+	}
+	result, err := security.ResolveAlerts(ctx, r.ClickHouse, orgID, filters, pagination)
+	if err != nil {
+		return nil, fmt.Errorf("securityAlerts: %w", err)
+	}
+	return result, nil
 }
 
-// SecurityOverview is the resolver for the securityOverview field.
+// SecurityOverview is the resolver for the securityOverview field. It
+// reads only the caller's own org: the orgId argument must equal the org
+// of the request identity, otherwise the request is denied.
 func (r *queryResolver) SecurityOverview(ctx context.Context, orgID string, filters *model.SecurityAlertFilterInput) (*model.SecurityOverview, error) {
-	panic(fmt.Errorf("not implemented: SecurityOverview - securityOverview"))
+	if err := requireOwnOrg(ctx, orgID); err != nil {
+		return nil, err
+	}
+	result, err := security.ResolveOverview(ctx, r.ClickHouse, orgID, filters)
+	if err != nil {
+		return nil, fmt.Errorf("securityOverview: %w", err)
+	}
+	return result, nil
 }
 
 // SavedReports is the resolver for the savedReports field.

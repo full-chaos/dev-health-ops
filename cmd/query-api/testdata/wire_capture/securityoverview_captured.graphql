@@ -1,0 +1,31 @@
+query SecurityOverview($orgId: String!, $filters: SecurityAlertFilterInput) {
+  securityOverview(orgId: $orgId, filters: $filters) {
+    kpis {
+      openTotal
+      critical
+      high
+      meanDaysToFix30d
+      openDelta30d
+      __typename
+    }
+    severityBreakdown {
+      severity
+      count
+      __typename
+    }
+    topRepos {
+      repoId
+      repoName
+      repoUrl
+      count
+      __typename
+    }
+    trend {
+      day
+      opened
+      fixed
+      __typename
+    }
+    __typename
+  }
+}

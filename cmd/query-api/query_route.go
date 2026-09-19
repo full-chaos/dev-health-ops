@@ -755,6 +755,80 @@ const registeredFeatureFlagEventsDocument = `query FeatureFlagEvents($orgId: Str
   }
 }`
 
+// registeredSecurityOverviewDocument is the registered document for the
+// `securityOverview` operation, the exact wire-form text a real web client
+// sends (testdata/wire_capture/securityoverview_captured.graphql).
+const registeredSecurityOverviewDocument = `query SecurityOverview($orgId: String!, $filters: SecurityAlertFilterInput) {
+  securityOverview(orgId: $orgId, filters: $filters) {
+    kpis {
+      openTotal
+      critical
+      high
+      meanDaysToFix30d
+      openDelta30d
+      __typename
+    }
+    severityBreakdown {
+      severity
+      count
+      __typename
+    }
+    topRepos {
+      repoId
+      repoName
+      repoUrl
+      count
+      __typename
+    }
+    trend {
+      day
+      opened
+      fixed
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredSecurityAlertsDocument is the registered document for the
+// `securityAlerts` operation, the exact wire-form text a real web client
+// sends (testdata/wire_capture/securityalerts_captured.graphql).
+const registeredSecurityAlertsDocument = `query SecurityAlerts($orgId: String!, $filters: SecurityAlertFilterInput, $pagination: SecurityPaginationInput) {
+  securityAlerts(orgId: $orgId, filters: $filters, pagination: $pagination) {
+    edges {
+      node {
+        alertId
+        repoId
+        repoName
+        repoUrl
+        source
+        severity
+        state
+        packageName
+        cveId
+        url
+        title
+        description
+        createdAt
+        fixedAt
+        dismissedAt
+        __typename
+      }
+      cursor
+      __typename
+    }
+    totalCount
+    pageInfo {
+      hasNextPage
+      hasPreviousPage
+      startCursor
+      endCursor
+      __typename
+    }
+    __typename
+  }
+}`
+
 // registeredPrDetailDocument is CHAOS-4991's registered document for the
 // `pr` operation -- the PR detail view (core row, reviews, commits,
 // linkedIssues). CHAOS-4980 wired the linkedIssues sub-field and the
@@ -1387,6 +1461,8 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		"throughputForecast":   digestHex(registeredThroughputForecastDocument),
 		"featureFlagEvents":    digestHex(registeredFeatureFlagEventsDocument),
 		"pr":                   digestHex(registeredPrDetailDocument),
+		"securityOverview":     digestHex(registeredSecurityOverviewDocument),
+		"securityAlerts":       digestHex(registeredSecurityAlertsDocument),
 	}
 	// CHAOS-4710 deliverable 3: log the mounted set HERE, where
 	// digestByOperation actually lives, rather than handing main.go a

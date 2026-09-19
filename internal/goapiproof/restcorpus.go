@@ -887,6 +887,10 @@ func pullRequestDrilldownDefects(route pullRequestDrilldownRoute) []BaselineDefe
 				EdgesListPath:      "data.items",
 				IDField:            RESTDedupKeyField,
 				TrailingCursorPath: route.cursorPath,
+				// The page's last id can have copies past the limit; its
+				// on-page copies are judged by pullRequestRowCopyRule's
+				// fields (pageboundarycopy.go).
+				PageBoundary: &PageBoundary{SortField: "created_at", Limit: drilldownPRsDefaultLimit, CopyRule: &pullRequestRowCopyRule},
 			},
 		},
 		{
@@ -962,7 +966,8 @@ func drilldownPRsParityWithLimit(limit int) Options {
 }
 
 // parityWithPageCutLimit returns opts with every page limit set to one
-// request's own effective limit: a DuplicateCollapsePageCutShape's Limit
+// request's own effective limit: a DuplicateCollapsePageCutShape's Limit,
+// a WorkGraphEdgeDedupShape's PageBoundary.Limit
 // and every declaration's CandidateAccounting.PageLimit -- the same
 // convention investmentSunburstParityWithLimit already establishes for
 // the identical class of per-request LIMIT field. Every other field of
@@ -975,6 +980,13 @@ func parityWithPageCutLimit(opts Options, limit int) Options {
 			shape := *defect.DuplicateCollapsePageCutShape
 			shape.Limit = limit
 			defect.DuplicateCollapsePageCutShape = &shape
+		}
+		if defect.WorkGraphEdgeDedupShape != nil && defect.WorkGraphEdgeDedupShape.PageBoundary != nil {
+			shape := *defect.WorkGraphEdgeDedupShape
+			boundary := *shape.PageBoundary
+			boundary.Limit = limit
+			shape.PageBoundary = &boundary
+			defect.WorkGraphEdgeDedupShape = &shape
 		}
 		if defect.Accounting != nil {
 			accounting := *defect.Accounting

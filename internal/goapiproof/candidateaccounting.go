@@ -68,7 +68,8 @@ func (a *CandidateAccounting) holds(baseList, candList []any) bool {
 //	d. every baseline id is present in the candidate (waived alone by
 //	   AllowDropped);
 //	e. every candidate row whose id is in the baseline is a copy CopyRule
-//	   lets a FINAL read serve;
+//	   lets a FINAL read serve, or, for the id cut at a page-at-limit
+//	   boundary alone, a copy PageBoundary admits (pageboundarycopy.go);
 //	f. a candidate-only id appears only on a page-cut baseline, and only
 //	   after the candidate's last shared row;
 //	g. the candidate is no longer than PageLimit when PageLimit is set.
@@ -87,6 +88,8 @@ func (a *CandidateAccounting) check(baseList, candList []any) (bool, string) {
 		}
 		baseGroups[id] = append(baseGroups[id], object)
 	}
+	boundary := &PageBoundary{SortField: a.SortField, Limit: a.PageLimit, CopyRule: a.CopyRule}
+	cutID, cut := boundary.cutBoundaryID(baseList, a.IDField)
 	if !monotoneDescending(candList, a.SortField) {
 		return false, "candidate rows are not ordered " + a.SortField + " DESC"
 	}
@@ -108,7 +111,7 @@ func (a *CandidateAccounting) check(baseList, candList []any) (bool, string) {
 			}
 			continue
 		}
-		if !a.CopyRule.candidateIsServedCopy(group, object) {
+		if boundary.admitCopy(a.CopyRule, group, object, cut && id == cutID) == copyRefused {
 			return false, fmt.Sprintf("candidate row %q equals no baseline copy under the declared %s rule", id, a.CopyRule.describe())
 		}
 		lastShared = i

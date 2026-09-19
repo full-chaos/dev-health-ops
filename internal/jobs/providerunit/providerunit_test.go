@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/httptrace"
 	"strings"
 	"sync"
 	"testing"
@@ -51,8 +52,12 @@ func TestEnabledProviderUnitExecutesCompleteRouteAndTerminalizes(t *testing.T) {
 	if repository.status != "success" || repository.attempt != 1 {
 		t.Fatalf("repository status=%s attempt=%d", repository.status, repository.attempt)
 	}
-	if _, ok := repository.result["go_provider_route"]; !ok {
+	route, ok := repository.result["go_provider_route"].(map[string]any)
+	if !ok {
 		t.Fatalf("terminal result=%#v", repository.result)
+	}
+	if requests, present := route["requests"].(int); !present || requests != 2 {
+		t.Fatalf("go_provider_route=%#v", route)
 	}
 	observations, ok := repository.result["go_worklog_observations"].([]providersync.JiraWorklogFetchObservation)
 	if !ok || len(observations) != 1 || !observations[0].RESTFallbackUsed {
@@ -639,7 +644,7 @@ func successfulExecutor(
 			) providerfoundation.BackoffGate {
 				return testBackoffGate{}
 			},
-			Handler:           testCompleteRouteHandler{t: t, now: now, WorklogObservations: []providersync.JiraWorklogFetchObservation{{IssueKey: "FLAGS-1", RESTFallbackUsed: true}}},
+			Handler:           testCompleteRouteHandler{t: t, now: now, Probes: 2, WorklogObservations: []providersync.JiraWorklogFetchObservation{{IssueKey: "FLAGS-1", RESTFallbackUsed: true}}},
 			Comparator:        providersync.ProductionContractComparator{},
 			Committer:         providersync.EffectCommitter{Ledger: &testEffectLedger{}, Sink: testEffectSink{}, Readback: testEffectReadback{}, Now: func() time.Time { return now }},
 			HeartbeatInterval: 10 * time.Second,
@@ -918,8 +923,14 @@ func (githubCredentialDecryptor) Decrypt(secrets.Value) ([]byte, error) {
 
 type testDoer struct{}
 
-func (testDoer) Do(*http.Request) (*http.Response, error) {
-	return nil, errors.New("unexpected request")
+// Do fails every request after reporting its write, as a transport does for
+// a request that reached the wire and got no response.
+func (testDoer) Do(request *http.Request) (*http.Response, error) {
+	err := errors.New("unexpected request")
+	if trace := httptrace.ContextClientTrace(request.Context()); trace != nil && trace.WroteRequest != nil {
+		trace.WroteRequest(httptrace.WroteRequestInfo{})
+	}
+	return nil, err
 }
 
 type githubFilesTraversalDoer struct{}
@@ -969,16 +980,23 @@ type testCompleteRouteHandler struct {
 	t                   *testing.T
 	now                 time.Time
 	WorklogObservations []providersync.JiraWorklogFetchObservation
+	// Probes is how many provider calls Collect sends before building rows.
+	Probes int
 }
 
 func (handler testCompleteRouteHandler) Collect(
-	_ context.Context,
+	ctx context.Context,
 	claim providersync.Claim,
 	_ providerfoundation.Credential,
-	_ *providerfoundation.HTTPClient,
+	client *providerfoundation.HTTPClient,
 	_ time.Time,
 ) (providersync.CompleteRouteBatch, error) {
 	handler.t.Helper()
+	for probe := 0; probe < handler.Probes; probe++ {
+		if response, err := client.Do(ctx, http.MethodGet, "/probe", nil); err == nil {
+			_ = response.Body.Close()
+		}
+	}
 	effects := make([]providersync.EffectBatch, 0, 4)
 	for _, destination := range []string{
 		"feature_flag", "feature_flag_event",
@@ -1079,4 +1097,57 @@ func (testEffectReadback) InspectEffect(
 	providersync.EffectBatch,
 ) (providersync.EffectInspection, error) {
 	return providersync.EffectAbsent, nil
+}
+
+// stuckLogOutput never returns from Write: a log pipe nobody reads.
+type stuckLogOutput struct{ release chan struct{} }
+
+func (output stuckLogOutput) Write(p []byte) (int, error) {
+	<-output.release
+	return len(p), nil
+}
+
+// TestRequestUsageNeverDelaysAUnitsCompletion runs the same unit twice, once
+// with no usage writer and once with a writer that nobody drains (a full
+// queue) and whose own log output is stuck: the unit reaches Complete, with
+// the same terminal result, in the same time.
+func TestRequestUsageNeverDelaysAUnitsCompletion(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
+	output := stuckLogOutput{release: make(chan struct{})}
+	t.Cleanup(func() { close(output.release) })
+	stuck := providersync.NewRequestUsageWriter(nil, slog.New(slog.NewTextHandler(output, nil)))
+	for range 2048 {
+		stuck.Offer([]providersync.RequestUsageRow{{Requests: 1}})
+	}
+	run := func(writer *providersync.RequestUsageWriter) (time.Duration, *memoryUnitRepository) {
+		repository := newMemoryUnitRepository(providerUnit())
+		build := successfulExecutor(t, now)
+		handler := &Handler{
+			Repository: repository, LeaseDuration: time.Minute, Heartbeat: 10 * time.Second,
+			Now: func() time.Time { return now },
+			BuildExecutor: func(session *providersync.LeaseSession) (providersync.CompleteRouteExecutor, error) {
+				executor, err := build(session)
+				executor.RequestUsage = writer
+				return executor, err
+			},
+		}
+		started := time.Now()
+		if err := handler.Work(context.Background(), providerExecution(repository.unit, now, 1)); err != nil {
+			t.Fatalf("Work() error = %v", err)
+		}
+		return time.Since(started), repository
+	}
+	baseline, plain := run(nil)
+	elapsed, recorded := run(stuck)
+	if plain.status != "success" || recorded.status != "success" {
+		t.Fatalf("status plain=%s recorded=%s", plain.status, recorded.status)
+	}
+	route, _ := recorded.result["go_provider_route"].(map[string]any)
+	if requests, _ := route["requests"].(int); requests != 2 {
+		t.Fatalf("go_provider_route=%#v", route)
+	}
+	if elapsed > baseline+100*time.Millisecond {
+		t.Fatalf("Complete reached in %s with a stuck writer, %s without one", elapsed, baseline)
+	}
 }

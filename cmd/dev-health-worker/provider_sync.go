@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -12,6 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/providerunit"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
@@ -802,7 +804,21 @@ func constructProviderSyncWorkerWithDependencies(
 		_ = clickhouseConnection.Close()
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
+	// Opened on the first usage write, never here: an unreachable usage
+	// store must not keep provider units from starting.
+	usageSink := &providersync.LazyClickHouseRequestUsageSink{
+		Open: func(openCtx context.Context) (driver.Conn, error) {
+			return clickhousestore.Open(openCtx, requestUsageClickHouseConfig(cfg.ClickHouseURI.Reveal()))
+		},
+	}
+	requestUsage := providersync.NewRequestUsageWriter(usageSink, logging.NewJSON(os.Stdout, cfg.LogLevel))
+	requestUsage.Start()
+	closeRequestUsage := func() error {
+		requestUsage.Close(requestUsageDrainTimeout)
+		return usageSink.Close()
+	}
 	closeDependencies := func() {
+		_ = closeRequestUsage()
 		valkeyClient.Close()
 		_ = clickhouseConnection.Close()
 	}
@@ -830,13 +846,8 @@ func constructProviderSyncWorkerWithDependencies(
 			Repository: providerfoundation.PostgresPagerDutyOAuthTokenRepository{
 				Pool: postgresDatabase.pools.Domain,
 			},
-			Cipher: decryptor,
-			Doer: &http.Client{
-				Timeout: 45 * time.Second,
-				CheckRedirect: func(*http.Request, []*http.Request) error {
-					return http.ErrUseLastResponse
-				},
-			},
+			Cipher:          decryptor,
+			Doer:            pagerDutyOAuthDoer(),
 			AppClientID:     cfg.PagerDutyOAuthClientID,
 			AppClientSecret: cfg.PagerDutyOAuthSecret,
 		},
@@ -855,6 +866,7 @@ func constructProviderSyncWorkerWithDependencies(
 	// dev_health_provider_unit_claimed_total/_failed_total stay permanently
 	// zero in production despite the counters being fully wired in Claim/Fail.
 	repository.Metrics = providerMetrics
+	withRequestUsage(handler, requestUsage)
 	adapter, err := jobruntime.NewAdapter[jobruntime.ProviderUnitArgs](
 		registry, spec, handler, jobruntime.Dependencies{
 			Logger: logger, Observer: observer,
@@ -887,14 +899,20 @@ func constructProviderSyncWorkerWithDependencies(
 		queues: selectedQueueBudgets(
 			cfg.Queues, []string{providerUnitQueue}, cfg.WorkerQueueConcurrency,
 		),
+		// Cleanups run in reverse: the request-usage writer drains and its
+		// connection closes before the shared connections go.
 		cleanups: []func() error{
 			clickhouseConnection.Close,
 			func() error {
 				valkeyClient.Close()
 				return nil
 			},
+			closeRequestUsage,
 		},
-		metricsSource: map[string]health.MetricsSource{"provider_foundation": providerMetrics},
+		metricsSource: map[string]health.MetricsSource{
+			"provider_foundation":    providerMetrics,
+			"provider_request_usage": requestUsage,
+		},
 	}, nil
 }
 
@@ -921,4 +939,41 @@ func (providerUnitTenantScope) Resolve(
 		return nil, jobruntime.DomainMismatch(errWorkerDependencyUnavailable)
 	}
 	return ctx, nil
+}
+
+// pagerDutyOAuthDoer sends PagerDuty token refreshes. A refresh runs inside a
+// unit execution's credential resolution, so it counts as that execution's
+// provider spend.
+func pagerDutyOAuthDoer() providerfoundation.HTTPDoer {
+	return providersync.CountRequests(&http.Client{
+		Timeout: 45 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	})
+}
+
+// requestUsageDrainTimeout bounds how long worker shutdown waits for the
+// request-usage writer to store what it holds.
+const requestUsageDrainTimeout = 10 * time.Second
+
+// requestUsageClickHouseConfig opens the request-usage writer's own single
+// connection, so a slow usage insert can never hold a connection a unit's
+// effect writes wait for.
+func requestUsageClickHouseConfig(dsn string) clickhousestore.Config {
+	config := clickhousestore.DefaultConfig(dsn)
+	config.MaxOpenConns = 1
+	config.MaxIdleConns = 1
+	return config
+}
+
+// withRequestUsage hands every executor the handler builds the process's
+// request-usage writer.
+func withRequestUsage(handler *providerunit.Handler, writer *providersync.RequestUsageWriter) {
+	build := handler.BuildExecutor
+	handler.BuildExecutor = func(session *providersync.LeaseSession) (providersync.CompleteRouteExecutor, error) {
+		executor, err := build(session)
+		executor.RequestUsage = writer
+		return executor, err
+	}
 }

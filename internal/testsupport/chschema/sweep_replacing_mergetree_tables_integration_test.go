@@ -182,8 +182,10 @@ func sweepReplacingMergeTreeTables(t *testing.T) []replacingMergeTreeTable {
 // 19 daily-family output tables from plain MergeTree to
 // ReplacingMergeTree(computed_at). Recounted from the migration chain: the
 // failing run's printed list was the prior 94 plus exactly those 19 names.
+// 113 -> 114: 098_provider_request_usage.sql adds `provider_request_usage`
+// (version recorded_at), keyed on the full per-flush row identity.
 func TestSweepReplacingMergeTreeTablesMatchesTheAuthoritativeCount(t *testing.T) {
-	const wantCount = 113
+	const wantCount = 114
 
 	tables := sweepReplacingMergeTreeTables(t)
 	if len(tables) != wantCount {

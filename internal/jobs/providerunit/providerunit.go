@@ -766,6 +766,7 @@ func (handler *Handler) Work(
 				"effects_written": result.Effects.Written,
 				"effects_skipped": result.Effects.Skipped,
 				"records":         result.Comparison.NativeRecords,
+				"requests":        result.RequestUsage.Requests,
 			}
 			if completeErr := handler.Repository.Complete(
 				context.WithoutCancel(ctx), session.Claim, payload,

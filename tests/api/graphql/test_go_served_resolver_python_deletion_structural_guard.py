@@ -104,6 +104,14 @@ DELETED_GO_SERVED_RESOLVER_MODULES: dict[str, Path] = {
     / "graphql"
     / "resolvers"
     / "operating_review.py",
+    # reviewEdges.
+    "review edges resolver": ROOT
+    / "src"
+    / "dev_health_ops"
+    / "api"
+    / "graphql"
+    / "resolvers"
+    / "review_edges.py",
     # The operating review computation; its only importer was the resolver.
     "operating review computation": ROOT
     / "src"
@@ -132,18 +140,23 @@ RETAINED_ORACLE_MODULES: dict[str, Path] = {
 # that both planes digest for routing. Trimming "unused" Python here would
 # silently change the schema digest and disable every registered operation.
 SDL_LOAD_BEARING_SOURCES: tuple[Path, ...] = (
+    ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "types" / "review_edges.py",
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "schema.py",
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "models" / "inputs.py",
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "models" / "outputs.py",
 )
 
 SDL_LOAD_BEARING_SYMBOLS: dict[str, frozenset[str]] = {
+    "review_edges.py": frozenset(
+        {"ReviewEdgesInput", "ReviewEdgeRow", "ReviewEdgesResult"}
+    ),
     "schema.py": frozenset(
         {
             "capacity_forecast",
             "capacity_forecasts",
             "throughput_forecast",
             "operating_review",
+            "review_edges",
         }
     ),
     "inputs.py": frozenset(

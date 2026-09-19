@@ -2,10 +2,13 @@ package providersync
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
+	"regexp"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
@@ -225,6 +228,39 @@ func (executor CompleteRouteExecutor) Execute(
 		state, loadErr := committer.Ledger.LoadEffects(
 			workContext, session.Claim, normalizedAt,
 		)
+		// bindCredential resolves the unit's credential and, for a route whose
+		// sinks are built from it, builds them -- once per attempt, wherever
+		// it is first needed. A snapshot replay needs the sinks before it
+		// commits, so it binds early; the call and its failures are the same
+		// either way, and neither makes a provider request.
+		var credential providerfoundation.Credential
+		credentialBound := false
+		bindCredential := func() error {
+			if credentialBound {
+				return nil
+			}
+			resolved, err := executor.Credentials.Resolve(workContext, guard, session.Claim.TenantScope())
+			if err != nil {
+				return err
+			}
+			if executor.EffectsFactory != nil {
+				committer.Sink, committer.Readback, err = executor.EffectsFactory(resolved)
+				if err != nil {
+					return err
+				}
+				if committer.Sink == nil {
+					return ErrInvalidConfiguration
+				}
+				// A route that recovers from a snapshot settles a replayed
+				// effect by reading it back; a factory that binds no readback
+				// would commit a first attempt whose replay could never finish.
+				if descriptor.PreparedManifestRecovery && committer.Readback == nil {
+					return ErrInvalidConfiguration
+				}
+			}
+			credential, credentialBound = resolved, true
+			return nil
+		}
 		switch {
 		case loadErr == nil:
 			if state.Generation != session.Claim.GenerationKey() ||
@@ -265,6 +301,11 @@ func (executor CompleteRouteExecutor) Execute(
 			)
 		}
 		if recoveredEffects != nil && descriptor.PreparedManifestRecovery && !legacyLedger {
+			if executor.EffectsFactory != nil {
+				if err := bindCredential(); err != nil {
+					return err
+				}
+			}
 			manifest, err := preparedLedger.LoadRouteSnapshot(
 				workContext, session.Claim, *recoveredEffects, executor.now(),
 			)
@@ -368,22 +409,8 @@ func (executor CompleteRouteExecutor) Execute(
 			// Fell through: the snapshot was discarded and the route replays
 			// from the claim below, exactly as an ordinary first attempt would.
 		}
-		credential, err := executor.Credentials.Resolve(
-			workContext,
-			guard,
-			session.Claim.TenantScope(),
-		)
-		if err != nil {
+		if err := bindCredential(); err != nil {
 			return err
-		}
-		if executor.EffectsFactory != nil {
-			committer.Sink, committer.Readback, err = executor.EffectsFactory(credential)
-			if err != nil {
-				return err
-			}
-			if committer.Sink == nil {
-				return ErrInvalidConfiguration
-			}
 		}
 		client, err := (Executor{
 			Doer: executor.Doer, Retry: executor.Retry,
@@ -507,11 +534,36 @@ func (executor CompleteRouteExecutor) Execute(
 					"cause", prepareErr.Error(),
 				)
 				preparedCommit = false
+			case errors.Is(prepareErr, ErrPreparedRouteSnapshotSensitiveKey) &&
+				!preparedManifestRouteRequiresSnapshot(session.Claim.Provider, session.Claim.Dataset):
+				// Provider content (a work item's custom field, a flag's
+				// payload) can carry a key the snapshot must never store. The
+				// batch commits the way it would without a snapshot; the line
+				// names the key, never its value.
+				var sensitive preparedSnapshotSensitiveKeyError
+				key := ""
+				if errors.As(prepareErr, &sensitive) {
+					key = sensitive.key
+				}
+				slog.Warn(
+					"provider_sync.prepared_snapshot_sensitive_key_fallback",
+					"provider", session.Claim.Provider, "dataset", session.Claim.Dataset,
+					"unit", session.Claim.ID, "generation", session.Claim.GenerationKey(),
+					"key", key,
+				)
+				preparedCommit = false
 			default:
 				return prepareErr
 			}
 		}
 		if !preparedCommit {
+			if descriptor.PreparedManifestRecovery && !legacyLedger {
+				// A route that recovers from a snapshot committed this batch
+				// without one: its recovery re-collects, and the unit result
+				// says so.
+				recovery = "recollect"
+				result.Result["recovery"] = "recollect"
+			}
 			result.Effects, err = committer.Commit(
 				workContext, session.Claim, batch.Effects, normalizedAt,
 			)
@@ -529,11 +581,9 @@ func (executor CompleteRouteExecutor) Execute(
 	// linear_work_items_route.go all populate it), so this is a straight
 	// surface-the-existing-data log, not a new computation.
 	if err == nil {
-		slog.Info(
+		slog.Default().LogAttrs(context.Background(), slog.LevelInfo,
 			"provider_sync.route_completed",
-			"provider", session.Claim.Provider, "dataset", session.Claim.Dataset,
-			"unit", session.Claim.ID, "recovery", recovery, "effects_written", result.Effects.Written,
-			"result", result.Result,
+			routeCompletedLogFor(session.Claim, recovery, result).attrs()...,
 		)
 	}
 	return result, err
@@ -577,4 +627,90 @@ func supersededSnapshotWritingEffectsVerdict(
 		}
 	}
 	return "manifest_mismatch"
+}
+
+// routeCompletedLog is everything provider_sync.route_completed carries:
+// identity from the claim, this package's own recovery word, effect and fetch
+// counts, and the unit result's "*_synced" counts. No value on the line comes
+// from provider content; the unit's stored result keeps everything else.
+type routeCompletedLog struct {
+	Provider               string
+	Dataset                string
+	Unit                   string
+	Recovery               string
+	EffectsWritten         int
+	EffectsSkipped         int
+	EffectsMarkedCommitted int
+	EffectsResetForReplay  int
+	Records                int
+	Requests               int
+	Pages                  int
+	Counts                 []routeCompletedCount
+}
+
+// routeCompletedCount is one integer "*_synced" entry of the unit result.
+type routeCompletedCount struct {
+	Name  string
+	Value int64
+}
+
+func routeCompletedLogFor(claim Claim, recovery string, result CompleteRouteExecutionResult) routeCompletedLog {
+	return routeCompletedLog{
+		Provider: claim.Provider, Dataset: claim.Dataset, Unit: claim.ID, Recovery: recovery,
+		EffectsWritten: result.Effects.Written, EffectsSkipped: result.Effects.Skipped,
+		EffectsMarkedCommitted: result.Effects.MarkedCommitted,
+		EffectsResetForReplay:  result.Effects.ResetForReplay,
+		Records:                result.Fetch.Records, Requests: result.Fetch.Requests, Pages: result.Fetch.Pages,
+		Counts: routeCompletedCounts(result.Result),
+	}
+}
+
+// routeCompletedCounts keeps only result entries whose key ends in
+// "_synced" and whose value is an integer: counts this package's routes
+// compute. Strings, nested values and anything else stay in the stored result.
+func routeCompletedCounts(result map[string]any) []routeCompletedCount {
+	var counts []routeCompletedCount
+	if len(result) == 0 {
+		return nil
+	}
+	for key, value := range result {
+		if !strings.HasSuffix(key, "_synced") || !routeCompletedCountName.MatchString(key) {
+			continue
+		}
+		var count int64
+		switch typed := value.(type) {
+		case int:
+			count = int64(typed)
+		case int64:
+			count = typed
+		case json.Number:
+			parsed, err := typed.Int64()
+			if err != nil {
+				continue
+			}
+			count = parsed
+		default:
+			continue
+		}
+		counts = append(counts, routeCompletedCount{Name: key, Value: count})
+	}
+	sort.Slice(counts, func(left, right int) bool { return counts[left].Name < counts[right].Name })
+	return counts
+}
+
+var routeCompletedCountName = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+
+func (line routeCompletedLog) attrs() []slog.Attr {
+	attrs := []slog.Attr{
+		slog.String("provider", line.Provider), slog.String("dataset", line.Dataset),
+		slog.String("unit", line.Unit), slog.String("recovery", line.Recovery),
+		slog.Int("effects_written", line.EffectsWritten), slog.Int("effects_skipped", line.EffectsSkipped),
+		slog.Int("effects_marked_committed", line.EffectsMarkedCommitted),
+		slog.Int("effects_reset_for_replay", line.EffectsResetForReplay),
+		slog.Int("records", line.Records), slog.Int("requests", line.Requests), slog.Int("pages", line.Pages),
+	}
+	for _, count := range line.Counts {
+		attrs = append(attrs, slog.Int64(count.Name, count.Value))
+	}
+	return attrs
 }

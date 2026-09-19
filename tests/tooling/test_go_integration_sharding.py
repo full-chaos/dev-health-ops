@@ -2161,10 +2161,17 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # The pull request contract tests replace the per-guard unit tests
     # (-12 +4 ordinary): -8 top-level (1537 -> 1529), integration-tagged
     # unchanged at 177.
-    # 1529 top-level provider tests, 177 of them integration-tagged; both
+    # The prepared-snapshot mechanisms every re-collect route needs before it
+    # can enrol (sinks bound from the credential before a replay, worklog
+    # observations in the stored snapshot, and a commit without a snapshot
+    # when a row carries a sensitive key, with every protected value kept out
+    # of every log line, which a test pins across the log-site packages, and
+    # the protected-key classifier with its package sweep) added 16 ordinary
+    # tests: +16 top-level (1529 -> 1545), integration-tagged unchanged at 177.
+    # 1545 top-level provider tests, 177 of them integration-tagged; both
     # pins move with any top-level test added to or removed from
     # internal/providersync.
-    assert len(expected_provider_tests) == 1529
+    assert len(expected_provider_tests) == 1545
 
     assert len(expected_integration_tests) == 177
     assert expected_integration_tests < expected_provider_tests
@@ -2182,7 +2189,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1529
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1545
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -2300,7 +2307,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1529
+    assert len(selected_tests) == len(set(selected_tests)) == 1545
     assert set(selected_tests) == expected_tests
 
 

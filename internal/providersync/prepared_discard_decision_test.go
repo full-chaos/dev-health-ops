@@ -4,8 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -226,23 +230,64 @@ func TestSupersededSnapshotDiscardDecisionTable(t *testing.T) {
 	}
 }
 
-// declaredConstants reads the string constants of one declared type from the
-// package source, so an axis of the decision table below is the set the code
-// actually has rather than a list kept by hand.
-func declaredConstants(t *testing.T, file, typeName string) map[string]bool {
+// declaredConstants parses every non-test source file of the package and
+// returns each string value declared as typeName, in either form a Go
+// declaration can take -- `x typeName = "v"` or `x = typeName("v")` -- so an
+// axis of the decision table below is the set the code actually declares
+// rather than a list kept by hand. A value computed at run time is not a
+// declaration and is outside what this can see.
+func declaredConstants(t *testing.T, typeName string) map[string]bool {
 	t.Helper()
-	source, err := os.ReadFile(file)
+	files, err := filepath.Glob("*.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	pattern := regexp.MustCompile(`(?m)^\s*\w+\s+` + regexp.QuoteMeta(typeName) + `\s*=\s*"([^"]+)"`)
-	matches := pattern.FindAllStringSubmatch(string(source), -1)
-	if len(matches) == 0 {
-		t.Fatalf("no %s constants found in %s", typeName, file)
+	values := map[string]bool{}
+	fileSet := token.NewFileSet()
+	for _, file := range files {
+		if strings.HasSuffix(file, "_test.go") {
+			continue
+		}
+		parsed, err := parser.ParseFile(fileSet, file, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, declaration := range parsed.Decls {
+			general, ok := declaration.(*ast.GenDecl)
+			if !ok || (general.Tok != token.CONST && general.Tok != token.VAR) {
+				continue
+			}
+			for _, spec := range general.Specs {
+				valueSpec, ok := spec.(*ast.ValueSpec)
+				if !ok {
+					continue
+				}
+				typed := false
+				if ident, ok := valueSpec.Type.(*ast.Ident); ok && ident.Name == typeName {
+					typed = true
+				}
+				for _, expression := range valueSpec.Values {
+					literal, _ := expression.(*ast.BasicLit)
+					if call, ok := expression.(*ast.CallExpr); ok && len(call.Args) == 1 {
+						if ident, ok := call.Fun.(*ast.Ident); ok && ident.Name == typeName {
+							literal, _ = call.Args[0].(*ast.BasicLit)
+							typed = true
+						}
+					}
+					if !typed || literal == nil || literal.Kind != token.STRING {
+						continue
+					}
+					value, err := strconv.Unquote(literal.Value)
+					if err != nil {
+						t.Fatal(err)
+					}
+					values[value] = true
+				}
+			}
+		}
 	}
-	values := make(map[string]bool, len(matches))
-	for _, match := range matches {
-		values[match[1]] = true
+	if len(values) == 0 {
+		t.Fatalf("no %s values declared in the package", typeName)
 	}
 	return values
 }
@@ -253,8 +298,8 @@ func declaredConstants(t *testing.T, file, typeName string) map[string]bool {
 // new state added to the package goes red here instead of silently taking
 // some default branch of the discard.
 func TestDiscardDecisionTableEnumeratesEveryDeclaredState(t *testing.T) {
-	statuses := declaredConstants(t, "generation_journal.go", "GenerationBlockStatus")
-	inspections := declaredConstants(t, "effect_ledger.go", "EffectInspection")
+	statuses := declaredConstants(t, "GenerationBlockStatus")
+	inspections := declaredConstants(t, "EffectInspection")
 	coveredStatuses := map[string]bool{}
 	coveredInspections := map[string]bool{}
 	blockedCovered, readErrorCovered, unknownAnswerCovered, noReadbackCovered := false, false, false, false

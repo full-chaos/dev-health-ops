@@ -101,8 +101,8 @@ func TestHeatmapAxisTieGroupShape_RefusesACandidateGroupNotInNameOrder(t *testin
 	candData := heatmapAxisTieGroupBody(t, cells, []string{"repoB", "repoA"})
 
 	plan := buildHeatmapAxisTieGroupPlan(heatmapAxisTieGroupTestShape(), baseData, candData)
-	if !plan.valid {
-		t.Fatal("plan should be structurally valid: same name set, both axis lists a valid descending order of their own totals")
+	if plan.valid {
+		t.Fatal("plan must refuse: the candidate axis (repoB, repoA) is not the deterministic order of its own totals")
 	}
 	if plan.admits(Finding{Path: "$.data.axes.y[0]", Shape: ShapeValue}) {
 		t.Error("data.axes.y[0] must stay outside: candidate's own tie-group order (repoB, repoA) is not name ascending")
@@ -130,25 +130,25 @@ func TestHeatmapAxisTieGroupShape_RefusesASetDifference(t *testing.T) {
 	}
 }
 
-// TestHeatmapAxisTieGroupShape_StaysInertWhenATotalDiffersAcrossLegs
-// isolates the shape's own composability guarantee: repoA's own total
-// differs between legs (a value change some OTHER mechanism, verified
-// or not, would have to explain), and merely coincides with repoB's
-// candidate-side total -- rule 2's cross-leg equality check must refuse
-// to treat that coincidence as a genuine tie.
-func TestHeatmapAxisTieGroupShape_StaysInertWhenATotalDiffersAcrossLegs(t *testing.T) {
-	baseCells := heatmapBoundaryCell("w1", "repoA", 8) + "," + heatmapBoundaryCell("w1", "repoB", 4)
-	candCells := heatmapBoundaryCell("w1", "repoA", 4) + "," + heatmapBoundaryCell("w1", "repoB", 4)
+// TestHeatmapAxisTieGroupShape_AdmitsAReorderWhenATotalDiffersAcrossLegs
+// pins that a total shifted between the legs does not void the axis
+// check: repoA and repoB tie at 4 on the baseline (Python's tie order
+// puts repoB first) while the candidate's repoB total is 3, so the
+// candidate axis is [repoA, repoB]. Each axis is a consequence of its
+// own leg's cells; the cell difference itself is judged by the cell
+// declarations, not here.
+func TestHeatmapAxisTieGroupShape_AdmitsAReorderWhenATotalDiffersAcrossLegs(t *testing.T) {
+	baseCells := heatmapBoundaryCell("w1", "repoA", 4) + "," + heatmapBoundaryCell("w1", "repoB", 4)
+	candCells := heatmapBoundaryCell("w1", "repoA", 4) + "," + heatmapBoundaryCell("w1", "repoB", 3)
 
-	baseData := heatmapAxisTieGroupBody(t, baseCells, []string{"repoA", "repoB"})
+	baseData := heatmapAxisTieGroupBody(t, baseCells, []string{"repoB", "repoA"})
 	candData := heatmapAxisTieGroupBody(t, candCells, []string{"repoA", "repoB"})
 
 	plan := buildHeatmapAxisTieGroupPlan(heatmapAxisTieGroupTestShape(), baseData, candData)
-	if !plan.valid {
-		t.Fatal("plan should be structurally valid: same name set, both axis lists a valid descending order of their own totals")
-	}
-	if plan.admits(Finding{Path: "$.data.axes.y[1]", Shape: ShapeValue}) {
-		t.Error("data.axes.y[1] must stay outside: repoA's own total (8 vs 4) differs across legs, so it can never join a verified tie group")
+	for _, idx := range []int{0, 1} {
+		if !plan.admits(Finding{Path: fmt.Sprintf("$.data.axes.y[%d]", idx), Shape: ShapeValue}) {
+			t.Errorf("data.axes.y[%d] must be admitted: both axes are valid orderings of their own legs' totals", idx)
+		}
 	}
 }
 
@@ -168,18 +168,15 @@ func TestHeatmapAxisTieGroupShape_RefusesWhenAxisIsNotWeaklyDescending(t *testin
 	}
 }
 
-// TestHeatmapAxisTieGroupShape_RefusesWhenBaselinePositionsHoldDifferentNames
-// pins rule 2's own "same position range" check directly, isolated from
-// the cross-leg-total-differs guard: repoX's own total differs across
-// legs (6 baseline, 2 candidate) -- correctly excluded from any group on
-// its own -- but its rank RELATIVE to the tied repoB/repoC pair (total 4
-// on both legs) flips: baseline ranks repoX above the tie (axis
-// [repoX, repoB, repoC]), candidate ranks it below (axis [repoB, repoC,
-// repoX]). The candidate's own tie-group position range ([0, 2)) sits
-// over a DIFFERENT name pair on baseline at those same positions
-// ({repoX, repoB}, not {repoB, repoC}), so the whole three-way reorder
-// must stay outside even though repoB/repoC's own totals never moved.
-func TestHeatmapAxisTieGroupShape_RefusesWhenBaselinePositionsHoldDifferentNames(t *testing.T) {
+// TestHeatmapAxisTieGroupShape_AdmitsARippleWhenATotalDiffersAcrossLegs:
+// repoX's total differs across legs (6 baseline, 2 candidate), so its
+// rank relative to the tied repoB/repoC pair (4 on both legs) flips:
+// baseline [repoX, repoB, repoC], candidate [repoB, repoC, repoX]. Each
+// axis is the ordering of its own leg's totals, so all three positions
+// are admitted; repoX's cell difference is the cell declarations' to
+// judge (see the Compare-level test below, where it stays outside when
+// the direction is wrong).
+func TestHeatmapAxisTieGroupShape_AdmitsARippleWhenATotalDiffersAcrossLegs(t *testing.T) {
 	baseCells := heatmapBoundaryCell("w1", "repoX", 6) + "," + heatmapBoundaryCell("w1", "repoB", 4) + "," + heatmapBoundaryCell("w1", "repoC", 4)
 	candCells := heatmapBoundaryCell("w1", "repoX", 2) + "," + heatmapBoundaryCell("w1", "repoB", 4) + "," + heatmapBoundaryCell("w1", "repoC", 4)
 
@@ -187,12 +184,9 @@ func TestHeatmapAxisTieGroupShape_RefusesWhenBaselinePositionsHoldDifferentNames
 	candData := heatmapAxisTieGroupBody(t, candCells, []string{"repoB", "repoC", "repoX"})
 
 	plan := buildHeatmapAxisTieGroupPlan(heatmapAxisTieGroupTestShape(), baseData, candData)
-	if !plan.valid {
-		t.Fatal("plan should be structurally valid: same name set, both axis lists a valid descending order of their own totals")
-	}
 	for _, idx := range []int{0, 1, 2} {
-		if plan.admits(Finding{Path: fmt.Sprintf("$.data.axes.y[%d]", idx), Shape: ShapeValue}) {
-			t.Errorf("data.axes.y[%d] must stay outside: candidate's own tie group at this position range does not occupy the same position range on baseline", idx)
+		if !plan.admits(Finding{Path: fmt.Sprintf("$.data.axes.y[%d]", idx), Shape: ShapeValue}) {
+			t.Errorf("data.axes.y[%d] must be admitted: each axis orders its own leg's totals", idx)
 		}
 	}
 }

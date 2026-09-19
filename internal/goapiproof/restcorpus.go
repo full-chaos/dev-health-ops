@@ -2336,10 +2336,11 @@ var heatmapReviewWaitDensityParity = Options{
 // (heatmap/response.go), where _axis_order's own stable sort (services/
 // heatmap.py) keeps breaking it by row-encounter order -- unverifiable
 // from the wire, and never fixed to match. See HeatmapAxisTieGroupShape's
-// own doc comment (heatmapaxistiegroup.go) for the full derivation; it
-// stays inert on any name whose own total genuinely differs between the
-// two legs, leaving that case to heatmapRepoTouchpointsTeamScopeSubsetDefect
-// or an unrelated, genuinely uncovered difference.
+// own doc comment (heatmapaxistiegroup.go) for the whole-axis invariant:
+// it admits the axis only when each leg's axis is the ordering of its own
+// cell totals over the same names; a cell value that differs between the
+// legs is judged by heatmapDedupParity's and the team-scope declarations,
+// never by this one.
 var heatmapRepoTouchpointsAxisTieGroupDefect = BaselineDefect{
 	Ticket:             "CHAOS-5965",
 	Reason:             "_axis_order's (services/heatmap.py) and axisOrder's (heatmap/response.go) own generic branch are both a stable sort by per-repo total descending; two repositories whose own totals genuinely tie keep whatever order the reference plane's own row-encounter order gives them, where this port breaks the same tie by name ascending. Go is correct.",
@@ -2415,11 +2416,10 @@ var heatmapHotspotRiskCellBoundaryDefect = BaselineDefect{
 // GroupDefect's own mechanism over hotspot_risk's file axis instead of
 // repo_touchpoints' repo axis: two files whose own totals genuinely tie.
 // It composes with heatmapHotspotRiskCellBoundaryDefect above rather than
-// overlapping it -- that defect's own rule 6 only admits an axis position
-// occupied by a file its own rule 4/2 already admitted (an entrant/
-// leaver or a verified fan-out value), never a pure tie between two files
-// neither the top-20 boundary nor a repos-join fan-out ever touched; this
-// defect covers exactly that remaining case.
+// replacing it: that defect owns a comparison whose two axes name
+// different files (the top-20 boundary); this one owns a comparison whose
+// axes name the same files and are each the ordering of their own leg's
+// cell totals.
 var heatmapHotspotRiskAxisTieGroupDefect = BaselineDefect{
 	Ticket:             "CHAOS-5965",
 	Reason:             "_axis_order's (services/heatmap.py) and axisOrder's (heatmap/response.go) own generic branch are both a stable sort by per-file total descending; two files whose own totals genuinely tie keep whatever order the reference plane's own row-encounter order gives them, where this port breaks the same tie by name ascending. Go is correct.",

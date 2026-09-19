@@ -15,7 +15,7 @@ one deletion at a time, and are NEVER removed.
    ``@strawberry.field`` registrations from ``api/graphql/schema.py`` drops 116
    lines from the export and moves the file's sha256 from
    ``29d509cd414cd957a7bcd73a1c0e78a07f17dd8a8794893233954aaa87241b88`` to
-   ``5e2150ef6b2b44975d83198b20d5b58cf72bca5a12cc51b9aed7304dad06545f``.
+   a different value.
 
 2. THAT FILE IS HALF THE ROUTING KEY. ``routeswitch.PostgresSwitch`` looks up
    ``go_api_routing_state`` by the 3-tuple (schema_digest, document_digest,
@@ -25,7 +25,7 @@ one deletion at a time, and are NEVER removed.
    EVERY registered operation at once. It is also gqlgen's input SDL, so the Go
    models for those types would vanish with it.
 
-3. THE STRAWBERRY FIELD BODIES RAISE. The three operations have no Python
+3. THE STRAWBERRY FIELD BODIES RAISE. These operations have no Python
    implementation: with no routing row, or when query-api fails, the field
    returns a GraphQL error and never a Python answer.
 
@@ -35,8 +35,9 @@ Python that is absent.
 
 # What this ledger holds
 
-The EXECUTION path -- ``resolvers/capacity.py``, ``resolvers/forecast.py`` and
-``metrics/capacity_queries.py`` -- plus ``discover_team_scopes``, which has no
+The EXECUTION path -- ``resolvers/capacity.py``, ``resolvers/forecast.py``,
+``metrics/capacity_queries.py``, ``resolvers/operating_review.py`` and
+``metrics/operating_review.py`` -- plus ``discover_team_scopes``, which has no
 caller in ``src/``.
 
 What is NOT here: ``metrics/compute_capacity.py`` and ``metrics/forecast.py``.
@@ -95,6 +96,20 @@ DELETED_GO_SERVED_RESOLVER_MODULES: dict[str, Path] = {
     / "dev_health_ops"
     / "metrics"
     / "capacity_queries.py",
+    # operatingReview.
+    "operating review resolver": ROOT
+    / "src"
+    / "dev_health_ops"
+    / "api"
+    / "graphql"
+    / "resolvers"
+    / "operating_review.py",
+    # The operating review computation; its only importer was the resolver.
+    "operating review computation": ROOT
+    / "src"
+    / "dev_health_ops"
+    / "metrics"
+    / "operating_review.py",
 }
 
 # The kernels RETAINED as Go-parity oracles, on the metrics/compounding_risk.py
@@ -124,13 +139,19 @@ SDL_LOAD_BEARING_SOURCES: tuple[Path, ...] = (
 
 SDL_LOAD_BEARING_SYMBOLS: dict[str, frozenset[str]] = {
     "schema.py": frozenset(
-        {"capacity_forecast", "capacity_forecasts", "throughput_forecast"}
+        {
+            "capacity_forecast",
+            "capacity_forecasts",
+            "throughput_forecast",
+            "operating_review",
+        }
     ),
     "inputs.py": frozenset(
         {
             "CapacityForecastInput",
             "CapacityForecastFilterInput",
             "ThroughputForecastInput",
+            "OperatingReviewInput",
         }
     ),
     "outputs.py": frozenset(
@@ -143,6 +164,10 @@ SDL_LOAD_BEARING_SYMBOLS: dict[str, frozenset[str]] = {
             "ThroughputRiskOverlay",
             "ThroughputStaleWip",
             "ThroughputEstimateCoverage",
+            "OperatingReview",
+            "OperatingReviewSection",
+            "OperatingReviewMetric",
+            "OperatingReviewDelta",
         }
     ),
 }

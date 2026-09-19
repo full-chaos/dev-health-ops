@@ -27,6 +27,15 @@
         {"file": "cmd/query-api/internal/throughputforecast/kernel_golden_test.go", "test": "TestNoHistoryPayloadMatchesLivePythonBitExact"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_retained_oracles_exist_and_have_no_production_importer"}
       ]
+    },
+    {
+      "operation": "operatingReview",
+      "two_plane_ops_sha": "12a6fa86fb59f2c6fe3aeec0ca44d040fc9e216f",
+      "guards": [
+        {"file": "cmd/query-api/internal/operatingreview/operatingreview_golden_test.go", "test": "TestOperatingReviewMatchesTheFrozenGolden"},
+        {"file": "cmd/query-api/internal/operatingreview/operatingreview_test.go", "test": "TestSumAvgMaxMin_SkipNilLikePythonNone"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
+      ]
     }
   ]
 }

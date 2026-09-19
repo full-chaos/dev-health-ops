@@ -233,16 +233,16 @@ func TestMintedCredentialCarriesTheBearerScheme(t *testing.T) {
 		return edgeValue, nil
 	})
 
-	if _, err := FetchBuildIdentity(context.Background(), envelopeServer.Client(), envelopeServer.URL, envelopeCredential); err != nil {
+	if _, err := FetchBuildIdentity(context.Background(), NewLegClient(0), envelopeServer.URL, envelopeCredential); err != nil {
 		t.Fatalf("the envelope credential must be accepted by the endpoint that checks the envelope: %v", err)
 	}
-	if _, err := FetchBuildIdentity(context.Background(), edgeServer.Client(), edgeServer.URL, edgeCredential); err != nil {
+	if _, err := FetchBuildIdentity(context.Background(), NewLegClient(0), edgeServer.URL, edgeCredential); err != nil {
 		t.Fatalf("the edge credential must be accepted by the endpoint that checks the edge access token: %v", err)
 	}
 
 	// The wrong CLASS on the wrong endpoint must still fail, with the
 	// exact production wording, and neither value anywhere in the error.
-	_, err := FetchBuildIdentity(context.Background(), envelopeServer.Client(), envelopeServer.URL, edgeCredential)
+	_, err := FetchBuildIdentity(context.Background(), NewLegClient(0), envelopeServer.URL, edgeCredential)
 	if err == nil {
 		t.Fatal("the edge credential must be rejected by the endpoint that checks the envelope")
 	}
@@ -293,7 +293,7 @@ func TestAnAgingCredentialIsReMintedBeforeEachUse(t *testing.T) {
 		return value, nil
 	})
 
-	before, err := FetchBuildIdentity(context.Background(), server.Client(), server.URL, credential)
+	before, err := FetchBuildIdentity(context.Background(), NewLegClient(0), server.URL, credential)
 	if err != nil {
 		t.Fatalf("first /buildinfo: %v", err)
 	}
@@ -308,7 +308,7 @@ func TestAnAgingCredentialIsReMintedBeforeEachUse(t *testing.T) {
 
 	// The closing stability check. A value read once at startup is now
 	// sixteen generations stale and this is a 401.
-	if err := VerifyBuildStable(context.Background(), server.Client(), server.URL, credential, before); err != nil {
+	if err := VerifyBuildStable(context.Background(), NewLegClient(0), server.URL, credential, before); err != nil {
 		t.Fatalf("the closing build-stability check failed on a stale credential: %v", err)
 	}
 }
@@ -333,13 +333,13 @@ func TestAStaticCredentialStillExpires(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	static := StaticCredential("Authorization", "envelope", "Bearer envelope-1")
-	if _, err := FetchBuildIdentity(context.Background(), server.Client(), server.URL, static); err != nil {
+	if _, err := FetchBuildIdentity(context.Background(), NewLegClient(0), server.URL, static); err != nil {
 		t.Fatalf("a current static credential must work: %v", err)
 	}
 	mu.Lock()
 	generation = 2
 	mu.Unlock()
-	if _, err := FetchBuildIdentity(context.Background(), server.Client(), server.URL, static); err == nil {
+	if _, err := FetchBuildIdentity(context.Background(), NewLegClient(0), server.URL, static); err == nil {
 		t.Fatal("a static credential the server no longer accepts must fail -- otherwise the refresh test above proves nothing")
 	}
 }
@@ -416,7 +416,7 @@ func newTwoPlaneRunner(t *testing.T, servers *twoPlaneServers, edge, proof *Cred
 		t.Fatalf("NewArtifactStore: %v", err)
 	}
 	return &Runner{
-		Client:    servers.edge.Client(),
+		Client:    NewLegClient(0),
 		Documents: map[string]string{"featureFlags": "query FeatureFlags { featureFlags { key } }"},
 		Registry: RegistryView{
 			SchemaDigest:   "sha256:29d509cd",

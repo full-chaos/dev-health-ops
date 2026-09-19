@@ -260,10 +260,10 @@ func TestProveOneRESTRequest_MatchWritesAReceipt(t *testing.T) {
 		_, _ = w.Write([]byte(`{"teams":["a","b"]}`))
 	}))
 	defer candidate.Close()
-	baseline := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	baseline := httptest.NewServer(referencePlane(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"teams":["a","b"]}`))
-	}))
+	})))
 	defer baseline.Close()
 
 	f := flags{queryAPIURL: candidate.URL, pythonAPIURL: baseline.URL, org: "org-1", recordedBy: "chris", reviewEvidence: "test"}
@@ -271,7 +271,7 @@ func TestProveOneRESTRequest_MatchWritesAReceipt(t *testing.T) {
 	request := goapiproof.RESTRequest{Name: "options", WantCandidateStatus: 200, WantBaselineStatus: 200, BodyMode: goapiproof.RESTBodyModeJSON}
 	writer := &fakeReceiptWriter{}
 
-	out, err := proveOneRESTRequest(context.Background(), http.DefaultClient, f, "REST:GET:/api/v1/filters/options", spec, request,
+	out, err := proveOneRESTRequest(context.Background(), goapiproof.NewLegClient(0), f, "REST:GET:/api/v1/filters/options", spec, request,
 		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil, false, nil)
 	if err != nil {
 		t.Fatalf("proveOneRESTRequest: %v", err)
@@ -320,10 +320,10 @@ func TestProveOneRESTRequest_UndeclaredNumericLeafRefusesWithNoReceipt(t *testin
 		_, _ = w.Write([]byte(body))
 	}))
 	defer candidate.Close()
-	baseline := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	baseline := httptest.NewServer(referencePlane(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(body))
-	}))
+	})))
 	defer baseline.Close()
 
 	f := flags{queryAPIURL: candidate.URL, pythonAPIURL: baseline.URL, org: "org-1", recordedBy: "chris", reviewEvidence: "test"}
@@ -335,7 +335,7 @@ func TestProveOneRESTRequest_UndeclaredNumericLeafRefusesWithNoReceipt(t *testin
 	}
 	writer := &fakeReceiptWriter{}
 
-	out, err := proveOneRESTRequest(context.Background(), http.DefaultClient, f, "REST:GET:/api/v1/filters/options", spec, request,
+	out, err := proveOneRESTRequest(context.Background(), goapiproof.NewLegClient(0), f, "REST:GET:/api/v1/filters/options", spec, request,
 		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil, false, nil)
 	if err != nil {
 		t.Fatalf("proveOneRESTRequest: %v", err)
@@ -369,10 +369,10 @@ func TestProveOneRESTRequest_DeclaredDefectAttachesFiringHistoryFromTheReceiptTa
 		_, _ = w.Write([]byte(`{"teams":["a","b"]}`))
 	}))
 	defer candidate.Close()
-	baseline := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	baseline := httptest.NewServer(referencePlane(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"teams":["a","b"]}`))
-	}))
+	})))
 	defer baseline.Close()
 
 	f := flags{queryAPIURL: candidate.URL, pythonAPIURL: baseline.URL, org: "org-1", recordedBy: "chris", reviewEvidence: "test"}
@@ -391,7 +391,7 @@ func TestProveOneRESTRequest_DeclaredDefectAttachesFiringHistoryFromTheReceiptTa
 	}
 	writer := &fakeReceiptWriter{firingHistory: wantHistory}
 
-	out, err := proveOneRESTRequest(context.Background(), http.DefaultClient, f, "REST:GET:/api/v1/filters/options", spec, request,
+	out, err := proveOneRESTRequest(context.Background(), goapiproof.NewLegClient(0), f, "REST:GET:/api/v1/filters/options", spec, request,
 		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil, false, nil)
 	if err != nil {
 		t.Fatalf("proveOneRESTRequest: %v", err)
@@ -434,9 +434,9 @@ func TestProveOneRESTRequest_StatusOnlyRequestNeverReadsFiringHistory(t *testing
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer candidate.Close()
-	baseline := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	baseline := httptest.NewServer(referencePlane(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-	}))
+	})))
 	defer baseline.Close()
 
 	f := flags{queryAPIURL: candidate.URL, pythonAPIURL: baseline.URL, org: "org-1", recordedBy: "chris", reviewEvidence: "test"}
@@ -452,7 +452,7 @@ func TestProveOneRESTRequest_StatusOnlyRequestNeverReadsFiringHistory(t *testing
 	}
 	writer := &fakeReceiptWriter{}
 
-	out, err := proveOneRESTRequest(context.Background(), http.DefaultClient, f, "REST:GET:/api/v1/filters/options", spec, request,
+	out, err := proveOneRESTRequest(context.Background(), goapiproof.NewLegClient(0), f, "REST:GET:/api/v1/filters/options", spec, request,
 		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil, false, nil)
 	if err != nil {
 		t.Fatalf("proveOneRESTRequest: %v", err)
@@ -477,10 +477,10 @@ func TestProveOneRESTRequest_FiringHistoryReadErrorFailsTheRequest(t *testing.T)
 		_, _ = w.Write([]byte(`{"teams":["a","b"]}`))
 	}))
 	defer candidate.Close()
-	baseline := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	baseline := httptest.NewServer(referencePlane(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"teams":["a","b"]}`))
-	}))
+	})))
 	defer baseline.Close()
 
 	f := flags{queryAPIURL: candidate.URL, pythonAPIURL: baseline.URL, org: "org-1", recordedBy: "chris", reviewEvidence: "test"}
@@ -496,7 +496,7 @@ func TestProveOneRESTRequest_FiringHistoryReadErrorFailsTheRequest(t *testing.T)
 	}
 	writer := &fakeReceiptWriter{firingHistoryErr: fmt.Errorf("constructed read failure")}
 
-	if _, err := proveOneRESTRequest(context.Background(), http.DefaultClient, f, "REST:GET:/api/v1/filters/options", spec, request,
+	if _, err := proveOneRESTRequest(context.Background(), goapiproof.NewLegClient(0), f, "REST:GET:/api/v1/filters/options", spec, request,
 		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil, false, nil); err == nil {
 		t.Fatal("want an error when ReadFiringHistory fails")
 	}
@@ -539,10 +539,10 @@ func TestProveOneRESTRequest_PersistsLegBodiesAndFindingsToTheArtifactDir(t *tes
 		_, _ = w.Write([]byte(candidateBody))
 	}))
 	defer candidate.Close()
-	baseline := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	baseline := httptest.NewServer(referencePlane(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(baselineBody))
-	}))
+	})))
 	defer baseline.Close()
 
 	artifacts, err := goapiproof.NewArtifactStore(t.TempDir())
@@ -555,7 +555,7 @@ func TestProveOneRESTRequest_PersistsLegBodiesAndFindingsToTheArtifactDir(t *tes
 	request := goapiproof.RESTRequest{Name: "options", WantCandidateStatus: 200, WantBaselineStatus: 200, BodyMode: goapiproof.RESTBodyModeJSON}
 	writer := &fakeReceiptWriter{}
 
-	out, err := proveOneRESTRequest(context.Background(), http.DefaultClient, f, "REST:GET:/api/v1/filters/options", spec, request,
+	out, err := proveOneRESTRequest(context.Background(), goapiproof.NewLegClient(0), f, "REST:GET:/api/v1/filters/options", spec, request,
 		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, artifacts, false, nil)
 	if err != nil {
 		t.Fatalf("proveOneRESTRequest: %v", err)
@@ -617,10 +617,10 @@ func TestProveOneRESTRequest_RefusedRequestStillPersistsLegBodies(t *testing.T) 
 		_, _ = w.Write([]byte(candidateBody))
 	}))
 	defer candidate.Close()
-	baseline := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	baseline := httptest.NewServer(referencePlane(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{}`))
-	}))
+	})))
 	defer baseline.Close()
 
 	artifacts, err := goapiproof.NewArtifactStore(t.TempDir())
@@ -632,7 +632,7 @@ func TestProveOneRESTRequest_RefusedRequestStillPersistsLegBodies(t *testing.T) 
 	spec := goapiproof.RESTEndpointSpec{Method: http.MethodGet, Path: "/api/v1/filters/options"}
 	request := goapiproof.RESTRequest{Name: "options", WantCandidateStatus: 200, WantBaselineStatus: 200, BodyMode: goapiproof.RESTBodyModeJSON}
 
-	out, err := proveOneRESTRequest(context.Background(), http.DefaultClient, f, "op", spec, request,
+	out, err := proveOneRESTRequest(context.Background(), goapiproof.NewLegClient(0), f, "op", spec, request,
 		staticCredentialForTest(), staticCredentialForTest(), "abc123", goapiproof.AuthContext{}, time.Now().UTC(), nil, artifacts, false, nil)
 	if err != nil {
 		t.Fatalf("proveOneRESTRequest: %v", err)
@@ -653,10 +653,10 @@ func TestProveOneRESTRequest_DryRunWritesNoReceipt(t *testing.T) {
 		_, _ = w.Write([]byte(`{}`))
 	}))
 	defer candidate.Close()
-	baseline := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	baseline := httptest.NewServer(referencePlane(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{}`))
-	}))
+	})))
 	defer baseline.Close()
 
 	f := flags{queryAPIURL: candidate.URL, pythonAPIURL: baseline.URL, org: "org-1"}
@@ -664,7 +664,7 @@ func TestProveOneRESTRequest_DryRunWritesNoReceipt(t *testing.T) {
 	request := goapiproof.RESTRequest{Name: "options", WantCandidateStatus: 200, WantBaselineStatus: 200, BodyMode: goapiproof.RESTBodyModeJSON}
 	writer := &fakeReceiptWriter{}
 
-	out, err := proveOneRESTRequest(context.Background(), http.DefaultClient, f, "op", spec, request,
+	out, err := proveOneRESTRequest(context.Background(), goapiproof.NewLegClient(0), f, "op", spec, request,
 		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil, true, nil)
 	if err != nil {
 		t.Fatalf("proveOneRESTRequest: %v", err)
@@ -682,10 +682,10 @@ func TestProveOneRESTRequest_RefusesOnUnexpectedStatus(t *testing.T) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
 	defer candidate.Close()
-	baseline := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	baseline := httptest.NewServer(referencePlane(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{}`))
-	}))
+	})))
 	defer baseline.Close()
 
 	f := flags{queryAPIURL: candidate.URL, pythonAPIURL: baseline.URL, org: "org-1"}
@@ -693,7 +693,7 @@ func TestProveOneRESTRequest_RefusesOnUnexpectedStatus(t *testing.T) {
 	request := goapiproof.RESTRequest{Name: "options", WantCandidateStatus: 200, WantBaselineStatus: 200, BodyMode: goapiproof.RESTBodyModeJSON}
 	writer := &fakeReceiptWriter{}
 
-	out, err := proveOneRESTRequest(context.Background(), http.DefaultClient, f, "op", spec, request,
+	out, err := proveOneRESTRequest(context.Background(), goapiproof.NewLegClient(0), f, "op", spec, request,
 		staticCredentialForTest(), staticCredentialForTest(), "abc123", goapiproof.AuthContext{}, time.Now().UTC(), writer, nil, false, nil)
 	if err != nil {
 		t.Fatalf("proveOneRESTRequest: %v", err)
@@ -727,10 +727,10 @@ func TestProveOneRESTRequest_VacuousComparisonIsRefusedNotCrashed(t *testing.T) 
 		_, _ = w.Write(empty)
 	}))
 	defer candidate.Close()
-	baseline := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	baseline := httptest.NewServer(referencePlane(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(empty)
-	}))
+	})))
 	defer baseline.Close()
 
 	f := flags{queryAPIURL: candidate.URL, pythonAPIURL: baseline.URL, org: "org-1", recordedBy: "chris", reviewEvidence: "test"}
@@ -745,7 +745,7 @@ func TestProveOneRESTRequest_VacuousComparisonIsRefusedNotCrashed(t *testing.T) 
 	}
 	writer := &fakeReceiptWriter{}
 
-	out, err := proveOneRESTRequest(context.Background(), http.DefaultClient, f, "REST:GET:/api/v1/drilldown/prs", spec, request,
+	out, err := proveOneRESTRequest(context.Background(), goapiproof.NewLegClient(0), f, "REST:GET:/api/v1/drilldown/prs", spec, request,
 		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil, false, nil)
 	if err != nil {
 		t.Fatalf("proveOneRESTRequest: %v -- a vacuous comparison must be a clean refusal, never a tool error", err)
@@ -776,7 +776,7 @@ func TestDoREST_SendsQueryAndBodyAndReadsBuildHeader(t *testing.T) {
 	}))
 	defer server.Close()
 
-	leg, err := doREST(context.Background(), http.DefaultClient, server.URL, http.MethodPost, "/p",
+	leg, err := doREST(context.Background(), goapiproof.NewLegClient(0), server.URL, http.MethodPost, "/p",
 		url.Values{"q": {"1"}}, map[string]any{"x": "y"}, staticCredentialForTest(), 0)
 	if err != nil {
 		t.Fatalf("doREST: %v", err)
@@ -812,7 +812,7 @@ func TestProveEdgeCredentialOnCandidate_Admitted(t *testing.T) {
 	spec := goapiproof.RESTEndpointSpec{Method: http.MethodGet, Path: "/api/v1/filters/options"}
 	request := goapiproof.RESTRequest{Name: "options", WantCandidateStatus: 200}
 
-	out, err := proveEdgeCredentialOnCandidate(context.Background(), http.DefaultClient, f,
+	out, err := proveEdgeCredentialOnCandidate(context.Background(), goapiproof.NewLegClient(0), f,
 		"REST:GET:/api/v1/filters/options", spec, request, staticCredentialForTest(), build, nil)
 	if err != nil {
 		t.Fatalf("proveEdgeCredentialOnCandidate: %v", err)
@@ -848,7 +848,7 @@ func TestProveEdgeCredentialOnCandidate_PersistsBodyToArtifactDir(t *testing.T) 
 	spec := goapiproof.RESTEndpointSpec{Method: http.MethodGet, Path: "/api/v1/filters/options"}
 	request := goapiproof.RESTRequest{Name: "options", WantCandidateStatus: 200}
 
-	out, err := proveEdgeCredentialOnCandidate(context.Background(), http.DefaultClient, f,
+	out, err := proveEdgeCredentialOnCandidate(context.Background(), goapiproof.NewLegClient(0), f,
 		"op", spec, request, staticCredentialForTest(), build, artifacts)
 	if err != nil {
 		t.Fatalf("proveEdgeCredentialOnCandidate: %v", err)
@@ -876,7 +876,7 @@ func TestProveEdgeCredentialOnCandidate_RefusesOnUnexpectedStatus(t *testing.T) 
 	spec := goapiproof.RESTEndpointSpec{Method: http.MethodGet, Path: "/api/v1/filters/options"}
 	request := goapiproof.RESTRequest{Name: "options", WantCandidateStatus: 200}
 
-	out, err := proveEdgeCredentialOnCandidate(context.Background(), http.DefaultClient, f,
+	out, err := proveEdgeCredentialOnCandidate(context.Background(), goapiproof.NewLegClient(0), f,
 		"op", spec, request, staticCredentialForTest(), "abc123", nil)
 	if err != nil {
 		t.Fatalf("proveEdgeCredentialOnCandidate: %v", err)
@@ -904,7 +904,7 @@ func TestProveEdgeCredentialOnCandidate_RefusesOnBuildMismatch(t *testing.T) {
 	spec := goapiproof.RESTEndpointSpec{Method: http.MethodGet, Path: "/api/v1/filters/options"}
 	request := goapiproof.RESTRequest{Name: "options", WantCandidateStatus: 200}
 
-	out, err := proveEdgeCredentialOnCandidate(context.Background(), http.DefaultClient, f,
+	out, err := proveEdgeCredentialOnCandidate(context.Background(), goapiproof.NewLegClient(0), f,
 		"op", spec, request, staticCredentialForTest(), "abc123", nil)
 	if err != nil {
 		t.Fatalf("proveEdgeCredentialOnCandidate: %v", err)
@@ -975,11 +975,11 @@ func TestProveOneRESTRequest_PublicNoAuthSendsNoAuthorizationHeader(t *testing.T
 		_, _ = w.Write([]byte(`{}`))
 	}))
 	defer candidate.Close()
-	baseline := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	baseline := httptest.NewServer(referencePlane(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotBaselineAuth = r.Header.Get("Authorization")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{}`))
-	}))
+	})))
 	defer baseline.Close()
 
 	f := flags{queryAPIURL: candidate.URL, pythonAPIURL: baseline.URL, org: "org-1"}
@@ -993,7 +993,7 @@ func TestProveOneRESTRequest_PublicNoAuthSendsNoAuthorizationHeader(t *testing.T
 	// silently-sent header.
 	poisonedCredential := goapiproof.StaticCredential("Authorization", "poisoned", "")
 
-	out, err := proveOneRESTRequest(context.Background(), http.DefaultClient, f, "REST:GET:/api/v1/meta", spec, request,
+	out, err := proveOneRESTRequest(context.Background(), goapiproof.NewLegClient(0), f, "REST:GET:/api/v1/meta", spec, request,
 		poisonedCredential, poisonedCredential, build, goapiproof.AuthContext{}, time.Now().UTC(), nil, nil, true, nil)
 	if err != nil {
 		t.Fatalf("proveOneRESTRequest: %v", err)
@@ -1033,14 +1033,14 @@ func TestBuildInfoRead_RejectsUnauthenticatedAcceptsTheMintedBearer(t *testing.T
 
 	// No Authorization header at all -- an expired or never-configured
 	// credential.
-	if _, err := goapiproof.FetchBuildIdentity(context.Background(), http.DefaultClient, server.URL, nil); err == nil {
+	if _, err := goapiproof.FetchBuildIdentity(context.Background(), goapiproof.NewLegClient(0), server.URL, nil); err == nil {
 		t.Fatal("want an error when no credential is applied")
 	}
 
 	// The wrong bearer -- rejected the same way a real bearer-envelope
 	// verifier would reject a mismatched or stale one.
 	wrongCredential := goapiproof.StaticCredential("Authorization", "candidate bearer", "Bearer not-the-right-token")
-	_, err := goapiproof.FetchBuildIdentity(context.Background(), http.DefaultClient, server.URL, wrongCredential)
+	_, err := goapiproof.FetchBuildIdentity(context.Background(), goapiproof.NewLegClient(0), server.URL, wrongCredential)
 	if err == nil {
 		t.Fatal("want an error when the credential does not match")
 	}
@@ -1053,7 +1053,7 @@ func TestBuildInfoRead_RejectsUnauthenticatedAcceptsTheMintedBearer(t *testing.T
 	// The SAME shape of credential run() actually applies to /buildinfo
 	// -- candidateCredential, the same one every corpus request's own
 	// candidate leg uses.
-	got, err := goapiproof.FetchBuildIdentity(context.Background(), http.DefaultClient, server.URL, staticCredentialForTest())
+	got, err := goapiproof.FetchBuildIdentity(context.Background(), goapiproof.NewLegClient(0), server.URL, staticCredentialForTest())
 	if err != nil {
 		t.Fatalf("FetchBuildIdentity: %v", err)
 	}
@@ -1086,11 +1086,11 @@ func TestIDBinding_EndToEnd(t *testing.T) {
 		_, _ = w.Write([]byte(personListBody))
 	}))
 	defer candidate.Close()
-	baseline := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	baseline := httptest.NewServer(referencePlane(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		baselinePaths = append(baselinePaths, r.URL.Path)
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(personListBody))
-	}))
+	})))
 	defer baseline.Close()
 
 	f := flags{queryAPIURL: candidate.URL, pythonAPIURL: baseline.URL, org: "org-1", recordedBy: "chris", reviewEvidence: "test"}
@@ -1105,7 +1105,7 @@ func TestIDBinding_EndToEnd(t *testing.T) {
 		BodyMode: goapiproof.RESTBodyModeJSON,
 		Produces: []goapiproof.RESTIDProducer{{Name: "person_id", IDField: "person_id"}},
 	}
-	producerOut, err := proveOneRESTRequest(context.Background(), http.DefaultClient, f, "REST:GET:/api/v1/people", producerSpec, producerRequest,
+	producerOut, err := proveOneRESTRequest(context.Background(), goapiproof.NewLegClient(0), f, "REST:GET:/api/v1/people", producerSpec, producerRequest,
 		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil, false, nil)
 	if err != nil {
 		t.Fatalf("producer proveOneRESTRequest: %v", err)
@@ -1143,7 +1143,7 @@ func TestIDBinding_EndToEnd(t *testing.T) {
 	resolvedRequest.Query = resolvedQuery
 	resolvedRequest.Body = resolvedBody
 
-	consumerOut, err := proveOneRESTRequest(context.Background(), http.DefaultClient, f, "REST:GET:/api/v1/people/{person_id}/summary", resolvedSpec, resolvedRequest,
+	consumerOut, err := proveOneRESTRequest(context.Background(), goapiproof.NewLegClient(0), f, "REST:GET:/api/v1/people/{person_id}/summary", resolvedSpec, resolvedRequest,
 		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil, false,
 		map[string]string{"person_id": produced["person_id"]})
 	if err != nil {
@@ -1211,14 +1211,14 @@ func iteratingFixtureServers(t *testing.T, build string, personIDs []string, can
 	}))
 	t.Cleanup(candidate.Close)
 
-	baseline := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	baseline := httptest.NewServer(referencePlane(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/people" {
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(people))
 			return
 		}
 		w.WriteHeader(http.StatusServiceUnavailable)
-	}))
+	})))
 	t.Cleanup(baseline.Close)
 
 	return candidate.URL, baseline.URL, &paths
@@ -1237,7 +1237,7 @@ func runIteratingProducer(t *testing.T, f flags, build string, writer receiptWri
 		BodyMode: goapiproof.RESTBodyModeJSON,
 		Produces: []goapiproof.RESTIDProducer{{Name: "person_id", IDField: "person_id"}},
 	}
-	out, err := proveOneRESTRequest(context.Background(), http.DefaultClient, f, "REST:GET:/people", producerSpec, producerRequest,
+	out, err := proveOneRESTRequest(context.Background(), goapiproof.NewLegClient(0), f, "REST:GET:/people", producerSpec, producerRequest,
 		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil, false, nil)
 	if err != nil {
 		t.Fatalf("producer proveOneRESTRequest: %v", err)
@@ -1290,7 +1290,7 @@ func TestResolveIteratingRequest_SelectsTheFirstCandidateWhoseConsumerYieldsItsP
 
 	writer := &fakeReceiptWriter{}
 	spec, request, binding := iteratingConsumerRequest()
-	attempt, err := resolveIteratingRequest(context.Background(), http.DefaultClient, f, "REST:GET:/people/{person_id}/issues",
+	attempt, err := resolveIteratingRequest(context.Background(), goapiproof.NewLegClient(0), f, "REST:GET:/people/{person_id}/issues",
 		spec, request, binding, produced, producedCandidates,
 		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil)
 	if err != nil {
@@ -1331,7 +1331,7 @@ func TestResolveIteratingRequest_SiblingBoundToExposeAsReceivesTheWinner(t *test
 	produced, producedCandidates := runIteratingProducer(t, f, build, &fakeReceiptWriter{})
 
 	spec, request, binding := iteratingConsumerRequest()
-	attempt, err := resolveIteratingRequest(context.Background(), http.DefaultClient, f, "REST:GET:/people/{person_id}/issues",
+	attempt, err := resolveIteratingRequest(context.Background(), goapiproof.NewLegClient(0), f, "REST:GET:/people/{person_id}/issues",
 		spec, request, binding, produced, producedCandidates,
 		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), &fakeReceiptWriter{}, nil)
 	if err != nil {
@@ -1374,7 +1374,7 @@ func TestResolveIteratingRequest_RefusesByNameAfterExhaustingTheBound(t *testing
 
 	writer := &fakeReceiptWriter{}
 	spec, request, binding := iteratingConsumerRequest()
-	attempt, err := resolveIteratingRequest(context.Background(), http.DefaultClient, f, "REST:GET:/people/{person_id}/issues",
+	attempt, err := resolveIteratingRequest(context.Background(), goapiproof.NewLegClient(0), f, "REST:GET:/people/{person_id}/issues",
 		spec, request, binding, produced, producedCandidates,
 		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil)
 	if err != nil {
@@ -1443,7 +1443,7 @@ func TestResolveIteratingRequest_StopsAtTheDeclaredBoundNeverTriesBeyondIt(t *te
 	spec, request, binding := iteratingConsumerRequest()
 	binding.Candidates = 3
 	request.IDBindings = []goapiproof.RESTIDBinding{binding}
-	attempt, err := resolveIteratingRequest(context.Background(), http.DefaultClient, f, "REST:GET:/people/{person_id}/issues",
+	attempt, err := resolveIteratingRequest(context.Background(), goapiproof.NewLegClient(0), f, "REST:GET:/people/{person_id}/issues",
 		spec, request, binding, produced, producedCandidates,
 		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil)
 	if err != nil {
@@ -1512,7 +1512,7 @@ func jsonBodyModeIteratingFixtureServers(t *testing.T, build string, personIDs [
 	}))
 	t.Cleanup(candidate.Close)
 
-	baseline := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	baseline := httptest.NewServer(referencePlane(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/people" {
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(people))
@@ -1520,7 +1520,7 @@ func jsonBodyModeIteratingFixtureServers(t *testing.T, build string, personIDs [
 		}
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(respond(baselineBodies, r.URL.Path)))
-	}))
+	})))
 	t.Cleanup(baseline.Close)
 
 	return candidate.URL, baseline.URL, &paths
@@ -1572,7 +1572,7 @@ func TestResolveIteratingRequest_JSONBodyModeMismatchWinsOverALaterMatch(t *test
 	}
 
 	writer := &fakeReceiptWriter{}
-	attempt, err := resolveIteratingRequest(context.Background(), http.DefaultClient, f, "REST:GET:/people/{person_id}/prs",
+	attempt, err := resolveIteratingRequest(context.Background(), goapiproof.NewLegClient(0), f, "REST:GET:/people/{person_id}/prs",
 		spec, request, binding, produced, producedCandidates,
 		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil)
 	if err != nil {
@@ -1631,7 +1631,7 @@ func TestResolveSingleShotRequest_UnaffectedByTheIterationMechanism(t *testing.T
 		BodyMode:               goapiproof.RESTBodyModeStatusOnly,
 		IDBindings:             []goapiproof.RESTIDBinding{{Producer: "person_id", PathParam: "person_id"}},
 	}
-	attempt, err := resolveSingleShotRequest(context.Background(), http.DefaultClient, f, "REST:GET:/people/{person_id}/issues",
+	attempt, err := resolveSingleShotRequest(context.Background(), goapiproof.NewLegClient(0), f, "REST:GET:/people/{person_id}/issues",
 		spec, request, produced,
 		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil)
 	if err != nil {
@@ -1692,7 +1692,7 @@ func TestDoREST_TimeoutClassifiesAsTransportTimeout(t *testing.T) {
 	server := stallingServer(t)
 	defer server.Close()
 
-	_, err := doREST(context.Background(), http.DefaultClient, server.URL, http.MethodGet, "/p", nil, nil, nil, 30*time.Millisecond)
+	_, err := doREST(context.Background(), goapiproof.NewLegClient(0), server.URL, http.MethodGet, "/p", nil, nil, nil, 30*time.Millisecond)
 	if err == nil {
 		t.Fatal("doREST: want an error from a leg that never answers, got nil")
 	}
@@ -1714,7 +1714,7 @@ func TestDoREST_ConnectionDropClassifiesAsTransportError(t *testing.T) {
 	server := hijackAndCloseServer(t)
 	defer server.Close()
 
-	_, err := doREST(context.Background(), http.DefaultClient, server.URL, http.MethodGet, "/p", nil, nil, nil, 5*time.Second)
+	_, err := doREST(context.Background(), goapiproof.NewLegClient(0), server.URL, http.MethodGet, "/p", nil, nil, nil, 5*time.Second)
 	if err == nil {
 		t.Fatal("doREST: want an error from a dropped connection, got nil")
 	}
@@ -1740,10 +1740,10 @@ func TestDoREST_ConnectionDropClassifiesAsTransportError(t *testing.T) {
 func TestProveOneRESTRequest_CandidateLegTimeoutIsRefusedPerCase(t *testing.T) {
 	candidate := stallingServer(t)
 	defer candidate.Close()
-	baseline := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	baseline := httptest.NewServer(referencePlane(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{}`))
-	}))
+	})))
 	defer baseline.Close()
 
 	f := flags{queryAPIURL: candidate.URL, pythonAPIURL: baseline.URL, org: "org-1", recordedBy: "chris", reviewEvidence: "test", timeout: 30 * time.Millisecond}
@@ -1751,7 +1751,7 @@ func TestProveOneRESTRequest_CandidateLegTimeoutIsRefusedPerCase(t *testing.T) {
 	request := goapiproof.RESTRequest{Name: "home", WantCandidateStatus: 200, WantBaselineStatus: 200, BodyMode: goapiproof.RESTBodyModeJSON}
 	writer := &fakeReceiptWriter{}
 
-	out, err := proveOneRESTRequest(context.Background(), http.DefaultClient, f, "REST:GET:/api/v1/home", spec, request,
+	out, err := proveOneRESTRequest(context.Background(), goapiproof.NewLegClient(0), f, "REST:GET:/api/v1/home", spec, request,
 		staticCredentialForTest(), staticCredentialForTest(), "build123", goapiproof.AuthContext{}, time.Now().UTC(), writer, nil, false, nil)
 	if err != nil {
 		t.Fatalf("proveOneRESTRequest: %v -- a leg timeout must be a refusal, never a tool error", err)
@@ -1789,7 +1789,7 @@ func TestProveOneRESTRequest_BaselineLegConnectionDropIsRefusedPerCase(t *testin
 	request := goapiproof.RESTRequest{Name: "home", WantCandidateStatus: 200, WantBaselineStatus: 200, BodyMode: goapiproof.RESTBodyModeJSON}
 	writer := &fakeReceiptWriter{}
 
-	out, err := proveOneRESTRequest(context.Background(), http.DefaultClient, f, "REST:GET:/api/v1/home", spec, request,
+	out, err := proveOneRESTRequest(context.Background(), goapiproof.NewLegClient(0), f, "REST:GET:/api/v1/home", spec, request,
 		staticCredentialForTest(), staticCredentialForTest(), "build123", goapiproof.AuthContext{}, time.Now().UTC(), writer, nil, false, nil)
 	if err != nil {
 		t.Fatalf("proveOneRESTRequest: %v -- a dropped baseline leg must be a refusal, never a tool error", err)
@@ -1815,10 +1815,10 @@ func TestProveOneRESTRequest_BaselineLegConnectionDropIsRefusedPerCase(t *testin
 func TestProveOneRESTRequest_LaterRequestStillRunsAfterALegFailure(t *testing.T) {
 	stalledCandidate := stallingServer(t)
 	defer stalledCandidate.Close()
-	firstBaseline := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	firstBaseline := httptest.NewServer(referencePlane(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{}`))
-	}))
+	})))
 	defer firstBaseline.Close()
 
 	okCandidate := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1827,10 +1827,10 @@ func TestProveOneRESTRequest_LaterRequestStillRunsAfterALegFailure(t *testing.T)
 		_, _ = w.Write([]byte(`{"a":1}`))
 	}))
 	defer okCandidate.Close()
-	okBaseline := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	okBaseline := httptest.NewServer(referencePlane(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"a":1}`))
-	}))
+	})))
 	defer okBaseline.Close()
 
 	spec := goapiproof.RESTEndpointSpec{Method: http.MethodGet, Path: "/api/v1/home"}
@@ -1838,7 +1838,7 @@ func TestProveOneRESTRequest_LaterRequestStillRunsAfterALegFailure(t *testing.T)
 	writer := &fakeReceiptWriter{}
 
 	firstFlags := flags{queryAPIURL: stalledCandidate.URL, pythonAPIURL: firstBaseline.URL, org: "org-1", recordedBy: "chris", reviewEvidence: "test", timeout: 30 * time.Millisecond}
-	first, err := proveOneRESTRequest(context.Background(), http.DefaultClient, firstFlags, "REST:GET:/api/v1/home", spec, request,
+	first, err := proveOneRESTRequest(context.Background(), goapiproof.NewLegClient(0), firstFlags, "REST:GET:/api/v1/home", spec, request,
 		staticCredentialForTest(), staticCredentialForTest(), "build123", goapiproof.AuthContext{}, time.Now().UTC(), writer, nil, false, nil)
 	if err != nil {
 		t.Fatalf("first proveOneRESTRequest: %v, want a refusal not an error", err)
@@ -1848,7 +1848,7 @@ func TestProveOneRESTRequest_LaterRequestStillRunsAfterALegFailure(t *testing.T)
 	}
 
 	secondFlags := flags{queryAPIURL: okCandidate.URL, pythonAPIURL: okBaseline.URL, org: "org-1", recordedBy: "chris", reviewEvidence: "test", timeout: 5 * time.Second}
-	second, err := proveOneRESTRequest(context.Background(), http.DefaultClient, secondFlags, "REST:GET:/api/v1/home", spec, request,
+	second, err := proveOneRESTRequest(context.Background(), goapiproof.NewLegClient(0), secondFlags, "REST:GET:/api/v1/home", spec, request,
 		staticCredentialForTest(), staticCredentialForTest(), "build123", goapiproof.AuthContext{}, time.Now().UTC(), writer, nil, false, nil)
 	if err != nil {
 		t.Fatalf("second proveOneRESTRequest: %v, want a clean match", err)
@@ -1874,7 +1874,7 @@ func TestProveEdgeCredentialOnCandidate_LegTimeoutIsRefusedPerCase(t *testing.T)
 	spec := goapiproof.RESTEndpointSpec{Method: http.MethodGet, Path: "/api/v1/home"}
 	request := goapiproof.RESTRequest{Name: "home", WantCandidateStatus: 200}
 
-	out, err := proveEdgeCredentialOnCandidate(context.Background(), http.DefaultClient, f,
+	out, err := proveEdgeCredentialOnCandidate(context.Background(), goapiproof.NewLegClient(0), f,
 		"REST:GET:/api/v1/home", spec, request, staticCredentialForTest(), "build123", nil)
 	if err != nil {
 		t.Fatalf("proveEdgeCredentialOnCandidate: %v, want a refusal not an error", err)
@@ -2127,7 +2127,7 @@ func TestRunMeasurement_BaselineLegTimeoutIsNonFatalReportedAndLaterCaseRuns(t *
 	const build = "build123"
 	candidate := httptest.NewServer(genericRESTStubHandler(t, build, nil))
 	defer candidate.Close()
-	baseline := httptest.NewServer(genericRESTStubHandler(t, "", &stalledRequest{method: http.MethodGet, path: "/api/v1/home", rawQuery: ""}))
+	baseline := httptest.NewServer(referencePlane(genericRESTStubHandler(t, "", &stalledRequest{method: http.MethodGet, path: "/api/v1/home", rawQuery: ""})))
 	defer baseline.Close()
 
 	dir := t.TempDir()
@@ -2144,7 +2144,7 @@ func TestRunMeasurement_BaselineLegTimeoutIsNonFatalReportedAndLaterCaseRuns(t *
 
 	var runErr error
 	stdout := captureStdout(t, func() {
-		runErr = runMeasurement(context.Background(), http.DefaultClient, f,
+		runErr = runMeasurement(context.Background(), goapiproof.NewLegClient(0), f,
 			staticCredentialForTest(), staticCredentialForTest(), build, nil, artifacts)
 	})
 
@@ -2205,7 +2205,7 @@ func TestRunMeasurement_OperatorSuppliedBindingUnsuppliedRefusesByName(t *testin
 	const build = "build123"
 	candidate := httptest.NewServer(genericRESTStubHandler(t, build, nil))
 	defer candidate.Close()
-	baseline := httptest.NewServer(genericRESTStubHandler(t, "", nil))
+	baseline := httptest.NewServer(referencePlane(genericRESTStubHandler(t, "", nil)))
 	defer baseline.Close()
 
 	dir := t.TempDir()
@@ -2230,7 +2230,7 @@ func TestRunMeasurement_OperatorSuppliedBindingUnsuppliedRefusesByName(t *testin
 	// "report first, error second" discipline), so it is still complete
 	// and worth reading regardless.
 	_ = captureStdout(t, func() {
-		_ = runMeasurement(context.Background(), http.DefaultClient, f,
+		_ = runMeasurement(context.Background(), goapiproof.NewLegClient(0), f,
 			staticCredentialForTest(), staticCredentialForTest(), build, nil, artifacts)
 	})
 
@@ -2274,7 +2274,7 @@ func TestRunMeasurement_OperatorSuppliedBindingSuppliedResolves(t *testing.T) {
 	const boundValue = "00000000-0000-0000-0000-000000000000:d-1"
 	candidate := httptest.NewServer(genericRESTStubHandler(t, build, nil))
 	defer candidate.Close()
-	baseline := httptest.NewServer(genericRESTStubHandler(t, "", nil))
+	baseline := httptest.NewServer(referencePlane(genericRESTStubHandler(t, "", nil)))
 	defer baseline.Close()
 
 	dir := t.TempDir()
@@ -2293,7 +2293,7 @@ func TestRunMeasurement_OperatorSuppliedBindingSuppliedResolves(t *testing.T) {
 	// See the sibling test above for why runMeasurement's own returned
 	// error is not asserted here.
 	_ = captureStdout(t, func() {
-		_ = runMeasurement(context.Background(), http.DefaultClient, f,
+		_ = runMeasurement(context.Background(), goapiproof.NewLegClient(0), f,
 			staticCredentialForTest(), staticCredentialForTest(), build, nil, artifacts)
 	})
 
@@ -2335,7 +2335,7 @@ func TestRunMeasurement_DeploymentGapBindingUnsuppliedRefusesByName(t *testing.T
 	const build = "build123"
 	candidate := httptest.NewServer(genericRESTStubHandler(t, build, nil))
 	defer candidate.Close()
-	baseline := httptest.NewServer(genericRESTStubHandler(t, "", nil))
+	baseline := httptest.NewServer(referencePlane(genericRESTStubHandler(t, "", nil)))
 	defer baseline.Close()
 
 	dir := t.TempDir()
@@ -2353,7 +2353,7 @@ func TestRunMeasurement_DeploymentGapBindingUnsuppliedRefusesByName(t *testing.T
 	// See TestRunMeasurement_OperatorSuppliedBindingUnsuppliedRefusesByName
 	// for why runMeasurement's own returned error is not asserted here.
 	_ = captureStdout(t, func() {
-		_ = runMeasurement(context.Background(), http.DefaultClient, f,
+		_ = runMeasurement(context.Background(), goapiproof.NewLegClient(0), f,
 			staticCredentialForTest(), staticCredentialForTest(), build, nil, artifacts)
 	})
 
@@ -2396,7 +2396,7 @@ func TestRunMeasurement_PRGapBindingUnsuppliedRefusesByName(t *testing.T) {
 	const build = "build123"
 	candidate := httptest.NewServer(genericRESTStubHandler(t, build, nil))
 	defer candidate.Close()
-	baseline := httptest.NewServer(genericRESTStubHandler(t, "", nil))
+	baseline := httptest.NewServer(referencePlane(genericRESTStubHandler(t, "", nil)))
 	defer baseline.Close()
 
 	dir := t.TempDir()
@@ -2414,7 +2414,7 @@ func TestRunMeasurement_PRGapBindingUnsuppliedRefusesByName(t *testing.T) {
 	// See TestRunMeasurement_OperatorSuppliedBindingUnsuppliedRefusesByName
 	// for why runMeasurement's own returned error is not asserted here.
 	_ = captureStdout(t, func() {
-		_ = runMeasurement(context.Background(), http.DefaultClient, f,
+		_ = runMeasurement(context.Background(), goapiproof.NewLegClient(0), f,
 			staticCredentialForTest(), staticCredentialForTest(), build, nil, artifacts)
 	})
 
@@ -2457,7 +2457,7 @@ func TestRunMeasurement_IssueGapBindingUnsuppliedRefusesByName(t *testing.T) {
 	const build = "build123"
 	candidate := httptest.NewServer(genericRESTStubHandler(t, build, nil))
 	defer candidate.Close()
-	baseline := httptest.NewServer(genericRESTStubHandler(t, "", nil))
+	baseline := httptest.NewServer(referencePlane(genericRESTStubHandler(t, "", nil)))
 	defer baseline.Close()
 
 	dir := t.TempDir()
@@ -2475,7 +2475,7 @@ func TestRunMeasurement_IssueGapBindingUnsuppliedRefusesByName(t *testing.T) {
 	// See TestRunMeasurement_OperatorSuppliedBindingUnsuppliedRefusesByName
 	// for why runMeasurement's own returned error is not asserted here.
 	_ = captureStdout(t, func() {
-		_ = runMeasurement(context.Background(), http.DefaultClient, f,
+		_ = runMeasurement(context.Background(), goapiproof.NewLegClient(0), f,
 			staticCredentialForTest(), staticCredentialForTest(), build, nil, artifacts)
 	})
 
@@ -2522,7 +2522,7 @@ func TestRunMeasurement_NonTransportErrorMidRunStillWritesAPartialReport(t *test
 	const build = "build123"
 	candidate := httptest.NewServer(genericRESTStubHandler(t, build, nil))
 	defer candidate.Close()
-	baseline := httptest.NewServer(genericRESTStubHandler(t, "", nil))
+	baseline := httptest.NewServer(referencePlane(genericRESTStubHandler(t, "", nil)))
 	defer baseline.Close()
 
 	dir := t.TempDir()
@@ -2548,7 +2548,7 @@ func TestRunMeasurement_NonTransportErrorMidRunStillWritesAPartialReport(t *test
 
 	var runErr error
 	captureStdout(t, func() {
-		runErr = runMeasurement(context.Background(), http.DefaultClient, f,
+		runErr = runMeasurement(context.Background(), goapiproof.NewLegClient(0), f,
 			staticCredentialForTest(), staticCredentialForTest(), build, nil, artifacts)
 	})
 	if runErr == nil {
@@ -2597,10 +2597,10 @@ func TestProveOneRESTRequest_StatusOnlyBaselineFailureProducesFromCandidateLeg(t
 		_, _ = w.Write([]byte(`{"items":[{"work_item_id":"` + wantID + `"}]}`))
 	}))
 	defer candidate.Close()
-	baseline := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	baseline := httptest.NewServer(referencePlane(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		_, _ = w.Write([]byte(`{"detail":"Data unavailable"}`))
-	}))
+	})))
 	defer baseline.Close()
 
 	f := flags{queryAPIURL: candidate.URL, pythonAPIURL: baseline.URL, org: "org-1", recordedBy: "chris", reviewEvidence: "test"}
@@ -2613,7 +2613,7 @@ func TestProveOneRESTRequest_StatusOnlyBaselineFailureProducesFromCandidateLeg(t
 	}
 	writer := &fakeReceiptWriter{}
 
-	out, err := proveOneRESTRequest(context.Background(), http.DefaultClient, f, "REST:GET:/api/v1/drilldown/issues", spec, request,
+	out, err := proveOneRESTRequest(context.Background(), goapiproof.NewLegClient(0), f, "REST:GET:/api/v1/drilldown/issues", spec, request,
 		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil, false, nil)
 	if err != nil {
 		t.Fatalf("proveOneRESTRequest: %v", err)
@@ -2645,10 +2645,10 @@ func TestProveOneRESTRequest_StatusOnlyBaselineFailureRefusedWhenCandidateBodyLa
 		_, _ = w.Write([]byte(`{"entity":{"work_item_id":"w1"},"timeline":{"start":"2024-01-01T00:00:00Z","end":"2024-01-02T00:00:00Z"},"frames":[]}`))
 	}))
 	defer candidate.Close()
-	baseline := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	baseline := httptest.NewServer(referencePlane(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		_, _ = w.Write([]byte(`{"detail":"Data unavailable"}`))
-	}))
+	})))
 	defer baseline.Close()
 
 	f := flags{queryAPIURL: candidate.URL, pythonAPIURL: baseline.URL, org: "org-1", recordedBy: "chris", reviewEvidence: "test"}
@@ -2661,7 +2661,7 @@ func TestProveOneRESTRequest_StatusOnlyBaselineFailureRefusedWhenCandidateBodyLa
 	}
 	writer := &fakeReceiptWriter{}
 
-	out, err := proveOneRESTRequest(context.Background(), http.DefaultClient, f, "REST:GET:/api/v1/flame", spec, request,
+	out, err := proveOneRESTRequest(context.Background(), goapiproof.NewLegClient(0), f, "REST:GET:/api/v1/flame", spec, request,
 		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil, false, nil)
 	if err != nil {
 		t.Fatalf("proveOneRESTRequest: %v", err)
@@ -2690,12 +2690,12 @@ func TestProveOneRESTRequest_StatusOnlyBaselineFailureRefusedWhenBaselineRecover
 		_, _ = w.Write([]byte(`{"items":[{"work_item_id":"wi-777"}]}`))
 	}))
 	defer candidate.Close()
-	baseline := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	baseline := httptest.NewServer(referencePlane(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// The baseline has recovered: it now answers the CANDIDATE's own
 		// declared 200, not the 503 this entry declares for it.
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"items":[{"work_item_id":"wi-777"}]}`))
-	}))
+	})))
 	defer baseline.Close()
 
 	f := flags{queryAPIURL: candidate.URL, pythonAPIURL: baseline.URL, org: "org-1", recordedBy: "chris", reviewEvidence: "test"}
@@ -2708,7 +2708,7 @@ func TestProveOneRESTRequest_StatusOnlyBaselineFailureRefusedWhenBaselineRecover
 	}
 	writer := &fakeReceiptWriter{}
 
-	out, err := proveOneRESTRequest(context.Background(), http.DefaultClient, f, "REST:GET:/api/v1/drilldown/issues", spec, request,
+	out, err := proveOneRESTRequest(context.Background(), goapiproof.NewLegClient(0), f, "REST:GET:/api/v1/drilldown/issues", spec, request,
 		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil, false, nil)
 	if err != nil {
 		t.Fatalf("proveOneRESTRequest: %v", err)
@@ -2738,10 +2738,10 @@ func TestProveOneRESTRequest_OrdinaryRequestStillProducesFromBaselineLeg(t *test
 		_, _ = w.Write([]byte(`{"items":[{"work_item_id":"from-candidate"}]}`))
 	}))
 	defer candidate.Close()
-	baseline := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	baseline := httptest.NewServer(referencePlane(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"items":[{"work_item_id":"from-baseline"}]}`))
-	}))
+	})))
 	defer baseline.Close()
 
 	f := flags{queryAPIURL: candidate.URL, pythonAPIURL: baseline.URL, org: "org-1", recordedBy: "chris", reviewEvidence: "test"}
@@ -2753,7 +2753,7 @@ func TestProveOneRESTRequest_OrdinaryRequestStillProducesFromBaselineLeg(t *test
 	}
 	writer := &fakeReceiptWriter{}
 
-	out, err := proveOneRESTRequest(context.Background(), http.DefaultClient, f, "REST:GET:/api/v1/drilldown/issues", spec, request,
+	out, err := proveOneRESTRequest(context.Background(), goapiproof.NewLegClient(0), f, "REST:GET:/api/v1/drilldown/issues", spec, request,
 		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil, false, nil)
 	if err != nil {
 		t.Fatalf("proveOneRESTRequest: %v", err)
@@ -2764,4 +2764,14 @@ func TestProveOneRESTRequest_OrdinaryRequestStillProducesFromBaselineLeg(t *test
 	if got := out.producedIDs["work_item_id"]; got != "from-baseline" {
 		t.Fatalf("producedIDs[work_item_id] = %q, want %q (still the BASELINE leg for an ordinary request)", got, "from-baseline")
 	}
+}
+
+// referencePlane wraps a test handler so every response carries the
+// Python app's `server: uvicorn` stamp, the positive baseline identity
+// RESTAdmit requires of a baseline leg.
+func referencePlane(handler http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Server", goapiproof.ReferencePlaneServer)
+		handler.ServeHTTP(w, r)
+	})
 }

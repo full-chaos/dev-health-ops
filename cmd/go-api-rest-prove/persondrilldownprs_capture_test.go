@@ -63,7 +63,7 @@ func TestRunMeasurement_PersonDrilldownPRsCapturedBodiesHaveNothingOutside(t *te
 	}
 	candidate := httptest.NewServer(handler(true))
 	defer candidate.Close()
-	baseline := httptest.NewServer(handler(false))
+	baseline := httptest.NewServer(referencePlane(handler(false)))
 	defer baseline.Close()
 	dir := t.TempDir()
 	reportPath := dir + "/report.json"
@@ -77,7 +77,7 @@ func TestRunMeasurement_PersonDrilldownPRsCapturedBodiesHaveNothingOutside(t *te
 		timeout: 5 * time.Second, dryRun: true, reportPath: reportPath,
 	}
 	_ = captureStdout(t, func() {
-		_ = runMeasurement(context.Background(), http.DefaultClient, f,
+		_ = runMeasurement(context.Background(), goapiproof.NewLegClient(0), f,
 			staticCredentialForTest(), staticCredentialForTest(), build, nil, artifacts)
 	})
 	raw, err := os.ReadFile(reportPath)

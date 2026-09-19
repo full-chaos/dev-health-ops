@@ -127,7 +127,7 @@ func TestRESTAdmit_RefusesUnexpectedCandidateStatus(t *testing.T) {
 		NamedBuild:          "abc123",
 		WantCandidateStatus: 200, WantBaselineStatus: 200,
 		Candidate: restLeg(503, `{}`, "abc123"),
-		Baseline:  restLeg(200, `{}`, ""),
+		Baseline:  baselineLeg(200, `{}`),
 	}
 	got := RESTAdmit(in, true)
 	if got.Admitted {
@@ -143,7 +143,7 @@ func TestRESTAdmit_RefusesUnexpectedBaselineStatus(t *testing.T) {
 		NamedBuild:          "abc123",
 		WantCandidateStatus: 200, WantBaselineStatus: 200,
 		Candidate: restLeg(200, `{}`, "abc123"),
-		Baseline:  restLeg(500, `{}`, ""),
+		Baseline:  baselineLeg(500, `{}`),
 	}
 	got := RESTAdmit(in, true)
 	if got.Admitted || got.Reason != RESTRefusalUnexpectedStatus {
@@ -156,7 +156,7 @@ func TestRESTAdmit_RefusesAbsentBuildHeader(t *testing.T) {
 		NamedBuild:          "abc123",
 		WantCandidateStatus: 200, WantBaselineStatus: 200,
 		Candidate: restLeg(200, `{}`, ""),
-		Baseline:  restLeg(200, `{}`, ""),
+		Baseline:  baselineLeg(200, `{}`),
 	}
 	got := RESTAdmit(in, true)
 	if got.Admitted || got.Reason != RESTRefusalBuildUnbound {
@@ -169,7 +169,7 @@ func TestRESTAdmit_RefusesMismatchedBuildHeader(t *testing.T) {
 		NamedBuild:          "abc123",
 		WantCandidateStatus: 200, WantBaselineStatus: 200,
 		Candidate: restLeg(200, `{}`, "someone-elses-build"),
-		Baseline:  restLeg(200, `{}`, ""),
+		Baseline:  baselineLeg(200, `{}`),
 	}
 	got := RESTAdmit(in, true)
 	if got.Admitted || got.Reason != RESTRefusalBuildUnbound {
@@ -182,7 +182,7 @@ func TestRESTAdmit_RefusesTrailingBytes(t *testing.T) {
 		NamedBuild:          "abc123",
 		WantCandidateStatus: 200, WantBaselineStatus: 200,
 		Candidate: restLeg(200, `{"x":1}trailer`, "abc123"),
-		Baseline:  restLeg(200, `{"x":1}`, ""),
+		Baseline:  baselineLeg(200, `{"x":1}`),
 	}
 	got := RESTAdmit(in, true)
 	if got.Admitted || got.Reason != RESTRefusalTrailingBytes {
@@ -195,7 +195,7 @@ func TestRESTAdmit_RefusesUndecodableBody(t *testing.T) {
 		NamedBuild:          "abc123",
 		WantCandidateStatus: 200, WantBaselineStatus: 200,
 		Candidate: restLeg(200, `{not json`, "abc123"),
-		Baseline:  restLeg(200, `{}`, ""),
+		Baseline:  baselineLeg(200, `{}`),
 	}
 	got := RESTAdmit(in, true)
 	if got.Admitted || got.Reason != RESTRefusalBodyNotJSON {
@@ -208,7 +208,7 @@ func TestRESTAdmit_AdmitsAndDecodesOnSuccess(t *testing.T) {
 		NamedBuild:          "abc123",
 		WantCandidateStatus: 200, WantBaselineStatus: 200,
 		Candidate: restLeg(200, `{"x":1}`, "abc123"),
-		Baseline:  restLeg(200, `{"x":1}`, ""),
+		Baseline:  baselineLeg(200, `{"x":1}`),
 	}
 	got := RESTAdmit(in, true)
 	if !got.Admitted {
@@ -229,7 +229,7 @@ func TestRESTAdmit_AdmitsTrailingWhitespaceOnEitherLeg(t *testing.T) {
 			NamedBuild:          "abc123",
 			WantCandidateStatus: 200, WantBaselineStatus: 200,
 			Candidate: restLeg(200, "{\"x\":1}\n", "abc123"),
-			Baseline:  restLeg(200, `{"x":1}`, ""),
+			Baseline:  baselineLeg(200, `{"x":1}`),
 		}
 		got := RESTAdmit(in, true)
 		if !got.Admitted {
@@ -241,7 +241,7 @@ func TestRESTAdmit_AdmitsTrailingWhitespaceOnEitherLeg(t *testing.T) {
 			NamedBuild:          "abc123",
 			WantCandidateStatus: 200, WantBaselineStatus: 200,
 			Candidate: restLeg(200, `{"x":1}`, "abc123"),
-			Baseline:  restLeg(200, "{\"x\":1}  \t", ""),
+			Baseline:  baselineLeg(200, "{\"x\":1}  \t"),
 		}
 		got := RESTAdmit(in, true)
 		if !got.Admitted {
@@ -259,7 +259,7 @@ func TestRESTAdmit_EmptyBodyOnOneLegOnlyStillRefusesBodyNotJSON(t *testing.T) {
 		NamedBuild:          "abc123",
 		WantCandidateStatus: 200, WantBaselineStatus: 200,
 		Candidate: restLeg(200, "", "abc123"),
-		Baseline:  restLeg(200, `{"x":1}`, ""),
+		Baseline:  baselineLeg(200, `{"x":1}`),
 	}
 	got := RESTAdmit(in, true)
 	if got.Admitted || got.Reason != RESTRefusalBodyNotJSON {
@@ -274,7 +274,7 @@ func TestRESTAdmit_StatusOnlySkipsDecode(t *testing.T) {
 		NamedBuild:          "abc123",
 		WantCandidateStatus: 400, WantBaselineStatus: 422,
 		Candidate: restLeg(400, "invalid start_date\n", "abc123"),
-		Baseline:  restLeg(422, `{"detail":[{"type":"date_from_datetime_parsing"}]}`, ""),
+		Baseline:  baselineLeg(422, `{"detail":[{"type":"date_from_datetime_parsing"}]}`),
 	}
 	got := RESTAdmit(in, false)
 	if !got.Admitted {
@@ -306,7 +306,7 @@ func TestRESTAdmit_StatusDivergentCorpusEntriesRefuseBothReversalsByName(t *test
 					WantCandidateStatus: req.WantCandidateStatus,
 					WantBaselineStatus:  req.WantBaselineStatus,
 					Candidate:           restLeg(req.WantCandidateStatus, `{}`, "abc123"),
-					Baseline:            restLeg(req.WantCandidateStatus, `{}`, ""),
+					Baseline:            baselineLeg(req.WantCandidateStatus, `{}`),
 				}
 				got := RESTAdmit(in, decodeBody)
 				if got.Admitted || got.Reason != RESTRefusalUnexpectedStatus {
@@ -320,7 +320,7 @@ func TestRESTAdmit_StatusDivergentCorpusEntriesRefuseBothReversalsByName(t *test
 					WantCandidateStatus: req.WantCandidateStatus,
 					WantBaselineStatus:  req.WantBaselineStatus,
 					Candidate:           restLeg(req.WantBaselineStatus, `{}`, "abc123"),
-					Baseline:            restLeg(req.WantBaselineStatus, `{}`, ""),
+					Baseline:            baselineLeg(req.WantBaselineStatus, `{}`),
 				}
 				got := RESTAdmit(in, decodeBody)
 				if got.Admitted || got.Reason != RESTRefusalUnexpectedStatus {
@@ -329,4 +329,12 @@ func TestRESTAdmit_StatusDivergentCorpusEntriesRefuseBothReversalsByName(t *test
 			})
 		}
 	}
+}
+
+// baselineLeg is a baseline RESTLeg carrying the Python app's positive
+// identity (`server: uvicorn`, no build header).
+func baselineLeg(status int, body string) RESTLeg {
+	leg := restLeg(status, body, "")
+	leg.Server = ReferencePlaneServer
+	return leg
 }

@@ -84,13 +84,32 @@ import (
 )
 
 func main() {
-	f, err := parseFlags()
-	if err != nil {
+	// ContinueOnError: a flag the flag package cannot parse is returned,
+	// not an exit inside flag.Parse, so it reaches execute like every other
+	// refusal and the run's accounting is still printed and written.
+	flag.CommandLine.Init(os.Args[0], flag.ContinueOnError)
+	if err := execute(parseFlags()); err != nil {
 		log.Fatalf("go-api-rest-prove: %v", err)
 	}
-	if err := run(f); err != nil {
-		log.Fatalf("go-api-rest-prove: %v", err)
+}
+
+// execute is the command's one entry after flag parsing. A refused
+// configuration (flag syntax, a missing or invalid flag) ends here with
+// the same accounting as every other exit: every planned request named in
+// not_run on stdout and, when -report was parsed, in a freshly written
+// report, with exit_cause refused_before_measuring.
+func execute(f flags, parseErr error) error {
+	if errors.Is(parseErr, flag.ErrHelp) {
+		return nil
 	}
+	if parseErr != nil {
+		err := secrets.NewBoundary(f.postgresURI).Redact(parseErr)
+		if writeErr := writeStoppedBeforeMeasuringReport(f, nil, err); writeErr != nil {
+			return fmt.Errorf("%w; additionally, writing the report failed: %v", err, writeErr)
+		}
+		return err
+	}
+	return run(f)
 }
 
 // defaultRunDeadline is -run-deadline's default.
@@ -124,6 +143,13 @@ type flags struct {
 
 	candidateBearerExec string
 	baselineBearerExec  string
+
+	// pythonForwarderOff is the operator's attestation that the Python
+	// app's forwarding switch for every PythonForwarder endpoint is off
+	// for this run, so a 200 baseline there is Python's own answer.
+	// Default false: such a 200 baseline is refused by name. Recorded in
+	// every receipt it affects.
+	pythonForwarderOff bool
 
 	postgresURI    string
 	org            string
@@ -169,6 +195,7 @@ func parseFlags() (flags, error) {
 	})
 	flag.StringVar(&f.queryAPIURL, "query-api-url", "http://localhost:8090", "query-api's OWN in-cluster address -- the candidate leg. Never an edge or ingress URL: every request this tool sends goes DIRECTLY to this service")
 	flag.StringVar(&f.pythonAPIURL, "python-api-url", "", "the Python api service's OWN in-cluster address -- the baseline leg (required). Never an edge or ingress URL, for the same reason as -query-api-url")
+	flag.BoolVar(&f.pythonForwarderOff, "python-forwarder-off", false, "attest that the Python app's forwarding switch for every endpoint it can forward to query-api (RESTEndpointSpec.PythonForwarder: POST /api/v1/investment/explain) is OFF for this whole run, so a 200 baseline there is Python's own answer and is compared. The Python app relays query-api's answer without any header that marks it, so nothing on the response can show which plane computed it: without this flag such a 200 baseline is refused by name, and with it every receipt for such an endpoint records the attestation")
 	flag.StringVar(&f.buildInfoURL, "buildinfo-url", "", "GET /buildinfo on query-api -- the ONLY source of the build identity every receipt names. Defaults to -query-api-url + \"/buildinfo\"")
 	flag.StringVar(&f.candidateBuild, "candidate-build", "", "optional CROSS-CHECK: fail if the running build is not this sha. Never the source of the value written -- the value written always comes from /buildinfo, matching go-api-prove's own -candidate-build flag")
 	flag.StringVar(&f.queryAPISrc, "query-api-src", "", "OPTIONAL dev-only override: path to a REAL query-api source checkout, read LIVE to confirm this corpus's paths match what the mux actually mounts (migrationmatrix.LoadQueryAPIMuxRoutes). Empty (the default) uses goapiproof.MountedRESTPaths, the checked-in snapshot this binary ships with -- the operator tools image carries no Go source tree at all, so that is the ONLY option available there. Set this only when running from a real repo checkout, to catch drift immediately instead of waiting for TestMountedRESTPathsMatchesTheRealQueryAPIMux's own CI run")
@@ -197,7 +224,7 @@ func parseFlags() (flags, error) {
 	// the only way a malformed -bind is ever observed at all, rather than
 	// silently discarded.
 	if err := flag.CommandLine.Parse(os.Args[1:]); err != nil {
-		return flags{}, err
+		return f, err
 	}
 	secrets.ResolveFlag(flag.CommandLine, &f.postgresURI, "postgres-uri", postgresURIEnvVar)
 
@@ -230,12 +257,73 @@ func parseFlags() (flags, error) {
 		missing = append(missing, "-postgres-uri (or -dry-run)")
 	}
 	if len(missing) > 0 {
-		return flags{}, fmt.Errorf("missing required flag(s): %s", strings.Join(missing, ", "))
+		return f, fmt.Errorf("missing required flag(s): %s", strings.Join(missing, ", "))
 	}
 	if f.runDeadline <= 0 {
-		return flags{}, fmt.Errorf("-run-deadline must be greater than zero, got %s", f.runDeadline)
+		return f, fmt.Errorf("-run-deadline must be greater than zero, got %s", f.runDeadline)
+	}
+	// Every base URL a leg or a /buildinfo read is built from: a fragment,
+	// a query or userinfo would make the request sent differ from the one
+	// named, so each is refused here, before anything is sent.
+	for _, base := range []struct{ name, value string }{
+		{"-query-api-url", f.queryAPIURL},
+		{"-python-api-url", f.pythonAPIURL},
+		{"-buildinfo-url", f.buildInfoURL},
+	} {
+		if err := goapiproof.ValidateBaseURL(base.name, base.value); err != nil {
+			return f, err
+		}
 	}
 	return f, nil
+}
+
+// prepareLegs does everything run() checks before the first corpus
+// request, in order: it binds both credentials to -org, reads the build
+// the receipts will name from /buildinfo, and asks the Python app, with
+// the baseline credential, which org it serves that credential. Any
+// refusal stops the run before a leg is sent.
+func prepareLegs(ctx context.Context, client *goapiproof.LegClient, f flags, candidateCredential, baselineCredential *goapiproof.Credential) (string, error) {
+	// Both planes scope a request by the credential's org_id claim, so
+	// every value either credential sends must name -org (and no
+	// impersonation) -- checked on the exact value, each time it is set
+	// on a request. The baseline credential also backs the
+	// edge-credential leg on the candidate.
+	candidateCredential.BindOrg(f.org)
+	baselineCredential.BindOrg(f.org)
+
+	// candidateCredential -- the SAME credential every corpus request's
+	// own candidate leg uses below (doREST's own candidateCredential
+	// argument in proveOneRESTRequest) -- never a second, separately
+	// minted credential: /buildinfo is authenticated with the same
+	// bearer-envelope verifier the REST routes themselves use
+	// (buildinfo_route.go's own doc comment), so there is no "proof-
+	// plane" credential distinct from what this binary already mints for
+	// every other request in the run.
+	//
+	// Bounded by the run's own -timeout default, same as every measured
+	// leg -- the leg client carries no Timeout of its own, so this read
+	// would otherwise wait on ctx's 30-minute run-level bound alone.
+	buildInfoCtx, cancelBuildInfo := context.WithTimeout(ctx, f.timeout)
+	namedBuild, err := goapiproof.FetchBuildIdentity(buildInfoCtx, client, f.buildInfoURL, candidateCredential)
+	cancelBuildInfo()
+	if err != nil {
+		return "", fmt.Errorf("read the candidate build from /buildinfo: %w", err)
+	}
+	if f.candidateBuild != "" && f.candidateBuild != namedBuild {
+		return "", fmt.Errorf("-candidate-build %q does not match the running build %q reported by %s", f.candidateBuild, namedBuild, f.buildInfoURL)
+	}
+
+	// The Python app's own answer, with the baseline credential, naming
+	// the org it serves that credential -- refused unless it is -org with
+	// no impersonation session in force. Every baseline leg is still
+	// checked for the impersonation stamp (RESTAdmit).
+	principalCtx, cancelPrincipal := context.WithTimeout(ctx, f.timeout)
+	err = goapiproof.VerifyReferencePrincipal(principalCtx, client, f.pythonAPIURL, baselineCredential, f.org)
+	cancelPrincipal()
+	if err != nil {
+		return "", err
+	}
+	return namedBuild, nil
 }
 
 // parseHelperArgv decodes a -*-bearer-exec flag's JSON array. argv[0] is
@@ -311,7 +399,7 @@ func buildCredential(header, kind, flagName, rawArgv string) (*goapiproof.Creden
 // measuring meta WITH a bearer token would exercise a path real anonymous
 // traffic never takes, and a route that happens to also accept an
 // unrelated valid token is not proof of the public code path.
-func doREST(ctx context.Context, client *http.Client, baseURL, method, path string, query url.Values, body any, credential *goapiproof.Credential, timeout time.Duration) (goapiproof.RESTLeg, error) {
+func doREST(ctx context.Context, client *goapiproof.LegClient, baseURL, method, path string, query url.Values, body any, credential *goapiproof.Credential, timeout time.Duration) (goapiproof.RESTLeg, error) {
 	target := strings.TrimRight(baseURL, "/") + path
 	if len(query) > 0 {
 		target += "?" + query.Encode()
@@ -345,16 +433,24 @@ func doREST(ctx context.Context, client *http.Client, baseURL, method, path stri
 		}
 	}
 
-	resp, err := client.Do(req)
+	legResponse, err := client.Do(req)
 	if err != nil {
 		return goapiproof.RESTLeg{}, goapiproof.NewTransportFailure(target, err)
 	}
+	resp := legResponse.Response
 	defer func() { _ = resp.Body.Close() }()
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return goapiproof.RESTLeg{}, goapiproof.NewTransportFailure(target, err)
 	}
-	return goapiproof.RESTLeg{StatusCode: resp.StatusCode, Body: raw, Build: resp.Header.Get("x-dev-health-build")}, nil
+	return goapiproof.RESTLeg{
+		StatusCode:    resp.StatusCode,
+		Body:          raw,
+		Build:         resp.Header.Get("x-dev-health-build"),
+		Server:        resp.Header.Get("Server"),
+		Impersonating: goapiproof.ServedUnderImpersonation(resp.Header),
+		WireAttempts:  legResponse.WireAttempts,
+	}, nil
 }
 
 // resolveRESTTimeout is the per-request timeout a leg actually gets: the
@@ -553,6 +649,11 @@ type restReviewEvidence struct {
 	// decoded finding list (goapiproof.Result.Findings), set only when
 	// this request's BodyMode decoded and compared both legs.
 	FindingsRef string `json:"findings_ref,omitempty"`
+	// PythonForwarderOffAttested is set on a receipt for a
+	// PythonForwarder endpoint compared under -python-forwarder-off: the
+	// baseline is taken as Python's own answer on the operator's word,
+	// not on anything the response showed.
+	PythonForwarderOffAttested bool `json:"python_forwarder_off_attested,omitempty"`
 }
 
 // encodeRESTReviewEvidence renders restReviewEvidence for one receipt.
@@ -561,8 +662,8 @@ type restReviewEvidence struct {
 // nothing -- same fallback ReceiptProvenance's own reviewEvidence method
 // uses, and the same reasoning: the operator's own words are worth more
 // than a dropped column.
-func encodeRESTReviewEvidence(operator, findingsRef string) string {
-	encoded, err := json.Marshal(restReviewEvidence{Operator: operator, FindingsRef: findingsRef})
+func encodeRESTReviewEvidence(operator, findingsRef string, forwarderOffAttested bool) string {
+	encoded, err := json.Marshal(restReviewEvidence{Operator: operator, FindingsRef: findingsRef, PythonForwarderOffAttested: forwarderOffAttested})
 	if err != nil {
 		return operator
 	}
@@ -604,6 +705,14 @@ type outcome struct {
 	// where its bodies landed, not only an admitted one's.
 	BaselineResponseRef  string `json:"baseline_response_ref,omitempty"`
 	CandidateResponseRef string `json:"candidate_response_ref,omitempty"`
+
+	// BaselineWireAttempts/CandidateWireAttempts are the wire attempts
+	// the transport made for each leg (goapiproof.LegResponse): 1 for a
+	// leg sent once, more when the standard library resent it on its own
+	// (a failed reused connection, an HTTP/2 stream replay). Recorded, not
+	// prevented; zero when the leg was never sent.
+	BaselineWireAttempts  int `json:"baseline_wire_attempts,omitempty"`
+	CandidateWireAttempts int `json:"candidate_wire_attempts,omitempty"`
 
 	// FindingsRef is the -artifact-dir reference to this comparison's
 	// decoded finding list (goapiproof.Result.Findings), set only when
@@ -769,7 +878,7 @@ func run(f flags) (err error) {
 	var runEnded error
 	measuring := false
 	defer func() {
-		if err == nil || measuring || f.reportPath == "" {
+		if err == nil || measuring {
 			return
 		}
 		if writeErr := writeStoppedBeforeMeasuringReport(f, runEnded, err); writeErr != nil {
@@ -798,6 +907,10 @@ func run(f flags) (err error) {
 		runEnded = ctx.Err()
 		cancel()
 	}()
+
+	if f.pythonForwarderOff {
+		fmt.Println("python_forwarder_off=attested: a 200 baseline on an endpoint the Python app can forward is compared as Python's own answer, and each such receipt records the attestation")
+	}
 
 	// Checked FIRST, ahead of every credential/network step below: both
 	// need no network and (in the default, -query-api-src-unset case) no
@@ -864,29 +977,11 @@ func run(f flags) (err error) {
 	// (a slow but legitimate entry declaring a LONGER budget than the
 	// run's default). Every request this run sends is bounded instead by
 	// its own context deadline -- see doREST and resolveRESTTimeout.
-	client := &http.Client{}
+	client := goapiproof.NewLegClient(0)
 
-	// candidateCredential -- the SAME credential every corpus request's
-	// own candidate leg uses below (doREST's own candidateCredential
-	// argument in proveOneRESTRequest) -- never a second, separately
-	// minted credential: /buildinfo is authenticated with the same
-	// bearer-envelope verifier the REST routes themselves use
-	// (buildinfo_route.go's own doc comment), so there is no "proof-
-	// plane" credential distinct from what this binary already mints for
-	// every other request in the run.
-	//
-	// Bounded by the run's own -timeout default, same as every measured
-	// leg -- client carries no Timeout of its own any more (above), so
-	// this read would otherwise wait on ctx's 30-minute run-level bound
-	// alone.
-	buildInfoCtx, cancelBuildInfo := context.WithTimeout(ctx, f.timeout)
-	namedBuild, err := goapiproof.FetchBuildIdentity(buildInfoCtx, client, f.buildInfoURL, candidateCredential)
-	cancelBuildInfo()
+	namedBuild, err := prepareLegs(ctx, client, f, candidateCredential, baselineCredential)
 	if err != nil {
-		return fmt.Errorf("read the candidate build from /buildinfo: %w", err)
-	}
-	if f.candidateBuild != "" && f.candidateBuild != namedBuild {
-		return fmt.Errorf("-candidate-build %q does not match the running build %q reported by %s", f.candidateBuild, namedBuild, f.buildInfoURL)
+		return err
 	}
 
 	var pgPool receiptWriter
@@ -910,18 +1005,39 @@ func run(f flags) (err error) {
 // own Err() as the run exited.
 func writeStoppedBeforeMeasuringReport(f flags, runEnded, stopErr error) error {
 	planned, _ := planRESTRequests()
+	notRun := notRunKeys(planned, nil)
 	cause := stopCause(runEnded, nil)
+	exitCause := exitCauseFromPartial(cause)
 	if cause == "" {
 		cause = partialCauseRefusedBeforeMeasuring
+		exitCause = exitRefusedBeforeMeasuring
 	}
-	fmt.Printf("partial run: %d request(s) never attempted\npartial_cause=%s\n", len(notRunKeys(planned, nil)), cause)
+	// Printed whether or not -report was given: stdout carries the same
+	// accounting the report file does.
+	fmt.Printf("partial run: %d request(s) never attempted: %v\npartial_cause=%s\nexit_cause=%s\n", len(notRun), notRun, cause, exitCause)
+	if f.reportPath == "" {
+		return nil
+	}
 	return writeJSONReport(f.reportPath, jsonReport{
 		Outcomes:     []outcome{},
-		NotRun:       notRunKeys(planned, nil),
+		NotRun:       notRun,
 		PartialCause: cause,
 		PartialError: stopErr.Error(),
+		ExitCause:    exitCause,
 		RunDeadline:  f.runDeadline.String(),
 	})
+}
+
+// exitCauseFromPartial maps a run-level stop (run deadline, signal) to its
+// exit cause; empty for anything else.
+func exitCauseFromPartial(partialCause string) string {
+	switch partialCause {
+	case partialCauseRunDeadline:
+		return exitStoppedByRunDeadline
+	case partialCauseSignal:
+		return exitStoppedBySignal
+	}
+	return ""
 }
 
 // runMeasurement is run()'s own request loop, report write and exit-code
@@ -975,7 +1091,7 @@ func findIteratingBinding(bindings []goapiproof.RESTIDBinding) (goapiproof.RESTI
 // behaviour this file always had.
 func resolveSingleShotRequest(
 	ctx context.Context,
-	client *http.Client,
+	client *goapiproof.LegClient,
 	f flags,
 	operation string,
 	spec goapiproof.RESTEndpointSpec,
@@ -1057,7 +1173,7 @@ func resolveSingleShotRequest(
 // above already implements -- no special-casing needed for that cascade.
 func resolveIteratingRequest(
 	ctx context.Context,
-	client *http.Client,
+	client *goapiproof.LegClient,
 	f flags,
 	operation string,
 	spec goapiproof.RESTEndpointSpec,
@@ -1186,7 +1302,7 @@ func candidateHasNoData(refusal string) bool {
 	return false
 }
 
-func runMeasurement(ctx context.Context, client *http.Client, f flags, candidateCredential, baselineCredential *goapiproof.Credential, namedBuild string, pgPool receiptWriter, artifacts *goapiproof.ArtifactStore) error {
+func runMeasurement(ctx context.Context, client *goapiproof.LegClient, f flags, candidateCredential, baselineCredential *goapiproof.Credential, namedBuild string, pgPool receiptWriter, artifacts *goapiproof.ArtifactStore) error {
 	// Printed before the first request, so a run cut by the deadline
 	// shows on its own log what it was given.
 	fmt.Printf("run_deadline=%s\n", f.runDeadline)
@@ -1301,7 +1417,19 @@ requestLoop:
 			// must not read this the same way it reads a run that broke
 			// off early.
 			if !spec.PublicNoAuth {
-				attemptedKeys[operation+"/"+request.Name+" (edge-credential-on-candidate)"] = true
+				// Named in its own outcome, never left in neither list: the
+				// edge-credential leg is not sent, for its case's own reason.
+				edgeName := request.Name + " (edge-credential-on-candidate)"
+				attemptedKeys[operation+"/"+edgeName] = true
+				skipped := outcome{
+					Operation: operation, Request: edgeName,
+					Admitted: false,
+					Refusal:  attempt.out.Refusal,
+					Detail:   "not sent: this case was refused before either of its legs was sent",
+					BoundIDs: attempt.out.BoundIDs,
+				}
+				outcomes = append(outcomes, skipped)
+				fmt.Println(skipped.line())
 			}
 			continue
 		}
@@ -1358,54 +1486,95 @@ requestLoop:
 	// timeout also wraps context.DeadlineExceeded. A run the deadline or
 	// a signal ended always exits non-zero, even when it had reached its
 	// last case: a leg in flight was cut, not measured.
-	partialCause := stopCause(ctx.Err(), runErr)
-	if runErr == nil && ctx.Err() != nil {
-		runErr = fmt.Errorf("run interrupted: %w", ctx.Err())
-	}
-	if len(notRun) > 0 {
-		fmt.Printf("partial run: %d request(s) never attempted: %v\n", len(notRun), notRun)
-	}
-	if partialCause != "" {
-		fmt.Printf("partial_cause=%s\n", partialCause)
-	}
-	fmt.Printf("attempted=%d admitted=%d match=%d mismatch=%d refused=%d\n",
-		attempted, admitted, matched, mismatched, attempted-admitted)
-
-	if f.reportPath != "" {
-		if writeErr := writeJSONReport(f.reportPath, jsonReport{Outcomes: outcomes, NotRun: notRun, PartialCause: partialCause, PartialError: partialError(f, runErr), RunDeadline: f.runDeadline.String()}); writeErr != nil {
-			if runErr == nil {
-				runErr = writeErr
-			} else {
-				runErr = fmt.Errorf("%w; additionally, writing the report failed: %v", runErr, writeErr)
-			}
-		}
-	}
-
-	if runErr != nil {
-		return runErr
-	}
-
-	// A leg that never answered is not a tool error (it is already
-	// recorded above as its own named refusal, per case), but a run
-	// containing one must still exit non-zero: it is evidence the
-	// instrument itself did not complete cleanly, distinct from an
-	// ordinary admission refusal, and an operator must not have to read
-	// every line of output to notice one happened.
-	if legFailures := legFailuresIn(outcomes); len(legFailures) > 0 {
-		return fmt.Errorf("this run measured a leg that never answered (fix the deployment, or for a legitimately slow baseline declare a longer RESTRequest.Timeout):\n%s", strings.Join(legFailures, "\n"))
-	}
-
+	// The exit cause is decided before anything is printed or written,
+	// from the run context's own state, and decided AGAIN after the report
+	// is written: a deadline or signal that lands during the write ends
+	// the run too, and the report and the exit say so.
+	legFailures := legFailuresIn(outcomes)
 	var vacuityErrs []string
 	for _, out := range outcomes {
 		for _, e := range out.vacuityErrors {
 			vacuityErrs = append(vacuityErrs, fmt.Sprintf("%s/%s: %s", out.Operation, out.Request, e))
 		}
 	}
-	if len(vacuityErrs) > 0 {
-		sort.Strings(vacuityErrs)
-		return fmt.Errorf("this run found declarations that excuse nothing (fix or remove them):\n%s", strings.Join(vacuityErrs, "\n"))
+	sort.Strings(vacuityErrs)
+	if len(notRun) > 0 {
+		fmt.Printf("partial run: %d request(s) never attempted: %v\n", len(notRun), notRun)
 	}
-	return nil
+	fmt.Printf("attempted=%d admitted=%d match=%d mismatch=%d refused=%d\n",
+		attempted, admitted, matched, mismatched, attempted-admitted)
+
+	runEnded := ctx.Err()
+	report, finalErr := finalRunReport(f, outcomes, notRun, runEnded, runErr, legFailures, vacuityErrs)
+	finalErr = writeFinalReport(f, report, finalErr)
+	if late := ctx.Err(); late != nil && runEnded == nil {
+		report, finalErr = finalRunReport(f, outcomes, notRun, late, runErr, legFailures, vacuityErrs)
+		fmt.Println("the run ended while its report was being written")
+		finalErr = writeFinalReport(f, report, finalErr)
+	}
+	return finalErr
+}
+
+// finalRunReport decides how a run that reached the end of its request
+// loop ended -- partial_cause, exit_cause and the error it exits with --
+// from runEnded (the run context's own Err()), the loop's own error, the
+// legs that never answered and the declarations that excused nothing.
+func finalRunReport(f flags, outcomes []outcome, notRun []string, runEnded, runErr error, legFailures, vacuityErrs []string) (jsonReport, error) {
+	partialCause := stopCause(runEnded, runErr)
+	if runErr == nil && runEnded != nil {
+		runErr = fmt.Errorf("run interrupted: %w", runEnded)
+	}
+	exitCause, finalErr := exitCauseFor(runEnded, runErr, legFailures, vacuityErrs)
+	report := jsonReport{Outcomes: outcomes, NotRun: notRun, PartialCause: partialCause, PartialError: partialError(f, runErr), ExitCause: exitCause, RunDeadline: f.runDeadline.String()}
+	return report, finalErr
+}
+
+// writeFinalReport prints the run's causes on stdout and writes the
+// report when -report was given, returning the run's exit error (joined
+// with a write failure when there is one).
+func writeFinalReport(f flags, report jsonReport, finalErr error) error {
+	if report.PartialCause != "" {
+		fmt.Printf("partial_cause=%s\n", report.PartialCause)
+	}
+	fmt.Printf("exit_cause=%s\n", report.ExitCause)
+	if f.reportPath == "" {
+		return finalErr
+	}
+	if writeErr := writeJSONReport(f.reportPath, report); writeErr != nil {
+		if finalErr == nil {
+			return writeErr
+		}
+		return fmt.Errorf("%w; additionally, writing the report failed: %v", finalErr, writeErr)
+	}
+	return finalErr
+}
+
+// exitCauseFor decides the exit cause of a run that reached the end of
+// its request loop, and the error it exits with. runEnded is the run
+// context's own Err(): the run deadline or a signal is read from the
+// context that carries them, never inferred from an error chain (a
+// single request's own timeout also wraps context.DeadlineExceeded).
+// Then a tool error, then a leg that never answered, then a declaration
+// that excused nothing.
+func exitCauseFor(runEnded, runErr error, legFailures, vacuityErrs []string) (string, error) {
+	switch {
+	case errors.Is(runEnded, context.DeadlineExceeded):
+		return exitStoppedByRunDeadline, runErr
+	case runEnded != nil:
+		return exitStoppedBySignal, runErr
+	case runErr != nil:
+		return exitAbortedByToolError, runErr
+	case len(legFailures) > 0:
+		// A leg that never answered is not a tool error (it is already
+		// recorded as its own named refusal, per case), but a run
+		// containing one still exits non-zero: the instrument did not
+		// complete cleanly, and an operator must not have to read every
+		// line of output to notice.
+		return exitCompletedWithLegsThatNeverAnswered, fmt.Errorf("this run measured a leg that never answered (fix the deployment, or for a legitimately slow baseline declare a longer RESTRequest.Timeout):\n%s", strings.Join(legFailures, "\n"))
+	case len(vacuityErrs) > 0:
+		return exitCompletedWithVacuousDeclarations, fmt.Errorf("this run found declarations that excuse nothing (fix or remove them):\n%s", strings.Join(vacuityErrs, "\n"))
+	}
+	return exitCompleted, nil
 }
 
 // jsonReport is -report's own top-level shape: not a bare array of
@@ -1430,9 +1599,25 @@ type jsonReport struct {
 	// PartialError is the redacted run-level error behind PartialCause,
 	// when there was one.
 	PartialError string `json:"partial_error,omitempty"`
+	// ExitCause names how the run ended, one of the exit* constants: a
+	// whole run, a run stopped early (and by what), or one refused before
+	// it measured anything.
+	ExitCause string `json:"exit_cause"`
 	// RunDeadline is this run's -run-deadline.
 	RunDeadline string `json:"run_deadline"`
 }
+
+// Exit causes, one per way the command can end; each is written into the
+// report and printed on that path.
+const (
+	exitCompleted                          = "completed"
+	exitCompletedWithLegsThatNeverAnswered = "completed_with_legs_that_never_answered"
+	exitCompletedWithVacuousDeclarations   = "completed_with_declarations_that_excuse_nothing"
+	exitStoppedBySignal                    = "stopped_by_signal"
+	exitStoppedByRunDeadline               = "stopped_by_run_deadline"
+	exitAbortedByToolError                 = "aborted_by_tool_error"
+	exitRefusedBeforeMeasuring             = "refused_before_measuring"
+)
 
 // Partial causes, read from the run's own context first.
 const (
@@ -1488,7 +1673,7 @@ func writeJSONReport(path string, report jsonReport) error {
 // admission, comparison (when the corpus asks for one) and the receipt.
 func proveOneRESTRequest(
 	ctx context.Context,
-	client *http.Client,
+	client *goapiproof.LegClient,
 	f flags,
 	operation string,
 	spec goapiproof.RESTEndpointSpec,
@@ -1502,6 +1687,23 @@ func proveOneRESTRequest(
 	dryRun bool,
 	boundIDs map[string]string,
 ) (outcome, error) {
+	for _, binding := range request.IDBindings {
+		if binding.PathParam == "" {
+			continue
+		}
+		if id := boundIDs[binding.Producer]; !goapiproof.IsPathLiteralID(id) {
+			// Neither leg is sent: the server's path router would decode
+			// or split this id, so both planes would answer for an id
+			// other than the one the receipt names.
+			return outcome{
+				Operation: operation, Request: request.Name,
+				Admitted: false,
+				Refusal:  goapiproof.RESTRefusalBoundIDNotAPathLiteral,
+				Detail:   fmt.Sprintf("the id bound to path parameter %q by %q is not a path literal", binding.PathParam, binding.Producer),
+				BoundIDs: boundIDs,
+			}, nil
+		}
+	}
 	if spec.PublicNoAuth {
 		candidateCredential, baselineCredential = nil, nil
 	}
@@ -1545,6 +1747,7 @@ func proveOneRESTRequest(
 		NamedBuild:          namedBuild,
 		WantCandidateStatus: request.WantCandidateStatus,
 		WantBaselineStatus:  request.WantBaselineStatus,
+		PythonForwarder:     spec.PythonForwarder && !f.pythonForwarderOff,
 		Candidate:           candidateLeg,
 		Baseline:            baselineLeg,
 	}, decodeBody)
@@ -1552,9 +1755,11 @@ func proveOneRESTRequest(
 	out := outcome{
 		Operation: operation, Request: request.Name,
 		Admitted: admission.Admitted, Refusal: admission.Reason, Detail: admission.Detail,
-		BoundIDs:             boundIDs,
-		BaselineResponseRef:  baselineRef,
-		CandidateResponseRef: candidateRef,
+		BoundIDs:              boundIDs,
+		BaselineResponseRef:   baselineRef,
+		CandidateResponseRef:  candidateRef,
+		BaselineWireAttempts:  baselineLeg.WireAttempts,
+		CandidateWireAttempts: candidateLeg.WireAttempts,
 	}
 	if !admission.Admitted {
 		return out, nil
@@ -1827,7 +2032,7 @@ func proveOneRESTRequest(
 		Stage:                            goapiproof.EnablementProofStage,
 		TerminalState:                    terminalState,
 		OrgID:                            f.org,
-		ReviewEvidence:                   encodeRESTReviewEvidence(f.reviewEvidence, findingsRef),
+		ReviewEvidence:                   encodeRESTReviewEvidence(f.reviewEvidence, findingsRef, spec.PythonForwarder && f.pythonForwarderOff),
 		RecordedBy:                       f.recordedBy,
 		ObservedAt:                       observedAt,
 		MeasurementRoute:                 goapiproof.RouteProof,
@@ -1897,7 +2102,7 @@ func proveOneRESTRequest(
 // main() always builds one (run()'s own -artifact-dir, required).
 func proveEdgeCredentialOnCandidate(
 	ctx context.Context,
-	client *http.Client,
+	client *goapiproof.LegClient,
 	f flags,
 	operation string,
 	spec goapiproof.RESTEndpointSpec,
@@ -1916,7 +2121,7 @@ func proveEdgeCredentialOnCandidate(
 		return outcome{}, fmt.Errorf("candidate leg (edge credential): %w", err)
 	}
 
-	out := outcome{Operation: operation, Request: requestName}
+	out := outcome{Operation: operation, Request: requestName, CandidateWireAttempts: leg.WireAttempts}
 	if artifacts != nil {
 		ref, refErr := artifacts.Put(leg.Body)
 		if refErr != nil {

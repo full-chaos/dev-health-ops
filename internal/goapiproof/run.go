@@ -68,7 +68,12 @@ const (
 	RefusalOrderInsensitiveListKeyMissing = "order_insensitive_list_element_missing_key_field"
 	RefusalNonFinite                      = "response_carried_a_non_finite_json_number"
 	RefusalPlaneUnidentified              = "response_carried_no_plane_evidence"
-	RefusalBuildMismatch                  = "serving_build_is_not_the_named_build"
+	// RefusalServedUnderImpersonation is for a leg the Python app served
+	// inside an active impersonation session: it answered for the
+	// session's target org, not the org the credential names, and
+	// stamped the response with impersonationHeader to say so.
+	RefusalServedUnderImpersonation = "leg_was_served_under_an_impersonation_session"
+	RefusalBuildMismatch            = "serving_build_is_not_the_named_build"
 	// RefusalNeedsInstanceID is for an operation whose registered
 	// document requires an identifier for ONE stored row -- `pr(id:)`
 	// today. The table cannot supply one: any value it invented would
@@ -208,6 +213,29 @@ type Observation struct {
 	Body    []byte            `json:"-"`
 	BodyRef string            `json:"body_ref,omitempty"`
 	Elapsed time.Duration     `json:"elapsed_ns"`
+	// Impersonating is true when the response carried
+	// impersonationHeader: the Python app served it for an impersonation
+	// target's org.
+	Impersonating bool `json:"impersonating,omitempty"`
+	// WireAttempts is the number of wire attempts the transport made for
+	// this leg (see LegResponse.WireAttempts): recorded, never prevented.
+	WireAttempts int `json:"wire_attempts"`
+}
+
+// impersonationHeader is the header the Python app's impersonation
+// middleware adds to every response it serves with the org overridden to
+// an impersonation session's target (api/middleware/impersonation.py).
+// Every other path through that middleware leaves the org the request's
+// own credential resolved to, so a leg without it answered for the
+// credential's org.
+const impersonationHeader = "x-impersonating"
+
+// ServedUnderImpersonation reports whether a response header set carries
+// the Python app's impersonation stamp. Any value counts: the stamp's
+// presence, not its spelling, is the override.
+func ServedUnderImpersonation(header http.Header) bool {
+	_, present := header[http.CanonicalHeaderKey(impersonationHeader)]
+	return present
 }
 
 // Outcome is one operation's complete result: what was attempted, what
@@ -437,7 +465,7 @@ type Config struct {
 
 // Runner executes the proof run.
 type Runner struct {
-	Client    *http.Client
+	Client    *LegClient
 	Documents map[string]string // operation -> registered document TEXT
 	Registry  RegistryView
 	Routing   map[string]RoutingRow
@@ -1223,13 +1251,12 @@ func (r *Runner) post(ctx context.Context, url, document string, credential *Cre
 		return Observation{}, err
 	}
 
-	// Wrapped so redirects are REFUSED. The measured routes are direct
-	// endpoints; following a redirect would fetch a URL the operator never
-	// supplied and this package never validated, and every redirect
-	// finding in this seam's history arrived through a Location header.
-	client := NoRedirectClient(r.Client)
+	// r.Client is a LegClient: redirects are REFUSED and no proxy is
+	// used. The measured routes are direct endpoints; a redirect or a
+	// proxy would answer from a server the operator never named.
 	started := time.Now()
-	response, err := client.Do(request)
+	legResponse, err := r.Client.Do(request)
+	response := legResponse.Response
 	if err != nil {
 		// The transport error is DROPPED, not quoted and not scrubbed.
 		// What comes back is the endpoint label this package rebuilt and a
@@ -1251,8 +1278,10 @@ func (r *Runner) post(ctx context.Context, url, document string, credential *Cre
 		Headers: map[string]string{
 			contentTypeHeader: strings.ToLower(strings.TrimSpace(response.Header.Get(contentTypeHeader))),
 		},
-		Body:    responseBody,
-		Elapsed: time.Since(started),
+		Body:          responseBody,
+		Elapsed:       time.Since(started),
+		Impersonating: ServedUnderImpersonation(response.Header),
+		WireAttempts:  legResponse.WireAttempts,
 	}
 	if r.Artifacts != nil {
 		ref, err := r.Artifacts.Put(responseBody)

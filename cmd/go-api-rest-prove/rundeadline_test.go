@@ -53,7 +53,7 @@ func runUnderDeadlineWith(t *testing.T, ctx context.Context, stall *stalledReque
 	}
 	candidate := httptest.NewServer(candidateHandler)
 	t.Cleanup(candidate.Close)
-	baseline := httptest.NewServer(genericRESTStubHandler(t, "", baselineStall))
+	baseline := httptest.NewServer(referencePlane(genericRESTStubHandler(t, "", baselineStall)))
 	t.Cleanup(baseline.Close)
 	dir := t.TempDir()
 	artifacts, err := goapiproof.NewArtifactStore(dir + "/artifacts")
@@ -64,7 +64,7 @@ func runUnderDeadlineWith(t *testing.T, ctx context.Context, stall *stalledReque
 		timeout: time.Minute, runDeadline: runDeadline, dryRun: true, reportPath: dir + "/report.json"}
 	var run deadlineRun
 	run.stdout = captureStdout(t, func() {
-		run.err = runMeasurement(ctx, http.DefaultClient, f, staticCredentialForTest(), baselineCredential, build, nil, artifacts)
+		run.err = runMeasurement(ctx, goapiproof.NewLegClient(0), f, staticCredentialForTest(), baselineCredential, build, nil, artifacts)
 	})
 	raw, err := os.ReadFile(f.reportPath)
 	if err != nil {
@@ -76,55 +76,52 @@ func runUnderDeadlineWith(t *testing.T, ctx context.Context, stall *stalledReque
 	return run
 }
 
-// knownUnaccountedOnAFullStubRun pins the size of the one set of planned
-// requests a report does not account for, a limit inherited from main:
-// the edge-credential sibling of a case refused before either of its legs
-// was sent (an unresolved id binding, or an exhausted candidate search).
-// That sibling is marked attempted and gets neither an outcome nor a
-// not_run entry. The number is the full stub run's; it may only shrink.
-const knownUnaccountedOnAFullStubRun = 90
-
-// accountFor checks that the report accounts for every planned request
-// exactly once -- an outcome, or not_run -- except the KNOWN-UNACCOUNTED
-// set, which is generated here, not exempted: every planned key the
-// report does not account for must be the edge-credential sibling of a
-// case the same report shows refused before its legs, and the set is
-// returned so a caller can pin its size.
-func accountFor(t *testing.T, report jsonReport) []string {
+// corpusRequestKeys is every request key the corpus declares, built from
+// the corpus itself (KnownRESTOperations and each endpoint's own
+// Requests), not from the run's planner, so a request the planner drops
+// is still expected.
+func corpusRequestKeys(t *testing.T) []string {
 	t.Helper()
-	planned, err := planRESTRequests()
-	if err != nil {
-		t.Fatal(err)
-	}
-	seen := map[string]int{}
-	refusedBeforeLegs := map[string]bool{}
-	for _, o := range report.Outcomes {
-		key := o.Operation + "/" + o.Request
-		seen[key]++
-		switch o.Refusal {
-		case goapiproof.RESTRefusalIDBindingUnresolved, goapiproof.RESTRefusalCandidateIterationExhausted:
-			refusedBeforeLegs[key] = true
+	var keys []string
+	for _, operation := range goapiproof.KnownRESTOperations() {
+		spec, err := goapiproof.SpecForREST(operation)
+		if err != nil {
+			t.Fatal(err)
 		}
+		for _, request := range spec.Requests {
+			keys = append(keys, operation+"/"+request.Name)
+			if !spec.PublicNoAuth {
+				keys = append(keys, operation+"/"+request.Name+" (edge-credential-on-candidate)")
+			}
+		}
+	}
+	return keys
+}
+
+// accountFor checks the report accounts for every request the corpus
+// declares exactly once -- an outcome, or not_run -- with no exception,
+// and names no request the corpus does not declare.
+func accountFor(t *testing.T, report jsonReport) {
+	t.Helper()
+	seen := map[string]int{}
+	for _, o := range report.Outcomes {
+		seen[o.Operation+"/"+o.Request]++
 	}
 	for _, key := range report.NotRun {
 		seen[key]++
 	}
-	var knownUnaccounted []string
-	for _, key := range notRunKeys(planned, nil) {
-		switch seen[key] {
-		case 1:
-		case 0:
-			parent, isEdge := strings.CutSuffix(key, " (edge-credential-on-candidate)")
-			if !isEdge || !refusedBeforeLegs[parent] {
-				t.Errorf("planned request %q is not accounted for (no outcome, not in not_run), and is not the edge sibling of a case refused before its legs", key)
-				continue
-			}
-			knownUnaccounted = append(knownUnaccounted, key)
-		default:
-			t.Errorf("planned request %q is accounted for %d times, want once", key, seen[key])
+	expected := map[string]bool{}
+	for _, key := range corpusRequestKeys(t) {
+		expected[key] = true
+		if seen[key] != 1 {
+			t.Errorf("corpus request %q is accounted for %d time(s), want exactly once (an outcome or not_run)", key, seen[key])
 		}
 	}
-	return knownUnaccounted
+	for key := range seen {
+		if !expected[key] {
+			t.Errorf("the report names %q, which the corpus does not declare", key)
+		}
+	}
 }
 
 // countingCredential counts how many values it is asked for.
@@ -261,7 +258,7 @@ func TestRunDeadlineEveryPointAtWhichItCanStrike(t *testing.T) {
 	for _, cell := range cells {
 		t.Run(cell.name, func(t *testing.T) {
 			run := cell.run(t)
-			knownUnaccounted := accountFor(t, run.report)
+			accountFor(t, run.report)
 			if run.report.Outcomes == nil {
 				t.Fatal("the report's outcomes is null, want a list")
 			}
@@ -286,9 +283,6 @@ func TestRunDeadlineEveryPointAtWhichItCanStrike(t *testing.T) {
 				}
 			}
 			if cell.wantCause == "" {
-				if len(knownUnaccounted) != knownUnaccountedOnAFullStubRun {
-					t.Fatalf("the full run leaves %d planned request(s) unaccounted, pinned at %d (a limit inherited from main that may only shrink): %v", len(knownUnaccounted), knownUnaccountedOnAFullStubRun, knownUnaccounted)
-				}
 				if run.report.Partial || len(run.report.NotRun) != 0 || strings.Contains(run.stdout, "partial_cause=") {
 					t.Fatalf("a run that reached its last case reads as partial: not_run=%v", run.report.NotRun)
 				}

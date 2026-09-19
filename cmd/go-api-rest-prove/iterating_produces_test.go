@@ -52,7 +52,7 @@ func scopedFixtureServers(t *testing.T, build string, scopeOf func(*http.Request
 		_, _ = w.Write([]byte(body))
 	}))
 	t.Cleanup(candidate.Close)
-	baseline := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	baseline := httptest.NewServer(referencePlane(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, ok := baselineBodies[scopeOf(r)]
 		if !ok {
 			w.WriteHeader(http.StatusNotFound)
@@ -60,7 +60,7 @@ func scopedFixtureServers(t *testing.T, build string, scopeOf func(*http.Request
 		}
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(body))
-	}))
+	})))
 	t.Cleanup(baseline.Close)
 	return candidate.URL, baseline.URL, &scopes
 }
@@ -131,7 +131,7 @@ func TestResolveIteratingRequest_FlowRepoScopedSkipsARepositoryWithNoInvestmentR
 	spec, request, binding := corpusRequest(t, "REST:POST:/api/v1/investment/flow", "repo_scoped")
 
 	writer := &fakeReceiptWriter{}
-	attempt, err := resolveIteratingRequest(context.Background(), http.DefaultClient, f, "REST:POST:/api/v1/investment/flow",
+	attempt, err := resolveIteratingRequest(context.Background(), goapiproof.NewLegClient(0), f, "REST:POST:/api/v1/investment/flow",
 		spec, request, binding, map[string]string{}, map[string][]string{binding.Producer: {"repo-empty", "repo-data"}},
 		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil)
 	if err != nil {
@@ -175,7 +175,7 @@ func TestResolveIteratingRequest_WorkUnitsRepoScopedSkipsARepositoryWithNoWorkUn
 	spec, request, binding := corpusRequest(t, "REST:GET:/api/v1/work-units", "repo_scoped")
 
 	writer := &fakeReceiptWriter{}
-	attempt, err := resolveIteratingRequest(context.Background(), http.DefaultClient, f, "REST:GET:/api/v1/work-units",
+	attempt, err := resolveIteratingRequest(context.Background(), goapiproof.NewLegClient(0), f, "REST:GET:/api/v1/work-units",
 		spec, request, binding, map[string]string{}, map[string][]string{binding.Producer: {"repo-empty", "repo-data"}},
 		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil)
 	if err != nil {
@@ -216,7 +216,7 @@ func TestProveOneRESTRequest_SingleShotJSONRequestStillAdmittedWithoutItsDeclare
 		Query:    map[string][]string{"scope_id": {"repo-empty"}},
 		Produces: []goapiproof.RESTIDProducer{{Name: "work_unit_id_repo_scoped", IDField: "work_unit_id"}},
 	}
-	out, err := proveOneRESTRequest(context.Background(), http.DefaultClient, f, "REST:GET:/work-units", spec, request,
+	out, err := proveOneRESTRequest(context.Background(), goapiproof.NewLegClient(0), f, "REST:GET:/work-units", spec, request,
 		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), &fakeReceiptWriter{}, nil, false, nil)
 	if err != nil {
 		t.Fatalf("proveOneRESTRequest: %v", err)
@@ -253,7 +253,7 @@ func TestResolveIteratingRequest_FlowRepoScopedComparesACandidateOnlyNodeInstead
 	f := flags{queryAPIURL: candidateURL, pythonAPIURL: baselineURL, org: "org-1", recordedBy: "chris", reviewEvidence: "test"}
 	spec, request, binding := corpusRequest(t, "REST:POST:/api/v1/investment/flow", "repo_scoped")
 
-	attempt, err := resolveIteratingRequest(context.Background(), http.DefaultClient, f, "REST:POST:/api/v1/investment/flow",
+	attempt, err := resolveIteratingRequest(context.Background(), goapiproof.NewLegClient(0), f, "REST:POST:/api/v1/investment/flow",
 		spec, request, binding, map[string]string{}, map[string][]string{binding.Producer: {"repo-diverges", "repo-data"}},
 		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), &fakeReceiptWriter{}, nil)
 	if err != nil {
@@ -288,7 +288,7 @@ func TestResolveIteratingRequest_WorkUnitsRepoScopedGoOnlyUnitIsComparedAndNotEx
 	f := flags{queryAPIURL: candidateURL, pythonAPIURL: baselineURL, org: "org-1", recordedBy: "chris", reviewEvidence: "test"}
 	spec, request, binding := corpusRequest(t, "REST:GET:/api/v1/work-units", "repo_scoped")
 
-	attempt, err := resolveIteratingRequest(context.Background(), http.DefaultClient, f, "REST:GET:/api/v1/work-units",
+	attempt, err := resolveIteratingRequest(context.Background(), goapiproof.NewLegClient(0), f, "REST:GET:/api/v1/work-units",
 		spec, request, binding, map[string]string{}, map[string][]string{binding.Producer: {"repo-go-only", "repo-data"}},
 		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), &fakeReceiptWriter{}, nil)
 	if err != nil {
@@ -347,16 +347,16 @@ func TestResolveIteratingRequest_ARealFailureStopsTheSearch(t *testing.T) {
 		_, _ = w.Write([]byte(withData))
 	}))
 	t.Cleanup(candidate.Close)
-	baseline := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	baseline := httptest.NewServer(referencePlane(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(withData))
-	}))
+	})))
 	t.Cleanup(baseline.Close)
 	f := flags{queryAPIURL: candidate.URL, pythonAPIURL: baseline.URL, org: "org-1", recordedBy: "chris", reviewEvidence: "test"}
 	spec, request, binding := corpusRequest(t, "REST:POST:/api/v1/investment/flow", "repo_scoped")
 
 	writer := &fakeReceiptWriter{}
-	attempt, err := resolveIteratingRequest(context.Background(), http.DefaultClient, f, "REST:POST:/api/v1/investment/flow",
+	attempt, err := resolveIteratingRequest(context.Background(), goapiproof.NewLegClient(0), f, "REST:POST:/api/v1/investment/flow",
 		spec, request, binding, map[string]string{}, map[string][]string{binding.Producer: {"repo-fails", "repo-data"}},
 		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil)
 	if err != nil {
@@ -392,7 +392,7 @@ func TestResolveIteratingRequest_UndecodableCandidateBodyStopsTheSearch(t *testi
 
 	writer := &fakeReceiptWriter{}
 	spec, request, binding := iteratingConsumerRequest()
-	attempt, err := resolveIteratingRequest(context.Background(), http.DefaultClient, f, "REST:GET:/people/{person_id}/issues",
+	attempt, err := resolveIteratingRequest(context.Background(), goapiproof.NewLegClient(0), f, "REST:GET:/people/{person_id}/issues",
 		spec, request, binding, produced, producedCandidates,
 		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil)
 	if err != nil {
@@ -448,7 +448,7 @@ func TestResolveIteratingRequest_OnlyAnEmptyDeclaredListIsNoData(t *testing.T) {
 			f := flags{queryAPIURL: candidateURL, pythonAPIURL: baselineURL, org: "org-1", recordedBy: "chris", reviewEvidence: "test"}
 			spec, request, binding := corpusRequest(t, "REST:GET:/api/v1/work-units", "repo_scoped")
 			writer := &fakeReceiptWriter{}
-			attempt, err := resolveIteratingRequest(context.Background(), http.DefaultClient, f, "REST:GET:/api/v1/work-units",
+			attempt, err := resolveIteratingRequest(context.Background(), goapiproof.NewLegClient(0), f, "REST:GET:/api/v1/work-units",
 				spec, request, binding, map[string]string{}, map[string][]string{binding.Producer: {"repo-first", "repo-data"}},
 				staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil)
 			if err != nil {
@@ -490,7 +490,7 @@ func TestResolveIteratingRequest_StatusOnlyOnlyAnEmptyDeclaredListIsNoData(t *te
 			produced, producedCandidates := runIteratingProducer(t, f, build, &fakeReceiptWriter{})
 			writer := &fakeReceiptWriter{}
 			spec, request, binding := iteratingConsumerRequest()
-			attempt, err := resolveIteratingRequest(context.Background(), http.DefaultClient, f, "REST:GET:/people/{person_id}/issues",
+			attempt, err := resolveIteratingRequest(context.Background(), goapiproof.NewLegClient(0), f, "REST:GET:/people/{person_id}/issues",
 				spec, request, binding, produced, producedCandidates,
 				staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil)
 			if err != nil {
@@ -564,7 +564,7 @@ func TestResolveIteratingRequest_FlowEmptyNodesWithOtherDifferencesWins(t *testi
 	f := flags{queryAPIURL: candidateURL, pythonAPIURL: baselineURL, org: "org-1", recordedBy: "chris", reviewEvidence: "test"}
 	spec, request, binding := corpusRequest(t, "REST:POST:/api/v1/investment/flow", "repo_scoped")
 	writer := &fakeReceiptWriter{}
-	attempt, err := resolveIteratingRequest(context.Background(), http.DefaultClient, f, "REST:POST:/api/v1/investment/flow",
+	attempt, err := resolveIteratingRequest(context.Background(), goapiproof.NewLegClient(0), f, "REST:POST:/api/v1/investment/flow",
 		spec, request, binding, map[string]string{}, map[string][]string{binding.Producer: {"repo-first", "repo-data"}},
 		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil)
 	if err != nil {
@@ -591,7 +591,7 @@ func TestResolveIteratingRequest_JSONExhaustionIsANamedRefusalWithEveryAttempt(t
 	f := flags{queryAPIURL: candidateURL, pythonAPIURL: baselineURL, org: "org-1", recordedBy: "chris", reviewEvidence: "test"}
 	spec, request, binding := corpusRequest(t, "REST:GET:/api/v1/work-units", "repo_scoped")
 	writer := &fakeReceiptWriter{}
-	attempt, err := resolveIteratingRequest(context.Background(), http.DefaultClient, f, "REST:GET:/api/v1/work-units",
+	attempt, err := resolveIteratingRequest(context.Background(), goapiproof.NewLegClient(0), f, "REST:GET:/api/v1/work-units",
 		spec, request, binding, map[string]string{}, map[string][]string{binding.Producer: {"repo-a", "repo-b"}},
 		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil)
 	if err != nil {
@@ -642,7 +642,7 @@ func TestResolveIteratingRequest_EachLegsDeclaredListIsCheckedUnderAVolatileList
 				Parity:     goapiproof.Options{VolatileFields: map[string]string{"data.items": "test fixture"}},
 			}
 			writer := &fakeReceiptWriter{}
-			attempt, err := resolveIteratingRequest(context.Background(), http.DefaultClient, f, "REST:GET:/people/{person_id}/prs",
+			attempt, err := resolveIteratingRequest(context.Background(), goapiproof.NewLegClient(0), f, "REST:GET:/people/{person_id}/prs",
 				spec, request, binding, produced, producedCandidates,
 				staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil)
 			if err != nil {

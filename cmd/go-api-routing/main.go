@@ -55,7 +55,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"net/http"
 	"net/url"
 	"os"
 	"strconv"
@@ -609,7 +608,10 @@ func envelopeCredential() (*goapiproof.Credential, error) {
 	return buildInfoCredential(bearer), nil
 }
 
-func httpClient(timeout time.Duration) *http.Client { return &http.Client{Timeout: timeout} }
+// httpClient is the goapiproof leg client: it refuses redirects and never
+// uses an environment proxy, so a registry or /buildinfo read answers
+// from the host named.
+func httpClient(timeout time.Duration) *goapiproof.LegClient { return goapiproof.NewLegClient(timeout) }
 
 // ErrURLCarriesCredentials refuses a -registry-url or -buildinfo-url that
 // carries anything a credential can hide in.

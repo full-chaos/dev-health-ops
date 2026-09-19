@@ -362,18 +362,6 @@ func classifyTransport(err error) string {
 // redirect produces.
 var errRedirectRefused = errors.New("goapiproof: refusing to follow a redirect")
 
-// NoRedirectClient returns a client that refuses redirects.
-func NoRedirectClient(base *http.Client) *http.Client {
-	client := &http.Client{}
-	if base != nil {
-		*client = *base
-	}
-	client.CheckRedirect = func(*http.Request, []*http.Request) error {
-		return errRedirectRefused
-	}
-	return client
-}
-
 // transportError builds the only error this package emits for a failed
 // request.
 func transportError(rawURL string, err error) error {
@@ -432,15 +420,16 @@ const proofBearerEnvVarName = "GO_API_PROVE_PROOF_BEARER"
 // CHAOS-5416 records happened because rows were seeded at a digest no
 // running binary computed, and every surface that could have said so was
 // reading the same stale source as the thing that was wrong.
-func FetchRegistry(ctx context.Context, client *http.Client, registryURL string) (RegistryView, error) {
-	// Redirects are REFUSED: /registry and /buildinfo are direct
-	// endpoints, so a redirect means fetching something nobody validated.
-	client = NoRedirectClient(client)
+func FetchRegistry(ctx context.Context, client *LegClient, registryURL string) (RegistryView, error) {
+	// client is a LegClient: redirects are REFUSED and no proxy is used,
+	// because /registry and /buildinfo are direct endpoints and anything
+	// else means reading something nobody validated.
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, registryURL, nil)
 	if err != nil {
 		return RegistryView{}, fmt.Errorf("goapiproof: build registry request: %w", err)
 	}
-	response, err := client.Do(request)
+	legResponse, err := client.Do(request)
+	response := legResponse.Response
 	if err != nil {
 		return RegistryView{}, transportError(registryURL, err)
 	}
@@ -598,10 +587,10 @@ func dedupeSorted(sorted []string) []string {
 //   - a 404: the deployment predates /buildinfo. Also a refusal -- an old
 //     build that cannot identify itself is exactly the case this check
 //     exists for.
-func FetchBuildIdentity(ctx context.Context, client *http.Client, buildInfoURL string, credential *Credential) (string, error) {
-	// Redirects are REFUSED: /registry and /buildinfo are direct
-	// endpoints, so a redirect means fetching something nobody validated.
-	client = NoRedirectClient(client)
+func FetchBuildIdentity(ctx context.Context, client *LegClient, buildInfoURL string, credential *Credential) (string, error) {
+	// client is a LegClient: redirects are REFUSED and no proxy is used,
+	// because /registry and /buildinfo are direct endpoints and anything
+	// else means reading something nobody validated.
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, buildInfoURL, nil)
 	if err != nil {
 		return "", fmt.Errorf("goapiproof: build buildinfo request: %w", err)
@@ -609,7 +598,8 @@ func FetchBuildIdentity(ctx context.Context, client *http.Client, buildInfoURL s
 	if err := credential.Apply(ctx, request); err != nil {
 		return "", err
 	}
-	response, err := client.Do(request)
+	legResponse, err := client.Do(request)
+	response := legResponse.Response
 	if err != nil {
 		return "", transportError(buildInfoURL, err)
 	}
@@ -700,7 +690,7 @@ func FetchBuildIdentity(ctx context.Context, client *http.Client, buildInfoURL s
 // lockstep rule already forbids -- migrate and every go-* image rebuild
 // together, never staggered -- so the residual is a deployment invariant,
 // not an unexamined hole. It is stated on the report rather than assumed.
-func VerifyBuildStable(ctx context.Context, client *http.Client, buildInfoURL string, credential *Credential, before string) error {
+func VerifyBuildStable(ctx context.Context, client *LegClient, buildInfoURL string, credential *Credential, before string) error {
 	after, err := FetchBuildIdentity(ctx, client, buildInfoURL, credential)
 	if err != nil {
 		return fmt.Errorf("goapiproof: re-reading the build identity after the run failed, so the receipts cannot be shown to name the build that served them: %w", err)

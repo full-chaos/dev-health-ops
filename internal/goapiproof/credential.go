@@ -3,6 +3,8 @@ package goapiproof
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -66,6 +68,9 @@ type Credential struct {
 	// the same indistinguishable-401 this file exists to eliminate, one
 	// level further out.
 	validate func(string) error
+	// org, when set, is the org every value this credential sends must
+	// name in its org_id claim (BindOrg).
+	org string
 
 	// state holds everything MUTABLE, behind a pointer, and that shape is
 	// load-bearing twice over.
@@ -171,6 +176,56 @@ func MintedCredential(header, kind string, freshFor time.Duration, mint func(con
 	return &Credential{header: header, kind: kind, mint: mint, freshFor: freshFor, state: &credentialState{}}
 }
 
+// BindOrg makes every value this credential sends name org: before a
+// value is set on a request, its JWT payload must carry an `org_id`
+// claim equal to org and must not claim `impersonation_active: true`.
+// Both the query-api and the Python app scope a request by that claim
+// (the Python app also honours an X-Org-Id header, which neither prover
+// sends), so a value naming another org would measure that org while
+// the receipt names this one. The check runs on the exact value about to
+// be sent -- minted, refreshed or static -- and the signature is not
+// verified here: the plane verifies it, and this binds scope, not trust.
+func (c *Credential) BindOrg(org string) *Credential {
+	c.org = org
+	return c
+}
+
+// ErrCredentialNamesAnotherOrg is returned for a credential value whose
+// claims do not name the bound org, or that names an impersonation.
+var ErrCredentialNamesAnotherOrg = errors.New("goapiproof: credential_org_does_not_match_the_named_org")
+
+// checkOrgClaims enforces BindOrg on one value. The value is never
+// included in the error.
+func (c *Credential) checkOrgClaims(value string) error {
+	if c.org == "" {
+		return nil
+	}
+	segments := strings.Split(strings.TrimSpace(strings.TrimPrefix(value, "Bearer ")), ".")
+	if len(segments) != 3 {
+		return fmt.Errorf("%w: the %s is not a JWT, so the org it scopes to cannot be read", ErrCredentialNamesAnotherOrg, c.kind)
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(segments[1], "="))
+	if err != nil {
+		return fmt.Errorf("%w: the %s payload is not base64url, so the org it scopes to cannot be read", ErrCredentialNamesAnotherOrg, c.kind)
+	}
+	var claims struct {
+		OrgID               *string `json:"org_id"`
+		ImpersonationActive *bool   `json:"impersonation_active"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return fmt.Errorf("%w: the %s payload is not a JSON object, so the org it scopes to cannot be read", ErrCredentialNamesAnotherOrg, c.kind)
+	}
+	switch {
+	case claims.OrgID == nil:
+		return fmt.Errorf("%w: the %s carries no org_id claim", ErrCredentialNamesAnotherOrg, c.kind)
+	case *claims.OrgID != c.org:
+		return fmt.Errorf("%w: the %s names a different org than -org", ErrCredentialNamesAnotherOrg, c.kind)
+	case claims.ImpersonationActive != nil && *claims.ImpersonationActive:
+		return fmt.Errorf("%w: the %s claims an active impersonation, so the org it scopes to is an impersonation target's", ErrCredentialNamesAnotherOrg, c.kind)
+	}
+	return nil
+}
+
 // WithShapeValidator returns c with a shape check applied to every minted
 // value. Returns c so it can be chained at construction.
 func (c *Credential) WithShapeValidator(validate func(string) error) *Credential {
@@ -245,6 +300,9 @@ func (c *Credential) value(ctx context.Context) (string, error) {
 			// produces. Whitespace is an empty credential wearing a disguise.
 			return "", fmt.Errorf("the %s credential is empty or whitespace", c.kind)
 		}
+		if err := c.checkOrgClaims(c.state.cached); err != nil {
+			return "", err
+		}
 		return c.state.cached, nil
 	}
 	if c.state.cached != "" && c.freshFor > 0 && time.Since(c.state.mintedAt) < c.freshFor {
@@ -270,6 +328,9 @@ func (c *Credential) value(ctx context.Context) (string, error) {
 			// shape. A malformed credential is still a credential.
 			return "", fmt.Errorf("the %s minter returned something that is not a %s: %w", c.kind, c.kind, err)
 		}
+	}
+	if err := c.checkOrgClaims(minted); err != nil {
+		return "", err
 	}
 	c.state.cached, c.state.mintedAt = minted, time.Now()
 	c.state.mints++

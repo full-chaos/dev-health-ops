@@ -176,6 +176,9 @@ func Admit(in AdmissionInput) Admission {
 
 func admitPlanes(in AdmissionInput) Admission {
 	switch {
+	case in.Candidate.Impersonating || in.Baseline.Impersonating:
+		return refused(RefusalServedUnderImpersonation,
+			fmt.Sprintf("a leg carried the %s header: the Python app served it for an impersonation session's target org, not the org this run's credential names", impersonationHeader))
 	case in.Candidate.Plane == "":
 		return refused(RefusalPlaneUnidentified,
 			fmt.Sprintf("candidate leg carried no %s header (status %d): with no plane evidence this response cannot back a proof. On the edge route GO_API_PLANE_HEADER_ENABLED must be true; on the proof route the deployment predates the header the proof handler stamps", planeHeader, in.Candidate.StatusCode))

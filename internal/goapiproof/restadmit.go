@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -96,7 +98,22 @@ type RESTLeg struct {
 	// api service does not stamp it -- but read generically so a future
 	// deployment that adds it to the baseline is not silently ignored.
 	Build string
+	// Server is the Server response header. The Python app runs under
+	// uvicorn, which stamps `server: uvicorn` on every response; neither
+	// Go's net/http nor query-api sets a Server header.
+	Server string
+	// Impersonating is true when the response carried the Python app's
+	// impersonation stamp (ServedUnderImpersonation).
+	Impersonating bool
+	// WireAttempts is the number of wire attempts the transport made for
+	// this leg (LegResponse.WireAttempts): recorded, never prevented.
+	WireAttempts int
 }
+
+// ReferencePlaneServer is the Server header value the Python app's
+// uvicorn process stamps on every response it serves (api/runner.py runs
+// the app through uvicorn.run with the default server header).
+const ReferencePlaneServer = "uvicorn"
 
 // RESTAdmissionInput is everything RESTAdmit may consider.
 type RESTAdmissionInput struct {
@@ -108,6 +125,9 @@ type RESTAdmissionInput struct {
 	// the request did not reach the state this entry measures.
 	WantCandidateStatus int
 	WantBaselineStatus  int
+	// PythonForwarder is RESTEndpointSpec.PythonForwarder: the Python
+	// app may forward this route to query-api and relay a 200.
+	PythonForwarder bool
 
 	Candidate, Baseline RESTLeg
 }
@@ -120,6 +140,24 @@ const (
 	RESTRefusalBuildUnbound     = "rest_candidate_build_header_absent_or_mismatched"
 	RESTRefusalTrailingBytes    = "rest_response_body_carried_bytes_after_the_json_value"
 	RESTRefusalBodyNotJSON      = "rest_response_body_did_not_decode_as_json"
+	// RESTRefusalBaselineNotReferencePlane: the baseline leg is not
+	// positively the Python app -- it carried no `server: uvicorn`, or it
+	// carried query-api's build header. Absence of the build header alone
+	// is never taken as Python: query-api's own unmounted-route 404 and a
+	// forwarded response both carry none.
+	RESTRefusalBaselineNotReferencePlane = "rest_baseline_leg_not_served_by_the_reference_plane"
+	// RESTRefusalServedUnderImpersonation: a leg carried the Python app's
+	// impersonation stamp, so it answered for an impersonation target's
+	// org, not the org the credential names.
+	RESTRefusalServedUnderImpersonation = "rest_leg_served_under_an_impersonation_session"
+	// RESTRefusalBaselineMayBeRelayed: the endpoint is one the Python app
+	// can forward to query-api, and the baseline answered 200 -- the only
+	// status the forwarder relays -- so nothing shows Python computed it.
+	RESTRefusalBaselineMayBeRelayed = "rest_baseline_leg_may_be_relayed_from_the_candidate_plane"
+	// RESTRefusalBoundIDNotAPathLiteral: a path-bound id the server's path
+	// router would decode or split, so the planes would answer a different
+	// id than the receipt names. Refused before either leg is sent.
+	RESTRefusalBoundIDNotAPathLiteral = "rest_bound_id_is_not_a_path_literal"
 )
 
 // REST leg transport refusal reasons: a leg that never produced a
@@ -171,6 +209,25 @@ func restRefused(reason, detail string) RESTAdmission {
 //
 // Ordered like Admit: the most fundamental failure first.
 func RESTAdmit(in RESTAdmissionInput, decodeBody bool) RESTAdmission {
+	// 0. Each leg is the plane and the org it is named for, before
+	// anything it answered is judged.
+	if in.Candidate.Impersonating || in.Baseline.Impersonating {
+		return restRefused(RESTRefusalServedUnderImpersonation,
+			fmt.Sprintf("a leg carried the %s header: the Python app served it for an impersonation session's target org, not the org this run's credential names", impersonationHeader))
+	}
+	if !strings.EqualFold(strings.TrimSpace(in.Baseline.Server), ReferencePlaneServer) {
+		return restRefused(RESTRefusalBaselineNotReferencePlane,
+			fmt.Sprintf("the baseline leg carried no `server: %s` header (status %d): it cannot be shown to be the Python app", ReferencePlaneServer, in.Baseline.StatusCode))
+	}
+	if in.Baseline.Build != "" {
+		return restRefused(RESTRefusalBaselineNotReferencePlane,
+			fmt.Sprintf("the baseline leg carried query-api's %s header: it was served by the candidate plane", buildHeader))
+	}
+	if in.PythonForwarder && in.Baseline.StatusCode == http.StatusOK {
+		return restRefused(RESTRefusalBaselineMayBeRelayed,
+			"the Python app can forward this endpoint to query-api and relays only a 200, so a 200 baseline cannot be shown to be Python's own answer")
+	}
+
 	// 1. Each leg answered the status this request declared admissible.
 	if in.Candidate.StatusCode != in.WantCandidateStatus {
 		return restRefused(RESTRefusalUnexpectedStatus,

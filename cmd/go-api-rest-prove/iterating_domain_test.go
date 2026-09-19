@@ -40,6 +40,9 @@ func domainServer(t *testing.T, build string, first, second legReply) (*httptest
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if build != "" {
 			w.Header().Set("x-dev-health-build", build)
+		} else {
+			// The baseline role: the Python app's positive identity.
+			w.Header().Set("Server", goapiproof.ReferencePlaneServer)
 		}
 		id := strings.TrimPrefix(r.URL.Path, "/things/")
 		mu.Lock()
@@ -96,7 +99,7 @@ func runDomainCell(t *testing.T, statusOnly bool, cell domainCell, second legRep
 		request.Parity = goapiproof.Options{}
 	}
 	writer := &fakeReceiptWriter{}
-	attempt, err := resolveIteratingRequest(context.Background(), http.DefaultClient, f, "REST:GET:/things/{thing_id}",
+	attempt, err := resolveIteratingRequest(context.Background(), goapiproof.NewLegClient(0), f, "REST:GET:/things/{thing_id}",
 		spec, request, binding, map[string]string{}, map[string][]string{"thing_id": {"p-1", "p-2"}},
 		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil)
 	if err != nil {
@@ -283,7 +286,7 @@ func TestRunMeasurement_RepositoryScopedCasesBindARepositoryWithData(t *testing.
 	}
 	candidate := httptest.NewServer(handler(true))
 	defer candidate.Close()
-	baseline := httptest.NewServer(handler(false))
+	baseline := httptest.NewServer(referencePlane(handler(false)))
 	defer baseline.Close()
 
 	dir := t.TempDir()
@@ -298,7 +301,7 @@ func TestRunMeasurement_RepositoryScopedCasesBindARepositoryWithData(t *testing.
 		timeout: 5 * time.Second, dryRun: true, reportPath: reportPath,
 	}
 	_ = captureStdout(t, func() {
-		_ = runMeasurement(context.Background(), http.DefaultClient, f,
+		_ = runMeasurement(context.Background(), goapiproof.NewLegClient(0), f,
 			staticCredentialForTest(), staticCredentialForTest(), build, nil, artifacts)
 	})
 	raw, err := os.ReadFile(reportPath)
@@ -456,7 +459,7 @@ func TestIterationDecision_EveryCorpusSearchSkipsNoDataAndStopsOnFailure(t *test
 						_, _ = w.Write([]byte(reply.body))
 					}))
 					defer candidate.Close()
-					baseline := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					baseline := httptest.NewServer(referencePlane(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 						if request.WantBaselineStatus != http.StatusOK {
 							w.WriteHeader(request.WantBaselineStatus)
 							_, _ = w.Write([]byte(`{"detail":"x"}`))
@@ -467,7 +470,7 @@ func TestIterationDecision_EveryCorpusSearchSkipsNoDataAndStopsOnFailure(t *test
 							body = cell.firstBase
 						}
 						_, _ = w.Write([]byte(body))
-					}))
+					})))
 					defer baseline.Close()
 					f := flags{queryAPIURL: candidate.URL, pythonAPIURL: baseline.URL, org: "org-1", recordedBy: "chris", reviewEvidence: "test", timeout: 5 * time.Second}
 					produced := map[string]string{}
@@ -477,7 +480,7 @@ func TestIterationDecision_EveryCorpusSearchSkipsNoDataAndStopsOnFailure(t *test
 						}
 					}
 					writer := &fakeReceiptWriter{}
-					attempt, err := resolveIteratingRequest(context.Background(), http.DefaultClient, f, operation,
+					attempt, err := resolveIteratingRequest(context.Background(), goapiproof.NewLegClient(0), f, operation,
 						spec, request, binding, produced, map[string][]string{binding.Producer: {"cand-1", "cand-2"}},
 						staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil)
 					if err != nil {
@@ -555,7 +558,7 @@ func TestRunMeasurement_NullVersusEmptyPullRequestsIsReportedAsAMismatch(t *test
 	}
 	candidate := httptest.NewServer(handler(true))
 	defer candidate.Close()
-	baseline := httptest.NewServer(handler(false))
+	baseline := httptest.NewServer(referencePlane(handler(false)))
 	defer baseline.Close()
 	dir := t.TempDir()
 	reportPath := dir + "/report.json"
@@ -569,7 +572,7 @@ func TestRunMeasurement_NullVersusEmptyPullRequestsIsReportedAsAMismatch(t *test
 		timeout: 5 * time.Second, dryRun: true, reportPath: reportPath,
 	}
 	_ = captureStdout(t, func() {
-		_ = runMeasurement(context.Background(), http.DefaultClient, f,
+		_ = runMeasurement(context.Background(), goapiproof.NewLegClient(0), f,
 			staticCredentialForTest(), staticCredentialForTest(), build, nil, artifacts)
 	})
 	raw, err := os.ReadFile(reportPath)
@@ -625,7 +628,7 @@ func TestProveOneRESTRequest_AllNullRowsUnderDedupAreNeverAMatch(t *testing.T) {
 				f := flags{queryAPIURL: srv.URL, pythonAPIURL: srv.URL, org: "org-1", recordedBy: "chris", reviewEvidence: "test", timeout: 5 * time.Second}
 				resolved := spec
 				resolved.Path = strings.NewReplacer("{person_id}", "ABC-123", "{team_id}", "ABC-123", "{work_unit_id}", "ABC-123").Replace(spec.Path)
-				out, err := proveOneRESTRequest(context.Background(), http.DefaultClient, f, operation, resolved, request,
+				out, err := proveOneRESTRequest(context.Background(), goapiproof.NewLegClient(0), f, operation, resolved, request,
 					staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), &fakeReceiptWriter{}, nil, false, nil)
 				if err != nil {
 					t.Fatalf("proveOneRESTRequest: %v", err)

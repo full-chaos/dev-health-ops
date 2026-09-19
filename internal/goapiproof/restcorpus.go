@@ -134,6 +134,16 @@ type RESTEndpointSpec struct {
 	// measured, not an authenticated path that merely happens to also
 	// succeed unauthenticated.
 	PublicNoAuth bool
+	// PythonForwarder marks an endpoint the Python app can forward to
+	// query-api (investment_explain_dispatcher.py for investment/explain):
+	// when its switch is on, the Python app relays query-api's answer --
+	// only a 200, it falls back to its own path on any other status --
+	// with query-api's provenance headers dropped. A 200 baseline on such
+	// an endpoint cannot be shown to be Python's own answer, so RESTAdmit
+	// refuses it by name; any other baseline status is Python's own,
+	// because request validation and authentication reject before the
+	// handler reaches the forwarder.
+	PythonForwarder bool
 }
 
 // investmentBaselineDefects is shared by GET and POST /api/v1/investment
@@ -4813,8 +4823,9 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 		},
 	},
 	"REST:POST:/api/v1/investment/explain": {
-		Method: "POST",
-		Path:   "/api/v1/investment/explain",
+		Method:          "POST",
+		Path:            "/api/v1/investment/explain",
+		PythonForwarder: true,
 		Requests: []RESTRequest{
 			{
 				Name:                "default_filters",

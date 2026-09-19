@@ -46,9 +46,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
+	"os/signal"
 	"reflect"
 	"sort"
 	"strings"
@@ -207,9 +208,24 @@ func parseFlags() (flags, error) {
 
 func run() (err error) {
 	var f flags
-	f, err = parseFlags()
-	if err != nil {
-		return err
+	// Every exit before emitReport runs still writes -report (when one
+	// was given), with exit_cause refused_before_measuring and the
+	// redacted error: registered first, so it runs last.
+	reported := false
+	defer func() {
+		if err == nil || reported || f.reportPath == "" {
+			return
+		}
+		if writeErr := writeReportFile(f.reportPath, report{OrgID: f.orgID, Window: f.window, Stage: goapiproof.Stage, Outcomes: []goapiproof.Outcome{}, ExitCause: exitRefusedBeforeMeasuring, ExitDetail: err.Error()}); writeErr != nil {
+			err = fmt.Errorf("%w; additionally, writing the report failed: %v", err, writeErr)
+		}
+	}()
+	// parseFlags returns what it parsed alongside a refusal, so the
+	// report path and the DSN to redact are known on that exit too.
+	parsed, parseErr := parseFlags()
+	f = parsed
+	if parseErr != nil {
+		return secrets.NewBoundary(f.postgresURI).Redact(parseErr)
 	}
 	// A single boundary, applied here via defer, covers every error this
 	// function returns from this point on, no matter which layer
@@ -237,8 +253,13 @@ func run() (err error) {
 		return err
 	}
 
-	ctx := context.Background()
-	client := &http.Client{Timeout: f.timeout}
+	// Cancelled by SIGINT or SIGTERM (the signal an orchestrator sends
+	// before it kills a pod): every leg still in flight then fails as a
+	// named per-operation refusal, and the report below is still written,
+	// with exit_cause stopped_by_signal.
+	ctx, stopSignal := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignal()
+	client := goapiproof.NewLegClient(f.timeout)
 
 	// The opening and closing /buildinfo reads get the SAME per-request
 	// deadline the measured legs get. They used to take
@@ -257,6 +278,12 @@ func run() (err error) {
 	if err != nil {
 		return err
 	}
+	// Both planes scope a request by the credential's org_id claim, so
+	// every value either credential sends must name -org (and no
+	// impersonation) -- checked on the exact value each time it is set on
+	// a request.
+	edgeCredential.BindOrg(f.orgID)
+	proofCredential.BindOrg(f.orgID)
 
 	registry, err := goapiproof.FetchRegistry(ctx, client, f.registryURL)
 	if err != nil {
@@ -279,6 +306,17 @@ func run() (err error) {
 		if errors.Is(err, goapiproof.ErrNoBuildIdentity) {
 			return fmt.Errorf("%w\n  the deployed query-api must identify its build at %s before any receipt can be written", err, goapiproof.EndpointLabel(f.buildInfoURL))
 		}
+		return err
+	}
+
+	// The Python app's own answer, with the credential every baseline leg
+	// carries, naming the org it serves that credential: refused unless it
+	// is -org with no impersonation session in force. Every leg is still
+	// checked for the impersonation stamp (admitPlanes).
+	principalCtx, cancelPrincipal := boundedCtx()
+	err = goapiproof.VerifyReferencePrincipal(principalCtx, client, originOf(f.edgeURL), edgeCredential, f.orgID)
+	cancelPrincipal()
+	if err != nil {
 		return err
 	}
 
@@ -369,9 +407,8 @@ func run() (err error) {
 	default:
 		receipts, receiptErr = runner.ReceiptsFor(observedAt)
 	}
-	if receiptErr != nil {
-		return receiptErr
-	}
+	// Held, not returned: the outcomes measured above go into the report
+	// whatever happens to their receipts.
 
 	var writeErr error
 	if !f.dryRun && pool != nil {
@@ -392,7 +429,7 @@ func run() (err error) {
 		// that loses the failure signal.
 		writeErr = err
 	}
-	for _, err := range []error{stabilityErr, writeErr} {
+	for _, err := range []error{stabilityErr, receiptErr, writeErr} {
 		if err == nil {
 			continue
 		}
@@ -407,11 +444,36 @@ func run() (err error) {
 	// a failed run's evidence is exactly what an operator needs, and a
 	// command that swallows its own output on failure is the "report the
 	// problem and return" trap D15/R4 names.
-	if err := emitReport(f, registry, outcomes, summary, proofCredential, edgeCredential); err != nil {
-		return err
+	exitCause := exitCompleted
+	switch {
+	case ctx.Err() != nil:
+		exitCause = exitStoppedBySignal
+		if runErr == nil {
+			runErr = fmt.Errorf("run interrupted: %w", ctx.Err())
+		} else {
+			runErr = fmt.Errorf("run interrupted: %w; %w", ctx.Err(), runErr)
+		}
+	case runErr != nil:
+		exitCause = exitCompletedWithRunError
+	}
+	reported = true
+	if err := emitReport(f, registry, outcomes, summary, proofCredential, edgeCredential, exitCause, runErr); err != nil {
+		if runErr == nil {
+			return err
+		}
+		return fmt.Errorf("%w; additionally, writing the report failed: %v", runErr, err)
 	}
 	return runErr
 }
+
+// Exit causes, one per way a run can end; each is written into the
+// report on that path.
+const (
+	exitCompleted              = "completed"
+	exitCompletedWithRunError  = "completed_with_run_error"
+	exitStoppedBySignal        = "stopped_by_signal"
+	exitRefusedBeforeMeasuring = "refused_before_measuring"
+)
 
 // readRoutingState reads each registered operation's current mode from
 // go_api_routing_state at the LIVE schema digest.
@@ -560,6 +622,25 @@ type report struct {
 	Window         goapiproof.Window    `json:"window"`
 	Summary        goapiproof.Summary   `json:"summary"`
 	Outcomes       []goapiproof.Outcome `json:"outcomes"`
+	// ExitCause names how the run ended (one of the exit* constants), so
+	// a report read after the fact says whether it is a whole run, a run
+	// stopped early, or one refused before it measured anything.
+	ExitCause string `json:"exit_cause"`
+	// ExitDetail is the run-level error behind ExitCause, redacted, when
+	// there was one.
+	ExitDetail string `json:"exit_detail,omitempty"`
+}
+
+// writeReportFile writes one report as JSON.
+func writeReportFile(path string, r report) error {
+	encoded, err := json.MarshalIndent(r, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode report: %w", err)
+	}
+	if err := os.WriteFile(path, encoded, 0o640); err != nil {
+		return fmt.Errorf("write report: %w", err)
+	}
+	return nil
 }
 
 // emitReport prints the explicit-zero telemetry block and the full JSON.
@@ -568,7 +649,7 @@ type report struct {
 // measured nothing" and "prove measured everything and found nothing
 // wrong" are different facts, and the shape of the output must never let
 // them look alike.
-func emitReport(f flags, registry goapiproof.RegistryView, outcomes []goapiproof.Outcome, summary goapiproof.Summary, proofCredential, edgeCredential *goapiproof.Credential) error {
+func emitReport(f flags, registry goapiproof.RegistryView, outcomes []goapiproof.Outcome, summary goapiproof.Summary, proofCredential, edgeCredential *goapiproof.Credential, exitCause string, runErr error) error {
 	fmt.Printf("go-api-prove: schema_digest=%s candidate_build=%s stage=%s org=%s\n",
 		registry.SchemaDigest, registry.BuildIdentity, goapiproof.Stage, f.orgID)
 	// admitted is printed alongside the others, including when it is zero:
@@ -638,10 +719,11 @@ func emitReport(f flags, registry goapiproof.RegistryView, outcomes []goapiproof
 			outcome.Operation, outcome.Mode, outcome.RefusalReason, outcome.RefusalDetail)
 	}
 
+	fmt.Printf("go-api-prove: exit_cause=%s\n", exitCause)
 	if f.reportPath == "" {
 		return nil
 	}
-	encoded, err := json.MarshalIndent(report{
+	r := report{
 		SchemaDigest:   registry.SchemaDigest,
 		CandidateBuild: registry.BuildIdentity,
 		Stage:          goapiproof.Stage,
@@ -649,12 +731,13 @@ func emitReport(f flags, registry goapiproof.RegistryView, outcomes []goapiproof
 		Window:         f.window,
 		Summary:        summary,
 		Outcomes:       outcomes,
-	}, "", "  ")
-	if err != nil {
-		return fmt.Errorf("encode report: %w", err)
+		ExitCause:      exitCause,
 	}
-	if err := os.WriteFile(f.reportPath, encoded, 0o640); err != nil {
-		return fmt.Errorf("write report: %w", err)
+	if runErr != nil {
+		r.ExitDetail = secrets.NewBoundary(f.postgresURI).Redact(runErr).Error()
+	}
+	if err := writeReportFile(f.reportPath, r); err != nil {
+		return err
 	}
 	fmt.Printf("go-api-prove: report written to %s\n", f.reportPath)
 	return nil
@@ -1087,11 +1170,22 @@ func validateEndpointFlags(f flags) error {
 		if flagged.value == "" {
 			continue
 		}
-		if err := goapiproof.RefuseCredentialsInURL(flagged.name, flagged.value); err != nil {
+		if err := goapiproof.ValidateBaseURL(flagged.name, flagged.value); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// originOf is raw's scheme and host: the Python app serves its own
+// ReferencePrincipalPath beside the GraphQL route -edge-url names.
+// validateEndpointFlags has already refused a URL it cannot account for.
+func originOf(raw string) string {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+	return (&url.URL{Scheme: parsed.Scheme, Host: parsed.Host}).String()
 }
 
 // executedOutcomeLine is the terminal line for one executed measurement. It

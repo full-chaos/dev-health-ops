@@ -29,7 +29,7 @@ func buildInfoServer(t *testing.T, status int, body string) *httptest.Server {
 
 func TestFetchBuildIdentityReturnsTheRunningCommit(t *testing.T) {
 	server := buildInfoServer(t, http.StatusOK, `{"commit":"b18e56fa79cfe20ce0f75df148144b832d92be36","modified":false}`)
-	commit, err := FetchBuildIdentity(context.Background(), server.Client(), server.URL,
+	commit, err := FetchBuildIdentity(context.Background(), NewLegClient(0), server.URL,
 		StaticCredential("Authorization", "test", "Bearer x"))
 	if err != nil {
 		t.Fatalf("FetchBuildIdentity: %v", err)
@@ -53,7 +53,7 @@ func TestFetchBuildIdentityRefusesAnUnidentifiableBuild(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			server := buildInfoServer(t, testCase.status, testCase.body)
-			_, err := FetchBuildIdentity(context.Background(), server.Client(), server.URL,
+			_, err := FetchBuildIdentity(context.Background(), NewLegClient(0), server.URL,
 				StaticCredential("Authorization", "test", "Bearer x"))
 			if !errors.Is(err, ErrNoBuildIdentity) {
 				t.Fatalf("expected ErrNoBuildIdentity, got %v", err)
@@ -77,7 +77,7 @@ func TestFetchBuildIdentityRefusesAModifiedBuildEvenUnderAShadowKey(t *testing.T
 	} {
 		t.Run(name, func(t *testing.T) {
 			server := buildInfoServer(t, http.StatusOK, body)
-			_, err := FetchBuildIdentity(context.Background(), server.Client(), server.URL,
+			_, err := FetchBuildIdentity(context.Background(), NewLegClient(0), server.URL,
 				StaticCredential("Authorization", "test", "Bearer x"))
 			if !errors.Is(err, ErrNoBuildIdentity) {
 				t.Fatalf("a MODIFIED build (real key present, however ordered against a shadow) must refuse, got %v", err)
@@ -93,7 +93,7 @@ func TestFetchBuildIdentityRefusesAModifiedBuildEvenUnderAShadowKey(t *testing.T
 // routing row and receipt is keyed against.
 func TestFetchBuildIdentityRefusesInvalidUTF8(t *testing.T) {
 	server := buildInfoServer(t, http.StatusOK, "{\"commit\":\"b18e56\xff\",\"modified\":false}")
-	_, err := FetchBuildIdentity(context.Background(), server.Client(), server.URL,
+	_, err := FetchBuildIdentity(context.Background(), NewLegClient(0), server.URL,
 		StaticCredential("Authorization", "test", "Bearer x"))
 	if err == nil {
 		t.Fatal("a /buildinfo response containing invalid UTF-8 must refuse, not silently substitute U+FFFD into the commit")
@@ -108,7 +108,7 @@ func TestFetchBuildIdentityRefusesInvalidUTF8(t *testing.T) {
 // the same value a genuinely corrupted build identity would produce.
 func TestFetchBuildIdentityRefusesUnpairedSurrogateEscape(t *testing.T) {
 	server := buildInfoServer(t, http.StatusOK, `{"commit":"\ud800aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","modified":false}`)
-	_, err := FetchBuildIdentity(context.Background(), server.Client(), server.URL,
+	_, err := FetchBuildIdentity(context.Background(), NewLegClient(0), server.URL,
 		StaticCredential("Authorization", "test", "Bearer x"))
 	if err == nil {
 		t.Fatal("a /buildinfo response carrying an unpaired UTF-16 surrogate escape must refuse, not silently collapse to U+FFFD")
@@ -123,7 +123,7 @@ func TestFetchBuildIdentityRefusesUnpairedSurrogateEscape(t *testing.T) {
 // exactly like `"modified":false` would have.
 func TestFetchBuildIdentityRefusesNullModified(t *testing.T) {
 	server := buildInfoServer(t, http.StatusOK, `{"commit":"b18e56fa7","modified":null}`)
-	_, err := FetchBuildIdentity(context.Background(), server.Client(), server.URL,
+	_, err := FetchBuildIdentity(context.Background(), NewLegClient(0), server.URL,
 		StaticCredential("Authorization", "test", "Bearer x"))
 	if err == nil {
 		t.Fatal("`modified: null` must refuse -- an unknown cleanliness answer must never be read as false")
@@ -135,7 +135,7 @@ func TestFetchBuildIdentityRefusesNullModified(t *testing.T) {
 // used to discard that flag (`modified, _, err := exactBoolField(...)`).
 func TestFetchBuildIdentityRefusesAbsentModified(t *testing.T) {
 	server := buildInfoServer(t, http.StatusOK, `{"commit":"b18e56fa7"}`)
-	_, err := FetchBuildIdentity(context.Background(), server.Client(), server.URL,
+	_, err := FetchBuildIdentity(context.Background(), NewLegClient(0), server.URL,
 		StaticCredential("Authorization", "test", "Bearer x"))
 	if err == nil {
 		t.Fatal("an absent `modified` key must refuse -- unknown cleanliness must never default to clean")
@@ -147,7 +147,7 @@ func TestFetchBuildIdentityRefusesAbsentModified(t *testing.T) {
 // disagree with a Python reader that simply never looks at it.
 func TestFetchBuildIdentityAcceptsAnUnknownKey(t *testing.T) {
 	server := buildInfoServer(t, http.StatusOK, `{"commit":"b18e56fa7","modified":false,"unexpected_future_field":"x"}`)
-	commit, err := FetchBuildIdentity(context.Background(), server.Client(), server.URL,
+	commit, err := FetchBuildIdentity(context.Background(), NewLegClient(0), server.URL,
 		StaticCredential("Authorization", "test", "Bearer x"))
 	if err != nil {
 		t.Fatalf("an unrecognised key must not refuse the buildinfo body: %v", err)
@@ -162,7 +162,7 @@ func TestFetchBuildIdentitySendsTheEnvelope(t *testing.T) {
 	// No Authorization header: the stub answers 401, and that must be a
 	// distinct failure from "cannot identify its build" -- one is a
 	// credential problem, the other is a deployment problem.
-	_, err := FetchBuildIdentity(context.Background(), server.Client(), server.URL, nil)
+	_, err := FetchBuildIdentity(context.Background(), NewLegClient(0), server.URL, nil)
 	if err == nil {
 		t.Fatal("an unauthenticated /buildinfo read must fail")
 	}
@@ -177,7 +177,7 @@ func TestFetchBuildIdentitySendsTheEnvelope(t *testing.T) {
 // 401 had a fixture.
 func TestFetchBuildIdentityNames403AsACredentialRejectionToo(t *testing.T) {
 	server := buildInfoServer(t, http.StatusForbidden, `ignored`)
-	_, err := FetchBuildIdentity(context.Background(), server.Client(), server.URL,
+	_, err := FetchBuildIdentity(context.Background(), NewLegClient(0), server.URL,
 		StaticCredential("Authorization", "test", "Bearer x"))
 	if err == nil {
 		t.Fatal("a 403 must be refused")
@@ -297,7 +297,7 @@ func TestFetchRegistryAcceptsAnEmptyRegistration(t *testing.T) {
 		_, _ = w.Write([]byte(`{"schema_digest":"sha256:abc","operations":[]}`))
 	}))
 	t.Cleanup(server.Close)
-	view, err := FetchRegistry(context.Background(), server.Client(), server.URL)
+	view, err := FetchRegistry(context.Background(), NewLegClient(0), server.URL)
 	if err != nil {
 		t.Fatalf("a process agreeing on schema_digest but registering nothing must not refuse -- status needs the digest: %v", err)
 	}
@@ -327,7 +327,7 @@ func TestFetchRegistryRefusesAMissingOrNullOperationsKey(t *testing.T) {
 				_, _ = w.Write([]byte(body))
 			}))
 			t.Cleanup(server.Close)
-			if _, err := FetchRegistry(context.Background(), server.Client(), server.URL); err == nil {
+			if _, err := FetchRegistry(context.Background(), NewLegClient(0), server.URL); err == nil {
 				t.Fatalf("a missing or null operations key must refuse, not silently report an empty (but genuinely present) registry")
 			}
 		})
@@ -351,7 +351,7 @@ func TestFetchRegistryRefusesInvalidUTF8(t *testing.T) {
 		_, _ = w.Write([]byte("{\"schema_digest\":\"sha256:abc\",\"operations\":[{\"operation\":\"flowMatrix\",\"document_digest\":\"\xff\"}]}"))
 	}))
 	t.Cleanup(server.Close)
-	if _, err := FetchRegistry(context.Background(), server.Client(), server.URL); err == nil {
+	if _, err := FetchRegistry(context.Background(), NewLegClient(0), server.URL); err == nil {
 		t.Fatal("a /registry response containing invalid UTF-8 must refuse -- python's HTTP client cannot decode it either")
 	}
 }
@@ -363,7 +363,7 @@ func TestFetchRegistryRefusesUnpairedSurrogateEscape(t *testing.T) {
 		_, _ = w.Write([]byte(`{"schema_digest":"sha256:abc","operations":[{"operation":"flowMatrix","document_digest":"\ud800abc"}]}`))
 	}))
 	t.Cleanup(server.Close)
-	if _, err := FetchRegistry(context.Background(), server.Client(), server.URL); err == nil {
+	if _, err := FetchRegistry(context.Background(), NewLegClient(0), server.URL); err == nil {
 		t.Fatal("a /registry response carrying an unpaired UTF-16 surrogate escape must refuse, not silently collapse a document_digest to U+FFFD")
 	}
 }
@@ -388,7 +388,7 @@ func TestFetchRegistryRefusesConflictingDuplicateOperations(t *testing.T) {
 				_, _ = w.Write(body)
 			}))
 			t.Cleanup(server.Close)
-			_, err = FetchRegistry(context.Background(), server.Client(), server.URL)
+			_, err = FetchRegistry(context.Background(), NewLegClient(0), server.URL)
 			if err == nil {
 				t.Fatal("a registry naming one operation twice under conflicting digests must refuse -- ordering must not decide which digest wins")
 			}
@@ -412,7 +412,7 @@ func TestFetchRegistryRefusesAnIdenticalDuplicateOperationToo(t *testing.T) {
 		]}`))
 	}))
 	t.Cleanup(server.Close)
-	if _, err := FetchRegistry(context.Background(), server.Client(), server.URL); err == nil {
+	if _, err := FetchRegistry(context.Background(), NewLegClient(0), server.URL); err == nil {
 		t.Fatal("an operation listed twice must refuse even when both entries agree")
 	}
 }
@@ -432,7 +432,7 @@ func TestFetchRegistryOperationFieldIsNeverShadowedByADifferentlyCasedKey(t *tes
 		]}`))
 	}))
 	t.Cleanup(server.Close)
-	view, err := FetchRegistry(context.Background(), server.Client(), server.URL)
+	view, err := FetchRegistry(context.Background(), NewLegClient(0), server.URL)
 	if err != nil {
 		t.Fatalf("FetchRegistry: %v", err)
 	}
@@ -455,7 +455,7 @@ func TestFetchRegistryAcceptsAnUnknownKey(t *testing.T) {
 		]}`))
 	}))
 	t.Cleanup(server.Close)
-	view, err := FetchRegistry(context.Background(), server.Client(), server.URL)
+	view, err := FetchRegistry(context.Background(), NewLegClient(0), server.URL)
 	if err != nil {
 		t.Fatalf("an unrecognised key must not refuse the registry: %v", err)
 	}
@@ -478,7 +478,7 @@ func TestFetchRegistryRefusesAnEmptySchemaDigest(t *testing.T) {
 		_, _ = w.Write([]byte(`{"schema_digest":"","operations":[{"operation":"flowMatrix","document_digest":"good"}]}`))
 	}))
 	t.Cleanup(server.Close)
-	if _, err := FetchRegistry(context.Background(), server.Client(), server.URL); err == nil {
+	if _, err := FetchRegistry(context.Background(), NewLegClient(0), server.URL); err == nil {
 		t.Fatal("an empty schema_digest must refuse -- it is not a real digest anything computed")
 	}
 }
@@ -499,7 +499,7 @@ func TestFetchRegistryRefusesAnEmptyOrNullOperationsEntry(t *testing.T) {
 				_, _ = w.Write([]byte(body))
 			}))
 			t.Cleanup(server.Close)
-			if _, err := FetchRegistry(context.Background(), server.Client(), server.URL); err == nil {
+			if _, err := FetchRegistry(context.Background(), NewLegClient(0), server.URL); err == nil {
 				t.Fatal("an empty or null operations entry must refuse, not silently decode to an empty operation/digest")
 			}
 		})
@@ -581,7 +581,7 @@ func TestVerifyBuildStableRefusesAMovedBuild(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	err := VerifyBuildStable(context.Background(), server.Client(), server.URL,
+	err := VerifyBuildStable(context.Background(), NewLegClient(0), server.URL,
 		StaticCredential("Authorization", "test", "Bearer x"), "build-before")
 	if err == nil {
 		t.Fatal("a build that moved mid-run must fail the run")
@@ -600,7 +600,7 @@ func TestVerifyBuildStableAcceptsAnUnchangedBuild(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	if err := VerifyBuildStable(context.Background(), server.Client(), server.URL,
+	if err := VerifyBuildStable(context.Background(), NewLegClient(0), server.URL,
 		StaticCredential("Authorization", "test", "Bearer x"), "same-build"); err != nil {
 		t.Fatalf("an unchanged build must pass: %v", err)
 	}
@@ -614,7 +614,7 @@ func TestVerifyBuildStableRefusesWhenTheRereadFails(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	if err := VerifyBuildStable(context.Background(), server.Client(), server.URL,
+	if err := VerifyBuildStable(context.Background(), NewLegClient(0), server.URL,
 		StaticCredential("Authorization", "test", "Bearer x"), "some-build"); err == nil {
 		t.Fatal("a failed re-read must fail the run, not pass silently")
 	}

@@ -293,6 +293,13 @@ func TestRunProvesTwoOperationsEndToEnd(t *testing.T) {
 	hotspotsCandidate := hotspotsBody(hotspotsRow("a.go", "r1", 9, "0.5"), hotspotsRow("c.go", "r2", 2, "0.75"))
 
 	edge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == goapiproof.ReferencePrincipalPath {
+			// The Python app's own answer naming the org the edge
+			// credential resolves to.
+			w.Header().Set("Server", goapiproof.ReferencePlaneServer)
+			_, _ = w.Write([]byte(`{"org_id":"70d529e0"}`))
+			return
+		}
 		raw, _ := io.ReadAll(r.Body)
 		var parsed struct {
 			Query string `json:"query"`
@@ -348,8 +355,8 @@ func TestRunProvesTwoOperationsEndToEnd(t *testing.T) {
 	}}
 	withFakePool(t, pool)
 
-	edgeToken := syntheticJWT(t, map[string]string{"sub": "edge"})
-	proofToken := syntheticJWT(t, map[string]string{"sub": "proof"})
+	edgeToken := syntheticJWT(t, map[string]string{"sub": "edge", "org_id": "70d529e0"})
+	proofToken := syntheticJWT(t, map[string]string{"sub": "proof", "org_id": "70d529e0"})
 	reportPath := filepath.Join(t.TempDir(), "report.json")
 
 	var runErr error

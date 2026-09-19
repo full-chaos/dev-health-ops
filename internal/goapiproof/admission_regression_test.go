@@ -55,7 +55,7 @@ func (e *cEdge) run(t *testing.T, mode string, viaProofRoute bool) []Outcome {
 	t.Cleanup(server.Close)
 
 	runner := newRunner(t, &fakeEdge{goBody: e.candidateBody, pythonBody: e.baselineBody}, mode)
-	runner.Client = server.Client()
+	runner.Client = NewLegClient(0)
 	if viaProofRoute {
 		runner.Config.GoProofURL = server.URL
 		runner.Config.PythonEdgeURL = server.URL

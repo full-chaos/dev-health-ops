@@ -56,13 +56,13 @@ func TestTransportErrorsNeverCarryTheRawURL(t *testing.T) {
 	const secret = "REVIEW_SYNTHETIC_SECRET"
 	raw := "http:" + secret + "@host/registry"
 
-	if _, err := FetchRegistry(context.Background(), http.DefaultClient, raw); err == nil {
+	if _, err := FetchRegistry(context.Background(), NewLegClient(0), raw); err == nil {
 		t.Fatal("expected a failure")
 	} else if strings.Contains(err.Error(), secret) {
 		t.Fatalf("FetchRegistry leaked the URL: %v", err)
 	}
 
-	if _, err := FetchBuildIdentity(context.Background(), http.DefaultClient, raw,
+	if _, err := FetchBuildIdentity(context.Background(), NewLegClient(0), raw,
 		StaticCredential("Authorization", "envelope", "Bearer x")); err == nil {
 		t.Fatal("expected a failure")
 	} else if strings.Contains(err.Error(), secret) {
@@ -79,7 +79,7 @@ func TestAClosedEndpointDoesNotLeakItsURL(t *testing.T) {
 	server.Close() // now refusing connections
 
 	withCredential := strings.Replace(url, "http://", "http://alice:"+secret+"@", 1)
-	_, err := FetchRegistry(context.Background(), http.DefaultClient, withCredential)
+	_, err := FetchRegistry(context.Background(), NewLegClient(0), withCredential)
 	if err == nil {
 		t.Fatal("expected a connection failure")
 	}
@@ -116,8 +116,8 @@ func TestARedirectNeverReachesAnOperatorError(t *testing.T) {
 			t.Cleanup(server.Close)
 
 			// Every entry point that talks to a remote endpoint.
-			_, registryErr := FetchRegistry(context.Background(), server.Client(), server.URL)
-			_, buildErr := FetchBuildIdentity(context.Background(), server.Client(), server.URL,
+			_, registryErr := FetchRegistry(context.Background(), NewLegClient(0), server.URL)
+			_, buildErr := FetchBuildIdentity(context.Background(), NewLegClient(0), server.URL,
 				StaticCredential("Authorization", "envelope", "Bearer x"))
 
 			for label, err := range map[string]error{"FetchRegistry": registryErr, "FetchBuildIdentity": buildErr} {
@@ -141,7 +141,7 @@ func TestARefusedRedirectIsNamedAsOne(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	_, err := FetchRegistry(context.Background(), server.Client(), server.URL)
+	_, err := FetchRegistry(context.Background(), NewLegClient(0), server.URL)
 	if err == nil {
 		t.Fatal("a redirect must be refused")
 	}
@@ -173,11 +173,11 @@ func TestATransportFailureCarriesNoUnderlyingText(t *testing.T) {
 // with no URL-safety test. Both its guards survived removal:
 //
 //   - replacing transportError(url, err) with a wrap of the raw URL, and
-//   - replacing NoRedirectClient(r.Client) with r.Client.
+//   - sending through a client that follows redirects.
 //
 // The first leaks: safeEndpoint checks scheme, opaque body, userinfo and
-// host -- NOT path, query or fragment -- so a secret in a query string is
-// accepted at flag parse by design, and then reaches Outcome.RefusalDetail,
+// host -- NOT path, query or fragment -- so a secret in a query string of a
+// URL that did not pass through ValidateBaseURL reaches Outcome.RefusalDetail,
 // which emitReport prints to stdout AND writes into the report JSON.
 //
 // The second is worse than a leak: with redirects followed, the run

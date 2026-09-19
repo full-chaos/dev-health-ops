@@ -85,7 +85,7 @@ func newRunner(t *testing.T, edge *fakeEdge, mode string) *Runner {
 	}
 
 	return &Runner{
-		Client:    server.Client(),
+		Client:    NewLegClient(0),
 		Documents: map[string]string{"featureFlags": "query FeatureFlags { featureFlags { key } }"},
 		Registry: RegistryView{
 			SchemaDigest:   "sha256:29d509cd",
@@ -421,7 +421,7 @@ func runnerAgainst(t *testing.T, edge *planeStampingEdge, mode string) *Runner {
 	server := edge.server(t)
 	runner := newRunner(t, &fakeEdge{goBody: edge.body, pythonBody: edge.body}, mode)
 	runner.Config.PythonEdgeURL = server.URL
-	runner.Client = server.Client()
+	runner.Client = NewLegClient(0)
 	return runner
 }
 
@@ -927,7 +927,7 @@ func TestARoutedOperationWithASuppliedInstanceIDIsMeasured(t *testing.T) {
 	}
 
 	runner := &Runner{
-		Client:    server.Client(),
+		Client:    NewLegClient(0),
 		Documents: map[string]string{"pr": "query PrDetail($orgId: String!, $id: ID!) { pr(orgId: $orgId, id: $id) { id } }"},
 		Registry: RegistryView{
 			SchemaDigest:   "sha256:29d509cd",

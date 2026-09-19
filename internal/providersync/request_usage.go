@@ -18,6 +18,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
@@ -122,7 +123,7 @@ func (doer RequestCountingDoer) Do(request *http.Request) (*http.Response, error
 	if response != nil {
 		ledger.observe(transport, response.StatusCode, response.Header)
 	}
-	return response, err
+	return response, logging.TransportFailure(err)
 }
 
 func requestTransport(request *http.Request) string {

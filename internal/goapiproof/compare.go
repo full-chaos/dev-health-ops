@@ -324,6 +324,13 @@ type Result struct {
 	// otherwise.
 	StochasticLeafCitation string `json:"stochastic_leaf_class,omitempty"`
 
+	// outsideFindings holds the Findings indexes classifyBaselineDefects
+	// left outside every declaration, in Findings order -- the exact set
+	// DifferencesOutsideBaselineDefect counts. Unexported and never
+	// serialised: ClassifyWriteSkew (writeskew.go) reads it to know which
+	// leaves a re-read has to account for.
+	outsideFindings []int
+
 	// StochasticLeafRefusals names every way Options.StochasticLeaves did
 	// not describe this comparison: an invalid declaration, a covered path
 	// that crosses a list or ends on a container, or a path neither plane
@@ -1609,10 +1616,12 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 
 	outside := 0
 	coveredByShape, outsideByShape := map[string]int{}, map[string]int{}
+	result.outsideFindings = nil
 	for i, isCovered := range covered {
 		if !isCovered {
 			outside++
 			outsideByShape[shapeLabel(shapes[i])]++
+			result.outsideFindings = append(result.outsideFindings, findingRefs[i])
 			continue
 		}
 		coveredByShape[shapeLabel(shapes[i])]++

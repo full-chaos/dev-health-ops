@@ -707,6 +707,13 @@ type outcome struct {
 	// existed.
 	Attempts []attemptRecord `json:"attempts,omitempty"`
 
+	// WriteSkew records the bracketed re-read (goapiproof.ClassifyWriteSkew)
+	// when the first comparison left only value leaves outside every
+	// declaration: the baseline was read a second time after the
+	// candidate, and each outside leaf carries both baseline reads and the
+	// candidate value. Nil for every case that needed no re-read.
+	WriteSkew *writeSkewRecord `json:"write_skew,omitempty"`
+
 	// BaselineResponseRef/CandidateResponseRef mirror the identically
 	// named RESTReceipt fields (goapiproof.RESTReceipt's own doc
 	// comment) -- the content-addressed -artifact-dir reference to each
@@ -805,9 +812,32 @@ func attemptsSuffix(attempts []attemptRecord) string {
 	return fmt.Sprintf(" attempts=%v", ids)
 }
 
+// writeSkewRecord is one case's bracketed re-read: its verdict, the
+// outside leaves with the first baseline value, the candidate value and
+// the second baseline value, and where the second baseline body landed in
+// -artifact-dir.
+type writeSkewRecord struct {
+	Verdict                   goapiproof.WriteSkewVerdict `json:"verdict"`
+	Leaves                    []goapiproof.WriteSkewLeaf  `json:"leaves,omitempty"`
+	Detail                    string                      `json:"detail,omitempty"`
+	SecondBaselineResponseRef string                      `json:"second_baseline_response_ref,omitempty"`
+	// SecondBaselineWireAttempts is the second read's wire attempts
+	// (goapiproof.LegResponse), recorded like every leg's.
+	SecondBaselineWireAttempts int `json:"second_baseline_wire_attempts,omitempty"`
+}
+
+// writeSkewSuffix names a re-read's verdict on the stdout line, so a
+// skew-admitted case never reads like an ordinary cited mismatch.
+func writeSkewSuffix(record *writeSkewRecord) string {
+	if record == nil {
+		return ""
+	}
+	return fmt.Sprintf(" write_skew=%s", record.Verdict)
+}
+
 func (o outcome) line() string {
 	if !o.Admitted {
-		return fmt.Sprintf("%s/%s: REFUSED %s -- %s%s", o.Operation, o.Request, o.Refusal, o.Detail, attemptsSuffix(o.Attempts))
+		return fmt.Sprintf("%s/%s: REFUSED %s -- %s%s%s", o.Operation, o.Request, o.Refusal, o.Detail, attemptsSuffix(o.Attempts), writeSkewSuffix(o.WriteSkew))
 	}
 	boundSuffix := ""
 	if len(o.BoundIDs) > 0 {
@@ -817,8 +847,8 @@ func (o outcome) line() string {
 	if len(o.DeclarationFiring) > 0 {
 		firingSuffix = " " + formatDeclarationFiring(o.DeclarationFiring)
 	}
-	return fmt.Sprintf("%s/%s: %s outside=%d baseline_defect=%v receipt=%s%s%s%s",
-		o.Operation, o.Request, o.TerminalState, o.DifferencesOutsideBaselineDefect, o.BaselineDefectsMatched, o.ReceiptID, boundSuffix, firingSuffix, attemptsSuffix(o.Attempts))
+	return fmt.Sprintf("%s/%s: %s outside=%d baseline_defect=%v receipt=%s%s%s%s%s",
+		o.Operation, o.Request, o.TerminalState, o.DifferencesOutsideBaselineDefect, o.BaselineDefectsMatched, o.ReceiptID, boundSuffix, firingSuffix, attemptsSuffix(o.Attempts), writeSkewSuffix(o.WriteSkew))
 }
 
 // formatDeclarationFiring renders one request's own declared defects'
@@ -1312,6 +1342,69 @@ func declaredListsEmpty(body any, produces []goapiproof.RESTIDProducer) bool {
 	return true
 }
 
+// bracketedReread reads the baseline a second time, admits that leg the
+// same way the first was admitted (status, JSON body, alongside the one
+// candidate leg), applies the same dedup-key injection, and classifies
+// the case. refused is non-nil when the case must be refused: the second
+// read failed in transport or admission, or an outside leaf moved to a
+// third value.
+func bracketedReread(
+	ctx context.Context,
+	client *goapiproof.LegClient,
+	f flags,
+	spec goapiproof.RESTEndpointSpec,
+	request goapiproof.RESTRequest,
+	baselineCredential *goapiproof.Credential,
+	timeout time.Duration,
+	namedBuild string,
+	candidateLeg goapiproof.RESTLeg,
+	admission goapiproof.RESTAdmission,
+	first goapiproof.Result,
+	artifacts *goapiproof.ArtifactStore,
+) (*writeSkewRecord, *outcome, goapiproof.Snapshot, goapiproof.Result, error) {
+	record := &writeSkewRecord{Verdict: goapiproof.WriteSkewRefused}
+	var none goapiproof.Snapshot
+	secondLeg, err := doREST(ctx, client, f.pythonAPIURL, spec.Method, spec.Path, request.Query, request.Body, baselineCredential, timeout)
+	if err != nil {
+		transport, ok := legTransportOutcome(ctx, "", request.Name, "baseline", nil, err)
+		if !ok {
+			return nil, nil, none, goapiproof.Result{}, fmt.Errorf("second baseline leg: %w", err)
+		}
+		record.Detail = "second baseline read: " + transport.Detail
+		return record, &outcome{Refusal: transport.Refusal, Detail: record.Detail}, none, goapiproof.Result{}, nil
+	}
+	if artifacts != nil {
+		if record.SecondBaselineResponseRef, err = artifacts.Put(secondLeg.Body); err != nil {
+			return nil, nil, none, goapiproof.Result{}, fmt.Errorf("store second baseline leg artifact: %w", err)
+		}
+	}
+	record.SecondBaselineWireAttempts = secondLeg.WireAttempts
+	// The second read is admitted exactly as the first was: the same
+	// plane identity (server, build header, impersonation stamp) and the
+	// same forwarder rule, so a re-read can never be a different plane's
+	// answer.
+	secondAdmission := goapiproof.RESTAdmit(goapiproof.RESTAdmissionInput{
+		NamedBuild:          namedBuild,
+		WantCandidateStatus: request.WantCandidateStatus,
+		WantBaselineStatus:  request.WantBaselineStatus,
+		PythonForwarder:     spec.PythonForwarder && !f.pythonForwarderOff,
+		Candidate:           candidateLeg,
+		Baseline:            secondLeg,
+	}, true)
+	if !secondAdmission.Admitted {
+		record.Detail = "second baseline read: " + secondAdmission.Detail
+		return record, &outcome{Refusal: secondAdmission.Reason, Detail: record.Detail}, none, goapiproof.Result{}, nil
+	}
+	second := secondAdmission.BaselineSnap
+	second.Data = goapiproof.InjectRESTDedupKeys(second.Data, request.DedupListPath, request.DedupKeyFields)
+	decision := goapiproof.ClassifyWriteSkew(first, admission.BaselineSnap, admission.CandidateSnap, second, request.Parity)
+	record.Verdict, record.Leaves, record.Detail = decision.Verdict, decision.Leaves, decision.Detail
+	if decision.Verdict == goapiproof.WriteSkewRefused {
+		return record, &outcome{Refusal: decision.Refusal, Detail: decision.Detail}, none, goapiproof.Result{}, nil
+	}
+	return record, nil, second, decision.Second, nil
+}
+
 // candidateHasNoData reports whether a refused attempt of a bounded-
 // candidate search refused because the candidate has no data to compare
 // -- both legs the same empty answer with every declared list empty, a clean match with the declared
@@ -1530,6 +1623,13 @@ requestLoop:
 	}
 	fmt.Printf("attempted=%d admitted=%d match=%d mismatch=%d refused=%d\n",
 		attempted, admitted, matched, mismatched, attempted-admitted)
+	// Every skew-admitted case is named on its own line; this count per
+	// route (operation) makes a route admitted by skew run after run a
+	// visible pattern rather than a clean run.
+	skewAdmitted := skewAdmittedByOperation(outcomes)
+	for _, operation := range sortedStringKeys(skewAdmitted) {
+		fmt.Printf("skew_admitted %s=%d\n", operation, skewAdmitted[operation])
+	}
 
 	runEnded := ctx.Err()
 	report, finalErr := finalRunReport(f, outcomes, notRun, runEnded, runErr, legFailures, vacuityErrs)
@@ -1544,6 +1644,35 @@ requestLoop:
 	return finalErr
 }
 
+// skewAdmittedByOperation counts the skew-admitted cases per operation;
+// nil when there are none.
+func skewAdmittedByOperation(outcomes []outcome) map[string]int {
+	var counts map[string]int
+	for _, out := range outcomes {
+		if out.WriteSkew == nil || out.WriteSkew.Verdict != goapiproof.WriteSkewAdmitted {
+			continue
+		}
+		if counts == nil {
+			counts = map[string]int{}
+		}
+		counts[out.Operation] = counts[out.Operation] + 1
+	}
+	return counts
+}
+
+// sortedStringKeys returns m's keys in order.
+func sortedStringKeys(m map[string]int) []string {
+	if len(m) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(m))
+	for key := range m {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 // finalRunReport decides how a run that reached the end of its request
 // loop ended -- partial_cause, exit_cause and the error it exits with --
 // from runEnded (the run context's own Err()), the loop's own error, the
@@ -1554,7 +1683,7 @@ func finalRunReport(f flags, outcomes []outcome, notRun []string, runEnded, runE
 		runErr = fmt.Errorf("run interrupted: %w", runEnded)
 	}
 	exitCause, finalErr := exitCauseFor(runEnded, runErr, legFailures, vacuityErrs)
-	report := jsonReport{Outcomes: outcomes, NotRun: notRun, PartialCause: partialCause, PartialError: partialError(f, runErr), ExitCause: exitCause, RunDeadline: f.runDeadline.String()}
+	report := jsonReport{Outcomes: outcomes, NotRun: notRun, PartialCause: partialCause, PartialError: partialError(f, runErr), ExitCause: exitCause, RunDeadline: f.runDeadline.String(), SkewAdmittedByOperation: skewAdmittedByOperation(outcomes)}
 	return report, finalErr
 }
 
@@ -1632,6 +1761,10 @@ type jsonReport struct {
 	// PartialError is the redacted run-level error behind PartialCause,
 	// when there was one.
 	PartialError string `json:"partial_error,omitempty"`
+	// SkewAdmittedByOperation counts, per route (operation), the cases
+	// admitted by a bracketed re-read (outcome.write_skew verdict
+	// skew_admitted). Absent when there were none.
+	SkewAdmittedByOperation map[string]int `json:"skew_admitted_by_operation,omitempty"`
 	// ExitCause names how the run ended, one of the exit* constants: a
 	// whole run, a run stopped early (and by what), or one refused before
 	// it measured anything.
@@ -1741,19 +1874,23 @@ func proveOneRESTRequest(
 		candidateCredential, baselineCredential = nil, nil
 	}
 	timeout := resolveRESTTimeout(request.Timeout, f.timeout)
-	candidateLeg, err := doREST(ctx, client, f.queryAPIURL, spec.Method, spec.Path, request.Query, request.Body, candidateCredential, timeout)
-	if err != nil {
-		if out, ok := legTransportOutcome(ctx, operation, request.Name, "candidate", boundIDs, err); ok {
-			return out, nil
-		}
-		return outcome{}, fmt.Errorf("candidate leg: %w", err)
-	}
+	// The baseline (reference) leg is read FIRST and the candidate second.
+	// The bracketed re-read (bracketedReread) depends on this order: it
+	// re-reads the baseline after the candidate, so a write landing
+	// between the legs shows as a change on the reference plane itself.
 	baselineLeg, err := doREST(ctx, client, f.pythonAPIURL, spec.Method, spec.Path, request.Query, request.Body, baselineCredential, timeout)
 	if err != nil {
 		if out, ok := legTransportOutcome(ctx, operation, request.Name, "baseline", boundIDs, err); ok {
 			return out, nil
 		}
 		return outcome{}, fmt.Errorf("baseline leg: %w", err)
+	}
+	candidateLeg, err := doREST(ctx, client, f.queryAPIURL, spec.Method, spec.Path, request.Query, request.Body, candidateCredential, timeout)
+	if err != nil {
+		if out, ok := legTransportOutcome(ctx, operation, request.Name, "candidate", boundIDs, err); ok {
+			return out, nil
+		}
+		return outcome{}, fmt.Errorf("candidate leg: %w", err)
 	}
 
 	// Stored BEFORE admission runs, and unconditionally: a refused
@@ -1921,6 +2058,53 @@ func proveOneRESTRequest(
 		matchedDefects = result.BaselineDefectsMatched
 		vacuity = resultVacuityErrors(result)
 
+		// Bracketed re-read: the baseline was read FIRST, so a
+		// materializer write landing between the two legs leaves the
+		// baseline on the older generation. Only when every outside
+		// difference is a value leaf (goapiproof.WriteSkewRereadNeeded)
+		// is the baseline read a second time, now after the candidate;
+		// see goapiproof.ClassifyWriteSkew for what that second read may
+		// and may not admit.
+		iterationGateState := terminalState
+		if goapiproof.WriteSkewRereadNeeded(result) {
+			record, refused, secondSnap, secondResult, err := bracketedReread(ctx, client, f, spec, request, baselineCredential, timeout, namedBuild, candidateLeg, admission, result, artifacts)
+			if err != nil {
+				return outcome{}, err
+			}
+			out.WriteSkew = record
+			if refused != nil {
+				out.Admitted = false
+				out.Refusal = refused.Refusal
+				out.Detail = refused.Detail
+				out.FindingsRef = findingsRef
+				return out, nil
+			}
+			if record.Verdict == goapiproof.WriteSkewAdmitted {
+				// The case now stands on the second comparison (B2 against
+				// C1): the receipt keeps the first comparison's mismatch
+				// with nothing outside and the write-skew citation, and
+				// every later gate reads B2 -- the declared ids are
+				// produced from B2, and the bounded-search gate below
+				// judges B2/C1's own terminal state exactly as the normal
+				// path judges a clean comparison.
+				iterationGateState = secondResult.TerminalState
+				differences = 0
+				matchedDefects = append(append([]string(nil), secondResult.BaselineDefectsMatched...), goapiproof.WriteSkewCitation)
+				admission.BaselineSnap = secondSnap
+				if len(request.Produces) > 0 {
+					out.producedIDs = make(map[string]string, len(request.Produces))
+					out.producedCandidateIDs = make(map[string][]string, len(request.Produces))
+					for _, producer := range request.Produces {
+						candidates := goapiproof.ExtractRESTIDCandidates(secondSnap.Data, producer)
+						out.producedCandidateIDs[producer.Name] = candidates
+						if len(candidates) > 0 {
+							out.producedIDs[producer.Name] = candidates[0]
+						}
+					}
+				}
+			}
+		}
+
 		// Compare first, classify after. A bounded-candidate attempt is
 		// "no data" -- it loses, writes no receipt, and the search moves
 		// to the next candidate (candidateHasNoData) -- ONLY when its
@@ -1932,7 +2116,7 @@ func proveOneRESTRequest(
 		// clean match whose bodies lack a declared id in any other shape
 		// (the list missing, null, not an array, or elements without the
 		// id) refuses as a failure and ends the search as well.
-		if _, iterating := findIteratingBinding(request.IDBindings); iterating && terminalState == goapiproof.TerminalStateMatch {
+		if _, iterating := findIteratingBinding(request.IDBindings); iterating && iterationGateState == goapiproof.TerminalStateMatch {
 			var empty, unrecognised []string
 			for _, producer := range request.Produces {
 				if _, ok := out.producedIDs[producer.Name]; ok {

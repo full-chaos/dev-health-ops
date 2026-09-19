@@ -28,6 +28,7 @@ var resultFieldClassification = map[string]string{
 	"LiveBaselineDefectsUnexplained":   "acceptance input: read by Acceptance",
 	"IdleIntermittentBaselineDefects":  "not an acceptance input: the true idle case is expected and recorded, never refused -- see the field's own doc comment",
 	"DifferencesOutsideBaselineDefect": "not an acceptance input: read by the CALLER's own match/mismatch accounting (e.g. enablement eligibility), never by Acceptance",
+	"outsideFindings":                  "not an acceptance input: the findings DifferencesOutsideBaselineDefect counts, kept for the write-skew classifier (ClassifyWriteSkew), which judges each outside leaf; it never gates a verdict by itself",
 	"UnusedOrderInsensitiveLists":      "acceptance input: read by Acceptance",
 	"OrderInsensitiveListRefusals":     "acceptance input: read by Acceptance",
 	"StructuralRefusal":                "checked by the CALLER before Acceptance is ever invoked, never one of Acceptance's own return values: Compare returns immediately on it, leaving every field Acceptance reads at its zero value",

@@ -75,33 +75,15 @@ func (sink GitHubPullRequestClickHouseEffects) writePullRequestEffect(
 	// terminal on GitHub's side -- "reopen" is never offered for a merged
 	// pull request, only for a closed-but-unmerged one, which correctly
 	// holds a null merged_at throughout its own lifecycle instead of ever
-	// clearing a populated one. Force-pushing the head branch or deleting
-	// it afterwards does not touch the historical merge-event record
-	// either. So a null merged_at arriving here for a key that already has
-	// a stored value is transport/API noise (a stale or racing upstream
-	// read), never a legitimate state transition, and must not be allowed
-	// to win.
-	stored, storedReviews, err := loadStoredPullRequestGuardValues(ctx, sink.Conn, claim.OrgID, rows)
-	if err != nil {
+	// clearing a populated one. So a null merged_at arriving here for a key
+	// that already has a stored value is transport/API noise (a stale or
+	// racing upstream read), never a legitimate state transition; the
+	// contract table keeps it, with every other held column this writer does
+	// not state.
+	if err := applyPullRequestContract(ctx, sink.Conn, claim, rows, true); err != nil {
 		return err
 	}
-	logPullRequestMergedAtRegressionGuarded(
-		ctx, claim, guardPullRequestMergedAtRegressions(rows, stored),
-	)
-	logPullRequestReviewRegressionGuarded(
-		ctx, claim, guardPullRequestReviewRegressions(rows, storedReviews),
-	)
-	// org_id is appended last, mirroring _insert_rows' auto-injection order in
-	// storage/clickhouse.py (`columns = [*columns, "org_id"]` when org_id is
-	// not already in the explicit column list).
-	batch, err := sink.Conn.PrepareBatch(ctx, `
-INSERT INTO git_pull_requests (
-  repo_id, number, title, body, state, author_name, author_email,
-  created_at, merged_at, closed_at, head_branch, base_branch,
-  additions, deletions, changed_files, first_review_at, first_comment_at,
-  changes_requested_count, reviews_count, comments_count, last_synced,
-  source_id, org_id
-)`)
+	batch, err := sink.Conn.PrepareBatch(ctx, pullRequestInsert)
 	if err != nil {
 		return err
 	}
@@ -124,143 +106,15 @@ INSERT INTO git_pull_requests (
 	return batch.Send()
 }
 
-// pullRequestMergedAtGuardKey is the merged_at guard's own lookup key. Only
-// (repo_id, number) is needed here: org_id is applied once as the query's
-// WHERE clause, not per key, because row.validate already requires every row
-// in a batch to share claim.OrgID.
-type pullRequestMergedAtGuardKey struct {
-	RepoID string
-	Number int
-}
-
 // pullRequestMergedAtRegressionGuarded is one row where the incoming batch's
 // merged_at was NULL while the currently winning physical row already had a
-// value, and the guard carried the stored value forward instead of letting
-// the null win. It carries only the row's own key and the two merged_at
-// values in conflict -- never title/body or any other row content -- which
-// is exactly what an investigator needs to see what was about to be
-// overwritten with what, and nothing more.
+// value, and the contract carried the stored value forward instead of
+// letting the null win. It carries only the row's own key and the stored
+// merged_at -- never title/body or any other row content.
 type pullRequestMergedAtRegressionGuarded struct {
 	RepoID         string
 	Number         int
 	StoredMergedAt time.Time
-}
-
-// storedPullRequestReviews is the currently winning row's three
-// review-derived columns for one key.
-type storedPullRequestReviews struct {
-	FirstReviewAt         *time.Time
-	ChangesRequestedCount int
-	ReviewsCount          int
-}
-
-// loadStoredPullRequestGuardValues is the guards' one extra read per
-// WriteEffect call -- not per row. It returns the stored merged_at and the
-// stored review-derived columns per key from the same row. It is a single FINAL point lookup keyed
-// on the table's own ORDER BY prefix (org_id, repo_id) and its trailing
-// number column, scoped with IN(...) to exactly the keys this batch is
-// about to write (repo_id is included defensively in case a future caller
-// ever composes rows from more than one repo into a single batch; today
-// every row in a batch shares one repo_id, so this collapses to a
-// single-element IN). FINAL is required for the same reason
-// scanWinningPullRequestVersion above uses it: only the
-// merge-time-equivalent winning row can be trusted for merged_at, not an
-// independent per-row aggregate.
-func loadStoredPullRequestGuardValues(
-	ctx context.Context, conn driver.Conn, orgID string, rows []pullRequestRow,
-) (map[pullRequestMergedAtGuardKey]*time.Time, map[pullRequestMergedAtGuardKey]storedPullRequestReviews, error) {
-	repoIDs := make([]string, 0, len(rows))
-	numbers := make([]int, 0, len(rows))
-	seenRepo := make(map[string]bool, len(rows))
-	seenNumber := make(map[int]bool, len(rows))
-	for _, row := range rows {
-		if !seenRepo[row.RepoID] {
-			seenRepo[row.RepoID] = true
-			repoIDs = append(repoIDs, row.RepoID)
-		}
-		if !seenNumber[row.Number] {
-			seenNumber[row.Number] = true
-			numbers = append(numbers, row.Number)
-		}
-	}
-	dbRows, err := conn.Query(ctx, `
-SELECT repo_id, number, merged_at, first_review_at, changes_requested_count, reviews_count
-FROM git_pull_requests FINAL
-WHERE org_id = ? AND repo_id IN (?) AND number IN (?)`,
-		orgID, repoIDs, numbers,
-	)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer dbRows.Close()
-	stored := make(map[pullRequestMergedAtGuardKey]*time.Time, len(rows))
-	storedReviews := make(map[pullRequestMergedAtGuardKey]storedPullRequestReviews, len(rows))
-	for dbRows.Next() {
-		var repoID string
-		// number and the two review counts are non-nullable UInt32 columns;
-		// clickhouse-go requires scanning into *uint32, not *int (see the
-		// identical note on scanWinningPullRequestVersion's scan).
-		var number, changesRequestedCount, reviewsCount uint32
-		var mergedAt, firstReviewAt *time.Time
-		if err := dbRows.Scan(&repoID, &number, &mergedAt, &firstReviewAt, &changesRequestedCount, &reviewsCount); err != nil {
-			return nil, nil, err
-		}
-		key := pullRequestMergedAtGuardKey{RepoID: repoID, Number: int(number)}
-		stored[key] = mergedAt
-		storedReviews[key] = storedPullRequestReviews{
-			FirstReviewAt:         firstReviewAt,
-			ChangesRequestedCount: int(changesRequestedCount),
-			ReviewsCount:          int(reviewsCount),
-		}
-	}
-	if err := dbRows.Err(); err != nil {
-		return nil, nil, err
-	}
-	return stored, storedReviews, nil
-}
-
-// guardPullRequestMergedAtRegressions is the pure decision at the center of
-// the write-once invariant, deliberately separated from the ClickHouse call
-// above so it can be exercised without a live connection. ReplacingMergeTree
-// has no partial-column merge (writePullRequestEffect's own doc comment
-// above): a whole new physical row always wins or loses as a unit, so the
-// only way to keep every OTHER column fresh while refusing SPECIFICALLY a
-// null-over-populated merged_at is to carry the previously-stored value
-// forward into the row that is about to be appended, in memory, before the
-// insert -- every other column on that row still lands exactly as the
-// upstream fetch produced it. `stored` holds the current winning merged_at
-// per key exactly as loadStoredPullRequestGuardValues read it back; a key
-// absent from that map has no prior row (a brand-new pull request) and is
-// never guarded because there is nothing yet to protect.
-//
-// This is NOT a transactional compare-and-swap: the read above and the
-// INSERT that follows are two separate statements with no lock between
-// them, so a second writer for the SAME key landing in that window could
-// still land its own null after this correction. In practice a sync unit is
-// scoped to one org and one repo, and concurrent units do not target the
-// same key at the same time, so the case this guard actually closes -- a
-// stale or racing UPSTREAM READ producing a null for an already-merged pull
-// request -- is covered. It does not, and must not be read to, promise
-// atomicity against a concurrent writer.
-func guardPullRequestMergedAtRegressions(
-	rows []pullRequestRow, stored map[pullRequestMergedAtGuardKey]*time.Time,
-) []pullRequestMergedAtRegressionGuarded {
-	var guarded []pullRequestMergedAtRegressionGuarded
-	for i, row := range rows {
-		if row.MergedAt != nil {
-			continue
-		}
-		prior, ok := stored[pullRequestMergedAtGuardKey{RepoID: row.RepoID, Number: row.Number}]
-		if !ok || prior == nil {
-			continue
-		}
-		preserved := *prior
-		rows[i].MergedAt = &preserved
-		guarded = append(guarded, pullRequestMergedAtRegressionGuarded{
-			RepoID: row.RepoID, Number: row.Number, StoredMergedAt: preserved,
-		})
-	}
-	return guarded
 }
 
 // pullRequestReviewsCarriedForward is one row whose stored review-derived
@@ -268,36 +122,6 @@ func guardPullRequestMergedAtRegressions(
 type pullRequestReviewsCarriedForward struct {
 	RepoID string
 	Number int
-}
-
-// guardPullRequestReviewRegressions carries the stored first_review_at,
-// changes_requested_count and reviews_count into a row whose review
-// enrichment FAILED this pass (ReviewsLookupFailed), so the base
-// collector's zero values never replace a known review history. A
-// successful enrichment, including one that honestly found no reviews, is
-// never touched; a key absent from `stored`, or one whose stored review
-// columns are themselves empty, has nothing to protect. The three columns
-// move as a unit because they are derived from one review collection. The
-// same read-then-insert limitation as guardPullRequestMergedAtRegressions
-// applies.
-func guardPullRequestReviewRegressions(
-	rows []pullRequestRow, stored map[pullRequestMergedAtGuardKey]storedPullRequestReviews,
-) []pullRequestReviewsCarriedForward {
-	var carried []pullRequestReviewsCarriedForward
-	for i, row := range rows {
-		if !row.ReviewsLookupFailed {
-			continue
-		}
-		prior, ok := stored[pullRequestMergedAtGuardKey{RepoID: row.RepoID, Number: row.Number}]
-		if !ok || (prior.FirstReviewAt == nil && prior.ReviewsCount == 0 && prior.ChangesRequestedCount == 0) {
-			continue
-		}
-		rows[i].FirstReviewAt = prior.FirstReviewAt
-		rows[i].ChangesRequestedCount = prior.ChangesRequestedCount
-		rows[i].ReviewsCount = prior.ReviewsCount
-		carried = append(carried, pullRequestReviewsCarriedForward{RepoID: row.RepoID, Number: row.Number})
-	}
-	return carried
 }
 
 const pullRequestReviewRegressionGuardedEvent = "providersync.pull_request.review_regression_guarded"
@@ -400,18 +224,15 @@ func (sink GitHubPullRequestClickHouseEffects) inspectPullRequestEffect(
 	if sink.Conn == nil {
 		return EffectConflict, ErrInvalidConfiguration
 	}
-	// WriteEffect carried stored merged_at and review columns into the rows
-	// it inserted. Recovery rebuilds `expected` from a fresh Collect() pass
-	// that knows nothing of that correction, so the same guards run here
-	// against the same stored state; otherwise a row the guard itself wrote
-	// reads back as EffectConflict. A guard-read failure fails the
-	// inspection, the same as it fails WriteEffect.
-	stored, storedReviews, err := loadStoredPullRequestGuardValues(ctx, sink.Conn, claim.OrgID, expected)
-	if err != nil {
+	// WriteEffect carried held columns into the rows it inserted. Recovery
+	// rebuilds `expected` from a fresh Collect() pass that knows nothing of
+	// that correction, so the same contract runs here against the same
+	// stored state; otherwise a row the contract itself wrote reads back as
+	// EffectConflict. A read failure fails the inspection, the same as it
+	// fails WriteEffect.
+	if err := applyPullRequestContract(ctx, sink.Conn, claim, expected, false); err != nil {
 		return EffectConflict, err
 	}
-	guardPullRequestMergedAtRegressions(expected, stored)
-	guardPullRequestReviewRegressions(expected, storedReviews)
 	exact, absent := 0, 0
 	for _, row := range expected {
 		inspection, err := sink.inspectPullRequest(ctx, row)

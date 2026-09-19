@@ -320,16 +320,16 @@ WHERE org_id = ? AND repo_id IN (?) AND deployment_id IN (?)`,
 // guardDeploymentLifecycleRegressions is the pure decision at the center
 // of the write-once lifecycle invariant, deliberately separated from the
 // ClickHouse call above so it can be exercised without a live connection
-// (the same split guardPullRequestMergedAtRegressions uses for
-// git_pull_requests' own write-once merged_at guard). A row is only ever
+// (the pull request contract in stored_version.go keeps git_pull_requests'
+// own write-once merged_at the same way). A row is only ever
 // touched when LifecycleLookupFailed marks its nil as a FAILURE, never a
 // successful-but-empty lookup -- that nil is the honest value the ticket's
 // own class ruling requires, and carrying a stale value over it would
 // contradict "never a copied value." A key absent from `stored` (a
 // brand-new deployment, or the guard's own read failing upstream) is
 // never carried forward because there is nothing yet to protect. Not a
-// transactional compare-and-swap, the same limitation
-// guardPullRequestMergedAtRegressions documents: the read above and the
+// transactional compare-and-swap, the same limitation the storedversion
+// package documents: the read above and the
 // INSERT that follows are two separate statements with no lock between
 // them.
 func guardDeploymentLifecycleRegressions(

@@ -35,19 +35,19 @@ var contractedWriters = map[string]string{
 	"internal/streamhandlers/internal_ingest.go|git_pull_requests":            "internal pull-requests",
 	"internal/streamhandlers/internal_ingest.go|git_pull_request_reviews":     "internal reviews",
 	"internal/streamhandlers/internal_ingest.go|work_items":                   "internal work-items",
+	"internal/providersync/stored_version.go|git_pull_requests":               "provider sync pull requests",
+	"internal/providersync/stored_version.go|git_pull_request_reviews":        "provider sync reviews",
 }
 
 // pendingWriters write an in-scope table without a contract yet: the table,
 // the columns a write can erase, and the stacked change that brings the
 // writer under a contract. The list is empty once every step has landed.
 var pendingWriters = map[string]string{
-	"internal/providersync/github_prs_effects_clickhouse.go|git_pull_requests":               "first_comment_at (never produced), review columns outside a failed lookup; pull requests and reviews step",
-	"internal/providersync/github_pr_reviews_effects_clickhouse.go|git_pull_request_reviews": "every column stated; joins the contract tables in the pull requests and reviews step",
-	"internal/providersync/github_work_items_direct_effects_clickhouse.go|work_items":        "description, priority_raw, service_class, due_at (not in the insert); work items step",
-	"internal/providersync/linear_work_items_effects.go|work_items":                          "description, priority_raw, service_class, due_at (not in the insert); work items step",
-	"internal/providersync/github_deployments_effects_clickhouse.go|deployments":             "columns outside a failed lifecycle or pull request lookup; deployments, commits and repos step",
-	"internal/providersync/github_commits_effects_clickhouse.go|git_commits":                 "source_id (not in the insert); deployments, commits and repos step",
-	"internal/providersync/github_repository_effects_clickhouse.go|repos":                    "ref, settings, tags when the provider row leaves them empty, source_id (not in the insert); deployments, commits and repos step",
+	"internal/providersync/github_work_items_direct_effects_clickhouse.go|work_items": "description, priority_raw, service_class, due_at (not in the insert); work items step",
+	"internal/providersync/linear_work_items_effects.go|work_items":                   "description, priority_raw, service_class, due_at (not in the insert); work items step",
+	"internal/providersync/github_deployments_effects_clickhouse.go|deployments":      "columns outside a failed lifecycle or pull request lookup; deployments, commits and repos step",
+	"internal/providersync/github_commits_effects_clickhouse.go|git_commits":          "source_id (not in the insert); deployments, commits and repos step",
+	"internal/providersync/github_repository_effects_clickhouse.go|repos":             "ref, settings, tags when the provider row leaves them empty, source_id (not in the insert); deployments, commits and repos step",
 }
 
 // outOfScopeWriters write operational_* tables: revisioned snapshots under

@@ -59,11 +59,7 @@ func (sink GitHubPullRequestSocialClickHouseEffects) WriteEffect(
 	if sink.Conn == nil {
 		return ErrInvalidConfiguration
 	}
-	batch, err := sink.Conn.PrepareBatch(ctx, `
-INSERT INTO git_pull_request_reviews (
-  repo_id, number, review_id, reviewer, state, submitted_at,
-  last_synced, source_id, org_id
-)`)
+	batch, err := sink.Conn.PrepareBatch(ctx, pullRequestReviewInsert)
 	if err != nil {
 		return err
 	}

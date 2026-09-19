@@ -67,8 +67,8 @@ type pullRequestRow struct {
 	// ReviewsLookupFailed is writer-internal signaling, never an INSERT
 	// column: true exactly when FirstReviewAt/ReviewsCount/
 	// ChangesRequestedCount hold the base collector's zero values because
-	// the review enrichment FAILED this pass. See
-	// guardPullRequestReviewRegressions.
+	// the review enrichment FAILED this pass; pullRequestContract then keeps
+	// the held review columns (stored_version.go).
 	ReviewsLookupFailed bool `json:"reviews_lookup_failed,omitempty"`
 }
 

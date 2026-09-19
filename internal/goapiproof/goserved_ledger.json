@@ -63,6 +63,24 @@
         {"file": "cmd/query-api/internal/featureflags/events_test.go", "test": "TestResolveEvents_MissingTableDegradesInsteadOfErroring"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
       ]
+    },
+    {
+      "operation": "complexityTimeseries",
+      "two_plane_ops_sha": "12a6fa86fb59f2c6fe3aeec0ca44d040fc9e216f",
+      "guards": [
+        {"file": "cmd/query-api/internal/complexitytimeseries/complexitytimeseries_golden_test.go", "test": "TestComplexityTimeseriesMatchesTheFrozenGolden"},
+        {"file": "cmd/query-api/internal/complexitytimeseries/complexitytimeseries_test.go", "test": "TestPyWeekday_MatchesPythonConvention"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
+      ]
+    },
+    {
+      "operation": "hotspots",
+      "two_plane_ops_sha": "12a6fa86fb59f2c6fe3aeec0ca44d040fc9e216f",
+      "guards": [
+        {"file": "cmd/query-api/internal/hotspots/hotspots_golden_test.go", "test": "TestHotspotsMatchesTheFrozenGolden"},
+        {"file": "cmd/query-api/internal/hotspots/hotspots_test.go", "test": "TestQuotePython_MatchesPythonQuoteDefaultSafeSet"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
+      ]
     }
   ]
 }

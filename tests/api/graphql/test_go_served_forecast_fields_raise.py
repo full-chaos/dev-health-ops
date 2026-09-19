@@ -28,6 +28,18 @@ _QUERIES = {
         'input: {historyWeeks: 12, teamIds: ["team-1"]}) { forecastId } }',
         None,
     ),
+    "complexityTimeseries": (
+        'query { complexityTimeseries(input: {orgId: "org-1", '
+        'sinceUtc: "2026-01-05T00:00:00Z", untilUtc: "2026-01-07T00:00:00Z", '
+        "granularity: DAY, scope: REPO}) { totalScope } }",
+        None,
+    ),
+    "hotspots": (
+        'query { hotspots(input: {orgId: "org-1", '
+        'sinceUtc: "2026-01-05T00:00:00Z", untilUtc: "2026-01-07T00:00:00Z"}) '
+        "{ rows { filePath } } }",
+        None,
+    ),
     "featureFlags": (
         'query { featureFlags(orgId: "org-1") { totalCount } }',
         None,

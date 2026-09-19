@@ -120,6 +120,14 @@ DELETED_GO_SERVED_RESOLVER_MODULES: dict[str, Path] = {
     / "graphql"
     / "resolvers"
     / "feature_flags.py",
+    # complexityTimeseries and hotspots.
+    "complexity resolver": ROOT
+    / "src"
+    / "dev_health_ops"
+    / "api"
+    / "graphql"
+    / "resolvers"
+    / "complexity.py",
     # The operating review computation; its only importer was the resolver.
     "operating review computation": ROOT
     / "src"
@@ -148,6 +156,7 @@ RETAINED_ORACLE_MODULES: dict[str, Path] = {
 # that both planes digest for routing. Trimming "unused" Python here would
 # silently change the schema digest and disable every registered operation.
 SDL_LOAD_BEARING_SOURCES: tuple[Path, ...] = (
+    ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "types" / "complexity.py",
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "types" / "review_edges.py",
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "schema.py",
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "models" / "inputs.py",
@@ -155,6 +164,16 @@ SDL_LOAD_BEARING_SOURCES: tuple[Path, ...] = (
 )
 
 SDL_LOAD_BEARING_SYMBOLS: dict[str, frozenset[str]] = {
+    "complexity.py": frozenset(
+        {
+            "ComplexityTimeseriesInput",
+            "ComplexityTimeseriesResult",
+            "ComplexityPoint",
+            "HotspotsInput",
+            "HotspotsResult",
+            "HotspotRow",
+        }
+    ),
     "review_edges.py": frozenset(
         {"ReviewEdgesInput", "ReviewEdgeRow", "ReviewEdgesResult"}
     ),
@@ -167,6 +186,8 @@ SDL_LOAD_BEARING_SYMBOLS: dict[str, frozenset[str]] = {
             "review_edges",
             "feature_flags",
             "feature_flag_events",
+            "complexity_timeseries",
+            "hotspots",
         }
     ),
     "inputs.py": frozenset(

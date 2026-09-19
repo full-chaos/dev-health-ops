@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -138,37 +140,37 @@ func TestTheRunEndingWhileItsReportIsWrittenEndsTheRun(t *testing.T) {
 			}
 			f := flags{queryAPIURL: candidate.URL, pythonAPIURL: baseline.URL, org: "org-1", recordedBy: "r", reviewEvidence: "e",
 				timeout: time.Minute, runDeadline: 3 * time.Second, dryRun: true, reportPath: fifo}
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			defer cancel()
+			wantErr, wantCause := context.DeadlineExceeded, exitStoppedByRunDeadline
 			if cancelDuringWrite {
-				ctx, cancel = context.WithCancel(context.Background())
-				defer cancel()
+				wantErr, wantCause = context.Canceled, exitStoppedBySignal
 			}
+			ctx := newEndableContext()
 			reports := make(chan []byte, 2)
 			readerDone := make(chan struct{})
 			go func() {
 				defer close(readerDone)
-				// Opened only after the run has certainly reached its report.
-				time.Sleep(4 * time.Second)
-				if cancelDuringWrite {
-					cancel()
+				// Opening the read end blocks until the run opens the
+				// write end: its loop is over and it is writing its
+				// report. Only then does the run end, so the end always
+				// lands during the write, however slow the host is.
+				first, err := os.Open(fifo)
+				if err != nil {
+					return
 				}
-				for i := 0; i < 2; i++ {
-					raw, err := os.ReadFile(fifo)
-					if err != nil {
-						return
-					}
-					reports <- raw
+				ctx.end(wantErr)
+				raw, _ := io.ReadAll(first)
+				_ = first.Close()
+				reports <- raw
+				raw, err = os.ReadFile(fifo)
+				if err != nil {
+					return
 				}
+				reports <- raw
 			}()
 			var runErr error
 			stdout := captureStdout(t, func() {
 				runErr = runMeasurement(ctx, goapiproof.NewLegClient(0), f, staticCredentialForTest(), staticCredentialForTest(), build, nil, artifacts)
 			})
-			wantErr, wantCause := context.DeadlineExceeded, exitStoppedByRunDeadline
-			if cancelDuringWrite {
-				wantErr, wantCause = context.Canceled, exitStoppedBySignal
-			}
 			if !errors.Is(runErr, wantErr) {
 				t.Fatalf("err = %v, want %v: the run ended during its report write", runErr, wantErr)
 			}
@@ -193,6 +195,38 @@ func TestTheRunEndingWhileItsReportIsWrittenEndsTheRun(t *testing.T) {
 			}
 		})
 	}
+}
+
+// endableContext is a run context the test ends at a moment of its
+// choosing, with the error the run's own deadline (DeadlineExceeded) or a
+// signal (Canceled) would carry.
+type endableContext struct {
+	context.Context
+	done chan struct{}
+	once sync.Once
+	mu   sync.Mutex
+	err  error
+}
+
+func newEndableContext() *endableContext {
+	return &endableContext{Context: context.Background(), done: make(chan struct{})}
+}
+
+func (c *endableContext) Done() <-chan struct{} { return c.done }
+
+func (c *endableContext) Err() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.err
+}
+
+func (c *endableContext) end(err error) {
+	c.once.Do(func() {
+		c.mu.Lock()
+		c.err = err
+		c.mu.Unlock()
+		close(c.done)
+	})
 }
 
 // TestExitCauseForEveryRunEnding pins each exit cause of a run that

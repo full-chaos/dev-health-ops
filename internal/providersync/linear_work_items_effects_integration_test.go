@@ -41,9 +41,12 @@ func TestLinearClickHouseAdaptersWriteAndReadBackTenantFencedRows(t *testing.T) 
 		t.Fatal(err)
 	}
 	itemAdapter := LinearWorkItemsClickHouseAdapter{Conn: conn}
+	heldDue := now.Add(-48 * time.Hour)
+	insertHeldWorkItemColumns(ctx, t, conn, claim.OrgID, projectLinearWorkItem(item), now.Add(-time.Hour), heldDue)
 	if err := itemAdapter.WriteLinearWorkItemEffect(ctx, itemIdentity, itemEffect); err != nil {
 		t.Fatal(err)
 	}
+	expectHeldWorkItemColumns(ctx, t, conn, claim.OrgID, projectLinearWorkItem(item), heldDue)
 	if inspection, err := itemAdapter.InspectLinearWorkItemEffect(ctx, itemIdentity, itemEffect); err != nil || inspection != EffectExact {
 		t.Fatalf("work item inspection=%s error=%v", inspection, err)
 	}

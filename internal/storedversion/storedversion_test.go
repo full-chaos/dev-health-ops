@@ -135,3 +135,12 @@ func TestApplyRefusesAColumnKeptWithANonTerminalColumn(t *testing.T) {
 		t.Fatal("Apply accepted a column kept with a column that is not terminal")
 	}
 }
+
+func TestApplyRefusesAStatedColumnItsInsertDoesNotWrite(t *testing.T) {
+	_, err := pullRequests.Apply(context.Background(), &recordingQuerier{}, "org-1",
+		"INSERT INTO git_pull_requests (repo_id,number,merged_at,reviews_count)",
+		[]Row{{Values: []any{uuid.Nil, uint32(1), nil, uint32(0)}}})
+	if err == nil {
+		t.Fatal("Apply accepted a stated column the insert does not write")
+	}
+}

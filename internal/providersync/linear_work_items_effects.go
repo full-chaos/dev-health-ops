@@ -357,17 +357,11 @@ func (adapter LinearWorkItemsClickHouseAdapter) WriteLinearWorkItemEffect(
 	if len(rows) == 0 {
 		return nil
 	}
-	batch, err := adapter.Conn.PrepareBatch(ctx, linearWorkItemsInsert)
-	if err != nil {
-		return err
+	projected := make([]workItemStoredRow, len(rows))
+	for i, row := range rows {
+		projected[i] = projectLinearWorkItem(row)
 	}
-	defer batch.Abort()
-	for _, row := range rows {
-		if err := batch.Append(projectLinearWorkItem(row).values()...); err != nil {
-			return err
-		}
-	}
-	return batch.Send()
+	return writeWorkItemsKeepingHeldColumns(ctx, adapter.Conn, identity.OrgID, linearWorkItemsInsert, projected)
 }
 
 func (adapter LinearWorkItemsClickHouseAdapter) InspectLinearWorkItemEffect(

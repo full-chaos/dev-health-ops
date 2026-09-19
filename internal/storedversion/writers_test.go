@@ -24,30 +24,30 @@ var inScopeTables = map[string]bool{
 // contractedWriters write an in-scope table under a stored-version contract;
 // each package's own tests pin its inserts to its enumerated contracts.
 var contractedWriters = map[string]string{
-	"internal/streamhandlers/external_clickhouse.go|git_commits":              "external commit.v1",
-	"internal/streamhandlers/external_clickhouse.go|git_pull_requests":        "external pull_request.v1",
-	"internal/streamhandlers/external_clickhouse.go|git_pull_request_reviews": "external review.v1",
-	"internal/streamhandlers/external_clickhouse.go|identities":               "external identity.v1",
-	"internal/streamhandlers/external_clickhouse.go|repos":                    "external repository.v1",
-	"internal/streamhandlers/external_clickhouse.go|work_items":               "external work_item.v1",
-	"internal/streamhandlers/internal_ingest.go|deployments":                  "internal deployments",
-	"internal/streamhandlers/internal_ingest.go|git_commits":                  "internal commits",
-	"internal/streamhandlers/internal_ingest.go|git_pull_requests":            "internal pull-requests",
-	"internal/streamhandlers/internal_ingest.go|git_pull_request_reviews":     "internal reviews",
-	"internal/streamhandlers/internal_ingest.go|work_items":                   "internal work-items",
-	"internal/providersync/stored_version.go|git_pull_requests":               "provider sync pull requests",
-	"internal/providersync/stored_version.go|git_pull_request_reviews":        "provider sync reviews",
+	"internal/streamhandlers/external_clickhouse.go|git_commits":                      "external commit.v1",
+	"internal/streamhandlers/external_clickhouse.go|git_pull_requests":                "external pull_request.v1",
+	"internal/streamhandlers/external_clickhouse.go|git_pull_request_reviews":         "external review.v1",
+	"internal/streamhandlers/external_clickhouse.go|identities":                       "external identity.v1",
+	"internal/streamhandlers/external_clickhouse.go|repos":                            "external repository.v1",
+	"internal/streamhandlers/external_clickhouse.go|work_items":                       "external work_item.v1",
+	"internal/streamhandlers/internal_ingest.go|deployments":                          "internal deployments",
+	"internal/streamhandlers/internal_ingest.go|git_commits":                          "internal commits",
+	"internal/streamhandlers/internal_ingest.go|git_pull_requests":                    "internal pull-requests",
+	"internal/streamhandlers/internal_ingest.go|git_pull_request_reviews":             "internal reviews",
+	"internal/streamhandlers/internal_ingest.go|work_items":                           "internal work-items",
+	"internal/providersync/stored_version.go|git_pull_requests":                       "provider sync pull requests",
+	"internal/providersync/stored_version.go|git_pull_request_reviews":                "provider sync reviews",
+	"internal/providersync/github_work_items_direct_effects_clickhouse.go|work_items": "provider sync work items (github, gitlab, jira rows)",
+	"internal/providersync/linear_work_items_effects.go|work_items":                   "provider sync linear work items",
 }
 
 // pendingWriters write an in-scope table without a contract yet: the table,
 // the columns a write can erase, and the stacked change that brings the
 // writer under a contract. The list is empty once every step has landed.
 var pendingWriters = map[string]string{
-	"internal/providersync/github_work_items_direct_effects_clickhouse.go|work_items": "description, priority_raw, service_class, due_at (not in the insert); work items step",
-	"internal/providersync/linear_work_items_effects.go|work_items":                   "description, priority_raw, service_class, due_at (not in the insert); work items step",
-	"internal/providersync/github_deployments_effects_clickhouse.go|deployments":      "columns outside a failed lifecycle or pull request lookup; deployments, commits and repos step",
-	"internal/providersync/github_commits_effects_clickhouse.go|git_commits":          "source_id (not in the insert); deployments, commits and repos step",
-	"internal/providersync/github_repository_effects_clickhouse.go|repos":             "ref, settings, tags when the provider row leaves them empty, source_id (not in the insert); deployments, commits and repos step",
+	"internal/providersync/github_deployments_effects_clickhouse.go|deployments": "columns outside a failed lifecycle or pull request lookup; deployments, commits and repos step",
+	"internal/providersync/github_commits_effects_clickhouse.go|git_commits":     "source_id (not in the insert); deployments, commits and repos step",
+	"internal/providersync/github_repository_effects_clickhouse.go|repos":        "ref, settings, tags when the provider row leaves them empty, source_id (not in the insert); deployments, commits and repos step",
 }
 
 // outOfScopeWriters write operational_* tables: revisioned snapshots under

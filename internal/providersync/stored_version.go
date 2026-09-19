@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/storedversion"
 )
 
@@ -263,5 +265,79 @@ func StoredVersionSpecs() map[string][]storedversion.Spec {
 			Name: "provider sync reviews", Contract: pullRequestReviewContract, Insert: pullRequestReviewInsert,
 			Carry: func(map[string]any) map[string]bool { return map[string]bool{} },
 		}},
+		"work_items": {
+			{
+				Name: "provider sync work items", Contract: workItemsContract, Insert: withHeldWorkItemColumns(gitHubWorkItemsInsert),
+				Carry: func(map[string]any) map[string]bool {
+					return workItemsContract.Carry(func(string) bool { return false })
+				},
+			},
+			{
+				Name: "provider sync linear work items", Contract: workItemsContract, Insert: withHeldWorkItemColumns(linearWorkItemsInsert),
+				Carry: func(map[string]any) map[string]bool {
+					return workItemsContract.Carry(func(string) bool { return false })
+				},
+			},
+		},
 	}
+}
+
+// workItemsHeldColumns are the work_items columns the provider-sync work-item
+// writers never produce a value for; the Python-parity column lists omit
+// them, so the writers append them carrying the held value.
+var workItemsHeldColumns = []string{"description", "priority_raw", "service_class", "due_at"}
+
+// workItemsContract is the contract table of the provider-sync work-item
+// writers (the direct adapter shared by github, gitlab and jira rows, and the
+// linear adapter): every column of the Python-parity list is stated as the
+// provider row produces it, and the four held columns are R1.
+var workItemsContract = storedversion.Contract{Writer: "provider_sync", Table: "work_items", Columns: joinColumns(
+	contractColumns(storedversion.Identity, "repo_id", "work_item_id"),
+	contractColumns(storedversion.Writer, "provider"),
+	contractColumns(storedversion.Stated, "title", "type", "status", "status_raw", "project_key", "project_id",
+		"native_team_key", "project_name", "assignees", "reporter", "created_at", "updated_at"),
+	contractColumns(storedversion.StateCoupled, "started_at", "completed_at", "closed_at"),
+	contractColumns(storedversion.Stated, "labels", "story_points", "sprint_id", "sprint_name", "parent_id", "epic_id", "url"),
+	contractColumns(storedversion.Writer, "last_synced", "org_id", "source_id"),
+	[]storedversion.Column{
+		{Name: "description", Rule: storedversion.NoField}, {Name: "priority_raw", Rule: storedversion.NoField},
+		{Name: "service_class", Rule: storedversion.NoField}, {Name: "due_at", Rule: storedversion.NoField},
+	},
+)}
+
+// withHeldWorkItemColumns appends the held columns to a Python-parity
+// work_items insert.
+func withHeldWorkItemColumns(insert string) string {
+	end := strings.LastIndexByte(insert, ')')
+	return insert[:end] + ", " + strings.Join(workItemsHeldColumns, ", ") + insert[end:]
+}
+
+// writeWorkItemsKeepingHeldColumns inserts the projected rows with the held
+// columns carried from each key's current version. A failed read fails the
+// write before any insert.
+func writeWorkItemsKeepingHeldColumns(
+	ctx context.Context, conn driver.Conn, orgID, insert string, rows []workItemStoredRow,
+) error {
+	extended := withHeldWorkItemColumns(insert)
+	stored := make([]storedversion.Row, len(rows))
+	for i, row := range rows {
+		values := append(row.values(), make([]any, len(workItemsHeldColumns))...)
+		stored[i] = storedversion.Row{Values: values, Carry: workItemsContract.Carry(func(string) bool { return false })}
+	}
+	outcomes, err := workItemsContract.Apply(ctx, conn, orgID, extended, stored)
+	if err != nil {
+		return err
+	}
+	workItemsContract.Log(ctx, orgID, storedVersionCarriedEvent, storedVersionRefusedEvent, outcomes)
+	batch, err := conn.PrepareBatch(ctx, extended)
+	if err != nil {
+		return err
+	}
+	defer batch.Abort()
+	for _, row := range stored {
+		if err := batch.Append(row.Values...); err != nil {
+			return err
+		}
+	}
+	return batch.Send()
 }

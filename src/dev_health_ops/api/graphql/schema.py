@@ -79,7 +79,6 @@ from .resolvers.ai import (
 from .resolvers.analytics import resolve_analytics
 from .resolvers.bus_factor import resolve_bus_factor
 from .resolvers.catalog import resolve_catalog
-from .resolvers.cognitive_load import resolve_cognitive_load
 from .resolvers.compounding_risk import resolve_compounding_risk
 from .resolvers.data_health import resolve_data_health
 from .resolvers.dev_evidence import (
@@ -785,8 +784,7 @@ class Query:
         info: Info,
         input: CognitiveLoadInput,
     ) -> CognitiveLoadResult:
-        context = get_context(info)
-        return await resolve_cognitive_load(context, input)
+        _raise_served_by_query_api("cognitiveLoad", input.org_id, info)
 
     @strawberry.field(
         description=(

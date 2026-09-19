@@ -128,6 +128,14 @@ DELETED_GO_SERVED_RESOLVER_MODULES: dict[str, Path] = {
     / "graphql"
     / "resolvers"
     / "complexity.py",
+    # cognitiveLoad.
+    "cognitive load resolver": ROOT
+    / "src"
+    / "dev_health_ops"
+    / "api"
+    / "graphql"
+    / "resolvers"
+    / "cognitive_load.py",
     # The operating review computation; its only importer was the resolver.
     "operating review computation": ROOT
     / "src"
@@ -156,6 +164,7 @@ RETAINED_ORACLE_MODULES: dict[str, Path] = {
 # that both planes digest for routing. Trimming "unused" Python here would
 # silently change the schema digest and disable every registered operation.
 SDL_LOAD_BEARING_SOURCES: tuple[Path, ...] = (
+    ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "types" / "cognitive_load.py",
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "types" / "complexity.py",
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "types" / "review_edges.py",
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "schema.py",
@@ -164,6 +173,13 @@ SDL_LOAD_BEARING_SOURCES: tuple[Path, ...] = (
 )
 
 SDL_LOAD_BEARING_SYMBOLS: dict[str, frozenset[str]] = {
+    "cognitive_load.py": frozenset(
+        {
+            "CognitiveLoadInput",
+            "CognitiveLoadSignal",
+            "CognitiveLoadResult",
+        }
+    ),
     "complexity.py": frozenset(
         {
             "ComplexityTimeseriesInput",
@@ -188,6 +204,7 @@ SDL_LOAD_BEARING_SYMBOLS: dict[str, frozenset[str]] = {
             "feature_flag_events",
             "complexity_timeseries",
             "hotspots",
+            "cognitive_load",
         }
     ),
     "inputs.py": frozenset(

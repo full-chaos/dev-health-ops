@@ -102,6 +102,7 @@ func Execute(parent context.Context, args []string, lookup secrets.LookupEnv, st
 	}
 
 	logger := logging.NewJSON(streams.Stdout, cfg.LogLevel)
+	defer logging.InstallDefault(logger)()
 	if len(cfg.EnvOnlySettings) > 0 {
 		logger.Warn(
 			"configuration supplied through environment variables",

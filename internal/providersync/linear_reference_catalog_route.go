@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/identityalias"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
@@ -597,7 +598,7 @@ func collectLinearReferenceConnection(
 		var envelope linearReferenceGraphQLEnvelope
 		if err := json.NewDecoder(response.Body).Decode(&envelope); err != nil {
 			response.Body.Close()
-			return items, pages, false, err
+			return items, pages, false, logging.DecodeFailure(err)
 		}
 		response.Body.Close()
 		if len(envelope.Errors) > 0 {

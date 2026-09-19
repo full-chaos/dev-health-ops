@@ -516,9 +516,9 @@ func TestAdapterLogsTheWrappedCauseBehindAFailedJob(t *testing.T) {
 // entirely.
 //
 // This is what the provider-unit handler needs and WithSafeCause cannot give
-// it. providerfoundation.ProviderError's Error() embeds the request path and a
-// bounded snippet of the provider's response body (CHAOS-4582), so promoting
-// the error's own message would leak both on every provider 4xx -- and the
+// it. providerfoundation.ProviderError's Error() embeds the request path, so
+// promoting the error's own message would put it in a log line on every
+// provider 4xx -- and the
 // consequence of having no usable option at all was that
 // internal/jobs/providerunit had ZERO opt-ins and every provider-unit failure
 // left nothing but "dev-health job failed [retryable]".

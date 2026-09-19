@@ -242,6 +242,7 @@ func main() {
 	// last, after the HTTP server has stopped accepting requests, so
 	// buffered spans from the final in-flight requests still flush.
 	logger := logging.NewJSON(os.Stdout, slog.LevelInfo)
+	logging.InstallDefault(logger)
 	tracingComponent := tracing.InitWithServiceName(logger, otelServiceName)
 
 	// Installs the process-wide OTel MeterProvider so the gauges/counters

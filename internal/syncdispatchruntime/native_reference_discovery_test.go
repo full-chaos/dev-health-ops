@@ -1,11 +1,27 @@
 package syncdispatchruntime
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
+	"syscall"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
+
+type timeoutFailure struct{}
+
+func (timeoutFailure) Error() string { return "i/o" }
+func (timeoutFailure) Timeout() bool { return true }
+
+type temporaryFailure struct{}
+
+func (temporaryFailure) Error() string   { return "busy" }
+func (temporaryFailure) Temporary() bool { return true }
 
 // TestIsRetryableDiscoveryErrorTreatsBridgeFailuresAsRetryable pins the
 // codex-flagged gap (CHAOS-4175): a failure of the populate bridge call
@@ -24,7 +40,15 @@ func TestIsRetryableDiscoveryErrorTreatsBridgeFailuresAsRetryable(t *testing.T) 
 		{"connection refused wrapped as ErrBridgeRequest", fmt.Errorf("%w: dial tcp 127.0.0.1:8000: connect: connection refused", ErrBridgeRequest), true},
 		{"non-2xx status wrapped as ErrBridgeRequest", fmt.Errorf("%w: status=503", ErrBridgeRequest), true},
 		{"bare ErrInvalidBridge", ErrInvalidBridge, true},
-		{"substring marker still matches", errors.New("request failed: rate limited"), true},
+		{"provider rate limit", &providerfoundation.ProviderError{Class: providerfoundation.ErrorRateLimited, StatusCode: 429}, true},
+		{"provider transient", fmt.Errorf("discover: %w", &providerfoundation.ProviderError{Class: providerfoundation.ErrorTransient, StatusCode: 503}), true},
+		{"provider permanent", &providerfoundation.ProviderError{Class: providerfoundation.ErrorPermanent, StatusCode: 400}, false},
+		{"deadline", fmt.Errorf("discover: %w", context.DeadlineExceeded), true},
+		{"timeout", fmt.Errorf("discover: %w", timeoutFailure{}), true},
+		{"temporary", fmt.Errorf("discover: %w", temporaryFailure{}), true},
+		{"transport failure", logging.TransportFailure(&net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED}), true},
+		{"transient database failure", fmt.Errorf("%w: begin", ErrDiscoveryTransientFailure), true},
+		{"a retry word in the text alone does not decide", errors.New("request failed: rate limited, timeout, 429, too many, transient"), false},
 		{"unrelated error is not retryable", errors.New("boom"), false},
 		{"nil is not retryable", nil, false},
 	}

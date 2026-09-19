@@ -10,7 +10,9 @@ import (
 
 // httpStatusError wraps a non-2xx HTTP response so classifyProviderError can
 // read both the status code and the response body/headers (needed for
-// Retry-After on a 429).
+// Retry-After on a 429). Error() carries the status only: the body is
+// provider content and is read through responseBodyOf, which only the
+// classifier calls.
 type httpStatusError struct {
 	statusCode int
 	header     http.Header
@@ -18,7 +20,18 @@ type httpStatusError struct {
 }
 
 func (e *httpStatusError) Error() string {
-	return fmt.Sprintf("http %d: %s", e.statusCode, e.body)
+	return fmt.Sprintf("http %d", e.statusCode)
+}
+
+// responseBodyOf returns the provider's response body carried by err's
+// chain, or "". The classifier matches it against provider error
+// vocabularies; it is never formatted into an error or a log line.
+func responseBodyOf(err error) string {
+	var statusErr *httpStatusError
+	if errors.As(err, &statusErr) {
+		return statusErr.body
+	}
+	return ""
 }
 
 // httpTransportError wraps a failure where no HTTP response was ever

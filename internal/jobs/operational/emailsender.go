@@ -22,6 +22,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 )
 
 // CHAOS-5353: the email transport `dev_health_ops.api.services.email` provided
@@ -65,9 +67,14 @@ var ErrEmailProviderUnsupported = errors.New("operational email provider is unsu
 // exists so a provider that CAN report one on an ambiguous outcome has
 // somewhere to put it, and so the failure-site log line's shape does not
 // need to change if one later does.
+//
+// ProviderMessageID holds only an id that passed logging.ProviderAssignedID;
+// ProviderMessageIDDropped reports that the provider sent one of another
+// shape, which is not kept.
 type AmbiguousSendError struct {
-	Err               error
-	ProviderMessageID string
+	Err                      error
+	ProviderMessageID        string
+	ProviderMessageIDDropped bool
 }
 
 func (e *AmbiguousSendError) Error() string { return e.Err.Error() }
@@ -320,7 +327,7 @@ func (sender *resendEmailSender) Send(ctx context.Context, message EmailMessage)
 			// DNS failure, a refused or timed-out dial, or (the case the
 			// old net.OpError-based check missed) a TLS handshake that
 			// never completed. No bytes reached Resend.
-			return fmt.Errorf("resend API unreachable: %w", err)
+			return fmt.Errorf("resend API unreachable: %w", logging.TransportFailure(err))
 		}
 		if wroteRequestErr != nil {
 			// The write itself failed partway through. Some bytes reached
@@ -328,7 +335,7 @@ func (sender *resendEmailSender) Send(ctx context.Context, message EmailMessage)
 			// unlike the "never written" case above, this leaves genuine
 			// doubt rather than ruling the send out.
 			return &AmbiguousSendError{
-				Err: fmt.Errorf("resend API request write incomplete: %w", err),
+				Err: fmt.Errorf("resend API request write incomplete: %w", logging.TransportFailure(err)),
 			}
 		}
 		// The full request WAS written -- Resend had everything it needed to
@@ -336,7 +343,7 @@ func (sender *resendEmailSender) Send(ctx context.Context, message EmailMessage)
 		// reset while waiting, etc). CHAOS-5399: this must not be treated as
 		// "nothing was sent".
 		return &AmbiguousSendError{
-			Err: fmt.Errorf("resend API response uncertain: %w", err),
+			Err: fmt.Errorf("resend API response uncertain: %w", logging.TransportFailure(err)),
 		}
 	}
 	defer response.Body.Close()
@@ -345,7 +352,7 @@ func (sender *resendEmailSender) Send(ctx context.Context, message EmailMessage)
 	raw, readErr := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes+1))
 	// Best-effort only: never let a read/parse failure on a body we don't
 	// even need decide the outcome for a status code that already does.
-	messageID := bestEffortResendMessageID(raw)
+	messageID, messageIDDropped := logging.ProviderAssignedID(bestEffortResendMessageID(raw))
 
 	// CHAOS-5399 r1 (codex P1): status code is checked BEFORE trusting a body
 	// read failure. The previous ordering treated ANY readErr as ambiguous
@@ -358,8 +365,9 @@ func (sender *resendEmailSender) Send(ctx context.Context, message EmailMessage)
 		// or sent before that failure. Ambiguous, same reasoning as a
 		// pre-response timeout, regardless of whether the body was readable.
 		return &AmbiguousSendError{
-			Err:               fmt.Errorf("resend API returned a server error: status %d", response.StatusCode),
-			ProviderMessageID: messageID,
+			Err:                      fmt.Errorf("resend API returned a server error: status %d", response.StatusCode),
+			ProviderMessageID:        messageID,
+			ProviderMessageIDDropped: messageIDDropped,
 		}
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
@@ -381,8 +389,9 @@ func (sender *resendEmailSender) Send(ctx context.Context, message EmailMessage)
 		// is what would confirm or rule out an embedded error object --
 		// was lost. Ambiguous, not a rejection.
 		return &AmbiguousSendError{
-			Err:               fmt.Errorf("resend API response unreadable: %w", readErr),
-			ProviderMessageID: messageID,
+			Err:                      fmt.Errorf("resend API response unreadable: %w", logging.TransportFailure(readErr)),
+			ProviderMessageID:        messageID,
+			ProviderMessageIDDropped: messageIDDropped,
 		}
 	}
 	var decoded struct {
@@ -393,15 +402,16 @@ func (sender *resendEmailSender) Send(ctx context.Context, message EmailMessage)
 		// A 2xx status with an unparseable body: the transport-level send
 		// succeeded, but the body cannot be trusted. Ambiguous, not a clean
 		// success.
-		return &AmbiguousSendError{Err: fmt.Errorf("resend API response invalid: %w", err)}
+		return &AmbiguousSendError{Err: fmt.Errorf("resend API response invalid: %w", logging.DecodeFailure(err))}
 	}
 	if len(decoded.Error) > 0 && string(decoded.Error) != "null" {
 		// A 2xx wrapping an explicit error object IS a definite rejection --
 		// Resend told us, unambiguously, that it did not send.
 		return errors.New("resend API returned an error object")
 	}
+	acceptedID, acceptedIDDropped := logging.ProviderAssignedID(decoded.ID)
 	slog.InfoContext(ctx, "billing notification: resend accepted the message",
-		"message_id", decoded.ID, "subject", message.Subject)
+		"message_id", acceptedID, "id_dropped", acceptedIDDropped, "subject", message.Subject)
 	return nil
 }
 

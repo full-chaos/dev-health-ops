@@ -439,8 +439,8 @@ func migrationStageError(stage string) error {
 // rule is that a swallowed error on a TOUCHED failure path is a review
 // finding, and CHAOS-5437's own two new stages (creating/stamping the
 // posture manifest table) are exactly that. The caller (cmd/dev-health-
-// worker-migrate) already runs its own logger through slog.NewJSONHandler
-// against stderr, so this reaches the operator's deploy log without needing
+// worker-migrate) runs its logger through logging.NewJSON against stderr,
+// so this reaches the operator's deploy log without needing
 // ApplyPinnedMigrations' return value to carry more than the bounded stage
 // name it already does.
 func logMigrationStageFailure(ctx context.Context, logger *slog.Logger, stage string, err error) {

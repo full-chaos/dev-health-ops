@@ -35,6 +35,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
@@ -147,7 +148,7 @@ func execute(
 		return 1
 	}
 
-	logger := slog.New(slog.NewJSONHandler(stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	logger := logging.NewJSON(stderr, slog.LevelInfo)
 	result, err := authschema.Apply(ctx, pool, authschema.Options{
 		Schema:      schema,
 		RuntimeRole: runtimeRole,

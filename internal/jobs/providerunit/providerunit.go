@@ -193,9 +193,8 @@ func deterministicTerminalCategory(err error) (string, bool) {
 //
 // Why jobruntime.WithSafeCause could not simply be used: it promotes the
 // error's OWN message, and providerfoundation.ProviderError.Error() embeds the
-// request path and a bounded snippet of the provider's response body
-// (providerfoundation/types.go, CHAOS-4582). Those are exactly the "upstream
-// response content the runtime has no way to vet" WithSafeCause's own doc
+// request path (providerfoundation/types.go). That is exactly the kind of
+// request-derived content the runtime has no way to vet, which WithSafeCause's own doc
 // forbids. So the cause is CONSTRUCTED here from fields that are provably
 // static or numeric, and jobruntime.WithSafeCauseText carries it instead.
 //

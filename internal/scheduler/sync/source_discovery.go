@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -912,7 +913,7 @@ func discoverJiraLegacyProjects(ctx context.Context, client *providerfoundation.
 	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, 32<<20))
 	if err != nil {
-		return nil, err
+		return nil, logging.TransportFailure(err)
 	}
 	var items []json.RawMessage
 	if err := json.Unmarshal(body, &items); err != nil {

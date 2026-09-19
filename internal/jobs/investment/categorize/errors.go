@@ -259,7 +259,7 @@ func classifyProviderError(err error, statusCode int, header http.Header, provid
 	if err == nil {
 		return nil
 	}
-	msgLower := strings.ToLower(err.Error())
+	msgLower := strings.ToLower(err.Error() + " " + responseBodyOf(err))
 
 	base := func(kind llmErrorKind, message string) *llmError {
 		return &llmError{kind: kind, message: message, provider: provider, model: model, cause: sanitizedCause(err)}

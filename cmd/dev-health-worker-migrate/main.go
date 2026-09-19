@@ -16,6 +16,7 @@ import (
 	jobsv1 "github.com/full-chaos/dev-health-ops/contracts/jobs/v1"
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	platformsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
@@ -98,7 +99,7 @@ func execute(
 	// for the component form, config.ComponentDatabaseIdentity asks the driver for the
 	// separate, non-secret DEV_HEALTH_MIGRATION_PG_DB env value directly,
 	// needing no parsing of the assembled DSN.
-	infoLogger := slog.New(slog.NewJSONHandler(stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	infoLogger := logging.NewJSON(stderr, slog.LevelInfo)
 	if host, present := lookup(migrationDatabaseSpec.HostKey); present && host != "" {
 		infoLogger.InfoContext(parent, "migration database resolved",
 			"form", "components",
@@ -190,7 +191,7 @@ func execute(
 	}
 	defer pool.Close()
 
-	logger := slog.New(slog.NewJSONHandler(stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	logger := logging.NewJSON(stderr, slog.LevelWarn)
 	if *check {
 		current, err := riverstore.CheckSchema(ctx, pool, schema, logger)
 		return reportSchemaCheck(ctx, logger, stdout, stderr, current, err)

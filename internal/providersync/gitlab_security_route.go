@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/google/uuid"
 )
@@ -68,7 +69,7 @@ func (doer gitLabSecurityCountingDoer) Do(request *http.Request) (*http.Response
 		doer.observe.lastStatus = response.StatusCode
 		doer.observe.lastHeaders = response.Header.Clone()
 	}
-	return response, err
+	return response, logging.TransportFailure(err)
 }
 
 func (handler GitLabSecurityRouteHandler) Collect(
@@ -206,7 +207,7 @@ func fetchGitLabSecurityObjects(
 	defer response.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(response.Body, 2<<20))
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, logging.TransportFailure(err)
 	}
 	var rawItems []json.RawMessage
 	if err := json.Unmarshal(body, &rawItems); err != nil {

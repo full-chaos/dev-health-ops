@@ -5,9 +5,11 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -120,7 +122,7 @@ func githubTestsArtifactIDFromBlobPath(t *testing.T, path string) int {
 type githubTestsErrorReader struct{}
 
 func (*githubTestsErrorReader) Read([]byte) (int, error) {
-	return 0, errors.New("connection reset by peer")
+	return 0, &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}
 }
 
 // githubTestsRepeatingReader synthesizes `remaining` bytes without holding
@@ -298,7 +300,9 @@ func TestGitHubTestsArtifactDownloadReadFailureCarriesCause(t *testing.T) {
 	if err.Error() == ErrGitHubTestsIncomplete.Error() {
 		t.Fatalf("error=%q is the BARE sentinel with no cause attached (CHAOS-4191)", err.Error())
 	}
-	if !strings.Contains(err.Error(), "connection reset by peer") {
+	// The cause survives as its class in the text and as the original
+	// error for errors.Is; the transport's own text does not.
+	if !strings.Contains(err.Error(), "artifact download read failed: exchange request failed: reset") || !errors.Is(err, syscall.ECONNRESET) {
 		t.Fatalf("error=%q does not carry the underlying read failure", err.Error())
 	}
 }
@@ -352,7 +356,9 @@ func TestGitHubTestsChunkedArtifactDownloadReadFailureCarriesCause(t *testing.T)
 	if err.Error() == ErrGitHubTestsIncomplete.Error() {
 		t.Fatalf("error=%q is the BARE sentinel with no cause attached (CHAOS-4191)", err.Error())
 	}
-	if !strings.Contains(err.Error(), "connection reset by peer") {
+	// The cause survives as its class in the text and as the original
+	// error for errors.Is; the transport's own text does not.
+	if !strings.Contains(err.Error(), "artifact download read failed: exchange request failed: reset") || !errors.Is(err, syscall.ECONNRESET) {
 		t.Fatalf("error=%q does not carry the underlying read failure", err.Error())
 	}
 }

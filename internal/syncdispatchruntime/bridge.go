@@ -12,6 +12,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 )
 
 var (
@@ -95,7 +97,7 @@ func (bridge *HTTPBridge) do(ctx context.Context, path string, payload any) (*ht
 		// discarding it -- callers that classify retryability from the
 		// error text (isRetryableDiscoveryError) need it, and a bare
 		// sentinel with no detail is useless in an incident.
-		return nil, fmt.Errorf("%w: %v", ErrBridgeRequest, err)
+		return nil, fmt.Errorf("%w: %v", ErrBridgeRequest, logging.TransportFailure(err))
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		defer response.Body.Close()

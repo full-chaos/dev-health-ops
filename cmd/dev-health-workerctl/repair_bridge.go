@@ -12,6 +12,8 @@ import (
 	"reflect"
 	"strings"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 )
 
 // reviewEvidenceMaxBytes mirrors the bridge's own Pydantic bound
@@ -282,7 +284,7 @@ func postWorkerBridge[T any, PT interface {
 	client := &http.Client{Timeout: 30 * time.Second}
 	response, err := client.Do(request)
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, logging.TransportFailure(err)
 	}
 	defer func() { _ = response.Body.Close() }()
 	// codex round 3, P1: reading exactly bridgeResponseBodyCap bytes with no
@@ -293,7 +295,7 @@ func postWorkerBridge[T any, PT interface {
 	// bigger is DETECTED, not silently accepted as a valid-looking prefix.
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, bridgeResponseBodyCap+1))
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, logging.TransportFailure(err)
 	}
 	if len(responseBody) > bridgeResponseBodyCap {
 		return response.StatusCode, nil, fmt.Errorf(
@@ -320,7 +322,7 @@ func postWorkerBridge[T any, PT interface {
 				// silently trust.
 				return response.StatusCode, nil, fmt.Errorf(
 					"bridge returned status %d with an undecodable body (%d bytes): %w",
-					response.StatusCode, len(responseBody), unmarshalErr,
+					response.StatusCode, len(responseBody), logging.DecodeFailure(unmarshalErr),
 				)
 			}
 			// codex round 3, P2: the check above USED TO run unconditionally

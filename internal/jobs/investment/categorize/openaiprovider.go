@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 )
 
 // OpenAIProviderConfig configures OpenAIProvider.
@@ -231,7 +233,7 @@ func (p *OpenAIProvider) executeResponsesRequest(ctx context.Context, body openA
 
 	resp, err := p.client.Do(req)
 	if err != nil {
-		return openAICompletionText{}, "", &httpTransportError{cause: err}
+		return openAICompletionText{}, "", &httpTransportError{cause: logging.TransportFailure(err)}
 	}
 	defer resp.Body.Close()
 
@@ -246,7 +248,7 @@ func (p *OpenAIProvider) executeResponsesRequest(ctx context.Context, body openA
 
 	var decoded openAIResponsesResponse
 	if err := json.Unmarshal(responseBody, &decoded); err != nil {
-		return openAICompletionText{}, "", fmt.Errorf("decode response: %w", err)
+		return openAICompletionText{}, "", logging.DecodeFailure(err)
 	}
 
 	content := decoded.OutputText

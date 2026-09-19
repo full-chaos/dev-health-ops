@@ -24,32 +24,39 @@ import (
 // preparedRouteRowTypes are the Go types each enrolled destination's sinks
 // decode their rows into, one per sink when providers' sinks differ.
 var preparedRouteRowTypes = map[string][]any{
-	"deployments":                      {deploymentRow{}},
-	"git_pull_requests":                {pullRequestRow{}},
-	"git_pull_request_reviews":         {pullRequestReviewRow{}},
-	"ai_attribution":                   {githubAIAttributionRow{}},
-	"estimate_coverage_metrics_daily":  {githubEstimateCoverageMetricsDailyRow{}},
-	"investment_classifications_daily": {githubInvestmentClassificationDailyRow{}},
-	"investment_metrics_daily":         {githubInvestmentMetricsDailyRow{}},
-	"issue_type_metrics_daily":         {githubIssueTypeMetricsDailyRow{}},
-	"sprints":                          {githubSprintRow{}},
-	"work_item_cycle_times":            {githubWorkItemCycleTimePersistenceRow{}},
-	"work_item_dependencies":           {githubWorkItemDependencyRow{}},
-	"work_item_interactions":           {githubWorkItemInteractionRow{}},
-	"work_item_metrics_daily":          {githubWorkItemMetricsDailyRow{}},
-	"work_item_reopen_events":          {githubWorkItemReopenRow{}},
-	"work_item_state_durations_daily":  {githubWorkItemStateDurationDailyRow{}},
-	"work_item_team_attributions":      {githubWorkItemTeamAttributionRow{}},
-	"work_item_transitions":            {githubWorkItemTransitionRow{}},
-	"work_item_user_metrics_daily":     {githubWorkItemUserMetricsDailyRow{}},
-	"project_membership_transitions":   {projectmembership.Row{}},
-	"projects":                         {projectmembership.CatalogRow{}},
-	"work_items":                       {githubWorkItemRow{}},
-	"git_commit_stats":                 {commitStatsRow{}},
-	"git_commits":                      {gitCommitRow{}},
-	"git_files":                        {gitFileRow{}},
-	"repos":                            {repositoryRow{}},
-	"security_alerts":                  {securityAlertRow{}, gitLabSecurityAlertRow{}},
+	"deployments":                             {deploymentRow{}},
+	"git_pull_requests":                       {pullRequestRow{}},
+	"git_pull_request_reviews":                {pullRequestReviewRow{}},
+	"ai_attribution":                          {githubAIAttributionRow{}},
+	"estimate_coverage_metrics_daily":         {githubEstimateCoverageMetricsDailyRow{}},
+	"investment_classifications_daily":        {githubInvestmentClassificationDailyRow{}},
+	"investment_metrics_daily":                {githubInvestmentMetricsDailyRow{}},
+	"issue_type_metrics_daily":                {githubIssueTypeMetricsDailyRow{}},
+	"sprints":                                 {githubSprintRow{}},
+	"work_item_cycle_times":                   {githubWorkItemCycleTimePersistenceRow{}},
+	"work_item_dependencies":                  {githubWorkItemDependencyRow{}},
+	"work_item_interactions":                  {githubWorkItemInteractionRow{}},
+	"work_item_metrics_daily":                 {githubWorkItemMetricsDailyRow{}},
+	"work_item_reopen_events":                 {githubWorkItemReopenRow{}},
+	"work_item_state_durations_daily":         {githubWorkItemStateDurationDailyRow{}},
+	"work_item_team_attributions":             {githubWorkItemTeamAttributionRow{}},
+	"work_item_transitions":                   {githubWorkItemTransitionRow{}},
+	"work_item_user_metrics_daily":            {githubWorkItemUserMetricsDailyRow{}},
+	"project_membership_transitions":          {projectmembership.Row{}},
+	"projects":                                {projectmembership.CatalogRow{}},
+	"work_items":                              {githubWorkItemRow{}},
+	"git_commit_stats":                        {commitStatsRow{}},
+	"git_commits":                             {gitCommitRow{}},
+	"git_files":                               {gitFileRow{}},
+	"repos":                                   {repositoryRow{}},
+	"security_alerts":                         {securityAlertRow{}, gitLabSecurityAlertRow{}},
+	"feature_flag":                            {launchDarklyFlagRow{}},
+	"feature_flag_event":                      {launchDarklyEventRow{}},
+	"feature_flag_link":                       {launchDarklyLinkRow{}},
+	"work_graph_edges":                        {launchDarklyEdgeRow{}},
+	"operational_services":                    {gitLabOperationalServiceRow{}},
+	"operational_service_repository_mappings": {gitLabServiceRepositoryMappingRow{}},
+	"operational_incidents":                   {jiraIncidentRow{}},
 }
 
 // preparedRouteDroppedKeys are the row keys the projection drops: keys a
@@ -213,6 +220,11 @@ func TestProjectionStatementsAreTheSinksOwnInserts(t *testing.T) {
 						continue
 					}
 					found := writer{arguments: map[string]bool{}, indexes: map[string]bool{}, calls: map[string]bool{}}
+					// A writer handed its decoded rows as a parameter decodes them
+					// in its caller: a typed []Row parameter counts as the decode.
+					for _, field := range typed.Type.Params.List {
+						found.indexes[strings.TrimPrefix(types.ExprString(field.Type), "[]")] = true
+					}
 					ast.Inspect(typed.Body, func(node ast.Node) bool {
 						switch inner := node.(type) {
 						case *ast.CallExpr:

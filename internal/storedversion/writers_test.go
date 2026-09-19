@@ -65,7 +65,6 @@ var outOfScopeWriters = map[string]string{
 	"internal/providersync/jira_incidents_effects_clickhouse.go|operational_incidents":                          "operational",
 	"internal/providersync/gitlab_incidents_effects_clickhouse.go|operational_services":                         "operational",
 	"internal/providersync/gitlab_incidents_effects_clickhouse.go|operational_service_repository_mappings":      "operational",
-	"internal/providersync/gitlab_incidents_effects_clickhouse.go|operational_incidents":                        "operational",
 	"internal/providersync/pagerduty_schedules_effects_clickhouse.go|operational_on_call_schedules":             "operational",
 	"internal/providersync/pagerduty_users_effects_clickhouse.go|operational_users":                             "operational",
 	"internal/providersync/pagerduty_business_services_effects_clickhouse.go|operational_services":              "operational",

@@ -359,15 +359,19 @@ func buildDuplicateCollapsePageCutPlan(shape *DuplicateCollapsePageCutShape, bas
 		candOrder = append(candOrder, id)
 	}
 
-	// Rule 4: dedup(baseline) is candidate's own literal prefix.
+	// Rule 4: dedup(baseline) is candidate's own literal prefix. The id
+	// cut at the page boundary may be served from a copy past the limit
+	// (PageBoundary, pageboundarycopy.go).
 	if len(candOrder) < len(dedupOrder) {
 		return plan
 	}
+	boundary := &PageBoundary{SortField: shape.SortField, Limit: shape.Limit, CopyRule: shape.CopyRule}
+	cutID, cut := boundary.cutBoundaryID(baseList, shape.IDField)
 	for i, id := range dedupOrder {
 		if candOrder[i] != id {
 			return plan
 		}
-		if !shape.CopyRule.candidateIsServedCopy(baseGroups[id], candByID[id]) {
+		if boundary.admitCopy(shape.CopyRule, baseGroups[id], candByID[id], cut && id == cutID) == copyRefused {
 			return plan
 		}
 	}

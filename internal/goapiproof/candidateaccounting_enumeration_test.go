@@ -100,8 +100,15 @@ func enumCandidates(maxLen int) [][]enumRow {
 
 // enumInvariant is the oracle, written from the invariant alone.
 // allowDropped permits a baseline id absent from the candidate, the one
-// violation a team scope's narrower population may carry.
+// violation a team scope's narrower population may carry. The id of the
+// last row of a baseline at its limit may carry a title no on-page copy
+// carries when its on-page copies agree: its later copies can be past the
+// limit (pageboundarycopy.go). Generated ids never share a created_at.
 func enumInvariant(base, cand []enumRow, limit int, allowDropped bool) bool {
+	boundary := ""
+	if limit > 0 && len(base) >= limit {
+		boundary = base[len(base)-1].id
+	}
 	titles := map[string]map[string]bool{}
 	for _, r := range base {
 		if titles[r.id] == nil {
@@ -129,7 +136,7 @@ func enumInvariant(base, cand []enumRow, limit int, allowDropped bool) bool {
 			}
 			continue
 		}
-		if !copies[r.title] {
+		if !copies[r.title] && (r.id != boundary || len(copies) != 1) {
 			return false
 		}
 		lastShared = i

@@ -137,6 +137,13 @@ type WorkGraphEdgeDedupShape struct {
 	// them, and the candidate carries the value of the copy it equals.
 	// Named per entry from the writer, never inferred.
 	RewrittenFields []string
+	// PageBoundary, when set in the default mode, also admits the one id
+	// cut at a page-at-limit boundary whose on-page copies agree and whose
+	// candidate row differs from them only on PageBoundary.CopyRule's
+	// fields (pageboundarycopy.go); every other id keeps rule 2. A page
+	// whose only repeated copies are past its limit applies for the cut
+	// id alone.
+	PageBoundary *PageBoundary
 }
 
 // copyRule returns the shape's judged-mode rule, or nil in the default
@@ -330,7 +337,8 @@ func buildWorkGraphEdgeDedupPlan(shape *WorkGraphEdgeDedupShape, baselineData, c
 			judged[id] = true
 		}
 	}
-	if !hasDuplicate {
+	cutID, cut := shape.PageBoundary.cutBoundaryID(baseList, shape.IDField)
+	if !hasDuplicate && !cut {
 		return plan
 	}
 
@@ -371,7 +379,14 @@ func buildWorkGraphEdgeDedupPlan(shape *WorkGraphEdgeDedupShape, baselineData, c
 			admitted[id] = judged[id] && rule.candidateIsServedCopy(baseGroups[id], candObject)
 			continue
 		}
-		admitted[id] = agreeingIDs[id] && jsonValuesEqual(baseObject, candObject)
+		if !hasDuplicate {
+			// No copy on the page shifts a position, so the plan applies
+			// for the cut id alone.
+			admitted[id] = id == cutID && agreeingIDs[id] && shape.PageBoundary.admitCopy(nil, baseGroups[id], candObject, true) != copyRefused
+			continue
+		}
+		admitted[id] = agreeingIDs[id] && (jsonValuesEqual(baseObject, candObject) ||
+			(cut && id == cutID && shape.PageBoundary.admitCopy(nil, baseGroups[id], candObject, true) == copyCutBoundary))
 	}
 	if shared == 0 {
 		return plan

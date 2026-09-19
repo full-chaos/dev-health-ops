@@ -674,12 +674,19 @@ var investmentExplainDeterministicFloats = map[string]string{
 }
 
 // investmentExplainIntegerLeaves declares investment/explain's one
-// count-shaped numeric leaf: confidence.band_mix[].count is Go int
-// (investmentexplain/explanation.go's own BandCount struct), a plain
-// count of work units per evidence-quality band -- never a ClickHouse
-// aggregate.
+// count-shaped numeric leaf: EncodeInvestmentMixExplanation
+// (investmentexplain/explanation.go) writes confidence.band_mix as an
+// OBJECT keyed by band name ("high", "moderate", ...), each value a
+// BandCount.Count Go int -- a plain count of work units in that band,
+// never a ClickHouse aggregate. Declared at the MAP's own path, like
+// investmentIntegerLeaves' evidence_quality_distribution
+// (restcorpus.go), because BandMix's own doc comment (explanation.go)
+// states its keys are whichever bands were actually ENCOUNTERED in this
+// request's work units, not a fixed enumerable set -- a per-band-name
+// declaration would need updating every time a new band value appeared
+// in the data, and silently under-declare until then.
 var investmentExplainIntegerLeaves = map[string]string{
-	"data.confidence.band_mix.count": "BandCount.Count (investmentexplain/explanation.go) -- a plain Go int count of work units per quality band.",
+	"data.confidence.band_mix": "BandCount.Count (investmentexplain/explanation.go), one entry per evidence-quality band this request's work units actually reached -- a plain Go int count, never a ClickHouse aggregate.",
 }
 
 // quadrantPointFloats declares quadrant.Point's x/y as Tier B: both are

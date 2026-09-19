@@ -181,6 +181,17 @@ func TestResultVacuityErrors_EmptyForACleanResult(t *testing.T) {
 	}
 }
 
+// TestResultVacuityErrors_NamesEveryKind covers resultVacuityErrors'
+// SOFT fields (goapiproof.AcceptanceRefusal.Hard == false): a declaration
+// that matched nothing ELSE in an otherwise honest, fully-executed
+// comparison. OrderInsensitiveListRefusals is set here too, but is a
+// HARD field -- its own comparison could have skipped a whole list (see
+// AcceptanceRefusal.Hard's own doc comment) -- so it must NOT contribute
+// to this count; the real call path never even reaches
+// resultVacuityErrors with it set (proveOneRESTRequest refuses that
+// request immediately, before this function ever runs), so leaving it in
+// this Result also exercises resultVacuityErrors' own defensive filter
+// standing alone.
 func TestResultVacuityErrors_NamesEveryKind(t *testing.T) {
 	result := goapiproof.Result{
 		UnusedExclusions:             []string{"a"},
@@ -190,8 +201,23 @@ func TestResultVacuityErrors_NamesEveryKind(t *testing.T) {
 		OrderInsensitiveListRefusals: []string{"d"},
 	}
 	errs := resultVacuityErrors(result)
-	if len(errs) != 5 {
-		t.Fatalf("got %d errors, want 5: %v", len(errs), errs)
+	if len(errs) != 4 {
+		t.Fatalf("got %d errors, want 4: %v", len(errs), errs)
+	}
+}
+
+// TestResultVacuityErrors_HardRefusalsAloneProduceNoVacuityError pins the
+// same defensive filter with no soft field set at all: every field here
+// is HARD (goapiproof.AcceptanceRefusal.Hard), so the result must be
+// empty, not just short one entry.
+func TestResultVacuityErrors_HardRefusalsAloneProduceNoVacuityError(t *testing.T) {
+	result := goapiproof.Result{
+		UndeclaredNumericLeaves:      []string{"a"},
+		OrderInsensitiveListRefusals: []string{"b"},
+		StochasticLeafRefusals:       []string{"c"},
+	}
+	if errs := resultVacuityErrors(result); len(errs) != 0 {
+		t.Fatalf("got %v, want none -- Hard refusals are never reported as vacuity errors", errs)
 	}
 }
 
@@ -273,6 +299,58 @@ func TestProveOneRESTRequest_MatchWritesAReceipt(t *testing.T) {
 	}
 	if out.DeclarationFiring != nil {
 		t.Fatalf("out.DeclarationFiring = %v, want nil", out.DeclarationFiring)
+	}
+}
+
+// TestProveOneRESTRequest_UndeclaredNumericLeafRefusesWithNoReceipt pins
+// that a request whose Parity sets NumericLeavesDeclared but leaves a
+// reached numeric leaf ("count") unnamed in FloatTierB, FloatExactLeaves
+// or IntegerLeaves must refuse -- the SAME rule the GraphQL prover
+// already enforces (run.go, RefusalUndeclaredNumericLeaf) -- with NO
+// receipt written, exactly like a StructuralRefusal: an undeclared
+// numeric leaf compares under the unverified Tier-A default, so a
+// receipt built from it could read as a fully-checked match having
+// verified nothing about that leaf's type.
+func TestProveOneRESTRequest_UndeclaredNumericLeafRefusesWithNoReceipt(t *testing.T) {
+	const build = "abc123def456"
+	body := `{"teams":["a","b"],"count":5}`
+	candidate := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("x-dev-health-build", build)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(body))
+	}))
+	defer candidate.Close()
+	baseline := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(body))
+	}))
+	defer baseline.Close()
+
+	f := flags{queryAPIURL: candidate.URL, pythonAPIURL: baseline.URL, org: "org-1", recordedBy: "chris", reviewEvidence: "test"}
+	spec := goapiproof.RESTEndpointSpec{Method: http.MethodGet, Path: "/api/v1/filters/options"}
+	request := goapiproof.RESTRequest{
+		Name: "options", WantCandidateStatus: 200, WantBaselineStatus: 200,
+		BodyMode: goapiproof.RESTBodyModeJSON,
+		Parity:   goapiproof.Options{NumericLeavesDeclared: true},
+	}
+	writer := &fakeReceiptWriter{}
+
+	out, err := proveOneRESTRequest(context.Background(), http.DefaultClient, f, "REST:GET:/api/v1/filters/options", spec, request,
+		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil, false, nil)
+	if err != nil {
+		t.Fatalf("proveOneRESTRequest: %v", err)
+	}
+	if out.Admitted {
+		t.Fatalf("out = %+v, want unadmitted (an undeclared numeric leaf must refuse)", out)
+	}
+	if out.Refusal != goapiproof.RefusalUndeclaredNumericLeaf {
+		t.Fatalf("out.Refusal = %q, want %q", out.Refusal, goapiproof.RefusalUndeclaredNumericLeaf)
+	}
+	if !strings.Contains(out.Detail, "count") {
+		t.Fatalf("out.Detail = %q, want it to name the undeclared leaf", out.Detail)
+	}
+	if len(writer.receipts) != 0 {
+		t.Fatalf("wrote %d receipts, want 0 -- an undeclared numeric leaf must never reach a receipt", len(writer.receipts))
 	}
 }
 

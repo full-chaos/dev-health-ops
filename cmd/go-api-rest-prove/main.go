@@ -679,29 +679,26 @@ func formatDeclarationFiring(histories []goapiproof.FiringHistory) string {
 }
 
 // resultVacuityErrors names every declaration in result that matched
-// nothing or was refused -- a citation, exclusion, Tier-B entry or
-// order-insensitive-list declaration that excuses nothing is either stale
-// or misspelled, and compare.go's own Result field comments state the
-// caller fails the run on each of these, uniformly.
+// nothing -- a citation, exclusion or Tier-B entry that excuses nothing
+// is either stale or misspelled -- from the SAME shared definition the
+// GraphQL prover refuses on, goapiproof.Result.Acceptance (compare.go).
+// It reports only the SOFT half (Hard == false): a soft refusal means the
+// declaration matched nothing else in an otherwise fully-executed,
+// honest comparison, so this run() (see its own closing check) may fail
+// the whole batch on it rather than refusing the one request immediately.
+// A HARD refusal (Acceptance's own doc comment: TerminalState may read
+// match despite something never actually being checked) is never soft --
+// proveOneRESTRequest refuses that request outright, with no receipt,
+// before resultVacuityErrors ever runs, so a Hard entry can never reach
+// here in the first place; the filter stays as a second, defensive line
+// so this function is correct standing alone too.
 func resultVacuityErrors(result goapiproof.Result) []string {
 	var errs []string
-	if len(result.UnusedExclusions) > 0 {
-		errs = append(errs, fmt.Sprintf("unused VolatileFields: %v", result.UnusedExclusions))
-	}
-	if len(result.UnusedTierB) > 0 {
-		errs = append(errs, fmt.Sprintf("unused FloatTierB: %v", result.UnusedTierB))
-	}
-	if len(result.StaleBaselineDefects) > 0 {
-		errs = append(errs, fmt.Sprintf("stale BaselineDefects: %v", result.StaleBaselineDefects))
-	}
-	if len(result.LiveBaselineDefectsUnexplained) > 0 {
-		errs = append(errs, fmt.Sprintf("live but unexplained BaselineDefects: %v", result.LiveBaselineDefectsUnexplained))
-	}
-	if len(result.UnusedOrderInsensitiveLists) > 0 {
-		errs = append(errs, fmt.Sprintf("unused OrderInsensitiveLists: %v", result.UnusedOrderInsensitiveLists))
-	}
-	if len(result.OrderInsensitiveListRefusals) > 0 {
-		errs = append(errs, fmt.Sprintf("OrderInsensitiveList refusals: %v", result.OrderInsensitiveListRefusals))
+	for _, refusal := range result.Acceptance() {
+		if refusal.Hard {
+			continue
+		}
+		errs = append(errs, refusal.Detail)
 	}
 	return errs
 }
@@ -1497,6 +1494,29 @@ func proveOneRESTRequest(
 			}
 			return out, nil
 		}
+
+		// The HARD half of goapiproof.Result.Acceptance -- see that
+		// method's own doc comment and AcceptanceRefusal.Hard. Mirrors
+		// run.go's own GraphQL runner: refused immediately, with NO
+		// receipt written, the same way the StructuralRefusal block just
+		// above does, because a Hard refusal means TerminalState here
+		// could read match despite this comparison not actually checking
+		// what its own declaration promises -- an undeclared numeric leaf
+		// compared under the unverified Tier-A default is the corpus-
+		// completeness gap this exists to close; a route with one stays
+		// invisible to every reader of go_api_rest_proof_run until it is
+		// declared, one way or the other, in restcorpus.go.
+		for _, refusal := range result.Acceptance() {
+			if !refusal.Hard {
+				continue
+			}
+			out.Admitted = false
+			out.Refusal = refusal.Code
+			out.Detail = refusal.Detail
+			out.FindingsRef = findingsRef
+			return out, nil
+		}
+
 		terminalState = result.TerminalState
 		differences = result.DifferencesOutsideBaselineDefect
 		matchedDefects = result.BaselineDefectsMatched

@@ -930,55 +930,18 @@ func (r *Runner) proveRequest(ctx context.Context, operation string, variantName
 		// below are unreachable once this fires.
 		return refuse(result.StructuralRefusal, result.StructuralDetail)
 	}
-	if len(result.UndeclaredNumericLeaves) > 0 {
-		// Checked ahead of every declared-relaxation guard below, same
-		// priority as StructuralRefusal: an undeclared numeric leaf is a
-		// corpus-completeness defect, not a stale relaxation, and it is
-		// the check that makes NumericLeavesDeclared's opt-out default a
-		// guarantee rather than a hope -- a version of it that let a
-		// marked entry pass with an undeclared leaf would be worse than
-		// not having it.
-		return refuse(RefusalUndeclaredNumericLeaf, fmt.Sprintf("numeric leaves reached with no declared float/integer type: %v", result.UndeclaredNumericLeaves))
-	}
-	if len(result.UnusedTierB) > 0 {
-		// Same rule as a stale exclusion, one tier over: a Tier-B
-		// declaration that relaxed nothing means the comparison that ran
-		// is not the comparison anybody declared.
-		return refuse(RefusalStaleTierB, fmt.Sprintf("declared Tier-B float fields matched nothing: %v", result.UnusedTierB))
-	}
-	if len(result.LiveBaselineDefectsUnexplained) > 0 {
-		// Checked ahead of RefusalStaleBaselineDefect: a live-but-
-		// unexplained entry is a stronger, more specific finding than a
-		// merely stale one, and a reader must not see the generic "matched
-		// nothing" text for an entry whose own Paths carried something.
-		return refuse(RefusalLiveBaselineDefectUnexplained, fmt.Sprintf("declared baseline defects' own cited paths carried a difference this run but their shape admitted none of it: %v", result.LiveBaselineDefectsUnexplained))
-	}
-	if len(result.StaleBaselineDefects) > 0 {
-		// The Python defect was fixed, or the cited paths are wrong.
-		// Either way the entry must go before this run can stand.
-		return refuse(RefusalStaleBaselineDefect, fmt.Sprintf("declared baseline defects covered no difference: %v", result.StaleBaselineDefects))
-	}
-	if len(result.UnusedExclusions) > 0 {
-		// A declared exclusion that matched nothing is either stale or
-		// misspelled; either way the comparison it produced is not the
-		// comparison anybody declared, so it cannot stand as a verdict.
-		return refuse(RefusalStaleExclusion, fmt.Sprintf("declared volatile fields matched nothing: %v", result.UnusedExclusions))
-	}
-	if len(result.UnusedOrderInsensitiveLists) > 0 {
-		// Same rule, one relaxation over: a declared order-insensitive
-		// list that matched no list in this response is stale or
-		// misspelled, and the comparison that ran positionally-compared a
-		// list nobody meant to leave positional.
-		return refuse(RefusalStaleOrderInsensitiveList, fmt.Sprintf("declared order-insensitive lists matched nothing: %v", result.UnusedOrderInsensitiveLists))
-	}
-	if len(result.OrderInsensitiveListRefusals) > 0 {
-		// An element missing a declared key field means the declaration
-		// does not describe this data -- the pairing it promises cannot
-		// be built, so nothing here can stand as a verdict either.
-		return refuse(RefusalOrderInsensitiveListKeyMissing, fmt.Sprintf("order-insensitive list comparison could not pair elements: %v", result.OrderInsensitiveListRefusals))
-	}
-	if len(result.StochasticLeafRefusals) > 0 {
-		return refuse(RefusalStochasticLeafClassUnfit, fmt.Sprintf("declared stochastic leaf class does not describe these responses: %v", result.StochasticLeafRefusals))
+	// Every field below is ONE shared definition, Result.Acceptance
+	// (compare.go): this runner refuses on the FIRST entry it returns,
+	// in the fixed priority order Acceptance's own doc comment states
+	// and must never reorder -- see that comment for why
+	// UndeclaredNumericLeaves/LiveBaselineDefectsUnexplained/UnusedTierB
+	// are checked ahead of the guards after them. The REST prover
+	// (cmd/go-api-rest-prove/main.go) calls the SAME method, so a new
+	// acceptance rule is added once, in compare.go, and both provers
+	// enforce it identically.
+	if refusals := result.Acceptance(); len(refusals) > 0 {
+		first := refusals[0]
+		return refuse(first.Code, first.Detail)
 	}
 
 	outcome.Executed = true

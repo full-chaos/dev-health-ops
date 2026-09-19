@@ -12,18 +12,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/storedversion"
 )
 
-// Writer is one writer of a table as the enumeration drives it, through its
-// production contract, insert and carry decision.
-type Writer struct {
-	Name     string
-	Contract storedversion.Contract
-	Insert   string
-	// NullIsUnstated: the writer's source cannot tell an absent field from a
-	// null one (the internal ingest API serialises every declared field).
-	NullIsUnstated bool
-	// Carry is the writer's production carry decision for one payload.
-	Carry func(payload map[string]any) map[string]bool
-}
+// Writer is one writer of a table as the enumeration drives it.
+type Writer = storedversion.Spec
 
 type statement uint8
 
@@ -187,9 +177,9 @@ func stated(writer Writer, column string, fields map[string]statement) (bool, bo
 		return true, fields[""] == value
 	}
 	anyValue, anyNull := false, false
-	for _, s := range fields {
-		anyValue = anyValue || s == value
-		anyNull = anyNull || s == null
+	for _, field := range c.Fields {
+		anyValue = anyValue || fields[field] == value
+		anyNull = anyNull || fields[field] == null
 	}
 	if anyValue {
 		return true, true
@@ -201,36 +191,67 @@ func token(i int) string        { return fmt.Sprintf("w%d", i) }
 func defaultToken(i int) string { return fmt.Sprintf("default%d", i) }
 
 // oracle reads terminal per table: a column any writer marks terminal
-// records an event, so no writer may replace its held value with null.
+// records an event, so no writer may replace its held value with null. A
+// column a writer keeps With a terminal column keeps its held value when
+// that writer's write refuses the terminal column's null.
 func oracle(writers []Writer, column string, writes []write) any {
-	terminal := false
-	for _, writer := range writers {
-		if c, ok := rule(writer, column); ok && c.Terminal {
-			terminal = true
-		}
-	}
+	history := oracleHistory(writers, column, writes)
+	return history[len(history)-1]
+}
+
+// oracleHistory returns the column's FINAL value after each write.
+func oracleHistory(writers []Writer, column string, writes []write) []any {
+	terminal := terminalColumn(writers, column)
+	history := make([]any, len(writes))
 	var held any
 	exists := false
+	withHistory := map[string][]any{}
 	for i, w := range writes {
 		writer := writers[w.writer]
 		isStated, isValue := stated(writer, column, w.fields)
+		c, _ := rule(writer, column)
 		switch {
 		case isStated && isValue:
 			held = token(i)
 		case isStated:
-			if !(terminal && exists && held != nil) {
+			keep := terminal && exists && held != nil
+			if c.With != "" && exists && held != nil {
+				if _, ok := withHistory[c.With]; !ok {
+					withHistory[c.With] = oracleHistory(writers, c.With, writes)
+				}
+				keep = keep || refusedAt(writers, c.With, writes, withHistory[c.With], i)
+			}
+			if !keep {
 				held = nil
 			}
 		case !exists:
 			held = defaultToken(i)
 		}
 		exists = true
+		history[i] = held
 	}
-	return held
+	return history
 }
 
-// row builds one write's insert values: key columns "k", the column under
-// test from its statement, every other column nil.
+func terminalColumn(writers []Writer, column string) bool {
+	for _, writer := range writers {
+		if c, ok := rule(writer, column); ok && c.Terminal {
+			return true
+		}
+	}
+	return false
+}
+
+// refusedAt reports whether write i states the terminal column null over a
+// held value.
+func refusedAt(writers []Writer, column string, writes []write, history []any, i int) bool {
+	isStated, isValue := stated(writers[writes[i].writer], column, writes[i].fields)
+	return i > 0 && isStated && !isValue && history[i-1] != nil
+}
+
+// row builds one write's insert values: key columns "k", and every other
+// column from the statement of its own source fields (a column whose fields
+// are not under test is absent: its default, or null when stated).
 func row(writer Writer, positions map[string]int, column string, i int, fields map[string]statement) storedversion.Row {
 	values := make([]any, len(positions))
 	for _, key := range writer.Contract.Keys() {
@@ -247,8 +268,18 @@ func row(writer Writer, positions map[string]int, column string, i int, fields m
 			}
 		}
 	}
-	if p, ok := positions[column]; ok {
-		isStated, isValue := stated(writer, column, fields)
+	for _, c := range writer.Contract.Columns {
+		p, ok := positions[c.Name]
+		if !ok || c.Rule == storedversion.Identity {
+			continue
+		}
+		if c.Name != column && !sharesFields(writer, c.Name, column) {
+			if c.Rule == storedversion.NoField || c.Rule == storedversion.Unstated {
+				values[p] = defaultToken(i)
+			}
+			continue
+		}
+		isStated, isValue := stated(writer, c.Name, fields)
 		switch {
 		case isValue:
 			values[p] = token(i)
@@ -257,6 +288,22 @@ func row(writer Writer, positions map[string]int, column string, i int, fields m
 		}
 	}
 	return storedversion.Row{Values: values, Carry: writer.Carry(payload)}
+}
+
+// sharesFields reports whether two unstated columns of a writer are
+// translated from the same source fields.
+func sharesFields(writer Writer, a, b string) bool {
+	ca, okA := rule(writer, a)
+	cb, okB := rule(writer, b)
+	if !okA || !okB || ca.Rule != storedversion.Unstated || cb.Rule != storedversion.Unstated || len(ca.Fields) != len(cb.Fields) {
+		return false
+	}
+	for i := range ca.Fields {
+		if ca.Fields[i] != cb.Fields[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func replay(t *testing.T, writers []Writer, positions []map[string]int, column string, writes []write, batch bool) any {

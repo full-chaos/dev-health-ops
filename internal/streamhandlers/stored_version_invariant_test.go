@@ -14,61 +14,15 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/storedversion/storedversiontest"
 )
 
-func internalWriter(name, insert string, contract storedversion.Contract) storedversiontest.Writer {
-	return storedversiontest.Writer{
-		Name: name, Contract: contract, Insert: insert, NullIsUnstated: true,
-		Carry: func(payload map[string]any) map[string]bool { return internalCarry(contract, payload) },
-	}
-}
-
-func externalWriter(t *testing.T, kind, system string) storedversiontest.Writer {
-	t.Helper()
-	contract, ok := externalContract(kind, system)
-	if !ok {
-		t.Fatalf("%s has no contract", kind)
-	}
-	query, err := externalInsertQuery(kind)
-	if err != nil {
-		t.Fatal(err)
-	}
-	extended, _, err := withContractColumns(query, contract)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return storedversiontest.Writer{
-		Name: "external " + kind + " " + system, Contract: contract, Insert: extended,
-		Carry: func(payload map[string]any) map[string]bool { return externalCarry(contract, payload) },
-	}
-}
-
-// StreamHandlerWriters lists every stream-handler writer of each in-scope
+// streamHandlerWriters lists every stream-handler writer of each in-scope
 // table, the set the invariant is enumerated over.
 func streamHandlerWriters(t *testing.T) map[string][]storedversiontest.Writer {
 	t.Helper()
-	return map[string][]storedversiontest.Writer{
-		"git_pull_requests": {
-			internalWriter("internal pull-requests", internalPullRequestInsert, internalPullRequestContract),
-			externalWriter(t, "pull_request.v1", "github"),
-		},
-		"git_pull_request_reviews": {
-			internalWriter("internal reviews", internalReviewInsert, internalReviewContract),
-			externalWriter(t, "review.v1", "github"),
-		},
-		"git_commits": {
-			internalWriter("internal commits", internalCommitInsert, internalCommitContract),
-			externalWriter(t, "commit.v1", "github"),
-		},
-		"deployments": {
-			internalWriter("internal deployments", internalDeploymentInsert, internalDeploymentContract),
-		},
-		"work_items": {
-			internalWriter("internal work-items", internalWorkItemInsert, internalWorkItemContract),
-			externalWriter(t, "work_item.v1", "jira"), externalWriter(t, "work_item.v1", "github"),
-			externalWriter(t, "work_item.v1", "gitlab"), externalWriter(t, "work_item.v1", "linear"),
-		},
-		"repos":      {externalWriter(t, "repository.v1", "github")},
-		"identities": {externalWriter(t, "identity.v1", "github")},
+	specs, err := StoredVersionSpecs()
+	if err != nil {
+		t.Fatal(err)
 	}
+	return specs
 }
 
 func TestStreamHandlerWritersKeepTheStoredVersionInvariant(t *testing.T) {

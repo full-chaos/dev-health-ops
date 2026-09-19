@@ -290,8 +290,14 @@ func TestGenericComparatorMatchesCorrectReadback(t *testing.T) {
 	// guard is now known to preserve (not excluded from comparison), so a
 	// future change to the guard's behaviour still fails this test instead
 	// of silently passing.
+	// The same holds for the review unit: winning states an empty review
+	// list over older's first review, so the contract keeps older's
+	// first_review_at and both review counts together.
 	expected := expectedPullRequestRowMap(t, winning)
 	expected["merged_at"] = encodeOracleValue(t, older.MergedAt)
+	expected["first_review_at"] = encodeOracleValue(t, older.FirstReviewAt)
+	expected["reviews_count"] = encodeOracleValue(t, older.ReviewsCount)
+	expected["changes_requested_count"] = encodeOracleValue(t, older.ChangesRequestedCount)
 	actual := readPullRequestRowCorrectly(ctx, t, harness, winning.RepoID, winning.Number)
 	messages := diffRows("winning-after-mixed-null-history", expected, actual,
 		nil, pullRequestReadbackComparisonExclusions)

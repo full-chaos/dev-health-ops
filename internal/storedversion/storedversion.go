@@ -62,7 +62,11 @@ type Column struct {
 	Rule     Rule
 	Fields   []string
 	Terminal bool
-	Value    func(payload map[string]any) any
+	// With names a terminal column this column is kept together with: when
+	// that column's stated null is refused, this column keeps its held value
+	// too, so the row does not contradict itself.
+	With  string
+	Value func(payload map[string]any) any
 }
 
 // Contract is one writer's contract table for one table.
@@ -70,6 +74,18 @@ type Contract struct {
 	Writer  string
 	Table   string
 	Columns []Column
+}
+
+// Spec is one writer as the invariant enumeration drives it: its contract,
+// its insert and its carry decision for a payload of source fields.
+// NullIsUnstated marks a source that cannot tell an absent field from a null
+// one.
+type Spec struct {
+	Name           string
+	Contract       Contract
+	Insert         string
+	NullIsUnstated bool
+	Carry          func(payload map[string]any) map[string]bool
 }
 
 // Row is one new version in insert column order, with the columns this row
@@ -103,11 +119,21 @@ func (c Contract) Keys() []string {
 	return keys
 }
 
-// Kept returns the columns Apply reads: R1, R2 and terminal columns.
+func containsName(names []string, name string) bool {
+	for _, candidate := range names {
+		if candidate == name {
+			return true
+		}
+	}
+	return false
+}
+
+// Kept returns the columns Apply reads: R1, R2, terminal columns and the
+// columns kept together with a terminal column.
 func (c Contract) Kept() []string {
 	var kept []string
 	for _, column := range c.Columns {
-		if column.Rule == NoField || column.Rule == Unstated || column.Terminal {
+		if column.Rule == NoField || column.Rule == Unstated || column.Terminal || column.With != "" {
 			kept = append(kept, column.Name)
 		}
 	}
@@ -185,6 +211,12 @@ func (c Contract) check(insert string, rows []Row) (map[string]int, [][]any, err
 		return nil, nil, err
 	}
 	keys := c.Keys()
+	terminal := c.Terminal()
+	for _, column := range c.Columns {
+		if column.With != "" && !containsName(terminal, column.With) {
+			return nil, nil, fmt.Errorf("stored version of %s: %s is kept with %s, which is not terminal", c.Table, column.Name, column.With)
+		}
+	}
 	for _, column := range append(append([]string{}, keys...), c.Kept()...) {
 		if _, ok := positions[column]; !ok {
 			return nil, nil, fmt.Errorf("stored version of %s: column %s is not written by %q", c.Table, column, insert)
@@ -230,6 +262,13 @@ func (c Contract) fold(
 				if row.Values[positions[column]] == nil && version[column] != nil {
 					row.Values[positions[column]] = version[column]
 					outcome.Refused = append(outcome.Refused, column)
+				}
+			}
+			refused := outcome.Refused
+			for _, column := range c.Columns {
+				if column.With != "" && containsName(refused, column.With) {
+					row.Values[positions[column.Name]] = version[column.Name]
+					outcome.Refused = append(outcome.Refused, column.Name)
 				}
 			}
 		}

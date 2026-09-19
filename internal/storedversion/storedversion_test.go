@@ -121,3 +121,17 @@ func TestApplyWithoutRowsReadsNothing(t *testing.T) {
 		t.Fatalf("outcomes = %v, err = %v, reads = %d; want no read for an empty batch", outcomes, err, querier.calls)
 	}
 }
+
+func TestApplyRefusesAColumnKeptWithANonTerminalColumn(t *testing.T) {
+	contract := Contract{Table: "git_pull_requests", Columns: []Column{
+		{Name: "repo_id", Rule: Identity}, {Name: "number", Rule: Identity},
+		{Name: "first_review_at", Rule: Unstated, Fields: []string{"f"}},
+		{Name: "reviews_count", Rule: Unstated, Fields: []string{"f"}, With: "first_review_at"},
+	}}
+	_, err := contract.Apply(context.Background(), &recordingQuerier{}, "org-1",
+		"INSERT INTO git_pull_requests (repo_id,number,first_review_at,reviews_count)",
+		[]Row{{Values: []any{uuid.Nil, uint32(1), nil, uint32(0)}}})
+	if err == nil {
+		t.Fatal("Apply accepted a column kept with a column that is not terminal")
+	}
+}

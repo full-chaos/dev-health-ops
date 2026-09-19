@@ -9,9 +9,9 @@ import (
 )
 
 // TestGitHubPullRequestWriteEffectRefusesMergedAtRegression is the
-// table-level fence for the write-once guard: the unit tests in
-// github_prs_merged_at_guard_test.go prove guardPullRequestMergedAtRegressions
-// refuses the regression in isolation, but writePullRequestEffect's real
+// table-level fence for the write-once guard: the contract enumeration
+// proves the pull request contract refuses the regression in isolation, but
+// writePullRequestEffect's real
 // path is a read-before-write followed by a ReplacingMergeTree batch insert
 // against a live engine -- only a real ClickHouse proves the correction
 // this guard makes actually survives that path and wins the FINAL
@@ -198,37 +198,69 @@ func TestGitHubPullRequestWriteEffectCarriesReviewsForwardOnFailedEnrichment(t *
 	}
 }
 
-// TestGitHubPullRequestWriteEffectWritesSuccessfulEmptyReviews is the
-// negative control: an enrichment that succeeded writes what it found, even
-// over a stored review history.
-func TestGitHubPullRequestWriteEffectWritesSuccessfulEmptyReviews(t *testing.T) {
+// TestGitHubPullRequestReviewColumnsFollowTheReviewUnit executes every cell of
+// {no held review history, a held review history} x {enrichment failed,
+// succeeded with no reviews, succeeded with reviews}: a failed enrichment
+// keeps what is held; an empty list over a held first review keeps
+// first_review_at and both counts as one unit (a submitted review cannot be
+// deleted upstream, so the empty list is an anomaly); reviews that are found
+// are written as stated, and nothing held is written as stated.
+func TestGitHubPullRequestReviewColumnsFollowTheReviewUnit(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	harness := startPullRequestReadbackHarness(t, ctx)
 	claim, sink, now := harness.claim, harness.sink, harness.now
-
-	reviewed := pullRequestReadbackFixture(now)
-	reviewed.OrgID = claim.OrgID
-	if err := sink.WriteEffect(ctx, claim, pullRequestEffect(t, reviewed)); err != nil {
-		t.Fatal(err)
+	heldReview := now.Add(-3 * time.Hour)
+	foundReview := now.Add(-time.Hour)
+	type reviews struct {
+		first            *time.Time
+		count, requested int
 	}
-	empty := reviewed
-	empty.LastSynced = now.Add(time.Hour)
-	empty.FirstReviewAt, empty.ReviewsCount, empty.ChangesRequestedCount = nil, 0, 0
-	emptyEffect := pullRequestEffect(t, empty)
-	if err := sink.WriteEffect(ctx, claim, emptyEffect); err != nil {
-		t.Fatal(err)
+	cases := []struct {
+		name     string
+		held     bool
+		failed   bool
+		incoming reviews
+		want     reviews
+	}{
+		{"nothing held, enrichment failed", false, true, reviews{}, reviews{}},
+		{"nothing held, no reviews found", false, false, reviews{}, reviews{}},
+		{"nothing held, reviews found", false, false, reviews{&foundReview, 2, 1}, reviews{&foundReview, 2, 1}},
+		{"history held, enrichment failed", true, true, reviews{}, reviews{&heldReview, 3, 1}},
+		{"history held, no reviews found", true, false, reviews{}, reviews{&heldReview, 3, 1}},
+		{"history held, reviews found", true, false, reviews{&foundReview, 1, 0}, reviews{&foundReview, 1, 0}},
 	}
-
-	winner, err := sink.scanWinningPullRequestVersion(ctx, claim.OrgID, reviewed.RepoID, reviewed.Number)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !winner.Found || winner.Row.FirstReviewAt != nil || winner.Row.ReviewsCount != 0 || winner.Row.ChangesRequestedCount != 0 {
-		t.Fatalf("winner=%+v want the successful enrichment's empty review columns", winner.Row)
-	}
-	inspection, err := sink.InspectEffect(ctx, claim, emptyEffect)
-	if err != nil || inspection != EffectExact {
-		t.Fatalf("inspection=%s err=%v want=%s", inspection, err, EffectExact)
+	for i, tc := range cases {
+		row := pullRequestReadbackFixture(now)
+		row.OrgID = claim.OrgID
+		row.Number = 900 + i
+		if tc.held {
+			held := row
+			held.FirstReviewAt, held.ReviewsCount, held.ChangesRequestedCount = &heldReview, 3, 1
+			if err := sink.WriteEffect(ctx, claim, pullRequestEffect(t, held)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		incoming := row
+		incoming.LastSynced = now.Add(time.Hour)
+		incoming.FirstReviewAt, incoming.ReviewsCount, incoming.ChangesRequestedCount = tc.incoming.first, tc.incoming.count, tc.incoming.requested
+		incoming.ReviewsLookupFailed = tc.failed
+		effect := pullRequestEffect(t, incoming)
+		if err := sink.WriteEffect(ctx, claim, effect); err != nil {
+			t.Fatal(err)
+		}
+		winner, err := sink.scanWinningPullRequestVersion(ctx, claim.OrgID, row.RepoID, row.Number)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := reviews{winner.Row.FirstReviewAt, winner.Row.ReviewsCount, winner.Row.ChangesRequestedCount}
+		if !timePointersEqual(got.first, tc.want.first) || got.count != tc.want.count || got.requested != tc.want.requested {
+			t.Errorf("%s: FINAL first_review_at=%v reviews_count=%d changes_requested_count=%d, want %v %d %d",
+				tc.name, got.first, got.count, got.requested, tc.want.first, tc.want.count, tc.want.requested)
+		}
+		inspection, err := sink.InspectEffect(ctx, claim, effect)
+		if err != nil || inspection != EffectExact {
+			t.Errorf("%s: inspection=%s err=%v want %s", tc.name, inspection, err, EffectExact)
+		}
 	}
 }

@@ -1,11 +1,19 @@
 [
   {
+    "operation": "acrRepositoryScopes",
+    "digest": "1fe3d5c84c8c047b57cdaf71a71370583d615156e78dcb8991b8f954fae41773"
+  },
+  {
     "operation": "capacityForecast",
     "digest": "b4fb8f075aba9954714f10f7f4451242d969548d6392d778dae1177759f80780"
   },
   {
     "operation": "capacityForecasts",
     "digest": "43890adbbf75ac3ad71c29f728a82e35d035c3f2c701f0ced116559fa28b6c20"
+  },
+  {
+    "operation": "catalogValues",
+    "digest": "d069072e06541e799679f355cb343a6408d660d17f1e7a33659063b423017fba"
   },
   {
     "operation": "cognitiveLoad",

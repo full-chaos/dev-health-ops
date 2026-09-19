@@ -146,3 +146,23 @@ digest to `564852769ff2397df5c7c0364ee6d1cf7ef0172e62566d575c2b9d5c9e77d577`
 
 Captured: 2026-09-09T19:41Z, ops tip at capture time:
 fe03a111bee28542293b34ba8c72bb16e9579858 (this lane's worktree base).
+
+# catalog wire-capture fixtures
+
+`catalog_values_captured.graphql` (operation `CatalogValues`, the web
+client's `CATALOG_VALUES_QUERY`) and `acr_repository_scopes_captured.graphql`
+(operation `ACRRepositoryScopes`, the agent-context runtime's repository
+scope read) are the wire-form query text of the two documents that select the
+`catalog` root field. Each was produced by importing the web repo's own
+`wireForm()` (`scripts/graphql-wire-parity.ts`) and applying it to the
+document's source text, so `@urql/core` resolved from the web repo's pinned
+`node_modules`.
+
+| fixture | sha256(wire form) |
+| --- | --- |
+| `catalog_values_captured.graphql` | `d069072e06541e799679f355cb343a6408d660d17f1e7a33659063b423017fba` |
+| `acr_repository_scopes_captured.graphql` | `1fe3d5c84c8c047b57cdaf71a71370583d615156e78dcb8991b8f954fae41773` |
+
+`query_route_wire_capture_test.go`'s
+`TestRegisteredCatalogDocuments_MatchCapturedWireFixtures` asserts each
+registered const digests to its fixture.

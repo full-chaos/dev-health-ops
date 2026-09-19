@@ -1,0 +1,10 @@
+query ACRRepositoryScopes($orgId: String!) {
+  catalog(orgId: $orgId, dimension: REPO) {
+    values {
+      value
+      count
+      __typename
+    }
+    __typename
+  }
+}

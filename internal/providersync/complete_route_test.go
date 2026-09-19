@@ -19,7 +19,7 @@ func TestCompleteRouteExecutorRunsEnabledMultiEffectUnit(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
 	claim, session := completeRouteSession(t, now, false)
-	descriptor, ok := Descriptor("launchdarkly", "feature-flags")
+	descriptor, ok := recollectRouteDescriptor(t)
 	if !ok || !descriptor.Plannable {
 		t.Fatalf("descriptor=%+v ok=%v", descriptor, ok)
 	}
@@ -44,7 +44,7 @@ func TestCompleteRouteExecutorBindsCredentialScopedEffectsBeforeCollection(t *te
 	t.Parallel()
 	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
 	claim, session := completeRouteSession(t, now, false)
-	descriptor, _ := Descriptor("launchdarkly", "feature-flags")
+	descriptor, _ := recollectRouteDescriptor(t)
 	bound := false
 	handler := &effectsFactoryObservingHandler{
 		bound: &bound, batch: completeRouteFixture(t, claim),
@@ -82,7 +82,7 @@ func TestCompleteRouteExecutorReusesPersistedNormalizationTimeOnRecovery(t *test
 	}
 	ledger := &memoryEffectLedger{state: state}
 	handler := &staticCompleteRouteHandler{batch: batch}
-	descriptor, _ := Descriptor("launchdarkly", "feature-flags")
+	descriptor, _ := recollectRouteDescriptor(t)
 	_, err = completeRouteExecutor(
 		now, handler, ledger, &memoryEffectSink{},
 	).Execute(context.Background(), session, descriptor)
@@ -180,7 +180,7 @@ func TestCompleteRouteExecutorRejectsMissingOutboundDependencies(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
 	claim, session := completeRouteSession(t, now, false)
-	descriptor, _ := Descriptor("launchdarkly", "feature-flags")
+	descriptor, _ := recollectRouteDescriptor(t)
 	for _, test := range []struct {
 		name   string
 		mutate func(*CompleteRouteExecutor)
@@ -302,6 +302,17 @@ func completeRouteExecutorWithCommitClock(
 	}
 }
 
+// recollectRouteDescriptor is the launchdarkly/feature-flags descriptor on the
+// re-collect recovery path: these executor tests cover that path, which a
+// route enrolled in prepared-snapshot recovery takes only for a ledger
+// written without a snapshot.
+func recollectRouteDescriptor(t *testing.T) (CompleteRouteDescriptor, bool) {
+	t.Helper()
+	descriptor, ok := Descriptor("launchdarkly", "feature-flags")
+	descriptor.PreparedManifestRecovery = false
+	return descriptor, ok
+}
+
 func completeRouteFixture(t *testing.T, claim Claim) CompleteRouteBatch {
 	t.Helper()
 	destinations := []struct {
@@ -330,6 +341,7 @@ func completeRouteFixture(t *testing.T, claim Claim) CompleteRouteBatch {
 	}
 	return CompleteRouteBatch{
 		Effects: effects,
+		Result:  map[string]any{"records": 4},
 		Evidence: FetchEvidence{
 			Provider: claim.Provider, Dataset: claim.Dataset, Records: 4,
 		},
@@ -518,7 +530,7 @@ func TestCompleteRouteExecutorReusesPersistedNormalizationTimeOnOrdinaryRetry(
 	}
 	ledger := &memoryEffectLedger{state: state}
 	handler := &staticCompleteRouteHandler{batch: batch}
-	descriptor, _ := Descriptor("launchdarkly", "feature-flags")
+	descriptor, _ := recollectRouteDescriptor(t)
 
 	if _, err := completeRouteExecutor(
 		now, handler, ledger, &memoryEffectSink{},
@@ -541,7 +553,7 @@ func TestCompleteRouteExecutorStartsFreshWhenNoLedgerExists(t *testing.T) {
 	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
 	claim, session := completeRouteSession(t, now, false)
 	handler := &staticCompleteRouteHandler{batch: completeRouteFixture(t, claim)}
-	descriptor, _ := Descriptor("launchdarkly", "feature-flags")
+	descriptor, _ := recollectRouteDescriptor(t)
 
 	if _, err := completeRouteExecutor(
 		now, handler, &memoryEffectLedger{}, &memoryEffectSink{},
@@ -569,7 +581,7 @@ func TestCompleteRouteExecutorPersistsTheCollectionInstantNotTheCommitClock(
 	claim, session := completeRouteSession(t, collectedAt, false)
 	ledger := &memoryEffectLedger{}
 	handler := &staticCompleteRouteHandler{batch: completeRouteFixture(t, claim)}
-	descriptor, _ := Descriptor("launchdarkly", "feature-flags")
+	descriptor, _ := recollectRouteDescriptor(t)
 
 	if _, err := completeRouteExecutorWithCommitClock(
 		collectedAt, committedAt, handler, ledger, &memoryEffectSink{},
@@ -599,7 +611,7 @@ func TestCompleteRouteExecutorRetryReproducesTheDigestAcrossSkewedClocks(
 	firstAt := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
 	claim, session := completeRouteSession(t, firstAt, false)
 	ledger := &memoryEffectLedger{}
-	descriptor, _ := Descriptor("launchdarkly", "feature-flags")
+	descriptor, _ := recollectRouteDescriptor(t)
 
 	first := &staticCompleteRouteHandler{batch: completeRouteFixture(t, claim)}
 	if _, err := completeRouteExecutorWithCommitClock(

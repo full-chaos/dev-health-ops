@@ -365,7 +365,9 @@ func preparedManifestRouteDestinations(provider, dataset string) ([]string, bool
 	case provider == "github" && dataset == "work-items",
 		(provider == "github" || provider == "gitlab") && dataset == "deployments",
 		(provider == "github" || provider == "gitlab") && dataset == "prs",
-		(provider == "github" || provider == "gitlab") && preparedCodeFamilyDataset(dataset):
+		(provider == "github" || provider == "gitlab") && preparedCodeFamilyDataset(dataset),
+		(provider == "gitlab" || provider == "launchdarkly") && dataset == "feature-flags",
+		(provider == "gitlab" || provider == "jira") && dataset == "incidents":
 	default:
 		return nil, false
 	}

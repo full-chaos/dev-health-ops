@@ -77,6 +77,8 @@ func TestPreparedManifestRouteListIsExactlyTheEnrolledCanonicalRoutes(t *testing
 		{"github", "repo-metadata", true}, {"gitlab", "repo-metadata", true},
 		{"github", "security", true}, {"gitlab", "security", true},
 		{"github", "blame", false}, {"github", "cicd", false},
+		{"gitlab", "feature-flags", true}, {"launchdarkly", "feature-flags", true},
+		{"gitlab", "incidents", true}, {"jira", "incidents", true},
 		{"gitlab", "work-items", false}, {"linear", "work-items", false},
 	} {
 		destinations, ok := preparedManifestRouteDestinations(pair.provider, pair.dataset)
@@ -382,16 +384,16 @@ func TestEveryPlannableRouteStatesItsRecoveryMode(t *testing.T) {
 		"gitlab/commit-stats":            "prepared snapshot",
 		"gitlab/commits":                 "prepared snapshot",
 		"gitlab/deployments":             "prepared snapshot",
-		"gitlab/feature-flags":           "re-collect",
+		"gitlab/feature-flags":           "prepared snapshot",
 		"gitlab/files":                   "prepared snapshot",
-		"gitlab/incidents":               "re-collect",
+		"gitlab/incidents":               "prepared snapshot",
 		"gitlab/prs":                     "prepared snapshot",
 		"gitlab/repo-metadata":           "prepared snapshot",
 		"gitlab/security":                "prepared snapshot",
 		"gitlab/work-items":              "re-collect",
-		"jira/incidents":                 "re-collect",
+		"jira/incidents":                 "prepared snapshot",
 		"jira/work-items":                "re-collect",
-		"launchdarkly/feature-flags":     "re-collect",
+		"launchdarkly/feature-flags":     "prepared snapshot",
 		"linear/work-items":              "re-collect",
 		"pagerduty/business-services":    "re-collect",
 		"pagerduty/escalation-policies":  "re-collect",
@@ -478,53 +480,61 @@ func TestPreparedSnapshotDiscardReasonsAreCountedByName(t *testing.T) {
 	}
 }
 
-// TestCodeFamilyRoutesReplayTheirSnapshotWithoutRecollecting runs each GitHub
-// and GitLab repository code route through a crash after prepare: the retry
-// replays the stored snapshot, never calls the route's collector, and writes
-// every effect.
-func TestCodeFamilyRoutesReplayTheirSnapshotWithoutRecollecting(t *testing.T) {
+// TestEnrolledRoutesReplayTheirSnapshotWithoutRecollecting runs each route
+// enrolled in prepared-snapshot recovery through a crash after prepare: the
+// retry replays the stored snapshot, never calls the route's collector, and
+// writes every effect.
+func TestEnrolledRoutesReplayTheirSnapshotWithoutRecollecting(t *testing.T) {
 	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	routes := [][2]string{
+		{"gitlab", "feature-flags"}, {"launchdarkly", "feature-flags"},
+		{"gitlab", "incidents"}, {"jira", "incidents"},
+	}
 	for _, provider := range []string{"github", "gitlab"} {
 		for _, dataset := range []string{"commit-stats", "commits", "files", "repo-metadata", "security"} {
-			t.Run(provider+"/"+dataset, func(t *testing.T) {
-				log := captureSlog(t)
-				descriptor, ok := Descriptor(provider, dataset)
-				if !ok || !descriptor.PreparedManifestRecovery {
-					t.Fatalf("%s/%s is not enrolled", provider, dataset)
-				}
-				claim, session := preparedWorkItemsSession(t, now, provider, dataset)
-				effects := make([]EffectBatch, 0, len(descriptor.Destinations))
-				for _, destination := range descriptor.Destinations {
-					effect, err := effectBatchFromValues(destination, EffectReadbackRequired,
-						[]map[string]string{{"org_id": claim.OrgID, preparedFixtureColumn(t, destination): destination}})
-					if err != nil {
-						t.Fatal(err)
-					}
-					effects = append(effects, effect)
-				}
-				batch := CompleteRouteBatch{
-					Effects: effects, Result: map[string]any{"synced": 1}, Watermark: claim.BeforeAt,
-					Evidence: FetchEvidence{Provider: provider, Dataset: dataset, Records: len(effects)},
-				}
-				ledger := &memoryEffectLedger{}
-				if _, err := ledger.PrepareRouteSnapshot(context.Background(), claim, batch, ShadowComparison{Match: true}, now); err != nil {
+			routes = append(routes, [2]string{provider, dataset})
+		}
+	}
+	for _, route := range routes {
+		provider, dataset := route[0], route[1]
+		t.Run(provider+"/"+dataset, func(t *testing.T) {
+			log := captureSlog(t)
+			descriptor, ok := Descriptor(provider, dataset)
+			if !ok || !descriptor.PreparedManifestRecovery {
+				t.Fatalf("%s/%s is not enrolled", provider, dataset)
+			}
+			claim, session := preparedWorkItemsSession(t, now, provider, dataset)
+			effects := make([]EffectBatch, 0, len(descriptor.Destinations))
+			for _, destination := range descriptor.Destinations {
+				effect, err := effectBatchFromValues(destination, EffectReadbackRequired,
+					[]map[string]string{{"org_id": claim.OrgID, preparedFixtureColumn(t, destination): destination}})
+				if err != nil {
 					t.Fatal(err)
 				}
-				handler := &staticCompleteRouteHandler{batch: CompleteRouteBatch{Result: map[string]any{"live_provider": "drifted"}}}
-				sink := &memoryEffectSink{}
-				executor := completeRouteExecutor(now.Add(time.Hour), handler, ledger, sink)
-				executor.BudgetLimits = map[CostClass]int{claim.CostClass: 1}
-				result, err := executor.Execute(context.Background(), session, descriptor)
-				if err != nil {
-					t.Fatalf("snapshot recovery err=%v", err)
-				}
-				if !handler.normalizedAt.IsZero() || ledger.preparedLoads != 1 ||
-					result.Effects.Written != len(descriptor.Destinations) ||
-					!strings.Contains(log.String(), "recovery=snapshot_replay") {
-					t.Fatalf("handler_at=%s loads=%d result=%+v log=%s, want the snapshot replayed without re-collect",
-						handler.normalizedAt, ledger.preparedLoads, result.Effects, log.String())
-				}
-			})
-		}
+				effects = append(effects, effect)
+			}
+			batch := CompleteRouteBatch{
+				Effects: effects, Result: map[string]any{"synced": 1}, Watermark: claim.BeforeAt,
+				Evidence: FetchEvidence{Provider: provider, Dataset: dataset, Records: len(effects)},
+			}
+			ledger := &memoryEffectLedger{}
+			if _, err := ledger.PrepareRouteSnapshot(context.Background(), claim, batch, ShadowComparison{Match: true}, now); err != nil {
+				t.Fatal(err)
+			}
+			handler := &staticCompleteRouteHandler{batch: CompleteRouteBatch{Result: map[string]any{"live_provider": "drifted"}}}
+			sink := &memoryEffectSink{}
+			executor := completeRouteExecutor(now.Add(time.Hour), handler, ledger, sink)
+			executor.BudgetLimits = map[CostClass]int{claim.CostClass: 1}
+			result, err := executor.Execute(context.Background(), session, descriptor)
+			if err != nil {
+				t.Fatalf("snapshot recovery err=%v", err)
+			}
+			if !handler.normalizedAt.IsZero() || ledger.preparedLoads != 1 ||
+				result.Effects.Written != len(descriptor.Destinations) ||
+				!strings.Contains(log.String(), "recovery=snapshot_replay") {
+				t.Fatalf("handler_at=%s loads=%d result=%+v log=%s, want the snapshot replayed without re-collect",
+					handler.normalizedAt, ledger.preparedLoads, result.Effects, log.String())
+			}
+		})
 	}
 }

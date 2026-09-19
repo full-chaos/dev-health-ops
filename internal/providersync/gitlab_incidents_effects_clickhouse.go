@@ -122,7 +122,7 @@ func (sink GitLabIncidentsClickHouseEffects) writeServices(
 	if len(rows) == 0 {
 		return nil
 	}
-	batch, err := sink.Conn.PrepareBatch(ctx, "INSERT INTO operational_services ("+gitLabOperationalServiceColumns+")")
+	batch, err := sink.Conn.PrepareBatch(ctx, operationalServicesInsert)
 	if err != nil {
 		return err
 	}
@@ -144,7 +144,7 @@ func (sink GitLabIncidentsClickHouseEffects) writeMappings(
 	if len(rows) == 0 {
 		return nil
 	}
-	batch, err := sink.Conn.PrepareBatch(ctx, "INSERT INTO operational_service_repository_mappings ("+gitLabServiceMappingColumns+")")
+	batch, err := sink.Conn.PrepareBatch(ctx, operationalServiceRepositoryMappingsInsert)
 	if err != nil {
 		return err
 	}
@@ -166,7 +166,7 @@ func (sink GitLabIncidentsClickHouseEffects) writeIncidents(
 	if len(rows) == 0 {
 		return nil
 	}
-	batch, err := sink.Conn.PrepareBatch(ctx, "INSERT INTO operational_incidents ("+jiraIncidentColumns+")")
+	batch, err := sink.Conn.PrepareBatch(ctx, operationalIncidentsInsert)
 	if err != nil {
 		return err
 	}
@@ -460,3 +460,8 @@ func gitLabOperationalBaseScanValues(values ...any) []any { return values }
 
 var _ EffectSink = GitLabIncidentsClickHouseEffects{}
 var _ EffectReadback = GitLabIncidentsClickHouseEffects{}
+
+const (
+	operationalServicesInsert                  = "INSERT INTO operational_services (" + gitLabOperationalServiceColumns + ")"
+	operationalServiceRepositoryMappingsInsert = "INSERT INTO operational_service_repository_mappings (" + gitLabServiceMappingColumns + ")"
+)

@@ -57,7 +57,7 @@ func (sink JiraIncidentClickHouseEffects) WriteEffect(
 	if len(rows) == 0 {
 		return nil
 	}
-	batch, err := sink.Writer.PrepareBatch(ctx, "INSERT INTO operational_incidents ("+jiraIncidentColumns+")")
+	batch, err := sink.Writer.PrepareBatch(ctx, operationalIncidentsInsert)
 	if err != nil {
 		return err
 	}
@@ -244,3 +244,5 @@ func compareJiraIncidentVersion(
 
 var _ EffectSink = JiraIncidentClickHouseEffects{}
 var _ EffectReadback = JiraIncidentClickHouseReadback{}
+
+const operationalIncidentsInsert = "INSERT INTO operational_incidents (" + jiraIncidentColumns + ")"

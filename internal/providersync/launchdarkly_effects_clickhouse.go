@@ -589,11 +589,7 @@ func (sink featureFlagsClickHouseEffects) writeFlags(
 	if len(rows) == 0 {
 		return nil
 	}
-	batch, err := sink.Conn.PrepareBatch(ctx, `
-INSERT INTO feature_flag (
-  org_id, provider, flag_key, project_key, repo_id, environment, flag_type,
-  created_at, archived_at, last_synced
-)`)
+	batch, err := sink.Conn.PrepareBatch(ctx, featureFlagInsert)
 	if err != nil {
 		return err
 	}
@@ -620,11 +616,7 @@ func (sink featureFlagsClickHouseEffects) writeEvents(
 	if len(rows) == 0 {
 		return nil
 	}
-	batch, err := sink.Conn.PrepareBatch(ctx, `
-INSERT INTO feature_flag_event (
-  org_id, event_type, flag_key, environment, repo_id, actor_type, prev_state,
-  next_state, event_ts, ingested_at, source_event_id, dedupe_key
-)`)
+	batch, err := sink.Conn.PrepareBatch(ctx, featureFlagEventInsert)
 	if err != nil {
 		return err
 	}
@@ -651,11 +643,7 @@ func (sink featureFlagsClickHouseEffects) writeLinks(
 	if len(rows) == 0 {
 		return nil
 	}
-	batch, err := sink.Conn.PrepareBatch(ctx, `
-INSERT INTO feature_flag_link (
-  org_id, flag_key, target_type, target_id, provider, link_source, link_type,
-  evidence_type, confidence, valid_from, valid_to, last_synced
-)`)
+	batch, err := sink.Conn.PrepareBatch(ctx, featureFlagLinkInsert)
 	if err != nil {
 		return err
 	}
@@ -682,12 +670,7 @@ func (sink featureFlagsClickHouseEffects) writeEdges(
 	if len(rows) == 0 {
 		return nil
 	}
-	batch, err := sink.Conn.PrepareBatch(ctx, `
-INSERT INTO work_graph_edges (
-  edge_id, source_type, source_id, target_type, target_id, edge_type, repo_id,
-  provider, provenance, confidence, evidence, discovered_at, last_synced,
-  event_ts, day, org_id
-)`)
+	batch, err := sink.Conn.PrepareBatch(ctx, workGraphEdgesInsert)
 	if err != nil {
 		return err
 	}
@@ -785,3 +768,28 @@ var _ EffectSink = LaunchDarklyClickHouseEffects{}
 var _ EffectReadback = LaunchDarklyClickHouseEffects{}
 var _ EffectSink = GitLabFeatureFlagsClickHouseEffects{}
 var _ EffectReadback = GitLabFeatureFlagsClickHouseEffects{}
+
+const featureFlagInsert = `
+INSERT INTO feature_flag (
+  org_id, provider, flag_key, project_key, repo_id, environment, flag_type,
+  created_at, archived_at, last_synced
+)`
+
+const featureFlagEventInsert = `
+INSERT INTO feature_flag_event (
+  org_id, event_type, flag_key, environment, repo_id, actor_type, prev_state,
+  next_state, event_ts, ingested_at, source_event_id, dedupe_key
+)`
+
+const featureFlagLinkInsert = `
+INSERT INTO feature_flag_link (
+  org_id, flag_key, target_type, target_id, provider, link_source, link_type,
+  evidence_type, confidence, valid_from, valid_to, last_synced
+)`
+
+const workGraphEdgesInsert = `
+INSERT INTO work_graph_edges (
+  edge_id, source_type, source_id, target_type, target_id, edge_type, repo_id,
+  provider, provenance, confidence, evidence, discovered_at, last_synced,
+  event_ts, day, org_id
+)`

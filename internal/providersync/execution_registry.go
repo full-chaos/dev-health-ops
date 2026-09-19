@@ -305,10 +305,12 @@ func Descriptor(
 		descriptor.Destinations = []string{"operational_incidents"}
 		descriptor.RouteReady = true
 		descriptor.Plannable = true
+		descriptor.PreparedManifestRecovery = true
 	case provider == "launchdarkly" && dataset == "feature-flags":
 		descriptor.Destinations = launchDarklyRouteDestinations()
 		descriptor.RouteReady = true
 		descriptor.Plannable = true
+		descriptor.PreparedManifestRecovery = true
 	case provider == "github" && dataset == "repo-metadata":
 		// GitHub has a native complete-route handler
 		// (GitHubRepositoryRouteHandler) and a repos effect sink
@@ -372,6 +374,7 @@ func Descriptor(
 		}
 		descriptor.RouteReady = true
 		descriptor.Plannable = true
+		descriptor.PreparedManifestRecovery = true
 	case provider == "gitlab" && dataset == "deployments":
 		descriptor.Destinations = []string{"deployments"}
 		descriptor.RouteReady = true
@@ -381,6 +384,7 @@ func Descriptor(
 		descriptor.Destinations = []string{"feature_flag", "feature_flag_event", "work_graph_edges"}
 		descriptor.RouteReady = true
 		descriptor.Plannable = true
+		descriptor.PreparedManifestRecovery = true
 	case provider == "gitlab" && dataset == "files":
 		descriptor.Destinations = []string{"git_files"}
 		descriptor.RouteReady = true

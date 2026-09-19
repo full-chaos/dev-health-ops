@@ -1056,6 +1056,34 @@ func (ledger *testEffectLedger) PrepareEffects(
 	return state, nil
 }
 
+// PrepareRouteSnapshot records the prepared ledger a route enrolled in
+// prepared-snapshot recovery writes before its first effect; these tests never
+// resume from it, so the snapshot payload itself is not kept.
+func (ledger *testEffectLedger) PrepareRouteSnapshot(
+	_ context.Context,
+	claim providersync.Claim,
+	batch providersync.CompleteRouteBatch,
+	_ providersync.ShadowComparison,
+	normalizedAt time.Time,
+) (providersync.EffectLedgerState, error) {
+	state, err := providersync.NewEffectLedgerState(claim, batch.Effects, normalizedAt)
+	if err != nil {
+		return providersync.EffectLedgerState{}, err
+	}
+	state.SchemaVersion = "v2"
+	state.PreparedSnapshot = &providersync.PreparedRouteSnapshotReference{
+		SchemaVersion: "v1", ContentDigest: strings.Repeat("0", 64), PayloadBytes: 1,
+	}
+	ledger.state = state
+	return state, nil
+}
+
+func (*testEffectLedger) LoadRouteSnapshot(
+	context.Context, providersync.Claim, providersync.EffectLedgerState, time.Time,
+) (providersync.PreparedRouteManifest, error) {
+	return providersync.PreparedRouteManifest{}, providersync.ErrPreparedRouteSnapshotNotFound
+}
+
 func (*testEffectLedger) BeginEffect(
 	context.Context, providersync.Claim, int, string, time.Time,
 ) error {

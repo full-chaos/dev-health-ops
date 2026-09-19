@@ -28,7 +28,6 @@ var notImplementedResolverNames = []string{
 	"queryResolver.AiReviewLoad",
 	"queryResolver.AiRiskBreakdown",
 	"queryResolver.AiWorkflowDrilldown",
-	"queryResolver.BusFactor",
 	"queryResolver.CompoundingRisk",
 	"queryResolver.DataHealth",
 	"queryResolver.DevChangeSummary",

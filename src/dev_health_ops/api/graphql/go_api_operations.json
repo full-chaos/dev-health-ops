@@ -4,6 +4,10 @@
     "digest": "1fe3d5c84c8c047b57cdaf71a71370583d615156e78dcb8991b8f954fae41773"
   },
   {
+    "operation": "busFactor",
+    "digest": "1b3480a8830f9eed583e47174b7759740a7f34182c2a7a8d92f28eb1c2253cb7"
+  },
+  {
     "operation": "capacityForecast",
     "digest": "b4fb8f075aba9954714f10f7f4451242d969548d6392d778dae1177759f80780"
   },

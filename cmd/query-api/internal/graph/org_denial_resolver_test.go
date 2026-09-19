@@ -19,10 +19,10 @@ func (c *scopeRecordingClient) Query(_ context.Context, _ string, b []clickhouse
 	return nil, errors.New("scopeRecordingClient: reached")
 }
 
-type securityCall func(r *Resolver, ctx context.Context, orgID string) error
+type orgScopedCall func(r *Resolver, ctx context.Context, orgID string) error
 
-func securityCalls() map[string]securityCall {
-	return map[string]securityCall{
+func orgScopedCalls() map[string]orgScopedCall {
+	return map[string]orgScopedCall{
 		"securityAlerts": func(r *Resolver, ctx context.Context, orgID string) error {
 			_, err := r.Query().SecurityAlerts(ctx, orgID, nil, nil)
 			return err
@@ -31,13 +31,17 @@ func securityCalls() map[string]securityCall {
 			_, err := r.Query().SecurityOverview(ctx, orgID, nil)
 			return err
 		},
+		"busFactor": func(r *Resolver, ctx context.Context, orgID string) error {
+			_, err := r.Query().BusFactor(ctx, orgID, nil)
+			return err
+		},
 	}
 }
 
-// Every security field denies a missing identity, an empty org, and an
+// Every org-scoped field denies a missing identity, an empty org, and an
 // orgId argument that names another org, and reaches ClickHouse for none of them.
-func TestSecurityFields_DenyForeignAndMissingOrg(t *testing.T) {
-	for name, call := range securityCalls() {
+func TestOrgScopedFields_DenyForeignAndMissingOrg(t *testing.T) {
+	for name, call := range orgScopedCalls() {
 		for label, ctx := range map[string]context.Context{
 			"no claims":     context.Background(),
 			"empty org":     authctx.WithClaims(context.Background(), authctx.Claims{OrgID: ""}),
@@ -58,8 +62,8 @@ func TestSecurityFields_DenyForeignAndMissingOrg(t *testing.T) {
 }
 
 // With a matching org the resolver reaches ClickHouse and scopes to it.
-func TestSecurityFields_ScopeToAuthenticatedOrg(t *testing.T) {
-	for name, call := range securityCalls() {
+func TestOrgScopedFields_ScopeToAuthenticatedOrg(t *testing.T) {
+	for name, call := range orgScopedCalls() {
 		ch := &scopeRecordingClient{}
 		ctx := authctx.WithClaims(context.Background(), authctx.Claims{OrgID: "org-1"})
 		_ = call(&Resolver{ClickHouse: ch}, ctx, "org-1")

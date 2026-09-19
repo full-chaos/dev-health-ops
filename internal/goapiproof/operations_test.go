@@ -28,7 +28,7 @@ import (
 // perturb, and because a second, independent statement of the set is
 // what makes a drift legible rather than merely detected.
 var registeredOperations = []string{
-	"acrRepositoryScopes", "catalogValues",
+	"acrRepositoryScopes", "catalogValues", "busFactor",
 	"capacityForecast", "capacityForecasts", "cognitiveLoad", "complexityTimeseries",
 	"featureFlagEvents", "featureFlags", "flowMatrix", "hotspots",
 	"investmentBreakdown", "investmentFull", "operatingReview", "pr",
@@ -120,7 +120,7 @@ func TestWindowedSpecsUseTheWindow(t *testing.T) {
 		"acrRepositoryScopes": true, "catalogValues": true,
 		"capacityForecast": true, "capacityForecasts": true,
 		"featureFlagEvents": true, "featureFlags": true, "pr": true,
-		"securityAlerts": true, "securityOverview": true,
+		"busFactor": true, "securityAlerts": true, "securityOverview": true,
 		"throughputForecast": true, "workGraphArtifacts": true, "workGraphEdges": true,
 		"workGraphFlow": true,
 	}

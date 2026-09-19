@@ -227,10 +227,26 @@ func buildExternalRecordSchemas() map[string]map[string]externalFieldRule {
 	return schemas
 }
 
+// externalNonNullFields are optional fields the reference translation refuses
+// when stated null: absent is accepted, an explicit null is not.
+var externalNonNullFields = map[string]map[string]bool{
+	"repository.v1":                 {"settings": true, "tags": true},
+	"identity.v1":                   {"isActive": true, "providerIdentities": true, "teamIds": true},
+	"commit.v1":                     {"parents": true},
+	"work_item.v1":                  {"assignees": true, "labels": true, "type": true},
+	"team.v1":                       {"isActive": true, "members": true, "projectKeys": true, "repoPatterns": true},
+	"service_repository_mapping.v1": {"isActive": true},
+}
+
 func validateExternalRecord(kind string, payload map[string]any) error {
 	schema, ok := externalRecordSchemas[kind]
 	if !ok {
 		return fmt.Errorf("unsupported record kind")
+	}
+	for name := range externalNonNullFields[kind] {
+		if value, present := payload[name]; present && value == nil {
+			return fmt.Errorf("%s must not be null", name)
+		}
 	}
 	for key := range payload {
 		if _, allowed := schema[key]; !allowed {

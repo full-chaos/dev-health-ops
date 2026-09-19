@@ -37,6 +37,10 @@ from dev_health_ops.storage.operational_ordering_guard import (  # noqa: E402
 )
 
 OUTPUT = ROOT / "tests" / "fixtures" / "external_ingest_sink_python_golden.json"
+VARIANTS_OUTPUT = (
+    ROOT / "tests" / "fixtures" / "stored_version_statement_variants_python_golden.json"
+)
+SCHEMA = ROOT / "src" / "dev_health_ops" / "api" / "external_ingest" / "schema.json"
 NOW = datetime(2026, 7, 23, 12, 0, 0, tzinfo=timezone.utc)
 ORG_ID = "org-golden"
 SOURCE_ID = uuid.UUID("9749bda0-fc9f-4076-b19d-7b26c4f306ff")
@@ -544,6 +548,316 @@ async def _capture_operational() -> tuple[dict[str, Any], list[RecordEnvelope]]:
     return store.captured, records
 
 
+# The in-scope external kinds, their schema definitions and the ClickHouse
+# table each writes; work items vary by source system because the project
+# columns are derived per system.
+VARIANT_KINDS = {
+    "repository.v1": ("RepositoryV1", "repos", ["github"]),
+    "identity.v1": ("IdentityV1", "identities", ["github"]),
+    "pull_request.v1": ("PullRequestV1", "git_pull_requests", ["github"]),
+    "review.v1": ("ReviewV1", "git_pull_request_reviews", ["github"]),
+    "commit.v1": ("CommitV1", "git_commits", ["github"]),
+    "work_item.v1": (
+        "WorkItemV1",
+        "work_items",
+        ["github", "gitlab", "jira", "linear"],
+    ),
+    "team.v1": ("TeamV1", "teams", ["github"]),
+    "service_repository_mapping.v1": (
+        "ServiceRepositoryMappingV1",
+        "operational_service_repository_mappings",
+        ["pagerduty"],
+    ),
+}
+
+
+async def _capture_external_record(
+    kind: str, payload: dict[str, Any], system: str
+) -> dict[str, Any]:
+    """One record through the production normalization and Python writer;
+    the rejection code when normalization refuses it."""
+    with patch("dev_health_ops.models.operational.datetime", FrozenDateTime):
+        result = normalize_batch(
+            org_id=ORG_ID,
+            source_id=SOURCE_ID,
+            source_system=system,
+            source_instance=_variant_instance(system),
+            ingestion_id=INGESTION_ID,
+            records=[_record(kind, payload)],
+        )
+    if result.rejections:
+        return {"rejection_code": result.rejections[0].code}
+    batch = result.batch
+    store = CaptureStore(ORG_ID)
+    metrics_client = CaptureClient()
+    metrics = ClickHouseMetricsSink(
+        "clickhouse://example/default", client=metrics_client
+    )
+    metrics.org_id = ORG_ID
+    warnings: list[SinkWriteError] = []
+    with (
+        patch.object(external_sinks, "datetime", FrozenDateTime),
+        patch("dev_health_ops.storage.clickhouse.datetime", FrozenDateTime),
+        patch("dev_health_ops.storage.repository_rows.datetime", FrozenDateTime),
+        patch(
+            "dev_health_ops.metrics.sinks.clickhouse.work_graph.datetime",
+            FrozenDateTime,
+        ),
+    ):
+        if kind == "repository.v1":
+            await store.insert_repo(
+                cast(
+                    Any, external_sinks._build_repo_object(batch.repositories[0], batch)
+                )
+            )
+        elif kind == "identity.v1":
+            await store.insert_identities(
+                [
+                    external_sinks._build_identity_row(
+                        batch.identities[0], batch, index=0, warnings=warnings
+                    )
+                ]
+            )
+        elif kind == "work_item.v1":
+            metrics.write_work_items(
+                [
+                    external_sinks._build_work_item_row(
+                        batch.work_items[0], batch, index=0, warnings=warnings
+                    )
+                ]
+            )
+        elif kind == "pull_request.v1":
+            await store.insert_git_pull_requests(
+                [external_sinks._build_pr_row(batch.pull_requests[0], batch)]
+            )
+        elif kind == "review.v1":
+            await store.insert_git_pull_request_reviews(
+                [cast(Any, external_sinks._build_review_row(batch.reviews[0], batch))]
+            )
+        elif kind == "commit.v1":
+            await store.insert_git_commit_data(
+                [external_sinks._build_commit_row(batch.commits[0], batch)]
+            )
+        elif kind == "team.v1":
+            await store.insert_teams(
+                [
+                    external_sinks._build_team_row(
+                        batch.teams[0], batch, index=0, warnings=warnings
+                    )
+                ]
+            )
+        elif kind == "service_repository_mapping.v1":
+            await store.insert_operational_service_repository_mappings(
+                batch.service_repository_mappings
+            )
+    captured = {**store.captured, **metrics_client.captured}
+    return captured[VARIANT_KINDS[kind][1]]
+
+
+def _variant_instance(system: str) -> str:
+    return "Tenant.PagerDuty.COM" if system == "pagerduty" else "Acme/API"
+
+
+def _external_base_payload(kind: str, system: str) -> dict[str, Any]:
+    base = next(
+        r.payload for r in [*legacy_records(), *operational_records()] if r.kind == kind
+    )
+    payload = dict(base)
+    if kind == "work_item.v1":
+        payload["provider"] = system
+        payload["type"] = "issue"
+    return payload
+
+
+async def _external_variants() -> list[dict[str, Any]]:
+    schema = json.loads(SCHEMA.read_text())["$defs"]
+    variants: list[dict[str, Any]] = []
+    for kind, (definition, table, systems) in VARIANT_KINDS.items():
+        properties = schema[definition]["properties"]
+        required = set(schema[definition].get("required", []))
+        for system in systems:
+            base = _external_base_payload(kind, system)
+            for field in sorted(properties):
+                if field in required:
+                    continue
+                for statement in ("null", "absent"):
+                    payload = dict(base)
+                    if statement == "null":
+                        payload[field] = None
+                    else:
+                        payload.pop(field, None)
+                    row = await _capture_external_record(kind, payload, system)
+                    variants.append(
+                        {
+                            "kind": kind,
+                            "system": system,
+                            "instance": _variant_instance(system),
+                            "field": field,
+                            "statement": statement,
+                            "payload": _canonical(payload),
+                            "table": table,
+                            "rejected": "rejection_code" in row,
+                            **row,
+                        }
+                    )
+    return variants
+
+
+# The internal ingest entities: the pydantic model the API validates with and
+# the persist function the stream writes through.
+INTERNAL_BASES: dict[str, dict[str, Any]] = {
+    "commits": {
+        "hash": "abcdef0123456789",
+        "message": "ship parity",
+        "author_name": "Ada",
+        "author_email": "ada@example.test",
+        "author_when": "2026-07-22T09:00:00Z",
+        "committer_name": "Grace",
+        "committer_email": "grace@example.test",
+        "committer_when": "2026-07-22T09:30:00Z",
+        "parents": 2,
+    },
+    "pull-requests": {
+        "number": 7,
+        "title": "Ship parity",
+        "body": "Body",
+        "state": "merged",
+        "author_name": "Ada",
+        "author_email": "ada@example.test",
+        "created_at": "2026-07-22T10:00:00Z",
+        "merged_at": "2026-07-22T15:00:00Z",
+        "closed_at": "2026-07-22T15:00:00Z",
+        "head_branch": "feature/parity",
+        "base_branch": "main",
+        "additions": 10,
+        "deletions": 2,
+        "changed_files": 3,
+    },
+    "deployments": {
+        "deployment_id": "deploy-1",
+        "status": "success",
+        "environment": "prod",
+        "started_at": "2026-07-22T10:00:00Z",
+        "finished_at": "2026-07-22T10:05:00Z",
+        "deployed_at": "2026-07-22T10:05:00Z",
+        "pull_request_number": 7,
+        "release_ref": "v1.2.3",
+        "release_ref_confidence": 0.9,
+    },
+    "work-items": {
+        "work_item_id": "jira:ABC-123",
+        "provider": "jira",
+        "title": "Ship parity",
+        "type": "bug",
+        "status": "done",
+        "status_raw": "Done",
+        "description": "Body",
+        "project_key": "ABC",
+        "assignees": ["ada@example.test"],
+        "reporter": "grace@example.test",
+        "created_at": "2026-07-22T10:00:00Z",
+        "updated_at": "2026-07-22T11:00:00Z",
+        "started_at": "2026-07-22T10:30:00Z",
+        "completed_at": "2026-07-22T11:00:00Z",
+        "labels": ["go"],
+        "story_points": 3.5,
+        "priority_raw": "P1",
+        "url": "https://example.test/ABC-123",
+    },
+}
+
+INTERNAL_TABLES = {
+    "commits": "git_commits",
+    "pull-requests": "git_pull_requests",
+    "deployments": "deployments",
+    "work-items": "work_items",
+}
+INTERNAL_REPO_URL = "https://example.test/acme/api"
+
+
+async def _capture_internal_item(
+    entity: str, item: dict[str, Any]
+) -> dict[str, Any] | None:
+    from pydantic import ValidationError
+
+    from dev_health_ops.api.ingest import persist
+    from dev_health_ops.api.ingest.schemas import (
+        IngestCommit,
+        IngestDeployment,
+        IngestPullRequest,
+        IngestWorkItem,
+    )
+
+    model = {
+        "commits": IngestCommit,
+        "pull-requests": IngestPullRequest,
+        "deployments": IngestDeployment,
+        "work-items": IngestWorkItem,
+    }[entity]
+    try:
+        dumped = json.loads(model(**item).model_dump_json())
+    except ValidationError:
+        return None
+    dumped["_repo_url"] = INTERNAL_REPO_URL
+    store = CaptureStore(ORG_ID)
+    with (
+        patch("dev_health_ops.storage.clickhouse.datetime", FrozenDateTime),
+        patch.object(persist, "datetime", FrozenDateTime),
+    ):
+        persist_function = {
+            "commits": persist._persist_commits,
+            "pull-requests": persist._persist_pull_requests,
+            "deployments": persist._persist_deployments,
+            "work-items": persist._persist_work_items,
+        }[entity]
+        await persist_function(store, [dumped])
+    return {
+        "item": _canonical(json.loads(model(**item).model_dump_json())),
+        **store.captured[INTERNAL_TABLES[entity]],
+    }
+
+
+# Fields whose persist-path value depends on another field, stated null
+# together.
+INTERNAL_JOINT_NULLS: dict[str, list[tuple[str, ...]]] = {
+    "deployments": [("release_ref", "release_ref_confidence")],
+}
+
+
+async def _internal_variants() -> list[dict[str, Any]]:
+    variants: list[dict[str, Any]] = []
+    for entity, base in INTERNAL_BASES.items():
+        groups: list[tuple[str, ...]] = [(field,) for field in sorted(base)]
+        groups += INTERNAL_JOINT_NULLS.get(entity, [])
+        for group in groups:
+            item = dict(base)
+            for field in group:
+                item[field] = None
+            row = await _capture_internal_item(entity, item)
+            variants.append(
+                {
+                    "entity": entity,
+                    "field": "+".join(group),
+                    "statement": "null",
+                    "table": INTERNAL_TABLES[entity],
+                    "rejected": row is None,
+                    **(row or {}),
+                }
+            )
+    return variants
+
+
+async def build_variants() -> dict[str, Any]:
+    return {
+        "fixed_now": _canonical(NOW),
+        "org_id": ORG_ID,
+        "source_id": str(SOURCE_ID),
+        "internal_repo_url": INTERNAL_REPO_URL,
+        "external": await _external_variants(),
+        "internal": await _internal_variants(),
+    }
+
+
 async def build() -> dict[str, Any]:
     legacy, legacy_input = await _capture_legacy()
     operational, operational_input = await _capture_operational()
@@ -610,14 +924,25 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
-    rendered = json.dumps(asyncio.run(build()), indent=2, sort_keys=True) + "\n"
+    outputs = {
+        OUTPUT: json.dumps(asyncio.run(build()), indent=2, sort_keys=True) + "\n",
+        VARIANTS_OUTPUT: json.dumps(
+            asyncio.run(build_variants()), indent=2, sort_keys=True
+        )
+        + "\n",
+    }
     if args.check:
-        if not OUTPUT.exists() or OUTPUT.read_text() != rendered:
-            print(f"{OUTPUT.relative_to(ROOT)} is stale", file=sys.stderr)
-            return 1
-        return 0
-    OUTPUT.parent.mkdir(parents=True, exist_ok=True)
-    OUTPUT.write_text(rendered)
+        stale = [
+            path
+            for path, rendered in outputs.items()
+            if not path.exists() or path.read_text() != rendered
+        ]
+        for path in stale:
+            print(f"{path.relative_to(ROOT)} is stale", file=sys.stderr)
+        return 1 if stale else 0
+    for path, rendered in outputs.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(rendered)
     return 0
 
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/storedversion"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -73,32 +74,10 @@ func TestExternalSinkWritesNothingWhenCurrentVersionReadFails(t *testing.T) {
 	}
 }
 
-func TestStoredVersionWriteRefusesAColumnItsInsertDoesNotWrite(t *testing.T) {
-	write := storedVersionWrite{writer: "test", table: "git_pull_requests", keys: []string{"repo_id", "number"}, columns: []string{"first_review_at"}}
-	err := write.apply(context.Background(), &productSink{}, "org-1", "INSERT INTO git_pull_requests (repo_id,number,title)",
-		[]storedVersionRow{{values: []any{uuid.Nil, uint32(1), "t"}}})
-	if err == nil {
-		t.Fatal("apply accepted a carried column the insert does not write")
-	}
-}
-
-func TestStoredVersionWriteRefusesMisdeclaredColumnsAndRows(t *testing.T) {
-	const insert = "INSERT INTO git_pull_requests (repo_id,number,merged_at)"
-	row := func(values ...any) []storedVersionRow { return []storedVersionRow{{values: values}} }
-	unread := storedVersionWrite{writer: "test", table: "git_pull_requests", keys: []string{"repo_id", "number"}, terminal: []string{"merged_at"}}
-	if err := unread.apply(context.Background(), &productSink{}, "org-1", insert, row(uuid.Nil, uint32(1), nil)); err == nil {
-		t.Fatal("apply accepted a terminal column it does not read")
-	}
-	short := storedVersionWrite{writer: "test", table: "git_pull_requests", keys: []string{"repo_id", "number"}, columns: []string{"merged_at"}}
-	if err := short.apply(context.Background(), &productSink{}, "org-1", insert, row(uuid.Nil, uint32(1))); err == nil {
-		t.Fatal("apply accepted a row with fewer values than insert columns")
-	}
-}
-
 type contractUnderTest struct {
 	name     string
 	insert   string
-	contract writerContract
+	contract storedversion.Contract
 	kind     string
 }
 
@@ -111,8 +90,8 @@ func contractsUnderTest(t *testing.T) []contractUnderTest {
 		{"internal deployments", internalDeploymentInsert, internalDeploymentContract, ""},
 		{"internal work items", internalWorkItemInsert, internalWorkItemContract, ""},
 	}
-	for _, kind := range []string{"pull_request.v1", "review.v1", "commit.v1", "work_item.v1"} {
-		for _, system := range []string{"github", "gitlab", "jira", "linear", "custom"} {
+	for _, kind := range []string{"pull_request.v1", "review.v1", "commit.v1", "work_item.v1", "repository.v1", "identity.v1"} {
+		for _, system := range []string{"github", "gitlab", "jira", "linear", "custom", "pagerduty", "atlassian"} {
 			if _, allowed := externalAllowedKinds[system][kind]; !allowed {
 				continue
 			}
@@ -139,32 +118,32 @@ func contractsUnderTest(t *testing.T) []contractUnderTest {
 func TestEveryWrittenColumnHasOneContractRow(t *testing.T) {
 	for _, c := range contractsUnderTest(t) {
 		t.Run(c.name, func(t *testing.T) {
-			positions, err := insertColumnPositions(c.insert)
+			positions, err := storedversion.Positions(c.insert)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !strings.Contains(c.insert, "INSERT INTO "+c.contract.table+" (") {
-				t.Fatalf("contract table %s does not match %q", c.contract.table, c.insert)
+			if !strings.Contains(c.insert, "INSERT INTO "+c.contract.Table+" (") {
+				t.Fatalf("contract table %s does not match %q", c.contract.Table, c.insert)
 			}
 			rows := map[string]int{}
 			identities := 0
-			for _, column := range c.contract.columns {
-				rows[column.column] = rows[column.column] + 1
-				if _, written := positions[column.column]; !written {
-					t.Errorf("contract row %s names a column the insert does not write", column.column)
+			for _, column := range c.contract.Columns {
+				rows[column.Name] = rows[column.Name] + 1
+				if _, written := positions[column.Name]; !written {
+					t.Errorf("contract row %s names a column the insert does not write", column.Name)
 				}
-				if column.rule == columnIdentity {
+				if column.Rule == storedversion.Identity {
 					identities = identities + 1
 				}
-				if column.rule == columnUnstated && len(column.fields) == 0 {
-					t.Errorf("R2 row %s names no payload field", column.column)
+				if column.Rule == storedversion.Unstated && len(column.Fields) == 0 {
+					t.Errorf("R2 row %s names no payload field", column.Name)
 				}
-				for _, field := range column.fields {
+				for _, field := range column.Fields {
 					if c.kind == "" {
 						continue
 					}
 					if _, declared := externalRecordSchemas[c.kind][field]; !declared {
-						t.Errorf("R2 row %s names %s, which %s does not declare", column.column, field, c.kind)
+						t.Errorf("R2 row %s names %s, which %s does not declare", column.Name, field, c.kind)
 					}
 				}
 			}
@@ -181,7 +160,7 @@ func TestEveryWrittenColumnHasOneContractRow(t *testing.T) {
 }
 
 func TestExternalKindsOfContractTablesAllHaveContracts(t *testing.T) {
-	scoped := map[string]bool{"git_pull_requests": true, "git_pull_request_reviews": true, "git_commits": true, "deployments": true, "work_items": true}
+	scoped := map[string]bool{"git_pull_requests": true, "git_pull_request_reviews": true, "git_commits": true, "deployments": true, "work_items": true, "repos": true, "identities": true}
 	if len(externalRecordSchemas) == 0 {
 		t.Fatal("no external schemas")
 	}
@@ -193,27 +172,6 @@ func TestExternalKindsOfContractTablesAllHaveContracts(t *testing.T) {
 		table := strings.TrimSpace(strings.TrimPrefix(query[:strings.IndexByte(query, '(')], "INSERT INTO "))
 		if _, ok := externalContract(kind, "github"); scoped[table] && !ok {
 			t.Errorf("%s writes %s without a contract table", kind, table)
-		}
-	}
-}
-
-func TestCurrentVersionReadNamesEachKeyValueOnce(t *testing.T) {
-	sink := &productSink{}
-	repo := uuid.MustParse("5e1f2b1a-7c2d-4e8f-9a0b-1c2d3e4f5a6b")
-	row := func() storedVersionRow {
-		values := make([]any, 22)
-		values[1], values[2] = repo, uint32(7)
-		return storedVersionRow{values: values}
-	}
-	if err := internalPullRequestVersions.apply(context.Background(), sink, "org-1", internalPullRequestInsert, []storedVersionRow{row(), row()}); err != nil {
-		t.Fatal(err)
-	}
-	if len(sink.lastQueryArgs) != 3 {
-		t.Fatalf("query args = %v", sink.lastQueryArgs)
-	}
-	for _, arg := range sink.lastQueryArgs[1:] {
-		if values, ok := arg.([]any); !ok || len(values) != 1 {
-			t.Fatalf("key filter %v, want one value for two rows sharing a key", arg)
 		}
 	}
 }
@@ -250,8 +208,8 @@ func TestEveryDeclaredExternalFieldReachesAColumnOrIsNamedUnstored(t *testing.T)
 		t.Run(c.name, func(t *testing.T) {
 			system := c.name[strings.LastIndex(c.name, " ")+1:]
 			translated := map[string]bool{}
-			for _, column := range c.contract.columns {
-				for _, field := range column.fields {
+			for _, column := range c.contract.Columns {
+				for _, field := range column.Fields {
 					translated[field] = true
 				}
 			}
@@ -285,7 +243,7 @@ func TestEveryDeclaredIngestFieldReachesAColumnOrIsNamedUnstored(t *testing.T) {
 	}
 	contracts := []struct {
 		class    string
-		contract writerContract
+		contract storedversion.Contract
 	}{
 		{"IngestCommit", internalCommitContract}, {"IngestPullRequestReview", internalReviewContract},
 		{"IngestPullRequest", internalPullRequestContract}, {"IngestDeployment", internalDeploymentContract},
@@ -295,8 +253,8 @@ func TestEveryDeclaredIngestFieldReachesAColumnOrIsNamedUnstored(t *testing.T) {
 	for _, c := range contracts {
 		t.Run(c.class, func(t *testing.T) {
 			translated := map[string]bool{}
-			for _, column := range c.contract.columns {
-				for _, name := range column.fields {
+			for _, column := range c.contract.Columns {
+				for _, name := range column.Fields {
 					translated[name] = true
 				}
 			}
@@ -328,11 +286,11 @@ func TestEveryDeclaredIngestFieldReachesAColumnOrIsNamedUnstored(t *testing.T) {
 }
 
 func TestAppendedColumnsTranslateOrStartNil(t *testing.T) {
-	contract := writerContract{columns: []columnContract{
+	contract := storedversion.Contract{Columns: []storedversion.Column{
 		appended("description", "description", externalNullableString),
-		{column: "service_class", rule: columnNoField},
+		{Name: "service_class", Rule: storedversion.NoField},
 	}}
-	got := contract.appendedValues([]string{"description", "service_class"}, map[string]any{"description": "details"})
+	got := appendedValues(contract, []string{"description", "service_class"}, map[string]any{"description": "details"})
 	if len(got) != 2 || got[0] != "details" || got[1] != nil {
 		t.Fatalf("appended values = %#v, want [details <nil>]", got)
 	}

@@ -325,4 +325,41 @@ func TestStoredVersionsKeepEstablishedValuesAgainstRealClickHouse(t *testing.T) 
 			t.Fatalf("refusal events = %d, want one naming merged_at:\n%s", got, logs.String())
 		}
 	})
+
+	t.Run("external repository and identity keep unstated columns and created_at", func(t *testing.T) {
+		repoID := externalRepoUUID("github", "acme/api", "acme/web")
+		establishRow(ctx, t, conn, "INSERT INTO repos (id,repo,ref,created_at,settings,tags,provider,last_synced,org_id)",
+			repoID, "acme/web", "main", created, `{"a":1}`, `["x"]`, "github", establishedAt, storedVersionOrg)
+		externalWrite(ctx, t, conn, firstWriteAt, "github", "acme/api", "repository.v1",
+			`{"externalId":"acme/web","sourceSystem":"github"}`)
+		repoColumns := []string{"repo", "ref", "created_at", "settings", "tags", "provider"}
+		expectColumns(t, finalColumns(ctx, t, conn, "repos", "id = ?", repoColumns, repoID.String()), map[string]string{
+			"repo": "acme/web", "ref": "main", "created_at": "2026-06-01 09:00:00.000", "settings": `{"a":1}`, "tags": `["x"]`, "provider": "github",
+		})
+		externalWrite(ctx, t, conn, secondWriteAt, "github", "acme/api", "repository.v1",
+			`{"externalId":"acme/web","sourceSystem":"github","defaultRef":null,"tags":["y"]}`)
+		expectColumns(t, finalColumns(ctx, t, conn, "repos", "id = ?", repoColumns, repoID.String()), map[string]string{
+			"ref": "NULL", "created_at": "2026-06-01 09:00:00.000", "settings": `{"a":1}`, "tags": `["y"]`,
+		})
+		for _, field := range []string{"settings", "tags"} {
+			if err := validateExternalRecord("repository.v1", map[string]any{"externalId": "acme/web", "sourceSystem": "github", field: nil}); err == nil {
+				t.Errorf("repository.v1 with %s: null was accepted; the reference refuses it", field)
+			}
+		}
+
+		establishRow(ctx, t, conn, "INSERT INTO identities (org_id,canonical_id,identity_uuid,display_name,email,provider_identities,team_ids,is_active,updated_at)",
+			storedVersionOrg, "ada", uuid.New(), "Ada", "ada@example.test", `{"github":["ada"]}`, []string{"team-a"}, uint8(1), establishedAt)
+		externalWrite(ctx, t, conn, firstWriteAt, "github", "acme/api", "identity.v1",
+			`{"canonicalId":"ada","updatedAt":"2026-07-01T12:00:00Z"}`)
+		identityColumns := []string{"display_name", "email", "provider_identities", "team_ids", "is_active", "updated_at"}
+		expectColumns(t, finalColumns(ctx, t, conn, "identities", "canonical_id = ?", identityColumns, "ada"), map[string]string{
+			"display_name": "Ada", "email": "ada@example.test", "provider_identities": `{"github":["ada"]}`, "team_ids": "['team-a']", "is_active": "1",
+			"updated_at": "2026-07-01 12:00:00.000000",
+		})
+		externalWrite(ctx, t, conn, firstWriteAt, "github", "acme/api", "identity.v1",
+			`{"canonicalId":"ada","updatedAt":"2026-07-01T18:00:00Z","email":null}`)
+		expectColumns(t, finalColumns(ctx, t, conn, "identities", "canonical_id = ?", identityColumns, "ada"), map[string]string{
+			"display_name": "Ada", "email": "NULL", "team_ids": "['team-a']", "updated_at": "2026-07-01 18:00:00.000000",
+		})
+	})
 }

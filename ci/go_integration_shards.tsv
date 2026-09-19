@@ -48,6 +48,7 @@ cmd/dev-health-worker	235
 cmd/dev-health-workerctl	16
 cmd/go-api-routing	91
 cmd/query-api	209
+cmd/query-api/internal/aianalytics	35
 cmd/query-api/internal/analytics	218
 cmd/query-api/internal/busfactor	20
 cmd/query-api/internal/explain	122

@@ -11,9 +11,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
-// The migrated operational_services table predates durable ordering columns.
-// The effect row remains complete for parity and readback validation; this
-// insert list is the exact production ClickHouse schema.
+// The legacy (contract 1) column list; the table's contract decides whether
+// the four ordering columns are added (operational_ordering_contract.go).
 const pagerDutyBusinessServicesColumns = "org_id,provider,provider_instance_id,source_entity_type,external_id,source_version_at,id,source_id,source_url,source_event_at,source_event_id,observed_at,last_synced,raw_status,raw_severity,raw_priority,normalized_status,normalized_severity,normalized_priority,relationship_provenance,relationship_confidence,name,description,service_type,owning_team_id,escalation_policy_id,is_deleted,deleted_at"
 
 // PagerDutyBusinessServicesClickHouseEffects persists a complete business
@@ -27,11 +26,13 @@ type PagerDutyBusinessServicesClickHouseEffects struct {
 	Now                func() time.Time
 	Entitlement        IncidentEntitlement
 	Metrics            *providerfoundation.Metrics
+	contracts          *operationalTableContracts
 }
 
 func (sink PagerDutyBusinessServicesClickHouseEffects) WriteEffect(
 	ctx context.Context, claim Claim, effect EffectBatch,
 ) error {
+	sink.contracts = newOperationalTableContracts()
 	if err := sink.validateRequest(ctx, claim, effect); err != nil {
 		return err
 	}
@@ -74,15 +75,18 @@ func (sink PagerDutyBusinessServicesClickHouseEffects) WriteEffect(
 	if len(allRows) == 0 {
 		return nil
 	}
-	batch, err := sink.Conn.PrepareBatch(
-		ctx, "INSERT INTO operational_services ("+pagerDutyBusinessServicesColumns+")",
-	)
+	contract, err := sink.contracts.resolve(ctx, sink.Conn, "operational_services")
+	if err != nil {
+		return err
+	}
+	batch, err := sink.Conn.PrepareBatch(ctx, "INSERT INTO operational_services ("+contract.columns(pagerDutyBusinessServicesColumns)+")")
 	if err != nil {
 		return err
 	}
 	defer batch.Abort()
 	for _, row := range allRows {
-		if err := batch.Append(pagerDutyBusinessServiceValues(row)...); err != nil {
+		if err := batch.Append(contract.insertValues(pagerDutyBusinessServiceValues(row),
+			row.SourceRevision, row.SourceConflictKey, row.IngestRevision, row.OrderingContract)...); err != nil {
 			return err
 		}
 	}
@@ -93,6 +97,14 @@ func (sink PagerDutyBusinessServicesClickHouseEffects) WriteEffect(
 }
 
 func (sink PagerDutyBusinessServicesClickHouseEffects) InspectEffect(
+	ctx context.Context, claim Claim, effect EffectBatch,
+) (EffectInspection, error) {
+	sink.contracts = newOperationalTableContracts()
+	inspection, err := sink.inspectEffect(ctx, claim, effect)
+	return sink.contracts.confirmInspection(ctx, sink.Conn, inspection, err)
+}
+
+func (sink PagerDutyBusinessServicesClickHouseEffects) inspectEffect(
 	ctx context.Context, claim Claim, effect EffectBatch,
 ) (EffectInspection, error) {
 	if err := sink.validateRequest(ctx, claim, effect); err != nil {
@@ -245,9 +257,12 @@ func pagerDutyBusinessServiceScanValues(row *pagerDutyBusinessServiceRow) []any 
 func (sink PagerDutyBusinessServicesClickHouseEffects) loadActiveBusinessServices(
 	ctx context.Context, claim Claim, providerInstance string,
 ) ([]pagerDutyBusinessServiceRow, error) {
-	rows, err := sink.Conn.Query(
-		ctx, "SELECT "+pagerDutyBusinessServicesColumns+
-			" FROM operational_services FINAL WHERE org_id = ? AND provider = ? AND provider_instance_id = ? AND source_entity_type = ? AND is_deleted = 0",
+	contract, err := sink.contracts.resolve(ctx, sink.Conn, "operational_services")
+	if err != nil {
+		return nil, err
+	}
+	rows, err := sink.Conn.Query(ctx,
+		contract.activeQuery(pagerDutyBusinessServicesColumns, "operational_services", "org_id = ? AND provider = ? AND provider_instance_id = ? AND source_entity_type = ?", "is_deleted = 0"),
 		claim.OrgID, claim.Provider, providerInstance, "business_service",
 	)
 	if err != nil {
@@ -257,10 +272,10 @@ func (sink PagerDutyBusinessServicesClickHouseEffects) loadActiveBusinessService
 	active := make([]pagerDutyBusinessServiceRow, 0)
 	for rows.Next() {
 		var row pagerDutyBusinessServiceRow
-		if err := rows.Scan(pagerDutyBusinessServiceScanValues(&row)...); err != nil {
-			return nil, err
-		}
-		if err := fillPagerDutyBusinessServiceOrdering(&row); err != nil {
+		if err := contract.scan(rows, pagerDutyBusinessServiceScanValues(&row),
+			operationalOrderingTarget{&row.SourceRevision, &row.SourceConflictKey, &row.IngestRevision, &row.OrderingContract},
+			func() error { return fillPagerDutyBusinessServiceOrdering(&row) },
+		); err != nil {
 			return nil, err
 		}
 		active = append(active, row)
@@ -274,9 +289,12 @@ func (sink PagerDutyBusinessServicesClickHouseEffects) loadActiveBusinessService
 func (sink PagerDutyBusinessServicesClickHouseEffects) loadBusinessService(
 	ctx context.Context, claim Claim, providerInstance, id string,
 ) (pagerDutyBusinessServiceRow, bool, error) {
-	rows, err := sink.Conn.Query(
-		ctx, "SELECT "+pagerDutyBusinessServicesColumns+
-			" FROM operational_services FINAL WHERE org_id = ? AND provider = ? AND provider_instance_id = ? AND source_entity_type = ? AND id = ? LIMIT 1",
+	contract, err := sink.contracts.resolve(ctx, sink.Conn, "operational_services")
+	if err != nil {
+		return pagerDutyBusinessServiceRow{}, false, err
+	}
+	rows, err := sink.Conn.Query(ctx,
+		contract.latestQuery(pagerDutyBusinessServicesColumns, "operational_services", "org_id = ? AND provider = ? AND provider_instance_id = ? AND source_entity_type = ? AND id = ?"),
 		claim.OrgID, claim.Provider, providerInstance, "business_service", id,
 	)
 	if err != nil {
@@ -286,10 +304,10 @@ func (sink PagerDutyBusinessServicesClickHouseEffects) loadBusinessService(
 	var actual pagerDutyBusinessServiceRow
 	found := false
 	for rows.Next() {
-		if err := rows.Scan(pagerDutyBusinessServiceScanValues(&actual)...); err != nil {
-			return pagerDutyBusinessServiceRow{}, false, err
-		}
-		if err := fillPagerDutyBusinessServiceOrdering(&actual); err != nil {
+		if err := contract.scan(rows, pagerDutyBusinessServiceScanValues(&actual),
+			operationalOrderingTarget{&actual.SourceRevision, &actual.SourceConflictKey, &actual.IngestRevision, &actual.OrderingContract},
+			func() error { return fillPagerDutyBusinessServiceOrdering(&actual) },
+		); err != nil {
 			return pagerDutyBusinessServiceRow{}, false, err
 		}
 		found = true

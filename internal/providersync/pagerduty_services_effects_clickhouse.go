@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"math/big"
-	"os"
 	"strings"
 	"time"
 
@@ -14,94 +13,13 @@ import (
 	"github.com/google/uuid"
 )
 
-// Migration 067 changes the operational tables from the legacy
-// source_version_at contract to the v2 source-revision contract. The Go writer
-// must use the same bridge setting as Python while both schemas are supported.
+// Legacy (contract 1) column lists; the table's contract decides whether the
+// four ordering columns are added (operational_ordering_contract.go).
 const (
 	pagerDutyServicesLegacyBaseColumns    = "org_id,provider,provider_instance_id,source_entity_type,external_id,source_version_at,id,source_id,source_url,source_event_at,source_event_id,observed_at,last_synced,raw_status,raw_severity,raw_priority,normalized_status,normalized_severity,normalized_priority,relationship_provenance,relationship_confidence"
 	pagerDutyServicesLegacyServiceColumns = pagerDutyServicesLegacyBaseColumns + ",name,description,service_type,owning_team_id,escalation_policy_id,is_deleted,deleted_at"
 	pagerDutyServicesLegacyMappingColumns = pagerDutyServicesLegacyBaseColumns + ",service_id,repo_id,repo_full_name,repo_provider,mapping_kind,rule_id,valid_from,valid_to,is_active"
 )
-
-type pagerDutyServicesStorageContract uint8
-
-const (
-	pagerDutyServicesLegacyContract  pagerDutyServicesStorageContract = 1
-	pagerDutyServicesCurrentContract pagerDutyServicesStorageContract = 2
-)
-
-func configuredPagerDutyServicesStorageContract() (pagerDutyServicesStorageContract, error) {
-	raw, present := os.LookupEnv("OPERATIONAL_ORDERING_CONTRACT")
-	if !present || raw == "1" {
-		return pagerDutyServicesLegacyContract, nil
-	}
-	if raw == "2" {
-		return pagerDutyServicesCurrentContract, nil
-	}
-	return 0, ErrInvalidConfiguration
-}
-
-func (contract pagerDutyServicesStorageContract) serviceColumns() string {
-	if contract == pagerDutyServicesLegacyContract {
-		return pagerDutyServicesLegacyServiceColumns
-	}
-	return gitLabOperationalServiceColumns
-}
-
-func (contract pagerDutyServicesStorageContract) mappingColumns() string {
-	if contract == pagerDutyServicesLegacyContract {
-		return pagerDutyServicesLegacyMappingColumns
-	}
-	return gitLabServiceMappingColumns
-}
-
-func (contract pagerDutyServicesStorageContract) loadActiveServicesQuery() string {
-	columns := contract.serviceColumns()
-	if contract == pagerDutyServicesLegacyContract {
-		return "SELECT " + columns + " FROM (SELECT " + columns +
-			" FROM operational_services FINAL WHERE org_id = ?) " +
-			"WHERE provider = ? AND provider_instance_id = ? AND source_entity_type = ? AND is_deleted = 0"
-	}
-	return "SELECT " + columns + " FROM (SELECT " + columns +
-		" FROM operational_services WHERE org_id = ? AND provider = ? AND provider_instance_id = ? AND source_entity_type = ? " +
-		"ORDER BY org_id, id, source_revision DESC, source_conflict_key DESC, ingest_revision DESC LIMIT 1 BY org_id, id) " +
-		"WHERE is_deleted = 0"
-}
-
-func (contract pagerDutyServicesStorageContract) loadActiveMappingsQuery() string {
-	columns := contract.mappingColumns()
-	if contract == pagerDutyServicesLegacyContract {
-		return "SELECT " + columns + " FROM (SELECT " + columns +
-			" FROM operational_service_repository_mappings FINAL WHERE org_id = ?) " +
-			"WHERE provider = ? AND provider_instance_id = ? AND is_active = 1"
-	}
-	return "SELECT " + columns + " FROM (SELECT " + columns +
-		" FROM operational_service_repository_mappings WHERE org_id = ? AND provider = ? AND provider_instance_id = ? " +
-		"ORDER BY org_id, id, source_revision DESC, source_conflict_key DESC, ingest_revision DESC LIMIT 1 BY org_id, id) " +
-		"WHERE is_active = 1"
-}
-
-func (contract pagerDutyServicesStorageContract) loadServiceQuery() string {
-	columns := contract.serviceColumns()
-	if contract == pagerDutyServicesLegacyContract {
-		return "SELECT " + columns +
-			" FROM operational_services FINAL WHERE org_id = ? AND provider = ? AND provider_instance_id = ? AND source_entity_type = ? AND id = ? LIMIT 1"
-	}
-	return "SELECT " + columns +
-		" FROM operational_services WHERE org_id = ? AND provider = ? AND provider_instance_id = ? AND source_entity_type = ? AND id = ? " +
-		"ORDER BY source_revision DESC, source_conflict_key DESC, ingest_revision DESC LIMIT 1"
-}
-
-func (contract pagerDutyServicesStorageContract) loadMappingQuery() string {
-	columns := contract.mappingColumns()
-	if contract == pagerDutyServicesLegacyContract {
-		return "SELECT " + columns +
-			" FROM operational_service_repository_mappings FINAL WHERE org_id = ? AND provider = ? AND provider_instance_id = ? AND id = ? LIMIT 1"
-	}
-	return "SELECT " + columns +
-		" FROM operational_service_repository_mappings WHERE org_id = ? AND provider = ? AND provider_instance_id = ? AND id = ? " +
-		"ORDER BY source_revision DESC, source_conflict_key DESC, ingest_revision DESC LIMIT 1"
-}
 
 // PagerDutyServicesClickHouseEffects owns only the two destinations produced
 // by the services provider path. The repository mapping destination remains a
@@ -114,11 +32,13 @@ type PagerDutyServicesClickHouseEffects struct {
 	Now                func() time.Time
 	Entitlement        IncidentEntitlement
 	Metrics            *providerfoundation.Metrics
+	contracts          *operationalTableContracts
 }
 
 func (sink PagerDutyServicesClickHouseEffects) WriteEffect(
 	ctx context.Context, claim Claim, effect EffectBatch,
 ) error {
+	sink.contracts = newOperationalTableContracts()
 	if err := sink.validateRequest(ctx, claim, effect); err != nil {
 		return err
 	}
@@ -156,6 +76,14 @@ func (sink PagerDutyServicesClickHouseEffects) WriteEffect(
 }
 
 func (sink PagerDutyServicesClickHouseEffects) InspectEffect(
+	ctx context.Context, claim Claim, effect EffectBatch,
+) (EffectInspection, error) {
+	sink.contracts = newOperationalTableContracts()
+	inspection, err := sink.inspectEffect(ctx, claim, effect)
+	return sink.contracts.confirmInspection(ctx, sink.Conn, inspection, err)
+}
+
+func (sink PagerDutyServicesClickHouseEffects) inspectEffect(
 	ctx context.Context, claim Claim, effect EffectBatch,
 ) (EffectInspection, error) {
 	if err := sink.validateRequest(ctx, claim, effect); err != nil {
@@ -200,9 +128,6 @@ func (sink PagerDutyServicesClickHouseEffects) validateRequest(
 	case "operational_services", "operational_service_repository_mappings":
 	default:
 		return ErrInvalidConfiguration
-	}
-	if _, err := configuredPagerDutyServicesStorageContract(); err != nil {
-		return err
 	}
 	return sink.Lease.Assert(ctx)
 }
@@ -337,11 +262,11 @@ func (sink PagerDutyServicesClickHouseEffects) writeServicesSnapshot(
 	if len(allRows) == 0 {
 		return nil
 	}
-	contract, err := configuredPagerDutyServicesStorageContract()
+	contract, err := sink.contracts.resolve(ctx, sink.Conn, "operational_services")
 	if err != nil {
 		return err
 	}
-	batch, err := sink.Conn.PrepareBatch(ctx, "INSERT INTO operational_services ("+contract.serviceColumns()+")")
+	batch, err := sink.Conn.PrepareBatch(ctx, "INSERT INTO operational_services ("+contract.columns(pagerDutyServicesLegacyServiceColumns)+")")
 	if err != nil {
 		return err
 	}
@@ -391,11 +316,11 @@ func (sink PagerDutyServicesClickHouseEffects) writeMappingsSnapshot(
 	if len(allRows) == 0 {
 		return nil
 	}
-	contract, err := configuredPagerDutyServicesStorageContract()
+	contract, err := sink.contracts.resolve(ctx, sink.Conn, "operational_service_repository_mappings")
 	if err != nil {
 		return err
 	}
-	batch, err := sink.Conn.PrepareBatch(ctx, "INSERT INTO operational_service_repository_mappings ("+contract.mappingColumns()+")")
+	batch, err := sink.Conn.PrepareBatch(ctx, "INSERT INTO operational_service_repository_mappings ("+contract.columns(pagerDutyServicesLegacyMappingColumns)+")")
 	if err != nil {
 		return err
 	}
@@ -525,7 +450,7 @@ func pagerDutyServiceValues(row pagerDutyServiceRow) []any {
 }
 
 func pagerDutyServiceValuesForContract(
-	row pagerDutyServiceRow, contract pagerDutyServicesStorageContract,
+	row pagerDutyServiceRow, contract operationalStorageContract,
 ) []any {
 	return pagerDutyServicesValuesForContract(pagerDutyServiceValues(row), contract)
 }
@@ -545,22 +470,15 @@ func pagerDutyServiceMappingValues(row pagerDutyServiceRepositoryMappingRow) []a
 }
 
 func pagerDutyServiceMappingValuesForContract(
-	row pagerDutyServiceRepositoryMappingRow, contract pagerDutyServicesStorageContract,
+	row pagerDutyServiceRepositoryMappingRow, contract operationalStorageContract,
 ) []any {
 	return pagerDutyServicesValuesForContract(pagerDutyServiceMappingValues(row), contract)
 }
 
 func pagerDutyServicesValuesForContract(
-	values []any, contract pagerDutyServicesStorageContract,
+	values []any, contract operationalStorageContract,
 ) []any {
-	if contract != pagerDutyServicesLegacyContract {
-		return values
-	}
-	// The v2 ordering fields occupy the four positions immediately after
-	// source_version_at. Contract 1 stores all other canonical fields.
-	legacy := make([]any, 0, len(values)-4)
-	legacy = append(legacy, values[:6]...)
-	return append(legacy, values[10:]...)
+	return contract.fromCurrentValues(values)
 }
 
 func pagerDutyServiceScanValues(row *pagerDutyServiceRow, sourceRevision, ingestRevision *big.Int) []any {
@@ -579,7 +497,7 @@ func pagerDutyServiceScanValues(row *pagerDutyServiceRow, sourceRevision, ingest
 
 func pagerDutyServiceScanValuesForContract(
 	row *pagerDutyServiceRow, sourceRevision, ingestRevision *big.Int,
-	contract pagerDutyServicesStorageContract,
+	contract operationalStorageContract,
 ) []any {
 	return pagerDutyServicesValuesForContract(
 		pagerDutyServiceScanValues(row, sourceRevision, ingestRevision), contract,
@@ -602,7 +520,7 @@ func pagerDutyServiceMappingScanValues(row *pagerDutyServiceRepositoryMappingRow
 
 func pagerDutyServiceMappingScanValuesForContract(
 	row *pagerDutyServiceRepositoryMappingRow, sourceRevision, ingestRevision *big.Int,
-	contract pagerDutyServicesStorageContract,
+	contract operationalStorageContract,
 ) []any {
 	return pagerDutyServicesValuesForContract(
 		pagerDutyServiceMappingScanValues(row, sourceRevision, ingestRevision), contract,
@@ -611,9 +529,9 @@ func pagerDutyServiceMappingScanValuesForContract(
 
 func pagerDutyHydrateServiceOrdering(
 	row *pagerDutyServiceRow, sourceRevision, ingestRevision *big.Int,
-	contract pagerDutyServicesStorageContract,
+	contract operationalStorageContract,
 ) error {
-	if contract == pagerDutyServicesCurrentContract {
+	if contract == operationalCurrentContract {
 		row.SourceRevision = new(big.Int).Set(sourceRevision)
 		row.IngestRevision = new(big.Int).Set(ingestRevision)
 		return nil
@@ -630,9 +548,9 @@ func pagerDutyHydrateServiceOrdering(
 
 func pagerDutyHydrateServiceMappingOrdering(
 	row *pagerDutyServiceRepositoryMappingRow, sourceRevision, ingestRevision *big.Int,
-	contract pagerDutyServicesStorageContract,
+	contract operationalStorageContract,
 ) error {
-	if contract == pagerDutyServicesCurrentContract {
+	if contract == operationalCurrentContract {
 		row.SourceRevision = new(big.Int).Set(sourceRevision)
 		row.IngestRevision = new(big.Int).Set(ingestRevision)
 		return nil
@@ -650,11 +568,12 @@ func pagerDutyHydrateServiceMappingOrdering(
 func (sink PagerDutyServicesClickHouseEffects) loadActiveServices(
 	ctx context.Context, claim Claim, providerInstance string,
 ) ([]pagerDutyServiceRow, error) {
-	contract, err := configuredPagerDutyServicesStorageContract()
+	contract, err := sink.contracts.resolve(ctx, sink.Conn, "operational_services")
 	if err != nil {
 		return nil, err
 	}
-	rows, err := sink.Conn.Query(ctx, contract.loadActiveServicesQuery(),
+	rows, err := sink.Conn.Query(ctx, contract.activeQuery(pagerDutyServicesLegacyServiceColumns, "operational_services",
+		"org_id = ? AND provider = ? AND provider_instance_id = ? AND source_entity_type = ?", "is_deleted = 0"),
 		claim.OrgID, claim.Provider, providerInstance, "service")
 	if err != nil {
 		return nil, err
@@ -678,11 +597,12 @@ func (sink PagerDutyServicesClickHouseEffects) loadActiveServices(
 func (sink PagerDutyServicesClickHouseEffects) loadActiveMappings(
 	ctx context.Context, claim Claim, providerInstance string,
 ) ([]pagerDutyServiceRepositoryMappingRow, error) {
-	contract, err := configuredPagerDutyServicesStorageContract()
+	contract, err := sink.contracts.resolve(ctx, sink.Conn, "operational_service_repository_mappings")
 	if err != nil {
 		return nil, err
 	}
-	rows, err := sink.Conn.Query(ctx, contract.loadActiveMappingsQuery(),
+	rows, err := sink.Conn.Query(ctx, contract.activeQuery(pagerDutyServicesLegacyMappingColumns, "operational_service_repository_mappings",
+		"org_id = ? AND provider = ? AND provider_instance_id = ?", "is_active = 1"),
 		claim.OrgID, claim.Provider, providerInstance)
 	if err != nil {
 		return nil, err
@@ -794,11 +714,12 @@ func (sink PagerDutyServicesClickHouseEffects) inspectMappings(
 func (sink PagerDutyServicesClickHouseEffects) loadService(
 	ctx context.Context, claim Claim, providerInstance, id string,
 ) (pagerDutyServiceRow, bool, error) {
-	contract, err := configuredPagerDutyServicesStorageContract()
+	contract, err := sink.contracts.resolve(ctx, sink.Conn, "operational_services")
 	if err != nil {
 		return pagerDutyServiceRow{}, false, err
 	}
-	rows, err := sink.Conn.Query(ctx, contract.loadServiceQuery(),
+	rows, err := sink.Conn.Query(ctx, contract.latestQuery(pagerDutyServicesLegacyServiceColumns, "operational_services",
+		"org_id = ? AND provider = ? AND provider_instance_id = ? AND source_entity_type = ? AND id = ?"),
 		claim.OrgID, claim.Provider, providerInstance, "service", id)
 	if err != nil {
 		return pagerDutyServiceRow{}, false, err
@@ -822,11 +743,12 @@ func (sink PagerDutyServicesClickHouseEffects) loadService(
 func (sink PagerDutyServicesClickHouseEffects) loadMapping(
 	ctx context.Context, claim Claim, providerInstance, id string,
 ) (pagerDutyServiceRepositoryMappingRow, bool, error) {
-	contract, err := configuredPagerDutyServicesStorageContract()
+	contract, err := sink.contracts.resolve(ctx, sink.Conn, "operational_service_repository_mappings")
 	if err != nil {
 		return pagerDutyServiceRepositoryMappingRow{}, false, err
 	}
-	rows, err := sink.Conn.Query(ctx, contract.loadMappingQuery(),
+	rows, err := sink.Conn.Query(ctx, contract.latestQuery(pagerDutyServicesLegacyMappingColumns, "operational_service_repository_mappings",
+		"org_id = ? AND provider = ? AND provider_instance_id = ? AND id = ?"),
 		claim.OrgID, claim.Provider, providerInstance, id)
 	if err != nil {
 		return pagerDutyServiceRepositoryMappingRow{}, false, err

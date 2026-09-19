@@ -24,11 +24,13 @@ type PagerDutyTeamsClickHouseEffects struct {
 	Now                func() time.Time
 	Entitlement        IncidentEntitlement
 	Metrics            *providerfoundation.Metrics
+	contracts          *operationalTableContracts
 }
 
 func (sink PagerDutyTeamsClickHouseEffects) WriteEffect(
 	ctx context.Context, claim Claim, effect EffectBatch,
 ) error {
+	sink.contracts = newOperationalTableContracts()
 	if err := sink.validateRequest(ctx, claim, effect); err != nil {
 		return err
 	}
@@ -71,15 +73,18 @@ func (sink PagerDutyTeamsClickHouseEffects) WriteEffect(
 	if len(allRows) == 0 {
 		return nil
 	}
-	batch, err := sink.Conn.PrepareBatch(
-		ctx, "INSERT INTO operational_teams ("+pagerDutyTeamsColumns+")",
-	)
+	contract, err := sink.contracts.resolve(ctx, sink.Conn, "operational_teams")
+	if err != nil {
+		return err
+	}
+	batch, err := sink.Conn.PrepareBatch(ctx, "INSERT INTO operational_teams ("+contract.columns(pagerDutyTeamsColumns)+")")
 	if err != nil {
 		return err
 	}
 	defer batch.Abort()
 	for _, row := range allRows {
-		if err := batch.Append(pagerDutyTeamValues(row)...); err != nil {
+		if err := batch.Append(contract.insertValues(pagerDutyTeamValues(row),
+			row.SourceRevision, row.SourceConflictKey, row.IngestRevision, row.OrderingContract)...); err != nil {
 			return err
 		}
 	}
@@ -90,6 +95,14 @@ func (sink PagerDutyTeamsClickHouseEffects) WriteEffect(
 }
 
 func (sink PagerDutyTeamsClickHouseEffects) InspectEffect(
+	ctx context.Context, claim Claim, effect EffectBatch,
+) (EffectInspection, error) {
+	sink.contracts = newOperationalTableContracts()
+	inspection, err := sink.inspectEffect(ctx, claim, effect)
+	return sink.contracts.confirmInspection(ctx, sink.Conn, inspection, err)
+}
+
+func (sink PagerDutyTeamsClickHouseEffects) inspectEffect(
 	ctx context.Context, claim Claim, effect EffectBatch,
 ) (EffectInspection, error) {
 	if err := sink.validateRequest(ctx, claim, effect); err != nil {
@@ -233,10 +246,12 @@ func pagerDutyTeamScanValues(row *pagerDutyTeamRow) []any {
 func (sink PagerDutyTeamsClickHouseEffects) loadActiveTeams(
 	ctx context.Context, claim Claim, providerInstance string,
 ) ([]pagerDutyTeamRow, error) {
-	rows, err := sink.Conn.Query(
-		ctx,
-		"SELECT "+pagerDutyTeamsColumns+
-			" FROM operational_teams FINAL WHERE org_id = ? AND provider = ? AND provider_instance_id = ? AND source_entity_type = ? AND is_deleted = 0",
+	contract, err := sink.contracts.resolve(ctx, sink.Conn, "operational_teams")
+	if err != nil {
+		return nil, err
+	}
+	rows, err := sink.Conn.Query(ctx,
+		contract.activeQuery(pagerDutyTeamsColumns, "operational_teams", "org_id = ? AND provider = ? AND provider_instance_id = ? AND source_entity_type = ?", "is_deleted = 0"),
 		claim.OrgID, claim.Provider, providerInstance, "team",
 	)
 	if err != nil {
@@ -246,10 +261,10 @@ func (sink PagerDutyTeamsClickHouseEffects) loadActiveTeams(
 	active := make([]pagerDutyTeamRow, 0)
 	for rows.Next() {
 		var row pagerDutyTeamRow
-		if err := rows.Scan(pagerDutyTeamScanValues(&row)...); err != nil {
-			return nil, err
-		}
-		if err := fillPagerDutyTeamOrdering(&row); err != nil {
+		if err := contract.scan(rows, pagerDutyTeamScanValues(&row),
+			operationalOrderingTarget{&row.SourceRevision, &row.SourceConflictKey, &row.IngestRevision, &row.OrderingContract},
+			func() error { return fillPagerDutyTeamOrdering(&row) },
+		); err != nil {
 			return nil, err
 		}
 		active = append(active, row)
@@ -263,10 +278,12 @@ func (sink PagerDutyTeamsClickHouseEffects) loadActiveTeams(
 func (sink PagerDutyTeamsClickHouseEffects) loadTeam(
 	ctx context.Context, claim Claim, providerInstance, id string,
 ) (pagerDutyTeamRow, bool, error) {
-	rows, err := sink.Conn.Query(
-		ctx,
-		"SELECT "+pagerDutyTeamsColumns+
-			" FROM operational_teams FINAL WHERE org_id = ? AND provider = ? AND provider_instance_id = ? AND source_entity_type = ? AND id = ? LIMIT 1",
+	contract, err := sink.contracts.resolve(ctx, sink.Conn, "operational_teams")
+	if err != nil {
+		return pagerDutyTeamRow{}, false, err
+	}
+	rows, err := sink.Conn.Query(ctx,
+		contract.latestQuery(pagerDutyTeamsColumns, "operational_teams", "org_id = ? AND provider = ? AND provider_instance_id = ? AND source_entity_type = ? AND id = ?"),
 		claim.OrgID, claim.Provider, providerInstance, "team", id,
 	)
 	if err != nil {
@@ -276,10 +293,10 @@ func (sink PagerDutyTeamsClickHouseEffects) loadTeam(
 	var actual pagerDutyTeamRow
 	found := false
 	for rows.Next() {
-		if err := rows.Scan(pagerDutyTeamScanValues(&actual)...); err != nil {
-			return pagerDutyTeamRow{}, false, err
-		}
-		if err := fillPagerDutyTeamOrdering(&actual); err != nil {
+		if err := contract.scan(rows, pagerDutyTeamScanValues(&actual),
+			operationalOrderingTarget{&actual.SourceRevision, &actual.SourceConflictKey, &actual.IngestRevision, &actual.OrderingContract},
+			func() error { return fillPagerDutyTeamOrdering(&actual) },
+		); err != nil {
 			return pagerDutyTeamRow{}, false, err
 		}
 		found = true

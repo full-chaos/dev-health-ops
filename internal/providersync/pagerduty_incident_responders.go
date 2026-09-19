@@ -165,6 +165,7 @@ type PagerDutyWebhookRespondersClickHouseEffects struct {
 	ProviderInstanceID string
 	Entitlement        IncidentEntitlement
 	Metrics            *providerfoundation.Metrics
+	contracts          *operationalTableContracts
 }
 
 func (sink PagerDutyWebhookRespondersClickHouseEffects) validateRequest(
@@ -184,6 +185,7 @@ func (sink PagerDutyWebhookRespondersClickHouseEffects) validateRequest(
 func (sink PagerDutyWebhookRespondersClickHouseEffects) WriteEffect(
 	ctx context.Context, claim Claim, effect EffectBatch,
 ) error {
+	sink.contracts = newOperationalTableContracts()
 	if err := sink.validateRequest(ctx, claim, effect); err != nil {
 		return err
 	}
@@ -205,6 +207,14 @@ func (sink PagerDutyWebhookRespondersClickHouseEffects) WriteEffect(
 func (sink PagerDutyWebhookRespondersClickHouseEffects) InspectEffect(
 	ctx context.Context, claim Claim, effect EffectBatch,
 ) (EffectInspection, error) {
+	sink.contracts = newOperationalTableContracts()
+	inspection, err := sink.inspectEffect(ctx, claim, effect)
+	return sink.contracts.confirmInspection(ctx, sink.Conn, inspection, err)
+}
+
+func (sink PagerDutyWebhookRespondersClickHouseEffects) inspectEffect(
+	ctx context.Context, claim Claim, effect EffectBatch,
+) (EffectInspection, error) {
 	if err := sink.validateRequest(ctx, claim, effect); err != nil {
 		return EffectConflict, err
 	}
@@ -224,13 +234,18 @@ func (sink PagerDutyWebhookRespondersClickHouseEffects) writeResponderRows(
 	if len(rows) == 0 {
 		return nil
 	}
-	batch, err := sink.Conn.PrepareBatch(ctx, "INSERT INTO operational_incident_responders ("+pagerDutyResponderColumns+")")
+	contract, err := sink.contracts.resolve(ctx, sink.Conn, "operational_incident_responders")
+	if err != nil {
+		return err
+	}
+	batch, err := sink.Conn.PrepareBatch(ctx, "INSERT INTO operational_incident_responders ("+contract.columns(pagerDutyResponderColumns)+")")
 	if err != nil {
 		return err
 	}
 	defer batch.Abort()
 	for _, row := range rows {
-		if err := batch.Append(pagerDutyResponderValues(row)...); err != nil {
+		if err := batch.Append(contract.insertValues(pagerDutyResponderValues(row),
+			row.SourceRevision, row.SourceConflictKey, row.IngestRevision, row.OrderingContract)...); err != nil {
 			return err
 		}
 	}
@@ -251,7 +266,14 @@ func (sink PagerDutyWebhookRespondersClickHouseEffects) inspectResponderRows(
 func (sink PagerDutyWebhookRespondersClickHouseEffects) loadResponderRow(
 	ctx context.Context, claim Claim, id string,
 ) (pagerDutyResponderRow, bool, error) {
-	rows, err := sink.Conn.Query(ctx, "SELECT "+pagerDutyResponderColumns+" FROM operational_incident_responders FINAL WHERE org_id = ? AND provider = ? AND provider_instance_id = ? AND source_entity_type = ? AND id = ? LIMIT 1", claim.OrgID, claim.Provider, strings.ToLower(strings.TrimSpace(sink.ProviderInstanceID)), "responder", id)
+	contract, err := sink.contracts.resolve(ctx, sink.Conn, "operational_incident_responders")
+	if err != nil {
+		return pagerDutyResponderRow{}, false, err
+	}
+	rows, err := sink.Conn.Query(ctx,
+		contract.latestQuery(pagerDutyResponderColumns, "operational_incident_responders", "org_id = ? AND provider = ? AND provider_instance_id = ? AND source_entity_type = ? AND id = ?"),
+		claim.OrgID, claim.Provider, strings.ToLower(strings.TrimSpace(sink.ProviderInstanceID)), "responder", id,
+	)
 	if err != nil {
 		return pagerDutyResponderRow{}, false, err
 	}
@@ -260,13 +282,10 @@ func (sink PagerDutyWebhookRespondersClickHouseEffects) loadResponderRow(
 		return pagerDutyResponderRow{}, false, rows.Err()
 	}
 	var row pagerDutyResponderRow
-	if err := rows.Scan(pagerDutyResponderScanValues(&row)...); err != nil {
-		return pagerDutyResponderRow{}, false, err
-	}
-	// The readback returns the deployed contract's columns only, so the
-	// ordering fields come back zero and must be re-derived before the
-	// inspection compares revisions -- the same treatment loadNoteRow gives.
-	if err := fillPagerDutyResponderOrdering(&row); err != nil {
+	if err := contract.scan(rows, pagerDutyResponderScanValues(&row),
+		operationalOrderingTarget{&row.SourceRevision, &row.SourceConflictKey, &row.IngestRevision, &row.OrderingContract},
+		func() error { return fillPagerDutyResponderOrdering(&row) },
+	); err != nil {
 		return pagerDutyResponderRow{}, false, err
 	}
 	return row, true, rows.Err()

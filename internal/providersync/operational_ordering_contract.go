@@ -176,47 +176,6 @@ func readOperationalTableContract(
 	return contract, nil
 }
 
-// confirmInspection returns a readback's result only when every table the
-// call resolved still has the shape the call read. A legacy-shape SELECT on
-// a contract-2 table is valid SQL, so a table migrated between the call's
-// shape read and its SELECT could otherwise be read as absent or exact; the
-// second read turns that into an error, and the unit's retry reads again.
-func (cache *operationalTableContracts) confirmInspection(
-	ctx context.Context, conn driver.Conn, inspection EffectInspection, inspectErr error,
-) (EffectInspection, error) {
-	if inspectErr != nil || cache == nil {
-		return inspection, inspectErr
-	}
-	cache.mu.Lock()
-	resolved := make(map[string]operationalStorageContract, len(cache.byTable))
-	if len(cache.byTable) == 0 {
-		cache.mu.Unlock()
-		return inspection, nil
-	}
-	for table, contract := range cache.byTable {
-		resolved[table] = contract
-	}
-	cache.mu.Unlock()
-	if len(resolved) == 0 {
-		return inspection, nil
-	}
-	for table, contract := range resolved {
-		current, err := readOperationalTableContract(ctx, conn, table)
-		if err != nil {
-			return EffectConflict, err
-		}
-		if current != contract {
-			slog.Default().ErrorContext(ctx, "operational_ordering_contract_changed_during_readback",
-				slog.String("table", table),
-				slog.Int("read_contract", int(contract)),
-				slog.Int("table_contract", int(current)))
-			return EffectConflict, fmt.Errorf("%w: %s changed from contract %d to %d during the readback",
-				ErrOperationalTableContractUnknown, table, contract, current)
-		}
-	}
-	return inspection, nil
-}
-
 func readOperationalTableColumns(ctx context.Context, conn driver.Conn, table string) ([]string, error) {
 	rows, err := conn.Query(ctx,
 		"SELECT name FROM system.columns WHERE database = currentDatabase() AND table = ?", table)
@@ -299,11 +258,25 @@ func (contract operationalStorageContract) scan(
 	return nil
 }
 
+// operationalLegacyShapeGuard is a WHERE term that makes a legacy-shape
+// SELECT fail on a server whose table has the contract-2 columns. A legacy
+// SELECT is valid SQL on a contract-2 table, so without it a table read with
+// the wrong shape (a migration after the shape read, or another server of a
+// pool at a different migration stage) would return rows or none, which the
+// readback would take as exact or absent. The check runs on the server that
+// executes the statement, inside the statement. A contract-2 SELECT needs no
+// guard: it names columns a contract-1 table does not have.
+func operationalLegacyShapeGuard(table string) string {
+	return "(SELECT throwIf(hasColumnInTable(currentDatabase(), '" + table +
+		"', 'ordering_contract'), 'operational table has the contract-2 shape; legacy readback refused')) = 0"
+}
+
 // latestQuery selects the newest stored version matching where.
 func (contract operationalStorageContract) latestQuery(legacyColumns, table, where string) string {
 	columns := contract.columns(legacyColumns)
 	if contract == operationalLegacyContract {
-		return "SELECT " + columns + " FROM " + table + " FINAL WHERE " + where + " LIMIT 1"
+		return "SELECT " + columns + " FROM " + table + " FINAL WHERE " + where +
+			" AND " + operationalLegacyShapeGuard(table) + " LIMIT 1"
 	}
 	return "SELECT " + columns + " FROM " + table + " WHERE " + where +
 		" ORDER BY source_revision DESC, source_conflict_key DESC, ingest_revision DESC LIMIT 1"
@@ -315,7 +288,7 @@ func (contract operationalStorageContract) activeQuery(legacyColumns, table, whe
 	columns := contract.columns(legacyColumns)
 	if contract == operationalLegacyContract {
 		return "SELECT " + columns + " FROM (SELECT " + columns + " FROM " + table +
-			" FINAL WHERE " + where + ") WHERE " + active
+			" FINAL WHERE " + where + " AND " + operationalLegacyShapeGuard(table) + ") WHERE " + active
 	}
 	return "SELECT " + columns + " FROM (SELECT " + columns + " FROM " + table + " WHERE " + where +
 		" ORDER BY org_id, id, source_revision DESC, source_conflict_key DESC, ingest_revision DESC LIMIT 1 BY org_id, id) WHERE " +

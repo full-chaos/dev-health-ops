@@ -208,13 +208,6 @@ func (sink PagerDutyWebhookRespondersClickHouseEffects) InspectEffect(
 	ctx context.Context, claim Claim, effect EffectBatch,
 ) (EffectInspection, error) {
 	sink.contracts = newOperationalTableContracts()
-	inspection, err := sink.inspectEffect(ctx, claim, effect)
-	return sink.contracts.confirmInspection(ctx, sink.Conn, inspection, err)
-}
-
-func (sink PagerDutyWebhookRespondersClickHouseEffects) inspectEffect(
-	ctx context.Context, claim Claim, effect EffectBatch,
-) (EffectInspection, error) {
 	if err := sink.validateRequest(ctx, claim, effect); err != nil {
 		return EffectConflict, err
 	}

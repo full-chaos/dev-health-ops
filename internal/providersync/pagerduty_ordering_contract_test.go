@@ -47,7 +47,6 @@ var probeEnvValues = []string{"<unset>", "1", "2", "", "3"}
 type contractProbeConn struct {
 	driver.Conn
 	shape      string
-	shapes     []string // when set, the n-th system.columns read reports shapes[n] (last one repeats)
 	scanRows   bool
 	mu         sync.Mutex
 	systemRead int
@@ -63,9 +62,6 @@ func (conn *contractProbeConn) Query(_ context.Context, query string, _ ...any) 
 	if strings.Contains(query, "system.columns") {
 		conn.systemRead++
 		shape := conn.shape
-		if len(conn.shapes) > 0 {
-			shape = conn.shapes[min(conn.systemRead, len(conn.shapes))-1]
-		}
 		base := []string{"org_id", "provider", "id", "source_version_at"}
 		switch shape {
 		case probeTableLegacy:
@@ -302,6 +298,12 @@ func TestEveryPagerDutySinkSendsOnlyTheTableShape(t *testing.T) {
 						if strings.Contains(query, " FINAL ") == current {
 							t.Fatalf("%s: FINAL use does not match contract %v: %s", label, current, query)
 						}
+						// A legacy SELECT is valid SQL on a contract-2 table, so it
+						// must refuse itself on the executing server.
+						guarded := strings.Contains(query, " AND "+operationalLegacyShapeGuard(sinkCase.table))
+						if guarded == current {
+							t.Fatalf("%s: server-side shape guard present=%v for contract %v: %s", label, guarded, current, query)
+						}
 					}
 				}
 			}
@@ -499,14 +501,6 @@ func TestEveryPagerDutySinkTypeIsInTheContractSweep(t *testing.T) {
 					t.Errorf("%s.%s does not start with a new per-call table-contract cache: %q",
 						receiver.String(), typed.Name.Name, body)
 				}
-				if typed.Name.Name == "InspectEffect" && strings.Join(body, "\n") != strings.Join([]string{
-					"sink.contracts = newOperationalTableContracts()",
-					"inspection, err := sink.inspectEffect(ctx, claim, effect)",
-					"return sink.contracts.confirmInspection(ctx, sink.Conn, inspection, err)",
-				}, "\n") {
-					t.Errorf("%s.InspectEffect does not confirm the table shape after its readback: %q",
-						receiver.String(), body)
-				}
 			case *ast.CallExpr:
 				selector, ok := typed.Fun.(*ast.SelectorExpr)
 				if !ok {
@@ -580,12 +574,7 @@ func TestPagerDutySinkRereadsTheTableShapeOnEveryCall(t *testing.T) {
 			if err := run(); err != nil {
 				t.Fatalf("%s legacy call: %v", label, err)
 			}
-			// A write reads the table once; a readback reads it once more to
-			// confirm the shape did not change during the call.
 			perCall := 1
-			if operation == "inspect" {
-				perCall = 2
-			}
 			if conn.systemRead != perCall {
 				t.Fatalf("%s: system reads in one call=%d want %d", label, conn.systemRead, perCall)
 			}
@@ -606,32 +595,4 @@ func TestPagerDutySinkRereadsTheTableShapeOnEveryCall(t *testing.T) {
 			}
 		}
 	}
-}
-
-// A readback never reports absent or exact when a table's shape changed
-// between the call's shape read and its SELECT: every sink/destination x both
-// directions returns an error and EffectConflict, and writes nothing.
-func TestPagerDutyReadbackRefusesAShapeThatChangedDuringTheCall(t *testing.T) {
-	setProbeEnv(t, "2")
-	cells := 0
-	for _, direction := range [][]string{
-		{probeTableLegacy, probeTableCurrent},
-		{probeTableCurrent, probeTableLegacy},
-		{probeTableLegacy, probeTableFailing},
-		{probeTableCurrent, probeTableAbsent},
-	} {
-		for _, sinkCase := range pagerDutyContractSinkCases(t, "org-acme") {
-			label := fmt.Sprintf("%s->%s sink=%s", direction[0], direction[1], sinkCase.name)
-			conn := &contractProbeConn{shapes: direction}
-			inspection, err := sinkCase.build(conn).InspectEffect(context.Background(), sinkCase.claim, sinkCase.effect)
-			cells++
-			if !errors.Is(err, ErrOperationalTableContractUnknown) || inspection != EffectConflict {
-				t.Fatalf("%s: inspection=%s err=%v want conflict + unknown contract", label, inspection, err)
-			}
-			if len(conn.inserts) != 0 || conn.sends != 0 {
-				t.Fatalf("%s: readback wrote %v", label, conn.inserts)
-			}
-		}
-	}
-	t.Logf("raced readback cells=%d", cells)
 }

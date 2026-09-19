@@ -131,6 +131,9 @@ func runSkewGenerator(t *testing.T, base func() any, leaves []skewLeaf, declarat
 	for range leaves {
 		combos *= 125
 	}
+	// One body per read position is built once and its generated leaves are
+	// overwritten for every case; every case sets every leaf in every body.
+	bodies := [3]any{base(), base(), base()}
 	for _, opts := range declarations {
 		for n := 0; n < combos; n++ {
 			c := skewCase{symbols: make([][3]string, len(leaves))}
@@ -141,7 +144,7 @@ func runSkewGenerator(t *testing.T, base func() any, leaves []skewLeaf, declarat
 				c.symbols[l] = [3]string{skewSymbols[k%5], skewSymbols[(k/5)%5], skewSymbols[k/25]}
 			}
 			build := func(pos int) Snapshot {
-				body := base()
+				body := bodies[pos]
 				for l, leaf := range leaves {
 					symbol := c.symbols[l][pos]
 					if spelled, ok := secondSpelling[symbol]; ok && pos == 2 {
@@ -275,6 +278,7 @@ func syntheticDeclarations(leaves []skewLeaf) []Options {
 // TestWriteSkewInvariant_Synthetic enumerates one and two leaves of a flat
 // body under every per-leaf declaration coverage.
 func TestWriteSkewInvariant_Synthetic(t *testing.T) {
+	t.Parallel()
 	base := func() any { return map[string]any{"other": json.Number("7")} }
 	for _, leaves := range [][]skewLeaf{
 		{syntheticLeaf("l0")},
@@ -294,6 +298,7 @@ func TestWriteSkewInvariant_Synthetic(t *testing.T) {
 // captured team-scoped sunburst body under that case's real declarations,
 // varying the value of one and two keyed elements.
 func TestWriteSkewInvariant_RealSunburstDeclarations(t *testing.T) {
+	t.Parallel()
 	opts := investmentSunburstTeamScopedParityWithLimit(investmentSunburstDefaultLimit)
 	raw, err := os.ReadFile("testdata/investmentsunburst_teamscoped_skew_baseline_3cf72260.json")
 	if err != nil {
@@ -349,6 +354,7 @@ func TestWriteSkewInvariant_RealSunburstDeclarations(t *testing.T) {
 // the captured GET /api/v1/investment body under that route's real
 // declarations, varying one and two theme_distribution entries.
 func TestWriteSkewInvariant_RealInvestmentDeclarations(t *testing.T) {
+	t.Parallel()
 	raw, err := os.ReadFile("testdata/investment_default_window_baseline_852da907.json")
 	if err != nil {
 		t.Fatalf("read: %v", err)

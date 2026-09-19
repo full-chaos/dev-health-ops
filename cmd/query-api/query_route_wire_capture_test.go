@@ -144,14 +144,15 @@ func TestRegisteredPrDetailDocument_MatchesCapturedWireFixture(t *testing.T) {
 	}
 }
 
-// TestRegisteredSecurityDocuments_MatchCapturedWireFixtures proves each
+// TestRegisteredCapturedDocuments_MatchCapturedWireFixtures proves each
 // registered security document digests to the wire-form text produced by
 // the web repo's own wire-parity tooling, so a real client's request is
 // accepted by the route.
-func TestRegisteredSecurityDocuments_MatchCapturedWireFixtures(t *testing.T) {
+func TestRegisteredCapturedDocuments_MatchCapturedWireFixtures(t *testing.T) {
 	for _, c := range []struct{ fixture, registered string }{
 		{"testdata/wire_capture/securityoverview_captured.graphql", registeredSecurityOverviewDocument},
 		{"testdata/wire_capture/securityalerts_captured.graphql", registeredSecurityAlertsDocument},
+		{"testdata/wire_capture/busfactor_captured.graphql", registeredBusFactorDocument},
 	} {
 		captured, err := os.ReadFile(c.fixture)
 		if err != nil {

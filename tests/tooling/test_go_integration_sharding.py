@@ -41,6 +41,7 @@ EXPECTED_PACKAGES = {
     "cmd/go-api-routing",
     "cmd/query-api",
     "cmd/query-api/internal/analytics",
+    "cmd/query-api/internal/busfactor",
     # cmd/query-api/internal/explain's integration-tagged tests exercise
     # the team-scoped repo filter's pushed-down membership condition
     # against a real ClickHouse: the query text that once returned every

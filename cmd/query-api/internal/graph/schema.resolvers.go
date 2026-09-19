@@ -12,6 +12,7 @@ import (
 	"github.com/99designs/gqlgen/graphql"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/analytics"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/authctx"
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/busfactor"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/capacityforecast"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/cognitiveload"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/complexitytimeseries"
@@ -864,9 +865,19 @@ func (r *queryResolver) DataHealth(ctx context.Context, team string) (*model.Dat
 	panic(fmt.Errorf("not implemented: DataHealth - dataHealth"))
 }
 
-// BusFactor is the resolver for the busFactor field.
+// BusFactor is the resolver for the busFactor field. It reads only the
+// caller's own org: the orgId argument must equal the org of the request
+// identity, otherwise the request is denied. A team scope resolves through
+// the shared team-ownership condition at the instant of the request.
 func (r *queryResolver) BusFactor(ctx context.Context, orgID string, scope *model.BusFactorScopeInput) (*model.BusFactor, error) {
-	panic(fmt.Errorf("not implemented: BusFactor - busFactor"))
+	if err := requireOwnOrg(ctx, orgID); err != nil {
+		return nil, err
+	}
+	result, err := busfactor.Resolve(ctx, r.ClickHouse, orgID, scope, time.Now().UTC())
+	if err != nil {
+		return nil, fmt.Errorf("busFactor: %w", err)
+	}
+	return result, nil
 }
 
 // CompoundingRisk is the resolver for the compoundingRisk field.

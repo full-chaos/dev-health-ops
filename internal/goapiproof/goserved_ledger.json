@@ -1,0 +1,32 @@
+{
+  "deletion_error_message": "{operation} is served by query-api and has no Python implementation. The Go dispatcher did not intercept this request: verify the go_api_routing_state row for this operation is present with mode 'canary' or 'primary', and that the client's query document digest matches the one query-api registers (cmd/query-api/query_route.go).",
+  "entries": [
+    {
+      "operation": "capacityForecast",
+      "two_plane_ops_sha": "33ebad6b2d1747302667fb14902dafaa1bdf99ea",
+      "guards": [
+        {"file": "internal/jobs/metrics/numerical/capacity_golden_rot_guard_test.go", "test": "TestCapacityForecastGoldenMatchesLivePython"},
+        {"file": "internal/jobs/metrics/numerical/capacity_forecast_test.go", "test": "TestCapacityForecastMatchesPython"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_retained_oracles_exist_and_have_no_production_importer"}
+      ]
+    },
+    {
+      "operation": "capacityForecasts",
+      "two_plane_ops_sha": "33ebad6b2d1747302667fb14902dafaa1bdf99ea",
+      "guards": [
+        {"file": "internal/jobs/metrics/numerical/capacity_golden_rot_guard_test.go", "test": "TestCapacityForecastGoldenMatchesLivePython"},
+        {"file": "internal/jobs/metrics/numerical/capacity_forecast_test.go", "test": "TestCapacityForecastMatchesPython"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_retained_oracles_exist_and_have_no_production_importer"}
+      ]
+    },
+    {
+      "operation": "throughputForecast",
+      "two_plane_ops_sha": "33ebad6b2d1747302667fb14902dafaa1bdf99ea",
+      "guards": [
+        {"file": "cmd/query-api/internal/throughputforecast/kernel_golden_test.go", "test": "TestForecastThroughputCapacityMatchesLivePythonBitExact"},
+        {"file": "cmd/query-api/internal/throughputforecast/kernel_golden_test.go", "test": "TestNoHistoryPayloadMatchesLivePythonBitExact"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_retained_oracles_exist_and_have_no_production_importer"}
+      ]
+    }
+  ]
+}

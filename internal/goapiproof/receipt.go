@@ -203,6 +203,16 @@ func Write(ctx context.Context, db Querier, receipt Receipt) (uuid.UUID, error) 
 			return uuid.Nil, fmt.Errorf("goapiproof: refusing to write a receipt whose baseline_defect array contains an empty citation (%d entries) -- cardinality() counts it, so the enablement predicate would read this as a fully-cited mismatch while it cites nothing", len(receipt.BaselineDefects))
 		}
 	}
+	// The go-only prefix marks the ledger's own citation and nothing else:
+	// any receipt carrying it must carry exactly that citation on the
+	// mismatch arm.
+	ledger, ledgerErr := DefaultGoServedLedger()
+	if ledgerErr != nil {
+		return uuid.Nil, ledgerErr
+	}
+	if err := ValidateGoOnlyReceiptCitations(ledger, receipt.SelectedOperation, receipt.TerminalState, receipt.BaselineDefects); err != nil {
+		return uuid.Nil, err
+	}
 	if !measurementRoutes[receipt.MeasurementRoute] {
 		// A receipt with no route cannot be told apart from served
 		// traffic later, which is the entire reason the column exists.

@@ -66,6 +66,12 @@ type Admission struct {
 	// disagree with admitBuild about what happened. It is persisted as
 	// go_api_proof_run.build_binding by alembic 0129.
 	EdgeBuildBinding string
+	// GoOnly is true when the pair was admitted by the go-only class (see
+	// goonly.go): the baseline leg was the deletion error of an operation the
+	// go-served ledger names, and the candidate alone carried the proof.
+	// GoOnlyCitation is then the ledger's own citation for the operation.
+	GoOnly         bool
+	GoOnlyCitation string
 }
 
 // Whether a measured response carried the serving build on itself.
@@ -108,6 +114,13 @@ type AdmissionInput struct {
 	// no history. For the other thirteen the root is non-null in the SDL,
 	// so a null is the operation failing to produce its own result.
 	RootNullable bool
+	// Operation names the operation under measurement. It selects the
+	// go-served ledger entry; empty means no ledger entry can apply.
+	Operation string
+	// GoServed is the go-served ledger. Nil means the go-only class does not
+	// exist for this call and Admit behaves exactly as it does for an
+	// operation whose Python path is intact.
+	GoServed *GoServedLedger
 
 	Candidate, Baseline         Observation
 	CandidateSnap, BaselineSnap Snapshot
@@ -155,23 +168,58 @@ func Admit(in AdmissionInput) Admission {
 				fmt.Sprintf("%s body carried bytes after its first JSON value: the decoder ignores them, so the comparison would not be over the bytes actually served", leg.name))
 		}
 	}
-	// 5. No GraphQL errors on either side.
-	for _, leg := range []struct {
+	// 5. No GraphQL errors on either side -- except the one shape the
+	//    go-only class admits: an operation the ledger names, whose baseline
+	//    is exactly its deletion error. The candidate is never excused.
+	goOnly, citation, why := goOnlyBaseline(in)
+	legs := []struct {
 		name string
 		snap Snapshot
-	}{{"candidate", in.CandidateSnap}, {"baseline", in.BaselineSnap}} {
+	}{{"candidate", in.CandidateSnap}, {"baseline", in.BaselineSnap}}
+	if goOnly {
+		legs = legs[:1]
+	}
+	for _, leg := range legs {
 		if len(leg.snap.Errors) > 0 {
-			return refused(RefusalErroredResponse,
-				fmt.Sprintf("%s returned %d GraphQL error(s): agreement on a failure is not proof the operation works on the candidate plane", leg.name, len(leg.snap.Errors)))
+			detail := fmt.Sprintf("%s returned %d GraphQL error(s): agreement on a failure is not proof the operation works on the candidate plane", leg.name, len(leg.snap.Errors))
+			if leg.name == "baseline" && why != "" {
+				detail += "; " + why
+			}
+			return refused(RefusalErroredResponse, detail)
 		}
 	}
 	// 6. The operation's OWN root field, present and non-empty. `data: {}`
 	//    and a missing root both decode to something a presence check
-	//    accepts while proving that nothing was actually resolved.
-	if a := admitResponseRoot(in); !a.Admitted {
+	//    accepts while proving that nothing was actually resolved. On the
+	//    go-only class the candidate stands alone, so a null root is refused
+	//    even where the SDL allows it: with no baseline, a null proves
+	//    nothing.
+	if a := admitResponseRoot(in, goOnly); !a.Admitted {
 		return a
 	}
-	return Admission{Admitted: true, EdgeBuildBinding: build.EdgeBuildBinding}
+	return Admission{Admitted: true, EdgeBuildBinding: build.EdgeBuildBinding, GoOnly: goOnly, GoOnlyCitation: citation}
+}
+
+// goOnlyBaseline decides whether this pair is the go-only class: the ledger
+// names the operation and the baseline is exactly its deletion error. why is
+// a sentence for a refusal detail when the baseline errored and the class did
+// not apply.
+func goOnlyBaseline(in AdmissionInput) (goOnly bool, citation, why string) {
+	if len(in.BaselineSnap.Errors) == 0 || in.GoServed == nil || in.Operation == "" {
+		return false, "", ""
+	}
+	matched, reason := in.GoServed.DeletionErrorMatches(in.Operation, in.ResponseRoot, in.BaselineSnap)
+	if !matched {
+		return false, "", ""
+	}
+	if _, listed := in.GoServed.Entry(in.Operation); !listed {
+		return false, "", "the baseline is the deletion error, but the go-served ledger does not name " + in.Operation
+	}
+	built, err := NewGoOnlyCitation(in.GoServed, in.Operation)
+	if err != nil {
+		return false, "", reason + err.Error()
+	}
+	return true, built, ""
 }
 
 func admitPlanes(in AdmissionInput) Admission {
@@ -248,16 +296,21 @@ func admitBuild(in AdmissionInput) Admission {
 	return Admission{Admitted: true, EdgeBuildBinding: EdgeBuildPresent}
 }
 
-func admitResponseRoot(in AdmissionInput) Admission {
+func admitResponseRoot(in AdmissionInput, candidateOnly bool) Admission {
 	if in.ResponseRoot == "" {
 		return refused(RefusalEmptyResponseRoot,
 			"this operation declares no ResponseRoot, so the presence of its own result cannot be checked")
 	}
-	for _, leg := range []struct {
+	nullable := in.RootNullable && !candidateOnly
+	legs := []struct {
 		name string
 		snap Snapshot
-	}{{"candidate", in.CandidateSnap}, {"baseline", in.BaselineSnap}} {
-		if detail := emptyRootDetail(leg.name, in.ResponseRoot, in.RootNullable, leg.snap); detail != "" {
+	}{{"candidate", in.CandidateSnap}, {"baseline", in.BaselineSnap}}
+	if candidateOnly {
+		legs = legs[:1]
+	}
+	for _, leg := range legs {
+		if detail := emptyRootDetail(leg.name, in.ResponseRoot, nullable, leg.snap); detail != "" {
 			return refused(RefusalEmptyResponseRoot, detail)
 		}
 	}

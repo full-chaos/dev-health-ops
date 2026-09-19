@@ -129,6 +129,12 @@ func WriteREST(ctx context.Context, db Querier, receipt RESTReceipt) (uuid.UUID,
 			return uuid.Nil, fmt.Errorf("goapiproof: refusing to write a REST receipt whose baseline_defect array contains an empty citation (%d entries) -- cardinality() counts it, so the enablement predicate would read this as a fully-cited mismatch while it cites nothing", len(receipt.BaselineDefects))
 		}
 	}
+	// REST has no go-only class: the prefix is refused on either array.
+	for _, ticket := range append(append([]string(nil), receipt.BaselineDefects...), receipt.DeclaredDefects...) {
+		if HasGoOnlyPrefix(ticket) {
+			return uuid.Nil, fmt.Errorf("goapiproof: refusing to write a REST receipt whose citation starts with %q: only a GraphQL go-only receipt may carry it", GoOnlyCitationPrefix)
+		}
+	}
 	for _, ticket := range receipt.DeclaredDefects {
 		if NamesNothing(ticket) {
 			return uuid.Nil, fmt.Errorf("goapiproof: refusing to write a REST receipt whose baseline_defect_declared array contains an empty citation (%d entries)", len(receipt.DeclaredDefects))

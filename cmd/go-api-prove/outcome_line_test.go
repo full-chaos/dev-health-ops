@@ -57,3 +57,26 @@ func TestTheOutcomeLineNamesAStochasticLeafClassProof(t *testing.T) {
 	}
 	t.Logf("class proven: %s", classLine)
 }
+
+// An operation proven by the go-only class prints its own verdict word, never
+// a two-plane one, so a reader cannot mistake it for a match or a class proof.
+func TestTheOutcomeLineNamesAGoOnlyProof(t *testing.T) {
+	goOnly := goapiproof.Outcome{
+		Operation: "capacityForecast", Mode: "canary", Route: "edge", TerminalState: goapiproof.TerminalStateMismatch,
+		BaselineDefects: []string{goapiproof.GoOnlyCitationPrefix + "op=x"},
+		ProvenUnder:     goapiproof.ProvenUnderGoOnly,
+	}
+	line := executedOutcomeLine(goOnly)
+	if !strings.Contains(line, goapiproof.VerdictGoOnly+" (no two-plane baseline)") {
+		t.Fatalf("go-only line does not carry its verdict word: %q", line)
+	}
+	if strings.Contains(line, " match ") || strings.Contains(line, "PROVEN_UNDER") || strings.Contains(line, " mismatch ") {
+		t.Fatalf("go-only line reads like another proof: %q", line)
+	}
+	inert := goOnly
+	inert.ProvenUnder = ""
+	inert.DifferencesOutsideBaselineDefect = 1
+	if strings.Contains(executedOutcomeLine(inert), goapiproof.VerdictGoOnly) {
+		t.Fatal("an unproven measurement prints the go-only verdict")
+	}
+}

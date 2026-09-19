@@ -922,6 +922,11 @@ type BaselineDefect struct {
 // exemption it does not claim.
 func validateBaselineDefects(defects []BaselineDefect) error {
 	for _, defect := range defects {
+		// The go-only prefix marks the one citation of a go-only receipt
+		// (goonly.go); a declared defect may never claim it.
+		if HasGoOnlyPrefix(defect.Ticket) {
+			return fmt.Errorf("goapiproof: baseline defect %q starts with %q, which only a go-only receipt's own citation may carry", defect.Ticket, GoOnlyCitationPrefix)
+		}
 		hasReason := strings.TrimSpace(defect.IntermittentReason) != ""
 		if defect.Intermittent && !hasReason {
 			return fmt.Errorf("goapiproof: baseline defect %s is marked intermittent with no IntermittentReason -- an exemption from the stale rule must say why the defect comes and goes", defect.Ticket)

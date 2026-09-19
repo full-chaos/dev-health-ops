@@ -309,7 +309,9 @@ type Outcome struct {
 	// "unbound_edge").
 	CoveredByShape map[string]int `json:"covered_by_shape,omitempty"`
 	OutsideByShape map[string]int `json:"outside_by_shape,omitempty"`
-	// ProvenUnder is ProvenUnderStochasticLeafClass when the measurement's
+	// ProvenUnder is ProvenUnderGoOnly when the go-only class admitted the
+	// pair and nothing lies outside its citation. Otherwise
+	// ProvenUnderStochasticLeafClass when the measurement's
 	// only departures from equality are the drawn values of a declared
 	// StochasticLeafClass and nothing lies outside a citation. Empty for an
 	// operation proven by equality or not proven at all, so a reader can
@@ -394,8 +396,12 @@ type Summary struct {
 	// ProvenUnderStochasticLeafClass counts executed outcomes whose
 	// ProvenUnder is ProvenUnderStochasticLeafClass. Serialised even when
 	// zero.
-	ProvenUnderStochasticLeafClass int            `json:"proven_under_stochastic_leaf_class"`
-	ByRefusalReason                map[string]int `json:"by_refusal_reason"`
+	ProvenUnderStochasticLeafClass int `json:"proven_under_stochastic_leaf_class"`
+	// ProvenGoOnly counts executed outcomes proven by the go-only class
+	// (ProvenUnderGoOnly). Serialised even when zero. They also count under
+	// ByTerminalState "mismatch", the arm their receipt is written on.
+	ProvenGoOnly    int            `json:"proven_go_only"`
+	ByRefusalReason map[string]int `json:"by_refusal_reason"`
 }
 
 // RegistryView is what the RUNNING query-api reports about itself.
@@ -472,6 +478,10 @@ type Runner struct {
 	Artifacts *ArtifactStore
 	Config    Config
 	Now       func() time.Time
+	// GoServed is the go-served ledger. Nil disables the go-only class, so a
+	// Runner without it refuses every deleted-Python operation as an errored
+	// baseline.
+	GoServed *GoServedLedger
 
 	// sealed is what the last Run measured. Receipts are built from THIS
 	// and never from anything a caller holds -- see sealedOutcome. It is
@@ -543,6 +553,9 @@ func (r *Runner) Run(ctx context.Context) ([]Outcome, Summary, error) {
 			summary.ByTerminalState[outcome.TerminalState]++
 			if outcome.ProvenUnder == ProvenUnderStochasticLeafClass {
 				summary.ProvenUnderStochasticLeafClass++
+			}
+			if outcome.ProvenUnder == ProvenUnderGoOnly {
+				summary.ProvenGoOnly++
 			}
 		} else {
 			summary.Refused++
@@ -909,6 +922,8 @@ func (r *Runner) proveRequest(ctx context.Context, operation string, variantName
 		NamedBuild:    r.Registry.BuildIdentity,
 		ResponseRoot:  spec.ResponseRoot,
 		RootNullable:  spec.RootNullable,
+		Operation:     operation,
+		GoServed:      r.GoServed,
 		Candidate:     candidate,
 		Baseline:      baseline,
 		CandidateSnap: candidateSnapshot,
@@ -923,59 +938,71 @@ func (r *Runner) proveRequest(ctx context.Context, operation string, variantName
 	// receipt must state the binding that was actually checked.
 	outcome.EdgeBuildBinding = admission.EdgeBuildBinding
 
-	result := Compare(baselineSnapshot, candidateSnapshot, parity)
-	// Compare sees only the decoded bodies; the HTTP answer (status and
-	// every compared header) is part of what each plane answered. When it
-	// differs, the planes did not give the same answer, so no body-level
-	// refusal may stand in for the verdict: the HTTP difference recorded
-	// below is a mismatch. A vacuous body contributes nothing further; any
-	// other structural refusal is kept as a $.data finding outside every
-	// declaration, so the body's own reason stays on the receipt.
-	if result.StructuralRefusal != "" && httpAnswersDiffer(baseline, candidate) {
-		structural := result
-		result = Result{TerminalState: TerminalStateMatch}
-		if structural.StructuralRefusal != RefusalVacuousEmptyLegs {
-			result = Result{
-				TerminalState: TerminalStateMismatch,
-				Findings: []Finding{{
-					Kind:   FindingMismatch,
-					Path:   "$.data",
-					Detail: structural.StructuralRefusal + ": " + structural.StructuralDetail,
-				}},
-				DifferencesOutsideBaselineDefect: 1,
+	// The go-only class has no baseline answer to compare: the candidate was
+	// admitted on its own and the verdict is the cited-mismatch arm, whose one
+	// citation is the ledger's. Everything after the comparison (HTTP answer,
+	// build binding) still applies to it.
+	var result Result
+	if admission.GoOnly {
+		result = Result{TerminalState: TerminalStateMismatch}
+	} else {
+		result = Compare(baselineSnapshot, candidateSnapshot, parity)
+		// Compare sees only the decoded bodies; the HTTP answer (status and
+		// every compared header) is part of what each plane answered. When it
+		// differs, the planes did not give the same answer, so no body-level
+		// refusal may stand in for the verdict: the HTTP difference recorded
+		// below is a mismatch. A vacuous body contributes nothing further; any
+		// other structural refusal is kept as a $.data finding outside every
+		// declaration, so the body's own reason stays on the receipt.
+		if result.StructuralRefusal != "" && httpAnswersDiffer(baseline, candidate) {
+			structural := result
+			result = Result{TerminalState: TerminalStateMatch}
+			if structural.StructuralRefusal != RefusalVacuousEmptyLegs {
+				result = Result{
+					TerminalState: TerminalStateMismatch,
+					Findings: []Finding{{
+						Kind:   FindingMismatch,
+						Path:   "$.data",
+						Detail: structural.StructuralRefusal + ": " + structural.StructuralDetail,
+					}},
+					DifferencesOutsideBaselineDefect: 1,
+				}
 			}
 		}
-	}
-	if result.StructuralRefusal != "" {
-		// Checked FIRST, ahead of every declared-relaxation guard below:
-		// Compare returns immediately on a structural refusal (see
-		// structuralAgreementFailure/vacuousEmptyLegs), so StaleBaselineDefects
-		// and the rest of Result were never computed for this pair. CHAOS-5661:
-		// the JOB 7 step 7 run 2 refusal read "declared baseline defects
-		// covered no difference" when the true cause was zero node-id
-		// overlap, and that text must never stand in for this one again --
-		// which this ordering guarantees, since the stale-declaration checks
-		// below are unreachable once this fires.
-		return refuse(result.StructuralRefusal, result.StructuralDetail)
-	}
-	// Every field below is ONE shared definition, Result.Acceptance
-	// (compare.go): this runner refuses on the FIRST entry it returns,
-	// in the fixed priority order Acceptance's own doc comment states
-	// and must never reorder -- see that comment for why
-	// UndeclaredNumericLeaves/LiveBaselineDefectsUnexplained/UnusedTierB
-	// are checked ahead of the guards after them. The REST prover
-	// (cmd/go-api-rest-prove/main.go) calls the SAME method, so a new
-	// acceptance rule is added once, in compare.go, and both provers
-	// enforce it identically.
-	if refusals := result.Acceptance(); len(refusals) > 0 {
-		first := refusals[0]
-		return refuse(first.Code, first.Detail)
+		if result.StructuralRefusal != "" {
+			// Checked FIRST, ahead of every declared-relaxation guard below:
+			// Compare returns immediately on a structural refusal (see
+			// structuralAgreementFailure/vacuousEmptyLegs), so StaleBaselineDefects
+			// and the rest of Result were never computed for this pair.
+			// A refusal once read "declared baseline defects
+			// covered no difference" when the true cause was zero node-id
+			// overlap, and that text must never stand in for this one again --
+			// which this ordering guarantees, since the stale-declaration checks
+			// below are unreachable once this fires.
+			return refuse(result.StructuralRefusal, result.StructuralDetail)
+		}
+		// Every field below is ONE shared definition, Result.Acceptance
+		// (compare.go): this runner refuses on the FIRST entry it returns,
+		// in the fixed priority order Acceptance's own doc comment states
+		// and must never reorder -- see that comment for why
+		// UndeclaredNumericLeaves/LiveBaselineDefectsUnexplained/UnusedTierB
+		// are checked ahead of the guards after them. The REST prover
+		// (cmd/go-api-rest-prove/main.go) calls the SAME method, so a new
+		// acceptance rule is added once, in compare.go, and both provers
+		// enforce it identically.
+		if refusals := result.Acceptance(); len(refusals) > 0 {
+			first := refusals[0]
+			return refuse(first.Code, first.Detail)
+		}
 	}
 
 	outcome.Executed = true
 	outcome.TerminalState = result.TerminalState
 	outcome.Findings = result.Findings
 	outcome.BaselineDefects = result.BaselineDefectsMatched
+	if admission.GoOnly {
+		outcome.BaselineDefects = []string{admission.GoOnlyCitation}
+	}
 	if result.StochasticLeafCitation != "" {
 		// The class citation rides in the same array as the baseline-defect
 		// tickets, prefixed so the row says which one it is. This is what
@@ -1111,6 +1138,10 @@ func (r *Runner) proveRequest(ctx context.Context, operation string, variantName
 	if result.StochasticLeafCitation != "" && outcome.TerminalState == TerminalStateMismatch &&
 		outcome.DifferencesOutsideBaselineDefect == 0 {
 		outcome.ProvenUnder = ProvenUnderStochasticLeafClass
+	}
+	if admission.GoOnly && outcome.TerminalState == TerminalStateMismatch &&
+		outcome.DifferencesOutsideBaselineDefect == 0 {
+		outcome.ProvenUnder = ProvenUnderGoOnly
 	}
 	// Sealed LAST, from whatever the run concluded after every adjustment
 	// above. Assigning any exported field afterwards changes the report

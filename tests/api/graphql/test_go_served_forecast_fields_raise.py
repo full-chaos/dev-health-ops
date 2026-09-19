@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 from dev_health_ops.api.graphql.schema import (
@@ -41,3 +44,33 @@ async def test_field_returns_error_and_no_data(operation: str) -> None:
     )
     assert operation in result.errors[0].message
     assert not (result.data or {}).get(operation)
+
+
+_LEDGER = (
+    Path(__file__).resolve().parents[3]
+    / "internal"
+    / "goapiproof"
+    / "goserved_ledger.json"
+)
+
+
+def test_the_go_served_ledger_names_exactly_the_raising_fields() -> None:
+    ledger = json.loads(_LEDGER.read_text())
+    assert sorted(entry["operation"] for entry in ledger["entries"]) == sorted(_QUERIES)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", sorted(_QUERIES))
+async def test_the_wire_error_is_the_ledger_deletion_error(operation: str) -> None:
+    """The prover recognises the deletion error by this exact text and path."""
+    ledger = json.loads(_LEDGER.read_text())
+    query, _ = _QUERIES[operation]
+    result = await schema.execute(query, context_value=None)
+
+    assert result.errors is not None and len(result.errors) == 1
+    error = result.errors[0].formatted
+    assert error["message"] == ledger["deletion_error_message"].replace(
+        "{operation}", operation
+    )
+    assert error["path"] == [operation]
+    assert set(error) <= {"message", "locations", "path"}

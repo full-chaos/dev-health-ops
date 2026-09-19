@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+	"strings"
 )
 
 // CHAOS-5661: compareJSON assumes the two legs describe the SAME entities
@@ -503,4 +504,133 @@ func vacuousEmptyLegs(baseline, candidate any, opts Options) bool {
 		return false
 	}
 	return countNonNullLeaves(baseline) == 0 && countNonNullLeaves(candidate) == 0 && reflect.DeepEqual(baseline, candidate)
+}
+
+// nonEmptyCollection reports whether the dotted path (rooted at the `data`
+// object, written with its leading "data." segment) resolves to a list with
+// at least one element.
+func nonEmptyCollection(data any, path string) bool {
+	cur := data
+	for _, seg := range strings.Split(strings.TrimPrefix(path, "data."), ".") {
+		obj, ok := cur.(map[string]any)
+		if !ok {
+			return false
+		}
+		cur, ok = obj[seg]
+		if !ok {
+			return false
+		}
+	}
+	list, ok := cur.([]any)
+	return ok && len(list) > 0
+}
+
+// emptyOnBothLegs names the first required collection that is empty or
+// absent on both decoded bodies; empty when every required collection holds
+// an element on at least one leg.
+func emptyOnBothLegs(baseline, candidate any, required []string) string {
+	for _, path := range required {
+		if !nonEmptyCollection(baseline, path) && !nonEmptyCollection(candidate, path) {
+			return fmt.Sprintf("%s is empty on both legs: two empty answers agree without either plane having read anything, so this request measured nothing for the scope it exists to exercise", path)
+		}
+	}
+	return ""
+}
+
+// ScopeEcho is one requirement that a list's elements carry the requested
+// scope value. Value is filled when the request is built.
+type ScopeEcho struct {
+	// List is the dotted path (rooted at `data`, with its leading "data."
+	// segment) of the list to check.
+	List string
+	// Fields are dotted paths relative to one element; an element satisfies
+	// the requirement when ANY of them holds the value.
+	Fields []string
+	// Contains selects a case-insensitive substring match instead of a
+	// case-insensitive equality.
+	Contains bool
+	// FirstOnly checks only the first element (a page's first cursor).
+	FirstOnly bool
+	// Value is the requested scope value.
+	Value string
+	// Scalar makes List a path to ONE string leaf (for example the answer's
+	// echoed scope) that must equal Value on both legs; a missing or null
+	// leaf is a failure.
+	Scalar bool
+}
+
+func listAt(data any, path string) ([]any, bool) {
+	cur := data
+	for _, seg := range strings.Split(strings.TrimPrefix(path, "data."), ".") {
+		obj, ok := cur.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		if cur, ok = obj[seg]; !ok {
+			return nil, false
+		}
+	}
+	list, ok := cur.([]any)
+	return list, ok
+}
+
+func fieldAt(elem any, path string) (string, bool) {
+	cur := elem
+	for _, seg := range strings.Split(path, ".") {
+		obj, ok := cur.(map[string]any)
+		if !ok {
+			return "", false
+		}
+		if cur, ok = obj[seg]; !ok {
+			return "", false
+		}
+	}
+	str, ok := cur.(string)
+	return str, ok
+}
+
+func echoes(elem any, e ScopeEcho) bool {
+	for _, f := range e.Fields {
+		got, ok := fieldAt(elem, f)
+		if !ok {
+			continue
+		}
+		if e.Contains && strings.Contains(strings.ToLower(got), strings.ToLower(e.Value)) {
+			return true
+		}
+		if !e.Contains && strings.EqualFold(got, e.Value) {
+			return true
+		}
+	}
+	return false
+}
+
+// scopeNotReflected names the first list, on either leg, holding an element
+// that does not carry the requested scope; empty when every element of every
+// declared list does (an empty or absent list has nothing to contradict).
+func scopeNotReflected(baseline, candidate any, required []ScopeEcho) string {
+	for _, e := range required {
+		for leg, data := range map[string]any{"baseline": baseline, "candidate": candidate} {
+			if e.Scalar {
+				got, ok := fieldAt(data, strings.TrimPrefix(e.List, "data."))
+				if !ok || !strings.EqualFold(got, e.Value) {
+					return fmt.Sprintf("%s on the %s leg is not the requested scope: the answer does not echo the scope the request asked for, so a match would prove nothing about that branch", e.List, leg)
+				}
+				continue
+			}
+			list, ok := listAt(data, e.List)
+			if !ok || len(list) == 0 {
+				continue
+			}
+			if e.FirstOnly {
+				list = list[:1]
+			}
+			for i, elem := range list {
+				if !echoes(elem, e) {
+					return fmt.Sprintf("%s[%d] on the %s leg does not carry the requested scope in %v: the answer does not show the request's scope was applied, so a match would prove nothing about that branch", e.List, i, leg, e.Fields)
+				}
+			}
+		}
+	}
+	return ""
 }

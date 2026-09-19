@@ -148,7 +148,45 @@ type Variant struct {
 	// base request's divergence has no reason to cover the variant's (or
 	// vice versa).
 	Parity Options
+
+	// Instance, when set, marks a variant whose request needs one REAL
+	// identifier from the run (a repository that has alerts, a search term
+	// that matches an alert, ...). The run supplies it as
+	// `-instance-id <operation>.<variant>=<value>`; without one the variant
+	// is REFUSED by name, never sent with a guessed value.
+	Instance *VariantInstance
 }
+
+// VariantInstance describes the run-supplied identifier a Variant needs.
+type VariantInstance struct {
+	// Kind says in words what KIND of value the run must supply, so the
+	// operator can pick it with a read-only query. It never carries a value.
+	Kind string
+	// Bind writes the supplied value into the variant's variables.
+	Bind func(variables map[string]any, value string)
+	// EchoFor declares where the answer must show the supplied value: it
+	// returns the ScopeEcho requirements for one supplied value.
+	EchoFor func(value string) []ScopeEcho
+}
+
+// Echo returns the scope-echo requirements for one supplied value.
+func (i *VariantInstance) Echo(value string) []ScopeEcho {
+	if i == nil || i.EchoFor == nil {
+		return nil
+	}
+	return i.EchoFor(value)
+}
+
+// kindFor returns the words describing the identifier a missing key needs.
+func (i *VariantInstance) kindFor(missingKey string) string {
+	if i == nil || missingKey == "" {
+		return ""
+	}
+	return i.Kind
+}
+
+// InstanceKey is the -instance-id key naming one variant's identifier.
+func InstanceKey(operation, variant string) string { return operation + "." + variant }
 
 // volatileReason documents one excluded field. Kept as a named constant
 // so the reason travels with every operation that cites it rather than
@@ -187,7 +225,12 @@ var operationSpecs = map[string]OperationSpec{
 		Variables: func(orgID string, _ Window) map[string]any {
 			return map[string]any{"orgId": orgID, "scope": nil}
 		},
-		// Every variant below compares exactly. The team variants name a
+		// A team that OWNS repositories is deliberately not a variant: Go
+		// selects the team's repositories by ownership (team_repo_ownership)
+		// and Python by member authorship, so the two answers differ by
+		// design and no computed check admits that difference; it is a
+		// refused case, not a blanket citation.
+		// Every other variant compares exactly. The team variants name a
 		// team that owns nothing and that no member has authored for, so
 		// both planes answer an empty window; a team that owns repositories
 		// is not a corpus case because the two planes select its
@@ -198,6 +241,7 @@ var operationSpecs = map[string]OperationSpec{
 			busFactorVariant("REPO_MALFORMED", map[string]any{"repoId": "not-a-uuid"}),
 			busFactorVariant("TEAM_UNKNOWN", map[string]any{"teamId": "team-abc-123"}),
 			busFactorVariant("TEAM_BLANK", map[string]any{"teamId": ""}),
+			busFactorInstanceVariant("REPO_VALID", "a repository id that has commit stats", "repoId", "data.busFactor.repos"),
 			busFactorVariant("REPO_AND_TEAM_UNKNOWN", map[string]any{"repoId": "00000000-0000-0000-0000-000000000001", "teamId": "team-abc-123"}),
 		},
 	},
@@ -661,8 +705,10 @@ var operationSpecs = map[string]OperationSpec{
 			securityAlertsVariant("REPO_IDS", map[string]any{"repoIds": []any{"00000000-0000-0000-0000-000000000001"}}, nil),
 			securityAlertsVariant("SINCE_UNTIL", map[string]any{"since": "2026-06-01", "until": "2026-08-31"}, nil),
 			securityAlertsVariant("SEARCH", map[string]any{"search": "ABC-123"}, nil),
+			securityAlertsInstanceVariant("REPO_VALID", "a repository id that has alerts", "repoIds", true),
+			securityAlertsInstanceVariant("SEARCH_VALID", "a search term that matches an alert's title, package or CVE", "search", false),
 			securityAlertsVariant("PAGE_FIRST", nil, map[string]any{"first": 5}),
-			securityAlertsVariant("PAGE_AFTER", nil, map[string]any{"first": 5, "after": "5"}),
+			securityAlertsSecondPageVariant(),
 			securityAlertsVariant("PAGE_ZERO", nil, map[string]any{"first": 0}),
 		},
 	},
@@ -679,6 +725,7 @@ var operationSpecs = map[string]OperationSpec{
 			securityOverviewVariant("REPO_IDS", map[string]any{"repoIds": []any{"00000000-0000-0000-0000-000000000001"}}),
 			securityOverviewVariant("SINCE_UNTIL", map[string]any{"since": "2026-06-01", "until": "2026-08-31"}),
 			securityOverviewVariant("SEARCH", map[string]any{"search": "ABC-123"}),
+			securityOverviewRepoVariant("REPO_VALID", "a repository id that has open alerts"),
 		},
 	},
 	// The overlay `threshold` fields, estimateCoverage.ratio and
@@ -1048,4 +1095,92 @@ func metricLineageParity() Options {
 		Intermittent:       true,
 		IntermittentReason: "metricLineage is null for a metric no table holds and for tables with no answer, so the leaf exists only for a known metric",
 	}}}
+}
+
+// busFactorInstanceVariant is a busFactor scope variant whose scope field is
+// the run-supplied identifier, measured only when the answer lists at least
+// one repository on a leg.
+func busFactorInstanceVariant(name, kind, scopeField, nonEmpty string) Variant {
+	return Variant{
+		Name: name,
+		Variables: func(orgID string, _ Window) map[string]any {
+			return map[string]any{"orgId": orgID, "scope": map[string]any{}}
+		},
+		Parity: Options{RequireNonEmpty: []string{nonEmpty}},
+		Instance: &VariantInstance{
+			Kind: kind,
+			Bind: func(vars map[string]any, value string) { vars["scope"].(map[string]any)[scopeField] = value },
+			EchoFor: func(value string) []ScopeEcho {
+				return []ScopeEcho{
+					{List: nonEmpty, Fields: []string{"repoId"}, Value: value},
+					{List: "data.busFactor.scope.repoId", Scalar: true, Value: value},
+				}
+			},
+		},
+	}
+}
+
+// securityAlertsInstanceVariant filters the alert list by a run-supplied
+// repository id (asList) or search term, measured only when the list holds
+// at least one alert on a leg.
+func securityAlertsInstanceVariant(name, kind, field string, asList bool) Variant {
+	return Variant{
+		Name: name,
+		Variables: func(orgID string, _ Window) map[string]any {
+			return securityAlertsVariables(orgID, map[string]any{}, nil)
+		},
+		Parity: Options{
+			BaselineDefects: securityAlertsParity.BaselineDefects,
+			RequireNonEmpty: []string{"data.securityAlerts.edges"},
+		},
+		Instance: &VariantInstance{
+			Kind: kind,
+			Bind: func(vars map[string]any, value string) {
+				var v any = value
+				if asList {
+					v = []any{value}
+				}
+				vars["filters"].(map[string]any)[field] = v
+			},
+			EchoFor: func(value string) []ScopeEcho {
+				if asList {
+					return []ScopeEcho{{List: "data.securityAlerts.edges", Fields: []string{"node.repoId"}, Value: value}}
+				}
+				return []ScopeEcho{{List: "data.securityAlerts.edges", Fields: []string{"node.title", "node.packageName", "node.cveId"}, Contains: true, Value: value}}
+			},
+		},
+	}
+}
+
+// securityOverviewRepoVariant filters the overview by a run-supplied
+// repository id, measured only when the top-repository list holds that
+// repository (the only overview list whose elements name a repository).
+func securityOverviewRepoVariant(name, kind string) Variant {
+	return Variant{
+		Name: name,
+		Variables: func(orgID string, _ Window) map[string]any {
+			return map[string]any{"orgId": orgID, "filters": map[string]any{}}
+		},
+		Parity: Options{RequireNonEmpty: []string{"data.securityOverview.topRepos"}},
+		Instance: &VariantInstance{
+			Kind: kind,
+			Bind: func(vars map[string]any, value string) {
+				vars["filters"].(map[string]any)["repoIds"] = []any{value}
+			},
+			EchoFor: func(value string) []ScopeEcho {
+				return []ScopeEcho{{List: "data.securityOverview.topRepos", Fields: []string{"repoId"}, Value: value}}
+			},
+		},
+	}
+}
+
+// securityAlertsSecondPageVariant reads the page after the first five alerts;
+// it is measured only when that page holds an alert on a leg.
+func securityAlertsSecondPageVariant() Variant {
+	v := securityAlertsVariant("PAGE_AFTER", nil, map[string]any{"first": 5, "after": "5"})
+	v.Parity = Options{
+		BaselineDefects: securityAlertsParity.BaselineDefects,
+		RequireNonEmpty: []string{"data.securityAlerts.edges"},
+	}
+	return v
 }

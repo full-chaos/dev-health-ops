@@ -180,7 +180,7 @@ func parseFlags() (flags, error) {
 	flag.DurationVar(&f.timeout, "timeout", 60*time.Second, "per-request timeout")
 	flag.StringVar(&f.reportPath, "report", "", "write the full JSON report here in addition to stdout")
 	f.instanceIDs = instanceIDFlag{}
-	flag.Var(&f.instanceIDs, "instance-id", "operation=value, repeatable: a REAL row identifier for an operation whose registered document needs one (e.g. the pr operation needs $id), read from this org's own data -- a flag is the run's own input, never a value this command invents. An operation needing one with no entry here is refused by name (operation_needs_an_instance_identifier), not measured with a guess")
+	flag.Var(&f.instanceIDs, "instance-id", "operation=value or operation.VARIANT=value, repeatable: a REAL row identifier for an operation (or one corpus variant) whose request needs one (e.g. the pr operation needs $id), read from this org's own data -- a flag is the run's own input, never a value this command invents. An operation needing one with no entry here is refused by name (operation_needs_an_instance_identifier), not measured with a guess")
 	flag.StringVar(&f.window.SinceUTC, "since-utc", defaults.SinceUTC, "request window start (RFC3339)")
 	flag.StringVar(&f.window.UntilUTC, "until-utc", defaults.UntilUTC, "request window end (RFC3339)")
 	flag.StringVar(&f.window.SinceDate, "since-date", defaults.SinceDate, "request window start (YYYY-MM-DD)")

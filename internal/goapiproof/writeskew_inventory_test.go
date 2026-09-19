@@ -38,6 +38,7 @@ var writeSkewRefusalPlaces = map[string]string{
 	"RESTRefusalBuildUnbound":                 "F0a only: B2 is admitted alongside the same candidate leg C1, whose build already passed",
 	// Structural (F1) and the re-read's own structural refusal (R3).
 	"RefusalVacuousEmptyLegs":     "F1 / F1i",
+	"RefusalScopeNotReflected":    "not an axis: GraphQL prover only",
 	"RefusalLegsDoNotOverlap":     "F1",
 	"RESTRefusalRereadStructural": "R3",
 	// The re-read's own leaf and declaration refusals.

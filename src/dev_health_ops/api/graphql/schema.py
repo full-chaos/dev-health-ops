@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import NoReturn
 
 import strawberry
 from strawberry.types import Info
@@ -163,6 +164,50 @@ from .types.review_edges import (
 from .types.testops_risk import TestOpsRiskInput, TestOpsRiskResult
 
 logger = logging.getLogger(__name__)
+
+
+class GoServedOperationUnavailableError(RuntimeError):
+    """A query-api-served operation reached its Python field, which has no implementation.
+
+    Its own exception type rather than a bare RuntimeError so an operator can
+    grep for it, an alert can match on it, and a future test can assert it
+    without matching on message text.
+    """
+
+
+def _raise_served_by_query_api(operation: str, org_id: str, info: Info) -> NoReturn:
+    """Fail loudly for an operation query-api owns.
+
+    ONE structured error line before raising, per the standing telemetry rule:
+    the exception reaches the client as a GraphQL error with no server context,
+    so without this the operator sees a 500 with nothing pointing at the actual
+    cause -- which is always deploy skew, never a bug in the request.
+    """
+    logger.error(
+        "graphql.operation_served_by_query_api",
+        extra={
+            "operation": operation,
+            # The argument as sent, NOT an authorization decision -- these
+            # resolvers never scoped off it (require_org_id did), and it is
+            # logged only because a digest miss is usually org-agnostic while a
+            # routing-row gap is usually not, and knowing which narrows it fast.
+            "requested_org_id": org_id,
+            "path": str(info.path) if info is not None else "",
+            "reason": (
+                "query-api owns this operation and it has no Python implementation; "
+                "reaching this resolver means the Go "
+                "dispatcher did not intercept -- check the go_api_routing_state "
+                "row for this operation, then the registered document digest"
+            ),
+        },
+    )
+    raise GoServedOperationUnavailableError(
+        f"{operation} is served by query-api and has no Python implementation. "
+        "The Go dispatcher did not intercept this request: verify the "
+        "go_api_routing_state row for this operation is present with "
+        "mode 'canary' or 'primary', and that the client's query document digest matches the one "
+        "query-api registers (cmd/query-api/query_route.go)."
+    )
 
 
 def get_context(info: Info) -> GraphQLContext:
@@ -602,6 +647,32 @@ class Query:
     ) -> ReportRunConnection:
         return await resolve_report_runs(org_id, report_id, limit)
 
+    # These three fields are SERVED BY query-api, not by Python.
+    #
+    # The DECLARATIONS below are load-bearing and must not be deleted. They are
+    # what `dev_health_ops.api.graphql.export_schema` emits into
+    # contracts/graphql/v1/schema.graphql, which is gqlgen's input SDL for
+    # query-api, web's codegen schema, AND half of both planes' routing key --
+    # routeswitch.PostgresSwitch looks up go_api_routing_state by
+    # (schema_digest, document_digest, selected_operation). Measured:
+    # removing these three field registrations drops 116 lines from the export
+    # and moves its sha256 from 29d509cd... to 5e2150ef..., which would
+    # invalidate the routing row of EVERY registered operation at once.
+    #
+    # The BODIES raise. They have no Python implementation, so there is no
+    # Python fallback for these three operations. Every other delegated
+    # operation keeps its fallback.
+    #
+    # In normal operation nothing below ever runs: go_api_dispatcher intercepts
+    # at the HTTP layer, before Strawberry executes, whenever the operation's
+    # go_api_routing_state row is in mode canary or primary. Reaching one of these raises means the
+    # dispatcher did NOT intercept, which is one of exactly three things: the
+    # routing row is missing or not in mode canary or primary, the request's document digest
+    # did not match what query-api registers (a web query-text change deployed
+    # without its ops counterpart), or query-api answered non-200. All three are
+    # deploy skew or outage, and all three are worth a loud failure: the alternative is
+    # returning null or an empty connection, which renders as "no data" and is
+    # indistinguishable from a genuinely empty scope.
     @strawberry.field(description="Compute capacity forecast on-demand")
     async def capacity_forecast(
         self,
@@ -609,10 +680,7 @@ class Query:
         org_id: str,
         input: CapacityForecastInput | None = None,
     ) -> CapacityForecast | None:
-        from .resolvers.capacity import resolve_capacity_forecast
-
-        context = get_context(info)
-        return await resolve_capacity_forecast(context, input)
+        _raise_served_by_query_api("capacityForecast", org_id, info)
 
     @strawberry.field(description="List persisted capacity forecasts")
     async def capacity_forecasts(
@@ -621,10 +689,7 @@ class Query:
         org_id: str,
         filters: CapacityForecastFilterInput | None = None,
     ) -> CapacityForecastConnection:
-        from .resolvers.capacity import resolve_capacity_forecasts
-
-        context = get_context(info)
-        return await resolve_capacity_forecasts(context, filters)
+        _raise_served_by_query_api("capacityForecasts", org_id, info)
 
     @strawberry.field(description="Compute throughput-based capacity forecast")
     async def throughput_forecast(
@@ -633,10 +698,7 @@ class Query:
         org_id: str,
         input: ThroughputForecastInput,
     ) -> ThroughputForecast | None:
-        from .resolvers.forecast import resolve_throughput_forecast
-
-        context = get_context(info)
-        return await resolve_throughput_forecast(context, input)
+        _raise_served_by_query_api("throughputForecast", org_id, info)
 
     @strawberry.field(description="Weekly Engineering Operating Review")
     async def operating_review(

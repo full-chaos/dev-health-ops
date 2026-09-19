@@ -81,6 +81,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
 	"github.com/full-chaos/dev-health-ops/internal/migrationmatrix"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 )
 
 func main() {
@@ -104,7 +105,7 @@ func execute(f flags, parseErr error) error {
 	}
 	if parseErr != nil {
 		err := secrets.NewBoundary(f.postgresURI).Redact(parseErr)
-		if writeErr := writeStoppedBeforeMeasuringReport(f, nil, err); writeErr != nil {
+		if writeErr := writeStoppedBeforeMeasuringReport(f, nil, nil, err); writeErr != nil {
 			return fmt.Errorf("%w; additionally, writing the report failed: %v", err, writeErr)
 		}
 		return err
@@ -140,6 +141,8 @@ type flags struct {
 	buildInfoURL   string
 	candidateBuild string
 	queryAPISrc    string
+
+	allowProverBuildSkew bool
 
 	candidateBearerExec string
 	baselineBearerExec  string
@@ -197,6 +200,7 @@ func parseFlags() (flags, error) {
 	flag.StringVar(&f.pythonAPIURL, "python-api-url", "", "the Python api service's OWN in-cluster address -- the baseline leg (required). Never an edge or ingress URL, for the same reason as -query-api-url")
 	flag.BoolVar(&f.pythonForwarderOff, "python-forwarder-off", false, "attest that the Python app's forwarding switch for every endpoint it can forward to query-api (RESTEndpointSpec.PythonForwarder: POST /api/v1/investment/explain) is OFF for this whole run, so a 200 baseline there is Python's own answer and is compared. The Python app relays query-api's answer without any header that marks it, so nothing on the response can show which plane computed it: without this flag such a 200 baseline is refused by name, and with it every receipt for such an endpoint records the attestation")
 	flag.StringVar(&f.buildInfoURL, "buildinfo-url", "", "GET /buildinfo on query-api -- the ONLY source of the build identity every receipt names. Defaults to -query-api-url + \"/buildinfo\"")
+	flag.BoolVar(&f.allowProverBuildSkew, proverBuildSkewFlag[1:], false, "measure even when this binary was not built from the candidate build's commit (or carries no commit at all): its declarations, shapes and corpus are then another commit's, and the report records the skew as prover_build_skew_allowed")
 	flag.StringVar(&f.candidateBuild, "candidate-build", "", "optional CROSS-CHECK: fail if the running build is not this sha. Never the source of the value written -- the value written always comes from /buildinfo, matching go-api-prove's own -candidate-build flag")
 	flag.StringVar(&f.queryAPISrc, "query-api-src", "", "OPTIONAL dev-only override: path to a REAL query-api source checkout, read LIVE to confirm this corpus's paths match what the mux actually mounts (migrationmatrix.LoadQueryAPIMuxRoutes). Empty (the default) uses goapiproof.MountedRESTPaths, the checked-in snapshot this binary ships with -- the operator tools image carries no Go source tree at all, so that is the ONLY option available there. Set this only when running from a real repo checkout, to catch drift immediately instead of waiting for TestMountedRESTPathsMatchesTheRealQueryAPIMux's own CI run")
 	flag.StringVar(&f.candidateBearerExec, "candidate-bearer-exec", "", "JSON array whose first element is an ALLOWLISTED HELPER NAME (\"mint-envelope\" or \"mint-edge-token\", never a path -- see goapiproof.MintViaAllowlistedHelper) printing a FRESH bearer credential for query-api on stdout, e.g. [\"mint-envelope\",\"-org\",\"<org>\"]. Re-run as the credential ages. The helper reads any secret it needs from ITS OWN environment -- never from an argument here. The remaining elements are the helper's own argv, never a shell string: nothing is interpolated into a shell. The helper's stdout and stderr are NEVER reported by this command")
@@ -282,7 +286,7 @@ func parseFlags() (flags, error) {
 // the receipts will name from /buildinfo, and asks the Python app, with
 // the baseline credential, which org it serves that credential. Any
 // refusal stops the run before a leg is sent.
-func prepareLegs(ctx context.Context, client *goapiproof.LegClient, f flags, candidateCredential, baselineCredential *goapiproof.Credential) (string, error) {
+func prepareLegs(ctx context.Context, client *goapiproof.LegClient, f flags, candidateCredential, baselineCredential *goapiproof.Credential, prover version.Info) (*goapiproof.ProverBuild, error) {
 	// Both planes scope a request by the credential's org_id claim, so
 	// every value either credential sends must name -org (and no
 	// impersonation) -- checked on the exact value, each time it is set
@@ -300,30 +304,37 @@ func prepareLegs(ctx context.Context, client *goapiproof.LegClient, f flags, can
 	// plane" credential distinct from what this binary already mints for
 	// every other request in the run.
 	//
-	// Bounded by the run's own -timeout default, same as every measured
-	// leg -- the leg client carries no Timeout of its own, so this read
-	// would otherwise wait on ctx's 30-minute run-level bound alone.
-	buildInfoCtx, cancelBuildInfo := context.WithTimeout(ctx, f.timeout)
+	// Bounded by the run's own -timeout, same as every measured leg --
+	// the leg client carries no Timeout of its own, so this read would
+	// otherwise wait on ctx's 30-minute run-level bound alone.
+	buildInfoCtx, cancelBuildInfo := readContext(ctx, f.timeout)
 	namedBuild, err := goapiproof.FetchBuildIdentity(buildInfoCtx, client, f.buildInfoURL, candidateCredential)
 	cancelBuildInfo()
 	if err != nil {
-		return "", fmt.Errorf("read the candidate build from /buildinfo: %w", err)
+		return nil, fmt.Errorf("read the candidate build from /buildinfo: %w", err)
 	}
+	// From here every return carries both builds, refusal or not, for
+	// the report the stopped run writes.
+	builds := goapiproof.NewProverBuild(prover, namedBuild, f.allowProverBuildSkew)
+	fmt.Println(builds.Line())
 	if f.candidateBuild != "" && f.candidateBuild != namedBuild {
-		return "", fmt.Errorf("-candidate-build %q does not match the running build %q reported by %s", f.candidateBuild, namedBuild, f.buildInfoURL)
+		return &builds, fmt.Errorf("-candidate-build %q does not match the running build %q reported by %s", f.candidateBuild, namedBuild, f.buildInfoURL)
+	}
+	if err := builds.Check(proverBuildSkewFlag); err != nil {
+		return &builds, err
 	}
 
 	// The Python app's own answer, with the baseline credential, naming
 	// the org it serves that credential -- refused unless it is -org with
 	// no impersonation session in force. Every baseline leg is still
 	// checked for the impersonation stamp (RESTAdmit).
-	principalCtx, cancelPrincipal := context.WithTimeout(ctx, f.timeout)
+	principalCtx, cancelPrincipal := readContext(ctx, f.timeout)
 	err = goapiproof.VerifyReferencePrincipal(principalCtx, client, f.pythonAPIURL, baselineCredential, f.org)
 	cancelPrincipal()
 	if err != nil {
-		return "", err
+		return &builds, err
 	}
-	return namedBuild, nil
+	return &builds, nil
 }
 
 // parseHelperArgv decodes a -*-bearer-exec flag's JSON array. argv[0] is
@@ -876,12 +887,13 @@ func run(f flags) (err error) {
 	// before this function's own cancel() runs (which would otherwise
 	// read as a signal).
 	var runEnded error
+	var resolved *goapiproof.ProverBuild
 	measuring := false
 	defer func() {
 		if err == nil || measuring {
 			return
 		}
-		if writeErr := writeStoppedBeforeMeasuringReport(f, runEnded, err); writeErr != nil {
+		if writeErr := writeStoppedBeforeMeasuringReport(f, resolved, runEnded, err); writeErr != nil {
 			err = fmt.Errorf("%w; additionally, writing the report failed: %v", err, writeErr)
 		}
 	}()
@@ -979,7 +991,7 @@ func run(f flags) (err error) {
 	// its own context deadline -- see doREST and resolveRESTTimeout.
 	client := goapiproof.NewLegClient(0)
 
-	namedBuild, err := prepareLegs(ctx, client, f, candidateCredential, baselineCredential)
+	resolved, err = prepareLegs(ctx, client, f, candidateCredential, baselineCredential, version.Current("go-api-rest-prove"))
 	if err != nil {
 		return err
 	}
@@ -995,15 +1007,28 @@ func run(f flags) (err error) {
 	}
 
 	measuring = true
-	return runMeasurement(ctx, client, f, candidateCredential, baselineCredential, namedBuild, pgPool, artifacts)
+	return runMeasurement(ctx, client, f, candidateCredential, baselineCredential, *resolved, pgPool, artifacts)
 }
+
+// readContext bounds one opening read by -timeout; zero or less means no
+// per-read deadline, as on every request leg (doREST).
+func readContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout <= 0 {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, timeout)
+}
+
+// proverBuildSkewFlag permits a run whose prover build is not the
+// candidate's.
+const proverBuildSkewFlag = "-allow-prover-build-skew"
 
 // writeStoppedBeforeMeasuringReport writes the report of a run that
 // stopped before its first request: every planned request in not_run,
 // and partial_cause from the run context's own state (run_deadline,
 // signal), else refused_before_measuring. runEnded is the run context's
 // own Err() as the run exited.
-func writeStoppedBeforeMeasuringReport(f flags, runEnded, stopErr error) error {
+func writeStoppedBeforeMeasuringReport(f flags, builds *goapiproof.ProverBuild, runEnded, stopErr error) error {
 	planned, _ := planRESTRequests()
 	notRun := notRunKeys(planned, nil)
 	cause := stopCause(runEnded, nil)
@@ -1019,6 +1044,7 @@ func writeStoppedBeforeMeasuringReport(f flags, runEnded, stopErr error) error {
 		return nil
 	}
 	return writeJSONReport(f.reportPath, jsonReport{
+		ProverBuild:  builds,
 		Outcomes:     []outcome{},
 		NotRun:       notRun,
 		PartialCause: cause,
@@ -1302,7 +1328,8 @@ func candidateHasNoData(refusal string) bool {
 	return false
 }
 
-func runMeasurement(ctx context.Context, client *goapiproof.LegClient, f flags, candidateCredential, baselineCredential *goapiproof.Credential, namedBuild string, pgPool receiptWriter, artifacts *goapiproof.ArtifactStore) error {
+func runMeasurement(ctx context.Context, client *goapiproof.LegClient, f flags, candidateCredential, baselineCredential *goapiproof.Credential, builds goapiproof.ProverBuild, pgPool receiptWriter, artifacts *goapiproof.ArtifactStore) error {
+	namedBuild := builds.Candidate
 	// Printed before the first request, so a run cut by the deadline
 	// shows on its own log what it was given.
 	fmt.Printf("run_deadline=%s\n", f.runDeadline)
@@ -1506,9 +1533,11 @@ requestLoop:
 
 	runEnded := ctx.Err()
 	report, finalErr := finalRunReport(f, outcomes, notRun, runEnded, runErr, legFailures, vacuityErrs)
+	report.ProverBuild = &builds
 	finalErr = writeFinalReport(f, report, finalErr)
 	if late := ctx.Err(); late != nil && runEnded == nil {
 		report, finalErr = finalRunReport(f, outcomes, notRun, late, runErr, legFailures, vacuityErrs)
+		report.ProverBuild = &builds
 		fmt.Println("the run ended while its report was being written")
 		finalErr = writeFinalReport(f, report, finalErr)
 	}
@@ -1581,6 +1610,10 @@ func exitCauseFor(runEnded, runErr error, legFailures, vacuityErrs []string) (st
 // outcomes any more, so a partial run can say it is partial IN the file
 // an operator reads back, not only on stdout.
 type jsonReport struct {
+	// ProverBuild names the commit whose declarations, shapes and corpus
+	// the run applied, beside the candidate build it measured; absent
+	// only when the run stopped before /buildinfo named a candidate.
+	*goapiproof.ProverBuild
 	Outcomes []outcome `json:"outcomes"`
 	// Partial is true whenever NotRun is non-empty -- named separately
 	// rather than left for a reader to infer from an empty NotRun slice,

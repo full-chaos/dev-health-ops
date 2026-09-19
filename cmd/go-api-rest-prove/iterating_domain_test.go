@@ -302,7 +302,7 @@ func TestRunMeasurement_RepositoryScopedCasesBindARepositoryWithData(t *testing.
 	}
 	_ = captureStdout(t, func() {
 		_ = runMeasurement(context.Background(), goapiproof.NewLegClient(0), f,
-			staticCredentialForTest(), staticCredentialForTest(), build, nil, artifacts)
+			staticCredentialForTest(), staticCredentialForTest(), sameProverBuildForTest(build), nil, artifacts)
 	})
 	raw, err := os.ReadFile(reportPath)
 	if err != nil {
@@ -573,7 +573,7 @@ func TestRunMeasurement_NullVersusEmptyPullRequestsIsReportedAsAMismatch(t *test
 	}
 	_ = captureStdout(t, func() {
 		_ = runMeasurement(context.Background(), goapiproof.NewLegClient(0), f,
-			staticCredentialForTest(), staticCredentialForTest(), build, nil, artifacts)
+			staticCredentialForTest(), staticCredentialForTest(), sameProverBuildForTest(build), nil, artifacts)
 	})
 	raw, err := os.ReadFile(reportPath)
 	if err != nil {

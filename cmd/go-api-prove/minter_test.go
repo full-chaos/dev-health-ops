@@ -330,7 +330,7 @@ func TestTheReportCarriesTheCountersItComputes(t *testing.T) {
 		// safeEndpoint accepts at flag parse by design, and both of which the
 		// rebuilt label strips -- so the two forms now differ.
 		if err := emitReport(flags{orgID: "o", edgeURL: "http://edge.test/graphql?token=s3cret-happy-path", proofURL: "http://proof.test/query/proof/s3cret-proof"},
-			goapiproof.RegistryView{SchemaDigest: "sha256:x", BuildIdentity: "b"},
+			goapiproof.RegistryView{SchemaDigest: "sha256:x", BuildIdentity: "b"}, goapiproof.ProverBuild{Candidate: "b"},
 			outcomes, summary, credential, nil, exitCompleted, nil); err != nil {
 			t.Fatalf("emitReport: %v", err)
 		}
@@ -439,7 +439,7 @@ func TestThisCommandsGuardsAreKillable(t *testing.T) {
 		}
 		printed := captureStdout(t, func() {
 			_ = emitReport(flags{orgID: "o", edgeURL: "http://edge.test/graphql"},
-				goapiproof.RegistryView{SchemaDigest: "s", BuildIdentity: "b"},
+				goapiproof.RegistryView{SchemaDigest: "s", BuildIdentity: "b"}, goapiproof.ProverBuild{Candidate: "b"},
 				outcomes, goapiproof.Summary{Attempted: 1, Admitted: 1, Executed: 1}, nil, nil, exitCompleted, nil)
 		})
 		// 2 present, 1 absent -- neither number is 1, so a constant
@@ -636,7 +636,7 @@ func TestAHelperUsingEchoStillYieldsAUsableHeader(t *testing.T) {
 func TestTheStdoutSummaryCarriesItsExplicitZeros(t *testing.T) {
 	printed := captureStdout(t, func() {
 		_ = emitReport(flags{orgID: "o", edgeURL: "http://edge.test/graphql"},
-			goapiproof.RegistryView{SchemaDigest: "s", BuildIdentity: "b"},
+			goapiproof.RegistryView{SchemaDigest: "s", BuildIdentity: "b"}, goapiproof.ProverBuild{Candidate: "b"},
 			nil, goapiproof.Summary{Attempted: 3}, nil, nil, exitCompleted, nil)
 	})
 
@@ -908,7 +908,7 @@ func TestTheMintedEdgeCredentialIsShapeValidatedAndCounted(t *testing.T) {
 
 	printed := captureStdout(t, func() {
 		_ = emitReport(flags{orgID: "o", edgeURL: "http://edge.test/graphql"},
-			goapiproof.RegistryView{SchemaDigest: "s", BuildIdentity: "b"},
+			goapiproof.RegistryView{SchemaDigest: "s", BuildIdentity: "b"}, goapiproof.ProverBuild{Candidate: "b"},
 			nil, goapiproof.Summary{}, nil, edge, exitCompleted, nil)
 	})
 	if !strings.Contains(printed, "edge access token mints = 1") {

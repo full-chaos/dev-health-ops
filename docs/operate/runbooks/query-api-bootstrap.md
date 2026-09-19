@@ -161,13 +161,35 @@ Real proof run after the metrics drain completes (Trap #174 repair landed). Tool
 # (operator image)" below. JWT_SECRET_KEY and POSTGRES_URI reach it the
 # same way, and mint-edge-token mints the edge access token for the proof
 # service principal LOCALLY from them.
-go-api-prove -api-url=http://dev-health-ops.default.svc.cluster.local:8000 \
-  -query-api-url=http://dev-health-query-api:8000 \
-  -proof-bearer-exec='["/usr/local/bin/mint-envelope","-org","c6a38355-dad6-42e4-8cc9-4c712450827d"]' \
-  -edge-bearer-exec='["/usr/local/bin/mint-edge-token","-org","c6a38355-dad6-42e4-8cc9-4c712450827d"]' \
+go-api-prove \
+  -registry-url=http://dev-health-query-api:8000/registry \
+  -buildinfo-url=http://dev-health-query-api:8000/buildinfo \
+  -edge-url=http://dev-health-ops.default.svc.cluster.local:8000/graphql \
+  -documents=/app/go-api/documents.json \
+  -artifact-dir=/tmp/proof/artifacts \
+  -proof-bearer-exec='["mint-envelope","-org","c6a38355-dad6-42e4-8cc9-4c712450827d"]' \
+  -edge-bearer-exec='["mint-edge-token","-org","c6a38355-dad6-42e4-8cc9-4c712450827d"]' \
   -org=c6a38355-dad6-42e4-8cc9-4c712450827d \
-  -from=<baseline-date> -to=<proof-date>
+  -recorded-by=<operator> -review-evidence="<why this run>" \
+  -since-utc=<baseline-start RFC3339> -until-utc=<proof-end RFC3339>
 ```
+
+Each bearer exec names an ALLOWLISTED HELPER NAME (`mint-envelope`, `mint-edge-token`), never a path; the helper reads its own secret from the Pod's environment. `-documents` is the registry dump baked into the tools image at the same commit as the binary.
+
+The REST routes are proven the same way from the same Pod:
+
+```bash
+go-api-rest-prove \
+  -query-api-url=http://dev-health-query-api:8000 \
+  -python-api-url=http://dev-health-ops.default.svc.cluster.local:8000 \
+  -candidate-bearer-exec='["mint-envelope","-org","c6a38355-dad6-42e4-8cc9-4c712450827d"]' \
+  -baseline-bearer-exec='["mint-edge-token","-org","c6a38355-dad6-42e4-8cc9-4c712450827d"]' \
+  -org=c6a38355-dad6-42e4-8cc9-4c712450827d \
+  -recorded-by=<operator> -review-evidence="<why this run>" \
+  -artifact-dir=/tmp/proof/artifacts -report=/tmp/proof/rest-report.json
+```
+
+**Prover build.** `go-api-prove` and `go-api-rest-prove` carry every declaration, shape and corpus entry they apply compiled in, so both print `prover_build=<own commit> ... candidate_build=<commit /buildinfo names> prover_build_skew=<bool>` first and refuse to measure when the two commits differ or the prover carries no commit. A released image is built with `-buildvcs=false` and takes its commit from `-ldflags`, so it reports `prover_build_modified=false`; the modified arm names a locally built, VCS-stamped prover, and the commit comparison is what guards a released one. Run the tools image tagged with the candidate's own commit (`sha-<first 7>`). `-allow-prover-build-skew` measures anyway; the report then records `prover_build_skew_allowed: true` beside both commits.
 
 Proof runs against the 12 canary operations (shadow set is empty by design, not deferred). Compare baseline and candidate legs; `-proof-url` left empty (Trap #163: `/query/proof` cannot mount on prod). Result: `{12 total, 11 match, 1 mismatch}` or better.
 

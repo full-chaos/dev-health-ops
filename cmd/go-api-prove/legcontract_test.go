@@ -68,6 +68,7 @@ func TestOriginOfKeepsOnlySchemeAndHost(t *testing.T) {
 func TestRunRefusesABaselinePrincipalThatIsNotTheNamedOrg(t *testing.T) {
 	const org = "70d529e0"
 	const buildSHA = "b18e56fa79cfe20ce0f75df148144b832d92be36"
+	withProverCommit(t, buildSHA)
 	registry := httptest.NewServer(writeStaticJSONHandler(`{"schema_digest":"sha256:e2e","operations":[{"operation":"featureFlags","document_digest":"sha256:x"}]}`))
 	t.Cleanup(registry.Close)
 	buildinfo := httptest.NewServer(writeStaticJSONHandler(`{"commit":"` + buildSHA + `","modified":false}`))
@@ -134,6 +135,7 @@ func TestRunRefusesABaselinePrincipalThatIsNotTheNamedOrg(t *testing.T) {
 func exitFixture(t *testing.T, onGraphQL func(w http.ResponseWriter, baseline bool)) (args []string, reportPath string) {
 	t.Helper()
 	const buildSHA = "b18e56fa79cfe20ce0f75df148144b832d92be36"
+	withProverCommit(t, buildSHA)
 	const org = "70d529e0"
 	doc := "query FeatureFlags { featureFlags { key } }"
 	digest := goapidigest.Document(doc)

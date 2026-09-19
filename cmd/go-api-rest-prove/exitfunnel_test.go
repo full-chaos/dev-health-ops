@@ -169,7 +169,7 @@ func TestTheRunEndingWhileItsReportIsWrittenEndsTheRun(t *testing.T) {
 			}()
 			var runErr error
 			stdout := captureStdout(t, func() {
-				runErr = runMeasurement(ctx, goapiproof.NewLegClient(0), f, staticCredentialForTest(), staticCredentialForTest(), build, nil, artifacts)
+				runErr = runMeasurement(ctx, goapiproof.NewLegClient(0), f, staticCredentialForTest(), staticCredentialForTest(), sameProverBuildForTest(build), nil, artifacts)
 			})
 			if !errors.Is(runErr, wantErr) {
 				t.Fatalf("err = %v, want %v: the run ended during its report write", runErr, wantErr)

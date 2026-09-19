@@ -108,14 +108,16 @@ run_go_api_prove_e2e() {
   printf '%s' "${GO_API_PROVE_E2E_JWKS_PROGRAM}" > "${dir}/jwks.py"
 
   echo "==> [go-api-prove e2e] building query-api, go-api-routing, go-api-prove, mint-envelope, mint-edge-token"
-  # query-api refuses to identify an unstamped or modified build, so the
-  # commit is stamped the way the image build stamps it: -buildvcs=false and
-  # the commit through -ldflags.
+  # query-api refuses to identify an unstamped or modified build, and
+  # go-api-prove refuses to measure a candidate built from another commit
+  # than its own, so both are stamped the way the image build stamps them:
+  # -buildvcs=false and the same commit through -ldflags.
   commit="${GITHUB_SHA:-$(git -C "${ROOT_DIR}" rev-parse HEAD)}"
   go build -buildvcs=false -ldflags "-X github.com/full-chaos/dev-health-ops/internal/platform/version.Commit=${commit}" \
     -o "${BIN_DIR}/query-api" ./cmd/query-api
   go build -o "${BIN_DIR}/go-api-routing" ./cmd/go-api-routing
-  go build -o "${BIN_DIR}/go-api-prove" ./cmd/go-api-prove
+  go build -buildvcs=false -ldflags "-X github.com/full-chaos/dev-health-ops/internal/platform/version.Commit=${commit}" \
+    -o "${BIN_DIR}/go-api-prove" ./cmd/go-api-prove
   go build -o "${BIN_DIR}/mint-envelope" ./cmd/mint-envelope
   go build -o "${BIN_DIR}/mint-edge-token" ./cmd/mint-edge-token
   go run ./cmd/query-api/tools/registrydump -file cmd/query-api/query_route.go > "${dir}/documents.json"
@@ -196,6 +198,8 @@ run_go_api_prove_e2e() {
   [ "${rc}" -eq 0 ] || go_api_prove_e2e_fail "go-api-prove exited ${rc}"
   grep -Eq "^go-api-prove:   ${GO_API_PROVE_E2E_OPERATION} +mode=shadow +route=proof " "${prove_log}" \
     || go_api_prove_e2e_fail "${GO_API_PROVE_E2E_OPERATION} was not executed through the proof route"
+  grep -Fq "go-api-prove: prover_build=${commit} prover_build_modified=false candidate_build=${commit} prover_build_skew=false prover_build_skew_allowed=false" "${prove_log}" \
+    || go_api_prove_e2e_fail "the prover did not report its own build equal to the candidate's"
   grep -Eq '^go-api-prove: attempted=[0-9]+ admitted=[0-9]+ executed=[1-9][0-9]* ' "${prove_log}" \
     || go_api_prove_e2e_fail "no operation was executed"
   grep -Eq '^go-api-prove:   edge access token mints = [1-9][0-9]*$' "${prove_log}" \

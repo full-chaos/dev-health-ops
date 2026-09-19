@@ -64,7 +64,7 @@ func runUnderDeadlineWith(t *testing.T, ctx context.Context, stall *stalledReque
 		timeout: time.Minute, runDeadline: runDeadline, dryRun: true, reportPath: dir + "/report.json"}
 	var run deadlineRun
 	run.stdout = captureStdout(t, func() {
-		run.err = runMeasurement(ctx, goapiproof.NewLegClient(0), f, staticCredentialForTest(), baselineCredential, build, nil, artifacts)
+		run.err = runMeasurement(ctx, goapiproof.NewLegClient(0), f, staticCredentialForTest(), baselineCredential, sameProverBuildForTest(build), nil, artifacts)
 	})
 	raw, err := os.ReadFile(f.reportPath)
 	if err != nil {
@@ -453,7 +453,7 @@ func TestARunStoppedBeforeItsFirstRequestNamesEveryPlannedRequest(t *testing.T) 
 		f := flags{reportPath: t.TempDir() + "/report.json", runDeadline: 45 * time.Minute}
 		var err error
 		captureStdout(t, func() {
-			err = writeStoppedBeforeMeasuringReport(f, cell.runEnded, errors.New("read the candidate build from /buildinfo: refused"))
+			err = writeStoppedBeforeMeasuringReport(f, nil, cell.runEnded, errors.New("read the candidate build from /buildinfo: refused"))
 		})
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)

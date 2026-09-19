@@ -145,6 +145,11 @@ type CompleteRouteExecutor struct {
 	EffectsFactory    CompleteRouteEffectsFactory
 	HeartbeatInterval time.Duration
 	Now               func() time.Time
+	// RequestUsage receives the execution's provider request spend. Nil
+	// keeps the spend in the returned result only.
+	RequestUsage *RequestUsageWriter
+	// requestUsageTicks replaces the heartbeat ticker of the usage flusher.
+	requestUsageTicks <-chan time.Time
 }
 
 type CompleteRouteExecutionResult struct {
@@ -163,6 +168,8 @@ type CompleteRouteExecutionResult struct {
 	// loop committed nothing before the page budget refused them. Zero for
 	// non-chunked routes, which have no checkpoint.
 	CommittedRows int64
+	// RequestUsage is this execution's provider HTTP spend, on every exit.
+	RequestUsage RequestUsageTotals
 }
 
 func (executor CompleteRouteExecutor) now() time.Time {
@@ -172,7 +179,7 @@ func (executor CompleteRouteExecutor) now() time.Time {
 	return time.Now().UTC()
 }
 
-func (executor CompleteRouteExecutor) Execute(
+func (executor CompleteRouteExecutor) executeRoute(
 	ctx context.Context,
 	session *LeaseSession,
 	descriptor CompleteRouteDescriptor,

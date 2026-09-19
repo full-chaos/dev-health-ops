@@ -120,6 +120,7 @@ KNOWN_TTL_TABLES: frozenset[str] = frozenset(
         "telemetry_signal_bucket",
         "release_impact_daily",
         "product_telemetry_events",
+        "provider_request_usage",
     }
 )
 

@@ -18,6 +18,7 @@ func TestGoldenFixturesCrossDecodeAndReencode(t *testing.T) {
 	}{
 		{KindHeartbeat, "examples/system.heartbeat.v1.json", HeartbeatPayload{ScheduledFor: "2026-07-21T12:00:00Z"}},
 		{KindSyncCoverageRefresh, "examples/system.sync_coverage_refresh.v1.json", SyncCoverageRefreshPayload{ScheduledFor: "2026-08-12T12:00:00Z", Limit: 100}},
+		{KindDimensionFold, "examples/system.dimension_fold.v1.json", DimensionFoldPayload{ScheduledFor: "2026-08-12T12:00:00Z"}},
 		{KindRetentionCleanup, "examples/system.retention_cleanup.v1.json", RetentionCleanupPayload{BatchSize: 250, DeleteBefore: "2026-07-14T12:00:00Z", RetentionPolicy: RetentionWorkerTerminal}},
 		{KindRetentionCleanup, "examples/system.retention_cleanup.v3.json", RetentionCleanupPayload{BatchSize: 500, DeleteBefore: "2026-07-28T05:30:00Z", RetentionPolicy: RetentionAskDevConversations}},
 		{KindReportExecuteOnDemand, "examples/report.execute_on_demand.v1.json", OnDemandReportExecutionPayload{ReportID: "00000000-0000-4000-8000-000000000002"}},

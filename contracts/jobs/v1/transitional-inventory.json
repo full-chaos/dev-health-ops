@@ -2,7 +2,7 @@
   "schema_version": 1,
   "$comment": "CUT-01 transitional workload inventory contract (CHAOS-3073). Maps every legacy Celery/Beat/API/registry/stream surface discovered in the Wave-0 audit to a target owner or explicit removal. See docs/architecture/transitional-workload-inventory.md for the update procedure and CI gate (ci/check_transitional_inventory.py).",
   "source_audit": "Wave-0 inventory audit, 147 surfaces (docs/plans/go-worker-cutover-implementation-plan.md CUT-01; TRD sec 6, 8.3)",
-  "row_count": 33,
+  "row_count": 34,
   "ownership_model": {
     "owner_role": "'primary' rows are the exclusive canonical claimant of a target_kind_id (a Beat entry, registry kind, stream, transport route, or a standalone celery task with no other owning row). 'contributor' rows are dispatch/trigger call sites, or implementation bodies, that feed an existing primary row and may freely share a target_owner value with other contributors.",
     "exclusivity_rule": "At most one row may be owner_role=primary for any given target_kind_id. CI enforces this; it does not require target_owner.value itself to be unique, since many contributor rows legitimately share one coarse target process description."
@@ -558,11 +558,35 @@
     },
     {
       "id": "registry_kind:contracts/jobs/v1/registry.json:588",
-      "surface": "system.heartbeat",
+      "surface": "system.dimension_fold",
       "class": "registry_kind",
       "source": {
         "file": "contracts/jobs/v1/registry.json",
         "line": 588
+      },
+      "queue_or_cadence": "sync_provider / sync-provider",
+      "dispatches": "native fold of the declared small dimension tables",
+      "dispatch_mechanism": "job_registry_descriptor",
+      "owner_role": "primary",
+      "target_owner": {
+        "type": "native_kind",
+        "value": "system.dimension_fold"
+      },
+      "target_kind_id": "kind:system.dimension_fold",
+      "current_implementation_state": "native_go",
+      "verification_status": "verified",
+      "compatibility_dependency": "none; the kind is Go-only (go_only in registry.json) and never had a Python producer",
+      "deletion_evidence_requirement": "Remove this transitional registry row after the Go-worker migration project closes and the registry becomes the sole workload inventory.",
+      "acceptance_test_id": "internal/jobs/dimensionfold/fold_integration_test.go",
+      "notes": "Fixed scheduler emits one occurrence per interval (default 60 s); the sync-provider worker folds repos and teams with OPTIMIZE FINAL under a single-partition and row-bound guard."
+    },
+    {
+      "id": "registry_kind:contracts/jobs/v1/registry.json:621",
+      "surface": "system.heartbeat",
+      "class": "registry_kind",
+      "source": {
+        "file": "contracts/jobs/v1/registry.json",
+        "line": 621
       },
       "queue_or_cadence": "heartbeat / ops",
       "dispatches": "NativeHeartbeatDispatcher.DispatchHeartbeat",
@@ -581,12 +605,12 @@
       "notes": "CORRECTION: this row previously read python_compatibility / dispatches=phone_home_heartbeat, stale since the phone-home compute was ported to native Go with the HTTP bridge deleted outright (see compatibility_dependency)."
     },
     {
-      "id": "registry_kind:contracts/jobs/v1/registry.json:621",
+      "id": "registry_kind:contracts/jobs/v1/registry.json:654",
       "surface": "system.retention_cleanup",
       "class": "registry_kind",
       "source": {
         "file": "contracts/jobs/v1/registry.json",
-        "line": 621
+        "line": 654
       },
       "queue_or_cadence": "retention / ops",
       "dispatches": "n/a (native Go, worker_job_outbox terminal-row deletes only)",
@@ -605,12 +629,12 @@
       "notes": "does NOT cover prune_rate_limit_observations/prune_external_ingest_batches (gap 2.6)"
     },
     {
-      "id": "registry_kind:contracts/jobs/v1/registry.json:663",
+      "id": "registry_kind:contracts/jobs/v1/registry.json:696",
       "surface": "system.sync_coverage_refresh",
       "class": "registry_kind",
       "source": {
         "file": "contracts/jobs/v1/registry.json",
-        "line": 663
+        "line": 696
       },
       "queue_or_cadence": "coverage / ops",
       "dispatches": "native bounded projection refresh",
@@ -629,12 +653,12 @@
       "notes": "Fixed scheduler emits one bounded five-minute occurrence; ops worker owns the coverage queue and native PostgreSQL projector."
     },
     {
-      "id": "registry_kind:contracts/jobs/v1/registry.json:695",
+      "id": "registry_kind:contracts/jobs/v1/registry.json:728",
       "surface": "workgraph.build",
       "class": "registry_kind",
       "source": {
         "file": "contracts/jobs/v1/registry.json",
-        "line": 695
+        "line": 728
       },
       "queue_or_cadence": "workgraph / heavy",
       "dispatches": "run_work_graph_build",

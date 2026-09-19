@@ -871,8 +871,19 @@ func constructProviderSyncWorkerWithDependencies(
 		closeDependencies()
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
+	handlers := []jobruntime.HandlerSpec{adapter.Spec()}
+	foldSpec, err := registerDimensionFoldWorker(
+		registry, clickhouseConnection, postgresDatabase, observer, logger, workers,
+	)
+	if err != nil {
+		closeDependencies()
+		return workerFamily{}, errWorkerDependencyUnavailable
+	}
+	if foldSpec != nil {
+		handlers = append(handlers, *foldSpec)
+	}
 	return workerFamily{
-		handlers: []jobruntime.HandlerSpec{adapter.Spec()},
+		handlers: handlers,
 		queues: selectedQueueBudgets(
 			cfg.Queues, []string{providerUnitQueue}, cfg.WorkerQueueConcurrency,
 		),

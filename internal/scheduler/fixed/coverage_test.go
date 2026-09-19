@@ -549,6 +549,7 @@ func TestScheduleCoveragePinsTheMissedRunPolicy(t *testing.T) {
 		"membership_backfill_daily_fanout":   CatchUpBounded,
 		"capacity_forecast_weekly_fanout":    CatchUpBounded,
 		"sync_coverage_refresh":              CatchUpSkip,
+		"dimension_fold":                     CatchUpSkip,
 		"work_item_attribution_daily_fanout": CatchUpBounded,
 	}
 	schedules, err := Schedules()

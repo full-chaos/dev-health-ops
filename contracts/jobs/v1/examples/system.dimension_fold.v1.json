@@ -1,0 +1,12 @@
+{
+  "contract_version": 1,
+  "correlation_id": "fixed-schedule:dimension_fold:2026-08-12T12:00:00Z",
+  "idempotency_key": "dimension-fold:2026-08-12T12:00:00Z",
+  "domain": {
+    "type": "schedule_occurrence",
+    "id": "5d0f6c0e-7a1b-5c2d-8e3f-4a5b6c7d8e9f"
+  },
+  "payload": {
+    "scheduled_for": "2026-08-12T12:00:00Z"
+  }
+}

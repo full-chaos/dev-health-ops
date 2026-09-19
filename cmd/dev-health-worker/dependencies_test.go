@@ -338,8 +338,12 @@ func TestLaunchDarklyReadinessRequiresConcreteProviderHandlerRegistration(
 		if !ok {
 			t.Fatal("sync.provider_unit descriptor missing")
 		}
+		fold, ok := runtimeRegistry.Descriptor(jobcontract.KindDimensionFold)
+		if !ok {
+			t.Fatal("system.dimension_fold descriptor missing")
+		}
 		return workerFamily{
-			handlers: []jobruntime.HandlerSpec{spec},
+			handlers: []jobruntime.HandlerSpec{spec, fold},
 			queues: []jobruntime.QueueBudget{
 				{Queue: "sync_provider", MaxWorkers: 2},
 			},
@@ -2591,6 +2595,10 @@ func TestSelectedQueueCapabilityIsValidatedAcrossBuilderFamilies(t *testing.T) {
 	if !ok {
 		t.Fatal("sync.provider_unit descriptor missing")
 	}
+	foldSpec, ok := runtimeRegistry.Descriptor(jobcontract.KindDimensionFold)
+	if !ok {
+		t.Fatal("system.dimension_fold descriptor missing")
+	}
 	autoimportSpec, ok := runtimeRegistry.Descriptor(jobcontract.KindTeamAutoimport)
 	if !ok {
 		t.Fatal("sync.team_autoimport descriptor missing")
@@ -2620,7 +2628,7 @@ func TestSelectedQueueCapabilityIsValidatedAcrossBuilderFamilies(t *testing.T) {
 			*jobruntime.Registry, jobruntime.Observer, *slog.Logger, *river.Workers,
 		) (workerFamily, error) {
 			return workerFamily{
-				handlers: []jobruntime.HandlerSpec{providerSpec},
+				handlers: []jobruntime.HandlerSpec{providerSpec, foldSpec},
 				queues: []jobruntime.QueueBudget{
 					{Queue: "sync_provider", MaxWorkers: 2},
 				},

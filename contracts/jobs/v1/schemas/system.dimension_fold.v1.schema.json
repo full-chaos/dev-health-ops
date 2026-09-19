@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "dev-health.jobs/system.dimension_fold.v1",
+  "title": "Dimension table fold v1 payload",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["scheduled_for"],
+  "properties": {
+    "scheduled_for": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    }
+  }
+}

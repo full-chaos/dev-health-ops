@@ -117,6 +117,7 @@ func TestGenericOutboxLiveFailureInjectionMatrix(t *testing.T) {
 		jobcontract.KindSyncCoverageRefresh:          true,
 		jobcontract.KindTeamRepoOwnershipDerivation:  true,
 		jobcontract.KindRemainingWorkItemAttribution: true,
+		jobcontract.KindDimensionFold:                true,
 		jobcontract.KindInvestmentMaterialize:        true,
 		jobcontract.KindDailyMetricsDispatch:         true,
 		jobcontract.KindDailyMetricsFinalize:         true,

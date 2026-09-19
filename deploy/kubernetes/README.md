@@ -42,8 +42,8 @@ The explicit `kubectl wait` flow above is the recommended path, but a naive
 `kubectl apply -k deploy/kubernetes/` is also safe: the api Deployment carries
 a `wait-for-migrations` initContainer that blocks app start until
 `dev-hops migrate clickhouse status --check` reports the schema current. The
-go-worker groups in `go-workers.yaml` deploy at `replicas: 0` by default (see
-below), so they carry no such initContainer of their own.
+go-worker groups in `go-workers.yaml` carry no such initContainer of their
+own; roll them only after the migration Job has completed (see below).
 
 - The check is strictly **read-only** (it lists applied vs pending migrations
   and exits 1 while any are pending) — it never runs DDL, so multiple replicas
@@ -79,11 +79,14 @@ Notes:
 
 `go-workers.yaml` is the only worker topology this tree renders and is a base
 `kustomization.yaml` resource, applied by the same `kubectl apply -k` as
-everything else. It replaces the Celery `worker.yaml`/`beat.yaml` manifests
-deleted in CHAOS-4195 (production stopped running them on 2026-08-19,
-CHAOS-4026). Every group deploys at `replicas: 0` so a fresh apply stays
-inert until an operator deliberately scales the groups it needs, after the
-migration Job has completed.
+everything else.
+
+Every group's Deployment declares `replicas: 1`. Each River group also has a
+HorizontalPodAutoscaler: `sync-provider` keeps `minReplicas: 1` because its
+queue carries the scheduled `system.dimension_fold` job, and the other groups
+allow `minReplicas: 0`. Apply the migration Job and wait for it to complete
+before the worker groups; an operator who scales a group to zero stops its
+queues, and at zero `sync-provider` leaves `repos` and `teams` unfolded.
 
 **Provision the PostgreSQL roles first.** This tree provisions no PostgreSQL
 roles automatically. `dev-health-go-worker-secrets` (`secrets.yaml`)

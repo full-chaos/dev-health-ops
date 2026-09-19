@@ -585,6 +585,39 @@
       }
     },
     {
+      "kind": "system.dimension_fold",
+      "current_version": 1,
+      "supported_versions": [
+        1
+      ],
+      "queue": "sync_provider",
+      "handler_owner": "internal/jobs/dimensionfold",
+      "execution_mode": "command",
+      "priority": 1,
+      "timeout_seconds": 120,
+      "max_attempts": 2,
+      "retry_policy": "bounded_exponential_jitter",
+      "cancellation": "cooperative_checkpoint",
+      "delivery": "replay_safe_at_least_once",
+      "idempotency": "unique_schedule_occurrence",
+      "concurrency": {
+        "scope": "fleet",
+        "limit": 1
+      },
+      "sensitive_fields": [],
+      "domain_link": "schedule_occurrence",
+      "organization_scope": "global",
+      "schema_versions": {
+        "1": "schemas/system.dimension_fold.v1.schema.json"
+      },
+      "fixtures": {
+        "1": [
+          "examples/system.dimension_fold.v1.json"
+        ]
+      },
+      "go_only": true
+    },
+    {
       "kind": "system.heartbeat",
       "current_version": 1,
       "supported_versions": [

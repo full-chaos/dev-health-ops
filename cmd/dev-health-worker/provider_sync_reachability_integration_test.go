@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
@@ -67,7 +68,11 @@ func TestBuildProviderSyncWorkerConstructsRealDependenciesForTheSelectedQueue(t 
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(family.handlers) != 1 || len(family.queues) != 1 || family.queues[0].MaxWorkers != 9 {
+			// The sync_provider queue carries the provider unit and the
+			// dimension fold, and one family serves both.
+			if len(family.handlers) != 2 || len(family.queues) != 1 || family.queues[0].MaxWorkers != 9 ||
+				family.handlers[0].Kind != jobcontract.KindSyncProviderUnit ||
+				family.handlers[1].Kind != jobcontract.KindDimensionFold {
 				t.Fatalf("provider sync family=%#v", family)
 			}
 			if err := closeWorkerFamily(family); err != nil {

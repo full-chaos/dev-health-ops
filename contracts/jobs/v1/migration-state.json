@@ -354,6 +354,24 @@
       ]
     },
     {
+      "kind": "system.dimension_fold",
+      "state": "celery_removed",
+      "producer_version": 1,
+      "consumer_versions": [
+        1
+      ],
+      "required_queues": [
+        "sync_provider"
+      ],
+      "route": "river",
+      "rollback_route": "none",
+      "evidence": [
+        "contract_schema",
+        "handler_wiring",
+        "real_clickhouse_fold"
+      ]
+    },
+    {
       "kind": "system.heartbeat",
       "state": "celery_removed",
       "producer_version": 1,

@@ -9,10 +9,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
-// The current migrated operational table predates the Go ordering columns.
-// Keep the effect row complete for parity/readback validation, but write only
-// columns that the canonical migration actually provides. The follow-up
-// migration lane owns making source_revision durable in ClickHouse.
+// The legacy (contract 1) column list; the table's contract decides whether
+// the four ordering columns are added (operational_ordering_contract.go).
 const pagerDutyEscalationPoliciesColumns = "org_id,provider,provider_instance_id,source_entity_type,external_id,source_version_at,id,source_id,source_url,source_event_at,source_event_id,observed_at,last_synced,raw_status,raw_severity,raw_priority,normalized_status,normalized_severity,normalized_priority,relationship_provenance,relationship_confidence,name,description,is_deleted,deleted_at"
 
 type PagerDutyEscalationPoliciesClickHouseEffects struct {
@@ -20,11 +18,13 @@ type PagerDutyEscalationPoliciesClickHouseEffects struct {
 	Lease       providerfoundation.LeaseGuard
 	Entitlement IncidentEntitlement
 	Metrics     *providerfoundation.Metrics
+	contracts   *operationalTableContracts
 }
 
 func (sink PagerDutyEscalationPoliciesClickHouseEffects) WriteEffect(
 	ctx context.Context, claim Claim, effect EffectBatch,
 ) error {
+	sink.contracts = newOperationalTableContracts()
 	if err := sink.validateRequest(ctx, claim, effect); err != nil {
 		return err
 	}
@@ -43,15 +43,20 @@ func (sink PagerDutyEscalationPoliciesClickHouseEffects) WriteEffect(
 	if len(rows) == 0 {
 		return nil
 	}
+	contract, err := sink.contracts.resolve(ctx, sink.Conn, "operational_escalation_policies")
+	if err != nil {
+		return err
+	}
 	batch, err := sink.Conn.PrepareBatch(
-		ctx, "INSERT INTO operational_escalation_policies ("+pagerDutyEscalationPoliciesColumns+")",
+		ctx, "INSERT INTO operational_escalation_policies ("+contract.columns(pagerDutyEscalationPoliciesColumns)+")",
 	)
 	if err != nil {
 		return err
 	}
 	defer batch.Abort()
 	for _, row := range rows {
-		if err := batch.Append(pagerDutyEscalationPolicyValues(row)...); err != nil {
+		if err := batch.Append(contract.insertValues(pagerDutyEscalationPolicyValues(row),
+			row.SourceRevision, row.SourceConflictKey, row.IngestRevision, row.OrderingContract)...); err != nil {
 			return err
 		}
 	}
@@ -62,6 +67,14 @@ func (sink PagerDutyEscalationPoliciesClickHouseEffects) WriteEffect(
 }
 
 func (sink PagerDutyEscalationPoliciesClickHouseEffects) InspectEffect(
+	ctx context.Context, claim Claim, effect EffectBatch,
+) (EffectInspection, error) {
+	sink.contracts = newOperationalTableContracts()
+	inspection, err := sink.inspectEffect(ctx, claim, effect)
+	return sink.contracts.confirmInspection(ctx, sink.Conn, inspection, err)
+}
+
+func (sink PagerDutyEscalationPoliciesClickHouseEffects) inspectEffect(
 	ctx context.Context, claim Claim, effect EffectBatch,
 ) (EffectInspection, error) {
 	if err := sink.validateRequest(ctx, claim, effect); err != nil {
@@ -77,9 +90,13 @@ func (sink PagerDutyEscalationPoliciesClickHouseEffects) InspectEffect(
 	if len(expected) == 0 {
 		return EffectAbsent, nil
 	}
+	contract, err := sink.contracts.resolve(ctx, sink.Conn, "operational_escalation_policies")
+	if err != nil {
+		return EffectConflict, err
+	}
 	exact, absent := 0, 0
 	for _, row := range expected {
-		inspection, err := sink.inspectEscalationPolicy(ctx, row)
+		inspection, err := sink.inspectEscalationPolicy(ctx, contract, row)
 		if err != nil {
 			return EffectConflict, err
 		}
@@ -157,12 +174,11 @@ func pagerDutyEscalationPolicyValues(row pagerDutyEscalationPolicyRow) []any {
 }
 
 func (sink PagerDutyEscalationPoliciesClickHouseEffects) inspectEscalationPolicy(
-	ctx context.Context, expected pagerDutyEscalationPolicyRow,
+	ctx context.Context, contract operationalStorageContract, expected pagerDutyEscalationPolicyRow,
 ) (EffectInspection, error) {
 	rows, err := sink.Conn.Query(
 		ctx,
-		"SELECT "+pagerDutyEscalationPoliciesColumns+
-			" FROM operational_escalation_policies FINAL WHERE org_id = ? AND id = ? LIMIT 1",
+		contract.latestQuery(pagerDutyEscalationPoliciesColumns, "operational_escalation_policies", "org_id = ? AND id = ?"),
 		expected.OrgID, expected.ID,
 	)
 	if err != nil {
@@ -172,10 +188,10 @@ func (sink PagerDutyEscalationPoliciesClickHouseEffects) inspectEscalationPolicy
 	var actual pagerDutyEscalationPolicyRow
 	found := false
 	for rows.Next() {
-		if err := rows.Scan(pagerDutyEscalationPolicyScanValues(&actual)...); err != nil {
-			return EffectConflict, err
-		}
-		if err := fillPagerDutyEscalationPolicyOrdering(&actual); err != nil {
+		if err := contract.scan(rows, pagerDutyEscalationPolicyScanValues(&actual),
+			operationalOrderingTarget{&actual.SourceRevision, &actual.SourceConflictKey, &actual.IngestRevision, &actual.OrderingContract},
+			func() error { return fillPagerDutyEscalationPolicyOrdering(&actual) },
+		); err != nil {
 			return EffectConflict, err
 		}
 		found = true

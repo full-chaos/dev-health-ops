@@ -25,11 +25,13 @@ type PagerDutyUsersClickHouseEffects struct {
 	Now                func() time.Time
 	Entitlement        IncidentEntitlement
 	Metrics            *providerfoundation.Metrics
+	contracts          *operationalTableContracts
 }
 
 func (sink PagerDutyUsersClickHouseEffects) WriteEffect(
 	ctx context.Context, claim Claim, effect EffectBatch,
 ) error {
+	sink.contracts = newOperationalTableContracts()
 	if err := sink.validateRequest(ctx, claim, effect); err != nil {
 		return err
 	}
@@ -72,15 +74,18 @@ func (sink PagerDutyUsersClickHouseEffects) WriteEffect(
 	if len(allRows) == 0 {
 		return nil
 	}
-	batch, err := sink.Conn.PrepareBatch(
-		ctx, "INSERT INTO operational_users ("+pagerDutyUsersColumns+")",
-	)
+	contract, err := sink.contracts.resolve(ctx, sink.Conn, "operational_users")
+	if err != nil {
+		return err
+	}
+	batch, err := sink.Conn.PrepareBatch(ctx, "INSERT INTO operational_users ("+contract.columns(pagerDutyUsersColumns)+")")
 	if err != nil {
 		return err
 	}
 	defer batch.Abort()
 	for _, row := range allRows {
-		if err := batch.Append(pagerDutyUserValues(row)...); err != nil {
+		if err := batch.Append(contract.insertValues(pagerDutyUserValues(row),
+			row.SourceRevision, row.SourceConflictKey, row.IngestRevision, row.OrderingContract)...); err != nil {
 			return err
 		}
 	}
@@ -91,6 +96,14 @@ func (sink PagerDutyUsersClickHouseEffects) WriteEffect(
 }
 
 func (sink PagerDutyUsersClickHouseEffects) InspectEffect(
+	ctx context.Context, claim Claim, effect EffectBatch,
+) (EffectInspection, error) {
+	sink.contracts = newOperationalTableContracts()
+	inspection, err := sink.inspectEffect(ctx, claim, effect)
+	return sink.contracts.confirmInspection(ctx, sink.Conn, inspection, err)
+}
+
+func (sink PagerDutyUsersClickHouseEffects) inspectEffect(
 	ctx context.Context, claim Claim, effect EffectBatch,
 ) (EffectInspection, error) {
 	if err := sink.validateRequest(ctx, claim, effect); err != nil {
@@ -239,10 +252,12 @@ func pagerDutyUserScanValues(row *pagerDutyUserRow) []any {
 func (sink PagerDutyUsersClickHouseEffects) loadActiveUsers(
 	ctx context.Context, claim Claim, providerInstance string,
 ) ([]pagerDutyUserRow, error) {
-	rows, err := sink.Conn.Query(
-		ctx,
-		"SELECT "+pagerDutyUsersColumns+
-			" FROM operational_users FINAL WHERE org_id = ? AND provider = ? AND provider_instance_id = ? AND source_entity_type = ? AND is_deleted = 0",
+	contract, err := sink.contracts.resolve(ctx, sink.Conn, "operational_users")
+	if err != nil {
+		return nil, err
+	}
+	rows, err := sink.Conn.Query(ctx,
+		contract.activeQuery(pagerDutyUsersColumns, "operational_users", "org_id = ? AND provider = ? AND provider_instance_id = ? AND source_entity_type = ?", "is_deleted = 0"),
 		claim.OrgID, claim.Provider, providerInstance, "user",
 	)
 	if err != nil {
@@ -252,10 +267,10 @@ func (sink PagerDutyUsersClickHouseEffects) loadActiveUsers(
 	active := make([]pagerDutyUserRow, 0)
 	for rows.Next() {
 		var row pagerDutyUserRow
-		if err := rows.Scan(pagerDutyUserScanValues(&row)...); err != nil {
-			return nil, err
-		}
-		if err := fillPagerDutyUserOrdering(&row); err != nil {
+		if err := contract.scan(rows, pagerDutyUserScanValues(&row),
+			operationalOrderingTarget{&row.SourceRevision, &row.SourceConflictKey, &row.IngestRevision, &row.OrderingContract},
+			func() error { return fillPagerDutyUserOrdering(&row) },
+		); err != nil {
 			return nil, err
 		}
 		active = append(active, row)
@@ -269,10 +284,12 @@ func (sink PagerDutyUsersClickHouseEffects) loadActiveUsers(
 func (sink PagerDutyUsersClickHouseEffects) loadUser(
 	ctx context.Context, claim Claim, providerInstance, id string,
 ) (pagerDutyUserRow, bool, error) {
-	rows, err := sink.Conn.Query(
-		ctx,
-		"SELECT "+pagerDutyUsersColumns+
-			" FROM operational_users FINAL WHERE org_id = ? AND provider = ? AND provider_instance_id = ? AND source_entity_type = ? AND id = ? LIMIT 1",
+	contract, err := sink.contracts.resolve(ctx, sink.Conn, "operational_users")
+	if err != nil {
+		return pagerDutyUserRow{}, false, err
+	}
+	rows, err := sink.Conn.Query(ctx,
+		contract.latestQuery(pagerDutyUsersColumns, "operational_users", "org_id = ? AND provider = ? AND provider_instance_id = ? AND source_entity_type = ? AND id = ?"),
 		claim.OrgID, claim.Provider, providerInstance, "user", id,
 	)
 	if err != nil {
@@ -282,10 +299,10 @@ func (sink PagerDutyUsersClickHouseEffects) loadUser(
 	var actual pagerDutyUserRow
 	found := false
 	for rows.Next() {
-		if err := rows.Scan(pagerDutyUserScanValues(&actual)...); err != nil {
-			return pagerDutyUserRow{}, false, err
-		}
-		if err := fillPagerDutyUserOrdering(&actual); err != nil {
+		if err := contract.scan(rows, pagerDutyUserScanValues(&actual),
+			operationalOrderingTarget{&actual.SourceRevision, &actual.SourceConflictKey, &actual.IngestRevision, &actual.OrderingContract},
+			func() error { return fillPagerDutyUserOrdering(&actual) },
+		); err != nil {
 			return pagerDutyUserRow{}, false, err
 		}
 		found = true

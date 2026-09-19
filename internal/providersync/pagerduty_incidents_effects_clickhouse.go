@@ -27,11 +27,13 @@ type PagerDutyIncidentFamilyClickHouseEffects struct {
 	ProviderInstanceID string
 	Entitlement        IncidentEntitlement
 	Metrics            *providerfoundation.Metrics
+	contracts          *operationalTableContracts
 }
 
 func (sink PagerDutyIncidentFamilyClickHouseEffects) WriteEffect(
 	ctx context.Context, claim Claim, effect EffectBatch,
 ) error {
+	sink.contracts = newOperationalTableContracts()
 	if err := sink.validateRequest(ctx, claim, effect); err != nil {
 		return err
 	}
@@ -83,6 +85,14 @@ func (sink PagerDutyIncidentFamilyClickHouseEffects) WriteEffect(
 }
 
 func (sink PagerDutyIncidentFamilyClickHouseEffects) InspectEffect(
+	ctx context.Context, claim Claim, effect EffectBatch,
+) (EffectInspection, error) {
+	sink.contracts = newOperationalTableContracts()
+	inspection, err := sink.inspectEffect(ctx, claim, effect)
+	return sink.contracts.confirmInspection(ctx, sink.Conn, inspection, err)
+}
+
+func (sink PagerDutyIncidentFamilyClickHouseEffects) inspectEffect(
 	ctx context.Context, claim Claim, effect EffectBatch,
 ) (EffectInspection, error) {
 	if err := sink.validateRequest(ctx, claim, effect); err != nil {
@@ -153,13 +163,18 @@ func (sink PagerDutyIncidentFamilyClickHouseEffects) writeIncidentRows(
 	if len(rows) == 0 {
 		return nil
 	}
-	batch, err := sink.Conn.PrepareBatch(ctx, "INSERT INTO operational_incidents ("+pagerDutyIncidentColumns+")")
+	contract, err := sink.contracts.resolve(ctx, sink.Conn, "operational_incidents")
+	if err != nil {
+		return err
+	}
+	batch, err := sink.Conn.PrepareBatch(ctx, "INSERT INTO operational_incidents ("+contract.columns(pagerDutyIncidentColumns)+")")
 	if err != nil {
 		return err
 	}
 	defer batch.Abort()
 	for _, row := range rows {
-		if err := batch.Append(pagerDutyIncidentValues(row)...); err != nil {
+		if err := batch.Append(contract.insertValues(pagerDutyIncidentValues(row),
+			row.SourceRevision, row.SourceConflictKey, row.IngestRevision, row.OrderingContract)...); err != nil {
 			return err
 		}
 	}
@@ -175,13 +190,18 @@ func (sink PagerDutyIncidentFamilyClickHouseEffects) writeAlertRows(
 	if len(rows) == 0 {
 		return nil
 	}
-	batch, err := sink.Conn.PrepareBatch(ctx, "INSERT INTO operational_alerts ("+pagerDutyAlertColumns+")")
+	contract, err := sink.contracts.resolve(ctx, sink.Conn, "operational_alerts")
+	if err != nil {
+		return err
+	}
+	batch, err := sink.Conn.PrepareBatch(ctx, "INSERT INTO operational_alerts ("+contract.columns(pagerDutyAlertColumns)+")")
 	if err != nil {
 		return err
 	}
 	defer batch.Abort()
 	for _, row := range rows {
-		if err := batch.Append(pagerDutyAlertValues(row)...); err != nil {
+		if err := batch.Append(contract.insertValues(pagerDutyAlertValues(row),
+			row.SourceRevision, row.SourceConflictKey, row.IngestRevision, row.OrderingContract)...); err != nil {
 			return err
 		}
 	}
@@ -197,13 +217,18 @@ func (sink PagerDutyIncidentFamilyClickHouseEffects) writeLogEntryRows(
 	if len(rows) == 0 {
 		return nil
 	}
-	batch, err := sink.Conn.PrepareBatch(ctx, "INSERT INTO operational_incident_timeline_events ("+pagerDutyLogEntryColumns+")")
+	contract, err := sink.contracts.resolve(ctx, sink.Conn, "operational_incident_timeline_events")
+	if err != nil {
+		return err
+	}
+	batch, err := sink.Conn.PrepareBatch(ctx, "INSERT INTO operational_incident_timeline_events ("+contract.columns(pagerDutyLogEntryColumns)+")")
 	if err != nil {
 		return err
 	}
 	defer batch.Abort()
 	for _, row := range rows {
-		if err := batch.Append(pagerDutyLogEntryValues(row)...); err != nil {
+		if err := batch.Append(contract.insertValues(pagerDutyLogEntryValues(row),
+			row.SourceRevision, row.SourceConflictKey, row.IngestRevision, row.OrderingContract)...); err != nil {
 			return err
 		}
 	}
@@ -219,13 +244,18 @@ func (sink PagerDutyIncidentFamilyClickHouseEffects) writeNoteRows(
 	if len(rows) == 0 {
 		return nil
 	}
-	batch, err := sink.Conn.PrepareBatch(ctx, "INSERT INTO operational_incident_notes ("+pagerDutyNoteColumns+")")
+	contract, err := sink.contracts.resolve(ctx, sink.Conn, "operational_incident_notes")
+	if err != nil {
+		return err
+	}
+	batch, err := sink.Conn.PrepareBatch(ctx, "INSERT INTO operational_incident_notes ("+contract.columns(pagerDutyNoteColumns)+")")
 	if err != nil {
 		return err
 	}
 	defer batch.Abort()
 	for _, row := range rows {
-		if err := batch.Append(pagerDutyNoteValues(row)...); err != nil {
+		if err := batch.Append(contract.insertValues(pagerDutyNoteValues(row),
+			row.SourceRevision, row.SourceConflictKey, row.IngestRevision, row.OrderingContract)...); err != nil {
 			return err
 		}
 	}
@@ -465,7 +495,14 @@ func (sink PagerDutyIncidentFamilyClickHouseEffects) inspectNoteRows(
 func (sink PagerDutyIncidentFamilyClickHouseEffects) loadIncidentRow(
 	ctx context.Context, claim Claim, id string,
 ) (pagerDutyIncidentRow, bool, error) {
-	rows, err := sink.Conn.Query(ctx, "SELECT "+pagerDutyIncidentColumns+" FROM operational_incidents FINAL WHERE org_id = ? AND provider = ? AND provider_instance_id = ? AND source_entity_type = ? AND id = ? LIMIT 1", claim.OrgID, claim.Provider, strings.ToLower(strings.TrimSpace(sink.ProviderInstanceID)), "incident", id)
+	contract, err := sink.contracts.resolve(ctx, sink.Conn, "operational_incidents")
+	if err != nil {
+		return pagerDutyIncidentRow{}, false, err
+	}
+	rows, err := sink.Conn.Query(ctx,
+		contract.latestQuery(pagerDutyIncidentColumns, "operational_incidents", "org_id = ? AND provider = ? AND provider_instance_id = ? AND source_entity_type = ? AND id = ?"),
+		claim.OrgID, claim.Provider, strings.ToLower(strings.TrimSpace(sink.ProviderInstanceID)), "incident", id,
+	)
 	if err != nil {
 		return pagerDutyIncidentRow{}, false, err
 	}
@@ -473,10 +510,10 @@ func (sink PagerDutyIncidentFamilyClickHouseEffects) loadIncidentRow(
 	var row pagerDutyIncidentRow
 	found := false
 	for rows.Next() {
-		if err := rows.Scan(pagerDutyIncidentScanValues(&row)...); err != nil {
-			return pagerDutyIncidentRow{}, false, err
-		}
-		if err := fillPagerDutyIncidentOrdering(&row); err != nil {
+		if err := contract.scan(rows, pagerDutyIncidentScanValues(&row),
+			operationalOrderingTarget{&row.SourceRevision, &row.SourceConflictKey, &row.IngestRevision, &row.OrderingContract},
+			func() error { return fillPagerDutyIncidentOrdering(&row) },
+		); err != nil {
 			return pagerDutyIncidentRow{}, false, err
 		}
 		found = true
@@ -490,7 +527,14 @@ func (sink PagerDutyIncidentFamilyClickHouseEffects) loadIncidentRow(
 func (sink PagerDutyIncidentFamilyClickHouseEffects) loadAlertRow(
 	ctx context.Context, claim Claim, id string,
 ) (pagerDutyAlertRow, bool, error) {
-	rows, err := sink.Conn.Query(ctx, "SELECT "+pagerDutyAlertColumns+" FROM operational_alerts FINAL WHERE org_id = ? AND provider = ? AND provider_instance_id = ? AND source_entity_type = ? AND id = ? LIMIT 1", claim.OrgID, claim.Provider, strings.ToLower(strings.TrimSpace(sink.ProviderInstanceID)), "alert", id)
+	contract, err := sink.contracts.resolve(ctx, sink.Conn, "operational_alerts")
+	if err != nil {
+		return pagerDutyAlertRow{}, false, err
+	}
+	rows, err := sink.Conn.Query(ctx,
+		contract.latestQuery(pagerDutyAlertColumns, "operational_alerts", "org_id = ? AND provider = ? AND provider_instance_id = ? AND source_entity_type = ? AND id = ?"),
+		claim.OrgID, claim.Provider, strings.ToLower(strings.TrimSpace(sink.ProviderInstanceID)), "alert", id,
+	)
 	if err != nil {
 		return pagerDutyAlertRow{}, false, err
 	}
@@ -498,10 +542,10 @@ func (sink PagerDutyIncidentFamilyClickHouseEffects) loadAlertRow(
 	var row pagerDutyAlertRow
 	found := false
 	for rows.Next() {
-		if err := rows.Scan(pagerDutyAlertScanValues(&row)...); err != nil {
-			return pagerDutyAlertRow{}, false, err
-		}
-		if err := fillPagerDutyAlertOrdering(&row); err != nil {
+		if err := contract.scan(rows, pagerDutyAlertScanValues(&row),
+			operationalOrderingTarget{&row.SourceRevision, &row.SourceConflictKey, &row.IngestRevision, &row.OrderingContract},
+			func() error { return fillPagerDutyAlertOrdering(&row) },
+		); err != nil {
 			return pagerDutyAlertRow{}, false, err
 		}
 		found = true
@@ -515,7 +559,14 @@ func (sink PagerDutyIncidentFamilyClickHouseEffects) loadAlertRow(
 func (sink PagerDutyIncidentFamilyClickHouseEffects) loadLogEntryRow(
 	ctx context.Context, claim Claim, id string,
 ) (pagerDutyLogEntryRow, bool, error) {
-	rows, err := sink.Conn.Query(ctx, "SELECT "+pagerDutyLogEntryColumns+" FROM operational_incident_timeline_events FINAL WHERE org_id = ? AND provider = ? AND provider_instance_id = ? AND source_entity_type = ? AND id = ? LIMIT 1", claim.OrgID, claim.Provider, strings.ToLower(strings.TrimSpace(sink.ProviderInstanceID)), "log_entry", id)
+	contract, err := sink.contracts.resolve(ctx, sink.Conn, "operational_incident_timeline_events")
+	if err != nil {
+		return pagerDutyLogEntryRow{}, false, err
+	}
+	rows, err := sink.Conn.Query(ctx,
+		contract.latestQuery(pagerDutyLogEntryColumns, "operational_incident_timeline_events", "org_id = ? AND provider = ? AND provider_instance_id = ? AND source_entity_type = ? AND id = ?"),
+		claim.OrgID, claim.Provider, strings.ToLower(strings.TrimSpace(sink.ProviderInstanceID)), "log_entry", id,
+	)
 	if err != nil {
 		return pagerDutyLogEntryRow{}, false, err
 	}
@@ -523,10 +574,10 @@ func (sink PagerDutyIncidentFamilyClickHouseEffects) loadLogEntryRow(
 	var row pagerDutyLogEntryRow
 	found := false
 	for rows.Next() {
-		if err := rows.Scan(pagerDutyLogEntryScanValues(&row)...); err != nil {
-			return pagerDutyLogEntryRow{}, false, err
-		}
-		if err := fillPagerDutyLogEntryOrdering(&row); err != nil {
+		if err := contract.scan(rows, pagerDutyLogEntryScanValues(&row),
+			operationalOrderingTarget{&row.SourceRevision, &row.SourceConflictKey, &row.IngestRevision, &row.OrderingContract},
+			func() error { return fillPagerDutyLogEntryOrdering(&row) },
+		); err != nil {
 			return pagerDutyLogEntryRow{}, false, err
 		}
 		found = true
@@ -540,7 +591,14 @@ func (sink PagerDutyIncidentFamilyClickHouseEffects) loadLogEntryRow(
 func (sink PagerDutyIncidentFamilyClickHouseEffects) loadNoteRow(
 	ctx context.Context, claim Claim, id string,
 ) (pagerDutyNoteRow, bool, error) {
-	rows, err := sink.Conn.Query(ctx, "SELECT "+pagerDutyNoteColumns+" FROM operational_incident_notes FINAL WHERE org_id = ? AND provider = ? AND provider_instance_id = ? AND source_entity_type = ? AND id = ? LIMIT 1", claim.OrgID, claim.Provider, strings.ToLower(strings.TrimSpace(sink.ProviderInstanceID)), "note", id)
+	contract, err := sink.contracts.resolve(ctx, sink.Conn, "operational_incident_notes")
+	if err != nil {
+		return pagerDutyNoteRow{}, false, err
+	}
+	rows, err := sink.Conn.Query(ctx,
+		contract.latestQuery(pagerDutyNoteColumns, "operational_incident_notes", "org_id = ? AND provider = ? AND provider_instance_id = ? AND source_entity_type = ? AND id = ?"),
+		claim.OrgID, claim.Provider, strings.ToLower(strings.TrimSpace(sink.ProviderInstanceID)), "note", id,
+	)
 	if err != nil {
 		return pagerDutyNoteRow{}, false, err
 	}
@@ -548,10 +606,10 @@ func (sink PagerDutyIncidentFamilyClickHouseEffects) loadNoteRow(
 	var row pagerDutyNoteRow
 	found := false
 	for rows.Next() {
-		if err := rows.Scan(pagerDutyNoteScanValues(&row)...); err != nil {
-			return pagerDutyNoteRow{}, false, err
-		}
-		if err := fillPagerDutyNoteOrdering(&row); err != nil {
+		if err := contract.scan(rows, pagerDutyNoteScanValues(&row),
+			operationalOrderingTarget{&row.SourceRevision, &row.SourceConflictKey, &row.IngestRevision, &row.OrderingContract},
+			func() error { return fillPagerDutyNoteOrdering(&row) },
+		); err != nil {
 			return pagerDutyNoteRow{}, false, err
 		}
 		found = true

@@ -503,11 +503,8 @@ func TestPagerDutyResponderRowValidationMatchesTheFamilyContract(t *testing.T) {
 	}
 }
 
-// The deployed tables do not have the ordering columns (CH migration 067 has
-// not run), so the responder column list must omit them exactly as its four
-// siblings do -- the same property
-// TestPagerDutyServicesReadbackDoesNotClaimV2ColumnsFromActiveLegacySchema
-// pins for services.
+// The responder legacy column list omits the ordering columns exactly as its
+// siblings do; the table's contract adds them (operational_ordering_contract.go).
 func TestPagerDutyResponderColumnsOmitTheV2OrderingColumns(t *testing.T) {
 	for _, column := range strings.Split(pagerDutyResponderColumns, ",") {
 		if pagerDutyGoldenOrderingColumns[column] {

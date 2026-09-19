@@ -11,9 +11,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
-// The migrated operational_on_call_schedules table predates durable ordering
-// columns. Keep the typed effect row complete for parity/readback validation,
-// but insert the exact columns provided by the production migration.
+// The legacy (contract 1) column list; the table's contract decides whether
+// the four ordering columns are added (operational_ordering_contract.go).
 const pagerDutySchedulesColumns = "org_id,provider,provider_instance_id,source_entity_type,external_id,source_version_at,id,source_id,source_url,source_event_at,source_event_id,observed_at,last_synced,raw_status,raw_severity,raw_priority,normalized_status,normalized_severity,normalized_priority,relationship_provenance,relationship_confidence,name,description,timezone,is_deleted,deleted_at"
 
 // PagerDutySchedulesClickHouseEffects persists a complete schedules snapshot
@@ -26,11 +25,13 @@ type PagerDutySchedulesClickHouseEffects struct {
 	Now                func() time.Time
 	Entitlement        IncidentEntitlement
 	Metrics            *providerfoundation.Metrics
+	contracts          *operationalTableContracts
 }
 
 func (sink PagerDutySchedulesClickHouseEffects) WriteEffect(
 	ctx context.Context, claim Claim, effect EffectBatch,
 ) error {
+	sink.contracts = newOperationalTableContracts()
 	if err := sink.validateRequest(ctx, claim, effect); err != nil {
 		return err
 	}
@@ -73,15 +74,18 @@ func (sink PagerDutySchedulesClickHouseEffects) WriteEffect(
 	if len(allRows) == 0 {
 		return nil
 	}
-	batch, err := sink.Conn.PrepareBatch(
-		ctx, "INSERT INTO operational_on_call_schedules ("+pagerDutySchedulesColumns+")",
-	)
+	contract, err := sink.contracts.resolve(ctx, sink.Conn, "operational_on_call_schedules")
+	if err != nil {
+		return err
+	}
+	batch, err := sink.Conn.PrepareBatch(ctx, "INSERT INTO operational_on_call_schedules ("+contract.columns(pagerDutySchedulesColumns)+")")
 	if err != nil {
 		return err
 	}
 	defer batch.Abort()
 	for _, row := range allRows {
-		if err := batch.Append(pagerDutyScheduleValues(row)...); err != nil {
+		if err := batch.Append(contract.insertValues(pagerDutyScheduleValues(row),
+			row.SourceRevision, row.SourceConflictKey, row.IngestRevision, row.OrderingContract)...); err != nil {
 			return err
 		}
 	}
@@ -92,6 +96,14 @@ func (sink PagerDutySchedulesClickHouseEffects) WriteEffect(
 }
 
 func (sink PagerDutySchedulesClickHouseEffects) InspectEffect(
+	ctx context.Context, claim Claim, effect EffectBatch,
+) (EffectInspection, error) {
+	sink.contracts = newOperationalTableContracts()
+	inspection, err := sink.inspectEffect(ctx, claim, effect)
+	return sink.contracts.confirmInspection(ctx, sink.Conn, inspection, err)
+}
+
+func (sink PagerDutySchedulesClickHouseEffects) inspectEffect(
 	ctx context.Context, claim Claim, effect EffectBatch,
 ) (EffectInspection, error) {
 	if err := sink.validateRequest(ctx, claim, effect); err != nil {
@@ -239,9 +251,12 @@ func pagerDutyScheduleScanValues(row *pagerDutyScheduleRow) []any {
 func (sink PagerDutySchedulesClickHouseEffects) loadActiveSchedules(
 	ctx context.Context, claim Claim, providerInstance string,
 ) ([]pagerDutyScheduleRow, error) {
-	rows, err := sink.Conn.Query(
-		ctx, "SELECT "+pagerDutySchedulesColumns+
-			" FROM operational_on_call_schedules FINAL WHERE org_id = ? AND provider = ? AND provider_instance_id = ? AND source_entity_type = ? AND is_deleted = 0",
+	contract, err := sink.contracts.resolve(ctx, sink.Conn, "operational_on_call_schedules")
+	if err != nil {
+		return nil, err
+	}
+	rows, err := sink.Conn.Query(ctx,
+		contract.activeQuery(pagerDutySchedulesColumns, "operational_on_call_schedules", "org_id = ? AND provider = ? AND provider_instance_id = ? AND source_entity_type = ?", "is_deleted = 0"),
 		claim.OrgID, claim.Provider, providerInstance, "schedule",
 	)
 	if err != nil {
@@ -251,10 +266,10 @@ func (sink PagerDutySchedulesClickHouseEffects) loadActiveSchedules(
 	active := make([]pagerDutyScheduleRow, 0)
 	for rows.Next() {
 		var row pagerDutyScheduleRow
-		if err := rows.Scan(pagerDutyScheduleScanValues(&row)...); err != nil {
-			return nil, err
-		}
-		if err := fillPagerDutyScheduleOrdering(&row); err != nil {
+		if err := contract.scan(rows, pagerDutyScheduleScanValues(&row),
+			operationalOrderingTarget{&row.SourceRevision, &row.SourceConflictKey, &row.IngestRevision, &row.OrderingContract},
+			func() error { return fillPagerDutyScheduleOrdering(&row) },
+		); err != nil {
 			return nil, err
 		}
 		active = append(active, row)
@@ -268,9 +283,12 @@ func (sink PagerDutySchedulesClickHouseEffects) loadActiveSchedules(
 func (sink PagerDutySchedulesClickHouseEffects) loadSchedule(
 	ctx context.Context, claim Claim, providerInstance, id string,
 ) (pagerDutyScheduleRow, bool, error) {
-	rows, err := sink.Conn.Query(
-		ctx, "SELECT "+pagerDutySchedulesColumns+
-			" FROM operational_on_call_schedules FINAL WHERE org_id = ? AND provider = ? AND provider_instance_id = ? AND source_entity_type = ? AND id = ? LIMIT 1",
+	contract, err := sink.contracts.resolve(ctx, sink.Conn, "operational_on_call_schedules")
+	if err != nil {
+		return pagerDutyScheduleRow{}, false, err
+	}
+	rows, err := sink.Conn.Query(ctx,
+		contract.latestQuery(pagerDutySchedulesColumns, "operational_on_call_schedules", "org_id = ? AND provider = ? AND provider_instance_id = ? AND source_entity_type = ? AND id = ?"),
 		claim.OrgID, claim.Provider, providerInstance, "schedule", id,
 	)
 	if err != nil {
@@ -280,10 +298,10 @@ func (sink PagerDutySchedulesClickHouseEffects) loadSchedule(
 	var actual pagerDutyScheduleRow
 	found := false
 	for rows.Next() {
-		if err := rows.Scan(pagerDutyScheduleScanValues(&actual)...); err != nil {
-			return pagerDutyScheduleRow{}, false, err
-		}
-		if err := fillPagerDutyScheduleOrdering(&actual); err != nil {
+		if err := contract.scan(rows, pagerDutyScheduleScanValues(&actual),
+			operationalOrderingTarget{&actual.SourceRevision, &actual.SourceConflictKey, &actual.IngestRevision, &actual.OrderingContract},
+			func() error { return fillPagerDutyScheduleOrdering(&actual) },
+		); err != nil {
 			return pagerDutyScheduleRow{}, false, err
 		}
 		found = true

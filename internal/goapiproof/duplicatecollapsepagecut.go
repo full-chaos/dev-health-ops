@@ -189,6 +189,32 @@ type DuplicateCollapsePageCutShape struct {
 	// and rule 2b's tie argument holds. Nil keeps rules 2 and 4 as
 	// stated.
 	CopyRule *DuplicateCopyRule
+	// CursorPath, when set, is the dotted path of the response's own
+	// next-page cursor, which each plane copies from the SortField of its
+	// own page's last row (e.g. "data.next_cursor"). The duplicate copies
+	// that cut the baseline page short also move its last row: the
+	// reference plane pages over undeduplicated copies, so its page ends
+	// earlier in the sort order than the candidate's, and its cursor
+	// names a later instant than the candidate's. A difference at
+	// CursorPath is admitted only when every rule above holds AND:
+	//
+	//  7. each leg's cursor parses as a timestamp and names the SAME
+	//     instant as that leg's own last row's SortField, and the
+	//     candidate's cursor is not later than the baseline's.
+	//
+	// The last comparison of rule 7 follows from rules 4 and 6 (the
+	// proof under rule 6: every candidate row orders at or after
+	// baseline's own last row); it is checked anyway so the admission
+	// states its own direction. An absent, null or unparseable cursor on
+	// either leg, or one naming any other instant, is outside. Empty
+	// leaves the cursor to other declarations.
+	//
+	// Limit: a candidate row the baseline page never reached has no
+	// baseline value to bound it, and the cursor inherits that limit. When
+	// the candidate's last row is such a row, its created_at is checked
+	// only for order (rule 6), so a cursor equal to a wrong but ordered
+	// tail value is admitted exactly as that row itself is.
+	CursorPath string
 }
 
 // duplicateCollapsePageCutPlan is one comparison's fully-evaluated
@@ -196,6 +222,8 @@ type DuplicateCollapsePageCutShape struct {
 type duplicateCollapsePageCutPlan struct {
 	shape   *DuplicateCollapsePageCutShape
 	applies bool
+	// cursorAdmitted is rule 7's verdict, false unless applies holds.
+	cursorAdmitted bool
 }
 
 // buildDuplicateCollapsePageCutPlan evaluates every rule
@@ -381,7 +409,36 @@ func buildDuplicateCollapsePageCutPlan(shape *DuplicateCollapsePageCutShape, bas
 	}
 
 	plan.applies = true
+	plan.cursorAdmitted = pageCutCursorFollowsLastRows(shape, baselineData, candidateData, baseSort[len(baseSort)-1], candSort[len(candSort)-1])
 	return plan
+}
+
+// pageCutCursorFollowsLastRows is rule 7: each leg's cursor names its own
+// last row's SortField instant, and the candidate's is not later than the
+// baseline's. baseLast and candLast are the two lists' last SortField
+// values: rule 1 pins the baseline to Limit > 0 rows and rule 4 makes
+// dedup(baseline) the candidate's prefix, so neither list is empty here.
+// An empty CursorPath resolves to no string leaf and admits nothing.
+func pageCutCursorFollowsLastRows(shape *DuplicateCollapsePageCutShape, baselineData, candidateData any, baseLast, candLast time.Time) bool {
+	baseCursor, ok := pageCutCursorValue(baselineData, shape.CursorPath)
+	if !ok || !baseCursor.Equal(baseLast) {
+		return false
+	}
+	candCursor, ok := pageCutCursorValue(candidateData, shape.CursorPath)
+	if !ok || !candCursor.Equal(candLast) {
+		return false
+	}
+	return !candCursor.After(baseCursor)
+}
+
+// pageCutCursorValue reads a cursor leaf as a timestamp; ok is false when
+// it is absent, null, not a string or unparseable.
+func pageCutCursorValue(root any, dottedPath string) (time.Time, bool) {
+	raw, ok := stringAtDottedPath(root, dottedPath)
+	if !ok {
+		return time.Time{}, false
+	}
+	return parseTimestamp(raw)
 }
 
 // duplicateCollapsePageCutSortValue reads one list element's own
@@ -422,11 +479,18 @@ func duplicateCollapsePageCutSortValue(element any, sortField string) (time.Time
 	return parseTimestamp(str)
 }
 
-// admits reports whether one Finding is covered by this plan: only the
-// list's own ShapeLength finding, and only when every rule above held.
+// admits reports whether one Finding is covered by this plan: the list's
+// own ShapeLength finding when every rule above held, and a ShapeValue
+// finding at CursorPath when rule 7 also held.
 func (p *duplicateCollapsePageCutPlan) admits(finding Finding) bool {
 	if p == nil || !p.applies {
 		return false
+	}
+	// No finding's path is "$." alone, so an empty CursorPath matches
+	// nothing here; cursorAdmitted holds only when both cursors are
+	// strings, so the finding it admits is a ShapeValue one.
+	if finding.Path == "$."+p.shape.CursorPath {
+		return p.cursorAdmitted
 	}
 	return finding.Shape == ShapeLength && tieredPath(finding.Path) == p.shape.ListPath
 }

@@ -10,3 +10,9 @@ import "testing"
 func TestCandidateAccounting_EnumeratedAdmissionImpliesTheInvariantToFourRows(t *testing.T) {
 	runAccountingEnumeration(t, 4)
 }
+
+// TestPersonDrilldownPRs_EnumeratedCursorAdmissionImpliesTheInvariantToThreeRows
+// extends the cursor enumeration to candidates of three rows.
+func TestPersonDrilldownPRs_EnumeratedCursorAdmissionImpliesTheInvariantToThreeRows(t *testing.T) {
+	runCursorEnumeration(t, 3)
+}

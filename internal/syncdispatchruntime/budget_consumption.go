@@ -2,6 +2,7 @@ package syncdispatchruntime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -37,6 +38,17 @@ func scanActiveBudgetConsumptionUnit(rows pgx.Rows) (budgetUnit, error) {
 	unit.result = decodeUnitResult(resultRaw)
 	return unit, nil
 }
+
+// ErrEstimateFatal marks an estimator failure the gate must not treat as an
+// estimate outage. enforceRun fails its pass on it (no unit admitted or
+// deferred; the caller's transaction rolls back), whether it arrives while
+// estimating the candidates or while estimating the active baseline
+// (activeBudgetConsumption returns it to enforceRun); observeRun, which is
+// telemetry only, degrades the chunk as it does for any other error.
+// The HTTP bridge never returns it: only an estimator that reads its own
+// inputs can hit a failure that must not fail open. Classified with
+// errors.Is, so a wrapped or joined error keeps the class.
+var ErrEstimateFatal = errors.New("budget estimate failed fatally")
 
 // budgetEstimator is the credential-bound estimation call activeBudgetConsumption
 // needs -- satisfied by *HTTPBridge.DispatchBudgetEstimate, narrowed to an
@@ -159,6 +171,13 @@ ORDER BY id`,
 		for _, chunk := range chunkUnitIDs(unitIDs) {
 			estimatesByUnit, err := bridge.DispatchBudgetEstimate(ctx, key.orgID, key.syncRunID, chunk)
 			if err != nil {
+				// A fatal estimate failure here would leave enforceRun
+				// admitting against a baseline missing this chunk's
+				// consumption -- an unchecked admission -- so it fails the
+				// caller instead of degrading the baseline.
+				if errors.Is(err, ErrEstimateFatal) {
+					return nil, err
+				}
 				for _, unitID := range chunk {
 					logger.WarnContext(ctx, "dispatch_sync_run.budget_guard_active_estimate_failed",
 						attrsToAny(append(unitLogAttrs(key.syncRunID, unitsByID[unitID]), slog.String("error", err.Error())))...)

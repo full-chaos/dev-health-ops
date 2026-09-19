@@ -152,7 +152,7 @@ func enforceRun(
 	for _, chunk := range chunkUnitIDs(allUnitIDs) {
 		bridgeEstimates, bridgeErr := bridge.DispatchBudgetEstimate(ctx, orgID, syncRunID, chunk)
 		if bridgeErr != nil {
-			if errors.Is(bridgeErr, ErrBridgeContractRejected) {
+			if errors.Is(bridgeErr, ErrBridgeContractRejected) || errors.Is(bridgeErr, ErrEstimateFatal) {
 				return enforceRunResult{}, bridgeErr
 			}
 			// Genuine bridge/estimator unavailability: fail this CHUNK's

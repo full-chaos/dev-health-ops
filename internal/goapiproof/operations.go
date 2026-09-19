@@ -259,6 +259,55 @@ var operationSpecs = map[string]OperationSpec{
 			return map[string]any{"orgId": orgID}
 		},
 	},
+	// The four documents that select `dataHealth`. All send the team as a
+	// document variable except the lineage document, which fixes team ALL and
+	// sends the metric. The identity read is the only one the team changes
+	// (it narrows which identities count as mapped), so its base request asks
+	// for team ALL and a variant asks for the empty team, which takes the
+	// unscoped branch. The lineage document reads one metric's source tables,
+	// and the metrics of one table share every code path, so the base request
+	// asks for one metric per table and a variant asks for a metric no table
+	// holds.
+	"connectorsDataHealth": {
+		ResponseRoot: "dataHealth",
+		Variables: func(orgID string, _ Window) map[string]any {
+			return map[string]any{"teamId": "ALL"}
+		},
+		Parity: Options{BaselineDefects: []BaselineDefect{{
+			Ticket:             "CHAOS-6090",
+			Reason:             "sync_configurations.last_sync_at and job_runs.completed_at/started_at are Postgres timestamptz; Python's resolver hands the driver's tz-aware datetimes to strawberry's DateTime scalar, which isoformat()s them with a \"+00:00\" offset, while Go's gqlgen DateTime scalar formats the same instant as RFC 3339 with \"Z\" (resolvers/data_health.py resolve_connectors, models/data_health.py ConnectorStatus/ConnectorFailure). The instants are equal; only the wire text differs. Go's form is the canonical DateTime wire form (graphqldate.RFC3339UTC's doc comment); the Python form is the declared defect and stays frozen.",
+			Paths:              []string{"data.dataHealth.connectors.lastSyncAt", "data.dataHealth.connectors.lastFailure.occurredAt"},
+			Intermittent:       true,
+			IntermittentReason: "the two leaves exist only for a connector that has synced or failed; an org without one has no timestamp to differ",
+		}}},
+	},
+	"dataHealthIdentity": {
+		ResponseRoot: "dataHealth",
+		Variables: func(orgID string, _ Window) map[string]any {
+			return map[string]any{"team": "ALL"}
+		},
+		Variants: []Variant{{
+			Name: "EMPTY_TEAM",
+			Variables: func(orgID string, _ Window) map[string]any {
+				return map[string]any{"team": ""}
+			},
+		}},
+	},
+	"mappingCoverageHealth": {
+		ResponseRoot: "dataHealth",
+		Variables: func(orgID string, _ Window) map[string]any {
+			return map[string]any{"teamId": "ALL"}
+		},
+	},
+	"metricLineage": {
+		ResponseRoot: "dataHealth",
+		Variables: func(orgID string, _ Window) map[string]any {
+			return map[string]any{"metricId": "throughput"}
+		},
+		Parity: metricLineageParity(),
+
+		Variants: metricLineageVariants("review_load", "after_hours_ratio", "investment_mix", "no_such_metric"),
+	},
 	"cognitiveLoad": {
 		ResponseRoot: "cognitiveLoad",
 		Variables: func(orgID string, w Window) map[string]any {
@@ -971,4 +1020,32 @@ func busFactorVariant(name string, scope map[string]any) Variant {
 			return map[string]any{"orgId": orgID, "scope": scope}
 		},
 	}
+}
+
+// metricLineageVariants builds one metricLineage variant per metric, named by
+// the metric.
+func metricLineageVariants(metrics ...string) []Variant {
+	variants := make([]Variant, 0, len(metrics))
+	for _, metric := range metrics {
+		variants = append(variants, Variant{
+			Name: metric,
+			Variables: func(orgID string, _ Window) map[string]any {
+				return map[string]any{"metricId": metric}
+			},
+			Parity: metricLineageParity(),
+		})
+	}
+	return variants
+}
+
+// metricLineageParity declares the one wire-form difference every lineage
+// request with a known metric carries.
+func metricLineageParity() Options {
+	return Options{BaselineDefects: []BaselineDefect{{
+		Ticket:             "CHAOS-6090",
+		Reason:             "the lineage read takes argMax(computed_at, computed_at) from the metric tables, whose computed_at column is a ClickHouse DateTime('UTC'); Python's driver returns it without tzinfo, so strawberry's DateTime scalar isoformat()s it with no offset, while Go's gqlgen DateTime scalar formats the same instant as RFC 3339 with \"Z\" (models/data_health.py compute_metric_lineage). The instants are equal; only the wire text differs. Go's form is the canonical DateTime wire form; the Python form is the declared defect and stays frozen.",
+		Paths:              []string{"data.dataHealth.metricLineage.computedAt"},
+		Intermittent:       true,
+		IntermittentReason: "metricLineage is null for a metric no table holds and for tables with no answer, so the leaf exists only for a known metric",
+	}}}
 }

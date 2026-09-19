@@ -187,3 +187,28 @@ func TestRegisteredCatalogDocuments_MatchCapturedWireFixtures(t *testing.T) {
 		}
 	}
 }
+
+// TestRegisteredDataHealthDocuments_MatchCapturedWireFixtures asserts each
+// registered data-health document digests to the wire form the web client's
+// own pinned urql prints for the generated query text.
+func TestRegisteredDataHealthDocuments_MatchCapturedWireFixtures(t *testing.T) {
+	cases := []struct {
+		fixture    string
+		registered string
+	}{
+		{"testdata/wire_capture/data_health_connectors_captured.graphql", registeredConnectorsDataHealthDocument},
+		{"testdata/wire_capture/data_health_identity_captured.graphql", registeredDataHealthIdentityDocument},
+		{"testdata/wire_capture/data_health_metric_lineage_captured.graphql", registeredMetricLineageDocument},
+		{"testdata/wire_capture/data_health_mapping_coverage_captured.graphql", registeredMappingCoverageHealthDocument},
+	}
+	for _, tc := range cases {
+		captured, err := os.ReadFile(tc.fixture)
+		if err != nil {
+			t.Fatalf("read captured wire fixture %s: %v", tc.fixture, err)
+		}
+		if got, want := digestHex(string(captured)), digestHex(tc.registered); got != want {
+			t.Fatalf("registered document digest %s does not match the captured wire form %s (%s): a real client's request would miss this route\ncaptured:\n%s\n\nregistered:\n%s",
+				want, got, tc.fixture, string(captured), tc.registered)
+		}
+	}
+}

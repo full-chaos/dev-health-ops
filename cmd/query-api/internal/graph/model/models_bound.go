@@ -74,3 +74,13 @@ type SankeyCoverage struct {
 	TeamFallbackRepoCoverage *float64 `json:"teamFallbackRepoCoverage"`
 	RepoFanoutReposPerUnit   *float64 `json:"repoFanoutReposPerUnit"`
 }
+
+// DataHealth is the operator data-health result. Team is the requested team
+// scope; it is not a GraphQL field, and the metricLineage field resolver reads
+// it so the nested read runs under the same scope as the parent.
+type DataHealth struct {
+	Connectors      []ConnectorStatus      `json:"connectors"`
+	IdentityMapping *IdentityMappingHealth `json:"identityMapping"`
+	MappingCoverage *MappingCoverage       `json:"mappingCoverage"`
+	Team            string                 `json:"-"`
+}

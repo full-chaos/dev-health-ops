@@ -16,6 +16,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/capacityforecast"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/cognitiveload"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/complexitytimeseries"
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/datahealth"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/featureflags"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph/model"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/hotspots"
@@ -27,6 +28,32 @@ import (
 	"github.com/vektah/gqlparser/v2/gqlerror"
 	"go.opentelemetry.io/otel/attribute"
 )
+
+// MetricLineage is the resolver for the metricLineage field. It reads under the
+// authorized org and the team the parent was resolved with; the operator gate
+// already ran on the parent.
+func (r *dataHealthResolver) MetricLineage(ctx context.Context, obj *model.DataHealth, metricID string) (*model.MetricLineage, error) {
+	spanCtx, finish := startDataHealthSpan(ctx, "metricLineage")
+	claims, ok := authctx.FromContext(ctx)
+	if !ok || claims.OrgID == "" {
+		finish("denied", attribute.String("denial_reason", "no_org"))
+		return nil, &gqlerror.Error{
+			Message: "org_id is required for all analytics queries",
+			Path:    graphql.GetPath(ctx),
+			Extensions: map[string]interface{}{
+				"code": "AUTHORIZATION_ERROR",
+			},
+		}
+	}
+	reader := &datahealth.Reader{ClickHouse: r.ClickHouse}
+	lineage := reader.MetricLineage(spanCtx, claims.OrgID, metricID)
+	if reader.Degraded() {
+		finish("degraded")
+	} else {
+		finish("ok")
+	}
+	return lineage, nil
+}
 
 // CreateSavedReport is the resolver for the createSavedReport field.
 func (r *mutationResolver) CreateSavedReport(ctx context.Context, orgID string, input model.CreateSavedReportInput) (*model.SavedReportType, error) {
@@ -860,9 +887,52 @@ func (r *queryResolver) OperatingReview(ctx context.Context, orgID string, input
 	return result, nil
 }
 
-// DataHealth is the resolver for the dataHealth field.
+// DataHealth is the resolver for the dataHealth field. It serves operators
+// only: the principal must be a superuser or hold the admin, owner or operator
+// role, read from the verified envelope; a request without them is refused
+// before any read. The org read is the authorized org; the field takes no orgId
+// argument.
 func (r *queryResolver) DataHealth(ctx context.Context, team string) (*model.DataHealth, error) {
-	panic(fmt.Errorf("not implemented: DataHealth - dataHealth"))
+	spanCtx, finish := startDataHealthSpan(ctx, "dataHealth")
+
+	claims, ok := authctx.FromContext(ctx)
+	if err := datahealth.RequireOperator(datahealth.Principal{Present: ok, Role: claims.Role, IsSuperuser: claims.IsSuperuser}); err != nil {
+		reason := "not_operator"
+		if !ok {
+			reason = "no_principal"
+		}
+		finish("denied", attribute.String("denial_reason", reason))
+		return nil, &gqlerror.Error{
+			Message: err.Error(),
+			Path:    graphql.GetPath(ctx),
+			Extensions: map[string]interface{}{
+				"code": "AUTHORIZATION_ERROR",
+			},
+		}
+	}
+	if claims.OrgID == "" {
+		finish("denied", attribute.String("denial_reason", "no_org"))
+		return nil, &gqlerror.Error{
+			Message: "org_id is required for all analytics queries",
+			Path:    graphql.GetPath(ctx),
+			Extensions: map[string]interface{}{
+				"code": "AUTHORIZATION_ERROR",
+			},
+		}
+	}
+
+	reader := &datahealth.Reader{ClickHouse: r.ClickHouse, Postgres: r.Postgres}
+	result, err := reader.Resolve(spanCtx, claims.OrgID, team)
+	if err != nil {
+		finish("error")
+		return nil, fmt.Errorf("dataHealth: %w", err)
+	}
+	if reader.Degraded() {
+		finish("degraded")
+	} else {
+		finish("ok")
+	}
+	return result, nil
 }
 
 // BusFactor is the resolver for the busFactor field. It reads only the
@@ -1121,6 +1191,9 @@ func (r *subscriptionResolver) SyncProgress(ctx context.Context, orgID string) (
 	panic(fmt.Errorf("not implemented: SyncProgress - syncProgress"))
 }
 
+// DataHealth returns DataHealthResolver implementation.
+func (r *Resolver) DataHealth() DataHealthResolver { return &dataHealthResolver{r} }
+
 // Mutation returns MutationResolver implementation.
 func (r *Resolver) Mutation() MutationResolver { return &mutationResolver{r} }
 
@@ -1130,6 +1203,7 @@ func (r *Resolver) Query() QueryResolver { return &queryResolver{r} }
 // Subscription returns SubscriptionResolver implementation.
 func (r *Resolver) Subscription() SubscriptionResolver { return &subscriptionResolver{r} }
 
+type dataHealthResolver struct{ *Resolver }
 type mutationResolver struct{ *Resolver }
 type queryResolver struct{ *Resolver }
 type subscriptionResolver struct{ *Resolver }

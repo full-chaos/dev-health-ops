@@ -19,6 +19,12 @@ var claimsKey = contextKey{}
 // checks.
 type Claims struct {
 	OrgID string
+	// Role and IsSuperuser are copied from the verified envelope only. A
+	// route that builds Claims with just OrgID carries neither, which reads
+	// as "no role, not a superuser": every authorization built on them fails
+	// closed.
+	Role        string
+	IsSuperuser bool
 }
 
 // WithClaims returns a context carrying claims for downstream resolvers.

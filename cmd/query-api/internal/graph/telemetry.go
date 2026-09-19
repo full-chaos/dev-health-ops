@@ -46,6 +46,8 @@ var (
 	throughputForecastOutcomeCounter   = mustCounter("devhealth_query_api_throughput_forecast_outcome_total", "throughputForecast resolver outcomes, by result")
 	catalogCallCounter                 = mustCounter("devhealth_query_api_catalog_calls_total", "catalog resolver invocations")
 	catalogOutcomeCounter              = mustCounter("devhealth_query_api_catalog_outcome_total", "catalog resolver outcomes, by result")
+	dataHealthCallCounter              = mustCounter("devhealth_query_api_data_health_calls_total", "dataHealth resolver invocations")
+	dataHealthOutcomeCounter           = mustCounter("devhealth_query_api_data_health_outcome_total", "dataHealth resolver outcomes, by result")
 	featureFlagEventsCallCounter       = mustCounter("devhealth_query_api_feature_flag_events_calls_total", "featureFlagEvents resolver invocations")
 	featureFlagEventsOutcomeCounter    = mustCounter("devhealth_query_api_feature_flag_events_outcome_total", "featureFlagEvents resolver outcomes, by result")
 
@@ -523,5 +525,25 @@ func startCatalogSpan(ctx context.Context) (context.Context, func(outcome string
 		}
 		span.End()
 		catalogOutcomeCounter.Add(context.Background(), 1, metric.WithAttributes(attribute.String("outcome", outcome)))
+	}
+}
+
+// startDataHealthSpan counts the call and starts the span before the
+// authorization guards, so a rejected request is still visible. Outcomes are
+// "ok", "degraded" (a ClickHouse read failed and answered empty), "denied"
+// and "error".
+func startDataHealthSpan(ctx context.Context, name string) (context.Context, func(outcome string, extra ...attribute.KeyValue)) {
+	dataHealthCallCounter.Add(ctx, 1, metric.WithAttributes(attribute.String("field", name)))
+	spanCtx, span := tracer.Start(ctx, "query-api."+name)
+	return spanCtx, func(outcome string, extra ...attribute.KeyValue) {
+		span.SetAttributes(attribute.String("outcome", outcome))
+		if len(extra) > 0 {
+			span.SetAttributes(extra...)
+		}
+		if outcome == "error" {
+			span.SetStatus(codes.Error, name+" resolver error")
+		}
+		span.End()
+		dataHealthOutcomeCounter.Add(context.Background(), 1, metric.WithAttributes(attribute.String("field", name), attribute.String("outcome", outcome)))
 	}
 }

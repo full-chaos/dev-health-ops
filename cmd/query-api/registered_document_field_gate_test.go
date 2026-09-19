@@ -330,6 +330,39 @@ func parseQueryResolverImplemented(t *testing.T, repoRoot string) map[string]boo
 	return implemented
 }
 
+// parseFieldResolversImplemented maps "Type.Field" to whether the generated
+// field resolver for that type's field has a real body. A field with an
+// argument, or one gqlgen was told to resolve, has no struct field to fill;
+// its resolver is what populates it.
+func parseFieldResolversImplemented(t *testing.T, repoRoot string) map[string]bool {
+	t.Helper()
+	path := filepath.Join(repoRoot, "cmd", "query-api", "internal", "graph", "schema.resolvers.go")
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, path, nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", path, err)
+	}
+	implemented := map[string]bool{}
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*goast.FuncDecl)
+		if !ok || fn.Recv == nil || len(fn.Recv.List) != 1 {
+			continue
+		}
+		recvType := exprTypeName(fn.Recv.List[0].Type)
+		switch recvType {
+		case "queryResolver", "mutationResolver", "subscriptionResolver":
+			continue
+		}
+		typeName, isResolver := strings.CutSuffix(recvType, "Resolver")
+		if !isResolver || typeName == "" {
+			continue
+		}
+		typeName = strings.ToUpper(typeName[:1]) + typeName[1:]
+		implemented[typeName+"."+fn.Name.Name] = !bodyIsUnimplementedStub(fn.Body)
+	}
+	return implemented
+}
+
 // bodyIsUnimplementedStub reports whether a function body is (or starts
 // with) gqlgen's default `panic(fmt.Errorf("not implemented: ..."))`
 // stub -- a bare call to panic(...) as the body's own statement, not
@@ -759,6 +792,7 @@ func TestRegisteredDocumentFieldsArePopulatable(t *testing.T) {
 	documentConstants, operationToIdentifier := parseQueryRouteDocuments(t, repoRoot)
 	resolverImplemented := parseQueryResolverImplemented(t, repoRoot)
 	structFields := parseModelStructFields(t, repoRoot)
+	fieldResolvers := parseFieldResolversImplemented(t, repoRoot)
 
 	// Collect every selected field across every registered document
 	// FIRST, so the populatability oracle only needs to walk the source
@@ -813,6 +847,17 @@ func TestRegisteredDocumentFieldsArePopulatable(t *testing.T) {
 					violations = append(violations, violation{
 						operation: sel.operation, field: f,
 						reason: fmt.Sprintf("resolver method %q is still gqlgen's unimplemented-stub panic", resolverName),
+					})
+				}
+				continue
+			}
+
+			if implemented, resolved := fieldResolvers[f.typeName+"."+strings.ToUpper(f.fieldName[:1])+f.fieldName[1:]]; resolved {
+				checkedFields++
+				if !implemented {
+					violations = append(violations, violation{
+						operation: sel.operation, field: f,
+						reason: fmt.Sprintf("field resolver %sResolver.%s is still gqlgen's unimplemented-stub panic", f.typeName, f.fieldName),
 					})
 				}
 				continue

@@ -52,6 +52,9 @@ COPY cmd/dev-health-worker-migrate ./cmd/dev-health-worker-migrate
 # so it rides the same builder stage rather than earning a dedicated one.
 COPY cmd/ask-dev-jobs-probe ./cmd/ask-dev-jobs-probe
 COPY internal ./internal
+# dev-health-worker-migrate embeds the job migration policy it seeds route
+# rows from (contracts/jobs/v1/embed.go).
+COPY contracts/jobs/v1 ./contracts/jobs/v1
 
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \

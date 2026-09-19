@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"regexp"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -112,7 +113,17 @@ type MigrationOptions struct {
 	// PostureManifestDigest is set and this is empty, PostureManifestDigest
 	// itself is used as the build identity.
 	PostureManifestBuildID string
-	Logger                 *slog.Logger
+	// NativeRiverRoutes are the job kinds whose checked-in migration policy is
+	// route "river" with rollback "none". Each one without a
+	// public.worker_job_routes row gets one (transport river, unpaused,
+	// generation 1); an existing row is never read for anything but its
+	// presence and never changed. A registered kind with no row makes
+	// internal/jobroute resolve it as unknown, which fails the relay and the
+	// reconciler for every kind, so this is what lets a kind introduced in
+	// Go reach production without a hand-written seed. Optional: empty seeds
+	// nothing.
+	NativeRiverRoutes []string
+	Logger            *slog.Logger
 }
 
 // postureManifestAppliedTable mirrors postgres.PostureManifestAppliedTable's
@@ -124,6 +135,10 @@ type MigrationOptions struct {
 // make that call see no applied row at all and fail the test.
 const postureManifestAppliedTable = "worker_posture_manifest_applied"
 
+// jobKindPattern is the registry's own kind grammar
+// (contracts/jobs/v1/registry.schema.json).
+var jobKindPattern = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$`)
+
 // columnGrantablePrivileges is PostgreSQL's closed set of column-level
 // privileges. DELETE and TRUNCATE are not column-grantable at all, so a caller
 // asking for either is a construction bug rather than a tightening.
@@ -134,6 +149,13 @@ var columnGrantablePrivileges = map[string]struct{}{
 type MigrationResult struct {
 	AppliedVersions []int
 	CurrentVersion  int
+	// SeededRoutes are the NativeRiverRoutes this run inserted; PresentRoutes
+	// already had a row and were left untouched. RouteTableAbsent reports
+	// that public.worker_job_routes does not exist yet (the application
+	// schema migration has not run), so nothing was seeded.
+	SeededRoutes     []string
+	PresentRoutes    []string
+	RouteTableAbsent bool
 }
 
 // ApplyPinnedMigrations is the only production schema-changing River API in
@@ -289,6 +311,11 @@ func ApplyPinnedMigrations(
 	if err := applyRuntimeGrants(ctx, tx, options); err != nil {
 		return MigrationResult{}, migrationStageError("apply runtime grants")
 	}
+	routes, err := seedNativeRiverRoutes(ctx, tx, options.NativeRiverRoutes)
+	if err != nil {
+		logMigrationStageFailure(ctx, options.Logger, "seed native river routes", err)
+		return MigrationResult{}, migrationStageError("seed native river routes")
+	}
 	if options.PostureManifestDigest != "" {
 		buildID := options.PostureManifestBuildID
 		if buildID == "" {
@@ -317,7 +344,57 @@ func ApplyPinnedMigrations(
 	for _, version := range result.Versions {
 		applied = append(applied, version.Version)
 	}
-	return MigrationResult{AppliedVersions: applied, CurrentVersion: status}, nil
+	return MigrationResult{
+		AppliedVersions:  applied,
+		CurrentVersion:   status,
+		SeededRoutes:     routes.seeded,
+		PresentRoutes:    routes.present,
+		RouteTableAbsent: routes.tableAbsent,
+	}, nil
+}
+
+type routeSeedResult struct {
+	seeded      []string
+	present     []string
+	tableAbsent bool
+}
+
+// seedNativeRiverRoutes inserts the missing route rows inside the migration's
+// privilege transaction. ON CONFLICT DO NOTHING is what leaves an existing
+// row -- paused, rolled back, or at a later generation -- exactly as an
+// operator or an earlier migration left it; RETURNING tells an insert from a
+// row that was already there.
+func seedNativeRiverRoutes(ctx context.Context, tx pgx.Tx, kinds []string) (routeSeedResult, error) {
+	var result routeSeedResult
+	if len(kinds) == 0 {
+		return result, nil
+	}
+	var exists bool
+	if err := tx.QueryRow(ctx,
+		"SELECT to_regclass('public.worker_job_routes') IS NOT NULL").Scan(&exists); err != nil {
+		return result, err
+	}
+	if !exists {
+		result.tableAbsent = true
+		return result, nil
+	}
+	for _, kind := range kinds {
+		var inserted string
+		err := tx.QueryRow(ctx, `
+INSERT INTO public.worker_job_routes (job_kind, transport, paused, generation, updated_at)
+VALUES ($1, 'river', FALSE, 1, now())
+ON CONFLICT (job_kind) DO NOTHING
+RETURNING job_kind`, kind).Scan(&inserted)
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+			result.present = append(result.present, kind)
+		case err != nil:
+			return result, fmt.Errorf("seed route %s: %w", kind, err)
+		default:
+			result.seeded = append(result.seeded, kind)
+		}
+	}
+	return result, nil
 }
 
 // isSchemaCheckConnectivityError positively identifies a connection/pool/
@@ -436,6 +513,16 @@ func validatePinnedBundle(versions []rivermigrate.Migration) error {
 func ValidateMigrationOptions(options MigrationOptions) error {
 	if !validIdentifier(options.Schema) || !validIdentifier(options.DomainRole) || !validIdentifier(options.QueueRole) {
 		return ErrMigrationConfiguration
+	}
+	seenRoutes := make(map[string]struct{}, len(options.NativeRiverRoutes))
+	for _, kind := range options.NativeRiverRoutes {
+		if len(kind) > 96 || !jobKindPattern.MatchString(kind) {
+			return ErrMigrationConfiguration
+		}
+		if _, duplicate := seenRoutes[kind]; duplicate {
+			return ErrMigrationConfiguration
+		}
+		seenRoutes[kind] = struct{}{}
 	}
 	if options.DomainRole == options.QueueRole {
 		return ErrMigrationConfiguration

@@ -123,8 +123,14 @@ def migrated_to_application_schema_head(
 
 
 def _registry_kinds() -> set[str]:
+    """Registry kinds whose route row an Alembic revision owns.
+
+    A go_only kind is left out: dev-health-worker-migrate seeds its row from
+    the River-only policy (internal/storage/river's route seeding), which
+    runs after this chain in the migration job.
+    """
     registry = json.loads(_REGISTRY_PATH.read_text(encoding="utf-8"))
-    return {job["kind"] for job in registry["jobs"]}
+    return {job["kind"] for job in registry["jobs"] if job.get("go_only") is not True}
 
 
 def _seeded_route_kinds(engine: Engine) -> set[str]:
@@ -150,7 +156,8 @@ def test_every_registry_kind_has_a_worker_job_routes_row(
         "internal/jobroute.Controller.DeferredKinds queries this table for every "
         "registered kind on every reconciler step -- a missing row fails the "
         "whole step instantly (CHAOS-3092 PR-B's live reconciler crash). Add a "
-        "dedicated one-row seed migration for the missing kind(s), same pattern "
+        "dedicated one-row seed migration for the missing kind(s), or mark a "
+        "Go-only kind go_only so dev-health-worker-migrate seeds it, same pattern "
         "as 0094 (system.sync_coverage_refresh), 0115 "
         "(sync.team_repo_ownership_derivation), or 0123 "
         "(metrics.remaining.work_item_attribution)."

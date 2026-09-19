@@ -59,6 +59,11 @@ _REGISTRY_JOB_FIELDS = {
     "schema_versions",
     "fixtures",
 }
+# A job may additionally carry "go_only": true. Such a kind is produced and
+# consumed only by the Go runtime: it has no Python payload type, so this
+# loader validates its registry entry and records it in Registry.go_only_kinds
+# but never exposes it as a contract Python can enqueue or decode.
+_REGISTRY_JOB_OPTIONAL_FIELDS = frozenset({"go_only"})
 _MIGRATION_JOB_FIELDS = {
     "kind",
     "state",
@@ -99,6 +104,7 @@ class RegisteredContract:
 class Registry:
     root: Path
     contracts: tuple[RegisteredContract, ...]
+    go_only_kinds: tuple[str, ...] = ()
 
     def by_kind(self, kind: str) -> RegisteredContract:
         for contract in self.contracts:
@@ -192,9 +198,17 @@ def load_registry(root: Path | None = None) -> Registry:
         raise ContractDecodeError("registry jobs are missing")
 
     contracts: list[RegisteredContract] = []
+    go_only_kinds: list[str] = []
+    all_kinds: list[str] = []
     for raw in jobs:
-        if not isinstance(raw, dict) or set(raw) != _REGISTRY_JOB_FIELDS:
+        if (
+            not isinstance(raw, dict)
+            or set(raw) - _REGISTRY_JOB_OPTIONAL_FIELDS != _REGISTRY_JOB_FIELDS
+        ):
             raise ContractDecodeError("registry job must be an object")
+        go_only = "go_only" in raw
+        if go_only and raw["go_only"] is not True:
+            raise ContractDecodeError("registry go_only must be true when present")
         kind = _required_string(raw, "kind")
         current = _required_int(raw, "current_version")
         supported = _version_tuple(raw.get("supported_versions"))
@@ -223,6 +237,10 @@ def load_registry(root: Path | None = None) -> Registry:
             if relative is None:
                 raise ContractDecodeError("supported version has no schema")
             _read_contract_artifact(contract_root, relative)
+        all_kinds.append(kind)
+        if go_only:
+            go_only_kinds.append(kind)
+            continue
         contracts.append(
             RegisteredContract(
                 kind=kind,
@@ -235,11 +253,9 @@ def load_registry(root: Path | None = None) -> Registry:
                 schema_versions=schema_versions,
             )
         )
-    if tuple(contract.kind for contract in contracts) != tuple(
-        sorted(contract.kind for contract in contracts)
-    ):
+    if tuple(all_kinds) != tuple(sorted(all_kinds)):
         raise ContractDecodeError("registry jobs are not sorted")
-    if len({contract.kind for contract in contracts}) != len(contracts):
+    if len(set(all_kinds)) != len(all_kinds):
         raise ContractDecodeError("registry contains duplicate kinds")
 
     expected = {
@@ -277,14 +293,28 @@ def load_registry(root: Path | None = None) -> Registry:
         KIND_TEAM_AUTOIMPORT: (CONTRACT_VERSION_V1,),
         KIND_TEAM_REPO_OWNERSHIP_DERIVATION: (CONTRACT_VERSION_V1,),
     }
+    # A kind with a Python payload type is shared by definition, so marking it
+    # go_only is drift, not tolerance.
+    if expected.keys() & set(go_only_kinds):
+        raise ContractDecodeError("registry marks a Python contract kind go_only")
     if {
         contract.kind: contract.supported_versions for contract in contracts
     } != expected:
         raise ContractDecodeError("registry drifts from Python contract types")
-    return Registry(root=contract_root, contracts=tuple(contracts))
+    return Registry(
+        root=contract_root,
+        contracts=tuple(contracts),
+        go_only_kinds=tuple(go_only_kinds),
+    )
 
 
 def load_migration_jobs(root: Path | None = None) -> tuple[MigrationJob, ...]:
+    """Return the migration policy for every kind Python can produce.
+
+    A go_only kind's policy row is validated like any other and then left
+    out: Python never routes, enqueues or capability-checks it, so its policy
+    is the Go runtime's alone.
+    """
     contract_root = root or default_contract_root()
     document = _read_document(contract_root / "migration-state.json")
     if not isinstance(document, dict) or set(document) != {"schema_version", "jobs"}:
@@ -325,7 +355,25 @@ def load_migration_jobs(root: Path | None = None) -> tuple[MigrationJob, ...]:
         )
     if len({job.kind for job in jobs}) != len(jobs):
         raise ContractDecodeError("migration state contains duplicate kinds")
-    return tuple(jobs)
+    go_only = _go_only_kinds(contract_root)
+    return tuple(job for job in jobs if job.kind not in go_only)
+
+
+def _go_only_kinds(contract_root: Path) -> frozenset[str]:
+    """Kinds registry.json marks go_only. load_registry owns validating the
+    marker; this only reads it, so a malformed marker is never mistaken for
+    a go_only one."""
+    document = _read_document(contract_root / "registry.json")
+    jobs = document.get("jobs") if isinstance(document, dict) else None
+    if not isinstance(jobs, list):
+        raise ContractDecodeError("registry jobs are missing")
+    return frozenset(
+        job["kind"]
+        for job in jobs
+        if isinstance(job, dict)
+        and job.get("go_only") is True
+        and isinstance(job.get("kind"), str)
+    )
 
 
 def capabilities_for_queues(

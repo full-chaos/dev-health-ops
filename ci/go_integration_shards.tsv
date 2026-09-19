@@ -51,6 +51,7 @@ cmd/query-api	209
 cmd/query-api/internal/aianalytics	35
 cmd/query-api/internal/analytics	218
 cmd/query-api/internal/busfactor	20
+cmd/query-api/internal/compoundingrisk	20
 cmd/query-api/internal/explain	122
 cmd/query-api/internal/featureflags	22
 cmd/query-api/internal/home	30

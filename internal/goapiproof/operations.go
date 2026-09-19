@@ -256,6 +256,34 @@ var operationSpecs = map[string]OperationSpec{
 			aiInstanceVariant("TEAM_VALID", "a team id that has rollup rows and whose repo patterns select a repository", "teamId", aiReviewLoadParity(), "data.aiReviewLoad.byBucket", "", ""),
 		),
 	},
+	"compoundingRisk": {
+		ResponseRoot: "compoundingRisk",
+		Variables: func(orgID string, _ Window) map[string]any {
+			return compoundingRiskVariables(orgID, nil)
+		},
+		Parity: compoundingRiskParity,
+		// A team breakout whose team has NO stored team rows is deliberately
+		// not a variant: that branch derives team points from the repo rows
+		// through team ownership on Go and through teams.repo_patterns on
+		// Python, so the two answers differ by design and no computed check
+		// admits it; it is a refused case, not a blanket citation.
+		Variants: []Variant{
+			compoundingRiskVariant("REPO_BREAKOUT", map[string]any{"breakout": "REPO", "trendDays": 30}),
+			compoundingRiskVariant("TEAM_BREAKOUT", map[string]any{"breakout": "TEAM", "trendDays": 30}),
+			compoundingRiskDayVariant("DAY", "REPO"),
+			compoundingRiskDayVariant("TEAM_DAY", "TEAM"),
+			compoundingRiskVariant("REPO_IDS_UNKNOWN", map[string]any{"breakout": "REPO", "repoIds": []any{"00000000-0000-0000-0000-000000000001"}, "trendDays": 30}),
+			compoundingRiskVariant("REPO_IDS_EMPTY", map[string]any{"breakout": "REPO", "repoIds": []any{}, "trendDays": 30}),
+			compoundingRiskVariant("TEAM_IDS_UNKNOWN", map[string]any{"breakout": "TEAM", "teamIds": []any{"team-abc-123"}, "trendDays": 30}),
+			compoundingRiskVariant("TEAM_IDS_EMPTY", map[string]any{"breakout": "TEAM", "teamIds": []any{}, "trendDays": 30}),
+			compoundingRiskInstanceVariant("REPO_VALID", "a repository id that has stored compounding-risk rows", "REPO", "repoIds"),
+			compoundingRiskInstanceVariant("TEAM_STORED", "a team id that has stored team-scope compounding-risk rows", "TEAM", "teamIds"),
+			compoundingRiskVariant("TEAM_AND_REPO_UNKNOWN", map[string]any{"breakout": "TEAM", "teamIds": []any{"team-abc-123"}, "repoIds": []any{"00000000-0000-0000-0000-000000000001"}, "trendDays": 30}),
+			compoundingRiskVariant("TREND_ONE_DAY", map[string]any{"breakout": "REPO", "trendDays": 1}),
+			compoundingRiskVariant("TREND_CLAMPED_HIGH", map[string]any{"breakout": "REPO", "trendDays": 1000}),
+			compoundingRiskVariant("TREND_CLAMPED_LOW", map[string]any{"breakout": "REPO", "trendDays": 0}),
+		},
+	},
 	"busFactor": {
 		ResponseRoot: "busFactor",
 		Variables: func(orgID string, _ Window) map[string]any {
@@ -1304,6 +1332,74 @@ func aiInstanceVariant(name, kind, scopeField string, parity Options, nonEmpty, 
 					return nil
 				}
 				return []ScopeEcho{{List: echoList, Fields: []string{echoField}, Value: value}}
+			},
+		},
+	}
+}
+
+// compoundingRiskParity declares the two timestamp leaves: generatedAt is the
+// response instant and differs on every request by construction; computedAt is
+// a ClickHouse DateTime column that Python prints without an offset and Go
+// prints as RFC3339 with one, the same DateTime class the other operations
+// declare.
+var compoundingRiskParity = Options{
+	VolatileFields: map[string]string{
+		"data.compoundingRisk.generatedAt": "the response instant, regenerated on every request on both planes; two calls can never agree on it",
+	},
+	BaselineDefects: []BaselineDefect{{
+		Ticket: "CHAOS-5780",
+		Reason: "compounding_risk_daily.computed_at is a ClickHouse DateTime column; Python's clickhouse_connect driver returns it NAIVE, so strawberry's DateTime scalar isoformat()s it with no offset, while Go's driver attaches UTC and gqlgen's graphql.Time scalar prints RFC3339 with an explicit offset -- the same declared DateTime class as pr's fields. Go is correct.",
+		Paths:  []string{"data.compoundingRisk.rows.computedAt"},
+	}},
+}
+
+func compoundingRiskVariables(orgID string, filter map[string]any) map[string]any {
+	vars := map[string]any{"orgId": orgID, "filter": nil}
+	if filter != nil {
+		vars["filter"] = filter
+	}
+	return vars
+}
+
+func compoundingRiskVariant(name string, filter map[string]any) Variant {
+	return Variant{
+		Name: name,
+		Variables: func(orgID string, _ Window) map[string]any {
+			return compoundingRiskVariables(orgID, filter)
+		},
+		Parity: compoundingRiskParity,
+	}
+}
+
+// compoundingRiskDayVariant pins the read to the last day of the run's window.
+func compoundingRiskDayVariant(name, breakout string) Variant {
+	return Variant{
+		Name: name,
+		Variables: func(orgID string, w Window) map[string]any {
+			return compoundingRiskVariables(orgID, map[string]any{"breakout": breakout, "day": w.UntilDate, "trendDays": 30})
+		},
+		Parity: compoundingRiskParity,
+	}
+}
+
+// compoundingRiskInstanceVariant filters by a run-supplied repository or team
+// id, measured only when the answer lists rows and every row is that scope.
+func compoundingRiskInstanceVariant(name, kind, breakout, field string) Variant {
+	parity := compoundingRiskParity
+	parity.RequireNonEmpty = []string{"data.compoundingRisk.rows"}
+	return Variant{
+		Name: name,
+		Variables: func(orgID string, _ Window) map[string]any {
+			return compoundingRiskVariables(orgID, map[string]any{"breakout": breakout, "trendDays": 30})
+		},
+		Parity: parity,
+		Instance: &VariantInstance{
+			Kind: kind,
+			Bind: func(vars map[string]any, value string) {
+				vars["filter"].(map[string]any)[field] = []any{value}
+			},
+			EchoFor: func(value string) []ScopeEcho {
+				return []ScopeEcho{{List: "data.compoundingRisk.rows", Fields: []string{"scopeId", "scopeLabel"}, Value: value}}
 			},
 		},
 	}

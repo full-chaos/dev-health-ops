@@ -216,3 +216,36 @@ func TestRealClickHouse_BusFactor(t *testing.T) {
 		t.Errorf("before valid_from: %#v", past)
 	}
 }
+
+// The same repository id exists in two orgs with different names and
+// different commit evidence: each org sees only its own.
+func TestRealClickHouse_SameRepoIDInTwoOrgs(t *testing.T) {
+	ctx, conn, client := startStore(t)
+	repo(t, ctx, conn, "org-1", rA, "acme/web")
+	repo(t, ctx, conn, "org-2", rA, "other/web")
+	commit(t, ctx, conn, "org-1", rA, "h1", "alice@x", "", 10, 0)
+	commit(t, ctx, conn, "org-2", rA, "h1", "eve@x", "", 90, 0)
+	commit(t, ctx, conn, "org-2", rA, "h2", "mallory@x", "", 90, 0)
+	own(t, ctx, conn, "org-2", "team-x", "'"+rA+"'", "other/web")
+	now := time.Now().UTC()
+	for _, c := range []struct {
+		org, name, top string
+		evidence       int
+	}{{"org-1", "acme/web", "alice@x", 1}, {"org-2", "other/web", "eve@x", 2}} {
+		got, err := Resolve(ctx, client, c.org, nil, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got.Repos) != 1 || got.Repos[0].RepoName != c.name || got.EvidenceSampleCount != c.evidence || got.TopMaintainers[0].Author != c.top {
+			t.Errorf("%s: %#v", c.org, got)
+		}
+	}
+	team := "team-x"
+	other, err := Resolve(ctx, client, "org-1", &model.BusFactorScopeInput{TeamID: &team}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(other.Repos) != 0 {
+		t.Errorf("org-1 resolved org-2's team ownership: %#v", other.Repos)
+	}
+}

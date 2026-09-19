@@ -1,0 +1,42 @@
+query AIComparison($orgId: String!, $dateRange: AIDateRangeInput!, $scope: AIScopeInput) {
+  aiComparison(orgId: $orgId, dateRange: $dateRange, scope: $scope) {
+    orgId
+    startDate
+    endDate
+    dataAvailable
+    aiSide {
+      bucket
+      prsTotal
+      prsMerged
+      cycleTimeAvgHours
+      reviewsPerPr
+      reworkRate
+      revertRate
+      testGapRate
+      incidentRate
+      __typename
+    }
+    baselineSide {
+      bucket
+      prsTotal
+      prsMerged
+      cycleTimeAvgHours
+      reviewsPerPr
+      reworkRate
+      revertRate
+      testGapRate
+      incidentRate
+      __typename
+    }
+    delta {
+      cycleTimeDeltaHours
+      reviewsPerPrDelta
+      reworkRateDelta
+      revertRateDelta
+      testGapRateDelta
+      incidentRateDelta
+      __typename
+    }
+    __typename
+  }
+}

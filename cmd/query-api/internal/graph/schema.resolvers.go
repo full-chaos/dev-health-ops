@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/99designs/gqlgen/graphql"
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/aianalytics"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/analytics"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/authctx"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/busfactor"
@@ -1126,19 +1127,46 @@ func (r *queryResolver) Experiments(ctx context.Context, orgID string, filters *
 	panic(fmt.Errorf("not implemented: Experiments - experiments"))
 }
 
-// AiImpactSummary is the resolver for the aiImpactSummary field.
+// AiImpactSummary is the resolver for the aiImpactSummary field. It reads
+// only the caller's own org: the orgId argument must equal the org of the
+// request identity, otherwise the request is denied.
 func (r *queryResolver) AiImpactSummary(ctx context.Context, orgID string, dateRange model.AIDateRangeInput, scope *model.AIScopeInput) (*model.AIImpactSummary, error) {
-	panic(fmt.Errorf("not implemented: AiImpactSummary - aiImpactSummary"))
+	if err := requireOwnOrg(ctx, orgID); err != nil {
+		return nil, err
+	}
+	result, err := aianalytics.ImpactSummary(ctx, r.ClickHouse, orgID, dateRange, scope)
+	if err != nil {
+		return nil, fmt.Errorf("aiImpactSummary: %w", err)
+	}
+	return result, nil
 }
 
-// AiComparison is the resolver for the aiComparison field.
+// AiComparison is the resolver for the aiComparison field. It reads only
+// the caller's own org: the orgId argument must equal the org of the request
+// identity, otherwise the request is denied.
 func (r *queryResolver) AiComparison(ctx context.Context, orgID string, dateRange model.AIDateRangeInput, scope *model.AIScopeInput) (*model.AIComparison, error) {
-	panic(fmt.Errorf("not implemented: AiComparison - aiComparison"))
+	if err := requireOwnOrg(ctx, orgID); err != nil {
+		return nil, err
+	}
+	result, err := aianalytics.Comparison(ctx, r.ClickHouse, orgID, dateRange, scope)
+	if err != nil {
+		return nil, fmt.Errorf("aiComparison: %w", err)
+	}
+	return result, nil
 }
 
-// AiReviewLoad is the resolver for the aiReviewLoad field.
+// AiReviewLoad is the resolver for the aiReviewLoad field. It reads only
+// the caller's own org: the orgId argument must equal the org of the request
+// identity, otherwise the request is denied.
 func (r *queryResolver) AiReviewLoad(ctx context.Context, orgID string, dateRange model.AIDateRangeInput, scope *model.AIScopeInput) (*model.AIReviewLoadResult, error) {
-	panic(fmt.Errorf("not implemented: AiReviewLoad - aiReviewLoad"))
+	if err := requireOwnOrg(ctx, orgID); err != nil {
+		return nil, err
+	}
+	result, err := aianalytics.ReviewLoad(ctx, r.ClickHouse, orgID, dateRange, scope)
+	if err != nil {
+		return nil, fmt.Errorf("aiReviewLoad: %w", err)
+	}
+	return result, nil
 }
 
 // AiRiskBreakdown is the resolver for the aiRiskBreakdown field.

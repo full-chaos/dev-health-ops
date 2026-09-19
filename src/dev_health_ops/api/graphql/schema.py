@@ -518,16 +518,7 @@ class Query:
         include_archived: bool | None = False,
         limit: int = 1000,
     ) -> FeatureFlagRegistryResult:
-        from .resolvers.feature_flags import resolve_feature_flags
-
-        context = get_context(info)
-        return await resolve_feature_flags(
-            context,
-            provider=provider,
-            project=project,
-            include_archived=bool(include_archived),
-            limit=limit,
-        )
+        _raise_served_by_query_api("featureFlags", org_id, info)
 
     @strawberry.field(description="List feature flag state-change events")
     async def feature_flag_events(
@@ -538,15 +529,7 @@ class Query:
         environment: str | None = None,
         limit: int = 1000,
     ) -> FeatureFlagEventsResult:
-        from .resolvers.feature_flags import resolve_feature_flag_events
-
-        context = get_context(info)
-        return await resolve_feature_flag_events(
-            context,
-            flag_key=flag_key,
-            environment=environment,
-            limit=limit,
-        )
+        _raise_served_by_query_api("featureFlagEvents", org_id, info)
 
     @strawberry.field(
         description=(

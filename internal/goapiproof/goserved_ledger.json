@@ -45,6 +45,24 @@
         {"file": "cmd/query-api/internal/reviewedges/reviewedges_test.go", "test": "TestResolve_RepoIDsFilterBindsWhenProvided"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
       ]
+    },
+    {
+      "operation": "featureFlags",
+      "two_plane_ops_sha": "12a6fa86fb59f2c6fe3aeec0ca44d040fc9e216f",
+      "guards": [
+        {"file": "cmd/query-api/internal/featureflags/featureflags_golden_test.go", "test": "TestFeatureFlagResolversMatchTheFrozenGolden"},
+        {"file": "cmd/query-api/internal/featureflags/featureflags_test.go", "test": "TestResolve_MissingTableDegradesInsteadOfErroring"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
+      ]
+    },
+    {
+      "operation": "featureFlagEvents",
+      "two_plane_ops_sha": "12a6fa86fb59f2c6fe3aeec0ca44d040fc9e216f",
+      "guards": [
+        {"file": "cmd/query-api/internal/featureflags/featureflags_golden_test.go", "test": "TestFeatureFlagResolversMatchTheFrozenGolden"},
+        {"file": "cmd/query-api/internal/featureflags/events_test.go", "test": "TestResolveEvents_MissingTableDegradesInsteadOfErroring"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
+      ]
     }
   ]
 }

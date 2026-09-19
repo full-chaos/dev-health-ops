@@ -28,6 +28,14 @@ _QUERIES = {
         'input: {historyWeeks: 12, teamIds: ["team-1"]}) { forecastId } }',
         None,
     ),
+    "featureFlags": (
+        'query { featureFlags(orgId: "org-1") { totalCount } }',
+        None,
+    ),
+    "featureFlagEvents": (
+        'query { featureFlagEvents(orgId: "org-1") { totalCount } }',
+        None,
+    ),
     "reviewEdges": (
         'query { reviewEdges(input: {orgId: "org-1", sinceDate: "2026-01-01", '
         'untilDate: "2026-01-31"}) { totalCount } }',

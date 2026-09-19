@@ -174,7 +174,7 @@ func ledgerFor(t *testing.T, kind goOnlyLedgerKind, operation string) *GoServedL
 }
 
 func TestGoOnlyClassEnumerationThroughAdmit(t *testing.T) {
-	operations := []string{"capacityForecast", "capacityForecasts", "throughputForecast", "featureFlags"}
+	operations := []string{"capacityForecast", "capacityForecasts", "throughputForecast", "workGraphArtifacts"}
 	ledgerKinds := []goOnlyLedgerKind{ledgerNil, ledgerNamesOp, ledgerOtherOnly}
 	cells := 0
 	goOnlyAdmissions := 0
@@ -261,7 +261,7 @@ func TestGoOnlyClassEnumerationThroughAdmit(t *testing.T) {
 	if want := len(operations) * len(ledgerKinds) * len(baselineAlphabet()) * len(candidateAlphabet()); cells != want {
 		t.Fatalf("enumerated %d cells, want %d", cells, want)
 	}
-	// 3 ledgered operations plus featureFlags added to the ledger by the
+	// 3 ledgered operations plus workGraphArtifacts added to the ledger by the
 	// "ledger names the operation" axis, each admitting two baseline shapes
 	// against the two object candidates.
 	if want := 4 * 2 * 2; goOnlyAdmissions != want {

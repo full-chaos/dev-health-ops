@@ -328,6 +328,83 @@ type Result struct {
 // IsMatch reports whether the verdict is a clean match.
 func (r Result) IsMatch() bool { return r.TerminalState == TerminalStateMatch }
 
+// AcceptanceRefusal is one Result field whose value means a completed
+// comparison cannot stand as its route's verdict: a declaration that
+// excused nothing, a numeric leaf reached with no declared type, or a
+// declared relaxation that could not describe what the two planes
+// actually answered. Code is one of the RefusalXxx constants (run.go);
+// Detail is the exact sentence a refusal reports, so a reader sees
+// identical text whichever prover produced it.
+type AcceptanceRefusal struct {
+	// Field names the Result field this refusal reads, so a caller
+	// debugging "why did this refuse" can go straight to that field's
+	// own doc comment above.
+	Field  string
+	Code   string
+	Detail string
+	// Hard marks a refusal where TerminalState may read match despite
+	// the comparison not actually verifying what its own declaration
+	// promises: an undeclared numeric leaf still compares (Tier A, the
+	// UNVERIFIED default) rather than refusing outright; compareListByKey
+	// adds NO finding at all for a list whose declared pairing could not
+	// be built (see that function's own doc comment); a stochastic-leaf
+	// class that does not describe the response leaves its covered
+	// leaves uncompared by either the class's own checks or a value
+	// comparison. A receipt built from any of these could read as a
+	// genuine, fully-checked match. Every other refusal here means a
+	// declaration matched NOTHING ELSE in an otherwise fully-executed,
+	// honest comparison -- the verdict recorded is trustworthy, only the
+	// declaration itself is stale.
+	Hard bool
+}
+
+// Acceptance is the ONE definition, shared by the GraphQL prover (run.go)
+// and the REST prover (cmd/go-api-rest-prove/main.go), of every Result
+// field a completed comparison must still satisfy before its verdict may
+// stand -- see each field's own doc comment above for why. Checked in
+// this fixed priority order, which a caller refusing on the first entry
+// must never reorder: RefusalLiveBaselineDefectUnexplained is
+// deliberately checked ahead of the more generic RefusalStaleBaselineDefect
+// (see that field's own doc comment), and UnusedTierB is deliberately
+// checked ahead of UnusedOrderInsensitiveLists
+// (TestRunRefusesOnAnOrderInsensitiveListDeclarationMatchingNothing's own
+// comment states why: investmentFull declares FloatTierB on the same
+// sankey paths OrderInsensitiveList covers, and checking the generic
+// guard first would mask the specific one). StructuralRefusal is NOT
+// here: Compare returns immediately on it, before computing any field
+// this method reads, so a caller checks StructuralRefusal first and never
+// calls Acceptance on a Result Compare refused structurally.
+//
+// TestResultFieldsAreAllClassified pins that every field Result declares
+// is either read here or is named in resultFieldClassification with a
+// stated reason it is not an acceptance input -- a new field lands in
+// neither list by default, and that test goes red until it is.
+func (r Result) Acceptance() []AcceptanceRefusal {
+	var out []AcceptanceRefusal
+	add := func(field, code string, hard bool, values []string, format string) {
+		if len(values) > 0 {
+			out = append(out, AcceptanceRefusal{Field: field, Code: code, Hard: hard, Detail: fmt.Sprintf(format, values)})
+		}
+	}
+	add("UndeclaredNumericLeaves", RefusalUndeclaredNumericLeaf, true, r.UndeclaredNumericLeaves,
+		"numeric leaves reached with no declared float/integer type: %v")
+	add("UnusedTierB", RefusalStaleTierB, false, r.UnusedTierB,
+		"declared Tier-B float fields matched nothing: %v")
+	add("LiveBaselineDefectsUnexplained", RefusalLiveBaselineDefectUnexplained, false, r.LiveBaselineDefectsUnexplained,
+		"declared baseline defects' own cited paths carried a difference this run but their shape admitted none of it: %v")
+	add("StaleBaselineDefects", RefusalStaleBaselineDefect, false, r.StaleBaselineDefects,
+		"declared baseline defects covered no difference: %v")
+	add("UnusedExclusions", RefusalStaleExclusion, false, r.UnusedExclusions,
+		"declared volatile fields matched nothing: %v")
+	add("UnusedOrderInsensitiveLists", RefusalStaleOrderInsensitiveList, false, r.UnusedOrderInsensitiveLists,
+		"declared order-insensitive lists matched nothing: %v")
+	add("OrderInsensitiveListRefusals", RefusalOrderInsensitiveListKeyMissing, true, r.OrderInsensitiveListRefusals,
+		"order-insensitive list comparison could not pair elements: %v")
+	add("StochasticLeafRefusals", RefusalStochasticLeafClassUnfit, true, r.StochasticLeafRefusals,
+		"declared stochastic leaf class does not describe these responses: %v")
+	return out
+}
+
 // Options carries the per-operation parity configuration CHAOS-4381
 // requires to be declared, never inferred.
 type Options struct {

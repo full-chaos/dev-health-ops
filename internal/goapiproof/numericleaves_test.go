@@ -286,7 +286,7 @@ func TestTrancheNumericLeafDeclarationsAreReachable(t *testing.T) {
 
 		"investment main":     `{"data":{"theme_distribution":{"feature":1.5},"subcategory_distribution":{"feature.bug":2.5},"evidence_quality_distribution":{"high":3},"evidence_quality_stats":{"mean":0.5,"stddev":0.1,"total":10,"band_counts":{"high":3}}}}`,
 		"investment sunburst": `{"data":[{"theme":"t","subcategory":"s","scope":"repo","value":1.5}]}`,
-		"investment explain":  `{"data":{"confidence":{"quality_mean":0.5,"quality_stddev":0.1,"band_mix":[{"band":"high","count":3}]},"top_findings":[{"evidence":{"share_pct":10.0,"delta_pct_points":1.0,"evidence_quality_mean":0.5}}]}}`,
+		"investment explain":  `{"data":{"confidence":{"quality_mean":0.5,"quality_stddev":0.1,"band_mix":{"high":3}},"top_findings":[{"evidence":{"share_pct":10.0,"delta_pct_points":1.0,"evidence_quality_mean":0.5}}]}}`,
 
 		"investment flow dynamic":   `{"data":{"nodes":[{"name":"n","group":"g","value":1.5}],"links":[{"source":"a","target":"b","value":1.5}],"team_coverage":0.5,"repo_coverage":0.5,"distinct_team_targets":3,"distinct_repo_targets":4}}`,
 		"investment flow mode":      `{"data":{"nodes":[{"name":"n","group":"g","value":1.5}],"links":[{"source":"a","target":"b","value":1.5}],"team_coverage":0.5,"repo_coverage":0.5,"distinct_team_targets":3,"distinct_repo_targets":4,"coverage":{"team_coverage":0.5,"repo_coverage":0.5},"unassigned_reasons":{"missing_team":1,"missing_repo":2},"top_n_repos":12}}`,

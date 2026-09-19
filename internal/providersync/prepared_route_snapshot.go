@@ -364,7 +364,8 @@ func preparedManifestRouteDestinations(provider, dataset string) ([]string, bool
 	switch {
 	case provider == "github" && dataset == "work-items",
 		(provider == "github" || provider == "gitlab") && dataset == "deployments",
-		(provider == "github" || provider == "gitlab") && dataset == "prs":
+		(provider == "github" || provider == "gitlab") && dataset == "prs",
+		(provider == "github" || provider == "gitlab") && preparedCodeFamilyDataset(dataset):
 	default:
 		return nil, false
 	}
@@ -373,6 +374,17 @@ func preparedManifestRouteDestinations(provider, dataset string) ([]string, bool
 		return nil, false
 	}
 	return append([]string(nil), descriptor.Destinations...), true
+}
+
+// preparedCodeFamilyDataset reports whether a GitHub or GitLab dataset is one
+// of the repository code routes enrolled in prepared-snapshot recovery.
+func preparedCodeFamilyDataset(dataset string) bool {
+	switch dataset {
+	case "commit-stats", "commits", "files", "repo-metadata", "security":
+		return true
+	default:
+		return false
+	}
 }
 
 // preparedManifestRouteRequiresSnapshot reports whether a recovering unit of

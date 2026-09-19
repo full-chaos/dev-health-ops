@@ -42,8 +42,7 @@ func (sink GitLabFilesClickHouseEffects) WriteEffect(ctx context.Context, claim 
 	if err := sink.preserveExistingContents(ctx, claim, rows); err != nil {
 		return err
 	}
-	batch, err := sink.Conn.PrepareBatch(ctx, `
-INSERT INTO git_files (repo_id, path, executable, contents, last_synced, org_id)`)
+	batch, err := sink.Conn.PrepareBatch(ctx, gitFilesInsert)
 	if err != nil {
 		return err
 	}

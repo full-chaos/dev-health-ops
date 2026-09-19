@@ -38,8 +38,7 @@ func (sink GitHubFilesClickHouseEffects) WriteEffect(ctx context.Context, claim 
 	if sink.Conn == nil {
 		return ErrInvalidConfiguration
 	}
-	batch, err := sink.Conn.PrepareBatch(ctx, `
-INSERT INTO git_files (repo_id, path, executable, contents, last_synced, org_id)`)
+	batch, err := sink.Conn.PrepareBatch(ctx, gitFilesInsert)
 	if err != nil {
 		return err
 	}
@@ -148,3 +147,6 @@ func compareGitFileVersion(expected gitFileRow, actual gitFileVersion) EffectIns
 
 var _ EffectSink = GitHubFilesClickHouseEffects{}
 var _ EffectReadback = GitHubFilesClickHouseEffects{}
+
+const gitFilesInsert = `
+INSERT INTO git_files (repo_id, path, executable, contents, last_synced, org_id)`

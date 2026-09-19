@@ -67,11 +67,7 @@ func writeCommitStatsEffect(
 	if conn == nil {
 		return ErrInvalidConfiguration
 	}
-	batch, err := conn.PrepareBatch(ctx, `
-INSERT INTO git_commit_stats (
-  repo_id, commit_hash, file_path, additions, deletions, old_file_mode,
-  new_file_mode, last_synced, org_id
-)`)
+	batch, err := conn.PrepareBatch(ctx, gitCommitStatsInsert)
 	if err != nil {
 		return err
 	}
@@ -218,3 +214,9 @@ var _ EffectSink = GitHubCommitStatsClickHouseEffects{}
 var _ EffectReadback = GitHubCommitStatsClickHouseEffects{}
 var _ EffectSink = GitLabCommitStatsClickHouseEffects{}
 var _ EffectReadback = GitLabCommitStatsClickHouseEffects{}
+
+const gitCommitStatsInsert = `
+INSERT INTO git_commit_stats (
+  repo_id, commit_hash, file_path, additions, deletions, old_file_mode,
+  new_file_mode, last_synced, org_id
+)`

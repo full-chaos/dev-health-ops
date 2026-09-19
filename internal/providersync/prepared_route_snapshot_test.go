@@ -501,6 +501,9 @@ func preparedWorkItemsSession(
 	t.Helper()
 	unit := githubWorkItemOracleClaim().Unit
 	unit.Provider, unit.Dataset = provider, dataset
+	if capability, ok := Capability(provider, dataset); ok {
+		unit.CostClass = capability.CostClass
+	}
 	leases := newMemoryLeaseRepository(unit, "dispatching")
 	claim, err := leases.Claim(context.Background(), ClaimRequest{
 		UnitID: unit.ID, OrgID: unit.OrgID, Owner: uuid.NewString(), Now: now,
@@ -647,7 +650,7 @@ func TestPreparedManifestRecoveryIsRefusedOutsideItsRouteList(t *testing.T) {
 	// which is how R18 survived a version of this test that used it.
 	for name, pair := range map[string]struct{ provider, dataset string }{
 		"another provider": {provider: "linear", dataset: "work-items"},
-		"another dataset":  {provider: "github", dataset: "commits"},
+		"another dataset":  {provider: "github", dataset: "cicd"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			claim, session := preparedWorkItemsSession(t, now, pair.provider, pair.dataset)

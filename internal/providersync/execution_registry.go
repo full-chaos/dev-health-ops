@@ -328,6 +328,7 @@ func Descriptor(
 		descriptor.Destinations = []string{"repos"}
 		descriptor.RouteReady = true
 		descriptor.Plannable = true
+		descriptor.PreparedManifestRecovery = true
 		descriptor.ExecutedProofWaiver = &ExecutedProofWaiver{
 			Reason: "no production users yet; canary staging and live-traffic " +
 				"parity waived for this program per CHAOS-3123, interim state " +
@@ -340,14 +341,17 @@ func Descriptor(
 		descriptor.Destinations = []string{"repos"}
 		descriptor.RouteReady = true
 		descriptor.Plannable = true
+		descriptor.PreparedManifestRecovery = true
 	case provider == "gitlab" && dataset == "commits":
 		descriptor.Destinations = []string{"git_commits"}
 		descriptor.RouteReady = true
 		descriptor.Plannable = true
+		descriptor.PreparedManifestRecovery = true
 	case provider == "gitlab" && dataset == "commit-stats":
 		descriptor.Destinations = []string{"git_commit_stats"}
 		descriptor.RouteReady = true
 		descriptor.Plannable = true
+		descriptor.PreparedManifestRecovery = true
 	case provider == "gitlab" && dataset == "cicd":
 		descriptor.Destinations = []string{
 			"ci_pipeline_runs", "ci_job_runs", "ci_acceptance_checks",
@@ -381,6 +385,7 @@ func Descriptor(
 		descriptor.Destinations = []string{"git_files"}
 		descriptor.RouteReady = true
 		descriptor.Plannable = true
+		descriptor.PreparedManifestRecovery = true
 	case provider == "gitlab" && dataset == "blame":
 		descriptor.Destinations = []string{"git_blame"}
 		descriptor.RouteReady = true
@@ -400,6 +405,7 @@ func Descriptor(
 		descriptor.Destinations = []string{"security_alerts"}
 		descriptor.RouteReady = true
 		descriptor.Plannable = true
+		descriptor.PreparedManifestRecovery = true
 	case provider == "pagerduty" && dataset == "services":
 		descriptor.Destinations = []string{"operational_services", "operational_service_repository_mappings"}
 		descriptor.RouteReady = true
@@ -475,6 +481,7 @@ func Descriptor(
 		descriptor.Destinations = []string{"git_commits"}
 		descriptor.RouteReady = true
 		descriptor.Plannable = true
+		descriptor.PreparedManifestRecovery = true
 	case provider == "github" && dataset == "deployments":
 		descriptor.Destinations = []string{"deployments"}
 		descriptor.RouteReady = true
@@ -484,14 +491,17 @@ func Descriptor(
 		descriptor.Destinations = []string{"security_alerts"}
 		descriptor.RouteReady = true
 		descriptor.Plannable = true
+		descriptor.PreparedManifestRecovery = true
 	case provider == "github" && dataset == "files":
 		descriptor.Destinations = []string{"git_files"}
 		descriptor.RouteReady = true
 		descriptor.Plannable = true
+		descriptor.PreparedManifestRecovery = true
 	case provider == "github" && dataset == "commit-stats":
 		descriptor.Destinations = []string{"git_commit_stats"}
 		descriptor.RouteReady = true
 		descriptor.Plannable = true
+		descriptor.PreparedManifestRecovery = true
 	case provider == "github" && dataset == "blame":
 		// The path-progress effect sorts before git_blame in EffectCommitter.
 		// That ordering is the crash-safety contract: accepted blame rows must

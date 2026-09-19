@@ -224,8 +224,16 @@ func TestIterationDecision_ExhaustionIsNamedWithEveryAttempt(t *testing.T) {
 	}
 }
 
-func assertCellConsistent(t *testing.T, name, got string, receipts int, seen []string) {
+func assertCellConsistent(t *testing.T, name, got string, receipts int, reads []string) {
 	t.Helper()
+	// Distinct candidates tried: a candidate whose value difference is
+	// re-read (the bracketed re-read) is read twice and still counts once.
+	var seen []string
+	for _, id := range reads {
+		if len(seen) == 0 || seen[len(seen)-1] != id {
+			seen = append(seen, id)
+		}
+	}
 	switch {
 	case got == "next":
 		if receipts != 1 || len(seen) != 2 {
@@ -236,8 +244,10 @@ func assertCellConsistent(t *testing.T, name, got string, receipts int, seen []s
 			t.Errorf("%s: win -> %d receipts, tried %v; want 1 receipt, only p-1 tried", name, receipts, seen)
 		}
 	default:
-		if receipts != 0 || len(seen) != 1 {
-			t.Errorf("%s: stop -> %d receipts, tried %v; want 0 receipts, only p-1 tried", name, receipts, seen)
+		// The baseline is read first, so a baseline failure stops the
+		// search before the candidate plane is read at all.
+		if receipts != 0 || len(seen) > 1 || (len(seen) == 1 && seen[0] != "p-1") {
+			t.Errorf("%s: stop -> %d receipts, tried %v; want 0 receipts, nothing beyond p-1 tried", name, receipts, seen)
 		}
 	}
 }

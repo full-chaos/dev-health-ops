@@ -16,11 +16,11 @@ import (
 // providerErrorWithSecrets is the shape that makes jobruntime.WithSafeCause
 // unusable on this handler's failure returns.
 //
-// providerfoundation.ProviderError.Error() concatenates the request PATH and a
-// bounded snippet of the provider's RESPONSE BODY (types.go, CHAOS-4582), so
-// promoting the error's own message -- which is exactly what WithSafeCause does
-// -- would put both in a log line on every provider 4xx. The cause must be
-// CONSTRUCTED from the class and status instead.
+// providerfoundation.ProviderError carries the request PATH in Error() and the
+// provider's RESPONSE BODY in Body, so promoting the error's own message --
+// which is exactly what WithSafeCause does -- would put provider-chosen text
+// in a log line on every provider 4xx. The cause must be CONSTRUCTED from the
+// class and status instead.
 func providerErrorWithSecrets() error {
 	return &providerfoundation.ProviderError{
 		Class:      providerfoundation.ErrorAuthentication,
@@ -176,9 +176,9 @@ func TestProviderUnitSafeCauseNeverCarriesProviderResponseContent(t *testing.T) 
 	}
 	// Precondition: the fixture really does carry both, so the assertions
 	// below cannot pass because the secrets were never there.
-	if !strings.Contains(providerErr.Error(), "ghp_do_not_log_this_value") ||
+	if !strings.Contains(providerErr.(*providerfoundation.ProviderError).Body, "ghp_do_not_log_this_value") ||
 		!strings.Contains(providerErr.Error(), "/repos/octo/hello") {
-		t.Fatalf("fixture no longer embeds path and body in Error(): %q", providerErr.Error())
+		t.Fatalf("fixture no longer carries the path in Error() and the body in Body: %q", providerErr.Error())
 	}
 	if strings.Contains(cause, "ghp_do_not_log_this_value") {
 		t.Fatalf("cause %q leaked the response body", cause)

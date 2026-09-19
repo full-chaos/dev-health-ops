@@ -22,6 +22,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"golang.org/x/crypto/pbkdf2"
@@ -188,10 +189,19 @@ func TestHTTPClientSurfacesStatusPathAndBodyOnFailure(t *testing.T) {
 		t.Fatalf("Path = %q, want the request path without its query string", providerErr.Path)
 	}
 	message := providerErr.Error()
-	for _, want := range []string{"status=400", "path=/rest/api/3/search/jql", "does not exist for the field 'project'"} {
+	for _, want := range []string{"status=400", "path=/rest/api/3/search/jql"} {
 		if !strings.Contains(message, want) {
 			t.Fatalf("Error() = %q, want it to contain %q", message, want)
 		}
+	}
+	// The provider's own reason is reachable through the explicit accessor,
+	// never through Error(): error text flows into every log line and
+	// durable result unfiltered by key.
+	if strings.Contains(message, "does not exist") || strings.Contains(message, "body=") {
+		t.Fatalf("Error() = %q embeds the response body", message)
+	}
+	if snippet := providerErr.ResponseBodySnippet(); !strings.Contains(snippet, "does not exist for the field 'project'") {
+		t.Fatalf("ResponseBodySnippet() = %q, want the provider's rejection reason", snippet)
 	}
 }
 
@@ -210,12 +220,19 @@ func TestHTTPClientRedactsCredentialShapedBodyOnFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = client.Do(context.Background(), http.MethodGet, "/rest/api/3/search/jql", nil)
-	message := err.Error()
-	if strings.Contains(message, "hunter2") {
-		t.Fatalf("Error() = %q leaked the credential-shaped body", message)
+	var providerErr *ProviderError
+	if !errors.As(err, &providerErr) {
+		t.Fatalf("Do err = %v, want a *ProviderError", err)
 	}
-	if !strings.Contains(message, "[REDACTED]") {
-		t.Fatalf("Error() = %q, want a [REDACTED] marker", message)
+	if message := err.Error(); strings.Contains(message, "hunter2") || strings.Contains(message, "internal.example.com") {
+		t.Fatalf("Error() = %q carries the body", message)
+	}
+	snippet := providerErr.ResponseBodySnippet()
+	if strings.Contains(snippet, "hunter2") {
+		t.Fatalf("ResponseBodySnippet() = %q leaked the credential-shaped body", snippet)
+	}
+	if !strings.Contains(snippet, "[REDACTED]") {
+		t.Fatalf("ResponseBodySnippet() = %q, want a [REDACTED] marker", snippet)
 	}
 }
 
@@ -570,4 +587,29 @@ func encryptForTest(t *testing.T, plain []byte, secret, salt string) string {
 	_, _ = mac.Write(payload)
 	payload = append(payload, mac.Sum(nil)...)
 	return base64.RawURLEncoding.EncodeToString(payload)
+}
+
+// TestProviderErrorResponseBodySnippetIsRedactedAndBounded: the snippet is
+// redacted, cut to maxProviderErrorBodyInMessage bytes on a rune boundary,
+// and empty for a nil error or an empty body; Error() never carries it.
+func TestProviderErrorResponseBodySnippetIsRedactedAndBounded(t *testing.T) {
+	t.Parallel()
+	var providerErr *ProviderError
+	for offset := 0; offset < 4; offset++ {
+		long := `{"token":"canary-token","detail":"` + strings.Repeat("a", offset) + strings.Repeat("€", maxProviderErrorBodyInMessage) + `"}`
+		providerErr = &ProviderError{Class: ErrorPermanent, StatusCode: 422, Body: long}
+		snippet := providerErr.ResponseBodySnippet()
+		if strings.Contains(snippet, "canary") || !strings.Contains(snippet, `"detail":"`) {
+			t.Fatalf("offset %d: snippet not redacted: %q", offset, snippet)
+		}
+		if len(snippet) > maxProviderErrorBodyInMessage || !utf8.ValidString(snippet) {
+			t.Fatalf("offset %d: snippet is %d bytes or split a rune", offset, len(snippet))
+		}
+	}
+	if strings.Contains(providerErr.Error(), "detail") {
+		t.Fatalf("Error() carries the body: %q", providerErr.Error())
+	}
+	if (&ProviderError{}).ResponseBodySnippet() != "" || (*ProviderError)(nil).ResponseBodySnippet() != "" {
+		t.Fatal("an empty body or nil error must give an empty snippet")
+	}
 }

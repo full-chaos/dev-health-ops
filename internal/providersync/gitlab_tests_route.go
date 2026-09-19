@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
@@ -848,7 +849,7 @@ func downloadGitLabTestsArtifact(ctx context.Context, client *providerfoundation
 	if response.StatusCode >= 400 {
 		message, readErr := io.ReadAll(io.LimitReader(response.Body, 1<<20))
 		if readErr != nil {
-			return nil, readErr
+			return nil, logging.TransportFailure(readErr)
 		}
 		if classified := providerfoundation.ClassifyHTTPWithMessage("gitlab", response.StatusCode, response.Header, string(message)); classified != nil {
 			return nil, classified
@@ -857,7 +858,7 @@ func downloadGitLabTestsArtifact(ctx context.Context, client *providerfoundation
 	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, gitLabTestsMaxDownload+1))
 	if err != nil {
-		return nil, err
+		return nil, logging.TransportFailure(err)
 	}
 	if len(body) > gitLabTestsMaxDownload {
 		return nil, ErrGitLabTestsIncomplete

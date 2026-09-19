@@ -8,10 +8,10 @@ import (
 	"fmt"
 	"log/slog"
 	"math/big"
+	"net"
 	"os"
 	"sort"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -787,13 +787,23 @@ func isRetryableDiscoveryError(err error) bool {
 	if errors.Is(err, ErrBridgeRequest) || errors.Is(err, ErrInvalidBridge) || errors.Is(err, ErrDiscoveryTransientFailure) {
 		return true
 	}
-	message := strings.ToLower(err.Error())
-	for _, marker := range []string{"timeout", "rate", "429", "temporar", "transient", "too many"} {
-		if strings.Contains(message, marker) {
-			return true
-		}
+	// The class comes from the error's type and identity, never its text:
+	// error text can carry a provider's words, and a word in it must not
+	// decide a retry.
+	var retryable interface{ Retryable() bool }
+	if errors.As(err, &retryable) && retryable.Retryable() {
+		return true
 	}
-	return false
+	var timeout interface{ Timeout() bool }
+	if errors.As(err, &timeout) && timeout.Timeout() {
+		return true
+	}
+	var temporary interface{ Temporary() bool }
+	if errors.As(err, &temporary) && temporary.Temporary() {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr)
 }
 
 func retryAfterSecondsOf(err error) *float64 {

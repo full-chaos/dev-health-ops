@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
@@ -234,15 +235,11 @@ type ProviderError struct {
 	// an HTTP response (e.g. a rate-limit gate denial before the request
 	// went out).
 	Path string
-	// Body is a bounded, redacted snippet of the response body CHAOS-4582
-	// found was being read (for GitHub/GitLab rate-limit body-sniffing in
-	// ClassifyHTTPWithMessage) and then silently discarded -- every
-	// downstream consumer (job lifecycle logs, sync_run_units.result) saw
-	// only the generic Class, never why the provider actually rejected the
-	// request. Redacted with the same logging.RedactText pass job lifecycle
-	// logging already applies to err.Error() (defense in depth, not a
-	// replacement for it), and capped well short of maxProviderErrorBody so
-	// a large body can't bloat a durable result column.
+	// Body is the provider's response body as read (bounded by
+	// maxProviderErrorBody), kept for classification parsers that need the
+	// provider's own rejection detail. Error() never formats it: error text
+	// flows into logs and durable results unfiltered by key. No log path
+	// reads it.
 	Body string
 }
 
@@ -256,14 +253,26 @@ func (e *ProviderError) Error() string {
 	if e.Path != "" {
 		message += fmt.Sprintf(" path=%s", e.Path)
 	}
-	if e.Body != "" {
-		body := logging.RedactText(e.Body)
-		if len(body) > maxProviderErrorBodyInMessage {
-			body = body[:maxProviderErrorBodyInMessage]
-		}
-		message += fmt.Sprintf(" body=%q", body)
-	}
 	return message
+}
+
+// ResponseBodySnippet returns the response body redacted by
+// logging.RedactText and cut to maxProviderErrorBodyInMessage bytes, for a
+// caller that needs the provider's reason outside a log (a test, a
+// classifier). No log path calls it.
+func (e *ProviderError) ResponseBodySnippet() string {
+	if e == nil || e.Body == "" {
+		return ""
+	}
+	body := logging.RedactText(e.Body)
+	if len(body) > maxProviderErrorBodyInMessage {
+		cut := maxProviderErrorBodyInMessage
+		for cut > 0 && !utf8.RuneStart(body[cut]) {
+			cut--
+		}
+		body = body[:cut]
+	}
+	return body
 }
 
 func (e *ProviderError) Retryable() bool {

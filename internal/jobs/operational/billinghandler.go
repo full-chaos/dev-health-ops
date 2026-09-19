@@ -306,6 +306,7 @@ func (handler *BillingHandler) deliver(
 				"billing notification: the provider result is ambiguous; the claim will "+
 					"NOT be released, to avoid sending a message that may already be out",
 				"error", err, "provider_message_id", ambiguous.ProviderMessageID,
+				"id_dropped", ambiguous.ProviderMessageIDDropped,
 				"claim_outcome", string(FenceOutcomeAmbiguous))
 			return false, FenceOutcomeAmbiguous, err
 		}

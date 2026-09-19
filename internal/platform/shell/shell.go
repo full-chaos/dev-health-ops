@@ -299,6 +299,9 @@ func Execute(
 	}
 
 	logger := logging.NewJSON(streams.Stdout, cfg.LogLevel)
+	// Code that logs through slog.Default() or the standard log package
+	// writes through the same redacting handler as this logger.
+	defer logging.InstallDefault(logger)()
 	warnEnvOnlySettings(logger, cfg)
 	tracingComponent := tracing.Init(logger)
 	registry := health.NewRegistry(cfg.HealthCheckTimeout)

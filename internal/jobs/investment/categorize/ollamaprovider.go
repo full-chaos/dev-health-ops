@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 )
 
 // OllamaProviderConfig configures OllamaProvider.
@@ -234,7 +236,7 @@ func (p *OllamaProvider) executeChatRequest(ctx context.Context, body ollamaChat
 
 	resp, err := p.client.Do(req)
 	if err != nil {
-		return "", nil, nil, &httpTransportError{cause: err}
+		return "", nil, nil, &httpTransportError{cause: logging.TransportFailure(err)}
 	}
 	defer resp.Body.Close()
 
@@ -249,7 +251,7 @@ func (p *OllamaProvider) executeChatRequest(ctx context.Context, body ollamaChat
 
 	var decoded ollamaChatResponse
 	if err := json.Unmarshal(responseBody, &decoded); err != nil {
-		return "", nil, nil, fmt.Errorf("decode response: %w", err)
+		return "", nil, nil, logging.DecodeFailure(err)
 	}
 	if decoded.Error != "" {
 		return "", nil, nil, &httpStatusError{statusCode: resp.StatusCode, header: resp.Header, body: decoded.Error}

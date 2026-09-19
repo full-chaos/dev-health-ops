@@ -30,6 +30,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
@@ -39,6 +40,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/system"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 )
 
@@ -56,6 +58,9 @@ const (
 )
 
 func main() {
+	// Linked job packages log through slog.Default(); this makes that the
+	// redacting handler, on stderr beside the probe's own output.
+	logging.InstallDefault(logging.NewJSON(os.Stderr, slog.LevelInfo))
 	os.Exit(run(context.Background(), os.Args[1:], os.LookupEnv, os.Stdout, os.Stderr))
 }
 

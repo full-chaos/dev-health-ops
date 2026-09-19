@@ -16,6 +16,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 )
 
 // defaultHeartbeatTier is what an organization with no org_licenses row (or a
@@ -149,7 +151,7 @@ func (dispatcher *NativeHeartbeatDispatcher) postTelemetry(
 	request.Header.Set("Content-Type", "application/json")
 	response, err := dispatcher.httpClient.Do(request)
 	if err != nil {
-		return fmt.Errorf("telemetry endpoint unreachable: %w", err)
+		return fmt.Errorf("telemetry endpoint unreachable: %w", logging.TransportFailure(err))
 	}
 	defer response.Body.Close()
 	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4*1024))

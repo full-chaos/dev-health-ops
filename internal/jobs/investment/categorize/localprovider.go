@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 )
 
 // LocalProviderConfig configures LocalProvider.
@@ -201,7 +203,7 @@ func (p *LocalProvider) executeChatCompletionRequest(ctx context.Context, body l
 
 	resp, err := p.client.Do(req)
 	if err != nil {
-		return "", nil, &httpTransportError{cause: err}
+		return "", nil, &httpTransportError{cause: logging.TransportFailure(err)}
 	}
 	defer resp.Body.Close()
 
@@ -216,7 +218,7 @@ func (p *LocalProvider) executeChatCompletionRequest(ctx context.Context, body l
 
 	var decoded localChatResponse
 	if err := json.Unmarshal(responseBody, &decoded); err != nil {
-		return "", nil, fmt.Errorf("decode response: %w", err)
+		return "", nil, logging.DecodeFailure(err)
 	}
 	if len(decoded.Choices) == 0 {
 		return "", nil, fmt.Errorf("local provider response had no choices")

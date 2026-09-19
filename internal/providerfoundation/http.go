@@ -176,7 +176,8 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader
 		// the classification returned to the caller, so every consumer saw
 		// only the generic Class and never the provider's own rejection
 		// reason. Path excludes the query string deliberately (see Path's
-		// doc comment); Body is bounded/redacted in Error() itself.
+		// doc comment); Body is kept for classification parsers and never
+		// reaches a log.
 		classification.Path = target.Path
 		classification.Body = string(message)
 		retryDelay := c.retryDelay(attempt, classification.RetryAfter, classification.Class)

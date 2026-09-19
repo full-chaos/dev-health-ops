@@ -495,8 +495,10 @@ func TestRuntimeFailureRedactsComponentErrorDSN(t *testing.T) {
 	// This is the assertion that actually proves the handler did the
 	// scrubbing rather than the DSN simply never being attached: it only
 	// appears once the component's cause is attached as a real attribute
-	// value and passed through the redacting ReplaceAttr handler.
-	if !strings.Contains(combined, "component async-dsn-component: dial [REDACTED]") {
+	// value and passed through the redacting ReplaceAttr handler. The
+	// component's name holds the protected word "dsn", so the text after its
+	// "name:" is redacted as that key's value as well.
+	if !strings.Contains(combined, "component async-dsn-component: [REDACTED]") {
 		t.Fatalf("runtime failure log did not show a redacted (not discarded) cause: %s", combined)
 	}
 }

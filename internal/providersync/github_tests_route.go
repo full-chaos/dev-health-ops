@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
@@ -924,7 +925,7 @@ func downloadGitHubTestsArtifact(
 	body, readErr := io.ReadAll(io.LimitReader(response.Body, maxBytes+1))
 	if readErr != nil {
 		return nil, requests, false, fmt.Errorf(
-			"%w: artifact download read failed: %v", ErrGitHubTestsIncomplete, readErr,
+			"%w: artifact download read failed: %w", ErrGitHubTestsIncomplete, logging.TransportFailure(readErr),
 		)
 	}
 	if int64(len(body)) > maxBytes {

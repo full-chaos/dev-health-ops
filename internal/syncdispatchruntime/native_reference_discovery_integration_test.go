@@ -141,9 +141,13 @@ func (executor *fakeDiscoveryExecutor) Discover(ctx context.Context, orgID, runI
 	return executor.summary, executor.err
 }
 
+// retryableDiscoveryError is an executor failure that declares itself
+// retryable, the way a provider rate limit does; the retry decision reads
+// the type, never the message.
 type retryableDiscoveryError struct{ message string }
 
-func (e retryableDiscoveryError) Error() string { return e.message }
+func (e retryableDiscoveryError) Error() string   { return e.message }
+func (e retryableDiscoveryError) Retryable() bool { return true }
 
 func TestNativeReferenceDiscoverySucceedsAndArmsDispatch(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)

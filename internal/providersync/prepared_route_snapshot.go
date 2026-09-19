@@ -141,6 +141,11 @@ func encodePreparedRouteManifest(
 	if _, reserved := batch.Result[preparedSnapshotWorklogResultKey]; reserved {
 		return nil, PreparedRouteSnapshotReference{}, ErrEffectRecoveryUnsafe
 	}
+	// A snapshot row holds only what its sink writes or reads: the route's
+	// effects are projected before the ledger digest is taken.
+	if !preparedRouteRowsAreProjected(batch.Effects) {
+		return nil, PreparedRouteSnapshotReference{}, ErrEffectRecoveryUnsafe
+	}
 	storedResult := batch.Result
 	if len(batch.WorklogObservations) > 0 {
 		storedResult = make(map[string]any, len(batch.Result)+1)

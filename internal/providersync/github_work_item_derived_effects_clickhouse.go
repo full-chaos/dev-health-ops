@@ -329,9 +329,7 @@ func (sink GitHubEstimateCoverageClickHouseEffects) WriteGitHubWorkItemEffect(
 	if !githubWorkItemDerivedUniqueSortingKeys(rows, githubEstimateCoverageSortingKey) {
 		return ErrInvalidConfiguration
 	}
-	batch, err := sink.Conn.PrepareBatch(ctx, `INSERT INTO estimate_coverage_metrics_daily
-(day, provider, work_scope_id, team_id, team_name, estimated_count,
-unestimated_count, backlog_size, ratio, computed_at, org_id)`)
+	batch, err := sink.Conn.PrepareBatch(ctx, gitHubEstimateCoverageInsert)
 	if err != nil {
 		return err
 	}
@@ -489,9 +487,7 @@ func (sink GitHubWorkItemTeamAttributionsClickHouseEffects) WriteGitHubWorkItemE
 	// (workitemcontract.AttributionVersionFold), so a collision with one of the
 	// other two producers at an identical computed_at resolves to the same
 	// survivor regardless of arrival order.
-	batch, err := sink.Conn.PrepareBatch(ctx, `INSERT INTO work_item_team_attributions
-(org_id, repo_id, work_item_id, provider, team_id, team_name, source,
-is_primary, confidence, evidence, computed_at, writer, run_id)`)
+	batch, err := sink.Conn.PrepareBatch(ctx, gitHubWorkItemTeamAttributionsInsert)
 	if err != nil {
 		return err
 	}
@@ -792,9 +788,7 @@ func (sink GitHubWorkItemStateDurationsClickHouseEffects) WriteGitHubWorkItemEff
 	if !githubWorkItemDerivedUniqueSortingKeys(rows, githubStateDurationSortingKey) {
 		return ErrInvalidConfiguration
 	}
-	batch, err := sink.Conn.PrepareBatch(ctx, `INSERT INTO work_item_state_durations_daily
-(day, provider, work_scope_id, team_id, team_name, status, duration_hours,
-items_touched, computed_at, avg_wip, org_id)`)
+	batch, err := sink.Conn.PrepareBatch(ctx, gitHubWorkItemStateDurationsInsert)
 	if err != nil {
 		return err
 	}
@@ -1065,3 +1059,15 @@ func githubWorkItemDerivedFloatPointerEqual(left, right *float64) bool {
 	}
 	return *left == *right
 }
+
+const gitHubEstimateCoverageInsert = `INSERT INTO estimate_coverage_metrics_daily
+(day, provider, work_scope_id, team_id, team_name, estimated_count,
+unestimated_count, backlog_size, ratio, computed_at, org_id)`
+
+const gitHubWorkItemTeamAttributionsInsert = `INSERT INTO work_item_team_attributions
+(org_id, repo_id, work_item_id, provider, team_id, team_name, source,
+is_primary, confidence, evidence, computed_at, writer, run_id)`
+
+const gitHubWorkItemStateDurationsInsert = `INSERT INTO work_item_state_durations_daily
+(day, provider, work_scope_id, team_id, team_name, status, duration_hours,
+items_touched, computed_at, avg_wip, org_id)`

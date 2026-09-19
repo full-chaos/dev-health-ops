@@ -210,6 +210,12 @@ func TestGitHubWorkItemPreparedSnapshotRecoversAcrossPostgresAndClickHouse(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The commit path projects a prepared route's effects before the ledger
+	// digest; the snapshot accepts only projected rows.
+	effects, err = projectPreparedRouteEffects(effects)
+	if err != nil {
+		t.Fatal(err)
+	}
 	candidateWatermark := claim.BeforeAt.UTC()
 	batch := CompleteRouteBatch{
 		Effects: effects,

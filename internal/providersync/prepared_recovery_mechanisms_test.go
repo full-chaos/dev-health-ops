@@ -322,7 +322,7 @@ func TestSnapshotRefusesASensitiveKeyByNameOnly(t *testing.T) {
 	} {
 		for _, spelling := range []string{key, strings.ToUpper(key), strings.ReplaceAll(key, "_", "-")} {
 			effect, err := effectBatchFromValues("deployments", EffectReadbackRequired,
-				[]map[string]any{{"meta": map[string]any{"fields": []any{map[string]any{spelling: "value-must-not-leak"}}}}})
+				[]map[string]any{{"release_ref": map[string]any{"fields": []any{map[string]any{spelling: "value-must-not-leak"}}}}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -351,7 +351,7 @@ func TestSensitiveKeyBatchCommitsWithoutASnapshotAndSaysSo(t *testing.T) {
 	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
 	claim, session := preparedWorkItemsSession(t, now, "github", "deployments")
 	effect, err := effectBatchFromValues("deployments", EffectReadbackRequired,
-		[]map[string]any{{"meta": map[string]any{"headers": "value-must-not-leak"}}})
+		[]map[string]any{{"release_ref": map[string]any{"headers": "value-must-not-leak"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -382,7 +382,9 @@ func TestWorkItemsStillRefusesASensitiveKeySnapshot(t *testing.T) {
 	claim, session := preparedGitHubWorkItemsSession(t, now)
 	batch := preparedGitHubWorkItemsFixture(t, claim)
 	first := batch.Effects[0]
-	extra, err := json.Marshal(map[string]any{"token": "value-must-not-leak"})
+	extra, err := json.Marshal(map[string]any{
+		preparedFixtureColumn(t, first.Destination): map[string]any{"token": "value-must-not-leak"},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

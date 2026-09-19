@@ -137,10 +137,7 @@ func (sink GitHubIssueTypeMetricsClickHouseEffects) WriteGitHubWorkItemEffect(
 	if len(rows) == 0 {
 		return nil
 	}
-	batch, err := sink.Conn.PrepareBatch(ctx, `INSERT INTO issue_type_metrics_daily
-(repo_id, day, provider, team_id, issue_type_norm, created_count,
-completed_count, active_count, cycle_p50_hours, cycle_p90_hours,
-lead_p50_hours, computed_at, org_id)`)
+	batch, err := sink.Conn.PrepareBatch(ctx, gitHubIssueTypeMetricsInsert)
 	if err != nil {
 		return err
 	}
@@ -300,9 +297,7 @@ func (sink GitHubInvestmentClassificationsClickHouseEffects) WriteGitHubWorkItem
 	if len(rows) == 0 {
 		return nil
 	}
-	batch, err := sink.Conn.PrepareBatch(ctx, `INSERT INTO investment_classifications_daily
-(repo_id, day, artifact_type, artifact_id, provider, investment_area,
-project_stream, confidence, rule_id, computed_at, org_id)`)
+	batch, err := sink.Conn.PrepareBatch(ctx, gitHubInvestmentClassificationsInsert)
 	if err != nil {
 		return err
 	}
@@ -456,9 +451,7 @@ func (sink GitHubInvestmentMetricsClickHouseEffects) WriteGitHubWorkItemEffect(
 	if len(rows) == 0 {
 		return nil
 	}
-	batch, err := sink.Conn.PrepareBatch(ctx, `INSERT INTO investment_metrics_daily
-(repo_id, day, team_id, investment_area, project_stream, delivery_units,
-work_items_completed, prs_merged, churn_loc, cycle_p50_hours, computed_at, org_id)`)
+	batch, err := sink.Conn.PrepareBatch(ctx, gitHubInvestmentMetricsInsert)
 	if err != nil {
 		return err
 	}
@@ -700,3 +693,16 @@ var (
 	_ GitHubWorkItemEffectAdapter = GitHubInvestmentClassificationsClickHouseEffects{}
 	_ GitHubWorkItemEffectAdapter = GitHubInvestmentMetricsClickHouseEffects{}
 )
+
+const gitHubIssueTypeMetricsInsert = `INSERT INTO issue_type_metrics_daily
+(repo_id, day, provider, team_id, issue_type_norm, created_count,
+completed_count, active_count, cycle_p50_hours, cycle_p90_hours,
+lead_p50_hours, computed_at, org_id)`
+
+const gitHubInvestmentClassificationsInsert = `INSERT INTO investment_classifications_daily
+(repo_id, day, artifact_type, artifact_id, provider, investment_area,
+project_stream, confidence, rule_id, computed_at, org_id)`
+
+const gitHubInvestmentMetricsInsert = `INSERT INTO investment_metrics_daily
+(repo_id, day, team_id, investment_area, project_stream, delivery_units,
+work_items_completed, prs_merged, churn_loc, cycle_p50_hours, computed_at, org_id)`

@@ -111,6 +111,12 @@ type Finding struct {
 	// (transport-level ones the runner adds), and an empty shape is never
 	// coverable.
 	Shape string `json:"shape,omitempty"`
+
+	// baselineText/candidateText are the two string leaves a ShapeValue
+	// finding between two JSON strings compared, kept for shapes that
+	// judge the values themselves (TimestampRenderingShape) rather than
+	// the Detail text; both are empty on every other finding.
+	baselineText, candidateText string
 }
 
 // Finding shapes. A citation (BaselineDefect) declares that the Python
@@ -870,6 +876,23 @@ type BaselineDefect struct {
 	// behaviour every other declared defect still uses. A defect never
 	// sets more than one shape field.
 	BandMomentSubsetShape *BandMomentSubsetShape
+
+	// TimestampRenderingShape, when set, replaces this defect's blanket
+	// "any leaf difference under Paths is covered" rule with an admission
+	// of a value finding only where both planes carry one and the same
+	// instant in different wire forms -- see TimestampRenderingShape's own
+	// doc comment (timestamprendering.go). A leaf shape: it never admits a
+	// structural finding. A defect never sets more than one shape field.
+	TimestampRenderingShape *TimestampRenderingShape
+
+	// Accounting, when set, gates every admission this defect makes,
+	// whatever its shape or none: while the route family's candidate-side
+	// check (CandidateAccounting, candidateaccounting.go) fails over its
+	// list, nothing under this defect's Paths is admitted, and each
+	// finding it touched names the first violation. A route family's
+	// Options builder sets it on every declaration whose Paths reach the
+	// list, so a new declaration cannot admit under the list without it.
+	Accounting *CandidateAccounting
 }
 
 // validateBaselineDefects refuses a declaration that claims the
@@ -1202,6 +1225,10 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 		touched []int
 	}
 	verdicts := make([]perDefect, len(defects))
+	// gateNotes holds, per finding, the first candidate-accounting refusal
+	// of a declaration that touched it; it is written into the finding's
+	// Detail only if no declaration ends up covering the finding.
+	gateNotes := make([]string, len(mismatches))
 	// evaluateDefect runs the shared per-defect admission logic. Every
 	// existing shape is a pure function of the two decoded bodies (plus,
 	// for a whole-comparison shape, this run's own mismatch paths) and
@@ -1215,6 +1242,10 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 	// everything else in this comparison.
 	evaluateDefect := func(d int, defect BaselineDefect) {
 		hit := false
+		gateRefusal := ""
+		if ok, reason := defect.Accounting.checkLists(baselineData, candidateData); !ok {
+			gateRefusal = reason
+		}
 		// Built once per defect, not per finding: a shape's plan (its
 		// per-repo multiplier map and aggregate totals, or its
 		// whole-comparison coverage-shift verdict) is a property of this
@@ -1312,6 +1343,10 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 		if defect.BandMomentSubsetShape != nil {
 			momentPlan = buildBandMomentSubsetPlan(defect.BandMomentSubsetShape, baselineData, candidateData)
 		}
+		var renderingPlan *timestampRenderingPlan
+		if defect.TimestampRenderingShape != nil {
+			renderingPlan = &timestampRenderingPlan{}
+		}
 		// A SHAPED defect's citation is LIVE only when its shape actually
 		// admits something. A blanket (unshaped) citation stays live from
 		// path proximity alone -- any difference under Paths, covered or
@@ -1325,7 +1360,7 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 		// apart, and a shaped defect that hit on path alone would still
 		// double-report alongside the shape that actually explains the
 		// difference.
-		shaped := repoPlan != nil || covPlan != nil || dedupPlan != nil || skewPlan != nil || sankeyFanoutPlan != nil || keyedDirPlan != nil || conservePlan != nil || dictDirPlan != nil || scalarDirPlan != nil || identityPlan != nil || displacePlan != nil || hotspotBoundaryPlan != nil || subsetPlan != nil || zeroValueEmptyListPlan != nil || tiePlan != nil || heatmapCellPlan != nil || dupLenPlan != nil || homeTierPlan != nil || axisRepoOrderPlan != nil || axisTieGroupPlan != nil || dupPageCutPlan != nil || driversPlan != nil || momentPlan != nil
+		shaped := repoPlan != nil || covPlan != nil || dedupPlan != nil || skewPlan != nil || sankeyFanoutPlan != nil || keyedDirPlan != nil || conservePlan != nil || dictDirPlan != nil || scalarDirPlan != nil || identityPlan != nil || displacePlan != nil || hotspotBoundaryPlan != nil || subsetPlan != nil || zeroValueEmptyListPlan != nil || tiePlan != nil || heatmapCellPlan != nil || dupLenPlan != nil || homeTierPlan != nil || axisRepoOrderPlan != nil || axisTieGroupPlan != nil || dupPageCutPlan != nil || driversPlan != nil || momentPlan != nil || renderingPlan != nil
 		var touched []int
 		for i, path := range mismatches {
 			if !defectCovers(defect, path) {
@@ -1401,7 +1436,7 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 				// finding's own Detail -- a reader of the report can see
 				// which id was not covered and why without cross-
 				// referencing the raw bodies.
-				if !admitted {
+				if !admitted && gateRefusal == "" {
 					if id, ok := dedupPlan.uncoveredEdgeID(result.Findings[findingRefs[i]]); ok {
 						result.Findings[findingRefs[i]].Detail += dedupPlan.refusalDetail(id)
 					}
@@ -1446,6 +1481,14 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 				admitted = driversPlan.admits(result.Findings[findingRefs[i]])
 			case momentPlan != nil:
 				admitted = momentPlan.admits(result.Findings[findingRefs[i]])
+			case renderingPlan != nil:
+				admitted = renderingPlan.admits(result.Findings[findingRefs[i]])
+			}
+			if gateRefusal != "" {
+				admitted = false
+				if gateNotes[i] == "" {
+					gateNotes[i] = " (candidate accounting refused: " + gateRefusal + ")"
+				}
 			}
 			if admitted {
 				covered[i] = true
@@ -1468,6 +1511,12 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 			continue
 		}
 		evaluateDefect(d, defect)
+	}
+
+	for i, note := range gateNotes {
+		if note != "" && !covered[i] {
+			result.Findings[findingRefs[i]].Detail += note
+		}
 	}
 
 	var matched, stale, idle, liveUnexplainedDefects []string
@@ -1850,7 +1899,13 @@ func compareJSON(baseline, candidate any, path string, opts Options, envelopeKey
 	}
 
 	if !sameScalar(baseline, candidate) {
-		return []Finding{{Kind: FindingMismatch, Path: path, Detail: fmt.Sprintf("%v != %v", baseline, candidate), Shape: ShapeValue}}
+		finding := Finding{Kind: FindingMismatch, Path: path, Detail: fmt.Sprintf("%v != %v", baseline, candidate), Shape: ShapeValue}
+		baselineText, baselineIsText := baseline.(string)
+		candidateText, candidateIsText := candidate.(string)
+		if baselineIsText && candidateIsText {
+			finding.baselineText, finding.candidateText = baselineText, candidateText
+		}
+		return []Finding{finding}
 	}
 	return nil
 }

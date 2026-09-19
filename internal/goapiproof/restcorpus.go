@@ -751,62 +751,160 @@ var drilldownPRsIntegerLeaves = map[string]string{
 	"data.items.review_latency_hours": "dateDiff('hour', created_at, first_review_at) -- always a whole number of hours; Go types it int64 where Python's pydantic model types the same quantity float, a wire-shape difference, not a provenance one.",
 }
 
-// drilldownPRsParity is shared by every admissible (2xx) drilldown/prs
-// request, GET and POST alike: both routes call the same
-// BuildPRsResponse, so both carry the same declared Python-plane
-// defects.
-var drilldownPRsParity = Options{
-	NumericLeavesDeclared: true,
-	IntegerLeaves:         drilldownPRsIntegerLeaves,
-	BaselineDefects: []BaselineDefect{
+// pullRequestRowCopyRule names the git_pull_requests response fields a
+// later write of the same (repo_id, number) can store a different value
+// for, read off every writer of the table, and gives none of them a
+// direction. title is written verbatim from the upstream's current title
+// on every provider sync (internal/providersync normalizeGitHubPullRequest
+// and its GitLab counterpart), so an upstream edit rewrites it either way.
+// Every writer refuses a null over a held merged_at or first_review_at
+// (the provider sync's guardPullRequestMergedAtRegressions and
+// guardPullRequestReviewRegressions, the stream-ingest writers' terminal
+// columns in internal/streamhandlers stored_version.go), but each guard
+// reads the held version and inserts in two statements with no lock, a
+// physical version written before those guards stays until the
+// background merge, and first_review_at is recomputed from the reviews
+// each sync fetches; so neither gets a direction. review_latency_hours
+// is a pure function of first_review_at and the shared created_at. The
+// author (author on the person route, author_name on the scope route)
+// is the upstream login written on every sync, "Unknown" when the
+// upstream carries none, so a renamed or vanished login rewrites it. Every other response field is
+// left out: repo_id and number are the key; created_at is the route's
+// sort key, and a copy pair that differs in it (the writer's sync-time
+// fallback for a pull request with no upstream created_at) stays outside;
+// link is null on both planes.
+var pullRequestRowCopyRule = DuplicateCopyRule{
+	RewrittenFields: []string{"title", "author", "author_name", "merged_at", "first_review_at", "review_latency_hours"},
+}
+
+// pullRequestAccounting is the pull-request drilldown family's shared
+// candidate-side check (CandidateAccounting): every candidate row equals
+// one whole baseline copy under pullRequestRowCopyRule, the candidate is
+// ordered created_at DESC as both routes' ORDER BY, and only a page-cut
+// baseline leaves candidate rows beyond its reach. limit is the request's
+// own effective limit; parityWithPageCutLimit sets it per request.
+func pullRequestAccounting(limit int) *CandidateAccounting {
+	return &CandidateAccounting{ListPath: "data.items", IDField: RESTDedupKeyField, SortField: "created_at", CopyRule: &pullRequestRowCopyRule, PageLimit: limit}
+}
+
+// pullRequestListPaths are the response paths a pull-request drilldown
+// declaration can admit a finding under that depend on which rows the
+// list carries: the list itself and the cursor copied from its last row.
+var pullRequestListPaths = []string{"data.items", "data.next_cursor"}
+
+// reachesPath reports whether a cited path covers, or is covered by, one
+// of paths: a citation of the list, of a leaf inside it, or of an
+// ancestor of it.
+func reachesPath(cited string, paths []string) bool {
+	for _, path := range paths {
+		if cited == path || strings.HasPrefix(cited, path+".") || strings.HasPrefix(path, cited+".") {
+			return true
+		}
+	}
+	return false
+}
+
+// gatePullRequestDefects is the pull-request drilldown family's Options
+// builder step that makes the candidate accounting structural: every
+// declaration whose Paths reach the list or its cursor carries
+// pullRequestAccounting, whatever its shape, so no declaration of the
+// family admits under the list without it. A declaration whose mechanism
+// is a narrower candidate population (TeamRepoSubsetShape) permits
+// dropped rows and nothing else.
+func gatePullRequestDefects(defects []BaselineDefect, limit int) []BaselineDefect {
+	gated := make([]BaselineDefect, len(defects))
+	for i, defect := range defects {
+		for _, cited := range defect.Paths {
+			if reachesPath(cited, pullRequestListPaths) {
+				accounting := pullRequestAccounting(limit)
+				accounting.AllowDropped = defect.TeamRepoSubsetShape != nil
+				defect.Accounting = accounting
+				break
+			}
+		}
+		gated[i] = defect
+	}
+	return gated
+}
+
+// pullRequestDrilldownRoute carries the only declaration inputs that
+// differ between the pull-request drilldown routes.
+type pullRequestDrilldownRoute struct {
+	// cursorPath is the response's own next-page cursor leaf, the
+	// created_at of the page's last row, or empty for a route with none.
+	cursorPath string
+}
+
+// pullRequestDrilldownDefects is the one definition of the reference-plane
+// defects every pull-request drilldown route declares: GET/POST
+// /api/v1/drilldown/prs (fetch_pull_requests, api/queries/drilldown.py;
+// internal/drilldown/prs.go) and GET /api/v1/people/{person_id}/
+// drilldown/prs (fetch_person_pull_requests, sql/people/
+// person_drilldown_prs.sql; cmd/query-api/internal/people/
+// drilldownprs.go). Both reference readers select the same
+// git_pull_requests row fields through an INNER JOIN on repos with no
+// FINAL on either table, ORDER BY created_at DESC LIMIT; both ports read
+// both tables FINAL. A mechanism declared for one route is therefore a
+// mechanism the other can hit, and neither route's Parity lists these
+// entries by hand.
+func pullRequestDrilldownDefects(route pullRequestDrilldownRoute) []BaselineDefect {
+	datetimePaths := []string{
+		"data.items.created_at",
+		"data.items.merged_at",
+		"data.items.first_review_at",
+	}
+	if route.cursorPath != "" {
+		datetimePaths = append(datetimePaths, route.cursorPath)
+	}
+	return gatePullRequestDefects([]BaselineDefect{
 		{
-			Ticket: "CHAOS-5803",
-			Reason: "git_pull_requests' created_at/merged_at/first_review_at columns are ClickHouse DateTime64(3, 'UTC') (000_raw_tables.sql); Python's clickhouse_connect driver returns them NAIVE (no tzinfo), so the Pydantic response serializes them with no offset, while Go's driver attaches UTC location and this port's PRItem (encoding/json's default time.Time marshaling) emits RFC 3339 with an explicit offset -- the same class of divergence already declared for the operations.go GraphQL corpus's own capacityForecasts and pr entries. Go is correct. The same naive-vs-aware rendering recurs on GET /api/v1/people/{person_id}/summary's deltas spark series ts field, reading a ClickHouse Date column through a different query path and declared separately, in peopleSummarySparkTimestampDefect below.",
-			Paths: []string{
-				"data.items.created_at",
-				"data.items.merged_at",
-				"data.items.first_review_at",
-			},
-			Intermittent:       true,
-			IntermittentReason: "present only while this request's live result actually contains at least one returned PR with a non-null value under one of these three fields; an empty items list, or a window whose only PRs happen to leave every one of these fields null, shows no divergence under these paths and is not a bug in this citation -- the same live-data-dependence every other Intermittent entry in this table declares, just triggered by result content here rather than by ClickHouse's own merge state",
+			Ticket:                  "CHAOS-5803",
+			Reason:                  "git_pull_requests' created_at/merged_at/first_review_at columns are ClickHouse DateTime64(3, 'UTC') (000_raw_tables.sql); Python's clickhouse_connect driver returns them NAIVE (no tzinfo), so the Pydantic response serializes them with no offset -- and so does a next-page cursor copied from the last row's created_at -- while Go's driver attaches UTC location and each port's row type (encoding/json's default time.Time marshaling) emits RFC 3339 with an explicit offset -- the same class of divergence already declared for the operations.go GraphQL corpus's own capacityForecasts and pr entries. Go is correct. The same naive-vs-aware rendering recurs on GET /api/v1/people/{person_id}/summary's deltas spark series ts field, reading a ClickHouse Date column through a different query path and declared separately, in peopleSummarySparkTimestampDefect below.",
+			Paths:                   datetimePaths,
+			TimestampRenderingShape: &TimestampRenderingShape{},
+			Intermittent:            true,
+			IntermittentReason:      "present only while this request's live result actually contains at least one returned PR with a non-null value under one of these fields; an empty items list, or a window whose only PRs happen to leave every one of these fields null, shows no divergence under these paths and is not a bug in this citation -- the same live-data-dependence every other Intermittent entry in this table declares, just triggered by result content here rather than by ClickHouse's own merge state",
 		},
 		{
 			Ticket:             "CHAOS-5803",
-			Reason:             "git_pull_requests and repos are both ReplacingMergeTree(last_synced) (000_raw_tables.sql); fetch_pull_requests (api/queries/drilldown.py) reads neither with FINAL or any other merge-time dedup, so an unmerged physical version of the same logical PR ((repo_id, number)) can surface as two rows sharing that identity, spending one extra slot of the page limit and shifting every later element's position -- the same mechanism WorkGraphEdgeDedupShape already covers for the GraphQL workGraphEdges operation. This port's drilldown.Reader reads both tables FINAL. Go is correct.",
+			Reason:             "git_pull_requests and repos are both ReplacingMergeTree(last_synced) (000_raw_tables.sql); the reference readers (fetch_pull_requests in api/queries/drilldown.py, fetch_person_pull_requests over sql/people/person_drilldown_prs.sql) read neither with FINAL or any other merge-time dedup, so an unmerged physical version of the same logical PR ((repo_id, number)) can surface as two rows sharing that identity, spending one extra slot of the page limit and shifting every later element's position -- the same mechanism WorkGraphEdgeDedupShape already covers for the GraphQL workGraphEdges operation. Both ports read both tables FINAL. Go is correct.",
 			Paths:              []string{"data.items"},
 			Intermittent:       true,
 			IntermittentReason: "present only while the source tables hold an unmerged physical version of some PR or repo row; a comparison taken after the next background merge shows no repeated (repo_id, number) on the baseline side either",
 			WorkGraphEdgeDedupShape: &WorkGraphEdgeDedupShape{
-				EdgesListPath: "data.items",
-				IDField:       RESTDedupKeyField,
+				EdgesListPath:      "data.items",
+				IDField:            RESTDedupKeyField,
+				TrailingCursorPath: route.cursorPath,
 			},
 		},
 		{
 			Ticket:             "CHAOS-5897",
-			Reason:             "Mechanism: git_pull_requests is ReplacingMergeTree(last_synced) keyed by (org_id, repo_id, number), and fetch_pull_requests (api/queries/drilldown.py) reads it without FINAL, so while an older physical version of a pull request is unmerged the baseline page carries both an older copy and a newer copy of the same (repo_id, number), differing on whichever of merged_at or first_review_at the newer copy populates; review_latency_hours is `if(first_review_at IS NULL, NULL, dateDiff('hour', created_at, first_review_at))` in both handlers (api/queries/drilldown.py, drilldown/prs.go), a pure function of first_review_at given the created_at every copy already shares, so it moves in lockstep with it. The sync writer (internal/providersync, guardPullRequestMergedAtRegressions) refuses to write a null merged_at over a stored populated value for the same key; first_review_at is recomputed from whatever reviews are fetched each sync run (github_pr_reviews_route.go, enrichPullRequestsWithReviews) through the same insert; a failed review fetch carries the stored review columns forward (guardPullRequestReviewRegressions), and a review, once it exists upstream, does not stop existing. Either way the only transition between physical versions is null to populated, never the reverse, and a read that keeps the newest version per key returns the populated copy; this port's drilldown.Reader reads the table FINAL. Scope: drilldown/prs data.items only; admits an id only when its baseline copies agree on every field outside {merged_at, first_review_at, review_latency_hours}, and for each of those three either every copy already agrees or the field is null on at least one copy with one identical populated value on every other copy, and the candidate row for that id is present and equal to the resulting representative on every field. Two different populated values for one of the three, a candidate null where a copy is populated, a candidate with a different populated value, a disagreement on any field outside the three, or an id absent from the candidate stays uncovered -- including a pull request whose merged_at is null on every copy, which this entry never treats as a merged_at disagreement because there is nothing to reconcile there. The merged_at guard reads back and inserts in two statements with no lock between them: it closes a stale upstream read, not a concurrent writer for the same key. Blind spot: a pull request whose only stored versions carry a null merged_at, or a null first_review_at, is indistinguishable from one that is genuinely still open or unreviewed, so this entry cannot detect a state the store never recorded.",
+			Reason:             "Mechanism: git_pull_requests is ReplacingMergeTree(last_synced) keyed by (org_id, repo_id, number), and the reference readers read it without FINAL, so while an older physical version of a pull request is unmerged the baseline page carries both an older copy and a newer copy of the same (repo_id, number), differing on whichever fields a later write stored differently. pullRequestRowCopyRule names those fields from every writer of the table -- title, the author login, merged_at, first_review_at and review_latency_hours (CHAOS-6001) -- and gives none of them a direction: a provider sync rewrites title and the author login from upstream; every writer refuses a null over a held merged_at or first_review_at, but each guard reads the held version and inserts in two statements with no lock, a version written before those guards stays until the background merge, and first_review_at is recomputed from the reviews each sync fetches. A FINAL read returns one whole physical version, and the unFINALed read returns every version still unmerged, the kept one included, so the candidate row must equal one whole baseline copy field for field. Scope: data.items only; admits an id whose baseline copies disagree only when every copy carries the candidate's key set, every field outside those agrees across the copies, and the candidate row is present and equal to one copy. A candidate value that no copy carries, a candidate mixing fields of two copies, a disagreement on any other field, or an id absent from the candidate stays uncovered. Blind spot: which copy is newest is the table's last_synced, which neither body carries, so a Go read that served an older physical version is not told apart from one that served the newest.",
 			Paths:              []string{"data.items"},
 			Intermittent:       true,
-			IntermittentReason: "present only while git_pull_requests holds an unmerged older physical version of a pull request that a newer version already records as merged and/or reviewed, and that pull request falls within the requested page; after the background merge the baseline carries one copy per pull request and this entry has nothing to admit",
+			IntermittentReason: "present only while git_pull_requests holds an unmerged older physical version of a pull request that a later write stored with a different title, merged_at or first_review_at, and that pull request falls within the requested page; after the background merge the baseline carries one copy per pull request and this entry has nothing to admit",
 			WorkGraphEdgeDedupShape: &WorkGraphEdgeDedupShape{
-				EdgesListPath:   "data.items",
-				IDField:         RESTDedupKeyField,
-				WriteOnceFields: []string{"merged_at", "first_review_at", "review_latency_hours"},
+				EdgesListPath:      "data.items",
+				IDField:            RESTDedupKeyField,
+				TrailingCursorPath: route.cursorPath,
+				RewrittenFields:    pullRequestRowCopyRule.RewrittenFields,
 			},
 		},
 		{
 			Ticket:             "CHAOS-5959",
-			Reason:             "the same repos-join fan-out mechanism as this table's own CHAOS-5803 duplicate-row entry above, over data.items' own LENGTH: a physically-duplicated (repo_id, number) row spends an extra slot of the page limit, so the reference plane's own items list carries more elements than the candidate's for the SAME logical set of pull requests. Confirmed against a real production capture (team_scoped): every one of 6 duplicated ids in a 42-item baseline page was exactly 2 byte-identical copies, all for the same physically-duplicated repository, and collapsing them id for id reproduced the candidate's own 36-item page exactly, content included. Go is correct.",
+			Reason:             "the same repos-join fan-out mechanism as this table's own CHAOS-5803 duplicate-row entry above, over data.items' own LENGTH: a physically-duplicated (repo_id, number) row spends an extra slot of the page limit, so the reference plane's own items list carries more elements than the candidate's for the SAME logical set of pull requests. Copies of one id are judged by pullRequestRowCopyRule, the same rule the CHAOS-5897 entry above applies per id. Confirmed against real production captures: on GET /api/v1/drilldown/prs team_scoped, every one of 6 duplicated ids in a 42-item baseline page was exactly 2 byte-identical copies, all for the same physically-duplicated repository, and collapsing them id for id reproduced the candidate's own 36-item page exactly, content included; on GET /api/v1/people/{person_id}/drilldown/prs, 9 pull requests arrived as 18 rows (each 2 or 4 copies, git_pull_requests and repos both unmerged), one pull request's two physical versions carrying different titles (CHAOS-6001), and the candidate's 9 rows each equal one copy. Go is correct.",
 			Paths:              []string{"data.items"},
 			Intermittent:       true,
 			IntermittentReason: "present only while git_pull_requests or repos holds an unmerged physical version that duplicates a returned pull request's own identity within the requested page; a comparison taken after the next background merge shows no length divergence",
 			DuplicateCollapseLengthShape: &DuplicateCollapseLengthShape{
 				ListPath: "data.items",
 				IDField:  RESTDedupKeyField,
+				CopyRule: &pullRequestRowCopyRule,
 			},
 		},
 		{
 			Ticket:             "CHAOS-5968",
-			Reason:             "the same repos-join fan-out mechanism as this table's own CHAOS-5959 length entry above, over the case CHAOS-5959's own exact-collapse rule cannot reach: fetch_pull_requests' own INNER JOIN repos (api/queries/drilldown.py) reads repos WITHOUT FINAL, so while one or more repos rows sit unmerged (ReplacingMergeTree(last_synced), any repo a sync has recently written to, not confined to one particular repo or a fixed cadence) the join doubles every pull request belonging to one of those repos; fetchPullRequestsQuery's own ORDER BY created_at DESC LIMIT (drilldown/prs.go) means each doubled row spends one extra slot a genuinely distinct, later-ranked pull request would otherwise have occupied, so the candidate page -- reading the same table FINAL, never spending a slot on a duplicate -- reaches further and lists distinct ids the baseline's own page never got to. Confirmed against two real production captures (team_scoped), both outside any single fixed sync cadence: a PARTIAL capture, baseline 50 items at the route's own limit, 28 distinct ids, 22 of them duplicated exactly 2x each, byte-identical, candidate 36 items with 8 candidate-only ids in its own tail (the true, deduplicated population, 36, itself under the route's own limit, 50); and an ALL-DOUBLED capture, baseline 50 items, 25 distinct ids ACROSS TWO repos, every one of the 25 duplicated exactly 2x each, byte-identical (the window's own population entirely covered by repos with an unmerged repos row at capture time, not merely some of it), candidate 36 items with dedup(baseline)'s own 25 ids as its own literal prefix and 11 candidate-only ids in the tail. No property of a candidate-only tail row is a content check -- uniqueness and ordering are the only structural properties available for a row the baseline page never reached, never a check on whether that row's own id or timestamp is correct. Go is correct.",
+			Reason:             "the same repos-join fan-out mechanism as this table's own CHAOS-5959 length entry above, over the case CHAOS-5959's own exact-collapse rule cannot reach: the reference readers' own INNER JOIN repos reads repos WITHOUT FINAL, so while one or more repos rows sit unmerged (ReplacingMergeTree(last_synced), any repo a sync has recently written to, not confined to one particular repo or a fixed cadence) the join doubles every pull request belonging to one of those repos; both routes' ORDER BY created_at DESC LIMIT means each doubled row spends one extra slot a genuinely distinct, later-ranked pull request would otherwise have occupied, so the candidate page -- reading the same table FINAL, never spending a slot on a duplicate -- reaches further and lists distinct ids the baseline's own page never got to. Copies of one id are judged by pullRequestRowCopyRule, the same rule the CHAOS-5897 entry above applies per id. Confirmed against two real production captures (team_scoped), both outside any single fixed sync cadence: a PARTIAL capture, baseline 50 items at the route's own limit, 28 distinct ids, 22 of them duplicated exactly 2x each, byte-identical, candidate 36 items with 8 candidate-only ids in its own tail (the true, deduplicated population, 36, itself under the route's own limit, 50); and an ALL-DOUBLED capture, baseline 50 items, 25 distinct ids ACROSS TWO repos, every one of the 25 duplicated exactly 2x each, byte-identical (the window's own population entirely covered by repos with an unmerged repos row at capture time, not merely some of it), candidate 36 items with dedup(baseline)'s own 25 ids as its own literal prefix and 11 candidate-only ids in the tail. No property of a candidate-only tail row is a content check -- uniqueness and ordering are the only structural properties available for a row the baseline page never reached, never a check on whether that row's own id or timestamp is correct. Go is correct.",
 			Paths:              []string{"data.items"},
 			Intermittent:       true,
 			IntermittentReason: "present only while the baseline page is both truncated at the route's own limit AND holds an unmerged physical version that duplicates a returned pull request's own identity; a comparison taken after the next background merge, or one whose baseline page never reaches the limit at all, shows no length divergence for this entry",
@@ -815,9 +913,20 @@ var drilldownPRsParity = Options{
 				IDField:   RESTDedupKeyField,
 				SortField: "created_at",
 				Limit:     drilldownPRsDefaultLimit,
+				CopyRule:  &pullRequestRowCopyRule,
 			},
 		},
-	},
+	}, drilldownPRsDefaultLimit)
+}
+
+// drilldownPRsParity is shared by every admissible (2xx) drilldown/prs
+// request, GET and POST alike: both routes call the same
+// BuildPRsResponse, so both carry the same declared Python-plane
+// defects.
+var drilldownPRsParity = Options{
+	NumericLeavesDeclared: true,
+	IntegerLeaves:         drilldownPRsIntegerLeaves,
+	BaselineDefects:       pullRequestDrilldownDefects(pullRequestDrilldownRoute{}),
 }
 
 // drilldownPRsDefaultLimit is fetchPullRequestsQuery's own page size when
@@ -831,24 +940,33 @@ var drilldownPRsParity = Options{
 // and reaches drilldownPRsParityWithLimit instead.
 const drilldownPRsDefaultLimit = 50
 
-// drilldownPRsParityWithLimit returns drilldownPRsParity with a fresh
-// copy of its own DuplicateCollapsePageCutShape entry whose Limit is set
-// to THIS request's effective limit -- the same convention
-// investmentSunburstParityWithLimit already establishes for the
-// identical class of per-request LIMIT field. Every other entry in
-// BaselineDefects is the SAME slice element (copied by value, unchanged),
-// so this only ever changes what the page-cut entry itself checks.
+// drilldownPRsParityWithLimit returns drilldownPRsParity with its page-cut
+// entry's Limit set to THIS request's effective limit -- see
+// parityWithPageCutLimit.
 func drilldownPRsParityWithLimit(limit int) Options {
-	opts := drilldownPRsParity
-	defects := make([]BaselineDefect, len(drilldownPRsParity.BaselineDefects))
-	copy(defects, drilldownPRsParity.BaselineDefects)
+	return parityWithPageCutLimit(drilldownPRsParity, limit)
+}
+
+// parityWithPageCutLimit returns opts with every page limit set to one
+// request's own effective limit: a DuplicateCollapsePageCutShape's Limit
+// and every declaration's CandidateAccounting.PageLimit -- the same
+// convention investmentSunburstParityWithLimit already establishes for
+// the identical class of per-request LIMIT field. Every other field of
+// every entry is copied unchanged.
+func parityWithPageCutLimit(opts Options, limit int) Options {
+	defects := make([]BaselineDefect, len(opts.BaselineDefects))
+	copy(defects, opts.BaselineDefects)
 	for i, defect := range defects {
-		if defect.DuplicateCollapsePageCutShape == nil {
-			continue
+		if defect.DuplicateCollapsePageCutShape != nil {
+			shape := *defect.DuplicateCollapsePageCutShape
+			shape.Limit = limit
+			defect.DuplicateCollapsePageCutShape = &shape
 		}
-		shape := *defect.DuplicateCollapsePageCutShape
-		shape.Limit = limit
-		defect.DuplicateCollapsePageCutShape = &shape
+		if defect.Accounting != nil {
+			accounting := *defect.Accounting
+			accounting.PageLimit = limit
+			defect.Accounting = &accounting
+		}
 		defects[i] = defect
 	}
 	opts.BaselineDefects = defects
@@ -962,6 +1080,7 @@ var drilldownPRsTeamScopeUncutDefect = BaselineDefect{
 		ListPath:     "data.items",
 		IDField:      RESTDedupKeyField,
 		RequestLimit: drilldownPRsDefaultLimit,
+		CopyRule:     &pullRequestRowCopyRule,
 	},
 }
 
@@ -970,7 +1089,7 @@ var drilldownPRsTeamScopeUncutDefect = BaselineDefect{
 var drilldownPRsTeamScopedParity = Options{
 	NumericLeavesDeclared: true,
 	IntegerLeaves:         drilldownPRsIntegerLeaves,
-	BaselineDefects:       append(append([]BaselineDefect{}, drilldownPRsParity.BaselineDefects...), drilldownPRsTeamScopeSubsetDefect, drilldownPRsTeamScopeUncutDefect),
+	BaselineDefects:       gatePullRequestDefects(append(append([]BaselineDefect{}, drilldownPRsParity.BaselineDefects...), drilldownPRsTeamScopeSubsetDefect, drilldownPRsTeamScopeUncutDefect), drilldownPRsDefaultLimit),
 }
 
 // drilldownPRsTeamScopedParityWithLimit returns drilldownPRsTeamScopedParity
@@ -981,24 +1100,15 @@ var drilldownPRsTeamScopedParity = Options{
 // effective limit -- the same per-request-limit convention
 // drilldownPRsParityWithLimit already establishes for CHAOS-5968 alone.
 func drilldownPRsTeamScopedParityWithLimit(limit int) Options {
-	opts := drilldownPRsTeamScopedParity
-	defects := make([]BaselineDefect, len(drilldownPRsTeamScopedParity.BaselineDefects))
-	copy(defects, drilldownPRsTeamScopedParity.BaselineDefects)
-	for i, defect := range defects {
-		if defect.DuplicateCollapsePageCutShape != nil {
-			shape := *defect.DuplicateCollapsePageCutShape
-			shape.Limit = limit
-			defect.DuplicateCollapsePageCutShape = &shape
-			defects[i] = defect
-		}
+	opts := parityWithPageCutLimit(drilldownPRsTeamScopedParity, limit)
+	for i, defect := range opts.BaselineDefects {
 		if defect.Ticket == "CHAOS-5988" && defect.DuplicateCollapseLengthShape != nil {
 			shape := *defect.DuplicateCollapseLengthShape
 			shape.RequestLimit = limit
 			defect.DuplicateCollapseLengthShape = &shape
-			defects[i] = defect
+			opts.BaselineDefects[i] = defect
 		}
 	}
-	opts.BaselineDefects = defects
 	return opts
 }
 
@@ -1097,8 +1207,9 @@ var drilldownIssuesParity = Options{
 				"data.items.started_at",
 				"data.items.completed_at",
 			},
-			Intermittent:       true,
-			IntermittentReason: "present only while this request's live result actually contains at least one returned issue with a non-null started_at or completed_at -- both columns are themselves Nullable, so an empty items list, or a window whose only issues have not yet started/completed, shows no divergence under these paths and is not a bug in this citation",
+			TimestampRenderingShape: &TimestampRenderingShape{},
+			Intermittent:            true,
+			IntermittentReason:      "present only while this request's live result actually contains at least one returned issue with a non-null started_at or completed_at -- both columns are themselves Nullable, so an empty items list, or a window whose only issues have not yet started/completed, shows no divergence under these paths and is not a bug in this citation",
 		},
 		drilldownIssuesBoundaryTie,
 	},
@@ -1759,86 +1870,34 @@ var personDrilldownPRsIntegerLeaves = map[string]string{
 	"data.items.review_latency_hours": "dateDiff('hour', created_at, first_review_at) -- always a whole number of hours; toFloat64()-wrapped for this port's own *float64 wire typing, a wire-shape choice, not a provenance one.",
 }
 
-// personDrilldownPRsParity is shared by GET
-// /api/v1/people/{person_id}/drilldown/prs's own live (person_id-bound,
-// 200) entry below.
+// personDrilldownPRsParity is GET /api/v1/people/{person_id}/drilldown/
+// prs' own live (person_id-bound, 200) entries' Parity: the same
+// pullRequestDrilldownDefects drilldownPRsParity binds, with the route's
+// own next_cursor -- the created_at of the page's last row on both planes
+// (services/people.py's `rows[-1].get("created_at")`, drilldownprs.go) --
+// as the trailing cursor.
 var personDrilldownPRsParity = Options{
 	NumericLeavesDeclared: true,
 	IntegerLeaves:         personDrilldownPRsIntegerLeaves,
-	BaselineDefects: []BaselineDefect{
-		{
-			Ticket: "CHAOS-5803",
-			Reason: "git_pull_requests' created_at/merged_at/first_review_at columns are ClickHouse DateTime64(3, 'UTC') (000_raw_tables.sql); Python's clickhouse_connect driver returns them NAIVE (no tzinfo), so the Pydantic response serializes them with no offset, while Go's driver attaches UTC location and this port's PullRequestRow (encoding/json's default time.Time marshaling) emits RFC 3339 with an explicit offset -- the same class of divergence drilldown/prs' own corpus entry (drilldownPRsParity) already declares for the sibling scope-based route reading the same three columns. Go is correct.",
-			Paths: []string{
-				"data.items.created_at",
-				"data.items.merged_at",
-				"data.items.first_review_at",
-			},
-			Intermittent:       true,
-			IntermittentReason: "present only while this request's live result actually contains at least one returned PR with a non-null value under one of these three fields; an empty items list shows no divergence under these paths",
-		},
-		{
-			Ticket: "CHAOS-5803",
-			Reason: "git_pull_requests and repos are both ReplacingMergeTree(last_synced) (000_raw_tables.sql, org_id added to both sorting keys by migration 027); sql/people/person_drilldown_prs.sql reads git_pull_requests with no FINAL/argMax dedup and joins repos (also unFINALed) with the org filter only in the JOIN's outer WHERE, evaluated after the merge. This port's fetchPersonPullRequestsQuery reads BOTH tables FINAL, with the org boundary resolved through an org-scoped repos subquery bound to git_pull_requests.repo_id (drilldownprs.go's own doc comment, matching internal/drilldown/prs.go's identical fix for the sibling scope-based route). An unmerged physical version on either table can surface a stale field value or drop/duplicate a row among this identity's own pull requests. Go is correct. This citation's Paths reach the divergence but, by this package's own leaf-only coverage rule, never silently admit a length or structural difference.",
-			// DrilldownPRsResponse's whole field set (drilldownprs.go):
-			// every element field is read off the SAME git_pull_requests
-			// row this mechanism can serve a stale physical version of,
-			// and next_cursor names whichever PR lands in the page's
-			// last slot, which the same row-selection shift determines.
-			Paths: []string{
-				"data.items",
-				"data.next_cursor",
-			},
-			Intermittent:       true,
-			IntermittentReason: "present only while git_pull_requests or repos holds an unmerged physical version for a PR this identity authored, since the last merge; a comparison taken after the next background merge shows no divergence",
-		},
-	},
+	BaselineDefects:       pullRequestDrilldownDefects(pullRequestDrilldownRoute{cursorPath: "data.next_cursor"}),
 }
 
-// personDrilldownIssuesFloats/personDrilldownIssuesFloatExact declare
-// this route's two numeric leaves the same way drilldownIssuesFloats/
-// drilldownIssuesFloatExact do for the sibling scope-based route: a
-// plain per-row Nullable(Float64) column read off work_item_cycle_times,
-// never summed or averaged, so declared float and opted back to exact.
-var personDrilldownIssuesFloats = map[string]string{
-	"data.items.cycle_time_hours": "a plain per-row Nullable(Float64) column read -- no cross-row arithmetic, opted back to exact below",
-	"data.items.lead_time_hours":  "the same plain per-row read as cycle_time_hours, opted back to exact below",
-}
+// personDrilldownPRsCeilingLimit is the route's own limit ceiling on both
+// planes: main.py's `_bounded_limit_param(limit, 200)` and drilldownprs.go's
+// maxDrilldownLimit. A request above it is served a page of this size.
+const personDrilldownPRsCeilingLimit = 200
 
-var personDrilldownIssuesFloatExact = map[string]string{
-	"data.items.cycle_time_hours": "a plain per-row column read; no cross-row arithmetic on either plane",
-	"data.items.lead_time_hours":  "a plain per-row column read; no cross-row arithmetic on either plane",
-}
-
-// personDrilldownIssuesParity was shared by GET
-// /api/v1/people/{person_id}/drilldown/issues's own live (person_id-bound,
-// 200) entry below. Unlike personDrilldownPRsParity there is only one
-// BaselineDefect here: work_item_cycle_times is already read FINAL on both
-// planes for this route (sql/people/person_drilldown_issues.sql:10,
-// drilldownissues.go's own doc comment), so the RMT-dedup shape
-// personDrilldownPRsParity's own second entry declares has no
-// counterpart. No corpus entry below sets this Parity today: that entry
-// is declared baseline-only 503 (StatusDivergenceReason), so
-// no body is ever compared and neither numeric leaf above is ever
-// reached live -- declared here for the day that status divergence
-// clears.
-var personDrilldownIssuesParity = Options{
-	NumericLeavesDeclared: true,
-	FloatTierB:            personDrilldownIssuesFloats,
-	FloatExactLeaves:      personDrilldownIssuesFloatExact,
-	BaselineDefects: []BaselineDefect{
-		{
-			Ticket: "CHAOS-5808",
-			Reason: "work_item_cycle_times' started_at/completed_at columns are ClickHouse Nullable(DateTime('UTC')) (001_metrics_v2.sql); Python's clickhouse_connect driver returns them NAIVE (no tzinfo), so the Pydantic response serializes them with no offset, while Go's driver attaches UTC location and this port's IssueRow (encoding/json's default time.Time marshaling) emits RFC 3339 with an explicit offset -- the same class of divergence drilldown/issues' own corpus entry (drilldownIssuesParity) already declares for the sibling scope-based route reading the same two columns. Go is correct.",
-			Paths: []string{
-				"data.items.started_at",
-				"data.items.completed_at",
-			},
-			Intermittent:       true,
-			IntermittentReason: "present only while this request's live result actually contains at least one returned issue with a non-null started_at or completed_at -- both columns are themselves Nullable, so an empty items list, or a window whose only issues have not yet started/completed, shows no divergence under these paths",
-		},
-	},
-}
+// personDrilldownIssuesParity is the Parity GET /api/v1/people/
+// {person_id}/drilldown/issues' own live entries would compare under.
+// Both of that route's readers (sql/people/person_drilldown_issues.sql,
+// drilldownissues.go) read work_item_cycle_times FINAL and ORDER BY
+// wct.completed_at DESC LIMIT with no secondary sort, exactly as the
+// scope-based drilldown/issues readers do, so it binds the same
+// declarations drilldownIssuesParity binds. No corpus entry sets it
+// today: that route's live entries are declared baseline-only 503
+// (StatusDivergenceReason), so no body is compared until that status
+// divergence clears.
+var personDrilldownIssuesParity = drilldownIssuesParity
 
 // flamePRIDBoundParity is GET /api/v1/flame's own live (pr_id-bound, 200)
 // "pr" entity_type entry below. flame_route.go's own package doc comment
@@ -5300,8 +5359,9 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				// reads work_item_cycle_times FINAL on both planes for
 				// this route (the RMT-dedup fix flamePRIDBoundParity
 				// declares for "pr" has no counterpart here, the same
-				// asymmetry personDrilldownIssuesParity's own doc comment
-				// already states for the sibling person-scoped route).
+				// asymmetry drilldownIssuesParity's own doc comment
+				// states for the drilldown/issues routes, person-scoped
+				// included).
 				//
 				// The baseline plane answers HTTP 503 for this request in
 				// production (StatusDivergenceReason below) -- the same
@@ -5915,8 +5975,9 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				// person.
 				Name:                "drilldown_prs_default",
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
-				BodyMode: RESTBodyModeJSON,
-				Parity:   personDrilldownPRsParity,
+				BodyMode:      RESTBodyModeJSON,
+				Parity:        personDrilldownPRsParity,
+				DedupListPath: drilldownPRsDedup.ListPath, DedupKeyFields: drilldownPRsDedup.KeyFields,
 				IDBindings: []RESTIDBinding{
 					{Producer: "person_id", PathParam: "person_id", Candidates: 10, ExposeAs: "prs_person_id"},
 				},
@@ -5940,8 +6001,9 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				// bounded candidates.
 				Name:                "valid_cursor",
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
-				BodyMode: RESTBodyModeJSON,
-				Parity:   personDrilldownPRsParity,
+				BodyMode:      RESTBodyModeJSON,
+				Parity:        personDrilldownPRsParity,
+				DedupListPath: drilldownPRsDedup.ListPath, DedupKeyFields: drilldownPRsDedup.KeyFields,
 				IDBindings: []RESTIDBinding{
 					{Producer: "prs_person_id", PathParam: "person_id"},
 					{Producer: "prs_person_created_at", QueryParam: "cursor"},
@@ -5959,8 +6021,9 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				Name:                "limit_above_ceiling",
 				Query:               url.Values{"limit": {"500"}},
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
-				BodyMode:   RESTBodyModeJSON,
-				Parity:     personDrilldownPRsParity,
+				BodyMode:      RESTBodyModeJSON,
+				Parity:        parityWithPageCutLimit(personDrilldownPRsParity, personDrilldownPRsCeilingLimit),
+				DedupListPath: drilldownPRsDedup.ListPath, DedupKeyFields: drilldownPRsDedup.KeyFields,
 				IDBindings: []RESTIDBinding{{Producer: "prs_person_id", PathParam: "person_id"}},
 			},
 			{
@@ -5973,8 +6036,9 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				Name:                "limit_zero_falls_back_to_default",
 				Query:               url.Values{"limit": {"0"}},
 				WantCandidateStatus: 200, WantBaselineStatus: 200,
-				BodyMode:   RESTBodyModeJSON,
-				Parity:     personDrilldownPRsParity,
+				BodyMode:      RESTBodyModeJSON,
+				Parity:        personDrilldownPRsParity,
+				DedupListPath: drilldownPRsDedup.ListPath, DedupKeyFields: drilldownPRsDedup.KeyFields,
 				IDBindings: []RESTIDBinding{{Producer: "prs_person_id", PathParam: "person_id"}},
 			},
 		},

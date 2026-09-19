@@ -180,6 +180,15 @@ type DuplicateCollapsePageCutShape struct {
 	// caller composing per-request Options sets a fresh copy of this
 	// field for every corpus entry that can reach a different limit.
 	Limit int
+	// CopyRule, when declared, replaces rule 2's byte-identity and rule
+	// 4's content equality with DuplicateCopyRule (duplicatecopyrule.go):
+	// an id's copies may disagree in the rule's named fields, and the
+	// candidate element at the id's prefix position must be the copy a
+	// FINAL read serves. SortField is never one of those fields in a
+	// declaration, so every copy of one id still shares its sort value
+	// and rule 2b's tie argument holds. Nil keeps rules 2 and 4 as
+	// stated.
+	CopyRule *DuplicateCopyRule
 }
 
 // duplicateCollapsePageCutPlan is one comparison's fully-evaluated
@@ -228,11 +237,11 @@ func buildDuplicateCollapsePageCutPlan(shape *DuplicateCollapsePageCutShape, bas
 	}
 
 	// Rule 2: dedup(baseline) in first-occurrence order; every duplicate
-	// id's own copies byte-identical.
+	// id's own copies byte-identical, or, under a declared CopyRule,
+	// judged against the candidate row in rule 4.
 	baseGroups := map[string][]map[string]any{}
 	seen := map[string]bool{}
 	var dedupOrder []string
-	dedupRepresentative := map[string]map[string]any{}
 	for _, element := range baseList {
 		// edgeObjectAndID's own "not ok" case (a malformed element, or
 		// one carrying no usable id) is NOT re-checked here with its own
@@ -258,13 +267,15 @@ func buildDuplicateCollapsePageCutPlan(shape *DuplicateCollapsePageCutShape, bas
 		if !seen[id] {
 			seen[id] = true
 			dedupOrder = append(dedupOrder, id)
-			dedupRepresentative[id] = object
 		}
 	}
 	hasDuplicate := false
 	for _, group := range baseGroups {
 		if len(group) > 1 {
 			hasDuplicate = true
+		}
+		if shape.CopyRule.declared() {
+			continue
 		}
 		first := group[0]
 		for _, other := range group[1:] {
@@ -328,7 +339,7 @@ func buildDuplicateCollapsePageCutPlan(shape *DuplicateCollapsePageCutShape, bas
 		if candOrder[i] != id {
 			return plan
 		}
-		if !jsonValuesEqual(dedupRepresentative[id], candByID[id]) {
+		if !shape.CopyRule.candidateIsServedCopy(baseGroups[id], candByID[id]) {
 			return plan
 		}
 	}

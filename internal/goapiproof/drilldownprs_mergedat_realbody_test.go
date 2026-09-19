@@ -27,13 +27,21 @@ type drilldownPRsMergedAtCase struct {
 	name      string
 	baseline  string
 	candidate string
+	// limit is the request's own effective limit, as its corpus entry
+	// binds it.
+	limit int
+}
+
+// opts is the case's own Parity, as its corpus entry binds it.
+func (c drilldownPRsMergedAtCase) opts() Options {
+	return drilldownPRsParityWithLimit(c.limit)
 }
 
 var drilldownPRsMergedAtCases = []drilldownPRsMergedAtCase{
-	{"GET default_window", "testdata/drilldownprs_mergedat_baseline_ada5c41c.json", "testdata/drilldownprs_mergedat_candidate_a086b357.json"},
-	{"GET range_days_90", "testdata/drilldownprs_mergedat_baseline_a2fa3f34.json", "testdata/drilldownprs_mergedat_candidate_a086b357.json"},
-	{"POST default_filters", "testdata/drilldownprs_mergedat_baseline_a2fa3f34.json", "testdata/drilldownprs_mergedat_candidate_a086b357.json"},
-	{"POST explicit_scope_and_sort", "testdata/drilldownprs_mergedat_baseline_886028c5.json", "testdata/drilldownprs_mergedat_candidate_89ae9fa1.json"},
+	{"GET default_window", "testdata/drilldownprs_mergedat_baseline_ada5c41c.json", "testdata/drilldownprs_mergedat_candidate_a086b357.json", drilldownPRsDefaultLimit},
+	{"GET range_days_90", "testdata/drilldownprs_mergedat_baseline_a2fa3f34.json", "testdata/drilldownprs_mergedat_candidate_a086b357.json", drilldownPRsDefaultLimit},
+	{"POST default_filters", "testdata/drilldownprs_mergedat_baseline_a2fa3f34.json", "testdata/drilldownprs_mergedat_candidate_a086b357.json", drilldownPRsDefaultLimit},
+	{"POST explicit_scope_and_sort", "testdata/drilldownprs_mergedat_baseline_886028c5.json", "testdata/drilldownprs_mergedat_candidate_89ae9fa1.json", 25},
 }
 
 // drilldownPRsMergedAtIDs are the five (repo_id, number) identities whose
@@ -59,8 +67,10 @@ func drilldownPRsParityWithout(drop func(BaselineDefect) bool) Options {
 	return opts
 }
 
+// isWriteOnceEntry reports the copy-rule entry: the WorkGraphEdgeDedupShape
+// entry that judges disagreeing copies by a declared field set.
 func isWriteOnceEntry(d BaselineDefect) bool {
-	return d.WorkGraphEdgeDedupShape != nil && len(d.WorkGraphEdgeDedupShape.WriteOnceFields) > 0
+	return d.WorkGraphEdgeDedupShape != nil && d.WorkGraphEdgeDedupShape.copyRule() != nil
 }
 
 // drilldownPRsWriteOnceShape reads the write-once entry's shape from the
@@ -79,9 +89,9 @@ func drilldownPRsWriteOnceShape(t *testing.T) *WorkGraphEdgeDedupShape {
 	if found == nil {
 		t.Fatal("drilldownPRsParity declares no write-once entry")
 	}
-	wantFields := []string{"merged_at", "first_review_at", "review_latency_hours"}
-	if !equalStrings(found.WriteOnceFields, wantFields) {
-		t.Fatalf("write-once fields = %q, want %q", found.WriteOnceFields, wantFields)
+	wantFields := []string{"title", "author", "author_name", "merged_at", "first_review_at", "review_latency_hours"}
+	if !equalStrings(found.RewrittenFields, wantFields) || len(found.WriteOnceFields) != 0 {
+		t.Fatalf("rewritten fields = %q, write-once fields = %q, want rewritten %q and no write-once field", found.RewrittenFields, found.WriteOnceFields, wantFields)
 	}
 	return found
 }
@@ -102,7 +112,7 @@ func TestDrilldownPRsParity_CapturedMergedAtCasesHaveNothingOutside(t *testing.T
 		t.Run(c.name, func(t *testing.T) {
 			baseline := drilldownPRsSnapshotFromFile(t, c.baseline)
 			candidate := drilldownPRsSnapshotFromFile(t, c.candidate)
-			result := Compare(baseline, candidate, drilldownPRsParity)
+			result := Compare(baseline, candidate, c.opts())
 			if result.TerminalState != TerminalStateMismatch {
 				t.Fatalf("terminal = %q, want mismatch", result.TerminalState)
 			}
@@ -126,7 +136,7 @@ func TestDrilldownPRsParity_CapturedMergedAtCasesHaveNothingOutside(t *testing.T
 			// each comparison gets its own decoded legs anyway.
 			baseline = drilldownPRsSnapshotFromFile(t, c.baseline)
 			candidate = drilldownPRsSnapshotFromFile(t, c.candidate)
-			without := Compare(baseline, candidate, withoutWriteOnce)
+			without := Compare(baseline, candidate, parityWithPageCutLimit(withoutWriteOnce, c.limit))
 			if without.DifferencesOutsideBaselineDefect == 0 {
 				t.Fatal("without the write-once entry nothing is outside; the captured case no longer exercises it")
 			}
@@ -160,9 +170,14 @@ func TestDrilldownPRsParity_CapturedMergedAtCasesHaveNothingOutside(t *testing.T
 // admitted set is exactly the five merged_at ids -- no agreeing id and no
 // other id.
 func TestDrilldownPRsParity_CapturedMergedAtCasesAdmitExactlyTheFiveIDs(t *testing.T) {
-	shape := drilldownPRsWriteOnceShape(t)
 	for _, c := range drilldownPRsMergedAtCases {
 		t.Run(c.name, func(t *testing.T) {
+			var shape *WorkGraphEdgeDedupShape
+			for _, d := range c.opts().BaselineDefects {
+				if isWriteOnceEntry(d) {
+					shape = d.WorkGraphEdgeDedupShape
+				}
+			}
 			baseline := drilldownPRsSnapshotFromFile(t, c.baseline)
 			candidate := drilldownPRsSnapshotFromFile(t, c.candidate)
 			plan := buildWorkGraphEdgeDedupPlan(shape, baseline.Data, candidate.Data)
@@ -194,7 +209,6 @@ func TestDrilldownPRsParity_CapturedMergedAtCaseRefusesACandidateRegression(t *t
 		name   string
 		mutate func(map[string]any)
 	}{
-		{"candidate merged_at null", func(o map[string]any) { o["merged_at"] = nil }},
 		{"candidate merged_at different timestamp", func(o map[string]any) { o["merged_at"] = "2020-01-01T00:00:00Z" }},
 		{"candidate title differs", func(o map[string]any) { o["title"] = "mutated title" }},
 	}
@@ -221,16 +235,41 @@ func TestDrilldownPRsParity_CapturedMergedAtCaseRefusesACandidateRegression(t *t
 			quoted := fmt.Sprintf("%q", target)
 			named := false
 			for _, f := range result.Findings {
-				if strings.Contains(f.Detail, drilldownPRsWriteOnceRefusal) {
-					if !strings.Contains(f.Detail, quoted) {
-						t.Errorf("write-once refusal %s names another id: %s", f.Path, f.Detail)
+				if strings.Contains(f.Detail, drilldownPRsAccountingRefusal) {
+					if !strings.Contains(f.Detail, drilldownPRsAccountingRefusal+quoted) {
+						t.Errorf("accounting refusal %s names another row: %s", f.Path, f.Detail)
 					}
 					named = true
 				}
 			}
 			if !named {
-				t.Error("no finding carries the write-once refusal for the mutated id")
+				t.Error("no finding carries the accounting refusal for the mutated id")
 			}
 		})
+	}
+}
+
+// TestDrilldownPRsParity_CapturedMergedAtCandidateEqualToTheOlderCopyIsAdmitted
+// pins the declared blind spot: a candidate row equal to the older
+// physical copy (merged_at null) equals one whole baseline copy, and no
+// writer of the table gives merged_at a direction, so it is admitted.
+func TestDrilldownPRsParity_CapturedMergedAtCandidateEqualToTheOlderCopyIsAdmitted(t *testing.T) {
+	c := drilldownPRsMergedAtCases[0]
+	baseline := drilldownPRsSnapshotFromFile(t, c.baseline)
+	candidate := drilldownPRsSnapshotFromFile(t, c.candidate)
+	found := false
+	for _, element := range candidate.Data.(map[string]any)["items"].([]any) {
+		object := element.(map[string]any)
+		if object[RESTDedupKeyField] == drilldownPRsMergedAtIDs[0] {
+			object["merged_at"] = nil
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("candidate carries no row for %q", drilldownPRsMergedAtIDs[0])
+	}
+	result := Compare(baseline, candidate, drilldownPRsParity)
+	if result.DifferencesOutsideBaselineDefect != 0 {
+		t.Fatalf("outside = %d, want 0 -- findings %+v", result.DifferencesOutsideBaselineDefect, result.Findings)
 	}
 }

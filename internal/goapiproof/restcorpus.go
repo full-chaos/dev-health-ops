@@ -3264,13 +3264,55 @@ var investmentFlowModeParity = Options{
 // data.links.value/data.nodes.value are fetchInvestmentRepoTeamEdges'
 // own sum(subcategory_kv.2 * effort_value) (investmentflow/queries.go),
 // the SAME shape every other investment-flow fetcher shares.
+//
+// data.links has its own declaration here, not investmentFlowRepoDedup
+// Parity's: this route's rows are grouped by (subcategory, repo, team),
+// one level finer than either link the builder draws, so the reference
+// plane repeats a (source, target) pair once per row that reaches it
+// (investmentFlowRepoTeamLinkCopiesDefect), while the candidate writes
+// each pair once (buildRepoTeamSankey accumulates through orderedEdges).
+// (source, target) is the identity of a link on the candidate plane and,
+// after that defect's whole-key collapse, on the reference plane too.
 var investmentFlowRepoTeamParity = Options{
-	BaselineDefects:       investmentFlowRepoDedupParity.BaselineDefects,
-	OrderInsensitiveLists: investmentFlowRepoDedupParity.OrderInsensitiveLists,
+	BaselineDefects: append(append([]BaselineDefect{}, investmentFlowRepoDedupParity.BaselineDefects...),
+		investmentFlowRepoTeamLinkCopiesDefect),
+	OrderInsensitiveLists: []OrderInsensitiveList{
+		investmentFlowRepoDedupParity.OrderInsensitiveLists[0],
+		{
+			Path:      "data.links",
+			KeyFields: []string{"source", "target"},
+			Reason:    "the SAME first-touch insertion order as data.nodes, over the SAME under-ordered row set. (source, target) is unique per link on the candidate plane (orderedEdges, investmentflow/builders.go); the reference plane's repeated pairs are collapsed whole-key by investmentFlowRepoTeamLinkCopiesDefect before pairing.",
+			Ticket:    "CHAOS-5873",
+		},
+	},
 	NumericLeavesDeclared: true,
 	FloatTierB: map[string]string{
 		"data.links.value": investmentFlowDynamicParity.FloatTierB["data.links.value"],
 		"data.nodes.value": investmentFlowDynamicParity.FloatTierB["data.nodes.value"],
+	},
+}
+
+// investmentFlowRepoTeamLinkCopiesDefect: build_investment_repo_team_
+// flow_response (api/services/investment_flow.py) appends one link per
+// fetch_investment_repo_team_edges row, and those rows are grouped by
+// (subcategory, repo, team) -- so a repo->team link repeats once per
+// subcategory that reaches the repo, and a subcategory->repo link once per
+// team the repo maps to, each copy carrying one row's share. The candidate
+// sums every row reaching a pair into one link, the way the reference
+// plane's own link_totals builders do for every other investment flow.
+// The copies are compared whole-key: every baseline copy of a key is
+// consumed once, the copies must agree outside value, and their sum must
+// meet the candidate's value under data.links.value's own FloatTierB tier.
+var investmentFlowRepoTeamLinkCopiesDefect = BaselineDefect{
+	Ticket:             "CHAOS-6024",
+	Reason:             "build_investment_repo_team_flow_response appends one SankeyLink per (subcategory, repo, team) row, so the reference body repeats a (source, target) link once per row that reaches it, each copy carrying that row's share; buildRepoTeamSankey writes each (source, target) once, valued at the sum of the same rows (orderedEdges, the accumulator the link_totals builders share). A link is the aggregated contribution between two nodes (docs/use/investment/investment-flows.md); node values are equal on both planes. Go is correct.",
+	Paths:              []string{"data.links"},
+	Intermittent:       true,
+	IntermittentReason: "present only while some (source, target) pair is reached by two or more (subcategory, repo, team) rows in the requested window and scope; a body whose every repository maps to one team and is reached from one subcategory repeats no link",
+	BaselineCopySumShape: &BaselineCopySumShape{
+		ListPath:  "data.links",
+		KeyFields: []string{"source", "target"},
+		SumField:  "value",
 	},
 }
 

@@ -77,9 +77,10 @@ func TestPreparedManifestRouteListIsExactlyTheEnrolledCanonicalRoutes(t *testing
 		{"github", "repo-metadata", true}, {"gitlab", "repo-metadata", true},
 		{"github", "security", true}, {"gitlab", "security", true},
 		{"github", "blame", false}, {"github", "cicd", false},
+		{"gitlab", "work-items", true}, {"jira", "work-items", true}, {"linear", "work-items", true},
 		{"gitlab", "feature-flags", true}, {"launchdarkly", "feature-flags", true},
 		{"gitlab", "incidents", true}, {"jira", "incidents", true},
-		{"gitlab", "work-items", false}, {"linear", "work-items", false},
+		{"gitlab", "blame", false}, {"pagerduty", "incidents", false},
 	} {
 		destinations, ok := preparedManifestRouteDestinations(pair.provider, pair.dataset)
 		descriptor, _ := Descriptor(pair.provider, pair.dataset)
@@ -390,11 +391,11 @@ func TestEveryPlannableRouteStatesItsRecoveryMode(t *testing.T) {
 		"gitlab/prs":                     "prepared snapshot",
 		"gitlab/repo-metadata":           "prepared snapshot",
 		"gitlab/security":                "prepared snapshot",
-		"gitlab/work-items":              "re-collect",
+		"gitlab/work-items":              "prepared snapshot",
 		"jira/incidents":                 "prepared snapshot",
-		"jira/work-items":                "re-collect",
+		"jira/work-items":                "prepared snapshot",
 		"launchdarkly/feature-flags":     "prepared snapshot",
-		"linear/work-items":              "re-collect",
+		"linear/work-items":              "prepared snapshot",
 		"pagerduty/business-services":    "re-collect",
 		"pagerduty/escalation-policies":  "re-collect",
 		"pagerduty/incident-alerts":      "re-collect",
@@ -489,6 +490,7 @@ func TestEnrolledRoutesReplayTheirSnapshotWithoutRecollecting(t *testing.T) {
 	routes := [][2]string{
 		{"gitlab", "feature-flags"}, {"launchdarkly", "feature-flags"},
 		{"gitlab", "incidents"}, {"jira", "incidents"},
+		{"gitlab", "work-items"}, {"jira", "work-items"}, {"linear", "work-items"},
 	}
 	for _, provider := range []string{"github", "gitlab"} {
 		for _, dataset := range []string{"commit-stats", "commits", "files", "repo-metadata", "security"} {

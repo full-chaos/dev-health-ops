@@ -50,6 +50,17 @@ var preparedRouteInsertStatements = map[string]string{
 	"operational_services":                    operationalServicesInsert,
 	"operational_service_repository_mappings": operationalServiceRepositoryMappingsInsert,
 	"operational_incidents":                   operationalIncidentsInsert,
+	"worklogs":                                jiraWorklogsInsert,
+}
+
+// preparedRouteProviderInsertStatements names the INSERT of a provider whose
+// sink for a destination writes with its own statement instead of the shared
+// one above.
+var preparedRouteProviderInsertStatements = map[string]map[string]string{
+	"linear": {
+		"work_items":            linearWorkItemsInsert,
+		"work_item_transitions": linearWorkItemTransitionsInsert,
+	},
 }
 
 // preparedRouteSinkReadKeys are row keys a sink reads but does not INSERT:
@@ -67,6 +78,13 @@ var preparedRouteSinkReadKeys = map[string]map[string]sinkReadSignal{
 		"priority":         {kind: sinkReadInt},
 		"ownership_reason": {kind: sinkReadEnum, values: teamAttributionOwnershipReasons},
 	},
+	"work_item_transitions": {"provider": {kind: sinkReadEnum, values: workItemTransitionProviders}},
+}
+
+// workItemTransitionProviders is every provider a work-item transition row
+// names; the GitLab and Linear transition sinks refuse a row of another.
+var workItemTransitionProviders = map[string]bool{
+	"github": true, "gitlab": true, "jira": true, "linear": true,
 }
 
 // teamAttributionOwnershipReasons is every value a team-attribution row's
@@ -132,9 +150,20 @@ func insertStatementColumns(statement string) []string {
 	return columns
 }
 
-// preparedRouteColumns returns the columns a destination's sink INSERTs.
-func preparedRouteColumns(destination string) (map[string]bool, bool) {
+// preparedRouteStatement returns the INSERT a provider's sink for a
+// destination writes with.
+func preparedRouteStatement(provider, destination string) (string, bool) {
+	if statement, ok := preparedRouteProviderInsertStatements[provider][destination]; ok {
+		return statement, true
+	}
 	statement, ok := preparedRouteInsertStatements[destination]
+	return statement, ok
+}
+
+// preparedRouteColumns returns the columns a provider's sink for a
+// destination INSERTs.
+func preparedRouteColumns(provider, destination string) (map[string]bool, bool) {
+	statement, ok := preparedRouteStatement(provider, destination)
 	if !ok || len(insertStatementColumns(statement)) == 0 {
 		return nil, false
 	}
@@ -187,10 +216,10 @@ func projectedRow(destination string, columns map[string]bool, row json.RawMessa
 // projectPreparedRouteEffects rebuilds each effect from its rows' projection
 // onto the keys its destination's sink writes or reads. A destination with no
 // known INSERT refuses: a prepared route never commits a row it cannot project.
-func projectPreparedRouteEffects(effects []EffectBatch) ([]EffectBatch, error) {
+func projectPreparedRouteEffects(provider string, effects []EffectBatch) ([]EffectBatch, error) {
 	projected := make([]EffectBatch, 0, len(effects))
 	for _, effect := range effects {
-		columns, ok := preparedRouteColumns(effect.Destination)
+		columns, ok := preparedRouteColumns(provider, effect.Destination)
 		if !ok {
 			return nil, ErrEffectRecoveryUnsafe
 		}
@@ -221,9 +250,9 @@ func projectPreparedRouteEffects(effects []EffectBatch) ([]EffectBatch, error) {
 // admitted sink-read signals only. A destination with no known INSERT never
 // reaches a snapshot from a commit (projectPreparedRouteEffects refuses it);
 // the manifest check owns it.
-func preparedRouteRowsAreProjected(effects []EffectBatch) bool {
+func preparedRouteRowsAreProjected(provider string, effects []EffectBatch) bool {
 	for _, effect := range effects {
-		columns, ok := preparedRouteColumns(effect.Destination)
+		columns, ok := preparedRouteColumns(provider, effect.Destination)
 		if !ok {
 			continue
 		}
@@ -251,7 +280,7 @@ func preparedRouteEffectsForCommit(
 	effects []EffectBatch,
 	recovered *EffectLedgerState,
 ) ([]EffectBatch, error) {
-	projected, err := projectPreparedRouteEffects(effects)
+	projected, err := projectPreparedRouteEffects(claim.Provider, effects)
 	if err != nil {
 		return nil, err
 	}

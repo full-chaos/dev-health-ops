@@ -329,6 +329,36 @@ var operationSpecs = map[string]OperationSpec{
 			experimentsVariant("DEVELOPER_UNKNOWN", "DEVELOPER", []string{"dev-abc-123"}),
 		},
 	},
+	// The two product telemetry dashboards take a half-open day range only; the
+	// org dashboard reads the caller's own org (its hash), the platform
+	// dashboard every org and needs a superuser credential, without which both
+	// planes deny and the prover refuses the errored leg. The base request is
+	// the measurement window; the variant is the empty range (start equals
+	// end), which both planes answer with empty lists and an all-null summary.
+	"productTelemetryDashboard": {
+		ResponseRoot: "productTelemetryDashboard",
+		Variables: func(orgID string, w Window) map[string]any {
+			return map[string]any{"orgId": orgID, "input": map[string]any{"startDate": w.SinceDate, "endDate": w.UntilDate}}
+		},
+		Variants: []Variant{{
+			Name: "EMPTY_RANGE",
+			Variables: func(orgID string, w Window) map[string]any {
+				return map[string]any{"orgId": orgID, "input": map[string]any{"startDate": w.SinceDate, "endDate": w.SinceDate}}
+			},
+		}},
+	},
+	"productTelemetryPlatformDashboard": {
+		ResponseRoot: "productTelemetryPlatformDashboard",
+		Variables: func(_ string, w Window) map[string]any {
+			return map[string]any{"input": map[string]any{"startDate": w.SinceDate, "endDate": w.UntilDate}}
+		},
+		Variants: []Variant{{
+			Name: "EMPTY_RANGE",
+			Variables: func(_ string, w Window) map[string]any {
+				return map[string]any{"input": map[string]any{"startDate": w.SinceDate, "endDate": w.SinceDate}}
+			},
+		}},
+	},
 	"capacityForecast": {
 		ResponseRoot: "capacityForecast",
 		RootNullable: true,

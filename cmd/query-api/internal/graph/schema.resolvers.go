@@ -7,6 +7,7 @@ package graph
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/99designs/gqlgen/graphql"
@@ -24,6 +25,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph/model"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/hotspots"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/operatingreview"
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/producttelemetry"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/reviewedges"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/security"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/throughputforecast"
@@ -235,12 +237,66 @@ func (r *queryResolver) Analytics(ctx context.Context, orgID string, batch model
 
 // ProductTelemetryDashboard is the resolver for the productTelemetryDashboard field.
 func (r *queryResolver) ProductTelemetryDashboard(ctx context.Context, orgID string, input model.ProductTelemetryDashboardInput) (*model.ProductTelemetryDashboardType, error) {
-	panic(fmt.Errorf("not implemented: ProductTelemetryDashboard - productTelemetryDashboard"))
+	spanCtx, finish := startProductTelemetrySpan(ctx, "productTelemetryDashboard")
+	if err := requireOwnOrg(ctx, orgID); err != nil {
+		finish("denied", attribute.String("denial_reason", "org_mismatch_or_absent"))
+		return nil, err
+	}
+	rg := producttelemetry.Range{Start: time.Time(input.StartDate), End: time.Time(input.EndDate)}
+	if err := producttelemetry.CheckRange(rg.Start, rg.End); err != nil {
+		finish("invalid_range")
+		return nil, err
+	}
+	reader := &producttelemetry.Reader{ClickHouse: r.ClickHouse}
+	result, err := reader.Org(spanCtx, orgID, rg)
+	if err != nil {
+		slog.ErrorContext(ctx, "query-api: product telemetry dashboard read failed", "operation", "productTelemetryDashboard", "error", err)
+		finish("error")
+		return nil, fmt.Errorf("productTelemetryDashboard: %w", err)
+	}
+	finish("ok")
+	return result, nil
 }
 
 // ProductTelemetryPlatformDashboard is the resolver for the productTelemetryPlatformDashboard field.
 func (r *queryResolver) ProductTelemetryPlatformDashboard(ctx context.Context, input model.ProductTelemetryDashboardInput) (*model.ProductTelemetryPlatformDashboardType, error) {
-	panic(fmt.Errorf("not implemented: ProductTelemetryPlatformDashboard - productTelemetryPlatformDashboard"))
+	spanCtx, finish := startProductTelemetrySpan(ctx, "productTelemetryPlatformDashboard")
+	claims, present := authctx.FromContext(ctx)
+	if err := producttelemetry.RequirePlatformAdmin(producttelemetry.Principal{Present: present, IsSuperuser: claims.IsSuperuser, ImpersonationActive: claims.ImpersonationActive}); err != nil {
+		reason := "not_platform_admin"
+		if !present {
+			reason = "no_principal"
+		}
+		finish("denied", attribute.String("denial_reason", reason))
+		return nil, &gqlerror.Error{
+			Message:    err.Error(),
+			Path:       graphql.GetPath(ctx),
+			Extensions: map[string]interface{}{"code": "AUTHORIZATION_ERROR"},
+		}
+	}
+	rg := producttelemetry.Range{Start: time.Time(input.StartDate), End: time.Time(input.EndDate)}
+	if err := producttelemetry.CheckRange(rg.Start, rg.End); err != nil {
+		finish("invalid_range")
+		return nil, err
+	}
+	reader := &producttelemetry.Reader{ClickHouse: r.ClickHouse}
+	platform, err := reader.PlatformSections(spanCtx, rg)
+	if err != nil {
+		slog.ErrorContext(ctx, "query-api: product telemetry platform dashboard read failed", "operation", "productTelemetryPlatformDashboard", "error", err)
+		finish("error")
+		return nil, fmt.Errorf("productTelemetryPlatformDashboard: %w", err)
+	}
+	var names []producttelemetry.OrgName
+	if len(platform.Top) > 0 {
+		names, err = producttelemetry.LoadOrgNames(spanCtx, r.Postgres)
+		if err != nil {
+			slog.ErrorContext(ctx, "query-api: product telemetry organization names read failed", "operation", "productTelemetryPlatformDashboard", "error", err)
+			finish("error")
+			return nil, fmt.Errorf("productTelemetryPlatformDashboard: %w", err)
+		}
+	}
+	finish("ok")
+	return platform.Assemble(names), nil
 }
 
 // Home is the resolver for the home field.

@@ -25,6 +25,9 @@ type Claims struct {
 	// closed.
 	Role        string
 	IsSuperuser bool
+	// ImpersonationActive is copied from the verified envelope: true while the
+	// effective identity is an impersonated user.
+	ImpersonationActive bool
 }
 
 // WithClaims returns a context carrying claims for downstream resolvers.

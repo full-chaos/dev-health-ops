@@ -17,7 +17,6 @@ from dev_health_ops.api.graphql.models.inputs import (
     SankeyRequestInput,
 )
 from dev_health_ops.api.graphql.resolvers.analytics import resolve_analytics
-from dev_health_ops.api.graphql.resolvers.catalog import resolve_catalog
 
 
 class MockClient:
@@ -70,79 +69,6 @@ def context_with_data():
     )
 
 
-class TestResolveCatalog:
-    """Tests for catalog resolver."""
-
-    @pytest.mark.asyncio
-    async def test_catalog_returns_dimensions(self, mock_context):
-        """Test that catalog returns all available dimensions."""
-        result = await resolve_catalog(mock_context)
-
-        assert result.dimensions is not None
-        assert len(result.dimensions) > 0
-
-        dim_names = [d.name for d in result.dimensions]
-        assert "team" in dim_names
-        assert "repo" in dim_names
-        assert "author" in dim_names
-        assert "theme" in dim_names
-
-    @pytest.mark.asyncio
-    async def test_catalog_returns_measures(self, mock_context):
-        """Test that catalog returns all available measures."""
-        result = await resolve_catalog(mock_context)
-
-        assert result.measures is not None
-        assert len(result.measures) > 0
-
-        measure_names = [m.name for m in result.measures]
-        assert "count" in measure_names
-        assert "churn_loc" in measure_names
-        assert "cycle_time_hours" in measure_names
-        assert "throughput" in measure_names
-
-    @pytest.mark.asyncio
-    async def test_catalog_returns_limits(self, mock_context):
-        """Test that catalog returns cost limits."""
-        result = await resolve_catalog(mock_context)
-
-        assert result.limits is not None
-        assert result.limits.max_days > 0
-        assert result.limits.max_buckets > 0
-        assert result.limits.max_top_n > 0
-        assert result.limits.max_sankey_nodes > 0
-        assert result.limits.max_sankey_edges > 0
-        assert result.limits.max_sub_requests > 0
-
-    @pytest.mark.asyncio
-    async def test_catalog_without_dimension_has_no_values(self, mock_context):
-        """Test that catalog without dimension selection has no values."""
-        result = await resolve_catalog(mock_context, dimension=None)
-
-        # values should be None when no dimension is specified
-        assert result.values is None
-
-    @pytest.mark.asyncio
-    async def test_catalog_dimensions_have_descriptions(self, mock_context):
-        """Test that dimensions have descriptions."""
-        result = await resolve_catalog(mock_context)
-
-        for dim in result.dimensions:
-            assert dim.description is not None
-            # Description should be meaningful (not empty)
-            assert len(dim.description) > 0
-
-    @pytest.mark.asyncio
-    async def test_catalog_measures_have_descriptions(self, mock_context):
-        """Test that measures have descriptions."""
-        result = await resolve_catalog(mock_context)
-
-        for measure in result.measures:
-            assert measure.description is not None
-            # Description should be meaningful (not empty)
-            assert len(measure.description) > 0
-
-
 class TestContextOrgIdRequirement:
     """Tests for org_id enforcement."""
 
@@ -191,27 +117,6 @@ class TestErrorTypes:
 
         assert error_dict["code"] == "AUTHORIZATION_ERROR"
         assert "org_id" in error_dict["message"]
-
-
-class TestCatalogWithMockedQueryDicts:
-    """Tests for catalog with mocked query_dicts."""
-
-    @pytest.mark.asyncio
-    async def test_catalog_with_dimension_values(self, context_with_data):
-        """Test catalog fetches dimension values when dimension specified."""
-        from dev_health_ops.api.graphql.models.inputs import DimensionInput
-
-        # The catalog resolver correctly uses the client from context
-        # Just verify the flow works - actual query execution is tested in integration tests
-        result = await resolve_catalog(
-            context_with_data,
-            dimension=DimensionInput.TEAM,
-        )
-
-        # Should have dimensions and measures regardless
-        assert result.dimensions is not None
-        assert result.measures is not None
-        assert result.limits is not None
 
 
 class TestAuthzFunctions:

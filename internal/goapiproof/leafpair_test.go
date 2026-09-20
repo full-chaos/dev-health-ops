@@ -173,16 +173,20 @@ func TestAnalyticsBatchDeclarations_LabelNullSubtree(t *testing.T) {
 		name                string
 		baseline, candidate string
 		wantOutside         int
+		wantShape           string // shape of the one outside finding
 	}{
-		{"None -> null, every candidate label null", `"None"`, `null`, 0},
-		{"other text -> null, every candidate label null", `"repo"`, `null`, 1},
-		{"None -> empty text", `"None"`, `""`, 1},
+		{"None -> null, every candidate label null", `"None"`, `null`, 0, ""},
+		{"other text -> null, every candidate label null", `"repo"`, `null`, 1, ShapeEmptyResult},
+		{"None -> empty text", `"None"`, `""`, 1, ShapeValue},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			result := Compare(snapshotFromJSON(t, body(c.baseline)), snapshotFromJSON(t, body(c.candidate)), opts)
 			if result.DifferencesOutsideBaselineDefect != c.wantOutside {
 				t.Fatalf("outside = %d, want %d -- findings %+v", result.DifferencesOutsideBaselineDefect, c.wantOutside, result.Findings)
+			}
+			if c.wantOutside == 1 && (len(result.Findings) != 1 || result.Findings[0].Shape != c.wantShape) {
+				t.Fatalf("outside finding shape: want %q, findings %+v", c.wantShape, result.Findings)
 			}
 		})
 	}

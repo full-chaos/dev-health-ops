@@ -17,15 +17,15 @@ type LeafPairShape struct {
 	// nothing.
 	Pairs []LeafPair
 
-	// CandidateMayBeAllNull exempts this defect's paths from the
-	// empty-result rule (ShapeEmptyResult): a candidate whose subtree under a
-	// cited path has no non-null leaf, against a baseline that has one, is
-	// normally relabelled structural and never covered. Set it only where a
-	// declared pair itself names a null candidate and every leaf under the
-	// path can legitimately be null together (a label Go leaves null for every
-	// item, against the reference's "None" on the one item with a NULL
-	// dimension value). Coverage is still only the exact pairs: any other
-	// baseline leaf against null stays outside.
+	// CandidateMayBeAllNull lets a declared pair that names a null candidate
+	// keep its leaf shape where the empty-result rule (ShapeEmptyResult) would
+	// relabel it: a candidate whose subtree under a cited path has no non-null
+	// leaf, against a baseline that has one, is normally relabelled structural
+	// and never covered. Set it only where every leaf under the path can
+	// legitimately be null together (a label Go leaves null for every item,
+	// against the reference's "None" on the one item with a NULL dimension
+	// value). Only a finding that is exactly a declared pair is exempted; every
+	// other finding under the path is relabelled empty_result as before.
 	CandidateMayBeAllNull bool
 }
 

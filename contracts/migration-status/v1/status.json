@@ -567,7 +567,7 @@
       "parity": {
         "status": "diverged",
         "ticket": "CHAOS-5459",
-        "evidence": ".remember/lanes/team-lead/matrix-tracker-audit-2026-09-09.md section 4 -- repo attribution coverage fell 41% to 34% AFTER this family was recorded NATIVE; the fixes (internal/jobs/investment/hierarchycascade.go, materialize.go) are unmerged in PR #2382 with CHAOS-5460 stacked behind it"
+        "evidence": ".remember/lanes/team-lead/matrix-tracker-audit-2026-09-09.md section 4 -- repo attribution coverage fell 41% to 34% AFTER this family was recorded NATIVE; the fixes are merged at main (eadfd3955 #2382 transitive repository inheritance + cascade telemetry, 720f64bff #2394 fallback effort across owned repos; internal/jobs/investment/hierarchycascade.go, teamownership.go, repoattribution.go) but the production proof is still missing: dev_health_investment_repo_attribution_total has not been read against the 41 percent baseline, so this row stays diverged until it is"
       },
       "deployed": {
         "revision": "39e25d3665128976ebc79bd6b8f76e5efbe9806c",

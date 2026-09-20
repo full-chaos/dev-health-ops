@@ -13,32 +13,30 @@ import (
 
 // CompoundingRiskExecutor is the NATIVE implementation of the compounding_risk
 // metrics.daily family (CHAOS-4287), REPO scope only. Fidelity notes -- the
-// repo/team split, the append-only write mode, and why team rows are still
-// Python -- live on internal/jobs/metrics/daily/compoundingrisk's package doc
-// comment; this type is a thin ClickHouse-connection adapter over that
+// repo/team split, the append-only write mode -- live on
+// internal/jobs/metrics/daily/compoundingrisk's package doc comment (team rows
+// are the separate compounding_risk_team finalize family, also native); this type is a thin ClickHouse-connection adapter over that
 // package's pure Compute kernel and its loader/writer.
 //
 // # It is registered POST_BRIDGE, and that is load-bearing
 //
+// "post_bridge" is an ORDERING phase, not a bridge: no Python bridge call
+// exists (CHAOS-3092 PR-A deleted it; families.json declares the phase and the
+// partition handler runs it after every pre_bridge family of the partition).
+//
 // This family's only input is repo_metrics_daily, which the repo_user_commit
-// family writes in the SAME partition. repo_user_commit is already native and
-// runs pre_bridge, but computeNativeFamilies walks nativeFamilyNames in SORTED
-// order, and "compounding_risk" sorts BEFORE "repo_user_commit" -- so a
-// pre_bridge registration here would read the table before this partition's
-// rows were written and compute from stale or absent data, silently. Worse,
-// when repo_user_commit's own executor refuses, Python writes repo_metrics_daily
-// during the bridge call, which is later still.
+// family writes in the SAME partition. computeNativeFamilies walks
+// nativeFamilyNames in SORTED order, and "compounding_risk" sorts BEFORE
+// "repo_user_commit" -- so a pre_bridge registration here would read the
+// table before this partition's rows were written and compute from stale or
+// absent data, silently. The post_bridge phase runs after every pre_bridge
+// family, so the input is fresh.
 //
-// post_bridge is the phase that is after BOTH: every pre_bridge native family
-// has run, and the compatibility bridge has returned. This is exactly
-// work_item_state's situation and precedent (CHAOS-4278, caught there by a
-// codex round-1 P1 on a pre_bridge placement reading stale data).
-//
-// Unlike a pre_bridge family this is NOT fail-open end to end: Python is told
-// to skip compounding_risk unconditionally (skipFamiliesForBridge appends every
-// post_bridge name), so if this executor fails, nothing writes the family for
-// that partition. That tradeoff is inherent to the phase -- see
-// computePostBridgeNativeFamilies' doc comment -- not an oversight here.
+// Failure disposition: this executor is the only writer of the family, so if
+// it fails nothing writes the family for that partition. The partition is then
+// held failed (ErrPostBridgeFamilyIncomplete, see
+// computePostBridgeNativeFamilies' doc comment) and is re-dispatchable, not
+// completed.
 type CompoundingRiskExecutor struct {
 	loader *compoundingrisk.ClickHouseLoader
 	writer *compoundingrisk.Writer
@@ -49,9 +47,9 @@ var errCompoundingRiskUnavailable = fmt.Errorf("compounding_risk native executor
 
 // NewCompoundingRiskExecutor fails closed on a nil connection, matching
 // NewCICDExecutor's construction-time policy: a refused executor never enters
-// PartitionHandler's post-bridge family map, and compounding_risk stays on the
-// Python compatibility bridge for every partition until the worker restarts
-// with a healthy connection.
+// PartitionHandler's post-bridge family map, so a partition that reaches the
+// family with no executor is held failed (there is no other writer) until the
+// worker restarts with a healthy connection.
 func NewCompoundingRiskExecutor(conn driver.Conn) (*CompoundingRiskExecutor, error) {
 	if conn == nil {
 		return nil, errCompoundingRiskUnavailable

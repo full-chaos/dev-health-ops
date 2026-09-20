@@ -3,6 +3,7 @@ package aianalytics
 import (
 	"context"
 	"fmt"
+	"math/big"
 	"time"
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
@@ -65,13 +66,16 @@ func optionalText(v *string) *string {
 	return v
 }
 
-// coverageRatio is numerator/denominator; a non-positive denominator means
-// nothing was expected, which counts as fully covered.
+// coverageRatio is numerator/denominator, correctly rounded for any pair of
+// counts (integer true division does not round its operands first); a zero
+// denominator means nothing was expected, which counts as fully covered.
 func coverageRatio(numerator, denominator uint64) float64 {
 	if denominator == 0 {
 		return 1.0
 	}
-	return float64(numerator) / float64(denominator)
+	quotient := new(big.Rat).SetFrac(new(big.Int).SetUint64(numerator), new(big.Int).SetUint64(denominator))
+	out, _ := quotient.Float64()
+	return out
 }
 
 func loadCoverage(ctx context.Context, client QueryClient, orgID string, dr model.AIDateRangeInput, sc scope) ([]model.AIGovernanceCoverageRow, error) {

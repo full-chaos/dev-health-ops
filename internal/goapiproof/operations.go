@@ -261,9 +261,9 @@ var operationSpecs = map[string]OperationSpec{
 		Variables:    aiGovernanceVariables(nil, 50),
 		Parity:       aiGovernanceParity(),
 		Variants: append(aiGovernanceVariants(),
-			aiGovernanceInstanceVariant("REPO_VALID", "a repository id that has governance coverage rows", "repoId", "data.aiGovernanceSummary.coverage", "repoId"),
-			aiGovernanceInstanceVariant("REPO_NAME_VALID", "the full name of a repository that has governance coverage rows", "repoId", "data.aiGovernanceSummary.coverage", ""),
-			aiGovernanceInstanceVariant("TEAM_VALID", "a team id stored on governance coverage rows", "teamId", "data.aiGovernanceSummary.coverage", "teamId"),
+			aiGovernanceInstanceVariant("REPO_VALID", "a repository id that has policy events in the window", "repoId", "data.aiGovernanceSummary.recentViolations", "repoId"),
+			aiGovernanceInstanceVariant("REPO_NAME_VALID", "the full name of a repository that has policy events in the window", "repoId", "data.aiGovernanceSummary.recentViolations", ""),
+			aiGovernanceInstanceVariant("TEAM_VALID", "a team id stored on policy events in the window", "teamId", "data.aiGovernanceSummary.recentViolations", "teamId"),
 		),
 	},
 	"aiWorkflowDrilldown": {

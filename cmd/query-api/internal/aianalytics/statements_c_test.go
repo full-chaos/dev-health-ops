@@ -112,3 +112,19 @@ func TestGovernanceStatements_ScopeAndOrder(t *testing.T) {
 		t.Errorf("read order changed")
 	}
 }
+
+// Coverage is the exact quotient of the counts, also above 2^53.
+func TestCoverageRatio_IsCorrectlyRounded(t *testing.T) {
+	for _, c := range []struct {
+		n, d uint64
+		want float64
+	}{
+		{1, 3, 1.0 / 3.0}, {0, 5, 0}, {5, 0, 1.0}, {0, 0, 1.0}, {2, 2, 1.0}, {3, 4, 0.75},
+		{9007199254740992, 9007199254740993, 0.9999999999999999},
+		{5, 9007199254740993, 5.551115123125782e-16},
+	} {
+		if got := coverageRatio(c.n, c.d); got != c.want {
+			t.Errorf("%d/%d = %v, want %v", c.n, c.d, got, c.want)
+		}
+	}
+}

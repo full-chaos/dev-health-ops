@@ -686,6 +686,10 @@ type restReviewEvidence struct {
 	// Empty when no re-read admitted the case.
 	AdmittedBaselineRef  string `json:"admitted_baseline_ref,omitempty"`
 	AdmittedCandidateRef string `json:"admitted_candidate_ref,omitempty"`
+	// BaselineTimedOutAfter is the measured wait, e.g. "180.0s", after which
+	// the baseline leg was given up on for a request admitted under its
+	// BaselineTimeoutDeclared. Empty for every other receipt.
+	BaselineTimedOutAfter string `json:"baseline_timed_out_after,omitempty"`
 }
 
 // encodeRESTReviewEvidence renders restReviewEvidence for one receipt.
@@ -718,6 +722,11 @@ type outcome struct {
 	BaselineDefectsMatched           []string `json:"baseline_defect,omitempty"`
 
 	ReceiptID string `json:"receipt_id,omitempty"`
+
+	// BaselineTimedOutAfter is set only on a request admitted under its
+	// BaselineTimeoutDeclared (baselinetimeout.go): the measured wait,
+	// formatted "180.0s", the baseline leg ran before it was given up on.
+	BaselineTimedOutAfter string `json:"baseline_timed_out_after,omitempty"`
 
 	// Attempts names every LOSING candidate a bounded-candidate binding
 	// (goapiproof.RESTIDBinding.Candidates > 0) tried on THIS request
@@ -894,8 +903,12 @@ func (o outcome) line() string {
 	if len(o.DeclarationFiring) > 0 {
 		firingSuffix = " " + formatDeclarationFiring(o.DeclarationFiring)
 	}
-	return fmt.Sprintf("%s/%s: %s outside=%d baseline_defect=%v receipt=%s%s%s%s%s",
-		o.Operation, o.Request, o.TerminalState, o.DifferencesOutsideBaselineDefect, o.BaselineDefectsMatched, o.ReceiptID, boundSuffix, firingSuffix, attemptsSuffix(o.Attempts), writeSkewSuffix(o.WriteSkew)+gapRereadSuffix(o.GapReread))
+	timeoutSuffix := ""
+	if o.BaselineTimedOutAfter != "" {
+		timeoutSuffix = " baseline timed out after " + o.BaselineTimedOutAfter
+	}
+	return fmt.Sprintf("%s/%s: %s outside=%d baseline_defect=%v receipt=%s%s%s%s%s%s",
+		o.Operation, o.Request, o.TerminalState, o.DifferencesOutsideBaselineDefect, o.BaselineDefectsMatched, o.ReceiptID, timeoutSuffix, boundSuffix, firingSuffix, attemptsSuffix(o.Attempts), writeSkewSuffix(o.WriteSkew)+gapRereadSuffix(o.GapReread))
 }
 
 // formatDeclarationFiring renders one request's own declared defects'
@@ -1956,9 +1969,13 @@ func proveOneRESTRequest(
 	// The bracketed re-read (bracketedReread) depends on this order: it
 	// re-reads the baseline after the candidate, so a write landing
 	// between the legs shows as a change on the reference plane itself.
+	baselineStarted := time.Now()
 	baselineLeg, err := doREST(ctx, client, f.pythonAPIURL, spec.Method, spec.Path, request.Query, request.Body, baselineCredential, timeout)
 	if err != nil {
 		if out, ok := legTransportOutcome(ctx, operation, request.Name, "baseline", boundIDs, err); ok {
+			if out.Refusal == goapiproof.RESTRefusalBaselineLegTimedOut && request.BaselineTimeoutDeclared != nil {
+				return proveUnderBaselineTimeout(ctx, client, f, operation, spec, request, candidateCredential, namedBuild, auth, observedAt, writer, artifacts, dryRun, boundIDs, time.Since(baselineStarted), out)
+			}
 			return out, nil
 		}
 		return outcome{}, fmt.Errorf("baseline leg: %w", err)

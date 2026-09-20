@@ -150,6 +150,23 @@ var homeConfidenceTierParity = Options{
 	BaselineDefects:       []BaselineDefect{homeConfidenceTierDefect},
 }
 
+// homeTeamBaselineTimeout is the declaration home_team_scoped (GET and POST)
+// carries. The reference plane resolves a team's repositories through
+// user_metrics_daily, one id at a time (resolve_repo_ids_for_teams,
+// api/queries/scopes.py), and in production that read has not answered within
+// 180 s on four consecutive runs; the candidate reads the team's repositories
+// from team_repo_ownership through one shared condition
+// (cmd/query-api/internal/teamscope.RepoCondition). While the reference does
+// not answer, the team branch is admitted on the candidate's answer alone, and
+// only when the candidate held rework allocation rows (which exist only for a
+// team with work in the window) and all eleven metric deltas.
+var homeTeamBaselineTimeout = &BaselineTimeoutDeclaration{
+	Ticket:        "CHAOS-6143",
+	Reason:        "the reference plane's team scope resolves the team's repositories from user_metrics_daily one id at a time (resolve_repo_ids_for_teams, api/queries/scopes.py) and does not answer within 180 s for a team that owns real repositories; the candidate resolves the team from team_repo_ownership (teamscope.RepoCondition). A baseline that answers inside the timeout voids this declaration and the ordinary comparison runs.",
+	MinTimeout:    180 * time.Second,
+	NonEmptyPaths: []string{"data.deltas", "data.rework_theme_allocation"},
+}
+
 var homeGetEndpointSpec = RESTEndpointSpec{
 	Method: "GET",
 	Path:   "/api/v1/home",
@@ -185,6 +202,8 @@ var homeGetEndpointSpec = RESTEndpointSpec{
 			Parity:     homeNumericLeaves,
 			IDBindings: []RESTIDBinding{{Producer: "team_id", QueryParam: "scope_id"}},
 			Timeout:    180 * time.Second,
+
+			BaselineTimeoutDeclared: homeTeamBaselineTimeout,
 		},
 		{
 			// repo scope, scope_id bound to filters/options' own live
@@ -241,6 +260,9 @@ var homePostEndpointSpec = RESTEndpointSpec{
 			BodyMode:   RESTBodyModeJSON,
 			Parity:     homeNumericLeaves,
 			IDBindings: []RESTIDBinding{{Producer: "team_id", BodyPath: "filters.scope.ids"}},
+			Timeout:    180 * time.Second,
+
+			BaselineTimeoutDeclared: homeTeamBaselineTimeout,
 		},
 		{
 			// repo scope, bound to filters/options' own live repo_id, same

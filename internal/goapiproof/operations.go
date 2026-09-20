@@ -232,8 +232,8 @@ var operationSpecs = map[string]OperationSpec{
 	"aiImpactSummary": {
 		ResponseRoot: "aiImpactSummary",
 		Variables:    aiRollupVariables(nil),
-		Parity:       aiImpactSummaryParity(),
-		Variants: append(aiRollupVariants(aiImpactSummaryParity(), aiImpactSummaryParity()),
+		Parity:       nonEmpty(aiImpactSummaryParity(), "data.aiImpactSummary.daily"),
+		Variants: append(aiRollupVariants(nonEmpty(aiImpactSummaryParity(), "data.aiImpactSummary.daily"), nonEmpty(aiImpactSummaryParity(), "data.aiImpactSummary.daily")),
 			aiInstanceVariant("REPO_VALID", "a repository id that has rollup rows", "repoId", aiImpactSummaryParity(), "data.aiImpactSummary.daily", "data.aiImpactSummary.repoBreakdown", "scopeId"),
 			aiInstanceVariant("REPO_NAME_VALID", "the full name of a repository that has rollup rows", "repoId", aiImpactSummaryParity(), "data.aiImpactSummary.daily", "", ""),
 			aiInstanceVariant("TEAM_VALID", "a team id stored on rollup rows", "teamId", aiImpactSummaryParity(), "data.aiImpactSummary.daily", "data.aiImpactSummary.teamBreakdown", "scopeId"),
@@ -251,8 +251,8 @@ var operationSpecs = map[string]OperationSpec{
 	"aiReviewLoad": {
 		ResponseRoot: "aiReviewLoad",
 		Variables:    aiRollupVariables(nil),
-		Parity:       aiReviewLoadParity(),
-		Variants: append(aiRollupVariants(aiReviewLoadParity(), Options{}),
+		Parity:       nonEmpty(aiReviewLoadParity(), "data.aiReviewLoad.byBucket"),
+		Variants: append(aiRollupVariants(nonEmpty(aiReviewLoadParity(), "data.aiReviewLoad.byBucket"), nonEmpty(Options{}, "data.aiReviewLoad.byBucket")),
 			aiInstanceVariant("REPO_VALID", "a repository id that has rollup rows", "repoId", aiReviewLoadParity(), "data.aiReviewLoad.byBucket", "", ""),
 			aiInstanceVariant("REPO_NAME_VALID", "the full name of a repository that has rollup rows", "repoId", aiReviewLoadParity(), "data.aiReviewLoad.byBucket", "", ""),
 			aiInstanceVariant("TEAM_VALID", "a team id that has rollup rows and whose repo patterns select a repository", "teamId", aiReviewLoadParity(), "data.aiReviewLoad.byBucket", "", ""),
@@ -289,8 +289,8 @@ var operationSpecs = map[string]OperationSpec{
 	"aiRiskBreakdown": {
 		ResponseRoot: "aiRiskBreakdown",
 		Variables:    aiRollupVariables(nil),
-		Parity:       aiRiskBreakdownParity(),
-		Variants: append(aiRollupVariants(aiRiskBreakdownParity(), Options{}),
+		Parity:       nonEmpty(aiRiskBreakdownParity(), "data.aiRiskBreakdown.byBucket"),
+		Variants: append(aiRollupVariants(nonEmpty(aiRiskBreakdownParity(), "data.aiRiskBreakdown.byBucket"), nonEmpty(Options{}, "data.aiRiskBreakdown.byBucket")),
 			aiInstanceVariant("REPO_VALID", "a repository id that has rollup rows", "repoId", aiRiskBreakdownParity(), "data.aiRiskBreakdown.byBucket", "", ""),
 			aiInstanceVariant("REPO_NAME_VALID", "the full name of a repository that has rollup rows", "repoId", aiRiskBreakdownParity(), "data.aiRiskBreakdown.byBucket", "", ""),
 			aiInstanceVariant("TEAM_VALID", "a team id stored on rollup rows whose repo patterns select a repository", "teamId", aiRiskBreakdownParity(), "data.aiRiskBreakdown.byBucket", "", ""),
@@ -299,8 +299,8 @@ var operationSpecs = map[string]OperationSpec{
 	"aiAttributedPrs": {
 		ResponseRoot: "aiAttributedPrs",
 		Variables:    aiPagedVariables(nil),
-		Parity:       aiAttributedPrsParity(),
-		Variants: append(aiPagedVariants(aiAttributedPrsParity(), map[string]map[string]any{
+		Parity:       nonEmpty(aiAttributedPrsParity(), "data.aiAttributedPrs.rows"),
+		Variants: append(aiPagedVariants(nonEmpty(aiAttributedPrsParity(), "data.aiAttributedPrs.rows"), map[string]map[string]any{
 			"WORK_TYPE":             {"workType": "pull_request"},
 			"REPO_UNKNOWN":          {"repoId": "00000000-0000-0000-0000-000000000001"},
 			"REPO_NAME_UNKNOWN":     {"repoId": "no-such-org/no-such-repo"},
@@ -315,8 +315,8 @@ var operationSpecs = map[string]OperationSpec{
 	"aiAttributionOverview": {
 		ResponseRoot: "aiAttributionOverview",
 		Variables:    aiPagedVariables(nil),
-		Parity:       aiAttributionOverviewParity(),
-		Variants: append(aiPagedVariants(aiAttributionOverviewParity(), map[string]map[string]any{
+		Parity:       nonEmpty(aiAttributionOverviewParity(), "data.aiAttributionOverview.rows"),
+		Variants: append(aiPagedVariants(nonEmpty(aiAttributionOverviewParity(), "data.aiAttributionOverview.rows"), map[string]map[string]any{
 			"BUCKETS":               {"buckets": []any{"AI_ASSISTED", "HUMAN"}},
 			"REPO_UNKNOWN":          {"repoId": "00000000-0000-0000-0000-000000000001"},
 			"REPO_NAME_UNKNOWN":     {"repoId": "no-such-org/no-such-repo"},
@@ -1616,10 +1616,26 @@ func aiPagedVariants(parity Options, scopes map[string]map[string]any) []Variant
 				vars["limit"], vars["offset"] = limit, offset
 				return vars
 			},
-			Parity: parity,
+			Parity: pageParity(page.name, parity),
 		})
 	}
 	return variants
+}
+
+// pageParity is a page variant's declaration: an offset page can legitimately
+// hold nothing, so it does not require a non-empty list.
+func pageParity(name string, parity Options) Options {
+	if name == "PAGE_OFFSET" {
+		parity.RequireNonEmpty = nil
+	}
+	return parity
+}
+
+// nonEmpty returns o requiring the named lists to be non-empty on a leg: a
+// request whose lists are empty on both legs measured nothing.
+func nonEmpty(o Options, paths ...string) Options {
+	o.RequireNonEmpty = append([]string(nil), paths...)
+	return o
 }
 
 // aiPagedInstanceVariant is aiInstanceVariant for the paged operations.

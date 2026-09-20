@@ -578,3 +578,43 @@ func TestAITeamVariantsReachTheLastCompleteDayAndEmptyVariantsDeclareNothing(t *
 		t.Errorf("at the start of the run day the window ends the day before, got %s", got)
 	}
 }
+
+// Every base request and every scope or page breakout of an AI list operation
+// that can select rows requires a non-empty list, so two empty answers cannot
+// pass as a measurement; only variants that select nothing by construction, and
+// an offset page, do not.
+func TestAIListOperationsRequireNonEmptyLists(t *testing.T) {
+	lists := map[string]string{
+		"aiImpactSummary": "data.aiImpactSummary.daily", "aiReviewLoad": "data.aiReviewLoad.byBucket",
+		"aiRiskBreakdown": "data.aiRiskBreakdown.byBucket", "aiAttributedPrs": "data.aiAttributedPrs.rows",
+		"aiAttributionOverview": "data.aiAttributionOverview.rows",
+	}
+	for operation, list := range lists {
+		spec, err := SpecFor(operation)
+		if err != nil {
+			t.Fatal(err)
+		}
+		has := func(o Options) bool {
+			for _, p := range o.RequireNonEmpty {
+				if p == list {
+					return true
+				}
+			}
+			return false
+		}
+		if !has(spec.Parity) {
+			t.Errorf("%s: the base request does not require %s", operation, list)
+		}
+		for _, v := range spec.Variants {
+			unknown := strings.HasSuffix(v.Name, "_UNKNOWN") || v.Name == "REPO_AND_TEAM_UNKNOWN"
+			switch {
+			case unknown || v.Name == "PAGE_OFFSET":
+				if has(v.Parity) {
+					t.Errorf("%s/%s may hold nothing and must not require %s", operation, v.Name, list)
+				}
+			case v.Instance == nil && !has(v.Parity):
+				t.Errorf("%s/%s does not require %s", operation, v.Name, list)
+			}
+		}
+	}
+}

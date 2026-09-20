@@ -102,3 +102,67 @@ func TestRepairAuditInsertsAreRefusedToTheWorkerRole(t *testing.T) {
 		}
 	}
 }
+
+// The column-scoped move must lose nothing the coordinator role does today on
+// work_graph_execution_requests (before CHAOS-5459: table-wide INSERT + SELECT,
+// no UPDATE/DELETE). Its only writers are the RequestWriter producers
+// (internal/jobs/workgraph/publisher.go): the INSERT ... ON CONFLICT DO NOTHING
+// and the follow-up read of the existing row, both verbatim below. The ledger
+// and metric_compatibility_executions tables were not granted to the coordinator
+// at all, so nothing there can be lost; the domain and queue roles are
+// unchanged (their postures are asserted by the existing domain/queue suites).
+func TestCoordinatorKeepsEveryRequestWriterRightAfterTheColumnMove(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	admin, uri, roles := startGrantHarness(t, ctx)
+	coordinator := connectAs(t, ctx, uri, roles.coordinator, grantCoordinatorPass)
+
+	for _, statement := range []string{
+		`INSERT INTO public.work_graph_execution_requests (
+		    id, org_id, kind, scope, model_ref, prompt_ref, llm_concurrency,
+		    spend_limit_microunits, correlation_id, idempotency_key, state
+		) VALUES (gen_random_uuid(), gen_random_uuid(), 'workgraph.build', '{}'::jsonb, NULLIF('', ''), NULLIF('', ''), 1,
+		    0, 'c', 'i', 'pending')
+		ON CONFLICT (id) DO NOTHING`,
+		`SELECT id::text, org_id::text, kind, scope::text, COALESCE(model_ref, ''),
+		        COALESCE(prompt_ref, ''), llm_concurrency, spend_limit_microunits,
+		        correlation_id, idempotency_key, state
+		 FROM public.work_graph_execution_requests WHERE id = gen_random_uuid()`,
+	} {
+		if err := execInRolledBackTransaction(t, ctx, coordinator, statement); err != nil {
+			t.Errorf("coordinator lost a RequestWriter right: %v\n  statement: %s", err, collapse(statement))
+		}
+	}
+
+	// Superset check over EVERY real column of the table: the coordinator held
+	// table-wide INSERT+SELECT before, so it must still hold both on each column.
+	rows, err := admin.Query(ctx, `SELECT column_name FROM information_schema.columns
+		WHERE table_schema = 'public' AND table_name = 'work_graph_execution_requests'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var columns []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatal(err)
+		}
+		columns = append(columns, name)
+	}
+	rows.Close()
+	if len(columns) == 0 {
+		t.Fatal("no columns found; the check would be vacuous")
+	}
+	for _, column := range columns {
+		for _, privilege := range []string{"SELECT", "INSERT"} {
+			var held bool
+			if err := admin.QueryRow(ctx, `SELECT has_column_privilege($1, 'public.work_graph_execution_requests', $2, $3)`,
+				roles.coordinator, column, privilege).Scan(&held); err != nil {
+				t.Fatal(err)
+			}
+			if !held {
+				t.Errorf("coordinator lost %s on work_graph_execution_requests.%s", privilege, column)
+			}
+		}
+	}
+}

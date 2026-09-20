@@ -92,7 +92,7 @@ func VenueEvidenceClass(evidence string) string {
 // venueEdgeHosts is the allowlist: venue name -> hosts its edge may have.
 // A venue that is not a key is refused. Production is never a key.
 var venueEdgeHosts = map[string][]string{
-	"bigboy-compose": {"localhost", "127.0.0.1", "::1", "bigboy", "api"},
+	"bigboy-compose": {"localhost", "127.0.0.1", "::1", "bigboy"},
 }
 
 // Venues lists the venues that may carry a login token, sorted.

@@ -2,9 +2,12 @@ package goapiproof
 
 import (
 	"encoding/base64"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func fakeJWT(payload string) string {
@@ -379,6 +382,42 @@ func TestVenueEvidenceClassDomain(t *testing.T) {
 	} {
 		if got := VenueEvidenceClass(tc.evidence); got != tc.want {
 			t.Errorf("%s: %q want %q", name, got, tc.want)
+		}
+	}
+}
+
+// A login token must never be accepted at a host name production itself
+// defines. The allowlist is pinned to exactly the names below, and none of
+// them may be a service name in the production compose file (the `api`
+// service there is the production edge on :8000, reachable by that name
+// from inside production's network).
+func TestVenueHostsAreNeverProductionServiceNames(t *testing.T) {
+	if got, want := venueEdgeHosts["bigboy-compose"], []string{"localhost", "127.0.0.1", "::1", "bigboy"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("allowlist = %v, want exactly %v", got, want)
+	}
+	raw, err := os.ReadFile("../../deploy/docker-compose/compose.production.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var compose struct {
+		Services map[string]yaml.Node `yaml:"services"`
+	}
+	if err := yaml.Unmarshal(raw, &compose); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := compose.Services["api"]; !ok || len(compose.Services) < 10 {
+		t.Fatalf("production compose parse looks wrong: %d services", len(compose.Services))
+	}
+	for name, hosts := range venueEdgeHosts {
+		for _, host := range hosts {
+			if _, prod := compose.Services[host]; prod {
+				t.Errorf("venue %s allows %q, a production compose service name", name, host)
+			}
+		}
+	}
+	for _, edge := range []string{"http://api:8000/graphql", "http://query-api:8090/graphql", "http://dev-health-api:8000/graphql"} {
+		if err := CheckVenue("bigboy-compose", "bigboy-compose", edge); err == nil {
+			t.Errorf("login token accepted at %s", edge)
 		}
 	}
 }

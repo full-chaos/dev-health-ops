@@ -174,3 +174,54 @@ func TestAuthContextForSetsTheVenueOnlyWithAStamp(t *testing.T) {
 		t.Errorf("%+v", a)
 	}
 }
+
+// A venue run writes NO store receipt. A go_api_proof_run row is ordinary
+// enablement proof for whichever database the DSN names, so an admin
+// principal's row there would satisfy the shared predicate without the
+// venue-receipt checks. Driven through run() with a fake store: zero
+// statements reach it, the report says zero written, and the venue block
+// is still in the report. The control (no venue) writes two.
+func TestAVenueRunWritesNoStoreReceipts(t *testing.T) {
+	withProverCommit(t, e2eBuildSHA)
+	tokenFile := writeToken(t, 0o600, loginToken(`{"sub":"edge","org_id":"70d529e0","role":"admin","is_superuser":false}`))
+	t.Setenv(goapiproof.VenueAckEnvVar, "bigboy-compose")
+	e2eEdgeArgs = func(*testing.T) []string {
+		return []string{"-edge-bearer-file=" + tokenFile, "-venue=bigboy-compose"}
+	}
+	t.Cleanup(func() { e2eEdgeArgs = nil })
+
+	stdout, runErr, reportPath, pool := runTwoOperationsEndToEnd(t)
+	if runErr != nil {
+		t.Fatalf("run(): %v\n%s", runErr, stdout)
+	}
+	if n := len(pool.execs); n != 0 {
+		t.Fatalf("a venue run sent %d statements to the store: %+v", n, pool.execs)
+	}
+	if !strings.Contains(stdout, "no store receipts written") || !strings.Contains(stdout, "receipts_written=0") || !strings.Contains(stdout, "executed=2") {
+		t.Fatalf("stdout: %s", stdout)
+	}
+	raw, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded struct {
+		Venue   *goapiproof.VenueStamp `json:"venue"`
+		Summary struct {
+			ReceiptsWritten int `json:"receipts_written"`
+		} `json:"summary"`
+		Outcomes []struct {
+			ReceiptWritten bool `json:"receipt_written"`
+		} `json:"outcomes"`
+	}
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Venue == nil || decoded.Venue.Role != "admin" || decoded.Summary.ReceiptsWritten != 0 {
+		t.Fatalf("report: %s", raw)
+	}
+	for _, o := range decoded.Outcomes {
+		if o.ReceiptWritten {
+			t.Fatalf("an outcome claims a written receipt: %s", raw)
+		}
+	}
+}

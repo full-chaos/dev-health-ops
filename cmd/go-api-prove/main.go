@@ -444,7 +444,16 @@ func run() (err error) {
 	// whatever happens to their receipts.
 
 	var writeErr error
-	if !f.dryRun && pool != nil {
+	// A venue run (a login-token principal, say an admin) NEVER writes a
+	// store receipt: a row in go_api_proof_run is ordinary enablement proof
+	// for whichever database the DSN names, so an admin-principal receipt
+	// there would satisfy the shared predicate for an operation a viewer
+	// cannot prove, without going through enable -venue-receipt and its
+	// checks. The report file is the venue run's only output.
+	if f.stamp != nil {
+		fmt.Printf("go-api-prove: venue run (%s): no store receipts written; the report is the venue receipt\n", f.stamp.Name)
+	}
+	if !f.dryRun && f.stamp == nil && pool != nil {
 		written, err := goapiproof.WriteReceipts(ctx, pool, receipts)
 		summary.ReceiptsWritten = len(written)
 		for i := range outcomes {

@@ -61,6 +61,7 @@ cmd/query-api/internal/investmentflow	12
 cmd/query-api/internal/operatingreview	112
 cmd/query-api/internal/routeswitch	17
 cmd/query-api/internal/sankey	12
+cmd/query-api/internal/scopelabel	20
 cmd/query-api/internal/security	30
 cmd/query-api/internal/testopsrisk	20
 cmd/query-api/internal/throughputforecast	64

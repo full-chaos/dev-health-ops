@@ -3,9 +3,11 @@ package analytics
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph/model"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graphqldate"
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/scopelabel"
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
 )
@@ -194,16 +196,8 @@ type breakdownRow struct {
 	Value          *float64
 }
 
-// ExecuteBreakdownRaw runs the compiled query and returns the raw rows
-// -- label resolution (looksLikeUUID / repo+team display-name lookup,
-// _resolve_breakdown_labels / _build_breakdown_item, analytics.py:386-429)
-// is a SEPARATE step this package does not yet port (it needs the
-// identity-service repo/team display-name resolver, api/services/identity.py,
-// which lives outside this package's current scope); ExecuteBreakdown
-// below applies the label-less fallback shape (BreakdownItem.Label ==
-// nil) rather than inventing a resolver. Wiring in a real label resolver
-// is follow-up work, tracked alongside the rest of the top-level
-// orchestrator wiring.
+// executeBreakdownRaw runs the compiled query and returns the raw rows;
+// ExecuteBreakdown adds the item labels.
 func executeBreakdownRaw(ctx context.Context, client QueryClient, q compiledQuery) ([]breakdownRow, error) {
 	rows, err := client.Query(ctx, q.sql, q.bindings)
 	if err != nil {
@@ -227,29 +221,62 @@ func executeBreakdownRaw(ctx context.Context, client QueryClient, q compiledQuer
 }
 
 // ExecuteBreakdown runs the compiled query and returns a BreakdownResult.
-// LABEL RESOLUTION NOT YET PORTED (see executeBreakdownRaw's doc comment)
-// -- every item's Label is nil, which is NOT yet parity with Python for
-// the TEAM/REPO dimensions (Python's A7/A8 framework resolves those to a
-// human display name or an "#abcd1234" unresolved token,
-// analytics.py:411-429). THIS IS A KNOWN GAP, not a silent omission:
-// flagged so a caller does not treat this as dual-run-ready for
-// TEAM/REPO breakdowns until the label resolver lands. Dimensions
-// without a UUID identity (WORK_TYPE/THEME/SUBCATEGORY on the
-// non-investment path -- work_item_type/investment_area/project_stream
-// are already human text) are unaffected: Python's own
-// _build_breakdown_item falls through to the raw key unchanged for a
-// non-UUID-shaped key (analytics.py:421-423), which is exactly what
-// leaving Label nil approximates EXCEPT Python still SETS label to that
-// same string while this port leaves it nil -- also a gap, tracked the
-// same way.
-func ExecuteBreakdown(ctx context.Context, client QueryClient, q compiledQuery, dimensionName, measureName string) (model.BreakdownResult, error) {
+//
+// Every item carries the server-resolved label the client renders instead of
+// a raw id: for the repo and team dimensions the key is resolved to its
+// display name through the shared lookup (internal/scopelabel); a resolved
+// name that is a bare UUID is dropped; any key that is not a bare UUID
+// labels itself; a bare-UUID key becomes a short "#" token (its first eight
+// hex digits) so the client shows an unresolved badge, never a raw id. The
+// lookup is best effort: a failure leaves every item on the fallback path.
+// The tables it reads are read as stored, one row per physical version, the
+// way the Python resolver reads them.
+func ExecuteBreakdown(ctx context.Context, client QueryClient, orgID string, q compiledQuery, dimensionName, measureName string) (model.BreakdownResult, error) {
 	rows, err := executeBreakdownRaw(ctx, client, q)
 	if err != nil {
 		return model.BreakdownResult{}, err
 	}
+	keys := make([]string, 0, len(rows))
+	for _, r := range rows {
+		keys = append(keys, r.DimensionValue)
+	}
+	labels := breakdownLabels(ctx, client, orgID, dimensionName, keys)
 	items := make([]model.BreakdownItem, 0, len(rows))
 	for _, r := range rows {
-		items = append(items, model.BreakdownItem{Key: r.DimensionValue, Value: r.Value})
+		items = append(items, model.BreakdownItem{Key: r.DimensionValue, Value: r.Value, Label: breakdownLabel(r.DimensionValue, labels)})
 	}
 	return model.BreakdownResult{Dimension: dimensionName, Measure: measureName, Items: items}, nil
+}
+
+// breakdownLabels resolves the keys of a repo or team breakdown to display
+// names; every other dimension is already human text and resolves nothing.
+func breakdownLabels(ctx context.Context, client QueryClient, orgID, dimensionName string, keys []string) map[string]string {
+	kind := strings.ToLower(dimensionName)
+	if kind != "repo" && kind != "team" {
+		return map[string]string{}
+	}
+	var q scopelabel.Querier
+	if client != nil {
+		q = client
+	}
+	return scopelabel.Resolve(ctx, q, orgID, kind, keys, scopelabel.Options{Log: "analytics"})
+}
+
+// breakdownLabel is the label of one breakdown item.
+func breakdownLabel(key string, labels map[string]string) *string {
+	if resolved := labels[key]; resolved != "" && !scopelabel.LooksLikeUUID(resolved) {
+		return &resolved
+	}
+	if key != "" && !scopelabel.LooksLikeUUID(key) {
+		return &key
+	}
+	token := []rune(strings.ReplaceAll(key, "-", ""))
+	if len(token) > 8 {
+		token = token[:8]
+	}
+	if len(token) == 0 {
+		return nil
+	}
+	label := "#" + string(token)
+	return &label
 }

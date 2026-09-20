@@ -84,6 +84,10 @@
     "digest": "e5e5fd3aba6d00c5413407046dfa68acadeb72c6ff1bb5f40b983bd0ddc3b632"
   },
   {
+    "operation": "featureFlagTimeseries",
+    "digest": "fc959cbdfd1faa9aa8e5baa553709369e94318977713df958d346953319b28ff"
+  },
+  {
     "operation": "featureFlags",
     "digest": "06ca28a0517a34c0f5a6cc25b193da7b5682bea5192ae93e5a79edc7e7742208"
   },
@@ -158,6 +162,18 @@
   {
     "operation": "securityOverview",
     "digest": "3b76c20e6950094356311d84f4288a7ce9e1e936c60c2b867b6e083f2d709884"
+  },
+  {
+    "operation": "testOpsCoverage",
+    "digest": "404b55a3066388c00846a9330032aafdaff6f3441cca5258217ade4fb845ecac"
+  },
+  {
+    "operation": "testOpsPipeline",
+    "digest": "f380dda5b10c60b0887b888f4612bfd204409c1913b3e06458540a0295048df5"
+  },
+  {
+    "operation": "testOpsTest",
+    "digest": "20eeea67bfc1cfa0f809188878476a0fe40565bc583009151e1f7c8cf2f3be5c"
   },
   {
     "operation": "testopsRisk",

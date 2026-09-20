@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net/http"
 	"os"
 	"slices"
 	"sort"
@@ -26,6 +25,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/repair"
 	platformconfig "github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	platformsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
@@ -892,7 +892,11 @@ func dispatchMetrics(ctx context.Context, runtime *operatorRuntime, args []strin
 		if err != nil {
 			return writeServiceError(stderr, err)
 		}
-		ledgerRepair, err := redriveDailyMetricsLedger(ctx, runIDs, *reviewEvidence)
+		redrive, err := ledgerRedriverFor(ctx, runtime)
+		if err != nil {
+			return writeRepairSetupError(stderr, err)
+		}
+		ledgerRepair, err := redriveDailyMetricsLedger(ctx, redrive, runIDs, *reviewEvidence)
 		if err != nil {
 			return writeError(stderr, "ledger_repair_unavailable")
 		}
@@ -944,7 +948,7 @@ func dispatchMetrics(ctx context.Context, runtime *operatorRuntime, args []strin
 	case "partition-recompute":
 		return dispatchMetricsPartitionRecompute(ctx, runtime, args[1:], stdout, stderr)
 	case "execution-repair":
-		return dispatchMetricsExecutionRepair(ctx, args[1:], stdout, stderr)
+		return dispatchMetricsExecutionRepair(ctx, runtime, args[1:], stdout, stderr)
 	case "list-ambiguous-executions":
 		return dispatchMetricsListAmbiguousExecutions(ctx, runtime, args[1:], stdout, stderr)
 	default:
@@ -1285,7 +1289,11 @@ func dispatchMetricsDailyFinalize(
 	ledgerRepair := map[string]any{"repaired": 0, "skipped_claim_active": 0}
 	if hasRun {
 		var abort bool
-		ledgerRepair, abort, err = finalizeLedgerRepairGate(ctx, candidates, *reviewEvidence)
+		redrive, redriveErr := ledgerRedriverFor(ctx, runtime)
+		if redriveErr != nil {
+			return writeRepairSetupError(stderr, redriveErr)
+		}
+		ledgerRepair, abort, err = finalizeLedgerRepairGate(ctx, redrive, candidates, *reviewEvidence)
 		if err != nil {
 			return writeError(stderr, "ledger_repair_unavailable")
 		}
@@ -1321,13 +1329,13 @@ func dispatchMetricsDailyFinalize(
 // ledgerRepairWasIncomplete's own reasoning, so the gating decision is unit
 // testable against a mock bridge without needing a real Postgres store.
 func finalizeLedgerRepairGate(
-	ctx context.Context, candidates []string, reviewEvidence string,
+	ctx context.Context, redrive ledgerRedriver, candidates []string, reviewEvidence string,
 ) (ledgerRepair map[string]any, abort bool, err error) {
 	// "finalize" (codex review, round 1, P1): this call's review_evidence is
 	// about finalize output, never partition output -- it must never repair
 	// an unrelated partition ledger row under the DailyMetricsRedriveRequest
 	// default. See that field's own doc comment.
-	ledgerRepair, err = redriveDailyMetricsLedger(ctx, candidates, reviewEvidence, "finalize")
+	ledgerRepair, err = redriveDailyMetricsLedger(ctx, redrive, candidates, reviewEvidence, "finalize")
 	if err != nil {
 		return nil, false, err
 	}
@@ -2454,96 +2462,64 @@ func dispatchMetricsRemainingTriggerBackstop(
 	return code
 }
 
-// redriveDailyMetricsLedger calls the Python compatibility bridge's bulk
-// ledger repair (CHAOS-4304, POST /internal/worker/daily-metrics/v1/redrive)
-// for the given run ids, BEFORE any Go-side partition job publishes for the
-// same redrive -- see the ordering comment at this function's one call site.
-// An empty runIDs list is a no-op (nothing to repair): it still returns a
-// zero-valued result rather than skipping the call, so a redrive over a
-// window with no 'running' runs at all is reported honestly, not silently.
-// dailyMetricsRedriveMaxRunIDsPerRequest mirrors
-// DailyMetricsRedriveRequest.run_ids's max_length=200 bound in
-// worker_metrics.py -- a window bigger than one post_sync fanout's
-// generous ceiling (up to 15 daily runs per completed sync) can still
-// exceed 200 running runs, so this chunks rather than trusting the caller
-// to stay under the bridge's own limit (codex review round 2).
-const dailyMetricsRedriveMaxRunIDsPerRequest = 200
+const dailyMetricsRedriveMaxRunIDsPerRequest = repair.MaxRedriveRuns
 
-// redriveDailyMetricsLedger repairs the compatibility-bridge ledger for
-// every run id, chunking into requests no larger than the bridge's own
-// max_length bound and summing the aggregate outcome across chunks.
+// ledgerRedriver authorises retries for stranded daily ledger rows; production
+// runs it on the coordinator pool (repair.RedriveDaily).
+type ledgerRedriver func(ctx context.Context, request repair.RedriveRequest) (repair.RedriveResult, error)
+
+// ledgerRedriverFor binds the bulk redrive to the coordinator pool: the role
+// the operator verbs run as, which alone holds the ledger repair grants.
+func ledgerRedriverFor(ctx context.Context, runtime *operatorRuntime) (ledgerRedriver, error) {
+	pool, err := coordinatorPoolOf(ctx, runtime)
+	if err != nil {
+		return nil, err
+	}
+	return func(ctx context.Context, request repair.RedriveRequest) (repair.RedriveResult, error) {
+		return repair.RedriveDaily(ctx, pool, request, false)
+	}, nil
+}
+
+// redriveDailyMetricsLedger repairs the compatibility ledger for every run id,
+// chunking into calls no larger than the repair's own bound and summing the
+// aggregate outcome across chunks.
 //
-// operations (codex review, round 1, P1) scopes which
-// metric_compatibility_executions.operation this call is authorized to
-// repair -- omit it (the daily-redrive call site does) to keep the
-// pre-CHAOS-4409 default `["partition"]` on the bridge side byte-for-byte;
-// pass `"finalize"` (the daily-finalize call site does, via
+// operations scopes which metric_compatibility_executions.operation this call
+// is authorized to repair -- omit it (the daily-redrive call site does) for
+// partition rows only; pass "finalize" (the daily-finalize call site does, via
 // finalizeLedgerRepairGate) to repair finalize rows instead. A caller's
 // review_evidence means something different for each operation, so this is
-// never a caller-set default -- see DailyMetricsRedriveRequest.operations'
-// own doc comment for why daily-redrive must never repair finalize rows
+// never a caller-set default: daily-redrive must never repair finalize rows
 // under its own partition-scoped review_evidence.
-func redriveDailyMetricsLedger(ctx context.Context, runIDs []string, reviewEvidence string, operations ...string) (map[string]any, error) {
-	if len(runIDs) == 0 {
-		return redriveDailyMetricsLedgerChunk(ctx, nil, reviewEvidence, operations...)
-	}
+func redriveDailyMetricsLedger(ctx context.Context, redrive ledgerRedriver, runIDs []string, reviewEvidence string, operations ...string) (map[string]any, error) {
 	totalRepaired, totalSkipped := 0, 0
 	for start := 0; start < len(runIDs); start += dailyMetricsRedriveMaxRunIDsPerRequest {
 		end := min(start+dailyMetricsRedriveMaxRunIDsPerRequest, len(runIDs))
-		chunkResult, err := redriveDailyMetricsLedgerChunk(ctx, runIDs[start:end], reviewEvidence, operations...)
+		ids := make([]uuid.UUID, 0, end-start)
+		for _, raw := range runIDs[start:end] {
+			id, err := uuid.Parse(raw)
+			if err != nil {
+				return nil, fmt.Errorf("run id %q is not a uuid", raw)
+			}
+			ids = append(ids, id)
+		}
+		outcome, err := redrive(ctx, repair.RedriveRequest{RunIDs: ids, ReviewEvidence: reviewEvidence, Operations: operations})
 		if err != nil {
 			return nil, err
 		}
-		repaired, _ := chunkResult["repaired"].(float64)
-		skipped, _ := chunkResult["skipped_claim_active"].(float64)
-		totalRepaired += int(repaired)
-		totalSkipped += int(skipped)
+		totalRepaired += outcome.Repaired
+		totalSkipped += outcome.SkippedClaimActive
 	}
 	return map[string]any{"repaired": totalRepaired, "skipped_claim_active": totalSkipped}, nil
 }
 
 // ledgerRepairWasIncomplete reports whether any ambiguous/stuck-executing
-// ledger row was left unrepaired (codex review round 2's abort gate),
-// pulled out of dispatchMetrics as its own function so it can be unit
-// tested directly against redriveDailyMetricsLedger's actual return shape --
-// a prior version asserted the wrong dynamic type here (round 3: it reads
-// plain Go ints, not the float64 a raw json.Unmarshal produces) and the
-// ", _" discard pattern silently swallowed the mismatch, always reading 0
-// and defeating the whole safety gate with no test catching it.
+// ledger row was left unrepaired (the abort gate), pulled out of
+// dispatchMetrics as its own function so it can be unit tested directly
+// against redriveDailyMetricsLedger's actual return shape (plain Go ints).
 func ledgerRepairWasIncomplete(ledgerRepair map[string]any) bool {
 	skipped, _ := ledgerRepair["skipped_claim_active"].(int)
 	return skipped > 0
-}
-
-func redriveDailyMetricsLedgerChunk(ctx context.Context, runIDs []string, reviewEvidence string, operations ...string) (map[string]any, error) {
-	if len(runIDs) == 0 {
-		return map[string]any{"repaired": 0, "skipped_claim_active": 0}, nil
-	}
-	requestPayload := map[string]any{
-		"run_ids":         runIDs,
-		"review_evidence": reviewEvidence,
-	}
-	if len(operations) > 0 {
-		requestPayload["operations"] = operations
-	}
-	// CHAOS-5042: shares postWorkerBridge (repair_bridge.go) with the
-	// workgraph/metric-execution repair verbs -- same auth/timeout/decode
-	// shape, just a different token env var, path, and expected 2xx response
-	// shape (redriveLedgerBridgeResponse). codex rounds 1 and 2 both found
-	// the same CLASS of defect here (an undecodable body, then a decodable
-	// but incomplete one) -- postWorkerBridge's strict shape validation on
-	// every 2xx response (repair_bridge.go) is the fix for the class, not a
-	// second one-off check bolted onto this call site specifically.
-	status, decoded, err := postWorkerBridge[redriveLedgerBridgeResponse](
-		ctx, "WORKER_METRIC_REPAIR_TOKEN", "/internal/worker/daily-metrics/v1/redrive", requestPayload,
-	)
-	if err != nil {
-		return nil, err
-	}
-	if status != http.StatusOK {
-		return nil, fmt.Errorf("ledger redrive returned status %d", status)
-	}
-	return decoded, nil
 }
 
 func dispatchQueues(ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer) int {

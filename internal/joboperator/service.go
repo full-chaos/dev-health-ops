@@ -83,6 +83,12 @@ const (
 	// describes for its own 2026-08-29 finding.
 	ActionWorkgraphTrigger  Action = "workgraph.manual_trigger"
 	ActionInvestmentTrigger Action = "investment.manual_trigger"
+	// ActionLedgerRepair is the operator repair of an ambiguous execution
+	// ledger row (`workerctl workgraph repair`, `metrics execution-repair`,
+	// `metrics daily-redrive`): a Postgres transaction on the coordinator
+	// pool outside this service's own backends. Not written to
+	// worker_operator_audits.
+	ActionLedgerRepair Action = "ledger.repair"
 )
 
 // JobSummary is intentionally incapable of carrying encoded_args, exception
@@ -534,6 +540,14 @@ func (service *Service) AuthorizeWorkgraphTrigger(ctx context.Context, principal
 // trigger` enqueue. Same reasoning as AuthorizeWorkgraphTrigger.
 func (service *Service) AuthorizeInvestmentTrigger(ctx context.Context, principal Principal, resourceID string) error {
 	return service.authorize(ctx, principal, ActionInvestmentTrigger, "investment_manual_trigger", resourceID)
+}
+
+// AuthorizeLedgerRepair authorizes the operator repair verbs' Postgres
+// writes. A workers:read-only credential must never reach a repair
+// transaction, dry-run included: authorization covers the preview too, as it
+// does for the other operator-invoked mutations.
+func (service *Service) AuthorizeLedgerRepair(ctx context.Context, principal Principal, resourceID string) error {
+	return service.authorize(ctx, principal, ActionLedgerRepair, "ledger_repair", resourceID)
 }
 
 // Status authorizes the top-level runtime status view. Composition performs

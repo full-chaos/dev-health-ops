@@ -3,11 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -21,6 +18,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/repair"
 	"github.com/full-chaos/dev-health-ops/internal/syncroute"
 )
 
@@ -532,229 +530,128 @@ func TestSessionSafeModeRejectsTransactionAndUnknownModes(t *testing.T) {
 	}
 }
 
-func TestRedriveDailyMetricsLedgerCallsBulkRepairBeforePartitionRedrive(t *testing.T) {
-	var capturedAuth string
-	var capturedBody map[string]any
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		capturedAuth = r.Header.Get("Authorization")
-		if r.URL.Path != "/internal/worker/daily-metrics/v1/redrive" || r.Method != http.MethodPost {
-			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
-		}
-		if err := json.NewDecoder(r.Body).Decode(&capturedBody); err != nil {
-			t.Fatal(err)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"repaired":2,"skipped_claim_active":1}`))
-	}))
-	defer server.Close()
+type redriveRecorder struct {
+	requests []repair.RedriveRequest
+	result   repair.RedriveResult
+	err      error
+}
 
-	t.Setenv("WORKER_OPERATIONAL_BRIDGE_URL", server.URL)
-	t.Setenv("WORKER_METRIC_REPAIR_TOKEN", "test-repair-token")
+func (r *redriveRecorder) redrive(_ context.Context, request repair.RedriveRequest) (repair.RedriveResult, error) {
+	r.requests = append(r.requests, request)
+	return r.result, r.err
+}
 
-	result, err := redriveDailyMetricsLedger(context.Background(), []string{"run-a", "run-b"}, "test evidence")
+func testRunID(index int) string { return fmt.Sprintf("00000000-0000-4000-8000-%012d", index) }
+
+func TestRedriveDailyMetricsLedgerPassesEvidenceAndSumsOutcomes(t *testing.T) {
+	rec := &redriveRecorder{result: repair.RedriveResult{Repaired: 2, SkippedClaimActive: 1}}
+	result, err := redriveDailyMetricsLedger(context.Background(), rec.redrive, []string{testRunID(1), testRunID(2)}, "test evidence")
 	if err != nil {
 		t.Fatalf("redriveDailyMetricsLedger: %v", err)
 	}
-	if capturedAuth != "Bearer test-repair-token" {
-		t.Fatalf("Authorization header = %q, want Bearer test-repair-token", capturedAuth)
+	if len(rec.requests) != 1 || len(rec.requests[0].RunIDs) != 2 || rec.requests[0].ReviewEvidence != "test evidence" {
+		t.Fatalf("requests = %+v", rec.requests)
 	}
-	runIDs, _ := capturedBody["run_ids"].([]any)
-	if len(runIDs) != 2 {
-		t.Fatalf("request run_ids = %v, want 2 entries", capturedBody["run_ids"])
-	}
-	if repaired, _ := result["repaired"].(int); repaired != 2 {
-		t.Fatalf("result[repaired] = %v, want 2", result["repaired"])
+	if result["repaired"] != 2 || result["skipped_claim_active"] != 1 {
+		t.Fatalf("result = %v", result)
 	}
 }
 
-func TestRedriveDailyMetricsLedgerFailsClosedWithoutConfiguredToken(t *testing.T) {
-	t.Setenv("WORKER_OPERATIONAL_BRIDGE_URL", "http://unused.invalid")
-	t.Setenv("WORKER_METRIC_REPAIR_TOKEN", "")
-
-	if _, err := redriveDailyMetricsLedger(context.Background(), []string{"run-a"}, "test evidence"); err == nil {
-		t.Fatal("redriveDailyMetricsLedger with no WORKER_METRIC_REPAIR_TOKEN = nil error, want fail-closed")
+func TestRedriveDailyMetricsLedgerRejectsNonUUIDRunID(t *testing.T) {
+	rec := &redriveRecorder{}
+	if _, err := redriveDailyMetricsLedger(context.Background(), rec.redrive, []string{"run-a"}, "e"); err == nil {
+		t.Fatal("non-uuid run id = nil error")
+	}
+	if len(rec.requests) != 0 {
+		t.Fatal("redrive called for an invalid run id")
 	}
 }
 
-func TestRedriveDailyMetricsLedgerNoOpsOnEmptyRunIDsWithoutAnyHTTPCall(t *testing.T) {
-	// No env configured at all -- must not even attempt a request when there
-	// is nothing to repair (an operator redrive over a window with no
-	// 'running' runs at all).
-	result, err := redriveDailyMetricsLedger(context.Background(), nil, "test evidence")
+func TestRedriveDailyMetricsLedgerPropagatesRedriveError(t *testing.T) {
+	rec := &redriveRecorder{err: errors.New("boom")}
+	if _, err := redriveDailyMetricsLedger(context.Background(), rec.redrive, []string{testRunID(1)}, "e"); err == nil {
+		t.Fatal("redrive error swallowed")
+	}
+}
+
+func TestRedriveDailyMetricsLedgerNoOpsOnEmptyRunIDs(t *testing.T) {
+	rec := &redriveRecorder{}
+	result, err := redriveDailyMetricsLedger(context.Background(), rec.redrive, nil, "e")
 	if err != nil {
 		t.Fatalf("redriveDailyMetricsLedger(nil): %v", err)
 	}
-	if result["repaired"] != 0 || result["skipped_claim_active"] != 0 {
-		t.Fatalf("result = %v, want zero-valued", result)
+	if len(rec.requests) != 0 || result["repaired"] != 0 || result["skipped_claim_active"] != 0 {
+		t.Fatalf("result = %v requests = %d", result, len(rec.requests))
 	}
 }
 
 func TestRedriveDailyMetricsLedgerChunksAtTheRequestLimitAndSumsOutcomes(t *testing.T) {
-	// codex review round 2: DailyMetricsRedriveRequest.run_ids caps at
-	// max_length=200; a window spanning enough post_sync fanouts can exceed
-	// that, so the caller must chunk rather than send one oversized request
-	// the bridge would reject with 422.
-	var requestSizes []int
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body struct {
-			RunIDs []string `json:"run_ids"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Fatal(err)
-		}
-		requestSizes = append(requestSizes, len(body.RunIDs))
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"repaired":1,"skipped_claim_active":0}`))
-	}))
-	defer server.Close()
-
-	t.Setenv("WORKER_OPERATIONAL_BRIDGE_URL", server.URL)
-	t.Setenv("WORKER_METRIC_REPAIR_TOKEN", "test-repair-token")
-
+	rec := &redriveRecorder{result: repair.RedriveResult{Repaired: 1}}
 	runIDs := make([]string, 250)
 	for index := range runIDs {
-		runIDs[index] = fmt.Sprintf("run-%d", index)
+		runIDs[index] = testRunID(index)
 	}
-	result, err := redriveDailyMetricsLedger(context.Background(), runIDs, "test evidence")
+	result, err := redriveDailyMetricsLedger(context.Background(), rec.redrive, runIDs, "e")
 	if err != nil {
 		t.Fatalf("redriveDailyMetricsLedger: %v", err)
 	}
-	if len(requestSizes) != 2 || requestSizes[0] != 200 || requestSizes[1] != 50 {
-		t.Fatalf("chunk sizes = %v, want [200 50]", requestSizes)
+	if len(rec.requests) != 2 || len(rec.requests[0].RunIDs) != 200 || len(rec.requests[1].RunIDs) != 50 {
+		t.Fatalf("chunking wrong: %d requests", len(rec.requests))
 	}
 	if result["repaired"] != 2 {
-		t.Fatalf("summed repaired = %v, want 2 (one per chunk)", result["repaired"])
+		t.Fatalf("summed repaired = %v, want 2", result["repaired"])
 	}
 }
 
 func TestLedgerRepairWasIncompleteReadsTheRealReturnType(t *testing.T) {
-	// codex review round 3 red-first proof: this must exercise the ACTUAL
-	// map redriveDailyMetricsLedger returns (Go ints), not a hand-built map
-	// with the wrong dynamic type -- that mismatch is exactly what let the
-	// round-2 safety gate silently no-op.
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"repaired":1,"skipped_claim_active":1}`))
-	}))
-	defer server.Close()
-	t.Setenv("WORKER_OPERATIONAL_BRIDGE_URL", server.URL)
-	t.Setenv("WORKER_METRIC_REPAIR_TOKEN", "test-repair-token")
-
-	result, err := redriveDailyMetricsLedger(context.Background(), []string{"run-a"}, "test evidence")
+	rec := &redriveRecorder{result: repair.RedriveResult{Repaired: 1, SkippedClaimActive: 1}}
+	result, err := redriveDailyMetricsLedger(context.Background(), rec.redrive, []string{testRunID(1)}, "e")
 	if err != nil {
-		t.Fatalf("redriveDailyMetricsLedger: %v", err)
+		t.Fatal(err)
 	}
 	if !ledgerRepairWasIncomplete(result) {
 		t.Fatalf("ledgerRepairWasIncomplete(%v) = false, want true", result)
 	}
-
 	if ledgerRepairWasIncomplete(map[string]any{"repaired": 1, "skipped_claim_active": 0}) {
-		t.Fatal("ledgerRepairWasIncomplete with skipped=0 = true, want false")
+		t.Fatal("skipped=0 reported incomplete")
 	}
 }
 
-// TestFinalizeLedgerRepairGateCallsBulkRepairForCandidates is CHAOS-4409's
-// red-first orchestration proof: before this fix, dispatchMetricsDailyFinalize
-// never called the bulk-redrive endpoint at all, so a stuck daily/finalize
-// ledger row was never repaired no matter how many times an operator ran
-// `daily-finalize --run`. This proves finalizeLedgerRepairGate reaches the
-// SAME bridge endpoint daily-redrive already calls, with the candidates and
-// review evidence the caller passed.
-func TestFinalizeLedgerRepairGateCallsBulkRepairForCandidates(t *testing.T) {
-	var capturedPath string
-	var capturedBody map[string]any
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		capturedPath = r.URL.Path
-		if err := json.NewDecoder(r.Body).Decode(&capturedBody); err != nil {
-			t.Fatal(err)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"repaired":1,"skipped_claim_active":0}`))
-	}))
-	defer server.Close()
-	t.Setenv("WORKER_OPERATIONAL_BRIDGE_URL", server.URL)
-	t.Setenv("WORKER_METRIC_REPAIR_TOKEN", "test-repair-token")
-
-	ledgerRepair, abort, err := finalizeLedgerRepairGate(
-		context.Background(), []string{"run-a"}, "chaos-4409 test evidence",
-	)
+// finalize repairs must be scoped to operation=finalize; daily-redrive sends
+// no operations so the repair default (partition) governs.
+func TestFinalizeLedgerRepairGateScopesToFinalize(t *testing.T) {
+	rec := &redriveRecorder{result: repair.RedriveResult{Repaired: 1}}
+	ledger, abort, err := finalizeLedgerRepairGate(context.Background(), rec.redrive, []string{testRunID(1)}, "chaos-4409 evidence")
 	if err != nil {
-		t.Fatalf("finalizeLedgerRepairGate: %v", err)
+		t.Fatal(err)
 	}
-	if capturedPath != "/internal/worker/daily-metrics/v1/redrive" {
-		t.Fatalf("request path = %q, want the shared bulk-redrive endpoint", capturedPath)
+	if abort || ledger["repaired"] != 1 {
+		t.Fatalf("abort=%v ledger=%v", abort, ledger)
 	}
-	if evidence, _ := capturedBody["review_evidence"].(string); evidence != "chaos-4409 test evidence" {
-		t.Fatalf("request review_evidence = %v, want the caller's text", capturedBody["review_evidence"])
-	}
-	// codex review (round 1, P1): this call's review_evidence is about
-	// finalize output, never partition output -- it must scope the bridge
-	// repair to operation='finalize' explicitly, never fall through to the
-	// bridge's own operation='partition' default (which would silently
-	// authorize an unrelated partition ledger row under finalize-scoped
-	// evidence, or worse, leave the actual stuck finalize row untouched).
-	operations, _ := capturedBody["operations"].([]any)
-	if len(operations) != 1 || operations[0] != "finalize" {
-		t.Fatalf("request operations = %v, want [\"finalize\"]", capturedBody["operations"])
-	}
-	if abort {
-		t.Fatal("fully repaired ledger reported abort=true")
-	}
-	if repaired, _ := ledgerRepair["repaired"].(int); repaired != 1 {
-		t.Fatalf("ledgerRepair[repaired] = %v, want 1", ledgerRepair["repaired"])
+	if len(rec.requests) != 1 || rec.requests[0].ReviewEvidence != "chaos-4409 evidence" ||
+		!reflect.DeepEqual(rec.requests[0].Operations, []string{"finalize"}) {
+		t.Fatalf("requests = %+v", rec.requests)
 	}
 }
 
-// TestRedriveDailyMetricsLedgerDefaultsToPartitionOperationForDailyRedrive is
-// the daily-redrive-side half of the same codex finding: the shared bulk-
-// redrive endpoint must never repair a finalize ledger row under
-// daily-redrive's own partition-scoped review_evidence. redriveDailyMetricsLedger
-// (the function daily-redrive calls directly, with no operations argument)
-// must omit the field entirely so the bridge's own
-// DailyMetricsRedriveRequest.operations default (["partition"]) governs --
-// not send an explicit ["partition"] that could drift from that default.
-func TestRedriveDailyMetricsLedgerDefaultsToPartitionOperationForDailyRedrive(t *testing.T) {
-	var capturedBody map[string]any
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if err := json.NewDecoder(r.Body).Decode(&capturedBody); err != nil {
-			t.Fatal(err)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"repaired":0,"skipped_claim_active":0}`))
-	}))
-	defer server.Close()
-	t.Setenv("WORKER_OPERATIONAL_BRIDGE_URL", server.URL)
-	t.Setenv("WORKER_METRIC_REPAIR_TOKEN", "test-repair-token")
-
-	if _, err := redriveDailyMetricsLedger(context.Background(), []string{"run-a"}, "test evidence"); err != nil {
-		t.Fatalf("redriveDailyMetricsLedger: %v", err)
+func TestRedriveDailyMetricsLedgerSendsNoOperationsForDailyRedrive(t *testing.T) {
+	rec := &redriveRecorder{}
+	if _, err := redriveDailyMetricsLedger(context.Background(), rec.redrive, []string{testRunID(1)}, "e"); err != nil {
+		t.Fatal(err)
 	}
-	if _, present := capturedBody["operations"]; present {
-		t.Fatalf("daily-redrive's request sent an explicit operations field (%v); want it omitted so the bridge default governs", capturedBody["operations"])
+	if len(rec.requests[0].Operations) != 0 {
+		t.Fatalf("operations = %v, want none", rec.requests[0].Operations)
 	}
 }
 
-// TestFinalizeLedgerRepairGateAbortsWhenClaimsAreStillActive mirrors
-// daily-redrive's own CHAOS-4304 round-2 safety gate: a nonzero
-// skipped_claim_active means at least one row's original claim still read as
-// live at repair time, and publishing a fresh finalize job anyway risks the
-// identical ambiguous_refused wall the moment that claim resolves. The
-// caller must abort, not proceed to RedriveStrandedFinalize.
 func TestFinalizeLedgerRepairGateAbortsWhenClaimsAreStillActive(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"repaired":0,"skipped_claim_active":1}`))
-	}))
-	defer server.Close()
-	t.Setenv("WORKER_OPERATIONAL_BRIDGE_URL", server.URL)
-	t.Setenv("WORKER_METRIC_REPAIR_TOKEN", "test-repair-token")
-
-	_, abort, err := finalizeLedgerRepairGate(context.Background(), []string{"run-a"}, "test evidence")
+	rec := &redriveRecorder{result: repair.RedriveResult{SkippedClaimActive: 1}}
+	_, abort, err := finalizeLedgerRepairGate(context.Background(), rec.redrive, []string{testRunID(1)}, "e")
 	if err != nil {
-		t.Fatalf("finalizeLedgerRepairGate: %v", err)
+		t.Fatal(err)
 	}
 	if !abort {
-		t.Fatal("skipped_claim_active>0 reported abort=false, want true")
+		t.Fatal("skipped_claim_active>0 reported abort=false")
 	}
 }
 

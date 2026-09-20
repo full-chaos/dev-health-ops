@@ -322,6 +322,32 @@ var operationSpecs = map[string]OperationSpec{
 			compoundingRiskPinnedTrendVariant("TREND_CLAMPED_LOW", 0),
 		},
 	},
+	"aiOpportunities": {
+		ResponseRoot: "aiOpportunities",
+		Variables:    aiOpportunityVariables(nil, 25),
+		Parity:       requireLists(aiOpportunitiesParity(), "data.aiOpportunities.recommendations"),
+		Variants: append(aiOpportunityVariants(),
+			aiOpportunityInstanceVariant("REPO_VALID", "a repository id with rollup rows, commits or pull requests that trip a rule", "repoId"),
+			aiOpportunityInstanceVariant("REPO_NAME_VALID", "the full name of a repository that trips a rule", "repoId"),
+			aiOpportunityInstanceVariant("TEAM_VALID", "a team id stored on rollup rows that trip a metric rule", "teamId"),
+		),
+	},
+	"improveOpportunities": {
+		ResponseRoot: "improveOpportunities",
+		Variables:    improveVariables(nil, 10, 30),
+		Parity:       requireLists(improveOpportunitiesParity(), "data.improveOpportunities.opportunities"),
+		Variants: []Variant{
+			improveVariant("LIMIT_ONE", nil, 1, 30),
+			improveVariant("LIMIT_OVER_CEILING", nil, 500, 30),
+			improveVariant("WINDOW_ONE_DAY", nil, 10, 1),
+			improveVariant("WINDOW_OVER_CEILING", nil, 10, 9999),
+			improveVariant("REPO_UNKNOWN", map[string]any{"repoId": "00000000-0000-0000-0000-000000000001"}, 10, 30),
+			improveVariant("REPO_MALFORMED", map[string]any{"repoId": "not-a-uuid"}, 10, 30),
+			improveVariant("TEAM_UNKNOWN", map[string]any{"teamId": "team-abc-123"}, 10, 30),
+			improveInstanceVariant("REPO_VALID", "a repository id with at least five days of repository metrics that trip a rule", "repoId"),
+			improveInstanceVariant("TEAM_VALID", "a team id with at least five days of work-item metrics that trip a rule", "teamId"),
+		},
+	},
 	"aiGovernanceSummary": {
 		ResponseRoot: "aiGovernanceSummary",
 		Variables:    aiGovernanceVariables(nil, 50),
@@ -996,19 +1022,17 @@ var operationSpecs = map[string]OperationSpec{
 		},
 		Parity: securityAlertsParity,
 		Variants: []Variant{
-			securityAlertsVariant("OPEN_ONLY", map[string]any{"openOnly": true}, nil),
-			securityAlertsVariant("STATES", map[string]any{"states": []any{"FIXED", "DISMISSED"}}, nil),
-			securityAlertsVariant("OPEN_ONLY_OVER_STATES", map[string]any{"openOnly": true, "states": []any{"FIXED"}}, nil),
-			securityAlertsVariant("SEVERITIES", map[string]any{"severities": []any{"CRITICAL", "HIGH", "UNKNOWN"}}, nil),
-			securityAlertsVariant("SOURCES", map[string]any{"sources": []any{"DEPENDABOT", "GITLAB_DEPENDENCY"}}, nil),
-			securityAlertsVariant("REPO_IDS", map[string]any{"repoIds": []any{"00000000-0000-0000-0000-000000000001"}}, nil),
-			securityAlertsVariant("SINCE_UNTIL", map[string]any{"since": "2026-06-01", "until": "2026-08-31"}, nil),
-			securityAlertsVariant("SEARCH", map[string]any{"search": "ABC-123"}, nil),
+			securityAlertsEchoVariant("OPEN_ONLY", map[string]any{"openOnly": true}, "node.state", "open", "detected", "confirmed"),
+			securityAlertsEchoVariant("OPEN_ONLY_OVER_STATES", map[string]any{"openOnly": true, "states": []any{"FIXED"}}, "node.state", "open", "detected", "confirmed"),
+			securityAlertsEchoVariant("SEVERITIES", map[string]any{"severities": []any{"CRITICAL", "HIGH", "UNKNOWN"}}, "node.severity", "critical", "high", "unknown"),
+			securityAlertsEchoVariant("SOURCES", map[string]any{"sources": []any{"DEPENDABOT", "GITLAB_DEPENDENCY"}}, "node.source", "dependabot", "gitlab_dependency"),
+			securityAlertsDateRangeVariant("SINCE_UNTIL", "2026-06-01", "2026-08-31"),
+			securityAlertsStateVariant(),
 			securityAlertsInstanceVariant("REPO_VALID", "a repository id that has alerts", "repoIds", true),
 			securityAlertsInstanceVariant("SEARCH_VALID", "a search term that matches an alert's title, package or CVE", "search", false),
 			securityAlertsVariant("PAGE_FIRST", nil, map[string]any{"first": 5}),
 			securityAlertsSecondPageVariant(),
-			securityAlertsVariant("PAGE_ZERO", nil, map[string]any{"first": 0}),
+			securityAlertsPageZeroVariant(),
 		},
 	},
 	"securityOverview": {
@@ -1017,13 +1041,11 @@ var operationSpecs = map[string]OperationSpec{
 			return map[string]any{"orgId": orgID, "filters": nil}
 		},
 		Variants: []Variant{
-			securityOverviewVariant("OPEN_ONLY", map[string]any{"openOnly": true}),
-			securityOverviewVariant("STATES", map[string]any{"states": []any{"FIXED", "DISMISSED"}}),
-			securityOverviewVariant("SEVERITIES", map[string]any{"severities": []any{"CRITICAL", "HIGH", "UNKNOWN"}}),
-			securityOverviewVariant("SOURCES", map[string]any{"sources": []any{"DEPENDABOT", "GITLAB_DEPENDENCY"}}),
-			securityOverviewVariant("REPO_IDS", map[string]any{"repoIds": []any{"00000000-0000-0000-0000-000000000001"}}),
-			securityOverviewVariant("SINCE_UNTIL", map[string]any{"since": "2026-06-01", "until": "2026-08-31"}),
-			securityOverviewVariant("SEARCH", map[string]any{"search": "ABC-123"}),
+			securityOverviewNonEmptyVariant("OPEN_ONLY", map[string]any{"openOnly": true}),
+			securityOverviewOpenStateVariant(),
+			securityOverviewNonEmptyVariant("SEVERITIES", map[string]any{"severities": []any{"CRITICAL", "HIGH", "UNKNOWN"}}),
+			securityOverviewNonEmptyVariant("SOURCES", map[string]any{"sources": []any{"DEPENDABOT", "GITLAB_DEPENDENCY"}}),
+			securityOverviewNonEmptyVariant("SINCE_UNTIL", map[string]any{"since": "2026-06-01", "until": "2026-08-31"}),
 			securityOverviewRepoVariant("REPO_VALID", "a repository id that has open alerts"),
 		},
 	},
@@ -1789,6 +1811,140 @@ func experimentsVariant(name, level string, ids []string) Variant {
 	}
 }
 
+// aiOpportunityVariables builds the AI opportunity request: the org, the
+// scope (nil sends none) and the limit.
+func aiOpportunityVariables(scope map[string]any, limit int) func(orgID string, w Window) map[string]any {
+	return func(orgID string, _ Window) map[string]any {
+		vars := map[string]any{"orgId": orgID, "scope": nil, "limit": limit}
+		if scope != nil {
+			vars["scope"] = scope
+		}
+		return vars
+	}
+}
+
+// aiOpportunityVariants is one variant per scope and limit branch the
+// detector has. The repository and team values name nothing in any org, so
+// both planes answer no opportunity for them; a scope that selects real rows
+// needs a run-supplied identifier. Variants that select nothing by
+// construction declare nothing.
+func aiOpportunityVariants() []Variant {
+	cases := []struct {
+		name  string
+		scope map[string]any
+		limit int
+	}{
+		{"LIMIT_ONE", nil, 1},
+		{"LIMIT_ZERO", nil, 0},
+		{"LIMIT_OVER_CEILING", nil, 500},
+		{"REPO_UNKNOWN", map[string]any{"repoId": "00000000-0000-0000-0000-000000000001"}, 25},
+		{"REPO_NAME_UNKNOWN", map[string]any{"repoId": "no-such-org/no-such-repo"}, 25},
+		{"TEAM_UNKNOWN", map[string]any{"teamId": "team-abc-123"}, 25},
+		{"REPO_AND_TEAM_UNKNOWN", map[string]any{"repoId": "00000000-0000-0000-0000-000000000001", "teamId": "team-abc-123"}, 25},
+	}
+	variants := make([]Variant, 0, len(cases))
+	for _, c := range cases {
+		p := Options{}
+		if strings.HasPrefix(c.name, "LIMIT_") {
+			p = requireLists(aiOpportunitiesParity(), "data.aiOpportunities.recommendations")
+		}
+		variants = append(variants, Variant{Name: c.name, Variables: aiOpportunityVariables(c.scope, c.limit), Parity: p})
+	}
+	return variants
+}
+
+func aiOpportunityInstanceVariant(name, kind, scopeField string) Variant {
+	parity := aiOpportunitiesParity()
+	parity.RequireNonEmpty = []string{"data.aiOpportunities.recommendations"}
+	return Variant{
+		Name:      name,
+		Variables: aiOpportunityVariables(map[string]any{}, 25),
+		Parity:    parity,
+		Instance: &VariantInstance{
+			Kind: kind,
+			Bind: func(vars map[string]any, value string) { vars["scope"].(map[string]any)[scopeField] = value },
+			EchoFor: func(value string) []ScopeEcho {
+				if scopeField == "teamId" {
+					return []ScopeEcho{{List: "data.aiOpportunities.recommendations", Fields: []string{"teamId"}, Value: value}}
+				}
+				return nil
+			},
+		},
+	}
+}
+
+// aiOpportunitiesParity declares the opportunity list unordered and its score
+// a merged floating-point aggregate: the detector's first read has no ordering
+// and the flaky-test score derives from a summed rate.
+func aiOpportunitiesParity() Options {
+	return Options{
+		FloatTierB: map[string]string{
+			"data.aiOpportunities.recommendations.score": "the flaky-test score derives from sum(flake_rate * total_cases) / sum(total_cases), a floating-point aggregate ClickHouse merges in thread-completion order, so the last bits differ run to run on both planes (CHAOS-5451)",
+		},
+		OrderInsensitiveLists: []OrderInsensitiveList{{
+			Path:      "data.aiOpportunities.recommendations",
+			KeyFields: []string{"opportunityId"},
+			Reason:    "the detector groups an unordered GROUP BY result in first-seen order and sorts by score, so opportunities with equal scores have no stable relative order",
+			Ticket:    "CHAOS-6081",
+		}},
+	}
+}
+
+func improveVariables(scope map[string]any, limit, windowDays int) func(orgID string, w Window) map[string]any {
+	return func(_ string, _ Window) map[string]any {
+		vars := map[string]any{"scope": nil, "limit": limit, "windowDays": windowDays}
+		if scope != nil {
+			vars["scope"] = scope
+		}
+		return vars
+	}
+}
+
+func improveVariant(name string, scope map[string]any, limit, windowDays int) Variant {
+	p := requireLists(improveOpportunitiesParity(), "data.improveOpportunities.opportunities")
+	if strings.HasSuffix(name, "_UNKNOWN") || name == "REPO_MALFORMED" {
+		p = Options{}
+	}
+	return Variant{Name: name, Variables: improveVariables(scope, limit, windowDays), Parity: p}
+}
+
+func improveInstanceVariant(name, kind, scopeField string) Variant {
+	parity := improveOpportunitiesParity()
+	parity.RequireNonEmpty = []string{"data.improveOpportunities.opportunities"}
+	return Variant{
+		Name:      name,
+		Variables: improveVariables(map[string]any{}, 10, 30),
+		Parity:    parity,
+		Instance: &VariantInstance{
+			Kind: kind,
+			Bind: func(vars map[string]any, value string) { vars["scope"].(map[string]any)[scopeField] = value },
+		},
+	}
+}
+
+// improveOpportunitiesParity declares the score a floating-point aggregate
+// (an average over daily rows) and the list unordered.
+func improveOpportunitiesParity() Options {
+	return Options{
+		FloatTierB: map[string]string{
+			"data.improveOpportunities.opportunities.score": "the score is computed from avg(...) over daily metric rows, a floating-point aggregate ClickHouse merges in thread-completion order, so the last bits differ run to run on both planes (CHAOS-5451)",
+		},
+		OrderInsensitiveLists: []OrderInsensitiveList{{
+			Path:      "data.improveOpportunities.opportunities",
+			KeyFields: []string{"opportunityId"},
+			Reason:    "the detector sorts by score over two unordered GROUP BY results, so opportunities with equal scores have no stable relative order",
+			Ticket:    "CHAOS-6081",
+		}},
+	}
+}
+
+// requireLists returns o requiring the named lists to be non-empty on a leg: a
+// request whose lists are empty on both legs measured nothing.
+func requireLists(o Options, paths ...string) Options {
+	o.RequireNonEmpty = append([]string(nil), paths...)
+	return o
+}
+
 // aiGovernanceVariables builds the governance summary request: the org, the
 // run's day window, the scope (nil sends none) and the violation limit.
 func aiGovernanceVariables(scope map[string]any, violationLimit int) func(orgID string, w Window) map[string]any {
@@ -1891,13 +2047,6 @@ func aiWorkflowParity() Options {
 			Ticket:    "CHAOS-6081",
 		},
 	}}
-}
-
-// requireLists returns o requiring the named lists to be non-empty on a leg: a
-// request whose lists are empty on both legs measured nothing.
-func requireLists(o Options, paths ...string) Options {
-	o.RequireNonEmpty = append([]string(nil), paths...)
-	return o
 }
 
 // aiPagedVariables builds the shared request of the paged AI operations: the
@@ -2320,6 +2469,82 @@ func analyticsBatchVariants(series []analyticsSeries, breakdowns []analyticsBrea
 		out = append(out, Variant{Name: "BREAKDOWN_" + bd.Dimension + "_" + bd.Measure, Variables: analyticsBatchVariables(b), Parity: analyticsBatchParity(b)})
 	}
 	return out
+}
+
+// securityAlertsEchoVariant applies a set-valued filter and requires every
+// returned alert to carry one of the filter's values in field, so a filter
+// both planes ignore is refused rather than recorded as a match.
+func securityAlertsEchoVariant(name string, filters map[string]any, field string, anyOf ...string) Variant {
+	v := securityAlertsVariant(name, filters, nil)
+	v.Parity = Options{
+		BaselineDefects: securityAlertsParity.BaselineDefects,
+		ScopeEcho:       []ScopeEcho{{List: "data.securityAlerts.edges", Fields: []string{field}, AnyOf: anyOf}},
+	}
+	return v
+}
+
+// securityAlertsStateVariant filters the alert list by ONE run-supplied
+// state, measured only when the list holds an alert and every alert is in
+// that state; the run supplies a state that has alerts and is not the only
+// state the org's alerts are in, so the answer is a strict subset.
+func securityAlertsStateVariant() Variant {
+	return Variant{
+		Name: "STATE_VALID",
+		Variables: func(orgID string, _ Window) map[string]any {
+			return securityAlertsVariables(orgID, map[string]any{}, nil)
+		},
+		Parity: Options{
+			BaselineDefects: securityAlertsParity.BaselineDefects,
+			RequireNonEmpty: []string{"data.securityAlerts.edges"},
+		},
+		Instance: &VariantInstance{
+			Kind: "an alert state (open, fixed, dismissed, detected, confirmed or resolved) that has alerts and is not the only state the org's alerts are in",
+			Bind: func(vars map[string]any, value string) {
+				vars["filters"].(map[string]any)["states"] = []any{strings.ToUpper(value)}
+			},
+			EchoFor: func(value string) []ScopeEcho {
+				return []ScopeEcho{{List: "data.securityAlerts.edges", Fields: []string{"node.state"}, Value: value}}
+			},
+		},
+	}
+}
+
+// securityAlertsPageZeroVariant reads zero alerts: its answer is the count
+// and page flags with no alert, so it declares no timestamp difference (there
+// is no timestamp leaf for that declaration to match).
+func securityAlertsPageZeroVariant() Variant {
+	v := securityAlertsVariant("PAGE_ZERO", nil, map[string]any{"first": 0})
+	v.Parity = Options{}
+	return v
+}
+
+// securityOverviewOpenStateVariant filters the overview to the open state,
+// measured only when the severity breakdown (open alerts only) is non-empty.
+func securityOverviewOpenStateVariant() Variant {
+	v := securityOverviewVariant("STATES", map[string]any{"states": []any{"OPEN"}})
+	v.Parity = Options{RequireNonEmpty: []string{"data.securityOverview.severityBreakdown"}}
+	return v
+}
+
+// securityAlertsDateRangeVariant reads the alerts created in an inclusive date
+// range; every returned alert must be created inside it and the list must be
+// non-empty.
+func securityAlertsDateRangeVariant(name, since, until string) Variant {
+	v := securityAlertsVariant(name, map[string]any{"since": since, "until": until}, nil)
+	v.Parity = Options{
+		BaselineDefects: securityAlertsParity.BaselineDefects,
+		RequireNonEmpty: []string{"data.securityAlerts.edges"},
+		ScopeEcho:       []ScopeEcho{{List: "data.securityAlerts.edges", Fields: []string{"node.createdAt"}, NotBefore: since, NotAfter: until}},
+	}
+	return v
+}
+
+// securityOverviewNonEmptyVariant is an overview filter case measured only when
+// the severity breakdown (open alerts) holds a bucket on a leg.
+func securityOverviewNonEmptyVariant(name string, filters map[string]any) Variant {
+	v := securityOverviewVariant(name, filters)
+	v.Parity = Options{RequireNonEmpty: []string{"data.securityOverview.severityBreakdown"}}
+	return v
 }
 
 func testopsRiskVariables(orgID, start, end string) map[string]any {

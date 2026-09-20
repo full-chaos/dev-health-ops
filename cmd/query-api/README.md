@@ -12,13 +12,15 @@ and the plan doc,
 
 ## Wave 1 & 2: featureFlags and reviewEdges are live behind the switch
 
-`internal/featureflags` ports
-`dev_health_ops.api.graphql.resolvers.feature_flags.resolve_feature_flags`
+`internal/featureflags` ports the Python `feature_flags.resolve_feature_flags`
+resolver (since deleted; `internal/featureflags/testdata/feature_flags_golden.json`
+records the queries it issued and the results it built)
 verbatim (same WHERE clauses, argMax latest-row selection, ORDER BY,
 LIMIT clamp, and missing-table degraded path).
 
-`internal/reviewedges` ports
-`dev_health_ops.api.graphql.resolvers.review_edges.resolve_review_edges`
+`internal/reviewedges` ports the Python `review_edges.resolve_review_edges`
+resolver (since deleted; `internal/reviewedges/testdata/review_edges_golden.json`
+records the queries it issued and the results it built)
 verbatim (same argMax-per-key dedup over the append-only
 `review_edges_daily` table, same `ORDER BY reviews_count DESC, repo_id,
 reviewer, author, day` deterministic tie-break added by CHAOS-4368 Part A
@@ -58,17 +60,21 @@ file to avoid repeating (a wrong operation name on both the test and
 route sides would still "match" locally while 404-ing every real client
 request).
 
-Stage-2 local dual-run proof (real Python + real Go server, same
-producer-seeded scratch state, compared via the CHAOS-4381 comparator):
-`tests/api/graphql/test_go_api_dual_run_feature_flags.py`,
-`tests/api/graphql/test_go_api_dual_run_review_edges.py`,
-`tests/api/graphql/test_go_api_dual_run_cognitive_load.py`, and
-`tests/api/graphql/test_go_api_dual_run_complexity_timeseries.py`.
+The local dual-run tests (real Python + real Go server compared through the
+parity comparator) were deleted together with the Python resolvers they
+ran. What they proved is kept as frozen goldens, each produced by running the
+Python resolver once over scripted rows and compared by a Go test on every run:
+`internal/featureflags/testdata/feature_flags_golden.json`,
+`internal/reviewedges/testdata/review_edges_golden.json`,
+`internal/cognitiveload/testdata/cognitive_load_golden.json`,
+`internal/complexitytimeseries/testdata/complexity_timeseries_golden.json`,
+`internal/hotspots/testdata/hotspots_golden.json` and
+`internal/graph/testdata/pr_golden.json`.
 
 ## Wave 3: cognitiveLoad (CHAOS-4369, extended to a third path by CHAOS-4462)
 
-`internal/cognitiveload` ports
-`dev_health_ops.api.graphql.resolvers.cognitive_load.resolve_cognitive_load`
+`internal/cognitiveload` ports the Python `cognitive_load.resolve_cognitive_load`
+resolver (since deleted)
 verbatim, including the THREE distinct read paths the Python resolver
 picks between on `teamId`/`repoId`:
 
@@ -104,8 +110,8 @@ was verified false at the time
 returned non-zero; the commit existed only on `origin/main`), and was
 tracked as follow-up **CHAOS-4462**. The CHAOS-4352 rebase lane then
 rebased the feature branch onto `origin/main` (which carries 8519cd2a8),
-so `resolvers/cognitive_load.py` at the feature tip is now byte-identical
-to `origin/main`'s 3-path version, and this PR ports the third path to
+so the Python resolver at the feature tip was identical to
+`origin/main`'s 3-path version, and this PR ported the third path to
 close CHAOS-4462. `resolveOwnedRepoID`'s pattern-fallback resolver
 (`repoPatternResolver`) is a small package-private port of
 `RepoPatternTeamResolver`/`build_repo_pattern_resolver`
@@ -125,8 +131,8 @@ always wins over a mismatched `orgId` argument (`schema.resolvers.go`'s
 
 ## Wave 3: complexityTimeseries is live behind the switch
 
-`internal/complexitytimeseries` ports
-`dev_health_ops.api.graphql.resolvers.complexity.resolve_complexity_timeseries`
+`internal/complexitytimeseries` ports the Python
+`complexity.resolve_complexity_timeseries` resolver (since deleted)
 verbatim: same two-table split by `scope` (`REPO` reads
 `repo_complexity_daily`, `FILE` reads `file_complexity_snapshots`), same
 `argMax(<col>, computed_expr)` latest-compute-pass selection where
@@ -178,8 +184,8 @@ ports a resolver that does.
 
 ## Wave 3: hotspots is live behind the switch
 
-`internal/hotspots` ports
-`dev_health_ops.api.graphql.resolvers.complexity.resolve_hotspots`
+`internal/hotspots` ports the Python `complexity.resolve_hotspots` resolver
+(since deleted)
 verbatim: same `argMax(<col>, computed_at)` latest-compute-pass selection
 over the append-only `file_hotspot_daily` table, same optional `repoIds`
 filter resolved through the org-scoped `repos` catalog (bounded to
@@ -206,9 +212,11 @@ GraphQL error on both sides.
 
 ## Wave 0 scope: intentionally empty
 
-**No resolver is implemented.** Every GraphQL field gqlgen generated in
-`internal/graph/schema.resolvers.go` panics with `"not implemented"`. This
-is deliberate, not incomplete — plan §6: "deploy an empty Go query-api and
+The Wave 0 service implemented no resolver: every GraphQL field gqlgen
+generated in `internal/graph/schema.resolvers.go` panicked with
+`"not implemented"`. Resolvers have been added field by field since (see the
+waves above and the resolver bodies in that file); a field not yet built still
+panics. The empty start was deliberate, not incomplete — plan §6: "deploy an empty Go query-api and
 prove a route becomes reachable when, and only when, its individual switch
 is enabled." What exists in this Wave:
 

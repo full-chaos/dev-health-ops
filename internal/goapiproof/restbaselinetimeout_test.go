@@ -40,6 +40,9 @@ func TestBaselineTimeoutDeclarationValidate_OneCellPerClause(t *testing.T) {
 		{"no paths", func(d *BaselineTimeoutDeclaration, _ *RESTRequest) { d.NonEmptyPaths = nil }, "no NonEmptyPaths"},
 		{"path not rooted at data", func(d *BaselineTimeoutDeclaration, _ *RESTRequest) { d.NonEmptyPaths = []string{"deltas"} }, "does not start at"},
 		{"path with blank segment", func(d *BaselineTimeoutDeclaration, _ *RESTRequest) { d.NonEmptyPaths = []string{"data..x"} }, "blank segment"},
+		{"bounded-candidate binding", func(_ *BaselineTimeoutDeclaration, r *RESTRequest) {
+			r.IDBindings = []RESTIDBinding{{Producer: "p", QueryParam: "q", Candidates: 3, ExposeAs: "e"}}
+		}, "bounded-candidate binding"},
 		{"candidate status not 200", func(_ *BaselineTimeoutDeclaration, r *RESTRequest) { r.WantCandidateStatus = 503 }, "WantCandidateStatus 200"},
 		{"status-only body", func(_ *BaselineTimeoutDeclaration, r *RESTRequest) { r.BodyMode = RESTBodyModeStatusOnly }, "BodyMode"},
 	} {

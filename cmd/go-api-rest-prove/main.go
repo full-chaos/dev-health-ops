@@ -585,7 +585,7 @@ func isLegTransportRefusal(reason string) bool {
 func legFailuresIn(outcomes []outcome) []string {
 	var failures []string
 	for _, out := range outcomes {
-		if isLegTransportRefusal(out.Refusal) {
+		if isLegTransportRefusal(out.Refusal) || (!out.Admitted && out.BaselineTimedOut) {
 			failures = append(failures, fmt.Sprintf("%s/%s: %s -- %s", out.Operation, out.Request, out.Refusal, out.Detail))
 		}
 	}
@@ -727,6 +727,13 @@ type outcome struct {
 	// BaselineTimeoutDeclared (baselinetimeout.go): the measured wait,
 	// formatted "180.0s", the baseline leg ran before it was given up on.
 	BaselineTimedOutAfter string `json:"baseline_timed_out_after,omitempty"`
+
+	// BaselineTimedOut is set on every outcome of a request whose baseline leg
+	// produced no response within its timeout and which carries a
+	// BaselineTimeoutDeclared. Admitted, it is the declaration firing; refused,
+	// it keeps the baseline failure on the run's leg-failure accounting
+	// (legFailuresIn), whatever name the refusal carries.
+	BaselineTimedOut bool `json:"baseline_timed_out,omitempty"`
 
 	// Attempts names every LOSING candidate a bounded-candidate binding
 	// (goapiproof.RESTIDBinding.Candidates > 0) tried on THIS request

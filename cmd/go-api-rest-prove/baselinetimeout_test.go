@@ -118,6 +118,15 @@ func TestProveOneRESTRequest_BaselineTimeoutDeclaration(t *testing.T) {
 			if out.Refusal != "" && out.Admitted {
 				t.Fatalf("a refused outcome must not be admitted: %+v", out)
 			}
+			// A baseline that never answered keeps the run non-zero unless the
+			// declaration admitted the request: the refusal's name never decides it.
+			baselineSilent := cell.baseline.stall || cell.baseline.closed
+			wantFailure := baselineSilent && !out.Admitted
+			failures := legFailuresIn([]outcome{out})
+			cause, _ := exitCauseFor(nil, nil, failures, nil)
+			if (len(failures) > 0) != wantFailure || (cause != exitCompleted) != wantFailure {
+				t.Fatalf("leg failures = %v, exit cause = %q, want failure=%v (outcome %s)", failures, cause, wantFailure, out.line())
+			}
 			if !cell.wantReceipt {
 				return
 			}

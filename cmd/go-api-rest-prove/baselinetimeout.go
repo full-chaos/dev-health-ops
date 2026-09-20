@@ -39,6 +39,9 @@ func proveUnderBaselineTimeout(
 	timedOut outcome,
 ) (outcome, error) {
 	decl := *request.BaselineTimeoutDeclared
+	// From here every outcome carries the baseline's silence: a refusal keeps
+	// counting as a leg that never answered, whatever reason names it.
+	timedOut.BaselineTimedOut = true
 	if waited < decl.MinTimeout {
 		timedOut.Refusal = goapiproof.RESTRefusalBaselineTimeoutTooShort
 		timedOut.Detail = fmt.Sprintf("baseline leg ended without an answer after %s, less than the declared minimum wait %s: %s", waited.Round(100*time.Millisecond), decl.MinTimeout, timedOut.Detail)
@@ -69,7 +72,7 @@ func proveUnderBaselineTimeout(
 	out := outcome{
 		Operation: operation, Request: request.Name,
 		Admitted: admission.Admitted, Refusal: admission.Reason, Detail: admission.Detail,
-		BoundIDs:             boundIDs,
+		BoundIDs: boundIDs, BaselineTimedOut: true,
 		CandidateResponseRef: candidateRef, CandidateObservedAt: candidateObservedAt,
 		ObservedAt:            observedAt,
 		CandidateWireAttempts: candidateLeg.WireAttempts,

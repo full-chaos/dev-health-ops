@@ -96,6 +96,11 @@ func (d BaselineTimeoutDeclaration) Validate(req RESTRequest) error {
 			}
 		}
 	}
+	for _, binding := range req.IDBindings {
+		if binding.Candidates > 0 {
+			return fmt.Errorf("baseline-timeout declaration cannot ride a bounded-candidate binding (%q): the search needs the baseline's ids to move on", binding.Producer)
+		}
+	}
 	if req.WantCandidateStatus != 200 {
 		return fmt.Errorf("baseline-timeout declaration needs WantCandidateStatus 200, got %d", req.WantCandidateStatus)
 	}

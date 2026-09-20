@@ -1134,6 +1134,74 @@ const registeredAiReviewLoadDocument = `query AIReviewLoad($orgId: String!, $dat
   }
 }`
 
+// registeredAiGovernanceSummaryDocument is the registered document for the
+// `aiGovernanceSummary` operation, the exact wire-form text a real web client sends
+// (testdata/wire_capture/aigovernancesummary_captured.graphql).
+const registeredAiGovernanceSummaryDocument = `query AIGovernanceSummary($orgId: String!, $dateRange: AIDateRangeInput!, $scope: AIScopeInput, $violationLimit: Int! = 50) {
+  aiGovernanceSummary(
+    orgId: $orgId
+    dateRange: $dateRange
+    scope: $scope
+    violationLimit: $violationLimit
+  ) {
+    orgId
+    startDate
+    endDate
+    dataAvailable
+    recentViolations {
+      ruleId
+      severity
+      subjectType
+      subjectId
+      teamId
+      repoId
+      observedAt
+      evidence
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredAiWorkflowDrilldownDocument is the registered document for the
+// `aiWorkflowDrilldown` operation, the exact wire-form text a real web client sends
+// (testdata/wire_capture/aiworkflowdrilldown_captured.graphql).
+const registeredAiWorkflowDrilldownDocument = `query AIWorkflowDrilldown($orgId: String!, $rootType: AIWorkflowRootTypeInput!, $rootId: String!, $depth: Int! = 3, $limit: Int! = 100) {
+  aiWorkflowDrilldown(
+    orgId: $orgId
+    rootType: $rootType
+    rootId: $rootId
+    depth: $depth
+    limit: $limit
+  ) {
+    orgId
+    rootType
+    rootId
+    partial
+    dataAvailable
+    nodes {
+      nodeType
+      nodeId
+      __typename
+    }
+    edges {
+      edgeId
+      sourceType
+      sourceId
+      targetType
+      targetId
+      edgeType
+      confidence
+      source
+      evidence
+      provider
+      repoId
+      __typename
+    }
+    __typename
+  }
+}`
+
 // registeredAiRiskBreakdownDocument is the registered document for the
 // `aiRiskBreakdown` operation, the exact wire-form text a real web client sends
 // (testdata/wire_capture/airiskbreakdown_captured.graphql).
@@ -2403,6 +2471,8 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		"aiComparison":                      digestHex(registeredAiComparisonDocument),
 		"aiReviewLoad":                      digestHex(registeredAiReviewLoadDocument),
 		"compoundingRisk":                   digestHex(registeredCompoundingRiskDocument),
+		"aiGovernanceSummary":               digestHex(registeredAiGovernanceSummaryDocument),
+		"aiWorkflowDrilldown":               digestHex(registeredAiWorkflowDrilldownDocument),
 		"aiRiskBreakdown":                   digestHex(registeredAiRiskBreakdownDocument),
 		"aiAttributedPrs":                   digestHex(registeredAiAttributedPrsDocument),
 		"aiAttributionOverview":             digestHex(registeredAiAttributionOverviewDocument),

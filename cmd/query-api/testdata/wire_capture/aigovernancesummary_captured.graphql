@@ -1,0 +1,25 @@
+query AIGovernanceSummary($orgId: String!, $dateRange: AIDateRangeInput!, $scope: AIScopeInput, $violationLimit: Int! = 50) {
+  aiGovernanceSummary(
+    orgId: $orgId
+    dateRange: $dateRange
+    scope: $scope
+    violationLimit: $violationLimit
+  ) {
+    orgId
+    startDate
+    endDate
+    dataAvailable
+    recentViolations {
+      ruleId
+      severity
+      subjectType
+      subjectId
+      teamId
+      repoId
+      observedAt
+      evidence
+      __typename
+    }
+    __typename
+  }
+}

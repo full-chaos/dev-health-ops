@@ -117,6 +117,11 @@ type Finding struct {
 	// judge the values themselves (TimestampRenderingShape) rather than
 	// the Detail text; both are empty on every other finding.
 	baselineText, candidateText string
+
+	// baselineLeaf/candidateLeaf are the two decoded leaves of a leaf
+	// finding (a scalar or null on each side), kept for shapes that judge
+	// the exact values (LeafPairShape); both are nil on every other finding.
+	baselineLeaf, candidateLeaf any
 }
 
 // Finding shapes. A citation (BaselineDefect) declares that the Python
@@ -911,6 +916,14 @@ type BaselineDefect struct {
 	// structural finding. A defect never sets more than one shape field.
 	TimestampRenderingShape *TimestampRenderingShape
 
+	// LeafPairShape, when set, replaces this defect's blanket "any leaf
+	// difference under Paths is covered" rule with an admission of a leaf
+	// finding only where the two decoded leaves are exactly one of the
+	// declared (baseline, candidate) pairs -- see LeafPairShape's own doc
+	// comment (leafpair.go). A leaf shape: it never admits a structural
+	// finding. A defect never sets more than one shape field.
+	LeafPairShape *LeafPairShape
+
 	// Accounting, when set, gates every admission this defect makes,
 	// whatever its shape or none: while the route family's candidate-side
 	// check (CandidateAccounting, candidateaccounting.go) fails over its
@@ -1409,7 +1422,11 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 		}
 		var renderingPlan *timestampRenderingPlan
 		if defect.TimestampRenderingShape != nil {
-			renderingPlan = &timestampRenderingPlan{}
+			renderingPlan = &timestampRenderingPlan{candidateIsDate: defect.TimestampRenderingShape.CandidateIsDate}
+		}
+		var pairPlan *leafPairPlan
+		if defect.LeafPairShape != nil {
+			pairPlan = &leafPairPlan{shape: defect.LeafPairShape}
 		}
 		var copySumPlan *baselineCopySumPlan
 		if defect.BaselineCopySumShape != nil {
@@ -1428,7 +1445,7 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 		// apart, and a shaped defect that hit on path alone would still
 		// double-report alongside the shape that actually explains the
 		// difference.
-		shaped := repoPlan != nil || covPlan != nil || dedupPlan != nil || skewPlan != nil || sankeyFanoutPlan != nil || keyedDirPlan != nil || conservePlan != nil || dictDirPlan != nil || scalarDirPlan != nil || identityPlan != nil || displacePlan != nil || hotspotBoundaryPlan != nil || subsetPlan != nil || zeroValueEmptyListPlan != nil || tiePlan != nil || heatmapCellPlan != nil || dupLenPlan != nil || homeTierPlan != nil || axisRepoOrderPlan != nil || axisTieGroupPlan != nil || dupPageCutPlan != nil || driversPlan != nil || momentPlan != nil || renderingPlan != nil || copySumPlan != nil
+		shaped := repoPlan != nil || covPlan != nil || dedupPlan != nil || skewPlan != nil || sankeyFanoutPlan != nil || keyedDirPlan != nil || conservePlan != nil || dictDirPlan != nil || scalarDirPlan != nil || identityPlan != nil || displacePlan != nil || hotspotBoundaryPlan != nil || subsetPlan != nil || zeroValueEmptyListPlan != nil || tiePlan != nil || heatmapCellPlan != nil || dupLenPlan != nil || homeTierPlan != nil || axisRepoOrderPlan != nil || axisTieGroupPlan != nil || dupPageCutPlan != nil || driversPlan != nil || momentPlan != nil || renderingPlan != nil || pairPlan != nil || copySumPlan != nil
 		var touched []int
 		for i, path := range mismatches {
 			if !defectCovers(defect, path) {
@@ -1552,6 +1569,8 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 				admitted = momentPlan.admits(result.Findings[findingRefs[i]])
 			case renderingPlan != nil:
 				admitted = renderingPlan.admits(result.Findings[findingRefs[i]])
+			case pairPlan != nil:
+				admitted = pairPlan.admits(result.Findings[findingRefs[i]])
 			case copySumPlan != nil:
 				admitted = copySumPlan.admits(result.Findings[findingRefs[i]])
 			}
@@ -1922,7 +1941,7 @@ func compareJSON(baseline, candidate any, path string, opts Options, envelopeKey
 		case baselineKind == "null" || candidateKind == "null":
 			shape = ShapeNull
 		}
-		return []Finding{{Kind: FindingMismatch, Path: path, Detail: fmt.Sprintf("%v != %v", baseline, candidate), Shape: shape}}
+		return []Finding{{Kind: FindingMismatch, Path: path, Detail: fmt.Sprintf("%v != %v", baseline, candidate), Shape: shape, baselineLeaf: baseline, candidateLeaf: candidate}}
 	}
 
 	baselineBool, baselineIsBool := baseline.(bool)
@@ -1980,7 +1999,7 @@ func compareJSON(baseline, candidate any, path string, opts Options, envelopeKey
 	}
 
 	if !sameScalar(baseline, candidate) {
-		finding := Finding{Kind: FindingMismatch, Path: path, Detail: fmt.Sprintf("%v != %v", baseline, candidate), Shape: ShapeValue}
+		finding := Finding{Kind: FindingMismatch, Path: path, Detail: fmt.Sprintf("%v != %v", baseline, candidate), Shape: ShapeValue, baselineLeaf: baseline, candidateLeaf: candidate}
 		baselineText, baselineIsText := baseline.(string)
 		candidateText, candidateIsText := candidate.(string)
 		if baselineIsText && candidateIsText {

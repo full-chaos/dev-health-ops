@@ -210,6 +210,7 @@ func TestExecuteBreakdown_AllNullGroupYieldsNilValue_NotZero(t *testing.T) {
 		response: &fakeRowScanner{rows: [][]any{
 			{"repo-null", nil},  // SQL NULL -- the all-NULL-group shape
 			{"repo-real", 42.5}, // populated -- the other direction
+			{"repo-zero", 0.0},  // a measured zero is a value, never null
 		}},
 	}
 	q := compiledQuery{sql: "SELECT ..."}
@@ -217,8 +218,11 @@ func TestExecuteBreakdown_AllNullGroupYieldsNilValue_NotZero(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExecuteBreakdown error = %v", err)
 	}
-	if len(result.Items) != 2 {
-		t.Fatalf("got %d items, want 2", len(result.Items))
+	if len(result.Items) != 3 {
+		t.Fatalf("got %d items, want 3", len(result.Items))
+	}
+	if result.Items[2].Key != "repo-zero" || result.Items[2].Value == nil || *result.Items[2].Value != 0 {
+		t.Fatalf("expected repo-zero's Value to be a real 0 (the proof corpus admits reference 0.0 against Go null only because a measured zero stays 0 here), got %+v", result.Items[2])
 	}
 	if result.Items[0].Key != "repo-null" || result.Items[0].Value != nil {
 		t.Fatalf("expected repo-null's Value to be nil (SQL NULL scanned nullable, not silently 0.0), got %+v", result.Items[0])

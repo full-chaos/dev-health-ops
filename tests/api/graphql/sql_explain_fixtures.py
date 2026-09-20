@@ -143,36 +143,6 @@ async def _fixture_home(sink: CapturingSink) -> None:
 
 
 # ---------------------------------------------------------------------------
-# work_graph
-# ---------------------------------------------------------------------------
-
-
-async def _fixture_work_graph(sink: CapturingSink) -> None:
-    from dev_health_ops.api.graphql.models.inputs import (
-        WorkGraphEdgeFilterInput,
-        WorkGraphEdgeTypeInput,
-        WorkGraphNodeTypeInput,
-    )
-    from dev_health_ops.api.graphql.resolvers.work_graph import (
-        resolve_work_graph_edges,
-    )
-
-    context = FakeGraphQLContext(client=sink, org_id=SAMPLE_ORG_ID)
-
-    await resolve_work_graph_edges(context, filters=None)
-
-    filters = WorkGraphEdgeFilterInput(
-        repo_ids=[SAMPLE_REPO_ID],
-        source_type=WorkGraphNodeTypeInput.ISSUE,
-        target_type=WorkGraphNodeTypeInput.PR,
-        edge_type=WorkGraphEdgeTypeInput.IMPLEMENTS,
-        node_id="node-1",
-        limit=100,
-    )
-    await resolve_work_graph_edges(context, filters=filters)
-
-
-# ---------------------------------------------------------------------------
 # recommendations
 # ---------------------------------------------------------------------------
 
@@ -481,7 +451,7 @@ async def _fixture_analytics(sink: CapturingSink) -> None:
 # ---------------------------------------------------------------------------
 
 
-# There are no "forecast", "capacity" or "operating_review" fixtures: query-api
+# There are no "forecast", "capacity", "operating_review" or "work_graph" fixtures: query-api
 # serves capacityForecast/capacityForecasts/throughputForecast/operatingReview
 # natively, so there is
 # no Python SQL for this EXPLAIN contract to plan. The equivalent coverage
@@ -491,7 +461,6 @@ ALL_RESOLVER_SQL_FIXTURES: list[tuple[str, ResolverSQLFixture]] = [
     ("compounding_risk", _fixture_compounding_risk),
     ("testops_risk", _fixture_testops_risk),
     ("home", _fixture_home),
-    ("work_graph", _fixture_work_graph),
     ("recommendations", _fixture_recommendations),
     ("security", _fixture_security),
     ("bus_factor", _fixture_bus_factor),

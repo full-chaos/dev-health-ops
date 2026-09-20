@@ -453,10 +453,7 @@ class Query:
         org_id: str,
         filters: WorkGraphEdgeFilterInput | None = None,
     ) -> WorkGraphEdgesResult:
-        from .resolvers.work_graph import resolve_work_graph_edges
-
-        context = get_context(info)
-        return await resolve_work_graph_edges(context, filters)
+        _raise_served_by_query_api("workGraphEdges", org_id, info)
 
     @strawberry.field(
         description=(
@@ -481,10 +478,7 @@ class Query:
         org_id: str,
         filters: WorkGraphEdgeFilterInput | None = None,
     ) -> WorkGraphFlowResult:
-        from .resolvers.work_graph import resolve_work_graph_flow
-
-        context = get_context(info)
-        return await resolve_work_graph_flow(context, filters)
+        _raise_served_by_query_api("workGraphFlow", org_id, info)
 
     @strawberry.field(
         description="Top-N work graph nodes ranked by degree over the full graph"
@@ -495,10 +489,7 @@ class Query:
         org_id: str,
         filters: WorkGraphEdgeFilterInput | None = None,
     ) -> WorkGraphArtifactsResult:
-        from .resolvers.work_graph import resolve_work_graph_artifacts
-
-        context = get_context(info)
-        return await resolve_work_graph_artifacts(context, filters)
+        _raise_served_by_query_api("workGraphArtifacts", org_id, info)
 
     @strawberry.field(description="List feature flags from the ClickHouse registry")
     async def feature_flags(

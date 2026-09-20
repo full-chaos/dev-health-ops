@@ -177,6 +177,14 @@ DELETED_GO_SERVED_RESOLVER_MODULES: dict[str, Path] = {
     / "graphql"
     / "resolvers"
     / "bus_factor.py",
+    # workGraphEdges, workGraphFlow and workGraphArtifacts.
+    "work graph resolver": ROOT
+    / "src"
+    / "dev_health_ops"
+    / "api"
+    / "graphql"
+    / "resolvers"
+    / "work_graph.py",
     # The operating review computation; its only importer was the resolver.
     "operating review computation": ROOT
     / "src"
@@ -269,6 +277,9 @@ SDL_LOAD_BEARING_SYMBOLS: dict[str, frozenset[str]] = {
             "catalog",
             "bus_factor",
             "security_overview",
+            "work_graph_edges",
+            "work_graph_flow",
+            "work_graph_artifacts",
         }
     ),
     "inputs.py": frozenset(
@@ -277,6 +288,9 @@ SDL_LOAD_BEARING_SYMBOLS: dict[str, frozenset[str]] = {
             "CapacityForecastFilterInput",
             "ThroughputForecastInput",
             "OperatingReviewInput",
+            "WorkGraphEdgeFilterInput",
+            "WorkGraphNodeTypeInput",
+            "WorkGraphEdgeTypeInput",
         }
     ),
     "outputs.py": frozenset(
@@ -298,6 +312,15 @@ SDL_LOAD_BEARING_SYMBOLS: dict[str, frozenset[str]] = {
             "CatalogLimits",
             "CatalogValueItem",
             "CatalogResult",
+            "WorkGraphEdgesResult",
+            "WorkGraphEdgeResult",
+            "WorkGraphFlowResult",
+            "WorkGraphFlowRow",
+            "WorkGraphArtifactsResult",
+            "WorkGraphArtifactRow",
+            "WorkGraphNodeType",
+            "WorkGraphEdgeType",
+            "WorkGraphProvenance",
             "FeatureFlagItem",
             "FeatureFlagRegistryResult",
             "FeatureFlagEventItem",

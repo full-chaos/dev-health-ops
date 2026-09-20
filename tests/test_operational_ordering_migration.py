@@ -20,7 +20,6 @@ _CURRENT_READ_MODULES = (
     # Go, internal/jobs/workgraph/operationaledges) -- removed from this
     # Python-source scan since the file no longer exists. No equivalent
     # direct-FINAL/bare-argMax guard exists for the Go reader today.
-    _ROOT / "src/dev_health_ops/api/graphql/resolvers/work_graph.py",
 )
 _CANONICAL_FINAL = re.compile(
     r"\b(?:FROM|JOIN)\s+operational_[a-z_]+(?:\s+AS\s+\w+)?\s+FINAL\b",

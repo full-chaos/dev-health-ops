@@ -225,3 +225,28 @@ func TestNoProdDataListedOperationsNeedNoInstanceID(t *testing.T) {
 		}
 	}
 }
+
+// featureFlagTimeseries has no case that is empty-allowed, so production with
+// no flag rows answers every case as vacuous; the venue must prove them all.
+func TestNoProdDataAdmitFeatureFlagTimeseries(t *testing.T) {
+	const op = "featureFlagTimeseries"
+	admit := func(prod, venue *VenueReceipt) error {
+		return NoProdDataAdmit(prod, venue, op, testSchema, testDoc, testBuild, "primary")
+	}
+	if err := admit(productionReport(t, op, "primary"), goodReceipt(t, op, "primary")); err != nil {
+		t.Fatalf("all-vacuous production with a proving venue: %v", err)
+	}
+	if err := admit(productionReport(t, op, "primary"), nil); err == nil {
+		t.Fatal("no venue receipt must not admit")
+	}
+	unproven := goodReceipt(t, op, "primary")
+	unproven.Outcomes[0].Executed, unproven.Outcomes[0].RefusalReason = false, RefusalVacuousEmptyLegs
+	if err := admit(productionReport(t, op, "primary"), unproven); err == nil {
+		t.Fatal("a venue that leaves a case vacuous must not admit")
+	}
+	errored := productionReport(t, op, "primary")
+	errored.Outcomes[len(errored.Outcomes)-1].RefusalReason = RefusalErroredResponse
+	if err := admit(errored, goodReceipt(t, op, "primary")); err == nil {
+		t.Fatal("a production case that errored is not absence of data")
+	}
+}

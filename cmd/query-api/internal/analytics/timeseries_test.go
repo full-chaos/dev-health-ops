@@ -292,6 +292,7 @@ func TestExecuteTimeseries_AllNullBucketYieldsNilValue_NotZero(t *testing.T) {
 		response: &fakeRowScanner{rows: [][]any{
 			{mustTime("2026-01-01"), "repo-null", nil},  // SQL NULL -- the all-NULL-bucket shape
 			{mustTime("2026-01-01"), "repo-real", 42.5}, // populated -- the other direction
+			{mustTime("2026-01-01"), "repo-zero", 0.0},  // a measured zero is a value, never null
 		}},
 	}
 	q := compiledQuery{sql: "SELECT ..."}
@@ -299,11 +300,15 @@ func TestExecuteTimeseries_AllNullBucketYieldsNilValue_NotZero(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExecuteTimeseries error = %v", err)
 	}
-	if len(results) != 2 {
-		t.Fatalf("got %d results, want 2 (one per dimension_value)", len(results))
+	if len(results) != 3 {
+		t.Fatalf("got %d results, want 3 (one per dimension_value)", len(results))
 	}
 	nullResult := results[0]
 	realResult := results[1]
+	zeroResult := results[2]
+	if zeroResult.DimensionValue != "repo-zero" || len(zeroResult.Buckets) != 1 || zeroResult.Buckets[0].Value == nil || *zeroResult.Buckets[0].Value != 0 {
+		t.Fatalf("expected repo-zero's bucket Value to be a real 0 (the proof corpus admits reference 0.0 against Go null only because a measured zero stays 0 here), got %+v", zeroResult)
+	}
 	if nullResult.DimensionValue != "repo-null" || len(nullResult.Buckets) != 1 || nullResult.Buckets[0].Value != nil {
 		t.Fatalf("expected repo-null's bucket Value to be nil (SQL NULL scanned nullable, not silently 0.0), got %+v", nullResult)
 	}

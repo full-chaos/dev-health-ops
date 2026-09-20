@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -346,5 +347,133 @@ func TestCompoundingRiskTrendCasesPinTheDayAndTeamIdCasesAreKnownRefusals(t *tes
 	}
 	if known != 2 {
 		t.Errorf("%d known refusals, want 2", known)
+	}
+}
+
+func alertsVariants(t *testing.T) map[string]Variant {
+	t.Helper()
+	spec, err := SpecFor("securityAlerts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]Variant{}
+	for _, v := range spec.Variants {
+		out[v.Name] = v
+	}
+	return out
+}
+
+// Every filter branch of securityAlerts that has a static corpus case proves
+// the filter took effect: the answer's elements must carry the filter's
+// values, so a resolver that ignores the filter cannot record a match.
+func TestSecurityAlertsFilterVariantsProveTheFilterTookEffect(t *testing.T) {
+	vs := alertsVariants(t)
+	wants := map[string]struct {
+		field string
+		anyOf []string
+	}{
+		"OPEN_ONLY":             {"node.state", []string{"open", "detected", "confirmed"}},
+		"OPEN_ONLY_OVER_STATES": {"node.state", []string{"open", "detected", "confirmed"}},
+		"SEVERITIES":            {"node.severity", []string{"critical", "high", "unknown"}},
+		"SOURCES":               {"node.source", []string{"dependabot", "gitlab_dependency"}},
+	}
+	for name, w := range wants {
+		v, ok := vs[name]
+		if !ok || len(v.Parity.ScopeEcho) != 1 {
+			t.Fatalf("%s: echo %#v", name, v.Parity.ScopeEcho)
+		}
+		e := v.Parity.ScopeEcho[0]
+		if e.List != "data.securityAlerts.edges" || !reflect.DeepEqual(e.Fields, []string{w.field}) || !reflect.DeepEqual(e.AnyOf, w.anyOf) {
+			t.Errorf("%s: %#v", name, e)
+		}
+	}
+	for _, gone := range []string{"STATES", "REPO_IDS", "SEARCH"} {
+		if _, ok := vs[gone]; ok {
+			t.Errorf("%s is empty by construction under a declared timestamp difference and must not be a variant", gone)
+		}
+	}
+	if len(vs["PAGE_ZERO"].Parity.BaselineDefects) != 0 {
+		t.Error("PAGE_ZERO has no timestamp leaf: a declared timestamp difference would match nothing and refuse it")
+	}
+	sv, ok := vs["STATE_VALID"]
+	if !ok || sv.Instance == nil {
+		t.Fatal("STATE_VALID must take a run-supplied state")
+	}
+	vars := sv.Variables("org", DefaultWindow())
+	sv.Instance.Bind(vars, "open")
+	if got := vars["filters"].(map[string]any)["states"]; !reflect.DeepEqual(got, []any{"OPEN"}) {
+		t.Errorf("bound states %#v", got)
+	}
+	if len(sv.Parity.RequireNonEmpty) != 1 || len(sv.Instance.Echo("open")) != 1 || sv.Instance.Echo("open")[0].Value != "open" {
+		t.Errorf("STATE_VALID must require a non-empty list whose alerts are all in the state")
+	}
+}
+
+func TestScopeEcho_AnyOfCells(t *testing.T) {
+	list := func(b string) string { return `{"data":{"securityAlerts":{"edges":` + b + `}}}` }
+	e := []ScopeEcho{{List: "data.securityAlerts.edges", Fields: []string{"node.severity"}, AnyOf: []string{"critical", "high"}}}
+	cases := []struct {
+		name    string
+		body    string
+		refused bool
+	}{
+		{"all in the set (case-insensitive)", list(`[{"node":{"severity":"critical"}},{"node":{"severity":"HIGH"}}]`), false},
+		{"one outside the set", list(`[{"node":{"severity":"critical"}},{"node":{"severity":"low"}}]`), true},
+		{"empty list", list(`[]`), false},
+	}
+	for _, c := range cases {
+		res := Compare(snapshotFromJSON(t, c.body), snapshotFromJSON(t, c.body), Options{ScopeEcho: e})
+		if (res.StructuralRefusal == RefusalScopeNotReflected) != c.refused {
+			t.Errorf("%s: %q", c.name, res.StructuralRefusal)
+		}
+	}
+}
+
+func TestScopeEcho_DateRangeCells(t *testing.T) {
+	list := func(b string) string { return `{"data":{"securityAlerts":{"edges":` + b + `}}}` }
+	e := []ScopeEcho{{List: "data.securityAlerts.edges", Fields: []string{"node.createdAt"}, NotBefore: "2026-04-01", NotAfter: "2026-05-31"}}
+	cases := []struct {
+		name    string
+		body    string
+		refused bool
+	}{
+		{"inside, both offset renderings", list(`[{"node":{"createdAt":"2026-04-01T00:00:00Z"}},{"node":{"createdAt":"2026-05-31T23:59:59"}}]`), false},
+		{"the day before", list(`[{"node":{"createdAt":"2026-03-31T23:59:59Z"}}]`), true},
+		{"the day after", list(`[{"node":{"createdAt":"2026-06-01T00:00:00Z"}}]`), true},
+		{"one outside among many", list(`[{"node":{"createdAt":"2026-05-01T00:00:00Z"}},{"node":{"createdAt":"2025-01-01T00:00:00Z"}}]`), true},
+		{"missing field", list(`[{"node":{}}]`), true},
+		{"value too short to be a date", list(`[{"node":{"createdAt":"2026"}}]`), true},
+		{"empty list", list(`[]`), false},
+	}
+	for _, c := range cases {
+		res := Compare(snapshotFromJSON(t, c.body), snapshotFromJSON(t, c.body), Options{ScopeEcho: e})
+		if (res.StructuralRefusal == RefusalScopeNotReflected) != c.refused {
+			t.Errorf("%s: %q", c.name, res.StructuralRefusal)
+		}
+	}
+}
+
+// Every overview filter case is measured only when its severity breakdown is
+// non-empty, and the date-range alert case shows every alert inside the range.
+func TestSecurityOverviewAndDateRangeVariantsRequireAnAnswer(t *testing.T) {
+	spec, err := SpecFor("securityOverview")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]bool{"OPEN_ONLY": true, "STATES": true, "SEVERITIES": true, "SOURCES": true, "SINCE_UNTIL": true}
+	for _, v := range spec.Variants {
+		if want[v.Name] {
+			if len(v.Parity.RequireNonEmpty) != 1 || v.Parity.RequireNonEmpty[0] != "data.securityOverview.severityBreakdown" {
+				t.Errorf("overview %s: %#v", v.Name, v.Parity.RequireNonEmpty)
+			}
+			delete(want, v.Name)
+		}
+	}
+	if len(want) != 0 {
+		t.Errorf("missing overview variants %v", want)
+	}
+	d := alertsVariants(t)["SINCE_UNTIL"]
+	if len(d.Parity.ScopeEcho) != 1 || d.Parity.ScopeEcho[0].NotBefore != "2026-06-01" || d.Parity.ScopeEcho[0].NotAfter != "2026-08-31" || len(d.Parity.RequireNonEmpty) != 1 {
+		t.Errorf("SINCE_UNTIL %#v", d.Parity)
 	}
 }

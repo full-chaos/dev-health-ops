@@ -1060,7 +1060,7 @@ var operationSpecs = map[string]OperationSpec{
 		Variables: func(orgID string, w Window) map[string]any {
 			return testopsRiskVariables(orgID, w.SinceDate, w.UntilDate)
 		},
-		Parity: testopsRiskParity(true),
+		Parity: testopsRiskParity(true, testopsRiskBaseDeltas...),
 		Variants: []Variant{
 			{
 				Name: "SINGLE_DAY",
@@ -1072,9 +1072,9 @@ var operationSpecs = map[string]OperationSpec{
 			{
 				Name: "WEEK",
 				Variables: func(orgID string, w Window) map[string]any {
-					return testopsRiskVariables(orgID, w.WeekStart, w.UntilDate)
+					return testopsRiskVariables(orgID, testopsRiskWeekStart(w.UntilDate), w.UntilDate)
 				},
-				Parity: testopsRiskParity(false),
+				Parity: testopsRiskParity(false, testopsRiskAllDeltas...),
 			},
 		},
 	},
@@ -2565,11 +2565,47 @@ func testopsRiskVariables(orgID, start, end string) map[string]any {
 
 const testopsFloatAggregate = "avg()/sum() over Float64 in the daily testops read -- ClickHouse float aggregate, order-nondeterministic (CHAOS-5451)"
 
+// The three period deltas are (last - first) / |first| * 100 over the first
+// and last point of a spark, and null when the spark holds fewer than two
+// points or its first point is zero, on both planes. A declared Tier-B path
+// that reaches no float leaf refuses the case, so each request declares only
+// the deltas its window populates:
+//   - a one-day range holds one point per spark: every delta is null, none is
+//     declared, and null is compared as null;
+//   - the seven-day range ending at the window's last day holds seven points
+//     per spark and a non-zero first day on the measured org: all three are
+//     declared;
+//   - the whole window starts on a day whose drag is zero, so dragDelta is null
+//     on both planes and is not declared there; confidenceDelta and
+//     stabilityDelta are.
+var (
+	testopsRiskBaseDeltas = []string{"data.testopsRisk.confidenceDelta", "data.testopsRisk.stabilityDelta"}
+	testopsRiskAllDeltas  = []string{"data.testopsRisk.confidenceDelta", "data.testopsRisk.dragDelta", "data.testopsRisk.stabilityDelta"}
+)
+
+var testopsRiskDeltaReasons = map[string]string{
+	"data.testopsRisk.confidenceDelta": "derived from avg(confidence_score) (CHAOS-5451)",
+	"data.testopsRisk.dragDelta":       testopsFloatAggregate,
+	"data.testopsRisk.stabilityDelta":  "derived from avg(stability_index) (CHAOS-5451)",
+}
+
+// testopsRiskWeekStart is the first day of the seven-day range that ends on
+// the window's last day. An unparseable date is returned unchanged, which
+// makes the request a one-day range that a test refuses.
+func testopsRiskWeekStart(until string) string {
+	end, err := time.Parse("2006-01-02", until)
+	if err != nil {
+		return until
+	}
+	return end.AddDate(0, 0, -6).Format("2006-01-02")
+}
+
 // testopsRiskParity declares the float leaves derived from the daily
 // aggregates as Tier B; the quadrant rates are argMax of stored JSON values
 // and stay exact. requireSeries makes the request measure only when the
-// range holds at least one day of release-confidence data.
-func testopsRiskParity(requireSeries bool) Options {
+// range holds at least one day of release-confidence data. deltas names the
+// period deltas the request's window populates.
+func testopsRiskParity(requireSeries bool, deltas ...string) Options {
 	o := Options{FloatTierB: map[string]string{
 		"data.testopsRisk.releaseConfidence":          testopsFloatAggregate,
 		"data.testopsRisk.qualityDragHours":           testopsFloatAggregate,
@@ -2577,12 +2613,12 @@ func testopsRiskParity(requireSeries bool) Options {
 		"data.testopsRisk.timeseries.riskScore":       "derived from avg(confidence_score) (CHAOS-5451)",
 		"data.testopsRisk.qualityDragBreakdown.hours": testopsFloatAggregate,
 		"data.testopsRisk.confidenceSpark.value":      "derived from avg(confidence_score) (CHAOS-5451)",
-		"data.testopsRisk.confidenceDelta":            "derived from avg(confidence_score) (CHAOS-5451)",
 		"data.testopsRisk.dragSpark.value":            testopsFloatAggregate,
-		"data.testopsRisk.dragDelta":                  testopsFloatAggregate,
 		"data.testopsRisk.stabilitySpark.value":       "derived from avg(stability_index) (CHAOS-5451)",
-		"data.testopsRisk.stabilityDelta":             "derived from avg(stability_index) (CHAOS-5451)",
 	}}
+	for _, path := range deltas {
+		o.FloatTierB[path] = testopsRiskDeltaReasons[path]
+	}
 	if requireSeries {
 		o.RequireNonEmpty = []string{"data.testopsRisk.timeseries"}
 	}

@@ -1,0 +1,1 @@
+oracle_cases.json is generated from the Python resolvers (resolve_ai_impact_summary, resolve_ai_comparison, resolve_ai_review_load) at ops sha 362ab83faed608ac64fb658a6f75e121f16db492 over synthetic, neutral inputs; each case records the scripted loader inputs and the response the resolver returned.

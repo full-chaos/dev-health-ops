@@ -331,6 +331,14 @@ var operationSpecs = map[string]OperationSpec{
 			experimentsVariant("REPO_UNKNOWN", "REPO", []string{"00000000-0000-0000-0000-000000000001"}),
 			experimentsVariant("SERVICE_UNKNOWN", "SERVICE", []string{"service-abc-123"}),
 			experimentsVariant("DEVELOPER_UNKNOWN", "DEVELOPER", []string{"dev-abc-123"}),
+			// A repository id the run supplies. The answer carries no scope
+			// echo (experiments hold no repository field) and the comparator
+			// has no guard that the answer differs from the base answer, so
+			// the case proves the repo branch is read on both planes and
+			// compared, not that the filter narrowed the cards. A team id is
+			// not a case: Go selects a team's repositories by ownership and
+			// Python by member authorship, a declared baseline difference.
+			experimentsRepoValidVariant(),
 		},
 	},
 	// The two product telemetry dashboards take a half-open day range only; the
@@ -341,6 +349,10 @@ var operationSpecs = map[string]OperationSpec{
 	// end), which both planes answer with empty lists and an all-null summary.
 	"productTelemetryDashboard": {
 		ResponseRoot: "productTelemetryDashboard",
+		// The base request is measured only when the run's window holds
+		// events of the run's org on a leg; two empty answers agree without
+		// either plane reading anything. The window is run-supplied.
+		Parity: Options{RequireNonEmpty: []string{"data.productTelemetryDashboard.dailyActiveUsers"}},
 		Variables: func(orgID string, w Window) map[string]any {
 			return map[string]any{"orgId": orgID, "input": map[string]any{"startDate": w.SinceDate, "endDate": w.UntilDate}}
 		},
@@ -1652,4 +1664,20 @@ func compoundingRiskEmptyVariant(name string, filter map[string]any) Variant {
 	v := compoundingRiskVariant(name, filter)
 	v.Parity = Options{VolatileFields: compoundingRiskParity.VolatileFields}
 	return v
+}
+
+func experimentsRepoValidVariant() Variant {
+	return Variant{
+		Name:   "REPO_VALID",
+		Parity: Options{RequireNonEmpty: []string{"data.experiments.items"}},
+		Variables: func(orgID string, _ Window) map[string]any {
+			return map[string]any{"orgId": orgID, "filters": map[string]any{"scope": map[string]any{"level": "REPO", "ids": []string{}}}}
+		},
+		Instance: &VariantInstance{
+			Kind: "a repository id of the org that has metric rows in the window",
+			Bind: func(vars map[string]any, value string) {
+				vars["filters"].(map[string]any)["scope"].(map[string]any)["ids"] = []string{value}
+			},
+		},
+	}
 }

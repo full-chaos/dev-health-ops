@@ -92,6 +92,23 @@ type DuplicateCollapseLengthShape struct {
 	// baseline id in the candidate, so every repeated id is judged
 	// against its candidate row. Nil keeps rules 1 and 3 as stated.
 	CopyRule *DuplicateCopyRule
+	// CountPath, when set, is the dotted path of a sibling total-count
+	// leaf (for example "data.workGraphEdges.totalCount") that the
+	// resolver derives from the list it returns. When the plan applies,
+	// a value difference at that path is admitted only if each leg's own
+	// count equals that leg's own list length -- a count the resolver
+	// derives from its list moves with the list, and a count that does
+	// not (a candidate count that disagrees with its own list) stays
+	// outside. Empty keeps the shape's length-only behaviour.
+	CountPath string
+	// OrderField, when set, is a numeric field of each candidate element
+	// by which the candidate list must be weakly DESCENDING, with equal
+	// values ascending by OrderTieField (for work_graph_edges:
+	// confidence DESC, edgeId ASC, the order both planes sort by). A
+	// candidate that is not in that order refuses the whole plan. Empty
+	// keeps the shape without an order rule.
+	OrderField    string
+	OrderTieField string
 }
 
 // duplicateCollapseLengthPlan is one comparison's fully-evaluated
@@ -99,6 +116,48 @@ type DuplicateCollapseLengthShape struct {
 type duplicateCollapseLengthPlan struct {
 	shape   *DuplicateCollapseLengthShape
 	applies bool
+	// countAdmitted is true when the shape declares a CountPath and each
+	// leg's count equals its own list length.
+	countAdmitted bool
+}
+
+// candidateInDeclaredOrder reports whether the candidate list is weakly
+// descending by OrderField with ties ascending by OrderTieField.
+func (s *DuplicateCollapseLengthShape) candidateInDeclaredOrder(list []any) bool {
+	if s.OrderField == "" {
+		return true
+	}
+	var prevValue float64
+	var prevTie string
+	for i, element := range list {
+		object, ok := element.(map[string]any)
+		if !ok {
+			return false
+		}
+		value, ok := asFloat(object[s.OrderField])
+		if !ok {
+			return false
+		}
+		tie, _ := object[s.OrderTieField].(string)
+		if i > 0 {
+			if value > prevValue || (value == prevValue && tie <= prevTie) {
+				return false
+			}
+		}
+		prevValue, prevTie = value, tie
+	}
+	return true
+}
+
+// countEqualsLength reads the leaf at CountPath in root and reports
+// whether it is a number equal to wantLen.
+func countEqualsLength(root any, countPath string, wantLen int) bool {
+	value, ok := navigateSegments(root, citedSegments(countPath))
+	if !ok {
+		return false
+	}
+	count, ok := asFloat(value)
+	return ok && count == float64(wantLen)
 }
 
 // buildDuplicateCollapseLengthPlan evaluates every rule
@@ -193,8 +252,15 @@ func buildDuplicateCollapseLengthPlan(shape *DuplicateCollapseLengthShape, basel
 	if len(baseGroups) != len(candList) {
 		return plan
 	}
+	if !shape.candidateInDeclaredOrder(candList) {
+		return plan
+	}
 
 	plan.applies = true
+	if shape.CountPath != "" {
+		plan.countAdmitted = countEqualsLength(baselineData, shape.CountPath, len(baseList)) &&
+			countEqualsLength(candidateData, shape.CountPath, len(candList))
+	}
 	return plan
 }
 
@@ -203,6 +269,9 @@ func buildDuplicateCollapseLengthPlan(shape *DuplicateCollapseLengthShape, basel
 func (p *duplicateCollapseLengthPlan) admits(finding Finding) bool {
 	if p == nil || !p.applies {
 		return false
+	}
+	if p.countAdmitted && p.shape.CountPath != "" && finding.Path == "$."+p.shape.CountPath {
+		return true
 	}
 	return finding.Shape == ShapeLength && tieredPath(finding.Path) == p.shape.ListPath
 }

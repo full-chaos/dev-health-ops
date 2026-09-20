@@ -13,6 +13,8 @@ import (
 	stdclickhouse "github.com/ClickHouse/clickhouse-go/v2"
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph/model"
+
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
@@ -281,4 +283,102 @@ func scanRawEdgeIDsPythonShape(t *testing.T, ctx context.Context, admin stdclick
 		t.Fatalf("un-deduped control rows: %v", err)
 	}
 	return out
+}
+
+// CHAOS-6114: the same collapse on a nodeId request whose page the limit
+// does not cut. Production measured one node at 147 raw rows over 73
+// distinct edges (baseline) against 73 (this reader). Three logical edges
+// touch one node: one seeded twice, one three times, one once. The deduped
+// read returns exactly the three distinct edges; the un-deduped control (the
+// read Python performs, with the same nodeId predicate) returns six rows over
+// the same three ids, so a limit far above the distinct count still shows the
+// difference and no unrelated edge leaks in.
+func TestFetchDedupedEdgeRowsCollapsesDuplicateVersionsForANodeIdRequest(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	defer cancel()
+
+	const orgID = "org-6114-nodeid"
+	const node = "pr:owner/repo#42"
+
+	ch, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatalf("start ClickHouse test dependency: %v", err)
+	}
+	defer func() { _ = ch.Close(context.Background()) }()
+	chschema.Apply(ctx, t, ch)
+
+	options, err := stdclickhouse.ParseDSN(ch.URI)
+	if err != nil {
+		t.Fatalf("parse ClickHouse DSN: %v", err)
+	}
+	admin, err := stdclickhouse.Open(options)
+	if err != nil {
+		t.Fatalf("open ClickHouse admin connection: %v", err)
+	}
+	defer func() { _ = admin.Close() }()
+	assertEdgesDedupContract(t, ctx, admin)
+
+	// Hold background merges so the unmerged versions stay unmerged for the read.
+	if err := admin.Exec(ctx, "SYSTEM STOP MERGES work_graph_edges"); err != nil {
+		t.Fatalf("stop merges: %v", err)
+	}
+	base := time.Date(2026, 9, 7, 0, 0, 0, 0, time.UTC)
+	idA := "aaaa0000000000000000000000000000000000000000000000000000000000a1"
+	idB := "bbbb0000000000000000000000000000000000000000000000000000000000b2"
+	idC := "cccc0000000000000000000000000000000000000000000000000000000000c3"
+	idOther := "dddd0000000000000000000000000000000000000000000000000000000000d4"
+	seedDedupBudgetEdges(t, ctx, admin, orgID, []dedupBudgetEdge{
+		{idA, node, "issue:OPS-1", "a-v1", base},
+		{idA, node, "issue:OPS-1", "a-v2", base.Add(time.Hour)},
+		{idB, node, "issue:OPS-2", "b-v1", base},
+		{idB, node, "issue:OPS-2", "b-v2", base.Add(time.Hour)},
+		{idB, node, "issue:OPS-2", "b-v3", base.Add(2 * time.Hour)},
+		{idC, "issue:OPS-3", node, "c-v1", base},
+		{idOther, "issue:OPS-9", "pr:owner/repo#99", "other-v1", base},
+	})
+	assertUnmergedEdgeParts(t, ctx, admin)
+
+	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: ch.URI})
+	if err != nil {
+		t.Fatalf("construct query client: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	nodeID := node
+	filters := &model.WorkGraphEdgeFilterInput{NodeID: &nodeID}
+	const limit = 200
+	rows, err := fetchDedupedEdgeRows(ctx, client, orgID, newFilterScope(filters, nil), limit)
+	if err != nil {
+		t.Fatalf("fetchDedupedEdgeRows: %v", err)
+	}
+	got := make([]string, 0, len(rows))
+	for _, r := range rows {
+		got = append(got, r.edgeID)
+	}
+	sort.Strings(got)
+	want := []string{idA, idB, idC}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("nodeId page returned %v, want the three distinct edges %v", got, want)
+	}
+
+	rawRows, err := admin.Query(ctx, fmt.Sprintf(`
+        SELECT edge_id FROM work_graph_edges
+        WHERE org_id = '%s' AND (source_id = '%s' OR target_id = '%s')
+        ORDER BY confidence DESC, edge_id ASC LIMIT %d`, orgID, node, node, limit))
+	if err != nil {
+		t.Fatalf("un-deduped control query: %v", err)
+	}
+	defer func() { _ = rawRows.Close() }()
+	rawCount, rawDistinct := 0, map[string]struct{}{}
+	for rawRows.Next() {
+		var id string
+		if err := rawRows.Scan(&id); err != nil {
+			t.Fatalf("control scan: %v", err)
+		}
+		rawCount++
+		rawDistinct[id] = struct{}{}
+	}
+	if rawCount != 6 || len(rawDistinct) != 3 {
+		t.Fatalf("un-deduped control returned %d rows over %d ids, want 6 over 3; the fixture is not exercising unmerged versions", rawCount, len(rawDistinct))
+	}
 }

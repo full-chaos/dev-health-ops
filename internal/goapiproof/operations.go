@@ -1120,6 +1120,19 @@ var workGraphEdgesParity = Options{BaselineDefects: []BaselineDefect{{
 		IDField:            "edgeId",
 		TrailingCursorPath: "data.workGraphEdges.pageInfo.endCursor",
 	},
+}, {
+	Ticket:             "CHAOS-6114",
+	Reason:             "The same duplicate-version mechanism as CHAOS-5791, on a page the request limit does not cut: work_graph_edges is a ReplacingMergeTree, the baseline plane reads it with no merge-time collapse, so its list and its totalCount (the length of the list it returns) count every unmerged physical version of an edge, while the candidate plane collapses versions before counting, so its list and totalCount count distinct edges. Measured on production for one node id: baseline 147 rows over 73 distinct edgeIds (72 ids twice, 1 id three times), totalCount 147; candidate 73 rows, 73 distinct, totalCount 73; the two id sets identical. Admitted only when the candidate ids equal the baseline's distinct ids, every shared id is byte-identical on both planes, the candidate carries no repeated id and is in confidence-descending, edgeId-ascending order, and each plane's totalCount equals its own list length. A candidate that drops a distinct id, invents one, disagrees with a shared row, or reports a totalCount other than its own length stays outside. Candidate is correct.",
+	Paths:              []string{"data.workGraphEdges.edges", "data.workGraphEdges.totalCount"},
+	Intermittent:       true,
+	IntermittentReason: "present only while the source table holds an unmerged duplicate physical version of some edge on a page the limit does not cut; a comparison taken after the background merge collapses it shows equal lists and equal counts",
+	DuplicateCollapseLengthShape: &DuplicateCollapseLengthShape{
+		ListPath:      "data.workGraphEdges.edges",
+		IDField:       "edgeId",
+		CountPath:     "data.workGraphEdges.totalCount",
+		OrderField:    "confidence",
+		OrderTieField: "edgeId",
+	},
 }}}
 
 func workGraphVariables(orgID string, _ Window) map[string]any {

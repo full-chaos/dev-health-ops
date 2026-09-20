@@ -1306,14 +1306,13 @@ re-running `--all-complete` in a tight loop; check the query above for
 still-`pending`/`delivered` redrive rows first if in doubt.
 
 **Finalize-ledger repair (CHAOS-4409), `--run` only.** Before publishing,
-`--run` repairs the Python compatibility bridge's own finalize ledger row
+`--run` repairs the compatibility bridge's own finalize ledger row
 for the named run (`metric_compatibility_executions`, `worker_kind='daily'
-operation='finalize'`) — the same `/internal/worker/daily-metrics/v1/redrive`
-bulk-repair endpoint `daily-redrive` above already calls for partition rows,
-now scoped to `operations: ["finalize"]` (the request's `operations` field
-defaults to `["partition"]`, so `daily-redrive`'s own call is byte-for-byte
-unchanged and never touches a finalize row under its partition-scoped
-review evidence). Without this, a run whose finalize ledger row was stuck
+operation='finalize'`) — the same bulk ledger repair `daily-redrive` above
+already runs for partition rows, now scoped to the `finalize` operation (the
+repair's operations default to `partition`, so `daily-redrive`'s own repair is
+unchanged and never touches a finalize row under its partition-scoped review
+evidence). Without this, a run whose finalize ledger row was stuck
 `ambiguous`/stuck-`executing` from the original stranding answers
 `JobCancelError ambiguous_refused` on every redrive attempt, forever: the
 ledger's own `_reserve_execution` check refuses the identical execution

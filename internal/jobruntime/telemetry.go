@@ -890,11 +890,10 @@ var dailyMetricsBlockedRunOutcomes = []string{"marked", "cleared", "failed"}
 // 'executing') this pass moved to 'retry_authorized', unblocking
 // `daily-finalize --run`/`--all-complete` for the run it belongs to;
 // "skipped_claim_active" counts a row left untouched because its original
-// claim still read as live at repair time -- exactly what a single /repair
-// call against it would refuse with 409 today. See
-// worker_metrics.py's _bulk_redrive_ambiguous_executions, whose
-// operation='partition'-only filter (closed before CHAOS-4409) is what let a
-// stuck finalize row answer ambiguous_refused forever.
+// claim still read as live at repair time -- exactly what a single
+// `metrics execution-repair` against it would refuse with 409 today. The bulk
+// repair's earlier operation='partition'-only filter is what let a stuck
+// finalize row answer ambiguous_refused forever.
 var dailyMetricsFinalizeLedgerRepairOutcomes = []string{"repaired", "skipped_claim_active"}
 
 // dailyMetricsFinalizeRedriveOutcomes is the closed set of bounded outcomes

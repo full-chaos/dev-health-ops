@@ -238,7 +238,7 @@ A row that is live, reachable to real clients (`canary`/`primary`) and carries n
 is required before stage 4/5, and "a bare 200 does not qualify".
 
 <!-- BEGIN GENERATED GO API OPERATIONS -->
-_Rendered 2026-09-20T12:13:49Z against main merge-base `1205ec23c1cf05a32f925a49f96ff1e0d58a0f69`; SDL digest pin `sha256:19485ec136d04de0935717dca8b4f5fd27dd0351fe96b854d40f433229468fd0`; fleet read 2026-09-16T12:25:30Z via fleet file fleet-prod.json._
+_Rendered 2026-09-20T12:42:06Z against main merge-base `1205ec23c1cf05a32f925a49f96ff1e0d58a0f69`; SDL digest pin `sha256:19485ec136d04de0935717dca8b4f5fd27dd0351fe96b854d40f433229468fd0`; fleet read 2026-09-16T12:25:30Z via fleet file fleet-prod.json._
 
 _Rows in `go_api_proof_run` at read time: **2845**. Operations reachable to real clients with no deployed-executed proof: **0**. Rows whose mode says Go but whose schema digest no longer matches the pin, so every request silently falls back to Python: **0**._
 
@@ -539,7 +539,7 @@ deleted, the frozen file and this one test survive.
 | Area | Executor | Writer call site | Ticket |
 |---|---|---|---|
 | ai_governance / ai_impact / ai_workflow | NATIVE | see METRICS' daily-families table above (all three now native; this hand-authored row is not generator-checked and had drifted stale for all three, not just the family this row's own PR ported -- caught by codex round chaos-5220-r1) | CHAOS-4285/4280/4286 |
-| **ai attribution** | **NATIVE** | WRITE path: NATIVE for github (`internal/providersync/github_work_items_ai_attribution_effects_clickhouse.go`, part of native work-items sync) and gitlab/linear (`internal/providersync/gitlab_work_item_derived.go:286-293,570-581`, `internal/providersync/linear_work_items_derived.go:52,286` -- both build/write the `ai_attribution` projection as part of native work-items sync); jira explicitly writes **zero** rows by design ("evaluated-empty effect", `internal/providersync/jira_work_item_derived.go:14-20` -- no AI-attribution signal exists for jira, not a gap). READ: `api/graphql/resolvers/ai.py:1395` (`AIImpactClickHouseLoader.load_ai_pr_attributions`) is the query-api plane (Go query-api epic CHAOS-4352), out of CHAOS-3092 scope -- CHAOS-3092 is about worker compute families and the bridge, not the API read plane. | none found |
+| **ai attribution** | **NATIVE** | WRITE path: NATIVE for github (`internal/providersync/github_work_items_ai_attribution_effects_clickhouse.go`, part of native work-items sync) and gitlab/linear (`internal/providersync/gitlab_work_item_derived.go:286-293,570-581`, `internal/providersync/linear_work_items_derived.go:52,286` -- both build/write the `ai_attribution` projection as part of native work-items sync); jira explicitly writes **zero** rows by design ("evaluated-empty effect", `internal/providersync/jira_work_item_derived.go:14-20` -- no AI-attribution signal exists for jira, not a gap). READ: `src/dev_health_ops/api/graphql/resolvers/ai.py:1395` (`AIImpactClickHouseLoader.load_ai_pr_attributions`) is the query-api plane (Go query-api epic CHAOS-4352), out of CHAOS-3092 scope -- CHAOS-3092 is about worker compute families and the bridge, not the API read plane. | none found |
 
 ## INVESTMENT / WORK-GRAPH
 

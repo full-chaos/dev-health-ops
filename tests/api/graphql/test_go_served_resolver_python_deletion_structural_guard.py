@@ -67,12 +67,20 @@ SECURITY_RESOLVER_SOURCE = (
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "resolvers" / "security.py"
 )
 
+IMPROVE_RESOLVER_SOURCE = (
+    ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "resolvers" / "improve.py"
+)
+
 DELETED_GO_SERVED_RESOLVER_SYMBOLS: dict[Path, frozenset[str]] = {
     # A scheduler helper with no caller in src/.
     CAPACITY_QUERIES_SOURCE: frozenset({"discover_team_scopes"}),
     # securityOverview: only the function is deleted; the module stays for
     # securityAlerts and the shared filter builder.
     SECURITY_RESOLVER_SOURCE: frozenset({"resolve_security_overview"}),
+    # experiments: the improve-opportunities resolver stays in the module.
+    IMPROVE_RESOLVER_SOURCE: frozenset(
+        {"resolve_experiments", "_stable_experiment_id", "_metric_from_card"}
+    ),
 }
 
 # label -> a module that must not exist on disk AT ALL.
@@ -214,6 +222,7 @@ RETAINED_ORACLE_MODULES: dict[str, Path] = {
 # silently change the schema digest and disable every registered operation.
 SDL_LOAD_BEARING_SOURCES: tuple[Path, ...] = (
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "models" / "pr.py",
+    ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "models" / "improve.py",
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "types" / "cognitive_load.py",
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "types" / "complexity.py",
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "types" / "review_edges.py",
@@ -224,6 +233,7 @@ SDL_LOAD_BEARING_SOURCES: tuple[Path, ...] = (
 )
 
 SDL_LOAD_BEARING_SYMBOLS: dict[str, frozenset[str]] = {
+    "improve.py": frozenset({"Experiment", "ExperimentsResult", "ExperimentStatus"}),
     "pr.py": frozenset(
         {
             "PullRequestDetail",
@@ -277,6 +287,7 @@ SDL_LOAD_BEARING_SYMBOLS: dict[str, frozenset[str]] = {
             "catalog",
             "bus_factor",
             "security_overview",
+            "experiments",
             "work_graph_edges",
             "work_graph_flow",
             "work_graph_artifacts",

@@ -768,3 +768,55 @@ func TestSnapshotRefusesToFollowASymbolicLinkOutOfTheTree(t *testing.T) {
 		t.Fatalf("a symbolic link was digested as its target's content: %q", got)
 	}
 }
+
+// TestASameOutputLeavesNoHashInTheRecord pins the record's merge behaviour: an
+// output that equals its fresh generation is recorded by status alone, so the
+// record does not move when that file's (regenerable) content moves, while a
+// real difference still carries both digests.
+func TestASameOutputLeavesNoHashInTheRecord(t *testing.T) {
+	regen := func(resolverBody string) func(string) error {
+		return func(workDir string) error {
+			if err := rewriteOutputs("generated")(workDir); err != nil {
+				return err
+			}
+			return writeIn(workDir, "gen/resolver.go", resolverBody)
+		}
+	}
+	record := func(resolverBody string) string {
+		f := guardFixture(t)
+		f.write("gen/resolver.go", resolverBody)
+		if _, err := UpdateDriftRecord(context.Background(), guardOptions(f, &fakeGenerator{fn: regen(resolverBody)})); err != nil {
+			t.Fatalf("update the record: %v", err)
+		}
+		return f.read("contracts/expected-drift.record")
+	}
+	a := record(markedResolver + "// one\n")
+	b := record(markedResolver + "// two, longer\n")
+
+	if !strings.Contains(a, "digest same gen/resolver.go\n") {
+		t.Fatalf("a same output is not recorded hash-less:\n%s", a)
+	}
+	if a != b {
+		t.Fatalf("the record moved when only a same output's content moved:\n--a--\n%s\n--b--\n%s", a, b)
+	}
+	for _, line := range strings.Split(a, "\n") {
+		if strings.HasPrefix(line, "digest drift ") && !(strings.Contains(line, " tree=") && strings.Contains(line, " generated=")) {
+			t.Fatalf("a drift line lost its digests: %q", line)
+		}
+	}
+	if !strings.Contains(a, "digest drift gen/generated.go tree=") {
+		t.Fatalf("no drift line with digests in:\n%s", a)
+	}
+}
+
+// TestDigestLinesIndexesAHashlessSameLine: the hash-less form is a real record
+// line; only a hash-less line of any other status is malformed.
+func TestDigestLinesIndexesAHashlessSameLine(t *testing.T) {
+	got := digestLines("digest same gen/a.go\ndigest drift gen/b.go\ndigest added gen/c.go\n")
+	if got["gen/a.go"] != "same gen/a.go" {
+		t.Fatalf("hash-less same line not indexed: %#v", got)
+	}
+	if len(got) != 1 {
+		t.Fatalf("a hash-less line of a non-same status was indexed: %#v", got)
+	}
+}

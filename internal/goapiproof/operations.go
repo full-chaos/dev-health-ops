@@ -364,6 +364,37 @@ var operationSpecs = map[string]OperationSpec{
 			aiPagedInstanceVariant("TEAM_VALID", "a team id whose repo patterns select a repository with resolved attribution records", "teamId", aiAttributionOverviewParity(), "data.aiAttributionOverview.rows", "data.aiAttributionOverview.rows", "teamId"),
 		),
 	},
+	// The four unregistered analytics documents each carry the batches the web
+	// pages send them: one request per measure the web asks for (so each
+	// measure and dimension branch is compared on its own), one for the whole
+	// page batch, and one per breakdown. Every case is measured only when its
+	// timeseries or breakdown list is non-empty on a leg and every returned
+	// series/breakdown names the measure and dimension asked for (single
+	// requests).
+	"testOpsPipeline": {
+		ResponseRoot: "analytics",
+		Variables:    analyticsBatchVariables(analyticsBatch{Series: pipelineSeries, Breakdowns: pipelineBreakdowns}),
+		Parity:       analyticsBatchParity(analyticsBatch{Series: pipelineSeries, Breakdowns: pipelineBreakdowns}),
+		Variants:     analyticsBatchVariants(pipelineSeries, pipelineBreakdowns),
+	},
+	"testOpsTest": {
+		ResponseRoot: "analytics",
+		Variables:    analyticsBatchVariables(analyticsBatch{Series: testSeries, Breakdowns: testBreakdowns}),
+		Parity:       analyticsBatchParity(analyticsBatch{Series: testSeries, Breakdowns: testBreakdowns}),
+		Variants:     analyticsBatchVariants(testSeries, testBreakdowns),
+	},
+	"testOpsCoverage": {
+		ResponseRoot: "analytics",
+		Variables:    analyticsBatchVariables(analyticsBatch{Series: coverageSeries, Breakdowns: coverageBreakdowns}),
+		Parity:       analyticsBatchParity(analyticsBatch{Series: coverageSeries, Breakdowns: coverageBreakdowns}),
+		Variants:     analyticsBatchVariants(coverageSeries, coverageBreakdowns),
+	},
+	"featureFlagTimeseries": {
+		ResponseRoot: "analytics",
+		Variables:    analyticsBatchVariables(analyticsBatch{Series: flagSeries}),
+		Parity:       analyticsBatchParity(analyticsBatch{Series: flagSeries}),
+		Variants:     analyticsBatchVariants(flagSeries, nil),
+	},
 	"busFactor": {
 		ResponseRoot: "busFactor",
 		Variables: func(orgID string, _ Window) map[string]any {
@@ -1940,4 +1971,100 @@ func experimentsTeamUnknownVariant() Variant {
 		Reason: "the reference drops the team filter when the team resolves to no member metric rows and answers the whole org; Go narrows an unresolved team to nothing through team ownership and answers the steady-flow card",
 	}
 	return v
+}
+
+// analyticsSeries is one timeseries request a web page sends.
+type analyticsSeries struct{ Dimension, Measure string }
+
+// analyticsBreakdown is one breakdown request a web page sends.
+type analyticsBreakdown struct {
+	Dimension, Measure string
+	TopN               int
+}
+
+// analyticsBatch is one batch of requests.
+type analyticsBatch struct {
+	Series     []analyticsSeries
+	Breakdowns []analyticsBreakdown
+}
+
+var (
+	pipelineSeries = []analyticsSeries{
+		{"TEAM", "PIPELINE_SUCCESS_RATE"}, {"TEAM", "PIPELINE_FAILURE_RATE"}, {"TEAM", "PIPELINE_DURATION_P95"},
+		{"TEAM", "PIPELINE_QUEUE_TIME"}, {"TEAM", "PIPELINE_RERUN_RATE"},
+	}
+	pipelineBreakdowns = []analyticsBreakdown{{"TEAM", "PIPELINE_FAILURE_RATE", 10}}
+	testSeries         = []analyticsSeries{
+		{"TEAM", "TEST_PASS_RATE"}, {"TEAM", "TEST_FAILURE_RATE"}, {"TEAM", "TEST_FLAKE_RATE"}, {"TEAM", "TEST_SUITE_DURATION_P95"},
+	}
+	testBreakdowns     = []analyticsBreakdown{{"TEAM", "TEST_FLAKE_RATE", 10}}
+	coverageSeries     = []analyticsSeries{{"TEAM", "COVERAGE_LINE_PCT"}, {"TEAM", "COVERAGE_BRANCH_PCT"}, {"TEAM", "COVERAGE_DELTA_PCT"}}
+	coverageBreakdowns = []analyticsBreakdown{{"REPO", "COVERAGE_LINE_PCT", 10}}
+	flagSeries         = []analyticsSeries{
+		{"REPO", "FLAG_ACTIVATION_RATE"}, {"REPO", "FLAG_FRICTION_DELTA"}, {"REPO", "FLAG_ERROR_RATE_DELTA"}, {"REPO", "FLAG_COVERAGE_RATIO"},
+	}
+)
+
+// analyticsBatchVariables builds the request of one batch over the run's window.
+func analyticsBatchVariables(b analyticsBatch) func(orgID string, w Window) map[string]any {
+	return func(orgID string, w Window) map[string]any {
+		dateRange := map[string]any{"startDate": w.SinceDate, "endDate": w.UntilDate}
+		series := []any{}
+		for _, s := range b.Series {
+			series = append(series, map[string]any{"dimension": s.Dimension, "measure": s.Measure, "interval": "DAY", "dateRange": dateRange})
+		}
+		breakdowns := []any{}
+		for _, bd := range b.Breakdowns {
+			breakdowns = append(breakdowns, map[string]any{"dimension": bd.Dimension, "measure": bd.Measure, "dateRange": dateRange, "topN": bd.TopN})
+		}
+		batch := map[string]any{"timeseries": series}
+		if len(b.Breakdowns) > 0 {
+			batch["breakdowns"] = breakdowns
+		}
+		return map[string]any{"orgId": orgID, "batch": batch}
+	}
+}
+
+const analyticsFloatAggregate = "the measure is a ClickHouse float aggregate (avg/sum over Float64 rows): order-nondeterministic across merges on both planes (CHAOS-5451, rule-derived)"
+
+// analyticsBatchParity declares the float leaves as Tier B and requires the
+// batch's lists to be non-empty on a leg. A batch that asks for exactly one
+// series (or one breakdown) also requires every returned entry to name that
+// measure and dimension; a whole-page batch asks for several, so its measures
+// are proven by the single-request variants instead.
+func analyticsBatchParity(b analyticsBatch) Options {
+	o := Options{FloatTierB: map[string]string{"data.analytics.timeseries.buckets.value": analyticsFloatAggregate}}
+	if len(b.Series) > 0 {
+		o.RequireNonEmpty = append(o.RequireNonEmpty, "data.analytics.timeseries")
+		if len(b.Series) == 1 {
+			o.ScopeEcho = append(o.ScopeEcho,
+				ScopeEcho{List: "data.analytics.timeseries", Fields: []string{"measure"}, Value: b.Series[0].Measure},
+				ScopeEcho{List: "data.analytics.timeseries", Fields: []string{"dimension"}, Value: b.Series[0].Dimension})
+		}
+	}
+	if len(b.Breakdowns) > 0 {
+		o.FloatTierB["data.analytics.breakdowns.items.value"] = analyticsFloatAggregate
+		o.RequireNonEmpty = append(o.RequireNonEmpty, "data.analytics.breakdowns")
+		if len(b.Breakdowns) == 1 {
+			o.ScopeEcho = append(o.ScopeEcho,
+				ScopeEcho{List: "data.analytics.breakdowns", Fields: []string{"measure"}, Value: b.Breakdowns[0].Measure},
+				ScopeEcho{List: "data.analytics.breakdowns", Fields: []string{"dimension"}, Value: b.Breakdowns[0].Dimension})
+		}
+	}
+	return o
+}
+
+// analyticsBatchVariants is one variant per timeseries measure and one per
+// breakdown, each asking for that request alone.
+func analyticsBatchVariants(series []analyticsSeries, breakdowns []analyticsBreakdown) []Variant {
+	var out []Variant
+	for _, s := range series {
+		b := analyticsBatch{Series: []analyticsSeries{s}}
+		out = append(out, Variant{Name: s.Dimension + "_" + s.Measure, Variables: analyticsBatchVariables(b), Parity: analyticsBatchParity(b)})
+	}
+	for _, bd := range breakdowns {
+		b := analyticsBatch{Breakdowns: []analyticsBreakdown{bd}}
+		out = append(out, Variant{Name: "BREAKDOWN_" + bd.Dimension + "_" + bd.Measure, Variables: analyticsBatchVariables(b), Parity: analyticsBatchParity(b)})
+	}
+	return out
 }

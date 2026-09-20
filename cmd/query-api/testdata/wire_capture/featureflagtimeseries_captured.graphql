@@ -1,0 +1,16 @@
+query FeatureFlagTimeseries($orgId: String!, $batch: AnalyticsRequestInput!) {
+  analytics(orgId: $orgId, batch: $batch) {
+    timeseries {
+      dimension
+      dimensionValue
+      measure
+      buckets {
+        date
+        value
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}

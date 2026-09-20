@@ -163,7 +163,7 @@ func TestExecuteBreakdown_MapsRows(t *testing.T) {
 		}},
 	}
 	q := compiledQuery{sql: "SELECT ..."}
-	result, err := ExecuteBreakdown(context.Background(), client, q, "REPO", "COUNT")
+	result, err := ExecuteBreakdown(context.Background(), client, "org-1", q, "REPO", "COUNT")
 	if err != nil {
 		t.Fatalf("ExecuteBreakdown error = %v", err)
 	}
@@ -179,8 +179,8 @@ func TestExecuteBreakdown_MapsRows(t *testing.T) {
 	if result.Items[0].Key != "repo-a" || *result.Items[0].Value != 10.0 {
 		t.Fatalf("unexpected items[0]: %+v (value=%v)", result.Items[0], *result.Items[0].Value)
 	}
-	if result.Items[0].Label != nil {
-		t.Fatalf("label resolution not yet ported -- expected nil label, got %v", *result.Items[0].Label)
+	if result.Items[0].Label == nil || *result.Items[0].Label != "repo-a" {
+		t.Fatalf("a key that is not a bare UUID labels itself when the lookup finds nothing, got %v", result.Items[0].Label)
 	}
 }
 
@@ -213,7 +213,7 @@ func TestExecuteBreakdown_AllNullGroupYieldsNilValue_NotZero(t *testing.T) {
 		}},
 	}
 	q := compiledQuery{sql: "SELECT ..."}
-	result, err := ExecuteBreakdown(context.Background(), client, q, "REPO", "COVERAGE_LINE_PCT")
+	result, err := ExecuteBreakdown(context.Background(), client, "org-1", q, "REPO", "COVERAGE_LINE_PCT")
 	if err != nil {
 		t.Fatalf("ExecuteBreakdown error = %v", err)
 	}
@@ -231,7 +231,7 @@ func TestExecuteBreakdown_AllNullGroupYieldsNilValue_NotZero(t *testing.T) {
 func TestExecuteBreakdown_QueryErrorPropagates(t *testing.T) {
 	client := &fakeSingleClient{err: errors.New("boom")}
 	q := compiledQuery{sql: "SELECT ..."}
-	_, err := ExecuteBreakdown(context.Background(), client, q, "REPO", "COUNT")
+	_, err := ExecuteBreakdown(context.Background(), client, "org-1", q, "REPO", "COUNT")
 	if err == nil {
 		t.Fatal("expected error to propagate")
 	}
@@ -252,7 +252,7 @@ func TestExecuteBreakdown_MidStreamFailureDiscardsPartialRows(t *testing.T) {
 		},
 	}
 	q := compiledQuery{sql: "SELECT ..."}
-	result, err := ExecuteBreakdown(context.Background(), client, q, "REPO", "COUNT")
+	result, err := ExecuteBreakdown(context.Background(), client, "org-1", q, "REPO", "COUNT")
 	if err == nil {
 		t.Fatal("expected mid-stream failure to surface as an error")
 	}

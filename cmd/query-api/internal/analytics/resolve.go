@@ -285,7 +285,7 @@ func resolveOneBreakdown(ctx context.Context, client QueryClient, orgID string, 
 			RecordInvestmentRepoJoinDedupCollisions(ctx, client, orgID)
 		}
 	}
-	return ExecuteBreakdown(ctx, client, q, string(input.Dimension), string(input.Measure))
+	return ExecuteBreakdown(ctx, client, orgID, q, string(input.Dimension), string(input.Measure))
 }
 
 // resolveSankey ports the batch.sankey branch of resolve_analytics

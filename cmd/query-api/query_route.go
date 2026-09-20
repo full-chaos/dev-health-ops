@@ -840,6 +840,117 @@ const registeredCompoundingRiskDocument = `query CompoundingRisk($orgId: String!
   }
 }`
 
+// registeredTestOpsPipelineDocument is the registered document for the `testOpsPipeline`
+// operation, the exact wire-form text a real web client sends
+// (testdata/wire_capture/testopspipeline_captured.graphql).
+const registeredTestOpsPipelineDocument = `query TestOpsPipeline($orgId: String!, $batch: AnalyticsRequestInput!) {
+  analytics(orgId: $orgId, batch: $batch) {
+    timeseries {
+      dimension
+      dimensionValue
+      measure
+      buckets {
+        date
+        value
+        __typename
+      }
+      __typename
+    }
+    breakdowns {
+      dimension
+      measure
+      items {
+        key
+        value
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredTestOpsTestDocument is the registered document for the `testOpsTest`
+// operation, the exact wire-form text a real web client sends
+// (testdata/wire_capture/testopstest_captured.graphql).
+const registeredTestOpsTestDocument = `query TestOpsTest($orgId: String!, $batch: AnalyticsRequestInput!) {
+  analytics(orgId: $orgId, batch: $batch) {
+    timeseries {
+      dimension
+      dimensionValue
+      measure
+      buckets {
+        date
+        value
+        __typename
+      }
+      __typename
+    }
+    breakdowns {
+      dimension
+      measure
+      items {
+        key
+        value
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredTestOpsCoverageDocument is the registered document for the `testOpsCoverage`
+// operation, the exact wire-form text a real web client sends
+// (testdata/wire_capture/testopscoverage_captured.graphql).
+const registeredTestOpsCoverageDocument = `query TestOpsCoverage($orgId: String!, $batch: AnalyticsRequestInput!) {
+  analytics(orgId: $orgId, batch: $batch) {
+    timeseries {
+      dimension
+      dimensionValue
+      measure
+      buckets {
+        date
+        value
+        __typename
+      }
+      __typename
+    }
+    breakdowns {
+      dimension
+      measure
+      items {
+        key
+        value
+        label
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredFeatureFlagTimeseriesDocument is the registered document for the `featureFlagTimeseries`
+// operation, the exact wire-form text a real web client sends
+// (testdata/wire_capture/featureflagtimeseries_captured.graphql).
+const registeredFeatureFlagTimeseriesDocument = `query FeatureFlagTimeseries($orgId: String!, $batch: AnalyticsRequestInput!) {
+  analytics(orgId: $orgId, batch: $batch) {
+    timeseries {
+      dimension
+      dimensionValue
+      measure
+      buckets {
+        date
+        value
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}`
+
 // registeredBusFactorDocument is the registered document for the
 // `busFactor` operation, the exact wire-form text a real web client sends
 // (testdata/wire_capture/busfactor_captured.graphql).
@@ -2347,6 +2458,10 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		"catalogValues":                     digestHex(registeredCatalogValuesDocument),
 		"acrRepositoryScopes":               digestHex(registeredAcrRepositoryScopesDocument),
 		"busFactor":                         digestHex(registeredBusFactorDocument),
+		"testOpsPipeline":                   digestHex(registeredTestOpsPipelineDocument),
+		"testOpsTest":                       digestHex(registeredTestOpsTestDocument),
+		"testOpsCoverage":                   digestHex(registeredTestOpsCoverageDocument),
+		"featureFlagTimeseries":             digestHex(registeredFeatureFlagTimeseriesDocument),
 		"savedReports":                      digestHex(registeredSavedReportsDocument),
 		"savedReport":                       digestHex(registeredSavedReportDocument),
 		"reportRuns":                        digestHex(registeredReportRunsDocument),

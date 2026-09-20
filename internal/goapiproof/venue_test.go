@@ -323,7 +323,7 @@ func TestApplyVenueReceiptOnlyAddsAdmissions(t *testing.T) {
 	docs := map[string]string{op: testDoc, "featureFlags": testDoc}
 	request := EnableRequest{SchemaDigest: testSchema, RunningBuild: testBuild, Mode: "primary", VenueReceipt: goodReceipt(t, op, "primary")}
 	admitted, refused, still := applyVenueReceipt(request, docs, []string{op, "featureFlags"})
-	if admitted[op] != "d1" || len(admitted) != 1 || refused["featureFlags"] == "" || !reflect.DeepEqual(still, []string{"featureFlags"}) {
+	if admitted[op].venue != "d1" || admitted[op].production != "" || len(admitted) != 1 || refused["featureFlags"] == "" || !reflect.DeepEqual(still, []string{"featureFlags"}) {
 		t.Fatalf("admitted=%v refused=%v still=%v", admitted, refused, still)
 	}
 	request.VenueReceipt = nil

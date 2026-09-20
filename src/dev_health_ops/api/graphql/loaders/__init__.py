@@ -12,11 +12,6 @@ from .analytics_loader import (
     TimeseriesResultData,
 )
 from .base import CachedDataLoader, SimpleDataLoader, make_cache_key
-from .dimension_loader import (
-    get_dimension_descriptions,
-    get_measure_descriptions,
-    load_dimension_values,
-)
 from .repo_loader import RepoByNameLoader, RepoData, RepoLoader
 from .team_loader import TeamByNameLoader, TeamData, TeamLoader
 
@@ -35,10 +30,6 @@ __all__ = [
     "TimeseriesBucketData",
     "BreakdownResultData",
     "BreakdownItemData",
-    # Dimension loader
-    "load_dimension_values",
-    "get_dimension_descriptions",
-    "get_measure_descriptions",
     # Entity loaders
     "TeamLoader",
     "TeamByNameLoader",

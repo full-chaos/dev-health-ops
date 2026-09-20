@@ -104,23 +104,28 @@ func main() {
 }
 
 type flags struct {
-	registryURL           string
-	buildInfoURL          string
-	edgeURL               string
-	candidateBuild        string
-	allowProverBuildSkew  bool
-	proofURL              string
-	documentsPath         string
-	postgresURI           string
-	orgID                 string
-	artifactDir           string
-	recordedBy            string
-	reviewEvidence        string
-	principalKind         string
-	audience              string
-	keyID                 string
-	proofBearerExec       string
-	edgeBearerExec        string
+	registryURL          string
+	buildInfoURL         string
+	edgeURL              string
+	candidateBuild       string
+	allowProverBuildSkew bool
+	proofURL             string
+	documentsPath        string
+	postgresURI          string
+	orgID                string
+	artifactDir          string
+	recordedBy           string
+	reviewEvidence       string
+	principalKind        string
+	audience             string
+	keyID                string
+	proofBearerExec      string
+	edgeBearerExec       string
+	edgeBearerFile       string
+	venue                string
+	// stamp is the venue label once the login token was checked; nil for
+	// every run that did not use -edge-bearer-file.
+	stamp                 *goapiproof.VenueStamp
 	proofBearerSecretFile string
 	dryRun                bool
 	timeout               time.Duration
@@ -164,6 +169,8 @@ func parseFlags() (flags, error) {
 	flag.StringVar(&f.candidateBuild, "candidate-build", "", "optional CROSS-CHECK: fail if the running build is not this sha. Never the source of the value written (team-lead ruling R51)")
 	flag.StringVar(&f.edgeURL, "edge-url", "http://localhost:8000/graphql", "the real product GraphQL edge; both the canary/primary candidate leg and every baseline leg go through it")
 	flag.StringVar(&f.proofURL, "proof-url", "", "measurement-only route able to execute a SHADOW-mode operation on the deployed Go build; empty means shadow operations are refused by name rather than skipped")
+	flag.StringVar(&f.edgeBearerFile, "edge-bearer-file", "", "path to a 0600 file (owned by this user, not a symlink) holding a PRE-OBTAINED edge login token, for a NON-PRODUCTION venue only. Refused unless -venue names an allowlisted venue, "+goapiproof.VenueAckEnvVar+" equals it and -edge-url is a host of that venue; the receipt records the venue and the token's role and superuser flag. Never a credential in argv or in the repo")
+	flag.StringVar(&f.venue, "venue", "", "non-production venue for -edge-bearer-file; the default is refusal, and production is always refused")
 	flag.StringVar(&f.proofBearerExec, "proof-bearer-exec", "", "JSON argv of a helper printing a FRESH effective-principal envelope on stdout, e.g. '[\"/opt/job5/mint-envelope.sh\",\"--org\",\"70d529e0\"]'. Re-run as the previous envelope ages out; required when the envelope's TTL is shorter than the run (it is: 60s). argv, not a shell string, so nothing is interpolated into a shell. NOTE: argv IS visible in the process table, so a secret must NEVER appear as one of these elements -- an element that looks like one is refused by index, never by value. If the helper needs a credential, pass it with -proof-bearer-secret-file: it arrives on an inherited file descriptor (fd 3, env PROOF_BEARER_SECRET_FD=3), never in argv. The helper's stdout and stderr are NEVER reported by this command")
 	flag.StringVar(&f.edgeBearerExec, "edge-bearer-exec", "", "JSON argv of a helper printing a FRESH edge access token on stdout, e.g. '[\"/usr/local/bin/mint-edge-token\",\"-org\",\"<org>\"]'. Re-run as the token ages. This is the ONLY source for the edge credential (required). The same argv rules as -proof-bearer-exec apply: no secret may appear as an element (the helper reads its key from its own environment). The helper's stdout and stderr are NEVER reported by this command")
 	flag.StringVar(&f.proofBearerSecretFile, "proof-bearer-secret-file", "", "path to a file holding the credential the -proof-bearer-exec helper needs. Its bytes are handed to the helper on an inherited fd (3, env PROOF_BEARER_SECRET_FD=3) -- never in argv, an env VALUE, a log, or an error. The file must be owner-only (refused if group- or other-readable) and non-empty")
@@ -218,11 +225,14 @@ func run() (err error) {
 	// resolved is both builds once /buildinfo has named the candidate:
 	// every report written after that carries them.
 	var resolved *goapiproof.ProverBuild
+	// venue is the stamp once the edge login token has been labelled.
+	var venue *goapiproof.VenueStamp
 	defer func() {
 		if err == nil || reported || f.reportPath == "" {
 			return
 		}
 		refused := report{OrgID: f.orgID, Window: f.window, Stage: goapiproof.Stage, Outcomes: []goapiproof.Outcome{}, ExitCause: exitRefusedBeforeMeasuring, ExitDetail: err.Error()}
+		refused.Venue = venue
 		if resolved != nil {
 			refused.ProverBuild, refused.CandidateBuild = resolved, resolved.Candidate
 		}
@@ -288,6 +298,12 @@ func run() (err error) {
 	if err != nil {
 		return err
 	}
+	stamp, err := venueStamp(f)
+	if err != nil {
+		return err
+	}
+	venue = stamp
+	f.stamp = stamp
 	// Both planes scope a request by the credential's org_id claim, so
 	// every value either credential sends must name -org (and no
 	// impersonation) -- checked on the exact value each time it is set on
@@ -394,15 +410,11 @@ func run() (err error) {
 			GoProofURL:      f.proofURL,
 			EdgeCredential:  edgeCredential,
 			ProofCredential: proofCredential,
-			Auth: goapiproof.AuthContext{
-				PrincipalKind: f.principalKind,
-				Audience:      f.audience,
-				KeyID:         f.keyID,
-			},
-			RecordedBy:     f.recordedBy,
-			ReviewEvidence: f.reviewEvidence,
-			Timeout:        f.timeout,
-			InstanceIDs:    map[string]string(f.instanceIDs),
+			Auth:            authContextFor(f, stamp),
+			RecordedBy:      f.recordedBy,
+			ReviewEvidence:  f.reviewEvidence,
+			Timeout:         f.timeout,
+			InstanceIDs:     map[string]string(f.instanceIDs),
 		},
 	}
 
@@ -654,6 +666,20 @@ type report struct {
 	// ExitDetail is the run-level error behind ExitCause, redacted, when
 	// there was one.
 	ExitDetail string `json:"exit_detail,omitempty"`
+	// Venue is set only when the edge leg used a login token on a
+	// non-production venue: the venue and the principal's role and
+	// superuser flag, so an admin report is never read as a viewer one.
+	Venue *goapiproof.VenueStamp `json:"venue,omitempty"`
+}
+
+// authContextFor is the auth-context shape a run records; the venue fields
+// are set only for a venue run.
+func authContextFor(f flags, stamp *goapiproof.VenueStamp) goapiproof.AuthContext {
+	auth := goapiproof.AuthContext{PrincipalKind: f.principalKind, Audience: f.audience, KeyID: f.keyID}
+	if stamp != nil {
+		auth.Venue, auth.PrincipalRole, auth.PrincipalSuperuser = stamp.Name, stamp.Role, stamp.Superuser
+	}
+	return auth
 }
 
 // writeReportFile writes one report as JSON.
@@ -760,6 +786,7 @@ func emitReport(f flags, registry goapiproof.RegistryView, builds goapiproof.Pro
 		Summary:        summary,
 		Outcomes:       outcomes,
 		ExitCause:      exitCause,
+		Venue:          f.stamp,
 	}
 	if runErr != nil {
 		r.ExitDetail = secrets.NewBoundary(f.postgresURI).Redact(runErr).Error()
@@ -805,6 +832,17 @@ func sortedKeys[V any](m map[string]V) []string {
 // second operator rediscover it at the closing /buildinfo.
 func credentials(f flags) (edge, proof *goapiproof.Credential, err error) {
 	switch {
+	case f.edgeBearerFile != "" && f.edgeBearerExec != "":
+		return nil, nil, errors.New("-edge-bearer-file and -edge-bearer-exec are alternatives: set one")
+	case f.edgeBearerFile != "":
+		if _, err := venueStamp(f); err != nil {
+			return nil, nil, err
+		}
+		path := f.edgeBearerFile
+		edge = goapiproof.MintedCredential("Authorization", "edge login token", edgeCredentialFreshness,
+			func(context.Context) (string, error) {
+				return readTokenFile(path)
+			}).WithShapeValidator(goapiproof.ValidateEnvelopeShape)
 	case f.edgeBearerExec != "":
 		argv, err := parseHelperArgv("-edge-bearer-exec", f.edgeBearerExec)
 		if err != nil {
@@ -848,6 +886,56 @@ func credentials(f flags) (edge, proof *goapiproof.Credential, err error) {
 				"  or %s for a short run.", "/query/proof", proofBearerEnvVar)
 	}
 	return edge, proof, nil
+}
+
+// venueStamp is the fail-closed gate for -edge-bearer-file, and the label
+// the report carries. Without the file it returns nil, and -venue alone is
+// refused: a venue with no login token has nothing to label.
+func venueStamp(f flags) (*goapiproof.VenueStamp, error) {
+	if f.edgeBearerFile == "" {
+		if f.venue != "" {
+			return nil, errors.New("-venue is only meaningful with -edge-bearer-file")
+		}
+		return nil, nil
+	}
+	if err := goapiproof.CheckVenue(f.venue, os.Getenv(goapiproof.VenueAckEnvVar), f.edgeURL); err != nil {
+		return nil, err
+	}
+	token, err := readTokenFile(f.edgeBearerFile)
+	if err != nil {
+		return nil, err
+	}
+	role, superuser, err := goapiproof.PeekPrincipal(token)
+	if err != nil {
+		return nil, err
+	}
+	return &goapiproof.VenueStamp{Name: f.venue, Role: role, Superuser: superuser}, nil
+}
+
+// readTokenFile reads a login token from a private regular file. The value
+// is never put in an error.
+func readTokenFile(path string) (string, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return "", fmt.Errorf("-edge-bearer-file: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", errors.New("-edge-bearer-file must be a regular file, not a symlink or device")
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		return "", fmt.Errorf("-edge-bearer-file mode %04o is readable by others; it must be 0600", info.Mode().Perm())
+	}
+	if stat, ok := info.Sys().(*syscall.Stat_t); !ok || int(stat.Uid) != os.Getuid() {
+		return "", errors.New("-edge-bearer-file must be owned by the user running this command")
+	}
+	if info.Size() > 16<<10 {
+		return "", errors.New("-edge-bearer-file is larger than a token can be")
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("-edge-bearer-file: %w", err)
+	}
+	return strings.TrimSpace(string(raw)), nil
 }
 
 // parseHelperArgv decodes a -*-bearer-exec flag value into an argv and

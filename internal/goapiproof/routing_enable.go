@@ -134,6 +134,12 @@ type EnableRequest struct {
 	// each one UNPROVEN durably.
 	AcknowledgeUnproven bool
 
+	// VenueReceipt is an optional venue-proof receipt (venue.go). It is
+	// consulted ONLY for an operation the store has no proof for, and
+	// admits it only for exactly this RunningBuild, SchemaDigest and
+	// document digest.
+	VenueReceipt *VenueReceipt
+
 	DryRun bool
 }
 
@@ -147,6 +153,9 @@ type EnableOutcome struct {
 	// --acknowledge-unproven. It is reported even on success, because an
 	// enablement and an ACKNOWLEDGED enablement must not print alike.
 	Proven bool
+	// VenueDigest is the venue receipt's sha256 when the row was admitted
+	// from one instead of a store proof run; empty otherwise.
+	VenueDigest string
 	// ReviewEvidence is what was actually written, prefix included.
 	ReviewEvidence string
 	// ModeBefore/CandidateBuildBefore/HadRowBefore are
@@ -320,19 +329,33 @@ func Enable(ctx context.Context, pool *pgxpool.Pool, request EnableRequest) ([]E
 			unproven = append(unproven, operation)
 		}
 	}
+	// A venue receipt is additive: it can only turn an operation the store
+	// could not prove into a proven one, never the reverse.
+	venueDigest, venueRefusal, unproven := applyVenueReceipt(request, wanted, unproven)
 	sort.Strings(unproven)
 	if len(unproven) > 0 && !request.AcknowledgeUnproven {
-		return nil, fmt.Errorf("%w (%s=%s stage=%s terminal_state=%s) for: %v\n"+
+		var venueNotes string
+		for _, operation := range unproven {
+			if reason, ok := venueRefusal[operation]; ok {
+				venueNotes += fmt.Sprintf("\n  venue receipt refused for %s: %s", operation, reason)
+			}
+		}
+		return nil, fmt.Errorf("%w (%s=%s stage=%s terminal_state=%s) for: %v%s\n"+
 			"  Plan section 5 stage 3 requires the exact candidate build to have served the operation through real ingress, auth, parse/validate, dispatch and a real database -- a constructor, health check or bare 200 does not qualify.\n"+
 			"  Record it with go-api-prove, or pass -acknowledge-unproven to enable anyway (the row is then reported UNPROVEN by `status` for as long as it is in force)",
 			ErrEnableUnproven, "candidate_build", request.RunningBuild,
-			EnablementProofStage, EnablementProofTerminalState, unproven)
+			EnablementProofStage, EnablementProofTerminalState, unproven, venueNotes)
 	}
 
 	outcomes := make([]EnableOutcome, 0, len(request.Operations))
 	for _, operation := range request.Operations {
 		evidence := request.ReviewEvidence
-		if !proven[operation] {
+		digest := venueDigest[operation]
+		switch {
+		case proven[operation]:
+		case digest != "":
+			evidence = VenueEvidencePrefix + digest + " " + evidence
+		default:
 			evidence = UnprovenEvidencePrefix + evidence
 		}
 		outcomes = append(outcomes, EnableOutcome{
@@ -340,7 +363,8 @@ func Enable(ctx context.Context, pool *pgxpool.Pool, request EnableRequest) ([]E
 			DocumentDigest: wanted[operation],
 			Mode:           request.Mode,
 			CandidateBuild: request.RunningBuild,
-			Proven:         proven[operation],
+			Proven:         proven[operation] || digest != "",
+			VenueDigest:    digest,
 			ReviewEvidence: evidence,
 		})
 	}
@@ -453,4 +477,26 @@ func Enable(ctx context.Context, pool *pgxpool.Pool, request EnableRequest) ([]E
 		return nil, fmt.Errorf("goapiproof: commit: %w", err)
 	}
 	return outcomes, nil
+}
+
+// applyVenueReceipt splits the operations the store could not prove into
+// those a venue receipt admits (operation -> receipt digest), the reasons
+// it refused the rest, and what is still unproven. No receipt: everything
+// stays unproven.
+func applyVenueReceipt(request EnableRequest, documentDigest map[string]string, unproven []string) (map[string]string, map[string]string, []string) {
+	admitted := map[string]string{}
+	refused := map[string]string{}
+	if request.VenueReceipt == nil {
+		return admitted, refused, unproven
+	}
+	var still []string
+	for _, operation := range unproven {
+		if err := VenueAdmit(request.VenueReceipt, operation, request.SchemaDigest, documentDigest[operation], request.RunningBuild, request.Mode); err != nil {
+			refused[operation] = err.Error()
+			still = append(still, operation)
+			continue
+		}
+		admitted[operation] = request.VenueReceipt.Digest
+	}
+	return admitted, refused, still
 }

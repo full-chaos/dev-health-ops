@@ -244,7 +244,14 @@ SDL_LOAD_BEARING_SOURCES: tuple[Path, ...] = (
 
 SDL_LOAD_BEARING_SYMBOLS: dict[str, frozenset[str]] = {
     "improve.py": frozenset({"Experiment", "ExperimentsResult", "ExperimentStatus"}),
-    "ai.py": frozenset({"AIOpportunitiesResult", "AIOpportunity", "AIOpportunityKind"}),
+    "ai.py": frozenset(
+        {
+            "AIOpportunitiesResult",
+            "AIOpportunity",
+            "AIOpportunityKind",
+            "AIWorkGraphDrilldownRef",
+        }
+    ),
     "pr.py": frozenset(
         {
             "PullRequestDetail",

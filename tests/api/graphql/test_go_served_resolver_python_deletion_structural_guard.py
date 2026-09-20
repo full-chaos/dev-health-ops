@@ -84,6 +84,10 @@ PRODUCT_TELEMETRY_LOADER_SOURCE = (
     ROOT / "src" / "dev_health_ops" / "api" / "product_telemetry" / "dashboard.py"
 )
 
+AI_RESOLVER_SOURCE = (
+    ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "resolvers" / "ai.py"
+)
+
 DELETED_GO_SERVED_RESOLVER_SYMBOLS: dict[Path, frozenset[str]] = {
     # A scheduler helper with no caller in src/.
     CAPACITY_QUERIES_SOURCE: frozenset({"discover_team_scopes"}),
@@ -100,6 +104,34 @@ DELETED_GO_SERVED_RESOLVER_SYMBOLS: dict[Path, frozenset[str]] = {
         {"resolve_product_telemetry_dashboard"}
     ),
     PRODUCT_TELEMETRY_LOADER_SOURCE: frozenset({"load_product_telemetry_dashboard"}),
+    # The eight query-api-served AI analytics operations. aiOpportunities and its
+    # scope helpers stay in the module.
+    AI_RESOLVER_SOURCE: frozenset(
+        {
+            "resolve_ai_impact_summary",
+            "resolve_ai_comparison",
+            "resolve_ai_review_load",
+            "resolve_ai_risk_breakdown",
+            "resolve_ai_governance_summary",
+            "resolve_ai_workflow_drilldown",
+            "resolve_ai_attributed_prs",
+            "resolve_ai_attribution_overview",
+            "_normalize_scope",
+            "_normalize_attribution_scope",
+            "_load_daily_records",
+            "_load_scope_breakdowns",
+            "_load_reviewer_concentration",
+            "_load_engagement_slices",
+            "_load_overlap_rows",
+            "_resolve_repo_team_map",
+            "_resolve_team_repo_ids",
+            "_scope_rollups",
+            "_aggregate_bucket_totals",
+            "_aggregate_side",
+            "_validate_date_range",
+            "_to_aware",
+        }
+    ),
 }
 
 # label -> a module that must not exist on disk AT ALL.
@@ -318,6 +350,14 @@ SDL_LOAD_BEARING_SYMBOLS: dict[str, frozenset[str]] = {
             "experiments",
             "product_telemetry_dashboard",
             "compounding_risk",
+            "ai_impact_summary",
+            "ai_comparison",
+            "ai_review_load",
+            "ai_risk_breakdown",
+            "ai_governance_summary",
+            "ai_workflow_drilldown",
+            "ai_attributed_prs",
+            "ai_attribution_overview",
             "work_graph_edges",
             "work_graph_flow",
             "work_graph_artifacts",

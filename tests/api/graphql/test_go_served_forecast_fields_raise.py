@@ -50,6 +50,46 @@ _QUERIES = {
         'query { compoundingRisk(orgId: "org-1") { orgId } }',
         None,
     ),
+    "aiImpactSummary": (
+        'query { aiImpactSummary(orgId: "org-1", dateRange: '
+        '{startDate: "2026-01-05", endDate: "2026-01-11"}) { totalPrs } }',
+        None,
+    ),
+    "aiComparison": (
+        'query { aiComparison(orgId: "org-1", dateRange: '
+        '{startDate: "2026-01-05", endDate: "2026-01-11"}) { orgId } }',
+        None,
+    ),
+    "aiReviewLoad": (
+        'query { aiReviewLoad(orgId: "org-1", dateRange: '
+        '{startDate: "2026-01-05", endDate: "2026-01-11"}) { orgId } }',
+        None,
+    ),
+    "aiRiskBreakdown": (
+        'query { aiRiskBreakdown(orgId: "org-1", dateRange: '
+        '{startDate: "2026-01-05", endDate: "2026-01-11"}) { orgId } }',
+        None,
+    ),
+    "aiGovernanceSummary": (
+        'query { aiGovernanceSummary(orgId: "org-1", dateRange: '
+        '{startDate: "2026-01-05", endDate: "2026-01-11"}) { orgId } }',
+        None,
+    ),
+    "aiWorkflowDrilldown": (
+        'query { aiWorkflowDrilldown(orgId: "org-1", rootType: ISSUE, '
+        'rootId: "issue-1") { orgId } }',
+        None,
+    ),
+    "aiAttributedPrs": (
+        'query { aiAttributedPrs(orgId: "org-1", dateRange: '
+        '{startDate: "2026-01-05", endDate: "2026-01-11"}) { total } }',
+        None,
+    ),
+    "aiAttributionOverview": (
+        'query { aiAttributionOverview(orgId: "org-1", dateRange: '
+        '{startDate: "2026-01-05", endDate: "2026-01-11"}) { orgId } }',
+        None,
+    ),
     "securityOverview": (
         'query { securityOverview(orgId: "org-1") { kpis { openTotal } } }',
         None,

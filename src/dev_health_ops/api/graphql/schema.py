@@ -66,15 +66,7 @@ from .models.recommendations import (
     WindowInput,
 )
 from .resolvers.ai import (
-    resolve_ai_attributed_prs,
-    resolve_ai_attribution_overview,
-    resolve_ai_comparison,
-    resolve_ai_governance_summary,
-    resolve_ai_impact_summary,
     resolve_ai_opportunities,
-    resolve_ai_review_load,
-    resolve_ai_risk_breakdown,
-    resolve_ai_workflow_drilldown,
 )
 from .resolvers.analytics import resolve_analytics
 from .resolvers.data_health import resolve_data_health
@@ -820,8 +812,7 @@ class Query:
         date_range: AIDateRangeInput,
         scope: AIScopeInput | None = None,
     ) -> AIImpactSummary:
-        context = get_context(info)
-        return await resolve_ai_impact_summary(context, date_range, scope)
+        _raise_served_by_query_api("aiImpactSummary", org_id, info)
 
     @strawberry.field(
         description="Side-by-side AI-assisted vs non-AI baseline comparison."
@@ -833,8 +824,7 @@ class Query:
         date_range: AIDateRangeInput,
         scope: AIScopeInput | None = None,
     ) -> AIComparison:
-        context = get_context(info)
-        return await resolve_ai_comparison(context, date_range, scope)
+        _raise_served_by_query_api("aiComparison", org_id, info)
 
     @strawberry.field(
         description="Per-bucket AI review-load breakdown with amplification."
@@ -846,8 +836,7 @@ class Query:
         date_range: AIDateRangeInput,
         scope: AIScopeInput | None = None,
     ) -> AIReviewLoadResult:
-        context = get_context(info)
-        return await resolve_ai_review_load(context, date_range, scope)
+        _raise_served_by_query_api("aiReviewLoad", org_id, info)
 
     @strawberry.field(
         description="Per-bucket AI risk breakdown (rework, revert, test gaps, incidents)."
@@ -859,8 +848,7 @@ class Query:
         date_range: AIDateRangeInput,
         scope: AIScopeInput | None = None,
     ) -> AIRiskBreakdownResult:
-        context = get_context(info)
-        return await resolve_ai_risk_breakdown(context, date_range, scope)
+        _raise_served_by_query_api("aiRiskBreakdown", org_id, info)
 
     @strawberry.field(
         description=(
@@ -909,10 +897,7 @@ class Query:
         scope: AIScopeInput | None = None,
         violation_limit: int = 100,
     ) -> AIGovernanceSummary:
-        context = get_context(info)
-        return await resolve_ai_governance_summary(
-            context, date_range, scope, violation_limit
-        )
+        _raise_served_by_query_api("aiGovernanceSummary", org_id, info)
 
     @strawberry.field(
         description=(
@@ -930,10 +915,7 @@ class Query:
         depth: int = 3,
         limit: int = 100,
     ) -> AIWorkflowDrilldownResult:
-        context = get_context(info)
-        return await resolve_ai_workflow_drilldown(
-            context, root_type, root_id, depth, limit
-        )
+        _raise_served_by_query_api("aiWorkflowDrilldown", org_id, info)
 
     @strawberry.field(
         description=(
@@ -952,10 +934,7 @@ class Query:
         limit: int = 50,
         offset: int = 0,
     ) -> AiAttributedPrsResult:
-        context = get_context(info)
-        return await resolve_ai_attributed_prs(
-            context, date_range, scope, limit, offset
-        )
+        _raise_served_by_query_api("aiAttributedPrs", org_id, info)
 
     @strawberry.field(
         description=(
@@ -976,10 +955,7 @@ class Query:
         limit: int = 50,
         offset: int = 0,
     ) -> AIAttributionOverviewResult:
-        context = get_context(info)
-        return await resolve_ai_attribution_overview(
-            context, date_range, scope, limit, offset
-        )
+        _raise_served_by_query_api("aiAttributionOverview", org_id, info)
 
 
 @strawberry.type

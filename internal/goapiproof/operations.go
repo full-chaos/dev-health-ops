@@ -1158,6 +1158,18 @@ var operationSpecs = map[string]OperationSpec{
 		},
 	},
 	"workGraphFlow": {Variables: workGraphVariables, ResponseRoot: "workGraphFlow"},
+	// workUnitTeamAttributions is the investment view's team attribution
+	// query. See workunitteamattributions.go for the requests.
+	"workUnitTeamAttributions": {
+		ResponseRoot: "workUnitTeamAttributions",
+		Variables:    workUnitTeamAttributionsVariables,
+		Variants: []Variant{
+			workUnitTeamAttributionsTeamVariant("TEAM_UNKNOWN", "team-abc-123"),
+			workUnitTeamAttributionsTeamVariant("TEAM_BLANK", ""),
+			workUnitTeamAttributionsUnitVariant("WORK_UNIT_VALID", "a work unit id whose member work items have team attributions"),
+			workUnitTeamAttributionsTeamOwnedVariant("TEAM_OWNS_UNITS", "a team id that is the owning team of at least one work unit"),
+		},
+	},
 }
 
 // capacityForecastStochasticLeaves is the one StochasticLeafClass in this

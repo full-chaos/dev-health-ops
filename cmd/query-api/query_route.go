@@ -375,6 +375,28 @@ const registeredReleaseImpactDocument = `query ReleaseImpact($orgId: String!, $f
   }
 }`
 
+// registeredWorkUnitTeamAttributionsDocument is the registered document for
+// the `workUnitTeamAttributions` operation: the work unit team attribution
+// query the investment view sends, the exact wire-form text a real web
+// client sends (testdata/wire_capture/workunitteamattributions_captured.graphql).
+const registeredWorkUnitTeamAttributionsDocument = `query WorkUnitTeamAttributions($orgId: String!, $workUnitIds: [String!], $teamId: String) {
+  workUnitTeamAttributions(
+    orgId: $orgId
+    workUnitIds: $workUnitIds
+    teamId: $teamId
+  ) {
+    workUnitId
+    teamId
+    teamName
+    source
+    confidence
+    isPrimary
+    memberCount
+    evidence
+    __typename
+  }
+}`
+
 // registeredWorkGraphFlowDocument is CHAOS-4504's registered document for
 // the workGraphFlow operation. Copied byte-for-byte from
 // web/src/lib/graphql/queries.ts:462's WORK_GRAPH_FLOW_QUERY, operation
@@ -2607,6 +2629,7 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		"releaseImpact":                     digestHex(registeredReleaseImpactDocument),
 		"workGraphEdges":                    digestHex(registeredWorkGraphEdgesDocument),
 		"workGraphFlow":                     digestHex(registeredWorkGraphFlowDocument),
+		"workUnitTeamAttributions":          digestHex(registeredWorkUnitTeamAttributionsDocument),
 		"workGraphArtifacts":                digestHex(registeredWorkGraphArtifactsDocument),
 		"flowMatrix":                        digestHex(registeredFlowMatrixDocument),
 		"investmentBreakdown":               digestHex(registeredInvestmentBreakdownDocument),

@@ -668,14 +668,11 @@ func (r *queryResolver) WorkItemTeamAttributions(ctx context.Context, orgID stri
 // actually queried is claims.OrgID from the verified envelope, never the
 // caller-supplied value.
 //
-// Not registered as a routeswitch document in query_route.go by this PR
-// (deliberate, per this ticket's own Deliverables text, unlike sibling
-// CHAOS-4991) -- this only makes the resolver correct and stops the panic;
-// it does not make workUnitTeamAttributions reachable from a real request
-// yet (see query_route.go's own "registration is not enablement" doc
-// comments for what a later registration PR still has to do: a
-// byte-for-byte wire-form document capture, a digest, and a separate
-// enablement decision).
+// The web's document for this field is registered as a routeswitch document in
+// query_route.go (registeredWorkUnitTeamAttributionsDocument): a real request
+// digests to it and the two-plane proof covers it. Registration is not
+// enablement: no request reaches this resolver until a routing row for
+// workUnitTeamAttributions is enabled.
 func (r *queryResolver) WorkUnitTeamAttributions(ctx context.Context, orgID string, workUnitIds []string, teamID *string) ([]model.WorkUnitTeamAttribution, error) {
 	claims, ok := authctx.FromContext(ctx)
 	if !ok || claims.OrgID == "" {

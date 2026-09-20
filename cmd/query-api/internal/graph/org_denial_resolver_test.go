@@ -48,6 +48,10 @@ func orgScopedCalls() map[string]orgScopedCall {
 			_, err := r.Query().AiComparison(ctx, orgID, model.AIDateRangeInput{}, nil)
 			return err
 		},
+		"aiOpportunities": func(r *Resolver, ctx context.Context, orgID string) error {
+			_, err := r.Query().AiOpportunities(ctx, orgID, nil, 25)
+			return err
+		},
 		"aiReviewLoad": func(r *Resolver, ctx context.Context, orgID string) error {
 			_, err := r.Query().AiReviewLoad(ctx, orgID, model.AIDateRangeInput{}, nil)
 			return err
@@ -90,5 +94,32 @@ func TestOrgScopedFields_ScopeToAuthenticatedOrg(t *testing.T) {
 		if v, _ := bindingValueByName(ch.calls[0], "org_id"); v != "org-1" {
 			t.Errorf("%s: org_id binding = %v", name, v)
 		}
+	}
+}
+
+// improveOpportunities takes no orgId: it reads the org of the request
+// identity, is denied without one, and never reaches ClickHouse when denied.
+func TestImproveOpportunities_UsesTheIdentityOrg(t *testing.T) {
+	for label, ctx := range map[string]context.Context{
+		"no claims": context.Background(),
+		"empty org": authctx.WithClaims(context.Background(), authctx.Claims{OrgID: ""}),
+	} {
+		ch := &scopeRecordingClient{}
+		_, err := (&Resolver{ClickHouse: ch}).Query().ImproveOpportunities(ctx, nil, 10, 30)
+		asAuthorizationError(t, err)
+		if len(ch.calls) != 0 {
+			t.Errorf("%s: ClickHouse reached past the guard", label)
+		}
+	}
+	ch := &scopeRecordingClient{}
+	ctx := authctx.WithClaims(context.Background(), authctx.Claims{OrgID: "org-1"})
+	if _, err := (&Resolver{ClickHouse: ch}).Query().ImproveOpportunities(ctx, nil, 10, 30); err != nil {
+		t.Fatalf("a failed read answers an empty list, got %v", err)
+	}
+	if len(ch.calls) == 0 {
+		t.Fatal("never reached ClickHouse")
+	}
+	if v, _ := bindingValueByName(ch.calls[0], "org_id"); v != "org-1" {
+		t.Errorf("org_id binding = %v", v)
 	}
 }

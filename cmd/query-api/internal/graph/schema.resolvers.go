@@ -1184,14 +1184,33 @@ func (r *queryResolver) AiRiskBreakdown(ctx context.Context, orgID string, dateR
 	panic(fmt.Errorf("not implemented: AiRiskBreakdown - aiRiskBreakdown"))
 }
 
-// AiOpportunities is the resolver for the aiOpportunities field.
+// AiOpportunities is the resolver for the aiOpportunities field. It reads
+// only the caller's own org: the orgId argument must equal the org of the
+// request identity, otherwise the request is denied.
 func (r *queryResolver) AiOpportunities(ctx context.Context, orgID string, scope *model.AIScopeInput, limit int) (*model.AIOpportunitiesResult, error) {
-	panic(fmt.Errorf("not implemented: AiOpportunities - aiOpportunities"))
+	if err := requireOwnOrg(ctx, orgID); err != nil {
+		return nil, err
+	}
+	result, err := aianalytics.AiOpportunities(ctx, r.ClickHouse, orgID, scope, limit)
+	if err != nil {
+		return nil, fmt.Errorf("aiOpportunities: %w", err)
+	}
+	return result, nil
 }
 
-// ImproveOpportunities is the resolver for the improveOpportunities field.
+// ImproveOpportunities is the resolver for the improveOpportunities field. The
+// field takes no orgId argument: it reads the org of the request identity and
+// is denied without one.
 func (r *queryResolver) ImproveOpportunities(ctx context.Context, scope *model.AIScopeInput, limit int, windowDays int) (*model.ImproveOpportunitiesResult, error) {
-	panic(fmt.Errorf("not implemented: ImproveOpportunities - improveOpportunities"))
+	orgID, err := requestOrg(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result, err := aianalytics.FlowOpportunities(ctx, r.ClickHouse, orgID, scope, limit, windowDays)
+	if err != nil {
+		return nil, fmt.Errorf("improveOpportunities: %w", err)
+	}
+	return result, nil
 }
 
 // AiGovernanceSummary is the resolver for the aiGovernanceSummary field.

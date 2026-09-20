@@ -27,3 +27,20 @@ func requireOwnOrg(ctx context.Context, orgID string) error {
 	}
 	return nil
 }
+
+// requestOrg returns the org of the request identity for a field that takes no
+// orgId argument. A request without an org identity is denied with the same
+// AUTHORIZATION_ERROR.
+func requestOrg(ctx context.Context) (string, error) {
+	claims, ok := authctx.FromContext(ctx)
+	if !ok || claims.OrgID == "" {
+		return "", &gqlerror.Error{
+			Message: "org_id is required for all analytics queries",
+			Path:    graphql.GetPath(ctx),
+			Extensions: map[string]interface{}{
+				"code": "AUTHORIZATION_ERROR",
+			},
+		}
+	}
+	return claims.OrgID, nil
+}

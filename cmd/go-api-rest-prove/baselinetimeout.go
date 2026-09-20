@@ -41,7 +41,9 @@ func proveUnderBaselineTimeout(
 	decl := *request.BaselineTimeoutDeclared
 	// From here every outcome carries the baseline's silence: a refusal keeps
 	// counting as a leg that never answered, whatever reason names it.
+	waitedText := fmt.Sprintf("%.1fs", waited.Seconds())
 	timedOut.BaselineTimedOut = true
+	timedOut.BaselineTimedOutAfter = waitedText
 	if waited < decl.MinTimeout {
 		timedOut.Refusal = goapiproof.RESTRefusalBaselineTimeoutTooShort
 		timedOut.Detail = fmt.Sprintf("baseline leg ended without an answer after %s, less than the declared minimum wait %s: %s", waited.Round(100*time.Millisecond), decl.MinTimeout, timedOut.Detail)
@@ -51,6 +53,7 @@ func proveUnderBaselineTimeout(
 	candidateLeg, err := doREST(ctx, client, f.queryAPIURL, spec.Method, spec.Path, request.Query, request.Body, candidateCredential, timeout)
 	if err != nil {
 		if out, ok := legTransportOutcome(ctx, operation, request.Name, "candidate", boundIDs, err); ok {
+			out.BaselineTimedOut, out.BaselineTimedOutAfter = true, waitedText
 			return out, nil
 		}
 		return outcome{}, fmt.Errorf("candidate leg: %w", err)
@@ -62,7 +65,6 @@ func proveUnderBaselineTimeout(
 			return outcome{}, fmt.Errorf("store candidate leg artifact: %w", err)
 		}
 	}
-	waitedText := fmt.Sprintf("%.1fs", waited.Seconds())
 	admission := goapiproof.RESTAdmitCandidateAlone(goapiproof.RESTAdmissionInput{
 		NamedBuild:          namedBuild,
 		WantCandidateStatus: request.WantCandidateStatus,
@@ -72,7 +74,7 @@ func proveUnderBaselineTimeout(
 	out := outcome{
 		Operation: operation, Request: request.Name,
 		Admitted: admission.Admitted, Refusal: admission.Reason, Detail: admission.Detail,
-		BoundIDs: boundIDs, BaselineTimedOut: true,
+		BoundIDs: boundIDs, BaselineTimedOut: true, BaselineTimedOutAfter: waitedText,
 		CandidateResponseRef: candidateRef, CandidateObservedAt: candidateObservedAt,
 		ObservedAt:            observedAt,
 		CandidateWireAttempts: candidateLeg.WireAttempts,
@@ -81,7 +83,6 @@ func proveUnderBaselineTimeout(
 		out.Detail = fmt.Sprintf("baseline timed out after %s; %s", waitedText, out.Detail)
 		return out, nil
 	}
-	out.BaselineTimedOutAfter = waitedText
 	out.Detail = "baseline timed out after " + waitedText
 	out.TerminalState = goapiproof.EnablementCitedMismatchState
 	out.DifferencesOutsideBaselineDefect = 0

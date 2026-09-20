@@ -464,7 +464,10 @@ func doREST(ctx context.Context, client *goapiproof.LegClient, baseURL, method, 
 	defer func() { _ = resp.Body.Close() }()
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return goapiproof.RESTLeg{}, goapiproof.NewTransportFailure(target, err)
+		// The plane answered: it sent its status and headers. A failure from
+		// here is a broken answer, never silence, and no declaration that the
+		// plane cannot answer may stand on it.
+		return goapiproof.RESTLeg{}, answerStartedError{goapiproof.NewTransportFailure(target, err)}
 	}
 	return goapiproof.RESTLeg{
 		StatusCode:    resp.StatusCode,
@@ -475,6 +478,13 @@ func doREST(ctx context.Context, client *goapiproof.LegClient, baseURL, method, 
 		WireAttempts:  legResponse.WireAttempts,
 	}, nil
 }
+
+// answerStartedError marks a leg failure that happened after the plane sent its
+// response headers. It unwraps to the TransportFailure it carries, so every
+// consumer of that class reads it exactly as before.
+type answerStartedError struct{ error }
+
+func (e answerStartedError) Unwrap() error { return e.error }
 
 // resolveRESTTimeout is the per-request timeout a leg actually gets: the
 // corpus entry's OWN declared Timeout when it set one -- a slow but
@@ -1980,7 +1990,8 @@ func proveOneRESTRequest(
 	baselineLeg, err := doREST(ctx, client, f.pythonAPIURL, spec.Method, spec.Path, request.Query, request.Body, baselineCredential, timeout)
 	if err != nil {
 		if out, ok := legTransportOutcome(ctx, operation, request.Name, "baseline", boundIDs, err); ok {
-			if out.Refusal == goapiproof.RESTRefusalBaselineLegTimedOut && request.BaselineTimeoutDeclared != nil {
+			var started answerStartedError
+			if out.Refusal == goapiproof.RESTRefusalBaselineLegTimedOut && request.BaselineTimeoutDeclared != nil && !errors.As(err, &started) {
 				return proveUnderBaselineTimeout(ctx, client, f, operation, spec, request, candidateCredential, namedBuild, auth, observedAt, writer, artifacts, dryRun, boundIDs, time.Since(baselineStarted), out)
 			}
 			return out, nil

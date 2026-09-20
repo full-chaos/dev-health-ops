@@ -118,6 +118,12 @@ func TestProveOneRESTRequest_BaselineTimeoutDeclaration(t *testing.T) {
 			if out.Refusal != "" && out.Admitted {
 				t.Fatalf("a refused outcome must not be admitted: %+v", out)
 			}
+			// Every outcome of the arm names the baseline's silence and the wait;
+			// an outcome outside the arm never does.
+			inArm := cell.baseline.stall && cell.decl != nil
+			if out.BaselineTimedOut != inArm || (out.BaselineTimedOutAfter != "") != inArm {
+				t.Fatalf("baseline_timed_out=%v after=%q, want the arm's marker=%v (outcome %s)", out.BaselineTimedOut, out.BaselineTimedOutAfter, inArm, out.line())
+			}
 			// A baseline that never answered keeps the run non-zero unless the
 			// declaration admitted the request: the refusal's name never decides it.
 			baselineSilent := cell.baseline.stall || cell.baseline.closed
@@ -212,5 +218,49 @@ func TestProveOneRESTRequest_BaselineTimeoutProducesNoID(t *testing.T) {
 	}
 	if !out.Admitted || len(out.producedIDs) != 0 || len(out.producedCandidateIDs) != 0 {
 		t.Fatalf("out = %+v, want an admitted outcome producing no ids", out)
+	}
+}
+
+// A baseline that sends its status and headers and then stalls its body has
+// answered: the declaration must not fire, the request keeps its ordinary
+// timed-out refusal, no receipt is written, and the candidate is never asked.
+func TestProveOneRESTRequest_BaselineThatAnsweredHeadersIsNotSilent(t *testing.T) {
+	const build = "abc123def456"
+	var candidateCalls int
+	var mu sync.Mutex
+	partial := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Server", goapiproof.ReferencePlaneServer)
+		w.Header().Set("Content-Length", "100")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"items":`))
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	}))
+	t.Cleanup(partial.Close)
+	f := flags{
+		pythonAPIURL: partial.URL,
+		queryAPIURL:  startTimeoutLeg(t, timeoutLeg{build: build, body: `{"items":[1]}`}, &candidateCalls, &mu),
+		org:          "org-1", recordedBy: "chris", reviewEvidence: "test", timeout: time.Minute,
+	}
+	request := goapiproof.RESTRequest{
+		Name: "team", WantCandidateStatus: 200, WantBaselineStatus: 200, BodyMode: goapiproof.RESTBodyModeJSON,
+		Timeout: 300 * time.Millisecond,
+		BaselineTimeoutDeclared: &goapiproof.BaselineTimeoutDeclaration{
+			Ticket: "ABC-123", Reason: "fixture", MinTimeout: 250 * time.Millisecond, NonEmptyPaths: []string{"data.items"},
+		},
+	}
+	writer := &fakeReceiptWriter{}
+	out, err := proveOneRESTRequest(context.Background(), goapiproof.NewLegClient(0), f, "REST:GET:/things", goapiproof.RESTEndpointSpec{Method: http.MethodGet, Path: "/things"}, request,
+		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil, false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if out.Admitted || out.Refusal != goapiproof.RESTRefusalBaselineLegTimedOut || out.BaselineTimedOut || candidateCalls != 0 || len(writer.receipts) != 0 {
+		t.Fatalf("out = %s (baseline_timed_out=%v), candidate calls=%d, receipts=%d; want the ordinary timed-out refusal and nothing else", out.line(), out.BaselineTimedOut, candidateCalls, len(writer.receipts))
+	}
+	if len(legFailuresIn([]outcome{out})) == 0 {
+		t.Fatal("the refusal must still count as a leg that did not complete")
 	}
 }

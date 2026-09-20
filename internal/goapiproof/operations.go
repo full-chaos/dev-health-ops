@@ -941,19 +941,20 @@ var operationSpecs = map[string]OperationSpec{
 	},
 	// releaseImpact is the release impact document the feature flag pages
 	// send: the `workGraphEdges` root field with the filters `nodeId`,
-	// `sourceType` and `limit`. It reads the same resolver as the
-	// workGraphEdges document, so its declared baseline difference is the
-	// same. The base request is the page's request for every release
-	// (`nodeId` empty, `sourceType` RELEASE, `limit` 200); the variants prove
-	// the branches a page can reach: one release by node id (a real id the
-	// run supplies), and a page cut at one edge.
+	// `sourceType` and `limit` in one variable. It reads the same resolver as
+	// the workGraphEdges document, so its declared baseline difference is the
+	// same. The base request is the page's request for every release (`nodeId`
+	// empty, `sourceType` RELEASE, `limit` 200). See releaseimpact.go for the
+	// variants: a page cut at one edge, one node by id, and one populated
+	// source type.
 	"releaseImpact": {
 		ResponseRoot: "workGraphEdges",
 		Variables:    releaseImpactVariables,
 		Parity:       workGraphEdgesParity,
 		Variants: []Variant{
 			releaseImpactVariant("LIMIT_ONE", map[string]any{"nodeId": "", "sourceType": "RELEASE", "limit": 1}),
-			releaseImpactNodeVariant("NODE_ID_VALID", "a node id that is the source of at least one release edge"),
+			releaseImpactNodeVariant("NODE_ID_VALID", "a node id that is the source or target of at least one edge"),
+			releaseImpactSourceTypeVariant("SOURCE_TYPE_POPULATED", "a node type that has edges as a source, for example PR"),
 		},
 	},
 	"workGraphFlow": {Variables: workGraphVariables, ResponseRoot: "workGraphFlow"},

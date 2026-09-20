@@ -359,7 +359,15 @@ var operationSpecs = map[string]OperationSpec{
 		},
 		Variants: []Variant{
 			experimentsVariant("ORG_EXPLICIT", "ORG", nil),
-			experimentsVariant("TEAM_UNKNOWN", "TEAM", []string{"team-abc-123"}),
+			// A team id is not a case, known or unknown. For a team scope the
+			// reference resolves the team's repositories from the members'
+			// metric rows and, when none resolve (an unknown or renamed
+			// team), drops the repository filter and answers the whole org;
+			// Go selects the team's repositories by ownership and an
+			// unresolved team narrows to nothing, answering the steady-flow
+			// card. The planes therefore disagree by design: the reference
+			// widens a scope that resolves to nothing, which is the declared
+			// baseline defect, and Go's answer is the ruled semantics.
 			experimentsVariant("REPO_UNKNOWN", "REPO", []string{"00000000-0000-0000-0000-000000000001"}),
 			experimentsVariant("SERVICE_UNKNOWN", "SERVICE", []string{"service-abc-123"}),
 			experimentsVariant("DEVELOPER_UNKNOWN", "DEVELOPER", []string{"dev-abc-123"}),

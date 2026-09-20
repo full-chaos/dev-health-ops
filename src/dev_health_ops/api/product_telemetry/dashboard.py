@@ -312,8 +312,8 @@ async def load_product_telemetry_platform_dashboard(
 ) -> ProductTelemetryPlatformDashboard:
     """Load cross-org product telemetry rollups for the platform-admin view.
 
-    All queries are run in parallel against the analytics backend. Unlike
-    :func:`load_product_telemetry_dashboard`, none of the queries filter on
+    All queries are run in parallel against the analytics backend. Unlike the
+    per-organisation dashboard (served by query-api), none of the queries filter on
     ``org_id_hash`` — they aggregate across every tenant — and an additional
     top-orgs query rolls up event volume per ``org_id_hash`` so the resolver
     can attach Postgres-side org names.

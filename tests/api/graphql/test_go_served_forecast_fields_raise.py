@@ -36,6 +36,10 @@ _QUERIES = {
         'query { busFactor(orgId: "org-1") { value } }',
         None,
     ),
+    "securityOverview": (
+        'query { securityOverview(orgId: "org-1") { kpis { openTotal } } }',
+        None,
+    ),
     "pr": (
         'query { pr(orgId: "org-1", id: "11111111-1111-1111-1111-111111111111#pr1") '
         "{ id } }",

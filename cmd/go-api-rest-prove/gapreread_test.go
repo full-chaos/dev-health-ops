@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -233,5 +234,73 @@ func TestValidateGapRereadFlags(t *testing.T) {
 		if err := validateGapRereadFlags(cell.delay, cell.budget); (err == nil) != cell.ok {
 			t.Errorf("delay=%s budget=%s: err=%v, want ok=%v", cell.delay, cell.budget, err, cell.ok)
 		}
+	}
+}
+
+// A re-read admission's receipt names BOTH pairs: the first comparison (the
+// mismatch the citation excuses) in its response refs, and the pair the
+// admission stands on in review_evidence. Every cell runs the real
+// proveOneRESTRequest against real HTTP servers and a real artifact store;
+// refs are content digests, so each is checked against the body it must hold.
+func TestProveOneRESTRequest_ReceiptNamesTheAdmittedPair(t *testing.T) {
+	const build = "abc123def456"
+	spec := goapiproof.RESTEndpointSpec{Method: http.MethodGet, Path: "/thing"}
+	request := goapiproof.RESTRequest{Name: "thing", WantCandidateStatus: 200, WantBaselineStatus: 200, BodyMode: goapiproof.RESTBodyModeJSON}
+	digestRef := func(store *goapiproof.ArtifactStore, body string) string {
+		ref, err := store.Put([]byte(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ref
+	}
+	for _, cell := range []struct {
+		name                   string
+		cand, base             []string
+		wantAdmittedB, wantAdC string // body each admitted ref must hold; "" = no admitted refs
+	}{
+		{"delayed gap admission: B3 and C1", []string{`{"a":2}`}, []string{`{"a":1}`, `{"a":1}`, `{"a":2}`}, `{"a":2}`, `{"a":2}`},
+		{"delayed gap admission, presence: B3 and C1", []string{`{"a":2,"x":1}`}, []string{`{"a":1}`, `{"a":2,"x":1}`}, `{"a":2,"x":1}`, `{"a":2,"x":1}`},
+		{"bracketed write-skew admission: B2 and C1", []string{`{"a":2}`}, []string{`{"a":1}`, `{"a":2}`}, `{"a":2}`, `{"a":2}`},
+		{"stable difference: no admitted pair", []string{`{"a":2}`}, []string{`{"a":1}`}, "", ""},
+		{"delayed reread refused (third value): no admitted pair", []string{`{"a":2}`}, []string{`{"a":1}`, `{"a":1}`, `{"a":7}`}, "", ""},
+	} {
+		t.Run(cell.name, func(t *testing.T) {
+			candidateURL, baselineURL, _ := seqServers(t, build, cell.cand, cell.base)
+			store, err := goapiproof.NewArtifactStore(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			f := flags{queryAPIURL: candidateURL, pythonAPIURL: baselineURL, org: "org-1", recordedBy: "chris", reviewEvidence: "test", timeout: 2 * time.Second}
+			f.gapReread, _ = gapTestState(15*time.Second, time.Minute)
+			writer := &fakeReceiptWriter{}
+			if _, err := proveOneRESTRequest(context.Background(), goapiproof.NewLegClient(0), f, "REST:GET:/thing", spec, request,
+				staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, store, false, nil); err != nil {
+				t.Fatal(err)
+			}
+			if len(writer.receipts) != 1 {
+				t.Fatalf("receipts = %d, want 1", len(writer.receipts))
+			}
+			receipt := writer.receipts[0]
+			var evidence restReviewEvidence
+			if err := json.Unmarshal([]byte(receipt.ReviewEvidence), &evidence); err != nil {
+				t.Fatalf("review_evidence %q: %v", receipt.ReviewEvidence, err)
+			}
+			// The first comparison always stays in the response refs.
+			if receipt.BaselineResponseRef != digestRef(store, cell.base[0]) || receipt.CandidateResponseRef != digestRef(store, cell.cand[0]) {
+				t.Fatalf("response refs %q/%q are not the first pair", receipt.BaselineResponseRef, receipt.CandidateResponseRef)
+			}
+			if cell.wantAdmittedB == "" {
+				if evidence.AdmittedBaselineRef != "" || evidence.AdmittedCandidateRef != "" {
+					t.Fatalf("admitted refs %q/%q on a case no re-read admitted", evidence.AdmittedBaselineRef, evidence.AdmittedCandidateRef)
+				}
+				return
+			}
+			if evidence.AdmittedBaselineRef != digestRef(store, cell.wantAdmittedB) || evidence.AdmittedCandidateRef != digestRef(store, cell.wantAdC) {
+				t.Fatalf("admitted refs %q/%q; want the digests of %s / %s", evidence.AdmittedBaselineRef, evidence.AdmittedCandidateRef, cell.wantAdmittedB, cell.wantAdC)
+			}
+			if evidence.AdmittedBaselineRef == receipt.BaselineResponseRef {
+				t.Fatal("admitted baseline ref equals the first baseline ref: the baseline did not change")
+			}
+		})
 	}
 }

@@ -677,6 +677,15 @@ type restReviewEvidence struct {
 	// baseline is taken as Python's own answer on the operator's word,
 	// not on anything the response showed.
 	PythonForwarderOffAttested bool `json:"python_forwarder_off_attested,omitempty"`
+	// AdmittedBaselineRef and AdmittedCandidateRef name the response pair a
+	// re-read admission (write-skew or delayed gap re-read) stands on. The
+	// receipt's own BaselineResponseRef/CandidateResponseRef keep the FIRST
+	// comparison (the mismatch the citation excuses); when a re-read admits
+	// the case, the baseline that changed and the candidate it was matched
+	// to are recorded here, so the durable receipt identifies both pairs.
+	// Empty when no re-read admitted the case.
+	AdmittedBaselineRef  string `json:"admitted_baseline_ref,omitempty"`
+	AdmittedCandidateRef string `json:"admitted_candidate_ref,omitempty"`
 }
 
 // encodeRESTReviewEvidence renders restReviewEvidence for one receipt.
@@ -685,8 +694,11 @@ type restReviewEvidence struct {
 // nothing -- same fallback ReceiptProvenance's own reviewEvidence method
 // uses, and the same reasoning: the operator's own words are worth more
 // than a dropped column.
-func encodeRESTReviewEvidence(operator, findingsRef string, forwarderOffAttested bool) string {
-	encoded, err := json.Marshal(restReviewEvidence{Operator: operator, FindingsRef: findingsRef, PythonForwarderOffAttested: forwarderOffAttested})
+func encodeRESTReviewEvidence(operator, findingsRef string, forwarderOffAttested bool, admittedBaselineRef, admittedCandidateRef string) string {
+	encoded, err := json.Marshal(restReviewEvidence{
+		Operator: operator, FindingsRef: findingsRef, PythonForwarderOffAttested: forwarderOffAttested,
+		AdmittedBaselineRef: admittedBaselineRef, AdmittedCandidateRef: admittedCandidateRef,
+	})
 	if err != nil {
 		return operator
 	}
@@ -2017,6 +2029,9 @@ func proveOneRESTRequest(
 		matchedDefects []string
 		vacuity        []string
 		findingsRef    string
+		// admittedBaselineRef/admittedCandidateRef: the pair a re-read
+		// admission stands on (see restReviewEvidence).
+		admittedBaselineRef, admittedCandidateRef string
 	)
 	if decodeBody {
 		baselineData := goapiproof.InjectRESTDedupKeys(admission.BaselineSnap.Data, request.DedupListPath, request.DedupKeyFields)
@@ -2161,6 +2176,7 @@ func proveOneRESTRequest(
 				differences = 0
 				matchedDefects = append(append([]string(nil), secondResult.BaselineDefectsMatched...), goapiproof.WriteSkewCitation)
 				admission.BaselineSnap = secondSnap
+				admittedBaselineRef, admittedCandidateRef = record.SecondBaselineResponseRef, candidateRef
 				if len(request.Produces) > 0 {
 					out.producedIDs = make(map[string]string, len(request.Produces))
 					out.producedCandidateIDs = make(map[string][]string, len(request.Produces))
@@ -2193,6 +2209,7 @@ func proveOneRESTRequest(
 					differences = 0
 					matchedDefects = append(append([]string(nil), decision.Second.BaselineDefectsMatched...), goapiproof.GapRereadCitation)
 					admission.BaselineSnap = thirdSnap
+					admittedBaselineRef, admittedCandidateRef = record.BaselineResponseRef, record.CandidateResponseRef
 					if len(request.Produces) > 0 {
 						out.producedIDs = make(map[string]string, len(request.Produces))
 						out.producedCandidateIDs = make(map[string][]string, len(request.Produces))
@@ -2352,7 +2369,7 @@ func proveOneRESTRequest(
 		Stage:                            goapiproof.EnablementProofStage,
 		TerminalState:                    terminalState,
 		OrgID:                            f.org,
-		ReviewEvidence:                   encodeRESTReviewEvidence(f.reviewEvidence, findingsRef, spec.PythonForwarder && f.pythonForwarderOff),
+		ReviewEvidence:                   encodeRESTReviewEvidence(f.reviewEvidence, findingsRef, spec.PythonForwarder && f.pythonForwarderOff, admittedBaselineRef, admittedCandidateRef),
 		RecordedBy:                       f.recordedBy,
 		ObservedAt:                       observedAt,
 		MeasurementRoute:                 goapiproof.RouteProof,

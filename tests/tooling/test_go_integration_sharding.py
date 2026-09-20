@@ -150,6 +150,7 @@ EXPECTED_PACKAGES = {
     # sync_manual_triggers native dispatch path) -- no further count change.
     "internal/jobs/operational",
     "internal/jobs/pagerduty",
+    "internal/jobs/repair",
     "internal/jobs/report",
     "internal/jobs/system",
     "internal/jobs/workgraph",

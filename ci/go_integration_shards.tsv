@@ -85,6 +85,7 @@ internal/jobs/metrics/daily/icfinalize	119
 internal/jobs/metrics/remaining	794
 internal/jobs/operational	69
 internal/jobs/pagerduty	7
+internal/jobs/repair	30
 internal/jobs/report	76
 internal/jobs/system	17
 internal/jobs/workgraph	20

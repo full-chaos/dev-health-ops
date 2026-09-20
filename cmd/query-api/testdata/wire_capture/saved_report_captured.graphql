@@ -1,0 +1,20 @@
+query savedReport($orgId: String!, $reportId: String!) {
+  savedReport(orgId: $orgId, reportId: $reportId) {
+    id
+    orgId
+    name
+    description
+    reportPlan
+    isTemplate
+    templateSourceId
+    parameters
+    scheduleId
+    isActive
+    lastRunAt
+    lastRunStatus
+    createdAt
+    updatedAt
+    createdBy
+    __typename
+  }
+}

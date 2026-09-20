@@ -211,3 +211,19 @@ it to the query constants in `src/lib/graphql/productTelemetryFetchers.ts`.
 | --- | --- |
 | `product_telemetry_dashboard_captured.graphql` | `3bcefc8f84200705229f8195e785682bf9adbfc01e60c4e775d0ff9d36954707` |
 | `product_telemetry_platform_dashboard_captured.graphql` | `8e2847048e3b70b0391f45d9cd8804735ea4401b7e78cd614e35e49ca39e348f` |
+
+# saved-report wire-capture fixtures
+
+`saved_reports_captured.graphql` (`savedReports`), `saved_report_captured.graphql`
+(`savedReport`) and `report_runs_captured.graphql` (`reportRuns`) are the
+wire-form text of the three web documents that read saved reports and their
+runs (`SAVED_REPORTS_QUERY`, `SAVED_REPORT_QUERY`, `REPORT_RUNS_QUERY` in the
+web repo's `src/lib/reports/queries.ts`). Each was produced by importing the
+web repo's own `wireForm()` (`scripts/graphql-wire-parity.ts`) and applying it
+to the query source text.
+
+| fixture | sha256(wire form) |
+| --- | --- |
+| `saved_reports_captured.graphql` | `095ac91596b0baea1b8100074d7f8c0beb39291c999274d1e978444e8d25f6a5` |
+| `saved_report_captured.graphql` | `02fc81f826285965c94a564e490d1dec4e4831079bb3788ff7f742dd06aa6a22` |
+| `report_runs_captured.graphql` | `16fbdefaa0f4f095d43b934b5fefb3eaed5878aeb20685303aba6f3a67c4a8de` |

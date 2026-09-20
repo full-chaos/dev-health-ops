@@ -1,0 +1,20 @@
+query savedReports($orgId: String!, $limit: Int, $offset: Int) {
+  savedReports(orgId: $orgId, limit: $limit, offset: $offset) {
+    items {
+      id
+      orgId
+      name
+      description
+      reportPlan
+      isTemplate
+      isActive
+      lastRunAt
+      lastRunStatus
+      createdAt
+      updatedAt
+      __typename
+    }
+    total
+    __typename
+  }
+}

@@ -26,6 +26,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/hotspots"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/operatingreview"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/producttelemetry"
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/reports"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/reviewedges"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/security"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/throughputforecast"
@@ -721,19 +722,32 @@ func (r *queryResolver) SecurityOverview(ctx context.Context, orgID string, filt
 	return result, nil
 }
 
-// SavedReports is the resolver for the savedReports field.
+// SavedReports is the resolver for the savedReports field. It reads only the
+// caller's own org: the orgId argument must equal the org of the request
+// identity, otherwise the request is denied.
 func (r *queryResolver) SavedReports(ctx context.Context, orgID string, limit int, offset int) (*model.SavedReportConnection, error) {
-	panic(fmt.Errorf("not implemented: SavedReports - savedReports"))
+	if err := requireOwnOrg(ctx, orgID); err != nil {
+		return nil, err
+	}
+	return (&reports.Reader{Postgres: r.Postgres}).List(ctx, orgID, limit, offset)
 }
 
-// SavedReport is the resolver for the savedReport field.
+// SavedReport is the resolver for the savedReport field. A report of another
+// org, or an id that names no report, is null; a malformed id is an error.
 func (r *queryResolver) SavedReport(ctx context.Context, orgID string, reportID string) (*model.SavedReportType, error) {
-	panic(fmt.Errorf("not implemented: SavedReport - savedReport"))
+	if err := requireOwnOrg(ctx, orgID); err != nil {
+		return nil, err
+	}
+	return (&reports.Reader{Postgres: r.Postgres}).Get(ctx, orgID, reportID)
 }
 
-// ReportRuns is the resolver for the reportRuns field.
+// ReportRuns is the resolver for the reportRuns field. The runs of a report
+// that belongs to another org, or of an id that names no report, are empty.
 func (r *queryResolver) ReportRuns(ctx context.Context, orgID string, reportID string, limit int) (*model.ReportRunConnection, error) {
-	panic(fmt.Errorf("not implemented: ReportRuns - reportRuns"))
+	if err := requireOwnOrg(ctx, orgID); err != nil {
+		return nil, err
+	}
+	return (&reports.Reader{Postgres: r.Postgres}).Runs(ctx, orgID, reportID, limit)
 }
 
 // CapacityForecast is the resolver for the capacityForecast field

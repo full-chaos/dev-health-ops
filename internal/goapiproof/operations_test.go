@@ -37,7 +37,7 @@ var registeredOperations = []string{
 	"featureFlagEvents", "featureFlags", "flowMatrix", "hotspots",
 	"releaseImpact",
 	"investmentBreakdown", "investmentFull", "operatingReview", "pr",
-	"reviewEdges", "securityAlerts", "securityOverview", "throughputForecast",
+	"reportRuns", "reviewEdges", "savedReport", "savedReports", "securityAlerts", "securityOverview", "throughputForecast",
 	"workGraphArtifacts", "workGraphEdges", "workGraphFlow",
 }
 
@@ -126,7 +126,7 @@ func TestWindowedSpecsUseTheWindow(t *testing.T) {
 		"connectorsDataHealth": true, "dataHealthIdentity": true, "mappingCoverageHealth": true, "metricLineage": true,
 		"capacityForecast": true, "capacityForecasts": true,
 		"featureFlagEvents": true, "featureFlags": true, "pr": true,
-		"experiments": true, "busFactor": true, "compoundingRisk": true, "securityAlerts": true, "securityOverview": true,
+		"experiments": true, "busFactor": true, "compoundingRisk": true, "reportRuns": true, "savedReport": true, "savedReports": true, "securityAlerts": true, "securityOverview": true,
 		"releaseImpact": true, "throughputForecast": true, "workGraphArtifacts": true, "workGraphEdges": true,
 		"workGraphFlow": true,
 	}

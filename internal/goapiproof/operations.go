@@ -3,6 +3,8 @@ package goapiproof
 import (
 	"fmt"
 	"sort"
+	"strings"
+	"time"
 )
 
 // Window is the request window every windowed operation is asked for.
@@ -231,7 +233,7 @@ var operationSpecs = map[string]OperationSpec{
 		ResponseRoot: "aiImpactSummary",
 		Variables:    aiRollupVariables(nil),
 		Parity:       aiImpactSummaryParity(),
-		Variants: append(aiRollupVariants(aiImpactSummaryParity()),
+		Variants: append(aiRollupVariants(aiImpactSummaryParity(), aiImpactSummaryParity()),
 			aiInstanceVariant("REPO_VALID", "a repository id that has rollup rows", "repoId", aiImpactSummaryParity(), "data.aiImpactSummary.daily", "data.aiImpactSummary.repoBreakdown", "scopeId"),
 			aiInstanceVariant("REPO_NAME_VALID", "the full name of a repository that has rollup rows", "repoId", aiImpactSummaryParity(), "data.aiImpactSummary.daily", "", ""),
 			aiInstanceVariant("TEAM_VALID", "a team id stored on rollup rows", "teamId", aiImpactSummaryParity(), "data.aiImpactSummary.daily", "data.aiImpactSummary.teamBreakdown", "scopeId"),
@@ -240,7 +242,7 @@ var operationSpecs = map[string]OperationSpec{
 	"aiComparison": {
 		ResponseRoot: "aiComparison",
 		Variables:    aiRollupVariables(nil),
-		Variants: append(aiRollupVariants(Options{}),
+		Variants: append(aiRollupVariants(Options{}, Options{}),
 			aiInstanceVariant("REPO_VALID", "a repository id that has rollup rows", "repoId", Options{}, "", "", ""),
 			aiInstanceVariant("REPO_NAME_VALID", "the full name of a repository that has rollup rows", "repoId", Options{}, "", "", ""),
 			aiInstanceVariant("TEAM_VALID", "a team id stored on rollup rows", "teamId", Options{}, "", "", ""),
@@ -250,7 +252,7 @@ var operationSpecs = map[string]OperationSpec{
 		ResponseRoot: "aiReviewLoad",
 		Variables:    aiRollupVariables(nil),
 		Parity:       aiReviewLoadParity(),
-		Variants: append(aiRollupVariants(aiReviewLoadParity()),
+		Variants: append(aiRollupVariants(aiReviewLoadParity(), Options{}),
 			aiInstanceVariant("REPO_VALID", "a repository id that has rollup rows", "repoId", aiReviewLoadParity(), "data.aiReviewLoad.byBucket", "", ""),
 			aiInstanceVariant("REPO_NAME_VALID", "the full name of a repository that has rollup rows", "repoId", aiReviewLoadParity(), "data.aiReviewLoad.byBucket", "", ""),
 			aiInstanceVariant("TEAM_VALID", "a team id that has rollup rows and whose repo patterns select a repository", "teamId", aiReviewLoadParity(), "data.aiReviewLoad.byBucket", "", ""),
@@ -260,7 +262,7 @@ var operationSpecs = map[string]OperationSpec{
 		ResponseRoot: "aiRiskBreakdown",
 		Variables:    aiRollupVariables(nil),
 		Parity:       aiRiskBreakdownParity(),
-		Variants: append(aiRollupVariants(aiRiskBreakdownParity()),
+		Variants: append(aiRollupVariants(aiRiskBreakdownParity(), Options{}),
 			aiInstanceVariant("REPO_VALID", "a repository id that has rollup rows", "repoId", aiRiskBreakdownParity(), "data.aiRiskBreakdown.byBucket", "", ""),
 			aiInstanceVariant("REPO_NAME_VALID", "the full name of a repository that has rollup rows", "repoId", aiRiskBreakdownParity(), "data.aiRiskBreakdown.byBucket", "", ""),
 			aiInstanceVariant("TEAM_VALID", "a team id stored on rollup rows whose repo patterns select a repository", "teamId", aiRiskBreakdownParity(), "data.aiRiskBreakdown.byBucket", "", ""),
@@ -1266,10 +1268,37 @@ func securityAlertsSecondPageVariant() Variant {
 // aiRollupVariables builds the shared request of the AI rollup operations: the
 // org, the run's day window and the given scope (nil sends no scope).
 func aiRollupVariables(scope map[string]any) func(orgID string, w Window) map[string]any {
+	return aiRollupVariablesTo(scope, false)
+}
+
+// aiClock is the prover's clock for windows that follow the newest data.
+var aiClock = func() time.Time { return time.Now().UTC() }
+
+// aiWindowEnd is the last day of a window that reaches the newest complete
+// data: the later of the run's until-date and the last complete UTC day (the
+// day before the run day). A team id is stored only on the newest rollup
+// days, so a team-scoped request must end there rather than at a fixed date
+// that goes stale; the run day itself is excluded because the daily jobs
+// write it during the day, and two legs straddling a write would differ.
+func aiWindowEnd(w Window) string {
+	lastComplete := aiClock().AddDate(0, 0, -1).Format("2006-01-02")
+	if lastComplete > w.UntilDate {
+		return lastComplete
+	}
+	return w.UntilDate
+}
+
+// aiRollupVariablesTo is aiRollupVariables with the window's end optionally
+// extended to the run day.
+func aiRollupVariablesTo(scope map[string]any, toRunDay bool) func(orgID string, w Window) map[string]any {
 	return func(orgID string, w Window) map[string]any {
+		end := w.UntilDate
+		if toRunDay {
+			end = aiWindowEnd(w)
+		}
 		vars := map[string]any{
 			"orgId":     orgID,
-			"dateRange": map[string]any{"startDate": w.SinceDate, "endDate": w.UntilDate},
+			"dateRange": map[string]any{"startDate": w.SinceDate, "endDate": end},
 			"scope":     nil,
 		}
 		if scope != nil {
@@ -1283,7 +1312,12 @@ func aiRollupVariables(scope map[string]any) func(orgID string, w Window) map[st
 // have. The repository and team values name nothing in any org, so both planes
 // answer the empty window for them; a scope that selects real rows needs a
 // run-supplied identifier.
-func aiRollupVariants(parity Options) []Variant {
+//
+// A variant that selects nothing by construction carries no declaration: a
+// declared field that matches nothing refuses the run. The work-type variant
+// carries workTypeParity, because a work-type scope can turn a declared
+// aggregate off.
+func aiRollupVariants(parity, workTypeParity Options) []Variant {
 	scopes := []struct {
 		name  string
 		scope map[string]any
@@ -1297,7 +1331,14 @@ func aiRollupVariants(parity Options) []Variant {
 	}
 	variants := make([]Variant, 0, len(scopes))
 	for _, sc := range scopes {
-		variants = append(variants, Variant{Name: sc.name, Variables: aiRollupVariables(sc.scope), Parity: parity})
+		p := Options{}
+		switch sc.name {
+		case "BUCKETS":
+			p = parity
+		case "WORK_TYPE":
+			p = workTypeParity
+		}
+		variants = append(variants, Variant{Name: sc.name, Variables: aiRollupVariables(sc.scope), Parity: p})
 	}
 	return variants
 }
@@ -1336,7 +1377,7 @@ func aiInstanceVariant(name, kind, scopeField string, parity Options, nonEmpty, 
 	}
 	return Variant{
 		Name:      name,
-		Variables: aiRollupVariables(map[string]any{}),
+		Variables: aiRollupVariablesTo(map[string]any{}, scopeField == "teamId"),
 		Parity:    parity,
 		Instance: &VariantInstance{
 			Kind: kind,
@@ -1354,8 +1395,12 @@ func aiInstanceVariant(name, kind, scopeField string, parity Options, nonEmpty, 
 // aiPagedVariables builds the shared request of the paged AI operations: the
 // org, the run's day window, the scope (nil sends none) and the first page.
 func aiPagedVariables(scope map[string]any) func(orgID string, w Window) map[string]any {
+	return aiPagedVariablesTo(scope, false)
+}
+
+func aiPagedVariablesTo(scope map[string]any, toRunDay bool) func(orgID string, w Window) map[string]any {
 	return func(orgID string, w Window) map[string]any {
-		vars := aiRollupVariables(scope)(orgID, w)
+		vars := aiRollupVariablesTo(scope, toRunDay)(orgID, w)
 		vars["limit"] = 50
 		vars["offset"] = 0
 		return vars
@@ -1372,7 +1417,11 @@ func aiPagedVariants(parity Options, scopes map[string]map[string]any) []Variant
 	sort.Strings(names)
 	variants := make([]Variant, 0, len(names)+3)
 	for _, name := range names {
-		variants = append(variants, Variant{Name: name, Variables: aiPagedVariables(scopes[name]), Parity: parity})
+		p := parity
+		if strings.HasSuffix(name, "_UNKNOWN") {
+			p = Options{}
+		}
+		variants = append(variants, Variant{Name: name, Variables: aiPagedVariables(scopes[name]), Parity: p})
 	}
 	for _, page := range []struct {
 		name          string
@@ -1395,8 +1444,7 @@ func aiPagedVariants(parity Options, scopes map[string]map[string]any) []Variant
 // aiPagedInstanceVariant is aiInstanceVariant for the paged operations.
 func aiPagedInstanceVariant(name, kind, scopeField string, parity Options, nonEmpty, echoList, echoField string) Variant {
 	v := aiInstanceVariant(name, kind, scopeField, parity, nonEmpty, echoList, echoField)
-	base := aiPagedVariables(map[string]any{})
-	v.Variables = base
+	v.Variables = aiPagedVariablesTo(map[string]any{}, scopeField == "teamId")
 	return v
 }
 

@@ -820,3 +820,55 @@ func TestDigestLinesIndexesAHashlessSameLine(t *testing.T) {
 		t.Fatalf("a hash-less line of a non-same status was indexed: %#v", got)
 	}
 }
+
+// TestWhatASameStatusRecordStillRefuses pins both sides of the hash-less
+// "same" line. A file gqlgen preserves (a resolver body) that is edited stays
+// same and the check passes: the record never pinned its content. Every output
+// that gqlgen REWRITES from the schema is compared against a real fresh
+// generation, so a hand edit of it, or a schema change with no regeneration,
+// still turns the check red.
+func TestWhatASameStatusRecordStillRefuses(t *testing.T) {
+	// regen models gqlgen: it rewrites generated.go from the schema and leaves
+	// every resolver body alone.
+	regen := &fakeGenerator{fn: func(workDir string) error {
+		schema, err := os.ReadFile(filepath.Join(workDir, "schema.graphql"))
+		if err != nil {
+			return err
+		}
+		return writeIn(workDir, "gen/generated.go", markedExec+"// from schema: "+string(schema)+"\n")
+	}}
+	setup := func() (*fixture, Options) {
+		f := guardFixture(t)
+		f.write("gen/generated.go", markedExec+"// from schema: "+f.read("schema.graphql")+"\n")
+		opts := guardOptions(f, regen)
+		if _, err := UpdateDriftRecord(context.Background(), opts); err != nil {
+			t.Fatalf("update the record: %v", err)
+		}
+		if _, err := CheckDrift(context.Background(), opts); err != nil {
+			t.Fatalf("a fresh record is not clean: %v", err)
+		}
+		return f, opts
+	}
+
+	t.Run("editing a preserved resolver body stays green", func(t *testing.T) {
+		f, opts := setup()
+		f.write("gen/resolver.go", markedResolver+"func real() {}\n")
+		if _, err := CheckDrift(context.Background(), opts); err != nil {
+			t.Fatalf("editing a preserved resolver body was refused: %v", err)
+		}
+	})
+	t.Run("hand-editing a regenerated output turns red", func(t *testing.T) {
+		f, opts := setup()
+		f.write("gen/generated.go", f.read("gen/generated.go")+"// hand edit\n")
+		if _, err := CheckDrift(context.Background(), opts); err == nil {
+			t.Fatal("a hand edit of generated.go was accepted")
+		}
+	})
+	t.Run("a schema change with no regeneration turns red", func(t *testing.T) {
+		f, opts := setup()
+		f.write("schema.graphql", f.read("schema.graphql")+"\n# new field\n")
+		if _, err := CheckDrift(context.Background(), opts); err == nil {
+			t.Fatal("a schema change with a stale generated.go was accepted")
+		}
+	})
+}

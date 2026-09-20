@@ -33,6 +33,11 @@ func namesInDir(t *testing.T, dir string) []string {
 	}
 	names := make([]string, 0, len(entries))
 	for _, e := range entries {
+		// A marker is a regular file. A directory or symlink under that name
+		// would satisfy a name-only listing while marking nothing.
+		if !e.Type().IsRegular() {
+			t.Fatalf("%s/%s is not a regular file; each stub marker must be an empty regular file", dir, e.Name())
+		}
 		names = append(names, e.Name())
 	}
 	sort.Strings(names)

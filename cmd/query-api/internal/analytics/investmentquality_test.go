@@ -138,6 +138,16 @@ func TestResolveEvidenceQualityStats_NoRows_ReturnsAllDefaults(t *testing.T) {
 	if got.Total != 0 || got.Mean != nil || got.Stddev != nil {
 		t.Errorf("expected all-defaults, got %+v", got)
 	}
+	// bandCounts is a non-null field of the schema: an empty answer carries an
+	// empty object, and the marshaler writes it as one, never as null.
+	if got.BandCounts.IsNull() {
+		t.Fatalf("bandCounts is null on an empty result: %q", []byte(got.BandCounts))
+	}
+	var written strings.Builder
+	got.BandCounts.MarshalGQL(&written)
+	if written.String() != "{}" {
+		t.Errorf("bandCounts marshals as %q, want {}", written.String())
+	}
 }
 
 // TestResolveEvidenceQualityStats_QueryError_IsFatal pins that Phase 4

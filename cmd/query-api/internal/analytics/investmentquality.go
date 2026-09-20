@@ -144,7 +144,9 @@ func resolveEvidenceQualityStats(ctx context.Context, client QueryClient, orgID 
 		// -- zero result rows (not "total=0"; an aggregate query with no
 		// GROUP BY always emits exactly one row) is the same all-defaults
 		// fallback Python returns for a truly empty result set.
-		return &model.EvidenceQualityStats{}, nil
+		// bandCounts is a non-null field: the all-defaults answer carries an
+		// empty object, never a null.
+		return &model.EvidenceQualityStats{BandCounts: graphqljson.JSON("{}")}, nil
 	}
 
 	bandCounts := map[string]int{

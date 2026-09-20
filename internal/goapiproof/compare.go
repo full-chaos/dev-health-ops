@@ -1240,6 +1240,10 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 	// cited defect. One non-null leaf anywhere under the path keeps the
 	// rule leaf-by-leaf (hotspots' JOB 5 receipt: 7 null of 391 leaves).
 	for _, defect := range defects {
+		var exempt *leafPairPlan
+		if defect.LeafPairShape != nil && defect.LeafPairShape.CandidateMayBeAllNull {
+			exempt = &leafPairPlan{shape: defect.LeafPairShape}
+		}
 		for _, cited := range defect.Paths {
 			if nonNullLeaves(candidateData, citedSegments(cited)) > 0 || nonNullLeaves(baselineData, citedSegments(cited)) == 0 {
 				continue
@@ -1248,6 +1252,12 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 				finding := &result.Findings[i]
 				path := tieredPath(finding.Path)
 				if finding.Kind == FindingMismatch && leafDifference(finding.Shape) && (path == cited || strings.HasPrefix(path, cited+".")) {
+					// A pair the defect declares with a null candidate keeps
+					// its leaf shape so the pair can admit it; every other
+					// finding is relabelled as before.
+					if exempt.admits(*finding) {
+						continue
+					}
 					finding.Shape = ShapeEmptyResult
 				}
 			}

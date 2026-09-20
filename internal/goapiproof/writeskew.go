@@ -143,6 +143,10 @@ type WriteSkewDecision struct {
 	// candidate, set whenever it was run. On WriteSkewAdmitted it is the
 	// clean comparison the case now stands on.
 	Second Result
+	// ReferenceUnmoved is set on the R5 "stands" only: some outside leaf
+	// was read the same by the first two baseline reads. It is the one
+	// stands the delayed re-read (gapreread.go) may take up.
+	ReferenceUnmoved bool
 }
 
 // ClassifyWriteSkew decides one case from its first comparison (first
@@ -207,7 +211,7 @@ func ClassifyWriteSkew(first Result, firstBaseline, candidate, secondBaseline Sn
 		}
 	}
 	if !witnessed {
-		return WriteSkewDecision{Verdict: WriteSkewStands, Leaves: leaves, Second: second, Detail: "the reference plane did not move at every outside leaf"}
+		return WriteSkewDecision{Verdict: WriteSkewStands, Leaves: leaves, Second: second, ReferenceUnmoved: true, Detail: "the reference plane did not move at every outside leaf"}
 	}
 	if second.DifferencesOutsideBaselineDefect != 0 {
 		return WriteSkewDecision{Verdict: WriteSkewStands, Leaves: leaves, Second: second,

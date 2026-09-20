@@ -261,27 +261,31 @@ var operationSpecs = map[string]OperationSpec{
 		Variables: func(orgID string, _ Window) map[string]any {
 			return compoundingRiskVariables(orgID, nil)
 		},
-		Parity: compoundingRiskParity,
+		Parity: compoundingRiskRowsParity("REPO"),
 		// A team breakout whose team has NO stored team rows is deliberately
 		// not a variant: that branch derives team points from the repo rows
 		// through team ownership on Go and through teams.repo_patterns on
 		// Python, so the two answers differ by design and no computed check
-		// admits it; it is a refused case, not a blanket citation.
+		// admits it; it is a refused case, not a blanket citation. The Go
+		// answer (team ownership through the shared team-scope condition) is
+		// the ruled semantics and Python's repo_patterns read is the declared
+		// baseline divergence; the Go behaviour is pinned by
+		// TestRealClickHouse_TeamBreakout in the compoundingrisk package.
 		Variants: []Variant{
-			compoundingRiskVariant("REPO_BREAKOUT", map[string]any{"breakout": "REPO", "trendDays": 30}),
-			compoundingRiskVariant("TEAM_BREAKOUT", map[string]any{"breakout": "TEAM", "trendDays": 30}),
+			compoundingRiskRowsVariant("REPO_BREAKOUT", "REPO", map[string]any{"breakout": "REPO", "trendDays": 30}),
+			compoundingRiskRowsVariant("TEAM_BREAKOUT", "TEAM", map[string]any{"breakout": "TEAM", "trendDays": 30}),
 			compoundingRiskDayVariant("DAY", "REPO"),
 			compoundingRiskDayVariant("TEAM_DAY", "TEAM"),
-			compoundingRiskVariant("REPO_IDS_UNKNOWN", map[string]any{"breakout": "REPO", "repoIds": []any{"00000000-0000-0000-0000-000000000001"}, "trendDays": 30}),
-			compoundingRiskVariant("REPO_IDS_EMPTY", map[string]any{"breakout": "REPO", "repoIds": []any{}, "trendDays": 30}),
-			compoundingRiskVariant("TEAM_IDS_UNKNOWN", map[string]any{"breakout": "TEAM", "teamIds": []any{"team-abc-123"}, "trendDays": 30}),
-			compoundingRiskVariant("TEAM_IDS_EMPTY", map[string]any{"breakout": "TEAM", "teamIds": []any{}, "trendDays": 30}),
+			compoundingRiskEmptyVariant("REPO_IDS_UNKNOWN", map[string]any{"breakout": "REPO", "repoIds": []any{"00000000-0000-0000-0000-000000000001"}, "trendDays": 30}),
+			compoundingRiskEmptyVariant("REPO_IDS_EMPTY", map[string]any{"breakout": "REPO", "repoIds": []any{}, "trendDays": 30}),
+			compoundingRiskEmptyVariant("TEAM_IDS_UNKNOWN", map[string]any{"breakout": "TEAM", "teamIds": []any{"team-abc-123"}, "trendDays": 30}),
+			compoundingRiskEmptyVariant("TEAM_IDS_EMPTY", map[string]any{"breakout": "TEAM", "teamIds": []any{}, "trendDays": 30}),
 			compoundingRiskInstanceVariant("REPO_VALID", "a repository id that has stored compounding-risk rows", "REPO", "repoIds"),
 			compoundingRiskInstanceVariant("TEAM_STORED", "a team id that has stored team-scope compounding-risk rows", "TEAM", "teamIds"),
-			compoundingRiskVariant("TEAM_AND_REPO_UNKNOWN", map[string]any{"breakout": "TEAM", "teamIds": []any{"team-abc-123"}, "repoIds": []any{"00000000-0000-0000-0000-000000000001"}, "trendDays": 30}),
-			compoundingRiskVariant("TREND_ONE_DAY", map[string]any{"breakout": "REPO", "trendDays": 1}),
-			compoundingRiskVariant("TREND_CLAMPED_HIGH", map[string]any{"breakout": "REPO", "trendDays": 1000}),
-			compoundingRiskVariant("TREND_CLAMPED_LOW", map[string]any{"breakout": "REPO", "trendDays": 0}),
+			compoundingRiskEmptyVariant("TEAM_AND_REPO_UNKNOWN", map[string]any{"breakout": "TEAM", "teamIds": []any{"team-abc-123"}, "repoIds": []any{"00000000-0000-0000-0000-000000000001"}, "trendDays": 30}),
+			compoundingRiskRowsVariant("TREND_ONE_DAY", "REPO", map[string]any{"breakout": "REPO", "trendDays": 1}),
+			compoundingRiskRowsVariant("TREND_CLAMPED_HIGH", "REPO", map[string]any{"breakout": "REPO", "trendDays": 1000}),
+			compoundingRiskRowsVariant("TREND_CLAMPED_LOW", "REPO", map[string]any{"breakout": "REPO", "trendDays": 0}),
 		},
 	},
 	"busFactor": {
@@ -1486,7 +1490,7 @@ func compoundingRiskDayVariant(name, breakout string) Variant {
 		Variables: func(orgID string, w Window) map[string]any {
 			return compoundingRiskVariables(orgID, map[string]any{"breakout": breakout, "day": w.UntilDate, "trendDays": 30})
 		},
-		Parity: compoundingRiskParity,
+		Parity: compoundingRiskRowsParity(breakout),
 	}
 }
 
@@ -1620,4 +1624,32 @@ func reportRunsInstanceVariant(name string, limit int) Variant {
 			},
 		},
 	}
+}
+
+// compoundingRiskRowsParity is the timestamp declaration plus the requirement
+// that the answer lists rows on a leg and every row is at the breakout asked
+// for.
+func compoundingRiskRowsParity(breakout string) Options {
+	o := compoundingRiskParity
+	o.RequireNonEmpty = []string{"data.compoundingRisk.rows"}
+	o.ScopeEcho = []ScopeEcho{{List: "data.compoundingRisk.rows", Fields: []string{"scope"}, Value: breakout}}
+	return o
+}
+
+// compoundingRiskRowsVariant is a breakout case measured only on a non-empty
+// answer whose rows are at the breakout asked for.
+func compoundingRiskRowsVariant(name, breakout string, filter map[string]any) Variant {
+	v := compoundingRiskVariant(name, filter)
+	v.Parity = compoundingRiskRowsParity(breakout)
+	return v
+}
+
+// compoundingRiskEmptyVariant is a case whose filter names nothing (or
+// excludes everything), so both planes answer no rows. It declares only the
+// per-request instant: the timestamp difference is declared on a row leaf
+// that does not exist in an empty answer.
+func compoundingRiskEmptyVariant(name string, filter map[string]any) Variant {
+	v := compoundingRiskVariant(name, filter)
+	v.Parity = Options{VolatileFields: compoundingRiskParity.VolatileFields}
+	return v
 }

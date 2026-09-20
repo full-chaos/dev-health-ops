@@ -354,7 +354,7 @@ func Enable(ctx context.Context, pool *pgxpool.Pool, request EnableRequest) ([]E
 		switch {
 		case proven[operation]:
 		case digest != "":
-			evidence = VenueEvidencePrefix + digest + " " + evidence
+			evidence = VenueEvidence(digest, "", evidence)
 		default:
 			evidence = UnprovenEvidencePrefix + evidence
 		}

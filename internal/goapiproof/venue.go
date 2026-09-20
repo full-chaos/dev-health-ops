@@ -34,6 +34,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -50,6 +51,43 @@ const VenueAckEnvVar = "GO_API_PROVE_VENUE_ACK"
 // VenueEvidencePrefix starts review_evidence on a row enabled from a venue
 // receipt; the receipt's sha256 follows.
 const VenueEvidencePrefix = "VENUE-PROOF:"
+
+// NoProdDataEvidencePrefix starts review_evidence on a row enabled under
+// the "no production data" class (venue class 2); the production report's
+// sha256 follows, then the VenueEvidencePrefix part.
+const NoProdDataEvidencePrefix = "NO-PROD-DATA:"
+
+// Venue classes as `status` reports them.
+const (
+	VenueClassAdmin  = "admin_only"
+	VenueClassNoData = "no_production_data"
+)
+
+var venueEvidenceRE = regexp.MustCompile(`^(NO-PROD-DATA:[0-9a-f]{64} )?VENUE-PROOF:[0-9a-f]{64}( |$)`)
+
+// VenueEvidence is the ONE writer of the review_evidence prefix for a
+// venue-admitted row. productionDigest is empty for class 1.
+func VenueEvidence(venueDigest, productionDigest, operatorEvidence string) string {
+	evidence := VenueEvidencePrefix + venueDigest + " " + operatorEvidence
+	if productionDigest != "" {
+		evidence = NoProdDataEvidencePrefix + productionDigest + " " + evidence
+	}
+	return evidence
+}
+
+// VenueEvidenceClass is the ONE reader: the class a row's review_evidence
+// claims, or "" for anything else (including an ACKNOWLEDGED-UNPROVEN
+// waiver, whose prefix comes first). It reads the row's own text; it does
+// not prove a receipt exists.
+func VenueEvidenceClass(evidence string) string {
+	if !venueEvidenceRE.MatchString(evidence) {
+		return ""
+	}
+	if strings.HasPrefix(evidence, NoProdDataEvidencePrefix) {
+		return VenueClassNoData
+	}
+	return VenueClassAdmin
+}
 
 // venueEdgeHosts is the allowlist: venue name -> hosts its edge may have.
 // A venue that is not a key is refused. Production is never a key.

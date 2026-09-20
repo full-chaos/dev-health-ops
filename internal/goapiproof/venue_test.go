@@ -358,3 +358,27 @@ func TestRequestIdentityFoldsVenueOnlyWhenSet(t *testing.T) {
 		seen[id] = name
 	}
 }
+
+func TestVenueEvidenceClassDomain(t *testing.T) {
+	h1, h2 := strings.Repeat("a", 64), strings.Repeat("b", 64)
+	for name, tc := range map[string]struct{ evidence, want string }{
+		"class 1 written":       {VenueEvidence(h1, "", "op note"), VenueClassAdmin},
+		"class 2 written":       {VenueEvidence(h1, h2, "op note"), VenueClassNoData},
+		"class 1 empty note":    {VenueEvidence(h1, "", ""), VenueClassAdmin},
+		"bare class 1":          {VenueEvidencePrefix + h1, VenueClassAdmin},
+		"waiver":                {UnprovenEvidencePrefix + VenueEvidence(h1, "", "x"), ""},
+		"plain text":            {"chris ruled it", ""},
+		"empty":                 {"", ""},
+		"short digest":          {"VENUE-PROOF:abc note", ""},
+		"upper digest":          {"VENUE-PROOF:" + strings.ToUpper(h1) + " x", ""},
+		"digest run-on":         {"VENUE-PROOF:" + h1 + "z", ""},
+		"lowercase prefix":      {"venue-proof:" + h1, ""},
+		"leading space":         {" " + VenueEvidence(h1, "", "x"), ""},
+		"no-data without venue": {NoProdDataEvidencePrefix + h2 + " note", ""},
+		"venue then no-data":    {VenueEvidence(h1, "", "") + " NO-PROD-DATA:" + h2, VenueClassAdmin},
+	} {
+		if got := VenueEvidenceClass(tc.evidence); got != tc.want {
+			t.Errorf("%s: %q want %q", name, got, tc.want)
+		}
+	}
+}

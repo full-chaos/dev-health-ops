@@ -375,19 +375,19 @@ var operationSpecs = map[string]OperationSpec{
 		ResponseRoot: "analytics",
 		Variables:    analyticsBatchVariables(analyticsBatch{Series: pipelineSeries, Breakdowns: pipelineBreakdowns}),
 		Parity:       analyticsBatchParity(analyticsBatch{Series: pipelineSeries, Breakdowns: pipelineBreakdowns}),
-		Variants:     analyticsBatchVariants(pipelineSeries, pipelineBreakdowns),
+		Variants:     append(analyticsBatchVariants(pipelineSeries, pipelineBreakdowns), analyticsPageBatchVariants("testOpsPipeline")...),
 	},
 	"testOpsTest": {
 		ResponseRoot: "analytics",
 		Variables:    analyticsBatchVariables(analyticsBatch{Series: testSeries, Breakdowns: testBreakdowns}),
 		Parity:       analyticsBatchParity(analyticsBatch{Series: testSeries, Breakdowns: testBreakdowns}),
-		Variants:     analyticsBatchVariants(testSeries, testBreakdowns),
+		Variants:     append(analyticsBatchVariants(testSeries, testBreakdowns), analyticsPageBatchVariants("testOpsTest")...),
 	},
 	"testOpsCoverage": {
 		ResponseRoot: "analytics",
 		Variables:    analyticsBatchVariables(analyticsBatch{Series: coverageSeries, Breakdowns: coverageBreakdowns}),
 		Parity:       analyticsBatchParity(analyticsBatch{Series: coverageSeries, Breakdowns: coverageBreakdowns}),
-		Variants:     analyticsBatchVariants(coverageSeries, coverageBreakdowns),
+		Variants:     append(analyticsBatchVariants(coverageSeries, coverageBreakdowns), analyticsPageBatchVariants("testOpsCoverage")...),
 	},
 	"featureFlagTimeseries": {
 		ResponseRoot: "analytics",
@@ -2052,6 +2052,50 @@ func analyticsBatchParity(b analyticsBatch) Options {
 		}
 	}
 	return o
+}
+
+// analyticsPageBatch is one request batch a web page sends. The test-operations
+// pages send the same batch to all three test-operations documents (the
+// coverage page only to the coverage document), so a document also answers the
+// batches of the other pages.
+type analyticsPageBatch struct {
+	Name         string
+	Batch        analyticsBatch
+	CoverageOnly bool
+}
+
+var analyticsPageBatches = []analyticsPageBatch{
+	{Name: "PAGE_PIPELINES", Batch: analyticsBatch{Series: pipelineSeries, Breakdowns: pipelineBreakdowns}},
+	{Name: "PAGE_TESTS", Batch: analyticsBatch{Series: testSeries, Breakdowns: testBreakdowns}},
+	{Name: "PAGE_COVERAGE", Batch: analyticsBatch{Series: coverageSeries, Breakdowns: coverageBreakdowns}, CoverageOnly: true},
+	{Name: "PAGE_TESTOPS", Batch: analyticsBatch{Series: []analyticsSeries{
+		{"TEAM", "PIPELINE_SUCCESS_RATE"}, {"TEAM", "PIPELINE_FAILURE_RATE"}, {"TEAM", "PIPELINE_DURATION_P95"},
+		{"TEAM", "PIPELINE_QUEUE_TIME"}, {"TEAM", "PIPELINE_RERUN_RATE"}, {"TEAM", "TEST_FLAKE_RATE"}, {"TEAM", "COVERAGE_LINE_PCT"},
+	}}},
+	{Name: "PAGE_GOVERN", Batch: analyticsBatch{Series: []analyticsSeries{
+		{"TEAM", "PIPELINE_SUCCESS_RATE"}, {"TEAM", "TEST_FLAKE_RATE"}, {"TEAM", "COVERAGE_LINE_PCT"},
+	}}},
+}
+
+// analyticsOwnPageBatch names the page batch that is the document's own base
+// request.
+var analyticsOwnPageBatch = map[string]string{
+	"testOpsPipeline": "PAGE_PIPELINES",
+	"testOpsTest":     "PAGE_TESTS",
+	"testOpsCoverage": "PAGE_COVERAGE",
+}
+
+// analyticsPageBatchVariants is one variant per batch another web page sends
+// to the document.
+func analyticsPageBatchVariants(operation string) []Variant {
+	var out []Variant
+	for _, pb := range analyticsPageBatches {
+		if pb.Name == analyticsOwnPageBatch[operation] || (pb.CoverageOnly && operation != "testOpsCoverage") {
+			continue
+		}
+		out = append(out, Variant{Name: pb.Name, Variables: analyticsBatchVariables(pb.Batch), Parity: analyticsBatchParity(pb.Batch)})
+	}
+	return out
 }
 
 // analyticsBatchVariants is one variant per timeseries measure and one per

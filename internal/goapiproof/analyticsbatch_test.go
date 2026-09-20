@@ -3,6 +3,7 @@ package goapiproof
 import (
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -23,6 +24,9 @@ func TestAnalyticsBatchDocuments_CoverEveryWebMeasureAndEchoWhatTheyAsk(t *testi
 		}
 		var got []string
 		for _, v := range spec.Variants {
+			if strings.HasPrefix(v.Name, "PAGE_") {
+				continue
+			}
 			got = append(got, v.Name)
 			vars := v.Variables("org", DefaultWindow())
 			batch := vars["batch"].(map[string]any)
@@ -72,5 +76,50 @@ func TestAnalyticsBatchDocuments_CoverEveryWebMeasureAndEchoWhatTheyAsk(t *testi
 				t.Errorf("%s base carries several series, so only its single breakdown can echo: %s", op, e.List)
 			}
 		}
+	}
+}
+
+// Every batch a web page sends to a test-operations document is a case of that
+// document: the pages send their own batch to all three documents (the
+// coverage page only to the coverage document), so each document carries the
+// other pages' batches as well as its own base request.
+func TestAnalyticsPageBatches_EveryPageBatchReachesEveryDocumentItIsSentTo(t *testing.T) {
+	want := map[string][]string{
+		"testOpsPipeline": {"PAGE_GOVERN", "PAGE_TESTOPS", "PAGE_TESTS"},
+		"testOpsTest":     {"PAGE_GOVERN", "PAGE_PIPELINES", "PAGE_TESTOPS"},
+		"testOpsCoverage": {"PAGE_GOVERN", "PAGE_PIPELINES", "PAGE_TESTOPS", "PAGE_TESTS"},
+	}
+	measures := map[string]int{"PAGE_PIPELINES": 5, "PAGE_TESTS": 4, "PAGE_TESTOPS": 7, "PAGE_GOVERN": 3}
+	for op, names := range want {
+		spec, err := SpecFor(op)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, v := range spec.Variants {
+			if !strings.HasPrefix(v.Name, "PAGE_") {
+				continue
+			}
+			got = append(got, v.Name)
+			batch := v.Variables("org", DefaultWindow())["batch"].(map[string]any)
+			if n := len(batch["timeseries"].([]any)); n != measures[v.Name] {
+				t.Errorf("%s/%s asks for %d series, the web page sends %d", op, v.Name, n, measures[v.Name])
+			}
+			if len(v.Parity.RequireNonEmpty) == 0 || v.Parity.RequireNonEmpty[0] != "data.analytics.timeseries" {
+				t.Errorf("%s/%s must require a non-empty series list: %v", op, v.Name, v.Parity.RequireNonEmpty)
+			}
+			for _, e := range v.Parity.ScopeEcho {
+				if e.List != "data.analytics.breakdowns" {
+					t.Errorf("%s/%s carries several series, so only its single breakdown can echo: %s", op, v.Name, e.List)
+				}
+			}
+		}
+		sort.Strings(got)
+		if !reflect.DeepEqual(got, names) {
+			t.Errorf("%s page batches %v want %v", op, got, names)
+		}
+	}
+	if spec, _ := SpecFor("featureFlagTimeseries"); len(spec.Variants) != 4 {
+		t.Errorf("the feature-flag document carries no test-operations page batch, got %d variants", len(spec.Variants))
 	}
 }

@@ -248,3 +248,31 @@ func TestResolve_NoScopeAndBlankTeam(t *testing.T) {
 		t.Errorf("blank team echo %#v", got.Scope)
 	}
 }
+
+// Equal churn orders by author key whatever order the rows arrive in, and
+// equal repositories order by name then id.
+func TestTiebreaks_DoNotDependOnRowOrder(t *testing.T) {
+	for _, order := range [][]string{{"z@x", "a@x", "m@x"}, {"a@x", "m@x", "z@x"}, {"m@x", "z@x", "a@x"}} {
+		var specs []spec
+		for _, a := range order {
+			specs = append(specs, spec{sp(a), nil, 5, 0})
+		}
+		got := topMaintainers(evidence(toRows(repoOne, "acme/web", specs)), 3)
+		if len(got) != 3 || got[0].Author != "a@x" || got[1].Author != "m@x" || got[2].Author != "z@x" {
+			t.Errorf("order %v -> %#v", order, got)
+		}
+	}
+	idA, idB := "11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222"
+	for _, rows := range [][][]any{
+		append(toRows(idB, "same", []spec{{sp("a@x"), nil, 5, 0}}), toRows(idA, "same", []spec{{sp("a@x"), nil, 5, 0}})...),
+		append(toRows(idA, "same", []spec{{sp("a@x"), nil, 5, 0}}), toRows(idB, "same", []spec{{sp("a@x"), nil, 5, 0}})...),
+	} {
+		got, err := Resolve(context.Background(), &recordingClient{rows: rows}, "o", nil, time.Unix(0, 0))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got.Repos) != 2 || got.Repos[0].RepoID != idA || got.Repos[1].RepoID != idB {
+			t.Errorf("repos %#v", got.Repos)
+		}
+	}
+}

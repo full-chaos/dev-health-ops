@@ -146,7 +146,14 @@ func topMaintainers(rows []evidenceRow, limit int) []model.MaintainerShare {
 		return out
 	}
 	authors := append([]string(nil), ac.order...)
-	sort.SliceStable(authors, func(i, j int) bool { return ac.sum[authors[i]] > ac.sum[authors[j]] })
+	// Equal churn orders by author key so the answer does not depend on the
+	// order ClickHouse returns rows in.
+	sort.SliceStable(authors, func(i, j int) bool {
+		if ac.sum[authors[i]] != ac.sum[authors[j]] {
+			return ac.sum[authors[i]] > ac.sum[authors[j]]
+		}
+		return authors[i] < authors[j]
+	})
 	if len(authors) > limit {
 		authors = authors[:limit]
 	}
@@ -201,7 +208,10 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, scope *model
 		if repos[i].Value != repos[j].Value {
 			return repos[i].Value < repos[j].Value
 		}
-		return repos[i].RepoName < repos[j].RepoName
+		if repos[i].RepoName != repos[j].RepoName {
+			return repos[i].RepoName < repos[j].RepoName
+		}
+		return repos[i].RepoID < repos[j].RepoID
 	})
 
 	var scopeRepo *string

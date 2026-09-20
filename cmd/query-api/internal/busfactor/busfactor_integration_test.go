@@ -225,7 +225,7 @@ func TestRealClickHouse_SameRepoIDInTwoOrgs(t *testing.T) {
 	repo(t, ctx, conn, "org-2", rA, "other/web")
 	commit(t, ctx, conn, "org-1", rA, "h1", "alice@x", "", 10, 0)
 	commit(t, ctx, conn, "org-2", rA, "h1", "eve@x", "", 90, 0)
-	commit(t, ctx, conn, "org-2", rA, "h2", "mallory@x", "", 90, 0)
+	commit(t, ctx, conn, "org-2", rA, "h2", "mallory@x", "", 80, 0)
 	own(t, ctx, conn, "org-2", "team-x", "'"+rA+"'", "other/web")
 	now := time.Now().UTC()
 	for _, c := range []struct {

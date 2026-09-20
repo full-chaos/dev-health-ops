@@ -30,6 +30,7 @@ import (
 var registeredOperations = []string{
 	"experiments",
 	"acrRepositoryScopes", "catalogValues", "busFactor",
+	"aiOpportunities", "improveOpportunities",
 	"aiComparison", "aiImpactSummary", "aiReviewLoad",
 	"productTelemetryDashboard", "productTelemetryPlatformDashboard",
 	"connectorsDataHealth", "dataHealthIdentity", "mappingCoverageHealth", "metricLineage",
@@ -128,6 +129,8 @@ func TestWindowedSpecsUseTheWindow(t *testing.T) {
 		"featureFlagEvents": true, "featureFlags": true, "pr": true,
 		"experiments": true, "busFactor": true, "compoundingRisk": true, "securityAlerts": true, "securityOverview": true,
 		"releaseImpact": true, "throughputForecast": true, "workGraphArtifacts": true, "workGraphEdges": true,
+		"aiOpportunities": true, "improveOpportunities": true,
+
 		"workGraphFlow": true,
 	}
 

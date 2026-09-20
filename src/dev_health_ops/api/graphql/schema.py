@@ -99,7 +99,6 @@ from .resolvers.reports import (
     resolve_trigger_report,
     resolve_update_saved_report,
 )
-from .subscriptions import Subscription
 from .types.bus_factor import BusFactor, BusFactorScopeInput
 from .types.cognitive_load import (
     CognitiveLoadInput,
@@ -1006,7 +1005,6 @@ class Mutation:
 schema = strawberry.Schema(
     query=Query,
     mutation=Mutation,
-    subscription=Subscription,
     extensions=[
         OrgIdAuthExtension,
         ConfiguredValidationRules,

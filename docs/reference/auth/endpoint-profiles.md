@@ -43,7 +43,7 @@ resolver-bearing fields for GraphQL. Each surface's `file:line` anchor comes
 from `inspect` on the endpoint/resolver the object actually holds, so the set
 comes from the framework and the location still comes from real source.
 
-**311 REST surfaces + 59 GraphQL resolvers = 370 total.**
+**299 REST surfaces + 56 GraphQL resolvers = 355 total.**
 
 !!! note "Why the count moved from 361 (CHAOS-4761)"
     Discovery used to match decorators and `include_router` calls in source
@@ -67,6 +67,10 @@ comes from the framework and the location still comes from real source.
       `context_getter` → `get_context` path as every other GraphQL surface,
       before the websocket is accepted — but they matched no pattern, so they
       were invisible to the gate and excluded from the count it produced.
+      The three resolvers, their modules and their three inventory rows have
+      since been removed: the schema serves no subscription, and the
+      `WEBSOCKET /graphql` row remains because the transport stays mounted
+      and refuses subscription operations.
     - **−2 GraphQL.** `metrics` and `update_setting` were rows for
       `@strawberry.field` examples inside `require_permission`'s **docstring**
       (`api/graphql/authz.py:25`, `:30`). They are not fields on the served

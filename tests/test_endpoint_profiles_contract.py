@@ -178,20 +178,19 @@ def test_inventory_row_count_matches_the_baseline():
     rest = [r for r in rows if r["surface_kind"] == "rest"]
     graphql = [r for r in rows if r["surface_kind"] in _GRAPHQL_KINDS]
     assert len(rest) == 299, len(rest)
-    assert len(graphql) == 59, len(graphql)
-    assert len(rows) == 358, len(rows)
+    assert len(graphql) == 56, len(graphql)
+    assert len(rows) == 355, len(rows)
 
 
-def test_the_three_subscriptions_are_profiled():
-    """They were invisible to the old discoverer and excluded from the count
-    it produced (CHAOS-4761)."""
+def test_no_graphql_subscription_is_profiled():
+    """The schema serves no subscription, so no inventory row may claim one."""
     inventory = checker.load_json(_INVENTORY_PATH)
-    subs = {
+    subs = [
         r["graphql_field_name"]
         for r in inventory["rows"]
         if r["surface_kind"] == "graphql_subscription"
-    }
-    assert subs == {"metrics_updated", "task_status", "sync_progress"}, subs
+    ]
+    assert subs == [], subs
 
 
 def test_classification_summary_matches_the_baseline():
@@ -234,7 +233,9 @@ def test_classification_summary_matches_the_baseline():
     # - 1 more under this change: the deleted worker-sync/reference-discovery
     # row was also protected (worker bridge bearer, same as every other
     # worker-sync route).
-    assert len(protected) == 331, len(protected)
+    # - 3 more: the three GraphQL subscription rows were removed with the
+    # subscriptions themselves (recounted from the file).
+    assert len(protected) == 328, len(protected)
     # 22 + the four fastapi doc routes + /metrics.
     assert len(public) == 27, len(public)
     assert len(protected) + len(public) == len(rows)

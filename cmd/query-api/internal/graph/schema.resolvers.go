@@ -1367,21 +1367,6 @@ func (r *queryResolver) AiAttributionOverview(ctx context.Context, orgID string,
 	return result, nil
 }
 
-// MetricsUpdated is the resolver for the metricsUpdated field.
-func (r *subscriptionResolver) MetricsUpdated(ctx context.Context, orgID string) (<-chan *model.MetricsUpdate, error) {
-	panic(fmt.Errorf("not implemented: MetricsUpdated - metricsUpdated"))
-}
-
-// TaskStatus is the resolver for the taskStatus field.
-func (r *subscriptionResolver) TaskStatus(ctx context.Context, taskID string) (<-chan *model.TaskStatus, error) {
-	panic(fmt.Errorf("not implemented: TaskStatus - taskStatus"))
-}
-
-// SyncProgress is the resolver for the syncProgress field.
-func (r *subscriptionResolver) SyncProgress(ctx context.Context, orgID string) (<-chan *model.SyncProgress, error) {
-	panic(fmt.Errorf("not implemented: SyncProgress - syncProgress"))
-}
-
 // DataHealth returns DataHealthResolver implementation.
 func (r *Resolver) DataHealth() DataHealthResolver { return &dataHealthResolver{r} }
 
@@ -1391,10 +1376,6 @@ func (r *Resolver) Mutation() MutationResolver { return &mutationResolver{r} }
 // Query returns QueryResolver implementation.
 func (r *Resolver) Query() QueryResolver { return &queryResolver{r} }
 
-// Subscription returns SubscriptionResolver implementation.
-func (r *Resolver) Subscription() SubscriptionResolver { return &subscriptionResolver{r} }
-
 type dataHealthResolver struct{ *Resolver }
 type mutationResolver struct{ *Resolver }
 type queryResolver struct{ *Resolver }
-type subscriptionResolver struct{ *Resolver }

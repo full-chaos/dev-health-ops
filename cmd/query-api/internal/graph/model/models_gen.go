@@ -1281,13 +1281,6 @@ type MetricLineage struct {
 	RowCount      *int        `json:"rowCount,omitempty"`
 }
 
-type MetricsUpdate struct {
-	OrgID     string    `json:"orgId"`
-	Day       string    `json:"day"`
-	UpdatedAt time.Time `json:"updatedAt"`
-	Message   string    `json:"message"`
-}
-
 type MissingMapping struct {
 	RepoName string `json:"repoName"`
 	Reason   string `json:"reason"`
@@ -1686,28 +1679,6 @@ type SeverityBucket struct {
 type SparkPoint struct {
 	Ts    string  `json:"ts"`
 	Value float64 `json:"value"`
-}
-
-type Subscription struct {
-}
-
-type SyncProgress struct {
-	OrgID          string    `json:"orgId"`
-	Provider       string    `json:"provider"`
-	Status         string    `json:"status"`
-	ItemsProcessed int       `json:"itemsProcessed"`
-	ItemsTotal     int       `json:"itemsTotal"`
-	Message        *string   `json:"message,omitempty"`
-	UpdatedAt      time.Time `json:"updatedAt"`
-}
-
-type TaskStatus struct {
-	TaskID    string    `json:"taskId"`
-	Status    string    `json:"status"`
-	Progress  float64   `json:"progress"`
-	Message   *string   `json:"message,omitempty"`
-	Result    *string   `json:"result,omitempty"`
-	UpdatedAt time.Time `json:"updatedAt"`
 }
 
 type TestOpsRiskBreakdownItem struct {

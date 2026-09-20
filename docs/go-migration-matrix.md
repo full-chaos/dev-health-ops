@@ -238,45 +238,45 @@ A row that is live, reachable to real clients (`canary`/`primary`) and carries n
 is required before stage 4/5, and "a bare 200 does not qualify".
 
 <!-- BEGIN GENERATED GO API OPERATIONS -->
-_Rendered 2026-09-20T12:42:06Z against main merge-base `1205ec23c1cf05a32f925a49f96ff1e0d58a0f69`; SDL digest pin `sha256:19485ec136d04de0935717dca8b4f5fd27dd0351fe96b854d40f433229468fd0`; fleet read 2026-09-16T12:25:30Z via fleet file fleet-prod.json._
+_Rendered 2026-09-20T13:31:59Z against main merge-base `1205ec23c1cf05a32f925a49f96ff1e0d58a0f69`; SDL digest pin `sha256:898250a995e65f792e0383a07d7a683251894cbe51f426a4dcf520bcd82bf91e`; fleet read 2026-09-16T12:25:30Z via fleet file fleet-prod.json._
 
-_Rows in `go_api_proof_run` at read time: **2845**. Operations reachable to real clients with no deployed-executed proof: **0**. Rows whose mode says Go but whose schema digest no longer matches the pin, so every request silently falls back to Python: **0**._
+_Rows in `go_api_proof_run` at read time: **2845**. Operations reachable to real clients with no deployed-executed proof: **0**. Rows whose mode says Go but whose schema digest no longer matches the pin, so every request silently falls back to Python: **25**._
 
 _Live rows the edge cannot dispatch -- serving a document the operation catalog does not name (DOCUMENT_DRIFT, as `dev-hops go-api routing status` reports it): **0**; for an operation the catalog does not register (UNREGISTERED, as `dev-hops go-api routing status` reports it): **0**. Live rows with no recorded document digest, read before the reader carried it, so neither can be judged for them: **0**._
 
 | Operation | Mode | Schema digest | Candidate build | Live at current pin | Proven (derived) | Parity ticket |
 | --- | --- | --- | --- | --- | --- | --- |
-| `acrRepositoryScopes` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | `605b2b0b-42cd-46ce-967f-5d330c361a01` | -- |
-| `aiComparison` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | `02aa94a2-6365-4f62-a4c6-56ba134df4fb` | -- |
-| `aiImpactSummary` | python | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | **none** | -- |
-| `aiReviewLoad` | python | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | **none** | -- |
-| `busFactor` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | `7ca748c4-302b-4625-947b-c44b118ec1fd` | -- |
-| `capacityForecast` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | `016ece2e-c68d-40f1-9169-85236fb34ae9` | -- |
-| `capacityForecasts` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | `3171ee21-c80d-41ab-bc4b-5a3c8ad6950e` | -- |
-| `catalogValues` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | `0d7cb4c1-c027-4646-9a28-447484d86ea0` | -- |
-| `cognitiveLoad` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | `a95aa188-7f40-4696-8726-56ec0ac7309a` | -- |
-| `complexityTimeseries` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | `4d39f329-391e-411b-a190-255d253c16b9` | -- |
-| `compoundingRisk` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | `2f235644-d4ed-4903-8dbe-a3867c204a9f` | -- |
-| `connectorsDataHealth` | python | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | **none** | -- |
-| `experiments` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | `6cf05d7a-4716-4187-97d5-ef7dde64b465` | -- |
-| `featureFlagEvents` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | `a21f2f41-64a8-4c62-844f-c49d5e8e8680` | -- |
-| `featureFlags` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | `dfe61802-6209-4b39-a6c5-3b0b56d02970` | -- |
-| `flowMatrix` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | `7b6637c8-f40d-42ef-8d82-31c93c169979` | -- |
-| `hotspots` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | `7722f4d5-c27e-42a8-bbf3-7347c6e32682` | -- |
-| `investmentBreakdown` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | `5e4d34f4-4645-48ce-9468-00266c0cef67` | -- |
-| `investmentFull` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | `769f5ae4-6952-4048-add2-07c0fc748b0f` | -- |
-| `metricLineage` | python | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | **none** | -- |
-| `operatingReview` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | `48a6ee1c-4d7a-4067-a58d-edbb06c9603f` | -- |
-| `pr` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | `215119a1-5a2e-41c7-b4ed-7ee6b31843aa` | -- |
-| `productTelemetryDashboard` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | `0c7ae19b-7217-40ea-9ea5-ee5eb6a071fe` | -- |
-| `releaseImpact` | python | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | **none** | -- |
-| `reviewEdges` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | `e553c423-7418-4e5f-8084-e997f847d943` | -- |
-| `securityAlerts` | python | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | **none** | -- |
-| `securityOverview` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | `025e2b72-2943-406a-8249-fc14e3a7f58d` | -- |
-| `throughputForecast` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | `52e74390-2a83-408e-b524-9a8aab572438` | -- |
-| `workGraphArtifacts` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | `845092ad-d6e3-4653-a576-50accc9597db` | -- |
-| `workGraphEdges` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | `01c77c67-6993-4b9e-a630-bf206b051542` | -- |
-| `workGraphFlow` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | `1bc2cb6a-aa54-4798-8f22-e239600241c5` | -- |
+| `acrRepositoryScopes` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | **DEAD** (digest moved) | `605b2b0b-42cd-46ce-967f-5d330c361a01` | -- |
+| `aiComparison` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | **DEAD** (digest moved) | `02aa94a2-6365-4f62-a4c6-56ba134df4fb` | -- |
+| `aiImpactSummary` | python | `sha256:19485ec136d04d…` | `1205ec23c1cf` | **DEAD** (digest moved) | **none** | -- |
+| `aiReviewLoad` | python | `sha256:19485ec136d04d…` | `1205ec23c1cf` | **DEAD** (digest moved) | **none** | -- |
+| `busFactor` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | **DEAD** (digest moved) | `7ca748c4-302b-4625-947b-c44b118ec1fd` | -- |
+| `capacityForecast` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | **DEAD** (digest moved) | `016ece2e-c68d-40f1-9169-85236fb34ae9` | -- |
+| `capacityForecasts` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | **DEAD** (digest moved) | `3171ee21-c80d-41ab-bc4b-5a3c8ad6950e` | -- |
+| `catalogValues` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | **DEAD** (digest moved) | `0d7cb4c1-c027-4646-9a28-447484d86ea0` | -- |
+| `cognitiveLoad` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | **DEAD** (digest moved) | `a95aa188-7f40-4696-8726-56ec0ac7309a` | -- |
+| `complexityTimeseries` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | **DEAD** (digest moved) | `4d39f329-391e-411b-a190-255d253c16b9` | -- |
+| `compoundingRisk` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | **DEAD** (digest moved) | `2f235644-d4ed-4903-8dbe-a3867c204a9f` | -- |
+| `connectorsDataHealth` | python | `sha256:19485ec136d04d…` | `1205ec23c1cf` | **DEAD** (digest moved) | **none** | -- |
+| `experiments` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | **DEAD** (digest moved) | `6cf05d7a-4716-4187-97d5-ef7dde64b465` | -- |
+| `featureFlagEvents` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | **DEAD** (digest moved) | `a21f2f41-64a8-4c62-844f-c49d5e8e8680` | -- |
+| `featureFlags` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | **DEAD** (digest moved) | `dfe61802-6209-4b39-a6c5-3b0b56d02970` | -- |
+| `flowMatrix` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | **DEAD** (digest moved) | `7b6637c8-f40d-42ef-8d82-31c93c169979` | -- |
+| `hotspots` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | **DEAD** (digest moved) | `7722f4d5-c27e-42a8-bbf3-7347c6e32682` | -- |
+| `investmentBreakdown` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | **DEAD** (digest moved) | `5e4d34f4-4645-48ce-9468-00266c0cef67` | -- |
+| `investmentFull` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | **DEAD** (digest moved) | `769f5ae4-6952-4048-add2-07c0fc748b0f` | -- |
+| `metricLineage` | python | `sha256:19485ec136d04d…` | `1205ec23c1cf` | **DEAD** (digest moved) | **none** | -- |
+| `operatingReview` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | **DEAD** (digest moved) | `48a6ee1c-4d7a-4067-a58d-edbb06c9603f` | -- |
+| `pr` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | **DEAD** (digest moved) | `215119a1-5a2e-41c7-b4ed-7ee6b31843aa` | -- |
+| `productTelemetryDashboard` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | **DEAD** (digest moved) | `0c7ae19b-7217-40ea-9ea5-ee5eb6a071fe` | -- |
+| `releaseImpact` | python | `sha256:19485ec136d04d…` | `1205ec23c1cf` | **DEAD** (digest moved) | **none** | -- |
+| `reviewEdges` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | **DEAD** (digest moved) | `e553c423-7418-4e5f-8084-e997f847d943` | -- |
+| `securityAlerts` | python | `sha256:19485ec136d04d…` | `1205ec23c1cf` | **DEAD** (digest moved) | **none** | -- |
+| `securityOverview` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | **DEAD** (digest moved) | `025e2b72-2943-406a-8249-fc14e3a7f58d` | -- |
+| `throughputForecast` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | **DEAD** (digest moved) | `52e74390-2a83-408e-b524-9a8aab572438` | -- |
+| `workGraphArtifacts` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | **DEAD** (digest moved) | `845092ad-d6e3-4653-a576-50accc9597db` | -- |
+| `workGraphEdges` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | **DEAD** (digest moved) | `01c77c67-6993-4b9e-a630-bf206b051542` | -- |
+| `workGraphFlow` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | **DEAD** (digest moved) | `1bc2cb6a-aa54-4798-8f22-e239600241c5` | -- |
 <!-- END GENERATED GO API OPERATIONS -->
 
 ### Per REST endpoint

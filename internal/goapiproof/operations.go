@@ -795,6 +795,42 @@ var operationSpecs = map[string]OperationSpec{
 			},
 		}}},
 	},
+	// The saved-report reads answer from Postgres for the caller's own org.
+	// The unknown-id requests use a neutral id no report holds, so both
+	// planes answer the same empty branch; every request that reads a real
+	// row needs the run to supply a report id (or, for the list, an org that
+	// holds reports) and is refused as vacuous when the answer is empty.
+	"reportRuns": {
+		ResponseRoot: "reportRuns",
+		Variables: func(orgID string, _ Window) map[string]any {
+			return map[string]any{"orgId": orgID, "reportId": "00000000-0000-0000-0000-000000000001", "limit": 50}
+		},
+		Variants: []Variant{
+			reportRunsInstanceVariant("RUNS_OF_REPORT", 50),
+			reportRunsInstanceVariant("RUNS_LIMITED", 1),
+		},
+	},
+	"savedReport": {
+		ResponseRoot: "savedReport",
+		RootNullable: true,
+		Variables: func(orgID string, _ Window) map[string]any {
+			return map[string]any{"orgId": orgID, "reportId": "00000000-0000-0000-0000-000000000001"}
+		},
+		Variants: []Variant{savedReportInstanceVariant("FOUND")},
+	},
+	"savedReports": {
+		ResponseRoot: "savedReports",
+		Variables: func(orgID string, _ Window) map[string]any {
+			return map[string]any{"orgId": orgID, "limit": 50, "offset": 0}
+		},
+		Parity: savedReportsParity(),
+		Variants: []Variant{
+			savedReportsVariant("PAGE_FIRST", 1, 0, true),
+			savedReportsVariant("PAGE_SECOND", 1, 1, true),
+			savedReportsVariant("PAGE_ZERO", 0, 0, false),
+			savedReportsVariant("OFFSET_PAST_END", 50, 100000, false),
+		},
+	},
 	"reviewEdges": {
 		ResponseRoot: "reviewEdges",
 		Variables: func(orgID string, w Window) map[string]any {
@@ -1486,6 +1522,101 @@ func experimentsVariant(name, level string, ids []string) Variant {
 				scope["ids"] = ids
 			}
 			return map[string]any{"orgId": orgID, "filters": map[string]any{"scope": scope}}
+		},
+	}
+}
+
+// savedReportDateTimes declares the one divergence on every saved-report
+// answer: the timestamp columns are Postgres timestamptz; Python hands the
+// driver's tz-aware datetimes to strawberry's DateTime scalar, which prints a
+// "+00:00" offset, while Go's gqlgen DateTime scalar prints the same instant
+// as RFC 3339 with "Z". The instants are equal; only the wire text differs.
+func savedReportDateTimes(ticketPaths ...string) Options {
+	return Options{BaselineDefects: []BaselineDefect{{
+		Ticket: "CHAOS-6103",
+		Reason: "saved_reports and report_runs timestamps are Postgres timestamptz; Python's resolver hands the driver's tz-aware datetimes to strawberry's DateTime scalar, which isoformat()s them with a \"+00:00\" offset, while Go's gqlgen DateTime scalar formats the same instant as RFC 3339 with \"Z\" (resolvers/reports.py). The instants are equal; only the wire text differs. Go's form is the canonical DateTime wire form; the Python form is the declared defect and stays frozen.",
+		Paths:  ticketPaths,
+	}}}
+}
+
+func savedReportsParity() Options {
+	o := savedReportDateTimes(
+		"data.savedReports.items.lastRunAt",
+		"data.savedReports.items.createdAt",
+		"data.savedReports.items.updatedAt",
+	)
+	o.RequireNonEmpty = []string{"data.savedReports.items"}
+	return o
+}
+
+// savedReportsVariant reads one page of the org's saved reports. A variant
+// that names non-empty is measured only when the page holds a report on a leg.
+func savedReportsVariant(name string, limit, offset int, nonEmpty bool) Variant {
+	o := savedReportDateTimes(
+		"data.savedReports.items.lastRunAt",
+		"data.savedReports.items.createdAt",
+		"data.savedReports.items.updatedAt",
+	)
+	if nonEmpty {
+		o.RequireNonEmpty = []string{"data.savedReports.items"}
+	} else {
+		// A page with no item still answers the org's total, so the answer is
+		// never empty; nothing dated can be present, so no defect applies.
+		o = Options{}
+	}
+	return Variant{
+		Name: name,
+		Variables: func(orgID string, _ Window) map[string]any {
+			return map[string]any{"orgId": orgID, "limit": limit, "offset": offset}
+		},
+		Parity: o,
+	}
+}
+
+// savedReportInstanceVariant reads one saved report by a run-supplied id,
+// measured only when the answer is that report.
+func savedReportInstanceVariant(name string) Variant {
+	return Variant{
+		Name: name,
+		Variables: func(orgID string, _ Window) map[string]any {
+			return map[string]any{"orgId": orgID, "reportId": ""}
+		},
+		Parity: savedReportDateTimes(
+			"data.savedReport.lastRunAt",
+			"data.savedReport.createdAt",
+			"data.savedReport.updatedAt",
+		),
+		Instance: &VariantInstance{
+			Kind: "the id of a saved report of the proof org",
+			Bind: func(vars map[string]any, value string) { vars["reportId"] = value },
+			EchoFor: func(value string) []ScopeEcho {
+				return []ScopeEcho{{List: "data.savedReport.id", Scalar: true, Value: value}}
+			},
+		},
+	}
+}
+
+// reportRunsInstanceVariant reads the runs of a run-supplied report id,
+// measured only when the answer lists at least one run.
+func reportRunsInstanceVariant(name string, limit int) Variant {
+	o := savedReportDateTimes(
+		"data.reportRuns.items.startedAt",
+		"data.reportRuns.items.completedAt",
+		"data.reportRuns.items.createdAt",
+	)
+	o.RequireNonEmpty = []string{"data.reportRuns.items"}
+	return Variant{
+		Name: name,
+		Variables: func(orgID string, _ Window) map[string]any {
+			return map[string]any{"orgId": orgID, "reportId": "", "limit": limit}
+		},
+		Parity: o,
+		Instance: &VariantInstance{
+			Kind: "the id of a saved report of the proof org that has runs",
+			Bind: func(vars map[string]any, value string) { vars["reportId"] = value },
+			EchoFor: func(value string) []ScopeEcho {
+				return []ScopeEcho{{List: "data.reportRuns.items", Fields: []string{"reportId"}, Value: value}}
+			},
 		},
 	}
 }

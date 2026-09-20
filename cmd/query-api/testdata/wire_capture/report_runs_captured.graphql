@@ -1,0 +1,21 @@
+query reportRuns($orgId: String!, $reportId: String!, $limit: Int) {
+  reportRuns(orgId: $orgId, reportId: $reportId, limit: $limit) {
+    items {
+      id
+      reportId
+      status
+      startedAt
+      completedAt
+      durationSeconds
+      renderedMarkdown
+      artifactUrl
+      provenanceRecords
+      error
+      triggeredBy
+      createdAt
+      __typename
+    }
+    total
+    __typename
+  }
+}

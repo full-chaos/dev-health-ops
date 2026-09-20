@@ -324,7 +324,7 @@ func TestRunMeasuresADeclaredBaselineErrorOnTheCandidateAlone(t *testing.T) {
 				t.Errorf("%s: executed=%v provenUnder=%q terminal=%s refusal=%s (%s)", c.name, outcome.Executed, outcome.ProvenUnder, outcome.TerminalState, outcome.RefusalReason, outcome.RefusalDetail)
 				continue
 			}
-			if outcome.DeclaredBaselineError == nil || outcome.DeclaredBaselineError.Ticket != "CHAOS-6147" || len(outcome.BaselineDefects) != 0 {
+			if outcome.DeclaredBaselineError == nil || outcome.DeclaredBaselineError.Ticket != variant.Parity.DeclaredBaselineError.Ticket || len(outcome.BaselineDefects) != 0 {
 				t.Errorf("%s: record %+v citations %v", c.name, outcome.DeclaredBaselineError, outcome.BaselineDefects)
 			}
 			if outcome.TerminalState == EnablementProofTerminalState || outcome.TerminalState == EnablementCitedMismatchState {

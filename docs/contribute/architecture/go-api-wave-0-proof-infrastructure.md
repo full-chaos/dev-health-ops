@@ -247,6 +247,71 @@ running binary can never read — exactly the failure above.
 So: **rebuild and deploy `query-api` first, re-enable second.** Never the
 other way round.
 
+That ordering leaves a window, and `go-api-routing carry` (CHAOS-6107) is
+what closes it: between the first new pod starting and the re-enable, every
+enabled operation is un-routed — requests fall back to Python, and an
+operation whose Python execution path has been deleted (the go-only class)
+answers its deletion error to real clients instead. `carry` runs BEFORE the
+roll, from a tools image built at the sha about to roll, and copies every
+reachable row to the schema digest that image computes: mode,
+rollout_percentage, eligible_orgs and the candidate build verbatim, the rows
+at the live digest untouched. The new rows are inert until a process that
+computes that digest starts, so a rolling update finds rows at whichever
+digest each pod computes and a rollback finds its own rows exactly where it
+left them. It refuses — writing nothing at all — when the two digests are
+already equal, when a row's registered document is changed or absent in the
+image being rolled to (named operation by operation, with a DO NOT ROLL line
+for any go-only one), when this image's document dump and edge catalog
+disagree, when a row still names a build the deployed process is not running
+(run `repoint` first), or when the target digest already holds a different
+row for that operation.
+
+A carried row claims NO proof: receipts are keyed by `schema_digest`, so
+`status` reports every carried row UNPROVEN at the new digest until
+`go-api-prove` runs against the new build, and its `review_evidence` says so
+durably, opening with `CARRIED-FROM <live digest> build=<sha> at=<ts>:` in
+front of the source row's own reason. In `go_api_routing_audits` a carry is
+recorded with `action = 'enable'` — alembic 0130's CHECK admits only
+enable/disable/repoint — so that evidence prefix is what distinguishes a
+carried row from a fresh enablement for a reader of that table.
+
+A carry also refuses, rolling the whole run back and writing nothing, when
+a row it was copying **moves at the live digest while it runs**. The survey
+that decides what to copy is an unlocked read under READ COMMITTED, so an
+operator who changes or removes a live row between that read and the commit
+would otherwise have the superseded decision written to the new digest —
+and the roll would then serve Go for something that had just been turned
+off. Before committing, `carry` re-reads the rows it copied `FOR SHARE` and
+compares them; a difference names the operation and both readings, and the
+answer is simply to run `carry` again. The share lock blocks other routing
+WRITERS for the rest of that transaction and no readers at all: neither
+plane's dispatch path takes a lock, so production traffic never waits on a
+carry.
+
+**During this window, read the census, and mind which digest a write verb
+writes at.** `status` classifies rows against the digest the DEPLOYED
+process reports at `/registry`, never against the digest of the binary
+running the command, so rows carrying production traffic read `MATCH` and
+the freshly carried rows read `PENDING` — "nothing reads these yet", which
+is a different fact from `STALE`, "nothing will ever read these". With
+`/registry` unreachable there is no authority on what is live and `status`
+says so rather than presenting this binary's own digest as a reading.
+`enable` and `disable`, however, write at the digest THEIR OWN binary
+computes: run from the tools image built for the commit about to roll, a
+`disable` lands at the digest nothing is reading yet, reports success, and
+stops nothing. `disable` cannot detect this itself (it makes no HTTP call
+by design, so it works when query-api is down), but it now prints the other
+digests holding rows and points at `status`. **To stop live traffic during
+the window, run `disable` from the image that is actually deployed.**
+
+Every verb's `-timeout` bounds each HTTP request, the Postgres dial **and
+each database statement** — `statement_timeout` and `lock_timeout` are set
+on the connection from that flag. The bound is server-side on purpose: a
+client-side cancel landing during `COMMIT` would leave the operator unable
+to say whether the transaction committed, where a statement timeout aborts
+the statement, rolls the transaction back whole, and the command says so.
+It bounds each statement individually, never the run as a whole.
+
 ### Recovery procedure
 
 ```bash
@@ -316,6 +381,19 @@ only ones that can re-point a `shadow` row.
 # POSTGRES_URI environment variable on its own (main.go) -- set it in the
 # environment and omit the flag entirely.
 export POSTGRES_URI=<dsn>
+
+# 0. BEFORE the roll, from a tools image built at the sha about to roll:
+#    copy every reachable row to the digest that image computes, so the
+#    roll does not un-route what is already enabled. Writes nothing at the
+#    live digest, so a rollback still finds its own rows. -dry-run first.
+GO_API_ROUTING_BEARER=<envelope> go-api-routing carry \
+  -registry-url  http://query-api:8090/registry \
+  -buildinfo-url http://query-api:8090/buildinfo \
+  -recorded-by   <who> \
+  -review-evidence '<why>' \
+  -dry-run
+# then the same command without -dry-run. After the roll: `repoint` (the
+# carried rows still name the pre-roll build), then re-prove.
 
 # 1. Same question. Never refuses, works with query-api down.
 go-api-routing status -registry-url http://query-api:8090/registry
@@ -599,7 +677,10 @@ documents dump generated from the SAME commit at build time
 (`/app/go-api/documents.json`), and the checked-in operation catalog at its
 `DefaultCatalogPath` relative to the image's working directory
 (`/app/go-api/src/dev_health_ops/api/graphql/go_api_operations.json`) --
-`go-api-routing`'s `-catalog` flag needs no override when run from there.
+`go-api-routing`'s `-catalog` flag needs no override when run from there,
+and neither does `carry`'s `-documents` flag, whose default is that same
+baked-in dump — which is exactly what makes the image's own binary able to
+say which documents the deployment it was built from will register.
 
 The runtime base is a small Debian, not distroless: this image doubles as
 the operator's one-off Pod for running both binaries by hand, and a

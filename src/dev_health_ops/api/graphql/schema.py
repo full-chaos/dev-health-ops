@@ -92,7 +92,6 @@ from .resolvers.dev_status_change import (
 from .resolvers.dev_work_graph import resolve_dev_work_graph_neighbors
 from .resolvers.improve import resolve_improve_opportunities
 from .resolvers.product_telemetry import (
-    resolve_product_telemetry_dashboard,
     resolve_product_telemetry_platform_dashboard,
 )
 from .resolvers.reports import (
@@ -374,8 +373,7 @@ class Query:
         org_id: str,
         input: ProductTelemetryDashboardInput,
     ) -> ProductTelemetryDashboardType:
-        context = get_context(info)
-        return await resolve_product_telemetry_dashboard(context, input)
+        _raise_served_by_query_api("productTelemetryDashboard", org_id, info)
 
     @strawberry.field(
         description=(

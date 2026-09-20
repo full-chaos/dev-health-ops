@@ -256,6 +256,48 @@ var operationSpecs = map[string]OperationSpec{
 			aiInstanceVariant("TEAM_VALID", "a team id that has rollup rows and whose repo patterns select a repository", "teamId", aiReviewLoadParity(), "data.aiReviewLoad.byBucket", "", ""),
 		),
 	},
+	"aiRiskBreakdown": {
+		ResponseRoot: "aiRiskBreakdown",
+		Variables:    aiRollupVariables(nil),
+		Parity:       aiRiskBreakdownParity(),
+		Variants: append(aiRollupVariants(aiRiskBreakdownParity()),
+			aiInstanceVariant("REPO_VALID", "a repository id that has rollup rows", "repoId", aiRiskBreakdownParity(), "data.aiRiskBreakdown.byBucket", "", ""),
+			aiInstanceVariant("REPO_NAME_VALID", "the full name of a repository that has rollup rows", "repoId", aiRiskBreakdownParity(), "data.aiRiskBreakdown.byBucket", "", ""),
+			aiInstanceVariant("TEAM_VALID", "a team id stored on rollup rows whose repo patterns select a repository", "teamId", aiRiskBreakdownParity(), "data.aiRiskBreakdown.byBucket", "", ""),
+		),
+	},
+	"aiAttributedPrs": {
+		ResponseRoot: "aiAttributedPrs",
+		Variables:    aiPagedVariables(nil),
+		Parity:       aiAttributedPrsParity(),
+		Variants: append(aiPagedVariants(aiAttributedPrsParity(), map[string]map[string]any{
+			"WORK_TYPE":             {"workType": "pull_request"},
+			"REPO_UNKNOWN":          {"repoId": "00000000-0000-0000-0000-000000000001"},
+			"REPO_NAME_UNKNOWN":     {"repoId": "no-such-org/no-such-repo"},
+			"TEAM_UNKNOWN":          {"teamId": "team-abc-123"},
+			"REPO_AND_TEAM_UNKNOWN": {"repoId": "00000000-0000-0000-0000-000000000001", "teamId": "team-abc-123"},
+		}),
+			aiPagedInstanceVariant("REPO_VALID", "a repository id that has AI-attributed pull requests", "repoId", aiAttributedPrsParity(), "data.aiAttributedPrs.rows", "data.aiAttributedPrs.rows", "repoId"),
+			aiPagedInstanceVariant("REPO_NAME_VALID", "the full name of a repository that has AI-attributed pull requests", "repoId", aiAttributedPrsParity(), "data.aiAttributedPrs.rows", "", ""),
+			aiPagedInstanceVariant("TEAM_VALID", "a team id whose repo patterns select a repository with AI-attributed pull requests", "teamId", aiAttributedPrsParity(), "data.aiAttributedPrs.rows", "data.aiAttributedPrs.rows", "teamId"),
+		),
+	},
+	"aiAttributionOverview": {
+		ResponseRoot: "aiAttributionOverview",
+		Variables:    aiPagedVariables(nil),
+		Parity:       aiAttributionOverviewParity(),
+		Variants: append(aiPagedVariants(aiAttributionOverviewParity(), map[string]map[string]any{
+			"BUCKETS":               {"buckets": []any{"AI_ASSISTED", "HUMAN"}},
+			"REPO_UNKNOWN":          {"repoId": "00000000-0000-0000-0000-000000000001"},
+			"REPO_NAME_UNKNOWN":     {"repoId": "no-such-org/no-such-repo"},
+			"TEAM_UNKNOWN":          {"teamId": "team-abc-123"},
+			"REPO_AND_TEAM_UNKNOWN": {"repoId": "00000000-0000-0000-0000-000000000001", "teamId": "team-abc-123"},
+		}),
+			aiPagedInstanceVariant("REPO_VALID", "a repository id that has resolved attribution records", "repoId", aiAttributionOverviewParity(), "data.aiAttributionOverview.rows", "data.aiAttributionOverview.rows", "repoId"),
+			aiPagedInstanceVariant("REPO_NAME_VALID", "the full name of a repository that has resolved attribution records", "repoId", aiAttributionOverviewParity(), "data.aiAttributionOverview.rows", "", ""),
+			aiPagedInstanceVariant("TEAM_VALID", "a team id whose repo patterns select a repository with resolved attribution records", "teamId", aiAttributionOverviewParity(), "data.aiAttributionOverview.rows", "data.aiAttributionOverview.rows", "teamId"),
+		),
+	},
 	"busFactor": {
 		ResponseRoot: "busFactor",
 		Variables: func(orgID string, _ Window) map[string]any {
@@ -1307,4 +1349,83 @@ func aiInstanceVariant(name, kind, scopeField string, parity Options, nonEmpty, 
 			},
 		},
 	}
+}
+
+// aiPagedVariables builds the shared request of the paged AI operations: the
+// org, the run's day window, the scope (nil sends none) and the first page.
+func aiPagedVariables(scope map[string]any) func(orgID string, w Window) map[string]any {
+	return func(orgID string, w Window) map[string]any {
+		vars := aiRollupVariables(scope)(orgID, w)
+		vars["limit"] = 50
+		vars["offset"] = 0
+		return vars
+	}
+}
+
+// aiPagedVariants is one variant per named scope branch, plus the page
+// branches: a limit below one, a limit above the ceiling and an offset.
+func aiPagedVariants(parity Options, scopes map[string]map[string]any) []Variant {
+	names := make([]string, 0, len(scopes))
+	for name := range scopes {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	variants := make([]Variant, 0, len(names)+3)
+	for _, name := range names {
+		variants = append(variants, Variant{Name: name, Variables: aiPagedVariables(scopes[name]), Parity: parity})
+	}
+	for _, page := range []struct {
+		name          string
+		limit, offset int
+	}{{"PAGE_ZERO", 0, 0}, {"PAGE_OVER_CEILING", 1000, 0}, {"PAGE_OFFSET", 5, 5}} {
+		limit, offset := page.limit, page.offset
+		variants = append(variants, Variant{
+			Name: page.name,
+			Variables: func(orgID string, w Window) map[string]any {
+				vars := aiPagedVariables(nil)(orgID, w)
+				vars["limit"], vars["offset"] = limit, offset
+				return vars
+			},
+			Parity: parity,
+		})
+	}
+	return variants
+}
+
+// aiPagedInstanceVariant is aiInstanceVariant for the paged operations.
+func aiPagedInstanceVariant(name, kind, scopeField string, parity Options, nonEmpty, echoList, echoField string) Variant {
+	v := aiInstanceVariant(name, kind, scopeField, parity, nonEmpty, echoList, echoField)
+	base := aiPagedVariables(map[string]any{})
+	v.Variables = base
+	return v
+}
+
+// aiRiskBreakdownParity declares the average hotspot risk score a merged
+// floating-point aggregate.
+func aiRiskBreakdownParity() Options {
+	return Options{FloatTierB: map[string]string{
+		"data.aiRiskBreakdown.hotspotOverlap.avgHotspotRiskScore": "avgIf over file risk scores: ClickHouse merges partial aggregate states in thread-completion order, so the last bits differ run to run on both planes (CHAOS-5451)",
+	}}
+}
+
+const aiAttributionTimestampReason = "the timestamp is a ClickHouse DateTime64(3, 'UTC') read through a tz-aware driver value; Python's strawberry DateTime scalar isoformat()s it with a \"+00:00\" offset and microsecond digits, while Go's gqlgen DateTime scalar formats the same instant as RFC 3339 with \"Z\" (resolvers/ai.py _to_aware). The instants are equal; only the wire text differs. Go's form is the canonical DateTime wire form; the Python form is the declared defect and stays frozen."
+
+func aiAttributedPrsParity() Options {
+	return Options{BaselineDefects: []BaselineDefect{{
+		Ticket:             "CHAOS-6081",
+		Reason:             aiAttributionTimestampReason,
+		Paths:              []string{"data.aiAttributedPrs.rows.mergedAt"},
+		Intermittent:       true,
+		IntermittentReason: "mergedAt is null for an unmerged pull request and the list is empty when nothing is attributed",
+	}}}
+}
+
+func aiAttributionOverviewParity() Options {
+	return Options{BaselineDefects: []BaselineDefect{{
+		Ticket:             "CHAOS-6081",
+		Reason:             aiAttributionTimestampReason,
+		Paths:              []string{"data.aiAttributionOverview.rows.observedAt"},
+		Intermittent:       true,
+		IntermittentReason: "the list is empty when nothing is attributed in the window",
+	}}}
 }

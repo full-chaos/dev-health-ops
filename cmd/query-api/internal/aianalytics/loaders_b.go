@@ -169,6 +169,10 @@ type attributedPR struct {
 	MergedAt *time.Time
 }
 
+// The linked-issue path joins attribution to a pull request through the work
+// item id alone, exactly as the reference does: an attribution record pinned
+// to one repository also attributes the pull requests of another repository
+// that the same work item links to.
 const attributedPRsStatement = `SELECT
     repo_id_str, number, kind, work_type, title, merged_at
 FROM (

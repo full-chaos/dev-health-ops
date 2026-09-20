@@ -172,7 +172,10 @@ WHERE org_id = {org_id:String}`, []clickhouse.Binding{{Name: "org_id", Value: or
 
 // dayBounds are the inclusive window of a date range as the naive UTC
 // instants the raw-PR queries compare with: midnight of the first day and
-// the last whole second of the last day.
+// the last whole second of the last day. The reference binds its end instant
+// (the last microsecond of the last day) as second-precision DateTime text, so
+// a row stamped inside the last second of the last day is outside the window
+// on both planes.
 func dayBounds(start, end time.Time) (time.Time, time.Time) {
 	s := time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, time.UTC)
 	e := time.Date(end.Year(), end.Month(), end.Day(), 23, 59, 59, 0, time.UTC)

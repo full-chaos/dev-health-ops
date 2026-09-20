@@ -212,6 +212,19 @@ def test_the_go_served_ledger_names_exactly_the_raising_fields() -> None:
     assert sorted(fields) == sorted(_QUERIES)
 
 
+def test_every_document_over_the_data_health_root_has_its_own_ledger_row() -> None:
+    """Four registered documents select `dataHealth`; the grouping above maps
+    them to one raising field, so a dropped row for one of them would pass it."""
+    ledger = json.loads(_LEDGER.read_text())
+    operations = {entry["operation"] for entry in ledger["entries"]}
+    assert {
+        "connectorsDataHealth",
+        "dataHealthIdentity",
+        "mappingCoverageHealth",
+        "metricLineage",
+    } <= operations
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("operation", sorted(_QUERIES))
 async def test_the_wire_error_is_the_ledger_deletion_error(operation: str) -> None:

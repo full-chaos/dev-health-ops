@@ -102,6 +102,10 @@ _QUERIES = {
         "query { improveOpportunities { detectorReady } }",
         None,
     ),
+    "workUnitTeamAttributions": (
+        'query { workUnitTeamAttributions(orgId: "org-1") { workUnitId } }',
+        None,
+    ),
     "securityOverview": (
         'query { securityOverview(orgId: "org-1") { kpis { openTotal } } }',
         None,

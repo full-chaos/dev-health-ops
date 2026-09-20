@@ -289,6 +289,15 @@
         {"file": "cmd/query-api/internal/aianalytics/integration_d_test.go", "test": "TestRealClickHouse_AIDetectors"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
       ]
+    },
+    {
+      "operation": "workUnitTeamAttributions",
+      "two_plane_ops_sha": "22e1e8c5fe1e729f057e3c231a3db0c807658da5",
+      "guards": [
+        {"file": "cmd/query-api/internal/workgraph/teamattribution_test.go", "test": "TestResolveWorkUnitTeamAttributions_QueryShape"},
+        {"file": "cmd/query-api/internal/workgraph/teamattribution_integration_test.go", "test": "TestResolveWorkUnitTeamAttributions_SourcePrecedenceAndShapeRealEngine"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_symbols_are_not_redefined"}
+      ]
     }
   ]
 }

@@ -1736,3 +1736,63 @@ func TestConnectPostgresFloorsASubMillisecondTimeout(t *testing.T) {
 		})
 	}
 }
+
+// r2 F1: when the deployed plane disagrees on BOTH the schema digest and
+// this operation's document digest, the REFUSING answer must win.
+//
+// The schema case is the only one of the three that admits, and it used
+// to be evaluated first, so a row reported `reachable:true` while
+// `deployed_digest_state` on the same row read `MISMATCH` -- a claim and
+// its own contradiction, side by side. Each mismatch alone was covered;
+// their combination was not, which is the whole lesson: a refusal must
+// never be reachable only by the absence of a weaker admission.
+func TestReachabilityRefusalsWinOverTheSchemaMismatchAdmission(t *testing.T) {
+	base := goapiproof.OperationStatus{
+		Operation:      "flowMatrix",
+		DocumentDigest: "catalog-digest",
+		DigestState:    goapiproof.DigestMatch,
+		Mode:           "canary",
+	}
+	for _, testCase := range []struct {
+		name       string
+		deployed   map[string]string
+		wantState  string
+		wantReason string
+	}{
+		{
+			name:       "schema mismatch AND a different deployed document digest",
+			deployed:   map[string]string{"flowMatrix": "some-other-digest"},
+			wantState:  "MISMATCH",
+			wantReason: "DIFFERENT document digest",
+		},
+		{
+			name:       "schema mismatch AND the operation unregistered",
+			deployed:   map[string]string{"somethingElse": "x"},
+			wantState:  "UNREGISTERED",
+			wantReason: "does not register this operation at all",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			reported := toReportOperation(base, testCase.deployed, false, true)
+			if reported.DeployedDigestState != testCase.wantState {
+				t.Fatalf("deployed_digest_state = %q, want %q", reported.DeployedDigestState, testCase.wantState)
+			}
+			if reported.Reachable == nil || *reported.Reachable {
+				t.Fatalf("reachable must be false when the deployed plane itself would refuse this operation, got %v", reported.Reachable)
+			}
+			// And the reason must name the DOCUMENT fact, not the schema
+			// one: an operator told "your SDL differs" would go and
+			// rebuild, when the actual problem is this operation.
+			if reported.ReachableReason == nil || !strings.Contains(*reported.ReachableReason, testCase.wantReason) {
+				t.Fatalf("the reason must name the document-level cause (%q), got %v", testCase.wantReason, reported.ReachableReason)
+			}
+		})
+	}
+
+	// CONTROL: with the document digest AGREEING, the schema mismatch
+	// alone still admits -- the r1 fix is not undone by the r2 one.
+	agreeing := toReportOperation(base, map[string]string{"flowMatrix": "catalog-digest"}, false, true)
+	if agreeing.Reachable == nil || !*agreeing.Reachable {
+		t.Fatalf("a row the deployed process reads and registers identically must stay reachable=true, got %v", agreeing.Reachable)
+	}
+}

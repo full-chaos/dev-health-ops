@@ -599,6 +599,21 @@ func toReportOperation(status goapiproof.OperationStatus, deployedDigests map[st
 	case goPlaneUnreachable:
 		reported.Reachable = nil
 		reported.ReachableReason = stringPtr("the go plane could not be reached, so deployed agreement is genuinely unknown")
+	// ORDER IS THE DECISION HERE (r2 F1). The two document cases below
+	// REFUSE; the schema case admits. Putting the admitting case first
+	// meant that when BOTH disagreed -- the deployed plane on a different
+	// SDL *and* registering a different document digest for this
+	// operation -- the admitting case won and the row reported
+	// `reachable:true` while `deployed_digest_state` on the same row read
+	// `MISMATCH`. A refusal must never be reachable only by the absence
+	// of a weaker admission: every REFUSING case is evaluated first, and
+	// the admitting one is what is left.
+	case reported.DeployedDigestState == "MISMATCH":
+		reported.Reachable = boolPtr(false)
+		reported.ReachableReason = stringPtr("the deployed plane registers this operation under a DIFFERENT document digest than the catalog's -- enable's preflight 3 would refuse it")
+	case reported.DeployedDigestState == "UNREGISTERED":
+		reported.Reachable = boolPtr(false)
+		reported.ReachableReason = stringPtr("the deployed plane does not register this operation at all -- enable's preflight 3 would refuse it")
 	case schemaMismatch:
 		// THIS BINARY's SDL differing from the deployed process's is a
 		// fact about THIS BINARY, not about whether a real request is
@@ -616,12 +631,6 @@ func toReportOperation(status goapiproof.OperationStatus, deployedDigests map[st
 		// which is not the same question as this field's.
 		reported.Reachable = boolPtr(true)
 		reported.ReachableReason = stringPtr("the deployed process reads this row; note this binary's own SDL digest is NOT the deployed one, so enable/disable run from THIS binary would write at a digest nothing is reading")
-	case reported.DeployedDigestState == "MISMATCH":
-		reported.Reachable = boolPtr(false)
-		reported.ReachableReason = stringPtr("the deployed plane registers this operation under a DIFFERENT document digest than the catalog's -- enable's preflight 3 would refuse it")
-	case reported.DeployedDigestState == "UNREGISTERED":
-		reported.Reachable = boolPtr(false)
-		reported.ReachableReason = stringPtr("the deployed plane does not register this operation at all -- enable's preflight 3 would refuse it")
 	default:
 		reported.Reachable = boolPtr(true)
 	}

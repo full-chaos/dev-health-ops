@@ -789,3 +789,90 @@ func TestCarryRevalidatesEvenRowsItDidNotWriteThisRun(t *testing.T) {
 		t.Fatalf("the run must roll back whole; hotspots survived at the target digest: %+v", rows)
 	}
 }
+
+// r2 F2: a live row that APPEARS during the run is the quiet way to
+// break the invariant.
+//
+// Everything the run copied is still correct, so every other check
+// passes and the carry commits reporting success -- while an operation
+// somebody enabled while it was running has no row at the digest about
+// to go live, and the roll un-routes it. The verb reports that it
+// prevented exactly the harm it just failed to prevent.
+func TestCarryRefusesWhenANewLiveRowAppearsWhileItRuns(t *testing.T) {
+	ctx := t.Context()
+	pool := startAuditedRegistryPostgres(t)
+	seedCarryRow(t, ctx, pool, carryIntegrationLiveDigest, CarryRow{
+		Operation: "featureFlags", DocumentDigest: testDocumentDigest, Mode: "canary",
+		Build: verbsRunningBuild, Owner: "go", RolloutPercentage: 100, ReviewEvidence: "the original decision",
+	})
+
+	// Anchored on the target-digest insert, so it lands after the survey
+	// and before the commit -- the whole window.
+	if _, err := pool.Exec(ctx, `
+		CREATE FUNCTION carry_new_row_guard() RETURNS trigger AS $$
+		BEGIN
+			INSERT INTO public.go_api_candidate_build (schema_digest, document_digest, selected_operation, candidate_build)
+			VALUES (`+quoteLiteral(carryIntegrationLiveDigest)+`, `+quoteLiteral(testDocumentDigest2)+`, 'hotspots', `+quoteLiteral(verbsRunningBuild)+`)
+			ON CONFLICT DO NOTHING;
+			INSERT INTO public.go_api_routing_state
+				(schema_digest, document_digest, selected_operation, current_candidate_build,
+				 owner, mode, rollout_percentage, review_evidence, recorded_by, updated_at)
+			VALUES (`+quoteLiteral(carryIntegrationLiveDigest)+`, `+quoteLiteral(testDocumentDigest2)+`, 'hotspots', `+quoteLiteral(verbsRunningBuild)+`,
+				'go', 'canary', 100, 'enabled while the carry was running', 'somebody else', now())
+			ON CONFLICT DO NOTHING;
+			RETURN NEW;
+		END;
+		$$ LANGUAGE plpgsql;
+		CREATE TRIGGER carry_new_row_guard_trigger
+			BEFORE INSERT ON public.go_api_routing_state
+			FOR EACH ROW
+			WHEN (NEW.schema_digest = `+quoteLiteral(carryIntegrationTargetDigest)+`)
+			EXECUTE FUNCTION carry_new_row_guard();`); err != nil {
+		t.Fatalf("install the racing enabler: %v", err)
+	}
+
+	outcomes, err := Carry(ctx, pool, carryIntegrationRequest())
+	if !errors.Is(err, ErrCarrySourceRowChanged) {
+		t.Fatalf("err = %v (outcomes %+v), want ErrCarrySourceRowChanged -- a live row appeared and was not carried", err, SummarizeCarry(outcomes))
+	}
+	for _, want := range []string{"hotspots", "APPEARED at the live digest", "the roll would un-route it"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("the refusal must contain %q, got: %v", want, err)
+		}
+	}
+	// ALL OR NOTHING still: the row that DID carry is rolled back too.
+	if rows := rowsAtDigest(t, ctx, pool, carryIntegrationTargetDigest); len(rows) != 0 {
+		t.Fatalf("the run must roll back whole, found %d row(s): %+v", len(rows), rows)
+	}
+}
+
+// CONTROL: a row the survey DID see and deliberately skipped must not be
+// mistaken for one that appeared. Without this, the new-row check would
+// refuse every run that skips anything -- which is most of them -- and
+// the verb would be unusable.
+func TestCarryDoesNotMistakeASkippedRowForANewOne(t *testing.T) {
+	ctx := t.Context()
+	pool := startAuditedRegistryPostgres(t)
+	seedCarryRow(t, ctx, pool, carryIntegrationLiveDigest, CarryRow{
+		Operation: "featureFlags", DocumentDigest: testDocumentDigest, Mode: "canary",
+		Build: verbsRunningBuild, Owner: "go", RolloutPercentage: 100, ReviewEvidence: "the original decision",
+	})
+	// Present at the live digest, surveyed, and SKIPPED: mode python is
+	// not reachable, so there is nothing to preserve.
+	seedCarryRow(t, ctx, pool, carryIntegrationLiveDigest, CarryRow{
+		Operation: "hotspots", DocumentDigest: testDocumentDigest2, Mode: "python",
+		Build: verbsRunningBuild, Owner: "python", RolloutPercentage: 0, ReviewEvidence: "deliberately off",
+	})
+
+	outcomes, err := Carry(ctx, pool, carryIntegrationRequest())
+	if err != nil {
+		t.Fatalf("a surveyed-and-skipped row must not be read as a new one: %v", err)
+	}
+	summary := SummarizeCarry(outcomes)
+	if summary.Carried != 1 || summary.Skipped != 1 {
+		t.Fatalf("summary = %+v, want one carried and one skipped", summary)
+	}
+	if rows := rowsAtDigest(t, ctx, pool, carryIntegrationTargetDigest); len(rows) != 1 {
+		t.Fatalf("got %d row(s) at the target digest, want exactly the carried one", len(rows))
+	}
+}

@@ -650,7 +650,7 @@ func Carry(ctx context.Context, pool *pgxpool.Pool, request CarryRequest) ([]Car
 	// A difference ROLLS THE WHOLE RUN BACK rather than carrying the rest
 	// -- the same all-or-nothing rule the rest of this verb obeys. Half a
 	// rollout moved is the state carry exists to prevent.
-	if err := revalidateCarriedSourceRows(ctx, tx, request.LiveSchemaDigest, outcomes); err != nil {
+	if err := revalidateCarriedSourceRows(ctx, tx, request.LiveSchemaDigest, liveRows, outcomes); err != nil {
 		return outcomes, err
 	}
 
@@ -737,13 +737,23 @@ func carryOneRow(ctx context.Context, tx pgx.Tx, targetSchemaDigest, recordedBy 
 // superseded decision, and a row that VANISHED means the operator
 // removed the decision entirely -- in both cases what is about to commit
 // at the target digest is no longer what is standing at the live one.
-func revalidateCarriedSourceRows(ctx context.Context, tx pgx.Tx, liveSchemaDigest string, outcomes []CarryOutcome) error {
+func revalidateCarriedSourceRows(ctx context.Context, tx pgx.Tx, liveSchemaDigest string, surveyed []CarryRow, outcomes []CarryOutcome) error {
 	copied := map[carryRowKey]CarryRow{}
 	for _, outcome := range outcomes {
 		switch outcome.Action {
 		case CarryActionCarry, CarryActionUnchanged:
 			copied[carryRowKey{Operation: outcome.Operation, DocumentDigest: outcome.DocumentDigest}] = carriedRowOf(outcome)
 		}
+	}
+	// EVERY surveyed key, not only the copied ones (r2 F2). A row the
+	// survey saw and deliberately skipped is accounted for; a row NOBODY
+	// saw is the gap. Built even when nothing was copied, because a run
+	// that carried nothing has already refused elsewhere and a run that
+	// carried something must still be able to tell an old row from a new
+	// one.
+	seen := map[carryRowKey]bool{}
+	for _, row := range surveyed {
+		seen[carryRowKey{Operation: row.Operation, DocumentDigest: row.DocumentDigest}] = true
 	}
 	if len(copied) == 0 {
 		return nil
@@ -765,6 +775,26 @@ func revalidateCarriedSourceRows(ctx context.Context, tx pgx.Tx, liveSchemaDiges
 		case !sameCarriedState(was, now):
 			changed = append(changed, fmt.Sprintf("%s (document %s) now reads mode %s, rollout %d, build %s -- this run was copying mode %s, rollout %d, build %s",
 				key.Operation, key.DocumentDigest, now.Mode, now.RolloutPercentage, now.Build, was.Mode, was.RolloutPercentage, was.Build))
+		}
+	}
+	// A row that APPEARED during the run is the other way to break the
+	// invariant, and it is the quiet one: the rows this run copied are
+	// all still correct, so every check above passes, and the run
+	// commits reporting success -- while an operation somebody enabled
+	// thirty seconds ago has no row at the digest about to go live. It
+	// would be un-routed by the roll, which is the precise harm this
+	// verb exists to prevent, arrived at through the verb itself
+	// reporting that it had prevented it.
+	//
+	// Refused rather than carried: this run never fetched the deployed
+	// registry's or the image's opinion of that operation, so it has no
+	// basis to decide whether the row COULD be carried faithfully.
+	// Deciding on less than the verb's own preflights is how a carry
+	// starts inventing rows. Re-running gathers everything properly.
+	for key := range present {
+		if !seen[key] {
+			changed = append(changed, fmt.Sprintf("%s (document %s) APPEARED at the live digest after this run read it -- it has no row at the target digest and the roll would un-route it",
+				key.Operation, key.DocumentDigest))
 		}
 	}
 	if len(changed) == 0 {

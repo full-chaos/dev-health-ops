@@ -2454,14 +2454,7 @@ func analyticsSeriesDefects() []BaselineDefect {
 			IntermittentReason: "present only when a bucket group has a NULL dimension value; an org whose rows all carry an id shows no such group",
 			LeafPairShape:      &LeafPairShape{Pairs: []LeafPair{{Baseline: "None", Candidate: ""}}},
 		},
-		{
-			Ticket:             analyticsDefectTicket,
-			Reason:             "the reference builds each bucket value with float(row[\"value\"] or 0), so an aggregate with no rows in a bucket (a delta with no earlier day) is 0.0; Go scans the value as nullable and sends null (ruled product behaviour, see ExecuteTimeseries; the web merge treats a null bucket as missing, not zero). Only the exact pair (0, null) is covered.",
-			Paths:              []string{"data.analytics.timeseries.buckets.value"},
-			Intermittent:       true,
-			IntermittentReason: "present only when some bucket's aggregate is NULL in the source rows; a window where every bucket has rows shows no null",
-			LeafPairShape:      &LeafPairShape{Pairs: []LeafPair{{Baseline: 0.0, Candidate: nil}}},
-		},
+		analyticsEmptyAggregateDefect("data.analytics.timeseries.buckets.value", "bucket value", "a bucket"),
 	}
 }
 
@@ -2485,6 +2478,20 @@ func analyticsBreakdownDefects() []BaselineDefect {
 			IntermittentReason: "present only when the breakdown has an item whose dimension value is NULL, and only in a document that selects the label",
 			LeafPairShape:      &LeafPairShape{Pairs: []LeafPair{{Baseline: "None", Candidate: nil}}},
 		},
+		analyticsEmptyAggregateDefect("data.analytics.breakdowns.items.value", "breakdown item value", "an item"),
+	}
+}
+
+// analyticsEmptyAggregateDefect declares the reference's 0.0 for an aggregate
+// with no rows against Go's null, for one value leaf of the analytics answer.
+func analyticsEmptyAggregateDefect(path, leaf, unit string) BaselineDefect {
+	return BaselineDefect{
+		Ticket:             analyticsDefectTicket,
+		Reason:             "the reference builds each " + leaf + " with float(row[\"value\"] or 0), so an aggregate with no rows in " + unit + " (a delta with no earlier day) is 0.0; Go scans the value as nullable and sends null (ruled product behaviour, see ExecuteTimeseries and ExecuteBreakdown; the web merge treats a null value as missing, not zero). Only the exact pair (0, null) is covered. Known limit: the wire alone cannot tell an all-NULL aggregate from a real zero that Go dropped; the Go scan tests pin that a measured zero stays 0.",
+		Paths:              []string{path},
+		Intermittent:       true,
+		IntermittentReason: "present only when some " + leaf + "'s aggregate is NULL in the source rows; a window where every one has rows shows no null",
+		LeafPairShape:      &LeafPairShape{Pairs: []LeafPair{{Baseline: 0.0, Candidate: nil}}},
 	}
 }
 

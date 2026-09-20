@@ -9,9 +9,9 @@ import (
 // item, each leaf given as raw JSON, beside a second bucket and item whose
 // leaves are non-null (an answer whose every leaf is null is an empty
 // result, which no citation covers).
-func analyticsBody(dimensionValue, date, value, key, label string) string {
-	return fmt.Sprintf(`{"data":{"analytics":{"timeseries":[{"dimension":"TEAM","dimensionValue":%s,"measure":"M","buckets":[{"date":%s,"value":%s},{"date":"2026-06-02","value":2}]}],"breakdowns":[{"dimension":"TEAM","measure":"M","items":[{"key":%s,"value":1,"label":%s},{"key":"k2","value":1,"label":"l2"}]}]}}}`,
-		dimensionValue, date, value, key, label)
+func analyticsBody(dimensionValue, date, value, key, label, itemValue string) string {
+	return fmt.Sprintf(`{"data":{"analytics":{"timeseries":[{"dimension":"TEAM","dimensionValue":%s,"measure":"M","buckets":[{"date":%s,"value":%s},{"date":"2026-06-02","value":2}]}],"breakdowns":[{"dimension":"TEAM","measure":"M","items":[{"key":%s,"value":%s,"label":%s},{"key":"k2","value":1,"label":"l2"}]}]}}}`,
+		dimensionValue, date, value, key, itemValue, label)
 }
 
 // TestAnalyticsBatchDeclarations_InputDomain runs, through the real batch
@@ -24,9 +24,9 @@ func TestAnalyticsBatchDeclarations_InputDomain(t *testing.T) {
 		Breakdowns: []analyticsBreakdown{{"TEAM", "A", 10}, {"TEAM", "B", 10}},
 	})
 	const (
-		dv, date, val, key, label = 0, 1, 2, 3, 4
+		dv, date, val, key, label, itemVal = 0, 1, 2, 3, 4, 5
 	)
-	base := [5]string{`"t1"`, `"2026-06-01"`, `1.5`, `"k1"`, `"l1"`}
+	base := [6]string{`"t1"`, `"2026-06-01"`, `1.5`, `"k1"`, `"l1"`, `1`}
 	cases := []struct {
 		name                string
 		leaf                int
@@ -63,6 +63,12 @@ func TestAnalyticsBatchDeclarations_InputDomain(t *testing.T) {
 		{"key empty -> None", key, `""`, `"None"`, 1},
 		{"key other text", key, `"repo"`, `""`, 1},
 
+		{"item value 0 -> null", itemVal, `0.0`, `null`, 0},
+		{"item value 0 int -> null", itemVal, `0`, `null`, 0},
+		{"item value null -> 0", itemVal, `null`, `0.0`, 1},
+		{"item value 1 -> null", itemVal, `1.0`, `null`, 1},
+		{"item value 0 -> text", itemVal, `0.0`, `"0"`, 1},
+
 		{"label None -> null", label, `"None"`, `null`, 0},
 		{"label None -> empty", label, `"None"`, `""`, 1},
 		{"label null -> None", label, `null`, `"None"`, 1},
@@ -72,8 +78,8 @@ func TestAnalyticsBatchDeclarations_InputDomain(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			b, cand := base, base
 			b[c.leaf], cand[c.leaf] = c.baseline, c.candidate
-			baseline := snapshotFromJSON(t, analyticsBody(b[dv], b[date], b[val], b[key], b[label]))
-			candidate := snapshotFromJSON(t, analyticsBody(cand[dv], cand[date], cand[val], cand[key], cand[label]))
+			baseline := snapshotFromJSON(t, analyticsBody(b[dv], b[date], b[val], b[key], b[label], b[itemVal]))
+			candidate := snapshotFromJSON(t, analyticsBody(cand[dv], cand[date], cand[val], cand[key], cand[label], cand[itemVal]))
 			result := Compare(baseline, candidate, opts)
 			if result.DifferencesOutsideBaselineDefect != c.wantOutside {
 				t.Fatalf("outside = %d, want %d -- findings %+v", result.DifferencesOutsideBaselineDefect, c.wantOutside, result.Findings)

@@ -89,6 +89,9 @@ type statusReportOperation struct {
 	StaleDigests               []string `json:"stale_digests"`
 	UnreachableDocumentDigests []string `json:"unreachable_document_digests"`
 	Proven                     bool     `json:"proven"`
+	// VenueProof is "admin_only" or "no_production_data" for a live row
+	// enabled from a venue receipt (not store-proven), else "".
+	VenueProof string `json:"venue_proof"`
 	// A plain `bool` can only ever say "yes" or "no",
 	// so the moment reachability genuinely CANNOT be told (the go plane
 	// is unreachable) defaulting to the local row's own classification
@@ -387,23 +390,7 @@ func printStatusText(report statusReport, local string) {
 		if operation.RolloutPercentage != nil {
 			rollout = fmt.Sprintf("%d", *operation.RolloutPercentage)
 		}
-		proof := "-"
-		if operation.DigestState == goapiproof.DigestMatch {
-			proof = "UNPROVEN"
-			if operation.Proven {
-				proof = "ok"
-			}
-			// A proof receipt names a build served at a
-			// document digest -- it says nothing about whether the DEPLOYED
-			// process still registers that digest right now. Printing "ok"
-			// here regardless is the "output that merely looks healthy"
-			// this diagnostic must avoid: executed, `enable -dry-run`
-			// refused the identical operation with a document digest
-			// MISMATCH while this line still read "ok".
-			if operation.DeployedDigestState == "MISMATCH" || operation.DeployedDigestState == "UNREGISTERED" || schemaMismatch {
-				proof = "MISMATCH"
-			}
-		}
+		proof := proofWord(operation, schemaMismatch)
 		fmt.Fprintf(stdout, "%-24s %-8s %-10s %-8s %s\n", operation.Operation, operation.DigestState, mode, rollout, proof)
 		// r2 R2-05: these were computed and never printed, which made the
 		// runbook's promise to name them false.
@@ -435,6 +422,7 @@ func toReportOperation(status goapiproof.OperationStatus, deployedDigests map[st
 		StaleDigests:               status.StaleDigests,
 		UnreachableDocumentDigests: status.UnreachableDocumentDigests,
 		Proven:                     status.Proven,
+		VenueProof:                 status.VenueProof,
 	}
 	if reported.StaleDigests == nil {
 		reported.StaleDigests = []string{}
@@ -553,4 +541,31 @@ func derefOr(value *string, fallback string) string {
 		return fallback
 	}
 	return *value
+}
+
+// proofWord is the PROOF column word for one operation.
+func proofWord(operation statusReportOperation, schemaMismatch bool) string {
+	proof := "-"
+	if operation.DigestState == goapiproof.DigestMatch {
+		proof = "UNPROVEN"
+		if operation.Proven {
+			proof = "ok"
+		} else if operation.VenueProof != "" {
+			// Its own word, never UNPROVEN: a waiver row and a venue row
+			// are different states and a ladder keyed on UNPROVEN must
+			// neither trip on nor hide behind the other.
+			proof = "VENUE-PROVEN(" + operation.VenueProof + ")"
+		}
+		// A proof receipt names a build served at a
+		// document digest -- it says nothing about whether the DEPLOYED
+		// process still registers that digest right now. Printing "ok"
+		// here regardless is the "output that merely looks healthy"
+		// this diagnostic must avoid: executed, `enable -dry-run`
+		// refused the identical operation with a document digest
+		// MISMATCH while this line still read "ok".
+		if operation.DeployedDigestState == "MISMATCH" || operation.DeployedDigestState == "UNREGISTERED" || schemaMismatch {
+			proof = "MISMATCH"
+		}
+	}
+	return proof
 }

@@ -62,6 +62,12 @@ type OperationStatus struct {
 
 	StaleDigests []string
 	Proven       bool
+	// VenueProof is the venue class (VenueClassAdmin/VenueClassNoData) a
+	// NOT store-proven live row's own review_evidence claims; empty
+	// otherwise. It is deliberately not Proven: a venue row is admitted on
+	// an operator-supplied receipt, and a waiver row (ACKNOWLEDGED-UNPROVEN)
+	// must stay a different state from it.
+	VenueProof string
 
 	// UnreachableDocumentDigests names rows this operation has AT THE LIVE
 	// SCHEMA DIGEST whose document digest is NOT the catalog's.
@@ -293,6 +299,9 @@ func RoutingStatusRows(ctx context.Context, db Querier, liveSchemaDigest string,
 			status.ReviewEvidence = row.reviewEvidence
 			status.RecordedBy = row.recordedBy
 			status.Proven = proven[operation]
+			if !status.Proven {
+				status.VenueProof = VenueEvidenceClass(row.reviewEvidence)
+			}
 		case len(stale) > 0 || len(unreachable[operation]) > 0:
 			// STALE covers both shapes, because they are the same fact:
 			// a row exists and nothing will ever look it up. Which kind

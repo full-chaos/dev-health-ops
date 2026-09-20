@@ -220,13 +220,10 @@ and heartbeat `ok` are success; deterministic `error`/`dropped` results become
 permanent 422 rejections, while transport failures, timeouts, 429, 5xx, and
 malformed upstream responses remain retryable.
 
-Metric execution repair is a separate operator boundary. Configure
-`WORKER_METRIC_REPAIR_TOKEN` on the API only when reviewed repair is enabled;
-it is required by the repair endpoint and must differ from
-`WORKER_OPERATIONAL_BRIDGE_TOKEN`. Neither token authorizes the other's
-operation. Rotate the repair token independently with a coordinated API/client
-switch; the old value stops working immediately when the API changes. Missing,
-oversized, or equal secrets fail closed.
+Metric and work-graph execution repair is a separate operator boundary: the
+`dev-health-workerctl` repair verbs run it as Go-native Postgres transactions on
+the coordinator role after the operator credential is authorized for
+`workers:operate`. No API route accepts a repair token.
 
 The typed `syncdispatchruntime` package is dormant and all-or-nothing. Its
 claim projection drops the claim token, its River args validate the exact

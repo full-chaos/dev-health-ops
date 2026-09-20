@@ -946,7 +946,7 @@ the `api` container's own memory limit:
   aggregate-exhaustion risk.
 - The compatibility bridge no longer collapses a signaled/resource-exhausted
   runner with zero recorded progress into the `ambiguous` state that used to
-  require a human `/metric-executions/v1/{id}/repair` call before any retry
+  require an operator repair (`dev-health-workerctl metrics execution-repair`) before any retry
   could re-claim it; it authorizes the retry itself (see
   `worker_metrics._mark_retry_authorized`), so a single OOM kill no longer
   permanently fails the partition. "Zero progress" is signalled at the write

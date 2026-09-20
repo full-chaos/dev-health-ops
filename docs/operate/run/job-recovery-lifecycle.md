@@ -406,10 +406,9 @@ key, so it silently no-ops. `dev-health-workerctl metrics daily-redrive --org
 verified>"` closes this for one org+day window in two ordered steps (
 `--review-evidence` is required, with no default — see
 [cli-reference](../../reference/cli/index.md#dev-health-workerctl-metrics)
-for why). It FIRST calls the Python compatibility-bridge's
-bulk ledger repair (`POST /internal/worker/daily-metrics/v1/redrive`,
-`worker_metrics._bulk_redrive_ambiguous_executions`) for every `running` run
-in scope, authorizing retry for any `ambiguous`/stuck-`executing`
+for why). It FIRST runs the bulk ledger repair (a Go-native Postgres
+transaction on the coordinator role, `internal/jobs/repair`) for every
+`running` run in scope, authorizing retry for any `ambiguous`/stuck-`executing`
 `metric_compatibility_executions` row; only THEN does it reset any
 `failed_permanent` partition back to `failed` and publish a fresh
 `metrics.daily_partition` job for every `pending`/`failed` partition in

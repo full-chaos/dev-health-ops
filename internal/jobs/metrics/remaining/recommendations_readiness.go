@@ -163,7 +163,7 @@ func DailyMetricsReady(
 		// while appearing to add an explanation.
 		logger.Warn(
 			"daily metrics fan-out run has a failed_permanent partition; it will not "+
-				"finalize without a human /metric-executions/v1/{id}/repair call",
+				"finalize without an operator running dev-health-workerctl metrics execution-repair",
 			"org_id", orgID, "day", day.Format("2006-01-02"))
 	}
 	if observer != nil {

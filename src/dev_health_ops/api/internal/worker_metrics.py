@@ -18,20 +18,19 @@ import os
 import signal
 import sys
 import uuid
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import date
 from time import monotonic as _monotonic
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api.dependencies import get_postgres_session_dep
 from dev_health_ops.api.internal.worker_auth import (
-    authorize_metric_repair,
     authorize_worker_bridge,
 )
 from dev_health_ops.metrics.prometheus import (
@@ -528,72 +527,6 @@ class RemainingMetricsExecutionRequest(_StrictRequest):
     partition_id: uuid.UUID
 
 
-class MetricExecutionRepairRequest(_StrictRequest):
-    expected_state: Literal["executing", "ambiguous"]
-    expected_attempt_count: int = Field(ge=1)
-    resolution: Literal["retry_safe", "confirm_succeeded"]
-    review_evidence: str = Field(min_length=1, max_length=2048)
-    output_evidence: dict[str, Any] | None = None
-
-    @model_validator(mode="after")
-    def validate_resolution_evidence(self) -> MetricExecutionRepairRequest:
-        if len(self.review_evidence.encode()) > 2048:
-            raise ValueError("review_evidence must not exceed 2048 UTF-8 bytes")
-        if (self.resolution == "confirm_succeeded") != (
-            self.output_evidence is not None
-        ):
-            raise ValueError("output_evidence is required only when confirming success")
-        if self.output_evidence is not None:
-            encoded = _canonical_json(self.output_evidence)
-            if len(encoded.encode()) > _MAX_EVIDENCE_BYTES:
-                raise ValueError("output_evidence exceeds the durable bound")
-        return self
-
-
-_DAILY_REDRIVE_DEFAULT_OPERATIONS: tuple[Literal["partition", "finalize"], ...] = (
-    "partition",
-)
-
-
-class DailyMetricsRedriveRequest(_StrictRequest):
-    """CHAOS-4304: bulk-unblock ledger rows for a set of runs an operator has
-    already scoped for redrive (typically via the Go-side
-    daily.RedriveStrandedPartitions, CHAOS-4358). Distinct from
-    MetricExecutionRepairRequest: that endpoint repairs ONE execution id an
-    operator must already know; this one takes the run ids the operator
-    actually has (from the stranding evidence) and finds every ambiguous
-    daily/partition row underneath them itself.
-    """
-
-    run_ids: list[uuid.UUID] = Field(min_length=1, max_length=200)
-    review_evidence: str = Field(min_length=1, max_length=2048)
-    # CHAOS-4409 (codex review, round 1, P1): this endpoint is shared by two
-    # callers whose review_evidence means DIFFERENT things -- daily-redrive's
-    # evidence is about partition output, daily-finalize's is about finalize
-    # output. Before this field existed, both callers implicitly repaired
-    # BOTH operations for their run_ids: a daily-redrive call (which only
-    # ever republishes partition jobs) could silently move an UNRELATED
-    # finalize ledger row to retry_authorized without anyone reviewing
-    # finalize output specifically, letting some later, unrelated finalize
-    # attempt redrive it without the ledger's protection and duplicate
-    # already-written finalization output. Defaults to `["partition"]` --
-    # daily-redrive's pre-CHAOS-4409 behavior, byte-for-byte -- so every
-    # caller must opt in explicitly to repairing finalize rows.
-    operations: list[Literal["partition", "finalize"]] = Field(
-        default_factory=lambda: list(_DAILY_REDRIVE_DEFAULT_OPERATIONS),
-        min_length=1,
-        max_length=2,
-    )
-
-    @model_validator(mode="after")
-    def validate_review_evidence(self) -> DailyMetricsRedriveRequest:
-        if len(self.review_evidence.encode()) > 2048:
-            raise ValueError("review_evidence must not exceed 2048 UTF-8 bytes")
-        if len(set(self.operations)) != len(self.operations):
-            raise ValueError("operations must not contain duplicates")
-        return self
-
-
 @dataclass(frozen=True)
 class _Execution:
     id: uuid.UUID
@@ -953,7 +886,7 @@ async def _reserve_execution(
     # progress-having failures that state exists to protect. Removed: a
     # stuck ambiguous/executing row falls through to the same 409 below as
     # it always did before this ticket, requiring the manual
-    # /metric-executions/v1/{id}/repair readback. The only automatic
+    # `dev-health-workerctl metrics execution-repair`. The only automatic
     # resolution this ticket adds is _mark_retry_authorized in _execute,
     # which has real same-execution evidence (see safe_to_retry above) --
     # not a claim-staleness proxy for it.
@@ -976,7 +909,7 @@ async def _reserve_execution(
     # "ambiguous" here does NOT resume or re-execute anything -- it only
     # feeds Go's EXISTING state=="ambiguous" classification
     # (ErrCompatibilityAmbiguousStuck), which durably fails the partition
-    # permanently and still requires a human /repair call before this
+    # permanently and still requires an operator repair before this
     # ledger row can move again. That is strictly safer than today's
     # infinite-retry loop, and no less conservative than a genuine
     # 'ambiguous' row about whether partial output exists.
@@ -994,21 +927,6 @@ async def _reserve_execution(
             "reason": "ambiguous_refused",
         },
     )
-
-
-def _repair_id(
-    execution_id: uuid.UUID, request: MetricExecutionRepairRequest
-) -> uuid.UUID:
-    identity = _canonical_json(
-        [
-            "metric-compatibility-execution-repair",
-            str(execution_id),
-            request.expected_state,
-            request.expected_attempt_count,
-            request.resolution,
-        ]
-    )
-    return uuid.uuid5(_EXECUTION_NAMESPACE, identity)
 
 
 async def _original_claim_is_active(session: AsyncSession, row: Any) -> bool:
@@ -1064,262 +982,6 @@ async def _original_claim_is_active(session: AsyncSession, row: Any) -> bool:
     return bool(result.scalar_one())
 
 
-async def _repair_execution(
-    session: AsyncSession,
-    execution_id: uuid.UUID,
-    request: MetricExecutionRepairRequest,
-) -> dict[str, str]:
-    result = await session.execute(
-        text(
-            """
-            SELECT id, worker_kind, operation, run_id, partition_id, claim_token,
-                   state, attempt_count
-            FROM metric_compatibility_executions
-            WHERE id = CAST(:id AS uuid)
-            FOR UPDATE
-            """
-        ),
-        {"id": str(execution_id)},
-    )
-    row = result.mappings().first()
-    if row is None:
-        raise HTTPException(status_code=404, detail="Execution not found")
-
-    repair_id = _repair_id(execution_id, request)
-    prior_result = await session.execute(
-        text(
-            """
-            SELECT resolution, review_evidence, output_evidence
-            FROM metric_compatibility_execution_repairs
-            WHERE id = CAST(:id AS uuid)
-            """
-        ),
-        {"id": str(repair_id)},
-    )
-    prior = prior_result.mappings().first()
-    encoded_output = (
-        _canonical_json(request.output_evidence)
-        if request.output_evidence is not None
-        else None
-    )
-    if prior is not None:
-        if (
-            prior["resolution"] != request.resolution
-            or prior["review_evidence"] != request.review_evidence
-            or (
-                prior["output_evidence"] is not None
-                and _canonical_json(prior["output_evidence"]) != encoded_output
-            )
-        ):
-            raise HTTPException(status_code=409, detail="Repair identity conflict")
-        await session.commit()
-        return {
-            "status": "already_applied",
-            "execution_id": str(execution_id),
-            "state": str(row["state"]),
-        }
-
-    if (
-        row["state"] != request.expected_state
-        or row["attempt_count"] != request.expected_attempt_count
-    ):
-        raise HTTPException(
-            status_code=409, detail="Execution state or attempt changed"
-        )
-    if await _original_claim_is_active(session, row):
-        raise HTTPException(
-            status_code=409, detail="Original execution claim is still active"
-        )
-
-    if request.resolution == "retry_safe":
-        update = """
-            UPDATE metric_compatibility_executions
-            SET state = 'retry_authorized',
-                last_attempt_at = statement_timestamp()
-            WHERE id = CAST(:id AS uuid)
-              AND state = :expected_state
-              AND attempt_count = :expected_attempt_count
-            RETURNING id
-        """
-        target_state = "retry_authorized"
-    else:
-        update = """
-            UPDATE metric_compatibility_executions
-            SET state = 'succeeded',
-                output_evidence = CAST(:output_evidence AS jsonb),
-                completed_at = statement_timestamp(),
-                last_attempt_at = statement_timestamp()
-            WHERE id = CAST(:id AS uuid)
-              AND state = :expected_state
-              AND attempt_count = :expected_attempt_count
-            RETURNING id
-        """
-        target_state = "succeeded"
-    updated = await session.execute(
-        text(update),
-        {
-            "id": str(execution_id),
-            "expected_state": request.expected_state,
-            "expected_attempt_count": request.expected_attempt_count,
-            "output_evidence": encoded_output,
-        },
-    )
-    if updated.scalar_one_or_none() is None:
-        raise HTTPException(status_code=409, detail="Execution repair CAS failed")
-    await session.execute(
-        text(
-            """
-            INSERT INTO metric_compatibility_execution_repairs (
-                id, execution_id, expected_state, expected_attempt_count,
-                resolution, review_evidence, output_evidence
-            )
-            VALUES (
-                CAST(:id AS uuid), CAST(:execution_id AS uuid), :expected_state,
-                :expected_attempt_count, :resolution, :review_evidence,
-                CAST(:output_evidence AS jsonb)
-            )
-            """
-        ),
-        {
-            "id": str(repair_id),
-            "execution_id": str(execution_id),
-            "expected_state": request.expected_state,
-            "expected_attempt_count": request.expected_attempt_count,
-            "resolution": request.resolution,
-            "review_evidence": request.review_evidence,
-            "output_evidence": encoded_output,
-        },
-    )
-    await session.commit()
-    return {
-        "status": "repaired",
-        "execution_id": str(execution_id),
-        "state": target_state,
-    }
-
-
-async def _bulk_redrive_ambiguous_executions(
-    session: AsyncSession,
-    run_ids: list[uuid.UUID],
-    review_evidence: str,
-    operations: Sequence[Literal["partition", "finalize"]] = ("partition",),
-) -> dict[str, int]:
-    """CHAOS-4304: the ledger-side half of a stranded daily-metrics redrive.
-
-    A run's daily/partition ledger row can be stuck at "ambiguous" (a
-    progress-having failure -- see _mark_ambiguous) long after the run itself
-    has been stranded by CHAOS-4358 (River discarded every daily_partition
-    job for it). _reserve_execution refuses that row 409 ambiguous_refused
-    forever, identically on every future attempt at the SAME (run,
-    partition, family, generation, scope_digest) identity -- it is never
-    "skipped" (that only happens for a genuine 'succeeded' row), but it is
-    just as permanently unable to recompute without this repair, exactly the
-    CHAOS-4304 gap: "a failed partition can never be recomputed" without an
-    operator-authorized transition out of ambiguous first.
-
-    This does not invent a new ledger rule: it applies _repair_execution's
-    existing "retry_safe" resolution (gated on the original claim being
-    provably dead) to every daily/partition OR daily/finalize row under the
-    named runs whose state is either 'ambiguous' (a progress-having failure)
-    or stuck 'executing' (CHAOS-4361: the owning api process died before any
-    exception handler ran), in one pass, so an operator who has already
-    identified stranded RUNS (from daily_metrics_partitions/
-    daily_metrics_runs evidence, or the Go-side redrive's
-    RedispatchedRunIDs) does not also have to enumerate and repair each
-    execution id by hand. A row whose original claim is still active is left
-    untouched and counted "skipped_claim_active", exactly as a single
-    /repair call against it would refuse with 409 today -- this bulk path
-    changes nothing about that safety rule (a live 'executing' claim is
-    real, still-in-flight work, never something to repair out from under),
-    only how many rows one operator action can advance.
-
-    CHAOS-4409: originally this only ever selected operation='partition'
-    rows -- a run's *finalize* execution row (worker_kind='daily',
-    operation='finalize', partition_id NULL) can get stuck ambiguous/
-    executing exactly the same way (the api process died mid-Finalize, or a
-    progress-having finalize failure), and was invisible to this function
-    even though _repair_execution/_original_claim_is_active ALREADY handle
-    operation='finalize' generically (see _original_claim_is_active's own
-    branch reading daily_metrics_runs.finalization_status/
-    finalization_claim_token/finalization_lease_expires_at). Prod evidence:
-    13 daily_metrics_runs stuck 'running' with 100% partitions succeeded
-    (CHAOS-4389's stranded-finalize shape) whose finalize ledger row was
-    stuck ambiguous/executing from the ORIGINAL stranding -- daily-finalize
-    --run answered JobCancelError ambiguous_refused on every one of them,
-    forever, because nothing ever repaired that row.
-
-    `operations` (codex review, round 1, P1) scopes which operation this
-    call is authorized to touch -- defaults to `("partition",)`,
-    daily-redrive's original behavior byte-for-byte. A caller's
-    review_evidence means something DIFFERENT for each operation
-    (daily-redrive's is about partition output; daily-finalize's is about
-    finalize output), so a caller must opt in to `"finalize"` explicitly:
-    without this, daily-redrive's own call (which only ever republishes
-    partition jobs) could silently move an UNRELATED finalize ledger row to
-    retry_authorized without anyone having reviewed finalize output
-    specifically, and some later, unrelated finalize attempt could then
-    redrive it without the ledger's protection and duplicate already-
-    written finalization output. No new resolution, no new safety rule --
-    just an explicit scope on which of the two operations this ledger
-    tracks for a daily run a given call may advance.
-
-    codex review (round 3): "ambiguous" means a progress-having failure MAY
-    have already written real output -- claim expiration alone is not
-    evidence retry is safe (see _repair_execution's own docstring history).
-    This function therefore NEVER auto-selects "confirm_succeeded" (which
-    would need per-row output_evidence a bulk call cannot supply); it only
-    ever authorizes "retry_safe", and review_evidence is a caller-supplied
-    string, never a hardcoded default -- callers (the internal HTTP
-    endpoint below, and the Go CLI's --review-evidence flag) MUST require
-    an operator to state what they actually verified before invoking this
-    at scale. A needless retry is not free: families whose readers do not
-    argMax/dedup by computed_at (file_hotspots/file_metrics_daily, which
-    SUMs raw rows) silently inflate their scores on a duplicate write.
-    """
-    if not run_ids:
-        return {"repaired": 0, "skipped_claim_active": 0}
-    candidates = await session.execute(
-        text(
-            """
-            SELECT id, state, attempt_count
-            FROM metric_compatibility_executions
-            WHERE run_id = ANY(CAST(:run_ids AS uuid[]))
-              AND worker_kind = 'daily' AND operation = ANY(CAST(:operations AS text[]))
-              AND state IN ('ambiguous', 'executing')
-            """
-        ),
-        {
-            "run_ids": [str(run_id) for run_id in run_ids],
-            "operations": list(operations),
-        },
-    )
-    rows = candidates.mappings().all()
-    repaired = 0
-    skipped = 0
-    for row in rows:
-        try:
-            await _repair_execution(
-                session,
-                row["id"],
-                MetricExecutionRepairRequest(
-                    expected_state=row["state"],
-                    expected_attempt_count=row["attempt_count"],
-                    resolution="retry_safe",
-                    review_evidence=review_evidence,
-                ),
-            )
-            repaired += 1
-        except HTTPException as exc:
-            # A CAS/claim-active refusal on ONE row (409) must not abort the
-            # rest of the batch -- the whole point of a bulk redrive is to
-            # make progress on every row that is actually safe, not to be as
-            # fragile as calling /repair once per execution id by hand.
-            if exc.status_code != 409:
-                raise
-            skipped += 1
-    return {"repaired": repaired, "skipped_claim_active": skipped}
-
-
 async def _mark_ambiguous(
     session: AsyncSession, execution: _Execution, detail: str
 ) -> None:
@@ -1347,7 +1009,7 @@ async def _mark_retry_authorized(
     exception) -- i.e. no repository's families were written for this
     execution, so there is nothing an ambiguous-state human review could
     confirm or refute that a retry doesn't already handle safely. This is
-    the same terminal value _repair_execution's "retry_safe" resolution
+    the same terminal value the operator repair's "retry_safe" resolution
     writes; the only difference is that it fires automatically instead of
     waiting on a human, and only under that stronger safety condition.
     """
@@ -1806,7 +1468,7 @@ async def _run_compatibility_process_locked(execution: _Execution) -> dict[str, 
     # (EAGAIN from pthread_create -- exactly the 2026-08-26 incident's
     # failure) would otherwise propagate uncaught through _execute's
     # generic `except Exception` handler, which marks the execution
-    # ambiguous (needs a human /repair call) even though no computation
+    # ambiguous (needs an operator repair) even though no computation
     # ever started. Reclassify it the same way as every other
     # capacity_exhausted case: always retryable, never a silent drop or an
     # unnecessary human-review parking.
@@ -2338,28 +2000,3 @@ async def read_metric_execution(
         "attempt_count": row["attempt_count"],
         "output_evidence": row["output_evidence"],
     }
-
-
-@router.post("/metric-executions/v1/{execution_id}/repair")
-async def repair_metric_execution(
-    execution_id: uuid.UUID,
-    request: MetricExecutionRepairRequest,
-    session: Annotated[AsyncSession, Depends(get_postgres_session_dep)],
-    authorization: Annotated[str | None, Header()] = None,
-) -> dict[str, str]:
-    authorize_metric_repair(authorization)
-    return await _repair_execution(session, execution_id, request)
-
-
-@router.post("/daily-metrics/v1/redrive")
-async def redrive_daily_metrics(
-    request: DailyMetricsRedriveRequest,
-    session: Annotated[AsyncSession, Depends(get_postgres_session_dep)],
-    authorization: Annotated[str | None, Header()] = None,
-) -> dict[str, int]:
-    authorize_metric_repair(authorization)
-    result = await _bulk_redrive_ambiguous_executions(
-        session, request.run_ids, request.review_evidence, request.operations
-    )
-    await session.commit()
-    return result

@@ -1141,8 +1141,7 @@ original dispatch used, so a bare re-dispatch alone is not enough — see
 [job-recovery-lifecycle.md](../../operate/run/job-recovery-lifecycle.md)).
 
 ```bash
-WORKER_OPERATIONAL_BRIDGE_URL=http://metrics-api:8000 \
-WORKER_METRIC_REPAIR_TOKEN=<repair-token> \
+WORKER_OPERATOR_TOKEN=<operator-token> \
 dev-health-workerctl metrics daily-redrive \
   --org 70d529e0-3c06-4597-8480-794fd02328b6 \
   --from 2026-08-08 \
@@ -1153,8 +1152,8 @@ dev-health-workerctl metrics daily-redrive \
 `--review-evidence` is **required**, with no default (codex review round 3):
 "ambiguous" means a progress-having failure MAY have already written real
 output, and claim expiration alone is not evidence retry is safe —
-`worker_metrics.py`'s single-execution `/repair` endpoint already requires a
-human to pick `retry_safe` vs `confirm_succeeded` per execution based on
+`metrics execution-repair` already requires a human to pick `retry_safe` vs
+`confirm_succeeded` per execution based on
 actual review, and this bulk path must not quietly bypass that by
 auto-authorizing every ambiguous row with a generic hardcoded string. State
 what you actually checked — e.g. the redriven families' zero-row counters,
@@ -1169,18 +1168,16 @@ steps that MUST run in this order (codex review, round 1: publishing a
 partition job before the ledger repair only reproduces `ambiguous_refused`
 and re-terminalizes the partition `failed_permanent`, undoing the reset):
 
-1. **Ledger repair first.** Calls
-   `POST /internal/worker/daily-metrics/v1/redrive` (`WORKER_METRIC_REPAIR_TOKEN`
-   bearer auth, base URL from `WORKER_OPERATIONAL_BRIDGE_URL` — both
-   required) for every `running` run in scope, applying the SAME
-   `retry_safe` CAS the single-execution `/metric-executions/v1/{id}/repair`
-   endpoint uses (CHAOS-4304) to every `ambiguous`/stuck-`executing`
-   compatibility-bridge ledger row underneath them, carrying your
-   `--review-evidence` text. This path only ever authorizes `retry_safe` —
+1. **Ledger repair first.** Repairs the ledger through the coordinator
+   database role (the operator credential must hold `workers:operate`; no
+   API base URL and no separate repair token) for every `running` run in
+   scope, applying the SAME `retry_safe` CAS `metrics execution-repair`
+   uses to every `ambiguous`/stuck-`executing` ledger row
+   underneath them, carrying your `--review-evidence` text. This path only ever authorizes `retry_safe` —
    never `confirm_succeeded`, which needs per-row `output_evidence` a bulk
    call cannot supply; an operator who has confirmed a SPECIFIC execution's
-   output already landed correctly should use the single-execution
-   `/repair` endpoint with `confirm_succeeded` instead.
+   output already landed correctly should use `metrics execution-repair`
+   with `--resolution confirm_succeeded` instead.
 2. **Partition redrive second.** Resets any `failed_permanent` partition
    back to `failed` (clearing `failure_reason`), then publishes a fresh
    `metrics.daily_partition` job for every `pending`/`failed` partition in
@@ -1202,9 +1199,8 @@ have settled (their owning job finishes or its lease expires).
 
 Otherwise, returns `{"ledger_repair": {"repaired", "skipped_claim_active"},
 "partitions": {"PermanentReset", "RedispatchedRunIDs",
-"RedrivenPartitions"}}`. Ledger repairs are chunked to ≤200 run ids per
-request (the bridge's own request limit); a window spanning many post_sync
-fanouts is handled automatically.
+"RedrivenPartitions"}}`. A window spanning many post_sync fanouts is handled
+automatically.
 
 **Observability**: `dev_health_daily_metrics_redrive_partitions_total{reason}`
 is wired but not live for THIS caller — `workerctl` is a one-shot CLI with no
@@ -1233,20 +1229,17 @@ success. This is the finalize-side counterpart of the CHAOS-4358 gap
 
 ```bash
 WORKER_OPERATOR_TOKEN=<operator-token> \
-WORKER_OPERATIONAL_BRIDGE_URL=<bridge-base-url> \
-WORKER_METRIC_REPAIR_TOKEN=<metric-repair-token> \
 dev-health-workerctl metrics daily-finalize \
   --run 6f2caa3e-2a8b-4e46-9c47-6a5a0a5b9a12 \
   --review-evidence "confirmed all partitions succeeded and no user_metrics_daily/ic_landscape_rolling_30d rows exist yet for this run's target_day -- the prior metrics.daily_finalize job never reached CompleteFinalize"
 ```
 
-`--run` (CHAOS-4409) additionally requires `WORKER_OPERATIONAL_BRIDGE_URL`/
-`WORKER_METRIC_REPAIR_TOKEN` — the same two variables `daily-redrive` above
-already needs — because it repairs the named run's finalize ledger row
-through the compatibility bridge before publishing (see "Finalize-ledger
-repair" below). Missing either fails closed with
+`--run` additionally repairs the named run's finalize ledger
+row through the coordinator database role before publishing (see
+"Finalize-ledger repair" below); the operator credential must hold
+`workers:operate`, and a failed ledger repair fails closed with
 `{"error": {"code": "ledger_repair_unavailable"}}` before any write.
-`--all-complete` does NOT need them: it never touches a run whose finalize
+`--all-complete` does NOT repair ledger rows: it never touches a run whose finalize
 ledger row could be stuck (see that flag's own note below for why).
 
 `--review-evidence` is **required**, with no default, mirroring
@@ -1313,14 +1306,13 @@ re-running `--all-complete` in a tight loop; check the query above for
 still-`pending`/`delivered` redrive rows first if in doubt.
 
 **Finalize-ledger repair (CHAOS-4409), `--run` only.** Before publishing,
-`--run` repairs the Python compatibility bridge's own finalize ledger row
+`--run` repairs the compatibility bridge's own finalize ledger row
 for the named run (`metric_compatibility_executions`, `worker_kind='daily'
-operation='finalize'`) — the same `/internal/worker/daily-metrics/v1/redrive`
-bulk-repair endpoint `daily-redrive` above already calls for partition rows,
-now scoped to `operations: ["finalize"]` (the request's `operations` field
-defaults to `["partition"]`, so `daily-redrive`'s own call is byte-for-byte
-unchanged and never touches a finalize row under its partition-scoped
-review evidence). Without this, a run whose finalize ledger row was stuck
+operation='finalize'`) — the same bulk ledger repair `daily-redrive` above
+already runs for partition rows, now scoped to the `finalize` operation (the
+repair's operations default to `partition`, so `daily-redrive`'s own repair is
+unchanged and never touches a finalize row under its partition-scoped review
+evidence). Without this, a run whose finalize ledger row was stuck
 `ambiguous`/stuck-`executing` from the original stranding answers
 `JobCancelError ambiguous_refused` on every redrive attempt, forever: the
 ledger's own `_reserve_execution` check refuses the identical execution

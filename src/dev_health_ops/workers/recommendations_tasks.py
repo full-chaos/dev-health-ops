@@ -285,7 +285,7 @@ def _daily_metrics_ready(org_id: str, day: Any) -> bool:
         return True
     if has_stuck_partition:
         # CHAOS-4319: a failed_permanent partition can never move again
-        # without a human /metric-executions/v1/{id}/repair call -- unlike
+        # without an operator running `dev-health-workerctl metrics execution-repair` -- unlike
         # plain 'failed' (River retries it), this specific run will NEVER
         # reach finalization_status='succeeded' on its own. Surfaced here,
         # not by changing this gate's return value: the existing contract
@@ -294,8 +294,8 @@ def _daily_metrics_ready(org_id: str, day: Any) -> bool:
         # without a human running SQL against daily_metrics_partitions.
         logger.warning(
             "Daily metrics fan-out run for org=%s day=%s has a failed_permanent "
-            "partition -- this run will not finalize without a human "
-            "/metric-executions/v1/{id}/repair call",
+            "partition -- this run will not finalize without an operator "
+            "running `dev-health-workerctl metrics execution-repair`",
             org_id,
             day,
         )

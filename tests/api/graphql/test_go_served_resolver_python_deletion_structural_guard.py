@@ -88,12 +88,36 @@ AI_RESOLVER_SOURCE = (
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "resolvers" / "ai.py"
 )
 
+WORKER_METRICS_SOURCE = (
+    ROOT / "src" / "dev_health_ops" / "api" / "internal" / "worker_metrics.py"
+)
+WORKER_AUTH_SOURCE = (
+    ROOT / "src" / "dev_health_ops" / "api" / "internal" / "worker_auth.py"
+)
+
 DELETED_GO_SERVED_RESOLVER_SYMBOLS: dict[Path, frozenset[str]] = {
     # A scheduler helper with no caller in src/.
     CAPACITY_QUERIES_SOURCE: frozenset({"discover_team_scopes"}),
     # securityOverview: only the function is deleted; the module stays for
     # securityAlerts and the shared filter builder.
     SECURITY_RESOLVER_SOURCE: frozenset({"resolve_security_overview"}),
+    # The operator repair and bulk-redrive routes: the Go workerctl verbs run
+    # those repairs natively, so the routes, their request models, their
+    # helpers and their repair-token authorizers are gone.
+    WORKER_METRICS_SOURCE: frozenset(
+        {
+            "repair_metric_execution",
+            "redrive_daily_metrics",
+            "_repair_execution",
+            "_repair_id",
+            "_bulk_redrive_ambiguous_executions",
+            "MetricExecutionRepairRequest",
+            "DailyMetricsRedriveRequest",
+        }
+    ),
+    WORKER_AUTH_SOURCE: frozenset(
+        {"authorize_metric_repair", "authorize_workgraph_repair"}
+    ),
     # experiments: the improve-opportunities resolver stays in the module.
     IMPROVE_RESOLVER_SOURCE: frozenset(
         {"resolve_experiments", "_stable_experiment_id", "_metric_from_card"}
@@ -258,6 +282,13 @@ DELETED_GO_SERVED_RESOLVER_MODULES: dict[str, Path] = {
     / "graphql"
     / "resolvers"
     / "ai.py",
+    # The workgraph operator repair route (its only route).
+    "workgraph repair route": ROOT
+    / "src"
+    / "dev_health_ops"
+    / "api"
+    / "internal"
+    / "worker_workgraph.py",
     # workGraphEdges, workGraphFlow and workGraphArtifacts.
     "work graph resolver": ROOT
     / "src"

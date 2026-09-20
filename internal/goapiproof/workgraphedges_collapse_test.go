@@ -190,3 +190,92 @@ func TestWorkGraphEdgesNonCutVariantsAreDeclared(t *testing.T) {
 		t.Fatalf("found %d of the two non-cut variants", seen)
 	}
 }
+
+// The order clause alone: every id, row and count agree between the planes,
+// only the candidate's order changes, so the plan's own decision is what a
+// reordered or mis-tied list must fail.
+func TestWorkGraphEdgesCollapse_OrderRuleDecidesAlone(t *testing.T) {
+	spec, err := SpecFor("workGraphEdges")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var shape *DuplicateCollapseLengthShape
+	for _, d := range spec.Parity.BaselineDefects {
+		if d.DuplicateCollapseLengthShape != nil && d.DuplicateCollapseLengthShape.OrderField != "" {
+			shape = d.DuplicateCollapseLengthShape
+		}
+	}
+	if shape == nil {
+		t.Fatal("no whole-list shape with an order rule is declared on workGraphEdges")
+	}
+	decode := func(edges []collapseEdge, total int) any {
+		return snapshotFromJSON(t, collapseBody(t, edges, total)).Data
+	}
+	// Two ids at one confidence, then a lower one.
+	ordered := []collapseEdge{{"edge-a", 0.9}, {"edge-b", 0.9}, {"edge-c", 0.5}}
+	base := []collapseEdge{ordered[0], ordered[0], ordered[1], ordered[2]}
+	cases := []struct {
+		name string
+		cand []collapseEdge
+		want bool
+	}{
+		{"confidence descending, ties ascending", ordered, true},
+		{"confidence ascending", []collapseEdge{ordered[2], ordered[0], ordered[1]}, false},
+		{"ties descending", []collapseEdge{ordered[1], ordered[0], ordered[2]}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			plan := buildDuplicateCollapseLengthPlan(shape, decode(base, 4), decode(c.cand, 3))
+			if plan.applies != c.want {
+				t.Fatalf("applies = %v, want %v", plan.applies, c.want)
+			}
+		})
+	}
+}
+
+// The whole-list plan admits the list's own length finding and the total count
+// finding, each only when it applies, and admits nothing else beside them.
+func TestWorkGraphEdgesCollapse_PlanAdmitsOnlyLengthAndCount(t *testing.T) {
+	spec, err := SpecFor("workGraphEdges")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var shape *DuplicateCollapseLengthShape
+	for _, d := range spec.Parity.BaselineDefects {
+		if d.DuplicateCollapseLengthShape != nil && d.DuplicateCollapseLengthShape.CountPath != "" {
+			shape = d.DuplicateCollapseLengthShape
+		}
+	}
+	if shape == nil {
+		t.Fatal("no whole-list shape with a count path is declared on workGraphEdges")
+	}
+	decode := func(edges []collapseEdge, total int) any {
+		return snapshotFromJSON(t, collapseBody(t, edges, total)).Data
+	}
+	edges := collapseEdges(3)
+	dup := []collapseEdge{edges[0], edges[0], edges[1], edges[2]}
+	lengthFinding := Finding{Kind: FindingMismatch, Path: "$.data.workGraphEdges.edges", Shape: ShapeLength}
+	countFinding := Finding{Kind: FindingMismatch, Path: "$.data.workGraphEdges.totalCount", Shape: ShapeValue}
+	otherFinding := Finding{Kind: FindingMismatch, Path: "$.data.workGraphEdges.pageInfo.hasNextPage", Shape: ShapeValue}
+
+	applies := buildDuplicateCollapseLengthPlan(shape, decode(dup, 4), decode(edges, 3))
+	if !applies.applies || !applies.admits(lengthFinding) || !applies.admits(countFinding) {
+		t.Fatalf("plan must apply and admit the length and count findings: applies=%v", applies.applies)
+	}
+	if applies.admits(otherFinding) {
+		t.Fatal("plan admitted a finding that is neither the list length nor the total count")
+	}
+
+	// A total count that is not its own list length leaves the count outside
+	// while the plan still applies to the length.
+	badCount := buildDuplicateCollapseLengthPlan(shape, decode(dup, 4), decode(edges, 9))
+	if !badCount.admits(lengthFinding) || badCount.admits(countFinding) {
+		t.Fatalf("a candidate count that is not its length must stay outside: length=%v count=%v", badCount.admits(lengthFinding), badCount.admits(countFinding))
+	}
+
+	// No duplicate physical row in the baseline: nothing to collapse, nothing admitted.
+	noDup := buildDuplicateCollapseLengthPlan(shape, decode(edges, 3), decode(edges, 3))
+	if noDup.applies || noDup.admits(lengthFinding) {
+		t.Fatal("plan applied to a baseline with no repeated id")
+	}
+}

@@ -135,6 +135,42 @@
         {"file": "cmd/query-api/internal/security/security_test.go", "test": "TestResolveOverview_ParsesAndScopes"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_symbols_are_not_redefined"}
       ]
+    },
+    {
+      "operation": "workGraphEdges",
+      "two_plane_ops_sha": "9b218f69f10796bfb747a1e0301edf5c29c4ba40",
+      "guards": [
+        {"file": "cmd/query-api/internal/workgraph/workgraph_golden_test.go", "test": "TestWorkGraphResolversMatchTheFrozenGolden"},
+        {"file": "cmd/query-api/internal/workgraph/workgraph_test.go", "test": "TestFetchDedupedEdgeRows_QueryShapeHasArgMaxCollapse"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
+      ]
+    },
+    {
+      "operation": "workGraphFlow",
+      "two_plane_ops_sha": "9b218f69f10796bfb747a1e0301edf5c29c4ba40",
+      "guards": [
+        {"file": "cmd/query-api/internal/workgraph/workgraph_golden_test.go", "test": "TestWorkGraphResolversMatchTheFrozenGolden"},
+        {"file": "cmd/query-api/internal/workgraph/flow_test.go", "test": "TestResolveFlow_AggregatesInflowAndOutflowPerNodeType"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
+      ]
+    },
+    {
+      "operation": "workGraphArtifacts",
+      "two_plane_ops_sha": "9b218f69f10796bfb747a1e0301edf5c29c4ba40",
+      "guards": [
+        {"file": "cmd/query-api/internal/workgraph/workgraph_golden_test.go", "test": "TestWorkGraphResolversMatchTheFrozenGolden"},
+        {"file": "cmd/query-api/internal/workgraph/artifacts_evidence_tiebreak_integration_test.go", "test": "TestResolveArtifactsEvidenceMatchesPythonReaderLiteral"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
+      ]
+    },
+    {
+      "operation": "releaseImpact",
+      "two_plane_ops_sha": "9b218f69f10796bfb747a1e0301edf5c29c4ba40",
+      "guards": [
+        {"file": "cmd/query-api/internal/workgraph/workgraph_golden_test.go", "test": "TestWorkGraphResolversMatchTheFrozenGolden"},
+        {"file": "cmd/query-api/internal/workgraph/workgraph_test.go", "test": "TestFetchDedupedEdgeRows_QueryShapeHasArgMaxCollapse"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
+      ]
     }
   ]
 }

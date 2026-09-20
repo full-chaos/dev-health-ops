@@ -40,6 +40,18 @@ _QUERIES = {
         'query { securityOverview(orgId: "org-1") { kpis { openTotal } } }',
         None,
     ),
+    "workGraphEdges": (
+        'query { workGraphEdges(orgId: "org-1") { totalCount } }',
+        None,
+    ),
+    "workGraphFlow": (
+        'query { workGraphFlow(orgId: "org-1") { isPartial } }',
+        None,
+    ),
+    "workGraphArtifacts": (
+        'query { workGraphArtifacts(orgId: "org-1") { isPartial } }',
+        None,
+    ),
     "pr": (
         'query { pr(orgId: "org-1", id: "11111111-1111-1111-1111-111111111111#pr1") '
         "{ id } }",
@@ -113,6 +125,7 @@ def test_the_go_served_ledger_names_exactly_the_raising_fields() -> None:
     named_documents = {
         "catalogValues": "catalog",
         "acrRepositoryScopes": "catalog",
+        "releaseImpact": "workGraphEdges",
     }
     fields = {
         named_documents.get(entry["operation"], entry["operation"])

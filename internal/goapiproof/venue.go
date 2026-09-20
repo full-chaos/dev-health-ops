@@ -192,13 +192,23 @@ func (r AuthzRequirement) Satisfied(role string, superuser bool) bool {
 // package pins the two together.
 var dataHealthRequirement = AuthzRequirement{Roles: []string{"admin", "owner", "operator"}}
 
+// platformAdminRequirement mirrors producttelemetry.RequirePlatformAdmin: no
+// role satisfies it, only the superuser flag. That gate also refuses a
+// superuser whose request runs under an impersonation session; the venue
+// receipt records role and superuser only, so the requirement cannot express
+// that half (a named limit: a venue run authenticates with a login token,
+// which carries no impersonation session). A test in the producttelemetry
+// package pins the two together.
+var platformAdminRequirement = AuthzRequirement{}
+
 // operationAuthz names the operations whose Go route gates on more than a
 // read role. An operation absent here is NEVER venue-eligible.
 var operationAuthz = map[string]AuthzRequirement{
-	"connectorsDataHealth":  dataHealthRequirement,
-	"dataHealthIdentity":    dataHealthRequirement,
-	"mappingCoverageHealth": dataHealthRequirement,
-	"metricLineage":         dataHealthRequirement,
+	"productTelemetryPlatformDashboard": platformAdminRequirement,
+	"connectorsDataHealth":              dataHealthRequirement,
+	"dataHealthIdentity":                dataHealthRequirement,
+	"mappingCoverageHealth":             dataHealthRequirement,
+	"metricLineage":                     dataHealthRequirement,
 }
 
 // AuthzFor returns the declared requirement for operation.

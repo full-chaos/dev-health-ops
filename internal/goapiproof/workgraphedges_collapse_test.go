@@ -320,7 +320,9 @@ func TestWorkGraphEdgesCollapse_EveryCaseRefusesACutPage(t *testing.T) {
 				if shape.RequestLimit != limit {
 					t.Errorf("%s/%s sends limit %d but the whole-list declaration carries RequestLimit %d", operation, c.name, limit, shape.RequestLimit)
 				}
-				// Duplicated rows that reach the limit: a cut page.
+				// The baseline reaches the limit only through its duplicates (its
+				// distinct set is below the limit, its raw length is at it): the
+				// limit precondition refuses, the page may still be cut.
 				edges := collapseEdges(limit)
 				var base []collapseEdge
 				for _, e := range edges[:limit/2] {
@@ -357,5 +359,48 @@ func TestWorkGraphEdgesCollapse_EveryCaseRefusesACutPage(t *testing.T) {
 	// NODE_ID_VALID and SOURCE_TYPE_POPULATED (LIMIT_ONE carries no defects).
 	if carriers != 6 {
 		t.Fatalf("found %d requests carrying the whole-list declaration, want 6", carriers)
+	}
+}
+
+// The time axis: the two legs are read at different moments, so a merge or an
+// edge write can land between them. Every cell is decided on the id sets and the
+// rows, never on a raw row count.
+func TestWorkGraphEdgesCollapse_TimeAxisRows(t *testing.T) {
+	spec, err := SpecFor("releaseImpact")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var shape *DuplicateCollapseLengthShape
+	for _, d := range spec.Parity.BaselineDefects {
+		if d.DuplicateCollapseLengthShape != nil {
+			shape = d.DuplicateCollapseLengthShape
+		}
+	}
+	if shape == nil {
+		t.Fatal("releaseImpact declares no whole-list shape")
+	}
+	decode := func(edges []collapseEdge, total int) any {
+		return snapshotFromJSON(t, collapseBody(t, edges, total)).Data
+	}
+	edges := collapseEdges(4)
+	dup := []collapseEdge{edges[0], edges[0], edges[1], edges[2]}
+	cases := []struct {
+		name string
+		base []collapseEdge
+		cand []collapseEdge
+		want bool
+	}{
+		{"same moment: duplicates collapse", dup, edges[:3], true},
+		{"a merge ran before the baseline read: no repeated id, nothing to collapse", edges[:3], edges[:3], false},
+		{"an edge written after the baseline read: the candidate has an id the baseline lacks", dup, edges, false},
+		{"an edge written before the baseline read only: the baseline has an id the candidate lacks", dup, edges[:2], false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			plan := buildDuplicateCollapseLengthPlan(shape, decode(c.base, len(c.base)), decode(c.cand, len(c.cand)))
+			if plan.applies != c.want {
+				t.Fatalf("applies = %v, want %v", plan.applies, c.want)
+			}
+		})
 	}
 }

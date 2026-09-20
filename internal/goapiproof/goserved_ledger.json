@@ -189,6 +189,15 @@
         {"file": "cmd/query-api/internal/producttelemetry/producttelemetry_test.go", "test": "TestOrgDashboard_ScopeBindingsAndMapping"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_symbols_are_not_redefined"}
       ]
+    },
+    {
+      "operation": "compoundingRisk",
+      "two_plane_ops_sha": "8b08058f369cbe5415ebebb282c4fed5fac266c5",
+      "guards": [
+        {"file": "cmd/query-api/internal/compoundingrisk/resolve_test.go", "test": "TestTeamPoints_MatchesPythonCells"},
+        {"file": "cmd/query-api/internal/compoundingrisk/compoundingrisk_integration_test.go", "test": "TestRealClickHouse_RepoBreakout"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
+      ]
     }
   ]
 }

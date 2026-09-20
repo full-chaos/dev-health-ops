@@ -46,6 +46,10 @@ _QUERIES = {
         "{ sessionSummary { avgPagesViewed } } }",
         None,
     ),
+    "compoundingRisk": (
+        'query { compoundingRisk(orgId: "org-1") { orgId } }',
+        None,
+    ),
     "securityOverview": (
         'query { securityOverview(orgId: "org-1") { kpis { openTotal } } }',
         None,

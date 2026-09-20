@@ -75,6 +75,19 @@ AI_RESOLVER_SOURCE = (
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "resolvers" / "ai.py"
 )
 
+PRODUCT_TELEMETRY_RESOLVER_SOURCE = (
+    ROOT
+    / "src"
+    / "dev_health_ops"
+    / "api"
+    / "graphql"
+    / "resolvers"
+    / "product_telemetry.py"
+)
+PRODUCT_TELEMETRY_LOADER_SOURCE = (
+    ROOT / "src" / "dev_health_ops" / "api" / "product_telemetry" / "dashboard.py"
+)
+
 DELETED_GO_SERVED_RESOLVER_SYMBOLS: dict[Path, frozenset[str]] = {
     # A scheduler helper with no caller in src/.
     CAPACITY_QUERIES_SOURCE: frozenset({"discover_team_scopes"}),
@@ -90,6 +103,12 @@ DELETED_GO_SERVED_RESOLVER_SYMBOLS: dict[Path, frozenset[str]] = {
     IMPROVE_RESOLVER_SOURCE: frozenset(
         {"resolve_experiments", "_stable_experiment_id", "_metric_from_card"}
     ),
+    # productTelemetryDashboard: the platform dashboard resolver and the shared
+    # dataclasses stay; the organisation dashboard resolver and its loader go.
+    PRODUCT_TELEMETRY_RESOLVER_SOURCE: frozenset(
+        {"resolve_product_telemetry_dashboard"}
+    ),
+    PRODUCT_TELEMETRY_LOADER_SOURCE: frozenset({"load_product_telemetry_dashboard"}),
 }
 
 # label -> a module that must not exist on disk AT ALL.
@@ -194,6 +213,15 @@ DELETED_GO_SERVED_RESOLVER_MODULES: dict[str, Path] = {
     / "graphql"
     / "resolvers"
     / "bus_factor.py",
+    # compoundingRisk. The score computation stays in metrics/compounding_risk.py
+    # for the daily job; the SDL types stay in types/compounding_risk.py.
+    "compounding risk resolver": ROOT
+    / "src"
+    / "dev_health_ops"
+    / "api"
+    / "graphql"
+    / "resolvers"
+    / "compounding_risk.py",
     # workGraphEdges, workGraphFlow and workGraphArtifacts.
     "work graph resolver": ROOT
     / "src"
@@ -307,6 +335,8 @@ SDL_LOAD_BEARING_SYMBOLS: dict[str, frozenset[str]] = {
             "security_overview",
             "experiments",
             "ai_opportunities",
+            "product_telemetry_dashboard",
+            "compounding_risk",
             "work_graph_edges",
             "work_graph_flow",
             "work_graph_artifacts",
@@ -355,6 +385,8 @@ SDL_LOAD_BEARING_SYMBOLS: dict[str, frozenset[str]] = {
             "FeatureFlagRegistryResult",
             "FeatureFlagEventItem",
             "FeatureFlagEventsResult",
+            "ProductTelemetryDashboardType",
+            "ProductTelemetrySessionSummaryType",
         }
     ),
 }

@@ -44,6 +44,16 @@ _QUERIES = {
         'query { aiOpportunities(orgId: "org-1") { detectorReady } }',
         None,
     ),
+    "productTelemetryDashboard": (
+        'query { productTelemetryDashboard(orgId: "org-1", input: '
+        '{startDate: "2026-01-01", endDate: "2026-01-08"}) '
+        "{ sessionSummary { avgPagesViewed } } }",
+        None,
+    ),
+    "compoundingRisk": (
+        'query { compoundingRisk(orgId: "org-1") { orgId } }',
+        None,
+    ),
     "securityOverview": (
         'query { securityOverview(orgId: "org-1") { kpis { openTotal } } }',
         None,

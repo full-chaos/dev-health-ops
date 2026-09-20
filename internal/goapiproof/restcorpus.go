@@ -119,6 +119,13 @@ type RESTRequest struct {
 	// a corpus error, caught at startup, never discovered as an
 	// always-refused request in a live run.
 	IDBindings []RESTIDBinding
+
+	// BaselineTimeoutDeclared, when set, admits this request on the
+	// candidate's answer alone in a run whose baseline leg produced no
+	// response within its timeout -- see BaselineTimeoutDeclaration
+	// (restbaselinetimeout.go) for every condition and what is written.
+	// A baseline that answers leaves the request on the ordinary comparison.
+	BaselineTimeoutDeclared *BaselineTimeoutDeclaration
 }
 
 // RESTEndpointSpec is one REST route's committed corpus.
@@ -2042,10 +2049,13 @@ var flamePRIDBoundParity = Options{
 // explain's data.contributors/data.drivers on review_latency/deploy_freq/
 // churn/change_failure_rate's own team-scoped entries
 // (explainContributorsSubsetDefect/explainDriversSubsetDefect above).
-// NOT declared for home_team_scoped/opportunities_team_scoped's own GET
-// leg or work-units' own POST leg: the baseline leg on each currently
-// answers nothing at all (a request timeout, see each entry's own Timeout
-// field), so there is no live comparison to establish a declaration
+// home_team_scoped and work-units team_scoped (GET and POST) carry a
+// BaselineTimeoutDeclared (restbaselinetimeout.go): while the baseline leg
+// answers nothing within 180 s the request is admitted on the candidate's
+// non-empty answer alone, and while it answers the ordinary comparison runs.
+// NOT declared for opportunities_team_scoped's own GET leg: its baseline leg
+// currently answers nothing at all (a request timeout, see the entry's own
+// Timeout field), so there is no live comparison to establish a declaration
 // against, and none is guessed. quadrant's cycle_throughput_team_scoped
 // and flame/aggregated's two team_id entries bind a team COLUMN directly,
 // resolve no repositories, and are unaffected. investment/explain's
@@ -6441,6 +6451,11 @@ func ValidateRESTCorpus() error {
 			}
 			if req.Timeout < 0 {
 				return fmt.Errorf("goapiproof: REST corpus entry %q request %q declares a negative Timeout", operation, req.Name)
+			}
+			if req.BaselineTimeoutDeclared != nil {
+				if err := req.BaselineTimeoutDeclared.Validate(req); err != nil {
+					return fmt.Errorf("goapiproof: REST corpus entry %q request %q: %w", operation, req.Name, err)
+				}
 			}
 			if (req.DedupListPath == "") != (len(req.DedupKeyFields) == 0) {
 				return fmt.Errorf("goapiproof: REST corpus entry %q request %q sets DedupListPath and DedupKeyFields inconsistently -- both or neither", operation, req.Name)

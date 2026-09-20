@@ -239,6 +239,20 @@ var workUnitsTeamScopedParity = Options{
 	OrderInsensitiveLists: workUnitsTeamScopeOrderInsensitiveLists,
 }
 
+// workUnitsTeamBaselineTimeout is the declaration team_scoped (GET and POST)
+// carries: the reference plane's team scope reads user_metrics_daily one
+// repository id at a time and, for a team that owns real repositories, has not
+// answered within 180 s (see homeTeamBaselineTimeout for the same mechanism).
+// While it does not answer, the candidate's list is admitted alone only when it
+// holds at least one work unit. A baseline that answers voids the declaration
+// and workUnitsTeamScopeSubsetDefect's own comparison runs as before.
+var workUnitsTeamBaselineTimeout = &BaselineTimeoutDeclaration{
+	Ticket:        "CHAOS-6143",
+	Reason:        "the reference plane's team scope resolves the team's repositories from user_metrics_daily one id at a time (resolve_repo_ids_for_teams, api/queries/scopes.py) and does not answer within 180 s for a team that owns real repositories; the candidate resolves the team from team_repo_ownership (teamscope.RepoCondition). A baseline that answers inside the timeout voids this declaration and the ordinary comparison runs.",
+	MinTimeout:    180 * time.Second,
+	NonEmptyPaths: []string{"data"},
+}
+
 var workUnitsGetEndpointSpec = RESTEndpointSpec{
 	Method: "GET",
 	Path:   "/api/v1/work-units",
@@ -283,6 +297,8 @@ var workUnitsGetEndpointSpec = RESTEndpointSpec{
 			Parity:     workUnitsTeamScopedParity,
 			IDBindings: []RESTIDBinding{{Producer: "team_id", QueryParam: "scope_id"}},
 			Timeout:    180 * time.Second,
+
+			BaselineTimeoutDeclared: workUnitsTeamBaselineTimeout,
 			// Produces work_unit_id_team_scoped from this response's
 			// own bare JSON array of team-scoped work-unit records --
 			// the same shape as default_window's own work_unit_id
@@ -385,6 +401,9 @@ var workUnitsPostEndpointSpec = RESTEndpointSpec{
 			BodyMode:   RESTBodyModeJSON,
 			IDBindings: []RESTIDBinding{{Producer: "team_id", BodyPath: "filters.scope.ids"}},
 			Parity:     workUnitsTeamScopedParity,
+			Timeout:    180 * time.Second,
+
+			BaselineTimeoutDeclared: workUnitsTeamBaselineTimeout,
 		},
 		{
 			// repo scope via filters.what.repos -- the POST-only field

@@ -41,7 +41,7 @@ var SupportedPartitionRecomputeFamilies = []string{"repo_user_commit"}
 // permanently-deduped one (codex review, P1 -- see CompletePartition's own
 // doc comment on why the ordinary publish is a silent no-op here).
 //
-// Appended, not a replacement prefix (codex review, P2): the generation must
+// Appended, not a replacement prefix: the generation must
 // change for the recompute to be distinguishable from the succeeded run it
 // resets -- but Python's _LATEST_DAILY_METRICS_RUN_SQL
 // (workers/recommendations_tasks.py) finds a day's AUTHORITATIVE run via

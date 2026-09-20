@@ -149,12 +149,27 @@ type Variant struct {
 	// vice versa).
 	Parity Options
 
+	// KnownRefusal, when set, records that this case is expected NOT to
+	// compare: the planes differ by design and no declaration admits the
+	// difference. The case stays in the corpus so the record keeps showing the
+	// difference, and a change that makes it comparable is noticed. It never
+	// admits anything; it only documents.
+	KnownRefusal *KnownRefusal
+
 	// Instance, when set, marks a variant whose request needs one REAL
 	// identifier from the run (a repository that has alerts, a search term
 	// that matches an alert, ...). The run supplies it as
 	// `-instance-id <operation>.<variant>=<value>`; without one the variant
 	// is REFUSED by name, never sent with a guessed value.
 	Instance *VariantInstance
+}
+
+// KnownRefusal names why a corpus case is expected not to compare.
+type KnownRefusal struct {
+	// Ticket owns the difference.
+	Ticket string
+	// Reason states the difference in words.
+	Reason string
 }
 
 // VariantInstance describes the run-supplied identifier a Variant needs.
@@ -271,6 +286,14 @@ var operationSpecs = map[string]OperationSpec{
 		// the ruled semantics and Python's repo_patterns read is the declared
 		// baseline divergence; the Go behaviour is pinned by
 		// TestRealClickHouse_TeamBreakout in the compoundingrisk package.
+		// The same divergence reaches any request that names teamIds: an
+		// empty list (Python reads it as no filter and aggregates teams through
+		// teams.repo_patterns) and a team WITH stored rows (the rows agree, but
+		// the trend is built over the team's repo_patterns repositories on
+		// Python and over its owned repositories on Go). The web document sends
+		// no teamIds, so neither is reachable from it; both stay in the corpus
+		// as KNOWN refusals so the record keeps showing the difference and a
+		// later change that makes them comparable is noticed.
 		Variants: []Variant{
 			compoundingRiskRowsVariant("REPO_BREAKOUT", "REPO", map[string]any{"breakout": "REPO", "trendDays": 30}),
 			compoundingRiskRowsVariant("TEAM_BREAKOUT", "TEAM", map[string]any{"breakout": "TEAM", "trendDays": 30}),
@@ -278,14 +301,23 @@ var operationSpecs = map[string]OperationSpec{
 			compoundingRiskDayVariant("TEAM_DAY", "TEAM"),
 			compoundingRiskEmptyVariant("REPO_IDS_UNKNOWN", map[string]any{"breakout": "REPO", "repoIds": []any{"00000000-0000-0000-0000-000000000001"}, "trendDays": 30}),
 			compoundingRiskEmptyVariant("REPO_IDS_EMPTY", map[string]any{"breakout": "REPO", "repoIds": []any{}, "trendDays": 30}),
+			compoundingRiskKnownRefusalVariant("TEAM_IDS_EMPTY", map[string]any{"breakout": "TEAM", "teamIds": []any{}, "trendDays": 30}, nil),
+			compoundingRiskKnownRefusalVariant("TEAM_STORED", map[string]any{"breakout": "TEAM", "trendDays": 30},
+				&VariantInstance{
+					Kind: "a team id that has stored team-scope compounding-risk rows",
+					Bind: func(vars map[string]any, value string) {
+						vars["filter"].(map[string]any)["teamIds"] = []any{value}
+					},
+					EchoFor: func(value string) []ScopeEcho {
+						return []ScopeEcho{{List: "data.compoundingRisk.rows", Fields: []string{"scopeId", "scopeLabel"}, Value: value}}
+					},
+				}),
 			compoundingRiskEmptyVariant("TEAM_IDS_UNKNOWN", map[string]any{"breakout": "TEAM", "teamIds": []any{"team-abc-123"}, "trendDays": 30}),
-			compoundingRiskEmptyVariant("TEAM_IDS_EMPTY", map[string]any{"breakout": "TEAM", "teamIds": []any{}, "trendDays": 30}),
 			compoundingRiskInstanceVariant("REPO_VALID", "a repository id that has stored compounding-risk rows", "REPO", "repoIds"),
-			compoundingRiskInstanceVariant("TEAM_STORED", "a team id that has stored team-scope compounding-risk rows", "TEAM", "teamIds"),
 			compoundingRiskEmptyVariant("TEAM_AND_REPO_UNKNOWN", map[string]any{"breakout": "TEAM", "teamIds": []any{"team-abc-123"}, "repoIds": []any{"00000000-0000-0000-0000-000000000001"}, "trendDays": 30}),
-			compoundingRiskRowsVariant("TREND_ONE_DAY", "REPO", map[string]any{"breakout": "REPO", "trendDays": 1}),
+			compoundingRiskPinnedTrendVariant("TREND_ONE_DAY", 1),
 			compoundingRiskRowsVariant("TREND_CLAMPED_HIGH", "REPO", map[string]any{"breakout": "REPO", "trendDays": 1000}),
-			compoundingRiskRowsVariant("TREND_CLAMPED_LOW", "REPO", map[string]any{"breakout": "REPO", "trendDays": 0}),
+			compoundingRiskPinnedTrendVariant("TREND_CLAMPED_LOW", 0),
 		},
 	},
 	"busFactor": {
@@ -1680,4 +1712,30 @@ func experimentsRepoValidVariant() Variant {
 			},
 		},
 	}
+}
+
+// compoundingRiskPinnedTrendVariant reads the repo breakout on the last day of
+// the run's window with a trend window of trendDays days ending on it; pinning
+// the day keeps the case non-empty (the latest-day search over a window that
+// is only today finds no stored row).
+func compoundingRiskPinnedTrendVariant(name string, trendDays int) Variant {
+	return Variant{
+		Name: name,
+		Variables: func(orgID string, w Window) map[string]any {
+			return compoundingRiskVariables(orgID, map[string]any{"breakout": "REPO", "day": w.UntilDate, "trendDays": trendDays})
+		},
+		Parity: compoundingRiskRowsParity("REPO"),
+	}
+}
+
+const compoundingRiskTeamMappingReason = "a request that names teamIds resolves a team's repositories through team ownership on Go (the ruled semantics) and through teams.repo_patterns on Python: an empty list reads as no filter on Python, which then aggregates teams by repo_patterns, and a team with stored rows agrees on the rows but its trend is built over the team's repo_patterns repositories on Python (none when the column is empty) and over its owned repositories on Go"
+
+// compoundingRiskKnownRefusalVariant is a teamIds case that is expected not to
+// compare; it stays in the corpus as a recorded difference.
+func compoundingRiskKnownRefusalVariant(name string, filter map[string]any, instance *VariantInstance) Variant {
+	v := compoundingRiskVariant(name, filter)
+	v.Parity = compoundingRiskRowsParity("TEAM")
+	v.Instance = instance
+	v.KnownRefusal = &KnownRefusal{Ticket: "CHAOS-6108", Reason: compoundingRiskTeamMappingReason}
+	return v
 }

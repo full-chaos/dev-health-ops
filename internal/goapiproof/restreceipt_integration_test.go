@@ -170,3 +170,50 @@ func TestWriteREST_DeclaredDefectsRoundTripsThroughTheMigratedSchema(t *testing.
 		t.Fatalf("baseline_defect_declared = %v, want NULL (nil)", *declared)
 	}
 }
+
+// TestWriteREST_BaselineTimeoutReceiptSatisfiesTheEnablementPredicate writes the
+// receipt shape a request admitted under its BaselineTimeoutDeclared carries --
+// a cited mismatch with nothing outside the citation, no baseline body, the
+// declaration's ticket as the one baseline_defect entry -- through the real
+// writer and judges the stored row with the predicate the enablement readers
+// run. The same row with one difference outside the citation is not admitted.
+func TestWriteREST_BaselineTimeoutReceiptSatisfiesTheEnablementPredicate(t *testing.T) {
+	ctx := context.Background()
+	pool := startRegistryPostgres(t)
+	clause, err := EnablementProofClause("p", TargetModeCanary)
+	if err != nil {
+		t.Fatalf("EnablementProofClause: %v", err)
+	}
+	for _, cell := range []struct {
+		name    string
+		outside int
+		want    bool
+	}{
+		{"nothing outside the citation", 0, true},
+		{"one difference outside the citation", 1, false},
+	} {
+		t.Run(cell.name, func(t *testing.T) {
+			id, err := WriteRESTAtomic(ctx, pool, RESTReceipt{
+				Method: "POST", Path: "/api/v1/home", CandidateBuild: testCandidateBuild,
+				RequestIdentity: "rest-identity-timeout-" + cell.name, Stage: EnablementProofStage,
+				TerminalState: EnablementCitedMismatchState, CandidateResponseRef: "artifact://candidate/2",
+				OrgID: "70d529e0", ReviewEvidence: `{"baseline_timed_out_after":"180.0s"}`, RecordedBy: "goapiproof-integration-test",
+				ObservedAt: time.Now().UTC().Truncate(time.Microsecond), MeasurementRoute: RouteProof,
+				BaselineDefects: []string{"ABC-123"}, DeclaredDefects: []string{"ABC-123"},
+				DifferencesOutsideBaselineDefect: cell.outside, BuildBinding: EdgeBuildPresent,
+			})
+			if err != nil {
+				t.Fatalf("WriteRESTAtomic: %v", err)
+			}
+			var admitted bool
+			if err := pool.QueryRow(ctx,
+				`SELECT EXISTS (SELECT 1 FROM go_api_rest_proof_run AS p WHERE p.id = $1 AND `+clause+`)`, id,
+			).Scan(&admitted); err != nil {
+				t.Fatalf("judge the row: %v", err)
+			}
+			if admitted != cell.want {
+				t.Fatalf("EnablementProofClause admitted = %v, want %v", admitted, cell.want)
+			}
+		})
+	}
+}

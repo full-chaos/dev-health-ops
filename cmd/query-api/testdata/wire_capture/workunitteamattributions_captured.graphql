@@ -1,0 +1,17 @@
+query WorkUnitTeamAttributions($orgId: String!, $workUnitIds: [String!], $teamId: String) {
+  workUnitTeamAttributions(
+    orgId: $orgId
+    workUnitIds: $workUnitIds
+    teamId: $teamId
+  ) {
+    workUnitId
+    teamId
+    teamName
+    source
+    confidence
+    isPrimary
+    memberCount
+    evidence
+    __typename
+  }
+}

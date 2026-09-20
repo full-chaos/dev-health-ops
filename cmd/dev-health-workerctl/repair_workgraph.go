@@ -16,20 +16,16 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/repair"
 )
 
-// dispatchWorkgraph handles `workerctl workgraph ...` (CHAOS-5042): the
-// operator entry point for work_graph_execution_requests rows the Go worker
-// can never resolve on its own -- POST
-// /internal/worker/workgraph/v1/executions/{request_id}/repair
-// (worker_workgraph.py:429-523) is the ONLY way to move an unleased
+// dispatchWorkgraph handles `workerctl workgraph ...`: the operator entry
+// point for work_graph_execution_requests rows the Go worker can never resolve
+// on its own -- `workgraph repair` is the ONLY way to move an unleased
 // 'ambiguous' row (state AND ledger.state both 'ambiguous', claim_token/
-// lease_expires_at both NULL) forward; before this file, no Go caller ever
-// reached it and the row sat there until repaired by hand against the
-// database. Mirrors `metrics daily-redrive`'s CLI/auth/JSON-result
-// conventions (main.go's dispatchMetrics), and authenticates with the SAME
-// WORKER_METRIC_REPAIR_TOKEN -- chris ruling, CHAOS-5042 ("over-engineering"):
-// workgraph and metric-execution repair share ONE operator repair token,
-// not two distinct ones. worker_auth.py's authorize_workgraph_repair
-// delegates to authorize_metric_repair for exactly this reason.
+// lease_expires_at both NULL) forward; without it the row sits there until
+// repaired by hand against the database. It runs the repair as one Postgres
+// transaction on the coordinator role (internal/jobs/repair), after the
+// operator credential is authorized for `workers:operate`. Mirrors
+// `metrics daily-redrive`'s CLI/auth/JSON-result conventions (main.go's
+// dispatchMetrics).
 func dispatchWorkgraph(ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		return writeError(stderr, "invalid_request")

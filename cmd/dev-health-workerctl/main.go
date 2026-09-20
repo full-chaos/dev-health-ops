@@ -882,8 +882,8 @@ func dispatchMetrics(ctx context.Context, runtime *operatorRuntime, args []strin
 		// instant a redriven job reaches it, which Go classifies Permanent
 		// and re-terminalizes failed_permanent -- undoing this same pass's
 		// own reset. The ledger repair MUST land before any partition job
-		// publishes, not after, so this calls the Python bulk-redrive
-		// endpoint first, over every run this org+day window's runs (not
+		// publishes, not after, so this repairs the ledger through the
+		// coordinator role first, over every run this org+day window's runs (not
 		// just the ones with a currently-dispatchable partition -- a run
 		// can carry an ambiguous ledger row on a partition already
 		// terminalized failed_permanent, which step 2 below is about to

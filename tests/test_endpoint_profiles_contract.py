@@ -157,6 +157,12 @@ def test_inventory_row_count_matches_the_baseline():
     takes only the native reference-discovery service, never the bridge),
     and no Celery producer ever called the Python task this route invoked
     either, so nothing reaches this route any more.
+    Then -3 REST under a later change: the three operator repair routes
+    (`POST /internal/worker/metric-executions/v1/{id}/repair`, `POST
+    /internal/worker/daily-metrics/v1/redrive` and `POST /internal/worker/
+    workgraph/v1/executions/{id}/repair`) are deleted with their rows; the
+    Go `dev-health-workerctl` verbs run those repairs natively, so the rows
+    stand at 352 (296 REST + 56 GraphQL).
 
     MERGE HAZARD, recorded because it has now nearly landed silently more
     than once. Each change edited these same asserts, and each was correct
@@ -177,9 +183,9 @@ def test_inventory_row_count_matches_the_baseline():
     rows = inventory["rows"]
     rest = [r for r in rows if r["surface_kind"] == "rest"]
     graphql = [r for r in rows if r["surface_kind"] in _GRAPHQL_KINDS]
-    assert len(rest) == 299, len(rest)
+    assert len(rest) == 296, len(rest)
     assert len(graphql) == 56, len(graphql)
-    assert len(rows) == 355, len(rows)
+    assert len(rows) == 352, len(rows)
 
 
 def test_no_graphql_subscription_is_profiled():
@@ -235,7 +241,11 @@ def test_classification_summary_matches_the_baseline():
     # worker-sync route).
     # - 3 more: the three GraphQL subscription rows were removed with the
     # subscriptions themselves (recounted from the file).
-    assert len(protected) == 328, len(protected)
+    # - 3 more under a later change: the deleted operator repair rows
+    # (metric-executions/{id}/repair, daily-metrics/redrive and
+    # workgraph/executions/{id}/repair) were also protected (the operator
+    # repair token); the Go workerctl verbs own those operations now.
+    assert len(protected) == 325, len(protected)
     # 22 + the four fastapi doc routes + /metrics.
     assert len(public) == 27, len(public)
     assert len(protected) + len(public) == len(rows)

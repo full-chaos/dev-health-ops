@@ -143,11 +143,6 @@ spec:
         secretKeyRef:
           name: dev-health-ops-migrate
           key: POSTGRES_URI
-    - name: WORKER_METRIC_REPAIR_TOKEN
-      valueFrom:
-        secretKeyRef:
-          name: dev-health-ops
-          key: WORKER_METRIC_REPAIR_TOKEN
     command:
     - workerctl
     - metrics
@@ -243,7 +238,7 @@ Without `FINAL`, ClickHouse returns an arbitrary version of rows with the same `
 - **Admin-authored team-attribution overrides**: `identities.team_ids` and `teams.manual_members` (ClickHouse,
   not Postgres) -- written only through `/org/admin/identities` and the admin Identities screen /
   drift-approval flow, never by any sync/import path.
-- **Minted operator credentials**: `WORKER_METRIC_REPAIR_TOKEN`, `WORKER_OPERATOR_TOKEN`, and any other
+- **Minted operator credentials**: `WORKER_OPERATOR_TOKEN` and any other
   minted secret -- not sync-derived data. A wipe of the credential volume (`go_worker_operator_token`)
   requires re-minting; a stale cached operator token has already caused a real `authentication_failed` block
   during a redrive.

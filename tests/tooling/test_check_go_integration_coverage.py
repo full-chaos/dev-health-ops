@@ -214,7 +214,10 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # count. The planner still refuses when live discovery disagrees with the
     # manifest, and the named packages below pin set membership.
     total = _manifest_package_count()
-    assert f"{total} package(s) discovered, 0 denylisted, {total} will run" in result.stdout
+    assert (
+        f"{total} package(s) discovered, 0 denylisted, {total} will run"
+        in result.stdout
+    )
     # Name the package explicitly (SET MEMBERSHIP), not just the count --
     # a bare count is exactly what let CHAOS-4643's own literal drift
     # 31 -> 32 -> 33 unnoticed.

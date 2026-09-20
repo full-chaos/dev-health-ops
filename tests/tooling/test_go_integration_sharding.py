@@ -27,6 +27,7 @@ TEST_GO_CACHE = Path(tempfile.gettempdir()) / "chaos3141-go-sharding-test-cache"
 # does not change the workflow job cap or the Go test timeout.
 CHECK_GO_TIMEOUT_SECONDS = 120
 
+
 def _manifest_packages() -> set[str]:
     """Package keys of ci/go_integration_shards.tsv (one row per package).
 

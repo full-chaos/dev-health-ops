@@ -52,6 +52,10 @@
     "digest": "a31987266aad8c1e9eb7cb1b572cc45aecc417f566773e9b5ba6e1bf10ec1a94"
   },
   {
+    "operation": "experiments",
+    "digest": "133cf72191722912e8833ee46a1670c89d74c06dc9a174bfefb7c137fd74bfe5"
+  },
+  {
     "operation": "featureFlagEvents",
     "digest": "e5e5fd3aba6d00c5413407046dfa68acadeb72c6ff1bb5f40b983bd0ddc3b632"
   },

@@ -19,6 +19,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/complexitytimeseries"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/compoundingrisk"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/datahealth"
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/experiments"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/featureflags"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph/model"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/hotspots"
@@ -1134,7 +1135,18 @@ func (r *queryResolver) Recommendations(ctx context.Context, orgID string, team 
 
 // Experiments is the resolver for the experiments field.
 func (r *queryResolver) Experiments(ctx context.Context, orgID string, filters *model.FilterInput) (*model.ExperimentsResult, error) {
-	panic(fmt.Errorf("not implemented: Experiments - experiments"))
+	spanCtx, finish := startExperimentsSpan(ctx)
+	if err := requireOwnOrg(ctx, orgID); err != nil {
+		finish("denied", attribute.String("denial_reason", "org_mismatch_or_absent"))
+		return nil, err
+	}
+	result := experiments.Resolve(spanCtx, experiments.NewBuilder(r.ClickHouse), orgID, filters, time.Now().UTC())
+	if result.DerivedFromOpportunities {
+		finish("ok")
+	} else {
+		finish("degraded")
+	}
+	return result, nil
 }
 
 // AiImpactSummary is the resolver for the aiImpactSummary field. It reads

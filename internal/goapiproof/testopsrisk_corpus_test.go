@@ -1,6 +1,7 @@
 package goapiproof
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -28,6 +29,11 @@ func TestTestopsRiskDeltasAreDeclaredOnlyWhereTheRangePopulatesThem(t *testing.T
 		t.Fatalf("expected the base request and two variants, got %d", len(requests))
 	}
 	wantSpan := map[string]int{"SINGLE_DAY": 1, "WEEK": 7}
+	wantDeltas := map[string][]string{
+		"base":       {"data.testopsRisk.confidenceDelta", "data.testopsRisk.stabilityDelta"},
+		"SINGLE_DAY": nil,
+		"WEEK":       {"data.testopsRisk.confidenceDelta", "data.testopsRisk.dragDelta", "data.testopsRisk.stabilityDelta"},
+	}
 	deltas := []string{"data.testopsRisk.confidenceDelta", "data.testopsRisk.dragDelta", "data.testopsRisk.stabilityDelta"}
 	for _, r := range requests {
 		input := r.vars["input"].(map[string]any)
@@ -44,15 +50,20 @@ func TestTestopsRiskDeltasAreDeclaredOnlyWhereTheRangePopulatesThem(t *testing.T
 			t.Errorf("%s spans %d days, want %d", r.name, span, want)
 		}
 		declared := 0
+		var gotDeltas []string
 		for _, path := range deltas {
 			reason, isDeclared := r.opts.FloatTierB[path]
 			if !isDeclared {
 				continue
 			}
 			declared++
+			gotDeltas = append(gotDeltas, path)
 			if reason == "" {
 				t.Errorf("%s: %s is declared without a reason", r.name, path)
 			}
+		}
+		if strings.Join(gotDeltas, ",") != strings.Join(wantDeltas[r.name], ",") {
+			t.Errorf("%s declares deltas %v, want %v", r.name, gotDeltas, wantDeltas[r.name])
 		}
 		if span < 2 && declared != 0 {
 			t.Errorf("%s spans %d day(s) but declares %d delta(s) that are null by construction", r.name, span, declared)

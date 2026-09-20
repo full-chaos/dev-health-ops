@@ -271,6 +271,24 @@
         {"file": "cmd/query-api/internal/aianalytics/oracle_c_test.go", "test": "TestGroupC_MatchPythonResolvers"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_symbols_are_not_redefined"}
       ]
+    },
+    {
+      "operation": "securityAlerts",
+      "two_plane_ops_sha": "9d6512ef7ee24aaac9c293f7fdbb5ea52c36dab6",
+      "guards": [
+        {"file": "cmd/query-api/internal/security/security_test.go", "test": "TestBuildFilter_Enumeration"},
+        {"file": "cmd/query-api/internal/security/security_integration_test.go", "test": "TestRealClickHouse_Alerts"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
+      ]
+    },
+    {
+      "operation": "improveOpportunities",
+      "two_plane_ops_sha": "9d6512ef7ee24aaac9c293f7fdbb5ea52c36dab6",
+      "guards": [
+        {"file": "cmd/query-api/internal/aianalytics/oracle_d_test.go", "test": "TestOpportunityDetectors_MatchPythonDetectors"},
+        {"file": "cmd/query-api/internal/aianalytics/integration_d_test.go", "test": "TestRealClickHouse_AIDetectors"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
+      ]
     }
   ]
 }

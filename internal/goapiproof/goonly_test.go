@@ -200,7 +200,7 @@ func TestLedgerRejectsMalformedDocuments(t *testing.T) {
 
 func TestCitationConstructorRefusesAnythingTheLedgerDoesNotName(t *testing.T) {
 	ledger := defaultLedgerForTest(t)
-	for _, operation := range []string{"", "securityAlerts", "capacityforecast", "capacityForecast ", "GO-ONLY:x"} {
+	for _, operation := range []string{"", "aiOpportunities", "capacityforecast", "capacityForecast ", "GO-ONLY:x"} {
 		if _, err := NewGoOnlyCitation(ledger, operation); err == nil {
 			t.Errorf("a citation was built for %q", operation)
 		}
@@ -294,7 +294,7 @@ func TestThePrefixIsReservedForTheLedgersOwnCitation(t *testing.T) {
 		"own citation twice":                     {"capacityForecast", TerminalStateMismatch, []string{own, own}, false},
 		"lowercase claim":                        {"capacityForecast", TerminalStateMismatch, []string{strings.ToLower(own)}, false},
 		"blank-led claim":                        {"capacityForecast", TerminalStateMismatch, []string{" " + own}, false},
-		"operation not in the ledger":            {"securityAlerts", TerminalStateMismatch, []string{own}, false},
+		"operation not in the ledger":            {"aiOpportunities", TerminalStateMismatch, []string{own}, false},
 	} {
 		err := ValidateGoOnlyReceiptCitations(ledger, c.operation, c.state, c.citations)
 		if (err == nil) != c.ok {

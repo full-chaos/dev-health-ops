@@ -78,7 +78,6 @@ from .resolvers.dev_status_change import (
     resolve_dev_status_snapshot,
 )
 from .resolvers.dev_work_graph import resolve_dev_work_graph_neighbors
-from .resolvers.improve import resolve_improve_opportunities
 from .resolvers.product_telemetry import (
     resolve_product_telemetry_platform_dashboard,
 )
@@ -551,10 +550,7 @@ class Query:
         filters: SecurityAlertFilterInput | None = None,
         pagination: SecurityPaginationInput | None = None,
     ) -> SecurityAlertConnection:
-        from .resolvers.security import resolve_security_alerts
-
-        context = get_context(info)
-        return await resolve_security_alerts(context, org_id, filters, pagination)
+        _raise_served_by_query_api("securityAlerts", org_id, info)
 
     @strawberry.field(description="Aggregated security posture for the dashboard")
     async def security_overview(
@@ -878,8 +874,7 @@ class Query:
         limit: int = 10,
         window_days: int = 30,
     ) -> ImproveOpportunitiesResult:
-        context = get_context(info)
-        return await resolve_improve_opportunities(context, scope, limit, window_days)
+        _raise_served_by_query_api("improveOpportunities", "", info)
 
     @strawberry.field(
         description="AI governance coverage and recent policy violations."

@@ -100,7 +100,16 @@ DELETED_GO_SERVED_RESOLVER_SYMBOLS: dict[Path, frozenset[str]] = {
     CAPACITY_QUERIES_SOURCE: frozenset({"discover_team_scopes"}),
     # securityOverview: only the function is deleted; the module stays for
     # securityAlerts and the shared filter builder.
-    SECURITY_RESOLVER_SOURCE: frozenset({"resolve_security_overview"}),
+    # securityAlerts and improveOpportunities: both resolver modules are deleted
+    # (the modules ledger below keeps them from returning), and the symbols
+    # stay named here.
+    SECURITY_RESOLVER_SOURCE: frozenset(
+        {
+            "resolve_security_overview",
+            "resolve_security_alerts",
+            "_build_filter_clauses",
+        }
+    ),
     # The operator repair and bulk-redrive routes: the Go workerctl verbs run
     # those repairs natively, so the routes, their request models, their
     # helpers and their repair-token authorizers are gone.
@@ -118,9 +127,13 @@ DELETED_GO_SERVED_RESOLVER_SYMBOLS: dict[Path, frozenset[str]] = {
     WORKER_AUTH_SOURCE: frozenset(
         {"authorize_metric_repair", "authorize_workgraph_repair"}
     ),
-    # experiments: the improve-opportunities resolver stays in the module.
     IMPROVE_RESOLVER_SOURCE: frozenset(
-        {"resolve_experiments", "_stable_experiment_id", "_metric_from_card"}
+        {
+            "resolve_experiments",
+            "_stable_experiment_id",
+            "_metric_from_card",
+            "resolve_improve_opportunities",
+        }
     ),
     # productTelemetryDashboard: the platform dashboard resolver and the shared
     # dataclasses stay; the organisation dashboard resolver and its loader go.
@@ -264,6 +277,10 @@ DELETED_GO_SERVED_RESOLVER_MODULES: dict[str, Path] = {
     / "graphql"
     / "resolvers"
     / "bus_factor.py",
+    # securityAlerts (the securityOverview function went earlier).
+    "security alerts resolver": SECURITY_RESOLVER_SOURCE,
+    # improveOpportunities (the experiments functions went earlier).
+    "improve opportunities resolver": IMPROVE_RESOLVER_SOURCE,
     # compoundingRisk. The score computation stays in metrics/compounding_risk.py
     # for the daily job; the SDL types stay in types/compounding_risk.py.
     "compounding risk resolver": ROOT
@@ -338,7 +355,16 @@ SDL_LOAD_BEARING_SOURCES: tuple[Path, ...] = (
 )
 
 SDL_LOAD_BEARING_SYMBOLS: dict[str, frozenset[str]] = {
-    "improve.py": frozenset({"Experiment", "ExperimentsResult", "ExperimentStatus"}),
+    "improve.py": frozenset(
+        {
+            "Experiment",
+            "ExperimentsResult",
+            "ExperimentStatus",
+            "ImproveOpportunity",
+            "ImproveOpportunityKind",
+            "ImproveOpportunitiesResult",
+        }
+    ),
     "ai.py": frozenset(
         {
             "AIOpportunitiesResult",
@@ -404,6 +430,8 @@ SDL_LOAD_BEARING_SYMBOLS: dict[str, frozenset[str]] = {
             "ai_opportunities",
             "product_telemetry_dashboard",
             "compounding_risk",
+            "security_alerts",
+            "improve_opportunities",
             "ai_impact_summary",
             "ai_comparison",
             "ai_review_load",
@@ -460,6 +488,9 @@ SDL_LOAD_BEARING_SYMBOLS: dict[str, frozenset[str]] = {
             "FeatureFlagRegistryResult",
             "FeatureFlagEventItem",
             "FeatureFlagEventsResult",
+            "SecurityAlertNode",
+            "SecurityAlertEdge",
+            "SecurityAlertConnection",
             "ProductTelemetryDashboardType",
             "ProductTelemetrySessionSummaryType",
         }

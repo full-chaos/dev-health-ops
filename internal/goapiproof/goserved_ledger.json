@@ -99,6 +99,42 @@
         {"file": "cmd/query-api/internal/workgraph/pr_test.go", "test": "TestParsePRDetailID"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
       ]
+    },
+    {
+      "operation": "catalogValues",
+      "two_plane_ops_sha": "fb24ec18c004798b1e99e1907f80fafe0dd12f25",
+      "guards": [
+        {"file": "cmd/query-api/internal/analytics/catalog_golden_test.go", "test": "TestCatalogMatchesTheFrozenGolden"},
+        {"file": "cmd/query-api/internal/analytics/catalog_test.go", "test": "TestCanonicalRepositoryValues"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
+      ]
+    },
+    {
+      "operation": "acrRepositoryScopes",
+      "two_plane_ops_sha": "fb24ec18c004798b1e99e1907f80fafe0dd12f25",
+      "guards": [
+        {"file": "cmd/query-api/internal/analytics/catalog_golden_test.go", "test": "TestCatalogMatchesTheFrozenGolden"},
+        {"file": "cmd/query-api/internal/analytics/catalog_test.go", "test": "TestCanonicalRepositoryValues"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
+      ]
+    },
+    {
+      "operation": "busFactor",
+      "two_plane_ops_sha": "fb24ec18c004798b1e99e1907f80fafe0dd12f25",
+      "guards": [
+        {"file": "cmd/query-api/internal/busfactor/busfactor_golden_test.go", "test": "TestBusFactorMatchesTheFrozenGolden"},
+        {"file": "cmd/query-api/internal/busfactor/busfactor_test.go", "test": "TestTiebreaks_DoNotDependOnRowOrder"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
+      ]
+    },
+    {
+      "operation": "securityOverview",
+      "two_plane_ops_sha": "fb24ec18c004798b1e99e1907f80fafe0dd12f25",
+      "guards": [
+        {"file": "cmd/query-api/internal/security/secoverview_golden_test.go", "test": "TestSecurityOverviewMatchesTheFrozenGolden"},
+        {"file": "cmd/query-api/internal/security/security_test.go", "test": "TestResolveOverview_ParsesAndScopes"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_symbols_are_not_redefined"}
+      ]
     }
   ]
 }

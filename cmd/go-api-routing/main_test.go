@@ -13,6 +13,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -191,7 +193,7 @@ func TestSplitVerbKeepsTheFlatPreVerbFormWorkingAsRepoint(t *testing.T) {
 }
 
 func TestSplitVerbTakesAnExplicitVerbOffTheFront(t *testing.T) {
-	for _, want := range []string{"repoint", "enable", "disable", "status"} {
+	for _, want := range everyVerb(t) {
 		verb, rest := splitVerb([]string{want, "-dry-run"})
 		if verb != want {
 			t.Fatalf("splitVerb = %q, want %q", verb, want)
@@ -381,6 +383,9 @@ func TestEveryVerbRefusesItsOwnMissingPreconditions(t *testing.T) {
 		"repoint with no provenance":      {[]string{"repoint"}, "-recorded-by"},
 		"repoint with no postgres":        {[]string{"repoint", "-recorded-by", "w", "-review-evidence", "y"}, "-postgres-uri"},
 		"repoint with no credential":      {[]string{"repoint", "-recorded-by", "w", "-review-evidence", "y", "-postgres-uri", "postgres://x"}, bearerEnvVar},
+		"carry with no provenance":        {[]string{"carry"}, "-recorded-by"},
+		"carry with no postgres":          {[]string{"carry", "-recorded-by", "w", "-review-evidence", "y"}, "-postgres-uri"},
+		"carry with no credential":        {[]string{"carry", "-recorded-by", "w", "-review-evidence", "y", "-postgres-uri", "postgres://x"}, bearerEnvVar},
 	} {
 		t.Run(name, func(t *testing.T) {
 			err := run(testCase.argv)
@@ -519,7 +524,7 @@ func TestStatusReportsAnUnusableEnvURLInsteadOfRefusing(t *testing.T) {
 // script checking "did that succeed" after asking a verb what it does saw
 // a refusal for asking a question.
 func TestVerbHelpFlagExitsZeroLikeTopLevelHelp(t *testing.T) {
-	for _, verb := range []string{"enable", "disable", "repoint", "status"} {
+	for _, verb := range everyVerb(t) {
 		for _, flag := range []string{"-h", "-help"} {
 			out, errOut, err := captureVerb(t, verb, flag)
 			if err != nil {
@@ -1090,18 +1095,34 @@ func TestToReportOperationSurfacesDeployedDigestDisagreement(t *testing.T) {
 		t.Fatal("an UNKNOWN reachable state must still name why (r6 observability (6))")
 	}
 
-	// A SCHEMA-level disagreement must also force
-	// reachable=false, even when the per-operation document digest still
-	// happens to agree -- `enable`'s preflight 2 (schema) refuses BEFORE
-	// preflight 3 (per-operation document digest) ever runs, so nothing
-	// is writable once the schemas disagree, regardless of what an
-	// individual operation's digest says.
+	// CORRECTED (r1 F1): a SCHEMA-level disagreement between THIS BINARY
+	// and the deployed process must NOT force reachable=false.
+	//
+	// `base` here is a MATCH row -- and, since the classification above
+	// it now runs against the DEPLOYED digest, MATCH means the deployed
+	// process reads this row. A real request IS served by Go. The old
+	// assertion below read `reachable:false` for exactly those rows, and
+	// it fired on every live row for the whole duration of a `carry`
+	// window, where a tools image built from the commit about to roll
+	// differs from the deployed one BY DESIGN.
+	//
+	// The schema difference is a fact about WRITES from this binary, and
+	// it is still reported -- `planes_agree:false`, the banner, and the
+	// reason string below all carry it. What it is not is a claim about
+	// what the edge dispatches.
 	schemaMismatchButDigestAgrees := toReportOperation(base, map[string]string{"flowMatrix": "catalog-digest"}, false, true)
 	if schemaMismatchButDigestAgrees.DeployedDigestState != "AGREE" {
 		t.Fatalf("deployed_digest_state = %q, want AGREE (the per-operation digest itself still matches)", schemaMismatchButDigestAgrees.DeployedDigestState)
 	}
-	if schemaMismatchButDigestAgrees.Reachable == nil || *schemaMismatchButDigestAgrees.Reachable {
-		t.Fatalf("reachable must be false under a schema mismatch even when the per-operation document digest agrees, got %v", schemaMismatchButDigestAgrees.Reachable)
+	if schemaMismatchButDigestAgrees.Reachable == nil || !*schemaMismatchButDigestAgrees.Reachable {
+		t.Fatalf("a row the DEPLOYED process reads must stay reachable=true when only THIS BINARY's SDL differs, got %v", schemaMismatchButDigestAgrees.Reachable)
+	}
+	// The reason must still NAME the write hazard, or the fact has been
+	// dropped rather than reclassified -- which is the failure mode this
+	// correction must not introduce.
+	if schemaMismatchButDigestAgrees.ReachableReason == nil ||
+		!strings.Contains(*schemaMismatchButDigestAgrees.ReachableReason, "would write at a digest nothing is reading") {
+		t.Fatalf("the schema-mismatch row must still name the write hazard in its reason, got %v", schemaMismatchButDigestAgrees.ReachableReason)
 	}
 
 	// A row this binary's OWN classification
@@ -1349,7 +1370,7 @@ func TestNoVerbsUsageTextEverPrintsTheDSN(t *testing.T) {
 	const secret = "hunter2-not-a-real-password"
 	t.Setenv("POSTGRES_URI", "postgresql://postgres:"+secret+"@db.internal:5432/devhealth")
 
-	for _, verb := range []string{"enable", "disable", "repoint", "status"} {
+	for _, verb := range everyVerb(t) {
 		t.Run(verb, func(t *testing.T) {
 			// -h makes flag print usage and, under ContinueOnError, return
 			// ErrHelp instead of exiting the test binary.
@@ -1583,7 +1604,7 @@ func TestNoRealVerbsUsageTextEverPrintsTheDSN(t *testing.T) {
 	t.Setenv("POSTGRES_URI", "postgresql://postgres:"+secret+"@db.internal:5432/devhealth")
 	t.Setenv(bearerEnvVar, "")
 
-	for _, verb := range []string{"enable", "disable", "repoint", "status"} {
+	for _, verb := range everyVerb(t) {
 		t.Run(verb, func(t *testing.T) {
 			_, usage, _ := captureVerb(t, verb, "-h")
 			if usage == "" {
@@ -1602,5 +1623,176 @@ func TestNoRealVerbsUsageTextEverPrintsTheDSN(t *testing.T) {
 				t.Fatalf("%s usage text no longer names %s, so an operator cannot tell where the DSN comes from:\n%s", verb, postgresURIEnvVar, usage)
 			}
 		})
+	}
+}
+
+// everyVerb is the list of verbs this binary dispatches, READ FROM the
+// usage text rather than typed here.
+//
+// Four separate class-wide guards in this file -- help exits zero, no
+// usage text prints the DSN, an unconsumed operand is refused, splitVerb
+// takes the verb off the front -- each carried their own hand-typed list
+// of verb names. A verb added to run() and to usage but forgotten in one
+// of those lists is not covered by that guard, silently, and the list
+// that was forgotten is the one nobody looks at again. Deriving the list
+// from the usage text makes "a new verb" a thing that cannot be half-
+// added: it either appears in the usage block every verb list now comes
+// from, or TestEveryDispatchedVerbIsListedInUsage fails.
+func everyVerb(t *testing.T) []string {
+	t.Helper()
+	verbs := verbsInUsage()
+	if len(verbs) < 4 {
+		t.Fatalf("parsed %v from the usage text, which cannot be the whole verb set -- this helper is not reading what it thinks it is", verbs)
+	}
+	return verbs
+}
+
+func verbsInUsage() []string {
+	var verbs []string
+	lines := strings.Split(usage, "\n")
+	inVerbs := false
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "verbs:" {
+			inVerbs = true
+			continue
+		}
+		if !inVerbs {
+			continue
+		}
+		if strings.TrimSpace(line) == "" {
+			break
+		}
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			break
+		}
+		verbs = append(verbs, fields[0])
+	}
+	sort.Strings(verbs)
+	return verbs
+}
+
+// A verb run() answers but usage never mentions is a verb no class-wide
+// guard in this file covers, because every one of those lists is derived
+// from the usage text. The dispatch table is read from this package's own
+// source, so adding a case without a usage line fails here.
+func TestEveryDispatchedVerbIsListedInUsage(t *testing.T) {
+	source, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	listed := map[string]bool{}
+	for _, verb := range verbsInUsage() {
+		listed[verb] = true
+	}
+	// The dispatch switch's own cases, excluding the help aliases run()
+	// handles as one case.
+	dispatched := regexp.MustCompile(`(?m)^\tcase "([a-z-]+)":`).FindAllStringSubmatch(string(source), -1)
+	if len(dispatched) == 0 {
+		t.Fatal("found no dispatch cases in main.go, so this test proves nothing")
+	}
+	for _, match := range dispatched {
+		verb := match[1]
+		switch verb {
+		case "help", "-h", "--help":
+			continue
+		}
+		if !listed[verb] {
+			t.Fatalf("run() dispatches %q but the usage text does not list it -- every class-wide verb guard in this file is derived from that list, so the verb would be silently unguarded", verb)
+		}
+	}
+}
+
+// A sub-millisecond -timeout must NEVER render as "0": Postgres reads
+// `statement_timeout = 0` as no timeout at all, so truncation here would
+// silently turn the tightest bound an operator can ask for into no bound
+// whatsoever -- the flag meaning its own opposite, on exactly the values
+// nobody inspects.
+func TestConnectPostgresFloorsASubMillisecondTimeout(t *testing.T) {
+	for _, testCase := range []struct {
+		name    string
+		timeout time.Duration
+		want    string
+	}{
+		{"one nanosecond", time.Nanosecond, "1"},
+		{"just under a millisecond", 999 * time.Microsecond, "1"},
+		{"exactly a millisecond", time.Millisecond, "1"},
+		{"a millisecond and a half", 1500 * time.Microsecond, "1"},
+		{"the default", 30 * time.Second, "30000"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			params := statementBoundRuntimeParams(testCase.timeout)
+			// BOTH parameters, every time: one of them missing is a bound
+			// that covers a slow query but not a lock wait, or the other
+			// way round, and the gap only shows under contention.
+			for _, name := range []string{"statement_timeout", "lock_timeout"} {
+				if params[name] != testCase.want {
+					t.Fatalf("%s = %q, want %q", name, params[name], testCase.want)
+				}
+				if params[name] == "0" {
+					t.Fatalf("%s rendered as 0, which Postgres reads as NO timeout", name)
+				}
+			}
+		})
+	}
+}
+
+// r2 F1: when the deployed plane disagrees on BOTH the schema digest and
+// this operation's document digest, the REFUSING answer must win.
+//
+// The schema case is the only one of the three that admits, and it used
+// to be evaluated first, so a row reported `reachable:true` while
+// `deployed_digest_state` on the same row read `MISMATCH` -- a claim and
+// its own contradiction, side by side. Each mismatch alone was covered;
+// their combination was not, which is the whole lesson: a refusal must
+// never be reachable only by the absence of a weaker admission.
+func TestReachabilityRefusalsWinOverTheSchemaMismatchAdmission(t *testing.T) {
+	base := goapiproof.OperationStatus{
+		Operation:      "flowMatrix",
+		DocumentDigest: "catalog-digest",
+		DigestState:    goapiproof.DigestMatch,
+		Mode:           "canary",
+	}
+	for _, testCase := range []struct {
+		name       string
+		deployed   map[string]string
+		wantState  string
+		wantReason string
+	}{
+		{
+			name:       "schema mismatch AND a different deployed document digest",
+			deployed:   map[string]string{"flowMatrix": "some-other-digest"},
+			wantState:  "MISMATCH",
+			wantReason: "DIFFERENT document digest",
+		},
+		{
+			name:       "schema mismatch AND the operation unregistered",
+			deployed:   map[string]string{"somethingElse": "x"},
+			wantState:  "UNREGISTERED",
+			wantReason: "does not register this operation at all",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			reported := toReportOperation(base, testCase.deployed, false, true)
+			if reported.DeployedDigestState != testCase.wantState {
+				t.Fatalf("deployed_digest_state = %q, want %q", reported.DeployedDigestState, testCase.wantState)
+			}
+			if reported.Reachable == nil || *reported.Reachable {
+				t.Fatalf("reachable must be false when the deployed plane itself would refuse this operation, got %v", reported.Reachable)
+			}
+			// And the reason must name the DOCUMENT fact, not the schema
+			// one: an operator told "your SDL differs" would go and
+			// rebuild, when the actual problem is this operation.
+			if reported.ReachableReason == nil || !strings.Contains(*reported.ReachableReason, testCase.wantReason) {
+				t.Fatalf("the reason must name the document-level cause (%q), got %v", testCase.wantReason, reported.ReachableReason)
+			}
+		})
+	}
+
+	// CONTROL: with the document digest AGREEING, the schema mismatch
+	// alone still admits -- the r1 fix is not undone by the r2 one.
+	agreeing := toReportOperation(base, map[string]string{"flowMatrix": "catalog-digest"}, false, true)
+	if agreeing.Reachable == nil || !*agreeing.Reachable {
+		t.Fatalf("a row the deployed process reads and registers identically must stay reachable=true, got %v", agreeing.Reachable)
 	}
 }

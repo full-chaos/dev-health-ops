@@ -155,6 +155,11 @@ func TestRegisteredCapturedDocuments_MatchCapturedWireFixtures(t *testing.T) {
 		{"testdata/wire_capture/busfactor_captured.graphql", registeredBusFactorDocument},
 		{"testdata/wire_capture/aiopportunities_captured.graphql", registeredAiOpportunitiesDocument},
 		{"testdata/wire_capture/improveopportunities_captured.graphql", registeredImproveOpportunitiesDocument},
+		{"testdata/wire_capture/aigovernancesummary_captured.graphql", registeredAiGovernanceSummaryDocument},
+		{"testdata/wire_capture/aiworkflowdrilldown_captured.graphql", registeredAiWorkflowDrilldownDocument},
+		{"testdata/wire_capture/airiskbreakdown_captured.graphql", registeredAiRiskBreakdownDocument},
+		{"testdata/wire_capture/aiattributedprs_captured.graphql", registeredAiAttributedPrsDocument},
+		{"testdata/wire_capture/aiattributionoverview_captured.graphql", registeredAiAttributionOverviewDocument},
 		{"testdata/wire_capture/saved_reports_captured.graphql", registeredSavedReportsDocument},
 		{"testdata/wire_capture/saved_report_captured.graphql", registeredSavedReportDocument},
 		{"testdata/wire_capture/report_runs_captured.graphql", registeredReportRunsDocument},
@@ -163,6 +168,7 @@ func TestRegisteredCapturedDocuments_MatchCapturedWireFixtures(t *testing.T) {
 		{"testdata/wire_capture/aireviewload_captured.graphql", registeredAiReviewLoadDocument},
 		{"testdata/wire_capture/compoundingrisk_captured.graphql", registeredCompoundingRiskDocument},
 		{"testdata/wire_capture/releaseimpact_captured.graphql", registeredReleaseImpactDocument},
+		{"testdata/wire_capture/testopsrisk_captured.graphql", registeredTestopsRiskDocument},
 	} {
 		captured, err := os.ReadFile(c.fixture)
 		if err != nil {

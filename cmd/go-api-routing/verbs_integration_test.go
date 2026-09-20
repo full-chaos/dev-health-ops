@@ -897,13 +897,19 @@ func TestStatusReachableDegradesOnSchemaMismatchAndOnAnUnreachableGoPlane(t *tes
 	type reportShape struct {
 		PlanesAgree *bool `json:"planes_agree"`
 		Operations  []struct {
-			Operation string `json:"operation"`
-			Reachable *bool  `json:"reachable"`
+			Operation      string   `json:"operation"`
+			Reachable      *bool    `json:"reachable"`
+			DigestState    string   `json:"digest_state"`
+			StaleDigests   []string `json:"stale_digests"`
+			PendingDigests []string `json:"pending_digests"`
 		} `json:"operations"`
 	}
 	findOperation := func(t *testing.T, jsonOut string) *struct {
-		Operation string `json:"operation"`
-		Reachable *bool  `json:"reachable"`
+		Operation      string   `json:"operation"`
+		Reachable      *bool    `json:"reachable"`
+		DigestState    string   `json:"digest_state"`
+		StaleDigests   []string `json:"stale_digests"`
+		PendingDigests []string `json:"pending_digests"`
 	} {
 		t.Helper()
 		var report reportShape
@@ -919,10 +925,23 @@ func TestStatusReachableDegradesOnSchemaMismatchAndOnAnUnreachableGoPlane(t *tes
 		return nil
 	}
 
-	// --- Schema mismatch: the deployed plane serves a DIFFERENT
-	// schema_digest, but happens to still agree on THIS operation's
-	// document digest -- proving the downgrade is not just piggybacking
-	// on the existing document-digest check.
+	// --- Schema mismatch, CORRECTED (r1 F1). The deployed plane serves a
+	// DIFFERENT schema_digest and still agrees on this operation's
+	// document digest. The row in the table sits at THIS BINARY's digest.
+	//
+	// What that state IS: the pre-roll window `carry` exists to create.
+	// The row is not live and not dead -- it is waiting for the image
+	// this binary was built from. `status` must say PENDING, and must not
+	// say STALE (which claims nothing will ever read it) and must not say
+	// reachable=true (which claims a request is served by Go right now).
+	//
+	// The OLD assertions here demanded `reachable:false` plus
+	// `PROOF=MISMATCH` for the *schema* difference alone, applied to
+	// whatever row was found. Both were the same mistake in different
+	// columns: they treated THIS BINARY's SDL as the authority on what
+	// the deployed process is doing. The row the deployed process
+	// actually reads is covered by its own case below, which is the one
+	// that was inverted in production terms.
 	mismatchedServer := startQueryAPI(t, "sha256:"+strings.Repeat("f", 64), map[string]string{verbTestOperation: digest})
 	schemaJSONOut, _, err := captureVerb(t, "status", "-registry-url", mismatchedServer.URL+"/registry", "-postgres-uri", dsn, "-catalog", catalogPath, "-json")
 	if err != nil {
@@ -930,16 +949,18 @@ func TestStatusReachableDegradesOnSchemaMismatchAndOnAnUnreachableGoPlane(t *tes
 	}
 	schemaOperation := findOperation(t, schemaJSONOut)
 	if schemaOperation.Reachable == nil || *schemaOperation.Reachable {
-		t.Fatalf("reachable must be false (known, not unknown) under a schema mismatch, got %v", schemaOperation.Reachable)
+		t.Fatalf("a row at a digest the deployed process does NOT read must be reachable=false, got %v", schemaOperation.Reachable)
+	}
+	if schemaOperation.DigestState != "PENDING" {
+		t.Fatalf("a row at THIS BINARY's digest while a different digest is deployed is PENDING, not %q -- STALE claims nothing will ever read it", schemaOperation.DigestState)
+	}
+	if len(schemaOperation.PendingDigests) != 1 {
+		t.Fatalf("the pending row's own digest must be named, got %v", schemaOperation.PendingDigests)
+	}
+	if len(schemaOperation.StaleDigests) != 0 {
+		t.Fatalf("a pending row must NOT also be reported stale, got %v", schemaOperation.StaleDigests)
 	}
 
-	// The TEXT report's PROOF
-	// column must degrade to MISMATCH under a schema-level disagreement
-	// too -- not only a per-operation document-digest one -- even though
-	// DeployedDigestState reads AGREE (the per-operation digest itself
-	// still matches; only the SCHEMA disagrees). A mutant dropping
-	// `|| schemaMismatch` from that column's condition would print "ok"
-	// under a `[MISMATCH]` banner with nothing here to catch it.
 	schemaTextOut, _, err := captureVerb(t, "status", "-registry-url", mismatchedServer.URL+"/registry", "-postgres-uri", dsn, "-catalog", catalogPath)
 	if err != nil {
 		t.Fatalf("status must never refuse: %v", err)
@@ -947,13 +968,83 @@ func TestStatusReachableDegradesOnSchemaMismatchAndOnAnUnreachableGoPlane(t *tes
 	if !strings.Contains(schemaTextOut, "[MISMATCH]") {
 		t.Fatalf("the top-of-report schema banner must say MISMATCH:\n%s", schemaTextOut)
 	}
+	// The banner must go on to say what the difference COSTS -- writes
+	// from this binary landing at a digest nothing reads. Dropping that
+	// sentence is how the schema difference would become invisible once
+	// it no longer downgrades the per-row columns.
+	if !strings.Contains(schemaTextOut, "would write at") {
+		t.Fatalf("the banner must name the write hazard this binary's differing SDL creates:\n%s", schemaTextOut)
+	}
+	if !strings.Contains(schemaTextOut, "not live yet") {
+		t.Fatalf("the pending row must be named as not-live-yet, never as STALE:\n%s", schemaTextOut)
+	}
 	for _, line := range strings.Split(schemaTextOut, "\n") {
 		if strings.HasPrefix(strings.TrimSpace(line), verbTestOperation) {
-			if strings.Contains(line, "ok") {
-				t.Fatalf("the PROOF column must not print 'ok' under a schema-level disagreement:\n%s", schemaTextOut)
+			if strings.Contains(line, "STALE") {
+				t.Fatalf("a row waiting for the roll must not print STALE:\n%s", schemaTextOut)
 			}
-			if !strings.Contains(line, "MISMATCH") {
-				t.Fatalf("the PROOF column must print MISMATCH under a schema-level disagreement:\n%s", schemaTextOut)
+			break
+		}
+	}
+
+	// --- THE INVERSION ITSELF (r1 F1's executed reproduction, kept as a
+	// permanent guard). The deployed process reads the digest THE ROW IS
+	// AT, and this binary computes a different one -- the state every
+	// operator is in for the whole duration of a carry window, run from
+	// the tools image built for the commit about to roll.
+	//
+	// Before the fix, this exact case printed the census line `<- live`
+	// for that digest and, two lines below it, the row itself as
+	// `STALE  reachable:false` -- one report, one run, contradicting
+	// itself, with the wrong half in the column an operator reads. The
+	// row is LIVE: a real request is being served by Go right now.
+	// The row is planted at a digest that is NEITHER this binary's nor
+	// anything else in the fixture, and the deployed process is then made
+	// to report exactly that digest. That is the only way to express the
+	// real-world shape here: this binary's digest is compiled in and
+	// cannot be varied, so the DEPLOYED side is what moves.
+	deployedDigest := "sha256:" + strings.Repeat("a", 64)
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO public.go_api_candidate_build (schema_digest, document_digest, selected_operation, candidate_build)
+		VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`,
+		deployedDigest, digest, verbTestOperation, verbTestBuild); err != nil {
+		t.Fatalf("register candidate build at the deployed digest: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO public.go_api_routing_state
+			(schema_digest, document_digest, selected_operation, current_candidate_build,
+			 owner, mode, rollout_percentage, review_evidence, recorded_by, updated_at)
+		VALUES ($1, $2, $3, $4, 'go', 'canary', 100, 'r1 F1 guard: the deployed digest is the authority', 'lane-routing-verbs', now())
+		ON CONFLICT DO NOTHING`,
+		deployedDigest, digest, verbTestOperation, verbTestBuild); err != nil {
+		t.Fatalf("plant a row at the deployed digest: %v", err)
+	}
+	livePlaneServer := startQueryAPI(t, deployedDigest, map[string]string{verbTestOperation: digest})
+	liveJSONOut, _, err := captureVerb(t, "status", "-registry-url", livePlaneServer.URL+"/registry", "-postgres-uri", dsn, "-catalog", catalogPath, "-json")
+	if err != nil {
+		t.Fatalf("status -json must never refuse: %v", err)
+	}
+	liveOperation := findOperation(t, liveJSONOut)
+	if liveOperation.DigestState != "MATCH" {
+		t.Fatalf("a row the DEPLOYED process reads is MATCH, got %q -- this is the r1 F1 inversion", liveOperation.DigestState)
+	}
+	if liveOperation.Reachable == nil || !*liveOperation.Reachable {
+		t.Fatalf("a row the DEPLOYED process reads and dispatches must be reachable=true, got %v", liveOperation.Reachable)
+	}
+	liveTextOut, _, err := captureVerb(t, "status", "-registry-url", livePlaneServer.URL+"/registry", "-postgres-uri", dsn, "-catalog", catalogPath)
+	if err != nil {
+		t.Fatalf("status must never refuse: %v", err)
+	}
+	// The census and the per-operation table must AGREE. Their
+	// disagreeing is the defect; asserting only one of them is how it
+	// survived.
+	if !strings.Contains(liveTextOut, deployedDigest+"  1  <- live") {
+		t.Fatalf("the census must mark the deployed digest live:\n%s", liveTextOut)
+	}
+	for _, line := range strings.Split(liveTextOut, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), verbTestOperation) {
+			if !strings.Contains(line, "MATCH") || strings.Contains(line, "MISMATCH") {
+				t.Fatalf("the per-operation table must agree with the census it sits under:\n%s", liveTextOut)
 			}
 			break
 		}

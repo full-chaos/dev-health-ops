@@ -172,9 +172,28 @@ WHERE org_id = {org_id:String}`, []clickhouse.Binding{{Name: "org_id", Value: or
 
 // dayBounds are the inclusive window of a date range as the naive UTC
 // instants the raw-PR queries compare with: midnight of the first day and
-// the last whole second of the last day.
+// the last whole second of the last day. The reference binds its end instant
+// (the last microsecond of the last day) as second-precision DateTime text, so
+// a row stamped inside the last second of the last day is outside the window
+// on both planes.
 func dayBounds(start, end time.Time) (time.Time, time.Time) {
 	s := time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, time.UTC)
 	e := time.Date(end.Year(), end.Month(), end.Day(), 23, 59, 59, 0, time.UTC)
 	return s, e
+}
+
+func warnCatalogue(ctx context.Context, operation string, err error) {
+	slog.WarnContext(ctx, "query_api.ai_analytics.catalogue_unavailable",
+		"operation", operation, "error", err.Error())
+}
+
+// resolveTeams maps each repository id to the team its full name selects; a
+// repository with no name row resolves to no team.
+func resolveTeams(teams []aiimpact.Team, repoIDs []string, names map[string]string) map[string]*string {
+	resolver := aiimpact.BuildRepoPatternResolver(teams)
+	out := make(map[string]*string, len(repoIDs))
+	for _, id := range repoIDs {
+		out[id] = resolver.Resolve(names[id])
+	}
+	return out
 }

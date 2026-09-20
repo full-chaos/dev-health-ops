@@ -1156,6 +1156,165 @@ const registeredAiWorkflowDrilldownDocument = `query AIWorkflowDrilldown($orgId:
   }
 }`
 
+// registeredAiRiskBreakdownDocument is the registered document for the
+// `aiRiskBreakdown` operation, the exact wire-form text a real web client sends
+// (testdata/wire_capture/airiskbreakdown_captured.graphql).
+const registeredAiRiskBreakdownDocument = `query AIRiskBreakdown($orgId: String!, $dateRange: AIDateRangeInput!, $scope: AIScopeInput) {
+  aiRiskBreakdown(orgId: $orgId, dateRange: $dateRange, scope: $scope) {
+    orgId
+    startDate
+    endDate
+    dataAvailable
+    byBucket {
+      bucket
+      prsTotal
+      reworkPrs
+      reworkRate
+      revertPrs
+      revertRate
+      testGapPrs
+      testGapRate
+      incidentsCount
+      incidentRate
+      __typename
+    }
+    hotspotOverlap {
+      bucket
+      prsTotal
+      prsTouchingHotspots
+      hotspotOverlapRate
+      avgHotspotRiskScore
+      __typename
+    }
+    complexityOverlap {
+      bucket
+      prsTotal
+      prsTouchingHighComplexity
+      complexityOverlapRate
+      __typename
+    }
+    missingStates {
+      key
+      title
+      guidance
+      __typename
+    }
+    __typename
+  }
+  aiComparison(orgId: $orgId, dateRange: $dateRange, scope: $scope) {
+    orgId
+    startDate
+    endDate
+    dataAvailable
+    aiSide {
+      bucket
+      prsTotal
+      prsMerged
+      cycleTimeAvgHours
+      reviewsPerPr
+      reworkRate
+      revertRate
+      testGapRate
+      incidentRate
+      __typename
+    }
+    baselineSide {
+      bucket
+      prsTotal
+      prsMerged
+      cycleTimeAvgHours
+      reviewsPerPr
+      reworkRate
+      revertRate
+      testGapRate
+      incidentRate
+      __typename
+    }
+    delta {
+      cycleTimeDeltaHours
+      reviewsPerPrDelta
+      reworkRateDelta
+      revertRateDelta
+      testGapRateDelta
+      incidentRateDelta
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredAiAttributedPrsDocument is the registered document for the
+// `aiAttributedPrs` operation, the exact wire-form text a real web client sends
+// (testdata/wire_capture/aiattributedprs_captured.graphql).
+const registeredAiAttributedPrsDocument = `query AIAttributedPrs($orgId: String!, $dateRange: AIDateRangeInput!, $scope: AIScopeInput, $limit: Int! = 50, $offset: Int! = 0) {
+  aiAttributedPrs(
+    orgId: $orgId
+    dateRange: $dateRange
+    scope: $scope
+    limit: $limit
+    offset: $offset
+  ) {
+    orgId
+    startDate
+    endDate
+    total
+    hasMore
+    dataAvailable
+    rows {
+      repoId
+      number
+      title
+      kind
+      workType
+      teamId
+      mergedAt
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredAiAttributionOverviewDocument is the registered document for the
+// `aiAttributionOverview` operation, the exact wire-form text a real web client sends
+// (testdata/wire_capture/aiattributionoverview_captured.graphql).
+const registeredAiAttributionOverviewDocument = `query AIAttributionOverview($orgId: String!, $dateRange: AIDateRangeInput!, $scope: AIAttributionScopeInput, $limit: Int! = 50, $offset: Int! = 0) {
+  aiAttributionOverview(
+    orgId: $orgId
+    dateRange: $dateRange
+    scope: $scope
+    limit: $limit
+    offset: $offset
+  ) {
+    orgId
+    startDate
+    endDate
+    mix {
+      kind
+      count
+      share
+      __typename
+    }
+    totalAttributed
+    hasMore
+    dataAvailable
+    rows {
+      subjectType
+      subjectId
+      repoId
+      provider
+      kind
+      source
+      confidence
+      actor
+      evidence
+      observedAt
+      teamId
+      __typename
+    }
+    __typename
+  }
+}`
+
 // registeredSavedReportsDocument is the registered document for the `savedReports`
 // operation, the exact wire-form text a real web client sends
 // (testdata/wire_capture/saved_reports_captured.graphql).
@@ -2268,6 +2427,9 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		"compoundingRisk":                   digestHex(registeredCompoundingRiskDocument),
 		"aiGovernanceSummary":               digestHex(registeredAiGovernanceSummaryDocument),
 		"aiWorkflowDrilldown":               digestHex(registeredAiWorkflowDrilldownDocument),
+		"aiRiskBreakdown":                   digestHex(registeredAiRiskBreakdownDocument),
+		"aiAttributedPrs":                   digestHex(registeredAiAttributedPrsDocument),
+		"aiAttributionOverview":             digestHex(registeredAiAttributionOverviewDocument),
 	}
 	// CHAOS-4710 deliverable 3: log the mounted set HERE, where
 	// digestByOperation actually lives, rather than handing main.go a

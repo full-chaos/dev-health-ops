@@ -3,6 +3,8 @@ package goapiproof
 import (
 	"fmt"
 	"sort"
+	"strings"
+	"time"
 )
 
 // Window is the request window every windowed operation is asked for.
@@ -245,8 +247,8 @@ var operationSpecs = map[string]OperationSpec{
 	"aiImpactSummary": {
 		ResponseRoot: "aiImpactSummary",
 		Variables:    aiRollupVariables(nil),
-		Parity:       aiImpactSummaryParity(),
-		Variants: append(aiRollupVariants(aiImpactSummaryParity()),
+		Parity:       nonEmpty(aiImpactSummaryParity(), "data.aiImpactSummary.daily"),
+		Variants: append(aiRollupVariants(nonEmpty(aiImpactSummaryParity(), "data.aiImpactSummary.daily"), nonEmpty(aiImpactSummaryParity(), "data.aiImpactSummary.daily")),
 			aiInstanceVariant("REPO_VALID", "a repository id that has rollup rows", "repoId", aiImpactSummaryParity(), "data.aiImpactSummary.daily", "data.aiImpactSummary.repoBreakdown", "scopeId"),
 			aiInstanceVariant("REPO_NAME_VALID", "the full name of a repository that has rollup rows", "repoId", aiImpactSummaryParity(), "data.aiImpactSummary.daily", "", ""),
 			aiInstanceVariant("TEAM_VALID", "a team id stored on rollup rows", "teamId", aiImpactSummaryParity(), "data.aiImpactSummary.daily", "data.aiImpactSummary.teamBreakdown", "scopeId"),
@@ -255,7 +257,7 @@ var operationSpecs = map[string]OperationSpec{
 	"aiComparison": {
 		ResponseRoot: "aiComparison",
 		Variables:    aiRollupVariables(nil),
-		Variants: append(aiRollupVariants(Options{}),
+		Variants: append(aiRollupVariants(Options{}, Options{}),
 			aiInstanceVariant("REPO_VALID", "a repository id that has rollup rows", "repoId", Options{}, "", "", ""),
 			aiInstanceVariant("REPO_NAME_VALID", "the full name of a repository that has rollup rows", "repoId", Options{}, "", "", ""),
 			aiInstanceVariant("TEAM_VALID", "a team id stored on rollup rows", "teamId", Options{}, "", "", ""),
@@ -264,8 +266,8 @@ var operationSpecs = map[string]OperationSpec{
 	"aiReviewLoad": {
 		ResponseRoot: "aiReviewLoad",
 		Variables:    aiRollupVariables(nil),
-		Parity:       aiReviewLoadParity(),
-		Variants: append(aiRollupVariants(aiReviewLoadParity()),
+		Parity:       nonEmpty(aiReviewLoadParity(), "data.aiReviewLoad.byBucket"),
+		Variants: append(aiRollupVariants(nonEmpty(aiReviewLoadParity(), "data.aiReviewLoad.byBucket"), nonEmpty(Options{}, "data.aiReviewLoad.byBucket")),
 			aiInstanceVariant("REPO_VALID", "a repository id that has rollup rows", "repoId", aiReviewLoadParity(), "data.aiReviewLoad.byBucket", "", ""),
 			aiInstanceVariant("REPO_NAME_VALID", "the full name of a repository that has rollup rows", "repoId", aiReviewLoadParity(), "data.aiReviewLoad.byBucket", "", ""),
 			aiInstanceVariant("TEAM_VALID", "a team id that has rollup rows and whose repo patterns select a repository", "teamId", aiReviewLoadParity(), "data.aiReviewLoad.byBucket", "", ""),
@@ -343,6 +345,48 @@ var operationSpecs = map[string]OperationSpec{
 			aiWorkflowInstanceVariant("ISSUE_VALID", "an issue id that has AI workflow edges", "ISSUE"),
 			aiWorkflowInstanceVariant("WORK_UNIT_VALID", "a work unit id that has AI workflow edges", "WORK_UNIT"),
 		},
+	},
+	"aiRiskBreakdown": {
+		ResponseRoot: "aiRiskBreakdown",
+		Variables:    aiRollupVariables(nil),
+		Parity:       nonEmpty(aiRiskBreakdownParity(), "data.aiRiskBreakdown.byBucket"),
+		Variants: append(aiRollupVariants(nonEmpty(aiRiskBreakdownParity(), "data.aiRiskBreakdown.byBucket"), nonEmpty(Options{}, "data.aiRiskBreakdown.byBucket")),
+			aiInstanceVariant("REPO_VALID", "a repository id that has rollup rows", "repoId", aiRiskBreakdownParity(), "data.aiRiskBreakdown.byBucket", "", ""),
+			aiInstanceVariant("REPO_NAME_VALID", "the full name of a repository that has rollup rows", "repoId", aiRiskBreakdownParity(), "data.aiRiskBreakdown.byBucket", "", ""),
+			aiInstanceVariant("TEAM_VALID", "a team id stored on rollup rows whose repo patterns select a repository", "teamId", aiRiskBreakdownParity(), "data.aiRiskBreakdown.byBucket", "", ""),
+		),
+	},
+	"aiAttributedPrs": {
+		ResponseRoot: "aiAttributedPrs",
+		Variables:    aiPagedVariables(nil),
+		Parity:       nonEmpty(aiAttributedPrsParity(), "data.aiAttributedPrs.rows"),
+		Variants: append(aiPagedVariants(nonEmpty(aiAttributedPrsParity(), "data.aiAttributedPrs.rows"), map[string]map[string]any{
+			"WORK_TYPE":             {"workType": "pull_request"},
+			"REPO_UNKNOWN":          {"repoId": "00000000-0000-0000-0000-000000000001"},
+			"REPO_NAME_UNKNOWN":     {"repoId": "no-such-org/no-such-repo"},
+			"TEAM_UNKNOWN":          {"teamId": "team-abc-123"},
+			"REPO_AND_TEAM_UNKNOWN": {"repoId": "00000000-0000-0000-0000-000000000001", "teamId": "team-abc-123"},
+		}),
+			aiPagedInstanceVariant("REPO_VALID", "a repository id that has AI-attributed pull requests", "repoId", aiAttributedPrsParity(), "data.aiAttributedPrs.rows", "data.aiAttributedPrs.rows", "repoId"),
+			aiPagedInstanceVariant("REPO_NAME_VALID", "the full name of a repository that has AI-attributed pull requests", "repoId", aiAttributedPrsParity(), "data.aiAttributedPrs.rows", "", ""),
+			aiPagedInstanceVariant("TEAM_VALID", "a team id whose repo patterns select a repository with AI-attributed pull requests", "teamId", aiAttributedPrsParity(), "data.aiAttributedPrs.rows", "data.aiAttributedPrs.rows", "teamId"),
+		),
+	},
+	"aiAttributionOverview": {
+		ResponseRoot: "aiAttributionOverview",
+		Variables:    aiPagedVariables(nil),
+		Parity:       nonEmpty(aiAttributionOverviewParity(), "data.aiAttributionOverview.rows"),
+		Variants: append(aiPagedVariants(nonEmpty(aiAttributionOverviewParity(), "data.aiAttributionOverview.rows"), map[string]map[string]any{
+			"BUCKETS":               {"buckets": []any{"AI_ASSISTED", "HUMAN"}},
+			"REPO_UNKNOWN":          {"repoId": "00000000-0000-0000-0000-000000000001"},
+			"REPO_NAME_UNKNOWN":     {"repoId": "no-such-org/no-such-repo"},
+			"TEAM_UNKNOWN":          {"teamId": "team-abc-123"},
+			"REPO_AND_TEAM_UNKNOWN": {"repoId": "00000000-0000-0000-0000-000000000001", "teamId": "team-abc-123"},
+		}),
+			aiPagedInstanceVariant("REPO_VALID", "a repository id that has resolved attribution records", "repoId", aiAttributionOverviewParity(), "data.aiAttributionOverview.rows", "data.aiAttributionOverview.rows", "repoId"),
+			aiPagedInstanceVariant("REPO_NAME_VALID", "the full name of a repository that has resolved attribution records", "repoId", aiAttributionOverviewParity(), "data.aiAttributionOverview.rows", "", ""),
+			aiPagedInstanceVariant("TEAM_VALID", "a team id whose repo patterns select a repository with resolved attribution records", "teamId", aiAttributionOverviewParity(), "data.aiAttributionOverview.rows", "data.aiAttributionOverview.rows", "teamId"),
+		),
 	},
 	"busFactor": {
 		ResponseRoot: "busFactor",
@@ -1434,10 +1478,37 @@ func securityAlertsSecondPageVariant() Variant {
 // aiRollupVariables builds the shared request of the AI rollup operations: the
 // org, the run's day window and the given scope (nil sends no scope).
 func aiRollupVariables(scope map[string]any) func(orgID string, w Window) map[string]any {
+	return aiRollupVariablesTo(scope, false)
+}
+
+// aiClock is the prover's clock for windows that follow the newest data.
+var aiClock = func() time.Time { return time.Now().UTC() }
+
+// aiWindowEnd is the last day of a window that reaches the newest complete
+// data: the later of the run's until-date and the last complete UTC day (the
+// day before the run day). A team id is stored only on the newest rollup
+// days, so a team-scoped request must end there rather than at a fixed date
+// that goes stale; the run day itself is excluded because the daily jobs
+// write it during the day, and two legs straddling a write would differ.
+func aiWindowEnd(w Window) string {
+	lastComplete := aiClock().AddDate(0, 0, -1).Format("2006-01-02")
+	if lastComplete > w.UntilDate {
+		return lastComplete
+	}
+	return w.UntilDate
+}
+
+// aiRollupVariablesTo is aiRollupVariables with the window's end optionally
+// extended to the run day.
+func aiRollupVariablesTo(scope map[string]any, toRunDay bool) func(orgID string, w Window) map[string]any {
 	return func(orgID string, w Window) map[string]any {
+		end := w.UntilDate
+		if toRunDay {
+			end = aiWindowEnd(w)
+		}
 		vars := map[string]any{
 			"orgId":     orgID,
-			"dateRange": map[string]any{"startDate": w.SinceDate, "endDate": w.UntilDate},
+			"dateRange": map[string]any{"startDate": w.SinceDate, "endDate": end},
 			"scope":     nil,
 		}
 		if scope != nil {
@@ -1451,7 +1522,12 @@ func aiRollupVariables(scope map[string]any) func(orgID string, w Window) map[st
 // have. The repository and team values name nothing in any org, so both planes
 // answer the empty window for them; a scope that selects real rows needs a
 // run-supplied identifier.
-func aiRollupVariants(parity Options) []Variant {
+//
+// A variant that selects nothing by construction carries no declaration: a
+// declared field that matches nothing refuses the run. The work-type variant
+// carries workTypeParity, because a work-type scope can turn a declared
+// aggregate off.
+func aiRollupVariants(parity, workTypeParity Options) []Variant {
 	scopes := []struct {
 		name  string
 		scope map[string]any
@@ -1465,7 +1541,14 @@ func aiRollupVariants(parity Options) []Variant {
 	}
 	variants := make([]Variant, 0, len(scopes))
 	for _, sc := range scopes {
-		variants = append(variants, Variant{Name: sc.name, Variables: aiRollupVariables(sc.scope), Parity: parity})
+		p := Options{}
+		switch sc.name {
+		case "BUCKETS":
+			p = parity
+		case "WORK_TYPE":
+			p = workTypeParity
+		}
+		variants = append(variants, Variant{Name: sc.name, Variables: aiRollupVariables(sc.scope), Parity: p})
 	}
 	return variants
 }
@@ -1504,7 +1587,7 @@ func aiInstanceVariant(name, kind, scopeField string, parity Options, nonEmpty, 
 	}
 	return Variant{
 		Name:      name,
-		Variables: aiRollupVariables(map[string]any{}),
+		Variables: aiRollupVariablesTo(map[string]any{}, scopeField == "teamId"),
 		Parity:    parity,
 		Instance: &VariantInstance{
 			Kind: kind,
@@ -1710,6 +1793,108 @@ func aiWorkflowParity() Options {
 func requireLists(o Options, paths ...string) Options {
 	o.RequireNonEmpty = append([]string(nil), paths...)
 	return o
+}
+
+// aiPagedVariables builds the shared request of the paged AI operations: the
+// org, the run's day window, the scope (nil sends none) and the first page.
+func aiPagedVariables(scope map[string]any) func(orgID string, w Window) map[string]any {
+	return aiPagedVariablesTo(scope, false)
+}
+
+func aiPagedVariablesTo(scope map[string]any, toRunDay bool) func(orgID string, w Window) map[string]any {
+	return func(orgID string, w Window) map[string]any {
+		vars := aiRollupVariablesTo(scope, toRunDay)(orgID, w)
+		vars["limit"] = 50
+		vars["offset"] = 0
+		return vars
+	}
+}
+
+// aiPagedVariants is one variant per named scope branch, plus the page
+// branches: a limit below one, a limit above the ceiling and an offset.
+func aiPagedVariants(parity Options, scopes map[string]map[string]any) []Variant {
+	names := make([]string, 0, len(scopes))
+	for name := range scopes {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	variants := make([]Variant, 0, len(names)+3)
+	for _, name := range names {
+		p := parity
+		if strings.HasSuffix(name, "_UNKNOWN") {
+			p = Options{}
+		}
+		variants = append(variants, Variant{Name: name, Variables: aiPagedVariables(scopes[name]), Parity: p})
+	}
+	for _, page := range []struct {
+		name          string
+		limit, offset int
+	}{{"PAGE_ZERO", 0, 0}, {"PAGE_OVER_CEILING", 1000, 0}, {"PAGE_OFFSET", 5, 5}} {
+		limit, offset := page.limit, page.offset
+		variants = append(variants, Variant{
+			Name: page.name,
+			Variables: func(orgID string, w Window) map[string]any {
+				vars := aiPagedVariables(nil)(orgID, w)
+				vars["limit"], vars["offset"] = limit, offset
+				return vars
+			},
+			Parity: pageParity(page.name, parity),
+		})
+	}
+	return variants
+}
+
+// pageParity is a page variant's declaration: an offset page can legitimately
+// hold nothing, so it does not require a non-empty list.
+func pageParity(name string, parity Options) Options {
+	if name == "PAGE_OFFSET" {
+		parity.RequireNonEmpty = nil
+	}
+	return parity
+}
+
+// nonEmpty returns o requiring the named lists to be non-empty on a leg: a
+// request whose lists are empty on both legs measured nothing.
+func nonEmpty(o Options, paths ...string) Options {
+	o.RequireNonEmpty = append([]string(nil), paths...)
+	return o
+}
+
+// aiPagedInstanceVariant is aiInstanceVariant for the paged operations.
+func aiPagedInstanceVariant(name, kind, scopeField string, parity Options, nonEmpty, echoList, echoField string) Variant {
+	v := aiInstanceVariant(name, kind, scopeField, parity, nonEmpty, echoList, echoField)
+	v.Variables = aiPagedVariablesTo(map[string]any{}, scopeField == "teamId")
+	return v
+}
+
+// aiRiskBreakdownParity declares the average hotspot risk score a merged
+// floating-point aggregate.
+func aiRiskBreakdownParity() Options {
+	return Options{FloatTierB: map[string]string{
+		"data.aiRiskBreakdown.hotspotOverlap.avgHotspotRiskScore": "avgIf over file risk scores: ClickHouse merges partial aggregate states in thread-completion order, so the last bits differ run to run on both planes (CHAOS-5451)",
+	}}
+}
+
+const aiAttributionTimestampReason = "the timestamp is a ClickHouse DateTime64(3, 'UTC') read through a tz-aware driver value; Python's strawberry DateTime scalar isoformat()s it with a \"+00:00\" offset and microsecond digits, while Go's gqlgen DateTime scalar formats the same instant as RFC 3339 with \"Z\" (resolvers/ai.py _to_aware). The instants are equal; only the wire text differs. Go's form is the canonical DateTime wire form; the Python form is the declared defect and stays frozen."
+
+func aiAttributedPrsParity() Options {
+	return Options{BaselineDefects: []BaselineDefect{{
+		Ticket:             "CHAOS-6081",
+		Reason:             aiAttributionTimestampReason,
+		Paths:              []string{"data.aiAttributedPrs.rows.mergedAt"},
+		Intermittent:       true,
+		IntermittentReason: "mergedAt is null for an unmerged pull request and the list is empty when nothing is attributed",
+	}}}
+}
+
+func aiAttributionOverviewParity() Options {
+	return Options{BaselineDefects: []BaselineDefect{{
+		Ticket:             "CHAOS-6081",
+		Reason:             aiAttributionTimestampReason,
+		Paths:              []string{"data.aiAttributionOverview.rows.observedAt"},
+		Intermittent:       true,
+		IntermittentReason: "the list is empty when nothing is attributed in the window",
+	}}}
 }
 
 // savedReportDateTimes declares the one divergence on every saved-report

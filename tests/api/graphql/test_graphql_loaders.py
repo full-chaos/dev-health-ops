@@ -3,7 +3,6 @@ from __future__ import annotations
 import pytest
 
 from dev_health_ops.api.graphql.loaders.base import CachedDataLoader, make_cache_key
-from dev_health_ops.api.graphql.loaders.dimension_loader import load_dimension_values
 from dev_health_ops.api.graphql.loaders.repo_loader import RepoByNameLoader, RepoLoader
 from dev_health_ops.api.graphql.loaders.team_loader import TeamByNameLoader, TeamLoader
 
@@ -47,27 +46,6 @@ def test_make_cache_key_differs_by_org_id():
     key_org_a = make_cache_key("ints", "org-a", 42)
     key_org_b = make_cache_key("ints", "org-b", 42)
     assert key_org_a != key_org_b, "Cache keys for different org_ids must differ"
-
-
-@pytest.mark.asyncio
-async def test_load_dimension_values_maps_rows(monkeypatch):
-    async def fake_query_dicts(_client, _sql, _params):
-        return [{"value": "team-a", "count": 3}]
-
-    monkeypatch.setattr(
-        "dev_health_ops.api.queries.client.query_dicts", fake_query_dicts
-    )
-
-    rows = await load_dimension_values(
-        client=object(),
-        dimension="team",
-        org_id="org-1",
-        limit=10,
-        timeout=5,
-        filters=None,
-    )
-
-    assert rows == [{"value": "team-a", "count": 3}]
 
 
 @pytest.mark.asyncio

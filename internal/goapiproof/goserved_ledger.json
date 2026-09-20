@@ -99,6 +99,24 @@
         {"file": "cmd/query-api/internal/workgraph/pr_test.go", "test": "TestParsePRDetailID"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
       ]
+    },
+    {
+      "operation": "catalogValues",
+      "two_plane_ops_sha": "fb24ec18c004798b1e99e1907f80fafe0dd12f25",
+      "guards": [
+        {"file": "cmd/query-api/internal/analytics/catalog_golden_test.go", "test": "TestCatalogMatchesTheFrozenGolden"},
+        {"file": "cmd/query-api/internal/analytics/catalog_test.go", "test": "TestCanonicalRepositoryValues"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
+      ]
+    },
+    {
+      "operation": "acrRepositoryScopes",
+      "two_plane_ops_sha": "fb24ec18c004798b1e99e1907f80fafe0dd12f25",
+      "guards": [
+        {"file": "cmd/query-api/internal/analytics/catalog_golden_test.go", "test": "TestCatalogMatchesTheFrozenGolden"},
+        {"file": "cmd/query-api/internal/analytics/catalog_test.go", "test": "TestCanonicalRepositoryValues"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
+      ]
     }
   ]
 }

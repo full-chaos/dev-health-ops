@@ -92,8 +92,23 @@ func TestLedgerMatchesTheDeletedFieldBodiesInSchemaPy(t *testing.T) {
 		fromSchema = append(fromSchema, operation)
 	}
 	sort.Strings(fromSchema)
-	if strings.Join(fromSchema, ",") != strings.Join(ledger.Operations(), ",") {
-		t.Fatalf("schema.py raises the deletion error for %v; the ledger names %v", fromSchema, ledger.Operations())
+	// A ledger operation is either a root field whose body raises, or a named
+	// document over one (its response root is the root field that raises).
+	roots := map[string]bool{}
+	for _, operation := range ledger.Operations() {
+		spec, err := SpecFor(operation)
+		if err != nil {
+			t.Fatalf("ledger operation %s: %v", operation, err)
+		}
+		roots[spec.ResponseRoot] = true
+	}
+	var fromLedger []string
+	for root := range roots {
+		fromLedger = append(fromLedger, root)
+	}
+	sort.Strings(fromLedger)
+	if strings.Join(fromSchema, ",") != strings.Join(fromLedger, ",") {
+		t.Fatalf("schema.py raises the deletion error for %v; the ledger's response roots are %v", fromSchema, fromLedger)
 	}
 
 	if got := pythonRaisedMessage(t, source); got != ledger.MessageTemplate {
@@ -185,7 +200,7 @@ func TestLedgerRejectsMalformedDocuments(t *testing.T) {
 
 func TestCitationConstructorRefusesAnythingTheLedgerDoesNotName(t *testing.T) {
 	ledger := defaultLedgerForTest(t)
-	for _, operation := range []string{"", "workGraphArtifacts", "capacityforecast", "capacityForecast ", "GO-ONLY:x"} {
+	for _, operation := range []string{"", "securityAlerts", "capacityforecast", "capacityForecast ", "GO-ONLY:x"} {
 		if _, err := NewGoOnlyCitation(ledger, operation); err == nil {
 			t.Errorf("a citation was built for %q", operation)
 		}
@@ -279,7 +294,7 @@ func TestThePrefixIsReservedForTheLedgersOwnCitation(t *testing.T) {
 		"own citation twice":                     {"capacityForecast", TerminalStateMismatch, []string{own, own}, false},
 		"lowercase claim":                        {"capacityForecast", TerminalStateMismatch, []string{strings.ToLower(own)}, false},
 		"blank-led claim":                        {"capacityForecast", TerminalStateMismatch, []string{" " + own}, false},
-		"operation not in the ledger":            {"workGraphArtifacts", TerminalStateMismatch, []string{own}, false},
+		"operation not in the ledger":            {"securityAlerts", TerminalStateMismatch, []string{own}, false},
 	} {
 		err := ValidateGoOnlyReceiptCitations(ledger, c.operation, c.state, c.citations)
 		if (err == nil) != c.ok {

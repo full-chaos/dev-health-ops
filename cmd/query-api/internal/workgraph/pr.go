@@ -56,16 +56,20 @@ var prDetailIDPattern = regexp.MustCompile(`^([0-9a-fA-F-]{36})(?:#pr|#|:|/pr/)(
 // result, no GraphQL error), never a parse error surfaced to the client.
 // See prDetailIDPattern's own doc comment for a known, deliberate,
 // safe-direction divergence on non-ASCII decimal digits.
+//
+// A number above the range of the UInt32 column it is bound to is refused
+// too: ClickHouse wraps such a value modulo 2^32, so accepting it would
+// return a different, existing pull request for an id that names none.
 func ParsePRDetailID(id string) (repoID string, number int, ok bool) {
 	m := prDetailIDPattern.FindStringSubmatch(strings.TrimSpace(id))
 	if m == nil {
 		return "", 0, false
 	}
-	n, err := strconv.Atoi(m[2])
+	n, err := strconv.ParseUint(m[2], 10, 32)
 	if err != nil {
 		return "", 0, false
 	}
-	return strings.ToLower(m[1]), n, true
+	return strings.ToLower(m[1]), int(n), true
 }
 
 // PRCoreRowExists is a cheap existence check against `git_pull_requests` --

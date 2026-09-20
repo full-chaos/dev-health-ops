@@ -287,7 +287,7 @@ var operationSpecs = map[string]OperationSpec{
 	"aiGovernanceSummary": {
 		ResponseRoot: "aiGovernanceSummary",
 		Variables:    aiGovernanceVariables(nil, 50),
-		Parity:       aiGovernanceParity(),
+		Parity:       requireLists(aiGovernanceParity(), "data.aiGovernanceSummary.recentViolations"),
 		Variants: append(aiGovernanceVariants(),
 			aiGovernanceInstanceVariant("REPO_VALID", "a repository id that has policy events in the window", "repoId", "data.aiGovernanceSummary.recentViolations", "repoId"),
 			aiGovernanceInstanceVariant("REPO_NAME_VALID", "the full name of a repository that has policy events in the window", "repoId", "data.aiGovernanceSummary.recentViolations", ""),
@@ -1616,4 +1616,11 @@ func aiWorkflowParity() Options {
 			Ticket:    "CHAOS-6081",
 		},
 	}}
+}
+
+// requireLists returns o requiring the named lists to be non-empty on a leg: a
+// request whose lists are empty on both legs measured nothing.
+func requireLists(o Options, paths ...string) Options {
+	o.RequireNonEmpty = append([]string(nil), paths...)
+	return o
 }

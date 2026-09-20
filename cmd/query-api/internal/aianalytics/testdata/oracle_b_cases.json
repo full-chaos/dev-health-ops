@@ -1,0 +1,7143 @@
+{
+ "cases": [
+  {
+   "calls": {
+    "hotspot": {
+     "repo_id": null,
+     "repo_ids": null
+    }
+   },
+   "complexity": [
+    {
+     "bucket": "human_x",
+     "prs_total": 3,
+     "prs_touching_high_complexity": 1
+    },
+    {
+     "bucket": "ai_assisted",
+     "prs_total": 6,
+     "prs_touching_high_complexity": 2
+    },
+    {
+     "bucket": "ai_review",
+     "prs_total": 0,
+     "prs_touching_high_complexity": 0
+    }
+   ],
+   "daily": [
+    {
+     "agent_created_prs": 0,
+     "ai_assisted_pr_ratio": null,
+     "ai_assisted_prs": 0,
+     "ai_cycle_time_delta_hours": null,
+     "ai_review_amplification": null,
+     "attribution_bucket": "ai_assisted",
+     "changes_requested_per_pr": null,
+     "computed_at": "2026-09-01T12:00:00.123000+00:00",
+     "cycle_time_avg_hours": null,
+     "day": "2026-08-01",
+     "followup_commits_count": 0,
+     "human_prs": 0,
+     "incident_drag_rate": null,
+     "incidents_count": 1,
+     "leverage_cycle_time_component": null,
+     "leverage_incident_component": null,
+     "leverage_prs_component": 0.0,
+     "leverage_review_component": null,
+     "leverage_rework_component": null,
+     "leverage_test_component": null,
+     "org_id": "org-1",
+     "prs_merged": 0,
+     "prs_total": 7,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "revert_prs": 1,
+     "revert_rate": null,
+     "reviews_per_pr": null,
+     "rework_drag_rate": null,
+     "rework_prs": 2,
+     "team_id": "team-a",
+     "test_gap_prs": 3,
+     "test_gap_rate": null,
+     "unknown_prs": 0,
+     "work_type": "pull_request"
+    },
+    {
+     "agent_created_prs": 0,
+     "ai_assisted_pr_ratio": null,
+     "ai_assisted_prs": 0,
+     "ai_cycle_time_delta_hours": null,
+     "ai_review_amplification": null,
+     "attribution_bucket": "human",
+     "changes_requested_per_pr": null,
+     "computed_at": "2026-09-01T12:00:00.123000+00:00",
+     "cycle_time_avg_hours": null,
+     "day": "2026-08-01",
+     "followup_commits_count": 0,
+     "human_prs": 0,
+     "incident_drag_rate": null,
+     "incidents_count": 0,
+     "leverage_cycle_time_component": null,
+     "leverage_incident_component": null,
+     "leverage_prs_component": 0.0,
+     "leverage_review_component": null,
+     "leverage_rework_component": null,
+     "leverage_test_component": null,
+     "org_id": "org-1",
+     "prs_merged": 0,
+     "prs_total": 3,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "revert_prs": 0,
+     "revert_rate": null,
+     "reviews_per_pr": null,
+     "rework_drag_rate": null,
+     "rework_prs": 0,
+     "team_id": "team-a",
+     "test_gap_prs": 1,
+     "test_gap_rate": null,
+     "unknown_prs": 0,
+     "work_type": "pull_request"
+    },
+    {
+     "agent_created_prs": 0,
+     "ai_assisted_pr_ratio": null,
+     "ai_assisted_prs": 0,
+     "ai_cycle_time_delta_hours": null,
+     "ai_review_amplification": null,
+     "attribution_bucket": "agent_created",
+     "changes_requested_per_pr": null,
+     "computed_at": "2026-09-01T12:00:00.123000+00:00",
+     "cycle_time_avg_hours": null,
+     "day": "2026-08-02",
+     "followup_commits_count": 0,
+     "human_prs": 0,
+     "incident_drag_rate": null,
+     "incidents_count": 0,
+     "leverage_cycle_time_component": null,
+     "leverage_incident_component": null,
+     "leverage_prs_component": 0.0,
+     "leverage_review_component": null,
+     "leverage_rework_component": null,
+     "leverage_test_component": null,
+     "org_id": "org-1",
+     "prs_merged": 0,
+     "prs_total": 4,
+     "repo_id": "22222222-2222-2222-2222-222222222222",
+     "revert_prs": 0,
+     "revert_rate": null,
+     "reviews_per_pr": null,
+     "rework_drag_rate": null,
+     "rework_prs": 1,
+     "team_id": "team-b",
+     "test_gap_prs": 0,
+     "test_gap_rate": null,
+     "unknown_prs": 0,
+     "work_type": "pull_request"
+    },
+    {
+     "agent_created_prs": 0,
+     "ai_assisted_pr_ratio": null,
+     "ai_assisted_prs": 0,
+     "ai_cycle_time_delta_hours": null,
+     "ai_review_amplification": null,
+     "attribution_bucket": "ai_assisted",
+     "changes_requested_per_pr": null,
+     "computed_at": "2026-09-01T12:00:00.123000+00:00",
+     "cycle_time_avg_hours": null,
+     "day": "2026-08-02",
+     "followup_commits_count": 0,
+     "human_prs": 0,
+     "incident_drag_rate": null,
+     "incidents_count": 0,
+     "leverage_cycle_time_component": null,
+     "leverage_incident_component": null,
+     "leverage_prs_component": 0.0,
+     "leverage_review_component": null,
+     "leverage_rework_component": null,
+     "leverage_test_component": null,
+     "org_id": "org-1",
+     "prs_merged": 0,
+     "prs_total": 0,
+     "repo_id": "22222222-2222-2222-2222-222222222222",
+     "revert_prs": 0,
+     "revert_rate": null,
+     "reviews_per_pr": null,
+     "rework_drag_rate": null,
+     "rework_prs": 0,
+     "team_id": "team-b",
+     "test_gap_prs": 0,
+     "test_gap_rate": null,
+     "unknown_prs": 0,
+     "work_type": "pull_request"
+    },
+    {
+     "agent_created_prs": 0,
+     "ai_assisted_pr_ratio": null,
+     "ai_assisted_prs": 0,
+     "ai_cycle_time_delta_hours": null,
+     "ai_review_amplification": null,
+     "attribution_bucket": "unknown",
+     "changes_requested_per_pr": null,
+     "computed_at": "2026-09-01T12:00:00.123000+00:00",
+     "cycle_time_avg_hours": null,
+     "day": "2026-08-03",
+     "followup_commits_count": 0,
+     "human_prs": 0,
+     "incident_drag_rate": null,
+     "incidents_count": 2,
+     "leverage_cycle_time_component": null,
+     "leverage_incident_component": null,
+     "leverage_prs_component": 0.0,
+     "leverage_review_component": null,
+     "leverage_rework_component": null,
+     "leverage_test_component": null,
+     "org_id": "org-1",
+     "prs_merged": 0,
+     "prs_total": 2,
+     "repo_id": "33333333-3333-3333-3333-333333333333",
+     "revert_prs": 0,
+     "revert_rate": null,
+     "reviews_per_pr": null,
+     "rework_drag_rate": null,
+     "rework_prs": 0,
+     "team_id": "",
+     "test_gap_prs": 0,
+     "test_gap_rate": null,
+     "unknown_prs": 0,
+     "work_type": "pull_request"
+    }
+   ],
+   "evidence": [],
+   "expected": {
+    "byBucket": [
+     {
+      "bucket": "agent_created",
+      "incidentRate": 0.0,
+      "incidentsCount": 0,
+      "prsTotal": 4,
+      "revertPrs": 0,
+      "revertRate": 0.0,
+      "reworkPrs": 1,
+      "reworkRate": 0.25,
+      "testGapPrs": 0,
+      "testGapRate": 0.0
+     },
+     {
+      "bucket": "ai_assisted",
+      "incidentRate": 0.14285714285714285,
+      "incidentsCount": 1,
+      "prsTotal": 7,
+      "revertPrs": 1,
+      "revertRate": 0.14285714285714285,
+      "reworkPrs": 2,
+      "reworkRate": 0.2857142857142857,
+      "testGapPrs": 3,
+      "testGapRate": 0.42857142857142855
+     },
+     {
+      "bucket": "human",
+      "incidentRate": 0.0,
+      "incidentsCount": 0,
+      "prsTotal": 3,
+      "revertPrs": 0,
+      "revertRate": 0.0,
+      "reworkPrs": 0,
+      "reworkRate": 0.0,
+      "testGapPrs": 1,
+      "testGapRate": 0.3333333333333333
+     },
+     {
+      "bucket": "unknown",
+      "incidentRate": 1.0,
+      "incidentsCount": 2,
+      "prsTotal": 2,
+      "revertPrs": 0,
+      "revertRate": 0.0,
+      "reworkPrs": 0,
+      "reworkRate": 0.0,
+      "testGapPrs": 0,
+      "testGapRate": 0.0
+     }
+    ],
+    "complexityOverlap": [
+     {
+      "bucket": "ai_assisted",
+      "complexityOverlapRate": 0.3333333333333333,
+      "prsTotal": 6,
+      "prsTouchingHighComplexity": 2
+     },
+     {
+      "bucket": "human_x",
+      "complexityOverlapRate": 0.3333333333333333,
+      "prsTotal": 3,
+      "prsTouchingHighComplexity": 1
+     }
+    ],
+    "dataAvailable": true,
+    "endDate": "2026-08-03",
+    "hotspotOverlap": [
+     {
+      "avgHotspotRiskScore": 2.75,
+      "bucket": "ai_assisted",
+      "hotspotOverlapRate": 0.75,
+      "prsTotal": 4,
+      "prsTouchingHotspots": 3
+     },
+     {
+      "avgHotspotRiskScore": null,
+      "bucket": "ai_review",
+      "hotspotOverlapRate": 1.0,
+      "prsTotal": 5,
+      "prsTouchingHotspots": 5
+     },
+     {
+      "avgHotspotRiskScore": null,
+      "bucket": "unknown",
+      "hotspotOverlapRate": 0.0,
+      "prsTotal": 2,
+      "prsTouchingHotspots": 0
+     }
+    ],
+    "missingStates": [],
+    "orgId": "org-1",
+    "startDate": "2026-08-01"
+   },
+   "fail": null,
+   "fn": "resolve_ai_risk_breakdown",
+   "hotspot": [
+    {
+     "avg_hotspot_risk_score": 2.75,
+     "bucket": "ai_assisted",
+     "prs_total": 4,
+     "prs_touching_hotspots": 3
+    },
+    {
+     "avg_hotspot_risk_score": null,
+     "bucket": "agent_created",
+     "prs_total": 0,
+     "prs_touching_hotspots": 0
+    },
+    {
+     "avg_hotspot_risk_score": "NaN",
+     "bucket": "",
+     "prs_total": 2,
+     "prs_touching_hotspots": 0
+    },
+    {
+     "avg_hotspot_risk_score": "Inf",
+     "bucket": "ai_review",
+     "prs_total": 5,
+     "prs_touching_hotspots": 5
+    }
+   ],
+   "limit": null,
+   "mix": [],
+   "name": "risk/plain",
+   "nameQueryFails": false,
+   "offset": null,
+   "prs": [],
+   "repoRows": null,
+   "scope": null,
+   "slugRows": [],
+   "teamRepoRows": null,
+   "teamRows": null
+  },
+  {
+   "calls": {
+    "hotspot": {
+     "repo_id": null,
+     "repo_ids": null
+    }
+   },
+   "complexity": [],
+   "daily": [],
+   "evidence": [],
+   "expected": {
+    "byBucket": [],
+    "complexityOverlap": [],
+    "dataAvailable": false,
+    "endDate": "2026-08-03",
+    "hotspotOverlap": [],
+    "missingStates": [
+     {
+      "guidance": "No AI-attributed PRs in this window could be joined to hotspot files \u2014 either no AI PRs have commit/file linkage yet or no hotspot snapshots exist for the window. Treat missing overlap as no data, not as no risk.",
+      "key": "hotspot_overlap",
+      "title": "Hotspot overlap has no assessable AI PRs"
+     },
+     {
+      "guidance": "No AI-attributed PRs in this window could be joined to high-complexity files. Drill into PR and Work Graph evidence when available; do not infer person-level quality from this gap.",
+      "key": "complexity_overlap",
+      "title": "Complexity overlap has no assessable AI PRs"
+     }
+    ],
+    "orgId": "org-1",
+    "startDate": "2026-08-01"
+   },
+   "fail": null,
+   "fn": "resolve_ai_risk_breakdown",
+   "hotspot": [],
+   "limit": null,
+   "mix": [],
+   "name": "risk/empty",
+   "nameQueryFails": false,
+   "offset": null,
+   "prs": [],
+   "repoRows": null,
+   "scope": null,
+   "slugRows": [],
+   "teamRepoRows": null,
+   "teamRows": null
+  },
+  {
+   "calls": {
+    "hotspot": {
+     "repo_id": null,
+     "repo_ids": null
+    }
+   },
+   "complexity": [
+    {
+     "bucket": "human_x",
+     "prs_total": 3,
+     "prs_touching_high_complexity": 1
+    },
+    {
+     "bucket": "ai_assisted",
+     "prs_total": 6,
+     "prs_touching_high_complexity": 2
+    },
+    {
+     "bucket": "ai_review",
+     "prs_total": 0,
+     "prs_touching_high_complexity": 0
+    }
+   ],
+   "daily": [
+    {
+     "agent_created_prs": 0,
+     "ai_assisted_pr_ratio": null,
+     "ai_assisted_prs": 0,
+     "ai_cycle_time_delta_hours": null,
+     "ai_review_amplification": null,
+     "attribution_bucket": "ai_assisted",
+     "changes_requested_per_pr": null,
+     "computed_at": "2026-09-01T12:00:00.123000+00:00",
+     "cycle_time_avg_hours": null,
+     "day": "2026-08-01",
+     "followup_commits_count": 0,
+     "human_prs": 0,
+     "incident_drag_rate": null,
+     "incidents_count": 1,
+     "leverage_cycle_time_component": null,
+     "leverage_incident_component": null,
+     "leverage_prs_component": 0.0,
+     "leverage_review_component": null,
+     "leverage_rework_component": null,
+     "leverage_test_component": null,
+     "org_id": "org-1",
+     "prs_merged": 0,
+     "prs_total": 7,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "revert_prs": 1,
+     "revert_rate": null,
+     "reviews_per_pr": null,
+     "rework_drag_rate": null,
+     "rework_prs": 2,
+     "team_id": "team-a",
+     "test_gap_prs": 3,
+     "test_gap_rate": null,
+     "unknown_prs": 0,
+     "work_type": "pull_request"
+    },
+    {
+     "agent_created_prs": 0,
+     "ai_assisted_pr_ratio": null,
+     "ai_assisted_prs": 0,
+     "ai_cycle_time_delta_hours": null,
+     "ai_review_amplification": null,
+     "attribution_bucket": "human",
+     "changes_requested_per_pr": null,
+     "computed_at": "2026-09-01T12:00:00.123000+00:00",
+     "cycle_time_avg_hours": null,
+     "day": "2026-08-01",
+     "followup_commits_count": 0,
+     "human_prs": 0,
+     "incident_drag_rate": null,
+     "incidents_count": 0,
+     "leverage_cycle_time_component": null,
+     "leverage_incident_component": null,
+     "leverage_prs_component": 0.0,
+     "leverage_review_component": null,
+     "leverage_rework_component": null,
+     "leverage_test_component": null,
+     "org_id": "org-1",
+     "prs_merged": 0,
+     "prs_total": 3,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "revert_prs": 0,
+     "revert_rate": null,
+     "reviews_per_pr": null,
+     "rework_drag_rate": null,
+     "rework_prs": 0,
+     "team_id": "team-a",
+     "test_gap_prs": 1,
+     "test_gap_rate": null,
+     "unknown_prs": 0,
+     "work_type": "pull_request"
+    },
+    {
+     "agent_created_prs": 0,
+     "ai_assisted_pr_ratio": null,
+     "ai_assisted_prs": 0,
+     "ai_cycle_time_delta_hours": null,
+     "ai_review_amplification": null,
+     "attribution_bucket": "agent_created",
+     "changes_requested_per_pr": null,
+     "computed_at": "2026-09-01T12:00:00.123000+00:00",
+     "cycle_time_avg_hours": null,
+     "day": "2026-08-02",
+     "followup_commits_count": 0,
+     "human_prs": 0,
+     "incident_drag_rate": null,
+     "incidents_count": 0,
+     "leverage_cycle_time_component": null,
+     "leverage_incident_component": null,
+     "leverage_prs_component": 0.0,
+     "leverage_review_component": null,
+     "leverage_rework_component": null,
+     "leverage_test_component": null,
+     "org_id": "org-1",
+     "prs_merged": 0,
+     "prs_total": 4,
+     "repo_id": "22222222-2222-2222-2222-222222222222",
+     "revert_prs": 0,
+     "revert_rate": null,
+     "reviews_per_pr": null,
+     "rework_drag_rate": null,
+     "rework_prs": 1,
+     "team_id": "team-b",
+     "test_gap_prs": 0,
+     "test_gap_rate": null,
+     "unknown_prs": 0,
+     "work_type": "pull_request"
+    },
+    {
+     "agent_created_prs": 0,
+     "ai_assisted_pr_ratio": null,
+     "ai_assisted_prs": 0,
+     "ai_cycle_time_delta_hours": null,
+     "ai_review_amplification": null,
+     "attribution_bucket": "ai_assisted",
+     "changes_requested_per_pr": null,
+     "computed_at": "2026-09-01T12:00:00.123000+00:00",
+     "cycle_time_avg_hours": null,
+     "day": "2026-08-02",
+     "followup_commits_count": 0,
+     "human_prs": 0,
+     "incident_drag_rate": null,
+     "incidents_count": 0,
+     "leverage_cycle_time_component": null,
+     "leverage_incident_component": null,
+     "leverage_prs_component": 0.0,
+     "leverage_review_component": null,
+     "leverage_rework_component": null,
+     "leverage_test_component": null,
+     "org_id": "org-1",
+     "prs_merged": 0,
+     "prs_total": 0,
+     "repo_id": "22222222-2222-2222-2222-222222222222",
+     "revert_prs": 0,
+     "revert_rate": null,
+     "reviews_per_pr": null,
+     "rework_drag_rate": null,
+     "rework_prs": 0,
+     "team_id": "team-b",
+     "test_gap_prs": 0,
+     "test_gap_rate": null,
+     "unknown_prs": 0,
+     "work_type": "pull_request"
+    },
+    {
+     "agent_created_prs": 0,
+     "ai_assisted_pr_ratio": null,
+     "ai_assisted_prs": 0,
+     "ai_cycle_time_delta_hours": null,
+     "ai_review_amplification": null,
+     "attribution_bucket": "unknown",
+     "changes_requested_per_pr": null,
+     "computed_at": "2026-09-01T12:00:00.123000+00:00",
+     "cycle_time_avg_hours": null,
+     "day": "2026-08-03",
+     "followup_commits_count": 0,
+     "human_prs": 0,
+     "incident_drag_rate": null,
+     "incidents_count": 2,
+     "leverage_cycle_time_component": null,
+     "leverage_incident_component": null,
+     "leverage_prs_component": 0.0,
+     "leverage_review_component": null,
+     "leverage_rework_component": null,
+     "leverage_test_component": null,
+     "org_id": "org-1",
+     "prs_merged": 0,
+     "prs_total": 2,
+     "repo_id": "33333333-3333-3333-3333-333333333333",
+     "revert_prs": 0,
+     "revert_rate": null,
+     "reviews_per_pr": null,
+     "rework_drag_rate": null,
+     "rework_prs": 0,
+     "team_id": "",
+     "test_gap_prs": 0,
+     "test_gap_rate": null,
+     "unknown_prs": 0,
+     "work_type": "pull_request"
+    }
+   ],
+   "evidence": [],
+   "expected": {
+    "byBucket": [
+     {
+      "bucket": "agent_created",
+      "incidentRate": 0.0,
+      "incidentsCount": 0,
+      "prsTotal": 4,
+      "revertPrs": 0,
+      "revertRate": 0.0,
+      "reworkPrs": 1,
+      "reworkRate": 0.25,
+      "testGapPrs": 0,
+      "testGapRate": 0.0
+     },
+     {
+      "bucket": "ai_assisted",
+      "incidentRate": 0.14285714285714285,
+      "incidentsCount": 1,
+      "prsTotal": 7,
+      "revertPrs": 1,
+      "revertRate": 0.14285714285714285,
+      "reworkPrs": 2,
+      "reworkRate": 0.2857142857142857,
+      "testGapPrs": 3,
+      "testGapRate": 0.42857142857142855
+     },
+     {
+      "bucket": "human",
+      "incidentRate": 0.0,
+      "incidentsCount": 0,
+      "prsTotal": 3,
+      "revertPrs": 0,
+      "revertRate": 0.0,
+      "reworkPrs": 0,
+      "reworkRate": 0.0,
+      "testGapPrs": 1,
+      "testGapRate": 0.3333333333333333
+     },
+     {
+      "bucket": "unknown",
+      "incidentRate": 1.0,
+      "incidentsCount": 2,
+      "prsTotal": 2,
+      "revertPrs": 0,
+      "revertRate": 0.0,
+      "reworkPrs": 0,
+      "reworkRate": 0.0,
+      "testGapPrs": 0,
+      "testGapRate": 0.0
+     }
+    ],
+    "complexityOverlap": [
+     {
+      "bucket": "ai_assisted",
+      "complexityOverlapRate": 0.3333333333333333,
+      "prsTotal": 6,
+      "prsTouchingHighComplexity": 2
+     },
+     {
+      "bucket": "human_x",
+      "complexityOverlapRate": 0.3333333333333333,
+      "prsTotal": 3,
+      "prsTouchingHighComplexity": 1
+     }
+    ],
+    "dataAvailable": true,
+    "endDate": "2026-08-03",
+    "hotspotOverlap": [],
+    "missingStates": [
+     {
+      "guidance": "No AI-attributed PRs in this window could be joined to hotspot files \u2014 either no AI PRs have commit/file linkage yet or no hotspot snapshots exist for the window. Treat missing overlap as no data, not as no risk.",
+      "key": "hotspot_overlap",
+      "title": "Hotspot overlap has no assessable AI PRs"
+     }
+    ],
+    "orgId": "org-1",
+    "startDate": "2026-08-01"
+   },
+   "fail": "hotspot",
+   "fn": "resolve_ai_risk_breakdown",
+   "hotspot": [
+    {
+     "avg_hotspot_risk_score": 2.75,
+     "bucket": "ai_assisted",
+     "prs_total": 4,
+     "prs_touching_hotspots": 3
+    },
+    {
+     "avg_hotspot_risk_score": null,
+     "bucket": "agent_created",
+     "prs_total": 0,
+     "prs_touching_hotspots": 0
+    },
+    {
+     "avg_hotspot_risk_score": "NaN",
+     "bucket": "",
+     "prs_total": 2,
+     "prs_touching_hotspots": 0
+    },
+    {
+     "avg_hotspot_risk_score": "Inf",
+     "bucket": "ai_review",
+     "prs_total": 5,
+     "prs_touching_hotspots": 5
+    }
+   ],
+   "limit": null,
+   "mix": [],
+   "name": "risk/hotspotFails",
+   "nameQueryFails": false,
+   "offset": null,
+   "prs": [],
+   "repoRows": null,
+   "scope": null,
+   "slugRows": [],
+   "teamRepoRows": null,
+   "teamRows": null
+  },
+  {
+   "calls": {
+    "hotspot": {
+     "repo_id": null,
+     "repo_ids": null
+    }
+   },
+   "complexity": [
+    {
+     "bucket": "human_x",
+     "prs_total": 3,
+     "prs_touching_high_complexity": 1
+    },
+    {
+     "bucket": "ai_assisted",
+     "prs_total": 6,
+     "prs_touching_high_complexity": 2
+    },
+    {
+     "bucket": "ai_review",
+     "prs_total": 0,
+     "prs_touching_high_complexity": 0
+    }
+   ],
+   "daily": [
+    {
+     "agent_created_prs": 0,
+     "ai_assisted_pr_ratio": null,
+     "ai_assisted_prs": 0,
+     "ai_cycle_time_delta_hours": null,
+     "ai_review_amplification": null,
+     "attribution_bucket": "ai_assisted",
+     "changes_requested_per_pr": null,
+     "computed_at": "2026-09-01T12:00:00.123000+00:00",
+     "cycle_time_avg_hours": null,
+     "day": "2026-08-01",
+     "followup_commits_count": 0,
+     "human_prs": 0,
+     "incident_drag_rate": null,
+     "incidents_count": 1,
+     "leverage_cycle_time_component": null,
+     "leverage_incident_component": null,
+     "leverage_prs_component": 0.0,
+     "leverage_review_component": null,
+     "leverage_rework_component": null,
+     "leverage_test_component": null,
+     "org_id": "org-1",
+     "prs_merged": 0,
+     "prs_total": 7,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "revert_prs": 1,
+     "revert_rate": null,
+     "reviews_per_pr": null,
+     "rework_drag_rate": null,
+     "rework_prs": 2,
+     "team_id": "team-a",
+     "test_gap_prs": 3,
+     "test_gap_rate": null,
+     "unknown_prs": 0,
+     "work_type": "pull_request"
+    },
+    {
+     "agent_created_prs": 0,
+     "ai_assisted_pr_ratio": null,
+     "ai_assisted_prs": 0,
+     "ai_cycle_time_delta_hours": null,
+     "ai_review_amplification": null,
+     "attribution_bucket": "human",
+     "changes_requested_per_pr": null,
+     "computed_at": "2026-09-01T12:00:00.123000+00:00",
+     "cycle_time_avg_hours": null,
+     "day": "2026-08-01",
+     "followup_commits_count": 0,
+     "human_prs": 0,
+     "incident_drag_rate": null,
+     "incidents_count": 0,
+     "leverage_cycle_time_component": null,
+     "leverage_incident_component": null,
+     "leverage_prs_component": 0.0,
+     "leverage_review_component": null,
+     "leverage_rework_component": null,
+     "leverage_test_component": null,
+     "org_id": "org-1",
+     "prs_merged": 0,
+     "prs_total": 3,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "revert_prs": 0,
+     "revert_rate": null,
+     "reviews_per_pr": null,
+     "rework_drag_rate": null,
+     "rework_prs": 0,
+     "team_id": "team-a",
+     "test_gap_prs": 1,
+     "test_gap_rate": null,
+     "unknown_prs": 0,
+     "work_type": "pull_request"
+    },
+    {
+     "agent_created_prs": 0,
+     "ai_assisted_pr_ratio": null,
+     "ai_assisted_prs": 0,
+     "ai_cycle_time_delta_hours": null,
+     "ai_review_amplification": null,
+     "attribution_bucket": "agent_created",
+     "changes_requested_per_pr": null,
+     "computed_at": "2026-09-01T12:00:00.123000+00:00",
+     "cycle_time_avg_hours": null,
+     "day": "2026-08-02",
+     "followup_commits_count": 0,
+     "human_prs": 0,
+     "incident_drag_rate": null,
+     "incidents_count": 0,
+     "leverage_cycle_time_component": null,
+     "leverage_incident_component": null,
+     "leverage_prs_component": 0.0,
+     "leverage_review_component": null,
+     "leverage_rework_component": null,
+     "leverage_test_component": null,
+     "org_id": "org-1",
+     "prs_merged": 0,
+     "prs_total": 4,
+     "repo_id": "22222222-2222-2222-2222-222222222222",
+     "revert_prs": 0,
+     "revert_rate": null,
+     "reviews_per_pr": null,
+     "rework_drag_rate": null,
+     "rework_prs": 1,
+     "team_id": "team-b",
+     "test_gap_prs": 0,
+     "test_gap_rate": null,
+     "unknown_prs": 0,
+     "work_type": "pull_request"
+    },
+    {
+     "agent_created_prs": 0,
+     "ai_assisted_pr_ratio": null,
+     "ai_assisted_prs": 0,
+     "ai_cycle_time_delta_hours": null,
+     "ai_review_amplification": null,
+     "attribution_bucket": "ai_assisted",
+     "changes_requested_per_pr": null,
+     "computed_at": "2026-09-01T12:00:00.123000+00:00",
+     "cycle_time_avg_hours": null,
+     "day": "2026-08-02",
+     "followup_commits_count": 0,
+     "human_prs": 0,
+     "incident_drag_rate": null,
+     "incidents_count": 0,
+     "leverage_cycle_time_component": null,
+     "leverage_incident_component": null,
+     "leverage_prs_component": 0.0,
+     "leverage_review_component": null,
+     "leverage_rework_component": null,
+     "leverage_test_component": null,
+     "org_id": "org-1",
+     "prs_merged": 0,
+     "prs_total": 0,
+     "repo_id": "22222222-2222-2222-2222-222222222222",
+     "revert_prs": 0,
+     "revert_rate": null,
+     "reviews_per_pr": null,
+     "rework_drag_rate": null,
+     "rework_prs": 0,
+     "team_id": "team-b",
+     "test_gap_prs": 0,
+     "test_gap_rate": null,
+     "unknown_prs": 0,
+     "work_type": "pull_request"
+    },
+    {
+     "agent_created_prs": 0,
+     "ai_assisted_pr_ratio": null,
+     "ai_assisted_prs": 0,
+     "ai_cycle_time_delta_hours": null,
+     "ai_review_amplification": null,
+     "attribution_bucket": "unknown",
+     "changes_requested_per_pr": null,
+     "computed_at": "2026-09-01T12:00:00.123000+00:00",
+     "cycle_time_avg_hours": null,
+     "day": "2026-08-03",
+     "followup_commits_count": 0,
+     "human_prs": 0,
+     "incident_drag_rate": null,
+     "incidents_count": 2,
+     "leverage_cycle_time_component": null,
+     "leverage_incident_component": null,
+     "leverage_prs_component": 0.0,
+     "leverage_review_component": null,
+     "leverage_rework_component": null,
+     "leverage_test_component": null,
+     "org_id": "org-1",
+     "prs_merged": 0,
+     "prs_total": 2,
+     "repo_id": "33333333-3333-3333-3333-333333333333",
+     "revert_prs": 0,
+     "revert_rate": null,
+     "reviews_per_pr": null,
+     "rework_drag_rate": null,
+     "rework_prs": 0,
+     "team_id": "",
+     "test_gap_prs": 0,
+     "test_gap_rate": null,
+     "unknown_prs": 0,
+     "work_type": "pull_request"
+    }
+   ],
+   "evidence": [],
+   "expected": {
+    "byBucket": [
+     {
+      "bucket": "agent_created",
+      "incidentRate": 0.0,
+      "incidentsCount": 0,
+      "prsTotal": 4,
+      "revertPrs": 0,
+      "revertRate": 0.0,
+      "reworkPrs": 1,
+      "reworkRate": 0.25,
+      "testGapPrs": 0,
+      "testGapRate": 0.0
+     },
+     {
+      "bucket": "ai_assisted",
+      "incidentRate": 0.14285714285714285,
+      "incidentsCount": 1,
+      "prsTotal": 7,
+      "revertPrs": 1,
+      "revertRate": 0.14285714285714285,
+      "reworkPrs": 2,
+      "reworkRate": 0.2857142857142857,
+      "testGapPrs": 3,
+      "testGapRate": 0.42857142857142855
+     },
+     {
+      "bucket": "human",
+      "incidentRate": 0.0,
+      "incidentsCount": 0,
+      "prsTotal": 3,
+      "revertPrs": 0,
+      "revertRate": 0.0,
+      "reworkPrs": 0,
+      "reworkRate": 0.0,
+      "testGapPrs": 1,
+      "testGapRate": 0.3333333333333333
+     },
+     {
+      "bucket": "unknown",
+      "incidentRate": 1.0,
+      "incidentsCount": 2,
+      "prsTotal": 2,
+      "revertPrs": 0,
+      "revertRate": 0.0,
+      "reworkPrs": 0,
+      "reworkRate": 0.0,
+      "testGapPrs": 0,
+      "testGapRate": 0.0
+     }
+    ],
+    "complexityOverlap": [],
+    "dataAvailable": true,
+    "endDate": "2026-08-03",
+    "hotspotOverlap": [
+     {
+      "avgHotspotRiskScore": 2.75,
+      "bucket": "ai_assisted",
+      "hotspotOverlapRate": 0.75,
+      "prsTotal": 4,
+      "prsTouchingHotspots": 3
+     },
+     {
+      "avgHotspotRiskScore": null,
+      "bucket": "ai_review",
+      "hotspotOverlapRate": 1.0,
+      "prsTotal": 5,
+      "prsTouchingHotspots": 5
+     },
+     {
+      "avgHotspotRiskScore": null,
+      "bucket": "unknown",
+      "hotspotOverlapRate": 0.0,
+      "prsTotal": 2,
+      "prsTouchingHotspots": 0
+     }
+    ],
+    "missingStates": [
+     {
+      "guidance": "No AI-attributed PRs in this window could be joined to high-complexity files. Drill into PR and Work Graph evidence when available; do not infer person-level quality from this gap.",
+      "key": "complexity_overlap",
+      "title": "Complexity overlap has no assessable AI PRs"
+     }
+    ],
+    "orgId": "org-1",
+    "startDate": "2026-08-01"
+   },
+   "fail": "complexity",
+   "fn": "resolve_ai_risk_breakdown",
+   "hotspot": [
+    {
+     "avg_hotspot_risk_score": 2.75,
+     "bucket": "ai_assisted",
+     "prs_total": 4,
+     "prs_touching_hotspots": 3
+    },
+    {
+     "avg_hotspot_risk_score": null,
+     "bucket": "agent_created",
+     "prs_total": 0,
+     "prs_touching_hotspots": 0
+    },
+    {
+     "avg_hotspot_risk_score": "NaN",
+     "bucket": "",
+     "prs_total": 2,
+     "prs_touching_hotspots": 0
+    },
+    {
+     "avg_hotspot_risk_score": "Inf",
+     "bucket": "ai_review",
+     "prs_total": 5,
+     "prs_touching_hotspots": 5
+    }
+   ],
+   "limit": null,
+   "mix": [],
+   "name": "risk/complexityFails",
+   "nameQueryFails": false,
+   "offset": null,
+   "prs": [],
+   "repoRows": null,
+   "scope": null,
+   "slugRows": [],
+   "teamRepoRows": null,
+   "teamRows": null
+  },
+  {
+   "calls": {},
+   "complexity": [
+    {
+     "bucket": "human_x",
+     "prs_total": 3,
+     "prs_touching_high_complexity": 1
+    },
+    {
+     "bucket": "ai_assisted",
+     "prs_total": 6,
+     "prs_touching_high_complexity": 2
+    },
+    {
+     "bucket": "ai_review",
+     "prs_total": 0,
+     "prs_touching_high_complexity": 0
+    }
+   ],
+   "daily": [
+    {
+     "agent_created_prs": 0,
+     "ai_assisted_pr_ratio": null,
+     "ai_assisted_prs": 0,
+     "ai_cycle_time_delta_hours": null,
+     "ai_review_amplification": null,
+     "attribution_bucket": "ai_assisted",
+     "changes_requested_per_pr": null,
+     "computed_at": "2026-09-01T12:00:00.123000+00:00",
+     "cycle_time_avg_hours": null,
+     "day": "2026-08-01",
+     "followup_commits_count": 0,
+     "human_prs": 0,
+     "incident_drag_rate": null,
+     "incidents_count": 1,
+     "leverage_cycle_time_component": null,
+     "leverage_incident_component": null,
+     "leverage_prs_component": 0.0,
+     "leverage_review_component": null,
+     "leverage_rework_component": null,
+     "leverage_test_component": null,
+     "org_id": "org-1",
+     "prs_merged": 0,
+     "prs_total": 7,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "revert_prs": 1,
+     "revert_rate": null,
+     "reviews_per_pr": null,
+     "rework_drag_rate": null,
+     "rework_prs": 2,
+     "team_id": "team-a",
+     "test_gap_prs": 3,
+     "test_gap_rate": null,
+     "unknown_prs": 0,
+     "work_type": "pull_request"
+    },
+    {
+     "agent_created_prs": 0,
+     "ai_assisted_pr_ratio": null,
+     "ai_assisted_prs": 0,
+     "ai_cycle_time_delta_hours": null,
+     "ai_review_amplification": null,
+     "attribution_bucket": "human",
+     "changes_requested_per_pr": null,
+     "computed_at": "2026-09-01T12:00:00.123000+00:00",
+     "cycle_time_avg_hours": null,
+     "day": "2026-08-01",
+     "followup_commits_count": 0,
+     "human_prs": 0,
+     "incident_drag_rate": null,
+     "incidents_count": 0,
+     "leverage_cycle_time_component": null,
+     "leverage_incident_component": null,
+     "leverage_prs_component": 0.0,
+     "leverage_review_component": null,
+     "leverage_rework_component": null,
+     "leverage_test_component": null,
+     "org_id": "org-1",
+     "prs_merged": 0,
+     "prs_total": 3,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "revert_prs": 0,
+     "revert_rate": null,
+     "reviews_per_pr": null,
+     "rework_drag_rate": null,
+     "rework_prs": 0,
+     "team_id": "team-a",
+     "test_gap_prs": 1,
+     "test_gap_rate": null,
+     "unknown_prs": 0,
+     "work_type": "pull_request"
+    },
+    {
+     "agent_created_prs": 0,
+     "ai_assisted_pr_ratio": null,
+     "ai_assisted_prs": 0,
+     "ai_cycle_time_delta_hours": null,
+     "ai_review_amplification": null,
+     "attribution_bucket": "agent_created",
+     "changes_requested_per_pr": null,
+     "computed_at": "2026-09-01T12:00:00.123000+00:00",
+     "cycle_time_avg_hours": null,
+     "day": "2026-08-02",
+     "followup_commits_count": 0,
+     "human_prs": 0,
+     "incident_drag_rate": null,
+     "incidents_count": 0,
+     "leverage_cycle_time_component": null,
+     "leverage_incident_component": null,
+     "leverage_prs_component": 0.0,
+     "leverage_review_component": null,
+     "leverage_rework_component": null,
+     "leverage_test_component": null,
+     "org_id": "org-1",
+     "prs_merged": 0,
+     "prs_total": 4,
+     "repo_id": "22222222-2222-2222-2222-222222222222",
+     "revert_prs": 0,
+     "revert_rate": null,
+     "reviews_per_pr": null,
+     "rework_drag_rate": null,
+     "rework_prs": 1,
+     "team_id": "team-b",
+     "test_gap_prs": 0,
+     "test_gap_rate": null,
+     "unknown_prs": 0,
+     "work_type": "pull_request"
+    },
+    {
+     "agent_created_prs": 0,
+     "ai_assisted_pr_ratio": null,
+     "ai_assisted_prs": 0,
+     "ai_cycle_time_delta_hours": null,
+     "ai_review_amplification": null,
+     "attribution_bucket": "ai_assisted",
+     "changes_requested_per_pr": null,
+     "computed_at": "2026-09-01T12:00:00.123000+00:00",
+     "cycle_time_avg_hours": null,
+     "day": "2026-08-02",
+     "followup_commits_count": 0,
+     "human_prs": 0,
+     "incident_drag_rate": null,
+     "incidents_count": 0,
+     "leverage_cycle_time_component": null,
+     "leverage_incident_component": null,
+     "leverage_prs_component": 0.0,
+     "leverage_review_component": null,
+     "leverage_rework_component": null,
+     "leverage_test_component": null,
+     "org_id": "org-1",
+     "prs_merged": 0,
+     "prs_total": 0,
+     "repo_id": "22222222-2222-2222-2222-222222222222",
+     "revert_prs": 0,
+     "revert_rate": null,
+     "reviews_per_pr": null,
+     "rework_drag_rate": null,
+     "rework_prs": 0,
+     "team_id": "team-b",
+     "test_gap_prs": 0,
+     "test_gap_rate": null,
+     "unknown_prs": 0,
+     "work_type": "pull_request"
+    },
+    {
+     "agent_created_prs": 0,
+     "ai_assisted_pr_ratio": null,
+     "ai_assisted_prs": 0,
+     "ai_cycle_time_delta_hours": null,
+     "ai_review_amplification": null,
+     "attribution_bucket": "unknown",
+     "changes_requested_per_pr": null,
+     "computed_at": "2026-09-01T12:00:00.123000+00:00",
+     "cycle_time_avg_hours": null,
+     "day": "2026-08-03",
+     "followup_commits_count": 0,
+     "human_prs": 0,
+     "incident_drag_rate": null,
+     "incidents_count": 2,
+     "leverage_cycle_time_component": null,
+     "leverage_incident_component": null,
+     "leverage_prs_component": 0.0,
+     "leverage_review_component": null,
+     "leverage_rework_component": null,
+     "leverage_test_component": null,
+     "org_id": "org-1",
+     "prs_merged": 0,
+     "prs_total": 2,
+     "repo_id": "33333333-3333-3333-3333-333333333333",
+     "revert_prs": 0,
+     "revert_rate": null,
+     "reviews_per_pr": null,
+     "rework_drag_rate": null,
+     "rework_prs": 0,
+     "team_id": "",
+     "test_gap_prs": 0,
+     "test_gap_rate": null,
+     "unknown_prs": 0,
+     "work_type": "pull_request"
+    }
+   ],
+   "evidence": [],
+   "expected": {
+    "byBucket": [
+     {
+      "bucket": "agent_created",
+      "incidentRate": 0.0,
+      "incidentsCount": 0,
+      "prsTotal": 4,
+      "revertPrs": 0,
+      "revertRate": 0.0,
+      "reworkPrs": 1,
+      "reworkRate": 0.25,
+      "testGapPrs": 0,
+      "testGapRate": 0.0
+     },
+     {
+      "bucket": "ai_assisted",
+      "incidentRate": 0.14285714285714285,
+      "incidentsCount": 1,
+      "prsTotal": 7,
+      "revertPrs": 1,
+      "revertRate": 0.14285714285714285,
+      "reworkPrs": 2,
+      "reworkRate": 0.2857142857142857,
+      "testGapPrs": 3,
+      "testGapRate": 0.42857142857142855
+     },
+     {
+      "bucket": "human",
+      "incidentRate": 0.0,
+      "incidentsCount": 0,
+      "prsTotal": 3,
+      "revertPrs": 0,
+      "revertRate": 0.0,
+      "reworkPrs": 0,
+      "reworkRate": 0.0,
+      "testGapPrs": 1,
+      "testGapRate": 0.3333333333333333
+     },
+     {
+      "bucket": "unknown",
+      "incidentRate": 1.0,
+      "incidentsCount": 2,
+      "prsTotal": 2,
+      "revertPrs": 0,
+      "revertRate": 0.0,
+      "reworkPrs": 0,
+      "reworkRate": 0.0,
+      "testGapPrs": 0,
+      "testGapRate": 0.0
+     }
+    ],
+    "complexityOverlap": [],
+    "dataAvailable": true,
+    "endDate": "2026-08-03",
+    "hotspotOverlap": [],
+    "missingStates": [
+     {
+      "guidance": "No AI-attributed PRs in this window could be joined to hotspot files \u2014 either no AI PRs have commit/file linkage yet or no hotspot snapshots exist for the window. Treat missing overlap as no data, not as no risk.",
+      "key": "hotspot_overlap",
+      "title": "Hotspot overlap has no assessable AI PRs"
+     },
+     {
+      "guidance": "No AI-attributed PRs in this window could be joined to high-complexity files. Drill into PR and Work Graph evidence when available; do not infer person-level quality from this gap.",
+      "key": "complexity_overlap",
+      "title": "Complexity overlap has no assessable AI PRs"
+     }
+    ],
+    "orgId": "org-1",
+    "startDate": "2026-08-01"
+   },
+   "fail": null,
+   "fn": "resolve_ai_risk_breakdown",
+   "hotspot": [
+    {
+     "avg_hotspot_risk_score": 2.75,
+     "bucket": "ai_assisted",
+     "prs_total": 4,
+     "prs_touching_hotspots": 3
+    },
+    {
+     "avg_hotspot_risk_score": null,
+     "bucket": "agent_created",
+     "prs_total": 0,
+     "prs_touching_hotspots": 0
+    },
+    {
+     "avg_hotspot_risk_score": "NaN",
+     "bucket": "",
+     "prs_total": 2,
+     "prs_touching_hotspots": 0
+    },
+    {
+     "avg_hotspot_risk_score": "Inf",
+     "bucket": "ai_review",
+     "prs_total": 5,
+     "prs_touching_hotspots": 5
+    }
+   ],
+   "limit": null,
+   "mix": [],
+   "name": "risk/workType",
+   "nameQueryFails": false,
+   "offset": null,
+   "prs": [],
+   "repoRows": null,
+   "scope": {
+    "buckets": [],
+    "repoId": null,
+    "teamId": null,
+    "workType": "pull_request"
+   },
+   "slugRows": [],
+   "teamRepoRows": null,
+   "teamRows": null
+  },
+  {
+   "calls": {},
+   "complexity": [
+    {
+     "bucket": "human_x",
+     "prs_total": 3,
+     "prs_touching_high_complexity": 1
+    },
+    {
+     "bucket": "ai_assisted",
+     "prs_total": 6,
+     "prs_touching_high_complexity": 2
+    },
+    {
+     "bucket": "ai_review",
+     "prs_total": 0,
+     "prs_touching_high_complexity": 0
+    }
+   ],
+   "daily": [
+    {
+     "agent_created_prs": 0,
+     "ai_assisted_pr_ratio": null,
+     "ai_assisted_prs": 0,
+     "ai_cycle_time_delta_hours": null,
+     "ai_review_amplification": null,
+     "attribution_bucket": "ai_assisted",
+     "changes_requested_per_pr": null,
+     "computed_at": "2026-09-01T12:00:00.123000+00:00",
+     "cycle_time_avg_hours": null,
+     "day": "2026-08-01",
+     "followup_commits_count": 0,
+     "human_prs": 0,
+     "incident_drag_rate": null,
+     "incidents_count": 1,
+     "leverage_cycle_time_component": null,
+     "leverage_incident_component": null,
+     "leverage_prs_component": 0.0,
+     "leverage_review_component": null,
+     "leverage_rework_component": null,
+     "leverage_test_component": null,
+     "org_id": "org-1",
+     "prs_merged": 0,
+     "prs_total": 7,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "revert_prs": 1,
+     "revert_rate": null,
+     "reviews_per_pr": null,
+     "rework_drag_rate": null,
+     "rework_prs": 2,
+     "team_id": "team-a",
+     "test_gap_prs": 3,
+     "test_gap_rate": null,
+     "unknown_prs": 0,
+     "work_type": "pull_request"
+    },
+    {
+     "agent_created_prs": 0,
+     "ai_assisted_pr_ratio": null,
+     "ai_assisted_prs": 0,
+     "ai_cycle_time_delta_hours": null,
+     "ai_review_amplification": null,
+     "attribution_bucket": "human",
+     "changes_requested_per_pr": null,
+     "computed_at": "2026-09-01T12:00:00.123000+00:00",
+     "cycle_time_avg_hours": null,
+     "day": "2026-08-01",
+     "followup_commits_count": 0,
+     "human_prs": 0,
+     "incident_drag_rate": null,
+     "incidents_count": 0,
+     "leverage_cycle_time_component": null,
+     "leverage_incident_component": null,
+     "leverage_prs_component": 0.0,
+     "leverage_review_component": null,
+     "leverage_rework_component": null,
+     "leverage_test_component": null,
+     "org_id": "org-1",
+     "prs_merged": 0,
+     "prs_total": 3,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "revert_prs": 0,
+     "revert_rate": null,
+     "reviews_per_pr": null,
+     "rework_drag_rate": null,
+     "rework_prs": 0,
+     "team_id": "team-a",
+     "test_gap_prs": 1,
+     "test_gap_rate": null,
+     "unknown_prs": 0,
+     "work_type": "pull_request"
+    },
+    {
+     "agent_created_prs": 0,
+     "ai_assisted_pr_ratio": null,
+     "ai_assisted_prs": 0,
+     "ai_cycle_time_delta_hours": null,
+     "ai_review_amplification": null,
+     "attribution_bucket": "agent_created",
+     "changes_requested_per_pr": null,
+     "computed_at": "2026-09-01T12:00:00.123000+00:00",
+     "cycle_time_avg_hours": null,
+     "day": "2026-08-02",
+     "followup_commits_count": 0,
+     "human_prs": 0,
+     "incident_drag_rate": null,
+     "incidents_count": 0,
+     "leverage_cycle_time_component": null,
+     "leverage_incident_component": null,
+     "leverage_prs_component": 0.0,
+     "leverage_review_component": null,
+     "leverage_rework_component": null,
+     "leverage_test_component": null,
+     "org_id": "org-1",
+     "prs_merged": 0,
+     "prs_total": 4,
+     "repo_id": "22222222-2222-2222-2222-222222222222",
+     "revert_prs": 0,
+     "revert_rate": null,
+     "reviews_per_pr": null,
+     "rework_drag_rate": null,
+     "rework_prs": 1,
+     "team_id": "team-b",
+     "test_gap_prs": 0,
+     "test_gap_rate": null,
+     "unknown_prs": 0,
+     "work_type": "pull_request"
+    },
+    {
+     "agent_created_prs": 0,
+     "ai_assisted_pr_ratio": null,
+     "ai_assisted_prs": 0,
+     "ai_cycle_time_delta_hours": null,
+     "ai_review_amplification": null,
+     "attribution_bucket": "ai_assisted",
+     "changes_requested_per_pr": null,
+     "computed_at": "2026-09-01T12:00:00.123000+00:00",
+     "cycle_time_avg_hours": null,
+     "day": "2026-08-02",
+     "followup_commits_count": 0,
+     "human_prs": 0,
+     "incident_drag_rate": null,
+     "incidents_count": 0,
+     "leverage_cycle_time_component": null,
+     "leverage_incident_component": null,
+     "leverage_prs_component": 0.0,
+     "leverage_review_component": null,
+     "leverage_rework_component": null,
+     "leverage_test_component": null,
+     "org_id": "org-1",
+     "prs_merged": 0,
+     "prs_total": 0,
+     "repo_id": "22222222-2222-2222-2222-222222222222",
+     "revert_prs": 0,
+     "revert_rate": null,
+     "reviews_per_pr": null,
+     "rework_drag_rate": null,
+     "rework_prs": 0,
+     "team_id": "team-b",
+     "test_gap_prs": 0,
+     "test_gap_rate": null,
+     "unknown_prs": 0,
+     "work_type": "pull_request"
+    },
+    {
+     "agent_created_prs": 0,
+     "ai_assisted_pr_ratio": null,
+     "ai_assisted_prs": 0,
+     "ai_cycle_time_delta_hours": null,
+     "ai_review_amplification": null,
+     "attribution_bucket": "unknown",
+     "changes_requested_per_pr": null,
+     "computed_at": "2026-09-01T12:00:00.123000+00:00",
+     "cycle_time_avg_hours": null,
+     "day": "2026-08-03",
+     "followup_commits_count": 0,
+     "human_prs": 0,
+     "incident_drag_rate": null,
+     "incidents_count": 2,
+     "leverage_cycle_time_component": null,
+     "leverage_incident_component": null,
+     "leverage_prs_component": 0.0,
+     "leverage_review_component": null,
+     "leverage_rework_component": null,
+     "leverage_test_component": null,
+     "org_id": "org-1",
+     "prs_merged": 0,
+     "prs_total": 2,
+     "repo_id": "33333333-3333-3333-3333-333333333333",
+     "revert_prs": 0,
+     "revert_rate": null,
+     "reviews_per_pr": null,
+     "rework_drag_rate": null,
+     "rework_prs": 0,
+     "team_id": "",
+     "test_gap_prs": 0,
+     "test_gap_rate": null,
+     "unknown_prs": 0,
+     "work_type": "pull_request"
+    }
+   ],
+   "evidence": [],
+   "expected": {
+    "byBucket": [],
+    "complexityOverlap": [],
+    "dataAvailable": false,
+    "endDate": "2026-08-03",
+    "hotspotOverlap": [],
+    "missingStates": [
+     {
+      "guidance": "No AI-attributed PRs in this window could be joined to hotspot files \u2014 either no AI PRs have commit/file linkage yet or no hotspot snapshots exist for the window. Treat missing overlap as no data, not as no risk.",
+      "key": "hotspot_overlap",
+      "title": "Hotspot overlap has no assessable AI PRs"
+     },
+     {
+      "guidance": "No AI-attributed PRs in this window could be joined to high-complexity files. Drill into PR and Work Graph evidence when available; do not infer person-level quality from this gap.",
+      "key": "complexity_overlap",
+      "title": "Complexity overlap has no assessable AI PRs"
+     }
+    ],
+    "orgId": "org-1",
+    "startDate": "2026-08-01"
+   },
+   "fail": null,
+   "fn": "resolve_ai_risk_breakdown",
+   "hotspot": [
+    {
+     "avg_hotspot_risk_score": 2.75,
+     "bucket": "ai_assisted",
+     "prs_total": 4,
+     "prs_touching_hotspots": 3
+    },
+    {
+     "avg_hotspot_risk_score": null,
+     "bucket": "agent_created",
+     "prs_total": 0,
+     "prs_touching_hotspots": 0
+    },
+    {
+     "avg_hotspot_risk_score": "NaN",
+     "bucket": "",
+     "prs_total": 2,
+     "prs_touching_hotspots": 0
+    },
+    {
+     "avg_hotspot_risk_score": "Inf",
+     "bucket": "ai_review",
+     "prs_total": 5,
+     "prs_touching_hotspots": 5
+    }
+   ],
+   "limit": null,
+   "mix": [],
+   "name": "risk/repoUnresolved",
+   "nameQueryFails": false,
+   "offset": null,
+   "prs": [],
+   "repoRows": null,
+   "scope": {
+    "buckets": [],
+    "repoId": "no/such",
+    "teamId": null,
+    "workType": null
+   },
+   "slugRows": [],
+   "teamRepoRows": null,
+   "teamRows": null
+  },
+  {
+   "calls": {
+    "hotspot": {
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "repo_ids": null
+    }
+   },
+   "complexity": [
+    {
+     "bucket": "human_x",
+     "prs_total": 3,
+     "prs_touching_high_complexity": 1
+    },
+    {
+     "bucket": "ai_assisted",
+     "prs_total": 6,
+     "prs_touching_high_complexity": 2
+    },
+    {
+     "bucket": "ai_review",
+     "prs_total": 0,
+     "prs_touching_high_complexity": 0
+    }
+   ],
+   "daily": [
+    {
+     "agent_created_prs": 0,
+     "ai_assisted_pr_ratio": null,
+     "ai_assisted_prs": 0,
+     "ai_cycle_time_delta_hours": null,
+     "ai_review_amplification": null,
+     "attribution_bucket": "ai_assisted",
+     "changes_requested_per_pr": null,
+     "computed_at": "2026-09-01T12:00:00.123000+00:00",
+     "cycle_time_avg_hours": null,
+     "day": "2026-08-01",
+     "followup_commits_count": 0,
+     "human_prs": 0,
+     "incident_drag_rate": null,
+     "incidents_count": 1,
+     "leverage_cycle_time_component": null,
+     "leverage_incident_component": null,
+     "leverage_prs_component": 0.0,
+     "leverage_review_component": null,
+     "leverage_rework_component": null,
+     "leverage_test_component": null,
+     "org_id": "org-1",
+     "prs_merged": 0,
+     "prs_total": 7,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "revert_prs": 1,
+     "revert_rate": null,
+     "reviews_per_pr": null,
+     "rework_drag_rate": null,
+     "rework_prs": 2,
+     "team_id": "team-a",
+     "test_gap_prs": 3,
+     "test_gap_rate": null,
+     "unknown_prs": 0,
+     "work_type": "pull_request"
+    },
+    {
+     "agent_created_prs": 0,
+     "ai_assisted_pr_ratio": null,
+     "ai_assisted_prs": 0,
+     "ai_cycle_time_delta_hours": null,
+     "ai_review_amplification": null,
+     "attribution_bucket": "human",
+     "changes_requested_per_pr": null,
+     "computed_at": "2026-09-01T12:00:00.123000+00:00",
+     "cycle_time_avg_hours": null,
+     "day": "2026-08-01",
+     "followup_commits_count": 0,
+     "human_prs": 0,
+     "incident_drag_rate": null,
+     "incidents_count": 0,
+     "leverage_cycle_time_component": null,
+     "leverage_incident_component": null,
+     "leverage_prs_component": 0.0,
+     "leverage_review_component": null,
+     "leverage_rework_component": null,
+     "leverage_test_component": null,
+     "org_id": "org-1",
+     "prs_merged": 0,
+     "prs_total": 3,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "revert_prs": 0,
+     "revert_rate": null,
+     "reviews_per_pr": null,
+     "rework_drag_rate": null,
+     "rework_prs": 0,
+     "team_id": "team-a",
+     "test_gap_prs": 1,
+     "test_gap_rate": null,
+     "unknown_prs": 0,
+     "work_type": "pull_request"
+    },
+    {
+     "agent_created_prs": 0,
+     "ai_assisted_pr_ratio": null,
+     "ai_assisted_prs": 0,
+     "ai_cycle_time_delta_hours": null,
+     "ai_review_amplification": null,
+     "attribution_bucket": "agent_created",
+     "changes_requested_per_pr": null,
+     "computed_at": "2026-09-01T12:00:00.123000+00:00",
+     "cycle_time_avg_hours": null,
+     "day": "2026-08-02",
+     "followup_commits_count": 0,
+     "human_prs": 0,
+     "incident_drag_rate": null,
+     "incidents_count": 0,
+     "leverage_cycle_time_component": null,
+     "leverage_incident_component": null,
+     "leverage_prs_component": 0.0,
+     "leverage_review_component": null,
+     "leverage_rework_component": null,
+     "leverage_test_component": null,
+     "org_id": "org-1",
+     "prs_merged": 0,
+     "prs_total": 4,
+     "repo_id": "22222222-2222-2222-2222-222222222222",
+     "revert_prs": 0,
+     "revert_rate": null,
+     "reviews_per_pr": null,
+     "rework_drag_rate": null,
+     "rework_prs": 1,
+     "team_id": "team-b",
+     "test_gap_prs": 0,
+     "test_gap_rate": null,
+     "unknown_prs": 0,
+     "work_type": "pull_request"
+    },
+    {
+     "agent_created_prs": 0,
+     "ai_assisted_pr_ratio": null,
+     "ai_assisted_prs": 0,
+     "ai_cycle_time_delta_hours": null,
+     "ai_review_amplification": null,
+     "attribution_bucket": "ai_assisted",
+     "changes_requested_per_pr": null,
+     "computed_at": "2026-09-01T12:00:00.123000+00:00",
+     "cycle_time_avg_hours": null,
+     "day": "2026-08-02",
+     "followup_commits_count": 0,
+     "human_prs": 0,
+     "incident_drag_rate": null,
+     "incidents_count": 0,
+     "leverage_cycle_time_component": null,
+     "leverage_incident_component": null,
+     "leverage_prs_component": 0.0,
+     "leverage_review_component": null,
+     "leverage_rework_component": null,
+     "leverage_test_component": null,
+     "org_id": "org-1",
+     "prs_merged": 0,
+     "prs_total": 0,
+     "repo_id": "22222222-2222-2222-2222-222222222222",
+     "revert_prs": 0,
+     "revert_rate": null,
+     "reviews_per_pr": null,
+     "rework_drag_rate": null,
+     "rework_prs": 0,
+     "team_id": "team-b",
+     "test_gap_prs": 0,
+     "test_gap_rate": null,
+     "unknown_prs": 0,
+     "work_type": "pull_request"
+    },
+    {
+     "agent_created_prs": 0,
+     "ai_assisted_pr_ratio": null,
+     "ai_assisted_prs": 0,
+     "ai_cycle_time_delta_hours": null,
+     "ai_review_amplification": null,
+     "attribution_bucket": "unknown",
+     "changes_requested_per_pr": null,
+     "computed_at": "2026-09-01T12:00:00.123000+00:00",
+     "cycle_time_avg_hours": null,
+     "day": "2026-08-03",
+     "followup_commits_count": 0,
+     "human_prs": 0,
+     "incident_drag_rate": null,
+     "incidents_count": 2,
+     "leverage_cycle_time_component": null,
+     "leverage_incident_component": null,
+     "leverage_prs_component": 0.0,
+     "leverage_review_component": null,
+     "leverage_rework_component": null,
+     "leverage_test_component": null,
+     "org_id": "org-1",
+     "prs_merged": 0,
+     "prs_total": 2,
+     "repo_id": "33333333-3333-3333-3333-333333333333",
+     "revert_prs": 0,
+     "revert_rate": null,
+     "reviews_per_pr": null,
+     "rework_drag_rate": null,
+     "rework_prs": 0,
+     "team_id": "",
+     "test_gap_prs": 0,
+     "test_gap_rate": null,
+     "unknown_prs": 0,
+     "work_type": "pull_request"
+    }
+   ],
+   "evidence": [],
+   "expected": {
+    "byBucket": [
+     {
+      "bucket": "agent_created",
+      "incidentRate": 0.0,
+      "incidentsCount": 0,
+      "prsTotal": 4,
+      "revertPrs": 0,
+      "revertRate": 0.0,
+      "reworkPrs": 1,
+      "reworkRate": 0.25,
+      "testGapPrs": 0,
+      "testGapRate": 0.0
+     },
+     {
+      "bucket": "ai_assisted",
+      "incidentRate": 0.14285714285714285,
+      "incidentsCount": 1,
+      "prsTotal": 7,
+      "revertPrs": 1,
+      "revertRate": 0.14285714285714285,
+      "reworkPrs": 2,
+      "reworkRate": 0.2857142857142857,
+      "testGapPrs": 3,
+      "testGapRate": 0.42857142857142855
+     },
+     {
+      "bucket": "human",
+      "incidentRate": 0.0,
+      "incidentsCount": 0,
+      "prsTotal": 3,
+      "revertPrs": 0,
+      "revertRate": 0.0,
+      "reworkPrs": 0,
+      "reworkRate": 0.0,
+      "testGapPrs": 1,
+      "testGapRate": 0.3333333333333333
+     },
+     {
+      "bucket": "unknown",
+      "incidentRate": 1.0,
+      "incidentsCount": 2,
+      "prsTotal": 2,
+      "revertPrs": 0,
+      "revertRate": 0.0,
+      "reworkPrs": 0,
+      "reworkRate": 0.0,
+      "testGapPrs": 0,
+      "testGapRate": 0.0
+     }
+    ],
+    "complexityOverlap": [
+     {
+      "bucket": "ai_assisted",
+      "complexityOverlapRate": 0.3333333333333333,
+      "prsTotal": 6,
+      "prsTouchingHighComplexity": 2
+     },
+     {
+      "bucket": "human_x",
+      "complexityOverlapRate": 0.3333333333333333,
+      "prsTotal": 3,
+      "prsTouchingHighComplexity": 1
+     }
+    ],
+    "dataAvailable": true,
+    "endDate": "2026-08-03",
+    "hotspotOverlap": [
+     {
+      "avgHotspotRiskScore": 2.75,
+      "bucket": "ai_assisted",
+      "hotspotOverlapRate": 0.75,
+      "prsTotal": 4,
+      "prsTouchingHotspots": 3
+     },
+     {
+      "avgHotspotRiskScore": null,
+      "bucket": "ai_review",
+      "hotspotOverlapRate": 1.0,
+      "prsTotal": 5,
+      "prsTouchingHotspots": 5
+     },
+     {
+      "avgHotspotRiskScore": null,
+      "bucket": "unknown",
+      "hotspotOverlapRate": 0.0,
+      "prsTotal": 2,
+      "prsTouchingHotspots": 0
+     }
+    ],
+    "missingStates": [],
+    "orgId": "org-1",
+    "startDate": "2026-08-01"
+   },
+   "fail": null,
+   "fn": "resolve_ai_risk_breakdown",
+   "hotspot": [
+    {
+     "avg_hotspot_risk_score": 2.75,
+     "bucket": "ai_assisted",
+     "prs_total": 4,
+     "prs_touching_hotspots": 3
+    },
+    {
+     "avg_hotspot_risk_score": null,
+     "bucket": "agent_created",
+     "prs_total": 0,
+     "prs_touching_hotspots": 0
+    },
+    {
+     "avg_hotspot_risk_score": "NaN",
+     "bucket": "",
+     "prs_total": 2,
+     "prs_touching_hotspots": 0
+    },
+    {
+     "avg_hotspot_risk_score": "Inf",
+     "bucket": "ai_review",
+     "prs_total": 5,
+     "prs_touching_hotspots": 5
+    }
+   ],
+   "limit": null,
+   "mix": [],
+   "name": "risk/repoSlug",
+   "nameQueryFails": false,
+   "offset": null,
+   "prs": [],
+   "repoRows": null,
+   "scope": {
+    "buckets": [],
+    "repoId": "acme/alpha",
+    "teamId": null,
+    "workType": null
+   },
+   "slugRows": [
+    "11111111-1111-1111-1111-111111111111"
+   ],
+   "teamRepoRows": null,
+   "teamRows": null
+  },
+  {
+   "calls": {
+    "hotspot": {
+     "repo_id": null,
+     "repo_ids": [
+      "22222222-2222-2222-2222-222222222222"
+     ]
+    }
+   },
+   "complexity": [
+    {
+     "bucket": "human_x",
+     "prs_total": 3,
+     "prs_touching_high_complexity": 1
+    },
+    {
+     "bucket": "ai_assisted",
+     "prs_total": 6,
+     "prs_touching_high_complexity": 2
+    },
+    {
+     "bucket": "ai_review",
+     "prs_total": 0,
+     "prs_touching_high_complexity": 0
+    }
+   ],
+   "daily": [
+    {
+     "agent_created_prs": 0,
+     "ai_assisted_pr_ratio": null,
+     "ai_assisted_prs": 0,
+     "ai_cycle_time_delta_hours": null,
+     "ai_review_amplification": null,
+     "attribution_bucket": "ai_assisted",
+     "changes_requested_per_pr": null,
+     "computed_at": "2026-09-01T12:00:00.123000+00:00",
+     "cycle_time_avg_hours": null,
+     "day": "2026-08-01",
+     "followup_commits_count": 0,
+     "human_prs": 0,
+     "incident_drag_rate": null,
+     "incidents_count": 1,
+     "leverage_cycle_time_component": null,
+     "leverage_incident_component": null,
+     "leverage_prs_component": 0.0,
+     "leverage_review_component": null,
+     "leverage_rework_component": null,
+     "leverage_test_component": null,
+     "org_id": "org-1",
+     "prs_merged": 0,
+     "prs_total": 7,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "revert_prs": 1,
+     "revert_rate": null,
+     "reviews_per_pr": null,
+     "rework_drag_rate": null,
+     "rework_prs": 2,
+     "team_id": "team-a",
+     "test_gap_prs": 3,
+     "test_gap_rate": null,
+     "unknown_prs": 0,
+     "work_type": "pull_request"
+    },
+    {
+     "agent_created_prs": 0,
+     "ai_assisted_pr_ratio": null,
+     "ai_assisted_prs": 0,
+     "ai_cycle_time_delta_hours": null,
+     "ai_review_amplification": null,
+     "attribution_bucket": "human",
+     "changes_requested_per_pr": null,
+     "computed_at": "2026-09-01T12:00:00.123000+00:00",
+     "cycle_time_avg_hours": null,
+     "day": "2026-08-01",
+     "followup_commits_count": 0,
+     "human_prs": 0,
+     "incident_drag_rate": null,
+     "incidents_count": 0,
+     "leverage_cycle_time_component": null,
+     "leverage_incident_component": null,
+     "leverage_prs_component": 0.0,
+     "leverage_review_component": null,
+     "leverage_rework_component": null,
+     "leverage_test_component": null,
+     "org_id": "org-1",
+     "prs_merged": 0,
+     "prs_total": 3,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "revert_prs": 0,
+     "revert_rate": null,
+     "reviews_per_pr": null,
+     "rework_drag_rate": null,
+     "rework_prs": 0,
+     "team_id": "team-a",
+     "test_gap_prs": 1,
+     "test_gap_rate": null,
+     "unknown_prs": 0,
+     "work_type": "pull_request"
+    },
+    {
+     "agent_created_prs": 0,
+     "ai_assisted_pr_ratio": null,
+     "ai_assisted_prs": 0,
+     "ai_cycle_time_delta_hours": null,
+     "ai_review_amplification": null,
+     "attribution_bucket": "agent_created",
+     "changes_requested_per_pr": null,
+     "computed_at": "2026-09-01T12:00:00.123000+00:00",
+     "cycle_time_avg_hours": null,
+     "day": "2026-08-02",
+     "followup_commits_count": 0,
+     "human_prs": 0,
+     "incident_drag_rate": null,
+     "incidents_count": 0,
+     "leverage_cycle_time_component": null,
+     "leverage_incident_component": null,
+     "leverage_prs_component": 0.0,
+     "leverage_review_component": null,
+     "leverage_rework_component": null,
+     "leverage_test_component": null,
+     "org_id": "org-1",
+     "prs_merged": 0,
+     "prs_total": 4,
+     "repo_id": "22222222-2222-2222-2222-222222222222",
+     "revert_prs": 0,
+     "revert_rate": null,
+     "reviews_per_pr": null,
+     "rework_drag_rate": null,
+     "rework_prs": 1,
+     "team_id": "team-b",
+     "test_gap_prs": 0,
+     "test_gap_rate": null,
+     "unknown_prs": 0,
+     "work_type": "pull_request"
+    },
+    {
+     "agent_created_prs": 0,
+     "ai_assisted_pr_ratio": null,
+     "ai_assisted_prs": 0,
+     "ai_cycle_time_delta_hours": null,
+     "ai_review_amplification": null,
+     "attribution_bucket": "ai_assisted",
+     "changes_requested_per_pr": null,
+     "computed_at": "2026-09-01T12:00:00.123000+00:00",
+     "cycle_time_avg_hours": null,
+     "day": "2026-08-02",
+     "followup_commits_count": 0,
+     "human_prs": 0,
+     "incident_drag_rate": null,
+     "incidents_count": 0,
+     "leverage_cycle_time_component": null,
+     "leverage_incident_component": null,
+     "leverage_prs_component": 0.0,
+     "leverage_review_component": null,
+     "leverage_rework_component": null,
+     "leverage_test_component": null,
+     "org_id": "org-1",
+     "prs_merged": 0,
+     "prs_total": 0,
+     "repo_id": "22222222-2222-2222-2222-222222222222",
+     "revert_prs": 0,
+     "revert_rate": null,
+     "reviews_per_pr": null,
+     "rework_drag_rate": null,
+     "rework_prs": 0,
+     "team_id": "team-b",
+     "test_gap_prs": 0,
+     "test_gap_rate": null,
+     "unknown_prs": 0,
+     "work_type": "pull_request"
+    },
+    {
+     "agent_created_prs": 0,
+     "ai_assisted_pr_ratio": null,
+     "ai_assisted_prs": 0,
+     "ai_cycle_time_delta_hours": null,
+     "ai_review_amplification": null,
+     "attribution_bucket": "unknown",
+     "changes_requested_per_pr": null,
+     "computed_at": "2026-09-01T12:00:00.123000+00:00",
+     "cycle_time_avg_hours": null,
+     "day": "2026-08-03",
+     "followup_commits_count": 0,
+     "human_prs": 0,
+     "incident_drag_rate": null,
+     "incidents_count": 2,
+     "leverage_cycle_time_component": null,
+     "leverage_incident_component": null,
+     "leverage_prs_component": 0.0,
+     "leverage_review_component": null,
+     "leverage_rework_component": null,
+     "leverage_test_component": null,
+     "org_id": "org-1",
+     "prs_merged": 0,
+     "prs_total": 2,
+     "repo_id": "33333333-3333-3333-3333-333333333333",
+     "revert_prs": 0,
+     "revert_rate": null,
+     "reviews_per_pr": null,
+     "rework_drag_rate": null,
+     "rework_prs": 0,
+     "team_id": "",
+     "test_gap_prs": 0,
+     "test_gap_rate": null,
+     "unknown_prs": 0,
+     "work_type": "pull_request"
+    }
+   ],
+   "evidence": [],
+   "expected": {
+    "byBucket": [
+     {
+      "bucket": "agent_created",
+      "incidentRate": 0.0,
+      "incidentsCount": 0,
+      "prsTotal": 4,
+      "revertPrs": 0,
+      "revertRate": 0.0,
+      "reworkPrs": 1,
+      "reworkRate": 0.25,
+      "testGapPrs": 0,
+      "testGapRate": 0.0
+     },
+     {
+      "bucket": "ai_assisted",
+      "incidentRate": 0.14285714285714285,
+      "incidentsCount": 1,
+      "prsTotal": 7,
+      "revertPrs": 1,
+      "revertRate": 0.14285714285714285,
+      "reworkPrs": 2,
+      "reworkRate": 0.2857142857142857,
+      "testGapPrs": 3,
+      "testGapRate": 0.42857142857142855
+     },
+     {
+      "bucket": "human",
+      "incidentRate": 0.0,
+      "incidentsCount": 0,
+      "prsTotal": 3,
+      "revertPrs": 0,
+      "revertRate": 0.0,
+      "reworkPrs": 0,
+      "reworkRate": 0.0,
+      "testGapPrs": 1,
+      "testGapRate": 0.3333333333333333
+     },
+     {
+      "bucket": "unknown",
+      "incidentRate": 1.0,
+      "incidentsCount": 2,
+      "prsTotal": 2,
+      "revertPrs": 0,
+      "revertRate": 0.0,
+      "reworkPrs": 0,
+      "reworkRate": 0.0,
+      "testGapPrs": 0,
+      "testGapRate": 0.0
+     }
+    ],
+    "complexityOverlap": [
+     {
+      "bucket": "ai_assisted",
+      "complexityOverlapRate": 0.3333333333333333,
+      "prsTotal": 6,
+      "prsTouchingHighComplexity": 2
+     },
+     {
+      "bucket": "human_x",
+      "complexityOverlapRate": 0.3333333333333333,
+      "prsTotal": 3,
+      "prsTouchingHighComplexity": 1
+     }
+    ],
+    "dataAvailable": true,
+    "endDate": "2026-08-03",
+    "hotspotOverlap": [
+     {
+      "avgHotspotRiskScore": 2.75,
+      "bucket": "ai_assisted",
+      "hotspotOverlapRate": 0.75,
+      "prsTotal": 4,
+      "prsTouchingHotspots": 3
+     },
+     {
+      "avgHotspotRiskScore": null,
+      "bucket": "ai_review",
+      "hotspotOverlapRate": 1.0,
+      "prsTotal": 5,
+      "prsTouchingHotspots": 5
+     },
+     {
+      "avgHotspotRiskScore": null,
+      "bucket": "unknown",
+      "hotspotOverlapRate": 0.0,
+      "prsTotal": 2,
+      "prsTouchingHotspots": 0
+     }
+    ],
+    "missingStates": [],
+    "orgId": "org-1",
+    "startDate": "2026-08-01"
+   },
+   "fail": null,
+   "fn": "resolve_ai_risk_breakdown",
+   "hotspot": [
+    {
+     "avg_hotspot_risk_score": 2.75,
+     "bucket": "ai_assisted",
+     "prs_total": 4,
+     "prs_touching_hotspots": 3
+    },
+    {
+     "avg_hotspot_risk_score": null,
+     "bucket": "agent_created",
+     "prs_total": 0,
+     "prs_touching_hotspots": 0
+    },
+    {
+     "avg_hotspot_risk_score": "NaN",
+     "bucket": "",
+     "prs_total": 2,
+     "prs_touching_hotspots": 0
+    },
+    {
+     "avg_hotspot_risk_score": "Inf",
+     "bucket": "ai_review",
+     "prs_total": 5,
+     "prs_touching_hotspots": 5
+    }
+   ],
+   "limit": null,
+   "mix": [],
+   "name": "risk/teamPatterns",
+   "nameQueryFails": false,
+   "offset": null,
+   "prs": [],
+   "repoRows": [
+    {
+     "full_name": "acme/alpha",
+     "repo_id": "11111111-1111-1111-1111-111111111111"
+    },
+    {
+     "full_name": "Acme/Beta",
+     "repo_id": "22222222-2222-2222-2222-222222222222"
+    },
+    {
+     "full_name": "",
+     "repo_id": "33333333-3333-3333-3333-333333333333"
+    }
+   ],
+   "scope": {
+    "buckets": [],
+    "repoId": null,
+    "teamId": "team-b",
+    "workType": null
+   },
+   "slugRows": [],
+   "teamRepoRows": null,
+   "teamRows": [
+    {
+     "id": "team-a",
+     "name": "Team A",
+     "repo_patterns": [
+      "acme/alpha"
+     ]
+    },
+    {
+     "id": "team-b",
+     "name": "B",
+     "repo_patterns": [
+      "ACME/*"
+     ]
+    }
+   ]
+  },
+  {
+   "calls": {},
+   "complexity": [
+    {
+     "bucket": "human_x",
+     "prs_total": 3,
+     "prs_touching_high_complexity": 1
+    },
+    {
+     "bucket": "ai_assisted",
+     "prs_total": 6,
+     "prs_touching_high_complexity": 2
+    },
+    {
+     "bucket": "ai_review",
+     "prs_total": 0,
+     "prs_touching_high_complexity": 0
+    }
+   ],
+   "daily": [
+    {
+     "agent_created_prs": 0,
+     "ai_assisted_pr_ratio": null,
+     "ai_assisted_prs": 0,
+     "ai_cycle_time_delta_hours": null,
+     "ai_review_amplification": null,
+     "attribution_bucket": "ai_assisted",
+     "changes_requested_per_pr": null,
+     "computed_at": "2026-09-01T12:00:00.123000+00:00",
+     "cycle_time_avg_hours": null,
+     "day": "2026-08-01",
+     "followup_commits_count": 0,
+     "human_prs": 0,
+     "incident_drag_rate": null,
+     "incidents_count": 1,
+     "leverage_cycle_time_component": null,
+     "leverage_incident_component": null,
+     "leverage_prs_component": 0.0,
+     "leverage_review_component": null,
+     "leverage_rework_component": null,
+     "leverage_test_component": null,
+     "org_id": "org-1",
+     "prs_merged": 0,
+     "prs_total": 7,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "revert_prs": 1,
+     "revert_rate": null,
+     "reviews_per_pr": null,
+     "rework_drag_rate": null,
+     "rework_prs": 2,
+     "team_id": "team-a",
+     "test_gap_prs": 3,
+     "test_gap_rate": null,
+     "unknown_prs": 0,
+     "work_type": "pull_request"
+    },
+    {
+     "agent_created_prs": 0,
+     "ai_assisted_pr_ratio": null,
+     "ai_assisted_prs": 0,
+     "ai_cycle_time_delta_hours": null,
+     "ai_review_amplification": null,
+     "attribution_bucket": "human",
+     "changes_requested_per_pr": null,
+     "computed_at": "2026-09-01T12:00:00.123000+00:00",
+     "cycle_time_avg_hours": null,
+     "day": "2026-08-01",
+     "followup_commits_count": 0,
+     "human_prs": 0,
+     "incident_drag_rate": null,
+     "incidents_count": 0,
+     "leverage_cycle_time_component": null,
+     "leverage_incident_component": null,
+     "leverage_prs_component": 0.0,
+     "leverage_review_component": null,
+     "leverage_rework_component": null,
+     "leverage_test_component": null,
+     "org_id": "org-1",
+     "prs_merged": 0,
+     "prs_total": 3,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "revert_prs": 0,
+     "revert_rate": null,
+     "reviews_per_pr": null,
+     "rework_drag_rate": null,
+     "rework_prs": 0,
+     "team_id": "team-a",
+     "test_gap_prs": 1,
+     "test_gap_rate": null,
+     "unknown_prs": 0,
+     "work_type": "pull_request"
+    },
+    {
+     "agent_created_prs": 0,
+     "ai_assisted_pr_ratio": null,
+     "ai_assisted_prs": 0,
+     "ai_cycle_time_delta_hours": null,
+     "ai_review_amplification": null,
+     "attribution_bucket": "agent_created",
+     "changes_requested_per_pr": null,
+     "computed_at": "2026-09-01T12:00:00.123000+00:00",
+     "cycle_time_avg_hours": null,
+     "day": "2026-08-02",
+     "followup_commits_count": 0,
+     "human_prs": 0,
+     "incident_drag_rate": null,
+     "incidents_count": 0,
+     "leverage_cycle_time_component": null,
+     "leverage_incident_component": null,
+     "leverage_prs_component": 0.0,
+     "leverage_review_component": null,
+     "leverage_rework_component": null,
+     "leverage_test_component": null,
+     "org_id": "org-1",
+     "prs_merged": 0,
+     "prs_total": 4,
+     "repo_id": "22222222-2222-2222-2222-222222222222",
+     "revert_prs": 0,
+     "revert_rate": null,
+     "reviews_per_pr": null,
+     "rework_drag_rate": null,
+     "rework_prs": 1,
+     "team_id": "team-b",
+     "test_gap_prs": 0,
+     "test_gap_rate": null,
+     "unknown_prs": 0,
+     "work_type": "pull_request"
+    },
+    {
+     "agent_created_prs": 0,
+     "ai_assisted_pr_ratio": null,
+     "ai_assisted_prs": 0,
+     "ai_cycle_time_delta_hours": null,
+     "ai_review_amplification": null,
+     "attribution_bucket": "ai_assisted",
+     "changes_requested_per_pr": null,
+     "computed_at": "2026-09-01T12:00:00.123000+00:00",
+     "cycle_time_avg_hours": null,
+     "day": "2026-08-02",
+     "followup_commits_count": 0,
+     "human_prs": 0,
+     "incident_drag_rate": null,
+     "incidents_count": 0,
+     "leverage_cycle_time_component": null,
+     "leverage_incident_component": null,
+     "leverage_prs_component": 0.0,
+     "leverage_review_component": null,
+     "leverage_rework_component": null,
+     "leverage_test_component": null,
+     "org_id": "org-1",
+     "prs_merged": 0,
+     "prs_total": 0,
+     "repo_id": "22222222-2222-2222-2222-222222222222",
+     "revert_prs": 0,
+     "revert_rate": null,
+     "reviews_per_pr": null,
+     "rework_drag_rate": null,
+     "rework_prs": 0,
+     "team_id": "team-b",
+     "test_gap_prs": 0,
+     "test_gap_rate": null,
+     "unknown_prs": 0,
+     "work_type": "pull_request"
+    },
+    {
+     "agent_created_prs": 0,
+     "ai_assisted_pr_ratio": null,
+     "ai_assisted_prs": 0,
+     "ai_cycle_time_delta_hours": null,
+     "ai_review_amplification": null,
+     "attribution_bucket": "unknown",
+     "changes_requested_per_pr": null,
+     "computed_at": "2026-09-01T12:00:00.123000+00:00",
+     "cycle_time_avg_hours": null,
+     "day": "2026-08-03",
+     "followup_commits_count": 0,
+     "human_prs": 0,
+     "incident_drag_rate": null,
+     "incidents_count": 2,
+     "leverage_cycle_time_component": null,
+     "leverage_incident_component": null,
+     "leverage_prs_component": 0.0,
+     "leverage_review_component": null,
+     "leverage_rework_component": null,
+     "leverage_test_component": null,
+     "org_id": "org-1",
+     "prs_merged": 0,
+     "prs_total": 2,
+     "repo_id": "33333333-3333-3333-3333-333333333333",
+     "revert_prs": 0,
+     "revert_rate": null,
+     "reviews_per_pr": null,
+     "rework_drag_rate": null,
+     "rework_prs": 0,
+     "team_id": "",
+     "test_gap_prs": 0,
+     "test_gap_rate": null,
+     "unknown_prs": 0,
+     "work_type": "pull_request"
+    }
+   ],
+   "evidence": [],
+   "expected": {
+    "byBucket": [
+     {
+      "bucket": "agent_created",
+      "incidentRate": 0.0,
+      "incidentsCount": 0,
+      "prsTotal": 4,
+      "revertPrs": 0,
+      "revertRate": 0.0,
+      "reworkPrs": 1,
+      "reworkRate": 0.25,
+      "testGapPrs": 0,
+      "testGapRate": 0.0
+     },
+     {
+      "bucket": "ai_assisted",
+      "incidentRate": 0.14285714285714285,
+      "incidentsCount": 1,
+      "prsTotal": 7,
+      "revertPrs": 1,
+      "revertRate": 0.14285714285714285,
+      "reworkPrs": 2,
+      "reworkRate": 0.2857142857142857,
+      "testGapPrs": 3,
+      "testGapRate": 0.42857142857142855
+     },
+     {
+      "bucket": "human",
+      "incidentRate": 0.0,
+      "incidentsCount": 0,
+      "prsTotal": 3,
+      "revertPrs": 0,
+      "revertRate": 0.0,
+      "reworkPrs": 0,
+      "reworkRate": 0.0,
+      "testGapPrs": 1,
+      "testGapRate": 0.3333333333333333
+     },
+     {
+      "bucket": "unknown",
+      "incidentRate": 1.0,
+      "incidentsCount": 2,
+      "prsTotal": 2,
+      "revertPrs": 0,
+      "revertRate": 0.0,
+      "reworkPrs": 0,
+      "reworkRate": 0.0,
+      "testGapPrs": 0,
+      "testGapRate": 0.0
+     }
+    ],
+    "complexityOverlap": [],
+    "dataAvailable": true,
+    "endDate": "2026-08-03",
+    "hotspotOverlap": [],
+    "missingStates": [
+     {
+      "guidance": "No AI-attributed PRs in this window could be joined to hotspot files \u2014 either no AI PRs have commit/file linkage yet or no hotspot snapshots exist for the window. Treat missing overlap as no data, not as no risk.",
+      "key": "hotspot_overlap",
+      "title": "Hotspot overlap has no assessable AI PRs"
+     },
+     {
+      "guidance": "No AI-attributed PRs in this window could be joined to high-complexity files. Drill into PR and Work Graph evidence when available; do not infer person-level quality from this gap.",
+      "key": "complexity_overlap",
+      "title": "Complexity overlap has no assessable AI PRs"
+     }
+    ],
+    "orgId": "org-1",
+    "startDate": "2026-08-01"
+   },
+   "fail": null,
+   "fn": "resolve_ai_risk_breakdown",
+   "hotspot": [
+    {
+     "avg_hotspot_risk_score": 2.75,
+     "bucket": "ai_assisted",
+     "prs_total": 4,
+     "prs_touching_hotspots": 3
+    },
+    {
+     "avg_hotspot_risk_score": null,
+     "bucket": "agent_created",
+     "prs_total": 0,
+     "prs_touching_hotspots": 0
+    },
+    {
+     "avg_hotspot_risk_score": "NaN",
+     "bucket": "",
+     "prs_total": 2,
+     "prs_touching_hotspots": 0
+    },
+    {
+     "avg_hotspot_risk_score": "Inf",
+     "bucket": "ai_review",
+     "prs_total": 5,
+     "prs_touching_hotspots": 5
+    }
+   ],
+   "limit": null,
+   "mix": [],
+   "name": "risk/teamNoRepos",
+   "nameQueryFails": false,
+   "offset": null,
+   "prs": [],
+   "repoRows": [
+    {
+     "full_name": "acme/alpha",
+     "repo_id": "11111111-1111-1111-1111-111111111111"
+    },
+    {
+     "full_name": "Acme/Beta",
+     "repo_id": "22222222-2222-2222-2222-222222222222"
+    },
+    {
+     "full_name": "",
+     "repo_id": "33333333-3333-3333-3333-333333333333"
+    }
+   ],
+   "scope": {
+    "buckets": [],
+    "repoId": null,
+    "teamId": "team-z",
+    "workType": null
+   },
+   "slugRows": [],
+   "teamRepoRows": null,
+   "teamRows": [
+    {
+     "id": "team-a",
+     "name": "Team A",
+     "repo_patterns": [
+      "acme/alpha"
+     ]
+    },
+    {
+     "id": "team-b",
+     "name": "B",
+     "repo_patterns": [
+      "ACME/*"
+     ]
+    }
+   ]
+  },
+  {
+   "calls": {},
+   "complexity": [
+    {
+     "bucket": "human_x",
+     "prs_total": 3,
+     "prs_touching_high_complexity": 1
+    },
+    {
+     "bucket": "ai_assisted",
+     "prs_total": 6,
+     "prs_touching_high_complexity": 2
+    },
+    {
+     "bucket": "ai_review",
+     "prs_total": 0,
+     "prs_touching_high_complexity": 0
+    }
+   ],
+   "daily": [
+    {
+     "agent_created_prs": 0,
+     "ai_assisted_pr_ratio": null,
+     "ai_assisted_prs": 0,
+     "ai_cycle_time_delta_hours": null,
+     "ai_review_amplification": null,
+     "attribution_bucket": "ai_assisted",
+     "changes_requested_per_pr": null,
+     "computed_at": "2026-09-01T12:00:00.123000+00:00",
+     "cycle_time_avg_hours": null,
+     "day": "2026-08-01",
+     "followup_commits_count": 0,
+     "human_prs": 0,
+     "incident_drag_rate": null,
+     "incidents_count": 1,
+     "leverage_cycle_time_component": null,
+     "leverage_incident_component": null,
+     "leverage_prs_component": 0.0,
+     "leverage_review_component": null,
+     "leverage_rework_component": null,
+     "leverage_test_component": null,
+     "org_id": "org-1",
+     "prs_merged": 0,
+     "prs_total": 7,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "revert_prs": 1,
+     "revert_rate": null,
+     "reviews_per_pr": null,
+     "rework_drag_rate": null,
+     "rework_prs": 2,
+     "team_id": "team-a",
+     "test_gap_prs": 3,
+     "test_gap_rate": null,
+     "unknown_prs": 0,
+     "work_type": "pull_request"
+    },
+    {
+     "agent_created_prs": 0,
+     "ai_assisted_pr_ratio": null,
+     "ai_assisted_prs": 0,
+     "ai_cycle_time_delta_hours": null,
+     "ai_review_amplification": null,
+     "attribution_bucket": "human",
+     "changes_requested_per_pr": null,
+     "computed_at": "2026-09-01T12:00:00.123000+00:00",
+     "cycle_time_avg_hours": null,
+     "day": "2026-08-01",
+     "followup_commits_count": 0,
+     "human_prs": 0,
+     "incident_drag_rate": null,
+     "incidents_count": 0,
+     "leverage_cycle_time_component": null,
+     "leverage_incident_component": null,
+     "leverage_prs_component": 0.0,
+     "leverage_review_component": null,
+     "leverage_rework_component": null,
+     "leverage_test_component": null,
+     "org_id": "org-1",
+     "prs_merged": 0,
+     "prs_total": 3,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "revert_prs": 0,
+     "revert_rate": null,
+     "reviews_per_pr": null,
+     "rework_drag_rate": null,
+     "rework_prs": 0,
+     "team_id": "team-a",
+     "test_gap_prs": 1,
+     "test_gap_rate": null,
+     "unknown_prs": 0,
+     "work_type": "pull_request"
+    },
+    {
+     "agent_created_prs": 0,
+     "ai_assisted_pr_ratio": null,
+     "ai_assisted_prs": 0,
+     "ai_cycle_time_delta_hours": null,
+     "ai_review_amplification": null,
+     "attribution_bucket": "agent_created",
+     "changes_requested_per_pr": null,
+     "computed_at": "2026-09-01T12:00:00.123000+00:00",
+     "cycle_time_avg_hours": null,
+     "day": "2026-08-02",
+     "followup_commits_count": 0,
+     "human_prs": 0,
+     "incident_drag_rate": null,
+     "incidents_count": 0,
+     "leverage_cycle_time_component": null,
+     "leverage_incident_component": null,
+     "leverage_prs_component": 0.0,
+     "leverage_review_component": null,
+     "leverage_rework_component": null,
+     "leverage_test_component": null,
+     "org_id": "org-1",
+     "prs_merged": 0,
+     "prs_total": 4,
+     "repo_id": "22222222-2222-2222-2222-222222222222",
+     "revert_prs": 0,
+     "revert_rate": null,
+     "reviews_per_pr": null,
+     "rework_drag_rate": null,
+     "rework_prs": 1,
+     "team_id": "team-b",
+     "test_gap_prs": 0,
+     "test_gap_rate": null,
+     "unknown_prs": 0,
+     "work_type": "pull_request"
+    },
+    {
+     "agent_created_prs": 0,
+     "ai_assisted_pr_ratio": null,
+     "ai_assisted_prs": 0,
+     "ai_cycle_time_delta_hours": null,
+     "ai_review_amplification": null,
+     "attribution_bucket": "ai_assisted",
+     "changes_requested_per_pr": null,
+     "computed_at": "2026-09-01T12:00:00.123000+00:00",
+     "cycle_time_avg_hours": null,
+     "day": "2026-08-02",
+     "followup_commits_count": 0,
+     "human_prs": 0,
+     "incident_drag_rate": null,
+     "incidents_count": 0,
+     "leverage_cycle_time_component": null,
+     "leverage_incident_component": null,
+     "leverage_prs_component": 0.0,
+     "leverage_review_component": null,
+     "leverage_rework_component": null,
+     "leverage_test_component": null,
+     "org_id": "org-1",
+     "prs_merged": 0,
+     "prs_total": 0,
+     "repo_id": "22222222-2222-2222-2222-222222222222",
+     "revert_prs": 0,
+     "revert_rate": null,
+     "reviews_per_pr": null,
+     "rework_drag_rate": null,
+     "rework_prs": 0,
+     "team_id": "team-b",
+     "test_gap_prs": 0,
+     "test_gap_rate": null,
+     "unknown_prs": 0,
+     "work_type": "pull_request"
+    },
+    {
+     "agent_created_prs": 0,
+     "ai_assisted_pr_ratio": null,
+     "ai_assisted_prs": 0,
+     "ai_cycle_time_delta_hours": null,
+     "ai_review_amplification": null,
+     "attribution_bucket": "unknown",
+     "changes_requested_per_pr": null,
+     "computed_at": "2026-09-01T12:00:00.123000+00:00",
+     "cycle_time_avg_hours": null,
+     "day": "2026-08-03",
+     "followup_commits_count": 0,
+     "human_prs": 0,
+     "incident_drag_rate": null,
+     "incidents_count": 2,
+     "leverage_cycle_time_component": null,
+     "leverage_incident_component": null,
+     "leverage_prs_component": 0.0,
+     "leverage_review_component": null,
+     "leverage_rework_component": null,
+     "leverage_test_component": null,
+     "org_id": "org-1",
+     "prs_merged": 0,
+     "prs_total": 2,
+     "repo_id": "33333333-3333-3333-3333-333333333333",
+     "revert_prs": 0,
+     "revert_rate": null,
+     "reviews_per_pr": null,
+     "rework_drag_rate": null,
+     "rework_prs": 0,
+     "team_id": "",
+     "test_gap_prs": 0,
+     "test_gap_rate": null,
+     "unknown_prs": 0,
+     "work_type": "pull_request"
+    }
+   ],
+   "evidence": [],
+   "expected": {
+    "byBucket": [
+     {
+      "bucket": "agent_created",
+      "incidentRate": 0.0,
+      "incidentsCount": 0,
+      "prsTotal": 4,
+      "revertPrs": 0,
+      "revertRate": 0.0,
+      "reworkPrs": 1,
+      "reworkRate": 0.25,
+      "testGapPrs": 0,
+      "testGapRate": 0.0
+     },
+     {
+      "bucket": "ai_assisted",
+      "incidentRate": 0.14285714285714285,
+      "incidentsCount": 1,
+      "prsTotal": 7,
+      "revertPrs": 1,
+      "revertRate": 0.14285714285714285,
+      "reworkPrs": 2,
+      "reworkRate": 0.2857142857142857,
+      "testGapPrs": 3,
+      "testGapRate": 0.42857142857142855
+     },
+     {
+      "bucket": "human",
+      "incidentRate": 0.0,
+      "incidentsCount": 0,
+      "prsTotal": 3,
+      "revertPrs": 0,
+      "revertRate": 0.0,
+      "reworkPrs": 0,
+      "reworkRate": 0.0,
+      "testGapPrs": 1,
+      "testGapRate": 0.3333333333333333
+     },
+     {
+      "bucket": "unknown",
+      "incidentRate": 1.0,
+      "incidentsCount": 2,
+      "prsTotal": 2,
+      "revertPrs": 0,
+      "revertRate": 0.0,
+      "reworkPrs": 0,
+      "reworkRate": 0.0,
+      "testGapPrs": 0,
+      "testGapRate": 0.0
+     }
+    ],
+    "complexityOverlap": [],
+    "dataAvailable": true,
+    "endDate": "2026-08-03",
+    "hotspotOverlap": [],
+    "missingStates": [
+     {
+      "guidance": "No AI-attributed PRs in this window could be joined to hotspot files \u2014 either no AI PRs have commit/file linkage yet or no hotspot snapshots exist for the window. Treat missing overlap as no data, not as no risk.",
+      "key": "hotspot_overlap",
+      "title": "Hotspot overlap has no assessable AI PRs"
+     },
+     {
+      "guidance": "No AI-attributed PRs in this window could be joined to high-complexity files. Drill into PR and Work Graph evidence when available; do not infer person-level quality from this gap.",
+      "key": "complexity_overlap",
+      "title": "Complexity overlap has no assessable AI PRs"
+     }
+    ],
+    "orgId": "org-1",
+    "startDate": "2026-08-01"
+   },
+   "fail": "teams",
+   "fn": "resolve_ai_risk_breakdown",
+   "hotspot": [
+    {
+     "avg_hotspot_risk_score": 2.75,
+     "bucket": "ai_assisted",
+     "prs_total": 4,
+     "prs_touching_hotspots": 3
+    },
+    {
+     "avg_hotspot_risk_score": null,
+     "bucket": "agent_created",
+     "prs_total": 0,
+     "prs_touching_hotspots": 0
+    },
+    {
+     "avg_hotspot_risk_score": "NaN",
+     "bucket": "",
+     "prs_total": 2,
+     "prs_touching_hotspots": 0
+    },
+    {
+     "avg_hotspot_risk_score": "Inf",
+     "bucket": "ai_review",
+     "prs_total": 5,
+     "prs_touching_hotspots": 5
+    }
+   ],
+   "limit": null,
+   "mix": [],
+   "name": "risk/teamCatalogueFails",
+   "nameQueryFails": false,
+   "offset": null,
+   "prs": [],
+   "repoRows": [
+    {
+     "full_name": "acme/alpha",
+     "repo_id": "11111111-1111-1111-1111-111111111111"
+    },
+    {
+     "full_name": "Acme/Beta",
+     "repo_id": "22222222-2222-2222-2222-222222222222"
+    },
+    {
+     "full_name": "",
+     "repo_id": "33333333-3333-3333-3333-333333333333"
+    }
+   ],
+   "scope": {
+    "buckets": [],
+    "repoId": null,
+    "teamId": "team-b",
+    "workType": null
+   },
+   "slugRows": [],
+   "teamRepoRows": null,
+   "teamRows": [
+    {
+     "id": "team-a",
+     "name": "Team A",
+     "repo_patterns": [
+      "acme/alpha"
+     ]
+    },
+    {
+     "id": "team-b",
+     "name": "B",
+     "repo_patterns": [
+      "ACME/*"
+     ]
+    }
+   ]
+  },
+  {
+   "calls": {
+    "hotspot": {
+     "repo_id": null,
+     "repo_ids": null
+    }
+   },
+   "complexity": [
+    {
+     "bucket": "ai_review",
+     "prs_total": 0,
+     "prs_touching_high_complexity": 0
+    }
+   ],
+   "daily": [
+    {
+     "agent_created_prs": 0,
+     "ai_assisted_pr_ratio": null,
+     "ai_assisted_prs": 0,
+     "ai_cycle_time_delta_hours": null,
+     "ai_review_amplification": null,
+     "attribution_bucket": "ai_assisted",
+     "changes_requested_per_pr": null,
+     "computed_at": "2026-09-01T12:00:00.123000+00:00",
+     "cycle_time_avg_hours": null,
+     "day": "2026-08-01",
+     "followup_commits_count": 0,
+     "human_prs": 0,
+     "incident_drag_rate": null,
+     "incidents_count": 1,
+     "leverage_cycle_time_component": null,
+     "leverage_incident_component": null,
+     "leverage_prs_component": 0.0,
+     "leverage_review_component": null,
+     "leverage_rework_component": null,
+     "leverage_test_component": null,
+     "org_id": "org-1",
+     "prs_merged": 0,
+     "prs_total": 7,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "revert_prs": 1,
+     "revert_rate": null,
+     "reviews_per_pr": null,
+     "rework_drag_rate": null,
+     "rework_prs": 2,
+     "team_id": "team-a",
+     "test_gap_prs": 3,
+     "test_gap_rate": null,
+     "unknown_prs": 0,
+     "work_type": "pull_request"
+    },
+    {
+     "agent_created_prs": 0,
+     "ai_assisted_pr_ratio": null,
+     "ai_assisted_prs": 0,
+     "ai_cycle_time_delta_hours": null,
+     "ai_review_amplification": null,
+     "attribution_bucket": "human",
+     "changes_requested_per_pr": null,
+     "computed_at": "2026-09-01T12:00:00.123000+00:00",
+     "cycle_time_avg_hours": null,
+     "day": "2026-08-01",
+     "followup_commits_count": 0,
+     "human_prs": 0,
+     "incident_drag_rate": null,
+     "incidents_count": 0,
+     "leverage_cycle_time_component": null,
+     "leverage_incident_component": null,
+     "leverage_prs_component": 0.0,
+     "leverage_review_component": null,
+     "leverage_rework_component": null,
+     "leverage_test_component": null,
+     "org_id": "org-1",
+     "prs_merged": 0,
+     "prs_total": 3,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "revert_prs": 0,
+     "revert_rate": null,
+     "reviews_per_pr": null,
+     "rework_drag_rate": null,
+     "rework_prs": 0,
+     "team_id": "team-a",
+     "test_gap_prs": 1,
+     "test_gap_rate": null,
+     "unknown_prs": 0,
+     "work_type": "pull_request"
+    },
+    {
+     "agent_created_prs": 0,
+     "ai_assisted_pr_ratio": null,
+     "ai_assisted_prs": 0,
+     "ai_cycle_time_delta_hours": null,
+     "ai_review_amplification": null,
+     "attribution_bucket": "agent_created",
+     "changes_requested_per_pr": null,
+     "computed_at": "2026-09-01T12:00:00.123000+00:00",
+     "cycle_time_avg_hours": null,
+     "day": "2026-08-02",
+     "followup_commits_count": 0,
+     "human_prs": 0,
+     "incident_drag_rate": null,
+     "incidents_count": 0,
+     "leverage_cycle_time_component": null,
+     "leverage_incident_component": null,
+     "leverage_prs_component": 0.0,
+     "leverage_review_component": null,
+     "leverage_rework_component": null,
+     "leverage_test_component": null,
+     "org_id": "org-1",
+     "prs_merged": 0,
+     "prs_total": 4,
+     "repo_id": "22222222-2222-2222-2222-222222222222",
+     "revert_prs": 0,
+     "revert_rate": null,
+     "reviews_per_pr": null,
+     "rework_drag_rate": null,
+     "rework_prs": 1,
+     "team_id": "team-b",
+     "test_gap_prs": 0,
+     "test_gap_rate": null,
+     "unknown_prs": 0,
+     "work_type": "pull_request"
+    },
+    {
+     "agent_created_prs": 0,
+     "ai_assisted_pr_ratio": null,
+     "ai_assisted_prs": 0,
+     "ai_cycle_time_delta_hours": null,
+     "ai_review_amplification": null,
+     "attribution_bucket": "ai_assisted",
+     "changes_requested_per_pr": null,
+     "computed_at": "2026-09-01T12:00:00.123000+00:00",
+     "cycle_time_avg_hours": null,
+     "day": "2026-08-02",
+     "followup_commits_count": 0,
+     "human_prs": 0,
+     "incident_drag_rate": null,
+     "incidents_count": 0,
+     "leverage_cycle_time_component": null,
+     "leverage_incident_component": null,
+     "leverage_prs_component": 0.0,
+     "leverage_review_component": null,
+     "leverage_rework_component": null,
+     "leverage_test_component": null,
+     "org_id": "org-1",
+     "prs_merged": 0,
+     "prs_total": 0,
+     "repo_id": "22222222-2222-2222-2222-222222222222",
+     "revert_prs": 0,
+     "revert_rate": null,
+     "reviews_per_pr": null,
+     "rework_drag_rate": null,
+     "rework_prs": 0,
+     "team_id": "team-b",
+     "test_gap_prs": 0,
+     "test_gap_rate": null,
+     "unknown_prs": 0,
+     "work_type": "pull_request"
+    },
+    {
+     "agent_created_prs": 0,
+     "ai_assisted_pr_ratio": null,
+     "ai_assisted_prs": 0,
+     "ai_cycle_time_delta_hours": null,
+     "ai_review_amplification": null,
+     "attribution_bucket": "unknown",
+     "changes_requested_per_pr": null,
+     "computed_at": "2026-09-01T12:00:00.123000+00:00",
+     "cycle_time_avg_hours": null,
+     "day": "2026-08-03",
+     "followup_commits_count": 0,
+     "human_prs": 0,
+     "incident_drag_rate": null,
+     "incidents_count": 2,
+     "leverage_cycle_time_component": null,
+     "leverage_incident_component": null,
+     "leverage_prs_component": 0.0,
+     "leverage_review_component": null,
+     "leverage_rework_component": null,
+     "leverage_test_component": null,
+     "org_id": "org-1",
+     "prs_merged": 0,
+     "prs_total": 2,
+     "repo_id": "33333333-3333-3333-3333-333333333333",
+     "revert_prs": 0,
+     "revert_rate": null,
+     "reviews_per_pr": null,
+     "rework_drag_rate": null,
+     "rework_prs": 0,
+     "team_id": "",
+     "test_gap_prs": 0,
+     "test_gap_rate": null,
+     "unknown_prs": 0,
+     "work_type": "pull_request"
+    }
+   ],
+   "evidence": [],
+   "expected": {
+    "byBucket": [
+     {
+      "bucket": "agent_created",
+      "incidentRate": 0.0,
+      "incidentsCount": 0,
+      "prsTotal": 4,
+      "revertPrs": 0,
+      "revertRate": 0.0,
+      "reworkPrs": 1,
+      "reworkRate": 0.25,
+      "testGapPrs": 0,
+      "testGapRate": 0.0
+     },
+     {
+      "bucket": "ai_assisted",
+      "incidentRate": 0.14285714285714285,
+      "incidentsCount": 1,
+      "prsTotal": 7,
+      "revertPrs": 1,
+      "revertRate": 0.14285714285714285,
+      "reworkPrs": 2,
+      "reworkRate": 0.2857142857142857,
+      "testGapPrs": 3,
+      "testGapRate": 0.42857142857142855
+     },
+     {
+      "bucket": "human",
+      "incidentRate": 0.0,
+      "incidentsCount": 0,
+      "prsTotal": 3,
+      "revertPrs": 0,
+      "revertRate": 0.0,
+      "reworkPrs": 0,
+      "reworkRate": 0.0,
+      "testGapPrs": 1,
+      "testGapRate": 0.3333333333333333
+     },
+     {
+      "bucket": "unknown",
+      "incidentRate": 1.0,
+      "incidentsCount": 2,
+      "prsTotal": 2,
+      "revertPrs": 0,
+      "revertRate": 0.0,
+      "reworkPrs": 0,
+      "reworkRate": 0.0,
+      "testGapPrs": 0,
+      "testGapRate": 0.0
+     }
+    ],
+    "complexityOverlap": [],
+    "dataAvailable": true,
+    "endDate": "2026-08-03",
+    "hotspotOverlap": [],
+    "missingStates": [
+     {
+      "guidance": "No AI-attributed PRs in this window could be joined to hotspot files \u2014 either no AI PRs have commit/file linkage yet or no hotspot snapshots exist for the window. Treat missing overlap as no data, not as no risk.",
+      "key": "hotspot_overlap",
+      "title": "Hotspot overlap has no assessable AI PRs"
+     },
+     {
+      "guidance": "No AI-attributed PRs in this window could be joined to high-complexity files. Drill into PR and Work Graph evidence when available; do not infer person-level quality from this gap.",
+      "key": "complexity_overlap",
+      "title": "Complexity overlap has no assessable AI PRs"
+     }
+    ],
+    "orgId": "org-1",
+    "startDate": "2026-08-01"
+   },
+   "fail": null,
+   "fn": "resolve_ai_risk_breakdown",
+   "hotspot": [
+    {
+     "avg_hotspot_risk_score": null,
+     "bucket": "agent_created",
+     "prs_total": 0,
+     "prs_touching_hotspots": 0
+    }
+   ],
+   "limit": null,
+   "mix": [],
+   "name": "risk/onlyEmptyOverlap",
+   "nameQueryFails": false,
+   "offset": null,
+   "prs": [],
+   "repoRows": null,
+   "scope": null,
+   "slugRows": [],
+   "teamRepoRows": null,
+   "teamRows": null
+  },
+  {
+   "calls": {
+    "prs": {
+     "limit": 51,
+     "offset": 0,
+     "repo_id": null,
+     "repo_ids": null
+    }
+   },
+   "complexity": [],
+   "daily": [],
+   "evidence": [],
+   "expected": {
+    "dataAvailable": true,
+    "endDate": "2026-08-03",
+    "hasMore": false,
+    "orgId": "org-1",
+    "rows": [
+     {
+      "kind": "ai_assisted",
+      "mergedAt": "2026-08-02T10:00:00.500000+00:00",
+      "number": 7,
+      "repoId": "11111111-1111-1111-1111-111111111111",
+      "teamId": "team-a",
+      "title": "Add thing",
+      "workType": "pull_request"
+     },
+     {
+      "kind": "agent_created",
+      "mergedAt": null,
+      "number": 6,
+      "repoId": "11111111-1111-1111-1111-111111111111",
+      "teamId": "team-a",
+      "title": null,
+      "workType": "story"
+     }
+    ],
+    "startDate": "2026-08-01",
+    "total": 2
+   },
+   "fail": null,
+   "fn": "resolve_ai_attributed_prs",
+   "hotspot": [],
+   "limit": 50,
+   "mix": [],
+   "name": "prs/plain",
+   "nameQueryFails": false,
+   "offset": 0,
+   "prs": [
+    {
+     "kind": "ai_assisted",
+     "merged_at": "2026-08-02T10:00:00.500000",
+     "number": 7,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "team_id": null,
+     "title": "Add thing",
+     "work_type": "pull_request"
+    },
+    {
+     "kind": "agent_created",
+     "merged_at": null,
+     "number": 6,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "team_id": null,
+     "title": null,
+     "work_type": "story"
+    }
+   ],
+   "repoRows": [
+    {
+     "full_name": "acme/alpha",
+     "repo_id": "11111111-1111-1111-1111-111111111111"
+    },
+    {
+     "full_name": "Acme/Beta",
+     "repo_id": "22222222-2222-2222-2222-222222222222"
+    },
+    {
+     "full_name": "",
+     "repo_id": "33333333-3333-3333-3333-333333333333"
+    }
+   ],
+   "scope": null,
+   "slugRows": [],
+   "teamRepoRows": null,
+   "teamRows": [
+    {
+     "id": "team-a",
+     "name": "Team A",
+     "repo_patterns": [
+      "acme/alpha"
+     ]
+    },
+    {
+     "id": "team-b",
+     "name": "B",
+     "repo_patterns": [
+      "ACME/*"
+     ]
+    }
+   ]
+  },
+  {
+   "calls": {
+    "prs": {
+     "limit": 4,
+     "offset": 0,
+     "repo_id": null,
+     "repo_ids": null
+    }
+   },
+   "complexity": [],
+   "daily": [],
+   "evidence": [],
+   "expected": {
+    "dataAvailable": true,
+    "endDate": "2026-08-03",
+    "hasMore": true,
+    "orgId": "org-1",
+    "rows": [
+     {
+      "kind": "ai_assisted",
+      "mergedAt": "2026-08-02T10:00:00.500000+00:00",
+      "number": 7,
+      "repoId": "11111111-1111-1111-1111-111111111111",
+      "teamId": "team-a",
+      "title": "Add thing",
+      "workType": "pull_request"
+     },
+     {
+      "kind": "agent_created",
+      "mergedAt": null,
+      "number": 6,
+      "repoId": "11111111-1111-1111-1111-111111111111",
+      "teamId": "team-a",
+      "title": null,
+      "workType": "story"
+     },
+     {
+      "kind": "ai_review",
+      "mergedAt": "2026-08-02T10:00:00.500000+00:00",
+      "number": 2,
+      "repoId": "22222222-2222-2222-2222-222222222222",
+      "teamId": "team-b",
+      "title": "B thing",
+      "workType": "pull_request"
+     }
+    ],
+    "startDate": "2026-08-01",
+    "total": 3
+   },
+   "fail": null,
+   "fn": "resolve_ai_attributed_prs",
+   "hotspot": [],
+   "limit": 3,
+   "mix": [],
+   "name": "prs/hasMore",
+   "nameQueryFails": false,
+   "offset": 0,
+   "prs": [
+    {
+     "kind": "ai_assisted",
+     "merged_at": "2026-08-02T10:00:00.500000",
+     "number": 7,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "team_id": null,
+     "title": "Add thing",
+     "work_type": "pull_request"
+    },
+    {
+     "kind": "agent_created",
+     "merged_at": null,
+     "number": 6,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "team_id": null,
+     "title": null,
+     "work_type": "story"
+    },
+    {
+     "kind": "ai_review",
+     "merged_at": "2026-08-02T10:00:00.500000",
+     "number": 2,
+     "repo_id": "22222222-2222-2222-2222-222222222222",
+     "team_id": null,
+     "title": "B thing",
+     "work_type": "pull_request"
+    },
+    {
+     "kind": "ai_assisted",
+     "merged_at": "2026-08-02T10:00:00.500000",
+     "number": 1,
+     "repo_id": "33333333-3333-3333-3333-333333333333",
+     "team_id": null,
+     "title": "C thing",
+     "work_type": "pull_request"
+    }
+   ],
+   "repoRows": [
+    {
+     "full_name": "acme/alpha",
+     "repo_id": "11111111-1111-1111-1111-111111111111"
+    },
+    {
+     "full_name": "Acme/Beta",
+     "repo_id": "22222222-2222-2222-2222-222222222222"
+    },
+    {
+     "full_name": "",
+     "repo_id": "33333333-3333-3333-3333-333333333333"
+    }
+   ],
+   "scope": null,
+   "slugRows": [],
+   "teamRepoRows": null,
+   "teamRows": [
+    {
+     "id": "team-a",
+     "name": "Team A",
+     "repo_patterns": [
+      "acme/alpha"
+     ]
+    },
+    {
+     "id": "team-b",
+     "name": "B",
+     "repo_patterns": [
+      "ACME/*"
+     ]
+    }
+   ]
+  },
+  {
+   "calls": {
+    "prs": {
+     "limit": 2,
+     "offset": 0,
+     "repo_id": null,
+     "repo_ids": null
+    }
+   },
+   "complexity": [],
+   "daily": [],
+   "evidence": [],
+   "expected": {
+    "dataAvailable": true,
+    "endDate": "2026-08-03",
+    "hasMore": true,
+    "orgId": "org-1",
+    "rows": [
+     {
+      "kind": "ai_assisted",
+      "mergedAt": "2026-08-02T10:00:00.500000+00:00",
+      "number": 7,
+      "repoId": "11111111-1111-1111-1111-111111111111",
+      "teamId": "team-a",
+      "title": "Add thing",
+      "workType": "pull_request"
+     }
+    ],
+    "startDate": "2026-08-01",
+    "total": 1
+   },
+   "fail": null,
+   "fn": "resolve_ai_attributed_prs",
+   "hotspot": [],
+   "limit": 0,
+   "mix": [],
+   "name": "prs/limitZero",
+   "nameQueryFails": false,
+   "offset": -4,
+   "prs": [
+    {
+     "kind": "ai_assisted",
+     "merged_at": "2026-08-02T10:00:00.500000",
+     "number": 7,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "team_id": null,
+     "title": "Add thing",
+     "work_type": "pull_request"
+    },
+    {
+     "kind": "agent_created",
+     "merged_at": null,
+     "number": 6,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "team_id": null,
+     "title": null,
+     "work_type": "story"
+    },
+    {
+     "kind": "ai_review",
+     "merged_at": "2026-08-02T10:00:00.500000",
+     "number": 2,
+     "repo_id": "22222222-2222-2222-2222-222222222222",
+     "team_id": null,
+     "title": "B thing",
+     "work_type": "pull_request"
+    },
+    {
+     "kind": "ai_assisted",
+     "merged_at": "2026-08-02T10:00:00.500000",
+     "number": 1,
+     "repo_id": "33333333-3333-3333-3333-333333333333",
+     "team_id": null,
+     "title": "C thing",
+     "work_type": "pull_request"
+    }
+   ],
+   "repoRows": [
+    {
+     "full_name": "acme/alpha",
+     "repo_id": "11111111-1111-1111-1111-111111111111"
+    },
+    {
+     "full_name": "Acme/Beta",
+     "repo_id": "22222222-2222-2222-2222-222222222222"
+    },
+    {
+     "full_name": "",
+     "repo_id": "33333333-3333-3333-3333-333333333333"
+    }
+   ],
+   "scope": null,
+   "slugRows": [],
+   "teamRepoRows": null,
+   "teamRows": [
+    {
+     "id": "team-a",
+     "name": "Team A",
+     "repo_patterns": [
+      "acme/alpha"
+     ]
+    },
+    {
+     "id": "team-b",
+     "name": "B",
+     "repo_patterns": [
+      "ACME/*"
+     ]
+    }
+   ]
+  },
+  {
+   "calls": {
+    "prs": {
+     "limit": 201,
+     "offset": 0,
+     "repo_id": null,
+     "repo_ids": null
+    }
+   },
+   "complexity": [],
+   "daily": [],
+   "evidence": [],
+   "expected": {
+    "dataAvailable": true,
+    "endDate": "2026-08-03",
+    "hasMore": false,
+    "orgId": "org-1",
+    "rows": [
+     {
+      "kind": "ai_assisted",
+      "mergedAt": "2026-08-02T10:00:00.500000+00:00",
+      "number": 7,
+      "repoId": "11111111-1111-1111-1111-111111111111",
+      "teamId": "team-a",
+      "title": "Add thing",
+      "workType": "pull_request"
+     },
+     {
+      "kind": "agent_created",
+      "mergedAt": null,
+      "number": 6,
+      "repoId": "11111111-1111-1111-1111-111111111111",
+      "teamId": "team-a",
+      "title": null,
+      "workType": "story"
+     },
+     {
+      "kind": "ai_review",
+      "mergedAt": "2026-08-02T10:00:00.500000+00:00",
+      "number": 2,
+      "repoId": "22222222-2222-2222-2222-222222222222",
+      "teamId": "team-b",
+      "title": "B thing",
+      "workType": "pull_request"
+     },
+     {
+      "kind": "ai_assisted",
+      "mergedAt": "2026-08-02T10:00:00.500000+00:00",
+      "number": 1,
+      "repoId": "33333333-3333-3333-3333-333333333333",
+      "teamId": null,
+      "title": "C thing",
+      "workType": "pull_request"
+     }
+    ],
+    "startDate": "2026-08-01",
+    "total": 4
+   },
+   "fail": null,
+   "fn": "resolve_ai_attributed_prs",
+   "hotspot": [],
+   "limit": 200,
+   "mix": [],
+   "name": "prs/limit200",
+   "nameQueryFails": false,
+   "offset": 0,
+   "prs": [
+    {
+     "kind": "ai_assisted",
+     "merged_at": "2026-08-02T10:00:00.500000",
+     "number": 7,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "team_id": null,
+     "title": "Add thing",
+     "work_type": "pull_request"
+    },
+    {
+     "kind": "agent_created",
+     "merged_at": null,
+     "number": 6,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "team_id": null,
+     "title": null,
+     "work_type": "story"
+    },
+    {
+     "kind": "ai_review",
+     "merged_at": "2026-08-02T10:00:00.500000",
+     "number": 2,
+     "repo_id": "22222222-2222-2222-2222-222222222222",
+     "team_id": null,
+     "title": "B thing",
+     "work_type": "pull_request"
+    },
+    {
+     "kind": "ai_assisted",
+     "merged_at": "2026-08-02T10:00:00.500000",
+     "number": 1,
+     "repo_id": "33333333-3333-3333-3333-333333333333",
+     "team_id": null,
+     "title": "C thing",
+     "work_type": "pull_request"
+    }
+   ],
+   "repoRows": [
+    {
+     "full_name": "acme/alpha",
+     "repo_id": "11111111-1111-1111-1111-111111111111"
+    },
+    {
+     "full_name": "Acme/Beta",
+     "repo_id": "22222222-2222-2222-2222-222222222222"
+    },
+    {
+     "full_name": "",
+     "repo_id": "33333333-3333-3333-3333-333333333333"
+    }
+   ],
+   "scope": null,
+   "slugRows": [],
+   "teamRepoRows": null,
+   "teamRows": [
+    {
+     "id": "team-a",
+     "name": "Team A",
+     "repo_patterns": [
+      "acme/alpha"
+     ]
+    },
+    {
+     "id": "team-b",
+     "name": "B",
+     "repo_patterns": [
+      "ACME/*"
+     ]
+    }
+   ]
+  },
+  {
+   "calls": {
+    "prs": {
+     "limit": 201,
+     "offset": 0,
+     "repo_id": null,
+     "repo_ids": null
+    }
+   },
+   "complexity": [],
+   "daily": [],
+   "evidence": [],
+   "expected": {
+    "dataAvailable": true,
+    "endDate": "2026-08-03",
+    "hasMore": false,
+    "orgId": "org-1",
+    "rows": [
+     {
+      "kind": "ai_assisted",
+      "mergedAt": "2026-08-02T10:00:00.500000+00:00",
+      "number": 7,
+      "repoId": "11111111-1111-1111-1111-111111111111",
+      "teamId": "team-a",
+      "title": "Add thing",
+      "workType": "pull_request"
+     },
+     {
+      "kind": "agent_created",
+      "mergedAt": null,
+      "number": 6,
+      "repoId": "11111111-1111-1111-1111-111111111111",
+      "teamId": "team-a",
+      "title": null,
+      "workType": "story"
+     },
+     {
+      "kind": "ai_review",
+      "mergedAt": "2026-08-02T10:00:00.500000+00:00",
+      "number": 2,
+      "repoId": "22222222-2222-2222-2222-222222222222",
+      "teamId": "team-b",
+      "title": "B thing",
+      "workType": "pull_request"
+     },
+     {
+      "kind": "ai_assisted",
+      "mergedAt": "2026-08-02T10:00:00.500000+00:00",
+      "number": 1,
+      "repoId": "33333333-3333-3333-3333-333333333333",
+      "teamId": null,
+      "title": "C thing",
+      "workType": "pull_request"
+     }
+    ],
+    "startDate": "2026-08-01",
+    "total": 4
+   },
+   "fail": null,
+   "fn": "resolve_ai_attributed_prs",
+   "hotspot": [],
+   "limit": 201,
+   "mix": [],
+   "name": "prs/limit201",
+   "nameQueryFails": false,
+   "offset": 0,
+   "prs": [
+    {
+     "kind": "ai_assisted",
+     "merged_at": "2026-08-02T10:00:00.500000",
+     "number": 7,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "team_id": null,
+     "title": "Add thing",
+     "work_type": "pull_request"
+    },
+    {
+     "kind": "agent_created",
+     "merged_at": null,
+     "number": 6,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "team_id": null,
+     "title": null,
+     "work_type": "story"
+    },
+    {
+     "kind": "ai_review",
+     "merged_at": "2026-08-02T10:00:00.500000",
+     "number": 2,
+     "repo_id": "22222222-2222-2222-2222-222222222222",
+     "team_id": null,
+     "title": "B thing",
+     "work_type": "pull_request"
+    },
+    {
+     "kind": "ai_assisted",
+     "merged_at": "2026-08-02T10:00:00.500000",
+     "number": 1,
+     "repo_id": "33333333-3333-3333-3333-333333333333",
+     "team_id": null,
+     "title": "C thing",
+     "work_type": "pull_request"
+    }
+   ],
+   "repoRows": [
+    {
+     "full_name": "acme/alpha",
+     "repo_id": "11111111-1111-1111-1111-111111111111"
+    },
+    {
+     "full_name": "Acme/Beta",
+     "repo_id": "22222222-2222-2222-2222-222222222222"
+    },
+    {
+     "full_name": "",
+     "repo_id": "33333333-3333-3333-3333-333333333333"
+    }
+   ],
+   "scope": null,
+   "slugRows": [],
+   "teamRepoRows": null,
+   "teamRows": [
+    {
+     "id": "team-a",
+     "name": "Team A",
+     "repo_patterns": [
+      "acme/alpha"
+     ]
+    },
+    {
+     "id": "team-b",
+     "name": "B",
+     "repo_patterns": [
+      "ACME/*"
+     ]
+    }
+   ]
+  },
+  {
+   "calls": {
+    "prs": {
+     "limit": 6,
+     "offset": 0,
+     "repo_id": null,
+     "repo_ids": null
+    }
+   },
+   "complexity": [],
+   "daily": [],
+   "evidence": [],
+   "expected": {
+    "dataAvailable": true,
+    "endDate": "2026-08-03",
+    "hasMore": false,
+    "orgId": "org-1",
+    "rows": [
+     {
+      "kind": "ai_assisted",
+      "mergedAt": "2026-08-02T10:00:00.500000+00:00",
+      "number": 7,
+      "repoId": "11111111-1111-1111-1111-111111111111",
+      "teamId": "team-a",
+      "title": "Add thing",
+      "workType": "pull_request"
+     },
+     {
+      "kind": "agent_created",
+      "mergedAt": null,
+      "number": 6,
+      "repoId": "11111111-1111-1111-1111-111111111111",
+      "teamId": "team-a",
+      "title": null,
+      "workType": "story"
+     },
+     {
+      "kind": "ai_review",
+      "mergedAt": "2026-08-02T10:00:00.500000+00:00",
+      "number": 2,
+      "repoId": "22222222-2222-2222-2222-222222222222",
+      "teamId": "team-b",
+      "title": "B thing",
+      "workType": "pull_request"
+     },
+     {
+      "kind": "ai_assisted",
+      "mergedAt": "2026-08-02T10:00:00.500000+00:00",
+      "number": 1,
+      "repoId": "33333333-3333-3333-3333-333333333333",
+      "teamId": null,
+      "title": "C thing",
+      "workType": "pull_request"
+     }
+    ],
+    "startDate": "2026-08-01",
+    "total": 4
+   },
+   "fail": null,
+   "fn": "resolve_ai_attributed_prs",
+   "hotspot": [],
+   "limit": 5,
+   "mix": [],
+   "name": "prs/offsetMinusOne",
+   "nameQueryFails": false,
+   "offset": -1,
+   "prs": [
+    {
+     "kind": "ai_assisted",
+     "merged_at": "2026-08-02T10:00:00.500000",
+     "number": 7,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "team_id": null,
+     "title": "Add thing",
+     "work_type": "pull_request"
+    },
+    {
+     "kind": "agent_created",
+     "merged_at": null,
+     "number": 6,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "team_id": null,
+     "title": null,
+     "work_type": "story"
+    },
+    {
+     "kind": "ai_review",
+     "merged_at": "2026-08-02T10:00:00.500000",
+     "number": 2,
+     "repo_id": "22222222-2222-2222-2222-222222222222",
+     "team_id": null,
+     "title": "B thing",
+     "work_type": "pull_request"
+    },
+    {
+     "kind": "ai_assisted",
+     "merged_at": "2026-08-02T10:00:00.500000",
+     "number": 1,
+     "repo_id": "33333333-3333-3333-3333-333333333333",
+     "team_id": null,
+     "title": "C thing",
+     "work_type": "pull_request"
+    }
+   ],
+   "repoRows": [
+    {
+     "full_name": "acme/alpha",
+     "repo_id": "11111111-1111-1111-1111-111111111111"
+    },
+    {
+     "full_name": "Acme/Beta",
+     "repo_id": "22222222-2222-2222-2222-222222222222"
+    },
+    {
+     "full_name": "",
+     "repo_id": "33333333-3333-3333-3333-333333333333"
+    }
+   ],
+   "scope": null,
+   "slugRows": [],
+   "teamRepoRows": null,
+   "teamRows": [
+    {
+     "id": "team-a",
+     "name": "Team A",
+     "repo_patterns": [
+      "acme/alpha"
+     ]
+    },
+    {
+     "id": "team-b",
+     "name": "B",
+     "repo_patterns": [
+      "ACME/*"
+     ]
+    }
+   ]
+  },
+  {
+   "calls": {
+    "prs": {
+     "limit": 3,
+     "offset": 0,
+     "repo_id": null,
+     "repo_ids": null
+    }
+   },
+   "complexity": [],
+   "daily": [],
+   "evidence": [],
+   "expected": {
+    "dataAvailable": true,
+    "endDate": "2026-08-03",
+    "hasMore": false,
+    "orgId": "org-1",
+    "rows": [
+     {
+      "kind": "ai_assisted",
+      "mergedAt": "2026-08-02T10:00:00.500000+00:00",
+      "number": 7,
+      "repoId": "11111111-1111-1111-1111-111111111111",
+      "teamId": "team-a",
+      "title": "Add thing",
+      "workType": "pull_request"
+     },
+     {
+      "kind": "agent_created",
+      "mergedAt": null,
+      "number": 6,
+      "repoId": "11111111-1111-1111-1111-111111111111",
+      "teamId": "team-a",
+      "title": null,
+      "workType": "story"
+     }
+    ],
+    "startDate": "2026-08-01",
+    "total": 2
+   },
+   "fail": null,
+   "fn": "resolve_ai_attributed_prs",
+   "hotspot": [],
+   "limit": 2,
+   "mix": [],
+   "name": "prs/exactPage",
+   "nameQueryFails": false,
+   "offset": 0,
+   "prs": [
+    {
+     "kind": "ai_assisted",
+     "merged_at": "2026-08-02T10:00:00.500000",
+     "number": 7,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "team_id": null,
+     "title": "Add thing",
+     "work_type": "pull_request"
+    },
+    {
+     "kind": "agent_created",
+     "merged_at": null,
+     "number": 6,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "team_id": null,
+     "title": null,
+     "work_type": "story"
+    }
+   ],
+   "repoRows": [
+    {
+     "full_name": "acme/alpha",
+     "repo_id": "11111111-1111-1111-1111-111111111111"
+    },
+    {
+     "full_name": "Acme/Beta",
+     "repo_id": "22222222-2222-2222-2222-222222222222"
+    },
+    {
+     "full_name": "",
+     "repo_id": "33333333-3333-3333-3333-333333333333"
+    }
+   ],
+   "scope": null,
+   "slugRows": [],
+   "teamRepoRows": null,
+   "teamRows": [
+    {
+     "id": "team-a",
+     "name": "Team A",
+     "repo_patterns": [
+      "acme/alpha"
+     ]
+    },
+    {
+     "id": "team-b",
+     "name": "B",
+     "repo_patterns": [
+      "ACME/*"
+     ]
+    }
+   ]
+  },
+  {
+   "calls": {
+    "prs": {
+     "limit": 201,
+     "offset": 7,
+     "repo_id": null,
+     "repo_ids": null
+    }
+   },
+   "complexity": [],
+   "daily": [],
+   "evidence": [],
+   "expected": {
+    "dataAvailable": true,
+    "endDate": "2026-08-03",
+    "hasMore": false,
+    "orgId": "org-1",
+    "rows": [
+     {
+      "kind": "ai_assisted",
+      "mergedAt": "2026-08-02T10:00:00.500000+00:00",
+      "number": 7,
+      "repoId": "11111111-1111-1111-1111-111111111111",
+      "teamId": "team-a",
+      "title": "Add thing",
+      "workType": "pull_request"
+     },
+     {
+      "kind": "agent_created",
+      "mergedAt": null,
+      "number": 6,
+      "repoId": "11111111-1111-1111-1111-111111111111",
+      "teamId": "team-a",
+      "title": null,
+      "workType": "story"
+     },
+     {
+      "kind": "ai_review",
+      "mergedAt": "2026-08-02T10:00:00.500000+00:00",
+      "number": 2,
+      "repoId": "22222222-2222-2222-2222-222222222222",
+      "teamId": "team-b",
+      "title": "B thing",
+      "workType": "pull_request"
+     },
+     {
+      "kind": "ai_assisted",
+      "mergedAt": "2026-08-02T10:00:00.500000+00:00",
+      "number": 1,
+      "repoId": "33333333-3333-3333-3333-333333333333",
+      "teamId": null,
+      "title": "C thing",
+      "workType": "pull_request"
+     }
+    ],
+    "startDate": "2026-08-01",
+    "total": 4
+   },
+   "fail": null,
+   "fn": "resolve_ai_attributed_prs",
+   "hotspot": [],
+   "limit": 1000,
+   "mix": [],
+   "name": "prs/limitOverCeiling",
+   "nameQueryFails": false,
+   "offset": 7,
+   "prs": [
+    {
+     "kind": "ai_assisted",
+     "merged_at": "2026-08-02T10:00:00.500000",
+     "number": 7,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "team_id": null,
+     "title": "Add thing",
+     "work_type": "pull_request"
+    },
+    {
+     "kind": "agent_created",
+     "merged_at": null,
+     "number": 6,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "team_id": null,
+     "title": null,
+     "work_type": "story"
+    },
+    {
+     "kind": "ai_review",
+     "merged_at": "2026-08-02T10:00:00.500000",
+     "number": 2,
+     "repo_id": "22222222-2222-2222-2222-222222222222",
+     "team_id": null,
+     "title": "B thing",
+     "work_type": "pull_request"
+    },
+    {
+     "kind": "ai_assisted",
+     "merged_at": "2026-08-02T10:00:00.500000",
+     "number": 1,
+     "repo_id": "33333333-3333-3333-3333-333333333333",
+     "team_id": null,
+     "title": "C thing",
+     "work_type": "pull_request"
+    }
+   ],
+   "repoRows": [
+    {
+     "full_name": "acme/alpha",
+     "repo_id": "11111111-1111-1111-1111-111111111111"
+    },
+    {
+     "full_name": "Acme/Beta",
+     "repo_id": "22222222-2222-2222-2222-222222222222"
+    },
+    {
+     "full_name": "",
+     "repo_id": "33333333-3333-3333-3333-333333333333"
+    }
+   ],
+   "scope": null,
+   "slugRows": [],
+   "teamRepoRows": null,
+   "teamRows": [
+    {
+     "id": "team-a",
+     "name": "Team A",
+     "repo_patterns": [
+      "acme/alpha"
+     ]
+    },
+    {
+     "id": "team-b",
+     "name": "B",
+     "repo_patterns": [
+      "ACME/*"
+     ]
+    }
+   ]
+  },
+  {
+   "calls": {
+    "prs": {
+     "limit": 51,
+     "offset": 0,
+     "repo_id": null,
+     "repo_ids": [
+      "22222222-2222-2222-2222-222222222222"
+     ]
+    }
+   },
+   "complexity": [],
+   "daily": [],
+   "evidence": [],
+   "expected": {
+    "dataAvailable": true,
+    "endDate": "2026-08-03",
+    "hasMore": false,
+    "orgId": "org-1",
+    "rows": [
+     {
+      "kind": "ai_review",
+      "mergedAt": "2026-08-02T10:00:00.500000+00:00",
+      "number": 2,
+      "repoId": "22222222-2222-2222-2222-222222222222",
+      "teamId": "team-b",
+      "title": "B thing",
+      "workType": "pull_request"
+     }
+    ],
+    "startDate": "2026-08-01",
+    "total": 1
+   },
+   "fail": null,
+   "fn": "resolve_ai_attributed_prs",
+   "hotspot": [],
+   "limit": 50,
+   "mix": [],
+   "name": "prs/teamFilter",
+   "nameQueryFails": false,
+   "offset": 0,
+   "prs": [
+    {
+     "kind": "ai_assisted",
+     "merged_at": "2026-08-02T10:00:00.500000",
+     "number": 7,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "team_id": null,
+     "title": "Add thing",
+     "work_type": "pull_request"
+    },
+    {
+     "kind": "agent_created",
+     "merged_at": null,
+     "number": 6,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "team_id": null,
+     "title": null,
+     "work_type": "story"
+    },
+    {
+     "kind": "ai_review",
+     "merged_at": "2026-08-02T10:00:00.500000",
+     "number": 2,
+     "repo_id": "22222222-2222-2222-2222-222222222222",
+     "team_id": null,
+     "title": "B thing",
+     "work_type": "pull_request"
+    },
+    {
+     "kind": "ai_assisted",
+     "merged_at": "2026-08-02T10:00:00.500000",
+     "number": 1,
+     "repo_id": "33333333-3333-3333-3333-333333333333",
+     "team_id": null,
+     "title": "C thing",
+     "work_type": "pull_request"
+    }
+   ],
+   "repoRows": [
+    {
+     "full_name": "acme/alpha",
+     "repo_id": "11111111-1111-1111-1111-111111111111"
+    },
+    {
+     "full_name": "Acme/Beta",
+     "repo_id": "22222222-2222-2222-2222-222222222222"
+    },
+    {
+     "full_name": "",
+     "repo_id": "33333333-3333-3333-3333-333333333333"
+    }
+   ],
+   "scope": {
+    "buckets": [],
+    "repoId": null,
+    "teamId": "team-b",
+    "workType": null
+   },
+   "slugRows": [],
+   "teamRepoRows": null,
+   "teamRows": [
+    {
+     "id": "team-a",
+     "name": "Team A",
+     "repo_patterns": [
+      "acme/alpha"
+     ]
+    },
+    {
+     "id": "team-b",
+     "name": "B",
+     "repo_patterns": [
+      "ACME/*"
+     ]
+    }
+   ]
+  },
+  {
+   "calls": {},
+   "complexity": [],
+   "daily": [],
+   "evidence": [],
+   "expected": {
+    "dataAvailable": false,
+    "endDate": "2026-08-03",
+    "hasMore": false,
+    "orgId": "org-1",
+    "rows": [],
+    "startDate": "2026-08-01",
+    "total": 0
+   },
+   "fail": null,
+   "fn": "resolve_ai_attributed_prs",
+   "hotspot": [],
+   "limit": 50,
+   "mix": [],
+   "name": "prs/teamNoRepos",
+   "nameQueryFails": false,
+   "offset": 0,
+   "prs": [
+    {
+     "kind": "ai_assisted",
+     "merged_at": "2026-08-02T10:00:00.500000",
+     "number": 7,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "team_id": null,
+     "title": "Add thing",
+     "work_type": "pull_request"
+    },
+    {
+     "kind": "agent_created",
+     "merged_at": null,
+     "number": 6,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "team_id": null,
+     "title": null,
+     "work_type": "story"
+    },
+    {
+     "kind": "ai_review",
+     "merged_at": "2026-08-02T10:00:00.500000",
+     "number": 2,
+     "repo_id": "22222222-2222-2222-2222-222222222222",
+     "team_id": null,
+     "title": "B thing",
+     "work_type": "pull_request"
+    },
+    {
+     "kind": "ai_assisted",
+     "merged_at": "2026-08-02T10:00:00.500000",
+     "number": 1,
+     "repo_id": "33333333-3333-3333-3333-333333333333",
+     "team_id": null,
+     "title": "C thing",
+     "work_type": "pull_request"
+    }
+   ],
+   "repoRows": [
+    {
+     "full_name": "acme/alpha",
+     "repo_id": "11111111-1111-1111-1111-111111111111"
+    },
+    {
+     "full_name": "Acme/Beta",
+     "repo_id": "22222222-2222-2222-2222-222222222222"
+    },
+    {
+     "full_name": "",
+     "repo_id": "33333333-3333-3333-3333-333333333333"
+    }
+   ],
+   "scope": {
+    "buckets": [],
+    "repoId": null,
+    "teamId": "team-z",
+    "workType": null
+   },
+   "slugRows": [],
+   "teamRepoRows": null,
+   "teamRows": [
+    {
+     "id": "team-a",
+     "name": "Team A",
+     "repo_patterns": [
+      "acme/alpha"
+     ]
+    },
+    {
+     "id": "team-b",
+     "name": "B",
+     "repo_patterns": [
+      "ACME/*"
+     ]
+    }
+   ]
+  },
+  {
+   "calls": {
+    "prs": {
+     "limit": 51,
+     "offset": 0,
+     "repo_id": null,
+     "repo_ids": null
+    }
+   },
+   "complexity": [],
+   "daily": [],
+   "evidence": [],
+   "expected": {
+    "dataAvailable": false,
+    "endDate": "2026-08-03",
+    "hasMore": false,
+    "orgId": "org-1",
+    "rows": [],
+    "startDate": "2026-08-01",
+    "total": 0
+   },
+   "fail": "teams",
+   "fn": "resolve_ai_attributed_prs",
+   "hotspot": [],
+   "limit": 50,
+   "mix": [],
+   "name": "prs/teamCatalogueFails",
+   "nameQueryFails": false,
+   "offset": 0,
+   "prs": [
+    {
+     "kind": "ai_assisted",
+     "merged_at": "2026-08-02T10:00:00.500000",
+     "number": 7,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "team_id": null,
+     "title": "Add thing",
+     "work_type": "pull_request"
+    },
+    {
+     "kind": "agent_created",
+     "merged_at": null,
+     "number": 6,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "team_id": null,
+     "title": null,
+     "work_type": "story"
+    },
+    {
+     "kind": "ai_review",
+     "merged_at": "2026-08-02T10:00:00.500000",
+     "number": 2,
+     "repo_id": "22222222-2222-2222-2222-222222222222",
+     "team_id": null,
+     "title": "B thing",
+     "work_type": "pull_request"
+    },
+    {
+     "kind": "ai_assisted",
+     "merged_at": "2026-08-02T10:00:00.500000",
+     "number": 1,
+     "repo_id": "33333333-3333-3333-3333-333333333333",
+     "team_id": null,
+     "title": "C thing",
+     "work_type": "pull_request"
+    }
+   ],
+   "repoRows": [
+    {
+     "full_name": "acme/alpha",
+     "repo_id": "11111111-1111-1111-1111-111111111111"
+    },
+    {
+     "full_name": "Acme/Beta",
+     "repo_id": "22222222-2222-2222-2222-222222222222"
+    },
+    {
+     "full_name": "",
+     "repo_id": "33333333-3333-3333-3333-333333333333"
+    }
+   ],
+   "scope": {
+    "buckets": [],
+    "repoId": null,
+    "teamId": "team-b",
+    "workType": null
+   },
+   "slugRows": [],
+   "teamRepoRows": null,
+   "teamRows": [
+    {
+     "id": "team-a",
+     "name": "Team A",
+     "repo_patterns": [
+      "acme/alpha"
+     ]
+    },
+    {
+     "id": "team-b",
+     "name": "B",
+     "repo_patterns": [
+      "ACME/*"
+     ]
+    }
+   ]
+  },
+  {
+   "calls": {
+    "prs": {
+     "limit": 51,
+     "offset": 0,
+     "repo_id": null,
+     "repo_ids": null
+    }
+   },
+   "complexity": [],
+   "daily": [],
+   "evidence": [],
+   "expected": {
+    "dataAvailable": true,
+    "endDate": "2026-08-03",
+    "hasMore": false,
+    "orgId": "org-1",
+    "rows": [
+     {
+      "kind": "agent_created",
+      "mergedAt": null,
+      "number": 6,
+      "repoId": "11111111-1111-1111-1111-111111111111",
+      "teamId": "team-a",
+      "title": null,
+      "workType": "story"
+     }
+    ],
+    "startDate": "2026-08-01",
+    "total": 1
+   },
+   "fail": null,
+   "fn": "resolve_ai_attributed_prs",
+   "hotspot": [],
+   "limit": 50,
+   "mix": [],
+   "name": "prs/workTypeFilter",
+   "nameQueryFails": false,
+   "offset": 0,
+   "prs": [
+    {
+     "kind": "ai_assisted",
+     "merged_at": "2026-08-02T10:00:00.500000",
+     "number": 7,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "team_id": null,
+     "title": "Add thing",
+     "work_type": "pull_request"
+    },
+    {
+     "kind": "agent_created",
+     "merged_at": null,
+     "number": 6,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "team_id": null,
+     "title": null,
+     "work_type": "story"
+    },
+    {
+     "kind": "ai_review",
+     "merged_at": "2026-08-02T10:00:00.500000",
+     "number": 2,
+     "repo_id": "22222222-2222-2222-2222-222222222222",
+     "team_id": null,
+     "title": "B thing",
+     "work_type": "pull_request"
+    },
+    {
+     "kind": "ai_assisted",
+     "merged_at": "2026-08-02T10:00:00.500000",
+     "number": 1,
+     "repo_id": "33333333-3333-3333-3333-333333333333",
+     "team_id": null,
+     "title": "C thing",
+     "work_type": "pull_request"
+    }
+   ],
+   "repoRows": [
+    {
+     "full_name": "acme/alpha",
+     "repo_id": "11111111-1111-1111-1111-111111111111"
+    },
+    {
+     "full_name": "Acme/Beta",
+     "repo_id": "22222222-2222-2222-2222-222222222222"
+    },
+    {
+     "full_name": "",
+     "repo_id": "33333333-3333-3333-3333-333333333333"
+    }
+   ],
+   "scope": {
+    "buckets": [],
+    "repoId": null,
+    "teamId": null,
+    "workType": "story"
+   },
+   "slugRows": [],
+   "teamRepoRows": null,
+   "teamRows": [
+    {
+     "id": "team-a",
+     "name": "Team A",
+     "repo_patterns": [
+      "acme/alpha"
+     ]
+    },
+    {
+     "id": "team-b",
+     "name": "B",
+     "repo_patterns": [
+      "ACME/*"
+     ]
+    }
+   ]
+  },
+  {
+   "calls": {},
+   "complexity": [],
+   "daily": [],
+   "evidence": [],
+   "expected": {
+    "dataAvailable": false,
+    "endDate": "2026-08-03",
+    "hasMore": false,
+    "orgId": "org-1",
+    "rows": [],
+    "startDate": "2026-08-01",
+    "total": 0
+   },
+   "fail": null,
+   "fn": "resolve_ai_attributed_prs",
+   "hotspot": [],
+   "limit": 50,
+   "mix": [],
+   "name": "prs/repoUnresolved",
+   "nameQueryFails": false,
+   "offset": 0,
+   "prs": [
+    {
+     "kind": "ai_assisted",
+     "merged_at": "2026-08-02T10:00:00.500000",
+     "number": 7,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "team_id": null,
+     "title": "Add thing",
+     "work_type": "pull_request"
+    },
+    {
+     "kind": "agent_created",
+     "merged_at": null,
+     "number": 6,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "team_id": null,
+     "title": null,
+     "work_type": "story"
+    },
+    {
+     "kind": "ai_review",
+     "merged_at": "2026-08-02T10:00:00.500000",
+     "number": 2,
+     "repo_id": "22222222-2222-2222-2222-222222222222",
+     "team_id": null,
+     "title": "B thing",
+     "work_type": "pull_request"
+    },
+    {
+     "kind": "ai_assisted",
+     "merged_at": "2026-08-02T10:00:00.500000",
+     "number": 1,
+     "repo_id": "33333333-3333-3333-3333-333333333333",
+     "team_id": null,
+     "title": "C thing",
+     "work_type": "pull_request"
+    }
+   ],
+   "repoRows": null,
+   "scope": {
+    "buckets": [],
+    "repoId": "no/such",
+    "teamId": null,
+    "workType": null
+   },
+   "slugRows": [],
+   "teamRepoRows": null,
+   "teamRows": null
+  },
+  {
+   "calls": {
+    "prs": {
+     "limit": 51,
+     "offset": 0,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "repo_ids": null
+    }
+   },
+   "complexity": [],
+   "daily": [],
+   "evidence": [],
+   "expected": {
+    "dataAvailable": true,
+    "endDate": "2026-08-03",
+    "hasMore": false,
+    "orgId": "org-1",
+    "rows": [
+     {
+      "kind": "ai_assisted",
+      "mergedAt": "2026-08-02T10:00:00.500000+00:00",
+      "number": 7,
+      "repoId": "11111111-1111-1111-1111-111111111111",
+      "teamId": "team-a",
+      "title": "Add thing",
+      "workType": "pull_request"
+     },
+     {
+      "kind": "agent_created",
+      "mergedAt": null,
+      "number": 6,
+      "repoId": "11111111-1111-1111-1111-111111111111",
+      "teamId": "team-a",
+      "title": null,
+      "workType": "story"
+     }
+    ],
+    "startDate": "2026-08-01",
+    "total": 2
+   },
+   "fail": null,
+   "fn": "resolve_ai_attributed_prs",
+   "hotspot": [],
+   "limit": 50,
+   "mix": [],
+   "name": "prs/repoSlug",
+   "nameQueryFails": false,
+   "offset": 0,
+   "prs": [
+    {
+     "kind": "ai_assisted",
+     "merged_at": "2026-08-02T10:00:00.500000",
+     "number": 7,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "team_id": null,
+     "title": "Add thing",
+     "work_type": "pull_request"
+    },
+    {
+     "kind": "agent_created",
+     "merged_at": null,
+     "number": 6,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "team_id": null,
+     "title": null,
+     "work_type": "story"
+    }
+   ],
+   "repoRows": [
+    {
+     "full_name": "acme/alpha",
+     "repo_id": "11111111-1111-1111-1111-111111111111"
+    },
+    {
+     "full_name": "Acme/Beta",
+     "repo_id": "22222222-2222-2222-2222-222222222222"
+    },
+    {
+     "full_name": "",
+     "repo_id": "33333333-3333-3333-3333-333333333333"
+    }
+   ],
+   "scope": {
+    "buckets": [],
+    "repoId": "acme/alpha",
+    "teamId": null,
+    "workType": null
+   },
+   "slugRows": [
+    "11111111-1111-1111-1111-111111111111"
+   ],
+   "teamRepoRows": null,
+   "teamRows": [
+    {
+     "id": "team-a",
+     "name": "Team A",
+     "repo_patterns": [
+      "acme/alpha"
+     ]
+    },
+    {
+     "id": "team-b",
+     "name": "B",
+     "repo_patterns": [
+      "ACME/*"
+     ]
+    }
+   ]
+  },
+  {
+   "calls": {
+    "prs": {
+     "limit": 51,
+     "offset": 0,
+     "repo_id": null,
+     "repo_ids": null
+    }
+   },
+   "complexity": [],
+   "daily": [],
+   "evidence": [],
+   "expected": {
+    "dataAvailable": true,
+    "endDate": "2026-08-03",
+    "hasMore": false,
+    "orgId": "org-1",
+    "rows": [
+     {
+      "kind": "ai_assisted",
+      "mergedAt": "2026-08-02T10:00:00.500000+00:00",
+      "number": 7,
+      "repoId": "11111111-1111-1111-1111-111111111111",
+      "teamId": null,
+      "title": "Add thing",
+      "workType": "pull_request"
+     },
+     {
+      "kind": "agent_created",
+      "mergedAt": null,
+      "number": 6,
+      "repoId": "11111111-1111-1111-1111-111111111111",
+      "teamId": null,
+      "title": null,
+      "workType": "story"
+     }
+    ],
+    "startDate": "2026-08-01",
+    "total": 2
+   },
+   "fail": null,
+   "fn": "resolve_ai_attributed_prs",
+   "hotspot": [],
+   "limit": 50,
+   "mix": [],
+   "name": "prs/nameQueryFails",
+   "nameQueryFails": true,
+   "offset": 0,
+   "prs": [
+    {
+     "kind": "ai_assisted",
+     "merged_at": "2026-08-02T10:00:00.500000",
+     "number": 7,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "team_id": null,
+     "title": "Add thing",
+     "work_type": "pull_request"
+    },
+    {
+     "kind": "agent_created",
+     "merged_at": null,
+     "number": 6,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "team_id": null,
+     "title": null,
+     "work_type": "story"
+    }
+   ],
+   "repoRows": [
+    {
+     "full_name": "acme/alpha",
+     "repo_id": "11111111-1111-1111-1111-111111111111"
+    },
+    {
+     "full_name": "Acme/Beta",
+     "repo_id": "22222222-2222-2222-2222-222222222222"
+    },
+    {
+     "full_name": "",
+     "repo_id": "33333333-3333-3333-3333-333333333333"
+    }
+   ],
+   "scope": null,
+   "slugRows": [],
+   "teamRepoRows": null,
+   "teamRows": [
+    {
+     "id": "team-a",
+     "name": "Team A",
+     "repo_patterns": [
+      "acme/alpha"
+     ]
+    },
+    {
+     "id": "team-b",
+     "name": "B",
+     "repo_patterns": [
+      "ACME/*"
+     ]
+    }
+   ]
+  },
+  {
+   "calls": {
+    "prs": {
+     "limit": 51,
+     "offset": 0,
+     "repo_id": null,
+     "repo_ids": null
+    }
+   },
+   "complexity": [],
+   "daily": [],
+   "evidence": [],
+   "expected": {
+    "dataAvailable": false,
+    "endDate": "2026-08-03",
+    "hasMore": false,
+    "orgId": "org-1",
+    "rows": [],
+    "startDate": "2026-08-01",
+    "total": 0
+   },
+   "fail": null,
+   "fn": "resolve_ai_attributed_prs",
+   "hotspot": [],
+   "limit": 50,
+   "mix": [],
+   "name": "prs/empty",
+   "nameQueryFails": false,
+   "offset": 0,
+   "prs": [],
+   "repoRows": [
+    {
+     "full_name": "acme/alpha",
+     "repo_id": "11111111-1111-1111-1111-111111111111"
+    },
+    {
+     "full_name": "Acme/Beta",
+     "repo_id": "22222222-2222-2222-2222-222222222222"
+    },
+    {
+     "full_name": "",
+     "repo_id": "33333333-3333-3333-3333-333333333333"
+    }
+   ],
+   "scope": null,
+   "slugRows": [],
+   "teamRepoRows": null,
+   "teamRows": [
+    {
+     "id": "team-a",
+     "name": "Team A",
+     "repo_patterns": [
+      "acme/alpha"
+     ]
+    },
+    {
+     "id": "team-b",
+     "name": "B",
+     "repo_patterns": [
+      "ACME/*"
+     ]
+    }
+   ]
+  },
+  {
+   "calls": {
+    "evidence": {
+     "limit": 51,
+     "offset": 0
+    },
+    "mix": {
+     "kinds": null,
+     "repo_ids": null
+    }
+   },
+   "complexity": [],
+   "daily": [],
+   "evidence": [
+    {
+     "actor": "bot",
+     "confidence": 0.8999999761581421,
+     "evidence": "{\"label\": \"ai\"}",
+     "kind": "ai_assisted",
+     "observed_at": "2026-08-02T10:00:00.500000",
+     "provider": "github",
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "source": "pr_label",
+     "subject_id": "7",
+     "subject_type": "pull_request"
+    },
+    {
+     "actor": null,
+     "confidence": null,
+     "evidence": "",
+     "kind": "",
+     "observed_at": "2026-08-02T10:00:00.500000",
+     "provider": "github",
+     "repo_id": "22222222-2222-2222-2222-222222222222",
+     "source": "",
+     "subject_id": "6",
+     "subject_type": "pull_request"
+    },
+    {
+     "actor": null,
+     "confidence": 1.0,
+     "evidence": "{}",
+     "kind": "human",
+     "observed_at": "2026-08-02T10:00:00.500000",
+     "provider": "linear",
+     "repo_id": null,
+     "source": "manual",
+     "subject_id": "ABC-123",
+     "subject_type": "issue"
+    },
+    {
+     "actor": "x",
+     "confidence": 0.5,
+     "evidence": "{}",
+     "kind": "ai_review",
+     "observed_at": "2026-08-02T10:00:00.500000",
+     "provider": "github",
+     "repo_id": "33333333-3333-3333-3333-333333333333",
+     "source": "bot_author",
+     "subject_id": "1",
+     "subject_type": "pull_request"
+    }
+   ],
+   "expected": {
+    "dataAvailable": true,
+    "endDate": "2026-08-03",
+    "hasMore": false,
+    "mix": [
+     {
+      "count": 6,
+      "kind": "ai_assisted",
+      "share": 0.6
+     },
+     {
+      "count": 3,
+      "kind": "human",
+      "share": 0.3
+     },
+     {
+      "count": 1,
+      "kind": "unknown",
+      "share": 0.1
+     }
+    ],
+    "orgId": "org-1",
+    "rows": [
+     {
+      "actor": "bot",
+      "confidence": 0.8999999761581421,
+      "evidence": "{\"label\": \"ai\"}",
+      "kind": "ai_assisted",
+      "observedAt": "2026-08-02T10:00:00.500000+00:00",
+      "provider": "github",
+      "repoId": "11111111-1111-1111-1111-111111111111",
+      "source": "pr_label",
+      "subjectId": "7",
+      "subjectType": "pull_request",
+      "teamId": "team-a"
+     },
+     {
+      "actor": null,
+      "confidence": 0.0,
+      "evidence": "{}",
+      "kind": "unknown",
+      "observedAt": "2026-08-02T10:00:00.500000+00:00",
+      "provider": "github",
+      "repoId": "22222222-2222-2222-2222-222222222222",
+      "source": "",
+      "subjectId": "6",
+      "subjectType": "pull_request",
+      "teamId": "team-b"
+     },
+     {
+      "actor": null,
+      "confidence": 1.0,
+      "evidence": "{}",
+      "kind": "human",
+      "observedAt": "2026-08-02T10:00:00.500000+00:00",
+      "provider": "linear",
+      "repoId": null,
+      "source": "manual",
+      "subjectId": "ABC-123",
+      "subjectType": "issue",
+      "teamId": null
+     },
+     {
+      "actor": "x",
+      "confidence": 0.5,
+      "evidence": "{}",
+      "kind": "ai_review",
+      "observedAt": "2026-08-02T10:00:00.500000+00:00",
+      "provider": "github",
+      "repoId": "33333333-3333-3333-3333-333333333333",
+      "source": "bot_author",
+      "subjectId": "1",
+      "subjectType": "pull_request",
+      "teamId": null
+     }
+    ],
+    "startDate": "2026-08-01",
+    "totalAttributed": 10
+   },
+   "fail": null,
+   "fn": "resolve_ai_attribution_overview",
+   "hotspot": [],
+   "limit": 50,
+   "mix": [
+    {
+     "count": 6,
+     "kind": "ai_assisted"
+    },
+    {
+     "count": 3,
+     "kind": "human"
+    },
+    {
+     "count": 1,
+     "kind": ""
+    }
+   ],
+   "name": "overview/plain",
+   "nameQueryFails": false,
+   "offset": 0,
+   "prs": [],
+   "repoRows": [
+    {
+     "full_name": "acme/alpha",
+     "repo_id": "11111111-1111-1111-1111-111111111111"
+    },
+    {
+     "full_name": "Acme/Beta",
+     "repo_id": "22222222-2222-2222-2222-222222222222"
+    },
+    {
+     "full_name": "",
+     "repo_id": "33333333-3333-3333-3333-333333333333"
+    }
+   ],
+   "scope": null,
+   "slugRows": [],
+   "teamRepoRows": null,
+   "teamRows": [
+    {
+     "id": "team-a",
+     "name": "Team A",
+     "repo_patterns": [
+      "acme/alpha"
+     ]
+    },
+    {
+     "id": "team-b",
+     "name": "B",
+     "repo_patterns": [
+      "ACME/*"
+     ]
+    }
+   ]
+  },
+  {
+   "calls": {
+    "evidence": {
+     "limit": 3,
+     "offset": 0
+    },
+    "mix": {
+     "kinds": null,
+     "repo_ids": null
+    }
+   },
+   "complexity": [],
+   "daily": [],
+   "evidence": [
+    {
+     "actor": "bot",
+     "confidence": 0.8999999761581421,
+     "evidence": "{\"label\": \"ai\"}",
+     "kind": "ai_assisted",
+     "observed_at": "2026-08-02T10:00:00.500000",
+     "provider": "github",
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "source": "pr_label",
+     "subject_id": "7",
+     "subject_type": "pull_request"
+    },
+    {
+     "actor": null,
+     "confidence": null,
+     "evidence": "",
+     "kind": "",
+     "observed_at": "2026-08-02T10:00:00.500000",
+     "provider": "github",
+     "repo_id": "22222222-2222-2222-2222-222222222222",
+     "source": "",
+     "subject_id": "6",
+     "subject_type": "pull_request"
+    }
+   ],
+   "expected": {
+    "dataAvailable": true,
+    "endDate": "2026-08-03",
+    "hasMore": false,
+    "mix": [
+     {
+      "count": 6,
+      "kind": "ai_assisted",
+      "share": 0.6
+     },
+     {
+      "count": 3,
+      "kind": "human",
+      "share": 0.3
+     },
+     {
+      "count": 1,
+      "kind": "unknown",
+      "share": 0.1
+     }
+    ],
+    "orgId": "org-1",
+    "rows": [
+     {
+      "actor": "bot",
+      "confidence": 0.8999999761581421,
+      "evidence": "{\"label\": \"ai\"}",
+      "kind": "ai_assisted",
+      "observedAt": "2026-08-02T10:00:00.500000+00:00",
+      "provider": "github",
+      "repoId": "11111111-1111-1111-1111-111111111111",
+      "source": "pr_label",
+      "subjectId": "7",
+      "subjectType": "pull_request",
+      "teamId": "team-a"
+     },
+     {
+      "actor": null,
+      "confidence": 0.0,
+      "evidence": "{}",
+      "kind": "unknown",
+      "observedAt": "2026-08-02T10:00:00.500000+00:00",
+      "provider": "github",
+      "repoId": "22222222-2222-2222-2222-222222222222",
+      "source": "",
+      "subjectId": "6",
+      "subjectType": "pull_request",
+      "teamId": "team-b"
+     }
+    ],
+    "startDate": "2026-08-01",
+    "totalAttributed": 10
+   },
+   "fail": null,
+   "fn": "resolve_ai_attribution_overview",
+   "hotspot": [],
+   "limit": 2,
+   "mix": [
+    {
+     "count": 6,
+     "kind": "ai_assisted"
+    },
+    {
+     "count": 3,
+     "kind": "human"
+    },
+    {
+     "count": 1,
+     "kind": ""
+    }
+   ],
+   "name": "overview/exactPage",
+   "nameQueryFails": false,
+   "offset": 0,
+   "prs": [],
+   "repoRows": [
+    {
+     "full_name": "acme/alpha",
+     "repo_id": "11111111-1111-1111-1111-111111111111"
+    },
+    {
+     "full_name": "Acme/Beta",
+     "repo_id": "22222222-2222-2222-2222-222222222222"
+    },
+    {
+     "full_name": "",
+     "repo_id": "33333333-3333-3333-3333-333333333333"
+    }
+   ],
+   "scope": null,
+   "slugRows": [],
+   "teamRepoRows": null,
+   "teamRows": [
+    {
+     "id": "team-a",
+     "name": "Team A",
+     "repo_patterns": [
+      "acme/alpha"
+     ]
+    },
+    {
+     "id": "team-b",
+     "name": "B",
+     "repo_patterns": [
+      "ACME/*"
+     ]
+    }
+   ]
+  },
+  {
+   "calls": {
+    "evidence": {
+     "limit": 201,
+     "offset": 0
+    },
+    "mix": {
+     "kinds": null,
+     "repo_ids": null
+    }
+   },
+   "complexity": [],
+   "daily": [],
+   "evidence": [
+    {
+     "actor": "bot",
+     "confidence": 0.8999999761581421,
+     "evidence": "{\"label\": \"ai\"}",
+     "kind": "ai_assisted",
+     "observed_at": "2026-08-02T10:00:00.500000",
+     "provider": "github",
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "source": "pr_label",
+     "subject_id": "7",
+     "subject_type": "pull_request"
+    },
+    {
+     "actor": null,
+     "confidence": null,
+     "evidence": "",
+     "kind": "",
+     "observed_at": "2026-08-02T10:00:00.500000",
+     "provider": "github",
+     "repo_id": "22222222-2222-2222-2222-222222222222",
+     "source": "",
+     "subject_id": "6",
+     "subject_type": "pull_request"
+    },
+    {
+     "actor": null,
+     "confidence": 1.0,
+     "evidence": "{}",
+     "kind": "human",
+     "observed_at": "2026-08-02T10:00:00.500000",
+     "provider": "linear",
+     "repo_id": null,
+     "source": "manual",
+     "subject_id": "ABC-123",
+     "subject_type": "issue"
+    },
+    {
+     "actor": "x",
+     "confidence": 0.5,
+     "evidence": "{}",
+     "kind": "ai_review",
+     "observed_at": "2026-08-02T10:00:00.500000",
+     "provider": "github",
+     "repo_id": "33333333-3333-3333-3333-333333333333",
+     "source": "bot_author",
+     "subject_id": "1",
+     "subject_type": "pull_request"
+    }
+   ],
+   "expected": {
+    "dataAvailable": true,
+    "endDate": "2026-08-03",
+    "hasMore": false,
+    "mix": [
+     {
+      "count": 6,
+      "kind": "ai_assisted",
+      "share": 0.6
+     },
+     {
+      "count": 3,
+      "kind": "human",
+      "share": 0.3
+     },
+     {
+      "count": 1,
+      "kind": "unknown",
+      "share": 0.1
+     }
+    ],
+    "orgId": "org-1",
+    "rows": [
+     {
+      "actor": "bot",
+      "confidence": 0.8999999761581421,
+      "evidence": "{\"label\": \"ai\"}",
+      "kind": "ai_assisted",
+      "observedAt": "2026-08-02T10:00:00.500000+00:00",
+      "provider": "github",
+      "repoId": "11111111-1111-1111-1111-111111111111",
+      "source": "pr_label",
+      "subjectId": "7",
+      "subjectType": "pull_request",
+      "teamId": "team-a"
+     },
+     {
+      "actor": null,
+      "confidence": 0.0,
+      "evidence": "{}",
+      "kind": "unknown",
+      "observedAt": "2026-08-02T10:00:00.500000+00:00",
+      "provider": "github",
+      "repoId": "22222222-2222-2222-2222-222222222222",
+      "source": "",
+      "subjectId": "6",
+      "subjectType": "pull_request",
+      "teamId": "team-b"
+     },
+     {
+      "actor": null,
+      "confidence": 1.0,
+      "evidence": "{}",
+      "kind": "human",
+      "observedAt": "2026-08-02T10:00:00.500000+00:00",
+      "provider": "linear",
+      "repoId": null,
+      "source": "manual",
+      "subjectId": "ABC-123",
+      "subjectType": "issue",
+      "teamId": null
+     },
+     {
+      "actor": "x",
+      "confidence": 0.5,
+      "evidence": "{}",
+      "kind": "ai_review",
+      "observedAt": "2026-08-02T10:00:00.500000+00:00",
+      "provider": "github",
+      "repoId": "33333333-3333-3333-3333-333333333333",
+      "source": "bot_author",
+      "subjectId": "1",
+      "subjectType": "pull_request",
+      "teamId": null
+     }
+    ],
+    "startDate": "2026-08-01",
+    "totalAttributed": 10
+   },
+   "fail": null,
+   "fn": "resolve_ai_attribution_overview",
+   "hotspot": [],
+   "limit": 201,
+   "mix": [
+    {
+     "count": 6,
+     "kind": "ai_assisted"
+    },
+    {
+     "count": 3,
+     "kind": "human"
+    },
+    {
+     "count": 1,
+     "kind": ""
+    }
+   ],
+   "name": "overview/limit201",
+   "nameQueryFails": false,
+   "offset": -1,
+   "prs": [],
+   "repoRows": [
+    {
+     "full_name": "acme/alpha",
+     "repo_id": "11111111-1111-1111-1111-111111111111"
+    },
+    {
+     "full_name": "Acme/Beta",
+     "repo_id": "22222222-2222-2222-2222-222222222222"
+    },
+    {
+     "full_name": "",
+     "repo_id": "33333333-3333-3333-3333-333333333333"
+    }
+   ],
+   "scope": null,
+   "slugRows": [],
+   "teamRepoRows": null,
+   "teamRows": [
+    {
+     "id": "team-a",
+     "name": "Team A",
+     "repo_patterns": [
+      "acme/alpha"
+     ]
+    },
+    {
+     "id": "team-b",
+     "name": "B",
+     "repo_patterns": [
+      "ACME/*"
+     ]
+    }
+   ]
+  },
+  {
+   "calls": {
+    "evidence": {
+     "limit": 51,
+     "offset": 0
+    },
+    "mix": {
+     "kinds": null,
+     "repo_ids": null
+    }
+   },
+   "complexity": [],
+   "daily": [],
+   "evidence": [
+    {
+     "actor": "bot",
+     "confidence": 0.8999999761581421,
+     "evidence": "{\"label\": \"ai\"}",
+     "kind": "ai_assisted",
+     "observed_at": "2026-08-02T10:00:00.500000",
+     "provider": "github",
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "source": "pr_label",
+     "subject_id": "7",
+     "subject_type": "pull_request"
+    },
+    {
+     "actor": null,
+     "confidence": null,
+     "evidence": "",
+     "kind": "",
+     "observed_at": "2026-08-02T10:00:00.500000",
+     "provider": "github",
+     "repo_id": "22222222-2222-2222-2222-222222222222",
+     "source": "",
+     "subject_id": "6",
+     "subject_type": "pull_request"
+    },
+    {
+     "actor": null,
+     "confidence": 1.0,
+     "evidence": "{}",
+     "kind": "human",
+     "observed_at": "2026-08-02T10:00:00.500000",
+     "provider": "linear",
+     "repo_id": null,
+     "source": "manual",
+     "subject_id": "ABC-123",
+     "subject_type": "issue"
+    },
+    {
+     "actor": "x",
+     "confidence": 0.5,
+     "evidence": "{}",
+     "kind": "ai_review",
+     "observed_at": "2026-08-02T10:00:00.500000",
+     "provider": "github",
+     "repo_id": "33333333-3333-3333-3333-333333333333",
+     "source": "bot_author",
+     "subject_id": "1",
+     "subject_type": "pull_request"
+    }
+   ],
+   "expected": {
+    "dataAvailable": true,
+    "endDate": "2026-08-03",
+    "hasMore": false,
+    "mix": [
+     {
+      "count": 6,
+      "kind": "ai_assisted",
+      "share": 0.6
+     },
+     {
+      "count": 3,
+      "kind": "human",
+      "share": 0.3
+     },
+     {
+      "count": 1,
+      "kind": "unknown",
+      "share": 0.1
+     }
+    ],
+    "orgId": "org-1",
+    "rows": [
+     {
+      "actor": "bot",
+      "confidence": 0.8999999761581421,
+      "evidence": "{\"label\": \"ai\"}",
+      "kind": "ai_assisted",
+      "observedAt": "2026-08-02T10:00:00.500000+00:00",
+      "provider": "github",
+      "repoId": "11111111-1111-1111-1111-111111111111",
+      "source": "pr_label",
+      "subjectId": "7",
+      "subjectType": "pull_request",
+      "teamId": "team-a"
+     },
+     {
+      "actor": null,
+      "confidence": 0.0,
+      "evidence": "{}",
+      "kind": "unknown",
+      "observedAt": "2026-08-02T10:00:00.500000+00:00",
+      "provider": "github",
+      "repoId": "22222222-2222-2222-2222-222222222222",
+      "source": "",
+      "subjectId": "6",
+      "subjectType": "pull_request",
+      "teamId": "team-b"
+     },
+     {
+      "actor": null,
+      "confidence": 1.0,
+      "evidence": "{}",
+      "kind": "human",
+      "observedAt": "2026-08-02T10:00:00.500000+00:00",
+      "provider": "linear",
+      "repoId": null,
+      "source": "manual",
+      "subjectId": "ABC-123",
+      "subjectType": "issue",
+      "teamId": null
+     },
+     {
+      "actor": "x",
+      "confidence": 0.5,
+      "evidence": "{}",
+      "kind": "ai_review",
+      "observedAt": "2026-08-02T10:00:00.500000+00:00",
+      "provider": "github",
+      "repoId": "33333333-3333-3333-3333-333333333333",
+      "source": "bot_author",
+      "subjectId": "1",
+      "subjectType": "pull_request",
+      "teamId": null
+     }
+    ],
+    "startDate": "2026-08-01",
+    "totalAttributed": 10
+   },
+   "fail": null,
+   "fn": "resolve_ai_attribution_overview",
+   "hotspot": [],
+   "limit": 50,
+   "mix": [
+    {
+     "count": 6,
+     "kind": "ai_assisted"
+    },
+    {
+     "count": 3,
+     "kind": "human"
+    },
+    {
+     "count": 1,
+     "kind": ""
+    }
+   ],
+   "name": "overview/repoScoped",
+   "nameQueryFails": false,
+   "offset": 0,
+   "prs": [],
+   "repoRows": [
+    {
+     "full_name": "acme/alpha",
+     "repo_id": "11111111-1111-1111-1111-111111111111"
+    },
+    {
+     "full_name": "Acme/Beta",
+     "repo_id": "22222222-2222-2222-2222-222222222222"
+    },
+    {
+     "full_name": "",
+     "repo_id": "33333333-3333-3333-3333-333333333333"
+    }
+   ],
+   "scope": {
+    "buckets": [],
+    "repoId": "acme/alpha",
+    "teamId": null,
+    "workType": null
+   },
+   "slugRows": [
+    "11111111-1111-1111-1111-111111111111"
+   ],
+   "teamRepoRows": null,
+   "teamRows": [
+    {
+     "id": "team-a",
+     "name": "Team A",
+     "repo_patterns": [
+      "acme/alpha"
+     ]
+    },
+    {
+     "id": "team-b",
+     "name": "B",
+     "repo_patterns": [
+      "ACME/*"
+     ]
+    }
+   ]
+  },
+  {
+   "calls": {
+    "evidence": {
+     "limit": 4,
+     "offset": 2
+    },
+    "mix": {
+     "kinds": null,
+     "repo_ids": null
+    }
+   },
+   "complexity": [],
+   "daily": [],
+   "evidence": [
+    {
+     "actor": "bot",
+     "confidence": 0.8999999761581421,
+     "evidence": "{\"label\": \"ai\"}",
+     "kind": "ai_assisted",
+     "observed_at": "2026-08-02T10:00:00.500000",
+     "provider": "github",
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "source": "pr_label",
+     "subject_id": "7",
+     "subject_type": "pull_request"
+    },
+    {
+     "actor": null,
+     "confidence": null,
+     "evidence": "",
+     "kind": "",
+     "observed_at": "2026-08-02T10:00:00.500000",
+     "provider": "github",
+     "repo_id": "22222222-2222-2222-2222-222222222222",
+     "source": "",
+     "subject_id": "6",
+     "subject_type": "pull_request"
+    },
+    {
+     "actor": null,
+     "confidence": 1.0,
+     "evidence": "{}",
+     "kind": "human",
+     "observed_at": "2026-08-02T10:00:00.500000",
+     "provider": "linear",
+     "repo_id": null,
+     "source": "manual",
+     "subject_id": "ABC-123",
+     "subject_type": "issue"
+    },
+    {
+     "actor": "x",
+     "confidence": 0.5,
+     "evidence": "{}",
+     "kind": "ai_review",
+     "observed_at": "2026-08-02T10:00:00.500000",
+     "provider": "github",
+     "repo_id": "33333333-3333-3333-3333-333333333333",
+     "source": "bot_author",
+     "subject_id": "1",
+     "subject_type": "pull_request"
+    }
+   ],
+   "expected": {
+    "dataAvailable": true,
+    "endDate": "2026-08-03",
+    "hasMore": true,
+    "mix": [
+     {
+      "count": 6,
+      "kind": "ai_assisted",
+      "share": 0.6
+     },
+     {
+      "count": 3,
+      "kind": "human",
+      "share": 0.3
+     },
+     {
+      "count": 1,
+      "kind": "unknown",
+      "share": 0.1
+     }
+    ],
+    "orgId": "org-1",
+    "rows": [
+     {
+      "actor": "bot",
+      "confidence": 0.8999999761581421,
+      "evidence": "{\"label\": \"ai\"}",
+      "kind": "ai_assisted",
+      "observedAt": "2026-08-02T10:00:00.500000+00:00",
+      "provider": "github",
+      "repoId": "11111111-1111-1111-1111-111111111111",
+      "source": "pr_label",
+      "subjectId": "7",
+      "subjectType": "pull_request",
+      "teamId": "team-a"
+     },
+     {
+      "actor": null,
+      "confidence": 0.0,
+      "evidence": "{}",
+      "kind": "unknown",
+      "observedAt": "2026-08-02T10:00:00.500000+00:00",
+      "provider": "github",
+      "repoId": "22222222-2222-2222-2222-222222222222",
+      "source": "",
+      "subjectId": "6",
+      "subjectType": "pull_request",
+      "teamId": "team-b"
+     },
+     {
+      "actor": null,
+      "confidence": 1.0,
+      "evidence": "{}",
+      "kind": "human",
+      "observedAt": "2026-08-02T10:00:00.500000+00:00",
+      "provider": "linear",
+      "repoId": null,
+      "source": "manual",
+      "subjectId": "ABC-123",
+      "subjectType": "issue",
+      "teamId": null
+     }
+    ],
+    "startDate": "2026-08-01",
+    "totalAttributed": 10
+   },
+   "fail": null,
+   "fn": "resolve_ai_attribution_overview",
+   "hotspot": [],
+   "limit": 3,
+   "mix": [
+    {
+     "count": 6,
+     "kind": "ai_assisted"
+    },
+    {
+     "count": 3,
+     "kind": "human"
+    },
+    {
+     "count": 1,
+     "kind": ""
+    }
+   ],
+   "name": "overview/hasMore",
+   "nameQueryFails": false,
+   "offset": 2,
+   "prs": [],
+   "repoRows": [
+    {
+     "full_name": "acme/alpha",
+     "repo_id": "11111111-1111-1111-1111-111111111111"
+    },
+    {
+     "full_name": "Acme/Beta",
+     "repo_id": "22222222-2222-2222-2222-222222222222"
+    },
+    {
+     "full_name": "",
+     "repo_id": "33333333-3333-3333-3333-333333333333"
+    }
+   ],
+   "scope": null,
+   "slugRows": [],
+   "teamRepoRows": null,
+   "teamRows": [
+    {
+     "id": "team-a",
+     "name": "Team A",
+     "repo_patterns": [
+      "acme/alpha"
+     ]
+    },
+    {
+     "id": "team-b",
+     "name": "B",
+     "repo_patterns": [
+      "ACME/*"
+     ]
+    }
+   ]
+  },
+  {
+   "calls": {
+    "evidence": {
+     "limit": 51,
+     "offset": 0
+    },
+    "mix": {
+     "kinds": [
+      "ai_assisted",
+      "human"
+     ],
+     "repo_ids": null
+    }
+   },
+   "complexity": [],
+   "daily": [],
+   "evidence": [
+    {
+     "actor": "bot",
+     "confidence": 0.8999999761581421,
+     "evidence": "{\"label\": \"ai\"}",
+     "kind": "ai_assisted",
+     "observed_at": "2026-08-02T10:00:00.500000",
+     "provider": "github",
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "source": "pr_label",
+     "subject_id": "7",
+     "subject_type": "pull_request"
+    },
+    {
+     "actor": null,
+     "confidence": null,
+     "evidence": "",
+     "kind": "",
+     "observed_at": "2026-08-02T10:00:00.500000",
+     "provider": "github",
+     "repo_id": "22222222-2222-2222-2222-222222222222",
+     "source": "",
+     "subject_id": "6",
+     "subject_type": "pull_request"
+    },
+    {
+     "actor": null,
+     "confidence": 1.0,
+     "evidence": "{}",
+     "kind": "human",
+     "observed_at": "2026-08-02T10:00:00.500000",
+     "provider": "linear",
+     "repo_id": null,
+     "source": "manual",
+     "subject_id": "ABC-123",
+     "subject_type": "issue"
+    },
+    {
+     "actor": "x",
+     "confidence": 0.5,
+     "evidence": "{}",
+     "kind": "ai_review",
+     "observed_at": "2026-08-02T10:00:00.500000",
+     "provider": "github",
+     "repo_id": "33333333-3333-3333-3333-333333333333",
+     "source": "bot_author",
+     "subject_id": "1",
+     "subject_type": "pull_request"
+    }
+   ],
+   "expected": {
+    "dataAvailable": true,
+    "endDate": "2026-08-03",
+    "hasMore": false,
+    "mix": [
+     {
+      "count": 6,
+      "kind": "ai_assisted",
+      "share": 0.6
+     },
+     {
+      "count": 3,
+      "kind": "human",
+      "share": 0.3
+     },
+     {
+      "count": 1,
+      "kind": "unknown",
+      "share": 0.1
+     }
+    ],
+    "orgId": "org-1",
+    "rows": [
+     {
+      "actor": "bot",
+      "confidence": 0.8999999761581421,
+      "evidence": "{\"label\": \"ai\"}",
+      "kind": "ai_assisted",
+      "observedAt": "2026-08-02T10:00:00.500000+00:00",
+      "provider": "github",
+      "repoId": "11111111-1111-1111-1111-111111111111",
+      "source": "pr_label",
+      "subjectId": "7",
+      "subjectType": "pull_request",
+      "teamId": "team-a"
+     },
+     {
+      "actor": null,
+      "confidence": 0.0,
+      "evidence": "{}",
+      "kind": "unknown",
+      "observedAt": "2026-08-02T10:00:00.500000+00:00",
+      "provider": "github",
+      "repoId": "22222222-2222-2222-2222-222222222222",
+      "source": "",
+      "subjectId": "6",
+      "subjectType": "pull_request",
+      "teamId": "team-b"
+     },
+     {
+      "actor": null,
+      "confidence": 1.0,
+      "evidence": "{}",
+      "kind": "human",
+      "observedAt": "2026-08-02T10:00:00.500000+00:00",
+      "provider": "linear",
+      "repoId": null,
+      "source": "manual",
+      "subjectId": "ABC-123",
+      "subjectType": "issue",
+      "teamId": null
+     },
+     {
+      "actor": "x",
+      "confidence": 0.5,
+      "evidence": "{}",
+      "kind": "ai_review",
+      "observedAt": "2026-08-02T10:00:00.500000+00:00",
+      "provider": "github",
+      "repoId": "33333333-3333-3333-3333-333333333333",
+      "source": "bot_author",
+      "subjectId": "1",
+      "subjectType": "pull_request",
+      "teamId": null
+     }
+    ],
+    "startDate": "2026-08-01",
+    "totalAttributed": 10
+   },
+   "fail": null,
+   "fn": "resolve_ai_attribution_overview",
+   "hotspot": [],
+   "limit": 50,
+   "mix": [
+    {
+     "count": 6,
+     "kind": "ai_assisted"
+    },
+    {
+     "count": 3,
+     "kind": "human"
+    },
+    {
+     "count": 1,
+     "kind": ""
+    }
+   ],
+   "name": "overview/buckets",
+   "nameQueryFails": false,
+   "offset": 0,
+   "prs": [],
+   "repoRows": [
+    {
+     "full_name": "acme/alpha",
+     "repo_id": "11111111-1111-1111-1111-111111111111"
+    },
+    {
+     "full_name": "Acme/Beta",
+     "repo_id": "22222222-2222-2222-2222-222222222222"
+    },
+    {
+     "full_name": "",
+     "repo_id": "33333333-3333-3333-3333-333333333333"
+    }
+   ],
+   "scope": {
+    "buckets": [
+     "AI_ASSISTED",
+     "HUMAN"
+    ],
+    "repoId": null,
+    "teamId": null,
+    "workType": null
+   },
+   "slugRows": [],
+   "teamRepoRows": null,
+   "teamRows": [
+    {
+     "id": "team-a",
+     "name": "Team A",
+     "repo_patterns": [
+      "acme/alpha"
+     ]
+    },
+    {
+     "id": "team-b",
+     "name": "B",
+     "repo_patterns": [
+      "ACME/*"
+     ]
+    }
+   ]
+  },
+  {
+   "calls": {
+    "evidence": {
+     "limit": 51,
+     "offset": 0
+    },
+    "mix": {
+     "kinds": null,
+     "repo_ids": [
+      "22222222-2222-2222-2222-222222222222"
+     ]
+    }
+   },
+   "complexity": [],
+   "daily": [],
+   "evidence": [
+    {
+     "actor": "bot",
+     "confidence": 0.8999999761581421,
+     "evidence": "{\"label\": \"ai\"}",
+     "kind": "ai_assisted",
+     "observed_at": "2026-08-02T10:00:00.500000",
+     "provider": "github",
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "source": "pr_label",
+     "subject_id": "7",
+     "subject_type": "pull_request"
+    },
+    {
+     "actor": null,
+     "confidence": null,
+     "evidence": "",
+     "kind": "",
+     "observed_at": "2026-08-02T10:00:00.500000",
+     "provider": "github",
+     "repo_id": "22222222-2222-2222-2222-222222222222",
+     "source": "",
+     "subject_id": "6",
+     "subject_type": "pull_request"
+    },
+    {
+     "actor": null,
+     "confidence": 1.0,
+     "evidence": "{}",
+     "kind": "human",
+     "observed_at": "2026-08-02T10:00:00.500000",
+     "provider": "linear",
+     "repo_id": null,
+     "source": "manual",
+     "subject_id": "ABC-123",
+     "subject_type": "issue"
+    },
+    {
+     "actor": "x",
+     "confidence": 0.5,
+     "evidence": "{}",
+     "kind": "ai_review",
+     "observed_at": "2026-08-02T10:00:00.500000",
+     "provider": "github",
+     "repo_id": "33333333-3333-3333-3333-333333333333",
+     "source": "bot_author",
+     "subject_id": "1",
+     "subject_type": "pull_request"
+    }
+   ],
+   "expected": {
+    "dataAvailable": true,
+    "endDate": "2026-08-03",
+    "hasMore": false,
+    "mix": [
+     {
+      "count": 6,
+      "kind": "ai_assisted",
+      "share": 0.6
+     },
+     {
+      "count": 3,
+      "kind": "human",
+      "share": 0.3
+     },
+     {
+      "count": 1,
+      "kind": "unknown",
+      "share": 0.1
+     }
+    ],
+    "orgId": "org-1",
+    "rows": [
+     {
+      "actor": null,
+      "confidence": 0.0,
+      "evidence": "{}",
+      "kind": "unknown",
+      "observedAt": "2026-08-02T10:00:00.500000+00:00",
+      "provider": "github",
+      "repoId": "22222222-2222-2222-2222-222222222222",
+      "source": "",
+      "subjectId": "6",
+      "subjectType": "pull_request",
+      "teamId": "team-b"
+     }
+    ],
+    "startDate": "2026-08-01",
+    "totalAttributed": 10
+   },
+   "fail": null,
+   "fn": "resolve_ai_attribution_overview",
+   "hotspot": [],
+   "limit": 50,
+   "mix": [
+    {
+     "count": 6,
+     "kind": "ai_assisted"
+    },
+    {
+     "count": 3,
+     "kind": "human"
+    },
+    {
+     "count": 1,
+     "kind": ""
+    }
+   ],
+   "name": "overview/teamFilter",
+   "nameQueryFails": false,
+   "offset": 0,
+   "prs": [],
+   "repoRows": [
+    {
+     "full_name": "acme/alpha",
+     "repo_id": "11111111-1111-1111-1111-111111111111"
+    },
+    {
+     "full_name": "Acme/Beta",
+     "repo_id": "22222222-2222-2222-2222-222222222222"
+    },
+    {
+     "full_name": "",
+     "repo_id": "33333333-3333-3333-3333-333333333333"
+    }
+   ],
+   "scope": {
+    "buckets": [],
+    "repoId": null,
+    "teamId": "team-b",
+    "workType": null
+   },
+   "slugRows": [],
+   "teamRepoRows": null,
+   "teamRows": [
+    {
+     "id": "team-a",
+     "name": "Team A",
+     "repo_patterns": [
+      "acme/alpha"
+     ]
+    },
+    {
+     "id": "team-b",
+     "name": "B",
+     "repo_patterns": [
+      "ACME/*"
+     ]
+    }
+   ]
+  },
+  {
+   "calls": {},
+   "complexity": [],
+   "daily": [],
+   "evidence": [
+    {
+     "actor": "bot",
+     "confidence": 0.8999999761581421,
+     "evidence": "{\"label\": \"ai\"}",
+     "kind": "ai_assisted",
+     "observed_at": "2026-08-02T10:00:00.500000",
+     "provider": "github",
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "source": "pr_label",
+     "subject_id": "7",
+     "subject_type": "pull_request"
+    },
+    {
+     "actor": null,
+     "confidence": null,
+     "evidence": "",
+     "kind": "",
+     "observed_at": "2026-08-02T10:00:00.500000",
+     "provider": "github",
+     "repo_id": "22222222-2222-2222-2222-222222222222",
+     "source": "",
+     "subject_id": "6",
+     "subject_type": "pull_request"
+    },
+    {
+     "actor": null,
+     "confidence": 1.0,
+     "evidence": "{}",
+     "kind": "human",
+     "observed_at": "2026-08-02T10:00:00.500000",
+     "provider": "linear",
+     "repo_id": null,
+     "source": "manual",
+     "subject_id": "ABC-123",
+     "subject_type": "issue"
+    },
+    {
+     "actor": "x",
+     "confidence": 0.5,
+     "evidence": "{}",
+     "kind": "ai_review",
+     "observed_at": "2026-08-02T10:00:00.500000",
+     "provider": "github",
+     "repo_id": "33333333-3333-3333-3333-333333333333",
+     "source": "bot_author",
+     "subject_id": "1",
+     "subject_type": "pull_request"
+    }
+   ],
+   "expected": {
+    "dataAvailable": false,
+    "endDate": "2026-08-03",
+    "hasMore": false,
+    "mix": [],
+    "orgId": "org-1",
+    "rows": [],
+    "startDate": "2026-08-01",
+    "totalAttributed": 0
+   },
+   "fail": null,
+   "fn": "resolve_ai_attribution_overview",
+   "hotspot": [],
+   "limit": 50,
+   "mix": [
+    {
+     "count": 6,
+     "kind": "ai_assisted"
+    },
+    {
+     "count": 3,
+     "kind": "human"
+    },
+    {
+     "count": 1,
+     "kind": ""
+    }
+   ],
+   "name": "overview/teamNoRepos",
+   "nameQueryFails": false,
+   "offset": 0,
+   "prs": [],
+   "repoRows": [
+    {
+     "full_name": "acme/alpha",
+     "repo_id": "11111111-1111-1111-1111-111111111111"
+    },
+    {
+     "full_name": "Acme/Beta",
+     "repo_id": "22222222-2222-2222-2222-222222222222"
+    },
+    {
+     "full_name": "",
+     "repo_id": "33333333-3333-3333-3333-333333333333"
+    }
+   ],
+   "scope": {
+    "buckets": [],
+    "repoId": null,
+    "teamId": "team-z",
+    "workType": null
+   },
+   "slugRows": [],
+   "teamRepoRows": null,
+   "teamRows": [
+    {
+     "id": "team-a",
+     "name": "Team A",
+     "repo_patterns": [
+      "acme/alpha"
+     ]
+    },
+    {
+     "id": "team-b",
+     "name": "B",
+     "repo_patterns": [
+      "ACME/*"
+     ]
+    }
+   ]
+  },
+  {
+   "calls": {},
+   "complexity": [],
+   "daily": [],
+   "evidence": [
+    {
+     "actor": "bot",
+     "confidence": 0.8999999761581421,
+     "evidence": "{\"label\": \"ai\"}",
+     "kind": "ai_assisted",
+     "observed_at": "2026-08-02T10:00:00.500000",
+     "provider": "github",
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "source": "pr_label",
+     "subject_id": "7",
+     "subject_type": "pull_request"
+    },
+    {
+     "actor": null,
+     "confidence": null,
+     "evidence": "",
+     "kind": "",
+     "observed_at": "2026-08-02T10:00:00.500000",
+     "provider": "github",
+     "repo_id": "22222222-2222-2222-2222-222222222222",
+     "source": "",
+     "subject_id": "6",
+     "subject_type": "pull_request"
+    },
+    {
+     "actor": null,
+     "confidence": 1.0,
+     "evidence": "{}",
+     "kind": "human",
+     "observed_at": "2026-08-02T10:00:00.500000",
+     "provider": "linear",
+     "repo_id": null,
+     "source": "manual",
+     "subject_id": "ABC-123",
+     "subject_type": "issue"
+    },
+    {
+     "actor": "x",
+     "confidence": 0.5,
+     "evidence": "{}",
+     "kind": "ai_review",
+     "observed_at": "2026-08-02T10:00:00.500000",
+     "provider": "github",
+     "repo_id": "33333333-3333-3333-3333-333333333333",
+     "source": "bot_author",
+     "subject_id": "1",
+     "subject_type": "pull_request"
+    }
+   ],
+   "expected": {
+    "dataAvailable": false,
+    "endDate": "2026-08-03",
+    "hasMore": false,
+    "mix": [],
+    "orgId": "org-1",
+    "rows": [],
+    "startDate": "2026-08-01",
+    "totalAttributed": 0
+   },
+   "fail": null,
+   "fn": "resolve_ai_attribution_overview",
+   "hotspot": [],
+   "limit": 50,
+   "mix": [
+    {
+     "count": 6,
+     "kind": "ai_assisted"
+    },
+    {
+     "count": 3,
+     "kind": "human"
+    },
+    {
+     "count": 1,
+     "kind": ""
+    }
+   ],
+   "name": "overview/repoUnresolved",
+   "nameQueryFails": false,
+   "offset": 0,
+   "prs": [],
+   "repoRows": null,
+   "scope": {
+    "buckets": [],
+    "repoId": "no/such",
+    "teamId": null,
+    "workType": null
+   },
+   "slugRows": [],
+   "teamRepoRows": null,
+   "teamRows": null
+  },
+  {
+   "calls": {
+    "evidence": {
+     "limit": 51,
+     "offset": 0
+    },
+    "mix": {
+     "kinds": null,
+     "repo_ids": null
+    }
+   },
+   "complexity": [],
+   "daily": [],
+   "evidence": [],
+   "expected": {
+    "dataAvailable": false,
+    "endDate": "2026-08-03",
+    "hasMore": false,
+    "mix": [],
+    "orgId": "org-1",
+    "rows": [],
+    "startDate": "2026-08-01",
+    "totalAttributed": 0
+   },
+   "fail": null,
+   "fn": "resolve_ai_attribution_overview",
+   "hotspot": [],
+   "limit": 50,
+   "mix": [],
+   "name": "overview/empty",
+   "nameQueryFails": false,
+   "offset": 0,
+   "prs": [],
+   "repoRows": [
+    {
+     "full_name": "acme/alpha",
+     "repo_id": "11111111-1111-1111-1111-111111111111"
+    },
+    {
+     "full_name": "Acme/Beta",
+     "repo_id": "22222222-2222-2222-2222-222222222222"
+    },
+    {
+     "full_name": "",
+     "repo_id": "33333333-3333-3333-3333-333333333333"
+    }
+   ],
+   "scope": null,
+   "slugRows": [],
+   "teamRepoRows": null,
+   "teamRows": [
+    {
+     "id": "team-a",
+     "name": "Team A",
+     "repo_patterns": [
+      "acme/alpha"
+     ]
+    },
+    {
+     "id": "team-b",
+     "name": "B",
+     "repo_patterns": [
+      "ACME/*"
+     ]
+    }
+   ]
+  },
+  {
+   "calls": {
+    "evidence": {
+     "limit": 51,
+     "offset": 0
+    },
+    "mix": {
+     "kinds": null,
+     "repo_ids": null
+    }
+   },
+   "complexity": [],
+   "daily": [],
+   "evidence": [],
+   "expected": {
+    "dataAvailable": true,
+    "endDate": "2026-08-03",
+    "hasMore": false,
+    "mix": [
+     {
+      "count": 0,
+      "kind": "x",
+      "share": 0.0
+     }
+    ],
+    "orgId": "org-1",
+    "rows": [],
+    "startDate": "2026-08-01",
+    "totalAttributed": 0
+   },
+   "fail": null,
+   "fn": "resolve_ai_attribution_overview",
+   "hotspot": [],
+   "limit": 50,
+   "mix": [
+    {
+     "count": 0,
+     "kind": "x"
+    }
+   ],
+   "name": "overview/zeroTotal",
+   "nameQueryFails": false,
+   "offset": 0,
+   "prs": [],
+   "repoRows": [
+    {
+     "full_name": "acme/alpha",
+     "repo_id": "11111111-1111-1111-1111-111111111111"
+    },
+    {
+     "full_name": "Acme/Beta",
+     "repo_id": "22222222-2222-2222-2222-222222222222"
+    },
+    {
+     "full_name": "",
+     "repo_id": "33333333-3333-3333-3333-333333333333"
+    }
+   ],
+   "scope": null,
+   "slugRows": [],
+   "teamRepoRows": null,
+   "teamRows": [
+    {
+     "id": "team-a",
+     "name": "Team A",
+     "repo_patterns": [
+      "acme/alpha"
+     ]
+    },
+    {
+     "id": "team-b",
+     "name": "B",
+     "repo_patterns": [
+      "ACME/*"
+     ]
+    }
+   ]
+  },
+  {
+   "calls": {
+    "evidence": {
+     "limit": 51,
+     "offset": 0
+    },
+    "mix": {
+     "kinds": null,
+     "repo_ids": null
+    }
+   },
+   "complexity": [],
+   "daily": [],
+   "evidence": [
+    {
+     "actor": "bot",
+     "confidence": 0.8999999761581421,
+     "evidence": "{\"label\": \"ai\"}",
+     "kind": "ai_assisted",
+     "observed_at": "2026-08-02T10:00:00.500000",
+     "provider": "github",
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "source": "pr_label",
+     "subject_id": "7",
+     "subject_type": "pull_request"
+    },
+    {
+     "actor": null,
+     "confidence": null,
+     "evidence": "",
+     "kind": "",
+     "observed_at": "2026-08-02T10:00:00.500000",
+     "provider": "github",
+     "repo_id": "22222222-2222-2222-2222-222222222222",
+     "source": "",
+     "subject_id": "6",
+     "subject_type": "pull_request"
+    },
+    {
+     "actor": null,
+     "confidence": 1.0,
+     "evidence": "{}",
+     "kind": "human",
+     "observed_at": "2026-08-02T10:00:00.500000",
+     "provider": "linear",
+     "repo_id": null,
+     "source": "manual",
+     "subject_id": "ABC-123",
+     "subject_type": "issue"
+    },
+    {
+     "actor": "x",
+     "confidence": 0.5,
+     "evidence": "{}",
+     "kind": "ai_review",
+     "observed_at": "2026-08-02T10:00:00.500000",
+     "provider": "github",
+     "repo_id": "33333333-3333-3333-3333-333333333333",
+     "source": "bot_author",
+     "subject_id": "1",
+     "subject_type": "pull_request"
+    }
+   ],
+   "expected": {
+    "dataAvailable": true,
+    "endDate": "2026-08-03",
+    "hasMore": false,
+    "mix": [
+     {
+      "count": 6,
+      "kind": "ai_assisted",
+      "share": 0.6
+     },
+     {
+      "count": 3,
+      "kind": "human",
+      "share": 0.3
+     },
+     {
+      "count": 1,
+      "kind": "unknown",
+      "share": 0.1
+     }
+    ],
+    "orgId": "org-1",
+    "rows": [],
+    "startDate": "2026-08-01",
+    "totalAttributed": 10
+   },
+   "fail": "teams",
+   "fn": "resolve_ai_attribution_overview",
+   "hotspot": [],
+   "limit": 50,
+   "mix": [
+    {
+     "count": 6,
+     "kind": "ai_assisted"
+    },
+    {
+     "count": 3,
+     "kind": "human"
+    },
+    {
+     "count": 1,
+     "kind": ""
+    }
+   ],
+   "name": "overview/teamCatalogueFails",
+   "nameQueryFails": false,
+   "offset": 0,
+   "prs": [],
+   "repoRows": [
+    {
+     "full_name": "acme/alpha",
+     "repo_id": "11111111-1111-1111-1111-111111111111"
+    },
+    {
+     "full_name": "Acme/Beta",
+     "repo_id": "22222222-2222-2222-2222-222222222222"
+    },
+    {
+     "full_name": "",
+     "repo_id": "33333333-3333-3333-3333-333333333333"
+    }
+   ],
+   "scope": {
+    "buckets": [],
+    "repoId": null,
+    "teamId": "team-b",
+    "workType": null
+   },
+   "slugRows": [],
+   "teamRepoRows": null,
+   "teamRows": [
+    {
+     "id": "team-a",
+     "name": "Team A",
+     "repo_patterns": [
+      "acme/alpha"
+     ]
+    },
+    {
+     "id": "team-b",
+     "name": "B",
+     "repo_patterns": [
+      "ACME/*"
+     ]
+    }
+   ]
+  },
+  {
+   "calls": {
+    "evidence": {
+     "limit": 51,
+     "offset": 0
+    },
+    "mix": {
+     "kinds": null,
+     "repo_ids": null
+    }
+   },
+   "complexity": [],
+   "daily": [],
+   "evidence": [
+    {
+     "actor": "bot",
+     "confidence": 0.8999999761581421,
+     "evidence": "{\"label\": \"ai\"}",
+     "kind": "ai_assisted",
+     "observed_at": "2026-08-02T10:00:00.500000",
+     "provider": "github",
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "source": "pr_label",
+     "subject_id": "7",
+     "subject_type": "pull_request"
+    },
+    {
+     "actor": null,
+     "confidence": null,
+     "evidence": "",
+     "kind": "",
+     "observed_at": "2026-08-02T10:00:00.500000",
+     "provider": "github",
+     "repo_id": "22222222-2222-2222-2222-222222222222",
+     "source": "",
+     "subject_id": "6",
+     "subject_type": "pull_request"
+    },
+    {
+     "actor": null,
+     "confidence": 1.0,
+     "evidence": "{}",
+     "kind": "human",
+     "observed_at": "2026-08-02T10:00:00.500000",
+     "provider": "linear",
+     "repo_id": null,
+     "source": "manual",
+     "subject_id": "ABC-123",
+     "subject_type": "issue"
+    },
+    {
+     "actor": "x",
+     "confidence": 0.5,
+     "evidence": "{}",
+     "kind": "ai_review",
+     "observed_at": "2026-08-02T10:00:00.500000",
+     "provider": "github",
+     "repo_id": "33333333-3333-3333-3333-333333333333",
+     "source": "bot_author",
+     "subject_id": "1",
+     "subject_type": "pull_request"
+    }
+   ],
+   "expected": {
+    "dataAvailable": true,
+    "endDate": "2026-08-03",
+    "hasMore": false,
+    "mix": [
+     {
+      "count": 6,
+      "kind": "ai_assisted",
+      "share": 0.6
+     },
+     {
+      "count": 3,
+      "kind": "human",
+      "share": 0.3
+     },
+     {
+      "count": 1,
+      "kind": "unknown",
+      "share": 0.1
+     }
+    ],
+    "orgId": "org-1",
+    "rows": [
+     {
+      "actor": "bot",
+      "confidence": 0.8999999761581421,
+      "evidence": "{\"label\": \"ai\"}",
+      "kind": "ai_assisted",
+      "observedAt": "2026-08-02T10:00:00.500000+00:00",
+      "provider": "github",
+      "repoId": "11111111-1111-1111-1111-111111111111",
+      "source": "pr_label",
+      "subjectId": "7",
+      "subjectType": "pull_request",
+      "teamId": null
+     },
+     {
+      "actor": null,
+      "confidence": 0.0,
+      "evidence": "{}",
+      "kind": "unknown",
+      "observedAt": "2026-08-02T10:00:00.500000+00:00",
+      "provider": "github",
+      "repoId": "22222222-2222-2222-2222-222222222222",
+      "source": "",
+      "subjectId": "6",
+      "subjectType": "pull_request",
+      "teamId": null
+     },
+     {
+      "actor": null,
+      "confidence": 1.0,
+      "evidence": "{}",
+      "kind": "human",
+      "observedAt": "2026-08-02T10:00:00.500000+00:00",
+      "provider": "linear",
+      "repoId": null,
+      "source": "manual",
+      "subjectId": "ABC-123",
+      "subjectType": "issue",
+      "teamId": null
+     },
+     {
+      "actor": "x",
+      "confidence": 0.5,
+      "evidence": "{}",
+      "kind": "ai_review",
+      "observedAt": "2026-08-02T10:00:00.500000+00:00",
+      "provider": "github",
+      "repoId": "33333333-3333-3333-3333-333333333333",
+      "source": "bot_author",
+      "subjectId": "1",
+      "subjectType": "pull_request",
+      "teamId": null
+     }
+    ],
+    "startDate": "2026-08-01",
+    "totalAttributed": 10
+   },
+   "fail": null,
+   "fn": "resolve_ai_attribution_overview",
+   "hotspot": [],
+   "limit": 50,
+   "mix": [
+    {
+     "count": 6,
+     "kind": "ai_assisted"
+    },
+    {
+     "count": 3,
+     "kind": "human"
+    },
+    {
+     "count": 1,
+     "kind": ""
+    }
+   ],
+   "name": "overview/nameQueryFails",
+   "nameQueryFails": true,
+   "offset": 0,
+   "prs": [],
+   "repoRows": [
+    {
+     "full_name": "acme/alpha",
+     "repo_id": "11111111-1111-1111-1111-111111111111"
+    },
+    {
+     "full_name": "Acme/Beta",
+     "repo_id": "22222222-2222-2222-2222-222222222222"
+    },
+    {
+     "full_name": "",
+     "repo_id": "33333333-3333-3333-3333-333333333333"
+    }
+   ],
+   "scope": null,
+   "slugRows": [],
+   "teamRepoRows": null,
+   "teamRows": [
+    {
+     "id": "team-a",
+     "name": "Team A",
+     "repo_patterns": [
+      "acme/alpha"
+     ]
+    },
+    {
+     "id": "team-b",
+     "name": "B",
+     "repo_patterns": [
+      "ACME/*"
+     ]
+    }
+   ]
+  }
+ ]
+}

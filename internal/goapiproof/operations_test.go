@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The operations the running query-api registers, written out rather
@@ -30,7 +31,7 @@ import (
 var registeredOperations = []string{
 	"experiments",
 	"acrRepositoryScopes", "catalogValues", "busFactor",
-	"aiComparison", "aiImpactSummary", "aiReviewLoad",
+	"aiAttributedPrs", "aiAttributionOverview", "aiComparison", "aiImpactSummary", "aiReviewLoad", "aiRiskBreakdown",
 	"productTelemetryDashboard", "productTelemetryPlatformDashboard",
 	"connectorsDataHealth", "dataHealthIdentity", "mappingCoverageHealth", "metricLineage",
 	"capacityForecast", "capacityForecasts", "cognitiveLoad", "compoundingRisk", "complexityTimeseries",
@@ -544,5 +545,94 @@ func TestReleaseImpactRequestsMatchThePage(t *testing.T) {
 	}
 	if len(sourceType.Parity.RequireNonEmpty) != 1 || sourceType.Parity.RequireNonEmpty[0] != "data.workGraphEdges.edges" {
 		t.Fatalf("SOURCE_TYPE_POPULATED must require a non-empty edge list, got %v", sourceType.Parity.RequireNonEmpty)
+	}
+}
+
+// A team id is stored on the newest rollup days only, so every team-scoped AI
+// variant must end its window at the last complete UTC day, and a variant that
+// selects nothing by construction must carry no declaration that could match
+// nothing.
+func TestAITeamVariantsReachTheLastCompleteDayAndEmptyVariantsDeclareNothing(t *testing.T) {
+	restore := aiClock
+	defer func() { aiClock = restore }()
+	aiClock = func() time.Time { return time.Date(2026, 9, 20, 23, 59, 59, 0, time.UTC) }
+	const lastComplete = "2026-09-19"
+	for _, operation := range []string{"aiImpactSummary", "aiComparison", "aiReviewLoad", "aiRiskBreakdown", "aiAttributedPrs", "aiAttributionOverview"} {
+		spec, err := SpecFor(operation)
+		if err != nil {
+			t.Fatal(err)
+		}
+		seen := map[string]bool{}
+		for _, v := range spec.Variants {
+			seen[v.Name] = true
+			vars := v.Variables("org", DefaultWindow())
+			end := vars["dateRange"].(map[string]any)["endDate"].(string)
+			switch v.Name {
+			case "TEAM_VALID":
+				if end != lastComplete {
+					t.Errorf("%s/TEAM_VALID ends at %s, want the last complete day %s", operation, end, lastComplete)
+				}
+			case "REPO_UNKNOWN", "REPO_NAME_UNKNOWN", "TEAM_UNKNOWN", "REPO_AND_TEAM_UNKNOWN":
+				if len(v.Parity.FloatTierB) != 0 || len(v.Parity.BaselineDefects) != 0 || len(v.Parity.OrderInsensitiveLists) != 0 {
+					t.Errorf("%s/%s selects nothing by construction and must declare nothing", operation, v.Name)
+				}
+			default:
+				if end != DefaultWindow().UntilDate {
+					t.Errorf("%s/%s must keep the base window, ends at %s", operation, v.Name, end)
+				}
+			}
+		}
+		if !seen["TEAM_VALID"] {
+			t.Errorf("%s has no TEAM_VALID variant", operation)
+		}
+	}
+	// a run window that already ends later keeps its own end
+	if got := aiWindowEnd(Window{UntilDate: "2026-12-31"}); got != "2026-12-31" {
+		t.Errorf("a later until-date is kept, got %s", got)
+	}
+	// the run day itself is never included
+	aiClock = func() time.Time { return time.Date(2026, 9, 20, 0, 0, 0, 0, time.UTC) }
+	if got := aiWindowEnd(Window{UntilDate: "2026-09-01"}); got != "2026-09-19" {
+		t.Errorf("at the start of the run day the window ends the day before, got %s", got)
+	}
+}
+
+// Every base request and every scope or page breakout of an AI list operation
+// that can select rows requires a non-empty list, so two empty answers cannot
+// pass as a measurement; only variants that select nothing by construction, and
+// an offset page, do not.
+func TestAIListOperationsRequireNonEmptyLists(t *testing.T) {
+	lists := map[string]string{
+		"aiImpactSummary": "data.aiImpactSummary.daily", "aiReviewLoad": "data.aiReviewLoad.byBucket",
+		"aiRiskBreakdown": "data.aiRiskBreakdown.byBucket", "aiAttributedPrs": "data.aiAttributedPrs.rows",
+		"aiAttributionOverview": "data.aiAttributionOverview.rows",
+	}
+	for operation, list := range lists {
+		spec, err := SpecFor(operation)
+		if err != nil {
+			t.Fatal(err)
+		}
+		has := func(o Options) bool {
+			for _, p := range o.RequireNonEmpty {
+				if p == list {
+					return true
+				}
+			}
+			return false
+		}
+		if !has(spec.Parity) {
+			t.Errorf("%s: the base request does not require %s", operation, list)
+		}
+		for _, v := range spec.Variants {
+			unknown := strings.HasSuffix(v.Name, "_UNKNOWN") || v.Name == "REPO_AND_TEAM_UNKNOWN"
+			switch {
+			case unknown || v.Name == "PAGE_OFFSET":
+				if has(v.Parity) {
+					t.Errorf("%s/%s may hold nothing and must not require %s", operation, v.Name, list)
+				}
+			case v.Instance == nil && !has(v.Parity):
+				t.Errorf("%s/%s does not require %s", operation, v.Name, list)
+			}
+		}
 	}
 }

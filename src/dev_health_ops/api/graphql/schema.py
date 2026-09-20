@@ -77,7 +77,6 @@ from .resolvers.ai import (
     resolve_ai_workflow_drilldown,
 )
 from .resolvers.analytics import resolve_analytics
-from .resolvers.bus_factor import resolve_bus_factor
 from .resolvers.compounding_risk import resolve_compounding_risk
 from .resolvers.data_health import resolve_data_health
 from .resolvers.dev_evidence import (
@@ -588,10 +587,7 @@ class Query:
         org_id: str,
         filters: SecurityAlertFilterInput | None = None,
     ) -> SecurityOverview:
-        from .resolvers.security import resolve_security_overview
-
-        context = get_context(info)
-        return await resolve_security_overview(context, org_id, filters)
+        _raise_served_by_query_api("securityOverview", org_id, info)
 
     @strawberry.field(description="List saved reports for an organization")
     async def saved_reports(
@@ -702,8 +698,7 @@ class Query:
         org_id: str,
         scope: BusFactorScopeInput | None = None,
     ) -> BusFactor:
-        context = get_context(info)
-        return await resolve_bus_factor(context, org_id, scope)
+        _raise_served_by_query_api("busFactor", org_id, info)
 
     @strawberry.field(
         description=(

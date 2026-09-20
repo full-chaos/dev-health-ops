@@ -1,0 +1,35 @@
+query AIWorkflowDrilldown($orgId: String!, $rootType: AIWorkflowRootTypeInput!, $rootId: String!, $depth: Int! = 3, $limit: Int! = 100) {
+  aiWorkflowDrilldown(
+    orgId: $orgId
+    rootType: $rootType
+    rootId: $rootId
+    depth: $depth
+    limit: $limit
+  ) {
+    orgId
+    rootType
+    rootId
+    partial
+    dataAvailable
+    nodes {
+      nodeType
+      nodeId
+      __typename
+    }
+    edges {
+      edgeId
+      sourceType
+      sourceId
+      targetType
+      targetId
+      edgeType
+      confidence
+      source
+      evidence
+      provider
+      repoId
+      __typename
+    }
+    __typename
+  }
+}

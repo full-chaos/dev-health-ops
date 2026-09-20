@@ -4,8 +4,20 @@
     "digest": "1fe3d5c84c8c047b57cdaf71a71370583d615156e78dcb8991b8f954fae41773"
   },
   {
+    "operation": "aiAttributedPrs",
+    "digest": "6ed54ebe5a535e28c16c1e903f64eda9fbbc32577465ccebe7fa30e2075f2f3e"
+  },
+  {
+    "operation": "aiAttributionOverview",
+    "digest": "ed60bc0ddeb514d39c3ed1c655e65d0c414e5e5ab05e33928a99f527972cda0a"
+  },
+  {
     "operation": "aiComparison",
     "digest": "4e0ad7f190e95a7eaa2d19cd4e1ccb8c76379d6f66662efebd23fa11cd3d743a"
+  },
+  {
+    "operation": "aiGovernanceSummary",
+    "digest": "ba73e66057e6dfc659ad198a9a90cd3f7827e31486cf850324d9655e486c86fa"
   },
   {
     "operation": "aiImpactSummary",
@@ -14,6 +26,14 @@
   {
     "operation": "aiReviewLoad",
     "digest": "4a160089d82bb30f486e81dcc4fb0ef20b97efac29166f0d04e8b03cf06a1697"
+  },
+  {
+    "operation": "aiRiskBreakdown",
+    "digest": "ae1e4ac101539ef16b83174aeb3556b5a574e607e1a37b98c328b418b8af06ae"
+  },
+  {
+    "operation": "aiWorkflowDrilldown",
+    "digest": "42bfc78e3f533b51578eb3575c027a61f9c81bfc9a7bf843c4c2f9979972fea4"
   },
   {
     "operation": "busFactor",
@@ -130,6 +150,10 @@
   {
     "operation": "securityOverview",
     "digest": "3b76c20e6950094356311d84f4288a7ce9e1e936c60c2b867b6e083f2d709884"
+  },
+  {
+    "operation": "testopsRisk",
+    "digest": "de0e6a96f2f917aa3a785993b5b35c4f003f974d638097f5702b3b8a56fa0bf7"
   },
   {
     "operation": "throughputForecast",

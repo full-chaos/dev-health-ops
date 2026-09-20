@@ -79,6 +79,7 @@ type statusReportOperation struct {
 	Operation                  string   `json:"operation"`
 	DocumentDigest             string   `json:"document_digest"`
 	DigestState                string   `json:"digest_state"`
+	PendingDigests             []string `json:"pending_digests"`
 	Mode                       *string  `json:"mode"`
 	CurrentCandidateBuild      *string  `json:"current_candidate_build"`
 	RolloutPercentage          *int     `json:"rollout_percentage"`
@@ -89,6 +90,9 @@ type statusReportOperation struct {
 	StaleDigests               []string `json:"stale_digests"`
 	UnreachableDocumentDigests []string `json:"unreachable_document_digests"`
 	Proven                     bool     `json:"proven"`
+	// VenueProof is "admin_only" or "no_production_data" for a live row
+	// enabled from a venue receipt (not store-proven), else "".
+	VenueProof string `json:"venue_proof"`
 	// A plain `bool` can only ever say "yes" or "no",
 	// so the moment reachability genuinely CANNOT be told (the go plane
 	// is unreachable) defaulting to the local row's own classification
@@ -249,6 +253,18 @@ func runStatus(argv []string) error {
 		deployedDigests = registry.DocumentDigest
 	}
 
+	// "Live" is a property of the DEPLOYED PROCESS. This binary's own
+	// digest stands in for it ONLY when the deployed process could not be
+	// asked, and that substitution is reported, never silent.
+	liveDigest := local
+	pendingDigest := ""
+	if report.GoPlaneSchemaDigest != nil {
+		liveDigest = *report.GoPlaneSchemaDigest
+		if local != liveDigest {
+			pendingDigest = local
+		}
+	}
+
 	var statuses []goapiproof.OperationStatus
 	if common.postgresURI == "" {
 		report.RegistryDBError = stringPtr("no -postgres-uri and " + postgresURIEnvVar + " is unset")
@@ -289,7 +305,26 @@ func runStatus(argv []string) error {
 			// succeeded and there is a catalog to drive it: a failure here
 			// must not erase the census, which is meaningful on its own.
 			if len(catalog) > 0 {
-				statuses, err = goapiproof.RoutingStatusRows(dbCtx, pool, local, catalog)
+				// CLASSIFIED AGAINST THE DEPLOYED DIGEST, never this
+				// binary's -- the same rule censusMarker states two
+				// screens down, now applied to the per-operation table
+				// that sits underneath the census and used to contradict
+				// it.
+				//
+				// Executed before this fix, with a row at the DEPLOYED
+				// digest and this binary built from a different SDL: the
+				// census printed that digest `<- live` and the table
+				// below printed the very same row `STALE`,
+				// `reachable:false`. Both halves of one report, one run,
+				// opposite answers -- and the wrong half is the one an
+				// operator's eye lands on, during exactly the window
+				// `carry` exists to create.
+				//
+				// With the deployed process unreachable there is no
+				// authority on what is live, so this falls back to this
+				// binary's digest and printStatusText says so rather
+				// than presenting a guess as a classification.
+				statuses, err = goapiproof.RoutingStatusRows(dbCtx, pool, liveDigest, pendingDigest, catalog)
 				if err != nil {
 					// Its OWN field: the census above succeeded and must
 					// still be printed (r2 R2-04).
@@ -328,6 +363,41 @@ func runStatus(argv []string) error {
 	return nil
 }
 
+// censusMarker says which digest's rows are the ones being READ, and by
+// what.
+//
+// "live" is a property of the DEPLOYED PROCESS, not of this binary. The
+// two coincide most of the time, and exactly when they do not is when
+// this line matters most: a tools image built from the commit about to
+// roll computes a digest nothing is serving yet, so marking ITS digest
+// "live" labels the rows actually carrying production traffic STALE and
+// the inert, not-yet-read rows live -- the precise inversion an operator
+// must not read during a rollout, on the one command they run to decide
+// whether to roll.
+//
+// With the registry unreachable there is no authority on what is live,
+// and this says so rather than guessing: an unclassified digest is not
+// evidence that its rows are dead, which is the same "two states, one
+// silence" failure the whole surface exists to end.
+func censusMarker(digest, local string, deployed *string) string {
+	if deployed == nil {
+		if digest == local {
+			return "  <- this binary's SDL (query-api unreachable: cannot confirm what is live)"
+		}
+		return "  <- unclassified (query-api unreachable: cannot confirm what is live)"
+	}
+	switch {
+	case digest == *deployed && digest == local:
+		return "  <- live"
+	case digest == *deployed:
+		return "  <- live (the deployed process reads these; this binary computes a different digest)"
+	case digest == local:
+		return "  <- this binary's SDL, NOT live yet"
+	default:
+		return "  <- STALE"
+	}
+}
+
 func printStatusText(report statusReport, local string) {
 	fmt.Fprintf(stdout, "local schema_digest        : %s\n", local)
 	switch {
@@ -337,7 +407,22 @@ func printStatusText(report statusReport, local string) {
 		fmt.Fprintf(stdout, "go plane schema_digest     : %s  [AGREE]\n", *report.GoPlaneSchemaDigest)
 	default:
 		fmt.Fprintf(stdout, "go plane schema_digest     : %s  [MISMATCH]\n", *report.GoPlaneSchemaDigest)
-		fmt.Fprintf(stdout, "  !! Rows follow the deployed image. Every row written at %s is unreachable to this binary. See %s\n", local, runbook)
+		// Said in the operator's own terms, because the earlier wording
+		// had the direction backwards and the direction is the whole
+		// point: rows are classified against the DEPLOYED digest, so the
+		// rows named live below are the ones actually serving traffic.
+		// What this binary's differing SDL costs is WRITES -- enable and
+		// disable run from here land at a digest nothing is reading,
+		// which during a carry window is the mistake that silently does
+		// nothing.
+		fmt.Fprintf(stdout, "  !! This binary's SDL is NOT the deployed one. Rows below are classified against the DEPLOYED digest.\n")
+		fmt.Fprintf(stdout, "     `enable`/`disable` run from THIS binary would write at %s, which nothing is reading. See %s\n", local, runbook)
+	}
+	if report.GoPlaneSchemaDigest == nil && report.RegistryDBError == nil {
+		// A measurement that did not happen must not read like one that
+		// did: with no deployed process to ask, MATCH/STALE/PENDING below
+		// is this binary's guess about itself, and says so.
+		fmt.Fprintf(stdout, "  !! the deployed process could not be reached, so rows below are classified against THIS BINARY's digest -- that is an assumption, not a reading of what is live\n")
 	}
 	if !report.CatalogLoaded {
 		fmt.Fprintf(stdout, "!! CATALOG UNAVAILABLE: %s\n", derefOr(report.CatalogError, "unknown"))
@@ -359,11 +444,8 @@ func printStatusText(report statusReport, local string) {
 		}
 		sort.Strings(digests)
 		for _, digest := range digests {
-			marker := "  <- STALE"
-			if digest == local {
-				marker = "  <- live"
-			}
-			fmt.Fprintf(stdout, "  %s  %d%s\n", digest, report.RowsBySchemaDigest[digest], marker)
+			fmt.Fprintf(stdout, "  %s  %d%s\n", digest, report.RowsBySchemaDigest[digest],
+				censusMarker(digest, local, report.GoPlaneSchemaDigest))
 		}
 	}
 	fmt.Fprintln(stdout)
@@ -374,12 +456,6 @@ func printStatusText(report statusReport, local string) {
 		fmt.Fprintln(stdout, "  The per-digest census above is still accurate; only the per-operation table could not be built.")
 		return
 	}
-	// The PROOF column must degrade to MISMATCH on a
-	// schema-level disagreement too, not only a per-operation document
-	// digest one -- the top-of-report banner above already says [MISMATCH]
-	// once; this is the same fact, per row, where an operator's eye
-	// actually lands.
-	schemaMismatch := report.PlanesAgree != nil && !*report.PlanesAgree
 	fmt.Fprintf(stdout, "%-24s %-8s %-10s %-8s PROOF\n", "OPERATION", "DIGEST", "MODE", "ROLLOUT")
 	for _, operation := range report.Operations {
 		mode := derefOr(operation.Mode, "-")
@@ -387,28 +463,20 @@ func printStatusText(report statusReport, local string) {
 		if operation.RolloutPercentage != nil {
 			rollout = fmt.Sprintf("%d", *operation.RolloutPercentage)
 		}
-		proof := "-"
-		if operation.DigestState == goapiproof.DigestMatch {
-			proof = "UNPROVEN"
-			if operation.Proven {
-				proof = "ok"
-			}
-			// A proof receipt names a build served at a
-			// document digest -- it says nothing about whether the DEPLOYED
-			// process still registers that digest right now. Printing "ok"
-			// here regardless is the "output that merely looks healthy"
-			// this diagnostic must avoid: executed, `enable -dry-run`
-			// refused the identical operation with a document digest
-			// MISMATCH while this line still read "ok".
-			if operation.DeployedDigestState == "MISMATCH" || operation.DeployedDigestState == "UNREGISTERED" || schemaMismatch {
-				proof = "MISMATCH"
-			}
-		}
+		proof := proofWord(operation)
 		fmt.Fprintf(stdout, "%-24s %-8s %-10s %-8s %s\n", operation.Operation, operation.DigestState, mode, rollout, proof)
 		// r2 R2-05: these were computed and never printed, which made the
 		// runbook's promise to name them false.
 		if len(operation.StaleDigests) > 0 {
 			fmt.Fprintf(stdout, "    rows at STALE schema digests: %v\n", operation.StaleDigests)
+		}
+		// Named separately from the STALE line above because an operator
+		// mid-window acts on the two in opposite directions: a stale row
+		// is rubbish to be cleaned up one day, a pending row is the work
+		// `carry` just did and the thing that must be there before the
+		// roll.
+		if len(operation.PendingDigests) > 0 {
+			fmt.Fprintf(stdout, "    rows at THIS BINARY's schema digest, not live yet: %v\n", operation.PendingDigests)
 		}
 		if len(operation.UnreachableDocumentDigests) > 0 {
 			fmt.Fprintf(stdout, "    rows at the LIVE schema digest the edge can never reach, document digest: %v\n", operation.UnreachableDocumentDigests)
@@ -433,11 +501,16 @@ func toReportOperation(status goapiproof.OperationStatus, deployedDigests map[st
 		DocumentDigest:             status.DocumentDigest,
 		DigestState:                status.DigestState,
 		StaleDigests:               status.StaleDigests,
+		PendingDigests:             status.PendingDigests,
 		UnreachableDocumentDigests: status.UnreachableDocumentDigests,
 		Proven:                     status.Proven,
+		VenueProof:                 status.VenueProof,
 	}
 	if reported.StaleDigests == nil {
 		reported.StaleDigests = []string{}
+	}
+	if reported.PendingDigests == nil {
+		reported.PendingDigests = []string{}
 	}
 	if reported.UnreachableDocumentDigests == nil {
 		reported.UnreachableDocumentDigests = []string{}
@@ -503,15 +576,38 @@ func toReportOperation(status goapiproof.OperationStatus, deployedDigests map[st
 	case goPlaneUnreachable:
 		reported.Reachable = nil
 		reported.ReachableReason = stringPtr("the go plane could not be reached, so deployed agreement is genuinely unknown")
-	case schemaMismatch:
-		reported.Reachable = boolPtr(false)
-		reported.ReachableReason = stringPtr("the two planes disagree on the SCHEMA digest -- enable's preflight 2 would refuse before ever checking this operation")
+	// ORDER IS THE DECISION HERE (r2 F1). The two document cases below
+	// REFUSE; the schema case admits. Putting the admitting case first
+	// meant that when BOTH disagreed -- the deployed plane on a different
+	// SDL *and* registering a different document digest for this
+	// operation -- the admitting case won and the row reported
+	// `reachable:true` while `deployed_digest_state` on the same row read
+	// `MISMATCH`. A refusal must never be reachable only by the absence
+	// of a weaker admission: every REFUSING case is evaluated first, and
+	// the admitting one is what is left.
 	case reported.DeployedDigestState == "MISMATCH":
 		reported.Reachable = boolPtr(false)
 		reported.ReachableReason = stringPtr("the deployed plane registers this operation under a DIFFERENT document digest than the catalog's -- enable's preflight 3 would refuse it")
 	case reported.DeployedDigestState == "UNREGISTERED":
 		reported.Reachable = boolPtr(false)
 		reported.ReachableReason = stringPtr("the deployed plane does not register this operation at all -- enable's preflight 3 would refuse it")
+	case schemaMismatch:
+		// THIS BINARY's SDL differing from the deployed process's is a
+		// fact about THIS BINARY, not about whether a real request is
+		// served by Go. It used to force `reachable:false` here, and
+		// that was the same inversion the classification above fixed:
+		// during the whole pre-roll window `carry` creates, a tools
+		// image built from the commit about to roll differs from the
+		// deployed one BY DESIGN, and every row actually carrying
+		// production traffic reported `reachable:false`.
+		//
+		// The fact itself is not dropped -- the banner names it once,
+		// and `planes_agree:false` in the JSON carries it for a machine
+		// reader. What it genuinely predicts is that
+		// `enable`'s preflight 2 would refuse a WRITE from this binary,
+		// which is not the same question as this field's.
+		reported.Reachable = boolPtr(true)
+		reported.ReachableReason = stringPtr("the deployed process reads this row; note this binary's own SDL digest is NOT the deployed one, so enable/disable run from THIS binary would write at a digest nothing is reading")
 	default:
 		reported.Reachable = boolPtr(true)
 	}
@@ -553,4 +649,45 @@ func derefOr(value *string, fallback string) string {
 		return fallback
 	}
 	return *value
+}
+
+// proofWord is the PROOF column word for one operation.
+//
+// NO schemaMismatch PARAMETER, deliberately (r1 F1). This used to take
+// one and OR it into the MISMATCH condition below, which meant that for
+// the whole duration of a `carry` window -- where a tools image built
+// for the commit about to roll differs from the deployed one BY DESIGN
+// -- every live row printed MISMATCH, a diagnostic crying wolf exactly
+// when it is read most carefully. Proof is looked up at the LIVE digest
+// (RoutingStatusRows hands that digest to OperationsWithEnablementProof),
+// so a live row's receipt is a real receipt whatever SDL this binary
+// happens to carry. The parameter is gone rather than merely unused, so
+// the clause cannot be reintroduced by a caller.
+func proofWord(operation statusReportOperation) string {
+	proof := "-"
+	if operation.DigestState == goapiproof.DigestMatch {
+		proof = "UNPROVEN"
+		if operation.Proven {
+			proof = "ok"
+		} else if operation.VenueProof != "" {
+			// Its own word, never UNPROVEN: a waiver row and a venue row
+			// are different states and a ladder keyed on UNPROVEN must
+			// neither trip on nor hide behind the other.
+			proof = "VENUE-PROVEN(" + operation.VenueProof + ")"
+		}
+		// A proof receipt names a build served at a
+		// document digest -- it says nothing about whether the DEPLOYED
+		// process still registers that digest right now. Printing "ok"
+		// here regardless is the "output that merely looks healthy"
+		// this diagnostic must avoid: executed, `enable -dry-run`
+		// refused the identical operation with a document digest
+		// MISMATCH while this line still read "ok".
+		// What still forces MISMATCH is what it always meant: the
+		// DEPLOYED plane registering a different document digest for
+		// this operation, or not registering it at all.
+		if operation.DeployedDigestState == "MISMATCH" || operation.DeployedDigestState == "UNREGISTERED" {
+			proof = "MISMATCH"
+		}
+	}
+	return proof
 }

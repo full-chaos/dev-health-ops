@@ -1,0 +1,83 @@
+query AIRiskBreakdown($orgId: String!, $dateRange: AIDateRangeInput!, $scope: AIScopeInput) {
+  aiRiskBreakdown(orgId: $orgId, dateRange: $dateRange, scope: $scope) {
+    orgId
+    startDate
+    endDate
+    dataAvailable
+    byBucket {
+      bucket
+      prsTotal
+      reworkPrs
+      reworkRate
+      revertPrs
+      revertRate
+      testGapPrs
+      testGapRate
+      incidentsCount
+      incidentRate
+      __typename
+    }
+    hotspotOverlap {
+      bucket
+      prsTotal
+      prsTouchingHotspots
+      hotspotOverlapRate
+      avgHotspotRiskScore
+      __typename
+    }
+    complexityOverlap {
+      bucket
+      prsTotal
+      prsTouchingHighComplexity
+      complexityOverlapRate
+      __typename
+    }
+    missingStates {
+      key
+      title
+      guidance
+      __typename
+    }
+    __typename
+  }
+  aiComparison(orgId: $orgId, dateRange: $dateRange, scope: $scope) {
+    orgId
+    startDate
+    endDate
+    dataAvailable
+    aiSide {
+      bucket
+      prsTotal
+      prsMerged
+      cycleTimeAvgHours
+      reviewsPerPr
+      reworkRate
+      revertRate
+      testGapRate
+      incidentRate
+      __typename
+    }
+    baselineSide {
+      bucket
+      prsTotal
+      prsMerged
+      cycleTimeAvgHours
+      reviewsPerPr
+      reworkRate
+      revertRate
+      testGapRate
+      incidentRate
+      __typename
+    }
+    delta {
+      cycleTimeDeltaHours
+      reviewsPerPrDelta
+      reworkRateDelta
+      revertRateDelta
+      testGapRateDelta
+      incidentRateDelta
+      __typename
+    }
+    __typename
+  }
+}

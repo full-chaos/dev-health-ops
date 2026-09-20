@@ -63,9 +63,16 @@ CAPACITY_QUERIES_SOURCE = (
 )
 
 # module path -> the symbols that must not be defined in it.
+SECURITY_RESOLVER_SOURCE = (
+    ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "resolvers" / "security.py"
+)
+
 DELETED_GO_SERVED_RESOLVER_SYMBOLS: dict[Path, frozenset[str]] = {
     # A scheduler helper with no caller in src/.
     CAPACITY_QUERIES_SOURCE: frozenset({"discover_team_scopes"}),
+    # securityOverview: only the function is deleted; the module stays for
+    # securityAlerts and the shared filter builder.
+    SECURITY_RESOLVER_SOURCE: frozenset({"resolve_security_overview"}),
 }
 
 # label -> a module that must not exist on disk AT ALL.
@@ -161,6 +168,15 @@ DELETED_GO_SERVED_RESOLVER_MODULES: dict[str, Path] = {
     / "graphql"
     / "loaders"
     / "dimension_loader.py",
+    # busFactor (the churn-concentration computation stays in
+    # metrics/knowledge.py for the daily job).
+    "bus factor resolver": ROOT
+    / "src"
+    / "dev_health_ops"
+    / "api"
+    / "graphql"
+    / "resolvers"
+    / "bus_factor.py",
     # The operating review computation; its only importer was the resolver.
     "operating review computation": ROOT
     / "src"
@@ -193,6 +209,7 @@ SDL_LOAD_BEARING_SOURCES: tuple[Path, ...] = (
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "types" / "cognitive_load.py",
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "types" / "complexity.py",
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "types" / "review_edges.py",
+    ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "types" / "bus_factor.py",
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "schema.py",
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "models" / "inputs.py",
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "models" / "outputs.py",
@@ -227,6 +244,15 @@ SDL_LOAD_BEARING_SYMBOLS: dict[str, frozenset[str]] = {
     "review_edges.py": frozenset(
         {"ReviewEdgesInput", "ReviewEdgeRow", "ReviewEdgesResult"}
     ),
+    "bus_factor.py": frozenset(
+        {
+            "MaintainerShare",
+            "RepoBusFactor",
+            "BusFactorScope",
+            "BusFactor",
+            "BusFactorScopeInput",
+        }
+    ),
     "schema.py": frozenset(
         {
             "capacity_forecast",
@@ -241,6 +267,8 @@ SDL_LOAD_BEARING_SYMBOLS: dict[str, frozenset[str]] = {
             "cognitive_load",
             "pr",
             "catalog",
+            "bus_factor",
+            "security_overview",
         }
     ),
     "inputs.py": frozenset(

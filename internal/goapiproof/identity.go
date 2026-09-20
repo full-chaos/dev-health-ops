@@ -29,6 +29,14 @@ type AuthContext struct {
 	KeyID string
 	// Scopes are the granted scopes, order-insensitive.
 	Scopes []string
+	// Venue, PrincipalRole and PrincipalSuperuser are set only when the
+	// edge leg used a pre-obtained login token on a non-production venue.
+	// They fold into the digest only then, so a run without a venue keeps
+	// the identity it always had, and an admin run can never share a
+	// request_identity with a viewer run.
+	Venue              string
+	PrincipalRole      string
+	PrincipalSuperuser bool
 }
 
 // RequestIdentity is the digest go_api_proof_run.request_identity stores:
@@ -43,14 +51,20 @@ func RequestIdentity(orgID string, auth AuthContext, variables map[string]any) (
 	scopes := append([]string(nil), auth.Scopes...)
 	sort.Strings(scopes)
 
+	authShape := map[string]any{
+		"principal_kind": auth.PrincipalKind,
+		"audience":       auth.Audience,
+		"key_id":         auth.KeyID,
+		"scopes":         scopes,
+	}
+	if auth.Venue != "" {
+		authShape["venue"] = auth.Venue
+		authShape["principal_role"] = auth.PrincipalRole
+		authShape["principal_superuser"] = auth.PrincipalSuperuser
+	}
 	payload := map[string]any{
-		"org_id": orgID,
-		"auth": map[string]any{
-			"principal_kind": auth.PrincipalKind,
-			"audience":       auth.Audience,
-			"key_id":         auth.KeyID,
-			"scopes":         scopes,
-		},
+		"org_id":    orgID,
+		"auth":      authShape,
 		"variables": variables,
 	}
 	encoded, err := json.Marshal(payload)

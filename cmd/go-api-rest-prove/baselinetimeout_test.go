@@ -175,3 +175,33 @@ func TestProveOneRESTRequest_RunDeadlineDuringBaselineIsNotABaselineTimeout(t *t
 		t.Fatalf("refusal=%q candidate calls=%d receipts=%d, want the run-deadline refusal and nothing else", out.Refusal, c, len(writer.receipts))
 	}
 }
+
+// A request under the declaration that also Produces an id (work-units GET
+// team_scoped does) yields no id on a baseline timeout: the producer reads the
+// baseline body, which does not exist, so a consumer bound to it refuses by name.
+func TestProveOneRESTRequest_BaselineTimeoutProducesNoID(t *testing.T) {
+	const build = "abc123def456"
+	var mu sync.Mutex
+	var b, c int
+	f := flags{
+		pythonAPIURL: startTimeoutLeg(t, timeoutLeg{stall: true}, &b, &mu),
+		queryAPIURL:  startTimeoutLeg(t, timeoutLeg{build: build, body: `{"items":[{"id":"x"}]}`}, &c, &mu),
+		org:          "org-1", recordedBy: "chris", reviewEvidence: "test", timeout: time.Minute,
+	}
+	request := goapiproof.RESTRequest{
+		Name: "team", WantCandidateStatus: 200, WantBaselineStatus: 200, BodyMode: goapiproof.RESTBodyModeJSON,
+		Timeout:  300 * time.Millisecond,
+		Produces: []goapiproof.RESTIDProducer{{Name: "thing_id", ListPath: "items", IDField: "id"}},
+		BaselineTimeoutDeclared: &goapiproof.BaselineTimeoutDeclaration{
+			Ticket: "ABC-123", Reason: "fixture", MinTimeout: 250 * time.Millisecond, NonEmptyPaths: []string{"data.items"},
+		},
+	}
+	out, err := proveOneRESTRequest(context.Background(), goapiproof.NewLegClient(0), f, "REST:GET:/things", goapiproof.RESTEndpointSpec{Method: http.MethodGet, Path: "/things"}, request,
+		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), &fakeReceiptWriter{}, nil, false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !out.Admitted || len(out.producedIDs) != 0 || len(out.producedCandidateIDs) != 0 {
+		t.Fatalf("out = %+v, want an admitted outcome producing no ids", out)
+	}
+}

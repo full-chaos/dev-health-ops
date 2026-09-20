@@ -44,3 +44,20 @@ func TestProductTelemetryBaseRequiresANonEmptyAnswerAndTheEmptyRangeDoesNot(t *t
 		}
 	}
 }
+
+func TestExperimentsTeamUnknownIsAKnownRefusal(t *testing.T) {
+	spec, err := SpecFor("experiments")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range spec.Variants {
+		if v.Name != "TEAM_UNKNOWN" {
+			continue
+		}
+		if v.KnownRefusal == nil || v.KnownRefusal.Ticket == "" || v.KnownRefusal.Reason == "" {
+			t.Fatalf("TEAM_UNKNOWN must record why it is expected not to compare: %#v", v.KnownRefusal)
+		}
+		return
+	}
+	t.Fatal("experiments.TEAM_UNKNOWN is missing from the corpus")
+}

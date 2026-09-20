@@ -74,7 +74,7 @@ func runEnable(argv []string) error {
 	set.BoolVar(&acknowledgeUnproven, "acknowledge-unproven", false, "enable operations with no deployed-executed proof run for this build. Each such row records ACKNOWLEDGED-UNPROVEN durably and is reported UNPROVEN by status for as long as it is in force")
 	set.StringVar(&venueReceiptPath, "venue-receipt", "", "path to the JSON report a go-api-prove run wrote on a NON-PRODUCTION venue as an admin principal, at the SAME build production runs. Admits only operations the viewer proof principal cannot satisfy and the store has no proof for; the row records VENUE-PROOF:<sha256> in review_evidence. The file is operator-supplied and not authenticated")
 	set.BoolVar(&dryRun, "dry-run", false, "run every preflight and write NOTHING")
-	set.DurationVar(&common.timeout, "timeout", 30*time.Second, "per-request timeout")
+	set.DurationVar(&common.timeout, "timeout", 30*time.Second, "bounds EACH HTTP request, the Postgres dial, and EACH database statement (server-side statement_timeout/lock_timeout) -- never the run as a whole")
 	if err := parseVerbFlags(set, argv); err != nil {
 		return err
 	}

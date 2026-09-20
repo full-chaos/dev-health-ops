@@ -322,6 +322,30 @@ var operationSpecs = map[string]OperationSpec{
 			compoundingRiskPinnedTrendVariant("TREND_CLAMPED_LOW", 0),
 		},
 	},
+	"aiGovernanceSummary": {
+		ResponseRoot: "aiGovernanceSummary",
+		Variables:    aiGovernanceVariables(nil, 50),
+		Parity:       requireLists(aiGovernanceParity(), "data.aiGovernanceSummary.recentViolations"),
+		Variants: append(aiGovernanceVariants(),
+			aiGovernanceInstanceVariant("REPO_VALID", "a repository id that has policy events in the window", "repoId", "data.aiGovernanceSummary.recentViolations", "repoId"),
+			aiGovernanceInstanceVariant("REPO_NAME_VALID", "the full name of a repository that has policy events in the window", "repoId", "data.aiGovernanceSummary.recentViolations", ""),
+			aiGovernanceInstanceVariant("TEAM_VALID", "a team id stored on policy events in the window", "teamId", "data.aiGovernanceSummary.recentViolations", "teamId"),
+		),
+	},
+	"aiWorkflowDrilldown": {
+		ResponseRoot: "aiWorkflowDrilldown",
+		Variables:    aiWorkflowVariables("PR", "no-such-org:0", 3, 100),
+		Parity:       aiWorkflowParity(),
+		Variants: []Variant{
+			aiWorkflowVariant("ISSUE_UNKNOWN", "ISSUE", "NO-SUCH-1", 3, 100),
+			aiWorkflowVariant("WORK_UNIT_UNKNOWN", "WORK_UNIT", "no-such-unit", 3, 100),
+			aiWorkflowVariant("DEPTH_ZERO", "PR", "no-such-org:0", 0, 100),
+			aiWorkflowVariant("LIMIT_ZERO", "PR", "no-such-org:0", 3, 0),
+			aiWorkflowInstanceVariant("PR_VALID", "a pull request workflow id (repository id, colon, number) that has AI workflow edges", "PR"),
+			aiWorkflowInstanceVariant("ISSUE_VALID", "an issue id that has AI workflow edges", "ISSUE"),
+			aiWorkflowInstanceVariant("WORK_UNIT_VALID", "a work unit id that has AI workflow edges", "WORK_UNIT"),
+		},
+	},
 	"aiRiskBreakdown": {
 		ResponseRoot: "aiRiskBreakdown",
 		Variables:    aiRollupVariables(nil),
@@ -1009,6 +1033,29 @@ var operationSpecs = map[string]OperationSpec{
 	// are integer sums divided once in Go. All three are exact, and a
 	// tolerance on an exact field excuses a real defect
 	// (lane-goapi-parity, CHAOS-5451).
+	"testopsRisk": {
+		ResponseRoot: "testopsRisk",
+		Variables: func(orgID string, w Window) map[string]any {
+			return testopsRiskVariables(orgID, w.SinceDate, w.UntilDate)
+		},
+		Parity: testopsRiskParity(true),
+		Variants: []Variant{
+			{
+				Name: "SINGLE_DAY",
+				Variables: func(orgID string, w Window) map[string]any {
+					return testopsRiskVariables(orgID, w.UntilDate, w.UntilDate)
+				},
+				Parity: testopsRiskParity(false),
+			},
+			{
+				Name: "WEEK",
+				Variables: func(orgID string, w Window) map[string]any {
+					return testopsRiskVariables(orgID, w.WeekStart, w.UntilDate)
+				},
+				Parity: testopsRiskParity(false),
+			},
+		},
+	},
 	"throughputForecast": {
 		ResponseRoot: "throughputForecast",
 		RootNullable: true,
@@ -1062,7 +1109,13 @@ var operationSpecs = map[string]OperationSpec{
 	"workGraphEdges": {
 		ResponseRoot: "workGraphEdges",
 		Variables:    workGraphVariables,
-		Parity:       workGraphEdgesParity,
+		Parity:       workGraphEdgesParityAt(workGraphEdgesDefaultLimit),
+		// Two comparing cases on pages the limit does not cut, so the whole-list
+		// declaration applies and a dropped edge cannot hide.
+		Variants: []Variant{
+			workGraphEdgesSourceTypeSmallVariant("SOURCE_TYPE_SMALL", "a node type whose whole edge set as a source is below 200, for example a feature flag or an incident type"),
+			workGraphEdgesNodeVariant("NODE_ID_VALID", "a node id that is the source or target of at least one edge and of fewer than 200"),
+		},
 	},
 	// releaseImpact is the release impact document the feature flag pages
 	// send: the `workGraphEdges` root field with the filters `nodeId`,
@@ -1075,7 +1128,7 @@ var operationSpecs = map[string]OperationSpec{
 	"releaseImpact": {
 		ResponseRoot: "workGraphEdges",
 		Variables:    releaseImpactVariables,
-		Parity:       workGraphEdgesParity,
+		Parity:       workGraphEdgesParityAt(200),
 		Variants: []Variant{
 			releaseImpactVariant("LIMIT_ONE", map[string]any{"nodeId": "", "sourceType": "RELEASE", "limit": 1}),
 			releaseImpactNodeVariant("NODE_ID_VALID", "a node id that is the source or target of at least one edge"),
@@ -1216,20 +1269,65 @@ func investmentFullVariables(orgID string, w Window) map[string]any {
 	}}
 }
 
-// workGraphEdgesParity is the declared comparator configuration shared by
-// every request that reads the workGraphEdges resolver.
-var workGraphEdgesParity = Options{BaselineDefects: []BaselineDefect{{
-	Ticket:             "CHAOS-5791",
-	Reason:             "work_graph_edges is a ReplacingMergeTree keyed on the edge identity; the baseline plane reads it with no merge-time collapse, so an unmerged duplicate physical version of one logical edge surfaces as two content-identical rows sharing one edgeId, spending one extra slot of the page limit and shifting every later element's position, including which edge's id pageInfo.endCursor names. The candidate plane collapses duplicate versions before applying the page limit, so it carries no repeated edgeId. Candidate is correct.",
-	Paths:              []string{"data.workGraphEdges.edges", "data.workGraphEdges.pageInfo.endCursor"},
-	Intermittent:       true,
-	IntermittentReason: "present only while the source table holds an unmerged duplicate physical version of some edge; a comparison taken after the background merge collapses it shows no repeated edgeId on the baseline side either",
-	WorkGraphEdgeDedupShape: &WorkGraphEdgeDedupShape{
-		EdgesListPath:      "data.workGraphEdges.edges",
-		IDField:            "edgeId",
-		TrailingCursorPath: "data.workGraphEdges.pageInfo.endCursor",
-	},
-}}}
+// workGraphEdgesDefaultLimit is the page limit the resolver applies when the
+// request sends none.
+const workGraphEdgesDefaultLimit = 1000
+
+// workGraphEdgesParityAt is the declared comparator configuration for a request
+// that reads the workGraphEdges resolver with the page limit `limit`. The
+// whole-list declaration carries that limit as its RequestLimit: a baseline
+// list that reaches it is a page the limit may have cut, where a list-length
+// difference cannot be told from a dropped edge, so the declaration refuses.
+func workGraphEdgesParityAt(limit int) Options {
+	return Options{BaselineDefects: []BaselineDefect{workGraphEdgesPerEdgeDefect(limit), workGraphEdgesWholePageDefect(limit)}}
+}
+
+// workGraphEdgesNonCutParityAt is the configuration of a request whose purpose
+// is a page the limit does not cut. It carries only the whole-page declaration:
+// a supplied identifier whose page reaches the limit is then not absorbed by the
+// per-edge declaration, every finding on it stays outside, and the run reports
+// it so a smaller identifier is supplied.
+func workGraphEdgesNonCutParityAt(limit int) Options {
+	return Options{BaselineDefects: []BaselineDefect{workGraphEdgesWholePageDefect(limit)}}
+}
+
+// workGraphEdgesPerEdgeDefect owns a page the limit may have cut.
+func workGraphEdgesPerEdgeDefect(limit int) BaselineDefect {
+	return BaselineDefect{
+		Ticket:             "CHAOS-5791",
+		Reason:             "work_graph_edges is a ReplacingMergeTree keyed on the edge identity; the baseline plane reads it with no merge-time collapse, so an unmerged duplicate physical version of one logical edge surfaces as two content-identical rows sharing one edgeId, spending one extra slot of the page limit and shifting every later element's position, including which edge's id pageInfo.endCursor names. The candidate plane collapses duplicate versions before applying the page limit, so it carries no repeated edgeId. Candidate is correct. Known limit (CHAOS-6116): on a page the limit cuts this shape resolves a positional finding to the baseline id at that index and admits a baseline-only id on its own copies agreeing, so a candidate that dropped a distinct id on such a page would be absorbed; the non-cut variants under CHAOS-6114 re-prove the operation where that cannot hide.",
+		Paths:              []string{"data.workGraphEdges.edges", "data.workGraphEdges.pageInfo.endCursor"},
+		Intermittent:       true,
+		IntermittentReason: "present only while the source table holds an unmerged duplicate physical version of some edge; a comparison taken after the background merge collapses it shows no repeated edgeId on the baseline side either",
+		WorkGraphEdgeDedupShape: &WorkGraphEdgeDedupShape{
+			EdgesListPath:      "data.workGraphEdges.edges",
+			IDField:            "edgeId",
+			TrailingCursorPath: "data.workGraphEdges.pageInfo.endCursor",
+			CutPageLimit:       limit,
+		},
+	}
+}
+
+// workGraphEdgesWholePageDefect owns a page the limit did not cut.
+func workGraphEdgesWholePageDefect(limit int) BaselineDefect {
+	return BaselineDefect{
+		Ticket:             "CHAOS-6114",
+		Reason:             "The same duplicate-version mechanism as CHAOS-5791, on a page the request limit does not cut: work_graph_edges is a ReplacingMergeTree, the baseline plane reads it with no merge-time collapse, so its list and its totalCount (the length of the list it returns) count every unmerged physical version of an edge, while the candidate plane collapses versions before counting, so its list and totalCount count distinct edges. Measured on production for one node id: baseline 147 rows over 73 distinct edgeIds (72 ids twice, 1 id three times), totalCount 147; candidate 73 rows, 73 distinct, totalCount 73; the two id sets identical. This declaration owns every finding on such a page (list length, totalCount, each positional element, the trailing cursor), and the per-edge declaration above applies only to a page the limit may have cut. Admitted only when the baseline's raw length is below the request limit, the candidate ids equal the baseline's distinct ids in the baseline's first-occurrence order, every shared id is byte-identical on both planes, the candidate carries no repeated id and is in confidence-descending, edgeId-ascending order, and each plane's totalCount equals its own list length. A candidate that drops a distinct id, invents one, disagrees with a shared row, or reports a totalCount other than its own length stays outside. Candidate is correct.",
+		Paths:              []string{"data.workGraphEdges.edges", "data.workGraphEdges.totalCount", "data.workGraphEdges.pageInfo.endCursor"},
+		Intermittent:       true,
+		IntermittentReason: "present only while the source table holds an unmerged duplicate physical version of some edge on a page the limit does not cut; a comparison taken after the background merge collapses it shows equal lists and equal counts",
+		DuplicateCollapseLengthShape: &DuplicateCollapseLengthShape{
+			ListPath:      "data.workGraphEdges.edges",
+			IDField:       "edgeId",
+			CountPath:     "data.workGraphEdges.totalCount",
+			OrderField:    "confidence",
+			OrderTieField: "edgeId",
+			RequestLimit:  limit,
+			OwnsPage:      true,
+			CursorPath:    "data.workGraphEdges.pageInfo.endCursor",
+		},
+	}
+}
 
 func workGraphVariables(orgID string, _ Window) map[string]any {
 	return map[string]any{"orgId": orgID, "filters": map[string]any{}}
@@ -1691,6 +1789,117 @@ func experimentsVariant(name, level string, ids []string) Variant {
 	}
 }
 
+// aiGovernanceVariables builds the governance summary request: the org, the
+// run's day window, the scope (nil sends none) and the violation limit.
+func aiGovernanceVariables(scope map[string]any, violationLimit int) func(orgID string, w Window) map[string]any {
+	return func(orgID string, w Window) map[string]any {
+		vars := aiRollupVariables(scope)(orgID, w)
+		vars["violationLimit"] = violationLimit
+		return vars
+	}
+}
+
+const aiGovernanceTimestampReason = "the violation timestamp is a ClickHouse DateTime64(3, 'UTC') read through a tz-aware driver value; Python's strawberry DateTime scalar isoformat()s it with a \"+00:00\" offset and microsecond digits, while Go's gqlgen DateTime scalar formats the same instant as RFC 3339 with \"Z\" (resolvers/ai.py _to_aware). The instants are equal; only the wire text differs. Go's form is the canonical DateTime wire form; the Python form is the declared defect and stays frozen."
+
+func aiGovernanceVariants() []Variant {
+	scopes := []struct {
+		name  string
+		scope map[string]any
+		limit int
+	}{
+		{"REPO_UNKNOWN", map[string]any{"repoId": "00000000-0000-0000-0000-000000000001"}, 50},
+		{"REPO_NAME_UNKNOWN", map[string]any{"repoId": "no-such-org/no-such-repo"}, 50},
+		{"TEAM_UNKNOWN", map[string]any{"teamId": "team-abc-123"}, 50},
+		{"REPO_AND_TEAM_UNKNOWN", map[string]any{"repoId": "00000000-0000-0000-0000-000000000001", "teamId": "team-abc-123"}, 50},
+		{"VIOLATION_LIMIT_ZERO", nil, 0},
+	}
+	variants := make([]Variant, 0, len(scopes))
+	for _, sc := range scopes {
+		variants = append(variants, Variant{Name: sc.name, Variables: aiGovernanceVariables(sc.scope, sc.limit), Parity: aiGovernanceParity()})
+	}
+	return variants
+}
+
+func aiGovernanceInstanceVariant(name, kind, scopeField, nonEmpty, echoField string) Variant {
+	echoList := ""
+	if echoField != "" {
+		echoList = nonEmpty
+	}
+	v := aiInstanceVariant(name, kind, scopeField, aiGovernanceParity(), nonEmpty, echoList, echoField)
+	v.Variables = aiGovernanceVariables(map[string]any{}, 50)
+	return v
+}
+
+// aiGovernanceParity declares the violation timestamp's wire text a
+// baseline defect.
+func aiGovernanceParity() Options {
+	return Options{BaselineDefects: []BaselineDefect{{
+		Ticket:             "CHAOS-6081",
+		Reason:             aiGovernanceTimestampReason,
+		Paths:              []string{"data.aiGovernanceSummary.recentViolations.observedAt"},
+		Intermittent:       true,
+		IntermittentReason: "the list is empty when the window holds no policy event",
+	}}}
+}
+
+func aiWorkflowVariables(rootType, rootID string, depth, limit int) func(orgID string, w Window) map[string]any {
+	return func(orgID string, _ Window) map[string]any {
+		return map[string]any{"orgId": orgID, "rootType": rootType, "rootId": rootID, "depth": depth, "limit": limit}
+	}
+}
+
+func aiWorkflowVariant(name, rootType, rootID string, depth, limit int) Variant {
+	return Variant{Name: name, Variables: aiWorkflowVariables(rootType, rootID, depth, limit), Parity: aiWorkflowParity()}
+}
+
+// aiWorkflowInstanceVariant walks from a run-supplied root; it is measured
+// only when the walk returns an edge on a leg.
+func aiWorkflowInstanceVariant(name, kind, rootType string) Variant {
+	return Variant{
+		Name:      name,
+		Variables: aiWorkflowVariables(rootType, "", 3, 100),
+		Parity: func() Options {
+			p := aiWorkflowParity()
+			p.RequireNonEmpty = []string{"data.aiWorkflowDrilldown.edges"}
+			return p
+		}(),
+		Instance: &VariantInstance{
+			Kind: kind,
+			Bind: func(vars map[string]any, value string) { vars["rootId"] = value },
+			EchoFor: func(value string) []ScopeEcho {
+				return []ScopeEcho{{List: "data.aiWorkflowDrilldown.rootId", Scalar: true, Value: value}}
+			},
+		},
+	}
+}
+
+// aiWorkflowParity declares the node and edge lists unordered: the edge read
+// is a union of five tables under a row limit with no ordering, so the
+// identical statement returns different orders.
+func aiWorkflowParity() Options {
+	return Options{OrderInsensitiveLists: []OrderInsensitiveList{
+		{
+			Path:      "data.aiWorkflowDrilldown.nodes",
+			KeyFields: []string{"nodeType", "nodeId"},
+			Reason:    "the nodes are collected in the row order of an unordered UNION ALL over five edge tables under a LIMIT, so the same statement can return them in a different order",
+			Ticket:    "CHAOS-6081",
+		},
+		{
+			Path:      "data.aiWorkflowDrilldown.edges",
+			KeyFields: []string{"edgeId"},
+			Reason:    "the edges are the rows of an unordered UNION ALL over five edge tables under a LIMIT, so the same statement can return them in a different order",
+			Ticket:    "CHAOS-6081",
+		},
+	}}
+}
+
+// requireLists returns o requiring the named lists to be non-empty on a leg: a
+// request whose lists are empty on both legs measured nothing.
+func requireLists(o Options, paths ...string) Options {
+	o.RequireNonEmpty = append([]string(nil), paths...)
+	return o
+}
+
 // aiPagedVariables builds the shared request of the paged AI operations: the
 // org, the run's day window, the scope (nil sends none) and the first page.
 func aiPagedVariables(scope map[string]any) func(orgID string, w Window) map[string]any {
@@ -2111,4 +2320,34 @@ func analyticsBatchVariants(series []analyticsSeries, breakdowns []analyticsBrea
 		out = append(out, Variant{Name: "BREAKDOWN_" + bd.Dimension + "_" + bd.Measure, Variables: analyticsBatchVariables(b), Parity: analyticsBatchParity(b)})
 	}
 	return out
+}
+
+func testopsRiskVariables(orgID, start, end string) map[string]any {
+	return map[string]any{"orgId": orgID, "input": map[string]any{"startDate": start, "endDate": end}}
+}
+
+const testopsFloatAggregate = "avg()/sum() over Float64 in the daily testops read -- ClickHouse float aggregate, order-nondeterministic (CHAOS-5451)"
+
+// testopsRiskParity declares the float leaves derived from the daily
+// aggregates as Tier B; the quadrant rates are argMax of stored JSON values
+// and stay exact. requireSeries makes the request measure only when the
+// range holds at least one day of release-confidence data.
+func testopsRiskParity(requireSeries bool) Options {
+	o := Options{FloatTierB: map[string]string{
+		"data.testopsRisk.releaseConfidence":          testopsFloatAggregate,
+		"data.testopsRisk.qualityDragHours":           testopsFloatAggregate,
+		"data.testopsRisk.pipelineStability":          testopsFloatAggregate,
+		"data.testopsRisk.timeseries.riskScore":       "derived from avg(confidence_score) (CHAOS-5451)",
+		"data.testopsRisk.qualityDragBreakdown.hours": testopsFloatAggregate,
+		"data.testopsRisk.confidenceSpark.value":      "derived from avg(confidence_score) (CHAOS-5451)",
+		"data.testopsRisk.confidenceDelta":            "derived from avg(confidence_score) (CHAOS-5451)",
+		"data.testopsRisk.dragSpark.value":            testopsFloatAggregate,
+		"data.testopsRisk.dragDelta":                  testopsFloatAggregate,
+		"data.testopsRisk.stabilitySpark.value":       "derived from avg(stability_index) (CHAOS-5451)",
+		"data.testopsRisk.stabilityDelta":             "derived from avg(stability_index) (CHAOS-5451)",
+	}}
+	if requireSeries {
+		o.RequireNonEmpty = []string{"data.testopsRisk.timeseries"}
+	}
+	return o
 }

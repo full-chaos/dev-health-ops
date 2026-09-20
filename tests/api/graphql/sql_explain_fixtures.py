@@ -206,7 +206,6 @@ async def _fixture_security(sink: CapturingSink) -> None:
     )
     from dev_health_ops.api.graphql.resolvers.security import (
         resolve_security_alerts,
-        resolve_security_overview,
     )
 
     context = FakeGraphQLContext(client=sink, org_id=SAMPLE_ORG_ID)
@@ -242,9 +241,6 @@ async def _fixture_security(sink: CapturingSink) -> None:
     await resolve_security_alerts(
         context, org_id=SAMPLE_ORG_ID, filters=open_only_filters
     )
-
-    # Overview fires four queries (kpis, breakdown, top repos, trend).
-    await resolve_security_overview(context, org_id=SAMPLE_ORG_ID, filters=filters)
 
 
 # ---------------------------------------------------------------------------

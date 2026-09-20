@@ -33,12 +33,13 @@ var registeredOperations = []string{
 	"acrRepositoryScopes", "catalogValues", "busFactor",
 	"aiAttributedPrs", "aiAttributionOverview", "aiComparison", "aiImpactSummary", "aiReviewLoad", "aiRiskBreakdown",
 	"productTelemetryDashboard", "productTelemetryPlatformDashboard",
+	"aiGovernanceSummary", "aiWorkflowDrilldown",
 	"connectorsDataHealth", "dataHealthIdentity", "mappingCoverageHealth", "metricLineage",
 	"capacityForecast", "capacityForecasts", "cognitiveLoad", "compoundingRisk", "complexityTimeseries",
 	"featureFlagEvents", "featureFlags", "flowMatrix", "hotspots",
 	"releaseImpact",
 	"investmentBreakdown", "investmentFull", "operatingReview", "pr",
-	"reportRuns", "reviewEdges", "savedReport", "savedReports", "securityAlerts", "securityOverview", "throughputForecast", "testOpsCoverage", "testOpsPipeline", "testOpsTest", "featureFlagTimeseries",
+	"reportRuns", "reviewEdges", "savedReport", "savedReports", "securityAlerts", "securityOverview", "testopsRisk", "throughputForecast", "testOpsCoverage", "testOpsPipeline", "testOpsTest", "featureFlagTimeseries",
 	"workGraphArtifacts", "workGraphEdges", "workGraphFlow",
 }
 
@@ -129,7 +130,8 @@ func TestWindowedSpecsUseTheWindow(t *testing.T) {
 		"featureFlagEvents": true, "featureFlags": true, "pr": true,
 		"experiments": true, "busFactor": true, "compoundingRisk": true, "reportRuns": true, "savedReport": true, "savedReports": true, "securityAlerts": true, "securityOverview": true,
 		"releaseImpact": true, "throughputForecast": true, "workGraphArtifacts": true, "workGraphEdges": true,
-		"workGraphFlow": true,
+		"aiWorkflowDrilldown": true,
+		"workGraphFlow":       true,
 	}
 
 	for _, operation := range KnownOperations() {

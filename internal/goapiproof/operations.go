@@ -220,6 +220,42 @@ const volatileForecastIdentity = "freshly generated per request: an identical re
 // name would have produced entries that match nothing -- which fails the
 // run, correctly, but for a reason nobody would have understood.
 var operationSpecs = map[string]OperationSpec{
+	// The three AI rollup operations read the same ai_impact_metrics_daily
+	// rows and share one request shape: the org, a day range and an optional
+	// scope. Their variants cover every scope branch a document can send:
+	// work type, attribution buckets, a repository that resolves to nothing
+	// (as a uuid and as a name), a team that owns nothing, and the pair.
+	// aiReviewLoad's document also selects aiComparison, so the comparison is
+	// proven inside it as well as on its own document.
+	"aiImpactSummary": {
+		ResponseRoot: "aiImpactSummary",
+		Variables:    aiRollupVariables(nil),
+		Parity:       aiImpactSummaryParity(),
+		Variants: append(aiRollupVariants(aiImpactSummaryParity()),
+			aiInstanceVariant("REPO_VALID", "a repository id that has rollup rows", "repoId", aiImpactSummaryParity(), "data.aiImpactSummary.daily", "data.aiImpactSummary.repoBreakdown", "scopeId"),
+			aiInstanceVariant("REPO_NAME_VALID", "the full name of a repository that has rollup rows", "repoId", aiImpactSummaryParity(), "data.aiImpactSummary.daily", "", ""),
+			aiInstanceVariant("TEAM_VALID", "a team id stored on rollup rows", "teamId", aiImpactSummaryParity(), "data.aiImpactSummary.daily", "data.aiImpactSummary.teamBreakdown", "scopeId"),
+		),
+	},
+	"aiComparison": {
+		ResponseRoot: "aiComparison",
+		Variables:    aiRollupVariables(nil),
+		Variants: append(aiRollupVariants(Options{}),
+			aiInstanceVariant("REPO_VALID", "a repository id that has rollup rows", "repoId", Options{}, "", "", ""),
+			aiInstanceVariant("REPO_NAME_VALID", "the full name of a repository that has rollup rows", "repoId", Options{}, "", "", ""),
+			aiInstanceVariant("TEAM_VALID", "a team id stored on rollup rows", "teamId", Options{}, "", "", ""),
+		),
+	},
+	"aiReviewLoad": {
+		ResponseRoot: "aiReviewLoad",
+		Variables:    aiRollupVariables(nil),
+		Parity:       aiReviewLoadParity(),
+		Variants: append(aiRollupVariants(aiReviewLoadParity()),
+			aiInstanceVariant("REPO_VALID", "a repository id that has rollup rows", "repoId", aiReviewLoadParity(), "data.aiReviewLoad.byBucket", "", ""),
+			aiInstanceVariant("REPO_NAME_VALID", "the full name of a repository that has rollup rows", "repoId", aiReviewLoadParity(), "data.aiReviewLoad.byBucket", "", ""),
+			aiInstanceVariant("TEAM_VALID", "a team id that has rollup rows and whose repo patterns select a repository", "teamId", aiReviewLoadParity(), "data.aiReviewLoad.byBucket", "", ""),
+		),
+	},
 	"busFactor": {
 		ResponseRoot: "busFactor",
 		Variables: func(orgID string, _ Window) map[string]any {
@@ -1183,4 +1219,92 @@ func securityAlertsSecondPageVariant() Variant {
 		RequireNonEmpty: []string{"data.securityAlerts.edges"},
 	}
 	return v
+}
+
+// aiRollupVariables builds the shared request of the AI rollup operations: the
+// org, the run's day window and the given scope (nil sends no scope).
+func aiRollupVariables(scope map[string]any) func(orgID string, w Window) map[string]any {
+	return func(orgID string, w Window) map[string]any {
+		vars := map[string]any{
+			"orgId":     orgID,
+			"dateRange": map[string]any{"startDate": w.SinceDate, "endDate": w.UntilDate},
+			"scope":     nil,
+		}
+		if scope != nil {
+			vars["scope"] = scope
+		}
+		return vars
+	}
+}
+
+// aiRollupVariants is one variant per scope branch the AI rollup resolvers
+// have. The repository and team values name nothing in any org, so both planes
+// answer the empty window for them; a scope that selects real rows needs a
+// run-supplied identifier.
+func aiRollupVariants(parity Options) []Variant {
+	scopes := []struct {
+		name  string
+		scope map[string]any
+	}{
+		{"WORK_TYPE", map[string]any{"workType": "pull_request"}},
+		{"BUCKETS", map[string]any{"buckets": []any{"AI_ASSISTED", "HUMAN"}}},
+		{"REPO_UNKNOWN", map[string]any{"repoId": "00000000-0000-0000-0000-000000000001"}},
+		{"REPO_NAME_UNKNOWN", map[string]any{"repoId": "no-such-org/no-such-repo"}},
+		{"TEAM_UNKNOWN", map[string]any{"teamId": "team-abc-123"}},
+		{"REPO_AND_TEAM_UNKNOWN", map[string]any{"repoId": "00000000-0000-0000-0000-000000000001", "teamId": "team-abc-123"}},
+	}
+	variants := make([]Variant, 0, len(scopes))
+	for _, sc := range scopes {
+		variants = append(variants, Variant{Name: sc.name, Variables: aiRollupVariables(sc.scope), Parity: parity})
+	}
+	return variants
+}
+
+const aiComputedAtReason = "the rollup rows carry computed_at as a ClickHouse DateTime64(3, 'UTC'); Python's driver returns it tz-aware, so strawberry's DateTime scalar isoformat()s it with a \"+00:00\" offset and microsecond digits, while Go's gqlgen DateTime scalar formats the same instant as RFC 3339 with \"Z\" (resolvers/ai.py resolve_ai_impact_summary, computed_at = max over rows). The instants are equal; only the wire text differs. Go's form is the canonical DateTime wire form; the Python form is the declared defect and stays frozen."
+
+// aiImpactSummaryParity declares the one wire-form difference the impact
+// summary carries.
+func aiImpactSummaryParity() Options {
+	return Options{BaselineDefects: []BaselineDefect{{
+		Ticket:             "CHAOS-6081",
+		Reason:             aiComputedAtReason,
+		Paths:              []string{"data.aiImpactSummary.computedAt"},
+		Intermittent:       true,
+		IntermittentReason: "computedAt is null when the window has no rollup rows, so the leaf exists only for a window with data",
+	}}}
+}
+
+// aiReviewLoadParity declares pickup latency a merged floating-point
+// aggregate: it is an average over raw pull-request rows that ClickHouse
+// merges in thread-completion order.
+func aiReviewLoadParity() Options {
+	return Options{FloatTierB: map[string]string{
+		"data.aiReviewLoad.byBucket.pickupLatencyHours": "avgIf over raw pull-request rows: ClickHouse merges partial aggregate states in thread-completion order, so the last bits differ run to run on both planes (CHAOS-5451)",
+		"data.aiReviewLoad.daily.pickupLatencyHours":    "avgIf over raw pull-request rows: ClickHouse merges partial aggregate states in thread-completion order, so the last bits differ run to run on both planes (CHAOS-5451)",
+	}}
+}
+
+// aiInstanceVariant is an AI rollup scope variant whose scope field is a
+// run-supplied identifier. It is measured only when nonEmpty (when named)
+// holds an element on a leg; echoList (when named) must carry the supplied
+// value in echoField on every element.
+func aiInstanceVariant(name, kind, scopeField string, parity Options, nonEmpty, echoList, echoField string) Variant {
+	if nonEmpty != "" {
+		parity.RequireNonEmpty = []string{nonEmpty}
+	}
+	return Variant{
+		Name:      name,
+		Variables: aiRollupVariables(map[string]any{}),
+		Parity:    parity,
+		Instance: &VariantInstance{
+			Kind: kind,
+			Bind: func(vars map[string]any, value string) { vars["scope"].(map[string]any)[scopeField] = value },
+			EchoFor: func(value string) []ScopeEcho {
+				if echoList == "" {
+					return nil
+				}
+				return []ScopeEcho{{List: echoList, Fields: []string{echoField}, Value: value}}
+			},
+		},
+	}
 }

@@ -29,6 +29,7 @@ import (
 // what makes a drift legible rather than merely detected.
 var registeredOperations = []string{
 	"acrRepositoryScopes", "catalogValues", "busFactor",
+	"aiComparison", "aiImpactSummary", "aiReviewLoad",
 	"connectorsDataHealth", "dataHealthIdentity", "mappingCoverageHealth", "metricLineage",
 	"capacityForecast", "capacityForecasts", "cognitiveLoad", "complexityTimeseries",
 	"featureFlagEvents", "featureFlags", "flowMatrix", "hotspots",

@@ -8,6 +8,7 @@ import (
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/authctx"
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph/model"
 )
 
 // scopeRecordingClient records every statement's bindings and fails, so a
@@ -33,6 +34,18 @@ func orgScopedCalls() map[string]orgScopedCall {
 		},
 		"busFactor": func(r *Resolver, ctx context.Context, orgID string) error {
 			_, err := r.Query().BusFactor(ctx, orgID, nil)
+			return err
+		},
+		"aiImpactSummary": func(r *Resolver, ctx context.Context, orgID string) error {
+			_, err := r.Query().AiImpactSummary(ctx, orgID, model.AIDateRangeInput{}, nil)
+			return err
+		},
+		"aiComparison": func(r *Resolver, ctx context.Context, orgID string) error {
+			_, err := r.Query().AiComparison(ctx, orgID, model.AIDateRangeInput{}, nil)
+			return err
+		},
+		"aiReviewLoad": func(r *Resolver, ctx context.Context, orgID string) error {
+			_, err := r.Query().AiReviewLoad(ctx, orgID, model.AIDateRangeInput{}, nil)
 			return err
 		},
 	}

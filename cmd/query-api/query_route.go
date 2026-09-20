@@ -789,6 +789,220 @@ const registeredBusFactorDocument = `query BusFactor($orgId: String!, $scope: Bu
   }
 }`
 
+// registeredAiImpactSummaryDocument is the registered document for the
+// `aiImpactSummary` operation, the exact wire-form text a real web client sends
+// (testdata/wire_capture/aiimpactsummary_captured.graphql).
+const registeredAiImpactSummaryDocument = `query AIImpactSummary($orgId: String!, $dateRange: AIDateRangeInput!, $scope: AIScopeInput) {
+  aiImpactSummary(orgId: $orgId, dateRange: $dateRange, scope: $scope) {
+    orgId
+    startDate
+    endDate
+    totalPrs
+    aiAssistedPrs
+    agentCreatedPrs
+    humanPrs
+    unknownPrs
+    aiAssistedPrRatio
+    dataAvailable
+    computedAt
+    byBucket {
+      bucket
+      prsTotal
+      prsMerged
+      aiAssistedPrRatio
+      agentCreatedPrCount
+      cycleTimeAvgHours
+      aiCycleTimeDeltaHours
+      aiReviewAmplification
+      reworkDragRate
+      revertRate
+      incidentDragRate
+      testGapRate
+      leverage {
+        prsComponent
+        cycleTimeComponent
+        reviewComponent
+        reworkComponent
+        testComponent
+        incidentComponent
+        __typename
+      }
+      __typename
+    }
+    daily {
+      bucket
+      prsTotal
+      prsMerged
+      cycleTimeAvgHours
+      reviewsPerPr
+      changesRequestedPerPr
+      reworkPrs
+      reworkRate
+      revertPrs
+      revertRate
+      incidentsCount
+      incidentRate
+      testGapPrs
+      testGapRate
+      __typename
+    }
+    repoBreakdown {
+      scopeId
+      scopeLabel
+      aiPrsTotal
+      aiAssistedPrRatio
+      reworkRateDelta
+      __typename
+    }
+    teamBreakdown {
+      scopeId
+      scopeLabel
+      aiPrsTotal
+      aiAssistedPrRatio
+      reworkRateDelta
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredAiComparisonDocument is the registered document for the
+// `aiComparison` operation, the exact wire-form text a real web client sends
+// (testdata/wire_capture/aicomparison_captured.graphql).
+const registeredAiComparisonDocument = `query AIComparison($orgId: String!, $dateRange: AIDateRangeInput!, $scope: AIScopeInput) {
+  aiComparison(orgId: $orgId, dateRange: $dateRange, scope: $scope) {
+    orgId
+    startDate
+    endDate
+    dataAvailable
+    aiSide {
+      bucket
+      prsTotal
+      prsMerged
+      cycleTimeAvgHours
+      reviewsPerPr
+      reworkRate
+      revertRate
+      testGapRate
+      incidentRate
+      __typename
+    }
+    baselineSide {
+      bucket
+      prsTotal
+      prsMerged
+      cycleTimeAvgHours
+      reviewsPerPr
+      reworkRate
+      revertRate
+      testGapRate
+      incidentRate
+      __typename
+    }
+    delta {
+      cycleTimeDeltaHours
+      reviewsPerPrDelta
+      reworkRateDelta
+      revertRateDelta
+      testGapRateDelta
+      incidentRateDelta
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredAiReviewLoadDocument is the registered document for the
+// `aiReviewLoad` operation, the exact wire-form text a real web client sends
+// (testdata/wire_capture/aireviewload_captured.graphql).
+const registeredAiReviewLoadDocument = `query AIReviewLoad($orgId: String!, $dateRange: AIDateRangeInput!, $scope: AIScopeInput) {
+  aiReviewLoad(orgId: $orgId, dateRange: $dateRange, scope: $scope) {
+    orgId
+    startDate
+    endDate
+    dataAvailable
+    byBucket {
+      bucket
+      prsTotal
+      reviewsTotal
+      reviewsPerPr
+      changesRequestedPerPr
+      reviewAmplification
+      postFirstReviewPushesCount
+      postFirstReviewPushesPerPr
+      pickupLatencyHours
+      reviewCommentsPerLoc
+      __typename
+    }
+    daily {
+      bucket
+      prsTotal
+      reviewsTotal
+      reviewsPerPr
+      changesRequestedPerPr
+      reviewAmplification
+      postFirstReviewPushesCount
+      postFirstReviewPushesPerPr
+      pickupLatencyHours
+      reviewCommentsPerLoc
+      __typename
+    }
+    reviewerConcentration {
+      dataAvailable
+      reviewerCount
+      reviewerGini
+      __typename
+    }
+    missingStates {
+      key
+      title
+      guidance
+      __typename
+    }
+    __typename
+  }
+  aiComparison(orgId: $orgId, dateRange: $dateRange, scope: $scope) {
+    orgId
+    startDate
+    endDate
+    dataAvailable
+    aiSide {
+      bucket
+      prsTotal
+      prsMerged
+      cycleTimeAvgHours
+      reviewsPerPr
+      reworkRate
+      revertRate
+      testGapRate
+      incidentRate
+      __typename
+    }
+    baselineSide {
+      bucket
+      prsTotal
+      prsMerged
+      cycleTimeAvgHours
+      reviewsPerPr
+      reworkRate
+      revertRate
+      testGapRate
+      incidentRate
+      __typename
+    }
+    delta {
+      cycleTimeDeltaHours
+      reviewsPerPrDelta
+      reworkRateDelta
+      revertRateDelta
+      testGapRateDelta
+      incidentRateDelta
+      __typename
+    }
+    __typename
+  }
+}`
+
 // registeredSecurityOverviewDocument is the registered document for the
 // `securityOverview` operation, the exact wire-form text a real web client
 // sends (testdata/wire_capture/securityoverview_captured.graphql).
@@ -1649,6 +1863,9 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		"catalogValues":         digestHex(registeredCatalogValuesDocument),
 		"acrRepositoryScopes":   digestHex(registeredAcrRepositoryScopesDocument),
 		"busFactor":             digestHex(registeredBusFactorDocument),
+		"aiImpactSummary":       digestHex(registeredAiImpactSummaryDocument),
+		"aiComparison":          digestHex(registeredAiComparisonDocument),
+		"aiReviewLoad":          digestHex(registeredAiReviewLoadDocument),
 	}
 	// CHAOS-4710 deliverable 3: log the mounted set HERE, where
 	// digestByOperation actually lives, rather than handing main.go a

@@ -40,6 +40,7 @@ EXPECTED_PACKAGES = {
     # entire suite while nothing ever ran a verb.
     "cmd/go-api-routing",
     "cmd/query-api",
+    "cmd/query-api/internal/aianalytics",
     "cmd/query-api/internal/analytics",
     "cmd/query-api/internal/busfactor",
     # cmd/query-api/internal/explain's integration-tagged tests exercise

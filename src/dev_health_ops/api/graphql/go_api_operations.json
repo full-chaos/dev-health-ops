@@ -4,6 +4,18 @@
     "digest": "1fe3d5c84c8c047b57cdaf71a71370583d615156e78dcb8991b8f954fae41773"
   },
   {
+    "operation": "aiComparison",
+    "digest": "4e0ad7f190e95a7eaa2d19cd4e1ccb8c76379d6f66662efebd23fa11cd3d743a"
+  },
+  {
+    "operation": "aiImpactSummary",
+    "digest": "7e84d73b35104dd2ec3ece19c163cd8247c4637aa93df3b5f1449394c4539328"
+  },
+  {
+    "operation": "aiReviewLoad",
+    "digest": "4a160089d82bb30f486e81dcc4fb0ef20b97efac29166f0d04e8b03cf06a1697"
+  },
+  {
     "operation": "busFactor",
     "digest": "1b3480a8830f9eed583e47174b7759740a7f34182c2a7a8d92f28eb1c2253cb7"
   },

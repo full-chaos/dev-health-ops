@@ -216,3 +216,17 @@ func TestRegisteredDataHealthDocuments_MatchCapturedWireFixtures(t *testing.T) {
 		}
 	}
 }
+
+// TestRegisteredExperimentsDocument_MatchesCapturedWireFixture asserts the
+// registered experiments document digests to the wire form the web client's own
+// pinned urql prints for the generated query text.
+func TestRegisteredExperimentsDocument_MatchesCapturedWireFixture(t *testing.T) {
+	const fixture = "testdata/wire_capture/experiments_captured.graphql"
+	captured, err := os.ReadFile(fixture)
+	if err != nil {
+		t.Fatalf("read captured wire fixture %s: %v", fixture, err)
+	}
+	if got, want := digestHex(string(captured)), digestHex(registeredExperimentsDocument); got != want {
+		t.Fatalf("registered document digest %s does not match the captured wire form %s (%s): a real client's request would miss this route", want, got, fixture)
+	}
+}

@@ -1368,6 +1368,31 @@ const registeredMappingCoverageHealthDocument = `query GetMappingCoverageHealth(
   }
 }`
 
+// registeredExperimentsDocument is the registered document for the experiments read on the improve experiments page: the
+// urql wire form of the web client's query, captured under
+// testdata/wire_capture/experiments_captured.graphql and asserted equal by
+// TestRegisteredExperimentsDocument_MatchesCapturedWireFixture. Registration is
+// not enablement: PostgresSwitch.Enabled() is fail-closed.
+const registeredExperimentsDocument = `query Experiments($orgId: String!, $filters: FilterInput) {
+  experiments(orgId: $orgId, filters: $filters) {
+    items {
+      id
+      opportunityId
+      hypothesis
+      metric
+      owner
+      stopCondition
+      status
+      startDate
+      stopDate
+      outcome
+      __typename
+    }
+    derivedFromOpportunities
+    __typename
+  }
+}`
+
 // digestHex is a thin wrapper over the ONE canonical document-digest
 // algorithm (CHAOS-4696): sha256(strings.TrimSpace(text)), hex-encoded,
 // now shared code in cmd/query-api/internal/digest so
@@ -1915,6 +1940,7 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		"catalogValues":         digestHex(registeredCatalogValuesDocument),
 		"acrRepositoryScopes":   digestHex(registeredAcrRepositoryScopesDocument),
 		"busFactor":             digestHex(registeredBusFactorDocument),
+		"experiments":           digestHex(registeredExperimentsDocument),
 		"aiImpactSummary":       digestHex(registeredAiImpactSummaryDocument),
 		"aiComparison":          digestHex(registeredAiComparisonDocument),
 		"aiReviewLoad":          digestHex(registeredAiReviewLoadDocument),

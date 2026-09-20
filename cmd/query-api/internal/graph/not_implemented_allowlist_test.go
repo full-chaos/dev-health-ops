@@ -33,7 +33,6 @@ var notImplementedResolverNames = []string{
 	"queryResolver.DevScopeSearch",
 	"queryResolver.DevStatusSnapshot",
 	"queryResolver.DevWorkGraphNeighbors",
-	"queryResolver.Experiments",
 	"queryResolver.Home",
 	"queryResolver.ImproveOpportunities",
 	"queryResolver.ProductTelemetryDashboard",

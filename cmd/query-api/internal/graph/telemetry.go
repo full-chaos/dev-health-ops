@@ -48,6 +48,8 @@ var (
 	catalogOutcomeCounter              = mustCounter("devhealth_query_api_catalog_outcome_total", "catalog resolver outcomes, by result")
 	dataHealthCallCounter              = mustCounter("devhealth_query_api_data_health_calls_total", "dataHealth resolver invocations")
 	dataHealthOutcomeCounter           = mustCounter("devhealth_query_api_data_health_outcome_total", "dataHealth resolver outcomes, by result")
+	experimentsCallCounter             = mustCounter("devhealth_query_api_experiments_calls_total", "experiments resolver invocations")
+	experimentsOutcomeCounter          = mustCounter("devhealth_query_api_experiments_outcome_total", "experiments resolver outcomes, by result")
 	featureFlagEventsCallCounter       = mustCounter("devhealth_query_api_feature_flag_events_calls_total", "featureFlagEvents resolver invocations")
 	featureFlagEventsOutcomeCounter    = mustCounter("devhealth_query_api_feature_flag_events_outcome_total", "featureFlagEvents resolver outcomes, by result")
 
@@ -545,5 +547,22 @@ func startDataHealthSpan(ctx context.Context, name string) (context.Context, fun
 		}
 		span.End()
 		dataHealthOutcomeCounter.Add(context.Background(), 1, metric.WithAttributes(attribute.String("field", name), attribute.String("outcome", outcome)))
+	}
+}
+
+// startExperimentsSpan counts the call and starts the span before the
+// authorization guard, so a rejected request is still visible. Outcomes are
+// "ok", "degraded" (the opportunity build failed and the field answered empty)
+// and "denied".
+func startExperimentsSpan(ctx context.Context) (context.Context, func(outcome string, extra ...attribute.KeyValue)) {
+	experimentsCallCounter.Add(ctx, 1)
+	spanCtx, span := tracer.Start(ctx, "query-api.experiments")
+	return spanCtx, func(outcome string, extra ...attribute.KeyValue) {
+		span.SetAttributes(attribute.String("outcome", outcome))
+		if len(extra) > 0 {
+			span.SetAttributes(extra...)
+		}
+		span.End()
+		experimentsOutcomeCounter.Add(context.Background(), 1, metric.WithAttributes(attribute.String("outcome", outcome)))
 	}
 }

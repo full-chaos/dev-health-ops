@@ -309,6 +309,26 @@ var operationSpecs = map[string]OperationSpec{
 			busFactorVariant("REPO_AND_TEAM_UNKNOWN", map[string]any{"repoId": "00000000-0000-0000-0000-000000000001", "teamId": "team-abc-123"}),
 		},
 	},
+	// experiments derives its items from the opportunity cards, which are
+	// built from the home read; the scope level and ids are the only request
+	// inputs that reach it (the window is fixed). The base request is the org
+	// scope. Every other scope level is a variant naming an id that matches
+	// nothing, so both planes answer the same single "steady flow" card and
+	// the comparison is non-empty for each level.
+	"experiments": {
+		ResponseRoot: "experiments",
+		Parity:       Options{RequireNonEmpty: []string{"data.experiments.items"}},
+		Variables: func(orgID string, _ Window) map[string]any {
+			return map[string]any{"orgId": orgID, "filters": nil}
+		},
+		Variants: []Variant{
+			experimentsVariant("ORG_EXPLICIT", "ORG", nil),
+			experimentsVariant("TEAM_UNKNOWN", "TEAM", []string{"team-abc-123"}),
+			experimentsVariant("REPO_UNKNOWN", "REPO", []string{"00000000-0000-0000-0000-000000000001"}),
+			experimentsVariant("SERVICE_UNKNOWN", "SERVICE", []string{"service-abc-123"}),
+			experimentsVariant("DEVELOPER_UNKNOWN", "DEVELOPER", []string{"dev-abc-123"}),
+		},
+	},
 	"capacityForecast": {
 		ResponseRoot: "capacityForecast",
 		RootNullable: true,
@@ -1401,6 +1421,20 @@ func compoundingRiskInstanceVariant(name, kind, breakout, field string) Variant 
 			EchoFor: func(value string) []ScopeEcho {
 				return []ScopeEcho{{List: "data.compoundingRisk.rows", Fields: []string{"scopeId", "scopeLabel"}, Value: value}}
 			},
+		},
+	}
+}
+
+func experimentsVariant(name, level string, ids []string) Variant {
+	return Variant{
+		Name:   name,
+		Parity: Options{RequireNonEmpty: []string{"data.experiments.items"}},
+		Variables: func(orgID string, _ Window) map[string]any {
+			scope := map[string]any{"level": level, "ids": []string{}}
+			if ids != nil {
+				scope["ids"] = ids
+			}
+			return map[string]any{"orgId": orgID, "filters": map[string]any{"scope": scope}}
 		},
 	}
 }

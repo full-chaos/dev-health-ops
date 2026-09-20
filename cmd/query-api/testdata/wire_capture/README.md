@@ -186,3 +186,14 @@ emits, and the fixture keeps it byte for byte.
 | `data_health_identity_captured.graphql` | `a31987266aad8c1e9eb7cb1b572cc45aecc417f566773e9b5ba6e1bf10ec1a94` |
 | `data_health_metric_lineage_captured.graphql` | `4d93b59c335d6b8e5709f60bf4186030aa1b6b454c438e73c9177c675ccd705d` |
 | `data_health_mapping_coverage_captured.graphql` | `f87ebae2df502280d389cfd3bf6452e2e1ef8ed6965280f5ba809350ac6a0d01` |
+
+# experiments wire-capture fixture
+
+`experiments_captured.graphql` (`Experiments`) is the wire-form text of the
+document that selects `experiments`, produced by importing the web repo's own
+`wireForm()` (`scripts/graphql-wire-parity.ts`) and applying it to
+`EXPERIMENTS_QUERY`.
+
+| fixture | sha256(wire form) |
+| --- | --- |
+| `experiments_captured.graphql` | `133cf72191722912e8833ee46a1670c89d74c06dc9a174bfefb7c137fd74bfe5` |

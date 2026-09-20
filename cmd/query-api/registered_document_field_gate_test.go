@@ -771,6 +771,9 @@ func recordFieldSite(oracle *populatabilityOracle, typeName, fieldName string, v
 var expectedUnpopulatedFields = map[string]string{
 	"SecurityAlertNode.repoUrl": "the ClickHouse repos table has no url column, so the field is null for every row on both planes; Python selects a literal NULL for it (resolvers/security.py)",
 	"RepoAlertCount.repoUrl":    "the ClickHouse repos table has no url column, so the field is null for every row on both planes; Python selects a literal NULL for it (resolvers/security.py)",
+	"Experiment.startDate":      "a derived experiment is only ever suggested, so the field is null for every item on both planes; Python passes None (resolvers/improve.py resolve_experiments)",
+	"Experiment.stopDate":       "a derived experiment is only ever suggested, so the field is null for every item on both planes; Python passes None (resolvers/improve.py resolve_experiments)",
+	"Experiment.outcome":        "a derived experiment is only ever suggested, so the field is null for every item on both planes; Python passes None (resolvers/improve.py resolve_experiments)",
 }
 
 // TestRegisteredDocumentFieldsArePopulatable is CHAOS-4723's

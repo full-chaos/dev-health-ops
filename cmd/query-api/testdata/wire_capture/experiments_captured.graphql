@@ -1,0 +1,19 @@
+query Experiments($orgId: String!, $filters: FilterInput) {
+  experiments(orgId: $orgId, filters: $filters) {
+    items {
+      id
+      opportunityId
+      hypothesis
+      metric
+      owner
+      stopCondition
+      status
+      startDate
+      stopDate
+      outcome
+      __typename
+    }
+    derivedFromOpportunities
+    __typename
+  }
+}

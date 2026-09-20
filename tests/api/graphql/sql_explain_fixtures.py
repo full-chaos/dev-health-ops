@@ -43,68 +43,6 @@ SAMPLE_DAY = date(2026, 5, 21)
 ResolverSQLFixture = Callable[[CapturingSink], Awaitable[None]]
 
 
-# ---------------------------------------------------------------------------
-# compounding_risk (CHAOS-1642 / CHAOS-1751 — origin of this whole exercise)
-# ---------------------------------------------------------------------------
-
-
-async def _fixture_compounding_risk(sink: CapturingSink) -> None:
-    from dev_health_ops.api.graphql.resolvers.compounding_risk import (
-        _fetch_latest_rows,
-        _fetch_repo_trend,
-        _latest_day_for_org,
-        _load_repo_labels,
-        _load_team_assignments,
-    )
-
-    await _latest_day_for_org(
-        sink, SAMPLE_ORG_ID, scope="repo", scope_ids=[SAMPLE_REPO_ID]
-    )
-    await _latest_day_for_org(
-        sink, SAMPLE_ORG_ID, scope="team", scope_ids=[SAMPLE_TEAM_ID]
-    )
-
-    # Both scope=repo and scope=team paths plus with/without scope_ids filter
-    # — bug #2 (max(computed_at) AS computed_at) lives in this query.
-    await _fetch_latest_rows(
-        sink,
-        org_id=SAMPLE_ORG_ID,
-        day=SAMPLE_DAY,
-        scope="repo",
-        scope_ids=None,
-    )
-    await _fetch_latest_rows(
-        sink,
-        org_id=SAMPLE_ORG_ID,
-        day=SAMPLE_DAY,
-        scope="repo",
-        scope_ids=[SAMPLE_REPO_ID],
-    )
-    await _fetch_latest_rows(
-        sink,
-        org_id=SAMPLE_ORG_ID,
-        day=SAMPLE_DAY,
-        scope="team",
-        scope_ids=None,
-    )
-
-    await _fetch_repo_trend(
-        sink, SAMPLE_ORG_ID, SAMPLE_DAY, trend_days=30, repo_ids=None
-    )
-    await _fetch_repo_trend(
-        sink,
-        SAMPLE_ORG_ID,
-        SAMPLE_DAY,
-        trend_days=30,
-        repo_ids=[SAMPLE_REPO_ID],
-    )
-
-    # Bug #3 (toString(repo_id) AS repo_id from `repos` table that has `id`,
-    # `repo`) lives here.
-    await _load_repo_labels(sink, SAMPLE_ORG_ID, [SAMPLE_REPO_ID])
-    await _load_team_assignments(sink, SAMPLE_ORG_ID)
-
-
 async def _fixture_testops_risk(sink: CapturingSink) -> None:
     from dev_health_ops.api.graphql.resolvers.testops_risk import (
         _fetch_daily_rows,
@@ -451,14 +389,13 @@ async def _fixture_analytics(sink: CapturingSink) -> None:
 # ---------------------------------------------------------------------------
 
 
-# There are no "forecast", "capacity", "operating_review" or "work_graph" fixtures: query-api
+# There are no "forecast", "capacity", "operating_review", "work_graph" or "compounding_risk" fixtures: query-api
 # serves capacityForecast/capacityForecasts/throughputForecast/operatingReview
 # natively, so there is
 # no Python SQL for this EXPLAIN contract to plan. The equivalent coverage
 # lives on the Go side: cmd/query-api/capacity_forecast_seeded_integration_
 # test.go runs those reads against a real, migrated ClickHouse.
 ALL_RESOLVER_SQL_FIXTURES: list[tuple[str, ResolverSQLFixture]] = [
-    ("compounding_risk", _fixture_compounding_risk),
     ("testops_risk", _fixture_testops_risk),
     ("home", _fixture_home),
     ("recommendations", _fixture_recommendations),

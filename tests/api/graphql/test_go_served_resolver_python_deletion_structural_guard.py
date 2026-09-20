@@ -204,6 +204,15 @@ DELETED_GO_SERVED_RESOLVER_MODULES: dict[str, Path] = {
     / "graphql"
     / "resolvers"
     / "bus_factor.py",
+    # compoundingRisk. The score computation stays in metrics/compounding_risk.py
+    # for the daily job; the SDL types stay in types/compounding_risk.py.
+    "compounding risk resolver": ROOT
+    / "src"
+    / "dev_health_ops"
+    / "api"
+    / "graphql"
+    / "resolvers"
+    / "compounding_risk.py",
     # workGraphEdges, workGraphFlow and workGraphArtifacts.
     "work graph resolver": ROOT
     / "src"
@@ -308,6 +317,7 @@ SDL_LOAD_BEARING_SYMBOLS: dict[str, frozenset[str]] = {
             "security_overview",
             "experiments",
             "product_telemetry_dashboard",
+            "compounding_risk",
             "work_graph_edges",
             "work_graph_flow",
             "work_graph_artifacts",

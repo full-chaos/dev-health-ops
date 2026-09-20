@@ -77,7 +77,6 @@ from .resolvers.ai import (
     resolve_ai_workflow_drilldown,
 )
 from .resolvers.analytics import resolve_analytics
-from .resolvers.compounding_risk import resolve_compounding_risk
 from .resolvers.data_health import resolve_data_health
 from .resolvers.dev_evidence import (
     resolve_dev_data_health,
@@ -702,8 +701,7 @@ class Query:
         org_id: str,
         filter: CompoundingRiskFilterInput | None = None,  # noqa: A002
     ) -> CompoundingRiskResult:
-        context = get_context(info)
-        return await resolve_compounding_risk(context, org_id, filter)
+        _raise_served_by_query_api("compoundingRisk", org_id, info)
 
     @strawberry.field(
         description=(

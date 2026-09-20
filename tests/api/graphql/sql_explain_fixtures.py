@@ -100,58 +100,6 @@ async def _fixture_recommendations(sink: CapturingSink) -> None:
 
 
 # ---------------------------------------------------------------------------
-# security
-# ---------------------------------------------------------------------------
-
-
-async def _fixture_security(sink: CapturingSink) -> None:
-    from dev_health_ops.api.graphql.models.inputs import (
-        SecurityAlertFilterInput,
-        SecurityPaginationInput,
-        SecuritySeverityInput,
-        SecuritySourceInput,
-        SecurityStateInput,
-    )
-    from dev_health_ops.api.graphql.resolvers.security import (
-        resolve_security_alerts,
-    )
-
-    context = FakeGraphQLContext(client=sink, org_id=SAMPLE_ORG_ID)
-
-    # Bare alert list.
-    await resolve_security_alerts(context, org_id=SAMPLE_ORG_ID)
-
-    # Every filter branch is included in the WHERE clause builder; covering
-    # them here makes sure no branch ships a column the schema does not have.
-    filters = SecurityAlertFilterInput(
-        open_only=False,
-        states=[SecurityStateInput.OPEN, SecurityStateInput.FIXED],
-        repo_ids=[SAMPLE_REPO_ID],
-        severities=[
-            SecuritySeverityInput.CRITICAL,
-            SecuritySeverityInput.HIGH,
-        ],
-        sources=[SecuritySourceInput.DEPENDABOT],
-        since=SAMPLE_DAY - timedelta(days=30),
-        until=SAMPLE_DAY,
-        search="cve",
-    )
-    pagination = SecurityPaginationInput(first=50, after="0")
-    await resolve_security_alerts(
-        context,
-        org_id=SAMPLE_ORG_ID,
-        filters=filters,
-        pagination=pagination,
-    )
-
-    # open_only branch overrides explicit states.
-    open_only_filters = SecurityAlertFilterInput(open_only=True)
-    await resolve_security_alerts(
-        context, org_id=SAMPLE_ORG_ID, filters=open_only_filters
-    )
-
-
-# ---------------------------------------------------------------------------
 # bus_factor (via OwnershipClickHouseLoader)
 # ---------------------------------------------------------------------------
 
@@ -389,7 +337,7 @@ async def _fixture_analytics(sink: CapturingSink) -> None:
 # ---------------------------------------------------------------------------
 
 
-# There are no "forecast", "capacity", "operating_review", "work_graph" or "compounding_risk" fixtures: query-api
+# There are no "forecast", "capacity", "operating_review", "work_graph", "compounding_risk" or "security" fixtures: query-api
 # serves capacityForecast/capacityForecasts/throughputForecast/operatingReview
 # natively, so there is
 # no Python SQL for this EXPLAIN contract to plan. The equivalent coverage
@@ -399,7 +347,6 @@ ALL_RESOLVER_SQL_FIXTURES: list[tuple[str, ResolverSQLFixture]] = [
     ("testops_risk", _fixture_testops_risk),
     ("home", _fixture_home),
     ("recommendations", _fixture_recommendations),
-    ("security", _fixture_security),
     ("bus_factor", _fixture_bus_factor),
     ("data_health", _fixture_data_health),
     ("analytics", _fixture_analytics),

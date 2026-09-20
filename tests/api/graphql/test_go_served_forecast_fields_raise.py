@@ -94,6 +94,14 @@ _QUERIES = {
         '{startDate: "2026-01-05", endDate: "2026-01-11"}) { orgId } }',
         None,
     ),
+    "securityAlerts": (
+        'query { securityAlerts(orgId: "org-1") { totalCount } }',
+        None,
+    ),
+    "improveOpportunities": (
+        "query { improveOpportunities { detectorReady } }",
+        None,
+    ),
     "securityOverview": (
         'query { securityOverview(orgId: "org-1") { kpis { openTotal } } }',
         None,

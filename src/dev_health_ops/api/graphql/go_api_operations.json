@@ -8,12 +8,20 @@
     "digest": "4e0ad7f190e95a7eaa2d19cd4e1ccb8c76379d6f66662efebd23fa11cd3d743a"
   },
   {
+    "operation": "aiGovernanceSummary",
+    "digest": "ba73e66057e6dfc659ad198a9a90cd3f7827e31486cf850324d9655e486c86fa"
+  },
+  {
     "operation": "aiImpactSummary",
     "digest": "7e84d73b35104dd2ec3ece19c163cd8247c4637aa93df3b5f1449394c4539328"
   },
   {
     "operation": "aiReviewLoad",
     "digest": "4a160089d82bb30f486e81dcc4fb0ef20b97efac29166f0d04e8b03cf06a1697"
+  },
+  {
+    "operation": "aiWorkflowDrilldown",
+    "digest": "42bfc78e3f533b51578eb3575c027a61f9c81bfc9a7bf843c4c2f9979972fea4"
   },
   {
     "operation": "busFactor",

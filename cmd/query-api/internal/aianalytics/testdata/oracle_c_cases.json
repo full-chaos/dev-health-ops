@@ -1,0 +1,3813 @@
+{
+ "cases": [
+  {
+   "calls": {
+    "coverage": {
+     "repo_id": null,
+     "team_id": null
+    },
+    "violations": {
+     "limit": 50
+    }
+   },
+   "coverage": [
+    {
+     "ai_artifacts": 4,
+     "day": "2026-08-01",
+     "declared_artifacts": 3,
+     "human_reviewed_prs": 2,
+     "in_policy_artifacts": 4,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "security_scanned_prs": 1,
+     "team_id": "team-a"
+    },
+    {
+     "ai_artifacts": 0,
+     "day": "2026-08-01",
+     "declared_artifacts": 0,
+     "human_reviewed_prs": 0,
+     "in_policy_artifacts": 0,
+     "repo_id": null,
+     "security_scanned_prs": 0,
+     "team_id": null
+    },
+    {
+     "ai_artifacts": 3,
+     "day": "2026-08-02",
+     "declared_artifacts": 1,
+     "human_reviewed_prs": 3,
+     "in_policy_artifacts": 2,
+     "repo_id": "22222222-2222-2222-2222-222222222222",
+     "security_scanned_prs": 0,
+     "team_id": ""
+    }
+   ],
+   "expected": {
+    "coverage": [
+     {
+      "aiArtifacts": 4,
+      "day": "2026-08-01",
+      "declarationCoverage": 0.75,
+      "declaredArtifacts": 3,
+      "humanReviewCoverage": 0.5,
+      "humanReviewedPrs": 2,
+      "inPolicyArtifacts": 4,
+      "inPolicyCoverage": 1.0,
+      "repoId": "11111111-1111-1111-1111-111111111111",
+      "securityScanCoverage": 0.25,
+      "securityScannedPrs": 1,
+      "teamId": "team-a"
+     },
+     {
+      "aiArtifacts": 0,
+      "day": "2026-08-01",
+      "declarationCoverage": 1.0,
+      "declaredArtifacts": 0,
+      "humanReviewCoverage": 1.0,
+      "humanReviewedPrs": 0,
+      "inPolicyArtifacts": 0,
+      "inPolicyCoverage": 1.0,
+      "repoId": null,
+      "securityScanCoverage": 1.0,
+      "securityScannedPrs": 0,
+      "teamId": null
+     },
+     {
+      "aiArtifacts": 3,
+      "day": "2026-08-02",
+      "declarationCoverage": 0.3333333333333333,
+      "declaredArtifacts": 1,
+      "humanReviewCoverage": 1.0,
+      "humanReviewedPrs": 3,
+      "inPolicyArtifacts": 2,
+      "inPolicyCoverage": 0.6666666666666666,
+      "repoId": "22222222-2222-2222-2222-222222222222",
+      "securityScanCoverage": 0.0,
+      "securityScannedPrs": 0,
+      "teamId": null
+     }
+    ],
+    "dataAvailable": true,
+    "endDate": "2026-08-03",
+    "orgId": "org-1",
+    "recentViolations": [
+     {
+      "evidence": "{\"a\": 1}",
+      "observedAt": "2026-08-02T10:00:00.500000+00:00",
+      "repoId": "11111111-1111-1111-1111-111111111111",
+      "ruleId": "r1",
+      "severity": "high",
+      "subjectId": "7",
+      "subjectType": "pull_request",
+      "teamId": "team-a"
+     },
+     {
+      "evidence": "{}",
+      "observedAt": "2026-08-02T11:00:00+00:00",
+      "repoId": null,
+      "ruleId": "r2",
+      "severity": "low",
+      "subjectId": "ABC-123",
+      "subjectType": "issue",
+      "teamId": null
+     },
+     {
+      "evidence": "{}",
+      "observedAt": "2026-08-02T10:00:00.500000+00:00",
+      "repoId": "00000000-0000-0000-0000-000000000000",
+      "ruleId": "r3",
+      "severity": "low",
+      "subjectId": "9",
+      "subjectType": "pull_request",
+      "teamId": null
+     }
+    ],
+    "startDate": "2026-08-01"
+   },
+   "kind": "governance",
+   "limit": 50,
+   "name": "gov/plain",
+   "scope": null,
+   "slugRows": [],
+   "violations": [
+    {
+     "evidence": "{\"a\": 1}",
+     "observed_at": "2026-08-02T10:00:00.500000+00:00",
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "rule_id": "r1",
+     "severity": "high",
+     "subject_id": "7",
+     "subject_type": "pull_request",
+     "team_id": "team-a"
+    },
+    {
+     "evidence": "",
+     "observed_at": "2026-08-02T11:00:00",
+     "repo_id": null,
+     "rule_id": "r2",
+     "severity": "low",
+     "subject_id": "ABC-123",
+     "subject_type": "issue",
+     "team_id": null
+    },
+    {
+     "evidence": "{}",
+     "observed_at": "2026-08-02T10:00:00.500000+00:00",
+     "repo_id": "00000000-0000-0000-0000-000000000000",
+     "rule_id": "r3",
+     "severity": "low",
+     "subject_id": "9",
+     "subject_type": "pull_request",
+     "team_id": ""
+    }
+   ]
+  },
+  {
+   "calls": {
+    "coverage": {
+     "repo_id": null,
+     "team_id": null
+    },
+    "violations": {
+     "limit": 50
+    }
+   },
+   "coverage": [],
+   "expected": {
+    "coverage": [],
+    "dataAvailable": false,
+    "endDate": "2026-08-03",
+    "orgId": "org-1",
+    "recentViolations": [],
+    "startDate": "2026-08-01"
+   },
+   "kind": "governance",
+   "limit": 50,
+   "name": "gov/empty",
+   "scope": null,
+   "slugRows": [],
+   "violations": []
+  },
+  {
+   "calls": {
+    "coverage": {
+     "repo_id": null,
+     "team_id": null
+    },
+    "violations": {
+     "limit": 50
+    }
+   },
+   "coverage": [],
+   "expected": {
+    "coverage": [],
+    "dataAvailable": true,
+    "endDate": "2026-08-03",
+    "orgId": "org-1",
+    "recentViolations": [
+     {
+      "evidence": "{\"a\": 1}",
+      "observedAt": "2026-08-02T10:00:00.500000+00:00",
+      "repoId": "11111111-1111-1111-1111-111111111111",
+      "ruleId": "r1",
+      "severity": "high",
+      "subjectId": "7",
+      "subjectType": "pull_request",
+      "teamId": "team-a"
+     },
+     {
+      "evidence": "{}",
+      "observedAt": "2026-08-02T11:00:00+00:00",
+      "repoId": null,
+      "ruleId": "r2",
+      "severity": "low",
+      "subjectId": "ABC-123",
+      "subjectType": "issue",
+      "teamId": null
+     },
+     {
+      "evidence": "{}",
+      "observedAt": "2026-08-02T10:00:00.500000+00:00",
+      "repoId": "00000000-0000-0000-0000-000000000000",
+      "ruleId": "r3",
+      "severity": "low",
+      "subjectId": "9",
+      "subjectType": "pull_request",
+      "teamId": null
+     }
+    ],
+    "startDate": "2026-08-01"
+   },
+   "kind": "governance",
+   "limit": 50,
+   "name": "gov/onlyViolations",
+   "scope": null,
+   "slugRows": [],
+   "violations": [
+    {
+     "evidence": "{\"a\": 1}",
+     "observed_at": "2026-08-02T10:00:00.500000+00:00",
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "rule_id": "r1",
+     "severity": "high",
+     "subject_id": "7",
+     "subject_type": "pull_request",
+     "team_id": "team-a"
+    },
+    {
+     "evidence": "",
+     "observed_at": "2026-08-02T11:00:00",
+     "repo_id": null,
+     "rule_id": "r2",
+     "severity": "low",
+     "subject_id": "ABC-123",
+     "subject_type": "issue",
+     "team_id": null
+    },
+    {
+     "evidence": "{}",
+     "observed_at": "2026-08-02T10:00:00.500000+00:00",
+     "repo_id": "00000000-0000-0000-0000-000000000000",
+     "rule_id": "r3",
+     "severity": "low",
+     "subject_id": "9",
+     "subject_type": "pull_request",
+     "team_id": ""
+    }
+   ]
+  },
+  {
+   "calls": {
+    "coverage": {
+     "repo_id": null,
+     "team_id": null
+    },
+    "violations": {
+     "limit": 0
+    }
+   },
+   "coverage": [
+    {
+     "ai_artifacts": 4,
+     "day": "2026-08-01",
+     "declared_artifacts": 3,
+     "human_reviewed_prs": 2,
+     "in_policy_artifacts": 4,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "security_scanned_prs": 1,
+     "team_id": "team-a"
+    },
+    {
+     "ai_artifacts": 0,
+     "day": "2026-08-01",
+     "declared_artifacts": 0,
+     "human_reviewed_prs": 0,
+     "in_policy_artifacts": 0,
+     "repo_id": null,
+     "security_scanned_prs": 0,
+     "team_id": null
+    },
+    {
+     "ai_artifacts": 3,
+     "day": "2026-08-02",
+     "declared_artifacts": 1,
+     "human_reviewed_prs": 3,
+     "in_policy_artifacts": 2,
+     "repo_id": "22222222-2222-2222-2222-222222222222",
+     "security_scanned_prs": 0,
+     "team_id": ""
+    }
+   ],
+   "expected": {
+    "coverage": [
+     {
+      "aiArtifacts": 4,
+      "day": "2026-08-01",
+      "declarationCoverage": 0.75,
+      "declaredArtifacts": 3,
+      "humanReviewCoverage": 0.5,
+      "humanReviewedPrs": 2,
+      "inPolicyArtifacts": 4,
+      "inPolicyCoverage": 1.0,
+      "repoId": "11111111-1111-1111-1111-111111111111",
+      "securityScanCoverage": 0.25,
+      "securityScannedPrs": 1,
+      "teamId": "team-a"
+     },
+     {
+      "aiArtifacts": 0,
+      "day": "2026-08-01",
+      "declarationCoverage": 1.0,
+      "declaredArtifacts": 0,
+      "humanReviewCoverage": 1.0,
+      "humanReviewedPrs": 0,
+      "inPolicyArtifacts": 0,
+      "inPolicyCoverage": 1.0,
+      "repoId": null,
+      "securityScanCoverage": 1.0,
+      "securityScannedPrs": 0,
+      "teamId": null
+     },
+     {
+      "aiArtifacts": 3,
+      "day": "2026-08-02",
+      "declarationCoverage": 0.3333333333333333,
+      "declaredArtifacts": 1,
+      "humanReviewCoverage": 1.0,
+      "humanReviewedPrs": 3,
+      "inPolicyArtifacts": 2,
+      "inPolicyCoverage": 0.6666666666666666,
+      "repoId": "22222222-2222-2222-2222-222222222222",
+      "securityScanCoverage": 0.0,
+      "securityScannedPrs": 0,
+      "teamId": null
+     }
+    ],
+    "dataAvailable": true,
+    "endDate": "2026-08-03",
+    "orgId": "org-1",
+    "recentViolations": [
+     {
+      "evidence": "{\"a\": 1}",
+      "observedAt": "2026-08-02T10:00:00.500000+00:00",
+      "repoId": "11111111-1111-1111-1111-111111111111",
+      "ruleId": "r1",
+      "severity": "high",
+      "subjectId": "7",
+      "subjectType": "pull_request",
+      "teamId": "team-a"
+     },
+     {
+      "evidence": "{}",
+      "observedAt": "2026-08-02T11:00:00+00:00",
+      "repoId": null,
+      "ruleId": "r2",
+      "severity": "low",
+      "subjectId": "ABC-123",
+      "subjectType": "issue",
+      "teamId": null
+     },
+     {
+      "evidence": "{}",
+      "observedAt": "2026-08-02T10:00:00.500000+00:00",
+      "repoId": "00000000-0000-0000-0000-000000000000",
+      "ruleId": "r3",
+      "severity": "low",
+      "subjectId": "9",
+      "subjectType": "pull_request",
+      "teamId": null
+     }
+    ],
+    "startDate": "2026-08-01"
+   },
+   "kind": "governance",
+   "limit": 0,
+   "name": "gov/limitZero",
+   "scope": null,
+   "slugRows": [],
+   "violations": [
+    {
+     "evidence": "{\"a\": 1}",
+     "observed_at": "2026-08-02T10:00:00.500000+00:00",
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "rule_id": "r1",
+     "severity": "high",
+     "subject_id": "7",
+     "subject_type": "pull_request",
+     "team_id": "team-a"
+    },
+    {
+     "evidence": "",
+     "observed_at": "2026-08-02T11:00:00",
+     "repo_id": null,
+     "rule_id": "r2",
+     "severity": "low",
+     "subject_id": "ABC-123",
+     "subject_type": "issue",
+     "team_id": null
+    },
+    {
+     "evidence": "{}",
+     "observed_at": "2026-08-02T10:00:00.500000+00:00",
+     "repo_id": "00000000-0000-0000-0000-000000000000",
+     "rule_id": "r3",
+     "severity": "low",
+     "subject_id": "9",
+     "subject_type": "pull_request",
+     "team_id": ""
+    }
+   ]
+  },
+  {
+   "calls": {
+    "coverage": {
+     "repo_id": null,
+     "team_id": null
+    },
+    "violations": {
+     "limit": 0
+    }
+   },
+   "coverage": [
+    {
+     "ai_artifacts": 4,
+     "day": "2026-08-01",
+     "declared_artifacts": 3,
+     "human_reviewed_prs": 2,
+     "in_policy_artifacts": 4,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "security_scanned_prs": 1,
+     "team_id": "team-a"
+    },
+    {
+     "ai_artifacts": 0,
+     "day": "2026-08-01",
+     "declared_artifacts": 0,
+     "human_reviewed_prs": 0,
+     "in_policy_artifacts": 0,
+     "repo_id": null,
+     "security_scanned_prs": 0,
+     "team_id": null
+    },
+    {
+     "ai_artifacts": 3,
+     "day": "2026-08-02",
+     "declared_artifacts": 1,
+     "human_reviewed_prs": 3,
+     "in_policy_artifacts": 2,
+     "repo_id": "22222222-2222-2222-2222-222222222222",
+     "security_scanned_prs": 0,
+     "team_id": ""
+    }
+   ],
+   "expected": {
+    "coverage": [
+     {
+      "aiArtifacts": 4,
+      "day": "2026-08-01",
+      "declarationCoverage": 0.75,
+      "declaredArtifacts": 3,
+      "humanReviewCoverage": 0.5,
+      "humanReviewedPrs": 2,
+      "inPolicyArtifacts": 4,
+      "inPolicyCoverage": 1.0,
+      "repoId": "11111111-1111-1111-1111-111111111111",
+      "securityScanCoverage": 0.25,
+      "securityScannedPrs": 1,
+      "teamId": "team-a"
+     },
+     {
+      "aiArtifacts": 0,
+      "day": "2026-08-01",
+      "declarationCoverage": 1.0,
+      "declaredArtifacts": 0,
+      "humanReviewCoverage": 1.0,
+      "humanReviewedPrs": 0,
+      "inPolicyArtifacts": 0,
+      "inPolicyCoverage": 1.0,
+      "repoId": null,
+      "securityScanCoverage": 1.0,
+      "securityScannedPrs": 0,
+      "teamId": null
+     },
+     {
+      "aiArtifacts": 3,
+      "day": "2026-08-02",
+      "declarationCoverage": 0.3333333333333333,
+      "declaredArtifacts": 1,
+      "humanReviewCoverage": 1.0,
+      "humanReviewedPrs": 3,
+      "inPolicyArtifacts": 2,
+      "inPolicyCoverage": 0.6666666666666666,
+      "repoId": "22222222-2222-2222-2222-222222222222",
+      "securityScanCoverage": 0.0,
+      "securityScannedPrs": 0,
+      "teamId": null
+     }
+    ],
+    "dataAvailable": true,
+    "endDate": "2026-08-03",
+    "orgId": "org-1",
+    "recentViolations": [
+     {
+      "evidence": "{\"a\": 1}",
+      "observedAt": "2026-08-02T10:00:00.500000+00:00",
+      "repoId": "11111111-1111-1111-1111-111111111111",
+      "ruleId": "r1",
+      "severity": "high",
+      "subjectId": "7",
+      "subjectType": "pull_request",
+      "teamId": "team-a"
+     },
+     {
+      "evidence": "{}",
+      "observedAt": "2026-08-02T11:00:00+00:00",
+      "repoId": null,
+      "ruleId": "r2",
+      "severity": "low",
+      "subjectId": "ABC-123",
+      "subjectType": "issue",
+      "teamId": null
+     },
+     {
+      "evidence": "{}",
+      "observedAt": "2026-08-02T10:00:00.500000+00:00",
+      "repoId": "00000000-0000-0000-0000-000000000000",
+      "ruleId": "r3",
+      "severity": "low",
+      "subjectId": "9",
+      "subjectType": "pull_request",
+      "teamId": null
+     }
+    ],
+    "startDate": "2026-08-01"
+   },
+   "kind": "governance",
+   "limit": -1,
+   "name": "gov/limitMinusOne",
+   "scope": null,
+   "slugRows": [],
+   "violations": [
+    {
+     "evidence": "{\"a\": 1}",
+     "observed_at": "2026-08-02T10:00:00.500000+00:00",
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "rule_id": "r1",
+     "severity": "high",
+     "subject_id": "7",
+     "subject_type": "pull_request",
+     "team_id": "team-a"
+    },
+    {
+     "evidence": "",
+     "observed_at": "2026-08-02T11:00:00",
+     "repo_id": null,
+     "rule_id": "r2",
+     "severity": "low",
+     "subject_id": "ABC-123",
+     "subject_type": "issue",
+     "team_id": null
+    },
+    {
+     "evidence": "{}",
+     "observed_at": "2026-08-02T10:00:00.500000+00:00",
+     "repo_id": "00000000-0000-0000-0000-000000000000",
+     "rule_id": "r3",
+     "severity": "low",
+     "subject_id": "9",
+     "subject_type": "pull_request",
+     "team_id": ""
+    }
+   ]
+  },
+  {
+   "calls": {
+    "coverage": {
+     "repo_id": null,
+     "team_id": null
+    },
+    "violations": {
+     "limit": 0
+    }
+   },
+   "coverage": [
+    {
+     "ai_artifacts": 4,
+     "day": "2026-08-01",
+     "declared_artifacts": 3,
+     "human_reviewed_prs": 2,
+     "in_policy_artifacts": 4,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "security_scanned_prs": 1,
+     "team_id": "team-a"
+    },
+    {
+     "ai_artifacts": 0,
+     "day": "2026-08-01",
+     "declared_artifacts": 0,
+     "human_reviewed_prs": 0,
+     "in_policy_artifacts": 0,
+     "repo_id": null,
+     "security_scanned_prs": 0,
+     "team_id": null
+    },
+    {
+     "ai_artifacts": 3,
+     "day": "2026-08-02",
+     "declared_artifacts": 1,
+     "human_reviewed_prs": 3,
+     "in_policy_artifacts": 2,
+     "repo_id": "22222222-2222-2222-2222-222222222222",
+     "security_scanned_prs": 0,
+     "team_id": ""
+    }
+   ],
+   "expected": {
+    "coverage": [
+     {
+      "aiArtifacts": 4,
+      "day": "2026-08-01",
+      "declarationCoverage": 0.75,
+      "declaredArtifacts": 3,
+      "humanReviewCoverage": 0.5,
+      "humanReviewedPrs": 2,
+      "inPolicyArtifacts": 4,
+      "inPolicyCoverage": 1.0,
+      "repoId": "11111111-1111-1111-1111-111111111111",
+      "securityScanCoverage": 0.25,
+      "securityScannedPrs": 1,
+      "teamId": "team-a"
+     },
+     {
+      "aiArtifacts": 0,
+      "day": "2026-08-01",
+      "declarationCoverage": 1.0,
+      "declaredArtifacts": 0,
+      "humanReviewCoverage": 1.0,
+      "humanReviewedPrs": 0,
+      "inPolicyArtifacts": 0,
+      "inPolicyCoverage": 1.0,
+      "repoId": null,
+      "securityScanCoverage": 1.0,
+      "securityScannedPrs": 0,
+      "teamId": null
+     },
+     {
+      "aiArtifacts": 3,
+      "day": "2026-08-02",
+      "declarationCoverage": 0.3333333333333333,
+      "declaredArtifacts": 1,
+      "humanReviewCoverage": 1.0,
+      "humanReviewedPrs": 3,
+      "inPolicyArtifacts": 2,
+      "inPolicyCoverage": 0.6666666666666666,
+      "repoId": "22222222-2222-2222-2222-222222222222",
+      "securityScanCoverage": 0.0,
+      "securityScannedPrs": 0,
+      "teamId": null
+     }
+    ],
+    "dataAvailable": true,
+    "endDate": "2026-08-03",
+    "orgId": "org-1",
+    "recentViolations": [
+     {
+      "evidence": "{\"a\": 1}",
+      "observedAt": "2026-08-02T10:00:00.500000+00:00",
+      "repoId": "11111111-1111-1111-1111-111111111111",
+      "ruleId": "r1",
+      "severity": "high",
+      "subjectId": "7",
+      "subjectType": "pull_request",
+      "teamId": "team-a"
+     },
+     {
+      "evidence": "{}",
+      "observedAt": "2026-08-02T11:00:00+00:00",
+      "repoId": null,
+      "ruleId": "r2",
+      "severity": "low",
+      "subjectId": "ABC-123",
+      "subjectType": "issue",
+      "teamId": null
+     },
+     {
+      "evidence": "{}",
+      "observedAt": "2026-08-02T10:00:00.500000+00:00",
+      "repoId": "00000000-0000-0000-0000-000000000000",
+      "ruleId": "r3",
+      "severity": "low",
+      "subjectId": "9",
+      "subjectType": "pull_request",
+      "teamId": null
+     }
+    ],
+    "startDate": "2026-08-01"
+   },
+   "kind": "governance",
+   "limit": -5,
+   "name": "gov/limitNegative",
+   "scope": null,
+   "slugRows": [],
+   "violations": [
+    {
+     "evidence": "{\"a\": 1}",
+     "observed_at": "2026-08-02T10:00:00.500000+00:00",
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "rule_id": "r1",
+     "severity": "high",
+     "subject_id": "7",
+     "subject_type": "pull_request",
+     "team_id": "team-a"
+    },
+    {
+     "evidence": "",
+     "observed_at": "2026-08-02T11:00:00",
+     "repo_id": null,
+     "rule_id": "r2",
+     "severity": "low",
+     "subject_id": "ABC-123",
+     "subject_type": "issue",
+     "team_id": null
+    },
+    {
+     "evidence": "{}",
+     "observed_at": "2026-08-02T10:00:00.500000+00:00",
+     "repo_id": "00000000-0000-0000-0000-000000000000",
+     "rule_id": "r3",
+     "severity": "low",
+     "subject_id": "9",
+     "subject_type": "pull_request",
+     "team_id": ""
+    }
+   ]
+  },
+  {
+   "calls": {
+    "coverage": {
+     "repo_id": null,
+     "team_id": "team-a"
+    },
+    "violations": {
+     "limit": 50
+    }
+   },
+   "coverage": [
+    {
+     "ai_artifacts": 4,
+     "day": "2026-08-01",
+     "declared_artifacts": 3,
+     "human_reviewed_prs": 2,
+     "in_policy_artifacts": 4,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "security_scanned_prs": 1,
+     "team_id": "team-a"
+    }
+   ],
+   "expected": {
+    "coverage": [
+     {
+      "aiArtifacts": 4,
+      "day": "2026-08-01",
+      "declarationCoverage": 0.75,
+      "declaredArtifacts": 3,
+      "humanReviewCoverage": 0.5,
+      "humanReviewedPrs": 2,
+      "inPolicyArtifacts": 4,
+      "inPolicyCoverage": 1.0,
+      "repoId": "11111111-1111-1111-1111-111111111111",
+      "securityScanCoverage": 0.25,
+      "securityScannedPrs": 1,
+      "teamId": "team-a"
+     }
+    ],
+    "dataAvailable": true,
+    "endDate": "2026-08-03",
+    "orgId": "org-1",
+    "recentViolations": [
+     {
+      "evidence": "{\"a\": 1}",
+      "observedAt": "2026-08-02T10:00:00.500000+00:00",
+      "repoId": "11111111-1111-1111-1111-111111111111",
+      "ruleId": "r1",
+      "severity": "high",
+      "subjectId": "7",
+      "subjectType": "pull_request",
+      "teamId": "team-a"
+     }
+    ],
+    "startDate": "2026-08-01"
+   },
+   "kind": "governance",
+   "limit": 50,
+   "name": "gov/team",
+   "scope": {
+    "repoId": null,
+    "teamId": "team-a"
+   },
+   "slugRows": [],
+   "violations": [
+    {
+     "evidence": "{\"a\": 1}",
+     "observed_at": "2026-08-02T10:00:00.500000+00:00",
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "rule_id": "r1",
+     "severity": "high",
+     "subject_id": "7",
+     "subject_type": "pull_request",
+     "team_id": "team-a"
+    }
+   ]
+  },
+  {
+   "calls": {
+    "coverage": {
+     "repo_id": null,
+     "team_id": null
+    },
+    "violations": {
+     "limit": 50
+    }
+   },
+   "coverage": [
+    {
+     "ai_artifacts": 4,
+     "day": "2026-08-01",
+     "declared_artifacts": 3,
+     "human_reviewed_prs": 2,
+     "in_policy_artifacts": 4,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "security_scanned_prs": 1,
+     "team_id": "team-a"
+    },
+    {
+     "ai_artifacts": 0,
+     "day": "2026-08-01",
+     "declared_artifacts": 0,
+     "human_reviewed_prs": 0,
+     "in_policy_artifacts": 0,
+     "repo_id": null,
+     "security_scanned_prs": 0,
+     "team_id": null
+    },
+    {
+     "ai_artifacts": 3,
+     "day": "2026-08-02",
+     "declared_artifacts": 1,
+     "human_reviewed_prs": 3,
+     "in_policy_artifacts": 2,
+     "repo_id": "22222222-2222-2222-2222-222222222222",
+     "security_scanned_prs": 0,
+     "team_id": ""
+    }
+   ],
+   "expected": {
+    "coverage": [
+     {
+      "aiArtifacts": 4,
+      "day": "2026-08-01",
+      "declarationCoverage": 0.75,
+      "declaredArtifacts": 3,
+      "humanReviewCoverage": 0.5,
+      "humanReviewedPrs": 2,
+      "inPolicyArtifacts": 4,
+      "inPolicyCoverage": 1.0,
+      "repoId": "11111111-1111-1111-1111-111111111111",
+      "securityScanCoverage": 0.25,
+      "securityScannedPrs": 1,
+      "teamId": "team-a"
+     },
+     {
+      "aiArtifacts": 0,
+      "day": "2026-08-01",
+      "declarationCoverage": 1.0,
+      "declaredArtifacts": 0,
+      "humanReviewCoverage": 1.0,
+      "humanReviewedPrs": 0,
+      "inPolicyArtifacts": 0,
+      "inPolicyCoverage": 1.0,
+      "repoId": null,
+      "securityScanCoverage": 1.0,
+      "securityScannedPrs": 0,
+      "teamId": null
+     },
+     {
+      "aiArtifacts": 3,
+      "day": "2026-08-02",
+      "declarationCoverage": 0.3333333333333333,
+      "declaredArtifacts": 1,
+      "humanReviewCoverage": 1.0,
+      "humanReviewedPrs": 3,
+      "inPolicyArtifacts": 2,
+      "inPolicyCoverage": 0.6666666666666666,
+      "repoId": "22222222-2222-2222-2222-222222222222",
+      "securityScanCoverage": 0.0,
+      "securityScannedPrs": 0,
+      "teamId": null
+     }
+    ],
+    "dataAvailable": true,
+    "endDate": "2026-08-03",
+    "orgId": "org-1",
+    "recentViolations": [
+     {
+      "evidence": "{\"a\": 1}",
+      "observedAt": "2026-08-02T10:00:00.500000+00:00",
+      "repoId": "11111111-1111-1111-1111-111111111111",
+      "ruleId": "r1",
+      "severity": "high",
+      "subjectId": "7",
+      "subjectType": "pull_request",
+      "teamId": "team-a"
+     },
+     {
+      "evidence": "{}",
+      "observedAt": "2026-08-02T11:00:00+00:00",
+      "repoId": null,
+      "ruleId": "r2",
+      "severity": "low",
+      "subjectId": "ABC-123",
+      "subjectType": "issue",
+      "teamId": null
+     },
+     {
+      "evidence": "{}",
+      "observedAt": "2026-08-02T10:00:00.500000+00:00",
+      "repoId": "00000000-0000-0000-0000-000000000000",
+      "ruleId": "r3",
+      "severity": "low",
+      "subjectId": "9",
+      "subjectType": "pull_request",
+      "teamId": null
+     }
+    ],
+    "startDate": "2026-08-01"
+   },
+   "kind": "governance",
+   "limit": 50,
+   "name": "gov/teamBlank",
+   "scope": {
+    "repoId": null,
+    "teamId": ""
+   },
+   "slugRows": [],
+   "violations": [
+    {
+     "evidence": "{\"a\": 1}",
+     "observed_at": "2026-08-02T10:00:00.500000+00:00",
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "rule_id": "r1",
+     "severity": "high",
+     "subject_id": "7",
+     "subject_type": "pull_request",
+     "team_id": "team-a"
+    },
+    {
+     "evidence": "",
+     "observed_at": "2026-08-02T11:00:00",
+     "repo_id": null,
+     "rule_id": "r2",
+     "severity": "low",
+     "subject_id": "ABC-123",
+     "subject_type": "issue",
+     "team_id": null
+    },
+    {
+     "evidence": "{}",
+     "observed_at": "2026-08-02T10:00:00.500000+00:00",
+     "repo_id": "00000000-0000-0000-0000-000000000000",
+     "rule_id": "r3",
+     "severity": "low",
+     "subject_id": "9",
+     "subject_type": "pull_request",
+     "team_id": ""
+    }
+   ]
+  },
+  {
+   "calls": {
+    "coverage": {
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "team_id": null
+    },
+    "violations": {
+     "limit": 50
+    }
+   },
+   "coverage": [
+    {
+     "ai_artifacts": 4,
+     "day": "2026-08-01",
+     "declared_artifacts": 3,
+     "human_reviewed_prs": 2,
+     "in_policy_artifacts": 4,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "security_scanned_prs": 1,
+     "team_id": "team-a"
+    }
+   ],
+   "expected": {
+    "coverage": [
+     {
+      "aiArtifacts": 4,
+      "day": "2026-08-01",
+      "declarationCoverage": 0.75,
+      "declaredArtifacts": 3,
+      "humanReviewCoverage": 0.5,
+      "humanReviewedPrs": 2,
+      "inPolicyArtifacts": 4,
+      "inPolicyCoverage": 1.0,
+      "repoId": "11111111-1111-1111-1111-111111111111",
+      "securityScanCoverage": 0.25,
+      "securityScannedPrs": 1,
+      "teamId": "team-a"
+     }
+    ],
+    "dataAvailable": true,
+    "endDate": "2026-08-03",
+    "orgId": "org-1",
+    "recentViolations": [
+     {
+      "evidence": "{\"a\": 1}",
+      "observedAt": "2026-08-02T10:00:00.500000+00:00",
+      "repoId": "11111111-1111-1111-1111-111111111111",
+      "ruleId": "r1",
+      "severity": "high",
+      "subjectId": "7",
+      "subjectType": "pull_request",
+      "teamId": "team-a"
+     }
+    ],
+    "startDate": "2026-08-01"
+   },
+   "kind": "governance",
+   "limit": 50,
+   "name": "gov/repoUuid",
+   "scope": {
+    "repoId": "11111111-1111-1111-1111-111111111111",
+    "teamId": null
+   },
+   "slugRows": [],
+   "violations": [
+    {
+     "evidence": "{\"a\": 1}",
+     "observed_at": "2026-08-02T10:00:00.500000+00:00",
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "rule_id": "r1",
+     "severity": "high",
+     "subject_id": "7",
+     "subject_type": "pull_request",
+     "team_id": "team-a"
+    }
+   ]
+  },
+  {
+   "calls": {
+    "coverage": {
+     "repo_id": null,
+     "team_id": null
+    },
+    "violations": {
+     "limit": 50
+    }
+   },
+   "coverage": [
+    {
+     "ai_artifacts": 4,
+     "day": "2026-08-01",
+     "declared_artifacts": 3,
+     "human_reviewed_prs": 2,
+     "in_policy_artifacts": 4,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "security_scanned_prs": 1,
+     "team_id": "team-a"
+    },
+    {
+     "ai_artifacts": 0,
+     "day": "2026-08-01",
+     "declared_artifacts": 0,
+     "human_reviewed_prs": 0,
+     "in_policy_artifacts": 0,
+     "repo_id": null,
+     "security_scanned_prs": 0,
+     "team_id": null
+    },
+    {
+     "ai_artifacts": 3,
+     "day": "2026-08-02",
+     "declared_artifacts": 1,
+     "human_reviewed_prs": 3,
+     "in_policy_artifacts": 2,
+     "repo_id": "22222222-2222-2222-2222-222222222222",
+     "security_scanned_prs": 0,
+     "team_id": ""
+    }
+   ],
+   "expected": {
+    "coverage": [
+     {
+      "aiArtifacts": 4,
+      "day": "2026-08-01",
+      "declarationCoverage": 0.75,
+      "declaredArtifacts": 3,
+      "humanReviewCoverage": 0.5,
+      "humanReviewedPrs": 2,
+      "inPolicyArtifacts": 4,
+      "inPolicyCoverage": 1.0,
+      "repoId": "11111111-1111-1111-1111-111111111111",
+      "securityScanCoverage": 0.25,
+      "securityScannedPrs": 1,
+      "teamId": "team-a"
+     },
+     {
+      "aiArtifacts": 0,
+      "day": "2026-08-01",
+      "declarationCoverage": 1.0,
+      "declaredArtifacts": 0,
+      "humanReviewCoverage": 1.0,
+      "humanReviewedPrs": 0,
+      "inPolicyArtifacts": 0,
+      "inPolicyCoverage": 1.0,
+      "repoId": null,
+      "securityScanCoverage": 1.0,
+      "securityScannedPrs": 0,
+      "teamId": null
+     },
+     {
+      "aiArtifacts": 3,
+      "day": "2026-08-02",
+      "declarationCoverage": 0.3333333333333333,
+      "declaredArtifacts": 1,
+      "humanReviewCoverage": 1.0,
+      "humanReviewedPrs": 3,
+      "inPolicyArtifacts": 2,
+      "inPolicyCoverage": 0.6666666666666666,
+      "repoId": "22222222-2222-2222-2222-222222222222",
+      "securityScanCoverage": 0.0,
+      "securityScannedPrs": 0,
+      "teamId": null
+     }
+    ],
+    "dataAvailable": true,
+    "endDate": "2026-08-03",
+    "orgId": "org-1",
+    "recentViolations": [
+     {
+      "evidence": "{\"a\": 1}",
+      "observedAt": "2026-08-02T10:00:00.500000+00:00",
+      "repoId": "11111111-1111-1111-1111-111111111111",
+      "ruleId": "r1",
+      "severity": "high",
+      "subjectId": "7",
+      "subjectType": "pull_request",
+      "teamId": "team-a"
+     },
+     {
+      "evidence": "{}",
+      "observedAt": "2026-08-02T11:00:00+00:00",
+      "repoId": null,
+      "ruleId": "r2",
+      "severity": "low",
+      "subjectId": "ABC-123",
+      "subjectType": "issue",
+      "teamId": null
+     },
+     {
+      "evidence": "{}",
+      "observedAt": "2026-08-02T10:00:00.500000+00:00",
+      "repoId": "00000000-0000-0000-0000-000000000000",
+      "ruleId": "r3",
+      "severity": "low",
+      "subjectId": "9",
+      "subjectType": "pull_request",
+      "teamId": null
+     }
+    ],
+    "startDate": "2026-08-01"
+   },
+   "kind": "governance",
+   "limit": 50,
+   "name": "gov/repoBlank",
+   "scope": {
+    "repoId": "",
+    "teamId": null
+   },
+   "slugRows": [],
+   "violations": [
+    {
+     "evidence": "{\"a\": 1}",
+     "observed_at": "2026-08-02T10:00:00.500000+00:00",
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "rule_id": "r1",
+     "severity": "high",
+     "subject_id": "7",
+     "subject_type": "pull_request",
+     "team_id": "team-a"
+    },
+    {
+     "evidence": "",
+     "observed_at": "2026-08-02T11:00:00",
+     "repo_id": null,
+     "rule_id": "r2",
+     "severity": "low",
+     "subject_id": "ABC-123",
+     "subject_type": "issue",
+     "team_id": null
+    },
+    {
+     "evidence": "{}",
+     "observed_at": "2026-08-02T10:00:00.500000+00:00",
+     "repo_id": "00000000-0000-0000-0000-000000000000",
+     "rule_id": "r3",
+     "severity": "low",
+     "subject_id": "9",
+     "subject_type": "pull_request",
+     "team_id": ""
+    }
+   ]
+  },
+  {
+   "calls": {
+    "coverage": {
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "team_id": null
+    },
+    "violations": {
+     "limit": 50
+    }
+   },
+   "coverage": [
+    {
+     "ai_artifacts": 4,
+     "day": "2026-08-01",
+     "declared_artifacts": 3,
+     "human_reviewed_prs": 2,
+     "in_policy_artifacts": 4,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "security_scanned_prs": 1,
+     "team_id": "team-a"
+    }
+   ],
+   "expected": {
+    "coverage": [
+     {
+      "aiArtifacts": 4,
+      "day": "2026-08-01",
+      "declarationCoverage": 0.75,
+      "declaredArtifacts": 3,
+      "humanReviewCoverage": 0.5,
+      "humanReviewedPrs": 2,
+      "inPolicyArtifacts": 4,
+      "inPolicyCoverage": 1.0,
+      "repoId": "11111111-1111-1111-1111-111111111111",
+      "securityScanCoverage": 0.25,
+      "securityScannedPrs": 1,
+      "teamId": "team-a"
+     }
+    ],
+    "dataAvailable": true,
+    "endDate": "2026-08-03",
+    "orgId": "org-1",
+    "recentViolations": [
+     {
+      "evidence": "{\"a\": 1}",
+      "observedAt": "2026-08-02T10:00:00.500000+00:00",
+      "repoId": "11111111-1111-1111-1111-111111111111",
+      "ruleId": "r1",
+      "severity": "high",
+      "subjectId": "7",
+      "subjectType": "pull_request",
+      "teamId": "team-a"
+     }
+    ],
+    "startDate": "2026-08-01"
+   },
+   "kind": "governance",
+   "limit": 50,
+   "name": "gov/repoSlug",
+   "scope": {
+    "repoId": "acme/alpha",
+    "teamId": null
+   },
+   "slugRows": [
+    "11111111-1111-1111-1111-111111111111"
+   ],
+   "violations": [
+    {
+     "evidence": "{\"a\": 1}",
+     "observed_at": "2026-08-02T10:00:00.500000+00:00",
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "rule_id": "r1",
+     "severity": "high",
+     "subject_id": "7",
+     "subject_type": "pull_request",
+     "team_id": "team-a"
+    }
+   ]
+  },
+  {
+   "calls": {},
+   "coverage": [
+    {
+     "ai_artifacts": 4,
+     "day": "2026-08-01",
+     "declared_artifacts": 3,
+     "human_reviewed_prs": 2,
+     "in_policy_artifacts": 4,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "security_scanned_prs": 1,
+     "team_id": "team-a"
+    },
+    {
+     "ai_artifacts": 0,
+     "day": "2026-08-01",
+     "declared_artifacts": 0,
+     "human_reviewed_prs": 0,
+     "in_policy_artifacts": 0,
+     "repo_id": null,
+     "security_scanned_prs": 0,
+     "team_id": null
+    },
+    {
+     "ai_artifacts": 3,
+     "day": "2026-08-02",
+     "declared_artifacts": 1,
+     "human_reviewed_prs": 3,
+     "in_policy_artifacts": 2,
+     "repo_id": "22222222-2222-2222-2222-222222222222",
+     "security_scanned_prs": 0,
+     "team_id": ""
+    }
+   ],
+   "expected": {
+    "coverage": [],
+    "dataAvailable": false,
+    "endDate": "2026-08-03",
+    "orgId": "org-1",
+    "recentViolations": [],
+    "startDate": "2026-08-01"
+   },
+   "kind": "governance",
+   "limit": 50,
+   "name": "gov/repoUnresolved",
+   "scope": {
+    "repoId": "no/such",
+    "teamId": null
+   },
+   "slugRows": [],
+   "violations": [
+    {
+     "evidence": "{\"a\": 1}",
+     "observed_at": "2026-08-02T10:00:00.500000+00:00",
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "rule_id": "r1",
+     "severity": "high",
+     "subject_id": "7",
+     "subject_type": "pull_request",
+     "team_id": "team-a"
+    },
+    {
+     "evidence": "",
+     "observed_at": "2026-08-02T11:00:00",
+     "repo_id": null,
+     "rule_id": "r2",
+     "severity": "low",
+     "subject_id": "ABC-123",
+     "subject_type": "issue",
+     "team_id": null
+    },
+    {
+     "evidence": "{}",
+     "observed_at": "2026-08-02T10:00:00.500000+00:00",
+     "repo_id": "00000000-0000-0000-0000-000000000000",
+     "rule_id": "r3",
+     "severity": "low",
+     "subject_id": "9",
+     "subject_type": "pull_request",
+     "team_id": ""
+    }
+   ]
+  },
+  {
+   "calls": {
+    "coverage": {
+     "repo_id": null,
+     "team_id": null
+    },
+    "violations": {
+     "limit": 50
+    }
+   },
+   "coverage": [
+    {
+     "ai_artifacts": 4,
+     "day": "2026-08-01",
+     "declared_artifacts": 3,
+     "human_reviewed_prs": 2,
+     "in_policy_artifacts": 4,
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "security_scanned_prs": 1,
+     "team_id": "team-a"
+    },
+    {
+     "ai_artifacts": 0,
+     "day": "2026-08-01",
+     "declared_artifacts": 0,
+     "human_reviewed_prs": 0,
+     "in_policy_artifacts": 0,
+     "repo_id": null,
+     "security_scanned_prs": 0,
+     "team_id": null
+    },
+    {
+     "ai_artifacts": 3,
+     "day": "2026-08-02",
+     "declared_artifacts": 1,
+     "human_reviewed_prs": 3,
+     "in_policy_artifacts": 2,
+     "repo_id": "22222222-2222-2222-2222-222222222222",
+     "security_scanned_prs": 0,
+     "team_id": ""
+    }
+   ],
+   "expected": {
+    "coverage": [
+     {
+      "aiArtifacts": 4,
+      "day": "2026-08-01",
+      "declarationCoverage": 0.75,
+      "declaredArtifacts": 3,
+      "humanReviewCoverage": 0.5,
+      "humanReviewedPrs": 2,
+      "inPolicyArtifacts": 4,
+      "inPolicyCoverage": 1.0,
+      "repoId": "11111111-1111-1111-1111-111111111111",
+      "securityScanCoverage": 0.25,
+      "securityScannedPrs": 1,
+      "teamId": "team-a"
+     },
+     {
+      "aiArtifacts": 0,
+      "day": "2026-08-01",
+      "declarationCoverage": 1.0,
+      "declaredArtifacts": 0,
+      "humanReviewCoverage": 1.0,
+      "humanReviewedPrs": 0,
+      "inPolicyArtifacts": 0,
+      "inPolicyCoverage": 1.0,
+      "repoId": null,
+      "securityScanCoverage": 1.0,
+      "securityScannedPrs": 0,
+      "teamId": null
+     },
+     {
+      "aiArtifacts": 3,
+      "day": "2026-08-02",
+      "declarationCoverage": 0.3333333333333333,
+      "declaredArtifacts": 1,
+      "humanReviewCoverage": 1.0,
+      "humanReviewedPrs": 3,
+      "inPolicyArtifacts": 2,
+      "inPolicyCoverage": 0.6666666666666666,
+      "repoId": "22222222-2222-2222-2222-222222222222",
+      "securityScanCoverage": 0.0,
+      "securityScannedPrs": 0,
+      "teamId": null
+     }
+    ],
+    "dataAvailable": true,
+    "endDate": "2026-08-03",
+    "orgId": "org-1",
+    "recentViolations": [
+     {
+      "evidence": "{\"a\": 1}",
+      "observedAt": "2026-08-02T10:00:00.500000+00:00",
+      "repoId": "11111111-1111-1111-1111-111111111111",
+      "ruleId": "r1",
+      "severity": "high",
+      "subjectId": "7",
+      "subjectType": "pull_request",
+      "teamId": "team-a"
+     },
+     {
+      "evidence": "{}",
+      "observedAt": "2026-08-02T11:00:00+00:00",
+      "repoId": null,
+      "ruleId": "r2",
+      "severity": "low",
+      "subjectId": "ABC-123",
+      "subjectType": "issue",
+      "teamId": null
+     },
+     {
+      "evidence": "{}",
+      "observedAt": "2026-08-02T10:00:00.500000+00:00",
+      "repoId": "00000000-0000-0000-0000-000000000000",
+      "ruleId": "r3",
+      "severity": "low",
+      "subjectId": "9",
+      "subjectType": "pull_request",
+      "teamId": null
+     }
+    ],
+    "startDate": "2026-08-01"
+   },
+   "kind": "governance",
+   "limit": 50,
+   "name": "gov/workTypeIgnored",
+   "scope": {
+    "repoId": null,
+    "teamId": null
+   },
+   "slugRows": [],
+   "violations": [
+    {
+     "evidence": "{\"a\": 1}",
+     "observed_at": "2026-08-02T10:00:00.500000+00:00",
+     "repo_id": "11111111-1111-1111-1111-111111111111",
+     "rule_id": "r1",
+     "severity": "high",
+     "subject_id": "7",
+     "subject_type": "pull_request",
+     "team_id": "team-a"
+    },
+    {
+     "evidence": "",
+     "observed_at": "2026-08-02T11:00:00",
+     "repo_id": null,
+     "rule_id": "r2",
+     "severity": "low",
+     "subject_id": "ABC-123",
+     "subject_type": "issue",
+     "team_id": null
+    },
+    {
+     "evidence": "{}",
+     "observed_at": "2026-08-02T10:00:00.500000+00:00",
+     "repo_id": "00000000-0000-0000-0000-000000000000",
+     "rule_id": "r3",
+     "severity": "low",
+     "subject_id": "9",
+     "subject_type": "pull_request",
+     "team_id": ""
+    }
+   ]
+  },
+  {
+   "calls": [
+    {
+     "artifact_ids": [],
+     "deployment_ids": [],
+     "incident_ids": [],
+     "issue_ids": [
+      "ABC-1"
+     ],
+     "limit": 100,
+     "node_ids": [
+      "ABC-1"
+     ],
+     "node_types": [
+      "issue"
+     ],
+     "org_id": "org-1",
+     "pr_ids": [],
+     "review_outcome_ids": [],
+     "run_ids": []
+    },
+    {
+     "artifact_ids": [],
+     "deployment_ids": [],
+     "incident_ids": [],
+     "issue_ids": [],
+     "limit": 98,
+     "node_ids": [
+      "run-1",
+      "run-2"
+     ],
+     "node_types": [
+      "ai_workflow_run",
+      "ai_workflow_run"
+     ],
+     "org_id": "org-1",
+     "pr_ids": [],
+     "review_outcome_ids": [],
+     "run_ids": [
+      "run-1",
+      "run-2"
+     ]
+    },
+    {
+     "artifact_ids": [
+      "d1",
+      "r:7"
+     ],
+     "deployment_ids": [],
+     "incident_ids": [],
+     "issue_ids": [],
+     "limit": 96,
+     "node_ids": [
+      "d1",
+      "r:7"
+     ],
+     "node_types": [
+      "diff",
+      "pr"
+     ],
+     "org_id": "org-1",
+     "pr_ids": [
+      "r:7"
+     ],
+     "review_outcome_ids": [],
+     "run_ids": []
+    }
+   ],
+   "depth": 3,
+   "error": null,
+   "expected": {
+    "dataAvailable": true,
+    "edges": [
+     {
+      "confidence": 0.8999999761581421,
+      "edgeId": "e1",
+      "edgeType": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "github",
+      "repoId": null,
+      "source": "s",
+      "sourceId": "ABC-1",
+      "sourceType": "issue",
+      "targetId": "run-1",
+      "targetType": "ai_workflow_run"
+     },
+     {
+      "confidence": 0.5,
+      "edgeId": "e2",
+      "edgeType": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "",
+      "repoId": "11111111-1111-1111-1111-111111111111",
+      "source": "s",
+      "sourceId": "ABC-1",
+      "sourceType": "issue",
+      "targetId": "run-2",
+      "targetType": "ai_workflow_run"
+     },
+     {
+      "confidence": 0.25,
+      "edgeId": "e3",
+      "edgeType": "generates",
+      "evidence": "e",
+      "provider": "github",
+      "repoId": null,
+      "source": "s",
+      "sourceId": "run-1",
+      "sourceType": "ai_workflow_run",
+      "targetId": "r:7",
+      "targetType": "pr"
+     },
+     {
+      "confidence": 0.5,
+      "edgeId": "e4",
+      "edgeType": "generates",
+      "evidence": "e",
+      "provider": "github",
+      "repoId": null,
+      "source": "s",
+      "sourceId": "run-2",
+      "sourceType": "ai_workflow_run",
+      "targetId": "d1",
+      "targetType": "diff"
+     },
+     {
+      "confidence": 0.5,
+      "edgeId": "e5",
+      "edgeType": "has_review_outcome",
+      "evidence": "e",
+      "provider": "github",
+      "repoId": null,
+      "source": "s",
+      "sourceId": "r:7",
+      "sourceType": "pr",
+      "targetId": "ro-1",
+      "targetType": "review_outcome"
+     },
+     {
+      "confidence": 0.5,
+      "edgeId": "e6",
+      "edgeType": "deploys",
+      "evidence": "e",
+      "provider": "github",
+      "repoId": null,
+      "source": "s",
+      "sourceId": "r:7",
+      "sourceType": "pr",
+      "targetId": "dep-1",
+      "targetType": "deployment"
+     }
+    ],
+    "nodes": [
+     {
+      "nodeId": "ABC-1",
+      "nodeType": "issue"
+     },
+     {
+      "nodeId": "run-1",
+      "nodeType": "ai_workflow_run"
+     },
+     {
+      "nodeId": "run-2",
+      "nodeType": "ai_workflow_run"
+     },
+     {
+      "nodeId": "r:7",
+      "nodeType": "pr"
+     },
+     {
+      "nodeId": "d1",
+      "nodeType": "diff"
+     },
+     {
+      "nodeId": "ro-1",
+      "nodeType": "review_outcome"
+     },
+     {
+      "nodeId": "dep-1",
+      "nodeType": "deployment"
+     }
+    ],
+    "orgId": "org-1",
+    "partial": false,
+    "rootId": "ABC-1",
+    "rootType": "issue"
+   },
+   "hops": [
+    [
+     {
+      "confidence": 0.8999999761581421,
+      "edge_id": "e1",
+      "edge_type": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "ABC-1",
+      "source_type": "issue",
+      "target_id": "run-1",
+      "target_type": "ai_workflow_run"
+     },
+     {
+      "confidence": 0.5,
+      "edge_id": "e2",
+      "edge_type": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "",
+      "repo_id": "11111111-1111-1111-1111-111111111111",
+      "source": "s",
+      "source_id": "ABC-1",
+      "source_type": "issue",
+      "target_id": "run-2",
+      "target_type": "ai_workflow_run"
+     },
+     {
+      "confidence": 0.5,
+      "edge_id": "",
+      "edge_type": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "ABC-1",
+      "source_type": "issue",
+      "target_id": "run-3",
+      "target_type": "ai_workflow_run"
+     },
+     {
+      "confidence": 0.5,
+      "edge_id": "e1",
+      "edge_type": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "ABC-1",
+      "source_type": "issue",
+      "target_id": "run-1",
+      "target_type": "ai_workflow_run"
+     }
+    ],
+    [
+     {
+      "confidence": 0.25,
+      "edge_id": "e3",
+      "edge_type": "generates",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "run-1",
+      "source_type": "ai_workflow_run",
+      "target_id": "r:7",
+      "target_type": "pr"
+     },
+     {
+      "confidence": 0.5,
+      "edge_id": "e4",
+      "edge_type": "generates",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "run-2",
+      "source_type": "ai_workflow_run",
+      "target_id": "d1",
+      "target_type": "diff"
+     }
+    ],
+    [
+     {
+      "confidence": 0.5,
+      "edge_id": "e5",
+      "edge_type": "has_review_outcome",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "r:7",
+      "source_type": "pr",
+      "target_id": "ro-1",
+      "target_type": "review_outcome"
+     },
+     {
+      "confidence": 0.5,
+      "edge_id": "e6",
+      "edge_type": "deploys",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "r:7",
+      "source_type": "pr",
+      "target_id": "dep-1",
+      "target_type": "deployment"
+     }
+    ]
+   ],
+   "kind": "workflow",
+   "limit": 100,
+   "name": "wf/issueChain",
+   "rootId": "ABC-1",
+   "rootType": "ISSUE"
+  },
+  {
+   "calls": [
+    {
+     "artifact_ids": [],
+     "deployment_ids": [],
+     "incident_ids": [],
+     "issue_ids": [
+      "ABC-1"
+     ],
+     "limit": 100,
+     "node_ids": [
+      "ABC-1"
+     ],
+     "node_types": [
+      "issue"
+     ],
+     "org_id": "org-1",
+     "pr_ids": [],
+     "review_outcome_ids": [],
+     "run_ids": []
+    },
+    {
+     "artifact_ids": [],
+     "deployment_ids": [],
+     "incident_ids": [],
+     "issue_ids": [],
+     "limit": 98,
+     "node_ids": [
+      "run-1",
+      "run-2"
+     ],
+     "node_types": [
+      "ai_workflow_run",
+      "ai_workflow_run"
+     ],
+     "org_id": "org-1",
+     "pr_ids": [],
+     "review_outcome_ids": [],
+     "run_ids": [
+      "run-1",
+      "run-2"
+     ]
+    },
+    {
+     "artifact_ids": [
+      "d1",
+      "r:7"
+     ],
+     "deployment_ids": [],
+     "incident_ids": [],
+     "issue_ids": [],
+     "limit": 96,
+     "node_ids": [
+      "d1",
+      "r:7"
+     ],
+     "node_types": [
+      "diff",
+      "pr"
+     ],
+     "org_id": "org-1",
+     "pr_ids": [
+      "r:7"
+     ],
+     "review_outcome_ids": [],
+     "run_ids": []
+    },
+    {
+     "artifact_ids": [
+      "dep-1",
+      "ro-1"
+     ],
+     "deployment_ids": [
+      "dep-1"
+     ],
+     "incident_ids": [],
+     "issue_ids": [],
+     "limit": 94,
+     "node_ids": [
+      "dep-1",
+      "ro-1"
+     ],
+     "node_types": [
+      "deployment",
+      "review_outcome"
+     ],
+     "org_id": "org-1",
+     "pr_ids": [],
+     "review_outcome_ids": [
+      "ro-1"
+     ],
+     "run_ids": []
+    }
+   ],
+   "depth": 4,
+   "error": null,
+   "expected": {
+    "dataAvailable": true,
+    "edges": [
+     {
+      "confidence": 0.8999999761581421,
+      "edgeId": "e1",
+      "edgeType": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "github",
+      "repoId": null,
+      "source": "s",
+      "sourceId": "ABC-1",
+      "sourceType": "issue",
+      "targetId": "run-1",
+      "targetType": "ai_workflow_run"
+     },
+     {
+      "confidence": 0.5,
+      "edgeId": "e2",
+      "edgeType": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "",
+      "repoId": "11111111-1111-1111-1111-111111111111",
+      "source": "s",
+      "sourceId": "ABC-1",
+      "sourceType": "issue",
+      "targetId": "run-2",
+      "targetType": "ai_workflow_run"
+     },
+     {
+      "confidence": 0.25,
+      "edgeId": "e3",
+      "edgeType": "generates",
+      "evidence": "e",
+      "provider": "github",
+      "repoId": null,
+      "source": "s",
+      "sourceId": "run-1",
+      "sourceType": "ai_workflow_run",
+      "targetId": "r:7",
+      "targetType": "pr"
+     },
+     {
+      "confidence": 0.5,
+      "edgeId": "e4",
+      "edgeType": "generates",
+      "evidence": "e",
+      "provider": "github",
+      "repoId": null,
+      "source": "s",
+      "sourceId": "run-2",
+      "sourceType": "ai_workflow_run",
+      "targetId": "d1",
+      "targetType": "diff"
+     },
+     {
+      "confidence": 0.5,
+      "edgeId": "e5",
+      "edgeType": "has_review_outcome",
+      "evidence": "e",
+      "provider": "github",
+      "repoId": null,
+      "source": "s",
+      "sourceId": "r:7",
+      "sourceType": "pr",
+      "targetId": "ro-1",
+      "targetType": "review_outcome"
+     },
+     {
+      "confidence": 0.5,
+      "edgeId": "e6",
+      "edgeType": "deploys",
+      "evidence": "e",
+      "provider": "github",
+      "repoId": null,
+      "source": "s",
+      "sourceId": "r:7",
+      "sourceType": "pr",
+      "targetId": "dep-1",
+      "targetType": "deployment"
+     },
+     {
+      "confidence": 0.5,
+      "edgeId": "e7",
+      "edgeType": "linked_incident",
+      "evidence": "e",
+      "provider": "github",
+      "repoId": null,
+      "source": "s",
+      "sourceId": "dep-1",
+      "sourceType": "deployment",
+      "targetId": "inc-1",
+      "targetType": "incident"
+     }
+    ],
+    "nodes": [
+     {
+      "nodeId": "ABC-1",
+      "nodeType": "issue"
+     },
+     {
+      "nodeId": "run-1",
+      "nodeType": "ai_workflow_run"
+     },
+     {
+      "nodeId": "run-2",
+      "nodeType": "ai_workflow_run"
+     },
+     {
+      "nodeId": "r:7",
+      "nodeType": "pr"
+     },
+     {
+      "nodeId": "d1",
+      "nodeType": "diff"
+     },
+     {
+      "nodeId": "ro-1",
+      "nodeType": "review_outcome"
+     },
+     {
+      "nodeId": "dep-1",
+      "nodeType": "deployment"
+     },
+     {
+      "nodeId": "inc-1",
+      "nodeType": "incident"
+     }
+    ],
+    "orgId": "org-1",
+    "partial": false,
+    "rootId": "ABC-1",
+    "rootType": "issue"
+   },
+   "hops": [
+    [
+     {
+      "confidence": 0.8999999761581421,
+      "edge_id": "e1",
+      "edge_type": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "ABC-1",
+      "source_type": "issue",
+      "target_id": "run-1",
+      "target_type": "ai_workflow_run"
+     },
+     {
+      "confidence": 0.5,
+      "edge_id": "e2",
+      "edge_type": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "",
+      "repo_id": "11111111-1111-1111-1111-111111111111",
+      "source": "s",
+      "source_id": "ABC-1",
+      "source_type": "issue",
+      "target_id": "run-2",
+      "target_type": "ai_workflow_run"
+     },
+     {
+      "confidence": 0.5,
+      "edge_id": "",
+      "edge_type": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "ABC-1",
+      "source_type": "issue",
+      "target_id": "run-3",
+      "target_type": "ai_workflow_run"
+     },
+     {
+      "confidence": 0.5,
+      "edge_id": "e1",
+      "edge_type": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "ABC-1",
+      "source_type": "issue",
+      "target_id": "run-1",
+      "target_type": "ai_workflow_run"
+     }
+    ],
+    [
+     {
+      "confidence": 0.25,
+      "edge_id": "e3",
+      "edge_type": "generates",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "run-1",
+      "source_type": "ai_workflow_run",
+      "target_id": "r:7",
+      "target_type": "pr"
+     },
+     {
+      "confidence": 0.5,
+      "edge_id": "e4",
+      "edge_type": "generates",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "run-2",
+      "source_type": "ai_workflow_run",
+      "target_id": "d1",
+      "target_type": "diff"
+     }
+    ],
+    [
+     {
+      "confidence": 0.5,
+      "edge_id": "e5",
+      "edge_type": "has_review_outcome",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "r:7",
+      "source_type": "pr",
+      "target_id": "ro-1",
+      "target_type": "review_outcome"
+     },
+     {
+      "confidence": 0.5,
+      "edge_id": "e6",
+      "edge_type": "deploys",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "r:7",
+      "source_type": "pr",
+      "target_id": "dep-1",
+      "target_type": "deployment"
+     }
+    ],
+    [
+     {
+      "confidence": 0.5,
+      "edge_id": "e7",
+      "edge_type": "linked_incident",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "dep-1",
+      "source_type": "deployment",
+      "target_id": "inc-1",
+      "target_type": "incident"
+     }
+    ]
+   ],
+   "kind": "workflow",
+   "limit": 100,
+   "name": "wf/depth4",
+   "rootId": "ABC-1",
+   "rootType": "ISSUE"
+  },
+  {
+   "calls": [],
+   "depth": 0,
+   "error": null,
+   "expected": {
+    "dataAvailable": false,
+    "edges": [],
+    "nodes": [
+     {
+      "nodeId": "ABC-1",
+      "nodeType": "issue"
+     }
+    ],
+    "orgId": "org-1",
+    "partial": false,
+    "rootId": "ABC-1",
+    "rootType": "issue"
+   },
+   "hops": [
+    [
+     {
+      "confidence": 0.8999999761581421,
+      "edge_id": "e1",
+      "edge_type": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "ABC-1",
+      "source_type": "issue",
+      "target_id": "run-1",
+      "target_type": "ai_workflow_run"
+     },
+     {
+      "confidence": 0.5,
+      "edge_id": "e2",
+      "edge_type": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "",
+      "repo_id": "11111111-1111-1111-1111-111111111111",
+      "source": "s",
+      "source_id": "ABC-1",
+      "source_type": "issue",
+      "target_id": "run-2",
+      "target_type": "ai_workflow_run"
+     },
+     {
+      "confidence": 0.5,
+      "edge_id": "",
+      "edge_type": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "ABC-1",
+      "source_type": "issue",
+      "target_id": "run-3",
+      "target_type": "ai_workflow_run"
+     },
+     {
+      "confidence": 0.5,
+      "edge_id": "e1",
+      "edge_type": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "ABC-1",
+      "source_type": "issue",
+      "target_id": "run-1",
+      "target_type": "ai_workflow_run"
+     }
+    ]
+   ],
+   "kind": "workflow",
+   "limit": 100,
+   "name": "wf/depthZero",
+   "rootId": "ABC-1",
+   "rootType": "ISSUE"
+  },
+  {
+   "calls": [],
+   "depth": -2,
+   "error": null,
+   "expected": {
+    "dataAvailable": false,
+    "edges": [],
+    "nodes": [
+     {
+      "nodeId": "ABC-1",
+      "nodeType": "issue"
+     }
+    ],
+    "orgId": "org-1",
+    "partial": false,
+    "rootId": "ABC-1",
+    "rootType": "issue"
+   },
+   "hops": [
+    [
+     {
+      "confidence": 0.8999999761581421,
+      "edge_id": "e1",
+      "edge_type": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "ABC-1",
+      "source_type": "issue",
+      "target_id": "run-1",
+      "target_type": "ai_workflow_run"
+     },
+     {
+      "confidence": 0.5,
+      "edge_id": "e2",
+      "edge_type": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "",
+      "repo_id": "11111111-1111-1111-1111-111111111111",
+      "source": "s",
+      "source_id": "ABC-1",
+      "source_type": "issue",
+      "target_id": "run-2",
+      "target_type": "ai_workflow_run"
+     },
+     {
+      "confidence": 0.5,
+      "edge_id": "",
+      "edge_type": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "ABC-1",
+      "source_type": "issue",
+      "target_id": "run-3",
+      "target_type": "ai_workflow_run"
+     },
+     {
+      "confidence": 0.5,
+      "edge_id": "e1",
+      "edge_type": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "ABC-1",
+      "source_type": "issue",
+      "target_id": "run-1",
+      "target_type": "ai_workflow_run"
+     }
+    ]
+   ],
+   "kind": "workflow",
+   "limit": 100,
+   "name": "wf/depthNegative",
+   "rootId": "ABC-1",
+   "rootType": "ISSUE"
+  },
+  {
+   "calls": [],
+   "depth": -1,
+   "error": null,
+   "expected": {
+    "dataAvailable": false,
+    "edges": [],
+    "nodes": [
+     {
+      "nodeId": "ABC-1",
+      "nodeType": "issue"
+     }
+    ],
+    "orgId": "org-1",
+    "partial": false,
+    "rootId": "ABC-1",
+    "rootType": "issue"
+   },
+   "hops": [
+    [
+     {
+      "confidence": 0.8999999761581421,
+      "edge_id": "e1",
+      "edge_type": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "ABC-1",
+      "source_type": "issue",
+      "target_id": "run-1",
+      "target_type": "ai_workflow_run"
+     },
+     {
+      "confidence": 0.5,
+      "edge_id": "e2",
+      "edge_type": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "",
+      "repo_id": "11111111-1111-1111-1111-111111111111",
+      "source": "s",
+      "source_id": "ABC-1",
+      "source_type": "issue",
+      "target_id": "run-2",
+      "target_type": "ai_workflow_run"
+     },
+     {
+      "confidence": 0.5,
+      "edge_id": "",
+      "edge_type": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "ABC-1",
+      "source_type": "issue",
+      "target_id": "run-3",
+      "target_type": "ai_workflow_run"
+     },
+     {
+      "confidence": 0.5,
+      "edge_id": "e1",
+      "edge_type": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "ABC-1",
+      "source_type": "issue",
+      "target_id": "run-1",
+      "target_type": "ai_workflow_run"
+     }
+    ]
+   ],
+   "kind": "workflow",
+   "limit": 100,
+   "name": "wf/depthMinusOne",
+   "rootId": "ABC-1",
+   "rootType": "ISSUE"
+  },
+  {
+   "calls": [],
+   "depth": 3,
+   "error": null,
+   "expected": {
+    "dataAvailable": false,
+    "edges": [],
+    "nodes": [
+     {
+      "nodeId": "ABC-1",
+      "nodeType": "issue"
+     }
+    ],
+    "orgId": "org-1",
+    "partial": false,
+    "rootId": "ABC-1",
+    "rootType": "issue"
+   },
+   "hops": [
+    [
+     {
+      "confidence": 0.8999999761581421,
+      "edge_id": "e1",
+      "edge_type": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "ABC-1",
+      "source_type": "issue",
+      "target_id": "run-1",
+      "target_type": "ai_workflow_run"
+     },
+     {
+      "confidence": 0.5,
+      "edge_id": "e2",
+      "edge_type": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "",
+      "repo_id": "11111111-1111-1111-1111-111111111111",
+      "source": "s",
+      "source_id": "ABC-1",
+      "source_type": "issue",
+      "target_id": "run-2",
+      "target_type": "ai_workflow_run"
+     },
+     {
+      "confidence": 0.5,
+      "edge_id": "",
+      "edge_type": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "ABC-1",
+      "source_type": "issue",
+      "target_id": "run-3",
+      "target_type": "ai_workflow_run"
+     },
+     {
+      "confidence": 0.5,
+      "edge_id": "e1",
+      "edge_type": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "ABC-1",
+      "source_type": "issue",
+      "target_id": "run-1",
+      "target_type": "ai_workflow_run"
+     }
+    ]
+   ],
+   "kind": "workflow",
+   "limit": -1,
+   "name": "wf/limitMinusOne",
+   "rootId": "ABC-1",
+   "rootType": "ISSUE"
+  },
+  {
+   "calls": [
+    {
+     "artifact_ids": [],
+     "deployment_ids": [],
+     "incident_ids": [],
+     "issue_ids": [
+      "ABC-1"
+     ],
+     "limit": 100,
+     "node_ids": [
+      "ABC-1"
+     ],
+     "node_types": [
+      "issue"
+     ],
+     "org_id": "org-1",
+     "pr_ids": [],
+     "review_outcome_ids": [],
+     "run_ids": []
+    },
+    {
+     "artifact_ids": [
+      ""
+     ],
+     "deployment_ids": [],
+     "incident_ids": [],
+     "issue_ids": [],
+     "limit": 98,
+     "node_ids": [
+      "",
+      "",
+      "run-9"
+     ],
+     "node_types": [
+      "",
+      "ai_workflow_run",
+      "ai_workflow_run"
+     ],
+     "org_id": "org-1",
+     "pr_ids": [],
+     "review_outcome_ids": [],
+     "run_ids": [
+      "",
+      "run-9"
+     ]
+    }
+   ],
+   "depth": 3,
+   "error": null,
+   "expected": {
+    "dataAvailable": true,
+    "edges": [
+     {
+      "confidence": 0.5,
+      "edgeId": "z1",
+      "edgeType": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "github",
+      "repoId": null,
+      "source": "s",
+      "sourceId": "ABC-1",
+      "sourceType": "issue",
+      "targetId": "",
+      "targetType": "ai_workflow_run"
+     },
+     {
+      "confidence": 0.5,
+      "edgeId": "z2",
+      "edgeType": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "github",
+      "repoId": null,
+      "source": "s",
+      "sourceId": "",
+      "sourceType": "",
+      "targetId": "run-9",
+      "targetType": "ai_workflow_run"
+     }
+    ],
+    "nodes": [
+     {
+      "nodeId": "ABC-1",
+      "nodeType": "issue"
+     },
+     {
+      "nodeId": "run-9",
+      "nodeType": "ai_workflow_run"
+     }
+    ],
+    "orgId": "org-1",
+    "partial": false,
+    "rootId": "ABC-1",
+    "rootType": "issue"
+   },
+   "hops": [
+    [
+     {
+      "confidence": 0.5,
+      "edge_id": "z1",
+      "edge_type": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "ABC-1",
+      "source_type": "issue",
+      "target_id": "",
+      "target_type": "ai_workflow_run"
+     },
+     {
+      "confidence": 0.5,
+      "edge_id": "z2",
+      "edge_type": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "",
+      "source_type": "",
+      "target_id": "run-9",
+      "target_type": "ai_workflow_run"
+     }
+    ]
+   ],
+   "kind": "workflow",
+   "limit": 100,
+   "name": "wf/emptyNodeId",
+   "rootId": "ABC-1",
+   "rootType": "ISSUE"
+  },
+  {
+   "calls": [],
+   "depth": 3,
+   "error": null,
+   "expected": {
+    "dataAvailable": false,
+    "edges": [],
+    "nodes": [
+     {
+      "nodeId": "ABC-1",
+      "nodeType": "issue"
+     }
+    ],
+    "orgId": "org-1",
+    "partial": false,
+    "rootId": "ABC-1",
+    "rootType": "issue"
+   },
+   "hops": [
+    [
+     {
+      "confidence": 0.8999999761581421,
+      "edge_id": "e1",
+      "edge_type": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "ABC-1",
+      "source_type": "issue",
+      "target_id": "run-1",
+      "target_type": "ai_workflow_run"
+     },
+     {
+      "confidence": 0.5,
+      "edge_id": "e2",
+      "edge_type": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "",
+      "repo_id": "11111111-1111-1111-1111-111111111111",
+      "source": "s",
+      "source_id": "ABC-1",
+      "source_type": "issue",
+      "target_id": "run-2",
+      "target_type": "ai_workflow_run"
+     },
+     {
+      "confidence": 0.5,
+      "edge_id": "",
+      "edge_type": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "ABC-1",
+      "source_type": "issue",
+      "target_id": "run-3",
+      "target_type": "ai_workflow_run"
+     },
+     {
+      "confidence": 0.5,
+      "edge_id": "e1",
+      "edge_type": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "ABC-1",
+      "source_type": "issue",
+      "target_id": "run-1",
+      "target_type": "ai_workflow_run"
+     }
+    ]
+   ],
+   "kind": "workflow",
+   "limit": 0,
+   "name": "wf/limitZero",
+   "rootId": "ABC-1",
+   "rootType": "ISSUE"
+  },
+  {
+   "calls": [],
+   "depth": 3,
+   "error": null,
+   "expected": {
+    "dataAvailable": false,
+    "edges": [],
+    "nodes": [
+     {
+      "nodeId": "ABC-1",
+      "nodeType": "issue"
+     }
+    ],
+    "orgId": "org-1",
+    "partial": false,
+    "rootId": "ABC-1",
+    "rootType": "issue"
+   },
+   "hops": [
+    [
+     {
+      "confidence": 0.8999999761581421,
+      "edge_id": "e1",
+      "edge_type": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "ABC-1",
+      "source_type": "issue",
+      "target_id": "run-1",
+      "target_type": "ai_workflow_run"
+     },
+     {
+      "confidence": 0.5,
+      "edge_id": "e2",
+      "edge_type": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "",
+      "repo_id": "11111111-1111-1111-1111-111111111111",
+      "source": "s",
+      "source_id": "ABC-1",
+      "source_type": "issue",
+      "target_id": "run-2",
+      "target_type": "ai_workflow_run"
+     },
+     {
+      "confidence": 0.5,
+      "edge_id": "",
+      "edge_type": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "ABC-1",
+      "source_type": "issue",
+      "target_id": "run-3",
+      "target_type": "ai_workflow_run"
+     },
+     {
+      "confidence": 0.5,
+      "edge_id": "e1",
+      "edge_type": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "ABC-1",
+      "source_type": "issue",
+      "target_id": "run-1",
+      "target_type": "ai_workflow_run"
+     }
+    ]
+   ],
+   "kind": "workflow",
+   "limit": -3,
+   "name": "wf/limitNegative",
+   "rootId": "ABC-1",
+   "rootType": "ISSUE"
+  },
+  {
+   "calls": [
+    {
+     "artifact_ids": [],
+     "deployment_ids": [],
+     "incident_ids": [],
+     "issue_ids": [
+      "ABC-1"
+     ],
+     "limit": 2,
+     "node_ids": [
+      "ABC-1"
+     ],
+     "node_types": [
+      "issue"
+     ],
+     "org_id": "org-1",
+     "pr_ids": [],
+     "review_outcome_ids": [],
+     "run_ids": []
+    }
+   ],
+   "depth": 3,
+   "error": null,
+   "expected": {
+    "dataAvailable": true,
+    "edges": [
+     {
+      "confidence": 0.8999999761581421,
+      "edgeId": "e1",
+      "edgeType": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "github",
+      "repoId": null,
+      "source": "s",
+      "sourceId": "ABC-1",
+      "sourceType": "issue",
+      "targetId": "run-1",
+      "targetType": "ai_workflow_run"
+     },
+     {
+      "confidence": 0.5,
+      "edgeId": "e2",
+      "edgeType": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "",
+      "repoId": "11111111-1111-1111-1111-111111111111",
+      "source": "s",
+      "sourceId": "ABC-1",
+      "sourceType": "issue",
+      "targetId": "run-2",
+      "targetType": "ai_workflow_run"
+     }
+    ],
+    "nodes": [
+     {
+      "nodeId": "ABC-1",
+      "nodeType": "issue"
+     },
+     {
+      "nodeId": "run-1",
+      "nodeType": "ai_workflow_run"
+     },
+     {
+      "nodeId": "run-2",
+      "nodeType": "ai_workflow_run"
+     }
+    ],
+    "orgId": "org-1",
+    "partial": true,
+    "rootId": "ABC-1",
+    "rootType": "issue"
+   },
+   "hops": [
+    [
+     {
+      "confidence": 0.8999999761581421,
+      "edge_id": "e1",
+      "edge_type": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "ABC-1",
+      "source_type": "issue",
+      "target_id": "run-1",
+      "target_type": "ai_workflow_run"
+     },
+     {
+      "confidence": 0.5,
+      "edge_id": "e2",
+      "edge_type": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "",
+      "repo_id": "11111111-1111-1111-1111-111111111111",
+      "source": "s",
+      "source_id": "ABC-1",
+      "source_type": "issue",
+      "target_id": "run-2",
+      "target_type": "ai_workflow_run"
+     }
+    ],
+    [
+     {
+      "confidence": 0.25,
+      "edge_id": "e3",
+      "edge_type": "generates",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "run-1",
+      "source_type": "ai_workflow_run",
+      "target_id": "r:7",
+      "target_type": "pr"
+     },
+     {
+      "confidence": 0.5,
+      "edge_id": "e4",
+      "edge_type": "generates",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "run-2",
+      "source_type": "ai_workflow_run",
+      "target_id": "d1",
+      "target_type": "diff"
+     }
+    ]
+   ],
+   "kind": "workflow",
+   "limit": 2,
+   "name": "wf/partialExactFill",
+   "rootId": "ABC-1",
+   "rootType": "ISSUE"
+  },
+  {
+   "calls": [
+    {
+     "artifact_ids": [],
+     "deployment_ids": [],
+     "incident_ids": [],
+     "issue_ids": [
+      "ABC-1"
+     ],
+     "limit": 2,
+     "node_ids": [
+      "ABC-1"
+     ],
+     "node_types": [
+      "issue"
+     ],
+     "org_id": "org-1",
+     "pr_ids": [],
+     "review_outcome_ids": [],
+     "run_ids": []
+    }
+   ],
+   "depth": 3,
+   "error": null,
+   "expected": {
+    "dataAvailable": true,
+    "edges": [
+     {
+      "confidence": 0.8999999761581421,
+      "edgeId": "e1",
+      "edgeType": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "github",
+      "repoId": null,
+      "source": "s",
+      "sourceId": "ABC-1",
+      "sourceType": "issue",
+      "targetId": "run-1",
+      "targetType": "ai_workflow_run"
+     },
+     {
+      "confidence": 0.5,
+      "edgeId": "e2",
+      "edgeType": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "",
+      "repoId": "11111111-1111-1111-1111-111111111111",
+      "source": "s",
+      "sourceId": "ABC-1",
+      "sourceType": "issue",
+      "targetId": "run-2",
+      "targetType": "ai_workflow_run"
+     }
+    ],
+    "nodes": [
+     {
+      "nodeId": "ABC-1",
+      "nodeType": "issue"
+     },
+     {
+      "nodeId": "run-1",
+      "nodeType": "ai_workflow_run"
+     },
+     {
+      "nodeId": "run-2",
+      "nodeType": "ai_workflow_run"
+     }
+    ],
+    "orgId": "org-1",
+    "partial": true,
+    "rootId": "ABC-1",
+    "rootType": "issue"
+   },
+   "hops": [
+    [
+     {
+      "confidence": 0.8999999761581421,
+      "edge_id": "e1",
+      "edge_type": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "ABC-1",
+      "source_type": "issue",
+      "target_id": "run-1",
+      "target_type": "ai_workflow_run"
+     },
+     {
+      "confidence": 0.5,
+      "edge_id": "e2",
+      "edge_type": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "",
+      "repo_id": "11111111-1111-1111-1111-111111111111",
+      "source": "s",
+      "source_id": "ABC-1",
+      "source_type": "issue",
+      "target_id": "run-2",
+      "target_type": "ai_workflow_run"
+     },
+     {
+      "confidence": 0.5,
+      "edge_id": "",
+      "edge_type": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "ABC-1",
+      "source_type": "issue",
+      "target_id": "run-3",
+      "target_type": "ai_workflow_run"
+     },
+     {
+      "confidence": 0.5,
+      "edge_id": "e1",
+      "edge_type": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "ABC-1",
+      "source_type": "issue",
+      "target_id": "run-1",
+      "target_type": "ai_workflow_run"
+     }
+    ],
+    [
+     {
+      "confidence": 0.25,
+      "edge_id": "e3",
+      "edge_type": "generates",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "run-1",
+      "source_type": "ai_workflow_run",
+      "target_id": "r:7",
+      "target_type": "pr"
+     },
+     {
+      "confidence": 0.5,
+      "edge_id": "e4",
+      "edge_type": "generates",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "run-2",
+      "source_type": "ai_workflow_run",
+      "target_id": "d1",
+      "target_type": "diff"
+     }
+    ]
+   ],
+   "kind": "workflow",
+   "limit": 2,
+   "name": "wf/partialOverFill",
+   "rootId": "ABC-1",
+   "rootType": "ISSUE"
+  },
+  {
+   "calls": [
+    {
+     "artifact_ids": [],
+     "deployment_ids": [],
+     "incident_ids": [],
+     "issue_ids": [
+      "wu-1"
+     ],
+     "limit": 100,
+     "node_ids": [
+      "wu-1"
+     ],
+     "node_types": [
+      "issue"
+     ],
+     "org_id": "org-1",
+     "pr_ids": [],
+     "review_outcome_ids": [],
+     "run_ids": []
+    },
+    {
+     "artifact_ids": [],
+     "deployment_ids": [],
+     "incident_ids": [],
+     "issue_ids": [
+      "ABC-1"
+     ],
+     "limit": 98,
+     "node_ids": [
+      "ABC-1",
+      "run-1",
+      "run-2"
+     ],
+     "node_types": [
+      "ai_workflow_run",
+      "ai_workflow_run",
+      "issue"
+     ],
+     "org_id": "org-1",
+     "pr_ids": [],
+     "review_outcome_ids": [],
+     "run_ids": [
+      "run-1",
+      "run-2"
+     ]
+    }
+   ],
+   "depth": 2,
+   "error": null,
+   "expected": {
+    "dataAvailable": true,
+    "edges": [
+     {
+      "confidence": 0.8999999761581421,
+      "edgeId": "e1",
+      "edgeType": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "github",
+      "repoId": null,
+      "source": "s",
+      "sourceId": "ABC-1",
+      "sourceType": "issue",
+      "targetId": "run-1",
+      "targetType": "ai_workflow_run"
+     },
+     {
+      "confidence": 0.5,
+      "edgeId": "e2",
+      "edgeType": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "",
+      "repoId": "11111111-1111-1111-1111-111111111111",
+      "source": "s",
+      "sourceId": "ABC-1",
+      "sourceType": "issue",
+      "targetId": "run-2",
+      "targetType": "ai_workflow_run"
+     },
+     {
+      "confidence": 0.25,
+      "edgeId": "e3",
+      "edgeType": "generates",
+      "evidence": "e",
+      "provider": "github",
+      "repoId": null,
+      "source": "s",
+      "sourceId": "run-1",
+      "sourceType": "ai_workflow_run",
+      "targetId": "r:7",
+      "targetType": "pr"
+     },
+     {
+      "confidence": 0.5,
+      "edgeId": "e4",
+      "edgeType": "generates",
+      "evidence": "e",
+      "provider": "github",
+      "repoId": null,
+      "source": "s",
+      "sourceId": "run-2",
+      "sourceType": "ai_workflow_run",
+      "targetId": "d1",
+      "targetType": "diff"
+     }
+    ],
+    "nodes": [
+     {
+      "nodeId": "wu-1",
+      "nodeType": "issue"
+     },
+     {
+      "nodeId": "ABC-1",
+      "nodeType": "issue"
+     },
+     {
+      "nodeId": "run-1",
+      "nodeType": "ai_workflow_run"
+     },
+     {
+      "nodeId": "run-2",
+      "nodeType": "ai_workflow_run"
+     },
+     {
+      "nodeId": "r:7",
+      "nodeType": "pr"
+     },
+     {
+      "nodeId": "d1",
+      "nodeType": "diff"
+     }
+    ],
+    "orgId": "org-1",
+    "partial": false,
+    "rootId": "wu-1",
+    "rootType": "work_unit"
+   },
+   "hops": [
+    [
+     {
+      "confidence": 0.8999999761581421,
+      "edge_id": "e1",
+      "edge_type": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "ABC-1",
+      "source_type": "issue",
+      "target_id": "run-1",
+      "target_type": "ai_workflow_run"
+     },
+     {
+      "confidence": 0.5,
+      "edge_id": "e2",
+      "edge_type": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "",
+      "repo_id": "11111111-1111-1111-1111-111111111111",
+      "source": "s",
+      "source_id": "ABC-1",
+      "source_type": "issue",
+      "target_id": "run-2",
+      "target_type": "ai_workflow_run"
+     },
+     {
+      "confidence": 0.5,
+      "edge_id": "",
+      "edge_type": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "ABC-1",
+      "source_type": "issue",
+      "target_id": "run-3",
+      "target_type": "ai_workflow_run"
+     },
+     {
+      "confidence": 0.5,
+      "edge_id": "e1",
+      "edge_type": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "ABC-1",
+      "source_type": "issue",
+      "target_id": "run-1",
+      "target_type": "ai_workflow_run"
+     }
+    ],
+    [
+     {
+      "confidence": 0.25,
+      "edge_id": "e3",
+      "edge_type": "generates",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "run-1",
+      "source_type": "ai_workflow_run",
+      "target_id": "r:7",
+      "target_type": "pr"
+     },
+     {
+      "confidence": 0.5,
+      "edge_id": "e4",
+      "edge_type": "generates",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "run-2",
+      "source_type": "ai_workflow_run",
+      "target_id": "d1",
+      "target_type": "diff"
+     }
+    ]
+   ],
+   "kind": "workflow",
+   "limit": 100,
+   "name": "wf/workUnit",
+   "rootId": "wu-1",
+   "rootType": "WORK_UNIT"
+  },
+  {
+   "calls": [
+    {
+     "artifact_ids": [
+      "r:7"
+     ],
+     "deployment_ids": [],
+     "incident_ids": [],
+     "issue_ids": [],
+     "limit": 100,
+     "node_ids": [
+      "r:7"
+     ],
+     "node_types": [
+      "pr"
+     ],
+     "org_id": "org-1",
+     "pr_ids": [
+      "r:7"
+     ],
+     "review_outcome_ids": [],
+     "run_ids": []
+    },
+    {
+     "artifact_ids": [
+      "dep-1",
+      "ro-1"
+     ],
+     "deployment_ids": [
+      "dep-1"
+     ],
+     "incident_ids": [],
+     "issue_ids": [],
+     "limit": 98,
+     "node_ids": [
+      "dep-1",
+      "ro-1"
+     ],
+     "node_types": [
+      "deployment",
+      "review_outcome"
+     ],
+     "org_id": "org-1",
+     "pr_ids": [],
+     "review_outcome_ids": [
+      "ro-1"
+     ],
+     "run_ids": []
+    },
+    {
+     "artifact_ids": [
+      "inc-1"
+     ],
+     "deployment_ids": [],
+     "incident_ids": [
+      "inc-1"
+     ],
+     "issue_ids": [],
+     "limit": 97,
+     "node_ids": [
+      "inc-1"
+     ],
+     "node_types": [
+      "incident"
+     ],
+     "org_id": "org-1",
+     "pr_ids": [],
+     "review_outcome_ids": [],
+     "run_ids": []
+    }
+   ],
+   "depth": 3,
+   "error": null,
+   "expected": {
+    "dataAvailable": true,
+    "edges": [
+     {
+      "confidence": 0.5,
+      "edgeId": "e5",
+      "edgeType": "has_review_outcome",
+      "evidence": "e",
+      "provider": "github",
+      "repoId": null,
+      "source": "s",
+      "sourceId": "r:7",
+      "sourceType": "pr",
+      "targetId": "ro-1",
+      "targetType": "review_outcome"
+     },
+     {
+      "confidence": 0.5,
+      "edgeId": "e6",
+      "edgeType": "deploys",
+      "evidence": "e",
+      "provider": "github",
+      "repoId": null,
+      "source": "s",
+      "sourceId": "r:7",
+      "sourceType": "pr",
+      "targetId": "dep-1",
+      "targetType": "deployment"
+     },
+     {
+      "confidence": 0.5,
+      "edgeId": "e7",
+      "edgeType": "linked_incident",
+      "evidence": "e",
+      "provider": "github",
+      "repoId": null,
+      "source": "s",
+      "sourceId": "dep-1",
+      "sourceType": "deployment",
+      "targetId": "inc-1",
+      "targetType": "incident"
+     }
+    ],
+    "nodes": [
+     {
+      "nodeId": "r:7",
+      "nodeType": "pr"
+     },
+     {
+      "nodeId": "ro-1",
+      "nodeType": "review_outcome"
+     },
+     {
+      "nodeId": "dep-1",
+      "nodeType": "deployment"
+     },
+     {
+      "nodeId": "inc-1",
+      "nodeType": "incident"
+     }
+    ],
+    "orgId": "org-1",
+    "partial": false,
+    "rootId": "r:7",
+    "rootType": "pr"
+   },
+   "hops": [
+    [
+     {
+      "confidence": 0.5,
+      "edge_id": "e5",
+      "edge_type": "has_review_outcome",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "r:7",
+      "source_type": "pr",
+      "target_id": "ro-1",
+      "target_type": "review_outcome"
+     },
+     {
+      "confidence": 0.5,
+      "edge_id": "e6",
+      "edge_type": "deploys",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "r:7",
+      "source_type": "pr",
+      "target_id": "dep-1",
+      "target_type": "deployment"
+     }
+    ],
+    [
+     {
+      "confidence": 0.5,
+      "edge_id": "e7",
+      "edge_type": "linked_incident",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "dep-1",
+      "source_type": "deployment",
+      "target_id": "inc-1",
+      "target_type": "incident"
+     }
+    ]
+   ],
+   "kind": "workflow",
+   "limit": 100,
+   "name": "wf/prRoot",
+   "rootId": "r:7",
+   "rootType": "PR"
+  },
+  {
+   "calls": [
+    {
+     "artifact_ids": [
+      "nothing"
+     ],
+     "deployment_ids": [],
+     "incident_ids": [],
+     "issue_ids": [],
+     "limit": 100,
+     "node_ids": [
+      "nothing"
+     ],
+     "node_types": [
+      "pr"
+     ],
+     "org_id": "org-1",
+     "pr_ids": [
+      "nothing"
+     ],
+     "review_outcome_ids": [],
+     "run_ids": []
+    }
+   ],
+   "depth": 3,
+   "error": null,
+   "expected": {
+    "dataAvailable": false,
+    "edges": [],
+    "nodes": [
+     {
+      "nodeId": "nothing",
+      "nodeType": "pr"
+     }
+    ],
+    "orgId": "org-1",
+    "partial": false,
+    "rootId": "nothing",
+    "rootType": "pr"
+   },
+   "hops": [
+    []
+   ],
+   "kind": "workflow",
+   "limit": 100,
+   "name": "wf/noEdges",
+   "rootId": "nothing",
+   "rootType": "PR"
+  },
+  {
+   "calls": [],
+   "depth": 3,
+   "error": "root_id is required for AI workflow drilldown",
+   "expected": null,
+   "hops": [],
+   "kind": "workflow",
+   "limit": 100,
+   "name": "wf/emptyRoot",
+   "rootId": "",
+   "rootType": "ISSUE"
+  },
+  {
+   "calls": [
+    {
+     "artifact_ids": [],
+     "deployment_ids": [],
+     "incident_ids": [],
+     "issue_ids": [
+      "A"
+     ],
+     "limit": 100,
+     "node_ids": [
+      "A"
+     ],
+     "node_types": [
+      "issue"
+     ],
+     "org_id": "org-1",
+     "pr_ids": [],
+     "review_outcome_ids": [],
+     "run_ids": []
+    },
+    {
+     "artifact_ids": [],
+     "deployment_ids": [],
+     "incident_ids": [],
+     "issue_ids": [],
+     "limit": 99,
+     "node_ids": [
+      "R"
+     ],
+     "node_types": [
+      "ai_workflow_run"
+     ],
+     "org_id": "org-1",
+     "pr_ids": [],
+     "review_outcome_ids": [],
+     "run_ids": [
+      "R"
+     ]
+    },
+    {
+     "artifact_ids": [
+      "A"
+     ],
+     "deployment_ids": [],
+     "incident_ids": [],
+     "issue_ids": [],
+     "limit": 98,
+     "node_ids": [
+      "A"
+     ],
+     "node_types": [
+      "pr"
+     ],
+     "org_id": "org-1",
+     "pr_ids": [
+      "A"
+     ],
+     "review_outcome_ids": [],
+     "run_ids": []
+    }
+   ],
+   "depth": 5,
+   "error": null,
+   "expected": {
+    "dataAvailable": true,
+    "edges": [
+     {
+      "confidence": 0.5,
+      "edgeId": "c1",
+      "edgeType": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "github",
+      "repoId": null,
+      "source": "s",
+      "sourceId": "A",
+      "sourceType": "issue",
+      "targetId": "R",
+      "targetType": "ai_workflow_run"
+     },
+     {
+      "confidence": 0.5,
+      "edgeId": "c2",
+      "edgeType": "generates",
+      "evidence": "e",
+      "provider": "github",
+      "repoId": null,
+      "source": "s",
+      "sourceId": "R",
+      "sourceType": "ai_workflow_run",
+      "targetId": "A",
+      "targetType": "pr"
+     }
+    ],
+    "nodes": [
+     {
+      "nodeId": "A",
+      "nodeType": "issue"
+     },
+     {
+      "nodeId": "R",
+      "nodeType": "ai_workflow_run"
+     },
+     {
+      "nodeId": "A",
+      "nodeType": "pr"
+     }
+    ],
+    "orgId": "org-1",
+    "partial": false,
+    "rootId": "A",
+    "rootType": "issue"
+   },
+   "hops": [
+    [
+     {
+      "confidence": 0.5,
+      "edge_id": "c1",
+      "edge_type": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "A",
+      "source_type": "issue",
+      "target_id": "R",
+      "target_type": "ai_workflow_run"
+     }
+    ],
+    [
+     {
+      "confidence": 0.5,
+      "edge_id": "c1",
+      "edge_type": "has_ai_workflow",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "A",
+      "source_type": "issue",
+      "target_id": "R",
+      "target_type": "ai_workflow_run"
+     },
+     {
+      "confidence": 0.5,
+      "edge_id": "c2",
+      "edge_type": "generates",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "R",
+      "source_type": "ai_workflow_run",
+      "target_id": "A",
+      "target_type": "pr"
+     }
+    ],
+    [
+     {
+      "confidence": 0.5,
+      "edge_id": "c2",
+      "edge_type": "generates",
+      "evidence": "e",
+      "provider": "github",
+      "repo_id": null,
+      "source": "s",
+      "source_id": "R",
+      "source_type": "ai_workflow_run",
+      "target_id": "A",
+      "target_type": "pr"
+     }
+    ]
+   ],
+   "kind": "workflow",
+   "limit": 100,
+   "name": "wf/cycle",
+   "rootId": "A",
+   "rootType": "ISSUE"
+  }
+ ]
+}

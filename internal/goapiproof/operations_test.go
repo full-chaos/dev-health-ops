@@ -32,6 +32,7 @@ var registeredOperations = []string{
 	"acrRepositoryScopes", "catalogValues", "busFactor",
 	"aiComparison", "aiImpactSummary", "aiReviewLoad",
 	"productTelemetryDashboard", "productTelemetryPlatformDashboard",
+	"aiGovernanceSummary", "aiWorkflowDrilldown",
 	"connectorsDataHealth", "dataHealthIdentity", "mappingCoverageHealth", "metricLineage",
 	"capacityForecast", "capacityForecasts", "cognitiveLoad", "compoundingRisk", "complexityTimeseries",
 	"featureFlagEvents", "featureFlags", "flowMatrix", "hotspots",
@@ -128,7 +129,8 @@ func TestWindowedSpecsUseTheWindow(t *testing.T) {
 		"featureFlagEvents": true, "featureFlags": true, "pr": true,
 		"experiments": true, "busFactor": true, "compoundingRisk": true, "securityAlerts": true, "securityOverview": true,
 		"releaseImpact": true, "throughputForecast": true, "workGraphArtifacts": true, "workGraphEdges": true,
-		"workGraphFlow": true,
+		"aiWorkflowDrilldown": true,
+		"workGraphFlow":       true,
 	}
 
 	for _, operation := range KnownOperations() {

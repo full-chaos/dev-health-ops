@@ -342,6 +342,39 @@ const registeredWorkGraphEdgesDocument = `query WorkGraphEdges($orgId: String!, 
   }
 }`
 
+// registeredReleaseImpactDocument is the registered document for the
+// `releaseImpact` operation: the release impact query the feature flag pages
+// send, which selects the `workGraphEdges` root field with the filters
+// `nodeId`, `sourceType` and `limit`. It is the exact wire-form text a real
+// web client sends (testdata/wire_capture/releaseimpact_captured.graphql).
+const registeredReleaseImpactDocument = `query ReleaseImpact($orgId: String!, $filters: WorkGraphEdgeFilterInput) {
+  workGraphEdges(orgId: $orgId, filters: $filters) {
+    edges {
+      edgeId
+      sourceType
+      sourceId
+      targetType
+      targetId
+      edgeType
+      provenance
+      confidence
+      evidence
+      repoId
+      provider
+      __typename
+    }
+    totalCount
+    pageInfo {
+      hasNextPage
+      hasPreviousPage
+      startCursor
+      endCursor
+      __typename
+    }
+    __typename
+  }
+}`
+
 // registeredWorkGraphFlowDocument is CHAOS-4504's registered document for
 // the workGraphFlow operation. Copied byte-for-byte from
 // web/src/lib/graphql/queries.ts:462's WORK_GRAPH_FLOW_QUERY, operation
@@ -2061,6 +2094,7 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		"complexityTimeseries":              digestHex(registeredComplexityTimeseriesDocument),
 		"hotspots":                          digestHex(registeredHotspotsDocument),
 		"operatingReview":                   digestHex(registeredOperatingReviewDocument),
+		"releaseImpact":                     digestHex(registeredReleaseImpactDocument),
 		"workGraphEdges":                    digestHex(registeredWorkGraphEdgesDocument),
 		"workGraphFlow":                     digestHex(registeredWorkGraphFlowDocument),
 		"workGraphArtifacts":                digestHex(registeredWorkGraphArtifactsDocument),

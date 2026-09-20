@@ -35,6 +35,7 @@ var registeredOperations = []string{
 	"connectorsDataHealth", "dataHealthIdentity", "mappingCoverageHealth", "metricLineage",
 	"capacityForecast", "capacityForecasts", "cognitiveLoad", "compoundingRisk", "complexityTimeseries",
 	"featureFlagEvents", "featureFlags", "flowMatrix", "hotspots",
+	"releaseImpact",
 	"investmentBreakdown", "investmentFull", "operatingReview", "pr",
 	"reviewEdges", "securityAlerts", "securityOverview", "throughputForecast",
 	"workGraphArtifacts", "workGraphEdges", "workGraphFlow",
@@ -126,7 +127,7 @@ func TestWindowedSpecsUseTheWindow(t *testing.T) {
 		"capacityForecast": true, "capacityForecasts": true,
 		"featureFlagEvents": true, "featureFlags": true, "pr": true,
 		"experiments": true, "busFactor": true, "compoundingRisk": true, "securityAlerts": true, "securityOverview": true,
-		"throughputForecast": true, "workGraphArtifacts": true, "workGraphEdges": true,
+		"releaseImpact": true, "throughputForecast": true, "workGraphArtifacts": true, "workGraphEdges": true,
 		"workGraphFlow": true,
 	}
 
@@ -344,12 +345,12 @@ func TestEverySpecDeclaresItsResponseRoot(t *testing.T) {
 	}
 	// flowMatrix, investmentBreakdown and investmentFull all select
 	// `analytics`; catalogValues and acrRepositoryScopes both select
-	// `catalog`. If this ever reads 0, either the documents changed or
+	// `catalog`; releaseImpact selects `workGraphEdges`. If this ever reads 0, either the documents changed or
 	// someone "tidied" ResponseRoot into a copy of the operation name --
 	// and the parity-path checks above would silently start passing for
 	// paths that can never match.
-	if sharedRoots != 9 {
-		t.Fatalf("expected 9 operations whose response root differs from their name, got %d", sharedRoots)
+	if sharedRoots != 10 {
+		t.Fatalf("expected 10 operations whose response root differs from their name, got %d", sharedRoots)
 	}
 }
 
@@ -475,5 +476,55 @@ func TestTheFeatureFlagEventsLimitMatchesTheSDLDefault(t *testing.T) {
 	}
 	if string(match[1]) != "1000" {
 		t.Fatalf("the SDL now defaults limit to %s, but the spec sends 1000: go-api-prove is measuring a different page than a client that omits the argument", match[1])
+	}
+}
+
+// The release impact requests are the ones the feature flag pages send: the
+// RELEASE source type, an empty node id for every release, and the page
+// limit. A change to any of them proves a request no page sends.
+func TestReleaseImpactRequestsMatchThePage(t *testing.T) {
+	spec, err := SpecFor("releaseImpact")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.ResponseRoot != "workGraphEdges" {
+		t.Fatalf("response root %q, want workGraphEdges", spec.ResponseRoot)
+	}
+	encode := func(vars map[string]any) string {
+		encoded, err := json.Marshal(vars)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(encoded)
+	}
+	if got, want := encode(spec.Variables("org-1", DefaultWindow())), `{"filters":{"limit":200,"nodeId":"","sourceType":"RELEASE"},"orgId":"org-1"}`; got != want {
+		t.Fatalf("base request %s, want %s", got, want)
+	}
+	byName := map[string]Variant{}
+	for _, v := range spec.Variants {
+		byName[v.Name] = v
+	}
+	if len(byName) != 2 {
+		t.Fatalf("%d variants, want LIMIT_ONE and NODE_ID_VALID", len(byName))
+	}
+	limitOne := byName["LIMIT_ONE"]
+	if got, want := encode(limitOne.Variables("org-1", DefaultWindow())), `{"filters":{"limit":1,"nodeId":"","sourceType":"RELEASE"},"orgId":"org-1"}`; got != want {
+		t.Fatalf("LIMIT_ONE request %s, want %s", got, want)
+	}
+	node := byName["NODE_ID_VALID"]
+	if node.Instance == nil {
+		t.Fatal("NODE_ID_VALID names no run-supplied identifier")
+	}
+	vars := node.Variables("org-1", DefaultWindow())
+	node.Instance.Bind(vars, "rel-1")
+	if got, want := encode(vars), `{"filters":{"limit":200,"nodeId":"rel-1","sourceType":"RELEASE"},"orgId":"org-1"}`; got != want {
+		t.Fatalf("NODE_ID_VALID request %s, want %s", got, want)
+	}
+	echo := node.Instance.Echo("rel-1")
+	if len(echo) != 1 || echo[0].List != "data.workGraphEdges.edges" || echo[0].Value != "rel-1" {
+		t.Fatalf("NODE_ID_VALID echo %+v", echo)
+	}
+	if len(node.Parity.RequireNonEmpty) != 1 || node.Parity.RequireNonEmpty[0] != "data.workGraphEdges.edges" {
+		t.Fatalf("NODE_ID_VALID must require a non-empty edge list, got %v", node.Parity.RequireNonEmpty)
 	}
 }

@@ -565,9 +565,10 @@
     },
     "workgraph/investment.materialize": {
       "parity": {
-        "status": "diverged",
+        "status": "verified",
         "ticket": "CHAOS-5459",
-        "evidence": ".remember/lanes/team-lead/matrix-tracker-audit-2026-09-09.md section 4 -- repo attribution coverage fell 41% to 34% AFTER this family was recorded NATIVE; the fixes are merged at main (eadfd3955 #2382 transitive repository inheritance + cascade telemetry, 720f64bff #2394 fallback effort across owned repos; internal/jobs/investment/hierarchycascade.go, teamownership.go, repoattribution.go) but the production proof is still missing: dev_health_investment_repo_attribution_total has not been read against the 41 percent baseline, so this row stays diverged until it is"
+        "sha": "720f64bffc7529f1413c84e46542ef7c8eb46241",
+        "evidence": "Coverage divergence closed, and output parity pinned by the frozen goldens. Coverage: internal/jobs/investment/repoattribution.go exports dev_health_investment_repo_attribution_total{source} (own|ancestor|children|team|unassigned; the five sum to the run's components); production read 2026-09-20 on the Go worker that runs the workgraph queue, with transitive repository inheritance and the fallback effort across owned repos (internal/jobs/investment/hierarchycascade.go, teamownership.go) in the deployed build: attributed component share 77.07 percent, Investment page team coverage 100 percent, repository coverage 99 percent; the owner accepted that as the coverage bar. Parity: internal/jobs/investment/materialize_python_golden_test.go TestMaterializeOrchestrationMatchesFrozenPythonGolden (orchestration decisions vs the frozen Python golden) and TestFrozenPythonGoldenStillMatchesLivePython (the golden re-checked against live Python); internal/jobs/investment/categorize/*golden_test.go for the LLM-plane prompt, schema and mock-provider goldens. Not covered by any golden: end-to-end component rows against live Python on production data."
       },
       "deployed": {
         "revision": "39e25d3665128976ebc79bd6b8f76e5efbe9806c",
@@ -577,10 +578,7 @@
       "proof": {
         "ref": "none"
       },
-      "open_regressions": [
-        "CHAOS-5459",
-        "CHAOS-5460"
-      ]
+      "open_regressions": []
     },
     "workgraph/workgraph.build": {
       "parity": {

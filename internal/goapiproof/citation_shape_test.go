@@ -534,7 +534,8 @@ func TestEveryDeclaredCitationCoversOnlyValueDifferences(t *testing.T) {
 			// not apply to it either. See
 			// investmentfull_supersession_skew_shape_test.go for its own
 			// dedicated sweep.
-			if defect.RepoFanoutShape != nil || defect.CoverageShiftShape != nil || defect.WorkGraphEdgeDedupShape != nil || defect.SupersessionSkewShape != nil {
+			if defect.RepoFanoutShape != nil || defect.CoverageShiftShape != nil || defect.WorkGraphEdgeDedupShape != nil || defect.SupersessionSkewShape != nil ||
+				(defect.DuplicateCollapseLengthShape != nil && defect.DuplicateCollapseLengthShape.CountPath != "") {
 				continue
 			}
 			for _, cited := range defect.Paths {

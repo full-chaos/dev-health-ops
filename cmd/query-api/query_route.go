@@ -1134,6 +1134,59 @@ const registeredAiReviewLoadDocument = `query AIReviewLoad($orgId: String!, $dat
   }
 }`
 
+// registeredAiOpportunitiesDocument is the registered document for the
+// `aiOpportunities` operation, the exact wire-form text a real web client sends
+// (testdata/wire_capture/aiopportunities_captured.graphql).
+const registeredAiOpportunitiesDocument = `query AIOpportunities($orgId: String!, $scope: AIScopeInput, $limit: Int! = 5) {
+  aiOpportunities(orgId: $orgId, scope: $scope, limit: $limit) {
+    orgId
+    detectorReady
+    recommendations {
+      opportunityId
+      kind
+      repoId
+      teamId
+      title
+      rationale
+      score
+      evidenceRefs
+      workGraphDrilldowns {
+        rootType
+        rootId
+        label
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredImproveOpportunitiesDocument is the registered document for the
+// `improveOpportunities` operation, the exact wire-form text a real web client sends
+// (testdata/wire_capture/improveopportunities_captured.graphql).
+const registeredImproveOpportunitiesDocument = `query ImproveOpportunities($scope: AIScopeInput, $limit: Int! = 10, $windowDays: Int! = 30) {
+  improveOpportunities(scope: $scope, limit: $limit, windowDays: $windowDays) {
+    orgId
+    detectorReady
+    totalCount
+    opportunities {
+      opportunityId
+      kind
+      entityType
+      entityId
+      title
+      rationale
+      score
+      severity
+      evidenceRefs
+      recommendedAction
+      __typename
+    }
+    __typename
+  }
+}`
+
 // registeredAiGovernanceSummaryDocument is the registered document for the
 // `aiGovernanceSummary` operation, the exact wire-form text a real web client sends
 // (testdata/wire_capture/aigovernancesummary_captured.graphql).
@@ -2471,6 +2524,8 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		"aiComparison":                      digestHex(registeredAiComparisonDocument),
 		"aiReviewLoad":                      digestHex(registeredAiReviewLoadDocument),
 		"compoundingRisk":                   digestHex(registeredCompoundingRiskDocument),
+		"aiOpportunities":                   digestHex(registeredAiOpportunitiesDocument),
+		"improveOpportunities":              digestHex(registeredImproveOpportunitiesDocument),
 		"aiGovernanceSummary":               digestHex(registeredAiGovernanceSummaryDocument),
 		"aiWorkflowDrilldown":               digestHex(registeredAiWorkflowDrilldownDocument),
 		"aiRiskBreakdown":                   digestHex(registeredAiRiskBreakdownDocument),

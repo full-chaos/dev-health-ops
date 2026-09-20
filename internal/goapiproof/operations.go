@@ -322,6 +322,32 @@ var operationSpecs = map[string]OperationSpec{
 			compoundingRiskPinnedTrendVariant("TREND_CLAMPED_LOW", 0),
 		},
 	},
+	"aiOpportunities": {
+		ResponseRoot: "aiOpportunities",
+		Variables:    aiOpportunityVariables(nil, 25),
+		Parity:       requireLists(aiOpportunitiesParity(), "data.aiOpportunities.recommendations"),
+		Variants: append(aiOpportunityVariants(),
+			aiOpportunityInstanceVariant("REPO_VALID", "a repository id with rollup rows, commits or pull requests that trip a rule", "repoId"),
+			aiOpportunityInstanceVariant("REPO_NAME_VALID", "the full name of a repository that trips a rule", "repoId"),
+			aiOpportunityInstanceVariant("TEAM_VALID", "a team id stored on rollup rows that trip a metric rule", "teamId"),
+		),
+	},
+	"improveOpportunities": {
+		ResponseRoot: "improveOpportunities",
+		Variables:    improveVariables(nil, 10, 30),
+		Parity:       requireLists(improveOpportunitiesParity(), "data.improveOpportunities.opportunities"),
+		Variants: []Variant{
+			improveVariant("LIMIT_ONE", nil, 1, 30),
+			improveVariant("LIMIT_OVER_CEILING", nil, 500, 30),
+			improveVariant("WINDOW_ONE_DAY", nil, 10, 1),
+			improveVariant("WINDOW_OVER_CEILING", nil, 10, 9999),
+			improveVariant("REPO_UNKNOWN", map[string]any{"repoId": "00000000-0000-0000-0000-000000000001"}, 10, 30),
+			improveVariant("REPO_MALFORMED", map[string]any{"repoId": "not-a-uuid"}, 10, 30),
+			improveVariant("TEAM_UNKNOWN", map[string]any{"teamId": "team-abc-123"}, 10, 30),
+			improveInstanceVariant("REPO_VALID", "a repository id with at least five days of repository metrics that trip a rule", "repoId"),
+			improveInstanceVariant("TEAM_VALID", "a team id with at least five days of work-item metrics that trip a rule", "teamId"),
+		},
+	},
 	"aiGovernanceSummary": {
 		ResponseRoot: "aiGovernanceSummary",
 		Variables:    aiGovernanceVariables(nil, 50),
@@ -1758,6 +1784,140 @@ func experimentsVariant(name, level string, ids []string) Variant {
 	}
 }
 
+// aiOpportunityVariables builds the AI opportunity request: the org, the
+// scope (nil sends none) and the limit.
+func aiOpportunityVariables(scope map[string]any, limit int) func(orgID string, w Window) map[string]any {
+	return func(orgID string, _ Window) map[string]any {
+		vars := map[string]any{"orgId": orgID, "scope": nil, "limit": limit}
+		if scope != nil {
+			vars["scope"] = scope
+		}
+		return vars
+	}
+}
+
+// aiOpportunityVariants is one variant per scope and limit branch the
+// detector has. The repository and team values name nothing in any org, so
+// both planes answer no opportunity for them; a scope that selects real rows
+// needs a run-supplied identifier. Variants that select nothing by
+// construction declare nothing.
+func aiOpportunityVariants() []Variant {
+	cases := []struct {
+		name  string
+		scope map[string]any
+		limit int
+	}{
+		{"LIMIT_ONE", nil, 1},
+		{"LIMIT_ZERO", nil, 0},
+		{"LIMIT_OVER_CEILING", nil, 500},
+		{"REPO_UNKNOWN", map[string]any{"repoId": "00000000-0000-0000-0000-000000000001"}, 25},
+		{"REPO_NAME_UNKNOWN", map[string]any{"repoId": "no-such-org/no-such-repo"}, 25},
+		{"TEAM_UNKNOWN", map[string]any{"teamId": "team-abc-123"}, 25},
+		{"REPO_AND_TEAM_UNKNOWN", map[string]any{"repoId": "00000000-0000-0000-0000-000000000001", "teamId": "team-abc-123"}, 25},
+	}
+	variants := make([]Variant, 0, len(cases))
+	for _, c := range cases {
+		p := Options{}
+		if strings.HasPrefix(c.name, "LIMIT_") {
+			p = requireLists(aiOpportunitiesParity(), "data.aiOpportunities.recommendations")
+		}
+		variants = append(variants, Variant{Name: c.name, Variables: aiOpportunityVariables(c.scope, c.limit), Parity: p})
+	}
+	return variants
+}
+
+func aiOpportunityInstanceVariant(name, kind, scopeField string) Variant {
+	parity := aiOpportunitiesParity()
+	parity.RequireNonEmpty = []string{"data.aiOpportunities.recommendations"}
+	return Variant{
+		Name:      name,
+		Variables: aiOpportunityVariables(map[string]any{}, 25),
+		Parity:    parity,
+		Instance: &VariantInstance{
+			Kind: kind,
+			Bind: func(vars map[string]any, value string) { vars["scope"].(map[string]any)[scopeField] = value },
+			EchoFor: func(value string) []ScopeEcho {
+				if scopeField == "teamId" {
+					return []ScopeEcho{{List: "data.aiOpportunities.recommendations", Fields: []string{"teamId"}, Value: value}}
+				}
+				return nil
+			},
+		},
+	}
+}
+
+// aiOpportunitiesParity declares the opportunity list unordered and its score
+// a merged floating-point aggregate: the detector's first read has no ordering
+// and the flaky-test score derives from a summed rate.
+func aiOpportunitiesParity() Options {
+	return Options{
+		FloatTierB: map[string]string{
+			"data.aiOpportunities.recommendations.score": "the flaky-test score derives from sum(flake_rate * total_cases) / sum(total_cases), a floating-point aggregate ClickHouse merges in thread-completion order, so the last bits differ run to run on both planes (CHAOS-5451)",
+		},
+		OrderInsensitiveLists: []OrderInsensitiveList{{
+			Path:      "data.aiOpportunities.recommendations",
+			KeyFields: []string{"opportunityId"},
+			Reason:    "the detector groups an unordered GROUP BY result in first-seen order and sorts by score, so opportunities with equal scores have no stable relative order",
+			Ticket:    "CHAOS-6081",
+		}},
+	}
+}
+
+func improveVariables(scope map[string]any, limit, windowDays int) func(orgID string, w Window) map[string]any {
+	return func(_ string, _ Window) map[string]any {
+		vars := map[string]any{"scope": nil, "limit": limit, "windowDays": windowDays}
+		if scope != nil {
+			vars["scope"] = scope
+		}
+		return vars
+	}
+}
+
+func improveVariant(name string, scope map[string]any, limit, windowDays int) Variant {
+	p := requireLists(improveOpportunitiesParity(), "data.improveOpportunities.opportunities")
+	if strings.HasSuffix(name, "_UNKNOWN") || name == "REPO_MALFORMED" {
+		p = Options{}
+	}
+	return Variant{Name: name, Variables: improveVariables(scope, limit, windowDays), Parity: p}
+}
+
+func improveInstanceVariant(name, kind, scopeField string) Variant {
+	parity := improveOpportunitiesParity()
+	parity.RequireNonEmpty = []string{"data.improveOpportunities.opportunities"}
+	return Variant{
+		Name:      name,
+		Variables: improveVariables(map[string]any{}, 10, 30),
+		Parity:    parity,
+		Instance: &VariantInstance{
+			Kind: kind,
+			Bind: func(vars map[string]any, value string) { vars["scope"].(map[string]any)[scopeField] = value },
+		},
+	}
+}
+
+// improveOpportunitiesParity declares the score a floating-point aggregate
+// (an average over daily rows) and the list unordered.
+func improveOpportunitiesParity() Options {
+	return Options{
+		FloatTierB: map[string]string{
+			"data.improveOpportunities.opportunities.score": "the score is computed from avg(...) over daily metric rows, a floating-point aggregate ClickHouse merges in thread-completion order, so the last bits differ run to run on both planes (CHAOS-5451)",
+		},
+		OrderInsensitiveLists: []OrderInsensitiveList{{
+			Path:      "data.improveOpportunities.opportunities",
+			KeyFields: []string{"opportunityId"},
+			Reason:    "the detector sorts by score over two unordered GROUP BY results, so opportunities with equal scores have no stable relative order",
+			Ticket:    "CHAOS-6081",
+		}},
+	}
+}
+
+// requireLists returns o requiring the named lists to be non-empty on a leg: a
+// request whose lists are empty on both legs measured nothing.
+func requireLists(o Options, paths ...string) Options {
+	o.RequireNonEmpty = append([]string(nil), paths...)
+	return o
+}
+
 // aiGovernanceVariables builds the governance summary request: the org, the
 // run's day window, the scope (nil sends none) and the violation limit.
 func aiGovernanceVariables(scope map[string]any, violationLimit int) func(orgID string, w Window) map[string]any {
@@ -1860,13 +2020,6 @@ func aiWorkflowParity() Options {
 			Ticket:    "CHAOS-6081",
 		},
 	}}
-}
-
-// requireLists returns o requiring the named lists to be non-empty on a leg: a
-// request whose lists are empty on both legs measured nothing.
-func requireLists(o Options, paths ...string) Options {
-	o.RequireNonEmpty = append([]string(nil), paths...)
-	return o
 }
 
 // aiPagedVariables builds the shared request of the paged AI operations: the

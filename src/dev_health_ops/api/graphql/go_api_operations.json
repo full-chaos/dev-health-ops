@@ -24,6 +24,10 @@
     "digest": "7e84d73b35104dd2ec3ece19c163cd8247c4637aa93df3b5f1449394c4539328"
   },
   {
+    "operation": "aiOpportunities",
+    "digest": "fad9b02c4e8a4a7023bf9a7ba988a04346473cdd9d840ec76d611f92e1b5af2e"
+  },
+  {
     "operation": "aiReviewLoad",
     "digest": "4a160089d82bb30f486e81dcc4fb0ef20b97efac29166f0d04e8b03cf06a1697"
   },
@@ -90,6 +94,10 @@
   {
     "operation": "hotspots",
     "digest": "6ccfcc785f38dc4a2d3ef5c9bdc2a00e76c02ccf58d11fd1198d2d321165e781"
+  },
+  {
+    "operation": "improveOpportunities",
+    "digest": "8890d7aeddfebaa9683d6c8834c82b059e345af1dbf42db14eebba840fcd87d2"
   },
   {
     "operation": "investmentBreakdown",

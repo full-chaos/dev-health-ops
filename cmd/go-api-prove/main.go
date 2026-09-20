@@ -769,6 +769,7 @@ func emitReport(f flags, registry goapiproof.RegistryView, builds goapiproof.Pro
 	}
 	fmt.Printf("go-api-prove:   proven_under %s = %d\n", goapiproof.ProvenUnderStochasticLeafClass, summary.ProvenUnderStochasticLeafClass)
 	fmt.Printf("go-api-prove:   %s = %d\n", goapiproof.VerdictGoOnly, summary.ProvenGoOnly)
+	fmt.Printf("go-api-prove:   %s = %d\n", goapiproof.VerdictDeclaredBaselineError, summary.ProvenDeclaredBaselineError)
 	for _, reason := range sortedKeys(summary.ByRefusalReason) {
 		fmt.Printf("go-api-prove:   refused %s = %d\n", reason, summary.ByRefusalReason[reason])
 	}
@@ -1327,6 +1328,10 @@ func executedOutcomeLine(outcome goapiproof.Outcome) string {
 	case goapiproof.ProvenUnderGoOnly:
 		// Never printed as a two-plane word: no baseline answered.
 		verdict = goapiproof.VerdictGoOnly + " (no two-plane baseline)"
+	case goapiproof.ProvenUnderDeclaredBaselineError:
+		// Never printed as a two-plane word: the baseline answered a declared
+		// Python failure and only the Go leg was measured.
+		verdict = goapiproof.VerdictDeclaredBaselineError + " (declared Python failure)"
 	default:
 		verdict += " PROVEN_UNDER=" + outcome.ProvenUnder
 	}

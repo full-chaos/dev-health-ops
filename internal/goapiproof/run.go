@@ -313,6 +313,10 @@ type Outcome struct {
 	// stated ticket and reason. It is reporting only: it never changes the
 	// terminal state, admission or the receipt written.
 	KnownRefusal *KnownRefusal `json:"known_refusal,omitempty"`
+	// DeclaredBaselineError names the Python defect a request declared when
+	// the declared-baseline-error class measured it (ProvenUnder is then
+	// ProvenUnderDeclaredBaselineError).
+	DeclaredBaselineError *DeclaredBaselineErrorRecord `json:"declared_baseline_error,omitempty"`
 	// CoveredByShape / OutsideByShape say WHAT the two counts are made of;
 	// OutsideByShape sums to DifferencesOutsideBaselineDefect,
 	// including the transport differences no citation can express ("http",
@@ -330,6 +334,13 @@ type Outcome struct {
 	Candidate      *Observation `json:"candidate,omitempty"`
 	Baseline       *Observation `json:"baseline,omitempty"`
 	ReceiptWritten bool         `json:"receipt_written"`
+}
+
+// DeclaredBaselineErrorRecord is the ticket and reason of the Python defect a
+// measurement was taken under.
+type DeclaredBaselineErrorRecord struct {
+	Ticket string `json:"ticket"`
+	Reason string `json:"reason"`
 }
 
 // sealedOutcome is what a measurement ACTUALLY established, captured by
@@ -410,8 +421,12 @@ type Summary struct {
 	// ProvenGoOnly counts executed outcomes proven by the go-only class
 	// (ProvenUnderGoOnly). Serialised even when zero. They also count under
 	// ByTerminalState "mismatch", the arm their receipt is written on.
-	ProvenGoOnly    int            `json:"proven_go_only"`
-	ByRefusalReason map[string]int `json:"by_refusal_reason"`
+	ProvenGoOnly int `json:"proven_go_only"`
+	// ProvenDeclaredBaselineError counts executed outcomes measured by the
+	// declared-baseline-error class (ProvenUnderDeclaredBaselineError).
+	// Serialised even when zero. They also count under ByOperation's Proven.
+	ProvenDeclaredBaselineError int            `json:"proven_declared_baseline_error"`
+	ByRefusalReason             map[string]int `json:"by_refusal_reason"`
 	// KnownRefusals counts outcomes whose variant is a recorded known
 	// refusal, reported apart from every other count. Serialised even when
 	// zero.
@@ -599,6 +614,9 @@ func (r *Runner) Run(ctx context.Context) ([]Outcome, Summary, error) {
 			}
 			if outcome.ProvenUnder == ProvenUnderGoOnly {
 				summary.ProvenGoOnly++
+			}
+			if outcome.ProvenUnder == ProvenUnderDeclaredBaselineError {
+				summary.ProvenDeclaredBaselineError++
 			}
 		} else {
 			summary.Refused++
@@ -896,6 +914,9 @@ func (r *Runner) proveRequest(ctx context.Context, operation string, variantName
 	if err := validateBaselineDefects(parity.BaselineDefects); err != nil {
 		return refuse(RefusalInvalidBaselineDefect, err.Error())
 	}
+	if err := validateDeclaredBaselineError(parity.DeclaredBaselineError, parity.ScopeEcho); err != nil {
+		return refuse(RefusalInvalidDeclaredBaselineError, err.Error())
+	}
 
 	document, ok := r.Documents[operation]
 	if !ok {
@@ -991,16 +1012,17 @@ func (r *Runner) proveRequest(ctx context.Context, operation string, variantName
 	// through the function (see admission.go's opening comment for the ten
 	// instances that shape cost).
 	admission := Admit(AdmissionInput{
-		Route:         outcome.Route,
-		NamedBuild:    r.Registry.BuildIdentity,
-		ResponseRoot:  spec.ResponseRoot,
-		RootNullable:  spec.RootNullable,
-		Operation:     operation,
-		GoServed:      r.GoServed,
-		Candidate:     candidate,
-		Baseline:      baseline,
-		CandidateSnap: candidateSnapshot,
-		BaselineSnap:  baselineSnapshot,
+		Route:                 outcome.Route,
+		NamedBuild:            r.Registry.BuildIdentity,
+		ResponseRoot:          spec.ResponseRoot,
+		RootNullable:          spec.RootNullable,
+		Operation:             operation,
+		GoServed:              r.GoServed,
+		DeclaredBaselineError: parity.DeclaredBaselineError,
+		Candidate:             candidate,
+		Baseline:              baseline,
+		CandidateSnap:         candidateSnapshot,
+		BaselineSnap:          baselineSnapshot,
 	})
 	if !admission.Admitted {
 		return refuse(admission.Reason, admission.Detail)
@@ -1018,6 +1040,14 @@ func (r *Runner) proveRequest(ctx context.Context, operation string, variantName
 	var result Result
 	if admission.GoOnly {
 		result = Result{TerminalState: TerminalStateMismatch}
+	} else if admission.DeclaredBaselineError {
+		// Measured on the candidate alone, against the shape the declaration
+		// names. The verdict is `unsupported`: not a match and not a cited
+		// mismatch, so the enablement predicate does not read it.
+		if detail := parity.DeclaredBaselineError.goLegUnmet(candidateSnapshot, parity.ScopeEcho); detail != "" {
+			return refuse(RefusalDeclaredBaselineErrorGoLeg, detail)
+		}
+		result = Result{TerminalState: TerminalStateUnsupported}
 	} else {
 		result = Compare(baselineSnapshot, candidateSnapshot, parity)
 		// Compare sees only the decoded bodies; the HTTP answer (status and
@@ -1211,6 +1241,13 @@ func (r *Runner) proveRequest(ctx context.Context, operation string, variantName
 	if result.StochasticLeafCitation != "" && outcome.TerminalState == TerminalStateMismatch &&
 		outcome.DifferencesOutsideBaselineDefect == 0 {
 		outcome.ProvenUnder = ProvenUnderStochasticLeafClass
+	}
+	if admission.DeclaredBaselineError && outcome.TerminalState == TerminalStateUnsupported &&
+		outcome.DifferencesOutsideBaselineDefect == 0 {
+		outcome.ProvenUnder = ProvenUnderDeclaredBaselineError
+		outcome.DeclaredBaselineError = &DeclaredBaselineErrorRecord{
+			Ticket: parity.DeclaredBaselineError.Ticket, Reason: parity.DeclaredBaselineError.Reason,
+		}
 	}
 	if admission.GoOnly && outcome.TerminalState == TerminalStateMismatch &&
 		outcome.DifferencesOutsideBaselineDefect == 0 {
@@ -1501,6 +1538,9 @@ func (r *Runner) reviewEvidence(sealed sealedOutcome, refusal string, measured, 
 func outcomeProves(o Outcome) bool {
 	if !o.Executed {
 		return false
+	}
+	if o.ProvenUnder == ProvenUnderDeclaredBaselineError {
+		return o.TerminalState == TerminalStateUnsupported && o.DifferencesOutsideBaselineDefect == 0
 	}
 	if o.TerminalState == EnablementProofTerminalState {
 		return true

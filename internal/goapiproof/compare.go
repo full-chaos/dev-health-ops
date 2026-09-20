@@ -533,6 +533,13 @@ type Options struct {
 	// scope_not_reflected_in_answer instead of recorded as a match.
 	ScopeEcho []ScopeEcho
 
+	// DeclaredBaselineError declares that this request's Python baseline
+	// answers a GraphQL error because of a Python defect, and what the Go leg
+	// must answer instead. The comparator does not read it: Admit and the
+	// runner do (baselineerror.go), because the pair is measured on the
+	// candidate alone and never reaches Compare.
+	DeclaredBaselineError *DeclaredBaselineError
+
 	// EnvelopeKeys excuses named keys from the null-vs-omission check at
 	// the TOP LEVEL of `data` only -- parity rule 2's stated exception for
 	// transport-envelope keys one framework omits when empty. Never

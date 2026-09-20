@@ -327,8 +327,8 @@ var operationSpecs = map[string]OperationSpec{
 		Variables:    aiOpportunityVariables(nil, 25),
 		Parity:       requireLists(aiOpportunitiesParity(), "data.aiOpportunities.recommendations"),
 		Variants: append(aiOpportunityVariants(),
-			aiOpportunityRepoKnownRefusal(aiOpportunityInstanceVariant("REPO_VALID", "a repository id with rollup rows, commits or pull requests that trip a rule", "repoId")),
-			aiOpportunityRepoKnownRefusal(aiOpportunityInstanceVariant("REPO_NAME_VALID", "the full name of a repository that trips a rule", "repoId")),
+			aiOpportunityRepoInstanceVariant("REPO_VALID", "a repository id with rollup rows, commits or pull requests that trip a rule", true),
+			aiOpportunityRepoInstanceVariant("REPO_NAME_VALID", "the full name of a repository that trips a rule", false),
 			aiOpportunityInstanceVariant("TEAM_VALID", "a team id stored on rollup rows that trip a metric rule", "teamId"),
 		),
 	},
@@ -1862,20 +1862,42 @@ func aiOpportunityVariants() []Variant {
 		}
 		v := Variant{Name: c.name, Variables: aiOpportunityVariables(c.scope, c.limit), Parity: p}
 		if c.name == "REPO_UNKNOWN" {
-			v = aiOpportunityRepoKnownRefusal(v)
+			v.Parity.DeclaredBaselineError = aiOpportunityRepoScopeError(GoAnswerEmpty, "")
 		}
 		variants = append(variants, v)
 	}
 	return variants
 }
 
-const aiOpportunityRepoScopeReason = "a repoId that is, or resolves to, a UUID and carries no teamId makes the Python detector read pull requests with `pr.repo_id = {repo_id:UUID}`, which ClickHouse rejects (code 386, NO_COMMON_TYPE), so the Python plane answers a GraphQL error for every such value; with a teamId that read is skipped and both planes answer. Go answers the scoped list (empty for an id that names nothing). A proof refuses a baseline that errored, so these cases record the difference without comparing"
+const aiOpportunityRepoScopeReason = "a repoId that is, or resolves to, a UUID and carries no teamId makes the Python detector read pull requests with `pr.repo_id = {repo_id:UUID}`, which ClickHouse rejects (code 386, NO_COMMON_TYPE), so the Python plane answers a GraphQL error for every such value; with a teamId that read is skipped and both planes answer. Go answers the scoped list (empty for an id that names nothing)"
 
-// aiOpportunityRepoKnownRefusal records that a repository scope answers a
-// GraphQL error on the Python plane, so the case cannot compare. It never
-// admits anything; it documents the difference.
-func aiOpportunityRepoKnownRefusal(v Variant) Variant {
-	v.KnownRefusal = &KnownRefusal{Ticket: "CHAOS-6147", Reason: aiOpportunityRepoScopeReason}
+// aiOpportunityRepoScopeError declares the Python failure of a repository
+// scope and the answer the Go leg must give: the empty list for an id that
+// names nothing, or a non-empty list for one scope (every element carrying one
+// repoId).
+func aiOpportunityRepoScopeError(answer GoAnswerShape, uniformField string) *DeclaredBaselineError {
+	return &DeclaredBaselineError{
+		Ticket:       "CHAOS-6147",
+		Reason:       aiOpportunityRepoScopeReason,
+		MessageToken: "NO_COMMON_TYPE",
+		List:         "data.aiOpportunities.recommendations",
+		Answer:       answer,
+		UniformField: uniformField,
+	}
+}
+
+// aiOpportunityRepoInstanceVariant is a repository scope that needs a real
+// repository from the run. The Python plane answers an error for it, so the Go
+// leg is measured alone: a non-empty list whose elements all carry one
+// repoId, and, when the request names the repository by its id, that id.
+func aiOpportunityRepoInstanceVariant(name, kind string, echoID bool) Variant {
+	v := aiOpportunityInstanceVariant(name, kind, "repoId")
+	v.Parity.DeclaredBaselineError = aiOpportunityRepoScopeError(GoAnswerNonEmpty, "repoId")
+	if echoID {
+		v.Instance.EchoFor = func(value string) []ScopeEcho {
+			return []ScopeEcho{{List: "data.aiOpportunities.recommendations", Fields: []string{"repoId"}, Value: value}}
+		}
+	}
 	return v
 }
 

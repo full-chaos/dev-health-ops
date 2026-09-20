@@ -72,6 +72,10 @@ type Admission struct {
 	// GoOnlyCitation is then the ledger's own citation for the operation.
 	GoOnly         bool
 	GoOnlyCitation string
+	// DeclaredBaselineError is true when the pair was admitted by the
+	// declared-baseline-error class: the baseline leg was the declared Python
+	// failure and the candidate alone carried the measurement.
+	DeclaredBaselineError bool
 }
 
 // Whether a measured response carried the serving build on itself.
@@ -121,6 +125,10 @@ type AdmissionInput struct {
 	// exist for this call and Admit behaves exactly as it does for an
 	// operation whose Python path is intact.
 	GoServed *GoServedLedger
+	// DeclaredBaselineError is the request's declaration that its Python
+	// baseline answers a GraphQL error by defect (see baselineerror.go). Nil
+	// means the class does not exist for this call.
+	DeclaredBaselineError *DeclaredBaselineError
 
 	Candidate, Baseline         Observation
 	CandidateSnap, BaselineSnap Snapshot
@@ -172,11 +180,27 @@ func Admit(in AdmissionInput) Admission {
 	//    go-only class admits: an operation the ledger names, whose baseline
 	//    is exactly its deletion error. The candidate is never excused.
 	goOnly, citation, why := goOnlyBaseline(in)
+	declared := false
+	if in.DeclaredBaselineError != nil {
+		if goOnly {
+			return refused(RefusalInvalidDeclaredBaselineError,
+				"the baseline is the go-served deletion error: a declared baseline error applies to an operation whose Python path is intact")
+		}
+		if len(in.BaselineSnap.Errors) == 0 {
+			return refused(RefusalStaleBaselineErrorDeclaration,
+				fmt.Sprintf("the request declares %s as a Python failure and the baseline answered without a GraphQL error, so the declaration matched nothing", in.DeclaredBaselineError.Ticket))
+		}
+		if matched, reason := in.DeclaredBaselineError.baselineMatches(in.ResponseRoot, in.BaselineSnap); matched {
+			declared = true
+		} else {
+			why = "the declared failure " + in.DeclaredBaselineError.Ticket + " did not match: " + reason
+		}
+	}
 	legs := []struct {
 		name string
 		snap Snapshot
 	}{{"candidate", in.CandidateSnap}, {"baseline", in.BaselineSnap}}
-	if goOnly {
+	if goOnly || declared {
 		legs = legs[:1]
 	}
 	for _, leg := range legs {
@@ -194,10 +218,10 @@ func Admit(in AdmissionInput) Admission {
 	//    go-only class the candidate stands alone, so a null root is refused
 	//    even where the SDL allows it: with no baseline, a null proves
 	//    nothing.
-	if a := admitResponseRoot(in, goOnly); !a.Admitted {
+	if a := admitResponseRoot(in, goOnly || declared); !a.Admitted {
 		return a
 	}
-	return Admission{Admitted: true, EdgeBuildBinding: build.EdgeBuildBinding, GoOnly: goOnly, GoOnlyCitation: citation}
+	return Admission{Admitted: true, EdgeBuildBinding: build.EdgeBuildBinding, GoOnly: goOnly, GoOnlyCitation: citation, DeclaredBaselineError: declared}
 }
 
 // goOnlyBaseline decides whether this pair is the go-only class: the ledger

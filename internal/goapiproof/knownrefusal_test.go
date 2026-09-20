@@ -95,35 +95,3 @@ func TestByOperationVerdicts(t *testing.T) {
 		}
 	}
 }
-
-// Every aiOpportunities case whose repoId is, or resolves to, a UUID is a
-// recorded known refusal (the Python plane answers a GraphQL error for it);
-// every other case is measured, including a slug that resolves to no
-// repository, which both planes answer empty before any detector read.
-func TestAIOpportunitiesRepoScopeCasesAreKnownRefusals(t *testing.T) {
-	spec, ok := operationSpecs["aiOpportunities"]
-	if !ok {
-		t.Fatal("aiOpportunities has no corpus entry")
-	}
-	want := map[string]bool{"REPO_UNKNOWN": true, "REPO_VALID": true, "REPO_NAME_VALID": true}
-	got := map[string]bool{}
-	for _, v := range spec.Variants {
-		if v.KnownRefusal == nil {
-			continue
-		}
-		got[v.Name] = true
-		if v.KnownRefusal.Ticket == "" || !strings.Contains(v.KnownRefusal.Reason, "NO_COMMON_TYPE") {
-			t.Errorf("%s: %#v", v.Name, v.KnownRefusal)
-		}
-	}
-	for name := range want {
-		if !got[name] {
-			t.Errorf("%s is not a recorded known refusal", name)
-		}
-	}
-	for name := range got {
-		if !want[name] {
-			t.Errorf("%s is a recorded known refusal but its scope answers on both planes", name)
-		}
-	}
-}

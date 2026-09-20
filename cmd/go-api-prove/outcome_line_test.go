@@ -80,3 +80,24 @@ func TestTheOutcomeLineNamesAGoOnlyProof(t *testing.T) {
 		t.Fatal("an unproven measurement prints the go-only verdict")
 	}
 }
+
+// A request measured under the declared-baseline-error class prints its own
+// verdict word, never a two-plane one; without the class proof it does not.
+func TestTheOutcomeLineNamesADeclaredBaselineErrorProof(t *testing.T) {
+	measured := goapiproof.Outcome{
+		Operation: "aiOpportunities", Mode: "canary", Route: "edge", TerminalState: goapiproof.TerminalStateUnsupported,
+		ProvenUnder: goapiproof.ProvenUnderDeclaredBaselineError,
+	}
+	line := executedOutcomeLine(measured)
+	if !strings.Contains(line, goapiproof.VerdictDeclaredBaselineError+" (declared Python failure)") {
+		t.Fatalf("line does not carry its verdict word: %q", line)
+	}
+	if strings.Contains(line, " match ") || strings.Contains(line, "PROVEN_UNDER") || strings.Contains(line, goapiproof.VerdictGoOnly) {
+		t.Fatalf("line reads like another proof: %q", line)
+	}
+	bare := measured
+	bare.ProvenUnder = ""
+	if strings.Contains(executedOutcomeLine(bare), goapiproof.VerdictDeclaredBaselineError) {
+		t.Fatal("an unproven measurement prints the class verdict")
+	}
+}

@@ -364,7 +364,7 @@ var operationSpecs = map[string]OperationSpec{
 			aiPagedInstanceVariant("TEAM_VALID", "a team id whose repo patterns select a repository with resolved attribution records", "teamId", aiAttributionOverviewParity(), "data.aiAttributionOverview.rows", "data.aiAttributionOverview.rows", "teamId"),
 		),
 	},
-	// The four unregistered analytics documents each carry the batches the web
+	// The four registered analytics documents each carry the batches the web
 	// pages send them: one request per measure the web asks for (so each
 	// measure and dimension branch is compared on its own), one for the whole
 	// page batch, and one per breakdown. Every case is measured only when its

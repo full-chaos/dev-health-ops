@@ -67,8 +67,8 @@ import (
 // the only value this port can produce.
 //
 // Breakdown item LABEL RESOLUTION (the A7/A8 display-name framework) is
-// likewise not yet ported -- see breakdown.go's ExecuteBreakdown doc
-// comment.
+// ported for the repo and team dimensions -- see breakdown.go's
+// ExecuteBreakdown doc comment.
 func Resolve(ctx context.Context, client QueryClient, orgID string, batch model.AnalyticsRequestInput) (*model.AnalyticsResult, error) {
 	if err := validateSubRequestCount(len(batch.Timeseries), len(batch.Breakdowns), batch.Sankey != nil, batch.FlowMatrix != nil); err != nil {
 		return nil, err

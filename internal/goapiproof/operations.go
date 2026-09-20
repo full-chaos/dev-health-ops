@@ -978,6 +978,29 @@ var operationSpecs = map[string]OperationSpec{
 	// are integer sums divided once in Go. All three are exact, and a
 	// tolerance on an exact field excuses a real defect
 	// (lane-goapi-parity, CHAOS-5451).
+	"testopsRisk": {
+		ResponseRoot: "testopsRisk",
+		Variables: func(orgID string, w Window) map[string]any {
+			return testopsRiskVariables(orgID, w.SinceDate, w.UntilDate)
+		},
+		Parity: testopsRiskParity(true),
+		Variants: []Variant{
+			{
+				Name: "SINGLE_DAY",
+				Variables: func(orgID string, w Window) map[string]any {
+					return testopsRiskVariables(orgID, w.UntilDate, w.UntilDate)
+				},
+				Parity: testopsRiskParity(false),
+			},
+			{
+				Name: "WEEK",
+				Variables: func(orgID string, w Window) map[string]any {
+					return testopsRiskVariables(orgID, w.WeekStart, w.UntilDate)
+				},
+				Parity: testopsRiskParity(false),
+			},
+		},
+	},
 	"throughputForecast": {
 		ResponseRoot: "throughputForecast",
 		RootNullable: true,
@@ -1940,4 +1963,34 @@ func experimentsTeamUnknownVariant() Variant {
 		Reason: "the reference drops the team filter when the team resolves to no member metric rows and answers the whole org; Go narrows an unresolved team to nothing through team ownership and answers the steady-flow card",
 	}
 	return v
+}
+
+func testopsRiskVariables(orgID, start, end string) map[string]any {
+	return map[string]any{"orgId": orgID, "input": map[string]any{"startDate": start, "endDate": end}}
+}
+
+const testopsFloatAggregate = "avg()/sum() over Float64 in the daily testops read -- ClickHouse float aggregate, order-nondeterministic (CHAOS-5451)"
+
+// testopsRiskParity declares the float leaves derived from the daily
+// aggregates as Tier B; the quadrant rates are argMax of stored JSON values
+// and stay exact. requireSeries makes the request measure only when the
+// range holds at least one day of release-confidence data.
+func testopsRiskParity(requireSeries bool) Options {
+	o := Options{FloatTierB: map[string]string{
+		"data.testopsRisk.releaseConfidence":          testopsFloatAggregate,
+		"data.testopsRisk.qualityDragHours":           testopsFloatAggregate,
+		"data.testopsRisk.pipelineStability":          testopsFloatAggregate,
+		"data.testopsRisk.timeseries.riskScore":       "derived from avg(confidence_score) (CHAOS-5451)",
+		"data.testopsRisk.qualityDragBreakdown.hours": testopsFloatAggregate,
+		"data.testopsRisk.confidenceSpark.value":      "derived from avg(confidence_score) (CHAOS-5451)",
+		"data.testopsRisk.confidenceDelta":            "derived from avg(confidence_score) (CHAOS-5451)",
+		"data.testopsRisk.dragSpark.value":            testopsFloatAggregate,
+		"data.testopsRisk.dragDelta":                  testopsFloatAggregate,
+		"data.testopsRisk.stabilitySpark.value":       "derived from avg(stability_index) (CHAOS-5451)",
+		"data.testopsRisk.stabilityDelta":             "derived from avg(stability_index) (CHAOS-5451)",
+	}}
+	if requireSeries {
+		o.RequireNonEmpty = []string{"data.testopsRisk.timeseries"}
+	}
+	return o
 }

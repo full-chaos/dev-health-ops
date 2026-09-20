@@ -38,7 +38,7 @@ var registeredOperations = []string{
 	"featureFlagEvents", "featureFlags", "flowMatrix", "hotspots",
 	"releaseImpact",
 	"investmentBreakdown", "investmentFull", "operatingReview", "pr",
-	"reportRuns", "reviewEdges", "savedReport", "savedReports", "securityAlerts", "securityOverview", "throughputForecast",
+	"reportRuns", "reviewEdges", "savedReport", "savedReports", "securityAlerts", "securityOverview", "testopsRisk", "throughputForecast",
 	"workGraphArtifacts", "workGraphEdges", "workGraphFlow",
 }
 

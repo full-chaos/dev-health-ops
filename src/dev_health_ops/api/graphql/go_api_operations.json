@@ -116,8 +116,20 @@
     "digest": "0d11e4442ba732c441246bf7c04c8585a391761187b0d20ebf26bcb4bbce1b4c"
   },
   {
+    "operation": "reportRuns",
+    "digest": "16fbdefaa0f4f095d43b934b5fefb3eaed5878aeb20685303aba6f3a67c4a8de"
+  },
+  {
     "operation": "reviewEdges",
     "digest": "4a759f9e3d3e903b03a3aae8039b3bdca2ed69b3af25a0b20f01c1da55d97123"
+  },
+  {
+    "operation": "savedReport",
+    "digest": "02fc81f826285965c94a564e490d1dec4e4831079bb3788ff7f742dd06aa6a22"
+  },
+  {
+    "operation": "savedReports",
+    "digest": "095ac91596b0baea1b8100074d7f8c0beb39291c999274d1e978444e8d25f6a5"
   },
   {
     "operation": "securityAlerts",

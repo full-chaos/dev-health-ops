@@ -67,7 +67,9 @@ const defaultAddr = ":8090"
 // rather than only once a later wave tries to wire it in.
 func newExecutableSchemaHandler() http.Handler {
 	schema := graph.NewExecutableSchema(graph.Config{Resolvers: &graph.Resolver{}})
-	return gqlhandler.NewDefaultServer(schema)
+	server := gqlhandler.NewDefaultServer(schema)
+	server.AroundFields(graph.RefuseNullForNonNullArguments)
+	return server
 }
 
 func addr() string {

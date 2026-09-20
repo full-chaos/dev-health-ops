@@ -284,3 +284,78 @@ func TestWorkGraphEdgesCollapse_PlanAdmitsOnlyLengthAndCount(t *testing.T) {
 		t.Fatal("plan applied to a baseline with no repeated id")
 	}
 }
+
+// Every request that carries the whole-list declaration carries its own page
+// limit as the declaration's RequestLimit, and a baseline that reaches that
+// limit is a page the limit may have cut, which the declaration refuses.
+func TestWorkGraphEdgesCollapse_EveryCaseRefusesACutPage(t *testing.T) {
+	carriers := 0
+	for _, operation := range []string{"workGraphEdges", "releaseImpact"} {
+		spec, err := SpecFor(operation)
+		if err != nil {
+			t.Fatal(err)
+		}
+		type requestCase struct {
+			name      string
+			variables func(string, Window) map[string]any
+			parity    Options
+		}
+		cases := []requestCase{{"base", spec.Variables, spec.Parity}}
+		for _, v := range spec.Variants {
+			cases = append(cases, requestCase{v.Name, v.Variables, v.Parity})
+		}
+		for _, c := range cases {
+			limit := workGraphEdgesDefaultLimit
+			if filters, ok := c.variables("org", Window{})["filters"].(map[string]any); ok {
+				if l, ok := filters["limit"].(int); ok {
+					limit = l
+				}
+			}
+			for _, d := range c.parity.BaselineDefects {
+				shape := d.DuplicateCollapseLengthShape
+				if shape == nil {
+					continue
+				}
+				carriers++
+				if shape.RequestLimit != limit {
+					t.Errorf("%s/%s sends limit %d but the whole-list declaration carries RequestLimit %d", operation, c.name, limit, shape.RequestLimit)
+				}
+				// Duplicated rows that reach the limit: a cut page.
+				edges := collapseEdges(limit)
+				var base []collapseEdge
+				for _, e := range edges[:limit/2] {
+					base = append(base, e, e)
+				}
+				decode := func(list []collapseEdge, total int) any {
+					return snapshotFromJSON(t, collapseBody(t, list, total)).Data
+				}
+				if len(base) < limit {
+					t.Fatalf("fixture has %d baseline rows below limit %d", len(base), limit)
+				}
+				cut := buildDuplicateCollapseLengthPlan(shape, decode(base, len(base)), decode(edges[:limit/2], limit/2))
+				if cut.applies {
+					t.Errorf("%s/%s: the declaration applies to a baseline of %d rows at limit %d", operation, c.name, len(base), limit)
+				}
+				if limit > 2 {
+					short := collapseEdges(limit / 2)
+					var below []collapseEdge
+					for _, e := range short[:limit/2-1] {
+						below = append(below, e, e)
+					}
+					below = append(below, short[limit/2-1])
+					if len(below) >= limit {
+						t.Fatalf("fixture has %d rows, not below limit %d", len(below), limit)
+					}
+					if !buildDuplicateCollapseLengthPlan(shape, decode(below, len(below)), decode(short, len(short))).applies {
+						t.Errorf("%s/%s: the declaration refuses a baseline of %d rows below limit %d", operation, c.name, len(below), limit)
+					}
+				}
+			}
+		}
+	}
+	// workGraphEdges: base and the two non-cut variants; releaseImpact: base,
+	// NODE_ID_VALID and SOURCE_TYPE_POPULATED (LIMIT_ONE carries no defects).
+	if carriers != 6 {
+		t.Fatalf("found %d requests carrying the whole-list declaration, want 6", carriers)
+	}
+}

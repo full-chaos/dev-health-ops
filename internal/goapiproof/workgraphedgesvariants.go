@@ -18,7 +18,7 @@ func workGraphEdgesSourceTypeSmallVariant(name, kind string) Variant {
 			return map[string]any{"orgId": orgID, "filters": map[string]any{"sourceType": "FEATURE_FLAG", "limit": 200}}
 		},
 		Parity: Options{
-			BaselineDefects: workGraphEdgesParity.BaselineDefects,
+			BaselineDefects: workGraphEdgesParityAt(200).BaselineDefects,
 			RequireNonEmpty: []string{"data.workGraphEdges.edges"},
 		},
 		Instance: &VariantInstance{
@@ -42,7 +42,7 @@ func workGraphEdgesNodeVariant(name, kind string) Variant {
 			return map[string]any{"orgId": orgID, "filters": map[string]any{"nodeId": "", "limit": 200}}
 		},
 		Parity: Options{
-			BaselineDefects: workGraphEdgesParity.BaselineDefects,
+			BaselineDefects: workGraphEdgesParityAt(200).BaselineDefects,
 			RequireNonEmpty: []string{"data.workGraphEdges.edges"},
 		},
 		Instance: &VariantInstance{

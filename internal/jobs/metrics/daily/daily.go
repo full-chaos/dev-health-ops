@@ -984,36 +984,23 @@ func (handler *PartitionHandler) blockedNativeDependency(name string, blocked ma
 // # Why a post_bridge phase exists at all (CHAOS-4278)
 //
 // families.json's `"phase"` field is additive and defaults to `pre_bridge`
-// (today's behavior, computeNativeFamilies above) for every family that does
-// not declare it -- this phase exists for the narrow case of a native family
-// whose OWN correctness depends on data a DIFFERENT, still-Python-bridged
-// family writes during the SAME partition run. `work_item_state`
-// (WorkItemStateExecutor) is the first: it reads `work_item_team_
-// attributions`, which `work_item_attribution` (still Python-bridged,
-// CHAOS-4283) writes fresh every partition. Running work_item_state
-// pre_bridge (as it originally shipped) meant the Go read happened BEFORE
-// that write -- codex round 1 (2026-09-01) caught this as a P1: a new or
-// re-attributed item's freshest attribution was systematically invisible to
-// the same-partition read. post_bridge fixes the ordering: pre_bridge
-// natives run, then the bridge runs (computing `work_item_attribution`
-// among whatever else was not skipped), THEN this method runs
-// work_item_state against the now-fresh table.
-//
-// TEMPORARY, per family (team-lead ruling 2026-09-01): when CHAOS-4283 ports
-// `work_item_attribution` to a native Go executor, that executor should run
-// BEFORE `work_item_state` within the SAME (pre_bridge) native phase --
-// ordinary in-process sequencing, no cross-phase call needed -- and
-// `work_item_state` should move back to `pre_bridge` in families.json.
-// post_bridge is a bridge (pun intended) for as long as the dependency
-// crosses the Python/Go boundary, not a permanent architectural feature.
+// (computeNativeFamilies above) for every family that does not declare it.
+// `post_bridge` is for the narrow case of a native family whose OWN
+// correctness depends on rows a DIFFERENT family writes during the SAME
+// partition run, where the sorted pre-phase walk would read the input first.
+// Today that is compounding_risk: it reads repo_metrics_daily, which
+// repo_user_commit writes in the same partition, and "compounding_risk" sorts
+// before "repo_user_commit". work_item_state was the first user (it read
+// attributions a still-Python family wrote); every work-item family is now
+// native and pre_bridge with `after` edges (CHAOS-5078), so it no longer needs
+// the phase. No bridge call exists: the phase is an ORDERING label only.
 //
 // Fail-open PER FAMILY, like computeNativeFamilies, for the SAME reason (a
 // transient ClickHouse hiccup on one family must never sink every other
-// family in the loop) -- but with a narrower safety net at the PARTITION
-// level: Python was already told (via skipFamiliesForBridge) not to compute
-// this family, so a post_bridge failure here means NO writer produces this
-// family's rows for this partition, unlike a pre_bridge failure (which still
-// has the bridge as a fallback). A failure still increments the SAME
+// family in the loop) -- but the PARTITION is not fail-open: this executor is
+// the only writer of the family, so a failure here means NO rows for this
+// family in this partition, exactly as for a pre_bridge family (there is no
+// fallback writer for either). A failure increments the SAME
 // DailyMetricsNativeFamilyOutcomeRefused telemetry pre_bridge failures use
 // (the operator-visible signal for "this partition produced zero rows for
 // this family, check why") and, since CHAOS-5139, is also logged via
@@ -1043,18 +1030,10 @@ func (handler *PartitionHandler) computePostBridgeNativeFamilies(ctx context.Con
 	for _, name := range handler.postBridgeFamilyNames {
 		executor := handler.postBridgeFamilies[name]
 		if executor == nil {
-			// CHAOS-5190 (codex round 1, P1): skipFamiliesForBridge already
-			// told Python to skip every registered post_bridge NAME
-			// unconditionally, independent of whether an executor was
-			// actually wired for it -- unlike computeNativeFamilies' own
-			// pre_bridge sibling, where a nil executor's name is simply
-			// never appended to the bridge's own skip list, so Python
-			// computing it instead is a safe fallback there. There is no
-			// such fallback here: a nil post_bridge executor means NO
-			// writer produces this family's rows for this partition,
-			// exactly the class this fix exists to close -- it must count
-			// as incomplete too, not a silent no-op that used to fall
-			// straight through to CompletePartition.
+			// A nil post_bridge executor means NO writer produces this family's
+			// rows for this partition (no fallback writer exists for any
+			// family), so it counts as incomplete, not as a silent no-op that
+			// would fall straight through to CompletePartition (CHAOS-5190).
 			incomplete = append(incomplete, name)
 			if handler.nativeFamilyLogger != nil {
 				handler.nativeFamilyLogger.Error(
@@ -1081,13 +1060,11 @@ func (handler *PartitionHandler) computePostBridgeNativeFamilies(ctx context.Con
 		duration := handler.nativeFamiliesNow().Sub(started)
 		outcome := jobruntime.DailyMetricsNativeFamilyOutcomeComputed
 		if err != nil {
-			// A post_bridge partial write cannot cause BRIDGE duplication --
-			// Python was already told to skip this family unconditionally. But
-			// the outcome and the row count must still be truthful: reporting
+			// The outcome and the row count must be truthful: reporting
 			// "refused, 0 rows" for a family that wrote several thousand before
 			// failing tells an operator the opposite of what happened, and the
-			// re-drive decision depends on knowing rows landed. So the outcome
-			// is distinguished here even though the skip decision is not.
+			// re-drive decision depends on knowing rows landed. So a partial
+			// write is distinguished from a refusal in the telemetry.
 			if errors.Is(err, ErrPartialWrite) {
 				outcome = jobruntime.DailyMetricsNativeFamilyOutcomePartialWrite
 				// #2280 r3 (sweep item, same class as computeNativeFamilies'

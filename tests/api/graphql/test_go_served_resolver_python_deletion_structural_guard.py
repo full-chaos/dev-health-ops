@@ -88,6 +88,10 @@ AI_RESOLVER_SOURCE = (
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "resolvers" / "ai.py"
 )
 
+DATA_HEALTH_MODELS_SOURCE = (
+    ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "models" / "data_health.py"
+)
+
 WORKER_METRICS_SOURCE = (
     ROOT / "src" / "dev_health_ops" / "api" / "internal" / "worker_metrics.py"
 )
@@ -106,6 +110,18 @@ TEAM_ATTRIBUTION_RESOLVER_SOURCE = (
 )
 
 DELETED_GO_SERVED_RESOLVER_SYMBOLS: dict[Path, frozenset[str]] = {
+    # dataHealth (connectors, identity, mapping coverage, metric lineage): the
+    # resolver module is deleted (modules ledger below); the lineage
+    # computation lived beside the response types, which stay for the SDL.
+    DATA_HEALTH_MODELS_SOURCE: frozenset(
+        {
+            "compute_metric_lineage",
+            "_lineage_freshness",
+            "_query_dicts",
+            "_int",
+            "_safe_table_name",
+        }
+    ),
     # A scheduler helper with no caller in src/.
     CAPACITY_QUERIES_SOURCE: frozenset({"discover_team_scopes"}),
     # securityOverview: only the function is deleted; the module stays for
@@ -317,6 +333,16 @@ DELETED_GO_SERVED_RESOLVER_MODULES: dict[str, Path] = {
     / "graphql"
     / "resolvers"
     / "ai.py",
+    # dataHealth: connectors, identity mapping, mapping coverage and metric
+    # lineage. The Python resolver answered connectors with [] in production
+    # (its session was never set on the context); Go is the only answer.
+    "data health resolver": ROOT
+    / "src"
+    / "dev_health_ops"
+    / "api"
+    / "graphql"
+    / "resolvers"
+    / "data_health.py",
     # The workgraph operator repair route (its only route).
     "workgraph repair route": ROOT
     / "src"
@@ -363,6 +389,7 @@ SDL_LOAD_BEARING_SOURCES: tuple[Path, ...] = (
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "models" / "pr.py",
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "models" / "improve.py",
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "models" / "ai.py",
+    ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "models" / "data_health.py",
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "types" / "cognitive_load.py",
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "types" / "complexity.py",
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "types" / "review_edges.py",
@@ -381,6 +408,21 @@ SDL_LOAD_BEARING_SYMBOLS: dict[str, frozenset[str]] = {
             "ImproveOpportunity",
             "ImproveOpportunityKind",
             "ImproveOpportunitiesResult",
+        }
+    ),
+    "data_health.py": frozenset(
+        {
+            "ConnectorFailure",
+            "ConnectorStatus",
+            "UnmappedIdentity",
+            "AliasSuggestion",
+            "IdentityMappingHealth",
+            "MissingMapping",
+            "CoverageStat",
+            "MappingCoverage",
+            "WindowSpec",
+            "MetricLineage",
+            "DataHealth",
         }
     ),
     "ai.py": frozenset(
@@ -443,6 +485,7 @@ SDL_LOAD_BEARING_SYMBOLS: dict[str, frozenset[str]] = {
             "pr",
             "catalog",
             "bus_factor",
+            "data_health",
             "security_overview",
             "work_unit_team_attributions",
             "experiments",

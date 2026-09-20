@@ -162,6 +162,10 @@ _QUERIES = {
         'input: {weekStart: "2026-01-05"}) { orgId } }',
         None,
     ),
+    "dataHealth": (
+        'query { dataHealth(team: "ALL") { connectors { provider } } }',
+        None,
+    ),
 }
 
 
@@ -196,6 +200,10 @@ def test_the_go_served_ledger_names_exactly_the_raising_fields() -> None:
         "catalogValues": "catalog",
         "acrRepositoryScopes": "catalog",
         "releaseImpact": "workGraphEdges",
+        "connectorsDataHealth": "dataHealth",
+        "dataHealthIdentity": "dataHealth",
+        "mappingCoverageHealth": "dataHealth",
+        "metricLineage": "dataHealth",
     }
     fields = {
         named_documents.get(entry["operation"], entry["operation"])

@@ -1,5 +1,6 @@
-// Package datahealth is the Go port of the operator data-health surface
-// (resolvers/data_health.py and models/data_health.py): connector health from
+// Package datahealth serves the operator data-health surface, ported from the
+// Python resolvers/data_health.py and models/data_health.py logic (the Python
+// resolver is deleted; the Go tests here are its guards): connector health from
 // the sync tables in Postgres, identity-mapping and mapping-coverage health
 // from ClickHouse, and metric lineage freshness from the metric tables.
 //

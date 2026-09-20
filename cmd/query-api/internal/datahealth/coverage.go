@@ -96,7 +96,8 @@ type lineageEntry struct {
 
 func days(n int) *int { return &n }
 
-// lineageRegistry ports METRIC_LINEAGE_REGISTRY.
+// lineageRegistry is the metric-to-source-tables registry (ported from the
+// deleted Python METRIC_LINEAGE_REGISTRY).
 var lineageRegistry = map[string]lineageEntry{
 	"throughput":           {[]string{"work_item_metrics_daily"}, windowSpec{kind: "daily"}},
 	"cycle_time":           {[]string{"work_item_metrics_daily"}, windowSpec{kind: "daily"}},

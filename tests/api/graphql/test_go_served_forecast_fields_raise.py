@@ -40,6 +40,12 @@ _QUERIES = {
         'query { experiments(orgId: "org-1") { derivedFromOpportunities } }',
         None,
     ),
+    "productTelemetryDashboard": (
+        'query { productTelemetryDashboard(orgId: "org-1", input: '
+        '{startDate: "2026-01-01", endDate: "2026-01-08"}) '
+        "{ sessionSummary { avgPagesViewed } } }",
+        None,
+    ),
     "securityOverview": (
         'query { securityOverview(orgId: "org-1") { kpis { openTotal } } }',
         None,

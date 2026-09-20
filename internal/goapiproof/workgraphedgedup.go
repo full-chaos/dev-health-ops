@@ -88,6 +88,14 @@ type WorkGraphEdgeDedupShape struct {
 	// defect's own Paths name no such field -- as drilldown/prs's own
 	// entry does not, having no cursor at all.
 	TrailingCursorPath string
+	// CutPageLimit, when > 0, confines this shape to the pages the request
+	// limit may have cut: it applies only when the baseline list's raw
+	// length reaches the limit. A shorter baseline is a page the limit did
+	// not cut, which a whole-page declaration owns (DuplicateCollapseLengthShape
+	// with OwnsPage); this shape then admits nothing, so no positional
+	// absorption of an altered edge set reaches a page that declaration
+	// decides.
+	CutPageLimit int
 	// WriteOnceFields, when set, switches this shape to a second, narrower
 	// admission: it admits ONLY an id whose baseline copies DISAGREE, and
 	// only when every disagreement falls on a NAMED field and is exactly
@@ -291,6 +299,9 @@ func buildWorkGraphEdgeDedupPlan(shape *WorkGraphEdgeDedupShape, baselineData, c
 	baseList, ok1 := listAtDottedPath(baselineData, shape.EdgesListPath)
 	candList, ok2 := listAtDottedPath(candidateData, shape.EdgesListPath)
 	if !ok1 || !ok2 {
+		return plan
+	}
+	if shape.CutPageLimit > 0 && len(baseList) < shape.CutPageLimit {
 		return plan
 	}
 

@@ -1,5 +1,7 @@
 package goapiproof
 
+import "strings"
+
 // DuplicateCollapseLengthShape, set on a BaselineDefect, admits a list's
 // own ShapeLength finding for the ONE additional consequence
 // WorkGraphEdgeDedupShape's own per-id admission (workgraphedgedup.go)
@@ -109,6 +111,23 @@ type DuplicateCollapseLengthShape struct {
 	// keeps the shape without an order rule.
 	OrderField    string
 	OrderTieField string
+	// OwnsPage, when set, makes this shape the ONE owner of every finding on
+	// a page it applies to, not only the list length and the count: every
+	// element finding under ListPath (a positional value difference, a
+	// baseline-only element) and, when CursorPath is set, the trailing
+	// cursor. The plan then also requires the baseline's distinct ids, in
+	// first-occurrence order, to equal the candidate's ids in order, so
+	// every positional difference is a consequence of a repeated baseline
+	// row and nothing else. The page is decided as a whole: a page this
+	// shape refuses leaves all of its findings outside, and a sibling
+	// declaration that would absorb them positionally must apply only to
+	// pages this shape does not own (see RequestLimit).
+	OwnsPage bool
+	// CursorPath is the dotted path of the page's trailing cursor leaf (for
+	// example "data.workGraphEdges.pageInfo.endCursor"). Used only with
+	// OwnsPage: a difference there is admitted when the candidate's cursor
+	// names its own last element.
+	CursorPath string
 }
 
 // duplicateCollapseLengthPlan is one comparison's fully-evaluated
@@ -119,6 +138,9 @@ type duplicateCollapseLengthPlan struct {
 	// countAdmitted is true when the shape declares a CountPath and each
 	// leg's count equals its own list length.
 	countAdmitted bool
+	// cursorAdmitted is true when the shape owns the page, declares a
+	// CursorPath and the candidate's cursor names its own last element.
+	cursorAdmitted bool
 }
 
 // candidateInDeclaredOrder reports whether the candidate list is weakly
@@ -180,10 +202,14 @@ func buildDuplicateCollapseLengthPlan(shape *DuplicateCollapseLengthShape, basel
 	}
 
 	baseGroups := map[string][]map[string]any{}
+	var baseOrder []string
 	for _, element := range baseList {
 		object, id, ok := edgeObjectAndID(element, shape.IDField)
 		if !ok {
 			return plan
+		}
+		if _, seen := baseGroups[id]; !seen {
+			baseOrder = append(baseOrder, id)
 		}
 		baseGroups[id] = append(baseGroups[id], object)
 	}
@@ -255,8 +281,30 @@ func buildDuplicateCollapseLengthPlan(shape *DuplicateCollapseLengthShape, basel
 	if !shape.candidateInDeclaredOrder(candList) {
 		return plan
 	}
+	if shape.OwnsPage {
+		// Every positional finding is explained by a repeated baseline row
+		// only when removing the repeats leaves the candidate's own
+		// sequence, id for id.
+		for i, element := range candList {
+			_, id, _ := edgeObjectAndID(element, shape.IDField)
+			if baseOrder[i] != id {
+				return plan
+			}
+		}
+	}
 
 	plan.applies = true
+	if shape.OwnsPage && shape.CursorPath != "" {
+		last := ""
+		if len(candList) > 0 {
+			_, last, _ = edgeObjectAndID(candList[len(candList)-1], shape.IDField)
+		}
+		if cursor, ok := navigateSegments(candidateData, citedSegments(shape.CursorPath)); ok {
+			if text, isText := cursor.(string); isText && text == last {
+				plan.cursorAdmitted = true
+			}
+		}
+	}
 	if shape.CountPath != "" {
 		plan.countAdmitted = countEqualsLength(baselineData, shape.CountPath, len(baseList)) &&
 			countEqualsLength(candidateData, shape.CountPath, len(candList))
@@ -272,6 +320,15 @@ func (p *duplicateCollapseLengthPlan) admits(finding Finding) bool {
 	}
 	if p.countAdmitted && p.shape.CountPath != "" && finding.Path == "$."+p.shape.CountPath {
 		return true
+	}
+	if p.shape.OwnsPage {
+		tiered := tieredPath(finding.Path)
+		if tiered == p.shape.ListPath || strings.HasPrefix(tiered, p.shape.ListPath+".") {
+			return true
+		}
+		if p.cursorAdmitted && finding.Path == "$."+p.shape.CursorPath {
+			return true
+		}
 	}
 	return finding.Shape == ShapeLength && tieredPath(finding.Path) == p.shape.ListPath
 }

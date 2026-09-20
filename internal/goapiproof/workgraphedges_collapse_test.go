@@ -218,7 +218,6 @@ func TestWorkGraphEdgesCollapse_OrderRuleDecidesAlone(t *testing.T) {
 	}
 	// Two ids at one confidence, then a lower one.
 	ordered := []collapseEdge{{"edge-a", 0.9}, {"edge-b", 0.9}, {"edge-c", 0.5}}
-	base := []collapseEdge{ordered[0], ordered[0], ordered[1], ordered[2]}
 	cases := []struct {
 		name string
 		cand []collapseEdge
@@ -230,6 +229,9 @@ func TestWorkGraphEdgesCollapse_OrderRuleDecidesAlone(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			// The baseline runs in the candidate's own order, so only the
+			// order clause can refuse: the page-ownership sequence rule agrees.
+			base := append([]collapseEdge{c.cand[0]}, c.cand...)
 			plan := buildDuplicateCollapseLengthPlan(shape, decode(base, 4), decode(c.cand, 3))
 			if plan.applies != c.want {
 				t.Fatalf("applies = %v, want %v", plan.applies, c.want)
@@ -402,5 +404,156 @@ func TestWorkGraphEdgesCollapse_TimeAxisRows(t *testing.T) {
 				t.Fatalf("applies = %v, want %v", plan.applies, c.want)
 			}
 		})
+	}
+}
+
+// One owner per page. For every request that carries the whole-page
+// declaration, a page the limit did not cut is owned by that declaration alone
+// (the per-edge declaration matches nothing on it), and a page the limit may
+// have cut is owned by the per-edge declaration alone. Every combination of
+// page cut or not, difference kind and shape present is run through Compare.
+func TestWorkGraphEdgesOnePageOneOwner(t *testing.T) {
+	const perEdge, wholePage = "CHAOS-5791", "CHAOS-6114"
+	matched := func(r Result, ticket string) bool {
+		for _, m := range r.BaselineDefectsMatched {
+			if m == ticket {
+				return true
+			}
+		}
+		return false
+	}
+	type requestCase struct {
+		name   string
+		limit  int
+		parity Options
+	}
+	var cases []requestCase
+	for _, operation := range []string{"workGraphEdges", "releaseImpact"} {
+		spec, err := SpecFor(operation)
+		if err != nil {
+			t.Fatal(err)
+		}
+		all := []requestCase{{operation + "/base", workGraphEdgesDefaultLimit, spec.Parity}}
+		if operation == "releaseImpact" {
+			all[0].limit = 200
+		}
+		for _, v := range spec.Variants {
+			limit := workGraphEdgesDefaultLimit
+			if filters, ok := v.Variables("org", Window{})["filters"].(map[string]any); ok {
+				if l, ok := filters["limit"].(int); ok {
+					limit = l
+				}
+			}
+			all = append(all, requestCase{operation + "/" + v.Name, limit, v.Parity})
+		}
+		for _, c := range all {
+			for _, d := range c.parity.BaselineDefects {
+				if d.DuplicateCollapseLengthShape != nil {
+					cases = append(cases, c)
+					break
+				}
+			}
+		}
+	}
+	if len(cases) != 6 {
+		t.Fatalf("found %d requests carrying the whole-page declaration, want 6", len(cases))
+	}
+	compare := func(c requestCase, base, cand []collapseEdge) Result {
+		return Compare(snapshotFromJSON(t, collapseBody(t, base, len(base))), snapshotFromJSON(t, collapseBody(t, cand, len(cand))), c.parity)
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			edges := collapseEdges(c.limit + 2)
+			// Not cut: four rows, one repeated, against a limit above four.
+			nonCutBase := []collapseEdge{edges[0], edges[0], edges[1], edges[2]}
+			nonCut := []struct {
+				name        string
+				cand        []collapseEdge
+				wantOutside bool
+			}{
+				{"collapse of the repeated row", edges[:3], false},
+				{"equal length, one id invented", []collapseEdge{edges[0], edges[1], edges[2], edges[3]}, true},
+				{"one distinct id dropped", edges[:2], true},
+				{"one distinct id replaced", []collapseEdge{edges[0], edges[1], edges[3]}, true},
+				{"same ids, other order", []collapseEdge{edges[1], edges[0], edges[2]}, true},
+			}
+			// The repeated row sits after the last distinct id, so the baseline's
+			// trailing cursor names it while the candidate's names its own last
+			// element: a cursor difference the whole-page declaration owns.
+			trailing := compare(c, []collapseEdge{edges[0], edges[1], edges[2], edges[0]}, edges[:3])
+			if trailing.DifferencesOutsideBaselineDefect != 0 || !matched(trailing, wholePage) || matched(trailing, perEdge) {
+				t.Errorf("not cut, repeated row after the last id: outside=%d matched=%v", trailing.DifferencesOutsideBaselineDefect, trailing.BaselineDefectsMatched)
+			}
+			for _, k := range nonCut {
+				result := compare(c, nonCutBase, k.cand)
+				if (result.DifferencesOutsideBaselineDefect > 0) != k.wantOutside {
+					t.Errorf("not cut, %s: outside=%d, want outside=%v (matched %v)", k.name, result.DifferencesOutsideBaselineDefect, k.wantOutside, result.BaselineDefectsMatched)
+				}
+				if matched(result, perEdge) {
+					t.Errorf("not cut, %s: the per-edge declaration matched on a page it does not own", k.name)
+				}
+				if !k.wantOutside && !matched(result, wholePage) {
+					t.Errorf("not cut, %s: the whole-page declaration did not match", k.name)
+				}
+			}
+			// Cut: the baseline reaches the limit through one repeated row.
+			cutBase := []collapseEdge{edges[0]}
+			for i := 0; i < c.limit-1; i++ {
+				cutBase = append(cutBase, edges[i])
+			}
+			cutCand := edges[:c.limit]
+			result := compare(c, cutBase, cutCand)
+			if matched(result, wholePage) {
+				t.Errorf("cut page: the whole-page declaration matched on a page it refuses")
+			}
+			if c.limit > 1 && !matched(result, perEdge) {
+				t.Errorf("cut page: the per-edge declaration did not match (outside=%d)", result.DifferencesOutsideBaselineDefect)
+			}
+		})
+	}
+}
+
+// The whole-page plan's own rules that the request-level cases above do not
+// reach alone: the baseline's distinct ids must run in the candidate's order,
+// and the trailing cursor is admitted only when it names the candidate's last
+// element.
+func TestWorkGraphEdgesCollapse_PageOwnershipRules(t *testing.T) {
+	spec, err := SpecFor("releaseImpact")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var shape *DuplicateCollapseLengthShape
+	for _, d := range spec.Parity.BaselineDefects {
+		if d.DuplicateCollapseLengthShape != nil {
+			shape = d.DuplicateCollapseLengthShape
+		}
+	}
+	if shape == nil || !shape.OwnsPage || shape.CursorPath == "" {
+		t.Fatalf("releaseImpact must declare a page-owning shape with a cursor path: %+v", shape)
+	}
+	decode := func(edges []collapseEdge) any {
+		return snapshotFromJSON(t, collapseBody(t, edges, len(edges))).Data
+	}
+	e := collapseEdges(3)
+	sameOrder := buildDuplicateCollapseLengthPlan(shape, decode([]collapseEdge{e[0], e[0], e[1], e[2]}), decode(e))
+	if !sameOrder.applies {
+		t.Fatal("plan must apply when the distinct baseline ids run in the candidate's order")
+	}
+	otherOrder := buildDuplicateCollapseLengthPlan(shape, decode([]collapseEdge{e[1], e[1], e[0], e[2]}), decode(e))
+	if otherOrder.applies {
+		t.Fatal("plan applied although the baseline's distinct ids run in another order than the candidate's")
+	}
+	cursor := Finding{Kind: FindingMismatch, Path: "$." + shape.CursorPath, Shape: ShapeValue}
+	element := Finding{Kind: FindingMismatch, Path: "$.data.workGraphEdges.edges[2].edgeId", Shape: ShapeValue}
+	if !sameOrder.admits(cursor) || !sameOrder.admits(element) {
+		t.Fatalf("plan must own the cursor and element findings: cursor=%v element=%v", sameOrder.admits(cursor), sameOrder.admits(element))
+	}
+	// A candidate whose cursor does not name its own last element.
+	wrong := snapshotFromJSON(t, collapseBody(t, e, 3)).Data
+	root := wrong.(map[string]any)["workGraphEdges"].(map[string]any)["pageInfo"].(map[string]any)
+	root["endCursor"] = e[0].id
+	badCursor := buildDuplicateCollapseLengthPlan(shape, decode([]collapseEdge{e[0], e[0], e[1], e[2]}), wrong)
+	if !badCursor.applies || badCursor.admits(cursor) {
+		t.Fatalf("a cursor that is not the candidate's last id must stay outside: applies=%v admits=%v", badCursor.applies, badCursor.admits(cursor))
 	}
 }

@@ -217,6 +217,15 @@ func TestPrMatchesTheFrozenGolden(t *testing.T) {
 		t.Run(tc.Name, func(t *testing.T) {
 			if tc.Kind == "parse" {
 				repo, number, ok := workgraph.ParsePRDetailID(tc.ID)
+				// The reference parser accepted any number of digits. The Go
+				// parser refuses a number above the UInt32 range, which the
+				// bound column would otherwise wrap onto another pull request.
+				if tc.Expected != nil && tc.Expected["number"].(float64) > 4294967295 {
+					if ok {
+						t.Fatalf("parsed %q as %s/%d, want a refusal above the UInt32 range", tc.ID, repo, number)
+					}
+					return
+				}
 				if tc.Expected == nil {
 					if ok {
 						t.Fatalf("parsed %q as %s/%d, want a refusal", tc.ID, repo, number)

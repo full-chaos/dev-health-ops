@@ -245,6 +245,7 @@ type VenueOutcome struct {
 	DocumentDigest   string   `json:"document_digest"`
 	Executed         bool     `json:"executed"`
 	Admitted         bool     `json:"admitted"`
+	RefusalReason    string   `json:"refusal_reason"`
 	Route            string   `json:"route"`
 	EdgeBuildBinding string   `json:"edge_build_binding"`
 	TerminalState    string   `json:"terminal_state"`
@@ -294,6 +295,17 @@ func VenueAdmit(receipt *VenueReceipt, operation, schemaDigest, documentDigest, 
 		return errors.New("operation is not venue-eligible: the viewer principal can prove it, or it declares no authorization requirement")
 	}
 	requirement, _ := AuthzFor(operation)
+	if stamp := receipt.Venue; stamp != nil && !requirement.Satisfied(stamp.Role, stamp.Superuser) {
+		return fmt.Errorf("receipt principal (role %q, superuser %t) does not satisfy the operation's authorization", stamp.Role, stamp.Superuser)
+	}
+	return venueReceiptProves(receipt, operation, schemaDigest, documentDigest, runningBuild, targetMode)
+}
+
+// venueReceiptProves is what any venue receipt must satisfy, whatever class
+// admits it: an allowlisted non-production venue, a whole run at the live
+// build, schema and document, and every declared variant proven the way the
+// store predicate proves a row.
+func venueReceiptProves(receipt *VenueReceipt, operation, schemaDigest, documentDigest, runningBuild, targetMode string) error {
 	stamp := receipt.Venue
 	switch {
 	case stamp == nil:
@@ -302,26 +314,16 @@ func VenueAdmit(receipt *VenueReceipt, operation, schemaDigest, documentDigest, 
 		return errors.New("receipt venue is production")
 	case venueEdgeHosts[stamp.Name] == nil:
 		return fmt.Errorf("receipt venue %q is not allowlisted", stamp.Name)
-	case !requirement.Satisfied(stamp.Role, stamp.Superuser):
-		return fmt.Errorf("receipt principal (role %q, superuser %t) does not satisfy the operation's authorization", stamp.Role, stamp.Superuser)
-	case receipt.Stage != Stage:
-		return fmt.Errorf("receipt stage %q is not %q", receipt.Stage, Stage)
-	case receipt.ExitCause != venueExitCompleted:
-		return fmt.Errorf("receipt exit_cause %q is not %q", receipt.ExitCause, venueExitCompleted)
-	case strings.TrimSpace(runningBuild) == "" || receipt.CandidateBuild != runningBuild:
-		return fmt.Errorf("receipt names build %q, production runs %q", receipt.CandidateBuild, runningBuild)
-	case receipt.SchemaDigest != schemaDigest:
-		return errors.New("receipt schema digest is not the live schema digest")
-	case documentDigest == "":
-		return errors.New("no live document digest for the operation")
 	}
-	spec, err := SpecFor(operation)
-	if err != nil {
+	if err := reportIsWholeRunAt(receipt, schemaDigest, runningBuild); err != nil {
 		return err
 	}
-	needed := map[string]bool{"": false}
-	for _, variant := range spec.Variants {
-		needed[variant.Name] = false
+	if documentDigest == "" {
+		return errors.New("no live document digest for the operation")
+	}
+	needed, err := declaredVariants(operation)
+	if err != nil {
+		return err
 	}
 	for _, outcome := range receipt.Outcomes {
 		if outcome.Operation != operation {
@@ -343,11 +345,43 @@ func VenueAdmit(receipt *VenueReceipt, operation, schemaDigest, documentDigest, 
 	return nil
 }
 
+// reportIsWholeRunAt refuses a report that is not a completed run of the
+// enablement stage at the live schema and build.
+func reportIsWholeRunAt(receipt *VenueReceipt, schemaDigest, runningBuild string) error {
+	switch {
+	case receipt.Stage != Stage:
+		return fmt.Errorf("receipt stage %q is not %q", receipt.Stage, Stage)
+	case receipt.ExitCause != venueExitCompleted:
+		return fmt.Errorf("receipt exit_cause %q is not %q", receipt.ExitCause, venueExitCompleted)
+	case strings.TrimSpace(runningBuild) == "" || receipt.CandidateBuild != runningBuild:
+		return fmt.Errorf("receipt names build %q, production runs %q", receipt.CandidateBuild, runningBuild)
+	case receipt.SchemaDigest != schemaDigest:
+		return errors.New("receipt schema digest is not the live schema digest")
+	}
+	return nil
+}
+
+// declaredVariants is the base request ("") plus every declared variant,
+// each not yet seen.
+func declaredVariants(operation string) (map[string]bool, error) {
+	spec, err := SpecFor(operation)
+	if err != nil {
+		return nil, err
+	}
+	needed := map[string]bool{"": false}
+	for _, variant := range spec.Variants {
+		needed[variant.Name] = false
+	}
+	return needed, nil
+}
+
 // venueOutcomeRefusal mirrors enablementProofPredicate row by row.
 func venueOutcomeRefusal(outcome VenueOutcome, documentDigest, targetMode string) string {
 	switch {
 	case outcome.DocumentDigest != documentDigest:
 		return "document digest is not the live one"
+	case outcome.RefusalReason != "":
+		return fmt.Sprintf("outcome was refused (%s)", outcome.RefusalReason)
 	case !outcome.Executed || !outcome.Admitted:
 		return "not executed and admitted"
 	case outcome.EdgeBuildBinding != EdgeBuildPresent:

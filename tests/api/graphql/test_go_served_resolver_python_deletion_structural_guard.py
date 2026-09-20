@@ -144,6 +144,23 @@ DELETED_GO_SERVED_RESOLVER_MODULES: dict[str, Path] = {
     / "graphql"
     / "resolvers"
     / "pr.py",
+    # catalog (the catalogValues and acrRepositoryScopes documents).
+    "catalog resolver": ROOT
+    / "src"
+    / "dev_health_ops"
+    / "api"
+    / "graphql"
+    / "resolvers"
+    / "catalog.py",
+    # The catalog's dimension value loader and description helpers; their only
+    # importers were the resolver and one loader test.
+    "dimension value loader": ROOT
+    / "src"
+    / "dev_health_ops"
+    / "api"
+    / "graphql"
+    / "loaders"
+    / "dimension_loader.py",
     # The operating review computation; its only importer was the resolver.
     "operating review computation": ROOT
     / "src"
@@ -223,6 +240,7 @@ SDL_LOAD_BEARING_SYMBOLS: dict[str, frozenset[str]] = {
             "hotspots",
             "cognitive_load",
             "pr",
+            "catalog",
         }
     ),
     "inputs.py": frozenset(
@@ -247,6 +265,11 @@ SDL_LOAD_BEARING_SYMBOLS: dict[str, frozenset[str]] = {
             "OperatingReviewSection",
             "OperatingReviewMetric",
             "OperatingReviewDelta",
+            "CatalogDimension",
+            "CatalogMeasure",
+            "CatalogLimits",
+            "CatalogValueItem",
+            "CatalogResult",
             "FeatureFlagItem",
             "FeatureFlagRegistryResult",
             "FeatureFlagEventItem",

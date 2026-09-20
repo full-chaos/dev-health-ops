@@ -173,8 +173,10 @@ func (l *GoServedLedger) ExpectedMessage(operation string) string {
 // DeletionErrorMatches reports whether snapshot is exactly the deletion
 // error for operation and nothing else, or names the first way it is not.
 //
-// Exactly: one error; its message equal to the ledger's template; its path
-// equal to [root]; no key besides message, locations and path; and no data
+// Exactly: one error; its message equal to the ledger's template naming the
+// root field (the deleted field body names the field it stands for, so a named
+// document over a deleted root field carries the root field's name, not its
+// own); its path equal to [root]; no key besides message, locations and path; and no data
 // beyond a null root. The class name of the server-side exception is not on
 // the wire, so the message text and path are the discriminator.
 func (l *GoServedLedger) DeletionErrorMatches(operation, root string, snapshot Snapshot) (bool, string) {
@@ -196,7 +198,7 @@ func (l *GoServedLedger) DeletionErrorMatches(operation, root string, snapshot S
 		}
 	}
 	message, _ := failure["message"].(string)
-	if message != l.ExpectedMessage(operation) {
+	if message != l.ExpectedMessage(root) {
 		return false, "baseline error message is not the deletion error's message for this operation"
 	}
 	path, _ := failure["path"].([]any)

@@ -78,7 +78,6 @@ from .resolvers.ai import (
 )
 from .resolvers.analytics import resolve_analytics
 from .resolvers.bus_factor import resolve_bus_factor
-from .resolvers.catalog import resolve_catalog
 from .resolvers.compounding_risk import resolve_compounding_risk
 from .resolvers.data_health import resolve_data_health
 from .resolvers.dev_evidence import (
@@ -346,9 +345,7 @@ class Query:
         Returns:
             CatalogResult with dimensions, measures, limits, and optional values.
         """
-        context = get_context(info)
-        # org_id is already validated and written to context by OrgIdAuthExtension.
-        return await resolve_catalog(context, dimension, filters=filters)
+        _raise_served_by_query_api("catalog", org_id, info)
 
     @strawberry.field(description="Run batch analytics queries")
     async def analytics(

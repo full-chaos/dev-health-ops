@@ -20,6 +20,7 @@ on:
       - 'uv.lock'
       - 'contracts/jobs/v1/**'
       - 'deploy/go-workers/**'
+      - 'deploy/docker-compose/compose.production.yml'
       - 'scripts/**'
       - 'src/dev_health_ops/api/**'
       - 'src/dev_health_ops/config/**'
@@ -138,6 +139,7 @@ on:
       - 'uv.lock'
       - 'contracts/jobs/v1/**'
       - 'deploy/go-workers/**'
+      - 'deploy/docker-compose/compose.production.yml'
       - 'scripts/**'
       - 'src/dev_health_ops/api/**'
       - 'src/dev_health_ops/config/**'
@@ -1008,6 +1010,20 @@ jobs:
         working-directory: dev-health-web-main
         run: pnpm install --frozen-lockfile
 
+      # An UNPAIRED run (web ref resolved to main) tolerates one direction: a
+      # web manifest entry naming an operation this repo has not registered
+      # yet. A paired change merges web first, so for a short window web main
+      # names an operation ops main lacks; without this every sibling ops PR
+      # would be red until the ops half lands. An operation registered HERE
+      # with no manifest entry, and any digest mismatch, stay errors on every
+      # run, and a paired run (same-named web branch) stays fully strict.
       - name: Run graphql-wire-parity check against this repo's HEAD
         working-directory: dev-health-web-main
-        run: pnpm graphql:wire-parity:check --ops-root "${{ github.workspace }}"
+        env:
+          TOLERATE_MANIFEST_ONLY: ${{ steps.resolve-web-ref.outputs.ref == 'main' && '1' || '' }}
+        run: |
+          args=(--ops-root "${{ github.workspace }}")
+          if [ "$TOLERATE_MANIFEST_ONLY" = "1" ]; then
+            args+=(--tolerate-manifest-only)
+          fi
+          pnpm graphql:wire-parity:check "${args[@]}"

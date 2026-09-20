@@ -90,6 +90,9 @@ type statusReportOperation struct {
 	StaleDigests               []string `json:"stale_digests"`
 	UnreachableDocumentDigests []string `json:"unreachable_document_digests"`
 	Proven                     bool     `json:"proven"`
+	// VenueProof is "admin_only" or "no_production_data" for a live row
+	// enabled from a venue receipt (not store-proven), else "".
+	VenueProof string `json:"venue_proof"`
 	// A plain `bool` can only ever say "yes" or "no",
 	// so the moment reachability genuinely CANNOT be told (the go plane
 	// is unreachable) defaulting to the local row's own classification
@@ -460,34 +463,7 @@ func printStatusText(report statusReport, local string) {
 		if operation.RolloutPercentage != nil {
 			rollout = fmt.Sprintf("%d", *operation.RolloutPercentage)
 		}
-		proof := "-"
-		if operation.DigestState == goapiproof.DigestMatch {
-			proof = "UNPROVEN"
-			if operation.Proven {
-				proof = "ok"
-			}
-			// A proof receipt names a build served at a
-			// document digest -- it says nothing about whether the DEPLOYED
-			// process still registers that digest right now. Printing "ok"
-			// here regardless is the "output that merely looks healthy"
-			// this diagnostic must avoid: executed, `enable -dry-run`
-			// refused the identical operation with a document digest
-			// MISMATCH while this line still read "ok".
-			// A SCHEMA-level difference between this binary and the
-			// deployed process no longer forces MISMATCH here. Proof is
-			// looked up at the LIVE digest (RoutingStatusRows passes it
-			// to OperationsWithEnablementProof), so a live row's receipt
-			// is a real receipt whatever SDL this binary happens to
-			// carry -- and forcing MISMATCH on every live row for the
-			// duration of a carry window is a diagnostic that cries
-			// wolf exactly when it is being read most carefully. What
-			// still forces it is what it always meant: the DEPLOYED
-			// plane registering a different document digest, or not
-			// registering the operation at all.
-			if operation.DeployedDigestState == "MISMATCH" || operation.DeployedDigestState == "UNREGISTERED" {
-				proof = "MISMATCH"
-			}
-		}
+		proof := proofWord(operation)
 		fmt.Fprintf(stdout, "%-24s %-8s %-10s %-8s %s\n", operation.Operation, operation.DigestState, mode, rollout, proof)
 		// r2 R2-05: these were computed and never printed, which made the
 		// runbook's promise to name them false.
@@ -528,6 +504,7 @@ func toReportOperation(status goapiproof.OperationStatus, deployedDigests map[st
 		PendingDigests:             status.PendingDigests,
 		UnreachableDocumentDigests: status.UnreachableDocumentDigests,
 		Proven:                     status.Proven,
+		VenueProof:                 status.VenueProof,
 	}
 	if reported.StaleDigests == nil {
 		reported.StaleDigests = []string{}
@@ -672,4 +649,45 @@ func derefOr(value *string, fallback string) string {
 		return fallback
 	}
 	return *value
+}
+
+// proofWord is the PROOF column word for one operation.
+//
+// NO schemaMismatch PARAMETER, deliberately (r1 F1). This used to take
+// one and OR it into the MISMATCH condition below, which meant that for
+// the whole duration of a `carry` window -- where a tools image built
+// for the commit about to roll differs from the deployed one BY DESIGN
+// -- every live row printed MISMATCH, a diagnostic crying wolf exactly
+// when it is read most carefully. Proof is looked up at the LIVE digest
+// (RoutingStatusRows hands that digest to OperationsWithEnablementProof),
+// so a live row's receipt is a real receipt whatever SDL this binary
+// happens to carry. The parameter is gone rather than merely unused, so
+// the clause cannot be reintroduced by a caller.
+func proofWord(operation statusReportOperation) string {
+	proof := "-"
+	if operation.DigestState == goapiproof.DigestMatch {
+		proof = "UNPROVEN"
+		if operation.Proven {
+			proof = "ok"
+		} else if operation.VenueProof != "" {
+			// Its own word, never UNPROVEN: a waiver row and a venue row
+			// are different states and a ladder keyed on UNPROVEN must
+			// neither trip on nor hide behind the other.
+			proof = "VENUE-PROVEN(" + operation.VenueProof + ")"
+		}
+		// A proof receipt names a build served at a
+		// document digest -- it says nothing about whether the DEPLOYED
+		// process still registers that digest right now. Printing "ok"
+		// here regardless is the "output that merely looks healthy"
+		// this diagnostic must avoid: executed, `enable -dry-run`
+		// refused the identical operation with a document digest
+		// MISMATCH while this line still read "ok".
+		// What still forces MISMATCH is what it always meant: the
+		// DEPLOYED plane registering a different document digest for
+		// this operation, or not registering it at all.
+		if operation.DeployedDigestState == "MISMATCH" || operation.DeployedDigestState == "UNREGISTERED" {
+			proof = "MISMATCH"
+		}
+	}
+	return proof
 }

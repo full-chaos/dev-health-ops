@@ -276,6 +276,10 @@ func TestRunProvesTwoOperationsEndToEnd(t *testing.T) {
 // e2ePoolHook, when set, adjusts the fake receipt store before run().
 var e2ePoolHook func(*e2ePool)
 
+// e2eEdgeArgs, when set, replaces the default -edge-bearer-exec flag with
+// the flags a venue run passes (a login-token file and -venue).
+var e2eEdgeArgs func(t *testing.T) []string
+
 // runTwoOperationsEndToEnd drives run() against fake registry,
 // /buildinfo and edge servers plus a fake receipt store; extraArgs are
 // appended to the operator's own flags.
@@ -398,8 +402,12 @@ func runTwoOperationsEndToEnd(t *testing.T, extraArgs ...string) (stdout string,
 	proofToken := syntheticJWT(t, map[string]string{"sub": "proof", "org_id": "70d529e0"})
 	reportPath = filepath.Join(t.TempDir(), "report.json")
 
+	edgeArgs := []string{"-edge-bearer-exec=" + jsonArgv(t, e2eBearerHelper(t, edgeToken))}
+	if e2eEdgeArgs != nil {
+		edgeArgs = e2eEdgeArgs(t)
+	}
 	stdout = captureStdout(t, func() {
-		runErr = runCLI(t, append([]string{
+		runErr = runCLI(t, append(append([]string{
 			"-registry-url=" + registry.URL + "/registry",
 			"-buildinfo-url=" + buildinfo.URL + "/buildinfo",
 			"-edge-url=" + edge.URL + "/graphql",
@@ -409,11 +417,10 @@ func runTwoOperationsEndToEnd(t *testing.T, extraArgs ...string) (stdout string,
 			"-artifact-dir=" + t.TempDir(),
 			"-recorded-by=harness",
 			"-review-evidence=e2e harness run",
-			"-edge-bearer-exec=" + jsonArgv(t, e2eBearerHelper(t, edgeToken)),
 			"-proof-bearer-exec=" + jsonArgv(t, e2eBearerHelper(t, proofToken)),
 			"-report=" + reportPath,
 			"-timeout=5s",
-		}, extraArgs...))
+		}, edgeArgs...), extraArgs...))
 	})
 	return stdout, runErr, reportPath, pool
 }

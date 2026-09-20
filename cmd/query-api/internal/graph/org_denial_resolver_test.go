@@ -48,6 +48,18 @@ func orgScopedCalls() map[string]orgScopedCall {
 			_, err := r.Query().AiComparison(ctx, orgID, model.AIDateRangeInput{}, nil)
 			return err
 		},
+		"aiRiskBreakdown": func(r *Resolver, ctx context.Context, orgID string) error {
+			_, err := r.Query().AiRiskBreakdown(ctx, orgID, model.AIDateRangeInput{}, nil)
+			return err
+		},
+		"aiAttributedPrs": func(r *Resolver, ctx context.Context, orgID string) error {
+			_, err := r.Query().AiAttributedPrs(ctx, orgID, model.AIDateRangeInput{}, nil, 50, 0)
+			return err
+		},
+		"aiAttributionOverview": func(r *Resolver, ctx context.Context, orgID string) error {
+			_, err := r.Query().AiAttributionOverview(ctx, orgID, model.AIDateRangeInput{}, nil, 50, 0)
+			return err
+		},
 		"aiReviewLoad": func(r *Resolver, ctx context.Context, orgID string) error {
 			_, err := r.Query().AiReviewLoad(ctx, orgID, model.AIDateRangeInput{}, nil)
 			return err

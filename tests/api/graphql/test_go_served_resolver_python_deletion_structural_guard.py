@@ -144,6 +144,32 @@ DELETED_GO_SERVED_RESOLVER_MODULES: dict[str, Path] = {
     / "graphql"
     / "resolvers"
     / "pr.py",
+    # catalog (the catalogValues and acrRepositoryScopes documents).
+    "catalog resolver": ROOT
+    / "src"
+    / "dev_health_ops"
+    / "api"
+    / "graphql"
+    / "resolvers"
+    / "catalog.py",
+    # The catalog's dimension value loader and description helpers; their only
+    # importers were the resolver and one loader test.
+    "dimension value loader": ROOT
+    / "src"
+    / "dev_health_ops"
+    / "api"
+    / "graphql"
+    / "loaders"
+    / "dimension_loader.py",
+    # busFactor (the churn-concentration computation stays in
+    # metrics/knowledge.py for the daily job).
+    "bus factor resolver": ROOT
+    / "src"
+    / "dev_health_ops"
+    / "api"
+    / "graphql"
+    / "resolvers"
+    / "bus_factor.py",
     # The operating review computation; its only importer was the resolver.
     "operating review computation": ROOT
     / "src"
@@ -176,6 +202,7 @@ SDL_LOAD_BEARING_SOURCES: tuple[Path, ...] = (
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "types" / "cognitive_load.py",
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "types" / "complexity.py",
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "types" / "review_edges.py",
+    ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "types" / "bus_factor.py",
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "schema.py",
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "models" / "inputs.py",
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "models" / "outputs.py",
@@ -210,6 +237,15 @@ SDL_LOAD_BEARING_SYMBOLS: dict[str, frozenset[str]] = {
     "review_edges.py": frozenset(
         {"ReviewEdgesInput", "ReviewEdgeRow", "ReviewEdgesResult"}
     ),
+    "bus_factor.py": frozenset(
+        {
+            "MaintainerShare",
+            "RepoBusFactor",
+            "BusFactorScope",
+            "BusFactor",
+            "BusFactorScopeInput",
+        }
+    ),
     "schema.py": frozenset(
         {
             "capacity_forecast",
@@ -223,6 +259,8 @@ SDL_LOAD_BEARING_SYMBOLS: dict[str, frozenset[str]] = {
             "hotspots",
             "cognitive_load",
             "pr",
+            "catalog",
+            "bus_factor",
         }
     ),
     "inputs.py": frozenset(
@@ -247,6 +285,11 @@ SDL_LOAD_BEARING_SYMBOLS: dict[str, frozenset[str]] = {
             "OperatingReviewSection",
             "OperatingReviewMetric",
             "OperatingReviewDelta",
+            "CatalogDimension",
+            "CatalogMeasure",
+            "CatalogLimits",
+            "CatalogValueItem",
+            "CatalogResult",
             "FeatureFlagItem",
             "FeatureFlagRegistryResult",
             "FeatureFlagEventItem",

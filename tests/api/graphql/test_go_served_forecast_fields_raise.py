@@ -28,6 +28,14 @@ _QUERIES = {
         'input: {historyWeeks: 12, teamIds: ["team-1"]}) { forecastId } }',
         None,
     ),
+    "catalog": (
+        'query { catalog(orgId: "org-1") { limits { maxDays } } }',
+        None,
+    ),
+    "busFactor": (
+        'query { busFactor(orgId: "org-1") { value } }',
+        None,
+    ),
     "pr": (
         'query { pr(orgId: "org-1", id: "11111111-1111-1111-1111-111111111111#pr1") '
         "{ id } }",
@@ -96,7 +104,17 @@ _LEDGER = (
 
 def test_the_go_served_ledger_names_exactly_the_raising_fields() -> None:
     ledger = json.loads(_LEDGER.read_text())
-    assert sorted(entry["operation"] for entry in ledger["entries"]) == sorted(_QUERIES)
+    # A named document over a root field that raises carries its own ledger row;
+    # the field that raises is its response root.
+    named_documents = {
+        "catalogValues": "catalog",
+        "acrRepositoryScopes": "catalog",
+    }
+    fields = {
+        named_documents.get(entry["operation"], entry["operation"])
+        for entry in ledger["entries"]
+    }
+    assert sorted(fields) == sorted(_QUERIES)
 
 
 @pytest.mark.asyncio

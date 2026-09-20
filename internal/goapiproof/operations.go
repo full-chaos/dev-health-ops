@@ -3,6 +3,8 @@ package goapiproof
 import (
 	"fmt"
 	"sort"
+	"strings"
+	"time"
 )
 
 // Window is the request window every windowed operation is asked for.
@@ -149,12 +151,27 @@ type Variant struct {
 	// vice versa).
 	Parity Options
 
+	// KnownRefusal, when set, records that this case is expected NOT to
+	// compare: the planes differ by design and no declaration admits the
+	// difference. The case stays in the corpus so the record keeps showing the
+	// difference, and a change that makes it comparable is noticed. It never
+	// admits anything; it only documents.
+	KnownRefusal *KnownRefusal
+
 	// Instance, when set, marks a variant whose request needs one REAL
 	// identifier from the run (a repository that has alerts, a search term
 	// that matches an alert, ...). The run supplies it as
 	// `-instance-id <operation>.<variant>=<value>`; without one the variant
 	// is REFUSED by name, never sent with a guessed value.
 	Instance *VariantInstance
+}
+
+// KnownRefusal names why a corpus case is expected not to compare.
+type KnownRefusal struct {
+	// Ticket owns the difference.
+	Ticket string
+	// Reason states the difference in words.
+	Reason string
 }
 
 // VariantInstance describes the run-supplied identifier a Variant needs.
@@ -230,8 +247,8 @@ var operationSpecs = map[string]OperationSpec{
 	"aiImpactSummary": {
 		ResponseRoot: "aiImpactSummary",
 		Variables:    aiRollupVariables(nil),
-		Parity:       aiImpactSummaryParity(),
-		Variants: append(aiRollupVariants(aiImpactSummaryParity()),
+		Parity:       nonEmpty(aiImpactSummaryParity(), "data.aiImpactSummary.daily"),
+		Variants: append(aiRollupVariants(nonEmpty(aiImpactSummaryParity(), "data.aiImpactSummary.daily"), nonEmpty(aiImpactSummaryParity(), "data.aiImpactSummary.daily")),
 			aiInstanceVariant("REPO_VALID", "a repository id that has rollup rows", "repoId", aiImpactSummaryParity(), "data.aiImpactSummary.daily", "data.aiImpactSummary.repoBreakdown", "scopeId"),
 			aiInstanceVariant("REPO_NAME_VALID", "the full name of a repository that has rollup rows", "repoId", aiImpactSummaryParity(), "data.aiImpactSummary.daily", "", ""),
 			aiInstanceVariant("TEAM_VALID", "a team id stored on rollup rows", "teamId", aiImpactSummaryParity(), "data.aiImpactSummary.daily", "data.aiImpactSummary.teamBreakdown", "scopeId"),
@@ -240,7 +257,7 @@ var operationSpecs = map[string]OperationSpec{
 	"aiComparison": {
 		ResponseRoot: "aiComparison",
 		Variables:    aiRollupVariables(nil),
-		Variants: append(aiRollupVariants(Options{}),
+		Variants: append(aiRollupVariants(Options{}, Options{}),
 			aiInstanceVariant("REPO_VALID", "a repository id that has rollup rows", "repoId", Options{}, "", "", ""),
 			aiInstanceVariant("REPO_NAME_VALID", "the full name of a repository that has rollup rows", "repoId", Options{}, "", "", ""),
 			aiInstanceVariant("TEAM_VALID", "a team id stored on rollup rows", "teamId", Options{}, "", "", ""),
@@ -249,8 +266,8 @@ var operationSpecs = map[string]OperationSpec{
 	"aiReviewLoad": {
 		ResponseRoot: "aiReviewLoad",
 		Variables:    aiRollupVariables(nil),
-		Parity:       aiReviewLoadParity(),
-		Variants: append(aiRollupVariants(aiReviewLoadParity()),
+		Parity:       nonEmpty(aiReviewLoadParity(), "data.aiReviewLoad.byBucket"),
+		Variants: append(aiRollupVariants(nonEmpty(aiReviewLoadParity(), "data.aiReviewLoad.byBucket"), nonEmpty(Options{}, "data.aiReviewLoad.byBucket")),
 			aiInstanceVariant("REPO_VALID", "a repository id that has rollup rows", "repoId", aiReviewLoadParity(), "data.aiReviewLoad.byBucket", "", ""),
 			aiInstanceVariant("REPO_NAME_VALID", "the full name of a repository that has rollup rows", "repoId", aiReviewLoadParity(), "data.aiReviewLoad.byBucket", "", ""),
 			aiInstanceVariant("TEAM_VALID", "a team id that has rollup rows and whose repo patterns select a repository", "teamId", aiReviewLoadParity(), "data.aiReviewLoad.byBucket", "", ""),
@@ -261,28 +278,91 @@ var operationSpecs = map[string]OperationSpec{
 		Variables: func(orgID string, _ Window) map[string]any {
 			return compoundingRiskVariables(orgID, nil)
 		},
-		Parity: compoundingRiskParity,
+		Parity: compoundingRiskRowsParity("REPO"),
 		// A team breakout whose team has NO stored team rows is deliberately
 		// not a variant: that branch derives team points from the repo rows
 		// through team ownership on Go and through teams.repo_patterns on
 		// Python, so the two answers differ by design and no computed check
-		// admits it; it is a refused case, not a blanket citation.
+		// admits it; it is a refused case, not a blanket citation. The Go
+		// answer (team ownership through the shared team-scope condition) is
+		// the ruled semantics and Python's repo_patterns read is the declared
+		// baseline divergence; the Go behaviour is pinned by
+		// TestRealClickHouse_TeamBreakout in the compoundingrisk package.
+		// The same divergence reaches any request that names teamIds: an
+		// empty list (Python reads it as no filter and aggregates teams through
+		// teams.repo_patterns) and a team WITH stored rows (the rows agree, but
+		// the trend is built over the team's repo_patterns repositories on
+		// Python and over its owned repositories on Go). The web document sends
+		// no teamIds, so neither is reachable from it; both stay in the corpus
+		// as KNOWN refusals so the record keeps showing the difference and a
+		// later change that makes them comparable is noticed.
 		Variants: []Variant{
-			compoundingRiskVariant("REPO_BREAKOUT", map[string]any{"breakout": "REPO", "trendDays": 30}),
-			compoundingRiskVariant("TEAM_BREAKOUT", map[string]any{"breakout": "TEAM", "trendDays": 30}),
+			compoundingRiskRowsVariant("REPO_BREAKOUT", "REPO", map[string]any{"breakout": "REPO", "trendDays": 30}),
+			compoundingRiskRowsVariant("TEAM_BREAKOUT", "TEAM", map[string]any{"breakout": "TEAM", "trendDays": 30}),
 			compoundingRiskDayVariant("DAY", "REPO"),
 			compoundingRiskDayVariant("TEAM_DAY", "TEAM"),
-			compoundingRiskVariant("REPO_IDS_UNKNOWN", map[string]any{"breakout": "REPO", "repoIds": []any{"00000000-0000-0000-0000-000000000001"}, "trendDays": 30}),
-			compoundingRiskVariant("REPO_IDS_EMPTY", map[string]any{"breakout": "REPO", "repoIds": []any{}, "trendDays": 30}),
-			compoundingRiskVariant("TEAM_IDS_UNKNOWN", map[string]any{"breakout": "TEAM", "teamIds": []any{"team-abc-123"}, "trendDays": 30}),
-			compoundingRiskVariant("TEAM_IDS_EMPTY", map[string]any{"breakout": "TEAM", "teamIds": []any{}, "trendDays": 30}),
+			compoundingRiskEmptyVariant("REPO_IDS_UNKNOWN", map[string]any{"breakout": "REPO", "repoIds": []any{"00000000-0000-0000-0000-000000000001"}, "trendDays": 30}),
+			compoundingRiskEmptyVariant("REPO_IDS_EMPTY", map[string]any{"breakout": "REPO", "repoIds": []any{}, "trendDays": 30}),
+			compoundingRiskKnownRefusalVariant("TEAM_IDS_EMPTY", map[string]any{"breakout": "TEAM", "teamIds": []any{}, "trendDays": 30}, nil),
+			compoundingRiskKnownRefusalVariant("TEAM_STORED", map[string]any{"breakout": "TEAM", "trendDays": 30},
+				&VariantInstance{
+					Kind: "a team id that has stored team-scope compounding-risk rows",
+					Bind: func(vars map[string]any, value string) {
+						vars["filter"].(map[string]any)["teamIds"] = []any{value}
+					},
+					EchoFor: func(value string) []ScopeEcho {
+						return []ScopeEcho{{List: "data.compoundingRisk.rows", Fields: []string{"scopeId", "scopeLabel"}, Value: value}}
+					},
+				}),
+			compoundingRiskEmptyVariant("TEAM_IDS_UNKNOWN", map[string]any{"breakout": "TEAM", "teamIds": []any{"team-abc-123"}, "trendDays": 30}),
 			compoundingRiskInstanceVariant("REPO_VALID", "a repository id that has stored compounding-risk rows", "REPO", "repoIds"),
-			compoundingRiskInstanceVariant("TEAM_STORED", "a team id that has stored team-scope compounding-risk rows", "TEAM", "teamIds"),
-			compoundingRiskVariant("TEAM_AND_REPO_UNKNOWN", map[string]any{"breakout": "TEAM", "teamIds": []any{"team-abc-123"}, "repoIds": []any{"00000000-0000-0000-0000-000000000001"}, "trendDays": 30}),
-			compoundingRiskVariant("TREND_ONE_DAY", map[string]any{"breakout": "REPO", "trendDays": 1}),
-			compoundingRiskVariant("TREND_CLAMPED_HIGH", map[string]any{"breakout": "REPO", "trendDays": 1000}),
-			compoundingRiskVariant("TREND_CLAMPED_LOW", map[string]any{"breakout": "REPO", "trendDays": 0}),
+			compoundingRiskEmptyVariant("TEAM_AND_REPO_UNKNOWN", map[string]any{"breakout": "TEAM", "teamIds": []any{"team-abc-123"}, "repoIds": []any{"00000000-0000-0000-0000-000000000001"}, "trendDays": 30}),
+			compoundingRiskPinnedTrendVariant("TREND_ONE_DAY", 1),
+			compoundingRiskRowsVariant("TREND_CLAMPED_HIGH", "REPO", map[string]any{"breakout": "REPO", "trendDays": 1000}),
+			compoundingRiskPinnedTrendVariant("TREND_CLAMPED_LOW", 0),
 		},
+	},
+	"aiRiskBreakdown": {
+		ResponseRoot: "aiRiskBreakdown",
+		Variables:    aiRollupVariables(nil),
+		Parity:       nonEmpty(aiRiskBreakdownParity(), "data.aiRiskBreakdown.byBucket"),
+		Variants: append(aiRollupVariants(nonEmpty(aiRiskBreakdownParity(), "data.aiRiskBreakdown.byBucket"), nonEmpty(Options{}, "data.aiRiskBreakdown.byBucket")),
+			aiInstanceVariant("REPO_VALID", "a repository id that has rollup rows", "repoId", aiRiskBreakdownParity(), "data.aiRiskBreakdown.byBucket", "", ""),
+			aiInstanceVariant("REPO_NAME_VALID", "the full name of a repository that has rollup rows", "repoId", aiRiskBreakdownParity(), "data.aiRiskBreakdown.byBucket", "", ""),
+			aiInstanceVariant("TEAM_VALID", "a team id stored on rollup rows whose repo patterns select a repository", "teamId", aiRiskBreakdownParity(), "data.aiRiskBreakdown.byBucket", "", ""),
+		),
+	},
+	"aiAttributedPrs": {
+		ResponseRoot: "aiAttributedPrs",
+		Variables:    aiPagedVariables(nil),
+		Parity:       nonEmpty(aiAttributedPrsParity(), "data.aiAttributedPrs.rows"),
+		Variants: append(aiPagedVariants(nonEmpty(aiAttributedPrsParity(), "data.aiAttributedPrs.rows"), map[string]map[string]any{
+			"WORK_TYPE":             {"workType": "pull_request"},
+			"REPO_UNKNOWN":          {"repoId": "00000000-0000-0000-0000-000000000001"},
+			"REPO_NAME_UNKNOWN":     {"repoId": "no-such-org/no-such-repo"},
+			"TEAM_UNKNOWN":          {"teamId": "team-abc-123"},
+			"REPO_AND_TEAM_UNKNOWN": {"repoId": "00000000-0000-0000-0000-000000000001", "teamId": "team-abc-123"},
+		}),
+			aiPagedInstanceVariant("REPO_VALID", "a repository id that has AI-attributed pull requests", "repoId", aiAttributedPrsParity(), "data.aiAttributedPrs.rows", "data.aiAttributedPrs.rows", "repoId"),
+			aiPagedInstanceVariant("REPO_NAME_VALID", "the full name of a repository that has AI-attributed pull requests", "repoId", aiAttributedPrsParity(), "data.aiAttributedPrs.rows", "", ""),
+			aiPagedInstanceVariant("TEAM_VALID", "a team id whose repo patterns select a repository with AI-attributed pull requests", "teamId", aiAttributedPrsParity(), "data.aiAttributedPrs.rows", "data.aiAttributedPrs.rows", "teamId"),
+		),
+	},
+	"aiAttributionOverview": {
+		ResponseRoot: "aiAttributionOverview",
+		Variables:    aiPagedVariables(nil),
+		Parity:       nonEmpty(aiAttributionOverviewParity(), "data.aiAttributionOverview.rows"),
+		Variants: append(aiPagedVariants(nonEmpty(aiAttributionOverviewParity(), "data.aiAttributionOverview.rows"), map[string]map[string]any{
+			"BUCKETS":               {"buckets": []any{"AI_ASSISTED", "HUMAN"}},
+			"REPO_UNKNOWN":          {"repoId": "00000000-0000-0000-0000-000000000001"},
+			"REPO_NAME_UNKNOWN":     {"repoId": "no-such-org/no-such-repo"},
+			"TEAM_UNKNOWN":          {"teamId": "team-abc-123"},
+			"REPO_AND_TEAM_UNKNOWN": {"repoId": "00000000-0000-0000-0000-000000000001", "teamId": "team-abc-123"},
+		}),
+			aiPagedInstanceVariant("REPO_VALID", "a repository id that has resolved attribution records", "repoId", aiAttributionOverviewParity(), "data.aiAttributionOverview.rows", "data.aiAttributionOverview.rows", "repoId"),
+			aiPagedInstanceVariant("REPO_NAME_VALID", "the full name of a repository that has resolved attribution records", "repoId", aiAttributionOverviewParity(), "data.aiAttributionOverview.rows", "", ""),
+			aiPagedInstanceVariant("TEAM_VALID", "a team id whose repo patterns select a repository with resolved attribution records", "teamId", aiAttributionOverviewParity(), "data.aiAttributionOverview.rows", "data.aiAttributionOverview.rows", "teamId"),
+		),
 	},
 	"busFactor": {
 		ResponseRoot: "busFactor",
@@ -323,10 +403,20 @@ var operationSpecs = map[string]OperationSpec{
 		},
 		Variants: []Variant{
 			experimentsVariant("ORG_EXPLICIT", "ORG", nil),
-			experimentsVariant("TEAM_UNKNOWN", "TEAM", []string{"team-abc-123"}),
+			// An unresolved team is a known refusal: the planes differ by
+			// design, so the case stays to keep the difference on the record.
+			experimentsTeamUnknownVariant(),
 			experimentsVariant("REPO_UNKNOWN", "REPO", []string{"00000000-0000-0000-0000-000000000001"}),
 			experimentsVariant("SERVICE_UNKNOWN", "SERVICE", []string{"service-abc-123"}),
 			experimentsVariant("DEVELOPER_UNKNOWN", "DEVELOPER", []string{"dev-abc-123"}),
+			// A repository id the run supplies. The answer carries no scope
+			// echo (experiments hold no repository field) and the comparator
+			// has no guard that the answer differs from the base answer, so
+			// the case proves the repo branch is read on both planes and
+			// compared, not that the filter narrowed the cards. A team id is
+			// not a case: Go selects a team's repositories by ownership and
+			// Python by member authorship, a declared baseline difference.
+			experimentsRepoValidVariant(),
 		},
 	},
 	// The two product telemetry dashboards take a half-open day range only; the
@@ -337,6 +427,10 @@ var operationSpecs = map[string]OperationSpec{
 	// end), which both planes answer with empty lists and an all-null summary.
 	"productTelemetryDashboard": {
 		ResponseRoot: "productTelemetryDashboard",
+		// The base request is measured only when the run's window holds
+		// events of the run's org on a leg; two empty answers agree without
+		// either plane reading anything. The window is run-supplied.
+		Parity: Options{RequireNonEmpty: []string{"data.productTelemetryDashboard.dailyActiveUsers"}},
 		Variables: func(orgID string, w Window) map[string]any {
 			return map[string]any{"orgId": orgID, "input": map[string]any{"startDate": w.SinceDate, "endDate": w.UntilDate}}
 		},
@@ -941,19 +1035,20 @@ var operationSpecs = map[string]OperationSpec{
 	},
 	// releaseImpact is the release impact document the feature flag pages
 	// send: the `workGraphEdges` root field with the filters `nodeId`,
-	// `sourceType` and `limit`. It reads the same resolver as the
-	// workGraphEdges document, so its declared baseline difference is the
-	// same. The base request is the page's request for every release
-	// (`nodeId` empty, `sourceType` RELEASE, `limit` 200); the variants prove
-	// the branches a page can reach: one release by node id (a real id the
-	// run supplies), and a page cut at one edge.
+	// `sourceType` and `limit` in one variable. It reads the same resolver as
+	// the workGraphEdges document, so its declared baseline difference is the
+	// same. The base request is the page's request for every release (`nodeId`
+	// empty, `sourceType` RELEASE, `limit` 200). See releaseimpact.go for the
+	// variants: a page cut at one edge, one node by id, and one populated
+	// source type.
 	"releaseImpact": {
 		ResponseRoot: "workGraphEdges",
 		Variables:    releaseImpactVariables,
 		Parity:       workGraphEdgesParity,
 		Variants: []Variant{
 			releaseImpactVariant("LIMIT_ONE", map[string]any{"nodeId": "", "sourceType": "RELEASE", "limit": 1}),
-			releaseImpactNodeVariant("NODE_ID_VALID", "a node id that is the source of at least one release edge"),
+			releaseImpactNodeVariant("NODE_ID_VALID", "a node id that is the source or target of at least one edge"),
+			releaseImpactSourceTypeVariant("SOURCE_TYPE_POPULATED", "a node type that has edges as a source, for example PR"),
 		},
 	},
 	"workGraphFlow": {Variables: workGraphVariables, ResponseRoot: "workGraphFlow"},
@@ -1359,10 +1454,37 @@ func securityAlertsSecondPageVariant() Variant {
 // aiRollupVariables builds the shared request of the AI rollup operations: the
 // org, the run's day window and the given scope (nil sends no scope).
 func aiRollupVariables(scope map[string]any) func(orgID string, w Window) map[string]any {
+	return aiRollupVariablesTo(scope, false)
+}
+
+// aiClock is the prover's clock for windows that follow the newest data.
+var aiClock = func() time.Time { return time.Now().UTC() }
+
+// aiWindowEnd is the last day of a window that reaches the newest complete
+// data: the later of the run's until-date and the last complete UTC day (the
+// day before the run day). A team id is stored only on the newest rollup
+// days, so a team-scoped request must end there rather than at a fixed date
+// that goes stale; the run day itself is excluded because the daily jobs
+// write it during the day, and two legs straddling a write would differ.
+func aiWindowEnd(w Window) string {
+	lastComplete := aiClock().AddDate(0, 0, -1).Format("2006-01-02")
+	if lastComplete > w.UntilDate {
+		return lastComplete
+	}
+	return w.UntilDate
+}
+
+// aiRollupVariablesTo is aiRollupVariables with the window's end optionally
+// extended to the run day.
+func aiRollupVariablesTo(scope map[string]any, toRunDay bool) func(orgID string, w Window) map[string]any {
 	return func(orgID string, w Window) map[string]any {
+		end := w.UntilDate
+		if toRunDay {
+			end = aiWindowEnd(w)
+		}
 		vars := map[string]any{
 			"orgId":     orgID,
-			"dateRange": map[string]any{"startDate": w.SinceDate, "endDate": w.UntilDate},
+			"dateRange": map[string]any{"startDate": w.SinceDate, "endDate": end},
 			"scope":     nil,
 		}
 		if scope != nil {
@@ -1376,7 +1498,12 @@ func aiRollupVariables(scope map[string]any) func(orgID string, w Window) map[st
 // have. The repository and team values name nothing in any org, so both planes
 // answer the empty window for them; a scope that selects real rows needs a
 // run-supplied identifier.
-func aiRollupVariants(parity Options) []Variant {
+//
+// A variant that selects nothing by construction carries no declaration: a
+// declared field that matches nothing refuses the run. The work-type variant
+// carries workTypeParity, because a work-type scope can turn a declared
+// aggregate off.
+func aiRollupVariants(parity, workTypeParity Options) []Variant {
 	scopes := []struct {
 		name  string
 		scope map[string]any
@@ -1390,7 +1517,14 @@ func aiRollupVariants(parity Options) []Variant {
 	}
 	variants := make([]Variant, 0, len(scopes))
 	for _, sc := range scopes {
-		variants = append(variants, Variant{Name: sc.name, Variables: aiRollupVariables(sc.scope), Parity: parity})
+		p := Options{}
+		switch sc.name {
+		case "BUCKETS":
+			p = parity
+		case "WORK_TYPE":
+			p = workTypeParity
+		}
+		variants = append(variants, Variant{Name: sc.name, Variables: aiRollupVariables(sc.scope), Parity: p})
 	}
 	return variants
 }
@@ -1429,7 +1563,7 @@ func aiInstanceVariant(name, kind, scopeField string, parity Options, nonEmpty, 
 	}
 	return Variant{
 		Name:      name,
-		Variables: aiRollupVariables(map[string]any{}),
+		Variables: aiRollupVariablesTo(map[string]any{}, scopeField == "teamId"),
 		Parity:    parity,
 		Instance: &VariantInstance{
 			Kind: kind,
@@ -1485,7 +1619,7 @@ func compoundingRiskDayVariant(name, breakout string) Variant {
 		Variables: func(orgID string, w Window) map[string]any {
 			return compoundingRiskVariables(orgID, map[string]any{"breakout": breakout, "day": w.UntilDate, "trendDays": 30})
 		},
-		Parity: compoundingRiskParity,
+		Parity: compoundingRiskRowsParity(breakout),
 	}
 }
 
@@ -1524,6 +1658,108 @@ func experimentsVariant(name, level string, ids []string) Variant {
 			return map[string]any{"orgId": orgID, "filters": map[string]any{"scope": scope}}
 		},
 	}
+}
+
+// aiPagedVariables builds the shared request of the paged AI operations: the
+// org, the run's day window, the scope (nil sends none) and the first page.
+func aiPagedVariables(scope map[string]any) func(orgID string, w Window) map[string]any {
+	return aiPagedVariablesTo(scope, false)
+}
+
+func aiPagedVariablesTo(scope map[string]any, toRunDay bool) func(orgID string, w Window) map[string]any {
+	return func(orgID string, w Window) map[string]any {
+		vars := aiRollupVariablesTo(scope, toRunDay)(orgID, w)
+		vars["limit"] = 50
+		vars["offset"] = 0
+		return vars
+	}
+}
+
+// aiPagedVariants is one variant per named scope branch, plus the page
+// branches: a limit below one, a limit above the ceiling and an offset.
+func aiPagedVariants(parity Options, scopes map[string]map[string]any) []Variant {
+	names := make([]string, 0, len(scopes))
+	for name := range scopes {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	variants := make([]Variant, 0, len(names)+3)
+	for _, name := range names {
+		p := parity
+		if strings.HasSuffix(name, "_UNKNOWN") {
+			p = Options{}
+		}
+		variants = append(variants, Variant{Name: name, Variables: aiPagedVariables(scopes[name]), Parity: p})
+	}
+	for _, page := range []struct {
+		name          string
+		limit, offset int
+	}{{"PAGE_ZERO", 0, 0}, {"PAGE_OVER_CEILING", 1000, 0}, {"PAGE_OFFSET", 5, 5}} {
+		limit, offset := page.limit, page.offset
+		variants = append(variants, Variant{
+			Name: page.name,
+			Variables: func(orgID string, w Window) map[string]any {
+				vars := aiPagedVariables(nil)(orgID, w)
+				vars["limit"], vars["offset"] = limit, offset
+				return vars
+			},
+			Parity: pageParity(page.name, parity),
+		})
+	}
+	return variants
+}
+
+// pageParity is a page variant's declaration: an offset page can legitimately
+// hold nothing, so it does not require a non-empty list.
+func pageParity(name string, parity Options) Options {
+	if name == "PAGE_OFFSET" {
+		parity.RequireNonEmpty = nil
+	}
+	return parity
+}
+
+// nonEmpty returns o requiring the named lists to be non-empty on a leg: a
+// request whose lists are empty on both legs measured nothing.
+func nonEmpty(o Options, paths ...string) Options {
+	o.RequireNonEmpty = append([]string(nil), paths...)
+	return o
+}
+
+// aiPagedInstanceVariant is aiInstanceVariant for the paged operations.
+func aiPagedInstanceVariant(name, kind, scopeField string, parity Options, nonEmpty, echoList, echoField string) Variant {
+	v := aiInstanceVariant(name, kind, scopeField, parity, nonEmpty, echoList, echoField)
+	v.Variables = aiPagedVariablesTo(map[string]any{}, scopeField == "teamId")
+	return v
+}
+
+// aiRiskBreakdownParity declares the average hotspot risk score a merged
+// floating-point aggregate.
+func aiRiskBreakdownParity() Options {
+	return Options{FloatTierB: map[string]string{
+		"data.aiRiskBreakdown.hotspotOverlap.avgHotspotRiskScore": "avgIf over file risk scores: ClickHouse merges partial aggregate states in thread-completion order, so the last bits differ run to run on both planes (CHAOS-5451)",
+	}}
+}
+
+const aiAttributionTimestampReason = "the timestamp is a ClickHouse DateTime64(3, 'UTC') read through a tz-aware driver value; Python's strawberry DateTime scalar isoformat()s it with a \"+00:00\" offset and microsecond digits, while Go's gqlgen DateTime scalar formats the same instant as RFC 3339 with \"Z\" (resolvers/ai.py _to_aware). The instants are equal; only the wire text differs. Go's form is the canonical DateTime wire form; the Python form is the declared defect and stays frozen."
+
+func aiAttributedPrsParity() Options {
+	return Options{BaselineDefects: []BaselineDefect{{
+		Ticket:             "CHAOS-6081",
+		Reason:             aiAttributionTimestampReason,
+		Paths:              []string{"data.aiAttributedPrs.rows.mergedAt"},
+		Intermittent:       true,
+		IntermittentReason: "mergedAt is null for an unmerged pull request and the list is empty when nothing is attributed",
+	}}}
+}
+
+func aiAttributionOverviewParity() Options {
+	return Options{BaselineDefects: []BaselineDefect{{
+		Ticket:             "CHAOS-6081",
+		Reason:             aiAttributionTimestampReason,
+		Paths:              []string{"data.aiAttributionOverview.rows.observedAt"},
+		Intermittent:       true,
+		IntermittentReason: "the list is empty when nothing is attributed in the window",
+	}}}
 }
 
 // savedReportDateTimes declares the one divergence on every saved-report
@@ -1619,4 +1855,89 @@ func reportRunsInstanceVariant(name string, limit int) Variant {
 			},
 		},
 	}
+}
+
+// compoundingRiskRowsParity is the timestamp declaration plus the requirement
+// that the answer lists rows on a leg and every row is at the breakout asked
+// for.
+func compoundingRiskRowsParity(breakout string) Options {
+	o := compoundingRiskParity
+	o.RequireNonEmpty = []string{"data.compoundingRisk.rows"}
+	o.ScopeEcho = []ScopeEcho{{List: "data.compoundingRisk.rows", Fields: []string{"scope"}, Value: breakout}}
+	return o
+}
+
+// compoundingRiskRowsVariant is a breakout case measured only on a non-empty
+// answer whose rows are at the breakout asked for.
+func compoundingRiskRowsVariant(name, breakout string, filter map[string]any) Variant {
+	v := compoundingRiskVariant(name, filter)
+	v.Parity = compoundingRiskRowsParity(breakout)
+	return v
+}
+
+// compoundingRiskEmptyVariant is a case whose filter names nothing (or
+// excludes everything), so both planes answer no rows. It declares only the
+// per-request instant: the timestamp difference is declared on a row leaf
+// that does not exist in an empty answer.
+func compoundingRiskEmptyVariant(name string, filter map[string]any) Variant {
+	v := compoundingRiskVariant(name, filter)
+	v.Parity = Options{VolatileFields: compoundingRiskParity.VolatileFields}
+	return v
+}
+
+func experimentsRepoValidVariant() Variant {
+	return Variant{
+		Name:   "REPO_VALID",
+		Parity: Options{RequireNonEmpty: []string{"data.experiments.items"}},
+		Variables: func(orgID string, _ Window) map[string]any {
+			return map[string]any{"orgId": orgID, "filters": map[string]any{"scope": map[string]any{"level": "REPO", "ids": []string{}}}}
+		},
+		Instance: &VariantInstance{
+			Kind: "a repository id of the org that has metric rows in the window",
+			Bind: func(vars map[string]any, value string) {
+				vars["filters"].(map[string]any)["scope"].(map[string]any)["ids"] = []string{value}
+			},
+		},
+	}
+}
+
+// compoundingRiskPinnedTrendVariant reads the repo breakout on the last day of
+// the run's window with a trend window of trendDays days ending on it; pinning
+// the day keeps the case non-empty (the latest-day search over a window that
+// is only today finds no stored row).
+func compoundingRiskPinnedTrendVariant(name string, trendDays int) Variant {
+	return Variant{
+		Name: name,
+		Variables: func(orgID string, w Window) map[string]any {
+			return compoundingRiskVariables(orgID, map[string]any{"breakout": "REPO", "day": w.UntilDate, "trendDays": trendDays})
+		},
+		Parity: compoundingRiskRowsParity("REPO"),
+	}
+}
+
+const compoundingRiskTeamMappingReason = "a request that names teamIds resolves a team's repositories through team ownership on Go (the ruled semantics) and through teams.repo_patterns on Python: an empty list reads as no filter on Python, which then aggregates teams by repo_patterns, and a team with stored rows agrees on the rows but its trend is built over the team's repo_patterns repositories on Python (none when the column is empty) and over its owned repositories on Go"
+
+// compoundingRiskKnownRefusalVariant is a teamIds case that is expected not to
+// compare; it stays in the corpus as a recorded difference.
+func compoundingRiskKnownRefusalVariant(name string, filter map[string]any, instance *VariantInstance) Variant {
+	v := compoundingRiskVariant(name, filter)
+	v.Parity = compoundingRiskRowsParity("TEAM")
+	v.Instance = instance
+	v.KnownRefusal = &KnownRefusal{Ticket: "CHAOS-6108", Reason: compoundingRiskTeamMappingReason}
+	return v
+}
+
+// experimentsTeamUnknownVariant is a team scope that resolves to nothing. The
+// reference resolves a team's repositories from the members' metric rows and,
+// when none resolve (an unknown, deleted or renamed team), drops the
+// repository filter and answers the whole org; Go selects the team's
+// repositories by ownership and an unresolved team narrows to nothing,
+// answering the steady-flow card.
+func experimentsTeamUnknownVariant() Variant {
+	v := experimentsVariant("TEAM_UNKNOWN", "TEAM", []string{"team-abc-123"})
+	v.KnownRefusal = &KnownRefusal{
+		Ticket: "CHAOS-6118",
+		Reason: "the reference drops the team filter when the team resolves to no member metric rows and answers the whole org; Go narrows an unresolved team to nothing through team ownership and answers the steady-flow card",
+	}
+	return v
 }

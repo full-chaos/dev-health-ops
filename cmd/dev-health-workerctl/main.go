@@ -892,9 +892,9 @@ func dispatchMetrics(ctx context.Context, runtime *operatorRuntime, args []strin
 		if err != nil {
 			return writeServiceError(stderr, err)
 		}
-		redrive, err := ledgerRedriverFor(runtime)
+		redrive, err := ledgerRedriverFor(ctx, runtime)
 		if err != nil {
-			return writeError(stderr, "operator_backend_unavailable")
+			return writeRepairSetupError(stderr, err)
 		}
 		ledgerRepair, err := redriveDailyMetricsLedger(ctx, redrive, runIDs, *reviewEvidence)
 		if err != nil {
@@ -1289,9 +1289,9 @@ func dispatchMetricsDailyFinalize(
 	ledgerRepair := map[string]any{"repaired": 0, "skipped_claim_active": 0}
 	if hasRun {
 		var abort bool
-		redrive, redriveErr := ledgerRedriverFor(runtime)
+		redrive, redriveErr := ledgerRedriverFor(ctx, runtime)
 		if redriveErr != nil {
-			return writeError(stderr, "operator_backend_unavailable")
+			return writeRepairSetupError(stderr, redriveErr)
 		}
 		ledgerRepair, abort, err = finalizeLedgerRepairGate(ctx, redrive, candidates, *reviewEvidence)
 		if err != nil {
@@ -2470,11 +2470,8 @@ type ledgerRedriver func(ctx context.Context, request repair.RedriveRequest) (re
 
 // ledgerRedriverFor binds the bulk redrive to the coordinator pool: the role
 // the operator verbs run as, which alone holds the ledger repair grants.
-func ledgerRedriverFor(runtime *operatorRuntime) (ledgerRedriver, error) {
-	if runtime == nil || runtime.pools == nil {
-		return nil, errors.New("operator backend unavailable")
-	}
-	pool, err := runtime.pools.CoordinatorPool()
+func ledgerRedriverFor(ctx context.Context, runtime *operatorRuntime) (ledgerRedriver, error) {
+	pool, err := coordinatorPoolOf(ctx, runtime)
 	if err != nil {
 		return nil, err
 	}

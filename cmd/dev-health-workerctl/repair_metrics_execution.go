@@ -70,9 +70,9 @@ func dispatchMetricsExecutionRepair(ctx context.Context, runtime *operatorRuntim
 	} else if trimmedOutputEvidence != "" {
 		return writeError(stderr, "invalid_request")
 	}
-	pool, err := coordinatorPoolOf(runtime)
+	pool, err := coordinatorPoolOf(ctx, runtime)
 	if err != nil {
-		return writeError(stderr, "operator_backend_unavailable")
+		return writeRepairSetupError(stderr, err)
 	}
 	result, err := repair.RepairMetricExecution(ctx, pool, repairRequest, *dryRun)
 	return writeRepairOutcome(stdout, stderr, result, err, *dryRun)

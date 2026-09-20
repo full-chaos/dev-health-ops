@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/joboperator"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/repair"
 )
 
@@ -191,21 +192,39 @@ func dispatchWorkgraphRepair(ctx context.Context, runtime *operatorRuntime, args
 	} else if trimmedOutputEvidence != "" {
 		return writeError(stderr, "invalid_request")
 	}
-	pool, err := coordinatorPoolOf(runtime)
+	pool, err := coordinatorPoolOf(ctx, runtime)
 	if err != nil {
-		return writeError(stderr, "operator_backend_unavailable")
+		return writeRepairSetupError(stderr, err)
 	}
 	result, err := repair.RepairWorkgraph(ctx, pool, repairRequest, *dryRun)
 	return writeRepairOutcome(stdout, stderr, result, err, *dryRun)
 }
 
 // coordinatorPoolOf is the pool every repair verb runs on: the coordinator
-// role the operator binary already connects as.
-func coordinatorPoolOf(runtime *operatorRuntime) (*pgxpool.Pool, error) {
-	if runtime == nil || runtime.pools == nil {
+// role, which alone holds the ledger repair grants. The caller's credential is
+// authorized for the repair before the pool is handed out, so no repair path
+// reaches a transaction on authentication alone.
+func coordinatorPoolOf(ctx context.Context, runtime *operatorRuntime) (*pgxpool.Pool, error) {
+	if runtime == nil || runtime.service == nil {
+		return nil, errors.New("operator backend unavailable")
+	}
+	if err := runtime.service.AuthorizeLedgerRepair(ctx, runtime.principal, "*"); err != nil {
+		return nil, err
+	}
+	if runtime.pools == nil {
 		return nil, errors.New("operator backend unavailable")
 	}
 	return runtime.pools.CoordinatorPool()
+}
+
+// writeRepairSetupError answers a failure to obtain the repair pool: a denial
+// keeps its bounded service code, anything else is a backend error.
+func writeRepairSetupError(stderr io.Writer, err error) int {
+	var serviceError *joboperator.ServiceError
+	if errors.As(err, &serviceError) {
+		return writeServiceError(stderr, err)
+	}
+	return writeError(stderr, "operator_backend_unavailable")
 }
 
 // writeRepairOutcome prints a repair's result as JSON. A refusal prints the

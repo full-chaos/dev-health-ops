@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/repair"
@@ -40,6 +41,10 @@ func parseOutputEvidence(raw string) (map[string]any, error) {
 	}
 	if evidence == nil {
 		return nil, errors.New("output-evidence must be a non-null JSON object")
+	}
+	// A second value after the object would be dropped silently; refuse it.
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		return nil, errors.New("output-evidence must be exactly one JSON object")
 	}
 	return evidence, nil
 }

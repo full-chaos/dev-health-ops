@@ -941,19 +941,17 @@ var operationSpecs = map[string]OperationSpec{
 		},
 		Parity: securityAlertsParity,
 		Variants: []Variant{
-			securityAlertsVariant("OPEN_ONLY", map[string]any{"openOnly": true}, nil),
-			securityAlertsVariant("STATES", map[string]any{"states": []any{"FIXED", "DISMISSED"}}, nil),
-			securityAlertsVariant("OPEN_ONLY_OVER_STATES", map[string]any{"openOnly": true, "states": []any{"FIXED"}}, nil),
-			securityAlertsVariant("SEVERITIES", map[string]any{"severities": []any{"CRITICAL", "HIGH", "UNKNOWN"}}, nil),
-			securityAlertsVariant("SOURCES", map[string]any{"sources": []any{"DEPENDABOT", "GITLAB_DEPENDENCY"}}, nil),
-			securityAlertsVariant("REPO_IDS", map[string]any{"repoIds": []any{"00000000-0000-0000-0000-000000000001"}}, nil),
-			securityAlertsVariant("SINCE_UNTIL", map[string]any{"since": "2026-06-01", "until": "2026-08-31"}, nil),
-			securityAlertsVariant("SEARCH", map[string]any{"search": "ABC-123"}, nil),
+			securityAlertsEchoVariant("OPEN_ONLY", map[string]any{"openOnly": true}, "node.state", "open", "detected", "confirmed"),
+			securityAlertsEchoVariant("OPEN_ONLY_OVER_STATES", map[string]any{"openOnly": true, "states": []any{"FIXED"}}, "node.state", "open", "detected", "confirmed"),
+			securityAlertsEchoVariant("SEVERITIES", map[string]any{"severities": []any{"CRITICAL", "HIGH", "UNKNOWN"}}, "node.severity", "critical", "high", "unknown"),
+			securityAlertsEchoVariant("SOURCES", map[string]any{"sources": []any{"DEPENDABOT", "GITLAB_DEPENDENCY"}}, "node.source", "dependabot", "gitlab_dependency"),
+			securityAlertsDateRangeVariant("SINCE_UNTIL", "2026-06-01", "2026-08-31"),
+			securityAlertsStateVariant(),
 			securityAlertsInstanceVariant("REPO_VALID", "a repository id that has alerts", "repoIds", true),
 			securityAlertsInstanceVariant("SEARCH_VALID", "a search term that matches an alert's title, package or CVE", "search", false),
 			securityAlertsVariant("PAGE_FIRST", nil, map[string]any{"first": 5}),
 			securityAlertsSecondPageVariant(),
-			securityAlertsVariant("PAGE_ZERO", nil, map[string]any{"first": 0}),
+			securityAlertsPageZeroVariant(),
 		},
 	},
 	"securityOverview": {
@@ -962,13 +960,11 @@ var operationSpecs = map[string]OperationSpec{
 			return map[string]any{"orgId": orgID, "filters": nil}
 		},
 		Variants: []Variant{
-			securityOverviewVariant("OPEN_ONLY", map[string]any{"openOnly": true}),
-			securityOverviewVariant("STATES", map[string]any{"states": []any{"FIXED", "DISMISSED"}}),
-			securityOverviewVariant("SEVERITIES", map[string]any{"severities": []any{"CRITICAL", "HIGH", "UNKNOWN"}}),
-			securityOverviewVariant("SOURCES", map[string]any{"sources": []any{"DEPENDABOT", "GITLAB_DEPENDENCY"}}),
-			securityOverviewVariant("REPO_IDS", map[string]any{"repoIds": []any{"00000000-0000-0000-0000-000000000001"}}),
-			securityOverviewVariant("SINCE_UNTIL", map[string]any{"since": "2026-06-01", "until": "2026-08-31"}),
-			securityOverviewVariant("SEARCH", map[string]any{"search": "ABC-123"}),
+			securityOverviewNonEmptyVariant("OPEN_ONLY", map[string]any{"openOnly": true}),
+			securityOverviewOpenStateVariant(),
+			securityOverviewNonEmptyVariant("SEVERITIES", map[string]any{"severities": []any{"CRITICAL", "HIGH", "UNKNOWN"}}),
+			securityOverviewNonEmptyVariant("SOURCES", map[string]any{"sources": []any{"DEPENDABOT", "GITLAB_DEPENDENCY"}}),
+			securityOverviewNonEmptyVariant("SINCE_UNTIL", map[string]any{"since": "2026-06-01", "until": "2026-08-31"}),
 			securityOverviewRepoVariant("REPO_VALID", "a repository id that has open alerts"),
 		},
 	},
@@ -1939,5 +1935,81 @@ func experimentsTeamUnknownVariant() Variant {
 		Ticket: "CHAOS-6118",
 		Reason: "the reference drops the team filter when the team resolves to no member metric rows and answers the whole org; Go narrows an unresolved team to nothing through team ownership and answers the steady-flow card",
 	}
+	return v
+}
+
+// securityAlertsEchoVariant applies a set-valued filter and requires every
+// returned alert to carry one of the filter's values in field, so a filter
+// both planes ignore is refused rather than recorded as a match.
+func securityAlertsEchoVariant(name string, filters map[string]any, field string, anyOf ...string) Variant {
+	v := securityAlertsVariant(name, filters, nil)
+	v.Parity = Options{
+		BaselineDefects: securityAlertsParity.BaselineDefects,
+		ScopeEcho:       []ScopeEcho{{List: "data.securityAlerts.edges", Fields: []string{field}, AnyOf: anyOf}},
+	}
+	return v
+}
+
+// securityAlertsStateVariant filters the alert list by ONE run-supplied
+// state, measured only when the list holds an alert and every alert is in
+// that state; the run supplies a state that has alerts and is not the only
+// state the org's alerts are in, so the answer is a strict subset.
+func securityAlertsStateVariant() Variant {
+	return Variant{
+		Name: "STATE_VALID",
+		Variables: func(orgID string, _ Window) map[string]any {
+			return securityAlertsVariables(orgID, map[string]any{}, nil)
+		},
+		Parity: Options{
+			BaselineDefects: securityAlertsParity.BaselineDefects,
+			RequireNonEmpty: []string{"data.securityAlerts.edges"},
+		},
+		Instance: &VariantInstance{
+			Kind: "an alert state (open, fixed, dismissed, detected, confirmed or resolved) that has alerts and is not the only state the org's alerts are in",
+			Bind: func(vars map[string]any, value string) {
+				vars["filters"].(map[string]any)["states"] = []any{strings.ToUpper(value)}
+			},
+			EchoFor: func(value string) []ScopeEcho {
+				return []ScopeEcho{{List: "data.securityAlerts.edges", Fields: []string{"node.state"}, Value: value}}
+			},
+		},
+	}
+}
+
+// securityAlertsPageZeroVariant reads zero alerts: its answer is the count
+// and page flags with no alert, so it declares no timestamp difference (there
+// is no timestamp leaf for that declaration to match).
+func securityAlertsPageZeroVariant() Variant {
+	v := securityAlertsVariant("PAGE_ZERO", nil, map[string]any{"first": 0})
+	v.Parity = Options{}
+	return v
+}
+
+// securityOverviewOpenStateVariant filters the overview to the open state,
+// measured only when the severity breakdown (open alerts only) is non-empty.
+func securityOverviewOpenStateVariant() Variant {
+	v := securityOverviewVariant("STATES", map[string]any{"states": []any{"OPEN"}})
+	v.Parity = Options{RequireNonEmpty: []string{"data.securityOverview.severityBreakdown"}}
+	return v
+}
+
+// securityAlertsDateRangeVariant reads the alerts created in an inclusive date
+// range; every returned alert must be created inside it and the list must be
+// non-empty.
+func securityAlertsDateRangeVariant(name, since, until string) Variant {
+	v := securityAlertsVariant(name, map[string]any{"since": since, "until": until}, nil)
+	v.Parity = Options{
+		BaselineDefects: securityAlertsParity.BaselineDefects,
+		RequireNonEmpty: []string{"data.securityAlerts.edges"},
+		ScopeEcho:       []ScopeEcho{{List: "data.securityAlerts.edges", Fields: []string{"node.createdAt"}, NotBefore: since, NotAfter: until}},
+	}
+	return v
+}
+
+// securityOverviewNonEmptyVariant is an overview filter case measured only when
+// the severity breakdown (open alerts) holds a bucket on a leg.
+func securityOverviewNonEmptyVariant(name string, filters map[string]any) Variant {
+	v := securityOverviewVariant(name, filters)
+	v.Parity = Options{RequireNonEmpty: []string{"data.securityOverview.severityBreakdown"}}
 	return v
 }

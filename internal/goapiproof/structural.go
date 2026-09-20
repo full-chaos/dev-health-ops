@@ -553,6 +553,16 @@ type ScopeEcho struct {
 	FirstOnly bool
 	// Value is the requested scope value.
 	Value string
+	// AnyOf, when set, replaces Value: an element satisfies the requirement
+	// when a field equals (or, with Contains, contains) ANY of them. It is how
+	// a filter over a set of values (severities, sources, states) is shown to
+	// have been applied.
+	AnyOf []string
+	// NotBefore / NotAfter (YYYY-MM-DD, either may be empty) bound a date
+	// field instead of matching a value: the first ten characters of the
+	// field must lie in [NotBefore, NotAfter], whatever the timestamp's
+	// offset rendering.
+	NotBefore, NotAfter string
 	// Scalar makes List a path to ONE string leaf (for example the answer's
 	// echoed scope) that must equal Value on both legs; a missing or null
 	// leaf is a failure.
@@ -590,16 +600,35 @@ func fieldAt(elem any, path string) (string, bool) {
 }
 
 func echoes(elem any, e ScopeEcho) bool {
+	if e.NotBefore != "" || e.NotAfter != "" {
+		for _, f := range e.Fields {
+			got, ok := fieldAt(elem, f)
+			if !ok || len(got) < 10 {
+				continue
+			}
+			day := got[:10]
+			if (e.NotBefore == "" || day >= e.NotBefore) && (e.NotAfter == "" || day <= e.NotAfter) {
+				return true
+			}
+		}
+		return false
+	}
+	wanted := e.AnyOf
+	if len(wanted) == 0 {
+		wanted = []string{e.Value}
+	}
 	for _, f := range e.Fields {
 		got, ok := fieldAt(elem, f)
 		if !ok {
 			continue
 		}
-		if e.Contains && strings.Contains(strings.ToLower(got), strings.ToLower(e.Value)) {
-			return true
-		}
-		if !e.Contains && strings.EqualFold(got, e.Value) {
-			return true
+		for _, w := range wanted {
+			if e.Contains && strings.Contains(strings.ToLower(got), strings.ToLower(w)) {
+				return true
+			}
+			if !e.Contains && strings.EqualFold(got, w) {
+				return true
+			}
 		}
 	}
 	return false

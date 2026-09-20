@@ -840,6 +840,52 @@ const registeredCompoundingRiskDocument = `query CompoundingRisk($orgId: String!
   }
 }`
 
+// registeredTestopsRiskDocument is the registered document for the
+// `testopsRisk` operation, the exact wire-form text a real web client
+// sends (testdata/wire_capture/testopsrisk_captured.graphql).
+const registeredTestopsRiskDocument = `query TestOpsRisk($orgId: String!, $input: TestOpsRiskInput!) {
+  testopsRisk(orgId: $orgId, input: $input) {
+    releaseConfidence
+    qualityDragHours
+    pipelineStability
+    timeseries {
+      date
+      riskScore
+      __typename
+    }
+    qualityDragBreakdown {
+      category
+      hours
+      __typename
+    }
+    quadrantData {
+      id
+      pipelineSuccessRate
+      testPassRate
+      __typename
+    }
+    confidenceSpark {
+      ts
+      value
+      __typename
+    }
+    confidenceDelta
+    dragSpark {
+      ts
+      value
+      __typename
+    }
+    dragDelta
+    stabilitySpark {
+      ts
+      value
+      __typename
+    }
+    stabilityDelta
+    __typename
+  }
+}`
+
 // registeredBusFactorDocument is the registered document for the
 // `busFactor` operation, the exact wire-form text a real web client sends
 // (testdata/wire_capture/busfactor_captured.graphql).
@@ -2360,6 +2406,7 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		"aiRiskBreakdown":                   digestHex(registeredAiRiskBreakdownDocument),
 		"aiAttributedPrs":                   digestHex(registeredAiAttributedPrsDocument),
 		"aiAttributionOverview":             digestHex(registeredAiAttributionOverviewDocument),
+		"testopsRisk":                       digestHex(registeredTestopsRiskDocument),
 	}
 	// CHAOS-4710 deliverable 3: log the mounted set HERE, where
 	// digestByOperation actually lives, rather than handing main.go a

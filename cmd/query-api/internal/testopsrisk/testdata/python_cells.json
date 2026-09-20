@@ -1,0 +1,674 @@
+{
+"empty": {
+"daily": [],
+"quadrant": [],
+"want": {
+"release_confidence": null,
+"quality_drag_hours": null,
+"pipeline_stability": null,
+"timeseries": [],
+"breakdown": [],
+"quadrant": [],
+"confidence_spark": [],
+"confidence_delta": null,
+"drag_spark": [],
+"drag_delta": null,
+"stability_spark": [],
+"stability_delta": null
+}
+},
+"single": {
+"daily": [
+{
+"day": "2026-01-05",
+"release_confidence": 0.8,
+"quality_drag_hours": 2.0,
+"failure_rework_hours": 1.0,
+"flake_investigation_hours": 0.5,
+"queue_wait_hours": 0.25,
+"retry_overhead_hours": 0.25,
+"pipeline_stability": 0.9
+}
+],
+"quadrant": [
+{
+"repo_label": "acme/web",
+"pipeline_success_rate": 0.9,
+"test_pass_rate": 0.95
+}
+],
+"want": {
+"release_confidence": 0.8,
+"quality_drag_hours": 2.0,
+"pipeline_stability": 0.9,
+"timeseries": [
+[
+"2026-01-05",
+0.19999999999999996
+]
+],
+"breakdown": [
+[
+"Failure Rework",
+1.0
+],
+[
+"Flake Investigation",
+0.5
+],
+[
+"Queue Wait",
+0.25
+],
+[
+"Retry Overhead",
+0.25
+]
+],
+"quadrant": [
+[
+"acme/web",
+0.9,
+0.95
+]
+],
+"confidence_spark": [
+[
+"2026-01-05",
+80.0
+]
+],
+"confidence_delta": null,
+"drag_spark": [
+[
+"2026-01-05",
+2.0
+]
+],
+"drag_delta": null,
+"stability_spark": [
+[
+"2026-01-05",
+90.0
+]
+],
+"stability_delta": null
+}
+},
+"series": {
+"daily": [
+{
+"day": "2026-01-01",
+"release_confidence": 0.5,
+"quality_drag_hours": 4.0,
+"failure_rework_hours": 2,
+"flake_investigation_hours": 1,
+"queue_wait_hours": 0.5,
+"retry_overhead_hours": 0.5,
+"pipeline_stability": 0.5
+},
+{
+"day": "2026-01-02",
+"release_confidence": 0.75,
+"quality_drag_hours": 3.0,
+"failure_rework_hours": 1,
+"flake_investigation_hours": 1,
+"queue_wait_hours": 0.5,
+"retry_overhead_hours": 0.5,
+"pipeline_stability": 0.75
+},
+{
+"day": "2026-01-03",
+"release_confidence": 1.2,
+"quality_drag_hours": 2.0,
+"failure_rework_hours": 1,
+"flake_investigation_hours": 0.5,
+"queue_wait_hours": 0.25,
+"retry_overhead_hours": 0.25,
+"pipeline_stability": 1.0
+}
+],
+"quadrant": [
+{
+"repo_label": "a/b",
+"pipeline_success_rate": 0.5,
+"test_pass_rate": 0.4
+},
+{
+"repo_label": "c/d",
+"pipeline_success_rate": null,
+"test_pass_rate": 0.7
+}
+],
+"want": {
+"release_confidence": 1.2,
+"quality_drag_hours": 2.0,
+"pipeline_stability": 1.0,
+"timeseries": [
+[
+"2026-01-01",
+0.5
+],
+[
+"2026-01-02",
+0.25
+],
+[
+"2026-01-03",
+0.0
+]
+],
+"breakdown": [
+[
+"Failure Rework",
+1.0
+],
+[
+"Flake Investigation",
+0.5
+],
+[
+"Queue Wait",
+0.25
+],
+[
+"Retry Overhead",
+0.25
+]
+],
+"quadrant": [
+[
+"a/b",
+0.5,
+0.4
+],
+[
+"c/d",
+null,
+0.7
+]
+],
+"confidence_spark": [
+[
+"2026-01-01",
+50.0
+],
+[
+"2026-01-02",
+75.0
+],
+[
+"2026-01-03",
+100.0
+]
+],
+"confidence_delta": 100.0,
+"drag_spark": [
+[
+"2026-01-01",
+4.0
+],
+[
+"2026-01-02",
+3.0
+],
+[
+"2026-01-03",
+2.0
+]
+],
+"drag_delta": -50.0,
+"stability_spark": [
+[
+"2026-01-01",
+50.0
+],
+[
+"2026-01-02",
+75.0
+],
+[
+"2026-01-03",
+100.0
+]
+],
+"stability_delta": 100.0
+}
+},
+"gaps": {
+"daily": [
+{
+"day": "2026-01-01",
+"release_confidence": 0.5,
+"quality_drag_hours": null,
+"failure_rework_hours": null,
+"flake_investigation_hours": null,
+"queue_wait_hours": null,
+"retry_overhead_hours": null,
+"pipeline_stability": null
+},
+{
+"day": "2026-01-02",
+"release_confidence": null,
+"quality_drag_hours": 3.0,
+"failure_rework_hours": 1,
+"flake_investigation_hours": null,
+"queue_wait_hours": null,
+"retry_overhead_hours": 0.5,
+"pipeline_stability": 0.8
+},
+{
+"day": "2026-01-03",
+"release_confidence": 0.6,
+"quality_drag_hours": null,
+"failure_rework_hours": null,
+"flake_investigation_hours": null,
+"queue_wait_hours": null,
+"retry_overhead_hours": null,
+"pipeline_stability": null
+}
+],
+"quadrant": [],
+"want": {
+"release_confidence": 0.6,
+"quality_drag_hours": 3.0,
+"pipeline_stability": 0.8,
+"timeseries": [
+[
+"2026-01-01",
+0.5
+],
+[
+"2026-01-03",
+0.4
+]
+],
+"breakdown": [
+[
+"Failure Rework",
+1.0
+],
+[
+"Flake Investigation",
+0.0
+],
+[
+"Queue Wait",
+0.0
+],
+[
+"Retry Overhead",
+0.5
+]
+],
+"quadrant": [],
+"confidence_spark": [
+[
+"2026-01-01",
+50.0
+],
+[
+"2026-01-03",
+60.0
+]
+],
+"confidence_delta": 20.0,
+"drag_spark": [
+[
+"2026-01-02",
+3.0
+]
+],
+"drag_delta": null,
+"stability_spark": [
+[
+"2026-01-02",
+80.0
+]
+],
+"stability_delta": null
+}
+},
+"zero_first": {
+"daily": [
+{
+"day": "2026-01-01",
+"release_confidence": 1.0,
+"quality_drag_hours": 0.0,
+"failure_rework_hours": 0,
+"flake_investigation_hours": 0,
+"queue_wait_hours": 0,
+"retry_overhead_hours": 0,
+"pipeline_stability": 0.0
+},
+{
+"day": "2026-01-02",
+"release_confidence": 0.5,
+"quality_drag_hours": 5.0,
+"failure_rework_hours": 1,
+"flake_investigation_hours": 1,
+"queue_wait_hours": 1,
+"retry_overhead_hours": 1,
+"pipeline_stability": 0.5
+}
+],
+"quadrant": [],
+"want": {
+"release_confidence": 0.5,
+"quality_drag_hours": 5.0,
+"pipeline_stability": 0.5,
+"timeseries": [
+[
+"2026-01-01",
+0.0
+],
+[
+"2026-01-02",
+0.5
+]
+],
+"breakdown": [
+[
+"Failure Rework",
+1.0
+],
+[
+"Flake Investigation",
+1.0
+],
+[
+"Queue Wait",
+1.0
+],
+[
+"Retry Overhead",
+1.0
+]
+],
+"quadrant": [],
+"confidence_spark": [
+[
+"2026-01-01",
+100.0
+],
+[
+"2026-01-02",
+50.0
+]
+],
+"confidence_delta": -50.0,
+"drag_spark": [
+[
+"2026-01-01",
+0.0
+],
+[
+"2026-01-02",
+5.0
+]
+],
+"drag_delta": null,
+"stability_spark": [
+[
+"2026-01-01",
+0.0
+],
+[
+"2026-01-02",
+50.0
+]
+],
+"stability_delta": null
+}
+},
+"negative_first": {
+"daily": [
+{
+"day": "2026-01-01",
+"release_confidence": 1.5,
+"quality_drag_hours": -2.0,
+"failure_rework_hours": 0,
+"flake_investigation_hours": 0,
+"queue_wait_hours": 0,
+"retry_overhead_hours": 0,
+"pipeline_stability": 0.5
+},
+{
+"day": "2026-01-02",
+"release_confidence": -0.5,
+"quality_drag_hours": -1.0,
+"failure_rework_hours": 0,
+"flake_investigation_hours": 0,
+"queue_wait_hours": 0,
+"retry_overhead_hours": 0,
+"pipeline_stability": 0.25
+}
+],
+"quadrant": [],
+"want": {
+"release_confidence": -0.5,
+"quality_drag_hours": -1.0,
+"pipeline_stability": 0.25,
+"timeseries": [
+[
+"2026-01-01",
+0.0
+],
+[
+"2026-01-02",
+1.0
+]
+],
+"breakdown": [
+[
+"Failure Rework",
+0.0
+],
+[
+"Flake Investigation",
+0.0
+],
+[
+"Queue Wait",
+0.0
+],
+[
+"Retry Overhead",
+0.0
+]
+],
+"quadrant": [],
+"confidence_spark": [
+[
+"2026-01-01",
+100.0
+],
+[
+"2026-01-02",
+0.0
+]
+],
+"confidence_delta": -100.0,
+"drag_spark": [
+[
+"2026-01-01",
+-2.0
+],
+[
+"2026-01-02",
+-1.0
+]
+],
+"drag_delta": 50.0,
+"stability_spark": [
+[
+"2026-01-01",
+50.0
+],
+[
+"2026-01-02",
+25.0
+]
+],
+"stability_delta": -50.0
+}
+},
+"nan_conf": {
+"daily": [
+{
+"day": "2026-01-01",
+"release_confidence": "NaN",
+"quality_drag_hours": 1.0,
+"failure_rework_hours": 0,
+"flake_investigation_hours": 0,
+"queue_wait_hours": 0,
+"retry_overhead_hours": 0,
+"pipeline_stability": 0.5
+},
+{
+"day": "2026-01-02",
+"release_confidence": 0.5,
+"quality_drag_hours": 2.0,
+"failure_rework_hours": 0,
+"flake_investigation_hours": 0,
+"queue_wait_hours": 0,
+"retry_overhead_hours": 0,
+"pipeline_stability": 0.5
+}
+],
+"quadrant": [],
+"want": {
+"release_confidence": 0.5,
+"quality_drag_hours": 2.0,
+"pipeline_stability": 0.5,
+"timeseries": [
+[
+"2026-01-01",
+1.0
+],
+[
+"2026-01-02",
+0.5
+]
+],
+"breakdown": [
+[
+"Failure Rework",
+0.0
+],
+[
+"Flake Investigation",
+0.0
+],
+[
+"Queue Wait",
+0.0
+],
+[
+"Retry Overhead",
+0.0
+]
+],
+"quadrant": [],
+"confidence_spark": [
+[
+"2026-01-01",
+0.0
+],
+[
+"2026-01-02",
+50.0
+]
+],
+"confidence_delta": null,
+"drag_spark": [
+[
+"2026-01-01",
+1.0
+],
+[
+"2026-01-02",
+2.0
+]
+],
+"drag_delta": 100.0,
+"stability_spark": [
+[
+"2026-01-01",
+50.0
+],
+[
+"2026-01-02",
+50.0
+]
+],
+"stability_delta": 0.0
+}
+},
+"drag_null_parts": {
+"daily": [
+{
+"day": "2026-01-01",
+"release_confidence": 0.5,
+"quality_drag_hours": 2.0,
+"failure_rework_hours": null,
+"flake_investigation_hours": null,
+"queue_wait_hours": null,
+"retry_overhead_hours": null,
+"pipeline_stability": 0.5
+}
+],
+"quadrant": [],
+"want": {
+"release_confidence": 0.5,
+"quality_drag_hours": 2.0,
+"pipeline_stability": 0.5,
+"timeseries": [
+[
+"2026-01-01",
+0.5
+]
+],
+"breakdown": [
+[
+"Failure Rework",
+0.0
+],
+[
+"Flake Investigation",
+0.0
+],
+[
+"Queue Wait",
+0.0
+],
+[
+"Retry Overhead",
+0.0
+]
+],
+"quadrant": [],
+"confidence_spark": [
+[
+"2026-01-01",
+50.0
+]
+],
+"confidence_delta": null,
+"drag_spark": [
+[
+"2026-01-01",
+2.0
+]
+],
+"drag_delta": null,
+"stability_spark": [
+[
+"2026-01-01",
+50.0
+]
+],
+"stability_delta": null
+}
+}
+}

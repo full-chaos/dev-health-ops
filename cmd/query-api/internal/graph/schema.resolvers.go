@@ -29,6 +29,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/reports"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/reviewedges"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/security"
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/testopsrisk"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/throughputforecast"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/workgraph"
 	"github.com/vektah/gqlparser/v2/gqlerror"
@@ -1037,9 +1038,18 @@ func (r *queryResolver) CompoundingRisk(ctx context.Context, orgID string, filte
 	return result, nil
 }
 
-// TestopsRisk is the resolver for the testopsRisk field.
+// TestopsRisk is the resolver for the testopsRisk field. It reads only the
+// caller's own org: the orgId argument must equal the org of the request
+// identity, otherwise the request is denied.
 func (r *queryResolver) TestopsRisk(ctx context.Context, orgID string, input model.TestOpsRiskInput) (*model.TestOpsRiskResult, error) {
-	panic(fmt.Errorf("not implemented: TestopsRisk - testopsRisk"))
+	if err := requireOwnOrg(ctx, orgID); err != nil {
+		return nil, err
+	}
+	result, err := testopsrisk.Resolve(ctx, r.ClickHouse, orgID, input)
+	if err != nil {
+		return nil, fmt.Errorf("testopsRisk: %w", err)
+	}
+	return result, nil
 }
 
 // ComplexityTimeseries is the resolver for the complexityTimeseries field.

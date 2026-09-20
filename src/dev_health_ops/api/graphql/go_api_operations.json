@@ -144,6 +144,10 @@
     "digest": "3b76c20e6950094356311d84f4288a7ce9e1e936c60c2b867b6e083f2d709884"
   },
   {
+    "operation": "testopsRisk",
+    "digest": "de0e6a96f2f917aa3a785993b5b35c4f003f974d638097f5702b3b8a56fa0bf7"
+  },
+  {
     "operation": "throughputForecast",
     "digest": "fc08dea094ec832290b4f528141eacb5bbc463beea45794cf205fe43952379f9"
   },

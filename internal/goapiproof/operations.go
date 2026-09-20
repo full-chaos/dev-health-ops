@@ -327,8 +327,8 @@ var operationSpecs = map[string]OperationSpec{
 		Variables:    aiOpportunityVariables(nil, 25),
 		Parity:       requireLists(aiOpportunitiesParity(), "data.aiOpportunities.recommendations"),
 		Variants: append(aiOpportunityVariants(),
-			aiOpportunityInstanceVariant("REPO_VALID", "a repository id with rollup rows, commits or pull requests that trip a rule", "repoId"),
-			aiOpportunityInstanceVariant("REPO_NAME_VALID", "the full name of a repository that trips a rule", "repoId"),
+			aiOpportunityRepoKnownRefusal(aiOpportunityInstanceVariant("REPO_VALID", "a repository id with rollup rows, commits or pull requests that trip a rule", "repoId")),
+			aiOpportunityRepoKnownRefusal(aiOpportunityInstanceVariant("REPO_NAME_VALID", "the full name of a repository that trips a rule", "repoId")),
 			aiOpportunityInstanceVariant("TEAM_VALID", "a team id stored on rollup rows that trip a metric rule", "teamId"),
 		),
 	},
@@ -1860,9 +1860,23 @@ func aiOpportunityVariants() []Variant {
 		if strings.HasPrefix(c.name, "LIMIT_") {
 			p = requireLists(aiOpportunitiesParity(), "data.aiOpportunities.recommendations")
 		}
-		variants = append(variants, Variant{Name: c.name, Variables: aiOpportunityVariables(c.scope, c.limit), Parity: p})
+		v := Variant{Name: c.name, Variables: aiOpportunityVariables(c.scope, c.limit), Parity: p}
+		if c.name == "REPO_UNKNOWN" {
+			v = aiOpportunityRepoKnownRefusal(v)
+		}
+		variants = append(variants, v)
 	}
 	return variants
+}
+
+const aiOpportunityRepoScopeReason = "a repoId that is, or resolves to, a UUID reaches the Python detector's repository filter, which ClickHouse rejects (code 386, NO_COMMON_TYPE: toString(repo_id) compared with a UUID parameter), so the Python plane answers a GraphQL error for every such value; Go answers the scoped list (empty for an id that names nothing). A proof refuses a baseline that errored, so these cases record the difference without comparing"
+
+// aiOpportunityRepoKnownRefusal records that a repository scope answers a
+// GraphQL error on the Python plane, so the case cannot compare. It never
+// admits anything; it documents the difference.
+func aiOpportunityRepoKnownRefusal(v Variant) Variant {
+	v.KnownRefusal = &KnownRefusal{Ticket: "CHAOS-6147", Reason: aiOpportunityRepoScopeReason}
+	return v
 }
 
 func aiOpportunityInstanceVariant(name, kind, scopeField string) Variant {

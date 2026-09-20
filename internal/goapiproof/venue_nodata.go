@@ -3,7 +3,7 @@ package goapiproof
 // Venue class 2: "no production data" (CHAOS-6099).
 //
 // Production holds no saved reports in any org the prover could run as, so
-// savedReports / savedReport / reportRuns cannot be proven non-empty there:
+// savedReports cannot be proven non-empty there:
 // the prover refuses every data-requiring case as vacuous, because two
 // empty answers agree without either plane reading anything. The venue
 // (bigboy) has the data. This class admits such an operation from TWO
@@ -22,6 +22,13 @@ package goapiproof
 // answered, both empty" can stand for "production has no data". The
 // operation list below only NARROWS: the computed check is the gate.
 //
+// savedReport and reportRuns are NOT on the list: every one of their data
+// cases needs a real report id, and production with no reports has none to
+// give -instance-id, so the prover refuses them as
+// operation_needs_an_instance_identifier -- a refusal that says "the run had
+// no id", not "no data", so it is never read as absence. They stay
+// unprovable in production until an id exists (named limit).
+//
 // Named limits: both files are operator-supplied and not authenticated
 // (same as class 1); the production report covers the one org its run was
 // made for, so "no data in any org" is the operator's reading of one org's
@@ -35,8 +42,6 @@ import (
 // noProdDataOperations is the narrowing list.
 var noProdDataOperations = map[string]bool{
 	"savedReports": true,
-	"savedReport":  true,
-	"reportRuns":   true,
 }
 
 // NoProdDataEligible reports whether operation may be admitted by class 2.

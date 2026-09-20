@@ -109,14 +109,14 @@ func TestNoProdDataAdmitDomain(t *testing.T) {
 	if ok(nil, newVenue()) == nil || ok(productionReport(t, nodataOp, "primary", ""), nil) == nil {
 		t.Error("a missing report admitted")
 	}
-	for _, other := range []string{"metricLineage", "featureFlags", "releaseImpact", "zzNoSuchOp", ""} {
+	for _, other := range []string{"metricLineage", "featureFlags", "releaseImpact", "savedReport", "reportRuns", "zzNoSuchOp", ""} {
 		if NoProdDataAdmit(productionReport(t, nodataOp, "primary", ""), newVenue(), other, testSchema, testDoc, testBuild, "primary") == nil {
 			t.Errorf("%q admitted by class 2", other)
 		}
 	}
 	// A well-formed pair for an operation OFF the list is still refused: the
 	// list narrows, whatever the reports say.
-	for _, other := range []string{"metricLineage", "releaseImpact", "featureFlags"} {
+	for _, other := range []string{"metricLineage", "releaseImpact", "featureFlags", "savedReport", "reportRuns"} {
 		if _, err := SpecFor(other); err != nil {
 			continue
 		}
@@ -160,7 +160,7 @@ func TestNoProdDataListIsNarrowAndDisjointFromClassOne(t *testing.T) {
 		}
 	}
 	sort.Strings(listed)
-	if want := []string{"reportRuns", "savedReport", "savedReports"}; !reflect.DeepEqual(listed, want) {
+	if want := []string{"savedReports"}; !reflect.DeepEqual(listed, want) {
 		t.Fatalf("list = %v, want %v", listed, want)
 	}
 }
@@ -189,5 +189,39 @@ func TestApplyVenueReceiptClassTwo(t *testing.T) {
 	// Evidence written for class 2 reads back as class 2.
 	if got := VenueEvidenceClass(VenueEvidence("1"+strings.Repeat("a", 63), "2"+strings.Repeat("b", 63), "note")); got != VenueClassNoData {
 		t.Fatalf("class = %q", got)
+	}
+}
+
+// A listed operation must be able to finish a production run with no
+// data: a variant that needs a real instance id is refused by the prover as
+// operation_needs_an_instance_identifier (production has no id to give), so
+// a class-2 list entry carrying one could never be admitted. Generated over
+// every operation the prover knows: listed <=> reachable (no Instance
+// variant), and the two excluded report operations do carry one.
+func TestNoProdDataListedOperationsNeedNoInstanceID(t *testing.T) {
+	needsInstance := func(operation string) bool {
+		spec, err := SpecFor(operation)
+		if err != nil {
+			t.Fatalf("%s: %v", operation, err)
+		}
+		for _, variant := range spec.Variants {
+			if variant.Instance != nil {
+				return true
+			}
+		}
+		return false
+	}
+	for _, operation := range KnownOperations() {
+		if (NoProdDataEligible(operation) || VenueEligible(operation)) && needsInstance(operation) {
+			t.Errorf("%s is admitted by a venue class but a variant needs an instance id the proof run cannot supply", operation)
+		}
+	}
+	for _, excluded := range []string{"savedReport", "reportRuns"} {
+		if !needsInstance(excluded) {
+			t.Errorf("%s is off the list because it needs an instance id, but no variant declares one", excluded)
+		}
+		if NoProdDataEligible(excluded) {
+			t.Errorf("%s is listed", excluded)
+		}
 	}
 }

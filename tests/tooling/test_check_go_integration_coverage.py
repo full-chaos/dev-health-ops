@@ -5,19 +5,9 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+from tests.tooling.go_integration_manifest import manifest_packages
+
 ROOT = Path(__file__).resolve().parents[2]
-MANIFEST = ROOT / "ci" / "go_integration_shards.tsv"
-
-
-def _manifest_package_count() -> int:
-    """Package rows in the shard manifest (the first data row is the shard count)."""
-    rows = [
-        line
-        for line in MANIFEST.read_text(encoding="utf-8").splitlines()
-        if line.strip() and not line.startswith("#")
-    ]
-    assert rows[0].split("\t")[0] == "shards", rows[0]
-    return len(rows) - 1
 
 
 def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
@@ -213,7 +203,7 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # package is one manifest row, so parallel additions do not conflict on a
     # count. The planner still refuses when live discovery disagrees with the
     # manifest, and the named packages below pin set membership.
-    total = _manifest_package_count()
+    total = len(manifest_packages())
     assert (
         f"{total} package(s) discovered, 0 denylisted, {total} will run"
         in result.stdout

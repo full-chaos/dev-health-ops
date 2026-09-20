@@ -14,6 +14,8 @@ from typing import Any
 import pytest
 import yaml
 
+from tests.tooling.go_integration_manifest import manifest_packages, manifest_rows
+
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "go.yml"
 CHECK_GO = ROOT / "ci" / "check_go.sh"
@@ -28,25 +30,7 @@ TEST_GO_CACHE = Path(tempfile.gettempdir()) / "chaos3141-go-sharding-test-cache"
 CHECK_GO_TIMEOUT_SECONDS = 120
 
 
-def _manifest_packages() -> set[str]:
-    """Package keys of ci/go_integration_shards.tsv (one row per package).
-
-    The manifest is the single hand-edited list: ci/check_go.sh refuses to plan
-    when it disagrees with live `-tags=integration` discovery, and the tests
-    below compare the planner's own output to it. Deriving the expected set here
-    instead of repeating it as a second literal means adding an integration
-    package edits one line in one file, so parallel additions merge cleanly.
-    """
-    rows = [
-        line.split("\t")
-        for line in MANIFEST.read_text(encoding="utf-8").splitlines()
-        if line.strip() and not line.startswith("#")
-    ]
-    assert rows[0][0] == "shards", rows[0]
-    return {row[0] for row in rows[1:]}
-
-
-EXPECTED_PACKAGES = _manifest_packages()
+EXPECTED_PACKAGES = manifest_packages()
 # A floor that does not follow the manifest, so deleting a package's row (or its
 # integration tests) together with the rest of the change is still noticed.
 REQUIRED_PACKAGES = {
@@ -422,6 +406,44 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
     expected_tests = _providersync_top_level_tests()
     assert len(selected_tests) == len(set(selected_tests))
     assert set(selected_tests) == expected_tests
+
+
+def test_manifest_reader_agrees_with_the_planner_on_whitespace_and_comments(
+    tmp_path: Path,
+) -> None:
+    """The tests read the manifest the way check_go.sh does, not a stricter way.
+
+    The planner reads rows with `IFS=$'\\t ' read -r key value extra`, so
+    indented comments, whitespace-only lines and space/tab-separated or padded
+    rows are all accepted. A test-side reader that only understood `^#` and one
+    tab would reject a manifest the planner plans from (and the count/set the
+    tests derive would then disagree with the planner's own).
+    """
+    original = manifest_rows()
+    variant = tmp_path / "whitespace-variant.tsv"
+    lines = [
+        "  # indented comment the planner skips",
+        "\t# tab-indented comment the planner skips",
+        "   ",
+    ]
+    for index, fields in enumerate(original):
+        key, value = fields
+        lines.append(
+            [f"  {key}\t {value}  ", f"{key} {value}", f"\t{key}\t\t{value}\t"][
+                index % 3
+            ]
+        )
+    variant.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    assert manifest_rows(variant) == original
+    assert manifest_packages(variant) == manifest_packages()
+
+    result = _run_check_go("integration-shard-plan", manifest=variant)
+    assert result.returncode == 0, result.stdout + result.stderr
+    total = len(manifest_packages(variant))
+    assert (
+        f"{total} package(s) discovered, 0 denylisted, {total} will run"
+    ) in result.stdout
 
 
 def test_manifest_drift_and_duplicate_packages_fail_loudly(tmp_path: Path) -> None:

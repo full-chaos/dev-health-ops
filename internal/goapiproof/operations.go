@@ -288,7 +288,7 @@ var operationSpecs = map[string]OperationSpec{
 	"aiOpportunities": {
 		ResponseRoot: "aiOpportunities",
 		Variables:    aiOpportunityVariables(nil, 25),
-		Parity:       aiOpportunitiesParity(),
+		Parity:       requireLists(aiOpportunitiesParity(), "data.aiOpportunities.recommendations"),
 		Variants: append(aiOpportunityVariants(),
 			aiOpportunityInstanceVariant("REPO_VALID", "a repository id with rollup rows, commits or pull requests that trip a rule", "repoId"),
 			aiOpportunityInstanceVariant("REPO_NAME_VALID", "the full name of a repository that trips a rule", "repoId"),
@@ -298,7 +298,7 @@ var operationSpecs = map[string]OperationSpec{
 	"improveOpportunities": {
 		ResponseRoot: "improveOpportunities",
 		Variables:    improveVariables(nil, 10, 30),
-		Parity:       improveOpportunitiesParity(),
+		Parity:       requireLists(improveOpportunitiesParity(), "data.improveOpportunities.opportunities"),
 		Variants: []Variant{
 			improveVariant("LIMIT_ONE", nil, 1, 30),
 			improveVariant("LIMIT_OVER_CEILING", nil, 500, 30),
@@ -1552,7 +1552,7 @@ func aiOpportunityVariants() []Variant {
 	for _, c := range cases {
 		p := Options{}
 		if strings.HasPrefix(c.name, "LIMIT_") {
-			p = aiOpportunitiesParity()
+			p = requireLists(aiOpportunitiesParity(), "data.aiOpportunities.recommendations")
 		}
 		variants = append(variants, Variant{Name: c.name, Variables: aiOpportunityVariables(c.scope, c.limit), Parity: p})
 	}
@@ -1607,7 +1607,7 @@ func improveVariables(scope map[string]any, limit, windowDays int) func(orgID st
 }
 
 func improveVariant(name string, scope map[string]any, limit, windowDays int) Variant {
-	p := improveOpportunitiesParity()
+	p := requireLists(improveOpportunitiesParity(), "data.improveOpportunities.opportunities")
 	if strings.HasSuffix(name, "_UNKNOWN") || name == "REPO_MALFORMED" {
 		p = Options{}
 	}
@@ -1642,4 +1642,11 @@ func improveOpportunitiesParity() Options {
 			Ticket:    "CHAOS-6081",
 		}},
 	}
+}
+
+// requireLists returns o requiring the named lists to be non-empty on a leg: a
+// request whose lists are empty on both legs measured nothing.
+func requireLists(o Options, paths ...string) Options {
+	o.RequireNonEmpty = append([]string(nil), paths...)
+	return o
 }

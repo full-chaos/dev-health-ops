@@ -190,7 +190,7 @@ _Deployed revisions read from: fleet file fleet-prod.json._
 | `recommendations` | remaining | NATIVE | VERIFIED (CHAOS-5800 @ `84e5d60d76a3`, internal/jobs/metrics/remaining/recommendations_engine_test.go TestEvaluateStateMatchesTheReference (full row/field EvaluateState output vs testdata/recommendations_engine_golden.json, captured by testdata/generate_recommendations_engine_golden.py driving the live Python RuleEngine.evaluate_state; 80 records/16 cases) + recommendations_rules_test.go's per-rule golden as supporting evidence; PASS re-run at this sha) | `39e25d366512` (read 2026-09-16T12:25:30Z) | **none** | -- |
 | `release_impact` | remaining | NATIVE | VERIFIED (CHAOS-5800 @ `84e5d60d76a3`, internal/jobs/metrics/remaining/release_impact_parity_golden_test.go TestReleaseImpactMatchesTheFrozenPythonGolden (native executor's release_impact_daily row, every non-flag column, vs testdata/release_impact_parity_golden.json, a frozen golden captured by running release_impact.py's live _compute_day against an identically-seeded ClickHouse over its HTTP port via clickhouse_connect; capture command recorded in the test's doc comment) + release_impact_fixture_integration_test.go TestReleaseImpactParityClassBattery (row-count/degraded-signal proof for the two zero-row classes this golden cannot cover); PASS re-run at this sha) | `39e25d366512` (read 2026-09-16T12:25:30Z) | **none** | -- |
 | `work_item_attribution` | remaining | NATIVE | VERIFIED (CHAOS-5800 @ `84e5d60d76a3`, internal/providersync/work_item_attribution_backstop_oracle_test.go TestWorkItemAttributionBackstopMatchesLivePythonProduction (drives remaining.BuildWorkItemAttributionRows -- the exact mapping ComputePartition calls -- against the frozen github_work-items_team-attributions_backstop Python oracle snapshot, every WorkItemAttributionRow field via githubTeamAttributionColumns); PASS re-run at this sha) | `39e25d366512` (read 2026-09-16T12:25:30Z) | **none** | -- |
-| `investment.materialize` | workgraph | NATIVE | **DIVERGED** (CHAOS-5459, .remember/lanes/team-lead/matrix-tracker-audit-2026-09-09.md section 4 -- repo attribution coverage fell 41% to 34% AFTER this family was recorded NATIVE; the fixes are merged at main (eadfd3955 #2382 transitive repository inheritance + cascade telemetry, 720f64bff #2394 fallback effort across owned repos; internal/jobs/investment/hierarchycascade.go, teamownership.go, repoattribution.go) but the production proof is still missing: dev_health_investment_repo_attribution_total has not been read against the 41 percent baseline, so this row stays diverged until it is) | `39e25d366512` (read 2026-09-16T12:25:30Z) | **none** | **CHAOS-5459, CHAOS-5460** |
+| `investment.materialize` | workgraph | NATIVE | VERIFIED (CHAOS-5459 @ `720f64bffc75`, internal/jobs/investment/repoattribution.go: the worker exports dev_health_investment_repo_attribution_total{source} (own|ancestor|children|team|unassigned; the five sum to the run's components). Production read 2026-09-20 on the Go worker that runs the workgraph queue, with transitive repository inheritance and the fallback effort across owned repos (internal/jobs/investment/hierarchycascade.go, teamownership.go) in the deployed build: attributed component share 77.07 percent; Investment page team coverage 100 percent, repository coverage 99 percent. Accepted by the owner as the coverage bar.) | `39e25d366512` (read 2026-09-16T12:25:30Z) | **none** | -- |
 | `workgraph.build` | workgraph | NATIVE | VERIFIED (CHAOS-5801 @ `cb78f7b67ea4`, every one of the build's 12 native pre-steps has a frozen-Python-golden or live-Python-golden test: stale_pr_dependency_issue_edges_cleanup -> internal/jobs/workgraph/edges/stale_dependency_edges_integration_test.go::TestDeleteStalePRDependencyIssueEdgesAgainstLiveClickHouse; issue_pr_links -> internal/jobs/workgraph/issueprlinks/golden_full_test.go::TestDeriveMatchesFrozenPythonGoldenExhaustively; issue_pr_edges_fast_path and issue_pr_edges_text_parse -> internal/jobs/workgraph/issuepredges/golden_test.go::TestDeriveFastPathAndTextParseEdgesMatchFrozenPythonGolden; issue_commit_edges -> internal/jobs/workgraph/issuecommitedges/golden_test.go::TestDeriveMatchesFrozenPythonGolden; issue_pr_edges_heuristic -> internal/jobs/workgraph/issuepredges/heuristic_golden_test.go::TestDeriveHeuristicEdgesMatchesFrozenPythonGolden; pr_commit_links and pr_commit_edges -> internal/jobs/workgraph/prcommit/golden_test.go::TestDeriveAndBuildFastPathEdgesMatchFrozenPythonGolden; commit_file_edges -> internal/jobs/workgraph/issuecommitedges/commit_file_edges_count_integration_test.go::TestCountCommitFileEdgesMatchesFrozenPythonGolden (new: seeds git_commit_stats and reproduces the frozen readback of the deleted _count_commit_file_edges query for the org-scoped, foreign-org and unscoped calls); flag_guards_edges -> internal/jobs/workgraph/operationaledges/incidents_golden_integration_test.go::TestBuildOperationalEdgesMatchSyntheticGolden; operational_incident_edges -> internal/jobs/workgraph/operationaledges/incidents_golden_integration_test.go::TestBuildOperationalIncidentEdgesMatchesOrg70d529e0Golden; issue_issue_edges -> internal/jobs/workgraph/edges/canonical_golden_test.go::TestDerivationReproducesTheFrozenGolden) | `39e25d366512` (read 2026-09-16T12:25:30Z) | **none** | -- |
 <!-- END GENERATED MIGRATION STATUS V2 -->
 
@@ -238,31 +238,45 @@ A row that is live, reachable to real clients (`canary`/`primary`) and carries n
 is required before stage 4/5, and "a bare 200 does not qualify".
 
 <!-- BEGIN GENERATED GO API OPERATIONS -->
-_Rendered 2026-09-16T12:25:30Z against main merge-base `1205ec23c1cf05a32f925a49f96ff1e0d58a0f69`; SDL digest pin `sha256:19485ec136d04de0935717dca8b4f5fd27dd0351fe96b854d40f433229468fd0`; fleet read 2026-09-16T12:25:30Z via fleet file fleet-prod.json._
+_Rendered 2026-09-20T11:54:38Z against main merge-base `1205ec23c1cf05a32f925a49f96ff1e0d58a0f69`; SDL digest pin `sha256:19485ec136d04de0935717dca8b4f5fd27dd0351fe96b854d40f433229468fd0`; fleet read 2026-09-16T12:25:30Z via fleet file fleet-prod.json._
 
-_Rows in `go_api_proof_run` at read time: **515**. Operations reachable to real clients with no deployed-executed proof: **0**. Rows whose mode says Go but whose schema digest no longer matches the pin, so every request silently falls back to Python: **0**._
+_Rows in `go_api_proof_run` at read time: **2845**. Operations reachable to real clients with no deployed-executed proof: **0**. Rows whose mode says Go but whose schema digest no longer matches the pin, so every request silently falls back to Python: **0**._
 
 _Live rows the edge cannot dispatch -- serving a document the operation catalog does not name (DOCUMENT_DRIFT, as `dev-hops go-api routing status` reports it): **0**; for an operation the catalog does not register (UNREGISTERED, as `dev-hops go-api routing status` reports it): **0**. Live rows with no recorded document digest, read before the reader carried it, so neither can be judged for them: **0**._
 
 | Operation | Mode | Schema digest | Candidate build | Live at current pin | Proven (derived) | Parity ticket |
 | --- | --- | --- | --- | --- | --- | --- |
-| `capacityForecast` | canary | `sha256:19485ec136d04d…` | `39e25d366512` | yes | `a33096fa-f28f-4b77-a47d-10827d0dbe87` | -- |
-| `capacityForecasts` | canary | `sha256:19485ec136d04d…` | `39e25d366512` | yes | `1d3b8a44-3481-4cac-bbd6-270774a8d195` | -- |
-| `cognitiveLoad` | canary | `sha256:19485ec136d04d…` | `39e25d366512` | yes | `53228aac-a49e-4269-a1ca-d58a8288f738` | -- |
-| `complexityTimeseries` | canary | `sha256:19485ec136d04d…` | `39e25d366512` | yes | `c2a462a9-f02d-4ae6-ab6f-9fcc73b537b6` | -- |
-| `featureFlagEvents` | canary | `sha256:19485ec136d04d…` | `39e25d366512` | yes | `6e8e1464-cd16-4fc1-b074-b0963cf48f18` | -- |
-| `featureFlags` | canary | `sha256:19485ec136d04d…` | `39e25d366512` | yes | `be7562b3-8635-4c04-946a-d520c401bda7` | -- |
-| `flowMatrix` | canary | `sha256:19485ec136d04d…` | `39e25d366512` | yes | `0cc32c9a-1b9b-4c59-b04e-b728616843df` | -- |
-| `hotspots` | canary | `sha256:19485ec136d04d…` | `39e25d366512` | yes | `2a4defef-050b-4a5f-b1f5-0b8d0d1cd02d` | -- |
-| `investmentBreakdown` | canary | `sha256:19485ec136d04d…` | `39e25d366512` | yes | `2c52c59d-1d3f-485d-9152-bd70401e297a` | -- |
-| `investmentFull` | canary | `sha256:19485ec136d04d…` | `39e25d366512` | yes | `7efcc06d-b1c6-4d0e-8d71-547a4a50fb32` | -- |
-| `operatingReview` | canary | `sha256:19485ec136d04d…` | `39e25d366512` | yes | `2c7a10a0-0710-4b8a-af5a-9057e4913a28` | -- |
-| `pr` | canary | `sha256:19485ec136d04d…` | `39e25d366512` | yes | `b3aaeb66-8b59-448c-8442-e9a46c68f034` | -- |
-| `reviewEdges` | canary | `sha256:19485ec136d04d…` | `39e25d366512` | yes | `d296baf1-ff70-4cd9-a7b1-4918000063bf` | -- |
-| `throughputForecast` | canary | `sha256:19485ec136d04d…` | `39e25d366512` | yes | `c8a33ae9-f085-44b2-8413-9cf3c0dbcd2a` | -- |
-| `workGraphArtifacts` | canary | `sha256:19485ec136d04d…` | `39e25d366512` | yes | `8846737d-8f95-41a9-800b-5227fa0e469e` | -- |
-| `workGraphEdges` | canary | `sha256:19485ec136d04d…` | `39e25d366512` | yes | `4f051952-cb30-4978-9067-d14545d53496` | -- |
-| `workGraphFlow` | canary | `sha256:19485ec136d04d…` | `39e25d366512` | yes | `17d38566-fa6a-454d-8f73-d11ded30c905` | -- |
+| `acrRepositoryScopes` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | `605b2b0b-42cd-46ce-967f-5d330c361a01` | -- |
+| `aiComparison` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | `02aa94a2-6365-4f62-a4c6-56ba134df4fb` | -- |
+| `aiImpactSummary` | python | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | **none** | -- |
+| `aiReviewLoad` | python | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | **none** | -- |
+| `busFactor` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | `7ca748c4-302b-4625-947b-c44b118ec1fd` | -- |
+| `capacityForecast` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | `016ece2e-c68d-40f1-9169-85236fb34ae9` | -- |
+| `capacityForecasts` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | `3171ee21-c80d-41ab-bc4b-5a3c8ad6950e` | -- |
+| `catalogValues` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | `0d7cb4c1-c027-4646-9a28-447484d86ea0` | -- |
+| `cognitiveLoad` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | `a95aa188-7f40-4696-8726-56ec0ac7309a` | -- |
+| `complexityTimeseries` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | `4d39f329-391e-411b-a190-255d253c16b9` | -- |
+| `compoundingRisk` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | `2f235644-d4ed-4903-8dbe-a3867c204a9f` | -- |
+| `connectorsDataHealth` | python | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | **none** | -- |
+| `experiments` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | `6cf05d7a-4716-4187-97d5-ef7dde64b465` | -- |
+| `featureFlagEvents` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | `a21f2f41-64a8-4c62-844f-c49d5e8e8680` | -- |
+| `featureFlags` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | `dfe61802-6209-4b39-a6c5-3b0b56d02970` | -- |
+| `flowMatrix` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | `7b6637c8-f40d-42ef-8d82-31c93c169979` | -- |
+| `hotspots` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | `7722f4d5-c27e-42a8-bbf3-7347c6e32682` | -- |
+| `investmentBreakdown` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | `5e4d34f4-4645-48ce-9468-00266c0cef67` | -- |
+| `investmentFull` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | `769f5ae4-6952-4048-add2-07c0fc748b0f` | -- |
+| `metricLineage` | python | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | **none** | -- |
+| `operatingReview` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | `48a6ee1c-4d7a-4067-a58d-edbb06c9603f` | -- |
+| `pr` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | `215119a1-5a2e-41c7-b4ed-7ee6b31843aa` | -- |
+| `productTelemetryDashboard` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | `0c7ae19b-7217-40ea-9ea5-ee5eb6a071fe` | -- |
+| `releaseImpact` | python | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | **none** | -- |
+| `reviewEdges` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | `e553c423-7418-4e5f-8084-e997f847d943` | -- |
+| `securityAlerts` | python | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | **none** | -- |
+| `securityOverview` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | `025e2b72-2943-406a-8249-fc14e3a7f58d` | -- |
+| `throughputForecast` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | `52e74390-2a83-408e-b524-9a8aab572438` | -- |
+| `workGraphArtifacts` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | `845092ad-d6e3-4653-a576-50accc9597db` | -- |
+| `workGraphEdges` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | `01c77c67-6993-4b9e-a630-bf206b051542` | -- |
+| `workGraphFlow` | canary | `sha256:19485ec136d04d…` | `1205ec23c1cf` | yes | `1bc2cb6a-aa54-4798-8f22-e239600241c5` | -- |
 <!-- END GENERATED GO API OPERATIONS -->
 
 ### Per REST endpoint

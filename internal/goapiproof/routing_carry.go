@@ -183,6 +183,19 @@ var ErrCarryTargetRowExists = errors.New("goapiproof: a different routing row al
 // live digest, matching `repoint`'s refusal of the same shape.
 var ErrCarryUnknownOperation = errors.New("goapiproof: no routing row at the live schema digest for a named operation")
 
+// ErrCarrySourceRowChanged reports that a row at the LIVE schema digest
+// -- one this run was copying -- was changed or removed by somebody else
+// after this run read it and before it could commit.
+//
+// Its own sentinel, not folded into ErrCarryRacedAnotherWriter, because
+// the two name opposite ends of the copy and an operator does different
+// things about them: a changed TARGET row means somebody decided
+// something at the digest about to roll, and is resolved there; a
+// changed SOURCE row means the decision being copied is no longer the
+// standing one, and is resolved by simply running `carry` again, which
+// then copies what the operator actually wants now.
+var ErrCarrySourceRowChanged = errors.New("goapiproof: a routing row at the live schema digest changed while this carry was preparing")
+
 // ErrCarryRacedAnotherWriter reports that a row appeared at the target
 // digest between this verb's survey and its write, and then could not be
 // read back. Nothing is written.
@@ -618,6 +631,29 @@ func Carry(ctx context.Context, pool *pgxpool.Pool, request CarryRequest) ([]Car
 			ModeAfter:            outcome.Mode,
 		})
 	}
+	// THE SOURCE ROWS ARE RE-READ UNDER A LOCK, and only now.
+	//
+	// Everything above decided what to copy from an UNLOCKED read, which
+	// under READ COMMITTED is a photograph of a moment that has since
+	// passed. This pass locks those rows FOR SHARE and compares them to
+	// what was actually written; from here to COMMIT they cannot move, so
+	// the row committed at the target digest is the decision standing at
+	// the live digest at the instant this transaction becomes real --
+	// which is the only reading of "preserve" that is worth anything to
+	// an operator about to roll.
+	//
+	// It runs after every write for the lock-order reason
+	// lockCarrySourceRowsSQL's own comment gives: nothing is left to
+	// register, so no routing-row lock is ever held while waiting for a
+	// candidate build.
+	//
+	// A difference ROLLS THE WHOLE RUN BACK rather than carrying the rest
+	// -- the same all-or-nothing rule the rest of this verb obeys. Half a
+	// rollout moved is the state carry exists to prevent.
+	if err := revalidateCarriedSourceRows(ctx, tx, request.LiveSchemaDigest, outcomes); err != nil {
+		return outcomes, err
+	}
+
 	// A run that carried nothing in the end (every row turned out to be
 	// there already) writes no audit row: an audit entry for a write that
 	// did not happen is a false entry in a table nothing can correct.
@@ -686,6 +722,67 @@ func carryOneRow(ctx context.Context, tx pgx.Tx, targetSchemaDigest, recordedBy 
 	}
 	outcome.Action = CarryActionUnchanged
 	return false, nil
+}
+
+// revalidateCarriedSourceRows re-reads the LIVE rows under a share lock
+// and refuses if any row this run copied is no longer what was copied.
+//
+// It compares only the rows whose outcome was CARRY or UNCHANGED: a
+// SKIPPED row was never copied, so a concurrent change to it changes
+// nothing this transaction claims, and refusing over it would block a
+// correct carry for a row nothing at the target digest will ever read.
+//
+// Both directions are a refusal, and for the same reason: a row whose
+// carried columns CHANGED means the target digest would hold a
+// superseded decision, and a row that VANISHED means the operator
+// removed the decision entirely -- in both cases what is about to commit
+// at the target digest is no longer what is standing at the live one.
+func revalidateCarriedSourceRows(ctx context.Context, tx pgx.Tx, liveSchemaDigest string, outcomes []CarryOutcome) error {
+	copied := map[carryRowKey]CarryRow{}
+	for _, outcome := range outcomes {
+		switch outcome.Action {
+		case CarryActionCarry, CarryActionUnchanged:
+			copied[carryRowKey{Operation: outcome.Operation, DocumentDigest: outcome.DocumentDigest}] = carriedRowOf(outcome)
+		}
+	}
+	if len(copied) == 0 {
+		return nil
+	}
+	locked, err := readCarryRows(ctx, tx, lockCarrySourceRowsSQL, liveSchemaDigest)
+	if err != nil {
+		return err
+	}
+	present := map[carryRowKey]CarryRow{}
+	for _, row := range locked {
+		present[carryRowKey{Operation: row.Operation, DocumentDigest: row.DocumentDigest}] = row
+	}
+	var changed []string
+	for key, was := range copied {
+		now, ok := present[key]
+		switch {
+		case !ok:
+			changed = append(changed, fmt.Sprintf("%s (document %s) was REMOVED at the live digest", key.Operation, key.DocumentDigest))
+		case !sameCarriedState(was, now):
+			changed = append(changed, fmt.Sprintf("%s (document %s) now reads mode %s, rollout %d, build %s -- this run was copying mode %s, rollout %d, build %s",
+				key.Operation, key.DocumentDigest, now.Mode, now.RolloutPercentage, now.Build, was.Mode, was.RolloutPercentage, was.Build))
+		}
+	}
+	if len(changed) == 0 {
+		return nil
+	}
+	sort.Strings(changed)
+	return fmt.Errorf("%w: %d row(s) at %s moved while this carry was preparing:\n  %s\n"+
+		"  NOTHING was written -- the whole run rolled back. Run `carry` again; it will copy what the live digest says NOW.",
+		ErrCarrySourceRowChanged, len(changed), liveSchemaDigest, strings.Join(changed, "\n  "))
+}
+
+// carryRowKey is a row's full identity WITHIN one schema digest -- the
+// table's primary key minus the digest itself. Operation alone ties
+// whenever an operation has rows under several document digests, and a
+// tie here would silently compare one row against another.
+type carryRowKey struct {
+	Operation      string
+	DocumentDigest string
 }
 
 // carryRefusalError renders every refused operation in one error, wrapped

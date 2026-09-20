@@ -70,7 +70,7 @@ func runCarry(argv []string) error {
 	set.StringVar(&common.reviewEvidence, "review-evidence", "", "WHY, in your own words, recorded on every row written (required)")
 	set.StringVar(&expectBuild, "expect-build", "", "optional CROSS-CHECK: fail if the deployed build is not this sha. Never the source of the value written")
 	set.BoolVar(&dryRun, "dry-run", false, "run every preflight, print the plan and write NOTHING")
-	set.DurationVar(&common.timeout, "timeout", 30*time.Second, "per-request timeout")
+	set.DurationVar(&common.timeout, "timeout", 30*time.Second, "bounds EACH HTTP request, the Postgres dial, and EACH database statement (server-side statement_timeout/lock_timeout) -- never the run as a whole")
 	if err := parseVerbFlags(set, argv); err != nil {
 		return err
 	}

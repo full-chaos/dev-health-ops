@@ -14,10 +14,12 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -254,5 +256,189 @@ func TestCarryDryRunEndToEndWritesNothing(t *testing.T) {
 	}
 	if strings.Contains(errOut, "go_api_routing.carried") {
 		t.Fatalf("a dry run logged a write it did not make:\n%s", errOut)
+	}
+}
+
+// r1 F3: `-timeout` must bound the DATABASE WORK, not only the dial.
+//
+// The dial succeeds against a perfectly healthy Postgres and the QUERY
+// is then what waits -- behind, here, an ACCESS EXCLUSIVE lock held by
+// somebody else. Before the fix, `carry -timeout 100ms` was still
+// blocked after half a second and returned only when the lock was
+// released, so the one operator running the one command that must
+// complete BEFORE a roll could not tell "still running" from
+// "committed".
+//
+// Both halves are asserted, because the bound alone is not the contract:
+// it must RETURN within the timeout, AND it must say that nothing was
+// written. A command that gives up inside its timeout and leaves the
+// operator guessing whether it committed has replaced one unanswerable
+// question with another.
+func TestCarryTimeoutBoundsTheDatabaseWorkAndSaysNothingWasWritten(t *testing.T) {
+	_, dsn := startVerbPostgres(t)
+	digest := carryTestDocumentDigest()
+	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
+	documentsPath := writeDocumentsDump(t, map[string]string{verbTestOperation: carryTestDocument})
+	t.Setenv(bearerEnvVar, verbTestBearer)
+	server := startQueryAPI(t, carryDeployedSchemaDigest, map[string]string{verbTestOperation: digest})
+	seedLiveRow(t, dsn, digest, "canary")
+
+	// A SEPARATE connection holds the table, and holds it past the
+	// command's timeout. Released through the deferred rollback, so a
+	// failure here cannot wedge the rest of the package.
+	ctx := context.Background()
+	blocker, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blocker.Close()
+	tx, err := blocker.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Belt and braces: the explicit rollback below is what the test
+	// relies on; this one only covers a t.Fatal before it.
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	if _, err := tx.Exec(ctx, `LOCK TABLE public.go_api_routing_state IN ACCESS EXCLUSIVE MODE`); err != nil {
+		t.Fatalf("take the blocking lock: %v", err)
+	}
+
+	started := time.Now()
+	_, stderrOut, err := captureVerb(t, carryArgs(server, dsn, catalogPath, documentsPath,
+		"-recorded-by", "operator", "-review-evidence", "r1 F3 timeout guard", "-timeout", "500ms")...)
+	elapsed := time.Since(started)
+	// Released IMMEDIATELY, not at the end of the test: the assertions
+	// below read the same table, and leaving the lock held would make
+	// THEM the thing that waits forever -- which is how this test first
+	// hung for ten minutes rather than failing.
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatalf("release the blocking lock: %v", err)
+	}
+
+	if err == nil {
+		t.Fatalf("carry must not report success while the table is locked:\n%s", stderrOut)
+	}
+	// Generous, because this asserts a BOUND, not a stopwatch: the point
+	// is that the command no longer waits for the lock holder, which
+	// here would be indefinitely. Anything inside a few seconds proves
+	// the server-side statement/lock timeout fired rather than the
+	// command blocking.
+	if elapsed > 15*time.Second {
+		t.Fatalf("carry ignored its -timeout and waited %s for a lock", elapsed)
+	}
+	// The refusal text reaches the operator through the error the verb
+	// returns (main prints it); stderrOut carries the plan. Both are
+	// searched so this cannot pass on the wrong channel.
+	said := err.Error() + "\n" + stderrOut
+	for _, want := range []string{"did not answer within the -timeout", "ROLLED BACK WHOLE", "NOTHING was written"} {
+		if !strings.Contains(said, want) {
+			t.Fatalf("the timeout refusal must contain %q, got:\n%s", want, said)
+		}
+	}
+	// And it must be TRUE: nothing at the target digest.
+	if count := countRowsAt(t, dsn, localSchemaDigest()); count != 0 {
+		t.Fatalf("a timed-out carry must write nothing, found %d row(s) at the target digest", count)
+	}
+}
+
+// The WINDOW this ticket creates has a trap `carry` cannot close on its
+// own: `disable` writes at the digest ITS OWN binary computes, and run
+// from the tools image built for the commit about to roll that is the
+// digest nothing is reading yet. It reports rows changed, exits 0, and
+// the operation it was meant to stop keeps being served by Go.
+//
+// `disable` deliberately makes no HTTP call (it must work when query-api
+// is down, which is when it is needed most), so it cannot ask what is
+// live -- but it can see that rows exist elsewhere, and must say so.
+// Reported rather than refused, for the same reason: refusing would
+// break the one property the verb exists for.
+func TestDisableNamesTheOtherDigestsHoldingRowsSoItCannotSilentlyStopNothing(t *testing.T) {
+	_, dsn := startVerbPostgres(t)
+	digest := carryTestDocumentDigest()
+	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
+	// The only row is at the DEPLOYED digest, not at this binary's.
+	seedLiveRow(t, dsn, digest, "canary")
+
+	_, stderrOut, err := captureVerb(t, "disable",
+		"-postgres-uri", dsn, "-catalog", catalogPath,
+		"-operations", verbTestOperation, "-mode", "python")
+	if err != nil {
+		t.Fatalf("disable must not refuse just because rows sit elsewhere: %v\n%s", err, stderrOut)
+	}
+	for _, want := range []string{"this command writes ONLY at", carryDeployedSchemaDigest, "stops nothing"} {
+		if !strings.Contains(stderrOut, want) {
+			t.Fatalf("disable must name the other digest holding rows, missing %q:\n%s", want, stderrOut)
+		}
+	}
+}
+
+// CONTROL for the note above: with every row at this binary's own
+// digest, there is nothing to warn about and the note must NOT print. A
+// warning that always fires is a warning nobody reads.
+func TestDisableSaysNothingWhenEveryRowIsAtThisBinarysDigest(t *testing.T) {
+	pool, dsn := startVerbPostgres(t)
+	digest := carryTestDocumentDigest()
+	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO public.go_api_candidate_build (schema_digest, document_digest, selected_operation, candidate_build)
+		VALUES ($1, $2, $3, $4)`, localSchemaDigest(), digest, verbTestOperation, verbTestBuild); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO public.go_api_routing_state
+			(schema_digest, document_digest, selected_operation, current_candidate_build,
+			 owner, mode, rollout_percentage, review_evidence, recorded_by)
+		VALUES ($1, $2, $3, $4, 'go', 'canary', 100, 'control row', 'operator')`,
+		localSchemaDigest(), digest, verbTestOperation, verbTestBuild); err != nil {
+		t.Fatal(err)
+	}
+	_, stderrOut, err := captureVerb(t, "disable",
+		"-postgres-uri", dsn, "-catalog", catalogPath,
+		"-operations", verbTestOperation, "-mode", "python")
+	if err != nil {
+		t.Fatalf("disable: %v\n%s", err, stderrOut)
+	}
+	if strings.Contains(stderrOut, "this command writes ONLY at") {
+		t.Fatalf("the other-digest note must not fire when there are no other digests:\n%s", stderrOut)
+	}
+}
+
+// With the deployed process unreachable there is no authority on what is
+// live, and `status` falls back to this binary's digest. A measurement
+// that did not happen must not read like one that did: the fallback is
+// stated, every run, or an operator reads MATCH/PENDING/STALE as a
+// reading of the deployment when it is an assumption about it.
+func TestStatusSaysWhenItsClassificationIsAnAssumptionNotAReading(t *testing.T) {
+	_, dsn := startVerbPostgres(t)
+	digest := carryTestDocumentDigest()
+	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
+	seedLiveRow(t, dsn, digest, "canary")
+
+	down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(down.Close)
+
+	out, _, err := captureVerb(t, "status", "-registry-url", down.URL+"/registry",
+		"-postgres-uri", dsn, "-catalog", catalogPath)
+	if err != nil {
+		t.Fatalf("status must never refuse: %v", err)
+	}
+	if !strings.Contains(out, "that is an assumption, not a reading of what is live") {
+		t.Fatalf("status must state that its classification is a fallback when the deployed process is unreachable:\n%s", out)
+	}
+
+	// CONTROL: with the plane answering, the line must NOT print -- it
+	// would then be false, and a caveat that is always there is a caveat
+	// that is never read.
+	up := startQueryAPI(t, carryDeployedSchemaDigest, map[string]string{verbTestOperation: digest})
+	upOut, _, err := captureVerb(t, "status", "-registry-url", up.URL+"/registry",
+		"-postgres-uri", dsn, "-catalog", catalogPath)
+	if err != nil {
+		t.Fatalf("status must never refuse: %v", err)
+	}
+	if strings.Contains(upOut, "that is an assumption, not a reading of what is live") {
+		t.Fatalf("the fallback caveat must not print when the deployed process answered:\n%s", upOut)
 	}
 }

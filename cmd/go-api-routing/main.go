@@ -191,6 +191,23 @@ func classifyWriteError(err error) error {
 	}
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
+		// The -timeout bound this verb set on the SERVER
+		// (connectPostgres's statement_timeout/lock_timeout) is not a
+		// crash and not a typo: it is the flag doing exactly what it
+		// says. Naming it as its own refusal is the whole reason the
+		// bound is server-side -- the statement was aborted, so the
+		// transaction rolled back WHOLE and nothing was written, which
+		// is the one thing an operator standing in front of a roll has
+		// to be told without having to go and look.
+		//
+		// 57014 query_canceled  = statement_timeout expired.
+		// 55P03 lock_not_available = lock_timeout expired.
+		switch pgErr.Code {
+		case "57014", "55P03":
+			return refuse("the database did not answer within the -timeout: %s.\n"+
+				"  The statement was cancelled by this command's own statement_timeout/lock_timeout, so the transaction ROLLED BACK WHOLE and NOTHING was written -- this is not a partial write.\n"+
+				"  Something else is most likely holding a lock on go_api_routing_state. Find it, or raise -timeout, then run the command again.", pgErr.Message)
+		}
 		return internal("%v", err)
 	}
 	return refuse("%v", err)
@@ -784,17 +801,55 @@ func sanitizeEndpointURL(flagName, raw string) (string, error) {
 	return safe.String(), nil
 }
 
-// connectPostgres applies the command's own -timeout to CONNECTING, which
-// a bare context.Background() would not.
+// connectPostgres applies the command's own -timeout to CONNECTING and to
+// every STATEMENT the verb goes on to run, which a bare
+// context.Background() would not.
 //
 // pgxpool.New does not dial; the first Acquire does. So a blackholed
 // database left `status` -- the one verb whose whole contract is that it
 // always answers -- hanging indefinitely, and the write verbs hanging
-// before they had done anything. The returned context bounds the
-// connection attempt only; it is cancelled once the pool is live, so the
-// work that follows is not cut short by a flag meant for a dial.
+// before they had done anything.
+//
+// A DIAL-ONLY BOUND IS NOT THE BOUND THE FLAG ADVERTISES, and the gap is
+// not theoretical: a dial succeeds against a perfectly healthy database
+// and the QUERY then blocks behind somebody else's `LOCK TABLE
+// go_api_routing_state IN ACCESS EXCLUSIVE MODE`. Executed before this
+// fix: `carry -timeout 100ms` was still blocked after 501ms with such a
+// lock held, and only returned when the lock was released -- so the one
+// operator running the one command that must complete BEFORE a roll
+// could not tell "still running" from "committed".
+//
+// The bound is set on the SERVER (`statement_timeout` and `lock_timeout`
+// as connection runtime parameters) rather than by cancelling a client
+// context mid-transaction, and that choice is the whole point: a
+// client-side cancel that lands during COMMIT leaves the operator unable
+// to say whether the transaction committed, which is a WORSE answer than
+// hanging. A server-side statement timeout aborts the STATEMENT, the
+// transaction rolls back whole, and nothing was written -- an
+// unambiguous answer, which `classifyWriteError` then names.
+//
+// Both parameters, not just one: `statement_timeout` alone does not
+// bound a wait for a lock in every path, and `lock_timeout` alone does
+// not bound a query that is merely slow. Each verb's -timeout is the
+// bound for each individually, never for the transaction as a whole --
+// the help text on every verb's flag says exactly that, because a flag
+// that claims a bound it does not have is how this defect existed at
+// all.
 func connectPostgres(ctx context.Context, uri string, timeout time.Duration) (*pgxpool.Pool, error) {
-	pool, err := pgxpool.New(ctx, uri)
+	config, err := pgxpool.ParseConfig(uri)
+	if err != nil {
+		// Same rule as pgxpool.New's parse failure below: pgx's message
+		// EMBEDS THE DSN, and a real DSN carries a password, so the
+		// underlying error is deliberately not wrapped.
+		return nil, refuse("the -postgres-uri could not be parsed as a Postgres DSN. Its text is deliberately not echoed -- it carries a password")
+	}
+	if config.ConnConfig.RuntimeParams == nil {
+		config.ConnConfig.RuntimeParams = map[string]string{}
+	}
+	for name, value := range statementBoundRuntimeParams(timeout) {
+		config.ConnConfig.RuntimeParams[name] = value
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
 		// A malformed DSN, which the operator fixes (r2 R2-01). It reads
 		// as a parse error from pgx, so it used to fall through to the
@@ -830,6 +885,29 @@ func connectPostgres(ctx context.Context, uri string, timeout time.Duration) (*p
 		return nil, internal("Postgres did not answer within %s: %w", timeout, err)
 	}
 	return pool, nil
+}
+
+// statementBoundRuntimeParams renders the verb's -timeout as the Postgres
+// connection parameters that bound each statement.
+//
+// Split out of connectPostgres so the arithmetic is testable without a
+// database. The rounding is the whole reason it has a test: Postgres
+// reads `statement_timeout = 0` as NO TIMEOUT AT ALL, so a
+// sub-millisecond -timeout truncating to "0" would silently mean the
+// exact opposite of what the operator asked for -- the flag's own
+// inversion, on the smallest values, where nobody would look.
+// requirePositiveTimeout has already refused zero and negative durations,
+// so the only value reaching this floor is a real, very small one.
+func statementBoundRuntimeParams(timeout time.Duration) map[string]string {
+	milliseconds := timeout.Milliseconds()
+	if milliseconds < 1 {
+		milliseconds = 1
+	}
+	bound := strconv.FormatInt(milliseconds, 10)
+	return map[string]string{
+		"statement_timeout": bound,
+		"lock_timeout":      bound,
+	}
 }
 
 // requestedOperations forwards to the package parser so the four verbs

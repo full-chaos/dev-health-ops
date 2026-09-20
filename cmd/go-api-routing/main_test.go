@@ -1095,18 +1095,34 @@ func TestToReportOperationSurfacesDeployedDigestDisagreement(t *testing.T) {
 		t.Fatal("an UNKNOWN reachable state must still name why (r6 observability (6))")
 	}
 
-	// A SCHEMA-level disagreement must also force
-	// reachable=false, even when the per-operation document digest still
-	// happens to agree -- `enable`'s preflight 2 (schema) refuses BEFORE
-	// preflight 3 (per-operation document digest) ever runs, so nothing
-	// is writable once the schemas disagree, regardless of what an
-	// individual operation's digest says.
+	// CORRECTED (r1 F1): a SCHEMA-level disagreement between THIS BINARY
+	// and the deployed process must NOT force reachable=false.
+	//
+	// `base` here is a MATCH row -- and, since the classification above
+	// it now runs against the DEPLOYED digest, MATCH means the deployed
+	// process reads this row. A real request IS served by Go. The old
+	// assertion below read `reachable:false` for exactly those rows, and
+	// it fired on every live row for the whole duration of a `carry`
+	// window, where a tools image built from the commit about to roll
+	// differs from the deployed one BY DESIGN.
+	//
+	// The schema difference is a fact about WRITES from this binary, and
+	// it is still reported -- `planes_agree:false`, the banner, and the
+	// reason string below all carry it. What it is not is a claim about
+	// what the edge dispatches.
 	schemaMismatchButDigestAgrees := toReportOperation(base, map[string]string{"flowMatrix": "catalog-digest"}, false, true)
 	if schemaMismatchButDigestAgrees.DeployedDigestState != "AGREE" {
 		t.Fatalf("deployed_digest_state = %q, want AGREE (the per-operation digest itself still matches)", schemaMismatchButDigestAgrees.DeployedDigestState)
 	}
-	if schemaMismatchButDigestAgrees.Reachable == nil || *schemaMismatchButDigestAgrees.Reachable {
-		t.Fatalf("reachable must be false under a schema mismatch even when the per-operation document digest agrees, got %v", schemaMismatchButDigestAgrees.Reachable)
+	if schemaMismatchButDigestAgrees.Reachable == nil || !*schemaMismatchButDigestAgrees.Reachable {
+		t.Fatalf("a row the DEPLOYED process reads must stay reachable=true when only THIS BINARY's SDL differs, got %v", schemaMismatchButDigestAgrees.Reachable)
+	}
+	// The reason must still NAME the write hazard, or the fact has been
+	// dropped rather than reclassified -- which is the failure mode this
+	// correction must not introduce.
+	if schemaMismatchButDigestAgrees.ReachableReason == nil ||
+		!strings.Contains(*schemaMismatchButDigestAgrees.ReachableReason, "would write at a digest nothing is reading") {
+		t.Fatalf("the schema-mismatch row must still name the write hazard in its reason, got %v", schemaMismatchButDigestAgrees.ReachableReason)
 	}
 
 	// A row this binary's OWN classification
@@ -1684,5 +1700,39 @@ func TestEveryDispatchedVerbIsListedInUsage(t *testing.T) {
 		if !listed[verb] {
 			t.Fatalf("run() dispatches %q but the usage text does not list it -- every class-wide verb guard in this file is derived from that list, so the verb would be silently unguarded", verb)
 		}
+	}
+}
+
+// A sub-millisecond -timeout must NEVER render as "0": Postgres reads
+// `statement_timeout = 0` as no timeout at all, so truncation here would
+// silently turn the tightest bound an operator can ask for into no bound
+// whatsoever -- the flag meaning its own opposite, on exactly the values
+// nobody inspects.
+func TestConnectPostgresFloorsASubMillisecondTimeout(t *testing.T) {
+	for _, testCase := range []struct {
+		name    string
+		timeout time.Duration
+		want    string
+	}{
+		{"one nanosecond", time.Nanosecond, "1"},
+		{"just under a millisecond", 999 * time.Microsecond, "1"},
+		{"exactly a millisecond", time.Millisecond, "1"},
+		{"a millisecond and a half", 1500 * time.Microsecond, "1"},
+		{"the default", 30 * time.Second, "30000"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			params := statementBoundRuntimeParams(testCase.timeout)
+			// BOTH parameters, every time: one of them missing is a bound
+			// that covers a slow query but not a lock wait, or the other
+			// way round, and the gap only shows under contention.
+			for _, name := range []string{"statement_timeout", "lock_timeout"} {
+				if params[name] != testCase.want {
+					t.Fatalf("%s = %q, want %q", name, params[name], testCase.want)
+				}
+				if params[name] == "0" {
+					t.Fatalf("%s rendered as 0, which Postgres reads as NO timeout", name)
+				}
+			}
+		})
 	}
 }

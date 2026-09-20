@@ -51,6 +51,39 @@ const carryRowColumns = routingRowColumns + `, owner, rollout_percentage, eligib
 const surveyCarryRowsSQL = `
 SELECT ` + carryRowColumns + routingRowSource
 
+// lockCarrySourceRowsSQL is that same wide read at the LIVE digest, now
+// taking a SHARE lock, and it is what makes `carry`'s preservation claim
+// true AT COMMIT rather than merely at the moment of an earlier read.
+//
+// THE DEFECT IT CLOSES, executed: under READ COMMITTED (pgx's default),
+// `surveyCarryRowsSQL` sees the rows as they were when IT ran. An
+// operator who changes a live row's mode from `canary` to `python` after
+// that read and before this transaction commits changes the decision
+// `carry` is in the middle of copying -- and the old version committed
+// the SUPERSEDED decision at the target digest, so the first new pod
+// would have served Go for an operation the operator had just turned
+// off. "Preserve the operator's decision" has to mean the decision that
+// is standing when the copy becomes real.
+//
+// FOR SHARE, not FOR UPDATE: this verb never writes at the live digest,
+// and must not. A share lock blocks a concurrent WRITER of these rows
+// (enable/disable/repoint) for the rest of this transaction while
+// leaving every plain reader -- the Python edge's dispatcher and
+// query-api's route switch, which take no locks at all -- completely
+// unaffected. Production traffic never waits on a carry.
+//
+// WHERE IT RUNS is part of the fix, not an implementation detail: AFTER
+// every candidate build has been registered and every target row
+// written, immediately before the audit row and the commit. Taking it
+// earlier would mean holding a routing-row lock while still registering
+// candidate builds, which is the exact lock-order inversion CHAOS-5507
+// left this package's shared order to prevent. Taken here, nothing
+// remains to wait on, and the rows cannot move between this read and the
+// commit.
+const lockCarrySourceRowsSQL = `
+SELECT ` + carryRowColumns + routingRowSource + `
+   FOR SHARE`
+
 // surveyRoutingRowsSQL is the UNLOCKED read.
 //
 // Its only job is to learn each row's document_digest so the candidate

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -503,4 +504,288 @@ func TestCarryAnswersOnTheRowThatIsActuallyAtTheTargetKey(t *testing.T) {
 			t.Fatalf("err = %v, want the refusal that names the row already there", err)
 		}
 	})
+}
+
+// r1 F1 (the SOURCE half): a carry must copy the decision that is
+// STANDING when it commits, not the one it happened to read first.
+//
+// Under READ COMMITTED -- pgx's default, and what every verb in this
+// package runs under -- the unlocked survey read sees the live rows as
+// they were at the instant IT ran. Before this guard, an operator who
+// changed a live row between that read and the commit had the SUPERSEDED
+// decision written to the target digest: the roll would then serve Go
+// for an operation they had just turned off, and `status` would show a
+// row at the new digest that matches nothing at the live one.
+//
+// The change is made by a trigger rather than a second goroutine on
+// purpose. A goroutine racing a millisecond-wide window is a test that
+// passes for whichever reason the scheduler chose that day; a trigger
+// puts the table in EXACTLY the state the guard exists to catch, every
+// run, and still exercises the real comparison against a real Postgres.
+func TestCarryRefusesWhenALiveRowChangesUnderneathItAndWritesNothing(t *testing.T) {
+	ctx := t.Context()
+	pool := startAuditedRegistryPostgres(t)
+	seedCarryRow(t, ctx, pool, carryIntegrationLiveDigest, CarryRow{
+		Operation: "featureFlags", DocumentDigest: testDocumentDigest, Mode: "canary",
+		Build: verbsRunningBuild, Owner: "go", RolloutPercentage: 100, ReviewEvidence: "the original decision",
+	})
+	seedCarryRow(t, ctx, pool, carryIntegrationLiveDigest, CarryRow{
+		Operation: "hotspots", DocumentDigest: testDocumentDigest2, Mode: "primary",
+		Build: verbsRunningBuild, Owner: "go", RolloutPercentage: 50, ReviewEvidence: "the other decision",
+	})
+
+	// Fires when the carry writes its FIRST target row -- i.e. after the
+	// survey has already decided what to copy, and before the commit.
+	if _, err := pool.Exec(ctx, `
+		CREATE FUNCTION carry_race_guard() RETURNS trigger AS $$
+		BEGIN
+			UPDATE public.go_api_routing_state
+			   SET mode = 'python'
+			 WHERE schema_digest = `+quoteLiteral(carryIntegrationLiveDigest)+`
+			   AND selected_operation = 'featureFlags';
+			RETURN NEW;
+		END;
+		$$ LANGUAGE plpgsql;
+		CREATE TRIGGER carry_race_guard_trigger
+			BEFORE INSERT ON public.go_api_routing_state
+			FOR EACH ROW
+			WHEN (NEW.schema_digest = `+quoteLiteral(carryIntegrationTargetDigest)+`)
+			EXECUTE FUNCTION carry_race_guard();`); err != nil {
+		t.Fatalf("install the racing writer: %v", err)
+	}
+
+	_, err := Carry(ctx, pool, carryIntegrationRequest())
+	if !errors.Is(err, ErrCarrySourceRowChanged) {
+		t.Fatalf("Carry err = %v, want ErrCarrySourceRowChanged", err)
+	}
+	// The refusal must NAME the operation and both readings. A refusal
+	// that says only "something moved" leaves the operator with nothing
+	// to act on in front of a roll.
+	for _, want := range []string{"featureFlags", "python", "canary", "NOTHING was written"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("refusal must contain %q, got: %v", want, err)
+		}
+	}
+
+	// ALL OR NOTHING: not one row, and not one audit entry, survives.
+	if rows := rowsAtDigest(t, ctx, pool, carryIntegrationTargetDigest); len(rows) != 0 {
+		t.Fatalf("the whole run must roll back, found %d row(s) at the target digest: %+v", len(rows), rows)
+	}
+	var audits int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM public.go_api_routing_audits`).Scan(&audits); err != nil {
+		t.Fatalf("count audits: %v", err)
+	}
+	if audits != 0 {
+		t.Fatalf("a rolled-back carry must leave no audit row, got %d", audits)
+	}
+}
+
+// The other direction of the same guard: the live row does not change,
+// it DISAPPEARS. "The operator changed their mind" and "the operator
+// removed the decision entirely" are different facts and both mean the
+// row about to commit at the target digest is no longer backed by
+// anything live.
+func TestCarryRefusesWhenALiveRowIsRemovedUnderneathIt(t *testing.T) {
+	ctx := t.Context()
+	pool := startAuditedRegistryPostgres(t)
+	seedCarryRow(t, ctx, pool, carryIntegrationLiveDigest, CarryRow{
+		Operation: "featureFlags", DocumentDigest: testDocumentDigest, Mode: "canary",
+		Build: verbsRunningBuild, Owner: "go", RolloutPercentage: 100, ReviewEvidence: "the original decision",
+	})
+	if _, err := pool.Exec(ctx, `
+		CREATE FUNCTION carry_delete_guard() RETURNS trigger AS $$
+		BEGIN
+			DELETE FROM public.go_api_routing_state
+			 WHERE schema_digest = `+quoteLiteral(carryIntegrationLiveDigest)+`
+			   AND selected_operation = 'featureFlags';
+			RETURN NEW;
+		END;
+		$$ LANGUAGE plpgsql;
+		CREATE TRIGGER carry_delete_guard_trigger
+			BEFORE INSERT ON public.go_api_routing_state
+			FOR EACH ROW
+			WHEN (NEW.schema_digest = `+quoteLiteral(carryIntegrationTargetDigest)+`)
+			EXECUTE FUNCTION carry_delete_guard();`); err != nil {
+		t.Fatalf("install the racing deleter: %v", err)
+	}
+
+	_, err := Carry(ctx, pool, carryIntegrationRequest())
+	if !errors.Is(err, ErrCarrySourceRowChanged) {
+		t.Fatalf("Carry err = %v, want ErrCarrySourceRowChanged", err)
+	}
+	if !strings.Contains(err.Error(), "was REMOVED at the live digest") {
+		t.Fatalf("the refusal must say the row was removed, got: %v", err)
+	}
+	if rows := rowsAtDigest(t, ctx, pool, carryIntegrationTargetDigest); len(rows) != 0 {
+		t.Fatalf("the whole run must roll back, found %d row(s): %+v", len(rows), rows)
+	}
+}
+
+// CONTROL for both tests above, and the reason they are not vacuous: an
+// UNCHANGED live row must still carry cleanly with the revalidation in
+// place. A guard that refused everything would pass both tests above and
+// break the verb entirely.
+func TestCarryStillSucceedsWhenTheLiveRowsDoNotMove(t *testing.T) {
+	ctx := t.Context()
+	pool := startAuditedRegistryPostgres(t)
+	seedCarryRow(t, ctx, pool, carryIntegrationLiveDigest, CarryRow{
+		Operation: "featureFlags", DocumentDigest: testDocumentDigest, Mode: "canary",
+		Build: verbsRunningBuild, Owner: "go", RolloutPercentage: 100, ReviewEvidence: "the original decision",
+	})
+	outcomes, err := Carry(ctx, pool, carryIntegrationRequest())
+	if err != nil {
+		t.Fatalf("an untouched live row must carry cleanly: %v", err)
+	}
+	if summary := SummarizeCarry(outcomes); summary.Carried != 1 {
+		t.Fatalf("summary = %+v, want one row carried", summary)
+	}
+	if rows := rowsAtDigest(t, ctx, pool, carryIntegrationTargetDigest); len(rows) != 1 {
+		t.Fatalf("got %d row(s) at the target digest, want 1", len(rows))
+	}
+}
+
+// quoteLiteral renders a SQL string literal for the trigger bodies
+// above. Test-only, and the values are test constants -- but spelled
+// with a real quoting rule rather than bare concatenation so a constant
+// that ever gains an apostrophe fails loudly instead of silently
+// changing what the trigger does.
+func quoteLiteral(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
+}
+
+// The LOCK itself, proven from outside the transaction that takes it.
+//
+// The two tests above pin the COMPARISON: they put the table in the
+// state the guard must catch and check that it refuses. Neither of them
+// can kill `FOR SHARE` -- a trigger's change is made inside the carry's
+// own transaction, so the re-read sees it with or without a lock. That
+// is a real gap, and this closes it at the one seam where the lock's
+// effect is observable: with the rows locked, a DIFFERENT session's
+// UPDATE of them must not be able to proceed.
+//
+// The second session sets its own lock_timeout so this test cannot hang
+// on a failure; the failure mode without the lock is the UPDATE
+// SUCCEEDING, which is asserted directly rather than inferred from a
+// timing.
+func TestCarrySourceReadActuallyLocksTheLiveRowsAgainstOtherWriters(t *testing.T) {
+	ctx := t.Context()
+	pool := startAuditedRegistryPostgres(t)
+	seedCarryRow(t, ctx, pool, carryIntegrationLiveDigest, CarryRow{
+		Operation: "featureFlags", DocumentDigest: testDocumentDigest, Mode: "canary",
+		Build: verbsRunningBuild, Owner: "go", RolloutPercentage: 100, ReviewEvidence: "the original decision",
+	})
+
+	holder, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = holder.Rollback(context.Background()) }()
+	if _, err := readCarryRows(ctx, holder, lockCarrySourceRowsSQL, carryIntegrationLiveDigest); err != nil {
+		t.Fatalf("locking read: %v", err)
+	}
+
+	writer, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = writer.Rollback(context.Background()) }()
+	if _, err := writer.Exec(ctx, `SET LOCAL lock_timeout = '750ms'`); err != nil {
+		t.Fatalf("set lock_timeout: %v", err)
+	}
+	_, err = writer.Exec(ctx, `
+		UPDATE public.go_api_routing_state SET mode = 'python'
+		 WHERE schema_digest = $1 AND selected_operation = 'featureFlags'`, carryIntegrationLiveDigest)
+	if err == nil {
+		t.Fatal("another session updated a row this transaction holds FOR SHARE -- the source rows are not actually locked, so a concurrent operator change can still land between the survey and the commit")
+	}
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "55P03" {
+		t.Fatalf("want lock_not_available (55P03) from the blocked writer, got %v", err)
+	}
+
+	// CONTROL: once the holder releases, the same UPDATE succeeds. Without
+	// this the test would also pass if the row were simply unwritable for
+	// some unrelated reason.
+	if err := holder.Rollback(ctx); err != nil {
+		t.Fatalf("release the share lock: %v", err)
+	}
+	// A FRESH transaction: the blocked one above is aborted by its own
+	// failed statement (SQLSTATE 25P02 on anything further), so reusing
+	// it would fail for a reason that has nothing to do with the lock and
+	// the control would prove nothing.
+	if err := writer.Rollback(ctx); err != nil {
+		t.Fatalf("discard the aborted writer transaction: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE public.go_api_routing_state SET mode = 'python'
+		 WHERE schema_digest = $1 AND selected_operation = 'featureFlags'`, carryIntegrationLiveDigest); err != nil {
+		t.Fatalf("control: the update must succeed once the share lock is gone, got %v", err)
+	}
+}
+
+// The revalidation must cover rows whose outcome is UNCHANGED, not only
+// the ones this run actually inserted.
+//
+// UNCHANGED means "the target digest already holds exactly this row" --
+// which a partly-completed earlier carry, or a rerun, produces routinely.
+// If the guard watched only the rows IT wrote, a live row that moved
+// under an UNCHANGED outcome would leave the target digest holding a
+// superseded decision while the run reported success.
+//
+// The run here is MIXED on purpose: `hotspots` is carried (so a write
+// happens, and with it the trigger's anchor) while `featureFlags` is
+// already at the target digest and reports UNCHANGED. The trigger moves
+// the UNCHANGED one. Only the clause under test can see that.
+func TestCarryRevalidatesEvenRowsItDidNotWriteThisRun(t *testing.T) {
+	ctx := t.Context()
+	pool := startAuditedRegistryPostgres(t)
+	seedCarryRow(t, ctx, pool, carryIntegrationLiveDigest, CarryRow{
+		Operation: "featureFlags", DocumentDigest: testDocumentDigest, Mode: "canary",
+		Build: verbsRunningBuild, Owner: "go", RolloutPercentage: 100, ReviewEvidence: "the original decision",
+	})
+	seedCarryRow(t, ctx, pool, carryIntegrationLiveDigest, CarryRow{
+		Operation: "hotspots", DocumentDigest: testDocumentDigest2, Mode: "primary",
+		Build: verbsRunningBuild, Owner: "go", RolloutPercentage: 50, ReviewEvidence: "the other decision",
+	})
+	// featureFlags is ALREADY at the target digest, carrying the evidence
+	// a real carry would have written -- so this run reports it UNCHANGED
+	// and writes nothing for it.
+	seedCarryRow(t, ctx, pool, carryIntegrationTargetDigest, CarryRow{
+		Operation: "featureFlags", DocumentDigest: testDocumentDigest, Mode: "canary",
+		Build: verbsRunningBuild, Owner: "go", RolloutPercentage: 100,
+		ReviewEvidence: CarriedEvidence(carryIntegrationLiveDigest, verbsRunningBuild, time.Now().UTC(), "the original decision"),
+	})
+
+	// Anchored on the candidate-build insert that carrying `hotspots`
+	// performs; it moves `featureFlags`, the UNCHANGED row.
+	if _, err := pool.Exec(ctx, `
+		CREATE FUNCTION carry_rerun_guard() RETURNS trigger AS $$
+		BEGIN
+			UPDATE public.go_api_routing_state
+			   SET rollout_percentage = 5
+			 WHERE schema_digest = `+quoteLiteral(carryIntegrationLiveDigest)+`
+			   AND selected_operation = 'featureFlags';
+			RETURN NEW;
+		END;
+		$$ LANGUAGE plpgsql;
+		CREATE TRIGGER carry_rerun_guard_trigger
+			BEFORE INSERT ON public.go_api_candidate_build
+			FOR EACH ROW
+			WHEN (NEW.schema_digest = `+quoteLiteral(carryIntegrationTargetDigest)+`)
+			EXECUTE FUNCTION carry_rerun_guard();`); err != nil {
+		t.Fatalf("install the racing writer: %v", err)
+	}
+
+	outcomes, err := Carry(ctx, pool, carryIntegrationRequest())
+	if !errors.Is(err, ErrCarrySourceRowChanged) {
+		t.Fatalf("err = %v (outcomes %+v), want ErrCarrySourceRowChanged", err, SummarizeCarry(outcomes))
+	}
+	if !strings.Contains(err.Error(), "featureFlags") {
+		t.Fatalf("the refusal must name the moved UNCHANGED operation, got: %v", err)
+	}
+	// And the whole run rolled back: `hotspots`, which DID write, is gone.
+	rows := rowsAtDigest(t, ctx, pool, carryIntegrationTargetDigest)
+	if _, found := carryRowByOperation(rows, "hotspots"); found {
+		t.Fatalf("the run must roll back whole; hotspots survived at the target digest: %+v", rows)
+	}
 }

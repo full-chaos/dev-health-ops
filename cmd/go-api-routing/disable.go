@@ -19,6 +19,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
@@ -42,7 +43,7 @@ func runDisable(argv []string) error {
 	// all, and a flag that is accepted and ignored tells an operator this
 	// command does something it does not. -timeout IS honoured, because
 	// it bounds the Postgres dial -- the one thing this verb waits on.
-	set.DurationVar(&common.timeout, "timeout", 30*time.Second, "how long to wait for Postgres to answer. This verb makes no HTTP call; the timeout bounds the database connection only")
+	set.DurationVar(&common.timeout, "timeout", 30*time.Second, "how long to wait for Postgres to answer. This verb makes no HTTP call; the timeout bounds the Postgres dial and EACH database statement (server-side statement_timeout/lock_timeout), never the run as a whole")
 	if err := parseVerbFlags(set, argv); err != nil {
 		return err
 	}
@@ -135,6 +136,33 @@ func runDisable(argv []string) error {
 	// previous "wrote nothing at all".
 	var skippedOperations []string
 	fmt.Fprintf(stdout, "schema_digest %s\n", local)
+	// WHICH DIGEST THIS VERB WRITES AT IS NOT A DETAIL DURING A CARRY
+	// WINDOW. `disable` makes no HTTP call by design (it must work when
+	// query-api is down, which is exactly when it is needed), so it
+	// cannot ask the deployed process what is live -- but it CAN see
+	// that rows exist at other digests, and say so. Run from a tools
+	// image built for the commit about to roll, `disable` writes at the
+	// digest nothing is reading yet: it reports rows changed, exits 0,
+	// and the operation it was meant to stop keeps serving Go.
+	//
+	// Reported rather than refused: refusing here would break the one
+	// property this verb exists for -- working when everything else is
+	// broken -- and the operator who needs it most is the one who cannot
+	// get a second opinion. So it names the fact and leaves the decision
+	// where it belongs.
+	if counts, countErr := goapiproof.CountRowsBySchemaDigest(ctx, pool); countErr == nil {
+		others := make([]string, 0, len(counts))
+		for digest, count := range counts {
+			if digest != local && count > 0 {
+				others = append(others, digest)
+			}
+		}
+		if len(others) > 0 {
+			sort.Strings(others)
+			fmt.Fprintf(stderr, "go-api-routing: NOTE: this command writes ONLY at %s. Rows also exist at %v.\n", local, others)
+			fmt.Fprintf(stderr, "  If a roll is in flight, the digest the deployed process reads may be one of those -- `status` (which DOES ask the deployed process) says which. Disabling at the wrong digest reports success and stops nothing.\n")
+		}
+	}
 	fmt.Fprintf(stdout, "%-24s %-10s -> %-10s CANDIDATE BUILD                           DOCUMENT DIGEST\n", "OPERATION", "FROM", "TO")
 	for _, change := range changes {
 		current := change.CurrentMode

@@ -275,6 +275,43 @@ recorded with `action = 'enable'` — alembic 0130's CHECK admits only
 enable/disable/repoint — so that evidence prefix is what distinguishes a
 carried row from a fresh enablement for a reader of that table.
 
+A carry also refuses, rolling the whole run back and writing nothing, when
+a row it was copying **moves at the live digest while it runs**. The survey
+that decides what to copy is an unlocked read under READ COMMITTED, so an
+operator who changes or removes a live row between that read and the commit
+would otherwise have the superseded decision written to the new digest —
+and the roll would then serve Go for something that had just been turned
+off. Before committing, `carry` re-reads the rows it copied `FOR SHARE` and
+compares them; a difference names the operation and both readings, and the
+answer is simply to run `carry` again. The share lock blocks other routing
+WRITERS for the rest of that transaction and no readers at all: neither
+plane's dispatch path takes a lock, so production traffic never waits on a
+carry.
+
+**During this window, read the census, and mind which digest a write verb
+writes at.** `status` classifies rows against the digest the DEPLOYED
+process reports at `/registry`, never against the digest of the binary
+running the command, so rows carrying production traffic read `MATCH` and
+the freshly carried rows read `PENDING` — "nothing reads these yet", which
+is a different fact from `STALE`, "nothing will ever read these". With
+`/registry` unreachable there is no authority on what is live and `status`
+says so rather than presenting this binary's own digest as a reading.
+`enable` and `disable`, however, write at the digest THEIR OWN binary
+computes: run from the tools image built for the commit about to roll, a
+`disable` lands at the digest nothing is reading yet, reports success, and
+stops nothing. `disable` cannot detect this itself (it makes no HTTP call
+by design, so it works when query-api is down), but it now prints the other
+digests holding rows and points at `status`. **To stop live traffic during
+the window, run `disable` from the image that is actually deployed.**
+
+Every verb's `-timeout` bounds each HTTP request, the Postgres dial **and
+each database statement** — `statement_timeout` and `lock_timeout` are set
+on the connection from that flag. The bound is server-side on purpose: a
+client-side cancel landing during `COMMIT` would leave the operator unable
+to say whether the transaction committed, where a statement timeout aborts
+the statement, rolls the transaction back whole, and the command says so.
+It bounds each statement individually, never the run as a whole.
+
 ### Recovery procedure
 
 ```bash

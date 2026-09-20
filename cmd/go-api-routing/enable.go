@@ -72,7 +72,7 @@ func runEnable(argv []string) error {
 	// unexpected operand), so the only real cost is a confused operator.
 	set.BoolVar(&acknowledgeUnproven, "acknowledge-unproven", false, "enable operations with no deployed-executed proof run for this build. Each such row records ACKNOWLEDGED-UNPROVEN durably and is reported UNPROVEN by status for as long as it is in force")
 	set.BoolVar(&dryRun, "dry-run", false, "run every preflight and write NOTHING")
-	set.DurationVar(&common.timeout, "timeout", 30*time.Second, "per-request timeout")
+	set.DurationVar(&common.timeout, "timeout", 30*time.Second, "bounds EACH HTTP request, the Postgres dial, and EACH database statement (server-side statement_timeout/lock_timeout) -- never the run as a whole")
 	if err := parseVerbFlags(set, argv); err != nil {
 		return err
 	}

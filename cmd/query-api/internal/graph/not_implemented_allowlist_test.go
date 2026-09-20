@@ -4,46 +4,44 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
 	"sort"
 	"strings"
 	"testing"
 )
 
-// notImplementedResolverNames names every resolver whose body is a gqlgen
-// "not implemented" stub. A resolver that gains a real body must drop its
-// line here; a stub that is not listed fails the test, so an unbuilt field
-// can never reach a router unnoticed.
-var notImplementedResolverNames = []string{
-	"mutationResolver.CloneSavedReport",
-	"mutationResolver.CreateSavedReport",
-	"mutationResolver.DeleteSavedReport",
-	"mutationResolver.TriggerReport",
-	"mutationResolver.UpdateSavedReport",
-	"queryResolver.AiAttributedPrs",
-	"queryResolver.AiAttributionOverview",
-	"queryResolver.AiGovernanceSummary",
-	"queryResolver.AiOpportunities",
-	"queryResolver.AiRiskBreakdown",
-	"queryResolver.AiWorkflowDrilldown",
-	"queryResolver.DevChangeSummary",
-	"queryResolver.DevDataHealth",
-	"queryResolver.DevEvidenceSearch",
-	"queryResolver.DevMetric",
-	"queryResolver.DevMetricCatalog",
-	"queryResolver.DevScopeSearch",
-	"queryResolver.DevStatusSnapshot",
-	"queryResolver.DevWorkGraphNeighbors",
-	"queryResolver.Home",
-	"queryResolver.ImproveOpportunities",
-	"queryResolver.Recommendations",
-	"queryResolver.ReportRuns",
-	"queryResolver.SavedReport",
-	"queryResolver.SavedReports",
-	"queryResolver.TestopsRisk",
-	"queryResolver.WorkItemTeamAttributions",
-	"subscriptionResolver.MetricsUpdated",
-	"subscriptionResolver.SyncProgress",
-	"subscriptionResolver.TaskStatus",
+// notImplementedDir holds one regular file per resolver (content ignored, kept empty) whose body is a gqlgen
+// "not implemented" stub, named "Receiver.Method". One file per name (not one
+// shared list) so that porting a resolver -- deleting its own file -- never
+// edits a line another port also edits, which is what let parallel ports merge
+// without conflicts. A resolver that gains a real body must delete its file; a
+// stub with no file fails the test, so an unbuilt field can never reach a
+// router unnoticed.
+const notImplementedDir = "testdata/not_implemented"
+
+// notImplementedResolverNames lists the names the directory holds.
+func notImplementedResolverNames(t *testing.T) []string {
+	t.Helper()
+	return namesInDir(t, notImplementedDir)
+}
+
+func namesInDir(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read %s: %v", dir, err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		// A marker is a regular file. A directory or symlink under that name
+		// would satisfy a name-only listing while marking nothing.
+		if !e.Type().IsRegular() {
+			t.Fatalf("%s/%s is not a regular file; each stub marker must be a regular file", dir, e.Name())
+		}
+		names = append(names, e.Name())
+	}
+	sort.Strings(names)
+	return names
 }
 
 // stubResolvers returns "Receiver.Method" for every method in
@@ -104,8 +102,9 @@ func callMentionsNotImplemented(call *ast.CallExpr) bool {
 }
 
 func TestNotImplementedResolversMatchAllowlist(t *testing.T) {
-	notImplementedResolvers := make(map[string]struct{}, len(notImplementedResolverNames))
-	for _, name := range notImplementedResolverNames {
+	allowed := notImplementedResolverNames(t)
+	notImplementedResolvers := make(map[string]struct{}, len(allowed))
+	for _, name := range allowed {
 		notImplementedResolvers[name] = struct{}{}
 	}
 	stubs := stubResolvers(t)
@@ -127,9 +126,9 @@ func TestNotImplementedResolversMatchAllowlist(t *testing.T) {
 	sort.Strings(unlisted)
 	sort.Strings(built)
 	if len(unlisted) > 0 {
-		t.Errorf("resolvers with a not-implemented body that are not in the allowlist: %v", unlisted)
+		t.Errorf("resolvers with a not-implemented body that have no file in %s: %v", notImplementedDir, unlisted)
 	}
 	if len(built) > 0 {
-		t.Errorf("allowlist names resolvers that are built or absent; remove them: %v", built)
+		t.Errorf("%s names resolvers that are built or absent; delete these files: %v", notImplementedDir, built)
 	}
 }

@@ -151,12 +151,27 @@ type Variant struct {
 	// vice versa).
 	Parity Options
 
+	// KnownRefusal, when set, records that this case is expected NOT to
+	// compare: the planes differ by design and no declaration admits the
+	// difference. The case stays in the corpus so the record keeps showing the
+	// difference, and a change that makes it comparable is noticed. It never
+	// admits anything; it only documents.
+	KnownRefusal *KnownRefusal
+
 	// Instance, when set, marks a variant whose request needs one REAL
 	// identifier from the run (a repository that has alerts, a search term
 	// that matches an alert, ...). The run supplies it as
 	// `-instance-id <operation>.<variant>=<value>`; without one the variant
 	// is REFUSED by name, never sent with a guessed value.
 	Instance *VariantInstance
+}
+
+// KnownRefusal names why a corpus case is expected not to compare.
+type KnownRefusal struct {
+	// Ticket owns the difference.
+	Ticket string
+	// Reason states the difference in words.
+	Reason string
 }
 
 // VariantInstance describes the run-supplied identifier a Variant needs.
@@ -263,27 +278,48 @@ var operationSpecs = map[string]OperationSpec{
 		Variables: func(orgID string, _ Window) map[string]any {
 			return compoundingRiskVariables(orgID, nil)
 		},
-		Parity: compoundingRiskParity,
+		Parity: compoundingRiskRowsParity("REPO"),
 		// A team breakout whose team has NO stored team rows is deliberately
 		// not a variant: that branch derives team points from the repo rows
 		// through team ownership on Go and through teams.repo_patterns on
 		// Python, so the two answers differ by design and no computed check
-		// admits it; it is a refused case, not a blanket citation.
+		// admits it; it is a refused case, not a blanket citation. The Go
+		// answer (team ownership through the shared team-scope condition) is
+		// the ruled semantics and Python's repo_patterns read is the declared
+		// baseline divergence; the Go behaviour is pinned by
+		// TestRealClickHouse_TeamBreakout in the compoundingrisk package.
+		// The same divergence reaches any request that names teamIds: an
+		// empty list (Python reads it as no filter and aggregates teams through
+		// teams.repo_patterns) and a team WITH stored rows (the rows agree, but
+		// the trend is built over the team's repo_patterns repositories on
+		// Python and over its owned repositories on Go). The web document sends
+		// no teamIds, so neither is reachable from it; both stay in the corpus
+		// as KNOWN refusals so the record keeps showing the difference and a
+		// later change that makes them comparable is noticed.
 		Variants: []Variant{
-			compoundingRiskVariant("REPO_BREAKOUT", map[string]any{"breakout": "REPO", "trendDays": 30}),
-			compoundingRiskVariant("TEAM_BREAKOUT", map[string]any{"breakout": "TEAM", "trendDays": 30}),
+			compoundingRiskRowsVariant("REPO_BREAKOUT", "REPO", map[string]any{"breakout": "REPO", "trendDays": 30}),
+			compoundingRiskRowsVariant("TEAM_BREAKOUT", "TEAM", map[string]any{"breakout": "TEAM", "trendDays": 30}),
 			compoundingRiskDayVariant("DAY", "REPO"),
 			compoundingRiskDayVariant("TEAM_DAY", "TEAM"),
-			compoundingRiskVariant("REPO_IDS_UNKNOWN", map[string]any{"breakout": "REPO", "repoIds": []any{"00000000-0000-0000-0000-000000000001"}, "trendDays": 30}),
-			compoundingRiskVariant("REPO_IDS_EMPTY", map[string]any{"breakout": "REPO", "repoIds": []any{}, "trendDays": 30}),
-			compoundingRiskVariant("TEAM_IDS_UNKNOWN", map[string]any{"breakout": "TEAM", "teamIds": []any{"team-abc-123"}, "trendDays": 30}),
-			compoundingRiskVariant("TEAM_IDS_EMPTY", map[string]any{"breakout": "TEAM", "teamIds": []any{}, "trendDays": 30}),
+			compoundingRiskEmptyVariant("REPO_IDS_UNKNOWN", map[string]any{"breakout": "REPO", "repoIds": []any{"00000000-0000-0000-0000-000000000001"}, "trendDays": 30}),
+			compoundingRiskEmptyVariant("REPO_IDS_EMPTY", map[string]any{"breakout": "REPO", "repoIds": []any{}, "trendDays": 30}),
+			compoundingRiskKnownRefusalVariant("TEAM_IDS_EMPTY", map[string]any{"breakout": "TEAM", "teamIds": []any{}, "trendDays": 30}, nil),
+			compoundingRiskKnownRefusalVariant("TEAM_STORED", map[string]any{"breakout": "TEAM", "trendDays": 30},
+				&VariantInstance{
+					Kind: "a team id that has stored team-scope compounding-risk rows",
+					Bind: func(vars map[string]any, value string) {
+						vars["filter"].(map[string]any)["teamIds"] = []any{value}
+					},
+					EchoFor: func(value string) []ScopeEcho {
+						return []ScopeEcho{{List: "data.compoundingRisk.rows", Fields: []string{"scopeId", "scopeLabel"}, Value: value}}
+					},
+				}),
+			compoundingRiskEmptyVariant("TEAM_IDS_UNKNOWN", map[string]any{"breakout": "TEAM", "teamIds": []any{"team-abc-123"}, "trendDays": 30}),
 			compoundingRiskInstanceVariant("REPO_VALID", "a repository id that has stored compounding-risk rows", "REPO", "repoIds"),
-			compoundingRiskInstanceVariant("TEAM_STORED", "a team id that has stored team-scope compounding-risk rows", "TEAM", "teamIds"),
-			compoundingRiskVariant("TEAM_AND_REPO_UNKNOWN", map[string]any{"breakout": "TEAM", "teamIds": []any{"team-abc-123"}, "repoIds": []any{"00000000-0000-0000-0000-000000000001"}, "trendDays": 30}),
-			compoundingRiskVariant("TREND_ONE_DAY", map[string]any{"breakout": "REPO", "trendDays": 1}),
-			compoundingRiskVariant("TREND_CLAMPED_HIGH", map[string]any{"breakout": "REPO", "trendDays": 1000}),
-			compoundingRiskVariant("TREND_CLAMPED_LOW", map[string]any{"breakout": "REPO", "trendDays": 0}),
+			compoundingRiskEmptyVariant("TEAM_AND_REPO_UNKNOWN", map[string]any{"breakout": "TEAM", "teamIds": []any{"team-abc-123"}, "repoIds": []any{"00000000-0000-0000-0000-000000000001"}, "trendDays": 30}),
+			compoundingRiskPinnedTrendVariant("TREND_ONE_DAY", 1),
+			compoundingRiskRowsVariant("TREND_CLAMPED_HIGH", "REPO", map[string]any{"breakout": "REPO", "trendDays": 1000}),
+			compoundingRiskPinnedTrendVariant("TREND_CLAMPED_LOW", 0),
 		},
 	},
 	"aiRiskBreakdown": {
@@ -367,10 +403,20 @@ var operationSpecs = map[string]OperationSpec{
 		},
 		Variants: []Variant{
 			experimentsVariant("ORG_EXPLICIT", "ORG", nil),
-			experimentsVariant("TEAM_UNKNOWN", "TEAM", []string{"team-abc-123"}),
+			// An unresolved team is a known refusal: the planes differ by
+			// design, so the case stays to keep the difference on the record.
+			experimentsTeamUnknownVariant(),
 			experimentsVariant("REPO_UNKNOWN", "REPO", []string{"00000000-0000-0000-0000-000000000001"}),
 			experimentsVariant("SERVICE_UNKNOWN", "SERVICE", []string{"service-abc-123"}),
 			experimentsVariant("DEVELOPER_UNKNOWN", "DEVELOPER", []string{"dev-abc-123"}),
+			// A repository id the run supplies. The answer carries no scope
+			// echo (experiments hold no repository field) and the comparator
+			// has no guard that the answer differs from the base answer, so
+			// the case proves the repo branch is read on both planes and
+			// compared, not that the filter narrowed the cards. A team id is
+			// not a case: Go selects a team's repositories by ownership and
+			// Python by member authorship, a declared baseline difference.
+			experimentsRepoValidVariant(),
 		},
 	},
 	// The two product telemetry dashboards take a half-open day range only; the
@@ -381,6 +427,10 @@ var operationSpecs = map[string]OperationSpec{
 	// end), which both planes answer with empty lists and an all-null summary.
 	"productTelemetryDashboard": {
 		ResponseRoot: "productTelemetryDashboard",
+		// The base request is measured only when the run's window holds
+		// events of the run's org on a leg; two empty answers agree without
+		// either plane reading anything. The window is run-supplied.
+		Parity: Options{RequireNonEmpty: []string{"data.productTelemetryDashboard.dailyActiveUsers"}},
 		Variables: func(orgID string, w Window) map[string]any {
 			return map[string]any{"orgId": orgID, "input": map[string]any{"startDate": w.SinceDate, "endDate": w.UntilDate}}
 		},
@@ -839,6 +889,42 @@ var operationSpecs = map[string]OperationSpec{
 			},
 		}}},
 	},
+	// The saved-report reads answer from Postgres for the caller's own org.
+	// The unknown-id requests use a neutral id no report holds, so both
+	// planes answer the same empty branch; every request that reads a real
+	// row needs the run to supply a report id (or, for the list, an org that
+	// holds reports) and is refused as vacuous when the answer is empty.
+	"reportRuns": {
+		ResponseRoot: "reportRuns",
+		Variables: func(orgID string, _ Window) map[string]any {
+			return map[string]any{"orgId": orgID, "reportId": "00000000-0000-0000-0000-000000000001", "limit": 50}
+		},
+		Variants: []Variant{
+			reportRunsInstanceVariant("RUNS_OF_REPORT", 50),
+			reportRunsInstanceVariant("RUNS_LIMITED", 1),
+		},
+	},
+	"savedReport": {
+		ResponseRoot: "savedReport",
+		RootNullable: true,
+		Variables: func(orgID string, _ Window) map[string]any {
+			return map[string]any{"orgId": orgID, "reportId": "00000000-0000-0000-0000-000000000001"}
+		},
+		Variants: []Variant{savedReportInstanceVariant("FOUND")},
+	},
+	"savedReports": {
+		ResponseRoot: "savedReports",
+		Variables: func(orgID string, _ Window) map[string]any {
+			return map[string]any{"orgId": orgID, "limit": 50, "offset": 0}
+		},
+		Parity: savedReportsParity(),
+		Variants: []Variant{
+			savedReportsVariant("PAGE_FIRST", 1, 0, true),
+			savedReportsVariant("PAGE_SECOND", 1, 1, true),
+			savedReportsVariant("PAGE_ZERO", 0, 0, false),
+			savedReportsVariant("OFFSET_PAST_END", 50, 100000, false),
+		},
+	},
 	"reviewEdges": {
 		ResponseRoot: "reviewEdges",
 		Variables: func(orgID string, w Window) map[string]any {
@@ -949,19 +1035,20 @@ var operationSpecs = map[string]OperationSpec{
 	},
 	// releaseImpact is the release impact document the feature flag pages
 	// send: the `workGraphEdges` root field with the filters `nodeId`,
-	// `sourceType` and `limit`. It reads the same resolver as the
-	// workGraphEdges document, so its declared baseline difference is the
-	// same. The base request is the page's request for every release
-	// (`nodeId` empty, `sourceType` RELEASE, `limit` 200); the variants prove
-	// the branches a page can reach: one release by node id (a real id the
-	// run supplies), and a page cut at one edge.
+	// `sourceType` and `limit` in one variable. It reads the same resolver as
+	// the workGraphEdges document, so its declared baseline difference is the
+	// same. The base request is the page's request for every release (`nodeId`
+	// empty, `sourceType` RELEASE, `limit` 200). See releaseimpact.go for the
+	// variants: a page cut at one edge, one node by id, and one populated
+	// source type.
 	"releaseImpact": {
 		ResponseRoot: "workGraphEdges",
 		Variables:    releaseImpactVariables,
 		Parity:       workGraphEdgesParity,
 		Variants: []Variant{
 			releaseImpactVariant("LIMIT_ONE", map[string]any{"nodeId": "", "sourceType": "RELEASE", "limit": 1}),
-			releaseImpactNodeVariant("NODE_ID_VALID", "a node id that is the source of at least one release edge"),
+			releaseImpactNodeVariant("NODE_ID_VALID", "a node id that is the source or target of at least one edge"),
+			releaseImpactSourceTypeVariant("SOURCE_TYPE_POPULATED", "a node type that has edges as a source, for example PR"),
 		},
 	},
 	"workGraphFlow": {Variables: workGraphVariables, ResponseRoot: "workGraphFlow"},
@@ -1532,7 +1619,7 @@ func compoundingRiskDayVariant(name, breakout string) Variant {
 		Variables: func(orgID string, w Window) map[string]any {
 			return compoundingRiskVariables(orgID, map[string]any{"breakout": breakout, "day": w.UntilDate, "trendDays": 30})
 		},
-		Parity: compoundingRiskParity,
+		Parity: compoundingRiskRowsParity(breakout),
 	}
 }
 
@@ -1673,4 +1760,184 @@ func aiAttributionOverviewParity() Options {
 		Intermittent:       true,
 		IntermittentReason: "the list is empty when nothing is attributed in the window",
 	}}}
+}
+
+// savedReportDateTimes declares the one divergence on every saved-report
+// answer: the timestamp columns are Postgres timestamptz; Python hands the
+// driver's tz-aware datetimes to strawberry's DateTime scalar, which prints a
+// "+00:00" offset, while Go's gqlgen DateTime scalar prints the same instant
+// as RFC 3339 with "Z". The instants are equal; only the wire text differs.
+func savedReportDateTimes(ticketPaths ...string) Options {
+	return Options{BaselineDefects: []BaselineDefect{{
+		Ticket: "CHAOS-6103",
+		Reason: "saved_reports and report_runs timestamps are Postgres timestamptz; Python's resolver hands the driver's tz-aware datetimes to strawberry's DateTime scalar, which isoformat()s them with a \"+00:00\" offset, while Go's gqlgen DateTime scalar formats the same instant as RFC 3339 with \"Z\" (resolvers/reports.py). The instants are equal; only the wire text differs. Go's form is the canonical DateTime wire form; the Python form is the declared defect and stays frozen.",
+		Paths:  ticketPaths,
+	}}}
+}
+
+func savedReportsParity() Options {
+	o := savedReportDateTimes(
+		"data.savedReports.items.lastRunAt",
+		"data.savedReports.items.createdAt",
+		"data.savedReports.items.updatedAt",
+	)
+	o.RequireNonEmpty = []string{"data.savedReports.items"}
+	return o
+}
+
+// savedReportsVariant reads one page of the org's saved reports. A variant
+// that names non-empty is measured only when the page holds a report on a leg.
+func savedReportsVariant(name string, limit, offset int, nonEmpty bool) Variant {
+	o := savedReportDateTimes(
+		"data.savedReports.items.lastRunAt",
+		"data.savedReports.items.createdAt",
+		"data.savedReports.items.updatedAt",
+	)
+	if nonEmpty {
+		o.RequireNonEmpty = []string{"data.savedReports.items"}
+	} else {
+		// A page with no item still answers the org's total, so the answer is
+		// never empty; nothing dated can be present, so no defect applies.
+		o = Options{}
+	}
+	return Variant{
+		Name: name,
+		Variables: func(orgID string, _ Window) map[string]any {
+			return map[string]any{"orgId": orgID, "limit": limit, "offset": offset}
+		},
+		Parity: o,
+	}
+}
+
+// savedReportInstanceVariant reads one saved report by a run-supplied id,
+// measured only when the answer is that report.
+func savedReportInstanceVariant(name string) Variant {
+	return Variant{
+		Name: name,
+		Variables: func(orgID string, _ Window) map[string]any {
+			return map[string]any{"orgId": orgID, "reportId": ""}
+		},
+		Parity: savedReportDateTimes(
+			"data.savedReport.lastRunAt",
+			"data.savedReport.createdAt",
+			"data.savedReport.updatedAt",
+		),
+		Instance: &VariantInstance{
+			Kind: "the id of a saved report of the proof org",
+			Bind: func(vars map[string]any, value string) { vars["reportId"] = value },
+			EchoFor: func(value string) []ScopeEcho {
+				return []ScopeEcho{{List: "data.savedReport.id", Scalar: true, Value: value}}
+			},
+		},
+	}
+}
+
+// reportRunsInstanceVariant reads the runs of a run-supplied report id,
+// measured only when the answer lists at least one run.
+func reportRunsInstanceVariant(name string, limit int) Variant {
+	o := savedReportDateTimes(
+		"data.reportRuns.items.startedAt",
+		"data.reportRuns.items.completedAt",
+		"data.reportRuns.items.createdAt",
+	)
+	o.RequireNonEmpty = []string{"data.reportRuns.items"}
+	return Variant{
+		Name: name,
+		Variables: func(orgID string, _ Window) map[string]any {
+			return map[string]any{"orgId": orgID, "reportId": "", "limit": limit}
+		},
+		Parity: o,
+		Instance: &VariantInstance{
+			Kind: "the id of a saved report of the proof org that has runs",
+			Bind: func(vars map[string]any, value string) { vars["reportId"] = value },
+			EchoFor: func(value string) []ScopeEcho {
+				return []ScopeEcho{{List: "data.reportRuns.items", Fields: []string{"reportId"}, Value: value}}
+			},
+		},
+	}
+}
+
+// compoundingRiskRowsParity is the timestamp declaration plus the requirement
+// that the answer lists rows on a leg and every row is at the breakout asked
+// for.
+func compoundingRiskRowsParity(breakout string) Options {
+	o := compoundingRiskParity
+	o.RequireNonEmpty = []string{"data.compoundingRisk.rows"}
+	o.ScopeEcho = []ScopeEcho{{List: "data.compoundingRisk.rows", Fields: []string{"scope"}, Value: breakout}}
+	return o
+}
+
+// compoundingRiskRowsVariant is a breakout case measured only on a non-empty
+// answer whose rows are at the breakout asked for.
+func compoundingRiskRowsVariant(name, breakout string, filter map[string]any) Variant {
+	v := compoundingRiskVariant(name, filter)
+	v.Parity = compoundingRiskRowsParity(breakout)
+	return v
+}
+
+// compoundingRiskEmptyVariant is a case whose filter names nothing (or
+// excludes everything), so both planes answer no rows. It declares only the
+// per-request instant: the timestamp difference is declared on a row leaf
+// that does not exist in an empty answer.
+func compoundingRiskEmptyVariant(name string, filter map[string]any) Variant {
+	v := compoundingRiskVariant(name, filter)
+	v.Parity = Options{VolatileFields: compoundingRiskParity.VolatileFields}
+	return v
+}
+
+func experimentsRepoValidVariant() Variant {
+	return Variant{
+		Name:   "REPO_VALID",
+		Parity: Options{RequireNonEmpty: []string{"data.experiments.items"}},
+		Variables: func(orgID string, _ Window) map[string]any {
+			return map[string]any{"orgId": orgID, "filters": map[string]any{"scope": map[string]any{"level": "REPO", "ids": []string{}}}}
+		},
+		Instance: &VariantInstance{
+			Kind: "a repository id of the org that has metric rows in the window",
+			Bind: func(vars map[string]any, value string) {
+				vars["filters"].(map[string]any)["scope"].(map[string]any)["ids"] = []string{value}
+			},
+		},
+	}
+}
+
+// compoundingRiskPinnedTrendVariant reads the repo breakout on the last day of
+// the run's window with a trend window of trendDays days ending on it; pinning
+// the day keeps the case non-empty (the latest-day search over a window that
+// is only today finds no stored row).
+func compoundingRiskPinnedTrendVariant(name string, trendDays int) Variant {
+	return Variant{
+		Name: name,
+		Variables: func(orgID string, w Window) map[string]any {
+			return compoundingRiskVariables(orgID, map[string]any{"breakout": "REPO", "day": w.UntilDate, "trendDays": trendDays})
+		},
+		Parity: compoundingRiskRowsParity("REPO"),
+	}
+}
+
+const compoundingRiskTeamMappingReason = "a request that names teamIds resolves a team's repositories through team ownership on Go (the ruled semantics) and through teams.repo_patterns on Python: an empty list reads as no filter on Python, which then aggregates teams by repo_patterns, and a team with stored rows agrees on the rows but its trend is built over the team's repo_patterns repositories on Python (none when the column is empty) and over its owned repositories on Go"
+
+// compoundingRiskKnownRefusalVariant is a teamIds case that is expected not to
+// compare; it stays in the corpus as a recorded difference.
+func compoundingRiskKnownRefusalVariant(name string, filter map[string]any, instance *VariantInstance) Variant {
+	v := compoundingRiskVariant(name, filter)
+	v.Parity = compoundingRiskRowsParity("TEAM")
+	v.Instance = instance
+	v.KnownRefusal = &KnownRefusal{Ticket: "CHAOS-6108", Reason: compoundingRiskTeamMappingReason}
+	return v
+}
+
+// experimentsTeamUnknownVariant is a team scope that resolves to nothing. The
+// reference resolves a team's repositories from the members' metric rows and,
+// when none resolve (an unknown, deleted or renamed team), drops the
+// repository filter and answers the whole org; Go selects the team's
+// repositories by ownership and an unresolved team narrows to nothing,
+// answering the steady-flow card.
+func experimentsTeamUnknownVariant() Variant {
+	v := experimentsVariant("TEAM_UNKNOWN", "TEAM", []string{"team-abc-123"})
+	v.KnownRefusal = &KnownRefusal{
+		Ticket: "CHAOS-6118",
+		Reason: "the reference drops the team filter when the team resolves to no member metric rows and answers the whole org; Go narrows an unresolved team to nothing through team ownership and answers the steady-flow card",
+	}
+	return v
 }

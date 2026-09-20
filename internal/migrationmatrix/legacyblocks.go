@@ -209,7 +209,7 @@ func dailyFamilyExecutor(name string, artifactDaily map[string]string, finalizeC
 		executor = "COMPAT-Python"
 	}
 	if artifactValue == "post_bridge" {
-		executor += ", post_bridge"
+		executor += ", post_bridge (ordering phase only; no bridge call exists)"
 	}
 	if finalizeCompat[FinalizeTarget{Namespace: "daily", Family: name}] && artifactValue != "compat" {
 		executor = executor + " (repo) / COMPAT-Python (finalize)"

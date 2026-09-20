@@ -386,3 +386,44 @@ func TestRealClickHouse_FallbackIgnoresSupersededRepoName(t *testing.T) {
 		t.Fatalf("a superseded name selected the repository: %#v", stale.Rows)
 	}
 }
+
+// With teamIds supplied the trend is the mean of the latest scores of the
+// team's OWNED repositories, not of every repository; without teamIds it is the
+// mean over all of them.
+func TestRealClickHouse_TrendOverOwnedRepositoriesForASuppliedTeam(t *testing.T) {
+	ctx, conn, client := startStore(t)
+	now := time.Now().UTC()
+	repo(t, ctx, conn, "org-1", rA, "acme/web")
+	repo(t, ctx, conn, "org-1", rB, "acme/api")
+	exec(t, ctx, conn, `INSERT INTO teams (id, name, org_id, updated_at) VALUES ('t1', 'Platform', 'org-1', now64(6))`)
+	own(t, ctx, conn, "org-1", "t1", rA, "acme/web")
+	// a stored team row (the primary path) and repo rows for both repositories
+	put(t, ctx, conn, risk{org: "org-1", scope: "team", id: "t1", day: day(now, 1), score: "0.5", sev: "elevated"})
+	for back, scores := range map[int][2]string{1: {"0.2", "0.8"}, 2: {"0.4", "0.6"}} {
+		put(t, ctx, conn, risk{org: "org-1", scope: "repo", id: rA, day: day(now, back), score: scores[0], sev: "low"})
+		put(t, ctx, conn, risk{org: "org-1", scope: "repo", id: rB, day: day(now, back), score: scores[1], sev: "high"})
+	}
+	trendOf := func(teamIDs []string) map[string]float64 {
+		got, err := Resolve(ctx, client, "org-1", &model.CompoundingRiskFilterInput{Breakout: model.CompoundingRiskScopeTeam, TeamIds: teamIDs, TrendDays: 30}, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got.Rows) != 1 || got.Rows[0].ScopeID != "t1" || *got.Rows[0].Score != 0.5 {
+			t.Fatalf("stored team row %#v", got.Rows)
+		}
+		out := map[string]float64{}
+		for _, p := range got.Trend {
+			out[p.Day.String()] = *p.Score
+		}
+		return out
+	}
+	within := func(a, b float64) bool { return a-b < 1e-9 && b-a < 1e-9 }
+	owned := trendOf([]string{"t1"})
+	if len(owned) != 2 || !within(owned[day(now, 1).Format("2006-01-02")], 0.2) || !within(owned[day(now, 2).Format("2006-01-02")], 0.4) {
+		t.Errorf("trend for a supplied team must be over its owned repository only: %v", owned)
+	}
+	all := trendOf(nil)
+	if len(all) != 2 || !within(all[day(now, 1).Format("2006-01-02")], 0.5) || !within(all[day(now, 2).Format("2006-01-02")], 0.5) {
+		t.Errorf("trend without a team filter is over every repository: %v", all)
+	}
+}

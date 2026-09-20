@@ -1247,6 +1247,79 @@ const registeredAiAttributionOverviewDocument = `query AIAttributionOverview($or
   }
 }`
 
+// registeredSavedReportsDocument is the registered document for the `savedReports`
+// operation, the exact wire-form text a real web client sends
+// (testdata/wire_capture/saved_reports_captured.graphql).
+const registeredSavedReportsDocument = `query savedReports($orgId: String!, $limit: Int, $offset: Int) {
+  savedReports(orgId: $orgId, limit: $limit, offset: $offset) {
+    items {
+      id
+      orgId
+      name
+      description
+      reportPlan
+      isTemplate
+      isActive
+      lastRunAt
+      lastRunStatus
+      createdAt
+      updatedAt
+      __typename
+    }
+    total
+    __typename
+  }
+}`
+
+// registeredSavedReportDocument is the registered document for the `savedReport`
+// operation, the exact wire-form text a real web client sends
+// (testdata/wire_capture/saved_report_captured.graphql).
+const registeredSavedReportDocument = `query savedReport($orgId: String!, $reportId: String!) {
+  savedReport(orgId: $orgId, reportId: $reportId) {
+    id
+    orgId
+    name
+    description
+    reportPlan
+    isTemplate
+    templateSourceId
+    parameters
+    scheduleId
+    isActive
+    lastRunAt
+    lastRunStatus
+    createdAt
+    updatedAt
+    createdBy
+    __typename
+  }
+}`
+
+// registeredReportRunsDocument is the registered document for the `reportRuns`
+// operation, the exact wire-form text a real web client sends
+// (testdata/wire_capture/report_runs_captured.graphql).
+const registeredReportRunsDocument = `query reportRuns($orgId: String!, $reportId: String!, $limit: Int) {
+  reportRuns(orgId: $orgId, reportId: $reportId, limit: $limit) {
+    items {
+      id
+      reportId
+      status
+      startedAt
+      completedAt
+      durationSeconds
+      renderedMarkdown
+      artifactUrl
+      provenanceRecords
+      error
+      triggeredBy
+      createdAt
+      __typename
+    }
+    total
+    __typename
+  }
+}`
+
 // registeredSecurityOverviewDocument is the registered document for the
 // `securityOverview` operation, the exact wire-form text a real web client
 // sends (testdata/wire_capture/securityoverview_captured.graphql).
@@ -2274,6 +2347,9 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		"catalogValues":                     digestHex(registeredCatalogValuesDocument),
 		"acrRepositoryScopes":               digestHex(registeredAcrRepositoryScopesDocument),
 		"busFactor":                         digestHex(registeredBusFactorDocument),
+		"savedReports":                      digestHex(registeredSavedReportsDocument),
+		"savedReport":                       digestHex(registeredSavedReportDocument),
+		"reportRuns":                        digestHex(registeredReportRunsDocument),
 		"productTelemetryDashboard":         digestHex(registeredProductTelemetryDashboardDocument),
 		"productTelemetryPlatformDashboard": digestHex(registeredProductTelemetryPlatformDashboardDocument),
 		"experiments":                       digestHex(registeredExperimentsDocument),
@@ -2312,6 +2388,7 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 
 	schema := graph.NewExecutableSchema(graph.Config{Resolvers: &graph.Resolver{ClickHouse: chClient, Postgres: pgPool}})
 	gqlHandler := gqlhandler.NewDefaultServer(schema)
+	gqlHandler.AroundFields(graph.RefuseNullForNonNullArguments)
 	// CHAOS-4647 diagnostic: the process log carries nothing per-request,
 	// and gqlgen's default presenter surfaces only err.Error() -- which for
 	// a dev-health-go *operationError (clickhouse/client.go) is the fixed

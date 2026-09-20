@@ -23,6 +23,7 @@ import (
 type Resolver struct {
 	ClickHouse featureflags.QueryClient
 	// Postgres is the read-only Postgres surface the data-health connector
-	// read uses; nil answers an empty connector list.
+	// read and the saved-report reads use; without it the connector list is
+	// empty and a saved-report read is an error.
 	Postgres datahealth.PGQuerier
 }

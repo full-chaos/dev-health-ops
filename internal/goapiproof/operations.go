@@ -954,6 +954,12 @@ var operationSpecs = map[string]OperationSpec{
 		ResponseRoot: "workGraphEdges",
 		Variables:    workGraphVariables,
 		Parity:       workGraphEdgesParity,
+		// Two comparing cases on pages the limit does not cut, so the whole-list
+		// declaration (CHAOS-6114) applies and a dropped edge cannot hide.
+		Variants: []Variant{
+			workGraphEdgesSourceTypeSmallVariant("SOURCE_TYPE_SMALL", "a node type whose whole edge set as a source is below 200, for example a feature flag or an incident type"),
+			workGraphEdgesNodeVariant("NODE_ID_VALID", "a node id that is the source or target of at least one edge and of fewer than 200"),
+		},
 	},
 	// releaseImpact is the release impact document the feature flag pages
 	// send: the `workGraphEdges` root field with the filters `nodeId`,

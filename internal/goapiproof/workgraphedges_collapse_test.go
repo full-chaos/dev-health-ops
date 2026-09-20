@@ -144,3 +144,49 @@ func TestWorkGraphEdgesCollapse_SharedRowDisagreementStaysOutside(t *testing.T) 
 		t.Fatal("admitted a changed shared row")
 	}
 }
+
+// The enabled workGraphEdges document's non-cut cases carry the whole-list
+// declaration, require a non-empty answer and echo the supplied value.
+func TestWorkGraphEdgesNonCutVariantsAreDeclared(t *testing.T) {
+	spec, err := SpecFor("workGraphEdges")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string][]string{"SOURCE_TYPE_SMALL": {"sourceType"}, "NODE_ID_VALID": {"sourceId", "targetId"}}
+	seen := 0
+	for _, v := range spec.Variants {
+		fields, ok := want[v.Name]
+		if !ok {
+			continue
+		}
+		seen++
+		if v.Instance == nil {
+			t.Fatalf("%s carries no run-supplied value", v.Name)
+		}
+		if len(v.Parity.RequireNonEmpty) != 1 || v.Parity.RequireNonEmpty[0] != "data.workGraphEdges.edges" {
+			t.Errorf("%s must require a non-empty edge list: %v", v.Name, v.Parity.RequireNonEmpty)
+		}
+		hasCollapse := false
+		for _, d := range v.Parity.BaselineDefects {
+			if d.Ticket == "CHAOS-6114" && d.DuplicateCollapseLengthShape != nil {
+				hasCollapse = true
+			}
+		}
+		if !hasCollapse {
+			t.Errorf("%s does not carry the whole-list declaration", v.Name)
+		}
+		echo := v.Instance.Echo("X")
+		if len(echo) != 1 || echo[0].List != "data.workGraphEdges.edges" || echo[0].Value != "X" || len(echo[0].Fields) != len(fields) {
+			t.Errorf("%s echo %+v", v.Name, echo)
+		}
+		vars := v.Variables("org", Window{})
+		v.Instance.Bind(vars, "X")
+		filters := vars["filters"].(map[string]any)
+		if filters["limit"] != 200 {
+			t.Errorf("%s limit %v", v.Name, filters["limit"])
+		}
+	}
+	if seen != 2 {
+		t.Fatalf("found %d of the two non-cut variants", seen)
+	}
+}

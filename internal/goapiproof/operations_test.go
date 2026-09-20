@@ -38,7 +38,7 @@ var registeredOperations = []string{
 	"featureFlagEvents", "featureFlags", "flowMatrix", "hotspots",
 	"releaseImpact",
 	"investmentBreakdown", "investmentFull", "operatingReview", "pr",
-	"reviewEdges", "securityAlerts", "securityOverview", "throughputForecast",
+	"reportRuns", "reviewEdges", "savedReport", "savedReports", "securityAlerts", "securityOverview", "throughputForecast",
 	"workGraphArtifacts", "workGraphEdges", "workGraphFlow",
 }
 
@@ -127,7 +127,7 @@ func TestWindowedSpecsUseTheWindow(t *testing.T) {
 		"connectorsDataHealth": true, "dataHealthIdentity": true, "mappingCoverageHealth": true, "metricLineage": true,
 		"capacityForecast": true, "capacityForecasts": true,
 		"featureFlagEvents": true, "featureFlags": true, "pr": true,
-		"experiments": true, "busFactor": true, "compoundingRisk": true, "securityAlerts": true, "securityOverview": true,
+		"experiments": true, "busFactor": true, "compoundingRisk": true, "reportRuns": true, "savedReport": true, "savedReports": true, "securityAlerts": true, "securityOverview": true,
 		"releaseImpact": true, "throughputForecast": true, "workGraphArtifacts": true, "workGraphEdges": true,
 		"aiOpportunities": true, "improveOpportunities": true,
 
@@ -507,8 +507,8 @@ func TestReleaseImpactRequestsMatchThePage(t *testing.T) {
 	for _, v := range spec.Variants {
 		byName[v.Name] = v
 	}
-	if len(byName) != 2 {
-		t.Fatalf("%d variants, want LIMIT_ONE and NODE_ID_VALID", len(byName))
+	if len(byName) != 3 {
+		t.Fatalf("%d variants, want LIMIT_ONE, NODE_ID_VALID and SOURCE_TYPE_POPULATED", len(byName))
 	}
 	limitOne := byName["LIMIT_ONE"]
 	if got, want := encode(limitOne.Variables("org-1", DefaultWindow())), `{"filters":{"limit":1,"nodeId":"","sourceType":"RELEASE"},"orgId":"org-1"}`; got != want {
@@ -519,15 +519,33 @@ func TestReleaseImpactRequestsMatchThePage(t *testing.T) {
 		t.Fatal("NODE_ID_VALID names no run-supplied identifier")
 	}
 	vars := node.Variables("org-1", DefaultWindow())
-	node.Instance.Bind(vars, "rel-1")
-	if got, want := encode(vars), `{"filters":{"limit":200,"nodeId":"rel-1","sourceType":"RELEASE"},"orgId":"org-1"}`; got != want {
+	node.Instance.Bind(vars, "node-1")
+	if got, want := encode(vars), `{"filters":{"limit":200,"nodeId":"node-1"},"orgId":"org-1"}`; got != want {
 		t.Fatalf("NODE_ID_VALID request %s, want %s", got, want)
 	}
-	echo := node.Instance.Echo("rel-1")
-	if len(echo) != 1 || echo[0].List != "data.workGraphEdges.edges" || echo[0].Value != "rel-1" {
+	echo := node.Instance.Echo("node-1")
+	if len(echo) != 1 || echo[0].List != "data.workGraphEdges.edges" || echo[0].Value != "node-1" {
 		t.Fatalf("NODE_ID_VALID echo %+v", echo)
 	}
 	if len(node.Parity.RequireNonEmpty) != 1 || node.Parity.RequireNonEmpty[0] != "data.workGraphEdges.edges" {
 		t.Fatalf("NODE_ID_VALID must require a non-empty edge list, got %v", node.Parity.RequireNonEmpty)
+	}
+	sourceType := byName["SOURCE_TYPE_POPULATED"]
+	if sourceType.Instance == nil {
+		t.Fatal("SOURCE_TYPE_POPULATED names no run-supplied source type")
+	}
+	vars = sourceType.Variables("org-1", DefaultWindow())
+	if got, want := encode(vars), `{"filters":{"limit":50,"nodeId":"","sourceType":"PR"},"orgId":"org-1"}`; got != want {
+		t.Fatalf("SOURCE_TYPE_POPULATED request %s, want %s", got, want)
+	}
+	sourceType.Instance.Bind(vars, "FEATURE_FLAG")
+	if got, want := encode(vars), `{"filters":{"limit":50,"nodeId":"","sourceType":"FEATURE_FLAG"},"orgId":"org-1"}`; got != want {
+		t.Fatalf("SOURCE_TYPE_POPULATED bound request %s, want %s", got, want)
+	}
+	if echo := sourceType.Instance.Echo("FEATURE_FLAG"); len(echo) != 1 || echo[0].Fields[0] != "sourceType" || echo[0].Value != "FEATURE_FLAG" {
+		t.Fatalf("SOURCE_TYPE_POPULATED echo %+v", echo)
+	}
+	if len(sourceType.Parity.RequireNonEmpty) != 1 || sourceType.Parity.RequireNonEmpty[0] != "data.workGraphEdges.edges" {
+		t.Fatalf("SOURCE_TYPE_POPULATED must require a non-empty edge list, got %v", sourceType.Parity.RequireNonEmpty)
 	}
 }

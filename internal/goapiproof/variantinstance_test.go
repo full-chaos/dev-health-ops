@@ -275,3 +275,76 @@ func TestSecondPageVariantDoesNotTurnACursorDifferenceIntoARefusal(t *testing.T)
 	}
 	t.Fatal("PAGE_AFTER variant missing")
 }
+
+// Every compoundingRisk case that can return rows requires them and shows the
+// breakout asked for; the cases that name nothing declare no row timestamp
+// difference (it would match nothing and refuse them on every run).
+func TestCompoundingRiskVariants_RequireRowsOrDeclareNoRowLeaf(t *testing.T) {
+	spec, err := SpecFor("compoundingRisk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := map[string]string{"REPO_BREAKOUT": "REPO", "TEAM_BREAKOUT": "TEAM", "DAY": "REPO", "TEAM_DAY": "TEAM",
+		"TREND_ONE_DAY": "REPO", "TREND_CLAMPED_HIGH": "REPO", "TREND_CLAMPED_LOW": "REPO", "REPO_VALID": "", "TEAM_STORED": "", "TEAM_IDS_EMPTY": "TEAM"}
+	empty := map[string]bool{"REPO_IDS_UNKNOWN": true, "REPO_IDS_EMPTY": true, "TEAM_IDS_UNKNOWN": true, "TEAM_AND_REPO_UNKNOWN": true}
+	if got := spec.Parity.ScopeEcho; len(got) != 1 || got[0].Value != "REPO" || len(spec.Parity.RequireNonEmpty) != 1 {
+		t.Errorf("base: %#v", spec.Parity)
+	}
+	seen := 0
+	for _, v := range spec.Variants {
+		seen++
+		if breakout, ok := rows[v.Name]; ok {
+			if len(v.Parity.RequireNonEmpty) != 1 || v.Parity.RequireNonEmpty[0] != "data.compoundingRisk.rows" {
+				t.Errorf("%s must require rows: %#v", v.Name, v.Parity.RequireNonEmpty)
+			}
+			if breakout != "" && (len(v.Parity.ScopeEcho) != 1 || v.Parity.ScopeEcho[0].Value != breakout || v.Parity.ScopeEcho[0].Fields[0] != "scope") {
+				t.Errorf("%s must echo breakout %s: %#v", v.Name, breakout, v.Parity.ScopeEcho)
+			}
+			continue
+		}
+		if !empty[v.Name] {
+			t.Errorf("unclassified compoundingRisk variant %s", v.Name)
+			continue
+		}
+		if len(v.Parity.BaselineDefects) != 0 || len(v.Parity.RequireNonEmpty) != 0 || len(v.Parity.VolatileFields) != 1 {
+			t.Errorf("%s: %#v", v.Name, v.Parity)
+		}
+	}
+	if seen != len(rows)+len(empty) {
+		t.Errorf("%d variants, classified %d", seen, len(rows)+len(empty))
+	}
+}
+
+// The pinned-trend cases send the day they pin and the trend window they name,
+// and the two teamIds cases that differ by design stay in the corpus as known
+// refusals naming the difference and its ticket.
+func TestCompoundingRiskTrendCasesPinTheDayAndTeamIdCasesAreKnownRefusals(t *testing.T) {
+	spec, err := SpecFor("compoundingRisk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := DefaultWindow()
+	known := 0
+	for _, v := range spec.Variants {
+		filter, _ := v.Variables("org", w)["filter"].(map[string]any)
+		switch v.Name {
+		case "TREND_ONE_DAY", "TREND_CLAMPED_LOW":
+			want := map[string]int{"TREND_ONE_DAY": 1, "TREND_CLAMPED_LOW": 0}[v.Name]
+			if filter["day"] != w.UntilDate || filter["trendDays"] != want || filter["breakout"] != "REPO" {
+				t.Errorf("%s filter %#v", v.Name, filter)
+			}
+		case "TEAM_IDS_EMPTY", "TEAM_STORED":
+			known++
+			if v.KnownRefusal == nil || v.KnownRefusal.Ticket == "" || v.KnownRefusal.Reason == "" {
+				t.Errorf("%s must record why it is expected not to compare: %#v", v.Name, v.KnownRefusal)
+			}
+		default:
+			if v.KnownRefusal != nil {
+				t.Errorf("%s must not claim a known refusal", v.Name)
+			}
+		}
+	}
+	if known != 2 {
+		t.Errorf("%d known refusals, want 2", known)
+	}
+}

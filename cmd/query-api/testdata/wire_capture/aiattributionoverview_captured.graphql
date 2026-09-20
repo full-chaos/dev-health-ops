@@ -1,0 +1,37 @@
+query AIAttributionOverview($orgId: String!, $dateRange: AIDateRangeInput!, $scope: AIAttributionScopeInput, $limit: Int! = 50, $offset: Int! = 0) {
+  aiAttributionOverview(
+    orgId: $orgId
+    dateRange: $dateRange
+    scope: $scope
+    limit: $limit
+    offset: $offset
+  ) {
+    orgId
+    startDate
+    endDate
+    mix {
+      kind
+      count
+      share
+      __typename
+    }
+    totalAttributed
+    hasMore
+    dataAvailable
+    rows {
+      subjectType
+      subjectId
+      repoId
+      provider
+      kind
+      source
+      confidence
+      actor
+      evidence
+      observedAt
+      teamId
+      __typename
+    }
+    __typename
+  }
+}

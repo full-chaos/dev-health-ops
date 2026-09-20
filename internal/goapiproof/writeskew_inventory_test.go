@@ -66,6 +66,10 @@ var writeSkewRefusalPlaces = map[string]string{
 	"RESTRefusalIDBindingUnresolved":         "not an axis: refused before any leg is read",
 	"RESTRefusalBoundIDNotAPathLiteral":      "not an axis: refused before any leg is read",
 	"RESTRefusalCandidateIterationExhausted": "not an axis: a search-level outcome with no comparison of its own",
+	// The baseline-timeout arm: the baseline produced no response, so there
+	// is no first comparison and no baseline to re-read.
+	"RESTRefusalBaselineTimeoutTooShort":            "not an axis: the baseline never answered, so no comparison and no re-read exists",
+	"RESTRefusalCandidateEmptyUnderBaselineTimeout": "not an axis: the baseline never answered, so no comparison and no re-read exists",
 	// GraphQL prover only: the REST prover never produces these.
 	"RefusalBuildUnbound":               "not an axis: GraphQL prover only",
 	"RefusalBuildMismatch":              "not an axis: GraphQL prover only",

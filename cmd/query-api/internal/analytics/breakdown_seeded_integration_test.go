@@ -186,7 +186,7 @@ func TestCompileBreakdown_ThemeCount_SeededRealClickHouse_ExactAggregate(t *test
 		t.Fatalf("CompileBreakdown: %v", err)
 	}
 
-	result, err := ExecuteBreakdown(ctx, client, q, "theme", "count")
+	result, err := ExecuteBreakdown(ctx, client, "org-1", q, "theme", "count")
 	if err != nil {
 		t.Fatalf("ExecuteBreakdown: %v (this is the CHAOS-4730 defect if the message contains "+
 			"\"Syntax error\" / \"code: 62\" / \"Expected substitution type\")", err)

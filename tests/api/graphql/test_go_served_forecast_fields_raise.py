@@ -32,6 +32,84 @@ _QUERIES = {
         'query { catalog(orgId: "org-1") { limits { maxDays } } }',
         None,
     ),
+    "busFactor": (
+        'query { busFactor(orgId: "org-1") { value } }',
+        None,
+    ),
+    "experiments": (
+        'query { experiments(orgId: "org-1") { derivedFromOpportunities } }',
+        None,
+    ),
+    "aiOpportunities": (
+        'query { aiOpportunities(orgId: "org-1") { detectorReady } }',
+        None,
+    ),
+    "productTelemetryDashboard": (
+        'query { productTelemetryDashboard(orgId: "org-1", input: '
+        '{startDate: "2026-01-01", endDate: "2026-01-08"}) '
+        "{ sessionSummary { avgPagesViewed } } }",
+        None,
+    ),
+    "compoundingRisk": (
+        'query { compoundingRisk(orgId: "org-1") { orgId } }',
+        None,
+    ),
+    "aiImpactSummary": (
+        'query { aiImpactSummary(orgId: "org-1", dateRange: '
+        '{startDate: "2026-01-05", endDate: "2026-01-11"}) { totalPrs } }',
+        None,
+    ),
+    "aiComparison": (
+        'query { aiComparison(orgId: "org-1", dateRange: '
+        '{startDate: "2026-01-05", endDate: "2026-01-11"}) { orgId } }',
+        None,
+    ),
+    "aiReviewLoad": (
+        'query { aiReviewLoad(orgId: "org-1", dateRange: '
+        '{startDate: "2026-01-05", endDate: "2026-01-11"}) { orgId } }',
+        None,
+    ),
+    "aiRiskBreakdown": (
+        'query { aiRiskBreakdown(orgId: "org-1", dateRange: '
+        '{startDate: "2026-01-05", endDate: "2026-01-11"}) { orgId } }',
+        None,
+    ),
+    "aiGovernanceSummary": (
+        'query { aiGovernanceSummary(orgId: "org-1", dateRange: '
+        '{startDate: "2026-01-05", endDate: "2026-01-11"}) { orgId } }',
+        None,
+    ),
+    "aiWorkflowDrilldown": (
+        'query { aiWorkflowDrilldown(orgId: "org-1", rootType: ISSUE, '
+        'rootId: "issue-1") { orgId } }',
+        None,
+    ),
+    "aiAttributedPrs": (
+        'query { aiAttributedPrs(orgId: "org-1", dateRange: '
+        '{startDate: "2026-01-05", endDate: "2026-01-11"}) { total } }',
+        None,
+    ),
+    "aiAttributionOverview": (
+        'query { aiAttributionOverview(orgId: "org-1", dateRange: '
+        '{startDate: "2026-01-05", endDate: "2026-01-11"}) { orgId } }',
+        None,
+    ),
+    "securityOverview": (
+        'query { securityOverview(orgId: "org-1") { kpis { openTotal } } }',
+        None,
+    ),
+    "workGraphEdges": (
+        'query { workGraphEdges(orgId: "org-1") { totalCount } }',
+        None,
+    ),
+    "workGraphFlow": (
+        'query { workGraphFlow(orgId: "org-1") { isPartial } }',
+        None,
+    ),
+    "workGraphArtifacts": (
+        'query { workGraphArtifacts(orgId: "org-1") { isPartial } }',
+        None,
+    ),
     "pr": (
         'query { pr(orgId: "org-1", id: "11111111-1111-1111-1111-111111111111#pr1") '
         "{ id } }",
@@ -105,6 +183,7 @@ def test_the_go_served_ledger_names_exactly_the_raising_fields() -> None:
     named_documents = {
         "catalogValues": "catalog",
         "acrRepositoryScopes": "catalog",
+        "releaseImpact": "workGraphEdges",
     }
     fields = {
         named_documents.get(entry["operation"], entry["operation"])

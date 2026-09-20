@@ -153,6 +153,17 @@ func TestRegisteredCapturedDocuments_MatchCapturedWireFixtures(t *testing.T) {
 		{"testdata/wire_capture/securityoverview_captured.graphql", registeredSecurityOverviewDocument},
 		{"testdata/wire_capture/securityalerts_captured.graphql", registeredSecurityAlertsDocument},
 		{"testdata/wire_capture/busfactor_captured.graphql", registeredBusFactorDocument},
+		{"testdata/wire_capture/aiopportunities_captured.graphql", registeredAiOpportunitiesDocument},
+		{"testdata/wire_capture/improveopportunities_captured.graphql", registeredImproveOpportunitiesDocument},
+		{"testdata/wire_capture/aigovernancesummary_captured.graphql", registeredAiGovernanceSummaryDocument},
+		{"testdata/wire_capture/aiworkflowdrilldown_captured.graphql", registeredAiWorkflowDrilldownDocument},
+		{"testdata/wire_capture/airiskbreakdown_captured.graphql", registeredAiRiskBreakdownDocument},
+		{"testdata/wire_capture/aiattributedprs_captured.graphql", registeredAiAttributedPrsDocument},
+		{"testdata/wire_capture/aiattributionoverview_captured.graphql", registeredAiAttributionOverviewDocument},
+		{"testdata/wire_capture/testopspipeline_captured.graphql", registeredTestOpsPipelineDocument},
+		{"testdata/wire_capture/testopstest_captured.graphql", registeredTestOpsTestDocument},
+		{"testdata/wire_capture/testopscoverage_captured.graphql", registeredTestOpsCoverageDocument},
+		{"testdata/wire_capture/featureflagtimeseries_captured.graphql", registeredFeatureFlagTimeseriesDocument},
 		{"testdata/wire_capture/saved_reports_captured.graphql", registeredSavedReportsDocument},
 		{"testdata/wire_capture/saved_report_captured.graphql", registeredSavedReportDocument},
 		{"testdata/wire_capture/report_runs_captured.graphql", registeredReportRunsDocument},
@@ -161,6 +172,8 @@ func TestRegisteredCapturedDocuments_MatchCapturedWireFixtures(t *testing.T) {
 		{"testdata/wire_capture/aireviewload_captured.graphql", registeredAiReviewLoadDocument},
 		{"testdata/wire_capture/compoundingrisk_captured.graphql", registeredCompoundingRiskDocument},
 		{"testdata/wire_capture/releaseimpact_captured.graphql", registeredReleaseImpactDocument},
+		{"testdata/wire_capture/testopsrisk_captured.graphql", registeredTestopsRiskDocument},
+		{"testdata/wire_capture/workunitteamattributions_captured.graphql", registeredWorkUnitTeamAttributionsDocument},
 	} {
 		captured, err := os.ReadFile(c.fixture)
 		if err != nil {

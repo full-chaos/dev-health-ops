@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -300,5 +301,47 @@ func TestCheckRolePostureRejectsRaggedParallelArrays(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "required table privileges") {
 		t.Fatalf("validateParallelArrayLengths error = %q, want it to name the posture it was checking", err.Error())
+	}
+}
+
+// CHAOS-5459: the repair grant delta, pinned in the manifest both ways.
+func TestCoordinatorPostureCarriesTheRepairGrantDelta(t *testing.T) {
+	posture := coordinatorPosture()
+	tables := map[string]TablePrivilege{}
+	for _, table := range posture.RequiredTables {
+		tables[table.TableName] = table
+	}
+	for _, name := range []string{"work_graph_execution_repairs", "metric_compatibility_execution_repairs"} {
+		got, ok := tables[name]
+		if !ok || !got.AllowInsert || got.AllowUpdate || got.AllowDelete {
+			t.Fatalf("%s = %+v (present=%t), want INSERT-only", name, got, ok)
+		}
+	}
+	if got, ok := tables["daily_metrics_partitions"]; !ok || got.AllowInsert || got.AllowUpdate || got.AllowDelete {
+		t.Fatalf("daily_metrics_partitions = %+v, want SELECT-only", got)
+	}
+	updates := map[string][]string{}
+	for _, column := range posture.ColumnScoped {
+		if column.Privilege == "UPDATE" {
+			updates[column.TableName] = append(updates[column.TableName], column.ColumnName)
+		}
+	}
+	want := map[string][]string{
+		"work_graph_execution_requests":   {"state", "updated_at"},
+		"work_graph_execution_ledger":     {"state", "output_evidence", "failure_detail", "completed_at"},
+		"metric_compatibility_executions": {"state", "output_evidence", "completed_at", "last_attempt_at"},
+	}
+	if !reflect.DeepEqual(updates, want) {
+		t.Fatalf("column UPDATE grants = %v, want exactly %v", updates, want)
+	}
+}
+
+func TestWorkerRolePosturesGainNoRepairAuditGrant(t *testing.T) {
+	for name, posture := range map[string]RolePosture{"domain": domainPosture(), "queue": queuePosture()} {
+		for _, table := range posture.RequiredTables {
+			if table.TableName == "work_graph_execution_repairs" || table.TableName == "metric_compatibility_execution_repairs" {
+				t.Fatalf("%s posture holds %s; only the operator role may write repairs", name, table.TableName)
+			}
+		}
 	}
 }

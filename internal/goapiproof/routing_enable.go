@@ -134,6 +134,16 @@ type EnableRequest struct {
 	// each one UNPROVEN durably.
 	AcknowledgeUnproven bool
 
+	// VenueReceipt is an optional venue-proof receipt (venue.go). It is
+	// consulted ONLY for an operation the store has no proof for, and
+	// admits it only for exactly this RunningBuild, SchemaDigest and
+	// document digest.
+	VenueReceipt *VenueReceipt
+	// ProductionReport is production's OWN prover report at the same build.
+	// With VenueReceipt it admits, by venue class 2, an operation on the
+	// no-production-data list (venue_nodata.go).
+	ProductionReport *VenueReceipt
+
 	DryRun bool
 }
 
@@ -147,6 +157,12 @@ type EnableOutcome struct {
 	// --acknowledge-unproven. It is reported even on success, because an
 	// enablement and an ACKNOWLEDGED enablement must not print alike.
 	Proven bool
+	// VenueDigest is the venue receipt's sha256 when the row was admitted
+	// from one instead of a store proof run; empty otherwise.
+	VenueDigest string
+	// ProductionDigest is set with VenueDigest for a class-2 admission: the
+	// production report's sha256.
+	ProductionDigest string
 	// ReviewEvidence is what was actually written, prefix included.
 	ReviewEvidence string
 	// ModeBefore/CandidateBuildBefore/HadRowBefore are
@@ -320,28 +336,44 @@ func Enable(ctx context.Context, pool *pgxpool.Pool, request EnableRequest) ([]E
 			unproven = append(unproven, operation)
 		}
 	}
+	// A venue receipt is additive: it can only turn an operation the store
+	// could not prove into a proven one, never the reverse.
+	venueDigest, venueRefusal, unproven := applyVenueReceipt(request, wanted, unproven)
 	sort.Strings(unproven)
 	if len(unproven) > 0 && !request.AcknowledgeUnproven {
-		return nil, fmt.Errorf("%w (%s=%s stage=%s terminal_state=%s) for: %v\n"+
+		var venueNotes string
+		for _, operation := range unproven {
+			if reason, ok := venueRefusal[operation]; ok {
+				venueNotes += fmt.Sprintf("\n  venue receipt refused for %s: %s", operation, reason)
+			}
+		}
+		return nil, fmt.Errorf("%w (%s=%s stage=%s terminal_state=%s) for: %v%s\n"+
 			"  Plan section 5 stage 3 requires the exact candidate build to have served the operation through real ingress, auth, parse/validate, dispatch and a real database -- a constructor, health check or bare 200 does not qualify.\n"+
 			"  Record it with go-api-prove, or pass -acknowledge-unproven to enable anyway (the row is then reported UNPROVEN by `status` for as long as it is in force)",
 			ErrEnableUnproven, "candidate_build", request.RunningBuild,
-			EnablementProofStage, EnablementProofTerminalState, unproven)
+			EnablementProofStage, EnablementProofTerminalState, unproven, venueNotes)
 	}
 
 	outcomes := make([]EnableOutcome, 0, len(request.Operations))
 	for _, operation := range request.Operations {
 		evidence := request.ReviewEvidence
-		if !proven[operation] {
+		digest := venueDigest[operation].venue
+		switch {
+		case proven[operation]:
+		case digest != "":
+			evidence = VenueEvidence(digest, venueDigest[operation].production, evidence)
+		default:
 			evidence = UnprovenEvidencePrefix + evidence
 		}
 		outcomes = append(outcomes, EnableOutcome{
-			Operation:      operation,
-			DocumentDigest: wanted[operation],
-			Mode:           request.Mode,
-			CandidateBuild: request.RunningBuild,
-			Proven:         proven[operation],
-			ReviewEvidence: evidence,
+			Operation:        operation,
+			DocumentDigest:   wanted[operation],
+			Mode:             request.Mode,
+			CandidateBuild:   request.RunningBuild,
+			Proven:           proven[operation] || digest != "",
+			VenueDigest:      digest,
+			ProductionDigest: venueDigest[operation].production,
+			ReviewEvidence:   evidence,
 		})
 	}
 	if request.DryRun {
@@ -453,4 +485,38 @@ func Enable(ctx context.Context, pool *pgxpool.Pool, request EnableRequest) ([]E
 		return nil, fmt.Errorf("goapiproof: commit: %w", err)
 	}
 	return outcomes, nil
+}
+
+// venueAdmission is what admitted one operation from a venue receipt.
+type venueAdmission struct{ venue, production string }
+
+// applyVenueReceipt splits the operations the store could not prove into
+// those a venue receipt admits, the reasons it refused the rest, and what
+// is still unproven. Class 1 (admin-only) is tried first, then class 2 (no
+// production data) when a production report was given. No receipt:
+// everything stays unproven.
+func applyVenueReceipt(request EnableRequest, documentDigest map[string]string, unproven []string) (map[string]venueAdmission, map[string]string, []string) {
+	admitted := map[string]venueAdmission{}
+	refused := map[string]string{}
+	if request.VenueReceipt == nil {
+		return admitted, refused, unproven
+	}
+	var still []string
+	for _, operation := range unproven {
+		err := VenueAdmit(request.VenueReceipt, operation, request.SchemaDigest, documentDigest[operation], request.RunningBuild, request.Mode)
+		if err == nil {
+			admitted[operation] = venueAdmission{venue: request.VenueReceipt.Digest}
+			continue
+		}
+		if NoProdDataEligible(operation) {
+			err = NoProdDataAdmit(request.ProductionReport, request.VenueReceipt, operation, request.SchemaDigest, documentDigest[operation], request.RunningBuild, request.Mode)
+			if err == nil {
+				admitted[operation] = venueAdmission{venue: request.VenueReceipt.Digest, production: request.ProductionReport.Digest}
+				continue
+			}
+		}
+		refused[operation] = err.Error()
+		still = append(still, operation)
+	}
+	return admitted, refused, still
 }

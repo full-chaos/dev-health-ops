@@ -29,9 +29,9 @@ does not include `go-cutover` and a real redrive has already run a stale operato
 a needed subcommand because of this.
 
 Auth: `WORKER_OPERATOR_TOKEN`/`WORKER_OPERATOR_TOKEN_FILE` for job-list/cancel/retry and the providersync/
-sync-dispatch-outbox cleanups; `WORKER_METRIC_REPAIR_TOKEN` for every metrics/workgraph repair verb (one
-shared repair token across metrics execution repair, workgraph repair, and finalize repair, per chris's
-CHAOS-5042 ruling). `dev-hops` = the Python CLI (`src/dev_health_ops/cli.py`); every `dev-hops metrics ...`
+sync-dispatch-outbox cleanups; the metrics/workgraph repair verbs (`workgraph repair`, `metrics execution-repair`,
+bulk `daily-redrive`) run Go-native Postgres transactions on the operator (coordinator) DB role and need no
+repair token or API bridge (CHAOS-5459). `dev-hops` = the Python CLI (`src/dev_health_ops/cli.py`); every `dev-hops metrics ...`
 verb below is marked **no longer legacy** (dispatches through the Go worker, CHAOS-5055/#2232), **legacy**
 (still a standalone Python compute path), or **deleted** (CHAOS-5307) -- see the table below for which is
 which per verb.
@@ -71,7 +71,7 @@ fallback path (retained but skip-gated). Confirm current status against `familie
 | `dev-health-workerctl jobs cancel <id> --reason <code> --correlation-id <id>` / `jobs retry <id> --reason <code> --correlation-id <id>` | `main.go:742-769` | Generic job-level cancel/retry, audited via `joboperator.Service`'s Action/audit pipeline (unlike the metrics/workgraph repair verbs, which bypass it -- see each verb's own doc comment). |
 | `dev-health-workerctl workgraph list-ambiguous [--org <uuid>]` | `repair_workgraph.go:77-131` | Read-only. Lists `work_graph_execution_requests` rows stuck `state='ambiguous'` on both the request and its ledger row, unleased. Each row includes a ready-to-copy `workgraph repair` command. |
 | `dev-health-workerctl workgraph list-undelivered [--ceiling-hours N]` | `list_undelivered.go` | Read-only. Counts outbox rows that cannot reach River on their own — pending behind a completion fence that cannot or did not arrive, or dead while their work-graph request stayed pending — grouped by job kind and the reason the reconciler's undelivered sweep assigns. See [undelivered outbox rows](../run/job-recovery-lifecycle.md#undelivered-outbox-rows). |
-| `dev-health-workerctl workgraph repair --request <uuid> --resolution <confirm_succeeded\|retry_safe> --expected-attempt-count <N> --review-evidence "<text>" [--output-evidence '<json>'] [--dry-run]` | `repair_workgraph.go:144-228` (CHAOS-5042) | Repair a stuck `workgraph.build`/`investment.materialize` ledger row. Shares the finalize/metrics repair token (`WORKER_METRIC_REPAIR_TOKEN`). |
+| `dev-health-workerctl workgraph repair --request <uuid> --resolution <confirm_succeeded\|retry_safe> --expected-attempt-count <N> --review-evidence "<text>" [--output-evidence '<json>'] [--dry-run]` | `repair_workgraph.go:144-228` (CHAOS-5042) | Repair a stuck `workgraph.build`/`investment.materialize` ledger row. Runs as one Postgres transaction on the operator role (CHAOS-5459); no API bridge or repair token. |
 | `dev-health-workerctl sync-dispatch-outbox close-backlog [--dry-run] [--batch-size N]` | `main.go:1585-1621` (CHAOS-4583) | Drain a pre-existing `sync_dispatch_outbox` backlog; the forward reconciler stage only prevents new backlog, it doesn't retroactively clean an existing one. Not org-scoped. |
 
 Related reference (not a command, background): [Job recovery lifecycle](../run/job-recovery-lifecycle.md) --

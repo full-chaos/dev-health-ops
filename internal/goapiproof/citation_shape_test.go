@@ -534,7 +534,15 @@ func TestEveryDeclaredCitationCoversOnlyValueDifferences(t *testing.T) {
 			// not apply to it either. See
 			// investmentfull_supersession_skew_shape_test.go for its own
 			// dedicated sweep.
-			if defect.RepoFanoutShape != nil || defect.CoverageShiftShape != nil || defect.WorkGraphEdgeDedupShape != nil || defect.SupersessionSkewShape != nil {
+			// A LeafPairShape or date-form TimestampRenderingShape defect
+			// admits only its exact declared leaves, so a bare
+			// "python"/"go" pair is outside by design; leafpair_test.go
+			// sweeps every declared pair and date form of the corpus.
+			if defect.LeafPairShape != nil || (defect.TimestampRenderingShape != nil && defect.TimestampRenderingShape.CandidateIsDate) {
+				continue
+			}
+			if defect.RepoFanoutShape != nil || defect.CoverageShiftShape != nil || defect.WorkGraphEdgeDedupShape != nil || defect.SupersessionSkewShape != nil ||
+				(defect.DuplicateCollapseLengthShape != nil && defect.DuplicateCollapseLengthShape.CountPath != "") {
 				continue
 			}
 			for _, cited := range defect.Paths {

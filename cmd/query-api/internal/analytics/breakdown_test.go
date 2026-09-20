@@ -163,7 +163,7 @@ func TestExecuteBreakdown_MapsRows(t *testing.T) {
 		}},
 	}
 	q := compiledQuery{sql: "SELECT ..."}
-	result, err := ExecuteBreakdown(context.Background(), client, q, "REPO", "COUNT")
+	result, err := ExecuteBreakdown(context.Background(), client, "org-1", q, "REPO", "COUNT")
 	if err != nil {
 		t.Fatalf("ExecuteBreakdown error = %v", err)
 	}
@@ -179,8 +179,8 @@ func TestExecuteBreakdown_MapsRows(t *testing.T) {
 	if result.Items[0].Key != "repo-a" || *result.Items[0].Value != 10.0 {
 		t.Fatalf("unexpected items[0]: %+v (value=%v)", result.Items[0], *result.Items[0].Value)
 	}
-	if result.Items[0].Label != nil {
-		t.Fatalf("label resolution not yet ported -- expected nil label, got %v", *result.Items[0].Label)
+	if result.Items[0].Label == nil || *result.Items[0].Label != "repo-a" {
+		t.Fatalf("a key that is not a bare UUID labels itself when the lookup finds nothing, got %v", result.Items[0].Label)
 	}
 }
 
@@ -210,15 +210,19 @@ func TestExecuteBreakdown_AllNullGroupYieldsNilValue_NotZero(t *testing.T) {
 		response: &fakeRowScanner{rows: [][]any{
 			{"repo-null", nil},  // SQL NULL -- the all-NULL-group shape
 			{"repo-real", 42.5}, // populated -- the other direction
+			{"repo-zero", 0.0},  // a measured zero is a value, never null
 		}},
 	}
 	q := compiledQuery{sql: "SELECT ..."}
-	result, err := ExecuteBreakdown(context.Background(), client, q, "REPO", "COVERAGE_LINE_PCT")
+	result, err := ExecuteBreakdown(context.Background(), client, "org-1", q, "REPO", "COVERAGE_LINE_PCT")
 	if err != nil {
 		t.Fatalf("ExecuteBreakdown error = %v", err)
 	}
-	if len(result.Items) != 2 {
-		t.Fatalf("got %d items, want 2", len(result.Items))
+	if len(result.Items) != 3 {
+		t.Fatalf("got %d items, want 3", len(result.Items))
+	}
+	if result.Items[2].Key != "repo-zero" || result.Items[2].Value == nil || *result.Items[2].Value != 0 {
+		t.Fatalf("expected repo-zero's Value to be a real 0 (the proof corpus admits reference 0.0 against Go null only because a measured zero stays 0 here), got %+v", result.Items[2])
 	}
 	if result.Items[0].Key != "repo-null" || result.Items[0].Value != nil {
 		t.Fatalf("expected repo-null's Value to be nil (SQL NULL scanned nullable, not silently 0.0), got %+v", result.Items[0])
@@ -231,7 +235,7 @@ func TestExecuteBreakdown_AllNullGroupYieldsNilValue_NotZero(t *testing.T) {
 func TestExecuteBreakdown_QueryErrorPropagates(t *testing.T) {
 	client := &fakeSingleClient{err: errors.New("boom")}
 	q := compiledQuery{sql: "SELECT ..."}
-	_, err := ExecuteBreakdown(context.Background(), client, q, "REPO", "COUNT")
+	_, err := ExecuteBreakdown(context.Background(), client, "org-1", q, "REPO", "COUNT")
 	if err == nil {
 		t.Fatal("expected error to propagate")
 	}
@@ -252,7 +256,7 @@ func TestExecuteBreakdown_MidStreamFailureDiscardsPartialRows(t *testing.T) {
 		},
 	}
 	q := compiledQuery{sql: "SELECT ..."}
-	result, err := ExecuteBreakdown(context.Background(), client, q, "REPO", "COUNT")
+	result, err := ExecuteBreakdown(context.Background(), client, "org-1", q, "REPO", "COUNT")
 	if err == nil {
 		t.Fatal("expected mid-stream failure to surface as an error")
 	}

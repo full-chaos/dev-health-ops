@@ -29,6 +29,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/reports"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/reviewedges"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/security"
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/testopsrisk"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/throughputforecast"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/workgraph"
 	"github.com/vektah/gqlparser/v2/gqlerror"
@@ -667,14 +668,11 @@ func (r *queryResolver) WorkItemTeamAttributions(ctx context.Context, orgID stri
 // actually queried is claims.OrgID from the verified envelope, never the
 // caller-supplied value.
 //
-// Not registered as a routeswitch document in query_route.go by this PR
-// (deliberate, per this ticket's own Deliverables text, unlike sibling
-// CHAOS-4991) -- this only makes the resolver correct and stops the panic;
-// it does not make workUnitTeamAttributions reachable from a real request
-// yet (see query_route.go's own "registration is not enablement" doc
-// comments for what a later registration PR still has to do: a
-// byte-for-byte wire-form document capture, a digest, and a separate
-// enablement decision).
+// The web's document for this field is registered as a routeswitch document in
+// query_route.go (registeredWorkUnitTeamAttributionsDocument): a real request
+// digests to it and the two-plane proof covers it. Registration is not
+// enablement: no request reaches this resolver until a routing row for
+// workUnitTeamAttributions is enabled.
 func (r *queryResolver) WorkUnitTeamAttributions(ctx context.Context, orgID string, workUnitIds []string, teamID *string) ([]model.WorkUnitTeamAttribution, error) {
 	claims, ok := authctx.FromContext(ctx)
 	if !ok || claims.OrgID == "" {
@@ -1037,9 +1035,18 @@ func (r *queryResolver) CompoundingRisk(ctx context.Context, orgID string, filte
 	return result, nil
 }
 
-// TestopsRisk is the resolver for the testopsRisk field.
+// TestopsRisk is the resolver for the testopsRisk field. It reads only the
+// caller's own org: the orgId argument must equal the org of the request
+// identity, otherwise the request is denied.
 func (r *queryResolver) TestopsRisk(ctx context.Context, orgID string, input model.TestOpsRiskInput) (*model.TestOpsRiskResult, error) {
-	panic(fmt.Errorf("not implemented: TestopsRisk - testopsRisk"))
+	if err := requireOwnOrg(ctx, orgID); err != nil {
+		return nil, err
+	}
+	result, err := testopsrisk.Resolve(ctx, r.ClickHouse, orgID, input)
+	if err != nil {
+		return nil, fmt.Errorf("testopsRisk: %w", err)
+	}
+	return result, nil
 }
 
 // ComplexityTimeseries is the resolver for the complexityTimeseries field.
@@ -1261,39 +1268,103 @@ func (r *queryResolver) AiReviewLoad(ctx context.Context, orgID string, dateRang
 	return result, nil
 }
 
-// AiRiskBreakdown is the resolver for the aiRiskBreakdown field.
+// AiRiskBreakdown is the resolver for the aiRiskBreakdown field. It reads only the caller's own org:
+// the orgId argument must equal the org of the request identity, otherwise
+// the request is denied.
 func (r *queryResolver) AiRiskBreakdown(ctx context.Context, orgID string, dateRange model.AIDateRangeInput, scope *model.AIScopeInput) (*model.AIRiskBreakdownResult, error) {
-	panic(fmt.Errorf("not implemented: AiRiskBreakdown - aiRiskBreakdown"))
+	if err := requireOwnOrg(ctx, orgID); err != nil {
+		return nil, err
+	}
+	result, err := aianalytics.RiskBreakdown(ctx, r.ClickHouse, orgID, dateRange, scope)
+	if err != nil {
+		return nil, fmt.Errorf("aiRiskBreakdown: %w", err)
+	}
+	return result, nil
 }
 
-// AiOpportunities is the resolver for the aiOpportunities field.
+// AiOpportunities is the resolver for the aiOpportunities field. It reads
+// only the caller's own org: the orgId argument must equal the org of the
+// request identity, otherwise the request is denied.
 func (r *queryResolver) AiOpportunities(ctx context.Context, orgID string, scope *model.AIScopeInput, limit int) (*model.AIOpportunitiesResult, error) {
-	panic(fmt.Errorf("not implemented: AiOpportunities - aiOpportunities"))
+	if err := requireOwnOrg(ctx, orgID); err != nil {
+		return nil, err
+	}
+	result, err := aianalytics.AiOpportunities(ctx, r.ClickHouse, orgID, scope, limit)
+	if err != nil {
+		return nil, fmt.Errorf("aiOpportunities: %w", err)
+	}
+	return result, nil
 }
 
-// ImproveOpportunities is the resolver for the improveOpportunities field.
+// ImproveOpportunities is the resolver for the improveOpportunities field. The
+// field takes no orgId argument: it reads the org of the request identity and
+// is denied without one.
 func (r *queryResolver) ImproveOpportunities(ctx context.Context, scope *model.AIScopeInput, limit int, windowDays int) (*model.ImproveOpportunitiesResult, error) {
-	panic(fmt.Errorf("not implemented: ImproveOpportunities - improveOpportunities"))
+	orgID, err := requestOrg(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result, err := aianalytics.FlowOpportunities(ctx, r.ClickHouse, orgID, scope, limit, windowDays)
+	if err != nil {
+		return nil, fmt.Errorf("improveOpportunities: %w", err)
+	}
+	return result, nil
 }
 
-// AiGovernanceSummary is the resolver for the aiGovernanceSummary field.
+// AiGovernanceSummary is the resolver for the aiGovernanceSummary field. It reads only the
+// caller's own org: the orgId argument must equal the org of the request
+// identity, otherwise the request is denied.
 func (r *queryResolver) AiGovernanceSummary(ctx context.Context, orgID string, dateRange model.AIDateRangeInput, scope *model.AIScopeInput, violationLimit int) (*model.AIGovernanceSummary, error) {
-	panic(fmt.Errorf("not implemented: AiGovernanceSummary - aiGovernanceSummary"))
+	if err := requireOwnOrg(ctx, orgID); err != nil {
+		return nil, err
+	}
+	result, err := aianalytics.GovernanceSummary(ctx, r.ClickHouse, orgID, dateRange, scope, violationLimit)
+	if err != nil {
+		return nil, fmt.Errorf("aiGovernanceSummary: %w", err)
+	}
+	return result, nil
 }
 
-// AiWorkflowDrilldown is the resolver for the aiWorkflowDrilldown field.
+// AiWorkflowDrilldown is the resolver for the aiWorkflowDrilldown field. It reads only the
+// caller's own org: the orgId argument must equal the org of the request
+// identity, otherwise the request is denied.
 func (r *queryResolver) AiWorkflowDrilldown(ctx context.Context, orgID string, rootType model.AIWorkflowRootTypeInput, rootID string, depth int, limit int) (*model.AIWorkflowDrilldownResult, error) {
-	panic(fmt.Errorf("not implemented: AiWorkflowDrilldown - aiWorkflowDrilldown"))
+	if err := requireOwnOrg(ctx, orgID); err != nil {
+		return nil, err
+	}
+	result, err := aianalytics.WorkflowDrilldown(ctx, r.ClickHouse, orgID, rootType, rootID, depth, limit)
+	if err != nil {
+		return nil, fmt.Errorf("aiWorkflowDrilldown: %w", err)
+	}
+	return result, nil
 }
 
-// AiAttributedPrs is the resolver for the aiAttributedPrs field.
+// AiAttributedPrs is the resolver for the aiAttributedPrs field. It reads only the caller's own org:
+// the orgId argument must equal the org of the request identity, otherwise
+// the request is denied.
 func (r *queryResolver) AiAttributedPrs(ctx context.Context, orgID string, dateRange model.AIDateRangeInput, scope *model.AIScopeInput, limit int, offset int) (*model.AiAttributedPrsResult, error) {
-	panic(fmt.Errorf("not implemented: AiAttributedPrs - aiAttributedPrs"))
+	if err := requireOwnOrg(ctx, orgID); err != nil {
+		return nil, err
+	}
+	result, err := aianalytics.AttributedPrs(ctx, r.ClickHouse, orgID, dateRange, scope, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("aiAttributedPrs: %w", err)
+	}
+	return result, nil
 }
 
-// AiAttributionOverview is the resolver for the aiAttributionOverview field.
+// AiAttributionOverview is the resolver for the aiAttributionOverview field. It reads only the caller's own org:
+// the orgId argument must equal the org of the request identity, otherwise
+// the request is denied.
 func (r *queryResolver) AiAttributionOverview(ctx context.Context, orgID string, dateRange model.AIDateRangeInput, scope *model.AIAttributionScopeInput, limit int, offset int) (*model.AIAttributionOverviewResult, error) {
-	panic(fmt.Errorf("not implemented: AiAttributionOverview - aiAttributionOverview"))
+	if err := requireOwnOrg(ctx, orgID); err != nil {
+		return nil, err
+	}
+	result, err := aianalytics.AttributionOverview(ctx, r.ClickHouse, orgID, dateRange, scope, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("aiAttributionOverview: %w", err)
+	}
+	return result, nil
 }
 
 // DataHealth returns DataHealthResolver implementation.

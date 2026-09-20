@@ -307,19 +307,14 @@ ORDER BY bucket ASC, value DESC, dimension_value ASC
 // no empty-state branch for a null bucket; JS's `+` coerces a null
 // operand to 0, so a null would be silently averaged in as a measured
 // zero, reproducing THIS SAME defect one layer up in the web client
-// were it ever null on the wire). NONE of these four operations appear
-// in query_route.go's digestByOperation map at all -- confirmed by grep
-// -- so they are not merely gated OFF by a missing go_api_routing_state
-// row (breakdown's situation): they have no registered document AT
-// ALL, which is a SEPARATE, EARLIER gate than PostgresSwitch.Enabled().
-// Registering one of these four documents is therefore its own
-// deliberate future step, prior to and independent of any routing-state
-// row -- timeseries's blast radius today is narrower than breakdown's,
-// not identical to it. Whoever takes that registration step MUST widen
-// the SDL's TimeseriesBucket.value (and BreakdownItem.value) to `Float`
-// in the SAME change, together with the Python Strawberry counterparts,
-// AND give the web client's mergeToSpark (or equivalent) a real
-// null-handling branch first -- see CHAOS-4658.
+// were it ever null on the wire). These four operations' documents are
+// registered in query_route.go's digestByOperation map, so serving them
+// from Go is gated by the go_api_routing_state row
+// (PostgresSwitch.Enabled()) like any other registered document. The
+// SDL's TimeseriesBucket.value (and BreakdownItem.value) is nullable on
+// both planes; the web client's mergeToSpark (or equivalent) still needs
+// a real null-handling branch before any of these four routing rows is
+// enabled.
 func ExecuteTimeseries(ctx context.Context, client QueryClient, q compiledQuery, dimensionName, measureName string) ([]model.TimeseriesResult, error) {
 	rows, err := client.Query(ctx, q.sql, q.bindings)
 	if err != nil {

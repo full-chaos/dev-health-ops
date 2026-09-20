@@ -117,6 +117,160 @@
         {"file": "cmd/query-api/internal/analytics/catalog_test.go", "test": "TestCanonicalRepositoryValues"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
       ]
+    },
+    {
+      "operation": "busFactor",
+      "two_plane_ops_sha": "fb24ec18c004798b1e99e1907f80fafe0dd12f25",
+      "guards": [
+        {"file": "cmd/query-api/internal/busfactor/busfactor_golden_test.go", "test": "TestBusFactorMatchesTheFrozenGolden"},
+        {"file": "cmd/query-api/internal/busfactor/busfactor_test.go", "test": "TestTiebreaks_DoNotDependOnRowOrder"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
+      ]
+    },
+    {
+      "operation": "securityOverview",
+      "two_plane_ops_sha": "fb24ec18c004798b1e99e1907f80fafe0dd12f25",
+      "guards": [
+        {"file": "cmd/query-api/internal/security/secoverview_golden_test.go", "test": "TestSecurityOverviewMatchesTheFrozenGolden"},
+        {"file": "cmd/query-api/internal/security/security_test.go", "test": "TestResolveOverview_ParsesAndScopes"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_symbols_are_not_redefined"}
+      ]
+    },
+    {
+      "operation": "workGraphEdges",
+      "two_plane_ops_sha": "9b218f69f10796bfb747a1e0301edf5c29c4ba40",
+      "guards": [
+        {"file": "cmd/query-api/internal/workgraph/workgraph_golden_test.go", "test": "TestWorkGraphResolversMatchTheFrozenGolden"},
+        {"file": "cmd/query-api/internal/workgraph/workgraph_test.go", "test": "TestFetchDedupedEdgeRows_QueryShapeHasArgMaxCollapse"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
+      ]
+    },
+    {
+      "operation": "workGraphFlow",
+      "two_plane_ops_sha": "9b218f69f10796bfb747a1e0301edf5c29c4ba40",
+      "guards": [
+        {"file": "cmd/query-api/internal/workgraph/workgraph_golden_test.go", "test": "TestWorkGraphResolversMatchTheFrozenGolden"},
+        {"file": "cmd/query-api/internal/workgraph/flow_test.go", "test": "TestResolveFlow_AggregatesInflowAndOutflowPerNodeType"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
+      ]
+    },
+    {
+      "operation": "workGraphArtifacts",
+      "two_plane_ops_sha": "9b218f69f10796bfb747a1e0301edf5c29c4ba40",
+      "guards": [
+        {"file": "cmd/query-api/internal/workgraph/workgraph_golden_test.go", "test": "TestWorkGraphResolversMatchTheFrozenGolden"},
+        {"file": "cmd/query-api/internal/workgraph/artifacts_evidence_tiebreak_integration_test.go", "test": "TestResolveArtifactsEvidenceMatchesPythonReaderLiteral"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
+      ]
+    },
+    {
+      "operation": "releaseImpact",
+      "two_plane_ops_sha": "9b218f69f10796bfb747a1e0301edf5c29c4ba40",
+      "guards": [
+        {"file": "cmd/query-api/internal/workgraph/workgraph_golden_test.go", "test": "TestWorkGraphResolversMatchTheFrozenGolden"},
+        {"file": "cmd/query-api/internal/workgraph/workgraph_test.go", "test": "TestFetchDedupedEdgeRows_QueryShapeHasArgMaxCollapse"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
+      ]
+    },
+    {
+      "operation": "experiments",
+      "two_plane_ops_sha": "fe2e37171c7c6f76a182328359796fcc6d76034a",
+      "guards": [
+        {"file": "cmd/query-api/internal/experiments/experiments_golden_test.go", "test": "TestExperimentsMatchesTheFrozenGolden"},
+        {"file": "cmd/query-api/internal/experiments/experiments_test.go", "test": "TestStableID_MatchesTheReferenceDigest"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_symbols_are_not_redefined"}
+      ]
+    },
+    {
+      "operation": "aiOpportunities",
+      "two_plane_ops_sha": "9d6512ef7ee24aaac9c293f7fdbb5ea52c36dab6",
+      "guards": [
+        {"file": "cmd/query-api/internal/aianalytics/oracle_d_test.go", "test": "TestOpportunityDetectors_MatchPythonDetectors"},
+        {"file": "cmd/query-api/internal/aianalytics/statements_d_test.go", "test": "TestDetectorStatements_ApplyScopeAndWindow"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_symbols_are_not_redefined"}
+      ]
+    },
+    {
+      "operation": "productTelemetryDashboard",
+      "two_plane_ops_sha": "1653f5066af107acfc0f32de97727d734f2090c2",
+      "guards": [
+        {"file": "cmd/query-api/internal/producttelemetry/dashboard_golden_test.go", "test": "TestOrgDashboardMatchesTheFrozenGolden"},
+        {"file": "cmd/query-api/internal/producttelemetry/producttelemetry_test.go", "test": "TestOrgDashboard_ScopeBindingsAndMapping"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_symbols_are_not_redefined"}
+      ]
+    },
+    {
+      "operation": "compoundingRisk",
+      "two_plane_ops_sha": "8b08058f369cbe5415ebebb282c4fed5fac266c5",
+      "guards": [
+        {"file": "cmd/query-api/internal/compoundingrisk/resolve_test.go", "test": "TestTeamPoints_MatchesPythonCells"},
+        {"file": "cmd/query-api/internal/compoundingrisk/compoundingrisk_integration_test.go", "test": "TestRealClickHouse_RepoBreakout"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
+      ]
+    },
+    {
+      "operation": "aiImpactSummary",
+      "two_plane_ops_sha": "9b218f69f10796bfb747a1e0301edf5c29c4ba40",
+      "guards": [
+        {"file": "cmd/query-api/internal/aianalytics/oracle_test.go", "test": "TestResolvers_MatchPythonResolvers"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_symbols_are_not_redefined"}
+      ]
+    },
+    {
+      "operation": "aiComparison",
+      "two_plane_ops_sha": "9b218f69f10796bfb747a1e0301edf5c29c4ba40",
+      "guards": [
+        {"file": "cmd/query-api/internal/aianalytics/oracle_test.go", "test": "TestResolvers_MatchPythonResolvers"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_symbols_are_not_redefined"}
+      ]
+    },
+    {
+      "operation": "aiReviewLoad",
+      "two_plane_ops_sha": "9b218f69f10796bfb747a1e0301edf5c29c4ba40",
+      "guards": [
+        {"file": "cmd/query-api/internal/aianalytics/oracle_test.go", "test": "TestResolvers_MatchPythonResolvers"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_symbols_are_not_redefined"}
+      ]
+    },
+    {
+      "operation": "aiRiskBreakdown",
+      "two_plane_ops_sha": "9b218f69f10796bfb747a1e0301edf5c29c4ba40",
+      "guards": [
+        {"file": "cmd/query-api/internal/aianalytics/oracle_b_test.go", "test": "TestGroupB_MatchPythonResolvers"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_symbols_are_not_redefined"}
+      ]
+    },
+    {
+      "operation": "aiAttributedPrs",
+      "two_plane_ops_sha": "9b218f69f10796bfb747a1e0301edf5c29c4ba40",
+      "guards": [
+        {"file": "cmd/query-api/internal/aianalytics/oracle_b_test.go", "test": "TestGroupB_MatchPythonResolvers"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_symbols_are_not_redefined"}
+      ]
+    },
+    {
+      "operation": "aiAttributionOverview",
+      "two_plane_ops_sha": "9b218f69f10796bfb747a1e0301edf5c29c4ba40",
+      "guards": [
+        {"file": "cmd/query-api/internal/aianalytics/oracle_b_test.go", "test": "TestGroupB_MatchPythonResolvers"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_symbols_are_not_redefined"}
+      ]
+    },
+    {
+      "operation": "aiGovernanceSummary",
+      "two_plane_ops_sha": "9d6512ef7ee24aaac9c293f7fdbb5ea52c36dab6",
+      "guards": [
+        {"file": "cmd/query-api/internal/aianalytics/oracle_c_test.go", "test": "TestGroupC_MatchPythonResolvers"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_symbols_are_not_redefined"}
+      ]
+    },
+    {
+      "operation": "aiWorkflowDrilldown",
+      "two_plane_ops_sha": "9d6512ef7ee24aaac9c293f7fdbb5ea52c36dab6",
+      "guards": [
+        {"file": "cmd/query-api/internal/aianalytics/oracle_c_test.go", "test": "TestGroupC_MatchPythonResolvers"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_symbols_are_not_redefined"}
+      ]
     }
   ]
 }

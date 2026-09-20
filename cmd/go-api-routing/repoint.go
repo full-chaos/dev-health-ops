@@ -39,7 +39,7 @@ func runRepoint(argv []string) error {
 	set.StringVar(&expectBuild, "expect-build", "", "optional CROSS-CHECK: fail if the running build is not this sha. Never the source of the value written")
 	set.StringVar(&documentDigest, "document", "", "narrow -operations (exactly one name) to the ONE row whose OWN document digest equals this -- the only way to re-point just a DOCUMENT_DRIFT row (as `status` names it) and leave a sibling catalog row untouched. Exact-match")
 	set.BoolVar(&dryRun, "dry-run", false, "report what would change and write NOTHING")
-	set.DurationVar(&common.timeout, "timeout", 30*time.Second, "per-request timeout")
+	set.DurationVar(&common.timeout, "timeout", 30*time.Second, "bounds EACH HTTP request, the Postgres dial, and EACH database statement (server-side statement_timeout/lock_timeout) -- never the run as a whole")
 	if err := parseVerbFlags(set, argv); err != nil {
 		return err
 	}

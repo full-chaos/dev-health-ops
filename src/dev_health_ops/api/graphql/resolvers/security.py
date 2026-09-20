@@ -21,27 +21,18 @@ Cursor convention:
 
 from __future__ import annotations
 
-import asyncio
 import logging
-import math
 from datetime import date, datetime, timezone
 from typing import Any
-
-from dev_health_ops.utils.datetime import utc_today
 
 from ..authz import require_org_id
 from ..context import GraphQLContext
 from ..models.inputs import SecurityAlertFilterInput, SecurityPaginationInput
 from ..models.outputs import (
     PageInfo,
-    RepoAlertCount,
     SecurityAlertConnection,
     SecurityAlertEdge,
     SecurityAlertNode,
-    SecurityKpis,
-    SecurityOverview,
-    SeverityBucket,
-    TrendPoint,
 )
 
 logger = logging.getLogger(__name__)
@@ -262,183 +253,4 @@ async def resolve_security_alerts(
             start_cursor=edges[0].cursor if edges else None,
             end_cursor=edges[-1].cursor if edges else None,
         ),
-    )
-
-
-async def resolve_security_overview(
-    context: GraphQLContext,
-    org_id: str,
-    filters: SecurityAlertFilterInput | None = None,
-) -> SecurityOverview:
-    """Resolve aggregated security posture metrics for the dashboard."""
-    from dev_health_ops.api.queries.client import query_dicts
-
-    require_org_id(context)
-    client = context.client
-
-    if client is None:
-        raise RuntimeError("Database client not available")
-
-    base_params: dict[str, Any] = {"org_id": org_id}
-    where_clauses = _build_filter_clauses(filters, base_params)
-    where_sql = f"WHERE {' AND '.join(where_clauses)}"
-
-    # ------------------------------------------------------------------
-    # Query 1: KPIs
-    # ------------------------------------------------------------------
-    kpi_params = dict(base_params)
-    kpi_params["open_states_kpi"] = list(_OPEN_STATES)
-    kpi_query = f"""
-        SELECT
-            countIf(sa.state IN %(open_states_kpi)s) AS open_total,
-            countIf(sa.state IN %(open_states_kpi)s AND sa.severity = 'critical') AS critical,
-            countIf(sa.state IN %(open_states_kpi)s AND sa.severity = 'high') AS high,
-            avgIf(
-                dateDiff('day', sa.created_at, sa.fixed_at),
-                sa.fixed_at IS NOT NULL
-                AND sa.fixed_at >= now() - INTERVAL 30 DAY
-            ) AS mean_days_to_fix_30d,
-            countIf(
-                sa.state IN %(open_states_kpi)s
-                AND sa.created_at >= now() - INTERVAL 30 DAY
-            ) - countIf(
-                sa.state IN %(open_states_kpi)s
-                AND sa.created_at < now() - INTERVAL 30 DAY
-                AND (sa.fixed_at IS NULL OR sa.fixed_at >= now() - INTERVAL 30 DAY)
-                AND (sa.dismissed_at IS NULL OR sa.dismissed_at >= now() - INTERVAL 30 DAY)
-            ) AS open_delta_30d
-        FROM security_alerts sa
-        INNER JOIN repos r ON sa.repo_id = r.id
-        {where_sql}
-    """
-
-    # ------------------------------------------------------------------
-    # Query 2: Severity breakdown
-    # ------------------------------------------------------------------
-    breakdown_params = dict(base_params)
-    breakdown_params["open_states_bd"] = list(_OPEN_STATES)
-    breakdown_query = f"""
-        SELECT
-            coalesce(sa.severity, 'unknown') AS severity,
-            count() AS count
-        FROM security_alerts sa
-        INNER JOIN repos r ON sa.repo_id = r.id
-        {where_sql}
-        AND sa.state IN %(open_states_bd)s
-        GROUP BY severity
-        ORDER BY count DESC
-    """
-
-    # ------------------------------------------------------------------
-    # Query 3: Top repos by open alert count (limit 10)
-    # ------------------------------------------------------------------
-    top_repos_params = dict(base_params)
-    top_repos_params["open_states_tr"] = list(_OPEN_STATES)
-    top_repos_query = f"""
-        SELECT
-            toString(sa.repo_id) AS repo_id,
-            r.repo AS repo_name,
-            NULL AS repo_url,
-            count() AS count
-        FROM security_alerts sa
-        INNER JOIN repos r ON sa.repo_id = r.id
-        {where_sql}
-        AND sa.state IN %(open_states_tr)s
-        GROUP BY sa.repo_id, r.repo
-        ORDER BY count DESC
-        LIMIT 10
-    """
-
-    # ------------------------------------------------------------------
-    # Query 4: Trend — last 30 days, one point per day
-    # ------------------------------------------------------------------
-    trend_params = dict(base_params)
-    trend_query = f"""
-        SELECT
-            toDate(day) AS day,
-            countIf(event_type = 'opened') AS opened,
-            countIf(event_type = 'fixed') AS fixed
-        FROM (
-            SELECT sa.created_at AS day, 'opened' AS event_type
-            FROM security_alerts sa
-            INNER JOIN repos r ON sa.repo_id = r.id
-            {where_sql}
-            AND sa.created_at >= now() - INTERVAL 30 DAY
-            UNION ALL
-            SELECT sa.fixed_at AS day, 'fixed' AS event_type
-            FROM security_alerts sa
-            INNER JOIN repos r ON sa.repo_id = r.id
-            {where_sql}
-            AND sa.fixed_at IS NOT NULL
-            AND sa.fixed_at >= now() - INTERVAL 30 DAY
-        )
-        GROUP BY day
-        ORDER BY day ASC
-    """
-
-    kpi_rows, breakdown_rows, top_repos_rows, trend_rows = await asyncio.gather(
-        query_dicts(client, kpi_query, kpi_params),
-        query_dicts(client, breakdown_query, breakdown_params),
-        query_dicts(client, top_repos_query, top_repos_params),
-        query_dicts(client, trend_query, trend_params),
-    )
-
-    # Parse KPIs
-    kpi_row = kpi_rows[0] if kpi_rows else {}
-    mean_raw = kpi_row.get("mean_days_to_fix_30d")
-    mean_days: float | None = float(mean_raw) if mean_raw is not None else None
-    if mean_days is not None and math.isnan(mean_days):  # NaN check
-        mean_days = None
-
-    kpis = SecurityKpis(
-        open_total=int(kpi_row.get("open_total", 0)),
-        critical=int(kpi_row.get("critical", 0)),
-        high=int(kpi_row.get("high", 0)),
-        mean_days_to_fix_30d=mean_days,
-        open_delta_30d=int(kpi_row.get("open_delta_30d", 0)),
-    )
-
-    # Parse severity breakdown
-    severity_breakdown = [
-        SeverityBucket(
-            severity=str(row.get("severity", "unknown")),
-            count=int(row.get("count", 0)),
-        )
-        for row in breakdown_rows
-    ]
-
-    # Parse top repos
-    top_repos = [
-        RepoAlertCount(
-            repo_id=str(row.get("repo_id", "")),
-            repo_name=str(row.get("repo_name", "")),
-            repo_url=str(row["repo_url"]) if row.get("repo_url") else None,
-            count=int(row.get("count", 0)),
-        )
-        for row in top_repos_rows
-    ]
-
-    # Parse trend
-    def _to_date(val: Any) -> date:
-        if isinstance(val, date):
-            return val if not isinstance(val, datetime) else val.date()
-        try:
-            return date.fromisoformat(str(val))
-        except (ValueError, TypeError):
-            return utc_today()
-
-    trend = [
-        TrendPoint(
-            day=_to_date(row.get("day")),
-            opened=int(row.get("opened", 0)),
-            fixed=int(row.get("fixed", 0)),
-        )
-        for row in trend_rows
-    ]
-
-    return SecurityOverview(
-        kpis=kpis,
-        severity_breakdown=severity_breakdown,
-        top_repos=top_repos,
-        trend=trend,
     )

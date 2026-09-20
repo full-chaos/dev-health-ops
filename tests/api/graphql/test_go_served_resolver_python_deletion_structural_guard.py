@@ -63,9 +63,79 @@ CAPACITY_QUERIES_SOURCE = (
 )
 
 # module path -> the symbols that must not be defined in it.
+SECURITY_RESOLVER_SOURCE = (
+    ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "resolvers" / "security.py"
+)
+
+IMPROVE_RESOLVER_SOURCE = (
+    ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "resolvers" / "improve.py"
+)
+
+PRODUCT_TELEMETRY_RESOLVER_SOURCE = (
+    ROOT
+    / "src"
+    / "dev_health_ops"
+    / "api"
+    / "graphql"
+    / "resolvers"
+    / "product_telemetry.py"
+)
+PRODUCT_TELEMETRY_LOADER_SOURCE = (
+    ROOT / "src" / "dev_health_ops" / "api" / "product_telemetry" / "dashboard.py"
+)
+
+AI_RESOLVER_SOURCE = (
+    ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "resolvers" / "ai.py"
+)
+
 DELETED_GO_SERVED_RESOLVER_SYMBOLS: dict[Path, frozenset[str]] = {
     # A scheduler helper with no caller in src/.
     CAPACITY_QUERIES_SOURCE: frozenset({"discover_team_scopes"}),
+    # securityOverview: only the function is deleted; the module stays for
+    # securityAlerts and the shared filter builder.
+    SECURITY_RESOLVER_SOURCE: frozenset({"resolve_security_overview"}),
+    # experiments: the improve-opportunities resolver stays in the module.
+    IMPROVE_RESOLVER_SOURCE: frozenset(
+        {"resolve_experiments", "_stable_experiment_id", "_metric_from_card"}
+    ),
+    # productTelemetryDashboard: the platform dashboard resolver and the shared
+    # dataclasses stay; the organisation dashboard resolver and its loader go.
+    PRODUCT_TELEMETRY_RESOLVER_SOURCE: frozenset(
+        {"resolve_product_telemetry_dashboard"}
+    ),
+    PRODUCT_TELEMETRY_LOADER_SOURCE: frozenset({"load_product_telemetry_dashboard"}),
+    # The nine query-api-served AI analytics operations, including
+    # aiOpportunities. The module is deleted with them; the detector module
+    # stays as the Go detectors' parity oracle.
+    AI_RESOLVER_SOURCE: frozenset(
+        {
+            "resolve_ai_opportunities",
+            "_normalize_opportunity_scope",
+            "_resolve_repo_ref",
+            "resolve_ai_impact_summary",
+            "resolve_ai_comparison",
+            "resolve_ai_review_load",
+            "resolve_ai_risk_breakdown",
+            "resolve_ai_governance_summary",
+            "resolve_ai_workflow_drilldown",
+            "resolve_ai_attributed_prs",
+            "resolve_ai_attribution_overview",
+            "_normalize_scope",
+            "_normalize_attribution_scope",
+            "_load_daily_records",
+            "_load_scope_breakdowns",
+            "_load_reviewer_concentration",
+            "_load_engagement_slices",
+            "_load_overlap_rows",
+            "_resolve_repo_team_map",
+            "_resolve_team_repo_ids",
+            "_scope_rollups",
+            "_aggregate_bucket_totals",
+            "_aggregate_side",
+            "_validate_date_range",
+            "_to_aware",
+        }
+    ),
 }
 
 # label -> a module that must not exist on disk AT ALL.
@@ -161,6 +231,41 @@ DELETED_GO_SERVED_RESOLVER_MODULES: dict[str, Path] = {
     / "graphql"
     / "loaders"
     / "dimension_loader.py",
+    # busFactor (the churn-concentration computation stays in
+    # metrics/knowledge.py for the daily job).
+    "bus factor resolver": ROOT
+    / "src"
+    / "dev_health_ops"
+    / "api"
+    / "graphql"
+    / "resolvers"
+    / "bus_factor.py",
+    # compoundingRisk. The score computation stays in metrics/compounding_risk.py
+    # for the daily job; the SDL types stay in types/compounding_risk.py.
+    "compounding risk resolver": ROOT
+    / "src"
+    / "dev_health_ops"
+    / "api"
+    / "graphql"
+    / "resolvers"
+    / "compounding_risk.py",
+    # The AI analytics operations, aiOpportunities last. The detector module
+    # stays as the Go detectors' parity oracle.
+    "ai resolver": ROOT
+    / "src"
+    / "dev_health_ops"
+    / "api"
+    / "graphql"
+    / "resolvers"
+    / "ai.py",
+    # workGraphEdges, workGraphFlow and workGraphArtifacts.
+    "work graph resolver": ROOT
+    / "src"
+    / "dev_health_ops"
+    / "api"
+    / "graphql"
+    / "resolvers"
+    / "work_graph.py",
     # The operating review computation; its only importer was the resolver.
     "operating review computation": ROOT
     / "src"
@@ -190,15 +295,27 @@ RETAINED_ORACLE_MODULES: dict[str, Path] = {
 # silently change the schema digest and disable every registered operation.
 SDL_LOAD_BEARING_SOURCES: tuple[Path, ...] = (
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "models" / "pr.py",
+    ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "models" / "improve.py",
+    ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "models" / "ai.py",
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "types" / "cognitive_load.py",
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "types" / "complexity.py",
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "types" / "review_edges.py",
+    ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "types" / "bus_factor.py",
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "schema.py",
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "models" / "inputs.py",
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "models" / "outputs.py",
 )
 
 SDL_LOAD_BEARING_SYMBOLS: dict[str, frozenset[str]] = {
+    "improve.py": frozenset({"Experiment", "ExperimentsResult", "ExperimentStatus"}),
+    "ai.py": frozenset(
+        {
+            "AIOpportunitiesResult",
+            "AIOpportunity",
+            "AIOpportunityKind",
+            "AIWorkGraphDrilldownRef",
+        }
+    ),
     "pr.py": frozenset(
         {
             "PullRequestDetail",
@@ -227,6 +344,15 @@ SDL_LOAD_BEARING_SYMBOLS: dict[str, frozenset[str]] = {
     "review_edges.py": frozenset(
         {"ReviewEdgesInput", "ReviewEdgeRow", "ReviewEdgesResult"}
     ),
+    "bus_factor.py": frozenset(
+        {
+            "MaintainerShare",
+            "RepoBusFactor",
+            "BusFactorScope",
+            "BusFactor",
+            "BusFactorScopeInput",
+        }
+    ),
     "schema.py": frozenset(
         {
             "capacity_forecast",
@@ -241,6 +367,23 @@ SDL_LOAD_BEARING_SYMBOLS: dict[str, frozenset[str]] = {
             "cognitive_load",
             "pr",
             "catalog",
+            "bus_factor",
+            "security_overview",
+            "experiments",
+            "ai_opportunities",
+            "product_telemetry_dashboard",
+            "compounding_risk",
+            "ai_impact_summary",
+            "ai_comparison",
+            "ai_review_load",
+            "ai_risk_breakdown",
+            "ai_governance_summary",
+            "ai_workflow_drilldown",
+            "ai_attributed_prs",
+            "ai_attribution_overview",
+            "work_graph_edges",
+            "work_graph_flow",
+            "work_graph_artifacts",
         }
     ),
     "inputs.py": frozenset(
@@ -249,6 +392,9 @@ SDL_LOAD_BEARING_SYMBOLS: dict[str, frozenset[str]] = {
             "CapacityForecastFilterInput",
             "ThroughputForecastInput",
             "OperatingReviewInput",
+            "WorkGraphEdgeFilterInput",
+            "WorkGraphNodeTypeInput",
+            "WorkGraphEdgeTypeInput",
         }
     ),
     "outputs.py": frozenset(
@@ -270,10 +416,21 @@ SDL_LOAD_BEARING_SYMBOLS: dict[str, frozenset[str]] = {
             "CatalogLimits",
             "CatalogValueItem",
             "CatalogResult",
+            "WorkGraphEdgesResult",
+            "WorkGraphEdgeResult",
+            "WorkGraphFlowResult",
+            "WorkGraphFlowRow",
+            "WorkGraphArtifactsResult",
+            "WorkGraphArtifactRow",
+            "WorkGraphNodeType",
+            "WorkGraphEdgeType",
+            "WorkGraphProvenance",
             "FeatureFlagItem",
             "FeatureFlagRegistryResult",
             "FeatureFlagEventItem",
             "FeatureFlagEventsResult",
+            "ProductTelemetryDashboardType",
+            "ProductTelemetrySessionSummaryType",
         }
     ),
 }

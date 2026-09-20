@@ -61,7 +61,9 @@ cmd/query-api/internal/investmentflow	12
 cmd/query-api/internal/operatingreview	112
 cmd/query-api/internal/routeswitch	17
 cmd/query-api/internal/sankey	12
+cmd/query-api/internal/scopelabel	20
 cmd/query-api/internal/security	30
+cmd/query-api/internal/testopsrisk	20
 cmd/query-api/internal/throughputforecast	64
 cmd/query-api/internal/workgraph	380
 internal/cacheinvalidation	1
@@ -84,6 +86,7 @@ internal/jobs/metrics/daily/icfinalize	119
 internal/jobs/metrics/remaining	794
 internal/jobs/operational	69
 internal/jobs/pagerduty	7
+internal/jobs/repair	30
 internal/jobs/report	76
 internal/jobs/system	17
 internal/jobs/workgraph	20

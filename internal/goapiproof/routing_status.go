@@ -38,6 +38,16 @@ const (
 	DigestStale = "STALE"
 	// DigestMissing: no row at any digest. Never enabled, or cleaned up.
 	DigestMissing = "MISSING"
+	// DigestPending: no row at the LIVE digest, but a row exists at the
+	// digest the caller's own binary computes.
+	//
+	// Distinct from STALE because the two are opposite predictions about
+	// the same table: STALE says nothing will ever read this row, PENDING
+	// says something WILL read it as soon as the image the caller was
+	// built from is deployed. During the pre-roll window `carry` creates,
+	// every row it has just written is PENDING -- reporting those STALE
+	// tells the operator the carry failed when it in fact succeeded.
+	DigestPending = "PENDING"
 )
 
 // OperationStatus is one row of `status`.
@@ -62,6 +72,25 @@ type OperationStatus struct {
 
 	StaleDigests []string
 	Proven       bool
+	// VenueProof is the venue class (VenueClassAdmin/VenueClassNoData) a
+	// NOT store-proven live row's own review_evidence claims; empty
+	// otherwise. It is deliberately not Proven: a venue row is admitted on
+	// an operator-supplied receipt, and a waiver row (ACKNOWLEDGED-UNPROVEN)
+	// must stay a different state from it.
+	VenueProof string
+
+	// PendingDigests names rows this operation has at the schema digest
+	// the CALLER's own binary computes, when that is not the digest the
+	// deployed process computes.
+	//
+	// They are not stale and they are not live: nothing reads them YET,
+	// and the reason nothing reads them yet is that the image which will
+	// is not deployed. Collapsing them into StaleDigests was the same
+	// inversion censusMarker exists to prevent, one column over -- during
+	// the pre-roll window `carry` creates, EVERY freshly carried row
+	// would read STALE on the one command an operator runs to decide
+	// whether to roll.
+	PendingDigests []string
 
 	// UnreachableDocumentDigests names rows this operation has AT THE LIVE
 	// SCHEMA DIGEST whose document digest is NOT the catalog's.
@@ -145,7 +174,20 @@ type routingStateRow struct {
 // here -- they cannot be dispatched (the edge resolves a request to an
 // operation via the catalog), so they are stale by construction. The
 // per-digest census from CountRowsBySchemaDigest is what surfaces those.
-func RoutingStatusRows(ctx context.Context, db Querier, liveSchemaDigest string, catalog map[string]string) ([]OperationStatus, error) {
+// liveSchemaDigest is the digest the DEPLOYED process computes -- never
+// the caller's own, unless the caller has no way to learn the deployed
+// one and says so. "Live" is a property of what is running.
+//
+// pendingSchemaDigest is the caller's own digest when it differs from the
+// live one (empty otherwise). Rows there are reported PendingDigests
+// rather than StaleDigests: see that field.
+//
+// No normalisation of the two coinciding, deliberately: a row at the live
+// digest never reaches the pending bucket at all (it takes the live
+// branch first), so passing the same value twice is already a no-op, and
+// a guard whose removal changes nothing observable is a guard that reads
+// as coverage without being any.
+func RoutingStatusRows(ctx context.Context, db Querier, liveSchemaDigest, pendingSchemaDigest string, catalog map[string]string) ([]OperationStatus, error) {
 	if db == nil {
 		return nil, errors.New("goapiproof: nil database handle")
 	}
@@ -188,12 +230,21 @@ func RoutingStatusRows(ctx context.Context, db Querier, liveSchemaDigest string,
 	liveByOperation := map[string]routingStateRow{}
 	unreachable := map[string][]string{}
 	staleDigests := map[string]map[string]bool{}
+	pendingDigests := map[string]map[string]bool{}
 	for _, row := range all {
 		if row.schemaDigest != liveSchemaDigest {
-			if staleDigests[row.operation] == nil {
-				staleDigests[row.operation] = map[string]bool{}
+			bucket := staleDigests
+			// A row at the caller's own digest is PENDING, not stale:
+			// "nothing reads this yet" and "nothing will ever read this"
+			// are different facts and an operator acts differently on
+			// each.
+			if pendingSchemaDigest != "" && row.schemaDigest == pendingSchemaDigest {
+				bucket = pendingDigests
 			}
-			staleDigests[row.operation][row.schemaDigest] = true
+			if bucket[row.operation] == nil {
+				bucket[row.operation] = map[string]bool{}
+			}
+			bucket[row.operation][row.schemaDigest] = true
 			continue
 		}
 		if row.documentDigest != catalog[row.operation] {
@@ -272,11 +323,17 @@ func RoutingStatusRows(ctx context.Context, db Querier, liveSchemaDigest string,
 			stale = append(stale, digest)
 		}
 		sort.Strings(stale)
+		pending := make([]string, 0, len(pendingDigests[operation]))
+		for digest := range pendingDigests[operation] {
+			pending = append(pending, digest)
+		}
+		sort.Strings(pending)
 
 		status := OperationStatus{
 			Operation:                  operation,
 			DocumentDigest:             catalog[operation],
 			StaleDigests:               stale,
+			PendingDigests:             pending,
 			UnreachableDocumentDigests: unreachable[operation],
 		}
 		row, live := liveByOperation[operation]
@@ -293,7 +350,15 @@ func RoutingStatusRows(ctx context.Context, db Querier, liveSchemaDigest string,
 			status.ReviewEvidence = row.reviewEvidence
 			status.RecordedBy = row.recordedBy
 			status.Proven = proven[operation]
-		case len(stale) > 0 || len(unreachable[operation]) > 0:
+			if !status.Proven {
+				status.VenueProof = VenueEvidenceClass(row.reviewEvidence)
+			}
+		case len(stale) == 0 && len(unreachable[operation]) == 0 && len(pending) > 0:
+			// ONLY pending rows: nothing is live, nothing is dead, and
+			// the operator is mid-window. Named as its own state so the
+			// report cannot say "stale" about a row that is waiting.
+			status.DigestState = DigestPending
+		case len(stale) > 0 || len(pending) > 0 || len(unreachable[operation]) > 0:
 			// STALE covers both shapes, because they are the same fact:
 			// a row exists and nothing will ever look it up. Which kind
 			// it is, is in StaleDigests / UnreachableDocumentDigests.

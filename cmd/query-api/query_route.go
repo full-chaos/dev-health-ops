@@ -375,6 +375,28 @@ const registeredReleaseImpactDocument = `query ReleaseImpact($orgId: String!, $f
   }
 }`
 
+// registeredWorkUnitTeamAttributionsDocument is the registered document for
+// the `workUnitTeamAttributions` operation: the work unit team attribution
+// query the investment view sends, the exact wire-form text a real web
+// client sends (testdata/wire_capture/workunitteamattributions_captured.graphql).
+const registeredWorkUnitTeamAttributionsDocument = `query WorkUnitTeamAttributions($orgId: String!, $workUnitIds: [String!], $teamId: String) {
+  workUnitTeamAttributions(
+    orgId: $orgId
+    workUnitIds: $workUnitIds
+    teamId: $teamId
+  ) {
+    workUnitId
+    teamId
+    teamName
+    source
+    confidence
+    isPrimary
+    memberCount
+    evidence
+    __typename
+  }
+}`
+
 // registeredWorkGraphFlowDocument is CHAOS-4504's registered document for
 // the workGraphFlow operation. Copied byte-for-byte from
 // web/src/lib/graphql/queries.ts:462's WORK_GRAPH_FLOW_QUERY, operation
@@ -840,6 +862,163 @@ const registeredCompoundingRiskDocument = `query CompoundingRisk($orgId: String!
   }
 }`
 
+// registeredTestOpsPipelineDocument is the registered document for the `testOpsPipeline`
+// operation, the exact wire-form text a real web client sends
+// (testdata/wire_capture/testopspipeline_captured.graphql).
+const registeredTestOpsPipelineDocument = `query TestOpsPipeline($orgId: String!, $batch: AnalyticsRequestInput!) {
+  analytics(orgId: $orgId, batch: $batch) {
+    timeseries {
+      dimension
+      dimensionValue
+      measure
+      buckets {
+        date
+        value
+        __typename
+      }
+      __typename
+    }
+    breakdowns {
+      dimension
+      measure
+      items {
+        key
+        value
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredTestOpsTestDocument is the registered document for the `testOpsTest`
+// operation, the exact wire-form text a real web client sends
+// (testdata/wire_capture/testopstest_captured.graphql).
+const registeredTestOpsTestDocument = `query TestOpsTest($orgId: String!, $batch: AnalyticsRequestInput!) {
+  analytics(orgId: $orgId, batch: $batch) {
+    timeseries {
+      dimension
+      dimensionValue
+      measure
+      buckets {
+        date
+        value
+        __typename
+      }
+      __typename
+    }
+    breakdowns {
+      dimension
+      measure
+      items {
+        key
+        value
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredTestOpsCoverageDocument is the registered document for the `testOpsCoverage`
+// operation, the exact wire-form text a real web client sends
+// (testdata/wire_capture/testopscoverage_captured.graphql).
+const registeredTestOpsCoverageDocument = `query TestOpsCoverage($orgId: String!, $batch: AnalyticsRequestInput!) {
+  analytics(orgId: $orgId, batch: $batch) {
+    timeseries {
+      dimension
+      dimensionValue
+      measure
+      buckets {
+        date
+        value
+        __typename
+      }
+      __typename
+    }
+    breakdowns {
+      dimension
+      measure
+      items {
+        key
+        value
+        label
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredFeatureFlagTimeseriesDocument is the registered document for the `featureFlagTimeseries`
+// operation, the exact wire-form text a real web client sends
+// (testdata/wire_capture/featureflagtimeseries_captured.graphql).
+const registeredFeatureFlagTimeseriesDocument = `query FeatureFlagTimeseries($orgId: String!, $batch: AnalyticsRequestInput!) {
+  analytics(orgId: $orgId, batch: $batch) {
+    timeseries {
+      dimension
+      dimensionValue
+      measure
+      buckets {
+        date
+        value
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredTestopsRiskDocument is the registered document for the
+// `testopsRisk` operation, the exact wire-form text a real web client
+// sends (testdata/wire_capture/testopsrisk_captured.graphql).
+const registeredTestopsRiskDocument = `query TestOpsRisk($orgId: String!, $input: TestOpsRiskInput!) {
+  testopsRisk(orgId: $orgId, input: $input) {
+    releaseConfidence
+    qualityDragHours
+    pipelineStability
+    timeseries {
+      date
+      riskScore
+      __typename
+    }
+    qualityDragBreakdown {
+      category
+      hours
+      __typename
+    }
+    quadrantData {
+      id
+      pipelineSuccessRate
+      testPassRate
+      __typename
+    }
+    confidenceSpark {
+      ts
+      value
+      __typename
+    }
+    confidenceDelta
+    dragSpark {
+      ts
+      value
+      __typename
+    }
+    dragDelta
+    stabilitySpark {
+      ts
+      value
+      __typename
+    }
+    stabilityDelta
+    __typename
+  }
+}`
+
 // registeredBusFactorDocument is the registered document for the
 // `busFactor` operation, the exact wire-form text a real web client sends
 // (testdata/wire_capture/busfactor_captured.graphql).
@@ -1082,6 +1261,286 @@ const registeredAiReviewLoadDocument = `query AIReviewLoad($orgId: String!, $dat
       revertRateDelta
       testGapRateDelta
       incidentRateDelta
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredAiOpportunitiesDocument is the registered document for the
+// `aiOpportunities` operation, the exact wire-form text a real web client sends
+// (testdata/wire_capture/aiopportunities_captured.graphql).
+const registeredAiOpportunitiesDocument = `query AIOpportunities($orgId: String!, $scope: AIScopeInput, $limit: Int! = 5) {
+  aiOpportunities(orgId: $orgId, scope: $scope, limit: $limit) {
+    orgId
+    detectorReady
+    recommendations {
+      opportunityId
+      kind
+      repoId
+      teamId
+      title
+      rationale
+      score
+      evidenceRefs
+      workGraphDrilldowns {
+        rootType
+        rootId
+        label
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredImproveOpportunitiesDocument is the registered document for the
+// `improveOpportunities` operation, the exact wire-form text a real web client sends
+// (testdata/wire_capture/improveopportunities_captured.graphql).
+const registeredImproveOpportunitiesDocument = `query ImproveOpportunities($scope: AIScopeInput, $limit: Int! = 10, $windowDays: Int! = 30) {
+  improveOpportunities(scope: $scope, limit: $limit, windowDays: $windowDays) {
+    orgId
+    detectorReady
+    totalCount
+    opportunities {
+      opportunityId
+      kind
+      entityType
+      entityId
+      title
+      rationale
+      score
+      severity
+      evidenceRefs
+      recommendedAction
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredAiGovernanceSummaryDocument is the registered document for the
+// `aiGovernanceSummary` operation, the exact wire-form text a real web client sends
+// (testdata/wire_capture/aigovernancesummary_captured.graphql).
+const registeredAiGovernanceSummaryDocument = `query AIGovernanceSummary($orgId: String!, $dateRange: AIDateRangeInput!, $scope: AIScopeInput, $violationLimit: Int! = 50) {
+  aiGovernanceSummary(
+    orgId: $orgId
+    dateRange: $dateRange
+    scope: $scope
+    violationLimit: $violationLimit
+  ) {
+    orgId
+    startDate
+    endDate
+    dataAvailable
+    recentViolations {
+      ruleId
+      severity
+      subjectType
+      subjectId
+      teamId
+      repoId
+      observedAt
+      evidence
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredAiWorkflowDrilldownDocument is the registered document for the
+// `aiWorkflowDrilldown` operation, the exact wire-form text a real web client sends
+// (testdata/wire_capture/aiworkflowdrilldown_captured.graphql).
+const registeredAiWorkflowDrilldownDocument = `query AIWorkflowDrilldown($orgId: String!, $rootType: AIWorkflowRootTypeInput!, $rootId: String!, $depth: Int! = 3, $limit: Int! = 100) {
+  aiWorkflowDrilldown(
+    orgId: $orgId
+    rootType: $rootType
+    rootId: $rootId
+    depth: $depth
+    limit: $limit
+  ) {
+    orgId
+    rootType
+    rootId
+    partial
+    dataAvailable
+    nodes {
+      nodeType
+      nodeId
+      __typename
+    }
+    edges {
+      edgeId
+      sourceType
+      sourceId
+      targetType
+      targetId
+      edgeType
+      confidence
+      source
+      evidence
+      provider
+      repoId
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredAiRiskBreakdownDocument is the registered document for the
+// `aiRiskBreakdown` operation, the exact wire-form text a real web client sends
+// (testdata/wire_capture/airiskbreakdown_captured.graphql).
+const registeredAiRiskBreakdownDocument = `query AIRiskBreakdown($orgId: String!, $dateRange: AIDateRangeInput!, $scope: AIScopeInput) {
+  aiRiskBreakdown(orgId: $orgId, dateRange: $dateRange, scope: $scope) {
+    orgId
+    startDate
+    endDate
+    dataAvailable
+    byBucket {
+      bucket
+      prsTotal
+      reworkPrs
+      reworkRate
+      revertPrs
+      revertRate
+      testGapPrs
+      testGapRate
+      incidentsCount
+      incidentRate
+      __typename
+    }
+    hotspotOverlap {
+      bucket
+      prsTotal
+      prsTouchingHotspots
+      hotspotOverlapRate
+      avgHotspotRiskScore
+      __typename
+    }
+    complexityOverlap {
+      bucket
+      prsTotal
+      prsTouchingHighComplexity
+      complexityOverlapRate
+      __typename
+    }
+    missingStates {
+      key
+      title
+      guidance
+      __typename
+    }
+    __typename
+  }
+  aiComparison(orgId: $orgId, dateRange: $dateRange, scope: $scope) {
+    orgId
+    startDate
+    endDate
+    dataAvailable
+    aiSide {
+      bucket
+      prsTotal
+      prsMerged
+      cycleTimeAvgHours
+      reviewsPerPr
+      reworkRate
+      revertRate
+      testGapRate
+      incidentRate
+      __typename
+    }
+    baselineSide {
+      bucket
+      prsTotal
+      prsMerged
+      cycleTimeAvgHours
+      reviewsPerPr
+      reworkRate
+      revertRate
+      testGapRate
+      incidentRate
+      __typename
+    }
+    delta {
+      cycleTimeDeltaHours
+      reviewsPerPrDelta
+      reworkRateDelta
+      revertRateDelta
+      testGapRateDelta
+      incidentRateDelta
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredAiAttributedPrsDocument is the registered document for the
+// `aiAttributedPrs` operation, the exact wire-form text a real web client sends
+// (testdata/wire_capture/aiattributedprs_captured.graphql).
+const registeredAiAttributedPrsDocument = `query AIAttributedPrs($orgId: String!, $dateRange: AIDateRangeInput!, $scope: AIScopeInput, $limit: Int! = 50, $offset: Int! = 0) {
+  aiAttributedPrs(
+    orgId: $orgId
+    dateRange: $dateRange
+    scope: $scope
+    limit: $limit
+    offset: $offset
+  ) {
+    orgId
+    startDate
+    endDate
+    total
+    hasMore
+    dataAvailable
+    rows {
+      repoId
+      number
+      title
+      kind
+      workType
+      teamId
+      mergedAt
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredAiAttributionOverviewDocument is the registered document for the
+// `aiAttributionOverview` operation, the exact wire-form text a real web client sends
+// (testdata/wire_capture/aiattributionoverview_captured.graphql).
+const registeredAiAttributionOverviewDocument = `query AIAttributionOverview($orgId: String!, $dateRange: AIDateRangeInput!, $scope: AIAttributionScopeInput, $limit: Int! = 50, $offset: Int! = 0) {
+  aiAttributionOverview(
+    orgId: $orgId
+    dateRange: $dateRange
+    scope: $scope
+    limit: $limit
+    offset: $offset
+  ) {
+    orgId
+    startDate
+    endDate
+    mix {
+      kind
+      count
+      share
+      __typename
+    }
+    totalAttributed
+    hasMore
+    dataAvailable
+    rows {
+      subjectType
+      subjectId
+      repoId
+      provider
+      kind
+      source
+      confidence
+      actor
+      evidence
+      observedAt
+      teamId
       __typename
     }
     __typename
@@ -2170,6 +2629,7 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		"releaseImpact":                     digestHex(registeredReleaseImpactDocument),
 		"workGraphEdges":                    digestHex(registeredWorkGraphEdgesDocument),
 		"workGraphFlow":                     digestHex(registeredWorkGraphFlowDocument),
+		"workUnitTeamAttributions":          digestHex(registeredWorkUnitTeamAttributionsDocument),
 		"workGraphArtifacts":                digestHex(registeredWorkGraphArtifactsDocument),
 		"flowMatrix":                        digestHex(registeredFlowMatrixDocument),
 		"investmentBreakdown":               digestHex(registeredInvestmentBreakdownDocument),
@@ -2188,6 +2648,10 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		"catalogValues":                     digestHex(registeredCatalogValuesDocument),
 		"acrRepositoryScopes":               digestHex(registeredAcrRepositoryScopesDocument),
 		"busFactor":                         digestHex(registeredBusFactorDocument),
+		"testOpsPipeline":                   digestHex(registeredTestOpsPipelineDocument),
+		"testOpsTest":                       digestHex(registeredTestOpsTestDocument),
+		"testOpsCoverage":                   digestHex(registeredTestOpsCoverageDocument),
+		"featureFlagTimeseries":             digestHex(registeredFeatureFlagTimeseriesDocument),
 		"savedReports":                      digestHex(registeredSavedReportsDocument),
 		"savedReport":                       digestHex(registeredSavedReportDocument),
 		"reportRuns":                        digestHex(registeredReportRunsDocument),
@@ -2198,6 +2662,14 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		"aiComparison":                      digestHex(registeredAiComparisonDocument),
 		"aiReviewLoad":                      digestHex(registeredAiReviewLoadDocument),
 		"compoundingRisk":                   digestHex(registeredCompoundingRiskDocument),
+		"aiOpportunities":                   digestHex(registeredAiOpportunitiesDocument),
+		"improveOpportunities":              digestHex(registeredImproveOpportunitiesDocument),
+		"aiGovernanceSummary":               digestHex(registeredAiGovernanceSummaryDocument),
+		"aiWorkflowDrilldown":               digestHex(registeredAiWorkflowDrilldownDocument),
+		"aiRiskBreakdown":                   digestHex(registeredAiRiskBreakdownDocument),
+		"aiAttributedPrs":                   digestHex(registeredAiAttributedPrsDocument),
+		"aiAttributionOverview":             digestHex(registeredAiAttributionOverviewDocument),
+		"testopsRisk":                       digestHex(registeredTestopsRiskDocument),
 	}
 	// CHAOS-4710 deliverable 3: log the mounted set HERE, where
 	// digestByOperation actually lives, rather than handing main.go a

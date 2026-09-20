@@ -3,6 +3,8 @@ package goapiproof
 import (
 	"fmt"
 	"sort"
+	"strings"
+	"time"
 )
 
 // Window is the request window every windowed operation is asked for.
@@ -245,8 +247,8 @@ var operationSpecs = map[string]OperationSpec{
 	"aiImpactSummary": {
 		ResponseRoot: "aiImpactSummary",
 		Variables:    aiRollupVariables(nil),
-		Parity:       aiImpactSummaryParity(),
-		Variants: append(aiRollupVariants(aiImpactSummaryParity()),
+		Parity:       nonEmpty(aiImpactSummaryParity(), "data.aiImpactSummary.daily"),
+		Variants: append(aiRollupVariants(nonEmpty(aiImpactSummaryParity(), "data.aiImpactSummary.daily"), nonEmpty(aiImpactSummaryParity(), "data.aiImpactSummary.daily")),
 			aiInstanceVariant("REPO_VALID", "a repository id that has rollup rows", "repoId", aiImpactSummaryParity(), "data.aiImpactSummary.daily", "data.aiImpactSummary.repoBreakdown", "scopeId"),
 			aiInstanceVariant("REPO_NAME_VALID", "the full name of a repository that has rollup rows", "repoId", aiImpactSummaryParity(), "data.aiImpactSummary.daily", "", ""),
 			aiInstanceVariant("TEAM_VALID", "a team id stored on rollup rows", "teamId", aiImpactSummaryParity(), "data.aiImpactSummary.daily", "data.aiImpactSummary.teamBreakdown", "scopeId"),
@@ -255,7 +257,7 @@ var operationSpecs = map[string]OperationSpec{
 	"aiComparison": {
 		ResponseRoot: "aiComparison",
 		Variables:    aiRollupVariables(nil),
-		Variants: append(aiRollupVariants(Options{}),
+		Variants: append(aiRollupVariants(Options{}, Options{}),
 			aiInstanceVariant("REPO_VALID", "a repository id that has rollup rows", "repoId", Options{}, "", "", ""),
 			aiInstanceVariant("REPO_NAME_VALID", "the full name of a repository that has rollup rows", "repoId", Options{}, "", "", ""),
 			aiInstanceVariant("TEAM_VALID", "a team id stored on rollup rows", "teamId", Options{}, "", "", ""),
@@ -264,8 +266,8 @@ var operationSpecs = map[string]OperationSpec{
 	"aiReviewLoad": {
 		ResponseRoot: "aiReviewLoad",
 		Variables:    aiRollupVariables(nil),
-		Parity:       aiReviewLoadParity(),
-		Variants: append(aiRollupVariants(aiReviewLoadParity()),
+		Parity:       nonEmpty(aiReviewLoadParity(), "data.aiReviewLoad.byBucket"),
+		Variants: append(aiRollupVariants(nonEmpty(aiReviewLoadParity(), "data.aiReviewLoad.byBucket"), nonEmpty(Options{}, "data.aiReviewLoad.byBucket")),
 			aiInstanceVariant("REPO_VALID", "a repository id that has rollup rows", "repoId", aiReviewLoadParity(), "data.aiReviewLoad.byBucket", "", ""),
 			aiInstanceVariant("REPO_NAME_VALID", "the full name of a repository that has rollup rows", "repoId", aiReviewLoadParity(), "data.aiReviewLoad.byBucket", "", ""),
 			aiInstanceVariant("TEAM_VALID", "a team id that has rollup rows and whose repo patterns select a repository", "teamId", aiReviewLoadParity(), "data.aiReviewLoad.byBucket", "", ""),
@@ -319,6 +321,129 @@ var operationSpecs = map[string]OperationSpec{
 			compoundingRiskRowsVariant("TREND_CLAMPED_HIGH", "REPO", map[string]any{"breakout": "REPO", "trendDays": 1000}),
 			compoundingRiskPinnedTrendVariant("TREND_CLAMPED_LOW", 0),
 		},
+	},
+	"aiOpportunities": {
+		ResponseRoot: "aiOpportunities",
+		Variables:    aiOpportunityVariables(nil, 25),
+		Parity:       requireLists(aiOpportunitiesParity(), "data.aiOpportunities.recommendations"),
+		Variants: append(aiOpportunityVariants(),
+			aiOpportunityInstanceVariant("REPO_VALID", "a repository id with rollup rows, commits or pull requests that trip a rule", "repoId"),
+			aiOpportunityInstanceVariant("REPO_NAME_VALID", "the full name of a repository that trips a rule", "repoId"),
+			aiOpportunityInstanceVariant("TEAM_VALID", "a team id stored on rollup rows that trip a metric rule", "teamId"),
+		),
+	},
+	"improveOpportunities": {
+		ResponseRoot: "improveOpportunities",
+		Variables:    improveVariables(nil, 10, 30),
+		Parity:       requireLists(improveOpportunitiesParity(), "data.improveOpportunities.opportunities"),
+		Variants: []Variant{
+			improveVariant("LIMIT_ONE", nil, 1, 30),
+			improveVariant("LIMIT_OVER_CEILING", nil, 500, 30),
+			improveVariant("WINDOW_ONE_DAY", nil, 10, 1),
+			improveVariant("WINDOW_OVER_CEILING", nil, 10, 9999),
+			improveVariant("REPO_UNKNOWN", map[string]any{"repoId": "00000000-0000-0000-0000-000000000001"}, 10, 30),
+			improveVariant("REPO_MALFORMED", map[string]any{"repoId": "not-a-uuid"}, 10, 30),
+			improveVariant("TEAM_UNKNOWN", map[string]any{"teamId": "team-abc-123"}, 10, 30),
+			improveInstanceVariant("REPO_VALID", "a repository id with at least five days of repository metrics that trip a rule", "repoId"),
+			improveInstanceVariant("TEAM_VALID", "a team id with at least five days of work-item metrics that trip a rule", "teamId"),
+		},
+	},
+	"aiGovernanceSummary": {
+		ResponseRoot: "aiGovernanceSummary",
+		Variables:    aiGovernanceVariables(nil, 50),
+		Parity:       requireLists(aiGovernanceParity(), "data.aiGovernanceSummary.recentViolations"),
+		Variants: append(aiGovernanceVariants(),
+			aiGovernanceInstanceVariant("REPO_VALID", "a repository id that has policy events in the window", "repoId", "data.aiGovernanceSummary.recentViolations", "repoId"),
+			aiGovernanceInstanceVariant("REPO_NAME_VALID", "the full name of a repository that has policy events in the window", "repoId", "data.aiGovernanceSummary.recentViolations", ""),
+			aiGovernanceInstanceVariant("TEAM_VALID", "a team id stored on policy events in the window", "teamId", "data.aiGovernanceSummary.recentViolations", "teamId"),
+		),
+	},
+	"aiWorkflowDrilldown": {
+		ResponseRoot: "aiWorkflowDrilldown",
+		Variables:    aiWorkflowVariables("PR", "no-such-org:0", 3, 100),
+		Parity:       aiWorkflowParity(),
+		Variants: []Variant{
+			aiWorkflowVariant("ISSUE_UNKNOWN", "ISSUE", "NO-SUCH-1", 3, 100),
+			aiWorkflowVariant("WORK_UNIT_UNKNOWN", "WORK_UNIT", "no-such-unit", 3, 100),
+			aiWorkflowVariant("DEPTH_ZERO", "PR", "no-such-org:0", 0, 100),
+			aiWorkflowVariant("LIMIT_ZERO", "PR", "no-such-org:0", 3, 0),
+			aiWorkflowInstanceVariant("PR_VALID", "a pull request workflow id (repository id, colon, number) that has AI workflow edges", "PR"),
+			aiWorkflowInstanceVariant("ISSUE_VALID", "an issue id that has AI workflow edges", "ISSUE"),
+			aiWorkflowInstanceVariant("WORK_UNIT_VALID", "a work unit id that has AI workflow edges", "WORK_UNIT"),
+		},
+	},
+	"aiRiskBreakdown": {
+		ResponseRoot: "aiRiskBreakdown",
+		Variables:    aiRollupVariables(nil),
+		Parity:       nonEmpty(aiRiskBreakdownParity(), "data.aiRiskBreakdown.byBucket"),
+		Variants: append(aiRollupVariants(nonEmpty(aiRiskBreakdownParity(), "data.aiRiskBreakdown.byBucket"), nonEmpty(Options{}, "data.aiRiskBreakdown.byBucket")),
+			aiInstanceVariant("REPO_VALID", "a repository id that has rollup rows", "repoId", aiRiskBreakdownParity(), "data.aiRiskBreakdown.byBucket", "", ""),
+			aiInstanceVariant("REPO_NAME_VALID", "the full name of a repository that has rollup rows", "repoId", aiRiskBreakdownParity(), "data.aiRiskBreakdown.byBucket", "", ""),
+			aiInstanceVariant("TEAM_VALID", "a team id stored on rollup rows whose repo patterns select a repository", "teamId", aiRiskBreakdownParity(), "data.aiRiskBreakdown.byBucket", "", ""),
+		),
+	},
+	"aiAttributedPrs": {
+		ResponseRoot: "aiAttributedPrs",
+		Variables:    aiPagedVariables(nil),
+		Parity:       nonEmpty(aiAttributedPrsParity(), "data.aiAttributedPrs.rows"),
+		Variants: append(aiPagedVariants(nonEmpty(aiAttributedPrsParity(), "data.aiAttributedPrs.rows"), map[string]map[string]any{
+			"WORK_TYPE":             {"workType": "pull_request"},
+			"REPO_UNKNOWN":          {"repoId": "00000000-0000-0000-0000-000000000001"},
+			"REPO_NAME_UNKNOWN":     {"repoId": "no-such-org/no-such-repo"},
+			"TEAM_UNKNOWN":          {"teamId": "team-abc-123"},
+			"REPO_AND_TEAM_UNKNOWN": {"repoId": "00000000-0000-0000-0000-000000000001", "teamId": "team-abc-123"},
+		}),
+			aiPagedInstanceVariant("REPO_VALID", "a repository id that has AI-attributed pull requests", "repoId", aiAttributedPrsParity(), "data.aiAttributedPrs.rows", "data.aiAttributedPrs.rows", "repoId"),
+			aiPagedInstanceVariant("REPO_NAME_VALID", "the full name of a repository that has AI-attributed pull requests", "repoId", aiAttributedPrsParity(), "data.aiAttributedPrs.rows", "", ""),
+			aiPagedInstanceVariant("TEAM_VALID", "a team id whose repo patterns select a repository with AI-attributed pull requests", "teamId", aiAttributedPrsParity(), "data.aiAttributedPrs.rows", "data.aiAttributedPrs.rows", "teamId"),
+		),
+	},
+	"aiAttributionOverview": {
+		ResponseRoot: "aiAttributionOverview",
+		Variables:    aiPagedVariables(nil),
+		Parity:       nonEmpty(aiAttributionOverviewParity(), "data.aiAttributionOverview.rows"),
+		Variants: append(aiPagedVariants(nonEmpty(aiAttributionOverviewParity(), "data.aiAttributionOverview.rows"), map[string]map[string]any{
+			"BUCKETS":               {"buckets": []any{"AI_ASSISTED", "HUMAN"}},
+			"REPO_UNKNOWN":          {"repoId": "00000000-0000-0000-0000-000000000001"},
+			"REPO_NAME_UNKNOWN":     {"repoId": "no-such-org/no-such-repo"},
+			"TEAM_UNKNOWN":          {"teamId": "team-abc-123"},
+			"REPO_AND_TEAM_UNKNOWN": {"repoId": "00000000-0000-0000-0000-000000000001", "teamId": "team-abc-123"},
+		}),
+			aiPagedInstanceVariant("REPO_VALID", "a repository id that has resolved attribution records", "repoId", aiAttributionOverviewParity(), "data.aiAttributionOverview.rows", "data.aiAttributionOverview.rows", "repoId"),
+			aiPagedInstanceVariant("REPO_NAME_VALID", "the full name of a repository that has resolved attribution records", "repoId", aiAttributionOverviewParity(), "data.aiAttributionOverview.rows", "", ""),
+			aiPagedInstanceVariant("TEAM_VALID", "a team id whose repo patterns select a repository with resolved attribution records", "teamId", aiAttributionOverviewParity(), "data.aiAttributionOverview.rows", "data.aiAttributionOverview.rows", "teamId"),
+		),
+	},
+	// The four registered analytics documents each carry the batches the web
+	// pages send them: one request per measure the web asks for (so each
+	// measure and dimension branch is compared on its own), one for the whole
+	// page batch, and one per breakdown. Every case is measured only when its
+	// timeseries or breakdown list is non-empty on a leg and every returned
+	// series/breakdown names the measure and dimension asked for (single
+	// requests).
+	"testOpsPipeline": {
+		ResponseRoot: "analytics",
+		Variables:    analyticsBatchVariables(analyticsBatch{Series: pipelineSeries, Breakdowns: pipelineBreakdowns}),
+		Parity:       analyticsBatchParity(analyticsBatch{Series: pipelineSeries, Breakdowns: pipelineBreakdowns}),
+		Variants:     append(analyticsBatchVariants(pipelineSeries, pipelineBreakdowns), analyticsPageBatchVariants("testOpsPipeline")...),
+	},
+	"testOpsTest": {
+		ResponseRoot: "analytics",
+		Variables:    analyticsBatchVariables(analyticsBatch{Series: testSeries, Breakdowns: testBreakdowns}),
+		Parity:       analyticsBatchParity(analyticsBatch{Series: testSeries, Breakdowns: testBreakdowns}),
+		Variants:     append(analyticsBatchVariants(testSeries, testBreakdowns), analyticsPageBatchVariants("testOpsTest")...),
+	},
+	"testOpsCoverage": {
+		ResponseRoot: "analytics",
+		Variables:    analyticsBatchVariables(analyticsBatch{Series: coverageSeries, Breakdowns: coverageBreakdowns}),
+		Parity:       analyticsBatchParity(analyticsBatch{Series: coverageSeries, Breakdowns: coverageBreakdowns}),
+		Variants:     append(analyticsBatchVariants(coverageSeries, coverageBreakdowns), analyticsPageBatchVariants("testOpsCoverage")...),
+	},
+	"featureFlagTimeseries": {
+		ResponseRoot: "analytics",
+		Variables:    analyticsBatchVariables(analyticsBatch{Series: flagSeries}),
+		Parity:       analyticsBatchParity(analyticsBatch{Series: flagSeries}),
+		Variants:     analyticsBatchVariants(flagSeries, nil),
 	},
 	"busFactor": {
 		ResponseRoot: "busFactor",
@@ -897,19 +1022,17 @@ var operationSpecs = map[string]OperationSpec{
 		},
 		Parity: securityAlertsParity,
 		Variants: []Variant{
-			securityAlertsVariant("OPEN_ONLY", map[string]any{"openOnly": true}, nil),
-			securityAlertsVariant("STATES", map[string]any{"states": []any{"FIXED", "DISMISSED"}}, nil),
-			securityAlertsVariant("OPEN_ONLY_OVER_STATES", map[string]any{"openOnly": true, "states": []any{"FIXED"}}, nil),
-			securityAlertsVariant("SEVERITIES", map[string]any{"severities": []any{"CRITICAL", "HIGH", "UNKNOWN"}}, nil),
-			securityAlertsVariant("SOURCES", map[string]any{"sources": []any{"DEPENDABOT", "GITLAB_DEPENDENCY"}}, nil),
-			securityAlertsVariant("REPO_IDS", map[string]any{"repoIds": []any{"00000000-0000-0000-0000-000000000001"}}, nil),
-			securityAlertsVariant("SINCE_UNTIL", map[string]any{"since": "2026-06-01", "until": "2026-08-31"}, nil),
-			securityAlertsVariant("SEARCH", map[string]any{"search": "ABC-123"}, nil),
+			securityAlertsEchoVariant("OPEN_ONLY", map[string]any{"openOnly": true}, "node.state", "open", "detected", "confirmed"),
+			securityAlertsEchoVariant("OPEN_ONLY_OVER_STATES", map[string]any{"openOnly": true, "states": []any{"FIXED"}}, "node.state", "open", "detected", "confirmed"),
+			securityAlertsEchoVariant("SEVERITIES", map[string]any{"severities": []any{"CRITICAL", "HIGH", "UNKNOWN"}}, "node.severity", "critical", "high", "unknown"),
+			securityAlertsEchoVariant("SOURCES", map[string]any{"sources": []any{"DEPENDABOT", "GITLAB_DEPENDENCY"}}, "node.source", "dependabot", "gitlab_dependency"),
+			securityAlertsDateRangeVariant("SINCE_UNTIL", "2026-06-01", "2026-08-31"),
+			securityAlertsStateVariant(),
 			securityAlertsInstanceVariant("REPO_VALID", "a repository id that has alerts", "repoIds", true),
 			securityAlertsInstanceVariant("SEARCH_VALID", "a search term that matches an alert's title, package or CVE", "search", false),
 			securityAlertsVariant("PAGE_FIRST", nil, map[string]any{"first": 5}),
 			securityAlertsSecondPageVariant(),
-			securityAlertsVariant("PAGE_ZERO", nil, map[string]any{"first": 0}),
+			securityAlertsPageZeroVariant(),
 		},
 	},
 	"securityOverview": {
@@ -918,13 +1041,11 @@ var operationSpecs = map[string]OperationSpec{
 			return map[string]any{"orgId": orgID, "filters": nil}
 		},
 		Variants: []Variant{
-			securityOverviewVariant("OPEN_ONLY", map[string]any{"openOnly": true}),
-			securityOverviewVariant("STATES", map[string]any{"states": []any{"FIXED", "DISMISSED"}}),
-			securityOverviewVariant("SEVERITIES", map[string]any{"severities": []any{"CRITICAL", "HIGH", "UNKNOWN"}}),
-			securityOverviewVariant("SOURCES", map[string]any{"sources": []any{"DEPENDABOT", "GITLAB_DEPENDENCY"}}),
-			securityOverviewVariant("REPO_IDS", map[string]any{"repoIds": []any{"00000000-0000-0000-0000-000000000001"}}),
-			securityOverviewVariant("SINCE_UNTIL", map[string]any{"since": "2026-06-01", "until": "2026-08-31"}),
-			securityOverviewVariant("SEARCH", map[string]any{"search": "ABC-123"}),
+			securityOverviewNonEmptyVariant("OPEN_ONLY", map[string]any{"openOnly": true}),
+			securityOverviewOpenStateVariant(),
+			securityOverviewNonEmptyVariant("SEVERITIES", map[string]any{"severities": []any{"CRITICAL", "HIGH", "UNKNOWN"}}),
+			securityOverviewNonEmptyVariant("SOURCES", map[string]any{"sources": []any{"DEPENDABOT", "GITLAB_DEPENDENCY"}}),
+			securityOverviewNonEmptyVariant("SINCE_UNTIL", map[string]any{"since": "2026-06-01", "until": "2026-08-31"}),
 			securityOverviewRepoVariant("REPO_VALID", "a repository id that has open alerts"),
 		},
 	},
@@ -934,6 +1055,29 @@ var operationSpecs = map[string]OperationSpec{
 	// are integer sums divided once in Go. All three are exact, and a
 	// tolerance on an exact field excuses a real defect
 	// (lane-goapi-parity, CHAOS-5451).
+	"testopsRisk": {
+		ResponseRoot: "testopsRisk",
+		Variables: func(orgID string, w Window) map[string]any {
+			return testopsRiskVariables(orgID, w.SinceDate, w.UntilDate)
+		},
+		Parity: testopsRiskParity(true, testopsRiskBaseDeltas...),
+		Variants: []Variant{
+			{
+				Name: "SINGLE_DAY",
+				Variables: func(orgID string, w Window) map[string]any {
+					return testopsRiskVariables(orgID, w.UntilDate, w.UntilDate)
+				},
+				Parity: testopsRiskParity(false),
+			},
+			{
+				Name: "WEEK",
+				Variables: func(orgID string, w Window) map[string]any {
+					return testopsRiskVariables(orgID, testopsRiskWeekStart(w.UntilDate), w.UntilDate)
+				},
+				Parity: testopsRiskParity(false, testopsRiskAllDeltas...),
+			},
+		},
+	},
 	"throughputForecast": {
 		ResponseRoot: "throughputForecast",
 		RootNullable: true,
@@ -987,7 +1131,13 @@ var operationSpecs = map[string]OperationSpec{
 	"workGraphEdges": {
 		ResponseRoot: "workGraphEdges",
 		Variables:    workGraphVariables,
-		Parity:       workGraphEdgesParity,
+		Parity:       workGraphEdgesParityAt(workGraphEdgesDefaultLimit),
+		// Two comparing cases on pages the limit does not cut, so the whole-list
+		// declaration applies and a dropped edge cannot hide.
+		Variants: []Variant{
+			workGraphEdgesSourceTypeSmallVariant("SOURCE_TYPE_SMALL", "a node type whose whole edge set as a source is below 200, for example a feature flag or an incident type"),
+			workGraphEdgesNodeVariant("NODE_ID_VALID", "a node id that is the source or target of at least one edge and of fewer than 200"),
+		},
 	},
 	// releaseImpact is the release impact document the feature flag pages
 	// send: the `workGraphEdges` root field with the filters `nodeId`,
@@ -1000,7 +1150,7 @@ var operationSpecs = map[string]OperationSpec{
 	"releaseImpact": {
 		ResponseRoot: "workGraphEdges",
 		Variables:    releaseImpactVariables,
-		Parity:       workGraphEdgesParity,
+		Parity:       workGraphEdgesParityAt(200),
 		Variants: []Variant{
 			releaseImpactVariant("LIMIT_ONE", map[string]any{"nodeId": "", "sourceType": "RELEASE", "limit": 1}),
 			releaseImpactNodeVariant("NODE_ID_VALID", "a node id that is the source or target of at least one edge"),
@@ -1008,6 +1158,18 @@ var operationSpecs = map[string]OperationSpec{
 		},
 	},
 	"workGraphFlow": {Variables: workGraphVariables, ResponseRoot: "workGraphFlow"},
+	// workUnitTeamAttributions is the investment view's team attribution
+	// query. See workunitteamattributions.go for the requests.
+	"workUnitTeamAttributions": {
+		ResponseRoot: "workUnitTeamAttributions",
+		Variables:    workUnitTeamAttributionsVariables,
+		Variants: []Variant{
+			workUnitTeamAttributionsTeamVariant("TEAM_UNKNOWN", "team-abc-123"),
+			workUnitTeamAttributionsTeamVariant("TEAM_BLANK", ""),
+			workUnitTeamAttributionsUnitVariant("WORK_UNIT_VALID", "a work unit id whose member work items have team attributions"),
+			workUnitTeamAttributionsTeamOwnedVariant("TEAM_OWNS_UNITS", "a team id that is the owning team of at least one work unit"),
+		},
+	},
 }
 
 // capacityForecastStochasticLeaves is the one StochasticLeafClass in this
@@ -1141,20 +1303,65 @@ func investmentFullVariables(orgID string, w Window) map[string]any {
 	}}
 }
 
-// workGraphEdgesParity is the declared comparator configuration shared by
-// every request that reads the workGraphEdges resolver.
-var workGraphEdgesParity = Options{BaselineDefects: []BaselineDefect{{
-	Ticket:             "CHAOS-5791",
-	Reason:             "work_graph_edges is a ReplacingMergeTree keyed on the edge identity; the baseline plane reads it with no merge-time collapse, so an unmerged duplicate physical version of one logical edge surfaces as two content-identical rows sharing one edgeId, spending one extra slot of the page limit and shifting every later element's position, including which edge's id pageInfo.endCursor names. The candidate plane collapses duplicate versions before applying the page limit, so it carries no repeated edgeId. Candidate is correct.",
-	Paths:              []string{"data.workGraphEdges.edges", "data.workGraphEdges.pageInfo.endCursor"},
-	Intermittent:       true,
-	IntermittentReason: "present only while the source table holds an unmerged duplicate physical version of some edge; a comparison taken after the background merge collapses it shows no repeated edgeId on the baseline side either",
-	WorkGraphEdgeDedupShape: &WorkGraphEdgeDedupShape{
-		EdgesListPath:      "data.workGraphEdges.edges",
-		IDField:            "edgeId",
-		TrailingCursorPath: "data.workGraphEdges.pageInfo.endCursor",
-	},
-}}}
+// workGraphEdgesDefaultLimit is the page limit the resolver applies when the
+// request sends none.
+const workGraphEdgesDefaultLimit = 1000
+
+// workGraphEdgesParityAt is the declared comparator configuration for a request
+// that reads the workGraphEdges resolver with the page limit `limit`. The
+// whole-list declaration carries that limit as its RequestLimit: a baseline
+// list that reaches it is a page the limit may have cut, where a list-length
+// difference cannot be told from a dropped edge, so the declaration refuses.
+func workGraphEdgesParityAt(limit int) Options {
+	return Options{BaselineDefects: []BaselineDefect{workGraphEdgesPerEdgeDefect(limit), workGraphEdgesWholePageDefect(limit)}}
+}
+
+// workGraphEdgesNonCutParityAt is the configuration of a request whose purpose
+// is a page the limit does not cut. It carries only the whole-page declaration:
+// a supplied identifier whose page reaches the limit is then not absorbed by the
+// per-edge declaration, every finding on it stays outside, and the run reports
+// it so a smaller identifier is supplied.
+func workGraphEdgesNonCutParityAt(limit int) Options {
+	return Options{BaselineDefects: []BaselineDefect{workGraphEdgesWholePageDefect(limit)}}
+}
+
+// workGraphEdgesPerEdgeDefect owns a page the limit may have cut.
+func workGraphEdgesPerEdgeDefect(limit int) BaselineDefect {
+	return BaselineDefect{
+		Ticket:             "CHAOS-5791",
+		Reason:             "work_graph_edges is a ReplacingMergeTree keyed on the edge identity; the baseline plane reads it with no merge-time collapse, so an unmerged duplicate physical version of one logical edge surfaces as two content-identical rows sharing one edgeId, spending one extra slot of the page limit and shifting every later element's position, including which edge's id pageInfo.endCursor names. The candidate plane collapses duplicate versions before applying the page limit, so it carries no repeated edgeId. Candidate is correct. Known limit (CHAOS-6116): on a page the limit cuts this shape resolves a positional finding to the baseline id at that index and admits a baseline-only id on its own copies agreeing, so a candidate that dropped a distinct id on such a page would be absorbed; the non-cut variants under CHAOS-6114 re-prove the operation where that cannot hide.",
+		Paths:              []string{"data.workGraphEdges.edges", "data.workGraphEdges.pageInfo.endCursor"},
+		Intermittent:       true,
+		IntermittentReason: "present only while the source table holds an unmerged duplicate physical version of some edge; a comparison taken after the background merge collapses it shows no repeated edgeId on the baseline side either",
+		WorkGraphEdgeDedupShape: &WorkGraphEdgeDedupShape{
+			EdgesListPath:      "data.workGraphEdges.edges",
+			IDField:            "edgeId",
+			TrailingCursorPath: "data.workGraphEdges.pageInfo.endCursor",
+			CutPageLimit:       limit,
+		},
+	}
+}
+
+// workGraphEdgesWholePageDefect owns a page the limit did not cut.
+func workGraphEdgesWholePageDefect(limit int) BaselineDefect {
+	return BaselineDefect{
+		Ticket:             "CHAOS-6114",
+		Reason:             "The same duplicate-version mechanism as CHAOS-5791, on a page the request limit does not cut: work_graph_edges is a ReplacingMergeTree, the baseline plane reads it with no merge-time collapse, so its list and its totalCount (the length of the list it returns) count every unmerged physical version of an edge, while the candidate plane collapses versions before counting, so its list and totalCount count distinct edges. Measured on production for one node id: baseline 147 rows over 73 distinct edgeIds (72 ids twice, 1 id three times), totalCount 147; candidate 73 rows, 73 distinct, totalCount 73; the two id sets identical. This declaration owns every finding on such a page (list length, totalCount, each positional element, the trailing cursor), and the per-edge declaration above applies only to a page the limit may have cut. Admitted only when the baseline's raw length is below the request limit, the candidate ids equal the baseline's distinct ids in the baseline's first-occurrence order, every shared id is byte-identical on both planes, the candidate carries no repeated id and is in confidence-descending, edgeId-ascending order, and each plane's totalCount equals its own list length. A candidate that drops a distinct id, invents one, disagrees with a shared row, or reports a totalCount other than its own length stays outside. Candidate is correct.",
+		Paths:              []string{"data.workGraphEdges.edges", "data.workGraphEdges.totalCount", "data.workGraphEdges.pageInfo.endCursor"},
+		Intermittent:       true,
+		IntermittentReason: "present only while the source table holds an unmerged duplicate physical version of some edge on a page the limit does not cut; a comparison taken after the background merge collapses it shows equal lists and equal counts",
+		DuplicateCollapseLengthShape: &DuplicateCollapseLengthShape{
+			ListPath:      "data.workGraphEdges.edges",
+			IDField:       "edgeId",
+			CountPath:     "data.workGraphEdges.totalCount",
+			OrderField:    "confidence",
+			OrderTieField: "edgeId",
+			RequestLimit:  limit,
+			OwnsPage:      true,
+			CursorPath:    "data.workGraphEdges.pageInfo.endCursor",
+		},
+	}
+}
 
 func workGraphVariables(orgID string, _ Window) map[string]any {
 	return map[string]any{"orgId": orgID, "filters": map[string]any{}}
@@ -1410,10 +1617,37 @@ func securityAlertsSecondPageVariant() Variant {
 // aiRollupVariables builds the shared request of the AI rollup operations: the
 // org, the run's day window and the given scope (nil sends no scope).
 func aiRollupVariables(scope map[string]any) func(orgID string, w Window) map[string]any {
+	return aiRollupVariablesTo(scope, false)
+}
+
+// aiClock is the prover's clock for windows that follow the newest data.
+var aiClock = func() time.Time { return time.Now().UTC() }
+
+// aiWindowEnd is the last day of a window that reaches the newest complete
+// data: the later of the run's until-date and the last complete UTC day (the
+// day before the run day). A team id is stored only on the newest rollup
+// days, so a team-scoped request must end there rather than at a fixed date
+// that goes stale; the run day itself is excluded because the daily jobs
+// write it during the day, and two legs straddling a write would differ.
+func aiWindowEnd(w Window) string {
+	lastComplete := aiClock().AddDate(0, 0, -1).Format("2006-01-02")
+	if lastComplete > w.UntilDate {
+		return lastComplete
+	}
+	return w.UntilDate
+}
+
+// aiRollupVariablesTo is aiRollupVariables with the window's end optionally
+// extended to the run day.
+func aiRollupVariablesTo(scope map[string]any, toRunDay bool) func(orgID string, w Window) map[string]any {
 	return func(orgID string, w Window) map[string]any {
+		end := w.UntilDate
+		if toRunDay {
+			end = aiWindowEnd(w)
+		}
 		vars := map[string]any{
 			"orgId":     orgID,
-			"dateRange": map[string]any{"startDate": w.SinceDate, "endDate": w.UntilDate},
+			"dateRange": map[string]any{"startDate": w.SinceDate, "endDate": end},
 			"scope":     nil,
 		}
 		if scope != nil {
@@ -1427,7 +1661,12 @@ func aiRollupVariables(scope map[string]any) func(orgID string, w Window) map[st
 // have. The repository and team values name nothing in any org, so both planes
 // answer the empty window for them; a scope that selects real rows needs a
 // run-supplied identifier.
-func aiRollupVariants(parity Options) []Variant {
+//
+// A variant that selects nothing by construction carries no declaration: a
+// declared field that matches nothing refuses the run. The work-type variant
+// carries workTypeParity, because a work-type scope can turn a declared
+// aggregate off.
+func aiRollupVariants(parity, workTypeParity Options) []Variant {
 	scopes := []struct {
 		name  string
 		scope map[string]any
@@ -1441,7 +1680,14 @@ func aiRollupVariants(parity Options) []Variant {
 	}
 	variants := make([]Variant, 0, len(scopes))
 	for _, sc := range scopes {
-		variants = append(variants, Variant{Name: sc.name, Variables: aiRollupVariables(sc.scope), Parity: parity})
+		p := Options{}
+		switch sc.name {
+		case "BUCKETS":
+			p = parity
+		case "WORK_TYPE":
+			p = workTypeParity
+		}
+		variants = append(variants, Variant{Name: sc.name, Variables: aiRollupVariables(sc.scope), Parity: p})
 	}
 	return variants
 }
@@ -1480,7 +1726,7 @@ func aiInstanceVariant(name, kind, scopeField string, parity Options, nonEmpty, 
 	}
 	return Variant{
 		Name:      name,
-		Variables: aiRollupVariables(map[string]any{}),
+		Variables: aiRollupVariablesTo(map[string]any{}, scopeField == "teamId"),
 		Parity:    parity,
 		Instance: &VariantInstance{
 			Kind: kind,
@@ -1575,6 +1821,346 @@ func experimentsVariant(name, level string, ids []string) Variant {
 			return map[string]any{"orgId": orgID, "filters": map[string]any{"scope": scope}}
 		},
 	}
+}
+
+// aiOpportunityVariables builds the AI opportunity request: the org, the
+// scope (nil sends none) and the limit.
+func aiOpportunityVariables(scope map[string]any, limit int) func(orgID string, w Window) map[string]any {
+	return func(orgID string, _ Window) map[string]any {
+		vars := map[string]any{"orgId": orgID, "scope": nil, "limit": limit}
+		if scope != nil {
+			vars["scope"] = scope
+		}
+		return vars
+	}
+}
+
+// aiOpportunityVariants is one variant per scope and limit branch the
+// detector has. The repository and team values name nothing in any org, so
+// both planes answer no opportunity for them; a scope that selects real rows
+// needs a run-supplied identifier. Variants that select nothing by
+// construction declare nothing.
+func aiOpportunityVariants() []Variant {
+	cases := []struct {
+		name  string
+		scope map[string]any
+		limit int
+	}{
+		{"LIMIT_ONE", nil, 1},
+		{"LIMIT_ZERO", nil, 0},
+		{"LIMIT_OVER_CEILING", nil, 500},
+		{"REPO_UNKNOWN", map[string]any{"repoId": "00000000-0000-0000-0000-000000000001"}, 25},
+		{"REPO_NAME_UNKNOWN", map[string]any{"repoId": "no-such-org/no-such-repo"}, 25},
+		{"TEAM_UNKNOWN", map[string]any{"teamId": "team-abc-123"}, 25},
+		{"REPO_AND_TEAM_UNKNOWN", map[string]any{"repoId": "00000000-0000-0000-0000-000000000001", "teamId": "team-abc-123"}, 25},
+	}
+	variants := make([]Variant, 0, len(cases))
+	for _, c := range cases {
+		p := Options{}
+		if strings.HasPrefix(c.name, "LIMIT_") {
+			p = requireLists(aiOpportunitiesParity(), "data.aiOpportunities.recommendations")
+		}
+		variants = append(variants, Variant{Name: c.name, Variables: aiOpportunityVariables(c.scope, c.limit), Parity: p})
+	}
+	return variants
+}
+
+func aiOpportunityInstanceVariant(name, kind, scopeField string) Variant {
+	parity := aiOpportunitiesParity()
+	parity.RequireNonEmpty = []string{"data.aiOpportunities.recommendations"}
+	return Variant{
+		Name:      name,
+		Variables: aiOpportunityVariables(map[string]any{}, 25),
+		Parity:    parity,
+		Instance: &VariantInstance{
+			Kind: kind,
+			Bind: func(vars map[string]any, value string) { vars["scope"].(map[string]any)[scopeField] = value },
+			EchoFor: func(value string) []ScopeEcho {
+				if scopeField == "teamId" {
+					return []ScopeEcho{{List: "data.aiOpportunities.recommendations", Fields: []string{"teamId"}, Value: value}}
+				}
+				return nil
+			},
+		},
+	}
+}
+
+// aiOpportunitiesParity declares the opportunity list unordered and its score
+// a merged floating-point aggregate: the detector's first read has no ordering
+// and the flaky-test score derives from a summed rate.
+func aiOpportunitiesParity() Options {
+	return Options{
+		FloatTierB: map[string]string{
+			"data.aiOpportunities.recommendations.score": "the flaky-test score derives from sum(flake_rate * total_cases) / sum(total_cases), a floating-point aggregate ClickHouse merges in thread-completion order, so the last bits differ run to run on both planes (CHAOS-5451)",
+		},
+		OrderInsensitiveLists: []OrderInsensitiveList{{
+			Path:      "data.aiOpportunities.recommendations",
+			KeyFields: []string{"opportunityId"},
+			Reason:    "the detector groups an unordered GROUP BY result in first-seen order and sorts by score, so opportunities with equal scores have no stable relative order",
+			Ticket:    "CHAOS-6081",
+		}},
+	}
+}
+
+func improveVariables(scope map[string]any, limit, windowDays int) func(orgID string, w Window) map[string]any {
+	return func(_ string, _ Window) map[string]any {
+		vars := map[string]any{"scope": nil, "limit": limit, "windowDays": windowDays}
+		if scope != nil {
+			vars["scope"] = scope
+		}
+		return vars
+	}
+}
+
+func improveVariant(name string, scope map[string]any, limit, windowDays int) Variant {
+	p := requireLists(improveOpportunitiesParity(), "data.improveOpportunities.opportunities")
+	if strings.HasSuffix(name, "_UNKNOWN") || name == "REPO_MALFORMED" {
+		p = Options{}
+	}
+	return Variant{Name: name, Variables: improveVariables(scope, limit, windowDays), Parity: p}
+}
+
+func improveInstanceVariant(name, kind, scopeField string) Variant {
+	parity := improveOpportunitiesParity()
+	parity.RequireNonEmpty = []string{"data.improveOpportunities.opportunities"}
+	return Variant{
+		Name:      name,
+		Variables: improveVariables(map[string]any{}, 10, 30),
+		Parity:    parity,
+		Instance: &VariantInstance{
+			Kind: kind,
+			Bind: func(vars map[string]any, value string) { vars["scope"].(map[string]any)[scopeField] = value },
+		},
+	}
+}
+
+// improveOpportunitiesParity declares the score a floating-point aggregate
+// (an average over daily rows) and the list unordered.
+func improveOpportunitiesParity() Options {
+	return Options{
+		FloatTierB: map[string]string{
+			"data.improveOpportunities.opportunities.score": "the score is computed from avg(...) over daily metric rows, a floating-point aggregate ClickHouse merges in thread-completion order, so the last bits differ run to run on both planes (CHAOS-5451)",
+		},
+		OrderInsensitiveLists: []OrderInsensitiveList{{
+			Path:      "data.improveOpportunities.opportunities",
+			KeyFields: []string{"opportunityId"},
+			Reason:    "the detector sorts by score over two unordered GROUP BY results, so opportunities with equal scores have no stable relative order",
+			Ticket:    "CHAOS-6081",
+		}},
+	}
+}
+
+// requireLists returns o requiring the named lists to be non-empty on a leg: a
+// request whose lists are empty on both legs measured nothing.
+func requireLists(o Options, paths ...string) Options {
+	o.RequireNonEmpty = append([]string(nil), paths...)
+	return o
+}
+
+// aiGovernanceVariables builds the governance summary request: the org, the
+// run's day window, the scope (nil sends none) and the violation limit.
+func aiGovernanceVariables(scope map[string]any, violationLimit int) func(orgID string, w Window) map[string]any {
+	return func(orgID string, w Window) map[string]any {
+		vars := aiRollupVariables(scope)(orgID, w)
+		vars["violationLimit"] = violationLimit
+		return vars
+	}
+}
+
+const aiGovernanceTimestampReason = "the violation timestamp is a ClickHouse DateTime64(3, 'UTC') read through a tz-aware driver value; Python's strawberry DateTime scalar isoformat()s it with a \"+00:00\" offset and microsecond digits, while Go's gqlgen DateTime scalar formats the same instant as RFC 3339 with \"Z\" (resolvers/ai.py _to_aware). The instants are equal; only the wire text differs. Go's form is the canonical DateTime wire form; the Python form is the declared defect and stays frozen."
+
+func aiGovernanceVariants() []Variant {
+	scopes := []struct {
+		name  string
+		scope map[string]any
+		limit int
+	}{
+		{"REPO_UNKNOWN", map[string]any{"repoId": "00000000-0000-0000-0000-000000000001"}, 50},
+		{"REPO_NAME_UNKNOWN", map[string]any{"repoId": "no-such-org/no-such-repo"}, 50},
+		{"TEAM_UNKNOWN", map[string]any{"teamId": "team-abc-123"}, 50},
+		{"REPO_AND_TEAM_UNKNOWN", map[string]any{"repoId": "00000000-0000-0000-0000-000000000001", "teamId": "team-abc-123"}, 50},
+		{"VIOLATION_LIMIT_ZERO", nil, 0},
+	}
+	variants := make([]Variant, 0, len(scopes))
+	for _, sc := range scopes {
+		variants = append(variants, Variant{Name: sc.name, Variables: aiGovernanceVariables(sc.scope, sc.limit), Parity: aiGovernanceParity()})
+	}
+	return variants
+}
+
+func aiGovernanceInstanceVariant(name, kind, scopeField, nonEmpty, echoField string) Variant {
+	echoList := ""
+	if echoField != "" {
+		echoList = nonEmpty
+	}
+	v := aiInstanceVariant(name, kind, scopeField, aiGovernanceParity(), nonEmpty, echoList, echoField)
+	v.Variables = aiGovernanceVariables(map[string]any{}, 50)
+	return v
+}
+
+// aiGovernanceParity declares the violation timestamp's wire text a
+// baseline defect.
+func aiGovernanceParity() Options {
+	return Options{BaselineDefects: []BaselineDefect{{
+		Ticket:             "CHAOS-6081",
+		Reason:             aiGovernanceTimestampReason,
+		Paths:              []string{"data.aiGovernanceSummary.recentViolations.observedAt"},
+		Intermittent:       true,
+		IntermittentReason: "the list is empty when the window holds no policy event",
+	}}}
+}
+
+func aiWorkflowVariables(rootType, rootID string, depth, limit int) func(orgID string, w Window) map[string]any {
+	return func(orgID string, _ Window) map[string]any {
+		return map[string]any{"orgId": orgID, "rootType": rootType, "rootId": rootID, "depth": depth, "limit": limit}
+	}
+}
+
+func aiWorkflowVariant(name, rootType, rootID string, depth, limit int) Variant {
+	return Variant{Name: name, Variables: aiWorkflowVariables(rootType, rootID, depth, limit), Parity: aiWorkflowParity()}
+}
+
+// aiWorkflowInstanceVariant walks from a run-supplied root; it is measured
+// only when the walk returns an edge on a leg.
+func aiWorkflowInstanceVariant(name, kind, rootType string) Variant {
+	return Variant{
+		Name:      name,
+		Variables: aiWorkflowVariables(rootType, "", 3, 100),
+		Parity: func() Options {
+			p := aiWorkflowParity()
+			p.RequireNonEmpty = []string{"data.aiWorkflowDrilldown.edges"}
+			return p
+		}(),
+		Instance: &VariantInstance{
+			Kind: kind,
+			Bind: func(vars map[string]any, value string) { vars["rootId"] = value },
+			EchoFor: func(value string) []ScopeEcho {
+				return []ScopeEcho{{List: "data.aiWorkflowDrilldown.rootId", Scalar: true, Value: value}}
+			},
+		},
+	}
+}
+
+// aiWorkflowParity declares the node and edge lists unordered: the edge read
+// is a union of five tables under a row limit with no ordering, so the
+// identical statement returns different orders.
+func aiWorkflowParity() Options {
+	return Options{OrderInsensitiveLists: []OrderInsensitiveList{
+		{
+			Path:      "data.aiWorkflowDrilldown.nodes",
+			KeyFields: []string{"nodeType", "nodeId"},
+			Reason:    "the nodes are collected in the row order of an unordered UNION ALL over five edge tables under a LIMIT, so the same statement can return them in a different order",
+			Ticket:    "CHAOS-6081",
+		},
+		{
+			Path:      "data.aiWorkflowDrilldown.edges",
+			KeyFields: []string{"edgeId"},
+			Reason:    "the edges are the rows of an unordered UNION ALL over five edge tables under a LIMIT, so the same statement can return them in a different order",
+			Ticket:    "CHAOS-6081",
+		},
+	}}
+}
+
+// aiPagedVariables builds the shared request of the paged AI operations: the
+// org, the run's day window, the scope (nil sends none) and the first page.
+func aiPagedVariables(scope map[string]any) func(orgID string, w Window) map[string]any {
+	return aiPagedVariablesTo(scope, false)
+}
+
+func aiPagedVariablesTo(scope map[string]any, toRunDay bool) func(orgID string, w Window) map[string]any {
+	return func(orgID string, w Window) map[string]any {
+		vars := aiRollupVariablesTo(scope, toRunDay)(orgID, w)
+		vars["limit"] = 50
+		vars["offset"] = 0
+		return vars
+	}
+}
+
+// aiPagedVariants is one variant per named scope branch, plus the page
+// branches: a limit below one, a limit above the ceiling and an offset.
+func aiPagedVariants(parity Options, scopes map[string]map[string]any) []Variant {
+	names := make([]string, 0, len(scopes))
+	for name := range scopes {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	variants := make([]Variant, 0, len(names)+3)
+	for _, name := range names {
+		p := parity
+		if strings.HasSuffix(name, "_UNKNOWN") {
+			p = Options{}
+		}
+		variants = append(variants, Variant{Name: name, Variables: aiPagedVariables(scopes[name]), Parity: p})
+	}
+	for _, page := range []struct {
+		name          string
+		limit, offset int
+	}{{"PAGE_ZERO", 0, 0}, {"PAGE_OVER_CEILING", 1000, 0}, {"PAGE_OFFSET", 5, 5}} {
+		limit, offset := page.limit, page.offset
+		variants = append(variants, Variant{
+			Name: page.name,
+			Variables: func(orgID string, w Window) map[string]any {
+				vars := aiPagedVariables(nil)(orgID, w)
+				vars["limit"], vars["offset"] = limit, offset
+				return vars
+			},
+			Parity: pageParity(page.name, parity),
+		})
+	}
+	return variants
+}
+
+// pageParity is a page variant's declaration: an offset page can legitimately
+// hold nothing, so it does not require a non-empty list.
+func pageParity(name string, parity Options) Options {
+	if name == "PAGE_OFFSET" {
+		parity.RequireNonEmpty = nil
+	}
+	return parity
+}
+
+// nonEmpty returns o requiring the named lists to be non-empty on a leg: a
+// request whose lists are empty on both legs measured nothing.
+func nonEmpty(o Options, paths ...string) Options {
+	o.RequireNonEmpty = append([]string(nil), paths...)
+	return o
+}
+
+// aiPagedInstanceVariant is aiInstanceVariant for the paged operations.
+func aiPagedInstanceVariant(name, kind, scopeField string, parity Options, nonEmpty, echoList, echoField string) Variant {
+	v := aiInstanceVariant(name, kind, scopeField, parity, nonEmpty, echoList, echoField)
+	v.Variables = aiPagedVariablesTo(map[string]any{}, scopeField == "teamId")
+	return v
+}
+
+// aiRiskBreakdownParity declares the average hotspot risk score a merged
+// floating-point aggregate.
+func aiRiskBreakdownParity() Options {
+	return Options{FloatTierB: map[string]string{
+		"data.aiRiskBreakdown.hotspotOverlap.avgHotspotRiskScore": "avgIf over file risk scores: ClickHouse merges partial aggregate states in thread-completion order, so the last bits differ run to run on both planes (CHAOS-5451)",
+	}}
+}
+
+const aiAttributionTimestampReason = "the timestamp is a ClickHouse DateTime64(3, 'UTC') read through a tz-aware driver value; Python's strawberry DateTime scalar isoformat()s it with a \"+00:00\" offset and microsecond digits, while Go's gqlgen DateTime scalar formats the same instant as RFC 3339 with \"Z\" (resolvers/ai.py _to_aware). The instants are equal; only the wire text differs. Go's form is the canonical DateTime wire form; the Python form is the declared defect and stays frozen."
+
+func aiAttributedPrsParity() Options {
+	return Options{BaselineDefects: []BaselineDefect{{
+		Ticket:             "CHAOS-6081",
+		Reason:             aiAttributionTimestampReason,
+		Paths:              []string{"data.aiAttributedPrs.rows.mergedAt"},
+		Intermittent:       true,
+		IntermittentReason: "mergedAt is null for an unmerged pull request and the list is empty when nothing is attributed",
+	}}}
+}
+
+func aiAttributionOverviewParity() Options {
+	return Options{BaselineDefects: []BaselineDefect{{
+		Ticket:             "CHAOS-6081",
+		Reason:             aiAttributionTimestampReason,
+		Paths:              []string{"data.aiAttributionOverview.rows.observedAt"},
+		Intermittent:       true,
+		IntermittentReason: "the list is empty when nothing is attributed in the window",
+	}}}
 }
 
 // savedReportDateTimes declares the one divergence on every saved-report
@@ -1755,4 +2341,357 @@ func experimentsTeamUnknownVariant() Variant {
 		Reason: "the reference drops the team filter when the team resolves to no member metric rows and answers the whole org; Go narrows an unresolved team to nothing through team ownership and answers the steady-flow card",
 	}
 	return v
+}
+
+// analyticsSeries is one timeseries request a web page sends.
+type analyticsSeries struct{ Dimension, Measure string }
+
+// analyticsBreakdown is one breakdown request a web page sends.
+type analyticsBreakdown struct {
+	Dimension, Measure string
+	TopN               int
+}
+
+// analyticsBatch is one batch of requests.
+type analyticsBatch struct {
+	Series     []analyticsSeries
+	Breakdowns []analyticsBreakdown
+}
+
+var (
+	pipelineSeries = []analyticsSeries{
+		{"TEAM", "PIPELINE_SUCCESS_RATE"}, {"TEAM", "PIPELINE_FAILURE_RATE"}, {"TEAM", "PIPELINE_DURATION_P95"},
+		{"TEAM", "PIPELINE_QUEUE_TIME"}, {"TEAM", "PIPELINE_RERUN_RATE"},
+	}
+	pipelineBreakdowns = []analyticsBreakdown{{"TEAM", "PIPELINE_FAILURE_RATE", 10}}
+	testSeries         = []analyticsSeries{
+		{"TEAM", "TEST_PASS_RATE"}, {"TEAM", "TEST_FAILURE_RATE"}, {"TEAM", "TEST_FLAKE_RATE"}, {"TEAM", "TEST_SUITE_DURATION_P95"},
+	}
+	testBreakdowns     = []analyticsBreakdown{{"TEAM", "TEST_FLAKE_RATE", 10}}
+	coverageSeries     = []analyticsSeries{{"TEAM", "COVERAGE_LINE_PCT"}, {"TEAM", "COVERAGE_BRANCH_PCT"}, {"TEAM", "COVERAGE_DELTA_PCT"}}
+	coverageBreakdowns = []analyticsBreakdown{{"REPO", "COVERAGE_LINE_PCT", 10}}
+	flagSeries         = []analyticsSeries{
+		{"REPO", "FLAG_ACTIVATION_RATE"}, {"REPO", "FLAG_FRICTION_DELTA"}, {"REPO", "FLAG_ERROR_RATE_DELTA"}, {"REPO", "FLAG_COVERAGE_RATIO"},
+	}
+)
+
+// analyticsBatchVariables builds the request of one batch over the run's window.
+func analyticsBatchVariables(b analyticsBatch) func(orgID string, w Window) map[string]any {
+	return func(orgID string, w Window) map[string]any {
+		dateRange := map[string]any{"startDate": w.SinceDate, "endDate": w.UntilDate}
+		series := []any{}
+		for _, s := range b.Series {
+			series = append(series, map[string]any{"dimension": s.Dimension, "measure": s.Measure, "interval": "DAY", "dateRange": dateRange})
+		}
+		breakdowns := []any{}
+		for _, bd := range b.Breakdowns {
+			breakdowns = append(breakdowns, map[string]any{"dimension": bd.Dimension, "measure": bd.Measure, "dateRange": dateRange, "topN": bd.TopN})
+		}
+		batch := map[string]any{"timeseries": series}
+		if len(b.Breakdowns) > 0 {
+			batch["breakdowns"] = breakdowns
+		}
+		return map[string]any{"orgId": orgID, "batch": batch}
+	}
+}
+
+const analyticsFloatAggregate = "the measure is a ClickHouse float aggregate (avg/sum over Float64 rows): order-nondeterministic across merges on both planes (CHAOS-5451, rule-derived)"
+
+// analyticsBatchParity declares the float leaves as Tier B and requires the
+// batch's lists to be non-empty on a leg. A batch that asks for exactly one
+// series (or one breakdown) also requires every returned entry to name that
+// measure and dimension; a whole-page batch asks for several, so its measures
+// are proven by the single-request variants instead. Every declaration is
+// made only for the lists the batch asks for: a declaration over a list the
+// batch does not carry matches nothing and fails the run.
+func analyticsBatchParity(b analyticsBatch) Options {
+	o := Options{FloatTierB: map[string]string{}}
+	if len(b.Series) > 0 {
+		o.FloatTierB["data.analytics.timeseries.buckets.value"] = analyticsFloatAggregate
+		o.RequireNonEmpty = append(o.RequireNonEmpty, "data.analytics.timeseries")
+		o.BaselineDefects = append(o.BaselineDefects, analyticsSeriesDefects()...)
+		if len(b.Series) == 1 {
+			o.ScopeEcho = append(o.ScopeEcho,
+				ScopeEcho{List: "data.analytics.timeseries", Fields: []string{"measure"}, Value: b.Series[0].Measure},
+				ScopeEcho{List: "data.analytics.timeseries", Fields: []string{"dimension"}, Value: b.Series[0].Dimension})
+		}
+	}
+	if len(b.Breakdowns) > 0 {
+		o.FloatTierB["data.analytics.breakdowns.items.value"] = analyticsFloatAggregate
+		o.RequireNonEmpty = append(o.RequireNonEmpty, "data.analytics.breakdowns")
+		o.BaselineDefects = append(o.BaselineDefects, analyticsBreakdownDefects()...)
+		if len(b.Breakdowns) == 1 {
+			o.ScopeEcho = append(o.ScopeEcho,
+				ScopeEcho{List: "data.analytics.breakdowns", Fields: []string{"measure"}, Value: b.Breakdowns[0].Measure},
+				ScopeEcho{List: "data.analytics.breakdowns", Fields: []string{"dimension"}, Value: b.Breakdowns[0].Dimension})
+		}
+	}
+	return o
+}
+
+const (
+	analyticsDefectTicket = "CHAOS-6149"
+	// analyticsNoneReason describes the reference plane's str(None) text.
+	analyticsNoneReason = "the reference resolver builds each group name with str(row[\"dimension_value\"]), so a NULL dimension value (a team or repository the row carries no id for) reaches the wire as the text \"None\"; Go carries the absence as an empty string (or null for a label). The web page treats \"\" and \"none\" alike (isMissingKey in web/src/lib/testops/failure-patterns.ts), so the difference is the reference's rendering of a missing value, not a value the page reads. Only the exact pair (\"None\", \"\" or null) is covered; any other text under the path stays outside."
+)
+
+// analyticsSeriesDefects are the reference plane's differences on the
+// timeseries list. Each is a shape, never a blanket path citation, so a real
+// difference under the same path stays outside.
+func analyticsSeriesDefects() []BaselineDefect {
+	return []BaselineDefect{
+		{
+			Ticket:                  analyticsDefectTicket,
+			Reason:                  "the reference hands the driver's datetime to strawberry's Date scalar, whose serializer isoformat()s it, so a bucket day reaches the wire as \"YYYY-MM-DDT00:00:00\"; the schema types TimeseriesBucket.date as Date (\"YYYY-MM-DD\") and Go emits that. The web pages use the value only as an opaque sort and merge key within one response. Only a baseline at exactly 00:00:00 UTC on the same calendar day as the candidate is covered.",
+			Paths:                   []string{"data.analytics.timeseries.buckets.date"},
+			TimestampRenderingShape: &TimestampRenderingShape{CandidateIsDate: true},
+		},
+		{
+			Ticket:             analyticsDefectTicket,
+			Reason:             analyticsNoneReason,
+			Paths:              []string{"data.analytics.timeseries.dimensionValue"},
+			Intermittent:       true,
+			IntermittentReason: "present only when a bucket group has a NULL dimension value; an org whose rows all carry an id shows no such group",
+			LeafPairShape:      &LeafPairShape{Pairs: []LeafPair{{Baseline: "None", Candidate: ""}}},
+		},
+		analyticsEmptyAggregateDefect("data.analytics.timeseries.buckets.value", "bucket value", "a bucket"),
+	}
+}
+
+// analyticsBreakdownDefects are the reference plane's differences on the
+// breakdown list.
+func analyticsBreakdownDefects() []BaselineDefect {
+	return []BaselineDefect{
+		{
+			Ticket:             analyticsDefectTicket,
+			Reason:             analyticsNoneReason,
+			Paths:              []string{"data.analytics.breakdowns.items.key"},
+			Intermittent:       true,
+			IntermittentReason: "present only when the breakdown has an item whose dimension value is NULL; an org whose rows all carry an id shows no such item",
+			LeafPairShape:      &LeafPairShape{Pairs: []LeafPair{{Baseline: "None", Candidate: ""}}},
+		},
+		{
+			Ticket:             analyticsDefectTicket,
+			Reason:             analyticsNoneReason,
+			Paths:              []string{"data.analytics.breakdowns.items.label"},
+			Intermittent:       true,
+			IntermittentReason: "present only when the breakdown has an item whose dimension value is NULL, and only in a document that selects the label",
+			LeafPairShape:      &LeafPairShape{Pairs: []LeafPair{{Baseline: "None", Candidate: nil}}},
+		},
+		analyticsEmptyAggregateDefect("data.analytics.breakdowns.items.value", "breakdown item value", "an item"),
+	}
+}
+
+// analyticsEmptyAggregateDefect declares the reference's 0.0 for an aggregate
+// with no rows against Go's null, for one value leaf of the analytics answer.
+func analyticsEmptyAggregateDefect(path, leaf, unit string) BaselineDefect {
+	return BaselineDefect{
+		Ticket:             analyticsDefectTicket,
+		Reason:             "the reference builds each " + leaf + " with float(row[\"value\"] or 0), so an aggregate with no rows in " + unit + " (a delta with no earlier day) is 0.0; Go scans the value as nullable and sends null (ruled product behaviour, see ExecuteTimeseries and ExecuteBreakdown; the web merge treats a null value as missing, not zero). Only the exact pair (0, null) is covered. Known limit: the wire alone cannot tell an all-NULL aggregate from a real zero that Go dropped; the Go scan tests pin that a measured zero stays 0.",
+		Paths:              []string{path},
+		Intermittent:       true,
+		IntermittentReason: "present only when some " + leaf + "'s aggregate is NULL in the source rows; a window where every one has rows shows no null",
+		LeafPairShape:      &LeafPairShape{Pairs: []LeafPair{{Baseline: 0.0, Candidate: nil}}},
+	}
+}
+
+// analyticsPageBatch is one request batch a web page sends. The test-operations
+// pages send the same batch to all three test-operations documents (the
+// coverage page only to the coverage document), so a document also answers the
+// batches of the other pages.
+type analyticsPageBatch struct {
+	Name         string
+	Batch        analyticsBatch
+	CoverageOnly bool
+}
+
+var analyticsPageBatches = []analyticsPageBatch{
+	{Name: "PAGE_PIPELINES", Batch: analyticsBatch{Series: pipelineSeries, Breakdowns: pipelineBreakdowns}},
+	{Name: "PAGE_TESTS", Batch: analyticsBatch{Series: testSeries, Breakdowns: testBreakdowns}},
+	{Name: "PAGE_COVERAGE", Batch: analyticsBatch{Series: coverageSeries, Breakdowns: coverageBreakdowns}, CoverageOnly: true},
+	{Name: "PAGE_TESTOPS", Batch: analyticsBatch{Series: []analyticsSeries{
+		{"TEAM", "PIPELINE_SUCCESS_RATE"}, {"TEAM", "PIPELINE_FAILURE_RATE"}, {"TEAM", "PIPELINE_DURATION_P95"},
+		{"TEAM", "PIPELINE_QUEUE_TIME"}, {"TEAM", "PIPELINE_RERUN_RATE"}, {"TEAM", "TEST_FLAKE_RATE"}, {"TEAM", "COVERAGE_LINE_PCT"},
+	}}},
+	{Name: "PAGE_GOVERN", Batch: analyticsBatch{Series: []analyticsSeries{
+		{"TEAM", "PIPELINE_SUCCESS_RATE"}, {"TEAM", "TEST_FLAKE_RATE"}, {"TEAM", "COVERAGE_LINE_PCT"},
+	}}},
+}
+
+// analyticsOwnPageBatch names the page batch that is the document's own base
+// request.
+var analyticsOwnPageBatch = map[string]string{
+	"testOpsPipeline": "PAGE_PIPELINES",
+	"testOpsTest":     "PAGE_TESTS",
+	"testOpsCoverage": "PAGE_COVERAGE",
+}
+
+// analyticsPageBatchVariants is one variant per batch another web page sends
+// to the document.
+func analyticsPageBatchVariants(operation string) []Variant {
+	var out []Variant
+	for _, pb := range analyticsPageBatches {
+		if pb.Name == analyticsOwnPageBatch[operation] || (pb.CoverageOnly && operation != "testOpsCoverage") {
+			continue
+		}
+		out = append(out, Variant{Name: pb.Name, Variables: analyticsBatchVariables(pb.Batch), Parity: analyticsBatchParity(pb.Batch)})
+	}
+	return out
+}
+
+// analyticsBatchVariants is one variant per timeseries measure and one per
+// breakdown, each asking for that request alone.
+func analyticsBatchVariants(series []analyticsSeries, breakdowns []analyticsBreakdown) []Variant {
+	var out []Variant
+	for _, s := range series {
+		b := analyticsBatch{Series: []analyticsSeries{s}}
+		out = append(out, Variant{Name: s.Dimension + "_" + s.Measure, Variables: analyticsBatchVariables(b), Parity: analyticsBatchParity(b)})
+	}
+	for _, bd := range breakdowns {
+		b := analyticsBatch{Breakdowns: []analyticsBreakdown{bd}}
+		out = append(out, Variant{Name: "BREAKDOWN_" + bd.Dimension + "_" + bd.Measure, Variables: analyticsBatchVariables(b), Parity: analyticsBatchParity(b)})
+	}
+	return out
+}
+
+// securityAlertsEchoVariant applies a set-valued filter and requires every
+// returned alert to carry one of the filter's values in field, so a filter
+// both planes ignore is refused rather than recorded as a match.
+func securityAlertsEchoVariant(name string, filters map[string]any, field string, anyOf ...string) Variant {
+	v := securityAlertsVariant(name, filters, nil)
+	v.Parity = Options{
+		BaselineDefects: securityAlertsParity.BaselineDefects,
+		ScopeEcho:       []ScopeEcho{{List: "data.securityAlerts.edges", Fields: []string{field}, AnyOf: anyOf}},
+	}
+	return v
+}
+
+// securityAlertsStateVariant filters the alert list by ONE run-supplied
+// state, measured only when the list holds an alert and every alert is in
+// that state; the run supplies a state that has alerts and is not the only
+// state the org's alerts are in, so the answer is a strict subset.
+func securityAlertsStateVariant() Variant {
+	return Variant{
+		Name: "STATE_VALID",
+		Variables: func(orgID string, _ Window) map[string]any {
+			return securityAlertsVariables(orgID, map[string]any{}, nil)
+		},
+		Parity: Options{
+			BaselineDefects: securityAlertsParity.BaselineDefects,
+			RequireNonEmpty: []string{"data.securityAlerts.edges"},
+		},
+		Instance: &VariantInstance{
+			Kind: "an alert state (open, fixed, dismissed, detected, confirmed or resolved) that has alerts and is not the only state the org's alerts are in",
+			Bind: func(vars map[string]any, value string) {
+				vars["filters"].(map[string]any)["states"] = []any{strings.ToUpper(value)}
+			},
+			EchoFor: func(value string) []ScopeEcho {
+				return []ScopeEcho{{List: "data.securityAlerts.edges", Fields: []string{"node.state"}, Value: value}}
+			},
+		},
+	}
+}
+
+// securityAlertsPageZeroVariant reads zero alerts: its answer is the count
+// and page flags with no alert, so it declares no timestamp difference (there
+// is no timestamp leaf for that declaration to match).
+func securityAlertsPageZeroVariant() Variant {
+	v := securityAlertsVariant("PAGE_ZERO", nil, map[string]any{"first": 0})
+	v.Parity = Options{}
+	return v
+}
+
+// securityOverviewOpenStateVariant filters the overview to the open state,
+// measured only when the severity breakdown (open alerts only) is non-empty.
+func securityOverviewOpenStateVariant() Variant {
+	v := securityOverviewVariant("STATES", map[string]any{"states": []any{"OPEN"}})
+	v.Parity = Options{RequireNonEmpty: []string{"data.securityOverview.severityBreakdown"}}
+	return v
+}
+
+// securityAlertsDateRangeVariant reads the alerts created in an inclusive date
+// range; every returned alert must be created inside it and the list must be
+// non-empty.
+func securityAlertsDateRangeVariant(name, since, until string) Variant {
+	v := securityAlertsVariant(name, map[string]any{"since": since, "until": until}, nil)
+	v.Parity = Options{
+		BaselineDefects: securityAlertsParity.BaselineDefects,
+		RequireNonEmpty: []string{"data.securityAlerts.edges"},
+		ScopeEcho:       []ScopeEcho{{List: "data.securityAlerts.edges", Fields: []string{"node.createdAt"}, NotBefore: since, NotAfter: until}},
+	}
+	return v
+}
+
+// securityOverviewNonEmptyVariant is an overview filter case measured only when
+// the severity breakdown (open alerts) holds a bucket on a leg.
+func securityOverviewNonEmptyVariant(name string, filters map[string]any) Variant {
+	v := securityOverviewVariant(name, filters)
+	v.Parity = Options{RequireNonEmpty: []string{"data.securityOverview.severityBreakdown"}}
+	return v
+}
+
+func testopsRiskVariables(orgID, start, end string) map[string]any {
+	return map[string]any{"orgId": orgID, "input": map[string]any{"startDate": start, "endDate": end}}
+}
+
+const testopsFloatAggregate = "avg()/sum() over Float64 in the daily testops read -- ClickHouse float aggregate, order-nondeterministic (CHAOS-5451)"
+
+// The three period deltas are (last - first) / |first| * 100 over the first
+// and last point of a spark, and null when the spark holds fewer than two
+// points or its first point is zero, on both planes. A declared Tier-B path
+// that reaches no float leaf refuses the case, so each request declares only
+// the deltas its window populates:
+//   - a one-day range holds one point per spark: every delta is null, none is
+//     declared, and null is compared as null;
+//   - the seven-day range ending at the window's last day holds seven points
+//     per spark and a non-zero first day on the measured org: all three are
+//     declared;
+//   - the whole window starts on a day whose drag is zero, so dragDelta is null
+//     on both planes and is not declared there; confidenceDelta and
+//     stabilityDelta are.
+var (
+	testopsRiskBaseDeltas = []string{"data.testopsRisk.confidenceDelta", "data.testopsRisk.stabilityDelta"}
+	testopsRiskAllDeltas  = []string{"data.testopsRisk.confidenceDelta", "data.testopsRisk.dragDelta", "data.testopsRisk.stabilityDelta"}
+)
+
+var testopsRiskDeltaReasons = map[string]string{
+	"data.testopsRisk.confidenceDelta": "derived from avg(confidence_score) (CHAOS-5451)",
+	"data.testopsRisk.dragDelta":       testopsFloatAggregate,
+	"data.testopsRisk.stabilityDelta":  "derived from avg(stability_index) (CHAOS-5451)",
+}
+
+// testopsRiskWeekStart is the first day of the seven-day range that ends on
+// the window's last day. An unparseable date is returned unchanged, which
+// makes the request a one-day range that a test refuses.
+func testopsRiskWeekStart(until string) string {
+	end, err := time.Parse("2006-01-02", until)
+	if err != nil {
+		return until
+	}
+	return end.AddDate(0, 0, -6).Format("2006-01-02")
+}
+
+// testopsRiskParity declares the float leaves derived from the daily
+// aggregates as Tier B; the quadrant rates are argMax of stored JSON values
+// and stay exact. requireSeries makes the request measure only when the
+// range holds at least one day of release-confidence data. deltas names the
+// period deltas the request's window populates.
+func testopsRiskParity(requireSeries bool, deltas ...string) Options {
+	o := Options{FloatTierB: map[string]string{
+		"data.testopsRisk.releaseConfidence":          testopsFloatAggregate,
+		"data.testopsRisk.qualityDragHours":           testopsFloatAggregate,
+		"data.testopsRisk.pipelineStability":          testopsFloatAggregate,
+		"data.testopsRisk.timeseries.riskScore":       "derived from avg(confidence_score) (CHAOS-5451)",
+		"data.testopsRisk.qualityDragBreakdown.hours": testopsFloatAggregate,
+		"data.testopsRisk.confidenceSpark.value":      "derived from avg(confidence_score) (CHAOS-5451)",
+		"data.testopsRisk.dragSpark.value":            testopsFloatAggregate,
+		"data.testopsRisk.stabilitySpark.value":       "derived from avg(stability_index) (CHAOS-5451)",
+	}}
+	for _, path := range deltas {
+		o.FloatTierB[path] = testopsRiskDeltaReasons[path]
+	}
+	if requireSeries {
+		o.RequireNonEmpty = []string{"data.testopsRisk.timeseries"}
+	}
+	return o
 }

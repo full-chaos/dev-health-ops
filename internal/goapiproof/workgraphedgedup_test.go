@@ -122,8 +122,8 @@ func TestWorkGraphEdgeDedupShape_RegisteredOnWorkGraphEdges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SpecFor(workGraphEdges): %v", err)
 	}
-	if len(spec.Parity.BaselineDefects) != 1 {
-		t.Fatalf("want exactly one declared baseline defect, got %d", len(spec.Parity.BaselineDefects))
+	if len(spec.Parity.BaselineDefects) != 2 {
+		t.Fatalf("want exactly two declared baseline defects (per-id shape, then whole-list collapse), got %d", len(spec.Parity.BaselineDefects))
 	}
 	defect := spec.Parity.BaselineDefects[0]
 	if defect.WorkGraphEdgeDedupShape == nil {

@@ -168,6 +168,13 @@ type flags struct {
 	// runDeadline bounds the whole run (-run-deadline).
 	runDeadline time.Duration
 	reportPath  string
+	// gapDelay is -gap-reread-delay: how long the delayed re-read waits
+	// (0 disables the stage); gapBudget is -gap-reread-budget: the most
+	// delay one run spends in total. gapReread is the run's shared budget
+	// state, built by runMeasurement; nil disables the stage.
+	gapDelay  time.Duration
+	gapBudget time.Duration
+	gapReread *gapRereadState
 
 	// binds is every -bind NAME=VALUE the run invocation supplied, keyed
 	// by NAME -- an id for a corpus request whose IDBindings names a
@@ -216,6 +223,8 @@ func parseFlags() (flags, error) {
 	flag.BoolVar(&f.dryRun, "dry-run", false, "execute and compare, but write NO receipts")
 	flag.DurationVar(&f.timeout, "timeout", 60*time.Second, "per-request timeout")
 	flag.DurationVar(&f.runDeadline, "run-deadline", defaultRunDeadline, "how long the whole run may take; at the deadline the run stops between requests, names a leg in flight as cut by the run deadline, names every request it did not reach in the report's not_run, writes partial_cause run_deadline and exits non-zero. Must be greater than zero")
+	flag.DurationVar(&f.gapDelay, "gap-reread-delay", goapiproof.GapRereadDefaultDelay, "how long the delayed re-read waits before it reads both planes again for a case whose difference the bracketed re-read left outside (or could not take up): it must outlast the 4-9 s materializer gap in which the Python investment scope gate fails open (CHAOS-5975; worst recorded ~12 s). 0 disables the stage; above 60s is refused")
+	flag.DurationVar(&f.gapBudget, "gap-reread-budget", goapiproof.GapRereadDefaultBudget, "the most delay one run spends in delayed re-reads in total; a case that does not fit stands as the bracketed re-read left it")
 	flag.StringVar(&f.reportPath, "report", "", "write the full JSON report here in addition to stdout")
 	// flag.CommandLine.Parse, not the package-level flag.Parse (which
 	// discards Parse's own returned error): -bind's own Func callback
@@ -265,6 +274,9 @@ func parseFlags() (flags, error) {
 	}
 	if f.runDeadline <= 0 {
 		return f, fmt.Errorf("-run-deadline must be greater than zero, got %s", f.runDeadline)
+	}
+	if err := validateGapRereadFlags(f.gapDelay, f.gapBudget); err != nil {
+		return f, err
 	}
 	// Every base URL a leg or a /buildinfo read is built from: a fragment,
 	// a query or userinfo would make the request sent differ from the one
@@ -452,7 +464,10 @@ func doREST(ctx context.Context, client *goapiproof.LegClient, baseURL, method, 
 	defer func() { _ = resp.Body.Close() }()
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return goapiproof.RESTLeg{}, goapiproof.NewTransportFailure(target, err)
+		// The plane answered: it sent its status and headers. A failure from
+		// here is a broken answer, never silence, and no declaration that the
+		// plane cannot answer may stand on it.
+		return goapiproof.RESTLeg{}, answerStartedError{goapiproof.NewTransportFailure(target, err)}
 	}
 	return goapiproof.RESTLeg{
 		StatusCode:    resp.StatusCode,
@@ -463,6 +478,13 @@ func doREST(ctx context.Context, client *goapiproof.LegClient, baseURL, method, 
 		WireAttempts:  legResponse.WireAttempts,
 	}, nil
 }
+
+// answerStartedError marks a leg failure that happened after the plane sent its
+// response headers. It unwraps to the TransportFailure it carries, so every
+// consumer of that class reads it exactly as before.
+type answerStartedError struct{ error }
+
+func (e answerStartedError) Unwrap() error { return e.error }
 
 // resolveRESTTimeout is the per-request timeout a leg actually gets: the
 // corpus entry's OWN declared Timeout when it set one -- a slow but
@@ -573,7 +595,7 @@ func isLegTransportRefusal(reason string) bool {
 func legFailuresIn(outcomes []outcome) []string {
 	var failures []string
 	for _, out := range outcomes {
-		if isLegTransportRefusal(out.Refusal) {
+		if isLegTransportRefusal(out.Refusal) || (!out.Admitted && out.BaselineTimedOut) {
 			failures = append(failures, fmt.Sprintf("%s/%s: %s -- %s", out.Operation, out.Request, out.Refusal, out.Detail))
 		}
 	}
@@ -665,6 +687,19 @@ type restReviewEvidence struct {
 	// baseline is taken as Python's own answer on the operator's word,
 	// not on anything the response showed.
 	PythonForwarderOffAttested bool `json:"python_forwarder_off_attested,omitempty"`
+	// AdmittedBaselineRef and AdmittedCandidateRef name the response pair a
+	// re-read admission (write-skew or delayed gap re-read) stands on. The
+	// receipt's own BaselineResponseRef/CandidateResponseRef keep the FIRST
+	// comparison (the mismatch the citation excuses); when a re-read admits
+	// the case, the baseline that changed and the candidate it was matched
+	// to are recorded here, so the durable receipt identifies both pairs.
+	// Empty when no re-read admitted the case.
+	AdmittedBaselineRef  string `json:"admitted_baseline_ref,omitempty"`
+	AdmittedCandidateRef string `json:"admitted_candidate_ref,omitempty"`
+	// BaselineTimedOutAfter is the measured wait, e.g. "180.0s", after which
+	// the baseline leg was given up on for a request admitted under its
+	// BaselineTimeoutDeclared. Empty for every other receipt.
+	BaselineTimedOutAfter string `json:"baseline_timed_out_after,omitempty"`
 }
 
 // encodeRESTReviewEvidence renders restReviewEvidence for one receipt.
@@ -673,8 +708,11 @@ type restReviewEvidence struct {
 // nothing -- same fallback ReceiptProvenance's own reviewEvidence method
 // uses, and the same reasoning: the operator's own words are worth more
 // than a dropped column.
-func encodeRESTReviewEvidence(operator, findingsRef string, forwarderOffAttested bool) string {
-	encoded, err := json.Marshal(restReviewEvidence{Operator: operator, FindingsRef: findingsRef, PythonForwarderOffAttested: forwarderOffAttested})
+func encodeRESTReviewEvidence(operator, findingsRef string, forwarderOffAttested bool, admittedBaselineRef, admittedCandidateRef string) string {
+	encoded, err := json.Marshal(restReviewEvidence{
+		Operator: operator, FindingsRef: findingsRef, PythonForwarderOffAttested: forwarderOffAttested,
+		AdmittedBaselineRef: admittedBaselineRef, AdmittedCandidateRef: admittedCandidateRef,
+	})
 	if err != nil {
 		return operator
 	}
@@ -695,6 +733,18 @@ type outcome struct {
 
 	ReceiptID string `json:"receipt_id,omitempty"`
 
+	// BaselineTimedOutAfter is set only on a request admitted under its
+	// BaselineTimeoutDeclared (baselinetimeout.go): the measured wait,
+	// formatted "180.0s", the baseline leg ran before it was given up on.
+	BaselineTimedOutAfter string `json:"baseline_timed_out_after,omitempty"`
+
+	// BaselineTimedOut is set on every outcome of a request whose baseline leg
+	// produced no response within its timeout and which carries a
+	// BaselineTimeoutDeclared. Admitted, it is the declaration firing; refused,
+	// it keeps the baseline failure on the run's leg-failure accounting
+	// (legFailuresIn), whatever name the refusal carries.
+	BaselineTimedOut bool `json:"baseline_timed_out,omitempty"`
+
 	// Attempts names every LOSING candidate a bounded-candidate binding
 	// (goapiproof.RESTIDBinding.Candidates > 0) tried on THIS request
 	// before either the winning candidate or exhaustion -- see
@@ -713,6 +763,17 @@ type outcome struct {
 	// candidate, and each outside leaf carries both baseline reads and the
 	// candidate value. Nil for every case that needed no re-read.
 	WriteSkew *writeSkewRecord `json:"write_skew,omitempty"`
+
+	// GapReread records the delayed re-read (goapiproof.ClassifyGapReread)
+	// for a case the bracketed re-read left outside or could not take up.
+	// Nil for every case that did not reach it.
+	GapReread *gapRereadRecord `json:"gap_reread,omitempty"`
+
+	// ObservedAt and CandidateObservedAt are when the first baseline and
+	// first candidate reads of this case returned (UTC), to line a case up
+	// with a write the data plane made.
+	ObservedAt          time.Time `json:"observed_at,omitzero"`
+	CandidateObservedAt time.Time `json:"candidate_observed_at,omitzero"`
 
 	// BaselineResponseRef/CandidateResponseRef mirror the identically
 	// named RESTReceipt fields (goapiproof.RESTReceipt's own doc
@@ -824,6 +885,10 @@ type writeSkewRecord struct {
 	// SecondBaselineWireAttempts is the second read's wire attempts
 	// (goapiproof.LegResponse), recorded like every leg's.
 	SecondBaselineWireAttempts int `json:"second_baseline_wire_attempts,omitempty"`
+	// SecondBaselineAt is when the second baseline read returned.
+	SecondBaselineAt time.Time `json:"second_baseline_at,omitzero"`
+	// referenceUnmoved is the decision's ReferenceUnmoved (never serialised).
+	referenceUnmoved bool
 }
 
 // writeSkewSuffix names a re-read's verdict on the stdout line, so a
@@ -835,9 +900,17 @@ func writeSkewSuffix(record *writeSkewRecord) string {
 	return fmt.Sprintf(" write_skew=%s", record.Verdict)
 }
 
+// gapRereadSuffix names the delayed re-read's outcome on the stdout line.
+func gapRereadSuffix(record *gapRereadRecord) string {
+	if record == nil {
+		return ""
+	}
+	return fmt.Sprintf(" gap_reread=%s", record.Outcome)
+}
+
 func (o outcome) line() string {
 	if !o.Admitted {
-		return fmt.Sprintf("%s/%s: REFUSED %s -- %s%s%s", o.Operation, o.Request, o.Refusal, o.Detail, attemptsSuffix(o.Attempts), writeSkewSuffix(o.WriteSkew))
+		return fmt.Sprintf("%s/%s: REFUSED %s -- %s%s%s", o.Operation, o.Request, o.Refusal, o.Detail, attemptsSuffix(o.Attempts), writeSkewSuffix(o.WriteSkew)+gapRereadSuffix(o.GapReread))
 	}
 	boundSuffix := ""
 	if len(o.BoundIDs) > 0 {
@@ -847,8 +920,12 @@ func (o outcome) line() string {
 	if len(o.DeclarationFiring) > 0 {
 		firingSuffix = " " + formatDeclarationFiring(o.DeclarationFiring)
 	}
-	return fmt.Sprintf("%s/%s: %s outside=%d baseline_defect=%v receipt=%s%s%s%s%s",
-		o.Operation, o.Request, o.TerminalState, o.DifferencesOutsideBaselineDefect, o.BaselineDefectsMatched, o.ReceiptID, boundSuffix, firingSuffix, attemptsSuffix(o.Attempts), writeSkewSuffix(o.WriteSkew))
+	timeoutSuffix := ""
+	if o.BaselineTimedOutAfter != "" {
+		timeoutSuffix = " baseline timed out after " + o.BaselineTimedOutAfter
+	}
+	return fmt.Sprintf("%s/%s: %s outside=%d baseline_defect=%v receipt=%s%s%s%s%s%s",
+		o.Operation, o.Request, o.TerminalState, o.DifferencesOutsideBaselineDefect, o.BaselineDefectsMatched, o.ReceiptID, timeoutSuffix, boundSuffix, firingSuffix, attemptsSuffix(o.Attempts), writeSkewSuffix(o.WriteSkew)+gapRereadSuffix(o.GapReread))
 }
 
 // formatDeclarationFiring renders one request's own declared defects'
@@ -1378,6 +1455,7 @@ func bracketedReread(
 			return nil, nil, none, goapiproof.Result{}, fmt.Errorf("store second baseline leg artifact: %w", err)
 		}
 	}
+	record.SecondBaselineAt = time.Now().UTC()
 	record.SecondBaselineWireAttempts = secondLeg.WireAttempts
 	// The second read is admitted exactly as the first was: the same
 	// plane identity (server, build header, impersonation stamp) and the
@@ -1399,6 +1477,7 @@ func bracketedReread(
 	second.Data = goapiproof.InjectRESTDedupKeys(second.Data, request.DedupListPath, request.DedupKeyFields)
 	decision := goapiproof.ClassifyWriteSkew(first, admission.BaselineSnap, admission.CandidateSnap, second, request.Parity)
 	record.Verdict, record.Leaves, record.Detail = decision.Verdict, decision.Leaves, decision.Detail
+	record.referenceUnmoved = decision.ReferenceUnmoved
 	if decision.Verdict == goapiproof.WriteSkewRefused {
 		return record, &outcome{Refusal: decision.Refusal, Detail: decision.Detail}, none, goapiproof.Result{}, nil
 	}
@@ -1423,6 +1502,10 @@ func candidateHasNoData(refusal string) bool {
 
 func runMeasurement(ctx context.Context, client *goapiproof.LegClient, f flags, candidateCredential, baselineCredential *goapiproof.Credential, builds goapiproof.ProverBuild, pgPool receiptWriter, artifacts *goapiproof.ArtifactStore) error {
 	namedBuild := builds.Candidate
+	if f.gapDelay > 0 {
+		f.gapReread = newGapRereadState(f.gapDelay, f.gapBudget)
+		fmt.Printf("gap_reread_delay=%s gap_reread_budget=%s\n", f.gapDelay, f.gapBudget)
+	}
 	// Printed before the first request, so a run cut by the deadline
 	// shows on its own log what it was given.
 	fmt.Printf("run_deadline=%s\n", f.runDeadline)
@@ -1630,6 +1713,10 @@ requestLoop:
 	for _, operation := range sortedStringKeys(skewAdmitted) {
 		fmt.Printf("skew_admitted %s=%d\n", operation, skewAdmitted[operation])
 	}
+	gapAdmitted := gapAdmittedByOperation(outcomes)
+	for _, operation := range sortedStringKeys(gapAdmitted) {
+		fmt.Printf("gap_admitted %s=%d\n", operation, gapAdmitted[operation])
+	}
 
 	runEnded := ctx.Err()
 	report, finalErr := finalRunReport(f, outcomes, notRun, runEnded, runErr, legFailures, vacuityErrs)
@@ -1660,6 +1747,22 @@ func skewAdmittedByOperation(outcomes []outcome) map[string]int {
 	return counts
 }
 
+// gapAdmittedByOperation counts the delayed-re-read admissions per
+// operation; nil when there are none.
+func gapAdmittedByOperation(outcomes []outcome) map[string]int {
+	var counts map[string]int
+	for _, out := range outcomes {
+		if out.GapReread == nil || out.GapReread.Outcome != goapiproof.GapRereadAdmitted {
+			continue
+		}
+		if counts == nil {
+			counts = map[string]int{}
+		}
+		counts[out.Operation]++
+	}
+	return counts
+}
+
 // sortedStringKeys returns m's keys in order.
 func sortedStringKeys(m map[string]int) []string {
 	if len(m) == 0 {
@@ -1683,7 +1786,7 @@ func finalRunReport(f flags, outcomes []outcome, notRun []string, runEnded, runE
 		runErr = fmt.Errorf("run interrupted: %w", runEnded)
 	}
 	exitCause, finalErr := exitCauseFor(runEnded, runErr, legFailures, vacuityErrs)
-	report := jsonReport{Outcomes: outcomes, NotRun: notRun, PartialCause: partialCause, PartialError: partialError(f, runErr), ExitCause: exitCause, RunDeadline: f.runDeadline.String(), SkewAdmittedByOperation: skewAdmittedByOperation(outcomes)}
+	report := jsonReport{Outcomes: outcomes, NotRun: notRun, PartialCause: partialCause, PartialError: partialError(f, runErr), ExitCause: exitCause, RunDeadline: f.runDeadline.String(), SkewAdmittedByOperation: skewAdmittedByOperation(outcomes), GapAdmittedByOperation: gapAdmittedByOperation(outcomes)}
 	return report, finalErr
 }
 
@@ -1765,6 +1868,11 @@ type jsonReport struct {
 	// admitted by a bracketed re-read (outcome.write_skew verdict
 	// skew_admitted). Absent when there were none.
 	SkewAdmittedByOperation map[string]int `json:"skew_admitted_by_operation,omitempty"`
+	// GapAdmittedByOperation counts, per route, the cases admitted by the
+	// delayed re-read (outcome.gap_reread outcome gap_admitted), so the
+	// record shows how often the materializer-gap class fired. Absent when
+	// there were none.
+	GapAdmittedByOperation map[string]int `json:"gap_admitted_by_operation,omitempty"`
 	// ExitCause names how the run ended, one of the exit* constants: a
 	// whole run, a run stopped early (and by what), or one refused before
 	// it measured anything.
@@ -1878,13 +1986,19 @@ func proveOneRESTRequest(
 	// The bracketed re-read (bracketedReread) depends on this order: it
 	// re-reads the baseline after the candidate, so a write landing
 	// between the legs shows as a change on the reference plane itself.
+	baselineStarted := time.Now()
 	baselineLeg, err := doREST(ctx, client, f.pythonAPIURL, spec.Method, spec.Path, request.Query, request.Body, baselineCredential, timeout)
 	if err != nil {
 		if out, ok := legTransportOutcome(ctx, operation, request.Name, "baseline", boundIDs, err); ok {
+			var started answerStartedError
+			if out.Refusal == goapiproof.RESTRefusalBaselineLegTimedOut && request.BaselineTimeoutDeclared != nil && !errors.As(err, &started) {
+				return proveUnderBaselineTimeout(ctx, client, f, operation, spec, request, candidateCredential, namedBuild, auth, observedAt, writer, artifacts, dryRun, boundIDs, time.Since(baselineStarted), out)
+			}
 			return out, nil
 		}
 		return outcome{}, fmt.Errorf("baseline leg: %w", err)
 	}
+	baselineObservedAt := time.Now().UTC()
 	candidateLeg, err := doREST(ctx, client, f.queryAPIURL, spec.Method, spec.Path, request.Query, request.Body, candidateCredential, timeout)
 	if err != nil {
 		if out, ok := legTransportOutcome(ctx, operation, request.Name, "candidate", boundIDs, err); ok {
@@ -1892,6 +2006,7 @@ func proveOneRESTRequest(
 		}
 		return outcome{}, fmt.Errorf("candidate leg: %w", err)
 	}
+	candidateObservedAt := time.Now().UTC()
 
 	// Stored BEFORE admission runs, and unconditionally: a refused
 	// request's own bodies are exactly what a reader needs to see WHY it
@@ -1930,6 +2045,8 @@ func proveOneRESTRequest(
 		CandidateResponseRef:  candidateRef,
 		BaselineWireAttempts:  baselineLeg.WireAttempts,
 		CandidateWireAttempts: candidateLeg.WireAttempts,
+		ObservedAt:            baselineObservedAt,
+		CandidateObservedAt:   candidateObservedAt,
 	}
 	if !admission.Admitted {
 		return out, nil
@@ -1947,6 +2064,9 @@ func proveOneRESTRequest(
 		matchedDefects []string
 		vacuity        []string
 		findingsRef    string
+		// admittedBaselineRef/admittedCandidateRef: the pair a re-read
+		// admission stands on (see restReviewEvidence).
+		admittedBaselineRef, admittedCandidateRef string
 	)
 	if decodeBody {
 		baselineData := goapiproof.InjectRESTDedupKeys(admission.BaselineSnap.Data, request.DedupListPath, request.DedupKeyFields)
@@ -2091,6 +2211,7 @@ func proveOneRESTRequest(
 				differences = 0
 				matchedDefects = append(append([]string(nil), secondResult.BaselineDefectsMatched...), goapiproof.WriteSkewCitation)
 				admission.BaselineSnap = secondSnap
+				admittedBaselineRef, admittedCandidateRef = record.SecondBaselineResponseRef, candidateRef
 				if len(request.Produces) > 0 {
 					out.producedIDs = make(map[string]string, len(request.Produces))
 					out.producedCandidateIDs = make(map[string][]string, len(request.Produces))
@@ -2099,6 +2220,40 @@ func proveOneRESTRequest(
 						out.producedCandidateIDs[producer.Name] = candidates
 						if len(candidates) > 0 {
 							out.producedIDs[producer.Name] = candidates[0]
+						}
+					}
+				}
+			}
+		}
+
+		// Delayed re-read (goapiproof.ClassifyGapReread): a case still outside
+		// after the bracketed re-read (reference unmoved) or never eligible
+		// for it (presence/type findings) waits out the materializer gap and
+		// reads both planes again. It only ever turns such a case into an
+		// admission on a moved reference and a stable candidate.
+		if f.gapReread != nil {
+			var bracket *goapiproof.WriteSkewDecision
+			if out.WriteSkew != nil {
+				bracket = &goapiproof.WriteSkewDecision{Verdict: out.WriteSkew.Verdict, ReferenceUnmoved: out.WriteSkew.referenceUnmoved}
+			}
+			if goapiproof.GapRereadEligible(result, bracket) {
+				record, thirdSnap, decision := f.gapReread.run(ctx, client, f, spec, request, baselineCredential, candidateCredential, timeout, namedBuild, admission, result, artifacts)
+				out.GapReread = record
+				if record.Outcome == goapiproof.GapRereadAdmitted {
+					iterationGateState = decision.Second.TerminalState
+					differences = 0
+					matchedDefects = append(append([]string(nil), decision.Second.BaselineDefectsMatched...), goapiproof.GapRereadCitation)
+					admission.BaselineSnap = thirdSnap
+					admittedBaselineRef, admittedCandidateRef = record.BaselineResponseRef, record.CandidateResponseRef
+					if len(request.Produces) > 0 {
+						out.producedIDs = make(map[string]string, len(request.Produces))
+						out.producedCandidateIDs = make(map[string][]string, len(request.Produces))
+						for _, producer := range request.Produces {
+							candidates := goapiproof.ExtractRESTIDCandidates(thirdSnap.Data, producer)
+							out.producedCandidateIDs[producer.Name] = candidates
+							if len(candidates) > 0 {
+								out.producedIDs[producer.Name] = candidates[0]
+							}
 						}
 					}
 				}
@@ -2249,7 +2404,7 @@ func proveOneRESTRequest(
 		Stage:                            goapiproof.EnablementProofStage,
 		TerminalState:                    terminalState,
 		OrgID:                            f.org,
-		ReviewEvidence:                   encodeRESTReviewEvidence(f.reviewEvidence, findingsRef, spec.PythonForwarder && f.pythonForwarderOff),
+		ReviewEvidence:                   encodeRESTReviewEvidence(f.reviewEvidence, findingsRef, spec.PythonForwarder && f.pythonForwarderOff, admittedBaselineRef, admittedCandidateRef),
 		RecordedBy:                       f.recordedBy,
 		ObservedAt:                       observedAt,
 		MeasurementRoute:                 goapiproof.RouteProof,

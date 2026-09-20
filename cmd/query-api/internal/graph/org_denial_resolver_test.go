@@ -36,6 +36,10 @@ func orgScopedCalls() map[string]orgScopedCall {
 			_, err := r.Query().CompoundingRisk(ctx, orgID, nil)
 			return err
 		},
+		"testopsRisk": func(r *Resolver, ctx context.Context, orgID string) error {
+			_, err := r.Query().TestopsRisk(ctx, orgID, model.TestOpsRiskInput{})
+			return err
+		},
 		"busFactor": func(r *Resolver, ctx context.Context, orgID string) error {
 			_, err := r.Query().BusFactor(ctx, orgID, nil)
 			return err
@@ -46,6 +50,30 @@ func orgScopedCalls() map[string]orgScopedCall {
 		},
 		"aiComparison": func(r *Resolver, ctx context.Context, orgID string) error {
 			_, err := r.Query().AiComparison(ctx, orgID, model.AIDateRangeInput{}, nil)
+			return err
+		},
+		"aiOpportunities": func(r *Resolver, ctx context.Context, orgID string) error {
+			_, err := r.Query().AiOpportunities(ctx, orgID, nil, 25)
+			return err
+		},
+		"aiGovernanceSummary": func(r *Resolver, ctx context.Context, orgID string) error {
+			_, err := r.Query().AiGovernanceSummary(ctx, orgID, model.AIDateRangeInput{}, nil, 50)
+			return err
+		},
+		"aiWorkflowDrilldown": func(r *Resolver, ctx context.Context, orgID string) error {
+			_, err := r.Query().AiWorkflowDrilldown(ctx, orgID, model.AIWorkflowRootTypeInputPr, "r:1", 3, 100)
+			return err
+		},
+		"aiRiskBreakdown": func(r *Resolver, ctx context.Context, orgID string) error {
+			_, err := r.Query().AiRiskBreakdown(ctx, orgID, model.AIDateRangeInput{}, nil)
+			return err
+		},
+		"aiAttributedPrs": func(r *Resolver, ctx context.Context, orgID string) error {
+			_, err := r.Query().AiAttributedPrs(ctx, orgID, model.AIDateRangeInput{}, nil, 50, 0)
+			return err
+		},
+		"aiAttributionOverview": func(r *Resolver, ctx context.Context, orgID string) error {
+			_, err := r.Query().AiAttributionOverview(ctx, orgID, model.AIDateRangeInput{}, nil, 50, 0)
 			return err
 		},
 		"aiReviewLoad": func(r *Resolver, ctx context.Context, orgID string) error {
@@ -90,5 +118,32 @@ func TestOrgScopedFields_ScopeToAuthenticatedOrg(t *testing.T) {
 		if v, _ := bindingValueByName(ch.calls[0], "org_id"); v != "org-1" {
 			t.Errorf("%s: org_id binding = %v", name, v)
 		}
+	}
+}
+
+// improveOpportunities takes no orgId: it reads the org of the request
+// identity, is denied without one, and never reaches ClickHouse when denied.
+func TestImproveOpportunities_UsesTheIdentityOrg(t *testing.T) {
+	for label, ctx := range map[string]context.Context{
+		"no claims": context.Background(),
+		"empty org": authctx.WithClaims(context.Background(), authctx.Claims{OrgID: ""}),
+	} {
+		ch := &scopeRecordingClient{}
+		_, err := (&Resolver{ClickHouse: ch}).Query().ImproveOpportunities(ctx, nil, 10, 30)
+		asAuthorizationError(t, err)
+		if len(ch.calls) != 0 {
+			t.Errorf("%s: ClickHouse reached past the guard", label)
+		}
+	}
+	ch := &scopeRecordingClient{}
+	ctx := authctx.WithClaims(context.Background(), authctx.Claims{OrgID: "org-1"})
+	if _, err := (&Resolver{ClickHouse: ch}).Query().ImproveOpportunities(ctx, nil, 10, 30); err != nil {
+		t.Fatalf("a failed read answers an empty list, got %v", err)
+	}
+	if len(ch.calls) == 0 {
+		t.Fatal("never reached ClickHouse")
+	}
+	if v, _ := bindingValueByName(ch.calls[0], "org_id"); v != "org-1" {
+		t.Errorf("org_id binding = %v", v)
 	}
 }

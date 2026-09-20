@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The operations the running query-api registers, written out rather
@@ -30,15 +31,18 @@ import (
 var registeredOperations = []string{
 	"experiments",
 	"acrRepositoryScopes", "catalogValues", "busFactor",
-	"aiComparison", "aiImpactSummary", "aiReviewLoad",
+	"aiOpportunities", "improveOpportunities",
+	"aiAttributedPrs", "aiAttributionOverview", "aiComparison", "aiImpactSummary", "aiReviewLoad", "aiRiskBreakdown",
 	"productTelemetryDashboard", "productTelemetryPlatformDashboard",
+	"aiGovernanceSummary", "aiWorkflowDrilldown",
 	"connectorsDataHealth", "dataHealthIdentity", "mappingCoverageHealth", "metricLineage",
 	"capacityForecast", "capacityForecasts", "cognitiveLoad", "compoundingRisk", "complexityTimeseries",
 	"featureFlagEvents", "featureFlags", "flowMatrix", "hotspots",
 	"releaseImpact",
 	"investmentBreakdown", "investmentFull", "operatingReview", "pr",
-	"reportRuns", "reviewEdges", "savedReport", "savedReports", "securityAlerts", "securityOverview", "throughputForecast",
+	"reportRuns", "reviewEdges", "savedReport", "savedReports", "securityAlerts", "securityOverview", "testopsRisk", "throughputForecast", "testOpsCoverage", "testOpsPipeline", "testOpsTest", "featureFlagTimeseries",
 	"workGraphArtifacts", "workGraphEdges", "workGraphFlow",
+	"workUnitTeamAttributions",
 }
 
 func TestAssertCoverageAcceptsTheRegisteredSet(t *testing.T) {
@@ -66,8 +70,8 @@ func TestAssertCoverageRefusesAStaleEntry(t *testing.T) {
 	if err == nil {
 		t.Fatal("an operation covered here but not registered must fail")
 	}
-	if !strings.Contains(err.Error(), "workGraphFlow") {
-		t.Fatalf("the failure must NAME the stale entry, got %v", err)
+	if stale := registeredOperations[len(registeredOperations)-1]; !strings.Contains(err.Error(), stale) {
+		t.Fatalf("the failure must NAME the stale entry %s, got %v", stale, err)
 	}
 }
 
@@ -128,7 +132,11 @@ func TestWindowedSpecsUseTheWindow(t *testing.T) {
 		"featureFlagEvents": true, "featureFlags": true, "pr": true,
 		"experiments": true, "busFactor": true, "compoundingRisk": true, "reportRuns": true, "savedReport": true, "savedReports": true, "securityAlerts": true, "securityOverview": true,
 		"releaseImpact": true, "throughputForecast": true, "workGraphArtifacts": true, "workGraphEdges": true,
-		"workGraphFlow": true,
+		"aiOpportunities": true, "improveOpportunities": true,
+		"aiWorkflowDrilldown": true,
+		"workGraphFlow":       true,
+
+		"workUnitTeamAttributions": true,
 	}
 
 	for _, operation := range KnownOperations() {
@@ -349,8 +357,8 @@ func TestEverySpecDeclaresItsResponseRoot(t *testing.T) {
 	// someone "tidied" ResponseRoot into a copy of the operation name --
 	// and the parity-path checks above would silently start passing for
 	// paths that can never match.
-	if sharedRoots != 10 {
-		t.Fatalf("expected 10 operations whose response root differs from their name, got %d", sharedRoots)
+	if sharedRoots != 14 {
+		t.Fatalf("expected 14 operations whose response root differs from their name, got %d", sharedRoots)
 	}
 }
 
@@ -544,5 +552,155 @@ func TestReleaseImpactRequestsMatchThePage(t *testing.T) {
 	}
 	if len(sourceType.Parity.RequireNonEmpty) != 1 || sourceType.Parity.RequireNonEmpty[0] != "data.workGraphEdges.edges" {
 		t.Fatalf("SOURCE_TYPE_POPULATED must require a non-empty edge list, got %v", sourceType.Parity.RequireNonEmpty)
+	}
+}
+
+// A team id is stored on the newest rollup days only, so every team-scoped AI
+// variant must end its window at the last complete UTC day, and a variant that
+// selects nothing by construction must carry no declaration that could match
+// nothing.
+func TestAITeamVariantsReachTheLastCompleteDayAndEmptyVariantsDeclareNothing(t *testing.T) {
+	restore := aiClock
+	defer func() { aiClock = restore }()
+	aiClock = func() time.Time { return time.Date(2026, 9, 20, 23, 59, 59, 0, time.UTC) }
+	const lastComplete = "2026-09-19"
+	for _, operation := range []string{"aiImpactSummary", "aiComparison", "aiReviewLoad", "aiRiskBreakdown", "aiAttributedPrs", "aiAttributionOverview"} {
+		spec, err := SpecFor(operation)
+		if err != nil {
+			t.Fatal(err)
+		}
+		seen := map[string]bool{}
+		for _, v := range spec.Variants {
+			seen[v.Name] = true
+			vars := v.Variables("org", DefaultWindow())
+			end := vars["dateRange"].(map[string]any)["endDate"].(string)
+			switch v.Name {
+			case "TEAM_VALID":
+				if end != lastComplete {
+					t.Errorf("%s/TEAM_VALID ends at %s, want the last complete day %s", operation, end, lastComplete)
+				}
+			case "REPO_UNKNOWN", "REPO_NAME_UNKNOWN", "TEAM_UNKNOWN", "REPO_AND_TEAM_UNKNOWN":
+				if len(v.Parity.FloatTierB) != 0 || len(v.Parity.BaselineDefects) != 0 || len(v.Parity.OrderInsensitiveLists) != 0 {
+					t.Errorf("%s/%s selects nothing by construction and must declare nothing", operation, v.Name)
+				}
+			default:
+				if end != DefaultWindow().UntilDate {
+					t.Errorf("%s/%s must keep the base window, ends at %s", operation, v.Name, end)
+				}
+			}
+		}
+		if !seen["TEAM_VALID"] {
+			t.Errorf("%s has no TEAM_VALID variant", operation)
+		}
+	}
+	// a run window that already ends later keeps its own end
+	if got := aiWindowEnd(Window{UntilDate: "2026-12-31"}); got != "2026-12-31" {
+		t.Errorf("a later until-date is kept, got %s", got)
+	}
+	// the run day itself is never included
+	aiClock = func() time.Time { return time.Date(2026, 9, 20, 0, 0, 0, 0, time.UTC) }
+	if got := aiWindowEnd(Window{UntilDate: "2026-09-01"}); got != "2026-09-19" {
+		t.Errorf("at the start of the run day the window ends the day before, got %s", got)
+	}
+}
+
+// Every base request and every scope or page breakout of an AI list operation
+// that can select rows requires a non-empty list, so two empty answers cannot
+// pass as a measurement; only variants that select nothing by construction, and
+// an offset page, do not.
+func TestAIListOperationsRequireNonEmptyLists(t *testing.T) {
+	lists := map[string]string{
+		"aiImpactSummary": "data.aiImpactSummary.daily", "aiReviewLoad": "data.aiReviewLoad.byBucket",
+		"aiRiskBreakdown": "data.aiRiskBreakdown.byBucket", "aiAttributedPrs": "data.aiAttributedPrs.rows",
+		"aiAttributionOverview": "data.aiAttributionOverview.rows",
+	}
+	for operation, list := range lists {
+		spec, err := SpecFor(operation)
+		if err != nil {
+			t.Fatal(err)
+		}
+		has := func(o Options) bool {
+			for _, p := range o.RequireNonEmpty {
+				if p == list {
+					return true
+				}
+			}
+			return false
+		}
+		if !has(spec.Parity) {
+			t.Errorf("%s: the base request does not require %s", operation, list)
+		}
+		for _, v := range spec.Variants {
+			unknown := strings.HasSuffix(v.Name, "_UNKNOWN") || v.Name == "REPO_AND_TEAM_UNKNOWN"
+			switch {
+			case unknown || v.Name == "PAGE_OFFSET":
+				if has(v.Parity) {
+					t.Errorf("%s/%s may hold nothing and must not require %s", operation, v.Name, list)
+				}
+			case v.Instance == nil && !has(v.Parity):
+				t.Errorf("%s/%s does not require %s", operation, v.Name, list)
+			}
+		}
+	}
+}
+
+// The work unit team attribution requests are the ones the investment view
+// sends: a list of work unit ids and an optional team id. A change to any of
+// them proves a request no view sends.
+func TestWorkUnitTeamAttributionsRequestsMatchTheView(t *testing.T) {
+	spec, err := SpecFor("workUnitTeamAttributions")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.ResponseRoot != "workUnitTeamAttributions" {
+		t.Fatalf("response root %q", spec.ResponseRoot)
+	}
+	encode := func(vars map[string]any) string {
+		encoded, err := json.Marshal(vars)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(encoded)
+	}
+	if got, want := encode(spec.Variables("org-1", DefaultWindow())), `{"orgId":"org-1","teamId":null,"workUnitIds":["wu-unknown-1"]}`; got != want {
+		t.Fatalf("base request %s, want %s", got, want)
+	}
+	byName := map[string]Variant{}
+	for _, v := range spec.Variants {
+		byName[v.Name] = v
+	}
+	if len(byName) != 4 {
+		t.Fatalf("%d variants, want 4", len(byName))
+	}
+	for name, want := range map[string]string{
+		"TEAM_UNKNOWN": `{"orgId":"org-1","teamId":"team-abc-123","workUnitIds":["wu-unknown-1"]}`,
+		"TEAM_BLANK":   `{"orgId":"org-1","teamId":"","workUnitIds":["wu-unknown-1"]}`,
+	} {
+		if got := encode(byName[name].Variables("org-1", DefaultWindow())); got != want {
+			t.Fatalf("%s request %s, want %s", name, got, want)
+		}
+	}
+	unit := byName["WORK_UNIT_VALID"]
+	vars := unit.Variables("org-1", DefaultWindow())
+	unit.Instance.Bind(vars, "wu-1")
+	if got, want := encode(vars), `{"orgId":"org-1","teamId":null,"workUnitIds":["wu-1"]}`; got != want {
+		t.Fatalf("WORK_UNIT_VALID request %s, want %s", got, want)
+	}
+	team := byName["TEAM_OWNS_UNITS"]
+	vars = team.Variables("org-1", DefaultWindow())
+	team.Instance.Bind(vars, "team-1")
+	if got, want := encode(vars), `{"orgId":"org-1","teamId":"team-1","workUnitIds":[]}`; got != want {
+		t.Fatalf("TEAM_OWNS_UNITS request %s, want %s", got, want)
+	}
+	for name, variant := range map[string]Variant{"WORK_UNIT_VALID": unit, "TEAM_OWNS_UNITS": team} {
+		if len(variant.Parity.RequireNonEmpty) != 1 || variant.Parity.RequireNonEmpty[0] != "data.workUnitTeamAttributions" {
+			t.Fatalf("%s must require a non-empty answer, got %v", name, variant.Parity.RequireNonEmpty)
+		}
+	}
+	if echo := unit.Instance.Echo("wu-1"); len(echo) != 1 || echo[0].Fields[0] != "workUnitId" || echo[0].Value != "wu-1" {
+		t.Fatalf("WORK_UNIT_VALID echo %+v", echo)
+	}
+	if echo := team.Instance.Echo("team-1"); len(echo) != 1 || echo[0].Fields[0] != "teamId" || echo[0].Value != "team-1" {
+		t.Fatalf("TEAM_OWNS_UNITS echo %+v", echo)
 	}
 }

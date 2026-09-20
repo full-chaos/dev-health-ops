@@ -1869,7 +1869,7 @@ func aiOpportunityVariants() []Variant {
 	return variants
 }
 
-const aiOpportunityRepoScopeReason = "a repoId that is, or resolves to, a UUID reaches the Python detector's repository filter, which ClickHouse rejects (code 386, NO_COMMON_TYPE: toString(repo_id) compared with a UUID parameter), so the Python plane answers a GraphQL error for every such value; Go answers the scoped list (empty for an id that names nothing). A proof refuses a baseline that errored, so these cases record the difference without comparing"
+const aiOpportunityRepoScopeReason = "a repoId that is, or resolves to, a UUID and carries no teamId makes the Python detector read pull requests with `pr.repo_id = {repo_id:UUID}`, which ClickHouse rejects (code 386, NO_COMMON_TYPE), so the Python plane answers a GraphQL error for every such value; with a teamId that read is skipped and both planes answer. Go answers the scoped list (empty for an id that names nothing). A proof refuses a baseline that errored, so these cases record the difference without comparing"
 
 // aiOpportunityRepoKnownRefusal records that a repository scope answers a
 // GraphQL error on the Python plane, so the case cannot compare. It never

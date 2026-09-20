@@ -23,6 +23,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/authctx"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/investmentexplain"
+	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
 )
 
 const teamRoutesOrg = "teamroutes-org"
@@ -36,6 +37,19 @@ func seedTeamRoutesChurn(t *testing.T, conn chdriver.Conn, repoID uuid.UUID, chu
 		repoID, time.Date(2026, 8, 22, 0, 0, 0, 0, time.UTC), churn,
 		time.Date(2026, 8, 26, 0, 0, 0, 0, time.UTC), teamRoutesOrg); err != nil {
 		t.Fatalf("seed repo_metrics_daily: %v", err)
+	}
+}
+
+// seedTeamRoutesRework writes one investment_metrics_daily row keyed by team id:
+// the source of home's rework allocation, which the team scope reads by column.
+func seedTeamRoutesRework(t *testing.T, conn chdriver.Conn, teamID string) {
+	t.Helper()
+	if err := conn.Exec(context.Background(),
+		`INSERT INTO investment_metrics_daily (repo_id, day, team_id, investment_area, project_stream, work_items_completed, prs_merged, churn_loc, computed_at, org_id)
+		 VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		time.Date(2026, 8, 22, 0, 0, 0, 0, time.UTC), teamID, "feature_delivery", "core",
+		uint32(5), uint32(2), uint64(40), time.Date(2026, 8, 26, 0, 0, 0, 0, time.UTC), teamRoutesOrg); err != nil {
+		t.Fatalf("seed investment_metrics_daily: %v", err)
 	}
 }
 
@@ -117,6 +131,8 @@ func TestTeamScopeRoutes_OwnedRepositoriesOnly(t *testing.T) {
 		seedTeamRoutesChurn(t, conn, repo, churn)
 	}
 
+	seedTeamRoutesRework(t, conn, "team-two")
+
 	reader, err := investmentexplain.NewReader(client)
 	if err != nil {
 		t.Fatalf("NewReader: %v", err)
@@ -139,11 +155,17 @@ func TestTeamScopeRoutes_OwnedRepositoriesOnly(t *testing.T) {
 		wantUnits  []string
 		wantChurn  float64
 		ownedCount int
+		// wantHomeDeclaration/wantUnitsDeclaration: whether the corpus's own
+		// BaselineTimeoutDeclared paths hold on the real handler's body. Home's
+		// rework allocation is keyed by team column and is seeded for team-two
+		// only, so a team without it reads as empty there and the declaration
+		// would refuse instead of admitting on silence.
+		wantHomeDeclaration, wantUnitsDeclaration bool
 	}{
-		{"two owned repositories, one unowned repository present", "team-two", []string{"wu-a", "wu-b"}, 30, 2},
-		{"one owned repository", "team-one", []string{"wu-c"}, 400, 1},
-		{"no owned repository", "team-none", []string{}, 0, 0},
-		{"organization scope reads every repository", "", []string{"wu-a", "wu-b", "wu-c", "wu-d"}, 8430, 4},
+		{"two owned repositories, one unowned repository present", "team-two", []string{"wu-a", "wu-b"}, 30, 2, true, true},
+		{"one owned repository", "team-one", []string{"wu-c"}, 400, 1, false, true},
+		{"no owned repository", "team-none", []string{}, 0, 0, false, false},
+		{"organization scope reads every repository", "", []string{"wu-a", "wu-b", "wu-c", "wu-d"}, 8430, 4, false, true},
 	} {
 		t.Run(cell.name, func(t *testing.T) {
 			var unitsQuery, homeQuery, unitsScope, homeScope string
@@ -156,20 +178,54 @@ func TestTeamScopeRoutes_OwnedRepositoriesOnly(t *testing.T) {
 				unitsScope, homeScope = teamScope(cell.team), teamScope(cell.team)
 			}
 
-			for label, got := range map[string][]string{
-				"GET work-units":  workUnitIDsIn(t, serveTeamRoutes(t, unitsGet, http.MethodGet, unitsQuery, "")),
-				"POST work-units": workUnitIDsIn(t, serveTeamRoutes(t, unitsPost, http.MethodPost, "/api/v1/work-units", unitsPostBody(unitsScope))),
-			} {
-				if strings.Join(got, ",") != strings.Join(cell.wantUnits, ",") {
-					t.Errorf("%s for %q = %v, want exactly %v", label, cell.team, got, cell.wantUnits)
+			bodies := map[string][]byte{
+				"REST:GET:/api/v1/work-units":  serveTeamRoutes(t, unitsGet, http.MethodGet, unitsQuery, ""),
+				"REST:POST:/api/v1/work-units": serveTeamRoutes(t, unitsPost, http.MethodPost, "/api/v1/work-units", unitsPostBody(unitsScope)),
+				"REST:GET:/api/v1/home":        serveTeamRoutes(t, homeGet, http.MethodGet, homeQuery, ""),
+				"REST:POST:/api/v1/home":       serveTeamRoutes(t, homePost, http.MethodPost, "/api/v1/home", homePostBody(homeScope)),
+			}
+			for _, operation := range []string{"REST:GET:/api/v1/work-units", "REST:POST:/api/v1/work-units"} {
+				if got := workUnitIDsIn(t, bodies[operation]); strings.Join(got, ",") != strings.Join(cell.wantUnits, ",") {
+					t.Errorf("%s for %q = %v, want exactly %v", operation, cell.team, got, cell.wantUnits)
 				}
 			}
-			for label, got := range map[string]float64{
-				"GET home":  homeChurnIn(t, serveTeamRoutes(t, homeGet, http.MethodGet, homeQuery, "")),
-				"POST home": homeChurnIn(t, serveTeamRoutes(t, homePost, http.MethodPost, "/api/v1/home", homePostBody(homeScope))),
+			for _, operation := range []string{"REST:GET:/api/v1/home", "REST:POST:/api/v1/home"} {
+				if got := homeChurnIn(t, bodies[operation]); got != cell.wantChurn {
+					t.Errorf("%s churn for %q = %v, want %v (the sum over exactly its %d owned repositories)", operation, cell.team, got, cell.wantChurn, cell.ownedCount)
+				}
+			}
+			// The corpus's declared non-empty paths, evaluated on the real
+			// handlers' own bodies (the four team-scoped requests only).
+			if cell.team == "" {
+				return
+			}
+			for operation, want := range map[string]bool{
+				"REST:GET:/api/v1/work-units": cell.wantUnitsDeclaration, "REST:POST:/api/v1/work-units": cell.wantUnitsDeclaration,
+				"REST:GET:/api/v1/home": cell.wantHomeDeclaration, "REST:POST:/api/v1/home": cell.wantHomeDeclaration,
 			} {
-				if got != cell.wantChurn {
-					t.Errorf("%s churn for %q = %v, want %v (the sum over exactly its %d owned repositories)", label, cell.team, got, cell.wantChurn, cell.ownedCount)
+				spec, err := goapiproof.SpecForREST(operation)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var declared *goapiproof.BaselineTimeoutDeclaration
+				for _, request := range spec.Requests {
+					if request.BaselineTimeoutDeclared != nil {
+						declared = request.BaselineTimeoutDeclared
+					}
+				}
+				if declared == nil {
+					t.Fatalf("%s carries no declaration", operation)
+				}
+				snapshot, err := goapiproof.DecodeRESTSnapshot(bodies[operation])
+				if err != nil {
+					t.Fatalf("%s: %v", operation, err)
+				}
+				holds := true
+				for _, path := range declared.NonEmptyPaths {
+					holds = holds && goapiproof.SnapshotHoldsNonEmpty(snapshot, path)
+				}
+				if holds != want {
+					t.Errorf("%s for %q: declared NonEmptyPaths %v hold=%v, want %v", operation, cell.team, declared.NonEmptyPaths, holds, want)
 				}
 			}
 		})

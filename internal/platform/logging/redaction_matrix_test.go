@@ -9,6 +9,7 @@ import (
 	"log"
 	"log/slog"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -254,6 +255,8 @@ func TestEveryCarrierSpellingAndPositionRedactsTheProtectedValue(t *testing.T) {
 	}
 }
 
+var recordTime = regexp.MustCompile(`"time":"[^"]*",?`)
+
 // TestProtectedAttributeKeyHidesEveryKind: an attribute or group named like a
 // credential hides its value whatever slog.Kind carries it.
 func TestProtectedAttributeKeyHidesEveryKind(t *testing.T) {
@@ -298,7 +301,10 @@ func TestProtectedAttributeKeyHidesEveryKind(t *testing.T) {
 					logger.WithGroup(key).WithGroup("middle").Info("m", slog.Attr{Key: "inner_value", Value: value})
 					logger.Info("m", "note", "visible")
 				}
-				line := output.String()
+				// The record's own "time" field is the wall clock: its nanoseconds
+				// can contain a canary's digits ("98123") by chance, so it is
+				// removed before scanning. Every other field is still scanned.
+				line := recordTime.ReplaceAllString(output.String(), "")
 				for _, fragment := range []string{"canary", "98123", "2031-01-02", "Y2FuYXJ5"} {
 					if strings.Contains(line, fragment) {
 						t.Errorf("%s %s kind=%s leaked %q: %s", carrier, key, value.Kind(), fragment, line)

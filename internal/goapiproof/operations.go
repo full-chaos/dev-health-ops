@@ -1123,7 +1123,21 @@ const workGraphEdgesDefaultLimit = 1000
 // list that reaches it is a page the limit may have cut, where a list-length
 // difference cannot be told from a dropped edge, so the declaration refuses.
 func workGraphEdgesParityAt(limit int) Options {
-	return Options{BaselineDefects: []BaselineDefect{{
+	return Options{BaselineDefects: []BaselineDefect{workGraphEdgesPerEdgeDefect(limit), workGraphEdgesWholePageDefect(limit)}}
+}
+
+// workGraphEdgesNonCutParityAt is the configuration of a request whose purpose
+// is a page the limit does not cut. It carries only the whole-page declaration:
+// a supplied identifier whose page reaches the limit is then not absorbed by the
+// per-edge declaration, every finding on it stays outside, and the run reports
+// it so a smaller identifier is supplied.
+func workGraphEdgesNonCutParityAt(limit int) Options {
+	return Options{BaselineDefects: []BaselineDefect{workGraphEdgesWholePageDefect(limit)}}
+}
+
+// workGraphEdgesPerEdgeDefect owns a page the limit may have cut.
+func workGraphEdgesPerEdgeDefect(limit int) BaselineDefect {
+	return BaselineDefect{
 		Ticket:             "CHAOS-5791",
 		Reason:             "work_graph_edges is a ReplacingMergeTree keyed on the edge identity; the baseline plane reads it with no merge-time collapse, so an unmerged duplicate physical version of one logical edge surfaces as two content-identical rows sharing one edgeId, spending one extra slot of the page limit and shifting every later element's position, including which edge's id pageInfo.endCursor names. The candidate plane collapses duplicate versions before applying the page limit, so it carries no repeated edgeId. Candidate is correct. Known limit (CHAOS-6116): on a page the limit cuts this shape resolves a positional finding to the baseline id at that index and admits a baseline-only id on its own copies agreeing, so a candidate that dropped a distinct id on such a page would be absorbed; the non-cut variants under CHAOS-6114 re-prove the operation where that cannot hide.",
 		Paths:              []string{"data.workGraphEdges.edges", "data.workGraphEdges.pageInfo.endCursor"},
@@ -1135,7 +1149,12 @@ func workGraphEdgesParityAt(limit int) Options {
 			TrailingCursorPath: "data.workGraphEdges.pageInfo.endCursor",
 			CutPageLimit:       limit,
 		},
-	}, {
+	}
+}
+
+// workGraphEdgesWholePageDefect owns a page the limit did not cut.
+func workGraphEdgesWholePageDefect(limit int) BaselineDefect {
+	return BaselineDefect{
 		Ticket:             "CHAOS-6114",
 		Reason:             "The same duplicate-version mechanism as CHAOS-5791, on a page the request limit does not cut: work_graph_edges is a ReplacingMergeTree, the baseline plane reads it with no merge-time collapse, so its list and its totalCount (the length of the list it returns) count every unmerged physical version of an edge, while the candidate plane collapses versions before counting, so its list and totalCount count distinct edges. Measured on production for one node id: baseline 147 rows over 73 distinct edgeIds (72 ids twice, 1 id three times), totalCount 147; candidate 73 rows, 73 distinct, totalCount 73; the two id sets identical. This declaration owns every finding on such a page (list length, totalCount, each positional element, the trailing cursor), and the per-edge declaration above applies only to a page the limit may have cut. Admitted only when the baseline's raw length is below the request limit, the candidate ids equal the baseline's distinct ids in the baseline's first-occurrence order, every shared id is byte-identical on both planes, the candidate carries no repeated id and is in confidence-descending, edgeId-ascending order, and each plane's totalCount equals its own list length. A candidate that drops a distinct id, invents one, disagrees with a shared row, or reports a totalCount other than its own length stays outside. Candidate is correct.",
 		Paths:              []string{"data.workGraphEdges.edges", "data.workGraphEdges.totalCount", "data.workGraphEdges.pageInfo.endCursor"},
@@ -1151,7 +1170,7 @@ func workGraphEdgesParityAt(limit int) Options {
 			OwnsPage:      true,
 			CursorPath:    "data.workGraphEdges.pageInfo.endCursor",
 		},
-	}}}
+	}
 }
 
 func workGraphVariables(orgID string, _ Window) map[string]any {

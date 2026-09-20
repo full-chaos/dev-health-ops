@@ -31,7 +31,7 @@ func releaseImpactNodeVariant(name, kind string) Variant {
 			return map[string]any{"orgId": orgID, "filters": map[string]any{"nodeId": "", "limit": 200}}
 		},
 		Parity: Options{
-			BaselineDefects: workGraphEdgesParityAt(200).BaselineDefects,
+			BaselineDefects: workGraphEdgesNonCutParityAt(200).BaselineDefects,
 			RequireNonEmpty: []string{"data.workGraphEdges.edges"},
 		},
 		Instance: &VariantInstance{
@@ -56,7 +56,7 @@ func releaseImpactSourceTypeVariant(name, kind string) Variant {
 			return map[string]any{"orgId": orgID, "filters": map[string]any{"nodeId": "", "sourceType": "PR", "limit": 50}}
 		},
 		Parity: Options{
-			BaselineDefects: workGraphEdgesParityAt(50).BaselineDefects,
+			BaselineDefects: workGraphEdgesNonCutParityAt(50).BaselineDefects,
 			RequireNonEmpty: []string{"data.workGraphEdges.edges"},
 		},
 		Instance: &VariantInstance{

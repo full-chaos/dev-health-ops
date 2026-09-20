@@ -458,6 +458,7 @@ func TestWorkGraphEdgesOnePageOneOwner(t *testing.T) {
 	if len(cases) != 6 {
 		t.Fatalf("found %d requests carrying the whole-page declaration, want 6", len(cases))
 	}
+	perEdgeCases, nonCutCases := 0, 0
 	compare := func(c requestCase, base, cand []collapseEdge) Result {
 		return Compare(snapshotFromJSON(t, collapseBody(t, base, len(base))), snapshotFromJSON(t, collapseBody(t, cand, len(cand))), c.parity)
 	}
@@ -506,10 +507,38 @@ func TestWorkGraphEdgesOnePageOneOwner(t *testing.T) {
 			if matched(result, wholePage) {
 				t.Errorf("cut page: the whole-page declaration matched on a page it refuses")
 			}
-			if c.limit > 1 && !matched(result, perEdge) {
-				t.Errorf("cut page: the per-edge declaration did not match (outside=%d)", result.DifferencesOutsideBaselineDefect)
+			hasPerEdge := false
+			for _, d := range c.parity.BaselineDefects {
+				if d.WorkGraphEdgeDedupShape != nil {
+					hasPerEdge = true
+				}
+			}
+			if hasPerEdge {
+				perEdgeCases++
+				if !matched(result, perEdge) {
+					t.Errorf("cut page: the per-edge declaration did not match (outside=%d)", result.DifferencesOutsideBaselineDefect)
+				}
+			} else {
+				// A request whose purpose is a page the limit does not cut
+				// carries only the whole-page declaration: a supplied
+				// identifier whose page reaches the limit leaves every finding
+				// outside, so the run reports it rather than absorbing it.
+				nonCutCases++
+				if result.DifferencesOutsideBaselineDefect == 0 || matched(result, perEdge) {
+					t.Errorf("cut page on a non-cut request: outside=%d matched=%v, want findings left outside", result.DifferencesOutsideBaselineDefect, result.BaselineDefectsMatched)
+				}
+				// A dropped and an invented id on that cut page are not absorbed either.
+				altered := append(append([]collapseEdge{}, cutCand[:c.limit-1]...), edges[c.limit], edges[c.limit+1])
+				if res := compare(c, cutBase, altered); res.DifferencesOutsideBaselineDefect == 0 {
+					t.Errorf("cut page on a non-cut request: a dropped and an invented id were admitted (matched %v)", res.BaselineDefectsMatched)
+				}
 			}
 		})
+	}
+	// The two base requests keep both declarations; the four requests whose
+	// purpose is a page the limit does not cut carry the whole-page one only.
+	if perEdgeCases != 2 || nonCutCases != 4 {
+		t.Fatalf("per-edge cases %d, non-cut-only cases %d, want 2 and 4", perEdgeCases, nonCutCases)
 	}
 }
 

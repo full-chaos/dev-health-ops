@@ -180,6 +180,15 @@
         {"file": "cmd/query-api/internal/experiments/experiments_test.go", "test": "TestStableID_MatchesTheReferenceDigest"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_symbols_are_not_redefined"}
       ]
+    },
+    {
+      "operation": "aiOpportunities",
+      "two_plane_ops_sha": "9d6512ef7ee24aaac9c293f7fdbb5ea52c36dab6",
+      "guards": [
+        {"file": "cmd/query-api/internal/aianalytics/oracle_d_test.go", "test": "TestOpportunityDetectors_MatchPythonDetectors"},
+        {"file": "cmd/query-api/internal/aianalytics/statements_d_test.go", "test": "TestDetectorStatements_ApplyScopeAndWindow"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_symbols_are_not_redefined"}
+      ]
     }
   ]
 }

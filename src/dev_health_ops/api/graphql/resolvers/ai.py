@@ -33,7 +33,6 @@ from dev_health_ops.metrics.ai_impact import (
 )
 from dev_health_ops.metrics.loaders.ai_attribution import AIAttributionClickHouseLoader
 from dev_health_ops.metrics.loaders.ai_impact import AIImpactClickHouseLoader
-from dev_health_ops.metrics.opportunities.ai_detector import AIOpportunityDetector
 
 from ..authz import require_org_id
 from ..context import GraphQLContext
@@ -59,7 +58,6 @@ from ..models.ai import (
     AIImpactSummary,
     AILeverageComponents,
     AIMissingState,
-    AIOpportunitiesResult,
     AIReviewerConcentrationSummary,
     AIReviewLoadResult,
     AIReviewLoadRow,
@@ -161,27 +159,6 @@ async def _normalize_attribution_scope(
         scope.team_id or None,
         kinds,
         bool(scope.repo_id) and repo_id is None,
-    )
-
-
-async def _normalize_opportunity_scope(
-    context: GraphQLContext, org_id: str, scope: AIScopeInput | None
-) -> tuple[AIScopeInput | None, bool]:
-    if scope is None or not scope.repo_id:
-        return scope, False
-    repo_id = await _resolve_repo_ref(_require_client(context), org_id, scope.repo_id)
-    if repo_id is None:
-        return None, True
-    if scope.repo_id == str(repo_id):
-        return scope, False
-    return (
-        AIScopeInput(
-            repo_id=str(repo_id),
-            team_id=scope.team_id,
-            work_type=scope.work_type,
-            buckets=scope.buckets,
-        ),
-        False,
     )
 
 
@@ -1014,47 +991,6 @@ async def _load_overlap_rows(
     complexity_rows.sort(key=lambda r: r.bucket)
 
     return hotspot_rows, complexity_rows
-
-
-# =============================================================================
-# resolve_ai_opportunities
-# =============================================================================
-
-
-async def resolve_ai_opportunities(
-    context: GraphQLContext,
-    scope: AIScopeInput | None = None,
-    limit: int = 25,
-) -> AIOpportunitiesResult:
-    """Return rule-based AI automation opportunities.
-
-    First release decision: inline detection. The resolver reads existing
-    ClickHouse rollups synchronously via ``AIOpportunityDetector`` and does not
-    persist recommendations yet, keeping the detector pure-read and avoiding a
-    second materialization path until noisy-recommendation dismissal lands.
-    """
-
-    org_id = require_org_id(context)
-    client = _require_client(context)
-    resolved_scope, repo_unresolved = await _normalize_opportunity_scope(
-        context, org_id, scope
-    )
-    if repo_unresolved:
-        return AIOpportunitiesResult(
-            org_id=org_id, recommendations=[], detector_ready=True
-        )
-    detector = AIOpportunityDetector(client)
-    recommendations = await detector.detect(
-        org_id=org_id, scope=resolved_scope, limit=limit
-    )
-    # detector_ready signals that the detector is wired and ran successfully,
-    # NOT that it found candidates.  An empty result is valid (no opportunities
-    # right now); False would mislead the frontend into showing "not connected".
-    return AIOpportunitiesResult(
-        org_id=org_id,
-        recommendations=recommendations,
-        detector_ready=True,
-    )
 
 
 # =============================================================================

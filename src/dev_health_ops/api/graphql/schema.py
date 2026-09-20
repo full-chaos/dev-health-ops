@@ -71,7 +71,6 @@ from .resolvers.ai import (
     resolve_ai_comparison,
     resolve_ai_governance_summary,
     resolve_ai_impact_summary,
-    resolve_ai_opportunities,
     resolve_ai_review_load,
     resolve_ai_risk_breakdown,
     resolve_ai_workflow_drilldown,
@@ -880,8 +879,7 @@ class Query:
         scope: AIScopeInput | None = None,
         limit: int = 25,
     ) -> AIOpportunitiesResult:
-        context = get_context(info)
-        return await resolve_ai_opportunities(context, scope, limit)
+        _raise_served_by_query_api("aiOpportunities", org_id, info)
 
     @strawberry.field(
         description=(

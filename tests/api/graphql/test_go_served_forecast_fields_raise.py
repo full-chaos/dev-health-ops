@@ -40,6 +40,10 @@ _QUERIES = {
         'query { experiments(orgId: "org-1") { derivedFromOpportunities } }',
         None,
     ),
+    "aiOpportunities": (
+        'query { aiOpportunities(orgId: "org-1") { detectorReady } }',
+        None,
+    ),
     "securityOverview": (
         'query { securityOverview(orgId: "org-1") { kpis { openTotal } } }',
         None,

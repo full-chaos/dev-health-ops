@@ -71,12 +71,21 @@ IMPROVE_RESOLVER_SOURCE = (
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "resolvers" / "improve.py"
 )
 
+AI_RESOLVER_SOURCE = (
+    ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "resolvers" / "ai.py"
+)
+
 DELETED_GO_SERVED_RESOLVER_SYMBOLS: dict[Path, frozenset[str]] = {
     # A scheduler helper with no caller in src/.
     CAPACITY_QUERIES_SOURCE: frozenset({"discover_team_scopes"}),
     # securityOverview: only the function is deleted; the module stays for
     # securityAlerts and the shared filter builder.
     SECURITY_RESOLVER_SOURCE: frozenset({"resolve_security_overview"}),
+    # aiOpportunities: the other AI resolvers stay in the module; the detector
+    # module stays as the Go detectors' parity oracle.
+    AI_RESOLVER_SOURCE: frozenset(
+        {"resolve_ai_opportunities", "_normalize_opportunity_scope"}
+    ),
     # experiments: the improve-opportunities resolver stays in the module.
     IMPROVE_RESOLVER_SOURCE: frozenset(
         {"resolve_experiments", "_stable_experiment_id", "_metric_from_card"}
@@ -223,6 +232,7 @@ RETAINED_ORACLE_MODULES: dict[str, Path] = {
 SDL_LOAD_BEARING_SOURCES: tuple[Path, ...] = (
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "models" / "pr.py",
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "models" / "improve.py",
+    ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "models" / "ai.py",
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "types" / "cognitive_load.py",
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "types" / "complexity.py",
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "types" / "review_edges.py",
@@ -234,6 +244,7 @@ SDL_LOAD_BEARING_SOURCES: tuple[Path, ...] = (
 
 SDL_LOAD_BEARING_SYMBOLS: dict[str, frozenset[str]] = {
     "improve.py": frozenset({"Experiment", "ExperimentsResult", "ExperimentStatus"}),
+    "ai.py": frozenset({"AIOpportunitiesResult", "AIOpportunity", "AIOpportunityKind"}),
     "pr.py": frozenset(
         {
             "PullRequestDetail",
@@ -288,6 +299,7 @@ SDL_LOAD_BEARING_SYMBOLS: dict[str, frozenset[str]] = {
             "bus_factor",
             "security_overview",
             "experiments",
+            "ai_opportunities",
             "work_graph_edges",
             "work_graph_flow",
             "work_graph_artifacts",

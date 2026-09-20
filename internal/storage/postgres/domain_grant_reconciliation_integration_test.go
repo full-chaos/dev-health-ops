@@ -209,6 +209,7 @@ func reconciliationTables() []domainTable {
 			ddl: `CREATE TABLE public.remaining_metric_partitions (
 				id uuid PRIMARY KEY, run_id uuid NOT NULL, ordinal integer NOT NULL, scope jsonb NOT NULL,
 				status text NOT NULL, attempt_count integer NOT NULL DEFAULT 0,
+				claim_token uuid NULL, lease_expires_at timestamptz NULL,
 				created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL)`,
 			exercise: []string{
 				`INSERT INTO public.remaining_metric_partitions
@@ -224,7 +225,11 @@ func reconciliationTables() []domainTable {
 				id uuid PRIMARY KEY, org_id uuid NOT NULL, kind text NOT NULL, scope jsonb NOT NULL,
 				model_ref text, prompt_ref text, llm_concurrency integer NOT NULL,
 				spend_limit_microunits bigint NOT NULL, correlation_id text NOT NULL,
-				idempotency_key text NOT NULL, state text NOT NULL)`,
+				idempotency_key text NOT NULL, state text NOT NULL,
+				claim_token uuid NULL, lease_expires_at timestamptz NULL,
+				attempt_count integer NOT NULL DEFAULT 0,
+				created_at timestamptz NOT NULL DEFAULT statement_timestamp(),
+				updated_at timestamptz NOT NULL DEFAULT statement_timestamp())`,
 			exercise: []string{
 				`INSERT INTO public.work_graph_execution_requests
 					(id, org_id, kind, scope, llm_concurrency, spend_limit_microunits, correlation_id, idempotency_key, state)
@@ -363,6 +368,10 @@ func reconciliationTables() []domainTable {
 			ddl: `CREATE TABLE public.metric_compatibility_executions (
 				id uuid PRIMARY KEY, worker_kind text NOT NULL, operation text NOT NULL,
 				run_id uuid NOT NULL, partition_id uuid NULL, state text NOT NULL,
+				family text NOT NULL DEFAULT 'f', generation text NOT NULL DEFAULT 'g',
+				scope_digest text NOT NULL DEFAULT 'd', claim_token uuid NOT NULL DEFAULT gen_random_uuid(),
+				attempt_count integer NOT NULL DEFAULT 1, failure_detail text NULL,
+				created_at timestamptz NOT NULL DEFAULT statement_timestamp(),
 				output_evidence jsonb NULL, completed_at timestamptz NULL,
 				last_attempt_at timestamptz NOT NULL DEFAULT statement_timestamp(),
 				CHECK (
@@ -556,7 +565,9 @@ func startGrantHarness(t *testing.T, ctx context.Context) (*pgxpool.Pool, string
 			updated_at timestamptz NOT NULL
 		)`,
 		"CREATE TABLE public.billing_notifications (id bigint PRIMARY KEY)",
-		"CREATE TABLE public.daily_metrics_partitions (id bigint PRIMARY KEY)",
+		`CREATE TABLE public.daily_metrics_partitions (
+			id bigint PRIMARY KEY, run_id uuid, status text, claim_token uuid, lease_expires_at timestamptz
+		)`,
 		`CREATE TABLE public.daily_metrics_runs (
 			id uuid PRIMARY KEY, org_id uuid NOT NULL, target_day date NOT NULL,
 			generation text NOT NULL, status text NOT NULL,
@@ -565,6 +576,20 @@ func startGrantHarness(t *testing.T, ctx context.Context) (*pgxpool.Pool, string
 			UNIQUE (org_id, target_day, generation)
 		)`,
 		"CREATE TABLE public.daily_metrics_finalize_redrive_events (id uuid PRIMARY KEY)",
+		// CHAOS-5459 repair audit tables: coordinator INSERT-only. No FKs; this
+		// suite measures privileges, not referential integrity.
+		`CREATE TABLE public.work_graph_execution_repairs (
+			id uuid PRIMARY KEY, request_id uuid NOT NULL,
+			expected_attempt_count integer NOT NULL, resolution text NOT NULL,
+			review_evidence text NOT NULL, output_evidence jsonb NULL,
+			created_at timestamptz NOT NULL DEFAULT statement_timestamp()
+		)`,
+		`CREATE TABLE public.metric_compatibility_execution_repairs (
+			id uuid PRIMARY KEY, execution_id uuid NOT NULL, expected_state text NOT NULL,
+			expected_attempt_count integer NOT NULL, resolution text NOT NULL,
+			review_evidence text NOT NULL, output_evidence jsonb NULL,
+			created_at timestamptz NOT NULL DEFAULT statement_timestamp()
+		)`,
 		"CREATE TABLE public.daily_metrics_partition_recompute_events (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.external_ingest_recompute_jobs (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.external_ingest_rejections (id bigint PRIMARY KEY)",

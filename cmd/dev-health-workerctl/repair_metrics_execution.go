@@ -4,37 +4,33 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net/http"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/repair"
 )
 
 // dispatchMetricsExecutionRepair handles `metrics execution-repair`
-// (CHAOS-5042): the per-execution twin of the existing bulk `metrics
-// daily-redrive` -- POST
-// /internal/worker/metric-executions/v1/{execution_id}/repair
-// (worker_metrics.py:2946-2954) for ONE metric_compatibility_executions row
-// an operator has already reviewed, using the SAME WORKER_METRIC_REPAIR_TOKEN
-// daily-redrive already requires (worker_auth.py:19-28 --
-// authorize_metric_repair -- also the token `workgraph repair` uses, chris
-// ruling CHAOS-5042: one shared operator repair token, not a distinct one
-// per repair endpoint). Exists because the bulk endpoint only ever authorizes retry_safe
-// (main.go:797-811's "a bulk path cannot inspect per-row evidence" note) --
-// the 4 daily compat executions this ticket found whose output already
-// exists in file_hotspot_daily need confirm_succeeded specifically, which
-// only this single-execution endpoint can grant (retry_safe would
-// SUM-duplicate their already-written rows).
-func dispatchMetricsExecutionRepair(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+// (CHAOS-5042): the per-execution twin of the bulk `metrics daily-redrive`,
+// resolving ONE metric_compatibility_executions row an operator has already
+// reviewed, in the operator's own database transaction
+// (repair.RepairMetricExecution). It exists because the bulk path only ever
+// authorizes retry_safe -- executions whose output already exists need
+// confirm_succeeded specifically (retry_safe would SUM-duplicate their
+// already-written rows). The same assertion applied twice is idempotent
+// (already_applied); a row whose original claim is still live is refused. With
+// --dry-run the transaction runs and is rolled back.
+func dispatchMetricsExecutionRepair(ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer) int {
 	flags := quietFlags("metrics execution-repair")
 	execution := flags.String("execution", "", "metric_compatibility_executions id (uuid)")
 	expectedState := flags.String("expected-state", "", "executing or ambiguous -- the row's CURRENT state, read via `metrics list-ambiguous-executions` just before this call")
-	expectedAttemptCount := flags.Int("expected-attempt-count", 0, "REQUIRED: the row's attempt_count, read via `metrics list-ambiguous-executions` just before this call -- the bridge refuses a stale value (CAS guard, worker_metrics.py:1337-1343)")
+	expectedAttemptCount := flags.Int("expected-attempt-count", 0, "REQUIRED: the row's attempt_count, read via `metrics list-ambiguous-executions` just before this call")
 	resolution := flags.String("resolution", "", "confirm_succeeded or retry_safe")
-	reviewEvidence := flags.String("review-evidence", "", "REQUIRED: what you verified before authorizing this resolution for this ONE execution (e.g. \"file_hotspot_daily already has rows for this run/family -- retry would SUM-duplicate them, confirming succeeded instead\")")
-	outputEvidence := flags.String("output-evidence", "", "REQUIRED only when --resolution=confirm_succeeded: a JSON object describing the real output this execution already produced (MetricExecutionRepairRequest.output_evidence); refused for retry_safe")
-	dryRun := flags.Bool("dry-run", false, "validate flags and print the request that WOULD be sent (token redacted), without calling the bridge")
+	reviewEvidence := flags.String("review-evidence", "", "REQUIRED: what you verified before authorizing this resolution")
+	outputEvidence := flags.String("output-evidence", "", "REQUIRED only when --resolution=confirm_succeeded: a JSON object describing the real output this execution already produced; refused for retry_safe")
+	dryRun := flags.Bool("dry-run", false, "run the repair in a transaction that is rolled back, and print what it would have done")
 	if flags.Parse(args) != nil || flags.NArg() != 0 {
 		return writeError(stderr, "invalid_request")
 	}
@@ -45,27 +41,24 @@ func dispatchMetricsExecutionRepair(ctx context.Context, args []string, stdout, 
 	if *expectedState != "executing" && *expectedState != "ambiguous" {
 		return writeError(stderr, "invalid_request")
 	}
-	if *resolution != "confirm_succeeded" && *resolution != "retry_safe" {
+	if *resolution != repair.ResolutionConfirmSucceeded && *resolution != repair.ResolutionRetrySafe {
 		return writeError(stderr, "invalid_request")
 	}
 	if *expectedAttemptCount < 1 {
 		return writeError(stderr, "invalid_request")
 	}
-	// Same friction-by-design bar as `metrics daily-redrive` and `workgraph
-	// repair`: no default, no generic hardcoded string. codex round 1, P2:
-	// also bounded to the bridge's own 2048-byte limit (worker_metrics.py
-	// MetricExecutionRepairRequest.review_evidence).
 	if !validateReviewEvidence(*reviewEvidence) {
 		return writeError(stderr, "invalid_request")
 	}
-	payload := map[string]any{
-		"expected_state":         *expectedState,
-		"expected_attempt_count": *expectedAttemptCount,
-		"resolution":             *resolution,
-		"review_evidence":        *reviewEvidence,
+	repairRequest := repair.MetricRequest{
+		ExecutionID:          executionID,
+		ExpectedState:        *expectedState,
+		ExpectedAttemptCount: *expectedAttemptCount,
+		Resolution:           *resolution,
+		ReviewEvidence:       *reviewEvidence,
 	}
 	trimmedOutputEvidence := strings.TrimSpace(*outputEvidence)
-	if *resolution == "confirm_succeeded" {
+	if *resolution == repair.ResolutionConfirmSucceeded {
 		if trimmedOutputEvidence == "" {
 			return writeError(stderr, "invalid_request")
 		}
@@ -73,51 +66,18 @@ func dispatchMetricsExecutionRepair(ctx context.Context, args []string, stdout, 
 		if err != nil {
 			return writeError(stderr, "invalid_request")
 		}
-		payload["output_evidence"] = evidence
+		repairRequest.OutputEvidence = evidence
 	} else if trimmedOutputEvidence != "" {
-		// worker_metrics.py:681-684 refuses retry_safe with output_evidence
-		// present just as hard as it refuses confirm_succeeded without it --
-		// reject locally rather than spend a round trip on a guaranteed 422.
 		return writeError(stderr, "invalid_request")
 	}
-	path := "/internal/worker/metric-executions/v1/" + executionID.String() + "/repair"
-	if *dryRun {
-		// Team-lead addition (CHAOS-5042): same preview shape as `workgraph
-		// repair --dry-run` -- full validation already ran, token never
-		// resolved or printed.
-		return writeResult(stdout, stderr, map[string]any{
-			"dry_run":       true,
-			"method":        http.MethodPost,
-			"path":          path,
-			"authorization": "Bearer [REDACTED]",
-			"payload":       payload,
-		})
-	}
-	status, body, err := postWorkerBridge[metricExecutionRepairBridgeResponse](
-		ctx, "WORKER_METRIC_REPAIR_TOKEN",
-		path,
-		payload,
-	)
+	pool, err := coordinatorPoolOf(runtime)
 	if err != nil {
 		return writeError(stderr, "operator_backend_unavailable")
 	}
-	// Print the bridge's own response verbatim on every outcome, same as
-	// `workgraph repair` -- a 409 ("Execution state or attempt changed",
-	// "Original execution claim is still active") or 422 names the exact
-	// reason.
-	writeResult(stdout, stderr, body)
-	if status < http.StatusOK || status >= http.StatusMultipleChoices {
-		return 1
-	}
-	return 0
+	result, err := repair.RepairMetricExecution(ctx, pool, repairRequest, *dryRun)
+	return writeRepairOutcome(stdout, stderr, result, err, *dryRun)
 }
 
-// metricsAmbiguousExecution is one row of `metrics
-// list-ambiguous-executions`'s read-only output. metric_compatibility_executions
-// carries no org_id column of its own (alembic 0059) -- org is resolved by
-// joining run_id against whichever run table its worker_kind implies
-// (daily_metrics_runs for 'daily', remaining_metric_runs for 'remaining';
-// alembic 0059's own CHECK bounds worker_kind to exactly those two values).
 type metricsAmbiguousExecution struct {
 	ExecutionID   string `json:"execution_id"`
 	OrgID         string `json:"org_id"`

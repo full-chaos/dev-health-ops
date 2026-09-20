@@ -2,13 +2,17 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/repair"
 )
 
 // dispatchWorkgraph handles `workerctl workgraph ...` (CHAOS-5042): the
@@ -35,7 +39,7 @@ func dispatchWorkgraph(ctx context.Context, runtime *operatorRuntime, args []str
 	case "list-undelivered":
 		return dispatchWorkgraphListUndelivered(ctx, runtime, args[1:], stdout, stderr)
 	case "repair":
-		return dispatchWorkgraphRepair(ctx, args[1:], stdout, stderr)
+		return dispatchWorkgraphRepair(ctx, runtime, args[1:], stdout, stderr)
 	case "trigger":
 		return dispatchWorkgraphTrigger(ctx, runtime, args[1:], stdout, stderr)
 	default:
@@ -132,25 +136,24 @@ ORDER BY request.updated_at`, orgFilter)
 	return writeResult(stdout, stderr, results)
 }
 
-// dispatchWorkgraphRepair calls the Python bridge's repair endpoint
-// directly -- it deliberately does NOT go through joboperator.Service's
-// Action/audit pipeline, the same scope choice `metrics daily-redrive`
-// already made (main.go:773-777), gated only by WORKER_METRIC_REPAIR_TOKEN
-// (the SAME token `metrics daily-redrive`/`metrics execution-repair` use --
-// chris ruling, CHAOS-5042: one shared operator repair token, not a
-// distinct one per repair endpoint). It takes no *operatorRuntime/DB connection
-// at all: the repair endpoint is the sole source of truth for whether
-// --request/--expected-attempt-count still name a live, unleased ambiguous
-// row (worker_workgraph.py:468-478's FOR UPDATE read), so there is nothing
-// for a second local check to add except a race with the bridge's own.
-func dispatchWorkgraphRepair(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+// dispatchWorkgraphRepair resolves one unleased ambiguous work-graph execution
+// request in the operator's own database transaction (repair.RepairWorkgraph):
+// the row must be ambiguous on both the request and its ledger, hold no lease,
+// and carry the --expected-attempt-count the operator read from
+// `workgraph list-ambiguous`, otherwise the repair is refused and nothing
+// changes. It runs on the coordinator pool and deliberately does NOT go through
+// joboperator.Service's Action/audit pipeline, the same scope choice
+// `metrics daily-redrive` made. With --dry-run the whole transaction runs and is
+// rolled back, so an operator can prove the repair against a live row without
+// changing it.
+func dispatchWorkgraphRepair(ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer) int {
 	flags := quietFlags("workgraph repair")
 	request := flags.String("request", "", "work_graph_execution_requests id (uuid)")
 	resolution := flags.String("resolution", "", "confirm_succeeded or retry_safe")
-	expectedAttemptCount := flags.Int("expected-attempt-count", 0, "REQUIRED: the row's ledger attempt_count, read via `workgraph list-ambiguous` just before this call -- the bridge refuses a stale value (CAS guard, worker_workgraph.py:472)")
+	expectedAttemptCount := flags.Int("expected-attempt-count", 0, "REQUIRED: the row's ledger attempt_count, read via `workgraph list-ambiguous` just before this call -- the repair refuses a stale value")
 	reviewEvidence := flags.String("review-evidence", "", "REQUIRED: what you verified before authorizing this resolution (e.g. \"confirmed ClickHouse has zero rows for this request's target -- safe to retry\")")
-	outputEvidence := flags.String("output-evidence", "", "REQUIRED only when --resolution=confirm_succeeded: a JSON object describing the real output this execution already produced (worker_workgraph.py's RepairRequest.output_evidence); refused for retry_safe")
-	dryRun := flags.Bool("dry-run", false, "validate flags and print the request that WOULD be sent (token redacted), without calling the bridge")
+	outputEvidence := flags.String("output-evidence", "", "REQUIRED only when --resolution=confirm_succeeded: a JSON object describing the real output this execution already produced; refused for retry_safe")
+	dryRun := flags.Bool("dry-run", false, "run the repair in a transaction that is rolled back, and print what it would have done")
 	if flags.Parse(args) != nil || flags.NArg() != 0 {
 		return writeError(stderr, "invalid_request")
 	}
@@ -158,28 +161,25 @@ func dispatchWorkgraphRepair(ctx context.Context, args []string, stdout, stderr 
 	if err != nil {
 		return writeError(stderr, "invalid_request")
 	}
-	if *resolution != "confirm_succeeded" && *resolution != "retry_safe" {
+	if *resolution != repair.ResolutionConfirmSucceeded && *resolution != repair.ResolutionRetrySafe {
 		return writeError(stderr, "invalid_request")
 	}
 	if *expectedAttemptCount < 1 {
 		return writeError(stderr, "invalid_request")
 	}
-	// Same friction-by-design bar as `metrics daily-redrive`
-	// (main.go:797-814): no default, no generic hardcoded string, the
-	// operator states in their own words what they verified. codex round 1,
-	// P2: also bounded to the bridge's own 2048-byte limit (worker_workgraph.py
-	// RepairRequest.review_evidence) so an overlong value fails locally
-	// instead of reaching the bridge only to 422.
+	// Friction by design: no default, no generic hardcoded string; the operator
+	// states in their own words what they verified.
 	if !validateReviewEvidence(*reviewEvidence) {
 		return writeError(stderr, "invalid_request")
 	}
-	payload := map[string]any{
-		"expected_attempt_count": *expectedAttemptCount,
-		"resolution":             *resolution,
-		"review_evidence":        *reviewEvidence,
+	repairRequest := repair.WorkgraphRequest{
+		RequestID:            requestID,
+		ExpectedAttemptCount: *expectedAttemptCount,
+		Resolution:           *resolution,
+		ReviewEvidence:       *reviewEvidence,
 	}
 	trimmedOutputEvidence := strings.TrimSpace(*outputEvidence)
-	if *resolution == "confirm_succeeded" {
+	if *resolution == repair.ResolutionConfirmSucceeded {
 		if trimmedOutputEvidence == "" {
 			return writeError(stderr, "invalid_request")
 		}
@@ -187,46 +187,49 @@ func dispatchWorkgraphRepair(ctx context.Context, args []string, stdout, stderr 
 		if err != nil {
 			return writeError(stderr, "invalid_request")
 		}
-		payload["output_evidence"] = evidence
+		repairRequest.OutputEvidence = evidence
 	} else if trimmedOutputEvidence != "" {
-		// worker_workgraph.py:439-442 refuses retry_safe with output_evidence
-		// present just as hard as it refuses confirm_succeeded without it --
-		// reject locally rather than spend a round trip on a guaranteed 422.
 		return writeError(stderr, "invalid_request")
 	}
-	path := "/internal/worker/workgraph/v1/executions/" + requestID.String() + "/repair"
-	if *dryRun {
-		// Team-lead addition (CHAOS-5042): preview the exact request a real
-		// call would send -- full validation above already ran, so this is
-		// the real payload, not a guess -- with the token kept out of the
-		// output entirely (never resolved, never printed) rather than
-		// resolved-then-redacted, which would need the env var configured
-		// just to preview.
-		return writeResult(stdout, stderr, map[string]any{
-			"dry_run":       true,
-			"method":        http.MethodPost,
-			"path":          path,
-			"authorization": "Bearer [REDACTED]",
-			"payload":       payload,
-		})
-	}
-	status, body, err := postWorkerBridge[workgraphRepairBridgeResponse](
-		ctx, "WORKER_METRIC_REPAIR_TOKEN",
-		path,
-		payload,
-	)
+	pool, err := coordinatorPoolOf(runtime)
 	if err != nil {
 		return writeError(stderr, "operator_backend_unavailable")
 	}
-	// Print the bridge's own response verbatim on every outcome -- a
-	// 401/409/422/500 carries the exact reason (e.g. "Only unleased
-	// ambiguous executions can be repaired") an operator needs to see, not
-	// just a generic workerctl error code.
-	writeResult(stdout, stderr, body)
-	if status < http.StatusOK || status >= http.StatusMultipleChoices {
-		return 1
+	result, err := repair.RepairWorkgraph(ctx, pool, repairRequest, *dryRun)
+	return writeRepairOutcome(stdout, stderr, result, err, *dryRun)
+}
+
+// coordinatorPoolOf is the pool every repair verb runs on: the coordinator
+// role the operator binary already connects as.
+func coordinatorPoolOf(runtime *operatorRuntime) (*pgxpool.Pool, error) {
+	if runtime == nil || runtime.pools == nil {
+		return nil, errors.New("operator backend unavailable")
 	}
-	return 0
+	return runtime.pools.CoordinatorPool()
+}
+
+// writeRepairOutcome prints a repair's result as JSON. A refusal prints the
+// reason the ledger gave and exits 1; any other failure is a backend error.
+func writeRepairOutcome(stdout, stderr io.Writer, result any, err error, dryRun bool) int {
+	if err != nil {
+		if refusal, ok := repair.AsRefusal(err); ok {
+			writeResult(stdout, stderr, map[string]any{"detail": refusal.Detail, "status_code": refusal.Status})
+			return 1
+		}
+		return writeError(stderr, "operator_backend_unavailable")
+	}
+	encoded, marshalErr := json.Marshal(result)
+	if marshalErr != nil {
+		return writeError(stderr, "operator_backend_unavailable")
+	}
+	var body map[string]any
+	if json.Unmarshal(encoded, &body) != nil {
+		return writeError(stderr, "operator_backend_unavailable")
+	}
+	if dryRun {
+		body["dry_run"] = true
+	}
+	return writeResult(stdout, stderr, body)
 }
 
 // workgraphRepairCommandHint builds the ready-to-copy `workgraph repair`

@@ -641,8 +641,16 @@ func createOperatorIntegrationSchema(
 		"CREATE TABLE public.audit_logs (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.remaining_metric_runs (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.remaining_metric_partitions (id bigint PRIMARY KEY)",
-		"CREATE TABLE public.work_graph_execution_requests (id bigint PRIMARY KEY)",
-		"CREATE TABLE public.work_graph_execution_ledger (id bigint PRIMARY KEY)",
+		`CREATE TABLE public.work_graph_execution_requests (
+			id uuid PRIMARY KEY, org_id uuid, kind text, scope jsonb, model_ref text, prompt_ref text,
+			llm_concurrency integer, spend_limit_microunits bigint, correlation_id text,
+			idempotency_key text, state text, claim_token uuid, lease_expires_at timestamptz,
+			attempt_count integer, created_at timestamptz, updated_at timestamptz)`,
+		`CREATE TABLE public.work_graph_execution_ledger (
+			request_id uuid PRIMARY KEY, state text, attempt_count integer, output_evidence jsonb,
+			failure_detail text, completed_at timestamptz)`,
+		"CREATE TABLE public.work_graph_execution_repairs (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.metric_compatibility_execution_repairs (id uuid PRIMARY KEY)",
 		// CHAOS-3033 Option B manifest additions — domain-exclusive tables
 		// (role-partition manifest, removed in e23ede618; see git history at eda2d6b91).
 		"CREATE TABLE public.billing_notifications (id bigint PRIMARY KEY)",
@@ -650,7 +658,10 @@ func createOperatorIntegrationSchema(
 		"CREATE TABLE public.daily_metrics_runs (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.daily_metrics_finalize_redrive_events (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.daily_metrics_partition_recompute_events (id uuid PRIMARY KEY)",
-		"CREATE TABLE public.metric_compatibility_executions (id uuid PRIMARY KEY)",
+		`CREATE TABLE public.metric_compatibility_executions (
+			id uuid PRIMARY KEY, worker_kind text, operation text, run_id uuid, partition_id uuid,
+			claim_token uuid, state text, attempt_count integer, output_evidence jsonb,
+			completed_at timestamptz, last_attempt_at timestamptz)`,
 		"CREATE TABLE public.external_ingest_batch_payloads (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.external_ingest_batches (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.external_ingest_recompute_jobs (id bigint PRIMARY KEY)",

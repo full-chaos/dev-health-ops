@@ -1458,13 +1458,6 @@ type MetricLineage {
   rowCount: Int
 }
 
-type MetricsUpdate {
-  orgId: String!
-  day: String!
-  updatedAt: DateTime!
-  message: String!
-}
-
 type MissingMapping {
   repoName: String!
   reason: String!
@@ -2136,36 +2129,6 @@ type SeverityBucket {
 type SparkPoint {
   ts: String!
   value: Float!
-}
-
-type Subscription {
-  """Subscribe to metrics updates for an organization"""
-  metricsUpdated(orgId: String!): MetricsUpdate!
-
-  """Subscribe to task status updates"""
-  taskStatus(taskId: String!): TaskStatus!
-
-  """Subscribe to data sync progress"""
-  syncProgress(orgId: String!): SyncProgress!
-}
-
-type SyncProgress {
-  orgId: String!
-  provider: String!
-  status: String!
-  itemsProcessed: Int!
-  itemsTotal: Int!
-  message: String
-  updatedAt: DateTime!
-}
-
-type TaskStatus {
-  taskId: String!
-  status: String!
-  progress: Float!
-  message: String
-  result: String
-  updatedAt: DateTime!
 }
 
 enum TeamAttributionConfidence {

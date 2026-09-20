@@ -198,7 +198,6 @@ def get_graphql_info() -> dict:
         "schema_version": get_schema_version(),
         "endpoints": {
             "graphql": "/graphql",
-            "subscriptions": "/graphql",
         },
         "features": [
             "catalog",
@@ -207,40 +206,7 @@ def get_graphql_info() -> dict:
             "breakdowns",
             "sankey",
             "persisted_queries",
-            "subscriptions",
             "dataloaders",
             "caching",
         ],
-        "subscription_protocol": "graphql-ws",
     }
-
-
-async def init_pubsub() -> None:
-    """
-    Initialize the PubSub system.
-
-    Call this during application startup to establish Redis connections.
-    """
-    try:
-        from .pubsub import get_pubsub
-
-        pubsub = await get_pubsub()
-        logger.info("PubSub initialized, Redis available: %s", pubsub._available)
-    except Exception as e:
-        logger.warning("Failed to initialize PubSub: %s", e)
-
-
-async def shutdown_pubsub() -> None:
-    """
-    Shutdown the PubSub system.
-
-    Call this during application shutdown to close Redis connections.
-    """
-    try:
-        from .pubsub import _pubsub
-
-        if _pubsub:
-            await _pubsub.disconnect()
-            logger.info("PubSub disconnected")
-    except Exception as e:
-        logger.warning("Failed to shutdown PubSub: %s", e)

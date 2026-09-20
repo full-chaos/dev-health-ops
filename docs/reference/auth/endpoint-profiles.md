@@ -67,6 +67,10 @@ comes from the framework and the location still comes from real source.
       `context_getter` → `get_context` path as every other GraphQL surface,
       before the websocket is accepted — but they matched no pattern, so they
       were invisible to the gate and excluded from the count it produced.
+      The three resolvers, their modules and their three inventory rows have
+      since been removed: the schema serves no subscription, and the
+      `WEBSOCKET /graphql` row remains because the transport stays mounted
+      and refuses subscription operations.
     - **−2 GraphQL.** `metrics` and `update_setting` were rows for
       `@strawberry.field` examples inside `require_permission`'s **docstring**
       (`api/graphql/authz.py:25`, `:30`). They are not fields on the served

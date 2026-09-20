@@ -10,8 +10,8 @@
         "evidence": "internal/jobs/metrics/aigovernance/compute_test.go::TestGovernanceRowsMatchLivePythonProduction (live-Python full-row oracle over both ai_policy_events and ai_governance_coverage_daily, every persisted column except event_id/computed_at, gated by ci/check_go.sh live-python-oracles) plus TestDeriveEventIDMatchesItsFrozenGoldenValue (frozen event_id, the one field the oracle excludes)"
       },
       "deployed": {
-        "revision": "39e25d3665128976ebc79bd6b8f76e5efbe9806c",
-        "read_at": "2026-09-16T12:25:30.426971807Z",
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-20T11:13:37.246639073Z",
         "source": "fleet file fleet-prod.json"
       },
       "proof": {
@@ -27,8 +27,8 @@
         "evidence": "internal/jobs/metrics/aiimpact/compute_test.go::TestAIImpactMatchesFrozenPythonGolden (frozen golden tests/fixtures/ai_impact_python_golden.json, captured from the now-deleted compute_ai_impact_metrics_daily before its removal, compared field-for-field and bit-exact on floats)"
       },
       "deployed": {
-        "revision": "39e25d3665128976ebc79bd6b8f76e5efbe9806c",
-        "read_at": "2026-09-16T12:25:30.426971807Z",
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-20T11:13:37.246639073Z",
         "source": "fleet file fleet-prod.json"
       },
       "proof": {
@@ -44,8 +44,8 @@
         "evidence": "internal/jobs/metrics/aiworkflow/oracle_test.go TestAIWorkflowMatchesFrozenPythonGolden (frozen Python golden fixture; PASS re-run at this sha)"
       },
       "deployed": {
-        "revision": "39e25d3665128976ebc79bd6b8f76e5efbe9806c",
-        "read_at": "2026-09-16T12:25:30.426971807Z",
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-20T11:13:37.246639073Z",
         "source": "fleet file fleet-prod.json"
       },
       "proof": {
@@ -61,8 +61,8 @@
         "evidence": "internal/jobs/metrics/daily/cicd/compute_test.go TestComputeMatchesFrozenPythonGolden + TestComputeMatchesFrozenGoldenExhaustively (frozen Python golden; PASS re-run at this sha)"
       },
       "deployed": {
-        "revision": "39e25d3665128976ebc79bd6b8f76e5efbe9806c",
-        "read_at": "2026-09-16T12:25:30.426971807Z",
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-20T11:13:37.246639073Z",
         "source": "fleet file fleet-prod.json"
       },
       "proof": {
@@ -78,8 +78,8 @@
         "evidence": "internal/jobs/metrics/daily/compoundingrisk/compute_test.go TestComputeMatchesFrozenPythonGolden (frozen Python golden; PASS re-run at this sha)"
       },
       "deployed": {
-        "revision": "39e25d3665128976ebc79bd6b8f76e5efbe9806c",
-        "read_at": "2026-09-16T12:25:30.426971807Z",
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-20T11:13:37.246639073Z",
         "source": "fleet file fleet-prod.json"
       },
       "proof": {
@@ -95,8 +95,8 @@
         "evidence": "internal/jobs/metrics/numerical/deploy_parity_test.go: TestComputeDeployMetricsGoldenParity (tests/fixtures/daily_deploy_python_golden.json)"
       },
       "deployed": {
-        "revision": "39e25d3665128976ebc79bd6b8f76e5efbe9806c",
-        "read_at": "2026-09-16T12:25:30.426971807Z",
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-20T11:13:37.246639073Z",
         "source": "fleet file fleet-prod.json"
       },
       "proof": {
@@ -112,8 +112,8 @@
         "evidence": "internal/jobs/metrics/daily/filehotspots/golden_full_test.go TestComputeMatchesFrozenPythonGolden (ComputeFileHotspots leg; frozen Python golden; PASS re-run at this sha)"
       },
       "deployed": {
-        "revision": "39e25d3665128976ebc79bd6b8f76e5efbe9806c",
-        "read_at": "2026-09-16T12:25:30.426971807Z",
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-20T11:13:37.246639073Z",
         "source": "fleet file fleet-prod.json"
       },
       "proof": {
@@ -129,8 +129,8 @@
         "evidence": "internal/jobs/metrics/daily/filehotspots/golden_full_test.go TestComputeMatchesFrozenPythonGolden (ComputeFileRiskHotspots leg; frozen Python golden; PASS re-run at this sha)"
       },
       "deployed": {
-        "revision": "39e25d3665128976ebc79bd6b8f76e5efbe9806c",
-        "read_at": "2026-09-16T12:25:30.426971807Z",
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-20T11:13:37.246639073Z",
         "source": "fleet file fleet-prod.json"
       },
       "proof": {
@@ -146,8 +146,8 @@
         "evidence": "internal/jobs/metrics/daily/incident_parity_golden_test.go: TestComputeIncidentMetricsDailyMatchesFrozenPythonGolden (testdata/incident_parity_golden.json)"
       },
       "deployed": {
-        "revision": "39e25d3665128976ebc79bd6b8f76e5efbe9806c",
-        "read_at": "2026-09-16T12:25:30.426971807Z",
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-20T11:13:37.246639073Z",
         "source": "fleet file fleet-prod.json"
       },
       "proof": {
@@ -163,8 +163,8 @@
         "evidence": "internal/jobs/metrics/daily/repouser/compute_test.go TestComputeMatchesFrozenPythonGolden + golden_full_test.go TestComputeMatchesFrozenGoldenExhaustively (frozen Python golden; PASS re-run at this sha)"
       },
       "deployed": {
-        "revision": "39e25d3665128976ebc79bd6b8f76e5efbe9806c",
-        "read_at": "2026-09-16T12:25:30.426971807Z",
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-20T11:13:37.246639073Z",
         "source": "fleet file fleet-prod.json"
       },
       "proof": {
@@ -180,8 +180,8 @@
         "evidence": "internal/jobs/metrics/daily/reviewedges/compute_test.go TestComputeMatchesFrozenPythonGolden (frozen Python golden; PASS re-run at this sha)"
       },
       "deployed": {
-        "revision": "39e25d3665128976ebc79bd6b8f76e5efbe9806c",
-        "read_at": "2026-09-16T12:25:30.426971807Z",
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-20T11:13:37.246639073Z",
         "source": "fleet file fleet-prod.json"
       },
       "proof": {
@@ -197,8 +197,8 @@
         "evidence": "internal/jobs/metrics/numerical/wellbeing_parity_test.go TestTeamWellbeingGoldenParity (frozen Python golden; PASS re-run at this sha)"
       },
       "deployed": {
-        "revision": "39e25d3665128976ebc79bd6b8f76e5efbe9806c",
-        "read_at": "2026-09-16T12:25:30.426971807Z",
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-20T11:13:37.246639073Z",
         "source": "fleet file fleet-prod.json"
       },
       "proof": {
@@ -214,8 +214,8 @@
         "evidence": "internal/jobs/metrics/testops/parity_golden_test.go: TestComputeCoverageMetricMatchesFrozenPythonGolden (testdata/testops_coverage_parity_golden.json)"
       },
       "deployed": {
-        "revision": "39e25d3665128976ebc79bd6b8f76e5efbe9806c",
-        "read_at": "2026-09-16T12:25:30.426971807Z",
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-20T11:13:37.246639073Z",
         "source": "fleet file fleet-prod.json"
       },
       "proof": {
@@ -231,8 +231,8 @@
         "evidence": "internal/jobs/metrics/testops/parity_golden_test.go: TestComputePipelineMetricsMatchesFrozenPythonGolden (testdata/testops_pipeline_parity_golden.json)"
       },
       "deployed": {
-        "revision": "39e25d3665128976ebc79bd6b8f76e5efbe9806c",
-        "read_at": "2026-09-16T12:25:30.426971807Z",
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-20T11:13:37.246639073Z",
         "source": "fleet file fleet-prod.json"
       },
       "proof": {
@@ -248,8 +248,8 @@
         "evidence": "internal/jobs/metrics/daily/testops_risk_parity_golden_test.go: TestTestopsRiskComputeMatchesFrozenPythonGolden (testdata/testops_risk_parity_golden.json)"
       },
       "deployed": {
-        "revision": "39e25d3665128976ebc79bd6b8f76e5efbe9806c",
-        "read_at": "2026-09-16T12:25:30.426971807Z",
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-20T11:13:37.246639073Z",
         "source": "fleet file fleet-prod.json"
       },
       "proof": {
@@ -265,8 +265,8 @@
         "evidence": "internal/jobs/metrics/testops/parity_golden_test.go: TestComputeTestMetricsMatchesFrozenPythonGolden (testdata/testops_test_parity_golden.json)"
       },
       "deployed": {
-        "revision": "39e25d3665128976ebc79bd6b8f76e5efbe9806c",
-        "read_at": "2026-09-16T12:25:30.426971807Z",
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-20T11:13:37.246639073Z",
         "source": "fleet file fleet-prod.json"
       },
       "proof": {
@@ -282,8 +282,8 @@
         "evidence": "internal/jobs/metrics/workgraphedges/compute_test.go TestWorkGraphEdgesMatchFrozenPythonGolden (frozen Python golden; PASS re-run at this sha)"
       },
       "deployed": {
-        "revision": "39e25d3665128976ebc79bd6b8f76e5efbe9806c",
-        "read_at": "2026-09-16T12:25:30.426971807Z",
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-20T11:13:37.246639073Z",
         "source": "fleet file fleet-prod.json"
       },
       "proof": {
@@ -299,8 +299,8 @@
         "evidence": "internal/jobs/metrics/workitemmetrics/golden_test.go TestComputeDailyTripletMatchesPythonGolden (frozen Python golden; PASS re-run at this sha)"
       },
       "deployed": {
-        "revision": "39e25d3665128976ebc79bd6b8f76e5efbe9806c",
-        "read_at": "2026-09-16T12:25:30.426971807Z",
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-20T11:13:37.246639073Z",
         "source": "fleet file fleet-prod.json"
       },
       "proof": {
@@ -316,8 +316,8 @@
         "evidence": "internal/providersync/work_item_attribution_backstop_oracle_test.go TestWorkItemAttributionBackstopMatchesLivePythonProduction (exercises remaining.BuildWorkItemAttributionRows, the same row-building function this family's native executor calls, against a frozen Python oracle snapshot; PASS re-run at this sha)"
       },
       "deployed": {
-        "revision": "39e25d3665128976ebc79bd6b8f76e5efbe9806c",
-        "read_at": "2026-09-16T12:25:30.426971807Z",
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-20T11:13:37.246639073Z",
         "source": "fleet file fleet-prod.json"
       },
       "proof": {
@@ -333,8 +333,8 @@
         "evidence": "internal/jobs/metrics/workitemmetrics/golden_test.go TestComputeEstimateCoverageMatchesPythonGolden (frozen Python golden; PASS re-run at this sha)"
       },
       "deployed": {
-        "revision": "39e25d3665128976ebc79bd6b8f76e5efbe9806c",
-        "read_at": "2026-09-16T12:25:30.426971807Z",
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-20T11:13:37.246639073Z",
         "source": "fleet file fleet-prod.json"
       },
       "proof": {
@@ -350,8 +350,8 @@
         "evidence": "internal/jobs/metrics/daily/work_item_state_native_executor_test.go TestComputeWorkItemStateDurationsGolden (ports Python's test_time_in_state_is_bucketed_to_day byte-for-byte; PASS re-run at this sha)"
       },
       "deployed": {
-        "revision": "39e25d3665128976ebc79bd6b8f76e5efbe9806c",
-        "read_at": "2026-09-16T12:25:30.426971807Z",
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-20T11:13:37.246639073Z",
         "source": "fleet file fleet-prod.json"
       },
       "proof": {
@@ -367,8 +367,8 @@
         "evidence": "internal/jobs/metrics/daily/benchmarking/compute_test.go TestComputeMatchesFrozenPythonGolden (frozen Python golden; PASS re-run at this sha)"
       },
       "deployed": {
-        "revision": "39e25d3665128976ebc79bd6b8f76e5efbe9806c",
-        "read_at": "2026-09-16T12:25:30.426971807Z",
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-20T11:13:37.246639073Z",
         "source": "fleet file fleet-prod.json"
       },
       "proof": {
@@ -384,8 +384,8 @@
         "evidence": "internal/jobs/metrics/daily/compoundingrisk/team_golden_test.go TestBuildTeamRowsMatchesFrozenPythonGolden (frozen Python golden; PASS re-run at this sha)"
       },
       "deployed": {
-        "revision": "39e25d3665128976ebc79bd6b8f76e5efbe9806c",
-        "read_at": "2026-09-16T12:25:30.426971807Z",
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-20T11:13:37.246639073Z",
         "source": "fleet file fleet-prod.json"
       },
       "proof": {
@@ -401,8 +401,8 @@
         "evidence": "internal/jobs/metrics/daily/icfinalize/parity_golden_test.go TestICFinalizeMatchesTheFrozenPythonGolden (integration-tagged frozen Python golden; requires a ClickHouse container, part of the committed suite; not independently re-run here -- a missing sqlalchemy venv in this worktree blocked the local re-run attempt)"
       },
       "deployed": {
-        "revision": "39e25d3665128976ebc79bd6b8f76e5efbe9806c",
-        "read_at": "2026-09-16T12:25:30.426971807Z",
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-20T11:13:37.246639073Z",
         "source": "fleet file fleet-prod.json"
       },
       "proof": {
@@ -418,8 +418,8 @@
         "evidence": "internal/jobs/metrics/daily/team_cognitive_load_parity_golden_test.go TestTeamCognitiveLoadMatchesTheFrozenPythonGolden (frozen Python golden; PASS re-run at this sha)"
       },
       "deployed": {
-        "revision": "39e25d3665128976ebc79bd6b8f76e5efbe9806c",
-        "read_at": "2026-09-16T12:25:30.426971807Z",
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-20T11:13:37.246639073Z",
         "source": "fleet file fleet-prod.json"
       },
       "proof": {
@@ -435,8 +435,8 @@
         "evidence": "internal/jobs/metrics/daily/team_complexity_parity_golden_test.go TestTeamComplexityMatchesTheFrozenPythonGolden (frozen Python golden; PASS re-run at this sha)"
       },
       "deployed": {
-        "revision": "39e25d3665128976ebc79bd6b8f76e5efbe9806c",
-        "read_at": "2026-09-16T12:25:30.426971807Z",
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-20T11:13:37.246639073Z",
         "source": "fleet file fleet-prod.json"
       },
       "proof": {
@@ -452,8 +452,8 @@
         "evidence": "internal/jobs/metrics/numerical/capacity_forecast_test.go TestCapacityForecastMatchesPython (frozen golden tests/fixtures/capacity_forecast_golden.json, 95 cases/5 seeds, whole kernel output) + capacity_golden_rot_guard_test.go TestCapacityForecastGoldenMatchesLivePython (live-CPython rot guard proving the golden still matches live Python, gated DEV_HEALTH_LIVE_PYTHON_ORACLES=1 via ci/check_go.sh live-python-oracles); PASS re-run at this sha"
       },
       "deployed": {
-        "revision": "39e25d3665128976ebc79bd6b8f76e5efbe9806c",
-        "read_at": "2026-09-16T12:25:30.426971807Z",
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-20T11:13:37.246639073Z",
         "source": "fleet file fleet-prod.json"
       },
       "proof": {
@@ -469,8 +469,8 @@
         "evidence": "internal/jobs/metrics/remaining/complexity_native_integration_test.go TestComplexityExecutorMatchesPythonAgainstClickHouse (native executor's file_complexity_snapshots + repo_complexity_daily writes vs testdata/complexity_python_golden.json, a FROZEN golden captured from the real, shipped run_complexity_db_job on bigboy 2026-09-06 before its deletion); PASS re-run at this sha"
       },
       "deployed": {
-        "revision": "39e25d3665128976ebc79bd6b8f76e5efbe9806c",
-        "read_at": "2026-09-16T12:25:30.426971807Z",
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-20T11:13:37.246639073Z",
         "source": "fleet file fleet-prod.json"
       },
       "proof": {
@@ -486,8 +486,8 @@
         "evidence": "internal/jobs/metrics/numerical/dora_frozen_golden_test.go TestComputeDORAMatchesFrozenPythonGolden (frozen golden tests/fixtures/dora_metrics_python_golden.json, captured from real production Python 2026-07-23 before job_dora.py/compute_dora.py were deleted CHAOS-5336; ComputeDORA is the sole producer now, full DORAMetric struct compared byte-for-byte); PASS re-run at this sha"
       },
       "deployed": {
-        "revision": "39e25d3665128976ebc79bd6b8f76e5efbe9806c",
-        "read_at": "2026-09-16T12:25:30.426971807Z",
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-20T11:13:37.246639073Z",
         "source": "fleet file fleet-prod.json"
       },
       "proof": {
@@ -503,8 +503,8 @@
         "evidence": "internal/jobs/metrics/remaining/membership_golden_test.go TestComputeOrgMatchesLivePythonBackfillMemberships (CHAOS-4282 byte-parity oracle: ComputeOrg run against tests/fixtures/membership_backfill_golden.json, a golden captured from the real Python backfill_memberships via tests/fixtures/generate_membership_backfill_golden.py; compares full stats, every work_unit_membership row field-for-field, and the work_unit_membership_runs run record); PASS re-run at this sha"
       },
       "deployed": {
-        "revision": "39e25d3665128976ebc79bd6b8f76e5efbe9806c",
-        "read_at": "2026-09-16T12:25:30.426971807Z",
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-20T11:13:37.246639073Z",
         "source": "fleet file fleet-prod.json"
       },
       "proof": {
@@ -520,8 +520,8 @@
         "evidence": "internal/jobs/metrics/remaining/recommendations_engine_test.go TestEvaluateStateMatchesTheReference (full row/field EvaluateState output vs testdata/recommendations_engine_golden.json, captured by testdata/generate_recommendations_engine_golden.py driving the live Python RuleEngine.evaluate_state; 80 records/16 cases) + recommendations_rules_test.go's per-rule golden as supporting evidence; PASS re-run at this sha"
       },
       "deployed": {
-        "revision": "39e25d3665128976ebc79bd6b8f76e5efbe9806c",
-        "read_at": "2026-09-16T12:25:30.426971807Z",
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-20T11:13:37.246639073Z",
         "source": "fleet file fleet-prod.json"
       },
       "proof": {
@@ -537,8 +537,8 @@
         "evidence": "internal/jobs/metrics/remaining/release_impact_parity_golden_test.go TestReleaseImpactMatchesTheFrozenPythonGolden (native executor's release_impact_daily row, every non-flag column, vs testdata/release_impact_parity_golden.json, a frozen golden captured by running release_impact.py's live _compute_day against an identically-seeded ClickHouse over its HTTP port via clickhouse_connect; capture command recorded in the test's doc comment) + release_impact_fixture_integration_test.go TestReleaseImpactParityClassBattery (row-count/degraded-signal proof for the two zero-row classes this golden cannot cover); PASS re-run at this sha"
       },
       "deployed": {
-        "revision": "39e25d3665128976ebc79bd6b8f76e5efbe9806c",
-        "read_at": "2026-09-16T12:25:30.426971807Z",
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-20T11:13:37.246639073Z",
         "source": "fleet file fleet-prod.json"
       },
       "proof": {
@@ -554,8 +554,8 @@
         "evidence": "internal/providersync/work_item_attribution_backstop_oracle_test.go TestWorkItemAttributionBackstopMatchesLivePythonProduction (drives remaining.BuildWorkItemAttributionRows -- the exact mapping ComputePartition calls -- against the frozen github_work-items_team-attributions_backstop Python oracle snapshot, every WorkItemAttributionRow field via githubTeamAttributionColumns); PASS re-run at this sha"
       },
       "deployed": {
-        "revision": "39e25d3665128976ebc79bd6b8f76e5efbe9806c",
-        "read_at": "2026-09-16T12:25:30.426971807Z",
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-20T11:13:37.246639073Z",
         "source": "fleet file fleet-prod.json"
       },
       "proof": {
@@ -570,8 +570,8 @@
         "evidence": ".remember/lanes/team-lead/matrix-tracker-audit-2026-09-09.md section 4 -- repo attribution coverage fell 41% to 34% AFTER this family was recorded NATIVE; the fixes are merged at main (eadfd3955 #2382 transitive repository inheritance + cascade telemetry, 720f64bff #2394 fallback effort across owned repos; internal/jobs/investment/hierarchycascade.go, teamownership.go, repoattribution.go) but the production proof is still missing: dev_health_investment_repo_attribution_total has not been read against the 41 percent baseline, so this row stays diverged until it is"
       },
       "deployed": {
-        "revision": "39e25d3665128976ebc79bd6b8f76e5efbe9806c",
-        "read_at": "2026-09-16T12:25:30.426971807Z",
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-20T11:13:37.246639073Z",
         "source": "fleet file fleet-prod.json"
       },
       "proof": {
@@ -590,8 +590,8 @@
         "evidence": "every one of the build's 12 native pre-steps has a frozen-Python-golden or live-Python-golden test: stale_pr_dependency_issue_edges_cleanup -\u003e internal/jobs/workgraph/edges/stale_dependency_edges_integration_test.go::TestDeleteStalePRDependencyIssueEdgesAgainstLiveClickHouse; issue_pr_links -\u003e internal/jobs/workgraph/issueprlinks/golden_full_test.go::TestDeriveMatchesFrozenPythonGoldenExhaustively; issue_pr_edges_fast_path and issue_pr_edges_text_parse -\u003e internal/jobs/workgraph/issuepredges/golden_test.go::TestDeriveFastPathAndTextParseEdgesMatchFrozenPythonGolden; issue_commit_edges -\u003e internal/jobs/workgraph/issuecommitedges/golden_test.go::TestDeriveMatchesFrozenPythonGolden; issue_pr_edges_heuristic -\u003e internal/jobs/workgraph/issuepredges/heuristic_golden_test.go::TestDeriveHeuristicEdgesMatchesFrozenPythonGolden; pr_commit_links and pr_commit_edges -\u003e internal/jobs/workgraph/prcommit/golden_test.go::TestDeriveAndBuildFastPathEdgesMatchFrozenPythonGolden; commit_file_edges -\u003e internal/jobs/workgraph/issuecommitedges/commit_file_edges_count_integration_test.go::TestCountCommitFileEdgesMatchesFrozenPythonGolden (new: seeds git_commit_stats and reproduces the frozen readback of the deleted _count_commit_file_edges query for the org-scoped, foreign-org and unscoped calls); flag_guards_edges -\u003e internal/jobs/workgraph/operationaledges/incidents_golden_integration_test.go::TestBuildOperationalEdgesMatchSyntheticGolden; operational_incident_edges -\u003e internal/jobs/workgraph/operationaledges/incidents_golden_integration_test.go::TestBuildOperationalIncidentEdgesMatchesOrg70d529e0Golden; issue_issue_edges -\u003e internal/jobs/workgraph/edges/canonical_golden_test.go::TestDerivationReproducesTheFrozenGolden"
       },
       "deployed": {
-        "revision": "39e25d3665128976ebc79bd6b8f76e5efbe9806c",
-        "read_at": "2026-09-16T12:25:30.426971807Z",
+        "revision": "dd77701c562310465109aa5f6c9bffaed0ca6ec6",
+        "read_at": "2026-09-20T11:13:37.246639073Z",
         "source": "fleet file fleet-prod.json"
       },
       "proof": {

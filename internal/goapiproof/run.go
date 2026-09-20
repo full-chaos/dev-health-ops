@@ -307,6 +307,12 @@ type Outcome struct {
 	// difference is a known Python defect" and "there were no differences"
 	// are different facts.
 	DifferencesOutsideBaselineDefect int `json:"differences_outside_baseline_defect"`
+
+	// KnownRefusal is copied from the variant that produced this outcome
+	// (Variant.KnownRefusal): the case is expected not to compare, for the
+	// stated ticket and reason. It is reporting only: it never changes the
+	// terminal state, admission or the receipt written.
+	KnownRefusal *KnownRefusal `json:"known_refusal,omitempty"`
 	// CoveredByShape / OutsideByShape say WHAT the two counts are made of;
 	// OutsideByShape sums to DifferencesOutsideBaselineDefect,
 	// including the transport differences no citation can express ("http",
@@ -406,6 +412,38 @@ type Summary struct {
 	// ByTerminalState "mismatch", the arm their receipt is written on.
 	ProvenGoOnly    int            `json:"proven_go_only"`
 	ByRefusalReason map[string]int `json:"by_refusal_reason"`
+	// KnownRefusals counts outcomes whose variant is a recorded known
+	// refusal, reported apart from every other count. Serialised even when
+	// zero.
+	KnownRefusals int `json:"known_refusals"`
+	// NotProving counts outcomes that are not a known refusal and do not
+	// prove: not executed, or executed with neither a match nor a cited
+	// mismatch whose differences are all inside its declaration. A run whose
+	// NotProving is zero has no unexplained gap. Serialised even when zero.
+	NotProving int `json:"not_proving"`
+	// ByOperation is the verdict per operation: a proof run measures every
+	// registered operation, so a run-wide count can never say whether ONE
+	// operation is complete. Serialised even when empty.
+	ByOperation map[string]OperationVerdict `json:"by_operation"`
+}
+
+// OperationVerdict is one operation's completeness over a run: every case of
+// the operation (its base request and each variant) except the known refusals
+// must prove.
+type OperationVerdict struct {
+	// Required counts the operation's cases minus its known refusals.
+	Required int `json:"required"`
+	// Proven counts required cases that are evidence: executed, non-vacuous,
+	// and either a match or a cited mismatch fully inside its declaration.
+	Proven int `json:"proven"`
+	// KnownRefusals counts the operation's cases recorded as known refusals,
+	// reported apart.
+	KnownRefusals int `json:"known_refusals"`
+	// NotProving is Required minus Proven.
+	NotProving int `json:"not_proving"`
+	// Complete is true when there is at least one required case and every
+	// required case is proven.
+	Complete bool `json:"operation_complete"`
 }
 
 // RegistryView is what the RUNNING query-api reports about itself.
@@ -533,6 +571,7 @@ func (r *Runner) Run(ctx context.Context) ([]Outcome, Summary, error) {
 	summary := Summary{
 		ByTerminalState: map[string]int{},
 		ByRefusalReason: map[string]int{},
+		ByOperation:     map[string]OperationVerdict{},
 	}
 	outcomes := make([]Outcome, 0, len(operations))
 	// Reset, so a second Run cannot write receipts for the first one's
@@ -572,6 +611,8 @@ func (r *Runner) Run(ctx context.Context) ([]Outcome, Summary, error) {
 			}
 			summary.ByRefusalReason[outcome.RefusalReason]++
 		}
+
+		summary.countProofState(operation, outcome)
 
 		outcomes = append(outcomes, outcome)
 		r.sealed = append(r.sealed, r.seal(outcome, variables))
@@ -802,7 +843,9 @@ func (r *Runner) proveVariant(ctx context.Context, operation string, variant Var
 		return r.refuseNoSpec(operation, variant.Name, err)
 	}
 	variables, parity, missingKey := r.variantRequest(operation, variant)
-	return r.proveRequest(ctx, operation, variant.Name, spec, variables, parity, variant.Instance.kindFor(missingKey), missingKey)
+	outcome := r.proveRequest(ctx, operation, variant.Name, spec, variables, parity, variant.Instance.kindFor(missingKey), missingKey)
+	outcome.KnownRefusal = variant.KnownRefusal
+	return outcome
 }
 
 // refuseNoSpec builds the refusal Outcome for an operation (or variant)
@@ -1449,4 +1492,42 @@ func (r *Runner) reviewEvidence(sealed sealedOutcome, refusal string, measured, 
 		return r.Config.ReviewEvidence
 	}
 	return string(encoded)
+}
+
+// outcomeProves reports whether one outcome is evidence for its request, by
+// the rule the enablement predicate applies to a receipt: executed, and
+// either a match or a cited mismatch with every difference inside its
+// declaration.
+func outcomeProves(o Outcome) bool {
+	if !o.Executed {
+		return false
+	}
+	if o.TerminalState == EnablementProofTerminalState {
+		return true
+	}
+	return o.TerminalState == EnablementCitedMismatchState && o.DifferencesOutsideBaselineDefect == 0 && len(o.BaselineDefects) > 0
+}
+
+// countProofState files one outcome under exactly one of: a known refusal
+// (reported apart), not proving, or proving, both run-wide and under its
+// operation.
+func (s *Summary) countProofState(operation string, o Outcome) {
+	if s.ByOperation == nil {
+		s.ByOperation = map[string]OperationVerdict{}
+	}
+	v := s.ByOperation[operation]
+	switch {
+	case o.KnownRefusal != nil:
+		s.KnownRefusals++
+		v.KnownRefusals++
+	case !outcomeProves(o):
+		s.NotProving++
+		v.Required++
+		v.NotProving++
+	default:
+		v.Required++
+		v.Proven++
+	}
+	v.Complete = v.Required > 0 && v.Proven == v.Required
+	s.ByOperation[operation] = v
 }

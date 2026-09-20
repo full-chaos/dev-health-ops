@@ -6,6 +6,18 @@ import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+MANIFEST = ROOT / "ci" / "go_integration_shards.tsv"
+
+
+def _manifest_package_count() -> int:
+    """Package rows in the shard manifest (the first data row is the shard count)."""
+    rows = [
+        line
+        for line in MANIFEST.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.startswith("#")
+    ]
+    assert rows[0].split("\t")[0] == "shards", rows[0]
+    return len(rows) - 1
 
 
 def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
@@ -196,10 +208,13 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # same shape as the featureFlagEvents entry above -- a fake RowScanner
     # cannot reproduce the real driver's own type-conversion refusal --
     # and both count toward the total below.
-    # CURRENT TOTAL: 69. Adding one -tags=integration package bumps every
-    # literal below by +1 -- this is the one number to change; the
-    # narrative above is for someone auditing history, not for the bump.
-    assert "69 package(s) discovered, 0 denylisted, 69 will run" in result.stdout
+    # The total is the number of package rows in ci/go_integration_shards.tsv,
+    # read here rather than repeated as a literal: adding a -tags=integration
+    # package is one manifest row, so parallel additions do not conflict on a
+    # count. The planner still refuses when live discovery disagrees with the
+    # manifest, and the named packages below pin set membership.
+    total = _manifest_package_count()
+    assert f"{total} package(s) discovered, 0 denylisted, {total} will run" in result.stdout
     # Name the package explicitly (SET MEMBERSHIP), not just the count --
     # a bare count is exactly what let CHAOS-4643's own literal drift
     # 31 -> 32 -> 33 unnoticed.

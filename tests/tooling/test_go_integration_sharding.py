@@ -27,186 +27,39 @@ TEST_GO_CACHE = Path(tempfile.gettempdir()) / "chaos3141-go-sharding-test-cache"
 # does not change the workflow job cap or the Go test timeout.
 CHECK_GO_TIMEOUT_SECONDS = 120
 
-EXPECTED_PACKAGES = {
+def _manifest_packages() -> set[str]:
+    """Package keys of ci/go_integration_shards.tsv (one row per package).
+
+    The manifest is the single hand-edited list: ci/check_go.sh refuses to plan
+    when it disagrees with live `-tags=integration` discovery, and the tests
+    below compare the planner's own output to it. Deriving the expected set here
+    instead of repeating it as a second literal means adding an integration
+    package edits one line in one file, so parallel additions merge cleanly.
+    """
+    rows = [
+        line.split("\t")
+        for line in MANIFEST.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.startswith("#")
+    ]
+    assert rows[0][0] == "shards", rows[0]
+    return {row[0] for row in rows[1:]}
+
+
+EXPECTED_PACKAGES = _manifest_packages()
+# A floor that does not follow the manifest, so deleting a package's row (or its
+# integration tests) together with the rest of the change is still noticed.
+REQUIRED_PACKAGES = {
     "internal/goapiproof",
     "cmd/dev-health-reconciler",
     "cmd/dev-health-worker",
     "cmd/dev-health-workerctl",
-    # CHAOS-5486: the routing verbs' first //go:build integration file --
-    # `enable` driven end to end against a real Postgres and a real HTTP
-    # server, because an adversarial round proved that disabling the
-    # schema-agreement preflight and suppressing the enabled_unproven
-    # WARNING, both at their real call sites in this package, survived the
-    # entire suite while nothing ever ran a verb.
     "cmd/go-api-routing",
     "cmd/query-api",
-    "cmd/query-api/internal/aianalytics",
     "cmd/query-api/internal/analytics",
-    "cmd/query-api/internal/busfactor",
-    "cmd/query-api/internal/compoundingrisk",
-    # cmd/query-api/internal/explain's integration-tagged tests exercise
-    # the team-scoped repo filter's pushed-down membership condition
-    # against a real ClickHouse: the query text that once returned every
-    # matching repo id as its own result set throws the read-only
-    # client's row ceiling when run standalone, while the route itself
-    # succeeds on the same data; a status-filtered metric's
-    # empty-vs-populated response is exercised in both directions too.
     "cmd/query-api/internal/explain",
-    # CHAOS-5523: the featureFlagEvents port's own Testcontainers-backed
-    # tests (events_integration_test.go) -- the org-scoping/flagKey-filter/
-    # ORDER BY/count-not-limit-bound happy path and the real UNKNOWN_TABLE
-    # degraded path, both against a real ClickHouse engine.
     "cmd/query-api/internal/featureflags",
-    # Every home reader runs once against a real ClickHouse container
-    # with the canonical migration chain applied, each ReplacingMergeTree
-    # table seeded with a duplicate physical version at its own natural
-    # key: sum()/count() aggregates over integer columns promote to
-    # UInt64 in ClickHouse, and a fake RowScanner cannot reproduce the
-    # real clickhouse-go driver's refusal to scan that into a narrower
-    # destination, nor can it prove FINAL/argMax actually collapses a
-    # duplicate row the way canned fixture rows already assume it does
-    # (see readers_seeded_integration_test.go's own header comment).
     "cmd/query-api/internal/home",
-    "cmd/query-api/internal/hotspots",
-    # CHAOS-4977 step 7: the recurrence guard for FetchWorkUnitInvestments'
-    # real Map(String, Float64) theme/subcategory columns -- a fake
-    # RowScanner double can hand back any Go type its author declares, so
-    # it can never prove the real clickhouse-go driver's type-conversion
-    # path actually works against the real column type (it didn't, see
-    # workunitreader_seeded_integration_test.go's own header comment).
-    "cmd/query-api/internal/investmentexplain",
-    # fetchInvestmentUnassignedCounts' countDistinctIf() columns: the
-    # aggregate returns UInt64 in ClickHouse regardless of the counted
-    # column's own type, and a fake RowScanner answers a Scan call by
-    # reflecting on the Go destination type it is handed rather than
-    # replaying the real clickhouse-go driver's own conversion rules, so
-    # it cannot prove a narrower scan destination actually works against
-    # the real driver (see unassignedcounts_seeded_integration_test.go's
-    # own header comment).
-    "cmd/query-api/internal/investmentflow",
-    # The argMax dedup NULL-skip fix (Nullable(Float64) fields on
-    # work_item_metrics_daily/repo_metrics_daily/incident_metrics_daily/
-    # ai_impact_metrics_daily) has its own real-ClickHouse proof, since a
-    # fake RowScanner cannot reproduce argMax's server-side null-skip
-    # behaviour.
-    "cmd/query-api/internal/operatingreview",
-    "cmd/query-api/internal/routeswitch",
-    # sum()/countIf() aggregates over UInt32 columns (new_items_count,
-    # new_bugs_count, items_touched, churn) promote to UInt64 in
-    # ClickHouse, and a fake RowScanner cannot reproduce the real
-    # clickhouse-go driver's refusal to scan that into a narrower/
-    # mismatched Go destination (see
-    # aggregatescan_seeded_integration_test.go's own header comment).
-    "cmd/query-api/internal/sankey",
-    "cmd/query-api/internal/security",
-    # Same argMax dedup NULL-skip proof as operatingreview above, for
-    # wip_age_p50/p90_hours and pr_first_review_p50_hours.
-    "cmd/query-api/internal/throughputforecast",
-    "cmd/query-api/internal/workgraph",
-    "internal/cacheinvalidation",
-    "internal/externalrecompute",
-    "internal/joboperator",
-    "internal/joboutbox",
-    "internal/jobrescue",
-    "internal/jobroute",
-    "internal/jobruntime",
-    "internal/migrationmatrix",
-    # CHAOS-5006 PR2: the end-to-end proof that
-    # ResolveProviderKindForOrg's org-BYO precedence (org BYO beats an
-    # explicit platform LLM_PROVIDER, only the none/mock kill-switch
-    # beats org BYO) holds against llmorgsettings.Store.ResolveUsableProvider
-    # over a REAL Postgres container, not a fake resolver.
-    # CHAOS-5359: the package root's first //go:build integration file,
-    # hierarchycascade_integration_test.go -- proves the repo-hierarchy
-    # cascade's Materializer.Run end-to-end wiring, and the sankeycoverage.go
-    # repo-resolution expression it feeds, against a real ClickHouse.
-    # The dimension-table fold's OPTIMIZE FINAL and its single-partition and
-    # row-bound guard are properties of a real ClickHouse engine, run
-    # against the migrated repos and teams tables.
-    "internal/jobs/dimensionfold",
-    "internal/jobs/investment",
-    "internal/jobs/investment/categorize",
-    "internal/jobs/investment/chquery",
-    # CHAOS-4441: the ClickHouse writer for investment.materialize's three
-    # ReplacingMergeTree tables. Its correctness claims (dedup-before-filter,
-    # sub-millisecond version distinctness, org-scoping) are properties of the
-    # real engine, so a fake connection cannot prove them.
-    "internal/jobs/investment/chwrite",
-    "internal/jobs/metrics/daily",
-    # CHAOS-4806: the package's first //go:build integration file,
-    # baselines_nullable_integration_test.go -- proves a nil *float64
-    # aggregate field round-trips as a real ClickHouse NULL (migration
-    # 090's newly-Nullable columns) and does not corrupt a present
-    # sibling field on the same row, against a real server.
-    "internal/jobs/metrics/daily/benchmarking",
-    "internal/jobs/metrics/daily/icfinalize",
-    "internal/jobs/metrics/remaining",
-    # CHAOS-5318: the native GitHub App installation/marketplace_purchase
-    # webhook handler's Postgres-backed proofs (the atomic ON CONFLICT DO
-    # NOTHING upsert's 8-goroutine convergence, credential deactivation on
-    # "deleted"). CHAOS-5319 added a second integration file to this SAME
-    # package (the org/source resolution + scheduled_sync_occurrences/
-    # sync_manual_triggers native dispatch path) -- no further count change.
-    "internal/jobs/operational",
-    "internal/jobs/pagerduty",
-    "internal/jobs/report",
-    "internal/jobs/system",
-    "internal/jobs/workgraph",
-    "internal/jobs/workgraph/edges",
-    # CHAOS-5358: the CHAOS-5341-adjacent bind-value-type fix (bind
-    # window.RepoID.String(), not the raw uuid.UUID, to a {repo_id:UUID}
-    # named ClickHouse query parameter) -- the regression test proves the
-    # fix against a real server, since the defect is a server-side parse
-    # error a fake connection can never reproduce.
-    "internal/jobs/workgraph/issuecommitedges",
-    "internal/jobs/workgraph/issuepredges",
-    "internal/jobs/workgraph/issueprlinks",
-    # CHAOS-4924: the native operational-incident/flag-guards edge producer.
-    # Its correctness claims (the CHAOS-4269 NULL-valid_from guard, the
-    # DateTime-vs-DateTime64 placeholder precision, the batch-clock stamp)
-    # are properties of the real migration chain and a real ClickHouse
-    # engine, so a fake connection cannot prove them.
-    "internal/jobs/workgraph/operationaledges",
-    # CHAOS-5358: same bind-value-type fix as issuecommitedges/issuepredges
-    # above.
-    "internal/jobs/workgraph/prcommit",
-    # CHAOS-4989: the org-scoped BYO LLM settings read path's own
-    # feature_flags/org_feature_overrides/org_licenses/organizations/
-    # settings precedence matrix runs against a real Postgres container.
-    "internal/llmorgsettings",
-    "internal/platform/config",
-    "internal/providerfoundation",
     "internal/providersync",
-    "internal/scheduler/fixed",
-    "internal/scheduler/sync",
-    "internal/storage/postgres",
-    # CHAOS-4882: the auth-owned schema's migration lineage. Its suite starts
-    # a real PostgreSQL and connects AS the runtime role to prove DDL and
-    # cross-schema access are refused, so it is integration-tagged.
-    "internal/storage/postgres/authschema",
-    "internal/storage/river",
-    "internal/streamhandlers",
-    "internal/streamrunner",
-    "internal/syncdispatchruntime",
-    "internal/syncreconciler",
-    "internal/synccoverage",
-    "internal/syncroute",
-    # The argMax dedup NULL-skip fix for team_project_ownership.project_key,
-    # team_repo_ownership.repo_id and team_memberships.raw_provider_user_id/
-    # raw_email has its own real-ClickHouse proof, for the same reason as
-    # operatingreview/throughputforecast above.
-    "internal/teamattribution",
-    # CHAOS-4897: the recommendations loader's owned-repo scoping join reads
-    # team_repo_ownership's bitemporal window for real, so its correctness
-    # (valid_from/valid_to boundaries, NULL-repo_id exclusion, org isolation)
-    # is a property of the real engine a fake connection cannot prove.
-    "internal/teamownership",
-    # CHAOS-4902: the RMT sweep's own authoritative-count/dedup-key
-    # integration test -- applies the real migration chain to a fresh
-    # ClickHouse container and reads system.tables directly, so a fake
-    # connection cannot prove the population it asserts.
-    "internal/testsupport/chschema",
-    "internal/testsupport/containers",
 }
 
 
@@ -430,6 +283,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     flattened = [package for packages in assignments.values() for package in packages]
     assert len(flattened) == len(set(flattened)) == len(EXPECTED_PACKAGES)
     assert set(flattened) == EXPECTED_PACKAGES
+    assert REQUIRED_PACKAGES <= EXPECTED_PACKAGES
 
     # internal/providersync's isolation in the lowest-numbered shard is a
     # property of its WEIGHT relative to the other packages, not a fact this

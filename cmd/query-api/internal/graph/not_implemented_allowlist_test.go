@@ -35,8 +35,6 @@ var notImplementedResolverNames = []string{
 	"queryResolver.DevWorkGraphNeighbors",
 	"queryResolver.Home",
 	"queryResolver.ImproveOpportunities",
-	"queryResolver.ProductTelemetryDashboard",
-	"queryResolver.ProductTelemetryPlatformDashboard",
 	"queryResolver.Recommendations",
 	"queryResolver.ReportRuns",
 	"queryResolver.SavedReport",

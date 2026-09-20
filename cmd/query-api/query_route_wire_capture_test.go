@@ -230,3 +230,25 @@ func TestRegisteredExperimentsDocument_MatchesCapturedWireFixture(t *testing.T) 
 		t.Fatalf("registered document digest %s does not match the captured wire form %s (%s): a real client's request would miss this route", want, got, fixture)
 	}
 }
+
+// TestRegisteredProductTelemetryDocuments_MatchCapturedWireFixtures asserts each
+// registered product telemetry document digests to the wire form the web
+// client's own pinned urql prints for the generated query text.
+func TestRegisteredProductTelemetryDocuments_MatchCapturedWireFixtures(t *testing.T) {
+	cases := []struct {
+		fixture    string
+		registered string
+	}{
+		{"testdata/wire_capture/product_telemetry_dashboard_captured.graphql", registeredProductTelemetryDashboardDocument},
+		{"testdata/wire_capture/product_telemetry_platform_dashboard_captured.graphql", registeredProductTelemetryPlatformDashboardDocument},
+	}
+	for _, tc := range cases {
+		captured, err := os.ReadFile(tc.fixture)
+		if err != nil {
+			t.Fatalf("read captured wire fixture %s: %v", tc.fixture, err)
+		}
+		if got, want := digestHex(string(captured)), digestHex(tc.registered); got != want {
+			t.Fatalf("registered document digest %s does not match the captured wire form %s (%s): a real client's request would miss this route", want, got, tc.fixture)
+		}
+	}
+}

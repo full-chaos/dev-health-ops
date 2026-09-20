@@ -1393,6 +1393,147 @@ const registeredExperimentsDocument = `query Experiments($orgId: String!, $filte
   }
 }`
 
+// registeredProductTelemetryDashboardDocument is the registered document for the per-org product telemetry dashboard read: the
+// urql wire form of the web client's query, captured under
+// testdata/wire_capture/product_telemetry_dashboard_captured.graphql and asserted equal by
+// TestRegisteredProductTelemetryDocuments_MatchCapturedWireFixtures. Registration is
+// not enablement: PostgresSwitch.Enabled() is fail-closed.
+const registeredProductTelemetryDashboardDocument = `query ProductTelemetryDashboard($orgId: String!, $input: ProductTelemetryDashboardInput!) {
+  productTelemetryDashboard(orgId: $orgId, input: $input) {
+    dailyActiveUsers {
+      day
+      activeAnonymousUsers
+      __typename
+    }
+    topRoutes {
+      routePattern
+      events
+      sessions
+      anonymousUsers
+      __typename
+    }
+    featureViews {
+      feature
+      surface
+      views
+      anonymousUsers
+      __typename
+    }
+    filterChanges {
+      view
+      filterKey
+      changes
+      avgValueCount
+      __typename
+    }
+    chartInteractions {
+      chart
+      action
+      surface
+      interactions
+      sessions
+      __typename
+    }
+    clientErrors {
+      routePattern
+      boundary
+      errorClass
+      errors
+      affectedAnonymousUsers
+      __typename
+    }
+    sessionSummary {
+      p50DurationMs
+      p75DurationMs
+      p90DurationMs
+      p95DurationMs
+      avgPagesViewed
+      avgInteractions
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredProductTelemetryPlatformDashboardDocument is the registered document for the cross-org platform product telemetry dashboard read: the
+// urql wire form of the web client's query, captured under
+// testdata/wire_capture/product_telemetry_platform_dashboard_captured.graphql and asserted equal by
+// TestRegisteredProductTelemetryDocuments_MatchCapturedWireFixtures. Registration is
+// not enablement: PostgresSwitch.Enabled() is fail-closed.
+const registeredProductTelemetryPlatformDashboardDocument = `query ProductTelemetryPlatformDashboard($input: ProductTelemetryDashboardInput!) {
+  productTelemetryPlatformDashboard(input: $input) {
+    totals {
+      activeOrgs
+      anonymousUsers
+      sessions
+      events
+      __typename
+    }
+    dailyActiveUsers {
+      day
+      activeAnonymousUsers
+      __typename
+    }
+    topRoutes {
+      routePattern
+      events
+      sessions
+      anonymousUsers
+      __typename
+    }
+    featureViews {
+      feature
+      surface
+      views
+      anonymousUsers
+      __typename
+    }
+    filterChanges {
+      view
+      filterKey
+      changes
+      avgValueCount
+      __typename
+    }
+    chartInteractions {
+      chart
+      action
+      surface
+      interactions
+      sessions
+      __typename
+    }
+    clientErrors {
+      routePattern
+      boundary
+      errorClass
+      errors
+      affectedAnonymousUsers
+      __typename
+    }
+    sessionSummary {
+      p50DurationMs
+      p75DurationMs
+      p90DurationMs
+      p95DurationMs
+      avgPagesViewed
+      avgInteractions
+      __typename
+    }
+    topOrgs {
+      orgIdHash
+      events
+      sessions
+      anonymousUsers
+      orgId
+      orgName
+      orgSlug
+      __typename
+    }
+    __typename
+  }
+}`
+
 // digestHex is a thin wrapper over the ONE canonical document-digest
 // algorithm (CHAOS-4696): sha256(strings.TrimSpace(text)), hex-encoded,
 // now shared code in cmd/query-api/internal/digest so
@@ -1914,37 +2055,39 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 	// exact shape (a single `digestByOperation := map[string]string{...}`
 	// assignment) must stay untouched.
 	digestByOperation := map[string]string{
-		"featureFlags":          digestHex(registeredFeatureFlagsDocument),
-		"reviewEdges":           digestHex(registeredReviewEdgesDocument),
-		"cognitiveLoad":         digestHex(registeredCognitiveLoadDocument),
-		"complexityTimeseries":  digestHex(registeredComplexityTimeseriesDocument),
-		"hotspots":              digestHex(registeredHotspotsDocument),
-		"operatingReview":       digestHex(registeredOperatingReviewDocument),
-		"workGraphEdges":        digestHex(registeredWorkGraphEdgesDocument),
-		"workGraphFlow":         digestHex(registeredWorkGraphFlowDocument),
-		"workGraphArtifacts":    digestHex(registeredWorkGraphArtifactsDocument),
-		"flowMatrix":            digestHex(registeredFlowMatrixDocument),
-		"investmentBreakdown":   digestHex(registeredInvestmentBreakdownDocument),
-		"investmentFull":        digestHex(registeredInvestmentFullDocument),
-		"capacityForecast":      digestHex(registeredCapacityForecastDocument),
-		"capacityForecasts":     digestHex(registeredCapacityForecastsDocument),
-		"throughputForecast":    digestHex(registeredThroughputForecastDocument),
-		"featureFlagEvents":     digestHex(registeredFeatureFlagEventsDocument),
-		"pr":                    digestHex(registeredPrDetailDocument),
-		"securityOverview":      digestHex(registeredSecurityOverviewDocument),
-		"securityAlerts":        digestHex(registeredSecurityAlertsDocument),
-		"connectorsDataHealth":  digestHex(registeredConnectorsDataHealthDocument),
-		"dataHealthIdentity":    digestHex(registeredDataHealthIdentityDocument),
-		"metricLineage":         digestHex(registeredMetricLineageDocument),
-		"mappingCoverageHealth": digestHex(registeredMappingCoverageHealthDocument),
-		"catalogValues":         digestHex(registeredCatalogValuesDocument),
-		"acrRepositoryScopes":   digestHex(registeredAcrRepositoryScopesDocument),
-		"busFactor":             digestHex(registeredBusFactorDocument),
-		"experiments":           digestHex(registeredExperimentsDocument),
-		"aiImpactSummary":       digestHex(registeredAiImpactSummaryDocument),
-		"aiComparison":          digestHex(registeredAiComparisonDocument),
-		"aiReviewLoad":          digestHex(registeredAiReviewLoadDocument),
-		"compoundingRisk":       digestHex(registeredCompoundingRiskDocument),
+		"featureFlags":                      digestHex(registeredFeatureFlagsDocument),
+		"reviewEdges":                       digestHex(registeredReviewEdgesDocument),
+		"cognitiveLoad":                     digestHex(registeredCognitiveLoadDocument),
+		"complexityTimeseries":              digestHex(registeredComplexityTimeseriesDocument),
+		"hotspots":                          digestHex(registeredHotspotsDocument),
+		"operatingReview":                   digestHex(registeredOperatingReviewDocument),
+		"workGraphEdges":                    digestHex(registeredWorkGraphEdgesDocument),
+		"workGraphFlow":                     digestHex(registeredWorkGraphFlowDocument),
+		"workGraphArtifacts":                digestHex(registeredWorkGraphArtifactsDocument),
+		"flowMatrix":                        digestHex(registeredFlowMatrixDocument),
+		"investmentBreakdown":               digestHex(registeredInvestmentBreakdownDocument),
+		"investmentFull":                    digestHex(registeredInvestmentFullDocument),
+		"capacityForecast":                  digestHex(registeredCapacityForecastDocument),
+		"capacityForecasts":                 digestHex(registeredCapacityForecastsDocument),
+		"throughputForecast":                digestHex(registeredThroughputForecastDocument),
+		"featureFlagEvents":                 digestHex(registeredFeatureFlagEventsDocument),
+		"pr":                                digestHex(registeredPrDetailDocument),
+		"securityOverview":                  digestHex(registeredSecurityOverviewDocument),
+		"securityAlerts":                    digestHex(registeredSecurityAlertsDocument),
+		"connectorsDataHealth":              digestHex(registeredConnectorsDataHealthDocument),
+		"dataHealthIdentity":                digestHex(registeredDataHealthIdentityDocument),
+		"metricLineage":                     digestHex(registeredMetricLineageDocument),
+		"mappingCoverageHealth":             digestHex(registeredMappingCoverageHealthDocument),
+		"catalogValues":                     digestHex(registeredCatalogValuesDocument),
+		"acrRepositoryScopes":               digestHex(registeredAcrRepositoryScopesDocument),
+		"busFactor":                         digestHex(registeredBusFactorDocument),
+		"productTelemetryDashboard":         digestHex(registeredProductTelemetryDashboardDocument),
+		"productTelemetryPlatformDashboard": digestHex(registeredProductTelemetryPlatformDashboardDocument),
+		"experiments":                       digestHex(registeredExperimentsDocument),
+		"aiImpactSummary":                   digestHex(registeredAiImpactSummaryDocument),
+		"aiComparison":                      digestHex(registeredAiComparisonDocument),
+		"aiReviewLoad":                      digestHex(registeredAiReviewLoadDocument),
+		"compoundingRisk":                   digestHex(registeredCompoundingRiskDocument),
 	}
 	// CHAOS-4710 deliverable 3: log the mounted set HERE, where
 	// digestByOperation actually lives, rather than handing main.go a
@@ -2101,7 +2244,7 @@ func newDocumentDispatchHandler(routeMux *routeswitch.Mux, operationByDigest map
 			return
 		}
 
-		r = r.WithContext(authctx.WithClaims(r.Context(), authctx.Claims{OrgID: claims.OrgID, Role: claims.Role, IsSuperuser: claims.IsSuperuser}))
+		r = r.WithContext(authctx.WithClaims(r.Context(), authctx.Claims{OrgID: claims.OrgID, Role: claims.Role, IsSuperuser: claims.IsSuperuser, ImpersonationActive: claims.ImpersonationActive}))
 		r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 
 		routeMux.Dispatch(operation, w, r)

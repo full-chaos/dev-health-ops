@@ -1,0 +1,56 @@
+query ProductTelemetryDashboard($orgId: String!, $input: ProductTelemetryDashboardInput!) {
+  productTelemetryDashboard(orgId: $orgId, input: $input) {
+    dailyActiveUsers {
+      day
+      activeAnonymousUsers
+      __typename
+    }
+    topRoutes {
+      routePattern
+      events
+      sessions
+      anonymousUsers
+      __typename
+    }
+    featureViews {
+      feature
+      surface
+      views
+      anonymousUsers
+      __typename
+    }
+    filterChanges {
+      view
+      filterKey
+      changes
+      avgValueCount
+      __typename
+    }
+    chartInteractions {
+      chart
+      action
+      surface
+      interactions
+      sessions
+      __typename
+    }
+    clientErrors {
+      routePattern
+      boundary
+      errorClass
+      errors
+      affectedAnonymousUsers
+      __typename
+    }
+    sessionSummary {
+      p50DurationMs
+      p75DurationMs
+      p90DurationMs
+      p95DurationMs
+      avgPagesViewed
+      avgInteractions
+      __typename
+    }
+    __typename
+  }
+}

@@ -50,6 +50,8 @@ var (
 	dataHealthOutcomeCounter           = mustCounter("devhealth_query_api_data_health_outcome_total", "dataHealth resolver outcomes, by result")
 	experimentsCallCounter             = mustCounter("devhealth_query_api_experiments_calls_total", "experiments resolver invocations")
 	experimentsOutcomeCounter          = mustCounter("devhealth_query_api_experiments_outcome_total", "experiments resolver outcomes, by result")
+	productTelemetryCallCounter        = mustCounter("devhealth_query_api_product_telemetry_calls_total", "productTelemetry dashboard resolver invocations")
+	productTelemetryOutcomeCounter     = mustCounter("devhealth_query_api_product_telemetry_outcome_total", "productTelemetry dashboard resolver outcomes, by result")
 	featureFlagEventsCallCounter       = mustCounter("devhealth_query_api_feature_flag_events_calls_total", "featureFlagEvents resolver invocations")
 	featureFlagEventsOutcomeCounter    = mustCounter("devhealth_query_api_feature_flag_events_outcome_total", "featureFlagEvents resolver outcomes, by result")
 
@@ -564,5 +566,24 @@ func startExperimentsSpan(ctx context.Context) (context.Context, func(outcome st
 		}
 		span.End()
 		experimentsOutcomeCounter.Add(context.Background(), 1, metric.WithAttributes(attribute.String("outcome", outcome)))
+	}
+}
+
+// startProductTelemetrySpan counts the call and starts the span before the
+// authorization guard, so a rejected request is still visible. Outcomes are
+// "ok", "denied", "invalid_range" and "error".
+func startProductTelemetrySpan(ctx context.Context, name string) (context.Context, func(outcome string, extra ...attribute.KeyValue)) {
+	productTelemetryCallCounter.Add(ctx, 1, metric.WithAttributes(attribute.String("field", name)))
+	spanCtx, span := tracer.Start(ctx, "query-api."+name)
+	return spanCtx, func(outcome string, extra ...attribute.KeyValue) {
+		span.SetAttributes(attribute.String("outcome", outcome))
+		if len(extra) > 0 {
+			span.SetAttributes(extra...)
+		}
+		if outcome == "error" {
+			span.SetStatus(codes.Error, name+" resolver error")
+		}
+		span.End()
+		productTelemetryOutcomeCounter.Add(context.Background(), 1, metric.WithAttributes(attribute.String("field", name), attribute.String("outcome", outcome)))
 	}
 }

@@ -197,3 +197,17 @@ document that selects `experiments`, produced by importing the web repo's own
 | fixture | sha256(wire form) |
 | --- | --- |
 | `experiments_captured.graphql` | `133cf72191722912e8833ee46a1670c89d74c06dc9a174bfefb7c137fd74bfe5` |
+
+# product telemetry wire-capture fixtures
+
+`product_telemetry_dashboard_captured.graphql` (`ProductTelemetryDashboard`) and
+`product_telemetry_platform_dashboard_captured.graphql`
+(`ProductTelemetryPlatformDashboard`) are the wire-form text of the two
+documents that select the product telemetry dashboards, produced by importing
+the web repo's own `wireForm()` (`scripts/graphql-wire-parity.ts`) and applying
+it to the query constants in `src/lib/graphql/productTelemetryFetchers.ts`.
+
+| fixture | sha256(wire form) |
+| --- | --- |
+| `product_telemetry_dashboard_captured.graphql` | `3bcefc8f84200705229f8195e785682bf9adbfc01e60c4e775d0ff9d36954707` |
+| `product_telemetry_platform_dashboard_captured.graphql` | `8e2847048e3b70b0391f45d9cd8804735ea4401b7e78cd614e35e49ca39e348f` |

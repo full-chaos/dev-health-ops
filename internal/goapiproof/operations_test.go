@@ -31,6 +31,7 @@ var registeredOperations = []string{
 	"experiments",
 	"acrRepositoryScopes", "catalogValues", "busFactor",
 	"aiComparison", "aiImpactSummary", "aiReviewLoad",
+	"productTelemetryDashboard", "productTelemetryPlatformDashboard",
 	"connectorsDataHealth", "dataHealthIdentity", "mappingCoverageHealth", "metricLineage",
 	"capacityForecast", "capacityForecasts", "cognitiveLoad", "compoundingRisk", "complexityTimeseries",
 	"featureFlagEvents", "featureFlags", "flowMatrix", "hotspots",

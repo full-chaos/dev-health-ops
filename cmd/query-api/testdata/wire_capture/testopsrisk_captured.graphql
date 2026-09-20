@@ -1,0 +1,42 @@
+query TestOpsRisk($orgId: String!, $input: TestOpsRiskInput!) {
+  testopsRisk(orgId: $orgId, input: $input) {
+    releaseConfidence
+    qualityDragHours
+    pipelineStability
+    timeseries {
+      date
+      riskScore
+      __typename
+    }
+    qualityDragBreakdown {
+      category
+      hours
+      __typename
+    }
+    quadrantData {
+      id
+      pipelineSuccessRate
+      testPassRate
+      __typename
+    }
+    confidenceSpark {
+      ts
+      value
+      __typename
+    }
+    confidenceDelta
+    dragSpark {
+      ts
+      value
+      __typename
+    }
+    dragDelta
+    stabilitySpark {
+      ts
+      value
+      __typename
+    }
+    stabilityDelta
+    __typename
+  }
+}

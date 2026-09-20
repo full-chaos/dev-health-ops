@@ -1,5 +1,7 @@
 package goapiproof
 
+import "strings"
+
 // DuplicateCollapseLengthShape, set on a BaselineDefect, admits a list's
 // own ShapeLength finding for the ONE additional consequence
 // WorkGraphEdgeDedupShape's own per-id admission (workgraphedgedup.go)
@@ -92,6 +94,40 @@ type DuplicateCollapseLengthShape struct {
 	// baseline id in the candidate, so every repeated id is judged
 	// against its candidate row. Nil keeps rules 1 and 3 as stated.
 	CopyRule *DuplicateCopyRule
+	// CountPath, when set, is the dotted path of a sibling total-count
+	// leaf (for example "data.workGraphEdges.totalCount") that the
+	// resolver derives from the list it returns. When the plan applies,
+	// a value difference at that path is admitted only if each leg's own
+	// count equals that leg's own list length -- a count the resolver
+	// derives from its list moves with the list, and a count that does
+	// not (a candidate count that disagrees with its own list) stays
+	// outside. Empty keeps the shape's length-only behaviour.
+	CountPath string
+	// OrderField, when set, is a numeric field of each candidate element
+	// by which the candidate list must be weakly DESCENDING, with equal
+	// values ascending by OrderTieField (for work_graph_edges:
+	// confidence DESC, edgeId ASC, the order both planes sort by). A
+	// candidate that is not in that order refuses the whole plan. Empty
+	// keeps the shape without an order rule.
+	OrderField    string
+	OrderTieField string
+	// OwnsPage, when set, makes this shape the ONE owner of every finding on
+	// a page it applies to, not only the list length and the count: every
+	// element finding under ListPath (a positional value difference, a
+	// baseline-only element) and, when CursorPath is set, the trailing
+	// cursor. The plan then also requires the baseline's distinct ids, in
+	// first-occurrence order, to equal the candidate's ids in order, so
+	// every positional difference is a consequence of a repeated baseline
+	// row and nothing else. The page is decided as a whole: a page this
+	// shape refuses leaves all of its findings outside, and a sibling
+	// declaration that would absorb them positionally must apply only to
+	// pages this shape does not own (see RequestLimit).
+	OwnsPage bool
+	// CursorPath is the dotted path of the page's trailing cursor leaf (for
+	// example "data.workGraphEdges.pageInfo.endCursor"). Used only with
+	// OwnsPage: a difference there is admitted when the candidate's cursor
+	// names its own last element.
+	CursorPath string
 }
 
 // duplicateCollapseLengthPlan is one comparison's fully-evaluated
@@ -99,6 +135,51 @@ type DuplicateCollapseLengthShape struct {
 type duplicateCollapseLengthPlan struct {
 	shape   *DuplicateCollapseLengthShape
 	applies bool
+	// countAdmitted is true when the shape declares a CountPath and each
+	// leg's count equals its own list length.
+	countAdmitted bool
+	// cursorAdmitted is true when the shape owns the page, declares a
+	// CursorPath and the candidate's cursor names its own last element.
+	cursorAdmitted bool
+}
+
+// candidateInDeclaredOrder reports whether the candidate list is weakly
+// descending by OrderField with ties ascending by OrderTieField.
+func (s *DuplicateCollapseLengthShape) candidateInDeclaredOrder(list []any) bool {
+	if s.OrderField == "" {
+		return true
+	}
+	var prevValue float64
+	var prevTie string
+	for i, element := range list {
+		object, ok := element.(map[string]any)
+		if !ok {
+			return false
+		}
+		value, ok := asFloat(object[s.OrderField])
+		if !ok {
+			return false
+		}
+		tie, _ := object[s.OrderTieField].(string)
+		if i > 0 {
+			if value > prevValue || (value == prevValue && tie <= prevTie) {
+				return false
+			}
+		}
+		prevValue, prevTie = value, tie
+	}
+	return true
+}
+
+// countEqualsLength reads the leaf at CountPath in root and reports
+// whether it is a number equal to wantLen.
+func countEqualsLength(root any, countPath string, wantLen int) bool {
+	value, ok := navigateSegments(root, citedSegments(countPath))
+	if !ok {
+		return false
+	}
+	count, ok := asFloat(value)
+	return ok && count == float64(wantLen)
 }
 
 // buildDuplicateCollapseLengthPlan evaluates every rule
@@ -121,10 +202,14 @@ func buildDuplicateCollapseLengthPlan(shape *DuplicateCollapseLengthShape, basel
 	}
 
 	baseGroups := map[string][]map[string]any{}
+	var baseOrder []string
 	for _, element := range baseList {
 		object, id, ok := edgeObjectAndID(element, shape.IDField)
 		if !ok {
 			return plan
+		}
+		if _, seen := baseGroups[id]; !seen {
+			baseOrder = append(baseOrder, id)
 		}
 		baseGroups[id] = append(baseGroups[id], object)
 	}
@@ -193,8 +278,37 @@ func buildDuplicateCollapseLengthPlan(shape *DuplicateCollapseLengthShape, basel
 	if len(baseGroups) != len(candList) {
 		return plan
 	}
+	if !shape.candidateInDeclaredOrder(candList) {
+		return plan
+	}
+	if shape.OwnsPage {
+		// Every positional finding is explained by a repeated baseline row
+		// only when removing the repeats leaves the candidate's own
+		// sequence, id for id.
+		for i, element := range candList {
+			_, id, _ := edgeObjectAndID(element, shape.IDField)
+			if baseOrder[i] != id {
+				return plan
+			}
+		}
+	}
 
 	plan.applies = true
+	if shape.OwnsPage && shape.CursorPath != "" {
+		last := ""
+		if len(candList) > 0 {
+			_, last, _ = edgeObjectAndID(candList[len(candList)-1], shape.IDField)
+		}
+		if cursor, ok := navigateSegments(candidateData, citedSegments(shape.CursorPath)); ok {
+			if text, isText := cursor.(string); isText && text == last {
+				plan.cursorAdmitted = true
+			}
+		}
+	}
+	if shape.CountPath != "" {
+		plan.countAdmitted = countEqualsLength(baselineData, shape.CountPath, len(baseList)) &&
+			countEqualsLength(candidateData, shape.CountPath, len(candList))
+	}
 	return plan
 }
 
@@ -203,6 +317,18 @@ func buildDuplicateCollapseLengthPlan(shape *DuplicateCollapseLengthShape, basel
 func (p *duplicateCollapseLengthPlan) admits(finding Finding) bool {
 	if p == nil || !p.applies {
 		return false
+	}
+	if p.countAdmitted && p.shape.CountPath != "" && finding.Path == "$."+p.shape.CountPath {
+		return true
+	}
+	if p.shape.OwnsPage {
+		tiered := tieredPath(finding.Path)
+		if tiered == p.shape.ListPath || strings.HasPrefix(tiered, p.shape.ListPath+".") {
+			return true
+		}
+		if p.cursorAdmitted && finding.Path == "$."+p.shape.CursorPath {
+			return true
+		}
 	}
 	return finding.Shape == ShapeLength && tieredPath(finding.Path) == p.shape.ListPath
 }

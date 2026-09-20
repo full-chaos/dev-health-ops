@@ -172,7 +172,7 @@ func TestEnableAcknowledgedUnprovenMarksTheRowDurably(t *testing.T) {
 		t.Fatalf("review_evidence = %q, want the ACKNOWLEDGED-UNPROVEN prefix in front of the operator's own words", evidence)
 	}
 
-	statuses, err := RoutingStatusRows(ctx, pool, testSchemaDigest, map[string]string{"featureFlags": testDocumentDigest})
+	statuses, err := RoutingStatusRows(ctx, pool, testSchemaDigest, "", map[string]string{"featureFlags": testDocumentDigest})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -465,7 +465,7 @@ func TestDisableSelectDocumentDigestGuardsAndDisablesADocumentDriftRow(t *testin
 		t.Fatalf("provenance not recorded: recorded_by=%q review_evidence=%q", recordedBy, evidence)
 	}
 
-	statuses, err := RoutingStatusRows(ctx, pool, testSchemaDigest, map[string]string{"featureFlags": testDocumentDigest})
+	statuses, err := RoutingStatusRows(ctx, pool, testSchemaDigest, "", map[string]string{"featureFlags": testDocumentDigest})
 	if err != nil {
 		t.Fatalf("RoutingStatusRows: %v", err)
 	}
@@ -552,7 +552,7 @@ func TestRoutingStatusRowsSeparatesMatchStaleAndMissing(t *testing.T) {
 		"hotspots":     testDocumentDigest,
 		"flowMatrix":   "1111111111111111111111111111111111111111111111111111111111111111",
 	}
-	statuses, err := RoutingStatusRows(ctx, pool, testSchemaDigest, catalog)
+	statuses, err := RoutingStatusRows(ctx, pool, testSchemaDigest, "", catalog)
 	if err != nil {
 		t.Fatalf("RoutingStatusRows: %v", err)
 	}
@@ -590,7 +590,7 @@ func TestRoutingStatusRowsNeverBorrowsAnotherBuildsProof(t *testing.T) {
 	seedRow(t, ctx, "featureFlags", testDocumentDigest, "canary", testCandidateBuild, pool)
 	seedProof(t, ctx, pool, "featureFlags", testDocumentDigest, verbsRunningBuild, EnablementProofStage, EnablementProofTerminalState)
 
-	statuses, err := RoutingStatusRows(ctx, pool, testSchemaDigest, map[string]string{"featureFlags": testDocumentDigest})
+	statuses, err := RoutingStatusRows(ctx, pool, testSchemaDigest, "", map[string]string{"featureFlags": testDocumentDigest})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -630,7 +630,7 @@ func TestRoutingStatusRowsAppliesThePrimaryRowsStricterRouteRule(t *testing.T) {
 	}
 
 	catalog := map[string]string{"featureFlags": testDocumentDigest, "hotspots": testDocumentDigest}
-	statuses, err := RoutingStatusRows(ctx, pool, testSchemaDigest, catalog)
+	statuses, err := RoutingStatusRows(ctx, pool, testSchemaDigest, "", catalog)
 	if err != nil {
 		t.Fatalf("RoutingStatusRows: %v", err)
 	}
@@ -759,7 +759,7 @@ func TestStatusReportsTheReachableRowAndNamesTheRestAsUnreachable(t *testing.T) 
 	seedRow(t, ctx, "featureFlags", testDocumentDigest, "canary", verbsRunningBuild, pool)
 	seedRow(t, ctx, "featureFlags", otherDigest, "primary", testCandidateBuild, pool)
 
-	statuses, err := RoutingStatusRows(ctx, pool, testSchemaDigest,
+	statuses, err := RoutingStatusRows(ctx, pool, testSchemaDigest, "",
 		map[string]string{"featureFlags": testDocumentDigest})
 	if err != nil {
 		t.Fatalf("RoutingStatusRows: %v", err)
@@ -789,7 +789,7 @@ func TestALoneRowWithTheWrongDocumentDigestIsStaleNotMatch(t *testing.T) {
 	const otherDigest = "5555555555555555555555555555555555555555555555555555555555555555"
 	seedRow(t, ctx, "featureFlags", otherDigest, "primary", verbsRunningBuild, pool)
 
-	statuses, err := RoutingStatusRows(ctx, pool, testSchemaDigest,
+	statuses, err := RoutingStatusRows(ctx, pool, testSchemaDigest, "",
 		map[string]string{"featureFlags": testDocumentDigest})
 	if err != nil {
 		t.Fatalf("RoutingStatusRows: %v", err)

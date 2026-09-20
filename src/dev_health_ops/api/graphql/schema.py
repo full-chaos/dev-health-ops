@@ -587,10 +587,7 @@ class Query:
         org_id: str,
         filters: SecurityAlertFilterInput | None = None,
     ) -> SecurityOverview:
-        from .resolvers.security import resolve_security_overview
-
-        context = get_context(info)
-        return await resolve_security_overview(context, org_id, filters)
+        _raise_served_by_query_api("securityOverview", org_id, info)
 
     @strawberry.field(description="List saved reports for an organization")
     async def saved_reports(

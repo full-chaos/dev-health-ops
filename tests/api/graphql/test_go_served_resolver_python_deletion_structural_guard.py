@@ -63,9 +63,16 @@ CAPACITY_QUERIES_SOURCE = (
 )
 
 # module path -> the symbols that must not be defined in it.
+SECURITY_RESOLVER_SOURCE = (
+    ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "resolvers" / "security.py"
+)
+
 DELETED_GO_SERVED_RESOLVER_SYMBOLS: dict[Path, frozenset[str]] = {
     # A scheduler helper with no caller in src/.
     CAPACITY_QUERIES_SOURCE: frozenset({"discover_team_scopes"}),
+    # securityOverview: only the function is deleted; the module stays for
+    # securityAlerts and the shared filter builder.
+    SECURITY_RESOLVER_SOURCE: frozenset({"resolve_security_overview"}),
 }
 
 # label -> a module that must not exist on disk AT ALL.
@@ -261,6 +268,7 @@ SDL_LOAD_BEARING_SYMBOLS: dict[str, frozenset[str]] = {
             "pr",
             "catalog",
             "bus_factor",
+            "security_overview",
         }
     ),
     "inputs.py": frozenset(

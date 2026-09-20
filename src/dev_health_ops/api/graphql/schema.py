@@ -812,10 +812,7 @@ class Query:
         org_id: str,
         filters: FilterInput | None = None,
     ) -> ExperimentsResult:
-        from .resolvers.improve import resolve_experiments
-
-        context = get_context(info)
-        return await resolve_experiments(context, filters)
+        _raise_served_by_query_api("experiments", org_id, info)
 
     @strawberry.field(
         description="AI workflow impact summary across the requested time range."

@@ -328,6 +328,41 @@ func runStatus(argv []string) error {
 	return nil
 }
 
+// censusMarker says which digest's rows are the ones being READ, and by
+// what.
+//
+// "live" is a property of the DEPLOYED PROCESS, not of this binary. The
+// two coincide most of the time, and exactly when they do not is when
+// this line matters most: a tools image built from the commit about to
+// roll computes a digest nothing is serving yet, so marking ITS digest
+// "live" labels the rows actually carrying production traffic STALE and
+// the inert, not-yet-read rows live -- the precise inversion an operator
+// must not read during a rollout, on the one command they run to decide
+// whether to roll.
+//
+// With the registry unreachable there is no authority on what is live,
+// and this says so rather than guessing: an unclassified digest is not
+// evidence that its rows are dead, which is the same "two states, one
+// silence" failure the whole surface exists to end.
+func censusMarker(digest, local string, deployed *string) string {
+	if deployed == nil {
+		if digest == local {
+			return "  <- this binary's SDL (query-api unreachable: cannot confirm what is live)"
+		}
+		return "  <- unclassified (query-api unreachable: cannot confirm what is live)"
+	}
+	switch {
+	case digest == *deployed && digest == local:
+		return "  <- live"
+	case digest == *deployed:
+		return "  <- live (the deployed process reads these; this binary computes a different digest)"
+	case digest == local:
+		return "  <- this binary's SDL, NOT live yet"
+	default:
+		return "  <- STALE"
+	}
+}
+
 func printStatusText(report statusReport, local string) {
 	fmt.Fprintf(stdout, "local schema_digest        : %s\n", local)
 	switch {
@@ -359,11 +394,8 @@ func printStatusText(report statusReport, local string) {
 		}
 		sort.Strings(digests)
 		for _, digest := range digests {
-			marker := "  <- STALE"
-			if digest == local {
-				marker = "  <- live"
-			}
-			fmt.Fprintf(stdout, "  %s  %d%s\n", digest, report.RowsBySchemaDigest[digest], marker)
+			fmt.Fprintf(stdout, "  %s  %d%s\n", digest, report.RowsBySchemaDigest[digest],
+				censusMarker(digest, local, report.GoPlaneSchemaDigest))
 		}
 	}
 	fmt.Fprintln(stdout)

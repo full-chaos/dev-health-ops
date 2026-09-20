@@ -13,6 +13,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -191,7 +193,7 @@ func TestSplitVerbKeepsTheFlatPreVerbFormWorkingAsRepoint(t *testing.T) {
 }
 
 func TestSplitVerbTakesAnExplicitVerbOffTheFront(t *testing.T) {
-	for _, want := range []string{"repoint", "enable", "disable", "status"} {
+	for _, want := range everyVerb(t) {
 		verb, rest := splitVerb([]string{want, "-dry-run"})
 		if verb != want {
 			t.Fatalf("splitVerb = %q, want %q", verb, want)
@@ -381,6 +383,9 @@ func TestEveryVerbRefusesItsOwnMissingPreconditions(t *testing.T) {
 		"repoint with no provenance":      {[]string{"repoint"}, "-recorded-by"},
 		"repoint with no postgres":        {[]string{"repoint", "-recorded-by", "w", "-review-evidence", "y"}, "-postgres-uri"},
 		"repoint with no credential":      {[]string{"repoint", "-recorded-by", "w", "-review-evidence", "y", "-postgres-uri", "postgres://x"}, bearerEnvVar},
+		"carry with no provenance":        {[]string{"carry"}, "-recorded-by"},
+		"carry with no postgres":          {[]string{"carry", "-recorded-by", "w", "-review-evidence", "y"}, "-postgres-uri"},
+		"carry with no credential":        {[]string{"carry", "-recorded-by", "w", "-review-evidence", "y", "-postgres-uri", "postgres://x"}, bearerEnvVar},
 	} {
 		t.Run(name, func(t *testing.T) {
 			err := run(testCase.argv)
@@ -519,7 +524,7 @@ func TestStatusReportsAnUnusableEnvURLInsteadOfRefusing(t *testing.T) {
 // script checking "did that succeed" after asking a verb what it does saw
 // a refusal for asking a question.
 func TestVerbHelpFlagExitsZeroLikeTopLevelHelp(t *testing.T) {
-	for _, verb := range []string{"enable", "disable", "repoint", "status"} {
+	for _, verb := range everyVerb(t) {
 		for _, flag := range []string{"-h", "-help"} {
 			out, errOut, err := captureVerb(t, verb, flag)
 			if err != nil {
@@ -1349,7 +1354,7 @@ func TestNoVerbsUsageTextEverPrintsTheDSN(t *testing.T) {
 	const secret = "hunter2-not-a-real-password"
 	t.Setenv("POSTGRES_URI", "postgresql://postgres:"+secret+"@db.internal:5432/devhealth")
 
-	for _, verb := range []string{"enable", "disable", "repoint", "status"} {
+	for _, verb := range everyVerb(t) {
 		t.Run(verb, func(t *testing.T) {
 			// -h makes flag print usage and, under ContinueOnError, return
 			// ErrHelp instead of exiting the test binary.
@@ -1583,7 +1588,7 @@ func TestNoRealVerbsUsageTextEverPrintsTheDSN(t *testing.T) {
 	t.Setenv("POSTGRES_URI", "postgresql://postgres:"+secret+"@db.internal:5432/devhealth")
 	t.Setenv(bearerEnvVar, "")
 
-	for _, verb := range []string{"enable", "disable", "repoint", "status"} {
+	for _, verb := range everyVerb(t) {
 		t.Run(verb, func(t *testing.T) {
 			_, usage, _ := captureVerb(t, verb, "-h")
 			if usage == "" {
@@ -1602,5 +1607,82 @@ func TestNoRealVerbsUsageTextEverPrintsTheDSN(t *testing.T) {
 				t.Fatalf("%s usage text no longer names %s, so an operator cannot tell where the DSN comes from:\n%s", verb, postgresURIEnvVar, usage)
 			}
 		})
+	}
+}
+
+// everyVerb is the list of verbs this binary dispatches, READ FROM the
+// usage text rather than typed here.
+//
+// Four separate class-wide guards in this file -- help exits zero, no
+// usage text prints the DSN, an unconsumed operand is refused, splitVerb
+// takes the verb off the front -- each carried their own hand-typed list
+// of verb names. A verb added to run() and to usage but forgotten in one
+// of those lists is not covered by that guard, silently, and the list
+// that was forgotten is the one nobody looks at again. Deriving the list
+// from the usage text makes "a new verb" a thing that cannot be half-
+// added: it either appears in the usage block every verb list now comes
+// from, or TestEveryDispatchedVerbIsListedInUsage fails.
+func everyVerb(t *testing.T) []string {
+	t.Helper()
+	verbs := verbsInUsage()
+	if len(verbs) < 4 {
+		t.Fatalf("parsed %v from the usage text, which cannot be the whole verb set -- this helper is not reading what it thinks it is", verbs)
+	}
+	return verbs
+}
+
+func verbsInUsage() []string {
+	var verbs []string
+	lines := strings.Split(usage, "\n")
+	inVerbs := false
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "verbs:" {
+			inVerbs = true
+			continue
+		}
+		if !inVerbs {
+			continue
+		}
+		if strings.TrimSpace(line) == "" {
+			break
+		}
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			break
+		}
+		verbs = append(verbs, fields[0])
+	}
+	sort.Strings(verbs)
+	return verbs
+}
+
+// A verb run() answers but usage never mentions is a verb no class-wide
+// guard in this file covers, because every one of those lists is derived
+// from the usage text. The dispatch table is read from this package's own
+// source, so adding a case without a usage line fails here.
+func TestEveryDispatchedVerbIsListedInUsage(t *testing.T) {
+	source, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	listed := map[string]bool{}
+	for _, verb := range verbsInUsage() {
+		listed[verb] = true
+	}
+	// The dispatch switch's own cases, excluding the help aliases run()
+	// handles as one case.
+	dispatched := regexp.MustCompile(`(?m)^\tcase "([a-z-]+)":`).FindAllStringSubmatch(string(source), -1)
+	if len(dispatched) == 0 {
+		t.Fatal("found no dispatch cases in main.go, so this test proves nothing")
+	}
+	for _, match := range dispatched {
+		verb := match[1]
+		switch verb {
+		case "help", "-h", "--help":
+			continue
+		}
+		if !listed[verb] {
+			t.Fatalf("run() dispatches %q but the usage text does not list it -- every class-wide verb guard in this file is derived from that list, so the verb would be silently unguarded", verb)
+		}
 	}
 }

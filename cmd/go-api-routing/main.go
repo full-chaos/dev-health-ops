@@ -10,6 +10,11 @@
 //	disable  turn operations OFF. Deliberately FEWER preflights: it must
 //	         work when the planes disagree and when query-api is down,
 //	         which is exactly when it is needed.
+//	carry    provenance-and-reachability preserving COPY, run BEFORE a
+//	         roll: every reachable row moves to the schema digest this
+//	         binary's embedded SDL computes, so the roll does not
+//	         un-route what is already enabled. Writes nothing at the
+//	         live digest, so a rollback still finds its own rows.
 //	status   a diagnostic that never refuses and never fails on an
 //	         unhealthy state.
 //
@@ -87,6 +92,7 @@ verbs:
   repoint   point every routing row at the build /buildinfo reports, modes untouched
   enable    turn operations ON (mode canary|primary), with every preflight
   disable   turn operations OFF (mode python|disabled|shadow); mode only, never the build
+  carry     BEFORE a roll: copy every reachable row to the schema digest this binary computes
   status    report both planes' digests and every operation's row; never fails
 
 Run "go-api-routing <verb> -h" for that verb's flags.`
@@ -199,6 +205,8 @@ func run(argv []string) error {
 		return helpAsSuccess(runEnable(rest))
 	case "disable":
 		return helpAsSuccess(runDisable(rest))
+	case "carry":
+		return helpAsSuccess(runCarry(rest))
 	case "status":
 		return helpAsSuccess(runStatus(rest))
 	case "help", "-h", "--help":

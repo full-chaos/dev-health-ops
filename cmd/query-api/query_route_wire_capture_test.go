@@ -157,6 +157,7 @@ func TestRegisteredCapturedDocuments_MatchCapturedWireFixtures(t *testing.T) {
 		{"testdata/wire_capture/aicomparison_captured.graphql", registeredAiComparisonDocument},
 		{"testdata/wire_capture/aireviewload_captured.graphql", registeredAiReviewLoadDocument},
 		{"testdata/wire_capture/compoundingrisk_captured.graphql", registeredCompoundingRiskDocument},
+		{"testdata/wire_capture/releaseimpact_captured.graphql", registeredReleaseImpactDocument},
 	} {
 		captured, err := os.ReadFile(c.fixture)
 		if err != nil {

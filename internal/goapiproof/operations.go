@@ -901,18 +901,24 @@ var operationSpecs = map[string]OperationSpec{
 	"workGraphEdges": {
 		ResponseRoot: "workGraphEdges",
 		Variables:    workGraphVariables,
-		Parity: Options{BaselineDefects: []BaselineDefect{{
-			Ticket:             "CHAOS-5791",
-			Reason:             "work_graph_edges is a ReplacingMergeTree keyed on the edge identity; the baseline plane reads it with no merge-time collapse, so an unmerged duplicate physical version of one logical edge surfaces as two content-identical rows sharing one edgeId, spending one extra slot of the page limit and shifting every later element's position, including which edge's id pageInfo.endCursor names. The candidate plane collapses duplicate versions before applying the page limit, so it carries no repeated edgeId. Candidate is correct.",
-			Paths:              []string{"data.workGraphEdges.edges", "data.workGraphEdges.pageInfo.endCursor"},
-			Intermittent:       true,
-			IntermittentReason: "present only while the source table holds an unmerged duplicate physical version of some edge; a comparison taken after the background merge collapses it shows no repeated edgeId on the baseline side either",
-			WorkGraphEdgeDedupShape: &WorkGraphEdgeDedupShape{
-				EdgesListPath:      "data.workGraphEdges.edges",
-				IDField:            "edgeId",
-				TrailingCursorPath: "data.workGraphEdges.pageInfo.endCursor",
-			},
-		}}},
+		Parity:       workGraphEdgesParity,
+	},
+	// releaseImpact is the release impact document the feature flag pages
+	// send: the `workGraphEdges` root field with the filters `nodeId`,
+	// `sourceType` and `limit`. It reads the same resolver as the
+	// workGraphEdges document, so its declared baseline difference is the
+	// same. The base request is the page's request for every release
+	// (`nodeId` empty, `sourceType` RELEASE, `limit` 200); the variants prove
+	// the branches a page can reach: one release by node id (a real id the
+	// run supplies), and a page cut at one edge.
+	"releaseImpact": {
+		ResponseRoot: "workGraphEdges",
+		Variables:    releaseImpactVariables,
+		Parity:       workGraphEdgesParity,
+		Variants: []Variant{
+			releaseImpactVariant("LIMIT_ONE", map[string]any{"nodeId": "", "sourceType": "RELEASE", "limit": 1}),
+			releaseImpactNodeVariant("NODE_ID_VALID", "a node id that is the source of at least one release edge"),
+		},
 	},
 	"workGraphFlow": {Variables: workGraphVariables, ResponseRoot: "workGraphFlow"},
 }
@@ -1047,6 +1053,21 @@ func investmentFullVariables(orgID string, w Window) map[string]any {
 		"useInvestment": true,
 	}}
 }
+
+// workGraphEdgesParity is the declared comparator configuration shared by
+// every request that reads the workGraphEdges resolver.
+var workGraphEdgesParity = Options{BaselineDefects: []BaselineDefect{{
+	Ticket:             "CHAOS-5791",
+	Reason:             "work_graph_edges is a ReplacingMergeTree keyed on the edge identity; the baseline plane reads it with no merge-time collapse, so an unmerged duplicate physical version of one logical edge surfaces as two content-identical rows sharing one edgeId, spending one extra slot of the page limit and shifting every later element's position, including which edge's id pageInfo.endCursor names. The candidate plane collapses duplicate versions before applying the page limit, so it carries no repeated edgeId. Candidate is correct.",
+	Paths:              []string{"data.workGraphEdges.edges", "data.workGraphEdges.pageInfo.endCursor"},
+	Intermittent:       true,
+	IntermittentReason: "present only while the source table holds an unmerged duplicate physical version of some edge; a comparison taken after the background merge collapses it shows no repeated edgeId on the baseline side either",
+	WorkGraphEdgeDedupShape: &WorkGraphEdgeDedupShape{
+		EdgesListPath:      "data.workGraphEdges.edges",
+		IDField:            "edgeId",
+		TrailingCursorPath: "data.workGraphEdges.pageInfo.endCursor",
+	},
+}}}
 
 func workGraphVariables(orgID string, _ Window) map[string]any {
 	return map[string]any{"orgId": orgID, "filters": map[string]any{}}

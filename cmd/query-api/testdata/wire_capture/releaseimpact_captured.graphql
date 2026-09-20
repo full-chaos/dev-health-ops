@@ -1,0 +1,27 @@
+query ReleaseImpact($orgId: String!, $filters: WorkGraphEdgeFilterInput) {
+  workGraphEdges(orgId: $orgId, filters: $filters) {
+    edges {
+      edgeId
+      sourceType
+      sourceId
+      targetType
+      targetId
+      edgeType
+      provenance
+      confidence
+      evidence
+      repoId
+      provider
+      __typename
+    }
+    totalCount
+    pageInfo {
+      hasNextPage
+      hasPreviousPage
+      startCursor
+      endCursor
+      __typename
+    }
+    __typename
+  }
+}

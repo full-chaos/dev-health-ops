@@ -285,7 +285,7 @@ func scanRawEdgeIDsPythonShape(t *testing.T, ctx context.Context, admin stdclick
 	return out
 }
 
-// CHAOS-6114: the same collapse on a nodeId request whose page the limit
+// The same collapse on a nodeId request whose page the limit
 // does not cut. Production measured one node at 147 raw rows over 73
 // distinct edges (baseline) against 73 (this reader). Three logical edges
 // touch one node: one seeded twice, one three times, one once. The deduped

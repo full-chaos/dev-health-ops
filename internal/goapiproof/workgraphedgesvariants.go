@@ -3,9 +3,8 @@ package goapiproof
 // workGraphEdgesVariants are the workGraphEdges document's comparing cases on
 // pages the request limit does not cut. The base request is one page cut at the
 // default limit, where a duplicate-collapsing difference is absorbed by the
-// per-edge shape (CHAOS-5791); these two requests fall under the whole-list
-// declaration (CHAOS-6114), which admits a length or count difference only when
-// the candidate's ids equal the baseline's distinct ids, so a dropped or
+// per-edge shape; these two requests fall under the whole-list declaration,
+// which admits a length or count difference only when the candidate's ids equal the baseline's distinct ids, so a dropped or
 // invented edge cannot hide. Both are measured only when a leg lists at least
 // one edge, and both must echo the supplied value on every listed edge.
 

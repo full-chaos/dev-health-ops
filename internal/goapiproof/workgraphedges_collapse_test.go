@@ -6,10 +6,10 @@ import (
 	"testing"
 )
 
-// CHAOS-6114: a workGraphEdges page the request limit does not cut, over a
-// node whose edges hold unmerged duplicate versions. Measured on production
-// (rev 142, one node id): baseline 147 rows over 73 distinct edgeIds (72 ids
-// twice, 1 id three times), totalCount 147; candidate 73 rows, 73 distinct,
+// A workGraphEdges page the request limit does not cut, over a node whose
+// edges hold unmerged duplicate versions. Measured on production (one node
+// id): baseline 147 rows over 73 distinct edgeIds (72 ids twice, 1 id three
+// times), totalCount 147; candidate 73 rows, 73 distinct,
 // totalCount 73, the two id sets identical.
 
 type collapseEdge struct {

@@ -39,9 +39,9 @@ func TestWorkGraphEdgeDedupShape_RealCapturedBodyIsFullyCovered(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SpecFor(workGraphEdges): %v", err)
 	}
-	// Two entries: the per-id duplicate-row shape (index 0, CHAOS-5791) and the
-	// whole-list collapse shape for a page the limit does not cut (index 1,
-	// CHAOS-6114; see workgraphedges_collapse_test.go).
+	// Two entries: the per-id duplicate-row shape (index 0) and the whole-list
+	// collapse shape for a page the limit does not cut (index 1; see
+	// workgraphedges_collapse_test.go).
 	if len(spec.Parity.BaselineDefects) != 2 {
 		t.Fatalf("workGraphEdges declares %d baseline defects, want exactly 2", len(spec.Parity.BaselineDefects))
 	}

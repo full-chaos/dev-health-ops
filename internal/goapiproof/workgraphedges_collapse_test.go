@@ -3,6 +3,7 @@ package goapiproof
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"testing"
 )
 
@@ -153,6 +154,7 @@ func TestWorkGraphEdgesNonCutVariantsAreDeclared(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string][]string{"SOURCE_TYPE_SMALL": {"sourceType"}, "NODE_ID_VALID": {"sourceId", "targetId"}}
+	boundFilter := map[string]string{"SOURCE_TYPE_SMALL": "sourceType", "NODE_ID_VALID": "nodeId"}
 	seen := 0
 	for _, v := range spec.Variants {
 		fields, ok := want[v.Name]
@@ -176,14 +178,17 @@ func TestWorkGraphEdgesNonCutVariantsAreDeclared(t *testing.T) {
 			t.Errorf("%s does not carry the whole-list declaration", v.Name)
 		}
 		echo := v.Instance.Echo("X")
-		if len(echo) != 1 || echo[0].List != "data.workGraphEdges.edges" || echo[0].Value != "X" || len(echo[0].Fields) != len(fields) {
-			t.Errorf("%s echo %+v", v.Name, echo)
+		if len(echo) != 1 || echo[0].List != "data.workGraphEdges.edges" || echo[0].Value != "X" || !slices.Equal(echo[0].Fields, fields) {
+			t.Errorf("%s echo %+v, want fields %v", v.Name, echo, fields)
 		}
 		vars := v.Variables("org", Window{})
 		v.Instance.Bind(vars, "X")
 		filters := vars["filters"].(map[string]any)
 		if filters["limit"] != 200 {
 			t.Errorf("%s limit %v", v.Name, filters["limit"])
+		}
+		if filters[boundFilter[v.Name]] != "X" {
+			t.Errorf("%s binds the run-supplied value to %v, want filters.%s", v.Name, filters, boundFilter[v.Name])
 		}
 	}
 	if seen != 2 {

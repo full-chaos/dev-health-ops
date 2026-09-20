@@ -533,14 +533,7 @@ class Query:
         work_unit_ids: list[str] | None = None,
         team_id: str | None = None,
     ) -> list[WorkUnitTeamAttribution]:
-        from .resolvers.team_attribution import (
-            resolve_work_unit_team_attributions,
-        )
-
-        context = get_context(info)
-        return await resolve_work_unit_team_attributions(
-            context, work_unit_ids=work_unit_ids, team_id=team_id
-        )
+        _raise_served_by_query_api("workUnitTeamAttributions", org_id, info)
 
     @strawberry.field(description="Paginated list of security alerts")
     async def security_alerts(

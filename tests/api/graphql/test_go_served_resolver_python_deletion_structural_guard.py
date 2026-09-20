@@ -95,6 +95,16 @@ WORKER_AUTH_SOURCE = (
     ROOT / "src" / "dev_health_ops" / "api" / "internal" / "worker_auth.py"
 )
 
+TEAM_ATTRIBUTION_RESOLVER_SOURCE = (
+    ROOT
+    / "src"
+    / "dev_health_ops"
+    / "api"
+    / "graphql"
+    / "resolvers"
+    / "team_attribution.py"
+)
+
 DELETED_GO_SERVED_RESOLVER_SYMBOLS: dict[Path, frozenset[str]] = {
     # A scheduler helper with no caller in src/.
     CAPACITY_QUERIES_SOURCE: frozenset({"discover_team_scopes"}),
@@ -108,6 +118,14 @@ DELETED_GO_SERVED_RESOLVER_SYMBOLS: dict[Path, frozenset[str]] = {
             "resolve_security_overview",
             "resolve_security_alerts",
             "_build_filter_clauses",
+        }
+    ),
+    # workUnitTeamAttributions: the work-item attribution resolver stays.
+    TEAM_ATTRIBUTION_RESOLVER_SOURCE: frozenset(
+        {
+            "resolve_work_unit_team_attributions",
+            "_row_to_unit_attribution",
+            "_SOURCE_RANK_SQL",
         }
     ),
     # The operator repair and bulk-redrive routes: the Go workerctl verbs run
@@ -426,6 +444,7 @@ SDL_LOAD_BEARING_SYMBOLS: dict[str, frozenset[str]] = {
             "catalog",
             "bus_factor",
             "security_overview",
+            "work_unit_team_attributions",
             "experiments",
             "ai_opportunities",
             "product_telemetry_dashboard",
@@ -491,6 +510,7 @@ SDL_LOAD_BEARING_SYMBOLS: dict[str, frozenset[str]] = {
             "SecurityAlertNode",
             "SecurityAlertEdge",
             "SecurityAlertConnection",
+            "WorkUnitTeamAttribution",
             "ProductTelemetryDashboardType",
             "ProductTelemetrySessionSummaryType",
         }

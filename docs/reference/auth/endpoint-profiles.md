@@ -43,7 +43,7 @@ resolver-bearing fields for GraphQL. Each surface's `file:line` anchor comes
 from `inspect` on the endpoint/resolver the object actually holds, so the set
 comes from the framework and the location still comes from real source.
 
-**311 REST surfaces + 59 GraphQL resolvers = 370 total.**
+**299 REST surfaces + 56 GraphQL resolvers = 355 total.**
 
 !!! note "Why the count moved from 361 (CHAOS-4761)"
     Discovery used to match decorators and `include_router` calls in source

@@ -1,9 +1,12 @@
 """The GraphQL schema serves no subscription.
 
 Both the Strawberry schema and the exported SDL carry no Subscription root
-type; the websocket transport on /graphql stays mounted but is inert: it
-completes the connection handshake, then refuses any subscription operation
-with a GraphQL error, over both protocols. Queries over HTTP are unchanged.
+type. The dispatch router the schema is served through, given a minimal
+context, completes the websocket handshake and then refuses any subscription
+operation with a GraphQL error, over both protocols. Queries over HTTP are
+unchanged. The production mount (`create_graphql_app`) builds its context from
+an HTTP request, so a websocket connection to it fails before any operation is
+read; that behaviour is the same with and without a Subscription type.
 """
 
 from __future__ import annotations

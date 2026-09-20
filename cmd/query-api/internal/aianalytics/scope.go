@@ -178,3 +178,19 @@ func dayBounds(start, end time.Time) (time.Time, time.Time) {
 	e := time.Date(end.Year(), end.Month(), end.Day(), 23, 59, 59, 0, time.UTC)
 	return s, e
 }
+
+func warnCatalogue(ctx context.Context, operation string, err error) {
+	slog.WarnContext(ctx, "query_api.ai_analytics.catalogue_unavailable",
+		"operation", operation, "error", err.Error())
+}
+
+// resolveTeams maps each repository id to the team its full name selects; a
+// repository with no name row resolves to no team.
+func resolveTeams(teams []aiimpact.Team, repoIDs []string, names map[string]string) map[string]*string {
+	resolver := aiimpact.BuildRepoPatternResolver(teams)
+	out := make(map[string]*string, len(repoIDs))
+	for _, id := range repoIDs {
+		out[id] = resolver.Resolve(names[id])
+	}
+	return out
+}

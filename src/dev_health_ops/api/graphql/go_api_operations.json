@@ -28,12 +28,12 @@
     "digest": "4a160089d82bb30f486e81dcc4fb0ef20b97efac29166f0d04e8b03cf06a1697"
   },
   {
-    "operation": "aiWorkflowDrilldown",
-    "digest": "42bfc78e3f533b51578eb3575c027a61f9c81bfc9a7bf843c4c2f9979972fea4"
-  },
-  {
     "operation": "aiRiskBreakdown",
     "digest": "ae1e4ac101539ef16b83174aeb3556b5a574e607e1a37b98c328b418b8af06ae"
+  },
+  {
+    "operation": "aiWorkflowDrilldown",
+    "digest": "42bfc78e3f533b51578eb3575c027a61f9c81bfc9a7bf843c4c2f9979972fea4"
   },
   {
     "operation": "busFactor",

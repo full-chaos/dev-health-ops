@@ -11,26 +11,27 @@ import (
 
 // SupportedPartitionRecomputeFamilies lists the `metrics partition-recompute`
 // families this verb accepts (CHAOS-4459). A metrics.daily partition always
-// computes every family in ONE HTTP compatibility-bridge call plus whichever
-// native executors have cut over (job_daily.py's run_daily_metrics_job,
-// compute.py:149's compute_daily_metrics) -- there is no way to recompute
-// JUST repo_user_commit without recomputing the partition's other families
-// alongside it. --family therefore scopes intent/audit (which gap this
-// invocation is repairing, recorded in the provenance row below), not the
-// actual blast radius: every family in the partition is recomputed.
+// computes EVERY native family (the ordinary all-native partition handler; no
+// Python is involved) -- there is no way to recompute JUST repo_user_commit
+// without recomputing the partition's other families alongside it. --family
+// therefore scopes intent/audit (which gap this invocation is repairing,
+// recorded in the provenance row below), not the actual blast radius: every
+// family in the partition is recomputed.
 //
-// CORRECTION (codex review, P1): this is NOT universally safe. Most
-// native/bridge family writers are append-only with computed_at-keyed
-// reader dedup, but NOT ALL -- file_metrics_daily's hotspot/churn readers
-// (worker_metrics.py:2469-2474) sum raw rows with no argMax dedup, so a
-// second generation for the same day double-counts them. An operator using
-// this command is therefore choosing to also rewrite hotspot/churn numbers
-// for the recomputed org+day; the CLI help text and docs call this out. A
-// real per-family-scoped recompute (rather than whole-partition) needs
-// either a skip_families-on-publish mechanism (today skipFamilies is
-// computed dynamically at claim time from ledger state, not settable by
-// the publisher -- see daily.go's computeNativeFamilies) or fixing every
-// non-dedup-safe reader; tracked as follow-up, not attempted here.
+// Recompute is safe per table because of how each family's output table
+// collapses a second generation for the same day:
+//   - the daily-family output tables (file_metrics_daily included) are
+//     ReplacingMergeTree(computed_at) since migration 096, and every Go reader
+//     dedups (FINAL / argMax), so a second generation replaces, never
+//     double-counts;
+//   - compounding_risk_daily is still a plain append-only MergeTree with
+//     reader-side argMax (see compoundingrisk's "Write mode"), so a recompute
+//     appends duplicate physical rows there by design; readers collapse them.
+//
+// A real per-family-scoped recompute (rather than whole-partition) needs a
+// skip-set published with the partition claim (today which families run is
+// decided per partition by the handler, not settable by the publisher -- see
+// daily.go's computeNativeFamilies); tracked as follow-up, not attempted here.
 var SupportedPartitionRecomputeFamilies = []string{"repo_user_commit"}
 
 // recomputeGenerationMarker is APPENDED (never prepended -- see below) to a
@@ -40,18 +41,16 @@ var SupportedPartitionRecomputeFamilies = []string{"repo_user_commit"}
 // permanently-deduped one (codex review, P1 -- see CompletePartition's own
 // doc comment on why the ordinary publish is a silent no-op here).
 //
-// Appended, not a replacement prefix (codex review, P2): the compatibility
-// bridge's execution-ledger identity is uuid5(run_id, family, generation,
-// scope_digest), so generation must genuinely change for the recompute to
-// actually re-execute -- but Python's _LATEST_DAILY_METRICS_RUN_SQL
+// Appended, not a replacement prefix: the generation must
+// change for the recompute to be distinguishable from the succeeded run it
+// resets -- but Python's _LATEST_DAILY_METRICS_RUN_SQL
 // (workers/recommendations_tasks.py) finds a day's AUTHORITATIVE run via
 // `generation LIKE 'fixed-schedule:daily_metrics_fanout:%'`, a
 // classification prefix that must keep matching. Replacing the whole value
 // (this ticket's first version) made a run mid-recompute -- or stuck,
 // indefinitely, if the recompute fails -- invisible to that readiness
 // check entirely, not just "not yet ready". Appending preserves the
-// producer classification while still yielding a distinct string (and
-// therefore a fresh uuid5 identity). Requires widening
+// producer classification while still yielding a distinct string. Requires widening
 // daily_metrics_runs.generation from varchar(64) to text (migration
 // 0117): the widest classified value (the fan-out prefix, ~57 bytes) plus
 // this suffix (11 bytes + a 36-byte UUID) does not fit 64.
@@ -136,11 +135,9 @@ type PartitionRangeRedriveOutcome struct {
 // Mirrors RedriveFinalizeForRange's (CHAOS-4405) shape: one candidate run
 // per calendar day, its own transaction per day so one day's ineligibility
 // cannot roll back an otherwise-successful range, a fresh generation minted
-// from nonce so the redriven attempt gets a genuinely new
-// compatibility-bridge execution-ledger identity
-// (uuid5(run_id, family, generation, scope_digest) -- an unchanged
-// generation would make _reserve_execution find the SAME identity already
-// 'succeeded' and skip re-executing it), and a durable provenance row
+// from nonce so the redriven run is distinct from the succeeded run it
+// resets (finalize publishes under a redrive-scoped key derived from it), and
+// a durable provenance row
 // (daily_metrics_partition_recompute_events) written in the SAME
 // transaction as the reset and the fresh publish, before either.
 //
@@ -364,13 +361,10 @@ FOR UPDATE OF run`, runID).Scan(
 		return false, ErrInvalidState
 	}
 
-	// Fresh generation (CHAOS-4405 precedent): the compatibility bridge's
-	// execution-ledger identity is uuid5(run_id, family, generation,
-	// scope_digest) -- the ORIGINAL identity already reached 'succeeded',
-	// so an unchanged generation would make a redriven attempt land on the
-	// SAME identity and get silently skipped rather than actually
-	// recomputing. run_id itself is unchanged: only the generation VALUE
-	// this run is stored under moves. Appended to the BASE classification
+	// Fresh generation (CHAOS-4405 precedent): the run's generation must be
+	// distinct from the succeeded one it resets, so the redrive is
+	// distinguishable and finalize publishes under a fresh key. run_id itself
+	// is unchanged: only the generation VALUE this run is stored under moves. Appended to the BASE classification
 	// (recomputeGenerationMarker's own doc comment), never accumulated on
 	// top of a prior recompute's own marker (codex review round 2, P2) --
 	// a second-or-later recompute REPLACES the previous "#recompute:..."

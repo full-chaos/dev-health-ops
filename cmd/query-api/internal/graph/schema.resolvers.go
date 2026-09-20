@@ -1184,14 +1184,32 @@ func (r *queryResolver) ImproveOpportunities(ctx context.Context, scope *model.A
 	panic(fmt.Errorf("not implemented: ImproveOpportunities - improveOpportunities"))
 }
 
-// AiGovernanceSummary is the resolver for the aiGovernanceSummary field.
+// AiGovernanceSummary is the resolver for the aiGovernanceSummary field. It reads only the
+// caller's own org: the orgId argument must equal the org of the request
+// identity, otherwise the request is denied.
 func (r *queryResolver) AiGovernanceSummary(ctx context.Context, orgID string, dateRange model.AIDateRangeInput, scope *model.AIScopeInput, violationLimit int) (*model.AIGovernanceSummary, error) {
-	panic(fmt.Errorf("not implemented: AiGovernanceSummary - aiGovernanceSummary"))
+	if err := requireOwnOrg(ctx, orgID); err != nil {
+		return nil, err
+	}
+	result, err := aianalytics.GovernanceSummary(ctx, r.ClickHouse, orgID, dateRange, scope, violationLimit)
+	if err != nil {
+		return nil, fmt.Errorf("aiGovernanceSummary: %w", err)
+	}
+	return result, nil
 }
 
-// AiWorkflowDrilldown is the resolver for the aiWorkflowDrilldown field.
+// AiWorkflowDrilldown is the resolver for the aiWorkflowDrilldown field. It reads only the
+// caller's own org: the orgId argument must equal the org of the request
+// identity, otherwise the request is denied.
 func (r *queryResolver) AiWorkflowDrilldown(ctx context.Context, orgID string, rootType model.AIWorkflowRootTypeInput, rootID string, depth int, limit int) (*model.AIWorkflowDrilldownResult, error) {
-	panic(fmt.Errorf("not implemented: AiWorkflowDrilldown - aiWorkflowDrilldown"))
+	if err := requireOwnOrg(ctx, orgID); err != nil {
+		return nil, err
+	}
+	result, err := aianalytics.WorkflowDrilldown(ctx, r.ClickHouse, orgID, rootType, rootID, depth, limit)
+	if err != nil {
+		return nil, fmt.Errorf("aiWorkflowDrilldown: %w", err)
+	}
+	return result, nil
 }
 
 // AiAttributedPrs is the resolver for the aiAttributedPrs field.

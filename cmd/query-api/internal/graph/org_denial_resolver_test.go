@@ -44,6 +44,14 @@ func orgScopedCalls() map[string]orgScopedCall {
 			_, err := r.Query().AiComparison(ctx, orgID, model.AIDateRangeInput{}, nil)
 			return err
 		},
+		"aiGovernanceSummary": func(r *Resolver, ctx context.Context, orgID string) error {
+			_, err := r.Query().AiGovernanceSummary(ctx, orgID, model.AIDateRangeInput{}, nil, 50)
+			return err
+		},
+		"aiWorkflowDrilldown": func(r *Resolver, ctx context.Context, orgID string) error {
+			_, err := r.Query().AiWorkflowDrilldown(ctx, orgID, model.AIWorkflowRootTypeInputPr, "r:1", 3, 100)
+			return err
+		},
 		"aiReviewLoad": func(r *Resolver, ctx context.Context, orgID string) error {
 			_, err := r.Query().AiReviewLoad(ctx, orgID, model.AIDateRangeInput{}, nil)
 			return err

@@ -256,6 +256,30 @@ var operationSpecs = map[string]OperationSpec{
 			aiInstanceVariant("TEAM_VALID", "a team id that has rollup rows and whose repo patterns select a repository", "teamId", aiReviewLoadParity(), "data.aiReviewLoad.byBucket", "", ""),
 		),
 	},
+	"aiGovernanceSummary": {
+		ResponseRoot: "aiGovernanceSummary",
+		Variables:    aiGovernanceVariables(nil, 50),
+		Parity:       aiGovernanceParity(),
+		Variants: append(aiGovernanceVariants(),
+			aiGovernanceInstanceVariant("REPO_VALID", "a repository id that has governance coverage rows", "repoId", "data.aiGovernanceSummary.coverage", "repoId"),
+			aiGovernanceInstanceVariant("REPO_NAME_VALID", "the full name of a repository that has governance coverage rows", "repoId", "data.aiGovernanceSummary.coverage", ""),
+			aiGovernanceInstanceVariant("TEAM_VALID", "a team id stored on governance coverage rows", "teamId", "data.aiGovernanceSummary.coverage", "teamId"),
+		),
+	},
+	"aiWorkflowDrilldown": {
+		ResponseRoot: "aiWorkflowDrilldown",
+		Variables:    aiWorkflowVariables("PR", "no-such-org:0", 3, 100),
+		Parity:       aiWorkflowParity(),
+		Variants: []Variant{
+			aiWorkflowVariant("ISSUE_UNKNOWN", "ISSUE", "NO-SUCH-1", 3, 100),
+			aiWorkflowVariant("WORK_UNIT_UNKNOWN", "WORK_UNIT", "no-such-unit", 3, 100),
+			aiWorkflowVariant("DEPTH_ZERO", "PR", "no-such-org:0", 0, 100),
+			aiWorkflowVariant("LIMIT_ZERO", "PR", "no-such-org:0", 3, 0),
+			aiWorkflowInstanceVariant("PR_VALID", "a pull request workflow id (repository id, colon, number) that has AI workflow edges", "PR"),
+			aiWorkflowInstanceVariant("ISSUE_VALID", "an issue id that has AI workflow edges", "ISSUE"),
+			aiWorkflowInstanceVariant("WORK_UNIT_VALID", "a work unit id that has AI workflow edges", "WORK_UNIT"),
+		},
+	},
 	"busFactor": {
 		ResponseRoot: "busFactor",
 		Variables: func(orgID string, _ Window) map[string]any {
@@ -1307,4 +1331,108 @@ func aiInstanceVariant(name, kind, scopeField string, parity Options, nonEmpty, 
 			},
 		},
 	}
+}
+
+// aiGovernanceVariables builds the governance summary request: the org, the
+// run's day window, the scope (nil sends none) and the violation limit.
+func aiGovernanceVariables(scope map[string]any, violationLimit int) func(orgID string, w Window) map[string]any {
+	return func(orgID string, w Window) map[string]any {
+		vars := aiRollupVariables(scope)(orgID, w)
+		vars["violationLimit"] = violationLimit
+		return vars
+	}
+}
+
+const aiGovernanceTimestampReason = "the violation timestamp is a ClickHouse DateTime64(3, 'UTC') read through a tz-aware driver value; Python's strawberry DateTime scalar isoformat()s it with a \"+00:00\" offset and microsecond digits, while Go's gqlgen DateTime scalar formats the same instant as RFC 3339 with \"Z\" (resolvers/ai.py _to_aware). The instants are equal; only the wire text differs. Go's form is the canonical DateTime wire form; the Python form is the declared defect and stays frozen."
+
+func aiGovernanceVariants() []Variant {
+	scopes := []struct {
+		name  string
+		scope map[string]any
+		limit int
+	}{
+		{"REPO_UNKNOWN", map[string]any{"repoId": "00000000-0000-0000-0000-000000000001"}, 50},
+		{"REPO_NAME_UNKNOWN", map[string]any{"repoId": "no-such-org/no-such-repo"}, 50},
+		{"TEAM_UNKNOWN", map[string]any{"teamId": "team-abc-123"}, 50},
+		{"REPO_AND_TEAM_UNKNOWN", map[string]any{"repoId": "00000000-0000-0000-0000-000000000001", "teamId": "team-abc-123"}, 50},
+		{"VIOLATION_LIMIT_ZERO", nil, 0},
+	}
+	variants := make([]Variant, 0, len(scopes))
+	for _, sc := range scopes {
+		variants = append(variants, Variant{Name: sc.name, Variables: aiGovernanceVariables(sc.scope, sc.limit), Parity: aiGovernanceParity()})
+	}
+	return variants
+}
+
+func aiGovernanceInstanceVariant(name, kind, scopeField, nonEmpty, echoField string) Variant {
+	echoList := ""
+	if echoField != "" {
+		echoList = nonEmpty
+	}
+	v := aiInstanceVariant(name, kind, scopeField, aiGovernanceParity(), nonEmpty, echoList, echoField)
+	v.Variables = aiGovernanceVariables(map[string]any{}, 50)
+	return v
+}
+
+// aiGovernanceParity declares the violation timestamp's wire text a
+// baseline defect.
+func aiGovernanceParity() Options {
+	return Options{BaselineDefects: []BaselineDefect{{
+		Ticket:             "CHAOS-6081",
+		Reason:             aiGovernanceTimestampReason,
+		Paths:              []string{"data.aiGovernanceSummary.recentViolations.observedAt"},
+		Intermittent:       true,
+		IntermittentReason: "the list is empty when the window holds no policy event",
+	}}}
+}
+
+func aiWorkflowVariables(rootType, rootID string, depth, limit int) func(orgID string, w Window) map[string]any {
+	return func(orgID string, _ Window) map[string]any {
+		return map[string]any{"orgId": orgID, "rootType": rootType, "rootId": rootID, "depth": depth, "limit": limit}
+	}
+}
+
+func aiWorkflowVariant(name, rootType, rootID string, depth, limit int) Variant {
+	return Variant{Name: name, Variables: aiWorkflowVariables(rootType, rootID, depth, limit), Parity: aiWorkflowParity()}
+}
+
+// aiWorkflowInstanceVariant walks from a run-supplied root; it is measured
+// only when the walk returns an edge on a leg.
+func aiWorkflowInstanceVariant(name, kind, rootType string) Variant {
+	return Variant{
+		Name:      name,
+		Variables: aiWorkflowVariables(rootType, "", 3, 100),
+		Parity: func() Options {
+			p := aiWorkflowParity()
+			p.RequireNonEmpty = []string{"data.aiWorkflowDrilldown.edges"}
+			return p
+		}(),
+		Instance: &VariantInstance{
+			Kind: kind,
+			Bind: func(vars map[string]any, value string) { vars["rootId"] = value },
+			EchoFor: func(value string) []ScopeEcho {
+				return []ScopeEcho{{List: "data.aiWorkflowDrilldown.rootId", Scalar: true, Value: value}}
+			},
+		},
+	}
+}
+
+// aiWorkflowParity declares the node and edge lists unordered: the edge read
+// is a union of five tables under a row limit with no ordering, so the
+// identical statement returns different orders.
+func aiWorkflowParity() Options {
+	return Options{OrderInsensitiveLists: []OrderInsensitiveList{
+		{
+			Path:      "data.aiWorkflowDrilldown.nodes",
+			KeyFields: []string{"nodeType", "nodeId"},
+			Reason:    "the nodes are collected in the row order of an unordered UNION ALL over five edge tables under a LIMIT, so the same statement can return them in a different order",
+			Ticket:    "CHAOS-6081",
+		},
+		{
+			Path:      "data.aiWorkflowDrilldown.edges",
+			KeyFields: []string{"edgeId"},
+			Reason:    "the edges are the rows of an unordered UNION ALL over five edge tables under a LIMIT, so the same statement can return them in a different order",
+			Ticket:    "CHAOS-6081",
+		},
+	}}
 }

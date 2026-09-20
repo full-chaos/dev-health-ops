@@ -29,7 +29,7 @@ import (
 // what makes a drift legible rather than merely detected.
 var registeredOperations = []string{
 	"acrRepositoryScopes", "catalogValues", "busFactor",
-	"aiComparison", "aiImpactSummary", "aiReviewLoad",
+	"aiComparison", "aiGovernanceSummary", "aiImpactSummary", "aiReviewLoad", "aiWorkflowDrilldown",
 	"connectorsDataHealth", "dataHealthIdentity", "mappingCoverageHealth", "metricLineage",
 	"capacityForecast", "capacityForecasts", "cognitiveLoad", "complexityTimeseries",
 	"featureFlagEvents", "featureFlags", "flowMatrix", "hotspots",
@@ -123,7 +123,7 @@ func TestWindowedSpecsUseTheWindow(t *testing.T) {
 		"connectorsDataHealth": true, "dataHealthIdentity": true, "mappingCoverageHealth": true, "metricLineage": true,
 		"capacityForecast": true, "capacityForecasts": true,
 		"featureFlagEvents": true, "featureFlags": true, "pr": true,
-		"busFactor": true, "securityAlerts": true, "securityOverview": true,
+		"busFactor": true, "aiWorkflowDrilldown": true, "securityAlerts": true, "securityOverview": true,
 		"throughputForecast": true, "workGraphArtifacts": true, "workGraphEdges": true,
 		"workGraphFlow": true,
 	}

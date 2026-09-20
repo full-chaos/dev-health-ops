@@ -171,6 +171,15 @@
         {"file": "cmd/query-api/internal/workgraph/workgraph_test.go", "test": "TestFetchDedupedEdgeRows_QueryShapeHasArgMaxCollapse"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
       ]
+    },
+    {
+      "operation": "experiments",
+      "two_plane_ops_sha": "fe2e37171c7c6f76a182328359796fcc6d76034a",
+      "guards": [
+        {"file": "cmd/query-api/internal/experiments/experiments_golden_test.go", "test": "TestExperimentsMatchesTheFrozenGolden"},
+        {"file": "cmd/query-api/internal/experiments/experiments_test.go", "test": "TestStableID_MatchesTheReferenceDigest"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_symbols_are_not_redefined"}
+      ]
     }
   ]
 }

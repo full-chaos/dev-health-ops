@@ -3,6 +3,7 @@ package logging
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -254,24 +255,55 @@ func TestEveryCarrierSpellingAndPositionRedactsTheProtectedValue(t *testing.T) {
 	}
 }
 
+// leakSentinel is long and unique, so no incidental field of a log record (the
+// wall-clock time, a duration, an id) can contain it or any needle below by
+// chance. The numeric needles are 15+ digits for the same reason.
+const leakSentinel = "kQ7vZx3mP9wLr2TnB5cY8dHf6JsA4eGu"
+
+// leaves calls visit for every scalar under v with its JSON path.
+func leaves(v any, path string, visit func(path string, leaf any)) {
+	switch node := v.(type) {
+	case map[string]any:
+		for k, child := range node {
+			leaves(child, path+"."+k, visit)
+		}
+	case []any:
+		for i, child := range node {
+			leaves(child, fmt.Sprintf("%s[%d]", path, i), visit)
+		}
+	default:
+		visit(path, node)
+	}
+}
+
 // TestProtectedAttributeKeyHidesEveryKind: an attribute or group named like a
-// credential hides its value whatever slog.Kind carries it.
+// credential hides its value whatever slog.Kind carries it. The record is
+// decoded and checked field by field: every scalar under the protected key is
+// the redaction marker, and no scalar anywhere in the record carries the
+// secret, so the assertion cannot be fooled by (or fooled into failing on) an
+// unrelated field.
 func TestProtectedAttributeKeyHidesEveryKind(t *testing.T) {
 	t.Parallel()
 	values := []slog.Value{
-		slog.StringValue("canary-string"),
-		slog.Int64Value(981234567),
-		slog.Uint64Value(981234568),
-		slog.Float64Value(98123.4569),
+		slog.StringValue(leakSentinel + "-string"),
+		slog.Int64Value(7234567890123456789),
+		slog.Uint64Value(8234567890123456781),
+		slog.Float64Value(723456789012345.6),
 		slog.BoolValue(true),
-		slog.DurationValue(981234570 * time.Nanosecond),
+		slog.DurationValue(7234567890123456782 * time.Nanosecond),
 		slog.TimeValue(time.Date(2031, 1, 2, 3, 4, 5, 0, time.UTC)),
-		slog.AnyValue(errors.New("canary-error")),
-		slog.AnyValue(map[string]string{"inner": "canary-map"}),
-		slog.AnyValue(struct{ Inner string }{"canary-struct"}),
-		slog.AnyValue([]byte("canary-bytes")),
-		slog.GroupValue(slog.String("inner", "canary-group")),
-		slog.AnyValue(textValuer{"canary-valuer"}),
+		slog.AnyValue(errors.New(leakSentinel + "-error")),
+		slog.AnyValue(map[string]string{"inner": leakSentinel + "-map"}),
+		slog.AnyValue(struct{ Inner string }{leakSentinel + "-struct"}),
+		slog.AnyValue([]byte(leakSentinel + "-bytes")),
+		slog.GroupValue(slog.String("inner", leakSentinel+"-group")),
+		slog.AnyValue(textValuer{leakSentinel + "-valuer"}),
+	}
+	needles := []string{
+		leakSentinel,
+		base64.StdEncoding.EncodeToString([]byte(leakSentinel + "-bytes"))[:24],
+		"7234567890123456789", "8234567890123456781", "723456789012345", "7234567890123456782",
+		"2031-01-02",
 	}
 	kinds := map[slog.Kind]bool{}
 	for _, value := range values {
@@ -298,17 +330,40 @@ func TestProtectedAttributeKeyHidesEveryKind(t *testing.T) {
 					logger.WithGroup(key).WithGroup("middle").Info("m", slog.Attr{Key: "inner_value", Value: value})
 					logger.Info("m", "note", "visible")
 				}
-				line := output.String()
-				for _, fragment := range []string{"canary", "98123", "2031-01-02", "Y2FuYXJ5"} {
-					if strings.Contains(line, fragment) {
-						t.Errorf("%s %s kind=%s leaked %q: %s", carrier, key, value.Kind(), fragment, line)
+				cell := fmt.Sprintf("%s %s kind=%s", carrier, key, value.Kind())
+				decoder := json.NewDecoder(&output)
+				decoder.UseNumber()
+				var protectedSeen, noteSeen bool
+				for decoder.More() {
+					var record map[string]any
+					if err := decoder.Decode(&record); err != nil {
+						t.Fatalf("%s: log line is not JSON: %v", cell, err)
+					}
+					leaves(record, "", func(path string, leaf any) {
+						text := fmt.Sprint(leaf)
+						for _, needle := range needles {
+							if strings.Contains(text, needle) {
+								t.Errorf("%s leaked %q at %s: %v", cell, needle, path, record)
+							}
+						}
+						if b, ok := leaf.(bool); ok && b {
+							t.Errorf("%s leaked a true boolean at %s: %v", cell, path, record)
+						}
+					})
+					if record["note"] == "visible" {
+						noteSeen = true
+					}
+					if subtree, ok := record[key]; ok {
+						protectedSeen = true
+						leaves(subtree, key, func(path string, leaf any) {
+							if leaf != redacted {
+								t.Errorf("%s: %s = %v, want %s", cell, path, leaf, redacted)
+							}
+						})
 					}
 				}
-				if value.Kind() == slog.KindBool && strings.Contains(line, "true") {
-					t.Errorf("%s %s bool leaked: %s", carrier, key, line)
-				}
-				if !strings.Contains(line, `"note":"visible"`) || !strings.Contains(line, redacted) {
-					t.Errorf("%s %s kind=%s: %s", carrier, key, value.Kind(), line)
+				if !noteSeen || !protectedSeen {
+					t.Errorf("%s: note visible=%v protected key present=%v in %s", cell, noteSeen, protectedSeen, output.String())
 				}
 			}
 		}

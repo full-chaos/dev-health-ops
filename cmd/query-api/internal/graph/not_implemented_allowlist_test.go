@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-// notImplementedDir holds one empty file per resolver whose body is a gqlgen
+// notImplementedDir holds one regular file per resolver (content ignored, kept empty) whose body is a gqlgen
 // "not implemented" stub, named "Receiver.Method". One file per name (not one
 // shared list) so that porting a resolver -- deleting its own file -- never
 // edits a line another port also edits, which is what let parallel ports merge
@@ -36,7 +36,7 @@ func namesInDir(t *testing.T, dir string) []string {
 		// A marker is a regular file. A directory or symlink under that name
 		// would satisfy a name-only listing while marking nothing.
 		if !e.Type().IsRegular() {
-			t.Fatalf("%s/%s is not a regular file; each stub marker must be an empty regular file", dir, e.Name())
+			t.Fatalf("%s/%s is not a regular file; each stub marker must be a regular file", dir, e.Name())
 		}
 		names = append(names, e.Name())
 	}

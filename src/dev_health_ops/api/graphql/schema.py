@@ -65,9 +65,6 @@ from .models.recommendations import (
     Recommendation,
     WindowInput,
 )
-from .resolvers.ai import (
-    resolve_ai_opportunities,
-)
 from .resolvers.analytics import resolve_analytics
 from .resolvers.data_health import resolve_data_health
 from .resolvers.dev_evidence import (
@@ -864,8 +861,7 @@ class Query:
         scope: AIScopeInput | None = None,
         limit: int = 25,
     ) -> AIOpportunitiesResult:
-        context = get_context(info)
-        return await resolve_ai_opportunities(context, scope, limit)
+        _raise_served_by_query_api("aiOpportunities", org_id, info)
 
     @strawberry.field(
         description=(

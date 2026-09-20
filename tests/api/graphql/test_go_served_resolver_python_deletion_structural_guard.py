@@ -104,10 +104,14 @@ DELETED_GO_SERVED_RESOLVER_SYMBOLS: dict[Path, frozenset[str]] = {
         {"resolve_product_telemetry_dashboard"}
     ),
     PRODUCT_TELEMETRY_LOADER_SOURCE: frozenset({"load_product_telemetry_dashboard"}),
-    # The eight query-api-served AI analytics operations. aiOpportunities and its
-    # scope helpers stay in the module.
+    # The nine query-api-served AI analytics operations, including
+    # aiOpportunities. The module is deleted with them; the detector module
+    # stays as the Go detectors' parity oracle.
     AI_RESOLVER_SOURCE: frozenset(
         {
+            "resolve_ai_opportunities",
+            "_normalize_opportunity_scope",
+            "_resolve_repo_ref",
             "resolve_ai_impact_summary",
             "resolve_ai_comparison",
             "resolve_ai_review_load",
@@ -245,6 +249,15 @@ DELETED_GO_SERVED_RESOLVER_MODULES: dict[str, Path] = {
     / "graphql"
     / "resolvers"
     / "compounding_risk.py",
+    # The AI analytics operations, aiOpportunities last. The detector module
+    # stays as the Go detectors' parity oracle.
+    "ai resolver": ROOT
+    / "src"
+    / "dev_health_ops"
+    / "api"
+    / "graphql"
+    / "resolvers"
+    / "ai.py",
     # workGraphEdges, workGraphFlow and workGraphArtifacts.
     "work graph resolver": ROOT
     / "src"
@@ -283,6 +296,7 @@ RETAINED_ORACLE_MODULES: dict[str, Path] = {
 SDL_LOAD_BEARING_SOURCES: tuple[Path, ...] = (
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "models" / "pr.py",
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "models" / "improve.py",
+    ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "models" / "ai.py",
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "types" / "cognitive_load.py",
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "types" / "complexity.py",
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "types" / "review_edges.py",
@@ -294,6 +308,14 @@ SDL_LOAD_BEARING_SOURCES: tuple[Path, ...] = (
 
 SDL_LOAD_BEARING_SYMBOLS: dict[str, frozenset[str]] = {
     "improve.py": frozenset({"Experiment", "ExperimentsResult", "ExperimentStatus"}),
+    "ai.py": frozenset(
+        {
+            "AIOpportunitiesResult",
+            "AIOpportunity",
+            "AIOpportunityKind",
+            "AIWorkGraphDrilldownRef",
+        }
+    ),
     "pr.py": frozenset(
         {
             "PullRequestDetail",
@@ -348,6 +370,7 @@ SDL_LOAD_BEARING_SYMBOLS: dict[str, frozenset[str]] = {
             "bus_factor",
             "security_overview",
             "experiments",
+            "ai_opportunities",
             "product_telemetry_dashboard",
             "compounding_risk",
             "ai_impact_summary",

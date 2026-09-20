@@ -40,6 +40,10 @@ _QUERIES = {
         'query { experiments(orgId: "org-1") { derivedFromOpportunities } }',
         None,
     ),
+    "aiOpportunities": (
+        'query { aiOpportunities(orgId: "org-1") { detectorReady } }',
+        None,
+    ),
     "productTelemetryDashboard": (
         'query { productTelemetryDashboard(orgId: "org-1", input: '
         '{startDate: "2026-01-01", endDate: "2026-01-08"}) '

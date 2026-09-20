@@ -42,6 +42,9 @@ import (
 // noProdDataOperations is the narrowing list.
 var noProdDataOperations = map[string]bool{
 	"savedReports": true,
+	// featureFlagTimeseries reads flag activation rows production does not
+	// hold, so every case answers empty on both planes there.
+	"featureFlagTimeseries": true,
 }
 
 // NoProdDataEligible reports whether operation may be admitted by class 2.

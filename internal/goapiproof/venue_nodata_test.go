@@ -160,7 +160,7 @@ func TestNoProdDataListIsNarrowAndDisjointFromClassOne(t *testing.T) {
 		}
 	}
 	sort.Strings(listed)
-	if want := []string{"savedReports"}; !reflect.DeepEqual(listed, want) {
+	if want := []string{"featureFlagTimeseries", "savedReports"}; !reflect.DeepEqual(listed, want) {
 		t.Fatalf("list = %v, want %v", listed, want)
 	}
 }

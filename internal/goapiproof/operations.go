@@ -2401,11 +2401,15 @@ const analyticsFloatAggregate = "the measure is a ClickHouse float aggregate (av
 // batch's lists to be non-empty on a leg. A batch that asks for exactly one
 // series (or one breakdown) also requires every returned entry to name that
 // measure and dimension; a whole-page batch asks for several, so its measures
-// are proven by the single-request variants instead.
+// are proven by the single-request variants instead. Every declaration is
+// made only for the lists the batch asks for: a declaration over a list the
+// batch does not carry matches nothing and fails the run.
 func analyticsBatchParity(b analyticsBatch) Options {
-	o := Options{FloatTierB: map[string]string{"data.analytics.timeseries.buckets.value": analyticsFloatAggregate}}
+	o := Options{FloatTierB: map[string]string{}}
 	if len(b.Series) > 0 {
+		o.FloatTierB["data.analytics.timeseries.buckets.value"] = analyticsFloatAggregate
 		o.RequireNonEmpty = append(o.RequireNonEmpty, "data.analytics.timeseries")
+		o.BaselineDefects = append(o.BaselineDefects, analyticsSeriesDefects()...)
 		if len(b.Series) == 1 {
 			o.ScopeEcho = append(o.ScopeEcho,
 				ScopeEcho{List: "data.analytics.timeseries", Fields: []string{"measure"}, Value: b.Series[0].Measure},
@@ -2415,6 +2419,7 @@ func analyticsBatchParity(b analyticsBatch) Options {
 	if len(b.Breakdowns) > 0 {
 		o.FloatTierB["data.analytics.breakdowns.items.value"] = analyticsFloatAggregate
 		o.RequireNonEmpty = append(o.RequireNonEmpty, "data.analytics.breakdowns")
+		o.BaselineDefects = append(o.BaselineDefects, analyticsBreakdownDefects()...)
 		if len(b.Breakdowns) == 1 {
 			o.ScopeEcho = append(o.ScopeEcho,
 				ScopeEcho{List: "data.analytics.breakdowns", Fields: []string{"measure"}, Value: b.Breakdowns[0].Measure},
@@ -2422,6 +2427,65 @@ func analyticsBatchParity(b analyticsBatch) Options {
 		}
 	}
 	return o
+}
+
+const (
+	analyticsDefectTicket = "CHAOS-6149"
+	// analyticsNoneReason describes the reference plane's str(None) text.
+	analyticsNoneReason = "the reference resolver builds each group name with str(row[\"dimension_value\"]), so a NULL dimension value (a team or repository the row carries no id for) reaches the wire as the text \"None\"; Go carries the absence as an empty string (or null for a label). The web page treats \"\" and \"none\" alike (isMissingKey in web/src/lib/testops/failure-patterns.ts), so the difference is the reference's rendering of a missing value, not a value the page reads. Only the exact pair (\"None\", \"\" or null) is covered; any other text under the path stays outside."
+)
+
+// analyticsSeriesDefects are the reference plane's differences on the
+// timeseries list. Each is a shape, never a blanket path citation, so a real
+// difference under the same path stays outside.
+func analyticsSeriesDefects() []BaselineDefect {
+	return []BaselineDefect{
+		{
+			Ticket:                  analyticsDefectTicket,
+			Reason:                  "the reference hands the driver's datetime to strawberry's Date scalar, whose serializer isoformat()s it, so a bucket day reaches the wire as \"YYYY-MM-DDT00:00:00\"; the schema types TimeseriesBucket.date as Date (\"YYYY-MM-DD\") and Go emits that. The web pages use the value only as an opaque sort and merge key within one response. Only a baseline at exactly 00:00:00 UTC on the same calendar day as the candidate is covered.",
+			Paths:                   []string{"data.analytics.timeseries.buckets.date"},
+			TimestampRenderingShape: &TimestampRenderingShape{CandidateIsDate: true},
+		},
+		{
+			Ticket:             analyticsDefectTicket,
+			Reason:             analyticsNoneReason,
+			Paths:              []string{"data.analytics.timeseries.dimensionValue"},
+			Intermittent:       true,
+			IntermittentReason: "present only when a bucket group has a NULL dimension value; an org whose rows all carry an id shows no such group",
+			LeafPairShape:      &LeafPairShape{Pairs: []LeafPair{{Baseline: "None", Candidate: ""}}},
+		},
+		{
+			Ticket:             analyticsDefectTicket,
+			Reason:             "the reference builds each bucket value with float(row[\"value\"] or 0), so an aggregate with no rows in a bucket (a delta with no earlier day) is 0.0; Go scans the value as nullable and sends null (ruled product behaviour, see ExecuteTimeseries; the web merge treats a null bucket as missing, not zero). Only the exact pair (0, null) is covered.",
+			Paths:              []string{"data.analytics.timeseries.buckets.value"},
+			Intermittent:       true,
+			IntermittentReason: "present only when some bucket's aggregate is NULL in the source rows; a window where every bucket has rows shows no null",
+			LeafPairShape:      &LeafPairShape{Pairs: []LeafPair{{Baseline: 0.0, Candidate: nil}}},
+		},
+	}
+}
+
+// analyticsBreakdownDefects are the reference plane's differences on the
+// breakdown list.
+func analyticsBreakdownDefects() []BaselineDefect {
+	return []BaselineDefect{
+		{
+			Ticket:             analyticsDefectTicket,
+			Reason:             analyticsNoneReason,
+			Paths:              []string{"data.analytics.breakdowns.items.key"},
+			Intermittent:       true,
+			IntermittentReason: "present only when the breakdown has an item whose dimension value is NULL; an org whose rows all carry an id shows no such item",
+			LeafPairShape:      &LeafPairShape{Pairs: []LeafPair{{Baseline: "None", Candidate: ""}}},
+		},
+		{
+			Ticket:             analyticsDefectTicket,
+			Reason:             analyticsNoneReason,
+			Paths:              []string{"data.analytics.breakdowns.items.label"},
+			Intermittent:       true,
+			IntermittentReason: "present only when the breakdown has an item whose dimension value is NULL, and only in a document that selects the label",
+			LeafPairShape:      &LeafPairShape{Pairs: []LeafPair{{Baseline: "None", Candidate: nil}}},
+		},
+	}
 }
 
 // analyticsPageBatch is one request batch a web page sends. The test-operations

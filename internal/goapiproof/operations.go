@@ -2476,7 +2476,7 @@ func analyticsBreakdownDefects() []BaselineDefect {
 			Paths:              []string{"data.analytics.breakdowns.items.label"},
 			Intermittent:       true,
 			IntermittentReason: "present only when the breakdown has an item whose dimension value is NULL, and only in a document that selects the label",
-			LeafPairShape:      &LeafPairShape{Pairs: []LeafPair{{Baseline: "None", Candidate: nil}}},
+			LeafPairShape:      &LeafPairShape{Pairs: []LeafPair{{Baseline: "None", Candidate: nil}}, CandidateMayBeAllNull: true},
 		},
 		analyticsEmptyAggregateDefect("data.analytics.breakdowns.items.value", "breakdown item value", "an item"),
 	}

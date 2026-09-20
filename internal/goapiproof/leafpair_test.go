@@ -156,3 +156,34 @@ func TestLeafPairShape_NullPairNeverAdmitsAPresenceFinding(t *testing.T) {
 		t.Fatalf("outside = %d, want 1 -- %+v", result.DifferencesOutsideBaselineDefect, result.Findings)
 	}
 }
+
+// TestAnalyticsBatchDeclarations_LabelNullSubtree runs the label declaration
+// over a breakdown whose every candidate label is null (Go sends no label for
+// a NULL dimension value, and the item beside it has none either): the
+// declared ("None", null) pair is covered even though the candidate's label
+// subtree has no non-null leaf, and any other baseline text stays outside.
+// The production ladder for testOpsCoverage showed the "None" != null finding
+// relabelled empty_result and refused (PAGE_PIPELINES, PAGE_TESTS).
+func TestAnalyticsBatchDeclarations_LabelNullSubtree(t *testing.T) {
+	opts := analyticsBatchParity(analyticsBatch{Breakdowns: []analyticsBreakdown{{"TEAM", "A", 10}}})
+	body := func(firstLabel string) string {
+		return fmt.Sprintf(`{"data":{"analytics":{"breakdowns":[{"dimension":"TEAM","measure":"A","items":[{"key":"k1","value":1,"label":%s},{"key":"k2","value":1,"label":null}]}]}}}`, firstLabel)
+	}
+	cases := []struct {
+		name                string
+		baseline, candidate string
+		wantOutside         int
+	}{
+		{"None -> null, every candidate label null", `"None"`, `null`, 0},
+		{"other text -> null, every candidate label null", `"repo"`, `null`, 1},
+		{"None -> empty text", `"None"`, `""`, 1},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			result := Compare(snapshotFromJSON(t, body(c.baseline)), snapshotFromJSON(t, body(c.candidate)), opts)
+			if result.DifferencesOutsideBaselineDefect != c.wantOutside {
+				t.Fatalf("outside = %d, want %d -- findings %+v", result.DifferencesOutsideBaselineDefect, c.wantOutside, result.Findings)
+			}
+		})
+	}
+}

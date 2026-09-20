@@ -1240,6 +1240,9 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 	// cited defect. One non-null leaf anywhere under the path keeps the
 	// rule leaf-by-leaf (hotspots' JOB 5 receipt: 7 null of 391 leaves).
 	for _, defect := range defects {
+		if defect.LeafPairShape != nil && defect.LeafPairShape.CandidateMayBeAllNull {
+			continue
+		}
 		for _, cited := range defect.Paths {
 			if nonNullLeaves(candidateData, citedSegments(cited)) > 0 || nonNullLeaves(baselineData, citedSegments(cited)) == 0 {
 				continue

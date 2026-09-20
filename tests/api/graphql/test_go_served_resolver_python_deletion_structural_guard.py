@@ -71,10 +71,6 @@ IMPROVE_RESOLVER_SOURCE = (
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "resolvers" / "improve.py"
 )
 
-AI_RESOLVER_SOURCE = (
-    ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "resolvers" / "ai.py"
-)
-
 PRODUCT_TELEMETRY_RESOLVER_SOURCE = (
     ROOT
     / "src"
@@ -88,17 +84,16 @@ PRODUCT_TELEMETRY_LOADER_SOURCE = (
     ROOT / "src" / "dev_health_ops" / "api" / "product_telemetry" / "dashboard.py"
 )
 
+AI_RESOLVER_SOURCE = (
+    ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "resolvers" / "ai.py"
+)
+
 DELETED_GO_SERVED_RESOLVER_SYMBOLS: dict[Path, frozenset[str]] = {
     # A scheduler helper with no caller in src/.
     CAPACITY_QUERIES_SOURCE: frozenset({"discover_team_scopes"}),
     # securityOverview: only the function is deleted; the module stays for
     # securityAlerts and the shared filter builder.
     SECURITY_RESOLVER_SOURCE: frozenset({"resolve_security_overview"}),
-    # aiOpportunities: the other AI resolvers stay in the module; the detector
-    # module stays as the Go detectors' parity oracle.
-    AI_RESOLVER_SOURCE: frozenset(
-        {"resolve_ai_opportunities", "_normalize_opportunity_scope"}
-    ),
     # experiments: the improve-opportunities resolver stays in the module.
     IMPROVE_RESOLVER_SOURCE: frozenset(
         {"resolve_experiments", "_stable_experiment_id", "_metric_from_card"}
@@ -109,6 +104,38 @@ DELETED_GO_SERVED_RESOLVER_SYMBOLS: dict[Path, frozenset[str]] = {
         {"resolve_product_telemetry_dashboard"}
     ),
     PRODUCT_TELEMETRY_LOADER_SOURCE: frozenset({"load_product_telemetry_dashboard"}),
+    # The nine query-api-served AI analytics operations, including
+    # aiOpportunities. The module is deleted with them; the detector module
+    # stays as the Go detectors' parity oracle.
+    AI_RESOLVER_SOURCE: frozenset(
+        {
+            "resolve_ai_opportunities",
+            "_normalize_opportunity_scope",
+            "_resolve_repo_ref",
+            "resolve_ai_impact_summary",
+            "resolve_ai_comparison",
+            "resolve_ai_review_load",
+            "resolve_ai_risk_breakdown",
+            "resolve_ai_governance_summary",
+            "resolve_ai_workflow_drilldown",
+            "resolve_ai_attributed_prs",
+            "resolve_ai_attribution_overview",
+            "_normalize_scope",
+            "_normalize_attribution_scope",
+            "_load_daily_records",
+            "_load_scope_breakdowns",
+            "_load_reviewer_concentration",
+            "_load_engagement_slices",
+            "_load_overlap_rows",
+            "_resolve_repo_team_map",
+            "_resolve_team_repo_ids",
+            "_scope_rollups",
+            "_aggregate_bucket_totals",
+            "_aggregate_side",
+            "_validate_date_range",
+            "_to_aware",
+        }
+    ),
 }
 
 # label -> a module that must not exist on disk AT ALL.
@@ -222,6 +249,15 @@ DELETED_GO_SERVED_RESOLVER_MODULES: dict[str, Path] = {
     / "graphql"
     / "resolvers"
     / "compounding_risk.py",
+    # The AI analytics operations, aiOpportunities last. The detector module
+    # stays as the Go detectors' parity oracle.
+    "ai resolver": ROOT
+    / "src"
+    / "dev_health_ops"
+    / "api"
+    / "graphql"
+    / "resolvers"
+    / "ai.py",
     # workGraphEdges, workGraphFlow and workGraphArtifacts.
     "work graph resolver": ROOT
     / "src"
@@ -337,6 +373,14 @@ SDL_LOAD_BEARING_SYMBOLS: dict[str, frozenset[str]] = {
             "ai_opportunities",
             "product_telemetry_dashboard",
             "compounding_risk",
+            "ai_impact_summary",
+            "ai_comparison",
+            "ai_review_load",
+            "ai_risk_breakdown",
+            "ai_governance_summary",
+            "ai_workflow_drilldown",
+            "ai_attributed_prs",
+            "ai_attribution_overview",
             "work_graph_edges",
             "work_graph_flow",
             "work_graph_artifacts",

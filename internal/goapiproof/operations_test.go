@@ -31,7 +31,7 @@ var registeredOperations = []string{
 	"acrRepositoryScopes", "catalogValues", "busFactor",
 	"aiComparison", "aiImpactSummary", "aiReviewLoad",
 	"connectorsDataHealth", "dataHealthIdentity", "mappingCoverageHealth", "metricLineage",
-	"capacityForecast", "capacityForecasts", "cognitiveLoad", "complexityTimeseries",
+	"capacityForecast", "capacityForecasts", "cognitiveLoad", "compoundingRisk", "complexityTimeseries",
 	"featureFlagEvents", "featureFlags", "flowMatrix", "hotspots",
 	"investmentBreakdown", "investmentFull", "operatingReview", "pr",
 	"reviewEdges", "securityAlerts", "securityOverview", "throughputForecast",
@@ -123,7 +123,7 @@ func TestWindowedSpecsUseTheWindow(t *testing.T) {
 		"connectorsDataHealth": true, "dataHealthIdentity": true, "mappingCoverageHealth": true, "metricLineage": true,
 		"capacityForecast": true, "capacityForecasts": true,
 		"featureFlagEvents": true, "featureFlags": true, "pr": true,
-		"busFactor": true, "securityAlerts": true, "securityOverview": true,
+		"busFactor": true, "compoundingRisk": true, "securityAlerts": true, "securityOverview": true,
 		"throughputForecast": true, "workGraphArtifacts": true, "workGraphEdges": true,
 		"workGraphFlow": true,
 	}

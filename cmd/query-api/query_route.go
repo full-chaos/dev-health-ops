@@ -755,6 +755,58 @@ const registeredFeatureFlagEventsDocument = `query FeatureFlagEvents($orgId: Str
   }
 }`
 
+// registeredCompoundingRiskDocument is the registered document for the
+// `compoundingRisk` operation, the exact wire-form text a real web client
+// sends (testdata/wire_capture/compoundingrisk_captured.graphql).
+const registeredCompoundingRiskDocument = `query CompoundingRisk($orgId: String!, $filter: CompoundingRiskFilterInput = null) {
+  compoundingRisk(orgId: $orgId, filter: $filter) {
+    orgId
+    breakout
+    generatedAt
+    rows {
+      day
+      scope
+      scopeId
+      scopeLabel
+      score
+      severity
+      computedAt
+      components {
+        churnNorm
+        complexityNorm
+        ownershipNorm
+        reviewNorm
+        reworkChurn
+        complexityDelta
+        ownershipGini
+        singleOwnerRatio
+        reviewLatencyP90h
+        __typename
+      }
+      weights {
+        churn
+        complexity
+        ownership
+        review
+        __typename
+      }
+      thresholds {
+        elevated
+        high
+        __typename
+      }
+      __typename
+    }
+    trend {
+      day
+      score
+      severity
+      __typename
+    }
+    __typename
+  }
+}`
+
 // registeredBusFactorDocument is the registered document for the
 // `busFactor` operation, the exact wire-form text a real web client sends
 // (testdata/wire_capture/busfactor_captured.graphql).
@@ -1866,6 +1918,7 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		"aiImpactSummary":       digestHex(registeredAiImpactSummaryDocument),
 		"aiComparison":          digestHex(registeredAiComparisonDocument),
 		"aiReviewLoad":          digestHex(registeredAiReviewLoadDocument),
+		"compoundingRisk":       digestHex(registeredCompoundingRiskDocument),
 	}
 	// CHAOS-4710 deliverable 3: log the mounted set HERE, where
 	// digestByOperation actually lives, rather than handing main.go a

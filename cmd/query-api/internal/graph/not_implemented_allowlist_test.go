@@ -25,7 +25,6 @@ var notImplementedResolverNames = []string{
 	"queryResolver.AiOpportunities",
 	"queryResolver.AiRiskBreakdown",
 	"queryResolver.AiWorkflowDrilldown",
-	"queryResolver.CompoundingRisk",
 	"queryResolver.DevChangeSummary",
 	"queryResolver.DevDataHealth",
 	"queryResolver.DevEvidenceSearch",

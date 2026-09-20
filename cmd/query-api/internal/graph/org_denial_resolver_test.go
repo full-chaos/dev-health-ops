@@ -32,6 +32,10 @@ func orgScopedCalls() map[string]orgScopedCall {
 			_, err := r.Query().SecurityOverview(ctx, orgID, nil)
 			return err
 		},
+		"compoundingRisk": func(r *Resolver, ctx context.Context, orgID string) error {
+			_, err := r.Query().CompoundingRisk(ctx, orgID, nil)
+			return err
+		},
 		"busFactor": func(r *Resolver, ctx context.Context, orgID string) error {
 			_, err := r.Query().BusFactor(ctx, orgID, nil)
 			return err

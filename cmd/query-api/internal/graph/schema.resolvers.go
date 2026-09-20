@@ -17,6 +17,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/capacityforecast"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/cognitiveload"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/complexitytimeseries"
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/compoundingrisk"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/datahealth"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/featureflags"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph/model"
@@ -951,9 +952,18 @@ func (r *queryResolver) BusFactor(ctx context.Context, orgID string, scope *mode
 	return result, nil
 }
 
-// CompoundingRisk is the resolver for the compoundingRisk field.
+// CompoundingRisk is the resolver for the compoundingRisk field. It reads
+// only the caller's own org: the orgId argument must equal the org of the
+// request identity, otherwise the request is denied.
 func (r *queryResolver) CompoundingRisk(ctx context.Context, orgID string, filter *model.CompoundingRiskFilterInput) (*model.CompoundingRiskResult, error) {
-	panic(fmt.Errorf("not implemented: CompoundingRisk - compoundingRisk"))
+	if err := requireOwnOrg(ctx, orgID); err != nil {
+		return nil, err
+	}
+	result, err := compoundingrisk.Resolve(ctx, r.ClickHouse, orgID, filter, time.Now().UTC())
+	if err != nil {
+		return nil, fmt.Errorf("compoundingRisk: %w", err)
+	}
+	return result, nil
 }
 
 // TestopsRisk is the resolver for the testopsRisk field.

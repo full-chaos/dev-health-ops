@@ -43,6 +43,7 @@ EXPECTED_PACKAGES = {
     "cmd/query-api/internal/aianalytics",
     "cmd/query-api/internal/analytics",
     "cmd/query-api/internal/busfactor",
+    "cmd/query-api/internal/compoundingrisk",
     # cmd/query-api/internal/explain's integration-tagged tests exercise
     # the team-scoped repo filter's pushed-down membership condition
     # against a real ClickHouse: the query text that once returned every

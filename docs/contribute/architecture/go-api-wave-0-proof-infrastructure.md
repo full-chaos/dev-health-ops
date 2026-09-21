@@ -321,12 +321,9 @@ dev-hops go-api routing status --query-api-url http://query-api:8080
 # 2. If the planes disagree, STOP: rebuild/redeploy the query-api image
 #    from this SDL. `enable` will refuse until they agree, by design.
 
-# 3. Re-enable against the deployed build. --candidate-build is the ops
-#    commit sha the running image was built from.
-dev-hops go-api routing enable \
-  --operations all-registered \
-  --candidate-build <ops-sha-the-image-was-built-from> \
-  --mode canary
+# 3. Re-enable against the deployed build with the Go verb
+#    (`go-api-routing enable`, next section). It reads the candidate build
+#    from the running query-api's /buildinfo; there is no Python enable.
 
 # 4. Confirm every operation reads MATCH, and none reads UNPROVEN
 #    unless the go-served ledger names a written limit for it.
@@ -340,9 +337,9 @@ or when no admissible proof run exists for the candidate build: a
 `deployed_executed` run bound to the serving build per request that ended
 in `match`, or in a `mismatch` whose every difference is cited against a
 declared Python baseline defect (primary also requires the edge route).
-Nothing waives the last of these on the command line: the Python verb has no
-waiver flag. The Go verb (below) admits an operation without a proof run only
-through a written limit in the go-served ledger.
+Nothing waives the last of these on the command line. `enable` admits an
+operation without a proof run only through a written limit in the go-served
+ledger.
 
 On success `enable` names, for every proven row, the receipt that
 authorized it -- its id, terminal state, citations (for a cited mismatch),
@@ -359,7 +356,7 @@ The enablement rule requires `build_binding = 'per_request'` on every
 receipt, and rows written before 0129 carry `build_binding` NULL. So the
 moment 0129 is applied, **every operation proven before it reads UNPROVEN**
 on `dev-hops go-api routing status` and on the migration-status page, and
-`routing enable` refuses it -- including operations whose old receipt was a
+`go-api-routing enable` refuses it -- including operations whose old receipt was a
 sound `match`. Nothing is lost from the table; the old receipts stay as
 history. Re-run `go-api-prove` at the deployed build (JOB 6's re-prove step
 does exactly this) and the new receipts, bound per request, restore the
@@ -369,9 +366,9 @@ proofs.
 
 `cmd/go-api-routing` is the Go implementation of the same contract, built
 because the cutover rule forbids new Python compute on the critical path
-of a rollout operation. The Python verbs above are UNTOUCHED and still
-work; these are the ones to reach for on a Go-only fleet, and they are the
-only ones that can re-point a `shadow` row.
+of a rollout operation. The Python `status` and `disable` verbs still
+work. `enable` exists only in Go, and the Go verbs are the only ones that can
+re-point a `shadow` row.
 
 ```bash
 # A typed -postgres-uri flag value reaches /proc/<pid>/cmdline and shell

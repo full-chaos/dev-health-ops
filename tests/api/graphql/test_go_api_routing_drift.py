@@ -124,7 +124,7 @@ async def test_rows_only_at_a_superseded_digest_are_reported_stale(
     # ERROR, not INFO: this one IS an outage.
     assert [r for r in caplog.records if r.levelno >= logging.ERROR]
     # And it must name the way out, not merely the symptom.
-    assert "dev-hops go-api routing enable" in caplog.text
+    assert "go-api-routing enable" in caplog.text
 
 
 @pytest.mark.asyncio

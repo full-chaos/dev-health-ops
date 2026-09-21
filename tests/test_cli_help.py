@@ -42,7 +42,6 @@ def _run_cli_help(*args: str) -> subprocess.CompletedProcess[str]:
         ("push", "export", "--help"),
         ("go-api", "--help"),
         ("go-api", "routing", "--help"),
-        ("go-api", "routing", "enable", "--help"),
         ("go-api", "routing", "status", "--help"),
         ("migrate", "--help"),
         ("migrate", "clickhouse", "repair", "--help"),

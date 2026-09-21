@@ -114,7 +114,7 @@ func TestAuthzRequirementSatisfied(t *testing.T) {
 // the list of every operation the prover covers: a new operation with an
 // authz declaration, or a widened minter, turns this red.
 func TestVenueEligibleSetIsPinnedOverEveryOperation(t *testing.T) {
-	want := []string{"connectorsDataHealth", "dataHealthIdentity", "mappingCoverageHealth", "metricLineage"}
+	want := []string{"connectorsDataHealth", "dataHealthIdentity", "mappingCoverageHealth", "metricLineage", "productTelemetryPlatformDashboard"}
 	if got := VenueEligibleOperations(KnownOperations()); !reflect.DeepEqual(got, want) {
 		t.Fatalf("eligible = %v, want %v", got, want)
 	}
@@ -418,6 +418,37 @@ func TestVenueHostsAreNeverProductionServiceNames(t *testing.T) {
 	for _, edge := range []string{"http://api:8000/graphql", "http://query-api:8090/graphql", "http://dev-health-api:8000/graphql"} {
 		if err := CheckVenue("bigboy-compose", "bigboy-compose", edge); err == nil {
 			t.Errorf("login token accepted at %s", edge)
+		}
+	}
+}
+
+// productTelemetryPlatformDashboard's gate is the superuser flag alone: no
+// role satisfies it. A receipt whose principal is a non-superuser owner is
+// refused, a superuser's is admitted.
+func TestPlatformAdminRequirementIsSuperuserOnly(t *testing.T) {
+	requirement, ok := AuthzFor("productTelemetryPlatformDashboard")
+	if !ok {
+		t.Fatal("productTelemetryPlatformDashboard declares no requirement")
+	}
+	for _, role := range []string{"owner", "admin", "operator", "viewer", "member", "superuser", "platform_admin", ""} {
+		if requirement.Satisfied(role, false) {
+			t.Errorf("role %q satisfied the platform-admin requirement without the superuser flag", role)
+		}
+		if !requirement.Satisfied(role, true) {
+			t.Errorf("role %q with the superuser flag did not satisfy the platform-admin requirement", role)
+		}
+	}
+	const op = "productTelemetryPlatformDashboard"
+	for _, tc := range []struct {
+		role      string
+		superuser bool
+		admitted  bool
+	}{{"owner", false, false}, {"admin", false, false}, {"viewer", false, false}, {"owner", true, true}, {"", true, true}} {
+		receipt := goodReceipt(t, op, "primary")
+		receipt.Venue.Role, receipt.Venue.Superuser = tc.role, tc.superuser
+		err := VenueAdmit(receipt, op, testSchema, testDoc, testBuild, "primary")
+		if (err == nil) != tc.admitted {
+			t.Errorf("role %q superuser %t: err=%v, want admitted=%t", tc.role, tc.superuser, err, tc.admitted)
 		}
 	}
 }

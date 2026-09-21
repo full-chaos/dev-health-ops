@@ -16,6 +16,10 @@ spec:
     metadata:
       labels:
         {{- include "dev-health.componentSelectorLabels" (dict "component" "clickhouse" "context" $) | nindent 8 }}
+      {{- if .Values.clickhouse.usersd }}
+      annotations:
+        checksum/clickhouse-usersd: {{ toYaml .Values.clickhouse.usersd | sha256sum }}
+      {{- end }}
     spec:
       containers:
         - name: clickhouse
@@ -36,10 +40,19 @@ spec:
               value: "0.0.0.0"
           resources:
             {{- toYaml .Values.clickhouse.resources | nindent 12 }}
-          {{- if .Values.clickhouse.persistence.enabled }}
+          {{- if or .Values.clickhouse.persistence.enabled .Values.clickhouse.usersd }}
           volumeMounts:
+            {{- if .Values.clickhouse.persistence.enabled }}
             - name: clickhouse-data
               mountPath: /var/lib/clickhouse
+            {{- end }}
+            {{- /* One subPath mount per file so the image's own users.d files stay. */}}
+            {{- range $name := keys (.Values.clickhouse.usersd | default dict) | sortAlpha }}
+            - name: clickhouse-usersd
+              mountPath: {{ printf "/etc/clickhouse-server/users.d/%s" $name | quote }}
+              subPath: {{ $name | quote }}
+              readOnly: true
+            {{- end }}
           {{- end }}
           livenessProbe:
             httpGet:
@@ -53,6 +66,12 @@ spec:
               port: http
             initialDelaySeconds: 5
             periodSeconds: 5
+      {{- if .Values.clickhouse.usersd }}
+      volumes:
+        - name: clickhouse-usersd
+          configMap:
+            name: {{ include "dev-health.fullname" . }}-clickhouse-usersd
+      {{- end }}
   {{- if .Values.clickhouse.persistence.enabled }}
   volumeClaimTemplates:
     - metadata:
@@ -86,4 +105,21 @@ spec:
     - name: native
       port: 9000
       targetPort: native
+{{- if .Values.clickhouse.usersd }}
+---
+# CHAOS-6181: extra ClickHouse users.d files (e.g. a read-only user). Content
+# is supplied by the operator; do not put plaintext passwords here -- use
+# <password_sha256_hex>.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "dev-health.fullname" . }}-clickhouse-usersd
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "clickhouse" "context" $) | nindent 4 }}
+data:
+  {{- range $name, $content := .Values.clickhouse.usersd }}
+  {{- toYaml (dict $name $content) | nindent 2 }}
+  {{- end }}
+{{- end }}
 {{- end }}

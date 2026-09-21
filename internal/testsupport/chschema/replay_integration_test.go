@@ -47,9 +47,25 @@ func fingerprints(ctx context.Context, t *testing.T, c *clickHouseHTTP) map[stri
 		"columns": "SELECT table, name, type, default_kind, default_expression, compression_codec, " +
 			"is_in_sorting_key, is_in_partition_key FROM system.columns WHERE database = " + db +
 			" ORDER BY table, position",
-		"seed rows": "SELECT * FROM " + quoteIdentifier(c.database) + ".schema_migrations ORDER BY version",
 	}
 	out := map[string]string{}
+	// Every table that holds rows, not a named one: a future seed migration is
+	// compared without editing this test.
+	seeded, err := c.do(ctx, "SELECT name FROM system.tables WHERE database = "+db+
+		" AND engine NOT LIKE '%View' AND total_rows > 0 ORDER BY name FORMAT TSV", nil)
+	if err != nil {
+		t.Fatalf("list seeded tables: %v", err)
+	}
+	var rows strings.Builder
+	for _, name := range strings.Fields(string(seeded)) {
+		data, err := c.do(ctx, "SELECT * FROM "+quoteIdentifier(c.database)+"."+quoteIdentifier(name)+
+			" ORDER BY tuple(*) FORMAT JSONEachRow", nil)
+		if err != nil {
+			t.Fatalf("read seed rows of %s: %v", name, err)
+		}
+		rows.WriteString("-- " + name + "\n" + string(data))
+	}
+	out["seed rows"] = rows.String()
 	for name, query := range queries {
 		data, err := c.do(ctx, query+" FORMAT JSONEachRow", nil)
 		if err != nil {

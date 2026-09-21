@@ -265,6 +265,22 @@ func createAll(ctx context.Context, c *clickHouseHTTP, objects []schemaObject) e
 	return nil
 }
 
+// snapshotFor returns the snapshot cached for key, or builds and caches one.
+// The lock is held through build, so callers that arrive together on a cold
+// cache produce one chain run and the rest wait for its capture. A build that
+// fails the test (runtime.Goexit) releases the lock through the defer and
+// caches nothing.
+func snapshotFor(key string, build func() *schemaSnapshot) (snapshot *schemaSnapshot, built bool) {
+	snapshotMu.Lock()
+	defer snapshotMu.Unlock()
+	if cached := cachedSnapshots[key]; cached != nil {
+		return cached, false
+	}
+	snapshot = build()
+	cachedSnapshots[key] = snapshot
+	return snapshot, true
+}
+
 // applyReplayed runs the real migration chain via migrate the first time a
 // given environment is seen on an empty database and replays that captured end
 // state on every later empty database of the same environment. Only throwaway
@@ -293,23 +309,19 @@ func applyReplayed(ctx context.Context, t *testing.T, dsn string, migrate func()
 	}
 
 	key := chainInputKey()
-	snapshotMu.Lock()
-	snapshot := cachedSnapshots[key]
-	if snapshot == nil {
-		func() {
-			defer snapshotMu.Unlock()
-			migrate()
-			captured, err := captureSnapshot(ctx, client)
-			if err != nil {
-				t.Fatalf("chschema: capture the migrated schema: %v", err)
-			}
-			cachedSnapshots[key] = captured
-			t.Logf("chschema: applied the real migration chain and captured %d objects, %d seeded tables",
-				len(captured.objects), len(captured.rows))
-		}()
+	snapshot, built := snapshotFor(key, func() *schemaSnapshot {
+		migrate()
+		captured, err := captureSnapshot(ctx, client)
+		if err != nil {
+			t.Fatalf("chschema: capture the migrated schema: %v", err)
+		}
+		t.Logf("chschema: applied the real migration chain and captured %d objects, %d seeded tables",
+			len(captured.objects), len(captured.rows))
+		return captured
+	})
+	if built {
 		return
 	}
-	snapshotMu.Unlock()
 
 	if snapshot.database != client.database {
 		t.Fatalf("chschema: captured database %q, replay target %q", snapshot.database, client.database)

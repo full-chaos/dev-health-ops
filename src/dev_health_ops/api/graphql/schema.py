@@ -683,10 +683,7 @@ class Query:
         org_id: str,
         input: TestOpsRiskInput,
     ) -> TestOpsRiskResult:
-        from .resolvers.testops_risk import resolve_testops_risk
-
-        context = get_context(info)
-        return await resolve_testops_risk(context, org_id, input)
+        _raise_served_by_query_api("testopsRisk", org_id, info)
 
     @strawberry.field(
         description=(

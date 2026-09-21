@@ -200,6 +200,15 @@
       ]
     },
     {
+      "operation": "testopsRisk",
+      "two_plane_ops_sha": "f33a0ce94a7ca22eca8b5c635bb22d501d0ba744",
+      "guards": [
+        {"file": "cmd/query-api/internal/testopsrisk/testopsrisk_test.go", "test": "TestResolve_MatchesPythonCells"},
+        {"file": "cmd/query-api/internal/testopsrisk/testopsrisk_test.go", "test": "TestResolve_ScopesEveryStatement"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
+      ]
+    },
+    {
       "operation": "savedReports",
       "unproven_reason": "production holds no saved reports, so the data-bearing savedReports cases answered empty on both planes (vacuous_empty_legs) and only the empty-page cases matched; no two-plane run compared a leaf; record deploy-156/r156/r155g/prove-report-step155.json",
       "guards": [

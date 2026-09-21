@@ -174,6 +174,7 @@ DELETED_GO_SERVED_RESOLVER_SYMBOLS: dict[Path, frozenset[str]] = {
             "resolve_improve_opportunities",
         }
     ),
+    # testopsRisk: the whole resolver module goes (see the module list).
     # savedReports, savedReport and reportRuns: the read resolvers and the
     # run-row loader only they used. The module stays: the report mutations
     # (create, update, delete, clone, trigger) are Python and share its output
@@ -378,6 +379,14 @@ DELETED_GO_SERVED_RESOLVER_MODULES: dict[str, Path] = {
     # used. The telemetry ingest router keeps its own modules.
     "product telemetry resolver": PRODUCT_TELEMETRY_RESOLVER_SOURCE,
     "product telemetry dashboard loader": PRODUCT_TELEMETRY_LOADER_SOURCE,
+    # testopsRisk (the SDL types stay in types/testops_risk.py).
+    "testops risk resolver": ROOT
+    / "src"
+    / "dev_health_ops"
+    / "api"
+    / "graphql"
+    / "resolvers"
+    / "testops_risk.py",
     # The workgraph operator repair route (its only route).
     "workgraph repair route": ROOT
     / "src"
@@ -432,6 +441,7 @@ RETAINED_ORACLE_MODULES: dict[str, Path] = {
 # silently change the schema digest and disable every registered operation.
 SDL_LOAD_BEARING_SOURCES: tuple[Path, ...] = (
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "resolvers" / "reports.py",
+    ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "types" / "testops_risk.py",
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "models" / "pr.py",
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "models" / "improve.py",
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "models" / "ai.py",
@@ -446,6 +456,16 @@ SDL_LOAD_BEARING_SOURCES: tuple[Path, ...] = (
 )
 
 SDL_LOAD_BEARING_SYMBOLS: dict[str, frozenset[str]] = {
+    "testops_risk.py": frozenset(
+        {
+            "TestOpsRiskInput",
+            "TestOpsRiskTrendPoint",
+            "TestOpsRiskBreakdownItem",
+            "TestOpsRiskQuadrantPoint",
+            "TestOpsRiskSparkPoint",
+            "TestOpsRiskResult",
+        }
+    ),
     "reports.py": frozenset(
         {
             "SavedReportType",
@@ -549,6 +569,7 @@ SDL_LOAD_BEARING_SYMBOLS: dict[str, frozenset[str]] = {
             "saved_reports",
             "saved_report",
             "report_runs",
+            "testops_risk",
             "compounding_risk",
             "security_alerts",
             "improve_opportunities",

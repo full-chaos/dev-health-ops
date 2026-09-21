@@ -70,6 +70,11 @@ _QUERIES = {
         'reportId: "11111111-1111-1111-1111-111111111111") { total } }',
         None,
     ),
+    "testopsRisk": (
+        'query { testopsRisk(orgId: "org-1", input: '
+        '{startDate: "2026-01-05", endDate: "2026-01-11"}) { orgId } }',
+        None,
+    ),
     "compoundingRisk": (
         'query { compoundingRisk(orgId: "org-1") { orgId } }',
         None,

@@ -1327,6 +1327,9 @@ func executedOutcomeLine(outcome goapiproof.Outcome) string {
 	case goapiproof.ProvenUnderGoOnly:
 		// Never printed as a two-plane word: no baseline answered.
 		verdict = goapiproof.VerdictGoOnly + " (no two-plane baseline)"
+	case goapiproof.ProvenUnderGoOnlyUnproven:
+		// The ledger names no two-plane match for this operation.
+		verdict = goapiproof.VerdictGoOnlyUnproven + " (named limit, no two-plane match)"
 	default:
 		verdict += " PROVEN_UNDER=" + outcome.ProvenUnder
 	}

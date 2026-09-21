@@ -669,6 +669,12 @@ func (r *Runner) ReceiptsFor(observedAt time.Time) ([]Receipt, error) {
 		if !sealed.executed || !sealed.admitted {
 			continue
 		}
+		// An unproven go-only entry names no two-plane match, so no receipt
+		// may stand for it: a cited-mismatch receipt would satisfy the
+		// enablement predicate.
+		if citationsAreUnprovenGoOnly(sealed.baselineDefects) {
+			continue
+		}
 		identity, err := RequestIdentity(sealed.orgID, r.Config.Auth, sealed.variables)
 		if err != nil {
 			return nil, err
@@ -1215,6 +1221,11 @@ func (r *Runner) proveRequest(ctx context.Context, operation string, variantName
 	if admission.GoOnly && outcome.TerminalState == TerminalStateMismatch &&
 		outcome.DifferencesOutsideBaselineDefect == 0 {
 		outcome.ProvenUnder = ProvenUnderGoOnly
+		if citationsAreUnprovenGoOnly(outcome.BaselineDefects) {
+			// The ledger names no two-plane match for this operation: the
+			// candidate was checked on its own, and nothing here proves it.
+			outcome.ProvenUnder = ProvenUnderGoOnlyUnproven
+		}
 	}
 	// Sealed LAST, from whatever the run concluded after every adjustment
 	// above. Assigning any exported field afterwards changes the report
@@ -1499,7 +1510,7 @@ func (r *Runner) reviewEvidence(sealed sealedOutcome, refusal string, measured, 
 // either a match or a cited mismatch with every difference inside its
 // declaration.
 func outcomeProves(o Outcome) bool {
-	if !o.Executed {
+	if !o.Executed || o.ProvenUnder == ProvenUnderGoOnlyUnproven {
 		return false
 	}
 	if o.TerminalState == EnablementProofTerminalState {

@@ -384,3 +384,72 @@ func mustJSON(value any) string {
 	}
 	return string(encoded)
 }
+
+// unprovenLedger is a ledger with one operation that never had a two-plane run
+// and one that did.
+func unprovenLedger(t *testing.T, mutate func(*GoServedEntry)) []byte {
+	t.Helper()
+	entry := GoServedEntry{
+		Operation:      "featureFlagTimeseries",
+		UnprovenReason: "no flag-activation data in any venue, so no two-plane run compared a leaf; enable record cited",
+		Guards:         []GoServedGuard{{File: "a_test.go", Test: "TestA"}},
+	}
+	if mutate != nil {
+		mutate(&entry)
+	}
+	raw, err := json.Marshal(GoServedLedger{
+		MessageTemplate: "{operation} is served by query-api",
+		Entries: []GoServedEntry{
+			{Operation: "capacityForecast", TwoPlaneOpsSHA: strings.Repeat("a", 40), Guards: []GoServedGuard{{File: "a_test.go", Test: "TestA"}}},
+			entry,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+func TestUnprovenEntryClaimsNoTwoPlaneSHA(t *testing.T) {
+	ledger, err := ParseGoServedLedger(unprovenLedger(t, nil))
+	if err != nil {
+		t.Fatalf("a well-formed unproven entry: %v", err)
+	}
+	citation, err := NewGoOnlyCitation(ledger, "featureFlagTimeseries")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(citation, "two_plane=") || !strings.Contains(citation, "unproven=named_limit") {
+		t.Fatalf("an unproven citation must not claim a two-plane match: %q", citation)
+	}
+	parsed, err := ParseGoOnlyCitation(citation)
+	if err != nil || !parsed.Unproven || parsed.TwoPlaneOpsSHA != "" || parsed.String() != citation {
+		t.Fatalf("round trip: %+v %v", parsed, err)
+	}
+	proven, _ := NewGoOnlyCitation(ledger, "capacityForecast")
+	if p, err := ParseGoOnlyCitation(proven); err != nil || p.Unproven {
+		t.Fatalf("a proven citation must stay proven: %+v %v", p, err)
+	}
+}
+
+func TestUnprovenEntryRefusals(t *testing.T) {
+	cases := map[string]func(*GoServedEntry){
+		"sha and reason together": func(e *GoServedEntry) { e.TwoPlaneOpsSHA = strings.Repeat("b", 40) },
+		"placeholder reason":      func(e *GoServedEntry) { e.UnprovenReason = "todo" },
+		"no sha and no reason":    func(e *GoServedEntry) { e.UnprovenReason = "" },
+	}
+	for name, mutate := range cases {
+		if _, err := ParseGoServedLedger(unprovenLedger(t, mutate)); err == nil {
+			t.Errorf("%s: the ledger was accepted", name)
+		}
+	}
+	// A citation may not claim both forms or neither.
+	for name, citation := range map[string]string{
+		"both":    GoOnlyCitationPrefix + "op=x;two_plane=" + strings.Repeat("a", 40) + ";unproven=named_limit;guards=TestA",
+		"unknown": GoOnlyCitationPrefix + "op=x;unproven=other;guards=TestA",
+	} {
+		if _, err := ParseGoOnlyCitation(citation); err == nil {
+			t.Errorf("%s: citation %q parsed", name, citation)
+		}
+	}
+}

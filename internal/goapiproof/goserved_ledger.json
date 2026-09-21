@@ -332,6 +332,69 @@
         {"file": "cmd/query-api/internal/datahealth/datahealth_test.go", "test": "TestMetricLineage"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
       ]
+    },
+    {
+      "operation": "investmentBreakdown",
+      "two_plane_ops_sha": "84828635426669a9e45901edb04923449c6f930e",
+      "guards": [
+        {"file": "cmd/query-api/internal/analytics/resolve_test.go", "test": "TestResolve_Investment_ResolvesEndToEnd"},
+        {"file": "cmd/query-api/internal/analytics/breakdown_seeded_integration_test.go", "test": "TestCompileBreakdown_ThemeCount_SeededRealClickHouse_ExactAggregate"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
+      ]
+    },
+    {
+      "operation": "investmentFull",
+      "two_plane_ops_sha": "84828635426669a9e45901edb04923449c6f930e",
+      "guards": [
+        {"file": "cmd/query-api/internal/analytics/resolve_test.go", "test": "TestResolve_Investment_EvidenceQualityStats_PopulatedWhenUseInvestmentTrue"},
+        {"file": "cmd/query-api/internal/analytics/sankeycoverage_seeded_integration_test.go", "test": "TestResolveSankeyCoverage_SeededRealClickHouse_ExactShares"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
+      ]
+    },
+    {
+      "operation": "flowMatrix",
+      "two_plane_ops_sha": "84828635426669a9e45901edb04923449c6f930e",
+      "guards": [
+        {"file": "cmd/query-api/internal/analytics/resolve_test.go", "test": "TestResolve_FlowMatrix_RealClientShape_BatchUseInvestmentTrueDoesNotReject"},
+        {"file": "cmd/query-api/internal/analytics/flowmatrix_worktype_final_seeded_integration_test.go", "test": "TestFlowMatrixWorkType_FinalExcludesSupersededCycleTimeVersions"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
+      ]
+    },
+    {
+      "operation": "featureFlagTimeseries",
+      "unproven_reason": "no flag-activation data in any venue, both planes answered empty (vacuous_empty_legs), so no two-plane run compared any leaf; enabled canary 100 by the R319 acknowledgement (chris, option c) 2026-09-20T23:40Z; record deploy-154/r154/ladder-featureFlagTimeseries/enable.md",
+      "guards": [
+        {"file": "cmd/query-api/internal/analytics/resolve_test.go", "test": "TestResolve_HappyPath_TimeseriesAndBreakdown"},
+        {"file": "cmd/query-api/internal/analytics/timeseries_test.go", "test": "TestExecuteTimeseries_AllNullBucketYieldsNilValue_NotZero"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
+      ]
+    },
+    {
+      "operation": "testOpsPipeline",
+      "two_plane_ops_sha": "84828635426669a9e45901edb04923449c6f930e",
+      "guards": [
+        {"file": "cmd/query-api/internal/analytics/timeseries_test.go", "test": "TestCompileTimeseries_TestopsMeasureOverridesSource"},
+        {"file": "cmd/query-api/internal/analytics/timeseries_test.go", "test": "TestExecuteTimeseries_AllNullBucketYieldsNilValue_NotZero"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
+      ]
+    },
+    {
+      "operation": "testOpsTest",
+      "two_plane_ops_sha": "84828635426669a9e45901edb04923449c6f930e",
+      "guards": [
+        {"file": "cmd/query-api/internal/analytics/timeseries_test.go", "test": "TestCompileTimeseries_TestopsMeasureOverridesSource"},
+        {"file": "cmd/query-api/internal/analytics/breakdown_test.go", "test": "TestExecuteBreakdown_AllNullGroupYieldsNilValue_NotZero"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
+      ]
+    },
+    {
+      "operation": "testOpsCoverage",
+      "two_plane_ops_sha": "e1b1e86aeddf02ad15dedd202a08c2f1a67534e9",
+      "guards": [
+        {"file": "cmd/query-api/internal/analytics/breakdown_test.go", "test": "TestCompileBreakdown_TestopsCoverageMeasure"},
+        {"file": "cmd/query-api/internal/analytics/breakdown_test.go", "test": "TestExecuteBreakdown_AllNullGroupYieldsNilValue_NotZero"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
+      ]
     }
   ]
 }

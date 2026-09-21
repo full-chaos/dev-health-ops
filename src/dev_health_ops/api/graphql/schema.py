@@ -65,7 +65,6 @@ from .models.recommendations import (
     Recommendation,
     WindowInput,
 )
-from .resolvers.analytics import resolve_analytics
 from .resolvers.dev_evidence import (
     resolve_dev_data_health,
     resolve_dev_evidence_search,
@@ -348,8 +347,7 @@ class Query:
         Returns:
             AnalyticsResult with all query results.
         """
-        context = get_context(info)
-        return await resolve_analytics(context, batch)
+        _raise_served_by_query_api("analytics", org_id, info)
 
     @strawberry.field(description="Get first-party product telemetry dashboard metrics")
     async def product_telemetry_dashboard(

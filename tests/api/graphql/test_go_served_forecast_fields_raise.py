@@ -157,6 +157,11 @@ _QUERIES = {
         'untilDate: "2026-01-31"}) { totalCount } }',
         None,
     ),
+    "analytics": (
+        'query { analytics(orgId: "org-1", batch: {timeseries: [], breakdowns: []}) '
+        "{ timeseries { dimension } } }",
+        None,
+    ),
     "operatingReview": (
         'query { operatingReview(orgId: "org-1", '
         'input: {weekStart: "2026-01-05"}) { orgId } }',
@@ -204,6 +209,13 @@ def test_the_go_served_ledger_names_exactly_the_raising_fields() -> None:
         "dataHealthIdentity": "dataHealth",
         "mappingCoverageHealth": "dataHealth",
         "metricLineage": "dataHealth",
+        "investmentBreakdown": "analytics",
+        "investmentFull": "analytics",
+        "featureFlagTimeseries": "analytics",
+        "flowMatrix": "analytics",
+        "testOpsPipeline": "analytics",
+        "testOpsTest": "analytics",
+        "testOpsCoverage": "analytics",
     }
     fields = {
         named_documents.get(entry["operation"], entry["operation"])
@@ -240,3 +252,19 @@ async def test_the_wire_error_is_the_ledger_deletion_error(operation: str) -> No
     )
     assert error["path"] == [operation]
     assert set(error) <= {"message", "locations", "path"}
+
+
+def test_every_document_over_the_analytics_root_has_its_own_ledger_row() -> None:
+    """Seven registered documents select `analytics`; the grouping above maps
+    them to one raising field, so a dropped row for one of them would pass it."""
+    ledger = json.loads(_LEDGER.read_text())
+    operations = {entry["operation"] for entry in ledger["entries"]}
+    assert {
+        "investmentBreakdown",
+        "investmentFull",
+        "flowMatrix",
+        "featureFlagTimeseries",
+        "testOpsPipeline",
+        "testOpsTest",
+        "testOpsCoverage",
+    } <= operations

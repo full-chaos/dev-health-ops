@@ -80,3 +80,17 @@ func TestTheOutcomeLineNamesAGoOnlyProof(t *testing.T) {
 		t.Fatal("an unproven measurement prints the go-only verdict")
 	}
 }
+
+// A go-only receipt whose ledger entry is the unproven form prints the
+// unproven word, never PROVEN_GO_ONLY: no two-plane run compared a leaf.
+func TestTheOutcomeLineNamesAnUnprovenGoOnlyEntry(t *testing.T) {
+	outcome := goapiproof.Outcome{
+		Operation: "featureFlagTimeseries", Mode: "canary", Route: "edge", TerminalState: goapiproof.TerminalStateMismatch,
+		BaselineDefects: []string{goapiproof.GoOnlyCitationPrefix + "op=featureFlagTimeseries;unproven=named_limit;guards=TestA"},
+		ProvenUnder:     goapiproof.ProvenUnderGoOnlyUnproven,
+	}
+	line := executedOutcomeLine(outcome)
+	if !strings.Contains(line, goapiproof.VerdictGoOnlyUnproven) || strings.Contains(line, goapiproof.VerdictGoOnly+" ") {
+		t.Fatalf("an unproven go-only entry reads as proven: %q", line)
+	}
+}

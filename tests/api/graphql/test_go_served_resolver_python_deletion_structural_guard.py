@@ -365,6 +365,16 @@ DELETED_GO_SERVED_RESOLVER_MODULES: dict[str, Path] = {
     / "dev_health_ops"
     / "metrics"
     / "operating_review.py",
+    # analytics: the seven documents that select it (investment breakdown, full
+    # investment, flow matrix, feature flag timeseries and the three test
+    # operations documents).
+    "analytics resolver": ROOT
+    / "src"
+    / "dev_health_ops"
+    / "api"
+    / "graphql"
+    / "resolvers"
+    / "analytics.py",
 }
 
 # The kernels RETAINED as Go-parity oracles, on the metrics/compounding_risk.py
@@ -506,6 +516,7 @@ SDL_LOAD_BEARING_SYMBOLS: dict[str, frozenset[str]] = {
             "work_graph_edges",
             "work_graph_flow",
             "work_graph_artifacts",
+            "analytics",
         }
     ),
     "inputs.py": frozenset(

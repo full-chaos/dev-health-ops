@@ -35,6 +35,13 @@ import (
 // carries it is refused before a request is sent, and both receipt writers
 // refuse a citation that is not the ledger's own.
 
+// minUnprovenReasonLength keeps an unproven_reason from being a placeholder.
+const minUnprovenReasonLength = 40
+
+// unprovenCitationField stands where the two-plane sha stands in the citation
+// of an unproven entry.
+const unprovenCitationField = "unproven=named_limit"
+
 // GoOnlyCitationPrefix starts the one citation that marks a go-only receipt.
 const GoOnlyCitationPrefix = "GO-ONLY:"
 
@@ -42,9 +49,29 @@ const GoOnlyCitationPrefix = "GO-ONLY:"
 // the go-only class. It is never a two-plane match.
 const ProvenUnderGoOnly = "go_only"
 
+// ProvenUnderGoOnlyUnproven is the word a report prints for an operation whose
+// ledger entry is the unproven form. It is not a proof: the outcome does not
+// count as proving, writes no receipt, and never counts under ProvenGoOnly.
+const ProvenUnderGoOnlyUnproven = "go_only_unproven"
+
+// citationsAreUnprovenGoOnly reports whether the go-only citation among
+// citations is the unproven form.
+func citationsAreUnprovenGoOnly(citations []string) bool {
+	for _, citation := range citations {
+		if parsed, err := ParseGoOnlyCitation(citation); err == nil && parsed.Unproven {
+			return true
+		}
+	}
+	return false
+}
+
 // VerdictGoOnly is the verdict word a terminal line prints for such an
 // operation.
 const VerdictGoOnly = "PROVEN_GO_ONLY"
+
+// VerdictGoOnlyUnproven is the word for an operation whose ledger entry is the
+// unproven form: the terminal line never prints a proof word for it.
+const VerdictGoOnlyUnproven = "GO_ONLY_UNPROVEN"
 
 //go:embed goserved_ledger.json
 var goServedLedgerJSON []byte
@@ -60,8 +87,15 @@ type GoServedGuard struct {
 type GoServedEntry struct {
 	Operation string `json:"operation"`
 	// TwoPlaneOpsSHA is the ops build at which this operation last had a
-	// two-plane match receipt.
-	TwoPlaneOpsSHA string          `json:"two_plane_ops_sha"`
+	// two-plane match receipt. Empty exactly when UnprovenReason is set.
+	TwoPlaneOpsSHA string `json:"two_plane_ops_sha,omitempty"`
+	// UnprovenReason, set on an operation that never had a two-plane run with
+	// any leaf compared, names why and where the enablement was recorded. The
+	// entry then claims no two-plane match: its citation says "unproven", and
+	// the terminal line prints GO_ONLY_UNPROVEN, never a proof word. It is not
+	// a proof: it only keeps an operation whose Python body is deleted from
+	// being left with no ledger entry.
+	UnprovenReason string          `json:"unproven_reason,omitempty"`
 	Guards         []GoServedGuard `json:"guards"`
 }
 
@@ -108,7 +142,15 @@ func ParseGoServedLedger(raw []byte) (*GoServedLedger, error) {
 			return nil, fmt.Errorf("goapiproof: go-served ledger names %s twice", entry.Operation)
 		}
 		seen[entry.Operation] = true
-		if !hexSHA40.MatchString(entry.TwoPlaneOpsSHA) {
+		switch {
+		case entry.UnprovenReason != "":
+			if entry.TwoPlaneOpsSHA != "" {
+				return nil, fmt.Errorf("goapiproof: go-served ledger %s: an unproven entry claims no two-plane sha", entry.Operation)
+			}
+			if len(strings.TrimSpace(entry.UnprovenReason)) < minUnprovenReasonLength {
+				return nil, fmt.Errorf("goapiproof: go-served ledger %s: unproven_reason must say why and cite the enablement record", entry.Operation)
+			}
+		case !hexSHA40.MatchString(entry.TwoPlaneOpsSHA):
 			return nil, fmt.Errorf("goapiproof: go-served ledger %s: two_plane_ops_sha must be 40 lowercase hex characters", entry.Operation)
 		}
 		if len(entry.Guards) == 0 {
@@ -225,11 +267,18 @@ func (l *GoServedLedger) DeletionErrorMatches(operation, root string, snapshot S
 type GoOnlyCitation struct {
 	Operation      string
 	TwoPlaneOpsSHA string
-	Guards         []string
+	// Unproven is true for an entry that claims no two-plane match; then
+	// TwoPlaneOpsSHA is empty and the citation says so.
+	Unproven bool
+	Guards   []string
 }
 
 func (c GoOnlyCitation) String() string {
-	return GoOnlyCitationPrefix + "op=" + c.Operation + ";two_plane=" + c.TwoPlaneOpsSHA + ";guards=" + strings.Join(c.Guards, ",")
+	plane := "two_plane=" + c.TwoPlaneOpsSHA
+	if c.Unproven {
+		plane = unprovenCitationField
+	}
+	return GoOnlyCitationPrefix + "op=" + c.Operation + ";" + plane + ";guards=" + strings.Join(c.Guards, ",")
 }
 
 // HasGoOnlyPrefix reports whether a citation claims to be a go-only one.
@@ -246,14 +295,15 @@ func NewGoOnlyCitation(ledger *GoServedLedger, operation string) (string, error)
 	if !ok {
 		return "", fmt.Errorf("goapiproof: %q is not in the go-served ledger: no go-only citation can be built for it", operation)
 	}
-	if !hexSHA40.MatchString(entry.TwoPlaneOpsSHA) || len(entry.Guards) == 0 {
-		return "", fmt.Errorf("goapiproof: the go-served ledger entry for %q has no two-plane sha or no guard", operation)
+	unproven := entry.UnprovenReason != ""
+	if (!unproven && !hexSHA40.MatchString(entry.TwoPlaneOpsSHA)) || len(entry.Guards) == 0 {
+		return "", fmt.Errorf("goapiproof: the go-served ledger entry for %q has no two-plane sha (or unproven reason) or no guard", operation)
 	}
 	guards := make([]string, 0, len(entry.Guards))
 	for _, guard := range entry.Guards {
 		guards = append(guards, guard.Test)
 	}
-	return GoOnlyCitation{Operation: operation, TwoPlaneOpsSHA: entry.TwoPlaneOpsSHA, Guards: guards}.String(), nil
+	return GoOnlyCitation{Operation: operation, TwoPlaneOpsSHA: entry.TwoPlaneOpsSHA, Unproven: unproven, Guards: guards}.String(), nil
 }
 
 // ParseGoOnlyCitation is the ONE parser. Every field is a plain token, so it
@@ -271,13 +321,16 @@ func ParseGoOnlyCitation(citation string) (GoOnlyCitation, error) {
 	values := make([]string, 3)
 	for i, key := range []string{"op=", "two_plane=", "guards="} {
 		value, ok := strings.CutPrefix(fields[i], key)
+		if !ok && i == 1 && fields[i] == unprovenCitationField {
+			parsed.Unproven, value, ok = true, "", true
+		}
 		if !ok {
 			return GoOnlyCitation{}, fmt.Errorf("goapiproof: go-only citation field %d does not start with %q", i+1, key)
 		}
 		values[i] = value
 	}
 	parsed.Operation, parsed.TwoPlaneOpsSHA = values[0], values[1]
-	if !citationToken.MatchString(parsed.Operation) || !hexSHA40.MatchString(parsed.TwoPlaneOpsSHA) {
+	if !citationToken.MatchString(parsed.Operation) || (!parsed.Unproven && !hexSHA40.MatchString(parsed.TwoPlaneOpsSHA)) {
 		return GoOnlyCitation{}, errors.New("goapiproof: go-only citation names a malformed operation or sha")
 	}
 	if values[2] == "" {

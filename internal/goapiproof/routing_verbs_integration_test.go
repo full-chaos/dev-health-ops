@@ -123,6 +123,36 @@ func TestEnableWithALedgerLimitStillRefusesAnUnlimitedOperationAndWritesNothing(
 	}
 }
 
+// A dry run and each enable mode take the same ledger decision: the dry run
+// reports the named limit and writes nothing, and a primary enable is
+// admitted from the limit exactly as a canary one is.
+func TestEnableFromTheLedgerLimitDryRunAndPrimaryMode(t *testing.T) {
+	ctx := t.Context()
+	pool := startAuditedRegistryPostgres(t)
+
+	request := enableRequest("featureFlags")
+	request.Ledger = ledgerNamingLimits(t, "featureFlags")
+	request.DryRun = true
+	outcomes, err := Enable(ctx, pool, request)
+	if err != nil || len(outcomes) != 1 || outcomes[0].Proven || outcomes[0].NamedLimit != testEnableLimitReason {
+		t.Fatalf("dry run: outcomes = %+v, err = %v; want one named-limit outcome", outcomes, err)
+	}
+	var rows int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM go_api_routing_state`).Scan(&rows); err != nil || rows != 0 {
+		t.Fatalf("a dry run wrote %d row(s) (err %v)", rows, err)
+	}
+
+	request.DryRun = false
+	request.Mode = "primary"
+	if _, err := Enable(ctx, pool, request); err != nil {
+		t.Fatalf("primary enable from a ledger limit: %v", err)
+	}
+	mode, _, evidence, _, _ := readRow(t, ctx, pool, "featureFlags")
+	if mode != "primary" || !HasNamedLimitEvidence(evidence) {
+		t.Fatalf("row = mode %q evidence %q, want primary with the named-limit prefix", mode, evidence)
+	}
+}
+
 // A proven operation is never marked named-limit, even when the ledger also
 // names a limit for it: the proof run is what admitted it.
 func TestEnableOfAProvenOperationIgnoresItsLedgerLimit(t *testing.T) {

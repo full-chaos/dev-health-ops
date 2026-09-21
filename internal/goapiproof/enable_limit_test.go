@@ -104,3 +104,41 @@ func TestLegacyVenueEvidenceIsStillRead(t *testing.T) {
 		}
 	}
 }
+
+// The written limit's length bound, at the boundary and one either side, on
+// both fields that carry it; whitespace does not count toward it.
+func TestEnableLimitLengthBoundary(t *testing.T) {
+	guard := `"guards":[{"file":"f.go","test":"TestA"}]`
+	twoPlane := strings.Repeat("a", 40)
+	for name, tc := range map[string]struct {
+		field  string
+		reason string
+		ok     bool
+	}{
+		"enable_limit 39":              {"enable_limit", strings.Repeat("l", minUnprovenReasonLength-1), false},
+		"enable_limit 40":              {"enable_limit", strings.Repeat("l", minUnprovenReasonLength), true},
+		"enable_limit 41":              {"enable_limit", strings.Repeat("l", minUnprovenReasonLength+1), true},
+		"enable_limit whitespace only": {"enable_limit", strings.Repeat(" ", 80), false},
+		"enable_limit padded to 40":    {"enable_limit", strings.Repeat(" ", 20) + strings.Repeat("l", 20), false},
+	} {
+		raw := []byte(`{"deletion_error_message":"{operation} moved","entries":[{"operation":"x","two_plane_ops_sha":"` +
+			twoPlane + `","` + tc.field + `":"` + tc.reason + `",` + guard + `}]}`)
+		_, err := ParseGoServedLedger(raw)
+		if (err == nil) != tc.ok {
+			t.Errorf("%s: parse error = %v, want ok=%t", name, err, tc.ok)
+		}
+	}
+	for name, tc := range map[string]struct {
+		reason string
+		ok     bool
+	}{
+		"unproven_reason 39": {strings.Repeat("l", minUnprovenReasonLength-1), false},
+		"unproven_reason 40": {strings.Repeat("l", minUnprovenReasonLength), true},
+	} {
+		raw := []byte(`{"deletion_error_message":"{operation} moved","entries":[{"operation":"x","unproven_reason":"` +
+			tc.reason + `",` + guard + `}]}`)
+		if _, err := ParseGoServedLedger(raw); (err == nil) != tc.ok {
+			t.Errorf("%s: parse error = %v, want ok=%t", name, err, tc.ok)
+		}
+	}
+}

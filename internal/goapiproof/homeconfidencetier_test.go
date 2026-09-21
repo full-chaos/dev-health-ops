@@ -3,6 +3,7 @@ package goapiproof
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"testing"
 )
@@ -342,19 +343,19 @@ func homeConfidenceTierTicket(t *testing.T) string {
 	return ""
 }
 
-// TestHomeConfidenceTierParity_RealCapturedBodyAdmitsElevenConsequenceLeavesOnly
+// TestHomeConfidenceTierParity_RealCapturedBodyAdmitsConsequenceAndBaseCoverageLeaves
 // runs the real captured GET /api/v1/home home_default_org pair (STEP 97,
 // prod rev 102) through the actual registered homeConfidenceTierParity:
 // coverage_pct straddles 75 (74.9893 baseline, 75.0224 candidate),
 // flipping data_confidence.level, limiting_factor.confidence and 9 of 11
 // signals' own confidence (deploy_freq's own evidence_count=3 stays below
 // the high-tier's own >=7 floor on both legs; blocked_work's own
-// evidence_count=0 stays "low" on both legs) -- 11 leaves admitted. The
-// two BASE ratio leaves (coverage_pct itself, and freshness.coverage.
-// issues_with_cycle_states_pct) stay outside, exactly as this shape's own
-// doc comment says it must: their own magnitude/direction is never
-// re-derived.
-func TestHomeConfidenceTierParity_RealCapturedBodyAdmitsElevenConsequenceLeavesOnly(t *testing.T) {
+// evidence_count=0 stays "low" on both legs) -- 11 leaves admitted by the
+// tier shape. The two BASE ratio leaves (coverage_pct itself, and
+// freshness.coverage.issues_with_cycle_states_pct) are admitted by the
+// separate coverage citation, never by the tier shape: its magnitude and
+// direction are not re-derived.
+func TestHomeConfidenceTierParity_RealCapturedBodyAdmitsConsequenceAndBaseCoverageLeaves(t *testing.T) {
 	baseline := homeTierSnapshotFromFile(t, homeConfidenceTierBaselinePath)
 	candidate := homeTierSnapshotFromFile(t, homeConfidenceTierCandidatePath)
 
@@ -366,15 +367,12 @@ func TestHomeConfidenceTierParity_RealCapturedBodyAdmitsElevenConsequenceLeavesO
 	if len(result.Findings) != 13 {
 		t.Fatalf("findings = %d, want 13: %+v", len(result.Findings), result.Findings)
 	}
-	if result.DifferencesOutsideBaselineDefect != 2 {
-		t.Fatalf("outside = %d, want 2 (coverage_pct + issues_with_cycle_states_pct) -- covered %v outside %v findings %+v",
+	if result.DifferencesOutsideBaselineDefect != 0 {
+		t.Fatalf("outside = %d, want 0 -- covered %v outside %v findings %+v",
 			result.DifferencesOutsideBaselineDefect, result.CoveredByShape, result.OutsideByShape, result.Findings)
 	}
-	if result.OutsideByShape["value"] != 2 || len(result.OutsideByShape) != 1 {
-		t.Fatalf("outsideByShape = %v, want exactly {value: 2}", result.OutsideByShape)
-	}
-	if result.CoveredByShape["value"] != 11 {
-		t.Fatalf("coveredByShape = %v, want {value: 11}", result.CoveredByShape)
+	if result.CoveredByShape["value"] != 13 {
+		t.Fatalf("coveredByShape = %v, want {value: 13}", result.CoveredByShape)
 	}
 	wantTicket := homeConfidenceTierTicket(t)
 	found := false
@@ -386,5 +384,33 @@ func TestHomeConfidenceTierParity_RealCapturedBodyAdmitsElevenConsequenceLeavesO
 	if !found {
 		t.Fatalf("matched = %v, want %s among them: idle %v stale %v unexplained %v",
 			result.BaselineDefectsMatched, wantTicket, result.IdleIntermittentBaselineDefects, result.StaleBaselineDefects, result.LiveBaselineDefectsUnexplained)
+	}
+}
+
+// homeCoverageBody is the slice of a home response the coverage citation
+// touches: the three ratios, their mean, and the tier leaf derived from it.
+func homeCoverageBody(t *testing.T, repos, prs, issues, mean float64) Snapshot {
+	t.Helper()
+	return gapDoc(t, fmt.Sprintf(`{"data_confidence":{"coverage_pct":%v,"level":"high","connected_sources":["ci"],"missing_sources":[]},`+
+		`"freshness":{"coverage":{"repos_covered_pct":%v,"prs_linked_to_issues_pct":%v,"issues_with_cycle_states_pct":%v}}}`, mean, repos, prs, issues))
+}
+
+// The production pair from the run that first showed the difference (three
+// superseded in-window versions: 431/580 raw vs 428/577 FINAL) is admitted
+// as exactly the coverage citation's leaves; a difference in the repos
+// ratio, which no cycle-time read feeds, stays outside it.
+func TestHomeConfidenceTierParity_CoverageSupersessionAdmitsOnlyItsLeaves(t *testing.T) {
+	repos, prs := 54.54545454545454, 100.0
+	base := homeCoverageBody(t, repos, prs, 74.3103448275862, 76.28526645768025)
+	cand := homeCoverageBody(t, repos, prs, 74.17677642980935, 76.2407436584213)
+
+	got := Compare(base, cand, homeConfidenceTierParity)
+	if got.DifferencesOutsideBaselineDefect != 0 || len(got.Findings) != 2 {
+		t.Fatalf("outside=%d findings=%d, want 0 and 2: %+v", got.DifferencesOutsideBaselineDefect, len(got.Findings), got.Findings)
+	}
+
+	skewed := Compare(homeCoverageBody(t, 50.0, prs, 74.3103448275862, 76.2), cand, homeConfidenceTierParity)
+	if skewed.DifferencesOutsideBaselineDefect == 0 {
+		t.Fatalf("a repos_covered_pct difference was admitted: %+v", skewed.Findings)
 	}
 }

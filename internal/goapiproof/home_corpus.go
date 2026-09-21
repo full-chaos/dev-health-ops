@@ -95,9 +95,11 @@ var homeNumericLeaves = Options{
 //     issues_with_cycle_states_pct) have numerator AND denominator drawn
 //     from the SAME undeduped scan, and different physical versions of
 //     one work item can carry different work_scope_id/cycle_time_hours
-//     values -- the ratio has no guaranteed direction. Left uncovered,
-//     same as data.data_confidence.coverage_pct (_coverage_pct_from_
-//     coverage's mean of it and the other two ratios, home.py:437-441).
+//     values -- the ratio has no guaranteed direction, so no direction
+//     shape applies. Both ratios and data.data_confidence.coverage_pct
+//     (_coverage_pct_from_coverage's mean of the three, home.py:437-441)
+//     are admitted by homeConfidenceTierDefect (below) under the identity
+//     rule, which claims no direction or magnitude.
 //   - fetch_source_statuses' ci_pipeline_runs branch reaches only
 //     max(last_synced) and a count()>0 HAVING gate, both dedup-INVARIANT
 //     (an extra physical version cannot move a max(), and cannot flip a
@@ -107,10 +109,11 @@ var homeNumericLeaves = Options{
 //     categorical swap (one string for another), which no numeric or
 //     keyed-direction shape can admit. Left uncovered.
 //
-// homeConfidenceTierDefect (below) is narrower than a blanket citation on
-// the coverage_pct leaf itself: it never re-derives or bounds the
-// uncovered ratio, only the MECHANICAL tier/confidence consequence a
-// straddling coverage_pct produces elsewhere in the same body -- see
+// homeConfidenceTierDefect (below) admits the coverage leaves only under
+// an identity (never a direction or a bound): each leg's coverage_pct is
+// the mean of its own three ratios; repos_covered_pct is never admitted.
+// It also admits the MECHANICAL tier/confidence consequence a straddling
+// coverage_pct produces elsewhere in the same body -- see
 // HomeConfidenceTierShape's own doc comment (homeconfidencetier.go).
 // Wired only onto home_default_org/home_repo_scoped (both methods): the
 // mechanism is independent of scope_type (fetch_coverage/fetch_
@@ -120,14 +123,17 @@ var homeNumericLeaves = Options{
 // never verified alongside this one, so this citation stays off it.
 var homeConfidenceTierDefect = BaselineDefect{
 	Ticket: "CHAOS-5448",
-	Reason: "fetch_coverage's two work_item_cycle_times reads (api/queries/freshness.py:83-115) run raw (no FINAL) against a ReplacingMergeTree(computed_at) table whose sorting key (org_id, provider, work_item_id) does not include `day` (cmd/query-api/internal/home/queries_freshness.go:1-24, reading it FINAL) -- a physical stale/live version pair can straddle the day-window filter independently, so issues_with_cycle_states_pct, and through it data.data_confidence.coverage_pct (_coverage_pct_from_coverage's mean of three ratios, home.py:437-441), can differ between planes with no provable direction (left outside every citation, see this file's own package doc comment above). When that drift straddles the level/confidence thresholds (build_data_confidence, home.py:444-473 / BuildDataConfidence, cmd/query-api/internal/home/signals.go:261-289; _confidence_from_evidence, home.py:359-366 / signals.go:150), every downstream tier/confidence leaf is a MECHANICAL, recomputable function of its own leg's own coverage_pct/evidence_count -- HomeConfidenceTierShape verifies exactly that recomputation, never the base drift's own magnitude or direction. Go is correct.",
+	Reason: "fetch_coverage's two work_item_cycle_times reads (api/queries/freshness.py:83-115) run raw (no FINAL) against a ReplacingMergeTree(computed_at) table whose sorting key (org_id, provider, work_item_id) does not include `day` (cmd/query-api/internal/home/queries_freshness.go:1-24, reading it FINAL) -- a physical stale/live version pair can straddle the day-window filter independently, so issues_with_cycle_states_pct, and through it data.data_confidence.coverage_pct (_coverage_pct_from_coverage's mean of three ratios, home.py:437-441), can differ between planes with no provable direction (admitted only while each leg's coverage_pct is the mean of its own three ratios, and repos_covered_pct is never admitted; no direction or magnitude is claimed). When that drift straddles the level/confidence thresholds (build_data_confidence, home.py:444-473 / BuildDataConfidence, cmd/query-api/internal/home/signals.go:261-289; _confidence_from_evidence, home.py:359-366 / signals.go:150), every downstream tier/confidence leaf is a MECHANICAL, recomputable function of its own leg's own coverage_pct/evidence_count -- HomeConfidenceTierShape verifies exactly that recomputation, never the base drift's own magnitude or direction. Go is correct.",
 	Paths: []string{
+		"data.data_confidence.coverage_pct",
+		"data.freshness.coverage.issues_with_cycle_states_pct",
+		"data.freshness.coverage.prs_linked_to_issues_pct",
 		"data.data_confidence.level",
 		"data.limiting_factor.confidence",
 		"data.signals.confidence",
 	},
 	Intermittent:       true,
-	IntermittentReason: "present only while work_item_cycle_times holds an unmerged physical version whose own day value straddles the requested window AND the resulting coverage_pct drift crosses a tier threshold; most drifts land on the same side of every threshold and produce no finding at all",
+	IntermittentReason: "present only while work_item_cycle_times holds a superseded physical version whose own day value lies inside the requested window; a window with none reads identically on both planes, and a drift that stays on one side of every tier threshold produces no tier finding",
 	HomeConfidenceTierShape: &HomeConfidenceTierShape{
 		CoveragePctPath:              "data.data_confidence.coverage_pct",
 		MissingSourcesPath:           "data.data_confidence.missing_sources",
@@ -135,6 +141,11 @@ var homeConfidenceTierDefect = BaselineDefect{
 		LevelPath:                    "data.data_confidence.level",
 		LimitingFactorConfidencePath: "data.limiting_factor.confidence",
 		SignalsListPath:              "data.signals",
+		SupersededRatioPaths: []string{
+			"data.freshness.coverage.issues_with_cycle_states_pct",
+			"data.freshness.coverage.prs_linked_to_issues_pct",
+		},
+		OtherRatioPath: "data.freshness.coverage.repos_covered_pct",
 	},
 }
 

@@ -1,5 +1,7 @@
 package goapiproof
 
+import "math"
+
 // HomeConfidenceTierShape, set on a BaselineDefect, narrows that defect's
 // blanket "any leaf difference under Paths is covered" rule to the
 // mechanical CONSEQUENCE a coverage_pct drift produces on GET/POST
@@ -80,7 +82,22 @@ type HomeConfidenceTierShape struct {
 	// naming three more fields for a fixed, known wire shape buys nothing
 	// a constant field name does not already state.
 	SignalsListPath string
+
+	// SupersededRatioPaths are the coverage ratios drawn from the table
+	// whose superseded versions the reference plane counts (the issues and
+	// PR-link ratios); OtherRatioPath is the ratio no such read feeds
+	// (repos covered), which is never admitted here: a difference at it
+	// stays outside every citation. Rule 6 admits a difference at
+	// CoveragePctPath or a SupersededRatioPaths leaf only while each leg's
+	// own coverage_pct is the mean of its own three ratios (the mean's
+	// inputs are SupersededRatioPaths and OtherRatioPath).
+	SupersededRatioPaths []string
+	OtherRatioPath       string
 }
+
+// meanIdentityTolerance bounds the float noise of recomputing the mean of
+// three ratios; a mean that differs by more than this is not that mean.
+const meanIdentityTolerance = 1e-9
 
 // homeConfidenceTierPlan is one comparison's fully-evaluated admission
 // decision, built once per defect from the two decoded response bodies.
@@ -99,6 +116,8 @@ type homeConfidenceTierPlan struct {
 	// by the signal's own list position (identical on both legs -- see
 	// buildHomeConfidenceTierPlan's own length check).
 	signalConfidenceAdmits map[int]bool
+	// coverageAdmits holds rule 6's whole-comparison verdict.
+	coverageAdmits bool
 }
 
 // homeConfidenceLevel ports build_data_confidence's own level derivation
@@ -239,7 +258,37 @@ func buildHomeConfidenceTierPlan(shape *HomeConfidenceTierShape, baselineData, c
 		}
 	}
 
+	// Rule 6.
+	if len(shape.SupersededRatioPaths) > 0 && shape.OtherRatioPath != "" {
+		plan.coverageAdmits = homeCoverageMeanHolds(shape, baselineData, candidateData, baseCoverage, candCoverage)
+	}
+
 	return plan
+}
+
+// homeCoverageMeanHolds reports rule 6: each leg's coverage_pct is the
+// mean of that leg's own three ratios, so a coverage_pct difference is
+// fully explained by the ratio differences the plan also admits (a
+// difference at the other ratio is itself outside every citation).
+func homeCoverageMeanHolds(shape *HomeConfidenceTierShape, baselineData, candidateData any, baseCoverage, candCoverage float64) bool {
+	paths := append([]string{shape.OtherRatioPath}, shape.SupersededRatioPaths...)
+	for _, leg := range []struct {
+		data     any
+		coverage float64
+	}{{baselineData, baseCoverage}, {candidateData, candCoverage}} {
+		sum := 0.0
+		for _, path := range paths {
+			v, ok := floatAtDottedPath(leg.data, path)
+			if !ok {
+				return false
+			}
+			sum += v
+		}
+		if math.Abs(sum/float64(len(paths))-leg.coverage) > meanIdentityTolerance {
+			return false
+		}
+	}
+	return true
 }
 
 // admits reports whether one Finding is covered by this plan.
@@ -247,7 +296,16 @@ func (p *homeConfidenceTierPlan) admits(finding Finding) bool {
 	if p == nil || !p.valid {
 		return false
 	}
-	switch tieredPath(finding.Path) {
+	path := tieredPath(finding.Path)
+	if path == p.shape.CoveragePctPath {
+		return p.coverageAdmits
+	}
+	for _, ratio := range p.shape.SupersededRatioPaths {
+		if path == ratio {
+			return p.coverageAdmits
+		}
+	}
+	switch path {
 	case p.shape.LevelPath:
 		return p.levelAdmits
 	case p.shape.LimitingFactorConfidencePath:

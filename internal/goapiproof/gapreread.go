@@ -21,7 +21,7 @@ import (
 // the UNCHANGED candidate on the whole case:
 //
 //   - the candidate re-read (C2) equals the first candidate read (C1)
-//     exactly: the candidate is stable, so no candidate defect that
+//     exactly, declared VolatileFields aside: the candidate is stable, so no candidate defect that
 //     varies can be reported as the baseline's;
 //   - the delayed baseline read (B3) differs from the first baseline
 //     read (B1): the reference moved. A stable difference gives B3 == B1
@@ -118,10 +118,10 @@ func ClassifyGapReread(first Result, baseline1, candidate1, baseline3, candidate
 	if len(first.outsideFindings) == 0 {
 		return GapRereadDecision{Outcome: GapRereadBaselineUnchanged, Detail: "not eligible: nothing outside the declarations"}
 	}
-	if !decodedEqual(candidate2.Data, candidate1.Data) {
+	if !decodedEqual(withoutVolatile(candidate2.Data, opts), withoutVolatile(candidate1.Data, opts)) {
 		return GapRereadDecision{Outcome: GapRereadCandidateUnstable, Detail: "the candidate's delayed read differs from its first read"}
 	}
-	if decodedEqual(baseline3.Data, baseline1.Data) {
+	if decodedEqual(withoutVolatile(baseline3.Data, opts), withoutVolatile(baseline1.Data, opts)) {
 		return GapRereadDecision{Outcome: GapRereadBaselineUnchanged, Detail: "the reference plane did not move over the delay: a stable difference"}
 	}
 	second := Compare(baseline3, candidate1, opts)
@@ -138,6 +138,44 @@ func ClassifyGapReread(first Result, baseline1, candidate1, baseline3, candidate
 			Detail: "the delayed comparison carries an Acceptance entry; an admission never rests on it"}
 	}
 	return GapRereadDecision{Outcome: GapRereadAdmitted, Second: second}
+}
+
+// withoutVolatile returns data with every declared VolatileFields path
+// removed. A volatile field is drawn per request (a wall-clock stamp), so
+// two reads of the SAME plane disagree on it by construction; the stage's
+// stability and movement tests must not read that as the plane changing.
+// Paths use the declared dotted, index-free form (tieredPath).
+// volatileRoot is the path segment a snapshot's body sits under in every
+// declared path ("data.events.ts" for a body's own events[].ts).
+const volatileRoot = "data"
+
+func withoutVolatile(data any, opts Options) any {
+	if len(opts.VolatileFields) == 0 {
+		return data
+	}
+	return stripVolatile(data, volatileRoot, opts.VolatileFields)
+}
+
+func stripVolatile(v any, path string, volatile map[string]string) any {
+	switch x := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, child := range x {
+			key := path + "." + k
+			if _, drop := volatile[key]; drop {
+				continue
+			}
+			out[k] = stripVolatile(child, key, volatile)
+		}
+		return out
+	case []any:
+		out := make([]any, len(x))
+		for i, child := range x {
+			out[i] = stripVolatile(child, path, volatile)
+		}
+		return out
+	}
+	return v
 }
 
 // decodedEqual is exact equality of two decoded JSON values, numbers by

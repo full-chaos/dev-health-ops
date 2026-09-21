@@ -43,31 +43,6 @@ SAMPLE_DAY = date(2026, 5, 21)
 ResolverSQLFixture = Callable[[CapturingSink], Awaitable[None]]
 
 
-async def _fixture_testops_risk(sink: CapturingSink) -> None:
-    from dev_health_ops.api.graphql.resolvers.testops_risk import (
-        _fetch_daily_rows,
-        _fetch_quadrant_rows,
-    )
-    from dev_health_ops.api.graphql.types.testops_risk import TestOpsRiskInput
-
-    await _fetch_daily_rows(
-        sink,
-        SAMPLE_ORG_ID,
-        TestOpsRiskInput(
-            start_date=SAMPLE_DAY - timedelta(days=14),
-            end_date=SAMPLE_DAY,
-        ),
-    )
-    await _fetch_quadrant_rows(
-        sink,
-        SAMPLE_ORG_ID,
-        TestOpsRiskInput(
-            start_date=SAMPLE_DAY - timedelta(days=14),
-            end_date=SAMPLE_DAY,
-        ),
-    )
-
-
 # ---------------------------------------------------------------------------
 # home
 # ---------------------------------------------------------------------------
@@ -299,7 +274,6 @@ async def _fixture_analytics(sink: CapturingSink) -> None:
 # lives on the Go side: cmd/query-api/capacity_forecast_seeded_integration_
 # test.go runs those reads against a real, migrated ClickHouse.
 ALL_RESOLVER_SQL_FIXTURES: list[tuple[str, ResolverSQLFixture]] = [
-    ("testops_risk", _fixture_testops_risk),
     ("home", _fixture_home),
     ("recommendations", _fixture_recommendations),
     ("bus_factor", _fixture_bus_factor),

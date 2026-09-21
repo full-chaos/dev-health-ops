@@ -71,6 +71,10 @@ IMPROVE_RESOLVER_SOURCE = (
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "resolvers" / "improve.py"
 )
 
+REPORTS_RESOLVER_SOURCE = (
+    ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "resolvers" / "reports.py"
+)
+
 PRODUCT_TELEMETRY_RESOLVER_SOURCE = (
     ROOT
     / "src"
@@ -168,6 +172,20 @@ DELETED_GO_SERVED_RESOLVER_SYMBOLS: dict[Path, frozenset[str]] = {
             "_stable_experiment_id",
             "_metric_from_card",
             "resolve_improve_opportunities",
+        }
+    ),
+    # testopsRisk: the whole resolver module goes (see the module list).
+    # savedReports, savedReport and reportRuns: the read resolvers and the
+    # run-row loader only they used. The module stays: the report mutations
+    # (create, update, delete, clone, trigger) are Python and share its output
+    # types and row mappers.
+    REPORTS_RESOLVER_SOURCE: frozenset(
+        {
+            "resolve_saved_reports",
+            "resolve_saved_report",
+            "resolve_report_runs",
+            "_load_report_run_rows",
+            "_report_run_type_from_row",
         }
     ),
     # productTelemetryDashboard and productTelemetryPlatformDashboard: both
@@ -361,6 +379,14 @@ DELETED_GO_SERVED_RESOLVER_MODULES: dict[str, Path] = {
     # used. The telemetry ingest router keeps its own modules.
     "product telemetry resolver": PRODUCT_TELEMETRY_RESOLVER_SOURCE,
     "product telemetry dashboard loader": PRODUCT_TELEMETRY_LOADER_SOURCE,
+    # testopsRisk (the SDL types stay in types/testops_risk.py).
+    "testops risk resolver": ROOT
+    / "src"
+    / "dev_health_ops"
+    / "api"
+    / "graphql"
+    / "resolvers"
+    / "testops_risk.py",
     # The workgraph operator repair route (its only route).
     "workgraph repair route": ROOT
     / "src"
@@ -414,6 +440,8 @@ RETAINED_ORACLE_MODULES: dict[str, Path] = {
 # that both planes digest for routing. Trimming "unused" Python here would
 # silently change the schema digest and disable every registered operation.
 SDL_LOAD_BEARING_SOURCES: tuple[Path, ...] = (
+    ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "resolvers" / "reports.py",
+    ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "types" / "testops_risk.py",
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "models" / "pr.py",
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "models" / "improve.py",
     ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "models" / "ai.py",
@@ -428,6 +456,24 @@ SDL_LOAD_BEARING_SOURCES: tuple[Path, ...] = (
 )
 
 SDL_LOAD_BEARING_SYMBOLS: dict[str, frozenset[str]] = {
+    "testops_risk.py": frozenset(
+        {
+            "TestOpsRiskInput",
+            "TestOpsRiskTrendPoint",
+            "TestOpsRiskBreakdownItem",
+            "TestOpsRiskQuadrantPoint",
+            "TestOpsRiskSparkPoint",
+            "TestOpsRiskResult",
+        }
+    ),
+    "reports.py": frozenset(
+        {
+            "SavedReportType",
+            "ReportRunType",
+            "SavedReportConnection",
+            "ReportRunConnection",
+        }
+    ),
     "improve.py": frozenset(
         {
             "Experiment",
@@ -520,6 +566,10 @@ SDL_LOAD_BEARING_SYMBOLS: dict[str, frozenset[str]] = {
             "ai_opportunities",
             "product_telemetry_dashboard",
             "product_telemetry_platform_dashboard",
+            "saved_reports",
+            "saved_report",
+            "report_runs",
+            "testops_risk",
             "compounding_risk",
             "security_alerts",
             "improve_opportunities",

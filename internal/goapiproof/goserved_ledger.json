@@ -200,6 +200,39 @@
       ]
     },
     {
+      "operation": "testopsRisk",
+      "two_plane_ops_sha": "f33a0ce94a7ca22eca8b5c635bb22d501d0ba744",
+      "guards": [
+        {"file": "cmd/query-api/internal/testopsrisk/testopsrisk_test.go", "test": "TestResolve_MatchesPythonCells"},
+        {"file": "cmd/query-api/internal/testopsrisk/testopsrisk_test.go", "test": "TestResolve_ScopesEveryStatement"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
+      ]
+    },
+    {
+      "operation": "savedReports",
+      "unproven_reason": "production holds no saved reports, so the data-bearing savedReports cases answered empty on both planes (vacuous_empty_legs) and only the empty-page cases matched; no two-plane run compared a leaf; record deploy-156/r156/r155g/prove-report-step155.json",
+      "guards": [
+        {"file": "cmd/query-api/internal/reports/reports_test.go", "test": "TestList_StatementsAndArguments"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_symbols_are_not_redefined"}
+      ]
+    },
+    {
+      "operation": "savedReport",
+      "unproven_reason": "production holds no saved report to name and the operation was not routed to Go in the last two-plane run (operation_not_routed_to_go), so no two-plane run compared any leaf; record deploy-156/r156/r155g/prove-report-step155.json",
+      "guards": [
+        {"file": "cmd/query-api/internal/reports/reports_test.go", "test": "TestGet_StatementIdNormalizedAndOrgBound"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_symbols_are_not_redefined"}
+      ]
+    },
+    {
+      "operation": "reportRuns",
+      "unproven_reason": "production holds no saved report to name and the operation was not routed to Go in the last two-plane run (operation_not_routed_to_go), so no two-plane run compared any leaf; record deploy-156/r156/r155g/prove-report-step155.json",
+      "guards": [
+        {"file": "cmd/query-api/internal/reports/reports_test.go", "test": "TestRuns_StatementsAndMapping"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_symbols_are_not_redefined"}
+      ]
+    },
+    {
       "operation": "productTelemetryPlatformDashboard",
       "unproven_reason": "platform-admin-only route (a superuser, not impersonating): the viewer principal the production prover mints can never run it, so no two-plane run at a production build compared any leaf; enabled on the venue run as an admin at the same build (receipt sha256 prefix 27c03ff9, both executed requests matched) and the Go route's own authorization decision table",
       "guards": [

@@ -56,6 +56,25 @@ _QUERIES = {
         "{ totals { events } } }",
         None,
     ),
+    "savedReports": (
+        'query { savedReports(orgId: "org-1") { total } }',
+        None,
+    ),
+    "savedReport": (
+        'query { savedReport(orgId: "org-1", '
+        'reportId: "11111111-1111-1111-1111-111111111111") { id } }',
+        None,
+    ),
+    "reportRuns": (
+        'query { reportRuns(orgId: "org-1", '
+        'reportId: "11111111-1111-1111-1111-111111111111") { total } }',
+        None,
+    ),
+    "testopsRisk": (
+        'query { testopsRisk(orgId: "org-1", input: '
+        '{startDate: "2026-01-05", endDate: "2026-01-11"}) { orgId } }',
+        None,
+    ),
     "compoundingRisk": (
         'query { compoundingRisk(orgId: "org-1") { orgId } }',
         None,

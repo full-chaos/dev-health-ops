@@ -7,7 +7,7 @@ from typing import Any
 import strawberry
 from croniter import CroniterError
 from croniter import croniter as Croniter
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.models.reports import ReportRun, ReportRunStatus, SavedReport
@@ -109,21 +109,6 @@ _SAVED_REPORT_COLUMNS = (
     SavedReport.created_at,
     SavedReport.updated_at,
     SavedReport.created_by,
-)
-
-_REPORT_RUN_COLUMNS = (
-    ReportRun.id,
-    ReportRun.report_id,
-    ReportRun.status,
-    ReportRun.started_at,
-    ReportRun.completed_at,
-    ReportRun.duration_seconds,
-    ReportRun.rendered_markdown,
-    ReportRun.artifact_url,
-    ReportRun.provenance_records,
-    ReportRun.error,
-    ReportRun.triggered_by,
-    ReportRun.created_at,
 )
 
 
@@ -273,23 +258,6 @@ def _to_report_run_type(
     )
 
 
-def _report_run_type_from_row(row: Any) -> ReportRunType:
-    return _to_report_run_type(
-        run_id=_uuid_value(row.id),
-        report_id=_uuid_value(row.report_id),
-        status=_string_value(row.status),
-        started_at=_datetime_or_none(row.started_at),
-        completed_at=_datetime_or_none(row.completed_at),
-        duration_seconds=_float_or_none(row.duration_seconds),
-        rendered_markdown=_string_or_none(row.rendered_markdown),
-        artifact_url=_string_or_none(row.artifact_url),
-        provenance_records=_json_output(row.provenance_records),
-        error=_string_or_none(row.error),
-        triggered_by=_string_value(row.triggered_by),
-        created_at=_datetime_value(row.created_at),
-    )
-
-
 async def _load_saved_report_type(
     session: AsyncSession,
     report_id: uuid.UUID,
@@ -303,20 +271,6 @@ async def _load_saved_report_type(
     if row is None:
         return None
     return _saved_report_type_from_row(row)
-
-
-async def _load_report_run_rows(
-    session: AsyncSession,
-    report_id: uuid.UUID,
-    limit: int,
-) -> list[ReportRunType]:
-    result = await session.execute(
-        select(*_REPORT_RUN_COLUMNS)
-        .where(ReportRun.report_id == report_id)
-        .order_by(ReportRun.created_at.desc())
-        .limit(limit)
-    )
-    return [_report_run_type_from_row(row) for row in result.all()]
 
 
 def _validate_report_schedule_cron(cron: str) -> None:
@@ -383,81 +337,6 @@ async def _ensure_or_update_schedule(
     session.add(job)
     await session.flush()
     setattr(report, "schedule_id", _uuid_value(job.id))
-
-
-async def resolve_saved_reports(
-    org_id: str,
-    limit: int = 50,
-    offset: int = 0,
-) -> SavedReportConnection:
-    from dev_health_ops.db import get_postgres_session
-
-    async with get_postgres_session() as session:
-        count_result = await session.execute(
-            select(func.count())
-            .select_from(SavedReport)
-            .where(SavedReport.org_id == org_id)
-        )
-        total = count_result.scalar() or 0
-
-        result = await session.execute(
-            select(*_SAVED_REPORT_COLUMNS)
-            .where(SavedReport.org_id == org_id)
-            .order_by(SavedReport.updated_at.desc())
-            .offset(offset)
-            .limit(limit)
-        )
-        reports = result.all()
-
-    return SavedReportConnection(
-        items=[_saved_report_type_from_row(row) for row in reports],
-        total=total,
-    )
-
-
-async def resolve_saved_report(
-    org_id: str,
-    report_id: str,
-) -> SavedReportType | None:
-    from dev_health_ops.db import get_postgres_session
-
-    async with get_postgres_session() as session:
-        return await _load_saved_report_type(session, uuid.UUID(report_id), org_id)
-
-
-async def resolve_report_runs(
-    org_id: str,
-    report_id: str,
-    limit: int = 50,
-) -> ReportRunConnection:
-    from dev_health_ops.db import get_postgres_session
-
-    async with get_postgres_session() as session:
-        report_uuid = uuid.UUID(report_id)
-        report_result = await session.execute(
-            select(SavedReport.id).where(
-                SavedReport.org_id == org_id,
-                SavedReport.id == report_uuid,
-            )
-        )
-        report_row = report_result.one_or_none()
-        if report_row is None:
-            return ReportRunConnection(items=[], total=0)
-
-        resolved_report_id = _uuid_value(report_row.id)
-
-        count_result = await session.execute(
-            select(func.count())
-            .select_from(ReportRun)
-            .where(ReportRun.report_id == resolved_report_id)
-        )
-        total = count_result.scalar() or 0
-        runs = await _load_report_run_rows(session, resolved_report_id, limit)
-
-    return ReportRunConnection(
-        items=runs,
-        total=total,
-    )
 
 
 async def resolve_create_saved_report(

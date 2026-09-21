@@ -200,7 +200,7 @@ func TestLedgerRejectsMalformedDocuments(t *testing.T) {
 
 func TestCitationConstructorRefusesAnythingTheLedgerDoesNotName(t *testing.T) {
 	ledger := defaultLedgerForTest(t)
-	for _, operation := range []string{"", "testopsRisk", "capacityforecast", "capacityForecast ", "GO-ONLY:x"} {
+	for _, operation := range []string{"", "notAnOperation", "capacityforecast", "capacityForecast ", "GO-ONLY:x"} {
 		if _, err := NewGoOnlyCitation(ledger, operation); err == nil {
 			t.Errorf("a citation was built for %q", operation)
 		}

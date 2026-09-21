@@ -94,11 +94,10 @@ class DataHealth:
     async def metric_lineage(
         self, info: Info, metric_id: strawberry.ID
     ) -> MetricLineage | None:
-        # The parent field raises first; this body exists so the field, its
-        # argument and its type stay in the exported schema. Imported here to
-        # avoid a models<->schema import cycle.
-        from dev_health_ops.api.graphql.schema import _raise_served_by_query_api
-
-        _raise_served_by_query_api(
-            "dataHealth", getattr(self.context, "org_id", ""), info
+        # Unreachable: the parent `dataHealth` field raises first. The body
+        # exists so the field, its argument and its type stay in the exported
+        # schema. It cannot import the schema module's raise helper (that
+        # would be an import cycle), so it states the same fact directly.
+        raise RuntimeError(
+            "metricLineage is served by query-api and has no Python implementation."
         )

@@ -116,6 +116,7 @@ DELETED_GO_SERVED_RESOLVER_SYMBOLS: dict[Path, frozenset[str]] = {
     DATA_HEALTH_MODELS_SOURCE: frozenset(
         {
             "compute_metric_lineage",
+            "METRIC_LINEAGE_REGISTRY",
             "_lineage_freshness",
             "_query_dicts",
             "_int",
@@ -579,6 +580,16 @@ def _defined_names(source: Path) -> set[str]:
             if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                 names.add(child.name)
                 visit(child)
+            elif isinstance(child, ast.AnnAssign) and isinstance(
+                child.target, ast.Name
+            ):
+                names.add(child.target.id)
+            elif isinstance(child, ast.Assign):
+                names.update(
+                    target.id
+                    for target in child.targets
+                    if isinstance(target, ast.Name)
+                )
 
     visit(tree)
     return names

@@ -109,6 +109,21 @@ func (f *fakeRowScanner) Scan(dest ...any) error {
 				return fmt.Errorf("scan col %d: destination *float64 but fixture holds %T -- an aggregate returning UInt64 cannot be scanned into float64 by the native driver (see reviewedges.go:145's UInt32 note)", i, row[i])
 			}
 			*ptr = v
+		case **string:
+			// A grouped sankey scans its group keys as **string: the
+			// real driver's String.ScanRow allocates for **string and
+			// Nullable.ScanRow sets it to nil on a NULL cell. A fixture
+			// cell of literal nil stands in for NULL.
+			if row[i] == nil {
+				*ptr = nil
+				continue
+			}
+			v, ok := row[i].(string)
+			if !ok {
+				return fmt.Errorf("scan col %d: destination **string but fixture holds %T (want string or nil)", i, row[i])
+			}
+			allocated := v
+			*ptr = &allocated
 		case **float64:
 			// CHAOS-4650: the nullable-aware destination breakdown.go's
 			// executeBreakdownRaw now scans category-2 AT-RISK measures

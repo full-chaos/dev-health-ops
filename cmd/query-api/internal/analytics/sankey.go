@@ -88,53 +88,12 @@ func SankeyRequestFromInput(input model.SankeyRequestInput) (SankeyRequest, erro
 // (compiler.py:447) exactly, including that nodes is always a
 // single-element list while edges can be longer.
 func CompileSankey(req SankeyRequest, orgID string, timeoutSeconds int, useInvestment bool, filters *model.FilterInput) (nodes compiledQuery, edges []compiledQuery, err error) {
-	for _, dim := range req.Path {
-		if dim == DimensionAuthor {
-			// dbColumn below would reject this per-dimension anyway, but
-			// checking here first gives a clearer, path-scoped error
-			// rather than pointing at whichever UNION branch happened to
-			// build first.
-			return compiledQuery{}, nil, newValidationError("path", string(dim),
-				"author is not a supported breakdown/grouping dimension; "+
-					"filter by who.developers or scope.level=developer instead "+
-					"of grouping by author.")
-		}
-	}
-
-	fc, err := translateFilters(filters, useInvestment, defaultFilterColumns())
+	shape, err := compileSankeyShape(req, useInvestment, filters)
 	if err != nil {
 		return compiledQuery{}, nil, err
 	}
-
-	var source, alias, dateFilter, extraClauses, measureExpr string
-	if useInvestment {
-		ictx := investmentContextFor(req.Path, needsTeamJoin(filters), needsAuthorJoin(filters))
-		source, alias, dateFilter, extraClauses = ictx.Source, ictx.Alias, ictx.DateFilter, ictx.ExtraClauses
-		measureExpr, err = dbExpression(req.Measure, true, ictx.UseRepoAllocation)
-		if err != nil {
-			return compiledQuery{}, nil, err
-		}
-	} else {
-		source, alias, dateFilter = nonInvestmentSourceAndDateFilter(req.Measure)
-		measureExpr, err = dbExpression(req.Measure, false, false)
-		if err != nil {
-			return compiledQuery{}, nil, err
-		}
-	}
-	// Force a uniform Float64 result type. ClickHouse returns UInt64 for
-	// the SUM()-based measures (COUNT, THROUGHPUT, CHURN_LOC) and Float64
-	// for the AVG/ratio ones, and the native driver will NOT convert
-	// between them at scan time -- it errors, exactly as
-	// reviewedges.go:145 documents for UInt32. Coercing in SQL keeps ONE
-	// scan type for every measure. Python does the same coercion one
-	// layer later with `float(row["value"])`, so values are unchanged.
-	measureExpr = "toFloat64(" + measureExpr + ")"
-
-	// limit_per_dim = max(1, max_nodes // len(dimensions)), compiler.py:413.
-	limitPerDim := req.MaxNodes / len(req.Path)
-	if limitPerDim < 1 {
-		limitPerDim = 1
-	}
+	fc, source, alias, dateFilter, extraClauses, measureExpr := shape.fc, shape.source, shape.alias, shape.dateFilter, shape.extraClauses, shape.measureExpr
+	limitPerDim := shape.limitPerDim
 
 	// CHAOS-5546: a plain UNION ALL across the per-dimension branches
 	// below has NO guaranteed row order without an explicit outer ORDER
@@ -212,7 +171,7 @@ ORDER BY dim_order ASC, value DESC, node_id ASC
 	// One edges query per adjacent (source_dim, target_dim) pair,
 	// compiler.py:428-445. max_edges divided evenly across pairs --
 	// integer division, matching Python's `//`.
-	maxEdgesPerPair := req.MaxEdges / (len(req.Path) - 1)
+	maxEdgesPerPair := shape.maxEdgesPerPair
 	for i := 0; i < len(req.Path)-1; i++ {
 		sourceDim, targetDim := req.Path[i], req.Path[i+1]
 		sourceCol, colErr := dbColumn(sourceDim, useInvestment)

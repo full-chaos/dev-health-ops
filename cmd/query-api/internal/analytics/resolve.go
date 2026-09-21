@@ -47,7 +47,9 @@ package analytics
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph/model"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graphqljson"
@@ -350,7 +352,7 @@ func resolveSankey(ctx context.Context, client QueryClient, orgID string, input 
 		useInvestment = pathAutoRoutesToInvestment(req.Path)
 	}
 
-	nodesQuery, edgesQueries, err := CompileSankey(req, orgID, queryTimeoutSecs, useInvestment, filters)
+	groupedQuery, err := CompileSankeyGrouped(req, orgID, queryTimeoutSecs, useInvestment, filters)
 	if err != nil {
 		return nil, err
 	}
@@ -390,15 +392,8 @@ func resolveSankey(ctx context.Context, client QueryClient, orgID string, input 
 	// (sankeycoverage.go), gated on useInvestment exactly as Python gates
 	// it. It stays out of THIS function: firing it here as well would
 	// double-report for one request.
-	nodes, edges, execErr := ExecuteSankeyQueries(ctx, client, []compiledQuery{nodesQuery}, edgesQueries)
-	if execErr != nil {
-		// Swallow: analytics.py:654-656 logs and degrades to empty.
-		recordDegradation(ctx, "sankey", execErr)
-		nodes, edges = nil, nil
-	}
-
-	// analytics.py:658-660 -- coverage is computed AFTER nodes/edges, and
-	// unconditionally whenever a sankey was requested (`if batch.sankey is
+	// analytics.py:658-660 -- coverage is computed unconditionally
+	// whenever a sankey was requested (`if batch.sankey is
 	// not None`, which is exactly the condition under which this function
 	// runs at all). It degrades to nil on any failure rather than
 	// propagating an error; see sankeycoverage.go.
@@ -425,8 +420,52 @@ func resolveSankey(ctx context.Context, client QueryClient, orgID string, input 
 	// call (root AGENTS.md: a port copied from a buggy tip is a defect only
 	// when the bug is already fixed on the source tip -- this one is not).
 	// If it is ever changed, change it in Python first.
+	//
+	// Nodes+edges (one grouped query) and coverage are independent reads
+	// of the same window and neither reads the other's result, so they
+	// run at the same time: the request costs the slower of the two, not
+	// their sum. Python ran coverage after nodes/edges; the order is not
+	// observable in the response.
 	coverageUseInvestment := effective != nil && *effective
-	coverage := resolveSankeyCoverage(ctx, client, orgID, req, queryTimeoutSecs, coverageUseInvestment, filters)
+	started := time.Now()
+	var (
+		nodes              []model.SankeyNode
+		edges              []model.SankeyEdge
+		execErr            error
+		sankeyElapsed      time.Duration
+		coverage           *model.SankeyCoverage
+		coverageElapsed    time.Duration
+		coverageConcurrent sync.WaitGroup
+	)
+	coverageConcurrent.Add(1)
+	go func() {
+		defer coverageConcurrent.Done()
+		coverage = resolveSankeyCoverage(ctx, client, orgID, req, queryTimeoutSecs, coverageUseInvestment, filters)
+		coverageElapsed = time.Since(started)
+	}()
+	nodes, edges, execErr = executeSankeyGrouped(ctx, client, groupedQuery)
+	sankeyElapsed = time.Since(started)
+	coverageConcurrent.Wait()
+	if execErr != nil {
+		// Swallow: analytics.py:654-656 logs and degrades to empty.
+		recordDegradation(ctx, "sankey", execErr)
+		slog.WarnContext(ctx, "analytics: sankey query failed; returning an empty sankey",
+			"org_id", orgID, "path", pathLabel(req.Path), "use_investment", useInvestment, "error", execErr)
+		nodes, edges = nil, nil
+	}
+	slog.DebugContext(ctx, "analytics: sankey resolved",
+		"org_id", orgID,
+		"path", pathLabel(req.Path),
+		"use_investment", useInvestment,
+		"clickhouse_reads", 2, // the grouped sankey query + coverage; telemetry probes are not counted
+		"sankey_ms", sankeyElapsed.Milliseconds(),
+		"coverage_ms", coverageElapsed.Milliseconds(),
+		"total_ms", time.Since(started).Milliseconds(),
+		"nodes", len(nodes),
+		"edges", len(edges),
+		"sankey_failed", execErr != nil,
+		"coverage_nil", coverage == nil,
+	)
 
 	unit := model.SankeyValueUnitWorkUnits
 	if req.Measure == MeasureChurnLOC {

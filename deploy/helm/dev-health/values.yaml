@@ -1105,6 +1105,16 @@ clickhouse:
     user: "ch"
     password: "ch"
     database: "default"
+  # Extra ClickHouse users.d files, as a map of filename -> XML content
+  # (CHAOS-6181). Each renders into one ConfigMap key and is mounted with a
+  # subPath at /etc/clickhouse-server/users.d/<filename>, so the image's own
+  # users.d files stay. Empty (default) renders nothing extra. Use
+  # <password_sha256_hex>, never a plaintext <password>. Changing this restarts
+  # the ClickHouse pod (subPath mounts do not hot-reload).
+  #   usersd:
+  #     ro_user.xml: |
+  #       <clickhouse><users>...</users></clickhouse>
+  usersd: {}
 
 # =============================================================================
 # In-cluster PostgreSQL (optional — disable for managed Postgres)

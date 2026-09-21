@@ -651,6 +651,12 @@ web:
   tolerations: []
   affinity: {}
   extraEnv: []
+  # -- CHAOS-6188: mount extra volumes into web in every environment (e.g. the
+  #    Secret volume carrying the ACR web-assertion Ed25519 signing key).
+  #    Renders alongside localDevelopment's own extraVolumes/extraVolumeMounts
+  #    under a single volumeMounts:/volumes: key when both are set.
+  extraVolumeMounts: []
+  extraVolumes: []
   localDevelopment:
     enabled: false
     extraVolumeMounts: []

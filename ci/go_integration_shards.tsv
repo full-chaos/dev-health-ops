@@ -5,11 +5,13 @@
 # checked against ci/check_go.sh's live integration-tag discovery before any
 # shard runs, so this file cannot silently omit or duplicate a package.
 #
-# Every weight below is the median observed wall time of that package's own
+# Every weight below is the observed wall time of that package's own
 # `go test -tags=integration -count=1` run, read directly from the "ok
 # <package> <N>s" line the Go test binary prints in the hosted CI shard job's
-# own log, across ten separate green `Go` workflow runs against main, rounded
-# up (ceil) to the next whole second. A prior revision of this file mixed
+# own log, taken from a green `Go` workflow run against main that already
+# includes the once-per-process ClickHouse migration chain (earlier runs time
+# ClickHouse-backed packages much slower and would reintroduce stale weights),
+# rounded up (ceil) to the next whole second. A prior revision of this file mixed
 # local runs, an arm64 compute host's runs (roughly 2x local wall-clock), and
 # ad hoc "rounded up for headroom" local numbers per package as each package
 # gained tests -- accurate on the day each number was written, but a stale
@@ -28,9 +30,8 @@
 # shard's "packages" job never actually runs (see
 # INTEGRATION_SHARD_NON_PROVIDER_COUNTS in ci/check_go.sh) and every other
 # package balances across the REMAINING shards instead. Its weight is the
-# median, across the same ten hosted runs, of the SUM of its own four
-# provider-test-shard jobs' reported wall times -- the closest hosted
-# equivalent to "the whole package, run once" available, since CI never runs
+# SUM of its own four provider-test-shard jobs' reported wall times, from the
+# same hosted run -- the closest hosted equivalent to "the whole package, run once" available, since CI never runs
 # it as a single `go test ./internal/providersync` invocation.
 #
 # This isolation is a property of the WEIGHTS, not a guarantee: it holds only
@@ -43,75 +44,75 @@
 # loudly, with the actual numbers, instead of a human silently recounting a
 # new shard-1 membership as fine.
 shards	6
-cmd/dev-health-reconciler	6
-cmd/dev-health-worker	235
-cmd/dev-health-workerctl	16
-cmd/go-api-routing	91
-cmd/query-api	209
-cmd/query-api/internal/aianalytics	35
-cmd/query-api/internal/analytics	218
-cmd/query-api/internal/busfactor	20
-cmd/query-api/internal/compoundingrisk	20
-cmd/query-api/internal/explain	122
-cmd/query-api/internal/featureflags	22
-cmd/query-api/internal/home	30
-cmd/query-api/internal/hotspots	45
-cmd/query-api/internal/investmentexplain	22
-cmd/query-api/internal/investmentflow	12
-cmd/query-api/internal/operatingreview	112
-cmd/query-api/internal/routeswitch	17
-cmd/query-api/internal/sankey	12
-cmd/query-api/internal/scopelabel	20
-cmd/query-api/internal/security	30
-cmd/query-api/internal/testopsrisk	20
-cmd/query-api/internal/throughputforecast	64
-cmd/query-api/internal/workgraph	380
-internal/cacheinvalidation	1
-internal/externalrecompute	33
-internal/goapiproof	248
-internal/joboperator	8
+cmd/dev-health-reconciler	5
+cmd/dev-health-worker	246
+cmd/dev-health-workerctl	14
+cmd/go-api-routing	100
+cmd/query-api	391
+cmd/query-api/internal/aianalytics	65
+cmd/query-api/internal/analytics	251
+cmd/query-api/internal/busfactor	21
+cmd/query-api/internal/compoundingrisk	66
+cmd/query-api/internal/explain	60
+cmd/query-api/internal/featureflags	21
+cmd/query-api/internal/home	57
+cmd/query-api/internal/hotspots	46
+cmd/query-api/internal/investmentexplain	75
+cmd/query-api/internal/investmentflow	14
+cmd/query-api/internal/operatingreview	56
+cmd/query-api/internal/routeswitch	22
+cmd/query-api/internal/sankey	11
+cmd/query-api/internal/scopelabel	15
+cmd/query-api/internal/security	36
+cmd/query-api/internal/testopsrisk	31
+cmd/query-api/internal/throughputforecast	41
+cmd/query-api/internal/workgraph	280
+internal/cacheinvalidation	2
+internal/externalrecompute	32
+internal/goapiproof	604
+internal/joboperator	9
 internal/joboutbox	24
-internal/jobrescue	3
-internal/jobroute	23
-internal/jobruntime	57
-internal/migrationmatrix	25
-internal/jobs/dimensionfold	130
-internal/jobs/investment	62
+internal/jobrescue	4
+internal/jobroute	27
+internal/jobruntime	51
+internal/migrationmatrix	24
+internal/jobs/dimensionfold	76
+internal/jobs/investment	58
 internal/jobs/investment/categorize	5
-internal/jobs/investment/chquery	458
-internal/jobs/investment/chwrite	165
-internal/jobs/metrics/daily	737
-internal/jobs/metrics/daily/benchmarking	10
-internal/jobs/metrics/daily/icfinalize	119
-internal/jobs/metrics/remaining	794
-internal/jobs/operational	69
-internal/jobs/pagerduty	7
-internal/jobs/repair	30
-internal/jobs/report	76
-internal/jobs/system	17
-internal/jobs/workgraph	20
-internal/jobs/workgraph/edges	112
-internal/jobs/workgraph/issuecommitedges	22
-internal/jobs/workgraph/issuepredges	23
-internal/jobs/workgraph/issueprlinks	223
-internal/jobs/workgraph/operationaledges	52
-internal/jobs/workgraph/prcommit	25
-internal/llmorgsettings	36
-internal/platform/config	15
+internal/jobs/investment/chquery	231
+internal/jobs/investment/chwrite	85
+internal/jobs/metrics/daily	689
+internal/jobs/metrics/daily/benchmarking	33
+internal/jobs/metrics/daily/icfinalize	76
+internal/jobs/metrics/remaining	635
+internal/jobs/operational	71
+internal/jobs/pagerduty	8
+internal/jobs/repair	13
+internal/jobs/report	74
+internal/jobs/system	18
+internal/jobs/workgraph	24
+internal/jobs/workgraph/edges	81
+internal/jobs/workgraph/issuecommitedges	33
+internal/jobs/workgraph/issuepredges	22
+internal/jobs/workgraph/issueprlinks	134
+internal/jobs/workgraph/operationaledges	49
+internal/jobs/workgraph/prcommit	24
+internal/llmorgsettings	44
+internal/platform/config	14
 internal/providerfoundation	16
-internal/providersync	2720
-internal/scheduler/fixed	201
-internal/scheduler/sync	238
-internal/storage/postgres	123
-internal/storage/postgres/authschema	74
-internal/storage/river	34
-internal/streamhandlers	207
+internal/providersync	2337
+internal/scheduler/fixed	151
+internal/scheduler/sync	156
+internal/storage/postgres	129
+internal/storage/postgres/authschema	72
+internal/storage/river	38
+internal/streamhandlers	127
 internal/streamrunner	2
-internal/syncdispatchruntime	359
-internal/syncreconciler	175
+internal/syncdispatchruntime	418
+internal/syncreconciler	203
 internal/synccoverage	4
-internal/syncroute	11
-internal/teamattribution	41
-internal/teamownership	123
-internal/testsupport/chschema	45
+internal/syncroute	10
+internal/teamattribution	31
+internal/teamownership	81
+internal/testsupport/chschema	160
 internal/testsupport/containers	14

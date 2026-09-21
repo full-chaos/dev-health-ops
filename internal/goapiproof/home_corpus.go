@@ -98,8 +98,8 @@ var homeNumericLeaves = Options{
 //     values -- the ratio has no guaranteed direction, so no direction
 //     shape applies. Both ratios and data.data_confidence.coverage_pct
 //     (_coverage_pct_from_coverage's mean of the three, home.py:437-441)
-//     are covered by homeCoverageSupersessionDefect (below), a blanket
-//     citation that claims no direction or magnitude.
+//     are admitted by homeConfidenceTierDefect (below) under the identity
+//     rule, which claims no direction or magnitude.
 //   - fetch_source_statuses' ci_pipeline_runs branch reaches only
 //     max(last_synced) and a count()>0 HAVING gate, both dedup-INVARIANT
 //     (an extra physical version cannot move a max(), and cannot flip a
@@ -109,10 +109,11 @@ var homeNumericLeaves = Options{
 //     categorical swap (one string for another), which no numeric or
 //     keyed-direction shape can admit. Left uncovered.
 //
-// homeConfidenceTierDefect (below) is narrower than a blanket citation on
-// the coverage_pct leaf itself: it never re-derives or bounds the
-// base ratio, only the MECHANICAL tier/confidence consequence a
-// straddling coverage_pct produces elsewhere in the same body -- see
+// homeConfidenceTierDefect (below) admits the coverage leaves only under
+// an identity (never a direction or a bound): each leg's coverage_pct is
+// the mean of its own three ratios; repos_covered_pct is never admitted.
+// It also admits the MECHANICAL tier/confidence consequence a straddling
+// coverage_pct produces elsewhere in the same body -- see
 // HomeConfidenceTierShape's own doc comment (homeconfidencetier.go).
 // Wired only onto home_default_org/home_repo_scoped (both methods): the
 // mechanism is independent of scope_type (fetch_coverage/fetch_
@@ -122,14 +123,17 @@ var homeNumericLeaves = Options{
 // never verified alongside this one, so this citation stays off it.
 var homeConfidenceTierDefect = BaselineDefect{
 	Ticket: "CHAOS-5448",
-	Reason: "fetch_coverage's two work_item_cycle_times reads (api/queries/freshness.py:83-115) run raw (no FINAL) against a ReplacingMergeTree(computed_at) table whose sorting key (org_id, provider, work_item_id) does not include `day` (cmd/query-api/internal/home/queries_freshness.go:1-24, reading it FINAL) -- a physical stale/live version pair can straddle the day-window filter independently, so issues_with_cycle_states_pct, and through it data.data_confidence.coverage_pct (_coverage_pct_from_coverage's mean of three ratios, home.py:437-441), can differ between planes with no provable direction (covered by homeCoverageSupersessionDefect, which claims no direction or magnitude). When that drift straddles the level/confidence thresholds (build_data_confidence, home.py:444-473 / BuildDataConfidence, cmd/query-api/internal/home/signals.go:261-289; _confidence_from_evidence, home.py:359-366 / signals.go:150), every downstream tier/confidence leaf is a MECHANICAL, recomputable function of its own leg's own coverage_pct/evidence_count -- HomeConfidenceTierShape verifies exactly that recomputation, never the base drift's own magnitude or direction. Go is correct.",
+	Reason: "fetch_coverage's two work_item_cycle_times reads (api/queries/freshness.py:83-115) run raw (no FINAL) against a ReplacingMergeTree(computed_at) table whose sorting key (org_id, provider, work_item_id) does not include `day` (cmd/query-api/internal/home/queries_freshness.go:1-24, reading it FINAL) -- a physical stale/live version pair can straddle the day-window filter independently, so issues_with_cycle_states_pct, and through it data.data_confidence.coverage_pct (_coverage_pct_from_coverage's mean of three ratios, home.py:437-441), can differ between planes with no provable direction (admitted only while each leg's coverage_pct is the mean of its own three ratios, and repos_covered_pct is never admitted; no direction or magnitude is claimed). When that drift straddles the level/confidence thresholds (build_data_confidence, home.py:444-473 / BuildDataConfidence, cmd/query-api/internal/home/signals.go:261-289; _confidence_from_evidence, home.py:359-366 / signals.go:150), every downstream tier/confidence leaf is a MECHANICAL, recomputable function of its own leg's own coverage_pct/evidence_count -- HomeConfidenceTierShape verifies exactly that recomputation, never the base drift's own magnitude or direction. Go is correct.",
 	Paths: []string{
+		"data.data_confidence.coverage_pct",
+		"data.freshness.coverage.issues_with_cycle_states_pct",
+		"data.freshness.coverage.prs_linked_to_issues_pct",
 		"data.data_confidence.level",
 		"data.limiting_factor.confidence",
 		"data.signals.confidence",
 	},
 	Intermittent:       true,
-	IntermittentReason: "present only while work_item_cycle_times holds an unmerged physical version whose own day value straddles the requested window AND the resulting coverage_pct drift crosses a tier threshold; most drifts land on the same side of every threshold and produce no finding at all",
+	IntermittentReason: "present only while work_item_cycle_times holds a superseded physical version whose own day value lies inside the requested window; a window with none reads identically on both planes, and a drift that stays on one side of every tier threshold produces no tier finding",
 	HomeConfidenceTierShape: &HomeConfidenceTierShape{
 		CoveragePctPath:              "data.data_confidence.coverage_pct",
 		MissingSourcesPath:           "data.data_confidence.missing_sources",
@@ -137,34 +141,16 @@ var homeConfidenceTierDefect = BaselineDefect{
 		LevelPath:                    "data.data_confidence.level",
 		LimitingFactorConfidencePath: "data.limiting_factor.confidence",
 		SignalsListPath:              "data.signals",
+		SupersededRatioPaths: []string{
+			"data.freshness.coverage.issues_with_cycle_states_pct",
+			"data.freshness.coverage.prs_linked_to_issues_pct",
+		},
+		OtherRatioPath: "data.freshness.coverage.repos_covered_pct",
 	},
-}
-
-// homeCoverageSupersessionDefect covers the two coverage ratios themselves.
-// fetch_coverage's work_item_cycle_times reads on the reference plane run
-// raw, so a superseded version whose own day still lies inside the window
-// is counted next to its live version (a version whose live sibling sits in
-// another month partition is never merged away, so the reference count does
-// not converge on its own); the port reads FINAL. Two ratios are
-// drawn from that table (the issues ratio and the PR-link ratio), and
-// coverage_pct is the mean of the three ratios, so the leaves move together.
-// No direction or magnitude is claimed: numerator and denominator come from
-// the same undeduplicated scan. repos_covered_pct and every other leaf stay
-// outside this entry.
-var homeCoverageSupersessionDefect = BaselineDefect{
-	Ticket: "CHAOS-5448",
-	Reason: "fetch_coverage's two work_item_cycle_times reads (api/queries/freshness.py:83-115) run raw (no FINAL) against a ReplacingMergeTree(computed_at) table whose sorting key (org_id, provider, work_item_id) does not include `day`, so a superseded physical version whose day is still inside the window is counted next to its live version; issues_with_cycle_states_pct and prs_linked_to_issues_pct, and through them data.data_confidence.coverage_pct (the mean of three ratios, home.py:437-441), differ from the port's FINAL read (cmd/query-api/internal/home/queries_freshness.go). Measured: 431/580 (reference, raw) vs 428/577 (port, FINAL) on prod, three superseded in-window versions. Go is correct.",
-	Paths: []string{
-		"data.data_confidence.coverage_pct",
-		"data.freshness.coverage.issues_with_cycle_states_pct",
-		"data.freshness.coverage.prs_linked_to_issues_pct",
-	},
-	Intermittent:       true,
-	IntermittentReason: "present only while work_item_cycle_times holds a superseded physical version whose own day value lies inside the requested window; a window with none reads identically on both planes",
 }
 
 // homeConfidenceTierParity is homeNumericLeaves plus
-// homeConfidenceTierDefect and homeCoverageSupersessionDefect -- the Parity value home_default_org/
+// homeConfidenceTierDefect -- the Parity value home_default_org/
 // home_repo_scoped (GET and POST) carry; every other request keeps
 // homeNumericLeaves unchanged.
 var homeConfidenceTierParity = Options{
@@ -172,7 +158,7 @@ var homeConfidenceTierParity = Options{
 	FloatTierB:            homeNumericLeaves.FloatTierB,
 	IntegerLeaves:         homeNumericLeaves.IntegerLeaves,
 	VolatileFields:        homeNumericLeaves.VolatileFields,
-	BaselineDefects:       []BaselineDefect{homeConfidenceTierDefect, homeCoverageSupersessionDefect},
+	BaselineDefects:       []BaselineDefect{homeConfidenceTierDefect},
 }
 
 // homeTeamBaselineTimeout is the declaration home_team_scoped (GET and POST)

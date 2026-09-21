@@ -397,20 +397,31 @@ func homeCoverageBody(t *testing.T, repos, prs, issues, mean float64) Snapshot {
 
 // The production pair from the run that first showed the difference (three
 // superseded in-window versions: 431/580 raw vs 428/577 FINAL) is admitted
-// as exactly the coverage citation's leaves; a difference in the repos
-// ratio, which no cycle-time read feeds, stays outside it.
-func TestHomeConfidenceTierParity_CoverageSupersessionAdmitsOnlyItsLeaves(t *testing.T) {
+// as exactly the coverage leaves; a difference that the identity (repos
+// ratio equal, coverage_pct = mean of the three ratios) does not explain
+// stays outside.
+func TestHomeConfidenceTierParity_CoverageIdentityAdmitsOnlyWhatItExplains(t *testing.T) {
 	repos, prs := 54.54545454545454, 100.0
-	base := homeCoverageBody(t, repos, prs, 74.3103448275862, 76.28526645768025)
-	cand := homeCoverageBody(t, repos, prs, 74.17677642980935, 76.2407436584213)
+	mean := func(issues float64) float64 { return (repos + prs + issues) / 3 }
+	base := homeCoverageBody(t, repos, prs, 74.3103448275862, mean(74.3103448275862))
+	cand := homeCoverageBody(t, repos, prs, 74.17677642980935, mean(74.17677642980935))
 
-	got := Compare(base, cand, homeConfidenceTierParity)
-	if got.DifferencesOutsideBaselineDefect != 0 || len(got.Findings) != 2 {
-		t.Fatalf("outside=%d findings=%d, want 0 and 2: %+v", got.DifferencesOutsideBaselineDefect, len(got.Findings), got.Findings)
+	cases := []struct {
+		name        string
+		base, cand  Snapshot
+		wantOutside bool
+	}{
+		{"production pair", base, cand, false},
+		{"coverage_pct moved with all three ratios equal", base, homeCoverageBody(t, repos, prs, 74.3103448275862, 99), true},
+		{"coverage_pct is not the mean of its own ratios", base, homeCoverageBody(t, repos, prs, 74.17677642980935, 76.0), true},
+		{"repos ratio differs", homeCoverageBody(t, 50.0, prs, 74.3103448275862, (50.0+prs+74.3103448275862)/3), cand, true},
+		{"a superseded ratio moved but coverage_pct did not follow", base, homeCoverageBody(t, repos, prs, 74.17677642980935, mean(74.3103448275862)), true},
+		{"baseline's own mean is off", homeCoverageBody(t, repos, prs, 74.3103448275862, 70), cand, true},
 	}
-
-	skewed := Compare(homeCoverageBody(t, 50.0, prs, 74.3103448275862, 76.2), cand, homeConfidenceTierParity)
-	if skewed.DifferencesOutsideBaselineDefect == 0 {
-		t.Fatalf("a repos_covered_pct difference was admitted: %+v", skewed.Findings)
+	for _, c := range cases {
+		got := Compare(c.base, c.cand, homeConfidenceTierParity)
+		if c.wantOutside != (got.DifferencesOutsideBaselineDefect > 0) {
+			t.Errorf("%s: outside=%d, wantOutside=%v: %+v", c.name, got.DifferencesOutsideBaselineDefect, c.wantOutside, got.Findings)
+		}
 	}
 }

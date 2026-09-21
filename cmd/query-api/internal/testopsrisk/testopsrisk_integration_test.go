@@ -199,6 +199,43 @@ func TestRealClickHouse_TestopsRiskQuadrantLatestByDay(t *testing.T) {
 	}
 }
 
+// A factor missing from the latest row's factors_json (absent key, JSON null)
+// reads as absent, never as 0; a present 0 stays 0, and an older row's value
+// never stands in for the latest row's missing one.
+func TestRealClickHouse_TestopsRiskQuadrantMissingFactorIsNull(t *testing.T) {
+	ctx, conn, client := startStore(t)
+	for i, r := range []string{rA, rB, rC} {
+		exec(t, ctx, conn, `INSERT INTO repos (id, repo, org_id, created_at, last_synced) SELECT '%s', 'acme/r%d', 'org-1', now64(3), now64(3)`, r, i)
+	}
+	// rA: latest row has neither factor, an older row has both -> both absent
+	conf(t, ctx, conn, "org-1", rA, "2026-01-01", 0.1, `{"pipeline_success_rate": 0.9, "test_pass_rate": 0.8}`, "2026-01-01 01:00:00")
+	conf(t, ctx, conn, "org-1", rA, "2026-01-02", 0.2, `{}`, "2026-01-02 01:00:00")
+	// rB: one factor present as 0, the other JSON null -> 0 and absent
+	conf(t, ctx, conn, "org-1", rB, "2026-01-01", 0.3, `{"pipeline_success_rate": 0, "test_pass_rate": null}`, "2026-01-01 01:00:00")
+	// rC: both present
+	conf(t, ctx, conn, "org-1", rC, "2026-01-01", 0.4, `{"pipeline_success_rate": 0.7, "test_pass_rate": 0.6}`, "2026-01-01 01:00:00")
+	got, err := Resolve(ctx, client, "org-1", model.TestOpsRiskInput{StartDate: date("2026-01-01"), EndDate: date("2026-01-31")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.QuadrantData) != 3 {
+		t.Fatalf("quadrant %#v", got.QuadrantData)
+	}
+	byID := map[string]model.TestOpsRiskQuadrantPoint{}
+	for _, q := range got.QuadrantData {
+		byID[q.ID] = q
+	}
+	if q := byID["acme/r0"]; q.PipelineSuccessRate != nil || q.TestPassRate != nil {
+		t.Errorf("missing factors must be absent: %#v", q)
+	}
+	if q := byID["acme/r1"]; q.PipelineSuccessRate == nil || *q.PipelineSuccessRate != 0 || q.TestPassRate != nil {
+		t.Errorf("present 0 must stay 0, JSON null must be absent: %#v", q)
+	}
+	if q := byID["acme/r2"]; q.PipelineSuccessRate == nil || *q.PipelineSuccessRate != 0.7 || q.TestPassRate == nil || *q.TestPassRate != 0.6 {
+		t.Errorf("present factors unchanged: %#v", q)
+	}
+}
+
 // A stability row on the range's last day is included.
 func TestRealClickHouse_TestopsRiskRangeEndIsInclusiveForEveryTable(t *testing.T) {
 	ctx, conn, client := startStore(t)

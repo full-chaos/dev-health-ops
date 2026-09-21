@@ -90,8 +90,12 @@ type statusReportOperation struct {
 	StaleDigests               []string `json:"stale_digests"`
 	UnreachableDocumentDigests []string `json:"unreachable_document_digests"`
 	Proven                     bool     `json:"proven"`
-	// VenueProof is "admin_only" or "no_production_data" for a live row
-	// enabled from a venue receipt (not store-proven), else "".
+	// NamedLimit is true for a live row enabled from the go-served ledger's
+	// written limit (not store-proven).
+	NamedLimit bool `json:"named_limit"`
+	// VenueProof is "admin_only" or "no_production_data" for a live row a
+	// venue receipt admitted before that path was retired (not
+	// store-proven), else "".
 	VenueProof string `json:"venue_proof"`
 	// A plain `bool` can only ever say "yes" or "no",
 	// so the moment reachability genuinely CANNOT be told (the go plane
@@ -504,6 +508,7 @@ func toReportOperation(status goapiproof.OperationStatus, deployedDigests map[st
 		PendingDigests:             status.PendingDigests,
 		UnreachableDocumentDigests: status.UnreachableDocumentDigests,
 		Proven:                     status.Proven,
+		NamedLimit:                 status.NamedLimit,
 		VenueProof:                 status.VenueProof,
 	}
 	if reported.StaleDigests == nil {
@@ -669,10 +674,15 @@ func proofWord(operation statusReportOperation) string {
 		proof = "UNPROVEN"
 		if operation.Proven {
 			proof = "ok"
+		} else if operation.NamedLimit {
+			// Its own word, never UNPROVEN and never ok: a row the ledger's
+			// written limit admitted is a different state from one nothing
+			// admitted, and a ladder keyed on UNPROVEN must neither trip on
+			// nor hide behind it.
+			proof = "NAMED-LIMIT"
 		} else if operation.VenueProof != "" {
-			// Its own word, never UNPROVEN: a waiver row and a venue row
-			// are different states and a ladder keyed on UNPROVEN must
-			// neither trip on nor hide behind the other.
+			// A row the retired venue path wrote keeps its own word until
+			// the next `enable` rewrites it.
 			proof = "VENUE-PROVEN(" + operation.VenueProof + ")"
 		}
 		// A proof receipt names a build served at a

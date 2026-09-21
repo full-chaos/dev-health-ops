@@ -332,21 +332,13 @@ def test_disable_takes_no_query_api_url() -> None:
     assert "_fetch_go_plane_registry" not in source
 
 
-def test_enable_records_the_acknowledgement_durably() -> None:
-    """An acknowledged-unproven row carries its reason on the ROW.
-
-    Before this, the only record was a WARNING at the moment it happened:
-    on 2026-09-07 fifteen operations were enabled on an explicit ruling and
-    that ruling lived in a chat message.
-    """
+def test_enable_review_evidence_is_the_operators_words() -> None:
+    """A row's review_evidence is what the operator supplied (behind the
+    receipt's own evidence when one authorized it); nothing marks a row as
+    waived, because `enable` has no waiver."""
     ns = argparse.Namespace(review_evidence="chris ruled it, 09:14Z")
-    unproven = go_api_cli._enable_review_evidence(ns, unproven=True)
-    assert unproven == "ACKNOWLEDGED-UNPROVEN: chris ruled it, 09:14Z"
-
-    proven = go_api_cli._enable_review_evidence(ns, unproven=False)
-    assert proven == "chris ruled it, 09:14Z"
-
-    blank = go_api_cli._enable_review_evidence(
-        argparse.Namespace(review_evidence=None), unproven=True
+    assert go_api_cli._enable_review_evidence(ns) == "chris ruled it, 09:14Z"
+    assert (
+        go_api_cli._enable_review_evidence(argparse.Namespace(review_evidence=None))
+        is None
     )
-    assert blank == "ACKNOWLEDGED-UNPROVEN: no reason given"

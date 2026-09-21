@@ -329,7 +329,7 @@ dev-hops go-api routing enable \
   --mode canary
 
 # 4. Confirm every operation reads MATCH, and none reads UNPROVEN
-#    unless you deliberately acknowledged that.
+#    unless the go-served ledger names a written limit for it.
 dev-hops go-api routing status
 ```
 
@@ -340,9 +340,9 @@ or when no admissible proof run exists for the candidate build: a
 `deployed_executed` run bound to the serving build per request that ended
 in `match`, or in a `mismatch` whose every difference is cited against a
 declared Python baseline defect (primary also requires the edge route).
-The last of these is waivable with `--acknowledge-unproven`, which logs
-one warning per row and makes `status` report those rows as `UNPROVEN` for
-as long as they are in force.
+Nothing waives the last of these on the command line: the Python verb has no
+waiver flag. The Go verb (below) admits an operation without a proof run only
+through a written limit in the go-served ledger.
 
 On success `enable` names, for every proven row, the receipt that
 authorized it -- its id, terminal state, citations (for a cited mismatch),
@@ -363,7 +363,7 @@ on `dev-hops go-api routing status` and on the migration-status page, and
 sound `match`. Nothing is lost from the table; the old receipts stay as
 history. Re-run `go-api-prove` at the deployed build (JOB 6's re-prove step
 does exactly this) and the new receipts, bound per request, restore the
-proofs. Do not `--acknowledge-unproven` around it.
+proofs.
 
 ### The same procedure with the Go verbs (CHAOS-5486)
 

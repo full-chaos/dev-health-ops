@@ -346,7 +346,7 @@ func TestSameCarriedStateSeparatesNullFromAnEmptyEligibleOrgs(t *testing.T) {
 // nicety.
 func TestCarriedEvidenceKeepsTheSourceReasonAndItsOwnPrefixes(t *testing.T) {
 	at := time.Date(2026, 9, 20, 5, 27, 24, 0, time.UTC)
-	source := UnprovenEvidencePrefix + "chris ruled it"
+	source := NamedLimitEvidence("the ledger reason", "chris ruled it")
 	rendered := CarriedEvidence(carryLiveDigest, carryBuild, at, source)
 
 	if !strings.HasPrefix(rendered, CarriedEvidencePrefix) {
@@ -358,10 +358,10 @@ func TestCarriedEvidenceKeepsTheSourceReasonAndItsOwnPrefixes(t *testing.T) {
 	if !strings.Contains(rendered, "2026-09-20T05:27:24Z") {
 		t.Fatalf("evidence %q must carry the instant it was written, in UTC", rendered)
 	}
-	// An acknowledged-unproven enablement stays acknowledged-unproven at
-	// the new digest. Losing that prefix would make a row that nobody
-	// proved read like one that was.
-	if !strings.Contains(rendered, UnprovenEvidencePrefix+"chris ruled it") {
+	// A named-limit enablement stays a named-limit enablement at the new
+	// digest. Losing that prefix would make a row that nobody proved read
+	// like one that was.
+	if !strings.Contains(rendered, source) {
 		t.Fatalf("evidence %q dropped the source row's own reason or its prefix", rendered)
 	}
 }

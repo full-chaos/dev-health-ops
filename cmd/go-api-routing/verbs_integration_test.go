@@ -7,7 +7,7 @@ package main
 //
 // This file exists because of r1's P3. Four mutations at real call sites
 // -- the DSN-leaking flag default restored inside runEnable, the
-// schema-agreement preflight disabled, the enabled_unproven WARNING
+// schema-agreement preflight disabled, the enabled_named_limit WARNING
 // suppressed, and an ORDER BY tiebreak dropped while its phrase stayed in
 // a SQL comment -- ALL survived both package suites at 53.2% command
 // coverage, because nothing in the suite ever ran a verb end to end. Two
@@ -41,8 +41,13 @@ import (
 )
 
 const (
-	verbTestBuild     = "b18e56fa79cfe20ce0f75df148144b832d92be36"
-	verbTestOperation = "flowMatrix"
+	verbTestBuild = "b18e56fa79cfe20ce0f75df148144b832d92be36"
+	// verbTestOperation is an operation the compiled go-served ledger names
+	// a written limit for, so `enable` may write its row with no proof run.
+	verbTestOperation = "featureFlagTimeseries"
+	// verbTestUnlimitedOperation is one the ledger names no limit for: only
+	// a proof run admits it.
+	verbTestUnlimitedOperation = "flowMatrix"
 	// verbTestBearer is a syntactically valid effective-principal envelope
 	// -- three base64url segments carrying verbTestPrincipalID as `sub` --
 	// so CHAOS-5505's audit row can be written for a verb this suite
@@ -207,7 +212,7 @@ func TestEnableRefusesWhenThePlanesDisagreeOnTheSchemaDigest(t *testing.T) {
 	// Without this half, deleting the rows the guard protects would also
 	// pass the assertion above.
 	agreeing := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: digest})
-	_, _, err = captureVerb(t, enableArgs(agreeing, dsn, catalogPath, "-acknowledge-unproven", "-dry-run")...)
+	_, _, err = captureVerb(t, enableArgs(agreeing, dsn, catalogPath, "-dry-run")...)
 	if err != nil {
 		t.Fatalf("enable refused against an AGREEING process: %v", err)
 	}
@@ -225,7 +230,7 @@ func TestEnableDryRunNeverWritesARow(t *testing.T) {
 	t.Setenv(bearerEnvVar, verbTestBearer)
 	server := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: digest})
 
-	out, _, err := captureVerb(t, enableArgs(server, dsn, catalogPath, "-acknowledge-unproven", "-dry-run")...)
+	out, _, err := captureVerb(t, enableArgs(server, dsn, catalogPath, "-dry-run")...)
 	if err != nil {
 		t.Fatalf("enable -dry-run: %v", err)
 	}
@@ -235,56 +240,59 @@ func TestEnableDryRunNeverWritesARow(t *testing.T) {
 	assertNoRows(t, dsn)
 }
 
-// The enabled_unproven WARNING is emitted, per row, at its real call site.
+// The enabled_named_limit WARNING is emitted, per row, at its real call site.
 //
 // r1's M11 suppressed it and both suites stayed green. It is the only
 // signal at the moment of the decision that an operator turned an
-// operation on with no deployed-executed proof; `status` reports UNPROVEN
+// operation on with no deployed-executed proof; `status` reports NAMED-LIMIT
 // afterwards, but nothing else says it HAPPENED.
 func TestEnableWarnsOnEveryUnprovenRowItActuallyWrites(t *testing.T) {
 	_, dsn := startVerbPostgres(t)
 	digest := "1111111111111111111111111111111111111111111111111111111111111111"
-	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
+	otherDigest := "2222222222222222222222222222222222222222222222222222222222222222"
+	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest, verbTestUnlimitedOperation: otherDigest})
 	t.Setenv(bearerEnvVar, verbTestBearer)
-	server := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: digest})
+	server := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: digest, verbTestUnlimitedOperation: otherDigest})
 
-	// Without the acknowledgement, an unproven build is REFUSED outright.
-	_, _, err := captureVerb(t, enableArgs(server, dsn, catalogPath)...)
+	// An operation the ledger names no limit for, and that has no proof run
+	// for this build, is REFUSED outright.
+	_, _, err := captureVerb(t, enableArgs(server, dsn, catalogPath, "-operations", verbTestUnlimitedOperation)...)
 	if err == nil {
-		t.Fatal("enable wrote a row for a build with no deployed_executed proof and no acknowledgement")
+		t.Fatal("enable wrote a row for a build with no deployed_executed proof and no ledger limit")
 	}
 	assertNoRows(t, dsn)
 
-	// With it, the row is written AND the warning names the operation.
-	out, errOut, err := captureVerb(t, enableArgs(server, dsn, catalogPath, "-acknowledge-unproven")...)
+	// An operation the ledger names a limit for is written AND the warning
+	// names it.
+	out, errOut, err := captureVerb(t, enableArgs(server, dsn, catalogPath)...)
 	if err != nil {
-		t.Fatalf("enable -acknowledge-unproven: %v", err)
+		t.Fatalf("enable of a ledger-limited operation: %v", err)
 	}
 	for _, want := range []string{
 		"WARNING:",
-		"go_api_routing.enabled_unproven",
+		"go_api_routing.enabled_named_limit",
 		"operation=" + verbTestOperation,
 		"stage_evidence=none",
 		"candidate_build=" + verbTestBuild,
 		"dry_run=false",
 	} {
 		if !strings.Contains(errOut, want) {
-			t.Fatalf("the unproven warning is missing %q -- an acknowledged-unproven enablement left no signal at the moment it happened.\nstderr:\n%s", want, errOut)
+			t.Fatalf("the unproven warning is missing %q -- a named-limit enablement left no signal at the moment it happened.\nstderr:\n%s", want, errOut)
 		}
 	}
-	if !strings.Contains(out, "(UNPROVEN)") {
-		t.Fatalf("the report does not mark the row UNPROVEN:\n%s", out)
+	if !strings.Contains(out, "(NAMED-LIMIT ") {
+		t.Fatalf("the report does not mark the row NAMED-LIMIT:\n%s", out)
 	}
 
-	// ...and the acknowledgement is DURABLE, not merely logged: the row's
-	// own review evidence carries it, which is what `status` reads to keep
-	// saying UNPROVEN for as long as the row is in force.
+	// ...and the marker is DURABLE, not merely logged: the row's own review
+	// evidence carries it, which is what `status` reads to keep saying
+	// NAMED-LIMIT for as long as the row is in force.
 	var evidence string
 	if err := queryRow(t, dsn, `SELECT review_evidence FROM go_api_routing_state`, &evidence); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(evidence, "ACKNOWLEDGED-UNPROVEN: ") {
-		t.Fatalf("review_evidence = %q, want the ACKNOWLEDGED-UNPROVEN prefix", evidence)
+	if !goapiproof.HasNamedLimitEvidence(evidence) {
+		t.Fatalf("review_evidence = %q, want the NAMED-LIMIT prefix", evidence)
 	}
 }
 
@@ -443,7 +451,7 @@ func TestEnableExpectBuildCrossCheckRefusesAMismatch(t *testing.T) {
 
 	// The SAME build passed as -expect-build must not be refused: this is
 	// a cross-check, not an extra unconditional refusal.
-	_, _, err = captureVerb(t, enableArgs(server, dsn, catalogPath, "-expect-build", verbTestBuild, "-acknowledge-unproven", "-dry-run")...)
+	_, _, err = captureVerb(t, enableArgs(server, dsn, catalogPath, "-expect-build", verbTestBuild, "-dry-run")...)
 	if err != nil {
 		t.Fatalf("a MATCHING -expect-build must not be refused: %v", err)
 	}
@@ -456,7 +464,7 @@ func TestEnableExpectBuildCrossCheckRefusesAMismatch(t *testing.T) {
 // the first.
 func TestEnableWarnsOnEveryUnprovenRowAcrossMultipleOperations(t *testing.T) {
 	_, dsn := startVerbPostgres(t)
-	const secondOperation = "hotspots"
+	const secondOperation = "connectorsDataHealth"
 	digestA := "7777777777777777777777777777777777777777777777777777777777777777"
 	digestB := "8888888888888888888888888888888888888888888888888888888888888888"
 	catalogPath := writeCatalog(t, map[string]string{
@@ -470,10 +478,9 @@ func TestEnableWarnsOnEveryUnprovenRowAcrossMultipleOperations(t *testing.T) {
 	})
 
 	out, errOut, err := captureVerb(t, enableArgs(server, dsn, catalogPath,
-		"-operations", verbTestOperation+","+secondOperation,
-		"-acknowledge-unproven")...)
+		"-operations", verbTestOperation+","+secondOperation)...)
 	if err != nil {
-		t.Fatalf("enable -acknowledge-unproven: %v", err)
+		t.Fatalf("enable of ledger-limited operations: %v", err)
 	}
 	for _, op := range []string{verbTestOperation, secondOperation} {
 		want := "operation=" + op
@@ -481,8 +488,8 @@ func TestEnableWarnsOnEveryUnprovenRowAcrossMultipleOperations(t *testing.T) {
 			t.Fatalf("the unproven warning for %s is missing -- the warning loop must not stop after the first operation.\nstderr:\n%s", op, errOut)
 		}
 	}
-	if got := strings.Count(out, "(UNPROVEN)"); got != 2 {
-		t.Fatalf("want both rows reported UNPROVEN, got %d marker(s):\n%s", got, out)
+	if got := strings.Count(out, "(NAMED-LIMIT "); got != 2 {
+		t.Fatalf("want both rows reported NAMED-LIMIT, got %d marker(s):\n%s", got, out)
 	}
 }
 
@@ -502,7 +509,7 @@ func TestRepointExpectBuildCrossCheckRefusesAMismatch(t *testing.T) {
 
 	// repoint refuses on an empty registry (ErrRepointNoRows), so seed one
 	// row first -- enable is the fixture's own way to do that.
-	if _, _, err := captureVerb(t, enableArgs(server, dsn, catalogPath, "-acknowledge-unproven")...); err != nil {
+	if _, _, err := captureVerb(t, enableArgs(server, dsn, catalogPath)...); err != nil {
 		t.Fatalf("seeding enable: %v", err)
 	}
 
@@ -549,9 +556,9 @@ func TestRepointExpectBuildCrossCheckRefusesAMismatch(t *testing.T) {
 func TestStatusTextMarksAGenuinelyProvenRowOkNotUnproven(t *testing.T) {
 	pool, dsn := startVerbPostgres(t)
 	digest := "8888888888888888888888888888888888888888888888888888888888888887"
-	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
+	catalogPath := writeCatalog(t, map[string]string{verbTestUnlimitedOperation: digest})
 	t.Setenv(bearerEnvVar, verbTestBearer)
-	server := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: digest})
+	server := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestUnlimitedOperation: digest})
 
 	ctx := context.Background()
 	// Register the candidate build directly (enable's own preflight would
@@ -560,13 +567,13 @@ func TestStatusTextMarksAGenuinelyProvenRowOkNotUnproven(t *testing.T) {
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO public.go_api_candidate_build (schema_digest, document_digest, selected_operation, candidate_build)
 		VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`,
-		localSchemaDigest(), digest, verbTestOperation, verbTestBuild); err != nil {
+		localSchemaDigest(), digest, verbTestUnlimitedOperation, verbTestBuild); err != nil {
 		t.Fatalf("register candidate build: %v", err)
 	}
 	if _, err := goapiproof.Write(ctx, pool, goapiproof.Receipt{
 		SchemaDigest:      localSchemaDigest(),
 		DocumentDigest:    digest,
-		SelectedOperation: verbTestOperation,
+		SelectedOperation: verbTestUnlimitedOperation,
 		CandidateBuild:    verbTestBuild,
 		RequestIdentity:   "status-text-proven-row",
 		Stage:             goapiproof.EnablementProofStage,
@@ -579,11 +586,11 @@ func TestStatusTextMarksAGenuinelyProvenRowOkNotUnproven(t *testing.T) {
 		t.Fatalf("write receipt: %v", err)
 	}
 
-	// enable WITHOUT -acknowledge-unproven: the proof above must be what
+	// enable for an operation the ledger names no limit for: the proof above must be what
 	// lets this succeed, proving the row really is proven, not just
 	// asserted to be.
-	if _, _, err := captureVerb(t, enableArgs(server, dsn, catalogPath)...); err != nil {
-		t.Fatalf("enable a genuinely proven operation must succeed without acknowledgement: %v", err)
+	if _, _, err := captureVerb(t, enableArgs(server, dsn, catalogPath, "-operations", verbTestUnlimitedOperation)...); err != nil {
+		t.Fatalf("enable a genuinely proven operation must succeed: %v", err)
 	}
 
 	out, _, err := captureVerb(t, "status", "-registry-url", server.URL+"/registry", "-postgres-uri", dsn, "-catalog", catalogPath)
@@ -591,7 +598,7 @@ func TestStatusTextMarksAGenuinelyProvenRowOkNotUnproven(t *testing.T) {
 		t.Fatalf("status must never refuse: %v", err)
 	}
 	for _, line := range strings.Split(out, "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), verbTestOperation) {
+		if strings.HasPrefix(strings.TrimSpace(line), verbTestUnlimitedOperation) {
 			if strings.Contains(line, "UNPROVEN") {
 				t.Fatalf("a genuinely proven row printed UNPROVEN in the text report:\n%s", out)
 			}
@@ -601,7 +608,7 @@ func TestStatusTextMarksAGenuinelyProvenRowOkNotUnproven(t *testing.T) {
 			return
 		}
 	}
-	t.Fatalf("no line for %s found in the text report:\n%s", verbTestOperation, out)
+	t.Fatalf("no line for %s found in the text report:\n%s", verbTestUnlimitedOperation, out)
 }
 
 func assertNoRows(t *testing.T, dsn string) {
@@ -834,7 +841,7 @@ func TestRepointRefusesARegistryThatRegistersNothingAtAll(t *testing.T) {
 	// against the registry it actually reads, not from an incidental
 	// empty-table refusal.
 	seedServer := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: digest})
-	if _, _, err := captureVerb(t, enableArgs(seedServer, dsn, catalogPath, "-acknowledge-unproven")...); err != nil {
+	if _, _, err := captureVerb(t, enableArgs(seedServer, dsn, catalogPath)...); err != nil {
 		t.Fatalf("seeding enable: %v", err)
 	}
 	emptyServer := startQueryAPI(t, localSchemaDigest(), map[string]string{})
@@ -1102,7 +1109,6 @@ func TestEnableDerivesBothEndpointsFromTheEnvVarAloneNoFlags(t *testing.T) {
 		"-catalog", catalogPath,
 		"-recorded-by", "lane-routing-verbs",
 		"-review-evidence", "r6 P2 killer: env-var-only endpoint resolution",
-		"-acknowledge-unproven",
 	)
 	if err != nil {
 		t.Fatalf("enable with only GO_API_QUERY_API_URL set must succeed: %v", err)
@@ -1479,12 +1485,12 @@ func TestEnableLogNamesTheLiveRowsDocumentDigestNotADeadSiblings(t *testing.T) {
 		t.Fatalf("seed dead row: %v", err)
 	}
 
-	_, errOut, err := captureVerb(t, enableArgs(server, dsn, catalogPath, "-acknowledge-unproven")...)
+	_, errOut, err := captureVerb(t, enableArgs(server, dsn, catalogPath)...)
 	if err != nil {
 		t.Fatalf("enable: %v", err)
 	}
 	// Anchored to `recorded_by=` immediately after, the `go_api_routing.enabled`
-	// line's own shape -- the `enabled_unproven` WARNING line (not exercised
+	// line's own shape -- the `enabled_named_limit` WARNING line (not exercised
 	// here; this row is proven) has `document_digest=` followed by `mode=`
 	// instead, so this cannot pass by accident via the sibling line.
 	if !strings.Contains(errOut, "document_digest="+liveDigest+" recorded_by=") {
@@ -2050,7 +2056,7 @@ func TestEnableExitsOneOnAGenuineServerSideWriteFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, _, err := captureVerb(t, enableArgs(server, dsn, catalogPath, "-acknowledge-unproven")...)
+	_, _, err := captureVerb(t, enableArgs(server, dsn, catalogPath)...)
 	if err == nil {
 		t.Fatal("enable must refuse when the database itself raises inside the write")
 	}
@@ -2073,7 +2079,7 @@ func TestEnableAndRepointEmitEndpointAndPerRowStructuredLines(t *testing.T) {
 	t.Setenv(bearerEnvVar, verbTestBearer)
 	server := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: digest})
 
-	enableOut, enableErrOut, err := captureVerb(t, enableArgs(server, dsn, catalogPath, "-acknowledge-unproven")...)
+	enableOut, enableErrOut, err := captureVerb(t, enableArgs(server, dsn, catalogPath)...)
 	if err != nil {
 		t.Fatalf("enable: %v", err)
 	}
@@ -2270,7 +2276,7 @@ func TestEnableEndpointLineDistinguishesTwoLocalProcessesByPort(t *testing.T) {
 	t.Setenv(bearerEnvVar, verbTestBearer)
 	server := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: digest})
 
-	out, _, err := captureVerb(t, enableArgs(server, dsn, catalogPath, "-acknowledge-unproven")...)
+	out, _, err := captureVerb(t, enableArgs(server, dsn, catalogPath)...)
 	if err != nil {
 		t.Fatalf("enable: %v", err)
 	}
@@ -2380,7 +2386,7 @@ func TestEnableBeforeStateLogNamesTheCorrectRowNotADeadOne(t *testing.T) {
 		t.Fatalf("seed dead routing row: %v", err)
 	}
 
-	_, errOut, err := captureVerb(t, enableArgs(server, dsn, catalogPath, "-acknowledge-unproven")...)
+	_, errOut, err := captureVerb(t, enableArgs(server, dsn, catalogPath)...)
 	if err != nil {
 		t.Fatalf("enable: %v", err)
 	}

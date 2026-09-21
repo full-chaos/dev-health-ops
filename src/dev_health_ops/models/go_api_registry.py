@@ -137,10 +137,9 @@ class RoutingState(Base):
     #:
     #: These exist because a routing row is a decision, and a decision with
     #: no durable "who/why" is unreadable six weeks later -- the same
-    #: complaint that produced the UNPROVEN marker in `status`. On
-    #: 2026-09-07 an operator enabled 15 operations with
-    #: `--acknowledge-unproven` on an explicit ruling, and the ruling had
-    #: nowhere to live but a chat message.
+    #: complaint that produced the UNPROVEN marker in `status`. Rows enabled
+    #: without a proof run once carried their reason nowhere but a chat
+    #: message.
     review_evidence: Mapped[str | None] = mapped_column(Text, nullable=True)
     recorded_by: Mapped[str | None] = mapped_column(Text, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
@@ -226,10 +225,9 @@ class ProofRun(Base):
     #:
     #: These exist because a routing row is a decision, and a decision with
     #: no durable "who/why" is unreadable six weeks later -- the same
-    #: complaint that produced the UNPROVEN marker in `status`. On
-    #: 2026-09-07 an operator enabled 15 operations with
-    #: `--acknowledge-unproven` on an explicit ruling, and the ruling had
-    #: nowhere to live but a chat message.
+    #: complaint that produced the UNPROVEN marker in `status`. Rows enabled
+    #: without a proof run once carried their reason nowhere but a chat
+    #: message.
     review_evidence: Mapped[str | None] = mapped_column(Text, nullable=True)
     recorded_by: Mapped[str | None] = mapped_column(Text, nullable=True)
     #: Which route executed the candidate leg (alembic 0128, CHAOS-5425):

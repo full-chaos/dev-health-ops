@@ -76,9 +76,6 @@ from .resolvers.dev_status_change import (
     resolve_dev_status_snapshot,
 )
 from .resolvers.dev_work_graph import resolve_dev_work_graph_neighbors
-from .resolvers.product_telemetry import (
-    resolve_product_telemetry_platform_dashboard,
-)
 from .resolvers.reports import (
     CloneSavedReportInput,
     CreateSavedReportInput,
@@ -370,8 +367,7 @@ class Query:
         info: Info,
         input: ProductTelemetryDashboardInput,
     ) -> ProductTelemetryPlatformDashboardType:
-        context = get_context(info)
-        return await resolve_product_telemetry_platform_dashboard(context, input)
+        _raise_served_by_query_api("productTelemetryPlatformDashboard", "", info)
 
     @strawberry.field(description="Get home dashboard metrics")
     async def home(

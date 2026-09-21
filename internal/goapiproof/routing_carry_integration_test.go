@@ -118,7 +118,7 @@ func TestCarryPreservesEveryReachableRowAndTouchesNothingAtTheLiveDigest(t *test
 	seedCarryRow(t, ctx, pool, carryIntegrationLiveDigest, CarryRow{
 		Operation: "hotspots", DocumentDigest: testDocumentDigest2, Mode: "primary",
 		Build: verbsRunningBuild, Owner: "go", RolloutPercentage: 50, EligibleOrgs: &orgs,
-		ReviewEvidence: UnprovenEvidencePrefix + "chris ruled it",
+		ReviewEvidence: NamedLimitEvidence("the ledger reason", "chris ruled it"),
 	})
 	before := rowsAtDigest(t, ctx, pool, carryIntegrationLiveDigest)
 

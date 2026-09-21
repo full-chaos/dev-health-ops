@@ -54,9 +54,10 @@ const (
 //
 // Proven is orthogonal to DigestState: a row can be live and reachable
 // while nothing ever proved the deployed build serves it. Rendering that
-// as UNPROVEN is what keeps an acknowledged-unproven enablement visible
-// for as long as it is in force, not just in the log line written the
-// moment it happened.
+// as UNPROVEN (or NAMED-LIMIT, when the row says the ledger's written limit
+// admitted it) is what keeps an enablement with no proof visible for as
+// long as it is in force, not just in the log line written the moment it
+// happened.
 type OperationStatus struct {
 	Operation      string
 	DocumentDigest string
@@ -72,11 +73,14 @@ type OperationStatus struct {
 
 	StaleDigests []string
 	Proven       bool
-	// VenueProof is the venue class (VenueClassAdmin/VenueClassNoData) a
-	// NOT store-proven live row's own review_evidence claims; empty
-	// otherwise. It is deliberately not Proven: a venue row is admitted on
-	// an operator-supplied receipt, and a waiver row (ACKNOWLEDGED-UNPROVEN)
-	// must stay a different state from it.
+	// NamedLimit is true for a NOT store-proven live row whose own
+	// review_evidence says the go-served ledger's written limit admitted it.
+	// It is deliberately not Proven.
+	NamedLimit bool
+	// VenueProof is the class (VenueClassAdmin/VenueClassNoData) a NOT
+	// store-proven live row's review_evidence claims when a venue receipt
+	// written by the retired venue path admitted it; empty otherwise. It is
+	// read only, so such a row keeps its own word until `enable` rewrites it.
 	VenueProof string
 
 	// PendingDigests names rows this operation has at the schema digest
@@ -351,7 +355,8 @@ func RoutingStatusRows(ctx context.Context, db Querier, liveSchemaDigest, pendin
 			status.RecordedBy = row.recordedBy
 			status.Proven = proven[operation]
 			if !status.Proven {
-				status.VenueProof = VenueEvidenceClass(row.reviewEvidence)
+				status.NamedLimit = HasNamedLimitEvidence(row.reviewEvidence)
+				status.VenueProof = LegacyVenueEvidenceClass(row.reviewEvidence)
 			}
 		case len(stale) == 0 && len(unreachable[operation]) == 0 && len(pending) > 0:
 			// ONLY pending rows: nothing is live, nothing is dead, and

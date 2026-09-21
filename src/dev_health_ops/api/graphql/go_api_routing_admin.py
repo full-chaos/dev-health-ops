@@ -73,7 +73,7 @@ __all__ = [
 ]
 
 #: The proof a routing row must have behind it before ``enable`` will turn
-#: an operation on without ``--acknowledge-unproven``. Plan section 5's
+#: an operation on. Plan section 5's
 #: five-stage gate runs dual_run -> deployed_executed -> shadow -> canary;
 #: ``deployed_executed`` is the first stage that proves THIS candidate
 #: build actually served the operation through real ingress, auth, parse,

@@ -97,6 +97,53 @@ func TestEnableRefusesAnOperationWithNoProofForThisBuild(t *testing.T) {
 	}
 }
 
+// A written limit admits only the operation it names: enabling one limited
+// and one unlimited operation together is refused as a whole and writes
+// nothing, and the refusal names only the unlimited one.
+func TestEnableWithALedgerLimitStillRefusesAnUnlimitedOperationAndWritesNothing(t *testing.T) {
+	ctx := t.Context()
+	pool := startAuditedRegistryPostgres(t)
+
+	request := enableRequest("featureFlags", "hotspots")
+	request.DocumentDigest["hotspots"] = "1111111111111111111111111111111111111111111111111111111111111111"
+	request.Ledger = ledgerNamingLimits(t, "featureFlags")
+	_, err := Enable(ctx, pool, request)
+	if !errors.Is(err, ErrEnableUnproven) {
+		t.Fatalf("Enable = %v, want ErrEnableUnproven", err)
+	}
+	if !strings.Contains(err.Error(), "[hotspots]") || strings.Contains(err.Error(), "featureFlags") {
+		t.Fatalf("the refusal must name only the unlimited operation: %v", err)
+	}
+	var rows int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM go_api_routing_state`).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 0 {
+		t.Fatalf("a refused enable wrote %d row(s) -- it must write NOTHING", rows)
+	}
+}
+
+// A proven operation is never marked named-limit, even when the ledger also
+// names a limit for it: the proof run is what admitted it.
+func TestEnableOfAProvenOperationIgnoresItsLedgerLimit(t *testing.T) {
+	ctx := t.Context()
+	pool := startAuditedRegistryPostgres(t)
+	seedProof(t, ctx, pool, "featureFlags", testDocumentDigest, verbsRunningBuild, EnablementProofStage, EnablementProofTerminalState)
+
+	request := enableRequest("featureFlags")
+	request.Ledger = ledgerNamingLimits(t, "featureFlags")
+	outcomes, err := Enable(ctx, pool, request)
+	if err != nil {
+		t.Fatalf("Enable: %v", err)
+	}
+	if len(outcomes) != 1 || !outcomes[0].Proven || outcomes[0].NamedLimit != "" {
+		t.Fatalf("outcomes = %+v, want one PROVEN outcome with no named limit", outcomes)
+	}
+	if _, _, evidence, _, _ := readRow(t, ctx, pool, "featureFlags"); HasNamedLimitEvidence(evidence) {
+		t.Fatalf("a proven row carries the named-limit prefix: %q", evidence)
+	}
+}
+
 // A receipt for a DIFFERENT build, or in a non-terminal-match state, is
 // not proof. Plan §8.3: a proof is evidence for exactly one 4-column key
 // and is never carried forward across any of the four changing.
@@ -142,24 +189,23 @@ func TestEnableWritesTheProvenRowWithItsProvenance(t *testing.T) {
 	if recordedBy != "lane-routing-verbs" || evidence != "CHAOS-5486 enable" {
 		t.Fatalf("provenance not recorded: recorded_by=%q review_evidence=%q", recordedBy, evidence)
 	}
-	// A proven row must NOT carry the acknowledged prefix -- the marker is
-	// what makes an unproven enablement findable, and applying it to
+	// A proven row must NOT carry the named-limit prefix -- the marker is
+	// what makes an enablement with no proof findable, and applying it to
 	// everything would make it mean nothing.
-	if got := evidence; len(got) >= len(UnprovenEvidencePrefix) && got[:len(UnprovenEvidencePrefix)] == UnprovenEvidencePrefix {
-		t.Fatalf("a PROVEN row must not be marked ACKNOWLEDGED-UNPROVEN: %q", got)
+	if HasNamedLimitEvidence(evidence) {
+		t.Fatalf("a PROVEN row must not be marked NAMED-LIMIT: %q", evidence)
 	}
 }
 
-// -acknowledge-unproven writes the reason DURABLY on the row, so `status`
-// can report it for as long as the enablement is in force. On 2026-09-07
-// fifteen operations were enabled on a ruling that lived in a chat
-// message; this is the fix for that.
-func TestEnableAcknowledgedUnprovenMarksTheRowDurably(t *testing.T) {
+// An operation the ledger names a written limit for is enabled with no
+// proof run, and the row says so DURABLY, so `status` can report it for as
+// long as the enablement is in force.
+func TestEnableFromTheLedgerLimitMarksTheRowDurably(t *testing.T) {
 	ctx := t.Context()
 	pool := startAuditedRegistryPostgres(t)
 
 	request := enableRequest("featureFlags")
-	request.AcknowledgeUnproven = true
+	request.Ledger = ledgerNamingLimits(t, "featureFlags")
 	outcomes, err := Enable(ctx, pool, request)
 	if err != nil {
 		t.Fatalf("Enable: %v", err)
@@ -168,19 +214,19 @@ func TestEnableAcknowledgedUnprovenMarksTheRowDurably(t *testing.T) {
 		t.Fatalf("outcomes = %+v, want one UNPROVEN outcome", outcomes)
 	}
 	_, _, evidence, _, _ := readRow(t, ctx, pool, "featureFlags")
-	if evidence != UnprovenEvidencePrefix+"CHAOS-5486 enable" {
-		t.Fatalf("review_evidence = %q, want the ACKNOWLEDGED-UNPROVEN prefix in front of the operator's own words", evidence)
+	if want := NamedLimitEvidence(testEnableLimitReason, request.ReviewEvidence); evidence != want {
+		t.Fatalf("review_evidence = %q, want %q: the NAMED-LIMIT prefix in front of the operator's own words", evidence, want)
 	}
 
 	statuses, err := RoutingStatusRows(ctx, pool, testSchemaDigest, "", map[string]string{"featureFlags": testDocumentDigest})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(statuses) != 1 || statuses[0].Proven {
-		t.Fatalf("status = %+v, want the row reported UNPROVEN for as long as it is in force", statuses)
+	if len(statuses) != 1 || statuses[0].Proven || !statuses[0].NamedLimit {
+		t.Fatalf("status = %+v, want the row reported NAMED-LIMIT (not proven) for as long as it is in force", statuses)
 	}
 	if !statuses[0].Reachable() {
-		t.Fatal("an acknowledged-unproven canary row IS reachable -- that is exactly why status must keep flagging it")
+		t.Fatal("a named-limit canary row IS reachable -- that is exactly why status must keep flagging it")
 	}
 }
 
@@ -206,7 +252,6 @@ func TestEnableDryRunRunsTheGateAndWritesNothing(t *testing.T) {
 	}
 
 	request.DryRun = false
-	request.AcknowledgeUnproven = false
 	request.Operations = []string{"featureFlags", "hotspots"}
 	request.DocumentDigest["hotspots"] = "1111111111111111111111111111111111111111111111111111111111111111"
 	if _, err := Enable(ctx, pool, request); !errors.Is(err, ErrEnableUnproven) {
@@ -1227,7 +1272,7 @@ func TestEnableRefusesWhenTheRoutingRowWriteIsSwallowed(t *testing.T) {
 	}
 
 	request := enableRequest("featureFlags")
-	request.AcknowledgeUnproven = true
+	request.Ledger = ledgerNamingLimits(t, "featureFlags")
 	_, err := Enable(ctx, pool, request)
 	if err == nil {
 		t.Fatal("Enable must refuse when the routing-row write affected 0 rows -- CHAOS-5416's exact silent-success shape")
@@ -1420,7 +1465,7 @@ func TestEnableAbortsOnAGenuineBeforeStateReadFailure(t *testing.T) {
 	boundedCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
 	defer cancel()
 	request := enableRequest("featureFlags")
-	request.AcknowledgeUnproven = true
+	request.Ledger = ledgerNamingLimits(t, "featureFlags")
 	if _, err := Enable(boundedCtx, pool, request); err == nil {
 		t.Fatal("Enable must return an error when its before-state read is blocked past the caller's own deadline")
 	} else if !strings.Contains(err.Error(), "read before-state") {

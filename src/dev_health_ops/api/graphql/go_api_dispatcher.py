@@ -647,11 +647,14 @@ class GoApiDispatchRouter(GraphQLRouter[_Context, _RootValue]):
 
         elapsed = time.monotonic() - started
 
-        content_type = resp.headers.get("content-type")
+        media_type = (
+            (resp.headers.get("content-type") or "").split(";")[0].strip().lower()
+        )
         if (
             resp.status_code == 200
-            and content_type
-            and "json" not in content_type.lower()
+            and media_type
+            and media_type != "application/json"
+            and not media_type.endswith("+json")
         ):
             # A proxy or the wrong service answering 200 with HTML/text is not
             # a GraphQL response; forwarding it would log served_go for bytes

@@ -546,24 +546,64 @@ async def test_malformed_query_api_url_answers_typed_error(
     _assert_go_failure(result, reason="go_request_error")
 
 
+@pytest.mark.parametrize(
+    "content_type",
+    ["text/plain", "text/html; charset=utf-8", "text/not-json", "application/jsonx"],
+)
 async def test_go_200_non_json_answers_typed_error_not_served_go(
     router: GoApiDispatchRouter,
     routing_row_mode,
     valid_envelope_inputs,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
+    content_type: str,
 ):
     routing_row_mode("canary")
     monkeypatch.setattr(
         go_api_dispatcher,
         "_get_http_client",
-        lambda: _mock_transport(lambda r: httpx.Response(200, text="not-json")),
+        lambda: _mock_transport(
+            lambda r: httpx.Response(
+                200, content=b"not-json", headers={"content-type": content_type}
+            )
+        ),
     )
     context = _context(user=_sample_user(), tier=LicenseTier.TEAM, licensed_features=[])
     with caplog.at_level(logging.INFO, logger=go_api_dispatcher.__name__):
         result = await router._maybe_dispatch_to_go(_post_request(TEST_QUERY), context)
     _assert_go_failure(result, reason="go_invalid_response", status=200)
     assert not [r for r in caplog.records if "served_go" in r.getMessage()]
+
+
+@pytest.mark.parametrize(
+    "content_type",
+    [
+        "application/json",
+        "application/json; charset=utf-8",
+        "application/graphql-response+json",
+    ],
+)
+async def test_go_200_json_media_types_are_served(
+    router: GoApiDispatchRouter,
+    routing_row_mode,
+    valid_envelope_inputs,
+    monkeypatch: pytest.MonkeyPatch,
+    content_type: str,
+):
+    routing_row_mode("canary")
+    monkeypatch.setattr(
+        go_api_dispatcher,
+        "_get_http_client",
+        lambda: _mock_transport(
+            lambda r: httpx.Response(
+                200, content=b'{"data":{}}', headers={"content-type": content_type}
+            )
+        ),
+    )
+    context = _context(user=_sample_user(), tier=LicenseTier.TEAM, licensed_features=[])
+    result = await router._maybe_dispatch_to_go(_post_request(TEST_QUERY), context)
+    assert result is not None
+    assert result.body == b'{"data":{}}'
 
 
 async def test_go_5xx_answers_typed_error(
@@ -673,6 +713,16 @@ async def test_go_failure_logs_event_and_counts_and_does_not_fall_back(
     monkeypatch.setattr(
         go_api_dispatcher, "_get_http_client", lambda: _mock_transport(handler)
     )
+    fallback_labels: list[dict[str, str]] = []
+    original_fallback = go_api_dispatcher.GO_API_DISPATCH_FALLBACK_TOTAL.labels
+
+    def _tracking_fallback(**labels: str) -> Any:
+        fallback_labels.append(labels)
+        return original_fallback(**labels)
+
+    monkeypatch.setattr(
+        go_api_dispatcher.GO_API_DISPATCH_FALLBACK_TOTAL, "labels", _tracking_fallback
+    )
     seen: list[dict[str, str]] = []
     original = go_api_dispatcher.GO_API_DISPATCH_GO_FAILED_TOTAL.labels
 
@@ -690,6 +740,7 @@ async def test_go_failure_logs_event_and_counts_and_does_not_fall_back(
 
     _assert_go_failure(result, reason="go_timeout")
     assert seen == [{"operation": TEST_OPERATION, "reason": "go_timeout"}]
+    assert fallback_labels == []
     messages = [r.getMessage() for r in caplog.records]
     failed = [m for m in messages if "go_api_dispatch.go_failed" in m]
     assert len(failed) == 1, failed

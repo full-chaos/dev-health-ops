@@ -1,35 +1,16 @@
 """``dev-hops go-api routing`` -- the operator surface for Go-API rollout.
 
-Until this existed, the ONLY code in the repository that could write a
-``go_api_routing_state`` row was a pytest helper
-(``tests/api/graphql/test_go_api_livelocal.py``). Enabling an operation on
-a real database meant hand-written SQL, and hand-written SQL meant
-hand-typing a ``schema_digest`` -- which is precisely how twelve rows came
-to be seeded on 2026-09-01 at a digest that a same-day SDL change made
-unreachable within hours. Nothing rejected them, nothing reported them,
-and every request silently fell back to Python for six days.
+This surface reads and rolls back routing; it does not enable. Enabling an
+operation is the Go verb ``go-api-routing enable`` (``cmd/go-api-routing``),
+which reads the candidate build from the deployed query-api's ``/buildinfo``
+and refuses -- exit 2, nothing written -- on any doubt. This module keeps
+two commands, and the split between them is deliberate:
 
-Two commands, and the split between them is deliberate:
-
-``enable``
-    A mutation. It refuses -- exit 2, nothing written -- on any doubt at
-    all. Four preflights run in order, and each answers a question the
-    September failure could not:
-
-    1. **Is query-api reachable?** No answer is not a pass. A measurement
-       that did not happen must fail loudly (root ``AGENTS.md``).
-    2. **Do both planes hash the same SDL?** The Python edge reads
-       ``contracts/graphql/v1/schema.graphql`` from its checkout; the Go
-       binary hashes its own ``go:embed``ed copy. Rows follow the
-       *image*. Writing rows from a checkout that has moved ahead of the
-       deployed image produces exactly the dead rows this command exists
-       to recover from -- so a mismatch is refused, naming both digests.
-    3. **Does the running binary register the operation, under the same
-       document digest?** The local catalog is a checked-in mirror of
-       ``registrydump``; the deployed image is the authority. An
-       operation the binary does not serve cannot be enabled into it.
-    4. **Has this exact candidate build been proven?** See
-       ``go_api_routing_admin.ENABLEMENT_PROOF_STAGE``.
+``disable``
+    A rollback. It sets ``mode`` to python/disabled/shadow, none of which is
+    reachable to a real client, and deliberately has FEWER preflights than
+    the Go ``enable``: it must work when the planes disagree or query-api is
+    down, which is exactly when it is needed.
 
 ``status``
     A diagnostic. It NEVER refuses and never exits non-zero for an
@@ -663,9 +644,9 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
         help=(
             "Turn operations OFF -- the rollback half of the rollout. Sets "
             "mode to python/disabled/shadow, none of which are reachable to "
-            "a real client. Deliberately has FEWER preflights than enable: "
-            "it must work when the planes disagree or query-api is down, "
-            "which is exactly when it is needed."
+            "a real client. Deliberately has few preflights: it must work "
+            "when the planes disagree or query-api is down, which is exactly "
+            "when it is needed."
         ),
     )
     disable.add_argument(

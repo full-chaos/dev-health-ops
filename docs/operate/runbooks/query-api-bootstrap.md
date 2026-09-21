@@ -93,7 +93,7 @@ kubectl create secret generic dev-health-query-api-envelope \
 
 ## Step 4: Apply the query-api Deployment and Service
 
-Digest pairing is verified automatically at step 6 (routing enable). Apply the manifest and wait for the pod to reach ready.
+Digest pairing is verified automatically when routing is enabled (end of step 7). Apply the manifest and wait for the pod to reach ready.
 
 ### Manifest values
 
@@ -117,19 +117,28 @@ kubectl patch deployment dev-health-ops -p '{"spec":{"template":{"spec":{"contai
 
 Or use `--patch-file` to avoid credential exposure (Trap #121).
 
-## Step 6: First-time routing enable (canary set only)
+## Step 6: First-time routing rows (canary set only)
 
-The routing state table is empty on first deploy. Routing enables with 12 canary operations only (shadow set disabled by design).
+The routing state table is empty on first deploy, and nothing that reads it can create a row: `go-api-prove` routes a `shadow` operation through the proof route only when a row exists, `go-api-routing disable` never inserts one, and `go-api-routing enable` refuses an operation with no recorded proof run for the running build (there is no waiver flag; the only exception is a written limit in the compiled go-served ledger). So the first rows are seeded by hand in `shadow` mode, at the digests the running query-api reports, then proven (Step 7), then enabled (end of Step 7).
 
-```bash
-# Run from a one-off tools Pod (see Operator commands § Workerctl on k8s)
-go-api-routing enable -operations <op1> <op2> ... <op12> \
-  -mode python -apply \
-  -recorded-by <operator> \
-  -review-evidence "First-time enable on prod k3s, JOB 7 step 6"
+Read the digests from the running query-api (`/registry` is unauthenticated; `/buildinfo` takes the envelope) and insert one row per canary operation, candidate build first:
+
+```sql
+-- <schema> and <document> come from GET /registry (schema_digest, and the
+-- operation's document_digest); <build> is the candidate_build /buildinfo reports.
+INSERT INTO go_api_candidate_build (schema_digest, document_digest, selected_operation, candidate_build)
+VALUES ('<schema>', '<document>', '<operation>', '<build>') ON CONFLICT DO NOTHING;
+
+INSERT INTO go_api_routing_state
+  (schema_digest, document_digest, selected_operation, current_candidate_build,
+   owner, mode, rollout_percentage, review_evidence, recorded_by, updated_at)
+VALUES ('<schema>', '<document>', '<operation>', '<build>',
+        'go', 'shadow', 0, 'first-time bootstrap: shadow row for the proof run', '<operator>', now())
+ON CONFLICT (schema_digest, document_digest, selected_operation) DO UPDATE
+  SET current_candidate_build = EXCLUDED.current_candidate_build, mode = EXCLUDED.mode, updated_at = EXCLUDED.updated_at;
 ```
 
-**Shadow set (3 ops) intentionally NOT enabled** — the `disable -mode shadow` verb never INSERTs a row, so enabling known-mismatch operations as canary first is a stop condition. Canary operations route to the real query-api against the baseline API. Real proof compares both planes; shadow refused-by-name (expected on prod) is never compared.
+**Shadow set (3 ops) intentionally NOT seeded** — enabling known-mismatch operations as canary first is a stop condition. Canary operations route to the real query-api against the baseline API. Real proof compares both planes; shadow refused-by-name (expected on prod) is never compared.
 
 ## Step 7: Real proof (go-api-prove)
 
@@ -200,6 +209,22 @@ now-unused bearer key from the `dev-health-go-api-prove` Secret, and remove
 the operator script that used to hand-mint it from the prod host. Re-run
 the 12-operation proof above afterward to confirm the exec path alone still
 produces a clean result.
+
+### Enable the canary set
+
+After the proof run records a `deployed_executed` result for each canary operation at the running build, enable them with the Go verb. The candidate build is read from the deployed process's `/buildinfo`; there is no build flag and no waiver flag. Operations are one comma-separated value:
+
+```bash
+GO_API_ROUTING_BEARER=<envelope> go-api-routing enable \
+  -registry-url  http://dev-health-query-api:8000/registry \
+  -buildinfo-url http://dev-health-query-api:8000/buildinfo \
+  -operations <op1>,<op2>,<op12> \
+  -mode canary \
+  -recorded-by <operator> \
+  -review-evidence "First-time enable on prod k3s, JOB 7 step 6"
+```
+
+Add `-dry-run` first to see which operations would be admitted; a refusal names the operations with no proof run.
 
 ## Step 8: Enable the investment explanation (optional, requires encryption keys)
 

@@ -1,7 +1,7 @@
 """The Python edge dispatcher (CHAOS-4697) -- the hop that decides, per
 ``/graphql`` request, whether query-api (Go) owns the operation, mints a
 signed effective-principal envelope, forwards, and falls back to Python
-safely on every failure. Without this module, ``go_api_routing_state`` rows
+answers a typed error on a Go-plane failure. Without this module, ``go_api_routing_state`` rows
 enable nothing: ``PostgresSwitch`` is only consulted *inside* query-api,
 and nothing routed a request there before this.
 
@@ -32,12 +32,17 @@ the measured Python/Go whitespace divergence this guards against.
 GET, CHAOS-4706) where a body must be constructed at all, and why that
 construction is not the GraphQL-reprint defect class CHAOS-4696 documents.
 
-**Read-only assumption.** Every operation reachable through this
-dispatcher today is a read-only, idempotent GraphQL *query* -- the ONLY
-reason falling back to Python **after** attempting Go is safe (plan §5:
-never fall back after dispatch once a write outcome may be ambiguous). Do
-not extend this dispatcher to mutations without re-deciding that -- see
-CHAOS-4697's brief, "Wave 7".
+**No fallback after Go was asked.** Every operation reachable through this
+dispatcher is a read-only GraphQL *query* whose Python resolver has no body
+(it raises "no Python implementation"). So once query-api has been asked and
+timed out, refused the connection or answered non-200, :meth:`_go_failed`
+answers a typed GraphQL error naming the operation, reason and elapsed ms;
+running the Python resolver would only replace the real cause with a
+misleading one. Decisions made BEFORE query-api is asked (no routing row, a
+non-reachable mode, no principal) still return ``None`` and let Strawberry
+run: there the Python resolver's "dispatcher did not intercept" error is
+accurate. Do not extend this dispatcher to mutations without re-deciding
+that -- see CHAOS-4697's brief, "Wave 7".
 
 **rollout_percentage / eligible_orgs are NOT enforced here**, matching
 ``routeswitch.PostgresSwitch.Enabled`` on the Go side (it takes no org
@@ -96,6 +101,7 @@ from .go_api_dispatch_telemetry import (
     GO_API_DISPATCH_ATTEMPTED_TOTAL,
     GO_API_DISPATCH_DIGEST_MISS_TOTAL,
     GO_API_DISPATCH_FALLBACK_TOTAL,
+    GO_API_DISPATCH_GO_FAILED_TOTAL,
     GO_API_DISPATCH_LATENCY_SECONDS,
     GO_API_DISPATCH_SERVED_GO_TOTAL,
 )
@@ -343,6 +349,52 @@ def _passthrough_headers(upstream: Any) -> dict[str, str]:
     return copied
 
 
+class _GoFailureResponse(Response):
+    """The GraphQL error the edge itself answers with when query-api was
+    asked and did not serve the operation. A distinct type so
+    :meth:`GoApiDispatchRouter.run` can stamp the plane header with the plane
+    that produced these bytes (the Python edge), not the one that failed."""
+
+
+def _go_failure_response(
+    operation: str, reason: str, elapsed_ms: int, status: int | None
+) -> Response:
+    """A typed GraphQL error for a Go-plane failure.
+
+    Every operation this dispatcher routes is Go-only: its Python resolver
+    has no body and raises "no Python implementation". Handing the request to
+    that resolver after Go failed would replace the real cause (a timeout, a
+    refused connection, a 5xx) with a misleading one, so the edge answers
+    with the Go outcome instead. HTTP 200 with ``errors`` is the GraphQL
+    convention and what the web client already handles.
+    """
+    extensions: dict[str, Any] = {
+        "code": reason,
+        "operation": operation,
+        "plane": "go",
+        "elapsedMs": elapsed_ms,
+    }
+    if status is not None:
+        extensions["status"] = status
+    payload = {
+        "data": None,
+        "errors": [
+            {
+                "message": (
+                    f"query-api did not serve {operation}: {reason} "
+                    f"after {elapsed_ms} ms"
+                ),
+                "extensions": extensions,
+            }
+        ],
+    }
+    return _GoFailureResponse(
+        content=json.dumps(payload),
+        status_code=200,
+        media_type="application/json",
+    )
+
+
 class GoApiDispatchRouter(GraphQLRouter[_Context, _RootValue]):
     """A :class:`~strawberry.fastapi.GraphQLRouter` that dispatches
     Go-eligible, Go-enabled operations to query-api before falling back to
@@ -368,7 +420,8 @@ class GoApiDispatchRouter(GraphQLRouter[_Context, _RootValue]):
         if not isinstance(context, UnsetType):
             dispatched = await self._maybe_dispatch_to_go(request, context)
             if dispatched is not None:
-                return _with_plane_header(dispatched, "go")
+                plane = "python" if isinstance(dispatched, _GoFailureResponse) else "go"
+                return _with_plane_header(dispatched, plane)
 
         response = await super().run(
             request=request, context=context, root_value=root_value
@@ -541,7 +594,7 @@ class GoApiDispatchRouter(GraphQLRouter[_Context, _RootValue]):
         doc_digest: str,
         envelope: str,
         outbound_body: bytes,
-    ) -> Response | None:
+    ) -> Response:
         timeout = _dispatch_timeout_seconds()
         started = time.monotonic()
         client = _get_http_client()
@@ -556,24 +609,27 @@ class GoApiDispatchRouter(GraphQLRouter[_Context, _RootValue]):
                 timeout=timeout,
             )
         except httpx.TimeoutException:
+            elapsed = time.monotonic() - started
             GO_API_DISPATCH_LATENCY_SECONDS.labels(
                 plane="go", outcome="timeout"
-            ).observe(time.monotonic() - started)
-            return self._fallback(selected_operation, "go_timeout")
+            ).observe(elapsed)
+            return self._go_failed(selected_operation, "go_timeout", elapsed)
         except httpx.ConnectError:
+            elapsed = time.monotonic() - started
             GO_API_DISPATCH_LATENCY_SECONDS.labels(
                 plane="go", outcome="connection_error"
-            ).observe(time.monotonic() - started)
-            return self._fallback(selected_operation, "go_connection_error")
+            ).observe(elapsed)
+            return self._go_failed(selected_operation, "go_connection_error", elapsed)
         except httpx.HTTPError:
+            elapsed = time.monotonic() - started
             logger.exception(
                 "go_api_dispatch.go_request_failed",
                 extra={"operation": selected_operation},
             )
             GO_API_DISPATCH_LATENCY_SECONDS.labels(
                 plane="go", outcome="request_error"
-            ).observe(time.monotonic() - started)
-            return self._fallback(selected_operation, "go_request_error")
+            ).observe(elapsed)
+            return self._go_failed(selected_operation, "go_request_error", elapsed)
 
         elapsed = time.monotonic() - started
 
@@ -614,7 +670,9 @@ class GoApiDispatchRouter(GraphQLRouter[_Context, _RootValue]):
             GO_API_DISPATCH_LATENCY_SECONDS.labels(
                 plane="go", outcome="digest_miss"
             ).observe(elapsed)
-            return self._fallback(selected_operation, "go_404_digest_miss")
+            return self._go_failed(
+                selected_operation, "go_404_digest_miss", elapsed, resp.status_code
+            )
 
         if resp.status_code == 405:
             # Should not occur -- this dispatcher always forwards as POST
@@ -628,13 +686,20 @@ class GoApiDispatchRouter(GraphQLRouter[_Context, _RootValue]):
             GO_API_DISPATCH_LATENCY_SECONDS.labels(
                 plane="go", outcome="method_not_allowed"
             ).observe(elapsed)
-            return self._fallback(selected_operation, "go_405_method_not_allowed")
+            return self._go_failed(
+                selected_operation,
+                "go_405_method_not_allowed",
+                elapsed,
+                resp.status_code,
+            )
 
         if 500 <= resp.status_code < 600:
             GO_API_DISPATCH_LATENCY_SECONDS.labels(plane="go", outcome="5xx").observe(
                 elapsed
             )
-            return self._fallback(selected_operation, "go_5xx")
+            return self._go_failed(
+                selected_operation, "go_5xx", elapsed, resp.status_code
+            )
 
         logger.error(
             "go_api_dispatch.go_unexpected_status",
@@ -643,7 +708,31 @@ class GoApiDispatchRouter(GraphQLRouter[_Context, _RootValue]):
         GO_API_DISPATCH_LATENCY_SECONDS.labels(
             plane="go", outcome="unexpected_status"
         ).observe(elapsed)
-        return self._fallback(selected_operation, "go_unexpected_status")
+        return self._go_failed(
+            selected_operation, "go_unexpected_status", elapsed, resp.status_code
+        )
+
+    @staticmethod
+    def _go_failed(
+        operation: str,
+        reason: str,
+        elapsed_seconds: float,
+        status: int | None = None,
+    ) -> Response:
+        """Terminal decision for a request query-api was asked to serve and
+        did not: log, count, and answer with a typed GraphQL error. There is
+        no Python fallback here -- see :func:`_go_failure_response`."""
+        elapsed_ms = int(elapsed_seconds * 1000)
+        logger.info(
+            "go_api_dispatch.go_failed operation=%s plane=go reason=%s "
+            "elapsed_ms=%d status=%s",
+            operation,
+            reason,
+            elapsed_ms,
+            status if status is not None else "none",
+        )
+        GO_API_DISPATCH_GO_FAILED_TOTAL.labels(operation=operation, reason=reason).inc()
+        return _go_failure_response(operation, reason, elapsed_ms, status)
 
     @staticmethod
     def _fallback(operation: str, reason: str) -> None:

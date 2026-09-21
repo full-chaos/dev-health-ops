@@ -23,8 +23,14 @@ these counters are what let an operator tell those apart.
     ``None``).
 ``envelope_signing_error`` -- ``issue_effective_principal_envelope`` raised
     (e.g. missing/malformed signing key).
-``go_timeout`` / ``go_connection_error`` / ``go_5xx`` -- the outbound call
-    to query-api itself failed or errored.
+``build_outbound_body_error`` -- the outbound body could not be built.
+
+``go_failed`` reason vocabulary (query-api was asked and did NOT serve the
+operation; there is no Python fallback -- every routed operation is Go-only,
+so the edge answers with a typed GraphQL error and counts it under
+``GO_API_DISPATCH_GO_FAILED_TOTAL``, never under the fallback counter):
+``go_timeout`` / ``go_connection_error`` / ``go_request_error`` / ``go_5xx``
+    -- the outbound call to query-api itself failed or errored.
 ``go_404_digest_miss`` -- query-api 404'd DESPITE a local catalog match --
     post-CHAOS-4696 this means digest DRIFT between the edge's catalog and
     the deployed query-api binary, not "unregistered". Alert-worthy.
@@ -49,6 +55,7 @@ __all__ = [
     "GO_API_DISPATCH_ATTEMPTED_TOTAL",
     "GO_API_DISPATCH_SERVED_GO_TOTAL",
     "GO_API_DISPATCH_FALLBACK_TOTAL",
+    "GO_API_DISPATCH_GO_FAILED_TOTAL",
     "GO_API_DISPATCH_DIGEST_MISS_TOTAL",
     "GO_API_DISPATCH_LATENCY_SECONDS",
 ]
@@ -86,9 +93,20 @@ GO_API_DISPATCH_FALLBACK_TOTAL = build_counter(
     prometheus=_prometheus,
 )
 
+#: Requests query-api was asked to serve and did not (timeout, transport
+#: error, non-2xx). Answered with a typed GraphQL error, not handed to
+#: Python: the Python resolver of a routed operation has no body.
+GO_API_DISPATCH_GO_FAILED_TOTAL = build_counter(
+    "devhealth_go_api_dispatch_go_failed_total",
+    "GraphQL requests query-api was asked to serve and did not, by operation and reason",
+    ["operation", "reason"],
+    meter=_meter,
+    prometheus=_prometheus,
+)
+
 #: The specific, alert-worthy digest-miss-on-forward case (query-api 404
 #: despite a local catalog match) -- also counted under
-#: GO_API_DISPATCH_FALLBACK_TOTAL(reason="go_404_digest_miss"), broken out
+#: GO_API_DISPATCH_GO_FAILED_TOTAL(reason="go_404_digest_miss"), broken out
 #: on its own so an alert can key on this one counter instead of a label
 #: filter.
 GO_API_DISPATCH_DIGEST_MISS_TOTAL = build_counter(

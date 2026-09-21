@@ -592,11 +592,12 @@ class Query:
     # In normal operation nothing below ever runs: go_api_dispatcher intercepts
     # at the HTTP layer, before Strawberry executes, whenever the operation's
     # go_api_routing_state row is in mode canary or primary. Reaching one of these raises means the
-    # dispatcher did NOT intercept, which is one of exactly three things: the
-    # routing row is missing or not in mode canary or primary, the request's document digest
-    # did not match what query-api registers (a web query-text change deployed
-    # without its ops counterpart), or query-api answered non-200. All three are
-    # deploy skew or outage, and all three are worth a loud failure: the alternative is
+    # dispatcher did NOT intercept, which is one of two things: the
+    # routing row is missing or not in mode canary or primary, or the request's
+    # document digest did not match what query-api registers (a web query-text
+    # change deployed without its ops counterpart). A query-api timeout or
+    # non-200 never reaches here: the dispatcher answers those itself with a
+    # typed error. Both are deploy skew, and both are worth a loud failure: the alternative is
     # returning null or an empty connection, which renders as "no data" and is
     # indistinguishable from a genuinely empty scope.
     @strawberry.field(description="Compute capacity forecast on-demand")

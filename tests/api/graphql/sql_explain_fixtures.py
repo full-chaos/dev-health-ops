@@ -157,22 +157,6 @@ async def _fixture_ai_attribution(sink: CapturingSink) -> None:
 
 
 # ---------------------------------------------------------------------------
-# data_health
-# ---------------------------------------------------------------------------
-
-
-async def _fixture_data_health(sink: CapturingSink) -> None:
-    from dev_health_ops.api.graphql.resolvers.data_health import (
-        _coverage_rows,
-        _observed_identities,
-    )
-
-    context = FakeGraphQLContext(client=sink, org_id=SAMPLE_ORG_ID)
-    await _observed_identities(context, org_id=SAMPLE_ORG_ID, team=SAMPLE_TEAM_ID)
-    await _coverage_rows(context, org_id=SAMPLE_ORG_ID, team=SAMPLE_TEAM_ID)
-
-
-# ---------------------------------------------------------------------------
 # analytics — compile_* functions return SQL deterministically; harvest by
 # calling them directly with sample requests (no capturing sink needed).
 # ---------------------------------------------------------------------------
@@ -337,7 +321,7 @@ async def _fixture_analytics(sink: CapturingSink) -> None:
 # ---------------------------------------------------------------------------
 
 
-# There are no "forecast", "capacity", "operating_review", "work_graph", "compounding_risk" or "security" fixtures: query-api
+# There are no "forecast", "capacity", "operating_review", "work_graph", "compounding_risk", "data_health" or "security" fixtures: query-api
 # serves capacityForecast/capacityForecasts/throughputForecast/operatingReview
 # natively, so there is
 # no Python SQL for this EXPLAIN contract to plan. The equivalent coverage
@@ -348,7 +332,6 @@ ALL_RESOLVER_SQL_FIXTURES: list[tuple[str, ResolverSQLFixture]] = [
     ("home", _fixture_home),
     ("recommendations", _fixture_recommendations),
     ("bus_factor", _fixture_bus_factor),
-    ("data_health", _fixture_data_health),
     ("analytics", _fixture_analytics),
     ("ai_attribution", _fixture_ai_attribution),
 ]

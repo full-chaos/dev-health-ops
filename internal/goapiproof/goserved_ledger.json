@@ -298,6 +298,40 @@
         {"file": "cmd/query-api/internal/workgraph/teamattribution_integration_test.go", "test": "TestResolveWorkUnitTeamAttributions_SourcePrecedenceAndShapeRealEngine"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_symbols_are_not_redefined"}
       ]
+    },
+    {
+      "operation": "connectorsDataHealth",
+      "two_plane_ops_sha": "84828635426669a9e45901edb04923449c6f930e",
+      "guards": [
+        {"file": "cmd/query-api/internal/datahealth/datahealth_test.go", "test": "TestConnectorFailureDecisionTable"},
+        {"file": "cmd/query-api/internal/datahealth/datahealth_test.go", "test": "TestConnectorsReadsTheAuthorizedOrgAndMapsRows"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
+      ]
+    },
+    {
+      "operation": "dataHealthIdentity",
+      "two_plane_ops_sha": "84828635426669a9e45901edb04923449c6f930e",
+      "guards": [
+        {"file": "cmd/query-api/internal/datahealth/datahealth_test.go", "test": "TestIdentityMapping"},
+        {"file": "cmd/query-api/internal/datahealth/datahealth_test.go", "test": "TestIdentityMappingTeamScopesTheMappedSet"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
+      ]
+    },
+    {
+      "operation": "mappingCoverageHealth",
+      "two_plane_ops_sha": "84828635426669a9e45901edb04923449c6f930e",
+      "guards": [
+        {"file": "cmd/query-api/internal/datahealth/datahealth_test.go", "test": "TestCoverageStat"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
+      ]
+    },
+    {
+      "operation": "metricLineage",
+      "two_plane_ops_sha": "84828635426669a9e45901edb04923449c6f930e",
+      "guards": [
+        {"file": "cmd/query-api/internal/datahealth/datahealth_test.go", "test": "TestMetricLineage"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
+      ]
     }
   ]
 }

@@ -66,7 +66,6 @@ from .models.recommendations import (
     WindowInput,
 )
 from .resolvers.analytics import resolve_analytics
-from .resolvers.data_health import resolve_data_health
 from .resolvers.dev_evidence import (
     resolve_dev_data_health,
     resolve_dev_evidence_search,
@@ -651,8 +650,9 @@ class Query:
         info: Info,
         team: strawberry.ID,
     ) -> DataHealth:
-        context = get_context(info)
-        return await resolve_data_health(context, str(team))
+        _raise_served_by_query_api(
+            "dataHealth", getattr(get_context(info), "org_id", ""), info
+        )
 
     @strawberry.field(
         description="Repository ownership concentration and bus-factor summary."

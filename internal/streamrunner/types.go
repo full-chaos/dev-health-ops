@@ -116,6 +116,11 @@ type Config struct {
 	Logger *slog.Logger
 }
 
+// Validate reports ErrInvalidConfig for a configuration New would refuse.
+// It lets a caller reject a bad configuration before it opens the
+// connections New's transport and handler need.
+func (c Config) Validate() error { return c.validate() }
+
 func (c Config) validate() error {
 	if c.Name == "" || (len(c.Streams) == 0 && len(c.Patterns) == 0) || c.ConsumerGroup == "" || c.ConsumerName == "" ||
 		c.BatchSize < 1 || c.BatchSize > 1_000 || c.Block < 10*time.Millisecond || c.Block > time.Minute ||

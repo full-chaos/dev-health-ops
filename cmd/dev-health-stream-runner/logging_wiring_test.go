@@ -176,19 +176,7 @@ func TestStreamRunnerReceivesTheComposedLoggerFromStreamRunnerCompositionRoot(t 
 		t.Fatalf("configureStreamRunnerDependenciesWithSources() error = %v", err)
 	}
 
-	var runner lifecycle.Component
-	for _, component := range components {
-		if component.Name() == "stream-internal_ingest" {
-			runner = component
-		}
-	}
-	if runner == nil {
-		t.Fatalf("stream-internal_ingest was not constructed: components=%v", componentNames(components))
-	}
-	if err := runner.Start(context.Background()); err != nil {
-		t.Fatalf("start runner: %v", err)
-	}
-	t.Cleanup(func() { _ = runner.Shutdown(context.Background()) })
+	runStreamComponents(t, registry, components)
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) && !strings.Contains(buf.String(), "stream runner cycle failed") {

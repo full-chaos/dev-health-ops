@@ -114,6 +114,28 @@ TEST_OPERATION = "testOperation"
 TEST_QUERY = "query Test { thing { id } }"
 
 
+def _assert_go_failure(
+    result: Response | None, *, reason: str, status: int | None = None
+) -> dict[str, Any]:
+    """A Go-plane failure is answered by the edge as a typed GraphQL error --
+    never None, which would hand the request to a Python resolver that has no
+    body for a routed operation."""
+    assert result is not None
+    assert result.status_code == 200
+    body = json.loads(bytes(result.body))
+    assert body["data"] is None
+    (error,) = body["errors"]
+    ext = error["extensions"]
+    assert ext["code"] == reason
+    assert ext["operation"] == TEST_OPERATION
+    assert ext["plane"] == "go"
+    assert isinstance(ext["elapsedMs"], int) and ext["elapsedMs"] >= 0
+    assert ext.get("status") == status
+    assert TEST_OPERATION in error["message"] and reason in error["message"]
+    assert "no Python implementation" not in error["message"]
+    return body
+
+
 @pytest.fixture
 def router() -> GoApiDispatchRouter[GraphQLContext, None]:
     from dev_health_ops.api.graphql.schema import schema
@@ -452,7 +474,7 @@ async def test_reachable_modes_forward_and_serve_go_response(
     assert seen["body"] == original_bytes  # verbatim
 
 
-async def test_go_timeout_falls_back_to_python(
+async def test_go_timeout_answers_typed_error(
     router: GoApiDispatchRouter,
     routing_row_mode,
     valid_envelope_inputs,
@@ -468,10 +490,10 @@ async def test_go_timeout_falls_back_to_python(
     )
     context = _context(user=_sample_user(), tier=LicenseTier.TEAM, licensed_features=[])
     result = await router._maybe_dispatch_to_go(_post_request(TEST_QUERY), context)
-    assert result is None
+    _assert_go_failure(result, reason="go_timeout")
 
 
-async def test_go_connection_error_falls_back_to_python(
+async def test_go_connection_error_answers_typed_error(
     router: GoApiDispatchRouter,
     routing_row_mode,
     valid_envelope_inputs,
@@ -487,10 +509,104 @@ async def test_go_connection_error_falls_back_to_python(
     )
     context = _context(user=_sample_user(), tier=LicenseTier.TEAM, licensed_features=[])
     result = await router._maybe_dispatch_to_go(_post_request(TEST_QUERY), context)
-    assert result is None
+    _assert_go_failure(result, reason="go_connection_error")
 
 
-async def test_go_5xx_falls_back_to_python(
+async def test_go_request_error_answers_typed_error(
+    router: GoApiDispatchRouter,
+    routing_row_mode,
+    valid_envelope_inputs,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    routing_row_mode("canary")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadError("reset", request=request)
+
+    monkeypatch.setattr(
+        go_api_dispatcher, "_get_http_client", lambda: _mock_transport(handler)
+    )
+    context = _context(user=_sample_user(), tier=LicenseTier.TEAM, licensed_features=[])
+    result = await router._maybe_dispatch_to_go(_post_request(TEST_QUERY), context)
+    _assert_go_failure(result, reason="go_request_error")
+
+
+async def test_malformed_query_api_url_answers_typed_error(
+    router: GoApiDispatchRouter,
+    routing_row_mode,
+    valid_envelope_inputs,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """httpx.InvalidURL is not an httpx.HTTPError; it must not escape as a 500."""
+    routing_row_mode("canary")
+    monkeypatch.setenv("GO_API_QUERY_API_URL", "http://query-api.test:notaport")
+    monkeypatch.setattr(go_api_dispatcher, "_get_http_client", httpx.AsyncClient)
+    context = _context(user=_sample_user(), tier=LicenseTier.TEAM, licensed_features=[])
+    result = await router._maybe_dispatch_to_go(_post_request(TEST_QUERY), context)
+    _assert_go_failure(result, reason="go_request_error")
+
+
+@pytest.mark.parametrize(
+    "content_type",
+    ["text/plain", "text/html; charset=utf-8", "text/not-json", "application/jsonx"],
+)
+async def test_go_200_non_json_answers_typed_error_not_served_go(
+    router: GoApiDispatchRouter,
+    routing_row_mode,
+    valid_envelope_inputs,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    content_type: str,
+):
+    routing_row_mode("canary")
+    monkeypatch.setattr(
+        go_api_dispatcher,
+        "_get_http_client",
+        lambda: _mock_transport(
+            lambda r: httpx.Response(
+                200, content=b"not-json", headers={"content-type": content_type}
+            )
+        ),
+    )
+    context = _context(user=_sample_user(), tier=LicenseTier.TEAM, licensed_features=[])
+    with caplog.at_level(logging.INFO, logger=go_api_dispatcher.__name__):
+        result = await router._maybe_dispatch_to_go(_post_request(TEST_QUERY), context)
+    _assert_go_failure(result, reason="go_invalid_response", status=200)
+    assert not [r for r in caplog.records if "served_go" in r.getMessage()]
+
+
+@pytest.mark.parametrize(
+    "content_type",
+    [
+        "application/json",
+        "application/json; charset=utf-8",
+        "application/graphql-response+json",
+    ],
+)
+async def test_go_200_json_media_types_are_served(
+    router: GoApiDispatchRouter,
+    routing_row_mode,
+    valid_envelope_inputs,
+    monkeypatch: pytest.MonkeyPatch,
+    content_type: str,
+):
+    routing_row_mode("canary")
+    monkeypatch.setattr(
+        go_api_dispatcher,
+        "_get_http_client",
+        lambda: _mock_transport(
+            lambda r: httpx.Response(
+                200, content=b'{"data":{}}', headers={"content-type": content_type}
+            )
+        ),
+    )
+    context = _context(user=_sample_user(), tier=LicenseTier.TEAM, licensed_features=[])
+    result = await router._maybe_dispatch_to_go(_post_request(TEST_QUERY), context)
+    assert result is not None
+    assert result.body == b'{"data":{}}'
+
+
+async def test_go_5xx_answers_typed_error(
     router: GoApiDispatchRouter,
     routing_row_mode,
     valid_envelope_inputs,
@@ -504,10 +620,10 @@ async def test_go_5xx_falls_back_to_python(
     )
     context = _context(user=_sample_user(), tier=LicenseTier.TEAM, licensed_features=[])
     result = await router._maybe_dispatch_to_go(_post_request(TEST_QUERY), context)
-    assert result is None
+    _assert_go_failure(result, reason="go_5xx", status=500)
 
 
-async def test_go_404_digest_miss_falls_back_and_alerts(
+async def test_go_404_digest_miss_answers_typed_error_and_alerts(
     router: GoApiDispatchRouter,
     routing_row_mode,
     valid_envelope_inputs,
@@ -515,7 +631,7 @@ async def test_go_404_digest_miss_falls_back_and_alerts(
 ):
     """A LOCAL catalog match that still 404s at query-api is digest DRIFT
     (post-CHAOS-4696), not 'unregistered' -- must be counted distinctly
-    (GO_API_DISPATCH_DIGEST_MISS_TOTAL) and still fail closed to Python."""
+    (GO_API_DISPATCH_DIGEST_MISS_TOTAL) and answered as a typed error."""
     routing_row_mode("canary")
     monkeypatch.setattr(
         go_api_dispatcher,
@@ -539,11 +655,11 @@ async def test_go_404_digest_miss_falls_back_and_alerts(
         mp.setattr(GO_API_DISPATCH_DIGEST_MISS_TOTAL, "labels", _tracking)
         result = await router._maybe_dispatch_to_go(_post_request(TEST_QUERY), context)
 
-    assert result is None
+    _assert_go_failure(result, reason="go_404_digest_miss", status=404)
     assert incremented["n"] == 1
 
 
-async def test_go_405_falls_back_to_python(
+async def test_go_405_answers_typed_error(
     router: GoApiDispatchRouter,
     routing_row_mode,
     valid_envelope_inputs,
@@ -559,7 +675,109 @@ async def test_go_405_falls_back_to_python(
     )
     context = _context(user=_sample_user(), tier=LicenseTier.TEAM, licensed_features=[])
     result = await router._maybe_dispatch_to_go(_post_request(TEST_QUERY), context)
-    assert result is None
+    _assert_go_failure(result, reason="go_405_method_not_allowed", status=405)
+
+
+async def test_go_unexpected_status_answers_typed_error(
+    router: GoApiDispatchRouter,
+    routing_row_mode,
+    valid_envelope_inputs,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    routing_row_mode("canary")
+    monkeypatch.setattr(
+        go_api_dispatcher,
+        "_get_http_client",
+        lambda: _mock_transport(lambda r: httpx.Response(418, text="teapot")),
+    )
+    context = _context(user=_sample_user(), tier=LicenseTier.TEAM, licensed_features=[])
+    result = await router._maybe_dispatch_to_go(_post_request(TEST_QUERY), context)
+    _assert_go_failure(result, reason="go_unexpected_status", status=418)
+
+
+async def test_go_failure_logs_event_and_counts_and_does_not_fall_back(
+    router: GoApiDispatchRouter,
+    routing_row_mode,
+    valid_envelope_inputs,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+):
+    """The Go outcome is one event line and one counter increment, and the
+    request never reaches the fallback funnel (whose counter means "Python
+    ran")."""
+    routing_row_mode("canary")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.TimeoutException("timed out", request=request)
+
+    monkeypatch.setattr(
+        go_api_dispatcher, "_get_http_client", lambda: _mock_transport(handler)
+    )
+    fallback_labels: list[dict[str, str]] = []
+    original_fallback = go_api_dispatcher.GO_API_DISPATCH_FALLBACK_TOTAL.labels
+
+    def _tracking_fallback(**labels: str) -> Any:
+        fallback_labels.append(labels)
+        return original_fallback(**labels)
+
+    monkeypatch.setattr(
+        go_api_dispatcher.GO_API_DISPATCH_FALLBACK_TOTAL, "labels", _tracking_fallback
+    )
+    seen: list[dict[str, str]] = []
+    original = go_api_dispatcher.GO_API_DISPATCH_GO_FAILED_TOTAL.labels
+
+    def _tracking(**labels: str) -> Any:
+        seen.append(labels)
+        return original(**labels)
+
+    monkeypatch.setattr(
+        go_api_dispatcher.GO_API_DISPATCH_GO_FAILED_TOTAL, "labels", _tracking
+    )
+    context = _context(user=_sample_user(), tier=LicenseTier.TEAM, licensed_features=[])
+
+    with caplog.at_level(logging.INFO, logger=go_api_dispatcher.__name__):
+        result = await router._maybe_dispatch_to_go(_post_request(TEST_QUERY), context)
+
+    _assert_go_failure(result, reason="go_timeout")
+    assert seen == [{"operation": TEST_OPERATION, "reason": "go_timeout"}]
+    assert fallback_labels == []
+    messages = [r.getMessage() for r in caplog.records]
+    failed = [m for m in messages if "go_api_dispatch.go_failed" in m]
+    assert len(failed) == 1, failed
+    assert f"operation={TEST_OPERATION}" in failed[0]
+    assert "plane=go" in failed[0]
+    assert "reason=go_timeout" in failed[0]
+    assert "elapsed_ms=" in failed[0]
+    assert not [m for m in messages if "go_api_dispatch.fallback" in m]
+
+
+async def test_run_answers_go_failure_without_running_python(
+    router: GoApiDispatchRouter,
+    routing_row_mode,
+    valid_envelope_inputs,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Through the real entrypoint: the response is the edge's typed error
+    (plane header names the edge, not the failed Go plane) and strawberry's
+    own execution is never invoked."""
+    monkeypatch.setenv("GO_API_PLANE_HEADER_ENABLED", "true")
+    routing_row_mode("canary")
+    monkeypatch.setattr(
+        go_api_dispatcher,
+        "_get_http_client",
+        lambda: _mock_transport(lambda r: httpx.Response(503, text="down")),
+    )
+
+    async def _boom(self, *args, **kwargs):
+        raise AssertionError("Python execution must not run after a Go failure")
+
+    monkeypatch.setattr(GraphQLRouter, "run", _boom)
+    context = _context(user=_sample_user(), tier=LicenseTier.TEAM, licensed_features=[])
+
+    result = await router.run(_post_request(TEST_QUERY), context=context)
+
+    _assert_go_failure(result, reason="go_5xx", status=503)
+    assert result.headers["x-dev-health-plane"] == "python"
 
 
 async def test_get_request_dispatched_as_post_to_go(

@@ -1,6 +1,7 @@
 package goapiproof
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -161,5 +162,36 @@ func TestClassifyGapReread_DelayedComparisonRefusalsNeverAdmit(t *testing.T) {
 	accepted := ClassifyGapReread(first, b1, c1, c1, c1, opts)
 	if accepted.Outcome != GapRereadNoCleanMatch || !strings.Contains(accepted.Detail, "Acceptance") {
 		t.Fatalf("acceptance: %+v", accepted)
+	}
+}
+
+// A declared VolatileFields path (a per-request wall-clock stamp inside a
+// list) is not a plane changing: a candidate whose only change between two
+// reads is that stamp is stable, and a reference whose only change is that
+// stamp did not move. A change to any other leaf still counts.
+func TestClassifyGapReread_VolatileFieldsAreNotMovement(t *testing.T) {
+	opts := Options{VolatileFields: map[string]string{"data.events.ts": "per-request wall clock"}}
+	doc := func(v int, ts string) Snapshot {
+		return gapDoc(t, `{"v":`+strconv.Itoa(v)+`,"events":[{"ts":"`+ts+`","type":"spike"},{"ts":"`+ts+`","type":"regression"}]}`)
+	}
+	b1, c1 := doc(1, "t1"), doc(2, "t1")
+	first := Compare(b1, c1, opts)
+	if len(first.outsideFindings) == 0 {
+		t.Fatal("fixture has no outside finding")
+	}
+	cases := []struct {
+		name   string
+		b3, c2 Snapshot
+		want   GapRereadOutcome
+	}{
+		{"candidate re-read differs only in ts", b1, doc(2, "t2"), GapRereadBaselineUnchanged},
+		{"reference re-read differs only in ts", doc(1, "t2"), doc(2, "t2"), GapRereadBaselineUnchanged},
+		{"candidate re-read differs in a real leaf", b1, doc(3, "t1"), GapRereadCandidateUnstable},
+		{"reference really moved to the candidate value", doc(2, "t2"), doc(2, "t2"), GapRereadAdmitted},
+	}
+	for _, c := range cases {
+		if got := ClassifyGapReread(first, b1, c1, c.b3, c.c2, opts); got.Outcome != c.want {
+			t.Errorf("%s: outcome %s (%s), want %s", c.name, got.Outcome, got.Detail, c.want)
+		}
 	}
 }

@@ -14,13 +14,21 @@ import yaml
 
 _CHART = Path(__file__).parents[1] / "deploy/helm/dev-health"
 _XML = (
-    "<clickhouse><users><ro><password_sha256_hex>" + "a" * 64 +
-    "</password_sha256_hex><profile>ro_profile</profile></ro></users></clickhouse>"
+    "<clickhouse><users><ro><password_sha256_hex>"
+    + "a" * 64
+    + "</password_sha256_hex><profile>ro_profile</profile></ro></users></clickhouse>"
 )
 
 
 def _docs(*extra_set: str) -> list[dict]:
-    args = ["helm", "template", "t", str(_CHART), "--show-only", "templates/clickhouse.yaml"]
+    args = [
+        "helm",
+        "template",
+        "t",
+        str(_CHART),
+        "--show-only",
+        "templates/clickhouse.yaml",
+    ]
     for value in extra_set:
         args += ["--set-string" if "usersd" in value else "--set", value]
     out = run(args, check=True, capture_output=True, text=True).stdout
@@ -49,7 +57,10 @@ def test_usersd_renders_configmap_volume_and_subpath_mount() -> None:
 
     pod = _sts(docs)["spec"]["template"]
     assert pod["spec"]["volumes"] == [
-        {"name": "clickhouse-usersd", "configMap": {"name": "t-dev-health-clickhouse-usersd"}}
+        {
+            "name": "clickhouse-usersd",
+            "configMap": {"name": "t-dev-health-clickhouse-usersd"},
+        }
     ]
     mounts = {m["mountPath"]: m for m in pod["spec"]["containers"][0]["volumeMounts"]}
     # data mount stays; users.d is per-file (subPath), never the whole directory,
@@ -64,21 +75,35 @@ def test_usersd_renders_configmap_volume_and_subpath_mount() -> None:
 
 def test_usersd_checksum_tracks_content() -> None:
     a = _sts(_docs(f"clickhouse.usersd.a\\.xml={_XML}"))["spec"]["template"]["metadata"]
-    b = _sts(_docs(f"clickhouse.usersd.a\\.xml={_XML}x"))["spec"]["template"]["metadata"]
+    b = _sts(_docs(f"clickhouse.usersd.a\\.xml={_XML}x"))["spec"]["template"][
+        "metadata"
+    ]
     assert a["annotations"] != b["annotations"]
 
 
 def test_usersd_works_without_persistence() -> None:
-    docs = _docs("clickhouse.persistence.enabled=false", f"clickhouse.usersd.a\\.xml={_XML}")
+    docs = _docs(
+        "clickhouse.persistence.enabled=false", f"clickhouse.usersd.a\\.xml={_XML}"
+    )
     mounts = _sts(docs)["spec"]["template"]["spec"]["containers"][0]["volumeMounts"]
     assert [m["mountPath"] for m in mounts] == ["/etc/clickhouse-server/users.d/a.xml"]
 
 
 def _docs_json(usersd_json: str) -> list[dict]:
     out = run(
-        ["helm", "template", "t", str(_CHART), "--show-only", "templates/clickhouse.yaml",
-         "--set-json", f"clickhouse.usersd={usersd_json}"],
-        check=True, capture_output=True, text=True,
+        [
+            "helm",
+            "template",
+            "t",
+            str(_CHART),
+            "--show-only",
+            "templates/clickhouse.yaml",
+            "--set-json",
+            f"clickhouse.usersd={usersd_json}",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
     ).stdout
     return [d for d in yaml.safe_load_all(out) if d]
 

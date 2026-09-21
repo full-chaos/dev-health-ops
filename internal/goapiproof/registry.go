@@ -734,7 +734,7 @@ func VerifyCandidateBuild(running string, expected string, routing map[string]Ro
 	// how to clear this block safely. CHAOS-5486's `go-api-routing
 	// repoint` preserves the mode and reads the running build from
 	// /buildinfo rather than taking it on trust from an operator.
-	return fmt.Errorf("goapiproof: routing rows point at a build the running process is not (running=%s): %s.\n  Re-point the row to the running build with `go-api-routing repoint` (mode preserved); `routing enable` would also change the mode. This is a REFUSAL, not a warning: see StaleRoutingRows for the replica argument that makes it one",
+	return fmt.Errorf("goapiproof: routing rows point at a build the running process is not (running=%s): %s.\n  Re-point the row to the running build with `go-api-routing repoint` (mode preserved); `go-api-routing enable` would also change the mode. This is a REFUSAL, not a warning: see StaleRoutingRows for the replica argument that makes it one",
 		running, strings.Join(disagreeing, "; "))
 }
 

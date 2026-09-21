@@ -104,3 +104,37 @@ def test_every_enable_command_uses_only_flags_the_verb_defines(path: Path) -> No
                 pytest.fail(f"{path.name}: `{command}` has a stray word {token!r}")
             name = token.lstrip("-").split("=")[0]
             index += 1 if ("=" in token or name in BOOLEAN_FLAGS) else 2
+
+
+SHORTHAND = re.compile(
+    r"(?<!go-api-)(?<!go-api )(?<![\w-])`routing (?:enable|disable|repoint|carry|status)\b"
+)
+SCANNED_ROOTS = ("cmd", "internal", "src", "docs", "ci")
+SCANNED_SUFFIXES = {".go", ".py", ".md", ".sh"}
+
+
+def _shorthand_hits() -> list[str]:
+    hits: list[str] = []
+    for root in SCANNED_ROOTS:
+        for path in sorted((ROOT / root).rglob("*")):
+            if path.suffix not in SCANNED_SUFFIXES or not path.is_file():
+                continue
+            if path.name.endswith("_test.go") or "testdata" in path.parts:
+                continue
+            for number, line in enumerate(
+                path.read_text(encoding="utf-8", errors="replace").splitlines(), 1
+            ):
+                stripped = line.lstrip()
+                if path.suffix in {".go", ".py"} and stripped.startswith(("//", "#")):
+                    continue
+                if SHORTHAND.search(line):
+                    hits.append(f"{path.relative_to(ROOT)}:{number}")
+    return hits
+
+
+def test_no_operator_text_names_a_routing_verb_without_its_binary() -> None:
+    """`routing enable` is not a command: it is `go-api-routing enable` (Go) or
+    `dev-hops go-api routing status|disable` (Python). A hint or message with
+    the bare shorthand sends an operator to `command not found` mid-recovery.
+    """
+    assert _shorthand_hits() == []

@@ -230,7 +230,7 @@ acceptance ruling, quoted in `cmd/go-api-prove/main.go` and `cmd/query-api/build
 construct a receipt from a digest or an arbitrary build name."** A schema digest matching says the *SDL*
 didn't change; it says nothing about whether the new binary is the one that was actually measured. The
 recovery procedure stays exactly what it already is above: rebuild/redeploy, re-run `go-api-prove` against
-the deployed build, then `routing enable`. The two surfaces this section describes exist so that step is
+the deployed build, then `go-api-routing enable`. The two surfaces this section describes exist so that step is
 never skipped silently, not so it can be skipped on purpose.
 
 A row that is live, reachable to real clients (`canary`/`primary`) and carries no proof is marked

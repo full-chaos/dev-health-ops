@@ -32,7 +32,13 @@
                       SELECT work_unit_id FROM (
         SELECT DISTINCT m.work_unit_id AS work_unit_id
         FROM work_unit_membership AS m
-        INNER JOIN (SELECT (SELECT argMax(run_id, completed_at) FROM work_unit_membership_runs WHERE org_id = {org_id:String}) AS latest_run_id) AS latest_run ON 1 = 1
+        WHERE m.org_id = {org_id:String}
+          AND (SELECT argMax(run_id, completed_at) FROM work_unit_membership_runs WHERE org_id = {org_id:String}) != ''
+          AND (SELECT argMax(run_id, completed_at) FROM work_unit_membership_runs WHERE org_id = {org_id:String}) != '__legacy__'
+          AND m.run_id = (SELECT argMax(run_id, completed_at) FROM work_unit_membership_runs WHERE org_id = {org_id:String})
+        UNION ALL
+        SELECT DISTINCT m.work_unit_id AS work_unit_id
+        FROM work_unit_membership AS m
         
             LEFT JOIN (
                 SELECT
@@ -48,8 +54,9 @@
                 AND lnm.node_type = m.node_type
                 AND lnm.node_id = m.node_id
         WHERE m.org_id = {org_id:String}
-          AND latest_run.latest_run_id != ''
-          AND ((latest_run.latest_run_id != '__legacy__' AND m.run_id = latest_run.latest_run_id) OR (latest_run.latest_run_id = '__legacy__' AND m.run_id = '' AND m.computed_at = lnm.legacy_max_computed_at))
+          AND (SELECT argMax(run_id, completed_at) FROM work_unit_membership_runs WHERE org_id = {org_id:String}) = '__legacy__'
+          AND m.run_id = ''
+          AND m.computed_at = lnm.legacy_max_computed_at
     )
                   )
               )

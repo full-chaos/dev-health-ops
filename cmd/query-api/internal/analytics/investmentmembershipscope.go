@@ -162,32 +162,39 @@ func legacyNodeMaxJoinSQL() string {
                 AND lnm.node_id = m.node_id`
 }
 
-// runScopePredicateSQL ports _membership_run_scope.py's RUN_SCOPE_PREDICATE
-// verbatim, substituting legacyRunID for its f-string interpolation.
-func runScopePredicateSQL() string {
-	return fmt.Sprintf(
-		"(latest_run.latest_run_id != '%s' AND m.run_id = latest_run.latest_run_id) "+
-			"OR (latest_run.latest_run_id = '%s' AND m.run_id = '' "+
-			"AND m.computed_at = lnm.legacy_max_computed_at)",
-		legacyRunID, legacyRunID,
-	)
-}
-
 // membershipScopedWorkUnitIDsSource ports
 // investment_membership_scope.py:71-81's
 // `membership_scoped_work_unit_ids` CTE, inlined -- the run it scopes to is
 // investmentScopeRunIDSQL(), the same scalar the filter's no-marker test
-// reads, so both halves of the filter always name one run.
+// reads, so all of them always name one run.
+//
+// _membership_run_scope.py's RUN_SCOPE_PREDICATE is an OR of two
+// exclusive cases on the run id: a real run, or the '__legacy__' marker. It is
+// split here into two UNION ALL branches, one per case, each guarded by
+// its own run-id test, so the common real-run case reads
+// work_unit_membership once and never builds the legacy per-node max join
+// it cannot use. The union selects exactly the work units the single
+// predicate selects (the branches are disjoint on the run id and each
+// keeps its half of the predicate verbatim), and the only consumer is an
+// IN (...) test, so neither order nor duplicates reach a result.
 func membershipScopedWorkUnitIDsSource() string {
+	runID := investmentScopeRunIDSQL()
 	return fmt.Sprintf(`(
         SELECT DISTINCT m.work_unit_id AS work_unit_id
         FROM work_unit_membership AS m
-        INNER JOIN (SELECT %s AS latest_run_id) AS latest_run ON 1 = 1
-        %s
         WHERE m.org_id = {org_id:String}
-          AND latest_run.latest_run_id != ''
-          AND (%s)
-    )`, investmentScopeRunIDSQL(), legacyNodeMaxJoinSQL(), runScopePredicateSQL())
+          AND %[1]s != ''
+          AND %[1]s != '%[2]s'
+          AND m.run_id = %[1]s
+        UNION ALL
+        SELECT DISTINCT m.work_unit_id AS work_unit_id
+        FROM work_unit_membership AS m
+        %[3]s
+        WHERE m.org_id = {org_id:String}
+          AND %[1]s = '%[2]s'
+          AND m.run_id = ''
+          AND m.computed_at = lnm.legacy_max_computed_at
+    )`, runID, legacyRunID, legacyNodeMaxJoinSQL())
 }
 
 // investmentMembershipScopeFilter is the WHERE-clause fragment

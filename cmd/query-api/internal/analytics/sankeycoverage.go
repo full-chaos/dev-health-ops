@@ -183,7 +183,7 @@ func compileSankeyCoverage(req SankeyRequest, orgID string, timeoutSeconds int, 
 		orgFilter = "work_unit_investments.org_id = {org_id:String}"
 
 		unitTeamSQL := BuildUnitTeamSubquery(UnitTeamSubqueryOptions{
-			Source:         fmt.Sprintf("%s AS work_unit_investments", LatestWorkUnitInvestmentsSource()),
+			Source:         fmt.Sprintf("%s AS work_unit_investments", windowedUnitEvidenceSource()),
 			InnerTeamAlias: "team",
 			OuterTeamAlias: "team_label",
 			IncludeTeamID:  true,

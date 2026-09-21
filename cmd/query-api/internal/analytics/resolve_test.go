@@ -635,11 +635,12 @@ func TestResolve_Sankey_UnsetUseInvestment_AutoRoutesToInvestment(t *testing.T) 
 	} {
 		t.Run(string(dim), func(t *testing.T) {
 			client := &routingFakeClient{}
-			client.on("AS source_dimension,", &fakeRowScanner{rows: [][]any{
-				{"TEAM", strings.ToUpper(string(dim)), "team-a", "value-a", 2.0},
-			}})
-			client.on("AS dimension,", &fakeRowScanner{rows: [][]any{
-				{"TEAM", "team-a", 5.0},
+			// One grouped query: grouping set 1 = the TEAM node set,
+			// 0 = the TEAM>dim edge set (sankeyNodeSetID/sankeyEdgeSetID
+			// for a 2-dimension path).
+			client.on("AS grouping_set,", &fakeRowScanner{rows: [][]any{
+				{uint64(0), "team-a", "value-a", 2.0},
+				{uint64(1), "team-a", nil, 5.0},
 			}})
 			batch := model.AnalyticsRequestInput{
 				// UseInvestment deliberately omitted at BOTH levels.

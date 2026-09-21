@@ -72,17 +72,29 @@ spec:
           {{- end }}
           resources:
             {{- toYaml .Values.web.resources | nindent 12 }}
+          {{- /*
+          CHAOS-6188: web.extraVolumeMounts renders in every environment (the
+          Ed25519 ACR web-assertion signing key is a Secret volume mount web
+          needs in production), while web.localDevelopment.extraVolumeMounts
+          stays gated behind localDevelopment.enabled. Both feed ONE
+          volumeMounts key -- never two -- so they merge instead of the
+          second clobbering the first.
+          */}}
+          {{- $webVolumeMounts := .Values.web.extraVolumeMounts | default (list) }}
           {{- if .Values.web.localDevelopment.enabled }}
-          {{- with .Values.web.localDevelopment.extraVolumeMounts }}
+          {{- $webVolumeMounts = concat $webVolumeMounts (.Values.web.localDevelopment.extraVolumeMounts | default (list)) }}
+          {{- end }}
+          {{- with $webVolumeMounts }}
           volumeMounts:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          {{- end }}
+      {{- $webVolumes := .Values.web.extraVolumes | default (list) }}
       {{- if .Values.web.localDevelopment.enabled }}
-      {{- with .Values.web.localDevelopment.extraVolumes }}
+      {{- $webVolumes = concat $webVolumes (.Values.web.localDevelopment.extraVolumes | default (list)) }}
+      {{- end }}
+      {{- with $webVolumes }}
       volumes:
         {{- toYaml . | nindent 8 }}
-      {{- end }}
       {{- end }}
       {{- with .Values.web.nodeSelector }}
       nodeSelector:

@@ -256,6 +256,40 @@ func LatestWorkUnitInvestmentsSource() string {
     )`, supersededWorkUnitIDsFilter(), investmentMembershipScopeFilter())
 }
 
+// windowedUnitEvidenceSource is the source the per-unit team vote
+// (BuildUnitTeamSubquery) reads when it is LEFT JOINed, by work_unit_id,
+// onto rows that already come from LatestWorkUnitInvestmentsSource and the
+// window filter: each work unit's latest structural evidence, for every
+// work unit with at least one version inside the window.
+//
+// A unit's vote depends only on that unit's own latest evidence, so this
+// gives every joined unit exactly the vote LatestWorkUnitInvestmentsSource
+// would: the supersession and membership-scope filters drop whole work
+// units (never one version of a unit), and a unit whose latest version
+// intersects the window has a version that does, so no joined unit is
+// missing. Units this source keeps that the outer rows do not are never
+// joined. What it saves is a second evaluation of the membership scope
+// and of every other latest-version column per statement, and the vote
+// over units outside the window.
+func windowedUnitEvidenceSource() string {
+	return `(
+        SELECT
+            work_unit_id,
+            argMax(structural_evidence_json, computed_at) AS structural_evidence_json,
+            org_id
+        FROM work_unit_investments
+        WHERE org_id = {org_id:String}
+          AND work_unit_id IN (
+              SELECT work_unit_id
+              FROM work_unit_investments
+              WHERE org_id = {org_id:String}
+                AND from_ts < {end_date:Date}
+                AND to_ts >= {start_date:Date}
+          )
+        GROUP BY org_id, work_unit_id
+    )`
+}
+
 // --- investment.py:90-127: LATEST_WORK_UNIT_REPO_EFFORT_CTE ------------
 
 // LatestWorkUnitRepoEffortSource ports LATEST_WORK_UNIT_REPO_EFFORT_CTE
@@ -563,7 +597,7 @@ func investmentContextFor(dimensions []Dimension, needsTeamJoinFlag, needsAuthor
 	// LatestWorkUnitInvestmentsSource() independent of `source` above.
 	if dimensionListHas(dimensions, DimensionTeam) || needsTeamJoinFlag {
 		unitTeamSQL := BuildUnitTeamSubquery(UnitTeamSubqueryOptions{
-			Source:         fmt.Sprintf("%s AS work_unit_investments", LatestWorkUnitInvestmentsSource()),
+			Source:         fmt.Sprintf("%s AS work_unit_investments", windowedUnitEvidenceSource()),
 			InnerTeamAlias: "team_label",
 			IncludeTeamID:  true,
 		})

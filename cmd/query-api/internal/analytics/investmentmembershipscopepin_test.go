@@ -94,10 +94,11 @@ func TestPinInvestmentMembershipScope_BindsTheResolvedRun(t *testing.T) {
 	if strings.Contains(got.statement, investmentScopeRunIDSQL()) {
 		t.Errorf("pinned statement still evaluates its own membership run:\n%s", got.statement)
 	}
-	// The filter names its run twice: the no-run test and the membership
-	// subquery. Both must read the pinned parameter.
-	if n := strings.Count(got.statement, investmentScopeRunIDPlaceholder()); n != 2 {
-		t.Errorf("placeholder occurrences = %d, want 2:\n%s", n, got.statement)
+	// The filter names its run five times: the no-run test, and the
+	// membership subquery's real-run branch (three tests) and legacy
+	// branch (one). Every one must read the pinned parameter.
+	if n := strings.Count(got.statement, investmentScopeRunIDPlaceholder()); n != 5 {
+		t.Errorf("placeholder occurrences = %d, want 5:\n%s", n, got.statement)
 	}
 	if value, ok := bindingValue(got.bindings, investmentScopeRunIDParam); !ok || value != "run-1" {
 		t.Errorf("%s binding = %v (present=%v), want run-1", investmentScopeRunIDParam, value, ok)

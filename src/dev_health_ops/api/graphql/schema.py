@@ -87,9 +87,6 @@ from .resolvers.reports import (
     resolve_clone_saved_report,
     resolve_create_saved_report,
     resolve_delete_saved_report,
-    resolve_report_runs,
-    resolve_saved_report,
-    resolve_saved_reports,
     resolve_trigger_report,
     resolve_update_saved_report,
 )
@@ -555,7 +552,7 @@ class Query:
         limit: int = 50,
         offset: int = 0,
     ) -> SavedReportConnection:
-        return await resolve_saved_reports(org_id, limit, offset)
+        _raise_served_by_query_api("savedReports", org_id, info)
 
     @strawberry.field(description="Get a saved report by ID")
     async def saved_report(
@@ -564,7 +561,7 @@ class Query:
         org_id: str,
         report_id: str,
     ) -> SavedReportType | None:
-        return await resolve_saved_report(org_id, report_id)
+        _raise_served_by_query_api("savedReport", org_id, info)
 
     @strawberry.field(description="List report runs for a saved report")
     async def report_runs(
@@ -574,7 +571,7 @@ class Query:
         report_id: str,
         limit: int = 50,
     ) -> ReportRunConnection:
-        return await resolve_report_runs(org_id, report_id, limit)
+        _raise_served_by_query_api("reportRuns", org_id, info)
 
     # The fields whose bodies call _raise_served_by_query_api are SERVED BY
     # query-api, not by Python.

@@ -100,67 +100,6 @@ def _make_mock_session(session_maker):
 
 
 @pytest.mark.asyncio
-async def test_resolve_saved_reports(monkeypatch, session_maker, seeded_reports):
-    from dev_health_ops.api.graphql.resolvers import reports as reports_mod
-
-    monkeypatch.setattr(
-        "dev_health_ops.db.get_postgres_session",
-        _make_mock_session(session_maker),
-    )
-
-    result = await reports_mod.resolve_saved_reports(
-        org_id=seeded_reports["org_id"], limit=50, offset=0
-    )
-    assert result.total == 2
-    assert len(result.items) == 2
-    names = {r.name for r in result.items}
-    assert "Weekly Health" in names
-    assert "Monthly Review" in names
-
-
-@pytest.mark.asyncio
-async def test_resolve_saved_report_by_id(monkeypatch, session_maker, seeded_reports):
-    from dev_health_ops.api.graphql.resolvers import reports as reports_mod
-
-    monkeypatch.setattr(
-        "dev_health_ops.db.get_postgres_session",
-        _make_mock_session(session_maker),
-    )
-
-    result = await reports_mod.resolve_saved_report(
-        org_id=seeded_reports["org_id"],
-        report_id=seeded_reports["report1_id"],
-    )
-    assert result is not None
-    assert result.name == "Weekly Health"
-
-    missing = await reports_mod.resolve_saved_report(
-        org_id=seeded_reports["org_id"],
-        report_id=str(uuid.uuid4()),
-    )
-    assert missing is None
-
-
-@pytest.mark.asyncio
-async def test_resolve_report_runs(monkeypatch, session_maker, seeded_reports):
-    from dev_health_ops.api.graphql.resolvers import reports as reports_mod
-
-    monkeypatch.setattr(
-        "dev_health_ops.db.get_postgres_session",
-        _make_mock_session(session_maker),
-    )
-
-    result = await reports_mod.resolve_report_runs(
-        org_id=seeded_reports["org_id"],
-        report_id=seeded_reports["report1_id"],
-        limit=10,
-    )
-    assert result.total == 1
-    assert result.items[0].status == "success"
-    assert result.items[0].rendered_markdown == "# Weekly Health\nAll good."
-
-
-@pytest.mark.asyncio
 async def test_trigger_report_creates_atomic_run_and_deferred_handoff(
     monkeypatch, session_maker, seeded_reports
 ):
@@ -211,11 +150,11 @@ async def test_create_and_delete_saved_report(
     )
     assert deleted is True
 
-    gone = await reports_mod.resolve_saved_report(
-        org_id=seeded_reports["org_id"],
-        report_id=created.id,
-    )
-    assert gone is None
+    async with session_maker() as session:
+        remaining = await session.execute(
+            select(SavedReport.id).where(SavedReport.id == uuid.UUID(created.id))
+        )
+    assert remaining.first() is None
 
 
 @pytest.mark.asyncio

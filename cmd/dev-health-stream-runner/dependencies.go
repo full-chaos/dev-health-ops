@@ -16,7 +16,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	"github.com/full-chaos/dev-health-ops/internal/platform/postureguard"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
-	"github.com/full-chaos/dev-health-ops/internal/processreadiness"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
@@ -42,6 +41,10 @@ var errStreamDependencyUnavailable = errors.New("stream-runner dependency is una
 // a DSN or a secret.
 type dependencyFailure struct {
 	reason string
+	// configuration marks a failure no retry can fix -- a missing URI, a
+	// connection string the driver rejects, an unusable credential key --
+	// as opposed to a dependency that is down now and may come back.
+	configuration bool
 }
 
 func (failure dependencyFailure) Error() string {
@@ -54,6 +57,28 @@ func (dependencyFailure) Unwrap() error { return errStreamDependencyUnavailable 
 func (failure dependencyFailure) DependencyReason() string { return failure.reason }
 
 func dependencyUnavailable(reason string) error { return dependencyFailure{reason: reason} }
+
+func dependencyMisconfigured(reason string) error {
+	return dependencyFailure{reason: reason, configuration: true}
+}
+
+// openFailure keeps a rejected connection configuration apart from an
+// unreachable dependency, so the start-up loop stops retrying the first and
+// keeps retrying the second.
+func openFailure(reason string, err error) error {
+	if errors.Is(err, clickhouse.ErrInvalidConfig) || errors.Is(err, valkey.ErrInvalidConfig) ||
+		postgres.ConfigurationRejected(err) {
+		return dependencyMisconfigured(reason)
+	}
+	return dependencyUnavailable(reason)
+}
+
+// startupRetryable reports whether a failed start-up attempt can succeed on
+// a later attempt. Only an explicit configuration failure is final.
+func startupRetryable(err error) bool {
+	var failure dependencyFailure
+	return !errors.As(err, &failure) || !failure.configuration
+}
 
 // wrapStreamRunnerReadinessCheckWithLogging logs a failing check's own
 // bounded error text before returning it unchanged. health.Registry never
@@ -146,18 +171,18 @@ func newExternalRecomputeController(
 
 func openProductionStreamStorage(ctx context.Context, cfg config.Config, logger *slog.Logger) (streamStorage, error) {
 	if !cfg.ClickHouseURI.Configured() || !cfg.DomainDatabaseURI.Configured() || !cfg.ValkeyURI.Configured() {
-		return nil, dependencyUnavailable("stream_storage_uris_unconfigured")
+		return nil, dependencyMisconfigured("stream_storage_uris_unconfigured")
 	}
 	domainConfig := postgres.DefaultConfig(cfg.DomainDatabaseURI.Reveal())
 	domainConfig.MaxConns = cfg.DomainDatabaseMaxConns
 	domainPool, err := postgres.New(ctx, domainConfig)
 	if err != nil {
-		return nil, dependencyUnavailable("stream_domain_postgres_open_failed")
+		return nil, openFailure("stream_domain_postgres_open_failed", err)
 	}
 	clickHouse, err := clickhouse.Open(ctx, clickhouse.DefaultConfig(cfg.ClickHouseURI.Reveal()))
 	if err != nil {
 		domainPool.Close()
-		return nil, dependencyUnavailable("stream_clickhouse_open_failed")
+		return nil, openFailure("stream_clickhouse_open_failed", err)
 	}
 	valkeyConfig := valkey.DefaultConfig(cfg.ValkeyURI.Reveal())
 	valkeyConfig.ClientName = "dev-health-stream-runner-" + cfg.Profile
@@ -165,7 +190,7 @@ func openProductionStreamStorage(ctx context.Context, cfg config.Config, logger 
 	if err != nil {
 		_ = clickHouse.Close()
 		domainPool.Close()
-		return nil, dependencyUnavailable("stream_valkey_open_failed")
+		return nil, openFailure("stream_valkey_open_failed", err)
 	}
 	// The PagerDuty webhook reconciler decrypts the binding's own credential
 	// for its REST hydration fallback. Building the cipher here rather than at
@@ -178,7 +203,7 @@ func openProductionStreamStorage(ctx context.Context, cfg config.Config, logger 
 		valkeyClient.Close()
 		_ = clickHouse.Close()
 		domainPool.Close()
-		return nil, dependencyUnavailable("stream_credential_cipher_unconfigured")
+		return nil, dependencyMisconfigured("stream_credential_cipher_unconfigured")
 	}
 	return &productionStreamStorage{
 		clickHouse: clickHouse, domainPool: domainPool, valkey: valkeyClient,
@@ -405,173 +430,94 @@ func configureStreamRunnerDependenciesWithSources(
 	if registry == nil || sources.openStorage == nil {
 		return nil, dependencyUnavailable("stream_runner_sources_unavailable")
 	}
-	storage, err := sources.openStorage(ctx, cfg, logger)
-	if err != nil || storage == nil {
-		return nil, processreadiness.RegisterUnavailable(
-			registry,
-			"clickhouse",
-			"domain_postgres",
-			"posture_manifest_lockstep",
-			"stream_consumer",
-			"valkey",
-		)
-	}
-	closeOnError := true
-	defer func() {
-		if closeOnError {
-			storage.Close()
-		}
-	}()
-	// CHAOS-5437: posture_manifest_lockstep refuses readiness the instant
-	// this binary's compiled-in posture manifest is older than what
-	// go-worker-migrate has applied -- see cmd/dev-health-worker's identical
-	// check for the full incident this closes (three stream runners sat
-	// not_ready for 9h with no crash loop and no alert).
-	postureGuard := postureguard.New(
-		"dev-health-stream-runner", storage.PostureManifestLockstep, postgres.PostureManifestDigest(),
-	)
-	if err := registry.RegisterMetrics("posture_manifest_lockstep", postureGuard); err != nil {
+	specs, err := streamConsumerSpecs(cfg)
+	if err != nil {
 		return nil, err
 	}
-	storageChecks := []struct {
-		name  string
-		check health.CheckFunc
-	}{
-		{name: "clickhouse", check: storage.ClickHouseReady},
-		{name: "domain_postgres", check: storage.DomainPostgresReady},
-		// wrapStreamRunnerReadinessCheckWithLogging (codex review finding,
-		// CHAOS-5437 round 1): registering postureGuard.Ready directly left
-		// its formatted refusal -- naming both digests, "rebuild/redeploy
-		// this image" -- unreachable, since health.Registry never surfaces a
-		// CheckFunc's returned error anywhere (see cmd/dev-health-worker's
-		// identical logDependencyCheckFailure doc comment). Every OTHER
-		// binary's posture_manifest_lockstep check already logs; this one
-		// silently did not.
-		{name: "posture_manifest_lockstep", check: wrapStreamRunnerReadinessCheckWithLogging(logger, "posture_manifest_lockstep", postureGuard.Ready)},
-		{name: "valkey", check: storage.ValkeyReady},
-	}
-	streamConsumerConfigured := false
-	checks := append(storageChecks, struct {
-		name  string
-		check health.CheckFunc
-	}{
-		name: "stream_consumer", check: func(context.Context) error {
-			if !streamConsumerConfigured {
-				return errStreamDependencyUnavailable
-			}
-			return nil
-		},
-	})
-	for _, check := range checks {
-		if err := registry.RegisterRequired(check.name, check.check); err != nil {
-			return nil, err
-		}
-	}
-	bootstrapTimeout := cfg.HealthCheckTimeout
-	if bootstrapTimeout <= 0 {
-		bootstrapTimeout = 2 * time.Second
-	}
-	bootstrapContext, cancelBootstrap := context.WithTimeout(ctx, bootstrapTimeout)
-	defer cancelBootstrap()
-	for _, check := range storageChecks {
-		if check.check(bootstrapContext) != nil {
-			// CHAOS-5614: this used to return nil, nil. closeOnError's defer
-			// above still closed the pools, but the shell
-			// (internal/platform/shell.Execute) only logs
-			// "dependency_configuration_failed" and exits 1 when THIS
-			// function returns a non-nil error -- a bare nil, nil looked
-			// exactly like "storage is fine, no consumers configured yet"
-			// (see the RegisterUnavailable branch above), so the process
-			// stayed up indefinitely with its registered readiness checks
-			// (ClickHouseReady/DomainPostgresReady/ValkeyReady/
-			// postureGuard.Ready) bound to now-closed clients, serving
-			// not-ready forever with no restart. Each check already logged
-			// its own name and underlying error above
-			// (logDependencyCheckFailure / wrapStreamRunnerReadinessCheckWithLogging);
-			// this reason is deliberately a bounded, compile-time constant
-			// naming only the class of failure, not the dynamic check name.
-			return nil, dependencyUnavailable("stream_runner_bootstrap_check_failed")
-		}
-	}
-
-	components := []lifecycle.Component{streamStorageLifecycle{storage: storage}}
-	replicas := cfg.StreamConfiguredReplicas
-	if replicas == 0 {
-		replicas = 1
-	}
-	switch cfg.Profile {
-	case "ingest":
-		for _, specification := range []struct {
-			kind   streamHandlerKind
-			config streamrunner.Config
-		}{
-			{
-				kind:   internalIngestHandlerKind,
-				config: internalIngestRunnerConfig(replicas),
-			},
-			{
-				kind:   productTelemetryHandlerKind,
-				config: productTelemetryRunnerConfig(replicas),
-			},
-		} {
-			runner, err := buildStreamRunner(storage, registry, specification.kind, specification.config, logger, nil)
-			if err != nil {
-				if errors.Is(err, streamrunner.ErrInvalidConfig) {
-					return nil, err
-				}
-				return nil, nil
-			}
-			components = append(components, runner)
-		}
-	case "external":
+	// Nothing here opens a connection. Storage is opened, probed and turned
+	// into running consumers by the supervisor after the operator endpoint is
+	// up, and it keeps retrying while a dependency is down. Opening storage
+	// here instead made a dependency outage at start-up permanent: the
+	// process either exited or stayed alive with readiness latched shut after
+	// every dependency had come back.
+	var observer streamhandlers.ExternalIngestObserver
+	if cfg.Profile == "external" {
 		// The external profile is the only one that ingests customer-pushed
 		// records, so it is the only one with refusals and project-transition
 		// writes to report. Registering the collector on the health registry
 		// is what makes the counters REACHABLE rather than merely constructed:
 		// without it the handler would hold a live observer whose numbers no
 		// scrape ever reads.
-		observer, err := newExternalIngestMetrics(registry)
+		collector, err := newExternalIngestMetrics(registry)
 		if err != nil {
 			return nil, err
 		}
-		runner, err := buildStreamRunner(
-			storage,
-			registry,
-			externalIngestHandlerKind,
-			externalIngestRunnerConfig(replicas),
-			logger,
-			observer,
-		)
-		if err != nil {
-			if errors.Is(err, streamrunner.ErrInvalidConfig) {
-				return nil, err
-			}
-			return nil, nil
+		observer = collector
+	}
+	supervisor := newStreamConsumerSupervisor(cfg, registry, sources.openStorage, logger, specs, observer)
+	// CHAOS-5437: posture_manifest_lockstep refuses readiness the instant
+	// this binary's compiled-in posture manifest is older than what
+	// go-worker-migrate has applied -- see cmd/dev-health-worker's identical
+	// check for the full incident this closes (three stream runners sat
+	// not_ready for 9h with no crash loop and no alert).
+	postureGuard := postureguard.New(
+		"dev-health-stream-runner", supervisor.postureManifestLockstep, postgres.PostureManifestDigest(),
+	)
+	if err := registry.RegisterMetrics("posture_manifest_lockstep", postureGuard); err != nil {
+		return nil, err
+	}
+	storageChecks := []streamReadinessCheck{
+		{name: "clickhouse", check: supervisor.clickHouseReady},
+		{name: "domain_postgres", check: supervisor.domainPostgresReady},
+		// health.Registry never surfaces a CheckFunc's returned error, so
+		// the guard's refusal -- naming both digests -- reaches an operator
+		// only through this logging wrapper.
+		{name: "posture_manifest_lockstep", check: wrapStreamRunnerReadinessCheckWithLogging(logger, "posture_manifest_lockstep", postureGuard.Ready)},
+		{name: "valkey", check: supervisor.valkeyReady},
+	}
+	for _, check := range append(storageChecks, streamReadinessCheck{name: "stream_consumer", check: supervisor.consumersReady}) {
+		if err := registry.RegisterRequired(check.name, check.check); err != nil {
+			return nil, err
 		}
-		components = append(components, storage.ControlComponents()...)
-		components = append(components, runner)
+	}
+	supervisor.startupChecks = storageChecks
+	return []lifecycle.Component{supervisor}, nil
+}
+
+type streamReadinessCheck struct {
+	name  string
+	check health.CheckFunc
+}
+
+// streamConsumerSpecs names the consumers one profile runs. Each
+// configuration is validated here, before any connection is opened, so a
+// configuration no retry can fix (an external singleton scaled past one
+// replica, an unknown profile) stops the process at start-up.
+func streamConsumerSpecs(cfg config.Config) ([]streamConsumerSpec, error) {
+	replicas := cfg.StreamConfiguredReplicas
+	if replicas == 0 {
+		replicas = 1
+	}
+	var specs []streamConsumerSpec
+	switch cfg.Profile {
+	case "ingest":
+		specs = []streamConsumerSpec{
+			{kind: internalIngestHandlerKind, config: internalIngestRunnerConfig(replicas)},
+			{kind: productTelemetryHandlerKind, config: productTelemetryRunnerConfig(replicas)},
+		}
+	case "external":
+		specs = []streamConsumerSpec{{kind: externalIngestHandlerKind, config: externalIngestRunnerConfig(replicas)}}
 	case "pagerduty":
-		runner, err := buildStreamRunner(
-			storage,
-			registry,
-			pagerdutyHandlerKind,
-			pagerdutyRunnerConfig(replicas),
-			logger,
-			nil,
-		)
-		if err != nil {
-			if errors.Is(err, streamrunner.ErrInvalidConfig) {
-				return nil, err
-			}
-			return nil, nil
-		}
-		components = append(components, runner)
+		specs = []streamConsumerSpec{{kind: pagerdutyHandlerKind, config: pagerdutyRunnerConfig(replicas)}}
 	default:
 		return nil, streamrunner.ErrInvalidConfig
 	}
-	streamConsumerConfigured = true
-	closeOnError = false
-	return components, nil
+	for _, spec := range specs {
+		if err := spec.config.Validate(); err != nil {
+			return nil, err
+		}
+	}
+	return specs, nil
 }
 
 // newExternalIngestMetrics builds the external profile's Prometheus collector
@@ -695,24 +641,6 @@ func pagerdutyRunnerConfig(replicas int) streamrunner.Config {
 		MaxDeliveries: 4, ShutdownDrain: 30 * time.Second,
 		ConfiguredReplicas: replicas,
 	}
-}
-
-type streamStorageLifecycle struct{ storage streamStorage }
-
-func (streamStorageLifecycle) Name() string { return "stream-storage" }
-
-func (component streamStorageLifecycle) Start(context.Context) error {
-	if component.storage == nil {
-		return errStreamDependencyUnavailable
-	}
-	return nil
-}
-
-func (component streamStorageLifecycle) Shutdown(context.Context) error {
-	if component.storage != nil {
-		component.storage.Close()
-	}
-	return nil
 }
 
 // pagerDutyWebhookSinks builds the effect writers one webhook reconciliation

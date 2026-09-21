@@ -120,14 +120,12 @@ A large backlog left behind by a restore saturates the operator's telemetry gate
 
 **Permanent fix tracked in CHAOS-5615**: expose the timeout as a tuning knob.
 
-### Stream runners failing bootstrap (CHAOS-5614)
+### Stream runners starting during a dependency outage
 
-Stream runners returning `nil, nil` from a bootstrap check < 2s timeout:
-- Deferred `closeOnError` closes pools.
-- Process lives forever serving readiness against closed clients.
-- Restart clears.
-
-**Temporary**: restart the stream-runner pods. **Permanent fix**: CHAOS-5614.
+A stream runner opens ClickHouse, domain Postgres and Valkey and runs its start-up checks in the background, after its operator endpoint is up:
+- While a dependency is down, `/readyz` names the failing checks and the log shows `stream runner start-up attempt failed` with `reason` or `failed_checks` and `retry_in` (1s, doubling to 30s).
+- When every dependency answers, the log shows `stream runner dependencies recovered`, then `stream consumers started`, and `/readyz` turns 200. No restart is needed.
+- A rejected configuration (a missing URI, a connection string the driver refuses, an unusable credential key) is not retried: the log shows `stream runner start-up stopped: configuration rejected` with the `reason`, and the pod stays live and unready until the configuration is fixed.
 
 ## Prod values and digest pinning
 

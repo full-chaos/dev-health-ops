@@ -93,6 +93,8 @@ func TestExternalProfileWiresReachableIngestCounters(t *testing.T) {
 			if len(components) == 0 {
 				t.Fatal("profile built no stream consumers")
 			}
+			runStreamComponents(t, registry, components)
+			waitForSupervisor(t, components[0].(*streamConsumerSupervisor))
 			observer, built := storage.observers[testCase.kind]
 			if !built {
 				t.Fatalf("%s handler was never constructed: %v", testCase.kind, storage.seen)

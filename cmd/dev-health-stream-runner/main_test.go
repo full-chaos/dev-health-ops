@@ -95,16 +95,16 @@ func TestStreamRunnerSpecBuildsProductionProfiles(t *testing.T) {
 	t.Run("unconfigured storage stays live and fails readiness", func(t *testing.T) {
 		registry := health.NewRegistry(100 * time.Millisecond)
 		components, err := configureStreamRunnerDependenciesWithLogger(
-			context.Background(), config.Config{}, registry, nil,
+			context.Background(), config.Config{Profile: "ingest"}, registry, nil,
 		)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(components) != 0 {
-			t.Fatalf("components = %d, want no stream consumers without storage", len(components))
-		}
-		if err := (health.Gate{Registry: registry}).Start(context.Background()); err != nil {
-			t.Fatal(err)
+		supervisor := components[0].(*streamConsumerSupervisor)
+		runStreamComponents(t, registry, components)
+		waitForSupervisor(t, supervisor)
+		if supervisor.current() != nil {
+			t.Fatal("unconfigured storage was published")
 		}
 		want := []string{"clickhouse", "domain_postgres", "posture_manifest_lockstep", "stream_consumer", "valkey"}
 		if status := registry.Readiness(context.Background()); status.Ready || !slices.Equal(status.Failed, want) {
@@ -129,22 +129,17 @@ func TestStreamRunnerSpecBuildsProductionProfiles(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(components) != 3 {
-			t.Fatalf("components = %d, want storage plus two loops", len(components))
-		}
+		runStreamComponents(t, registry, components)
+		waitForReadiness(t, registry, 5*time.Second)
 		if !slices.Equal(storage.handlers, []streamHandlerKind{
 			internalIngestHandlerKind,
 			productTelemetryHandlerKind,
 		}) {
 			t.Fatalf("handlers = %v", storage.handlers)
 		}
-		if err := (health.Gate{Registry: registry}).Start(context.Background()); err != nil {
-			t.Fatal(err)
-		}
-		status := registry.Readiness(context.Background())
-		want := []string{"internal_ingest_loop", "product_telemetry_loop"}
-		if status.Ready || !slices.Equal(status.Failed, want) {
-			t.Fatalf("readiness = %#v, want failed %v", status, want)
+		running := componentNames(components[0].(*streamConsumerSupervisor).running)
+		if !slices.Equal(running, []string{"stream-internal_ingest", "stream-product_telemetry"}) {
+			t.Fatalf("running = %v, want the two ingest loops", running)
 		}
 	})
 
@@ -165,47 +160,15 @@ func TestStreamRunnerSpecBuildsProductionProfiles(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(components) != 0 || !storage.closed {
-			t.Fatalf("components=%d storage_closed=%v, want no components and closed storage", len(components), storage.closed)
-		}
-		if err := (health.Gate{Registry: registry}).Start(context.Background()); err != nil {
-			t.Fatal(err)
-		}
+		stop := runStreamComponents(t, registry, components)
+		waitForSupervisor(t, components[0].(*streamConsumerSupervisor))
 		want := []string{"stream_consumer"}
 		if status := registry.Readiness(context.Background()); status.Ready || !slices.Equal(status.Failed, want) {
 			t.Fatalf("readiness = %#v, want failed %v", status, want)
 		}
-	})
-
-	// CHAOS-5614: a bootstrap storage check (clickhouse/domain_postgres/
-	// valkey/posture_manifest_lockstep) that fails within cfg.HealthCheckTimeout
-	// used to return nil, nil here -- storage.Close() ran via closeOnError, but
-	// the shell (internal/platform/shell) only exits non-zero on a returned
-	// error, so the process stayed up forever, its readiness checks bound to
-	// the now-closed pools, with no restart. It must instead return a real
-	// error so the shell exits 1 and k8s restarts the process.
-	t.Run("failing bootstrap check returns an error instead of silently degrading", func(t *testing.T) {
-		storage := &streamCommandStorage{valkeyErr: errors.New("valkey unavailable")}
-		registry := health.NewRegistry(100 * time.Millisecond)
-		components, err := configureStreamRunnerDependenciesWithSources(
-			context.Background(),
-			config.Config{Profile: "ingest", StreamConfiguredReplicas: 1},
-			registry,
-			streamDependencySources{
-				openStorage: func(context.Context, config.Config, *slog.Logger) (streamStorage, error) {
-					return storage, nil
-				},
-			},
-			nil,
-		)
-		if err == nil {
-			t.Fatal("want a non-nil error when a bootstrap storage check fails, got nil (the CHAOS-5614 silent-degrade shape)")
-		}
-		if !errors.Is(err, errStreamDependencyUnavailable) {
-			t.Fatalf("error = %v, want it to wrap errStreamDependencyUnavailable", err)
-		}
-		if len(components) != 0 || len(storage.handlers) != 0 || !storage.closed {
-			t.Fatalf("components=%d handlers=%v storage_closed=%v, want no components, no consumer construction, closed storage", len(components), storage.handlers, storage.closed)
+		stop()
+		if !storage.closed {
+			t.Fatal("storage was not closed at shutdown")
 		}
 	})
 
@@ -226,25 +189,20 @@ func TestStreamRunnerSpecBuildsProductionProfiles(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(components) != 2 {
-			t.Fatalf("components = %d, want storage plus one webhook loop", len(components))
-		}
+		runStreamComponents(t, registry, components)
+		waitForReadiness(t, registry, 5*time.Second)
 		if !slices.Equal(storage.handlers, []streamHandlerKind{pagerdutyHandlerKind}) {
 			t.Fatalf("handlers = %v", storage.handlers)
 		}
-		if err := (health.Gate{Registry: registry}).Start(context.Background()); err != nil {
-			t.Fatal(err)
-		}
-		status := registry.Readiness(context.Background())
-		want := []string{"pagerduty_webhooks_loop"}
-		if status.Ready || !slices.Equal(status.Failed, want) {
-			t.Fatalf("readiness = %#v, want failed %v", status, want)
+		running := componentNames(components[0].(*streamConsumerSupervisor).running)
+		if !slices.Equal(running, []string{"stream-pagerduty_webhooks"}) {
+			t.Fatalf("running = %v, want the webhook loop", running)
 		}
 	})
 
 	t.Run("unavailable pagerduty bridge stays live and fails readiness", func(t *testing.T) {
-		// The compatibility reconciler is unconfigured until the worker bridge
-		// URL and token are deployed; that must never kill the process.
+		// A consumer that cannot be constructed over healthy storage must
+		// never kill the process.
 		storage := &streamCommandStorage{handlerErr: errors.New("bridge unavailable")}
 		registry := health.NewRegistry(100 * time.Millisecond)
 		components, err := configureStreamRunnerDependenciesWithSources(
@@ -261,33 +219,34 @@ func TestStreamRunnerSpecBuildsProductionProfiles(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(components) != 0 || !storage.closed {
-			t.Fatalf("components=%d storage_closed=%v, want no components and closed storage", len(components), storage.closed)
-		}
-		if err := (health.Gate{Registry: registry}).Start(context.Background()); err != nil {
-			t.Fatal(err)
-		}
+		stop := runStreamComponents(t, registry, components)
+		waitForSupervisor(t, components[0].(*streamConsumerSupervisor))
 		want := []string{"stream_consumer"}
 		if status := registry.Readiness(context.Background()); status.Ready || !slices.Equal(status.Failed, want) {
 			t.Fatalf("readiness = %#v, want failed %v", status, want)
 		}
+		stop()
+		if !storage.closed {
+			t.Fatal("storage was not closed at shutdown")
+		}
 	})
 
 	t.Run("external singleton configuration fails closed", func(t *testing.T) {
-		storage := &streamCommandStorage{}
+		opened := false
 		_, err := configureStreamRunnerDependenciesWithSources(
 			context.Background(),
 			config.Config{Profile: "external", StreamConfiguredReplicas: 2},
 			health.NewRegistry(time.Second),
 			streamDependencySources{
 				openStorage: func(context.Context, config.Config, *slog.Logger) (streamStorage, error) {
-					return storage, nil
+					opened = true
+					return &streamCommandStorage{}, nil
 				},
 			},
 			nil,
 		)
-		if err == nil || !storage.closed {
-			t.Fatalf("duplicate external replicas: err=%v storage_closed=%v", err, storage.closed)
+		if !errors.Is(err, streamrunner.ErrInvalidConfig) || opened {
+			t.Fatalf("duplicate external replicas: err=%v storage_opened=%v, want a refusal before any connection", err, opened)
 		}
 	})
 }

@@ -362,7 +362,7 @@
     },
     {
       "operation": "featureFlagTimeseries",
-      "unproven_reason": "no flag-activation data in any venue, both planes answered empty (vacuous_empty_legs), so no two-plane run compared any leaf; enabled canary 100 by the R319 acknowledgement (chris, option c) 2026-09-20T23:40Z; record deploy-154/r154/ladder-featureFlagTimeseries/enable.md",
+      "unproven_reason": "two-plane run at build 84828635 (the last build with a Python analytics leg) in a seeded org: 4 of 5 cases differ only inside declared defect CHAOS-6149 (0 outside) and 1 case is refused by the corpus Tier-B declaration on buckets.value, so no case is a plain match; no Python leg exists after the analytics deletion, so the row stays a named limit; enabled canary 100 by the acknowledgement (chris, option c) 2026-09-20T23:40Z; record deploy-154/r154/ladder-featureFlagTimeseries/enable.md",
       "guards": [
         {"file": "cmd/query-api/internal/analytics/resolve_test.go", "test": "TestResolve_HappyPath_TimeseriesAndBreakdown"},
         {"file": "cmd/query-api/internal/analytics/timeseries_test.go", "test": "TestExecuteTimeseries_AllNullBucketYieldsNilValue_NotZero"},

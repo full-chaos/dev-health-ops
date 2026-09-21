@@ -95,8 +95,15 @@ type GoServedEntry struct {
 	// the terminal line prints GO_ONLY_UNPROVEN, never a proof word. It is not
 	// a proof: it only keeps an operation whose Python body is deleted from
 	// being left with no ledger entry.
-	UnprovenReason string          `json:"unproven_reason,omitempty"`
-	Guards         []GoServedGuard `json:"guards"`
+	UnprovenReason string `json:"unproven_reason,omitempty"`
+	// EnableLimit names why the deployed-executed proof run can never be
+	// recorded for this operation at a production build (for example its
+	// route admits only an administrator, and the proof principal never is
+	// one). It may sit beside a two-plane sha. With UnprovenReason it is the
+	// only thing that lets `enable` write a row for an operation that has no
+	// store proof: see EnableLimitReason.
+	EnableLimit string          `json:"enable_limit,omitempty"`
+	Guards      []GoServedGuard `json:"guards"`
 }
 
 // GoServedLedger is the machine-readable list of deleted-Python operations.
@@ -153,6 +160,9 @@ func ParseGoServedLedger(raw []byte) (*GoServedLedger, error) {
 		case !hexSHA40.MatchString(entry.TwoPlaneOpsSHA):
 			return nil, fmt.Errorf("goapiproof: go-served ledger %s: two_plane_ops_sha must be 40 lowercase hex characters", entry.Operation)
 		}
+		if entry.EnableLimit != "" && len(strings.TrimSpace(entry.EnableLimit)) < minUnprovenReasonLength {
+			return nil, fmt.Errorf("goapiproof: go-served ledger %s: enable_limit must say why and cite the record", entry.Operation)
+		}
 		if len(entry.Guards) == 0 {
 			return nil, fmt.Errorf("goapiproof: go-served ledger %s names no guard test: a deleted-Python operation with nothing keeping its kernel honest cannot be proven", entry.Operation)
 		}
@@ -189,6 +199,25 @@ func (l *GoServedLedger) Entry(operation string) (GoServedEntry, bool) {
 		}
 	}
 	return GoServedEntry{}, false
+}
+
+// EnableLimitReason is the written reason the ledger gives for enabling
+// operation without a store proof run, or "" and false when it gives none.
+// `enable` admits an unproven operation only through this: the ledger is
+// compiled into the binary, so the set cannot be widened by anything an
+// operator passes on a command line.
+func (l *GoServedLedger) EnableLimitReason(operation string) (string, bool) {
+	entry, ok := l.Entry(operation)
+	if !ok {
+		return "", false
+	}
+	switch {
+	case strings.TrimSpace(entry.EnableLimit) != "":
+		return entry.EnableLimit, true
+	case strings.TrimSpace(entry.UnprovenReason) != "":
+		return entry.UnprovenReason, true
+	}
+	return "", false
 }
 
 // Operations lists the ledger's operations, sorted.

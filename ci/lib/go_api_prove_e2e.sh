@@ -59,6 +59,37 @@ with engine.begin() as conn:
 engine.dispose()
 '
 
+# The fixture program that puts the measured operation's routing row in shadow
+# mode at the running build. It writes the row directly: `go-api-routing
+# enable` admits an operation only from a recorded proof run or a written
+# ledger limit, and the run this script checks is what records the first one. The digests come from the running query-api's own /registry.
+GO_API_PROVE_E2E_ROUTING_PROGRAM='import json, os, sys
+from datetime import datetime, timezone
+from sqlalchemy import create_engine, text
+
+registry = json.load(open(sys.argv[1]))
+operation, build = sys.argv[2], sys.argv[3]
+digest = {entry["operation"]: entry["document_digest"] for entry in registry["operations"]}.get(operation)
+if not digest:
+    sys.exit("the running query-api does not register " + operation)
+key = {"s": registry["schema_digest"], "d": digest, "o": operation, "b": build}
+engine = create_engine(os.environ["POSTGRES_URI"].replace("+asyncpg", "", 1))
+with engine.begin() as conn:
+    conn.execute(text(
+        "INSERT INTO go_api_candidate_build (schema_digest, document_digest, selected_operation, candidate_build)"
+        " VALUES (:s, :d, :o, :b) ON CONFLICT DO NOTHING"
+    ), key)
+    conn.execute(text(
+        "INSERT INTO go_api_routing_state (schema_digest, document_digest, selected_operation, current_candidate_build,"
+        " owner, mode, rollout_percentage, review_evidence, recorded_by, updated_at)"
+        " VALUES (:s, :d, :o, :b, :owner, :mode, 0, :why, :who, :now)"
+        " ON CONFLICT (schema_digest, document_digest, selected_operation) DO UPDATE"
+        " SET current_candidate_build = EXCLUDED.current_candidate_build, mode = EXCLUDED.mode, updated_at = EXCLUDED.updated_at"
+    ), dict(key, owner="go", mode="shadow", why="live-e2e: measure through the proof route, not the edge dispatcher",
+            who="live-e2e", now=datetime.now(timezone.utc)))
+engine.dispose()
+'
+
 GO_API_PROVE_E2E_JWKS_PROGRAM='import json
 from dev_health_ops.api.graphql.principal_envelope import build_envelope_jwks
 print(json.dumps(build_envelope_jwks()))
@@ -106,8 +137,9 @@ run_go_api_prove_e2e() {
   pgx_uri="$(go_api_prove_e2e_pgx_uri)"
   printf '%s' "${GO_API_PROVE_E2E_PRINCIPAL_PROGRAM}" > "${dir}/principal.py"
   printf '%s' "${GO_API_PROVE_E2E_JWKS_PROGRAM}" > "${dir}/jwks.py"
+  printf '%s' "${GO_API_PROVE_E2E_ROUTING_PROGRAM}" > "${dir}/routing.py"
 
-  echo "==> [go-api-prove e2e] building query-api, go-api-routing, go-api-prove, mint-envelope, mint-edge-token"
+  echo "==> [go-api-prove e2e] building query-api, go-api-prove, mint-envelope, mint-edge-token"
   # query-api refuses to identify an unstamped or modified build, and
   # go-api-prove refuses to measure a candidate built from another commit
   # than its own, so both are stamped the way the image build stamps them:
@@ -115,7 +147,6 @@ run_go_api_prove_e2e() {
   commit="${GITHUB_SHA:-$(git -C "${ROOT_DIR}" rev-parse HEAD)}"
   go build -buildvcs=false -ldflags "-X github.com/full-chaos/dev-health-ops/internal/platform/version.Commit=${commit}" \
     -o "${BIN_DIR}/query-api" ./cmd/query-api
-  go build -o "${BIN_DIR}/go-api-routing" ./cmd/go-api-routing
   go build -buildvcs=false -ldflags "-X github.com/full-chaos/dev-health-ops/internal/platform/version.Commit=${commit}" \
     -o "${BIN_DIR}/go-api-prove" ./cmd/go-api-prove
   go build -o "${BIN_DIR}/mint-envelope" ./cmd/mint-envelope
@@ -147,16 +178,10 @@ run_go_api_prove_e2e() {
 
   echo "==> [go-api-prove e2e] routing ${GO_API_PROVE_E2E_OPERATION} to shadow at the running build"
   local query_api="http://127.0.0.1:${QUERY_API_PORT}"
-  (
-    local bearer
-    cd "${ROOT_DIR}"
-    bearer="$("${BIN_DIR}/mint-envelope" -org "${E2E_ORG_ID}" -key-file "${dir}/envelope.pem")" &&
-    POSTGRES_URI="${pgx_uri}" GO_API_ROUTING_BEARER="${bearer}" "${BIN_DIR}/go-api-routing" enable -operations "${GO_API_PROVE_E2E_OPERATION}" -mode canary \
-      -acknowledge-unproven -registry-url "${query_api}/registry" -buildinfo-url "${query_api}/buildinfo" \
-      -recorded-by live-e2e -review-evidence "live-e2e: row for the go-api-prove bearer-path run" &&
-    POSTGRES_URI="${pgx_uri}" GO_API_ROUTING_BEARER="${bearer}" "${BIN_DIR}/go-api-routing" disable -operations "${GO_API_PROVE_E2E_OPERATION}" -mode shadow -apply \
-      -recorded-by live-e2e -review-evidence "live-e2e: measure through the proof route, not the edge dispatcher"
-  ) || go_api_prove_e2e_fail "could not route ${GO_API_PROVE_E2E_OPERATION} to shadow"
+  curl -fsS "${query_api}/registry" > "${dir}/registry.json" \
+    || go_api_prove_e2e_fail "could not read ${query_api}/registry"
+  POSTGRES_URI="${pgx_uri}" run_python "${dir}/routing.py" "${dir}/registry.json" "${GO_API_PROVE_E2E_OPERATION}" "${commit}" \
+    || go_api_prove_e2e_fail "could not route ${GO_API_PROVE_E2E_OPERATION} to shadow"
 
   echo "==> [go-api-prove e2e] the migration created the proof service principal, with no membership"
   go_api_prove_e2e_principal assert-migrated || go_api_prove_e2e_fail "the proof service principal row is not the migrated one"

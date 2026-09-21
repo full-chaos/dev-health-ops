@@ -472,7 +472,7 @@ func resolveQueryAPIEndpoints(explicitRegistry, explicitBuildInfo string) (regis
 // what an operator would see. r1's P3 is the reason: three separate
 // mutations -- the DSN-leaking flag default restored only inside
 // `runEnable`, the schema-agreement preflight disabled, the
-// enabled_unproven WARNING suppressed -- all SURVIVED both package
+// enabled_named_limit WARNING suppressed -- all SURVIVED both package
 // suites, because nothing in the suite ever ran a verb and read its
 // output. A guard is pinned where it is installed or it is not pinned.
 var (
@@ -528,9 +528,9 @@ func newVerbFlagSet(name string) *flag.FlagSet {
 // `-expect-build` from `repoint`, and `-json` from `status`.
 //
 // It also swallows the most likely spelling mistake on this surface:
-// `flag` needs `-acknowledge-unproven=false`, so `-acknowledge-unproven
-// false` makes `false` an OPERAND -- an operator trying to turn the
-// acknowledgement OFF turns it on and loses every later flag too.
+// `flag` needs `-dry-run=false`, so `-dry-run false` makes `false` an
+// OPERAND -- an operator trying to turn the switch OFF turns it on and
+// loses every later flag too.
 //
 // Refused for EVERY verb, before any preflight and before anything is
 // read, so a mistyped command line cannot reach the database at all.

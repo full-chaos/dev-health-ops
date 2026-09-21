@@ -537,22 +537,27 @@ func TestVerbHelpFlagExitsZeroLikeTopLevelHelp(t *testing.T) {
 	}
 }
 
-// A back-quoted word inside a flag's usage string
-// makes Go's `flag` package treat it as the flag's OWN VALUE NAME (its
-// documented mechanism for choosing the usage placeholder) -- so
-// `-acknowledge-unproven`'s usage text, which said "...by `status`
-// for...", made `enable -h` print `-acknowledge-unproven status`, a
-// boolean switch that reads as if it takes an argument.
-func TestEnableHelpDoesNotShowAcknowledgeUnprovenAsTakingAnArgument(t *testing.T) {
+// `enable` has no operator door around the proof gate: the flags that used
+// to admit an unproven operation (a blanket acknowledgement, a venue receipt
+// file, a production report) are gone, so each is refused as an unknown
+// flag before anything is read, and `enable -h` does not list them.
+func TestEnableTakesNoFlagThatAdmitsAnUnprovenOperation(t *testing.T) {
 	_, errOut, err := captureVerb(t, "enable", "-h")
 	if err != nil {
 		t.Fatalf("enable -h: run() = %v, want nil", err)
 	}
-	if strings.Contains(errOut, "-acknowledge-unproven status") {
-		t.Fatalf("-acknowledge-unproven still prints as if it takes an argument named status:\n%s", errOut)
-	}
-	if !strings.Contains(errOut, "-acknowledge-unproven\n") {
-		t.Fatalf("-acknowledge-unproven must print as a plain boolean switch, own line, no value name:\n%s", errOut)
+	for _, gone := range []string{"acknowledge-unproven", "venue-receipt", "production-report"} {
+		if strings.Contains(errOut, gone) {
+			t.Fatalf("enable -h still lists -%s:\n%s", gone, errOut)
+		}
+		argv := []string{"enable", "-mode", "canary", "-recorded-by", "lane", "-review-evidence", "why", "-" + gone}
+		if gone != "acknowledge-unproven" {
+			argv = append(argv, "x.json")
+		}
+		_, _, err := captureVerb(t, argv...)
+		if err == nil || !strings.Contains(err.Error(), "flag provided but not defined: -"+gone) {
+			t.Fatalf("enable -%s = %v, want the unknown-flag refusal", gone, err)
+		}
 	}
 }
 
@@ -1545,10 +1550,10 @@ func TestEveryVerbRefusesAnUnconsumedArgument(t *testing.T) {
 		"status loses -json": {"status", "UNEXPECTED-OPERAND", "-json"},
 		// The boolean spelling an operator actually reaches for. `flag`
 		// wants -flag=false; -flag false makes `false` an OPERAND, so the
-		// operator who meant to turn the acknowledgement OFF turns it ON
-		// and loses every later flag as well.
+		// operator who meant to turn the switch OFF turns it ON and loses
+		// every later flag as well.
 		"a bare boolean value is an operand": {"enable", "-mode", "canary", "-recorded-by", "lane",
-			"-review-evidence", "why", "-acknowledge-unproven", "false", "-dry-run"},
+			"-review-evidence", "why", "-dry-run", "false", "-expect-build", "deadbeef"},
 		// A single trailing word with no flags after it, which is the
 		// harmless-looking version of the same mistake.
 		"one trailing word": {"status", "leftover"},

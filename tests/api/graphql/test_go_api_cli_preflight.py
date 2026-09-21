@@ -50,7 +50,6 @@ def _enable(**overrides: Any) -> int:
         mode="canary",
         rollout=100,
         query_api_url=None,
-        acknowledge_unproven=False,
     )
     for key, value in overrides.items():
         setattr(ns, key, value)

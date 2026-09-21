@@ -170,12 +170,24 @@ DELETED_GO_SERVED_RESOLVER_SYMBOLS: dict[Path, frozenset[str]] = {
             "resolve_improve_opportunities",
         }
     ),
-    # productTelemetryDashboard: the platform dashboard resolver and the shared
-    # dataclasses stay; the organisation dashboard resolver and its loader go.
+    # productTelemetryDashboard and productTelemetryPlatformDashboard: both
+    # resolvers, both loaders and the organisation-name lookup are gone with
+    # the modules.
     PRODUCT_TELEMETRY_RESOLVER_SOURCE: frozenset(
-        {"resolve_product_telemetry_dashboard"}
+        {
+            "resolve_product_telemetry_dashboard",
+            "resolve_product_telemetry_platform_dashboard",
+            "_load_org_hash_index",
+            "_resolve_top_orgs",
+            "_platform_dashboard_to_graphql",
+        }
     ),
-    PRODUCT_TELEMETRY_LOADER_SOURCE: frozenset({"load_product_telemetry_dashboard"}),
+    PRODUCT_TELEMETRY_LOADER_SOURCE: frozenset(
+        {
+            "load_product_telemetry_dashboard",
+            "load_product_telemetry_platform_dashboard",
+        }
+    ),
     # The nine query-api-served AI analytics operations, including
     # aiOpportunities. The module is deleted with them; the detector module
     # stays as the Go detectors' parity oracle.
@@ -344,6 +356,11 @@ DELETED_GO_SERVED_RESOLVER_MODULES: dict[str, Path] = {
     / "graphql"
     / "resolvers"
     / "data_health.py",
+    # productTelemetryPlatformDashboard (and productTelemetryDashboard before
+    # it): the resolvers, their loaders and the section dataclasses only they
+    # used. The telemetry ingest router keeps its own modules.
+    "product telemetry resolver": PRODUCT_TELEMETRY_RESOLVER_SOURCE,
+    "product telemetry dashboard loader": PRODUCT_TELEMETRY_LOADER_SOURCE,
     # The workgraph operator repair route (its only route).
     "workgraph repair route": ROOT
     / "src"
@@ -502,6 +519,7 @@ SDL_LOAD_BEARING_SYMBOLS: dict[str, frozenset[str]] = {
             "experiments",
             "ai_opportunities",
             "product_telemetry_dashboard",
+            "product_telemetry_platform_dashboard",
             "compounding_risk",
             "security_alerts",
             "improve_opportunities",
@@ -567,6 +585,7 @@ SDL_LOAD_BEARING_SYMBOLS: dict[str, frozenset[str]] = {
             "SecurityAlertConnection",
             "WorkUnitTeamAttribution",
             "ProductTelemetryDashboardType",
+            "ProductTelemetryPlatformDashboardType",
             "ProductTelemetrySessionSummaryType",
         }
     ),

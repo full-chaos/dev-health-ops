@@ -17,11 +17,12 @@ package goapiproof
 //  2. the running query-api must register every named operation, under
 //     the same DOCUMENT digest the edge's catalog carries.
 //  3. the exact candidate build must have a `deployed_executed`/`match`
-//     proof run for each operation, or --acknowledge-unproven must be
-//     passed -- in which case the row carries an ACKNOWLEDGED-UNPROVEN
-//     review_evidence prefix DURABLY, so `status` can report it for as
-//     long as the enablement is in force rather than only in a log line
-//     written at the moment it happened.
+//     proof run for each operation, or the go-served ledger compiled into
+//     this binary must name a written limit for it (goserved_ledger.json:
+//     `unproven_reason` or `enable_limit`) -- in which case the row carries
+//     a NAMED-LIMIT review_evidence prefix DURABLY, so `status` can report
+//     it for as long as the enablement is in force. No flag, environment
+//     variable or file an operator passes can add an operation to that set.
 //
 // WHAT IS DELIBERATELY DIFFERENT. The Python verb takes the candidate
 // build as a flag, documented "by CONVENTION, unverified" -- the fifteen
@@ -85,20 +86,9 @@ import (
 var EnableModes = []string{"canary", "primary"}
 
 // ErrEnableUnproven reports that an operation has no deployed-executed
-// proof for this candidate build and --acknowledge-unproven was not
-// passed.
+// proof for this candidate build and the go-served ledger names no written
+// limit for it.
 var ErrEnableUnproven = errors.New("goapiproof: no deployed_executed/match proof run recorded for this candidate build")
-
-// UnprovenEvidencePrefix is prepended to review_evidence on any row
-// enabled without a proof run.
-//
-// Durable on the ROW, not only in a log line: on 2026-09-07 fifteen
-// operations were enabled on an explicit ruling that lived in a chat
-// message, which is precisely the "unreadable six weeks later" problem
-// `status`'s UNPROVEN marker exists to flag. Byte-identical to
-// go_api_cli.py's `_enable_review_evidence` prefix so a row written by
-// either plane reads the same.
-const UnprovenEvidencePrefix = "ACKNOWLEDGED-UNPROVEN: "
 
 // EnableRequest is one invocation.
 type EnableRequest struct {
@@ -130,19 +120,10 @@ type EnableRequest struct {
 	// the operator typed about themselves and is verified by nothing.
 	PrincipalID string
 
-	// AcknowledgeUnproven enables operations with no proof run, marking
-	// each one UNPROVEN durably.
-	AcknowledgeUnproven bool
-
-	// VenueReceipt is an optional venue-proof receipt (venue.go). It is
-	// consulted ONLY for an operation the store has no proof for, and
-	// admits it only for exactly this RunningBuild, SchemaDigest and
-	// document digest.
-	VenueReceipt *VenueReceipt
-	// ProductionReport is production's OWN prover report at the same build.
-	// With VenueReceipt it admits, by venue class 2, an operation on the
-	// no-production-data list (venue_nodata.go).
-	ProductionReport *VenueReceipt
+	// Ledger is the go-served ledger whose written limits admit an
+	// operation with no store proof. Nil means the ledger this binary was
+	// built with; only a test sets it.
+	Ledger *GoServedLedger
 
 	DryRun bool
 }
@@ -153,16 +134,13 @@ type EnableOutcome struct {
 	DocumentDigest string
 	Mode           string
 	CandidateBuild string
-	// Proven is false when this row was enabled under
-	// --acknowledge-unproven. It is reported even on success, because an
-	// enablement and an ACKNOWLEDGED enablement must not print alike.
+	// Proven is false when this row was enabled from the ledger's written
+	// limit. It is reported even on success, because a proven enablement
+	// and a named-limit enablement must not print alike.
 	Proven bool
-	// VenueDigest is the venue receipt's sha256 when the row was admitted
-	// from one instead of a store proof run; empty otherwise.
-	VenueDigest string
-	// ProductionDigest is set with VenueDigest for a class-2 admission: the
-	// production report's sha256.
-	ProductionDigest string
+	// NamedLimit is the ledger's written reason when the row was admitted
+	// from it instead of a store proof run; empty otherwise.
+	NamedLimit string
 	// ReviewEvidence is what was actually written, prefix included.
 	ReviewEvidence string
 	// ModeBefore/CandidateBuildBefore/HadRowBefore are
@@ -336,44 +314,45 @@ func Enable(ctx context.Context, pool *pgxpool.Pool, request EnableRequest) ([]E
 			unproven = append(unproven, operation)
 		}
 	}
-	// A venue receipt is additive: it can only turn an operation the store
-	// could not prove into a proven one, never the reverse.
-	venueDigest, venueRefusal, unproven := applyVenueReceipt(request, wanted, unproven)
 	sort.Strings(unproven)
-	if len(unproven) > 0 && !request.AcknowledgeUnproven {
-		var venueNotes string
-		for _, operation := range unproven {
-			if reason, ok := venueRefusal[operation]; ok {
-				venueNotes += fmt.Sprintf("\n  venue receipt refused for %s: %s", operation, reason)
-			}
+	ledger := request.Ledger
+	if ledger == nil {
+		if ledger, err = DefaultGoServedLedger(); err != nil {
+			return nil, err
 		}
-		return nil, fmt.Errorf("%w (%s=%s stage=%s terminal_state=%s) for: %v%s\n"+
+	}
+	namedLimit := make(map[string]string, len(unproven))
+	var refused []string
+	for _, operation := range unproven {
+		if reason, ok := ledger.EnableLimitReason(operation); ok {
+			namedLimit[operation] = reason
+			continue
+		}
+		refused = append(refused, operation)
+	}
+	if len(refused) > 0 {
+		return nil, fmt.Errorf("%w (%s=%s stage=%s terminal_state=%s) for: %v\n"+
 			"  Plan section 5 stage 3 requires the exact candidate build to have served the operation through real ingress, auth, parse/validate, dispatch and a real database -- a constructor, health check or bare 200 does not qualify.\n"+
-			"  Record it with go-api-prove, or pass -acknowledge-unproven to enable anyway (the row is then reported UNPROVEN by `status` for as long as it is in force)",
+			"  Record it with go-api-prove. An operation that can never be proven that way needs a written limit in the go-served ledger (goserved_ledger.json), reviewed with the change; enable takes no flag for it",
 			ErrEnableUnproven, "candidate_build", request.RunningBuild,
-			EnablementProofStage, EnablementProofTerminalState, unproven, venueNotes)
+			EnablementProofStage, EnablementProofTerminalState, refused)
 	}
 
 	outcomes := make([]EnableOutcome, 0, len(request.Operations))
 	for _, operation := range request.Operations {
 		evidence := request.ReviewEvidence
-		digest := venueDigest[operation].venue
-		switch {
-		case proven[operation]:
-		case digest != "":
-			evidence = VenueEvidence(digest, venueDigest[operation].production, evidence)
-		default:
-			evidence = UnprovenEvidencePrefix + evidence
+		reason := namedLimit[operation]
+		if !proven[operation] {
+			evidence = NamedLimitEvidence(reason, evidence)
 		}
 		outcomes = append(outcomes, EnableOutcome{
-			Operation:        operation,
-			DocumentDigest:   wanted[operation],
-			Mode:             request.Mode,
-			CandidateBuild:   request.RunningBuild,
-			Proven:           proven[operation] || digest != "",
-			VenueDigest:      digest,
-			ProductionDigest: venueDigest[operation].production,
-			ReviewEvidence:   evidence,
+			Operation:      operation,
+			DocumentDigest: wanted[operation],
+			Mode:           request.Mode,
+			CandidateBuild: request.RunningBuild,
+			Proven:         proven[operation],
+			NamedLimit:     reason,
+			ReviewEvidence: evidence,
 		})
 	}
 	if request.DryRun {
@@ -485,38 +464,4 @@ func Enable(ctx context.Context, pool *pgxpool.Pool, request EnableRequest) ([]E
 		return nil, fmt.Errorf("goapiproof: commit: %w", err)
 	}
 	return outcomes, nil
-}
-
-// venueAdmission is what admitted one operation from a venue receipt.
-type venueAdmission struct{ venue, production string }
-
-// applyVenueReceipt splits the operations the store could not prove into
-// those a venue receipt admits, the reasons it refused the rest, and what
-// is still unproven. Class 1 (admin-only) is tried first, then class 2 (no
-// production data) when a production report was given. No receipt:
-// everything stays unproven.
-func applyVenueReceipt(request EnableRequest, documentDigest map[string]string, unproven []string) (map[string]venueAdmission, map[string]string, []string) {
-	admitted := map[string]venueAdmission{}
-	refused := map[string]string{}
-	if request.VenueReceipt == nil {
-		return admitted, refused, unproven
-	}
-	var still []string
-	for _, operation := range unproven {
-		err := VenueAdmit(request.VenueReceipt, operation, request.SchemaDigest, documentDigest[operation], request.RunningBuild, request.Mode)
-		if err == nil {
-			admitted[operation] = venueAdmission{venue: request.VenueReceipt.Digest}
-			continue
-		}
-		if NoProdDataEligible(operation) {
-			err = NoProdDataAdmit(request.ProductionReport, request.VenueReceipt, operation, request.SchemaDigest, documentDigest[operation], request.RunningBuild, request.Mode)
-			if err == nil {
-				admitted[operation] = venueAdmission{venue: request.VenueReceipt.Digest, production: request.ProductionReport.Digest}
-				continue
-			}
-		}
-		refused[operation] = err.Error()
-		still = append(still, operation)
-	}
-	return admitted, refused, still
 }

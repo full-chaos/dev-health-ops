@@ -6,8 +6,9 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
 )
 
-// A venue row and a waiver row are different states with different words;
-// a store-proven row is "ok" whatever its evidence says.
+// A named-limit row, a row the retired venue path wrote, and a row nothing
+// admitted are different states with different words; a store-proven row is
+// "ok" whatever its evidence says.
 //
 // REBASE RESOLUTION, two code paths merged (#2761 and CHAOS-6107). #2761
 // extracted this function and kept the pre-existing `|| schemaMismatch`
@@ -16,7 +17,7 @@ import (
 // removed clause -- its expectation now states the new contract, and the
 // case that still refuses (`venue but digest mismatch`, #2761's own) is
 // what proves the removal did not widen the MISMATCH path generally.
-func TestProofWordKeepsVenueAndWaiverRowsApart(t *testing.T) {
+func TestProofWordKeepsNamedLimitLegacyVenueAndUnprovenRowsApart(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		op   statusReportOperation
@@ -24,7 +25,11 @@ func TestProofWordKeepsVenueAndWaiverRowsApart(t *testing.T) {
 	}{
 		{"store proven", statusReportOperation{DigestState: goapiproof.DigestMatch, Proven: true}, "ok"},
 		{"store proven, stale venue text", statusReportOperation{DigestState: goapiproof.DigestMatch, Proven: true, VenueProof: goapiproof.VenueClassAdmin}, "ok"},
-		{"waiver", statusReportOperation{DigestState: goapiproof.DigestMatch}, "UNPROVEN"},
+		{"store proven, stale named-limit text", statusReportOperation{DigestState: goapiproof.DigestMatch, Proven: true, NamedLimit: true}, "ok"},
+		{"nothing admitted it", statusReportOperation{DigestState: goapiproof.DigestMatch}, "UNPROVEN"},
+		{"named limit", statusReportOperation{DigestState: goapiproof.DigestMatch, NamedLimit: true}, "NAMED-LIMIT"},
+		{"named limit but the DEPLOYED plane registers another document digest", statusReportOperation{DigestState: goapiproof.DigestMatch, NamedLimit: true, DeployedDigestState: "MISMATCH"}, "MISMATCH"},
+		{"named limit, no row", statusReportOperation{NamedLimit: true}, "-"},
 		{"venue admin", statusReportOperation{DigestState: goapiproof.DigestMatch, VenueProof: goapiproof.VenueClassAdmin}, "VENUE-PROVEN(admin_only)"},
 		{"venue no data", statusReportOperation{DigestState: goapiproof.DigestMatch, VenueProof: goapiproof.VenueClassNoData}, "VENUE-PROVEN(no_production_data)"},
 		{"venue but the DEPLOYED plane registers another document digest", statusReportOperation{DigestState: goapiproof.DigestMatch, VenueProof: goapiproof.VenueClassAdmin, DeployedDigestState: "MISMATCH"}, "MISMATCH"},

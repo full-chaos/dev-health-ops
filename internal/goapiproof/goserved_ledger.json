@@ -200,6 +200,15 @@
       ]
     },
     {
+      "operation": "productTelemetryPlatformDashboard",
+      "unproven_reason": "platform-admin-only route (a superuser, not impersonating): the viewer principal the production prover mints can never run it, so no two-plane run at a production build compared any leaf; enabled on the venue run as an admin at the same build (receipt sha256 prefix 27c03ff9, both executed requests matched) and the Go route's own authorization decision table",
+      "guards": [
+        {"file": "cmd/query-api/internal/producttelemetry/producttelemetry_test.go", "test": "TestPlatform_NoOrgPredicateAndAssembly"},
+        {"file": "cmd/query-api/internal/producttelemetry/producttelemetry_test.go", "test": "TestRequirePlatformAdmin_DecisionTable"},
+        {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_symbols_are_not_redefined"}
+      ]
+    },
+    {
       "operation": "compoundingRisk",
       "two_plane_ops_sha": "8b08058f369cbe5415ebebb282c4fed5fac266c5",
       "guards": [
@@ -302,6 +311,7 @@
     {
       "operation": "connectorsDataHealth",
       "two_plane_ops_sha": "84828635426669a9e45901edb04923449c6f930e",
+      "enable_limit": "admin-only route (role admin, owner or operator, or a superuser): the viewer principal the production prover mints can never run it, so no proof run can be recorded at a production build; enabled on the venue run as an admin at the same build (receipt sha256 prefix 27c03ff9) and the Go route's own authorization decision table",
       "guards": [
         {"file": "cmd/query-api/internal/datahealth/datahealth_test.go", "test": "TestConnectorFailureDecisionTable"},
         {"file": "cmd/query-api/internal/datahealth/datahealth_test.go", "test": "TestConnectorsReadsTheAuthorizedOrgAndMapsRows"},
@@ -311,6 +321,7 @@
     {
       "operation": "dataHealthIdentity",
       "two_plane_ops_sha": "84828635426669a9e45901edb04923449c6f930e",
+      "enable_limit": "admin-only route (role admin, owner or operator, or a superuser): the viewer principal the production prover mints can never run it, so no proof run can be recorded at a production build; enabled on the venue run as an admin at the same build (receipt sha256 prefix 27c03ff9) and the Go route's own authorization decision table",
       "guards": [
         {"file": "cmd/query-api/internal/datahealth/datahealth_test.go", "test": "TestIdentityMapping"},
         {"file": "cmd/query-api/internal/datahealth/datahealth_test.go", "test": "TestIdentityMappingTeamScopesTheMappedSet"},
@@ -320,6 +331,7 @@
     {
       "operation": "mappingCoverageHealth",
       "two_plane_ops_sha": "84828635426669a9e45901edb04923449c6f930e",
+      "enable_limit": "admin-only route (role admin, owner or operator, or a superuser): the viewer principal the production prover mints can never run it, so no proof run can be recorded at a production build; enabled on the venue run as an admin at the same build (receipt sha256 prefix 27c03ff9) and the Go route's own authorization decision table",
       "guards": [
         {"file": "cmd/query-api/internal/datahealth/datahealth_test.go", "test": "TestCoverageStat"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
@@ -328,6 +340,7 @@
     {
       "operation": "metricLineage",
       "two_plane_ops_sha": "84828635426669a9e45901edb04923449c6f930e",
+      "enable_limit": "admin-only route (role admin, owner or operator, or a superuser): the viewer principal the production prover mints can never run it, so no proof run can be recorded at a production build; enabled on the venue run as an admin at the same build (receipt sha256 prefix 27c03ff9) and the Go route's own authorization decision table",
       "guards": [
         {"file": "cmd/query-api/internal/datahealth/datahealth_test.go", "test": "TestMetricLineage"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}

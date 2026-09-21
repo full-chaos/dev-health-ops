@@ -72,7 +72,7 @@ import (
 
 // CarriedEvidencePrefix opens the review_evidence of every carried row.
 //
-// Durable on the ROW, for the reason UnprovenEvidencePrefix is: it is
+// Durable on the ROW, for the reason NamedLimitEvidencePrefix is: it is
 // the only thing telling a reader -- of the row, or of the audit table
 // where the action reads `enable` -- that this row is not a fresh
 // enablement decision but a copy of one taken at another digest. A log
@@ -83,7 +83,7 @@ const CarriedEvidencePrefix = "CARRIED-FROM "
 // CarriedEvidence renders what a carried row records.
 //
 // The source row's own evidence is kept INTACT behind the prefix,
-// including an ACKNOWLEDGED-UNPROVEN prefix of its own: a row enabled
+// including a NAMED-LIMIT prefix of its own: a row enabled
 // without proof must still say so at the new digest. Nothing is
 // truncated -- an over-long result is refused rather than trimmed,
 // because the audit table is append-only and a silently trimmed reason

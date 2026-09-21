@@ -50,6 +50,12 @@ _QUERIES = {
         "{ sessionSummary { avgPagesViewed } } }",
         None,
     ),
+    "productTelemetryPlatformDashboard": (
+        "query { productTelemetryPlatformDashboard(input: "
+        '{startDate: "2026-01-01", endDate: "2026-01-08"}) '
+        "{ totals { events } } }",
+        None,
+    ),
     "compoundingRisk": (
         'query { compoundingRisk(orgId: "org-1") { orgId } }',
         None,

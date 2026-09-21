@@ -8,7 +8,7 @@ behaviour under test is a composite-key upsert and a 4-column-FK-scoped
 query.
 
 What this file adds over the admin tests is the OPERATOR path: the
-command's own refusal, its acknowledgement escape hatch, and the fact that
+command's own refusal, the proof run that lets it proceed, and the fact that
 a refusal leaves the table untouched. A gate that refuses AFTER a partial
 write would be worse than no gate.
 
@@ -138,7 +138,6 @@ def _ns(**overrides: Any) -> argparse.Namespace:
         mode="canary",
         rollout=100,
         query_api_url=None,
-        acknowledge_unproven=False,
     )
     for key, value in overrides.items():
         setattr(ns, key, value)
@@ -160,7 +159,10 @@ async def test_preflight_4_refuses_an_unproven_build_and_writes_nothing(
     err = capsys.readouterr().err
     assert ENABLEMENT_PROOF_STAGE in err
     assert "featureFlags" in err
-    assert "--acknowledge-unproven" in err
+    assert "cmd/go-api-prove" in err
+    assert "acknowledge" not in err, (
+        "the refusal must not point at a waiver the command no longer has"
+    )
     assert await _rows(session_factory) == [], (
         "a refused enable wrote rows anyway -- a gate that refuses after a "
         "partial write is worse than no gate"
@@ -168,47 +170,10 @@ async def test_preflight_4_refuses_an_unproven_build_and_writes_nothing(
 
 
 @pytest.mark.asyncio
-async def test_acknowledge_unproven_enables_and_warns_per_row(
-    session_factory: Any, capsys: pytest.CaptureFixture[str]
-) -> None:
-    with FakeQueryAPI(registry_payload()) as url:
-        assert (
-            await go_api_cli._cmd_routing_enable(
-                _ns(
-                    operations="featureFlags,reviewEdges",
-                    query_api_url=url,
-                    acknowledge_unproven=True,
-                )
-            )
-            == 0
-        )
-
-    captured = capsys.readouterr()
-    # One line PER ROW: "some were unproven" is not actionable six weeks
-    # later; "these two were" is.
-    assert captured.err.count("go_api_routing.enabled_unproven") == 2
-    assert "operation=featureFlags" in captured.err
-    assert "operation=reviewEdges" in captured.err
-    assert "(UNPROVEN)" in captured.out
-
-    rows = await _rows(session_factory)
-    catalog = dict(catalog_entries())
-    assert {row.selected_operation for row in rows} == {"featureFlags", "reviewEdges"}
-    for row in rows:
-        # Written at the LIVE digest, computed at runtime -- never a
-        # hand-typed value. This is the property whose absence caused the
-        # 2026-09-01 outage.
-        assert row.schema_digest == current_schema_digest()
-        assert row.document_digest == catalog[row.selected_operation]
-        assert row.mode == "canary"
-        assert row.owner == "go"
-
-
-@pytest.mark.asyncio
-async def test_a_recorded_proof_run_lets_enable_proceed_without_acknowledgement(
+async def test_a_recorded_proof_run_lets_enable_proceed(
     session_factory: Any,
 ) -> None:
-    """The gate is passable by doing the right thing, not only by waiving it."""
+    """The gate is passable by doing the right thing: recording the proof run."""
     catalog = dict(catalog_entries())
     async with session_factory() as session:
         await register_candidate_build(
@@ -254,14 +219,16 @@ async def test_a_recorded_proof_run_lets_enable_proceed_without_acknowledgement(
 @pytest.mark.asyncio
 async def test_enable_is_idempotent_through_the_cli(session_factory: Any) -> None:
     """Recovering from a digest move must be safely repeatable."""
+    catalog = dict(catalog_entries())
+    await _seed_receipt(
+        session_factory,
+        document_digest=catalog["featureFlags"],
+        measurement_route="edge",
+        build_binding="per_request",
+    )
     with FakeQueryAPI(registry_payload()) as url:
         for _ in range(3):
-            assert (
-                await go_api_cli._cmd_routing_enable(
-                    _ns(query_api_url=url, acknowledge_unproven=True)
-                )
-                == 0
-            )
+            assert await go_api_cli._cmd_routing_enable(_ns(query_api_url=url)) == 0
 
     assert len(await _rows(session_factory)) == 1
 
@@ -270,13 +237,15 @@ async def test_enable_is_idempotent_through_the_cli(session_factory: Any) -> Non
 async def test_status_reports_both_planes_and_never_fails(
     session_factory: Any, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    catalog = dict(catalog_entries())
+    await _seed_receipt(
+        session_factory,
+        document_digest=catalog["featureFlags"],
+        measurement_route="edge",
+        build_binding="per_request",
+    )
     with FakeQueryAPI(registry_payload()) as url:
-        assert (
-            await go_api_cli._cmd_routing_enable(
-                _ns(query_api_url=url, acknowledge_unproven=True)
-            )
-            == 0
-        )
+        assert await go_api_cli._cmd_routing_enable(_ns(query_api_url=url)) == 0
         capsys.readouterr()
         assert (
             await go_api_cli._cmd_routing_status(
@@ -290,7 +259,6 @@ async def test_status_reports_both_planes_and_never_fails(
     assert "[AGREE]" in out
     assert "featureFlags" in out
     assert "MATCH" in out
-    assert "UNPROVEN" in out
     # Every catalog operation is listed, including the ones with no row --
     # "nothing printed" is how the outage stayed invisible.
     for operation, _ in catalog_entries():
@@ -895,22 +863,16 @@ async def test_enable_json_names_the_authorizing_receipt(
         receipt["build_binding"],
     ) == ("mismatch", ["CHAOS-5447"], "edge", "per_request"), receipt
 
-    # Unproven, acknowledged: no receipt, said so.
+    # No admissible receipt: refused, nothing written.
     await _reset(session_factory)
     with FakeQueryAPI(registry_payload()) as url:
         assert (
             await go_api_cli._cmd_routing_enable(
-                _ns(
-                    query_api_url=url,
-                    mode="canary",
-                    json=True,
-                    acknowledge_unproven=True,
-                )
+                _ns(query_api_url=url, mode="canary", json=True)
             )
-            == 0
+            == 2
         )
-    [row] = json.loads(capsys.readouterr().out)["operations"]
-    assert (row["proven"], row["receipt"]) == (False, None), row
+    assert await _rows(session_factory) == []
 
 
 @pytest.mark.asyncio

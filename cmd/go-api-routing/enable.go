@@ -28,7 +28,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"time"
 
 	schemav1 "github.com/full-chaos/dev-health-ops/contracts/graphql/v1"
@@ -51,9 +50,9 @@ func localSchemaDigest() string { return goapidigest.Schema(schemav1.SDL) }
 func runEnable(argv []string) error {
 	set := newVerbFlagSet("enable")
 	var common commonFlags
-	var registryURL, buildInfoURL, expectBuild, mode, venueReceiptPath, productionReportPath string
+	var registryURL, buildInfoURL, expectBuild, mode string
 	var rollout int
-	var acknowledgeUnproven, dryRun bool
+	var dryRun bool
 	set.StringVar(&registryURL, "registry-url", "", "GET /registry on the DEPLOYED query-api (falls back to "+queryAPIURLEnvVar+"+\"/registry\")")
 	set.StringVar(&buildInfoURL, "buildinfo-url", "", "GET /buildinfo on the DEPLOYED query-api -- the ONLY source of the candidate build written (falls back to "+queryAPIURLEnvVar+"+\"/buildinfo\")")
 	common.bindPostgresURI(set, "domain Postgres DSN holding go_api_routing_state")
@@ -64,16 +63,6 @@ func runEnable(argv []string) error {
 	set.StringVar(&mode, "mode", "", "routing mode: canary or primary. Only these two make an operation reachable, so they are the only ones an 'enable' verb offers (required)")
 	set.IntVar(&rollout, "rollout", 100, "rollout_percentage written to the row. NOTE: neither plane enforces this yet -- canary means 'on for everyone, revocable'. Recorded, not obeyed")
 	set.StringVar(&expectBuild, "expect-build", "", "optional CROSS-CHECK: fail if the running build is not this sha. Never the source of the value written")
-	// No backticks around "status" here: Go's `flag`
-	// package treats a back-quoted word as the FLAG'S OWN VALUE NAME (its
-	// documented convention for choosing the placeholder shown in usage
-	// text) -- one there made `enable -h` print `-acknowledge-unproven
-	// status`, a boolean switch that reads as if it takes an argument
-	// named "status". Following that literally is refused safely (an
-	// unexpected operand), so the only real cost is a confused operator.
-	set.BoolVar(&acknowledgeUnproven, "acknowledge-unproven", false, "enable operations with no deployed-executed proof run for this build. Each such row records ACKNOWLEDGED-UNPROVEN durably and is reported UNPROVEN by status for as long as it is in force")
-	set.StringVar(&venueReceiptPath, "venue-receipt", "", "path to the JSON report a go-api-prove run wrote on a NON-PRODUCTION venue as an admin principal, at the SAME build production runs. Admits only operations the viewer proof principal cannot satisfy and the store has no proof for; the row records VENUE-PROOF:<sha256> in review_evidence. The file is operator-supplied and not authenticated")
-	set.StringVar(&productionReportPath, "production-report", "", "path to PRODUCTION's OWN go-api-prove report at the same build; with -venue-receipt it admits savedReports when production has no data (every data-requiring case refused as vacuous on both legs). Operator-supplied and not authenticated")
 	set.BoolVar(&dryRun, "dry-run", false, "run every preflight and write NOTHING")
 	set.DurationVar(&common.timeout, "timeout", 30*time.Second, "bounds EACH HTTP request, the Postgres dial, and EACH database statement (server-side statement_timeout/lock_timeout) -- never the run as a whole")
 	if err := parseVerbFlags(set, argv); err != nil {
@@ -95,23 +84,6 @@ func runEnable(argv []string) error {
 	if err != nil {
 		return err
 	}
-	var venueReceipt, productionReport *goapiproof.VenueReceipt
-	if productionReportPath != "" && venueReceiptPath == "" {
-		return refuse("-production-report needs -venue-receipt: the no-production-data class is proven by both reports together")
-	}
-	if productionReportPath != "" {
-		productionReport, err = loadVenueReceipt(productionReportPath)
-		if err != nil {
-			return refuse("%v", err)
-		}
-	}
-	if venueReceiptPath != "" {
-		venueReceipt, err = loadVenueReceipt(venueReceiptPath)
-		if err != nil {
-			return refuse("%v", err)
-		}
-	}
-
 	catalog, err := goapiproof.LoadOperationCatalog(common.catalogPath)
 	if err != nil {
 		return refuse("%v -- refusing to enable anything on a catalog this process cannot read", err)
@@ -272,11 +244,8 @@ func runEnable(argv []string) error {
 		ReviewEvidence:    common.reviewEvidence,
 		// CHAOS-5505: WHO THE CREDENTIAL SAYS is acting. Distinct from
 		// -recorded-by, which is what the operator typed about themselves.
-		PrincipalID:         principalID,
-		AcknowledgeUnproven: acknowledgeUnproven,
-		VenueReceipt:        venueReceipt,
-		ProductionReport:    productionReport,
-		DryRun:              dryRun,
+		PrincipalID: principalID,
+		DryRun:      dryRun,
 	})
 	if err != nil {
 		if errors.Is(err, goapiproof.ErrEnableUnproven) || errors.Is(err, goapiproof.ErrEnableRequestRefused) {
@@ -287,19 +256,15 @@ func runEnable(argv []string) error {
 
 	var unproven int
 	for _, outcome := range outcomes {
-		if outcome.VenueDigest != "" {
-			fmt.Fprintf(stderr, "go_api_routing.enabled_venue_proof operation=%s production_report_sha256=%s venue_receipt_sha256=%s candidate_build=%s schema_digest=%s document_digest=%s mode=%s dry_run=%t\n",
-				outcome.Operation, outcome.ProductionDigest, outcome.VenueDigest, running, registry.SchemaDigest, outcome.DocumentDigest, mode, dryRun)
-		}
 		if !outcome.Proven {
 			unproven++
 			// One structured line PER ROW, not one per invocation: an
 			// operator (or a log search six weeks later) must be able to
-			// find WHICH operations were turned on without proof, not
+			// find WHICH operations were turned on without a proof run, not
 			// merely that some were.
 			fmt.Fprintf(stderr,
-				"WARNING: go_api_routing.enabled_unproven operation=%s stage_evidence=none candidate_build=%s schema_digest=%s document_digest=%s mode=%s dry_run=%t\n",
-				outcome.Operation, running, registry.SchemaDigest, outcome.DocumentDigest, mode, dryRun)
+				"WARNING: go_api_routing.enabled_named_limit operation=%s stage_evidence=none named_limit_sha256=%s candidate_build=%s schema_digest=%s document_digest=%s mode=%s dry_run=%t\n",
+				outcome.Operation, goapiproof.NamedLimitDigest(outcome.NamedLimit), running, registry.SchemaDigest, outcome.DocumentDigest, mode, dryRun)
 		}
 	}
 
@@ -318,14 +283,12 @@ func runEnable(argv []string) error {
 		goapiproof.EndpointLabelWithPort(registryURL), goapiproof.EndpointLabelWithPort(buildInfoURL))
 	fmt.Fprintf(stdout, "go-api-routing: schema_digest=%s candidate_build=%s mode=%s rollout=%d dry_run=%t\n",
 		registry.SchemaDigest, running, mode, rollout, dryRun)
-	fmt.Fprintf(stdout, "go-api-routing: %s total=%d proven=%d unproven=%d\n",
+	fmt.Fprintf(stdout, "go-api-routing: %s total=%d proven=%d named_limit=%d\n",
 		verb, len(outcomes), len(outcomes)-unproven, unproven)
 	for _, outcome := range outcomes {
 		flag := ""
-		if outcome.VenueDigest != "" {
-			flag = "  (VENUE-PROVEN " + goapiproof.VenueEvidenceClass(goapiproof.VenueEvidence(outcome.VenueDigest, outcome.ProductionDigest, "")) + " " + outcome.VenueDigest + ")"
-		} else if !outcome.Proven {
-			flag = "  (UNPROVEN)"
+		if !outcome.Proven {
+			flag = "  (NAMED-LIMIT " + goapiproof.NamedLimitDigest(outcome.NamedLimit) + ")"
 		}
 		fmt.Fprintf(stdout, "go-api-routing:   %-24s mode=%-8s %-40s digest=%s%s\n", outcome.Operation, outcome.Mode, outcome.CandidateBuild, outcome.DocumentDigest, flag)
 		// r6 observability (1) (team-lead ruling): a structured line PER
@@ -355,25 +318,3 @@ func runEnable(argv []string) error {
 // from every refusal a digest move can cause, so the message that stops
 // the command also says what to do about it.
 const runbook = "docs/contribute/architecture/go-api-wave-0-proof-infrastructure.md (section: When the schema digest moves)"
-
-// maxVenueReceiptBytes bounds the receipt file read.
-const maxVenueReceiptBytes = 16 << 20
-
-// loadVenueReceipt reads a regular, bounded file and parses it.
-func loadVenueReceipt(path string) (*goapiproof.VenueReceipt, error) {
-	info, err := os.Lstat(path)
-	if err != nil {
-		return nil, fmt.Errorf("venue receipt: %w", err)
-	}
-	if !info.Mode().IsRegular() {
-		return nil, fmt.Errorf("venue receipt %s is not a regular file", path)
-	}
-	if info.Size() > maxVenueReceiptBytes {
-		return nil, fmt.Errorf("venue receipt %s is %d bytes, limit %d", path, info.Size(), maxVenueReceiptBytes)
-	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("venue receipt: %w", err)
-	}
-	return goapiproof.ParseVenueReceipt(raw)
-}

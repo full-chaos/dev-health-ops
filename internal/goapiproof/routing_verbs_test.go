@@ -431,14 +431,6 @@ func TestOperationStatusReachableMatchesBothPlanesRuleExactly(t *testing.T) {
 	}
 }
 
-// The prefix is written durably on the ROW and must stay byte-identical
-// to go_api_cli.py's, so a row written by either plane reads the same.
-func TestUnprovenEvidencePrefixMatchesThePythonVerbByte(t *testing.T) {
-	if UnprovenEvidencePrefix != "ACKNOWLEDGED-UNPROVEN: " {
-		t.Fatalf("UnprovenEvidencePrefix = %q; go_api_cli.py's _enable_review_evidence writes %q", UnprovenEvidencePrefix, "ACKNOWLEDGED-UNPROVEN: ")
-	}
-}
-
 // A catalog that decodes to JSON `null` gets its OWN sentence.
 //
 // `null` and `[]` both unmarshal into a nil slice, so one message covered

@@ -333,21 +333,10 @@ def _resolve_requested_operations(
 
 
 def _enable_review_evidence(
-    ns: argparse.Namespace, unproven: bool, receipt: AuthorizingReceipt | None = None
+    ns: argparse.Namespace, receipt: AuthorizingReceipt | None = None
 ) -> str | None:
-    """What goes in the row's `review_evidence`.
-
-    An acknowledged-unproven enablement carries its reason DURABLY, on the
-    row. Previously the only record was a WARNING line at the moment it
-    happened: on 2026-09-07, 15 operations were enabled on an explicit
-    ruling and that ruling lived in a chat message, which is precisely the
-    "unreadable six weeks later" problem `status`'s UNPROVEN marker exists
-    to flag.
-    """
+    """What goes in the row's `review_evidence`."""
     supplied = (getattr(ns, "review_evidence", None) or "").strip()
-    if unproven:
-        prefix = "ACKNOWLEDGED-UNPROVEN: "
-        return prefix + (supplied or "no reason given")
     # A proven row names the receipt that authorized it: without it the
     # row records nothing about WHICH
     # evidence carried the decision, and a predicate that admitted the
@@ -451,7 +440,7 @@ async def _cmd_routing_enable(ns: argparse.Namespace) -> int:
             target_mode=ns.mode,
         )
         unproven = [op for op in operations if op not in proven]
-        if unproven and not ns.acknowledge_unproven:
+        if unproven:
             route_rule = (
                 f"measured on the {MEASUREMENT_ROUTE_EDGE} route"
                 if ns.mode == ENABLEMENT_TARGET_MODE_EDGE_ONLY
@@ -489,45 +478,29 @@ async def _cmd_routing_enable(ns: argparse.Namespace) -> int:
                 "parse/validate, dispatch and a real database -- a "
                 "constructor, health check or bare 200 does not qualify. "
                 "Record it by running cmd/go-api-prove against the deployed "
-                "stack, or pass --acknowledge-unproven to enable anyway (the "
-                "row is then reported as UNPROVEN by `dev-hops go-api routing "
-                "status` for as long as it is in force)."
+                "stack."
             )
 
         for operation in operations:
-            if operation in unproven:
-                # One structured line PER ROW, not one per invocation: an
-                # operator (or a log search six weeks later) must be able
-                # to find which specific operations were turned on without
-                # proof, not merely that some were.
-                print(
-                    "WARNING: go_api_routing.enabled_unproven "
-                    f"operation={operation} stage_evidence=none "
-                    f"candidate_build={ns.candidate_build} "
-                    f"schema_digest={local_digest} mode={ns.mode}",
-                    file=sys.stderr,
+            # Which receipt turned this row on, so a log search finds the
+            # evidence behind every enablement.
+            receipt = proven[operation]
+            print(
+                f"INFO: go_api_routing.enabled operation={operation} "
+                f"receipt_id={receipt.receipt_id} "
+                f"terminal_state={receipt.terminal_state}"
+                + (
+                    f" baseline_defect={','.join(receipt.baseline_defect)}"
+                    if receipt.baseline_defect
+                    else ""
                 )
-            else:
-                # The proven twin of the line above: which receipt turned
-                # this row on, so a log search finds the evidence behind
-                # every enablement, not only behind the unproven ones.
-                receipt = proven[operation]
-                print(
-                    f"INFO: go_api_routing.enabled operation={operation} "
-                    f"receipt_id={receipt.receipt_id} "
-                    f"terminal_state={receipt.terminal_state}"
-                    + (
-                        f" baseline_defect={','.join(receipt.baseline_defect)}"
-                        if receipt.baseline_defect
-                        else ""
-                    )
-                    + f" measurement_route={receipt.measurement_route} "
-                    f"build_binding={receipt.build_binding} "
-                    f"{receipt.shape_counts()} "
-                    f"candidate_build={ns.candidate_build} "
-                    f"schema_digest={local_digest} mode={ns.mode}",
-                    file=sys.stderr,
-                )
+                + f" measurement_route={receipt.measurement_route} "
+                f"build_binding={receipt.build_binding} "
+                f"{receipt.shape_counts()} "
+                f"candidate_build={ns.candidate_build} "
+                f"schema_digest={local_digest} mode={ns.mode}",
+                file=sys.stderr,
+            )
             await enable_operation(
                 session,
                 schema_digest=local_digest,
@@ -536,9 +509,7 @@ async def _cmd_routing_enable(ns: argparse.Namespace) -> int:
                 candidate_build=ns.candidate_build,
                 mode=ns.mode,
                 rollout_percentage=ns.rollout,
-                review_evidence=_enable_review_evidence(
-                    ns, operation in unproven, proven.get(operation)
-                ),
+                review_evidence=_enable_review_evidence(ns, proven[operation]),
                 recorded_by=_recorded_by(),
             )
         await session.commit()
@@ -571,10 +542,7 @@ async def _cmd_routing_enable(ns: argparse.Namespace) -> int:
         f"rollout={ns.rollout}"
     )
     for operation in operations:
-        authorizing = proven.get(operation)
-        if authorizing is None:
-            print(f"  {operation} (UNPROVEN)")
-            continue
+        authorizing = proven[operation]
         # A cited mismatch and a match must not print the same line: the
         # operator is told which kind of evidence turned the row on.
         cited = (
@@ -1009,23 +977,10 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
         ),
     )
     enable.add_argument(
-        "--acknowledge-unproven",
-        action="store_true",
-        help=(
-            "Enable operations that have no deployed-executed proof run for "
-            "this candidate build. Logs one WARNING per row and marks them "
-            "UNPROVEN in `status` for as long as they are in force."
-        ),
-    )
-    enable.add_argument(
         "--review-evidence",
         dest="review_evidence",
         default=None,
-        help=(
-            "Why this enablement is being made, recorded durably on each "
-            "row. Prefixed ACKNOWLEDGED-UNPROVEN for any row enabled "
-            "without a proof run."
-        ),
+        help=("Why this enablement is being made, recorded durably on each row."),
     )
     enable.set_defaults(func=_cmd_routing_enable)
 

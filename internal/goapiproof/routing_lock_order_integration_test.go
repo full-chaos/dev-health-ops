@@ -82,7 +82,7 @@ func seedRacingRows(t *testing.T, ctx context.Context, pool *pgxpool.Pool, build
 	}
 }
 
-func racingEnableRequest(build string) EnableRequest {
+func racingEnableRequest(t testing.TB, build string) EnableRequest {
 	digests := map[string]string{}
 	operations := make([]string, 0, len(racingOperations))
 	for _, row := range racingOperations {
@@ -90,16 +90,16 @@ func racingEnableRequest(build string) EnableRequest {
 		operations = append(operations, row.operation)
 	}
 	return EnableRequest{
-		PrincipalID:         testPrincipalID,
-		SchemaDigest:        testSchemaDigest,
-		RunningBuild:        build,
-		Operations:          operations,
-		DocumentDigest:      digests,
-		Mode:                "canary",
-		RolloutPercentage:   100,
-		RecordedBy:          "lane-routing-verbs",
-		ReviewEvidence:      "CHAOS-5507 concurrency",
-		AcknowledgeUnproven: true,
+		PrincipalID:       testPrincipalID,
+		SchemaDigest:      testSchemaDigest,
+		RunningBuild:      build,
+		Operations:        operations,
+		DocumentDigest:    digests,
+		Mode:              "canary",
+		RolloutPercentage: 100,
+		RecordedBy:        "lane-routing-verbs",
+		ReviewEvidence:    "CHAOS-5507 concurrency",
+		Ledger:            ledgerNamingLimits(t, operations...),
 	}
 }
 
@@ -163,7 +163,7 @@ func TestConcurrentRepointAndEnableNeverDeadlock(t *testing.T) {
 			wait.Add(1)
 			go func() {
 				defer wait.Done()
-				_, err := Enable(ctx, pool, racingEnableRequest(build))
+				_, err := Enable(ctx, pool, racingEnableRequest(t, build))
 				record("enable", err)
 			}()
 		}
@@ -273,7 +273,7 @@ func TestConcurrentEnablesNeverDeadlock(t *testing.T) {
 			wait.Add(1)
 			go func(build string) {
 				defer wait.Done()
-				_, err := Enable(ctx, pool, racingEnableRequest(build))
+				_, err := Enable(ctx, pool, racingEnableRequest(t, build))
 				if err == nil {
 					return
 				}

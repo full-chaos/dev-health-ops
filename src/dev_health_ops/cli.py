@@ -473,7 +473,6 @@ _COMMAND_REQUIREMENTS: dict[tuple[str, ...], frozenset[str]] = {
     # the semantic store. Declared here so --db actually reaches POSTGRES_URI
     # before the session opens (see the finalize-synthetic-sync comment above
     # for the failure mode when it is omitted).
-    ("go-api", "routing", "enable"): frozenset({_REQ_POSTGRES}),
     ("go-api", "routing", "status"): frozenset({_REQ_POSTGRES}),
     ("go-api", "routing", "disable"): frozenset({_REQ_POSTGRES}),
     ("service-credentials", "create"): frozenset({_REQ_POSTGRES}),

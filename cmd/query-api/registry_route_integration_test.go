@@ -94,7 +94,7 @@ func TestLogRoutingStateDrift_RowsOnlyAtSupersededDigestReportStale(t *testing.T
 	// The line must tell an operator what to do, not merely that something
 	// is wrong -- the failure mode here is a human not knowing this table
 	// exists.
-	if !strings.Contains(logged, "dev-hops go-api routing enable") {
+	if !strings.Contains(logged, "go-api-routing enable") {
 		t.Fatalf("stale line does not name the recovery command; got %q", logged)
 	}
 }

@@ -330,15 +330,3 @@ def test_disable_takes_no_query_api_url() -> None:
     source = inspect.getsource(go_api_cli._cmd_routing_disable)
     assert "query_api_url" not in source
     assert "_fetch_go_plane_registry" not in source
-
-
-def test_enable_review_evidence_is_the_operators_words() -> None:
-    """A row's review_evidence is what the operator supplied (behind the
-    receipt's own evidence when one authorized it); nothing marks a row as
-    waived, because `enable` has no waiver."""
-    ns = argparse.Namespace(review_evidence="chris ruled it, 09:14Z")
-    assert go_api_cli._enable_review_evidence(ns) == "chris ruled it, 09:14Z"
-    assert (
-        go_api_cli._enable_review_evidence(argparse.Namespace(review_evidence=None))
-        is None
-    )

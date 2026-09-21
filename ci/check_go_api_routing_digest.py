@@ -52,9 +52,9 @@ REGENERATE_HINT = (
     "  2. Add a dated row for {actual} to the '{heading}' table in {doc}\n"
     "     (the recovery procedure an operator needs is the section above it)\n"
     "  3. Re-enable routing AFTER the query-api image is rebuilt from this\n"
-    "     SDL:  dev-hops go-api routing enable --operations all-registered \\\n"
-    "             --candidate-build <ops-sha> --mode canary\n"
-    "     Then confirm with:  dev-hops go-api routing status\n"
+    "     SDL:  go-api-routing enable -operations all-registered -mode canary\n"
+    "             (the build is read from the running query-api's /buildinfo)\n"
+    "     Then confirm with:  go-api-routing status\n"
     "  4. Re-run this checker:  python ci/check_go_api_routing_digest.py --root ."
 )
 

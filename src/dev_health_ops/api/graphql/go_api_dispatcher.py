@@ -630,8 +630,38 @@ class GoApiDispatchRouter(GraphQLRouter[_Context, _RootValue]):
                 plane="go", outcome="request_error"
             ).observe(elapsed)
             return self._go_failed(selected_operation, "go_request_error", elapsed)
+        except Exception:
+            # Not an httpx.HTTPError, so nothing above caught it: a
+            # malformed GO_API_QUERY_API_URL raises httpx.InvalidURL, a
+            # non-UTF-8 one UnicodeEncodeError. Query-api was never reached;
+            # the request still gets the typed error, not a 500.
+            elapsed = time.monotonic() - started
+            logger.exception(
+                "go_api_dispatch.go_request_failed",
+                extra={"operation": selected_operation},
+            )
+            GO_API_DISPATCH_LATENCY_SECONDS.labels(
+                plane="go", outcome="request_error"
+            ).observe(elapsed)
+            return self._go_failed(selected_operation, "go_request_error", elapsed)
 
         elapsed = time.monotonic() - started
+
+        content_type = resp.headers.get("content-type")
+        if (
+            resp.status_code == 200
+            and content_type
+            and "json" not in content_type.lower()
+        ):
+            # A proxy or the wrong service answering 200 with HTML/text is not
+            # a GraphQL response; forwarding it would log served_go for bytes
+            # no GraphQL client can read. query-api always answers JSON.
+            GO_API_DISPATCH_LATENCY_SECONDS.labels(
+                plane="go", outcome="invalid_response"
+            ).observe(elapsed)
+            return self._go_failed(
+                selected_operation, "go_invalid_response", elapsed, resp.status_code
+            )
 
         if resp.status_code == 200:
             GO_API_DISPATCH_LATENCY_SECONDS.labels(

@@ -531,6 +531,41 @@ async def test_go_request_error_answers_typed_error(
     _assert_go_failure(result, reason="go_request_error")
 
 
+async def test_malformed_query_api_url_answers_typed_error(
+    router: GoApiDispatchRouter,
+    routing_row_mode,
+    valid_envelope_inputs,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """httpx.InvalidURL is not an httpx.HTTPError; it must not escape as a 500."""
+    routing_row_mode("canary")
+    monkeypatch.setenv("GO_API_QUERY_API_URL", "http://query-api.test:notaport")
+    monkeypatch.setattr(go_api_dispatcher, "_get_http_client", httpx.AsyncClient)
+    context = _context(user=_sample_user(), tier=LicenseTier.TEAM, licensed_features=[])
+    result = await router._maybe_dispatch_to_go(_post_request(TEST_QUERY), context)
+    _assert_go_failure(result, reason="go_request_error")
+
+
+async def test_go_200_non_json_answers_typed_error_not_served_go(
+    router: GoApiDispatchRouter,
+    routing_row_mode,
+    valid_envelope_inputs,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+):
+    routing_row_mode("canary")
+    monkeypatch.setattr(
+        go_api_dispatcher,
+        "_get_http_client",
+        lambda: _mock_transport(lambda r: httpx.Response(200, text="not-json")),
+    )
+    context = _context(user=_sample_user(), tier=LicenseTier.TEAM, licensed_features=[])
+    with caplog.at_level(logging.INFO, logger=go_api_dispatcher.__name__):
+        result = await router._maybe_dispatch_to_go(_post_request(TEST_QUERY), context)
+    _assert_go_failure(result, reason="go_invalid_response", status=200)
+    assert not [r for r in caplog.records if "served_go" in r.getMessage()]
+
+
 async def test_go_5xx_answers_typed_error(
     router: GoApiDispatchRouter,
     routing_row_mode,

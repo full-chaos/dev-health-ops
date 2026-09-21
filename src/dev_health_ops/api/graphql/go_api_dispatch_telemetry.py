@@ -38,6 +38,8 @@ so the edge answers with a typed GraphQL error and counts it under
     dispatcher always forwards as POST (CHAOS-4706), kept as a named
     reason rather than folding into a generic "unexpected status".
 ``go_unexpected_status`` -- any other non-2xx status from query-api.
+``go_invalid_response`` -- HTTP 200 whose content type is present and not
+    JSON (a proxy or the wrong service answered); not a GraphQL response.
 """
 
 from __future__ import annotations

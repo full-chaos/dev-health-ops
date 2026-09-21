@@ -2,6 +2,7 @@ package goapiproof
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -167,5 +168,46 @@ func TestTheWriterRefusesAForgedGoOnlyCitation(t *testing.T) {
 	}
 	if _, err := WriteREST(context.Background(), nil, rest); err == nil {
 		t.Error("the REST writer accepted the go-only prefix")
+	}
+}
+
+// An operation whose ledger entry is the unproven form is admitted and its
+// candidate is checked, but the run never counts it as proving, counts it under
+// no proof word and writes no receipt for it: nothing compared a leaf.
+func TestARunNeverProvesAnUnprovenLedgerEntry(t *testing.T) {
+	raw, err := json.Marshal(GoServedLedger{
+		MessageTemplate: defaultLedgerForTest(t).MessageTemplate,
+		Entries: []GoServedEntry{{
+			Operation:      "capacityForecast",
+			UnprovenReason: "no data in any venue, so no two-plane run compared a leaf; enable record cited",
+			Guards:         []GoServedGuard{{File: "a_test.go", Test: "TestA"}},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger, err := ParseGoServedLedger(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := goOnlyRunner(t, ledger, true)
+
+	outcomes, summary, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	outcome := outcomes[0]
+	if !outcome.Executed || !outcome.Admitted || outcome.ProvenUnder != ProvenUnderGoOnlyUnproven {
+		t.Fatalf("executed=%v admitted=%v provenUnder=%q", outcome.Executed, outcome.Admitted, outcome.ProvenUnder)
+	}
+	if outcomeProves(outcome) {
+		t.Fatal("an unproven entry proves its request")
+	}
+	if summary.ProvenGoOnly != 0 || summary.NotProving != 1 || summary.ByOperation["capacityForecast"].Proven != 0 || summary.ByOperation["capacityForecast"].NotProving != 1 {
+		t.Fatalf("summary counts an unproven entry as proof: %+v", summary)
+	}
+	receipts, err := runner.ReceiptsFor(time.Now().UTC())
+	if err != nil || len(receipts) != 0 {
+		t.Fatalf("ReceiptsFor wrote %d receipts for an unproven entry (err %v)", len(receipts), err)
 	}
 }

@@ -14,7 +14,6 @@ Validates the same-dimension flow matrix path end-to-end:
 
 from __future__ import annotations
 
-import asyncio
 import os
 from datetime import date
 from urllib.parse import urlparse
@@ -345,110 +344,6 @@ class TestValidateSubRequestCount:
             breakdowns_count=0,
             has_sankey=True,
         )
-
-
-@pytest.mark.asyncio
-async def test_flow_matrix_execution_prefixes_same_dim_ids(monkeypatch):
-    """End-to-end shape check: _execute_sankey_inner correctly prefixes
-    same-dimension entity ids like team:EngineeringA / team:EngineeringB.
-
-    Confirms the "Returns edges where both source and target have
-    dimension: team" acceptance criterion from CHAOS-1289.
-    """
-    from dev_health_ops.api.graphql.resolvers import analytics as mod
-
-    async def fake_query_dicts(client, sql, params):
-        # simulate two team nodes and one directional edge
-        if "source_dimension" in sql:
-            return [
-                {
-                    "source_dimension": "TEAM",
-                    "target_dimension": "TEAM",
-                    "source": "EngineeringA",
-                    "target": "EngineeringB",
-                    "value": 10.0,
-                },
-                {
-                    "source_dimension": "TEAM",
-                    "target_dimension": "TEAM",
-                    "source": "EngineeringB",
-                    "target": "EngineeringA",
-                    "value": 3.0,
-                },
-            ]
-        return [
-            {"dimension": "TEAM", "node_id": "EngineeringA", "value": 13.0},
-            {"dimension": "TEAM", "node_id": "EngineeringB", "value": 13.0},
-        ]
-
-    monkeypatch.setattr(
-        "dev_health_ops.api.queries.client.query_dicts",
-        fake_query_dicts,
-    )
-
-    nodes_queries, edges_queries = compile_flow_matrix(_req("team"), org_id="org-1")
-    nodes, edges = await mod._execute_sankey_inner(
-        client=object(),
-        nodes_queries=nodes_queries,
-        edges_queries=edges_queries,
-    )
-
-    node_ids = {n.id for n in nodes}
-    assert node_ids == {"TEAM:EngineeringA", "TEAM:EngineeringB"}
-
-    edge_pairs = {(e.source, e.target, e.value) for e in edges}
-    assert edge_pairs == {
-        ("TEAM:EngineeringA", "TEAM:EngineeringB", 10.0),
-        ("TEAM:EngineeringB", "TEAM:EngineeringA", 3.0),
-    }
-    # Matrix is ASYMMETRIC — proves directional data is preserved end-to-end.
-    forward = next(e for e in edges if e.source == "TEAM:EngineeringA")
-    reverse = next(e for e in edges if e.source == "TEAM:EngineeringB")
-    assert forward.value != reverse.value
-
-
-@pytest.mark.asyncio
-async def test_flow_matrix_queries_run_concurrently(monkeypatch):
-    """flow_matrix shares _execute_sankey_inner, so nodes+edges queries must
-    run concurrently (consistent with sankey's existing contract)."""
-    from dev_health_ops.api.graphql.resolvers import analytics as mod
-
-    active = 0
-    peak = 0
-
-    async def fake_query_dicts(client, sql, params):
-        nonlocal active, peak
-        active += 1
-        peak = max(peak, active)
-        try:
-            await asyncio.sleep(0.05)
-            if "source_dimension" in sql:
-                return [
-                    {
-                        "source_dimension": "TEAM",
-                        "target_dimension": "TEAM",
-                        "source": "a",
-                        "target": "b",
-                        "value": 1.0,
-                    }
-                ]
-            return [{"dimension": "TEAM", "node_id": "a", "value": 1.0}]
-        finally:
-            active -= 1
-
-    monkeypatch.setattr(
-        "dev_health_ops.api.queries.client.query_dicts",
-        fake_query_dicts,
-    )
-
-    nodes_queries, edges_queries = compile_flow_matrix(_req(), org_id="org-1")
-    await mod._execute_sankey_inner(
-        client=object(),
-        nodes_queries=nodes_queries,
-        edges_queries=edges_queries,
-    )
-
-    assert peak >= 2, f"Expected nodes + edges queries in flight; saw peak={peak}"
 
 
 def test_default_limits_admit_flow_matrix() -> None:

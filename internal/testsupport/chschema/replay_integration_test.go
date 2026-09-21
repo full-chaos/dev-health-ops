@@ -4,6 +4,7 @@ package chschema
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -160,5 +161,30 @@ func TestApplyOnAMigratedDatabaseRunsTheChain(t *testing.T) {
 	Apply(ctx, t, instance)
 	if got := replayCount.Load(); got != before {
 		t.Fatalf("Apply on an already-migrated database replayed (count %d -> %d)", before, got)
+	}
+}
+
+// TestConcurrentApplyRunsTheChainOnce pins the lock discipline: callers that
+// arrive together on a cold cache produce ONE chain run and replays for the
+// rest, never several chain runs racing to capture, and never a replay of a
+// half-captured snapshot.
+func TestConcurrentApplyRunsTheChainOnce(t *testing.T) {
+	ctx := context.Background()
+	snapshotMu.Lock()
+	cachedSnapshots = map[string]*schemaSnapshot{}
+	snapshotMu.Unlock()
+	before := replayCount.Load()
+
+	const callers = 3
+	t.Run("group", func(t *testing.T) {
+		for i := 0; i < callers; i++ {
+			t.Run(fmt.Sprintf("caller-%d", i), func(t *testing.T) {
+				t.Parallel()
+				startMigratedInstance(ctx, t)
+			})
+		}
+	})
+	if got := replayCount.Load() - before; got != callers-1 {
+		t.Fatalf("%d concurrent callers produced %d replays, want %d (one chain run)", callers, got, callers-1)
 	}
 }

@@ -117,7 +117,11 @@ ORDER BY day ASC
 SETTINGS join_use_nulls = 1`
 
 // quadrantQuery reads, per repository, the pipeline success rate and test
-// pass rate of its latest release-confidence row, least confident first.
+// pass rate of its latest release-confidence row, least confident first. A
+// factor missing from that row's factors_json (absent key or JSON null) is
+// NULL, not 0. The Nullable value is wrapped in a tuple because argMax skips
+// NULL values, which would let an older row's factor stand in for the latest
+// row's missing one.
 const quadrantQuery = `SELECT
     coalesce(nullIf(repos.repo, ''), toString(latest.repo_id)) AS repo_label,
     latest.pipeline_success_rate,
@@ -125,14 +129,14 @@ const quadrantQuery = `SELECT
 FROM (
     SELECT
         repo_id,
-        argMax(
-            JSONExtractFloat(factors_json, 'pipeline_success_rate'),
+        tupleElement(argMax(
+            tuple(JSONExtract(factors_json, 'pipeline_success_rate', 'Nullable(Float64)')),
             (day, computed_at)
-        ) AS pipeline_success_rate,
-        argMax(
-            JSONExtractFloat(factors_json, 'test_pass_rate'),
+        ), 1) AS pipeline_success_rate,
+        tupleElement(argMax(
+            tuple(JSONExtract(factors_json, 'test_pass_rate', 'Nullable(Float64)')),
             (day, computed_at)
-        ) AS test_pass_rate,
+        ), 1) AS test_pass_rate,
         argMax(confidence_score, (day, computed_at)) AS confidence_score
     FROM testops_release_confidence
     WHERE org_id = {org_id:String}

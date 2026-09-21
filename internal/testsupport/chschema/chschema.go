@@ -62,12 +62,26 @@ print("CHSCHEMA_APPLIED")
 // here would silently drop every schema-dependent assertion in the calling
 // package while the package still reported ok, which is precisely the
 // unmeasured-but-green shape this helper was written to remove.
+//
+// The Python runner executes once per test process. Every later container of a
+// throwaway-container instance receives the first one's captured end state
+// (see snapshot.go); a remote ClickHouse is always migrated by the runner.
 func Apply(ctx context.Context, t *testing.T, instance *containers.Instance) {
 	t.Helper()
 	dsn, err := containers.ClickHouseHTTPDSN(ctx, instance)
 	if err != nil {
 		t.Fatalf("chschema: %v", err)
 	}
+	if instance.Container == nil {
+		applyMigrationChain(ctx, t, dsn)
+		return
+	}
+	applyReplayed(ctx, t, dsn, func() { applyMigrationChain(ctx, t, dsn) })
+}
+
+// applyMigrationChain runs the canonical migration entrypoint against dsn.
+func applyMigrationChain(ctx context.Context, t *testing.T, dsn string) {
+	t.Helper()
 	root, err := repoRoot()
 	if err != nil {
 		t.Fatalf("chschema: %v", err)

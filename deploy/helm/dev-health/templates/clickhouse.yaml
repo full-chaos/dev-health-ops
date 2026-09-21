@@ -47,10 +47,10 @@ spec:
               mountPath: /var/lib/clickhouse
             {{- end }}
             {{- /* One subPath mount per file so the image's own users.d files stay. */}}
-            {{- range $name := keys .Values.clickhouse.usersd | sortAlpha }}
+            {{- range $name := keys (.Values.clickhouse.usersd | default dict) | sortAlpha }}
             - name: clickhouse-usersd
-              mountPath: /etc/clickhouse-server/users.d/{{ $name }}
-              subPath: {{ $name }}
+              mountPath: {{ printf "/etc/clickhouse-server/users.d/%s" $name | quote }}
+              subPath: {{ $name | quote }}
               readOnly: true
             {{- end }}
           {{- end }}
@@ -119,8 +119,7 @@ metadata:
     {{- include "dev-health.componentLabels" (dict "component" "clickhouse" "context" $) | nindent 4 }}
 data:
   {{- range $name, $content := .Values.clickhouse.usersd }}
-  {{ $name | quote }}: |-
-    {{- $content | nindent 4 }}
+  {{- toYaml (dict $name $content) | nindent 2 }}
   {{- end }}
 {{- end }}
 {{- end }}

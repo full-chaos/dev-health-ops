@@ -1110,7 +1110,8 @@ clickhouse:
   # subPath at /etc/clickhouse-server/users.d/<filename>, so the image's own
   # users.d files stay. Empty (default) renders nothing extra. Use
   # <password_sha256_hex>, never a plaintext <password>. Changing this restarts
-  # the ClickHouse pod (subPath mounts do not hot-reload).
+  # the ClickHouse pod (subPath mounts do not hot-reload). Do not name a file
+  # default-user.xml: the image entrypoint writes that file itself.
   #   usersd:
   #     ro_user.xml: |
   #       <clickhouse><users>...</users></clickhouse>

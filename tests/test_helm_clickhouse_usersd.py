@@ -6,6 +6,7 @@ pod and lost on restart. `clickhouse.usersd` (filename -> XML) makes it
 durable. Unset must render exactly what the chart rendered before.
 """
 
+import json
 from pathlib import Path
 from subprocess import run
 
@@ -71,3 +72,27 @@ def test_usersd_works_without_persistence() -> None:
     docs = _docs("clickhouse.persistence.enabled=false", f"clickhouse.usersd.a\\.xml={_XML}")
     mounts = _sts(docs)["spec"]["template"]["spec"]["containers"][0]["volumeMounts"]
     assert [m["mountPath"] for m in mounts] == ["/etc/clickhouse-server/users.d/a.xml"]
+
+
+def _docs_json(usersd_json: str) -> list[dict]:
+    out = run(
+        ["helm", "template", "t", str(_CHART), "--show-only", "templates/clickhouse.yaml",
+         "--set-json", f"clickhouse.usersd={usersd_json}"],
+        check=True, capture_output=True, text=True,
+    ).stdout
+    return [d for d in yaml.safe_load_all(out) if d]
+
+
+def test_usersd_null_renders_like_default() -> None:
+    docs = _docs_json("null")
+    assert sorted(d["kind"] for d in docs) == ["Service", "StatefulSet"]
+
+
+def test_usersd_leading_whitespace_and_numeric_filename_round_trip() -> None:
+    content = "  <clickhouse>\n<users/>\n</clickhouse>"
+    docs = _docs_json(json.dumps({"123": content, "b.xml": content}))
+    cm = next(d for d in docs if d["kind"] == "ConfigMap")
+    assert cm["data"] == {"123": content, "b.xml": content}
+    mounts = _sts(docs)["spec"]["template"]["spec"]["containers"][0]["volumeMounts"]
+    sub = {m["subPath"] for m in mounts if "subPath" in m}
+    assert sub == {"123", "b.xml"}

@@ -108,6 +108,68 @@ REVOKE CREATE ON SCHEMA public FROM :"domain_role";
 GRANT USAGE ON SCHEMA public TO :"queue_role";
 REVOKE CREATE ON SCHEMA public FROM :"queue_role";
 
+-- The dho api Service's own role (CHAOS-6269, spec.md §4.4). Optional, same
+-- shape as keda_role below -- only provisioned when the caller passes
+-- api_role, so this script's behaviour for every EXISTING unmodified caller
+-- (compose's go-river-provision service, the deploy chart's provision-roles
+-- hook) is completely unchanged: neither passes api_role today, and making
+-- it a REQUIRED 4th role here would have made every one of those callers
+-- either block on an interactive \prompt with no terminal attached, or
+-- silently create devhealth_api with an empty password -- a real regression
+-- this script must not introduce as a side effect of a change nothing yet
+-- depends on. An operator (today: chris, by hand, per the ticket's
+-- paste-ready line) opts in explicitly by passing api_role/api_password.
+--
+-- Not part of the CHAOS-3033 Option B split and never opens a River pool, so
+-- it gets no River-schema grant of any kind, here or anywhere --
+-- CheckAPIAuthorization (internal/storage/postgres/api_authorization.go)
+-- asserts zero River privilege the same way it does for the three roles
+-- above. Its table privileges, once routes exist to need any, are owned by
+-- postgres.APIPosture() and applied by the api Service's own
+-- provisioning/rollout step -- exactly the relationship coordinatorPosture()
+-- already has to coordinatorGrantStatements. This script's job for it is
+-- identical to the three roles above's: make the login exist, connectable,
+-- and unable to CREATEDB/CREATEROLE/self-grant TEMPORARY or CREATE on the
+-- public schema -- nothing this script does can ever revoke a grant a later
+-- step applied.
+\if :{?api_role}
+  \if :{?api_password}
+  \else
+    \prompt -1 'API Service role password: ' api_password
+  \endif
+
+  SELECT (:'api_role' = :'domain_role' OR :'api_role' = :'queue_role' OR :'api_role' = :'coordinator_role') AS api_role_collides
+  \gset
+  \if :api_role_collides
+    \echo 'api_role must be distinct from domain_role, queue_role, and coordinator_role'
+    \quit 2
+  \endif
+
+  SELECT format(
+           'CREATE ROLE %I LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD %L',
+           :'api_role',
+           :'api_password'
+         )
+   WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'api_role')
+  \gexec
+
+  GRANT CONNECT ON DATABASE :"app_database" TO :"api_role";
+  -- PUBLIC holds TEMPORARY (and CONNECT) on every database by default in
+  -- PostgreSQL; has_database_privilege resolves EFFECTIVE privilege,
+  -- inherited-via-PUBLIC included, so revoking only from api_role leaves the
+  -- role holding TEMPORARY anyway and fails CheckAPIAuthorization's
+  -- unconditional "does not hold TEMPORARY" assertion. The domain/queue/
+  -- coordinator block above already revokes this from PUBLIC database-wide,
+  -- so in every real invocation of this script (api_role is never the ONLY
+  -- thing provisioned -- the three roles above always run first) this line
+  -- is a no-op by the time it runs. Revoked here too, explicitly, so this
+  -- block is correct standing alone and does not depend on running after
+  -- that one.
+  REVOKE TEMPORARY ON DATABASE :"app_database" FROM PUBLIC, :"api_role";
+  GRANT USAGE ON SCHEMA public TO :"api_role";
+  REVOKE CREATE ON SCHEMA public FROM :"api_role";
+\endif
+
 -- The KEDA postgresql scaler's read-only role. Optional -- only
 -- provisioned when the caller passes keda_role (the Helm hook does this only
 -- when a goWorkers group has autoscaling.enabled=true; Compose never sets

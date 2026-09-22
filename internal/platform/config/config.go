@@ -109,7 +109,14 @@ const (
 	// alongside the other two by docker/init-extra-dbs.sh (local dev) and
 	// scripts/worker/provision_river_roles.sql (deployed environments).
 	defaultCoordinatorDatabaseRole = "devhealth_coordinator"
-	defaultStreamReplicas          = 1
+	// The dho api Service's own write-capable Postgres role (CHAOS-6269,
+	// spec.md §4.4). Not a River runtime role -- api never opens a River
+	// pool -- but provisioned by the SAME script (provision_river_roles.sql)
+	// and read back through the SAME RolePosture/CheckRolePosture readiness
+	// machinery as the three River roles, so it shares their naming and
+	// distinctness conventions.
+	defaultAPIDatabaseRole = "devhealth_api"
+	defaultStreamReplicas  = 1
 	// The OpenTelemetry defaults mirror src/dev_health_ops/tracing.py exactly,
 	// so a sync run crossing the Python/Go boundary is sampled consistently.
 	defaultOTelServiceName    = "dev-health-ops"
@@ -216,7 +223,13 @@ type Config struct {
 	DomainDatabaseURI      secrets.Value
 	QueueDatabaseURI       secrets.Value
 	CoordinatorDatabaseURI secrets.Value
-	ClickHouseURI          secrets.Value
+	// APIDatabaseURI is the dho api Service's own connection (CHAOS-6269).
+	// Optional here for the same reason CoordinatorDatabaseURI is: only the
+	// api Service requires it, and it enforces that itself at its own
+	// startup -- an unconditional requirement here would fail every other
+	// binary's Load() over a DSN it never uses.
+	APIDatabaseURI secrets.Value
+	ClickHouseURI  secrets.Value
 	// Successful resolution previously left only a boolean ("*_database_configured")
 	// observable -- which of the two DSN forms was actually honored, and
 	// which database an operator's config ultimately reaches, was invisible
@@ -231,6 +244,8 @@ type Config struct {
 	QueueDatabaseName       string
 	CoordinatorDatabaseForm string
 	CoordinatorDatabaseName string
+	APIDatabaseForm         string
+	APIDatabaseName         string
 	ClickHouseForm          string
 	ClickHouseName          string
 	ValkeyURI               secrets.Value
@@ -245,6 +260,7 @@ type Config struct {
 	DomainDatabaseRole          string
 	QueueDatabaseRole           string
 	CoordinatorDatabaseRole     string
+	APIDatabaseRole             string
 	DomainTransactionPooler     bool
 	DomainDatabaseMaxConns      int32
 	QueueDatabaseMaxConns       int32
@@ -547,6 +563,11 @@ func Load(spec Spec) (Config, error) {
 		// through postgres.RuntimeConfig.RequireCoordinator. A domain-only
 		// worker must not fail to start merely because this is unset.
 		{rawKey: "COORDINATOR_DATABASE_URI", spec: CoordinatorDatabaseSpec, target: &cfg.CoordinatorDatabaseURI, formTarget: &cfg.CoordinatorDatabaseForm, nameTarget: &cfg.CoordinatorDatabaseName},
+		// API_DATABASE_URI (CHAOS-6269) is optional here for the identical
+		// reason: only the dho api Service requires it, and it must enforce
+		// that itself at its own startup, not here -- every other binary's
+		// Load() must not fail over a DSN it never opens.
+		{rawKey: "API_DATABASE_URI", spec: APIDatabaseSpec, target: &cfg.APIDatabaseURI, formTarget: &cfg.APIDatabaseForm, nameTarget: &cfg.APIDatabaseName},
 		{rawKey: "CLICKHOUSE_URI", spec: ClickHouseSpec, target: &cfg.ClickHouseURI, formTarget: &cfg.ClickHouseForm, nameTarget: &cfg.ClickHouseName},
 	}
 	for _, binding := range dsnBindings {
@@ -611,6 +632,9 @@ func Load(spec Spec) (Config, error) {
 	if err := validateURI("COORDINATOR_DATABASE_URI", cfg.CoordinatorDatabaseURI, postgresSchemes...); err != nil {
 		return Config{}, err
 	}
+	if err := validateURI("API_DATABASE_URI", cfg.APIDatabaseURI, postgresSchemes...); err != nil {
+		return Config{}, err
+	}
 	if err := validateURI("CLICKHOUSE_URI", cfg.ClickHouseURI, "clickhouse", "http", "https"); err != nil {
 		return Config{}, err
 	}
@@ -656,6 +680,22 @@ func Load(spec Spec) (Config, error) {
 		return Config{}, fmt.Errorf(
 			"RIVER_COORDINATOR_DATABASE_ROLE must be distinct from " +
 				"RIVER_DOMAIN_DATABASE_ROLE and RIVER_QUEUE_DATABASE_ROLE",
+		)
+	}
+	cfg.APIDatabaseRole = envOrDefault(lookup, "API_DATABASE_ROLE", defaultAPIDatabaseRole)
+	if err := validateIdentifier("API_DATABASE_ROLE", cfg.APIDatabaseRole); err != nil {
+		return Config{}, err
+	}
+	// Same deployment-wide invariant as the three River roles above, checked
+	// unconditionally for the identical reason: a collision configured on a
+	// worker that never opens the api role's pool is still a misconfiguration
+	// the next process to actually use it would silently inherit.
+	if cfg.APIDatabaseRole == cfg.DomainDatabaseRole ||
+		cfg.APIDatabaseRole == cfg.QueueDatabaseRole ||
+		cfg.APIDatabaseRole == cfg.CoordinatorDatabaseRole {
+		return Config{}, fmt.Errorf(
+			"API_DATABASE_ROLE must be distinct from RIVER_DOMAIN_DATABASE_ROLE, " +
+				"RIVER_QUEUE_DATABASE_ROLE, and RIVER_COORDINATOR_DATABASE_ROLE",
 		)
 	}
 	cfg.DomainTransactionPooler, err = boolEnv(lookup, "PGBOUNCER_TRANSACTION_MODE", false)
@@ -821,6 +861,7 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.String("log_level", c.LogLevel.String()),
 		slog.Bool("domain_database_configured", c.DomainDatabaseURI.Configured()),
 		slog.Bool("coordinator_database_configured", c.CoordinatorDatabaseURI.Configured()),
+		slog.Bool("api_database_configured", c.APIDatabaseURI.Configured()),
 		slog.Bool("queue_database_configured", c.QueueDatabaseURI.Configured()),
 		// A successful resolution used
 		// to leave only the booleans above observable -- which of the two
@@ -835,6 +876,7 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.String("river_domain_database_role", c.DomainDatabaseRole),
 		slog.String("river_queue_database_role", c.QueueDatabaseRole),
 		slog.String("river_coordinator_database_role", c.CoordinatorDatabaseRole),
+		slog.String("api_database_role", c.APIDatabaseRole),
 		slog.Bool("domain_transaction_pooler", c.DomainTransactionPooler),
 		slog.Int("domain_database_max_connections", int(c.DomainDatabaseMaxConns)),
 		slog.Int("queue_database_max_connections", int(c.QueueDatabaseMaxConns)),
@@ -893,6 +935,7 @@ func (c Config) SafeAttrs() []slog.Attr {
 		{c.DomainDatabaseURI.Configured(), "domain_database_form", c.DomainDatabaseForm, "domain_database_name", c.DomainDatabaseName},
 		{c.QueueDatabaseURI.Configured(), "queue_database_form", c.QueueDatabaseForm, "queue_database_name", c.QueueDatabaseName},
 		{c.CoordinatorDatabaseURI.Configured(), "coordinator_database_form", c.CoordinatorDatabaseForm, "coordinator_database_name", c.CoordinatorDatabaseName},
+		{c.APIDatabaseURI.Configured(), "api_database_form", c.APIDatabaseForm, "api_database_name", c.APIDatabaseName},
 		{c.ClickHouseURI.Configured(), "clickhouse_form", c.ClickHouseForm, "clickhouse_name", c.ClickHouseName},
 	} {
 		if !observed.configured {
@@ -1385,6 +1428,14 @@ var (
 	CoordinatorDatabaseSpec = ComponentSpec{
 		HostKey: "DEV_HEALTH_PG_COORDINATOR_HOST", PortKey: "DEV_HEALTH_PG_COORDINATOR_PORT", DefaultPort: "5432",
 		UserKey: "DEV_HEALTH_PG_COORDINATOR_USER", PasswordKey: "DEV_HEALTH_PG_COORDINATOR_PASSWORD",
+		DBKey: "DEV_HEALTH_PG_DB", DefaultDB: "postgres", DBKeyShared: true, Scheme: "postgresql",
+	}
+	// APIDatabaseSpec is the dho api Service's own component form (CHAOS-6269).
+	// Same DBKeyShared convention as the three River specs above: one
+	// database, many logins.
+	APIDatabaseSpec = ComponentSpec{
+		HostKey: "DEV_HEALTH_PG_API_HOST", PortKey: "DEV_HEALTH_PG_API_PORT", DefaultPort: "5432",
+		UserKey: "DEV_HEALTH_PG_API_USER", PasswordKey: "DEV_HEALTH_PG_API_PASSWORD",
 		DBKey: "DEV_HEALTH_PG_DB", DefaultDB: "postgres", DBKeyShared: true, Scheme: "postgresql",
 	}
 	ClickHouseSpec = ComponentSpec{

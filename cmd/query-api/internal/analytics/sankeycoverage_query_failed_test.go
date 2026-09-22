@@ -139,6 +139,16 @@ func TestIsLocalValidationFailure(t *testing.T) {
 	}{
 		{"wrapped ErrInvalidBinding", fmt.Errorf("binding value: %w", clickhouse.ErrInvalidBinding), true},
 		{"bare ErrUnsafeStatement", clickhouse.ErrUnsafeStatement, true},
+		// CHAOS-6121: dev-health-go@v0.8.0 (the pinned version -- see
+		// go.mod) has FOUR local sentinels. ErrUnsupportedBinding
+		// (clickHouseParameter, a slice/array shape with no literal
+		// encoding) and ErrUnsafeBindingValue (clickHouseQuotedString, a
+		// []string element containing a backslash) are exactly as
+		// pre-dispatch as ErrInvalidBinding/ErrUnsafeStatement -- both
+		// fail inside translateBindings before c.connection.Query is
+		// ever called.
+		{"wrapped ErrUnsupportedBinding", fmt.Errorf("binding value: %w", clickhouse.ErrUnsupportedBinding), true},
+		{"wrapped ErrUnsafeBindingValue", fmt.Errorf("binding value: %w", clickhouse.ErrUnsafeBindingValue), true},
 		{"ClickHouse server exception", &clickhousedriver.Exception{Code: 60, Name: "UNKNOWN_TABLE"}, false},
 		{"context cancellation", context.Canceled, false},
 		{"unrelated error", errors.New("boom"), false},

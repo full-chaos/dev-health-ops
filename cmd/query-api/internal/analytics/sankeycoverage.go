@@ -165,15 +165,25 @@ func defaultRecordInvestmentCoverageFailure(ctx context.Context, orgID string, m
 }
 
 // isLocalValidationFailure reports whether err is, or wraps, one of
-// dev-health-go's two LOCAL (pre-dispatch) validation sentinels --
-// ErrUnsafeStatement (validateReadOnlyStatement) or ErrInvalidBinding
-// (translateBindings). Both run inside Client.Query BEFORE it ever calls
-// the driver (client.go:111-133): a query failing this way never reached
-// ClickHouse, so no query id bound to it was ever sent, and none can
-// appear in system.query_log. See resolveSankeyCoverage's call site for
-// why that makes the id worth suppressing rather than reporting.
+// dev-health-go's FOUR local (pre-dispatch) validation sentinels:
+// ErrUnsafeStatement (validateReadOnlyStatement), and ErrInvalidBinding /
+// ErrUnsupportedBinding / ErrUnsafeBindingValue (translateBindings and
+// the clickHouseParameter/clickHouseStringArray/clickHouseQuotedString
+// chain it calls -- a slice/array binding shape with no literal encoding,
+// or a []string element containing a backslash, fail exactly as locally
+// as a malformed binding name). All four run inside Client.Query BEFORE
+// it ever calls the driver (client.go:145-167): a query failing this way
+// never reached ClickHouse, so no query id bound to it was ever sent, and
+// none can appear in system.query_log. (ErrInvalidConfiguration is
+// deliberately excluded: it is returned only by
+// NewClickHouseQueryClientWithOptions, at client construction, never by
+// Query -- it cannot occur here.) See resolveSankeyCoverage's call site
+// for why that makes the id worth suppressing rather than reporting.
 func isLocalValidationFailure(err error) bool {
-	return errors.Is(err, clickhouse.ErrUnsafeStatement) || errors.Is(err, clickhouse.ErrInvalidBinding)
+	return errors.Is(err, clickhouse.ErrUnsafeStatement) ||
+		errors.Is(err, clickhouse.ErrInvalidBinding) ||
+		errors.Is(err, clickhouse.ErrUnsupportedBinding) ||
+		errors.Is(err, clickhouse.ErrUnsafeBindingValue)
 }
 
 // compileSankeyCoverage ports the query construction half of
@@ -549,15 +559,15 @@ func resolveSankeyCoverage(ctx context.Context, client QueryClient, orgID string
 		// unencodable binding value produces stage=query
 		// query_id=<minted> with ZERO matching system.query_log rows):
 		// dev-health-go's Client.Query validates the statement shape and
-		// translates bindings to native-protocol
-		// PARAMETERS entirely LOCALLY, both before it ever calls
-		// c.connection.Query (client.go:111-133) -- so
-		// ErrUnsafeStatement/ErrInvalidBinding mean the request was never
-		// dispatched, and the id we bound to it via WithQueryID was never
-		// sent either. Reporting queryID for THIS class sends on-call
-		// searching system.query_log for a row that can never exist,
-		// which is worse than reporting no id at all (AGENTS.md: "an
-		// inaccurate coverage claim is worse than an admitted gap").
+		// translates bindings to native-protocol PARAMETERS entirely
+		// LOCALLY, all before it ever calls c.connection.Query
+		// (client.go:145-167) -- so any of isLocalValidationFailure's
+		// four sentinels mean the request was never dispatched, and the
+		// id we bound to it via WithQueryID was never sent either.
+		// Reporting queryID for THIS class sends on-call searching
+		// system.query_log for a row that can never exist, which is
+		// worse than reporting no id at all (AGENTS.md: "an inaccurate
+		// coverage claim is worse than an admitted gap").
 		reportedQueryID := queryID
 		if isLocalValidationFailure(err) {
 			reportedQueryID = ""

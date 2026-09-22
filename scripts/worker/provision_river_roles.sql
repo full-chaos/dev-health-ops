@@ -38,7 +38,16 @@ SELECT (
 \gset
 \if :roles_match
   \echo 'domain_role, queue_role, and coordinator_role must be distinct'
-  \quit 2
+  -- \quit accepts an exit-code argument only on newer psql clients; verified
+  -- empirically against the psql installed where this script runs (16.15):
+  -- \quit 2 prints "extra argument "2" ignored" and still exits 0, silently
+  -- defeating this whole distinctness check for any caller that only reads
+  -- the exit code (a Helm hook, compose's go-river-provision). A forced SQL
+  -- error under ON_ERROR_STOP (set at the top of this file) is the
+  -- version-independent way to guarantee a nonzero exit; the \echo above
+  -- already carries the operator-readable reason, so the error text itself
+  -- (division by zero) never needs to be descriptive.
+  SELECT 1/0;
 \endif
 
 SELECT current_database() AS app_database
@@ -107,6 +116,109 @@ GRANT USAGE ON SCHEMA public TO :"domain_role";
 REVOKE CREATE ON SCHEMA public FROM :"domain_role";
 GRANT USAGE ON SCHEMA public TO :"queue_role";
 REVOKE CREATE ON SCHEMA public FROM :"queue_role";
+
+-- The dho api Service's own role (CHAOS-6269, spec.md §4.4). Optional, same
+-- shape as keda_role below -- only provisioned when the caller passes
+-- api_role, so this script's behaviour for every EXISTING unmodified caller
+-- (compose's go-river-provision service, the deploy chart's provision-roles
+-- hook) is completely unchanged: neither passes api_role today, and making
+-- it a REQUIRED 4th role here would have made every one of those callers
+-- either block on an interactive \prompt with no terminal attached, or
+-- silently create devhealth_api with an empty password -- a real regression
+-- this script must not introduce as a side effect of a change nothing yet
+-- depends on. An operator (today: chris, by hand, per the ticket's
+-- paste-ready line) opts in explicitly by passing api_role/api_password.
+--
+-- Not part of the CHAOS-3033 Option B split and never opens a River pool, so
+-- it gets no River-schema grant of any kind, here or anywhere --
+-- CheckAPIAuthorization (internal/storage/postgres/api_authorization.go)
+-- asserts zero River privilege the same way it does for the three roles
+-- above. Its table privileges, once routes exist to need any, are owned by
+-- postgres.APIPosture() and applied by the api Service's own
+-- provisioning/rollout step -- exactly the relationship coordinatorPosture()
+-- already has to coordinatorGrantStatements. This script's job for it is
+-- identical to the three roles above's: make the login exist, connectable,
+-- and unable to CREATEDB/CREATEROLE/self-grant TEMPORARY or CREATE on the
+-- public schema -- nothing this script does can ever revoke a grant a later
+-- step applied.
+\if :{?api_role}
+  \if :{?api_password}
+  \else
+    \prompt -1 'API Service role password: ' api_password
+  \endif
+
+  SELECT (:'api_role' = :'domain_role' OR :'api_role' = :'queue_role' OR :'api_role' = :'coordinator_role') AS api_role_collides
+  \gset
+  \if :api_role_collides
+    \echo 'api_role must be distinct from domain_role, queue_role, and coordinator_role'
+    -- See the roles_match check above for why this is SELECT 1/0, not \quit N.
+    SELECT 1/0;
+  \endif
+  -- keda_role is a SEPARATE optional \if block (below) whose vars are still
+  -- available for comparison here regardless of textual order -- psql
+  -- resolves --set variables at invocation time, not at the point their
+  -- \if block appears. Guarded on :{?keda_role} since it may be entirely
+  -- unset (comparing an unset psql variable errors, it does not read as
+  -- false). Without this check, api_role == keda_role creates ONE role that
+  -- this block bootstraps to zero River privilege and the keda block below
+  -- then grants USAGE on the River schema + SELECT on river_job to --
+  -- CheckAPIAuthorization's unconditional "holds zero River privilege"
+  -- assertion then refuses it, so the api Service could never become ready.
+  \if :{?keda_role}
+    SELECT (:'api_role' = :'keda_role') AS api_role_collides_keda
+    \gset
+    \if :api_role_collides_keda
+      \echo 'api_role must be distinct from keda_role'
+      -- See the roles_match check above for why this is SELECT 1/0, not \quit N.
+      SELECT 1/0;
+    \endif
+  \endif
+
+  SELECT format(
+           'CREATE ROLE %I LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD %L',
+           :'api_role',
+           :'api_password'
+         )
+   WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'api_role')
+  \gexec
+
+  GRANT CONNECT ON DATABASE :"app_database" TO :"api_role";
+  -- PUBLIC holds TEMPORARY (and CONNECT) on every database by default in
+  -- PostgreSQL; has_database_privilege resolves EFFECTIVE privilege,
+  -- inherited-via-PUBLIC included, so revoking only from api_role leaves the
+  -- role holding TEMPORARY anyway and fails CheckAPIAuthorization's
+  -- unconditional "does not hold TEMPORARY" assertion. The domain/queue/
+  -- coordinator block above already revokes this from PUBLIC database-wide,
+  -- so in every real invocation of this script (api_role is never the ONLY
+  -- thing provisioned -- the three roles above always run first) this line
+  -- is a no-op by the time it runs. Revoked here too, explicitly, so this
+  -- block is correct standing alone and does not depend on running after
+  -- that one.
+  REVOKE TEMPORARY ON DATABASE :"app_database" FROM PUBLIC, :"api_role";
+  GRANT USAGE ON SCHEMA public TO :"api_role";
+  -- Deliberately role-scoped only. A review round proved that naming PUBLIC
+  -- here (mirroring the TEMPORARY revoke above) has real blast radius: the
+  -- TEMPORARY revoke above is a no-op in every real invocation (the
+  -- mandatory domain/queue/coordinator block earlier in this script already
+  -- revokes TEMPORARY from PUBLIC database-wide before this block ever
+  -- runs), but there is no earlier unconditional REVOKE CREATE FROM PUBLIC
+  -- anywhere in this file -- adding one here would strip CREATE on the
+  -- public schema from every OTHER role in the database that relies on
+  -- PUBLIC's grant (the PostgreSQL default before v15, still possible on
+  -- any target regardless of version) as an undocumented side effect of
+  -- bootstrapping one unrelated role. Reproduced directly: granting PUBLIC
+  -- CREATE, then running this script with api_role set, revoked an
+  -- unrelated pre-existing role's CREATE privilege out from under it.
+  -- On a target where PUBLIC still holds CREATE on the public schema,
+  -- api_role effectively holds it too (has_schema_privilege resolves
+  -- PUBLIC-inherited privilege), and CheckAPIAuthorization's "does not hold
+  -- CREATE" assertion correctly REFUSES readiness -- the loud signal that
+  -- this target needs its own deliberate, human REVOKE CREATE ... FROM
+  -- PUBLIC, not a silent side effect of this script. The three roles above
+  -- (domain/queue/coordinator) carry the identical, pre-existing gap;
+  -- unfixed here, tracked as a follow-up, not silently dismissed.
+  REVOKE CREATE ON SCHEMA public FROM :"api_role";
+\endif
 
 -- The KEDA postgresql scaler's read-only role. Optional -- only
 -- provisioned when the caller passes keda_role (the Helm hook does this only

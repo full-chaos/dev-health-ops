@@ -246,6 +246,17 @@ var optionRegistry = []Option{
 		Default: defaultCoordinatorDatabaseRole, Group: GroupDatabase,
 		Usage: "PostgreSQL role for the coordinator pool",
 	},
+	{
+		// CHAOS-6269: not a River role (the dho api Service never opens a
+		// River pool), registered here anyway so it shares the domain/queue/
+		// coordinator roles' --help discovery and naming convention; no
+		// Services restriction, same as coordinator-database-role, since the
+		// api binary is not built yet -- it enforces its own requirement at
+		// its own startup once it exists.
+		Flag: "api-database-role", Env: "API_DATABASE_ROLE", Kind: KindString,
+		Default: defaultAPIDatabaseRole, Group: GroupDatabase,
+		Usage: "PostgreSQL role for the api Service pool",
+	},
 	// CHAOS-5560: component alternative to POSTGRES_URI/WORKER_DATABASE_URI/
 	// COORDINATOR_DATABASE_URI/CLICKHOUSE_URI. Setting a *_HOST value (flag
 	// or env) assembles that connection's URI from these components instead
@@ -302,9 +313,21 @@ var optionRegistry = []Option{
 		Usage: "coordinator PostgreSQL user (component form)",
 	},
 	{
+		Flag: "api-database-host", Env: "DEV_HEALTH_PG_API_HOST", Kind: KindString, Group: GroupDatabase,
+		Usage: "api Service PostgreSQL host; set to assemble API_DATABASE_URI from components",
+	},
+	{
+		Flag: "api-database-port", Env: "DEV_HEALTH_PG_API_PORT", Kind: KindString,
+		Default: "5432", Group: GroupDatabase, Usage: "api Service PostgreSQL port (component form)",
+	},
+	{
+		Flag: "api-database-user", Env: "DEV_HEALTH_PG_API_USER", Kind: KindString, Group: GroupDatabase,
+		Usage: "api Service PostgreSQL user (component form)",
+	},
+	{
 		Flag: "postgres-db", Env: "DEV_HEALTH_PG_DB", Kind: KindString,
 		Default: "postgres", Group: GroupDatabase,
-		Usage: "Postgres database name shared by the three component-form connections above",
+		Usage: "Postgres database name shared by the four component-form connections above",
 	},
 	{
 		Flag: "clickhouse-host", Env: "DEV_HEALTH_CH_HOST", Kind: KindString, Group: GroupDatabase,
@@ -423,6 +446,7 @@ var optionRegistry = []Option{
 	{Env: "POSTGRES_URI", Secret: true, Group: GroupCredentials, Usage: "domain PostgreSQL DSN"},
 	{Env: "WORKER_DATABASE_URI", Secret: true, Group: GroupCredentials, Usage: "queue-control PostgreSQL DSN"},
 	{Env: "COORDINATOR_DATABASE_URI", Secret: true, Group: GroupCredentials, Usage: "coordinator PostgreSQL DSN; required by coordinator binaries"},
+	{Env: "API_DATABASE_URI", Secret: true, Group: GroupCredentials, Usage: "api Service PostgreSQL DSN; required by the api binary (CHAOS-6269)"},
 	{Env: "CLICKHOUSE_URI", Secret: true, Group: GroupCredentials, Usage: "ClickHouse DSN; native protocol, port 9000"},
 	// CHAOS-5560: component PASSWORDS for the four URIs above. Non-secret
 	// components (host/port/user/db) are registered in GroupDatabase above
@@ -439,6 +463,7 @@ var optionRegistry = []Option{
 	{Env: "DEV_HEALTH_PG_DOMAIN_PASSWORD", Secret: true, Group: GroupCredentials, Usage: "domain PostgreSQL password (component form)"},
 	{Env: "DEV_HEALTH_PG_QUEUE_PASSWORD", Secret: true, Group: GroupCredentials, Usage: "queue-control PostgreSQL password (component form)"},
 	{Env: "DEV_HEALTH_PG_COORDINATOR_PASSWORD", Secret: true, Group: GroupCredentials, Usage: "coordinator PostgreSQL password (component form)"},
+	{Env: "DEV_HEALTH_PG_API_PASSWORD", Secret: true, Group: GroupCredentials, Usage: "api Service PostgreSQL password (component form)"},
 	{Env: "VALKEY_URI", Secret: true, Group: GroupCredentials, Usage: "Valkey/Redis DSN"},
 	{Env: "SETTINGS_ENCRYPTION_KEY", Secret: true, Group: GroupCredentials, Usage: "provider credential encryption key"},
 	{Env: "SETTINGS_ENCRYPTION_SALT", Secret: true, Group: GroupCredentials, Usage: "provider credential encryption salt"},

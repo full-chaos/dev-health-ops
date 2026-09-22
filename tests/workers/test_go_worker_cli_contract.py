@@ -47,6 +47,7 @@ _CREDENTIALS = frozenset(
         "POSTGRES_URI",
         "WORKER_DATABASE_URI",
         "COORDINATOR_DATABASE_URI",
+        "API_DATABASE_URI",
         "CLICKHOUSE_URI",
         # CHAOS-5560: component-form PASSWORDS for the four DSNs above.
         # Non-secret components (host/port/user/db) are deliberately NOT
@@ -56,6 +57,9 @@ _CREDENTIALS = frozenset(
         "DEV_HEALTH_PG_DOMAIN_PASSWORD",
         "DEV_HEALTH_PG_QUEUE_PASSWORD",
         "DEV_HEALTH_PG_COORDINATOR_PASSWORD",
+        # api Service's own pre-built DSN and component password (CHAOS-6269),
+        # same shape as the coordinator pair above.
+        "DEV_HEALTH_PG_API_PASSWORD",
         "VALKEY_URI",
         "SETTINGS_ENCRYPTION_KEY",
         "SETTINGS_ENCRYPTION_SALT",

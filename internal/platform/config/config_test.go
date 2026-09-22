@@ -440,6 +440,9 @@ func TestSafeAttrsReportFormAndNameOfEachResolvedDSN(t *testing.T) {
 		"DEV_HEALTH_PG_QUEUE_USER":     "app",
 		"DEV_HEALTH_PG_QUEUE_PASSWORD": "app",
 		"DEV_HEALTH_PG_DB":             "queuedb",
+		"DEV_HEALTH_PG_API_HOST":       "api.internal",
+		"DEV_HEALTH_PG_API_USER":       "app",
+		"DEV_HEALTH_PG_API_PASSWORD":   "app",
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -448,6 +451,7 @@ func TestSafeAttrsReportFormAndNameOfEachResolvedDSN(t *testing.T) {
 	for _, want := range []string{
 		"domain_database_form=uri",
 		"queue_database_form=components", "queue_database_name=queuedb",
+		"api_database_form=components", "api_database_name=queuedb",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("safe attrs missing %q: %s", want, text)
@@ -2424,4 +2428,76 @@ func TestFileReadFailureNeverEchoesTheConfiguredPath(t *testing.T) {
 	if !strings.Contains(err.Error(), "DEV_HEALTH_PG_DOMAIN_USER_FILE") {
 		t.Fatalf("expected the error to name the key, got: %v", err)
 	}
+}
+
+// TestUnconfiguredAPIRoleNeverCollidesWithAnExistingRoleName is the
+// executed regression proof for a review round's finding: unlike the three
+// River roles (a deployment-wide invariant -- every deployment always
+// provisions domain/queue/coordinator, so checking their distinctness
+// unconditionally is correct), the api role is OPTIONAL
+// (provision_river_roles.sql's api_role block, CHAOS-6269) -- most
+// deployments today never provision devhealth_api at all. Every process's
+// Load() still defaults cfg.APIDatabaseRole to "devhealth_api" whether or
+// not anything about the api Service is configured, so checking THAT
+// default unconditionally against an operator's real role names would
+// refuse startup for a domain/queue/coordinator role that merely happens
+// to already be named "devhealth_api" -- reproduced directly against
+// dev-health-worker by the round. The collision check must only fire when
+// the api role is actually in play.
+func TestUnconfiguredAPIRoleNeverCollidesWithAnExistingRoleName(t *testing.T) {
+	t.Parallel()
+
+	for _, envKey := range []string{
+		"RIVER_DOMAIN_DATABASE_ROLE",
+		"RIVER_QUEUE_DATABASE_ROLE",
+		"RIVER_COORDINATOR_DATABASE_ROLE",
+	} {
+		t.Run(envKey, func(t *testing.T) {
+			t.Parallel()
+
+			values := map[string]string{
+				"POSTGRES_URI":             "postgresql://app:app@db.internal:5432/appdb",
+				"WORKER_DATABASE_URI":      "postgresql://app:app@db.internal:5432/appdb",
+				"COORDINATOR_DATABASE_URI": "postgresql://app:app@db.internal:5432/appdb",
+				envKey:                     "devhealth_api",
+			}
+			if _, err := Load(workerSpec(values)); err != nil {
+				t.Fatalf("%s=devhealth_api with the api connection entirely unconfigured must not fail: %v", envKey, err)
+			}
+		})
+	}
+}
+
+// TestAPIRoleCollisionStillRefusedWhenAPIRoleIsActuallyInPlay is the
+// converse of the test above: the collision check must still fire once the
+// operator has actually named the api role explicitly, or configured the
+// api connection -- the fix must narrow the check's SCOPE, not remove it.
+func TestAPIRoleCollisionStillRefusedWhenAPIRoleIsActuallyInPlay(t *testing.T) {
+	t.Parallel()
+
+	t.Run("API_DATABASE_ROLE set explicitly", func(t *testing.T) {
+		t.Parallel()
+		_, err := Load(workerSpec(map[string]string{
+			"POSTGRES_URI":               "postgresql://app:app@db.internal:5432/appdb",
+			"WORKER_DATABASE_URI":        "postgresql://app:app@db.internal:5432/appdb",
+			"API_DATABASE_ROLE":          "app_domain",
+			"RIVER_DOMAIN_DATABASE_ROLE": "app_domain",
+		}))
+		if err == nil || !strings.Contains(err.Error(), "API_DATABASE_ROLE must be distinct") {
+			t.Fatalf("got %v, want the API_DATABASE_ROLE distinctness error", err)
+		}
+	})
+
+	t.Run("API_DATABASE_URI configured, default role collides", func(t *testing.T) {
+		t.Parallel()
+		_, err := Load(workerSpec(map[string]string{
+			"POSTGRES_URI":               "postgresql://app:app@db.internal:5432/appdb",
+			"WORKER_DATABASE_URI":        "postgresql://app:app@db.internal:5432/appdb",
+			"API_DATABASE_URI":           "postgresql://app:app@api.internal:5432/apidb",
+			"RIVER_DOMAIN_DATABASE_ROLE": "devhealth_api",
+		}))
+		if err == nil || !strings.Contains(err.Error(), "API_DATABASE_ROLE must be distinct") {
+			t.Fatalf("got %v, want the API_DATABASE_ROLE distinctness error", err)
+		}
+	})
 }

@@ -60,7 +60,12 @@ func TestHelpDeclaresTheDocumentedEnvironmentHandful(t *testing.T) {
 	// standard deployment (the pre-built URI form still works unset), but all
 	// four hold a real secret value and so are Secret-marked env-only like
 	// every other credential here.
-	if len(required) > 14 {
+	// 14 -> 16 (CHAOS-6269): API_DATABASE_URI, DEV_HEALTH_PG_API_PASSWORD
+	// added -- the api Service's own pre-built DSN and its component-form
+	// password field, same shape as the coordinator pair above. Neither is
+	// required for a standard deployment today (no route yet needs the api
+	// role for anything), but both hold a real secret value.
+	if len(required) > 16 {
 		t.Fatalf("required environment grew to %d settings: %v", len(required), required)
 	}
 	for _, name := range required {

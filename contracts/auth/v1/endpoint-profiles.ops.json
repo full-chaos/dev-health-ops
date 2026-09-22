@@ -15175,7 +15175,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 252,
+        "line": 159,
         "router_local_path": "/health"
       },
       "gaps": [],
@@ -15225,7 +15225,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 299,
+        "line": 206,
         "router_local_path": "/ready"
       },
       "gaps": [],
@@ -15275,7 +15275,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 310,
+        "line": 217,
         "router_local_path": "/health/workers"
       },
       "gaps": [],
@@ -15325,7 +15325,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 420,
+        "line": 379,
         "router_local_path": "/api/v1/meta"
       },
       "gaps": [],
@@ -15375,7 +15375,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 465,
+        "line": 385,
         "router_local_path": "/api/v1/home"
       },
       "gaps": [],
@@ -15434,7 +15434,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 485,
+        "line": 396,
         "router_local_path": "/api/v1/home"
       },
       "gaps": [],
@@ -15493,7 +15493,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 517,
+        "line": 413,
         "router_local_path": "/api/v1/explain"
       },
       "gaps": [],
@@ -15552,7 +15552,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 533,
+        "line": 420,
         "router_local_path": "/api/v1/explain"
       },
       "gaps": [],
@@ -15611,7 +15611,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 565,
+        "line": 437,
         "router_local_path": "/api/v1/heatmap"
       },
       "gaps": [],
@@ -15670,7 +15670,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 603,
+        "line": 456,
         "router_local_path": "/api/v1/work-units"
       },
       "gaps": [],
@@ -15729,7 +15729,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 639,
+        "line": 464,
         "router_local_path": "/api/v1/work-units"
       },
       "gaps": [],
@@ -15788,7 +15788,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 684,
+        "line": 479,
         "router_local_path": "/api/v1/work-units/{work_unit_id}/explain"
       },
       "gaps": [],
@@ -15847,7 +15847,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 779,
+        "line": 500,
         "router_local_path": "/api/v1/flame"
       },
       "gaps": [],
@@ -15906,7 +15906,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 801,
+        "line": 511,
         "router_local_path": "/api/v1/flame/aggregated"
       },
       "gaps": [],
@@ -15965,7 +15965,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 872,
+        "line": 531,
         "router_local_path": "/api/v1/quadrant"
       },
       "gaps": [],
@@ -16024,7 +16024,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 904,
+        "line": 547,
         "router_local_path": "/api/v1/drilldown/prs"
       },
       "gaps": [],
@@ -16083,7 +16083,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 934,
+        "line": 557,
         "router_local_path": "/api/v1/drilldown/prs"
       },
       "gaps": [],
@@ -16142,7 +16142,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 973,
+        "line": 572,
         "router_local_path": "/api/v1/drilldown/issues"
       },
       "gaps": [],
@@ -16201,7 +16201,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 1004,
+        "line": 582,
         "router_local_path": "/api/v1/drilldown/issues"
       },
       "gaps": [],
@@ -16260,7 +16260,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 1044,
+        "line": 597,
         "router_local_path": "/api/v1/people"
       },
       "gaps": [],
@@ -16319,7 +16319,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 1064,
+        "line": 608,
         "router_local_path": "/api/v1/people/{person_id}/summary"
       },
       "gaps": [],
@@ -16378,7 +16378,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 1088,
+        "line": 620,
         "router_local_path": "/api/v1/people/{person_id}/metric"
       },
       "gaps": [],
@@ -16437,7 +16437,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 1119,
+        "line": 632,
         "router_local_path": "/api/v1/people/{person_id}/drilldown/prs"
       },
       "gaps": [],
@@ -16496,7 +16496,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 1148,
+        "line": 648,
         "router_local_path": "/api/v1/people/{person_id}/drilldown/issues"
       },
       "gaps": [],
@@ -16555,7 +16555,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 1177,
+        "line": 664,
         "router_local_path": "/api/v1/opportunities"
       },
       "gaps": [],
@@ -16614,7 +16614,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 1207,
+        "line": 680,
         "router_local_path": "/api/v1/opportunities"
       },
       "gaps": [],
@@ -16673,7 +16673,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 1225,
+        "line": 690,
         "router_local_path": "/api/v1/investment"
       },
       "gaps": [],
@@ -16732,7 +16732,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 1251,
+        "line": 705,
         "router_local_path": "/api/v1/investment"
       },
       "gaps": [],
@@ -16791,7 +16791,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 1268,
+        "line": 715,
         "router_local_path": "/api/v1/investment/sunburst"
       },
       "gaps": [],
@@ -16850,7 +16850,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 1299,
+        "line": 732,
         "router_local_path": "/api/v1/investment/explain"
       },
       "gaps": [],
@@ -16909,7 +16909,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 1351,
+        "line": 754,
         "router_local_path": "/api/v1/investment/flow"
       },
       "gaps": [],
@@ -16968,7 +16968,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 1375,
+        "line": 764,
         "router_local_path": "/api/v1/investment/flow/repo-team"
       },
       "gaps": [],
@@ -17027,7 +17027,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 1392,
+        "line": 772,
         "router_local_path": "/api/v1/sankey"
       },
       "gaps": [],
@@ -17086,7 +17086,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 1427,
+        "line": 790,
         "router_local_path": "/api/v1/sankey"
       },
       "gaps": [],
@@ -17145,7 +17145,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 1451,
+        "line": 800,
         "router_local_path": "/api/v1/filters/options"
       },
       "gaps": [],

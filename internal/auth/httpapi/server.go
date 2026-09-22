@@ -77,6 +77,9 @@ type ServerOptions struct {
 	// MaxHeaderValueCount bounds the number of header values. Zero means
 	// net/http's default (500). Over it, net/http answers 431 itself.
 	MaxHeaderValueCount int
+	// IdleTimeout closes a keep-alive connection that has been idle this
+	// long. Zero means 60 s, this package's own value.
+	IdleTimeout time.Duration
 }
 
 // Server is the auth API listener. It is a lifecycle.Component so the runtime,
@@ -117,6 +120,10 @@ func NewServer(options ServerOptions) (*Server, error) {
 	if name == "" {
 		name = "auth-api-http"
 	}
+	idleTimeout := options.IdleTimeout
+	if idleTimeout <= 0 {
+		idleTimeout = 60 * time.Second
+	}
 	maxHeaderBytes := options.MaxHeaderBytes
 	if maxHeaderBytes <= 0 {
 		maxHeaderBytes = 1 << 16
@@ -135,7 +142,7 @@ func NewServer(options ServerOptions) (*Server, error) {
 		// RequestTimeout, or the connection would be torn down before a
 		// well-behaved handler could render its own deadline response.
 		WriteTimeout:                 options.RequestTimeout + 5*time.Second,
-		IdleTimeout:                  60 * time.Second,
+		IdleTimeout:                  idleTimeout,
 		DisableGeneralOptionsHandler: options.StrictPaths,
 		// MaxHeaderBytes bounds header memory independently of the body
 		// bound, which MaxBody cannot see.

@@ -58,6 +58,10 @@ const (
 	// ends a request head, as in uvicorn, which has no count limit: the
 	// shortest header line is 4 bytes, so 32,768 lines cannot fit the bound.
 	maxHeaderValueCount = 32 << 10
+	// idleTimeout is uvicorn's timeout_keep_alive default (5 s), which the
+	// Python api runs with: a client reusing a connection idle longer than
+	// that finds it closed on either plane.
+	idleTimeout = 5 * time.Second
 	// listenerCheck is the readiness check that fails until the api listener
 	// is bound.
 	listenerCheck = "api_listener"
@@ -133,7 +137,9 @@ func NewServer(cfg config.Config, logger *slog.Logger, routes []httpapi.Route) (
 		StrictPaths:         true,
 		MaxHeaderBytes:      maxHeaderBytes,
 		MaxHeaderValueCount: maxHeaderValueCount,
+		IdleTimeout:         idleTimeout,
 		Middleware: []func(http.Handler) http.Handler{
+			CloseHTTP10,
 			SecurityHeaders,
 			NewCORS(cfg.CORSAllowedOrigins).Wrap,
 		},

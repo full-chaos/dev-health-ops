@@ -1,12 +1,16 @@
 package httpapi
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // recordingWriter is an ErrorWriter that renders a marker body, so a test can
@@ -216,5 +220,66 @@ func TestHeaderLimitsDefaultAndOverride(t *testing.T) {
 	}
 	if server.server.MaxHeaderBytes != 123877 || server.server.MaxHeaderValueCount != 32768 {
 		t.Fatalf("overrides not applied: %d bytes, %d values", server.server.MaxHeaderBytes, server.server.MaxHeaderValueCount)
+	}
+}
+
+// TestIdleTimeoutClosesAnIdleKeepAliveConnection drives a live listener: with
+// IdleTimeout set, a kept-alive connection idle past it is closed by the
+// server; with the default (60 s), the same connection still serves a second
+// request after the same pause.
+func TestIdleTimeoutClosesAnIdleKeepAliveConnection(t *testing.T) {
+	const pause = 600 * time.Millisecond
+	for _, c := range []struct {
+		name       string
+		idle       time.Duration
+		wantSecond bool
+	}{
+		{"set below the pause", 200 * time.Millisecond, false},
+		{"default", 0, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			options := testOptions()
+			options.IdleTimeout = c.idle
+			server, err := NewServer(options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c.idle == 0 && server.server.IdleTimeout != 60*time.Second {
+				t.Fatalf("default idle timeout %v, want 60s", server.server.IdleTimeout)
+			}
+			if err := server.Start(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = server.Shutdown(context.Background()) })
+			conn, err := net.Dial("tcp", server.Address())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
+			reader := bufio.NewReader(conn)
+			ask := func() error {
+				if _, err := io.WriteString(conn, "GET /nope HTTP/1.1\r\nHost: x\r\n\r\n"); err != nil {
+					return err
+				}
+				_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+				response, err := http.ReadResponse(reader, nil)
+				if err != nil {
+					return err
+				}
+				_, _ = io.Copy(io.Discard, response.Body)
+				return response.Body.Close()
+			}
+			if err := ask(); err != nil {
+				t.Fatalf("first request: %v", err)
+			}
+			time.Sleep(pause)
+			err = ask()
+			if c.wantSecond && err != nil {
+				t.Fatalf("second request on a live connection: %v", err)
+			}
+			if !c.wantSecond && err == nil {
+				t.Fatal("second request served on a connection idle past IdleTimeout")
+			}
+		})
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"path"
 	"sort"
 	"strings"
 	"sync"
@@ -49,11 +50,33 @@ type ServerOptions struct {
 	// Now is injectable so a test can drive the rate limiter's clock. Nil
 	// means time.Now.
 	Now func() time.Time
+	// Name is the lifecycle component name and the label in this server's
+	// own error messages. Empty means "auth-api-http".
+	Name string
+	// ErrorWriter renders every error this server emits. Nil means WriteError
+	// (the ACP envelope).
+	ErrorWriter ErrorWriter
+	// Middleware wraps the whole mux, inside RequestID and the outermost
+	// Recover, in the order given: Middleware[0] sees the request first. It is
+	// for transport concerns every response carries (security headers, CORS);
+	// per-route policy belongs on the Route.
+	Middleware []func(http.Handler) http.Handler
+	// AcceptRequestID decides whether an inbound X-Request-ID is reused. Nil
+	// means this package's own narrow rule (acceptableRequestID).
+	AcceptRequestID func(string) bool
+	// StrictPaths answers, through ErrorWriter with CodeNotFound, every
+	// request whose target the mux would otherwise redirect or reject: a path
+	// that is not in canonical form ("/a/../b", "//x", "/a/./b"), a target
+	// without a leading slash (CONNECT authority form), and "*" (the
+	// server-wide OPTIONS handler is switched off so "OPTIONS *" reaches it).
+	// Off (the default), the mux keeps net/http's own redirects.
+	StrictPaths bool
 }
 
 // Server is the auth API listener. It is a lifecycle.Component so the runtime,
 // not this package and not a package-level variable, owns its shutdown.
 type Server struct {
+	name   string
 	logger *slog.Logger
 	server *http.Server
 	errors chan error
@@ -84,7 +107,11 @@ func NewServer(options ServerOptions) (*Server, error) {
 		return nil, err
 	}
 
-	server := &Server{logger: logger, errors: make(chan error, 1)}
+	name := options.Name
+	if name == "" {
+		name = "auth-api-http"
+	}
+	server := &Server{name: name, logger: logger, errors: make(chan error, 1)}
 	server.server = &http.Server{
 		Addr:    options.Address,
 		Handler: handler,
@@ -97,8 +124,9 @@ func NewServer(options ServerOptions) (*Server, error) {
 		// http.TimeoutHandler, is the backstop. It must exceed
 		// RequestTimeout, or the connection would be torn down before a
 		// well-behaved handler could render its own deadline response.
-		WriteTimeout: options.RequestTimeout + 5*time.Second,
-		IdleTimeout:  60 * time.Second,
+		WriteTimeout:                 options.RequestTimeout + 5*time.Second,
+		IdleTimeout:                  60 * time.Second,
+		DisableGeneralOptionsHandler: options.StrictPaths,
 		// MaxHeaderBytes bounds header memory independently of the body
 		// bound, which MaxBody cannot see.
 		MaxHeaderBytes: 1 << 16,
@@ -119,6 +147,10 @@ func NewServer(options ServerOptions) (*Server, error) {
 // 405, and an unknown path falls to the catch-all -- all three rendered by
 // this package's envelope rather than by net/http's plain-text defaults.
 func buildHandler(options ServerOptions, logger *slog.Logger) (http.Handler, error) {
+	write := options.ErrorWriter
+	if write == nil {
+		write = WriteError
+	}
 	mux := http.NewServeMux()
 
 	methodsByPattern := make(map[string][]string)
@@ -140,7 +172,7 @@ func buildHandler(options ServerOptions, logger *slog.Logger) (http.Handler, err
 		seen[key] = struct{}{}
 		methodsByPattern[route.Pattern] = append(methodsByPattern[route.Pattern], route.Method)
 
-		mux.Handle(key, routeChain(route, options, logger))
+		mux.Handle(key, routeChain(route, options, logger, write))
 	}
 
 	for pattern, methods := range methodsByPattern {
@@ -148,12 +180,12 @@ func buildHandler(options ServerOptions, logger *slog.Logger) (http.Handler, err
 		allow := strings.Join(methods, ", ")
 		mux.Handle(pattern, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Allow", allow)
-			WriteError(w, r, CodeMethodNotAllowed)
+			write(w, r, CodeMethodNotAllowed)
 		}))
 	}
 
 	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		WriteError(w, r, CodeNotFound)
+		write(w, r, CodeNotFound)
 	}))
 
 	// RequestID is outermost so every response -- including the 404 and 405
@@ -161,7 +193,23 @@ func buildHandler(options ServerOptions, logger *slog.Logger) (http.Handler, err
 	// correlation id. The outer Recover covers the mux itself and those two
 	// handlers; a route's own Recover (inside routeChain) catches first and
 	// logs the real pattern.
-	return RequestID(Recover(logger, "<unrouted>")(mux)), nil
+	var handler http.Handler = mux
+	if options.StrictPaths {
+		// Inside the middleware, so a refused target still gets every
+		// transport header a routed response gets.
+		handler = strictPaths(handler, write)
+	}
+	for index := len(options.Middleware) - 1; index >= 0; index-- {
+		if options.Middleware[index] == nil {
+			return nil, fmt.Errorf("middleware %d is nil", index)
+		}
+		handler = options.Middleware[index](handler)
+	}
+	accept := options.AcceptRequestID
+	if accept == nil {
+		accept = acceptableRequestID
+	}
+	return RequestIDWith(accept)(RecoverWith(logger, "<unrouted>", write)(handler)), nil
 }
 
 // routeChain wraps one route's handler. Order is deliberate: rate limiting is
@@ -169,7 +217,7 @@ func buildHandler(options ServerOptions, logger *slog.Logger) (http.Handler, err
 // on Content-Length without reading anything), then the deadline, then the
 // route's own panic recovery closest to the handler so the log line names the
 // real pattern.
-func routeChain(route Route, options ServerOptions, logger *slog.Logger) http.Handler {
+func routeChain(route Route, options ServerOptions, logger *slog.Logger, write ErrorWriter) http.Handler {
 	perSecond := route.RateLimitPerSecond
 	if perSecond <= 0 {
 		perSecond = options.RateLimit
@@ -183,10 +231,10 @@ func routeChain(route Route, options ServerOptions, logger *slog.Logger) http.Ha
 		maxBody = options.MaxBodyBytes
 	}
 
-	handler := Recover(logger, route.Method+" "+route.Pattern)(route.Handler)
+	handler := RecoverWith(logger, route.Method+" "+route.Pattern, write)(route.Handler)
 	handler = Deadline(options.RequestTimeout)(handler)
-	handler = MaxBody(maxBody)(handler)
-	handler = RateLimit(NewBucket(perSecond, burst, options.Now))(handler)
+	handler = MaxBodyWith(maxBody, write)(handler)
+	handler = RateLimitWith(NewBucket(perSecond, burst, options.Now), write)(handler)
 	return handler
 }
 
@@ -194,7 +242,7 @@ func routeChain(route Route, options ServerOptions, logger *slog.Logger) http.Ha
 func (s *Server) Handler() http.Handler { return s.server.Handler }
 
 // Name identifies the component to the lifecycle runtime.
-func (*Server) Name() string { return "auth-api-http" }
+func (s *Server) Name() string { return s.name }
 
 // Start binds the listener and serves in one owned goroutine.
 //
@@ -213,7 +261,7 @@ func (s *Server) Start(ctx context.Context) error {
 		// The address is this process's own configuration, not caller input,
 		// so it is safe in the error; the underlying syscall error is not
 		// wrapped in for the same reason net/http's own text is not needed.
-		return fmt.Errorf("listen for auth API on %s: %w", s.server.Addr, err)
+		return fmt.Errorf("listen for %s on %s: %w", s.name, s.server.Addr, err)
 	}
 	s.listener = listener
 	s.server.BaseContext = func(net.Listener) context.Context { return ctx }
@@ -221,7 +269,7 @@ func (s *Server) Start(ctx context.Context) error {
 		if serveErr := s.server.Serve(listener); serveErr != nil &&
 			!errors.Is(serveErr, http.ErrServerClosed) {
 			select {
-			case s.errors <- fmt.Errorf("auth API server: %w", serveErr):
+			case s.errors <- fmt.Errorf("%s server: %w", s.name, serveErr):
 			default:
 			}
 		}
@@ -239,7 +287,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		return nil
 	}
 	if err := s.server.Shutdown(ctx); err != nil {
-		return fmt.Errorf("shutdown auth API: %w", err)
+		return fmt.Errorf("shutdown %s: %w", s.name, err)
 	}
 	return nil
 }
@@ -263,3 +311,37 @@ func (s *Server) Address() string {
 type discard struct{}
 
 func (discard) Write(p []byte) (int, error) { return len(p), nil }
+
+// strictPaths answers NotFound for every request target net/http's ServeMux
+// would not route as given. ServeMux cleans the escaped path and redirects
+// when the cleaned form differs, and answers "*" with a bare 400; a service
+// that must answer exactly like one that routes the raw path (the Go api
+// mirrors Starlette, which never rewrites a path) stops those requests here.
+// The check is the mux's own rule (net/http cleanPath over EscapedPath), so
+// every request that passes it is one the mux routes without redirecting.
+func strictPaths(next http.Handler, write ErrorWriter) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		escaped := r.URL.EscapedPath()
+		if r.RequestURI == "*" || !strings.HasPrefix(escaped, "/") || canonicalPath(escaped) != escaped {
+			write(w, r, CodeNotFound)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// canonicalPath is net/http's cleanPath: path.Clean, keeping a trailing
+// slash.
+func canonicalPath(p string) string {
+	if p == "" {
+		return "/"
+	}
+	if p[0] != '/' {
+		p = "/" + p
+	}
+	cleaned := path.Clean(p)
+	if p[len(p)-1] == '/' && cleaned != "/" {
+		cleaned += "/"
+	}
+	return cleaned
+}

@@ -1,0 +1,114 @@
+{{- /*
+The Go HTTP api: `dho api` from the dho operator-binary image. It takes over
+the Python api's REST routes one area at a time; until an area is ported it
+mounts no business route and answers every api path with the Python api's own
+404 body. Nothing routes to it yet: the ingress path table that sends a
+ported path here is a deploy-repo change made per ported area, so enabling
+this Deployment changes no request's destination. Defaults off.
+
+Two listeners, never one: the api listener (goApi.port) carries requests, the
+operator listener (goApi.operatorPort) carries /healthz, /readyz and /metrics,
+so probes never pass through request middleware.
+
+Configuration is flags (CHAOS-4020), rendered below so `helm template` shows
+it; no platform Secret or ConfigMap is inherited unless goApi.envFrom lists
+one. The platform ConfigMap in particular is NOT inherited by default: it pins
+OTEL_SERVICE_NAME=dev-health-ops, and this service names itself
+dev-health-api.
+*/ -}}
+{{- if .Values.goApi.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "dev-health.fullname" . }}-go-api
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "go-api" "context" $) | nindent 4 }}
+spec:
+  replicas: {{ .Values.goApi.replicas }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxUnavailable: 0, maxSurge: 1}
+  selector:
+    matchLabels:
+      {{- include "dev-health.componentSelectorLabels" (dict "component" "go-api" "context" $) | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.goApi.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "dev-health.componentSelectorLabels" (dict "component" "go-api" "context" $) | nindent 8 }}
+    spec:
+      {{- include "dev-health.imagePullSecrets" . | nindent 6 }}
+      serviceAccountName: {{ include "dev-health.serviceAccountName" . }}
+      securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: go-api
+          image: {{ include "dev-health.goApiImage" . }}
+          imagePullPolicy: {{ .Values.goApi.image.pullPolicy }}
+          args:
+            - api
+            - {{ printf "--api-addr=:%v" .Values.goApi.port | quote }}
+            - {{ printf "--http-addr=:%v" .Values.goApi.operatorPort | quote }}
+            {{- with .Values.goApi.corsAllowedOrigins }}
+            - {{ printf "--cors-allowed-origins=%s" . | quote }}
+            {{- end }}
+            {{- range .Values.goApi.extraArgs }}
+            - {{ . | quote }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.goApi.port }}
+              protocol: TCP
+            - name: operator
+              containerPort: {{ .Values.goApi.operatorPort }}
+              protocol: TCP
+          {{- with .Values.goApi.envFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.goApi.extraEnv }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          livenessProbe:
+            httpGet: {path: /healthz, port: operator}
+            {{- toYaml .Values.goApi.livenessProbe | nindent 12 }}
+          readinessProbe:
+            httpGet: {path: /readyz, port: operator}
+            {{- toYaml .Values.goApi.readinessProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.goApi.resources | nindent 12 }}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, capabilities: {drop: [ALL]}, seccompProfile: {type: RuntimeDefault}}
+      {{- with .Values.goApi.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.goApi.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.goApi.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "dev-health.fullname" . }}-go-api
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "go-api" "context" $) | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "dev-health.componentSelectorLabels" (dict "component" "go-api" "context" $) | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.goApi.port }}
+      targetPort: http
+      protocol: TCP
+{{- end }}

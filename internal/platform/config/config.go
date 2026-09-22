@@ -27,6 +27,18 @@ import (
 // compares against it to tell an unset timeout from one an operator chose.
 const DefaultShutdownTimeout = 30 * time.Second
 
+// APIServiceName is the service identity of `dho api`, the Go HTTP api. Its
+// options (--api-addr, --cors-allowed-origins) are scoped to it, so no other
+// binary advertises or parses them.
+const APIServiceName = "dev-health-api"
+
+const (
+	defaultAPIAddress = ":8000"
+	// defaultCORSAllowedOrigins is the Python api's own default
+	// (src/dev_health_ops/api/_middleware.py _DEFAULT_CORS_ORIGINS).
+	defaultCORSAllowedOrigins = "http://localhost:3000"
+)
+
 const (
 	defaultHTTPAddress       = ":8080"
 	defaultShutdownTimeout   = DefaultShutdownTimeout
@@ -272,6 +284,14 @@ type Config struct {
 	// package default and would need hand-updating every time that default
 	// number changed.
 	SyncObservationTimeoutExplicit bool
+
+	// APIAddress is the host:port of the api listener (dho api only; empty for
+	// every other service). The operator listener stays on HTTPAddress.
+	APIAddress string
+	// CORSAllowedOrigins is the api's CORS allow-list, parsed exactly as the
+	// Python api parses CORS_ALLOWED_ORIGINS: comma-separated, entries trimmed,
+	// empty entries dropped (dho api only).
+	CORSAllowedOrigins             []string
 	OperationalBridgeURL           string
 	OperationalBridgeToken         secrets.Value
 	OperationalBridgeTimeout       time.Duration
@@ -752,6 +772,28 @@ func Load(spec Spec) (Config, error) {
 	} else {
 		cfg.SyncObservationTimeout = defaultSyncObservationTimeout
 	}
+	// Scoped to the api the same way the reconciler's settings are scoped above:
+	// the variables live in a shared environment, and no other service may fail
+	// startup on a value meant only for the api.
+	if cfg.Service == APIServiceName {
+		cfg.APIAddress = envOrDefault(lookup, "DEV_HEALTH_API_ADDR", defaultAPIAddress)
+		if _, _, splitErr := net.SplitHostPort(cfg.APIAddress); splitErr != nil {
+			return Config{}, fmt.Errorf(
+				"%s must be a host:port address", settingLabel("DEV_HEALTH_API_ADDR"),
+			)
+		}
+		// Port 0 asks the kernel for a free port, so two ":0" addresses never
+		// collide; any other identical pair would fail the second bind.
+		if cfg.APIAddress == cfg.HTTPAddress && !strings.HasSuffix(cfg.APIAddress, ":0") {
+			return Config{}, fmt.Errorf(
+				"%s must differ from %s: the api and operator listeners are separate",
+				settingLabel("DEV_HEALTH_API_ADDR"), settingLabel("DEV_HEALTH_HTTP_ADDR"),
+			)
+		}
+		cfg.CORSAllowedOrigins = parseCORSOrigins(
+			envOrDefault(lookup, "CORS_ALLOWED_ORIGINS", defaultCORSAllowedOrigins),
+		)
+	}
 	cfg.StreamConfiguredReplicas, err = boundedIntEnv(
 		lookup,
 		"DEV_HEALTH_STREAM_REPLICAS",
@@ -864,6 +906,12 @@ func (c Config) SafeAttrs() []slog.Attr {
 		if observed.name != "" {
 			attrs = append(attrs, slog.String(observed.nameKey, observed.name))
 		}
+	}
+	if c.APIAddress != "" {
+		attrs = append(attrs,
+			slog.String("api_address", c.APIAddress),
+			slog.Int("cors_allowed_origin_count", len(c.CORSAllowedOrigins)),
+		)
 	}
 	return attrs
 }
@@ -1704,4 +1752,17 @@ func firstOrEmpty(value string, ok bool) string {
 		return ""
 	}
 	return value
+}
+
+// parseCORSOrigins mirrors the Python api's _parse_cors_origins: split on
+// commas, trim each entry, drop the empty ones. An entry is kept verbatim;
+// what "*" means is the CORS middleware's decision, not the parser's.
+func parseCORSOrigins(raw string) []string {
+	origins := make([]string, 0, 4)
+	for _, entry := range strings.Split(raw, ",") {
+		if trimmed := strings.TrimSpace(entry); trimmed != "" {
+			origins = append(origins, trimmed)
+		}
+	}
+	return origins
 }

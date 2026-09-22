@@ -96,6 +96,13 @@ type EnvelopeError struct {
 	RequestID string `json:"request_id,omitempty"`
 }
 
+// ErrorWriter renders one error response for code. WriteError is this
+// package's own writer and the default everywhere; a server built with
+// ServerOptions.ErrorWriter uses that writer for every error it emits
+// (not-found, method-not-allowed, payload-too-large, invalid request, rate
+// limited, recovered panic), so one service answers in one shape.
+type ErrorWriter func(http.ResponseWriter, *http.Request, Code)
+
 // WriteError renders one envelope. It is the ONLY way this package writes an
 // error response, so there is one place to audit for leakage.
 //

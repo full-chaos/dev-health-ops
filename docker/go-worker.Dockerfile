@@ -49,7 +49,8 @@ RUN --mount=type=cache,target=/go/pkg/mod \
         dev-health-stream-runner \
         dev-health-workerctl \
         worker-contractcheck \
-        dev-health-worker-migrate; do \
+        dev-health-worker-migrate \
+        dho; do \
       GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build \
         -buildvcs=false \
         -trimpath \
@@ -79,7 +80,8 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       /runtime/contractcheck/usr/local/bin \
       /runtime/contractcheck/app/contracts/jobs \
       /runtime/contractcheck/app/deploy/go-workers \
-      /runtime/migrate/usr/local/bin; \
+      /runtime/migrate/usr/local/bin \
+      /runtime/dho/usr/local/bin; \
     cp /out/dev-health-worker /runtime/worker/usr/local/bin/dev-health-worker; \
     cp /out/dev-health-workerctl /runtime/worker/usr/local/bin/dev-health-workerctl; \
     cp /out/dev-health-scheduler /runtime/scheduler/usr/local/bin/dev-health-scheduler; \
@@ -102,6 +104,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     cp -R /src/contracts/jobs/v1 /runtime/contractcheck/app/contracts/jobs/v1; \
     cp /src/deploy/go-workers/deployment.json /runtime/contractcheck/app/deploy/go-workers/deployment.json; \
     cp /out/dev-health-worker-migrate /runtime/migrate/usr/local/bin/dev-health-worker-migrate; \
+    cp /out/dho /runtime/dho/usr/local/bin/dho; \
     find /runtime -exec touch -d "@${SOURCE_DATE_EPOCH}" {} +
 
 FROM ${GO_RUNTIME_IMAGE} AS runtime
@@ -150,6 +153,15 @@ WORKDIR /app
 ENTRYPOINT ["/usr/local/bin/worker-contractcheck"]
 CMD ["validate"]
 
+# dho is the operator binary (cmd/dho): one binary whose compiled-in
+# verticals are selected by the first argument, so every Deployment of it
+# passes its subcommand as args (`dho api`). The api vertical reads no staged
+# file at runtime, so this target stages nothing under /app and, like migrate
+# and stream-runner, declares no WORKDIR.
+FROM runtime AS dho
+COPY --from=build --chown=65532:65532 /runtime/dho/ /
+ENTRYPOINT ["/usr/local/bin/dho"]
+
 # migrate is the one-shot River schema/grant migration
 # (cmd/dev-health-worker-migrate). It reads no contract or deployment-profile
 # files at runtime -- only its flags and the MIGRATION_DATABASE_URI /
@@ -182,3 +194,4 @@ CMD ["validate"]
 FROM runtime AS migrate
 COPY --from=build --chown=65532:65532 /runtime/migrate/ /
 ENTRYPOINT ["/usr/local/bin/dev-health-worker-migrate"]
+

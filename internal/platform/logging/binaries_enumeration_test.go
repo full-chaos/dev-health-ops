@@ -30,6 +30,8 @@ import (
 //	            the sweep below proves it
 //	stdlib_cli  an operator proof tool whose only log calls are its own
 //	            fatal usage errors (log.Fatalf of its own error text)
+//	cli         main calls internal/cli.Main, and cli.Main installs the
+//	            redacting handler as the process default before dispatch
 var binaryLogging = map[string]string{
 	"ask-dev-jobs-probe":                     "installs",
 	"auth-migrate":                           "silent",
@@ -43,6 +45,7 @@ var binaryLogging = map[string]string{
 	"dev-health-worker":                      "shell",
 	"dev-health-worker-migrate":              "silent",
 	"dev-health-workerctl":                   "installs",
+	"dho":                                    "cli",
 	"go-api-prove":                           "silent",
 	"go-api-rest-prove":                      "stdlib_cli",
 	"go-api-routing":                         "silent",
@@ -141,6 +144,9 @@ func TestEveryBinaryLogsThroughTheRedactingHandler(t *testing.T) {
 			requireCall(t, binary, parsed[mainPath], modulePath+"/internal/platform/shell", "Main")
 		case "authruntime":
 			requireCall(t, binary, parsed[mainPath], modulePath+"/internal/auth/authruntime", "Main")
+		case "cli":
+			requireCall(t, binary, parsed[mainPath], modulePath+"/internal/cli", "Main")
+			requireFuncCall(t, binary, parsed[modulePath+"/internal/cli"], "Main", modulePath+"/internal/platform/logging", "InstallDefault")
 		case "installs":
 			requireCall(t, binary, parsed[mainPath], modulePath+"/internal/platform/logging", "InstallDefault")
 		case "silent", "stdlib_cli":
@@ -226,12 +232,18 @@ func calls(file *ast.File, visit func(path, function string, call *ast.CallExpr)
 // so the call runs on every start and cannot sit behind a branch.
 func requireCall(t *testing.T, binary string, files []*ast.File, path, function string) {
 	t.Helper()
+	requireFuncCall(t, binary, files, "main", path, function)
+}
+
+// requireFuncCall is requireCall for any top-level function named caller.
+func requireFuncCall(t *testing.T, binary string, files []*ast.File, caller, path, function string) {
+	t.Helper()
 	found := false
 	for _, file := range files {
 		names := importNames(file)
 		for _, declaration := range file.Decls {
 			main, ok := declaration.(*ast.FuncDecl)
-			if !ok || main.Name.Name != "main" || main.Recv != nil || main.Body == nil {
+			if !ok || main.Name.Name != caller || main.Recv != nil || main.Body == nil {
 				continue
 			}
 			for _, statement := range main.Body.List {
@@ -249,7 +261,7 @@ func requireCall(t *testing.T, binary string, files []*ast.File, path, function 
 		}
 	}
 	if !found {
-		t.Errorf("binary %s: func main does not call %s.%s as a top-level statement", binary, path, function)
+		t.Errorf("binary %s: func %s does not call %s.%s as a top-level statement", binary, caller, path, function)
 	}
 }
 

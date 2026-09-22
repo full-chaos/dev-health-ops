@@ -1,7 +1,9 @@
 package apiservice
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"strconv"
 
@@ -52,5 +54,16 @@ func WriteError(w http.ResponseWriter, _ *http.Request, code httpapi.Code) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
 	w.WriteHeader(response.status)
-	_, _ = w.Write(payload)
+	writeFixedBody(w, payload)
+}
+
+// writeFixedBody writes one of this package's own fixed bodies: the JSON
+// error bodies above and the CORS preflight text. None carries request data,
+// each response declares its Content-Type (application/json or text/plain)
+// and every api response carries X-Content-Type-Options: nosniff, so there is
+// nothing for an HTML escape to protect. The copy through io.Copy keeps the
+// bytes exact: json.Encoder would append a newline the Python api does not
+// send.
+func writeFixedBody(w http.ResponseWriter, body []byte) {
+	_, _ = io.Copy(w, bytes.NewReader(body))
 }

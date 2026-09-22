@@ -148,7 +148,7 @@ func (c *CORS) preflight(w http.ResponseWriter, r *http.Request, origin string) 
 	header.Set("Content-Type", "text/plain; charset=utf-8")
 	header.Set("Content-Length", strconv.Itoa(len(body)))
 	w.WriteHeader(status)
-	_, _ = w.Write([]byte(body))
+	writeFixedBody(w, []byte(body))
 }
 
 // applySimple mirrors CORSMiddleware.send for http.response.start.

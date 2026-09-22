@@ -38,7 +38,16 @@ SELECT (
 \gset
 \if :roles_match
   \echo 'domain_role, queue_role, and coordinator_role must be distinct'
-  \quit 2
+  -- \quit accepts an exit-code argument only on newer psql clients; verified
+  -- empirically against the psql installed where this script runs (16.15):
+  -- \quit 2 prints "extra argument "2" ignored" and still exits 0, silently
+  -- defeating this whole distinctness check for any caller that only reads
+  -- the exit code (a Helm hook, compose's go-river-provision). A forced SQL
+  -- error under ON_ERROR_STOP (set at the top of this file) is the
+  -- version-independent way to guarantee a nonzero exit; the \echo above
+  -- already carries the operator-readable reason, so the error text itself
+  -- (division by zero) never needs to be descriptive.
+  SELECT 1/0;
 \endif
 
 SELECT current_database() AS app_database
@@ -142,7 +151,27 @@ REVOKE CREATE ON SCHEMA public FROM :"queue_role";
   \gset
   \if :api_role_collides
     \echo 'api_role must be distinct from domain_role, queue_role, and coordinator_role'
-    \quit 2
+    -- See the roles_match check above for why this is SELECT 1/0, not \quit N.
+    SELECT 1/0;
+  \endif
+  -- keda_role is a SEPARATE optional \if block (below) whose vars are still
+  -- available for comparison here regardless of textual order -- psql
+  -- resolves --set variables at invocation time, not at the point their
+  -- \if block appears. Guarded on :{?keda_role} since it may be entirely
+  -- unset (comparing an unset psql variable errors, it does not read as
+  -- false). Without this check, api_role == keda_role creates ONE role that
+  -- this block bootstraps to zero River privilege and the keda block below
+  -- then grants USAGE on the River schema + SELECT on river_job to --
+  -- CheckAPIAuthorization's unconditional "holds zero River privilege"
+  -- assertion then refuses it, so the api Service could never become ready.
+  \if :{?keda_role}
+    SELECT (:'api_role' = :'keda_role') AS api_role_collides_keda
+    \gset
+    \if :api_role_collides_keda
+      \echo 'api_role must be distinct from keda_role'
+      -- See the roles_match check above for why this is SELECT 1/0, not \quit N.
+      SELECT 1/0;
+    \endif
   \endif
 
   SELECT format(
@@ -167,7 +196,16 @@ REVOKE CREATE ON SCHEMA public FROM :"queue_role";
   -- that one.
   REVOKE TEMPORARY ON DATABASE :"app_database" FROM PUBLIC, :"api_role";
   GRANT USAGE ON SCHEMA public TO :"api_role";
-  REVOKE CREATE ON SCHEMA public FROM :"api_role";
+  -- Same class as the TEMPORARY revoke above: has_schema_privilege resolves
+  -- effective privilege too, so on a database where PUBLIC has been granted
+  -- CREATE on the public schema (not PostgreSQL's own default since v15,
+  -- but not this script's business to assume about every target database),
+  -- revoking only from api_role would leave it holding CREATE anyway and
+  -- fail CheckAPIAuthorization's "does not hold CREATE" assertion. The
+  -- three roles above (domain/queue/coordinator) carry this identical gap,
+  -- unfixed here -- a pre-existing, already-deployed pattern this ticket
+  -- does not touch; tracked as a follow-up, not silently dismissed.
+  REVOKE CREATE ON SCHEMA public FROM PUBLIC, :"api_role";
 \endif
 
 -- The KEDA postgresql scaler's read-only role. Optional -- only

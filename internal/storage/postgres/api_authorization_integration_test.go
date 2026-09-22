@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -356,6 +357,167 @@ func TestProvisionScriptDefaultRunNeverCreatesAnAPIRole(t *testing.T) {
 	}
 	if count != 0 {
 		t.Fatalf("provision_river_roles.sql's default (api_role unset) run created a devhealth_api role; it must not")
+	}
+}
+
+// TestProvisionScriptRefusesAPIRoleCollidingWithKedaRole is the executed
+// regression proof for a real defect a codex review round found and
+// reproduced against this script (round pr2820-r1, VOID IN FORM but its
+// findings independently reproduced here): api_role was checked for
+// collision against domain_role/queue_role/coordinator_role but not against
+// keda_role, so api_role=X + keda_role=X created ONE role the api block
+// bootstraps to zero River privilege and the keda block then grants River
+// USAGE + river_job SELECT to -- CheckAPIAuthorization's "holds zero River
+// privilege" assertion then refuses it forever. The script must reject the
+// collision outright rather than provision a role that can never become
+// ready.
+func TestProvisionScriptRefusesAPIRoleCollidingWithKedaRole(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { closePostgresInstanceInternal(t, instance) })
+
+	admin, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(admin.Close)
+
+	role, err := containers.RoleName("provision_api_keda_collision", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { containers.DropRole(admin, role, t.Logf) })
+
+	cmd := exec.CommandContext(ctx, "psql",
+		instance.URI,
+		"--set=ON_ERROR_STOP=1",
+		"--set=domain_role=provision_api_keda_collision_domain_unused",
+		"--set=queue_role=provision_api_keda_collision_queue_unused",
+		"--set=coordinator_role=provision_api_keda_collision_coordinator_unused",
+		"--set=domain_password=unused",
+		"--set=queue_password=unused",
+		"--set=coordinator_password=unused",
+		"--set=api_role="+role,
+		"--set=api_password="+apiAuthorizationPass,
+		"--set=keda_role="+role,
+		"--set=keda_password=unused",
+		"--file="+provisionScriptPath(t),
+	)
+	t.Cleanup(func() {
+		for _, unused := range []string{
+			"provision_api_keda_collision_domain_unused",
+			"provision_api_keda_collision_queue_unused",
+			"provision_api_keda_collision_coordinator_unused",
+		} {
+			containers.DropRole(admin, unused, t.Logf)
+		}
+	})
+	output, runErr := cmd.CombinedOutput()
+	if runErr == nil {
+		t.Fatalf("provision_river_roles.sql must refuse api_role == keda_role, but exited 0:\n%s", output)
+	}
+	if !strings.Contains(string(output), "api_role must be distinct from keda_role") {
+		t.Fatalf("expected the api/keda collision message, got:\n%s", output)
+	}
+
+	var count int
+	if err := admin.QueryRow(
+		ctx, "SELECT count(*) FROM pg_roles WHERE rolname = $1", role,
+	).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("the refused run must not have created role %s, but it exists", role)
+	}
+}
+
+// TestProvisionScriptAPIRoleStripsPublicGrantedCreate is the executed
+// regression proof for the second defect the same review round found: on a
+// database where PUBLIC has been granted CREATE on the public schema (not
+// PostgreSQL's own default since v15, but a state this script cannot assume
+// away), REVOKE CREATE ON SCHEMA public FROM <api_role> alone left the role
+// holding CREATE anyway (has_schema_privilege resolves effective privilege,
+// PUBLIC-inherited included) -- CheckAPIAuthorization's "does not hold
+// CREATE" assertion then refused it. The fix names PUBLIC in the same
+// REVOKE statement; this proves it.
+func TestProvisionScriptAPIRoleStripsPublicGrantedCreate(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { closePostgresInstanceInternal(t, instance) })
+
+	admin, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(admin.Close)
+
+	role, err := containers.RoleName("provision_api_public_create", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { containers.DropRole(admin, role, t.Logf) })
+	if _, err := admin.Exec(ctx, "CREATE SCHEMA IF NOT EXISTS river"); err != nil {
+		t.Fatal(err)
+	}
+
+	// The anomalous precondition the review round's reproduction used: grant
+	// PUBLIC CREATE on the public schema before provisioning. Restored to
+	// REVOKE at cleanup so this test does not leave the shared instance (torn
+	// down anyway, but explicit) in a state other tests don't expect.
+	if _, err := admin.Exec(ctx, "GRANT CREATE ON SCHEMA public TO PUBLIC"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_, _ = admin.Exec(closeCtx, "REVOKE CREATE ON SCHEMA public FROM PUBLIC")
+	})
+
+	cmd := exec.CommandContext(ctx, "psql",
+		instance.URI,
+		"--set=ON_ERROR_STOP=1",
+		"--set=domain_role=provision_api_public_create_domain_unused",
+		"--set=queue_role=provision_api_public_create_queue_unused",
+		"--set=coordinator_role=provision_api_public_create_coordinator_unused",
+		"--set=domain_password=unused",
+		"--set=queue_password=unused",
+		"--set=coordinator_password=unused",
+		"--set=api_role="+role,
+		"--set=api_password="+apiAuthorizationPass,
+		"--file="+provisionScriptPath(t),
+	)
+	t.Cleanup(func() {
+		for _, unused := range []string{
+			"provision_api_public_create_domain_unused",
+			"provision_api_public_create_queue_unused",
+			"provision_api_public_create_coordinator_unused",
+		} {
+			containers.DropRole(admin, unused, t.Logf)
+		}
+	})
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("psql --file=provision_river_roles.sql (PUBLIC CREATE precondition) failed: %v\n%s", err, output)
+	}
+
+	api := connectAs(t, ctx, instance.URI, role, apiAuthorizationPass)
+	if err := CheckAPIAuthorization(ctx, api, role, grantSchema); err != nil {
+		t.Fatalf(
+			"api role failed readiness with PUBLIC CREATE granted before provisioning: %v "+
+				"(the REVOKE CREATE line must name PUBLIC explicitly, not just the role)",
+			err,
+		)
 	}
 }
 

@@ -48,12 +48,15 @@ package analytics
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 
+	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/full-chaos/dev-health-go/clickhouse"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph/model"
+	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
@@ -99,28 +102,88 @@ const (
 // to be injectable to be assertable.
 var recordInvestmentCoverageFailure = defaultRecordInvestmentCoverageFailure
 
-func defaultRecordInvestmentCoverageFailure(ctx context.Context, orgID string, measure Measure, useInvestment bool, stage coverageFailureStage, err error) {
+// defaultRecordInvestmentCoverageFailure carries queryID and, when err is
+// (or wraps) a ClickHouse server exception, the exception's code/name --
+// CHAOS-6121: the 09-20 STEP 142 incident logged this event 15x with only
+// an opaque errorString, and the ClickHouse code (735,
+// QUERY_WAS_CANCELLED_BY_CLIENT) was visible only from the ClickHouse side,
+// forcing a manual system.query_log search to correlate. queryID is empty
+// for coverageStageCompile (compileSankeyCoverage fails before any
+// statement is ever sent, so there is no query to match) and is otherwise
+// the id resolveSankeyCoverage itself minted and bound to the request via
+// clickhousedriver.WithQueryID -- the same id ClickHouse records in
+// system.query_log, not a value invented after the fact. The exception
+// fields use errors.As over the SAME unwrap chain
+// isMissingTable/QueryBudgetExceededCode already rely on (dev-health-go's
+// operationError.Unwrap() to the driver's *clickhousedriver.Exception), so
+// a non-exception failure (context cancellation, a transport error) simply
+// leaves them unset rather than misreporting a code.
+func defaultRecordInvestmentCoverageFailure(ctx context.Context, orgID string, measure Measure, useInvestment bool, stage coverageFailureStage, queryID string, err error) {
 	investmentCoverageQueryFailedCounter.Add(ctx, 1, metric.WithAttributes(
 		attribute.String("resolver", "investment_coverage"),
 		attribute.String("reason", string(stage)),
 	))
-	trace.SpanFromContext(ctx).AddEvent("investment_coverage.query_failed", trace.WithAttributes(
+
+	spanAttrs := []attribute.KeyValue{
 		attribute.String("resolver", "investment_coverage"),
 		attribute.String("stage", string(stage)),
 		attribute.String("error", err.Error()),
 		attribute.String("error.cause", rootCause(err).Error()),
-	))
+	}
 	// Mirrors Python's structured logger.error("investment_coverage.query_failed", extra={...})
-	// (analytics.py:894-906) field for field. org_id is an internal
-	// tenant UUID, already logged by this package elsewhere.
-	slog.ErrorContext(ctx, "investment_coverage.query_failed",
+	// (analytics.py:894-906) field for field, plus the query_id/ClickHouse-code
+	// fields Python never had. org_id is an internal tenant UUID, already
+	// logged by this package elsewhere.
+	logAttrs := []any{
 		"resolver", "investment_coverage",
 		"org_id", orgID,
 		"measure", string(measure),
 		"use_investment", useInvestment,
 		"stage", string(stage),
 		"error", err.Error(),
-	)
+	}
+
+	if queryID != "" {
+		spanAttrs = append(spanAttrs, attribute.String("query_id", queryID))
+		logAttrs = append(logAttrs, "query_id", queryID)
+	}
+
+	var exception *clickhousedriver.Exception
+	if errors.As(err, &exception) {
+		spanAttrs = append(spanAttrs,
+			attribute.Int64("clickhouse_code", int64(exception.Code)),
+			attribute.String("clickhouse_exception", exception.Name),
+		)
+		logAttrs = append(logAttrs,
+			"clickhouse_code", exception.Code,
+			"clickhouse_exception", exception.Name,
+		)
+	}
+
+	trace.SpanFromContext(ctx).AddEvent("investment_coverage.query_failed", trace.WithAttributes(spanAttrs...))
+	slog.ErrorContext(ctx, "investment_coverage.query_failed", logAttrs...)
+}
+
+// isLocalValidationFailure reports whether err is, or wraps, one of
+// dev-health-go's FOUR local (pre-dispatch) validation sentinels:
+// ErrUnsafeStatement (validateReadOnlyStatement), and ErrInvalidBinding /
+// ErrUnsupportedBinding / ErrUnsafeBindingValue (translateBindings and
+// the clickHouseParameter/clickHouseStringArray/clickHouseQuotedString
+// chain it calls -- a slice/array binding shape with no literal encoding,
+// or a []string element containing a backslash, fail exactly as locally
+// as a malformed binding name). All four run inside Client.Query BEFORE
+// it ever calls the driver (client.go:145-167): a query failing this way
+// never reached ClickHouse, so no query id bound to it was ever sent, and
+// none can appear in system.query_log. (ErrInvalidConfiguration is
+// deliberately excluded: it is returned only by
+// NewClickHouseQueryClientWithOptions, at client construction, never by
+// Query -- it cannot occur here.) See resolveSankeyCoverage's call site
+// for why that makes the id worth suppressing rather than reporting.
+func isLocalValidationFailure(err error) bool {
+	return errors.Is(err, clickhouse.ErrUnsafeStatement) ||
+		errors.Is(err, clickhouse.ErrInvalidBinding) ||
+		errors.Is(err, clickhouse.ErrUnsupportedBinding) ||
+		errors.Is(err, clickhouse.ErrUnsafeBindingValue)
 }
 
 // compileSankeyCoverage ports the query construction half of
@@ -456,7 +519,7 @@ func resolveSankeyCoverage(ctx context.Context, client QueryClient, orgID string
 		// Python raises inside the try (the f-string construction and
 		// translate_filters both run there, analytics.py:836-865), so a
 		// construction failure lands in the same except branch.
-		recordInvestmentCoverageFailure(ctx, orgID, req.Measure, useInvestment, coverageStageCompile, err)
+		recordInvestmentCoverageFailure(ctx, orgID, req.Measure, useInvestment, coverageStageCompile, "", err)
 		return nil
 	}
 
@@ -478,9 +541,38 @@ func resolveSankeyCoverage(ctx context.Context, client QueryClient, orgID string
 		RecordInvestmentRepoJoinDedupCollisions(ctx, client, orgID)
 	}
 
-	rows, err := client.Query(ctx, query.sql, query.bindings)
+	// CHAOS-6121: mint the query id ourselves and BIND it to the request
+	// via clickhousedriver.WithQueryID, rather than reading one back --
+	// clickhouse-go sends whatever ID is on the context verbatim
+	// (conn_send_query.go) and never surfaces a server-assigned one to the
+	// caller, so an unset ID here would leave every failure attribute
+	// below with nothing real to report. clickhousedriver.Context merges
+	// onto any existing QueryOptions on ctx (see its doc comment), so this
+	// only adds the id -- it does not disturb settings/parameters
+	// dev-health-go's own Client.Query layers on afterwards.
+	queryID := uuid.NewString()
+	queryCtx := clickhousedriver.Context(ctx, clickhousedriver.WithQueryID(queryID))
+
+	rows, err := client.Query(queryCtx, query.sql, query.bindings)
 	if err != nil {
-		recordInvestmentCoverageFailure(ctx, orgID, req.Measure, useInvestment, coverageStageQuery, fmt.Errorf("query: %w", err))
+		// CHAOS-6121 (executed live against a real ClickHouse: an
+		// unencodable binding value produces stage=query
+		// query_id=<minted> with ZERO matching system.query_log rows):
+		// dev-health-go's Client.Query validates the statement shape and
+		// translates bindings to native-protocol PARAMETERS entirely
+		// LOCALLY, all before it ever calls c.connection.Query
+		// (client.go:145-167) -- so any of isLocalValidationFailure's
+		// four sentinels mean the request was never dispatched, and the
+		// id we bound to it via WithQueryID was never sent either.
+		// Reporting queryID for THIS class sends on-call searching
+		// system.query_log for a row that can never exist, which is
+		// worse than reporting no id at all (AGENTS.md: "an inaccurate
+		// coverage claim is worse than an admitted gap").
+		reportedQueryID := queryID
+		if isLocalValidationFailure(err) {
+			reportedQueryID = ""
+		}
+		recordInvestmentCoverageFailure(ctx, orgID, req.Measure, useInvestment, coverageStageQuery, reportedQueryID, fmt.Errorf("query: %w", err))
 		return nil
 	}
 	defer rows.Close()
@@ -489,7 +581,7 @@ func resolveSankeyCoverage(ctx context.Context, client QueryClient, orgID string
 		// Python: `if c_rows:` -- zero rows leaves coverage as None with
 		// no error and no telemetry, because nothing failed.
 		if rowsErr := rows.Err(); rowsErr != nil {
-			recordInvestmentCoverageFailure(ctx, orgID, req.Measure, useInvestment, coverageStageRows, fmt.Errorf("rows: %w", rowsErr))
+			recordInvestmentCoverageFailure(ctx, orgID, req.Measure, useInvestment, coverageStageRows, queryID, fmt.Errorf("rows: %w", rowsErr))
 		}
 		return nil
 	}
@@ -505,11 +597,11 @@ func resolveSankeyCoverage(ctx context.Context, client QueryClient, orgID string
 	// breakdown.go's doc comment for the branch-by-branch detail.
 	var directRepo, teamFallbackRepo, fanoutReposPerUnit *float64
 	if scanErr := rows.Scan(&total, &assignedTeam, &repoTotal, &assignedRepo, &directRepo, &teamFallbackRepo, &fanoutReposPerUnit); scanErr != nil {
-		recordInvestmentCoverageFailure(ctx, orgID, req.Measure, useInvestment, coverageStageScan, fmt.Errorf("scan: %w", scanErr))
+		recordInvestmentCoverageFailure(ctx, orgID, req.Measure, useInvestment, coverageStageScan, queryID, fmt.Errorf("scan: %w", scanErr))
 		return nil
 	}
 	if rowsErr := rows.Err(); rowsErr != nil {
-		recordInvestmentCoverageFailure(ctx, orgID, req.Measure, useInvestment, coverageStageRows, fmt.Errorf("rows: %w", rowsErr))
+		recordInvestmentCoverageFailure(ctx, orgID, req.Measure, useInvestment, coverageStageRows, queryID, fmt.Errorf("rows: %w", rowsErr))
 		return nil
 	}
 

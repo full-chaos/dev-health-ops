@@ -1,11 +1,13 @@
 package providersync
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"testing"
@@ -358,6 +360,11 @@ func TestGitHubFilesRouteWalksTruncatedTreeToACompleteInventory(t *testing.T) {
 // (github_files_inventory_failed) because fetchObject's cap hit and a
 // genuinely malformed body were indistinguishable.
 func TestGitHubFilesRouteFallsBackToNonRecursiveWalkWhenTheRecursiveTreeExceedsTheObjectCap(t *testing.T) {
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
 	claim := nativeTestClaim("github", "files")
 	client := gitHubRepositoryClient(t, gitHubFilesTreeWalkDoer{t: t, rootOversized: true}, "https://api.github.com")
 	batch, err := (GitHubFilesRouteHandler{}).Collect(context.Background(), claim, providerfoundation.Credential{}, client, time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC))
@@ -377,6 +384,20 @@ func TestGitHubFilesRouteFallsBackToNonRecursiveWalkWhenTheRecursiveTreeExceedsT
 	}
 	if !strings.Contains(strings.Join(paths, ","), "src/main.go") {
 		t.Fatalf("paths=%v, want src/main.go recovered from the non-recursive subtree walk", paths)
+	}
+	// The observability half of the fix, not just the recovered rows: the
+	// WARN naming the cap hit, with its diagnostic fields, must actually be
+	// emitted -- a regression that drops the log call (or its fields) would
+	// otherwise be invisible while the unit still succeeds.
+	logged := logs.String()
+	if !strings.Contains(logged, "exceeded the shared object cap") {
+		t.Fatalf("logs=%q, want a WARN naming the object-cap fallback", logged)
+	}
+	if !strings.Contains(logged, "cap_bytes=2097152") {
+		t.Fatalf("logs=%q, want the cap_bytes field", logged)
+	}
+	if !strings.Contains(logged, "content_length=") {
+		t.Fatalf("logs=%q, want the content_length field", logged)
 	}
 }
 

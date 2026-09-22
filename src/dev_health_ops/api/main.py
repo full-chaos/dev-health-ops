@@ -9,7 +9,6 @@ from typing import NoReturn
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.logging_config import configure_logging
 from dev_health_ops.sentry import init_sentry
@@ -67,7 +66,6 @@ from .admin.impersonation import router as impersonation_router
 from .auth import router as auth_router
 from .auth.router import get_current_user
 from .billing import router as billing_router
-from .dependencies import get_postgres_session_dep
 from .dev.router import (
     AskDevApiError,
     ask_dev_error_handler,
@@ -388,7 +386,6 @@ async def home_post(
     request: Request,
     payload: HomeRequest,
     current_user: AuthenticatedUser = Depends(get_current_user),
-    semantic_session: AsyncSession = Depends(get_postgres_session_dep),
 ) -> HomeResponse:
     _raise_served_by_go_api("/api/v1/home")
 
@@ -405,7 +402,6 @@ async def home(
     start_date: date | None = None,
     end_date: date | None = None,
     current_user: AuthenticatedUser = Depends(get_current_user),
-    semantic_session: AsyncSession = Depends(get_postgres_session_dep),
 ) -> HomeResponse:
     _raise_served_by_go_api("/api/v1/home")
 

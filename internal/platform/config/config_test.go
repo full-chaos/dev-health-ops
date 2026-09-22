@@ -440,6 +440,9 @@ func TestSafeAttrsReportFormAndNameOfEachResolvedDSN(t *testing.T) {
 		"DEV_HEALTH_PG_QUEUE_USER":     "app",
 		"DEV_HEALTH_PG_QUEUE_PASSWORD": "app",
 		"DEV_HEALTH_PG_DB":             "queuedb",
+		"DEV_HEALTH_PG_API_HOST":       "api.internal",
+		"DEV_HEALTH_PG_API_USER":       "app",
+		"DEV_HEALTH_PG_API_PASSWORD":   "app",
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -448,6 +451,7 @@ func TestSafeAttrsReportFormAndNameOfEachResolvedDSN(t *testing.T) {
 	for _, want := range []string{
 		"domain_database_form=uri",
 		"queue_database_form=components", "queue_database_name=queuedb",
+		"api_database_form=components", "api_database_name=queuedb",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("safe attrs missing %q: %s", want, text)

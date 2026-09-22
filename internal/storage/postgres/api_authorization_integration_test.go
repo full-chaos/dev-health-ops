@@ -437,16 +437,22 @@ func TestProvisionScriptRefusesAPIRoleCollidingWithKedaRole(t *testing.T) {
 	}
 }
 
-// TestProvisionScriptAPIRoleStripsPublicGrantedCreate is the executed
-// regression proof for the second defect the same review round found: on a
-// database where PUBLIC has been granted CREATE on the public schema (not
-// PostgreSQL's own default since v15, but a state this script cannot assume
-// away), REVOKE CREATE ON SCHEMA public FROM <api_role> alone left the role
-// holding CREATE anyway (has_schema_privilege resolves effective privilege,
-// PUBLIC-inherited included) -- CheckAPIAuthorization's "does not hold
-// CREATE" assertion then refused it. The fix names PUBLIC in the same
-// REVOKE statement; this proves it.
-func TestProvisionScriptAPIRoleStripsPublicGrantedCreate(t *testing.T) {
+// TestProvisionScriptAPIRoleRefusedWhenPublicHoldsCreate is the executed
+// regression proof for a defect a LATER review round found in the first fix
+// attempt: naming PUBLIC in the api_role block's `REVOKE CREATE ON SCHEMA
+// public` (mirroring the TEMPORARY revoke a few lines above) reproducibly
+// stripped CREATE from every OTHER role relying on PUBLIC's grant, not just
+// api_role -- a database-wide side effect of bootstrapping one unrelated
+// role. The script now revokes CREATE from api_role alone. This test proves
+// the consequence of that scoping choice: on a database where PUBLIC has
+// been granted CREATE on the public schema (not PostgreSQL's own default
+// since v15, but a state this script cannot assume away), api_role
+// effectively holds CREATE too (has_schema_privilege resolves effective
+// privilege, PUBLIC-inherited included), and CheckAPIAuthorization's "does
+// not hold CREATE" assertion correctly REFUSES readiness -- the intended,
+// loud signal that this target needs its own deliberate `REVOKE CREATE ...
+// FROM PUBLIC`, never a silent side effect of this script.
+func TestProvisionScriptAPIRoleRefusedWhenPublicHoldsCreate(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -512,12 +518,23 @@ func TestProvisionScriptAPIRoleStripsPublicGrantedCreate(t *testing.T) {
 	}
 
 	api := connectAs(t, ctx, instance.URI, role, apiAuthorizationPass)
+	err = CheckAPIAuthorization(ctx, api, role, grantSchema)
+	if !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("api readiness with PUBLIC CREATE granted before provisioning: error = %v, want ErrUnavailable", err)
+	}
+	if !errors.Is(err, ErrPostureRefused) {
+		t.Fatalf("api readiness with PUBLIC CREATE granted before provisioning: error = %v, want ErrPostureRefused", err)
+	}
+
+	// And the converse, same connection/role: revoking PUBLIC's grant (the
+	// deliberate, human step this test's docstring says the script must not
+	// take silently) lets the identical role pass readiness -- proving the
+	// refusal above is caused by PUBLIC's grant, not some other defect.
+	if _, err := admin.Exec(ctx, "REVOKE CREATE ON SCHEMA public FROM PUBLIC"); err != nil {
+		t.Fatal(err)
+	}
 	if err := CheckAPIAuthorization(ctx, api, role, grantSchema); err != nil {
-		t.Fatalf(
-			"api role failed readiness with PUBLIC CREATE granted before provisioning: %v "+
-				"(the REVOKE CREATE line must name PUBLIC explicitly, not just the role)",
-			err,
-		)
+		t.Fatalf("api role failed readiness after PUBLIC's CREATE grant was revoked: %v", err)
 	}
 }
 

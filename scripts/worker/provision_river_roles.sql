@@ -196,16 +196,28 @@ REVOKE CREATE ON SCHEMA public FROM :"queue_role";
   -- that one.
   REVOKE TEMPORARY ON DATABASE :"app_database" FROM PUBLIC, :"api_role";
   GRANT USAGE ON SCHEMA public TO :"api_role";
-  -- Same class as the TEMPORARY revoke above: has_schema_privilege resolves
-  -- effective privilege too, so on a database where PUBLIC has been granted
-  -- CREATE on the public schema (not PostgreSQL's own default since v15,
-  -- but not this script's business to assume about every target database),
-  -- revoking only from api_role would leave it holding CREATE anyway and
-  -- fail CheckAPIAuthorization's "does not hold CREATE" assertion. The
-  -- three roles above (domain/queue/coordinator) carry this identical gap,
-  -- unfixed here -- a pre-existing, already-deployed pattern this ticket
-  -- does not touch; tracked as a follow-up, not silently dismissed.
-  REVOKE CREATE ON SCHEMA public FROM PUBLIC, :"api_role";
+  -- Deliberately role-scoped only. A review round proved that naming PUBLIC
+  -- here (mirroring the TEMPORARY revoke above) has real blast radius: the
+  -- TEMPORARY revoke above is a no-op in every real invocation (the
+  -- mandatory domain/queue/coordinator block earlier in this script already
+  -- revokes TEMPORARY from PUBLIC database-wide before this block ever
+  -- runs), but there is no earlier unconditional REVOKE CREATE FROM PUBLIC
+  -- anywhere in this file -- adding one here would strip CREATE on the
+  -- public schema from every OTHER role in the database that relies on
+  -- PUBLIC's grant (the PostgreSQL default before v15, still possible on
+  -- any target regardless of version) as an undocumented side effect of
+  -- bootstrapping one unrelated role. Reproduced directly: granting PUBLIC
+  -- CREATE, then running this script with api_role set, revoked an
+  -- unrelated pre-existing role's CREATE privilege out from under it.
+  -- On a target where PUBLIC still holds CREATE on the public schema,
+  -- api_role effectively holds it too (has_schema_privilege resolves
+  -- PUBLIC-inherited privilege), and CheckAPIAuthorization's "does not hold
+  -- CREATE" assertion correctly REFUSES readiness -- the loud signal that
+  -- this target needs its own deliberate, human REVOKE CREATE ... FROM
+  -- PUBLIC, not a silent side effect of this script. The three roles above
+  -- (domain/queue/coordinator) carry the identical, pre-existing gap;
+  -- unfixed here, tracked as a follow-up, not silently dismissed.
+  REVOKE CREATE ON SCHEMA public FROM :"api_role";
 \endif
 
 -- The KEDA postgresql scaler's read-only role. Optional -- only

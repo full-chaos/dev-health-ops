@@ -41,10 +41,23 @@ const (
 	// per-request bound; a route that needs a different one declares it when it
 	// is ported.
 	requestTimeout = 60 * time.Second
-	// maxBodyBytes bounds every request body. The Python api has no global
-	// bound; a route that needs more declares its own MaxBodyBytes when it is
-	// ported.
-	maxBodyBytes = 16 << 20
+	// maxBodyBytes bounds every request body at the ingress in front of both
+	// planes (proxy-body-size 50m on the prod ops ingress). The Python api has
+	// no bound of its own, so any body the ingress forwards reaches it; this
+	// default keeps that true for the Go api.
+	maxBodyBytes = 50 << 20
+	// maxHeaderBytes is the smallest bound under which the api accepts every
+	// request head the Python api accepts. uvicorn on h11 (uv.lock), with the
+	// head arriving in one piece, accepts a request line of up to 127,917
+	// bytes of target and a single header value of up to 127,887 bytes;
+	// net/http reads MaxHeaderBytes plus its own slop (measured +4,040 bytes
+	// for a long target, +4,019 for a long header). The raw-HTTP golden pins
+	// the edges.
+	maxHeaderBytes = 123877
+	// maxHeaderValueCount is high enough that the byte bound, not a count,
+	// ends a request head, as in uvicorn, which has no count limit: the
+	// shortest header line is 4 bytes, so 32,768 lines cannot fit the bound.
+	maxHeaderValueCount = 32 << 10
 	// listenerCheck is the readiness check that fails until the api listener
 	// is bound.
 	listenerCheck = "api_listener"
@@ -116,8 +129,10 @@ func NewServer(cfg config.Config, logger *slog.Logger, routes []httpapi.Route) (
 		// The Python api echoes any non-empty X-Request-ID
 		// (api/middleware/correlation_id.py) and routes the raw path, never
 		// redirecting one.
-		AcceptRequestID: func(id string) bool { return id != "" },
-		StrictPaths:     true,
+		AcceptRequestID:     func(id string) bool { return id != "" },
+		StrictPaths:         true,
+		MaxHeaderBytes:      maxHeaderBytes,
+		MaxHeaderValueCount: maxHeaderValueCount,
 		Middleware: []func(http.Handler) http.Handler{
 			SecurityHeaders,
 			NewCORS(cfg.CORSAllowedOrigins).Wrap,

@@ -71,6 +71,12 @@ type ServerOptions struct {
 	// server-wide OPTIONS handler is switched off so "OPTIONS *" reaches it).
 	// Off (the default), the mux keeps net/http's own redirects.
 	StrictPaths bool
+	// MaxHeaderBytes bounds the request line plus headers. Zero means 64 KiB,
+	// this package's own bound. Over it, net/http answers 431 itself.
+	MaxHeaderBytes int
+	// MaxHeaderValueCount bounds the number of header values. Zero means
+	// net/http's default (500). Over it, net/http answers 431 itself.
+	MaxHeaderValueCount int
 }
 
 // Server is the auth API listener. It is a lifecycle.Component so the runtime,
@@ -111,6 +117,10 @@ func NewServer(options ServerOptions) (*Server, error) {
 	if name == "" {
 		name = "auth-api-http"
 	}
+	maxHeaderBytes := options.MaxHeaderBytes
+	if maxHeaderBytes <= 0 {
+		maxHeaderBytes = 1 << 16
+	}
 	server := &Server{name: name, logger: logger, errors: make(chan error, 1)}
 	server.server = &http.Server{
 		Addr:    options.Address,
@@ -129,8 +139,9 @@ func NewServer(options ServerOptions) (*Server, error) {
 		DisableGeneralOptionsHandler: options.StrictPaths,
 		// MaxHeaderBytes bounds header memory independently of the body
 		// bound, which MaxBody cannot see.
-		MaxHeaderBytes: 1 << 16,
-		ErrorLog:       slog.NewLogLogger(logger.Handler(), slog.LevelWarn),
+		MaxHeaderBytes:      maxHeaderBytes,
+		MaxHeaderValueCount: options.MaxHeaderValueCount,
+		ErrorLog:            slog.NewLogLogger(logger.Handler(), slog.LevelWarn),
 	}
 	return server, nil
 }

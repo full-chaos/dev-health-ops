@@ -199,3 +199,22 @@ func TestAcceptRequestIDDecidesReuse(t *testing.T) {
 		t.Fatal("a missing id must still be generated")
 	}
 }
+
+func TestHeaderLimitsDefaultAndOverride(t *testing.T) {
+	server, err := NewServer(testOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if server.server.MaxHeaderBytes != 1<<16 || server.server.MaxHeaderValueCount != 0 {
+		t.Fatalf("defaults changed: %d bytes, %d values", server.server.MaxHeaderBytes, server.server.MaxHeaderValueCount)
+	}
+	options := testOptions()
+	options.MaxHeaderBytes, options.MaxHeaderValueCount = 123877, 32768
+	server, err = NewServer(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if server.server.MaxHeaderBytes != 123877 || server.server.MaxHeaderValueCount != 32768 {
+		t.Fatalf("overrides not applied: %d bytes, %d values", server.server.MaxHeaderBytes, server.server.MaxHeaderValueCount)
+	}
+}

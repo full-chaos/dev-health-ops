@@ -3,12 +3,12 @@ package apiservice
 import (
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"reflect"
 	"regexp"
@@ -20,7 +20,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 )
 
-// pythonRawGolden is testdata/python_raw_http_golden.json: the REAL Python
+// pythonRawGolden is testdata/python_raw_http_golden.json.gz (gzip of JSON): the REAL Python
 // api middleware stack on a route-less FastAPI app, served by the REAL
 // uvicorn the api runs on, driven with raw HTTP/1.1 request bytes over TCP so
 // no client library normalised the target, the method or a header. It covers
@@ -33,6 +33,8 @@ type pythonRawGolden struct {
 	GeneratedBy string `json:"generated_by"`
 	Cases       []struct {
 		Request string              `json:"request"`
+		Kind    string              `json:"kind"`
+		GoCode  int                 `json:"go_status"`
 		Method  string              `json:"method"`
 		Target  string              `json:"target"`
 		Status  int                 `json:"status"`
@@ -53,7 +55,16 @@ var transportOnly = map[string]bool{"date": true, "server": true, "connection": 
 // response headers. A generated X-Request-ID is compared as "a fresh UUID"
 // on both sides; an echoed one is compared byte for byte.
 func TestServerMatchesThePythonAPIOverRawHTTP(t *testing.T) {
-	raw, err := os.ReadFile("testdata/python_raw_http_golden.json")
+	file, err := os.Open("testdata/python_raw_http_golden.json.gz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	unzipped, err := gzip.NewReader(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := io.ReadAll(unzipped)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,49 +94,51 @@ func TestServerMatchesThePythonAPIOverRawHTTP(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = server.Shutdown(t.Context()) })
 
-	mismatches, invalid := 0, 0
+	counts := map[string]int{}
+	mismatches := 0
 	for _, c := range golden.Cases {
 		request, err := base64.StdEncoding.DecodeString(c.Request)
 		if err != nil {
 			t.Fatal(err)
 		}
+		counts[c.Kind]++
 		status, body, headers := rawRoundTrip(t, server.Address(), request, c.Method)
-		want := normalizeRaw(latin1Bytes(c.Headers))
-		got := normalizeRaw(headers)
-		if invalidEscape(c.Target) {
-			// Go's HTTP parser refuses a request target that is not a valid
-			// URI before any handler runs (url.ParseRequestURI), with a
-			// plain-text 400; uvicorn passes it on and the Python api answers
-			// its JSON 404. This is the one known server-level difference;
-			// it is pinned here so it cannot widen silently.
-			if status != http.StatusBadRequest || body != "400 Bad Request" && !(c.Method == "HEAD" && body == "") {
-				t.Errorf("%s %s: invalid-escape target gave %d %q, want the parser's 400", c.Method, c.Target, status, body)
+		switch c.Kind {
+		case "same":
+			// The api's own answer: status, body and headers equal.
+			want, got := normalizeRaw(latin1Bytes(c.Headers)), normalizeRaw(headers)
+			if status != c.Status || body != c.Body || !reflect.DeepEqual(got, want) {
+				mismatches++
+				if mismatches <= 8 {
+					t.Errorf("%s %.40s:\n go     %d %q %v\n python %d %q %v", c.Method, c.Target, status, body, got, c.Status, c.Body, want)
+				}
 			}
-			invalid++
-			continue
-		}
-		if status != c.Status || body != c.Body || !reflect.DeepEqual(got, want) {
-			mismatches++
-			if mismatches <= 8 {
-				t.Errorf("%s %s:\n go     %d %q %v\n python %d %q %v", c.Method, c.Target, status, body, got, c.Status, c.Body, want)
+		case "status":
+			// Both HTTP parsers refuse the request with the same status
+			// before any handler runs; each writes its own error text.
+			if status != c.Status {
+				mismatches++
+				t.Errorf("%s %.40s: parser refusal %d, python %d", c.Method, c.Target, status, c.Status)
 			}
+		case "differs":
+			// A decided, pinned difference in the HTTP parser layer: the Go
+			// status is exactly the one recorded beside the case.
+			if status != c.GoCode {
+				mismatches++
+				t.Errorf("%s %.40s: go %d, pinned %d (python %d)", c.Method, c.Target, status, c.GoCode, c.Status)
+			}
+		default:
+			t.Fatalf("case %s %.40s has unknown kind %q", c.Method, c.Target, c.Kind)
 		}
 	}
 	if mismatches > 0 {
-		t.Fatalf("%d of %d raw requests differ from the Python api", mismatches, len(golden.Cases))
+		t.Fatalf("%d of %d raw requests break their decided outcome", mismatches, len(golden.Cases))
 	}
-	// The golden holds exactly one invalid-escape target (one per method);
-	// if that count changes, the pinned difference changed with it.
-	if invalid != 6 {
-		t.Fatalf("%d invalid-escape cases, want 6", invalid)
+	// The decided outcomes are pinned by count, so a case cannot move
+	// between kinds without this line changing with it.
+	if want := map[string]int{"same": 83, "status": 8, "differs": 12}; !reflect.DeepEqual(counts, want) {
+		t.Fatalf("outcome counts %v, want %v", counts, want)
 	}
-}
-
-// invalidEscape reports a request target url.ParseRequestURI refuses for a
-// malformed percent-escape.
-func invalidEscape(target string) bool {
-	_, err := url.ParseRequestURI(target)
-	return err != nil && strings.Contains(err.Error(), "invalid URL escape")
 }
 
 // latin1Bytes turns the golden's header values back into the bytes on the

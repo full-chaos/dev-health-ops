@@ -18,10 +18,22 @@
 # READINESS_ATTEMPTS, READINESS_SLEEP_SECS, EXIT_FAILURE. Sets QUERY_API_PID
 # (the caller declares it and stops it with stop_service). Requires
 # run_python and wait_for_http_ready to be defined.
+#
+# CHAOS-6241: query_api_e2e_start/query_api_e2e_mint_envelope_token are also
+# called directly by the caller (ci/run_live_backend_e2e.sh) BEFORE
+# run_go_api_prove_e2e, to validate the two REST routes (/api/v1/meta,
+# /api/v1/home) query-api now serves against the SAME query-api process
+# run_go_api_prove_e2e's GraphQL proof reuses -- one build, one process, one
+# port.
 
 GO_API_PROVE_E2E_OPERATION="featureFlags"
 # Must match internal/edgetokenmint.ProvePrincipalID.
 GO_API_PROVE_E2E_PRINCIPAL_ID="00000000-0000-4000-8000-00000000e0e1"
+
+# Set by query_api_e2e_start; read by it, by run_go_api_prove_e2e, and by
+# query_api_e2e_mint_envelope_token.
+GO_API_PROVE_E2E_DIR=""
+GO_API_PROVE_E2E_ENVELOPE_PEM=""
 
 # The fixture program that checks the migrated proof service principal row,
 # grants it an org membership, and then mutates it. The users row itself comes
@@ -128,36 +140,46 @@ go_api_prove_e2e_mint_edge_token() {
   POSTGRES_URI="$(go_api_prove_e2e_pgx_uri)" "${BIN_DIR}/mint-edge-token" -org "${E2E_ORG_ID}"
 }
 
-run_go_api_prove_e2e() {
-  local dir commit prove_log rc status pgx_uri
+# query_api_e2e_start builds and boots the single query-api process both the
+# CHAOS-6241 REST checks (below) and run_go_api_prove_e2e's own GraphQL proof
+# share -- one build, one process, one port, rather than each starting its
+# own. Sets the caller-declared QUERY_API_PID global (read by cleanup(),
+# stopped with stop_service) and the module globals GO_API_PROVE_E2E_DIR /
+# GO_API_PROVE_E2E_ENVELOPE_PEM other functions in this file and the caller
+# reuse.
+#
+# GO_API_HOME_ENABLED/GO_API_META_ENABLED (both default OFF in production --
+# see cmd/query-api/home_route.go / meta_route.go) are turned on here: these
+# two REST routes are Go-served in prod, and CHAOS-6241 deleted their Python
+# bodies (main.py's home()/meta() now raise GoServedRouteUnavailableError
+# unconditionally) -- the live-e2e pipeline-proof for them has to run
+# against query-api, or it silently stops measuring anything for these two
+# paths the moment the Python body is gone.
+query_api_e2e_start() {
+  local dir commit pgx_uri
   dir="${TMP_DIR}/go-api-prove"
   GO_API_PROVE_E2E_DIR="${dir}"
   mkdir -p "${dir}/artifacts"
   chmod 700 "${dir}"
-  pgx_uri="$(go_api_prove_e2e_pgx_uri)"
-  printf '%s' "${GO_API_PROVE_E2E_PRINCIPAL_PROGRAM}" > "${dir}/principal.py"
+  GO_API_PROVE_E2E_ENVELOPE_PEM="${dir}/envelope.pem"
   printf '%s' "${GO_API_PROVE_E2E_JWKS_PROGRAM}" > "${dir}/jwks.py"
-  printf '%s' "${GO_API_PROVE_E2E_ROUTING_PROGRAM}" > "${dir}/routing.py"
 
-  echo "==> [go-api-prove e2e] building query-api, go-api-prove, mint-envelope, mint-edge-token"
-  # query-api refuses to identify an unstamped or modified build, and
-  # go-api-prove refuses to measure a candidate built from another commit
-  # than its own, so both are stamped the way the image build stamps them:
-  # -buildvcs=false and the same commit through -ldflags.
+  echo "==> [query-api] building query-api and mint-envelope"
+  # query-api refuses to identify an unstamped or modified build, so it is
+  # stamped the way the image build stamps it: -buildvcs=false and the same
+  # commit through -ldflags (go-api-prove, built later, refuses to measure a
+  # candidate built from another commit than its own).
   commit="${GITHUB_SHA:-$(git -C "${ROOT_DIR}" rev-parse HEAD)}"
   go build -buildvcs=false -ldflags "-X github.com/full-chaos/dev-health-ops/internal/platform/version.Commit=${commit}" \
     -o "${BIN_DIR}/query-api" ./cmd/query-api
-  go build -buildvcs=false -ldflags "-X github.com/full-chaos/dev-health-ops/internal/platform/version.Commit=${commit}" \
-    -o "${BIN_DIR}/go-api-prove" ./cmd/go-api-prove
   go build -o "${BIN_DIR}/mint-envelope" ./cmd/mint-envelope
-  go build -o "${BIN_DIR}/mint-edge-token" ./cmd/mint-edge-token
-  go run ./cmd/query-api/tools/registrydump -file cmd/query-api/query_route.go > "${dir}/documents.json"
 
-  echo "==> [go-api-prove e2e] generating a throwaway envelope key pair"
-  (umask 077 && openssl genpkey -algorithm ed25519 -out "${dir}/envelope.pem")
-  GO_API_ENVELOPE_PRIVATE_KEY="$(cat "${dir}/envelope.pem")" run_python "${dir}/jwks.py" > "${dir}/jwks.json"
+  echo "==> [query-api] generating a throwaway envelope key pair"
+  (umask 077 && openssl genpkey -algorithm ed25519 -out "${GO_API_PROVE_E2E_ENVELOPE_PEM}")
+  GO_API_ENVELOPE_PRIVATE_KEY="$(cat "${GO_API_PROVE_E2E_ENVELOPE_PEM}")" run_python "${dir}/jwks.py" > "${dir}/jwks.json"
 
-  echo "==> [go-api-prove e2e] starting query-api on :${QUERY_API_PORT} with the measurement route"
+  echo "==> [query-api] starting query-api on :${QUERY_API_PORT} (REST + measurement route)"
+  pgx_uri="$(go_api_prove_e2e_pgx_uri)"
   set -m
   (
     export CLICKHOUSE_URI="${CLICKHOUSE_URI_NATIVE}"
@@ -168,6 +190,8 @@ run_go_api_prove_e2e() {
     export QUERY_API_ADDR="127.0.0.1:${QUERY_API_PORT}"
     export DEV_HEALTH_ENV="ci"
     export GO_API_PROOF_ROUTE_ENABLED="true"
+    export GO_API_HOME_ENABLED="true"
+    export GO_API_META_ENABLED="true"
     exec "${BIN_DIR}/query-api"
   ) > "${dir}/query-api.log" 2>&1 &
   # Read by the caller's cleanup, which stops it with stop_service.
@@ -175,6 +199,30 @@ run_go_api_prove_e2e() {
   QUERY_API_PID="$!"
   set +m
   wait_for_http_ready "query-api" "http://127.0.0.1:${QUERY_API_PORT}/readyz" "${dir}/query-api.log" QUERY_API_PID
+}
+
+# query_api_e2e_mint_envelope_token ORG_ID -- prints an envelope bearer
+# token minted with query_api_e2e_start's throwaway key, the same auth
+# query-api's REST routes (home_route.go's doc comment: "the same
+# bearer-envelope verifier every other REST route in this binary uses")
+# and run_go_api_prove_e2e's own -proof-bearer-exec already use.
+query_api_e2e_mint_envelope_token() {
+  "${BIN_DIR}/mint-envelope" -org "$1" -key-file "${GO_API_PROVE_E2E_ENVELOPE_PEM}"
+}
+
+run_go_api_prove_e2e() {
+  local dir commit prove_log rc status pgx_uri
+  dir="${GO_API_PROVE_E2E_DIR}"
+  pgx_uri="$(go_api_prove_e2e_pgx_uri)"
+  printf '%s' "${GO_API_PROVE_E2E_PRINCIPAL_PROGRAM}" > "${dir}/principal.py"
+  printf '%s' "${GO_API_PROVE_E2E_ROUTING_PROGRAM}" > "${dir}/routing.py"
+
+  echo "==> [go-api-prove e2e] building go-api-prove, mint-edge-token (query-api is already running, see query_api_e2e_start)"
+  commit="${GITHUB_SHA:-$(git -C "${ROOT_DIR}" rev-parse HEAD)}"
+  go build -buildvcs=false -ldflags "-X github.com/full-chaos/dev-health-ops/internal/platform/version.Commit=${commit}" \
+    -o "${BIN_DIR}/go-api-prove" ./cmd/go-api-prove
+  go build -o "${BIN_DIR}/mint-edge-token" ./cmd/mint-edge-token
+  go run ./cmd/query-api/tools/registrydump -file cmd/query-api/query_route.go > "${dir}/documents.json"
 
   echo "==> [go-api-prove e2e] routing ${GO_API_PROVE_E2E_OPERATION} to shadow at the running build"
   local query_api="http://127.0.0.1:${QUERY_API_PORT}"

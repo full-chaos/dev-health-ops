@@ -18,6 +18,7 @@ real requests, unconditionally.
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
 
 import pytest
 from fastapi.testclient import TestClient
@@ -37,7 +38,7 @@ _TEST_USER = AuthenticatedUser(
 
 
 @pytest.fixture(autouse=True)
-def _authenticated(monkeypatch: pytest.MonkeyPatch) -> None:
+def _authenticated() -> Iterator[None]:
     app.dependency_overrides[get_current_user] = lambda: _TEST_USER
     yield
     app.dependency_overrides.pop(get_current_user, None)

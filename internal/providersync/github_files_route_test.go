@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -246,6 +247,30 @@ type gitHubFilesTreeWalkDoer struct {
 	rootMissing      bool
 	subtreeTruncated bool
 	subtreeMissing   bool
+	// rootOversized serves a recursive tree response built from the real
+	// response shape (a genuine tree array of blob entries, GitHub's
+	// truncated=false) but padded past nativeMaxObjectBytes -- the shape
+	// measured live against full-chaos/dev-health-ops (CHAOS-6268): a
+	// well-formed response GitHub never marked truncated, simply bigger
+	// than the shared per-object cap.
+	rootOversized bool
+}
+
+// oversizedGitHubTreeBody builds a genuine (not padded-with-garbage)
+// recursive tree JSON response -- real blob entries, repeated -- until it
+// exceeds nativeMaxObjectBytes, so the fixture pins the actual shape a
+// large repository's tree listing takes, not a contrived oversized field.
+func oversizedGitHubTreeBody() string {
+	var body strings.Builder
+	body.WriteString(`{"truncated":false,"tree":[`)
+	for i := 0; body.Len() <= nativeMaxObjectBytes; i++ {
+		if i > 0 {
+			body.WriteByte(',')
+		}
+		fmt.Fprintf(&body, `{"path":"pkg/generated/file%08d.go","type":"blob","sha":"%040x","size":120}`, i, i)
+	}
+	body.WriteString(`]}`)
+	return body.String()
 }
 
 func (doer gitHubFilesTreeWalkDoer) Do(request *http.Request) (*http.Response, error) {
@@ -261,6 +286,10 @@ func (doer gitHubFilesTreeWalkDoer) Do(request *http.Request) (*http.Response, e
 		if doer.rootMissing {
 			status = http.StatusNotFound
 			body = `{"message":"Not Found"}`
+			break
+		}
+		if doer.rootOversized {
+			body = oversizedGitHubTreeBody()
 			break
 		}
 		body = `{"truncated":true,"tree":[{"path":"README.md","type":"blob","size":5}]}`
@@ -306,6 +335,37 @@ func TestGitHubFilesRouteWalksTruncatedTreeToACompleteInventory(t *testing.T) {
 	}
 	if len(batch.Effects) != 1 || len(batch.Effects[0].Rows) != 2 {
 		t.Fatalf("effects=%+v, want 2 rows (README.md + src/main.go) recovered via the subtree walk", batch.Effects)
+	}
+	var paths []string
+	for _, raw := range batch.Effects[0].Rows {
+		var row gitFileRow
+		if err := json.Unmarshal(raw, &row); err != nil {
+			t.Fatal(err)
+		}
+		paths = append(paths, row.Path)
+	}
+	if !strings.Contains(strings.Join(paths, ","), "src/main.go") {
+		t.Fatalf("paths=%v, want src/main.go recovered from the non-recursive subtree walk", paths)
+	}
+}
+
+// TestGitHubFilesRouteFallsBackToNonRecursiveWalkWhenTheRecursiveTreeExceedsTheObjectCap
+// is the CHAOS-6268 regression: a repository whose recursive tree listing is
+// well-formed and NOT truncated by GitHub, but bigger than the shared
+// per-object cap (fetchObject/nativeMaxObjectBytes), must recover via the
+// same non-recursive walk a GitHub-truncated tree already uses -- not fail
+// the unit. Before the fix this fixture fails with ErrGitHubFilesTraversalFailed
+// (github_files_inventory_failed) because fetchObject's cap hit and a
+// genuinely malformed body were indistinguishable.
+func TestGitHubFilesRouteFallsBackToNonRecursiveWalkWhenTheRecursiveTreeExceedsTheObjectCap(t *testing.T) {
+	claim := nativeTestClaim("github", "files")
+	client := gitHubRepositoryClient(t, gitHubFilesTreeWalkDoer{t: t, rootOversized: true}, "https://api.github.com")
+	batch, err := (GitHubFilesRouteHandler{}).Collect(context.Background(), claim, providerfoundation.Credential{}, client, time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(batch.Effects) != 1 || len(batch.Effects[0].Rows) != 2 {
+		t.Fatalf("effects=%+v, want 2 rows (README.md + src/main.go) recovered via the object-cap walk fallback", batch.Effects)
 	}
 	var paths []string
 	for _, raw := range batch.Effects[0].Rows {

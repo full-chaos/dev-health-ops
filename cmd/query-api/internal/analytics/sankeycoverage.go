@@ -164,6 +164,18 @@ func defaultRecordInvestmentCoverageFailure(ctx context.Context, orgID string, m
 	slog.ErrorContext(ctx, "investment_coverage.query_failed", logAttrs...)
 }
 
+// isLocalValidationFailure reports whether err is, or wraps, one of
+// dev-health-go's two LOCAL (pre-dispatch) validation sentinels --
+// ErrUnsafeStatement (validateReadOnlyStatement) or ErrInvalidBinding
+// (translateBindings). Both run inside Client.Query BEFORE it ever calls
+// the driver (client.go:111-133): a query failing this way never reached
+// ClickHouse, so no query id bound to it was ever sent, and none can
+// appear in system.query_log. See resolveSankeyCoverage's call site for
+// why that makes the id worth suppressing rather than reporting.
+func isLocalValidationFailure(err error) bool {
+	return errors.Is(err, clickhouse.ErrUnsafeStatement) || errors.Is(err, clickhouse.ErrInvalidBinding)
+}
+
 // compileSankeyCoverage ports the query construction half of
 // analytics.py:658-865. Returns the compiled statement plus bindings.
 func compileSankeyCoverage(req SankeyRequest, orgID string, timeoutSeconds int, useInvestment bool, filters *model.FilterInput) (compiledQuery, error) {
@@ -533,7 +545,24 @@ func resolveSankeyCoverage(ctx context.Context, client QueryClient, orgID string
 
 	rows, err := client.Query(queryCtx, query.sql, query.bindings)
 	if err != nil {
-		recordInvestmentCoverageFailure(ctx, orgID, req.Measure, useInvestment, coverageStageQuery, queryID, fmt.Errorf("query: %w", err))
+		// CHAOS-6121 (executed live against a real ClickHouse: an
+		// unencodable binding value produces stage=query
+		// query_id=<minted> with ZERO matching system.query_log rows):
+		// dev-health-go's Client.Query validates the statement shape and
+		// translates bindings to native-protocol
+		// PARAMETERS entirely LOCALLY, both before it ever calls
+		// c.connection.Query (client.go:111-133) -- so
+		// ErrUnsafeStatement/ErrInvalidBinding mean the request was never
+		// dispatched, and the id we bound to it via WithQueryID was never
+		// sent either. Reporting queryID for THIS class sends on-call
+		// searching system.query_log for a row that can never exist,
+		// which is worse than reporting no id at all (AGENTS.md: "an
+		// inaccurate coverage claim is worse than an admitted gap").
+		reportedQueryID := queryID
+		if isLocalValidationFailure(err) {
+			reportedQueryID = ""
+		}
+		recordInvestmentCoverageFailure(ctx, orgID, req.Measure, useInvestment, coverageStageQuery, reportedQueryID, fmt.Errorf("query: %w", err))
 		return nil
 	}
 	defer rows.Close()

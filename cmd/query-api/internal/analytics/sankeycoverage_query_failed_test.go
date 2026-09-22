@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/full-chaos/dev-health-go/clickhouse"
 	"github.com/google/uuid"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
@@ -79,6 +80,75 @@ func TestResolveSankeyCoverage_QueryFailure_ReportsClickHouseCodeAndQueryID(t *t
 	}
 	if gotException.Code != 735 || gotException.Name != "QUERY_WAS_CANCELLED_BY_CLIENT" {
 		t.Fatalf("reported exception = %+v, want code 735 / QUERY_WAS_CANCELLED_BY_CLIENT", gotException)
+	}
+}
+
+// TestResolveSankeyCoverage_LocalValidationFailure_ReportsNoQueryID pins a
+// CHAOS-6121 finding reproduced live against a real ClickHouse container:
+// a bad binding value (`clickhouse.ErrInvalidBinding`)
+// fails INSIDE dev-health-go's Client.Query before it ever calls the
+// driver (client.go:111-133, translateBindings runs before
+// c.connection.Query) -- so the minted query id was never sent, and
+// system.query_log has zero rows for it. Before the fix, resolveSankeyCoverage
+// reported that id anyway, sending on-call searching for a row that can
+// never exist. `client.onErr` here returns the RAW sentinel-wrapped error
+// exactly as dev-health-go's Client.Query does for this class (no
+// operationError wrapping -- see client.go:115-118): the failure never
+// reaches c.connection.Query, so there is no driver error to wrap.
+func TestResolveSankeyCoverage_LocalValidationFailure_ReportsNoQueryID(t *testing.T) {
+	client := &routingFakeClient{}
+	client.onErr("AS assigned_team", fmt.Errorf("binding value: %w", clickhouse.ErrInvalidBinding))
+
+	var got []string
+	orig := recordInvestmentCoverageFailure
+	recordInvestmentCoverageFailure = func(_ context.Context, _ string, _ Measure, _ bool, stage coverageFailureStage, queryID string, _ error) {
+		got = append(got, queryID)
+		if stage != coverageStageQuery {
+			t.Fatalf("stage = %q, want %q", stage, coverageStageQuery)
+		}
+	}
+	t.Cleanup(func() { recordInvestmentCoverageFailure = orig })
+
+	req := SankeyRequest{
+		Measure:   MeasureCount,
+		StartDate: mustGraphQLDate("2026-01-01"),
+		EndDate:   mustGraphQLDate("2026-01-08"),
+	}
+	resolveSankeyCoverage(context.Background(), client, "org-1", req, 30, false, nil)
+
+	if len(got) != 1 {
+		t.Fatalf("expected exactly 1 failure report, got %d", len(got))
+	}
+	if got[0] != "" {
+		t.Fatalf("queryID = %q, want empty -- this request was never dispatched to ClickHouse, so no id can appear in system.query_log", got[0])
+	}
+}
+
+// TestIsLocalValidationFailure is the unit-level pin for the guard
+// resolveSankeyCoverage's fix relies on: it must match BOTH of
+// dev-health-go's pre-dispatch sentinels (wrapped or bare, the two shapes
+// Client.Query actually returns them in) and reject a real driver/network
+// failure -- a false positive on the latter would suppress query_id for
+// failures that DID reach ClickHouse, regressing the P1 this PR exists to
+// fix in the first place.
+func TestIsLocalValidationFailure(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"wrapped ErrInvalidBinding", fmt.Errorf("binding value: %w", clickhouse.ErrInvalidBinding), true},
+		{"bare ErrUnsafeStatement", clickhouse.ErrUnsafeStatement, true},
+		{"ClickHouse server exception", &clickhousedriver.Exception{Code: 60, Name: "UNKNOWN_TABLE"}, false},
+		{"context cancellation", context.Canceled, false},
+		{"unrelated error", errors.New("boom"), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isLocalValidationFailure(tc.err); got != tc.want {
+				t.Errorf("isLocalValidationFailure(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
 	}
 }
 

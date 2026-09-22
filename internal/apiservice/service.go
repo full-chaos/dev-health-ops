@@ -113,6 +113,11 @@ func NewServer(cfg config.Config, logger *slog.Logger, routes []httpapi.Route) (
 		RequestTimeout: requestTimeout,
 		MaxBodyBytes:   maxBodyBytes,
 		ErrorWriter:    WriteError,
+		// The Python api echoes any non-empty X-Request-ID
+		// (api/middleware/correlation_id.py) and routes the raw path, never
+		// redirecting one.
+		AcceptRequestID: func(id string) bool { return id != "" },
+		StrictPaths:     true,
 		Middleware: []func(http.Handler) http.Handler{
 			SecurityHeaders,
 			NewCORS(cfg.CORSAllowedOrigins).Wrap,

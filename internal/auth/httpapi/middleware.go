@@ -58,9 +58,24 @@ func acceptableRequestID(value string) bool {
 // response. A usable inbound id is preserved so a caller can correlate across
 // services; anything else is replaced.
 func RequestID(next http.Handler) http.Handler {
+	return RequestIDWith(acceptableRequestID)(next)
+}
+
+// RequestIDWith is RequestID with the reuse rule supplied by the caller. A
+// service that must echo the ids its clients already send (the Go api keeps
+// the Python api's behaviour: any non-empty value is echoed) passes its own
+// rule; net/http never writes CR or LF into a response header, so an echoed
+// value cannot split the response.
+func RequestIDWith(accept func(string) bool) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return requestID(accept, next)
+	}
+}
+
+func requestID(accept func(string) bool, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := r.Header.Get(RequestIDHeader)
-		if !acceptableRequestID(id) {
+		if !accept(id) {
 			id = uuid.NewString()
 		}
 		w.Header().Set(RequestIDHeader, id)

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"path"
 	"sort"
 	"strings"
 	"sync"
@@ -60,6 +61,16 @@ type ServerOptions struct {
 	// for transport concerns every response carries (security headers, CORS);
 	// per-route policy belongs on the Route.
 	Middleware []func(http.Handler) http.Handler
+	// AcceptRequestID decides whether an inbound X-Request-ID is reused. Nil
+	// means this package's own narrow rule (acceptableRequestID).
+	AcceptRequestID func(string) bool
+	// StrictPaths answers, through ErrorWriter with CodeNotFound, every
+	// request whose target the mux would otherwise redirect or reject: a path
+	// that is not in canonical form ("/a/../b", "//x", "/a/./b"), a target
+	// without a leading slash (CONNECT authority form), and "*" (the
+	// server-wide OPTIONS handler is switched off so "OPTIONS *" reaches it).
+	// Off (the default), the mux keeps net/http's own redirects.
+	StrictPaths bool
 }
 
 // Server is the auth API listener. It is a lifecycle.Component so the runtime,
@@ -113,8 +124,9 @@ func NewServer(options ServerOptions) (*Server, error) {
 		// http.TimeoutHandler, is the backstop. It must exceed
 		// RequestTimeout, or the connection would be torn down before a
 		// well-behaved handler could render its own deadline response.
-		WriteTimeout: options.RequestTimeout + 5*time.Second,
-		IdleTimeout:  60 * time.Second,
+		WriteTimeout:                 options.RequestTimeout + 5*time.Second,
+		IdleTimeout:                  60 * time.Second,
+		DisableGeneralOptionsHandler: options.StrictPaths,
 		// MaxHeaderBytes bounds header memory independently of the body
 		// bound, which MaxBody cannot see.
 		MaxHeaderBytes: 1 << 16,
@@ -182,13 +194,22 @@ func buildHandler(options ServerOptions, logger *slog.Logger) (http.Handler, err
 	// handlers; a route's own Recover (inside routeChain) catches first and
 	// logs the real pattern.
 	var handler http.Handler = mux
+	if options.StrictPaths {
+		// Inside the middleware, so a refused target still gets every
+		// transport header a routed response gets.
+		handler = strictPaths(handler, write)
+	}
 	for index := len(options.Middleware) - 1; index >= 0; index-- {
 		if options.Middleware[index] == nil {
 			return nil, fmt.Errorf("middleware %d is nil", index)
 		}
 		handler = options.Middleware[index](handler)
 	}
-	return RequestID(RecoverWith(logger, "<unrouted>", write)(handler)), nil
+	accept := options.AcceptRequestID
+	if accept == nil {
+		accept = acceptableRequestID
+	}
+	return RequestIDWith(accept)(RecoverWith(logger, "<unrouted>", write)(handler)), nil
 }
 
 // routeChain wraps one route's handler. Order is deliberate: rate limiting is
@@ -290,3 +311,37 @@ func (s *Server) Address() string {
 type discard struct{}
 
 func (discard) Write(p []byte) (int, error) { return len(p), nil }
+
+// strictPaths answers NotFound for every request target net/http's ServeMux
+// would not route as given. ServeMux cleans the escaped path and redirects
+// when the cleaned form differs, and answers "*" with a bare 400; a service
+// that must answer exactly like one that routes the raw path (the Go api
+// mirrors Starlette, which never rewrites a path) stops those requests here.
+// The check is the mux's own rule (net/http cleanPath over EscapedPath), so
+// every request that passes it is one the mux routes without redirecting.
+func strictPaths(next http.Handler, write ErrorWriter) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		escaped := r.URL.EscapedPath()
+		if r.RequestURI == "*" || !strings.HasPrefix(escaped, "/") || canonicalPath(escaped) != escaped {
+			write(w, r, CodeNotFound)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// canonicalPath is net/http's cleanPath: path.Clean, keeping a trailing
+// slash.
+func canonicalPath(p string) string {
+	if p == "" {
+		return "/"
+	}
+	if p[0] != '/' {
+		p = "/" + p
+	}
+	cleaned := path.Clean(p)
+	if p[len(p)-1] == '/' && cleaned != "/" {
+		cleaned += "/"
+	}
+	return cleaned
+}

@@ -132,3 +132,70 @@ func TestServerNameDefaultsAndOverrides(t *testing.T) {
 		}
 	}
 }
+
+// TestStrictPathsAnswersNotFoundWhereTheMuxWouldRedirect: with StrictPaths
+// every target the mux would redirect or reject reaches the writer as
+// NotFound, and a canonical path is routed as before. Without it the mux's
+// own redirect stands (TestDotSegmentsAreRedirectedNotServed).
+func TestStrictPathsAnswersNotFoundWhereTheMuxWouldRedirect(t *testing.T) {
+	options := testOptions(okRoute(http.MethodGet, "/ok"), okRoute(http.MethodGet, "/dir/"))
+	options.ErrorWriter = recordingWriter
+	options.StrictPaths = true
+	handler := handlerFor(t, options)
+	for _, target := range []string{"/a/../ok", "//ok", "/./ok", "/ok/.", "/dir/../ok", "/%2e%2e/ok"} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, target, nil))
+		if response.Code != 599 || response.Body.String() != "custom:"+string(CodeNotFound) {
+			t.Errorf("%s: %d %q, want the writer's not-found", target, response.Code, response.Body.String())
+		}
+	}
+	star := httptest.NewRequest(http.MethodOptions, "/", nil)
+	star.RequestURI, star.URL.Path = "*", "*"
+	authority := httptest.NewRequest(http.MethodConnect, "/", nil)
+	authority.URL.Path = ""
+	for name, request := range map[string]*http.Request{"star": star, "authority form": authority} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != 599 {
+			t.Errorf("%s: %d, want the writer's not-found", name, response.Code)
+		}
+	}
+	for _, target := range []string{"/ok", "/dir/"} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, target, nil))
+		if response.Code != http.StatusNoContent {
+			t.Errorf("%s: %d, want the route", target, response.Code)
+		}
+	}
+	server, err := NewServer(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !server.server.DisableGeneralOptionsHandler {
+		t.Fatal(`StrictPaths must let "OPTIONS *" reach the handler`)
+	}
+	options.StrictPaths = false
+	if server, _ := NewServer(options); server.server.DisableGeneralOptionsHandler {
+		t.Fatal("the general OPTIONS handler stays on without StrictPaths")
+	}
+}
+
+func TestAcceptRequestIDDecidesReuse(t *testing.T) {
+	options := testOptions()
+	options.AcceptRequestID = func(id string) bool { return id != "" }
+	handler := handlerFor(t, options)
+	for _, id := range []string{"bad/value", "x y", strings.Repeat("a", 4000)} {
+		request := httptest.NewRequest(http.MethodGet, "/nope", nil)
+		request.Header.Set(RequestIDHeader, id)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if got := response.Header().Get(RequestIDHeader); got != id {
+			t.Errorf("id %.20q replaced with %q", id, got)
+		}
+	}
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/nope", nil))
+	if response.Header().Get(RequestIDHeader) == "" {
+		t.Fatal("a missing id must still be generated")
+	}
+}

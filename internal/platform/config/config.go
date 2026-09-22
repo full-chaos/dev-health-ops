@@ -682,17 +682,28 @@ func Load(spec Spec) (Config, error) {
 				"RIVER_DOMAIN_DATABASE_ROLE and RIVER_QUEUE_DATABASE_ROLE",
 		)
 	}
+	_, apiDatabaseRoleExplicit := lookup("API_DATABASE_ROLE")
 	cfg.APIDatabaseRole = envOrDefault(lookup, "API_DATABASE_ROLE", defaultAPIDatabaseRole)
 	if err := validateIdentifier("API_DATABASE_ROLE", cfg.APIDatabaseRole); err != nil {
 		return Config{}, err
 	}
-	// Same deployment-wide invariant as the three River roles above, checked
-	// unconditionally for the identical reason: a collision configured on a
-	// worker that never opens the api role's pool is still a misconfiguration
-	// the next process to actually use it would silently inherit.
-	if cfg.APIDatabaseRole == cfg.DomainDatabaseRole ||
+	// UNLIKE the three River roles above, the api role is not a
+	// deployment-wide invariant yet: provision_river_roles.sql's api_role
+	// block is OPTIONAL (CHAOS-6269), so most deployments today never
+	// provision `devhealth_api` at all, and every process's Load() still
+	// defaults cfg.APIDatabaseRole to that name whether or not anything
+	// about the api Service is configured. Checking the collision
+	// unconditionally (the way the three River roles correctly do, since
+	// THEY are always provisioned) would refuse startup for a domain/
+	// queue/coordinator role that happens to already be named
+	// "devhealth_api" on a deployment that has not touched the api
+	// Service in any way -- a review round reproduced exactly this
+	// against dev-health-worker. Only enforce the check when the api
+	// role is actually in play: the operator named it explicitly, or the
+	// api connection itself is configured.
+	if (apiDatabaseRoleExplicit || cfg.APIDatabaseURI.Configured()) && (cfg.APIDatabaseRole == cfg.DomainDatabaseRole ||
 		cfg.APIDatabaseRole == cfg.QueueDatabaseRole ||
-		cfg.APIDatabaseRole == cfg.CoordinatorDatabaseRole {
+		cfg.APIDatabaseRole == cfg.CoordinatorDatabaseRole) {
 		return Config{}, fmt.Errorf(
 			"API_DATABASE_ROLE must be distinct from RIVER_DOMAIN_DATABASE_ROLE, " +
 				"RIVER_QUEUE_DATABASE_ROLE, and RIVER_COORDINATOR_DATABASE_ROLE",

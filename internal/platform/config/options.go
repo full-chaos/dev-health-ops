@@ -327,7 +327,7 @@ var optionRegistry = []Option{
 	{
 		Flag: "postgres-db", Env: "DEV_HEALTH_PG_DB", Kind: KindString,
 		Default: "postgres", Group: GroupDatabase,
-		Usage: "Postgres database name shared by the three component-form connections above",
+		Usage: "Postgres database name shared by the four component-form connections above",
 	},
 	{
 		Flag: "clickhouse-host", Env: "DEV_HEALTH_CH_HOST", Kind: KindString, Group: GroupDatabase,

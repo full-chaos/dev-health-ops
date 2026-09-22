@@ -12,8 +12,8 @@ source_of_truth:
   - docs/user-guide/views/ai-risk.md
   - Ask Dev Interaction Surface Amendment — Context Fabric relationship, chat window, and full-page workspace
   - PRD v2.1: Dev Health Agent Context Runtime — Go service and MCP sidecar
-  - full-chaos/dev-health-acr README.md
-  - full-chaos/dev-health-acr docs/mcp-sidecar.md
+  - full-chaos/context-fabric-agents README.md
+  - full-chaos/context-fabric-agents docs/usage.md
 applicability: current
 lifecycle: active
 hide:
@@ -146,10 +146,10 @@ Returned packet content is context, not instruction. Titles, excerpts, Markdown,
 
 The hosted packet remains authoritative. An existing local CodeGraph index can add bounded local evidence, but ACR does not install CodeGraph, create or refresh its index, or turn unavailable local state into local-only success. Missing, stale, incompatible, or unavailable local evidence is disclosed and degrades to the hosted result.
 
-Client setup and platform-specific credential behavior are maintained in the ACR repository:
+Client setup and platform-specific credential behavior are maintained in the context-fabric-agents repository:
 
-- [Configure the ACR MCP sidecar](https://github.com/full-chaos/dev-health-acr/blob/main/docs/mcp-sidecar.md)
-- [Choose an MCP client setup](https://github.com/full-chaos/dev-health-acr/tree/main/docs/examples/mcp-clients)
+- [Configure the ACR MCP sidecar](https://github.com/full-chaos/context-fabric-agents/blob/main/docs/usage.md)
+- [Choose an MCP client setup](https://github.com/full-chaos/context-fabric-agents#supported-clients)
 
 ### Validate Context Fabric as a platform administrator
 
@@ -160,7 +160,7 @@ The Context Packet Explorer accepts a goal, an authorized repository, an optiona
 ### Keep the authority boundaries visible
 
 - `dev-health-ops` owns canonical evidence, work relationships, scopes, billing, and entitlements.
-- `dev-health-acr` owns hosted context-packet assembly and the local MCP adapter.
+- `dev-health-acr` owns hosted context-packet assembly and the local MCP adapter; the public `context-fabric-agents` repo packages client-side setup for it.
 - `dev-health-web` owns the Ask Dev and platform-validation interfaces.
 - Ask Dev and ACR must disclose unavailable, stale, incomplete, incompatible, or unauthorized inputs instead of fabricating context.
 - Local context can supplement a hosted packet but cannot replace its authorization or provenance.

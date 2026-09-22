@@ -9,7 +9,7 @@ source_of_truth:
   - Ask Dev Interaction Surface Amendment — Context Fabric relationship, chat window, and full-page workspace
   - Ask Dev Wave 3.1 — Evidence-backed engineering intelligence
   - "PRD v2.1: Dev Health Agent Context Runtime — Go service and MCP sidecar"
-  - full-chaos/dev-health-acr README.md
+  - full-chaos/context-fabric-agents README.md
 applicability: current
 lifecycle: active
 hide:
@@ -31,7 +31,7 @@ Context Fabric turns the engineering evidence already flowing through Dev Health
 <div class="fc-cf-actions" markdown>
 
 [Explore Ask Dev](../use/ai-workflows/index.md#use-ask-dev-for-a-human-investigation){ .md-button .md-button--primary }
-[Connect an agent](https://github.com/full-chaos/dev-health-acr/blob/main/docs/mcp-sidecar.md){ .md-button }
+[Connect an agent](https://github.com/full-chaos/context-fabric-agents#install){ .md-button }
 
 </div>
 </div>
@@ -208,7 +208,7 @@ Compatible coding, review, documentation, CI, research, and automation agents ca
 
 </div>
 
-[Configure the ACR MCP sidecar →](https://github.com/full-chaos/dev-health-acr/blob/main/docs/mcp-sidecar.md){ .fc-cf-card-link }
+[Configure the ACR MCP sidecar →](https://github.com/full-chaos/context-fabric-agents/blob/main/docs/usage.md){ .fc-cf-card-link }
 
 </article>
 

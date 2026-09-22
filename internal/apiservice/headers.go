@@ -82,3 +82,16 @@ func (w *headerWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 
 // Unwrap lets http.ResponseController reach the underlying writer.
 func (w *headerWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+// CloseHTTP10 answers an HTTP/1.0 request with "Connection: close" and so
+// closes the connection after the response, as the Python api's server does
+// (h11 never keeps an HTTP/1.0 connection alive, whatever the request asks).
+// net/http would otherwise honour an HTTP/1.0 keep-alive request.
+func CloseHTTP10(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !r.ProtoAtLeast(1, 1) {
+			w.Header().Set("Connection", "close")
+		}
+		next.ServeHTTP(w, r)
+	})
+}

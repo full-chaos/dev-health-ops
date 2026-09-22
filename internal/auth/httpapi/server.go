@@ -49,11 +49,23 @@ type ServerOptions struct {
 	// Now is injectable so a test can drive the rate limiter's clock. Nil
 	// means time.Now.
 	Now func() time.Time
+	// Name is the lifecycle component name and the label in this server's
+	// own error messages. Empty means "auth-api-http".
+	Name string
+	// ErrorWriter renders every error this server emits. Nil means WriteError
+	// (the ACP envelope).
+	ErrorWriter ErrorWriter
+	// Middleware wraps the whole mux, inside RequestID and the outermost
+	// Recover, in the order given: Middleware[0] sees the request first. It is
+	// for transport concerns every response carries (security headers, CORS);
+	// per-route policy belongs on the Route.
+	Middleware []func(http.Handler) http.Handler
 }
 
 // Server is the auth API listener. It is a lifecycle.Component so the runtime,
 // not this package and not a package-level variable, owns its shutdown.
 type Server struct {
+	name   string
 	logger *slog.Logger
 	server *http.Server
 	errors chan error
@@ -84,7 +96,11 @@ func NewServer(options ServerOptions) (*Server, error) {
 		return nil, err
 	}
 
-	server := &Server{logger: logger, errors: make(chan error, 1)}
+	name := options.Name
+	if name == "" {
+		name = "auth-api-http"
+	}
+	server := &Server{name: name, logger: logger, errors: make(chan error, 1)}
 	server.server = &http.Server{
 		Addr:    options.Address,
 		Handler: handler,
@@ -119,6 +135,10 @@ func NewServer(options ServerOptions) (*Server, error) {
 // 405, and an unknown path falls to the catch-all -- all three rendered by
 // this package's envelope rather than by net/http's plain-text defaults.
 func buildHandler(options ServerOptions, logger *slog.Logger) (http.Handler, error) {
+	write := options.ErrorWriter
+	if write == nil {
+		write = WriteError
+	}
 	mux := http.NewServeMux()
 
 	methodsByPattern := make(map[string][]string)
@@ -140,7 +160,7 @@ func buildHandler(options ServerOptions, logger *slog.Logger) (http.Handler, err
 		seen[key] = struct{}{}
 		methodsByPattern[route.Pattern] = append(methodsByPattern[route.Pattern], route.Method)
 
-		mux.Handle(key, routeChain(route, options, logger))
+		mux.Handle(key, routeChain(route, options, logger, write))
 	}
 
 	for pattern, methods := range methodsByPattern {
@@ -148,12 +168,12 @@ func buildHandler(options ServerOptions, logger *slog.Logger) (http.Handler, err
 		allow := strings.Join(methods, ", ")
 		mux.Handle(pattern, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Allow", allow)
-			WriteError(w, r, CodeMethodNotAllowed)
+			write(w, r, CodeMethodNotAllowed)
 		}))
 	}
 
 	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		WriteError(w, r, CodeNotFound)
+		write(w, r, CodeNotFound)
 	}))
 
 	// RequestID is outermost so every response -- including the 404 and 405
@@ -161,7 +181,14 @@ func buildHandler(options ServerOptions, logger *slog.Logger) (http.Handler, err
 	// correlation id. The outer Recover covers the mux itself and those two
 	// handlers; a route's own Recover (inside routeChain) catches first and
 	// logs the real pattern.
-	return RequestID(Recover(logger, "<unrouted>")(mux)), nil
+	var handler http.Handler = mux
+	for index := len(options.Middleware) - 1; index >= 0; index-- {
+		if options.Middleware[index] == nil {
+			return nil, fmt.Errorf("middleware %d is nil", index)
+		}
+		handler = options.Middleware[index](handler)
+	}
+	return RequestID(RecoverWith(logger, "<unrouted>", write)(handler)), nil
 }
 
 // routeChain wraps one route's handler. Order is deliberate: rate limiting is
@@ -169,7 +196,7 @@ func buildHandler(options ServerOptions, logger *slog.Logger) (http.Handler, err
 // on Content-Length without reading anything), then the deadline, then the
 // route's own panic recovery closest to the handler so the log line names the
 // real pattern.
-func routeChain(route Route, options ServerOptions, logger *slog.Logger) http.Handler {
+func routeChain(route Route, options ServerOptions, logger *slog.Logger, write ErrorWriter) http.Handler {
 	perSecond := route.RateLimitPerSecond
 	if perSecond <= 0 {
 		perSecond = options.RateLimit
@@ -183,10 +210,10 @@ func routeChain(route Route, options ServerOptions, logger *slog.Logger) http.Ha
 		maxBody = options.MaxBodyBytes
 	}
 
-	handler := Recover(logger, route.Method+" "+route.Pattern)(route.Handler)
+	handler := RecoverWith(logger, route.Method+" "+route.Pattern, write)(route.Handler)
 	handler = Deadline(options.RequestTimeout)(handler)
-	handler = MaxBody(maxBody)(handler)
-	handler = RateLimit(NewBucket(perSecond, burst, options.Now))(handler)
+	handler = MaxBodyWith(maxBody, write)(handler)
+	handler = RateLimitWith(NewBucket(perSecond, burst, options.Now), write)(handler)
 	return handler
 }
 
@@ -194,7 +221,7 @@ func routeChain(route Route, options ServerOptions, logger *slog.Logger) http.Ha
 func (s *Server) Handler() http.Handler { return s.server.Handler }
 
 // Name identifies the component to the lifecycle runtime.
-func (*Server) Name() string { return "auth-api-http" }
+func (s *Server) Name() string { return s.name }
 
 // Start binds the listener and serves in one owned goroutine.
 //
@@ -213,7 +240,7 @@ func (s *Server) Start(ctx context.Context) error {
 		// The address is this process's own configuration, not caller input,
 		// so it is safe in the error; the underlying syscall error is not
 		// wrapped in for the same reason net/http's own text is not needed.
-		return fmt.Errorf("listen for auth API on %s: %w", s.server.Addr, err)
+		return fmt.Errorf("listen for %s on %s: %w", s.name, s.server.Addr, err)
 	}
 	s.listener = listener
 	s.server.BaseContext = func(net.Listener) context.Context { return ctx }
@@ -221,7 +248,7 @@ func (s *Server) Start(ctx context.Context) error {
 		if serveErr := s.server.Serve(listener); serveErr != nil &&
 			!errors.Is(serveErr, http.ErrServerClosed) {
 			select {
-			case s.errors <- fmt.Errorf("auth API server: %w", serveErr):
+			case s.errors <- fmt.Errorf("%s server: %w", s.name, serveErr):
 			default:
 			}
 		}
@@ -239,7 +266,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		return nil
 	}
 	if err := s.server.Shutdown(ctx); err != nil {
-		return fmt.Errorf("shutdown auth API: %w", err)
+		return fmt.Errorf("shutdown %s: %w", s.name, err)
 	}
 	return nil
 }

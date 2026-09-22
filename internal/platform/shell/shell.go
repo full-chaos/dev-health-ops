@@ -42,7 +42,14 @@ type ConfigureDependenciesWithLogger func(
 ) ([]lifecycle.Component, error)
 
 type Spec struct {
-	Service                         string
+	Service string
+	// Invocation is how an operator starts this service, for error hints
+	// (for example "dho api"). Empty means Service.
+	Invocation string
+	// TraceServiceName, when set, is the default OTEL service.name for this
+	// process (OTEL_SERVICE_NAME still wins). Empty keeps tracing.Init's
+	// shared default, which every pre-dho service relies on.
+	TraceServiceName                string
 	Profiles                        []string
 	DefaultProfile                  string
 	RequireQueues                   bool
@@ -256,7 +263,11 @@ func Execute(
 		// stays silently inert, which is how OTEL_SERVICE_NAMEi survived in
 		// production.
 		fmt.Fprintf(streams.Stderr, "argument error: %s\n", logging.RedactText(err.Error()))
-		fmt.Fprintf(streams.Stderr, "run %s --help for the full option list\n", spec.Service)
+		invocation := spec.Invocation
+		if invocation == "" {
+			invocation = spec.Service
+		}
+		fmt.Fprintf(streams.Stderr, "run %s --help for the full option list\n", invocation)
 		return 2
 	}
 	if flags.NArg() != 0 {
@@ -303,7 +314,12 @@ func Execute(
 	// writes through the same redacting handler as this logger.
 	defer logging.InstallDefault(logger)()
 	warnEnvOnlySettings(logger, cfg)
-	tracingComponent := tracing.Init(logger)
+	var tracingComponent tracing.Component
+	if spec.TraceServiceName != "" {
+		tracingComponent = tracing.InitWithServiceName(logger, spec.TraceServiceName)
+	} else {
+		tracingComponent = tracing.Init(logger)
+	}
 	registry := health.NewRegistry(cfg.HealthCheckTimeout)
 	operatorHTTP, err := health.NewServer(health.ServerOptions{
 		Address:  cfg.HTTPAddress,

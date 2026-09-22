@@ -101,6 +101,17 @@ query-api image
 {{- end }}
 
 {{/*
+dho (operator binary) image: the Go api Deployment runs `dho api` from it
+*/}}
+{{- define "dev-health.goApiImage" -}}
+{{- if contains "@" .Values.goApi.image.repository -}}
+{{- .Values.goApi.image.repository }}
+{{- else -}}
+{{- printf "%s:%s" .Values.goApi.image.repository (default .Chart.AppVersion .Values.goApi.image.tag) }}
+{{- end -}}
+{{- end }}
+
+{{/*
 Secret name — either the one we create or an external one
 */}}
 {{- define "dev-health.secretName" -}}

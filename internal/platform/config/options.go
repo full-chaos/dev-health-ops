@@ -197,6 +197,19 @@ var optionRegistry = []Option{
 			"units for this deployment",
 	},
 
+	// The Go HTTP api (dho api). Scoped to its service identity, so these
+	// never appear in a worker's --help and a worker never parses them.
+	{
+		Flag: "api-addr", Env: "DEV_HEALTH_API_ADDR", Kind: KindString,
+		Default: defaultAPIAddress, Services: []string{APIServiceName}, Group: GroupRuntime,
+		Usage: "host:port for the api HTTP server; must differ from --http-addr",
+	},
+	{
+		Flag: "cors-allowed-origins", Env: "CORS_ALLOWED_ORIGINS", Kind: KindString,
+		Default: defaultCORSAllowedOrigins, Services: []string{APIServiceName}, Group: GroupRuntime,
+		Usage: "comma-separated CORS allow-list for the api (same format as the Python api)",
+	},
+
 	// Database and River.
 	{
 		Flag: "queue-database-mode", Env: "WORKER_DATABASE_MODE", Kind: KindString,

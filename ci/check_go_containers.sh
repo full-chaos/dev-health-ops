@@ -13,7 +13,7 @@ readonly COMMIT="0000000000000000000000000000000000000000"
 readonly BUILD_TIME="1970-01-01T00:00:00Z"
 readonly SOURCE_DATE_EPOCH="0"
 readonly RUNTIME_TARGETS=(worker scheduler reconciler stream-runner)
-readonly ALL_TARGETS=(worker scheduler reconciler stream-runner operator contractcheck migrate)
+readonly ALL_TARGETS=(worker scheduler reconciler stream-runner operator contractcheck migrate dho)
 readonly CONTAINER_SECURITY_ARGS=(
   --read-only
   --cap-drop ALL
@@ -311,6 +311,67 @@ smoke() {
   printf '%s' "${migrate_stderr}" \
     | jq -e '.error.code == "configuration_error" and (.error.detail | contains("MIGRATION_DATABASE_URI"))' >/dev/null \
     || die "migrate did not report the missing MIGRATION_DATABASE_URI diagnostic"
+
+  smoke_dho
+}
+
+# smoke_dho runs the operator binary's api service the way its Deployment
+# does (`dho api`, both listeners published) and asserts the contract a
+# route-less api keeps: live, READY (it has no dependency yet, only its own
+# listener), metrics served, and every api path answered with the Python
+# api's own 404 body plus its security headers. It then stops cleanly.
+smoke_dho() {
+  local tag="${IMAGE_PREFIX}-dho:ci"
+  local container_name="dev-health-go-dho-smoke-$$"
+  local operator_address
+  local api_address
+  local headers
+  local body
+  local exit_code
+
+  printf 'container smoke: dho\n'
+  build_target dho "${tag}"
+  [ "$(docker image inspect --format '{{.Config.User}}' "${tag}")" = "65532:65532" ] \
+    || die "dho image is not configured for numeric non-root execution"
+  docker run --rm "${CONTAINER_SECURITY_ARGS[@]}" "${tag}" --version \
+    | grep -F '"version":"phase1-ci"' >/dev/null \
+    || die "dho did not report injected version metadata"
+
+  ACTIVE_CONTAINER="${container_name}"
+  docker run --detach \
+    --name "${container_name}" \
+    --publish "127.0.0.1::8080" \
+    --publish "127.0.0.1::8000" \
+    "${CONTAINER_SECURITY_ARGS[@]}" \
+    "${tag}" api --http-addr=:8080 --api-addr=:8000 >/dev/null
+  operator_address="$(docker port "${container_name}" 8080/tcp 2>/dev/null | head -n 1 || true)"
+  api_address="$(docker port "${container_name}" 8000/tcp 2>/dev/null | head -n 1 || true)"
+  if [ -z "${operator_address}" ] || [ -z "${api_address}" ]; then
+    printf 'container dho exited before publishing its ports; its output was:\n' >&2
+    docker logs "${container_name}" 2>&1 | tail -20 >&2
+    die "dho did not publish its listeners"
+  fi
+  wait_for_status "http://${operator_address}/healthz" 200 \
+    || die "dho health endpoint did not become available"
+  wait_for_status "http://${operator_address}/readyz" 200 \
+    || die "dho api did not become ready"
+  wait_for_status "http://${operator_address}/metrics" 200 \
+    || die "dho metrics endpoint did not become available"
+  wait_for_status "http://${api_address}/api/v1/smoke" 404 \
+    || die "dho api did not answer an unmounted path with 404"
+  body="$(curl --silent --show-error --max-time 1 "http://${api_address}/api/v1/smoke")"
+  [ "${body}" = '{"detail":"Not Found"}' ] \
+    || die "dho api 404 body is not the Python api's: ${body}"
+  headers="$(curl --silent --show-error --max-time 1 --dump-header - --output /dev/null "http://${api_address}/api/v1/smoke")"
+  grep -i -F 'x-frame-options: DENY' <<<"${headers}" >/dev/null \
+    || die "dho api response lacks the security headers"
+  grep -i -F 'x-request-id:' <<<"${headers}" >/dev/null \
+    || die "dho api response lacks a request id"
+
+  docker stop --time 5 "${container_name}" >/dev/null
+  exit_code="$(docker inspect --format '{{.State.ExitCode}}' "${container_name}")"
+  [ "${exit_code}" = "0" ] || die "dho exited with status ${exit_code}"
+  cleanup_active_container
 }
 
 reproducible() {

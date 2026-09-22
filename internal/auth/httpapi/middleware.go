@@ -77,6 +77,14 @@ func RequestID(next http.Handler) http.Handler {
 // converting it into a 500 would turn an intentional abort into a reported
 // server error.
 func Recover(logger *slog.Logger, pattern string) func(http.Handler) http.Handler {
+	return RecoverWith(logger, pattern, WriteError)
+}
+
+// RecoverWith is Recover with the error body rendered by write instead of this
+// package's envelope. A service that must answer in another wire shape (the
+// Go api mirrors the Python routes' bodies) injects its writer here; the
+// recovery logic itself is shared, not copied.
+func RecoverWith(logger *slog.Logger, pattern string, write ErrorWriter) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			recorder := &statusRecorder{ResponseWriter: w}
@@ -101,7 +109,7 @@ func Recover(logger *slog.Logger, pattern string) func(http.Handler) http.Handle
 					// truncated but its status line is not ours to change.
 					return
 				}
-				WriteError(recorder, r, CodeInternal)
+				write(recorder, r, CodeInternal)
 			}()
 			next.ServeHTTP(recorder, r)
 		})
@@ -167,10 +175,15 @@ func Recover(logger *slog.Logger, pattern string) func(http.Handler) http.Handle
 // A future route needing true streaming ingest wants its own middleware, not a
 // weakening of this one.
 func MaxBody(limit int64) func(http.Handler) http.Handler {
+	return MaxBodyWith(limit, WriteError)
+}
+
+// MaxBodyWith is MaxBody with the error body rendered by write (see RecoverWith).
+func MaxBodyWith(limit int64, write ErrorWriter) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.ContentLength > limit {
-				WriteError(w, r, CodePayloadTooLarge)
+				write(w, r, CodePayloadTooLarge)
 				return
 			}
 			if r.Body == nil {
@@ -203,7 +216,7 @@ func MaxBody(limit int64) func(http.Handler) http.Handler {
 			// lane-auth-cp's executed attack on this repair and pinned by
 			// TestSizeViolationWinsOverAConcurrentReadError.
 			if int64(len(buffered)) > limit {
-				WriteError(w, r, CodePayloadTooLarge)
+				write(w, r, CodePayloadTooLarge)
 				return
 			}
 			if err != nil {
@@ -211,7 +224,7 @@ func MaxBody(limit int64) func(http.Handler) http.Handler {
 				// problem, not a size problem. The client is usually already
 				// gone; answer honestly rather than reporting a size violation
 				// that did not occur.
-				WriteError(w, r, CodeInvalidRequest)
+				write(w, r, CodeInvalidRequest)
 				return
 			}
 			// Hand the handler an ordinary, fully-readable body. net/http owns
@@ -256,10 +269,16 @@ func Deadline(timeout time.Duration) func(http.Handler) http.Handler {
 // policy concern for a later wave and needs an authenticated principal, which
 // this dormant wave does not have.
 func RateLimit(limiter *Bucket) func(http.Handler) http.Handler {
+	return RateLimitWith(limiter, WriteError)
+}
+
+// RateLimitWith is RateLimit with the error body rendered by write (see
+// RecoverWith).
+func RateLimitWith(limiter *Bucket, write ErrorWriter) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if limiter != nil && !limiter.Allow() {
-				WriteError(w, r, CodeRateLimited)
+				write(w, r, CodeRateLimited)
 				return
 			}
 			next.ServeHTTP(w, r)

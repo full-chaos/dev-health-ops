@@ -692,6 +692,7 @@ jobs:
           - operator
           - contractcheck
           - migrate
+          - dho
         platform: [linux/amd64, linux/arm64]
         include:
           - platform: linux/amd64
@@ -1141,6 +1142,7 @@ jobs:
           - operator
           - contractcheck
           - migrate
+          - dho
     steps:
       - name: Download digests
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8

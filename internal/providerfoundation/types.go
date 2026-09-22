@@ -44,6 +44,31 @@ var (
 	ErrRecoveryUnsafe       = errors.New("provider sync effect recovery is outside the bounded contract")
 )
 
+// ObjectTooLargeError reports that fetchObject's shared per-object response
+// cap (nativeMaxObjectBytes) truncated a response before it could be decoded.
+// It wraps ErrNormalizationInvalid so every existing errors.Is(err,
+// ErrNormalizationInvalid) classification keeps matching unchanged; a route
+// with its own truncation-recovery path (github/files' recursive tree walk)
+// uses errors.As to react to the cap specifically instead of failing closed.
+type ObjectTooLargeError struct {
+	// Path is the request path fetchObject was reading when the cap was hit.
+	Path string
+	// CapBytes is the shared cap (nativeMaxObjectBytes) that was exceeded.
+	CapBytes int
+	// ContentLength is the server-reported response size in bytes, or -1
+	// when the server sent no Content-Length header.
+	ContentLength int64
+}
+
+func (e *ObjectTooLargeError) Error() string {
+	if e.ContentLength >= 0 {
+		return fmt.Sprintf("provider object at %s exceeds %d byte cap: %d bytes", e.Path, e.CapBytes, e.ContentLength)
+	}
+	return fmt.Sprintf("provider object at %s exceeds %d byte cap (content-length unknown)", e.Path, e.CapBytes)
+}
+
+func (e *ObjectTooLargeError) Unwrap() error { return ErrNormalizationInvalid }
+
 // TenantScope is derived from a claimed sync unit, never from a provider
 // response or an untrusted request body. CredentialID is optional only while
 // resolving the legacy default/single-active credential fallback.

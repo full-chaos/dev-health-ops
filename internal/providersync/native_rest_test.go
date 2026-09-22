@@ -283,6 +283,125 @@ func TestNativeRESTHandlerCountsFailedAndRetriedAttempts(t *testing.T) {
 	}
 }
 
+// TestFetchObjectReturnsTypedErrorWhenTheSharedCapIsExceeded pins the
+// distinction fetchObject makes between a genuinely malformed response
+// (bare ErrNormalizationInvalid) and a well-formed response that is simply
+// bigger than the shared per-object cap (ObjectTooLargeError, wrapping the
+// same sentinel so existing errors.Is classification is unaffected, but
+// carrying the path/cap/content-length a caller with its own recovery path
+// needs to react to the cap specifically instead of failing closed).
+func TestFetchObjectReturnsTypedErrorWhenTheSharedCapIsExceeded(t *testing.T) {
+	t.Parallel()
+	body := strings.Repeat("a", nativeMaxObjectBytes+1)
+	doer := jiraWorkItemsDoerFunc(func(request *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode:    http.StatusOK,
+			Header:        http.Header{"Content-Type": []string{"application/json"}},
+			Body:          io.NopCloser(strings.NewReader(body)),
+			ContentLength: int64(len(body)),
+			Request:       request,
+		}, nil
+	})
+	client := gitHubRepositoryClient(t, doer, "https://api.github.com")
+	var target any
+	err := fetchObject(context.Background(), client, "/repos/acme/api/git/trees/big?recursive=true", &target)
+
+	var tooLarge *providerfoundation.ObjectTooLargeError
+	if !errors.As(err, &tooLarge) {
+		t.Fatalf("error=%v, want *providerfoundation.ObjectTooLargeError", err)
+	}
+	if tooLarge.Path != "/repos/acme/api/git/trees/big?recursive=true" {
+		t.Fatalf("path=%q, want the exact request path", tooLarge.Path)
+	}
+	if tooLarge.CapBytes != nativeMaxObjectBytes {
+		t.Fatalf("cap=%d, want %d", tooLarge.CapBytes, nativeMaxObjectBytes)
+	}
+	if tooLarge.ContentLength != int64(len(body)) {
+		t.Fatalf("content length=%d, want %d", tooLarge.ContentLength, len(body))
+	}
+	if !errors.Is(err, providerfoundation.ErrNormalizationInvalid) {
+		t.Fatalf("error=%v, want it to still satisfy errors.Is(err, ErrNormalizationInvalid) for existing classification", err)
+	}
+}
+
+// capCrossingErrorReader delivers exactly len(remaining) bytes and attaches
+// io.ErrUnexpectedEOF to the SAME Read call that exhausts them, rather than
+// a clean io.EOF on a later call. io.Reader permits a Read to return n>0
+// bytes together with a non-nil error, and io.ReadAll keeps those bytes
+// before returning the error -- this models a real transport hiccup landing
+// on exactly the read that crosses the cap boundary, the interleaving a
+// readErr-checked-before-byte-count ordering would silently misclassify.
+type capCrossingErrorReader struct {
+	remaining []byte
+}
+
+func (r *capCrossingErrorReader) Read(p []byte) (int, error) {
+	if len(r.remaining) == 0 {
+		return 0, io.EOF
+	}
+	n := copy(p, r.remaining)
+	r.remaining = r.remaining[n:]
+	if len(r.remaining) == 0 {
+		return n, io.ErrUnexpectedEOF
+	}
+	return n, nil
+}
+
+// TestFetchObjectReturnsTypedErrorEvenWhenTheCapCrossingReadAlsoErrors pins
+// the case a readErr-first check would miss: a cap hit must be reported even
+// when the underlying read that crosses the cap ALSO errors, not just the
+// clean case where io.ReadAll succeeds with cap+1 bytes and no error at all.
+func TestFetchObjectReturnsTypedErrorEvenWhenTheCapCrossingReadAlsoErrors(t *testing.T) {
+	t.Parallel()
+	body := make([]byte, nativeMaxObjectBytes+1)
+	doer := jiraWorkItemsDoerFunc(func(request *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode:    http.StatusOK,
+			Header:        http.Header{"Content-Type": []string{"application/json"}},
+			Body:          io.NopCloser(&capCrossingErrorReader{remaining: body}),
+			ContentLength: int64(len(body)),
+			Request:       request,
+		}, nil
+	})
+	client := gitHubRepositoryClient(t, doer, "https://api.github.com")
+	var target any
+	err := fetchObject(context.Background(), client, "/repos/acme/api/git/trees/big?recursive=true", &target)
+
+	var tooLarge *providerfoundation.ObjectTooLargeError
+	if !errors.As(err, &tooLarge) {
+		t.Fatalf("error=%v, want *providerfoundation.ObjectTooLargeError even though the underlying read also errored", err)
+	}
+	if tooLarge.CapBytes != nativeMaxObjectBytes {
+		t.Fatalf("cap=%d, want %d", tooLarge.CapBytes, nativeMaxObjectBytes)
+	}
+}
+
+// TestFetchObjectStillReturnsBareNormalizationInvalidForGenuinelyMalformedJSON
+// is the negative case: a response WITHIN the cap that is simply not valid
+// JSON keeps returning the bare sentinel, never the typed cap error -- a
+// caller must not treat ordinary malformed data as a cap hit.
+func TestFetchObjectStillReturnsBareNormalizationInvalidForGenuinelyMalformedJSON(t *testing.T) {
+	t.Parallel()
+	doer := jiraWorkItemsDoerFunc(func(request *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{not valid json`)),
+			Request:    request,
+		}, nil
+	})
+	client := gitHubRepositoryClient(t, doer, "https://api.github.com")
+	var target any
+	err := fetchObject(context.Background(), client, "/repos/acme/api", &target)
+	if !errors.Is(err, providerfoundation.ErrNormalizationInvalid) {
+		t.Fatalf("error=%v, want ErrNormalizationInvalid", err)
+	}
+	var tooLarge *providerfoundation.ObjectTooLargeError
+	if errors.As(err, &tooLarge) {
+		t.Fatalf("error=%v, want the bare sentinel, not ObjectTooLargeError, for malformed-but-small JSON", err)
+	}
+}
+
 type noRequestDoer struct{}
 
 func (noRequestDoer) Do(*http.Request) (*http.Response, error) {

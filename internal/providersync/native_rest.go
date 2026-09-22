@@ -1,6 +1,7 @@
 package providersync
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -666,7 +667,32 @@ func fetchObject(ctx context.Context, client *providerfoundation.HTTPClient, pat
 		return err
 	}
 	defer response.Body.Close()
-	decoder := json.NewDecoder(io.LimitReader(response.Body, nativeMaxObjectBytes+1))
+	// Read into a bounded buffer first, rather than decoding straight off a
+	// LimitReader, so a response that legitimately exceeds the cap is
+	// reported as ITS OWN error (ObjectTooLargeError, with the path/cap/
+	// content-length that caused it) instead of collapsing into the same
+	// bare ErrNormalizationInvalid a genuinely malformed body produces. A
+	// caller with its own truncation-recovery path (github/files' recursive
+	// tree walk) needs to tell the two apart.
+	//
+	// The cap check runs BEFORE the read-error check, not after: io.Reader
+	// permits a single Read to return n>0 bytes together with a non-nil
+	// error (io.ReadAll keeps whatever bytes it already accumulated in that
+	// case), so a transport hiccup on the very read that crosses the cap
+	// would otherwise report readErr first and silently drop the cap signal
+	// the caller needs.
+	body, readErr := io.ReadAll(io.LimitReader(response.Body, nativeMaxObjectBytes+1))
+	if len(body) > nativeMaxObjectBytes {
+		return &providerfoundation.ObjectTooLargeError{
+			Path:          path,
+			CapBytes:      nativeMaxObjectBytes,
+			ContentLength: response.ContentLength,
+		}
+	}
+	if readErr != nil {
+		return providerfoundation.ErrNormalizationInvalid
+	}
+	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.UseNumber()
 	if err := decoder.Decode(target); err != nil {
 		return providerfoundation.ErrNormalizationInvalid

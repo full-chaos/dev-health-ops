@@ -91,6 +91,13 @@ type gitHubTreeEntry struct {
 // its own sha until every path is enumerated. A subtree that itself reports
 // truncated, or any fetch that fails partway through the walk, fails the
 // whole inventory rather than writing a partial one.
+//
+// A repository can also produce a well-formed, NOT-truncated recursive
+// listing that is simply bigger than the shared per-object response cap
+// (fetchObject/nativeMaxObjectBytes); GitHub never sets its own truncated
+// flag for that case, since the cap truncates the body before that field
+// would even be reached. That case is treated exactly like GitHub's own
+// truncated=true and recovers through the same non-recursive walk (CHAOS-6268).
 type GitHubFilesRouteHandler struct{}
 
 func (GitHubFilesRouteHandler) Collect(
@@ -137,17 +144,34 @@ func (GitHubFilesRouteHandler) Collect(
 	if treeRef == "" {
 		return gitHubFilesBatch(claim, repoPayload.FullName, nil, normalizedAt, requests, 0, false, false)
 	}
+	// The recursive tree listing is read through the shared per-object cap
+	// (fetchObject/nativeMaxObjectBytes). A repository with enough entries
+	// can legitimately produce a response over that cap without GitHub ever
+	// setting its own `truncated` flag -- the cap truncates the body before
+	// that field would even be reached. Treat a cap hit here exactly like
+	// GitHub's own truncated=true: fall back to the same non-recursive walk,
+	// rather than failing the unit over a well-formed response that was
+	// simply too big for the shared cap.
 	var tree gitHubTreePayload
-	if err := fetchObject(ctx, client, root+"/git/trees/"+url.PathEscape(treeRef)+"?recursive=true", &tree); err != nil {
-		if err := continueGitHubFilesTraversal(err, repoPayload.FullName); err != nil {
+	treeErr := fetchObject(ctx, client, root+"/git/trees/"+url.PathEscape(treeRef)+"?recursive=true", &tree)
+	var tooLarge *providerfoundation.ObjectTooLargeError
+	treeCapExceeded := errors.As(treeErr, &tooLarge)
+	if treeCapExceeded {
+		slog.Warn(
+			"github files tree response exceeded the shared object cap; falling back to non-recursive walk",
+			"repository", repoPayload.FullName, "path", tooLarge.Path,
+			"cap_bytes", tooLarge.CapBytes, "content_length", tooLarge.ContentLength,
+		)
+	} else if treeErr != nil {
+		if err := continueGitHubFilesTraversal(treeErr, repoPayload.FullName); err != nil {
 			return CompleteRouteBatch{}, err
 		}
 		return gitHubFilesBatch(claim, repoPayload.FullName, nil, normalizedAt, requests, 0, false, false)
 	}
 	var paths []string
 	var sizes map[string]*int
-	subtreeWalked := tree.Truncated
-	if tree.Truncated {
+	subtreeWalked := treeCapExceeded || tree.Truncated
+	if subtreeWalked {
 		walkedPaths, walkedSizes, walkErr := gitHubWalkTree(ctx, client, root, treeRef, "")
 		if walkErr != nil {
 			err := fmt.Errorf("ref=%s: %w", treeRef, walkErr)

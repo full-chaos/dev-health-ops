@@ -37,9 +37,13 @@ _TEST_USER = AuthenticatedUser(
 )
 
 
+def _override_get_current_user() -> AuthenticatedUser:
+    return _TEST_USER
+
+
 @pytest.fixture(autouse=True)
 def _authenticated() -> Iterator[None]:
-    app.dependency_overrides[get_current_user] = lambda: _TEST_USER
+    app.dependency_overrides[get_current_user] = _override_get_current_user
     yield
     app.dependency_overrides.pop(get_current_user, None)
 
@@ -116,5 +120,8 @@ def test_get_home_unauthenticated_still_401s():
     try:
         resp = client.get("/api/v1/home")
     finally:
-        app.dependency_overrides[get_current_user] = lambda: _TEST_USER
+        # A plain assignment, not a lambda literal, to keep the finally
+        # block free of anything CodeQL's py/exit-from-finally check could
+        # read as an early-exit statement.
+        app.dependency_overrides[get_current_user] = _override_get_current_user
     assert resp.status_code == 401, resp.text

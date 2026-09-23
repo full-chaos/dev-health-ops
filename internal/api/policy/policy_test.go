@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 )
 
@@ -548,3 +549,27 @@ type retryable struct{}
 
 func (retryable) Error() string     { return "not sent" }
 func (retryable) SafeToRetry() bool { return true }
+
+// A response body is an ordered *pyjson.Object, never a Go map: the
+// standard library sorts map keys, Python keeps declared order. A map that
+// reaches WriteJSON is refused loudly (500), not written in sorted order.
+func TestWriteJSONKeepsDeclaredOrderAndRefusesMaps(t *testing.T) {
+	ordered := pyjson.NewObject()
+	ordered.Set("zeta", 1)
+	ordered.Set("alpha", "é ")
+	recorder := httptest.NewRecorder()
+	WriteJSON(recorder, http.StatusOK, ordered, nil)
+	if got, want := recorder.Body.String(), "{\"zeta\":1,\"alpha\":\"é \"}"; recorder.Code != http.StatusOK || got != want {
+		t.Fatalf("ordered body = %d %q, want 200 %q", recorder.Code, got, want)
+	}
+	recorder = httptest.NewRecorder()
+	WriteJSON(recorder, http.StatusOK, map[string]any{"zeta": 1, "alpha": 2}, nil)
+	if recorder.Code != http.StatusInternalServerError || recorder.Body.String() != `{"detail":"Internal Server Error"}` {
+		t.Fatalf("map body = %d %q, want the 500 refusal", recorder.Code, recorder.Body.String())
+	}
+	recorder = httptest.NewRecorder()
+	WriteDetail(recorder, http.StatusUnauthorized, ErrorDetail("Invalid token"), nil)
+	if got := recorder.Body.String(); got != `{"detail":{"message":"Invalid token"}}` {
+		t.Fatalf("detail body = %q", got)
+	}
+}

@@ -60,3 +60,13 @@ zstandard==0.25.0
 # pytz is required by clickhouse-connect 0.15.1's tzutil at IMPORT time; the
 # --no-deps install is what surfaced it.
 pytz==2026.2
+
+# --- the Postgres audit-table migration proof ---
+# internal/joboperator's TestEveryAuditedActionPassesTheMigratedAuditConstraints
+# runs the real alembic migrations that shape worker_operator_audits (0047,
+# 0136, 0137) through alembic's Operations against its Postgres container.
+# Same job, same no-deps install; versions from uv.lock.
+alembic==1.18.4
+Mako==1.3.12
+MarkupSafe==3.0.3
+psycopg2-binary==2.9.12

@@ -56,6 +56,11 @@ on:
       - 'src/dev_health_ops/__init__.py'
       - 'src/dev_health_ops/cli.py'
       - 'src/dev_health_ops/storage/repository_rows.py'
+      # internal/joboperator's tests read the worker_operator_audits
+      # migrations: the unit test parses 0137's action tuple against
+      # AuditedActions, and the Postgres integration test applies 0047, 0136
+      # and 0137. A migration of that table changes what those tests assert.
+      - 'src/dev_health_ops/alembic/versions/*worker_operator_audits*.py'
       - 'src/dev_health_ops/sync/**'
       - 'src/dev_health_ops/workers/**'
       - 'src/dev_health_ops/workers/job_contracts/**'
@@ -175,6 +180,11 @@ on:
       - 'src/dev_health_ops/__init__.py'
       - 'src/dev_health_ops/cli.py'
       - 'src/dev_health_ops/storage/repository_rows.py'
+      # internal/joboperator's tests read the worker_operator_audits
+      # migrations: the unit test parses 0137's action tuple against
+      # AuditedActions, and the Postgres integration test applies 0047, 0136
+      # and 0137. A migration of that table changes what those tests assert.
+      - 'src/dev_health_ops/alembic/versions/*worker_operator_audits*.py'
       - 'src/dev_health_ops/sync/**'
       - 'src/dev_health_ops/workers/**'
       - 'src/dev_health_ops/workers/job_contracts/**'

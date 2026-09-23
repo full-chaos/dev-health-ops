@@ -1,25 +1,21 @@
 # The required `venue-oracles` check, in ONE always-run workflow.
 #
-# WHY (CHAOS-6337). `venue-oracles` (CHAOS-6314) started life as a job inside
-# go.yml, which is path-filtered: it only triggers when the diff touches
-# go.yml's own Go-relevant `paths` list. #2847 then promoted the job to a
-# REQUIRED status check on main -- but a PR touching none of those paths (a
-# Helm chart, a shell CI fixture, a docs page) never triggers go.yml at all,
-# so the required context never posts. The PR sits `mergeStateStatus: BLOCKED`
-# forever with every reported check green, and no rebase fixes it, because the
-# workflow that would produce the context simply never runs for that diff.
-# Reproduced on #2853 (CHAOS-6324): a helm+shell-only PR, CI fully green,
-# `venue-oracles` absent from the status-check rollup entirely -- not
-# pending, not failed, never reported.
+# WHY. A workflow that is path-filtered can never satisfy a required status
+# check for a diff that touches none of its listed paths: the workflow never
+# triggers at all, so the required context never posts. GitHub then reports
+# the PR as permanently blocked from merging, with every OTHER check green --
+# not pending, not failed, simply never produced, and no rebase fixes it,
+# because the workflow that would produce the context genuinely never runs
+# for that diff.
 #
-# Same root cause as CHAOS-4834's `go-quality` incident, so the same fix
-# applies: deciding relevance in the workflow TRIGGER is what breaks a
-# required check. A second, path-filtered "skip" workflow reporting the same
-# context would only reproduce CHAOS-4834's other failure mode -- two runners
-# racing to report one required context, with no guarantee which one branch
-# protection honours. This workflow has NO path filter (it always runs) and
-# decides relevance INSIDE the job instead, so there is exactly one producer
-# of the `venue-oracles` context and it always reports honestly.
+# A second, path-filtered "skip" workflow reporting the same context is not
+# the fix either: two workflows producing the same required context race to
+# report it, with no guarantee which one branch protection honours. This
+# workflow has NO path filter (it always runs, on every pull_request, every
+# push to main, and merge_group) and decides relevance INSIDE the job
+# instead, so there is exactly one producer of the `venue-oracles` context
+# and it always reports honestly -- either it ran the real oracle suite, or
+# it says in plain text that it skipped and why.
 #
 # THE PATTERN LIST IS NOT RESTATED HERE either: relevance is read via
 # `ci/go_relevance.py`, the same decider go-quality.yml already uses, against
@@ -52,7 +48,7 @@ concurrency:
 
 jobs:
   venue-oracles:
-    # venue-oracles (originally CHAOS-6314): every venue differential oracle
+    # venue-oracles: every venue differential oracle
     # test (internal/testsupport/venueoracle) against the REAL Python api and
     # the REAL Go api on two copies of one Alembic-migrated Postgres. Distinct
     # from `ci/check_go.sh live-python-oracles` (go-quality's own step): that

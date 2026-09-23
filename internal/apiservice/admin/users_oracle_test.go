@@ -71,6 +71,16 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), orgID, memberID
 		{Name: "get user not found", Method: "GET", Path: "/api/v1/admin/users/" + uuid.New().String(), Headers: authHeaders},
 		{Name: "create user", Method: "POST", Path: "/api/v1/admin/users", Headers: jsonHeaders,
 			Body: venueoracle.B64(`{"email":"venue-newuser@example.com","password":"a brand new password 7"}`)},
+		// create_user carries no route-level auth dependency of its own --
+		// admin/router.py's whole router requires require_admin -- so an
+		// unauthenticated request (no Authorization header at all) must
+		// 401 the same as any other admin route, never succeed. A live
+		// round found this route registered Public, letting an
+		// unauthenticated caller create an arbitrary user, including
+		// is_superuser:true.
+		{Name: "unauthenticated create user", Method: "POST", Path: "/api/v1/admin/users",
+			Headers: map[string]string{"Content-Type": "application/json"},
+			Body:    venueoracle.B64(`{"email":"venue-unauth-root@example.com","password":"a brand new password 9","is_superuser":true}`)},
 		// A whitespace-only username is truthy in Python (any non-empty
 		// string is), so UserService.create lowers/strips it to "" and
 		// stores/returns an EMPTY STRING, never null -- a live round found

@@ -20,7 +20,7 @@ func (h *handlers) userRoutes() []httpapi.Route {
 	return []httpapi.Route{
 		{Method: http.MethodGet, Pattern: usersPrefix + "/users", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.listUsers))},
 		{Method: http.MethodGet, Pattern: usersPrefix + "/users/{user_id}", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.getUser))},
-		{Method: http.MethodPost, Pattern: usersPrefix + "/users", Handler: h.bodyFirst(policy.Public, http.HandlerFunc(h.createUser))},
+		{Method: http.MethodPost, Pattern: usersPrefix + "/users", Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.createUser))},
 		{Method: http.MethodPatch, Pattern: usersPrefix + "/users/{user_id}", Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.updateUser))},
 		{Method: http.MethodPost, Pattern: usersPrefix + "/users/{user_id}/password",
 			Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.setUserPassword)), RateLimitPerSecond: 1, RateLimitBurst: 10},

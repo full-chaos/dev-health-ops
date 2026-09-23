@@ -18,6 +18,9 @@ type ingestError struct {
 	Code    string
 	Message string
 	Errors  []ValidationErrorItem
+	// Details are pydantic error dicts (errors=[dict(e) ...]); when set the
+	// body is written with pyjson, key order and all, as JSONResponse does.
+	Details []pyjson.Value
 }
 
 func (e *ingestError) Error() string { return e.Message }
@@ -46,7 +49,12 @@ func writeIngestError(w http.ResponseWriter, err *ingestError) {
 	errorObject := pyjson.NewObject()
 	errorObject.Set("code", err.Code)
 	errorObject.Set("message", err.Message)
-	if len(err.Errors) > 0 {
+	if err.Details != nil {
+		// errors=[dict(e) ...]: parseEnvelope has already checked that
+		// they render.
+		errorObject.Set("errors", err.Details)
+	}
+	if err.Details == nil && len(err.Errors) > 0 {
 		items := make([]pyjson.Value, len(err.Errors))
 		for i, item := range err.Errors {
 			items[i] = item.toPyJSON()

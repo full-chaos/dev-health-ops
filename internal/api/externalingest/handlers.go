@@ -150,7 +150,7 @@ func (d Deps) handleValidate() http.HandlerFunc {
 		}
 		envelope, err := parseEnvelope(raw)
 		if err != nil {
-			writeIngestError(w, newIngestError(http.StatusBadRequest, "invalid_envelope", err.Error()))
+			writeIngestError(w, err.(*ingestError))
 			return
 		}
 		if envelope.SchemaVersion != schemaVersion {
@@ -234,7 +234,7 @@ func (d Deps) handleAcceptBatch() http.HandlerFunc {
 		}
 		envelope, err := parseEnvelope(raw)
 		if err != nil {
-			writeIngestError(w, newIngestError(http.StatusBadRequest, "invalid_envelope", err.Error()))
+			writeIngestError(w, err.(*ingestError))
 			return
 		}
 		if idempotencyHeader := r.Header.Get("Idempotency-Key"); idempotencyHeader != "" && idempotencyHeader != envelope.IdempotencyKey {

@@ -61,8 +61,23 @@ type EnvelopeRecord struct {
 // ValidEnvelope is the part of a validated BatchEnvelope the admin validate
 // route reads.
 type ValidEnvelope struct {
-	SchemaVersion string
-	Records       []EnvelopeRecord
+	SchemaVersion  string
+	IdempotencyKey string
+	Source         ValidSource
+	// Window is nil when absent or null.
+	Window  *ValidWindow
+	Records []EnvelopeRecord
+}
+
+// ValidSource is a validated SourceDescriptor, defaults applied.
+type ValidSource struct {
+	Type, System, Instance, EntityFamily string
+	Producer, ProducerVersion            *string
+}
+
+// ValidWindow is a validated IngestWindow.
+type ValidWindow struct {
+	StartedAt, EndedAt pytime.DateTime
 }
 
 // ErrNaiveAwareComparison is the TypeError IngestWindow's validator raises
@@ -235,8 +250,16 @@ func (v *envelopeValidator) batch(value pyjson.Value) *ValidEnvelope {
 	fields := []jsonField{
 		{name: "schema_version", alias: "schemaVersion", validate: v.str(0, 0)},
 		{name: "idempotency_key", alias: "idempotencyKey", validate: v.str(1, 255)},
-		{name: "source", validate: v.source},
-		{name: "window", hasDefault: true, validate: v.window},
+		{name: "source", validate: func(value pyjson.Value, loc []pyjson.Value) bool {
+			source, ok := v.source(value, loc)
+			out.Source = source
+			return ok
+		}},
+		{name: "window", hasDefault: true, validate: func(value pyjson.Value, loc []pyjson.Value) bool {
+			window, ok := v.window(value, loc)
+			out.Window = window
+			return ok
+		}},
 		{name: "records", validate: func(value pyjson.Value, loc []pyjson.Value) bool {
 			records, ok := v.records(value, loc)
 			out.Records = records
@@ -248,11 +271,12 @@ func (v *envelopeValidator) batch(value pyjson.Value) *ValidEnvelope {
 		return nil
 	}
 	out.SchemaVersion, _ = values["schema_version"].(string)
+	out.IdempotencyKey, _ = values["idempotency_key"].(string)
 	return out
 }
 
-func (v *envelopeValidator) source(value pyjson.Value, loc []pyjson.Value) bool {
-	_, ok := v.model("SourceDescriptor", value, loc, []jsonField{
+func (v *envelopeValidator) source(value pyjson.Value, loc []pyjson.Value) (ValidSource, bool) {
+	values, ok := v.model("SourceDescriptor", value, loc, []jsonField{
 		{name: "type", hasDefault: true, validate: v.literal("customer_push")},
 		{name: "system", validate: v.literal("github", "gitlab", "jira", "linear", "pagerduty", "atlassian", "custom")},
 		{name: "instance", validate: v.str(1, 255)},
@@ -260,16 +284,34 @@ func (v *envelopeValidator) source(value pyjson.Value, loc []pyjson.Value) bool 
 		{name: "producer", hasDefault: true, validate: v.nullableStr},
 		{name: "producer_version", alias: "producerVersion", hasDefault: true, validate: v.nullableStr},
 	})
-	return ok
+	if !ok {
+		return ValidSource{}, false
+	}
+	source := ValidSource{Type: "customer_push", EntityFamily: legacyEntityFamily}
+	if text, ok := values["type"].(string); ok {
+		source.Type = text
+	}
+	source.System, _ = values["system"].(string)
+	source.Instance, _ = values["instance"].(string)
+	if text, ok := values["entity_family"].(string); ok {
+		source.EntityFamily = text
+	}
+	if text, ok := values["producer"].(string); ok {
+		source.Producer = &text
+	}
+	if text, ok := values["producer_version"].(string); ok {
+		source.ProducerVersion = &text
+	}
+	return source, true
 }
 
 // window is `IngestWindow | None`: two datetimes, and _ended_after_started
 // once both are valid.
-func (v *envelopeValidator) window(value pyjson.Value, loc []pyjson.Value) bool {
+func (v *envelopeValidator) window(value pyjson.Value, loc []pyjson.Value) (*ValidWindow, bool) {
 	if value == nil {
-		return true
+		return nil, true
 	}
-	var started *pytime.DateTime
+	var started, endedAt *pytime.DateTime
 	_, ok := v.model("IngestWindow", value, loc, []jsonField{
 		{name: "started_at", alias: "startedAt", validate: func(item pyjson.Value, at []pyjson.Value) bool {
 			parsed, ok := v.datetime(item, at)
@@ -280,6 +322,9 @@ func (v *envelopeValidator) window(value pyjson.Value, loc []pyjson.Value) bool 
 		}},
 		{name: "ended_at", alias: "endedAt", validate: func(item pyjson.Value, at []pyjson.Value) bool {
 			ended, ok := v.datetime(item, at)
+			if ok {
+				endedAt = &ended
+			}
 			if !ok || started == nil {
 				return ok
 			}
@@ -299,7 +344,10 @@ func (v *envelopeValidator) window(value pyjson.Value, loc []pyjson.Value) bool 
 			return true
 		}},
 	})
-	return ok
+	if !ok || started == nil || endedAt == nil {
+		return nil, ok
+	}
+	return &ValidWindow{StartedAt: *started, EndedAt: *endedAt}, true
 }
 
 // records is `list[RecordEnvelope] = Field(..., min_length=1)`.

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -231,4 +232,77 @@ func renderDicts(errs []PydanticError) string {
 		return "UNRENDERABLE"
 	}
 	return string(text)
+}
+
+// pythonDataPlaneParseProgram answers each body as router.py's
+// _parse_envelope_or_400 does through the Python api's handlers: 200
+// "valid", the 400 external_ingest_error_body JSONResponse, or the
+// unhandled 500 when that response cannot be rendered or the validator
+// raises.
+const pythonDataPlaneParseProgram = `
+import base64, json, sys
+from pydantic import ValidationError
+from starlette.responses import JSONResponse
+from dev_health_ops.api.external_ingest.schemas import BatchEnvelope
+from dev_health_ops.api.external_ingest.errors import external_ingest_error_body
+out = []
+for raw in json.loads(sys.stdin.read()):
+    body = base64.b64decode(raw)
+    try:
+        BatchEnvelope.model_validate_json(body)
+        out.append([200, "valid"])
+        continue
+    except ValidationError as exc:
+        try:
+            response = JSONResponse(status_code=400, content=external_ingest_error_body(
+                "invalid_envelope", "Malformed batch envelope", [dict(e) for e in exc.errors()]))
+            out.append([400, response.body.decode()])
+            continue
+        except Exception:
+            pass
+    except Exception:
+        pass
+    out.append([500, json.dumps(external_ingest_error_body("internal_error", "Internal Server Error"), separators=(",", ":"))])
+print(json.dumps(out))
+`
+
+// TestDataPlaneEnvelopeParseMatchesLivePython compares the data plane's
+// parseEnvelope answers (status and body bytes, written by
+// writeIngestError) with the Python api's on envelopeCorpus.
+func TestDataPlaneEnvelopeParseMatchesLivePython(t *testing.T) {
+	root, python := oracleRoot(t)
+	corpus := envelopeCorpus()
+	encoded := make([]string, len(corpus))
+	for index, body := range corpus {
+		encoded[index] = base64.StdEncoding.EncodeToString(body)
+	}
+	input, _ := json.Marshal(encoded)
+	output := runPython(t, root, python, pythonDataPlaneParseProgram, input)
+	lines := bytes.Split(bytes.TrimSpace(output), []byte("\n"))
+	var want [][2]any
+	if err := json.Unmarshal(lines[len(lines)-1], &want); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	mismatches, statuses := 0, map[int]int{}
+	for index, body := range corpus {
+		status, text := 200, "valid"
+		if _, err := parseEnvelope(body); err != nil {
+			recorder := httptest.NewRecorder()
+			writeIngestError(recorder, err.(*ingestError))
+			status, text = recorder.Code, strings.TrimSpace(recorder.Body.String())
+		}
+		statuses[status]++
+		wantStatus, wantText := int(want[index][0].(float64)), want[index][1].(string)
+		if status != wantStatus || text != wantText {
+			mismatches++
+			if mismatches <= 10 {
+				t.Errorf("%q:\n  go     %d %s\n  python %d %s", body, status, text, wantStatus, wantText)
+			}
+		}
+	}
+	if mismatches > 0 {
+		t.Fatalf("%d of %d bodies differ", mismatches, len(corpus))
+	}
+	writeOracleProof(t, "externalingest-data-plane-parse")
+	t.Logf("%d bodies compared (statuses %v); 0 mismatches", len(corpus), statuses)
 }

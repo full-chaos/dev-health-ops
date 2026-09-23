@@ -589,13 +589,13 @@ check_live_python_oracles() {
       PYTHON="${PYTHON:-python3}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^(TestSchemaBundleMatchesLivePython|TestOperationalProviderInstanceMatchesLivePython|TestRecordModelsGoldenMatchesLivePython|TestRecordValidationMatchesLivePython|TestEnvelopeValidationMatchesLivePython)$' \
+        -run '^(TestSchemaBundleMatchesLivePython|TestOperationalProviderInstanceMatchesLivePython|TestRecordModelsGoldenMatchesLivePython|TestRecordValidationMatchesLivePython|TestEnvelopeValidationMatchesLivePython|TestDataPlaneEnvelopeParseMatchesLivePython)$' \
         ./internal/api/externalingest
   ); then
     rm -rf -- "${proof_dir}"
     return 1
   fi
-  for proof_name in externalingest-schema-bundle externalingest-operational-host externalingest-record-models externalingest-record-validation externalingest-envelope-validation; do
+  for proof_name in externalingest-schema-bundle externalingest-operational-host externalingest-record-models externalingest-record-validation externalingest-envelope-validation externalingest-data-plane-parse; do
     proof_file="${proof_dir}/${proof_name}"
     if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
       printf 'ERROR: externalingest live Python oracle %s did not run\n' "${proof_name}" >&2

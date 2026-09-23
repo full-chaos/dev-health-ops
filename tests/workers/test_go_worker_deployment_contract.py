@@ -384,7 +384,6 @@ def test_go_worker_groups_are_enabled_by_default_under_go_default_state() -> Non
             "COORDINATOR_DATABASE_URI",
             "POSTGRES_URI",
             "WORKER_DATABASE_URI",
-            "WORKER_OPERATOR_TOKEN",
         ],
     }
 

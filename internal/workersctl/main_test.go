@@ -333,7 +333,7 @@ func TestManifestQueueStatusSourceCombinesFreshQueueAndPresenceState(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	principal := joboperator.Principal{Type: "service_credential", ID: "00000000-0000-4000-8000-000000000303"}
+	principal := joboperator.OperatorPrincipal
 	source := manifestQueueStatusSource{
 		service: service, principal: principal, manifest: manifest, budget: budget,
 		presence: func(context.Context) ([]jobruntime.WorkerPresenceSummary, error) {
@@ -400,10 +400,7 @@ func TestDispatchQueuesDrainAndUndrainRequireExplicitQueues(t *testing.T) {
 	runtime := &operatorRuntime{
 		service:          service,
 		queueControlMode: "direct",
-		principal: joboperator.Principal{
-			Type: "service_credential",
-			ID:   "00000000-0000-4000-8000-000000000303",
-		},
+		principal:        joboperator.OperatorPrincipal,
 	}
 	var stdout, stderr bytes.Buffer
 	code := dispatch(context.Background(), runtime, []string{
@@ -506,10 +503,7 @@ func commandRuntime(t *testing.T, authorizer joboperator.Authorizer) *operatorRu
 	return &operatorRuntime{
 		service:          service,
 		queueControlMode: "direct",
-		principal: joboperator.Principal{
-			Type: "service_credential",
-			ID:   "00000000-0000-4000-8000-000000000303",
-		},
+		principal:        joboperator.OperatorPrincipal,
 	}
 }
 

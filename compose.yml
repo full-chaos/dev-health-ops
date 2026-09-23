@@ -205,11 +205,10 @@ x-go-worker-route-activate:
     tmpfs: [/tmp]
     environment:
       <<: *go-worker-env-base
-      WORKER_OPERATOR_TOKEN_FILE: /run/go-worker-operator/token
-    volumes:
-      - go_worker_operator_token:/run/go-worker-operator:ro
     depends_on:
-      go-worker-operator-credential:
+      # The route tables are alembic's (0049); River's schema is
+      # go-river-migrate's.
+      migrate:
         condition: service_completed_successfully
       go-river-migrate:
         condition: service_completed_successfully
@@ -224,11 +223,6 @@ volumes:
   postgres_data:
     driver: local
   clickhouse_data:
-    driver: local
-  # Route activation for a Go-default bring-up: holds the
-  # one-shot operator credential go-worker-operator-credential mints, read
-  # by the go-sync-*-route-activate chain below.
-  go_worker_operator_token:
     driver: local
 
 services:
@@ -1115,90 +1109,13 @@ services:
   # readiness on that drift, since nothing actually consumes Celery
   # anymore. Folded in from the proven design already running the shared
   # bigboy stack (compose/compose.go.workers.yml, untracked, outside this
-  # repository): `dho workers` mints and uses an audited operator
-  # credential to flip each kind to `river`, the exact reference
+  # repository): `dho workers routes apply` flips each kind to `river`,
+  # audited, the exact reference
   # implementation option (a) names. This is the default for THIS file;
   # `sync.provider_unit`'s own canary-route activation (the fifth
   # `job-routes apply` the bigboy overlay also runs) is NOT folded in --
   # that promotion is a separate, already-tracked decision, not a
   # compose default.
-  #
-  # dho workers authenticates its very first database action (the
-  # operator token) against `internal_service_credentials` -- there is no
-  # Go-native way to mint that row, so this one-shot reuses the existing
-  # Python CLI command the bigboy overlay also uses
-  # (`service-credentials create`), same local build as `migrate`/`worker`
-  # above. Idempotent by construction: it only mints a token when the
-  # shared volume file is empty.
-  go-worker-operator-credential:
-    # Declared alongside `build:` so an operator pin is honoured: this is a
-    # staging file, `pull_policy` is left at Compose's own default, and a
-    # one-shot job that keeps building locally while the long-running
-    # services honour a release pin is how a setup step ends up running a
-    # different build of the same binary. The default is the `:local` tag
-    # of the same family, which no registry publishes: unpinned, Compose
-    # builds it from THIS tree, so a start is one coherent revision. A
-    # published moving tag as the default was worse than no pin at all --
-    # present on the host from any earlier pull, Compose ran THAT image
-    # instead of building, putting a months-old migration beside a fleet
-    # built today. Two consequences, both deliberate: with no pin and no
-    # prior build there is nothing for `--no-build` to run, and `:local`
-    # is shared across compose projects on one host.
-    image: ${DEV_HEALTH_IMAGE:-ghcr.io/full-chaos/dev-hops-runner:local}
-    build:
-      context: .
-      dockerfile: ./docker/Dockerfile
-      target: runner
-      args:
-        SETUPTOOLS_SCM_PRETEND_VERSION: 0.0.0
-        COMMIT: ${COMMIT:-unknown}
-        BUILD_TIME: ${BUILD_TIME:-1970-01-01T00:00:00Z}
-    restart: "no"
-    read_only: true
-    # codex proof (executed): Docker creates a named volume's mount point
-    # root:root, so the usual 65532:65532 non-root user this file's other
-    # one-shot steps run as cannot write the token file into it at all
-    # ("Permission denied" -- reproduced, then fixed). Matches the bigboy
-    # overlay's own `user: "0:0"` for this exact service; the minted file
-    # is chown'd to 65532:65532 and chmod 0400 below, so the route-activate
-    # chain (which mounts this volume read-only as that same non-root user)
-    # can read it, but nothing else can. codex proof (executed, three
-    # rounds): dropping every capability (this file's usual one-shot
-    # convention) made even uid 0 fail "Operation not permitted" on, in
-    # order, the initial file create (needs DAC_OVERRIDE -- a dropped-
-    # capability root does not bypass permission bits the way an
-    # unconstrained root does), `chown` (needs CHOWN), and `chmod` of the
-    # now-non-root-owned file (needs FOWNER) -- reproduced and fixed each
-    # time. Add back only those three rather than keep every root
-    # capability, which is what the bigboy overlay's own version of this
-    # service does instead.
-    user: "0:0"
-    cap_drop: [ALL]
-    cap_add: [CHOWN, FOWNER, DAC_OVERRIDE]
-    security_opt: [no-new-privileges:true]
-    tmpfs: [/tmp]
-    environment:
-      <<: *env
-    entrypoint:
-      - /bin/sh
-      - -ec
-      - |
-        token=/run/go-worker-operator/token
-        if [ ! -s "$$token" ]; then
-          umask 077
-          dev-hops service-credentials create \
-            --service worker-operator \
-            --scope workers:read \
-            --scope workers:operate > "$$token.tmp"
-          chown 65532:65532 "$$token.tmp"
-          chmod 0400 "$$token.tmp"
-          mv "$$token.tmp" "$$token"
-        fi
-    volumes:
-      - go_worker_operator_token:/run/go-worker-operator
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
 
   go-sync-dispatch-route-activate:
     <<: *go-worker-route-activate
@@ -1229,7 +1146,7 @@ services:
       # with four parallel one-shot containers.
       go-sync-dispatch-route-activate:
         condition: service_completed_successfully
-      go-worker-operator-credential:
+      migrate:
         condition: service_completed_successfully
       go-river-migrate:
         condition: service_completed_successfully
@@ -1254,7 +1171,7 @@ services:
     depends_on:
       go-sync-finalize-route-activate:
         condition: service_completed_successfully
-      go-worker-operator-credential:
+      migrate:
         condition: service_completed_successfully
       go-river-migrate:
         condition: service_completed_successfully
@@ -1279,7 +1196,7 @@ services:
     depends_on:
       go-sync-post-route-activate:
         condition: service_completed_successfully
-      go-worker-operator-credential:
+      migrate:
         condition: service_completed_successfully
       go-river-migrate:
         condition: service_completed_successfully

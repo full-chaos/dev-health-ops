@@ -598,8 +598,8 @@ Two things the values must NOT do:
     Set `POSTGRES_URI` instead and run River separately, per step 5.
 - **Leave `sync-provider` at `replicas: 0`.** That group cannot compose until
   the provider job-routes are activated, and the chart renders no
-  route-activation Job (Compose does this with five `*-route-activate`
-  one-shots plus `go-worker-operator-credential`). The group also serves the
+  route-activation Job (Compose does this with four `*-route-activate`
+  one-shots). The group also serves the
   `system.dimension_fold` job, so while it is at zero the lane's `repos` and
   `teams` tables keep superseded row versions until a background merge folds
   them; the scheduled fold jobs wait in `river_job` and are dropped as stale

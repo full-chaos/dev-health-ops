@@ -24,8 +24,7 @@ func NewPostgresAuditor(pool *pgxpool.Pool) (*PostgresAuditor, error) {
 }
 
 func (auditor *PostgresAuditor) Begin(ctx context.Context, event AuditEvent) (AuditHandle, error) {
-	if auditor == nil || auditor.pool == nil || event.Principal.Type != "service_credential" ||
-		!uuidIdentifier.MatchString(event.Principal.ID) || event.CreatedAt.IsZero() {
+	if auditor == nil || auditor.pool == nil || event.Principal != OperatorPrincipal || event.CreatedAt.IsZero() {
 		return nil, ErrAuditUnavailable
 	}
 	var auditID int64
@@ -33,9 +32,8 @@ func (auditor *PostgresAuditor) Begin(ctx context.Context, event AuditEvent) (Au
 		INSERT INTO public.worker_operator_audits (
 			credential_id, principal_type, principal_id, action, resource_type,
 			resource_id, reason_code, correlation_id, status, created_at
-		) VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, 'started', $9)
+		) VALUES (NULL, $1, $2, $3, $4, $5, $6, $7, 'started', $8)
 		RETURNING id`,
-		event.Principal.ID,
 		event.Principal.Type,
 		event.Principal.ID,
 		string(event.Action),

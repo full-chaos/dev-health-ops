@@ -28,10 +28,10 @@ Every mutating command below is `dho workers` (Go binary; compose service `go-wo
 does not include `go-cutover` and a real redrive has already run a stale operator image that silently lacked
 a needed subcommand because of this.
 
-Auth: `WORKER_OPERATOR_TOKEN`/`WORKER_OPERATOR_TOKEN_FILE` for job-list/cancel/retry and the providersync/
-sync-dispatch-outbox cleanups; the metrics/workgraph repair verbs (`workgraph repair`, `metrics execution-repair`,
-bulk `daily-redrive`) run Go-native Postgres transactions on the operator (coordinator) DB role and need no
-repair token or API bridge (CHAOS-5459). `dev-hops` = the Python CLI (`src/dev_health_ops/cli.py`); every `dev-hops metrics ...`
+Auth: none beyond exec access to a worker pod and its database DSNs -- `dho workers` takes no token. Mutations
+require `--reason` and `--correlation-id` and write an audit row; the metrics/workgraph repair verbs (`workgraph repair`,
+`metrics execution-repair`, bulk `daily-redrive`) run Go-native Postgres transactions on the operator (coordinator)
+DB role and need no API bridge (CHAOS-5459). `dev-hops` = the Python CLI (`src/dev_health_ops/cli.py`); every `dev-hops metrics ...`
 verb below is marked **no longer legacy** (dispatches through the Go worker, CHAOS-5055/#2232), **legacy**
 (still a standalone Python compute path), or **deleted** (CHAOS-5307) -- see the table below for which is
 which per verb.
@@ -238,10 +238,8 @@ Without `FINAL`, ClickHouse returns an arbitrary version of rows with the same `
 - **Admin-authored team-attribution overrides**: `identities.team_ids` and `teams.manual_members` (ClickHouse,
   not Postgres) -- written only through `/org/admin/identities` and the admin Identities screen /
   drift-approval flow, never by any sync/import path.
-- **Minted operator credentials**: `WORKER_OPERATOR_TOKEN` and any other
-  minted secret -- not sync-derived data. A wipe of the credential volume (`go_worker_operator_token`)
-  requires re-minting; a stale cached operator token has already caused a real `authentication_failed` block
-  during a redrive.
+- **Minted service credentials** (`internal_service_credentials`) -- not sync-derived data. The operator CLI no
+  longer uses one, but other minted secrets there require re-minting after a wipe.
 - **Audit history / operator action log** (`joboperator.Service`'s Action/audit pipeline records) -- no
   provider re-sync recreates a record of past operator interventions.
 - **Historical ledger state** (`daily_metrics_partitions`/`daily_metrics_runs`/`metric_compatibility_executions`)

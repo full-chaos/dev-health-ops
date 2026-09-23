@@ -1348,12 +1348,14 @@ def test_go_profile_overlay_never_depends_on_python_migrate() -> None:
         "go-river-provision",
         "go-river-migrate",
         "go-contractcheck",
-        # The route-activation chain's own credential-minting step
-        # reuses the Python `service-credentials create` CLI (no Go-native
-        # equivalent exists) and, like go-river-provision, legitimately
-        # waits on `migrate` for the same reason -- it is a one-shot setup
-        # step, not a long-running process that could move traffic.
-        "go-worker-operator-credential",
+        # The route-activation chain applies routes in tables alembic
+        # creates (0049), so like go-river-provision it legitimately waits
+        # on `migrate`; each is a one-shot setup step, not a long-running
+        # process that could move traffic.
+        "go-sync-dispatch-route-activate",
+        "go-sync-finalize-route-activate",
+        "go-sync-post-route-activate",
+        "go-sync-reference-route-activate",
     }
     go_services = {
         name: spec

@@ -49,9 +49,7 @@ _PROVISION = f"{_RELEASE}-dev-health-provision-roles"
 _RIVER = f"{_RELEASE}-dev-health-river-migrate"
 _ROUTE_ACTIVATE = f"{_RELEASE}-dev-health-route-activate"
 _ROUTE_ACTIVATE_SECRETS = f"{_RELEASE}-dev-health-route-activate-secrets"
-_ROUTE_ACTIVATE_CREDENTIAL_SECRETS = (
-    f"{_RELEASE}-dev-health-route-activate-credential-secrets"
-)
+_ROUTE_ACTIVATE_CREDENTIAL_SECRETS = f"{_RELEASE}-dev-health-route-activate-credential-secrets"  # no longer rendered: the operator-token mint step is gone
 
 _KINDS = ("dispatch_sync_run", "finalize_sync_run", "post_sync", "reference_discovery")
 
@@ -207,12 +205,12 @@ def test_all_four_kinds_are_present_as_ordered_initcontainers() -> None:
         "initContainers"
     ]
     names = [c["name"] for c in init_containers]
-    assert names[0] == "operator-credential", names
-    assert names[1] == "route-dsn", (
+    # No operator-credential step: `dho workers` takes no token.
+    assert names[0] == "route-dsn", (
         "the DSN-building step (ops runtime image, has a shell) must run "
         f"before any route-activate-* step (distroless, no shell): {names}"
     )
-    route_names = names[2:]
+    route_names = names[1:]
     assert route_names == [f"route-activate-{k.replace('_', '-')}" for k in _KINDS], (
         f"the four routes must run in Compose's own serialized order: {route_names}"
     )
@@ -268,7 +266,8 @@ def test_each_kind_invokes_routes_apply_with_that_exact_kind(kind: str) -> None:
         env["COORDINATOR_DATABASE_URI_FILE"]
         == "/run/route-dsn/COORDINATOR_DATABASE_URI"
     ), env
-    assert env["WORKER_OPERATOR_TOKEN_FILE"] == "/run/go-worker-operator/token", env
+    # No operator token: `dho workers` has none to read.
+    assert "WORKER_OPERATOR_TOKEN_FILE" not in env, env
     assert env["RIVER_DATABASE_SCHEMA"] == "river", env
 
 
@@ -310,20 +309,6 @@ def test_route_activate_operator_image_override_is_honoured() -> None:
     for kind in _KINDS:
         image = init_containers[f"route-activate-{kind.replace('_', '-')}"]["image"]
         assert image == "ghcr.io/example/custom-operator:sha-abc123456789", image
-
-
-def test_operator_credential_uses_the_ops_image_that_carries_the_cli() -> None:
-    jobs = _jobs(*_FULL_CHAIN_ON)
-    init_containers = {
-        c["name"]: c
-        for c in jobs[_ROUTE_ACTIVATE]["spec"]["template"]["spec"]["initContainers"]
-    }
-    credential_image = init_containers["operator-credential"]["image"]
-    migrate_image = jobs[_MIGRATE]["spec"]["template"]["spec"]["containers"][0]["image"]
-    assert credential_image == migrate_image, (
-        "`dev-hops service-credentials create` lives in the ops runtime "
-        f"image, same as migrate: {credential_image} != {migrate_image}"
-    )
 
 
 def test_route_dsn_uses_the_ops_image_that_has_a_shell_and_python(
@@ -573,14 +558,11 @@ def test_role_passwords_reach_only_the_route_activate_secret_via_secretkeyref() 
 
 
 def test_route_activate_secret_is_created_before_the_job_that_reads_it() -> None:
-    # postgresql.enabled=true: the credential Secret only renders once a DSN
-    # actually resolves (r2 P1 fix) -- _FULL_CHAIN_ON alone has no bundled
-    # postgres and no secretData DSN, so riverMigrationDSN is empty there,
-    # same reason river-migrate's own dedicated Secret needs it too.
     secrets = _secrets(*_FULL_CHAIN_ON, "postgresql.enabled=true")
     assert _ROUTE_ACTIVATE_SECRETS in secrets
-    assert _ROUTE_ACTIVATE_CREDENTIAL_SECRETS in secrets
-    for name in (_ROUTE_ACTIVATE_SECRETS, _ROUTE_ACTIVATE_CREDENTIAL_SECRETS):
+    # The operator-token mint step and its credential Secret are gone.
+    assert _ROUTE_ACTIVATE_CREDENTIAL_SECRETS not in secrets
+    for name in (_ROUTE_ACTIVATE_SECRETS,):
         annotations = secrets[name]["metadata"]["annotations"]
         assert "pre-install" in annotations["helm.sh/hook"].split(",")
         weight = int(annotations["helm.sh/hook-weight"])
@@ -642,70 +624,6 @@ def test_route_activate_without_any_password_secret_fails_the_render() -> None:
 
 
 # --- entrypoint execution: idempotent mint, DSN built from parts -----------
-
-
-def test_operator_credential_script_mints_only_once(tmp_path: Path) -> None:
-    """Execute the real script against an empty, then a populated, token file."""
-    jobs = _jobs(*_FULL_CHAIN_ON)
-    init_containers = {
-        c["name"]: c
-        for c in jobs[_ROUTE_ACTIVATE]["spec"]["template"]["spec"]["initContainers"]
-    }
-    command = init_containers["operator-credential"]["command"]
-    assert command[:2] == ["/bin/sh", "-ec"], command
-    script = command[2]
-
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    calls_log = tmp_path / "calls.log"
-    stub = bin_dir / "dev-hops"
-    stub.write_text(
-        '#!/bin/sh\necho "$*" >> "$CALLS_LOG"\necho minted-token\n', encoding="utf-8"
-    )
-    stub.chmod(0o755)
-
-    run_dir = tmp_path / "run"
-    run_dir.mkdir()
-    env = {
-        "PATH": f"{bin_dir}:{os.environ['PATH']}",
-        "CALLS_LOG": str(calls_log),
-        "HOME": str(tmp_path),
-    }
-
-    def _run() -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
-            [
-                "/bin/sh",
-                "-ec",
-                script.replace("/run/go-worker-operator/token", str(run_dir / "token")),
-            ],
-            capture_output=True,
-            text=True,
-            env=env,
-        )
-
-    first = _run()
-    assert first.returncode == 0, first.stderr
-    assert (run_dir / "token").read_text(encoding="utf-8").strip() == "minted-token"
-    mint_call = calls_log.read_text(encoding="utf-8")
-    assert mint_call.count("\n") == 1, "exactly one mint call on an empty token file"
-    # codex review (r3 REPORT mutations `scope_operate`/`remove_scope_read` --
-    # SURVIVED, now killed): the stub's received argv was logged but never
-    # asserted against -- a mutation dropping either `--scope` flag from the
-    # mint command survived entirely. `service-credentials create` without
-    # `workers:read` would mint a token the operator itself would later
-    # refuse on (`authentication_failed`), same class of invisible-at-Info
-    # regression as the unencoded-DB-name P1 above.
-    assert "--service worker-operator" in mint_call, mint_call
-    assert "--scope workers:read" in mint_call, mint_call
-    assert "--scope workers:operate" in mint_call, mint_call
-
-    second = _run()
-    assert second.returncode == 0, second.stderr
-    assert calls_log.read_text(encoding="utf-8").count("\n") == 1, (
-        "a non-empty token file must short-circuit the mint -- re-running "
-        "must be a no-op, matching Compose's own guard"
-    )
 
 
 def _run_route_dsn_script(tmp_path: Path, **env: str) -> Path:
@@ -1176,290 +1094,6 @@ def test_route_activate_enabled_still_accepts_real_booleans(value: str) -> None:
 # real `dev-hops service-credentials create` CLI, see the docstring below).
 
 
-def test_route_activate_credential_secret_is_not_minted_when_secrets_are_external() -> (
-    None
-):
-    """Mirrors test_route_activate_accepts_a_pre_created_external_secret
-    (pgbouncer Secret) but for the migration Secret this hook's
-    operator-credential step actually reads.
-
-    codex review (r3 REPORT mutation `secret_owner_gate` -- SURVIVED against
-    this exact test, now killed): the original combo had NO dsn configured
-    at all, so $riverDSN was ALSO empty -- removing ONLY the
-    `secrets.create` check didn't change the outcome, because the separate
-    `$riverDSN` guard alone already suppressed the Secret. Adding
-    `postgresql.enabled=true` gives this combo a NON-EMPTY $riverDSN (the
-    bundled-postgres default connection string), which isolates the
-    `secrets.create` check: without it, the Secret would now render."""
-    secrets = _secrets(
-        *_FULL_CHAIN_ON,
-        "postgresql.enabled=true",
-        "secrets.create=false",
-        "secrets.externalSecretName=app-secrets",
-        "migrations.hook.externalSecretName=migration-secrets",
-        "goWorkers.pgbouncer.secret.create=false",
-        "goWorkers.pgbouncer.secret.externalSecretName=river-role-credentials",
-    )
-    assert _ROUTE_ACTIVATE_CREDENTIAL_SECRETS not in secrets, (
-        "the chart must not fabricate a copy of a DSN it does not own -- "
-        f"got {sorted(secrets)}"
-    )
-    # codex review mutation-table gap found while re-verifying this test
-    # (r3, P1-shaped -- executed, fixed): checking only the INTERNAL name
-    # above missed a worse shape entirely -- removing just the
-    # `secrets.create` gate (keeping `$riverDSN`) makes the chart emit a REAL
-    # `kind: Secret` object named EXACTLY "migration-secrets", the operator's
-    # OWN external Secret name, clobbering it on `helm upgrade`. The chart
-    # must never emit a Secret object under a name this lane does not own.
-    assert "migration-secrets" not in secrets, (
-        "the chart must never render a Secret object under the EXTERNAL "
-        f"secret's own name -- that overwrites what the operator owns: {sorted(secrets)}"
-    )
-
-
-@pytest.mark.parametrize(
-    ("sets", "expected_secret"),
-    [
-        (
-            ("migrations.hook.externalSecretName=migration-secrets",),
-            "migration-secrets",
-        ),
-        (
-            (),  # migrations.hook.externalSecretName absent -> falls back
-            "app-secrets",  # to secrets.externalSecretName, same as migrate-job.yaml
-        ),
-    ],
-)
-def test_route_activate_credential_mint_reads_the_operators_own_secret(
-    sets: tuple[str, ...], expected_secret: str
-) -> None:
-    jobs = _jobs(
-        *_FULL_CHAIN_ON,
-        "secrets.create=false",
-        "secrets.externalSecretName=app-secrets",
-        "goWorkers.pgbouncer.secret.create=false",
-        "goWorkers.pgbouncer.secret.externalSecretName=river-role-credentials",
-        *sets,
-    )
-    init_containers = {
-        c["name"]: c
-        for c in jobs[_ROUTE_ACTIVATE]["spec"]["template"]["spec"]["initContainers"]
-    }
-    sources = [
-        item["secretRef"]["name"]
-        for item in init_containers["operator-credential"]["envFrom"]
-        if "secretRef" in item
-    ]
-    assert sources == [expected_secret], sources
-
-
-def test_route_activate_credential_secret_still_renders_when_secrets_are_bundled() -> (
-    None
-):
-    """The gate must not accidentally suppress the create=true path."""
-    secrets = _secrets(*_FULL_CHAIN_ON, "postgresql.enabled=true")
-    assert _ROUTE_ACTIVATE_CREDENTIAL_SECRETS in secrets
-    assert secrets[_ROUTE_ACTIVATE_CREDENTIAL_SECRETS]["stringData"]["DATABASE_URI"]
-
-
-def test_route_activate_credential_secret_prefers_migration_database_uri() -> None:
-    """codex review (r3 REPORT mutation `fallback_migration_clause` --
-    SURVIVED, now killed): `dev-health.riverMigrationDSN`'s own precedence
-    (MIGRATION_DATABASE_URI first, then the Secret's other compatibility
-    aliases, then a bundled postgres) was never exercised FROM route-activate
-    specifically -- only river-migrate's sibling Secret test covers it.
-
-    A first version of this test set ONLY MIGRATION_DATABASE_URI (no
-    candidate it could lose precedence TO), so an OR-order mutation on the
-    helper survived it too -- both MIGRATION_DATABASE_URI and the bundled
-    postgres (via secretData.POSTGRES_URI, the compatibility alias the
-    helper also checks) are now set AT ONCE, to distinct values, so only
-    the correct precedence produces the expected result."""
-    secrets = _secrets(
-        *_FULL_CHAIN_ON,
-        "postgresql.enabled=true",
-        "migrations.hook.secretData.MIGRATION_DATABASE_URI=postgresql://migrator:pw@postgres:5432/devhealth",
-        "migrations.hook.secretData.POSTGRES_URI=postgresql://should-lose:pw@postgres:5432/devhealth",
-    )
-    assert (
-        secrets[_ROUTE_ACTIVATE_CREDENTIAL_SECRETS]["stringData"]["DATABASE_URI"]
-        == "postgresql://migrator:pw@postgres:5432/devhealth"
-    ), secrets[_ROUTE_ACTIVATE_CREDENTIAL_SECRETS]["stringData"]
-
-
-def test_route_activate_credential_secret_is_absent_when_no_dsn_resolves_and_secrets_are_bundled() -> (
-    None
-):
-    """codex review (r2, P1 -- executed, fixed): secrets.create=true alone is
-    not enough -- if NEITHER a bundled postgres NOR any secretData DSN is
-    configured, riverMigrationDSN is empty and minting a Secret with an
-    empty DATABASE_URI is exactly the r2 P1 failure, just with the chart
-    owning the Secret instead of an operator. Same $riverDSN guard
-    river-migrate's own dedicated Secret already applies."""
-    secrets = _secrets(*_FULL_CHAIN_ON)
-    assert _ROUTE_ACTIVATE_CREDENTIAL_SECRETS not in secrets, sorted(secrets)
-
-
-def test_operator_credential_cli_fails_closed_without_any_dsn_env() -> None:
-    """Executed against the REAL `dev-hops service-credentials create` CLI
-    (not a stub) with an empty environment -- the exact reproduction of the
-    r2 P1 finding, kept as a red-first regression pin: this must always fail
-    with the CLI's own "missing required input(s)" message, never silently
-    proceed or hang trying to reach a default host.
-
-    codex review (r3, P1 -- executed, fixed): the mandated review-worktree
-    setup is `uv sync --no-install-project` -- dependencies only, the
-    `dev_health_ops` package itself is never installed into the venv (no
-    dist-info, no editable .pth). This subprocess used to rely on the venv
-    ALREADY having the project installed (true only when a lane's own
-    iteration venv did a full `uv sync --extra dev`); under the mandated
-    setup it fails `ModuleNotFoundError: No module named 'dev_health_ops'`
-    (reproduced with `python -S`, which skips the same site-packages .pth
-    processing) BEFORE the CLI's own argument parsing ever runs -- exit 1,
-    not the guard's exit 2. Setting PYTHONPATH to `src` explicitly makes the
-    subprocess importable regardless of install mode, matching how `pytest`
-    itself resolves the package via `pyproject.toml`'s `pythonpath` setting
-    without needing the project installed either."""
-    venv_python = Path(__file__).resolve().parents[2] / ".venv" / "bin" / "python"
-    if not venv_python.exists():
-        pytest.skip("no local .venv to exec the real CLI against")
-    src_dir = str(Path(__file__).resolve().parents[2] / "src")
-    completed = subprocess.run(
-        [
-            str(venv_python),
-            "-m",
-            "dev_health_ops.cli",
-            "service-credentials",
-            "create",
-            "--service",
-            "worker-operator",
-            "--scope",
-            "workers:read",
-            "--scope",
-            "workers:operate",
-        ],
-        capture_output=True,
-        text=True,
-        env={"PATH": os.environ["PATH"], "PYTHONPATH": src_dir},
-    )
-    assert completed.returncode == 2, completed.stderr
-    assert "missing required input(s)" in completed.stderr
-    assert "POSTGRES_URI/DATABASE_URI" in completed.stderr
-
-
-def _run_operator_credential_script(
-    tmp_path: Path, **env: str
-) -> subprocess.CompletedProcess[str]:
-    """Execute the REAL rendered operator-credential script (post-fix) with a
-    stub `dev-hops` that records the env it actually received, so the
-    fallback logic is proven at the shell level, not argued from reading the
-    template."""
-    jobs = _jobs(*_FULL_CHAIN_ON)
-    init_containers = {
-        c["name"]: c
-        for c in jobs[_ROUTE_ACTIVATE]["spec"]["template"]["spec"]["initContainers"]
-    }
-    command = init_containers["operator-credential"]["command"]
-    assert command[:2] == ["/bin/sh", "-ec"], command
-    script = command[2]
-
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    seen_env_file = tmp_path / "seen-env"
-    stub = bin_dir / "dev-hops"
-    stub.write_text(
-        "#!/bin/sh\n"
-        'printf \'POSTGRES_URI=%s\\n\' "${POSTGRES_URI:-<unset>}" > "$SEEN_ENV_FILE"\n'
-        'printf \'DATABASE_URI=%s\\n\' "${DATABASE_URI:-<unset>}" >> "$SEEN_ENV_FILE"\n'
-        "echo minted-token\n",
-        encoding="utf-8",
-    )
-    stub.chmod(0o755)
-
-    run_dir = tmp_path / "run"
-    run_dir.mkdir()
-    script = script.replace("/run/go-worker-operator/token", str(run_dir / "token"))
-    base_env = {
-        "PATH": f"{bin_dir}:{os.environ['PATH']}",
-        "SEEN_ENV_FILE": str(seen_env_file),
-        "HOME": str(tmp_path),
-    }
-    base_env.update(env)
-    completed = subprocess.run(
-        ["/bin/sh", "-ec", script], capture_output=True, text=True, env=base_env
-    )
-    if completed.returncode == 0:
-        completed.seen_env = dict(  # type: ignore[attr-defined]
-            line.split("=", 1)
-            for line in seen_env_file.read_text(encoding="utf-8").splitlines()
-        )
-    return completed
-
-
-_MIGRATION_DSN = "postgresql://migrator:pw@postgres:5432/devhealth"
-_EXPLICIT_POSTGRES_URI = "postgresql://explicit:pw@postgres:5432/devhealth"
-_EXPLICIT_DATABASE_URI = "postgresql://explicit-db:pw@postgres:5432/devhealth"
-
-
-@pytest.mark.parametrize(
-    ("case_id", "env", "expected_postgres_uri"),
-    [
-        # absent: dev-hops sees neither -- it fails closed on its own
-        # (pinned against the real CLI above); the stub just proves the
-        # script itself does not fabricate a value out of nothing.
-        ("all-absent", {}, "<unset>"),
-        # MIGRATION_DATABASE_URI only (the external Secret's own key) ->
-        # mapped across, the r2 P1 fix.
-        (
-            "migration-database-uri-only",
-            {"MIGRATION_DATABASE_URI": _MIGRATION_DSN},
-            _MIGRATION_DSN,
-        ),
-        # POSTGRES_URI already present -> must win, never clobbered by the
-        # fallback (mirrors river-migrate's own precedence direction).
-        (
-            "postgres-uri-wins-over-migration",
-            {
-                "POSTGRES_URI": _EXPLICIT_POSTGRES_URI,
-                "MIGRATION_DATABASE_URI": _MIGRATION_DSN,
-            },
-            _EXPLICIT_POSTGRES_URI,
-        ),
-        # empty-string MIGRATION_DATABASE_URI is treated as absent, same as
-        # the chart's other `-z` guards (river-hooks.yaml, migrate-job.yaml).
-        (
-            "empty-migration-database-uri",
-            {"MIGRATION_DATABASE_URI": ""},
-            "<unset>",
-        ),
-    ],
-)
-def test_operator_credential_script_dsn_input_domain(
-    tmp_path: Path, case_id: str, env: dict[str, str], expected_postgres_uri: str
-) -> None:
-    completed = _run_operator_credential_script(tmp_path, **env)
-    assert completed.returncode == 0, (case_id, completed.stderr)
-    assert completed.seen_env["POSTGRES_URI"] == expected_postgres_uri, (  # type: ignore[attr-defined]
-        case_id,
-        completed.seen_env,  # type: ignore[attr-defined]
-    )
-
-
-def test_operator_credential_script_does_not_clobber_an_explicit_database_uri(
-    tmp_path: Path,
-) -> None:
-    """DATABASE_URI is `dev-hops`'s other recognised name -- the fallback
-    must defer to it too, not only to POSTGRES_URI."""
-    completed = _run_operator_credential_script(
-        tmp_path,
-        DATABASE_URI=_EXPLICIT_DATABASE_URI,
-        MIGRATION_DATABASE_URI=_MIGRATION_DSN,
-    )
-    assert completed.returncode == 0, completed.stderr
-    assert completed.seen_env["DATABASE_URI"] == _EXPLICIT_DATABASE_URI  # type: ignore[attr-defined]
-    assert completed.seen_env["POSTGRES_URI"] == "<unset>"  # type: ignore[attr-defined]
-
-
 # --- P2 (r2, executed): the operator image's own pull policy ---------------
 #
 # codex review (r2, P2 -- executed): defaulting to .Values.image.pullPolicy
@@ -1485,8 +1119,7 @@ def test_route_activate_operator_pull_policy_is_independent_of_image_pull_policy
     # The ops-runtime containers (the side-loaded APPLICATION image) must
     # still inherit image.pullPolicy -- this fix is scoped to the operator
     # image only, not a blanket override.
-    for name in ("operator-credential", "route-dsn"):
-        assert init_containers[name]["imagePullPolicy"] == "Never", name
+    assert init_containers["route-dsn"]["imagePullPolicy"] == "Never"
 
 
 def test_route_activate_operator_pull_policy_override_still_wins() -> None:

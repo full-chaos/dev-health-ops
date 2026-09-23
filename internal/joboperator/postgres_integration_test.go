@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -29,7 +28,6 @@ const (
 	operatorIntegrationDomainPass      = "operator_domain_runtime_password"
 	operatorIntegrationQueuePass       = "operator_queue_runtime_password"
 	operatorIntegrationCoordinatorPass = "operator_coordinator_runtime_password"
-	operatorIntegrationToken           = "svc_worker_0123456789abcdefghijklmnopqrstuvwxyzAB"
 	operatorIntegrationCredential      = "00000000-0000-4000-8000-000000000303"
 )
 
@@ -101,7 +99,7 @@ type idleJobRouteQuiescer struct{}
 
 func (idleJobRouteQuiescer) Quiesce(context.Context, string) error { return nil }
 
-func TestPostgresOperatorAuthenticationBackendAndAudit(t *testing.T) {
+func TestPostgresOperatorBackendAndAudit(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 	instance, err := containers.StartPostgres(ctx)
@@ -188,29 +186,6 @@ func TestPostgresOperatorAuthenticationBackendAndAudit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// CHAOS-3100. This used to authenticate through the fixture's ADMIN pool,
-	// on the reasoning that the credential store sits outside the domain
-	// allow-list. That reasoning was right and the fixture was still wrong:
-	// an admin pool can run any statement, so the test proved nothing about
-	// which runtime role can, and it would have passed identically while the
-	// real CLI was 100% broken. The restricted coordinator login is the pool
-	// internal/workersctl actually builds its authenticator on, so it is
-	// the only connection that measures the deployed privilege.
-	authenticator, err := NewAuthenticator(coordinatorPool)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := authenticator.Authenticate(ctx, "svc_worker_invalid"); !errors.Is(err, ErrAuthentication) {
-		t.Fatalf("invalid Authenticate() error = %v", err)
-	}
-	authentication, err := authenticator.Authenticate(ctx, operatorIntegrationToken)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if authentication.Principal().ID != operatorIntegrationCredential {
-		t.Fatalf("principal = %+v", authentication.Principal())
-	}
-
 	backend, err := NewDirectPostgresBackend(queuePool, "river", registry)
 	if err != nil {
 		t.Fatal(err)
@@ -264,14 +239,14 @@ func TestPostgresOperatorAuthenticationBackendAndAudit(t *testing.T) {
 		t.Fatal(err)
 	}
 	service, err := New(Dependencies{
-		Registry: registry, Backend: backend, Authorizer: authentication.Authorizer(),
+		Registry: registry, Backend: backend, Authorizer: OperatorAuthorizer(),
 		DomainGuard: allowIntegrationDomainGuard{}, Auditor: auditor, Clock: func() time.Time { return now },
 		RouteController: routeController, JobRouteController: jobRouteController,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	principal := authentication.Principal()
+	principal := OperatorPrincipal
 	if err := service.Status(ctx, principal); err != nil {
 		t.Fatalf("Status: %v", err)
 	}
@@ -370,133 +345,6 @@ func TestPostgresOperatorAuthenticationBackendAndAudit(t *testing.T) {
 	}
 }
 
-// TestOperatorAuthenticationIsCoordinatorOnlyAndNamesPrivilegeDenials is the
-// CHAOS-3100 regression, and it deliberately proves BOTH halves of the fact
-// the ticket says must land together. Proving only that some role can
-// authenticate is what recreates the trap: the cheap way to make
-// authentication work is to widen the domain role, and that trades a runtime
-// 42501 for a permanent readiness failure across every domain worker, because
-// CheckDomainAuthorization asserts the domain role holds NOTHING outside its
-// own manifest.
-//
-//   - Half one: the restricted coordinator role -- the login
-//     internal/workersctl builds its authenticator on -- completes a real
-//     authentication against the real grants ApplyPinnedMigrations emits.
-//     Grants are derived from CoordinatorPosture(), so this fails if the
-//     migration and the posture ever disagree.
-//   - Half two: the domain role is still refused, and the domain role's own
-//     readiness still passes afterwards. A change that bought half one by
-//     granting the domain role fails the refusal; a change that bought it by
-//     granting without the matching allowlist row fails the readiness call.
-//
-// The refusal is also asserted by reason CODE, not merely by error identity.
-// Before this change auth.go collapsed a 42501 into a bare ErrAuthentication,
-// so workerctl printed `authentication_failed` for a missing grant and sent
-// operators to rotate a token that was never wrong. That assertion is the one
-// that fails without the auth.go half of this fix.
-func TestOperatorAuthenticationIsCoordinatorOnlyAndNamesPrivilegeDenials(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
-	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer closeCancel()
-		if err := instance.Close(closeCtx); err != nil {
-			t.Errorf("terminate PostgreSQL: %v", err)
-		}
-	})
-	adminPool := openOperatorIntegrationPool(t, ctx, instance.URI)
-	t.Cleanup(adminPool.Close)
-	// CREATE ROLE is cluster-scoped, not database-scoped -- a scratch
-	// database does not isolate it (CHAOS-4661). Deriving every role name
-	// from this call's own database identity is what makes two successive
-	// runs, and two concurrent lanes, collision-free.
-	operatorIntegrationDomainRole, operatorIntegrationQueueRole, operatorIntegrationCoordinatorRole :=
-		createOperatorIntegrationSchema(t, ctx, instance, adminPool)
-	t.Cleanup(func() { containers.DropRole(adminPool, operatorIntegrationDomainRole, t.Logf) })
-	t.Cleanup(func() { containers.DropRole(adminPool, operatorIntegrationQueueRole, t.Logf) })
-	t.Cleanup(func() { containers.DropRole(adminPool, operatorIntegrationCoordinatorRole, t.Logf) })
-	coordinatorTables, coordinatorColumns, coordinatorSequences := operatorIntegrationCoordinatorGrants()
-	if _, err := riverstore.ApplyPinnedMigrations(ctx, adminPool, riverstore.MigrationOptions{
-		Schema:                  "river",
-		DomainRole:              operatorIntegrationDomainRole,
-		QueueRole:               operatorIntegrationQueueRole,
-		CoordinatorRole:         operatorIntegrationCoordinatorRole,
-		CoordinatorGrants:       coordinatorTables,
-		CoordinatorColumnGrants: coordinatorColumns,
-		CoordinatorSequences:    coordinatorSequences,
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	coordinatorPool := openOperatorIntegrationRolePool(
-		t, ctx, instance.URI, operatorIntegrationCoordinatorRole, operatorIntegrationCoordinatorPass,
-	)
-	t.Cleanup(coordinatorPool.Close)
-	domainPool := openOperatorIntegrationRolePool(
-		t, ctx, instance.URI, operatorIntegrationDomainRole, operatorIntegrationDomainPass,
-	)
-	t.Cleanup(domainPool.Close)
-
-	// Half one. Authenticate runs SELECT and UPDATE in one CTE, so a role
-	// holding only SELECT would fail here too -- authentication is a write.
-	coordinatorAuthenticator, err := NewAuthenticator(coordinatorPool)
-	if err != nil {
-		t.Fatal(err)
-	}
-	authentication, err := coordinatorAuthenticator.Authenticate(ctx, operatorIntegrationToken)
-	if err != nil {
-		t.Fatalf("restricted coordinator role cannot authenticate the operator token: %v", err)
-	}
-	if authentication.Principal().ID != operatorIntegrationCredential {
-		t.Fatalf("principal = %+v", authentication.Principal())
-	}
-
-	// Half two, part one: the domain role is refused, and says why. Note the
-	// token supplied is the VALID one -- so `authentication_failed` would be
-	// an actively false statement about it, not merely a vague one.
-	domainAuthenticator, err := NewAuthenticator(domainPool)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := domainAuthenticator.Authenticate(ctx, operatorIntegrationToken); err == nil {
-		t.Fatal("the domain role authenticated against the coordinator-exclusive credential store, " +
-			"so it now holds a privilege its own readiness posture forbids")
-	} else {
-		if !errors.Is(err, ErrAuthentication) {
-			t.Fatalf("domain-role denial error = %v, want it to remain an ErrAuthentication", err)
-		}
-		if reason := AuthenticationReason(err); reason != ReasonCredentialStoreForbidden {
-			t.Fatalf("domain-role denial reason = %q, want %q -- a missing grant reported as a "+
-				"credential failure sends operators to rotate a token that was never wrong",
-				reason, ReasonCredentialStoreForbidden)
-		}
-	}
-
-	// Half two, part two: provisioning the coordinator did not widen the
-	// domain role. This is the assertion that fails if a future change fixes
-	// authentication by granting internal_service_credentials to the domain
-	// role -- readiness would then find an undeclared relation and every
-	// domain worker, not just workerctl, would fail closed at startup.
-	if err := postgresstore.CheckDomainAuthorization(
-		ctx, domainPool, operatorIntegrationDomainRole, "river",
-	); err != nil {
-		t.Fatalf("domain readiness broke once the coordinator was provisioned: %v", err)
-	}
-
-	// An invalid token on the correctly granted pool is the OTHER verdict, and
-	// must stay distinguishable from the denial above -- otherwise the two
-	// codes carry no information.
-	if _, err := coordinatorAuthenticator.Authenticate(ctx, "svc_worker_"+strings.Repeat("z", 40)); err == nil {
-		t.Fatal("an unknown token authenticated")
-	} else if reason := AuthenticationReason(err); reason != ReasonAuthenticationFailed {
-		t.Fatalf("unknown-token reason = %q, want %q", reason, ReasonAuthenticationFailed)
-	}
-}
-
 func createOperatorIntegrationSchema(
 	t *testing.T, ctx context.Context, instance *containers.Instance, pool *pgxpool.Pool,
 ) (domainRole, queueRole, coordinatorRole string) {
@@ -517,7 +365,6 @@ func createOperatorIntegrationSchema(
 	if err != nil {
 		t.Fatal(err)
 	}
-	digest := sha256.Sum256([]byte(operatorIntegrationToken))
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -713,15 +560,6 @@ func createOperatorIntegrationSchema(
 		VALUES ($1, 'celery', FALSE, 1, statement_timestamp())`, jobcontract.KindHeartbeat); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO public.internal_service_credentials (id, service_name, token_hash, scopes)
-		VALUES ($1, $2, $3, '["workers:read", "workers:operate"]'::jsonb)`,
-		operatorIntegrationCredential,
-		WorkerOperatorService,
-		hex.EncodeToString(digest[:]),
-	); err != nil {
-		t.Fatal(err)
-	}
 	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -859,17 +697,19 @@ func assertOperatorIntegrationAudit(
 ) {
 	t.Helper()
 	var count int
-	var action, status, principalID, correlationID string
+	var action, status, principalType, principalID, correlationID string
+	var credentialID *string
 	if err := pool.QueryRow(ctx, `
-		SELECT count(*) OVER (), action, status, principal_id, correlation_id
+		SELECT count(*) OVER (), action, status, principal_type, principal_id, credential_id::text, correlation_id
 		FROM public.worker_operator_audits
-		ORDER BY id DESC LIMIT 1`).Scan(&count, &action, &status, &principalID, &correlationID); err != nil {
+		ORDER BY id DESC LIMIT 1`).Scan(&count, &action, &status, &principalType, &principalID, &credentialID, &correlationID); err != nil {
 		t.Fatal(err)
 	}
 	if count != wantCount || action != wantLastAction || status != wantLastStatus ||
-		principalID != operatorIntegrationCredential || correlationID == "" {
-		t.Fatalf("audit = count=%d action=%q status=%q principal=%q correlation=%q",
-			count, action, status, principalID, correlationID)
+		principalType != OperatorPrincipal.Type || principalID != OperatorPrincipal.ID ||
+		credentialID != nil || correlationID == "" {
+		t.Fatalf("audit = count=%d action=%q status=%q principal=%q/%q credential=%v correlation=%q",
+			count, action, status, principalType, principalID, credentialID, correlationID)
 	}
 }
 

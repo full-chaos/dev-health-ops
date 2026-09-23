@@ -435,11 +435,12 @@ func validateOperatorCLI(operator OperatorCLI) error {
 		return errors.New("worker operator deployment identity or connection budget is invalid")
 	}
 	// COORDINATOR_DATABASE_URI and RIVER_COORDINATOR_DATABASE_ROLE are required
-	// here, not optional: workerctl authenticates its operator token against
-	// internal_service_credentials, a coordinator-exclusive table, before any
-	// command dispatches. Without the coordinator DSN the binary cannot do
-	// anything at all, so the deployment contract refuses to describe it as
-	// deployable without one.
+	// here, not optional: `dho workers` checks the coordinator role posture
+	// and runs its route controllers and operator audit on the coordinator
+	// pool before any command dispatches. Without the coordinator DSN the
+	// binary cannot do anything at all, so the deployment contract refuses to
+	// describe it as deployable without one. There is no operator token: exec
+	// access plus these DSNs is the operator boundary.
 	if !equalStrings(operator.ConfigEnv, []string{
 		"COORDINATOR_DATABASE_MODE",
 		"PGBOUNCER_TRANSACTION_MODE",
@@ -461,7 +462,6 @@ func validateOperatorCLI(operator OperatorCLI) error {
 		"COORDINATOR_DATABASE_URI",
 		"POSTGRES_URI",
 		"WORKER_DATABASE_URI",
-		"WORKER_OPERATOR_TOKEN",
 	}) {
 		return errors.New("worker operator deployment configuration is invalid")
 	}

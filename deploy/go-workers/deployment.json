@@ -53,8 +53,7 @@
       "CLICKHOUSE_URI",
       "COORDINATOR_DATABASE_URI",
       "POSTGRES_URI",
-      "WORKER_DATABASE_URI",
-      "WORKER_OPERATOR_TOKEN"
+      "WORKER_DATABASE_URI"
     ]
   },
   "processes": [

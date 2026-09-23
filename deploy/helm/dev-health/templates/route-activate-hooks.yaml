@@ -1,6 +1,5 @@
 {{- /*
-CHAOS-4272/CHAOS-4455: the sync-dispatch route activation chain and the
-one-shot operator credential that authenticates it.
+CHAOS-4272/CHAOS-4455: the sync-dispatch route activation chain.
 
 Root cause (CHAOS-4272). Alembic 0049 seeds `sync_dispatch_transport_routes`
 at transport=celery for four kinds -- dispatch_sync_run, finalize_sync_run,
@@ -19,20 +18,17 @@ and riverMigrate actually running, not a second route Job.
 Reference design: the proven bigboy compose overlay
 (compose/compose.go.workers.yml, untracked, outside this repository) and PR
 chore/celery-retire-pr3's root compose.yml, which folds the same chain into
-the default `docker compose up`. Both serialize the four route mutations
-behind one operator credential, because dho workers's operator
-permits one audited mutation at a time.
+the default `docker compose up`. Both serialize the four route mutations,
+because `dho workers` permits one audited mutation at a time. There is no
+operator token: the operator CLI's boundary is exec access plus the database
+DSNs this hook hands it.
 
 Kubernetes shape. Compose expresses the serialization as five one-shot
 containers sharing a named Docker volume via `depends_on:
 condition: service_completed_successfully`. Helm hook Jobs have no
 depends_on between sibling Jobs at the same weight, so the equivalent here is
 ONE Job whose initContainers run in the same order, sharing one emptyDir for
-the operator token file instead of a persistent volume -- a fresh token is
-minted on every install/upgrade (there is no cross-release volume), which is
-fine: `routes apply` is idempotent on the token's OWN authorization, not on
-whether the token is new (see RISK-NOTES for the one accepted side effect,
-an unrevoked credential row per release).
+the route DSN files instead of a persistent volume.
 
 Direct-to-Postgres, not through the goWorkers pgbouncer poolers: those
 poolers are REGULAR chart resources, created only after pre-install/
@@ -114,22 +110,6 @@ lockstep with the api image is the operator's own responsibility.
 {{- fail (printf "migrations.hook.routeActivate.image (%s) and image.repository/image.tag (%s) are pinned to different commits (%s vs %s) -- the operator's posture manifest must match the database the migrate Job just migrated." $operatorImage (include "dev-health.image" .) $operatorImageShaTag $apiImageShaTag) }}
 {{- end }}
 {{- $routeKinds := list "dispatch_sync_run" "finalize_sync_run" "post_sync" "reference_discovery" }}
-{{- /*
-codex review (r2, P1 -- executed): this Secret was created and read
-UNCONDITIONALLY, ignoring secrets.create=false. river-migrate
-(river-hooks.yaml:245-260) faces the identical fork and resolves it the same
-way this now does: when the chart owns the Secret (secrets.create=true) it
-mints its own hook-scoped copy from riverMigrationDSN; when an operator owns
-it (secrets.create=false + migrations.hook.externalSecretName) the chart
-mints NOTHING and reads the operator's existing Secret directly instead --
-riverMigrationDSN resolves from Helm VALUES (migrations.hook.secretData /
-secrets.data), which are empty in the external-secret path by design (the
-DSN lives only in the operator's own Secret, never in the release's values),
-so minting from it there produced an empty DATABASE_URI and the credential
-mint failed "missing required input(s)".
-*/}}
-{{- $riverDSN := include "dev-health.riverMigrationDSN" . }}
-{{- $credentialSecretName := ternary (printf "%s-route-activate-credential-secrets" (include "dev-health.fullname" .)) (default (include "dev-health.secretName" .) .Values.migrations.hook.externalSecretName) .Values.secrets.create }}
 {{- if $poolerSecret.create }}
 ---
 apiVersion: v1
@@ -148,46 +128,6 @@ stringData:
   RIVER_DOMAIN_DATABASE_PASSWORD: {{ required "goWorkers.pgbouncer.secret.data.RIVER_DOMAIN_DATABASE_PASSWORD is required when migrations.hook.routeActivate.enabled=true" $poolerSecret.data.RIVER_DOMAIN_DATABASE_PASSWORD | quote }}
   RIVER_QUEUE_DATABASE_PASSWORD: {{ required "goWorkers.pgbouncer.secret.data.RIVER_QUEUE_DATABASE_PASSWORD is required when migrations.hook.routeActivate.enabled=true" $poolerSecret.data.RIVER_QUEUE_DATABASE_PASSWORD | quote }}
   RIVER_COORDINATOR_DATABASE_PASSWORD: {{ required "goWorkers.pgbouncer.secret.data.RIVER_COORDINATOR_DATABASE_PASSWORD is required when migrations.hook.routeActivate.enabled=true" $poolerSecret.data.RIVER_COORDINATOR_DATABASE_PASSWORD | quote }}
-{{- end }}
-{{- /*
-codex review (r2, P1 -- executed, fixed): mint this hook-scoped Secret ONLY
-when the chart owns Secrets at all (secrets.create=true) -- same fork
-river-migrate's own dedicated Secret already makes (river-hooks.yaml:246-247,
-"{{- if .Values.secrets.create }}{{- if $riverDSN }}"). With
-secrets.create=false the operator's externally-managed Secret is read
-directly below instead (envFrom $credentialSecretName), the same way
-river-migrate and the weight-0 migrate Job already do
-(migrate-job.yaml:167,189; river-hooks.yaml:339).
-*/}}
-{{- if .Values.secrets.create }}
-{{- if $riverDSN }}
----
-{{- /*
-The one-shot operator-credential mint reuses the SAME elevated DSN
-river-migrate runs against (dev-health.riverMigrationDSN) -- not a superuser
-requirement, just the ops runtime's regular application database connection,
-same class of access `dev-hops service-credentials create` already runs with
-in Compose (its DATABASE_URI/POSTGRES_URI point at the plain app database).
-Bundled here as its own hook-scoped Secret (not reused from migrate-secrets
-or river-migrate-secrets) for the same reason those two don't share a copy
-either: each hook-scoped Secret's hook-succeeded delete policy is not
-provably still present by the time a LATER weight tier's Job starts.
-*/}}
-apiVersion: v1
-kind: Secret
-metadata:
-  name: {{ $credentialSecretName }}
-  namespace: {{ include "dev-health.namespace" . }}
-  labels:
-    {{- include "dev-health.componentLabels" (dict "component" "route-activate" "context" $) | nindent 4 }}
-  annotations:
-    helm.sh/hook: {{ join "," $hookEvents }}
-    helm.sh/hook-weight: "-5"
-    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
-type: Opaque
-stringData:
-  DATABASE_URI: {{ $riverDSN | quote }}
-{{- end }}
 {{- end }}
 ---
 apiVersion: batch/v1
@@ -221,7 +161,7 @@ spec:
         runAsNonRoot: true
         {{- /*
         codex review (r1, P1 -- executed): the ops-runtime container (UID
-        10001) writes the token/DSN files, the operator container (UID
+        10001) writes the DSN files, the operator container (UID
         65532, distroless, no shell to chown/chmod with even if it wanted
         to) only reads them -- with no fsGroup, Kubernetes mounts a fresh
         emptyDir root:root and the WRITER'S OWN non-root UID cannot create
@@ -233,57 +173,9 @@ spec:
         */}}
         fsGroup: 65532
       volumes:
-        - name: operator-token
-          emptyDir: {}
         - name: route-dsn
           emptyDir: {}
       initContainers:
-        - name: operator-credential
-          {{- /*
-          The OPS RUNTIME image: `dev-hops service-credentials create` is the
-          only way to mint a row in `internal_service_credentials` today --
-          there is no Go-native equivalent -- same command Compose's
-          go-worker-operator-credential service runs. Idempotent by
-          construction: only mints when the shared emptyDir file is empty,
-          same guard Compose uses on its persistent volume.
-          */}}
-          image: {{ include "dev-health.image" . }}
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
-          securityContext:
-            allowPrivilegeEscalation: false
-          command:
-            - /bin/sh
-            - -ec
-            - |
-              token=/run/go-worker-operator/token
-              if [ ! -s "$token" ]; then
-                # codex review (r2, P1 -- executed, fixed): the external-Secret
-                # path (secrets.create=false) hands this container the SAME
-                # Secret river-migrate/migrate-job read, which carries the DSN
-                # under MIGRATION_DATABASE_URI (or its POSTGRES_URI/DATABASE_URI
-                # compatibility aliases) -- never a key named exactly what
-                # `dev-hops` looks for. `dev-hops` itself only recognises
-                # POSTGRES_URI/DATABASE_URI (cli.py:542-543), so map the
-                # elevated-DSN alias across, same fallback river-migrate's own
-                # command already runs in the other direction
-                # (river-hooks.yaml:284-289).
-                if [ -z "${POSTGRES_URI:-}" ] && [ -z "${DATABASE_URI:-}" ] && [ -n "${MIGRATION_DATABASE_URI:-}" ]; then
-                  POSTGRES_URI="$MIGRATION_DATABASE_URI"
-                  export POSTGRES_URI
-                fi
-                dev-hops service-credentials create \
-                  --service worker-operator \
-                  --scope workers:read \
-                  --scope workers:operate > "$token"
-              fi
-          envFrom:
-            - secretRef:
-                name: {{ $credentialSecretName }}
-          volumeMounts:
-            - name: operator-token
-              mountPath: /run/go-worker-operator
-          resources:
-            {{- toYaml .Values.migrations.hook.resources | nindent 12 }}
         - name: route-dsn
           {{- /*
           codex review (r1, P1 -- executed) found TWO defects this step
@@ -298,8 +190,7 @@ spec:
           it happens HERE, in the ops runtime image (which has a shell and
           python3), and is handed to the operator containers as plain files
           via the existing `_FILE`-suffix convention
-          (internal/platform/secrets, already used by
-          WORKER_OPERATOR_TOKEN_FILE) -- no shell needed in the distroless
+          (internal/platform/secrets) -- no shell needed in the distroless
           containers at all.
 
           2. The prior in-shell DSN interpolated RIVER_*_DATABASE_PASSWORD
@@ -454,12 +345,7 @@ spec:
               value: /run/route-dsn/WORKER_DATABASE_URI
             - name: COORDINATOR_DATABASE_URI_FILE
               value: /run/route-dsn/COORDINATOR_DATABASE_URI
-            - name: WORKER_OPERATOR_TOKEN_FILE
-              value: /run/go-worker-operator/token
           volumeMounts:
-            - name: operator-token
-              mountPath: /run/go-worker-operator
-              readOnly: true
             - name: route-dsn
               mountPath: /run/route-dsn
               readOnly: true

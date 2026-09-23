@@ -238,10 +238,13 @@ def test_river_migrate_accepts_lockstep_match_with_the_api_image() -> None:
     ), container["image"]
 
 
-def test_river_migrate_lockstep_check_skips_a_digest_pinned_image() -> None:
-    """A digest pin encodes no commit, so it is never compared -- keeping a
-    digest pin in lockstep with the api image is the operator's own
-    responsibility (route-activate-hooks.yaml's identical rule)."""
+def test_river_migrate_lockstep_check_documents_the_digest_pin_limit() -> None:
+    """A digest pin encodes no commit, so it is never compared -- a KNOWN,
+    named limit shared with route-activate-hooks.yaml's identical check
+    (dev-health.lockstepImageCheck, _helpers.tpl): keeping a digest pin in
+    lockstep with the api image is the operator's own responsibility until
+    a digest-to-commit resolution exists. This test pins that CURRENT
+    behavior, not an endorsement of it staying this way forever."""
     own = "ghcr.io/full-chaos/dev-health-go-dho@sha256:" + "d" * 64
     jobs = _jobs(
         "migrations.hook.provisionRoles.enabled=true",

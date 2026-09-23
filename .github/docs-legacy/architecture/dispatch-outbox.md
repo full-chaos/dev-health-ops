@@ -246,17 +246,19 @@ early; deterministic fanout replay recreates a fence from authoritative
 terminal domain state when necessary. The legacy Celery post-sync path retains
 its partitioned chord while its route remains Celery.
 
-Before each long compatibility operation, the API closes its PostgreSQL read
-transaction so Go lease renewal is never blocked by a held row lock. Metric,
-work-graph, investment, and sync-coordinator HTTP clients use the River
-execution context as their whole-request deadline; the shared short
-operational-bridge budget applies only to connection and TLS-handshake setup.
-The API contains legacy metric and work-graph effects in fixed child processes
-and, on POSIX, terminates their process groups, kills them if needed, and reaps
-them on context cancellation or client disconnect. The standalone
-`investment.dispatch` descriptor retains
-its 7,200-second execution budget, contract version `1`, and checked-in Celery
-route, but native post-sync uses the separately fenced stages above.
+CHAOS-6279 (2026-09): the "operational-bridge" HTTP mechanism this section
+used to describe is gone. Metric, work-graph, investment, and
+sync-coordinator dispatch are native Go now (no HTTP client, no bridge
+budget, no `WORKER_OPERATIONAL_BRIDGE_URL`/`_TOKEN`/`_ALLOW_INSECURE` --
+deleted, zero remaining readers, confirmed by grep); the "API contains
+legacy metric and work-graph effects in fixed child processes" claim
+describes worker_metrics.py's subprocess mechanism, deleted earlier
+(CHAOS-6240) along with the routes it served. Not rewritten in full here
+(out of this ticket's scope) -- flagged as a known gap, not silently left
+implying current behavior. The standalone `investment.dispatch` descriptor
+retains its 7,200-second execution budget, contract version `1`, and
+checked-in Celery route, but native post-sync uses the separately fenced
+stages above.
 
 Child routes are evaluated independently. While a reviewed child remains
 `go_implemented` and Celery-routed, its generic outbox row is persisted as

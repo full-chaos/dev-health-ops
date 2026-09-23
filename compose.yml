@@ -12,28 +12,27 @@
 # empty volume -- it is no longer a way to attach to another project's data.
 name: dev-health-ops
 
-# WORKER_OPERATIONAL_BRIDGE_TOKEN has NO Python-side reader left in src/ as
-# of this change: worker_metrics.py/worker_auth.py (CHAOS-6240, this PR) and
-# worker_sync.py (CHAOS-6243, landed independently and concurrently) were
-# its only two callers, and both are gone. The Go worker CLIENTS still read
-# this exact shell variable/default (`&go-worker-env-base` below) -- kept
-# here, unremoved, since retiring the token itself (and whatever still sends
-# it) is a bigger call than this ticket's scope; flagged for the lead to
-# decide, not silently dropped. One shared anchor, merged into both `&env`
-# (api/metrics-api/billing-edge/worker) and `&go-worker-env-base`, so the
-# literal default lives in exactly one place rather than two copies that
-# can drift, whatever its ultimate disposition turns out to be.
-x-worker-operational-bridge-token:
-  token: &worker-operational-bridge-token
-    WORKER_OPERATIONAL_BRIDGE_TOKEN: ${WORKER_OPERATIONAL_BRIDGE_TOKEN:-local-go-worker-bridge-token}
-
+# CHAOS-6279: WORKER_OPERATIONAL_BRIDGE_TOKEN (and its x-worker-operational-
+# bridge-token anchor, formerly here) is deleted from this file entirely.
+# CHAOS-6240 already established it had zero Python-side readers
+# (worker_auth.py/worker_metrics.py and worker_sync.py were its only two,
+# both gone). This PR confirms the Go-worker side never read it either --
+# repo-wide grep found no `cfg.OperationalBridgeToken` consumer beyond
+# config.go's own parsing (itself deleted in this PR) and test literals; the
+# `internal/syncdispatchruntime.NewHTTPBridge` construction this file used
+# to cite as requiring a non-empty token no longer exists in the codebase at
+# all. The env var itself (a real credential an operator might still have
+# set, e.g. in the deploy chart's Secret) is untouched by this PR outside
+# this file -- see this PR's RISK-NOTES.
+#
 # An empty SETTINGS_ENCRYPTION_KEY default crash-loops
 # every Go worker family that constructs a provider-credential decryptor
 # (sync/ops/heavy) on a bare bring-up -- reproduced: "worker family builder
-# failed", three stream runners 503. Same single-anchor convention as the
-# bridge token above, so api/metrics-api and the Go fleet stay byte-identical
-# on the same local-only placeholder rather than two independent empty
-# defaults that happen to agree only when an operator sets the real value.
+# failed", three stream runners 503. Single-anchor convention (formerly
+# shared with the bridge token above) so api/metrics-api and the Go fleet
+# stay byte-identical on the same local-only placeholder rather than two
+# independent empty defaults that happen to agree only when an operator
+# sets the real value.
 x-settings-encryption-key:
   token: &settings-encryption-key
     SETTINGS_ENCRYPTION_KEY: ${SETTINGS_ENCRYPTION_KEY:-local-dev-settings-encryption-key}
@@ -68,21 +67,15 @@ x-go-worker-flag:
   queue-mode: &flag-queue-mode "--queue-database-mode=${WORKER_DATABASE_MODE:-session}"
   coordinator-mode: &flag-coordinator-mode "--coordinator-database-mode=${COORDINATOR_DATABASE_MODE:-session}"
   domain-pooler: &flag-domain-pooler "--domain-transaction-pooler=${PGBOUNCER_TRANSACTION_MODE:-true}"
-  # The PagerDuty stream runner forwards reconciliation to the Python worker
-  # bridge until the locked-graph port lands (CUT-20), so it cannot open
-  # readiness without a bridge URL.
-  bridge-url: &flag-bridge-url "--operational-bridge-url=${WORKER_OPERATIONAL_BRIDGE_URL:-http://api:8000}"
-  # CHAOS-4351: `go-worker-heavy` is the ONLY worker group whose queue set
-  # includes `metrics` -- every other group's operational-bridge traffic
-  # stays on `api` via the shared `flag-bridge-url` above; only this
-  # group's flag is repointed at the dedicated `metrics-api` service so a
-  # bridge-side pids/memory incident there can no longer take unrelated
-  # `api` request handling, or unrelated go-worker groups, down with it.
-  bridge-url-heavy: &flag-bridge-url-heavy "--operational-bridge-url=${DEV_HEALTH_METRICS_BRIDGE_URL:-http://metrics-api:8000}"
-  # The default bridge endpoint above is a plaintext Compose service-discovery
-  # name, which the runtime rejects unless this opt-in is set. Override to
-  # false once the bridge is reachable over an internal HTTPS origin.
-  bridge-insecure: &flag-bridge-insecure "--operational-bridge-allow-insecure=${WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE:-true}"
+  # CHAOS-6279: bridge-url/bridge-url-heavy/bridge-insecure (formerly here,
+  # CHAOS-4351) are deleted -- the --operational-bridge-url/--operational-
+  # bridge-allow-insecure flags they rendered no longer exist on any Go
+  # binary (CHAOS-5320 deleted the Python HTTP bridge they pointed at;
+  # nothing constructs a bridge client from cfg.OperationalBridgeURL any
+  # more, confirmed by grep across internal/ and cmd/). The PagerDuty
+  # stream runner's own readiness does not depend on this flag -- it never
+  # took it as an argument (confirmed: zero OperationalBridge references
+  # anywhere under cmd/dev-health-stream-runner).
   log-level: &flag-log-level "--log-level=${LOG_LEVEL:-info}"
 
 x-go-worker-env-base: &go-worker-env-base
@@ -145,18 +138,7 @@ x-go-worker-env-base: &go-worker-env-base
   DEV_HEALTH_PG_COORDINATOR_PORT: "6434"
   DEV_HEALTH_PG_COORDINATOR_USER: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
   DEV_HEALTH_PG_COORDINATOR_PASSWORD: ${RIVER_COORDINATOR_DATABASE_PASSWORD:-devhealth_coordinator}
-  # Found by executing the required readyz proof:
-  # internal/syncdispatchruntime.NewHTTPBridge rejects an empty bearer
-  # token outright (pure validation, no network call) -- sync/ops/heavy
-  # construct this bridge unconditionally, so an empty default here made
-  # EVERY worker family fail to compose at all ("worker readiness
-  # dependency is unavailable"), not the live-but-unready shape the other
-  # empty-defaults produce. That fix only reached
-  # the Go-worker side -- `api`/`metrics-api` never picked up the same
-  # default, so every bridge call 401'd. Merged from the single shared
-  # `x-worker-operational-bridge-token` anchor above instead of a second
-  # literal here.
-  <<: [*worker-operational-bridge-token, *settings-encryption-key]
+  <<: *settings-encryption-key
   AUTO_RUN_MIGRATIONS: "false"
   # CHAOS-4587: see `migrate`'s own comment on this variable below -- must
   # move with the migrate export in the same deploy pass; see
@@ -580,17 +562,6 @@ services:
     command: |
       --host 0.0.0.0 --port 8000 --reload
     environment: &env
-      # Api/metrics-api -- and, via this shared anchor, billing-edge -- no
-      # longer have any Python route that checks this token against an
-      # incoming Go operational-bridge call: worker_auth.py/worker_metrics.py
-      # (CHAOS-6240) and worker_sync.py (CHAOS-6243) were its only two
-      # readers, and both are gone as of this change. Kept anchored here
-      # regardless -- see the top-of-file note beside
-      # x-worker-operational-bridge-token for why this token's own
-      # disposition is out of this ticket's scope; this must still read the
-      # exact same shell variable and default as the Go-worker side below
-      # (x-worker-operational-bridge-token), never a second literal.
-      #
       # JWT_SECRET_KEY had no default anywhere in this
       # file -- the global org-id-extraction middleware's AuthService()
       # construction raised on every request carrying an Authorization
@@ -598,10 +569,8 @@ services:
       # 200/401 proof never actually exercised the real default path. See
       # `x-jwt-secret-key` above. Same gap
       # for SETTINGS_ENCRYPTION_KEY's empty default -- see
-      # `x-settings-encryption-key` above. YAML forbids more than one `<<`
-      # key in the same mapping, hence the single list-form merge below.
+      # `x-settings-encryption-key` above.
       <<:
-        - *worker-operational-bridge-token
         - *jwt-secret-key
         - *settings-encryption-key
       SETUPTOOLS_SCM_PRETEND_VERSION_FOR_DEV_HEALTH_OPS: "0.0.0"
@@ -1253,8 +1222,6 @@ services:
       - *flag-queue-mode
       - *flag-coordinator-mode
       - *flag-domain-pooler
-      - *flag-bridge-url-heavy
-      - *flag-bridge-insecure
       - *flag-log-level
     environment: &go-worker-env
       <<: *go-worker-env-base
@@ -1273,13 +1240,12 @@ services:
         condition: service_healthy
       pgbouncer-river-coordinator:
         condition: service_healthy
-      # this group's --operational-bridge-url points at metrics-api, a
-      # separate service with no other dependency edge into it -- gating on
-      # its healthcheck (not just container-started) means this worker
-      # doesn't start dispatching metrics/workgraph jobs before the bridge
-      # target can actually answer them.
-      metrics-api:
-        condition: service_healthy
+      # CHAOS-6279: the metrics-api dependency edge that used to live here
+      # is deleted along with the flag that justified it
+      # (--operational-bridge-url) -- this group no longer calls out to
+      # metrics-api at all, so nothing here needs it healthy before
+      # starting. Whether the metrics-api service itself should be retired
+      # is a separate, not-yet-decided follow-up.
     deploy: &go-worker-resources
       replicas: 1
       resources:
@@ -1302,13 +1268,7 @@ services:
       - *flag-queue-mode
       - *flag-coordinator-mode
       - *flag-domain-pooler
-      - *flag-bridge-url
-      - *flag-bridge-insecure
       - *flag-log-level
-    # Explicit override (not a merge): the shared &go-worker anchor's own
-    # depends_on includes metrics-api (needed by go-worker-heavy only). This
-    # service does not touch the metrics queue, so it does not inherit that
-    # dependency.
     depends_on:
       go-contractcheck:
         condition: service_completed_successfully
@@ -1340,8 +1300,6 @@ services:
       - *flag-queue-mode
       - *flag-coordinator-mode
       - *flag-domain-pooler
-      - *flag-bridge-url
-      - *flag-bridge-insecure
       - *flag-log-level
     depends_on:
       go-contractcheck:
@@ -1377,8 +1335,6 @@ services:
       - *flag-queue-mode
       - *flag-coordinator-mode
       - *flag-domain-pooler
-      - *flag-bridge-url
-      - *flag-bridge-insecure
       - *flag-log-level
     depends_on:
       go-contractcheck:
@@ -1421,8 +1377,6 @@ services:
       - *flag-queue-mode
       - *flag-coordinator-mode
       - *flag-domain-pooler
-      - *flag-bridge-url
-      - *flag-bridge-insecure
       - *flag-log-level
     depends_on:
       go-contractcheck:
@@ -1485,8 +1439,6 @@ services:
       - *flag-queue-mode
       - *flag-coordinator-mode
       - *flag-domain-pooler
-      - *flag-bridge-url
-      - *flag-bridge-insecure
       - *flag-log-level
     depends_on:
       go-contractcheck:
@@ -1524,8 +1476,6 @@ services:
       - *flag-queue-mode
       - *flag-coordinator-mode
       - *flag-domain-pooler
-      - *flag-bridge-url
-      - *flag-bridge-insecure
       - *flag-log-level
     depends_on:
       go-contractcheck:
@@ -1565,8 +1515,6 @@ services:
       - *flag-queue-mode
       - *flag-coordinator-mode
       - *flag-domain-pooler
-      - *flag-bridge-url
-      - *flag-bridge-insecure
       - *flag-log-level
     depends_on:
       go-contractcheck:
@@ -1609,8 +1557,6 @@ services:
       - *flag-queue-mode
       - *flag-coordinator-mode
       - *flag-domain-pooler
-      - *flag-bridge-url
-      - *flag-bridge-insecure
       - *flag-log-level
     depends_on:
       go-contractcheck:

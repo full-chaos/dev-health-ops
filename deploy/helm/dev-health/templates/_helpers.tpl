@@ -236,16 +236,6 @@ names; role credentials and runtime DSNs remain Secret values. */}}
 {{- end }}
 
 {{/*
-Worker operational bridge URL — the in-cluster API Service that serves the
-bridge the Go PagerDuty stream runner forwards reconciliation to. Auto-computed
-so the chart renders a reachable endpoint; override config.WORKER_OPERATIONAL_-
-BRIDGE_URL to point at an internal HTTPS origin instead.
-*/}}
-{{- define "dev-health.operationalBridgeURL" -}}
-{{- printf "http://%s-api.%s.svc.cluster.local:%v" (include "dev-health.fullname" .) (include "dev-health.namespace" .) .Values.api.port }}
-{{- end }}
-
-{{/*
 query-api base URL — the in-cluster Service the Python edge's dispatcher
 (GO_API_QUERY_API_URL) forwards to. Auto-computed so the chart renders a
 reachable endpoint whenever queryApi is enabled; override
@@ -291,7 +281,7 @@ chart's regular resources are created).
    REDIS_URL Secret key. */}}
 {{- $redisAuto := and .Values.valkey.enabled (not (index .Values.secrets.data "REDIS_URL")) }}
 {{- /* Keys whose empty placeholder is replaced by a computed value below. */}}
-{{- $derivedKeys := list "WORKER_OPERATIONAL_BRIDGE_URL" "GO_API_QUERY_API_URL" }}
+{{- $derivedKeys := list "GO_API_QUERY_API_URL" }}
 {{- range $key, $value := .Values.config }}
 {{- if or $value (not (has $key $derivedKeys)) }}
 {{ $key }}: {{ $value | quote }}
@@ -306,9 +296,6 @@ REDIS_URL: {{ include "dev-health.redisURL" . | quote }}
 {{- $valkeyAuto := and .Values.valkey.enabled (not (index .Values.secrets.data "VALKEY_URI")) }}
 {{- if $valkeyAuto }}
 VALKEY_URI: {{ include "dev-health.redisURL" . | quote }}
-{{- end }}
-{{- if not (index .Values.config "WORKER_OPERATIONAL_BRIDGE_URL") }}
-WORKER_OPERATIONAL_BRIDGE_URL: {{ include "dev-health.operationalBridgeURL" . | quote }}
 {{- end }}
 {{- /* Only when a query-api workload actually exists to forward to. With
    queryApi disabled and no operator override the key stays ABSENT rather than

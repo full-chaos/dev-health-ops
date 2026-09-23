@@ -108,18 +108,20 @@ api:
   extraEnvFrom: []
 
 # =============================================================================
-# Metrics API (CHAOS-4351)
+# Metrics API (CHAOS-4351, historical -- its routing rationale is retired, CHAOS-6279)
 # =============================================================================
 # A second copy of `api` -- same image, same args, same env (configMap/
-# secret) -- serving ONLY as the Go daily-runtime's metrics compatibility
-# bridge target (the `heavy` goWorkers group below points its
-# --operational-bridge-url at this Service's DNS name instead of `api`'s).
-# No route split, no code change: `api` still exposes the same bridge
-# routes too. The point is a separate pod/cgroup so a bridge-side pids/
-# memory incident (CHAOS-4264, CHAOS-4317, CHAOS-4350) can no longer take
-# unrelated `api` request handling down with it. `enabled: false` by
-# default, matching `billingEdge`'s off-by-default posture, until an
-# operator opts in for a cluster that runs Go workers.
+# secret) -- created to serve ONLY as the Go daily-runtime's metrics
+# compatibility bridge target. CHAOS-6279 deletes the --operational-
+# bridge-url flag that used to point the `heavy` goWorkers group at this
+# Service's DNS name -- that flag no longer exists on any Go binary
+# (CHAOS-5320 already deleted the Python HTTP bridge it pointed at, and
+# CHAOS-6240 deleted the routes/subprocess mechanism the original incident
+# history above (CHAOS-4264/CHAOS-4317/CHAOS-4350) was bounding). No
+# worker group's command line points at this Service any more, on any
+# renderer -- enabling it today stands up a Deployment nothing calls.
+# `enabled: false` by default; whether to retire this Deployment entirely
+# is a separate, not-yet-decided follow-up, not this comment's call.
 metricsApi:
   enabled: false
   replicas: 1
@@ -591,16 +593,12 @@ goWorkers:
       # terminationGracePeriodSeconds above (7260s) both protect the
       # long-running metrics job from a scale-down SIGKILL.
       autoscaling: {enabled: true, minReplicas: 1, maxReplicas: 2, queueDepthPerReplica: 10, cooldownPeriod: 600, pollingInterval: 30}
-      # CHAOS-4351: this is the ONLY worker group whose queue set includes
-      # `metrics` (confirmed via `rg 'queues='` against every group in this
-      # file), i.e. the only one that calls the metrics compatibility
-      # bridge. Empty means "use metricsApi's own Service DNS name" (set
-      # by the go-workers.yaml template below); override here (or via
-      # `--set goWorkers.groups[0].bridgeUrl=...`, mirroring compose's
-      # DEV_HEALTH_METRICS_BRIDGE_URL env var) only if metricsApi is
-      # disabled and this group must fall back to `api`, or points at a
-      # differently-named release.
-      bridgeUrl: ""
+      # CHAOS-6279: bridgeUrl (formerly here, CHAOS-4351) is deleted -- the
+      # --operational-bridge-url flag it overrode no longer exists on the Go
+      # binaries (go-workers.yaml's own comment has the full history). This
+      # group's own command line no longer points at metricsApi at all as a
+      # result -- see metrics-api-deployment.yaml's comment for the
+      # resulting open question (retire that Deployment or not).
     - name: ops
       image: ghcr.io/full-chaos/dev-health-go-worker:latest
       queues: [coverage, heartbeat, retention, webhooks]
@@ -939,15 +937,17 @@ config:
   #    role/DSN pattern as the three roles above; password lives under
   #    goWorkers.pgbouncer.secret.data.RIVER_KEDA_READONLY_PASSWORD.
   RIVER_KEDA_READONLY_DATABASE_ROLE: "devhealth_keda_readonly"
-  # -- Worker operational bridge (CUT-04). The Go PagerDuty stream runner
-  #    forwards reconciliation to the API bridge, so it cannot open readiness
-  #    without a reachable endpoint. Empty auto-computes the in-cluster API
-  #    Service URL; the matching bearer token is a Secret key, never set here.
-  WORKER_OPERATIONAL_BRIDGE_URL: ""
-  # -- The auto-computed in-cluster endpoint is plaintext, which the Go runtime
-  #    rejects unless this opt-in is set. Set "false" and point the URL above at
-  #    an internal HTTPS origin (mesh/ingress) to drop the exemption.
-  WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE: "true"
+  # CHAOS-6279: WORKER_OPERATIONAL_BRIDGE_URL and
+  # WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE (formerly here, CUT-04) are
+  # deleted -- CHAOS-5320 already deleted the Python HTTP bridge they
+  # pointed the Go PagerDuty stream runner at, and nothing in the Go
+  # binaries reads that config any more (confirmed by grep). The matching
+  # WORKER_OPERATIONAL_BRIDGE_TOKEN Secret key (secrets.data below) is
+  # deleted from this chart's own defaults too -- CHAOS-6240 already
+  # measured zero Python-side readers; this PR confirms zero Go-side
+  # senders left either. An operator's own override of that key, if any,
+  # is untouched (this only removes the empty placeholder default). The
+  # separate deploy repo's chart is the stacked follow-up, not this one.
   # -- Where the Python edge's dispatcher forwards an operation the routing
   #    registry assigns to the Go plane. Empty auto-computes the in-cluster
   #    query-api Service URL when queryApi.enabled; with queryApi disabled and
@@ -1057,10 +1057,6 @@ secrets:
     JWT_SECRET_KEY: ""
     SETTINGS_ENCRYPTION_KEY: ""
     ADMIN_API_KEY: ""
-    # Shared bearer token for the worker operational bridge: the API validates
-    # inbound bridge calls against it and the Go stream runner presents it, so
-    # both workloads must read the same value from this Secret.
-    WORKER_OPERATIONAL_BRIDGE_TOKEN: ""
     GITHUB_TOKEN: ""
     GITHUB_APP_PRIVATE_KEY: ""
     GITLAB_TOKEN: ""

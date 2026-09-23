@@ -1,14 +1,16 @@
 {{- /*
-CHAOS-4351: a second copy of the api Deployment/Service -- same image, same
-args, same configMap/secret envFrom -- serving ONLY as the Go daily-runtime's
-metrics compatibility bridge target (see go-workers.yaml's `heavy` group,
-which points --operational-bridge-url at this Service's DNS name instead of
-api's when metricsApi.enabled is true). No route split, no code change: api
-still exposes the same bridge routes too. This just gives the bridge its own
-pod/cgroup so a bridge-side pids/memory incident (CHAOS-4264, CHAOS-4317,
-CHAOS-4350) can no longer take unrelated api request handling down with it.
-Deliberately has no ingress.yaml route (unlike api/billing-edge) -- a
-ClusterIP Service reachable only by in-cluster DNS is the "no public route".
+CHAOS-4351 (historical): a second copy of the api Deployment/Service -- same
+image, same args, same configMap/secret envFrom -- created to serve ONLY as
+the Go daily-runtime's metrics compatibility bridge target.
+CHAOS-6240/CHAOS-6279: the routes it existed to isolate
+(worker_metrics.py's bridge handlers) and the --operational-bridge-url flag
+that pointed the heavy worker group at this Service instead of api's are
+both deleted (zero remaining callers/readers, confirmed by grep). This
+Deployment now serves nothing this PR can see either group actually
+reaching -- whether to retire it is a separate, not-yet-decided follow-up
+(named, not executed, in CHAOS-6279's RISK-NOTES). Deliberately has no
+ingress.yaml route (unlike api/billing-edge) -- a ClusterIP Service
+reachable only by in-cluster DNS is the "no public route".
 */}}
 {{- if .Values.metricsApi.enabled }}
 apiVersion: apps/v1

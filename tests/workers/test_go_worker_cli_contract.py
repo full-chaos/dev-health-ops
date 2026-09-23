@@ -65,7 +65,6 @@ _CREDENTIALS = frozenset(
         "SETTINGS_ENCRYPTION_SALT",
         "PAGER_DUTY_CLIENT_ID",
         "PAGER_DUTY_SECRET",
-        "WORKER_OPERATIONAL_BRIDGE_TOKEN",
     }
 )
 
@@ -372,8 +371,6 @@ _CONFIGMAP_BACKED_FLAGS = {
     "--river-schema": "RIVER_DATABASE_SCHEMA",
     "--domain-database-role": "RIVER_DOMAIN_DATABASE_ROLE",
     "--queue-database-role": "RIVER_QUEUE_DATABASE_ROLE",
-    "--operational-bridge-url": "WORKER_OPERATIONAL_BRIDGE_URL",
-    "--operational-bridge-allow-insecure": "WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE",
 }
 
 

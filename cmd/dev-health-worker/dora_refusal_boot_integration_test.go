@@ -90,8 +90,6 @@ func TestDORARefusalDoesNotTakeDownTheRemainingFamily(t *testing.T) {
 		Service:                  "dev-health-worker",
 		Queues:                   []string{metricsQueue},
 		RiverDatabaseSchema:      "river",
-		OperationalBridgeURL:     "http://127.0.0.1:1/",
-		OperationalBridgeToken:   secrets.NewValue("boot-test-token"),
 		OperationalBridgeTimeout: 20 * time.Second,
 		ClickHouseURI:            secrets.NewValue(clickhouse),
 		// CHAOS-4291: this struct is hand-built, not routed through

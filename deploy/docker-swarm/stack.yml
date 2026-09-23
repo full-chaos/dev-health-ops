@@ -6,13 +6,13 @@ version: "3.8"
 # deploy/docker-swarm/stack.go-workers.yml's services, which still exists
 # separately for reference/diffing; the two are edited apart.
 #
-# CHAOS-4351 GAP (documented, not fixed here -- scoped to
-# compose.yml/compose.production.yml + the Helm chart only, same posture as
-# CHAOS-4317's own Swarm/Kubernetes gaps): this stack has no `metrics-api`
-# service, so every worker group below -- including the one running the
-# `metrics` queue -- still shares `api`'s stack via the single
-# `flag-bridge-url`. Add an equivalent `metrics-api` service + a heavy-only
-# flag override here if this stack is ever a real deploy target again.
+# CHAOS-6279: bridge-url/bridge-insecure (formerly here, CHAOS-4351) are
+# deleted -- the --operational-bridge-url/--operational-bridge-allow-
+# insecure flags they rendered no longer exist on the Go binaries at all
+# (CHAOS-5320 already deleted the Python HTTP bridge they pointed at); a
+# stack still passing them would refuse to start ("unknown flag"). The
+# CHAOS-4351 GAP note that used to live here (no metrics-api service on
+# this stack) is moot along with it.
 x-go-worker-flag:
   http-addr: &flag-http-addr "--http-addr=:8080"
   river-schema: &flag-river-schema "--river-schema=${RIVER_DATABASE_SCHEMA:-river}"
@@ -21,8 +21,6 @@ x-go-worker-flag:
   queue-mode: &flag-queue-mode "--queue-database-mode=${WORKER_DATABASE_MODE:-session}"
   coordinator-mode: &flag-coordinator-mode "--coordinator-database-mode=${COORDINATOR_DATABASE_MODE:-session}"
   domain-pooler: &flag-domain-pooler "--domain-transaction-pooler=${PGBOUNCER_TRANSACTION_MODE:-true}"
-  bridge-url: &flag-bridge-url "--operational-bridge-url=${WORKER_OPERATIONAL_BRIDGE_URL:-http://api:8000}"
-  bridge-insecure: &flag-bridge-insecure "--operational-bridge-allow-insecure=${WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE:-true}"
   log-level: &flag-log-level "--log-level=${LOG_LEVEL:-info}"
 
 x-go-worker: &go-worker
@@ -37,7 +35,6 @@ x-go-worker: &go-worker
     CLICKHOUSE_URI: clickhouse://ch:ch@clickhouse:9000/default
     VALKEY_URI: redis://valkey:6379/1
     SETTINGS_ENCRYPTION_KEY: ${SETTINGS_ENCRYPTION_KEY:?provider credential encryption key is required}
-    WORKER_OPERATIONAL_BRIDGE_TOKEN: ${WORKER_OPERATIONAL_BRIDGE_TOKEN:-}
     AUTO_RUN_MIGRATIONS: "false"
     OPERATIONAL_ORDERING_CONTRACT: ${OPERATIONAL_ORDERING_CONTRACT:-1}
   networks: [dev-health-internal]
@@ -210,10 +207,6 @@ services:
       EXPECTED_WORKER_GROUPS: ${EXPECTED_WORKER_GROUPS:-heavy,ops,sync,sync-provider}
       GRAPHQL_QUERY_TIMEOUT: "30"
       LOG_LEVEL: INFO
-      # The API serves the worker operational bridge and authenticates the Go
-      # caller against this shared token; without it every bridge call from
-      # the PagerDuty stream runner is rejected with 401.
-      WORKER_OPERATIONAL_BRIDGE_TOKEN: ${WORKER_OPERATIONAL_BRIDGE_TOKEN:-}
       # Schema is applied by the one-shot `migrate` service — the API must
       # never run migrations itself (CHAOS-2304).
       AUTO_RUN_MIGRATIONS: "false"
@@ -294,8 +287,6 @@ services:
       - *flag-queue-mode
       - *flag-coordinator-mode
       - *flag-domain-pooler
-      - *flag-bridge-url
-      - *flag-bridge-insecure
       - *flag-log-level
     stop_grace_period: 7260s
   go-worker-ops:
@@ -314,8 +305,6 @@ services:
       - *flag-queue-mode
       - *flag-coordinator-mode
       - *flag-domain-pooler
-      - *flag-bridge-url
-      - *flag-bridge-insecure
       - *flag-log-level
     stop_grace_period: 960s
   go-worker-sync:
@@ -334,8 +323,6 @@ services:
       - *flag-queue-mode
       - *flag-coordinator-mode
       - *flag-domain-pooler
-      - *flag-bridge-url
-      - *flag-bridge-insecure
       - *flag-log-level
     stop_grace_period: 960s
   # Split from the sync worker: a combined service cannot start while provider
@@ -356,8 +343,6 @@ services:
       - *flag-queue-mode
       - *flag-coordinator-mode
       - *flag-domain-pooler
-      - *flag-bridge-url
-      - *flag-bridge-insecure
       - *flag-log-level
     stop_grace_period: 960s
   go-reconciler:
@@ -378,8 +363,6 @@ services:
       - *flag-queue-mode
       - *flag-coordinator-mode
       - *flag-domain-pooler
-      - *flag-bridge-url
-      - *flag-bridge-insecure
       - *flag-log-level
     environment:
       <<: *go-worker-env-base
@@ -399,8 +382,6 @@ services:
       - *flag-queue-mode
       - *flag-coordinator-mode
       - *flag-domain-pooler
-      - *flag-bridge-url
-      - *flag-bridge-insecure
       - *flag-log-level
     environment:
       <<: *go-worker-env-base
@@ -421,8 +402,6 @@ services:
       - *flag-queue-mode
       - *flag-coordinator-mode
       - *flag-domain-pooler
-      - *flag-bridge-url
-      - *flag-bridge-insecure
       - *flag-log-level
     environment:
       <<: *go-worker-env-base
@@ -442,8 +421,6 @@ services:
       - *flag-queue-mode
       - *flag-coordinator-mode
       - *flag-domain-pooler
-      - *flag-bridge-url
-      - *flag-bridge-insecure
       - *flag-log-level
     environment:
       <<: *go-worker-env-base
@@ -463,8 +440,6 @@ services:
       - *flag-queue-mode
       - *flag-coordinator-mode
       - *flag-domain-pooler
-      - *flag-bridge-url
-      - *flag-bridge-insecure
       - *flag-log-level
     environment:
       <<: *go-worker-env-base

@@ -626,14 +626,14 @@ default, an unknown flag is rejected at startup with exit status 2, and the
 manifests in this directory pass their configuration in `command:` so
 `docker compose config` shows what each container actually runs.
 
-The `sync.team_autoimport` handler still needs an operational bridge when the
-selected queue requires it: pass `--operational-bridge-url` and set
-`WORKER_OPERATIONAL_BRIDGE_TOKEN` in the environment (the token is a credential
-and has no flag). The constructor fails closed on an empty origin or token. If
-the origin is plain HTTP rather than HTTPS, also pass
-`--operational-bridge-allow-insecure=true`, matching the deployment examples.
-These settings are dependency requirements for the selected queue; they are not
-queue-selection aliases.
+CHAOS-6279: `--operational-bridge-url`, `--operational-bridge-allow-insecure`,
+and `WORKER_OPERATIONAL_BRIDGE_TOKEN` (formerly documented here as a
+`sync.team_autoimport` dependency) are deleted -- that HTTP bridge no
+longer exists (CHAOS-5320 deleted the Python side it called into), and no
+constructor in this binary reads any of the three any more (confirmed by
+grep). `--operational-bridge-timeout` survives only as a generic HTTP
+client timeout for two unrelated callers (the billing email sender, the
+native heartbeat dispatcher).
 
 ### Provider credentials the Go executor can decrypt
 
@@ -970,63 +970,22 @@ runner itself, not which container it runs inside), but with `metrics-api`
 enabled an OOM kill in the bridge's child process no longer risks `api`'s
 own request handling as collateral damage.
 
-### `metrics-api`: a dedicated container for the daily-metrics compatibility bridge, deploy-5 manual step (CHAOS-4351)
+### `metrics-api` (CHAOS-4351, historical) -- its routing rationale is retired (CHAOS-6279)
 
-`compose.yml` and `deploy/docker-compose/compose.production.yml` both define
-a `metrics-api` service: a second copy of `api` (same image, same command,
-same environment) whose only job is to be the target of
-`go-worker-heavy`'s `--operational-bridge-url` flag (`compose.go-workers.yml`'s
-`flag-bridge-url-heavy` anchor) -- `go-worker-heavy` is the only worker
-group whose queue set includes `metrics` (verified by
-`test_compose_go_worker_heavy_alone_targets_metrics_api`; every other
-go-worker-*/go-reconciler/go-scheduler/go-stream-* group stays pointed at
-`api`, unaffected). `api` still serves the same bridge routes too -- this is
-not a route split or a feature flag, just a separate process/cgroup so a
-bridge-side pids/memory incident (CHAOS-4264/CHAOS-4317/CHAOS-4350's whole
-incident history above) can no longer take unrelated `api` request handling
-down with it.
-
-`deploy/helm/dev-health`'s chart has the equivalent `metricsApi.*` values
-block and a `metrics-api-deployment.yaml` template (`enabled: false` by
-default, matching `billingEdge`'s off-by-default posture); the `heavy`
-goWorkers group's `--operational-bridge-url` falls back to `api`'s Service
-when `metricsApi.enabled` is false, so a fresh install never references a
-Service that doesn't exist.
-
-**Deploy-5 manual step**: prod's real deploy host runs from a hand-
-maintained root `compose.yml`, untracked and separate from this repo's
-`ops/compose.yml`/`compose.production.yml` (the same CHAOS-4264 precedent
-already noted at that file's memory-limit block, and CHAOS-4317's
-`pids_limit` line before it) -- it needs the same `metrics-api` service
-block AND `compose.go-workers.yml`'s `flag-bridge-url-heavy` anchor added
-manually on the next prod touch. This lane has no prod access; flagging for
-whoever runs deploy 5 to carry into that host's compose file.
-
-**Hand-maintained stacks that wire the bridge via env, not the flag**:
-chris's shared local stack (also outside this repo, `dev-health` root
-`compose.yml` + `compose/compose.go.workers.yml`) sets the bridge target
-on its go-worker services via the `WORKER_OPERATIONAL_BRIDGE_URL`
-environment variable on a shared anchor, not the `--operational-bridge-url`
-CLI flag this ticket's `flag-bridge-url-heavy` anchor uses. Both surfaces
-resolve the SAME setting -- `internal/platform/config/options.go`
-declares `operational-bridge-url`/`WORKER_OPERATIONAL_BRIDGE_URL` as one
-option with both a flag and an env name, and `config.go`'s
-`OperationalBridgeURL` resolves through `resolve.go`'s `layeredLookup`
-(flag > env > default), so the env var alone is genuinely honoured when
-no flag is also passed. For a stack like that: set
-`WORKER_OPERATIONAL_BRIDGE_URL=http://metrics-api:8000` on the ONE
-service that runs the `metrics` queue only -- setting it on the shared
-anchor the way `WORKER_OPERATIONAL_BRIDGE_URL`'s default is defined today
-would repoint every worker's bridge traffic at `metrics-api`, the same
-over-broad mistake `flag-bridge-url-heavy` was written to avoid for the
-tracked overlay.
-
-**Not done here (deliberately out of scope, per team-lead)**: the live-stack
-proof that `api`'s `dev_health_metric_compat_runner_slots_in_use` gauge
-drops to 0 and `metrics-api`'s rises above 0 during a real fanout -- that's
-an ENDGAME-step-6-class readback (same posture as CHAOS-4317's own deferred
-proof), not a lane step. The proof here is `docker compose config`/`helm
-template` rendering correctly plus the unit tests named above.
+`compose.yml`, `deploy/docker-compose/compose.production.yml`, and
+`deploy/helm/dev-health`'s chart all still define a `metrics-api`
+service/Deployment: a second copy of `api` originally created to be the
+target of `go-worker-heavy`'s `--operational-bridge-url` flag. CHAOS-6279
+deletes that flag entirely -- it no longer exists on any Go binary
+(CHAOS-5320 already deleted the Python HTTP bridge it pointed at, and
+CHAOS-6240 deleted the worker_metrics.py routes/subprocess mechanism the
+whole incident history above (CHAOS-4264/CHAOS-4317/CHAOS-4350) was
+bounding). No worker group's command line points at `metrics-api` any
+more, on any renderer. The service/Deployment itself is left in place --
+retiring it is a separate, not-yet-decided follow-up, not this ticket's
+call. The "hand-maintained stacks that wire the bridge via env" guidance
+and the deploy-5 manual-step note that used to live here are moot along
+with the mechanism they described.
 
 ### `--shutdown-timeout` must exceed the longest job timeout on the selected queues, not just satisfy the flag's own minimum
 

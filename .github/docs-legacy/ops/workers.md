@@ -197,28 +197,22 @@ deletes old, unreferenced completion fences in bounded batches, while replay of
 an already-succeeded deterministic stage restores its fence before re-staging
 a successor.
 
-The operational effect bridge is an authenticated internal API. Set
-`WORKER_OPERATIONAL_BRIDGE_URL` to an internal HTTPS origin and
-`WORKER_OPERATIONAL_BRIDGE_TOKEN` to the matching API/worker secret; the
-optional `WORKER_OPERATIONAL_BRIDGE_TIMEOUT` is bounded from 100ms to 30s and
-defaults to 10s. For River compatibility clients it limits connection and TLS
-handshake setup only; it never caps the whole request. The River handler
-execution context and its contract-specific budget remain authoritative for
-daily, remaining-metric, work-graph, and investment execution. The API runs
-those legacy Python calls in fixed, killable child processes with bounded JSON
-input/output (stdout is the protocol; diagnostics retain inherited stderr). On
-POSIX each child has its own process group, which River cancellation or client
-disconnect terminates, kills if needed, and reaps before the fenced execution
-becomes ambiguous. Plain HTTP defaults to
-loopback-only. Local container stacks may explicitly set
-`WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE=true`; this
-permits only private IPs and single-label/`.internal`/`.local` service-discovery
-names, while public HTTP origins remain rejected. Production must leave the
-opt-in unset and use TLS. Requests contain durable UUID references and bounded
-routing metadata only. Webhook `success`/duplicate `skipped`, billing `sent`,
-and heartbeat `ok` are success; deterministic `error`/`dropped` results become
-permanent 422 rejections, while transport failures, timeouts, 429, 5xx, and
-malformed upstream responses remain retryable.
+CHAOS-6279 (2026-09): the "operational effect bridge" this paragraph used to
+describe is gone. `WORKER_OPERATIONAL_BRIDGE_URL`, `WORKER_OPERATIONAL_-
+BRIDGE_TOKEN`, and `WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE` no longer
+exist on the Go config surface (deleted, zero remaining readers, confirmed
+by grep); `WORKER_OPERATIONAL_BRIDGE_TIMEOUT` survives only as a generic
+HTTP client timeout for two unrelated callers (the billing email sender,
+the native heartbeat dispatcher), unconnected to any bridge concept any
+more. The Python-side routes this bridge called into were already deleted
+earlier (CHAOS-5320's HTTPDispatcher/DispatchWebhook removal, then
+CHAOS-6240/CHAOS-6243's route deletions) -- this paragraph's remaining
+claims about "legacy Python calls in fixed, killable child processes" and
+"stdout is the protocol" describe that same now-deleted subprocess
+mechanism (worker_metrics.py/worker_metrics_runner.py, CHAOS-6240) and are
+themselves stale, pre-dating this PR; not rewritten here (out of this
+ticket's scope) -- flagged as a known gap, not silently left implying
+current behavior.
 
 Metric and work-graph execution repair is a separate operator boundary: the
 `dev-health-workerctl` repair verbs run it as Go-native Postgres transactions on

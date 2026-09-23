@@ -30,8 +30,12 @@
 # RECONCILER_PID; API_PID stays the caller's own responsibility (each script
 # starts its API differently) -- stop it directly with stop_service, AFTER
 # stop_worker_stack, to preserve the CHAOS-5025 kill order (worker ->
-# reconciler -> api: the api is the worker's only client, so it must be
-# signalled last).
+# reconciler -> api). CHAOS-6279: the original reason (the worker's
+# --operational-bridge-url made it the api's only client, so a shutdown race
+# could leave the api's teardown waiting on the worker's own calls into it)
+# no longer applies -- that flag/config is deleted, CHAOS-5320 having already
+# deleted the Python side it called into. Order kept anyway as a harmless,
+# conservative convention; no longer load-bearing.
 
 # ---------------------------------------------------------------------------
 # build_go_binaries -- builds the three Go binaries this fixture needs into
@@ -191,8 +195,7 @@ wait_for_http_ready() {
 #
 # Reads: BIN_DIR, POSTGRES_HOST/PORT/DB, RIVER_DOMAIN_ROLE/QUEUE_ROLE/
 # COORDINATOR_ROLE (+ passwords), CLICKHOUSE_URI_NATIVE, VALKEY_HOST/PORT,
-# SETTINGS_ENCRYPTION_KEY, WORKER_OPERATIONAL_BRIDGE_TOKEN, API_PORT,
-# WORKER_HTTP_PORT, RECONCILER_HTTP_PORT.
+# SETTINGS_ENCRYPTION_KEY, WORKER_HTTP_PORT, RECONCILER_HTTP_PORT.
 # ---------------------------------------------------------------------------
 start_worker_stack() {
   local worker_log_file="$1" reconciler_log_file="$2"
@@ -205,7 +208,7 @@ start_worker_stack() {
     export WORKER_DATABASE_URI="postgresql://${RIVER_QUEUE_ROLE}:${RIVER_QUEUE_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}"
     export CLICKHOUSE_URI="${CLICKHOUSE_URI_NATIVE}"
     export VALKEY_URI="redis://${VALKEY_HOST}:${VALKEY_PORT}/1"
-    export SETTINGS_ENCRYPTION_KEY WORKER_OPERATIONAL_BRIDGE_TOKEN
+    export SETTINGS_ENCRYPTION_KEY
     # CHAOS-4291: the native ComplexityExecutor reads complexity.yaml from
     # config.go's localComplexityConfigPath default ("/app/config/complexity.yaml"),
     # which only exists inside the built container image (docker/go-worker.Dockerfile).
@@ -247,8 +250,6 @@ start_worker_stack() {
       --queue-database-role="${RIVER_QUEUE_ROLE}" \
       --queue-database-mode=session \
       --domain-transaction-pooler=false \
-      --operational-bridge-url="http://127.0.0.1:${API_PORT}" \
-      --operational-bridge-allow-insecure=true \
       --log-level=info
   ) >"${worker_log_file}" 2>&1 &
   WORKER_PID="$!"
@@ -347,10 +348,9 @@ stop_service() {
 # stop_worker_stack -- stops worker, then reconciler, in that order
 # (CHAOS-5025 partial order; the caller stops its own API_PID via
 # stop_service directly AFTER calling this, to complete the full worker ->
-# reconciler -> api kill order: dev-health-worker is the API's only client
-# via --operational-bridge-url, so the API must be signalled last or its
-# shutdown never converges while the worker keeps issuing bridge calls into
-# it). Reads: WORKER_PID, RECONCILER_PID.
+# reconciler -> api kill order -- see the CHAOS-6279 note in this file's
+# header comment: no longer load-bearing, kept as a conservative
+# convention). Reads: WORKER_PID, RECONCILER_PID.
 stop_worker_stack() {
   stop_service "dev-health-worker" "${WORKER_PID}"
   stop_service "dev-health-reconciler" "${RECONCILER_PID}"

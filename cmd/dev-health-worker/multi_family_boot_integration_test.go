@@ -5,8 +5,6 @@ package main
 import (
 	"context"
 	"log/slog"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sort"
@@ -73,12 +71,6 @@ func TestEveryMultiFamilyQueueSelectionBoots(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = valkey.Close(context.Background()) })
 
-	bridge := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		writer.WriteHeader(http.StatusOK)
-		_, _ = writer.Write([]byte(`{}`))
-	}))
-	t.Cleanup(bridge.Close)
-
 	families := make([]string, 0, len(workerFamilyQueues))
 	for name := range workerFamilyQueues {
 		families = append(families, name)
@@ -106,7 +98,7 @@ func TestEveryMultiFamilyQueueSelectionBoots(t *testing.T) {
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
 			family, err := bootQueueSelection(
-				t, ctx, postgres.URI, clickhouse.URI, valkey.URI, bridge.URL, testCase.queues,
+				t, ctx, postgres.URI, clickhouse.URI, valkey.URI, testCase.queues,
 			)
 			if err != nil {
 				t.Fatalf("queue selection %s did not compose: %v", strings.Join(testCase.queues, ","), err)
@@ -144,7 +136,6 @@ func bootQueueSelection(
 	postgresURI string,
 	clickhouseURI string,
 	valkeyURI string,
-	bridgeURL string,
 	queues []string,
 ) (workerFamily, error) {
 	t.Helper()
@@ -177,10 +168,7 @@ func bootQueueSelection(
 	cfg.ClickHouseURI = secrets.NewValue(clickhouseURI)
 	cfg.ValkeyURI = secrets.NewValue(valkeyURI)
 	cfg.SettingsEncryptionKey = secrets.NewValue("multi-family-encryption-key")
-	cfg.OperationalBridgeURL = bridgeURL
-	cfg.OperationalBridgeToken = secrets.NewValue("multi-family-token")
 	cfg.OperationalBridgeTimeout = 20 * time.Second
-	cfg.OperationalBridgeAllowInsecure = true
 	registryTree, err := jobruntime.Load(filepath.Join("contracts", "jobs", "v1"))
 	if err != nil {
 		t.Fatal(err)

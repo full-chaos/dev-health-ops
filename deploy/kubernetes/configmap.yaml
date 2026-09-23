@@ -23,28 +23,16 @@ data:
   RIVER_DOMAIN_DATABASE_ROLE: "devhealth_domain"
   RIVER_QUEUE_DATABASE_ROLE: "devhealth_queue"
 
-  # Worker operational bridge (CUT-04). The Go PagerDuty stream runner forwards
-  # reconciliation to the Python API bridge until the locked-graph port lands,
-  # so it cannot open readiness without a reachable endpoint. The matching
-  # bearer token is a Secret key (dev-health-secrets), never a ConfigMap value.
-  WORKER_OPERATIONAL_BRIDGE_URL: "http://dev-health-api.dev-health.svc.cluster.local:8000"
-  # CHAOS-4351 GAP (documented, not fixed -- team-lead scoped this ticket
-  # to compose.yml/compose.production.yml + the Helm chart only, same
-  # posture as CHAOS-4317's own Swarm/Kubernetes gaps): these raw
-  # manifests have no `metrics-api` Deployment/Service and no per-group
-  # override of this single shared value, unlike the Helm chart's
-  # per-group `goWorkers.groups[].bridgeUrl`. Every worker on this surface
-  # -- including whichever one runs the `metrics` queue -- still shares
-  # `api`'s Deployment via this one ConfigMap key, so a bridge-side pids/
-  # memory incident here still risks `api` request handling as collateral
-  # damage. Add an equivalent `metrics-api` Deployment/Service (see
-  # `deploy/helm/dev-health/templates/metrics-api-deployment.yaml` for the
-  # shape) and a per-worker env override here if these manifests are ever
-  # a real deploy target again.
-  # The in-cluster endpoint above is plaintext, which the Go runtime rejects
-  # unless this opt-in is set. Set it to "false" and repoint the URL at an
-  # internal HTTPS origin (mesh/ingress) to drop the exemption.
-  WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE: "true"
+  # CHAOS-6279: WORKER_OPERATIONAL_BRIDGE_URL and
+  # WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE (formerly here, CUT-04) are
+  # deleted -- the Go binaries no longer register these flags/env at all
+  # (CHAOS-5320 already deleted the Python HTTP bridge they pointed at),
+  # so a manifest still setting them would only be inert config, not a
+  # crash risk from an unknown flag (these are env vars, not CLI args, on
+  # this renderer) -- removed anyway for accuracy. The CHAOS-4351 GAP note
+  # that used to live here (no metrics-api Deployment on this renderer) is
+  # moot along with it: nothing on this surface points at a bridge target
+  # any more, isolated or shared.
   # Exactly one runtime owns the PagerDuty webhook stream. The API and the Go
   # stream runner share this ConfigMap so they can never disagree: `celery`
   # named the retired Celery dispatch, `river` hands the stream to Go

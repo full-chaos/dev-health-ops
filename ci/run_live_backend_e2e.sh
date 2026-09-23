@@ -309,7 +309,6 @@ RIVER_DOMAIN_PASSWORD="devhealth_domain"
 RIVER_QUEUE_PASSWORD="devhealth_queue"
 RIVER_COORDINATOR_PASSWORD="devhealth_coordinator"
 
-WORKER_OPERATIONAL_BRIDGE_TOKEN="${WORKER_OPERATIONAL_BRIDGE_TOKEN:-ci-live-e2e-bridge-token}"
 # CHAOS-5362: previously only ever read inline as
 # "${SETTINGS_ENCRYPTION_KEY:-dev-key-not-for-prod}" (never actually
 # assigned as a shell variable) -- start_worker_stack's plain `export
@@ -352,10 +351,10 @@ cleanup() {
   fi
   CLEANUP_DONE=1
   trap '' INT TERM
-  # Kill ORDER is load-bearing (CHAOS-5025): dev-health-worker is the API's
-  # only client (--operational-bridge-url), so the API must be signalled
-  # LAST -- stop_worker_stack drains worker then reconciler; the api stops
-  # here, directly, afterward.
+  # Kill ORDER (CHAOS-5025): stop_worker_stack drains worker then
+  # reconciler; the api stops here, directly, afterward. CHAOS-6279: no
+  # longer load-bearing (see ci/lib/go_worker_fixture.sh's header comment)
+  # -- kept as a conservative convention.
   stop_worker_stack
   stop_service "query-api" "${QUERY_API_PID}"
   stop_service "dev-hops api" "${API_PID}"
@@ -561,12 +560,6 @@ echo "==> starting API at ${BASE_URL}"
   export CLICKHOUSE_URI="${CLICKHOUSE_URI}"
   export POSTGRES_URI="${POSTGRES_URI}"
   export JWT_SECRET_KEY="${JWT_SECRET_KEY}"
-  # CHAOS-5362: the Go worker started below authenticates its operational-
-  # bridge calls back into this API with this shared token (--operational-
-  # bridge-allow-insecure=true, start_worker_stack) -- the API must know the
-  # same value to accept them, same as ci/run_metrics_executed_proof.sh's
-  # own API-start block.
-  export WORKER_OPERATIONAL_BRIDGE_TOKEN="${WORKER_OPERATIONAL_BRIDGE_TOKEN}"
   # The edge stamps x-dev-health-plane on the GraphQL responses it serves,
   # as prod does. go-api-prove refuses a baseline leg without it (see
   # ci/lib/go_api_prove_e2e.sh).
@@ -588,8 +581,7 @@ wait_for_ready
 #
 # Reuses ci/run_metrics_executed_proof.sh's own mechanism (ci/lib/go_worker_
 # fixture.sh): build the Go binaries, provision River against this job's
-# throwaway Postgres, start dev-health-worker + dev-health-reconciler
-# pointed at the API already running above (its --operational-bridge-url),
+# throwaway Postgres, start dev-health-worker + dev-health-reconciler,
 # seed real source rows through the real sync path for cicd/deployments/
 # incidents/tests, finalize those sync_runs (triggering the real post-sync
 # fanout -> metrics.daily_dispatch/daily_partition River jobs), and confirm

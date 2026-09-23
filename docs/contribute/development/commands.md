@@ -128,7 +128,7 @@ make go:contract
 Use the worker contract checker and operator CLI help as the exact command source for the current revision:
 
 ```bash
-go run ./cmd/worker-contractcheck --help
+go run ./cmd/dho contracts --help
 go run ./internal/workersctl --help
 ```
 

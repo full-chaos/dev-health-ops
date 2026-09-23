@@ -1325,7 +1325,7 @@ check_contract() {
   printf 'job contracts: validate\n'
   (
     cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" GOWORK=off go run -mod=readonly ./cmd/worker-contractcheck \
+    "${GO_ENV_OFF[@]}" GOWORK=off go run -mod=readonly ./cmd/dho contracts \
       validate --root "${contract_root}"
   )
 
@@ -1335,7 +1335,7 @@ check_contract() {
     printf 'job contracts: compare %s\n' "${contract_base}"
     (
       cd "${ROOT}"
-      "${GO_ENV_OFF[@]}" GOWORK=off go run -mod=readonly ./cmd/worker-contractcheck \
+      "${GO_ENV_OFF[@]}" GOWORK=off go run -mod=readonly ./cmd/dho contracts \
         compare --base "${contract_base}" --candidate "${contract_root}"
     )
   fi

@@ -14,6 +14,7 @@ package main
 import (
 	"github.com/full-chaos/dev-health-ops/internal/apiservice"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
+	"github.com/full-chaos/dev-health-ops/internal/contractcheck"
 	"github.com/full-chaos/dev-health-ops/internal/goapicli"
 	"github.com/full-chaos/dev-health-ops/internal/mintcli"
 	"github.com/full-chaos/dev-health-ops/internal/workersctl"
@@ -25,6 +26,7 @@ func main() { cli.Main("dho", commands()) }
 func commands() []cli.Command {
 	return []cli.Command{
 		apiservice.Command(),
+		contractcheck.Command(),
 		goapicli.Command(),
 		mintcli.Command(),
 		workersctl.Command(),

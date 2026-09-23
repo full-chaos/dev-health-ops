@@ -1,14 +1,23 @@
-package main
+// Package contractcheck is the `contracts` vertical of the dho binary:
+// worker job-contract validation, folded from the standalone
+// worker-contractcheck binary. The validation logic is unchanged; each
+// verb's Run now goes through the binary-wide exit-code contract (a bad
+// flag or a malformed positional argument exits 2, -h/--help exits 0, any
+// other failure exits 1) via cli.WrapFlagParseError and cli.ExitForVerbError,
+// the same mapping every other vertical in this binary uses.
+package contractcheck
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"os"
 	"sort"
 	"strings"
 
+	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/deploymentcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 )
@@ -16,59 +25,68 @@ import (
 const defaultContractRoot = "contracts/jobs/v1"
 const defaultDeploymentManifest = "deploy/go-workers/deployment.json"
 
-func main() {
-	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
-}
-
-func run(args []string, stdout, stderr io.Writer) int {
-	if len(args) == 0 {
-		printUsage(stderr)
-		return 2
-	}
-	switch args[0] {
-	case "validate":
-		return runValidate(args[1:], stdout, stderr)
-	case "capabilities":
-		return runCapabilities(args[1:], stdout, stderr)
-	case "rollout":
-		return runRollout(args[1:], stdout, stderr)
-	case "compare":
-		return runCompare(args[1:], stdout, stderr)
-	case "help", "-h", "--help":
-		printUsage(stdout)
-		return 0
-	default:
-		fmt.Fprintf(stderr, "unknown command %q\n", args[0])
-		printUsage(stderr)
-		return 2
+// Command is the `contracts` vertical of the dho binary.
+func Command() cli.Command {
+	return cli.Command{
+		Name:    "contracts",
+		Kind:    cli.Group,
+		Summary: "worker job-contract validation: schema, capability, rollout, compare",
+		Children: []cli.Command{
+			verbCommand("validate", "validate the job-contract tree and the Go worker deployment manifest against it", runValidate),
+			verbCommand("capabilities", "emit a capability report for a live binary's registered queues", runCapabilities),
+			verbCommand("rollout", "check that every live capability report supports its queues' producer versions", runRollout),
+			verbCommand("compare", "diff two contract trees for breaking in-place changes", runCompare),
+		},
 	}
 }
 
-func runValidate(args []string, stdout, stderr io.Writer) int {
+// verbCommand wraps one of this package's run* functions in the standard
+// cli.Command shape: the verb's own error, if any and not a help request,
+// is printed once here (never by the run* function itself), and mapped to
+// this binary's exit-code contract by cli.ExitForVerbError.
+func verbCommand(name, summary string, run func(args []string, stdout, flagErrOutput io.Writer) error) cli.Command {
+	return cli.Command{
+		Name: name, Kind: cli.Verb, Summary: summary,
+		Run: func(_ context.Context, env cli.Env) int {
+			err := run(env.Args, env.Stdout, env.Stderr)
+			if err != nil && !errors.Is(err, flag.ErrHelp) {
+				fmt.Fprintf(env.Stderr, "contracts %s: %v\n", name, err)
+			}
+			return cli.ExitForVerbError(err)
+		},
+	}
+}
+
+// usageError marks a hand-rolled usage problem (a missing required flag, a
+// disallowed positional argument) with the SAME exit-2 semantics
+// cli.WrapFlagParseError gives a real (*flag.FlagSet).Parse failure -- both
+// are "nothing ran because the invocation was wrong", the class
+// cli.ExitForVerbError maps to ExitUsage.
+func usageError(err error) error {
+	return &cli.FlagUsageError{Err: err}
+}
+
+func runValidate(args []string, stdout, flagErrOutput io.Writer) error {
 	flags := flag.NewFlagSet("validate", flag.ContinueOnError)
-	flags.SetOutput(stderr)
+	flags.SetOutput(flagErrOutput)
 	root := flags.String("root", defaultContractRoot, "contract v1 directory")
 	deployment := flags.String("deployment", defaultDeploymentManifest, "Go worker deployment manifest")
 	if err := flags.Parse(args); err != nil {
-		return 2
+		return cli.WrapFlagParseError(err)
 	}
 	if flags.NArg() != 0 {
-		fmt.Fprintln(stderr, "validate accepts no positional arguments")
-		return 2
+		return usageError(errors.New("validate accepts no positional arguments"))
 	}
 	if err := jobcontract.ValidateTree(*root); err != nil {
-		fmt.Fprintln(stderr, "contract validation failed:", err)
-		return 1
+		return fmt.Errorf("contract validation failed: %w", err)
 	}
 	registry, err := jobcontract.LoadRegistry(*root)
 	if err != nil {
-		fmt.Fprintln(stderr, "load registry:", err)
-		return 1
+		return fmt.Errorf("load registry: %w", err)
 	}
 	_, budget, err := deploymentcontract.Load(*deployment, registry)
 	if err != nil {
-		fmt.Fprintln(stderr, "deployment validation failed:", err)
-		return 1
+		return fmt.Errorf("deployment validation failed: %w", err)
 	}
 	fmt.Fprintln(stdout, "worker contracts valid")
 	fmt.Fprintf(
@@ -83,78 +101,69 @@ func runValidate(args []string, stdout, stderr io.Writer) int {
 		budget.ServerConnectionFootprint,
 		budget.ServerConnectionHeadroom,
 	)
-	return 0
+	return nil
 }
 
-func runCapabilities(args []string, stdout, stderr io.Writer) int {
+func runCapabilities(args []string, stdout, flagErrOutput io.Writer) error {
 	flags := flag.NewFlagSet("capabilities", flag.ContinueOnError)
-	flags.SetOutput(stderr)
+	flags.SetOutput(flagErrOutput)
 	root := flags.String("root", defaultContractRoot, "contract v1 directory")
 	var queues queueList
 	flags.Var(&queues, "queues", "registered queues to consume (comma-separated or repeatable)")
 	if err := flags.Parse(args); err != nil {
-		return 2
+		return cli.WrapFlagParseError(err)
 	}
 	if len(queues) == 0 || flags.NArg() != 0 {
-		fmt.Fprintln(stderr, "capabilities requires --queues and no positional arguments")
-		return 2
+		return usageError(errors.New("capabilities requires --queues and no positional arguments"))
 	}
 	registry, err := jobcontract.LoadRegistry(*root)
 	if err != nil {
-		fmt.Fprintln(stderr, "load registry:", err)
-		return 1
+		return fmt.Errorf("load registry: %w", err)
 	}
 	report, err := jobcontract.CapabilitiesForQueues(*root, registry, queues)
 	if err != nil {
-		fmt.Fprintln(stderr, "build capability report:", err)
-		return 1
+		return fmt.Errorf("build capability report: %w", err)
 	}
 	encoder := json.NewEncoder(stdout)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(report); err != nil {
-		fmt.Fprintln(stderr, "encode capability report:", err)
-		return 1
+		return fmt.Errorf("encode capability report: %w", err)
 	}
-	return 0
+	return nil
 }
 
-func runRollout(args []string, stdout, stderr io.Writer) int {
+func runRollout(args []string, stdout, flagErrOutput io.Writer) error {
 	flags := flag.NewFlagSet("rollout", flag.ContinueOnError)
-	flags.SetOutput(stderr)
+	flags.SetOutput(flagErrOutput)
 	root := flags.String("root", defaultContractRoot, "contract v1 directory")
 	var queues queueList
 	flags.Var(&queues, "queues", "registered queues to check (comma-separated or repeatable)")
 	var reportPaths stringList
 	flags.Var(&reportPaths, "report", "capability report path (repeat for every live binary)")
 	if err := flags.Parse(args); err != nil {
-		return 2
+		return cli.WrapFlagParseError(err)
 	}
 	if len(queues) == 0 || len(reportPaths) == 0 || flags.NArg() != 0 {
-		fmt.Fprintln(stderr, "rollout requires --queues, at least one --report, and no positional arguments")
-		return 2
+		return usageError(errors.New("rollout requires --queues, at least one --report, and no positional arguments"))
 	}
 	registry, err := jobcontract.LoadRegistry(*root)
 	if err != nil {
-		fmt.Fprintln(stderr, "load registry:", err)
-		return 1
+		return fmt.Errorf("load registry: %w", err)
 	}
 	state, err := jobcontract.LoadMigrationState(*root, registry)
 	if err != nil {
-		fmt.Fprintln(stderr, "load migration state:", err)
-		return 1
+		return fmt.Errorf("load migration state: %w", err)
 	}
 	reports := make([]jobcontract.CapabilityReport, 0, len(reportPaths))
 	for _, path := range reportPaths {
 		report, err := jobcontract.LoadCapabilityReport(path)
 		if err != nil {
-			fmt.Fprintln(stderr, "load capability report:", err)
-			return 1
+			return fmt.Errorf("load capability report: %w", err)
 		}
 		reports = append(reports, report)
 	}
 	if _, err := jobcontract.CapabilitiesForQueues(*root, registry, queues); err != nil {
-		fmt.Fprintln(stderr, "validate rollout queues:", err)
-		return 1
+		return fmt.Errorf("validate rollout queues: %w", err)
 	}
 	selected := make(map[string]struct{}, len(queues))
 	for _, queue := range queues {
@@ -170,8 +179,7 @@ func runRollout(args []string, stdout, stderr io.Writer) int {
 	}
 	for _, queue := range queues {
 		if _, ok := covered[queue]; !ok {
-			fmt.Fprintf(stderr, "rollout queue %q has no capability report\n", queue)
-			return 1
+			return fmt.Errorf("rollout queue %q has no capability report", queue)
 		}
 	}
 
@@ -193,41 +201,32 @@ func runRollout(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	if err := jobcontract.CheckRollout(*root, scopedRegistry, scopedState, reports); err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
+		return err
 	}
 	fmt.Fprintln(stdout, "all live capability reports support producer versions")
-	return 0
+	return nil
 }
 
-func runCompare(args []string, stdout, stderr io.Writer) int {
+func runCompare(args []string, stdout, flagErrOutput io.Writer) error {
 	flags := flag.NewFlagSet("compare", flag.ContinueOnError)
-	flags.SetOutput(stderr)
+	flags.SetOutput(flagErrOutput)
 	base := flags.String("base", "", "merge-base contract v1 directory")
 	candidate := flags.String("candidate", defaultContractRoot, "candidate contract v1 directory")
 	if err := flags.Parse(args); err != nil {
-		return 2
+		return cli.WrapFlagParseError(err)
 	}
 	if *base == "" || flags.NArg() != 0 {
-		fmt.Fprintln(stderr, "compare requires --base and no positional arguments")
-		return 2
+		return usageError(errors.New("compare requires --base and no positional arguments"))
 	}
 	changes, err := jobcontract.CompareTrees(*base, *candidate)
 	if err != nil {
-		fmt.Fprintln(stderr, "compare contracts:", err)
-		return 1
+		return fmt.Errorf("compare contracts: %w", err)
 	}
 	if len(changes) > 0 {
-		fmt.Fprintln(stderr, "breaking contract changes detected:")
-		fmt.Fprintln(stderr, jobcontract.FormatBreakingChanges(changes))
-		return 1
+		return fmt.Errorf("breaking contract changes detected:\n%s", jobcontract.FormatBreakingChanges(changes))
 	}
 	fmt.Fprintln(stdout, "no breaking in-place contract changes")
-	return 0
-}
-
-func printUsage(writer io.Writer) {
-	fmt.Fprintln(writer, "usage: worker-contractcheck <validate|capabilities|rollout|compare> [flags]")
+	return nil
 }
 
 type stringList []string

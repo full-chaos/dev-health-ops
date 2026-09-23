@@ -144,7 +144,7 @@ The current maximum topology uses:
   connections, and a 15-connection server reserve, below
   `max_connections=100`.
 
-`worker-contractcheck validate` rejects registry/profile drift, runtime exposure
+`dho contracts validate` rejects registry/profile drift, runtime exposure
 of the migration DSN, or any budget increase that crosses those ceilings.
 
 River terminal-row cleanup is configured independently of product history:

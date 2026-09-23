@@ -63,7 +63,7 @@ cmd/
 ├── dev-health-reconciler/    # Durable-repair process shell
 ├── dev-health-stream-runner/ # Redis Streams process shell
 ├── dev-health-workerctl/     # Authenticated, audited River operator CLI
-└── worker-contractcheck/     # Versioned-contract validation CLI
+└── dho/                      # Operator binary: workers, contracts, goapi, mint verticals
 internal/
 ├── platform/                 # Config, secrets, logging, lifecycle, health, version
 ├── storage/                  # Bounded PostgreSQL, ClickHouse, and Valkey factories

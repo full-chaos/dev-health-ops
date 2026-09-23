@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -25,6 +26,20 @@ import (
 )
 
 func quietLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
+
+// TestMain overrides contractRoot once for this whole test binary: `go
+// test` runs with this package's own source directory as the working
+// directory (two levels below the repo root), so the production default
+// "contracts/jobs/v1" (relative to the dho api image's WORKDIR /app) never
+// resolves here -- matching cmd/dev-health-scheduler's own testContractRoot
+// convention. Every test in this package that reaches buildDeps with
+// APIDatabaseURI configured needs this; a package-level override means a
+// future such test gets it automatically, rather than each one repeating
+// its own save/override/restore.
+func TestMain(m *testing.M) {
+	contractRoot = "../../contracts/jobs/v1"
+	os.Exit(m.Run())
+}
 
 func TestWriteErrorRendersEveryCodeInThePythonShape(t *testing.T) {
 	cases := map[httpapi.Code]struct {
@@ -223,15 +238,15 @@ func TestConfigureRegistersTheDatabaseCheckOnlyWhenConfigured(t *testing.T) {
 	}
 }
 
-// TestRoutesMountsEveryArea proves both business-route areas (acr,
-// CHAOS-6244; external-ingest, CHAOS-6246) are always on the mux,
-// regardless of whether Deps is live: with a nil Pool/Valkey the acr health
-// path still answers and its entitlement path answers 503 rather than
-// being absent (see acr.Deps's doc comment for why omitting the route
-// entirely would be the wrong failure mode -- a silent 404 reads as "no
-// such route", not "not ready"), and external-ingest's routes register
-// unconditionally too (a handler that needs a live dependency answers
-// CodeInternal at request time instead).
+// TestRoutesMountsEveryArea proves all three business-route areas (acr,
+// CHAOS-6244; external-ingest, CHAOS-6246; webhookintake, CHAOS-6247) are
+// always on the mux, regardless of whether Deps is live: with a nil Pool/
+// Valkey the acr health path still answers and its entitlement path
+// answers 503 rather than being absent (see acr.Deps's doc comment for why
+// omitting the route entirely would be the wrong failure mode -- a silent
+// 404 reads as "no such route", not "not ready"), and external-ingest's
+// and webhookintake's routes both register unconditionally too (a handler
+// that needs a live dependency answers an error at request time instead).
 func TestRoutesMountsEveryArea(t *testing.T) {
 	routes := Routes(Deps{}, nil)
 	want := map[string]bool{
@@ -244,13 +259,18 @@ func TestRoutesMountsEveryArea(t *testing.T) {
 		"POST /api/v1/external-ingest/batches":                 false,
 		"GET /api/v1/external-ingest/batches":                  false,
 		"GET /api/v1/external-ingest/batches/{ingestion_id}":   false,
-		"GET /health":                           false,
-		"HEAD /health":                          false,
-		"GET /ready":                            false,
-		"HEAD /ready":                           false,
-		"GET /health/workers":                   false,
-		"HEAD /health/workers":                  false,
-		"POST /api/v1/product-telemetry/events": false,
+		"GET /health":                                  false,
+		"HEAD /health":                                 false,
+		"GET /ready":                                   false,
+		"HEAD /ready":                                  false,
+		"GET /health/workers":                          false,
+		"HEAD /health/workers":                         false,
+		"POST /api/v1/product-telemetry/events":        false,
+		"POST /api/v1/webhooks/github":                 false,
+		"POST /api/v1/webhooks/gitlab":                 false,
+		"POST /api/v1/webhooks/jira":                   false,
+		"POST /api/v1/webhooks/pagerduty/{binding_id}": false,
+		"GET /api/v1/webhooks/health":                  false,
 	}
 	if len(routes) != len(want) {
 		t.Fatalf("route count = %d, want %d: %+v", len(routes), len(want), routes)

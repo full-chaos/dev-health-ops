@@ -55,16 +55,19 @@ func bootstrapAPIRole(t *testing.T, ctx context.Context, admin *pgxpool.Pool, db
 	}
 }
 
-// acrEntitlementTables creates the four tables CHAOS-6244's apiPosture()
-// declares (organizations, feature_flags, org_feature_overrides,
-// org_licenses -- see api_authorization.go), with the same minimal shape
-// providersync's incident-entitlement integration test uses for the same
-// four tables (they share the source schema). GRANTs SELECT on each to
-// role, standing in for the api-role grant-apply step api_authorization.go's
-// NOTE says does not exist yet: this is the SAME manual/future-automated
-// step, executed here so a test proves the readiness check accepts a role
-// that genuinely holds the declared manifest, not just the pre-CHAOS-6244
-// empty one.
+// acrEntitlementTables creates every table apiPosture() currently declares
+// (CHAOS-6244's four SELECT-only entitlement/principal tables, and
+// CHAOS-6247's webhook_deliveries/worker_job_outbox/pagerduty_webhook_bindings)
+// and, by iterating apiPosture().RequiredTables itself rather than a
+// hand-written per-table list, GRANTs each its exact declared privilege set
+// to role -- standing in for the api-role grant-apply step
+// api_authorization.go's NOTE says does not exist yet: this is the SAME
+// manual/future-automated step, executed here so a test proves the
+// readiness check accepts a role that genuinely holds the declared
+// manifest, not just the pre-CHAOS-6244 empty one. Kept as one shared
+// helper (not a second copy per route PR) since the grant loop already
+// derives from apiPosture() generically; a new route PR adds only its own
+// CREATE TABLE statements above.
 func acrEntitlementTables(t *testing.T, ctx context.Context, admin *pgxpool.Pool, role string) {
 	t.Helper()
 	for _, statement := range []string{
@@ -80,6 +83,9 @@ func acrEntitlementTables(t *testing.T, ctx context.Context, admin *pgxpool.Pool
 		`CREATE TABLE IF NOT EXISTS users (id uuid PRIMARY KEY)`,
 		`CREATE TABLE IF NOT EXISTS memberships (id uuid PRIMARY KEY)`,
 		`CREATE TABLE IF NOT EXISTS impersonation_sessions (id uuid PRIMARY KEY)`,
+		`CREATE TABLE IF NOT EXISTS webhook_deliveries (id uuid PRIMARY KEY)`,
+		`CREATE TABLE IF NOT EXISTS worker_job_outbox (id uuid PRIMARY KEY)`,
+		`CREATE TABLE IF NOT EXISTS pagerduty_webhook_bindings (id uuid PRIMARY KEY)`,
 	} {
 		if _, err := admin.Exec(ctx, statement); err != nil {
 			t.Fatalf("bootstrap %s: %v", statement, err)
@@ -177,11 +183,11 @@ func externalIngestTables(t *testing.T, ctx context.Context, admin *pgxpool.Pool
 
 // TestCheckAPIAuthorizationAcceptsTheBaselineBootstrap proves a role
 // provisioned exactly the way provision_river_roles.sql's optional api_role
-// block provisions it -- CONNECT, USAGE on public -- PLUS the four
-// acrEntitlementTables SELECT grants CHAOS-6244's apiPosture() now declares,
-// passes CheckAPIAuthorization. Before CHAOS-6244 the manifest was empty and
-// the baseline alone was sufficient; TestCheckAPIAuthorizationRefusesTheBareBaselineNow
-// below is the regression proof that the bare baseline is no longer enough.
+// block provisions it -- CONNECT, USAGE on public -- PLUS acrEntitlementTables'
+// grants for apiPosture()'s full current manifest passes CheckAPIAuthorization.
+// Before CHAOS-6244 the manifest was empty and the baseline alone was
+// sufficient; TestCheckAPIAuthorizationRefusesTheBareBaselineNow below is the
+// regression proof that the bare baseline is no longer enough.
 func TestCheckAPIAuthorizationAcceptsTheBaselineBootstrap(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -220,7 +226,7 @@ func TestCheckAPIAuthorizationAcceptsTheBaselineBootstrap(t *testing.T) {
 }
 
 // TestCheckAPIAuthorizationRefusesTheBareBaselineNow is the regression proof
-// that CHAOS-6244's four-table manifest is genuinely enforced: a role
+// that apiPosture()'s declared manifest is genuinely enforced: a role
 // bootstrapped the OLD way (CONNECT + USAGE only, no acrEntitlementTables
 // grants) now FAILS readiness, where before CHAOS-6244 (apiPosture() empty)
 // it passed. provision_river_roles.sql's api_role block still produces
@@ -392,7 +398,7 @@ func TestCheckAPIAuthorizationRefusesAMissingBaselinePrivilege(t *testing.T) {
 // matches bootstrapAPIRole's own hand-rolled mimic: CONNECT + USAGE on
 // public, nothing else. Since CHAOS-6244, that bare baseline is no longer
 // apiPosture()'s whole manifest (api_authorization.go's NOTE: no automated
-// step yet applies the four acrEntitlementTables grants), so the role the
+// step yet applies acrEntitlementTables' grants), so the role the
 // script produces correctly FAILS readiness here -- this test's job is
 // proving the SQL file produces exactly the bare baseline, the same thing
 // TestCheckAPIAuthorizationRefusesTheBareBaselineNow proves for the
@@ -461,7 +467,7 @@ func TestProvisionScriptAPIRoleOptInMatchesTheDeclaredPosture(t *testing.T) {
 		t.Fatalf("provision_river_roles.sql's api_role opt-in readiness error = %v, want ErrPostureRefused", err)
 	}
 
-	// And the converse: granting the four acrEntitlementTables privileges the
+	// And the converse: granting acrEntitlementTables' privileges the
 	// script itself does not (yet) apply is what actually gets the
 	// script-provisioned role to readiness -- proving the refusal above is
 	// caused exactly by the missing table grants, nothing else about the
@@ -720,7 +726,7 @@ func TestProvisionScriptAPIRoleRefusedWhenPublicHoldsCreate(t *testing.T) {
 
 	// And the converse, same connection/role: revoking PUBLIC's grant (the
 	// deliberate, human step this test's docstring says the script must not
-	// take silently) PLUS granting the four acrEntitlementTables privileges
+	// take silently) PLUS granting acrEntitlementTables' privileges
 	// the script itself does not yet apply (api_authorization.go's NOTE) lets
 	// the identical role pass readiness -- proving the refusal above is
 	// caused by PUBLIC's CREATE grant, not some other defect, and that it is

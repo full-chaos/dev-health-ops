@@ -1064,3 +1064,36 @@ func TestExplicitHeadBesideALiteralSiblingOfAWildcard(t *testing.T) {
 		}
 	}
 }
+
+// TestATrailingSlashRouteIsNotAFallbackForItsBarePath pins the 405
+// fallback's lookup on a route table holding a trailing-slash pattern,
+// with neither StrictPaths nor RedirectSlashes: a request for the bare
+// path in a method no route has matches no route, so it is this package's
+// 404 envelope -- never the trailing-slash path's 405 nor net/http's own
+// redirect.
+func TestATrailingSlashRouteIsNotAFallbackForItsBarePath(t *testing.T) {
+	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	server, err := NewServer(ServerOptions{
+		Address: "127.0.0.1:0", RequestTimeout: time.Second, MaxBodyBytes: 1024,
+		Routes: []Route{{Method: http.MethodPost, Pattern: "/f/", Handler: ok}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		method, path string
+		status       int
+		allow        string
+	}{
+		{http.MethodGet, "/f", 404, ""},
+		{http.MethodGet, "/f/", 405, "POST"},
+		{http.MethodPost, "/f/", 200, ""},
+	} {
+		recorder := httptest.NewRecorder()
+		server.Handler().ServeHTTP(recorder, httptest.NewRequest(c.method, c.path, nil))
+		if recorder.Code != c.status || recorder.Header().Get("Allow") != c.allow || recorder.Header().Get("Location") != "" {
+			t.Errorf("%s %s: %d Allow=%q Location=%q, want %d %q", c.method, c.path, recorder.Code,
+				recorder.Header().Get("Allow"), recorder.Header().Get("Location"), c.status, c.allow)
+		}
+	}
+}

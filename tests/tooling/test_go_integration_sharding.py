@@ -499,8 +499,11 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # 1371s/1368s/1368s/1369s, a 3s spread. Re-tighten or loosen this to
     # match a future re-time's actual output rather than forcing new
     # weights to preserve today's gap.
+    # The bound is proportional (1% of the largest shard, about 13s today)
+    # so a package added at its measured weight is never tuned to fit a
+    # fixed gap: LPT on real weights leaves a few seconds of spread.
     packages_totals = [estimated[shard] for shard in (2, 3, 4, 5, 6)]
-    assert max(packages_totals) - min(packages_totals) <= 3
+    assert max(packages_totals) - min(packages_totals) <= max(packages_totals) // 100
 
     expected_provider_tests = _providersync_top_level_tests()
     expected_integration_tests = _providersync_integration_tagged_tests()

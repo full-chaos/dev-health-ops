@@ -33,6 +33,15 @@ command, so the pod could never start. Refuse the render instead.
 {{- if and $group.runtimeProfile (ne ($group.subcommand | default "") "stream-runner") }}
 {{- fail (printf "goWorkers.groups[%s]: a stream group (runtimeProfile=%q) runs `dho stream-runner` and needs subcommand: stream-runner (got %q); without it dho gets --profile as its command and exits 2." $group.name $group.runtimeProfile ($group.subcommand | default "")) }}
 {{- end }}
+{{- /*
+The retired dev-health-go-stream-runner image has no dho entrypoint: it
+refuses the `stream-runner` verb as a positional argument and exits 2. A
+stream group must run an image whose entrypoint is dho (go-dho, or the
+operator image that also ships dho).
+*/}}
+{{- if and $group.runtimeProfile (contains "dev-health-go-stream-runner" ($group.image | default "")) }}
+{{- fail (printf "goWorkers.groups[%s]: image %q is the retired dev-health-go-stream-runner image, which has no dho entrypoint and exits 2 on `stream-runner`; use the dev-health-go-dho image." $group.name $group.image) }}
+{{- end }}
 ---
 apiVersion: apps/v1
 kind: Deployment

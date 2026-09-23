@@ -8,6 +8,7 @@ package streamrunnerservice
 
 import (
 	"context"
+	"slices"
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/platform/shell"
@@ -36,4 +37,11 @@ func Command() cli.Command {
 			})
 		},
 	}
+}
+
+// Profiles returns the profiles `dho stream-runner --profile` accepts. The
+// chart's values schema pins the same list, so a render with any other
+// profile is refused instead of starting a pod that exits.
+func Profiles() []string {
+	return slices.Clone(streamRunnerSpec.Profiles)
 }

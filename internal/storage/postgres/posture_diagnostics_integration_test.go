@@ -29,7 +29,7 @@ import (
 //     each naming the actual table (and, for the privilege gap, the actual
 //     missing privilege) -- not a generic "something is wrong".
 //  2. Every gap's rendered log line (PostureGap.String(), exactly what
-//     cmd/dev-health-reconciler/dependencies.go's logCoordinatorPostureGaps
+//     internal/reconcilerservice/dependencies.go's logCoordinatorPostureGaps
 //     logs) contains the table/privilege it names and NEVER contains this
 //     test's own connection material: the full connection URI, the
 //     coordinator role's password, or a bare "postgres://" scheme prefix.

@@ -1,4 +1,11 @@
-package main
+// Package reconcilerservice is the reconciler service: `dho reconciler`, the
+// long-running process that relays the job outbox into River and runs the
+// sync reconciler stages, and `dho reconciler healthcheck`, its exec-form
+// readiness probe. It was the dev-health-reconciler binary; its shell.Spec
+// keeps the service identity "dev-health-reconciler", so the option registry
+// (--unreclaimable-sweep), telemetry service.name, the posture guards and the
+// deployment contract see the same service as before the fold.
+package reconcilerservice
 
 import (
 	"context"
@@ -6,12 +13,13 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"os"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/platform/shell"
 )
 
@@ -25,17 +33,35 @@ var reconcilerSpec = shell.Spec{
 	ConfigureDependenciesWithLogger: configureReconcilerDependenciesWithLogger,
 }
 
-// healthcheckSubcommand is a bare positional arg, not a flag registered
-// through the shared option registry: it must run BEFORE shell.Main parses
-// anything, and it must exit fast rather than boot the whole dependency
-// graph. This is invoked by Docker's own healthcheck exec, never a human.
-const healthcheckSubcommand = "healthcheck"
-
-func main() {
-	if len(os.Args) > 1 && os.Args[1] == healthcheckSubcommand {
-		os.Exit(runHealthcheck())
+// Command is `dho reconciler`, with `dho reconciler healthcheck` as its one
+// child. The healthcheck is a child verb, not a flag registered through the
+// shared option registry: it must exit fast rather than boot the whole
+// dependency graph, and it is invoked by Docker's own healthcheck exec, never
+// a human.
+func Command() cli.Command {
+	return cli.Command{
+		Name:    "reconciler",
+		Summary: "relay the job outbox into River and run the sync reconciler stages",
+		Kind:    cli.Service,
+		Run: func(ctx context.Context, env cli.Env) int {
+			return shell.Execute(ctx, reconcilerSpec, env.Args, env.Lookup, shell.IO{
+				Stdout: env.Stdout,
+				Stderr: env.Stderr,
+			})
+		},
+		Children: []cli.Command{{
+			Name:    "healthcheck",
+			Summary: "exit 0 when this host's reconciler answers /readyz with 200, else 1",
+			Kind:    cli.Verb,
+			Run: func(_ context.Context, env cli.Env) int {
+				if len(env.Args) != 0 {
+					fmt.Fprintf(env.Stderr, "{\"error\":{\"code\":\"invalid_request\",\"detail\":\"healthcheck takes no arguments\"}}\n")
+					return 2
+				}
+				return runHealthcheck(env.Lookup)
+			},
+		}},
 	}
-	shell.Main(reconcilerSpec)
 }
 
 // runHealthcheck is CHAOS-4239's Compose healthcheck probe: the runtime
@@ -58,8 +84,8 @@ func main() {
 // internal/platform/health's client-side helpers: this is a tiny,
 // dependency-free probe that must keep working even if something else in
 // the binary's health machinery is broken.
-func runHealthcheck() int {
-	addr := os.Getenv("DEV_HEALTH_HTTP_ADDR")
+func runHealthcheck(lookup secrets.LookupEnv) int {
+	addr, _ := lookup("DEV_HEALTH_HTTP_ADDR")
 	if addr == "" {
 		addr = ":8080"
 	}

@@ -214,7 +214,7 @@ func coordinatorStatements() []coordinatorStatement {
 		},
 		{
 			name: "job-route state read",
-			site: "internal/jobroute/control.go Controller.read, reached from workerctl job-routes status AND unconditionally from the reconciler relay (cmd/dev-health-reconciler/dependencies.go buildReconcilerRelay)",
+			site: "internal/jobroute/control.go Controller.read, reached from workerctl job-routes status AND unconditionally from the reconciler relay (internal/reconcilerservice/dependencies.go buildReconcilerRelay)",
 			// The finding that widened CHAOS-3113: worker_job_routes is absent
 			// from domainPosture altogether, so even the unlocked read fails.
 			// The reconciler relay takes only read paths, so this — not the
@@ -298,7 +298,7 @@ func coordinatorDualGrantStatements() []coordinatorStatement {
 	return []coordinatorStatement{
 		{
 			name:      "reconciler materializer reads its reference discoveries",
-			site:      "internal/syncreconciler/materializer.go, wired at cmd/dev-health-reconciler/dependencies.go, on the coordinator pool since the CHAOS-3113 repoint",
+			site:      "internal/syncreconciler/materializer.go, wired at internal/reconcilerservice/dependencies.go, on the coordinator pool since the CHAOS-3113 repoint",
 			privilege: "sync_run_reference_discoveries SELECT (dual-grant since CHAOS-4209; the domain role holds SELECT+INSERT+UPDATE of its own)",
 			sql:       "SELECT id FROM public.sync_run_reference_discoveries WHERE sync_run_id = gen_random_uuid()",
 		},

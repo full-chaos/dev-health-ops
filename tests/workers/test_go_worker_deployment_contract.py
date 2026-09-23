@@ -102,9 +102,9 @@ def _queue_concurrency_env(process: dict) -> str:
     )
 
 
-# dho service verbs a worker process names first (`dho stream-runner ...`);
-# every argument after the verb is a flag.
-_DHO_SERVICE_VERBS = frozenset({"stream-runner"})
+# dho service verbs a worker process names first (`dho stream-runner ...`,
+# `dho reconciler ...`); every argument after the verb is a flag.
+_DHO_SERVICE_VERBS = frozenset({"stream-runner", "reconciler"})
 
 
 def _process_verb(container: dict) -> str | None:
@@ -639,6 +639,15 @@ def test_river_worker_renderers_select_manifest_queues_without_profiles() -> Non
         environment = compose[service_name]["environment"]
         assert "DEV_HEALTH_QUEUE_CONCURRENCY" not in environment
         assert "DEV_HEALTH_WORKER_GROUP" not in environment
+    # The reconciler is `dho reconciler`: the dho image with the verb first.
+    for services in (compose, swarm):
+        assert _process_verb(services["go-reconciler"]) == "reconciler"
+        assert "/dev-health-go-dho:" in str(services["go-reconciler"]["image"])
+    container = deployments["dev-health-go-reconciler"]["spec"]["template"]["spec"][
+        "containers"
+    ][0]
+    assert _process_verb(container) == "reconciler", container.get("args")
+    assert "/dev-health-go-dho:" in container["image"], container["image"]
     for service_name in (
         "go-stream-external",
         "go-stream-ingest",
@@ -849,15 +858,16 @@ def test_go_only_overlays_scale_but_do_not_remove_celery_baseline(path: Path) ->
 
 
 def test_reconciler_image_packages_both_runtime_contract_roots() -> None:
+    # The reconciler is `dho reconciler`, run from the dho image.
     dockerfile = _GO_WORKER_DOCKERFILE.read_text(encoding="utf-8")
 
     assert (
-        "cp -R /src/contracts/jobs/v1 " + "/runtime/reconciler/app/contracts/jobs/v1;"
+        "cp -R /src/contracts/jobs/v1 " + "/runtime/dho/app/contracts/jobs/v1;"
         in dockerfile
     )
     assert (
         "cp -R /src/contracts/sync-dispatch/v1 "
-        + "/runtime/reconciler/app/contracts/sync-dispatch/v1;"
+        + "/runtime/dho/app/contracts/sync-dispatch/v1;"
         in dockerfile
     )
 

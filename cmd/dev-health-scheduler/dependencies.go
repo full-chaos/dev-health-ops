@@ -77,7 +77,7 @@ func openSchedulerDatabase(ctx context.Context, cfg config.Config) (schedulerDat
 // wrapSchedulerReadinessCheckWithLogging is domain_postgres/queue_postgres/
 // coordinator_postgres/river_schema's single reporting path (CHAOS-5435),
 // the scheduler's counterpart of the same-named helper in
-// cmd/dev-health-worker and cmd/dev-health-reconciler's dependencies.go.
+// cmd/dev-health-worker and internal/reconcilerservice's dependencies.go.
 // health.Registry never surfaces a CheckFunc's returned error anywhere
 // (registry.go: "Error text is deliberately never returned by the HTTP
 // surface"), so a scheduler readiness refusal used to reach an operator as
@@ -628,7 +628,7 @@ func buildSchedulerLoopWithSources(
 	}
 	// execution_liveness (CHAOS-4029): the scheduler's own periodic
 	// self-probe against the domain pool, on an independent clock -- the
-	// same signal cmd/dev-health-worker and cmd/dev-health-reconciler
+	// same signal cmd/dev-health-worker and internal/reconcilerservice
 	// register, so a scheduler whose handoff/reconcile loop is wedged (but
 	// whose dependency checks above still pass) goes visibly unhealthy
 	// instead of continuing to report ready while planning nothing. This is

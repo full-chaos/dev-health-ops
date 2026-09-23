@@ -179,7 +179,7 @@ func (service *NativeDispatchSyncRunService) nowUTC() time.Time {
 // touches. Route resolution for sync.provider_unit lives ONLY at drain,
 // in the relay (internal/joboutbox's relay step calls routes.Resolve per
 // claim, via a jobroute.Controller constructed on the COORDINATOR pool --
-// cmd/dev-health-reconciler/dependencies.go's jobroute.NewController(
+// internal/reconcilerservice/dependencies.go's jobroute.NewController(
 // coordinatorPool, ...) -- not the queue-control pool the relay's own
 // outbox claim/delivery runs on; codex round 3 caught this file's own
 // doc comment stating the wrong role): a celery-routed claim is deferred back,

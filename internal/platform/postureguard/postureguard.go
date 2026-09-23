@@ -2,7 +2,7 @@
 // posture_manifest_lockstep readiness check and its Prometheus gauge live
 // (CHAOS-5437). It exists so the refusal message, the gauge name, and the
 // digest-comparison wiring are written once and reused by
-// cmd/dev-health-worker, cmd/dev-health-scheduler, cmd/dev-health-reconciler
+// cmd/dev-health-worker, cmd/dev-health-scheduler, internal/reconcilerservice
 // and cmd/dev-health-stream-runner, rather than copy-pasted four times and
 // drifting the way domainReady/queueReady/riverSchemaReady already have
 // across those same four binaries.

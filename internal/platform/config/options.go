@@ -413,7 +413,7 @@ var optionRegistry = []Option{
 	// CHAOS-4092: reconciler-only, matching the unreclaimable-sweep flag's
 	// scoping precedent above. This overrides the mutation pipeline's
 	// composed per-stage-budget envelope (syncreconciler.DefaultStageBudgets;
-	// see cmd/dev-health-reconciler/dependencies.go's
+	// see internal/reconcilerservice/dependencies.go's
 	// SyncObservationTimeoutExplicit handling). CHAOS-4239: exceeding it no
 	// longer exits the process -- syncreconciler.ErrStepEnvelopeExceeded
 	// degrades only that tick (logged, counted, self-healing on the next one

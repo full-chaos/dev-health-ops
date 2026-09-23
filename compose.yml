@@ -1352,12 +1352,12 @@ services:
 
   go-reconciler:
     <<: *go-worker
-    image: ${DEV_HEALTH_GO_RECONCILER_IMAGE:-ghcr.io/full-chaos/dev-health-go-reconciler:local}
+    image: ${DEV_HEALTH_GO_DHO_IMAGE:-ghcr.io/full-chaos/dev-health-go-dho:local}
     # Default pull_policy, see go-worker-heavy's comment above.
     build:
       context: .
       dockerfile: docker/go-worker.Dockerfile
-      target: reconciler
+      target: dho
       args:
         COMMIT: ${COMMIT:-unknown}
         BUILD_TIME: ${BUILD_TIME:-1970-01-01T00:00:00Z}
@@ -1369,6 +1369,7 @@ services:
     # opt-in. A FLAG, not an environment entry: only credentials render
     # through `environment:`, every other setting is visible in `command:`.
     command:
+      - reconciler
       - --shutdown-timeout=60s
       - --unreclaimable-sweep=${SYNC_UNRECLAIMABLE_SWEEP:-active}
       - *flag-http-addr
@@ -1406,13 +1407,13 @@ services:
     # healthcheck exists to make OBSERVABLE, not to remediate -- recovery
     # from a stuck stage is the step-overrun watchdog's own job inside the
     # process. The runtime image has no shell/curl/wget, so this
-    # invokes the reconciler binary's own `healthcheck` subcommand
-    # (cmd/dev-health-reconciler/main.go), which queries this same
+    # invokes `dho reconciler healthcheck`
+    # (internal/reconcilerservice/service.go), which queries this same
     # container's own /readyz over loopback and mirrors that status as its
     # exit code. No other service in this fleet declares one to copy
     # interval/timeout/retries from -- these are this service's own.
     healthcheck:
-      test: ["CMD", "/usr/local/bin/dev-health-reconciler", "healthcheck"]
+      test: ["CMD", "/usr/local/bin/dho", "reconciler", "healthcheck"]
       interval: 15s
       timeout: 5s
       retries: 3

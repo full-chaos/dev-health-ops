@@ -317,7 +317,7 @@ services:
 
   go-reconciler:
     <<: *go-worker
-    image: ${DEV_HEALTH_GO_RECONCILER_IMAGE:-ghcr.io/full-chaos/dev-health-go-reconciler:latest}
+    image: ${DEV_HEALTH_GO_DHO_IMAGE:-ghcr.io/full-chaos/dev-health-go-dho:latest}
     labels:
       dev-health.io/worker-group: reconciler
   # CHAOS-3092 made "no Celery consumer serves provider units" true of every
@@ -335,6 +335,7 @@ services:
   # the shell or the .env beside this file. Reconciler-only, because the flag is
   # scoped to that binary and any other group would exit 2 on an unknown flag.
     command:
+      - reconciler
       - --shutdown-timeout=60s
       - --unreclaimable-sweep=${SYNC_UNRECLAIMABLE_SWEEP:-active}
       - *flag-http-addr

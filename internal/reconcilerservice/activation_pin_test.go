@@ -1,12 +1,8 @@
-package main
+package reconcilerservice
 
 import (
 	"context"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
-	"go/ast"
-	"go/build/constraint"
-	"go/parser"
-	"go/token"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -311,7 +307,7 @@ func TestProductionSyncShadowBuilderReturnsTheShadowStepper(t *testing.T) {
 // proves). The honest, now-verified statement of coverage follows.
 //
 // The behavioural pin calls configureReconcilerDependenciesWithSourcesAndLogger
-// so it can inject fakes. `shell.Main` does not call that directly -- it calls
+// so it can inject fakes. `shell.Execute` does not call that directly -- it calls
 // whatever reconcilerSpec names, which is configureReconcilerDependenciesWithLogger,
 // which delegates to the sources-taking function with production sources. This
 // test pins both ends of that chain: the spec field points where we think, and the
@@ -319,7 +315,7 @@ func TestProductionSyncShadowBuilderReturnsTheShadowStepper(t *testing.T) {
 //
 // PINNED: `reconcilerSpec.ConfigureDependenciesWithLogger`'s code pointer equals
 // configureReconcilerDependenciesWithLogger's, and ConfigureDependencies is nil
-// so shell.Main cannot take the other field. This is conclusive PROVIDED both
+// so shell.Execute cannot take the other field. This is conclusive PROVIDED both
 // sides stay what they are today -- direct references to the same package-level
 // function declaration, not a closure or bound method value. Go documents a
 // function's code pointer as not necessarily unique for those; a stronger
@@ -351,16 +347,18 @@ func TestProductionSyncShadowBuilderReturnsTheShadowStepper(t *testing.T) {
 //
 // NOT PINNED, and these are real gaps rather than pedantry:
 //
-//   - `main()` calling shell.Main(reconcilerSpec) at runtime. A running test
+//   - `dho reconciler` running shell.Execute(reconcilerSpec). A running test
 //     cannot observe process startup.
-//     TestReconcilerMainInvokesShellMainWithThePinnedSpec, below, closes the
-//     half of this a source parse can: that main.go's committed body is
-//     exactly that one call. It does NOT close a second, still-open half: a
-//     future activation route added inside shell.Main/Execute itself -- an
+//     TestReconcilerCommandRunsThePinnedSpec (service_test.go) closes the half
+//     a dispatch can: `dho reconciler --help`, run through the dho command
+//     tree, lists the --unreclaimable-sweep flag that the option registry
+//     scopes to reconcilerSpec's service identity alone. It does NOT close a
+//     second, still-open half: a
+//     future activation route added inside shell.Execute itself -- an
 //     environment variable read directly, or a dispatch on something other
 //     than the spec's configure fields -- would bypass every pin in this file
-//     the same way a rewired main() would, and nothing here exercises
-//     shell.Main/Execute's own internals to catch it.
+//     the same way a rewired Command() would, and nothing here exercises
+//     shell.Execute's own internals to catch it.
 //   - A future configureReconcilerDependenciesWithLogger that branches on a
 //     config.Config field only populated when a real secret environment
 //     variable is set (cfg.CoordinatorDatabaseURI.Configured(), for
@@ -380,7 +378,7 @@ func TestProductionSyncShadowBuilderReturnsTheShadowStepper(t *testing.T) {
 func TestReconcilerSpecUsesTheConfigurationThisFilePins(t *testing.T) {
 	if reconcilerSpec.ConfigureDependencies != nil {
 		t.Fatal(
-			"reconcilerSpec now sets ConfigureDependencies. shell.Main may call that " +
+			"reconcilerSpec now sets ConfigureDependencies. shell.Execute may call that " +
 				"instead of ConfigureDependenciesWithLogger, so the pins here no longer " +
 				"cover the production path. Retarget them.",
 		)
@@ -546,181 +544,5 @@ func TestReconcilerActivationPinIsNotVacuous(t *testing.T) {
 				field,
 			)
 		}
-	}
-}
-
-// TestReconcilerMainInvokesShellMainWithThePinnedSpec closes the one gap this
-// file states it cannot: whether `main()` actually calls
-// shell.Main(reconcilerSpec). A running test cannot observe process startup,
-// but it can read the committed source that becomes it. This parses main.go
-// directly and requires func main()'s body to be exactly one statement,
-// calling shell.Main with the identifier every other pin in this file already
-// covers end to end.
-//
-// This is deliberately strict about shape: rewiring main() to call something
-// else, to pass a copy or a second spec, or to do anything at all beyond this
-// one call, fails the test. A future legitimate change to main() must update
-// this test in the same commit, which is the point -- that change becomes
-// visible instead of silently falling outside every other pin's reach.
-//
-// The brittleness is intentional, not a defect to fix later: this WILL fail
-// the day someone adds a legitimate second statement to main() (a defer, a
-// flag parse, anything). The correct response to that red is to re-review
-// what the new statement does to activation and rewrite this test to match --
-// never to loosen the assertion to something like "contains a call to
-// shell.Main", which would silently reopen the exact gap this test exists to
-// close.
-func TestReconcilerMainInvokesShellMainWithThePinnedSpec(t *testing.T) {
-	fileSet := token.NewFileSet()
-	file, err := parser.ParseFile(fileSet, "main.go", nil, parser.ParseComments)
-	if err != nil {
-		t.Fatalf("parsing main.go: %v", err)
-	}
-
-	// A build-constrained main.go could be excluded from the build actually
-	// shipped, with a differently-behaving entry point compiling in its place
-	// under a platform- or tag-specific filename -- this test would keep
-	// parsing and passing against a file the binary never contains. Adversarial
-	// review raised this as a plausible ordinary refactor (a platform-specific
-	// entrypoint split), not a contrived one, so it is rejected outright rather
-	// than merely disclosed.
-	for _, group := range file.Comments {
-		for _, comment := range group.List {
-			if constraint.IsGoBuild(comment.Text) || constraint.IsPlusBuild(comment.Text) {
-				t.Fatalf(
-					"main.go carries a build constraint (%q). This file's pins only "+
-						"cover main.go's content, not whether the build actually "+
-						"includes it -- a constrained main.go could be dead code while "+
-						"another file supplies the real entry point. Remove the "+
-						"constraint, or move the pinned main() to whichever file is "+
-						"unconditionally built and retarget this test at it.",
-					comment.Text,
-				)
-			}
-		}
-	}
-
-	var mainDecl *ast.FuncDecl
-	for _, declaration := range file.Decls {
-		function, ok := declaration.(*ast.FuncDecl)
-		if !ok || function.Recv != nil || function.Name.Name != "main" {
-			continue
-		}
-		mainDecl = function
-	}
-	if mainDecl == nil || mainDecl.Body == nil {
-		t.Fatal(
-			"main.go declares no func main() with a body; the pins in this file " +
-				"cover a function the binary never runs",
-		)
-	}
-	// CHAOS-4239 added exactly one reviewed early exit ahead of shell.Main:
-	// Docker's healthcheck exec (the distroless runtime image has no shell,
-	// so it must invoke this binary itself -- see runHealthcheck's doc
-	// comment) needs a subcommand that runs and exits BEFORE the full
-	// dependency graph boots, which shell.Main does not support. This test's
-	// job did not change: prove shell.Main(reconcilerSpec) is still always
-	// EVENTUALLY reached unless that one narrow, os.Exit-terminated branch
-	// fires -- not that main() is one statement forever.
-	if len(mainDecl.Body.List) != 2 {
-		t.Fatalf(
-			"func main() has %d statements, want exactly 2 (the CHAOS-4239 "+
-				"healthcheck short-circuit, then the shell.Main call this test "+
-				"pins). If this is a reviewed change, confirm the new statement(s) "+
-				"cannot skip or alter the shell.Main(reconcilerSpec) call without "+
-				"exiting the process first, before updating this test.",
-			len(mainDecl.Body.List),
-		)
-	}
-
-	assertReconcilerHealthcheckShortCircuit(t, mainDecl.Body.List[0])
-	assertReconcilerShellMainCall(t, mainDecl.Body.List[1])
-}
-
-// assertReconcilerHealthcheckShortCircuit pins main()'s first statement to
-// EXACTLY the shape `if <args-check> { os.Exit(runHealthcheck()) }` -- an
-// early exit that can only ever (a) do nothing and fall through to
-// shell.Main, or (b) terminate the process via os.Exit. Neither outcome can
-// silently skip or alter the shell.Main(reconcilerSpec) call the way an
-// arbitrary added statement could (e.g. one that mutates reconcilerSpec, or
-// calls some OTHER entry point instead).
-func assertReconcilerHealthcheckShortCircuit(t *testing.T, statement ast.Stmt) {
-	t.Helper()
-	ifStatement, ok := statement.(*ast.IfStmt)
-	if !ok {
-		t.Fatalf("func main()'s first statement is not an if statement: %#v", statement)
-	}
-	if ifStatement.Init != nil || ifStatement.Else != nil {
-		t.Fatalf("the healthcheck short-circuit must be a bare if with no init or else clause: %#v", ifStatement)
-	}
-	if len(ifStatement.Body.List) != 1 {
-		t.Fatalf("the healthcheck short-circuit's body has %d statements, want exactly 1 (os.Exit)", len(ifStatement.Body.List))
-	}
-	exitStatement, ok := ifStatement.Body.List[0].(*ast.ExprStmt)
-	if !ok {
-		t.Fatalf("the healthcheck short-circuit's body is not a call expression: %#v", ifStatement.Body.List[0])
-	}
-	exitCall, ok := exitStatement.X.(*ast.CallExpr)
-	if !ok {
-		t.Fatalf("the healthcheck short-circuit's body is not a function call: %#v", exitStatement.X)
-	}
-	exitSelector, ok := exitCall.Fun.(*ast.SelectorExpr)
-	if !ok {
-		t.Fatalf("the healthcheck short-circuit does not call a package-qualified function: %#v", exitCall.Fun)
-	}
-	exitPackage, ok := exitSelector.X.(*ast.Ident)
-	if !ok || exitPackage.Name != "os" || exitSelector.Sel.Name != "Exit" {
-		t.Fatalf(
-			"the healthcheck short-circuit's body calls %#v, not os.Exit -- it must "+
-				"unconditionally terminate the process, never merely return and let "+
-				"execution continue past shell.Main with the healthcheck path half-run",
-			exitCall.Fun,
-		)
-	}
-	if len(exitCall.Args) != 1 {
-		t.Fatalf("os.Exit call has %d arguments, want exactly 1", len(exitCall.Args))
-	}
-	exitArgument, ok := exitCall.Args[0].(*ast.CallExpr)
-	if !ok {
-		t.Fatalf("os.Exit's argument is not a function call: %#v", exitCall.Args[0])
-	}
-	exitArgumentIdent, ok := exitArgument.Fun.(*ast.Ident)
-	if !ok || exitArgumentIdent.Name != "runHealthcheck" {
-		t.Fatalf(
-			"os.Exit's argument calls %#v, not runHealthcheck -- the pins in this "+
-				"file cover a healthcheck probe the binary does not use",
-			exitArgument.Fun,
-		)
-	}
-}
-
-func assertReconcilerShellMainCall(t *testing.T, statement ast.Stmt) {
-	t.Helper()
-	expressionStatement, ok := statement.(*ast.ExprStmt)
-	if !ok {
-		t.Fatalf("func main()'s second statement is not a call expression: %#v", statement)
-	}
-	call, ok := expressionStatement.X.(*ast.CallExpr)
-	if !ok {
-		t.Fatalf("func main()'s statement is not a function call: %#v", expressionStatement.X)
-	}
-	selector, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok {
-		t.Fatalf("func main() does not call a package-qualified function: %#v", call.Fun)
-	}
-	packageIdent, ok := selector.X.(*ast.Ident)
-	if !ok || packageIdent.Name != "shell" || selector.Sel.Name != "Main" {
-		t.Fatalf("func main() calls %#v, not shell.Main", call.Fun)
-	}
-	if len(call.Args) != 1 {
-		t.Fatalf("shell.Main call has %d arguments, want exactly 1", len(call.Args))
-	}
-	argument, ok := call.Args[0].(*ast.Ident)
-	if !ok || argument.Name != "reconcilerSpec" {
-		t.Fatalf(
-			"func main() passes %#v to shell.Main, not reconcilerSpec -- the pins "+
-				"in this file cover a spec the binary does not use",
-			call.Args[0],
-		)
 	}
 }

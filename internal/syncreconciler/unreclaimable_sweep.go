@@ -359,7 +359,7 @@ type unreclaimableRouteReader interface {
 //     role either.
 //
 // Neither pool alone can run the whole sweep. This is the same two-pool split
-// the Materializer already uses; cmd/dev-health-reconciler/dependencies.go
+// the Materializer already uses; internal/reconcilerservice/dependencies.go
 // documents the composition.
 // unreclaimableJobReader is the QUEUE-CONTROL seam, and it is a third role
 // (CHAOS-4097). internal/storage/river/migrate.go grants USAGE on the River

@@ -169,7 +169,8 @@
     },
     {
       "name": "reconciler",
-      "binary": "dev-health-reconciler",
+      "binary": "dho",
+      "subcommand": "reconciler",
       "runtime": "control",
       "enabled_by_default": true,
       "min_replicas": 0,

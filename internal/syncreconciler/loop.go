@@ -38,7 +38,7 @@ var (
 // This is reachable even after CHAOS-4239's per-stage budgets: an operator
 // can configure SYNC_OBSERVATION_TIMEOUT/--sync-observation-timeout below
 // what the mutation pipeline's composed stage-budget sum needs (WARNED but
-// still honored -- see cmd/dev-health-reconciler/dependencies.go and
+// still honored -- see internal/reconcilerservice/dependencies.go and
 // config.Config.SyncObservationTimeoutExplicit), and in that case the outer
 // envelope, not any single stage's own budget, is what trips first. Without
 // this, that operator-supplied, WARNED-about choice could still resurrect
@@ -95,7 +95,7 @@ type LoopConfig struct {
 // nothing caught it, and the flat 2s deadline it described kept killing the
 // whole process whenever any one of the stages ran long.
 //
-// cmd/dev-health-reconciler/dependencies.go overrides ObservationTimeout for
+// internal/reconcilerservice/dependencies.go overrides ObservationTimeout for
 // the mutation loop to StageBudgets.Sum() plus a fixed margin (see
 // stageBudgetOuterEnvelopeMargin there) -- a documented composition of what
 // the pipeline actually runs, not an independently chosen number. This

@@ -29,7 +29,7 @@ CHECK_GO_TIMEOUT_SECONDS = 120
 
 EXPECTED_PACKAGES = {
     "internal/goapiproof",
-    "cmd/dev-health-reconciler",
+    "internal/reconcilerservice",
     "cmd/dev-health-worker",
     "internal/workersctl",
     # CHAOS-5486: the routing verbs' first //go:build integration file --

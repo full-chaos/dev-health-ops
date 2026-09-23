@@ -879,3 +879,71 @@ func TestDeploymentManifestSchemaPinsTheStreamRunnerVerb(t *testing.T) {
 		}
 	})
 }
+
+// The reconciler process runs `dho reconciler`. The old binary, a missing or
+// different subcommand, and the verb (or any dho verb) on the scheduler each
+// fail validation,
+// in the Go validator and in the JSON Schema a schema-only consumer reads.
+func TestManifestPinsTheReconcilerSubcommand(t *testing.T) {
+	t.Parallel()
+	schemaBytes, err := os.ReadFile(filepath.Join("..", "..", "contracts", "jobs", "v1", "deployment-manifest.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema jsonschema.Schema
+	if err := json.Unmarshal(schemaBytes, &schema); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := schema.Resolve(&jsonschema.ResolveOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	toDocument := func(t *testing.T, manifest any) map[string]any {
+		t.Helper()
+		encoded, err := json.Marshal(manifest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var document map[string]any
+		if err := json.Unmarshal(encoded, &document); err != nil {
+			t.Fatal(err)
+		}
+		return document
+	}
+	// The unmutated fixture, encoded the same way, passes the schema, so a
+	// refusal below is the mutation's and not the encoding's.
+	if fixture, _ := loadFixture(t); resolved.Validate(toDocument(t, fixture)) != nil {
+		t.Fatalf("the encoded fixture fails its schema: %v", resolved.Validate(toDocument(t, fixture)))
+	}
+	for name, testCase := range map[string]struct {
+		process string
+		mutate  func(*Process)
+	}{
+		"old binary":             {"reconciler", func(p *Process) { p.Binary, p.Subcommand = "dev-health-reconciler", "" }},
+		"no subcommand":          {"reconciler", func(p *Process) { p.Subcommand = "" }},
+		"other subcommand":       {"reconciler", func(p *Process) { p.Subcommand = "stream-runner" }},
+		"verb on the scheduler":  {"scheduler", func(p *Process) { p.Binary, p.Subcommand = "dho", "reconciler" }},
+		"scheduler on dho alone": {"scheduler", func(p *Process) { p.Binary, p.Subcommand = "dho", "scheduler" }},
+		"verb on a worker":       {"heavy", func(p *Process) { p.Binary, p.Subcommand = "dho", "reconciler" }},
+	} {
+		t.Run(name, func(t *testing.T) {
+			manifest, registry := loadFixture(t)
+			mutated := 0
+			for index := range manifest.Processes {
+				if manifest.Processes[index].Name == testCase.process {
+					testCase.mutate(&manifest.Processes[index])
+					mutated++
+				}
+			}
+			if mutated != 1 {
+				t.Fatalf("mutated %d %s processes, want 1", mutated, testCase.process)
+			}
+			if _, err := manifest.Validate(registry); err == nil {
+				t.Fatal("Validate accepted the mutated control process")
+			}
+			if err := resolved.Validate(toDocument(t, manifest)); err == nil {
+				t.Fatal("the schema accepted the mutated control process that Validate rejects")
+			}
+		})
+	}
+}

@@ -23,7 +23,7 @@ import (
 // ClickHouseReady/DomainPostgresReady/ValkeyReady no longer swallow their
 // underlying dependency error -- CHAOS-5454, the same swallowed-readiness
 // class CHAOS-5435 fixed for cmd/dev-health-worker and
-// cmd/dev-health-reconciler. The domain_postgres cases build a REAL,
+// internal/reconcilerservice. The domain_postgres cases build a REAL,
 // live-but-failing *pgxpool.Pool dialing a refused local port (reusing
 // internal/storage/postgres's own
 // TestDomainAuthorizationRejectsMissingOrUnavailablePool shape); the

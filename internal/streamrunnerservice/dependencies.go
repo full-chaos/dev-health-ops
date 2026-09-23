@@ -250,7 +250,7 @@ func (storage *productionStreamStorage) PostureManifestLockstep(
 }
 
 // logDependencyCheckFailure mirrors cmd/dev-health-worker/dependencies.go's
-// and cmd/dev-health-reconciler/dependencies.go's helper of the same name
+// and internal/reconcilerservice/dependencies.go's helper of the same name
 // (CHAOS-5435). health.Registry never surfaces a CheckFunc's returned error
 // anywhere -- before this, ClickHouseReady/DomainPostgresReady/ValkeyReady
 // each collapsed their underlying failure into the bare

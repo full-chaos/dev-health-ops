@@ -246,7 +246,6 @@ ghcr.io/full-chaos/dev-health-web:0.1.0
 dev-health-acr:dev
 dev-health-go-worker:latest
 dev-health-go-scheduler:latest
-dev-health-go-reconciler:latest
 ghcr.io/full-chaos/dev-health-go-dho:local
 dev-health-go-operator:latest
 EOF
@@ -268,9 +267,10 @@ ACR_KIAC_CLUSTER_NAME=dev-full ACR_KIAC_ALLOW_VERSION_DRIFT=1 \
 ```
 
 One image serves the four River worker groups (`heavy`, `ops`, `sync`,
-`sync-provider`); the three `stream-*` groups run `dho stream-runner` from the dho image
+`sync-provider`); the `reconciler` group and the three `stream-*` groups run
+`dho reconciler` and `dho stream-runner` from the dho image
 (`ghcr.io/full-chaos/dev-health-go-dho:local`, the tag Compose builds), with
-`subcommand: stream-runner` so the verb is the first argument. The
+`subcommand` set so the verb is the first argument. The
 `heavy` group is also the metrics compatibility bridge's only caller, so it must
 be present whenever `metricsApi.enabled` is true.
 
@@ -512,7 +512,7 @@ goWorkers:
     - { name: ops,               image: dev-health-go-worker:latest,           queues: [coverage, heartbeat, retention, webhooks], queueConcurrency: {coverage: 1, heartbeat: 1, retention: 1, webhooks: 4}, replicas: 1, terminationGracePeriodSeconds: 960, autoscaling: {enabled: false} }
     - { name: sync,              image: dev-health-go-worker:latest,           queues: [sync], queueConcurrency: {sync: 4}, replicas: 1, terminationGracePeriodSeconds: 960, autoscaling: {enabled: false} }
     - { name: sync-provider,     image: dev-health-go-worker:latest,           queues: [sync_provider], queueConcurrency: {sync_provider: 2}, replicas: 0, terminationGracePeriodSeconds: 960, autoscaling: {enabled: false} }
-    - { name: reconciler,        image: dev-health-go-reconciler:latest,       replicas: 1, terminationGracePeriodSeconds: 60, autoscaling: {enabled: false} }
+    - { name: reconciler,        image: ghcr.io/full-chaos/dev-health-go-dho:local, subcommand: reconciler, replicas: 1, terminationGracePeriodSeconds: 60, autoscaling: {enabled: false} }
     - { name: scheduler,         image: dev-health-go-scheduler:latest,        replicas: 1, terminationGracePeriodSeconds: 60, autoscaling: {enabled: false} }
     - { name: stream-external,   image: ghcr.io/full-chaos/dev-health-go-dho:local, subcommand: stream-runner, runtimeProfile: external,  replicas: 1, terminationGracePeriodSeconds: 60, autoscaling: {enabled: false} }
     - { name: stream-ingest,     image: ghcr.io/full-chaos/dev-health-go-dho:local, subcommand: stream-runner, runtimeProfile: ingest,    replicas: 1, terminationGracePeriodSeconds: 60, autoscaling: {enabled: false} }

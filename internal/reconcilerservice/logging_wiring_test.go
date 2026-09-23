@@ -1,4 +1,4 @@
-package main
+package reconcilerservice
 
 import (
 	"bytes"
@@ -24,7 +24,7 @@ import (
 // proves the wiring, not just the field (CHAOS-3907): it goes through the
 // real composition root (configureReconcilerDependenciesWithSourcesAndLogger),
 // not a direct joboutbox.NewReconcilerLoop(..., ReconcilerLoopConfig{Logger:
-// ...}) call, which would prove nothing about cmd/dev-health-reconciler.
+// ...}) call, which would prove nothing about internal/reconcilerservice.
 // Before dependencies.go wired ReconcilerLoopConfig.Logger to the resolved
 // logger, this loop had zero slog references at all: a failed step closed
 // readiness with no output anywhere (CHAOS-3907).

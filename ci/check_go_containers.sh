@@ -12,11 +12,12 @@ readonly VERSION="phase1-ci"
 readonly COMMIT="0000000000000000000000000000000000000000"
 readonly BUILD_TIME="1970-01-01T00:00:00Z"
 readonly SOURCE_DATE_EPOCH="0"
-# The long-running services the smoke runs to readiness. stream-runner is not
-# an image target: it is `dho stream-runner`, smoked on the dho image (the
-# chart default) and on the operator image (what prod pins for it).
-readonly RUNTIME_TARGETS=(worker scheduler reconciler stream-runner stream-runner-operator)
-readonly ALL_TARGETS=(worker scheduler reconciler operator contractcheck migrate dho)
+# The long-running services the smoke runs to readiness. stream-runner and
+# reconciler are not image targets: they are `dho stream-runner` and `dho
+# reconciler`, smoked on the dho image (the chart default) and on the
+# operator image (what prod pins for them).
+readonly RUNTIME_TARGETS=(worker scheduler reconciler reconciler-operator stream-runner stream-runner-operator)
+readonly ALL_TARGETS=(worker scheduler operator contractcheck migrate dho)
 readonly CONTAINER_SECURITY_ARGS=(
   --read-only
   --cap-drop ALL
@@ -172,6 +173,14 @@ smoke_target() {
       image_target=dho
       verb_args=(stream-runner)
       ;;
+    reconciler)
+      image_target=dho
+      verb_args=(reconciler)
+      ;;
+    reconciler-operator)
+      image_target=operator
+      verb_args=(reconciler)
+      ;;
     stream-runner-operator)
       image_target=operator
       verb_args=(stream-runner)
@@ -261,7 +270,7 @@ smoke_target() {
       scheduler)
         dependencies="domain_postgres queue_postgres river_schema scheduler_loop"
         ;;
-      reconciler)
+      reconciler | reconciler-operator)
         dependencies="domain_postgres queue_postgres reconciler_loop river_schema"
         ;;
       stream-runner | stream-runner-operator)
@@ -275,9 +284,28 @@ smoke_target() {
       grep -F "\"${dependency}\"" <<<"${readiness_body}" >/dev/null \
         || die "${target} readiness omitted ${dependency}"
     done
-    if [ "${target}" = "reconciler" ] && grep -F '"job_registry"' <<<"${readiness_body}" >/dev/null; then
-      die "reconciler image could not load its packaged job contract artifacts"
-    fi
+    case "${target}" in
+      reconciler | reconciler-operator)
+        if grep -F '"job_registry"' <<<"${readiness_body}" >/dev/null; then
+          die "${target} image could not load its packaged job contract artifacts"
+        fi
+        # The reconciler also loads contracts/sync-dispatch/v1 from /app; a
+        # failed sync_dispatch_registry means the image did not package it.
+        if grep -F '"sync_dispatch_registry"' <<<"${readiness_body}" >/dev/null; then
+          die "${target} image could not load its packaged sync-dispatch contract"
+        fi
+        # The Compose probe is exec form (the runtime image has no shell):
+        # `dho reconciler healthcheck` inside the container mirrors /readyz,
+        # which is 503 here, so it must exit 1 -- not 0, and not 2 (unknown
+        # verb) or 127 (no such binary).
+        set +e
+        docker exec "${container_name}" /usr/local/bin/dho reconciler healthcheck
+        exit_code=$?
+        set -e
+        [ "${exit_code}" = "1" ] \
+          || die "${target}: dho reconciler healthcheck exited ${exit_code} against a not-ready process, want 1"
+        ;;
+    esac
   fi
   wait_for_status "http://${published_address}/metrics" 200 \
     || die "${target} metrics endpoint did not become available"

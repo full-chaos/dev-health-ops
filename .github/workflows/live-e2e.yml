@@ -140,7 +140,7 @@ jobs:
 
       - name: Set up Go
         # CHAOS-5362: this job now also builds/runs dev-health-worker/
-        # dev-health-worker-migrate/dev-health-reconciler (ci/lib/go_worker_
+        # dev-health-worker-migrate/dho reconciler (ci/lib/go_worker_
         # fixture.sh), same as the metrics-executed-proof job below.
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:

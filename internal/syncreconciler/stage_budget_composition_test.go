@@ -9,7 +9,7 @@ import (
 )
 
 // TestStageBudgetsCoverExactlyTheStagesStepRuns is the CHAOS-4239 analogue of
-// cmd/dev-health-reconciler/pool_composition_test.go's CHAOS-4035 pin: it
+// internal/reconcilerservice/pool_composition_test.go's CHAOS-4035 pin: it
 // parses pipeline.go's actual Step method source and asserts every
 // pipeline.runStage(ctx, StageX, ...) call names a stage DefaultStageBudgets
 // covers, and that DefaultStageBudgets names nothing Step does not actually

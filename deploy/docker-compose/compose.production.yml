@@ -726,13 +726,14 @@ services:
 
   go-reconciler:
     <<: *go-worker
-    image: ${DEV_HEALTH_GO_RECONCILER_IMAGE:-ghcr.io/full-chaos/dev-health-go-reconciler:latest}
+    image: ${DEV_HEALTH_GO_DHO_IMAGE:-ghcr.io/full-chaos/dev-health-go-dho:latest}
     labels:
       dev-health.io/worker-group: reconciler
     # CHAOS-3092 made "no Celery consumer serves provider units" true of
     # every deployment, which is exactly the assertion SweepModeActive
     # encodes -- so the sweep ships ACTIVE rather than as an operator opt-in.
     command:
+      - reconciler
       - --shutdown-timeout=60s
       - --unreclaimable-sweep=${SYNC_UNRECLAIMABLE_SWEEP:-active}
       - *flag-http-addr

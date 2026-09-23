@@ -21,14 +21,21 @@ const modulePath = "github.com/full-chaos/dev-health-ops"
 
 // migrationSurfaces are what a long-running process must never reach: the
 // River migration command, the river library's own migrator, and the
-// pinned-bundle apply. internal/storage/river owns ApplyPinnedMigrations and
-// is excepted as its definer, not as a caller.
+// pinned-bundle apply. internal/storage/river defines ApplyPinnedMigrations
+// and reads schema versions through the library migrator (CheckSchema, which
+// the services call), so it may import the migrator; inside it, only
+// ApplyPinnedMigrations' own body may call itself or a schema-changing
+// migrator method.
 const (
 	migrationCommandPackage = modulePath + "/internal/rivermigrate"
 	riverLibraryMigrator    = "github.com/riverqueue/river/rivermigrate"
 	riverStorePackage       = modulePath + "/internal/storage/river"
 	applyCall               = "ApplyPinnedMigrations"
 )
+
+// schemaChangingMigratorCalls are the river library migrator's methods that
+// change the schema.
+var schemaChangingMigratorCalls = []string{"Migrate", "MigrateTx"}
 
 type serviceVerb struct {
 	path    string
@@ -87,7 +94,7 @@ func TestServiceVerbsCannotMigrate(t *testing.T) {
 	for _, service := range services {
 		names = append(names, service.path)
 	}
-	for _, want := range []string{"api", "stream-runner"} {
+	for _, want := range []string{"api", "reconciler", "stream-runner"} {
 		if !containsString(names, want) {
 			t.Fatalf("service verbs = %v; %q is missing, so the walk no longer sees the tree", names, want)
 		}
@@ -100,15 +107,18 @@ func TestServiceVerbsCannotMigrate(t *testing.T) {
 			if pkg.ImportPath == migrationCommandPackage {
 				t.Errorf("service %q links the migration command %s", service.path, migrationCommandPackage)
 			}
-			if pkg.Module == nil || pkg.Module.Path != modulePath || pkg.ImportPath == riverStorePackage {
+			if pkg.Module == nil || pkg.Module.Path != modulePath {
 				continue
 			}
-			if containsString(pkg.Imports, riverLibraryMigrator) {
+			forbidden := []string{applyCall}
+			if pkg.ImportPath == riverStorePackage {
+				forbidden = append(forbidden, schemaChangingMigratorCalls...)
+			} else if containsString(pkg.Imports, riverLibraryMigrator) {
 				t.Errorf("service %q: %s imports the river library migrator %s", service.path, pkg.ImportPath, riverLibraryMigrator)
 			}
 			for _, file := range pkg.GoFiles {
-				if callsFunction(t, filepath.Join(pkg.Dir, file), applyCall) {
-					t.Errorf("service %q: %s/%s calls %s", service.path, pkg.ImportPath, file, applyCall)
+				if name := callsOutside(t, filepath.Join(pkg.Dir, file), forbidden, applyCall); name != "" {
+					t.Errorf("service %q: %s/%s calls %s", service.path, pkg.ImportPath, file, name)
 				}
 			}
 		}
@@ -143,27 +153,39 @@ func goListDeps(t *testing.T, pkg string) []listedPackage {
 	return packages
 }
 
-// callsFunction reports whether the Go file calls a function or method
-// named name (a call expression, not a comment or a string that mentions it).
-func callsFunction(t *testing.T, path, name string) bool {
+// callsOutside returns the first of names that the Go file calls as a
+// function or method (a call expression, not a comment or a string that
+// mentions it), skipping the body of the top-level function named exempt. It
+// returns "" when there is none.
+func callsOutside(t *testing.T, path string, names []string, exempt string) string {
 	t.Helper()
 	file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	found := false
+	found := ""
 	ast.Inspect(file, func(node ast.Node) bool {
+		if found != "" {
+			return false
+		}
+		if decl, ok := node.(*ast.FuncDecl); ok && decl.Recv == nil && decl.Name.Name == exempt {
+			return false
+		}
 		call, ok := node.(*ast.CallExpr)
 		if !ok {
-			return !found
+			return true
 		}
+		var called string
 		switch function := call.Fun.(type) {
 		case *ast.Ident:
-			found = found || function.Name == name
+			called = function.Name
 		case *ast.SelectorExpr:
-			found = found || function.Sel.Name == name
+			called = function.Sel.Name
 		}
-		return !found
+		if containsString(names, called) {
+			found = called
+		}
+		return found == ""
 	})
 	return found
 }

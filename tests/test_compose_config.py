@@ -345,7 +345,6 @@ def test_every_buildable_service_declares_an_overridable_image() -> None:
         "ghcr.io/full-chaos/dev-hops-api",
         "ghcr.io/full-chaos/dev-health-go-worker",
         "ghcr.io/full-chaos/dev-health-go-scheduler",
-        "ghcr.io/full-chaos/dev-health-go-reconciler",
         "ghcr.io/full-chaos/dev-health-go-operator",
         "ghcr.io/full-chaos/dev-health-go-dho",
         "ghcr.io/full-chaos/dev-health-go-contractcheck",
@@ -1748,8 +1747,8 @@ def test_go_reconciler_declares_a_readyz_healthcheck() -> None:
 
     The runtime image is distroless (docker/go-worker.Dockerfile,
     gcr.io/distroless/static-debian12) with no shell and no curl/wget, so the
-    test string must be the reconciler binary's own `healthcheck`
-    subcommand (cmd/dev-health-reconciler/main.go), never a CMD-SHELL
+    test string must be `dho reconciler healthcheck`
+    (internal/reconcilerservice/service.go), never a CMD-SHELL
     one-liner that could not run in this image at all.
 
     No other `go-*` service in root compose.yml declares a healthcheck to
@@ -1778,11 +1777,12 @@ def test_go_reconciler_declares_a_readyz_healthcheck() -> None:
     )
     assert test == [
         "CMD",
-        "/usr/local/bin/dev-health-reconciler",
+        "/usr/local/bin/dho",
+        "reconciler",
         "healthcheck",
     ], (
-        "the healthcheck must invoke the reconciler binary's own `healthcheck` "
-        "subcommand: nothing else executable exists in the distroless image"
+        "the healthcheck must invoke `dho reconciler healthcheck`: nothing "
+        "else executable exists in the distroless image"
     )
 
     for key in ("interval", "timeout", "retries", "start_period"):

@@ -167,7 +167,7 @@ same binary.
 | `DEV_HEALTH_GO_STREAM_RUNNER_IMAGE` | `dev-health-go-stream-runner` | the three `go-stream-*` processes |
 | `DEV_HEALTH_GO_OPERATOR_IMAGE` | `dev-health-go-operator` | the four `go-sync-*-route-activate` one-shots |
 | `DEV_HEALTH_GO_CONTRACTCHECK_IMAGE` | `dev-health-go-contractcheck` | `go-contractcheck` |
-| `DEV_HEALTH_IMAGE` | `dev-hops-runner` | `go-river-provision`, `go-river-migrate`, `go-worker-operator-credential`, and the dormant Celery services |
+| `DEV_HEALTH_IMAGE` | `dev-hops-runner` | `go-river-provision`, `go-river-migrate`, and the dormant Celery services |
 | `DEV_HEALTH_API_IMAGE` | `dev-hops-api` | `api`, `metrics-api`, `billing-edge`, `migrate` |
 | `DEV_HEALTH_QUERY_API_IMAGE` | `dev-health-query-api` | `query-api` (the `go-api` compose profile, `deploy/go-api/compose-query-api.yml`) |
 

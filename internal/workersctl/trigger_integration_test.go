@@ -97,13 +97,10 @@ func triggerIntegrationRuntime(t *testing.T, ctx context.Context, authorizer job
 		t.Fatal(err)
 	}
 	return &operatorRuntime{
-		service:  service,
-		registry: registry,
-		pools:    &postgresstore.RuntimePools{Domain: pool},
-		principal: joboperator.Principal{
-			Type: "service_credential",
-			ID:   "00000000-0000-4000-8000-000000000303",
-		},
+		service:   service,
+		registry:  registry,
+		pools:     &postgresstore.RuntimePools{Domain: pool},
+		principal: joboperator.OperatorPrincipal,
 	}
 }
 
@@ -236,13 +233,10 @@ func TestManualTriggerWriteTxFailureLogsUnderlyingErrorAndIdentifiers(t *testing
 		t.Fatal(err)
 	}
 	runtime := &operatorRuntime{
-		service:  service,
-		registry: registry,
-		pools:    &postgresstore.RuntimePools{Domain: pool},
-		principal: joboperator.Principal{
-			Type: "service_credential",
-			ID:   "00000000-0000-4000-8000-000000000303",
-		},
+		service:   service,
+		registry:  registry,
+		pools:     &postgresstore.RuntimePools{Domain: pool},
+		principal: joboperator.OperatorPrincipal,
 	}
 
 	logs := captureDefaultSlog(t)

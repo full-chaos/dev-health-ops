@@ -225,7 +225,6 @@ func TestConfigureRuntimePGBouncerModeErrorUsesTheSharedWriter(t *testing.T) {
 		"POSTGRES_URI":               "postgresql://app:app@127.0.0.1:1/appdb",
 		"WORKER_DATABASE_URI":        "postgresql://app:app@127.0.0.1:1/appdb",
 		"COORDINATOR_DATABASE_URI":   "postgresql://app:app@127.0.0.1:1/appdb",
-		"WORKER_OPERATOR_TOKEN":      "op-token",
 		"PGBOUNCER_TRANSACTION_MODE": "not-a-bool",
 	}), &stderr)
 	if code != 1 {

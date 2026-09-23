@@ -1,6 +1,7 @@
-// dho workers is the authenticated, payload-redacted River operator
-// CLI. It deliberately has no network listener and accepts credentials only
-// through WORKER_OPERATOR_TOKEN or WORKER_OPERATOR_TOKEN_FILE.
+// Package workersctl is `dho workers`, the payload-redacted River operator
+// CLI. It has no network listener and no bearer token: exec access to a
+// worker pod plus its database DSNs is the operator boundary, and every
+// mutation is audited with its --reason and --correlation-id.
 package workersctl
 
 import (
@@ -308,10 +309,10 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 		return nil, writeConfigError(stderr, err)
 	}
 	logResolvedDatabase(stderr, lookup, platformconfig.QueueDatabaseSpec, "queue", queueURI)
-	// Required, not optional: workerctl is a coordinator binary. Its very first
-	// database action (authenticating the operator token against
-	// internal_service_credentials) is a coordinator-exclusive read, so without
-	// this DSN the whole CLI is non-functional. Failing here with
+	// Required, not optional: workerctl is a coordinator binary. Its role
+	// posture check, the route controllers and the operator audit all run on
+	// the coordinator pool, so without this DSN the whole CLI is
+	// non-functional. Failing here with
 	// configuration_error is the honest outcome; falling back to the domain pool
 	// would reproduce the 42501 this change exists to remove.
 	coordinatorURI, err := resolveDSNRequired("COORDINATOR_DATABASE_URI", platformconfig.CoordinatorDatabaseSpec, lookup)
@@ -319,10 +320,6 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 		return nil, writeConfigError(stderr, err)
 	}
 	logResolvedDatabase(stderr, lookup, platformconfig.CoordinatorDatabaseSpec, "coordinator", coordinatorURI)
-	token, ok := resolveRequired("WORKER_OPERATOR_TOKEN", lookup)
-	if !ok {
-		return nil, writeError(stderr, joboperator.ReasonAuthenticationFailed)
-	}
 	mode := databaseMode(lookup, "WORKER_DATABASE_MODE")
 	if !sessionSafeMode(mode) {
 		return nil, writeError(stderr, "queue_control_mode_unsupported")
@@ -424,23 +421,6 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 		return nil, writeRuntimeRoleUnauthorized(stderr, refusal)
 	}
 
-	// Coordinator pool: reads and updates internal_service_credentials, which
-	// is coordinator-exclusive and has no domain grant at all.
-	authenticator, err := joboperator.NewAuthenticator(coordinatorPool)
-	if err != nil {
-		return nil, writeError(stderr, joboperator.ReasonAuthenticationFailed)
-	}
-	authentication, err := authenticator.Authenticate(ctx, token.Reveal())
-	if err != nil {
-		// The reason code comes from joboperator's bounded vocabulary rather
-		// than from the error text. A 42501 on internal_service_credentials
-		// means the connected role lacks its grant -- or that this binary was
-		// wired back onto a pool that never had one -- which is a different
-		// operator action entirely from a rotated or revoked token. Both codes
-		// are compile-time constants, so neither can carry credential or
-		// catalog material into the operator's terminal or logs.
-		return nil, writeError(stderr, joboperator.AuthenticationReason(err))
-	}
 	lockTx, err := pools.Domain.Begin(ctx)
 	if err != nil {
 		return nil, writeError(stderr, "operator_busy")
@@ -527,7 +507,7 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 		return nil, writeError(stderr, "domain_precondition_unavailable")
 	}
 	service, err := joboperator.New(joboperator.Dependencies{
-		Registry: registry, Backend: backend, Authorizer: authentication.Authorizer(),
+		Registry: registry, Backend: backend, Authorizer: joboperator.OperatorAuthorizer(),
 		DomainGuard: guard, Auditor: auditor,
 		RouteController:    routeController,
 		JobRouteController: jobRouteController,
@@ -538,7 +518,7 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 	failed = false
 	lockHeld = false
 	runtime := &operatorRuntime{
-		service: service, principal: authentication.Principal(), pools: pools, lockTx: lockTx,
+		service: service, principal: joboperator.OperatorPrincipal, pools: pools, lockTx: lockTx,
 		streamDeploymentState: string(manifest.DeploymentState), streams: streams, queueControlMode: mode,
 		registry: registry, lookup: lookup,
 	}
@@ -823,9 +803,9 @@ func dispatchJobs(ctx context.Context, runtime *operatorRuntime, args []string, 
 // else ever re-enqueues metrics.daily_dispatch for that run on its own.
 //
 // This deliberately bypasses joboperator.Service's Action/audit pipeline
-// (Cancel/Retry's path) -- it is gated only by the same WORKER_OPERATOR_TOKEN
-// authentication configureRuntime already requires for every workerctl
-// command. See the PR's RISK-NOTES for why that scope limit was accepted
+// (Cancel/Retry's path) -- it is gated only by the operator boundary
+// configureRuntime already applies to every workerctl command (exec access
+// plus the database DSNs). See the PR's RISK-NOTES for why that scope limit was accepted
 // here rather than adding a new Action end-to-end under time pressure.
 func dispatchMetrics(ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
@@ -1150,8 +1130,8 @@ func dispatchMetricsDailyBlocked(
 // the scope: --run repairs one named run; --all-complete sweeps every
 // organization for runs in this exact stranded shape (bounded by --limit)
 // and redrives each one found. Mirrors `metrics daily-redrive`'s shape
-// (WORKER_OPERATOR_TOKEN authentication via configureRuntime,
-// --review-evidence required, quiet flags, JSON result) and, like it,
+// (the configureRuntime operator boundary, --review-evidence required,
+// quiet flags, JSON result) and, like it,
 // deliberately bypasses joboperator.Service's Action/audit pipeline.
 //
 // CHAOS-4409: a run's finalize ledger row (metric_compatibility_executions,
@@ -1494,9 +1474,9 @@ func dispatchProvidersyncRetireLinearPseudoProjects(
 		authorizeResource = "*"
 	}
 	// Authorized BEFORE anything ClickHouse-related is even attempted (codex
-	// review, 2026-08-29, P1): this is a physically destructive mutation, and
-	// authentication alone (a live WORKER_OPERATOR_TOKEN) is not authorization
-	// -- a workers:read-only credential must never reach the delete. Every
+	// review, 2026-08-29, P1): this is a physically destructive mutation, so
+	// it passes the same authorizer as every other mutation before the
+	// delete. Every
 	// other mutation in this binary goes through runtime.service for exactly
 	// this reason; this is the same gate, just for an action with no other
 	// natural Service method (see AuthorizeProvidersyncCleanup's doc comment).
@@ -1691,8 +1671,8 @@ func dispatchSyncDispatchOutboxCloseBacklog(
 // commit_metrics before PR #1960 -- historical partitions computed under
 // the old writer stay wrong forever, since a 'succeeded' partition is never
 // dispatchable again through any existing path). Mirrors
-// `metrics finalize-redrive`'s command shape exactly (WORKER_OPERATOR_TOKEN
-// authentication via configureRuntime, --review-evidence required unless
+// `metrics finalize-redrive`'s command shape exactly (the configureRuntime
+// operator boundary, --review-evidence required unless
 // --dry-run, quiet invalid_request on any malformed input).
 //
 // --family is restricted to daily.SupportedPartitionRecomputeFamilies --
@@ -1832,8 +1812,8 @@ const manualBackfillMaxDays = 31
 // backfillable here even though it already has a "succeeded" partition,
 // because that partition wrote nothing.
 //
-// Mirrors `metrics daily-redrive`'s command shape (WORKER_OPERATOR_TOKEN
-// authentication via configureRuntime, --review-evidence required, quiet
+// Mirrors `metrics daily-redrive`'s command shape (the configureRuntime
+// operator boundary, --review-evidence required, quiet
 // invalid_request on any malformed input) but does NOT wire a
 // jobruntime.MetricsCollector to remaining.PostgresStore's
 // SetManualBackfillObserver: workerctl is a one-shot CLI with no metrics

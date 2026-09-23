@@ -911,37 +911,14 @@ dev-hops workers inspect --state active
 
 ### Worker operator CLI
 
-`dho workers` is the authenticated Go operator binary. Read this before
-the verb reference below — three of its requirements are not discoverable from
-the verbs themselves.
+`dho workers` is the Go operator CLI. Read this before the verb reference
+below — its requirements are not discoverable from the verbs themselves.
 
-**Mint a credential first.** The operator token the verbs require is a service
-credential, created with the Python CLI against the Postgres backend:
-
-```bash
-# --service defaults to `acr`. A workerctl credential MUST name worker-operator,
-# and --scope is repeated once per scope rather than given as a list.
-dev-hops service-credentials create \
-  --service worker-operator \
-  --scope workers:read \
-  --scope workers:operate
-
-dev-hops service-credentials list --service worker-operator
-
-dev-hops service-credentials rotate <credential-id> \
-  --service worker-operator \
-  --scope workers:read \
-  --scope workers:operate \
-  --overlap-seconds 300
-
-dev-hops service-credentials revoke <credential-id>
-```
-
-All four subcommands require the Postgres backend. The secret is printed once,
-by `create` and `rotate` only; `list` returns metadata without secrets. Supply
-the secret to `workerctl` through `WORKER_OPERATOR_TOKEN` or
-`WORKER_OPERATOR_TOKEN_FILE`. Status and inspection verbs require the
-`workers:read` scope; every mutation requires `workers:operate`.
+**No token.** `dho workers` takes no operator token. Whoever can run it in a
+worker pod with that pod's database DSNs is the operator. Every mutation
+still requires `--reason` and `--correlation-id`, and it writes an audit
+row (principal `operator/dho-workers`). Name yourself in those two flags:
+they and the cluster's exec audit log are the record of who acted.
 
 **Flags must precede the positional argument.** Go's `flag` package stops
 parsing at the first positional, so an id-first invocation fails with a generic
@@ -1022,7 +999,6 @@ original dispatch used, so a bare re-dispatch alone is not enough — see
 [job-recovery-lifecycle.md](../../operate/run/job-recovery-lifecycle.md)).
 
 ```bash
-WORKER_OPERATOR_TOKEN=<operator-token> \
 dho workers metrics daily-redrive \
   --org 70d529e0-3c06-4597-8480-794fd02328b6 \
   --from 2026-08-08 \
@@ -1109,7 +1085,6 @@ success. This is the finalize-side counterpart of the CHAOS-4358 gap
 `daily-redrive` closes for partitions/dispatch.
 
 ```bash
-WORKER_OPERATOR_TOKEN=<operator-token> \
 dho workers metrics daily-finalize \
   --run 6f2caa3e-2a8b-4e46-9c47-6a5a0a5b9a12 \
   --review-evidence "confirmed all partitions succeeded and no user_metrics_daily/ic_landscape_rolling_30d rows exist yet for this run's target_day -- the prior metrics.daily_finalize job never reached CompleteFinalize"
@@ -1260,7 +1235,6 @@ it opens is rolled back, never committed), and does not require
 `--review-evidence` since nothing yet needs justifying:
 
 ```bash
-WORKER_OPERATOR_TOKEN=<operator-token> \
 dho workers metrics finalize-redrive \
   --org c6a38355-dad6-42e4-8cc9-4c712450827d \
   --from 2026-05-01 --to 2026-05-31 \
@@ -1270,7 +1244,6 @@ dho workers metrics finalize-redrive \
 Then run for real:
 
 ```bash
-WORKER_OPERATOR_TOKEN=<operator-token> \
 dho workers metrics finalize-redrive \
   --org c6a38355-dad6-42e4-8cc9-4c712450827d \
   --from 2026-05-01 --to 2026-05-31 \
@@ -1415,7 +1388,6 @@ day computed before the fix sees zero rows, and no operator path could ever
 recompute that day once its partition read `'succeeded'`.
 
 ```bash
-WORKER_OPERATOR_TOKEN=<operator-token> \
 dho workers metrics partition-recompute \
   --org c6a38355-dad6-42e4-8cc9-4c712450827d \
   --from 2026-08-20 --to 2026-08-27 \
@@ -1426,7 +1398,6 @@ dho workers metrics partition-recompute \
 Then run for real:
 
 ```bash
-WORKER_OPERATOR_TOKEN=<operator-token> \
 dho workers metrics partition-recompute \
   --org c6a38355-dad6-42e4-8cc9-4c712450827d \
   --from 2026-08-20 --to 2026-08-27 \
@@ -1512,7 +1483,6 @@ incident, since a day the pre-fix same-day coverage bug froze at 0 rows
 already has a "succeeded" partition and needs exactly this bypass.
 
 ```bash
-WORKER_OPERATOR_TOKEN=<operator-token> \
 dho workers metrics remaining start \
   --family dora \
   --day 2026-08-25 --to 2026-08-27 \
@@ -1655,9 +1625,7 @@ dho workers routes resume \
 ```
 
 The fixed kinds are `dispatch_sync_run`, `finalize_sync_run`, `post_sync`, and
-`reference_discovery`. Supply the one-time service credential through
-`WORKER_OPERATOR_TOKEN` or `WORKER_OPERATOR_TOKEN_FILE`; status requires
-`workers:read`, while apply/pause/drain/resume require `workers:operate`. Mutations
+`reference_discovery`. No operator token is needed (see "No token" above). Mutations
 are serialized per semantic database, persist audit intent before changing
 state, and may return `outcome_unknown`; inspect the route before retrying.
 

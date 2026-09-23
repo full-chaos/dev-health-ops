@@ -12,6 +12,10 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/licensing"
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"github.com/google/uuid"
 )
 
@@ -22,11 +26,11 @@ func (d Deps) handleListSchemas() http.HandlerFunc {
 			writeIngestError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{
-			"schemaVersions": []string{schemaVersion},
-			"recordKinds":    recordKinds,
-			"limits":         limitsPayload(d.limits()),
-		})
+		body := pyjson.NewObject()
+		body.Set("schemaVersions", []string{schemaVersion})
+		body.Set("recordKinds", recordKinds)
+		body.Set("limits", limitsPayload(d.limits()))
+		policy.WriteJSON(w, http.StatusOK, body, nil)
 	}
 }
 
@@ -40,7 +44,7 @@ func (d Deps) handleGetSchema() http.HandlerFunc {
 		version := r.PathValue("schema_version")
 		if version != schemaVersion {
 			writeIngestError(w, newIngestError(http.StatusNotFound, "unsupported_schema_version",
-				fmt.Sprintf("Unknown schema version: %q", version)))
+				"Unknown schema version: "+pythonparity.StrRepr(version)))
 			return
 		}
 		document, err := schemaDocument(d.limits())
@@ -60,7 +64,7 @@ func (d Deps) handleGetSchema() http.HandlerFunc {
 		}
 		w.Header().Set("ETag", etag)
 		w.Header().Set("Cache-Control", "public, max-age=3600, must-revalidate")
-		writeJSON(w, http.StatusOK, document)
+		writeUnorderedJSON(w, http.StatusOK, document)
 	}
 }
 
@@ -106,15 +110,15 @@ func (d Deps) handleAvailability() http.HandlerFunc {
 			}
 		}
 
-		writeJSON(w, http.StatusOK, map[string]any{
-			"schemaVersion": schemaVersion,
-			"features": map[string]any{
-				"customerPushIngest":         customerPush,
-				"canonicalIncidentIngestion": canonicalIncident,
-			},
-			"availableRecordKinds":   sortedSet(available),
-			"unavailableRecordKinds": sortedSet(unavailable),
-		})
+		features := pyjson.NewObject()
+		features.Set("customerPushIngest", customerPush)
+		features.Set("canonicalIncidentIngestion", canonicalIncident)
+		body := pyjson.NewObject()
+		body.Set("schemaVersion", schemaVersion)
+		body.Set("features", features)
+		body.Set("availableRecordKinds", sortedSet(available))
+		body.Set("unavailableRecordKinds", sortedSet(unavailable))
+		policy.WriteJSON(w, http.StatusOK, body, nil)
 	}
 }
 
@@ -151,7 +155,7 @@ func (d Deps) handleValidate() http.HandlerFunc {
 		}
 		if envelope.SchemaVersion != schemaVersion {
 			writeIngestError(w, newIngestError(http.StatusBadRequest, "unsupported_schema_version",
-				fmt.Sprintf("Unsupported schemaVersion: %q", envelope.SchemaVersion)))
+				"Unsupported schemaVersion: "+pythonparity.StrRepr(envelope.SchemaVersion)))
 			return
 		}
 		if len(envelope.Records) > d.limits().MaxRecords {
@@ -176,12 +180,17 @@ func (d Deps) handleValidate() http.HandlerFunc {
 		for _, e := range errs {
 			rejectedIndices[e.Index] = true
 		}
-		writeJSON(w, http.StatusOK, map[string]any{
-			"valid":         len(errs) == 0,
-			"itemsAccepted": len(envelope.Records) - len(rejectedIndices),
-			"itemsRejected": len(rejectedIndices),
-			"errors":        nonNilErrors(errs),
-		})
+		errItems := nonNilErrors(errs)
+		errorValues := make([]pyjson.Value, len(errItems))
+		for i, item := range errItems {
+			errorValues[i] = item.toPyJSON()
+		}
+		body := pyjson.NewObject()
+		body.Set("valid", len(errs) == 0)
+		body.Set("itemsAccepted", len(envelope.Records)-len(rejectedIndices))
+		body.Set("itemsRejected", len(rejectedIndices))
+		body.Set("errors", errorValues)
+		policy.WriteJSON(w, http.StatusOK, body, nil)
 	}
 }
 
@@ -235,7 +244,7 @@ func (d Deps) handleAcceptBatch() http.HandlerFunc {
 		}
 		if envelope.SchemaVersion != schemaVersion {
 			writeIngestError(w, newIngestError(http.StatusBadRequest, "unsupported_schema_version",
-				fmt.Sprintf("Unsupported schemaVersion: %q", envelope.SchemaVersion)))
+				"Unsupported schemaVersion: "+pythonparity.StrRepr(envelope.SchemaVersion)))
 			return
 		}
 		kinds := make([]string, len(envelope.Records))
@@ -243,7 +252,7 @@ func (d Deps) handleAcceptBatch() http.HandlerFunc {
 			kinds[i] = rec.Kind
 			if _, known := recordKindValidators[rec.Kind]; !known {
 				writeIngestError(w, newIngestError(http.StatusBadRequest, "unknown_record_kind",
-					fmt.Sprintf("Unknown record kind at index %d: %q", i, rec.Kind)))
+					fmt.Sprintf("Unknown record kind at index %d: ", i)+pythonparity.StrRepr(rec.Kind)))
 				return
 			}
 		}
@@ -298,9 +307,10 @@ func (d Deps) handleAcceptBatch() http.HandlerFunc {
 		}
 		if outcome.Kind == outcomeConflict {
 			writeIngestError(w, newIngestError(http.StatusConflict, "idempotency_conflict",
-				fmt.Sprintf("Idempotency key %q was already used for source '%s:%s' with a different payload. "+
-					"Use a new idempotencyKey, or retry with the exact original payload to get the cached status.",
-					envelope.IdempotencyKey, envelope.Source.System, envelope.Source.Instance)))
+				"Idempotency key "+pythonparity.StrRepr(envelope.IdempotencyKey)+
+					fmt.Sprintf(" was already used for source '%s:%s' with a different payload. "+
+						"Use a new idempotencyKey, or retry with the exact original payload to get the cached status.",
+						envelope.Source.System, envelope.Source.Instance)))
 			return
 		}
 		if outcome.Kind == outcomeReplay {
@@ -333,17 +343,17 @@ func (d Deps) handleAcceptBatch() http.HandlerFunc {
 				return
 			}
 			writeIngestError(w, newIngestError(http.StatusServiceUnavailable, "stream_unavailable",
-				fmt.Sprintf("The durable ingest stream is temporarily unavailable. The batch was recorded as %q; "+
-					"retry with the same idempotencyKey once available.", batch.IngestionID)))
+				"The durable ingest stream is temporarily unavailable. The batch was recorded as "+
+					pythonparity.StrRepr(batch.IngestionID.String())+"; retry with the same idempotencyKey once available."))
 			return
 		}
 
-		writeJSON(w, http.StatusAccepted, map[string]any{
-			"ingestionId":   batch.IngestionID.String(),
-			"status":        "accepted",
-			"itemsReceived": len(envelope.Records),
-			"stream":        stream,
-		})
+		body := pyjson.NewObject()
+		body.Set("ingestionId", batch.IngestionID.String())
+		body.Set("status", "accepted")
+		body.Set("itemsReceived", len(envelope.Records))
+		body.Set("stream", stream)
+		policy.WriteJSON(w, http.StatusAccepted, body, nil)
 	}
 }
 
@@ -437,7 +447,12 @@ func (d Deps) writeReplayStatus(w http.ResponseWriter, ctx context.Context, orgI
 		writeIngestError(w, newIngestError(http.StatusInternalServerError, "internal_error", "failed to load rejections"))
 		return
 	}
-	writeJSON(w, http.StatusOK, batchStatusResponse(batch, rejections, total, 50, 0))
+	jobs, err := listRecomputeJobs(ctx, d.Pool, batch.OrgID, batch.SourceSystem, batch.SourceInstance, batch.RecomputeDispatchedAt)
+	if err != nil {
+		writeIngestError(w, newIngestError(http.StatusInternalServerError, "internal_error", "failed to load recompute jobs"))
+		return
+	}
+	policy.WriteJSON(w, http.StatusOK, batchStatusResponse(batch, rejections, jobs, total, 50, 0), nil)
 }
 
 // handleListBatches is status.py's list_batch_statuses (GET /batches).
@@ -461,13 +476,16 @@ func (d Deps) handleListBatches() http.HandlerFunc {
 			writeIngestError(w, newIngestError(http.StatusInternalServerError, "internal_error", "failed to list batches"))
 			return
 		}
-		items := make([]map[string]any, len(batches))
+		items := make([]pyjson.Value, len(batches))
 		for i := range batches {
 			items[i] = batchListItem(&batches[i])
 		}
-		writeJSON(w, http.StatusOK, map[string]any{
-			"items": items, "total": total, "limit": limit, "offset": offset,
-		})
+		body := pyjson.NewObject()
+		body.Set("items", items)
+		body.Set("total", total)
+		body.Set("limit", limit)
+		body.Set("offset", offset)
+		policy.WriteJSON(w, http.StatusOK, body, nil)
 	}
 }
 
@@ -503,7 +521,12 @@ func (d Deps) handleGetBatch() http.HandlerFunc {
 			writeIngestError(w, newIngestError(http.StatusInternalServerError, "internal_error", "failed to load rejections"))
 			return
 		}
-		writeJSON(w, http.StatusOK, batchStatusResponse(batch, rejections, total, limit, offset))
+		jobs, err := listRecomputeJobs(r.Context(), d.Pool, batch.OrgID, batch.SourceSystem, batch.SourceInstance, batch.RecomputeDispatchedAt)
+		if err != nil {
+			writeIngestError(w, newIngestError(http.StatusInternalServerError, "internal_error", "failed to load recompute jobs"))
+			return
+		}
+		policy.WriteJSON(w, http.StatusOK, batchStatusResponse(batch, rejections, jobs, total, limit, offset), nil)
 	}
 }
 
@@ -548,56 +571,168 @@ func timeRangeParams(r *http.Request) (after, before *time.Time) {
 	return after, before
 }
 
-func batchListItem(row *BatchRow) map[string]any {
-	return map[string]any{
-		"ingestionId":   row.IngestionID.String(),
-		"status":        row.Status,
-		"itemsReceived": row.ItemsReceived,
-		"itemsAccepted": row.ItemsAccepted,
-		"itemsRejected": row.ItemsRejected,
-		"source":        map[string]any{"system": row.SourceSystem, "instance": row.SourceInstance},
-		"window":        map[string]any{"startedAt": formatOptionalRFC3339(row.WindowStartedAt), "endedAt": formatOptionalRFC3339(row.WindowEndedAt)},
-		"producer":      optionalStringValue(row.Producer),
-		"createdAt":     row.CreatedAt.UTC().Format(time.RFC3339Nano),
-		"completedAt":   formatOptionalRFC3339(row.CompletedAt),
+// recomputeScopePyJSON builds status.py's RecomputeScopeResponse -- a real
+// Pydantic submodel, so Python serializes it in the MODEL's declared field
+// order (repoIds, teamIds, windowStartedAt, windowEndedAt, cappedDays,
+// cappedRepos) regardless of what order the stored recompute_scope JSONB
+// happens to hold, with the same defaulting _recompute_scope_response
+// applies (missing/falsy list -> [], missing bool -> false). nil in, nil
+// out (recompute.scope is null until a bounded recompute has scoped one).
+func recomputeScopePyJSON(scope map[string]any) pyjson.Value {
+	if scope == nil {
+		return nil
 	}
+	object := pyjson.NewObject()
+	object.Set("repoIds", stringListOrEmpty(scope["repoIds"]))
+	object.Set("teamIds", stringListOrEmpty(scope["teamIds"]))
+	object.Set("windowStartedAt", scopeDatetimeValue(scope["windowStartedAt"]))
+	object.Set("windowEndedAt", scopeDatetimeValue(scope["windowEndedAt"]))
+	object.Set("cappedDays", boolOrFalse(scope["cappedDays"]))
+	object.Set("cappedRepos", boolOrFalse(scope["cappedRepos"]))
+	return object
 }
 
-func batchStatusResponse(row *BatchRow, rejections []RejectionRow, total, limit, offset int) map[string]any {
-	errs := make([]map[string]any, len(rejections))
-	for i, rej := range rejections {
-		errs[i] = map[string]any{
-			"index": rej.Index, "kind": rej.Kind, "externalId": optionalStringValue(rej.ExternalID),
-			"code": rej.Code, "message": rej.Message, "path": optionalStringValue(rej.Path),
+// stringListOrEmpty ports `list(scope.get(key) or [])`: a missing or falsy
+// (nil, empty list) value becomes [], never null -- RecomputeScopeResponse's
+// repo_ids/team_ids fields are plain lists, not Optional.
+func stringListOrEmpty(raw any) []pyjson.Value {
+	items, _ := raw.([]any)
+	out := make([]pyjson.Value, 0, len(items))
+	for _, item := range items {
+		if s, ok := item.(string); ok {
+			out = append(out, s)
 		}
 	}
-	return map[string]any{
-		"ingestionId":     row.IngestionID.String(),
-		"status":          row.Status,
-		"attempts":        row.Attempts,
-		"itemsReceived":   row.ItemsReceived,
-		"itemsAccepted":   row.ItemsAccepted,
-		"itemsRejected":   row.ItemsRejected,
-		"source":          map[string]any{"system": row.SourceSystem, "instance": row.SourceInstance},
-		"window":          map[string]any{"startedAt": formatOptionalRFC3339(row.WindowStartedAt), "endedAt": formatOptionalRFC3339(row.WindowEndedAt)},
-		"producer":        optionalStringValue(row.Producer),
-		"producerVersion": optionalStringValue(row.ProducerVersion),
-		"createdAt":       row.CreatedAt.UTC().Format(time.RFC3339Nano),
-		"updatedAt":       row.UpdatedAt.UTC().Format(time.RFC3339Nano),
-		"completedAt":     formatOptionalRFC3339(row.CompletedAt),
-		"errorSummary":    row.ErrorSummary,
-		"errors":          errs,
-		"errorsTotal":     total,
-		"errorsLimit":     limit,
-		"errorsOffset":    offset,
-		"recompute": map[string]any{
-			"status":       row.RecomputeStatus,
-			"dispatchedAt": formatOptionalRFC3339(row.RecomputeDispatchedAt),
-			"completedAt":  formatOptionalRFC3339(row.RecomputeCompletedAt),
-			"error":        optionalStringValue(row.RecomputeError),
-			"jobs":         []any{},
-		},
+	return out
+}
+
+// boolOrFalse ports `bool(scope.get(key, False))`.
+func boolOrFalse(raw any) bool {
+	b, _ := raw.(bool)
+	return b
+}
+
+// scopeDatetimeValue ports `_parse_dt(scope.get(key))`: an ISO8601 string
+// stored in the scope JSONB, re-serialized through pytime -- NOT
+// formatOptionalRFC3339, which forces UTC and lets Go's RFC3339Nano trim
+// trailing zero microseconds. The stored string can carry a non-UTC offset
+// (the producer writes `scope.window_start.isoformat()`, which preserves
+// whatever aware offset it had) and Pydantic's own datetime serializer
+// never trims a non-zero microsecond field to fewer than six digits --
+// round 2 review reproduced both divergences live (a +05:30 offset forced
+// to Z, and .123400 trimmed to .1234). pytime.FromISOFormat/Pydantic is the
+// same datetime.fromisoformat()/pydantic-JSON pair telemetry.go and
+// customerpush/reads.go already use for this exact contract. A missing,
+// non-string, or unparseable value is null, matching _parse_dt_required's
+// own contract of only ever being called on a value the writer produced.
+func scopeDatetimeValue(raw any) any {
+	s, ok := raw.(string)
+	if !ok || s == "" {
+		return nil
 	}
+	parsed, ok := pytime.FromISOFormat(s)
+	if !ok {
+		return nil
+	}
+	return pytime.Pydantic(parsed)
+}
+
+// recomputeJobPyJSON builds status.py's RecomputeJobResponse field order:
+// task, taskId, queue, repoId.
+func recomputeJobPyJSON(job RecomputeJobRow) *pyjson.Object {
+	object := pyjson.NewObject()
+	object.Set("task", job.Task)
+	object.Set("taskId", optionalStringValue(job.TaskID))
+	object.Set("queue", job.Queue)
+	object.Set("repoId", optionalStringValue(job.RepoID))
+	return object
+}
+
+// sourceRef and windowRef build status.py's SourceRef/WindowRef shapes,
+// shared by batchListItem and batchStatusResponse.
+func sourceRef(system, instance string) *pyjson.Object {
+	object := pyjson.NewObject()
+	object.Set("system", system)
+	object.Set("instance", instance)
+	return object
+}
+
+func windowRef(startedAt, endedAt *time.Time) *pyjson.Object {
+	object := pyjson.NewObject()
+	object.Set("startedAt", formatOptionalRFC3339(startedAt))
+	object.Set("endedAt", formatOptionalRFC3339(endedAt))
+	return object
+}
+
+// batchListItem builds status.py's BatchListItemResponse field order:
+// ingestionId, status, itemsReceived, itemsAccepted, itemsRejected, source,
+// window, producer, createdAt, completedAt.
+func batchListItem(row *BatchRow) *pyjson.Object {
+	object := pyjson.NewObject()
+	object.Set("ingestionId", row.IngestionID.String())
+	object.Set("status", row.Status)
+	object.Set("itemsReceived", row.ItemsReceived)
+	object.Set("itemsAccepted", row.ItemsAccepted)
+	object.Set("itemsRejected", row.ItemsRejected)
+	object.Set("source", sourceRef(row.SourceSystem, row.SourceInstance))
+	object.Set("window", windowRef(row.WindowStartedAt, row.WindowEndedAt))
+	object.Set("producer", optionalStringValue(row.Producer))
+	object.Set("createdAt", row.CreatedAt.UTC().Format(time.RFC3339Nano))
+	object.Set("completedAt", formatOptionalRFC3339(row.CompletedAt))
+	return object
+}
+
+// batchStatusResponse builds status.py's BatchStatusResponse field order,
+// through an ordered *pyjson.Object instead of a map[string]any. jobs is
+// the recompute_jobs log fetched separately (listRecomputeJobs) since it
+// has no FK to this batch row -- a same-dispatched_at match across the
+// caller's own source_system/source_instance, exactly like Python's
+// _batch_to_recompute_response(row, jobs) split.
+func batchStatusResponse(row *BatchRow, rejections []RejectionRow, jobs []RecomputeJobRow, total, limit, offset int) *pyjson.Object {
+	errs := make([]pyjson.Value, len(rejections))
+	for i, rej := range rejections {
+		errItem := pyjson.NewObject()
+		errItem.Set("index", rej.Index)
+		errItem.Set("kind", rej.Kind)
+		errItem.Set("externalId", optionalStringValue(rej.ExternalID))
+		errItem.Set("code", rej.Code)
+		errItem.Set("message", rej.Message)
+		errItem.Set("path", optionalStringValue(rej.Path))
+		errs[i] = errItem
+	}
+	jobItems := make([]pyjson.Value, len(jobs))
+	for i, job := range jobs {
+		jobItems[i] = recomputeJobPyJSON(job)
+	}
+	recompute := pyjson.NewObject()
+	recompute.Set("status", row.RecomputeStatus)
+	recompute.Set("scope", recomputeScopePyJSON(row.RecomputeScope))
+	recompute.Set("dispatchedAt", formatOptionalRFC3339(row.RecomputeDispatchedAt))
+	recompute.Set("completedAt", formatOptionalRFC3339(row.RecomputeCompletedAt))
+	recompute.Set("error", optionalStringValue(row.RecomputeError))
+	recompute.Set("jobs", jobItems)
+
+	object := pyjson.NewObject()
+	object.Set("ingestionId", row.IngestionID.String())
+	object.Set("status", row.Status)
+	object.Set("attempts", row.Attempts)
+	object.Set("itemsReceived", row.ItemsReceived)
+	object.Set("itemsAccepted", row.ItemsAccepted)
+	object.Set("itemsRejected", row.ItemsRejected)
+	object.Set("source", sourceRef(row.SourceSystem, row.SourceInstance))
+	object.Set("window", windowRef(row.WindowStartedAt, row.WindowEndedAt))
+	object.Set("producer", optionalStringValue(row.Producer))
+	object.Set("producerVersion", optionalStringValue(row.ProducerVersion))
+	object.Set("createdAt", row.CreatedAt.UTC().Format(time.RFC3339Nano))
+	object.Set("updatedAt", row.UpdatedAt.UTC().Format(time.RFC3339Nano))
+	object.Set("completedAt", formatOptionalRFC3339(row.CompletedAt))
+	object.Set("errorSummary", row.ErrorSummary)
+	object.Set("errors", errs)
+	object.Set("errorsTotal", total)
+	object.Set("errorsLimit", limit)
+	object.Set("errorsOffset", offset)
+	object.Set("recompute", recompute)
+	return object
 }
 
 func formatOptionalRFC3339(t *time.Time) any {

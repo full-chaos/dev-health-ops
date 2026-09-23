@@ -2,9 +2,11 @@ package externalingest
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -32,13 +34,32 @@ type BatchRow struct {
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 	CompletedAt     *time.Time
-	ErrorSummary    map[string]any
+	// ErrorSummary is status.py's BatchStatusResponse.error_summary: a raw
+	// `dict[str, Any] | None` field with NO Pydantic submodel, so Python
+	// serializes exactly the dict json.loads produced from the stored
+	// JSONB text -- insertion order and int/float distinction preserved
+	// from whatever the writer (status.py's _build_error_summary, its
+	// mark_failed, or the Go worker's own writer) originally wrote. Decoded
+	// via pyjson.Decode (json.loads semantics: order kept, Int/Float
+	// distinct), not the generic decodeMetadata map[string]any helper,
+	// specifically so this passes through unconverted rather than being
+	// re-keyed against one assumed fixed shape -- round 1 review reproduced
+	// a second producer (mark_failed's {system_failure, reason}) that a
+	// fixed-shape converter silently dropped, plus reordered/float-ified
+	// keys on the shape it did handle.
+	ErrorSummary pyjson.Value
 	// ErrorSummaryJSON and RecordCountsJSON are the columns' stored JSON
-	// text (nil for SQL NULL). A reader that re-emits them decodes this text
-	// with pyjson, so key order survives; ErrorSummary above is the
-	// data-plane handler's decoded form.
-	ErrorSummaryJSON      []byte
-	RecordCountsJSON      []byte
+	// text (nil for SQL NULL) -- customerpush's own admin proxy decodes
+	// these itself (jsonObjectColumn) rather than going through ErrorSummary
+	// above, so both stay populated from the same scanned bytes.
+	ErrorSummaryJSON []byte
+	RecordCountsJSON []byte
+	// RecomputeScope is the raw recompute_scope JSONB column, decoded
+	// generically (key order doesn't matter here: status.py's
+	// RecomputeScopeResponse is a real Pydantic submodel, so Python
+	// serializes it in ITS OWN declared field order regardless of the
+	// stored dict's order -- recomputeScopePyJSON rebuilds that order).
+	RecomputeScope        map[string]any
 	RecomputeStatus       string
 	RecomputeDispatchedAt *time.Time
 	RecomputeCompletedAt  *time.Time
@@ -49,21 +70,28 @@ const batchColumns = `ingestion_id, org_id, idempotency_key, payload_hash, sourc
 	source_instance, entity_family, producer, producer_version, schema_version,
 	window_started_at, window_ended_at, status, attempts, items_received,
 	items_accepted, items_rejected, created_at, updated_at, completed_at, error_summary,
-	recompute_status, recompute_dispatched_at, recompute_completed_at, recompute_error, record_counts`
+	recompute_status, recompute_scope, recompute_dispatched_at, recompute_completed_at, recompute_error, record_counts`
 
 func scanBatchRow(row pgx.Row) (*BatchRow, error) {
 	var b BatchRow
-	var errorSummary []byte
+	var errorSummary, recomputeScope []byte
 	err := row.Scan(
 		&b.IngestionID, &b.OrgID, &b.IdempotencyKey, &b.PayloadHash, &b.SourceSystem,
 		&b.SourceInstance, &b.EntityFamily, &b.Producer, &b.ProducerVersion, &b.SchemaVersion,
 		&b.WindowStartedAt, &b.WindowEndedAt, &b.Status, &b.Attempts, &b.ItemsReceived,
 		&b.ItemsAccepted, &b.ItemsRejected, &b.CreatedAt, &b.UpdatedAt, &b.CompletedAt, &errorSummary,
-		&b.RecomputeStatus, &b.RecomputeDispatchedAt, &b.RecomputeCompletedAt, &b.RecomputeError,
+		&b.RecomputeStatus, &recomputeScope, &b.RecomputeDispatchedAt, &b.RecomputeCompletedAt, &b.RecomputeError,
 		&b.RecordCountsJSON,
 	)
-	b.ErrorSummary = decodeMetadata(errorSummary)
+	if len(errorSummary) > 0 {
+		v, decodeErr := pyjson.Decode(errorSummary)
+		if decodeErr != nil {
+			return nil, fmt.Errorf("decode error_summary: %w", decodeErr)
+		}
+		b.ErrorSummary = v
+	}
 	b.ErrorSummaryJSON = errorSummary
+	b.RecomputeScope = decodeMetadata(recomputeScope)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -301,4 +329,46 @@ func listRejections(ctx context.Context, pool *pgxpool.Pool, orgID string, inges
 		rejections = append(rejections, r)
 	}
 	return rejections, total, rows.Err()
+}
+
+// RecomputeJobRow mirrors recompute_status.py's RecomputeJobRow: one row
+// from the external_ingest_recompute_jobs log.
+type RecomputeJobRow struct {
+	Task   string
+	TaskID *string
+	Queue  string
+	RepoID *string
+}
+
+// listRecomputeJobs ports recompute_status.py's get_recompute_jobs: jobs
+// from the SAME flush that produced dispatchedAt on the batch row -- every
+// job row one flush inserts shares the identical dispatched_at timestamp
+// (a flush coalesces N ingestion_ids, so there is no per-job FK to
+// external_ingest_batches to join on instead). nil/zero dispatchedAt means
+// no recompute has ever dispatched for this source, matching Python's
+// "dispatched_at is None -> []" short circuit exactly.
+func listRecomputeJobs(ctx context.Context, pool *pgxpool.Pool, orgID, sourceSystem, sourceInstance string, dispatchedAt *time.Time) ([]RecomputeJobRow, error) {
+	if dispatchedAt == nil {
+		return nil, nil
+	}
+	rows, err := pool.Query(ctx, `
+		SELECT celery_task_name, celery_task_id, queue, repo_id
+		FROM external_ingest_recompute_jobs
+		WHERE org_id = $1 AND source_system = $2 AND source_instance = $3 AND dispatched_at = $4
+		ORDER BY celery_task_name, repo_id
+	`, orgID, sourceSystem, sourceInstance, *dispatchedAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var jobs []RecomputeJobRow
+	for rows.Next() {
+		var j RecomputeJobRow
+		if err := rows.Scan(&j.Task, &j.TaskID, &j.Queue, &j.RepoID); err != nil {
+			return nil, err
+		}
+		jobs = append(jobs, j)
+	}
+	return jobs, rows.Err()
 }

@@ -44,16 +44,30 @@ var recordKinds = sortedKeys(recordKindValidators)
 // limitsPayload mirrors router.py's _limits_payload(): the live,
 // env-overridable ingest limits, served on both GET /schemas* and merged
 // into the ETag'd schema document.
-func limitsPayload(cfg Limits) map[string]any {
-	return map[string]any{
-		"maxRecordsPerBatch": cfg.MaxRecords,
-		"maxBodyBytes":       cfg.MaxBodyBytes,
-	}
+func limitsPayload(cfg Limits) *pyjson.Object {
+	object := pyjson.NewObject()
+	object.Set("maxRecordsPerBatch", cfg.MaxRecords)
+	object.Set("maxBodyBytes", cfg.MaxBodyBytes)
+	return object
 }
 
 // schemaDocument returns the served GET /schemas/{version} body: the golden
 // bundle plus the live limits, exactly as router.py's
 // `{**bundle.document, "limits": _limits_payload()}` does.
+//
+// NAMED LIMIT: stays map[string]any and is written by writeUnorderedJSON
+// (errors.go), not converted to an ordered *pyjson.Object like every other
+// writer in this package. bundle.document is a generated JSON Schema
+// document (pydantic.json_schema.models_json_schema(), $defs and all), and
+// the checked-in golden fixture this decodes was written with
+// sort_keys=True for content-addressed storage (this file's own regenerate
+// comment) -- that is NOT necessarily Python's live dict-insertion order,
+// which Starlette's default JSONResponse preserves un-sorted. Reproducing
+// this golden's order faithfully would not prove it matches the live
+// response; only running the real interpreter and comparing would, and
+// that is out of this change's scope. limitsPayload above (called from here
+// AND from handleListSchemas) is fixed like every other writer -- only the
+// bundle.document merge itself is left as the documented exception.
 func schemaDocument(cfg Limits) (map[string]any, error) {
 	document, err := decodeGolden()
 	if err != nil {

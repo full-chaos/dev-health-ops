@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 )
 
 // ingestError mirrors errors.py's ExternalIngestError: the customer-facing
@@ -24,20 +27,47 @@ func newIngestError(status int, code, message string) *ingestError {
 }
 
 // writeIngestError renders errors.py's external_ingest_error_body:
-// {"error": {"code": ..., "message": ..., "errors": [...]?}}.
+// {"error": {"code": ..., "message": ..., "errors": [...]?}}. An explicitly
+// ordered *pyjson.Object through policy.WriteJSON, not a map[string]any:
+// stdlib encoding/json alphabetizes map keys on the way out, which would
+// silently diverge from Python's declared field order the moment this body
+// carried more than one key whose alphabetical and declared order differ
+// (they don't today, by coincidence -- code before message before errors is
+// already alphabetical -- which is exactly the kind of accident this class
+// of fix exists to stop relying on).
+//
+// Every f"{value!r}"/explicit-single-quote-literal Python error message in
+// this package calls pythonparity.StrRepr directly (CPython's str.__repr__,
+// landed on main by #2850 for a different route area) -- an earlier version
+// of this PR reimplemented the same algorithm locally before that shared
+// helper existed; R299 is one implementation, not a second copy per package.
+
 func writeIngestError(w http.ResponseWriter, err *ingestError) {
-	body := map[string]any{
-		"error": map[string]any{"code": err.Code, "message": err.Message},
-	}
+	errorObject := pyjson.NewObject()
+	errorObject.Set("code", err.Code)
+	errorObject.Set("message", err.Message)
 	if len(err.Errors) > 0 {
-		body["error"].(map[string]any)["errors"] = err.Errors
+		items := make([]pyjson.Value, len(err.Errors))
+		for i, item := range err.Errors {
+			items[i] = item.toPyJSON()
+		}
+		errorObject.Set("errors", items)
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(err.Status)
-	_ = json.NewEncoder(w).Encode(body)
+	body := pyjson.NewObject()
+	body.Set("error", errorObject)
+	policy.WriteJSON(w, err.Status, body, nil)
 }
 
-func writeJSON(w http.ResponseWriter, status int, body any) {
+// writeUnorderedJSON is the ONE remaining stdlib-map writer in this package,
+// used solely by GET /schemas/{schema_version}'s schema-bundle document
+// (handlers.go): that body is a generated JSON Schema document
+// (pydantic.json_schema.models_json_schema(), arbitrary $defs depth), not a
+// hand-declared response shape with a known field order to preserve, and
+// nothing here re-derives Python's live dict-insertion order from the
+// checked-in golden fixture (which was itself written with sort_keys=True
+// for content-addressed storage, not to record wire order). NAMED LIMIT,
+// not fixed by this change -- see bundle.go's schemaDocument doc comment.
+func writeUnorderedJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(body)

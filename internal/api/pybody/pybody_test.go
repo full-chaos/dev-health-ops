@@ -190,7 +190,7 @@ func TestDefaultedBoolMatchesPydantic(t *testing.T) {
 // JSON booleans -- the int/float 0/1, and a fixed case-insensitive string
 // vocabulary. A stricter Go-only `raw.(bool)` assertion answered 422 where
 // Python answers 200 for these. Verified live against the installed
-// pydantic (2.13.4); see pydanticBool's own doc comment for the full rule.
+// pydantic (2.13.4); see PydanticBool's own doc comment for the full rule.
 func TestOptionalBoolLaxCoercionMatchesPydantic(t *testing.T) {
 	accept := []struct {
 		json string

@@ -67,6 +67,20 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), orgID, memberID
 	requests := []venueoracle.Request{
 		{Name: "list users by org", Method: "GET", Path: "/api/v1/admin/users",
 			Headers: map[string]string{"Authorization": "Bearer " + venue.Tokens["admin"], "X-Org-Id": orgID.String()}},
+		// A repeated query key resolves to FastAPI's LAST value, never Go's
+		// stdlib url.Values.Get's first -- a live round found this
+		// reversed for limit/active_only/role/q across the admin routes
+		// (queryLastValue, shared by queryInt/queryBool/querySearch).
+		// Positioned before "create user" below: list's body is a
+		// top-level JSON array this test's own Normalize cannot redact
+		// field-by-field, so it must run while only the seeded, byte-
+		// identical-on-both-planes rows exist.
+		{Name: "list users duplicate limit", Method: "GET", Path: "/api/v1/admin/users?limit=0&limit=1",
+			Headers: map[string]string{"Authorization": "Bearer " + venue.Tokens["admin"], "X-Org-Id": orgID.String()}},
+		// FastAPI's int query coercion trims surrounding whitespace (it is
+		// not a bare strconv.Atoi) -- a live round found Go 422ing this.
+		{Name: "list users padded limit", Method: "GET", Path: "/api/v1/admin/users?limit=%201%20",
+			Headers: map[string]string{"Authorization": "Bearer " + venue.Tokens["admin"], "X-Org-Id": orgID.String()}},
 		{Name: "get user", Method: "GET", Path: "/api/v1/admin/users/" + memberID.String(), Headers: authHeaders},
 		{Name: "get user not found", Method: "GET", Path: "/api/v1/admin/users/" + uuid.New().String(), Headers: authHeaders},
 		{Name: "create user", Method: "POST", Path: "/api/v1/admin/users", Headers: jsonHeaders,

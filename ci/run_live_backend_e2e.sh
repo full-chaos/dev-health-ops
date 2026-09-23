@@ -437,16 +437,21 @@ fetch_json() {
   local path="$1"
   local out_file="$2"
   local expected_status="$3"
+  # base_url/bearer default to the Python api / AUTH_TOKEN (every existing
+  # caller) -- CHAOS-6241's query-api REST checks pass both explicitly, to
+  # hit the Go binary with its own envelope bearer instead.
+  local base_url="${4:-${BASE_URL}}"
+  local bearer="${5-${AUTH_TOKEN:-}}"
   local extra_headers=()
-  if [ -n "${AUTH_TOKEN:-}" ]; then
-    extra_headers+=(-H "Authorization: Bearer ${AUTH_TOKEN}")
+  if [ -n "${bearer}" ]; then
+    extra_headers+=(-H "Authorization: Bearer ${bearer}")
   fi
   local status
   status="$(
     curl -sS -o "${out_file}" -w "%{http_code}" \
       -H "Accept: application/json" \
       "${extra_headers[@]}" \
-      "${BASE_URL}${path}"
+      "${base_url}${path}"
   )"
   if [ "${status}" != "${expected_status}" ]; then
     echo "ERROR: ${path} returned HTTP ${status}, expected ${expected_status}."
@@ -635,9 +640,22 @@ HEALTH_FILE="${TMP_DIR}/health.json"
 fetch_json "/health" "${HEALTH_FILE}" "200"
 run_python "${PY_PROGRAM_DIR}/assert_health.py" "${HEALTH_FILE}"
 
-echo "==> validating /api/v1/meta"
+# CHAOS-6241: /api/v1/meta and /api/v1/home are Go-served in prod --
+# main.py's bodies for both now unconditionally raise
+# GoServedRouteUnavailableError, so validating them against the Python api
+# process (BASE_URL) would only prove that sentinel fires, not that the
+# pipeline actually works. query_api_e2e_start boots the real query-api
+# binary (GO_API_HOME_ENABLED/GO_API_META_ENABLED on) that
+# run_go_api_prove_e2e's GraphQL proof reuses below -- one process, one
+# port, for both checks.
+echo "==> starting query-api for the CHAOS-6241 REST checks (and the go-api-prove run below)"
+query_api_e2e_start
+QUERY_API_BASE_URL="http://127.0.0.1:${QUERY_API_PORT}"
+
+echo "==> validating /api/v1/meta (query-api)"
 META_FILE="${TMP_DIR}/meta.json"
-fetch_json "/api/v1/meta" "${META_FILE}" "200"
+# Public route (meta_route.go: "no envelope verifier dependency") -- no bearer.
+fetch_json "/api/v1/meta" "${META_FILE}" "200" "${QUERY_API_BASE_URL}" ""
 run_python "${PY_PROGRAM_DIR}/assert_meta.py" "${META_FILE}"
 
 # CHAOS-5362: repos_covered_pct (backed by repo_metrics_daily, written by
@@ -649,9 +667,10 @@ run_python "${PY_PROGRAM_DIR}/assert_meta.py" "${META_FILE}"
 # came from the now-removed --with-metrics call's Python compute; their
 # current provenance after that removal was not re-verified here (RISK:
 # assert_home.py may need updating if those two fields regress in CI).
-echo "==> validating /api/v1/home"
+echo "==> validating /api/v1/home (query-api)"
 HOME_FILE="${TMP_DIR}/home.json"
-fetch_json "/api/v1/home" "${HOME_FILE}" "200"
+QUERY_API_ENVELOPE_TOKEN="$(query_api_e2e_mint_envelope_token "${E2E_ORG_ID}")"
+fetch_json "/api/v1/home" "${HOME_FILE}" "200" "${QUERY_API_BASE_URL}" "${QUERY_API_ENVELOPE_TOKEN}"
 run_python "${PY_PROGRAM_DIR}/assert_home.py" "${HOME_FILE}"
 
 echo "==> running go-api-prove end to end with the envelope and the edge access token minted in-process"

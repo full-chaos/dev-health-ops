@@ -76,8 +76,8 @@ def _valkey_cache(
     monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[TTLCache, fakeredis.FakeValkey]:
     """The REAL RedisBackend (json round-trip, INCR/EXPIRE) over fakeredis --
-    the production shape (api/main.py HOME_CACHE, ttl 60s), not the memory
-    backend."""
+    the shape a production epoch-scoped cache would use (ttl 60s), not the
+    memory backend."""
     fake = fakeredis.FakeValkey(decode_responses=True)
     monkeypatch.setattr("valkey.from_url", lambda *_a, **_k: fake, raising=False)
     backend = RedisBackend("redis://cache-invalidation-test/1")
@@ -191,7 +191,7 @@ async def test_memory_fallback_reads_the_same_key_as_epoch_zero(monkeypatch):
 
 
 def test_epoch_scoped_cache_refuses_a_ttl_that_breaks_the_epoch_margin():
-    """The ceiling fires once, at construction (api/main.py), not per read."""
+    """The ceiling fires once, at construction, not per read."""
     from dev_health_ops.core.cache import (
         EPOCH_SCOPED_CACHE_MAX_TTL_SECONDS,
         epoch_scoped,

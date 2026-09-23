@@ -3,21 +3,16 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import date, datetime, timedelta
-from typing import Literal, cast
+from datetime import date, datetime
+from typing import NoReturn
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, StreamingResponse
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi.responses import JSONResponse
 
 from dev_health_ops.logging_config import configure_logging
-from dev_health_ops.metrics.sinks.factory import detect_backend
 from dev_health_ops.sentry import init_sentry
 from dev_health_ops.tracing import init_tracing
-from dev_health_ops.utils.datetime import utc_today
-
-from .utils.logging import sanitize_for_log
 
 # Configure structured JSON logging, Sentry, and OpenTelemetry as early as possible
 configure_logging()
@@ -37,14 +32,6 @@ from dev_health_ops.api.internal.worker_sync import router as worker_sync_router
 from dev_health_ops.api.middleware.rate_limit import limiter
 from dev_health_ops.api.product_telemetry import router as product_telemetry_router
 from dev_health_ops.api.telemetry.router import router as telemetry_router
-from dev_health_ops.core.cache import epoch_scoped
-from dev_health_ops.llm import get_provider
-from dev_health_ops.llm.errors import (
-    LLMAuthError,
-    LLMError,
-    LLMRateLimitError,
-    LLMServerError,
-)
 
 from ._errors import (
     _generic_exception_handler as _generic_exception_handler,
@@ -53,7 +40,6 @@ from ._errors import (
     register_exception_handlers,
 )
 from ._health import (
-    _analytics_db_url,
     _check_celery_health,
     _check_clickhouse_health,
     _check_go_worker_presence,
@@ -70,7 +56,6 @@ from .admin.impersonation import router as impersonation_router
 from .auth import router as auth_router
 from .auth.router import get_current_user
 from .billing import router as billing_router
-from .dependencies import get_postgres_session_dep
 from .dev.router import (
     AskDevApiError,
     ask_dev_error_handler,
@@ -80,9 +65,6 @@ from .dev.router import (
     router as dev_router,
 )
 from .graphql.app import create_graphql_app
-from .graphql.investment_explain_dispatcher import (
-    maybe_dispatch_investment_explain_to_go,
-)
 from .ingest import router as ingest_router
 from .licensing import router as licensing_router
 from .models.filters import (
@@ -92,10 +74,7 @@ from .models.filters import (
     HomeRequest,
     InvestmentExplainRequest,
     InvestmentFlowRequest,
-    MetricFilter,
     SankeyRequest,
-    ScopeFilter,
-    TimeFilter,
     WorkUnitRequest,
 )
 from .models.schemas import (
@@ -121,94 +100,10 @@ from .models.schemas import (
     WorkUnitInvestment,
 )
 from .orgs import router as orgs_router
-from .queries.client import clickhouse_client
-from .queries.drilldown import fetch_issues, fetch_pull_requests
-from .queries.filters import fetch_filter_options
-from .services.aggregated_flame import build_aggregated_flame_response
 from .services.auth import AuthenticatedUser
-from .services.cache import create_cache
-from .services.explain import build_explain_response
-from .services.filtering import scope_filter_for_metric, time_window
-from .services.flame import build_flame_response
-from .services.heatmap import build_heatmap_response
-from .services.home import build_home_response
-from .services.investment import build_investment_response, build_investment_sunburst
-from .services.investment_flow import (
-    build_investment_flow_response,
-    build_investment_repo_team_flow_response,
-)
-from .services.investment_mix_explain import explain_investment_mix
-from .services.opportunities import build_opportunities_response
-from .services.people import (
-    build_person_drilldown_issues_response,
-    build_person_drilldown_prs_response,
-    build_person_metric_response,
-    build_person_summary_response,
-    search_people_response,
-)
-from .services.quadrant import build_quadrant_response
-from .services.sankey import build_sankey_response
-from .services.work_unit_explain import explain_work_unit
-from .services.work_units import build_work_unit_investments
 from .webhooks import router as webhooks_router
 
-# Both are epoch-scoped (CHAOS-4226): their keys fold in the per-org cache
-# epoch the Go finalize bumps, and epoch_scoped() pins the entry TTL under
-# the epoch key's expiry margin once, here, rather than per request.
-HOME_CACHE = epoch_scoped(create_cache(ttl_seconds=60))
-EXPLAIN_CACHE = epoch_scoped(create_cache(ttl_seconds=120))
-WORK_UNITS_MAX_LIMIT = 1000
-
 logger = logging.getLogger(__name__)
-
-_FORBIDDEN_QUERY_PARAMS = {
-    "compare_to",
-    "rank",
-    "percentile",
-    "score",
-    "leaderboard",
-    "top",
-    "bottom",
-}
-
-
-def _filters_from_query(
-    scope_type: str,
-    scope_id: str,
-    range_days: int,
-    compare_days: int,
-    start_date: date | None = None,
-    end_date: date | None = None,
-) -> MetricFilter:
-    return MetricFilter(
-        time=TimeFilter(
-            range_days=range_days,
-            compare_days=compare_days,
-            start_date=start_date,
-            end_date=end_date,
-        ),
-        scope=ScopeFilter(
-            level=cast(
-                Literal["org", "team", "repo", "service", "developer"], scope_type
-            ),
-            ids=[scope_id] if scope_id else [],
-        ),
-    )
-
-
-def _reject_comparative_params(request: Request) -> None:
-    for key in request.query_params.keys():
-        if key in _FORBIDDEN_QUERY_PARAMS:
-            raise HTTPException(
-                status_code=400,
-                detail="Comparative parameters are not supported.",
-            )
-
-
-def _bounded_limit_param(limit: int, max_limit: int) -> int:
-    if limit <= 0:
-        return min(50, max_limit)
-    return min(max(limit, 1), max_limit)
 
 
 app = FastAPI(
@@ -407,59 +302,72 @@ async def keep_alive_wrapper(coro):
         )
 
 
-def _http_exception_from_llm_error(exc: LLMError) -> HTTPException:
-    if isinstance(exc, LLMAuthError):
-        return HTTPException(status_code=422, detail=str(exc))
-    if isinstance(exc, LLMRateLimitError):
-        return HTTPException(status_code=429, detail=str(exc))
-    if isinstance(exc, LLMServerError):
-        return HTTPException(status_code=503, detail=str(exc))
-    return HTTPException(status_code=422, detail=str(exc))
+class GoServedRouteUnavailableError(HTTPException):
+    """A query-api-served REST route reached its Python handler, which has
+    no implementation (CHAOS-6241).
+
+    Its own exception type rather than a bare HTTPException so an operator
+    can grep for it, an alert can match on it, and a future test can assert
+    it without matching on message text. Mirrors
+    ``graphql.schema.GoServedOperationUnavailableError``, the equivalent
+    shape for the GraphQL surface.
+    """
+
+    def __init__(self, path: str) -> None:
+        super().__init__(
+            status_code=500,
+            detail=(
+                f"{path} is served by query-api and has no Python "
+                "implementation. web/ingress routing did not intercept this "
+                "request: verify deploy values.prod.yaml's "
+                "ingress.queryApiPaths lists this path, that web's "
+                "BACKEND_URL reaches the ingress controller (CHAOS-6239), "
+                "and that the matching GO_API_*_ENABLED route-gate env is "
+                "true on query-api (cmd/query-api/main.go)."
+            ),
+        )
+
+
+def _raise_served_by_go_api(path: str) -> NoReturn:
+    """Fail loudly for a REST route query-api owns (CHAOS-6241).
+
+    ONE structured error line before raising, per the standing telemetry
+    rule: the exception reaches the client as a 500 with a JSON body but no
+    server context, so without this the operator sees a 500 pointing at
+    nothing -- which is always deploy/ingress skew, never a bug in the
+    request. Mirrors ``graphql.schema._raise_served_by_query_api``.
+    """
+    logger.error(
+        "rest.route_served_by_query_api",
+        extra={
+            "path": path,
+            "reason": (
+                "query-api owns this REST path and it has no Python "
+                "implementation; reaching this handler means ingress "
+                "routing did not intercept -- check deploy "
+                "values.prod.yaml's ingress.queryApiPaths and query-api's "
+                "GO_API_*_ENABLED gate for this path"
+            ),
+        },
+    )
+    raise GoServedRouteUnavailableError(path)
+
+
+# --- CHAOS-6241: the 32 REST routes below are served by query-api. Each
+# handler's body is reduced to _raise_served_by_go_api(): the route stays
+# mounted, with its original signature (path, methods, params, Depends,
+# response_model, rate-limit decorator) unchanged, so its OpenAPI schema
+# entry and its dependency-injected auth gate (get_current_user runs BEFORE
+# the body, same as before) stay exactly as they were -- only the body that
+# used to compute a response is gone. See internal/goapiproof/
+# goserved_ledger.json's analogous GraphQL-side deletions and
+# graphql/models/data_health.py's metric_lineage for the same pattern. ---
 
 
 @app.get("/api/v1/meta", response_model=MetaResponse)
 async def meta() -> MetaResponse | JSONResponse:
-    """
-    Return backend metadata including DB kind, version, limits, and supported endpoints.
-    """
-    db_url = _analytics_db_url()
-    backend = detect_backend(db_url).value  # Get string value from enum
-
-    try:
-        # Simple meta response using direct ClickHouse query
-        version = "unknown"
-        coverage: dict = {}
-        if backend == "clickhouse":
-            async with clickhouse_client(db_url) as sink:
-                try:
-                    result = await asyncio.to_thread(
-                        sink.query_dicts, "SELECT version() AS version", {}
-                    )
-                    version = str(result[0]["version"]) if result else "unknown"
-                except Exception:
-                    # Silently ignore version query failures - not critical for meta endpoint
-                    pass
-
-        return MetaResponse(
-            backend=backend,
-            version=version,
-            last_ingest_at=None,
-            coverage=coverage,
-            limits={"max_days": 365, "max_repos": 1000},
-            supported_endpoints=[
-                "/api/v1/home",
-                "/api/v1/quadrant",
-                "/api/v1/flame",
-                "/api/v1/heatmap",
-                "/api/v1/work-units",
-                "/api/v1/sankey",
-                "/api/v1/investment",
-                "/api/v1/opportunities",
-                "/graphql",
-            ],
-        )
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail="Metadata unavailable") from exc
+    """Return backend metadata including DB kind, version, limits, and supported endpoints."""
+    _raise_served_by_go_api("/api/v1/meta")
 
 
 @app.post("/api/v1/home", response_model=HomeResponse)
@@ -468,18 +376,8 @@ async def home_post(
     request: Request,
     payload: HomeRequest,
     current_user: AuthenticatedUser = Depends(get_current_user),
-    semantic_session: AsyncSession = Depends(get_postgres_session_dep),
 ) -> HomeResponse:
-    try:
-        return await build_home_response(
-            db_url=_analytics_db_url(),
-            filters=payload.filters,
-            cache=HOME_CACHE,
-            org_id=current_user.org_id,
-            semantic_session=semantic_session,
-        )
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail="Data unavailable") from exc
+    _raise_served_by_go_api("/api/v1/home")
 
 
 @app.get("/api/v1/home", response_model=HomeResponse)
@@ -494,40 +392,15 @@ async def home(
     start_date: date | None = None,
     end_date: date | None = None,
     current_user: AuthenticatedUser = Depends(get_current_user),
-    semantic_session: AsyncSession = Depends(get_postgres_session_dep),
 ) -> HomeResponse:
-    try:
-        filters = _filters_from_query(
-            scope_type, scope_id, range_days, compare_days, start_date, end_date
-        )
-        result = await build_home_response(
-            db_url=_analytics_db_url(),
-            filters=filters,
-            cache=HOME_CACHE,
-            org_id=current_user.org_id,
-            semantic_session=semantic_session,
-        )
-        if response is not None:
-            response.headers["X-DevHealth-Deprecated"] = "use POST with filters"
-        return result
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail="Data unavailable") from exc
+    _raise_served_by_go_api("/api/v1/home")
 
 
 @app.post("/api/v1/explain", response_model=ExplainResponse)
 async def explain_post(
     payload: ExplainRequest, current_user: AuthenticatedUser = Depends(get_current_user)
 ) -> ExplainResponse:
-    try:
-        return await build_explain_response(
-            db_url=_analytics_db_url(),
-            metric=payload.metric,
-            filters=payload.filters,
-            cache=EXPLAIN_CACHE,
-            org_id=current_user.org_id,
-        )
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail="Data unavailable") from exc
+    _raise_served_by_go_api("/api/v1/explain")
 
 
 @app.get("/api/v1/explain", response_model=ExplainResponse)
@@ -544,22 +417,7 @@ async def explain(
     end_date: date | None = None,
     current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> ExplainResponse:
-    try:
-        filters = _filters_from_query(
-            scope_type, scope_id, range_days, compare_days, start_date, end_date
-        )
-        result = await build_explain_response(
-            db_url=_analytics_db_url(),
-            metric=metric,
-            filters=filters,
-            cache=EXPLAIN_CACHE,
-            org_id=current_user.org_id,
-        )
-        if response is not None:
-            response.headers["X-DevHealth-Deprecated"] = "use POST with filters"
-        return result
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail="Data unavailable") from exc
+    _raise_served_by_go_api("/api/v1/explain")
 
 
 @app.get("/api/v1/heatmap", response_model=HeatmapResponse)
@@ -578,26 +436,7 @@ async def heatmap(
     limit: int = 50,
     current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> HeatmapResponse:
-    _reject_comparative_params(request)
-    try:
-        return await build_heatmap_response(
-            db_url=_analytics_db_url(),
-            org_id=current_user.org_id,
-            type=type,
-            metric=metric,
-            scope_type=scope_type,
-            scope_id=scope_id,
-            range_days=range_days,
-            start_date=start_date,
-            end_date=end_date,
-            x=x or None,
-            y=y or None,
-            limit=_bounded_limit_param(limit, 200),
-        )
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail="Data unavailable") from exc
+    _raise_served_by_go_api("/api/v1/heatmap")
 
 
 @app.post("/api/v1/work-units", response_model=list[WorkUnitInvestment])
@@ -605,35 +444,7 @@ async def work_units_post(
     payload: WorkUnitRequest,
     current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> list[WorkUnitInvestment]:
-    try:
-        include_textual = (
-            True if payload.include_textual is None else payload.include_textual
-        )
-        if hasattr(payload.filters, "model_dump"):
-            filter_payload = payload.filters.model_dump(mode="json")
-        else:
-            filter_payload = payload.filters.dict()
-        bounded_limit = _bounded_limit_param(payload.limit or 200, WORK_UNITS_MAX_LIMIT)
-        log_limit = str(bounded_limit).replace("\r", "").replace("\n", "")
-        log_include_textual = str(include_textual).replace("\r", "").replace("\n", "")
-        logger.debug(
-            "WorkUnits POST request include_textual=%s limit=%s filters=%s",
-            log_include_textual,
-            log_limit,
-            filter_payload,
-        )
-        result = await build_work_unit_investments(
-            db_url=_analytics_db_url(),
-            filters=payload.filters,
-            org_id=current_user.org_id,
-            limit=bounded_limit,
-            include_text=include_textual,
-        )
-        logger.debug("WorkUnits POST returned count=%s", len(result))
-        return result
-    except Exception as exc:
-        logger.exception("WorkUnits POST failed")
-        raise HTTPException(status_code=503, detail="Data unavailable") from exc
+    _raise_served_by_go_api("/api/v1/work-units")
 
 
 @app.get("/api/v1/work-units", response_model=list[WorkUnitInvestment])
@@ -648,37 +459,7 @@ async def work_units(
     include_textual: bool = True,
     current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> list[WorkUnitInvestment]:
-    try:
-        filters = _filters_from_query(
-            scope_type, scope_id, range_days, range_days, start_date, end_date
-        )
-        if hasattr(filters, "model_dump"):
-            filter_payload = filters.model_dump(mode="json")
-        else:
-            filter_payload = filters.dict()
-        bounded_limit = _bounded_limit_param(limit, WORK_UNITS_MAX_LIMIT)
-        log_limit = str(bounded_limit).replace("\r", "").replace("\n", "")
-        log_include_textual = str(include_textual).replace("\r", "").replace("\n", "")
-        logger.debug(
-            "WorkUnits GET request include_textual=%s limit=%s filters=%s",
-            log_include_textual,
-            log_limit,
-            filter_payload,
-        )
-        result = await build_work_unit_investments(
-            db_url=_analytics_db_url(),
-            filters=filters,
-            org_id=current_user.org_id,
-            limit=bounded_limit,
-            include_text=include_textual,
-        )
-        logger.debug("WorkUnits GET returned count=%s", len(result))
-        if response is not None:
-            response.headers["X-DevHealth-Deprecated"] = "use POST with filters"
-        return result
-    except Exception as exc:
-        logger.exception("WorkUnits GET failed")
-        raise HTTPException(status_code=503, detail="Data unavailable") from exc
+    _raise_served_by_go_api("/api/v1/work-units")
 
 
 @app.post(
@@ -697,83 +478,9 @@ async def work_unit_explain_endpoint(
     llm_provider: str = "auto",
     llm_model: str | None = None,
     current_user: AuthenticatedUser = Depends(get_current_user),
-) -> WorkUnitExplanation | StreamingResponse:
-    """
-    Generate an LLM explanation for a work unit's precomputed investment view.
-
-    This endpoint follows the Investment model rules:
-    - LLMs explain results, they NEVER compute them
-    - Only allowed inputs passed to LLM (investment vectors, evidence metadata,
-      evidence quality band, time span)
-    - Responses use probabilistic language (appears, leans, suggests)
-
-    Args:
-        work_unit_id: The work unit to explain
-        scope_type: Scope level (org, team, repo)
-        scope_id: Scope identifier
-        range_days: Time window in days
-        start_date: Optional start date
-        end_date: Optional end date
-        llm_provider: LLM provider to use (auto, openai, anthropic, mock)
-        llm_model: Optional model version override
-
-    Returns:
-        WorkUnitExplanation with summary, rationale, and uncertainty disclosure
-    """
-    try:
-        # Validate provider credentials before opening the stream so that a
-        # missing API key returns a 4xx JSON response instead of HTTP 200 +
-        # broken stream (the error would otherwise surface inside
-        # keep_alive_wrapper after headers are already sent).
-        try:
-            resolved_provider = get_provider(
-                llm_provider, model=llm_model, org_id=current_user.org_id
-            )
-        except (ValueError, LLMError) as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-        filters = _filters_from_query(
-            scope_type, scope_id, range_days, range_days, start_date, end_date
-        )
-        investments = await build_work_unit_investments(
-            db_url=_analytics_db_url(),
-            filters=filters,
-            org_id=current_user.org_id,
-            limit=1,
-            include_text=True,
-            work_unit_id=work_unit_id,
-        )
-
-        if not investments:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Work unit {work_unit_id} not found",
-            )
-
-        target_investment = investments[0]
-        logger.info(
-            "Generating explanation for work_unit_id=%s",
-            sanitize_for_log(work_unit_id),
-        )
-
-        try:
-            return await explain_work_unit(
-                investment=target_investment,
-                llm_provider=llm_provider,
-                llm_model=llm_model,
-                provider=resolved_provider,
-                org_id=current_user.org_id,
-                db_url=_analytics_db_url(),
-            )
-        except LLMError as exc:
-            raise _http_exception_from_llm_error(exc) from exc
-
-    except HTTPException:
-        raise
-    except Exception as exc:
-        safe_work_unit_id = work_unit_id.replace("\r", "").replace("\n", "")
-        logger.exception("Work unit explain failed for %s", safe_work_unit_id)
-        raise HTTPException(status_code=503, detail="Explanation unavailable") from exc
+) -> WorkUnitExplanation:
+    """Generate an LLM explanation for a work unit's precomputed investment view."""
+    _raise_served_by_go_api("/api/v1/work-units/{work_unit_id}/explain")
 
 
 @app.get("/api/v1/flame", response_model=FlameResponse)
@@ -784,18 +491,7 @@ async def flame(
     entity_id: str,
     current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> FlameResponse:
-    _reject_comparative_params(request)
-    try:
-        return await build_flame_response(
-            db_url=_analytics_db_url(),
-            entity_type=entity_type,
-            entity_id=entity_id,
-            org_id=current_user.org_id,
-        )
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail="Data unavailable") from exc
+    _raise_served_by_go_api("/api/v1/flame")
 
 
 @app.get("/api/v1/flame/aggregated", response_model=AggregatedFlameResponse)
@@ -814,59 +510,8 @@ async def flame_aggregated(
     min_value: int = 1,
     current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> AggregatedFlameResponse:
-    """
-    Get an aggregated flame graph for cycle breakdown or code hotspots.
-
-    Args:
-        mode: "cycle_breakdown" or "code_hotspots"
-        start_date: Start of time window (defaults to range_days ago)
-        end_date: End of time window (defaults to today)
-        range_days: Number of days if dates not specified
-        team_id: Filter by team
-        repo_id: Filter by repo (for code_hotspots)
-        provider: Filter by provider (for cycle_breakdown)
-        work_scope_id: Filter by work scope
-        limit: Max number of items (default 500)
-        min_value: Minimum value threshold (default 1)
-    """
-    _reject_comparative_params(request)
-
-    if mode not in ("cycle_breakdown", "code_hotspots", "throughput"):
-        raise HTTPException(
-            status_code=400,
-            detail="mode must be 'cycle_breakdown', 'code_hotspots', or 'throughput'",
-        )
-
-    # Calculate date window
-
-    if end_date is None:
-        end_day = utc_today()
-    else:
-        end_day = end_date
-
-    if start_date is None:
-        start_day = end_day - timedelta(days=range_days)
-    else:
-        start_day = start_date
-
-    try:
-        return await build_aggregated_flame_response(
-            db_url=_analytics_db_url(),
-            org_id=current_user.org_id,
-            mode=mode,  # type: ignore
-            start_day=start_day,
-            end_day=end_day,
-            team_id=team_id or None,
-            repo_id=repo_id or None,
-            provider=provider or None,
-            work_scope_id=work_scope_id or None,
-            limit=min(max(limit, 1), 1000),
-            min_value=max(min_value, 0),
-        )
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail="Data unavailable") from exc
+    """Get an aggregated flame graph for cycle breakdown or code hotspots."""
+    _raise_served_by_go_api("/api/v1/flame/aggregated")
 
 
 @app.get("/api/v1/quadrant", response_model=QuadrantResponse)
@@ -882,23 +527,7 @@ async def quadrant(
     bucket: str = "week",
     current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> QuadrantResponse:
-    _reject_comparative_params(request)
-    try:
-        return await build_quadrant_response(
-            db_url=_analytics_db_url(),
-            org_id=current_user.org_id,
-            type=type,
-            scope_type=scope_type,
-            scope_id=scope_id,
-            range_days=range_days,
-            start_date=start_date,
-            end_date=end_date,
-            bucket=bucket,
-        )
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail="Data unavailable") from exc
+    _raise_served_by_go_api("/api/v1/quadrant")
 
 
 @app.post("/api/v1/drilldown/prs", response_model=DrilldownResponse)
@@ -908,27 +537,7 @@ async def drilldown_prs_post(
     payload: DrilldownRequest,
     current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> DrilldownResponse:
-    try:
-        start_day, end_day, _, _ = time_window(payload.filters)
-        async with clickhouse_client(_analytics_db_url()) as sink:
-            scope_filter, scope_params = await scope_filter_for_metric(
-                sink,
-                metric_scope="repo",
-                filters=payload.filters,
-                org_id=current_user.org_id,
-            )
-            items = await fetch_pull_requests(
-                sink,
-                start_day=start_day,
-                end_day=end_day,
-                scope_filter=scope_filter,
-                scope_params=scope_params,
-                limit=payload.limit or 50,
-                org_id=current_user.org_id,
-            )
-        return DrilldownResponse(items=items)
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail="Data unavailable") from exc
+    _raise_served_by_go_api("/api/v1/drilldown/prs")
 
 
 @app.get("/api/v1/drilldown/prs", response_model=DrilldownResponse)
@@ -943,31 +552,7 @@ async def drilldown_prs(
     end_date: date | None = None,
     current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> DrilldownResponse:
-    try:
-        filters = _filters_from_query(
-            scope_type, scope_id, range_days, range_days, start_date, end_date
-        )
-        start_day, end_day, _, _ = time_window(filters)
-        async with clickhouse_client(_analytics_db_url()) as sink:
-            scope_filter, scope_params = await scope_filter_for_metric(
-                sink,
-                metric_scope="repo",
-                filters=filters,
-                org_id=current_user.org_id,
-            )
-            items = await fetch_pull_requests(
-                sink,
-                start_day=start_day,
-                end_day=end_day,
-                scope_filter=scope_filter,
-                scope_params=scope_params,
-                org_id=current_user.org_id,
-            )
-        if response is not None:
-            response.headers["X-DevHealth-Deprecated"] = "use POST with filters"
-        return DrilldownResponse(items=items)
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail="Data unavailable") from exc
+    _raise_served_by_go_api("/api/v1/drilldown/prs")
 
 
 @app.post("/api/v1/drilldown/issues", response_model=DrilldownResponse)
@@ -977,28 +562,7 @@ async def drilldown_issues_post(
     payload: DrilldownRequest,
     current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> DrilldownResponse:
-    try:
-        start_day, end_day, _, _ = time_window(payload.filters)
-        async with clickhouse_client(_analytics_db_url()) as sink:
-            scope_filter, scope_params = await scope_filter_for_metric(
-                sink,
-                metric_scope="team",
-                filters=payload.filters,
-                org_id=current_user.org_id,
-                team_column="t.team_id",
-            )
-            items = await fetch_issues(
-                sink,
-                start_day=start_day,
-                end_day=end_day,
-                scope_filter=scope_filter,
-                scope_params=scope_params,
-                limit=payload.limit or 50,
-                org_id=current_user.org_id,
-            )
-        return DrilldownResponse(items=items)
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail="Data unavailable") from exc
+    _raise_served_by_go_api("/api/v1/drilldown/issues")
 
 
 @app.get("/api/v1/drilldown/issues", response_model=DrilldownResponse)
@@ -1013,32 +577,7 @@ async def drilldown_issues(
     end_date: date | None = None,
     current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> DrilldownResponse:
-    try:
-        filters = _filters_from_query(
-            scope_type, scope_id, range_days, range_days, start_date, end_date
-        )
-        start_day, end_day, _, _ = time_window(filters)
-        async with clickhouse_client(_analytics_db_url()) as sink:
-            scope_filter, scope_params = await scope_filter_for_metric(
-                sink,
-                metric_scope="team",
-                filters=filters,
-                org_id=current_user.org_id,
-                team_column="t.team_id",
-            )
-            items = await fetch_issues(
-                sink,
-                start_day=start_day,
-                end_day=end_day,
-                scope_filter=scope_filter,
-                scope_params=scope_params,
-                org_id=current_user.org_id,
-            )
-        if response is not None:
-            response.headers["X-DevHealth-Deprecated"] = "use POST with filters"
-        return DrilldownResponse(items=items)
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail="Data unavailable") from exc
+    _raise_served_by_go_api("/api/v1/drilldown/issues")
 
 
 @app.get("/api/v1/people", response_model=list[PersonSearchResult])
@@ -1049,16 +588,7 @@ async def people_search(
     limit: int = 20,
     current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> list[PersonSearchResult]:
-    _reject_comparative_params(request)
-    try:
-        return await search_people_response(
-            db_url=_analytics_db_url(),
-            query=q,
-            limit=_bounded_limit_param(limit, 50),
-            org_id=current_user.org_id,
-        )
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail="Data unavailable") from exc
+    _raise_served_by_go_api("/api/v1/people")
 
 
 @app.get("/api/v1/people/{person_id}/summary", response_model=PersonSummaryResponse)
@@ -1070,19 +600,7 @@ async def people_summary(
     compare_days: int = 14,
     current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> PersonSummaryResponse:
-    _reject_comparative_params(request)
-    try:
-        return await build_person_summary_response(
-            db_url=_analytics_db_url(),
-            person_id=person_id,
-            range_days=range_days,
-            compare_days=compare_days,
-            org_id=current_user.org_id,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail="Person not found") from exc
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail="Data unavailable") from exc
+    _raise_served_by_go_api("/api/v1/people/{person_id}/summary")
 
 
 @app.get("/api/v1/people/{person_id}/metric", response_model=PersonMetricResponse)
@@ -1094,26 +612,7 @@ async def people_metric(
     compare_days: int = 14,
     current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> PersonMetricResponse:
-    _reject_comparative_params(request)
-    try:
-        return await build_person_metric_response(
-            db_url=_analytics_db_url(),
-            person_id=person_id,
-            metric=metric,
-            range_days=range_days,
-            compare_days=compare_days,
-            org_id=current_user.org_id,
-        )
-    except ValueError as exc:
-        detail = (
-            "Metric not supported"
-            if str(exc) == "metric not supported"
-            else "Person not found"
-        )
-        status = 400 if detail == "Metric not supported" else 404
-        raise HTTPException(status_code=status, detail=detail) from exc
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail="Data unavailable") from exc
+    _raise_served_by_go_api("/api/v1/people/{person_id}/metric")
 
 
 @app.get(
@@ -1129,20 +628,7 @@ async def people_drilldown_prs(
     cursor: datetime | None = None,
     current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> PersonDrilldownResponse:
-    _reject_comparative_params(request)
-    try:
-        return await build_person_drilldown_prs_response(
-            db_url=_analytics_db_url(),
-            person_id=person_id,
-            range_days=range_days,
-            limit=_bounded_limit_param(limit, 200),
-            cursor=cursor,
-            org_id=current_user.org_id,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail="Person not found") from exc
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail="Data unavailable") from exc
+    _raise_served_by_go_api("/api/v1/people/{person_id}/drilldown/prs")
 
 
 @app.get(
@@ -1158,20 +644,7 @@ async def people_drilldown_issues(
     cursor: datetime | None = None,
     current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> PersonDrilldownResponse:
-    _reject_comparative_params(request)
-    try:
-        return await build_person_drilldown_issues_response(
-            db_url=_analytics_db_url(),
-            person_id=person_id,
-            range_days=range_days,
-            limit=_bounded_limit_param(limit, 200),
-            cursor=cursor,
-            org_id=current_user.org_id,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail="Person not found") from exc
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail="Data unavailable") from exc
+    _raise_served_by_go_api("/api/v1/people/{person_id}/drilldown/issues")
 
 
 @app.get("/api/v1/opportunities", response_model=OpportunitiesResponse)
@@ -1187,21 +660,7 @@ async def opportunities(
     end_date: date | None = None,
     current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> OpportunitiesResponse:
-    try:
-        filters = _filters_from_query(
-            scope_type, scope_id, range_days, compare_days, start_date, end_date
-        )
-        result = await build_opportunities_response(
-            db_url=_analytics_db_url(),
-            filters=filters,
-            cache=HOME_CACHE,
-            org_id=current_user.org_id,
-        )
-        if response is not None:
-            response.headers["X-DevHealth-Deprecated"] = "use POST with filters"
-        return result
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail="Data unavailable") from exc
+    _raise_served_by_go_api("/api/v1/opportunities")
 
 
 @app.post("/api/v1/opportunities", response_model=OpportunitiesResponse)
@@ -1211,15 +670,7 @@ async def opportunities_post(
     payload: HomeRequest,
     current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> OpportunitiesResponse:
-    try:
-        return await build_opportunities_response(
-            db_url=_analytics_db_url(),
-            filters=payload.filters,
-            cache=HOME_CACHE,
-            org_id=current_user.org_id,
-        )
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail="Data unavailable") from exc
+    _raise_served_by_go_api("/api/v1/opportunities")
 
 
 @app.get("/api/v1/investment", response_model=InvestmentResponse)
@@ -1234,18 +685,7 @@ async def investment(
     end_date: date | None = None,
     current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> InvestmentResponse:
-    try:
-        filters = _filters_from_query(
-            scope_type, scope_id, range_days, range_days, start_date, end_date
-        )
-        result = await build_investment_response(
-            db_url=_analytics_db_url(), filters=filters, org_id=current_user.org_id
-        )
-        if response is not None:
-            response.headers["X-DevHealth-Deprecated"] = "use POST with filters"
-        return result
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail="Data unavailable") from exc
+    _raise_served_by_go_api("/api/v1/investment")
 
 
 @app.post("/api/v1/investment", response_model=InvestmentResponse)
@@ -1255,14 +695,7 @@ async def investment_post(
     payload: HomeRequest,
     current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> InvestmentResponse:
-    try:
-        return await build_investment_response(
-            db_url=_analytics_db_url(),
-            filters=payload.filters,
-            org_id=current_user.org_id,
-        )
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail="Data unavailable") from exc
+    _raise_served_by_go_api("/api/v1/investment")
 
 
 @app.get(
@@ -1279,21 +712,7 @@ async def investment_sunburst(
     limit: int = 500,
     current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> list[InvestmentSunburstSlice]:
-    try:
-        filters = _filters_from_query(
-            scope_type, scope_id, range_days, range_days, start_date, end_date
-        )
-        result = await build_investment_sunburst(
-            db_url=_analytics_db_url(),
-            filters=filters,
-            limit=limit,
-            org_id=current_user.org_id,
-        )
-        if response is not None:
-            response.headers["X-DevHealth-Deprecated"] = "use POST with filters"
-        return result
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail="Data unavailable") from exc
+    _raise_served_by_go_api("/api/v1/investment/sunburst")
 
 
 @app.post(
@@ -1307,45 +726,15 @@ async def investment_explain(
     llm_provider: str = "auto",
     force_refresh: bool = False,
     current_user: AuthenticatedUser = Depends(get_current_user),
-):
-    # CHAOS-4977 step 5b: forward to query-api's Go handler when the
-    # dispatcher's own switch/reachability checks allow it -- None means
-    # "run the Python path below", exactly like go_api_dispatcher's own
-    # None-return contract. See investment_explain_dispatcher.py's module
-    # docstring for the full fallback vocabulary.
-    go_response = await maybe_dispatch_investment_explain_to_go(
-        request,
-        current_user=current_user,
-        llm_provider=llm_provider,
-        force_refresh=force_refresh,
-    )
-    if go_response is not None:
-        return go_response
-
-    try:
-        logger.info("Generating streaming investment explanation")
-        return StreamingResponse(
-            keep_alive_wrapper(
-                explain_investment_mix(
-                    db_url=_analytics_db_url(),
-                    filters=payload.filters,
-                    theme=payload.theme,
-                    subcategory=payload.subcategory,
-                    org_id=current_user.org_id,
-                    llm_provider=llm_provider,
-                    llm_model=payload.llm_model,
-                    force_refresh=force_refresh,
-                )
-            ),
-            media_type="application/json",
-        )
-    except HTTPException:
-        raise
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:
-        logger.exception("Investment explain failed")
-        raise HTTPException(status_code=503, detail="Explanation unavailable") from exc
+) -> InvestmentMixExplanation:
+    # CHAOS-6241: the CHAOS-4977 step-5b Go-dispatch forward
+    # (maybe_dispatch_investment_explain_to_go) is removed along with the
+    # rest of this body -- ingress.queryApiPaths (CHAOS-6239) now routes
+    # this path to query-api before it ever reaches Python, making the
+    # per-request dispatch decision moot. The dispatcher module and its own
+    # tests (tests/api/graphql/test_investment_explain_dispatcher.py) are
+    # untouched; they test the dispatcher function directly, not this route.
+    _raise_served_by_go_api("/api/v1/investment/explain")
 
 
 @app.post("/api/v1/investment/flow", response_model=SankeyResponse)
@@ -1355,21 +744,7 @@ async def investment_flow(
     payload: InvestmentFlowRequest,
     current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> SankeyResponse:
-    try:
-        return await build_investment_flow_response(
-            db_url=_analytics_db_url(),
-            filters=payload.filters,
-            theme=payload.theme,
-            flow_mode=payload.flow_mode,
-            drill_category=payload.drill_category,
-            top_n_repos=payload.top_n_repos,
-            org_id=current_user.org_id,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:
-        logger.exception("Investment flow failed")
-        raise HTTPException(status_code=503, detail="Data unavailable") from exc
+    _raise_served_by_go_api("/api/v1/investment/flow")
 
 
 @app.post("/api/v1/investment/flow/repo-team", response_model=SankeyResponse)
@@ -1377,16 +752,7 @@ async def investment_flow_repo_team(
     payload: InvestmentFlowRequest,
     current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> SankeyResponse:
-    try:
-        return await build_investment_repo_team_flow_response(
-            db_url=_analytics_db_url(),
-            filters=payload.filters,
-            theme=payload.theme,
-            org_id=current_user.org_id,
-        )
-    except Exception as exc:
-        logger.exception("Investment repo-team flow failed")
-        raise HTTPException(status_code=503, detail="Data unavailable") from exc
+    _raise_served_by_go_api("/api/v1/investment/flow/repo-team")
 
 
 @app.get("/api/v1/sankey", response_model=SankeyResponse)
@@ -1404,24 +770,7 @@ async def sankey_get(
     window_end: date | None = None,
     current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> SankeyResponse:
-    try:
-        filters = _filters_from_query(
-            scope_type, scope_id, range_days, range_days, start_date, end_date
-        )
-        result = await build_sankey_response(
-            db_url=_analytics_db_url(),
-            mode=mode,
-            filters=filters,
-            org_id=current_user.org_id,
-            window_start=window_start,
-            window_end=window_end,
-        )
-        if response is not None:
-            response.headers["X-DevHealth-Deprecated"] = "use POST with filters"
-        return result
-    except Exception as exc:
-        logger.exception("Sankey GET failed for mode=%s", sanitize_for_log(mode))
-        raise HTTPException(status_code=503, detail="Data unavailable") from exc
+    _raise_served_by_go_api("/api/v1/sankey")
 
 
 @app.post("/api/v1/sankey", response_model=SankeyResponse)
@@ -1431,21 +780,7 @@ async def sankey_post(
     payload: SankeyRequest,
     current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> SankeyResponse:
-    try:
-        return await build_sankey_response(
-            db_url=_analytics_db_url(),
-            mode=payload.mode,
-            filters=payload.filters,
-            org_id=current_user.org_id,
-            context=payload.context,
-            window_start=payload.window_start,
-            window_end=payload.window_end,
-        )
-    except Exception as exc:
-        logger.exception(
-            "Sankey POST failed for mode=%s", sanitize_for_log(payload.mode)
-        )
-        raise HTTPException(status_code=503, detail="Data unavailable") from exc
+    _raise_served_by_go_api("/api/v1/sankey")
 
 
 @app.get("/api/v1/filters/options", response_model=FilterOptionsResponse)
@@ -1454,9 +789,4 @@ async def filter_options(
     request: Request,
     current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> FilterOptionsResponse:
-    try:
-        async with clickhouse_client(_analytics_db_url()) as sink:
-            options = await fetch_filter_options(sink, org_id=current_user.org_id)
-        return FilterOptionsResponse(**options)
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail="Data unavailable") from exc
+    _raise_served_by_go_api("/api/v1/filters/options")

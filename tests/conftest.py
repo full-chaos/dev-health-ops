@@ -81,11 +81,25 @@ def setup_test_env(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def mock_analytics_db_url(monkeypatch):
-    """Mock analytics DB URL so endpoints don't return 503 in tests."""
-    monkeypatch.setattr(
-        "dev_health_ops.api.main._analytics_db_url",
-        lambda: "clickhouse://localhost:8123/default",
-    )
+    """Mock analytics DB URL so endpoints don't return 503 in tests.
+
+    CHAOS-6241 deleted main.py's own callers of ``_analytics_db_url`` (the
+    32 REST routes it used to serve are Go-served now); the only production
+    code that still calls it is api/dev/router.py's two ask-dev endpoints,
+    which imported the function by value (``from ..._health import
+    _analytics_db_url``), so patching ``_health``'s own definition would not
+    reach it -- each ``from x import y`` binds an independent reference in
+    the importing module's namespace. Both targets are patched: the
+    definition module (``_health``), in case anything reaches it through a
+    qualified ``_health.py`` call, and the surviving importer
+    (``api.dev.router``), which is what actually runs at request time.
+    """
+
+    def stub() -> str:
+        return "clickhouse://localhost:8123/default"
+
+    monkeypatch.setattr("dev_health_ops.api._health._analytics_db_url", stub)
+    monkeypatch.setattr("dev_health_ops.api.dev.router._analytics_db_url", stub)
 
 
 @pytest.fixture(autouse=True)

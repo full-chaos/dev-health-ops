@@ -66,21 +66,26 @@ def test_fixture_is_producer_derived_from_the_live_python_key_function():
     )
 
 
-def test_epoch_key_expiry_dwarfs_every_epoch_scoped_entry_ttl():
+def test_epoch_key_expiry_dwarfs_every_configured_epoch_scoped_entry_ttl():
     """Team-lead constraint 3: an epoch key that expired while entries stamped
     N were alive would let them serve again after the next bump re-created
-    the key at 1. Pin the margin, and pin that the production caches fit."""
+    the key at 1. Pin the margin itself here.
+
+    CHAOS-6241 deleted api/main.py's HOME_CACHE/EXPLAIN_CACHE module
+    instances along with the REST route bodies that used them -- query-api
+    now serves those routes, so this module currently constructs zero
+    epoch-scoped caches. The per-instance half of this test (every actual
+    cache fits under the margin) moved to
+    tests/api/services/test_home_cache_invalidation.py::
+    test_epoch_scoped_cache_refuses_a_ttl_that_breaks_the_epoch_margin,
+    which proves the invariant at construction time via
+    core.cache.epoch_scoped -- a stronger guarantee than enumerating today's
+    instances, since it refuses ANY future epoch-scoped cache (wherever it
+    is constructed) that would break the margin, not just these two.
+    """
     assert ORG_CACHE_EPOCH_TTL_SECONDS >= (
         EPOCH_SCOPED_CACHE_MAX_TTL_SECONDS * EPOCH_SCOPED_CACHE_TTL_MARGIN
     )
-    from dev_health_ops.api import main as api_main
-
-    for cache in (api_main.HOME_CACHE, api_main.EXPLAIN_CACHE):
-        assert cache.ttl_seconds <= EPOCH_SCOPED_CACHE_MAX_TTL_SECONDS
-        assert (
-            ORG_CACHE_EPOCH_TTL_SECONDS
-            >= cache.ttl_seconds * EPOCH_SCOPED_CACHE_TTL_MARGIN
-        )
 
 
 def test_epoch_key_embeds_org_id_verbatim_under_a_stable_prefix():

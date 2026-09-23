@@ -518,7 +518,7 @@ func (pipeline *MutationPipeline) Step(
 	//     OrphanedUnitRepair and Materializer are read-adjacent safety nets and
 	//     repair passes over largely disjoint tables (see the pool-composition
 	//     comment on buildSyncMutationPipeline in
-	//     cmd/dev-health-reconciler/dependencies.go); a stall in one buys
+	//     internal/reconcilerservice/dependencies.go); a stall in one buys
 	//     nothing by blocking the others, so each failure is absorbed and the
 	//     pipeline continues. Sweep already worked this way before this
 	//     ticket; TerminalDeliveryRepair and Materializer are upgraded from

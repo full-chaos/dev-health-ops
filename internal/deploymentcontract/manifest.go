@@ -548,11 +548,13 @@ func validateProcess(process Process, coverage map[string]queueCoverage, state D
 			return errors.New("River job-kind coverage drifts from queue selection")
 		}
 	case "control":
-		expectedBinary := map[string]string{
-			"reconciler": "dev-health-reconciler",
-			"scheduler":  "dev-health-scheduler",
+		// The reconciler is the `dho reconciler` service verb; the scheduler
+		// is still its own binary.
+		expected, known := map[string]struct{ binary, subcommand string }{
+			"reconciler": {binary: "dho", subcommand: "reconciler"},
+			"scheduler":  {binary: "dev-health-scheduler"},
 		}[process.Name]
-		if expectedBinary == "" || process.Binary != expectedBinary ||
+		if !known || process.Binary != expected.binary || process.Subcommand != expected.subcommand ||
 			len(process.Queues) != 0 || len(process.JobKinds) != 0 ||
 			process.QueueControlMaxConnections < 1 || !contains(process.SecretEnv, "WORKER_DATABASE_URI") ||
 			len(process.QueueWorkers) != 0 ||

@@ -1,4 +1,4 @@
-package main
+package reconcilerservice
 
 import (
 	"bytes"
@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
@@ -154,9 +155,14 @@ func TestRunHealthcheckMirrorsReadyz(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Setenv("DEV_HEALTH_HTTP_ADDR", ":"+port)
+			lookup := func(key string) (string, bool) {
+				if key == "DEV_HEALTH_HTTP_ADDR" {
+					return ":" + port, true
+				}
+				return "", false
+			}
 
-			if code := runHealthcheck(); code != testCase.wantCode {
+			if code := runHealthcheck(lookup); code != testCase.wantCode {
 				t.Fatalf("runHealthcheck() = %d, want %d", code, testCase.wantCode)
 			}
 		})
@@ -176,9 +182,76 @@ func TestRunHealthcheckFailsClosedWithNothingListening(t *testing.T) {
 	if err := listener.Close(); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("DEV_HEALTH_HTTP_ADDR", address)
+	lookup := func(key string) (string, bool) {
+		if key == "DEV_HEALTH_HTTP_ADDR" {
+			return address, true
+		}
+		return "", false
+	}
 
-	if code := runHealthcheck(); code != 1 {
+	if code := runHealthcheck(lookup); code != 1 {
 		t.Fatalf("runHealthcheck() = %d, want 1 with nothing listening", code)
+	}
+}
+
+// TestReconcilerCommandRunsThePinnedSpec runs `dho reconciler --help` through
+// the dho dispatch and requires the --unreclaimable-sweep flag, which the
+// option registry declares for the dev-health-reconciler service alone. A
+// Command whose Run executed any other spec (or none) would not list it.
+func TestReconcilerCommandRunsThePinnedSpec(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := cli.Execute(context.Background(), "dho", []cli.Command{Command()}, cli.Env{
+		Args:   []string{"reconciler", "--help"},
+		Stdout: &stdout,
+		Stderr: &stderr,
+	})
+	if code != 0 {
+		t.Fatalf("dho reconciler --help = %d, want 0\nstderr: %s", code, stderr.String())
+	}
+	if help := stdout.String() + stderr.String(); !strings.Contains(help, "--unreclaimable-sweep") {
+		t.Fatalf("dho reconciler --help does not list the reconciler-only --unreclaimable-sweep flag:\n%s", help)
+	}
+}
+
+// TestReconcilerHealthcheckIsAChildVerb runs `dho reconciler healthcheck`
+// through the dho dispatch (the exec-form Compose probe): its exit code is the
+// probe's result, and any argument after it is a usage error.
+func TestReconcilerHealthcheckIsAChildVerb(t *testing.T) {
+	for name, testCase := range map[string]struct {
+		status   int
+		extra    []string
+		wantCode int
+	}{
+		"ready":          {status: http.StatusOK, wantCode: 0},
+		"not ready":      {status: http.StatusServiceUnavailable, wantCode: 1},
+		"extra argument": {status: http.StatusOK, extra: []string{"--now"}, wantCode: 2},
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+				if request.URL.Path != "/readyz" {
+					t.Errorf("healthcheck probed %q, want /readyz", request.URL.Path)
+				}
+				response.WriteHeader(testCase.status)
+			}))
+			defer server.Close()
+			_, port, err := net.SplitHostPort(strings.TrimPrefix(server.URL, "http://"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var stderr bytes.Buffer
+			code := cli.Execute(context.Background(), "dho", []cli.Command{Command()}, cli.Env{
+				Args: append([]string{"reconciler", "healthcheck"}, testCase.extra...),
+				Lookup: func(key string) (string, bool) {
+					if key == "DEV_HEALTH_HTTP_ADDR" {
+						return ":" + port, true
+					}
+					return "", false
+				},
+				Stderr: &stderr,
+			})
+			if code != testCase.wantCode {
+				t.Fatalf("dho reconciler healthcheck%v = %d, want %d\nstderr: %s", testCase.extra, code, testCase.wantCode, stderr.String())
+			}
+		})
 	}
 }

@@ -42,6 +42,20 @@ operator image that also ships dho).
 {{- if and $group.runtimeProfile (contains "dev-health-go-stream-runner" ($group.image | default "")) }}
 {{- fail (printf "goWorkers.groups[%s]: image %q is the retired dev-health-go-stream-runner image, which has no dho entrypoint and exits 2 on `stream-runner`; use the dev-health-go-dho image." $group.name $group.image) }}
 {{- end }}
+{{- /*
+The `reconciler` group is `dho reconciler`, and only that group gets the
+coordinator settings (its name is what $coordinator keys on). A reconciler
+group without the verb would hand dho its flags as a command and exit 2; the
+verb on any other group would start a reconciler without the coordinator
+session settings. Refuse both, and the retired dev-health-go-reconciler image,
+which has no dho entrypoint.
+*/}}
+{{- if ne (eq $group.name "reconciler") (eq ($group.subcommand | default "") "reconciler") }}
+{{- fail (printf "goWorkers.groups[%s]: the reconciler group and only it runs `dho reconciler`; it needs subcommand: reconciler, and no other group may set it (got subcommand %q)." $group.name ($group.subcommand | default "")) }}
+{{- end }}
+{{- if contains "dev-health-go-reconciler" ($group.image | default "") }}
+{{- fail (printf "goWorkers.groups[%s]: image %q is the retired dev-health-go-reconciler image, which has no dho entrypoint; use the dev-health-go-dho image with subcommand: reconciler." $group.name $group.image) }}
+{{- end }}
 ---
 apiVersion: apps/v1
 kind: Deployment

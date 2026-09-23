@@ -603,7 +603,7 @@ All NATIVE, no Python involvement found in any of the three:
 | Binary | Executor | Note |
 |---|---|---|
 | `dev-health-scheduler` | NATIVE | `cmd/dev-health-scheduler/` -- writes `worker_job_outbox` only |
-| `dev-health-reconciler` | NATIVE | `cmd/dev-health-reconciler/` -- relays outbox into `river_job` |
+| `dev-health-reconciler` | NATIVE | `internal/reconcilerservice/` -- relays outbox into `river_job` |
 | `dho workers` (operator CLI: status/jobs/queues/routes/job-routes/contracts) | NATIVE | pure Go, no Python calls found in this CLI's own dispatch tree |
 
 ## Out of migration scope (Python by design)

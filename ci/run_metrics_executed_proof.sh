@@ -252,7 +252,7 @@ API_LOG_FILE="${METRICS_PROOF_API_LOG_FILE:-${TMP_DIR}/api.log}"
 API_PID="$!"
 wait_for_http_ready "dev-hops api" "http://127.0.0.1:${API_PORT}/health" "${API_LOG_FILE}" API_PID
 
-# dev-health-worker / dev-health-reconciler startup is shared with
+# dev-health-worker / dho reconciler startup is shared with
 # ci/run_live_backend_e2e.sh -- see start_worker_stack in
 # ci/lib/go_worker_fixture.sh (--shutdown-timeout=7260s's CHAOS-3873 contract
 # and the "stop_service() bounds teardown regardless" rationale live there

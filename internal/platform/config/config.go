@@ -99,7 +99,7 @@ const (
 	// operator's genuine SYNC_OBSERVATION_TIMEOUT override (CHAOS-4239):
 	// Load never leaves SyncObservationTimeout at Go's zero value for the
 	// reconciler service, so a bare "!= 0" check cannot make that
-	// distinction on its own. See cmd/dev-health-reconciler/dependencies.go.
+	// distinction on its own. See internal/reconcilerservice/dependencies.go.
 	DefaultSyncObservationTimeout = defaultSyncObservationTimeout
 	// defaultGithubTestsMaxArtifactBytes mirrors providersync's own unconfigured
 	// default (githubTestsMaxDownloadSize) so a deployment that never sets the
@@ -306,7 +306,7 @@ type Config struct {
 	// explicitly chose this value" apart from "nobody configured anything and
 	// Load's own fallback (defaultSyncObservationTimeout) filled it in" --
 	// both produce the identical 2s. A caller that needs that distinction
-	// (cmd/dev-health-reconciler/dependencies.go, composing the mutation
+	// (internal/reconcilerservice/dependencies.go, composing the mutation
 	// loop's outer envelope from syncreconciler.DefaultStageBudgets instead)
 	// reads this field rather than comparing the value to a sentinel, which
 	// would silently ignore an operator who deliberately chose exactly the

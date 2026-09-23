@@ -127,6 +127,13 @@
               "properties": {"binary": {"const": "dho"}, "subcommand": {"const": "stream-runner"}},
               "required": ["binary", "subcommand"]
             }
+          },
+          {
+            "if": {"properties": {"name": {"const": "reconciler"}}, "required": ["name"]},
+            "then": {
+              "properties": {"binary": {"const": "dho"}, "subcommand": {"const": "reconciler"}},
+              "required": ["binary", "subcommand"]
+            }
           }
         ],
         "required": [

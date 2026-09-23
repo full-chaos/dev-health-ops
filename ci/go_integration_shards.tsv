@@ -52,7 +52,7 @@
 # run cannot happen before this manifest already lists it. Correct it to the
 # real hosted number the next time this file is otherwise touched.
 shards	6
-cmd/dev-health-reconciler	5
+internal/reconcilerservice	5
 cmd/dev-health-worker	246
 internal/goapicli/routing	100
 internal/workersctl	14

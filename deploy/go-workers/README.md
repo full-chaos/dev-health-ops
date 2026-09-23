@@ -139,8 +139,8 @@ per-kind route, and `internal/scheduler/sync/ownership.go`'s own, unrelated
 
 Publish one immutable image per target in `docker/go-worker.Dockerfile`:
 `dev-health-go-worker` (deployment-selected queue groups),
-`dev-health-go-reconciler`, `dev-health-go-scheduler`, and
-`dev-health-go-dho`, whose `dho stream-runner` verb runs the stream
+`dev-health-go-scheduler`, and `dev-health-go-dho`, whose `dho reconciler`
+verb runs the reconciler and whose `dho stream-runner` verb runs the stream
 profiles (external, ingest, pagerduty). All workload definitions
 run as UID/GID `65532`, deny privilege escalation, use a read-only root
 filesystem, and expose only the operator HTTP surface on port 8080:
@@ -705,7 +705,7 @@ table directly:
 SELECT to_regclass('public.<table_name>');  -- NULL means it does not exist
 ```
 
-As of CHAOS-3142, `cmd/dev-health-reconciler` logs this automatically: a
+As of CHAOS-3142, `internal/reconcilerservice` logs this automatically: a
 `coordinator_postgres` readiness failure now also emits a redacted ERROR log
 line per unsatisfied requirement — `postgres.DiagnoseRolePosture`, wired at
 `logCoordinatorPostureGaps` — naming the table (and privilege, or

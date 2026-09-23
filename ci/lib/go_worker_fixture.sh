@@ -42,10 +42,9 @@
 # BIN_DIR (caller-set global; created by the caller beforehand).
 # ---------------------------------------------------------------------------
 build_go_binaries() {
-  echo "==> building Go binaries (dho, dev-health-worker, dev-health-reconciler)"
+  echo "==> building Go binaries (dho, dev-health-worker)"
   go build -o "${BIN_DIR}/dho" ./cmd/dho
   go build -o "${BIN_DIR}/dev-health-worker" ./cmd/dev-health-worker
-  go build -o "${BIN_DIR}/dev-health-reconciler" ./cmd/dev-health-reconciler
 }
 
 # ---------------------------------------------------------------------------
@@ -228,7 +227,7 @@ wait_for_http_ready() {
 
 # ---------------------------------------------------------------------------
 # start_worker_stack worker_log_file reconciler_log_file -- starts
-# dev-health-worker (queues: metrics, sync) and dev-health-reconciler in the
+# dev-health-worker (queues: metrics, sync) and dho reconciler in the
 # background, sets WORKER_PID/RECONCILER_PID, and waits for both /readyz
 # endpoints. Brackets both launches with `set -m`/`set +m` itself (job
 # control ON for the launches: without it a background job stays in THIS
@@ -296,12 +295,12 @@ start_worker_stack() {
   ) >"${worker_log_file}" 2>&1 &
   WORKER_PID="$!"
 
-  echo "==> starting dev-health-reconciler"
+  echo "==> starting dho reconciler"
   (
     export POSTGRES_URI="postgresql://${RIVER_DOMAIN_ROLE}:${RIVER_DOMAIN_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}"
     export WORKER_DATABASE_URI="postgresql://${RIVER_QUEUE_ROLE}:${RIVER_QUEUE_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}"
     export COORDINATOR_DATABASE_URI="postgresql://${RIVER_COORDINATOR_ROLE}:${RIVER_COORDINATOR_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}"
-    exec "${BIN_DIR}/dev-health-reconciler" \
+    exec "${BIN_DIR}/dho" reconciler \
       --http-addr=":${RECONCILER_HTTP_PORT}" \
       --river-schema=river \
       --domain-database-role="${RIVER_DOMAIN_ROLE}" \
@@ -317,7 +316,7 @@ start_worker_stack() {
   set +m
 
   wait_for_http_ready "dev-health-worker" "http://127.0.0.1:${WORKER_HTTP_PORT}/readyz" "${worker_log_file}" WORKER_PID
-  wait_for_http_ready "dev-health-reconciler" "http://127.0.0.1:${RECONCILER_HTTP_PORT}/readyz" "${reconciler_log_file}" RECONCILER_PID
+  wait_for_http_ready "dho reconciler" "http://127.0.0.1:${RECONCILER_HTTP_PORT}/readyz" "${reconciler_log_file}" RECONCILER_PID
 }
 
 # ---------------------------------------------------------------------------
@@ -395,7 +394,7 @@ stop_service() {
 # convention). Reads: WORKER_PID, RECONCILER_PID.
 stop_worker_stack() {
   stop_service "dev-health-worker" "${WORKER_PID}"
-  stop_service "dev-health-reconciler" "${RECONCILER_PID}"
+  stop_service "dho reconciler" "${RECONCILER_PID}"
 }
 
 # ---------------------------------------------------------------------------

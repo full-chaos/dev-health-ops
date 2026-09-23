@@ -48,7 +48,7 @@ below is derived from it.
 | `ops` | `dev-health-worker` | River | `coverage`, `heartbeat`, `retention`, `webhooks` | 960s |
 | `sync` | `dev-health-worker` | River | `sync` | 960s |
 | `sync-provider` | `dev-health-worker` | River | `sync_provider` | 960s |
-| `reconciler` | `dev-health-reconciler` | control loop | none | 60s |
+| `reconciler` | `dho reconciler` | control loop | none | 60s |
 | `scheduler` | `dev-health-scheduler` | control loop | none | 60s |
 | `stream-ingest` | `dho stream-runner` | Valkey streams | none | 60s |
 | `stream-external` | `dho stream-runner` | Valkey streams | none | 60s |
@@ -120,7 +120,7 @@ add a grant, add it to the migration; the migration is the authority.
 A component that spans jurisdictions holds more than one pool and runs each
 statement on the pool whose role owns that statement's tables. The reconciler's
 mutation pipeline documents its own split at
-`cmd/dev-health-reconciler/dependencies.go:217-223`: the Materializer takes the
+`internal/reconcilerservice/dependencies.go:217-223`: the Materializer takes the
 coordinator pool because it reads coordinator-exclusive tables, while lease
 repair, the kernel's observe side, and the observer stay on the domain pool.
 
@@ -175,7 +175,7 @@ outbox row is a **domain** write in the same transaction as the domain change,
 while consuming one is a **queue-control** operation. The queue role holds no
 INSERT on `worker_job_outbox` at all.
 
-**`dev-health-reconciler`** — `cmd/dev-health-reconciler/dependencies.go`. All
+**`dho reconciler`** (service identity `dev-health-reconciler`) — `internal/reconcilerservice/dependencies.go`. All
 three pools, which is why its composition comment at `:217-223` exists.
 
 | Component | Constructed at | Pool |
@@ -997,7 +997,7 @@ That distinction has exactly four consumers, and none of them route:
 
 | Consumer | What it does with the group label |
 | --- | --- |
-| `worker_instances` presence / `EXPECTED_WORKER_GROUPS` health (CHAOS-3942) | `deploy/kubernetes/go-workers.yaml`'s `EXPECTED_WORKER_GROUPS` ConfigMap key (`heavy,ops,sync,sync-provider`) tells `/health/workers` which presence rows to expect before it flips from Celery-authoritative to Go-authoritative. It deliberately excludes `reconciler`/`scheduler`/`stream-*`: those run a separate role with their own `/healthz` and never register `worker_instances` presence. An earlier reconciler cut misread this variable as a *rollback-safety* declaration (`cmd/dev-health-reconciler/dependencies.go`, the `buildUnreclaimableSweep` doc comment) — wrong, because the variable's own contract excludes the reconciler and because rollback safety already rests on the durable `worker_job_routes` row, not on an env list. |
+| `worker_instances` presence / `EXPECTED_WORKER_GROUPS` health (CHAOS-3942) | `deploy/kubernetes/go-workers.yaml`'s `EXPECTED_WORKER_GROUPS` ConfigMap key (`heavy,ops,sync,sync-provider`) tells `/health/workers` which presence rows to expect before it flips from Celery-authoritative to Go-authoritative. It deliberately excludes `reconciler`/`scheduler`/`stream-*`: those run a separate role with their own `/healthz` and never register `worker_instances` presence. An earlier reconciler cut misread this variable as a *rollback-safety* declaration (`internal/reconcilerservice/dependencies.go`, the `buildUnreclaimableSweep` doc comment) — wrong, because the variable's own contract excludes the reconciler and because rollback safety already rests on the durable `worker_job_routes` row, not on an env list. |
 | `workerctl workers status` grouping | `internal/workersctl/main.go`'s `manifestQueueStatusSource.Status` keys live presence rows by `WorkerPresenceSummary.WorkerGroup` and cross-checks each group's queue set against the deployment manifest (`slices.Equal(summary.Queues, queues)`) — a display and consistency check, not a dispatch decision. |
 | `joboperator` drain-and-mutation targeting | `internal/joboperator/service.go`'s `Queues`, `Drain`, and `Undrain` all take a `group string` and validate it with `isValidWorkerGroup` before acting. An operator drains *a group* (a named, deployed set of replicas) — the group answers "which replicas do I signal," never "which queue does this job kind go to." |
 | Log labels | `Config.LogAttrs` (`internal/platform/config/config.go:764-767`) emits `worker_group` as a `slog` attribute alongside `queue_workers`, purely so a log line can be filtered to one deployed group. |
@@ -1146,7 +1146,7 @@ changing any of the source files.
 | `ops` (`dev-health-worker`) | `heartbeat` | `system.heartbeat` | 30 | 1 | `default` | `worker` | Celery dormant since 2026-08-19 (CHAOS-4026); Go/River live<br>system_ops.phone_home_heartbeat routed through 'default', not a dedicated queue.<br>`system.heartbeat`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json) |
 | `ops` (`dev-health-worker`) | `retention` | `system.retention_cleanup` | 300 | 3 | — | `beat` | Go-native consolidated sweep; historical retention work was several discrete Beat-scheduled tasks (retired under CHAOS-4026, e.g. ask-dev-retention-sweep)<br>`system.retention_cleanup`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json) |
 | `ops` (`dev-health-worker`) | `webhooks` | `operational.billing_notification`<br>`operational.webhook_delivery` | 120-900 | 4 | `webhooks` | `worker` | Celery dormant since 2026-08-19 (CHAOS-4026); Go/River live<br>`operational.billing_notification`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`operational.webhook_delivery`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json) |
-| `reconciler` (`dev-health-reconciler`) | `—` | — | — | — | — | — | Go-native -- no Celery predecessor<br>Control loop, not a River queue -- no -Q for this process. |
+| `reconciler` (`dho`) | `—` | — | — | — | — | — | Go-native -- no Celery predecessor<br>Control loop, not a River queue -- no -Q for this process. |
 | `scheduler` (`dev-health-scheduler`) | `—` | — | — | — | `scheduler` | `beat` | Celery Beat retired 2026-08-21 (CHAOS-4026); Go scheduler is sole production owner<br>Control loop, not a River queue -- no -Q for this process. |
 | `stream-external` (`dho`) | `—` | — | — | — | `external-ingest` | `worker-external-ingest` | Celery dormant since 2026-08-19 (CHAOS-4026); Go stream runner live<br>Valkey stream consumer, not a River queue -- no -Q for this process. |
 | `stream-ingest` (`dho`) | `—` | — | — | — | `ingest` | `worker-ingest` | Celery dormant since 2026-08-19 (CHAOS-4026); Go stream runner live<br>Valkey stream consumer, not a River queue -- no -Q for this process. |
@@ -1336,7 +1336,7 @@ domain reference (a domain-pool read) before the queue-pool `River` insert.
 
 Route resolution in the relay (`routes.Resolve(kind)`, `joboutbox.Relay.Step`)
 runs on the **coordinator** pool too:
-`cmd/dev-health-reconciler/dependencies.go`'s `jobroute.NewController(
+`internal/reconcilerservice/dependencies.go`'s `jobroute.NewController(
 coordinatorPool, ...)` is the exact controller instance threaded into
 `joboutbox.NewRelayWithRoutesRecoveryAndStrandRepair`. An earlier draft of
 this page (and of this PR's own doc comments) stated this ran "under the

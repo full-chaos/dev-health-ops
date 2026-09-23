@@ -72,7 +72,6 @@ func TestLongRunningCommandsCannotAutoMigrate(t *testing.T) {
 	for _, command := range []string{
 		"dev-health-worker",
 		"dev-health-scheduler",
-		"dev-health-reconciler",
 	} {
 		directory := filepath.Join(repositoryRoot, "cmd", command)
 		entries, err := os.ReadDir(directory)

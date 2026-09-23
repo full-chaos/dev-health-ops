@@ -42,6 +42,13 @@ on:
       # other pattern here matches -- without this, a PR touching only a
       # template is classified non-Go and go-quality passes vacuously.
       - 'internal/jobs/operational/templates/**'
+      # Same shape again: the admin password denylist is //go:embed-ed into
+      # internal/apiservice/admin (userstore.go's password policy check),
+      # so editing it changes what the compiled binary actually rejects. It
+      # is a .txt file, which no other pattern here matches -- without this
+      # a PR touching only the denylist is classified non-Go and go-quality
+      # passes vacuously.
+      - 'internal/apiservice/admin/data/**'
       - 'src/dev_health_ops/models/**'
       - 'src/dev_health_ops/parsers/**'
       - 'src/dev_health_ops/processors/**'
@@ -166,6 +173,13 @@ on:
       # other pattern here matches -- without this, a PR touching only a
       # template is classified non-Go and go-quality passes vacuously.
       - 'internal/jobs/operational/templates/**'
+      # Same shape again: the admin password denylist is //go:embed-ed into
+      # internal/apiservice/admin (userstore.go's password policy check),
+      # so editing it changes what the compiled binary actually rejects. It
+      # is a .txt file, which no other pattern here matches -- without this
+      # a PR touching only the denylist is classified non-Go and go-quality
+      # passes vacuously.
+      - 'internal/apiservice/admin/data/**'
       - 'src/dev_health_ops/models/**'
       - 'src/dev_health_ops/parsers/**'
       - 'src/dev_health_ops/processors/**'

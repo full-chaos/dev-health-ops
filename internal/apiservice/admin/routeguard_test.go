@@ -17,7 +17,7 @@ import (
 // "/api/v1/admin" -- this is the whole route table this Service mounts
 // under that prefix, so this file list is also this test's own coverage
 // statement.
-var adminRouteGuardFiles = []string{"impersonation.go", "users.go", "orgs.go"}
+var adminRouteGuardFiles = []string{"impersonation.go", "users.go", "orgs.go", "platformstats.go", "featureflags.go", "auditlogs.go", "ipallowlist.go"}
 
 // adminRouteGuardFuncs names the exact functions parsed for a Route
 // table -- a route registered anywhere else in this package is invisible
@@ -27,6 +27,10 @@ var adminRouteGuardFuncs = map[string]bool{
 	"impersonationRoutes": true,
 	"userRoutes":          true,
 	"orgRoutes":           true,
+	"platformRoutes":      true,
+	"featureRoutes":       true,
+	"auditLogRoutes":      true,
+	"ipAllowlistRoutes":   true,
 }
 
 // adminRouteGuardExceptions names every route this test permits at a
@@ -100,7 +104,7 @@ func patternLiteral(e ast.Expr) string {
 	}
 	unquoted := strings.Trim(suffix.Value, `"`)
 	switch prefixIdent.Name {
-	case "orgsPrefix", "usersPrefix", "impersonationPrefix":
+	case "orgsPrefix", "usersPrefix", "impersonationPrefix", "governancePrefix":
 		return "/api/v1/admin" + unquoted
 	default:
 		return ""
@@ -123,10 +127,20 @@ func patternLiteral(e ast.Expr) string {
 // function correctly reports "not found" for it.
 func guardLevelOf(handler ast.Expr) (string, bool) {
 	call, ok := handler.(*ast.CallExpr)
-	if !ok || len(call.Args) == 0 {
+	if !ok {
 		return "", false
 	}
 	name := calleeName(call.Fun)
+	// checkOrMethodNotAllowed is the one dispatcher (see its doc comment in
+	// ipallowlist.go): it wraps the check handler in bodyFirst(policy.Admin)
+	// itself and answers the 405 for other paths before any guard, as
+	// FastAPI's router does. TestDispatcherGuardsAtAdmin pins that.
+	if name == "checkOrMethodNotAllowed" && len(call.Args) == 0 {
+		return "Admin", true
+	}
+	if len(call.Args) == 0 {
+		return "", false
+	}
 	if name != "Wrap" && name != "bodyFirst" {
 		return "", false
 	}
@@ -268,5 +282,34 @@ func TestAdminRoutesAreNeverMountedBelowAdmin(t *testing.T) {
 	}
 	if len(violations) > 0 {
 		t.Fatalf("route(s) under /api/v1/admin not guarded at Admin/Superuser:\n%s", strings.Join(violations, "\n"))
+	}
+}
+
+// TestDispatcherGuardsAtAdmin pins the level guardLevelOf assumes for
+// checkOrMethodNotAllowed: its source must wrap the check handler in
+// bodyFirst(policy.Admin, ...).
+func TestDispatcherGuardsAtAdmin(t *testing.T) {
+	tree, err := parser.ParseFile(token.NewFileSet(), "ipallowlist.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	ast.Inspect(tree, func(n ast.Node) bool {
+		fn, ok := n.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != "checkOrMethodNotAllowed" {
+			return true
+		}
+		ast.Inspect(fn, func(n ast.Node) bool {
+			if call, ok := n.(*ast.CallExpr); ok {
+				if level, guarded := guardLevelOf(call); guarded && level == "Admin" && calleeName(call.Fun) == "bodyFirst" {
+					found = true
+				}
+			}
+			return true
+		})
+		return false
+	})
+	if !found {
+		t.Fatal("checkOrMethodNotAllowed no longer wraps the check handler in bodyFirst(policy.Admin, ...)")
 	}
 }

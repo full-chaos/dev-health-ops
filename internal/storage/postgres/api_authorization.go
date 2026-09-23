@@ -45,9 +45,14 @@ func apiPosture() RolePosture {
 			// Read root for GET /api/v1/internal/acr/entitlements/{org_id}:
 			// existence (404 if absent) and the tier fallback when no
 			// org_licenses row exists (internal/apiservice/acr/store.go).
-			// Also plan area L's self-service profile: read, and the name and
-			// description update of PATCH /api/v1/orgs/me.
-			{"organizations", false, true, false},
+			// Also plan area L's self-service profile: read, and the name
+			// and description update of PATCH /api/v1/orgs/me. The admin
+			// org routes add insert: create_org (update_org shares the
+			// self-service UPDATE grant above). Deletion is NOT ported
+			// (org_deletion.py is its own ticket; served separately) -- no
+			// AllowDelete here. Widened in place, per the one-entry rule
+			// below.
+			{"organizations", true, true, false},
 			// The one feature row this route ever reads (key =
 			// "agent_context_runtime"), never any other feature.
 			{"feature_flags", false, false, false},
@@ -96,11 +101,16 @@ func apiPosture() RolePosture {
 			// password changes. Widened in place, per the one-entry rule
 			// above.
 			{"users", true, true, true},
-			{"memberships", false, false, false},
+			// CHAOS-6305 (admin org routes) is the first route area to
+			// WRITE memberships: add_member, update_member_role,
+			// remove_member, transfer_ownership. Widened in place.
+			{"memberships", true, true, true},
 			// setUserPassword revokes every outstanding refresh token
 			// (refresh_tokens.py's revoke_all_for_user) on a password
 			// change.
 			{"refresh_tokens", false, true, false},
+			// Invite creation (CHAOS-6305's create_org_invite).
+			{"org_invites", true, false, false},
 			// CHAOS-6303 (admin impersonation routes) is the first route
 			// area over this principal to WRITE the impersonation session
 			// it reads: start_impersonation ends any prior open session
@@ -120,9 +130,9 @@ func apiPosture() RolePosture {
 			// Postgres repos table: repositories live in ClickHouse.)
 			{"settings", true, true, false},
 			{"sync_configurations", false, false, false},
-			// The generic audit writer (internal/api/audit): shared by this
-			// area's impersonation_start/impersonation_stop rows and plan
-			// area K's telemetry-report audit row -- one entry, both areas.
+			// The generic audit writer (internal/api/audit): impersonation
+			// start/stop, password_changed, member_invited, and plan area K's
+			// telemetry-report audit row -- one entry, every area.
 			{"audit_logs", true, false, false},
 			// webhook intake (CHAOS-6247): GitHub/GitLab/Jira persist their
 			// durable delivery row (INSERT; the (provider, delivery_key)

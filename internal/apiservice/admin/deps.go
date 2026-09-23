@@ -6,8 +6,8 @@
 // Scope); this package never re-checks a bearer token or re-derives the
 // request's org itself.
 //
-// This file now mounts impersonation (CHAOS-6303) and users (CHAOS-6304);
-// CHAOS-6305 extends Routes() with orgs as it stacks on this branch.
+// This file mounts all three areas: impersonation (CHAOS-6303), users
+// (CHAOS-6304), orgs (CHAOS-6305).
 package admin
 
 import (
@@ -57,11 +57,12 @@ func Routes(deps Deps) []httpapi.Route {
 	return area.routes()
 }
 
-// routes is this area's full route set so far: impersonation, users.
+// routes is this area's full route set: impersonation, users, orgs.
 func (h *handlers) routes() []httpapi.Route {
 	var out []httpapi.Route
 	out = append(out, h.impersonationRoutes()...)
 	out = append(out, h.userRoutes()...)
+	out = append(out, h.orgRoutes()...)
 	return out
 }
 

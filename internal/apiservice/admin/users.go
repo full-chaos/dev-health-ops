@@ -22,8 +22,15 @@ func (h *handlers) userRoutes() []httpapi.Route {
 		{Method: http.MethodGet, Pattern: usersPrefix + "/users/{user_id}", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.getUser))},
 		{Method: http.MethodPost, Pattern: usersPrefix + "/users", Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.createUser))},
 		{Method: http.MethodPatch, Pattern: usersPrefix + "/users/{user_id}", Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.updateUser))},
+		// set_user_password carries @limiter.limit(ADMIN_PASSWORD_LIMIT =
+		// "5/hour", ...) in Python -- this was registered at 1/second,
+		// burst 10 (a FAR looser limit), matching the same class of gap a
+		// live round found on create_org_invite's "10/hour". RateLimitPerSecond
+		// is the token-bucket refill rate a "5/hour" cap needs: 5 tokens
+		// per 3600 seconds, burst 5 (a full hour's allowance available at
+		// once, same as slowapi's own window starting full).
 		{Method: http.MethodPost, Pattern: usersPrefix + "/users/{user_id}/password",
-			Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.setUserPassword)), RateLimitPerSecond: 1, RateLimitBurst: 10},
+			Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.setUserPassword)), RateLimitPerSecond: 5.0 / 3600.0, RateLimitBurst: 5},
 		{Method: http.MethodDelete, Pattern: usersPrefix + "/users/{user_id}", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.deleteUser))},
 	}
 }

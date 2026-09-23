@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
 )
 
 // BatchEnvelope mirrors schemas.py's BatchEnvelope: the wire shape every
@@ -33,6 +34,14 @@ type SourceDescriptor struct {
 type IngestWindow struct {
 	StartedAt time.Time `json:"startedAt"`
 	EndedAt   time.Time `json:"endedAt"`
+	// startedRaw/endedRaw are StartedAt/EndedAt exactly as
+	// ValidateEnvelopeJSON parsed them: pytime.DateTime keeps the aware
+	// offset and microsecond precision the input JSON string carried,
+	// which StartedAt/EndedAt above (UTC-normalized .Time) discard.
+	// computePayloadHash needs these -- Python's compute_payload_hash
+	// hashes model_dump(mode="json")'s datetime form, which preserves the
+	// original offset, not UTC.
+	startedRaw, endedRaw pytime.DateTime
 }
 
 // Record mirrors schemas.py's RecordEnvelope. Payload is validated per kind
@@ -90,7 +99,10 @@ func parseEnvelope(raw []byte) (*BatchEnvelope, error) {
 		},
 	}
 	if valid.Window != nil {
-		envelope.Window = &IngestWindow{StartedAt: valid.Window.StartedAt.Time, EndedAt: valid.Window.EndedAt.Time}
+		envelope.Window = &IngestWindow{
+			StartedAt: valid.Window.StartedAt.Time, EndedAt: valid.Window.EndedAt.Time,
+			startedRaw: valid.Window.StartedAt, endedRaw: valid.Window.EndedAt,
+		}
 	}
 	for _, record := range valid.Records {
 		payload, _ := toAny(record.Payload).(map[string]any)

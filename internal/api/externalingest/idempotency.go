@@ -6,10 +6,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"math"
 	"os"
 	"strconv"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
@@ -38,35 +41,45 @@ type idempotencyOutcome struct {
 }
 
 // computePayloadHash mirrors idempotency.py's compute_payload_hash: sha256
-// over the canonicalized envelope (sorted keys, compact separators),
+// over json.dumps(envelope.model_dump(mode="json"), sort_keys=True,
+// separators=(",", ":"), ensure_ascii=True). Three things a naive port
+// gets wrong, each confirmed by a live digest mismatch on a real batch
+// (CHAOS-6350):
+//
+//  1. model_dump(mode="json") uses pydantic FIELD NAMES (snake_case),
+//     never the wire aliases (camelCase) -- by_alias is not passed.
+//  2. It keeps a JSON integer an int, never coerces it to a float --
+//     BatchEnvelope.Records[i].Payload (map[string]any, built by
+//     parseEnvelope's toAny helper for the accept path's own storage) DOES
+//     coerce every integer to float64, so a payload field hashes as "5.0"
+//     here and "5" in Python. Record.ordered (the exact *pyjson.Object
+//     ValidateEnvelopeJSON produced, Int and Float kept distinct) is the
+//     correct hash input instead.
+//  3. It preserves a datetime's original aware offset and formats
+//     microseconds Pydantic's way (never trimmed, omitted only when zero)
+//     -- IngestWindow.StartedAt/EndedAt (UTC-normalized time.Time) lose the
+//     offset; startedRaw/endedRaw (pytime.DateTime, parseEnvelope's copy of
+//     ValidateEnvelopeJSON's own parse) keep it, formatted with
+//     pytime.Pydantic instead of time.Time.UTC().Format(RFC3339Nano).
+//
 // dropping a "legacy" entityFamily the way the Python side's
 // model_dump(mode="json") + explicit pop does, so a client sending the
 // default value and a client omitting it hash identically.
 func computePayloadHash(envelope *BatchEnvelope) (string, error) {
-	payload := map[string]any{
-		"schemaVersion":  envelope.SchemaVersion,
-		"idempotencyKey": envelope.IdempotencyKey,
-		"records":        recordsAsJSON(envelope.Records),
-	}
-	source := map[string]any{
-		"type":     firstNonEmpty(envelope.Source.Type, "customer_push"),
-		"system":   envelope.Source.System,
-		"instance": envelope.Source.Instance,
-	}
-	if envelope.Source.EntityFamily != "" && envelope.Source.EntityFamily != legacyEntityFamily {
-		source["entityFamily"] = envelope.Source.EntityFamily
-	}
-	source["producer"] = optionalString(envelope.Source.Producer)
-	source["producerVersion"] = optionalString(envelope.Source.ProducerVersion)
-	payload["source"] = source
+	payload := pyjson.NewObject()
+	payload.Set("schema_version", envelope.SchemaVersion)
+	payload.Set("idempotency_key", envelope.IdempotencyKey)
+	payload.Set("source", sourceCanonical(envelope.Source))
 	if envelope.Window != nil {
-		payload["window"] = map[string]any{
-			"startedAt": envelope.Window.StartedAt.UTC().Format(time.RFC3339Nano),
-			"endedAt":   envelope.Window.EndedAt.UTC().Format(time.RFC3339Nano),
-		}
+		payload.Set("window", windowCanonical(envelope.Window))
 	} else {
-		payload["window"] = nil
+		payload.Set("window", nil)
 	}
+	records := make([]pyjson.Value, len(envelope.Records))
+	for i, r := range envelope.Records {
+		records[i] = recordCanonical(r)
+	}
+	payload.Set("records", records)
 
 	canonical, err := canonicalMarshal(payload)
 	if err != nil {
@@ -76,12 +89,76 @@ func computePayloadHash(envelope *BatchEnvelope) (string, error) {
 	return hex.EncodeToString(digest[:]), nil
 }
 
-func recordsAsJSON(records []Record) []map[string]any {
-	out := make([]map[string]any, len(records))
-	for i, r := range records {
-		out[i] = map[string]any{"kind": r.Kind, "externalId": r.ExternalID, "payload": r.Payload}
+// sourceCanonical builds SourceDescriptor's model_dump(mode="json") shape:
+// type, system, instance, entity_family (popped when "legacy", exactly the
+// existing conditional, just snake_case), producer, producer_version.
+func sourceCanonical(s SourceDescriptor) *pyjson.Object {
+	out := pyjson.NewObject()
+	out.Set("type", firstNonEmpty(s.Type, "customer_push"))
+	out.Set("system", s.System)
+	out.Set("instance", s.Instance)
+	if s.EntityFamily != "" && s.EntityFamily != legacyEntityFamily {
+		out.Set("entity_family", s.EntityFamily)
 	}
+	out.Set("producer", optionalString(s.Producer))
+	out.Set("producer_version", optionalString(s.ProducerVersion))
 	return out
+}
+
+// windowCanonical builds IngestWindow's model_dump(mode="json") shape:
+// started_at/ended_at, Pydantic's datetime JSON form (offset preserved,
+// microseconds exact) via the parsed pytime.DateTime, not the
+// UTC-normalized time.Time the accept path otherwise uses.
+func windowCanonical(w *IngestWindow) *pyjson.Object {
+	out := pyjson.NewObject()
+	out.Set("started_at", pytime.Pydantic(w.startedRaw))
+	out.Set("ended_at", pytime.Pydantic(w.endedRaw))
+	return out
+}
+
+// recordCanonical builds RecordEnvelope's model_dump(mode="json") shape:
+// kind, external_id, payload -- payload from Record.ordered (Int/Float
+// exact), with sanitizeNonFinite's NaN/Infinity -> null conversion applied,
+// matching a live-confirmed Pydantic model_dump(mode="json") behavior.
+func recordCanonical(r Record) *pyjson.Object {
+	out := pyjson.NewObject()
+	out.Set("kind", r.Kind)
+	out.Set("external_id", r.ExternalID)
+	out.Set("payload", sanitizeNonFinite(r.ordered))
+	return out
+}
+
+// sanitizeNonFinite ports model_dump(mode="json")'s float handling for a
+// record payload: NaN, Infinity and -Infinity all become None (confirmed
+// live against a real Pydantic model -- none of the three round-trips as a
+// literal token, unlike plain json.dumps' allow_nan=True default).
+// Everything else -- Int, string, bool, nil, nested objects/arrays --
+// passes through unchanged; Int is never touched, so no integer loses its
+// exact-int-not-float distinction here.
+func sanitizeNonFinite(value pyjson.Value) pyjson.Value {
+	switch typed := value.(type) {
+	case pyjson.Float:
+		f := float64(typed)
+		if math.IsNaN(f) || math.IsInf(f, 0) {
+			return nil
+		}
+		return typed
+	case *pyjson.Object:
+		out := pyjson.NewObject()
+		for _, key := range typed.Keys() {
+			item, _ := typed.Get(key)
+			out.Set(key, sanitizeNonFinite(item))
+		}
+		return out
+	case []pyjson.Value:
+		out := make([]pyjson.Value, len(typed))
+		for i, item := range typed {
+			out[i] = sanitizeNonFinite(item)
+		}
+		return out
+	default:
+		return value
+	}
 }
 
 func optionalString(s *string) any {

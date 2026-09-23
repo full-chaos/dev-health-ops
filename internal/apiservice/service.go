@@ -35,6 +35,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/buildinfo"
 	"github.com/full-chaos/dev-health-ops/internal/api/externalingest"
 	healthroutes "github.com/full-chaos/dev-health-ops/internal/api/health"
 	"github.com/full-chaos/dev-health-ops/internal/api/orgs"
@@ -53,6 +54,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	"github.com/full-chaos/dev-health-ops/internal/platform/shell"
+	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -161,6 +163,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		ExpectedWorkerGroups: deps.Probes.ExpectedWorkerGroups, Logger: logger,
 	})...)
 	routes = append(routes, producttelemetry.Routes(&producttelemetry.ValkeyStreams{URI: deps.Telemetry.ValkeyURI}, logger)...)
+	routes = append(routes, buildinfo.Routes(deps.Guard, version.Current("api"))...)
 	if deps.Guard != nil {
 		routes = append(routes, orgs.Routes(deps.Pool, deps.Guard, logger)...)
 		routes = append(routes, telemetry.Routes(deps.Pool, deps.Guard, deps.Auth, deps.Telemetry.Endpoint, logger)...)
@@ -294,7 +297,7 @@ func NewServer(
 	scope ...func(http.Handler) http.Handler,
 ) (*httpapi.Server, error) {
 	middleware := append([]func(http.Handler) http.Handler{UnhandledErrorShape, CloseHTTP10, DecodedPathRouting}, scope...)
-	middleware = append(middleware, SecurityHeaders, NewCORS(cfg.CORSAllowedOrigins).Wrap)
+	middleware = append(middleware, buildinfo.Stamp(version.Current("api")), SecurityHeaders, NewCORS(cfg.CORSAllowedOrigins).Wrap)
 	return httpapi.NewServer(httpapi.ServerOptions{
 		Name:           "api-http",
 		Address:        cfg.APIAddress,

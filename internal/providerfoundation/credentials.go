@@ -137,6 +137,26 @@ func decryptFernet(token string, key []byte) ([]byte, error) {
 	return plain[:len(plain)-padding], nil
 }
 
+// githubFieldAliases mirrors github_credentials_from_mapping's alias dict
+// (credentials/resolver.py:259-265) exactly: a GitHub App credential row a
+// web client wrote can carry camelCase field names. Applied ONLY for
+// provider=="github", matching that Python function's own call-site
+// scoping (it is never called for another provider) -- an unrelated
+// provider's literal "appId"-shaped field name is never silently renamed.
+// If both an alias and its canonical spelling are present on the same
+// row (a data anomaly, not an expected shape), which one wins is
+// iteration-order-dependent -- Go map iteration is randomized, so this
+// case is not guaranteed to match Python's (JSON-document-order-
+// dependent) choice; not reproduced, since neither side's choice in that
+// anomalous case is itself a documented contract.
+var githubFieldAliases = map[string]string{
+	"appId":          "app_id",
+	"baseUrl":        "base_url",
+	"installationId": "installation_id",
+	"privateKey":     "private_key",
+	"privateKeyPath": "private_key_path",
+}
+
 func decodeCredential(record EncryptedCredential, plaintext []byte) (Credential, error) {
 	var values map[string]any
 	if err := json.Unmarshal(plaintext, &values); err != nil {
@@ -147,6 +167,11 @@ func decodeCredential(record EncryptedCredential, plaintext []byte) (Credential,
 		text, ok := value.(string)
 		if !ok || strings.TrimSpace(key) == "" {
 			return Credential{}, ErrCredentialInvalid
+		}
+		if record.Provider == "github" {
+			if canonical, aliased := githubFieldAliases[key]; aliased {
+				key = canonical
+			}
 		}
 		fields[key] = secrets.NewValue(text)
 	}

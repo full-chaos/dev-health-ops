@@ -51,11 +51,25 @@ func TestProveOneRESTRequest_CandidateShapeLivenessPasses(t *testing.T) {
 	if !out.Admitted || out.Refusal != "" {
 		t.Fatalf("out = %+v, want admitted with no refusal", out)
 	}
-	if out.TerminalState != goapiproof.TerminalStateMatch {
-		t.Fatalf("TerminalState = %q, want match -- candidate_shape never compares bodies", out.TerminalState)
+	// TerminalStateUnsupported, never TerminalStateMatch: a liveness+kind
+	// check is not a body comparison, and "match" would let this receipt
+	// satisfy EnablementProofClause -- the same predicate `enable` and
+	// migrationmatrix's REST "proven" column read -- and silently promote
+	// a route on weaker evidence than a real comparison provides.
+	if out.TerminalState != goapiproof.TerminalStateUnsupported {
+		t.Fatalf("TerminalState = %q, want unsupported -- candidate_shape never compares bodies and must not satisfy EnablementProofClause", out.TerminalState)
 	}
-	if len(writer.receipts) != 1 {
-		t.Fatalf("wrote %d receipts, want 1", len(writer.receipts))
+	if len(writer.receipts) != 1 || writer.receipts[0].TerminalState != goapiproof.TerminalStateUnsupported {
+		t.Fatalf("receipts = %+v, want exactly 1 with TerminalState unsupported", writer.receipts)
+	}
+	// The written receipt's own terminal_state cannot satisfy
+	// EnablementProofClause (receipt.go): that predicate admits ONLY
+	// EnablementProofTerminalState ("match") or a fully-cited
+	// EnablementCitedMismatchState ("mismatch"), neither of which this
+	// receipt carries -- so ReadRESTProof (migrationmatrix) will not
+	// promote this route to RESTProven off this receipt alone.
+	if got := writer.receipts[0].TerminalState; got == goapiproof.EnablementProofTerminalState || got == goapiproof.EnablementCitedMismatchState {
+		t.Fatalf("receipt TerminalState = %q, want neither of the two states EnablementProofClause admits", got)
 	}
 }
 

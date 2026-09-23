@@ -2370,6 +2370,23 @@ func proveOneRESTRequest(
 				out.Detail = shapeErr.Error()
 				return out, nil
 			}
+			// TerminalStateUnsupported, never TerminalStateMatch: a
+			// liveness+kind check is not a body comparison, and writing
+			// "match" here would let this receipt satisfy
+			// EnablementProofClause (receipt.go) -- the SAME predicate
+			// go_api_routing_admin's `enable` preflight and
+			// migrationmatrix's REST "proven" column both read -- and
+			// silently promote a route on evidence no stronger than "the
+			// candidate answered something". "unsupported" is already the
+			// vocabulary's own word for "this pair could not be judged
+			// match or mismatch" (Compare's own watermark-missing/-drift
+			// cases use it identically), is already in the Postgres
+			// terminal_state CHECK constraint, and is already excluded by
+			// EnablementProofClause -- so this reaches a real receipt,
+			// still readable by an operator and by ReadRESTProof's own
+			// exclusion of it, without inventing a new DB value or a
+			// migration for it.
+			terminalState = goapiproof.TerminalStateUnsupported
 		}
 		out.producedIDs = make(map[string]string, len(request.Produces))
 		out.producedCandidateIDs = make(map[string][]string, len(request.Produces))

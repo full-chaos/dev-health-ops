@@ -380,8 +380,8 @@ func TestRunMeasurement_SunburstTeamScopedAdmitsUnderTheDeletedBodyOverride(t *t
 		if !o.Admitted || o.Refusal != "" {
 			t.Fatalf("team_scoped = %+v, want admitted with no refusal", o)
 		}
-		if o.TerminalState != goapiproof.TerminalStateMatch {
-			t.Fatalf("team_scoped TerminalState = %q, want match -- candidate_shape never compares bodies", o.TerminalState)
+		if o.TerminalState != goapiproof.TerminalStateUnsupported {
+			t.Fatalf("team_scoped TerminalState = %q, want unsupported -- candidate_shape never compares bodies and must not satisfy EnablementProofClause", o.TerminalState)
 		}
 		if o.WriteSkew != nil {
 			t.Fatalf("team_scoped WriteSkew = %+v, want none -- the deleted-body baseline never times out or mismatches", o.WriteSkew)

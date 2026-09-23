@@ -792,7 +792,7 @@ jobs:
     # leg runs on the same x64 host: the Dockerfile's build stage is
     # `--platform=$BUILDPLATFORM` (Go cross-compiles natively), and only the
     # arm64 runtime images run under QEMU, selected by DOCKER_DEFAULT_PLATFORM
-    # for both `docker build` and `docker run`.
+    # (on the smoke step only) for both `docker build` and `docker run`.
     name: go-container-smoke (${{ matrix.platform }})
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -800,8 +800,6 @@ jobs:
       fail-fast: false
       matrix:
         platform: [linux/amd64, linux/arm64]
-    env:
-      DOCKER_DEFAULT_PLATFORM: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -810,6 +808,11 @@ jobs:
         uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
 
       - name: Build and smoke Go images
+        # Only this step selects the platform: set job-wide, it made the QEMU
+        # setup step pull the arm64 binfmt image and fail with "exec format
+        # error" before emulation was registered.
+        env:
+          DOCKER_DEFAULT_PLATFORM: ${{ matrix.platform }}
         run: bash ci/check_go_containers.sh smoke
 
   go-container-security:

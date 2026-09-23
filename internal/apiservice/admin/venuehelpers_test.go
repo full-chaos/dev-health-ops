@@ -86,7 +86,17 @@ func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue, 
 // planes instead of exposing it (Object.Set replaces an existing key's
 // value in place, without moving it). A non-JSON-object body (an empty
 // 200, or a 4xx body with no such key) passes through unchanged.
-func redactField(body, key string) string {
+//
+// t.Fatalf's, rather than silently blanking, when the field's PRESENT value
+// is neither a string nor null: a redacted field is still a pydantic
+// datetime field, and this test's whole point is proving byte-identical
+// output, so a plane that answered with the wrong JSON TYPE for it (a bare
+// number, an object) must fail loudly here, not be waved through as "close
+// enough to redact" (codex round pr2842-r1, P3: the prior version replaced
+// the value with no type check at all, so a temporarily-corrupted
+// expires_at, changed to the JSON number 7 on both planes, still passed).
+func redactField(t *testing.T, body, key string) string {
+	t.Helper()
 	if body == "" {
 		return body
 	}
@@ -98,8 +108,14 @@ func redactField(body, key string) string {
 	if !ok {
 		return body
 	}
-	if _, present := object.Get(key); !present {
+	raw, present := object.Get(key)
+	if !present {
 		return body
+	}
+	if raw != nil {
+		if _, isString := raw.(string); !isString {
+			t.Fatalf("redactField(%q): value is %T, want string or null", key, raw)
+		}
 	}
 	object.Set(key, "")
 	encoded, err := pyjson.Marshal(object)

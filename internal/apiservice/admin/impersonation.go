@@ -1,11 +1,11 @@
 package admin
 
 import (
+	"context"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -23,7 +23,7 @@ const impersonationPrefix = "/api/v1/admin"
 func (h *handlers) impersonationRoutes() []httpapi.Route {
 	return []httpapi.Route{
 		{Method: http.MethodPost, Pattern: impersonationPrefix + "/impersonate",
-			Handler: h.guard.Wrap(policy.Superuser, http.HandlerFunc(h.startImpersonation))},
+			Handler: h.bodyFirst(policy.Superuser, http.HandlerFunc(h.startImpersonation))},
 		{Method: http.MethodPost, Pattern: impersonationPrefix + "/impersonate/stop",
 			Handler: h.guard.Wrap(policy.Superuser, http.HandlerFunc(h.stopImpersonation))},
 		{Method: http.MethodGet, Pattern: impersonationPrefix + "/impersonate/status",
@@ -48,8 +48,8 @@ func impersonationTTL() (time.Duration, *pybody.Error) {
 	if raw == "" {
 		raw = "60"
 	}
-	minutes, err := strconv.Atoi(raw)
-	if err != nil {
+	minutes, ok := parsePyInt(raw)
+	if !ok {
 		return 0, &pybody.Error{Type: "value_error", Msg: "Invalid IMPERSONATION_TTL_MINUTES configuration"}
 	}
 	if minutes <= 0 {
@@ -61,20 +61,8 @@ func impersonationTTL() (time.Duration, *pybody.Error) {
 // startImpersonation is impersonation.py's start_impersonation.
 func (h *handlers) startImpersonation(w http.ResponseWriter, r *http.Request) {
 	user := policy.UserFrom(r.Context())
+	body := bodyFromContext(r.Context())
 
-	body, outcome, failure, err := pybody.Read(r)
-	if err != nil {
-		policy.WriteInternal(w)
-		return
-	}
-	if outcome == pybody.ParseFailed {
-		policy.WriteDetail(w, http.StatusBadRequest, "Invalid request body", nil)
-		return
-	}
-	if outcome == pybody.DecodeFailed {
-		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail([]pybody.Error{*failure}), nil)
-		return
-	}
 	var errs pybody.Errors
 	object, ok := errs.Object(body)
 	var targetUserIDRaw string
@@ -160,13 +148,20 @@ func (h *handlers) startImpersonation(w http.ResponseWriter, r *http.Request) {
 		policy.WriteInternal(w)
 		return
 	}
-	if _, err := h.audit.Write(ctx, requestAuditEntry(r, audit.Entry{
-		OrgID:        membership.OrgID,
-		UserID:       &adminUserID,
-		Action:       audit.ActionImpersonationStart,
-		ResourceType: audit.ResourceSession,
-		ResourceID:   target.ID.String(),
-	})); err != nil {
+	// The audit row goes through the SAME transaction as the session write
+	// (Python: AuditService.log's AuditLog is session.add()ed to the same
+	// SQLAlchemy session as the session row, one implicit commit for both;
+	// a separate, immediately-committed write here would leave a
+	// successful audit row for a session whose transaction never
+	// committed).
+	if _, err := h.audit.Write(ctx, tx, audit.Entry{
+		OrgID:           membership.OrgID,
+		UserID:          &adminUserID,
+		Action:          audit.ActionImpersonationStart,
+		ResourceType:    audit.ResourceSession,
+		ResourceID:      target.ID.String(),
+		RequestMetadata: impersonationAuditMetadata(ctx, user),
+	}); err != nil {
 		h.logger.ErrorContext(ctx, "admin impersonate: audit write failed", slog.Any("error", err))
 		policy.WriteInternal(w)
 		return
@@ -233,13 +228,16 @@ func (h *handlers) stopImpersonation(w http.ResponseWriter, r *http.Request) {
 		policy.WriteInternal(w)
 		return
 	}
-	if _, err := h.audit.Write(ctx, requestAuditEntry(r, audit.Entry{
-		OrgID:        active.TargetOrgID,
-		UserID:       &adminUserID,
-		Action:       audit.ActionImpersonationStop,
-		ResourceType: audit.ResourceSession,
-		ResourceID:   active.TargetUserID.String(),
-	})); err != nil {
+	// Same-transaction audit write -- see startImpersonation's identical
+	// comment.
+	if _, err := h.audit.Write(ctx, tx, audit.Entry{
+		OrgID:           active.TargetOrgID,
+		UserID:          &adminUserID,
+		Action:          audit.ActionImpersonationStop,
+		ResourceType:    audit.ResourceSession,
+		ResourceID:      active.TargetUserID.String(),
+		RequestMetadata: impersonationAuditMetadata(ctx, user),
+	}); err != nil {
 		h.logger.ErrorContext(ctx, "admin impersonate stop: audit write failed", slog.Any("error", err))
 		policy.WriteInternal(w)
 		return
@@ -314,10 +312,52 @@ func (h *handlers) impersonationStatus(w http.ResponseWriter, r *http.Request) {
 	policy.WriteJSON(w, http.StatusOK, response, nil)
 }
 
+// impersonationAuditMetadata is AuditService.log's OWN metadata
+// construction for impersonation.py's two calls specifically -- unlike
+// emit_audit_log (used by member_invited/password_changed, which extracts
+// request headers), AuditService.log's start/stop calls pass no
+// ip_address/user_agent/request_id at all, so req_metadata starts "{}" and
+// gains only impersonation-context fields: user.impersonated_by (the
+// caller's own static JWT claim, almost always unset for a superuser
+// starting a fresh session) and, when the CALLER already has an active
+// impersonation session of their own (policy.ImpersonationFrom, set by the
+// Scope.Impersonation middleware before this handler ever runs),
+// impersonated_by/impersonation_target/impersonation_org from THAT session.
+// requestAuditEntry's header metadata belongs only to the emit_audit_log-
+// shaped writes in orgs.go/users.go, never to these two.
+func impersonationAuditMetadata(ctx context.Context, user *policy.User) []byte {
+	metadata := pyjson.NewObject()
+	if user != nil && user.ImpersonatedBy != nil && *user.ImpersonatedBy != "" {
+		metadata.Set("impersonated_by", *user.ImpersonatedBy)
+	}
+	if active := policy.ImpersonationFrom(ctx); active != nil {
+		if _, ok := metadata.Get("impersonated_by"); !ok {
+			metadata.Set("impersonated_by", active.AdminUserID.String())
+		}
+		if _, ok := metadata.Get("impersonation_target"); !ok {
+			metadata.Set("impersonation_target", active.TargetUserID.String())
+		}
+		if _, ok := metadata.Get("impersonation_org"); !ok {
+			metadata.Set("impersonation_org", active.TargetOrgID.String())
+		}
+	}
+	if metadata.Len() == 0 {
+		return nil
+	}
+	encoded, err := pyjson.Marshal(metadata)
+	if err != nil {
+		return nil
+	}
+	return encoded
+}
+
 // requestAuditEntry fills entry's RequestMetadata the way
 // api/utils/audit.py's extract_request_metadata does: X-Forwarded-For
 // (first hop) or else the direct peer, User-Agent, and X-Request-ID, each
-// present only when the header/value is non-empty.
+// present only when the header/value is non-empty. Used by emit_audit_log-
+// shaped writes (member_invited, password_changed) -- never by
+// impersonation start/stop, which use impersonationAuditMetadata instead
+// (see its own doc comment for why the two are genuinely different).
 func requestAuditEntry(r *http.Request, entry audit.Entry) audit.Entry {
 	metadata := pyjson.NewObject()
 	hasAny := false

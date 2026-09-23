@@ -43,7 +43,7 @@ func Routes(deps Deps) []httpapi.Route {
 		logger = slog.Default()
 	}
 	store := pgStore{Pool: deps.Pool, Now: deps.Now}
-	auditWriter := audit.PGWriter{Pool: deps.Pool, Now: deps.Now}
+	auditWriter := audit.PGWriter{Now: deps.Now}
 	cache := newImpersonationCache(deps.Valkey, store, logger)
 	if deps.Now != nil {
 		cache.now = deps.Now

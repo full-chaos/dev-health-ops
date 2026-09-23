@@ -69,6 +69,14 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), orgID, targetID
 		{Name: "self-impersonate refused", Method: "POST", Path: "/api/v1/admin/impersonate",
 			Headers: map[string]string{"Authorization": "Bearer " + venue.Tokens["admin"], "Content-Type": "application/json"},
 			Body:    venueoracle.B64(fmt.Sprintf(`{"target_user_id":%q}`, adminID.String()))},
+		// Unauthenticated + malformed body: FastAPI validates the pydantic
+		// body parameter before the auth Depends() ever runs, so this is a
+		// 422 on both planes, never a 401 (codex round pr2842-r1, P1: this
+		// PR originally wrapped the whole handler in Guard first, so an
+		// unauthenticated malformed body answered 401 instead).
+		{Name: "unauthenticated malformed body", Method: "POST", Path: "/api/v1/admin/impersonate",
+			Headers: map[string]string{"Content-Type": "application/json"},
+			Body:    venueoracle.B64(`{`)},
 	}
 	python := venue.ServePython(t, requests)
 	goBase, _ := startGoServer(t, ctx, venue, jwtKey)
@@ -80,7 +88,7 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), orgID, targetID
 			// value either route asserts equal to the millisecond, so this
 			// blanks the field's VALUE, not its presence, matching every
 			// other ruled Normalize in this repo's oracle suites.
-			return redactField(body, "expires_at")
+			return redactField(t, body, "expires_at")
 		},
 	})
 	t.Log(receipt)
@@ -93,6 +101,6 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), orgID, targetID
 }
 
 func impersonationAuditQuery(adminID, targetID uuid.UUID) string {
-	return fmt.Sprintf(`SELECT org_id, user_id, action, resource_type, resource_id, status
+	return fmt.Sprintf(`SELECT org_id, user_id, action, resource_type, resource_id, status, request_metadata
 FROM audit_logs WHERE user_id = '%s' AND resource_id = '%s' ORDER BY created_at`, adminID, targetID)
 }

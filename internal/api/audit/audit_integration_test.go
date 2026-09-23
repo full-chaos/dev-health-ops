@@ -72,7 +72,7 @@ func TestWriteInsertsTheDeclaredColumns(t *testing.T) {
 	}
 
 	fixedNow := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
-	writer := PGWriter{Pool: pool, Now: func() time.Time { return fixedNow }}
+	writer := PGWriter{Now: func() time.Time { return fixedNow }}
 	description := "Organization invite created"
 	entry := Entry{
 		OrgID:           orgID,
@@ -84,7 +84,7 @@ func TestWriteInsertsTheDeclaredColumns(t *testing.T) {
 		Changes:         []byte(`{"email":"new@example.com","role":"member","status":"pending"}`),
 		RequestMetadata: []byte(`{"ip_address":"203.0.113.9"}`),
 	}
-	id, err := writer.Write(ctx, entry)
+	id, err := writer.Write(ctx, pool, entry)
 	if err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -170,8 +170,8 @@ func TestWriteWithNilChangesStoresEmptyObject(t *testing.T) {
 		t.Fatalf("seed org: %v", err)
 	}
 
-	writer := PGWriter{Pool: pool}
-	id, err := writer.Write(ctx, Entry{
+	writer := PGWriter{}
+	id, err := writer.Write(ctx, pool, Entry{
 		OrgID:        orgID,
 		Action:       ActionPasswordChanged,
 		ResourceType: ResourceUser,
@@ -210,8 +210,8 @@ func TestWriteRejectsAnUnknownOrg(t *testing.T) {
 	ctx := context.Background()
 	pool := startPool(t, ctx)
 
-	writer := PGWriter{Pool: pool}
-	_, err := writer.Write(ctx, Entry{
+	writer := PGWriter{}
+	_, err := writer.Write(ctx, pool, Entry{
 		OrgID:        uuid.New(),
 		Action:       ActionMemberInvited,
 		ResourceType: ResourceMembership,

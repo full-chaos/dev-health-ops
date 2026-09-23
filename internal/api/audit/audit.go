@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // Action is models/audit.py AuditAction's value. Only the actions this PR's
@@ -66,14 +66,27 @@ type Entry struct {
 	ErrorMessage *string
 }
 
-// Writer inserts audit_logs rows. PGWriter is the production implementation.
-type Writer interface {
-	Write(ctx context.Context, entry Entry) (uuid.UUID, error)
+// Execer is the subset of *pgxpool.Pool and pgx.Tx that Write needs. A
+// caller inside an open transaction passes the tx, so the audit row commits
+// or rolls back atomically with whatever else that transaction does --
+// Python's own AuditLog is session.add()ed to the SAME SQLAlchemy session
+// (and its one implicit request-scoped commit) as every other write the
+// route makes, never committed on its own. A caller with no open
+// transaction of its own passes the pool directly.
+type Execer interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
 }
 
-// PGWriter is Writer over the api Service's Postgres pool.
+// Writer inserts audit_logs rows. PGWriter is the production implementation.
+type Writer interface {
+	Write(ctx context.Context, exec Execer, entry Entry) (uuid.UUID, error)
+}
+
+// PGWriter is Writer's production implementation. It carries no pool of its
+// own: every call site is inside a transaction it already opened for its
+// other writes, or (a pure-audit, no-other-write route, if one is ever
+// added) passes the shared pool explicitly.
 type PGWriter struct {
-	Pool *pgxpool.Pool
 	// Now is injectable for tests; nil means time.Now.
 	Now func() time.Time
 }
@@ -85,16 +98,16 @@ func (w PGWriter) now() time.Time {
 	return time.Now()
 }
 
-// Write inserts entry and returns its generated id. It never assigns
-// created_at itself in SQL (now()): the Go plane's clock, injected the same
-// way PGStore's is, keeps a test's expected timestamp exact.
-func (w PGWriter) Write(ctx context.Context, entry Entry) (uuid.UUID, error) {
+// Write inserts entry through exec and returns its generated id. It never
+// assigns created_at itself in SQL (now()): the Go plane's clock, injected
+// the same way PGStore's is, keeps a test's expected timestamp exact.
+func (w PGWriter) Write(ctx context.Context, exec Execer, entry Entry) (uuid.UUID, error) {
 	status := entry.Status
 	if status == "" {
 		status = "success"
 	}
 	id := uuid.New()
-	_, err := w.Pool.Exec(ctx, `
+	_, err := exec.Exec(ctx, `
 INSERT INTO audit_logs
 	(id, org_id, user_id, action, resource_type, resource_id, description,
 	 changes, request_metadata, status, error_message, created_at)

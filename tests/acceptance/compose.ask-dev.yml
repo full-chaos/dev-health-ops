@@ -135,8 +135,8 @@ services:
   # ---------------------------------------------------------------------------
 
   # The canonical Python `migrate` service (above) owns Alembic + ClickHouse.
-  # River's own schema is a SEPARATE migrator (`dev-health-worker-migrate`,
-  # cmd/dev-health-worker-migrate) that requires its three runtime roles to
+  # River's own schema is a SEPARATE migrator (`dho migrate river`,
+  # internal/rivermigrate) that requires its three runtime roles to
   # already exist -- provisioned here from the same checked-in SQL
   # deploy/docker-compose/compose.go-workers.yml's `go-river-provision`
   # uses, built locally (no ghcr pull) since the `runner` target already
@@ -174,21 +174,17 @@ services:
       migrate:
         condition: service_completed_successfully
 
-  # Applies the pinned River schema (dev-health-worker-migrate, already
-  # baked into the `runner` image) now that its roles exist, then
-  # independently verifies the result with `--check`.
+  # Applies the pinned River schema now that its roles exist, then verifies
+  # the result on a fresh connection: `dho migrate river --apply-and-check`
+  # on the Go operator image (entrypoint dho).
   river-migrate:
     container_name: ask-dev-acceptance-river-migrate
     build:
       context: .
-      dockerfile: ./docker/Dockerfile
-      target: runner
-      args:
-        SETUPTOOLS_SCM_PRETEND_VERSION: 0.0.0
+      dockerfile: ./docker/go-worker.Dockerfile
+      target: operator
     restart: "no"
-    entrypoint: ["/bin/sh", "-ec"]
-    command:
-      - "dev-health-worker-migrate && dev-health-worker-migrate --check"
+    command: [migrate, river, --apply-and-check]
     environment:
       MIGRATION_DATABASE_URI: postgresql://postgres:postgres@postgres:5432/${POSTGRES_DB:-postgres}
       RIVER_DATABASE_SCHEMA: ${RIVER_DATABASE_SCHEMA:-river}

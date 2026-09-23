@@ -1,4 +1,4 @@
-package main
+package rivermigrate
 
 import (
 	"bytes"
@@ -311,7 +311,7 @@ func TestResolveMigrationDatabaseURIComponentForm(t *testing.T) {
 	t.Run("neither form set -- required error", func(t *testing.T) {
 		t.Parallel()
 		var stderr bytes.Buffer
-		_, ok := resolveMigrationDatabaseURI(env(nil), &stderr)
+		_, _, ok := resolveMigrationDatabaseURI(env(nil), &stderr, false)
 		if ok {
 			t.Fatal("expected failure: neither the component host var nor MIGRATION_DATABASE_URI is set")
 		}
@@ -323,9 +323,9 @@ func TestResolveMigrationDatabaseURIComponentForm(t *testing.T) {
 	t.Run("pre-built URI only -- still works", func(t *testing.T) {
 		t.Parallel()
 		var stderr bytes.Buffer
-		got, ok := resolveMigrationDatabaseURI(env(map[string]string{
+		got, _, ok := resolveMigrationDatabaseURI(env(map[string]string{
 			"MIGRATION_DATABASE_URI": "postgresql://postgres:postgres@postgres:5432/postgres",
-		}), &stderr)
+		}), &stderr, false)
 		if !ok {
 			t.Fatalf("expected success, stderr=%s", stderr.String())
 		}
@@ -338,12 +338,12 @@ func TestResolveMigrationDatabaseURIComponentForm(t *testing.T) {
 		t.Parallel()
 		var stderr bytes.Buffer
 		reserved := "p#ss/w@rd"
-		got, ok := resolveMigrationDatabaseURI(env(map[string]string{
+		got, _, ok := resolveMigrationDatabaseURI(env(map[string]string{
 			"DEV_HEALTH_MIGRATION_PG_HOST":     "postgres",
 			"DEV_HEALTH_MIGRATION_PG_USER":     "postgres",
 			"DEV_HEALTH_MIGRATION_PG_PASSWORD": reserved,
 			"DEV_HEALTH_MIGRATION_PG_DB":       "postgres",
-		}), &stderr)
+		}), &stderr, false)
 		if !ok {
 			t.Fatalf("expected success, stderr=%s", stderr.String())
 		}
@@ -361,11 +361,11 @@ func TestResolveMigrationDatabaseURIComponentForm(t *testing.T) {
 	t.Run("both forms set -- refused naming both keys", func(t *testing.T) {
 		t.Parallel()
 		var stderr bytes.Buffer
-		_, ok := resolveMigrationDatabaseURI(env(map[string]string{
+		_, _, ok := resolveMigrationDatabaseURI(env(map[string]string{
 			"MIGRATION_DATABASE_URI":       "postgresql://real:real@real-host:5432/real",
 			"DEV_HEALTH_MIGRATION_PG_HOST": "postgres",
 			"DEV_HEALTH_MIGRATION_PG_USER": "postgres",
-		}), &stderr)
+		}), &stderr, false)
 		if ok {
 			t.Fatal("expected failure when both forms are set")
 		}
@@ -385,13 +385,13 @@ func TestResolveMigrationDatabaseURIComponentForm(t *testing.T) {
 	t.Run("compose overlay's own POSTGRES_HOST default has no effect", func(t *testing.T) {
 		t.Parallel()
 		var stderr bytes.Buffer
-		got, ok := resolveMigrationDatabaseURI(env(map[string]string{
+		got, _, ok := resolveMigrationDatabaseURI(env(map[string]string{
 			"MIGRATION_DATABASE_URI": "postgresql://postgres:postgres@postgres:5432/postgres",
 			"POSTGRES_HOST":          "postgres",
 			"POSTGRES_USER":          "postgres",
 			"POSTGRES_PASSWORD":      "postgres",
 			"POSTGRES_DB":            "postgres",
-		}), &stderr)
+		}), &stderr, false)
 		if !ok {
 			t.Fatalf("expected success, stderr=%s", stderr.String())
 		}
@@ -403,12 +403,12 @@ func TestResolveMigrationDatabaseURIComponentForm(t *testing.T) {
 	t.Run("bad port with component host set is refused, not silently defaulted", func(t *testing.T) {
 		t.Parallel()
 		var stderr bytes.Buffer
-		_, ok := resolveMigrationDatabaseURI(env(map[string]string{
+		_, _, ok := resolveMigrationDatabaseURI(env(map[string]string{
 			"DEV_HEALTH_MIGRATION_PG_HOST": "postgres",
 			"DEV_HEALTH_MIGRATION_PG_PORT": "not-a-port",
 			"DEV_HEALTH_MIGRATION_PG_USER": "postgres",
 			"DEV_HEALTH_MIGRATION_PG_DB":   "postgres",
-		}), &stderr)
+		}), &stderr, false)
 		if ok {
 			t.Fatal("expected failure on a non-numeric port")
 		}
@@ -422,9 +422,9 @@ func TestResolveMigrationDatabaseURIComponentForm(t *testing.T) {
 	t.Run("non-host component set without host or URI names the missing host key", func(t *testing.T) {
 		t.Parallel()
 		var stderr bytes.Buffer
-		_, ok := resolveMigrationDatabaseURI(env(map[string]string{
+		_, _, ok := resolveMigrationDatabaseURI(env(map[string]string{
 			"DEV_HEALTH_MIGRATION_PG_USER": "postgres",
-		}), &stderr)
+		}), &stderr, false)
 		if ok {
 			t.Fatal("expected failure")
 		}
@@ -440,10 +440,10 @@ func TestResolveMigrationDatabaseURIComponentForm(t *testing.T) {
 	t.Run("both forms plus a non-host component -- mutual exclusion still wins", func(t *testing.T) {
 		t.Parallel()
 		var stderr bytes.Buffer
-		_, ok := resolveMigrationDatabaseURI(env(map[string]string{
+		_, _, ok := resolveMigrationDatabaseURI(env(map[string]string{
 			"MIGRATION_DATABASE_URI":       "postgresql://real:real@real-host:5432/real",
 			"DEV_HEALTH_MIGRATION_PG_USER": "postgres",
-		}), &stderr)
+		}), &stderr, false)
 		if ok {
 			t.Fatal("expected failure")
 		}
@@ -461,9 +461,9 @@ func TestResolveMigrationDatabaseURIComponentForm(t *testing.T) {
 	t.Run("component DB alone (no host, no URI) names the missing host key", func(t *testing.T) {
 		t.Parallel()
 		var stderr bytes.Buffer
-		_, ok := resolveMigrationDatabaseURI(env(map[string]string{
+		_, _, ok := resolveMigrationDatabaseURI(env(map[string]string{
 			"DEV_HEALTH_MIGRATION_PG_DB": "postgres",
-		}), &stderr)
+		}), &stderr, false)
 		if ok {
 			t.Fatal("expected failure")
 		}
@@ -476,10 +476,10 @@ func TestResolveMigrationDatabaseURIComponentForm(t *testing.T) {
 	t.Run("component DB plus a raw MIGRATION_DATABASE_URI is refused", func(t *testing.T) {
 		t.Parallel()
 		var stderr bytes.Buffer
-		_, ok := resolveMigrationDatabaseURI(env(map[string]string{
+		_, _, ok := resolveMigrationDatabaseURI(env(map[string]string{
 			"MIGRATION_DATABASE_URI":     "postgresql://real:real@real-host:5432/real",
 			"DEV_HEALTH_MIGRATION_PG_DB": "postgres",
-		}), &stderr)
+		}), &stderr, false)
 		if ok {
 			t.Fatal("expected failure")
 		}
@@ -502,9 +502,9 @@ func TestResolveMigrationDatabaseURIComponentForm(t *testing.T) {
 			t.Fatal(err)
 		}
 		var stderr bytes.Buffer
-		_, ok := resolveMigrationDatabaseURI(env(map[string]string{
+		_, _, ok := resolveMigrationDatabaseURI(env(map[string]string{
 			"DEV_HEALTH_MIGRATION_PG_PASSWORD_FILE": passwordFile,
-		}), &stderr)
+		}), &stderr, false)
 		if ok {
 			t.Fatal("expected failure")
 		}
@@ -522,10 +522,10 @@ func TestResolveMigrationDatabaseURIComponentForm(t *testing.T) {
 			t.Fatal(err)
 		}
 		var stderr bytes.Buffer
-		_, ok := resolveMigrationDatabaseURI(env(map[string]string{
+		_, _, ok := resolveMigrationDatabaseURI(env(map[string]string{
 			"MIGRATION_DATABASE_URI":            "postgresql://real:real@real-host:5432/real",
 			"DEV_HEALTH_MIGRATION_PG_USER_FILE": userFile,
-		}), &stderr)
+		}), &stderr, false)
 		if ok {
 			t.Fatal("expected failure")
 		}
@@ -535,4 +535,85 @@ func TestResolveMigrationDatabaseURIComponentForm(t *testing.T) {
 			t.Fatalf("expected a mutual-exclusivity error naming DEV_HEALTH_MIGRATION_PG_USER_FILE, got: %s", stderr.String())
 		}
 	})
+}
+
+// TestApplyAndCheckResolvesTheMigrationDatabase pins the resolution the
+// chart hook's /bin/sh wrapper performed and --apply-and-check now performs
+// in Go: MIGRATION_DATABASE_URI (any form) wins; only --apply-and-check falls
+// back to POSTGRES_URI (or its _FILE); with neither, the wrapper's own
+// refusal is printed verbatim.
+func TestApplyAndCheckResolvesTheMigrationDatabase(t *testing.T) {
+	t.Parallel()
+	const migration = "postgresql://migrator:pw@postgres:5432/devhealth"
+	const postgres = "postgresql://alembic:pw@postgres:5432/devhealth"
+	postgresFile := t.TempDir() + "/postgres-uri"
+	if err := os.WriteFile(postgresFile, []byte(postgres), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name       string
+		values     map[string]string
+		fallback   bool
+		wantURI    string
+		wantSource string
+		wantStderr string
+	}{
+		{"migration URI wins over POSTGRES_URI", map[string]string{"MIGRATION_DATABASE_URI": migration, "POSTGRES_URI": postgres}, true, migration, "MIGRATION_DATABASE_URI", ""},
+		{"migration components win over POSTGRES_URI", map[string]string{
+			"DEV_HEALTH_MIGRATION_PG_HOST": "postgres", "DEV_HEALTH_MIGRATION_PG_USER": "migrator",
+			"DEV_HEALTH_MIGRATION_PG_PASSWORD": "pw", "DEV_HEALTH_MIGRATION_PG_DB": "devhealth", "POSTGRES_URI": postgres,
+		}, true, "", "MIGRATION_DATABASE_URI", ""},
+		{"POSTGRES_URI stands in", map[string]string{"POSTGRES_URI": postgres}, true, postgres, "POSTGRES_URI", ""},
+		{"empty MIGRATION_DATABASE_URI falls back", map[string]string{"MIGRATION_DATABASE_URI": "", "POSTGRES_URI": postgres}, true, postgres, "POSTGRES_URI", ""},
+		{"POSTGRES_URI_FILE stands in", map[string]string{"POSTGRES_URI_FILE": postgresFile}, true, postgres, "POSTGRES_URI", ""},
+		{"neither: the wrapper's refusal", nil, true, "", "", noMigrationDatabaseMessage + "\n"},
+		{"empty POSTGRES_URI: the wrapper's refusal", map[string]string{"POSTGRES_URI": ""}, true, "", "", noMigrationDatabaseMessage + "\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			var stderr bytes.Buffer
+			got, source, ok := resolveMigrationDatabaseURI(env(test.values), &stderr, test.fallback)
+			if test.wantStderr != "" {
+				if ok || stderr.String() != test.wantStderr {
+					t.Fatalf("ok=%v stderr=%q, want refusal %q", ok, stderr.String(), test.wantStderr)
+				}
+				return
+			}
+			if !ok || source != test.wantSource {
+				t.Fatalf("ok=%v source=%q stderr=%q, want source %q", ok, source, stderr.String(), test.wantSource)
+			}
+			if test.wantURI != "" && got.Reveal() != test.wantURI {
+				t.Fatalf("resolved a different database than %s", test.wantSource)
+			}
+		})
+	}
+}
+
+// Without --apply-and-check there is no fallback: the plain apply and
+// --check still require MIGRATION_DATABASE_URI, as before the fold.
+func TestOnlyApplyAndCheckFallsBackToPostgres(t *testing.T) {
+	t.Parallel()
+	var stderr bytes.Buffer
+	if _, _, ok := resolveMigrationDatabaseURI(env(map[string]string{"POSTGRES_URI": "postgresql://alembic:pw@postgres:5432/devhealth"}), &stderr, false); ok {
+		t.Fatal("the plain apply fell back to POSTGRES_URI")
+	}
+	if !strings.Contains(stderr.String(), "MIGRATION_DATABASE_URI is required") {
+		t.Fatalf("stderr=%q", stderr.String())
+	}
+}
+
+// The verb as the hook runs it: with no DSN it exits 1 with the refusal and
+// writes nothing to stdout; --check with --apply-and-check is a usage error.
+func TestApplyAndCheckVerb(t *testing.T) {
+	t.Parallel()
+	var stdout, stderr bytes.Buffer
+	if code := Execute(context.Background(), "dho", []string{"--apply-and-check"}, env(nil), &stdout, &stderr); code != 1 ||
+		stderr.String() != noMigrationDatabaseMessage+"\n" || stdout.Len() != 0 {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Execute(context.Background(), "dho", []string{"--check", "--apply-and-check"}, env(nil), &stdout, &stderr); code != 2 {
+		t.Fatalf("--check --apply-and-check: code=%d stderr=%q, want usage 2", code, stderr.String())
+	}
 }

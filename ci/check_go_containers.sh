@@ -282,8 +282,10 @@ smoke() {
     | grep -F '"version":"phase1-ci"' >/dev/null \
     || die "operator did not report injected version metadata"
   smoke_workers_vertical "${IMAGE_PREFIX}-operator:ci"
+  smoke_migrate_river "${IMAGE_PREFIX}-operator:ci"
 
-  # migrate (cmd/dev-health-worker-migrate) is a one-shot job, not a
+  # migrate (cmd/dev-health-worker-migrate, a thin main over the code `dho
+  # migrate river` runs, kept until spec S10) is a one-shot job, not a
   # long-running service: it has no readiness surface to smoke-test against,
   # so -- like contractcheck and operator above -- it is special-cased rather
   # than run through smoke_target. --version is its only no-op mode that
@@ -322,6 +324,22 @@ smoke() {
 # route-less api keeps: live, READY (it has no dependency yet, only its own
 # listener), metrics served, and every api path answered with the Python
 # api's own 404 body plus its security headers. It then stops cleanly.
+# smoke_migrate_river runs `dho migrate river --apply-and-check` -- the
+# chart hook's and Compose's exact argv, with no shell -- with no database
+# configured: it must reach the migrator and fail closed (exit 1) with the
+# refusal the hook's old shell wrapper printed, verbatim, not an unknown
+# command (exit 2) or a crash.
+smoke_migrate_river() {
+  local tag="$1" output code
+  set +e
+  output="$(docker run --rm "${CONTAINER_SECURITY_ARGS[@]}" "${tag}" migrate river --apply-and-check 2>&1 >/dev/null)"
+  code=$?
+  set -e
+  [ "${code}" = "1" ] || die "${tag}: dho migrate river --apply-and-check without a DSN exited ${code}, want 1: ${output}"
+  [ "${output}" = "river-migrate: neither MIGRATION_DATABASE_URI nor POSTGRES_URI is set in the migration Secret; this Job needs an ELEVATED DSN pointed DIRECTLY at PostgreSQL (5432), never at a transaction pooler" ] \
+    || die "${tag}: dho migrate river --apply-and-check did not report the missing-DSN refusal: ${output}"
+}
+
 # smoke_workers_vertical runs `dho workers status` with no database
 # configured: the verb tree must be reached and fail closed with the JSON
 # configuration error naming the first missing DSN (exit 1), not an unknown
@@ -354,6 +372,7 @@ smoke_dho() {
   docker run --rm "${CONTAINER_SECURITY_ARGS[@]}" "${tag}" --version \
     | grep -F '"version":"phase1-ci"' >/dev/null \
     || die "dho did not report injected version metadata"
+  smoke_migrate_river "${tag}"
 
   ACTIVE_CONTAINER="${container_name}"
   docker run --detach \

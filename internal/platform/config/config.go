@@ -1061,7 +1061,7 @@ func envOrDefault(lookup secrets.LookupEnv, key, fallback string) string {
 // unescaped URI can "successfully" parse with credential material
 // misattributed into the path, and no denylist of suspicious characters
 // guards against that. Callers report form="uri" with no name at all.
-// Exported so cmd/dev-health-worker-migrate and internal/workersctl
+// Exported so internal/rivermigrate and internal/workersctl
 // apply the identical rule.
 func ComponentDatabaseIdentity(scheme string, built secrets.Value) string {
 	if !built.Configured() {
@@ -1082,7 +1082,7 @@ func ComponentDatabaseIdentity(scheme string, built secrets.Value) string {
 //
 // One JSON diagnostic writer, shared by every Go entry point that can
 // surface a configuration error: internal/workersctl and
-// cmd/dev-health-worker-migrate for a
+// internal/rivermigrate for a
 // ResolveDSN/ResolveDSNFromComponents/secrets.Resolve error, and
 // internal/platform/shell.Execute (dev-health-worker, the reconciler, the
 // scheduler and the stream-runner) for a resolveProfile or config.Load

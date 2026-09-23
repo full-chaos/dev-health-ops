@@ -760,10 +760,13 @@ def test_go_compose_bootstrap_is_post_alembic_fail_closed_and_route_inert() -> N
         river_migrate["depends_on"]["go-river-provision"]["condition"]
         == "service_completed_successfully"
     )
-    migration_command = _command_string(river_migrate)
-    assert migration_command.count("dev-health-worker-migrate") == 2
-    assert "dev-health-worker-migrate --check" in migration_command
+    # `dho migrate river --apply-and-check` on the Go operator image: args
+    # only, no shell (the image is distroless), apply then check in Go.
+    assert "entrypoint" not in river_migrate
+    assert river_migrate["command"] == ["migrate", "river", "--apply-and-check"]
+    assert river_migrate["build"]["target"] == "operator"
     assert "MIGRATION_DATABASE_URI" in river_migrate["environment"]
+    assert "POSTGRES_URI" in river_migrate["environment"]
 
     contractcheck = services["go-contractcheck"]
     assert contractcheck["profiles"] == ["go-workers"]

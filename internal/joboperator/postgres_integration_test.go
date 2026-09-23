@@ -34,7 +34,7 @@ const (
 // operatorIntegrationCoordinatorGrants translates postgres.CoordinatorPosture()
 // into the migration's grant shape. It is derived, never restated: the posture
 // is the same single authority CheckCoordinatorAuthorization asserts against
-// and cmd/dev-health-worker-migrate provisions from, so what this fixture
+// and internal/rivermigrate provisions from, so what this fixture
 // grants cannot drift from what production grants.
 func operatorIntegrationCoordinatorGrants() ([]riverstore.TableGrant, []riverstore.ColumnGrant, []string) {
 	posture := postgresstore.CoordinatorPosture()

@@ -518,25 +518,26 @@ services:
   # CHAOS-5568: component form, not a shell-assembled URI. A generated
   # password containing `#`/`%`/etc. broke the old
   # `postgresql://$$POSTGRES_USER:$$POSTGRES_PASSWORD@...` shell fallback --
-  # `cmd/dev-health-worker-migrate`'s `resolveMigrationDatabaseURI` now
+  # `internal/rivermigrate`'s `resolveMigrationDatabaseURI` now
   # assembles this DSN internally via stdlib `net/url`, so no component
   # needs shell escaping and no fallback is needed. Matches root
   # compose.yml's current go-river-migrate shape.
+  #
+  # The Go operator image (entrypoint dho, no shell): `dho migrate river
+  # --apply-and-check` applies, then checks on a fresh connection.
   go-river-migrate:
-    image: ${DEV_HEALTH_IMAGE:-ghcr.io/your-org/dev-health-ops:latest}
+    image: ${DEV_HEALTH_GO_OPERATOR_IMAGE:-ghcr.io/full-chaos/dev-health-go-operator:latest}
     build:
       context: ../..
-      dockerfile: docker/Dockerfile
-      target: runner
+      dockerfile: docker/go-worker.Dockerfile
+      target: operator
     restart: "no"
     read_only: true
+    user: "65532:65532"
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     tmpfs: [/tmp]
-    entrypoint:
-      - /bin/sh
-      - -ec
-      - dev-health-worker-migrate && dev-health-worker-migrate --check
+    command: [migrate, river, --apply-and-check]
     environment:
       DEV_HEALTH_MIGRATION_PG_HOST: ${POSTGRES_HOST:?set POSTGRES_HOST}
       DEV_HEALTH_MIGRATION_PG_USER: ${POSTGRES_USER:?set POSTGRES_USER}
@@ -548,7 +549,7 @@ services:
       # This service never forwarded the coordinator role/password by
       # default, unlike go-river-provision just above it -- overriding
       # RIVER_COORDINATOR_DATABASE_ROLE away from its default then fails
-      # migration since dev-health-worker-migrate applies the privilege
+      # migration since the River migrator applies the privilege
       # policy against the unexported default name instead.
       RIVER_COORDINATOR_DATABASE_ROLE: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
       RIVER_COORDINATOR_DATABASE_PASSWORD: ${RIVER_COORDINATOR_DATABASE_PASSWORD:-devhealth_coordinator}

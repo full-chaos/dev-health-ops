@@ -333,8 +333,8 @@ sections.
 
 1. Compose runs a fail-closed bootstrap chain before any Go workload:
    canonical `migrate` (Alembic and ClickHouse), `go-river-provision`
-   (idempotent post-Alembic runtime-role grants), `go-river-migrate` (the
-   pinned River migration followed by `dev-health-worker-migrate --check`),
+   (idempotent post-Alembic runtime-role grants), `go-river-migrate` (`dho migrate
+   river --apply-and-check`: the pinned River migration, then a schema check),
    then `go-contractcheck` (the embedded job registry and deployment groups).
    Every edge requires `service_completed_successfully`; a failed
    one-shot leaves the Go services unstarted. The elevated DSN is confined to
@@ -1012,7 +1012,7 @@ value that looks reasonable for a quick manual test or CI run (10s, 60s,
 even 420s) fails this check silently under the same opaque reason string —
 confirmed by hand while building CHAOS-4266.
 
-### Provisioning order for a BRAND NEW database: `provision_river_roles.sql` before `dev-health-worker-migrate`, always
+### Provisioning order for a BRAND NEW database: `provision_river_roles.sql` before `dho migrate river`, always
 
 The "coordinator/domain readiness failure" section above is written around
 a database that is *behind* on migrations. A database that has never been
@@ -1026,7 +1026,7 @@ yet, or exist without the grants `CheckRolePosture`
 `scripts/worker/provision_river_roles.sql` (run via `psql` with
 `domain_role`/`queue_role`/`coordinator_role`/`*_password` variables, exactly
 as `deploy/docker-compose/compose.go-workers.yml`'s `go-river-provision`
-service invokes it) **must run before** `dev-health-worker-migrate`, every
+service invokes it) **must run before** `dho migrate river`, every
 time, on every fresh database — confirmed while building CHAOS-4266's CI
 gate (`ci/run_metrics_executed_proof.sh`).
 
@@ -1035,7 +1035,7 @@ exist: (1) `CheckRolePosture`'s posture check is an *exact* match, not a
 minimum — it rejects excess privileges (e.g. a table-wide grant on
 `worker_job_completion_fences`, which must be column-scoped) exactly as it
 rejects missing ones, so a blanket `GRANT ALL ON ALL TABLES` is strictly
-worse than doing nothing, not a workaround. (2) `dev-health-worker-migrate`
+worse than doing nothing, not a workaround. (2) `dho migrate river`
 only re-applies grants when it actually runs a pending migration — if the
 schema is already at the pinned version it reports `(0 applied)` and
 silently skips grant re-application, so revoking privileges by hand and

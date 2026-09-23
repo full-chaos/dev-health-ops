@@ -147,40 +147,41 @@ def test_provisioning_uses_the_ops_image_that_carries_the_sql() -> None:
     assert "provision_river_roles.sql" in command
 
 
-def test_river_migrate_defaults_to_the_ops_image_that_carries_the_binary() -> None:
-    """`dev-health-worker-migrate` lives in the ops runtime image.
+def test_river_migrate_defaults_to_the_pinned_operator_image() -> None:
+    """The River hook runs `dho migrate river`, so it needs an image whose
+    entrypoint is dho -- not the ops runtime image the migrate Job uses.
 
-    docker/Dockerfile:87 installs it into /usr/local/bin in the `runner`
-    target, and Compose's go-river-migrate builds and runs that same image.
-    An earlier version of this chart named
-    `ghcr.io/full-chaos/dev-health-go-worker-migrate:latest`, which CI has
-    never published -- caught by
-    tests/tooling/test_go_image_publishing.py::test_every_referenced_go_image_is_published
-    with "deployment renderers name Go images that CI never publishes". A
-    chart that renders an unpullable image fails at ImagePullBackOff, long
-    after the operator has committed to the upgrade.
+    It defaults to routeActivate.image, the operator image that hook's render
+    already refuses unless it is pinned to the migrate Job's commit, so the
+    River step runs the same build as the rest of the migration chain.
     """
     jobs = _jobs(*_BOTH_ON)
-    river_image = jobs[_RIVER]["spec"]["template"]["spec"]["containers"][0]["image"]
+    container = jobs[_RIVER]["spec"]["template"]["spec"]["containers"][0]
     migrate_image = jobs[_MIGRATE]["spec"]["template"]["spec"]["containers"][0]["image"]
-    assert river_image == migrate_image, (
-        "river-migrate must default to the ops runtime image that actually "
-        f"carries the binary: {river_image} != {migrate_image}"
-    )
+    assert container["image"] == _PINNED_OPERATOR_IMAGE, container["image"]
+    assert container["image"] != migrate_image
 
 
-def test_river_migrate_asserts_posture_after_applying_it() -> None:
-    """`--check` is the posture assertion, and it must run AFTER the apply."""
+def test_river_migrate_falls_back_to_the_dho_image() -> None:
+    """With route activation off there is no operator image to share; the
+    hook then runs the dho image (goApi.image), which CI publishes."""
+    jobs = _jobs(*_BOTH_ON, "migrations.hook.routeActivate.enabled=false", "migrations.hook.routeActivate.image=")
+    container = jobs[_RIVER]["spec"]["template"]["spec"]["containers"][0]
+    assert container["image"].startswith("ghcr.io/full-chaos/dev-health-go-dho:"), container["image"]
+
+
+def test_river_migrate_applies_and_checks_with_no_shell() -> None:
+    """`--apply-and-check` applies, then checks on a fresh connection, in Go.
+
+    The dho image is distroless: there is no shell, so the hook must set
+    args only and let the image entrypoint (dho) run them. The apply-then-
+    check order and the MIGRATION_DATABASE_URI -> POSTGRES_URI fallback are
+    pinned where they now live, internal/rivermigrate's tests.
+    """
     jobs = _jobs(*_BOTH_ON)
     container = jobs[_RIVER]["spec"]["template"]["spec"]["containers"][0]
-    command = " ".join(container["command"])
-    apply_at = command.find("dev-health-worker-migrate &&")
-    check_at = command.find("dev-health-worker-migrate --check")
-    assert apply_at != -1, f"the migrator is not invoked: {command}"
-    assert check_at > apply_at, (
-        "--check must follow the apply; a check that runs first proves "
-        f"nothing about what the apply did: {command}"
-    )
+    assert "command" not in container, container.get("command")
+    assert container["args"] == ["migrate", "river", "--apply-and-check"], container.get("args")
 
 
 def test_role_passwords_never_appear_in_the_rendered_manifest() -> None:
@@ -707,36 +708,9 @@ def test_cutover_authorisation_is_absent_by_default(tmp_path: Path) -> None:
 # a break anywhere along Secret -> envFrom -> entrypoint -> binary shows up here.
 
 
-def _run_river_command(
-    job: dict, env: dict[str, str], tmp_path: Path
-) -> tuple[int, list[str], str]:
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir(exist_ok=True)
-    log = tmp_path / "river.log"
-    stub = bin_dir / "dev-health-worker-migrate"
-    stub.write_text(
-        "#!/bin/sh\n"
-        'if [ "${MIGRATION_DATABASE_URI+x}" = x ]; then seen="$MIGRATION_DATABASE_URI";'
-        ' else seen="<unset>"; fi\n'
-        'printf "%s|%s\\n" "$*" "$seen" >> "$RIVER_LOG"\n'
-        "exit 0\n",
-        encoding="utf-8",
-    )
-    stub.chmod(0o755)
-
-    command = job["spec"]["template"]["spec"]["containers"][0]["command"]
-    assert command[:2] == ["/bin/sh", "-ec"], command
-    completed = subprocess.run(
-        ["/bin/sh", "-ec", command[2]],
-        capture_output=True,
-        text=True,
-        env={"PATH": f"{bin_dir}:{os.environ['PATH']}", "RIVER_LOG": str(log), **env},
-    )
-    calls = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
-    return completed.returncode, calls, completed.stderr
-
-
 def test_weight_10_job_applies_river_with_the_elevated_dsn(tmp_path: Path) -> None:
+    """The Secret the Job reads carries the elevated DSN under the key dho
+    prefers, so `--apply-and-check` never falls back to POSTGRES_URI here."""
     docs = _docs_from_values(_values(river_migrate=True), tmp_path)
     jobs = {d["metadata"]["name"]: d for d in docs if d.get("kind") == "Job"}
     secrets = {d["metadata"]["name"]: d for d in docs if d.get("kind") == "Secret"}
@@ -748,21 +722,11 @@ def test_weight_10_job_applies_river_with_the_elevated_dsn(tmp_path: Path) -> No
         if "secretRef" in item
     ]
     env = dict(secrets[source]["stringData"])
-
-    code, calls, stderr = _run_river_command(jobs[_RIVER], env, tmp_path)
-    assert code == 0, f"{stderr}\n{calls}"
-    assert len(calls) == 2, (
-        "the migrator must be applied and then re-checked; a single call means "
-        f"one of the two silently vanished: {calls}"
+    assert env.get("MIGRATION_DATABASE_URI") == _MIGRATION_DSN, (
+        "the weight-10 Job does not see the elevated DSN, so River would run "
+        f"against the wrong database or refuse: {sorted(env)}"
     )
-    applied, checked = calls
-    assert applied.startswith("|"), f"the apply must take no arguments: {applied!r}"
-    assert checked.startswith("--check|"), f"the check must be second: {checked!r}"
-    for line in calls:
-        assert line.endswith(f"|{_MIGRATION_DSN}"), (
-            "the weight-10 Job did not see the elevated DSN, so River would "
-            f"either no-op or run against the wrong database: {line!r}"
-        )
+    assert container["args"] == ["migrate", "river", "--apply-and-check"]
 
 
 # --- what riverMigrate.enabled=false actually means --------------------------
@@ -778,7 +742,7 @@ def test_weight_10_job_applies_river_with_the_elevated_dsn(tmp_path: Path) -> No
 #     safe where the roles already exist -- an upgrade, not a fresh install.
 #   * the Secret carries no URI -> the weight-0 Job is Alembic + ClickHouse
 #     only and NOTHING applies the River schema. The operator has to run
-#     dev-health-worker-migrate out of band.
+#     `dho migrate river --apply-and-check` out of band.
 
 
 def _values_no_dsn(river_migrate: bool) -> str:

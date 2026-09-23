@@ -982,30 +982,31 @@ services:
     # built today. Two consequences, both deliberate: with no pin and no
     # prior build there is nothing for `--no-build` to run, and `:local`
     # is shared across compose projects on one host.
-    image: ${DEV_HEALTH_IMAGE:-ghcr.io/full-chaos/dev-hops-runner:local}
+    # The Go operator image (entrypoint dho, distroless): `dho migrate river
+    # --apply-and-check` applies the pinned River schema and grant posture,
+    # then checks the schema on a fresh connection, in one process -- the
+    # pair this service used to run through /bin/sh.
+    image: ${DEV_HEALTH_GO_OPERATOR_IMAGE:-ghcr.io/full-chaos/dev-health-go-operator:local}
     build:
       context: .
-      dockerfile: docker/Dockerfile
-      target: runner
+      dockerfile: docker/go-worker.Dockerfile
+      target: operator
       args:
-        SETUPTOOLS_SCM_PRETEND_VERSION: 0.0.0
         COMMIT: ${COMMIT:-unknown}
         BUILD_TIME: ${BUILD_TIME:-1970-01-01T00:00:00Z}
     restart: "no"
     read_only: true
+    user: "65532:65532"
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     tmpfs: [/tmp]
-    entrypoint:
-      - /bin/sh
-      - -ec
-      - dev-health-worker-migrate && dev-health-worker-migrate --check
+    command: [migrate, river, --apply-and-check]
     environment:
       # CHAOS-5568: component form. The shell fallback this replaced
       # (`postgresql://$$POSTGRES_USER:$$POSTGRES_PASSWORD@$$POSTGRES_HOST:5432/$$POSTGRES_DB`)
       # was exactly the unescaped-password class the config package's
       # component form fixes, one shell layer further out than the Go
-      # binaries themselves -- `cmd/dev-health-worker-migrate`'s own
+      # binaries themselves -- `internal/rivermigrate`'s
       # `resolveMigrationDatabaseURI` now assembles this DSN internally
       # from these fields via stdlib `net/url`, so no component needs
       # encoding and no shell fallback is needed. Same
@@ -1027,7 +1028,7 @@ services:
       # role/password, unlike go-river-provision just above it -- overriding
       # RIVER_COORDINATOR_DATABASE_ROLE away from its default then failed
       # migration ("River schema or privilege policy was not applied") since
-      # dev-health-worker-migrate applied the privilege policy against the
+      # the River migrator applied the privilege policy against the
       # unexported default name instead. The deleted
       # deploy/go-workers/compose-go-workers.yml overlay forwarded this.
       RIVER_COORDINATOR_DATABASE_ROLE: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}

@@ -156,7 +156,7 @@ ORDER BY sequence_name
 // counterpart of rolePostureQuery's "no table-wide privilege leakage on a
 // column-scoped table" predicate (domain_authorization.go's
 // column_scoped_relations clause). It exists for CHAOS-4675: go-river-migrate's
-// executed-proof gate (checkExecutedGrantPosture, cmd/dev-health-worker-migrate)
+// executed-proof gate (checkExecutedGrantPosture, internal/rivermigrate)
 // calls DiagnoseRolePosture from an admin connection that cannot open a session
 // AS the runtime role, so it cannot call CheckRolePosture/rolePostureQuery
 // itself (that query is deliberately current_user-bound). Before this query
@@ -441,7 +441,7 @@ func diagnoseTablePosture(
 
 // diagnoseSequencePosture re-derives, per required sequence, whether it
 // exists and whether the given role currently holds USAGE on it. Added for
-// CHAOS-4261: the executed-proof gate in cmd/dev-health-worker-migrate
+// CHAOS-4261: the executed-proof gate in internal/rivermigrate
 // (checkExecutedGrantPosture) called DiagnoseRolePosture expecting it to
 // prove the FULL declared posture, but RequiredSequences (coordinatorPosture's
 // worker_operator_audits_id_seq) was silently never checked -- a database

@@ -29,7 +29,10 @@ type CredentialAmbiguousError struct {
 }
 
 func (e *CredentialAmbiguousError) Error() string {
-	return fmt.Sprintf("multiple active credentials exist for provider %q (%s); specify credential_name or credential_id",
+	// r2 (round 1, P3): exact string match to AmbiguousCredentialError.
+	// __init__ (integration_credentials.py:125-131) -- uppercase "Multiple",
+	// single-quoted provider name, not Go's %q double quotes.
+	return fmt.Sprintf("Multiple active credentials exist for provider '%s' (%s); specify credential_name or credential_id",
 		e.Provider, strings.Join(e.Names, ", "))
 }
 
@@ -74,15 +77,28 @@ FROM integration_credentials WHERE org_id = $1 AND provider = $2 AND is_active =
 	var matches []EncryptedCredential
 	for rows.Next() {
 		var record EncryptedCredential
-		var cipherText string
+		// r2 (round 1, P1): credentials_encrypted scans into a NULLABLE
+		// *string, not string. Python's list_by_provider (used by
+		// resolve_with_fallback's ambiguity check,
+		// integration_credentials.py:358,283) selects every row for
+		// org+provider with no filter on credentials_encrypted at all -- a
+		// row with a NULL or empty ciphertext is still a candidate for
+		// ambiguity detection, only failing later when something actually
+		// tries to decrypt it. Scanning NULL into a non-nullable Go string
+		// previously errored the WHOLE query (ErrCredentialNotFound,
+		// discarding every already-collected match too), and an
+		// empty-string ciphertext was silently dropped from `matches`
+		// outright -- both let an ambiguous set of active rows resolve to
+		// a single winner (or "not found") where Python raises
+		// AmbiguousCredentialError.
+		var cipherText *string
 		var configJSON []byte
 		if err := rows.Scan(&record.ID, &record.Provider, &record.Name, &record.Active, &cipherText, &configJSON); err != nil {
 			return EncryptedCredential{}, ErrCredentialNotFound
 		}
-		if !record.Active || cipherText == "" {
-			continue
+		if cipherText != nil && *cipherText != "" {
+			record.Ciphertext = secrets.NewValue(*cipherText)
 		}
-		record.Ciphertext = secrets.NewValue(cipherText)
 		record.Config = map[string]string{}
 		if err := decodeConfig(configJSON, record.Config); err != nil {
 			return EncryptedCredential{}, ErrCredentialInvalid

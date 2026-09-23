@@ -73,6 +73,21 @@ func insertCredential(t *testing.T, ctx context.Context, pool *pgxpool.Pool, id,
 	}
 }
 
+// insertCredentialNullCiphertext inserts an active row with a SQL NULL
+// credentials_encrypted -- a shape insertCredential's non-nullable string
+// param cannot express (Go can bind "" for an empty string, never NULL,
+// through that signature).
+func insertCredentialNullCiphertext(t *testing.T, ctx context.Context, pool *pgxpool.Pool, id, orgID, provider, name string) {
+	t.Helper()
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO public.integration_credentials (id, org_id, provider, name, is_active, credentials_encrypted, config)
+		 VALUES ($1::uuid, $2, $3, $4, true, NULL, '{}')`,
+		id, orgID, provider, name,
+	); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestResolveEncryptedAmbiguousMatchNamesEveryCandidate is CHAOS-6351's own
 // reproduction: three active credentials for one provider, no "default"
 // among them, no credential_id/credential_name given. Before this fix, the
@@ -110,7 +125,7 @@ func TestResolveEncryptedAmbiguousMatchNamesEveryCandidate(t *testing.T) {
 			t.Fatalf("Names = %v, want %v", ambiguous.Names, want)
 		}
 	}
-	wantMsg := `multiple active credentials exist for provider "github" (alpha, bravo, zulu); specify credential_name or credential_id`
+	wantMsg := `Multiple active credentials exist for provider 'github' (alpha, bravo, zulu); specify credential_name or credential_id`
 	if ambiguous.Error() != wantMsg {
 		t.Errorf("Error() = %q, want %q", ambiguous.Error(), wantMsg)
 	}
@@ -175,5 +190,59 @@ func TestResolveEncryptedNotFoundStaysNotFound(t *testing.T) {
 	_, err := repo.ResolveEncrypted(ctx, TenantScope{OrgID: "org-1", Provider: "linear", IntegrationID: "admin-discover"})
 	if !errors.Is(err, ErrCredentialNotFound) {
 		t.Errorf("err = %v, want ErrCredentialNotFound", err)
+	}
+}
+
+// TestResolveEncryptedActiveCredentialWithNullCiphertextStillCountsAsCandidate
+// is CHAOS-6351's round-1 P1 reproduction: Python's list_by_provider
+// (integration_credentials.py:358) selects every org+provider row with no
+// filter on credentials_encrypted at all, so an active row with a NULL
+// ciphertext still counts toward AmbiguousCredentialError's candidate set
+// (integration_credentials.py:283,287). Before this fix, scanning a SQL
+// NULL into a non-nullable Go string errored the whole query
+// (ErrCredentialNotFound), so this exact two-row shape resolved to
+// "not found" instead of ambiguous.
+func TestResolveEncryptedActiveCredentialWithNullCiphertextStillCountsAsCandidate(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	pool := startCredentialsPool(t, ctx)
+
+	insertCredentialNullCiphertext(t, ctx, pool, "00000000-0000-0000-0000-000000000031", "org-1", "github", "alpha-null")
+	insertCredential(t, ctx, pool, "00000000-0000-0000-0000-000000000032", "org-1", "github", "zulu-valid", true, "v1:a")
+
+	repo := PostgresCredentialRepository{Pool: pool}
+	_, err := repo.ResolveEncrypted(ctx, TenantScope{OrgID: "org-1", Provider: "github", IntegrationID: "admin-discover"})
+	var ambiguous *CredentialAmbiguousError
+	if !errors.As(err, &ambiguous) {
+		t.Fatalf("expected *CredentialAmbiguousError, got %T: %v", err, err)
+	}
+	want := []string{"alpha-null", "zulu-valid"}
+	if len(ambiguous.Names) != len(want) || ambiguous.Names[0] != want[0] || ambiguous.Names[1] != want[1] {
+		t.Fatalf("Names = %v, want %v", ambiguous.Names, want)
+	}
+}
+
+// TestResolveEncryptedActiveCredentialWithEmptyCiphertextStillCountsAsCandidate
+// is the empty-string sibling of the NULL case above: previously dropped
+// from `matches` entirely by the `cipherText == ""` skip, so this exact
+// two-row shape also resolved to a single silent winner instead of
+// ambiguous.
+func TestResolveEncryptedActiveCredentialWithEmptyCiphertextStillCountsAsCandidate(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	pool := startCredentialsPool(t, ctx)
+
+	insertCredential(t, ctx, pool, "00000000-0000-0000-0000-000000000041", "org-1", "github", "alpha-empty", true, "")
+	insertCredential(t, ctx, pool, "00000000-0000-0000-0000-000000000042", "org-1", "github", "zulu-valid", true, "v1:a")
+
+	repo := PostgresCredentialRepository{Pool: pool}
+	_, err := repo.ResolveEncrypted(ctx, TenantScope{OrgID: "org-1", Provider: "github", IntegrationID: "admin-discover"})
+	var ambiguous *CredentialAmbiguousError
+	if !errors.As(err, &ambiguous) {
+		t.Fatalf("expected *CredentialAmbiguousError, got %T: %v", err, err)
+	}
+	want := []string{"alpha-empty", "zulu-valid"}
+	if len(ambiguous.Names) != len(want) || ambiguous.Names[0] != want[0] || ambiguous.Names[1] != want[1] {
+		t.Fatalf("Names = %v, want %v", ambiguous.Names, want)
 	}
 }

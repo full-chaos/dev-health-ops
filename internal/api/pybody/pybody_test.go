@@ -216,15 +216,22 @@ func TestOptionalBoolLaxCoercionMatchesPydantic(t *testing.T) {
 			t.Errorf("%s: value=%v present=%v errs=%v, want %v with no error", c.json, value, present, errs, c.want)
 		}
 	}
-	reject := []string{`2`, `-1`, `0.5`, `"yep"`, `""`, `[]`, `{}`, `" true "`}
-	for _, json := range reject {
+	// pydantic reports bool_parsing for a str, int or integral float it
+	// cannot interpret, and bool_type for any other value.
+	reject := []struct{ json, want string }{
+		{`2`, "bool_parsing"}, {`-1`, "bool_parsing"}, {`2.0`, "bool_parsing"}, {`"yep"`, "bool_parsing"},
+		{`""`, "bool_parsing"}, {`" true "`, "bool_parsing"}, {`"1.0"`, "bool_parsing"},
+		{`0.5`, "bool_type"}, {`1e300`, "bool_type"}, {`1000000000000000000000000000000`, "bool_type"},
+		{`[]`, "bool_type"}, {`{}`, "bool_type"},
+	}
+	for _, c := range reject {
 		var errs Errors
-		object, ok := errs.Object(Body{Value: mustDecode(t, `{"b":`+json+`}`)})
+		object, ok := errs.Object(Body{Value: mustDecode(t, `{"b":`+c.json+`}`)})
 		if !ok {
-			t.Fatalf("%s: object refused", json)
+			t.Fatalf("%s: object refused", c.json)
 		}
-		if _, present := errs.OptionalBool(object, "b"); present || len(errs) != 1 || errs[0].Type != "bool_type" {
-			t.Errorf("%s: present=%v errs=%v, want one bool_type error", json, present, errs)
+		if _, present := errs.OptionalBool(object, "b"); present || len(errs) != 1 || errs[0].Type != c.want {
+			t.Errorf("%s: present=%v errs=%v, want one %s error", c.json, present, errs, c.want)
 		}
 	}
 }

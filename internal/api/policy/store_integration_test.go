@@ -151,6 +151,13 @@ func TestAPIRoleEndToEnd(t *testing.T) {
 			t.Fatalf("%s: %v", statement, err)
 		}
 	}
+	// Every other table the api posture declares (other route areas' tables)
+	// gets a stand-in, so readiness can hold exactly the posture.
+	for _, table := range postgres.APIPosture().RequiredTables {
+		if _, err := admin.Exec(ctx, "CREATE TABLE IF NOT EXISTS public."+table.TableName+" (id uuid PRIMARY KEY)"); err != nil {
+			t.Fatalf("stand-in %s: %v", table.TableName, err)
+		}
+	}
 
 	// 1. Migration before the api role exists: succeeds, grants nothing to it.
 	provision(t, ctx, instance.URI, roles, "")

@@ -199,6 +199,9 @@ func TestConfigureRegistersTheDatabaseCheckOnlyWhenConfigured(t *testing.T) {
 	cfg := config.Config{
 		APIAddress:     "127.0.0.1:0",
 		APIDatabaseURI: secrets.NewValue("postgres://user:pass@127.0.0.1:1/nonexistent"),
+		// With a database the api authenticates callers, so it needs the key.
+		APIJWTSecret: secrets.NewValue(strings.Repeat("fixture-key-", 3)),
+		APIJWTIssuer: "dev-health-ops", APIJWTAudience: "dev-health-api",
 	}
 	components, err := configure(context.Background(), cfg, registry, quietLogger())
 	if err != nil {

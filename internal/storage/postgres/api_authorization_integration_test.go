@@ -86,7 +86,13 @@ func acrEntitlementTables(t *testing.T, ctx context.Context, admin *pgxpool.Pool
 		}
 	}
 	// The grants derive from apiPosture() itself, as the River migration's
-	// api leg derives its GRANT statements.
+	// api leg derives its GRANT statements; a declared table this helper
+	// does not model gets a stand-in.
+	for _, table := range apiPosture().RequiredTables {
+		if _, err := admin.Exec(ctx, "CREATE TABLE IF NOT EXISTS "+table.TableName+" (id uuid PRIMARY KEY)"); err != nil {
+			t.Fatalf("stand-in %s: %v", table.TableName, err)
+		}
+	}
 	for _, table := range apiPosture().RequiredTables {
 		privileges := "SELECT"
 		if table.AllowInsert {

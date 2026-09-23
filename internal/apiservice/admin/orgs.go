@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -31,8 +32,15 @@ func (h *handlers) orgRoutes() []httpapi.Route {
 		{Method: http.MethodDelete, Pattern: orgsPrefix + "/orgs/{org_id}", Handler: h.guard.Wrap(policy.Superuser, http.HandlerFunc(h.deleteOrganizationStub))},
 		{Method: http.MethodGet, Pattern: orgsPrefix + "/orgs/{org_id}/members", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.listMembers))},
 		{Method: http.MethodPost, Pattern: orgsPrefix + "/orgs/{org_id}/members", Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.addMember))},
+		// create_org_invite carries @limiter.limit("10/hour", ...) in Python
+		// -- a live round found this registered at 1/second, burst 10 (a
+		// FAR looser limit: 10 requests in ~10 seconds succeed here, where
+		// Python 429s on the 11th within the hour). RateLimitPerSecond is
+		// the token-bucket refill rate a "10/hour" cap needs: 10 tokens
+		// per 3600 seconds, burst 10 (a full hour's allowance available at
+		// once, same as slowapi's own window starting full).
 		{Method: http.MethodPost, Pattern: orgsPrefix + "/orgs/{org_id}/invites",
-			Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.createOrgInvite)), RateLimitPerSecond: 1, RateLimitBurst: 10},
+			Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.createOrgInvite)), RateLimitPerSecond: 10.0 / 3600.0, RateLimitBurst: 10},
 		{Method: http.MethodPatch, Pattern: orgsPrefix + "/orgs/{org_id}/members/{user_id}", Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.updateMemberRole))},
 		{Method: http.MethodDelete, Pattern: orgsPrefix + "/orgs/{org_id}/members/{user_id}", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.removeMember))},
 		{Method: http.MethodPost, Pattern: orgsPrefix + "/orgs/{org_id}/transfer-ownership", Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.transferOwnership))},
@@ -172,20 +180,48 @@ func (h *handlers) createOrganization(w http.ResponseWriter, r *http.Request) {
 	body := bodyFromContext(ctx)
 	var errs pybody.Errors
 	object, ok := errs.Object(body)
-	var name, slug, description, tier, ownerUserID string
+	var name, slug, description, ownerUserID string
+	var settingsObj *pyjson.Object
+	tier := "community"
 	if ok {
 		name, _ = errs.RequiredString(object, "name", 1, 100)
+		// OrganizationCreate.validate_name: pydantic's own field_validator
+		// strips the (already min_length=1-checked) name and rejects an
+		// all-whitespace result -- distinct from the min_length check,
+		// which only catches a literally empty string. Verified live: the
+		// error is "value_error" with ctx {"error": {}} (a ValueError
+		// object jsonable_encoder cannot serialize further), input is the
+		// UNTRIMMED raw value.
+		trimmedName := strings.TrimSpace(name)
+		if trimmedName == "" && name != "" {
+			errCtx := pyjson.NewObject()
+			errCtx.Set("error", pyjson.NewObject())
+			errs = append(errs, pybody.Error{Type: "value_error", Loc: []pyjson.Value{"body", "name"},
+				Msg: "Value error, Workspace name is required", Input: name, Ctx: errCtx})
+		} else {
+			name = trimmedName
+		}
 		slug, _ = errs.OptionalString(object, "slug", 0, 0)
 		description, _ = errs.OptionalString(object, "description", 0, 0)
-		tier, _ = errs.OptionalString(object, "tier", 0, 0)
+		// tier is a pydantic DEFAULT (`str = "community"`), not Optional:
+		// absent applies the default, a present explicit value (including
+		// "") is stored verbatim, and a present null is a type error --
+		// same DefaultedString shape auth_provider already uses.
+		if value, present := errs.DefaultedString(object, "tier", 0, 0); present {
+			tier = value
+		}
 		ownerUserID, _ = errs.OptionalString(object, "owner_user_id", 0, 0)
+		// settings is ALSO a pydantic default (`dict[str, Any] =
+		// Field(default_factory=dict)`), never Optional: absent -> {},
+		// present non-object (including null) -> dict_type error. A live
+		// round found this field silently dropped and always stored as {}.
+		if value, present := errs.DefaultedObject(object, "settings"); present {
+			settingsObj = value
+		}
 	}
 	if len(errs) > 0 {
 		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
 		return
-	}
-	if tier == "" {
-		tier = "community"
 	}
 	if slug == "" {
 		slug = slugify(name)
@@ -201,14 +237,37 @@ func (h *handlers) createOrganization(w http.ResponseWriter, r *http.Request) {
 	if tier != "community" {
 		managedBy = "manual"
 	}
+	settingsBytes := []byte("{}")
+	if settingsObj != nil {
+		encoded, err := pyjson.Marshal(settingsObj)
+		if err != nil {
+			h.logger.ErrorContext(ctx, "admin: encode settings failed", "error", err)
+			policy.WriteInternal(w)
+			return
+		}
+		settingsBytes = encoded
+	}
 	org := &organization{
 		ID: uuid.New(), Slug: slug, Name: name, Tier: tier, ManagedBy: managedBy, IsActive: true,
-		Settings: []byte("{}"),
+		Settings: settingsBytes,
 	}
 	if description != "" {
 		org.Description = &description
 	}
-	if err := h.store.insertOrganization(ctx, org); err != nil {
+
+	// OrganizationService.create: the org row and its owner membership (if
+	// any) are one SQLAlchemy session, durable only when the router's
+	// commit runs -- a failed owner-membership insert must not leave a
+	// committed, ownerless organization behind.
+	tx, txErr := h.store.Pool.Begin(ctx)
+	if txErr != nil {
+		h.logger.ErrorContext(ctx, "admin: create organization begin tx failed", "error", txErr)
+		policy.WriteInternal(w)
+		return
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if err := h.store.insertOrganizationTx(ctx, tx, org); err != nil {
 		h.logger.ErrorContext(ctx, "admin: create organization failed", "error", err)
 		policy.WriteInternal(w)
 		return
@@ -216,13 +275,19 @@ func (h *handlers) createOrganization(w http.ResponseWriter, r *http.Request) {
 	if ownerUserID != "" {
 		ownerID, parseErr := uuid.Parse(ownerUserID)
 		if parseErr == nil {
-			if _, err := h.store.insertMembership(ctx, org.ID, ownerID, "owner", nil); err != nil {
+			if _, err := h.store.insertMembershipTx(ctx, tx, org.ID, ownerID, "owner", nil); err != nil {
 				h.logger.ErrorContext(ctx, "admin: create organization owner membership failed", "error", err)
 				policy.WriteInternal(w)
 				return
 			}
 		}
 	}
+	if err := tx.Commit(ctx); err != nil {
+		h.logger.ErrorContext(ctx, "admin: create organization commit failed", "error", err)
+		policy.WriteInternal(w)
+		return
+	}
+
 	obj, err := organizationResponseObject(org)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "admin: encode organization failed", "error", err)

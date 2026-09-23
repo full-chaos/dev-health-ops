@@ -58,8 +58,11 @@ func apiPosture() RolePosture {
 			{"feature_flags", false, false, false},
 			// Per-org override for that same feature.
 			{"org_feature_overrides", false, false, false},
-			// License tier + features_override JSON.
-			{"org_licenses", false, false, false},
+			// License tier + features_override JSON. The admin org PATCH
+			// route syncs an existing row's tier/managed_by on an actual
+			// tier change (OrganizationService._sync_license_tier);
+			// update added.
+			{"org_licenses", false, true, false},
 			// external-ingest (CHAOS-6246): bearer-token auth resolves the
 			// token row and bumps last_used_at/last_used_ip on every
 			// request that reaches a scope check (auth.go's bumpLastUsed).

@@ -44,6 +44,12 @@ func TestOrgCRUDMatchesThePythonAPI(t *testing.T) {
 			}
 			exec(`INSERT INTO organizations (id, slug, name, tier, managed_by, is_active, created_at, updated_at)
 VALUES ($1, 'venue-org-3', 'Venue Org 3', 'community', 'stripe', true, now(), now())`, orgID)
+			// An existing org_licenses row for the "patch org tier" case:
+			// _sync_license_tier only updates a PRE-EXISTING row, never
+			// inserts one, so this seed is required for that case to
+			// exercise the sync path at all.
+			exec(`INSERT INTO org_licenses (id, org_id, tier, is_valid, license_type, managed_by, created_at, updated_at)
+VALUES ($1, $2, 'community', true, 'saas', 'stripe', now(), now())`, uuid.New(), orgID)
 			for _, row := range []struct {
 				id    uuid.UUID
 				email string
@@ -79,14 +85,38 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), orgID, newMembe
 	requests := []venueoracle.Request{
 		// Organizations (superuser only).
 		{Name: "list orgs", Method: "GET", Path: "/api/v1/admin/orgs", Headers: authHeaders("super")},
+		// An explicitly empty int query value is present, not absent --
+		// FastAPI 422s it, it does not fall back to the default. A live
+		// round found Go treating "limit=" as absent.
+		{Name: "list orgs empty limit", Method: "GET", Path: "/api/v1/admin/orgs?limit=", Headers: authHeaders("super")},
+		// FastAPI's bool query coercion is case-insensitive ("YeS" is
+		// True) -- a live round found Go's exact-case switch rejecting it.
+		{Name: "list orgs mixed-case bool", Method: "GET", Path: "/api/v1/admin/orgs?active_only=YeS", Headers: authHeaders("super")},
 		{Name: "get org", Method: "GET", Path: "/api/v1/admin/orgs/" + orgID.String(), Headers: authHeaders("super")},
 		{Name: "get org as non-superuser refused", Method: "GET", Path: "/api/v1/admin/orgs/" + orgID.String(), Headers: authHeaders("owner")},
 		{Name: "create org", Method: "POST", Path: "/api/v1/admin/orgs", Headers: jsonHeaders("super"),
 			Body: venueoracle.B64(`{"name":"A New Org"}`)},
+		// OrganizationCreate.settings: dict[str, Any] = Field(default_factory=dict)
+		// -- a present object is stored verbatim, never dropped.
+		{Name: "create org with settings", Method: "POST", Path: "/api/v1/admin/orgs", Headers: jsonHeaders("super"),
+			Body: venueoracle.B64(`{"name":"Org With Settings","settings":{"flag":true}}`)},
+		// validate_name: pydantic strips the name and rejects an
+		// all-whitespace result -- a live round found Go accepting this.
+		{Name: "create org whitespace name", Method: "POST", Path: "/api/v1/admin/orgs", Headers: jsonHeaders("super"),
+			Body: venueoracle.B64(`{"name":"   "}`)},
+		// OrganizationService.create inserts the org and its owner
+		// membership in ONE session/transaction -- a valid but nonexistent
+		// owner_user_id fails the membership insert, and the org insert
+		// must not survive that failure either. A live round found Go
+		// leaving a committed, ownerless org behind.
+		{Name: "create org owner insert fails", Method: "POST", Path: "/api/v1/admin/orgs", Headers: jsonHeaders("super"),
+			Body: venueoracle.B64(fmt.Sprintf(`{"name":"Orphan Owner Org","owner_user_id":%q}`, uuid.New().String()))},
 		{Name: "patch org", Method: "PATCH", Path: "/api/v1/admin/orgs/" + orgID.String(), Headers: jsonHeaders("super"),
 			Body: venueoracle.B64(`{"description":"updated description"}`)},
 		{Name: "patch org not found", Method: "PATCH", Path: "/api/v1/admin/orgs/" + uuid.New().String(), Headers: jsonHeaders("super"),
 			Body: venueoracle.B64(`{"description":"x"}`)},
+		{Name: "patch org tier", Method: "PATCH", Path: "/api/v1/admin/orgs/" + orgID.String(), Headers: jsonHeaders("super"),
+			Body: venueoracle.B64(`{"tier":"enterprise"}`)},
 
 		// Members.
 		{Name: "list members", Method: "GET", Path: "/api/v1/admin/orgs/" + orgID.String() + "/members", Headers: authHeaders("owner")},
@@ -115,6 +145,26 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), orgID, newMembe
 		},
 	})
 	t.Log(receipt)
+
+	// Finding: OrganizationService.create's org insert and its owner
+	// membership insert are one transaction -- a failed owner insert (a
+	// valid but nonexistent owner_user_id) must leave ZERO matching
+	// organizations behind on both planes, never a committed orphan.
+	orphanQuery := `SELECT count(*) FROM organizations WHERE name = 'Orphan Owner Org'`
+	sourceOrphans := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), orphanQuery)
+	goOrphans := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), orphanQuery)
+	if sourceOrphans != goOrphans {
+		t.Errorf("orphan organization count differs after a failed owner insert:\n python: %s\n go:     %s", sourceOrphans, goOrphans)
+	}
+
+	// Finding: a tier PATCH that actually changes the tier must sync a
+	// PRE-EXISTING org_licenses row's own tier/managed_by, on both planes.
+	licenseQuery := fmt.Sprintf(`SELECT tier, managed_by FROM org_licenses WHERE org_id = '%s'`, orgID)
+	sourceLicense := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), licenseQuery)
+	goLicense := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), licenseQuery)
+	if sourceLicense != goLicense {
+		t.Errorf("org_licenses row differs after a tier patch:\n python: %s\n go:     %s", sourceLicense, goLicense)
+	}
 
 	// transfer-ownership is NOT diffed against Python: it is the one ruled,
 	// intentional shape divergence in this PR (team-lead: "Go serves the

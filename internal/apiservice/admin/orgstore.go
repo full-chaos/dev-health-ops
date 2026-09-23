@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 )
@@ -81,17 +82,37 @@ func (s pgStore) listOrganizations(ctx context.Context, limit, offset int, activ
 // by the caller before calling this, matching the Python service's own
 // get_by_slug-then-suffix dance).
 func (s pgStore) insertOrganization(ctx context.Context, org *organization) error {
+	return s.insertOrganizationTx(ctx, s.Pool, org)
+}
+
+// insertOrganizationTx is insertOrganization over an explicit Execer (a
+// *pgxpool.Pool or a pgx.Tx) -- createOrganization uses this with a tx so
+// the org row and its owner membership commit atomically, matching
+// OrganizationService.create's one SQLAlchemy session (session.add(org);
+// flush; membership_svc.add_member(...) in the SAME session -- both
+// durable only when the router's own session.commit() runs, never
+// separately).
+func (s pgStore) insertOrganizationTx(ctx context.Context, exec pgExecer, org *organization) error {
 	now := s.now().UTC()
 	org.CreatedAt, org.UpdatedAt = now, now
 	settings := org.Settings
 	if len(settings) == 0 {
 		settings = []byte("{}")
 	}
-	_, err := s.Pool.Exec(ctx, `
+	_, err := exec.Exec(ctx, `
 INSERT INTO organizations (id, slug, name, description, settings, tier, managed_by, is_active, created_at, updated_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
 		org.ID, org.Slug, org.Name, org.Description, settings, org.Tier, org.ManagedBy, org.IsActive, org.CreatedAt, org.UpdatedAt)
 	return err
+}
+
+// pgExecer is the Exec/QueryRow surface both *pgxpool.Pool and pgx.Tx
+// satisfy -- the same Execer-generalization shape internal/api/audit
+// already uses, so a store method can run standalone or inside a caller's
+// transaction without two hand-duplicated bodies.
+type pgExecer interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
 // orgUpdate is OrganizationUpdate: a nil field leaves the column unchanged.
@@ -123,6 +144,7 @@ func (s pgStore) updateOrganization(ctx context.Context, id uuid.UUID, patch org
 		settings = patch.Settings
 	}
 	managedBy := existing.ManagedBy
+	tierChanged := patch.Tier != nil && *patch.Tier != existing.Tier
 	if patch.Tier != nil {
 		tier = *patch.Tier
 		if tier != "community" {
@@ -135,10 +157,33 @@ func (s pgStore) updateOrganization(ctx context.Context, id uuid.UUID, patch org
 		isActive = *patch.IsActive
 	}
 	now := s.now().UTC()
-	_, err = s.Pool.Exec(ctx, `
-UPDATE organizations SET name = $2, description = $3, settings = $4, tier = $5, managed_by = $6, is_active = $7, updated_at = $8
-WHERE id = $1`, id, name, description, settings, tier, managedBy, isActive, now)
+
+	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx, `
+UPDATE organizations SET name = $2, description = $3, settings = $4, tier = $5, managed_by = $6, is_active = $7, updated_at = $8
+WHERE id = $1`, id, name, description, settings, tier, managedBy, isActive, now); err != nil {
+		return nil, err
+	}
+	// OrganizationService.update's _sync_license_tier: on an ACTUAL tier
+	// change (not merely a patch that repeats the current tier), an
+	// existing org_licenses row is kept in lockstep -- tier resolution
+	// gives OrgLicense precedence when a row exists, so an admin tier
+	// change that skips this would leave the org enforced at the OLD tier.
+	// No row means nothing to sync (resolution falls back to
+	// Organization.tier); this never INSERTs a license row.
+	if tierChanged {
+		if _, err := tx.Exec(ctx,
+			`UPDATE org_licenses SET tier = $2, managed_by = $3, updated_at = $4 WHERE org_id = $1`,
+			id, tier, managedBy, now); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
 	return s.orgByID(ctx, id)
@@ -224,7 +269,14 @@ func (s pgStore) listMemberships(ctx context.Context, orgID uuid.UUID, role *str
 var errMembershipExists = errors.New("user is already a member of this organization")
 
 func (s pgStore) insertMembership(ctx context.Context, orgID, userID uuid.UUID, role string, invitedByID *uuid.UUID) (*membership, error) {
-	existing, err := s.membershipByOrgUser(ctx, orgID, userID)
+	return s.insertMembershipTx(ctx, s.Pool, orgID, userID, role, invitedByID)
+}
+
+// insertMembershipTx is insertMembership over an explicit Execer -- see
+// insertOrganizationTx's doc comment for why createOrganization needs this.
+func (s pgStore) insertMembershipTx(ctx context.Context, exec pgExecer, orgID, userID uuid.UUID, role string, invitedByID *uuid.UUID) (*membership, error) {
+	existing, err := scanMembership(exec.QueryRow(ctx,
+		`SELECT `+membershipColumns+` FROM memberships WHERE org_id = $1 AND user_id = $2`, orgID, userID))
 	if err != nil {
 		return nil, err
 	}
@@ -234,7 +286,7 @@ func (s pgStore) insertMembership(ctx context.Context, orgID, userID uuid.UUID, 
 	now := s.now().UTC()
 	m := &membership{ID: uuid.New(), OrgID: orgID, UserID: userID, Role: role, InvitedByID: invitedByID,
 		JoinedAt: &now, CreatedAt: now, UpdatedAt: now}
-	_, err = s.Pool.Exec(ctx, `
+	_, err = exec.Exec(ctx, `
 INSERT INTO memberships (id, org_id, user_id, role, invited_by_id, joined_at, created_at, updated_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
 		m.ID, m.OrgID, m.UserID, m.Role, m.InvitedByID, m.JoinedAt, m.CreatedAt, m.UpdatedAt)

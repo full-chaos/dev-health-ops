@@ -336,6 +336,29 @@ func (e *Errors) DefaultedBool(object *pyjson.Object, name string) (bool, bool) 
 	return value, true
 }
 
+// DefaultedObject is DefaultedString/DefaultedBool's counterpart for a
+// `dict[str, Any] = Field(default_factory=dict)` field (a pydantic default,
+// not `dict | None`): present is false ONLY when the key is absent (the
+// caller applies its own default -- typically an empty *pyjson.Object --
+// in that case); an explicit null, or any present non-object value, is a
+// "dict_type" error, verified live: `settings: dict[str, Any] =
+// Field(default_factory=dict)` on `{"settings": null}` or `{"settings": 5}`
+// or `{"settings": []}` all raise dict_type ("Input should be an object"),
+// never a silent fall-back to the default.
+func (e *Errors) DefaultedObject(object *pyjson.Object, name string) (*pyjson.Object, bool) {
+	raw, ok := object.Get(name)
+	if !ok {
+		return nil, false
+	}
+	loc := []pyjson.Value{"body", name}
+	value, isObject := raw.(*pyjson.Object)
+	if !isObject {
+		*e = append(*e, Error{Type: "dict_type", Loc: loc, Msg: "Input should be an object", Input: raw})
+		return nil, false
+	}
+	return value, true
+}
+
 // OptionalInt validates one `int | None` field. present is false when the
 // field is absent or null; a non-integer present value is an "int_type"
 // pydantic error.

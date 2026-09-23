@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
@@ -124,6 +125,11 @@ type Deps struct {
 	// warning, matching org_deletion.py's own behavior when its ClickHouse
 	// client cannot connect.
 	ClickHouseDSN string
+	// Now is injectable so a test can drive an area's own clock (e.g.
+	// admin's keyed rate limiter, CHAOS-6357). Nil means time.Now, the
+	// same "nil is the production default" contract every other Now field
+	// in this codebase uses.
+	Now func() time.Time
 }
 
 // TelemetryConfig is TELEMETRY_ENDPOINT (where /telemetry/report sends) and

@@ -51,6 +51,15 @@ type Deps struct {
 	// HTTPDoer is the client the org-deletion route's PagerDuty revoke
 	// call uses; nil means http.DefaultClient.
 	HTTPDoer providerfoundation.HTTPDoer
+	// Write renders every error this area's own middleware writes directly
+	// (currently: the keyed rate limiter's 429, CHAOS-6357) -- every other
+	// error already renders through httpapi's route-level ErrorWriter, set
+	// once at Server construction (apiservice.NewServer). Nil means
+	// httpapi.WriteError, which is NOT what a real deployment uses (that is
+	// apiservice.WriteError, the Python-wire-shape renderer) -- callers
+	// building a real Service always pass it; nil is a test-only default
+	// for a case that does not care about the exact body.
+	Write httpapi.ErrorWriter
 }
 
 // Routes is the admin area's route set.
@@ -69,6 +78,10 @@ func Routes(deps Deps) []httpapi.Route {
 	if httpDoer == nil {
 		httpDoer = http.DefaultClient
 	}
+	write := deps.Write
+	if write == nil {
+		write = httpapi.WriteError
+	}
 	area := &handlers{
 		store:         store,
 		audit:         auditWriter,
@@ -79,6 +92,9 @@ func Routes(deps Deps) []httpapi.Route {
 		decryptor:     deps.Decryptor,
 		pagerDuty:     deps.PagerDuty,
 		httpDoer:      httpDoer,
+		write:         write,
+		// ADMIN_PASSWORD_LIMIT = "5/hour" (rate_limit.py).
+		adminPasswordRateLimit: httpapi.NewKeyedLimiter(5, time.Hour, deps.Now),
 	}
 	return area.routes()
 }
@@ -107,4 +123,16 @@ type handlers struct {
 	decryptor     providerfoundation.FernetDecryptor
 	pagerDuty     providerfoundation.PagerDutyRevokeConfig
 	httpDoer      providerfoundation.HTTPDoer
+	// write renders this area's own directly-written errors (the keyed
+	// rate limiter's 429) in the same wire shape every other error uses.
+	write httpapi.ErrorWriter
+	// adminPasswordRateLimit is setUserPassword's keyed rate limiter
+	// (CHAOS-6357): fixed window, per (authenticated admin, exact resolved
+	// path) -- the Go equivalent of users.py's
+	// `@limiter.limit(ADMIN_PASSWORD_LIMIT, key_func=get_admin_user_key)`.
+	// A route needing a DIFFERENT limit/window gets its own
+	// *httpapi.KeyedLimiter field: one instance holds one (limit, window)
+	// pair for its whole lifetime, so distinct limits are distinct
+	// instances, never one shared limiter reconfigured per call.
+	adminPasswordRateLimit *httpapi.KeyedLimiter
 }

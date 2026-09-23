@@ -183,6 +183,8 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 			Decryptor:     deps.Decryptor,
 			PagerDuty:     deps.PagerDuty,
 			HTTPDoer:      deps.HTTPDoer,
+			Now:           deps.Now,
+			Write:         WriteError,
 		})...)
 	}
 	routes = append(routes, webhookintake.Routes(webhookintake.Deps{

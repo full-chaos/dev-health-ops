@@ -16,6 +16,21 @@ import (
 
 const usersPrefix = "/api/v1/admin"
 
+// adminUserKey is the Go equivalent of rate_limit.py's get_admin_user_key:
+// the CALLING admin's own identity, not the target of the request. It runs
+// only where a Guard has already authenticated the caller (policy.UserFrom
+// is populated), which every route this key_func is applied to already
+// requires -- unlike Python's version, it never falls back to an IP key,
+// because httpapi.KeyedRateLimit is wired inside the authenticated part of
+// the chain and so never sees an unauthenticated request at all.
+func adminUserKey(r *http.Request) string {
+	user := policy.UserFrom(r.Context())
+	if user == nil {
+		return ""
+	}
+	return "admin-user:" + user.ID.String()
+}
+
 func (h *handlers) userRoutes() []httpapi.Route {
 	return []httpapi.Route{
 		{Method: http.MethodGet, Pattern: usersPrefix + "/users", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.listUsers))},
@@ -23,7 +38,8 @@ func (h *handlers) userRoutes() []httpapi.Route {
 		{Method: http.MethodPost, Pattern: usersPrefix + "/users", Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.createUser))},
 		{Method: http.MethodPatch, Pattern: usersPrefix + "/users/{user_id}", Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.updateUser))},
 		{Method: http.MethodPost, Pattern: usersPrefix + "/users/{user_id}/password",
-			Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.setUserPassword)), RateLimitPerSecond: 1, RateLimitBurst: 10},
+			Handler: h.bodyFirst(policy.Admin,
+				httpapi.KeyedRateLimitWith(h.adminPasswordRateLimit, adminUserKey, h.write)(http.HandlerFunc(h.setUserPassword)))},
 		{Method: http.MethodDelete, Pattern: usersPrefix + "/users/{user_id}", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.deleteUser))},
 	}
 }

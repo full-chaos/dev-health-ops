@@ -24,11 +24,12 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
-// adminDepsExtra lets a caller of startGoServer set the admin area's own
-// extra dependencies (CHAOS-6306: ClickHouseDSN/Decryptor/PagerDuty/
-// HTTPDoer) without widening every other venue test's call site -- the
-// default (no extras) leaves apiservice.Deps exactly as it was before those
-// fields existed.
+// adminDepsExtra lets a caller of startGoServer set fields on
+// apiservice.Deps (CHAOS-6306's ClickHouseDSN/Decryptor/PagerDuty/HTTPDoer;
+// CHAOS-6357's Now, to drive the admin area's keyed rate limiter's clock)
+// without widening every other venue test's call site -- the default (no
+// extras) leaves apiservice.Deps exactly as it was before those fields
+// existed.
 type adminDepsExtra func(*apiservice.Deps)
 
 // venueJWTIssuer/venueJWTAudience mirror config.go's unexported

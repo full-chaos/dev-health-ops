@@ -24,7 +24,12 @@ for raw in json.loads(sys.stdin.read()):
         BatchEnvelope.model_validate_json(base64.b64decode(raw))
         out.append("ok")
     except ValidationError as exc:
-        out.append([[e["type"], list(e["loc"]), e["msg"]] for e in exc.errors()])
+        try:
+            rendered = json.dumps([dict(e) for e in exc.errors()], ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+        except (TypeError, ValueError):
+            rendered = "UNRENDERABLE"
+        out.append({"rows": [[e["type"], list(e["loc"]), e["msg"]] for e in exc.errors()], "dicts": rendered})
+        continue
     except TypeError:
         out.append("TypeError")
 print(json.dumps(out))
@@ -145,6 +150,20 @@ func TestEnvelopeValidationMatchesLivePython(t *testing.T) {
 			got = "[" + strings.Join(rows, ", ") + "]"
 		}
 		var wantValue, gotValue any
+		var wantFull struct {
+			Rows  json.RawMessage
+			Dicts string
+		}
+		if json.Unmarshal(want[index], &wantFull) == nil && wantFull.Rows != nil {
+			if goDicts := renderDicts(errs); goDicts != wantFull.Dicts {
+				mismatches++
+				if mismatches <= 15 {
+					t.Errorf("%q dicts:\n  go     %s\n  python %s", body, goDicts, wantFull.Dicts)
+				}
+				continue
+			}
+			want[index] = wantFull.Rows
+		}
 		_ = json.Unmarshal(want[index], &wantValue)
 		if err := json.Unmarshal([]byte(got), &gotValue); err != nil {
 			t.Fatalf("render: %v %s", err, got)
@@ -195,4 +214,21 @@ func isLimitedSyntaxMessage(want, got any) bool {
 		}
 	}
 	return true
+}
+
+// renderDicts is json.dumps([dict(e) ...]) for errs, or UNRENDERABLE where
+// Python's json.dumps raises.
+func renderDicts(errs []PydanticError) string {
+	list := make([]pyjson.Value, len(errs))
+	for index, err := range errs {
+		if err.Unrenderable {
+			return "UNRENDERABLE"
+		}
+		list[index] = err.Dict()
+	}
+	text, err := pyjson.Marshal(list)
+	if err != nil {
+		return "UNRENDERABLE"
+	}
+	return string(text)
 }

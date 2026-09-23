@@ -210,6 +210,10 @@ var optionRegistry = []Option{
 		Usage: "comma-separated CORS allow-list for the api (same format as the Python api)",
 	},
 	{
+		Flag: "expected-worker-groups", Env: "EXPECTED_WORKER_GROUPS", Kind: KindString, Services: []string{APIServiceName}, Group: GroupRuntime,
+		Usage: "comma-separated worker groups /health/workers requires a live heartbeat from (unset: no Go fleet declared)",
+	},
+	{
 		Flag: "jwt-issuer", Env: "JWT_ISSUER", Kind: KindString,
 		Default: defaultJWTIssuer, Services: []string{APIServiceName}, Group: GroupRuntime,
 		Usage: "access-token issuer the api accepts (same variable as the Python api)",

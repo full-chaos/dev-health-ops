@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/deploymentcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
@@ -817,117 +818,7 @@ func dispatchMetrics(ctx context.Context, runtime *operatorRuntime, args []strin
 	case "daily-start":
 		return dispatchMetricsDailyStart(ctx, runtime, args[1:], stdout, stderr)
 	case "daily-redrive":
-		flags := quietFlags("metrics daily-redrive")
-		org := flags.String("org", "", "organization id (uuid)")
-		from := flags.String("from", "", "first target_day, inclusive (YYYY-MM-DD, UTC)")
-		to := flags.String("to", "", "last target_day, inclusive (YYYY-MM-DD, UTC)")
-		reviewEvidence := flags.String("review-evidence", "", "REQUIRED: what you verified before authorizing retry for ambiguous/stuck-executing ledger rows in this window (e.g. \"confirmed zero output rows for the affected families via ClickHouse readback\") -- see CHAOS-4304 note below")
-		if flags.Parse(args[1:]) != nil || flags.NArg() != 0 {
-			return writeError(stderr, "invalid_request")
-		}
-		if _, err := uuid.Parse(*org); err != nil {
-			return writeError(stderr, "invalid_request")
-		}
-		// codex review round 3: "ambiguous" means a progress-having failure
-		// MAY have partially written real output -- claim expiration alone
-		// is explicitly not evidence retry is safe (worker_metrics.py's own
-		// _repair_execution requires a human to pick retry_safe vs
-		// confirm_succeeded per execution, based on actual review). A bulk
-		// path cannot inspect per-row evidence, so it stays restricted to
-		// retry_safe only (never confirm_succeeded, which needs per-row
-		// output_evidence) and REQUIRES the operator to state in their own
-		// words what they verified -- no default, no generic hardcoded
-		// string. This is friction by design: an operator who has not
-		// actually checked (e.g. the redriven families' zero-row counters,
-		// or a fresh ClickHouse readback showing no output yet for these
-		// partitions) should not be able to bulk-authorize retries for
-		// non-argMax-deduped families (file_hotspots is the known example
-		// where a retry-caused duplicate silently inflates scores).
-		if strings.TrimSpace(*reviewEvidence) == "" {
-			return writeError(stderr, "invalid_request")
-		}
-		fromDay, err := time.Parse("2006-01-02", *from)
-		if err != nil {
-			return writeError(stderr, "invalid_request")
-		}
-		toDay, err := time.Parse("2006-01-02", *to)
-		if err != nil {
-			return writeError(stderr, "invalid_request")
-		}
-		if runtime.pools == nil || runtime.registry == nil {
-			return writeError(stderr, "operator_backend_unavailable")
-		}
-		store, err := daily.NewPostgresStore(runtime.pools.Domain)
-		if err != nil {
-			return writeError(stderr, "operator_backend_unavailable")
-		}
-		publisher, err := daily.NewPostgresPublisher(runtime.pools.Domain, runtime.registry)
-		if err != nil {
-			return writeError(stderr, "operator_backend_unavailable")
-		}
-		// CHAOS-4304 ordering requirement (codex review, round 1): a
-		// partition whose Python compatibility-bridge ledger row is still
-		// 'ambiguous'/stuck-'executing' answers ambiguous_refused the
-		// instant a redriven job reaches it, which Go classifies Permanent
-		// and re-terminalizes failed_permanent -- undoing this same pass's
-		// own reset. The ledger repair MUST land before any partition job
-		// publishes, not after, so this repairs the ledger through the
-		// coordinator role first, over every run this org+day window's runs (not
-		// just the ones with a currently-dispatchable partition -- a run
-		// can carry an ambiguous ledger row on a partition already
-		// terminalized failed_permanent, which step 2 below is about to
-		// reset back into the redrive set).
-		runIDs, err := store.RunningRunIDs(ctx, *org, fromDay, toDay)
-		if err != nil {
-			return writeServiceError(stderr, err)
-		}
-		redrive, err := ledgerRedriverFor(ctx, runtime)
-		if err != nil {
-			return writeRepairSetupError(stderr, err)
-		}
-		ledgerRepair, err := redriveDailyMetricsLedger(ctx, redrive, runIDs, *reviewEvidence)
-		if err != nil {
-			return writeError(stderr, "ledger_repair_unavailable")
-		}
-		// codex review round 2: a nonzero skipped_claim_active means at
-		// least one ambiguous/stuck-executing ledger row was left
-		// unrepaired because its original claim still read as active at
-		// that moment. Publishing partition jobs anyway is unsafe -- if
-		// that claim is released between this call and the redriven job
-		// reaching the bridge (a real, observed race, not hypothetical),
-		// the unrepaired row answers ambiguous_refused immediately and the
-		// partition is re-terminalized failed_permanent, undoing this same
-		// pass. Stop here and report it; the operator re-runs once those
-		// claims have settled (their own owning job will finish or expire).
-		if ledgerRepairWasIncomplete(ledgerRepair) {
-			return writeResult(stdout, stderr, map[string]any{
-				"ledger_repair": ledgerRepair,
-				"partitions":    nil,
-				"status":        "ledger_repair_incomplete_retry_after_claims_settle",
-			})
-		}
-		// codex review round 3 (residual, accepted risk): the ledger repair
-		// above takes a SNAPSHOT of run ids and repairs whatever is
-		// ambiguous/stuck-executing at that instant; a partition that
-		// starts a NEW execution and reaches ambiguous in the window
-		// between that call and this one is not covered by it, and this
-		// query will still pick it up (still 'failed'/'pending'/expired-
-		// lease at the moment it runs). Closing that window fully would
-		// need a single fenced transaction spanning both the Python ledger
-		// and the Go partition tables across a network call, which does
-		// not exist today. This is self-healing, not silent: a fresh
-		// ambiguous row here still surfaces as a 409/failed_permanent, and
-		// the NEXT invocation of this same command repairs it (the ledger
-		// repair step is idempotent by construction -- a row already
-		// 'retry_authorized' or 'succeeded' is simply not selected again).
-		outcome, err := store.RedriveStrandedPartitions(ctx, publisher, *org, fromDay, toDay, uuid.NewString())
-		if err != nil {
-			return writeServiceError(stderr, err)
-		}
-		return writeResult(stdout, stderr, map[string]any{
-			"ledger_repair": ledgerRepair,
-			"partitions":    outcome,
-		})
+		return dispatchMetricsDailyRedrive(ctx, runtime, args[1:], stdout, stderr)
 	case "daily-blocked":
 		return dispatchMetricsDailyBlocked(ctx, runtime, args[1:], stdout, stderr)
 	case "daily-finalize":
@@ -994,7 +885,8 @@ func dispatchMetricsDailyStart(ctx context.Context, runtime *operatorRuntime, ar
 	to := flags.String("to", "", "last target_day, inclusive (YYYY-MM-DD, UTC) -- defaults to --day for a single day")
 	var repoIDs stringList
 	flags.Var(&repoIDs, "repo-id", "repository uuid to scope this run to (repeatable); omit for every org repository (deferred discovery, same as the fixed-schedule fanout)")
-	if flags.Parse(args) != nil || flags.NArg() != 0 {
+	mutation := addMutationFlags(flags)
+	if flags.Parse(args) != nil || flags.NArg() != 0 || !mutation.valid(false) {
 		return writeError(stderr, "invalid_request")
 	}
 	canonicalOrg, err := canonicalUUID(*org)
@@ -1025,44 +917,47 @@ func dispatchMetricsDailyStart(ctx context.Context, runtime *operatorRuntime, ar
 	if err != nil {
 		return writeError(stderr, "invalid_request")
 	}
-	if runtime.pools == nil || runtime.registry == nil {
-		return writeError(stderr, "operator_backend_unavailable")
-	}
-	store, err := daily.NewPostgresStore(runtime.pools.Domain)
-	if err != nil {
-		return writeError(stderr, "operator_backend_unavailable")
-	}
-	publisher, err := daily.NewPostgresPublisher(runtime.pools.Domain, runtime.registry)
-	if err != nil {
-		return writeError(stderr, "operator_backend_unavailable")
-	}
-	var results []daily.ManualDailyRunOutcome
-	for cursor := fromDay; !cursor.After(toDay); cursor = cursor.AddDate(0, 0, 1) {
-		dayString := cursor.Format("2006-01-02")
-		generation := daily.ManualDailyRunGeneration(*org, dayString, repositoryIDs)
-		outcome, err := store.StartManualDailyRun(ctx, *org, dayString, generation, repositoryIDs, publisher)
-		if errors.Is(err, daily.ErrDayAlreadyCovered) {
-			// A clean, distinguishable code (codex adversarial review round
-			// 2, P1) rather than the generic operator_request_failed
-			// writeServiceError would otherwise report -- an operator
-			// re-running `metrics daily` over a range needs to see WHICH
-			// day was already covered by a different trigger, not just
-			// that the range as a whole failed partway through.
-			return writeError(stderr, "already_covered")
+	perform := func(ctx context.Context) int {
+		if runtime.pools == nil || runtime.registry == nil {
+			return writeError(stderr, "operator_backend_unavailable")
 		}
+		store, err := daily.NewPostgresStore(runtime.pools.Domain)
 		if err != nil {
-			return writeServiceError(stderr, err)
+			return writeError(stderr, "operator_backend_unavailable")
 		}
-		results = append(results, outcome)
+		publisher, err := daily.NewPostgresPublisher(runtime.pools.Domain, runtime.registry)
+		if err != nil {
+			return writeError(stderr, "operator_backend_unavailable")
+		}
+		var results []daily.ManualDailyRunOutcome
+		for cursor := fromDay; !cursor.After(toDay); cursor = cursor.AddDate(0, 0, 1) {
+			dayString := cursor.Format("2006-01-02")
+			generation := daily.ManualDailyRunGeneration(*org, dayString, repositoryIDs)
+			outcome, err := store.StartManualDailyRun(ctx, *org, dayString, generation, repositoryIDs, publisher)
+			if errors.Is(err, daily.ErrDayAlreadyCovered) {
+				// A clean, distinguishable code (codex adversarial review round
+				// 2, P1) rather than the generic operator_request_failed
+				// writeServiceError would otherwise report -- an operator
+				// re-running `metrics daily` over a range needs to see WHICH
+				// day was already covered by a different trigger, not just
+				// that the range as a whole failed partway through.
+				return writeError(stderr, "already_covered")
+			}
+			if err != nil {
+				return writeServiceError(stderr, err)
+			}
+			results = append(results, outcome)
+		}
+		return writeResult(stdout, stderr, map[string]any{
+			"days": results,
+			// deferred_discovery is true when no --repo-id was given: the run(s)
+			// cover every org repository, resolved later by the worker from live
+			// ClickHouse identity, not this command's own (possibly stale) view
+			// of the org's repository set.
+			"deferred_discovery": len(repositoryIDs) == 0,
+		})
 	}
-	return writeResult(stdout, stderr, map[string]any{
-		"days": results,
-		// deferred_discovery is true when no --repo-id was given: the run(s)
-		// cover every org repository, resolved later by the worker from live
-		// ClickHouse identity, not this command's own (possibly stale) view
-		// of the org's repository set.
-		"deferred_discovery": len(repositoryIDs) == 0,
-	})
+	return auditedWrite(ctx, runtime, stderr, mutation, joboperator.ActionMetricsDailyStart, "organization", *org, perform)
 }
 
 // dispatchMetricsDailyBlocked handles `metrics daily-blocked` (CHAOS-5040):
@@ -1186,7 +1081,8 @@ func dispatchMetricsDailyFinalize(
 	// between its bulk retry_safe path and confirm_succeeded's
 	// single-execution-only endpoint.
 	reviewEvidence := flags.String("review-evidence", "", "REQUIRED: what you verified before authorizing a repeat finalize -- for --run, state whether the run's finalize already wrote real output (e.g. \"confirmed all partitions succeeded and no user_metrics_daily/ic_landscape_rolling_30d/compounding_risk_daily rows exist yet for this run's target_day -- the prior metrics.daily_finalize job never reached CompleteFinalize\"); for --all-complete, why this sweep is authorized now (--all-complete never touches a run whose finalize already ran at least once, regardless of this text)")
-	if flags.Parse(args) != nil || flags.NArg() != 0 {
+	mutation := addMutationFlags(flags)
+	if flags.Parse(args) != nil || flags.NArg() != 0 || !mutation.valid(false) {
 		return writeError(stderr, "invalid_request")
 	}
 	if strings.TrimSpace(*reviewEvidence) == "" {
@@ -1214,101 +1110,104 @@ func dispatchMetricsDailyFinalize(
 		canonicalRun := parsedRun.String()
 		run = &canonicalRun
 	}
-	if runtime.pools == nil || runtime.registry == nil {
-		return writeError(stderr, "operator_backend_unavailable")
-	}
-	store, err := daily.NewPostgresStore(runtime.pools.Domain)
-	if err != nil {
-		return writeError(stderr, "operator_backend_unavailable")
-	}
-	publisher, err := daily.NewPostgresPublisher(runtime.pools.Domain, runtime.registry)
-	if err != nil {
-		return writeError(stderr, "operator_backend_unavailable")
-	}
-	var candidates []string
-	if hasRun {
-		candidates = []string{*run}
-	} else {
-		// CHAOS-4405 (team-lead escalation, 2026-08-28): close the residual
-		// silent-exclusion gap before scanning for stranded runs -- a
-		// finalize-redrive event whose published River job was
-		// discarded/cancelled (or never reached River at all) before
-		// ClaimFinalize ever ran for it stays 'open' forever otherwise,
-		// permanently excluding its run from the scan below. Only this
-		// branch runs it: --run never consults FindStrandedFinalizeRuns or
-		// this table's exclusion at all, so it has nothing to reconcile.
-		// riverSchema is resolved directly from the env var here (matching
-		// configureRuntime's own default) rather than threading a new field
-		// through operatorRuntime, since this is the ONLY call site that
-		// needs it.
-		riverSchema := os.Getenv("RIVER_DATABASE_SCHEMA")
-		if strings.TrimSpace(riverSchema) == "" {
-			riverSchema = "river"
+	perform := func(ctx context.Context) int {
+		if runtime.pools == nil || runtime.registry == nil {
+			return writeError(stderr, "operator_backend_unavailable")
 		}
-		if _, err := store.ReconcileOrphanedFinalizeRedriveRuns(ctx, runtime.pools.QueueControl, riverSchema); err != nil {
-			return writeServiceError(stderr, err)
+		store, err := daily.NewPostgresStore(runtime.pools.Domain)
+		if err != nil {
+			return writeError(stderr, "operator_backend_unavailable")
 		}
-		candidates, err = store.FindStrandedFinalizeRuns(ctx, *limit)
+		publisher, err := daily.NewPostgresPublisher(runtime.pools.Domain, runtime.registry)
+		if err != nil {
+			return writeError(stderr, "operator_backend_unavailable")
+		}
+		var candidates []string
+		if hasRun {
+			candidates = []string{*run}
+		} else {
+			// CHAOS-4405 (team-lead escalation, 2026-08-28): close the residual
+			// silent-exclusion gap before scanning for stranded runs -- a
+			// finalize-redrive event whose published River job was
+			// discarded/cancelled (or never reached River at all) before
+			// ClaimFinalize ever ran for it stays 'open' forever otherwise,
+			// permanently excluding its run from the scan below. Only this
+			// branch runs it: --run never consults FindStrandedFinalizeRuns or
+			// this table's exclusion at all, so it has nothing to reconcile.
+			// riverSchema is resolved directly from the env var here (matching
+			// configureRuntime's own default) rather than threading a new field
+			// through operatorRuntime, since this is the ONLY call site that
+			// needs it.
+			riverSchema := os.Getenv("RIVER_DATABASE_SCHEMA")
+			if strings.TrimSpace(riverSchema) == "" {
+				riverSchema = "river"
+			}
+			if _, err := store.ReconcileOrphanedFinalizeRedriveRuns(ctx, runtime.pools.QueueControl, riverSchema); err != nil {
+				return writeServiceError(stderr, err)
+			}
+			candidates, err = store.FindStrandedFinalizeRuns(ctx, *limit)
+			if err != nil {
+				return writeServiceError(stderr, err)
+			}
+		}
+		// CHAOS-4409: repair the named candidate's finalize ledger row BEFORE
+		// publishing anything -- see this function's own doc comment for why
+		// the ordering matters (a stuck row answers ambiguous_refused the
+		// instant the redriven job reaches it, permanently, undoing this same
+		// pass). ledgerRepair/abort are reported/checked the identical way
+		// daily-redrive already does for its partition-ledger repair.
+		//
+		// codex review (round 1, P1): this ONLY ever runs for --run, mirroring
+		// RedriveStrandedFinalize's own allowPriorAttempt=hasRun boundary
+		// exactly. FindStrandedFinalizeRuns' candidates (--all-complete's own
+		// input) deliberately include 'failed'/expired-running runs for
+		// VISIBILITY, not redrive -- RedriveStrandedFinalize below already
+		// refuses to publish for any of them. Repairing their ledger rows
+		// anyway (the pre-fix behavior) would authorize retry_authorized for a
+		// run --all-complete itself never touches, letting some LATER
+		// unrelated call redrive it without an operator ever having reviewed
+		// that specific run's output -- exactly the shape --all-complete's own
+		// 'pending'-only safety split exists to prevent. A truly
+		// never-attempted 'pending' run cannot have a stuck ledger row in the
+		// first place (ClaimFinalize never claimed this generation to attempt
+		// Finalize() at all), so --all-complete loses no real repair capacity
+		// here -- only the unauthorized side effect.
+		ledgerRepair := map[string]any{"repaired": 0, "skipped_claim_active": 0}
+		if hasRun {
+			var abort bool
+			redrive, redriveErr := ledgerRedriverFor(ctx, runtime)
+			if redriveErr != nil {
+				return writeRepairSetupError(stderr, redriveErr)
+			}
+			ledgerRepair, abort, err = finalizeLedgerRepairGate(ctx, redrive, candidates, *reviewEvidence)
+			if err != nil {
+				return writeError(stderr, "ledger_repair_unavailable")
+			}
+			if abort {
+				return writeResult(stdout, stderr, map[string]any{
+					"candidates":    candidates,
+					"ledger_repair": ledgerRepair,
+					"finalize":      nil,
+					"status":        "ledger_repair_incomplete_retry_after_claims_settle",
+				})
+			}
+		}
+		// allowPriorAttempt = hasRun: a specific --run is an explicit, reviewed,
+		// single-target operator action that MAY authorize redriving a run whose
+		// finalize already ran at least once; --all-complete's bulk sweep never
+		// does, regardless of --review-evidence's text (see the flag's own help
+		// and RedriveStrandedFinalize's doc comment for why).
+		outcome, err := store.RedriveStrandedFinalize(ctx, publisher, candidates, uuid.NewString(), hasRun)
 		if err != nil {
 			return writeServiceError(stderr, err)
 		}
+		return writeResult(stdout, stderr, map[string]any{
+			"candidates":    candidates,
+			"ledger_repair": ledgerRepair,
+			"finalize":      outcome,
+		})
 	}
-	// CHAOS-4409: repair the named candidate's finalize ledger row BEFORE
-	// publishing anything -- see this function's own doc comment for why
-	// the ordering matters (a stuck row answers ambiguous_refused the
-	// instant the redriven job reaches it, permanently, undoing this same
-	// pass). ledgerRepair/abort are reported/checked the identical way
-	// daily-redrive already does for its partition-ledger repair.
-	//
-	// codex review (round 1, P1): this ONLY ever runs for --run, mirroring
-	// RedriveStrandedFinalize's own allowPriorAttempt=hasRun boundary
-	// exactly. FindStrandedFinalizeRuns' candidates (--all-complete's own
-	// input) deliberately include 'failed'/expired-running runs for
-	// VISIBILITY, not redrive -- RedriveStrandedFinalize below already
-	// refuses to publish for any of them. Repairing their ledger rows
-	// anyway (the pre-fix behavior) would authorize retry_authorized for a
-	// run --all-complete itself never touches, letting some LATER
-	// unrelated call redrive it without an operator ever having reviewed
-	// that specific run's output -- exactly the shape --all-complete's own
-	// 'pending'-only safety split exists to prevent. A truly
-	// never-attempted 'pending' run cannot have a stuck ledger row in the
-	// first place (ClaimFinalize never claimed this generation to attempt
-	// Finalize() at all), so --all-complete loses no real repair capacity
-	// here -- only the unauthorized side effect.
-	ledgerRepair := map[string]any{"repaired": 0, "skipped_claim_active": 0}
-	if hasRun {
-		var abort bool
-		redrive, redriveErr := ledgerRedriverFor(ctx, runtime)
-		if redriveErr != nil {
-			return writeRepairSetupError(stderr, redriveErr)
-		}
-		ledgerRepair, abort, err = finalizeLedgerRepairGate(ctx, redrive, candidates, *reviewEvidence)
-		if err != nil {
-			return writeError(stderr, "ledger_repair_unavailable")
-		}
-		if abort {
-			return writeResult(stdout, stderr, map[string]any{
-				"candidates":    candidates,
-				"ledger_repair": ledgerRepair,
-				"finalize":      nil,
-				"status":        "ledger_repair_incomplete_retry_after_claims_settle",
-			})
-		}
-	}
-	// allowPriorAttempt = hasRun: a specific --run is an explicit, reviewed,
-	// single-target operator action that MAY authorize redriving a run whose
-	// finalize already ran at least once; --all-complete's bulk sweep never
-	// does, regardless of --review-evidence's text (see the flag's own help
-	// and RedriveStrandedFinalize's doc comment for why).
-	outcome, err := store.RedriveStrandedFinalize(ctx, publisher, candidates, uuid.NewString(), hasRun)
-	if err != nil {
-		return writeServiceError(stderr, err)
-	}
-	return writeResult(stdout, stderr, map[string]any{
-		"candidates":    candidates,
-		"ledger_repair": ledgerRepair,
-		"finalize":      outcome,
-	})
+	return auditedWrite(ctx, runtime, stderr, mutation, joboperator.ActionMetricsDailyFinalize, "daily_metrics_run", scopeOrAll(strings.TrimSpace(*run)), perform)
 }
 
 // finalizeLedgerRepairGate repairs the compatibility-bridge finalize ledger
@@ -1374,7 +1273,8 @@ func dispatchMetricsFinalizeRedrive(
 	// opens is rolled back, never committed -- see
 	// RedriveFinalizeForRange's dryRun doc comment.
 	dryRun := flags.Bool("dry-run", false, "report what a real pass would do (which days, which runs, which would need a terminal-state reset) without writing anything -- no reset, no provenance row, no publish")
-	if flags.Parse(args) != nil || flags.NArg() != 0 {
+	mutation := addMutationFlags(flags)
+	if flags.Parse(args) != nil || flags.NArg() != 0 || !mutation.valid(*dryRun) {
 		return writeError(stderr, "invalid_request")
 	}
 	if _, err := uuid.Parse(*org); err != nil {
@@ -1391,29 +1291,35 @@ func dispatchMetricsFinalizeRedrive(
 	if err != nil {
 		return writeError(stderr, "invalid_request")
 	}
-	if runtime.pools == nil || runtime.registry == nil {
-		return writeError(stderr, "operator_backend_unavailable")
+	perform := func(ctx context.Context) int {
+		if runtime.pools == nil || runtime.registry == nil {
+			return writeError(stderr, "operator_backend_unavailable")
+		}
+		store, err := daily.NewPostgresStore(runtime.pools.Domain)
+		if err != nil {
+			return writeError(stderr, "operator_backend_unavailable")
+		}
+		publisher, err := daily.NewPostgresPublisher(runtime.pools.Domain, runtime.registry)
+		if err != nil {
+			return writeError(stderr, "operator_backend_unavailable")
+		}
+		nonce := ""
+		if !*dryRun {
+			nonce = uuid.NewString()
+		}
+		outcome, err := store.RedriveFinalizeForRange(ctx, publisher, *org, fromDay, toDay, nonce, *includeSucceeded, *reviewEvidence, *dryRun)
+		if err != nil {
+			return writeServiceError(stderr, err)
+		}
+		return writeResult(stdout, stderr, map[string]any{
+			"finalize_redrive": outcome,
+			"dry_run":          *dryRun,
+		})
 	}
-	store, err := daily.NewPostgresStore(runtime.pools.Domain)
-	if err != nil {
-		return writeError(stderr, "operator_backend_unavailable")
+	if *dryRun {
+		return dryRunPreview(ctx, runtime, stderr, joboperator.ActionMetricsFinalizeRedrive, "organization", *org, perform)
 	}
-	publisher, err := daily.NewPostgresPublisher(runtime.pools.Domain, runtime.registry)
-	if err != nil {
-		return writeError(stderr, "operator_backend_unavailable")
-	}
-	nonce := ""
-	if !*dryRun {
-		nonce = uuid.NewString()
-	}
-	outcome, err := store.RedriveFinalizeForRange(ctx, publisher, *org, fromDay, toDay, nonce, *includeSucceeded, *reviewEvidence, *dryRun)
-	if err != nil {
-		return writeServiceError(stderr, err)
-	}
-	return writeResult(stdout, stderr, map[string]any{
-		"finalize_redrive": outcome,
-		"dry_run":          *dryRun,
-	})
+	return auditedWrite(ctx, runtime, stderr, mutation, joboperator.ActionMetricsFinalizeRedrive, "organization", *org, perform)
 }
 
 // dispatchProvidersync handles the `providersync` verb group.
@@ -1450,7 +1356,8 @@ func dispatchProvidersyncRetireLinearPseudoProjects(
 	flags := quietFlags("providersync retire-linear-pseudo-projects")
 	org := flags.String("org", "", "organization id (uuid) -- omit to run across every org")
 	dryRun := flags.Bool("dry-run", false, "report which pseudo-project rows would be deleted, across every org unless --org scopes it, without deleting anything")
-	if flags.Parse(args) != nil || flags.NArg() != 0 {
+	mutation := addMutationFlags(flags)
+	if flags.Parse(args) != nil || flags.NArg() != 0 || !mutation.valid(*dryRun) {
 		return writeError(stderr, "invalid_request")
 	}
 	// Canonicalize, never pass the raw flag value onward: uuid.Parse accepts
@@ -1474,15 +1381,29 @@ func dispatchProvidersyncRetireLinearPseudoProjects(
 		authorizeResource = "*"
 	}
 	// Authorized BEFORE anything ClickHouse-related is even attempted (codex
-	// review, 2026-08-29, P1): this is a physically destructive mutation, so
-	// it passes the same authorizer as every other mutation before the
-	// delete. Every
-	// other mutation in this binary goes through runtime.service for exactly
-	// this reason; this is the same gate, just for an action with no other
-	// natural Service method (see AuthorizeProvidersyncCleanup's doc comment).
-	if err := runtime.service.AuthorizeProvidersyncCleanup(ctx, runtime.principal, authorizeResource); err != nil {
+	// review, 2026-08-29, P1), dry-run included; the delete itself then runs
+	// through auditedWrite.
+	if err := runtime.service.Authorize(ctx, runtime.principal, joboperator.ActionProvidersyncCleanup, "organization", authorizeResource); err != nil {
 		return writeServiceError(stderr, err)
 	}
+	run := func(ctx context.Context) int {
+		return runProvidersyncCleanup(ctx, runtime, stdout, stderr, "retire_linear_pseudo_projects",
+			func(ctx context.Context, conn clickhousedriver.Conn) (any, error) {
+				return providersync.RetireLinearPseudoProjectRows(ctx, conn, scopedOrg, *dryRun)
+			})
+	}
+	if *dryRun {
+		return run(ctx)
+	}
+	return auditedWrite(ctx, runtime, stderr, mutation, joboperator.ActionProvidersyncCleanup, "organization", authorizeResource, run)
+}
+
+// runProvidersyncCleanup opens ClickHouse and runs one providersync cleanup,
+// printing its outcome under key.
+func runProvidersyncCleanup(
+	ctx context.Context, runtime *operatorRuntime, stdout, stderr io.Writer, key string,
+	cleanup func(context.Context, clickhousedriver.Conn) (any, error),
+) int {
 	if runtime.lookup == nil {
 		return writeError(stderr, "operator_backend_unavailable")
 	}
@@ -1496,13 +1417,11 @@ func dispatchProvidersyncRetireLinearPseudoProjects(
 		return writeError(stderr, "operator_backend_unavailable")
 	}
 	defer func() { _ = conn.Close() }()
-	outcome, err := providersync.RetireLinearPseudoProjectRows(ctx, conn, scopedOrg, *dryRun)
+	outcome, err := cleanup(ctx, conn)
 	if err != nil {
 		return writeServiceError(stderr, err)
 	}
-	return writeResult(stdout, stderr, map[string]any{
-		"retire_linear_pseudo_projects": outcome,
-	})
+	return writeResult(stdout, stderr, map[string]any{key: outcome})
 }
 
 // dispatchProvidersyncRetireStaleLinearProjectOwnership handles `providersync
@@ -1529,7 +1448,8 @@ func dispatchProvidersyncRetireStaleLinearProjectOwnership(
 	flags := quietFlags("providersync retire-stale-linear-project-ownership")
 	org := flags.String("org", "", "organization id (uuid) -- omit to run across every org")
 	dryRun := flags.Bool("dry-run", false, "report which stale team_project_ownership rows would be deleted, across every org unless --org scopes it, without deleting anything")
-	if flags.Parse(args) != nil || flags.NArg() != 0 {
+	mutation := addMutationFlags(flags)
+	if flags.Parse(args) != nil || flags.NArg() != 0 || !mutation.valid(*dryRun) {
 		return writeError(stderr, "invalid_request")
 	}
 	// An explicitly-provided EMPTY --org (e.g. `--org "$UNSET_VAR"` from a
@@ -1569,33 +1489,22 @@ func dispatchProvidersyncRetireStaleLinearProjectOwnership(
 	if authorizeResource == "" {
 		authorizeResource = "*"
 	}
-	// Authorized BEFORE anything ClickHouse-related is even attempted -- same
-	// gate retire-linear-pseudo-projects uses for the same class of action
-	// (a physically destructive ClickHouse mutation outside this service's
-	// own job/route/queue backends).
-	if err := runtime.service.AuthorizeProvidersyncCleanup(ctx, runtime.principal, authorizeResource); err != nil {
+	// Authorized BEFORE anything ClickHouse-related is even attempted, dry-run
+	// included -- the same gate retire-linear-pseudo-projects uses; the delete
+	// itself then runs through auditedWrite.
+	if err := runtime.service.Authorize(ctx, runtime.principal, joboperator.ActionProvidersyncOwnershipCleanup, "organization", authorizeResource); err != nil {
 		return writeServiceError(stderr, err)
 	}
-	if runtime.lookup == nil {
-		return writeError(stderr, "operator_backend_unavailable")
+	run := func(ctx context.Context) int {
+		return runProvidersyncCleanup(ctx, runtime, stdout, stderr, "retire_stale_linear_project_ownership",
+			func(ctx context.Context, conn clickhousedriver.Conn) (any, error) {
+				return providersync.RetireStaleLinearProjectOwnershipRows(ctx, conn, scopedOrg, *dryRun)
+			})
 	}
-	dsn, err := resolveDSNRequired("CLICKHOUSE_URI", platformconfig.ClickHouseSpec, runtime.lookup)
-	if err != nil {
-		return writeConfigError(stderr, err)
+	if *dryRun {
+		return run(ctx)
 	}
-	logResolvedDatabase(stderr, runtime.lookup, platformconfig.ClickHouseSpec, "clickhouse", dsn)
-	conn, err := chclickhouse.Open(ctx, chclickhouse.DefaultConfig(dsn.Reveal()))
-	if err != nil {
-		return writeError(stderr, "operator_backend_unavailable")
-	}
-	defer func() { _ = conn.Close() }()
-	outcome, err := providersync.RetireStaleLinearProjectOwnershipRows(ctx, conn, scopedOrg, *dryRun)
-	if err != nil {
-		return writeServiceError(stderr, err)
-	}
-	return writeResult(stdout, stderr, map[string]any{
-		"retire_stale_linear_project_ownership": outcome,
-	})
+	return auditedWrite(ctx, runtime, stderr, mutation, joboperator.ActionProvidersyncOwnershipCleanup, "organization", authorizeResource, run)
 }
 
 // dispatchSyncDispatchOutbox handles the `sync-dispatch-outbox` verb group.
@@ -1629,7 +1538,8 @@ func dispatchSyncDispatchOutboxCloseBacklog(
 	flags := quietFlags("sync-dispatch-outbox close-backlog")
 	dryRun := flags.Bool("dry-run", false, "report the exact backlog size per kind that a real pass would close, without writing anything")
 	batchSize := flags.Int("batch-size", 100, "rows closed per kind per pass when not --dry-run (1-100); a real run loops passes until the backlog is drained or the pass cap is hit")
-	if flags.Parse(args) != nil || flags.NArg() != 0 {
+	mutation := addMutationFlags(flags)
+	if flags.Parse(args) != nil || flags.NArg() != 0 || !mutation.valid(*dryRun) {
 		return writeError(stderr, "invalid_request")
 	}
 	// Bounds-checked here rather than left to ReapTerminalOutboxBacklog's own
@@ -1643,22 +1553,28 @@ func dispatchSyncDispatchOutboxCloseBacklog(
 	if runtime.service == nil {
 		return writeError(stderr, "operator_backend_unavailable")
 	}
-	// Authorized BEFORE anything Postgres-related is even attempted -- same
-	// gate the providersync cleanup verbs use for the same class of action: a
-	// workers:read-only credential must never reach this write.
-	if err := runtime.service.AuthorizeSyncDispatchOutboxClose(ctx, runtime.principal, "*"); err != nil {
+	// Authorized BEFORE anything Postgres-related is even attempted, dry-run
+	// included -- the same gate the providersync cleanup verbs use; the close
+	// itself then runs through auditedWrite.
+	if err := runtime.service.Authorize(ctx, runtime.principal, joboperator.ActionSyncDispatchOutboxClose, "sync_dispatch_outbox", "*"); err != nil {
 		return writeServiceError(stderr, err)
 	}
-	if runtime.pools == nil || runtime.pools.Coordinator == nil {
-		return writeError(stderr, "operator_backend_unavailable")
+	run := func(ctx context.Context) int {
+		if runtime.pools == nil || runtime.pools.Coordinator == nil {
+			return writeError(stderr, "operator_backend_unavailable")
+		}
+		outcome, err := syncreconciler.ReapTerminalOutboxBacklog(ctx, runtime.pools.Coordinator, time.Now().UTC(), *batchSize, *dryRun)
+		if err != nil {
+			return writeServiceError(stderr, err)
+		}
+		return writeResult(stdout, stderr, map[string]any{
+			"sync_dispatch_outbox_close_backlog": outcome,
+		})
 	}
-	outcome, err := syncreconciler.ReapTerminalOutboxBacklog(ctx, runtime.pools.Coordinator, time.Now().UTC(), *batchSize, *dryRun)
-	if err != nil {
-		return writeServiceError(stderr, err)
+	if *dryRun {
+		return run(ctx)
 	}
-	return writeResult(stdout, stderr, map[string]any{
-		"sync_dispatch_outbox_close_backlog": outcome,
-	})
+	return auditedWrite(ctx, runtime, stderr, mutation, joboperator.ActionSyncDispatchOutboxClose, "sync_dispatch_outbox", "*", run)
 }
 
 // dispatchMetricsPartitionRecompute handles `metrics partition-recompute`
@@ -1689,7 +1605,8 @@ func dispatchMetricsPartitionRecompute(
 	family := flags.String("family", "", "metrics.daily family this recompute is repairing (supported: repo_user_commit) -- recorded for audit; every family in the partition is recomputed, not just this one (see docs)")
 	reviewEvidence := flags.String("review-evidence", "", "REQUIRED unless --dry-run: why this historical re-run is authorized (e.g. \"CHAOS-4459: org-scoped commit_metrics/repo_metrics_daily/user_metrics_daily rows are 0 for this day because the partition succeeded under the pre-#1960 writer that stamped org_id=''\")")
 	dryRun := flags.Bool("dry-run", false, "report what a real pass would do (which days, which runs would be reset) without writing anything -- no reset, no provenance row, no publish")
-	if flags.Parse(args) != nil || flags.NArg() != 0 {
+	mutation := addMutationFlags(flags)
+	if flags.Parse(args) != nil || flags.NArg() != 0 || !mutation.valid(*dryRun) {
 		return writeError(stderr, "invalid_request")
 	}
 	if _, err := uuid.Parse(*org); err != nil {
@@ -1709,29 +1626,35 @@ func dispatchMetricsPartitionRecompute(
 	if err != nil {
 		return writeError(stderr, "invalid_request")
 	}
-	if runtime.pools == nil || runtime.registry == nil {
-		return writeError(stderr, "operator_backend_unavailable")
+	perform := func(ctx context.Context) int {
+		if runtime.pools == nil || runtime.registry == nil {
+			return writeError(stderr, "operator_backend_unavailable")
+		}
+		store, err := daily.NewPostgresStore(runtime.pools.Domain)
+		if err != nil {
+			return writeError(stderr, "operator_backend_unavailable")
+		}
+		publisher, err := daily.NewPostgresPublisher(runtime.pools.Domain, runtime.registry)
+		if err != nil {
+			return writeError(stderr, "operator_backend_unavailable")
+		}
+		nonce := ""
+		if !*dryRun {
+			nonce = uuid.NewString()
+		}
+		outcome, err := store.RedrivePartitionsForRange(ctx, publisher, *org, fromDay, toDay, nonce, *family, *reviewEvidence, *dryRun)
+		if err != nil {
+			return writeServiceError(stderr, err)
+		}
+		return writeResult(stdout, stderr, map[string]any{
+			"partition_recompute": outcome,
+			"dry_run":             *dryRun,
+		})
 	}
-	store, err := daily.NewPostgresStore(runtime.pools.Domain)
-	if err != nil {
-		return writeError(stderr, "operator_backend_unavailable")
+	if *dryRun {
+		return dryRunPreview(ctx, runtime, stderr, joboperator.ActionMetricsPartitionRecompute, "organization", *org, perform)
 	}
-	publisher, err := daily.NewPostgresPublisher(runtime.pools.Domain, runtime.registry)
-	if err != nil {
-		return writeError(stderr, "operator_backend_unavailable")
-	}
-	nonce := ""
-	if !*dryRun {
-		nonce = uuid.NewString()
-	}
-	outcome, err := store.RedrivePartitionsForRange(ctx, publisher, *org, fromDay, toDay, nonce, *family, *reviewEvidence, *dryRun)
-	if err != nil {
-		return writeServiceError(stderr, err)
-	}
-	return writeResult(stdout, stderr, map[string]any{
-		"partition_recompute": outcome,
-		"dry_run":             *dryRun,
-	})
+	return auditedWrite(ctx, runtime, stderr, mutation, joboperator.ActionMetricsPartitionRecompute, "organization", *org, perform)
 }
 
 // manualBackfillGeneration derives a deterministic generation for one
@@ -1829,141 +1752,7 @@ func dispatchMetricsRemaining(ctx context.Context, runtime *operatorRuntime, arg
 	}
 	switch args[0] {
 	case "start":
-		flags := quietFlags("metrics remaining start")
-		// CHAOS-4254: derived from the family list itself so this help text
-		// can never silently drift from ManualBackfillDayScopedFamilies again
-		// (capacity/recommendations/membership_backfill are deliberately NOT
-		// in that list -- see its own doc comment -- and work_item_attribution
-		// has its own separate `trigger-backstop` verb/family list below).
-		family := flags.String("family", "", "day-scoped remaining-metrics family ("+strings.Join(remaining.ManualBackfillDayScopedFamilies, ", ")+")")
-		day := flags.String("day", "", "first target day, inclusive (YYYY-MM-DD, UTC)")
-		to := flags.String("to", "", "last target day, inclusive (YYYY-MM-DD, UTC) -- defaults to --day for a single day")
-		org := flags.String("org", "", "organization id (uuid)")
-		reviewEvidence := flags.String("review-evidence", "", "REQUIRED: why this historical day needs a manual backfill (e.g. \"CHAOS-4384 -- day frozen at 0 rows by the pre-fix same-day coverage bug, source data has since landed\")")
-		if flags.Parse(args[1:]) != nil || flags.NArg() != 0 {
-			return writeError(stderr, "invalid_request")
-		}
-		if !slices.Contains(remaining.ManualBackfillDayScopedFamilies, *family) {
-			return writeError(stderr, "invalid_request")
-		}
-		if _, err := uuid.Parse(*org); err != nil {
-			return writeError(stderr, "invalid_request")
-		}
-		if strings.TrimSpace(*reviewEvidence) == "" {
-			return writeError(stderr, "invalid_request")
-		}
-		fromDay, err := time.Parse("2006-01-02", *day)
-		if err != nil {
-			return writeError(stderr, "invalid_request")
-		}
-		toRaw := *to
-		if toRaw == "" {
-			toRaw = *day
-		}
-		toDay, err := time.Parse("2006-01-02", toRaw)
-		if err != nil || toDay.Before(fromDay) {
-			return writeError(stderr, "invalid_request")
-		}
-		if int(toDay.Sub(fromDay).Hours()/24)+1 > manualBackfillMaxDays {
-			return writeError(stderr, "invalid_request")
-		}
-		// codex review round 2, P2: this is a HISTORICAL recovery tool -- a
-		// future --day/--to (a mistyped year, most likely) would still
-		// create a durable run and, for release_impact/dora's
-		// backfill_days window, silently compute PAST days as a side
-		// effect of an operator error that should have been an
-		// invalid_request instead.
-		//
-		// codex review round 3, P1: today itself is ALSO excluded, not just
-		// the future. dora's automatic triggers (post-sync's first-sync-of-
-		// day, the fixed-schedule dora_daily_fanout occurrence) both only
-		// ever target the current UTC day -- never a closed one. A manual
-		// backfill for today could therefore commit its own pending run,
-		// release the advisory lock, and then race an automatic trigger
-		// that starts a SEPARATE generation for the same day (StartRunTx's
-		// dora coverage check only recognizes SUCCEEDED runs, so a manual
-		// run still pending is invisible to it): both eventually execute
-		// and append duplicate dora_metrics_daily rows. Restricting this
-		// command to strictly closed days removes the race entirely --
-		// automatic triggers never revisit a day once it has closed -- and
-		// matches the command's whole purpose (a day that was never
-		// dispatched at all is, by construction, already in the past).
-		if !toDay.Before(time.Now().UTC().Truncate(24 * time.Hour)) {
-			return writeError(stderr, "invalid_request")
-		}
-		if runtime.pools == nil || runtime.registry == nil {
-			return writeError(stderr, "operator_backend_unavailable")
-		}
-		store, err := remaining.NewPostgresStore(runtime.pools.Domain)
-		if err != nil {
-			return writeError(stderr, "operator_backend_unavailable")
-		}
-		publisher, err := remaining.NewPostgresPublisher(runtime.pools.Domain, runtime.registry)
-		if err != nil {
-			return writeError(stderr, "operator_backend_unavailable")
-		}
-		// codex review, P1: a wall-clock generation made a retried CLI
-		// invocation (identical flags, rerun after the first commit but
-		// before its result was observed) indistinguishable from a
-		// genuinely new request -- coverage only recognizes SUCCEEDED
-		// partitions, so the retry could insert and dispatch a second run
-		// per day while the first was still pending/running. Deriving
-		// generation from the request's own shape makes an identical rerun
-		// land on insertRun's ON CONFLICT DO NOTHING path (surfaced as
-		// "already_ran") instead of a duplicate.
-		generation := manualBackfillGeneration(*family, *org, *day, toRaw)
-		var results []manualBackfillDayResult
-		for cursor := fromDay; !cursor.After(toDay); cursor = cursor.AddDate(0, 0, 1) {
-			dayString := cursor.Format("2006-01-02")
-			outcome, startErr := store.StartManualBackfillRun(ctx, *family, *org, dayString, generation, publisher)
-			switch {
-			case errors.Is(startErr, remaining.ErrDayAlreadyCovered):
-				results = append(results, manualBackfillDayResult{
-					Day: dayString, Status: "already_covered", RunID: outcome.RunID,
-				})
-			case errors.Is(startErr, remaining.ErrDayInProgress):
-				results = append(results, manualBackfillDayResult{
-					Day: dayString, Status: "in_progress", RunID: outcome.RunID,
-				})
-			case errors.Is(startErr, remaining.ErrManualBackfillGenerationExhausted):
-				results = append(results, manualBackfillDayResult{
-					Day: dayString, Status: "exhausted", RunID: outcome.RunID, Generation: outcome.Generation,
-				})
-			case startErr != nil:
-				results = append(results, manualBackfillDayResult{Day: dayString, Status: "error", Error: startErr.Error()})
-			case outcome.AlreadyRan:
-				results = append(results, manualBackfillDayResult{
-					Day: dayString, Status: "already_ran", RunID: outcome.RunID, PartitionID: outcome.PartitionID, Generation: outcome.Generation,
-				})
-			default:
-				results = append(results, manualBackfillDayResult{
-					Day: dayString, Status: "started", RunID: outcome.RunID, PartitionID: outcome.PartitionID, Generation: outcome.Generation,
-				})
-			}
-		}
-		// codex review, P2: an "error" status buried in one day's result
-		// object must not read as overall success -- a caller that checks
-		// only the process exit code (a shell script, a scheduled job)
-		// would otherwise treat a partially or completely undispatched
-		// backfill as clean. Print the same full JSON to stdout either way
-		// (the per-day detail is the actual diagnostic), but fail the
-		// process if anything errored.
-		hadDayError := anyManualBackfillDayErrored(results)
-		code := writeResult(stdout, stderr, map[string]any{
-			"family":          *family,
-			"org":             *org,
-			"generation":      generation,
-			"review_evidence": *reviewEvidence,
-			"days":            results,
-			"readback_hint": fmt.Sprintf(
-				"ClickHouse: SELECT day, count() FROM %s WHERE org_id = '%s' AND day BETWEEN '%s' AND '%s' GROUP BY day ORDER BY day",
-				manualBackfillReadbackTable[*family], *org, *day, toRaw,
-			),
-		})
-		if code == 0 && hadDayError {
-			return 1
-		}
-		return code
+		return dispatchMetricsRemainingStart(ctx, runtime, args[1:], stdout, stderr)
 	case "trigger-backstop":
 		return dispatchMetricsRemainingTriggerBackstop(ctx, runtime, args[1:], stdout, stderr)
 	case "redrive":
@@ -2010,7 +1799,8 @@ func dispatchMetricsRemainingRedrive(
 	terminalize := flags.Bool("terminalize", false, "move every matching run with no partition still pending/running straight to status='failed', instead of re-enqueuing its failed partitions")
 	reviewEvidence := flags.String("review-evidence", "", "REQUIRED unless --dry-run: what you verified before authorizing this action (for --terminalize, why no automatic or manual redrive will ever finish this run)")
 	dryRun := flags.Bool("dry-run", false, "print the run/partition table without publishing or terminalizing anything")
-	if flags.Parse(args) != nil || flags.NArg() != 0 {
+	mutation := addMutationFlags(flags)
+	if flags.Parse(args) != nil || flags.NArg() != 0 || !mutation.valid(*dryRun) {
 		return writeError(stderr, "invalid_request")
 	}
 	canonicalOrg, err := canonicalUUID(*org)
@@ -2031,51 +1821,57 @@ func dispatchMetricsRemainingRedrive(
 	if !*dryRun && strings.TrimSpace(*reviewEvidence) == "" {
 		return writeError(stderr, "invalid_request")
 	}
-	if runtime.pools == nil || runtime.registry == nil {
-		return writeError(stderr, "operator_backend_unavailable")
-	}
-	store, err := remaining.NewPostgresStore(runtime.pools.Domain)
-	if err != nil {
-		return writeError(stderr, "operator_backend_unavailable")
-	}
-	candidates, err := store.StrandedRuns(ctx, *org, *family, canonicalRun)
-	if err != nil {
-		return writeServiceError(stderr, err)
-	}
-	// UnstartableRuns is the OTHER class this same verb now surfaces: a
-	// 'pending' run (never claimed at all) whose handoff is provably dead,
-	// rather than a 'running' run stranded behind a 'failed' partition.
-	// Always printed alongside StrandedRuns, mirroring the same
-	// read-first-in-both-modes shape.
-	unstartable, err := store.UnstartableRuns(ctx, *org, *family, canonicalRun)
-	if err != nil {
-		return writeServiceError(stderr, err)
-	}
-	if *dryRun {
-		status := "would_redrive"
-		if *terminalize {
-			status = "would_terminalize"
+	perform := func(ctx context.Context) int {
+		if runtime.pools == nil || runtime.registry == nil {
+			return writeError(stderr, "operator_backend_unavailable")
+		}
+		store, err := remaining.NewPostgresStore(runtime.pools.Domain)
+		if err != nil {
+			return writeError(stderr, "operator_backend_unavailable")
+		}
+		candidates, err := store.StrandedRuns(ctx, *org, *family, canonicalRun)
+		if err != nil {
+			return writeServiceError(stderr, err)
+		}
+		// UnstartableRuns is the OTHER class this same verb now surfaces: a
+		// 'pending' run (never claimed at all) whose handoff is provably dead,
+		// rather than a 'running' run stranded behind a 'failed' partition.
+		// Always printed alongside StrandedRuns, mirroring the same
+		// read-first-in-both-modes shape.
+		unstartable, err := store.UnstartableRuns(ctx, *org, *family, canonicalRun)
+		if err != nil {
+			return writeServiceError(stderr, err)
+		}
+		if *dryRun {
+			status := "would_redrive"
+			if *terminalize {
+				status = "would_terminalize"
+			}
+			return writeResult(stdout, stderr, map[string]any{
+				"stranded_runs":    candidates,
+				"unstartable_runs": unstartable,
+				"terminalize":      *terminalize,
+				"status":           status,
+			})
+		}
+		publisher, err := remaining.NewPostgresPublisher(runtime.pools.Domain, runtime.registry)
+		if err != nil {
+			return writeError(stderr, "operator_backend_unavailable")
+		}
+		outcome, err := store.Redrive(ctx, publisher, *org, *family, canonicalRun, uuid.NewString(), *terminalize, *reviewEvidence)
+		if err != nil {
+			return writeServiceError(stderr, err)
 		}
 		return writeResult(stdout, stderr, map[string]any{
 			"stranded_runs":    candidates,
 			"unstartable_runs": unstartable,
-			"terminalize":      *terminalize,
-			"status":           status,
+			"outcome":          outcome,
 		})
 	}
-	publisher, err := remaining.NewPostgresPublisher(runtime.pools.Domain, runtime.registry)
-	if err != nil {
-		return writeError(stderr, "operator_backend_unavailable")
+	if *dryRun {
+		return dryRunPreview(ctx, runtime, stderr, joboperator.ActionMetricsRemainingRedrive, "organization", *org, perform)
 	}
-	outcome, err := store.Redrive(ctx, publisher, *org, *family, canonicalRun, uuid.NewString(), *terminalize, *reviewEvidence)
-	if err != nil {
-		return writeServiceError(stderr, err)
-	}
-	return writeResult(stdout, stderr, map[string]any{
-		"stranded_runs":    candidates,
-		"unstartable_runs": unstartable,
-		"outcome":          outcome,
-	})
+	return auditedWrite(ctx, runtime, stderr, mutation, joboperator.ActionMetricsRemainingRedrive, "organization", *org, perform)
 }
 
 // remainingRedriveFamilyNames returns every family name `metrics remaining
@@ -2324,7 +2120,8 @@ func dispatchMetricsRemainingTriggerBackstop(
 	team := flags.String("team", "", "team id (uuid) to scope this trigger to -- capacity/recommendations only, exactly one of --team/--all-teams required for those families; ignored for every other family")
 	allTeams := flags.Bool("all-teams", false, "scope this trigger to every team in the organization -- capacity/recommendations only; ignored for every other family")
 	window := flags.Int("window", 14, "evaluation window in days -- recommendations only, ignored for every other family (default: 14, matching the fixed-schedule fanout)")
-	if flags.Parse(args) != nil || flags.NArg() != 0 {
+	mutation := addMutationFlags(flags)
+	if flags.Parse(args) != nil || flags.NArg() != 0 || !mutation.valid(false) {
 		return writeError(stderr, "invalid_request")
 	}
 	if !slices.Contains(remaining.ManualBackstopTriggerFamilies, *family) {
@@ -2384,71 +2181,74 @@ func dispatchMetricsRemainingTriggerBackstop(
 		return writeError(stderr, "invalid_request")
 	}
 	dayString := targetDay.Format("2006-01-02")
-	if runtime.pools == nil || runtime.registry == nil {
-		return writeError(stderr, "operator_backend_unavailable")
+	perform := func(ctx context.Context) int {
+		if runtime.pools == nil || runtime.registry == nil {
+			return writeError(stderr, "operator_backend_unavailable")
+		}
+		store, err := remaining.NewPostgresStore(runtime.pools.Domain)
+		if err != nil {
+			return writeError(stderr, "operator_backend_unavailable")
+		}
+		publisher, err := remaining.NewPostgresPublisher(runtime.pools.Domain, runtime.registry)
+		if err != nil {
+			return writeError(stderr, "operator_backend_unavailable")
+		}
+		readbackHint, ok := manualBackstopTriggerReadbackHint(*family, *org)
+		if !ok {
+			// Unreachable while ManualBackstopTriggerFamilies and this switch stay
+			// in sync (mirrors the *_test.go sync test guarding the `start` verb's
+			// own family list against manualBackfillDayScope) -- refuse loud
+			// rather than print a result with a missing readback hint.
+			return writeError(stderr, "operator_backend_unavailable")
+		}
+		scopeDiscriminator := manualBackstopTriggerScopeDiscriminator(*family, teamID, *allTeams, *window)
+		generation := manualBackstopTriggerGeneration(*family, *org, dayString, scopeDiscriminator)
+		var outcome remaining.ManualBackfillOutcome
+		var startErr error
+		switch *family {
+		case "capacity":
+			outcome, startErr = store.StartManualCapacityTriggerRun(ctx, *org, dayString, generation, teamID, *allTeams, publisher)
+		case "recommendations":
+			outcome, startErr = store.StartManualRecommendationsTriggerRun(ctx, *org, dayString, generation, teamID, *window, publisher)
+		default:
+			outcome, startErr = store.StartManualBackfillRun(ctx, *family, *org, dayString, generation, publisher)
+		}
+		status := "started"
+		switch {
+		case errors.Is(startErr, remaining.ErrDayAlreadyCovered):
+			status = "already_covered"
+		case errors.Is(startErr, remaining.ErrDayInProgress):
+			status = "in_progress"
+		case errors.Is(startErr, remaining.ErrManualBackfillGenerationExhausted):
+			status = "exhausted"
+		case startErr != nil:
+			status = "error"
+		case outcome.AlreadyRan:
+			status = "already_ran"
+		}
+		result := map[string]any{
+			"family":          *family,
+			"org":             *org,
+			"day":             dayString,
+			"generation":      generation,
+			"review_evidence": *reviewEvidence,
+			"status":          status,
+			"run_id":          outcome.RunID,
+			"readback_hint":   readbackHint,
+		}
+		if startErr != nil && status == "error" {
+			result["error"] = startErr.Error()
+		}
+		if outcome.PartitionID != "" {
+			result["partition_id"] = outcome.PartitionID
+		}
+		code := writeResult(stdout, stderr, result)
+		if code == 0 && (status == "error" || status == "exhausted") {
+			return 1
+		}
+		return code
 	}
-	store, err := remaining.NewPostgresStore(runtime.pools.Domain)
-	if err != nil {
-		return writeError(stderr, "operator_backend_unavailable")
-	}
-	publisher, err := remaining.NewPostgresPublisher(runtime.pools.Domain, runtime.registry)
-	if err != nil {
-		return writeError(stderr, "operator_backend_unavailable")
-	}
-	readbackHint, ok := manualBackstopTriggerReadbackHint(*family, *org)
-	if !ok {
-		// Unreachable while ManualBackstopTriggerFamilies and this switch stay
-		// in sync (mirrors the *_test.go sync test guarding the `start` verb's
-		// own family list against manualBackfillDayScope) -- refuse loud
-		// rather than print a result with a missing readback hint.
-		return writeError(stderr, "operator_backend_unavailable")
-	}
-	scopeDiscriminator := manualBackstopTriggerScopeDiscriminator(*family, teamID, *allTeams, *window)
-	generation := manualBackstopTriggerGeneration(*family, *org, dayString, scopeDiscriminator)
-	var outcome remaining.ManualBackfillOutcome
-	var startErr error
-	switch *family {
-	case "capacity":
-		outcome, startErr = store.StartManualCapacityTriggerRun(ctx, *org, dayString, generation, teamID, *allTeams, publisher)
-	case "recommendations":
-		outcome, startErr = store.StartManualRecommendationsTriggerRun(ctx, *org, dayString, generation, teamID, *window, publisher)
-	default:
-		outcome, startErr = store.StartManualBackfillRun(ctx, *family, *org, dayString, generation, publisher)
-	}
-	status := "started"
-	switch {
-	case errors.Is(startErr, remaining.ErrDayAlreadyCovered):
-		status = "already_covered"
-	case errors.Is(startErr, remaining.ErrDayInProgress):
-		status = "in_progress"
-	case errors.Is(startErr, remaining.ErrManualBackfillGenerationExhausted):
-		status = "exhausted"
-	case startErr != nil:
-		status = "error"
-	case outcome.AlreadyRan:
-		status = "already_ran"
-	}
-	result := map[string]any{
-		"family":          *family,
-		"org":             *org,
-		"day":             dayString,
-		"generation":      generation,
-		"review_evidence": *reviewEvidence,
-		"status":          status,
-		"run_id":          outcome.RunID,
-		"readback_hint":   readbackHint,
-	}
-	if startErr != nil && status == "error" {
-		result["error"] = startErr.Error()
-	}
-	if outcome.PartitionID != "" {
-		result["partition_id"] = outcome.PartitionID
-	}
-	code := writeResult(stdout, stderr, result)
-	if code == 0 && (status == "error" || status == "exhausted") {
-		return 1
-	}
-	return code
+	return auditedWrite(ctx, runtime, stderr, mutation, joboperator.ActionMetricsRemainingTriggerBackstop, "organization", *org, perform)
 }
 
 const dailyMetricsRedriveMaxRunIDsPerRequest = repair.MaxRedriveRuns
@@ -2745,4 +2545,269 @@ func writeError(stderr io.Writer, code string) int {
 		return cli.ExitUsage
 	}
 	return cli.ExitFailure
+}
+
+// dispatchMetricsDailyRedrive handles `metrics daily-redrive`: it repairs
+// the compatibility ledger for an org/day window, then redrives the stranded
+// partitions.
+func dispatchMetricsDailyRedrive(ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer) int {
+	flags := quietFlags("metrics daily-redrive")
+	org := flags.String("org", "", "organization id (uuid)")
+	from := flags.String("from", "", "first target_day, inclusive (YYYY-MM-DD, UTC)")
+	to := flags.String("to", "", "last target_day, inclusive (YYYY-MM-DD, UTC)")
+	reviewEvidence := flags.String("review-evidence", "", "REQUIRED: what you verified before authorizing retry for ambiguous/stuck-executing ledger rows in this window (e.g. \"confirmed zero output rows for the affected families via ClickHouse readback\") -- see CHAOS-4304 note below")
+	mutation := addMutationFlags(flags)
+	if flags.Parse(args) != nil || flags.NArg() != 0 || !mutation.valid(false) {
+		return writeError(stderr, "invalid_request")
+	}
+	if _, err := uuid.Parse(*org); err != nil {
+		return writeError(stderr, "invalid_request")
+	}
+	// codex review round 3: "ambiguous" means a progress-having failure
+	// MAY have partially written real output -- claim expiration alone
+	// is explicitly not evidence retry is safe (worker_metrics.py's own
+	// _repair_execution requires a human to pick retry_safe vs
+	// confirm_succeeded per execution, based on actual review). A bulk
+	// path cannot inspect per-row evidence, so it stays restricted to
+	// retry_safe only (never confirm_succeeded, which needs per-row
+	// output_evidence) and REQUIRES the operator to state in their own
+	// words what they verified -- no default, no generic hardcoded
+	// string. This is friction by design: an operator who has not
+	// actually checked (e.g. the redriven families' zero-row counters,
+	// or a fresh ClickHouse readback showing no output yet for these
+	// partitions) should not be able to bulk-authorize retries for
+	// non-argMax-deduped families (file_hotspots is the known example
+	// where a retry-caused duplicate silently inflates scores).
+	if strings.TrimSpace(*reviewEvidence) == "" {
+		return writeError(stderr, "invalid_request")
+	}
+	fromDay, err := time.Parse("2006-01-02", *from)
+	if err != nil {
+		return writeError(stderr, "invalid_request")
+	}
+	toDay, err := time.Parse("2006-01-02", *to)
+	if err != nil {
+		return writeError(stderr, "invalid_request")
+	}
+	perform := func(ctx context.Context) int {
+		if runtime.pools == nil || runtime.registry == nil {
+			return writeError(stderr, "operator_backend_unavailable")
+		}
+		store, err := daily.NewPostgresStore(runtime.pools.Domain)
+		if err != nil {
+			return writeError(stderr, "operator_backend_unavailable")
+		}
+		publisher, err := daily.NewPostgresPublisher(runtime.pools.Domain, runtime.registry)
+		if err != nil {
+			return writeError(stderr, "operator_backend_unavailable")
+		}
+		// CHAOS-4304 ordering requirement (codex review, round 1): a
+		// partition whose Python compatibility-bridge ledger row is still
+		// 'ambiguous'/stuck-'executing' answers ambiguous_refused the
+		// instant a redriven job reaches it, which Go classifies Permanent
+		// and re-terminalizes failed_permanent -- undoing this same pass's
+		// own reset. The ledger repair MUST land before any partition job
+		// publishes, not after, so this repairs the ledger through the
+		// coordinator role first, over every run this org+day window's runs (not
+		// just the ones with a currently-dispatchable partition -- a run
+		// can carry an ambiguous ledger row on a partition already
+		// terminalized failed_permanent, which step 2 below is about to
+		// reset back into the redrive set).
+		runIDs, err := store.RunningRunIDs(ctx, *org, fromDay, toDay)
+		if err != nil {
+			return writeServiceError(stderr, err)
+		}
+		redrive, err := ledgerRedriverFor(ctx, runtime)
+		if err != nil {
+			return writeRepairSetupError(stderr, err)
+		}
+		ledgerRepair, err := redriveDailyMetricsLedger(ctx, redrive, runIDs, *reviewEvidence)
+		if err != nil {
+			return writeError(stderr, "ledger_repair_unavailable")
+		}
+		// codex review round 2: a nonzero skipped_claim_active means at
+		// least one ambiguous/stuck-executing ledger row was left
+		// unrepaired because its original claim still read as active at
+		// that moment. Publishing partition jobs anyway is unsafe -- if
+		// that claim is released between this call and the redriven job
+		// reaching the bridge (a real, observed race, not hypothetical),
+		// the unrepaired row answers ambiguous_refused immediately and the
+		// partition is re-terminalized failed_permanent, undoing this same
+		// pass. Stop here and report it; the operator re-runs once those
+		// claims have settled (their own owning job will finish or expire).
+		if ledgerRepairWasIncomplete(ledgerRepair) {
+			return writeResult(stdout, stderr, map[string]any{
+				"ledger_repair": ledgerRepair,
+				"partitions":    nil,
+				"status":        "ledger_repair_incomplete_retry_after_claims_settle",
+			})
+		}
+		// codex review round 3 (residual, accepted risk): the ledger repair
+		// above takes a SNAPSHOT of run ids and repairs whatever is
+		// ambiguous/stuck-executing at that instant; a partition that
+		// starts a NEW execution and reaches ambiguous in the window
+		// between that call and this one is not covered by it, and this
+		// query will still pick it up (still 'failed'/'pending'/expired-
+		// lease at the moment it runs). Closing that window fully would
+		// need a single fenced transaction spanning both the Python ledger
+		// and the Go partition tables across a network call, which does
+		// not exist today. This is self-healing, not silent: a fresh
+		// ambiguous row here still surfaces as a 409/failed_permanent, and
+		// the NEXT invocation of this same command repairs it (the ledger
+		// repair step is idempotent by construction -- a row already
+		// 'retry_authorized' or 'succeeded' is simply not selected again).
+		outcome, err := store.RedriveStrandedPartitions(ctx, publisher, *org, fromDay, toDay, uuid.NewString())
+		if err != nil {
+			return writeServiceError(stderr, err)
+		}
+		return writeResult(stdout, stderr, map[string]any{
+			"ledger_repair": ledgerRepair,
+			"partitions":    outcome,
+		})
+	}
+	return auditedWrite(ctx, runtime, stderr, mutation, joboperator.ActionMetricsDailyRedrive, "organization", *org, perform)
+}
+
+// dispatchMetricsRemainingStart handles `metrics remaining start`: a
+// manual backfill of one day-scoped remaining-metrics family over a day range.
+func dispatchMetricsRemainingStart(ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer) int {
+	flags := quietFlags("metrics remaining start")
+	// CHAOS-4254: derived from the family list itself so this help text
+	// can never silently drift from ManualBackfillDayScopedFamilies again
+	// (capacity/recommendations/membership_backfill are deliberately NOT
+	// in that list -- see its own doc comment -- and work_item_attribution
+	// has its own separate `trigger-backstop` verb/family list below).
+	family := flags.String("family", "", "day-scoped remaining-metrics family ("+strings.Join(remaining.ManualBackfillDayScopedFamilies, ", ")+")")
+	day := flags.String("day", "", "first target day, inclusive (YYYY-MM-DD, UTC)")
+	to := flags.String("to", "", "last target day, inclusive (YYYY-MM-DD, UTC) -- defaults to --day for a single day")
+	org := flags.String("org", "", "organization id (uuid)")
+	reviewEvidence := flags.String("review-evidence", "", "REQUIRED: why this historical day needs a manual backfill (e.g. \"CHAOS-4384 -- day frozen at 0 rows by the pre-fix same-day coverage bug, source data has since landed\")")
+	mutation := addMutationFlags(flags)
+	if flags.Parse(args) != nil || flags.NArg() != 0 || !mutation.valid(false) {
+		return writeError(stderr, "invalid_request")
+	}
+	if !slices.Contains(remaining.ManualBackfillDayScopedFamilies, *family) {
+		return writeError(stderr, "invalid_request")
+	}
+	if _, err := uuid.Parse(*org); err != nil {
+		return writeError(stderr, "invalid_request")
+	}
+	if strings.TrimSpace(*reviewEvidence) == "" {
+		return writeError(stderr, "invalid_request")
+	}
+	fromDay, err := time.Parse("2006-01-02", *day)
+	if err != nil {
+		return writeError(stderr, "invalid_request")
+	}
+	toRaw := *to
+	if toRaw == "" {
+		toRaw = *day
+	}
+	toDay, err := time.Parse("2006-01-02", toRaw)
+	if err != nil || toDay.Before(fromDay) {
+		return writeError(stderr, "invalid_request")
+	}
+	if int(toDay.Sub(fromDay).Hours()/24)+1 > manualBackfillMaxDays {
+		return writeError(stderr, "invalid_request")
+	}
+	// codex review round 2, P2: this is a HISTORICAL recovery tool -- a
+	// future --day/--to (a mistyped year, most likely) would still
+	// create a durable run and, for release_impact/dora's
+	// backfill_days window, silently compute PAST days as a side
+	// effect of an operator error that should have been an
+	// invalid_request instead.
+	//
+	// codex review round 3, P1: today itself is ALSO excluded, not just
+	// the future. dora's automatic triggers (post-sync's first-sync-of-
+	// day, the fixed-schedule dora_daily_fanout occurrence) both only
+	// ever target the current UTC day -- never a closed one. A manual
+	// backfill for today could therefore commit its own pending run,
+	// release the advisory lock, and then race an automatic trigger
+	// that starts a SEPARATE generation for the same day (StartRunTx's
+	// dora coverage check only recognizes SUCCEEDED runs, so a manual
+	// run still pending is invisible to it): both eventually execute
+	// and append duplicate dora_metrics_daily rows. Restricting this
+	// command to strictly closed days removes the race entirely --
+	// automatic triggers never revisit a day once it has closed -- and
+	// matches the command's whole purpose (a day that was never
+	// dispatched at all is, by construction, already in the past).
+	if !toDay.Before(time.Now().UTC().Truncate(24 * time.Hour)) {
+		return writeError(stderr, "invalid_request")
+	}
+	perform := func(ctx context.Context) int {
+		if runtime.pools == nil || runtime.registry == nil {
+			return writeError(stderr, "operator_backend_unavailable")
+		}
+		store, err := remaining.NewPostgresStore(runtime.pools.Domain)
+		if err != nil {
+			return writeError(stderr, "operator_backend_unavailable")
+		}
+		publisher, err := remaining.NewPostgresPublisher(runtime.pools.Domain, runtime.registry)
+		if err != nil {
+			return writeError(stderr, "operator_backend_unavailable")
+		}
+		// codex review, P1: a wall-clock generation made a retried CLI
+		// invocation (identical flags, rerun after the first commit but
+		// before its result was observed) indistinguishable from a
+		// genuinely new request -- coverage only recognizes SUCCEEDED
+		// partitions, so the retry could insert and dispatch a second run
+		// per day while the first was still pending/running. Deriving
+		// generation from the request's own shape makes an identical rerun
+		// land on insertRun's ON CONFLICT DO NOTHING path (surfaced as
+		// "already_ran") instead of a duplicate.
+		generation := manualBackfillGeneration(*family, *org, *day, toRaw)
+		var results []manualBackfillDayResult
+		for cursor := fromDay; !cursor.After(toDay); cursor = cursor.AddDate(0, 0, 1) {
+			dayString := cursor.Format("2006-01-02")
+			outcome, startErr := store.StartManualBackfillRun(ctx, *family, *org, dayString, generation, publisher)
+			switch {
+			case errors.Is(startErr, remaining.ErrDayAlreadyCovered):
+				results = append(results, manualBackfillDayResult{
+					Day: dayString, Status: "already_covered", RunID: outcome.RunID,
+				})
+			case errors.Is(startErr, remaining.ErrDayInProgress):
+				results = append(results, manualBackfillDayResult{
+					Day: dayString, Status: "in_progress", RunID: outcome.RunID,
+				})
+			case errors.Is(startErr, remaining.ErrManualBackfillGenerationExhausted):
+				results = append(results, manualBackfillDayResult{
+					Day: dayString, Status: "exhausted", RunID: outcome.RunID, Generation: outcome.Generation,
+				})
+			case startErr != nil:
+				results = append(results, manualBackfillDayResult{Day: dayString, Status: "error", Error: startErr.Error()})
+			case outcome.AlreadyRan:
+				results = append(results, manualBackfillDayResult{
+					Day: dayString, Status: "already_ran", RunID: outcome.RunID, PartitionID: outcome.PartitionID, Generation: outcome.Generation,
+				})
+			default:
+				results = append(results, manualBackfillDayResult{
+					Day: dayString, Status: "started", RunID: outcome.RunID, PartitionID: outcome.PartitionID, Generation: outcome.Generation,
+				})
+			}
+		}
+		// codex review, P2: an "error" status buried in one day's result
+		// object must not read as overall success -- a caller that checks
+		// only the process exit code (a shell script, a scheduled job)
+		// would otherwise treat a partially or completely undispatched
+		// backfill as clean. Print the same full JSON to stdout either way
+		// (the per-day detail is the actual diagnostic), but fail the
+		// process if anything errored.
+		hadDayError := anyManualBackfillDayErrored(results)
+		code := writeResult(stdout, stderr, map[string]any{
+			"family":          *family,
+			"org":             *org,
+			"generation":      generation,
+			"review_evidence": *reviewEvidence,
+			"days":            results,
+			"readback_hint": fmt.Sprintf(
+				"ClickHouse: SELECT day, count() FROM %s WHERE org_id = '%s' AND day BETWEEN '%s' AND '%s' GROUP BY day ORDER BY day",
+				manualBackfillReadbackTable[*family], *org, *day, toRaw,
+			),
+		})
+		if code == 0 && hadDayError {
+			return 1
+		}
+		return code
+	}
+	return auditedWrite(ctx, runtime, stderr, mutation, joboperator.ActionMetricsRemainingStart, "organization", *org, perform)
 }

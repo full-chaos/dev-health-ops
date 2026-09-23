@@ -59,8 +59,17 @@ CREATE TABLE feature_flags (
 );
 CREATE TABLE org_feature_overrides (
  id uuid PRIMARY KEY, org_id uuid NOT NULL, feature_id uuid NOT NULL,
- is_enabled boolean NOT NULL, expires_at timestamptz NULL,
+ is_enabled boolean NOT NULL, expires_at timestamptz NULL, config json NULL,
  UNIQUE (org_id, feature_id)
+);
+CREATE TABLE organizations (
+ id uuid PRIMARY KEY, tier text NULL
+);
+CREATE TABLE org_licenses (
+ org_id uuid PRIMARY KEY, tier text NULL, features_override json NULL, limits_override jsonb NULL
+);
+CREATE TABLE tier_limits (
+ tier text NOT NULL, limit_key text NOT NULL, limit_value text NULL, PRIMARY KEY (tier, limit_key)
 );
 CREATE TABLE backfill_jobs (
  id uuid PRIMARY KEY, org_id text NOT NULL, celery_task_id text NULL, status text NOT NULL,

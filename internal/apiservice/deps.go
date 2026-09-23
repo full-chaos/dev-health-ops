@@ -36,6 +36,27 @@ type Deps struct {
 	// Guard to wrap a handler with its authorization level.
 	Auth  *policy.Authenticator
 	Guard *policy.Guard
+	// Probes is the configuration the health probes report on.
+	Probes ProbeConfig
+	// Telemetry is the telemetry areas' configuration.
+	Telemetry TelemetryConfig
+}
+
+// TelemetryConfig is TELEMETRY_ENDPOINT (where /telemetry/report sends) and
+// the Valkey DSN product-telemetry batches are appended to ("" = no stream:
+// batches are accepted with stream "disabled").
+type TelemetryConfig struct {
+	Endpoint  string
+	ValkeyURI string
+}
+
+// ProbeConfig is what /health, /ready and /health/workers check: the
+// ClickHouse and Valkey DSNs ("" = not configured) and EXPECTED_WORKER_GROUPS
+// (nil = unset).
+type ProbeConfig struct {
+	ClickHouseDSN        string
+	ValkeyURI            string
+	ExpectedWorkerGroups *[]string
 }
 
 // pgxpoolComponent closes the pool on shutdown. Start performs no I/O, for

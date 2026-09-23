@@ -769,11 +769,10 @@ func TestDomainRoleCanTakeTheAdvisoryLockFinalizeNeeds(t *testing.T) {
 // -- is already there.
 func createDispatchTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
+	// organizations/org_licenses/tier_limits are created by
+	// createReferenceDiscoveryTables above (CHAOS-6286 merged them there).
 	createReferenceDiscoveryTables(t, ctx, pool)
 	if _, err := pool.Exec(ctx, `
-CREATE TABLE public.organizations (id uuid PRIMARY KEY, tier text NULL);
-CREATE TABLE public.org_licenses (org_id uuid PRIMARY KEY, tier text NULL, limits_override jsonb NULL);
-CREATE TABLE public.tier_limits (tier text NOT NULL, limit_key text NOT NULL, limit_value text NULL, PRIMARY KEY (tier, limit_key));
 CREATE TABLE public.worker_job_outbox (
 	id uuid PRIMARY KEY,
 	dedupe_key varchar(256) NOT NULL UNIQUE,

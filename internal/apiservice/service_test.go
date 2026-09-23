@@ -244,6 +244,13 @@ func TestRoutesMountsEveryArea(t *testing.T) {
 		"POST /api/v1/external-ingest/batches":                 false,
 		"GET /api/v1/external-ingest/batches":                  false,
 		"GET /api/v1/external-ingest/batches/{ingestion_id}":   false,
+		"GET /health":                           false,
+		"HEAD /health":                          false,
+		"GET /ready":                            false,
+		"HEAD /ready":                           false,
+		"GET /health/workers":                   false,
+		"HEAD /health/workers":                  false,
+		"POST /api/v1/product-telemetry/events": false,
 	}
 	if len(routes) != len(want) {
 		t.Fatalf("route count = %d, want %d: %+v", len(routes), len(want), routes)

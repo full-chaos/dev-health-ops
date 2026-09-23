@@ -36,8 +36,11 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/externalingest"
+	healthroutes "github.com/full-chaos/dev-health-ops/internal/api/health"
 	"github.com/full-chaos/dev-health-ops/internal/api/orgs"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/api/producttelemetry"
+	"github.com/full-chaos/dev-health-ops/internal/api/telemetry"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/acr"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
@@ -135,8 +138,14 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		Valkey: deps.Valkey,
 		Logger: logger,
 	})...)
+	routes = append(routes, healthroutes.Routes(healthroutes.Deps{
+		Pool: deps.Pool, ClickHouseDSN: deps.Probes.ClickHouseDSN, ValkeyURI: deps.Probes.ValkeyURI,
+		ExpectedWorkerGroups: deps.Probes.ExpectedWorkerGroups, Logger: logger,
+	})...)
+	routes = append(routes, producttelemetry.Routes(&producttelemetry.ValkeyStreams{URI: deps.Telemetry.ValkeyURI}, logger)...)
 	if deps.Guard != nil {
 		routes = append(routes, orgs.Routes(deps.Pool, deps.Guard, logger)...)
+		routes = append(routes, telemetry.Routes(deps.Pool, deps.Guard, deps.Auth, deps.Telemetry.Endpoint, logger)...)
 	}
 	// admin is this Service's other consumer of policy.Guard: mounted only
 	// when the protected-route runtime is actually up (deps.Pool
@@ -173,6 +182,11 @@ func configure(
 		deps.Auth, deps.Guard = protected.auth, protected.guard
 		scope = []func(http.Handler) http.Handler{protected.scope.OrgScope, protected.scope.Impersonation}
 	}
+	deps.Probes = ProbeConfig{
+		ClickHouseDSN: cfg.ClickHouseURI.Reveal(), ValkeyURI: cfg.ValkeyURI.Reveal(),
+		ExpectedWorkerGroups: cfg.APIExpectedWorkerGroups,
+	}
+	deps.Telemetry = TelemetryConfig{Endpoint: cfg.TelemetryEndpoint, ValkeyURI: cfg.ValkeyURI.Reveal()}
 	server, err := NewServer(cfg, logger, Routes(deps, logger), scope...)
 	if err != nil {
 		return nil, err

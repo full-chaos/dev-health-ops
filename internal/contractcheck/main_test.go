@@ -146,43 +146,77 @@ func TestCommandErrorsAreBounded(t *testing.T) {
 // (cli.ExitOK), and every other failure exits 1 (cli.ExitFailure). "Move
 // only" (this fold's own parser classification) does not exempt these
 // verbs from the contract every OTHER vertical in this binary honors.
+//
+// One row per verb x {bad flag, -h, unwanted positional, real failure} --
+// all four verbs are exercised identically, not a subset of cases spread
+// unevenly across verbs, so a verb-specific regression in the contract
+// cannot hide behind a case another verb happened to cover.
 func TestExitCodeContract(t *testing.T) {
 	root := moduleRootPath("contracts", "jobs", "v1")
-	for _, cell := range []struct {
-		name string
-		args []string
-		want int
-	}{
-		{"validate: bad flag", []string{"--not-a-real-flag"}, cli.ExitUsage},
-		{"validate: -h", []string{"-h"}, cli.ExitOK},
-		{"validate: --help", []string{"--help"}, cli.ExitOK},
-		{"validate: unwanted positional", []string{"unexpected"}, cli.ExitUsage},
-		{"validate: real failure (missing contract tree)", []string{"--root", filepath.Join(t.TempDir(), "does-not-exist")}, cli.ExitFailure},
-		{"capabilities: -h", []string{"-h"}, cli.ExitOK},
-		{"capabilities: missing --queues", []string{"--root", root}, cli.ExitUsage},
-		{"rollout: -h", []string{"-h"}, cli.ExitOK},
-		{"compare: -h", []string{"-h"}, cli.ExitOK},
-		{"compare: missing --base", []string{}, cli.ExitUsage},
-	} {
-		t.Run(cell.name, func(t *testing.T) {
-			var run func(args []string, stdout, stderr *bytes.Buffer) error
-			switch {
-			case strings.HasPrefix(cell.name, "validate"):
-				run = func(args []string, stdout, stderr *bytes.Buffer) error { return runValidate(args, stdout, stderr) }
-			case strings.HasPrefix(cell.name, "capabilities"):
-				run = func(args []string, stdout, stderr *bytes.Buffer) error { return runCapabilities(args, stdout, stderr) }
-			case strings.HasPrefix(cell.name, "rollout"):
-				run = func(args []string, stdout, stderr *bytes.Buffer) error { return runRollout(args, stdout, stderr) }
-			case strings.HasPrefix(cell.name, "compare"):
-				run = func(args []string, stdout, stderr *bytes.Buffer) error { return runCompare(args, stdout, stderr) }
-			}
-			var stdout, stderr bytes.Buffer
-			err := run(cell.args, &stdout, &stderr)
-			if got := cli.ExitForVerbError(err); got != cell.want {
-				t.Fatalf("exit = %d, want %d (err=%v)", got, cell.want, err)
-			}
-		})
+	missingRoot := filepath.Join(t.TempDir(), "does-not-exist")
+	missingReport := filepath.Join(t.TempDir(), "does-not-exist.json")
+
+	type verbCase struct {
+		verb string
+		run  func(args []string, stdout, stderr *bytes.Buffer) error
+		// validArgs is a minimal flag set that passes this verb's own
+		// usage checks (so bad-flag/positional cases are refused by the
+		// SHARED contract machinery, never by a verb-specific usage
+		// check firing first).
+		validArgs []string
 	}
+	verbs := []verbCase{
+		{"validate", func(args []string, stdout, stderr *bytes.Buffer) error { return runValidate(args, stdout, stderr) }, nil},
+		{"capabilities", func(args []string, stdout, stderr *bytes.Buffer) error { return runCapabilities(args, stdout, stderr) }, []string{"--root", root, "--queues", "heartbeat"}},
+		{"rollout", func(args []string, stdout, stderr *bytes.Buffer) error { return runRollout(args, stdout, stderr) }, []string{"--root", root, "--queues", "heartbeat", "--report", missingReport}},
+		{"compare", func(args []string, stdout, stderr *bytes.Buffer) error { return runCompare(args, stdout, stderr) }, []string{"--base", root}},
+	}
+
+	for _, verb := range verbs {
+		for _, cell := range []struct {
+			name string
+			args []string
+			want int
+		}{
+			{"bad flag", []string{"--not-a-real-flag"}, cli.ExitUsage},
+			{"-h", []string{"-h"}, cli.ExitOK},
+			{"unwanted positional", append(append([]string{}, verb.validArgs...), "unexpected"), cli.ExitUsage},
+			{"real failure", []string{"--root", missingRoot}, cli.ExitFailure},
+		} {
+			args := cell.args
+			if cell.name == "real failure" {
+				switch verb.verb {
+				case "capabilities":
+					// --queues must still be present or this falls into
+					// the usage-error branch instead of a real failure.
+					args = []string{"--root", missingRoot, "--queues", "heartbeat"}
+				case "rollout":
+					args = []string{"--root", missingRoot, "--queues", "heartbeat", "--report", missingReport}
+				case "compare":
+					// compare has no --root; its own failure mode is an
+					// unreadable --base tree.
+					args = []string{"--base", missingRoot}
+				}
+			}
+			t.Run(verb.verb+": "+cell.name, func(t *testing.T) {
+				var stdout, stderr bytes.Buffer
+				err := verb.run(args, &stdout, &stderr)
+				if got := cli.ExitForVerbError(err); got != cell.want {
+					t.Fatalf("exit = %d, want %d (err=%v)", got, cell.want, err)
+				}
+			})
+		}
+	}
+
+	// --help spelled long-form, once, to prove both spellings reach
+	// flag.ErrHelp identically (not a per-verb concern).
+	t.Run("validate: --help", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+		err := runValidate([]string{"--help"}, &stdout, &stderr)
+		if got := cli.ExitForVerbError(err); got != cli.ExitOK {
+			t.Fatalf("exit = %d, want %d (err=%v)", got, cli.ExitOK, err)
+		}
+	})
 }
 
 // TestCommandRunPrintsErrorOnceExceptOnHelp proves the Command() wrapper

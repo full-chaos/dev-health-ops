@@ -95,8 +95,18 @@ func apiPosture() RolePosture {
 			// a later route area needing more on an already-declared table
 			// widens this entry in place, never appends a second one.
 			{"impersonation_sessions", true, true, false},
-			// The generic audit writer (internal/api/audit): this area's
-			// impersonation_start/impersonation_stop rows.
+			// Plan area A: /health's application schema revision and
+			// /health/workers' worker heartbeat presence.
+			{"alembic_version", false, false, false},
+			{"worker_instances", false, false, false},
+			// Plan area K: the org telemetry settings, the instance usage
+			// counts /telemetry/report reads, and its audit row. (There is no
+			// Postgres repos table: repositories live in ClickHouse.)
+			{"settings", true, true, false},
+			{"sync_configurations", false, false, false},
+			// The generic audit writer (internal/api/audit): shared by this
+			// area's impersonation_start/impersonation_stop rows and plan
+			// area K's telemetry-report audit row -- one entry, both areas.
 			{"audit_logs", true, false, false},
 		},
 	}

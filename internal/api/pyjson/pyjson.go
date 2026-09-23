@@ -66,13 +66,31 @@ func IntOf(n int64) Int { return Int{big.NewInt(n)} }
 // plain maps are refused so no caller writes Go's sorted order by accident).
 func Marshal(value Value) ([]byte, error) {
 	var buffer bytes.Buffer
-	if err := write(&buffer, value); err != nil {
+	if err := (writer{}).write(&buffer, value); err != nil {
 		return nil, err
 	}
 	return buffer.Bytes(), nil
 }
 
-func write(buffer *bytes.Buffer, value Value) error {
+// Dumps writes value as json.dumps(value) with its defaults: ", " and ": "
+// separators and ensure_ascii=True (every non-ASCII character as \uXXXX,
+// surrogate pairs above the BMP). Stored JSON columns (SQLAlchemy's JSON
+// type) and Valkey stream fields the Python api writes use this form.
+func Dumps(value Value) (string, error) {
+	var buffer bytes.Buffer
+	if err := (writer{spaced: true, ascii: true}).write(&buffer, value); err != nil {
+		return "", err
+	}
+	return buffer.String(), nil
+}
+
+type writer struct{ spaced, ascii bool }
+
+// allowNaN is json.dumps(allow_nan=True): NaN and the infinities as the
+// bare words Python writes.
+func (wr writer) allowNaN() bool { return wr.ascii }
+
+func (wr writer) write(buffer *bytes.Buffer, value Value) error {
 	switch typed := value.(type) {
 	case nil:
 		buffer.WriteString("null")
@@ -83,7 +101,7 @@ func write(buffer *bytes.Buffer, value Value) error {
 			buffer.WriteString("false")
 		}
 	case string:
-		return writeString(buffer, typed)
+		return wr.writeString(buffer, typed)
 	case Int:
 		if typed.Int == nil {
 			buffer.WriteString("0")
@@ -95,16 +113,16 @@ func write(buffer *bytes.Buffer, value Value) error {
 	case int64:
 		buffer.WriteString(strconv.FormatInt(typed, 10))
 	case Float:
-		return writeFloat(buffer, float64(typed))
+		return wr.writeFloat(buffer, float64(typed))
 	case float64:
-		return writeFloat(buffer, typed)
+		return wr.writeFloat(buffer, typed)
 	case []Value:
 		buffer.WriteByte('[')
 		for index, item := range typed {
 			if index > 0 {
-				buffer.WriteByte(',')
+				wr.comma(buffer)
 			}
-			if err := write(buffer, item); err != nil {
+			if err := wr.write(buffer, item); err != nil {
 				return err
 			}
 		}
@@ -113,9 +131,9 @@ func write(buffer *bytes.Buffer, value Value) error {
 		buffer.WriteByte('[')
 		for index, item := range typed {
 			if index > 0 {
-				buffer.WriteByte(',')
+				wr.comma(buffer)
 			}
-			if err := writeString(buffer, item); err != nil {
+			if err := wr.writeString(buffer, item); err != nil {
 				return err
 			}
 		}
@@ -124,13 +142,16 @@ func write(buffer *bytes.Buffer, value Value) error {
 		buffer.WriteByte('{')
 		for index, key := range typed.keys {
 			if index > 0 {
-				buffer.WriteByte(',')
+				wr.comma(buffer)
 			}
-			if err := writeString(buffer, key); err != nil {
+			if err := wr.writeString(buffer, key); err != nil {
 				return err
 			}
 			buffer.WriteByte(':')
-			if err := write(buffer, typed.values[key]); err != nil {
+			if wr.spaced {
+				buffer.WriteByte(' ')
+			}
+			if err := wr.write(buffer, typed.values[key]); err != nil {
 				return err
 			}
 		}
@@ -144,7 +165,14 @@ func write(buffer *bytes.Buffer, value Value) error {
 // writeString is json.dumps' string escaping with ensure_ascii=False: '"',
 // '\\', and the control characters below 0x20 are escaped (\n \r \t \b \f
 // by name, the rest as \u00XX); everything else is written as UTF-8.
-func writeString(buffer *bytes.Buffer, text string) error {
+func (wr writer) comma(buffer *bytes.Buffer) {
+	buffer.WriteByte(',')
+	if wr.spaced {
+		buffer.WriteByte(' ')
+	}
+}
+
+func (wr writer) writeString(buffer *bytes.Buffer, text string) error {
 	buffer.WriteByte('"')
 	for _, r := range Runes(text) {
 		switch r {
@@ -164,12 +192,15 @@ func writeString(buffer *bytes.Buffer, text string) error {
 			buffer.WriteString(`\f`)
 		default:
 			switch {
-			case utf16.IsSurrogate(r):
+			case utf16.IsSurrogate(r) && !wr.ascii:
 				// json.dumps keeps a lone surrogate; encoding the body as
 				// UTF-8 then raises UnicodeEncodeError (a 500 in Python).
 				return ErrUnicode
-			case r < 0x20:
+			case r < 0x20 || (wr.ascii && r >= 0x7f && r <= 0xffff):
 				fmt.Fprintf(buffer, `\u%04x`, r)
+			case wr.ascii && r > 0xffff:
+				high, low := utf16.EncodeRune(r)
+				fmt.Fprintf(buffer, `\u%04x\u%04x`, high, low)
 			default:
 				buffer.WriteRune(r)
 			}
@@ -185,9 +216,20 @@ var ErrNotFinite = errors.New("pyjson: out of range float values are not JSON co
 // writeFloat is float.__repr__: the shortest round-tripping digits, in
 // positional form when 1e-4 <= |x| < 1e16 (with ".0" when integral) and in
 // exponent form otherwise ("1e+16", "1.5e-05").
-func writeFloat(buffer *bytes.Buffer, value float64) error {
+func (wr writer) writeFloat(buffer *bytes.Buffer, value float64) error {
 	if math.IsNaN(value) || math.IsInf(value, 0) {
-		return ErrNotFinite
+		if !wr.allowNaN() {
+			return ErrNotFinite
+		}
+		switch {
+		case math.IsNaN(value):
+			buffer.WriteString("NaN")
+		case value > 0:
+			buffer.WriteString("Infinity")
+		default:
+			buffer.WriteString("-Infinity")
+		}
+		return nil
 	}
 	if value == 0 {
 		if math.Signbit(value) {

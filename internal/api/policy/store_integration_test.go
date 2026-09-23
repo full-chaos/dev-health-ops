@@ -35,6 +35,11 @@ var schemaDDL = []string{
 	`CREATE TABLE public.feature_flags (id uuid PRIMARY KEY)`,
 	`CREATE TABLE public.org_feature_overrides (id uuid PRIMARY KEY)`,
 	`CREATE TABLE public.org_licenses (id uuid PRIMARY KEY)`,
+	`CREATE TABLE public.alembic_version (version_num varchar(32) PRIMARY KEY)`,
+	`CREATE TABLE public.worker_instances (id uuid PRIMARY KEY)`,
+	`CREATE TABLE public.settings (id uuid PRIMARY KEY)`,
+	`CREATE TABLE public.sync_configurations (id uuid PRIMARY KEY)`,
+	`CREATE TABLE public.audit_logs (id uuid PRIMARY KEY)`,
 	`CREATE TABLE public.users (
 		id uuid PRIMARY KEY, email text NOT NULL UNIQUE,
 		is_active boolean, is_superuser boolean, token_version integer NOT NULL DEFAULT 0)`,

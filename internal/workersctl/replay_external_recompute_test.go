@@ -50,9 +50,9 @@ func TestDispatchExternalRecomputeReplayRequiresReviewEvidence(t *testing.T) {
 
 func TestDispatchExternalRecomputeReplayRejectsBadFlags(t *testing.T) {
 	for name, args := range map[string][]string{
-		"non-positive limit": {"--review-evidence", "CHAOS-5296", "--limit", "0"},
-		"unknown flag":       {"--review-evidence", "CHAOS-5296", "--force"},
-		"stray argument":     {"--review-evidence", "CHAOS-5296", "extra"},
+		"non-positive limit": {"--review-evidence", "CHAOS-5296", "--reason", "operator_test", "--correlation-id", "corr-1", "--limit", "0"},
+		"unknown flag":       {"--review-evidence", "CHAOS-5296", "--reason", "operator_test", "--correlation-id", "corr-1", "--force"},
+		"stray argument":     {"--review-evidence", "CHAOS-5296", "--reason", "operator_test", "--correlation-id", "corr-1", "extra"},
 	} {
 		var stdout, stderr bytes.Buffer
 		code := dispatchExternalRecomputeReplay(context.Background(), &operatorRuntime{},
@@ -70,8 +70,8 @@ func TestDispatchExternalRecomputeReplayRejectsBadFlags(t *testing.T) {
 // database, and printing an empty report would read as "no backlog".
 func TestDispatchExternalRecomputeReplayNeedsABackend(t *testing.T) {
 	for name, args := range map[string][]string{
-		"real run": {"replay", "--review-evidence", "CHAOS-5296"},
-		"dry run":  {"replay", "--review-evidence", "CHAOS-5296", "--dry-run"},
+		"real run": {"replay", "--review-evidence", "CHAOS-5296", "--reason", "operator_test", "--correlation-id", "corr-1"},
+		"dry run":  {"replay", "--review-evidence", "CHAOS-5296", "--reason", "operator_test", "--correlation-id", "corr-1", "--dry-run"},
 	} {
 		var stdout, stderr bytes.Buffer
 		code := dispatchExternalRecompute(context.Background(), &operatorRuntime{},
@@ -125,7 +125,7 @@ func TestExternalRecomputeReplayRefusesAnEmptyCap(t *testing.T) {
 	// operator_backend_unavailable would be the wrong ordering. This asserts
 	// the ordering too -- with no backend, the backend error wins.
 	code := dispatchExternalRecompute(context.Background(), &operatorRuntime{},
-		[]string{"replay", "--review-evidence", "CHAOS-5296"}, &stdout, &stderr)
+		[]string{"replay", "--review-evidence", "CHAOS-5296", "--reason", "operator_test", "--correlation-id", "corr-1"}, &stdout, &stderr)
 	if code == 0 {
 		t.Fatalf("replay proceeded with an empty cap: stdout=%q", stdout.String())
 	}

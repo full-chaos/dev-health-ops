@@ -539,29 +539,38 @@ func TestFlameCorpus_HasIDBoundLiveEntriesForPRIssueAndDeployment(t *testing.T) 
 		t.Errorf("deployment entry Parity.BaselineDefects = %+v, want none -- fetch_deployment carries no declared divergence", deployment.Parity.BaselineDefects)
 	}
 
-	// deployment_gap_entity_id_bound_422 proves validateFlameFrames' own
+	// deployment_gap_entity_id_bound_422 declares validateFlameFrames' own
 	// "Flame frames have gaps" 422 branch for the "deployment" entity_type
 	// (restcorpus.go's own "Branches this corpus cannot provably reach"
-	// doc comment). On production data, 0 of the proof organisation's
-	// 1135 deployments satisfy end > start, so this is the deployment
-	// branch's only live comparing case. It needs its OWN
-	// operator-supplied producer -- a distinct deployment_id from
+	// doc comment). That 422 is the HANDLER's own data-dependent check
+	// (0 of the proof organisation's 1135 deployments satisfy end >
+	// start), not FastAPI/Pydantic request-shape validation, so it is
+	// exactly as dead as this route's other deleted-body entries: its
+	// IDBindings (below) is non-empty, so isFrameworkValidatedEqualStatus
+	// derives false for it, and restdeletedbody.go's init() overrides it
+	// to the fixed sentinel like every other non-framework entry (a real
+	// production refusal on STEP 173 first surfaced this gap). It still
+	// needs its OWN operator-supplied
+	// producer -- a distinct deployment_id from
 	// deployment_entity_id_bound_200's -- since the two entries declare
 	// different WantCandidateStatus and cannot share a bound value.
 	if !IsOperatorSuppliedIDProducer("deployment_gap_entity_id") {
 		t.Error("deployment_gap_entity_id is not declared in restOperatorSuppliedProducers")
 	}
-	if deploymentGap.WantCandidateStatus != 422 || deploymentGap.WantBaselineStatus != 422 {
-		t.Errorf("deployment gap entry status = (%d, %d), want (422, 422)", deploymentGap.WantCandidateStatus, deploymentGap.WantBaselineStatus)
+	if deploymentGap.WantCandidateStatus != 422 || deploymentGap.WantBaselineStatus != 500 {
+		t.Errorf("deployment gap entry status = (%d, %d), want (422, 500) -- GET /api/v1/flame is a deleted-Python-body route (CHAOS-6241)", deploymentGap.WantCandidateStatus, deploymentGap.WantBaselineStatus)
 	}
-	if deploymentGap.BodyMode != RESTBodyModeJSON {
-		t.Errorf("deployment gap entry BodyMode = %q, want json", deploymentGap.BodyMode)
+	if deploymentGap.BodyMode != RESTBodyModeStatusOnly {
+		t.Errorf("deployment gap entry BodyMode = %q, want status_only -- the candidate itself does not reach 200", deploymentGap.BodyMode)
+	}
+	if deploymentGap.StatusDivergenceReason != PythonBodyDeletedReason {
+		t.Errorf("deployment gap entry StatusDivergenceReason = %q, want the deleted-body reason", deploymentGap.StatusDivergenceReason)
 	}
 	if len(deploymentGap.IDBindings) != 1 || deploymentGap.IDBindings[0].Producer != "deployment_gap_entity_id" || deploymentGap.IDBindings[0].QueryParam != "entity_id" {
 		t.Errorf("deployment gap entry IDBindings = %+v, want one binding on entity_id to producer %q", deploymentGap.IDBindings, "deployment_gap_entity_id")
 	}
 	if len(deploymentGap.Parity.BaselineDefects) != 0 {
-		t.Errorf("deployment gap entry Parity.BaselineDefects = %+v, want none -- both planes raise the identical literal body", deploymentGap.Parity.BaselineDefects)
+		t.Errorf("deployment gap entry Parity.BaselineDefects = %+v, want none", deploymentGap.Parity.BaselineDefects)
 	}
 
 	if pr.WantCandidateStatus != 200 || pr.WantBaselineStatus != 500 {

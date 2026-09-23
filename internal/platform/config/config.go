@@ -318,6 +318,11 @@ type Config struct {
 	APIJWTSecret   secrets.Value
 	APIJWTIssuer   string
 	APIJWTAudience string
+	// APIExpectedWorkerGroups is EXPECTED_WORKER_GROUPS for the api's
+	// /health/workers (dho api only): nil when the variable is unset (no Go
+	// fleet declared), else its comma-separated, trimmed, non-empty entries
+	// -- possibly none, which the route treats as a misconfiguration.
+	APIExpectedWorkerGroups *[]string
 	// OperationalBridgeTimeout is CHAOS-6279's sole survivor from the
 	// deleted worker-operational-bridge trio (URL/Token/AllowInsecure) --
 	// nothing sends a bridge call any more (CHAOS-5320 deleted the Python
@@ -852,6 +857,15 @@ func Load(spec Spec) (Config, error) {
 		cfg.APIJWTSecret, _, err = secrets.Resolve("JWT_SECRET_KEY", lookup)
 		if err != nil {
 			return Config{}, err
+		}
+		if raw, present := lookup("EXPECTED_WORKER_GROUPS"); present {
+			groups := []string{}
+			for _, group := range strings.Split(raw, ",") {
+				if group = strings.TrimSpace(group); group != "" {
+					groups = append(groups, group)
+				}
+			}
+			cfg.APIExpectedWorkerGroups = &groups
 		}
 		cfg.APIJWTIssuer = envOrDefault(lookup, "JWT_ISSUER", defaultJWTIssuer)
 		cfg.APIJWTAudience = envOrDefault(lookup, "JWT_AUDIENCE", defaultJWTAudience)

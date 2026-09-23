@@ -37,13 +37,21 @@ type routeMatch struct{}
 
 func (routeMatch) ServeHTTP(http.ResponseWriter, *http.Request) {}
 
-// matches reports whether path matches a route pattern for some method.
-// For its own trailing-slash redirect, net/http's mux returns the target's
-// pattern with a redirect handler, so only a routeMatch handler counts.
+// matches reports whether the decoded path matches a route pattern for some
+// method, as Starlette matches scope["path"] literally. For its own
+// trailing-slash redirect, net/http's mux returns the target's pattern with a
+// redirect handler, so only a routeMatch handler counts.
+//
+// The mux cleans the escaped path before matching, so a "." or ".." segment
+// in the decoded path (from "%2e%2e", say) would be resolved away or
+// redirected. The probe's escaped path carries such segments percent-encoded:
+// the mux leaves them in place and unescapes them for a wildcard, which is
+// what Starlette's "[^/]+" does with the decoded segment.
 func (s *slashRedirector) matches(r *http.Request, path string) bool {
 	probe := r.Clone(r.Context())
 	url := *r.URL
 	url.Path, url.RawPath = path, ""
+	url.RawPath = escapeDotSegments(url.EscapedPath())
 	probe.URL = &url
 	handler, pattern := s.matcher.Handler(probe)
 	_, isMatch := handler.(routeMatch)
@@ -74,13 +82,13 @@ func (s *slashRedirector) redirect(w http.ResponseWriter, r *http.Request) bool 
 	if strings.HasSuffix(current, "/") {
 		target = strings.TrimRight(current, "/")
 	}
-	if target == "" || canonicalPath(target) != target {
+	if target == "" || !s.matches(r, target) {
 		return false
 	}
-	if !s.matches(r, target) {
-		return false
-	}
-	location := s.trust.scheme(r) + "://" + r.Host + target
+	// uvicorn builds scope["path"] with urllib.parse.unquote, which decodes
+	// the percent-escapes as UTF-8 with errors="replace"; Starlette quotes
+	// that str back, so an invalid sequence reaches Location as %EF%BF%BD.
+	location := s.trust.scheme(r) + "://" + r.Host + pythonparity.DecodeUTF8Replace(target)
 	if r.URL.RawQuery != "" {
 		location += "?" + r.URL.RawQuery
 	}
@@ -88,4 +96,20 @@ func (s *slashRedirector) redirect(w http.ResponseWriter, r *http.Request) bool 
 	w.Header().Set("Content-Length", "0")
 	w.WriteHeader(http.StatusTemporaryRedirect)
 	return true
+}
+
+// escapeDotSegments percent-encodes every "." and ".." segment of an escaped
+// path. Escaping never yields "%2E" itself, so the result still unescapes to
+// the same decoded path.
+func escapeDotSegments(escaped string) string {
+	segments := strings.Split(escaped, "/")
+	for index, segment := range segments {
+		switch segment {
+		case ".":
+			segments[index] = "%2E"
+		case "..":
+			segments[index] = "%2E%2E"
+		}
+	}
+	return strings.Join(segments, "/")
 }

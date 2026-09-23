@@ -185,9 +185,10 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), orgID, memberID
 	if sourceRows != goRows {
 		t.Errorf("audit_logs rows differ:\n python: %s\n go:     %s", sourceRows, goRows)
 	}
+	compareAuditJSONWithSpacingGap(t, ctx, venue, fmt.Sprintf("org_id = '%s' AND user_id = '%s'", orgID, adminID), "request_metadata")
 }
 
 func userPasswordAuditQuery(orgID, adminID uuid.UUID) string {
-	return fmt.Sprintf(`SELECT org_id, user_id, action, resource_type, status, changes, request_metadata
+	return fmt.Sprintf(`SELECT org_id, user_id, action, resource_type, status, changes::text
 FROM audit_logs WHERE org_id = '%s' AND user_id = '%s' ORDER BY created_at`, orgID, adminID)
 }

@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strings"
@@ -245,12 +246,21 @@ func TestWebhookIntakeVenueOracleGitHubGitLabJiraHealth(t *testing.T) {
 	}
 
 	pythonOutbox := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB),
-		`SELECT job_kind FROM worker_job_outbox ORDER BY job_kind, id`)
+		`SELECT job_kind FROM worker_job_outbox ORDER BY job_kind, dedupe_key`)
 	goOutbox := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB),
-		`SELECT job_kind FROM worker_job_outbox ORDER BY job_kind, id`)
+		`SELECT job_kind FROM worker_job_outbox ORDER BY job_kind, dedupe_key`)
 	if pythonOutbox != goOutbox {
 		t.Errorf("worker_job_outbox rows differ:\n python: %s\n go:     %s", pythonOutbox, goOutbox)
 	}
+	// args is stored JSON, compared as raw text. dedupe_key (the
+	// content-derived idempotency key) orders both planes' rows alike; the
+	// delivery ids inside are random per plane and blanked. Go stores the
+	// canonical job-contract text (indented), Python json.dumps text: that
+	// named gap is ticketed with the job outbox owner.
+	argsQuery := `SELECT coalesce(string_agg(args::text, E'\x1e' ORDER BY job_kind, dedupe_key), '') FROM worker_job_outbox`
+	venueoracle.CompareJSONSpacingGap(t, "worker_job_outbox.args",
+		blankedJSONRows(venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), argsQuery)),
+		blankedJSONRows(venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), argsQuery)))
 	// venueoracle.Start already wrote this test's own proof file (by
 	// t.Name()) once the venue genuinely built -- nothing to do here.
 }
@@ -579,4 +589,19 @@ func TestWebhookIntakeVenueOraclePagerDuty(t *testing.T) {
 		t.Errorf("pagerduty-webhook-replay keys differ:\n python: %s\n go:     %s", pythonReplay, goReplay)
 	}
 	// venueoracle.Start already wrote this test's own proof file.
+}
+
+var venueUUIDPattern = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
+
+// blankedJSONRows splits a string_agg of stored JSON texts into rows, with
+// every UUID blanked.
+func blankedJSONRows(joined string) []string {
+	if joined == "" {
+		return nil
+	}
+	rows := strings.Split(joined, venueoracle.JSONRowSeparator)
+	for index, row := range rows {
+		rows[index] = venueUUIDPattern.ReplaceAllString(row, "<uuid>")
+	}
+	return rows
 }

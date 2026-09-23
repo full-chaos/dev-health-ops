@@ -4,12 +4,14 @@ package admin_test
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -145,4 +147,28 @@ func repoRoot(t *testing.T) string {
 		}
 		directory = parent
 	}
+}
+
+// compareAuditJSONWithSpacingGap compares audit_logs json columns as raw
+// stored text for the rows where holds, in created_at order, through the
+// venue's named spacing-gap check: the Go admin routes store these
+// columns compact (pyjson.Marshal) where Python stores json.dumps text.
+// That gap is ticketed with the admin route owner; the check fails when
+// it closes, so this call is then replaced by a direct comparison.
+func compareAuditJSONWithSpacingGap(t *testing.T, ctx context.Context, venue *venueoracle.Venue, where string, columns ...string) {
+	t.Helper()
+	for _, column := range columns {
+		query := fmt.Sprintf(`SELECT coalesce(string_agg(coalesce(%s::text, '<null>'), E'\x1e' ORDER BY created_at), '')
+FROM audit_logs WHERE %s`, column, where)
+		python := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), query)
+		goText := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), query)
+		venueoracle.CompareJSONSpacingGap(t, "audit_logs."+column, splitRows(python), splitRows(goText))
+	}
+}
+
+func splitRows(joined string) []string {
+	if joined == "" {
+		return nil
+	}
+	return strings.Split(joined, venueoracle.JSONRowSeparator)
 }

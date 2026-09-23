@@ -161,7 +161,8 @@ func customerPushRequests(f customerPushFixture, tokens map[string]string) []ven
 		"page": "?limit=1&offset=1", "repeated limit": "?limit=1&limit=2", "limit float zeros": "?limit=2.00",
 		"limit spaced": "?limit=%201%20", "limit 0": "?limit=0", "limit 201": "?limit=201", "limit abc": "?limit=abc",
 		"offset -1": "?offset=-1", "from bad": "?from=2026-13-01", "to bad": "?to=x", "all bad": "?from=x&to=y&limit=0&offset=-1",
-		"huge limit": "?limit=99999999999999999999999",
+		"huge limit": "?limit=99999999999999999999999", "huge offset": "?offset=99999999999999999999",
+		"offset max int64": "?offset=9223372036854775807",
 	} {
 		add("batches "+name, "GET", batches+query, bearer("admin"))
 	}
@@ -174,6 +175,7 @@ func customerPushRequests(f customerPushFixture, tokens map[string]string) []ven
 		"old": f.batchOld.String(), "other source": f.batchOtherSource.String(), "other org": f.batchOtherOrg.String(),
 		"not uuid": "nope", "upper": strings.ToUpper(f.batchMain.String()),
 		"limit 0": f.batchMain.String() + "?rejected_records_limit=0", "offset bad": f.batchMain.String() + "?rejected_records_offset=x",
+		"offset huge": f.batchMain.String() + "?rejected_records_offset=99999999999999999999",
 	} {
 		add("batch "+name, "GET", detail+path, bearer("admin"))
 	}

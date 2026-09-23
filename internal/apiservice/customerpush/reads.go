@@ -319,9 +319,15 @@ func (h *handlers) listSourceBatches(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// pydantic's int is unbounded; asyncpg refuses an offset past int64 when
+	// it binds the page query, Python's unhandled 500.
+	if !offset.IsInt64() {
+		h.internal(w, r, "list batches", errors.New("offset does not fit a bigint"))
+		return
+	}
 	rows, total, err := externalingest.ListBatches(r.Context(), h.pool, orgID, externalingest.BatchQuery{
 		SourceSystem: &source.System, SourceInstance: &source.Instance, Status: status, Producer: producer,
-		CreatedAfter: instant(from), CreatedBefore: instant(to), Limit: int(limit), Offset: int(offset),
+		CreatedAfter: instant(from), CreatedBefore: instant(to), Limit: int(limit.Int64()), Offset: int(offset.Int64()),
 	})
 	if err != nil {
 		h.internal(w, r, "list batches", err)
@@ -334,8 +340,8 @@ func (h *handlers) listSourceBatches(w http.ResponseWriter, r *http.Request) {
 	out := pyjson.NewObject()
 	out.Set("items", items)
 	out.Set("total", total)
-	out.Set("limit", limit)
-	out.Set("offset", offset)
+	out.Set("limit", limit.Int64())
+	out.Set("offset", offset.Int64())
 	policy.WriteJSON(w, http.StatusOK, out, nil)
 }
 
@@ -383,7 +389,11 @@ func (h *handlers) getBatch(w http.ResponseWriter, r *http.Request) {
 		policy.WriteDetail(w, http.StatusNotFound, "Batch not found", nil)
 		return
 	}
-	out, err := h.batchDetail(r.Context(), orgID, *batch, int(limit), int(offset))
+	if !offset.IsInt64() {
+		h.internal(w, r, "load batch", errors.New("rejected_records_offset does not fit a bigint"))
+		return
+	}
+	out, err := h.batchDetail(r.Context(), orgID, *batch, int(limit.Int64()), int(offset.Int64()))
 	if err != nil {
 		h.internal(w, r, "render batch", err)
 		return

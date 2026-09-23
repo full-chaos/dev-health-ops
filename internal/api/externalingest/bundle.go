@@ -7,7 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
-	"unicode/utf8"
+
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 )
 
 // schemaVersion is the one supported external-ingest schema version
@@ -84,58 +85,23 @@ func computeETag(document map[string]any) (string, error) {
 	return fmt.Sprintf("%q", fmt.Sprintf("%x", digest)), nil
 }
 
-// canonicalMarshal renders v as compact JSON with map keys sorted
-// lexicographically, HTML-sensitive runes (<, >, &, U+2028, U+2029) left
-// unescaped, and every non-ASCII rune escaped as \uXXXX (surrogate-paired
-// above the BMP) -- matching Python's json.dumps(sort_keys=True,
+// canonicalMarshal renders v as json.dumps(v, sort_keys=True,
+// separators=(",", ":")) does -- plain json.dumps, whose DEFAULT
+// ensure_ascii=True applies, matching Python's json.dumps(sort_keys=True,
 // separators=(",", ":"), ensure_ascii=True) exactly. The schema descriptions
 // this hashes are copied from docstrings that use an em dash for punctuation
-// (TestComputeETagMatchesPythonEnsureAscii pins the exact escape), so this
-// is not a hypothetical case: the checked-in golden JSON is ASCII-only
-// on disk (Python already escaped it the same way when the file was
-// generated), but decoding it back into Go values and re-marshaling
-// without this step would reintroduce raw UTF-8 and silently diverge from
-// the ETag docs promise ("a 304 must be a correct validator for the whole
-// body").
+// (TestComputeETagIsStableAndSensitiveToLimits pins the exact escape via
+// pyjson.MarshalCanonical's own tests), so this is not a hypothetical case:
+// the checked-in golden JSON is ASCII-only on disk (Python already escaped
+// it the same way when the file was generated), but decoding it back into
+// Go values and re-marshaling without this step would reintroduce raw UTF-8
+// and silently diverge from the ETag docs promise ("a 304 must be a correct
+// validator for the whole body"). Delegates to the one shared canonicalizer
+// (internal/api/pyjson.MarshalCanonical, which accepts this package's own
+// stdlib-decoded map[string]any/json.Number shape directly) rather than a
+// second copy of the same sort+ensure_ascii logic.
 func canonicalMarshal(v any) ([]byte, error) {
-	var buf bytes.Buffer
-	encoder := json.NewEncoder(&buf)
-	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(v); err != nil {
-		return nil, err
-	}
-	// Encode appends a trailing newline; json.dumps does not.
-	compact := bytes.TrimRight(buf.Bytes(), "\n")
-	return escapeNonASCII(compact), nil
-}
-
-// escapeNonASCII rewrites every rune above U+007F in a compact JSON byte
-// stream as its \uXXXX escape (a surrogate pair for runes above U+FFFF),
-// matching Python's ensure_ascii=True. It is safe to run over an ENTIRE
-// JSON document, not just string literals: outside a JSON string, valid
-// JSON syntax is ASCII-only by construction, so no non-string byte can be
-// mistaken for the start of a multi-byte UTF-8 sequence.
-func escapeNonASCII(input []byte) []byte {
-	out := make([]byte, 0, len(input))
-	for i := 0; i < len(input); {
-		b := input[i]
-		if b < 0x80 {
-			out = append(out, b)
-			i++
-			continue
-		}
-		r, size := utf8.DecodeRune(input[i:])
-		i += size
-		if r > 0xFFFF {
-			r -= 0x10000
-			high := 0xD800 + (r >> 10)
-			low := 0xDC00 + (r & 0x3FF)
-			out = append(out, []byte(fmt.Sprintf(`\u%04x\u%04x`, high, low))...)
-		} else {
-			out = append(out, []byte(fmt.Sprintf(`\u%04x`, r))...)
-		}
-	}
-	return out
+	return pyjson.MarshalCanonical(v)
 }
 
 func sortedKeys[V any](m map[string]V) []string {

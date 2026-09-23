@@ -116,6 +116,19 @@ func apiPosture() RolePosture {
 			// area's impersonation_start/impersonation_stop rows and plan
 			// area K's telemetry-report audit row -- one entry, both areas.
 			{"audit_logs", true, false, false},
+			// webhook intake (CHAOS-6247): GitHub/GitLab/Jira persist their
+			// durable delivery row (INSERT; the (provider, delivery_key)
+			// conflict fallback is a SELECT, always implicit) then publish to
+			// the job outbox (joboutbox.Producer.Publish, same INSERT-only
+			// shape every domain-role producer already has --
+			// domain_authorization.go's own worker_job_outbox row).
+			{"webhook_deliveries", true, false, false},
+			{"worker_job_outbox", true, false, false},
+			// PagerDuty's binding lookup is read-only; its one write is the
+			// candidate->ready transition on a verified ping
+			// (mark_candidate_ready_from_verified_ping). Binding admin CRUD
+			// (create/rotate/activate/revoke) is CHAOS-6255, not this route.
+			{"pagerduty_webhook_bindings", false, true, false},
 		},
 	}
 }

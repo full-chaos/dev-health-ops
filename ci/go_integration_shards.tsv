@@ -43,6 +43,14 @@
 # so a future package addition that erodes this margin fails that assertion
 # loudly, with the actual numbers, instead of a human silently recounting a
 # new shard-1 membership as fine.
+#
+# internal/api/webhookintake (CHAOS-6247) is a brand-new package: no hosted
+# "Go" workflow run against main exists yet to source a real wall-clock
+# number from, so its weight (13) is its own local `-tags=integration
+# -count=1` wall time instead -- the one unavoidable exception to this
+# revision's "hosted measurement only" rule, since a package's first hosted
+# run cannot happen before this manifest already lists it. Correct it to the
+# real hosted number the next time this file is otherwise touched.
 shards	6
 cmd/dev-health-reconciler	5
 cmd/dev-health-worker	246
@@ -71,6 +79,7 @@ internal/api/audit	10
 internal/api/externalingest	10
 internal/api/licensing	6
 internal/api/policy	5
+internal/api/webhookintake	13
 internal/apiservice	37
 internal/apiservice/acr	6
 internal/apiservice/admin	2

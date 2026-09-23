@@ -79,7 +79,8 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       /runtime/contractcheck/app/contracts/jobs \
       /runtime/contractcheck/app/deploy/go-workers \
       /runtime/migrate/usr/local/bin \
-      /runtime/dho/usr/local/bin; \
+      /runtime/dho/usr/local/bin \
+      /runtime/dho/app/contracts/jobs; \
     cp /out/dev-health-worker /runtime/worker/usr/local/bin/dev-health-worker; \
     cp /out/dho /runtime/worker/usr/local/bin/dho; \
     cp /out/dev-health-scheduler /runtime/scheduler/usr/local/bin/dev-health-scheduler; \
@@ -103,6 +104,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     cp /src/deploy/go-workers/deployment.json /runtime/contractcheck/app/deploy/go-workers/deployment.json; \
     cp /out/dev-health-worker-migrate /runtime/migrate/usr/local/bin/dev-health-worker-migrate; \
     cp /out/dho /runtime/dho/usr/local/bin/dho; \
+    cp -R /src/contracts/jobs/v1 /runtime/dho/app/contracts/jobs/v1; \
     find /runtime -exec touch -d "@${SOURCE_DATE_EPOCH}" {} +
 
 FROM ${GO_RUNTIME_IMAGE} AS runtime
@@ -157,11 +159,14 @@ CMD ["contracts", "validate"]
 
 # dho is the operator binary (cmd/dho): one binary whose compiled-in
 # verticals are selected by the first argument, so every Deployment of it
-# passes its subcommand as args (`dho api`). The api vertical reads no staged
-# file at runtime, so this target stages nothing under /app and, like migrate
-# and stream-runner, declares no WORKDIR.
+# passes its subcommand as args (`dho api`). CHAOS-6247: the api vertical's
+# webhook-intake routes now write to the job outbox, which needs the checked-in
+# contracts/jobs/v1 manifest (jobruntime.Load) -- so, like worker/scheduler/
+# reconciler/operator/contractcheck, this target stages it under /app and
+# declares a WORKDIR.
 FROM runtime AS dho
 COPY --from=build --chown=65532:65532 /runtime/dho/ /
+WORKDIR /app
 ENTRYPOINT ["/usr/local/bin/dho"]
 
 # migrate is the one-shot River schema/grant migration

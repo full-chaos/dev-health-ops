@@ -173,6 +173,20 @@ def _invocations() -> list[tuple[str | None, list[str]]]:
         packages = PACKAGE.findall(block)
         if not packages or ORACLE_ENV not in block:
             continue
+        # A block that ALSO carries `-tags=integration` is excluded here on
+        # purpose, not merely uncounted: for that block, a plain `go test
+        # ./...` sweep (check_test/check_race) cannot compile the test in at
+        # all, so there is nothing for a runtime `t.Skip()` to protect
+        # against -- the SAME already-modeled mechanism
+        # test_the_build_tag_boundary_is_asserted_not_described exists for
+        # (previously pinned to one hardcoded marker; generalized below to
+        # cover every such block, this one included). Keeping it in THIS
+        # population would make test_every_oracle_named_test_skips_without_
+        # the_env_var invoke `go test` with no `-tags=integration`, which
+        # cannot even compile the file the test is declared in -- a "did not
+        # SKIP" false alarm, not a real gap.
+        if "-tags=integration" in block or "-tags integration" in block:
+            continue
         match = SELECTOR.search(block)
         found.append(((match.group(1) or match.group(2)) if match else None, packages))
     return found

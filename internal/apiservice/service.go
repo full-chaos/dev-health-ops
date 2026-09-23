@@ -5,6 +5,7 @@
 // level Routes() that composes each area package's own route set. CHAOS-6244
 // mounted the first business routes (the acr area, internal/apiservice/acr);
 // CHAOS-6246 added the external-ingest area (internal/api/externalingest);
+// CHAOS-6247 added the webhook-intake area (internal/api/webhookintake);
 // every other path still gets the Python api's own 404 body until its own
 // area package adds routes. What runs for every request, business route or
 // not, is the transport every route inherits:
@@ -33,14 +34,13 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-
 	"github.com/full-chaos/dev-health-ops/internal/api/externalingest"
 	healthroutes "github.com/full-chaos/dev-health-ops/internal/api/health"
 	"github.com/full-chaos/dev-health-ops/internal/api/orgs"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/producttelemetry"
 	"github.com/full-chaos/dev-health-ops/internal/api/telemetry"
+	"github.com/full-chaos/dev-health-ops/internal/api/webhookintake"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/acr"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
@@ -50,6 +50,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	"github.com/full-chaos/dev-health-ops/internal/platform/shell"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 const (
@@ -88,8 +89,9 @@ const (
 	// when APIDatabaseURI is configured (buildDeps, deps.go).
 	apiDatabaseCheck = "api_database"
 	// apiValkeyCheck is the readiness check that fails until the Valkey
-	// client (the external-ingest area's stream producer) can PING. It is
-	// registered only when ValkeyURI is configured (buildDeps, deps.go).
+	// client (the external-ingest area's stream producer, and
+	// webhookintake's PagerDuty replay-claim/stream-write path) can PING.
+	// It is registered only when ValkeyURI is configured (buildDeps, deps.go).
 	apiValkeyCheck = "api_valkey"
 )
 
@@ -124,8 +126,10 @@ func Command() cli.Command {
 // doc comment) -- the ingress path table switch (spec.md §4.6), not process
 // configuration, decides whether any traffic ever reaches them, and the
 // entitlement route answers 503 rather than being silently absent from the
-// mux. Each area package contributes its own []httpapi.Route; this function
-// only concatenates them.
+// mux. webhookintake's routes register unconditionally too: a handler that
+// needs a live Pool/Valkey/Producer/Decryptor answers 500 at request time
+// (its own Deps doc comment). Each area package contributes its own
+// []httpapi.Route; this function only concatenates them.
 func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 	var store acr.EntitlementStore
 	if deps.Pool != nil {
@@ -159,6 +163,13 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 			Logger: logger,
 		})...)
 	}
+	routes = append(routes, webhookintake.Routes(webhookintake.Deps{
+		Pool:      deps.Pool,
+		Valkey:    deps.Valkey,
+		Producer:  deps.Producer,
+		Decryptor: deps.Decryptor,
+		Logger:    logger,
+	})...)
 	return routes
 }
 

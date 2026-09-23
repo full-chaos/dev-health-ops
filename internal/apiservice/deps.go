@@ -4,16 +4,28 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 
 	"context"
+	"fmt"
 	"log/slog"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/webhookintake"
+	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	"github.com/full-chaos/dev-health-ops/internal/storage/valkey"
 	"github.com/jackc/pgx/v5/pgxpool"
 	valkeygo "github.com/valkey-io/valkey-go"
 )
+
+// contractRoot is webhookintake.LoadJobRegistry's manifest directory,
+// relative to the process's own working directory (the dho api image's
+// WORKDIR /app, docker/go-worker.Dockerfile's dho target). A var, not a
+// const, so a test two directories below the repo root can override it to
+// "../../contracts/jobs/v1" -- cmd/dev-health-scheduler's own
+// testContractRoot convention, restored after the test.
+var contractRoot = "contracts/jobs/v1"
 
 // apiDatabaseCheck and apiValkeyCheck are declared in service.go, alongside
 // listenerCheck -- one place names every readiness check this Service
@@ -40,6 +52,15 @@ type Deps struct {
 	Probes ProbeConfig
 	// Telemetry is the telemetry areas' configuration.
 	Telemetry TelemetryConfig
+	// Producer publishes to the job outbox (webhookintake's GitHub/GitLab/
+	// Jira durable deliveries -- jobcontract.KindWebhookDelivery). Nil under
+	// the same "not configured yet" rule as Pool.
+	Producer *joboutbox.Producer
+	// Decryptor decrypts pagerduty_webhook_bindings.signing_secret_encrypted
+	// (wire-compatible with core/encryption.py's encrypt_value/decrypt_value).
+	// Its zero value is a legal, always-failing decryptor -- see buildDeps's
+	// own comment on SettingsEncryptionKey below.
+	Decryptor providerfoundation.FernetDecryptor
 }
 
 // TelemetryConfig is TELEMETRY_ENDPOINT (where /telemetry/report sends) and
@@ -131,6 +152,27 @@ func buildDeps(
 		}); err != nil {
 			return Deps{}, nil, err
 		}
+
+		jobRegistry, err := webhookintake.LoadJobRegistry(contractRoot)
+		if err != nil {
+			return Deps{}, nil, fmt.Errorf("load job contracts for webhook intake: %w", err)
+		}
+		producer, err := joboutbox.NewProducer(pool, jobRegistry)
+		if err != nil {
+			return Deps{}, nil, fmt.Errorf("build webhook intake job outbox producer: %w", err)
+		}
+		deps.Producer = producer
+		// SettingsEncryptionKey unconfigured leaves Decryptor at its zero
+		// value: PagerDuty's route needs it at request time and answers 500
+		// there (the same "not yet bootstrapped" shape as an unconfigured
+		// Pool/Valkey) -- it must not stop the whole process from starting.
+		if cfg.SettingsEncryptionKey.Configured() {
+			decryptor, err := providerfoundation.NewFernetDecryptor(cfg.SettingsEncryptionKey, cfg.SettingsEncryptionSalt.Reveal())
+			if err != nil {
+				return Deps{}, nil, fmt.Errorf("build webhook intake secret decryptor: %w", err)
+			}
+			deps.Decryptor = decryptor
+		}
 	}
 
 	if cfg.ValkeyURI.Configured() {
@@ -150,6 +192,8 @@ func buildDeps(
 	logger.LogAttrs(ctx, slog.LevelInfo, "api dependencies configured",
 		slog.Bool("postgres_configured", deps.Pool != nil),
 		slog.Bool("valkey_configured", deps.Valkey != nil),
+		slog.Bool("webhook_outbox_producer_configured", deps.Producer != nil),
+		slog.Bool("webhook_secret_decryptor_configured", deps.Pool != nil && cfg.SettingsEncryptionKey.Configured()),
 	)
 	return deps, components, nil
 }

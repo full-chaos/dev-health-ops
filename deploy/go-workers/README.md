@@ -522,7 +522,7 @@ docker compose run --rm --entrypoint sh migrate -c \
   'python -m dev_health_ops.cli migrate postgres status --check'
 
 # Only then start the Go path.
-docker compose --profile go up -d go-worker go-reconciler
+docker compose --profile go up -d go-worker-heavy go-reconciler
 ```
 
 If the database is behind `0065`, nothing fails loudly at migration time — the

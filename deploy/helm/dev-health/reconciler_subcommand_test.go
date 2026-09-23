@@ -56,6 +56,10 @@ func TestReconcilerGroupRefusesShapesThatCannotStart(t *testing.T) {
 			group: "    - name: reconciler\n      image: ghcr.io/full-chaos/dev-health-go-reconciler:latest\n      subcommand: reconciler\n",
 			want:  "retired dev-health-go-reconciler image",
 		},
+		"an image without dho": {
+			group: "    - name: reconciler\n      image: ghcr.io/full-chaos/dev-health-go-worker:latest\n      subcommand: reconciler\n",
+			want:  "is not a dho image",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			output, err := renderGroups(t, testCase.group)
@@ -67,9 +71,15 @@ func TestReconcilerGroupRefusesShapesThatCannotStart(t *testing.T) {
 			}
 		})
 	}
-	output, err := renderGroups(t, "    - name: reconciler\n      image: ghcr.io/full-chaos/dev-health-go-dho:latest\n      subcommand: reconciler\n")
-	if err != nil {
-		t.Fatalf("a correct reconciler group did not render: %v\n%s", err, output)
+	for _, image := range []string{
+		"ghcr.io/full-chaos/dev-health-go-dho:latest",
+		"dev-health-go-dho:latest",
+		"ghcr.io/full-chaos/dev-health-go-operator@sha256:" + strings.Repeat("a", 64),
+	} {
+		output, err := renderGroups(t, "    - name: reconciler\n      image: "+image+"\n      subcommand: reconciler\n")
+		if err != nil {
+			t.Fatalf("a correct reconciler group on %s did not render: %v\n%s", image, err, output)
+		}
 	}
 }
 

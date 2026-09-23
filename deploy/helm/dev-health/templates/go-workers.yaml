@@ -56,6 +56,16 @@ which has no dho entrypoint.
 {{- if contains "dev-health-go-reconciler" ($group.image | default "") }}
 {{- fail (printf "goWorkers.groups[%s]: image %q is the retired dev-health-go-reconciler image, which has no dho entrypoint; use the dev-health-go-dho image with subcommand: reconciler." $group.name $group.image) }}
 {{- end }}
+{{- /*
+A `subcommand` is a dho verb, so the group's image must be one whose
+entrypoint is dho: dev-health-go-dho, or dev-health-go-operator, which also
+ships dho (prod pins it). Any other image would receive the verb as a
+positional argument its own binary rejects. The repository is matched by its
+last path element, so a registry prefix, a tag and a digest are all allowed.
+*/}}
+{{- if and $group.subcommand (not (regexMatch "(^|/)dev-health-go-(dho|operator)([:@]|$)" ($group.image | default ""))) }}
+{{- fail (printf "goWorkers.groups[%s]: subcommand %q is a dho verb, but image %q is not a dho image (dev-health-go-dho or dev-health-go-operator); its own binary would reject the verb." $group.name $group.subcommand ($group.image | default "")) }}
+{{- end }}
 ---
 apiVersion: apps/v1
 kind: Deployment

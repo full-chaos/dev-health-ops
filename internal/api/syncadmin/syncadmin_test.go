@@ -262,6 +262,7 @@ func TestEffectiveRunStatusTable(t *testing.T) {
 		{map[string]int64{"success": 2}, 2, "success"},
 		{map[string]int64{"success": 2, "failed": 1}, 3, "partial_failed"},
 		{map[string]int64{"failed": 3}, 3, "failed"},
+		{map[string]int64{"success": 1, "failed": 1}, 2, "partial_failed"},
 		{map[string]int64{"failed": 3}, 0, "running"},
 		{map[string]int64{"success": 1}, 2, "running"},
 		{map[string]int64{"retrying": 1}, 2, "running"},

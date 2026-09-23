@@ -291,3 +291,56 @@ func TestSyncConfigResponseRefusesUnrenderableColumns(t *testing.T) {
 		}
 	}
 }
+
+// runShapeReader serves one job run (and one sync run) with the stored
+// results given.
+type runShapeReader struct {
+	faultReader
+	jobResult, runResult string
+}
+
+func (s *runShapeReader) jobRuns(context.Context, []uuid.UUID, int64, int64) ([]jobRun, error) {
+	return []jobRun{{ID: uuid.New(), JobID: uuid.New(), Result: &s.jobResult, TriggeredBy: "t"}}, nil
+}
+func (s *runShapeReader) syncRunsByID(context.Context, string, []uuid.UUID) (map[uuid.UUID]*syncRun, error) {
+	return map[uuid.UUID]*syncRun{faultRunID: {ID: faultRunID, Result: &s.runResult}}, nil
+}
+func (s *runShapeReader) syncRunByID(context.Context, string, uuid.UUID) (*syncRun, error) {
+	return &syncRun{ID: faultRunID, Result: &s.runResult}, nil
+}
+func (s *runShapeReader) listConfigs(context.Context, string, bool) ([]*syncConfig, error) {
+	config := s.config()
+	options := `"abc"`
+	config.SyncOptions = &options
+	return []*syncConfig{config}, nil
+}
+
+// TestUnrenderableRunShapesAreLogged500s pins the job-run, sync-run and
+// config-list conversions as logged 500s at their own step.
+func TestUnrenderableRunShapesAreLogged500s(t *testing.T) {
+	planner := `{"sync_run_id": "` + faultRunID.String() + `"}`
+	for _, tc := range []struct {
+		step, jobResult, runResult string
+		handler                    func(*handlers) http.HandlerFunc
+	}{
+		{"decode_job_result", `{`, `{}`, func(h *handlers) http.HandlerFunc { return h.listJobs }},
+		{"render_job_run", `{"items_synced": 1e400}`, `{}`, func(h *handlers) http.HandlerFunc { return h.listJobs }},
+		{"render_job_run", `[1]`, `{}`, func(h *handlers) http.HandlerFunc { return h.listJobs }},
+		{"render_job_run", planner, `{`, func(h *handlers) http.HandlerFunc { return h.listJobs }},
+		{"render_sync_run", `{}`, `[1]`, func(h *handlers) http.HandlerFunc { return h.getSyncRun }},
+		{"render_sync_run", `{}`, `{`, func(h *handlers) http.HandlerFunc { return h.getSyncRun }},
+		{"render_config", `{}`, `{}`, func(h *handlers) http.HandlerFunc { return h.listSyncConfigs }},
+	} {
+		var logs strings.Builder
+		reader := &runShapeReader{jobResult: tc.jobResult, runResult: tc.runResult}
+		h := &handlers{store: reader, features: fixedFeatures{}, logger: slog.New(slog.NewTextHandler(&logs, nil)),
+			lookupEnv: func(string) (string, bool) { return "", false }}
+		request := newRequest(t, "/x", uuid.NewString())
+		request.SetPathValue("config_id", faultConfigID.String())
+		request.SetPathValue("run_id", faultRunID.String())
+		recorder := record(tc.handler(h), request)
+		if recorder.Code != http.StatusInternalServerError || !strings.Contains(logs.String(), "step="+tc.step) {
+			t.Errorf("%s job=%s run=%s: %d %s", tc.step, tc.jobResult, tc.runResult, recorder.Code, logs.String())
+		}
+	}
+}

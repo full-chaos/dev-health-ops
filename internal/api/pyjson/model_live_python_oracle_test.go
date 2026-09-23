@@ -75,7 +75,8 @@ func TestMarshalModelAndReprMatchLivePydantic(t *testing.T) {
 	}
 	docs := append(append([]string(nil), corpus...),
 		`{"k":[1,"a'b",{"x":null}],"t":true}`, `"it's"`, `"say \"hi\""`, `["\u0000\u007f  "]`,
-		`{"a":1e-5,"b":1e-7,"c":[2.5e-08,1e+16,1e22]}`)
+		`{"a":1e-5,"b":1e-7,"c":[2.5e-08,1e+16,1e22]}`, `""`, `"x"`, `0`, `7`, `0.0`, `-0.5`, `[]`, `[0]`, `{}`,
+		`{"k":null}`, `false`, `null`, `"it's \"q\""`, `["it's \"q\""]`)
 	input, _ := json.Marshal(map[string]any{"docs": docs, "floats": bits})
 	command := exec.Command(python, "-c", pythonModelProgram)
 	command.Stdin = strings.NewReader(string(input))

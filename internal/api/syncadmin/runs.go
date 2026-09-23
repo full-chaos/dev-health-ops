@@ -140,10 +140,8 @@ func plannerSyncRunID(result pyjson.Value) *uuid.UUID {
 	if !ok {
 		return nil
 	}
-	value, present := object.Get("sync_run_id")
-	if !present || value == nil {
-		return nil
-	}
+	// An absent or None value reads as str(None), which is no UUID.
+	value, _ := object.Get("sync_run_id")
 	parsed, err := pythonparity.ParseUUID(pyjson.Str(value))
 	if err != nil {
 		return nil

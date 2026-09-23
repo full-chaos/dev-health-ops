@@ -398,11 +398,21 @@ func numberField(payload map[string]any, name string) (float64, bool) {
 		return number, err == nil && !math.IsInf(number, 0) && !math.IsNaN(number)
 	case float64:
 		return value, !math.IsInf(value, 0) && !math.IsNaN(value)
+	case int:
+		return float64(value), true
+	case int64:
+		return float64(value), true
 	default:
 		return 0, false
 	}
 }
 
+// integerField reads payload[name] as an int64. Real payloads only ever
+// carry json.Number (decoded with UseNumber()) or float64 (a plain
+// encoding/json decode); the int/int64 cases exist for payload maps built
+// directly in Go (fixtures, internal callers), never for anything that
+// crossed the wire -- there is no formatting ambiguity for a value that was
+// never text, so those two cases are always exact.
 func integerField(payload map[string]any, name string) (int64, bool) {
 	switch value := payload[name].(type) {
 	case json.Number:
@@ -410,6 +420,10 @@ func integerField(payload map[string]any, name string) (int64, bool) {
 		return number, err == nil
 	case float64:
 		return int64(value), value == math.Trunc(value)
+	case int:
+		return int64(value), true
+	case int64:
+		return value, true
 	default:
 		return 0, false
 	}

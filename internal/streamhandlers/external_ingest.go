@@ -359,16 +359,56 @@ type externalEnvelope struct {
 type externalRecord struct {
 	Kind, ExternalID string
 	Payload          map[string]any
-	// OrderedPayload is Payload's exact same bytes, decoded a second time
-	// via pyjson.Decode instead of encoding/json+UseNumber: input key
+	// OrderedPayload is the payload decoded via pyjson.Decode: input key
 	// ORDER preserved, not just numeric type. externalingest.ValidateRecords
 	// needs this -- envelope_pydantic.go's own doc comment confirms
 	// pydantic's extra_forbidden errors are reported in INPUT order, which
 	// a map[string]any (Go map iteration order, unrelated to JSON input
-	// order) cannot reproduce. Payload itself is untouched and still what
-	// every other consumer (sink writers, the project-membership check)
-	// reads -- this field exists for validation only.
+	// order) cannot reproduce. Payload is DERIVED from this value (see
+	// payloadFromOrdered), not decoded from the raw bytes separately, so
+	// the two can never disagree on what a byte sequence means.
 	OrderedPayload *pyjson.Object
+}
+
+// payloadFromOrdered converts a decoded pyjson value into the
+// map[string]any/[]any/json.Number shapes every other consumer of a
+// record's payload already expects (sink writers via numberField/
+// integerField, the project-membership check, etc.) -- the same shapes a
+// plain encoding/json decode with UseNumber() would have produced, EXCEPT
+// a string carries pyjson's WTF-8 (a lone UTF-16 surrogate stays one, as in
+// a Python str) instead of encoding/json's U+FFFD replacement. Deriving
+// Payload this way, from the one pyjson.Decode already done for
+// OrderedPayload, is what keeps the two views structurally unable to
+// disagree -- a second independent decode is exactly how they could.
+//
+// pyjson.Int becomes json.Number via its exact decimal string (never
+// float64: a big integer like 9223372036854775808 would lose the precision
+// the overflow-detecting numeric conversions in external_clickhouse.go
+// depend on). pyjson.Float becomes a plain float64 -- numberField/
+// integerField already accept float64 directly, and pyjson.Float is
+// already the result of the same strconv.ParseFloat that can overflow to
+// +/-Inf, which those helpers already reject.
+func payloadFromOrdered(value pyjson.Value) any {
+	switch typed := value.(type) {
+	case *pyjson.Object:
+		out := make(map[string]any, typed.Len())
+		for _, key := range typed.Keys() {
+			item, _ := typed.Get(key)
+			out[key] = payloadFromOrdered(item)
+		}
+		return out
+	case []pyjson.Value:
+		out := make([]any, len(typed))
+		for index, item := range typed {
+			out[index] = payloadFromOrdered(item)
+		}
+		return out
+	case pyjson.Int:
+		return json.Number(typed.Int.String())
+	case pyjson.Float:
+		return float64(typed)
+	}
+	return value
 }
 
 func parseExternalEnvelope(raw []byte) (externalEnvelope, error) {
@@ -426,25 +466,29 @@ func parseExternalEnvelope(raw []byte) (externalEnvelope, error) {
 		if record.Kind == "" || record.ExternalID == "" || len(record.Payload) == 0 || string(record.Payload) == "null" {
 			return externalEnvelope{}, &streamrunner.PermanentError{Reason: "invalid_external_payload"}
 		}
-		// Two decodes of the SAME bytes: payload (map[string]any,
-		// UseNumber -- unchanged from before, every other consumer reads
-		// this) and orderedPayload (*pyjson.Object, input order + exact
-		// Int/Float -- ValidateRecords only). A payload that isn't a JSON
-		// object (or is otherwise malformed) fails the first decode the
+		// ONE decode of the payload bytes, via pyjson.Decode (input order +
+		// exact Int/Float -- what ValidateRecords needs). Payload
+		// (map[string]any -- every other consumer: sink writers, the
+		// project-membership check) is DERIVED from that same decoded
+		// value via payloadFromOrdered, not a second independent decode.
+		// A second decode is how the two views used to disagree: pyjson
+		// keeps a lone UTF-16 surrogate the way Python's json.loads does,
+		// while encoding/json's own decoder replaces it with U+FFFD --
+		// deriving one from the other makes that divergence structurally
+		// impossible instead of patching one instance of it. A payload
+		// that isn't a JSON object (or is otherwise malformed) fails the
 		// same way the old single-pass decoder would have failed the
 		// whole envelope.
-		var payload map[string]any
-		payloadDecoder := json.NewDecoder(bytes.NewReader(record.Payload))
-		payloadDecoder.UseNumber()
-		if err := payloadDecoder.Decode(&payload); err != nil || payload == nil {
-			return externalEnvelope{}, &streamrunner.PermanentError{Reason: "invalid_external_payload"}
-		}
 		orderedValue, err := pyjson.Decode(record.Payload)
 		if err != nil {
 			return externalEnvelope{}, &streamrunner.PermanentError{Reason: "invalid_external_payload"}
 		}
 		orderedPayload, ok := orderedValue.(*pyjson.Object)
 		if !ok {
+			return externalEnvelope{}, &streamrunner.PermanentError{Reason: "invalid_external_payload"}
+		}
+		payload, ok := payloadFromOrdered(orderedPayload).(map[string]any)
+		if !ok || payload == nil {
 			return externalEnvelope{}, &streamrunner.PermanentError{Reason: "invalid_external_payload"}
 		}
 		envelope.Records = append(envelope.Records, externalRecord{
@@ -573,6 +617,22 @@ func normalizeExternalRecords(pointer externalPointer, envelope externalEnvelope
 		// enforces "both present, or neither is checked here" as this
 		// separate semantic check, immediately after the git-family
 		// instance-scoping check and before operational dispatch).
+		//
+		// This check tests == "" on BOTH fields, not just nil/is-None like
+		// Python's own guard (normalize.py:589-591) does -- a deliberate,
+		// reviewed divergence, not an oversight. Python's guard alone lets
+		// repoFullName: "" through; what actually catches it downstream is
+		// ServiceRepositoryMapping.__post_init__ (models/operational.py:283,
+		// "not self.repo_full_name"), called UNGUARDED from
+		// _normalize_operational_record (normalize.py:610) -- no try/except
+		// anywhere between there and normalize_batch's own return, so that
+		// raise is an unhandled OperationalContractError that aborts the
+		// whole batch, contradicting normalize_batch's own docstring
+		// ("Never raises for record content -- every per-record problem
+		// becomes a RecordRejection"). That is a Python-side defect, not a
+		// stricter reference behavior to port; per the no-Python-fixes rule
+		// it stays undisturbed. Go's early, clean == "" rejection is kept
+		// as the correct behavior for this one edge.
 		if record.Kind == "service_repository_mapping.v1" {
 			if stringField(record.Payload, "repoFullName") == "" || stringField(record.Payload, "repoProvider") == "" {
 				rejections = append(rejections, rejection(index, record, "repository_identity_required", "service_repository_mapping requires repoFullName and repoProvider", "payload"))

@@ -1,5 +1,5 @@
-// Package operatorauditschema builds the worker_operator_audits table for
-// integration tests by running the REAL alembic migration code that shapes
+// Package operatorauditschema lets integration tests build the
+// worker_operator_audits table by running the REAL alembic migration code that shapes
 // it -- 0047 (create), 0136 (principal check), 0137 and 0138 (action check;
 // 0138 also widens the action column) -- through alembic's own Operations
 // on the project's Python interpreter. No DDL for this table is authored in
@@ -9,9 +9,7 @@
 package operatorauditschema
 
 import (
-	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -43,19 +41,37 @@ with engine.begin() as connection:
 print("AUDIT_MIGRATIONS_APPLIED")
 `
 
-// Apply runs Migrations against the Postgres database at uri (a
-// postgres:// or postgresql:// URI). internal_service_credentials, which
-// 0047's foreign key names, is created empty first.
-func Apply(t *testing.T, ctx context.Context, uri string) {
-	t.Helper()
+// The interpreter is started by each caller's _test.go file, not here: this
+// package builds only the static parts of the command (Argv, Env) and checks
+// its result (CheckApplied), so it never execs a program itself.
+
+// Root is the repository root: the directory pyoracle.Resolve searches for
+// the project's interpreter.
+func Root() string {
 	_, currentFile, _, _ := runtime.Caller(0)
-	root := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(currentFile))))
-	python := pyoracle.Resolve(t, root)
+	return filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(currentFile))))
+}
+
+// Argv is the interpreter argument list that applies Migrations to the
+// Postgres database at uri (a postgres:// or postgresql:// URI).
+// internal_service_credentials, which 0047's foreign key names, is created
+// empty first.
+func Argv(uri string) []string {
 	dsn := strings.Replace(uri, "postgres://", "postgresql+psycopg2://", 1)
 	dsn = strings.Replace(dsn, "postgresql://", "postgresql+psycopg2://", 1)
-	command := exec.CommandContext(ctx, python, append([]string{"-c", applyScript, dsn}, Migrations...)...)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
-	output, err := command.CombinedOutput()
+	return append([]string{"-c", applyScript, dsn}, Migrations...)
+}
+
+// Env is the interpreter's environment: this process's, plus the project's
+// src directory on PYTHONPATH.
+func Env() []string {
+	return append(os.Environ(), "PYTHONPATH="+filepath.Join(Root(), "src"))
+}
+
+// CheckApplied fails t unless the command ran and reported that every
+// migration applied.
+func CheckApplied(t *testing.T, python string, output []byte, err error) {
+	t.Helper()
 	if err != nil || !strings.Contains(string(output), "AUDIT_MIGRATIONS_APPLIED") {
 		t.Fatal(pyoracle.RunError(python, err, output))
 	}

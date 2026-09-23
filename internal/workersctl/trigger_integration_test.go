@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"log/slog"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ import (
 	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/operatorauditschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -304,7 +306,12 @@ func TestInvestmentManualTriggerRequiresOperateScope(t *testing.T) {
 // migrations and returns the production PostgresAuditor on that pool.
 func migratedPostgresAuditor(t *testing.T, uri string, pool *pgxpool.Pool) joboperator.Auditor {
 	t.Helper()
-	operatorauditschema.Apply(t, context.Background(), uri)
+	ctx := context.Background()
+	python := pyoracle.Resolve(t, operatorauditschema.Root())
+	command := exec.CommandContext(ctx, python, operatorauditschema.Argv(uri)...)
+	command.Env = operatorauditschema.Env()
+	output, err := command.CombinedOutput()
+	operatorauditschema.CheckApplied(t, python, output, err)
 	auditor, err := joboperator.NewPostgresAuditor(pool)
 	if err != nil {
 		t.Fatal(err)

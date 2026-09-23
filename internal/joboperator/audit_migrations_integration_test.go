@@ -4,6 +4,7 @@ package joboperator
 
 import (
 	"context"
+	"os/exec"
 	"regexp"
 	"strings"
 	"testing"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/operatorauditschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
 // TestEveryAuditedActionPassesTheMigratedAuditConstraints is the proof of
@@ -29,7 +31,11 @@ func TestEveryAuditedActionPassesTheMigratedAuditConstraints(t *testing.T) {
 	}
 	defer instance.Close(context.Background())
 
-	operatorauditschema.Apply(t, ctx, instance.URI)
+	python := pyoracle.Resolve(t, operatorauditschema.Root())
+	command := exec.CommandContext(ctx, python, operatorauditschema.Argv(instance.URI)...)
+	command.Env = operatorauditschema.Env()
+	output, err := command.CombinedOutput()
+	operatorauditschema.CheckApplied(t, python, output, err)
 
 	pool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {

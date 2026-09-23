@@ -70,7 +70,7 @@ CREATE TABLE public.feature_flags (
 );
 CREATE TABLE public.org_feature_overrides (
  id uuid PRIMARY KEY,org_id uuid NOT NULL,feature_id uuid NOT NULL,
- is_enabled boolean NOT NULL,expires_at timestamptz
+ is_enabled boolean NOT NULL,expires_at timestamptz,config json
 );
 CREATE TABLE public.tier_limits (
  tier text NOT NULL, limit_key text NOT NULL, limit_value text,

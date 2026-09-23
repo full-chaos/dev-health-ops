@@ -2,16 +2,16 @@
 // (and the registry membership sets it consults) into Go, generically over
 // any feature key the Postgres feature_flags/org_feature_overrides/
 // org_licenses/organizations tables can describe. It is the ONE feature-
-// decision engine dho api's own routes consult -- CHAOS-6244 (the acr
-// entitlement route) is its first caller; every later route needing a
-// feature decision imports this package rather than re-deriving the engine.
-//
-// providersync.decideCanonicalIncidentFeature (internal/providersync/
-// incident_entitlement.go) is a SEPARATE, pre-existing port of the same
-// Python function, used by the sync-worker's dispatch-time gate. The two
-// are not merged here: that package's callers, its own generated-golden
-// test corpus, and its own oracle case set are unrelated to the api
-// Service's route layer, and unifying them is out of this package's scope.
+// decision engine every Postgres-backed consumer in this repo calls: the
+// acr entitlement route (dho api, CHAOS-6244, its first caller),
+// internal/providersync's execution-time incident-entitlement recheck,
+// internal/streamhandlers's external-ingest operational gate, and
+// internal/scheduler/sync's non-locking dispatch-time gate all import this
+// package rather than re-deriving the engine locally. A caller that needs
+// row-locking (FOR UPDATE) still queries directly -- this package's Queryer
+// contract is read-only by construction -- see
+// internal/scheduler/sync.CanonicalIncidentAllowed's doc comment for why
+// that split is a real Postgres privilege boundary, not a convenience.
 package licensing
 
 import (

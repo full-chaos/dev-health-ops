@@ -39,7 +39,7 @@ func TestPostgresIncidentEntitlementHonorsRevocation(t *testing.T) {
   is_enabled boolean NOT NULL)`,
 		`CREATE TABLE org_feature_overrides (
   org_id uuid NOT NULL, feature_id uuid NOT NULL, is_enabled boolean NOT NULL,
-  expires_at timestamptz, PRIMARY KEY (org_id, feature_id))`,
+  expires_at timestamptz, config json, PRIMARY KEY (org_id, feature_id))`,
 		`CREATE TABLE org_licenses (
   org_id uuid PRIMARY KEY, tier text NOT NULL, features_override json)`,
 	} {
@@ -74,5 +74,75 @@ VALUES ($1, $2, false)`, orgID, featureID); err != nil {
 	}
 	if err := entitlement.Require(ctx, orgID); !errors.Is(err, ErrIncidentEntitlementDisabled) {
 		t.Fatalf("revoked grant error=%v", err)
+	}
+}
+
+// TestPostgresIncidentEntitlementNonObjectLicenseOverrideStillDecidesByTier
+// is the regression proof for CHAOS-6286: before this consumed
+// internal/api/licensing, a valid-but-non-object org_licenses.features_override
+// (e.g. an empty JSON array) made loadCanonicalIncidentFeatureState's local
+// decode fail and require() return ErrIncidentEntitlementDisabled directly --
+// denying an org whose tier alone qualifies it, which Python's own
+// isinstance(dict) guard would never do (it treats non-dict JSON as "no
+// override" and falls through to the tier check). This org has no
+// org_feature_overrides row at all, tier-qualifies, and its license's
+// features_override is `[]` -- Require must succeed.
+func TestPostgresIncidentEntitlementNonObjectLicenseOverrideStillDecidesByTier(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("terminate PostgreSQL: %v", err)
+		}
+	}()
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	for _, statement := range []string{
+		`CREATE TABLE organizations (id uuid PRIMARY KEY, tier text NOT NULL)`,
+		`CREATE TABLE feature_flags (
+  id uuid PRIMARY KEY, key text UNIQUE NOT NULL, min_tier text NOT NULL,
+  is_enabled boolean NOT NULL)`,
+		`CREATE TABLE org_feature_overrides (
+  org_id uuid NOT NULL, feature_id uuid NOT NULL, is_enabled boolean NOT NULL,
+  expires_at timestamptz, config json, PRIMARY KEY (org_id, feature_id))`,
+		`CREATE TABLE org_licenses (
+  org_id uuid PRIMARY KEY, tier text NOT NULL, features_override json)`,
+	} {
+		if _, err := pool.Exec(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	orgID := uuid.NewString()
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO organizations (id, tier) VALUES ($1, 'community')`, orgID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+INSERT INTO feature_flags (id, key, min_tier, is_enabled)
+VALUES ($1, 'canonical_incident_ingestion', 'community', true)`, uuid.NewString()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+INSERT INTO org_licenses (org_id, tier, features_override) VALUES ($1, 'community', '[]')`, orgID,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	entitlement := PostgresIncidentEntitlement{
+		Pool: pool,
+		Now:  func() time.Time { return time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC) },
+	}
+	if err := entitlement.Require(ctx, orgID); err != nil {
+		t.Fatalf("non-object features_override must not deny a tier-qualified org: %v", err)
 	}
 }

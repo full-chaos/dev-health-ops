@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/licensing"
 	"github.com/full-chaos/dev-health-ops/internal/streamrunner"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -29,93 +30,38 @@ func NewPostgresExternalBatchRepository(pool *pgxpool.Pool) (*PostgresExternalBa
 	return &PostgresExternalBatchRepository{pool: pool, now: time.Now}, nil
 }
 
+// externalOperationalFeatureKeys are the two features every operational
+// (push-ingest / incident-ingest) batch requires, both decided by the
+// shared internal/api/licensing engine (the same one CHAOS-6244's acr
+// route consumes). Neither is a member of EXPLICIT_PURCHASE_FEATURES
+// (licensing/registry.py), so an org qualifies by tier alone once
+// registered and enabled -- no purchase gate applies to either.
+var externalOperationalFeatureKeys = [...]string{
+	"customer_push_ingest",
+	"canonical_incident_ingestion",
+}
+
+// OperationalAllowed requires every key in externalOperationalFeatureKeys to
+// be Allowed. Unlike the query this replaced (an INNER JOIN on
+// organizations), licensing.LoadState does not check whether the org row
+// exists at all -- matching Python's own get_org_entitlements_from_db,
+// which silently falls back to the COMMUNITY default tier rather than
+// erroring (see licensing.Store's doc comment). A batch reaching this call
+// already claimed an external_ingest_batches row for orgID, so a
+// nonexistent org here is an already-anomalous state this check does not
+// separately guard against.
 func (r *PostgresExternalBatchRepository) OperationalAllowed(ctx context.Context, orgID string) (bool, error) {
-	for _, feature := range []struct {
-		key     string
-		minTier string
-	}{
-		{key: "customer_push_ingest", minTier: "team"},
-		{key: "canonical_incident_ingestion", minTier: "community"},
-	} {
-		allowed, err := r.featureAllowed(ctx, orgID, feature.key, feature.minTier)
-		if err != nil || !allowed {
-			return false, err
+	store := licensing.PostgresStore{Pool: r.pool, Now: r.now}
+	for _, key := range externalOperationalFeatureKeys {
+		decision, err := store.Decide(ctx, orgID, key)
+		if err != nil {
+			return false, fmt.Errorf("load feature decision for %s: %w", key, err)
+		}
+		if !decision.Allowed {
+			return false, nil
 		}
 	}
 	return true, nil
-}
-
-func (r *PostgresExternalBatchRepository) featureAllowed(ctx context.Context, orgID, key, expectedMinTier string) (bool, error) {
-	var (
-		globallyEnabled bool
-		minTier         string
-		orgTier         *string
-		licenseTier     *string
-		licenseFeatures []byte
-		overrideEnabled *bool
-		overrideExpires *time.Time
-	)
-	err := r.pool.QueryRow(ctx, `
-		SELECT feature.is_enabled, feature.min_tier, organization.tier,
-		       license.tier, license.features_override,
-		       override.is_enabled, override.expires_at
-		FROM feature_flags AS feature
-		JOIN organizations AS organization ON organization.id = $1
-		LEFT JOIN org_licenses AS license ON license.org_id = organization.id
-		LEFT JOIN org_feature_overrides AS override
-		  ON override.org_id = organization.id AND override.feature_id = feature.id
-		WHERE feature.key = $2
-	`, orgID, key).Scan(
-		&globallyEnabled, &minTier, &orgTier, &licenseTier, &licenseFeatures,
-		&overrideEnabled, &overrideExpires,
-	)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return false, nil
-	}
-	if err != nil {
-		return false, fmt.Errorf("load feature decision: %w", err)
-	}
-	if !globallyEnabled || minTier != expectedMinTier {
-		return false, nil
-	}
-	tier := "community"
-	if orgTier != nil {
-		tier = *orgTier
-	}
-	if licenseTier != nil {
-		tier = *licenseTier
-	}
-	tierAllowed := externalTierRank(tier) >= externalTierRank(minTier)
-	if overrideEnabled != nil && (overrideExpires == nil || overrideExpires.After(r.now().UTC())) {
-		if !*overrideEnabled {
-			return false, nil
-		}
-		return key != "customer_push_ingest" || tierAllowed, nil
-	}
-	if len(licenseFeatures) > 0 {
-		var overrides map[string]bool
-		if err := json.Unmarshal(licenseFeatures, &overrides); err != nil {
-			return false, nil
-		}
-		if enabled, exists := overrides[key]; exists {
-			if !enabled {
-				return false, nil
-			}
-			return key != "customer_push_ingest" || tierAllowed, nil
-		}
-	}
-	return tierAllowed, nil
-}
-
-func externalTierRank(tier string) int {
-	switch tier {
-	case "enterprise":
-		return 2
-	case "team":
-		return 1
-	default:
-		return 0
-	}
 }
 
 func (r *PostgresExternalBatchRepository) LoadForProcessing(ctx context.Context, pointer externalPointer) (externalBatch, error) {

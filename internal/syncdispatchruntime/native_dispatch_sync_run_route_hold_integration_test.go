@@ -68,10 +68,10 @@ func withRouteHoldFixture(t *testing.T, fn func(ctx context.Context, fixture rou
 	// jobroute worker_job_routes table, none of which the lighter dispatch
 	// fixtures need).
 	createReferenceDiscoveryTables(t, ctx, pool)
+	// organizations/org_licenses/tier_limits are created by
+	// createReferenceDiscoveryTables above (CHAOS-6286 merged them there);
+	// only the seed row and this fixture's own extra tables are local.
 	if _, err := pool.Exec(ctx, `
-CREATE TABLE public.organizations (id uuid PRIMARY KEY, tier text NULL);
-CREATE TABLE public.org_licenses (org_id uuid PRIMARY KEY, tier text NULL, limits_override jsonb NULL);
-CREATE TABLE public.tier_limits (tier text NOT NULL, limit_key text NOT NULL, limit_value text NULL, PRIMARY KEY (tier, limit_key));
 INSERT INTO public.organizations (id, tier) VALUES ('`+discoveryTestOrg+`', 'community');
 CREATE TABLE public.provider_rate_limit_observations (
  id uuid PRIMARY KEY, org_id text NOT NULL, provider text NOT NULL, host text NULL,

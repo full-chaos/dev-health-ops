@@ -2,16 +2,15 @@ package providersync
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/licensing"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -112,29 +111,6 @@ type PostgresIncidentEntitlement struct {
 	Now  func() time.Time
 }
 
-type canonicalIncidentFeatureState struct {
-	Registered      bool
-	GloballyEnabled bool
-	MinTier         string
-	OrgTier         string
-	OrgOverride     *canonicalIncidentFeatureOverride
-	LicenseOverride *bool
-	EvaluatedAt     time.Time
-}
-
-type canonicalIncidentFeatureOverride struct {
-	Enabled   bool
-	ExpiresAt *time.Time
-}
-
-type canonicalIncidentFeatureDecision struct {
-	FeatureKey string          `json:"feature_key"`
-	Allowed    bool            `json:"allowed"`
-	Reason     string          `json:"reason"`
-	ExpiresAt  *time.Time      `json:"expires_at"`
-	Config     *map[string]any `json:"config"`
-}
-
 func (entitlement PostgresIncidentEntitlement) Require(
 	ctx context.Context, orgID string,
 ) error {
@@ -144,13 +120,18 @@ func (entitlement PostgresIncidentEntitlement) Require(
 	return entitlement.require(ctx, entitlement.Pool, orgID)
 }
 
-// require separates the three ways the check can refuse. A construction
-// defect (unparseable organization id) is ErrInvalidConfiguration; a state
-// that could not be READ is ErrIncidentEntitlementUnavailable wrapping the
-// cause; only a state that was read and decided closed -- or a stored license
-// override too malformed to ever decide open -- is ErrIncidentEntitlementDisabled.
+// require separates the two ways the check can refuse. A construction defect
+// (unparseable organization id) is ErrInvalidConfiguration; a state that
+// could not be READ is ErrIncidentEntitlementUnavailable wrapping the cause;
+// a state that was read and decided closed -- via internal/api/licensing's
+// shared decision engine, the same one CHAOS-6244's acr route consumes -- is
+// ErrIncidentEntitlementDisabled. Malformed license-override JSON used to be
+// folded into ErrIncidentEntitlementDisabled directly (a local, non-Python
+// decode); it is now ErrIncidentEntitlementUnavailable like any other read
+// failure, and syntactically valid but non-object JSON (e.g. `[]`) is no
+// longer an error at all -- see licensing.LoadState's own doc comment.
 func (entitlement PostgresIncidentEntitlement) require(
-	ctx context.Context, queryer canonicalIncidentFeatureQueryer, orgID string,
+	ctx context.Context, queryer licensing.Queryer, orgID string,
 ) error {
 	parsedOrgID, err := uuid.Parse(strings.TrimSpace(orgID))
 	if err != nil {
@@ -160,164 +141,14 @@ func (entitlement PostgresIncidentEntitlement) require(
 	if entitlement.Now != nil {
 		evaluatedAt = entitlement.Now().UTC()
 	}
-	state, err := loadCanonicalIncidentFeatureState(
-		ctx, queryer, parsedOrgID.String(), evaluatedAt,
-	)
+	state, err := licensing.LoadState(ctx, queryer, parsedOrgID.String(), canonicalIncidentFeatureKey, evaluatedAt)
 	if err != nil {
-		if errors.Is(err, ErrIncidentEntitlementDisabled) {
-			return err
-		}
 		return fmt.Errorf("%w: %w", ErrIncidentEntitlementUnavailable, err)
 	}
-	if !canonicalIncidentFeatureAllowed(state) {
+	if !licensing.Decide(canonicalIncidentFeatureKey, state).Allowed {
 		return ErrIncidentEntitlementDisabled
 	}
 	return nil
-}
-
-type canonicalIncidentFeatureQueryer interface {
-	QueryRow(context.Context, string, ...any) pgx.Row
-}
-
-func loadCanonicalIncidentFeatureState(
-	ctx context.Context, queryer canonicalIncidentFeatureQueryer,
-	orgID string, evaluatedAt time.Time,
-) (canonicalIncidentFeatureState, error) {
-	state := canonicalIncidentFeatureState{
-		MinTier: "community", OrgTier: "community", EvaluatedAt: evaluatedAt.UTC(),
-	}
-	var overrideEnabled *bool
-	var overrideExpiresAt *time.Time
-	var licenseTier, orgTier *string
-	var encodedOverrides []byte
-	// Read the complete policy input in one PostgreSQL statement. This gives
-	// one MVCC snapshot without requiring UPDATE privilege solely to take row
-	// locks, preserving the domain worker's read-only licensing posture.
-	err := queryer.QueryRow(ctx, `
-SELECT feature.min_tier, feature.is_enabled,
-       org_override.is_enabled, org_override.expires_at,
-       license.tier, license.features_override, organization.tier
-FROM feature_flags AS feature
-LEFT JOIN org_feature_overrides AS org_override
-  ON org_override.org_id = $2::uuid AND org_override.feature_id = feature.id
-LEFT JOIN org_licenses AS license ON license.org_id = $2::uuid
-LEFT JOIN organizations AS organization ON organization.id = $2::uuid
-WHERE feature.key = $1`, canonicalIncidentFeatureKey, orgID).Scan(
-		&state.MinTier, &state.GloballyEnabled,
-		&overrideEnabled, &overrideExpiresAt,
-		&licenseTier, &encodedOverrides, &orgTier,
-	)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return state, nil
-	}
-	if err != nil {
-		return state, err
-	}
-	state.Registered = true
-	if overrideEnabled != nil {
-		state.OrgOverride = &canonicalIncidentFeatureOverride{
-			Enabled: *overrideEnabled, ExpiresAt: overrideExpiresAt,
-		}
-	}
-	if licenseTier != nil {
-		state.OrgTier = *licenseTier
-		var overrides map[string]any
-		if len(encodedOverrides) != 0 && json.Unmarshal(encodedOverrides, &overrides) != nil {
-			return state, ErrIncidentEntitlementDisabled
-		}
-		if raw, ok := overrides[canonicalIncidentFeatureKey]; ok {
-			value := pythonJSONTruth(raw)
-			state.LicenseOverride = &value
-		}
-	} else if orgTier != nil {
-		state.OrgTier = *orgTier
-	}
-	return state, nil
-}
-
-func canonicalIncidentFeatureAllowed(state canonicalIncidentFeatureState) bool {
-	return decideCanonicalIncidentFeature(state).Allowed
-}
-
-func decideCanonicalIncidentFeature(state canonicalIncidentFeatureState) canonicalIncidentFeatureDecision {
-	closed := func(reason string) canonicalIncidentFeatureDecision {
-		return canonicalIncidentFeatureDecision{FeatureKey: canonicalIncidentFeatureKey, Reason: reason}
-	}
-	minTier, minOK := licenseTierIndex(state.MinTier)
-	orgTier, orgOK := licenseTierIndex(state.OrgTier)
-	if !minOK {
-		return closed("invalid_feature_state")
-	}
-	if !state.Registered {
-		return closed("feature_not_registered")
-	}
-	if !state.GloballyEnabled {
-		return closed("global_disabled")
-	}
-	if !orgOK {
-		orgTier = 0
-	}
-	if state.OrgOverride != nil {
-		expired := state.OrgOverride.ExpiresAt != nil &&
-			!state.OrgOverride.ExpiresAt.After(state.EvaluatedAt)
-		if !expired {
-			if !state.OrgOverride.Enabled {
-				return closed("org_override_disabled")
-			}
-			return canonicalIncidentFeatureDecision{
-				FeatureKey: canonicalIncidentFeatureKey, Allowed: true,
-				Reason: "enabled_by_org_override", ExpiresAt: state.OrgOverride.ExpiresAt,
-			}
-		}
-	}
-	if state.LicenseOverride != nil {
-		if !*state.LicenseOverride {
-			return closed("license_override_disabled")
-		}
-		return canonicalIncidentFeatureDecision{
-			FeatureKey: canonicalIncidentFeatureKey, Allowed: true,
-			Reason: "enabled_by_license_override",
-		}
-	}
-	if orgTier >= minTier {
-		return canonicalIncidentFeatureDecision{
-			FeatureKey: canonicalIncidentFeatureKey, Allowed: true,
-			Reason: "enabled_by_tier",
-		}
-	}
-	return closed("tier_required")
-}
-
-func licenseTierIndex(value string) (int, bool) {
-	switch value {
-	case "community":
-		return 0, true
-	case "team":
-		return 1, true
-	case "enterprise":
-		return 2, true
-	default:
-		return 0, false
-	}
-}
-
-func pythonJSONTruth(value any) bool {
-	switch typed := value.(type) {
-	case nil:
-		return false
-	case bool:
-		return typed
-	case string:
-		return typed != ""
-	case float64:
-		return typed != 0
-	case []any:
-		return len(typed) != 0
-	case map[string]any:
-		return len(typed) != 0
-	default:
-		return false
-	}
 }
 
 var _ IncidentEntitlement = PostgresIncidentEntitlement{}

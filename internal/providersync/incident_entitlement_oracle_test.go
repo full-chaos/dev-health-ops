@@ -3,13 +3,15 @@ package providersync
 import (
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/api/licensing"
 )
 
 func buildIncidentEntitlementDecisionForOracle(
 	t *testing.T, input map[string]any,
-) canonicalIncidentFeatureDecision {
+) licensing.Decision {
 	t.Helper()
-	state := canonicalIncidentFeatureState{
+	state := licensing.State{
 		Registered:      input["registered"].(bool),
 		GloballyEnabled: input["globally_enabled"].(bool),
 		MinTier:         input["min_tier"].(string), OrgTier: input["org_tier"].(string),
@@ -17,7 +19,7 @@ func buildIncidentEntitlementDecisionForOracle(
 	}
 	if raw := input["org_override"]; raw != nil {
 		value := raw.(map[string]any)
-		state.OrgOverride = &canonicalIncidentFeatureOverride{Enabled: value["enabled"].(bool)}
+		state.OrgOverride = &licensing.Override{Enabled: value["enabled"].(bool)}
 		if encoded, ok := value["expires_at"].(string); ok && encoded != "" {
 			parsed, err := time.Parse(time.RFC3339Nano, encoded)
 			if err != nil {
@@ -30,7 +32,7 @@ func buildIncidentEntitlementDecisionForOracle(
 		value := raw.(bool)
 		state.LicenseOverride = &value
 	}
-	return decideCanonicalIncidentFeature(state)
+	return licensing.Decide(canonicalIncidentFeatureKey, state)
 }
 
 func incidentEntitlementOracleCases() []oracleCase {

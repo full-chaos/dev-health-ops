@@ -81,6 +81,12 @@ func runUnderDeadlineWith(t *testing.T, ctx context.Context, stall *stalledReque
 // Requests), not from the run's planner, so a request the planner drops
 // is still expected.
 func corpusRequestKeys(t *testing.T) []string {
+	return corpusRequestKeysFor(t, goapiproof.RESTServiceQueryAPI)
+}
+
+// corpusRequestKeysFor is the requests one service's run declares: only
+// that service's entries, and an edge-credential sibling only for query-api.
+func corpusRequestKeysFor(t *testing.T, service goapiproof.RESTService) []string {
 	t.Helper()
 	var keys []string
 	for _, operation := range goapiproof.KnownRESTOperations() {
@@ -88,9 +94,12 @@ func corpusRequestKeys(t *testing.T) []string {
 		if err != nil {
 			t.Fatal(err)
 		}
+		if spec.EffectiveService() != service {
+			continue
+		}
 		for _, request := range spec.Requests {
 			keys = append(keys, operation+"/"+request.Name)
-			if !spec.PublicNoAuth {
+			if !spec.PublicNoAuth && service == goapiproof.RESTServiceQueryAPI {
 				keys = append(keys, operation+"/"+request.Name+" (edge-credential-on-candidate)")
 			}
 		}
@@ -103,6 +112,11 @@ func corpusRequestKeys(t *testing.T) []string {
 // and names no request the corpus does not declare.
 func accountFor(t *testing.T, report jsonReport) {
 	t.Helper()
+	accountForService(t, report, goapiproof.RESTServiceQueryAPI)
+}
+
+func accountForService(t *testing.T, report jsonReport, service goapiproof.RESTService) {
+	t.Helper()
 	seen := map[string]int{}
 	for _, o := range report.Outcomes {
 		seen[o.Operation+"/"+o.Request]++
@@ -111,7 +125,7 @@ func accountFor(t *testing.T, report jsonReport) {
 		seen[key]++
 	}
 	expected := map[string]bool{}
-	for _, key := range corpusRequestKeys(t) {
+	for _, key := range corpusRequestKeysFor(t, service) {
 		expected[key] = true
 		if seen[key] != 1 {
 			t.Errorf("corpus request %q is accounted for %d time(s), want exactly once (an outcome or not_run)", key, seen[key])
@@ -152,12 +166,12 @@ func mintOnCall(n int32, returnToken bool, reached func()) *goapiproof.Credentia
 }
 
 // stallTheRunsLastLeg holds, until its request ends, the edge-credential
-// leg of the last request in RESTRunOrder -- the last leg a complete run
+// leg of the last request in the query-api RESTRunOrderFor -- the last leg a complete run
 // sends -- recognised by the baseline credential's token on the candidate
 // plane and by that request's own body -- calling reached as it arrives.
 func stallTheRunsLastLeg(t *testing.T, edgeToken string, reached func()) func(http.Handler) http.Handler {
 	t.Helper()
-	order := goapiproof.RESTRunOrder()
+	order := goapiproof.RESTRunOrderFor(goapiproof.RESTServiceQueryAPI)
 	last := order[len(order)-1]
 	spec, err := goapiproof.SpecForREST(last)
 	if err != nil {
@@ -490,6 +504,37 @@ func TestRunWritesTheReportWhenItStopsBeforeItsFirstRequest(t *testing.T) {
 		t.Fatalf("report left by run(): partial_cause=%q partial=%v run_deadline=%q (a stale report must be replaced)", report.PartialCause, report.Partial, report.RunDeadline)
 	}
 	accountFor(t, report)
+}
+
+// TestRunWritesTheDHOAPIReportWhenItStopsBeforeItsFirstRequest is the
+// dho-api counterpart: a refusal before the loop still accounts for every
+// dho-api request (never a query-api one) exactly once.
+func TestRunWritesTheDHOAPIReportWhenItStopsBeforeItsFirstRequest(t *testing.T) {
+	dir := t.TempDir()
+	blocker := dir + "/not-a-directory"
+	if err := os.WriteFile(blocker, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f := flags{service: goapiproof.RESTServiceDHOAPI, dhoAPIURL: "http://127.0.0.1:1", pythonAPIURL: "http://127.0.0.1:1",
+		org: "org-1", recordedBy: "r", reviewEvidence: "e", artifactDir: blocker + "/artifacts", dryRun: true,
+		reportPath: dir + "/report.json", timeout: time.Second, runDeadline: time.Minute}
+	var err error
+	captureStdout(t, func() { err = run(f) })
+	if err == nil {
+		t.Fatal("run: want the refusal")
+	}
+	raw, readErr := os.ReadFile(f.reportPath)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	var report jsonReport
+	if err := json.Unmarshal(raw, &report); err != nil {
+		t.Fatal(err)
+	}
+	if len(report.NotRun) == 0 {
+		t.Fatal("the dho-api run named no request it never got to")
+	}
+	accountForService(t, report, goapiproof.RESTServiceDHOAPI)
 }
 
 // TestRunContextIsCancelledBySIGTERM delivers a real SIGTERM to this

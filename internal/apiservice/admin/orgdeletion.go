@@ -21,8 +21,9 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
-	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 
+	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 )
 
@@ -96,18 +97,32 @@ func (h *handlers) deleteOrganization(w http.ResponseWriter, r *http.Request) {
 		clickhouseCount:    map[string]int64{},
 	}
 
-	if err := h.orgDeletionScope(ctx, orgUUID, orgIDStr, result); err != nil {
-		h.logger.ErrorContext(ctx, "admin: org deletion scope failed", "error", err)
+	if err := h.orgDeletionCredentialCounts(ctx, orgUUID, orgIDStr, result); err != nil {
+		h.logger.ErrorContext(ctx, "admin: org deletion credential counts failed", "error", err)
 		policy.WriteInternal(w)
 		return
 	}
 
+	// PagerDuty is revoked BEFORE the per-target count below (never
+	// after), on a real delete only -- matching org_deletion.py's own
+	// sequence exactly: a revoked pending revocation row is gone by the
+	// time provider_oauth_revocations is counted, so the response's count
+	// there is 0, not 1, on both planes.
 	if !dryRun {
 		if err := h.orgDeletionRevokePagerDuty(ctx, orgIDStr); err != nil {
 			h.logger.ErrorContext(ctx, "admin: org deletion pagerduty revoke failed", "error", err)
 			policy.WriteInternal(w)
 			return
 		}
+	}
+
+	if err := h.orgDeletionCountTargets(ctx, orgUUID, orgIDStr, result); err != nil {
+		h.logger.ErrorContext(ctx, "admin: org deletion target counts failed", "error", err)
+		policy.WriteInternal(w)
+		return
+	}
+
+	if !dryRun {
 		if err := h.orgDeletionPurgePostgres(ctx, orgUUID, orgIDStr, result); err != nil {
 			h.logger.ErrorContext(ctx, "admin: org deletion postgres purge failed", "error", err)
 			policy.WriteInternal(w)
@@ -172,9 +187,14 @@ func (r *orgDeletionResult) json() *pyjson.Object {
 	return out
 }
 
-// orgDeletionScope counts every Postgres target (the pass shared by
-// dry_run and a real delete) plus disabled_jobs and credentials_deleted.
-func (h *handlers) orgDeletionScope(ctx context.Context, orgUUID uuid.UUID, orgIDStr string, result *orgDeletionResult) error {
+// orgDeletionCredentialCounts is delete()'s own first two counts
+// (disabled_jobs, credentials_deleted) -- org_deletion.py runs these
+// BEFORE _revoke_pagerduty_oauth_before_delete, and the per-target loop
+// (orgDeletionCountTargets) AFTER it, so a real delete's response counts
+// reflect PagerDuty's pending-revocation row already being gone. See the
+// handler's own call sequence for why this is split from that loop rather
+// than counted together.
+func (h *handlers) orgDeletionCredentialCounts(ctx context.Context, orgUUID uuid.UUID, orgIDStr string, result *orgDeletionResult) error {
 	var disabledJobs int64
 	if err := h.store.Pool.QueryRow(ctx, "SELECT count(*) FROM scheduled_jobs WHERE org_id = $1", orgIDStr).Scan(&disabledJobs); err != nil {
 		return fmt.Errorf("count scheduled_jobs: %w", err)
@@ -192,7 +212,15 @@ func (h *handlers) orgDeletionScope(ctx context.Context, orgUUID uuid.UUID, orgI
 		return fmt.Errorf("count sso_providers: %w", err)
 	}
 	result.credentialsDeleted = credentialRows + encryptedSettings + ssoSecretRows
+	return nil
+}
 
+// orgDeletionCountTargets is delete()'s per-target counting loop, run
+// AFTER orgDeletionRevokePagerDuty on a real delete (see the handler's own
+// call sequence) so provider_oauth_revocations' count already reflects the
+// pending row PagerDuty's own revoke just deleted -- matching Python's
+// count = 0 there rather than counting it before revocation removes it.
+func (h *handlers) orgDeletionCountTargets(ctx context.Context, orgUUID uuid.UUID, orgIDStr string, result *orgDeletionResult) error {
 	for _, target := range orgDeletionTargets {
 		var count int64
 		if err := h.store.Pool.QueryRow(ctx, target.countSQL(), target.bindValue(orgUUID, orgIDStr)).Scan(&count); err != nil {
@@ -350,7 +378,7 @@ func (h *handlers) orgDeletionPurgeClickHouse(ctx context.Context, orgIDStr stri
 		result.warnings = append(result.warnings, "ClickHouse URI not configured; analytics tables were not verified.")
 		return
 	}
-	conn, err := clickhouse.Open(ctx, clickhouse.DefaultConfig(h.clickHouseDSN))
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(h.clickHouseDSN))
 	if err != nil {
 		result.warnings = append(result.warnings, "ClickHouse URI not configured; analytics tables were not verified.")
 		return
@@ -362,6 +390,20 @@ func (h *handlers) orgDeletionPurgeClickHouse(ctx context.Context, orgIDStr stri
 		result.warnings = append(result.warnings, "ClickHouse migration table catalog is empty.")
 		return
 	}
+
+	// mutations_sync=1 makes each ALTER TABLE DELETE below block until
+	// ClickHouse has actually applied it, rather than merely queuing an
+	// async mutation -- same synchronous-write discipline
+	// internal/providersync's own ClickHouse ALTER TABLE DELETE callers
+	// already use (linear_pseudo_project_cleanup.go,
+	// linear_stale_project_ownership_cleanup.go). Without this, a 200
+	// response here proves nothing about whether the rows are actually
+	// gone: a codex-review round on this PR reproduced target rows
+	// surviving a "successful" delete by pausing merges on the seeded
+	// table and observing the response return before the mutation applied.
+	syncCtx := clickhouse.Context(ctx, clickhouse.WithSettings(clickhouse.Settings{
+		"mutations_sync": "1",
+	}))
 
 	for _, t := range tables {
 		condition := "org_id = ?"
@@ -381,7 +423,7 @@ func (h *handlers) orgDeletionPurgeClickHouse(ctx context.Context, orgIDStr stri
 		if dryRun || count == 0 {
 			continue
 		}
-		if err := conn.Exec(ctx, fmt.Sprintf("ALTER TABLE `%s` DELETE WHERE %s", t.Name, condition), bind); err != nil {
+		if err := conn.Exec(syncCtx, fmt.Sprintf("ALTER TABLE `%s` DELETE WHERE %s", t.Name, condition), bind); err != nil {
 			result.warnings = append(result.warnings, fmt.Sprintf("Unable to delete ClickHouse table %s.", t.Name))
 		}
 	}

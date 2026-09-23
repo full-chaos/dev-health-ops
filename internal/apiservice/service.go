@@ -255,6 +255,9 @@ func NewServer(
 		IdleTimeout:         idleTimeout,
 		// FastAPI routes declared with @router.get do not answer HEAD.
 		ExplicitHead: true,
-		Middleware:   middleware,
+		// Starlette's Router redirects a trailing-slash variant of a route
+		// path (redirect_slashes, on by default in FastAPI) with a 307.
+		RedirectSlashes: true,
+		Middleware:      middleware,
 	})
 }

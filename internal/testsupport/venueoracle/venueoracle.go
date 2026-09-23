@@ -80,7 +80,7 @@ elif mode == "call":
 elif mode == "serve":
     from fastapi.testclient import TestClient
     from dev_health_ops.api.main import app
-    client = TestClient(app, raise_server_exceptions=False)
+    client = TestClient(app, raise_server_exceptions=False, follow_redirects=False)
     out = []
     for req in json.loads(sys.stdin.read()):
         body = base64.b64decode(req["body"]) if req.get("body") is not None else None
@@ -497,7 +497,12 @@ func Mark(same bool) string {
 	return "DIFF"
 }
 
-// Do sends one request to base and reads the whole answer.
+// noRedirects answers with the response itself, a redirect included, as the
+// Python plane's TestClient(follow_redirects=False) does.
+var noRedirects = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+
+// Do sends one request to base and reads the whole answer; a redirect is
+// returned, not followed.
 func Do(t *testing.T, base string, request Request) Response {
 	t.Helper()
 	var body io.Reader
@@ -512,10 +517,17 @@ func Do(t *testing.T, base string, request Request) Response {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// TestClient sends Host: testserver unless the request names one; net/http
+	// takes the Host from req.Host, never from a Host header.
+	httpRequest.Host = "testserver"
 	for key, value := range request.Headers {
+		if strings.EqualFold(key, "Host") {
+			httpRequest.Host = value
+			continue
+		}
 		httpRequest.Header.Set(key, value)
 	}
-	response, err := http.DefaultClient.Do(httpRequest)
+	response, err := noRedirects.Do(httpRequest)
 	if err != nil {
 		t.Fatal(err)
 	}

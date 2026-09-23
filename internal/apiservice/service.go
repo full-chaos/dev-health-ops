@@ -39,6 +39,8 @@ import (
 	healthroutes "github.com/full-chaos/dev-health-ops/internal/api/health"
 	"github.com/full-chaos/dev-health-ops/internal/api/orgs"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/api/producttelemetry"
+	"github.com/full-chaos/dev-health-ops/internal/api/telemetry"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/acr"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
@@ -139,8 +141,10 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		Pool: deps.Pool, ClickHouseDSN: deps.Probes.ClickHouseDSN, ValkeyURI: deps.Probes.ValkeyURI,
 		ExpectedWorkerGroups: deps.Probes.ExpectedWorkerGroups, Logger: logger,
 	})...)
+	routes = append(routes, producttelemetry.Routes(&producttelemetry.ValkeyStreams{URI: deps.Telemetry.ValkeyURI}, logger)...)
 	if deps.Guard != nil {
 		routes = append(routes, orgs.Routes(deps.Pool, deps.Guard, logger)...)
+		routes = append(routes, telemetry.Routes(deps.Pool, deps.Guard, deps.Auth, deps.Telemetry.Endpoint, logger)...)
 	}
 	return routes
 }
@@ -169,6 +173,7 @@ func configure(
 		ClickHouseDSN: cfg.ClickHouseURI.Reveal(), ValkeyURI: cfg.ValkeyURI.Reveal(),
 		ExpectedWorkerGroups: cfg.APIExpectedWorkerGroups,
 	}
+	deps.Telemetry = TelemetryConfig{Endpoint: cfg.TelemetryEndpoint, ValkeyURI: cfg.ValkeyURI.Reveal()}
 	server, err := NewServer(cfg, logger, Routes(deps, logger), scope...)
 	if err != nil {
 		return nil, err

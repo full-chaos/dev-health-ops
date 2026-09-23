@@ -5,6 +5,7 @@ package apiservice
 import (
 	"context"
 	"encoding/base64"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -85,6 +86,14 @@ func venueSeed(t *testing.T, ctx context.Context, pool *pgxpool.Pool) venueFixtu
 			(gen_random_uuid(), 'ops', '{default}', 'accepting', now(), now(), now() + interval '1 hour'),
 			(gen_random_uuid(), 'sync', '{default}', 'draining', now(), now(), now() - interval '1 minute'),
 			(gen_random_uuid(), 'other', '{default}', 'accepting', now(), now(), now() + interval '1 hour')`, nil},
+		{`INSERT INTO settings (id, org_id, category, key, value, is_encrypted, description, created_at, updated_at) VALUES
+			(gen_random_uuid(), $1, 'telemetry', 'telemetry_last_report_at', '2026-09-01T10:00:00.123456+00:00', false, NULL, now(), now()),
+			(gen_random_uuid(), $2, 'telemetry', 'telemetry_last_report_at', 'garbage', false, NULL, now(), now()),
+			(gen_random_uuid(), $2, 'telemetry', 'telemetry_opt_in', ' YES ', false, 'old', now(), now()),
+			(gen_random_uuid(), $3, 'telemetry', 'telemetry_last_report_at', '2026-09-01 10:00:00', false, NULL, now(), now()),
+			(gen_random_uuid(), $4, 'telemetry', 'telemetry_last_report_at', '2026-09-01T10:00:00Z', false, NULL, now(), now()),
+			(gen_random_uuid(), $4, 'telemetry', 'telemetry_opt_in', 'true', false, 'Controls voluntary telemetry reporting.', now() - interval '1 day', now() - interval '1 day')`,
+			[]any{f.orgA.String(), f.orgB.String(), f.orgFree.String(), f.orgNoLicense.String()}},
 		{`INSERT INTO feature_flags (id, key, name, min_tier, is_enabled, created_at, updated_at) VALUES
 			(gen_random_uuid(),'stored_only','Stored','team',true,now(),now()),
 			(gen_random_uuid(),'bad_tier','Bad','platinum',true,now(),now()),
@@ -198,6 +207,66 @@ func venueRequests(f venueFixture, tokens map[string]string) []venueoracle.Reque
 	add("ent: acr encoded slash", "GET", "/api/v1/internal/acr/entitlements/not-a%2Fuuid", nil, nil)
 	add("ent: POST", "POST", ent+f.orgA.String(), bearer("member"), nil)
 	add("ent: HEAD", "HEAD", ent+f.orgA.String(), bearer("member"), nil)
+	// Telemetry settings and the instance report.
+	status, optIn, optOut, report := "/api/v1/telemetry/status", "/api/v1/telemetry/opt-in", "/api/v1/telemetry/opt-out", "/api/v1/telemetry/report"
+	add("tel: anonymous", "GET", status, nil, nil)
+	add("tel: member own", "GET", status, bearer("member"), nil)
+	add("tel: member header member org", "GET", status, with(bearer("admin"), "X-Org-Id", f.orgFree.String()), nil)
+	add("tel: member header stranger", "GET", status, with(bearer("member"), "X-Org-Id", f.orgB.String()), nil)
+	add("tel: no org", "GET", status, bearer("no_org"), nil)
+	add("tel: superuser org B", "GET", status, with(bearer("superuser"), "X-Org-Id", f.orgB.String()), nil)
+	add("tel: superuser uppercase org", "GET", status, with(bearer("superuser"), "X-Org-Id", upper(f.orgA.String())), nil)
+	add("tel: superuser no-license org", "GET", status, with(bearer("superuser"), "X-Org-Id", f.orgNoLicense.String()), nil)
+	add("tel: impersonator own", "GET", status, bearer("impersonator"), nil)
+	add("tel: impersonator header target", "GET", status, with(bearer("impersonator"), "X-Org-Id", f.orgA.String()), nil)
+	add("tel: impersonator header other", "GET", status, with(bearer("impersonator"), "X-Org-Id", f.orgB.String()), nil)
+	add("tel: opt-in member", "POST", optIn, bearer("member"), nil)
+	add("tel: opt-in again", "POST", optIn, bearer("member"), nil)
+	add("tel: opt-out org B", "POST", optOut, with(bearer("superuser"), "X-Org-Id", f.orgB.String()), nil)
+	add("tel: opt-in unchanged", "POST", optIn, with(bearer("superuser"), "X-Org-Id", f.orgNoLicense.String()), nil)
+	add("tel: opt-in uppercase org", "POST", optIn, with(bearer("superuser"), "X-Org-Id", upper(f.orgA.String())), nil)
+	add("tel: opt-out impersonator", "POST", optOut, bearer("impersonator"), nil)
+	add("tel: opt-in stranger", "POST", optIn, with(bearer("member"), "X-Org-Id", f.orgB.String()), nil)
+	add("tel: status after", "GET", status, bearer("member"), nil)
+	add("tel: GET opt-in", "GET", optIn, bearer("member"), nil)
+	add("tel: status HEAD", "HEAD", status, bearer("member"), nil)
+	add("report: anonymous", "POST", report, nil, nil)
+	add("report: member", "POST", report, bearer("member"), nil)
+	add("report: impersonator", "POST", report, bearer("impersonator"), nil)
+	add("report: superuser not opted in", "POST", report, with(bearer("superuser"), "X-Org-Id", f.orgFree.String()), nil)
+	add("report: superuser opted in", "POST", report, with(bearer("superuser"), "X-Org-Id", f.orgNoLicense.String()), nil)
+	add("report: superuser no org", "POST", report, bearer("superuser"), nil)
+	add("tel: opt-in by slug", "POST", optIn, with(bearer("superuser"), "X-Org-Id", "org-free"), nil)
+	add("report: superuser by slug", "POST", report, with(bearer("superuser"), "X-Org-Id", "org-free"), nil)
+	// Product telemetry (public).
+	events := "/api/v1/product-telemetry/events"
+	event := `{"name":"page_viewed","schemaVersion":"1","eventId":"e1","ts":"2026-09-23T02:00:00.123Z","sessionId":"s","anonymousUserId":"a","payload":{"f":1.5,"i":7,"b":true,"n":null,"s":"é\u2028x","big":123456789012345678901234567890}}`
+	for _, body := range []struct{ name, text, contentType string }{
+		{"valid anonymous", `{"events":[` + event + `]}`, "application/json"},
+		{"valid org hash + names", `{"org_id_hash":"h1","orgIdHash":"h2","events":[` + event + `,{"name":"client_error","schema_version":"2","event_id":"e2","ts":1700000000.5,"session_id":"s2","anonymous_user_id":"a2","orgIdHash":null,"route_pattern":"/x","payload":{}}]}`, "application/json"},
+		{"empty org hash", `{"orgIdHash":"","events":[` + event + `]}`, "application/json"},
+		{"octet-stream", `{"events":[` + event + `]}`, "application/octet-stream"},
+		{"ts forms", `{"events":[` + strings.Replace(event, `"2026-09-23T02:00:00.123Z"`, `"2026-09-23"`, 1) + `,` + strings.Replace(event, `"2026-09-23T02:00:00.123Z"`, `"2026-09-23 02:00+0200"`, 1) + `,` + strings.Replace(event, `"2026-09-23T02:00:00.123Z"`, `"1700000000123"`, 1) + `,` + strings.Replace(event, `"2026-09-23T02:00:00.123Z"`, `-1`, 1) + `]}`, "application/json"},
+		{"bad ts forms", `{"events":[` + strings.Replace(event, `"2026-09-23T02:00:00.123Z"`, `"2026-02-30"`, 1) + `,` + strings.Replace(event, `"2026-09-23T02:00:00.123Z"`, `"2026-09-23T25:00"`, 1) + `,` + strings.Replace(event, `"2026-09-23T02:00:00.123Z"`, `true`, 1) + `,` + strings.Replace(event, `"2026-09-23T02:00:00.123Z"`, `"x"`, 1) + `,` + strings.Replace(event, `"2026-09-23T02:00:00.123Z"`, `1e20`, 1) + `]}`, "application/json"},
+		{"wrong types", `{"source":"other","orgIdHash":5,"events":[{"name":"nope","schemaVersion":1,"eventId":null,"ts":"2026-09-23","sessionId":"s","anonymousUserId":"a","payload":{"l":[1],"o":{}}},{}, 3]}`, "application/json"},
+		{"payload not object", `{"events":[` + strings.Replace(event, `"payload":{`, `"payload":[],"x":{`, 1) + `]}`, "application/json"},
+		{"events empty", `{"events":[]}`, "application/json"},
+		{"events not list", `{"events":"x","source":null}`, "application/json"},
+		{"events missing", `{}`, "application/json"},
+		{"too many", `{"events":[` + strings.TrimSuffix(strings.Repeat("1,", 501), ",") + `]}`, "application/json"},
+		{"body list", `[]`, "application/json"},
+		{"text plain", `{"events":[]}`, "text/plain"},
+		{"bad json", `{"events":`, "application/json"},
+		{"nan payload", `{"events":[` + strings.Replace(event, `"f":1.5`, `"f":NaN`, 1) + `]}`, "application/json"},
+	} {
+		headers := map[string]string{}
+		if body.contentType != "" {
+			headers["Content-Type"] = body.contentType
+		}
+		add("pt: "+body.name, "POST", events, headers, b64(body.text))
+	}
+	add("pt: GET", "GET", events, nil, nil)
+	add("pt: stranger org header", "POST", events, with(json(bearer("member")), "X-Org-Id", f.orgB.String()), b64(`{"events":[`+event+`]}`))
 	add("ent: impersonator", "GET", ent+f.orgB.String(), bearer("impersonator"), nil)
 	// Probes (the rate limiter and Celery values are normalized: ruled).
 	for _, path := range []string{"/health", "/ready", "/health/workers"} {

@@ -42,7 +42,7 @@ func Command() cli.Command {
 		Kind:    cli.Verb,
 		Summary: "mint a fresh effective-principal envelope and print it on stdout",
 		Run: func(_ context.Context, env cli.Env) int {
-			err := run(env.Args, env.Stdout)
+			err := run(env.Args, env.Stdout, env.Stderr)
 			if err != nil && !errors.Is(err, flag.ErrHelp) {
 				fmt.Fprintln(env.Stderr, "mint-envelope:", err)
 			}
@@ -56,16 +56,27 @@ func Command() cli.Command {
 // in-process minting entry point internal/goapiproof.MintViaAllowlistedHelper
 // calls (spec S1): a prover now mints its own envelope in process instead
 // of exec'ing this package's fixed-path standalone binary.
+//
+// A malformed -*-bearer-exec argument still has to fail loudly to its
+// CALLER (the returned error), but its flag-parse diagnostic text must
+// never reach the process's own stderr: under the old subprocess model a
+// helper's stderr was simply never wired to the parent, which is exactly
+// what this package's own doc comment promises ("not a failure message,
+// not its own diagnostics -- ever carries key material or the envelope
+// itself outside of a successful stdout write"); minting in process must
+// uphold that by construction, not by accident, so this path discards the
+// flag set's own usage/error output instead of defaulting to os.Stderr.
 func Mint(args []string) (string, error) {
 	var out bytes.Buffer
-	if err := run(args, &out); err != nil {
+	if err := run(args, &out, io.Discard); err != nil {
 		return "", err
 	}
 	return strings.TrimSpace(out.String()), nil
 }
 
-func run(args []string, stdout io.Writer) error {
+func run(args []string, stdout, flagErrOutput io.Writer) error {
 	fs := flag.NewFlagSet("mint-envelope", flag.ContinueOnError)
+	fs.SetOutput(flagErrOutput)
 	org := fs.String("org", "", "org id to mint the envelope for")
 	keyFile := fs.String("key-file", "", "path to a PEM file holding the Ed25519 private key (PKCS#8, \"PRIVATE KEY\" block); defaults to reading it from the "+envelopemint.PrivateKeyEnvVar+" environment variable, which is how the tools pod receives it via secretKeyRef")
 	if err := fs.Parse(args); err != nil {

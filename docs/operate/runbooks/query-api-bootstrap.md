@@ -14,7 +14,7 @@ Query-api provides the schema digest, routing tables, and proof harness for the 
 ## Prerequisites
 
 - **Prod k3s cluster running** (CHAOS-5590).
-- **Go API binary and routing state** — the `go-api-routing` binary and proof CLI available.
+- **Go API binary and routing state** — the `dho` operator binary (`goapi routing` and `goapi prove`/`goapi rest-prove`) available.
 - **Image registry credentials** — `ghcr-pull` Secret with `write:packages` scope.
 - **PostgreSQL query role** — `devhealth` user via pgbouncer-transaction (not direct `:5432` in this design, though current prod still uses direct due to chart limitations — see section **"Registry DSN"** below).
 

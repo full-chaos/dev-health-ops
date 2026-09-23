@@ -1195,10 +1195,10 @@ func exitCauseFromPartial(partialCause string) string {
 
 // runMeasurement is run()'s own request loop, report write and exit-code
 // decision, factored out as its own seam: run() itself cannot be driven
-// in a test without a real minted credential (buildCredential execs a
-// FIXED path, /usr/local/bin/mint-envelope or /usr/local/bin/mint-edge-
-// token -- see mintexec.go's own doc comment for why that path can never
-// be a caller-supplied value) and, outside -dry-run, a real Postgres.
+// in a test without a real minted credential (buildCredential mints in
+// process, through one of a fixed, compiled-in set of mintcli packages --
+// see mintexec.go's own doc comment for why the helper NAME can never be
+// a caller-supplied value) and, outside -dry-run, a real Postgres.
 // Every dependency runMeasurement itself needs is already a value or an
 // interface a test can fake -- staticCredentialForTest() (used
 // throughout this file's own tests already), an httptest server pair,

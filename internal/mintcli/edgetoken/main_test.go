@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -68,7 +70,7 @@ func TestRunRefusesBadFlagsWithoutOpeningTheDatabase(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			var opened, closed bool
 			var out bytes.Buffer
-			if err := run(context.Background(), args, &out, opener(&fakeDB{active: true}, &opened, &closed)); err == nil {
+			if err := run(context.Background(), args, &out, io.Discard, opener(&fakeDB{active: true}, &opened, &closed)); err == nil {
 				t.Fatal("expected a refusal")
 			}
 			if opened || out.Len() != 0 {
@@ -81,7 +83,7 @@ func TestRunRefusesBadFlagsWithoutOpeningTheDatabase(t *testing.T) {
 func TestRunRequiresTheSigningKeyBeforeOpeningTheDatabase(t *testing.T) {
 	t.Setenv(edgetokenmint.SigningKeyEnvVar, "")
 	var opened, closed bool
-	err := run(context.Background(), []string{"-org", testOrg}, &bytes.Buffer{}, opener(&fakeDB{active: true}, &opened, &closed))
+	err := run(context.Background(), []string{"-org", testOrg}, &bytes.Buffer{}, io.Discard, opener(&fakeDB{active: true}, &opened, &closed))
 	if err == nil || !strings.Contains(err.Error(), edgetokenmint.SigningKeyEnvVar) {
 		t.Fatalf("err = %v, want a refusal naming %s", err, edgetokenmint.SigningKeyEnvVar)
 	}
@@ -97,7 +99,7 @@ func TestRunPrintsExactlyOneTokenForTheProvePrincipal(t *testing.T) {
 	db := &fakeDB{active: true}
 	var opened, closed bool
 	var out bytes.Buffer
-	if err := run(context.Background(), []string{"-org", testOrg, "-ttl", "2m"}, &out, opener(db, &opened, &closed)); err != nil {
+	if err := run(context.Background(), []string{"-org", testOrg, "-ttl", "2m"}, &out, io.Discard, opener(db, &opened, &closed)); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	if !closed {
@@ -128,7 +130,7 @@ func TestRunNeverPrintsTheKeyOrATokenWhenItRefuses(t *testing.T) {
 	t.Setenv(edgetokenmint.SigningKeyEnvVar, testKey)
 	var opened, closed bool
 	var out bytes.Buffer
-	err := run(context.Background(), []string{"-org", testOrg}, &out, opener(&fakeDB{active: false}, &opened, &closed))
+	err := run(context.Background(), []string{"-org", testOrg}, &out, io.Discard, opener(&fakeDB{active: false}, &opened, &closed))
 	if !errors.Is(err, edgetokenmint.ErrPrincipalInactive) {
 		t.Fatalf("err = %v, want the inactive-principal refusal", err)
 	}
@@ -137,6 +139,47 @@ func TestRunNeverPrintsTheKeyOrATokenWhenItRefuses(t *testing.T) {
 	}
 	if !closed {
 		t.Fatal("the database handle was not closed on refusal")
+	}
+}
+
+// TestMint_MalformedFlagNeverReachesRealStderr pins the exact contract a
+// codex round found broken: under the OLD subprocess model, a helper's
+// stderr was simply never wired to the parent process, so a flag-parse
+// diagnostic could never leak. Minting in process removes that free
+// isolation -- Mint must uphold the SAME silence deliberately, by routing
+// the flag set's own error output to io.Discard, not by relying on a
+// process boundary that no longer exists. This test drives Mint (the
+// exact in-process entry point internal/goapiproof.MintViaAllowlistedHelper
+// calls) through a REAL os.Stderr swap, so a regression back to the
+// zero-value flag.FlagSet (which defaults its output to os.Stderr) is
+// caught by a real capture, not by reading the source. A malformed flag
+// fails at fs.Parse, before any database connection is attempted.
+func TestMint_MalformedFlagNeverReachesRealStderr(t *testing.T) {
+	old := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stderr = w
+	defer func() { os.Stderr = old }()
+
+	done := make(chan []byte, 1)
+	go func() {
+		data, _ := io.ReadAll(r)
+		done <- data
+	}()
+
+	_, mintErr := Mint(context.Background(), []string{"-not-a-real-flag"})
+
+	_ = w.Close()
+	captured := <-done
+	os.Stderr = old
+
+	if mintErr == nil {
+		t.Fatal("Mint([]string{\"-not-a-real-flag\"}) = nil error, want a refusal")
+	}
+	if len(captured) != 0 {
+		t.Fatalf("Mint wrote %d byte(s) to the real stderr, want none: %q", len(captured), captured)
 	}
 }
 

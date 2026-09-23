@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/x509"
 	"encoding/pem"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -45,14 +46,14 @@ func generateKeyPEM(t *testing.T) (string, ed25519.PublicKey) {
 
 func TestRunRequiresOrg(t *testing.T) {
 	t.Setenv(envelopemint.PrivateKeyEnvVar, "")
-	if err := run([]string{}, &bytes.Buffer{}); err == nil {
+	if err := run([]string{}, &bytes.Buffer{}, io.Discard); err == nil {
 		t.Fatal("expected -org to be required")
 	}
 }
 
 func TestRunRequiresAKey(t *testing.T) {
 	t.Setenv(envelopemint.PrivateKeyEnvVar, "")
-	if err := run([]string{"-org", "70d529e0"}, &bytes.Buffer{}); err == nil {
+	if err := run([]string{"-org", "70d529e0"}, &bytes.Buffer{}, io.Discard); err == nil {
 		t.Fatal("expected a missing key to be refused")
 	}
 }
@@ -62,7 +63,7 @@ func TestRunFromEnvMintsAnEnvelope(t *testing.T) {
 	t.Setenv(envelopemint.PrivateKeyEnvVar, pemText)
 
 	var stdout bytes.Buffer
-	if err := run([]string{"-org", "70d529e0"}, &stdout); err != nil {
+	if err := run([]string{"-org", "70d529e0"}, &stdout, io.Discard); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	envelope := strings.TrimSpace(stdout.String())
@@ -91,7 +92,7 @@ func TestRunFromKeyFile(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := run([]string{"-org", "70d529e0", "-key-file", keyPath}, &stdout); err != nil {
+	if err := run([]string{"-org", "70d529e0", "-key-file", keyPath}, &stdout, io.Discard); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	envelope := strings.TrimSpace(stdout.String())
@@ -103,7 +104,7 @@ func TestRunFromKeyFile(t *testing.T) {
 func TestRunNeverPrintsTheKeyOnError(t *testing.T) {
 	t.Setenv(envelopemint.PrivateKeyEnvVar, "not-a-valid-pem-at-all")
 	var stdout bytes.Buffer
-	err := run([]string{"-org", "70d529e0"}, &stdout)
+	err := run([]string{"-org", "70d529e0"}, &stdout, io.Discard)
 	if err == nil {
 		t.Fatal("expected an error for a malformed key")
 	}
@@ -112,5 +113,45 @@ func TestRunNeverPrintsTheKeyOnError(t *testing.T) {
 	}
 	if stdout.Len() != 0 {
 		t.Fatalf("stdout must be empty on failure, got %q", stdout.String())
+	}
+}
+
+// TestMint_MalformedFlagNeverReachesRealStderr pins the exact contract a
+// codex round found broken: under the OLD subprocess model, a helper's
+// stderr was simply never wired to the parent process, so a flag-parse
+// diagnostic could never leak. Minting in process removes that free
+// isolation -- Mint must uphold the SAME silence deliberately, by routing
+// the flag set's own error output to io.Discard, not by relying on a
+// process boundary that no longer exists. This test drives Mint (the
+// exact in-process entry point internal/goapiproof.MintViaAllowlistedHelper
+// calls) through a REAL os.Stderr swap, so a regression back to the
+// zero-value flag.FlagSet (which defaults its output to os.Stderr) is
+// caught by a real capture, not by reading the source.
+func TestMint_MalformedFlagNeverReachesRealStderr(t *testing.T) {
+	old := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stderr = w
+	defer func() { os.Stderr = old }()
+
+	done := make(chan []byte, 1)
+	go func() {
+		data, _ := io.ReadAll(r)
+		done <- data
+	}()
+
+	_, mintErr := Mint([]string{"-not-a-real-flag"})
+
+	_ = w.Close()
+	captured := <-done
+	os.Stderr = old
+
+	if mintErr == nil {
+		t.Fatal("Mint([]string{\"-not-a-real-flag\"}) = nil error, want a refusal")
+	}
+	if len(captured) != 0 {
+		t.Fatalf("Mint wrote %d byte(s) to the real stderr, want none: %q", len(captured), captured)
 	}
 }

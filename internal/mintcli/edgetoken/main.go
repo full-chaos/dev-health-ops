@@ -50,7 +50,7 @@ func Command() cli.Command {
 		Kind:    cli.Verb,
 		Summary: "mint a fresh edge access token for the proof service principal and print it on stdout",
 		Run: func(ctx context.Context, env cli.Env) int {
-			err := run(ctx, env.Args, env.Stdout, openPostgres)
+			err := run(ctx, env.Args, env.Stdout, env.Stderr, openPostgres)
 			if err != nil && !errors.Is(err, flag.ErrHelp) {
 				fmt.Fprintln(env.Stderr, "mint-edge-token:", err)
 			}
@@ -84,16 +84,25 @@ func openPostgres(ctx context.Context) (edgetokenmint.RowQuerier, func(), error)
 // of exec'ing this package's fixed-path standalone binary. It opens its own
 // Postgres connection exactly as the standalone binary did -- the prover's
 // own connection is not shared, since the two lookups' lifetimes differ.
+//
+// A malformed -*-bearer-exec argument still has to fail loudly to its
+// CALLER (the returned error), but its flag-parse diagnostic text must
+// never reach the process's own stderr -- see the package doc comment's
+// "No error or diagnostic this program writes ever carries the key, the
+// database URI, or the token" and envelope.Mint's own doc comment for why
+// this discards the flag set's own usage/error output rather than
+// defaulting to os.Stderr, now that minting runs in process.
 func Mint(ctx context.Context, args []string) (string, error) {
 	var out bytes.Buffer
-	if err := run(ctx, args, &out, openPostgres); err != nil {
+	if err := run(ctx, args, &out, io.Discard, openPostgres); err != nil {
 		return "", err
 	}
 	return strings.TrimSpace(out.String()), nil
 }
 
-func run(ctx context.Context, args []string, stdout io.Writer, open openFunc) error {
+func run(ctx context.Context, args []string, stdout, flagErrOutput io.Writer, open openFunc) error {
 	fs := flag.NewFlagSet("mint-edge-token", flag.ContinueOnError)
+	fs.SetOutput(flagErrOutput)
 	org := fs.String("org", "", "org id (UUID) to mint the token for; the proof service principal must hold a read-level membership in it")
 	ttl := fs.Duration("ttl", edgetokenmint.DefaultTTL, fmt.Sprintf("token lifetime, at most %s; dho goapi prove re-runs this helper as the token ages", edgetokenmint.MaxTTL))
 	if err := fs.Parse(args); err != nil {

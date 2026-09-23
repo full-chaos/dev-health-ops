@@ -37,8 +37,10 @@ EXPECTED_PACKAGES = {
     # server, because an adversarial round proved that disabling the
     # schema-agreement preflight and suppressing the enabled_unproven
     # WARNING, both at their real call sites in this package, survived the
-    # entire suite while nothing ever ran a verb.
-    "cmd/go-api-routing",
+    # entire suite while nothing ever ran a verb. CHAOS-6280 (spec S1)
+    # moved the package from cmd/go-api-routing to internal/goapicli/routing
+    # when go-api-routing folded into the dho operator binary.
+    "internal/goapicli/routing",
     "cmd/query-api",
     "cmd/query-api/internal/aianalytics",
     "cmd/query-api/internal/analytics",

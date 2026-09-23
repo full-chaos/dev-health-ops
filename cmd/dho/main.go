@@ -14,6 +14,8 @@ package main
 import (
 	"github.com/full-chaos/dev-health-ops/internal/apiservice"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
+	"github.com/full-chaos/dev-health-ops/internal/goapicli"
+	"github.com/full-chaos/dev-health-ops/internal/mintcli"
 )
 
 func main() { cli.Main("dho", commands()) }
@@ -22,5 +24,7 @@ func main() { cli.Main("dho", commands()) }
 func commands() []cli.Command {
 	return []cli.Command{
 		apiservice.Command(),
+		goapicli.Command(),
+		mintcli.Command(),
 	}
 }

@@ -137,7 +137,7 @@ go_api_prove_e2e_edge_status() {
 }
 
 go_api_prove_e2e_mint_edge_token() {
-  POSTGRES_URI="$(go_api_prove_e2e_pgx_uri)" "${BIN_DIR}/mint-edge-token" -org "${E2E_ORG_ID}"
+  POSTGRES_URI="$(go_api_prove_e2e_pgx_uri)" "${BIN_DIR}/dho" mint edge-token -org "${E2E_ORG_ID}"
 }
 
 # query_api_e2e_start builds and boots the single query-api process both the
@@ -164,15 +164,20 @@ query_api_e2e_start() {
   GO_API_PROVE_E2E_ENVELOPE_PEM="${dir}/envelope.pem"
   printf '%s' "${GO_API_PROVE_E2E_JWKS_PROGRAM}" > "${dir}/jwks.py"
 
-  echo "==> [query-api] building query-api and mint-envelope"
-  # query-api refuses to identify an unstamped or modified build, so it is
-  # stamped the way the image build stamps it: -buildvcs=false and the same
-  # commit through -ldflags (go-api-prove, built later, refuses to measure a
-  # candidate built from another commit than its own).
+  echo "==> [query-api] building query-api and dho (goapi prove, mint envelope, mint edge-token)"
+  # query-api refuses to identify an unstamped or modified build, and
+  # `dho goapi prove` refuses to measure a candidate built from another
+  # commit than its own, so both are stamped the way the image build
+  # stamps them: -buildvcs=false and the same commit through -ldflags. One
+  # dho build here covers mint-envelope (needed immediately below),
+  # go-api-prove and mint-edge-token too -- all three are dho verbs now,
+  # so run_go_api_prove_e2e (below) builds nothing of its own.
   commit="${GITHUB_SHA:-$(git -C "${ROOT_DIR}" rev-parse HEAD)}"
   go build -buildvcs=false -ldflags "-X github.com/full-chaos/dev-health-ops/internal/platform/version.Commit=${commit}" \
     -o "${BIN_DIR}/query-api" ./cmd/query-api
-  go build -o "${BIN_DIR}/mint-envelope" ./cmd/mint-envelope
+  go build -buildvcs=false -ldflags "-X github.com/full-chaos/dev-health-ops/internal/platform/version.Commit=${commit}" \
+    -o "${BIN_DIR}/dho" ./cmd/dho
+  go run ./cmd/query-api/tools/registrydump -file cmd/query-api/query_route.go > "${dir}/documents.json"
 
   echo "==> [query-api] generating a throwaway envelope key pair"
   (umask 077 && openssl genpkey -algorithm ed25519 -out "${GO_API_PROVE_E2E_ENVELOPE_PEM}")
@@ -207,7 +212,7 @@ query_api_e2e_start() {
 # bearer-envelope verifier every other REST route in this binary uses")
 # and run_go_api_prove_e2e's own -proof-bearer-exec already use.
 query_api_e2e_mint_envelope_token() {
-  "${BIN_DIR}/mint-envelope" -org "$1" -key-file "${GO_API_PROVE_E2E_ENVELOPE_PEM}"
+  "${BIN_DIR}/dho" mint envelope -org "$1" -key-file "${GO_API_PROVE_E2E_ENVELOPE_PEM}"
 }
 
 run_go_api_prove_e2e() {
@@ -217,11 +222,9 @@ run_go_api_prove_e2e() {
   printf '%s' "${GO_API_PROVE_E2E_PRINCIPAL_PROGRAM}" > "${dir}/principal.py"
   printf '%s' "${GO_API_PROVE_E2E_ROUTING_PROGRAM}" > "${dir}/routing.py"
 
-  echo "==> [go-api-prove e2e] building go-api-prove, mint-edge-token (query-api is already running, see query_api_e2e_start)"
+  # dho (goapi prove, mint edge-token) is already built, by
+  # query_api_e2e_start -- nothing to build here.
   commit="${GITHUB_SHA:-$(git -C "${ROOT_DIR}" rev-parse HEAD)}"
-  go build -buildvcs=false -ldflags "-X github.com/full-chaos/dev-health-ops/internal/platform/version.Commit=${commit}" \
-    -o "${BIN_DIR}/go-api-prove" ./cmd/go-api-prove
-  go build -o "${BIN_DIR}/mint-edge-token" ./cmd/mint-edge-token
   go run ./cmd/query-api/tools/registrydump -file cmd/query-api/query_route.go > "${dir}/documents.json"
 
   echo "==> [go-api-prove e2e] routing ${GO_API_PROVE_E2E_OPERATION} to shadow at the running build"
@@ -246,13 +249,13 @@ run_go_api_prove_e2e() {
   echo "==> [go-api-prove e2e] granting the proof service principal a viewer membership"
   go_api_prove_e2e_principal grant-membership || go_api_prove_e2e_fail "could not grant the proof service principal a membership"
 
-  echo "==> [go-api-prove e2e] running go-api-prove with both bearers minted in-process"
+  echo "==> [go-api-prove e2e] running dho goapi prove with both bearers minted in-process"
   prove_log="${dir}/go-api-prove.log"
   set +e
   (
     cd "${ROOT_DIR}"
     unset GO_API_PROVE_PROOF_BEARER
-    POSTGRES_URI="${pgx_uri}" "${BIN_DIR}/go-api-prove" \
+    POSTGRES_URI="${pgx_uri}" "${BIN_DIR}/dho" goapi prove \
       -registry-url "${query_api}/registry" \
       -buildinfo-url "${query_api}/buildinfo" \
       -proof-url "${query_api}/query/proof" \
@@ -262,8 +265,8 @@ run_go_api_prove_e2e() {
       -artifact-dir "${dir}/artifacts" \
       -recorded-by live-e2e \
       -review-evidence "live-e2e: go-api-prove with the envelope and the edge access token minted by the tools-image helpers" \
-      -proof-bearer-exec "[\"${BIN_DIR}/mint-envelope\",\"-org\",\"${E2E_ORG_ID}\",\"-key-file\",\"${dir}/envelope.pem\"]" \
-      -edge-bearer-exec "[\"${BIN_DIR}/mint-edge-token\",\"-org\",\"${E2E_ORG_ID}\"]"
+      -proof-bearer-exec "[\"${BIN_DIR}/dho\",\"mint\",\"envelope\",\"-org\",\"${E2E_ORG_ID}\",\"-key-file\",\"${dir}/envelope.pem\"]" \
+      -edge-bearer-exec "[\"${BIN_DIR}/dho\",\"mint\",\"edge-token\",\"-org\",\"${E2E_ORG_ID}\"]"
   ) > "${prove_log}" 2>&1
   rc=$?
   set -e

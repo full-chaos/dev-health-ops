@@ -1,6 +1,9 @@
 package reports
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // Expected values come from running Python's uuid.UUID(text) on each input
 // (CPython 3.14.7); ok=false marks a ValueError.
@@ -64,6 +67,26 @@ func TestParseReportID_MatchesPythonCells(t *testing.T) {
 		}
 		if c.ok && got != c.want {
 			t.Errorf("ParseReportID(%q) = %q, want %q", c.input, got, c.want)
+		}
+	}
+}
+
+// The base-16 error text is CPython's repr of the normalised string:
+// backslashes doubled, quotes chosen by content, controls escaped.
+func TestParseReportID_InvalidLiteralUsesCPythonRepr(t *testing.T) {
+	cases := []struct{ input, want string }{
+		{strings.Repeat("z", 32), "'" + strings.Repeat("z", 32) + "'"},
+		{strings.Repeat(`\`, 32), "'" + strings.Repeat(`\\`, 32) + "'"},
+		{strings.Repeat("'", 32), `"` + strings.Repeat("'", 32) + `"`},
+		{strings.Repeat("\t", 32), "'" + strings.Repeat(`\t`, 32) + "'"},
+		{"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\u00e9", "'zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\u00e9'"},
+		{"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\u0085", `'zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\x85'`},
+	}
+	for _, c := range cases {
+		_, err := ParseReportID(c.input)
+		want := "invalid literal for int() with base 16: " + c.want
+		if err == nil || err.Error() != want {
+			t.Errorf("ParseReportID(%q) error = %v, want %q", c.input, err, want)
 		}
 	}
 }

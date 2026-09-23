@@ -640,6 +640,110 @@ jobs:
           fi
           echo "all deterministic Go integration shards passed"
 
+  # venue-oracles (CHAOS-6314): every venue differential oracle test
+  # (internal/testsupport/venueoracle) against the REAL Python api and the
+  # REAL Go api on two copies of one Alembic-migrated Postgres. Distinct
+  # from `ci/check_go.sh live-python-oracles` (go-quality's own step): that
+  # verb's blocks are narrow pure-function comparisons installed via
+  # `pip install --no-deps -r ci/requirements-live-python-oracles.txt`; a
+  # venue oracle imports the WHOLE real FastAPI app plus alembic, so it
+  # needs the full project Python environment (`uv sync`), not that narrow
+  # closure -- discovered the hard way when this ticket's own PR failed
+  # go-quality with `ModuleNotFoundError: alembic`. Non-required at first
+  # (promoted once a real run history exists).
+  venue-oracles:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository_owner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Need the base commit to diff against for the relevance decision
+          # below; the default depth-1 checkout cannot see it.
+          fetch-depth: 0
+
+      # Job-level path relevance, separate from ci/go_relevance.py (that
+      # module is deliberately hardcoded to go.yml's OWN full path list,
+      # for the go-quality REQUIRED-check invariant -- reusing it here for
+      # a narrower, unrelated path set would misrepresent that invariant).
+      # `push`/`schedule` always run: they target main directly, with no PR
+      # diff to scope against.
+      - name: Decide whether this change set touches venue-oracle-relevant paths
+        id: relevance
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        run: |
+          set -euo pipefail
+          if [ "${EVENT_NAME}" != "pull_request" ] && [ "${EVENT_NAME}" != "merge_group" ]; then
+            echo "relevant=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            git fetch --no-tags origin "${BASE_SHA}"
+          fi
+          if git diff --name-only "${BASE_SHA}...HEAD" \
+              | grep -qE '^(internal/api/|internal/apiservice/|internal/testsupport/venueoracle/|src/dev_health_ops/api/)'; then
+            echo "relevant=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "relevant=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Set up Go
+        if: steps.relevance.outputs.relevant == 'true'
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: '**/go.sum'
+
+      - name: Install uv
+        if: steps.relevance.outputs.relevant == 'true'
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          python-version: '3.14'
+
+      # The FULL project environment -- see the job comment above for why
+      # ci/requirements-live-python-oracles.txt is not enough here. Once
+      # .venv exists, pyoracle.Resolve (internal/testsupport/pyoracle)
+      # already prefers it over a bare `python3` on PATH; no extra PATH
+      # wiring needed in this job.
+      - name: Install the full Python project
+        if: steps.relevance.outputs.relevant == 'true'
+        run: uv sync --frozen --all-extras --dev
+
+      - name: Log in to GitHub Container Registry
+        if: steps.relevance.outputs.relevant == 'true'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pre-pull pinned test dependency images with bounded retry
+        if: steps.relevance.outputs.relevant == 'true'
+        run: bash ci/check_go.sh integration-prepull
+
+      # `set -o pipefail` (via -euo pipefail) is load-bearing: without it, a
+      # failing check_go.sh in this pipe would be masked by `tee`'s own
+      # zero exit, and the step would report success on a red run.
+      - name: Run every venue differential oracle against the live Python api
+        if: steps.relevance.outputs.relevant == 'true'
+        env:
+          DEV_HEALTH_LIVE_PYTHON_ORACLES: '1'
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/venue-oracle-receipt"
+          bash ci/check_go.sh venue-oracles 2>&1 | tee "${RUNNER_TEMP}/venue-oracle-receipt/receipt.log"
+
+      - name: Upload the venue oracle receipt
+        if: steps.relevance.outputs.relevant == 'true' && always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: venue-oracle-receipt-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/venue-oracle-receipt/receipt.log
+          if-no-files-found: ignore
+
   go-container-smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 25

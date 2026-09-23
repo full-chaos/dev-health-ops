@@ -58,7 +58,7 @@ GO_ENV_OFF=(env -u GO_PROVIDER_ROUTES -u DEV_HEALTH_ENV -u GOFLAGS -u GOEXPERIME
 usage() {
   # Backticks in the literal help text document commands; they are not substitutions.
   # shellcheck disable=SC2016
-  printf '%s\n' 'Usage: ci/check_go.sh [fmt|vet|test|race|live-python-oracles|build|contract|multi-replica-workers|integration-vet|integration-coverage|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
+  printf '%s\n' 'Usage: ci/check_go.sh [fmt|vet|test|race|live-python-oracles|venue-oracles|build|contract|multi-replica-workers|integration-vet|integration-coverage|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
 
   fmt    Check gofmt without modifying files.
   vet    Run go vet ./... in every Go module.
@@ -78,6 +78,20 @@ usage() {
          the oracles at all, so it MUST stay in `all`, `ci`, and `fast`
          (since it is cheap) rather than being treated as an extra,
          skippable step.
+  venue-oracles
+         Run every venue differential oracle test (internal/testsupport/
+         venueoracle) against the live Python api: real Postgres/Valkey
+         containers AND the whole real FastAPI app, a heavier requirement
+         than any live-python-oracles block above -- needs the FULL project
+         Python environment (`uv sync`), never the narrow
+         ci/requirements-live-python-oracles.txt closure. Discovery is a
+         grep for VenueOracle-named tests, never a hardcoded list. Fails if
+         any discovered test has no proof file afterward (a skip, never a
+         silent pass) or if discovery finds nothing. Requires
+         DEV_HEALTH_LIVE_PYTHON_ORACLES=1 already set by the caller -- this
+         verb does not set it itself. NOT in `fast`/`ci`/`all`: it runs only
+         from the dedicated venue-oracles CI job, which is the one place
+         with the full Python environment this verb needs.
   build  Run go build ./... in every Go module.
   contract
          Validate the job contract tree and, when DEV_HEALTH_CONTRACT_BASE is
@@ -1315,6 +1329,103 @@ check_live_python_oracles() {
   rm -rf -- "${proof_dir}"
 }
 
+# check_venue_oracles (CHAOS-6314) runs every venue differential oracle test
+# in the repo against the live Python api, from the shared
+# internal/testsupport/venueoracle harness -- a heavier, DIFFERENT class of
+# live-Python proof than check_live_python_oracles above: these tests start
+# real Postgres/Valkey containers AND import the whole real FastAPI app
+# (dev_health_ops.api.main:app, alembic migrations, ~40 more packages than
+# any block above needs), so this verb requires the FULL project Python
+# environment (uv sync --frozen --all-extras --dev) rather than the narrow
+# ci/requirements-live-python-oracles.txt closure. It is invoked ONLY from
+# the dedicated venue-oracles CI job, never from `ci`/`fast`/`all`.
+#
+# Discovery is a grep over every *_test.go for `^func Test...VenueOracle...`,
+# never a hardcoded name list: a new venue-oracle test anywhere in the tree
+# is picked up the next time this runs, with no edit here. Tests are grouped
+# by their containing directory and run one `go test` invocation per package
+# (team-lead's shape, CHAOS-6314) -- today that is exactly one package
+# (internal/apiservice), but the grouping does not assume that stays true.
+#
+# Each discovered test's own venueoracle.Start writes a proof file (its own
+# t.Name()) into DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR once its venue
+# genuinely built. This verb fails loudly, rule-4-style, if that file is
+# missing for ANY discovered name after every invocation completes (a
+# t.Skip fired -- DEV_HEALTH_LIVE_PYTHON_ORACLES was unset, or
+# pyoracle.Resolve could not find python3 -- reads as a hard failure here,
+# never a silent pass) or if discovery itself found zero tests (the
+# discovery mechanism is broken, not a genuinely oracle-free tree).
+check_venue_oracles() {
+  [ "${DEV_HEALTH_LIVE_PYTHON_ORACLES:-}" = "1" ] \
+    || die "venue-oracles requires DEV_HEALTH_LIVE_PYTHON_ORACLES=1 (this verb never sets it itself -- a skip must be visible to the caller, not swallowed here)"
+
+  local proof_dir file dir names name total=0
+  local -a vo_dirs=() vo_names=()
+  proof_dir="$(mktemp -d "${TMPDIR:-/tmp}/dev-health-venue-oracles.XXXXXX")"
+
+  while IFS= read -r file; do
+    dir="$(dirname "${file}")"
+    names=""
+    while IFS= read -r name; do
+      names="${names:+${names}|}${name}"
+      total=$((total + 1))
+    done < <(grep -ohE '^func Test[A-Za-z0-9_]*VenueOracle[A-Za-z0-9_]*' "${file}" | sed 's/^func //')
+    [ -n "${names}" ] || continue
+    local found=0 index
+    for index in "${!vo_dirs[@]}"; do
+      if [ "${vo_dirs[${index}]}" = "${dir}" ]; then
+        vo_names[${index}]="${vo_names[${index}]}|${names}"
+        found=1
+        break
+      fi
+    done
+    if [ "${found}" -eq 0 ]; then
+      vo_dirs+=("${dir}")
+      vo_names+=("${names}")
+    fi
+  done < <(grep -rl '^func Test.*VenueOracle' --include='*_test.go' "${ROOT}" | LC_ALL=C sort)
+
+  if [ "${total}" -eq 0 ]; then
+    rm -rf -- "${proof_dir}"
+    die "venue-oracles: discovered zero VenueOracle-named tests -- the discovery mechanism itself is almost certainly broken, not a genuinely oracle-free tree"
+  fi
+  printf 'venue-oracles: %d test(s) discovered across %d package(s)\n' "${total}" "${#vo_dirs[@]}"
+
+  local index rel pattern
+  for index in "${!vo_dirs[@]}"; do
+    rel="./${vo_dirs[${index}]#"${ROOT}"/}"
+    pattern="^(${vo_names[${index}]})\$"
+    printf '  RUN  %s: %s\n' "${rel}" "${vo_names[${index}]//|/ }"
+    if ! (
+      cd "${ROOT}"
+      "${GO_ENV_OFF[@]}" \
+        GOWORK=off \
+        DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+        DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+        go test -mod=readonly -tags=integration -count=1 -timeout=20m \
+          -run "${pattern}" -v "${rel}"
+    ); then
+      rm -rf -- "${proof_dir}"
+      return 1
+    fi
+  done
+
+  local missing=0
+  for index in "${!vo_names[@]}"; do
+    local IFS='|'
+    local -a name_list=(${vo_names[${index}]})
+    unset IFS
+    for name in "${name_list[@]}"; do
+      if [ ! -f "${proof_dir}/${name}" ] || [ "$(cat "${proof_dir}/${name}")" != "executed" ]; then
+        printf 'ERROR: venue oracle %s did not run (no proof file -- venueoracle.Start likely skipped)\n' "${name}" >&2
+        missing=1
+      fi
+    done
+  done
+  rm -rf -- "${proof_dir}"
+  [ "${missing}" -eq 0 ] || return 1
+}
+
 check_build() {
   local status_before
   local status_after
@@ -2328,6 +2439,10 @@ case "${1:-all}" in
     ;;
   live-python-oracles)
     check_live_python_oracles
+    ;;
+  venue-oracles)
+    [ "$#" -eq 1 ] || die "venue-oracles accepts no arguments"
+    check_venue_oracles
     ;;
   build)
     check_build

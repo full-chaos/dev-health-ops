@@ -157,7 +157,13 @@ type Venue struct {
 
 // Start builds the venue; see the package comment. It skips unless
 // DEV_HEALTH_LIVE_PYTHON_ORACLES=1. Everything it creates is removed by
-// t.Cleanup.
+// t.Cleanup. On success it writes this venue's own proof file (see
+// writeProof) -- every caller gets that for free, with no per-test
+// boilerplate, and a caller whose venue never built (t.Skip fired, or a
+// t.Fatal along the way) never gets one, which is the point: a CI job that
+// requires this file for every venue-oracle test by name fails loudly on a
+// skip, exactly the "measurement that did not happen must FAIL" rule this
+// mechanism exists to satisfy.
 func Start(t *testing.T, ctx context.Context, options Options) *Venue {
 	t.Helper()
 	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
@@ -251,6 +257,7 @@ func Start(t *testing.T, ctx context.Context, options Options) *Venue {
 	})
 	v.provisionRoles(t, ctx)
 	v.migrate(t, ctx, logger)
+	writeProof(t)
 	return v
 }
 
@@ -663,4 +670,23 @@ func tail(text string) string {
 		return text[len(text)-4000:]
 	}
 	return text
+}
+
+// writeProof marks that THIS test's venue genuinely built and ran against
+// the live Python api -- one file per test name, so a CI job naming every
+// expected venue-oracle test by name can fail loudly when one is missing
+// (a t.Skip that fired, or a step that never reached Start at all), rather
+// than reporting a pass built on nothing. DEV_HEALTH_LIVE_PYTHON_ORACLE_
+// PROOF_DIR is optional: unset (the common local case) writes nothing and
+// is not an error.
+func writeProof(t *testing.T) {
+	t.Helper()
+	proofDir := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
+	if proofDir == "" {
+		return
+	}
+	name := strings.NewReplacer("/", "_", " ", "_").Replace(t.Name())
+	if err := os.WriteFile(filepath.Join(proofDir, name), []byte("executed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 }

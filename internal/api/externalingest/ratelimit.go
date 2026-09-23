@@ -1,6 +1,8 @@
 package externalingest
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"net"
 	"net/http"
 	"os"
@@ -112,4 +114,55 @@ func trustedProxies() map[string]bool {
 		}
 	}
 	return set
+}
+
+// routeLimiters is one keyedBucket per rate_limit.py @limiter.limit
+// decorator this package ports: each route gets its OWN counter (slowapi
+// keys per view function too, not just per key_func result), at the exact
+// per-minute ceiling and key shape router.py/status.py declare. GET
+// /availability has no decorator in Python and so has no bucket here.
+type routeLimiters struct {
+	schemasList *keyedBucket // INGEST_READ_LIMIT, key=IP (unauthenticated route)
+	schemasGet  *keyedBucket // INGEST_READ_LIMIT, key=IP
+	validate    *keyedBucket // INGEST_VALIDATE_LIMIT, key=validated token
+	batches     *keyedBucket // INGEST_BATCH_LIMIT, key=validated token
+	listBatches *keyedBucket // INGEST_READ_LIMIT, key=validated token
+	getBatch    *keyedBucket // INGEST_READ_LIMIT, key=validated token
+}
+
+const (
+	ingestReadLimitPerMinute     = 120
+	ingestValidateLimitPerMinute = 60
+	ingestBatchLimitPerMinute    = 60
+)
+
+func newRouteLimiters(now func() time.Time) *routeLimiters {
+	return &routeLimiters{
+		schemasList: newKeyedBucket(ingestReadLimitPerMinute, ingestReadLimitPerMinute, now),
+		schemasGet:  newKeyedBucket(ingestReadLimitPerMinute, ingestReadLimitPerMinute, now),
+		validate:    newKeyedBucket(ingestValidateLimitPerMinute, ingestValidateLimitPerMinute, now),
+		batches:     newKeyedBucket(ingestBatchLimitPerMinute, ingestBatchLimitPerMinute, now),
+		listBatches: newKeyedBucket(ingestReadLimitPerMinute, ingestReadLimitPerMinute, now),
+		getBatch:    newKeyedBucket(ingestReadLimitPerMinute, ingestReadLimitPerMinute, now),
+	}
+}
+
+// ingestTokenRateLimitKey mirrors rate_limit.py's get_ingest_token_key: keys
+// on the VALIDATED token id (set only after requireIngestScope succeeds),
+// never the raw bearer text -- an unvalidated caller could otherwise mint a
+// fresh bucket per request by rotating an arbitrary string.
+func ingestTokenRateLimitKey(tokenID string) string {
+	digest := sha256.Sum256([]byte(tokenID))
+	return "ingest-token:" + hex.EncodeToString(digest[:])[:16]
+}
+
+// rateLimitedOrTooManyRequests is the shared check every rate-limited
+// handler runs: nil means proceed, non-nil is the ingestError to write and
+// return immediately (429 rate_limited, matching Python's slowapi response
+// shape via this package's own error envelope).
+func rateLimitedOrTooManyRequests(bucket *keyedBucket, key string) *ingestError {
+	if bucket != nil && !bucket.allow(key) {
+		return newIngestError(http.StatusTooManyRequests, "rate_limited", "Rate limit exceeded")
+	}
+	return nil
 }

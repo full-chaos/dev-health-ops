@@ -66,7 +66,7 @@ func createExternalIngestTables(t *testing.T, ctx context.Context, pool *pgxpool
 			record_kind text NOT NULL, external_id text, code text NOT NULL, message text NOT NULL,
 			path text, created_at timestamptz NOT NULL
 		)`,
-		`CREATE TABLE integrations (id uuid PRIMARY KEY, org_id text NOT NULL, provider text NOT NULL, is_active boolean NOT NULL DEFAULT true)`,
+		`CREATE TABLE integrations (id uuid PRIMARY KEY, org_id text NOT NULL, provider text NOT NULL, is_active boolean NOT NULL DEFAULT true, config jsonb NOT NULL DEFAULT '{}')`,
 		`CREATE TABLE integration_sources (
 			id uuid PRIMARY KEY, org_id text NOT NULL, integration_id uuid NOT NULL REFERENCES integrations(id),
 			provider text NOT NULL, external_id text NOT NULL, name text NOT NULL, full_name text NOT NULL,
@@ -108,8 +108,13 @@ func seedIngestToken(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgI
 	`, tokenID, orgID, sourceID, mustHash(token), scopes); err != nil {
 		t.Fatalf("seed token: %v", err)
 	}
+	// ON CONFLICT DO NOTHING: feature_flags.key is UNIQUE and this helper is
+	// called once per subtest within one shared Postgres instance (several
+	// integration tests run multiple subtests against the same container) --
+	// idempotent by design, not "seed once and hope no caller repeats it".
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO feature_flags (id, key, is_enabled, min_tier) VALUES ($1, 'customer_push_ingest', true, 'team')
+		ON CONFLICT (key) DO NOTHING
 	`, uuid.New()); err != nil {
 		t.Fatalf("seed feature flag: %v", err)
 	}
@@ -118,7 +123,7 @@ func seedIngestToken(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgI
 
 func newTestDeps(t *testing.T, pool *pgxpool.Pool, client valkeygo.Client) Deps {
 	t.Helper()
-	return Deps{Pool: pool, Valkey: client, limiters: newAuthLimiters(nil)}
+	return Deps{Pool: pool, Valkey: client, limiters: newAuthLimiters(nil), routeLimiters: newRouteLimiters(nil)}
 }
 
 // TestAcceptBatchEndToEnd is this ticket's proof shape (Linear CHAOS-6246,

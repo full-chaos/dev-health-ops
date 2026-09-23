@@ -153,7 +153,11 @@ func getBatch(ctx context.Context, pool *pgxpool.Pool, orgID string, ingestionID
 
 // listBatches ports status.py's list_batches: newest first, org-scoped,
 // optionally filtered by status/source, page bounded by limit/offset.
-func listBatches(ctx context.Context, pool *pgxpool.Pool, orgID string, statusFilter, sourceSystem, sourceInstance string, limit, offset int) ([]BatchRow, int, error) {
+func listBatches(
+	ctx context.Context, pool *pgxpool.Pool, orgID string,
+	statusFilter, sourceSystem, sourceInstance string, createdAfter, createdBefore *time.Time,
+	limit, offset int,
+) ([]BatchRow, int, error) {
 	where := `WHERE org_id = $1`
 	args := []any{orgID}
 	if statusFilter != "" {
@@ -168,6 +172,14 @@ func listBatches(ctx context.Context, pool *pgxpool.Pool, orgID string, statusFi
 		args = append(args, sourceInstance)
 		where += ` AND source_instance = $` + strconv.Itoa(len(args))
 	}
+	if createdAfter != nil {
+		args = append(args, *createdAfter)
+		where += ` AND created_at >= $` + strconv.Itoa(len(args))
+	}
+	if createdBefore != nil {
+		args = append(args, *createdBefore)
+		where += ` AND created_at <= $` + strconv.Itoa(len(args))
+	}
 
 	var total int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM external_ingest_batches `+where, args...).Scan(&total); err != nil {
@@ -175,8 +187,13 @@ func listBatches(ctx context.Context, pool *pgxpool.Pool, orgID string, statusFi
 	}
 
 	limitArgs := append(append([]any{}, args...), limit, offset)
+	// created_at DESC, ingestion_id DESC: the ingestion_id tiebreaker keeps
+	// pagination stable across requests, since created_at alone is not
+	// unique (status.py's list_batches carries the same tiebreaker, added
+	// there for the identical reason -- ties free to reorder between pages
+	// under concurrent inserts otherwise).
 	rows, err := pool.Query(ctx, `SELECT `+batchColumns+` FROM external_ingest_batches `+where+
-		` ORDER BY created_at DESC LIMIT $`+strconv.Itoa(len(limitArgs)-1)+` OFFSET $`+strconv.Itoa(len(limitArgs)), limitArgs...)
+		` ORDER BY created_at DESC, ingestion_id DESC LIMIT $`+strconv.Itoa(len(limitArgs)-1)+` OFFSET $`+strconv.Itoa(len(limitArgs)), limitArgs...)
 	if err != nil {
 		return nil, 0, err
 	}

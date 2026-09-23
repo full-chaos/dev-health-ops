@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strconv"
@@ -17,6 +18,10 @@ import (
 // handleListSchemas is router.py's list_schemas (GET /schemas).
 func (d Deps) handleListSchemas() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if err := rateLimitedOrTooManyRequests(d.routeLimiters.schemasList, forwardedIP(r)); err != nil {
+			writeIngestError(w, err)
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"schemaVersions": []string{schemaVersion},
 			"recordKinds":    recordKinds,
@@ -28,6 +33,10 @@ func (d Deps) handleListSchemas() http.HandlerFunc {
 // handleGetSchema is router.py's get_schema (GET /schemas/{schema_version}).
 func (d Deps) handleGetSchema() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if err := rateLimitedOrTooManyRequests(d.routeLimiters.schemasGet, forwardedIP(r)); err != nil {
+			writeIngestError(w, err)
+			return
+		}
 		version := r.PathValue("schema_version")
 		if version != schemaVersion {
 			writeIngestError(w, newIngestError(http.StatusNotFound, "unsupported_schema_version",
@@ -126,6 +135,10 @@ func (d Deps) handleValidate() http.HandlerFunc {
 			writeIngestError(w, authErr)
 			return
 		}
+		if err := rateLimitedOrTooManyRequests(d.routeLimiters.validate, ingestTokenRateLimitKey(authCtx.TokenID)); err != nil {
+			writeIngestError(w, err)
+			return
+		}
 		raw, err := io.ReadAll(r.Body)
 		if err != nil {
 			writeIngestError(w, newIngestError(http.StatusBadRequest, "invalid_envelope", "Malformed batch envelope"))
@@ -195,6 +208,10 @@ func (d Deps) handleAcceptBatch() http.HandlerFunc {
 		authCtx, authErr := d.requireIngestScope(r.Context(), r, "ingest:write", true)
 		if authErr != nil {
 			writeIngestError(w, authErr)
+			return
+		}
+		if err := rateLimitedOrTooManyRequests(d.routeLimiters.batches, ingestTokenRateLimitKey(authCtx.TokenID)); err != nil {
+			writeIngestError(w, err)
 			return
 		}
 		if d.Pool == nil {
@@ -298,7 +315,23 @@ func (d Deps) handleAcceptBatch() http.HandlerFunc {
 			RecordCount: len(envelope.Records), WindowStartedAt: batch.WindowStartedAt, WindowEndedAt: batch.WindowEndedAt,
 		})
 		if streamErr != nil {
-			_ = markStreamUnavailableTx(r.Context(), d.Pool, authCtx.OrgID, batch.IngestionID)
+			if markErr := markStreamUnavailableTx(r.Context(), d.Pool, authCtx.OrgID, batch.IngestionID); markErr != nil {
+				// The row is stuck at status='accepted' with a fresh
+				// updated_at: a same-key retry inside the stale window
+				// would misclassify as REPLAY (idempotency.go's
+				// classifyExisting) and return a false 200, never
+				// re-enqueueing -- the exact silent-data-loss shape this
+				// package exists to prevent. We cannot make good on the
+				// "retry once available" promise the 503 body below makes,
+				// so this is reported as an internal error, loudly, rather
+				// than the routine-retry framing.
+				d.logger().LogAttrs(r.Context(), slog.LevelError, "external-ingest: failed to mark batch stream_unavailable after an enqueue failure",
+					slog.String("org_id", authCtx.OrgID), slog.String("ingestion_id", batch.IngestionID.String()),
+					slog.String("enqueue_error", streamErr.Error()), slog.String("mark_unavailable_error", markErr.Error()))
+				writeIngestError(w, newIngestError(http.StatusInternalServerError, "internal_error",
+					"The batch could not be durably recorded as unavailable for retry. Contact support with this ingestionId: "+batch.IngestionID.String()))
+				return
+			}
 			writeIngestError(w, newIngestError(http.StatusServiceUnavailable, "stream_unavailable",
 				fmt.Sprintf("The durable ingest stream is temporarily unavailable. The batch was recorded as %q; "+
 					"retry with the same idempotencyKey once available.", batch.IngestionID)))
@@ -415,10 +448,15 @@ func (d Deps) handleListBatches() http.HandlerFunc {
 			writeIngestError(w, authErr)
 			return
 		}
-		limit, offset := pageParams(r)
+		if err := rateLimitedOrTooManyRequests(d.routeLimiters.listBatches, ingestTokenRateLimitKey(authCtx.TokenID)); err != nil {
+			writeIngestError(w, err)
+			return
+		}
+		limit, offset := pageParams(r, "limit", "offset")
+		createdAfter, createdBefore := timeRangeParams(r)
 		batches, total, err := listBatches(r.Context(), d.Pool, authCtx.OrgID,
 			r.URL.Query().Get("status"), r.URL.Query().Get("sourceSystem"), r.URL.Query().Get("sourceInstance"),
-			limit, offset)
+			createdAfter, createdBefore, limit, offset)
 		if err != nil {
 			writeIngestError(w, newIngestError(http.StatusInternalServerError, "internal_error", "failed to list batches"))
 			return
@@ -441,9 +479,13 @@ func (d Deps) handleGetBatch() http.HandlerFunc {
 			writeIngestError(w, authErr)
 			return
 		}
+		if err := rateLimitedOrTooManyRequests(d.routeLimiters.getBatch, ingestTokenRateLimitKey(authCtx.TokenID)); err != nil {
+			writeIngestError(w, err)
+			return
+		}
 		ingestionID, err := uuid.Parse(r.PathValue("ingestion_id"))
 		if err != nil {
-			writeIngestError(w, newIngestError(http.StatusNotFound, "batch_not_found", "Unknown ingestion id"))
+			writeIngestError(w, newIngestError(http.StatusNotFound, "not_found", "ingestion batch not found"))
 			return
 		}
 		batch, err := getBatch(r.Context(), d.Pool, authCtx.OrgID, ingestionID)
@@ -452,10 +494,10 @@ func (d Deps) handleGetBatch() http.HandlerFunc {
 			return
 		}
 		if batch == nil {
-			writeIngestError(w, newIngestError(http.StatusNotFound, "batch_not_found", "Unknown ingestion id"))
+			writeIngestError(w, newIngestError(http.StatusNotFound, "not_found", "ingestion batch not found"))
 			return
 		}
-		limit, offset := pageParams(r)
+		limit, offset := pageParams(r, "errorLimit", "errorOffset")
 		rejections, total, err := listRejections(r.Context(), d.Pool, authCtx.OrgID, ingestionID, limit, offset)
 		if err != nil {
 			writeIngestError(w, newIngestError(http.StatusInternalServerError, "internal_error", "failed to load rejections"))
@@ -465,15 +507,45 @@ func (d Deps) handleGetBatch() http.HandlerFunc {
 	}
 }
 
-func pageParams(r *http.Request) (limit, offset int) {
+// pageParams reads limitParam/offsetParam, clamped to Python's Query(ge=1,
+// le=200) / Query(ge=0) bounds -- status.py's list_batch_statuses uses
+// "limit"/"offset", get_batch_status uses "errorLimit"/"errorOffset"
+// (status.py:1123-1124), never the same pair.
+func pageParams(r *http.Request, limitParam, offsetParam string) (limit, offset int) {
 	limit, offset = 50, 0
-	if v, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && v > 0 {
+	if v, err := strconv.Atoi(r.URL.Query().Get(limitParam)); err == nil {
 		limit = v
 	}
-	if v, err := strconv.Atoi(r.URL.Query().Get("offset")); err == nil && v >= 0 {
+	if limit < 1 {
+		limit = 1
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	if v, err := strconv.Atoi(r.URL.Query().Get(offsetParam)); err == nil && v >= 0 {
 		offset = v
 	}
 	return limit, offset
+}
+
+// timeRangeParams reads createdAfter/createdBefore as RFC3339 timestamps
+// (status.py's list_batch_statuses, Query(alias="createdAfter"/"createdBefore")).
+// An absent or unparseable value is nil, matching FastAPI's optional
+// datetime query params -- this is a narrowing from FastAPI's exact 422 on
+// a malformed value to "silently not filtered"; see deps.go's package doc
+// for this package's convention of stating such narrowings explicitly.
+func timeRangeParams(r *http.Request) (after, before *time.Time) {
+	if raw := r.URL.Query().Get("createdAfter"); raw != "" {
+		if t, err := time.Parse(time.RFC3339, raw); err == nil {
+			after = &t
+		}
+	}
+	if raw := r.URL.Query().Get("createdBefore"); raw != "" {
+		if t, err := time.Parse(time.RFC3339, raw); err == nil {
+			before = &t
+		}
+	}
+	return after, before
 }
 
 func batchListItem(row *BatchRow) map[string]any {

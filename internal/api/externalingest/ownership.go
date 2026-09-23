@@ -3,6 +3,7 @@ package externalingest
 import (
 	"context"
 	"encoding/json"
+	"net/url"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -30,27 +31,36 @@ type integrationSource struct {
 	Active     bool
 }
 
-// matchesInstance ports ownership.py's matches_instance for the
-// general (non-"operational" github/gitlab) case: a pure string comparison
-// against the managed source's own identifiers. It does NOT port the
-// self-hosted-instance credential-host branch (system in {github,gitlab}
-// AND entity_family == "operational"): that branch decrypts a linked
-// integration credential to resolve a configured host, a dependency this
-// area does not yet carry (see doc.go). Scoped narrowly: it applies only
-// when neither side's system/entityFamily combination is that branch, which
-// is every push kind this ticket ports except operational github/gitlab
-// records -- those fall back to "no match", the fail-safe direction (a
-// customer_push registration for that narrow case is never silently
-// overridden by an unseen managed source, matching CC5's own precedence:
-// an explicit external_ingest_sources row already wins unless a managed
-// owner is found).
-func matchesInstance(system, instance string, source integrationSource, entityFamily string) bool {
+// matchesInstance ports ownership.py's matches_instance. For the operational
+// github/gitlab branch it covers the explicitly-configured-host and
+// default-host cases (integrationConfig's github_instance_url/
+// gitlab_instance_url key, or github.com/gitlab.com when absent) but not
+// the narrower sub-case of a self-hosted host known only via a DECRYPTED
+// managed credential (Python's credential_base_url fallback,
+// ownership.py's _credential_host_resolution): that needs a credential-
+// decryption dependency this area does not carry (see deps.go's package
+// doc). A managed integration with no explicit config key and a self-hosted
+// credential-derived host is therefore still unmatched here -- fail-safe in
+// the same direction as before (an explicit customer_push row is not
+// overridden), just a narrower gap than "every operational github/gitlab
+// push", which is what this function covered before.
+func matchesInstance(system, instance string, source integrationSource, entityFamily string, integrationConfig map[string]any) bool {
 	inst := strings.ToLower(strings.TrimSpace(instance))
 	if inst == "" {
 		return false
 	}
 	if entityFamily == operationalEntityFamily && (system == "github" || system == "gitlab") {
-		return false // named limit: see doc comment
+		defaultHost := "github.com"
+		if system == "gitlab" {
+			defaultHost = "gitlab.com"
+		}
+		managedHost := defaultHost
+		if configured, ok := integrationConfig[system+"_instance_url"].(string); ok && strings.TrimSpace(configured) != "" {
+			managedHost = configured
+		} else if configured, ok := integrationConfig[system+"_url"].(string); ok && strings.TrimSpace(configured) != "" {
+			managedHost = configured
+		}
+		return normalizedOperationalHost(system, instance) == normalizedOperationalHost(system, managedHost)
 	}
 	switch system {
 	case "github", "jira":
@@ -66,6 +76,44 @@ func matchesInstance(system, instance string, source integrationSource, entityFa
 	default:
 		return false
 	}
+}
+
+// normalizedOperationalHost is a simplified port of models/
+// operational_identity.py's normalized_operational_provider_instance for
+// github/gitlab: lowercase hostname, api.github.com aliased to github.com,
+// scheme and default port (443/80) stripped. It does not reproduce every
+// edge case Python's version rejects (malformed labels, bracketed IPv6,
+// non-default schemes) -- those inputs compare unequal here rather than
+// being refused outright, which is safe for a host EQUALITY comparison:
+// an unparseable value on either side simply fails to match, never
+// falsely matches.
+func normalizedOperationalHost(system, raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+	withScheme := trimmed
+	if !strings.Contains(trimmed, "://") {
+		withScheme = "//" + trimmed
+	}
+	parsed, err := url.Parse(withScheme)
+	if err != nil || parsed.Hostname() == "" {
+		return strings.ToLower(trimmed)
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if system == "github" && (host == "api.github.com" || host == "github.com") {
+		return "github.com"
+	}
+	port := parsed.Port()
+	scheme := strings.ToLower(parsed.Scheme)
+	if scheme == "" {
+		scheme = "https"
+	}
+	defaultPort := map[string]string{"https": "443", "http": "80"}[scheme]
+	if port != "" && port != defaultPort {
+		return host + ":" + port
+	}
+	return host
 }
 
 func linearIsOrgWidePlaceholder(source integrationSource) bool {
@@ -94,7 +142,7 @@ func findActiveManagedOwner(ctx context.Context, pool *pgxpool.Pool, orgID, syst
 	}
 	rows, err := pool.Query(ctx, `
 		SELECT source.external_id, source.full_name, source.name, source.metadata,
-		       source.is_enabled, integration.is_active
+		       source.is_enabled, integration.is_active, integration.config
 		FROM integration_sources AS source
 		JOIN integrations AS integration ON integration.id = source.integration_id
 		WHERE source.org_id = $1 AND lower(source.provider) = $2
@@ -107,10 +155,10 @@ func findActiveManagedOwner(ctx context.Context, pool *pgxpool.Pool, orgID, syst
 	for rows.Next() {
 		var (
 			externalID, fullName, name string
-			metadataJSON               []byte
+			metadataJSON, configJSON   []byte
 			enabled, active            bool
 		)
-		if err := rows.Scan(&externalID, &fullName, &name, &metadataJSON, &enabled, &active); err != nil {
+		if err := rows.Scan(&externalID, &fullName, &name, &metadataJSON, &enabled, &active, &configJSON); err != nil {
 			return false, err
 		}
 		if !enabled || !active {
@@ -120,7 +168,7 @@ func findActiveManagedOwner(ctx context.Context, pool *pgxpool.Pool, orgID, syst
 			ExternalID: externalID, FullName: fullName, Name: name,
 			Metadata: decodeMetadata(metadataJSON), Enabled: enabled, Active: active,
 		}
-		if matchesInstance(system, instance, source, entityFamily) {
+		if matchesInstance(system, instance, source, entityFamily, decodeMetadata(configJSON)) {
 			return true, nil
 		}
 	}

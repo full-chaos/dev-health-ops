@@ -126,6 +126,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 	routes = append(routes, externalingest.Routes(externalingest.Deps{
 		Pool:   deps.Pool,
 		Valkey: deps.Valkey,
+		Logger: logger,
 	})...)
 	return routes
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"time"
 )
 
@@ -66,6 +67,17 @@ func parseEnvelope(raw []byte) (*BatchEnvelope, error) {
 	var envelope BatchEnvelope
 	if err := decoder.Decode(&envelope); err != nil {
 		return nil, fmt.Errorf("malformed batch envelope: %w", err)
+	}
+	// Decode stops after the first complete JSON value and, on its own,
+	// silently accepts trailing garbage after it -- unlike Python's
+	// BatchEnvelope.model_validate_json, which parses the whole string
+	// strictly and rejects anything left over. A batch this repo's own
+	// worker then finds malformed (internal/streamhandlers/
+	// external_ingest.go checks for EOF, external_ingest.go:390) must be
+	// rejected HERE, at accept time, not acknowledged and permanently
+	// stuck failing downstream.
+	if err := decoder.Decode(new(json.RawMessage)); err != io.EOF {
+		return nil, fmt.Errorf("malformed batch envelope: trailing data after the JSON value")
 	}
 	if envelope.SchemaVersion == "" {
 		return nil, fmt.Errorf("schemaVersion is required")

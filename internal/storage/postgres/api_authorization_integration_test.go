@@ -128,7 +128,7 @@ func externalIngestTables(t *testing.T, ctx context.Context, admin *pgxpool.Pool
   id uuid PRIMARY KEY, org_id text NOT NULL, ingestion_id uuid NOT NULL, record_index integer NOT NULL,
   record_kind text NOT NULL, external_id text, code text NOT NULL, message text NOT NULL,
   path text, created_at timestamptz NOT NULL)`,
-		`CREATE TABLE IF NOT EXISTS integrations (id uuid PRIMARY KEY, org_id text NOT NULL, provider text NOT NULL, is_active boolean NOT NULL DEFAULT true)`,
+		`CREATE TABLE IF NOT EXISTS integrations (id uuid PRIMARY KEY, org_id text NOT NULL, provider text NOT NULL, is_active boolean NOT NULL DEFAULT true, config jsonb NOT NULL DEFAULT '{}')`,
 		`CREATE TABLE IF NOT EXISTS integration_sources (
   id uuid PRIMARY KEY, org_id text NOT NULL, integration_id uuid NOT NULL,
   provider text NOT NULL, external_id text NOT NULL, name text NOT NULL, full_name text NOT NULL,

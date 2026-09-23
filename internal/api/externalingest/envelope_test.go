@@ -55,6 +55,7 @@ func TestParseEnvelopeRejects(t *testing.T) {
 			"source":{"system":"github","instance":"i"},"records":[]}`,
 		"missing record kind": `{"schemaVersion":"external-ingest.v1","idempotencyKey":"k",
 			"source":{"system":"github","instance":"i"},"records":[{"externalId":"i","payload":{}}]}`,
+		"trailing garbage after the JSON value": validEnvelopeJSON() + "trailing-garbage",
 		"empty record externalId": `{"schemaVersion":"external-ingest.v1","idempotencyKey":"k",
 			"source":{"system":"github","instance":"i"},"records":[{"kind":"repository.v1","externalId":"","payload":{}}]}`,
 	}

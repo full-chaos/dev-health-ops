@@ -42,6 +42,62 @@ func TestKeyedBucketTestDoesNotConsume(t *testing.T) {
 	}
 }
 
+func TestRouteLimitersEnforceThePerMinuteCeilings(t *testing.T) {
+	now := time.Unix(0, 0)
+	limiters := newRouteLimiters(func() time.Time { return now })
+
+	cases := []struct {
+		name   string
+		bucket *keyedBucket
+		ceil   int
+	}{
+		{"schemasList", limiters.schemasList, ingestReadLimitPerMinute},
+		{"schemasGet", limiters.schemasGet, ingestReadLimitPerMinute},
+		{"listBatches", limiters.listBatches, ingestReadLimitPerMinute},
+		{"getBatch", limiters.getBatch, ingestReadLimitPerMinute},
+		{"validate", limiters.validate, ingestValidateLimitPerMinute},
+		{"batches", limiters.batches, ingestBatchLimitPerMinute},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			key := "k"
+			for i := 0; i < c.ceil; i++ {
+				if err := rateLimitedOrTooManyRequests(c.bucket, key); err != nil {
+					t.Fatalf("request %d/%d unexpectedly rate-limited: %v", i+1, c.ceil, err)
+				}
+			}
+			err := rateLimitedOrTooManyRequests(c.bucket, key)
+			if err == nil || err.Status != 429 || err.Code != "rate_limited" {
+				t.Fatalf("request %d must be rate-limited, got %v", c.ceil+1, err)
+			}
+			// A different key has its own budget -- this is the per-caller
+			// shape the P1 finding's repro (121 unauthenticated requests
+			// all returning 200) was missing entirely.
+			if err := rateLimitedOrTooManyRequests(c.bucket, "different-key"); err != nil {
+				t.Fatalf("a different key must not share an exhausted bucket: %v", err)
+			}
+		})
+	}
+}
+
+func TestRateLimitedOrTooManyRequestsWithANilBucketAlwaysAllows(t *testing.T) {
+	if err := rateLimitedOrTooManyRequests(nil, "k"); err != nil {
+		t.Fatalf("a nil bucket (unrate-limited route, e.g. availability) must never refuse: %v", err)
+	}
+}
+
+func TestIngestTokenRateLimitKeyIsStablePerToken(t *testing.T) {
+	a := ingestTokenRateLimitKey("token-1")
+	b := ingestTokenRateLimitKey("token-1")
+	c := ingestTokenRateLimitKey("token-2")
+	if a != b {
+		t.Fatal("the same token id must produce the same key")
+	}
+	if a == c {
+		t.Fatal("different token ids must produce different keys")
+	}
+}
+
 func TestForwardedIPUsesPeerUnlessTrusted(t *testing.T) {
 	t.Setenv("TRUSTED_PROXIES", "10.0.0.1")
 

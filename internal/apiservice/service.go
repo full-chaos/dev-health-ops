@@ -39,6 +39,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/orgs"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/acr"
+	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
@@ -136,6 +137,18 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 	})...)
 	if deps.Guard != nil {
 		routes = append(routes, orgs.Routes(deps.Pool, deps.Guard, logger)...)
+	}
+	// admin is this Service's other consumer of policy.Guard: mounted only
+	// when the protected-route runtime is actually up (deps.Pool
+	// configured); with no pool these paths are simply absent from the mux,
+	// same as any other not-yet-ported area.
+	if deps.Pool != nil && deps.Guard != nil {
+		routes = append(routes, admin.Routes(admin.Deps{
+			Pool:   deps.Pool,
+			Valkey: deps.Valkey,
+			Guard:  deps.Guard,
+			Logger: logger,
+		})...)
 	}
 	return routes
 }

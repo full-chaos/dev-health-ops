@@ -85,7 +85,19 @@ func apiPosture() RolePosture {
 			// X-Org-Id, and the active impersonation session of a superuser.
 			{"users", false, false, false},
 			{"memberships", false, false, false},
-			{"impersonation_sessions", false, false, false},
+			// CHAOS-6303 (admin impersonation routes) is the first route
+			// area over this principal to WRITE the impersonation session
+			// it reads: start_impersonation ends any prior open session
+			// (UPDATE) and inserts the new one; stop_impersonation ends it
+			// (UPDATE). ONE entry per table is a hard requirement
+			// (riverstore.ValidateMigrationOptions rejects a duplicate
+			// TableName as a silent generic ErrMigrationConfiguration) --
+			// a later route area needing more on an already-declared table
+			// widens this entry in place, never appends a second one.
+			{"impersonation_sessions", true, true, false},
+			// The generic audit writer (internal/api/audit): this area's
+			// impersonation_start/impersonation_stop rows.
+			{"audit_logs", true, false, false},
 		},
 	}
 }

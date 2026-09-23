@@ -112,8 +112,6 @@ func apiPosture() RolePosture {
 			// (refresh_tokens.py's revoke_all_for_user) on a password
 			// change.
 			{"refresh_tokens", false, true, false},
-			// Invite creation (CHAOS-6305's create_org_invite).
-			{"org_invites", true, false, false},
 			// CHAOS-6303 (admin impersonation routes) is the first route
 			// area over this principal to WRITE the impersonation session
 			// it reads: start_impersonation ends any prior open session

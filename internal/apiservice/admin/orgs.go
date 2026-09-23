@@ -1,20 +1,14 @@
 package admin
 
 import (
-	"context"
-	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
-	"log/slog"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
-	"github.com/full-chaos/dev-health-ops/internal/api/audit"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
@@ -32,15 +26,14 @@ func (h *handlers) orgRoutes() []httpapi.Route {
 		{Method: http.MethodDelete, Pattern: orgsPrefix + "/orgs/{org_id}", Handler: h.guard.Wrap(policy.Superuser, http.HandlerFunc(h.deleteOrganizationStub))},
 		{Method: http.MethodGet, Pattern: orgsPrefix + "/orgs/{org_id}/members", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.listMembers))},
 		{Method: http.MethodPost, Pattern: orgsPrefix + "/orgs/{org_id}/members", Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.addMember))},
-		// create_org_invite carries @limiter.limit("10/hour", ...) in Python
-		// -- a live round found this registered at 1/second, burst 10 (a
-		// FAR looser limit: 10 requests in ~10 seconds succeed here, where
-		// Python 429s on the 11th within the hour). RateLimitPerSecond is
-		// the token-bucket refill rate a "10/hour" cap needs: 10 tokens
-		// per 3600 seconds, burst 10 (a full hour's allowance available at
-		// once, same as slowapi's own window starting full).
-		{Method: http.MethodPost, Pattern: orgsPrefix + "/orgs/{org_id}/invites",
-			Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.createOrgInvite)), RateLimitPerSecond: 10.0 / 3600.0, RateLimitBurst: 10},
+		// create_org_invite (POST /orgs/{org_id}/invites) is NOT mounted
+		// here: it best-effort emails the invite (invites.py's
+		// send_invite_email), and no Go mail path exists yet to port that
+		// behavior onto. Sending no email at all would silently diverge
+		// from Python rather than answer a route this Service cannot yet
+		// serve correctly. Python keeps serving this route unchanged.
+		// CHAOS-6334 tracks porting the mail sender and this route
+		// together.
 		{Method: http.MethodPatch, Pattern: orgsPrefix + "/orgs/{org_id}/members/{user_id}", Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.updateMemberRole))},
 		{Method: http.MethodDelete, Pattern: orgsPrefix + "/orgs/{org_id}/members/{user_id}", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.removeMember))},
 		{Method: http.MethodPost, Pattern: orgsPrefix + "/orgs/{org_id}/transfer-ownership", Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.transferOwnership))},
@@ -83,29 +76,6 @@ func membershipResponseObject(m *membership) *pyjson.Object {
 	}
 	out.Set("created_at", pyTimeString(m.CreatedAt))
 	out.Set("updated_at", pyTimeString(m.UpdatedAt))
-	return out
-}
-
-func orgInviteResponseObject(invite *orgInvite) *pyjson.Object {
-	out := pyjson.NewObject()
-	out.Set("id", invite.ID.String())
-	out.Set("org_id", invite.OrgID.String())
-	out.Set("email", invite.Email)
-	out.Set("role", invite.Role)
-	if invite.InvitedByID != nil {
-		out.Set("invited_by_id", invite.InvitedByID.String())
-	} else {
-		out.Set("invited_by_id", nil)
-	}
-	out.Set("status", invite.Status)
-	out.Set("expires_at", pyTimeString(invite.ExpiresAt))
-	if invite.AcceptedAt != nil {
-		out.Set("accepted_at", pyTimeString(*invite.AcceptedAt))
-	} else {
-		out.Set("accepted_at", nil)
-	}
-	out.Set("created_at", pyTimeString(invite.CreatedAt))
-	out.Set("updated_at", pyTimeString(invite.UpdatedAt))
 	return out
 }
 
@@ -444,117 +414,6 @@ func (h *handlers) addMember(w http.ResponseWriter, r *http.Request) {
 	policy.WriteJSON(w, http.StatusCreated, membershipResponseObject(created), nil)
 }
 
-// createOrgInvite is orgs.py's create_org_invite: audited (member_invited)
-// and best-effort emails the invite (a send failure never fails the
-// request -- matches the Python route's bare `except Exception: log`).
-func (h *handlers) createOrgInvite(w http.ResponseWriter, r *http.Request) {
-	user := policy.UserFrom(r.Context())
-	ctx := r.Context()
-	orgID, parseErr := uuid.Parse(r.PathValue("org_id"))
-	if parseErr != nil {
-		policy.WriteInternal(w)
-		return
-	}
-	if !h.ensureOrgAdminAccess(ctx, w, user, orgID) {
-		return
-	}
-	invitedByID, parseErr := uuid.Parse(user.UserID)
-	if parseErr != nil {
-		policy.WriteDetail(w, http.StatusUnauthorized, "Invalid user identity", nil)
-		return
-	}
-
-	body := bodyFromContext(ctx)
-	var errs pybody.Errors
-	object, ok := errs.Object(body)
-	var email, role string
-	if ok {
-		email, _ = errs.RequiredString(object, "email", 3, 0)
-		role, _ = errs.OptionalString(object, "role", 0, 0)
-	}
-	if len(errs) > 0 {
-		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
-		return
-	}
-	if role == "" {
-		role = "member"
-	}
-
-	orgName, found, err := h.store.orgNameByID(ctx, orgID)
-	if err != nil {
-		h.logger.ErrorContext(ctx, "admin: invite org lookup failed", "error", err)
-		policy.WriteInternal(w)
-		return
-	}
-	if !found {
-		policy.WriteDetail(w, http.StatusNotFound, "Organization not found", nil)
-		return
-	}
-
-	inviterFullName, inviterEmail, err := h.store.inviterDisplay(ctx, invitedByID)
-	if err != nil {
-		h.logger.ErrorContext(ctx, "admin: inviter lookup failed", "error", err)
-		policy.WriteInternal(w)
-		return
-	}
-	inviterName := user.Email
-	if inviterFullName != nil && *inviterFullName != "" {
-		inviterName = *inviterFullName
-	} else if inviterEmail != nil && *inviterEmail != "" {
-		inviterName = *inviterEmail
-	}
-
-	// The invite INSERT and the member_invited audit row share ONE
-	// transaction (Python: create_invite and emit_audit_log share the
-	// request's own SQLAlchemy session, one implicit commit for both).
-	tx, txErr := h.store.Pool.Begin(ctx)
-	if txErr != nil {
-		h.logger.ErrorContext(ctx, "admin: create invite begin tx failed", "error", txErr)
-		policy.WriteInternal(w)
-		return
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	tokenID := uuid.New()
-	token := buildInviteToken(tokenID)
-	invite, err := h.store.insertInvite(ctx, tx, orgID, email, role, invitedByID, hashInviteToken(token), 72*time.Hour)
-	if err == errPendingInviteExists {
-		policy.WriteDetail(w, http.StatusConflict, "A pending invite already exists for this email", nil)
-		return
-	}
-	if err != nil {
-		h.logger.ErrorContext(ctx, "admin: create invite failed", "error", err)
-		policy.WriteInternal(w)
-		return
-	}
-
-	changes := pyjson.NewObject()
-	changes.Set("email", invite.Email)
-	changes.Set("role", invite.Role)
-	changes.Set("status", invite.Status)
-	changesBytes, _ := pyjson.Marshal(changes)
-	description := "Organization invite created"
-	if _, err := h.audit.Write(ctx, tx, requestAuditEntry(r, audit.Entry{
-		OrgID: orgID, UserID: &invitedByID, Action: audit.ActionMemberInvited, ResourceType: audit.ResourceMembership,
-		ResourceID: invite.ID.String(), Description: &description, Changes: changesBytes,
-	})); err != nil {
-		h.logger.ErrorContext(ctx, "admin: invite audit write failed", "error", err)
-		policy.WriteInternal(w)
-		return
-	}
-	if err := tx.Commit(ctx); err != nil {
-		h.logger.ErrorContext(ctx, "admin: create invite commit failed", "error", err)
-		policy.WriteInternal(w)
-		return
-	}
-
-	if err := sendInviteEmail(ctx, h.logger, invite.Email, orgName, inviterName, token); err != nil {
-		h.logger.ErrorContext(ctx, "admin: invite email send failed", "error", err)
-	}
-
-	policy.WriteJSON(w, http.StatusCreated, orgInviteResponseObject(invite), nil)
-}
-
 // updateMemberRole is orgs.py's update_member_role.
 func (h *handlers) updateMemberRole(w http.ResponseWriter, r *http.Request) {
 	user := policy.UserFrom(r.Context())
@@ -721,52 +580,4 @@ func randomHex4() string {
 		return hex.EncodeToString([]byte(time.Now().Format("15040502")))[:8]
 	}
 	return hex.EncodeToString(buf)
-}
-
-// buildInviteToken / hashInviteToken port invites.py's HMAC-signed,
-// SHA256-hashed invite token exactly: token = "<id-hex>.<hmac-sha256(id)>",
-// stored as sha256(token). The secret precedence (JWT_SECRET_KEY, else
-// SETTINGS_ENCRYPTION_KEY, else a dev fallback) matches _token_secret.
-func buildInviteToken(id uuid.UUID) string {
-	idHex := hexNoDashes(id)
-	return idHex + "." + signInviteTokenID(idHex)
-}
-
-func signInviteTokenID(idHex string) string {
-	mac := hmac.New(sha256.New, []byte(inviteTokenSecret()))
-	mac.Write([]byte(idHex))
-	return hex.EncodeToString(mac.Sum(nil))
-}
-
-func hashInviteToken(token string) string {
-	sum := sha256.Sum256([]byte(token))
-	return hex.EncodeToString(sum[:])
-}
-
-func inviteTokenSecret() string {
-	if v := os.Getenv("JWT_SECRET_KEY"); v != "" {
-		return v
-	}
-	if v := os.Getenv("SETTINGS_ENCRYPTION_KEY"); v != "" {
-		return v
-	}
-	return "dev-key-not-for-prod"
-}
-
-func hexNoDashes(id uuid.UUID) string {
-	b := id[:]
-	return hex.EncodeToString(b)
-}
-
-// sendInviteEmail is invites.py's send_invite_email; failures are logged,
-// never surfaced to the caller (matches create_org_invite's bare `except
-// Exception`).
-func sendInviteEmail(ctx context.Context, logger *slog.Logger, toEmail, orgName, inviterName, token string) error {
-	// The email service itself (dev_health_ops.api.services.email) is not
-	// yet ported to Go; this records the send attempt so the audit trail
-	// and this route's own test coverage stay honest about what actually
-	// happens today. See the PR's RISK-NOTES.
-	logger.InfoContext(ctx, "admin: invite email send is a no-op pending the Go email service port",
-		"to", toEmail, "org", orgName, "inviter", inviterName)
-	return nil
 }

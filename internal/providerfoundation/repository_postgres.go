@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -11,6 +13,30 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// CredentialAmbiguousError reports 2+ active credentials for a provider
+// with no name/id given to disambiguate -- mirroring Python's
+// AmbiguousCredentialError (integration_credentials.py:121-131) message
+// shape exactly: "Multiple active credentials exist for provider
+// '<provider>' (<name1>, <name2>, ...); specify credential_name or
+// credential_id", names sorted. It wraps ErrCredentialInvalid (the
+// ObjectTooLargeError pattern in types.go) so every existing errors.Is(err,
+// ErrCredentialInvalid) classification keeps matching unchanged; a caller
+// that needs the candidate list for a 409 body (CHAOS-6311) uses errors.As.
+type CredentialAmbiguousError struct {
+	Provider string
+	Names    []string // sorted
+}
+
+func (e *CredentialAmbiguousError) Error() string {
+	// r2 (round 1, P3): exact string match to AmbiguousCredentialError.
+	// __init__ (integration_credentials.py:125-131) -- uppercase "Multiple",
+	// single-quoted provider name, not Go's %q double quotes.
+	return fmt.Sprintf("Multiple active credentials exist for provider '%s' (%s); specify credential_name or credential_id",
+		e.Provider, strings.Join(e.Names, ", "))
+}
+
+func (e *CredentialAmbiguousError) Unwrap() error { return ErrCredentialInvalid }
 
 // PostgresCredentialRepository reads the existing Python-owned
 // integration_credentials table. It only returns ciphertext; decrypting is
@@ -35,7 +61,13 @@ FROM integration_credentials WHERE org_id = $1 AND provider = $2 AND is_active =
 		query += " AND name = $3"
 		args = append(args, scope.CredentialName)
 	} else {
-		query += " ORDER BY CASE WHEN name = 'default' THEN 0 ELSE 1 END, name LIMIT 2"
+		// No id/name: fetch EVERY active candidate (no LIMIT) so an
+		// ambiguous match can name every candidate, matching Python's
+		// AmbiguousCredentialError exactly -- a LIMIT 2 here previously
+		// could only ever see the first two candidates, never the true
+		// set, whenever a provider had 3+ active credentials and no
+		// "default" among them.
+		query += " ORDER BY CASE WHEN name = 'default' THEN 0 ELSE 1 END, name"
 	}
 	rows, err := r.Pool.Query(ctx, query, args...)
 	if err != nil {
@@ -43,37 +75,78 @@ FROM integration_credentials WHERE org_id = $1 AND provider = $2 AND is_active =
 	}
 	defer rows.Close()
 	var matches []EncryptedCredential
+	// configBlobs holds each candidate's RAW config JSON, index-aligned
+	// with matches, deliberately left undecoded here. r3 (round 2, P1):
+	// config was previously decoded eagerly for EVERY candidate inside
+	// this loop, so a malformed config on any ONE active row (e.g. a
+	// stored JSON array instead of object -- the column has no shape
+	// constraint) aborted the WHOLE query with ErrCredentialInvalid
+	// before the ambiguity check ever ran, discarding every
+	// already-collected match, the same failure CLASS the ciphertext fix
+	// above closes. Python's list_by_provider (integration_credentials.py:
+	// 358) never touches `.config` during the ambiguity sweep at all --
+	// SQLAlchemy loads it lazily and nothing in resolve_with_fallback's
+	// candidate-counting path reads it. Config is decoded here ONLY for
+	// the single candidate actually being returned, at each return site
+	// below, matching that lazy Python behavior exactly.
+	var configBlobs [][]byte
 	for rows.Next() {
 		var record EncryptedCredential
-		var cipherText string
+		// r2 (round 1, P1): credentials_encrypted scans into a NULLABLE
+		// *string, not string. Python's list_by_provider (used by
+		// resolve_with_fallback's ambiguity check,
+		// integration_credentials.py:358,283) selects every row for
+		// org+provider with no filter on credentials_encrypted at all -- a
+		// row with a NULL or empty ciphertext is still a candidate for
+		// ambiguity detection, only failing later when something actually
+		// tries to decrypt it. Scanning NULL into a non-nullable Go string
+		// previously errored the WHOLE query (ErrCredentialNotFound,
+		// discarding every already-collected match too), and an
+		// empty-string ciphertext was silently dropped from `matches`
+		// outright -- both let an ambiguous set of active rows resolve to
+		// a single winner (or "not found") where Python raises
+		// AmbiguousCredentialError.
+		var cipherText *string
 		var configJSON []byte
 		if err := rows.Scan(&record.ID, &record.Provider, &record.Name, &record.Active, &cipherText, &configJSON); err != nil {
 			return EncryptedCredential{}, ErrCredentialNotFound
 		}
-		if !record.Active || cipherText == "" {
-			continue
-		}
-		record.Ciphertext = secrets.NewValue(cipherText)
-		record.Config = map[string]string{}
-		if err := decodeConfig(configJSON, record.Config); err != nil {
-			return EncryptedCredential{}, ErrCredentialInvalid
+		if cipherText != nil && *cipherText != "" {
+			record.Ciphertext = secrets.NewValue(*cipherText)
 		}
 		matches = append(matches, record)
+		configBlobs = append(configBlobs, configJSON)
 	}
 	if err := rows.Err(); err != nil || len(matches) == 0 {
 		return EncryptedCredential{}, ErrCredentialNotFound
 	}
 	if scope.CredentialID == "" && scope.CredentialName == "" {
-		for _, match := range matches {
+		for index, match := range matches {
 			if match.Name == "default" {
-				return match, nil
+				return finalizeConfig(match, configBlobs[index])
 			}
 		}
 		if len(matches) != 1 {
-			return EncryptedCredential{}, ErrCredentialInvalid
+			names := make([]string, len(matches))
+			for index, match := range matches {
+				names[index] = match.Name
+			}
+			sort.Strings(names)
+			return EncryptedCredential{}, &CredentialAmbiguousError{Provider: scope.Provider, Names: names}
 		}
 	}
-	return matches[0], nil
+	return finalizeConfig(matches[0], configBlobs[0])
+}
+
+// finalizeConfig decodes the single candidate ResolveEncrypted is actually
+// about to return -- see the configBlobs doc comment above for why this
+// must never run during the ambiguity-detection sweep.
+func finalizeConfig(record EncryptedCredential, configJSON []byte) (EncryptedCredential, error) {
+	record.Config = map[string]string{}
+	if err := decodeConfig(configJSON, record.Config); err != nil {
+		return EncryptedCredential{}, ErrCredentialInvalid
+	}
+	return record, nil
 }
 
 func decodeConfig(raw []byte, target map[string]string) error {

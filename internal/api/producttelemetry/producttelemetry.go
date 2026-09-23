@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	valkeygo "github.com/valkey-io/valkey-go"
@@ -45,35 +46,57 @@ type Streams interface {
 
 // ValkeyStreams opens its client on first use from VALKEY_URI ("" = no
 // stream: every batch is accepted with stream "disabled", as the Python
-// api does without REDIS_URL).
+// api does without REDIS_URL). A failed open is not cached: the next
+// batch tries again, as the Python client reconnects per command. The
+// open runs under its own bounded context, so a cancelled request cannot
+// fail it for later ones.
 type ValkeyStreams struct {
 	URI string
 
-	once   sync.Once
+	mu     sync.Mutex
 	client valkeygo.Client
-	err    error
 }
 
-var errNoStream = errors.New("producttelemetry: Valkey is not configured")
+// openTimeout bounds one open attempt (dial + ping).
+const openTimeout = 5 * time.Second
+
+var (
+	errNoStream    = errors.New("producttelemetry: Valkey is not configured")
+	errUnencodable = errors.New("producttelemetry: stream key or field is not encodable as UTF-8")
+)
+
+func (s *ValkeyStreams) open() (valkeygo.Client, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.client != nil {
+		return s.client, nil
+	}
+	config := valkey.DefaultConfig(s.URI)
+	config.ClientName = "dev-health-api"
+	ctx, cancel := context.WithTimeout(context.Background(), openTimeout)
+	defer cancel()
+	client, err := valkey.Open(ctx, config)
+	if err != nil {
+		return nil, err
+	}
+	s.client = client
+	return client, nil
+}
 
 // Append is XADD stream MAXLEN ~ 100000 * field value ...
 func (s *ValkeyStreams) Append(ctx context.Context, stream string, fields [][2]string) error {
 	if s.URI == "" {
 		return errNoStream
 	}
-	s.once.Do(func() {
-		config := valkey.DefaultConfig(s.URI)
-		config.ClientName = "dev-health-api"
-		s.client, s.err = valkey.Open(ctx, config)
-	})
-	if s.err != nil {
-		return s.err
+	client, err := s.open()
+	if err != nil {
+		return err
 	}
-	command := s.client.B().Xadd().Key(stream).Maxlen().Almost().Threshold(streamMax).Id("*").FieldValue()
+	command := client.B().Xadd().Key(stream).Maxlen().Almost().Threshold(streamMax).Id("*").FieldValue()
 	for _, field := range fields {
 		command = command.FieldValue(field[0], field[1])
 	}
-	return s.client.Do(ctx, command.Build()).Error()
+	return client.Do(ctx, command.Build()).Error()
 }
 
 // Routes returns the area's route. It is public: FastAPI runs no
@@ -147,6 +170,12 @@ func (h handler) write(ctx context.Context, batch batch, ingestionID string) (st
 	}
 	if h.streams == nil {
 		return "", errNoStream
+	}
+	// The Python Redis client UTF-8 encodes the key and every field before
+	// it sends anything; a lone surrogate fails that encode, so no entry is
+	// written and the batch is accepted with stream "disabled".
+	if pyjson.HasSurrogate(stream) || pyjson.HasSurrogate(orgHash) {
+		return "", errUnencodable
 	}
 	err = h.streams.Append(ctx, stream, [][2]string{
 		{"ingestion_id", ingestionID}, {"source", batch.source}, {"org_id_hash", orgHash}, {"events", encoded},

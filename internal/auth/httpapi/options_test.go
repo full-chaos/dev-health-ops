@@ -139,10 +139,13 @@ func TestServerNameDefaultsAndOverrides(t *testing.T) {
 
 // TestStrictPathsAnswersNotFoundWhereTheMuxWouldRedirect: with StrictPaths
 // every target the mux would redirect or reject reaches the writer as
-// NotFound, and a canonical path is routed as before. Without it the mux's
-// own redirect stands (TestDotSegmentsAreRedirectedNotServed).
+// NotFound, and a canonical path is routed as before. A "." or ".."
+// segment is matched literally, as Starlette matches it: here no route
+// matches one, so those are NotFound too (a "{param}" that captures one is
+// TestRedirectSlashesIsStarlettes' case). Without StrictPaths the mux's own
+// redirect stands (TestDotSegmentsAreRedirectedNotServed).
 func TestStrictPathsAnswersNotFoundWhereTheMuxWouldRedirect(t *testing.T) {
-	options := testOptions(okRoute(http.MethodGet, "/ok"), okRoute(http.MethodGet, "/dir/"))
+	options := testOptions(okRoute(http.MethodGet, "/ok"), okRoute(http.MethodGet, "/dir/{$}"))
 	options.ErrorWriter = recordingWriter
 	options.StrictPaths = true
 	handler := handlerFor(t, options)

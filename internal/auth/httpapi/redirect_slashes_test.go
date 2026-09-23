@@ -47,6 +47,10 @@ func TestRedirectSlashesIsStarlettes(t *testing.T) {
 		{"GET", "/items/%2e%2e", "", 200},
 		{"GET", "/items/%2e%2e/%2e%2e/", "", 404},
 		{"GET", "/items/../items/", "", 404},
+		{"GET", "/items/..", "", 200},
+		{"GET", "/items/.", "", 200},
+		{"GET", "/items/../x", "", 404},
+		{"GET", "/items//x", "", 404},
 		// Invalid UTF-8: uvicorn's unquote replaces each maximal ill-formed
 		// subpart with one U+FFFD before Starlette quotes the path back.
 		{"GET", "/items/%FF/", "http://example.com/items/%EF%BF%BD", 307},

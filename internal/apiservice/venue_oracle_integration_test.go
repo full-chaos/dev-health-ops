@@ -253,16 +253,24 @@ func assertPerTableCounts(t *testing.T, ctx context.Context, uri, body string) {
 	}
 	defer pool.Close()
 	for field, query := range map[string]string{
-		"total_organizations": `SELECT count(*) FROM organizations`,
-		"total_users":         `SELECT count(*) FROM users`,
-		"active_users":        `SELECT count(*) FROM users WHERE is_active`,
-		"total_sync_configs":  `SELECT count(*) FROM sync_configurations`,
+		"total_organizations":  `SELECT count(*) FROM organizations`,
+		"total_users":          `SELECT count(*) FROM users`,
+		"active_users":         `SELECT count(*) FROM users WHERE is_active`,
+		"total_sync_configs":   `SELECT count(*) FROM sync_configurations`,
+		"active_organizations": `SELECT count(*) FROM organizations WHERE is_active`,
+		"total_repos":          `SELECT 0::bigint`, // ruled: repositories live in ClickHouse
+		"active_syncs_24h":     `SELECT count(*) FROM sync_configurations WHERE is_active AND last_sync_at >= now() - interval '24 hours'`,
 	} {
 		var want int64
 		if err := pool.QueryRow(ctx, query).Scan(&want); err != nil {
 			t.Fatal(err)
 		}
-		if got, _ := report[field].(float64); int64(got) != want {
+		got, ok := report[field].(float64)
+		if !ok {
+			t.Errorf("report %s = %v, want a number", field, report[field])
+			continue
+		}
+		if int64(got) != want {
 			t.Errorf("report %s = %v, want the per-table count %d", field, report[field], want)
 		}
 	}

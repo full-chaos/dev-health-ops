@@ -60,6 +60,9 @@ func venueSeed(t *testing.T, ctx context.Context, pool *pgxpool.Pool) venueFixtu
 			($2,'org-b','Org B',NULL,     'enterprise'),
 			($3,'org-free','Org Free',NULL,DEFAULT),
 			($4,'org-none','Org None','x','community')`, []any{f.orgA, f.orgB, f.orgFree, f.orgNoLicense}},
+		// An inactive org no request names: the report's active_organizations
+		// must differ from its total.
+		{`INSERT INTO organizations (id, slug, name, tier, is_active) VALUES (gen_random_uuid(), 'org-off', 'Org Off', 'community', false)`, nil},
 		{`INSERT INTO users (id, email, is_superuser, is_active, token_version) VALUES
 			($1,'member@x',false,true,0),($2,'admin@x',false,true,0),($3,'owner@x',false,true,0),
 			($4,'super@x',true,true,0),($5,'outsider@x',false,true,0),($6,'inactive@x',false,false,0),
@@ -82,6 +85,15 @@ func venueSeed(t *testing.T, ctx context.Context, pool *pgxpool.Pool) venueFixtu
 		{`INSERT INTO users (id, email, is_superuser) VALUES ($1, 'imp@x', true)`, []any{f.impersonator}},
 		{`INSERT INTO impersonation_sessions (id, admin_user_id, target_user_id, target_org_id, target_role, expires_at)
 			VALUES (gen_random_uuid(), $1, $2, $3, 'member', now() + interval '1 hour')`, []any{f.impersonator, f.member, f.orgA}},
+		// Sync configurations for the report's totals: active and synced within
+		// a day (two, so no count coincides with another), active but stale,
+		// inactive but recent, and never synced.
+		{`INSERT INTO sync_configurations (id, org_id, name, provider, sync_targets, sync_options, is_active, last_sync_at, created_at, updated_at) VALUES
+			(gen_random_uuid(), $1, 'fresh', 'github', '[]', '{}', true, now() - interval '1 hour', now(), now()),
+			(gen_random_uuid(), $2, 'fresh too', 'gitlab', '[]', '{}', true, now() - interval '2 hours', now(), now()),
+			(gen_random_uuid(), $1, 'stale', 'github', '[]', '{}', true, now() - interval '3 days', now(), now()),
+			(gen_random_uuid(), $2, 'off', 'gitlab', '[]', '{}', false, now() - interval '1 hour', now(), now()),
+			(gen_random_uuid(), $2, 'never', 'jira', '[]', '{}', true, NULL, now(), now())`, []any{f.orgA.String(), f.orgB.String()}},
 		{`INSERT INTO worker_instances (instance_id, worker_group, queues, state, started_at, heartbeat_at, expires_at) VALUES
 			(gen_random_uuid(), 'ops', '{default}', 'accepting', now(), now(), now() + interval '1 hour'),
 			(gen_random_uuid(), 'sync', '{default}', 'draining', now(), now(), now() - interval '1 minute'),

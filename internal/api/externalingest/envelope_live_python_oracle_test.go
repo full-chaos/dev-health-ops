@@ -303,6 +303,6 @@ func TestDataPlaneEnvelopeParseMatchesLivePython(t *testing.T) {
 	if mismatches > 0 {
 		t.Fatalf("%d of %d bodies differ", mismatches, len(corpus))
 	}
-	writeOracleProof(t, "externalingest-data-plane-parse")
+	writeOracleProof(t, "externalingest-parse-dataplane")
 	t.Logf("%d bodies compared (statuses %v); 0 mismatches", len(corpus), statuses)
 }

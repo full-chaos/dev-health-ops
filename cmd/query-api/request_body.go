@@ -9,6 +9,7 @@ package main
 
 import (
 	"errors"
+	"math/big"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 )
@@ -41,9 +42,10 @@ func decodeRequestBody(loc []any, body []byte) (value pyjson.Value, empty bool, 
 
 // legacyJSON converts a validated body to the shape the routes' parameter
 // builders read: map[string]any, []any, string, bool, nil, a float as
-// float64, and an int kept exact as pyjson.Int (intFromAny and
-// dateFromAny, the builders' only number readers, take it as is). Only a
-// body that already passed validation is converted.
+// float64, and an int kept exact, as int64 or (beyond int64) *big.Int.
+// intFromAny and dateFromAny, the builders' number readers, take both, and
+// so does the investment-explain cache key (pythonparity's Python JSON).
+// Only a body that already passed validation is converted.
 func legacyJSON(value pyjson.Value) any {
 	switch typed := value.(type) {
 	case *pyjson.Object:
@@ -59,6 +61,11 @@ func legacyJSON(value pyjson.Value) any {
 			out[index] = legacyJSON(item)
 		}
 		return out
+	case pyjson.Int:
+		if typed.IsInt64() {
+			return typed.Int64()
+		}
+		return new(big.Int).Set(typed.Int)
 	case pyjson.Float:
 		return float64(typed)
 	default:

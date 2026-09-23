@@ -314,7 +314,7 @@ _32 `/api/v1/*` routes in `src/dev_health_ops/api/main.py`: **32** ported, **0**
 | POST | `/api/v1/home` | ported | `cmd/query-api/home_route.go:60` |
 | GET | `/api/v1/investment` | ported | `cmd/query-api/investment_route.go:108` |
 | POST | `/api/v1/investment` | ported | `cmd/query-api/investment_route.go:108` |
-| POST | `/api/v1/investment/explain` | ported | `cmd/query-api/investment_explain_route.go:127` |
+| POST | `/api/v1/investment/explain` | ported | `cmd/query-api/investment_explain_route.go:128` |
 | POST | `/api/v1/investment/flow` | ported | `cmd/query-api/investment_flow_route.go:88` |
 | POST | `/api/v1/investment/flow/repo-team` | ported | `cmd/query-api/investment_flow_route.go:88` |
 | GET | `/api/v1/investment/sunburst` | ported | `cmd/query-api/investment_route.go:176` |

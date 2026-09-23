@@ -4,7 +4,9 @@ import (
 	"math"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/investmentexplain"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
 // TestValidatedIntsKeepTheirValue pins what a route uses after validation:
@@ -35,5 +37,27 @@ func TestValidatedIntsKeepTheirValue(t *testing.T) {
 		if got := intFromAny(legacyJSON(value), 14); got != want {
 			t.Errorf("intFromAny(%s) = %d, want %d", text, got, want)
 		}
+	}
+}
+
+// TestValidatedIntsRenderAsPythonIntsInTheCacheKey pins the investment
+// explain cache key over a validated body: its ints are Python ints in
+// the key's json.dumps text (7, not 7.0), a huge int stays exact, and the
+// key builds without error.
+func TestValidatedIntsRenderAsPythonIntsInTheCacheKey(t *testing.T) {
+	body, _, detail := decodeRequestBody([]any{"body"}, []byte(`{"filters": {"time": {"range_days": 7, "compare_days": 123456789012345678901234567890}}}`))
+	if detail != nil {
+		t.Fatalf("decode: %+v", detail)
+	}
+	filters := legacyJSON(body).(map[string]any)["filters"]
+	text, err := pythonparity.MarshalPythonJSONSorted(filters)
+	if err != nil {
+		t.Fatalf("cache key JSON: %v", err)
+	}
+	if want := `{"time": {"compare_days": 123456789012345678901234567890, "range_days": 7}}`; string(text) != want {
+		t.Errorf("cache key JSON = %s, want %s", text, want)
+	}
+	if _, err := investmentexplain.ComputeCacheKey(investmentexplain.CacheKeyInput{Filters: filters.(map[string]any), OrgID: "org-1"}); err != nil {
+		t.Errorf("ComputeCacheKey: %v", err)
 	}
 }

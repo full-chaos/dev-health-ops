@@ -39,6 +39,7 @@ import (
 	"io"
 	"log"
 	"math"
+	"math/big"
 	"net/http"
 	"os"
 	"strconv"
@@ -682,8 +683,8 @@ func stringsFromAny(value any) []string {
 // intFromAny reads an already-validated field with pydantic's lax int
 // rule (pybody.PydanticInt, the rule validation used), saturated at Go's
 // int range, or fallback for an absent/null value. Values arrive in
-// legacyJSON's shape (an exact pyjson.Int, or a float64) or from a GET
-// handler's own filter map (float64).
+// legacyJSON's shape (an exact int64 or *big.Int, or a float64) or from a
+// GET handler's own filter map (float64).
 func intFromAny(value any, fallback int) int {
 	var raw pyjson.Value
 	switch v := value.(type) {
@@ -691,6 +692,10 @@ func intFromAny(value any, fallback int) int {
 		return fallback
 	case float64:
 		raw = legacyNumber(v)
+	case int64:
+		raw = pyjson.IntOf(v)
+	case *big.Int:
+		raw = pyjson.Int{Int: v}
 	default:
 		raw = v
 	}
@@ -707,9 +712,9 @@ func intFromAny(value any, fallback int) int {
 // midnight. ok is false for an absent/null value, as Python's None.
 func dateFromAny(value any) (t time.Time, ok bool) {
 	switch typed := value.(type) {
-	case string, float64:
-	case pyjson.Int:
-		value = typed.Int
+	case string, float64, *big.Int:
+	case int64:
+		value = big.NewInt(typed)
 	default:
 		return time.Time{}, false
 	}

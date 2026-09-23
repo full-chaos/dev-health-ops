@@ -13,6 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/externalingest"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/api/recordvalidation"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
@@ -132,7 +133,7 @@ func (h *handlers) validateSource(w http.ResponseWriter, r *http.Request) {
 		h.internal(w, r, "read validate body", err)
 		return
 	}
-	envelope, envelopeErrs, err := externalingest.ValidateEnvelopeJSON(raw)
+	envelope, envelopeErrs, err := recordvalidation.ValidateEnvelopeJSON(raw)
 	if err != nil {
 		h.internal(w, r, "validate envelope", err)
 		return
@@ -165,11 +166,11 @@ func (h *handlers) validateSource(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf("Batch has %d records; max is %s", len(envelope.Records), maxRecords.String()), "records"), nil)
 		return
 	}
-	inputs := make([]externalingest.RecordInput, len(envelope.Records))
+	inputs := make([]recordvalidation.RecordInput, len(envelope.Records))
 	for index, record := range envelope.Records {
-		inputs[index] = externalingest.RecordInput{Kind: record.Kind, Payload: record.Payload}
+		inputs[index] = recordvalidation.RecordInput{Kind: record.Kind, Payload: record.Payload}
 	}
-	items := externalingest.ValidateRecords(inputs)
+	items := recordvalidation.ValidateRecords(inputs)
 	rejected := map[int]bool{}
 	rows := make([]pyjson.Value, len(items))
 	for index, item := range items {

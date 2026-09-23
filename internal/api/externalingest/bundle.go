@@ -9,6 +9,7 @@ import (
 	"sort"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/api/recordvalidation"
 )
 
 // schemaVersion is the one supported external-ingest schema version
@@ -126,4 +127,4 @@ func sortedKeys[V any](m map[string]V) []string {
 const SchemaVersion = schemaVersion
 
 // RecordKinds is sorted(RECORD_KIND_MODELS), a fresh copy per call.
-func RecordKinds() []string { return append([]string(nil), recordKinds...) }
+func RecordKinds() []string { return recordvalidation.RecordKinds() }

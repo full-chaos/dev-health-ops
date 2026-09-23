@@ -1,6 +1,10 @@
 package externalingest
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/api/recordvalidation"
+)
 
 func TestValidateRecordsUnknownKind(t *testing.T) {
 	errs := validateRecords([]Record{{Kind: "nope.v1", ExternalID: "x", Payload: map[string]any{}}})
@@ -102,9 +106,9 @@ func TestValidateRecordsAcceptsAWellFormedRecordOfEveryKind(t *testing.T) {
 			"externalId": "sm-1", "sourceVersionAt": "2026-01-01T00:00:00Z", "serviceExternalId": "svc-1",
 		},
 	}
-	if len(fixtures) != len(recordModels) {
-		t.Fatalf("fixture set covers %d kinds, recordModels has %d -- add the missing fixture(s)",
-			len(fixtures), len(recordModels))
+	if len(fixtures) != len(recordvalidation.RecordKinds()) {
+		t.Fatalf("fixture set covers %d kinds, recordvalidation has %d -- add the missing fixture(s)",
+			len(fixtures), len(recordvalidation.RecordKinds()))
 	}
 	for kind, payload := range fixtures {
 		t.Run(kind, func(t *testing.T) {

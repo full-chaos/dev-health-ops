@@ -1,4 +1,4 @@
-package externalingest
+package recordvalidation
 
 import (
 	"fmt"
@@ -19,10 +19,10 @@ type ValidationErrorItem struct {
 	Path    string `json:"path,omitempty"`
 }
 
-// toPyJSON builds the ordered wire shape (schemas.py's ValidationErrorItem
+// ToPyJSON builds the ordered wire shape (schemas.py's ValidationErrorItem
 // field order: index, kind, code, message, path) for policy.WriteJSON. Path
 // is omitted when empty, matching the struct tag's omitempty.
-func (item ValidationErrorItem) toPyJSON() *pyjson.Object {
+func (item ValidationErrorItem) ToPyJSON() *pyjson.Object {
 	object := pyjson.NewObject()
 	object.Set("index", item.Index)
 	object.Set("kind", item.Kind)
@@ -72,19 +72,6 @@ func ValidateRecords(records []RecordInput) []ValidationErrorItem {
 		}
 	}
 	return items
-}
-
-// validateRecords is ValidateRecords over parsed envelope records.
-func validateRecords(records []Record) []ValidationErrorItem {
-	inputs := make([]RecordInput, len(records))
-	for index, record := range records {
-		payload := record.ordered
-		if payload == nil {
-			payload = objectFromMap(record.Payload)
-		}
-		inputs[index] = RecordInput{Kind: record.Kind, Payload: payload}
-	}
-	return ValidateRecords(inputs)
 }
 
 // errorCode is validate.py _error_code_for.

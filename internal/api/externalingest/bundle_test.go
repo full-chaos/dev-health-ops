@@ -1,6 +1,7 @@
 package externalingest
 
 import (
+	"github.com/full-chaos/dev-health-ops/internal/api/recordvalidation"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
@@ -92,17 +93,17 @@ func TestRecordKindsMatchesTheGoldenBundle(t *testing.T) {
 	if !ok {
 		t.Fatalf("golden bundle has no recordKinds: %+v", document)
 	}
-	if len(index) != len(recordModels) {
-		t.Fatalf("golden bundle has %d record kinds, recordModels has %d", len(index), len(recordModels))
+	if len(index) != len(recordvalidation.RecordKinds()) {
+		t.Fatalf("golden bundle has %d record kinds, recordvalidation has %d", len(index), len(recordvalidation.RecordKinds()))
 	}
 	for kind := range index {
-		if _, ok := recordModels[kind]; !ok {
+		if !recordvalidation.KnownKind(kind) {
 			t.Errorf("golden bundle has kind %q with no Go model", kind)
 		}
 	}
-	for kind := range recordModels {
+	for _, kind := range recordvalidation.RecordKinds() {
 		if _, ok := index[kind]; !ok {
-			t.Errorf("recordModels has kind %q missing from the golden bundle", kind)
+			t.Errorf("recordvalidation has kind %q missing from the golden bundle", kind)
 		}
 	}
 }

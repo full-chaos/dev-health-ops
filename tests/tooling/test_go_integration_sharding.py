@@ -890,13 +890,23 @@ _DOCKER_LOGIN_ACTION = "docker/login-action@"
 # Verbs asserted NOT to start a container. Adding a verb to check_go.sh without
 # adding it here fails test_every_check_go_verb_is_classified, which is the
 # point: the safe default is "this might start containers".
+#
+# `live-python-oracles` was here until CHAOS-6247: every live-oracle block in
+# check_live_python_oracles used a plain `go test -mod=readonly -count=1`
+# (pure-function comparisons, or a lightweight interpreter subprocess -- no
+# Testcontainers). CHAOS-6247's webhookintake venue oracle block genuinely
+# runs `go test -tags=integration ./internal/apiservice`, which starts real
+# Postgres/Valkey containers, so the declaration became false -- removed
+# rather than special-cased, since the verb only ever runs reached through
+# `ci` (already classified "harness" regardless of this set) in every
+# workflow today; test_every_workflow_job_starting_containers_authenticates_
+# and_pre_pulls stays green unchanged.
 _NON_CONTAINER_VERBS = frozenset(
     {
         "fmt",
         "vet",
         "test",
         "race",
-        "live-python-oracles",
         "build",
         "contract",
         "integration-vet",

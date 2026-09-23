@@ -173,8 +173,62 @@ def _invocations() -> list[tuple[str | None, list[str]]]:
         packages = PACKAGE.findall(block)
         if not packages or ORACLE_ENV not in block:
             continue
+        # A block that ALSO carries `-tags=integration` is excluded here on
+        # purpose, not merely uncounted: for that block, a plain `go test
+        # ./...` sweep (check_test/check_race) cannot compile the test in at
+        # all, so there is nothing for a runtime `t.Skip()` to protect
+        # against -- the SAME already-modeled mechanism
+        # test_the_build_tag_boundary_is_asserted_not_described exists for
+        # (previously pinned to one hardcoded marker; generalized below to
+        # cover every such block, this one included). Keeping it in THIS
+        # population would make test_every_oracle_named_test_skips_without_
+        # the_env_var invoke `go test` with no `-tags=integration`, which
+        # cannot even compile the file the test is declared in -- a "did not
+        # SKIP" false alarm, not a real gap.
+        if "-tags=integration" in block or "-tags integration" in block:
+            continue
         match = SELECTOR.search(block)
         found.append(((match.group(1) or match.group(2)) if match else None, packages))
+    return found
+
+
+def _integration_tagged_oracle_invocations() -> list[tuple[str, list[str]]]:
+    """Every live-oracle `go test` block that ALSO carries -tags=integration.
+
+    The mirror image of _invocations()'s exclusion above: these blocks are
+    scanned separately here rather than through the runtime-skip check,
+    because their protection against a double-run is the build tag, not
+    DEV_HEALTH_LIVE_PYTHON_ORACLES. Each entry is (selector, packages);
+    a block with no `-run` selector is skipped -- an unfiltered
+    `-tags=integration` oracle package would need this file to declare EVERY
+    test in it individually tagged, which none of these do, so treating "no
+    selector" as "check everything" would be asserting something the script
+    never claimed.
+    """
+    raw_source = CHECK_GO.read_text(encoding="utf-8")
+    lines = raw_source.splitlines()
+    found: list[tuple[str, list[str]]] = []
+    for index, line in enumerate(lines):
+        if not GO_TEST.search(line):
+            continue
+        if line.lstrip().startswith("#") or "printf" in line:
+            continue
+        start = index
+        while start > 0 and lines[start - 1].rstrip().endswith("\\"):
+            start -= 1
+        end = index
+        while lines[end].rstrip().endswith("\\") and end + 1 < len(lines):
+            end += 1
+        block = _expand("\n".join(lines[start : end + 1]), _shell_values(raw_source))
+        packages = PACKAGE.findall(block)
+        if not packages or ORACLE_ENV not in block:
+            continue
+        if "-tags=integration" not in block and "-tags integration" not in block:
+            continue
+        match = SELECTOR.search(block)
+        if match is None:
+            continue
+        found.append(((match.group(1) or match.group(2)), packages))
     return found
 
 
@@ -506,6 +560,56 @@ def test_the_build_tag_boundary_is_asserted_not_described() -> None:
             f"{path.relative_to(REPO_ROOT)} declares {marker} but carries no "
             "integration build tag, so a plain `./...` sweep compiles and runs it"
         )
+
+
+def test_every_integration_tagged_oracle_test_is_declared_under_the_tag() -> None:
+    """The class version of test_the_build_tag_boundary_is_asserted_not_described.
+
+    CHAOS-6247 added a second shape: a live-oracle `go test` block that
+    passes -tags=integration (so it needs real Postgres/Valkey containers) --
+    unlike the hardcoded marker above, these DO set DEV_HEALTH_LIVE_PYTHON_
+    ORACLES=1, so _invocations() excludes them from the runtime-skip check by
+    name rather than by omission, and this test is their actual protection:
+    each such invocation's named test(s) must be declared under a file that
+    carries the SAME build tag, or a plain `./...` sweep would compile and
+    run them for real, with no live interpreter configured.
+    """
+    checked = 0
+    for selector, packages in _integration_tagged_oracle_invocations():
+        names = re.findall(r"Test[A-Za-z0-9_]+", selector)
+        assert names, f"-run {selector!r} named no Test... function"
+        for package in packages:
+            relative = package.lstrip("./").removesuffix("/...")
+            directory = REPO_ROOT / relative
+            assert directory.is_dir(), f"{package} does not resolve to a directory"
+            for name in names:
+                declaring = [
+                    path
+                    for path in directory.rglob("*_test.go")
+                    if re.search(
+                        rf"^func {re.escape(name)}\(",
+                        path.read_text(encoding="utf-8", errors="ignore"),
+                        re.M,
+                    )
+                ]
+                if not declaring:
+                    continue  # named in another package this invocation also lists
+                checked += 1
+                for path in declaring:
+                    head = path.read_text(encoding="utf-8", errors="ignore")[:400]
+                    assert (
+                        "//go:build integration" in head or "+build integration" in head
+                    ), (
+                        f"{path.relative_to(REPO_ROOT)} declares {name}, invoked with "
+                        "-tags=integration in ci/check_go.sh, but carries no "
+                        "integration build tag -- a plain `./...` sweep compiles and "
+                        "runs it for real, with no live interpreter configured"
+                    )
+    assert checked > 0, (
+        "no -tags=integration oracle invocation resolved to a declared test; "
+        "the parse has broken (or every such block was removed, in which case "
+        "delete this test)"
+    )
 
 
 def test_a_skipped_subtest_does_not_prove_the_parent_is_gated() -> None:

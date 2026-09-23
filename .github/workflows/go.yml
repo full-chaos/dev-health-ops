@@ -20,6 +20,9 @@ on:
       - 'uv.lock'
       - 'contracts/jobs/v1/**'
       - 'deploy/go-workers/**'
+      # The chart's own Go tests (images_test.go, stream_subcommand_test.go)
+      # render deploy/helm/dev-health, so a chart-only change is a Go input.
+      - 'deploy/helm/dev-health/**'
       - 'deploy/docker-compose/compose.production.yml'
       - 'scripts/**'
       - 'src/dev_health_ops/api/**'
@@ -151,6 +154,9 @@ on:
       - 'uv.lock'
       - 'contracts/jobs/v1/**'
       - 'deploy/go-workers/**'
+      # The chart's own Go tests (images_test.go, stream_subcommand_test.go)
+      # render deploy/helm/dev-health, so a chart-only change is a Go input.
+      - 'deploy/helm/dev-health/**'
       - 'deploy/docker-compose/compose.production.yml'
       - 'scripts/**'
       - 'src/dev_health_ops/api/**'

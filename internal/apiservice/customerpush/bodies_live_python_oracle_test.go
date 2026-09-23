@@ -229,7 +229,13 @@ func TestCustomerPushBodiesMatchLiveFastAPI(t *testing.T) {
 		statuses[status]++
 		wantStatus := int(want[index][0].(float64))
 		wantText := want[index][1].(string)
-		if status != wantStatus || (status != 500 && text != wantText) {
+		// A 500 is a body neither plane can render. This bare app answers
+		// it with Starlette's plain-text 500 (the api's JSON 500 is compared
+		// by the venue), so both sides must have failed to render.
+		if status == 500 {
+			text, wantText = text+" | Internal Server Error", "render failed | "+wantText
+		}
+		if status != wantStatus || text != wantText {
 			mismatches++
 			if mismatches <= 15 {
 				t.Errorf("%s %s:\n  go     %d %s\n  python %d %s", item[0], item[1], status, text, wantStatus, wantText)

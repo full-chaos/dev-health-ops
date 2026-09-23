@@ -153,10 +153,25 @@ func TestShellLogsTheStartupDependencyReason(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("dho api = %d, want 1\n%s", code, output)
 	}
-	for _, want := range []string{`"msg":"configure runtime dependencies"`, `"reason":"api_clickhouse_open_failed"`, `"dependency":"api_clickhouse"`} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("output is missing %s:\n%s", want, output)
+	// Each record is checked on its own: the shell's "configure runtime
+	// dependencies" line must carry the reason itself, and the adapter's
+	// line must name the dependency.
+	records := map[string]map[string]any{}
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		var record map[string]any
+		if json.Unmarshal([]byte(line), &record) == nil {
+			if message, _ := record["msg"].(string); message != "" {
+				records[message] = record
+			}
 		}
+	}
+	shellLine := records["configure runtime dependencies"]
+	if shellLine == nil || shellLine["reason"] != "api_clickhouse_open_failed" || shellLine["error_category"] != "dependency_configuration_failed" {
+		t.Fatalf("the shell line does not carry the reason: %v\n%s", shellLine, output)
+	}
+	adapterLine := records["api dependency configuration failed"]
+	if adapterLine == nil || adapterLine["dependency"] != "api_clickhouse" || adapterLine["reason"] != "api_clickhouse_open_failed" {
+		t.Fatalf("the adapter line does not name the dependency: %v\n%s", adapterLine, output)
 	}
 	if strings.Contains(output, testCredential) {
 		t.Fatalf("a credential reached the log:\n%s", output)

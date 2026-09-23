@@ -46,9 +46,11 @@ func (e apiDependencyError) DependencyReason() string { return e.reason }
 
 // dependencyFailure logs the failing dependency, its reason and the underlying
 // error, and returns the reason-coded error the shell logs again. Every error
-// reaching it is free of credentials: the storage opens return fixed sentinels
-// (ErrInvalidConfig, ErrUnavailable), and the other sites return configuration
-// or contract messages that never format a secret.
+// reaching it is free of credentials: the storage opens return a fixed sentinel
+// (ErrInvalidConfig), or ErrUnavailable followed by the driver's text with every
+// credential component of the DSN redacted (secrets.WithRedactedCause), and the
+// other sites return configuration or contract messages that never format a
+// secret.
 func dependencyFailure(ctx context.Context, logger *slog.Logger, dependency, reason string, err error) error {
 	if logger != nil {
 		logger.LogAttrs(ctx, slog.LevelError, "api dependency configuration failed",

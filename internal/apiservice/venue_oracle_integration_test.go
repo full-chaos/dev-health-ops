@@ -40,7 +40,7 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 	var seed venueFixture
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Root: venueRoot(), JWTKey: venueKey, Logger: quietLogger(),
-		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool) map[string]map[string]any {
+		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			seed = venueSeed(t, ctx, admin)
 			return seed.tokenSpecs()
 		},

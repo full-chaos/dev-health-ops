@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	clickhousego "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -24,17 +23,17 @@ import (
 // ClickHouseReady/DomainPostgresReady/ValkeyReady no longer swallow their
 // underlying dependency error -- CHAOS-5454, the same swallowed-readiness
 // class CHAOS-5435 fixed for cmd/dev-health-worker and
-// cmd/dev-health-reconciler. Each case builds a REAL, live-but-failing
-// dependency object (no mocked interface for domain_postgres/clickhouse: a
-// *pgxpool.Pool / driver.Conn dialing a refused local port, reusing
-// internal/storage/postgres's and internal/storage/clickhouse's own
-// TestDomainAuthorizationRejectsMissingOrUnavailablePool /
-// TestOpenReturnsSanitizedUnavailableError shape; valkey's client dials
+// cmd/dev-health-reconciler. The domain_postgres cases build a REAL,
+// live-but-failing *pgxpool.Pool dialing a refused local port (reusing
+// internal/storage/postgres's own
+// TestDomainAuthorizationRejectsMissingOrUnavailablePool shape); the
+// clickhouse case uses failingClickHouseConn, whose Ping error is known
+// exactly (see that case for why a live dial is not used); valkey's client dials
 // eagerly at construction time -- see mockPingFailureServer below for why
 // valkey needs a different construction) so the logged error is genuine,
 // not fabricated.
-// dialFailureSubstrings is the SHARED accepted set for every domain_postgres/
-// clickhouse case below -- both the real-dial cases (racing RST vs timeout
+// dialFailureSubstrings is the SHARED accepted set for every domain_postgres
+// case below -- both the real-dial cases (racing RST vs timeout
 // vs context-deadline, see closedPortAddr) and the deterministic
 // already-expired-context cases read from this ONE slice. Sharing it is
 // load-bearing, not cosmetic: codex r1 F-1 found that the deterministic
@@ -53,17 +52,18 @@ func TestReadinessCheckFailuresLogTheCheckNameAndUnderlyingError(t *testing.T) {
 		// REAL underlying error shapes this construction can actually
 		// produce (verified live, not invented) -- asserting only non-empty
 		// (as an earlier draft of this test did) would pass even if the
-		// wrong message were logged; codex r1 F-2. domain_postgres/clickhouse
+		// wrong message were logged; codex r1 F-2. The domain_postgres cases
 		// dial a closed local listener, which is refused ("connection
 		// refused") on most stacks but was measured to time out instead
 		// ("i/o timeout", CHAOS-5478) on at least one hosted CI runner's
 		// network stack; under host load the 500ms test context can also
-		// expire before the kernel's RST is even processed, which pgx/
-		// clickhouse-go report as "context deadline exceeded" (CHAOS-5540,
+		// expire before the kernel's RST is even processed, which pgx
+		// reports as "context deadline exceeded" (CHAOS-5540,
 		// hit on #2422 twice and #2423). All three are the SAME
 		// dependency-unavailable class (a dial failure that never reaches a
 		// live peer), so any of the three is accepted; a bare non-network
-		// string (e.g. a driver-internal error unrelated to dialing) is not.
+		// string (e.g. a driver-internal error unrelated to dialing) is not. The
+		// clickhouse case does not dial: its fake's Ping error is known exactly.
 		check          string
 		wantSubstrings []string
 		run            func(t *testing.T, storage *productionStreamStorage) error
@@ -80,12 +80,25 @@ func TestReadinessCheckFailuresLogTheCheckNameAndUnderlyingError(t *testing.T) {
 			},
 		},
 		{
+			// ClickHouseReady's contract is the mechanism: Ping with the
+			// caller's context, log the check name with Ping's error
+			// unchanged, return errStreamDependencyUnavailable. A fake whose
+			// error is known exactly pins all three without a dial; a live
+			// dial's error text depends on host timing (refused, i/o timeout,
+			// deadline exceeded, or the pool's "acquire conn timeout" under
+			// -race load), so it could only ever be matched loosely.
 			name:           "clickhouse",
 			check:          "clickhouse",
-			wantSubstrings: dialFailureSubstrings,
+			wantSubstrings: []string{"simulated clickhouse ping failure"},
 			run: func(t *testing.T, storage *productionStreamStorage) error {
-				storage.clickHouse = newRefusedClickHouseConn(t)
-				return storage.ClickHouseReady(contextWithTimeout(t))
+				conn := &failingClickHouseConn{err: errors.New("simulated clickhouse ping failure")}
+				storage.clickHouse = conn
+				ctx := contextWithTimeout(t)
+				err := storage.ClickHouseReady(ctx)
+				if conn.pings != 1 || conn.pingCtx != ctx {
+					t.Fatalf("Ping calls = %d with context %v, want one call with the caller's context", conn.pings, conn.pingCtx)
+				}
+				return err
 			},
 		},
 		{
@@ -114,18 +127,6 @@ func TestReadinessCheckFailuresLogTheCheckNameAndUnderlyingError(t *testing.T) {
 				storage.domainRole = "domain_role"
 				storage.riverSchema = "river"
 				return storage.DomainPostgresReady(contextAlreadyExceeded(t))
-			},
-		},
-		{
-			// Same rationale as domain_postgres_context_deadline above
-			// (clickhouse-go's Ping also short-circuits on ctx.Err() with
-			// dial_calls=0, per codex r1's probe) -- clickhouse's Ping path.
-			name:           "clickhouse_context_deadline",
-			check:          "clickhouse",
-			wantSubstrings: dialFailureSubstrings,
-			run: func(t *testing.T, storage *productionStreamStorage) error {
-				storage.clickHouse = newRefusedClickHouseConn(t)
-				return storage.ClickHouseReady(contextAlreadyExceeded(t))
 			},
 		},
 		{
@@ -187,7 +188,7 @@ func TestReadinessChecksWithNoLoggerNeverPanic(t *testing.T) {
 		domainPool:  newRefusedDomainPool(t),
 		domainRole:  "domain_role",
 		riverSchema: "river",
-		clickHouse:  newRefusedClickHouseConn(t),
+		clickHouse:  &failingClickHouseConn{err: errors.New("simulated clickhouse ping failure")},
 		valkey:      newFailingValkeyClient(t),
 	}
 	if err := storage.DomainPostgresReady(contextWithTimeout(t)); !errors.Is(err, errStreamDependencyUnavailable) {
@@ -209,7 +210,7 @@ func contextWithTimeout(t *testing.T) context.Context {
 }
 
 // contextAlreadyExceeded returns a context whose deadline is already in the
-// past. pgxpool/clickhouse-go both short-circuit on ctx.Err() before
+// past. pgxpool short-circuits on ctx.Err() before
 // attempting to dial (measured: dial_calls=0), so this does not replay the
 // RST-vs-timeout dial race the two cases above cover -- what it DOES
 // deterministically produce is the exact "context deadline exceeded" text,
@@ -265,26 +266,21 @@ func newRefusedDomainPool(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
-// newRefusedClickHouseConn builds a driver.Conn against a just-closed local
-// port. clickhouse-go's Open dials lazily (proven live: Open succeeds, the
-// dial only happens on the first Ping) -- the same shape
-// internal/storage/clickhouse/factory_test.go's
-// TestOpenReturnsSanitizedUnavailableError uses one level up (through this
-// package's own Open, which Pings once itself); here we go straight to the
-// driver so ClickHouseReady's own Ping call is what fails.
-func newRefusedClickHouseConn(t *testing.T) driver.Conn {
-	t.Helper()
-	options, err := clickhousego.ParseDSN("clickhouse://" + closedPortAddr(t) + "/default")
-	if err != nil {
-		t.Fatal(err)
-	}
-	options.DialTimeout = time.Millisecond
-	conn, err := clickhousego.Open(options)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = conn.Close() })
-	return conn
+// failingClickHouseConn is a driver.Conn whose Ping returns a fixed error and
+// records how it was called. ClickHouseReady calls nothing else on it; any
+// other method would panic on the nil embedded interface, which is the point:
+// the check must stay a Ping.
+type failingClickHouseConn struct {
+	driver.Conn
+	err     error
+	pings   int
+	pingCtx context.Context
+}
+
+func (conn *failingClickHouseConn) Ping(ctx context.Context) error {
+	conn.pings++
+	conn.pingCtx = ctx
+	return conn.err
 }
 
 // newFailingValkeyClient returns a real valkey-go client connected to a

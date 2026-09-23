@@ -1065,13 +1065,12 @@ func TestExplicitHeadBesideALiteralSiblingOfAWildcard(t *testing.T) {
 	}
 }
 
-// TestATrailingSlashRouteIsNotAFallbackForItsBarePath pins the 405
-// fallback's lookup on a route table holding a trailing-slash pattern,
-// with neither StrictPaths nor RedirectSlashes: a request for the bare
-// path in a method no route has matches no route, so it is this package's
-// 404 envelope -- never the trailing-slash path's 405 nor net/http's own
-// redirect.
-func TestATrailingSlashRouteIsNotAFallbackForItsBarePath(t *testing.T) {
+// TestATrailingSlashRouteRedirectsItsBarePath pins the 405 fallback's
+// lookup on a route table holding a trailing-slash pattern, with neither
+// StrictPaths nor RedirectSlashes: a bare-path request in a method no route
+// has gets net/http's own redirect to the trailing-slash path, as when the
+// fallback lived in the route mux, never that path's 405 nor a 404.
+func TestATrailingSlashRouteRedirectsItsBarePath(t *testing.T) {
 	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	server, err := NewServer(ServerOptions{
 		Address: "127.0.0.1:0", RequestTimeout: time.Second, MaxBodyBytes: 1024,
@@ -1081,19 +1080,20 @@ func TestATrailingSlashRouteIsNotAFallbackForItsBarePath(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, c := range []struct {
-		method, path string
-		status       int
-		allow        string
+		method, path    string
+		status          int
+		allow, location string
 	}{
-		{http.MethodGet, "/f", 404, ""},
-		{http.MethodGet, "/f/", 405, "POST"},
-		{http.MethodPost, "/f/", 200, ""},
+		{http.MethodGet, "/f", 307, "", "/f/"},
+		{http.MethodGet, "/f/", 405, "POST", ""},
+		{http.MethodPost, "/f/", 200, "", ""},
+		{http.MethodGet, "/g", 404, "", ""},
 	} {
 		recorder := httptest.NewRecorder()
 		server.Handler().ServeHTTP(recorder, httptest.NewRequest(c.method, c.path, nil))
-		if recorder.Code != c.status || recorder.Header().Get("Allow") != c.allow || recorder.Header().Get("Location") != "" {
-			t.Errorf("%s %s: %d Allow=%q Location=%q, want %d %q", c.method, c.path, recorder.Code,
-				recorder.Header().Get("Allow"), recorder.Header().Get("Location"), c.status, c.allow)
+		if recorder.Code != c.status || recorder.Header().Get("Allow") != c.allow || recorder.Header().Get("Location") != c.location {
+			t.Errorf("%s %s: %d Allow=%q Location=%q, want %d %q %q", c.method, c.path, recorder.Code,
+				recorder.Header().Get("Allow"), recorder.Header().Get("Location"), c.status, c.allow, c.location)
 		}
 	}
 }

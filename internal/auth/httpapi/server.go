@@ -215,9 +215,7 @@ func buildHandler(options ServerOptions, logger *slog.Logger) (http.Handler, err
 	// when no method pattern matched. In the route mux a method-free
 	// /a/literal would conflict with GET /a/{id} (neither pattern is more
 	// specific), which net/http refuses to register; among method-free
-	// patterns alone the literal path is simply the more specific one. Only
-	// a methodNotAllowed it returns is a 405: anything else (its own
-	// not-found or redirect) falls to the catch-all below.
+	// patterns alone the literal path is simply the more specific one.
 	pathMux := http.NewServeMux()
 	notAllowedByPattern := make(map[string]http.Handler, len(methodsByPattern))
 	for pattern, methods := range methodsByPattern {
@@ -265,9 +263,11 @@ func buildHandler(options ServerOptions, logger *slog.Logger) (http.Handler, err
 		write(w, r, CodeNotFound)
 	}
 	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handler, _ := pathMux.Handler(r)
-		if notAllowed, ok := handler.(*methodNotAllowed); ok {
-			notAllowed.ServeHTTP(w, r)
+		// A method-free pattern answers as it did in the route mux: its
+		// 405, or net/http's own trailing-slash redirect to it; no match at
+		// all is the not-found path.
+		if handler, pattern := pathMux.Handler(r); pattern != "" {
+			handler.ServeHTTP(w, r)
 			return
 		}
 		notFound(w, r)

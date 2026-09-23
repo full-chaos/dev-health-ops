@@ -1,0 +1,165 @@
+# The required `venue-oracles` check, in ONE always-run workflow.
+#
+# WHY (CHAOS-6337). `venue-oracles` (CHAOS-6314) started life as a job inside
+# go.yml, which is path-filtered: it only triggers when the diff touches
+# go.yml's own Go-relevant `paths` list. #2847 then promoted the job to a
+# REQUIRED status check on main -- but a PR touching none of those paths (a
+# Helm chart, a shell CI fixture, a docs page) never triggers go.yml at all,
+# so the required context never posts. The PR sits `mergeStateStatus: BLOCKED`
+# forever with every reported check green, and no rebase fixes it, because the
+# workflow that would produce the context simply never runs for that diff.
+# Reproduced on #2853 (CHAOS-6324): a helm+shell-only PR, CI fully green,
+# `venue-oracles` absent from the status-check rollup entirely -- not
+# pending, not failed, never reported.
+#
+# Same root cause as CHAOS-4834's `go-quality` incident, so the same fix
+# applies: deciding relevance in the workflow TRIGGER is what breaks a
+# required check. A second, path-filtered "skip" workflow reporting the same
+# context would only reproduce CHAOS-4834's other failure mode -- two runners
+# racing to report one required context, with no guarantee which one branch
+# protection honours. This workflow has NO path filter (it always runs) and
+# decides relevance INSIDE the job instead, so there is exactly one producer
+# of the `venue-oracles` context and it always reports honestly.
+#
+# THE PATTERN LIST IS NOT RESTATED HERE either: relevance is read via
+# `ci/go_relevance.py`, the same decider go-quality.yml already uses, against
+# go.yml's own `on.pull_request.paths`. One list, so it cannot drift -- and it
+# guarantees anything Go-relevant enough to run go-quality is Go-relevant
+# enough to run venue-oracles too. This is a slightly WIDER trigger than the
+# job's previous internal `internal/|src/dev_health_ops/api/`-only check
+# (go.yml's list is a superset of both prefixes), never a narrower one.
+name: Venue oracles
+
+on:
+  pull_request:
+    branches: ['**']
+  push:
+    branches: [main]
+  merge_group:
+
+permissions:
+  contents: read
+  # Pull the mirrored test-dependency images from ghcr.io (CHAOS-4778).
+  packages: read
+
+concurrency:
+  # Same fleet-wide shape as go-quality.yml/go.yml (CHAOS-4906 fleet audit):
+  # group by PR number on pull_request, by ref on a push to a non-main
+  # branch, by commit sha on a push to main or on merge_group (never
+  # cancelled).
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || ((github.ref == 'refs/heads/main' || github.event_name == 'merge_group') && github.sha) || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
+
+jobs:
+  venue-oracles:
+    # venue-oracles (originally CHAOS-6314): every venue differential oracle
+    # test (internal/testsupport/venueoracle) against the REAL Python api and
+    # the REAL Go api on two copies of one Alembic-migrated Postgres. Distinct
+    # from `ci/check_go.sh live-python-oracles` (go-quality's own step): that
+    # verb's blocks are narrow pure-function comparisons installed via
+    # `pip install --no-deps -r ci/requirements-live-python-oracles.txt`; a
+    # venue oracle imports the WHOLE real FastAPI app plus alembic, so it
+    # needs the full project Python environment (`uv sync`), not that narrow
+    # closure -- discovered the hard way when this job's own PR first failed
+    # go-quality with `ModuleNotFoundError: alembic`.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository_owner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Need the base commit to diff against for the relevance decision
+          # below; the default depth-1 checkout cannot see it.
+          fetch-depth: 0
+
+      - name: Set up Python 3.14 for the relevance decision
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.14'
+
+      - name: Install the relevance decider's only dependency
+        run: python -m pip install --no-deps 'PyYAML==6.0.2'
+
+      - name: Decide whether this change set is Go-relevant
+        id: relevance
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        run: |
+          set -euo pipefail
+          if [ -n "${BASE_SHA:-}" ]; then
+            range="${BASE_SHA}...HEAD"
+          else
+            # push to main: compare against the previous commit.
+            range="HEAD^...HEAD"
+          fi
+          echo "diff range: ${range}"
+          git diff --name-only "${range}" > changed.txt || {
+            echo "could not resolve the diff range; failing closed"
+            printf 'relevant=true\n' >> "${GITHUB_OUTPUT}"
+            exit 0
+          }
+          python ci/go_relevance.py < changed.txt | tee relevance.out
+          grep -E '^relevant=(true|false)$' relevance.out >> "${GITHUB_OUTPUT}"
+
+      - name: Report that the gate was skipped, and why
+        if: steps.relevance.outputs.relevant != 'true'
+        run: |
+          echo "skipped: no Go-relevant paths in this change set."
+          echo "Relevance is decided by ci/go_relevance.py against go.yml's own"
+          echo "on.pull_request.paths list. This job still REPORTS, so the required"
+          echo "check is satisfied honestly rather than by a workflow that never ran."
+
+      - name: Set up Go
+        if: steps.relevance.outputs.relevant == 'true'
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: '**/go.sum'
+
+      - name: Install uv
+        if: steps.relevance.outputs.relevant == 'true'
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          python-version: '3.14'
+
+      # The FULL project environment -- see the job comment above for why
+      # ci/requirements-live-python-oracles.txt is not enough here. Once
+      # .venv exists, pyoracle.Resolve (internal/testsupport/pyoracle)
+      # already prefers it over a bare `python3` on PATH; no extra PATH
+      # wiring needed in this job.
+      - name: Install the full Python project
+        if: steps.relevance.outputs.relevant == 'true'
+        run: uv sync --frozen --all-extras --dev
+
+      - name: Log in to GitHub Container Registry
+        if: steps.relevance.outputs.relevant == 'true'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pre-pull pinned test dependency images with bounded retry
+        if: steps.relevance.outputs.relevant == 'true'
+        run: bash ci/check_go.sh integration-prepull
+
+      # `set -o pipefail` (via -euo pipefail) is load-bearing: without it, a
+      # failing check_go.sh in this pipe would be masked by `tee`'s own zero
+      # exit, and the step would report success on a red run.
+      - name: Run every venue differential oracle against the live Python api
+        if: steps.relevance.outputs.relevant == 'true'
+        env:
+          DEV_HEALTH_LIVE_PYTHON_ORACLES: '1'
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/venue-oracle-receipt"
+          bash ci/check_go.sh venue-oracles 2>&1 | tee "${RUNNER_TEMP}/venue-oracle-receipt/receipt.log"
+
+      - name: Upload the venue oracle receipt
+        if: steps.relevance.outputs.relevant == 'true' && always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: venue-oracle-receipt-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/venue-oracle-receipt/receipt.log
+          if-no-files-found: ignore

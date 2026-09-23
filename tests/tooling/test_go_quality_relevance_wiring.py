@@ -43,12 +43,28 @@ def test_the_relevance_step_wires_the_push_fallback_sha() -> None:
         f"{JOB_ID!r} job, found {len(relevance_steps)}"
     )
     base_sha_expr = ((relevance_steps[0].get("env") or {}).get("BASE_SHA")) or ""
-    assert "github.event.before" in base_sha_expr, (
-        f"the relevance step's BASE_SHA expression ({base_sha_expr!r}) does "
-        "not fall back to github.event.before. Without it, a push event "
-        "leaves BASE_SHA empty and ci/go_relevant_diff.sh falls back to "
-        "HEAD^...HEAD, which only ever sees the last commit of a "
-        "multi-commit push."
+    # A reproduced round: `"github.event.before" in base_sha_expr` is a
+    # SUBSTRING check, so an expression like
+    # `${{ github.event.commits[0].id || github.event.before }}` -- which
+    # reaches `commits[0].id` FIRST on a push event, never `before` -- still
+    # contained the substring and passed, while the real diff-range wiring
+    # was wrong (a multi-commit push resolved to the wrong sha and silently
+    # dropped earlier commits from the range). Pin the exact canonical
+    # fallback chain instead: `before` must be the LAST alternative, reached
+    # only when pull_request.base.sha and merge_group.base_sha are both
+    # absent -- exactly GitHub Actions' `||` short-circuit semantics for a
+    # push event, and exactly what ci/go_relevant_diff.sh's callers require.
+    expected = (
+        "${{ github.event.pull_request.base.sha || "
+        "github.event.merge_group.base_sha || github.event.before }}"
+    )
+    assert base_sha_expr == expected, (
+        f"the relevance step's BASE_SHA expression is {base_sha_expr!r}, "
+        f"expected exactly {expected!r}. A push event must fall back to "
+        "github.event.before as the LAST alternative -- any other position "
+        "or any other fallback ahead of it can resolve to the wrong sha on "
+        "a push and silently narrow or corrupt the diff range "
+        "ci/go_relevant_diff.sh computes."
     )
 
 

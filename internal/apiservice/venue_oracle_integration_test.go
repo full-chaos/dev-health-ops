@@ -5,6 +5,7 @@ package apiservice
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -61,6 +62,11 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 	var receipt strings.Builder
 	receipt.WriteString(venueoracle.Diff(t, base, requests, venue.ServePython(t, requests), venueoracle.DiffOptions{
 		Normalize: func(_ venueoracle.Request, body string) string { return normalizeRuled(body) },
+		// A HEAD probe has no body to normalize, but its content-length is the
+		// length of the ruled GET body.
+		SkipContentLength: func(request venueoracle.Request) bool {
+			return request.Method == http.MethodHead && (request.Path == "/health" || request.Path == "/health/workers")
+		},
 	}))
 	// The rows the writes touched are identical on both copies.
 	compareRows(t, ctx, venue, &receipt, "organizations", `SELECT id::text, slug, name, coalesce(description, '<null>'), tier, is_active,

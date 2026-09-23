@@ -431,3 +431,55 @@ func TestJiraBaseURLFallsBackToConfigWhenNoSecretExists(t *testing.T) {
 		t.Fatalf("jiraCredentialBaseURL = %q, want the config value", got)
 	}
 }
+
+// TestDecodeCredentialNormalizesGitHubAppCamelCaseAliases is CHAOS-6352's
+// own reproduction: a GitHub App credential row written with camelCase
+// keys (appId/privateKey/installationId -- the shape
+// github_credentials_from_mapping's own doc comment says a real web-
+// written row can carry, resolver.py:243-268) must decode to the
+// CANONICAL snake_case field names decodeCredential's callers
+// (ValidateCredentialShape, NewGitHubAppAuth) actually check.
+func TestDecodeCredentialNormalizesGitHubAppCamelCaseAliases(t *testing.T) {
+	plaintext := []byte(`{"appId":"12345","privateKey":"-----BEGIN RSA PRIVATE KEY-----\nZmFrZQ==\n-----END RSA PRIVATE KEY-----","installationId":"67890"}`)
+	credential, err := decodeCredential(EncryptedCredential{Provider: "github", ID: "cred-1", Name: "default"}, plaintext)
+	if err != nil {
+		t.Fatalf("decodeCredential: %v", err)
+	}
+	for name, want := range map[string]string{
+		"app_id":          "12345",
+		"installation_id": "67890",
+	} {
+		got, ok := credential.Secret(name)
+		if !ok || got.Reveal() != want {
+			t.Errorf("Secret(%q) = %q, %v; want %q, true", name, got.Reveal(), ok, want)
+		}
+	}
+	if _, ok := credential.Secret("private_key"); !ok {
+		t.Error(`Secret("private_key") not present after decoding a "privateKey"-keyed row`)
+	}
+	if _, ok := credential.Secret("appId"); ok {
+		t.Error(`Secret("appId") must not survive decode -- it should be renamed to "app_id", not duplicated`)
+	}
+	if err := ValidateCredentialShape(credential); err != nil {
+		t.Errorf("ValidateCredentialShape rejected a camelCase-sourced GitHub App credential: %v", err)
+	}
+}
+
+// TestDecodeCredentialLeavesNonGitHubCamelCaseKeysAlone proves the alias
+// normalization is scoped to provider=="github" only, matching
+// github_credentials_from_mapping's own call-site scoping -- an unrelated
+// provider's field literally named "appId" (however unlikely) is never
+// silently renamed.
+func TestDecodeCredentialLeavesNonGitHubCamelCaseKeysAlone(t *testing.T) {
+	plaintext := []byte(`{"appId":"not-actually-a-github-field"}`)
+	credential, err := decodeCredential(EncryptedCredential{Provider: "gitlab", ID: "cred-1", Name: "default"}, plaintext)
+	if err != nil {
+		t.Fatalf("decodeCredential: %v", err)
+	}
+	if _, ok := credential.Secret("app_id"); ok {
+		t.Error(`a non-github credential's "appId" field must not be renamed to "app_id"`)
+	}
+	if got, ok := credential.Secret("appId"); !ok || got.Reveal() != "not-actually-a-github-field" {
+		t.Error(`a non-github credential's "appId" field must survive decode unchanged`)
+	}
+}

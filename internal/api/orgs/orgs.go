@@ -133,39 +133,17 @@ func (h handlers) getOwnOrg(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, profile.json())
 }
 
-type bodyKey struct{}
-
 // decodeFirst reads the body before authentication, as FastAPI does: a
 // JSON decode failure is answered 422 (bytes that are not UTF-8, 400)
-// before the credential is looked at.
+// before the credential is looked at. policy.Guard.BodyFirst is the one
+// implementation, shared with internal/apiservice/admin.
 func (h handlers) decodeFirst(guard *policy.Guard, next http.Handler) http.Handler {
-	guarded := guard.Wrap(policy.Authenticated, next)
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, outcome, failure, err := pybody.Read(r)
-		if err != nil {
-			var tooLarge *http.MaxBytesError
-			if errors.As(err, &tooLarge) {
-				policy.WriteDetail(w, http.StatusRequestEntityTooLarge, "Request Entity Too Large", nil)
-				return
-			}
-			h.internal(w, r, "read body", err)
-			return
-		}
-		switch outcome {
-		case pybody.DecodeFailed:
-			writeJSON(w, http.StatusUnprocessableEntity, pybody.Detail([]pybody.Error{*failure}))
-			return
-		case pybody.ParseFailed:
-			policy.WriteDetail(w, http.StatusBadRequest, "There was an error parsing the body", nil)
-			return
-		}
-		guarded.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), bodyKey{}, body)))
-	})
+	return guard.BodyFirst(policy.Authenticated, next)
 }
 
 // updateOwnOrg is update_own_org.
 func (h handlers) updateOwnOrg(w http.ResponseWriter, r *http.Request) {
-	body, _ := r.Context().Value(bodyKey{}).(pybody.Body)
+	body, _ := policy.BodyFrom(r.Context())
 	var problems pybody.Errors
 	var name, description string
 	var hasName, hasDescription bool

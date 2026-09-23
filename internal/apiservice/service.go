@@ -38,6 +38,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/externalingest"
 	"github.com/full-chaos/dev-health-ops/internal/api/orgs"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/api/teamsidentity"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/acr"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
@@ -87,6 +88,11 @@ const (
 	// client (the external-ingest area's stream producer) can PING. It is
 	// registered only when ValkeyURI is configured (buildDeps, deps.go).
 	apiValkeyCheck = "api_valkey"
+	// apiClickHouseCheck is the readiness check that fails until the
+	// ClickHouse connection (internal/api/teamsidentity, CHAOS-6251, the
+	// first Go api ClickHouse writer) can PING. It is registered only when
+	// CLICKHOUSE_URI is configured (buildDeps, deps.go).
+	apiClickHouseCheck = "api_clickhouse"
 )
 
 // Spec is the shell specification of `dho api`. Exported so a test can run
@@ -136,6 +142,9 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 	})...)
 	if deps.Guard != nil {
 		routes = append(routes, orgs.Routes(deps.Pool, deps.Guard, logger)...)
+		if deps.ClickHouse != nil {
+			routes = append(routes, teamsidentity.Routes(deps.ClickHouse, deps.Guard, logger)...)
+		}
 	}
 	return routes
 }

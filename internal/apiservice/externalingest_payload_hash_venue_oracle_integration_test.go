@@ -6,7 +6,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/storage/valkey"
@@ -82,6 +84,73 @@ VALUES ($1::uuid, $2, $3::uuid, 'venue payload-hash operational token', $4, 'fcp
 	}
 }
 
+// acceptedBatchRow is the subset of an external_ingest_batches row
+// readAcceptedRow reads back and plantRow re-inserts -- enough to
+// reconstruct a fresh accept's row on the OTHER plane's database, which is
+// what makes the cross-plane retry check in
+// TestExternalIngestPayloadHashVenueOracle possible: the venue harness
+// gives each plane its OWN database (a template copy taken before any
+// test-time accept, CHAOS-6321's venueoracle.Start doc comment), so a row
+// ACCEPTED on one plane never exists on the other's database by itself --
+// in real production this is the SAME Postgres table both languages read
+// during a mixed rollout, so planting one plane's row into the other's
+// database here is what actually reproduces that scenario.
+type acceptedBatchRow struct {
+	IngestionID, OrgID, IdempotencyKey, PayloadHash, SourceSystem, SourceInstance, EntityFamily, SchemaVersion string
+	Producer, ProducerVersion                                                                                  *string
+	WindowStartedAt, WindowEndedAt                                                                             *time.Time
+	ItemsReceived                                                                                              int
+	CreatedAt, UpdatedAt                                                                                       time.Time
+}
+
+func readAcceptedRow(t *testing.T, ctx context.Context, adminPool *pgxpool.Pool, idempotencyKey string) acceptedBatchRow {
+	t.Helper()
+	var row acceptedBatchRow
+	err := adminPool.QueryRow(ctx, `
+		SELECT ingestion_id::text, org_id, idempotency_key, payload_hash, source_system, source_instance,
+		       entity_family, schema_version, producer, producer_version,
+		       window_started_at, window_ended_at, items_received, created_at, updated_at
+		FROM external_ingest_batches WHERE idempotency_key = $1
+	`, idempotencyKey).Scan(
+		&row.IngestionID, &row.OrgID, &row.IdempotencyKey, &row.PayloadHash, &row.SourceSystem, &row.SourceInstance,
+		&row.EntityFamily, &row.SchemaVersion, &row.Producer, &row.ProducerVersion,
+		&row.WindowStartedAt, &row.WindowEndedAt, &row.ItemsReceived, &row.CreatedAt, &row.UpdatedAt,
+	)
+	if err != nil {
+		t.Fatalf("read accepted row %q: %v", idempotencyKey, err)
+	}
+	return row
+}
+
+// plantRow inserts row into adminPool's database exactly as a fresh accept
+// would have (status='accepted', attempts=1, items_accepted=0,
+// items_rejected=0, recompute_status='not_applicable') -- the SAME
+// ingestion_id, org_id and payload_hash the donor plane wrote, so the
+// receiving plane's own idempotency lookup finds a row whose stored hash
+// came from the OTHER language's compute_payload_hash/computePayloadHash,
+// not its own.
+func plantRow(t *testing.T, ctx context.Context, adminPool *pgxpool.Pool, row acceptedBatchRow) {
+	t.Helper()
+	_, err := adminPool.Exec(ctx, `
+		INSERT INTO external_ingest_batches (
+			ingestion_id, org_id, idempotency_key, payload_hash, source_system, source_instance, entity_family,
+			producer, producer_version, schema_version, window_started_at, window_ended_at, status, attempts,
+			items_received, items_accepted, items_rejected, created_at, updated_at, recompute_status
+		) VALUES ($1::uuid,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'accepted',1,$13,0,0,$14,$15,'not_applicable')
+	`, row.IngestionID, row.OrgID, row.IdempotencyKey, row.PayloadHash, row.SourceSystem, row.SourceInstance,
+		row.EntityFamily, row.Producer, row.ProducerVersion, row.SchemaVersion,
+		row.WindowStartedAt, row.WindowEndedAt, row.ItemsReceived, row.CreatedAt, row.UpdatedAt)
+	if err != nil {
+		t.Fatalf("plant row %q: %v", row.IdempotencyKey, err)
+	}
+}
+
+// crossPlaneIdempotencyKey renames body's idempotencyKey to avoid colliding
+// with the same-plane accept this test already did under the original key.
+func crossPlaneIdempotencyKey(body, original, renamed string) string {
+	return strings.Replace(body, `"idempotencyKey":"`+original+`"`, `"idempotencyKey":"`+renamed+`"`, 1)
+}
+
 // TestExternalIngestPayloadHashVenueOracle is CHAOS-6350's proof: the REAL
 // Python api and the REAL Go api, given the identical accept batch body,
 // write the SAME external_ingest_batches.payload_hash on two copies of one
@@ -141,39 +210,50 @@ func TestExternalIngestPayloadHashVenueOracle(t *testing.T) {
 	t.Cleanup(func() { _ = server.Shutdown(ctx) })
 	goBase := "http://" + server.Address()
 
+	sourceAdmin, err := pgxpool.New(ctx, venue.AdminURI(t, venue.SourceDB))
+	if err != nil {
+		t.Fatalf("open source admin pool: %v", err)
+	}
+	t.Cleanup(sourceAdmin.Close)
+	goAdmin, err := pgxpool.New(ctx, venue.AdminURI(t, venue.GoDB))
+	if err != nil {
+		t.Fatalf("open go admin pool: %v", err)
+	}
+	t.Cleanup(goAdmin.Close)
+
 	headersFor := func(token string) map[string]string {
 		return map[string]string{"Content-Type": "application/json", "Authorization": "Bearer " + token}
 	}
 
 	cases := []struct {
-		name, body, token string
+		name, idempotencyKey, body, token string
 	}{
-		{"integer payload field", `{"schemaVersion":"external-ingest.v1","idempotencyKey":"venue-hash-int",` +
+		{"integer payload field", "venue-hash-int", `{"schemaVersion":"external-ingest.v1","idempotencyKey":"venue-hash-int",` +
 			`"source":{"system":"github","instance":"acme/payload-hash-repo"},` +
 			`"records":[{"kind":"repository.v1","externalId":"acme/payload-hash-repo",` +
 			`"payload":{"externalId":"acme/payload-hash-repo","sourceSystem":"github","stars":42}}]}`, seed.token},
-		{"nan payload field", `{"schemaVersion":"external-ingest.v1","idempotencyKey":"venue-hash-nan",` +
+		{"nan payload field", "venue-hash-nan", `{"schemaVersion":"external-ingest.v1","idempotencyKey":"venue-hash-nan",` +
 			`"source":{"system":"github","instance":"acme/payload-hash-repo"},` +
 			`"records":[{"kind":"repository.v1","externalId":"acme/payload-hash-repo",` +
 			`"payload":{"externalId":"acme/payload-hash-repo","sourceSystem":"github","score":NaN}}]}`, seed.token},
-		{"non-utc offset window with trailing-zero microseconds", `{"schemaVersion":"external-ingest.v1","idempotencyKey":"venue-hash-window",` +
+		{"non-utc offset window with trailing-zero microseconds", "venue-hash-window", `{"schemaVersion":"external-ingest.v1","idempotencyKey":"venue-hash-window",` +
 			`"source":{"system":"github","instance":"acme/payload-hash-repo"},` +
 			`"window":{"startedAt":"2026-09-01T00:00:00.123400+05:30","endedAt":"2026-09-08T00:00:00+05:30"},` +
 			`"records":[{"kind":"repository.v1","externalId":"acme/payload-hash-repo",` +
 			`"payload":{"externalId":"acme/payload-hash-repo","sourceSystem":"github"}}]}`, seed.token},
-		{"entity family operational", `{"schemaVersion":"external-ingest.v1","idempotencyKey":"venue-hash-operational",` +
+		{"entity family operational", "venue-hash-operational", `{"schemaVersion":"external-ingest.v1","idempotencyKey":"venue-hash-operational",` +
 			`"source":{"system":"github","instance":"acme/payload-hash-repo-ops","entityFamily":"operational"},` +
 			`"records":[{"kind":"operational_service.v1","externalId":"acme/payload-hash-repo-ops",` +
 			`"payload":{"externalId":"acme/payload-hash-repo-ops","sourceSystem":"github","name":"svc"}}]}`, seed.operationalToken},
-		{"entity family explicit legacy", `{"schemaVersion":"external-ingest.v1","idempotencyKey":"venue-hash-legacy",` +
+		{"entity family explicit legacy", "venue-hash-legacy", `{"schemaVersion":"external-ingest.v1","idempotencyKey":"venue-hash-legacy",` +
 			`"source":{"system":"github","instance":"acme/payload-hash-repo","entityFamily":"legacy"},` +
 			`"records":[{"kind":"repository.v1","externalId":"acme/payload-hash-repo",` +
 			`"payload":{"externalId":"acme/payload-hash-repo","sourceSystem":"github"}}]}`, seed.token},
-		{"producer and producerVersion present", `{"schemaVersion":"external-ingest.v1","idempotencyKey":"venue-hash-producer",` +
+		{"producer and producerVersion present", "venue-hash-producer", `{"schemaVersion":"external-ingest.v1","idempotencyKey":"venue-hash-producer",` +
 			`"source":{"system":"github","instance":"acme/payload-hash-repo","producer":"ci","producerVersion":"1.2.3"},` +
 			`"records":[{"kind":"repository.v1","externalId":"acme/payload-hash-repo",` +
 			`"payload":{"externalId":"acme/payload-hash-repo","sourceSystem":"github"}}]}`, seed.token},
-		{"non-ascii payload value", `{"schemaVersion":"external-ingest.v1","idempotencyKey":"venue-hash-unicode",` +
+		{"non-ascii payload value", "venue-hash-unicode", `{"schemaVersion":"external-ingest.v1","idempotencyKey":"venue-hash-unicode",` +
 			`"source":{"system":"github","instance":"acme/payload-hash-repo"},` +
 			`"records":[{"kind":"repository.v1","externalId":"acme/payload-hash-repo",` +
 			`"payload":{"externalId":"acme/payload-hash-repo","sourceSystem":"github","description":"café über 😀"}}]}`, seed.token},
@@ -192,13 +272,21 @@ func TestExternalIngestPayloadHashVenueOracle(t *testing.T) {
 					python.Status, goResp.Status, python.Body, goResp.Body)
 			}
 
-			// The identical body again, against EACH plane's own server:
-			// both must answer REPLAY (200), not a fresh 202 or a 409
-			// CONFLICT -- the actual failure mode a payload_hash mismatch
-			// causes. venue.ServePython(t, ...) re-invokes the Python
-			// process fresh but against the SAME underlying Postgres row,
-			// so this is a genuine second request against the same stored
-			// batch, not a no-op.
+			// The digest VALUE itself, read back from each plane's own
+			// database, per case -- not just inferred from a same-plane
+			// REPLAY (a status code that matches for the wrong reason
+			// would not be caught by that alone) and not deferred to one
+			// bulk diff at the end (which would not name the failing
+			// case).
+			pythonRow := readAcceptedRow(t, ctx, sourceAdmin, tc.idempotencyKey)
+			goRow := readAcceptedRow(t, ctx, goAdmin, tc.idempotencyKey)
+			if pythonRow.PayloadHash != goRow.PayloadHash {
+				t.Fatalf("payload_hash digest differs: python=%s go=%s", pythonRow.PayloadHash, goRow.PayloadHash)
+			}
+
+			// Same-plane replay: the identical body again, against EACH
+			// plane's own server -- both must answer REPLAY (200), not a
+			// fresh 202 or a 409 CONFLICT.
 			pythonReplay := venue.ServePython(t, []venueoracle.Request{request})[0]
 			goReplay := venueoracle.Do(t, goBase, request)
 			if pythonReplay.Status != 200 {
@@ -206,6 +294,31 @@ func TestExternalIngestPayloadHashVenueOracle(t *testing.T) {
 			}
 			if goReplay.Status != 200 {
 				t.Errorf("go replay: want 200, got %d (CONFLICT/fresh-accept means the payload hash diverged)\nbody: %s", goReplay.Status, goReplay.Body)
+			}
+
+			// Cross-plane retry, the actual acceptance case: a batch
+			// accepted on ONE plane, its row planted into the OTHER
+			// plane's database (simulating the one shared production
+			// Postgres table a mixed rollout actually has -- see
+			// plantRow's doc comment), retried against that OTHER plane's
+			// server. Both directions, under their own idempotency keys so
+			// neither collides with the same-plane rows above.
+			toGoKey := tc.idempotencyKey + "-cross-go"
+			toGoBody := crossPlaneIdempotencyKey(tc.body, tc.idempotencyKey, toGoKey)
+			toGoRequest := venueoracle.Request{Method: "POST", Path: "/api/v1/external-ingest/batches", Headers: headersFor(tc.token), Body: venueoracle.B64(toGoBody)}
+			venue.ServePython(t, []venueoracle.Request{toGoRequest})
+			plantRow(t, ctx, goAdmin, readAcceptedRow(t, ctx, sourceAdmin, toGoKey))
+			if retry := venueoracle.Do(t, goBase, toGoRequest); retry.Status != 200 {
+				t.Errorf("retry on go of a python-accepted batch: want 200 (REPLAY), got %d\nbody: %s", retry.Status, retry.Body)
+			}
+
+			toPythonKey := tc.idempotencyKey + "-cross-py"
+			toPythonBody := crossPlaneIdempotencyKey(tc.body, tc.idempotencyKey, toPythonKey)
+			toPythonRequest := venueoracle.Request{Method: "POST", Path: "/api/v1/external-ingest/batches", Headers: headersFor(tc.token), Body: venueoracle.B64(toPythonBody)}
+			venueoracle.Do(t, goBase, toPythonRequest)
+			plantRow(t, ctx, sourceAdmin, readAcceptedRow(t, ctx, goAdmin, toPythonKey))
+			if retry := venue.ServePython(t, []venueoracle.Request{toPythonRequest})[0]; retry.Status != 200 {
+				t.Errorf("retry on python of a go-accepted batch: want 200 (REPLAY), got %d\nbody: %s", retry.Status, retry.Body)
 			}
 		})
 	}

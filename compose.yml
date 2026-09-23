@@ -12,17 +12,17 @@
 # empty volume -- it is no longer a way to attach to another project's data.
 name: dev-health-ops
 
-# The Python operational-bridge SERVERS (`api`, `metrics-api`, via
-# worker_sync.py's own `_authorize()` -- CHAOS-6240 deleted the shared
-# api/internal/worker_auth.py helper's only route caller, worker_metrics.py,
-# so worker_sync.py's independent, inline reimplementation of the same
-# constant-time-compare check is now this token's only Python-side reader)
-# and the Go worker CLIENTS that call them must read this exact shell
-# variable to the exact same default -- a mismatch means every bridge call
-# fails closed with 401, not a readiness-visible failure. One shared
-# anchor, merged into both `&env` (api/metrics-api/billing-edge/worker)
-# below and `&go-worker-env-base` below that, so the literal default lives
-# in exactly one place rather than two copies that can drift.
+# WORKER_OPERATIONAL_BRIDGE_TOKEN has NO Python-side reader left in src/ as
+# of this change: worker_metrics.py/worker_auth.py (CHAOS-6240, this PR) and
+# worker_sync.py (CHAOS-6243, landed independently and concurrently) were
+# its only two callers, and both are gone. The Go worker CLIENTS still read
+# this exact shell variable/default (`&go-worker-env-base` below) -- kept
+# here, unremoved, since retiring the token itself (and whatever still sends
+# it) is a bigger call than this ticket's scope; flagged for the lead to
+# decide, not silently dropped. One shared anchor, merged into both `&env`
+# (api/metrics-api/billing-edge/worker) and `&go-worker-env-base`, so the
+# literal default lives in exactly one place rather than two copies that
+# can drift, whatever its ultimate disposition turns out to be.
 x-worker-operational-bridge-token:
   token: &worker-operational-bridge-token
     WORKER_OPERATIONAL_BRIDGE_TOKEN: ${WORKER_OPERATIONAL_BRIDGE_TOKEN:-local-go-worker-bridge-token}
@@ -586,12 +586,15 @@ services:
     command: |
       --host 0.0.0.0 --port 8000 --reload
     environment: &env
-      # Api/metrics-api -- and, via this shared
-      # anchor, billing-edge -- are the servers worker_sync.py's own
-      # _authorize() checks incoming Go operational-bridge calls against
-      # (CHAOS-6240 deleted the shared worker_auth.py helper along with its
-      # only route caller); this must read the exact same shell variable
-      # and default as the Go-worker side below
+      # Api/metrics-api -- and, via this shared anchor, billing-edge -- no
+      # longer have any Python route that checks this token against an
+      # incoming Go operational-bridge call: worker_auth.py/worker_metrics.py
+      # (CHAOS-6240) and worker_sync.py (CHAOS-6243) were its only two
+      # readers, and both are gone as of this change. Kept anchored here
+      # regardless -- see the top-of-file note beside
+      # x-worker-operational-bridge-token for why this token's own
+      # disposition is out of this ticket's scope; this must still read the
+      # exact same shell variable and default as the Go-worker side below
       # (x-worker-operational-bridge-token), never a second literal.
       #
       # JWT_SECRET_KEY had no default anywhere in this

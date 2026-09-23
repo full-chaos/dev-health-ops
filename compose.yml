@@ -75,7 +75,7 @@ x-go-worker-flag:
   # more, confirmed by grep across internal/ and cmd/). The PagerDuty
   # stream runner's own readiness does not depend on this flag -- it never
   # took it as an argument (confirmed: zero OperationalBridge references
-  # anywhere under cmd/dev-health-stream-runner).
+  # anywhere under the stream runner's code, now internal/streamrunnerservice).
   log-level: &flag-log-level "--log-level=${LOG_LEVEL:-info}"
 
 x-go-worker-env-base: &go-worker-env-base
@@ -1456,18 +1456,19 @@ services:
 
   go-stream-external:
     <<: *go-worker
-    image: ${DEV_HEALTH_GO_STREAM_RUNNER_IMAGE:-ghcr.io/full-chaos/dev-health-go-stream-runner:local}
+    image: ${DEV_HEALTH_GO_DHO_IMAGE:-ghcr.io/full-chaos/dev-health-go-dho:local}
     # Default pull_policy, see go-worker-heavy's comment above.
     build:
       context: .
       dockerfile: docker/go-worker.Dockerfile
-      target: stream-runner
+      target: dho
       args:
         COMMIT: ${COMMIT:-unknown}
         BUILD_TIME: ${BUILD_TIME:-1970-01-01T00:00:00Z}
     labels:
       dev-health.io/worker-group: stream-external
     command:
+      - stream-runner
       - --profile=external
       - --shutdown-timeout=60s
       - *flag-http-addr
@@ -1496,17 +1497,18 @@ services:
 
   go-stream-ingest:
     <<: *go-worker
-    image: ${DEV_HEALTH_GO_STREAM_RUNNER_IMAGE:-ghcr.io/full-chaos/dev-health-go-stream-runner:local}
+    image: ${DEV_HEALTH_GO_DHO_IMAGE:-ghcr.io/full-chaos/dev-health-go-dho:local}
     build:
       context: .
       dockerfile: docker/go-worker.Dockerfile
-      target: stream-runner
+      target: dho
       args:
         COMMIT: ${COMMIT:-unknown}
         BUILD_TIME: ${BUILD_TIME:-1970-01-01T00:00:00Z}
     labels:
       dev-health.io/worker-group: stream-ingest
     command:
+      - stream-runner
       - --profile=ingest
       - --shutdown-timeout=60s
       - *flag-http-addr
@@ -1538,17 +1540,18 @@ services:
   # runner.
   go-stream-pagerduty:
     <<: *go-worker
-    image: ${DEV_HEALTH_GO_STREAM_RUNNER_IMAGE:-ghcr.io/full-chaos/dev-health-go-stream-runner:local}
+    image: ${DEV_HEALTH_GO_DHO_IMAGE:-ghcr.io/full-chaos/dev-health-go-dho:local}
     build:
       context: .
       dockerfile: docker/go-worker.Dockerfile
-      target: stream-runner
+      target: dho
       args:
         COMMIT: ${COMMIT:-unknown}
         BUILD_TIME: ${BUILD_TIME:-1970-01-01T00:00:00Z}
     labels:
       dev-health.io/worker-group: stream-pagerduty
     command:
+      - stream-runner
       - --profile=pagerduty
       - --shutdown-timeout=60s
       - *flag-http-addr

@@ -57,7 +57,7 @@ Family boundaries remain explicit:
 - PagerDuty's 11 rows are scheduled provider-unit routes in
   `dev-health-worker`. The incident quartet remains four independent claims
   with four descriptors and no canonicalization or fan-out; the quartet shares
-  the one frozen incidents rollout flag. `dev-health-stream-runner` remains a
+  the one frozen incidents rollout flag. `dho stream-runner` remains a
   separate webhook-only surface and is not evidence for these rows.
 - GitLab's three PR-social identities share one complete handler/sink while
   retaining independent claims and mutually exclusive rollout switches.

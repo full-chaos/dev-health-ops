@@ -647,15 +647,20 @@ goWorkers:
       terminationGracePeriodSeconds: 60
       resources: {requests: {cpu: 100m, memory: 128Mi}, limits: {cpu: 500m, memory: 512Mi}}
       autoscaling: {enabled: false}
+    # The stream groups run `dho stream-runner`: the dho image (entrypoint
+    # dho) with `subcommand`, which go-workers.yaml renders as the first
+    # argument. A group without `subcommand` runs its image's own binary.
     - name: stream-external
-      image: ghcr.io/full-chaos/dev-health-go-stream-runner:latest
+      image: ghcr.io/full-chaos/dev-health-go-dho:latest
+      subcommand: stream-runner
       runtimeProfile: external
       replicas: 1
       terminationGracePeriodSeconds: 60
       resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
       autoscaling: {enabled: false}
     - name: stream-ingest
-      image: ghcr.io/full-chaos/dev-health-go-stream-runner:latest
+      image: ghcr.io/full-chaos/dev-health-go-dho:latest
+      subcommand: stream-runner
       runtimeProfile: ingest
       replicas: 1
       terminationGracePeriodSeconds: 60
@@ -664,7 +669,8 @@ goWorkers:
     # Not a singleton: PagerDuty entries are exclusive per consumer through the
     # group PEL and duplicates are fenced by the receipt claim token.
     - name: stream-pagerduty
-      image: ghcr.io/full-chaos/dev-health-go-stream-runner:latest
+      image: ghcr.io/full-chaos/dev-health-go-dho:latest
+      subcommand: stream-runner
       runtimeProfile: pagerduty
       replicas: 1
       terminationGracePeriodSeconds: 60

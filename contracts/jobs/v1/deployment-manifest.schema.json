@@ -115,6 +115,20 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {"properties": {"binary": {"const": "dho"}}, "required": ["binary"]},
+            "then": {"required": ["subcommand"]},
+            "else": {"not": {"required": ["subcommand"]}}
+          },
+          {
+            "if": {"properties": {"runtime": {"const": "stream"}}, "required": ["runtime"]},
+            "then": {
+              "properties": {"binary": {"const": "dho"}, "subcommand": {"const": "stream-runner"}},
+              "required": ["binary", "subcommand"]
+            }
+          }
+        ],
         "required": [
           "name",
           "binary",
@@ -136,7 +150,8 @@
         ],
         "properties": {
           "name": {"type": "string", "pattern": "^[a-z][a-z0-9-]+$"},
-          "binary": {"type": "string", "pattern": "^dev-health-[a-z-]+$"},
+          "binary": {"type": "string", "pattern": "^(dev-health-[a-z-]+|dho)$"},
+          "subcommand": {"type": "string", "pattern": "^[a-z][a-z-]*$"},
           "runtime": {"enum": ["control", "river", "stream"]},
           "enabled_by_default": {"type": "boolean"},
           "min_replicas": {"type": "integer", "minimum": 0, "maximum": 8},

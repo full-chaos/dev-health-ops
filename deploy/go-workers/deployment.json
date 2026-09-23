@@ -215,7 +215,8 @@
     },
     {
       "name": "stream-external",
-      "binary": "dev-health-stream-runner",
+      "binary": "dho",
+      "subcommand": "stream-runner",
       "runtime": "stream",
       "enabled_by_default": true,
       "min_replicas": 0,
@@ -238,7 +239,8 @@
     },
     {
       "name": "stream-ingest",
-      "binary": "dev-health-stream-runner",
+      "binary": "dho",
+      "subcommand": "stream-runner",
       "runtime": "stream",
       "enabled_by_default": true,
       "min_replicas": 0,
@@ -261,7 +263,8 @@
     },
     {
       "name": "stream-pagerduty",
-      "binary": "dev-health-stream-runner",
+      "binary": "dho",
+      "subcommand": "stream-runner",
       "runtime": "stream",
       "enabled_by_default": true,
       "min_replicas": 0,

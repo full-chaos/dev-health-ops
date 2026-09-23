@@ -222,6 +222,10 @@ def test_compose_surfaces_keep_only_credentials_in_the_environment(
         )
         command = service.get("command") or []
         assert command, f"{path.name}:{name} passes no flags at all"
+        # A dho service names its verb first (`dho stream-runner ...`); the
+        # rest is flags.
+        if str(command[0]) == "stream-runner":
+            command = command[1:]
         assert all(str(item).startswith("--") for item in command), (
             f"{path.name}:{name} mixes positional arguments into command:"
         )

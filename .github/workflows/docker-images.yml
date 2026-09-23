@@ -688,7 +688,6 @@ jobs:
           - worker
           - scheduler
           - reconciler
-          - stream-runner
           - operator
           - contractcheck
           - migrate
@@ -1138,7 +1137,6 @@ jobs:
           - worker
           - scheduler
           - reconciler
-          - stream-runner
           - operator
           - contractcheck
           - migrate
@@ -1709,7 +1707,7 @@ jobs:
           # The full family list, both naming schemes -- keep this whole,
           # like ci/check_go_containers.sh's ALL_TARGETS: a shorter,
           # second copy is how the next target goes untagged.
-          families="dev-hops-runner dev-hops-api dev-health-go-worker dev-health-go-scheduler dev-health-go-reconciler dev-health-go-stream-runner dev-health-go-operator dev-health-go-contractcheck dev-health-go-migrate dev-health-query-api dev-health-go-api-tools"
+          families="dev-hops-runner dev-hops-api dev-health-go-worker dev-health-go-scheduler dev-health-go-reconciler dev-health-go-operator dev-health-go-contractcheck dev-health-go-migrate dev-health-go-dho dev-health-query-api dev-health-go-api-tools"
           short_sha="$(echo "${BUILT_SHA}" | cut -c1-7)"
           # codex round 3, P2: every family shares this ONE short_sha, so an
           # UNKNOWN source-tag registry error (rc==2) on it is not a

@@ -41,7 +41,6 @@ var binaryLogging = map[string]string{
 	"dev-health-provider-normalized-fixture": "silent",
 	"dev-health-reconciler":                  "shell",
 	"dev-health-scheduler":                   "shell",
-	"dev-health-stream-runner":               "shell",
 	"dev-health-worker":                      "shell",
 	"dev-health-worker-migrate":              "silent",
 	"dho":                                    "cli",

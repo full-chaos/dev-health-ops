@@ -685,7 +685,7 @@
         "line": 15
       },
       "queue_or_cadence": "consumer group ingest-consumers",
-      "dispatches": "run_ingest_consumer (Python) / cmd/dev-health-stream-runner profile ingest (Go)",
+      "dispatches": "run_ingest_consumer (Python) / dho stream-runner profile ingest (Go)",
       "dispatch_mechanism": "stream_consumer_group",
       "owner_role": "primary",
       "target_owner": {
@@ -709,7 +709,7 @@
         "line": 11
       },
       "queue_or_cadence": "consumer group product-telemetry-consumers",
-      "dispatches": "run_product_telemetry_consumer (Python) / cmd/dev-health-stream-runner profile ingest (Go)",
+      "dispatches": "run_product_telemetry_consumer (Python) / dho stream-runner profile ingest (Go)",
       "dispatch_mechanism": "stream_consumer_group",
       "owner_role": "primary",
       "target_owner": {
@@ -733,7 +733,7 @@
         "line": 45
       },
       "queue_or_cadence": "consumer group external-ingest-consumers",
-      "dispatches": "run_external_ingest_consumer (Python) / cmd/dev-health-stream-runner profile external (Go, singleton)",
+      "dispatches": "run_external_ingest_consumer (Python) / dho stream-runner profile external (Go, singleton)",
       "dispatch_mechanism": "stream_consumer_group",
       "owner_role": "primary",
       "target_owner": {

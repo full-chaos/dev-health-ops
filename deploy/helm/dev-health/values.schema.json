@@ -163,6 +163,8 @@
             "required": ["name"],
             "properties": {
               "name": { "type": "string" },
+              "subcommand": { "type": "string", "pattern": "^[a-z][a-z-]*$" },
+              "runtimeProfile": { "type": "string", "enum": ["ingest", "external", "pagerduty"] },
               "autoscaling": {
                 "type": "object",
                 "required": ["enabled"],

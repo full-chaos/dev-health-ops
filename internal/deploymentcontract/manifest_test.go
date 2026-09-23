@@ -8,6 +8,8 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/google/jsonschema-go/jsonschema"
+
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 )
 
@@ -347,6 +349,49 @@ func TestManifestRejectsMigrationDSNOnRuntimeProcess(t *testing.T) {
 	}
 }
 
+// The stream processes run `dho stream-runner`: the dho binary with that
+// subcommand. Every way to break the pairing fails validation: the old
+// binary, a missing or different subcommand, and a subcommand on a process
+// that is not run by dho.
+func TestManifestPinsTheStreamRunnerSubcommand(t *testing.T) {
+	t.Parallel()
+	for name, mutate := range map[string]func(*Process){
+		"old binary":           func(p *Process) { p.Binary, p.Subcommand = "dev-health-stream-runner", "" },
+		"old binary, verb set": func(p *Process) { p.Binary = "dev-health-stream-runner" },
+		"no subcommand":        func(p *Process) { p.Subcommand = "" },
+		"other subcommand":     func(p *Process) { p.Subcommand = "api" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			manifest, registry := loadFixture(t)
+			mutated := 0
+			for index := range manifest.Processes {
+				if manifest.Processes[index].Runtime == "stream" {
+					mutate(&manifest.Processes[index])
+					mutated++
+				}
+			}
+			if mutated != 3 {
+				t.Fatalf("mutated %d stream processes, want 3", mutated)
+			}
+			if _, err := manifest.Validate(registry); err == nil {
+				t.Fatal("a stream process that is not `dho stream-runner` passed validation")
+			}
+		})
+	}
+	t.Run("subcommand on a worker", func(t *testing.T) {
+		manifest, registry := loadFixture(t)
+		for index := range manifest.Processes {
+			if manifest.Processes[index].Runtime == "river" {
+				manifest.Processes[index].Subcommand = "worker"
+				break
+			}
+		}
+		if _, err := manifest.Validate(registry); err == nil {
+			t.Fatal("a subcommand on a process with its own binary passed validation")
+		}
+	})
+}
+
 func TestManifestRejectsDuplicateExternalStreamReplicaConfiguration(t *testing.T) {
 	t.Parallel()
 	manifest, registry := loadFixture(t)
@@ -633,6 +678,7 @@ type strictManifestWithoutRegistryProfile struct {
 type strictDeploymentProcess struct {
 	Name                       string        `json:"name"`
 	Binary                     string        `json:"binary"`
+	Subcommand                 string        `json:"subcommand,omitempty"`
 	Runtime                    string        `json:"runtime"`
 	EnabledByDefault           bool          `json:"enabled_by_default"`
 	MinReplicas                int           `json:"min_replicas"`
@@ -758,4 +804,78 @@ func TestManifestRejectsSessionPoolsThatCannotAbsorbAFleetRollingRestart(t *test
 			}
 		})
 	}
+}
+
+// TestDeploymentManifestSchemaPinsTheStreamRunnerVerb validates the
+// checked-in manifest, and mutations of it, against the JSON Schema itself
+// (the contract a schema-only consumer sees), not against the Go validator:
+// the checked-in manifest passes, and a stream process that is not
+// `dho stream-runner`, or a subcommand on a process with its own binary,
+// fails the schema just as it fails Validate.
+func TestDeploymentManifestSchemaPinsTheStreamRunnerVerb(t *testing.T) {
+	t.Parallel()
+	schemaBytes, err := os.ReadFile(filepath.Join("..", "..", "contracts", "jobs", "v1", "deployment-manifest.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema jsonschema.Schema
+	if err := json.Unmarshal(schemaBytes, &schema); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := schema.Resolve(&jsonschema.ResolveOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestBytes, err := os.ReadFile(filepath.Join("..", "..", "deploy", "go-workers", "deployment.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	load := func(t *testing.T) map[string]any {
+		t.Helper()
+		var document map[string]any
+		if err := json.Unmarshal(manifestBytes, &document); err != nil {
+			t.Fatal(err)
+		}
+		return document
+	}
+	if err := resolved.Validate(load(t)); err != nil {
+		t.Fatalf("the checked-in manifest fails its schema: %v", err)
+	}
+	for name, mutate := range map[string]func(process map[string]any){
+		"stream: other verb":   func(p map[string]any) { p["subcommand"] = "api" },
+		"stream: old binary":   func(p map[string]any) { p["binary"] = "dev-health-stream-runner"; delete(p, "subcommand") },
+		"stream: no verb":      func(p map[string]any) { delete(p, "subcommand") },
+		"stream: other binary": func(p map[string]any) { p["binary"] = "dev-health-worker"; delete(p, "subcommand") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			document := load(t)
+			mutated := 0
+			for _, raw := range document["processes"].([]any) {
+				process := raw.(map[string]any)
+				if process["runtime"] == "stream" {
+					mutate(process)
+					mutated++
+				}
+			}
+			if mutated != 3 {
+				t.Fatalf("mutated %d stream processes, want 3", mutated)
+			}
+			if err := resolved.Validate(document); err == nil {
+				t.Fatal("the schema accepted a stream process that is not `dho stream-runner`")
+			}
+		})
+	}
+	t.Run("subcommand on a worker", func(t *testing.T) {
+		document := load(t)
+		for _, raw := range document["processes"].([]any) {
+			process := raw.(map[string]any)
+			if process["runtime"] == "river" {
+				process["subcommand"] = "worker"
+				break
+			}
+		}
+		if err := resolved.Validate(document); err == nil {
+			t.Fatal("the schema accepted a subcommand on a process with its own binary")
+		}
+	})
 }

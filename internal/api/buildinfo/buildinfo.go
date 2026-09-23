@@ -15,7 +15,10 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 )
 
-// Routes returns GET /buildinfo behind any authenticated caller. A nil guard
+// Routes returns GET /buildinfo behind any authenticated caller. The
+// credential is the api's own access or edge token (what mint-edge-token
+// prints), not the effective-principal envelope query-api verifies; a prover
+// measuring this service must mint the former. A nil guard
 // mounts nothing: with no protected-route runtime the route has no auth to
 // stand behind, and an unauthenticated build read is not offered.
 func Routes(guard *policy.Guard, info version.Info) []httpapi.Route {

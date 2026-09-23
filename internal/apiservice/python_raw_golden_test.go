@@ -17,7 +17,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/buildstamp"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
+	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 )
 
 // pythonRawGolden is testdata/python_raw_http_golden.json.gz (gzip of JSON): the REAL Python
@@ -192,7 +194,17 @@ func firstLine(request []byte) []byte {
 // compared.
 func planeStampDecided(goHeaders map[string][]string) bool {
 	plane := goHeaders["x-dev-health-plane"]
-	return len(plane) == 1 && plane[0] == "go"
+	if len(plane) != 1 || plane[0] != "go" {
+		return false
+	}
+	// The build header names this binary's commit whenever it has one; a
+	// binary with no commit stamp carries none (see buildstamp.IsKnownBuild).
+	build := goHeaders["x-dev-health-build"]
+	commit := strings.TrimSpace(version.Current("api").Commit)
+	if !buildstamp.IsKnownBuild(commit) {
+		return len(build) == 0
+	}
+	return len(build) == 1 && build[0] == commit
 }
 
 // serverHeaderDecided: uvicorn sends exactly "server: uvicorn"; the Go api
@@ -363,6 +375,11 @@ func loadRawGolden(t *testing.T) pythonRawGolden {
 // startRawServer starts the real api listener, configured through the
 // production config.Load, on a free port.
 func startRawServer(t *testing.T) string {
+	// A test binary carries no commit stamp; give it one so the build half
+	// of the provenance stamp is pinned by planeStampDecided too.
+	previous := version.Commit
+	version.Commit = "rawgolden0123456789abcdef0123456789abcdef01"
+	t.Cleanup(func() { version.Commit = previous })
 	t.Helper()
 	cfg, err := config.Load(config.Spec{Service: config.APIServiceName, LookupEnv: func(key string) (string, bool) {
 		if key == "DEV_HEALTH_API_ADDR" {

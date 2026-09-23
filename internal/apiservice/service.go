@@ -283,7 +283,9 @@ func closeComponents(components []lifecycle.Component) {
 }
 
 // NewServer builds the api listener with the full transport stack. The stack
-// order, request side first, is: request id, panic recovery, then scope (the
+// order, request side first, is: the plane/build provenance stamp (outside
+// everything so no response, scope rejection or unhandled error, lacks it),
+// request id, panic recovery, then scope (the
 // org scope and impersonation middlewares, when given), security headers,
 // CORS, then the mux (and, per route, recovery, deadline, body bound). It
 // matches the Python api's request order (src/dev_health_ops/api/
@@ -296,8 +298,8 @@ func NewServer(
 	routes []httpapi.Route,
 	scope ...func(http.Handler) http.Handler,
 ) (*httpapi.Server, error) {
-	middleware := append([]func(http.Handler) http.Handler{UnhandledErrorShape, CloseHTTP10, DecodedPathRouting}, scope...)
-	middleware = append(middleware, buildinfo.Stamp(version.Current("api")), SecurityHeaders, NewCORS(cfg.CORSAllowedOrigins).Wrap)
+	middleware := append([]func(http.Handler) http.Handler{buildinfo.Stamp(version.Current("api")), UnhandledErrorShape, CloseHTTP10, DecodedPathRouting}, scope...)
+	middleware = append(middleware, SecurityHeaders, NewCORS(cfg.CORSAllowedOrigins).Wrap)
 	return httpapi.NewServer(httpapi.ServerOptions{
 		Name:           "api-http",
 		Address:        cfg.APIAddress,

@@ -14,7 +14,10 @@
 // Service's route layer, and unifying them is out of this package's scope.
 package licensing
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // explicitPurchaseFeatures mirrors dev_health_ops.licensing.registry.py's
 // EXPLICIT_PURCHASE_FEATURES frozenset. A feature key in this set is NEVER
@@ -64,6 +67,15 @@ type State struct {
 type Override struct {
 	Enabled   bool
 	ExpiresAt *time.Time
+	// Config is org_feature_overrides.config, the JSON column Python's
+	// FeatureOverrideSnapshot.config carries and decide_feature echoes back
+	// on the enabled_by_org_override result (feature_policy.py's org_override
+	// branch: `config=context.org_override.config`). Confirmed live against
+	// real Postgres: a caller reading only Decision.Allowed never notices its
+	// absence, but a caller reading Decision.Config -- feature-specific
+	// per-org configuration -- got a silent nil instead of the row's real
+	// data before this field existed.
+	Config *map[string]any
 }
 
 // Decision mirrors Python's FeatureDecision dataclass field-for-field
@@ -135,6 +147,7 @@ func Decide(featureKey string, state State) Decision {
 			return Decision{
 				FeatureKey: featureKey, Allowed: true,
 				Reason: ReasonEnabledByOrgOverride, ExpiresAt: state.OrgOverride.ExpiresAt,
+				Config: state.OrgOverride.Config,
 			}
 		}
 		// Expired and not org-override-only: falls through, exactly as
@@ -197,6 +210,19 @@ func jsonTruth(value any) bool {
 		return typed
 	case string:
 		return typed != ""
+	case json.Number:
+		// decodeJSONTolerantly decodes with UseNumber, so every JSON number
+		// leaf reaches this case, never the float64 one below. Float64()
+		// wraps strconv.ParseFloat: an out-of-range magnitude (e.g.
+		// 1e10000) returns the correctly-signed +/-Inf alongside
+		// strconv.ErrRange, exactly what Python's own float parser returns
+		// for the same literal -- Inf != 0 is truthy on both planes, so the
+		// error is deliberately not treated as a decode failure here. A
+		// JSON number token is syntactically valid by construction (the
+		// tokenizer already rejected anything else), so ErrSyntax cannot
+		// reach this line.
+		f, _ := typed.Float64()
+		return f != 0
 	case float64:
 		return typed != 0
 	case []any:

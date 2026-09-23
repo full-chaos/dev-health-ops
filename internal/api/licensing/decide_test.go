@@ -1,6 +1,7 @@
 package licensing
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 )
@@ -230,4 +231,86 @@ func TestJSONTruth(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestJSONTruthOverflowingJSONNumber is the regression proof for a
+// confirmed P1: a features_override JSON number whose magnitude overflows
+// float64 (e.g. 1e10000) must decode as truthy Inf, matching Python's own
+// json.loads (a C double parser that returns +/-Inf on overflow, never
+// raises) -- not as a decode error that denies the whole entitlement.
+func TestJSONTruthOverflowingJSONNumber(t *testing.T) {
+	tests := []struct {
+		name  string
+		value json.Number
+		want  bool
+	}{
+		{"huge positive overflows to +Inf, truthy", json.Number("1e10000"), true},
+		{"huge negative overflows to -Inf, truthy (non-zero)", json.Number("-1e10000"), true},
+		{"ordinary non-zero", json.Number("5"), true},
+		{"zero", json.Number("0"), false},
+		{"zero with decimal", json.Number("0.0"), false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := jsonTruth(test.value); got != test.want {
+				t.Fatalf("jsonTruth(json.Number(%q)) = %v, want %v", test.value, got, test.want)
+			}
+		})
+	}
+}
+
+// TestDecideOrgOverridePropagatesConfig is the regression proof for a
+// confirmed P2: the enabled_by_org_override decision must carry the
+// override's Config field through, matching Python's
+// `config=context.org_override.config` (feature_policy.py). Before this
+// fix, Override had no Config field at all, so it was silently dropped
+// regardless of what the caller read from Decision.
+func TestDecideOrgOverridePropagatesConfig(t *testing.T) {
+	state := baseState()
+	config := map[string]any{"customer_limit": 17.0}
+	state.OrgOverride = &Override{Enabled: true, Config: &config}
+	decision := Decide("agent_context_runtime", state)
+	if !decision.Allowed || decision.Reason != ReasonEnabledByOrgOverride {
+		t.Fatalf("decision = %+v, want allowed by org override", decision)
+	}
+	if decision.Config == nil {
+		t.Fatal("Config = nil, want the override's config propagated")
+	}
+	if (*decision.Config)["customer_limit"] != 17.0 {
+		t.Fatalf("Config = %+v, want customer_limit=17", *decision.Config)
+	}
+}
+
+// TestDecideOrgOverrideOnlyBranches exercises org_override_expired and
+// org_override_required -- the two branches that only fire for a feature
+// key in ORG_OVERRIDE_ONLY_FEATURES, which is empty in production today
+// (matching Python's registry.py exactly) and so untested by any case
+// using a REAL feature key. This test registers a synthetic key for the
+// duration of the test only (t.Cleanup restores the real, empty set) so
+// the branches are proven against the real Decide function rather than
+// left uncovered because nothing in production reaches them yet.
+func TestDecideOrgOverrideOnlyBranches(t *testing.T) {
+	const testKey = "test_only_org_override_only_feature"
+	orgOverrideOnlyFeatures[testKey] = true
+	t.Cleanup(func() { delete(orgOverrideOnlyFeatures, testKey) })
+
+	t.Run("expired org override on an org-override-only feature is ORG_OVERRIDE_EXPIRED, not a fallthrough", func(t *testing.T) {
+		state := baseState()
+		expiry := evaluatedAt.Add(-time.Hour)
+		state.OrgOverride = &Override{Enabled: true, ExpiresAt: &expiry}
+		decision := Decide(testKey, state)
+		if decision.Allowed || decision.Reason != ReasonOrgOverrideExpired {
+			t.Fatalf("decision = %+v, want closed org_override_expired", decision)
+		}
+	})
+
+	t.Run("license override on an org-override-only feature is ORG_OVERRIDE_REQUIRED", func(t *testing.T) {
+		state := baseState()
+		value := true
+		state.LicenseOverride = &value
+		decision := Decide(testKey, state)
+		if decision.Allowed || decision.Reason != ReasonOrgOverrideRequired {
+			t.Fatalf("decision = %+v, want closed org_override_required", decision)
+		}
+	})
 }

@@ -22,7 +22,7 @@ func schemaFor(ctx context.Context, t *testing.T, pool *pgxpool.Pool) {
   is_enabled boolean NOT NULL)`,
 		`CREATE TABLE org_feature_overrides (
   org_id uuid NOT NULL, feature_id uuid NOT NULL, is_enabled boolean NOT NULL,
-  expires_at timestamptz, PRIMARY KEY (org_id, feature_id))`,
+  expires_at timestamptz, config json, PRIMARY KEY (org_id, feature_id))`,
 		`CREATE TABLE org_licenses (
   org_id uuid PRIMARY KEY, tier text NOT NULL, features_override json)`,
 	} {

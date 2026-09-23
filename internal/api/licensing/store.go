@@ -1,6 +1,7 @@
 package licensing
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -72,10 +73,10 @@ func loadState(
 	var featureEnabled, overrideEnabled *bool
 	var overrideExpiresAt *time.Time
 	var orgTier *string
-	var encodedOverrides []byte
+	var encodedOverrides, encodedOrgOverrideConfig []byte
 	err := queryer.QueryRow(ctx, `
 SELECT feature.min_tier, feature.is_enabled,
-       org_override.is_enabled, org_override.expires_at,
+       org_override.is_enabled, org_override.expires_at, org_override.config,
        license.tier, license.features_override, organization.tier
 FROM feature_flags AS feature
 LEFT JOIN org_feature_overrides AS org_override
@@ -84,7 +85,7 @@ LEFT JOIN org_licenses AS license ON license.org_id = $2::uuid
 LEFT JOIN organizations AS organization ON organization.id = $2::uuid
 WHERE feature.key = $1`, featureKey, orgID).Scan(
 		&featureMinTier, &featureEnabled,
-		&overrideEnabled, &overrideExpiresAt,
+		&overrideEnabled, &overrideExpiresAt, &encodedOrgOverrideConfig,
 		&licenseTier, &encodedOverrides, &orgTier,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -104,6 +105,19 @@ WHERE feature.key = $1`, featureKey, orgID).Scan(
 	}
 	if overrideEnabled != nil {
 		state.OrgOverride = &Override{Enabled: *overrideEnabled, ExpiresAt: overrideExpiresAt}
+		if len(encodedOrgOverrideConfig) != 0 {
+			// gating.py's _override_snapshot applies the identical
+			// isinstance(dict) guard to override.config that it applies to
+			// features_override below -- non-object JSON here is a silent
+			// nil Config, never a read failure, on both planes.
+			decoded, err := decodeJSONTolerantly(encodedOrgOverrideConfig)
+			if err != nil {
+				return state, fmt.Errorf("decode org_feature_overrides.config: %w", err)
+			}
+			if config, ok := decoded.(map[string]any); ok {
+				state.OrgOverride.Config = &config
+			}
+		}
 	}
 	if licenseTier != nil {
 		// An org_licenses row exists: its tier takes priority over
@@ -111,8 +125,8 @@ WHERE feature.key = $1`, featureKey, orgID).Scan(
 		// features_override JSON is the license-override source.
 		state.OrgTier = *licenseTier
 		if len(encodedOverrides) != 0 {
-			var decoded any
-			if err := json.Unmarshal(encodedOverrides, &decoded); err != nil {
+			decoded, err := decodeJSONTolerantly(encodedOverrides)
+			if err != nil {
 				return state, fmt.Errorf("decode org_licenses.features_override: %w", err)
 			}
 			// gating.py's own guard reads raw_license_overrides as the
@@ -125,7 +139,7 @@ WHERE feature.key = $1`, featureKey, orgID).Scan(
 			// features_override value of exactly `[]` return an error here
 			// and deny an active org grant with a false 503 -- confirmed
 			// live against real Postgres. Only genuinely malformed JSON
-			// bytes (the Unmarshal error above) are ErrUnavailable.
+			// bytes (the decode error below) are ErrUnavailable.
 			if overrides, ok := decoded.(map[string]any); ok {
 				if raw, ok := overrides[featureKey]; ok {
 					value := jsonTruth(raw)
@@ -137,4 +151,25 @@ WHERE feature.key = $1`, featureKey, orgID).Scan(
 		state.OrgTier = *orgTier
 	}
 	return state, nil
+}
+
+// decodeJSONTolerantly decodes one JSON column value the same way Python's
+// json.loads does: every syntactically valid JSON number decodes
+// successfully, including a magnitude that overflows float64 (Python's C
+// double parser returns +/-Inf on overflow; it never raises). encoding/json's
+// default number handling refuses to unmarshal such a value into
+// interface{} at all -- decodeState.literalStore's strconv.ParseFloat call
+// treats ErrRange as a hard decode error -- which turned a features_override
+// value containing a single out-of-range number (confirmed live:
+// `{"agent_context_runtime":1e10000}`) into ErrUnavailable for the WHOLE
+// column, denying an otherwise-valid entitlement. Decoding with UseNumber
+// defers number parsing to jsonTruth, which tolerates the same overflow.
+func decodeJSONTolerantly(encoded []byte) (any, error) {
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	decoder.UseNumber()
+	var decoded any
+	if err := decoder.Decode(&decoded); err != nil {
+		return nil, err
+	}
+	return decoded, nil
 }

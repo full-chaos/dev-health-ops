@@ -424,7 +424,13 @@ func (v *Venue) migrate(t *testing.T, ctx context.Context, logger *slog.Logger) 
 	}
 }
 
-// Volatile are the per-response headers Diff never compares.
+// Volatile are the per-response headers Diff never compares. They are
+// transport fingerprints, not route contract: x-request-id is a random id
+// per request on both planes, and date and server are added by uvicorn's
+// server layer (src/dev_health_ops/api/runner.py calls uvicorn.run with its
+// default date_header and server_header), which TestClient never reaches,
+// so the Python plane here cannot show them. In production, Cloudflare in
+// front of both planes sets its own Server header.
 var Volatile = map[string]bool{"date": true, "server": true, "x-request-id": true}
 
 // DiffOptions tune Diff for the ruled differences of a route set.

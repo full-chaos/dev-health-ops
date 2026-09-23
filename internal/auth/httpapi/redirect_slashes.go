@@ -18,16 +18,17 @@ const redirectLocationSafe = ":/%#?=@[]!$&'()*+,;"
 type slashRedirector struct {
 	matcher  *http.ServeMux
 	patterns map[string]bool
+	trust    ForwardedTrust
 }
 
-func newSlashRedirector(patterns []string) *slashRedirector {
+func newSlashRedirector(patterns []string, trust ForwardedTrust) *slashRedirector {
 	matcher := http.NewServeMux()
 	set := make(map[string]bool, len(patterns))
 	for _, pattern := range patterns {
 		matcher.Handle(pattern, routeMatch{})
 		set[pattern] = true
 	}
-	return &slashRedirector{matcher: matcher, patterns: set}
+	return &slashRedirector{matcher: matcher, patterns: set, trust: trust}
 }
 
 // routeMatch marks a real match in the matcher mux; any other handler it
@@ -79,11 +80,7 @@ func (s *slashRedirector) redirect(w http.ResponseWriter, r *http.Request) bool 
 	if !s.matches(r, target) {
 		return false
 	}
-	scheme := "http"
-	if r.TLS != nil {
-		scheme = "https"
-	}
-	location := scheme + "://" + r.Host + target
+	location := s.trust.scheme(r) + "://" + r.Host + target
 	if r.URL.RawQuery != "" {
 		location += "?" + r.URL.RawQuery
 	}

@@ -31,6 +31,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -258,6 +259,19 @@ func NewServer(
 		// Starlette's Router redirects a trailing-slash variant of a route
 		// path (redirect_slashes, on by default in FastAPI) with a 307.
 		RedirectSlashes: true,
-		Middleware:      middleware,
+		// The redirect's scheme honours X-Forwarded-Proto from the peers
+		// uvicorn trusts: FORWARDED_ALLOW_IPS, default 127.0.0.1.
+		ForwardedAllowIPs: forwardedAllowIPs(),
+		Middleware:        middleware,
 	})
+}
+
+// forwardedAllowIPs is FORWARDED_ALLOW_IPS as uvicorn reads it: nil when
+// unset (uvicorn's default applies), the raw value otherwise.
+func forwardedAllowIPs() *string {
+	value, ok := os.LookupEnv("FORWARDED_ALLOW_IPS")
+	if !ok {
+		return nil
+	}
+	return &value
 }

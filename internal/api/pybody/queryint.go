@@ -62,32 +62,34 @@ func ParsePydanticInt(raw string) (*big.Int, *Error) {
 
 // QueryInt validates one int query parameter as FastAPI's Query(ge=, le=)
 // does. raw is nil when the parameter is absent, which yields fallback.
-// loc is the error location (["query", name]); ge and le are nil when
-// unbounded. On failure the error is appended and ok is false.
-func (e *Errors) QueryInt(name string, raw *string, fallback int64, ge, le *int64) (int64, bool) {
+// The error location is ["query", name]; ge and le are nil when unbounded.
+// The value is exact (pydantic's int is unbounded): a caller that needs a
+// machine integer checks IsInt64 and answers as its Python counterpart does
+// past that range. On failure the error is appended and ok is false.
+func (e *Errors) QueryInt(name string, raw *string, fallback int64, ge, le *int64) (*big.Int, bool) {
 	if raw == nil {
-		return fallback, true
+		return big.NewInt(fallback), true
 	}
 	loc := []pyjson.Value{"query", name}
 	value, failure := ParsePydanticInt(*raw)
 	if failure != nil {
 		failure.Loc, failure.Input = loc, *raw
 		*e = append(*e, *failure)
-		return 0, false
+		return nil, false
 	}
 	if ge != nil && value.Cmp(big.NewInt(*ge)) < 0 {
 		ctx := pyjson.NewObject()
 		ctx.Set("ge", *ge)
 		*e = append(*e, Error{Type: "greater_than_equal", Loc: loc, Msg: "Input should be greater than or equal to " + big.NewInt(*ge).String(), Input: *raw, Ctx: ctx})
-		return 0, false
+		return nil, false
 	}
 	if le != nil && value.Cmp(big.NewInt(*le)) > 0 {
 		ctx := pyjson.NewObject()
 		ctx.Set("le", *le)
 		*e = append(*e, Error{Type: "less_than_equal", Loc: loc, Msg: "Input should be less than or equal to " + big.NewInt(*le).String(), Input: *raw, Ctx: ctx})
-		return 0, false
+		return nil, false
 	}
-	return value.Int64(), true
+	return value, true
 }
 
 // DatetimeError is the FastAPI error for a pydantic datetime failure at loc:

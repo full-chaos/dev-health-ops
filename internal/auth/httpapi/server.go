@@ -92,6 +92,10 @@ type ServerOptions struct {
 	// redirect_slashes 307 when the same path with its trailing slash
 	// toggled matches a route (for any method); see slashRedirector.
 	RedirectSlashes bool
+	// ForwardedAllowIPs is uvicorn's FORWARDED_ALLOW_IPS for the redirect's
+	// scheme: a peer it trusts may set X-Forwarded-Proto. Nil means the
+	// variable is unset, which is uvicorn's default, "127.0.0.1".
+	ForwardedAllowIPs *string
 }
 
 // Server is the auth API listener. It is a lifecycle.Component so the runtime,
@@ -238,7 +242,11 @@ func buildHandler(options ServerOptions, logger *slog.Logger) (http.Handler, err
 		for pattern := range methodsByPattern {
 			patterns = append(patterns, pattern)
 		}
-		redirector = newSlashRedirector(patterns)
+		allow := "127.0.0.1"
+		if options.ForwardedAllowIPs != nil {
+			allow = *options.ForwardedAllowIPs
+		}
+		redirector = newSlashRedirector(patterns, ParseForwardedTrust(allow))
 	}
 	notFound := func(w http.ResponseWriter, r *http.Request) {
 		if redirector != nil && redirector.redirect(w, r) {

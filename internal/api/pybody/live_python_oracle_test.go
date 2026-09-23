@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"testing"
 	"unicode"
@@ -97,7 +96,7 @@ func TestQueryIntMatchesLivePydantic(t *testing.T) {
 		value, ok := errs.QueryInt("limit", &raw, 50, &ge, &le)
 		got := ""
 		if ok {
-			got = "ok:" + strconv.FormatInt(value, 10)
+			got = "ok:" + value.String()
 		} else {
 			ctx := "null"
 			if errs[0].Ctx != nil {

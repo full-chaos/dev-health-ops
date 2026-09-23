@@ -107,35 +107,38 @@ func patternLiteral(e ast.Expr) string {
 	}
 }
 
-// guardLevelOf walks handler's AST directly and returns the Authz level
-// name from its guard.Wrap(...)/h.bodyFirst(...) call -- whichever of the
-// two the Handler expression actually contains, found anywhere in it so
-// this does not depend on how gofmt wrapped the call across lines.
+// guardLevelOf requires the Handler expression's OWN, TOP-LEVEL call to be
+// literally h.guard.Wrap(...)/h.bodyFirst(...) -- never a Wrap/bodyFirst
+// call found ANYWHERE inside the expression's subtree, no matter how deep.
+//
+// The first version of this function used ast.Inspect to walk the whole
+// subtree, which accepts a Wrap call whose RESULT is discarded as long as
+// one appears somewhere in the expression -- a codex-review round proved
+// this by rewriting a route's Handler to an IIFE that calls
+// guard.Wrap(policy.Superuser, real) for its side effect and then returns
+// the unwrapped `real` handler; that walk still reported "Superuser" and
+// the test still passed. Requiring the OUTERMOST call to be the guard
+// call closes that gap: an IIFE's Handler value is a call to the IIFE
+// itself, not to Wrap/bodyFirst, so it no longer matches at all and this
+// function correctly reports "not found" for it.
 func guardLevelOf(handler ast.Expr) (string, bool) {
-	var level string
-	found := false
-	ast.Inspect(handler, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok || len(call.Args) == 0 {
-			return true
-		}
-		name := calleeName(call.Fun)
-		if name != "Wrap" && name != "bodyFirst" {
-			return true
-		}
-		sel, ok := call.Args[0].(*ast.SelectorExpr)
-		if !ok {
-			return true
-		}
-		pkg, ok := sel.X.(*ast.Ident)
-		if !ok || pkg.Name != "policy" {
-			return true
-		}
-		level = sel.Sel.Name
-		found = true
-		return false
-	})
-	return level, found
+	call, ok := handler.(*ast.CallExpr)
+	if !ok || len(call.Args) == 0 {
+		return "", false
+	}
+	name := calleeName(call.Fun)
+	if name != "Wrap" && name != "bodyFirst" {
+		return "", false
+	}
+	sel, ok := call.Args[0].(*ast.SelectorExpr)
+	if !ok {
+		return "", false
+	}
+	pkg, ok := sel.X.(*ast.Ident)
+	if !ok || pkg.Name != "policy" {
+		return "", false
+	}
+	return sel.Sel.Name, true
 }
 
 func calleeName(e ast.Expr) string {
@@ -221,12 +224,17 @@ func discoverAdminRoutes(t *testing.T) []discoveredRoute {
 // except the one named, justified exception in
 // adminRouteGuardExceptions.
 //
-// Verified to fail: temporarily changed listOrganizations' own
-// guard.Wrap(policy.Superuser, ...) to guard.Wrap(policy.Public, ...) in
-// this worktree and confirmed this test failed, naming
-// "GET /orgs (orgs.go): guarded at \"Public\", want Admin or Superuser";
-// restored the file and confirmed `git diff` was empty before this test
-// was committed.
+// Verified to fail, twice, both restored with a matching file digest
+// before/after: (1) flipped listOrganizations' own
+// guard.Wrap(policy.Superuser, ...) to guard.Wrap(policy.Public, ...),
+// which failed naming "GET /orgs (orgs.go): guarded at \"Public\", want
+// Admin or Superuser"; (2) a codex-review round's own repro -- rewrote
+// the same route's Handler to an IIFE that calls
+// guard.Wrap(policy.Superuser, real) for its side effect and returns the
+// unwrapped real handler -- which the FIRST version of guardLevelOf
+// (ast.Inspect over the whole subtree) missed entirely; the current,
+// outermost-call-only version correctly fails it with "could not
+// determine its Authz level from the Handler expression".
 func TestAdminRoutesAreNeverMountedBelowAdmin(t *testing.T) {
 	routes := discoverAdminRoutes(t)
 	if len(routes) == 0 {

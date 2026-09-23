@@ -220,3 +220,27 @@ func ParseUUID(value string) (uuid.UUID, error) {
 	parsed.FillBytes(out[:])
 	return out, nil
 }
+
+// UUIDValidationDetail returns the exact detail text CPython's
+// `uuid.UUID(hex=value)` raises for value, for a route that forwards a
+// caught ValueError verbatim (`except ValueError as e: raise
+// HTTPException(400, str(e))`) -- distinct from ParseUUID's own
+// diagnostic-wrapped error, which names the offending value for a Go
+// log/test failure, never a wire response. ok is false when value is
+// actually valid (ParseUUID would accept it); there is nothing to report.
+func UUIDValidationDetail(value string) (detail string, ok bool) {
+	if _, err := ParseUUID(value); err == nil {
+		return "", false
+	}
+	hex := strings.ReplaceAll(value, "urn:", "")
+	hex = strings.ReplaceAll(hex, "uuid:", "")
+	hex = strings.Trim(hex, "{}")
+	hex = strings.ReplaceAll(hex, "-", "")
+	if utf8.RuneCountInString(hex) != 32 {
+		return "badly formed hexadecimal UUID string", true
+	}
+	if _, err := parsePythonIntBase16(hex); err != nil {
+		return err.Error(), true
+	}
+	return "int is out of range (need a 128-bit value)", true
+}

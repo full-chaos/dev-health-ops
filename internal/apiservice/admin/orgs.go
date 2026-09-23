@@ -13,6 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
 const orgsPrefix = "/api/v1/admin"
@@ -151,6 +152,7 @@ func (h *handlers) createOrganization(w http.ResponseWriter, r *http.Request) {
 	var errs pybody.Errors
 	object, ok := errs.Object(body)
 	var name, slug, description, ownerUserID string
+	var descriptionPresent bool
 	var settingsObj *pyjson.Object
 	tier := "community"
 	if ok {
@@ -172,7 +174,11 @@ func (h *handlers) createOrganization(w http.ResponseWriter, r *http.Request) {
 			name = trimmedName
 		}
 		slug, _ = errs.OptionalString(object, "slug", 0, 0)
-		description, _ = errs.OptionalString(object, "description", 0, 0)
+		// description is genuinely Optional (`str | None = None`): absent or
+		// explicit null both mean "no description"; a present explicit ""
+		// is a REAL value, distinct from absent -- a live round found Go
+		// collapsing an explicit "" to null.
+		description, descriptionPresent = errs.OptionalString(object, "description", 0, 0)
 		// tier is a pydantic DEFAULT (`str = "community"`), not Optional:
 		// absent applies the default, a present explicit value (including
 		// "") is stored verbatim, and a present null is a type error --
@@ -185,7 +191,7 @@ func (h *handlers) createOrganization(w http.ResponseWriter, r *http.Request) {
 		// Field(default_factory=dict)`), never Optional: absent -> {},
 		// present non-object (including null) -> dict_type error. A live
 		// round found this field silently dropped and always stored as {}.
-		if value, present := errs.DefaultedObject(object, "settings"); present {
+		if value, present := errs.DefaultedAnyDict(object, "settings"); present {
 			settingsObj = value
 		}
 	}
@@ -221,7 +227,7 @@ func (h *handlers) createOrganization(w http.ResponseWriter, r *http.Request) {
 		ID: uuid.New(), Slug: slug, Name: name, Tier: tier, ManagedBy: managedBy, IsActive: true,
 		Settings: settingsBytes,
 	}
-	if description != "" {
+	if descriptionPresent {
 		org.Description = &description
 	}
 
@@ -243,13 +249,23 @@ func (h *handlers) createOrganization(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if ownerUserID != "" {
-		ownerID, parseErr := uuid.Parse(ownerUserID)
-		if parseErr == nil {
-			if _, err := h.store.insertMembershipTx(ctx, tx, org.ID, ownerID, "owner", nil); err != nil {
-				h.logger.ErrorContext(ctx, "admin: create organization owner membership failed", "error", err)
-				policy.WriteInternal(w)
-				return
-			}
+		// OrganizationService.create -> MembershipService.add_member:
+		// `uuid.UUID(owner_user_id)` is a bare, un-try/excepted call inside
+		// svc.create() itself -- a malformed value raises unhandled all the
+		// way out of the route, past the never-reached session.commit(),
+		// to FastAPI's generic 500. A live round found Go silently
+		// SKIPPING the membership insert instead and still committing the
+		// organization.
+		ownerID, parseErr := pythonparity.ParseUUID(ownerUserID)
+		if parseErr != nil {
+			h.logger.ErrorContext(ctx, "admin: create organization owner_user_id invalid", "error", parseErr)
+			policy.WriteInternal(w)
+			return
+		}
+		if _, err := h.store.insertMembershipTx(ctx, tx, org.ID, ownerID, "owner", nil); err != nil {
+			h.logger.ErrorContext(ctx, "admin: create organization owner membership failed", "error", err)
+			policy.WriteInternal(w)
+			return
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -292,8 +308,13 @@ func (h *handlers) updateOrganization(w http.ResponseWriter, r *http.Request) {
 		if v, present := errs.OptionalBool(object, "is_active"); present {
 			patch.IsActive = &v
 		}
-		if raw, present := object.Get("settings"); present && raw != nil {
-			if encoded, err := pyjson.Marshal(raw); err == nil {
+		// settings is genuinely Optional here (`dict[str, Any] | None =
+		// None`, distinct from create's pydantic-default shape): absent or
+		// explicit null both mean "leave it alone"; a present non-object
+		// value is a dict_type 422, not silently accepted -- a live round
+		// found `{"settings":[]}` stored verbatim as an array.
+		if value, present := errs.OptionalAnyDict(object, "settings"); present {
+			if encoded, err := pyjson.Marshal(value); err == nil {
 				patch.Settings = encoded
 			}
 		}
@@ -344,9 +365,11 @@ func (h *handlers) listMembers(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureOrgAdminAccess(ctx, w, user, orgID) {
 		return
 	}
-	query := r.URL.Query()
+	// queryLastValue, not url.Values.Get (which picks the FIRST of a
+	// repeated key) -- a live round found `?role=owner&role=member`
+	// resolving to the owner row on Go, the member row on Python.
 	var role *string
-	if raw := query.Get("role"); raw != "" {
+	if raw, present := queryLastValue(r.URL.Query(), "role"); present && raw != "" {
 		role = &raw
 	}
 	members, err := h.store.listMemberships(ctx, orgID, role)
@@ -377,29 +400,47 @@ func (h *handlers) addMember(w http.ResponseWriter, r *http.Request) {
 	body := bodyFromContext(ctx)
 	var errs pybody.Errors
 	object, ok := errs.Object(body)
-	var targetUserIDRaw, role, invitedByRaw string
+	var targetUserIDRaw, invitedByRaw string
+	role := "member"
 	if ok {
 		targetUserIDRaw, _ = errs.RequiredString(object, "user_id", 1, 0)
-		role, _ = errs.OptionalString(object, "role", 0, 0)
+		// role is a pydantic DEFAULT (`str = "member"`), not Optional: absent
+		// applies the default, a present explicit "" is stored verbatim (a
+		// real value, distinct from the default), and a present null is a
+		// string_type error -- a live round found Go collapsing absent AND
+		// explicit-empty to the same default, and accepting null instead of
+		// 422ing.
+		if value, present := errs.DefaultedString(object, "role", 0, 0); present {
+			role = value
+		}
 		invitedByRaw, _ = errs.OptionalString(object, "invited_by_id", 0, 0)
 	}
 	if len(errs) > 0 {
 		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
 		return
 	}
-	if role == "" {
-		role = "member"
-	}
-	targetUserID, parseErr := uuid.Parse(targetUserIDRaw)
-	if parseErr != nil {
-		policy.WriteDetail(w, http.StatusBadRequest, "Invalid user_id", nil)
+	// MembershipService.add_member: `uuid.UUID(user_id)` and (when supplied)
+	// `uuid.UUID(invited_by_id)` are the ONLY validation either field gets --
+	// no pydantic UUID type, a bare str field -- and any ValueError either
+	// raises propagates unhandled to the router's `except ValueError as e:
+	// raise HTTPException(400, str(e))`. A live round found invited_by_id's
+	// failure silently discarded (the membership created without an
+	// inviter) instead of refusing the request.
+	targetUserID, userIDErr := pythonparity.ParseUUID(targetUserIDRaw)
+	if userIDErr != nil {
+		detail, _ := pythonparity.UUIDValidationDetail(targetUserIDRaw)
+		policy.WriteDetail(w, http.StatusBadRequest, detail, nil)
 		return
 	}
 	var invitedByID *uuid.UUID
 	if invitedByRaw != "" {
-		if id, err := uuid.Parse(invitedByRaw); err == nil {
-			invitedByID = &id
+		id, err := pythonparity.ParseUUID(invitedByRaw)
+		if err != nil {
+			detail, _ := pythonparity.UUIDValidationDetail(invitedByRaw)
+			policy.WriteDetail(w, http.StatusBadRequest, detail, nil)
+			return
 		}
+		invitedByID = &id
 	}
 	created, err := h.store.insertMembership(ctx, orgID, targetUserID, role, invitedByID)
 	if err == errMembershipExists {

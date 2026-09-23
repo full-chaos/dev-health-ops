@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
 // organization is users.py's Organization row (organizations.py's
@@ -191,20 +193,36 @@ WHERE id = $1`, id, name, description, settings, tier, managedBy, isActive, now)
 
 // slugify is users.py's _slugify: lowercase, strip, drop everything but
 // word/space/hyphen, collapse runs of hyphen/space to one hyphen, cap 50.
+// slugify is users.py's _slugify:
+//
+//	slug = name.lower().strip()
+//	slug = re.sub(r"[^\w\s-]", "", slug)
+//	slug = re.sub(r"[-\s]+", "-", slug)
+//	return slug[:50]
+//
+// Python's `\w` (Unicode mode, the default) is NOT ASCII-only: it matches
+// every Letter and Number Unicode category plus underscore -- verified
+// live against the installed re module. A live round found Go keeping
+// only ASCII letters/digits, dropping a name like "Café 東京" to "caf".
+// `slug[:50]` slices by CODE POINT, not byte, so the truncation below
+// works on a []rune.
 func slugify(name string) string {
-	lowered := strings.ToLower(strings.TrimSpace(name))
+	// name.lower() is CPython's Unicode-aware str.lower(), not
+	// strings.ToLower (which diverges on e.g. U+0130) -- see
+	// pythonparity.Lower's own doc comment.
+	lowered := pythonparity.Lower(strings.TrimSpace(name))
 	var kept strings.Builder
 	for _, r := range lowered {
-		if r == '_' || r == '-' || r == ' ' || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+		if r == '_' || r == '-' || unicode.IsSpace(r) || unicode.IsLetter(r) || unicode.IsNumber(r) {
 			kept.WriteRune(r)
 		}
 	}
-	fields := strings.FieldsFunc(kept.String(), func(r rune) bool { return r == '-' || r == ' ' })
-	slug := strings.Join(fields, "-")
+	fields := strings.FieldsFunc(kept.String(), func(r rune) bool { return r == '-' || unicode.IsSpace(r) })
+	slug := []rune(strings.Join(fields, "-"))
 	if len(slug) > 50 {
 		slug = slug[:50]
 	}
-	return slug
+	return string(slug)
 }
 
 // membership is users.py's Membership row.

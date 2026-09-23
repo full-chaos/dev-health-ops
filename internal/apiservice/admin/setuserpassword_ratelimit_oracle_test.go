@@ -105,15 +105,16 @@ func TestSetUserPasswordRateLimitMatchesThePythonAPI(t *testing.T) {
 	t.Log(receipt)
 }
 
-// TestSetUserPasswordRateLimitIsIndependentPerTargetAndAdmin is the
-// codex-review pr2866-r1 P1's two repros, both against real Python: a
-// shared bucket per route pattern let one admin's resets for one target
-// consume another target's (or another admin's) quota. It seeds two
-// admins and two targets in the SAME org, then interleaves:
-//  1. admin0 -> target0 (own bucket, allowed)
-//  2. admin0 -> target1 (cross-target: must NOT be refused by target0's bucket)
-//  3. admin1 -> target0 (cross-admin: must NOT be refused by admin0's bucket)
-//  4. admin0 -> target0 again (its own bucket is now at 2/5, still allowed)
+// TestSetUserPasswordRateLimitIsIndependentPerTargetAndAdmin is an
+// adversarial-review repro, against real Python: a shared bucket per route
+// pattern let one admin's resets for one target consume another target's
+// (or another admin's) quota. Sends admin0->target0 to its full 5-request
+// limit FIRST -- proving that bucket really is exhausted (request 6 is a
+// 429) -- THEN admin0->target1 and admin1->target0, which must still be
+// allowed. A review round on an earlier version of this test sent only 4
+// requests against a limit of 5, so it passed even under a mutant that
+// shared one global bucket for every caller and path; exhausting one
+// bucket to its real limit before testing the other two closes that gap.
 //
 // Diffed against live Python request-by-request -- Python's own
 // per-(admin,path) scoping already gets every one of these right; this
@@ -145,12 +146,18 @@ func TestSetUserPasswordRateLimitIsIndependentPerTargetAndAdmin(t *testing.T) {
 	}
 	pathFor := func(target uuid.UUID) string { return "/api/v1/admin/users/" + target.String() + "/password" }
 
-	requests := []venueoracle.Request{
-		{Name: "admin0 -> target0 (own bucket)", Method: "POST", Path: pathFor(target0), Headers: headersFor("admin0"), Body: body(0)},
-		{Name: "admin0 -> target1 (cross-target)", Method: "POST", Path: pathFor(target1), Headers: headersFor("admin0"), Body: body(1)},
-		{Name: "admin1 -> target0 (cross-admin)", Method: "POST", Path: pathFor(target0), Headers: headersFor("admin1"), Body: body(2)},
-		{Name: "admin0 -> target0 again (own bucket, 2nd hit)", Method: "POST", Path: pathFor(target0), Headers: headersFor("admin0"), Body: body(3)},
+	var requests []venueoracle.Request
+	for i := range 5 {
+		requests = append(requests, venueoracle.Request{
+			Name: fmt.Sprintf("admin0 -> target0 (own bucket, exhausting, %d/5)", i+1), Method: "POST",
+			Path: pathFor(target0), Headers: headersFor("admin0"), Body: body(i),
+		})
 	}
+	requests = append(requests,
+		venueoracle.Request{Name: "admin0 -> target0, 6th (own bucket now exhausted)", Method: "POST", Path: pathFor(target0), Headers: headersFor("admin0"), Body: body(5)},
+		venueoracle.Request{Name: "admin0 -> target1 (cross-target: must NOT be refused by target0's exhausted bucket)", Method: "POST", Path: pathFor(target1), Headers: headersFor("admin0"), Body: body(6)},
+		venueoracle.Request{Name: "admin1 -> target0 (cross-admin: must NOT be refused by admin0's exhausted bucket)", Method: "POST", Path: pathFor(target0), Headers: headersFor("admin1"), Body: body(7)},
+	)
 	python := venue.ServePython(t, requests)
 	goBase, _ := startGoServer(t, ctx, venue, jwtKey)
 

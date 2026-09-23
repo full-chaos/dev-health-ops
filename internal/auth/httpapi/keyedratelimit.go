@@ -46,12 +46,17 @@ type KeyedLimiter struct {
 	now    func() time.Time
 
 	mu sync.Mutex
-	// entries is unbounded in principle, but its real cardinality is
-	// (distinct callers) x (distinct rate-limited paths this limiter is
-	// applied to) -- for an admin-only limiter that is a small, stable
-	// number (the platform's admin population x its handful of
-	// rate-limited admin routes), never proportional to request volume.
+	// entries' key includes the exact request PATH, which for a route
+	// like /users/{user_id}/password carries a caller-supplied target id
+	// -- NOT a small fixed route set. An authenticated caller sending
+	// distinct target ids (the handler validates the target only AFTER
+	// this limiter runs) can otherwise grow this map without bound.
+	// sweep (below) evicts every expired entry at most once per window,
+	// so steady-state memory is bounded by callers active within the
+	// last window, never by total requests ever seen.
 	entries map[string]*fixedWindowEntry
+	// lastSweep is when entries was last swept for expired windows.
+	lastSweep time.Time
 }
 
 // NewKeyedLimiter returns a limiter allowing at most limit hits per window,
@@ -80,6 +85,7 @@ func (l *KeyedLimiter) Allow(key, path string) bool {
 	defer l.mu.Unlock()
 
 	now := l.now()
+	l.sweep(now)
 	entryKey := key + "\x00" + path
 	entry := l.entries[entryKey]
 	if entry == nil || now.Sub(entry.start) >= l.window {
@@ -88,6 +94,23 @@ func (l *KeyedLimiter) Allow(key, path string) bool {
 	}
 	entry.count++
 	return entry.count <= l.limit
+}
+
+// sweep deletes every entry whose window has fully expired, at most once
+// per l.window of wall-clock time -- called with l.mu already held. This
+// bounds the sweep's own O(n) cost to once per window rather than every
+// call, while guaranteeing an entry outlives its window by at most one
+// window's length before it is reclaimed.
+func (l *KeyedLimiter) sweep(now time.Time) {
+	if !l.lastSweep.IsZero() && now.Sub(l.lastSweep) < l.window {
+		return
+	}
+	l.lastSweep = now
+	for key, entry := range l.entries {
+		if now.Sub(entry.start) >= l.window {
+			delete(l.entries, key)
+		}
+	}
 }
 
 // KeyedRateLimit rejects a request once its (keyFunc(r), r.URL.Path) pair

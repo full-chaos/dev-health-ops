@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -68,6 +69,38 @@ func TestKeyedLimiterIsIndependentPerKeyAndPath(t *testing.T) {
 	}
 	if limiter.Allow("admin-user:a", "/users/target-1/password") {
 		t.Fatal("admin a, target 1 second call was allowed, want refused (its own bucket is exhausted)")
+	}
+}
+
+// TestKeyedLimiterEvictsExpiredEntries is the codex-review pr2873-r1 P1:
+// a caller-supplied path (a target user id in the URL, resolved before the
+// handler validates it exists) makes the limiter's real key cardinality
+// unbounded by request volume, not by distinct admins x distinct routes as
+// an earlier version of this file's doc comment wrongly claimed. Many
+// distinct paths must not survive past their own window forever.
+func TestKeyedLimiterEvictsExpiredEntries(t *testing.T) {
+	now := time.Now()
+	limiter := NewKeyedLimiter(5, time.Hour, func() time.Time { return now })
+
+	const distinctPaths = 5000
+	for i := range distinctPaths {
+		limiter.Allow("admin-user:a", fmt.Sprintf("/users/%d/password", i))
+	}
+	limiter.mu.Lock()
+	got := len(limiter.entries)
+	limiter.mu.Unlock()
+	if got != distinctPaths {
+		t.Fatalf("entries after %d distinct paths = %d, want %d (all still within their window)", distinctPaths, got, distinctPaths)
+	}
+
+	now = now.Add(2 * time.Hour)
+	limiter.Allow("admin-user:a", "/users/fresh/password")
+
+	limiter.mu.Lock()
+	got = len(limiter.entries)
+	limiter.mu.Unlock()
+	if got != 1 {
+		t.Fatalf("entries after all old windows expired = %d, want 1 (only the fresh path)", got)
 	}
 }
 

@@ -1,6 +1,10 @@
 package externalingest
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+)
 
 // The ensure_ascii oracle receipt lives in bundle_oracle_test.go's
 // TestSchemaBundleMatchesLivePython, which EXECUTES schema_registry.
@@ -31,11 +35,13 @@ func TestSchemaDocumentEmbedsLiveLimits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("schemaDocument: %v", err)
 	}
-	got, ok := document["limits"].(map[string]any)
+	got, ok := document["limits"].(*pyjson.Object)
 	if !ok {
 		t.Fatalf("no limits key: %+v", document)
 	}
-	if got["maxRecordsPerBatch"] != 42 || got["maxBodyBytes"] != 7 {
+	maxRecords, _ := got.Get("maxRecordsPerBatch")
+	maxBodyBytes, _ := got.Get("maxBodyBytes")
+	if maxRecords != 42 || maxBodyBytes != 7 {
 		t.Fatalf("%+v", got)
 	}
 }

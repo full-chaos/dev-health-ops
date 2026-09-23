@@ -2,6 +2,8 @@ package externalingest
 
 import (
 	"fmt"
+
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 )
 
 // ValidationErrorItem mirrors schemas.py's ValidationErrorItem: one
@@ -12,6 +14,23 @@ type ValidationErrorItem struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 	Path    string `json:"path,omitempty"`
+}
+
+// toPyJSON builds the ordered wire shape (schemas.py's ValidationErrorItem
+// field order: index, kind, code, message, path) for policy.WriteJSON. Path
+// is omitted when empty, matching the struct tag's existing omitempty
+// behavior -- this only changes the writer, not the null-vs-omitted
+// semantics of any field.
+func (item ValidationErrorItem) toPyJSON() *pyjson.Object {
+	object := pyjson.NewObject()
+	object.Set("index", item.Index)
+	object.Set("kind", item.Kind)
+	object.Set("code", item.Code)
+	object.Set("message", item.Message)
+	if item.Path != "" {
+		object.Set("path", item.Path)
+	}
+	return object
 }
 
 // validateRecords is validate.py's validate_records: validates each
@@ -34,7 +53,7 @@ func validateRecords(records []Record) []ValidationErrorItem {
 				Index:   index,
 				Kind:    record.Kind,
 				Code:    "unknown_kind",
-				Message: fmt.Sprintf("Unknown record kind: %q", record.Kind),
+				Message: "Unknown record kind: " + pythonRepr(record.Kind),
 				Path:    fmt.Sprintf("records[%d].kind", index),
 			})
 			continue

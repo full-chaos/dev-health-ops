@@ -2,7 +2,6 @@ package apiservice
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
@@ -65,18 +64,24 @@ func (v *valkeyComponent) Shutdown(context.Context) error {
 
 // buildDeps opens the pool and the Valkey client this process needs for the
 // route areas mounted under `dho api`, and registers a readiness check for
-// each that is configured. Neither is required to be configured: a
+// each ONLY when it is configured -- matching CHAOS-6244's original acr
+// wiring exactly (RegisterRequired lived inside the same `if …Configured()`
+// block, never outside it). Neither is required to be configured: a
 // deployment that has not yet run the CHAOS-6269 bootstrap, or a route area
-// that needs neither, still starts -- /buildinfo and /healthz work, and
-// /readyz fails closed on the specific check naming what is missing.
+// that needs neither, still starts and reports /readyz 200 -- the container
+// smoke test runs `dho api` with no database or Valkey configured at all and
+// asserts exactly that. A route area that DOES need a dependency but finds
+// it unconfigured answers CodeInternal on the route itself (Deps.Pool/.Valkey
+// is nil), not by making the whole process permanently unready.
 //
-// The Postgres check is postgres.CheckAPIAuthorization (api_authorization.go),
-// not a bare Ping: it proves the login is the declared api role AND holds
-// EXACTLY apiPosture()'s privilege manifest, no more and no less -- the
-// same posture-proof shape domainPosture/coordinatorPosture already use for
-// the River runtime roles. Every route PR that adds a table this Service
-// reads or writes adds it to apiPosture() in the same PR (CHAOS-6244's own
-// rule, restated in api_authorization.go's doc comment).
+// The Postgres check, when registered, is postgres.CheckAPIAuthorization
+// (api_authorization.go), not a bare Ping: it proves the login is the
+// declared api role AND holds EXACTLY apiPosture()'s privilege manifest, no
+// more and no less -- the same posture-proof shape domainPosture/
+// coordinatorPosture already use for the River runtime roles. Every route PR
+// that adds a table this Service reads or writes adds it to apiPosture() in
+// the same PR (CHAOS-6244's own rule, restated in api_authorization.go's doc
+// comment).
 func buildDeps(
 	ctx context.Context,
 	cfg config.Config,
@@ -93,14 +98,11 @@ func buildDeps(
 		}
 		deps.Pool = pool
 		components = append(components, &pgxpoolComponent{pool: pool})
-	}
-	if err := registry.RegisterRequired(apiDatabaseCheck, func(checkCtx context.Context) error {
-		if deps.Pool == nil {
-			return errors.New("API_DATABASE_URI is not configured")
+		if err := registry.RegisterRequired(apiDatabaseCheck, func(checkCtx context.Context) error {
+			return postgres.CheckAPIAuthorization(checkCtx, pool, cfg.APIDatabaseRole, cfg.RiverDatabaseSchema)
+		}); err != nil {
+			return Deps{}, nil, err
 		}
-		return postgres.CheckAPIAuthorization(checkCtx, deps.Pool, cfg.APIDatabaseRole, cfg.RiverDatabaseSchema)
-	}); err != nil {
-		return Deps{}, nil, err
 	}
 
 	if cfg.ValkeyURI.Configured() {
@@ -110,14 +112,11 @@ func buildDeps(
 		}
 		deps.Valkey = client
 		components = append(components, &valkeyComponent{client: client})
-	}
-	if err := registry.RegisterRequired(apiValkeyCheck, func(ctx context.Context) error {
-		if deps.Valkey == nil {
-			return errors.New("VALKEY_URI is not configured")
+		if err := registry.RegisterRequired(apiValkeyCheck, func(ctx context.Context) error {
+			return client.Do(ctx, client.B().Ping().Build()).Error()
+		}); err != nil {
+			return Deps{}, nil, err
 		}
-		return deps.Valkey.Do(ctx, deps.Valkey.B().Ping().Build()).Error()
-	}); err != nil {
-		return Deps{}, nil, err
 	}
 
 	logger.LogAttrs(ctx, slog.LevelInfo, "api dependencies configured",

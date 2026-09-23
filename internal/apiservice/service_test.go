@@ -16,6 +16,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
 func quietLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
@@ -128,11 +129,14 @@ func TestNewServerRequiresAnAddress(t *testing.T) {
 
 // TestConfigureRegistersTheListenerReadinessCheck exercises `dho api` with
 // no APIDatabaseURI/ValkeyURI configured (the pre-bootstrap shape the
-// w1-route-lanes brief documents as legal: "PRs can merge with goApi off").
-// The process still starts -- /buildinfo and /healthz work -- but overall
-// readiness stays false forever, on the api_database/api_valkey checks
-// buildDeps registers in deps.go, not just the listener check this test
-// predates.
+// w1-route-lanes brief documents as legal: "PRs can merge with goApi off",
+// and the exact shape the go-container-smoke CI job runs `dho api` under --
+// it passes no database or Valkey configuration at all and asserts /readyz
+// still reaches 200). buildDeps registers api_database/api_valkey ONLY when
+// each URI is configured (matching CHAOS-6244's original acr wiring, where
+// RegisterRequired lived inside the same `if …Configured()` block); with
+// neither configured, the listener check is the only one, and readiness
+// follows the listener alone.
 func TestConfigureRegistersTheListenerReadinessCheck(t *testing.T) {
 	registry := health.NewRegistry(time.Second)
 	components, err := configure(context.Background(), config.Config{APIAddress: "127.0.0.1:0"}, registry, quietLogger())
@@ -142,8 +146,8 @@ func TestConfigureRegistersTheListenerReadinessCheck(t *testing.T) {
 	if len(components) != 1 {
 		t.Fatalf("%d components", len(components))
 	}
-	if registry.RequiredCount() != 3 {
-		t.Fatalf("%d required checks, want listener + api_database + api_valkey", registry.RequiredCount())
+	if registry.RequiredCount() != 1 {
+		t.Fatalf("%d required checks, want only the listener (no database/valkey configured)", registry.RequiredCount())
 	}
 	if ready := registry.CheckRequired(context.Background()); ready.Ready {
 		t.Fatal("ready before the listener is bound")
@@ -153,10 +157,10 @@ func TestConfigureRegistersTheListenerReadinessCheck(t *testing.T) {
 		t.Fatalf("start: %v", err)
 	}
 	defer func() { _ = server.Shutdown(context.Background()) }()
-	// Neither dependency is configured, so overall readiness stays false
-	// even after the listener binds -- fail-closed, not a false positive.
-	if ready := registry.CheckRequired(context.Background()); ready.Ready {
-		t.Fatalf("ready with no database/valkey configured: %+v", ready)
+	// Neither dependency is configured, so nothing else can hold readiness
+	// back -- once the listener binds, the process is ready.
+	if ready := registry.CheckRequired(context.Background()); !ready.Ready {
+		t.Fatalf("not ready once the listener is bound, with no database/valkey configured: %+v", ready)
 	}
 	if server.Name() != "api-http" {
 		t.Fatalf("component name %q", server.Name())
@@ -175,6 +179,39 @@ func TestConfigureRegistersTheListenerReadinessCheck(t *testing.T) {
 	}
 	if response.Header.Get("X-Request-ID") == "" || response.Header.Get("X-Frame-Options") != "DENY" {
 		t.Fatalf("transport headers missing: %v", response.Header)
+	}
+}
+
+// TestConfigureRegistersTheDatabaseCheckOnlyWhenConfigured proves the other
+// half of the buildDeps contract: when APIDatabaseURI IS configured, the
+// api_database readiness check IS registered (RequiredCount grows to 2,
+// listener + api_database), even though the address is unreachable here --
+// postgres.New pools lazily (no dial at construction, per its own doc
+// comment), so configure() itself must not fail or block on an unreachable
+// database; only the registered check reports it.
+func TestConfigureRegistersTheDatabaseCheckOnlyWhenConfigured(t *testing.T) {
+	registry := health.NewRegistry(time.Second)
+	cfg := config.Config{
+		APIAddress:     "127.0.0.1:0",
+		APIDatabaseURI: secrets.NewValue("postgres://user:pass@127.0.0.1:1/nonexistent"),
+	}
+	components, err := configure(context.Background(), cfg, registry, quietLogger())
+	if err != nil {
+		t.Fatalf("configure must not fail on an unreachable-but-configured database: %v", err)
+	}
+	if registry.RequiredCount() != 2 {
+		t.Fatalf("%d required checks, want listener + api_database", registry.RequiredCount())
+	}
+	if len(components) != 2 {
+		t.Fatalf("%d components, want the pgx pool component + the server", len(components))
+	}
+	server := components[len(components)-1].(*httpapi.Server)
+	if err := server.Start(context.Background()); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer func() { _ = server.Shutdown(context.Background()) }()
+	if ready := registry.CheckRequired(context.Background()); ready.Ready {
+		t.Fatalf("ready against an unreachable configured database: %+v", ready)
 	}
 }
 

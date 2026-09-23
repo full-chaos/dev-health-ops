@@ -163,7 +163,7 @@
             "required": ["name"],
             "properties": {
               "name": { "type": "string" },
-              "subcommand": { "type": "string", "pattern": "^[a-z][a-z-]*$" },
+              "subcommand": { "type": "string", "enum": ["reconciler", "scheduler", "stream-runner"] },
               "runtimeProfile": { "type": "string", "enum": ["ingest", "external", "pagerduty"] },
               "autoscaling": {
                 "type": "object",

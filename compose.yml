@@ -1319,13 +1319,12 @@ services:
         condition: service_healthy
       pgbouncer-river-coordinator:
         condition: service_healthy
-      # this group's --operational-bridge-url points at metrics-api, a
-      # separate service with no other dependency edge into it -- gating on
-      # its healthcheck (not just container-started) means this worker
-      # doesn't start dispatching metrics/workgraph jobs before the bridge
-      # target can actually answer them.
-      metrics-api:
-        condition: service_healthy
+      # CHAOS-6279: the metrics-api dependency edge that used to live here
+      # is deleted along with the flag that justified it
+      # (--operational-bridge-url) -- this group no longer calls out to
+      # metrics-api at all, so nothing here needs it healthy before
+      # starting. Whether the metrics-api service itself should be retired
+      # is a separate, not-yet-decided follow-up.
     deploy: &go-worker-resources
       replicas: 1
       resources:
@@ -1349,10 +1348,6 @@ services:
       - *flag-coordinator-mode
       - *flag-domain-pooler
       - *flag-log-level
-    # Explicit override (not a merge): the shared &go-worker anchor's own
-    # depends_on includes metrics-api (needed by go-worker-heavy only). This
-    # service does not touch the metrics queue, so it does not inherit that
-    # dependency.
     depends_on:
       go-contractcheck:
         condition: service_completed_successfully

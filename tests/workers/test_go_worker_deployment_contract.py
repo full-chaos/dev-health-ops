@@ -19,6 +19,7 @@ _GO_WORKER_DOCKERFILE = _REPO_ROOT / "docker" / "go-worker.Dockerfile"
 _PRODUCTION_COMPOSE = (
     _REPO_ROOT / "deploy" / "docker-compose" / "compose.production.yml"
 )
+_ROOT_COMPOSE = _REPO_ROOT / "compose.yml"
 _SWARM_STACK = _REPO_ROOT / "deploy" / "docker-swarm" / "stack.yml"
 _KUBERNETES = _REPO_ROOT / "deploy" / "kubernetes"
 _HELM_CHART = _REPO_ROOT / "deploy" / "helm" / "dev-health"
@@ -1221,9 +1222,10 @@ def test_no_renderer_still_emits_the_deleted_operational_bridge(
     absence of a deleted test file.
     """
     # Compose + Swarm: no service's command/environment may carry any of
-    # the four surfaces (flags or env), on either the go-workers-only
-    # overlay or the full production/stack files.
+    # the four surfaces (flags or env), on the local dev stack, either
+    # go-workers-only overlay, or the full production/stack files.
     for path in (
+        _ROOT_COMPOSE,
         _PRODUCTION_COMPOSE,
         _SWARM_STACK,
         _GO_COMPOSE,
@@ -1240,6 +1242,12 @@ def test_no_renderer_still_emits_the_deleted_operational_bridge(
             environment = service.get("environment") or {}
             leaked = _BRIDGE_NAMES & set(environment)
             assert not leaked, f"{path.name}:{name} still carries {sorted(leaked)}"
+            # The metrics-api health dependency this mechanism justified must
+            # be gone too -- a service still gated on it would fail to start
+            # whenever metrics-api is unhealthy, for a call it no longer makes.
+            assert "metrics-api" not in (service.get("depends_on") or {}), (
+                f"{path.name}:{name} still depends on metrics-api"
+            )
 
     # Kubernetes: the ConfigMap/Secret must not declare any of the three
     # names, and no go-workers.yaml container may pass either flag.

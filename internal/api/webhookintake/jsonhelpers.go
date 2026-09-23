@@ -76,6 +76,23 @@ func decodeJSONBody(body []byte) (pyjson.Value, error) {
 	return value, nil
 }
 
+// webhookResponseBody builds {"status", "event_id", "message"} in that
+// EXACT order -- models.py's WebhookResponse pydantic field declaration
+// order (status, event_id, message), which FastAPI's response_model
+// serializes in declared order, not alphabetically. A plain map[string]any
+// through policy.WriteJSON sorts keys alphabetically (event_id, message,
+// status), the same class of bug health.go's own handler had -- masked
+// here until the venue oracle's normalizer itself stopped alphabetizing
+// away every response containing event_id (which is all four: both
+// accepted branches below).
+func webhookResponseBody(status, eventID, message string) *pyjson.Object {
+	body := pyjson.NewObject()
+	body.Set("status", status)
+	body.Set("event_id", eventID)
+	body.Set("message", message)
+	return body
+}
+
 // respondForEvent is the shared tail of the GitHub/GitLab/Jira handlers:
 // an UNKNOWN event type is accepted without ever persisting or publishing
 // (router.py's own early return), matching each handler's per-provider
@@ -83,11 +100,11 @@ func decodeJSONBody(body []byte) (pyjson.Value, error) {
 // through delivery.go and answers 200.
 func respondForEvent(w http.ResponseWriter, r *http.Request, d Deps, event webhookEvent, rawLabel string) {
 	if event.EventType == eventUnknown {
-		policy.WriteJSON(w, http.StatusOK, map[string]any{
-			"status":   "accepted",
-			"event_id": uuid.New().String(),
-			"message":  "Event type '" + sanitizeForLog(rawLabel) + "' not processed",
-		}, nil)
+		d.logger().Debug("Ignoring unsupported webhook event",
+			"provider", event.Provider, "raw_event_type", sanitizeForLog(rawLabel))
+		policy.WriteJSON(w, http.StatusOK, webhookResponseBody(
+			"accepted", uuid.New().String(), "Event type '"+sanitizeForLog(rawLabel)+"' not processed",
+		), nil)
 		return
 	}
 	deliveryID, err := dispatchWebhookDelivery(r.Context(), d.Pool, d.Producer, event)
@@ -97,11 +114,15 @@ func respondForEvent(w http.ResponseWriter, r *http.Request, d Deps, event webho
 		policy.WriteDetail(w, http.StatusServiceUnavailable, "Webhook delivery could not be routed; retry", nil)
 		return
 	}
-	policy.WriteJSON(w, http.StatusOK, map[string]any{
-		"status":   "accepted",
-		"event_id": deliveryID.String(),
-		"message":  "Processing " + string(event.EventType) + " event",
-	}, nil)
+	// router.py logs "Dispatched webhook event" at Info on every successful
+	// dispatch (_persist_and_route); this path had no equivalent, so a
+	// regression that stopped dispatching GitHub/GitLab/Jira events
+	// successfully would be invisible without turning on debug logging.
+	d.logger().Info("Dispatched webhook event",
+		"provider", event.Provider, "event_type", string(event.EventType), "delivery_id", deliveryID.String())
+	policy.WriteJSON(w, http.StatusOK, webhookResponseBody(
+		"accepted", deliveryID.String(), "Processing "+string(event.EventType)+" event",
+	), nil)
 }
 
 // sanitizeForLog strips CR/LF the way router.py's own

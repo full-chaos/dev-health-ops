@@ -254,17 +254,34 @@ func enqueuePagerDutyEvent(ctx context.Context, client valkeygo.Client, bindingI
 
 const receiverStreamMaxlen = 10_000
 
+// pythonMicrosecondFraction is Python's datetime.isoformat()/model_dump_json()
+// fractional-second text: OMITTED when microsecond is exactly zero, else
+// ALWAYS exactly 6 digits, zero-padded, never trailing-zero-trimmed.
+// Go's ".999999" format layout trims trailing zeros (123400us -> ".1234"),
+// which Python's own formatting never does (123400us -> ".123400") --
+// confirmed against the live interpreter:
+// `datetime(2026,1,1,tzinfo=UTC).replace(microsecond=123400).isoformat()`
+// returns "...+00:00" with ".123400", not ".1234". The earlier oracle run's
+// fixtures all carried zero microseconds, so this never surfaced there.
+func pythonMicrosecondFraction(instant time.Time) string {
+	microseconds := instant.Nanosecond() / 1000
+	if microseconds == 0 {
+		return ""
+	}
+	return fmt.Sprintf(".%06d", microseconds)
+}
+
 // pythonIsoformat renders instant like Python's datetime.isoformat() on a
 // UTC-aware datetime (pagerduty.py's _enqueue_event: occurred_at.astimezone
 // (UTC).isoformat(), received_at = datetime.now(UTC).isoformat()): the
-// offset is always the numeric "+00:00" and never a "Z" suffix, and
-// microseconds are shown (6 digits, no trailing-zero trimming beyond what
-// Python itself does) only when nonzero. VENUE-ORACLE-CAUGHT: the previous
-// time.RFC3339 formatting rendered "Z" for a UTC offset, which time.Parse
-// (internal/jobs/pagerduty/stream.go's own consumer) accepts either way, but
-// which failed byte-for-byte against the real Python stream entry.
+// offset is always the numeric "+00:00" and never a "Z" suffix.
+// VENUE-ORACLE-CAUGHT: the previous time.RFC3339 formatting rendered "Z" for
+// a UTC offset, which time.Parse (internal/jobs/pagerduty/stream.go's own
+// consumer) accepts either way, but which failed byte-for-byte against the
+// real Python stream entry.
 func pythonIsoformat(instant time.Time) string {
-	return instant.UTC().Format("2006-01-02T15:04:05.999999-07:00")
+	utc := instant.UTC()
+	return utc.Format("2006-01-02T15:04:05") + pythonMicrosecondFraction(utc) + "+00:00"
 }
 
 // pagerDutyV3Webhook is pagerduty_models.py's PagerDutyV3Webhook: a frozen,
@@ -275,13 +292,20 @@ func pythonIsoformat(instant time.Time) string {
 // declared dict[str, JsonValue], not reshaped).
 //
 // occurred_at's re-serialized text inside "payload" (pydantic's own
-// datetime-to-JSON formatting) is a "Z"-suffixed UTC instant -- confirmed
-// byte-for-byte against the real Python stream entry by the venue oracle
-// (TestWebhookIntakeVenueOraclePagerDuty) for a UTC-offset input, which is
-// what every real PagerDuty v3 webhook sends. NAMED LIMIT: a non-UTC offset
-// input is normalized to UTC here before re-serializing (time.Parse then
-// .UTC()); whether pydantic instead preserves the original offset on such
-// an input is unverified -- the oracle's fixture never exercises one.
+// datetime-to-JSON formatting) is a "Z"-suffixed UTC instant, with the
+// fractional-second text omitted at zero microseconds and otherwise a fixed
+// 6 digits (pythonMicrosecondFraction) -- confirmed byte-for-byte against
+// the real Python stream entry by the venue oracle
+// (TestWebhookIntakeVenueOraclePagerDuty) for a whole-second UTC-offset
+// input, which is what every real PagerDuty v3 webhook sends; the
+// fractional-second fix itself is proven by unit test
+// (TestPythonMicrosecondFractionMatchesPythonIsoformat) and adversarial
+// review's own executed repro against the live interpreter, not yet by an
+// extended oracle fixture carrying nonzero microseconds. NAMED LIMIT: a
+// non-UTC offset input is normalized to UTC here before re-serializing
+// (time.Parse then .UTC()); whether pydantic instead preserves the original
+// offset on such an input is unverified -- the oracle's fixture never
+// exercises one.
 type pagerDutyV3Webhook struct {
 	Event pagerDutyEvent
 	data  pyjson.Value
@@ -297,7 +321,8 @@ func (w pagerDutyV3Webhook) marshalCanonical() ([]byte, error) {
 	event := pyjson.NewObject()
 	event.Set("id", w.Event.ID)
 	event.Set("event_type", w.Event.EventType)
-	event.Set("occurred_at", w.Event.OccurredAt.UTC().Format("2006-01-02T15:04:05.999999Z"))
+	occurredAtUTC := w.Event.OccurredAt.UTC()
+	event.Set("occurred_at", occurredAtUTC.Format("2006-01-02T15:04:05")+pythonMicrosecondFraction(occurredAtUTC)+"Z")
 	if w.data != nil {
 		event.Set("data", w.data)
 	} else {
@@ -306,6 +331,34 @@ func (w pagerDutyV3Webhook) marshalCanonical() ([]byte, error) {
 	envelope := pyjson.NewObject()
 	envelope.Set("event", event)
 	return pyjson.Marshal(envelope)
+}
+
+// pagerDutyEventTypes mirrors pagerduty_models.py's PagerDutyEventType
+// StrEnum plus the "pagey.ping" Literal pagerDutyEvent.event_type accepts
+// alongside it (event_type: PagerDutyEventType | Literal["pagey.ping"]).
+// VENUE-ORACLE-CAUGHT: parsePagerDutyWebhook previously accepted ANY
+// non-empty event_type string -- Python's pydantic model rejects an unknown
+// one with a 400, so Go was silently accepting and enqueuing a malformed
+// event the Python original refuses.
+var pagerDutyEventTypes = map[string]bool{
+	"pagey.ping":                       true,
+	"incident.triggered":               true,
+	"incident.acknowledged":            true,
+	"incident.unacknowledged":          true,
+	"incident.escalated":               true,
+	"incident.reassigned":              true,
+	"incident.delegated":               true,
+	"incident.priority_updated":        true,
+	"incident.resolved":                true,
+	"incident.reopened":                true,
+	"incident.annotated":               true,
+	"incident.responder.added":         true,
+	"incident.responder.replied":       true,
+	"incident.service_updated":         true,
+	"incident.status_update_published": true,
+	"service.created":                  true,
+	"service.deleted":                  true,
+	"service.updated":                  true,
 }
 
 func parsePagerDutyWebhook(body []byte) (pagerDutyV3Webhook, error) {
@@ -326,12 +379,19 @@ func parsePagerDutyWebhook(body []byte) (pagerDutyV3Webhook, error) {
 		return pagerDutyV3Webhook{}, errInvalidEvent
 	}
 	eventType := stringField(eventObject, "event_type")
-	if eventType == "" {
+	if !pagerDutyEventTypes[eventType] {
 		return pagerDutyV3Webhook{}, errInvalidEvent
 	}
 	occurredAtRaw := stringField(eventObject, "occurred_at")
 	occurredAt, err := time.Parse(time.RFC3339, occurredAtRaw)
 	if err != nil {
+		return pagerDutyV3Webhook{}, errInvalidEvent
+	}
+	// data: dict[str, JsonValue] is REQUIRED in Python (no default) and must
+	// be a JSON object -- objectField returns nil for both "absent" and
+	// "present but not an object", exactly pydantic's rejection surface.
+	dataObject := objectField(eventObject, "data")
+	if dataObject == nil {
 		return pagerDutyV3Webhook{}, errInvalidEvent
 	}
 	data, _ := eventObject.Get("data")

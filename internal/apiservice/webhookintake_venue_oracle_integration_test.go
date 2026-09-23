@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/webhookintake"
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
@@ -54,24 +55,40 @@ func githubVenueSign(secret string, body []byte) string {
 // attempt -- see webhookintake/health.go) -- so the venue diff compares the
 // fields that must actually agree (status, message, HTTP status/headers)
 // without failing on the two values neither plane can or should make equal.
+//
+// NAMED LIMIT, now fixed: this used to decode into a stdlib
+// map[string]any and re-encode with encoding/json, which sorts keys
+// alphabetically on the way back out -- masking a REAL key-order regression
+// in any response this function normalizes (every GitHub/GitLab/Jira accept
+// response carries event_id, so none of their orderings were actually being
+// checked, and re-normalizing health after fixing its own order bug would
+// have hidden a future regression of that exact fix). Rewritten on
+// pyjson.DecodeString/pyjson.Marshal, which is order-preserving (Object.Set
+// on an existing key replaces the value in place, never moving its
+// position), so only the two blanked VALUES change; every other byte,
+// including key order, still round-trips untouched.
 func blankVenueEventID(_ venueoracle.Request, body string) string {
-	var decoded map[string]any
-	if err := json.Unmarshal([]byte(body), &decoded); err != nil {
+	decoded, err := pyjson.DecodeString(body)
+	if err != nil {
+		return body
+	}
+	object, ok := decoded.(*pyjson.Object)
+	if !ok {
 		return body
 	}
 	changed := false
-	if _, ok := decoded["event_id"]; ok {
-		decoded["event_id"] = "<event_id>"
+	if _, ok := object.Get("event_id"); ok {
+		object.Set("event_id", "<event_id>")
 		changed = true
 	}
-	if _, ok := decoded["celery_available"]; ok {
-		decoded["celery_available"] = "<celery_available>"
+	if _, ok := object.Get("celery_available"); ok {
+		object.Set("celery_available", "<celery_available>")
 		changed = true
 	}
 	if !changed {
 		return body
 	}
-	rewritten, err := json.Marshal(decoded)
+	rewritten, err := pyjson.Marshal(object)
 	if err != nil {
 		return body
 	}
@@ -444,6 +461,11 @@ func TestWebhookIntakeVenueOraclePagerDuty(t *testing.T) {
 	pingBody := []byte(`{"event":{"id":"PD-PING-1","event_type":"pagey.ping","occurred_at":"2026-01-02T03:04:05Z","data":{}}}`)
 	replayBody := []byte(`{"event":{"id":"PD-REPLAY-1","event_type":"incident.triggered","occurred_at":"2026-01-02T03:04:05Z","data":{}}}`)
 	gatedBody := []byte(`{"event":{"id":"PD-GATED-1","event_type":"incident.triggered","occurred_at":"2026-01-02T03:04:05Z","data":{}}}`)
+	// A nonzero-microsecond occurred_at: Go's ".999999" layout trims
+	// trailing zeros, but Python's isoformat()/model_dump_json() never does
+	// (pythonMicrosecondFraction). This is the byte-for-byte proof against
+	// the REAL Python stream entry for that fixed-width fraction.
+	fractionalBody := []byte(`{"event":{"id":"PD-FRACTIONAL-1","event_type":"incident.triggered","occurred_at":"2026-01-02T03:04:05.123400Z","data":{}}}`)
 
 	requests := []venueoracle.Request{
 		{
@@ -495,6 +517,16 @@ func TestWebhookIntakeVenueOraclePagerDuty(t *testing.T) {
 				"Content-Type":           "application/json",
 			},
 			Body: venueoracle.B64(string(activeBody)),
+		},
+		{
+			Name:   "pagerduty fractional timestamp",
+			Method: "POST", Path: "/api/v1/webhooks/pagerduty/" + seed.bindingActive,
+			Headers: map[string]string{
+				"X-Webhook-Subscription": "sub-active",
+				"X-PagerDuty-Signature":  pagerdutyVenueSign(secretActive, fractionalBody),
+				"Content-Type":           "application/json",
+			},
+			Body: venueoracle.B64(string(fractionalBody)),
 		},
 		{
 			Name:   "pagerduty gated feature",

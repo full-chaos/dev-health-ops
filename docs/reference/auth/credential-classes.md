@@ -64,7 +64,7 @@ Design docs (read the guardrails at minimum):
 | `impersonation_session` | active | human | |
 | `internal_svc_acr_token` | active | service_account | |
 | `internal_svc_worker_token` | **unconsumed** | service_account | |
-| `worker_operational_bridge_token` | active | infrastructure | |
+| `worker_operational_bridge_token` | **unconsumed** | infrastructure | |
 | `acr_client_credential` | active | client_credential | |
 | `acr_device_flow_code` | active | human | |
 | `acr_web_assertion` | active | workload | |

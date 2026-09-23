@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/licensing"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"github.com/google/uuid"
 )
@@ -612,8 +613,16 @@ func boolOrFalse(raw any) bool {
 }
 
 // scopeDatetimeValue ports `_parse_dt(scope.get(key))`: an ISO8601 string
-// stored in the scope JSONB, re-serialized the same way every other
-// datetime field in this response is (formatOptionalRFC3339). A missing,
+// stored in the scope JSONB, re-serialized through pytime -- NOT
+// formatOptionalRFC3339, which forces UTC and lets Go's RFC3339Nano trim
+// trailing zero microseconds. The stored string can carry a non-UTC offset
+// (the producer writes `scope.window_start.isoformat()`, which preserves
+// whatever aware offset it had) and Pydantic's own datetime serializer
+// never trims a non-zero microsecond field to fewer than six digits --
+// round 2 review reproduced both divergences live (a +05:30 offset forced
+// to Z, and .123400 trimmed to .1234). pytime.FromISOFormat/Pydantic is the
+// same datetime.fromisoformat()/pydantic-JSON pair telemetry.go and
+// customerpush/reads.go already use for this exact contract. A missing,
 // non-string, or unparseable value is null, matching _parse_dt_required's
 // own contract of only ever being called on a value the writer produced.
 func scopeDatetimeValue(raw any) any {
@@ -621,11 +630,11 @@ func scopeDatetimeValue(raw any) any {
 	if !ok || s == "" {
 		return nil
 	}
-	t, err := time.Parse(time.RFC3339, s)
-	if err != nil {
+	parsed, ok := pytime.FromISOFormat(s)
+	if !ok {
 		return nil
 	}
-	return formatOptionalRFC3339(&t)
+	return pytime.Pydantic(parsed)
 }
 
 // recomputeJobPyJSON builds status.py's RecomputeJobResponse field order:

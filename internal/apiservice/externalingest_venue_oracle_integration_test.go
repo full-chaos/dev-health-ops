@@ -109,10 +109,22 @@ VALUES ($1::uuid, $2, 'venue-seeded-failed-batch', 'venue-seeded-failed-hash', '
 		// (org_id, source_system, source_instance, dispatched_at), not by
 		// ingestion_id, so the job row below shares seed.orgID/github/
 		// acme/venue-repo/recomputeDispatchedAt with this batch row.
+		//
+		// windowStartedAt deliberately carries a NON-UTC offset (+05:30)
+		// and a non-zero, trailing-zero microsecond fraction (.123400);
+		// windowEndedAt carries the same offset with no fraction at all
+		// (round 2 review): the producer writes
+		// `scope.window_start.isoformat()`, which preserves whatever aware
+		// offset the value had, and Pydantic's datetime serializer never
+		// trims a non-zero microsecond field to fewer than six digits or
+		// omits a non-UTC offset -- a values-all-Z-and-round-seconds seed
+		// (the round 1 shape) can't distinguish pytime's exact
+		// fromisoformat/Pydantic pairing from a naive UTC-forcing,
+		// trailing-zero-trimming formatter; this one can.
 		{`INSERT INTO external_ingest_batches (ingestion_id, org_id, idempotency_key, payload_hash, source_system, source_instance, schema_version, items_received, recompute_status, recompute_scope, recompute_dispatched_at, created_at, updated_at)
 VALUES ($1::uuid, $2, 'venue-seeded-recompute-batch', 'venue-seeded-recompute-hash', 'github', 'acme/venue-repo', 'external-ingest.v1', 1, 'dispatched', $3::jsonb, $4::timestamptz, now(), now())`,
 			[]any{seed.seededRecomputeBatchID, seed.orgID,
-				`{"repoIds":["repo-1","repo-2"],"teamIds":["team-1"],"windowStartedAt":"2026-09-01T00:00:00+00:00","windowEndedAt":"2026-09-08T00:00:00+00:00","cappedDays":true,"cappedRepos":false}`,
+				`{"repoIds":["repo-1","repo-2"],"teamIds":["team-1"],"windowStartedAt":"2026-09-01T00:00:00.123400+05:30","windowEndedAt":"2026-09-08T00:00:00+05:30","cappedDays":true,"cappedRepos":false}`,
 				seed.recomputeDispatchedAt},
 		},
 		{`INSERT INTO external_ingest_recompute_jobs (id, org_id, source_system, source_instance, celery_task_name, celery_task_id, queue, repo_id, status, dispatched_at)

@@ -108,18 +108,20 @@ api:
   extraEnvFrom: []
 
 # =============================================================================
-# Metrics API (CHAOS-4351)
+# Metrics API (CHAOS-4351, historical -- its routing rationale is retired, CHAOS-6279)
 # =============================================================================
 # A second copy of `api` -- same image, same args, same env (configMap/
-# secret) -- serving ONLY as the Go daily-runtime's metrics compatibility
-# bridge target (the `heavy` goWorkers group below points its
-# --operational-bridge-url at this Service's DNS name instead of `api`'s).
-# No route split, no code change: `api` still exposes the same bridge
-# routes too. The point is a separate pod/cgroup so a bridge-side pids/
-# memory incident (CHAOS-4264, CHAOS-4317, CHAOS-4350) can no longer take
-# unrelated `api` request handling down with it. `enabled: false` by
-# default, matching `billingEdge`'s off-by-default posture, until an
-# operator opts in for a cluster that runs Go workers.
+# secret) -- created to serve ONLY as the Go daily-runtime's metrics
+# compatibility bridge target. CHAOS-6279 deletes the --operational-
+# bridge-url flag that used to point the `heavy` goWorkers group at this
+# Service's DNS name -- that flag no longer exists on any Go binary
+# (CHAOS-5320 already deleted the Python HTTP bridge it pointed at, and
+# CHAOS-6240 deleted the routes/subprocess mechanism the original incident
+# history above (CHAOS-4264/CHAOS-4317/CHAOS-4350) was bounding). No
+# worker group's command line points at this Service any more, on any
+# renderer -- enabling it today stands up a Deployment nothing calls.
+# `enabled: false` by default; whether to retire this Deployment entirely
+# is a separate, not-yet-decided follow-up, not this comment's call.
 metricsApi:
   enabled: false
   replicas: 1

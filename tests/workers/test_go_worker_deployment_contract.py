@@ -1204,7 +1204,18 @@ _BRIDGE_NAMES = frozenset(
         "WORKER_OPERATIONAL_BRIDGE_TOKEN",
     }
 )
-_BRIDGE_FLAGS = ("--operational-bridge-url=", "--operational-bridge-allow-insecure=")
+_BRIDGE_FLAG_NAMES = ("--operational-bridge-url", "--operational-bridge-allow-insecure")
+_BRIDGE_FLAGS = tuple(f"{name}=" for name in _BRIDGE_FLAG_NAMES)
+
+
+def _has_bridge_flag(args: list[str]) -> bool:
+    """True if `args` renders either deleted flag, in either spelling Go's
+    flag package accepts: `--flag=value` (every renderer's own convention)
+    or `--flag value` (a separate arg) -- a guard that only matched the
+    `=` form would miss a space-separated reintroduction (codex round 2)."""
+    return any(arg.startswith(flag) for arg in args for flag in _BRIDGE_FLAGS) or any(
+        arg in _BRIDGE_FLAG_NAMES for arg in args
+    )
 
 
 @pytest.mark.skipif(shutil.which("helm") is None, reason="helm is not installed")
@@ -1236,9 +1247,9 @@ def test_no_renderer_still_emits_the_deleted_operational_bridge(
         services = (_load_yaml(path).get("services") or {}) if path.exists() else {}
         for name, service in services.items():
             command = [str(a) for a in (service.get("command") or [])]
-            assert not any(
-                arg.startswith(flag) for arg in command for flag in _BRIDGE_FLAGS
-            ), f"{path.name}:{name} still renders an operational-bridge flag"
+            assert not _has_bridge_flag(command), (
+                f"{path.name}:{name} still renders an operational-bridge flag"
+            )
             environment = service.get("environment") or {}
             leaked = _BRIDGE_NAMES & set(environment)
             assert not leaked, f"{path.name}:{name} still carries {sorted(leaked)}"
@@ -1266,9 +1277,7 @@ def test_no_renderer_still_emits_the_deleted_operational_bridge(
             continue
         container = document["spec"]["template"]["spec"]["containers"][0]
         args = [str(a) for a in (container.get("args") or [])]
-        assert not any(
-            arg.startswith(flag) for arg in args for flag in _BRIDGE_FLAGS
-        ), (
+        assert not _has_bridge_flag(args), (
             f"go-workers.yaml:{document['metadata']['name']} still renders an operational-bridge flag"
         )
 
@@ -1298,9 +1307,7 @@ def test_no_renderer_still_emits_the_deleted_operational_bridge(
             containers = document["spec"]["template"]["spec"].get("containers") or []
             for container in containers:
                 args = [str(a) for a in (container.get("args") or [])]
-                assert not any(
-                    arg.startswith(flag) for arg in args for flag in _BRIDGE_FLAGS
-                ), (
+                assert not _has_bridge_flag(args), (
                     f"{document['metadata']['name']} (extra_set={extra_set}) still "
                     "renders an operational-bridge flag"
                 )
@@ -1834,10 +1841,10 @@ def test_compose_go_worker_heavy_alone_owns_the_metrics_queue() -> None:
     )
 
     for name, svc in go_worker_services.items():
-        assert not any(
-            isinstance(arg, str) and arg.startswith("--operational-bridge-url=")
-            for arg in svc.get("command") or []
-        ), f"{name}: --operational-bridge-url is deleted (CHAOS-6279), found in command"
+        command = [str(a) for a in (svc.get("command") or [])]
+        assert not _has_bridge_flag(command), (
+            f"{name}: an operational-bridge flag is deleted (CHAOS-6279), found in command"
+        )
         assert "metrics-api" not in (svc.get("depends_on") or {}), (
             f"{name}: the metrics-api depends_on edge is deleted (CHAOS-6279)"
         )

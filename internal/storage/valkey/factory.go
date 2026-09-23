@@ -6,6 +6,8 @@ import (
 	"time"
 
 	valkeygo "github.com/valkey-io/valkey-go"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
 var (
@@ -83,11 +85,11 @@ func Open(ctx context.Context, config Config) (valkeygo.Client, error) {
 
 	client, err := valkeygo.NewClient(options)
 	if err != nil {
-		return nil, ErrUnavailable
+		return nil, secrets.WithRedactedCause(ErrUnavailable, config.URI, err)
 	}
 	if err := client.Do(ctx, client.B().Ping().Build()).Error(); err != nil {
 		client.Close()
-		return nil, ErrUnavailable
+		return nil, secrets.WithRedactedCause(ErrUnavailable, config.URI, err)
 	}
 	return client, nil
 }

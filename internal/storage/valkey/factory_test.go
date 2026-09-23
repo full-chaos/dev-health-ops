@@ -50,6 +50,10 @@ func TestOpenReturnsSanitizedUnavailableError(t *testing.T) {
 	if !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("Open() error = %v, want ErrUnavailable", err)
 	}
+	// The driver's cause is kept, redacted, after the stable category.
+	if !strings.HasPrefix(err.Error(), ErrUnavailable.Error()+": ") || len(err.Error()) <= len(ErrUnavailable.Error())+2 {
+		t.Fatalf("Open() error = %q, want the category followed by the redacted driver cause", err)
+	}
 	if strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), config.URI) {
 		t.Fatalf("Open() exposed Valkey connection material: %v", err)
 	}

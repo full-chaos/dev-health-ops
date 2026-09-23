@@ -92,3 +92,26 @@ func (b Boundary) Redact(err error) error {
 	}
 	return errors.New(redacted)
 }
+
+// redactedCauseError is a stable sentinel plus a driver cause whose text has
+// had every credential component of a DSN removed. It unwraps to the sentinel
+// only: the raw cause is not kept, so no later %+v or errors.Unwrap can reach
+// the unredacted text.
+type redactedCauseError struct {
+	sentinel error
+	cause    string
+}
+
+func (e redactedCauseError) Error() string { return e.sentinel.Error() + ": " + e.cause }
+func (e redactedCauseError) Unwrap() error { return e.sentinel }
+
+// WithRedactedCause returns an error that errors.Is sentinel and whose text
+// adds cause's text with every credential component of dsn redacted, so an
+// operator can tell an authentication failure from a refused dial without the
+// log ever holding the password or the DSN. A nil cause returns sentinel.
+func WithRedactedCause(sentinel error, dsn string, cause error) error {
+	if cause == nil {
+		return sentinel
+	}
+	return redactedCauseError{sentinel: sentinel, cause: RedactValues(cause.Error(), CredentialComponents(dsn)...)}
+}

@@ -7,6 +7,8 @@ import (
 
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
 var (
@@ -80,11 +82,11 @@ func Open(ctx context.Context, config Config) (driver.Conn, error) {
 
 	connection, err := clickhouse.Open(options)
 	if err != nil {
-		return nil, ErrUnavailable
+		return nil, secrets.WithRedactedCause(ErrUnavailable, config.DSN, err)
 	}
 	if err := connection.Ping(ctx); err != nil {
 		_ = connection.Close()
-		return nil, ErrUnavailable
+		return nil, secrets.WithRedactedCause(ErrUnavailable, config.DSN, err)
 	}
 	return connection, nil
 }

@@ -28,12 +28,17 @@ package apiservice
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/full-chaos/dev-health-ops/internal/api/externalingest"
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/acr"
+	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
@@ -141,7 +146,17 @@ func configure(
 	if err != nil {
 		return nil, err
 	}
-	server, err := NewServer(cfg, logger, Routes(deps, logger))
+	var scope []func(http.Handler) http.Handler
+	if deps.Pool != nil {
+		protected, err := newProtection(cfg, deps.Pool, logger)
+		if err != nil {
+			closeComponents(depComponents)
+			return nil, err
+		}
+		deps.Auth, deps.Guard = protected.auth, protected.guard
+		scope = []func(http.Handler) http.Handler{protected.scope.OrgScope, protected.scope.Impersonation}
+	}
+	server, err := NewServer(cfg, logger, Routes(deps, logger), scope...)
 	if err != nil {
 		return nil, err
 	}
@@ -156,12 +171,54 @@ func configure(
 	return append(depComponents, server), nil
 }
 
+// protection is the protected-route runtime built over the api pool.
+type protection struct {
+	auth  *policy.Authenticator
+	scope *policy.Scope
+	guard *policy.Guard
+}
+
+// newProtection builds the principal service. The api verifies the access
+// token the Python api mints, so with a database it needs the same key:
+// JWT_SECRET_KEY is required, and a missing or short key stops startup.
+func newProtection(cfg config.Config, pool *pgxpool.Pool, logger *slog.Logger) (protection, error) {
+	if !cfg.APIJWTSecret.Configured() {
+		return protection{}, errors.New("JWT_SECRET_KEY is required by dho api when API_DATABASE_URI is set")
+	}
+	verifier, err := edgetoken.New(cfg.APIJWTSecret.Reveal(), cfg.APIJWTIssuer, cfg.APIJWTAudience)
+	if err != nil {
+		return protection{}, fmt.Errorf("access-token verifier: %w", err)
+	}
+	auth, err := policy.NewAuthenticator(verifier, policy.PGStore{Pool: pool}, logger)
+	if err != nil {
+		return protection{}, err
+	}
+	return protection{auth: auth, scope: policy.NewScope(auth, logger), guard: policy.NewGuard(auth, logger)}, nil
+}
+
+// closeComponents releases what buildDeps opened when startup fails later.
+func closeComponents(components []lifecycle.Component) {
+	for index := len(components) - 1; index >= 0; index-- {
+		_ = components[index].Shutdown(context.Background())
+	}
+}
+
 // NewServer builds the api listener with the full transport stack. The stack
-// order, request side first, is: request id, panic recovery, security
-// headers, CORS, then the mux (and, per route, recovery, deadline, body
-// bound). It matches the Python api's request order for the middleware that
-// exists here (src/dev_health_ops/api/_middleware.py registers in reverse).
-func NewServer(cfg config.Config, logger *slog.Logger, routes []httpapi.Route) (*httpapi.Server, error) {
+// order, request side first, is: request id, panic recovery, then scope (the
+// org scope and impersonation middlewares, when given), security headers,
+// CORS, then the mux (and, per route, recovery, deadline, body bound). It
+// matches the Python api's request order (src/dev_health_ops/api/
+// _middleware.py registers in reverse): OrgIdMiddleware and
+// ImpersonationMiddleware run outside SecurityHeadersMiddleware and
+// CORSMiddleware, so their own 403 carries neither.
+func NewServer(
+	cfg config.Config,
+	logger *slog.Logger,
+	routes []httpapi.Route,
+	scope ...func(http.Handler) http.Handler,
+) (*httpapi.Server, error) {
+	middleware := append([]func(http.Handler) http.Handler{CloseHTTP10}, scope...)
+	middleware = append(middleware, SecurityHeaders, NewCORS(cfg.CORSAllowedOrigins).Wrap)
 	return httpapi.NewServer(httpapi.ServerOptions{
 		Name:           "api-http",
 		Address:        cfg.APIAddress,
@@ -178,10 +235,6 @@ func NewServer(cfg config.Config, logger *slog.Logger, routes []httpapi.Route) (
 		MaxHeaderBytes:      maxHeaderBytes,
 		MaxHeaderValueCount: maxHeaderValueCount,
 		IdleTimeout:         idleTimeout,
-		Middleware: []func(http.Handler) http.Handler{
-			CloseHTTP10,
-			SecurityHeaders,
-			NewCORS(cfg.CORSAllowedOrigins).Wrap,
-		},
+		Middleware:          middleware,
 	})
 }

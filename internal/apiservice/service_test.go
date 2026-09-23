@@ -12,6 +12,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
@@ -312,5 +317,166 @@ func TestCORSJoinsAnExistingVary(t *testing.T) {
 		if got := recorder.Result().Header.Values("Vary"); len(got) != 1 || got[0] != "Accept-Encoding, Origin" {
 			t.Fatalf("origins %v: Vary %q, want [Accept-Encoding, Origin]", origins, got)
 		}
+	}
+}
+
+// apiTestConfig is a configuration with the api database and signing key
+// set. The DSN points at a closed local port and the key is a fixture built
+// at runtime.
+func apiTestConfig() config.Config {
+	return config.Config{
+		APIAddress:          "127.0.0.1:0",
+		APIDatabaseURI:      secrets.NewValue("postgresql://devhealth_api@127.0.0.1:1/devhealth?connect_timeout=1"),
+		APIDatabaseRole:     "devhealth_api",
+		RiverDatabaseSchema: "river",
+		APIJWTSecret:        secrets.NewValue(strings.Repeat("fixture-key-", 3)),
+		APIJWTIssuer:        "dev-health-ops",
+		APIJWTAudience:      "dev-health-api",
+	}
+}
+
+// TestConfigureRefusesADatabaseWithoutAUsableSigningKey: with a database the
+// api authenticates callers, so JWT_SECRET_KEY must be present and at least
+// 32 characters; the error names the key and never carries configuration.
+func TestConfigureRefusesADatabaseWithoutAUsableSigningKey(t *testing.T) {
+	cases := map[string]struct {
+		mutate func(*config.Config)
+		names  string
+	}{
+		"no signing key": {func(cfg *config.Config) { cfg.APIJWTSecret = secrets.Value{} }, "JWT_SECRET_KEY"},
+		"short key":      {func(cfg *config.Config) { cfg.APIJWTSecret = secrets.NewValue("short") }, "32 characters"},
+	}
+	for name, test := range cases {
+		t.Run(name, func(t *testing.T) {
+			cfg := apiTestConfig()
+			test.mutate(&cfg)
+			components, err := configure(context.Background(), cfg, health.NewRegistry(time.Second), quietLogger())
+			if err == nil {
+				t.Fatalf("configure accepted it: %d components", len(components))
+			}
+			if !strings.Contains(err.Error(), test.names) {
+				t.Fatalf("error %q does not name %q", err, test.names)
+			}
+			if strings.Contains(err.Error(), "fixture-key") || strings.Contains(err.Error(), "127.0.0.1:1") {
+				t.Fatalf("error leaks configuration: %v", err)
+			}
+		})
+	}
+	// Without a database no caller is authenticated, so no key is needed.
+	cfg := apiTestConfig()
+	cfg.APIDatabaseURI, cfg.APIJWTSecret = secrets.Value{}, secrets.Value{}
+	if _, err := configure(context.Background(), cfg, health.NewRegistry(time.Second), quietLogger()); err != nil {
+		t.Fatalf("transport-only configure: %v", err)
+	}
+}
+
+// TestConfigureInstallsTheScopeMiddlewaresWithADatabase proves the wiring:
+// a request carrying a valid token for a caller the (unreachable) database
+// cannot confirm fails in the org scope (500), where a server without the
+// scope would answer 404.
+func TestConfigureInstallsTheScopeMiddlewaresWithADatabase(t *testing.T) {
+	cfg := apiTestConfig()
+	components, err := configure(context.Background(), cfg, health.NewRegistry(time.Second), quietLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		for index := len(components) - 1; index >= 0; index-- {
+			_ = components[index].Shutdown(context.Background())
+		}
+	}()
+	var server *httpapi.Server
+	for _, component := range components {
+		if candidate, ok := component.(*httpapi.Server); ok {
+			server = candidate
+		}
+	}
+	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"sub": uuid.NewString(), "type": "access", "exp": time.Now().Add(time.Hour).Unix(),
+	}).SignedString([]byte(cfg.APIJWTSecret.Reveal()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/anything", nil)
+	request.Header.Set("Authorization", "Bearer "+token)
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("%d %s, want the org scope's 500 for an unreachable database", recorder.Code, recorder.Body.String())
+	}
+}
+
+// scopeStore is a policy.Store with one superuser who is impersonating, and
+// no memberships.
+type scopeStore struct{ admin, target, targetOrg uuid.UUID }
+
+func (s scopeStore) UserState(_ context.Context, id uuid.UUID) (policy.UserState, bool, error) {
+	return policy.UserState{IsActive: true, IsSuperuser: id == s.admin}, true, nil
+}
+func (scopeStore) IsMember(context.Context, uuid.UUID, uuid.UUID) (bool, error) { return false, nil }
+func (s scopeStore) ActiveImpersonation(_ context.Context, admin uuid.UUID) (*policy.Impersonation, error) {
+	if admin != s.admin {
+		return nil, nil
+	}
+	return &policy.Impersonation{AdminUserID: s.admin, TargetUserID: s.target, TargetOrgID: s.targetOrg}, nil
+}
+
+// TestServerRunsTheScopeMiddlewaresOutsideSecurityHeadersAndCORS pins the
+// Python request order on the real server: OrgIdMiddleware's 403 carries no
+// security or CORS header (they are inner), while an impersonated request's
+// response carries the impersonation headers and the security headers.
+func TestServerRunsTheScopeMiddlewaresOutsideSecurityHeadersAndCORS(t *testing.T) {
+	key := strings.Repeat("fixture-key-", 3)
+	verifier, err := edgetoken.New(key, "dev-health-ops", "dev-health-api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := scopeStore{admin: uuid.New(), target: uuid.New(), targetOrg: uuid.New()}
+	auth, err := policy.NewAuthenticator(verifier, store, quietLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := policy.NewScope(auth, quietLogger())
+	cfg := apiTestConfig()
+	cfg.CORSAllowedOrigins = []string{"https://app.example"}
+	server, err := NewServer(cfg, quietLogger(), nil, scope.OrgScope, scope.Impersonation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sign := func(sub uuid.UUID, superuser bool) string {
+		token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+			"sub": sub.String(), "type": "access", "org_id": uuid.NewString(), "is_superuser": superuser,
+			"exp": time.Now().Add(time.Hour).Unix(),
+		}).SignedString([]byte(key))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return token
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/anything", nil)
+	request.Header.Set("Authorization", "Bearer "+sign(uuid.New(), false))
+	request.Header.Set("X-Org-Id", uuid.NewString())
+	request.Header.Set("Origin", "https://app.example")
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusForbidden || recorder.Body.String() != `{"detail":"X-Org-Id not permitted for this user"}` {
+		t.Fatalf("%d %s", recorder.Code, recorder.Body.String())
+	}
+	if recorder.Header().Get("X-Frame-Options") != "" || recorder.Header().Get("Access-Control-Allow-Origin") != "" {
+		t.Fatalf("the org scope 403 carries inner headers: %v", recorder.Header())
+	}
+	if recorder.Header().Get("X-Request-ID") == "" {
+		t.Fatal("the org scope 403 lacks the correlation id (outer)")
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/api/v1/anything", nil)
+	request.Header.Set("Authorization", "Bearer "+sign(store.admin, true))
+	recorder = httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusNotFound || recorder.Header().Get("X-Impersonating") != "true" ||
+		recorder.Header().Get("X-Impersonated-User-Id") != store.target.String() ||
+		recorder.Header().Get("X-Frame-Options") != "DENY" {
+		t.Fatalf("%d %v", recorder.Code, recorder.Header())
 	}
 }

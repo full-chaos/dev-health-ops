@@ -35,15 +35,10 @@ import (
 // privilege on the River schema too, exactly as it does for every other
 // role's own posture.
 //
-// NOTE (CHAOS-6244): unlike the three River roles, no automated step yet
-// applies this manifest as GRANT statements -- go-river-migrate's
-// runtimeGrantStatements has no api-role equivalent. Until one exists (or an
-// operator GRANTs these four tables by hand, the same manual step
-// provision_river_roles.sql's api_role block already documents for role
-// creation itself), CheckAPIAuthorization correctly reports the role's
-// posture as refused wherever APIDatabaseURI is configured -- the safe
-// direction: the api Service simply does not become ready, rather than
-// silently running with unproven privileges.
+// The River migration applies this manifest as GRANT statements to the api
+// role once the role exists (riverstore.MigrationOptions.APIRole, derived
+// from APIPosture in cmd/dev-health-worker-migrate), so the grant side and
+// this readiness side are one list.
 func apiPosture() RolePosture {
 	return RolePosture{
 		RequiredTables: []TablePrivilege{
@@ -83,6 +78,12 @@ func apiPosture() RolePosture {
 			// findActiveManagedOwner): read-only.
 			{"integration_sources", false, false, false},
 			{"integrations", false, false, false},
+			// The protected-route principal (internal/api/policy): the users
+			// row behind every access token, org membership behind
+			// X-Org-Id, and the active impersonation session of a superuser.
+			{"users", false, false, false},
+			{"memberships", false, false, false},
+			{"impersonation_sessions", false, false, false},
 		},
 	}
 }

@@ -65,7 +65,9 @@ func TestHelpDeclaresTheDocumentedEnvironmentHandful(t *testing.T) {
 	// password field, same shape as the coordinator pair above. Neither is
 	// required for a standard deployment today (no route yet needs the api
 	// role for anything), but both hold a real secret value.
-	if len(required) > 16 {
+	// 16 -> 17: JWT_SECRET_KEY added -- the access-token key dho api
+	// verifies with, the same Secret key the Python api and web already read.
+	if len(required) > 17 {
 		t.Fatalf("required environment grew to %d settings: %v", len(required), required)
 	}
 	for _, name := range required {

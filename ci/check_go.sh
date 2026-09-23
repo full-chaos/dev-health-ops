@@ -66,7 +66,7 @@ usage() {
   race   Run go test -race ./... in every Go module.
   live-python-oracles
          Run the provider-sync, providerfoundation encryption,
-         scheduled-planner, daily-metrics discovery, and sync-coverage live-Python oracle packages
+         api access-token, scheduled-planner, daily-metrics discovery, and sync-coverage live-Python oracle packages
          with `go test -count=1` unconditionally
          (cache lookup disabled by -count=1 itself, not by any assumption
          about cache state). Separate from `test` because that package
@@ -374,6 +374,28 @@ check_live_python_oracles() {
   proof_file="${proof_dir}/edgetokenmint-edge-oracle"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: the Go-minted edge access token was not judged by the live Python edge validator\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+
+  printf 'go test -count=1: internal/api/policy (access-token decision vs the live Python AuthService)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 \
+        -run '^TestPrincipalMatchesLivePythonAuthService$' \
+        ./internal/api/policy
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  proof_file="${proof_dir}/api-policy-principal"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: the api access-token decision was not compared with the live Python AuthService\n' >&2
     rm -rf -- "${proof_dir}"
     return 1
   fi

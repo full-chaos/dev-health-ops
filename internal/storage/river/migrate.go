@@ -98,6 +98,20 @@ type MigrationOptions struct {
 	// coordinator may use. Each receives USAGE only; all other sequence
 	// privileges remain revoked.
 	CoordinatorSequences []string
+	// APIRole is the dho api Service's Postgres role (API_DATABASE_ROLE).
+	// Optional, and applied only when the role exists: it is provisioned
+	// once by an operator (scripts/worker/provision_river_roles.sql with
+	// api_role), so a migration run before that skips it and says so. When
+	// it exists it must be an eligible least-privilege login, and it gets the
+	// same REVOKE-ALL-then-GRANT treatment as the coordinator, from
+	// APIGrants/APIColumnGrants/APISequences, which the caller derives from
+	// postgres.APIPosture() -- the list the api's readiness check asserts.
+	// Unlike CoordinatorGrants, an empty APIGrants is valid: the api posture
+	// starts empty and grows one route at a time.
+	APIRole         string
+	APIGrants       []TableGrant
+	APIColumnGrants []ColumnGrant
+	APISequences    []string
 	// PostureManifestDigest is the sha256 hex digest CHAOS-5437's lockstep
 	// guard stamps into worker_posture_manifest_applied on every run
 	// (postgres.PostureManifestDigest() -- injected the same way
@@ -194,6 +208,7 @@ func ApplyPinnedMigrations(
 	}()
 	var migrationRole string
 	var domainRoleEligible, queueRoleEligible, coordinatorRoleEligible bool
+	var apiRoleExists, apiRoleEligible bool
 	// The coordinator arm is parameterized on options.CoordinatorRole and
 	// short-circuits to TRUE when no coordinator role is configured, so a
 	// pre-split caller sees the identical preflight it always did.
@@ -233,16 +248,33 @@ func ApplyPinnedMigrations(
 						AND NOT rolreplication
 						AND NOT rolbypassrls
 				)
+			),
+			$4 <> '' AND EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = $4),
+			EXISTS (
+				SELECT 1 FROM pg_catalog.pg_roles
+				WHERE rolname = $4
+					AND rolcanlogin
+					AND NOT rolsuper
+					AND NOT rolcreatedb
+					AND NOT rolcreaterole
+					AND NOT rolreplication
+					AND NOT rolbypassrls
 			)`,
 		options.DomainRole,
 		options.QueueRole,
 		options.CoordinatorRole,
-	).Scan(&migrationRole, &domainRoleEligible, &queueRoleEligible, &coordinatorRoleEligible); err != nil {
+		options.APIRole,
+	).Scan(&migrationRole, &domainRoleEligible, &queueRoleEligible, &coordinatorRoleEligible,
+		&apiRoleExists, &apiRoleEligible); err != nil {
 		return MigrationResult{}, migrationStageError("read migration role")
 	}
 	if err := validateRuntimeRolePreflight(
 		migrationRole, domainRoleEligible, queueRoleEligible, coordinatorRoleEligible, options,
 	); err != nil {
+		return MigrationResult{}, err
+	}
+	options, err = resolveAPIRole(ctx, options, migrationRole, apiRoleExists, apiRoleEligible)
+	if err != nil {
 		return MigrationResult{}, err
 	}
 
@@ -527,6 +559,13 @@ func ValidateMigrationOptions(options MigrationOptions) error {
 	if options.DomainRole == options.QueueRole {
 		return ErrMigrationConfiguration
 	}
+	if err := validateCoordinatorOptions(options); err != nil {
+		return err
+	}
+	return validateAPIOptions(options)
+}
+
+func validateCoordinatorOptions(options MigrationOptions) error {
 	if options.CoordinatorRole == "" {
 		// No coordinator provisioning requested. Grants supplied without a role
 		// are a caller bug, not a no-op: it would silently skip the grants the
@@ -544,8 +583,33 @@ func ValidateMigrationOptions(options MigrationOptions) error {
 	if len(options.CoordinatorGrants) == 0 {
 		return ErrMigrationConfiguration
 	}
-	seen := make(map[string]struct{}, len(options.CoordinatorGrants))
-	for _, grant := range options.CoordinatorGrants {
+	return validateGrantSet(options.CoordinatorGrants, options.CoordinatorColumnGrants, options.CoordinatorSequences)
+}
+
+// validateAPIOptions checks the optional api role leg. Grants without a role
+// are a caller bug, as for the coordinator.
+func validateAPIOptions(options MigrationOptions) error {
+	if options.APIRole == "" {
+		if len(options.APIGrants) != 0 || len(options.APIColumnGrants) != 0 || len(options.APISequences) != 0 {
+			return ErrMigrationConfiguration
+		}
+		return nil
+	}
+	if !validIdentifier(options.APIRole) ||
+		options.APIRole == options.DomainRole ||
+		options.APIRole == options.QueueRole ||
+		options.APIRole == options.CoordinatorRole {
+		return ErrMigrationConfiguration
+	}
+	return validateGrantSet(options.APIGrants, options.APIColumnGrants, options.APISequences)
+}
+
+// validateGrantSet checks one role's injected posture: valid identifiers, no
+// duplicates, grantable column privileges, and no relation granted both
+// table-wide and column-scoped.
+func validateGrantSet(tables []TableGrant, columns []ColumnGrant, sequences []string) error {
+	seen := make(map[string]struct{}, len(tables))
+	for _, grant := range tables {
 		if !validIdentifier(grant.TableName) {
 			return ErrMigrationConfiguration
 		}
@@ -554,8 +618,8 @@ func ValidateMigrationOptions(options MigrationOptions) error {
 		}
 		seen[grant.TableName] = struct{}{}
 	}
-	seenColumns := make(map[string]struct{}, len(options.CoordinatorColumnGrants))
-	for _, grant := range options.CoordinatorColumnGrants {
+	seenColumns := make(map[string]struct{}, len(columns))
+	for _, grant := range columns {
 		if !validIdentifier(grant.TableName) || !validIdentifier(grant.ColumnName) {
 			return ErrMigrationConfiguration
 		}
@@ -575,8 +639,8 @@ func ValidateMigrationOptions(options MigrationOptions) error {
 		}
 		seenColumns[key] = struct{}{}
 	}
-	seenSequences := make(map[string]struct{}, len(options.CoordinatorSequences))
-	for _, sequence := range options.CoordinatorSequences {
+	seenSequences := make(map[string]struct{}, len(sequences))
+	for _, sequence := range sequences {
 		if !validIdentifier(sequence) {
 			return ErrMigrationConfiguration
 		}
@@ -586,6 +650,36 @@ func ValidateMigrationOptions(options MigrationOptions) error {
 		seenSequences[sequence] = struct{}{}
 	}
 	return nil
+}
+
+// resolveAPIRole decides the api role leg after the preflight read. An api
+// role that does not exist yet is skipped (logged): it is provisioned once,
+// by an operator, and the api's readiness stays false until a later
+// migration grants it. One that exists must be an eligible least-privilege
+// login distinct from the migration identity, or the migration stops.
+func resolveAPIRole(
+	ctx context.Context,
+	options MigrationOptions,
+	migrationRole string,
+	exists bool,
+	eligible bool,
+) (MigrationOptions, error) {
+	if options.APIRole == "" {
+		return options, nil
+	}
+	if !exists {
+		if options.Logger != nil {
+			options.Logger.WarnContext(ctx, "api Postgres role does not exist; api grants skipped",
+				"api_role", options.APIRole)
+		}
+		options.APIRole = ""
+		options.APIGrants, options.APIColumnGrants, options.APISequences = nil, nil, nil
+		return options, nil
+	}
+	if !eligible || migrationRole == options.APIRole {
+		return options, ErrMigrationConfiguration
+	}
+	return options, nil
 }
 
 func validateRuntimeRolePreflight(
@@ -808,7 +902,7 @@ func runtimeGrantStatements(options MigrationOptions) []string {
 		"ALTER DEFAULT PRIVILEGES IN SCHEMA " + schema + " GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO " + queueRole,
 		"ALTER DEFAULT PRIVILEGES IN SCHEMA " + schema + " REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC",
 		"ALTER DEFAULT PRIVILEGES IN SCHEMA " + schema + " GRANT EXECUTE ON FUNCTIONS TO " + queueRole,
-	}, coordinatorGrantStatements(options)...)
+	}, append(coordinatorGrantStatements(options), apiGrantStatements(options)...)...)
 }
 
 // coordinatorGrantStatements emits the coordinator role's privilege policy
@@ -831,23 +925,41 @@ func coordinatorGrantStatements(options MigrationOptions) []string {
 	if options.CoordinatorRole == "" {
 		return nil
 	}
-	coordinatorRole := pgx.Identifier{options.CoordinatorRole}.Sanitize()
-	statements := []string{
-		"DO $$ BEGIN EXECUTE format('REVOKE TEMPORARY ON DATABASE %I FROM %I', current_database(), '" + options.CoordinatorRole + "'); END $$",
-		"GRANT USAGE ON SCHEMA public TO " + coordinatorRole,
-		"REVOKE CREATE ON SCHEMA public FROM " + coordinatorRole,
-		"REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM " + coordinatorRole,
-		"REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM " + coordinatorRole,
-		"REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM " + coordinatorRole,
-		// The coordinator is a public-schema control-plane role only. It never
-		// touches River's own tables, so it gets the same fail-closed treatment
-		// the domain role gets on the River schema.
-		"REVOKE ALL PRIVILEGES ON SCHEMA " + pgx.Identifier{options.Schema}.Sanitize() + " FROM " + coordinatorRole,
-		"REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA " + pgx.Identifier{options.Schema}.Sanitize() + " FROM " + coordinatorRole,
-		"REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA " + pgx.Identifier{options.Schema}.Sanitize() + " FROM " + coordinatorRole,
-		"REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA " + pgx.Identifier{options.Schema}.Sanitize() + " FROM " + coordinatorRole,
+	return postureGrantStatements(options.CoordinatorRole, options.Schema,
+		options.CoordinatorGrants, options.CoordinatorColumnGrants, options.CoordinatorSequences)
+}
+
+// apiGrantStatements is the api role's privilege policy, built exactly as
+// the coordinator's: REVOKE ALL, then the grants injected from
+// postgres.APIPosture(). Returns nil when no api role applies.
+func apiGrantStatements(options MigrationOptions) []string {
+	if options.APIRole == "" {
+		return nil
 	}
-	for _, grant := range options.CoordinatorGrants {
+	return postureGrantStatements(options.APIRole, options.Schema,
+		options.APIGrants, options.APIColumnGrants, options.APISequences)
+}
+
+// postureGrantStatements emits one role's policy: REVOKE ALL on the public
+// and River schemas, then each injected grant guarded by to_regclass.
+func postureGrantStatements(roleName, riverSchema string, tables []TableGrant, columns []ColumnGrant, sequences []string) []string {
+	role := pgx.Identifier{roleName}.Sanitize()
+	statements := []string{
+		"DO $$ BEGIN EXECUTE format('REVOKE TEMPORARY ON DATABASE %I FROM %I', current_database(), '" + roleName + "'); END $$",
+		"GRANT USAGE ON SCHEMA public TO " + role,
+		"REVOKE CREATE ON SCHEMA public FROM " + role,
+		"REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM " + role,
+		"REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM " + role,
+		"REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM " + role,
+		// The coordinator and the api are public-schema roles only. Neither
+		// touches River's own tables, so each gets the same fail-closed
+		// treatment the domain role gets on the River schema.
+		"REVOKE ALL PRIVILEGES ON SCHEMA " + pgx.Identifier{riverSchema}.Sanitize() + " FROM " + role,
+		"REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA " + pgx.Identifier{riverSchema}.Sanitize() + " FROM " + role,
+		"REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA " + pgx.Identifier{riverSchema}.Sanitize() + " FROM " + role,
+		"REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA " + pgx.Identifier{riverSchema}.Sanitize() + " FROM " + role,
+	}
+	for _, grant := range tables {
 		privileges := "SELECT"
 		if grant.AllowInsert {
 			privileges += ", INSERT"
@@ -862,7 +974,7 @@ func coordinatorGrantStatements(options MigrationOptions) []string {
 		statements = append(statements,
 			"DO $$ BEGIN IF to_regclass('"+qualified+"') IS NOT NULL THEN GRANT "+
 				privileges+" ON TABLE "+pgx.Identifier{"public", grant.TableName}.Sanitize()+
-				" TO "+coordinatorRole+"; END IF; END $$",
+				" TO "+role+"; END IF; END $$",
 		)
 	}
 	// Column-scoped grants are emitted after the table-wide ones and never
@@ -872,20 +984,20 @@ func coordinatorGrantStatements(options MigrationOptions) []string {
 	// diffable. The privilege keyword is taken from the validated closed set
 	// above rather than sanitized, because it is a keyword and not an
 	// identifier; the table and column are sanitized identifiers.
-	for _, grant := range options.CoordinatorColumnGrants {
+	for _, grant := range columns {
 		qualified := "public." + grant.TableName
 		statements = append(statements,
 			"DO $$ BEGIN IF to_regclass('"+qualified+"') IS NOT NULL THEN GRANT "+
 				grant.Privilege+" ("+pgx.Identifier{grant.ColumnName}.Sanitize()+
 				") ON TABLE "+pgx.Identifier{"public", grant.TableName}.Sanitize()+
-				" TO "+coordinatorRole+"; END IF; END $$",
+				" TO "+role+"; END IF; END $$",
 		)
 	}
-	for _, sequence := range options.CoordinatorSequences {
+	for _, sequence := range sequences {
 		qualified := "public." + sequence
 		statements = append(statements,
 			"DO $$ BEGIN IF to_regclass('"+qualified+"') IS NOT NULL THEN GRANT USAGE ON SEQUENCE "+
-				pgx.Identifier{"public", sequence}.Sanitize()+" TO "+coordinatorRole+"; END IF; END $$",
+				pgx.Identifier{"public", sequence}.Sanitize()+" TO "+role+"; END IF; END $$",
 		)
 	}
 	return statements

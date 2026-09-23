@@ -109,6 +109,9 @@ EXPECTED_PACKAGES = {
     "cmd/query-api/internal/workgraph",
     "internal/api/externalingest",
     "internal/api/licensing",
+    # The api's protected-route policy read path: provision, migrate, api
+    # readiness and an authenticated request on a real Postgres.
+    "internal/api/policy",
     "internal/apiservice/acr",
     "internal/cacheinvalidation",
     "internal/externalrecompute",

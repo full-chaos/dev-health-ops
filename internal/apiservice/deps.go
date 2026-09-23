@@ -1,6 +1,8 @@
 package apiservice
 
 import (
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+
 	"context"
 	"log/slog"
 
@@ -29,6 +31,11 @@ type Deps struct {
 	Pool *pgxpool.Pool
 	// Valkey is nil under the same "not configured yet" rule as Pool.
 	Valkey valkeygo.Client
+	// Auth and Guard are the protected-route runtime (internal/api/policy),
+	// nil without a pool: Auth for routes that check membership themselves,
+	// Guard to wrap a handler with its authorization level.
+	Auth  *policy.Authenticator
+	Guard *policy.Guard
 }
 
 // pgxpoolComponent closes the pool on shutdown. Start performs no I/O, for

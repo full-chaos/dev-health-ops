@@ -11,7 +11,8 @@ operator listener (goApi.operatorPort) carries /healthz, /readyz and /metrics,
 so probes never pass through request middleware.
 
 Configuration is flags (CHAOS-4020), rendered below so `helm template` shows
-it; no platform Secret or ConfigMap is inherited unless goApi.envFrom lists
+it, plus two Secret keys by reference (API_DATABASE_URI, JWT_SECRET_KEY); no
+other platform Secret or ConfigMap is inherited unless goApi.envFrom lists
 one. The platform ConfigMap in particular is NOT inherited by default: it pins
 OTEL_SERVICE_NAME=dev-health-ops, and this service names itself
 dev-health-api.
@@ -69,8 +70,20 @@ spec:
           envFrom:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          {{- with .Values.goApi.extraEnv }}
           env:
+            {{- /*
+            Both by secretKeyRef, never inline, and not optional: without
+            them `dho api` refuses to start, and a missing Secret key shows
+            as CreateContainerConfigError on the Pod instead of a crash loop.
+            API_DATABASE_URI is the api role's own DSN (API_DATABASE_ROLE,
+            default devhealth_api); JWT_SECRET_KEY is the access-token key the
+            Python api and web already read.
+            */}}
+            - name: API_DATABASE_URI
+              valueFrom: {secretKeyRef: {name: {{ include "dev-health.secretName" . }}, key: API_DATABASE_URI}}
+            - name: JWT_SECRET_KEY
+              valueFrom: {secretKeyRef: {name: {{ include "dev-health.secretName" . }}, key: JWT_SECRET_KEY}}
+          {{- with .Values.goApi.extraEnv }}
             {{- toYaml . | nindent 12 }}
           {{- end }}
           livenessProbe:

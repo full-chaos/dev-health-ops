@@ -360,6 +360,22 @@ var optionRegistry = []Option{
 		Default: "default", Group: GroupDatabase, Usage: "ClickHouse database name (component form)",
 	},
 	{
+		Flag: "api-clickhouse-host", Env: "DEV_HEALTH_CH_API_HOST", Kind: KindString, Group: GroupDatabase,
+		Usage: "api Service ClickHouse host; set to assemble API_CLICKHOUSE_URI from components",
+	},
+	{
+		Flag: "api-clickhouse-port", Env: "DEV_HEALTH_CH_API_PORT", Kind: KindString,
+		Default: "9000", Group: GroupDatabase, Usage: "api Service ClickHouse native-protocol port (component form)",
+	},
+	{
+		Flag: "api-clickhouse-user", Env: "DEV_HEALTH_CH_API_USER", Kind: KindString, Group: GroupDatabase,
+		Usage: "api Service ClickHouse user (component form)",
+	},
+	{
+		Flag: "api-clickhouse-db", Env: "DEV_HEALTH_CH_API_DB", Kind: KindString,
+		Default: "default", Group: GroupDatabase, Usage: "api Service ClickHouse database name (component form)",
+	},
+	{
 		Flag: "domain-max-conns", Env: "WORKER_DOMAIN_DATABASE_MAX_CONNS", Kind: KindInt,
 		Default: "4", Group: GroupDatabase,
 		Usage: "domain pool connection ceiling (1-16)",
@@ -459,6 +475,7 @@ var optionRegistry = []Option{
 	{Env: "COORDINATOR_DATABASE_URI", Secret: true, Group: GroupCredentials, Usage: "coordinator PostgreSQL DSN; required by coordinator binaries"},
 	{Env: "API_DATABASE_URI", Secret: true, Group: GroupCredentials, Usage: "api Service PostgreSQL DSN; required by the api binary (CHAOS-6269)"},
 	{Env: "CLICKHOUSE_URI", Secret: true, Group: GroupCredentials, Usage: "ClickHouse DSN; native protocol, port 9000"},
+	{Env: "API_CLICKHOUSE_URI", Secret: true, Group: GroupCredentials, Usage: "api Service ClickHouse DSN; the dedicated write login for team/identity admin CRUD (CHAOS-6310)"},
 	// CHAOS-5560: component PASSWORDS for the four URIs above. Non-secret
 	// components (host/port/user/db) are registered in GroupDatabase above
 	// -- only the password half of a DSN is credential-shaped. Setting the
@@ -475,6 +492,7 @@ var optionRegistry = []Option{
 	{Env: "DEV_HEALTH_PG_QUEUE_PASSWORD", Secret: true, Group: GroupCredentials, Usage: "queue-control PostgreSQL password (component form)"},
 	{Env: "DEV_HEALTH_PG_COORDINATOR_PASSWORD", Secret: true, Group: GroupCredentials, Usage: "coordinator PostgreSQL password (component form)"},
 	{Env: "DEV_HEALTH_PG_API_PASSWORD", Secret: true, Group: GroupCredentials, Usage: "api Service PostgreSQL password (component form)"},
+	{Env: "DEV_HEALTH_CH_API_PASSWORD", Secret: true, Group: GroupCredentials, Usage: "api Service ClickHouse password (component form)"},
 	{Env: "VALKEY_URI", Secret: true, Group: GroupCredentials, Usage: "Valkey/Redis DSN"},
 	{Env: "JWT_SECRET_KEY", Secret: true, Group: GroupCredentials, Usage: "access-token signing key the api verifies with (the Python api's JWT_SECRET_KEY); required by the api binary"},
 	{Env: "SETTINGS_ENCRYPTION_KEY", Secret: true, Group: GroupCredentials, Usage: "provider credential encryption key"},

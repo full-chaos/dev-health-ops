@@ -60,6 +60,10 @@ _CREDENTIALS = frozenset(
         # api Service's own pre-built DSN and component password (CHAOS-6269),
         # same shape as the coordinator pair above.
         "DEV_HEALTH_PG_API_PASSWORD",
+        # api Service's own ClickHouse login (CHAOS-6310), same DSN +
+        # component-password shape as the Postgres pair immediately above.
+        "API_CLICKHOUSE_URI",
+        "DEV_HEALTH_CH_API_PASSWORD",
         "VALKEY_URI",
         "SETTINGS_ENCRYPTION_KEY",
         "SETTINGS_ENCRYPTION_SALT",

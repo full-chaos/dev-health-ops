@@ -7,12 +7,15 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+
 	"github.com/full-chaos/dev-health-ops/internal/api/webhookintake"
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	chclickhouse "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	"github.com/full-chaos/dev-health-ops/internal/storage/valkey"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -43,6 +46,11 @@ type Deps struct {
 	Pool *pgxpool.Pool
 	// Valkey is nil under the same "not configured yet" rule as Pool.
 	Valkey valkeygo.Client
+	// ClickHouse is nil when CLICKHOUSE_URI is not configured. A route area
+	// that needs it (internal/api/teamsidentity, CHAOS-6251) answers
+	// CodeInternal rather than dereferencing a nil connection; the
+	// api_clickhouse readiness check surfaces the real cause.
+	ClickHouse driver.Conn
 	// Auth and Guard are the protected-route runtime (internal/api/policy),
 	// nil without a pool: Auth for routes that check membership themselves,
 	// Guard to wrap a handler with its authorization level.
@@ -71,11 +79,13 @@ type TelemetryConfig struct {
 	ValkeyURI string
 }
 
-// ProbeConfig is what /health, /ready and /health/workers check: the
-// ClickHouse and Valkey DSNs ("" = not configured) and EXPECTED_WORKER_GROUPS
-// (nil = unset).
+// ProbeConfig is what /health, /ready and /health/workers check beyond
+// deps.Pool/deps.ClickHouse (both already carried on Deps itself): the
+// Valkey DSN ("" = not configured) and EXPECTED_WORKER_GROUPS (nil =
+// unset). ClickHouse has no DSN field here on purpose -- CHAOS-6310 r1:
+// the health check reuses deps.ClickHouse (the api's own dedicated login),
+// never a second connection from a separate generic DSN.
 type ProbeConfig struct {
-	ClickHouseDSN        string
 	ValkeyURI            string
 	ExpectedWorkerGroups *[]string
 }
@@ -107,6 +117,20 @@ func (v *valkeyComponent) Start(context.Context) error { return nil }
 func (v *valkeyComponent) Shutdown(context.Context) error {
 	if v.client != nil {
 		v.client.Close()
+	}
+	return nil
+}
+
+// clickHouseComponent closes the connection on shutdown.
+type clickHouseComponent struct{ conn driver.Conn }
+
+func (c *clickHouseComponent) Name() string { return "api-clickhouse" }
+
+func (c *clickHouseComponent) Start(context.Context) error { return nil }
+
+func (c *clickHouseComponent) Shutdown(context.Context) error {
+	if c.conn != nil {
+		return c.conn.Close()
 	}
 	return nil
 }
@@ -189,9 +213,24 @@ func buildDeps(
 		}
 	}
 
+	if cfg.APIClickHouseURI.Configured() {
+		conn, err := chclickhouse.Open(ctx, chclickhouse.DefaultConfig(cfg.APIClickHouseURI.Reveal()))
+		if err != nil {
+			return Deps{}, nil, err
+		}
+		deps.ClickHouse = conn
+		components = append(components, &clickHouseComponent{conn: conn})
+		if err := registry.RegisterRequired(apiClickHouseCheck, func(checkCtx context.Context) error {
+			return chclickhouse.CheckAPIClickHouseAuthorization(checkCtx, conn)
+		}); err != nil {
+			return Deps{}, nil, err
+		}
+	}
+
 	logger.LogAttrs(ctx, slog.LevelInfo, "api dependencies configured",
 		slog.Bool("postgres_configured", deps.Pool != nil),
 		slog.Bool("valkey_configured", deps.Valkey != nil),
+		slog.Bool("clickhouse_configured", deps.ClickHouse != nil),
 		slog.Bool("webhook_outbox_producer_configured", deps.Producer != nil),
 		slog.Bool("webhook_secret_decryptor_configured", deps.Pool != nil && cfg.SettingsEncryptionKey.Configured()),
 	)

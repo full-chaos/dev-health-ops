@@ -92,6 +92,81 @@ func TestMarshalMatchesLivePythonJSONDumps(t *testing.T) {
 	}
 }
 
+const pythonDumpsDefaultProgram = `
+import json, sys
+out = []
+for text in json.loads(sys.stdin.read()):
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError as exc:
+        out.append("JSONDecodeError:%s:%d" % (exc.msg, exc.pos))
+        continue
+    try:
+        # NO keyword arguments at all -- json.dumps' own bare defaults
+        # (ensure_ascii=True, allow_nan=True, separators=(", ", ": ")),
+        # the EXACT call every ClickHouse JSON-column writer
+        # (storage/clickhouse.py's bare json.dumps(value)) actually makes,
+        # distinct from Starlette's response encoding Marshal matches above.
+        out.append(json.dumps(value))
+    except ValueError:
+        out.append("ValueError")
+print(json.dumps(out))
+`
+
+// TestDumpsMatchesLivePythonJSONDumpsDefault pins Dumps -- the shared
+// encoder every ClickHouse JSON-column writer uses (CHAOS-6310 r1 finding
+// #10) -- against a live Python bare `json.dumps(value)` call (no keyword
+// arguments at all), reusing the same corpus TestMarshalMatchesLivePythonJSONDumps
+// proves the compact/ensure_ascii=False form against. Dumps had no live-
+// oracle proof of its own before this; two mismatches from Marshal's own
+// assumptions were caught building it: Python's bare default is
+// ensure_ascii=TRUE (not False) and allow_nan=TRUE (not False).
+func TestDumpsMatchesLivePythonJSONDumpsDefault(t *testing.T) {
+	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
+		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
+	}
+	_, file, _, _ := runtime.Caller(0)
+	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
+	python := pyoracle.Resolve(t, root)
+	input, _ := json.Marshal(corpus)
+	command := exec.Command(python, "-c", pythonDumpsDefaultProgram)
+	command.Stdin = strings.NewReader(string(input))
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("live Python json.dumps (bare defaults): %v", pyoracle.RunError(python, err, output))
+	}
+	var want []string
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &want); err != nil {
+		t.Fatal(err)
+	}
+	for index, text := range corpus {
+		gotText := "ValueError"
+		value, err := Decode([]byte(text))
+		var syntax *SyntaxError
+		switch {
+		case errors.As(err, &syntax):
+			gotText = fmt.Sprintf("JSONDecodeError:%s:%d", syntax.Msg, syntax.Pos)
+		case err != nil:
+			gotText = "decode: " + err.Error()
+		default:
+			if got, err := Dumps(value); err == nil {
+				gotText = got
+			}
+		}
+		if gotText != want[index] {
+			t.Errorf("%s:\n Go     %s\n Python %s", text, gotText, want[index])
+		}
+	}
+	proofDir := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
+	if proofDir == "" {
+		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
+	}
+	if err := os.WriteFile(filepath.Join(proofDir, "api-pyjson-dumps"), []byte("executed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // bodyCorpus is request bodies as bytes (hex), for json.loads(bytes):
 // encoding detection, BOMs, surrogatepass. Built from real encodings.
 var bodyCorpus = func() []string {

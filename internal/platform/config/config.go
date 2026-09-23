@@ -234,6 +234,13 @@ type Config struct {
 	// binary's Load() over a DSN it never uses.
 	APIDatabaseURI secrets.Value
 	ClickHouseURI  secrets.Value
+	// APIClickHouseURI is the dho api Service's own ClickHouse connection
+	// (CHAOS-6310), a dedicated write login distinct from the shared
+	// CLICKHOUSE_URI every other binary reads -- the same "one Service, one
+	// dedicated role" shape APIDatabaseURI already established for Postgres
+	// (CHAOS-6269). Optional here for the identical reason: only the api
+	// Service requires it, enforced at its own startup, never here.
+	APIClickHouseURI secrets.Value
 	// Successful resolution previously left only a boolean ("*_database_configured")
 	// observable -- which of the two DSN forms was actually honored, and
 	// which database an operator's config ultimately reaches, was invisible
@@ -252,6 +259,8 @@ type Config struct {
 	APIDatabaseName         string
 	ClickHouseForm          string
 	ClickHouseName          string
+	APIClickHouseForm       string
+	APIClickHouseName       string
 	ValkeyURI               secrets.Value
 	SettingsEncryptionKey   secrets.Value
 	SettingsEncryptionSalt  secrets.Value
@@ -582,6 +591,9 @@ func Load(spec Spec) (Config, error) {
 		// Load() must not fail over a DSN it never opens.
 		{rawKey: "API_DATABASE_URI", spec: APIDatabaseSpec, target: &cfg.APIDatabaseURI, formTarget: &cfg.APIDatabaseForm, nameTarget: &cfg.APIDatabaseName},
 		{rawKey: "CLICKHOUSE_URI", spec: ClickHouseSpec, target: &cfg.ClickHouseURI, formTarget: &cfg.ClickHouseForm, nameTarget: &cfg.ClickHouseName},
+		// API_CLICKHOUSE_URI (CHAOS-6310) is optional here for the identical
+		// reason API_DATABASE_URI is: only the dho api Service requires it.
+		{rawKey: "API_CLICKHOUSE_URI", spec: APIClickHouseSpec, target: &cfg.APIClickHouseURI, formTarget: &cfg.APIClickHouseForm, nameTarget: &cfg.APIClickHouseName},
 	}
 	for _, binding := range dsnBindings {
 		value, _, resolveErr := ResolveDSN(lookup, binding.rawKey, binding.spec)
@@ -646,6 +658,9 @@ func Load(spec Spec) (Config, error) {
 		return Config{}, err
 	}
 	if err := validateURI("CLICKHOUSE_URI", cfg.ClickHouseURI, "clickhouse", "http", "https"); err != nil {
+		return Config{}, err
+	}
+	if err := validateURI("API_CLICKHOUSE_URI", cfg.APIClickHouseURI, "clickhouse", "http", "https"); err != nil {
 		return Config{}, err
 	}
 	if err := validateURI("VALKEY_URI", cfg.ValkeyURI, "redis", "rediss", "unix"); err != nil {
@@ -898,6 +913,7 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.Bool("domain_database_configured", c.DomainDatabaseURI.Configured()),
 		slog.Bool("coordinator_database_configured", c.CoordinatorDatabaseURI.Configured()),
 		slog.Bool("api_database_configured", c.APIDatabaseURI.Configured()),
+		slog.Bool("api_clickhouse_configured", c.APIClickHouseURI.Configured()),
 		slog.Bool("queue_database_configured", c.QueueDatabaseURI.Configured()),
 		// A successful resolution used
 		// to leave only the booleans above observable -- which of the two
@@ -972,6 +988,7 @@ func (c Config) SafeAttrs() []slog.Attr {
 		{c.CoordinatorDatabaseURI.Configured(), "coordinator_database_form", c.CoordinatorDatabaseForm, "coordinator_database_name", c.CoordinatorDatabaseName},
 		{c.APIDatabaseURI.Configured(), "api_database_form", c.APIDatabaseForm, "api_database_name", c.APIDatabaseName},
 		{c.ClickHouseURI.Configured(), "clickhouse_form", c.ClickHouseForm, "clickhouse_name", c.ClickHouseName},
+		{c.APIClickHouseURI.Configured(), "api_clickhouse_form", c.APIClickHouseForm, "api_clickhouse_name", c.APIClickHouseName},
 	} {
 		if !observed.configured {
 			continue
@@ -1477,6 +1494,18 @@ var (
 		HostKey: "DEV_HEALTH_CH_HOST", PortKey: "DEV_HEALTH_CH_PORT", DefaultPort: "9000",
 		UserKey: "DEV_HEALTH_CH_USER", PasswordKey: "DEV_HEALTH_CH_PASSWORD",
 		DBKey: "DEV_HEALTH_CH_DB", DefaultDB: "default", Scheme: "clickhouse",
+	}
+	// APIClickHouseSpec is the dho api Service's own ClickHouse component
+	// form (CHAOS-6310), the ClickHouse analog of APIDatabaseSpec: a
+	// dedicated login, its own database key. DBKeyShared is deliberately
+	// left false, unlike the Postgres specs above -- see ResolveDSN's own
+	// doc comment: DBKey sharing is correct for the Postgres River trio
+	// (genuinely one physical database, many role logins) but wrong for
+	// ClickHouse, where each connection's database is its own field.
+	APIClickHouseSpec = ComponentSpec{
+		HostKey: "DEV_HEALTH_CH_API_HOST", PortKey: "DEV_HEALTH_CH_API_PORT", DefaultPort: "9000",
+		UserKey: "DEV_HEALTH_CH_API_USER", PasswordKey: "DEV_HEALTH_CH_API_PASSWORD",
+		DBKey: "DEV_HEALTH_CH_API_DB", DefaultDB: "default", Scheme: "clickhouse",
 	}
 )
 

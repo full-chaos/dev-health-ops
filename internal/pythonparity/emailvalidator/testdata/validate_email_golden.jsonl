@@ -203,14 +203,19 @@
 {"input":[78,8,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: U+0008."}
 {"input":[97,9,64,120,46,99,111,109],"ok":false,"reason":"The email address contains invalid characters before the @-sign: U+0009."}
 {"input":[97,64,120,9,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters: U+0009."}
+{"input":[78,9,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
 {"input":[97,10,64,120,46,99,111,109],"ok":false,"reason":"The email address contains invalid characters before the @-sign: U+000A."}
 {"input":[97,64,120,10,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters: U+000A."}
+{"input":[78,10,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
 {"input":[97,11,64,120,46,99,111,109],"ok":false,"reason":"The email address contains invalid characters before the @-sign: U+000B."}
 {"input":[97,64,120,11,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters: U+000B."}
+{"input":[78,11,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
 {"input":[97,12,64,120,46,99,111,109],"ok":false,"reason":"The email address contains invalid characters before the @-sign: U+000C."}
 {"input":[97,64,120,12,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters: U+000C."}
+{"input":[78,12,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
 {"input":[97,13,64,120,46,99,111,109],"ok":false,"reason":"The email address contains invalid characters before the @-sign: U+000D."}
 {"input":[97,64,120,13,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters: U+000D."}
+{"input":[78,13,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
 {"input":[97,14,64,120,46,99,111,109],"ok":false,"reason":"The email address contains invalid characters before the @-sign: U+000E."}
 {"input":[97,64,120,14,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters: U+000E."}
 {"input":[78,14,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: U+000E."}
@@ -255,31 +260,303 @@
 {"input":[78,27,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: U+001B."}
 {"input":[97,28,64,120,46,99,111,109],"ok":false,"reason":"The email address contains invalid characters before the @-sign: U+001C."}
 {"input":[97,64,120,28,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters: U+001C."}
+{"input":[78,28,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
 {"input":[97,29,64,120,46,99,111,109],"ok":false,"reason":"The email address contains invalid characters before the @-sign: U+001D."}
 {"input":[97,64,120,29,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters: U+001D."}
+{"input":[78,29,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
 {"input":[97,30,64,120,46,99,111,109],"ok":false,"reason":"The email address contains invalid characters before the @-sign: U+001E."}
 {"input":[97,64,120,30,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters: U+001E."}
+{"input":[78,30,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
 {"input":[97,31,64,120,46,99,111,109],"ok":false,"reason":"The email address contains invalid characters before the @-sign: U+001F."}
 {"input":[97,64,120,31,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters: U+001F."}
+{"input":[78,31,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
 {"input":[97,32,64,120,46,99,111,109],"ok":false,"reason":"The email address contains invalid characters before the @-sign: SPACE."}
+{"input":[97,64,120,32,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters: SPACE."}
+{"input":[78,32,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,33,64,120,46,99,111,109],"ok":true,"email":[97,33,64,120,46,99,111,109]}
+{"input":[97,64,120,33,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters: '!'."}
+{"input":[78,33,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
 {"input":[97,34,64,120,46,99,111,109],"ok":false,"reason":"An email address must have an @-sign."}
+{"input":[97,64,120,34,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters: '\"'."}
 {"input":[78,34,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"An email address must have an @-sign."}
+{"input":[97,35,64,120,46,99,111,109],"ok":true,"email":[97,35,64,120,46,99,111,109]}
+{"input":[97,64,120,35,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters: '#'."}
+{"input":[78,35,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,36,64,120,46,99,111,109],"ok":true,"email":[97,36,64,120,46,99,111,109]}
+{"input":[97,64,120,36,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters: '$'."}
+{"input":[78,36,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,37,64,120,46,99,111,109],"ok":true,"email":[97,37,64,120,46,99,111,109]}
+{"input":[97,64,120,37,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters: '%'."}
+{"input":[78,37,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,38,64,120,46,99,111,109],"ok":true,"email":[97,38,64,120,46,99,111,109]}
+{"input":[97,64,120,38,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters: '\u0026'."}
+{"input":[78,38,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,39,64,120,46,99,111,109],"ok":true,"email":[97,39,64,120,46,99,111,109]}
+{"input":[97,64,120,39,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters: \"'\"."}
+{"input":[78,39,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
 {"input":[97,40,64,120,46,99,111,109],"ok":false,"reason":"The email address contains invalid characters before the @-sign: '('."}
+{"input":[97,64,120,40,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters: '('."}
 {"input":[78,40,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '('."}
 {"input":[97,41,64,120,46,99,111,109],"ok":false,"reason":"The email address contains invalid characters before the @-sign: ')'."}
+{"input":[97,64,120,41,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters: ')'."}
 {"input":[78,41,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: ')'."}
+{"input":[97,42,64,120,46,99,111,109],"ok":true,"email":[97,42,64,120,46,99,111,109]}
+{"input":[97,64,120,42,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters: '*'."}
+{"input":[78,42,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,43,64,120,46,99,111,109],"ok":true,"email":[97,43,64,120,46,99,111,109]}
+{"input":[97,64,120,43,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters: '+'."}
+{"input":[78,43,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
 {"input":[97,44,64,120,46,99,111,109],"ok":false,"reason":"The email address contains invalid characters before the @-sign: ','."}
+{"input":[97,64,120,44,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters: ','."}
 {"input":[78,44,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: ','."}
+{"input":[97,45,64,120,46,99,111,109],"ok":true,"email":[97,45,64,120,46,99,111,109]}
+{"input":[97,64,120,45,121,46,99,111,109],"ok":true,"email":[97,64,120,45,121,46,99,111,109]}
+{"input":[78,45,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
 {"input":[97,46,64,120,46,99,111,109],"ok":false,"reason":"An email address cannot have a period immediately before the @-sign."}
+{"input":[97,64,120,46,121,46,99,111,109],"ok":true,"email":[97,64,120,46,121,46,99,111,109]}
 {"input":[78,46,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '.'."}
+{"input":[97,47,64,120,46,99,111,109],"ok":true,"email":[97,47,64,120,46,99,111,109]}
+{"input":[97,64,120,47,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters: '/'."}
+{"input":[78,47,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,48,64,120,46,99,111,109],"ok":true,"email":[97,48,64,120,46,99,111,109]}
+{"input":[97,64,120,48,121,46,99,111,109],"ok":true,"email":[97,64,120,48,121,46,99,111,109]}
+{"input":[78,48,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,49,64,120,46,99,111,109],"ok":true,"email":[97,49,64,120,46,99,111,109]}
+{"input":[97,64,120,49,121,46,99,111,109],"ok":true,"email":[97,64,120,49,121,46,99,111,109]}
+{"input":[78,49,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,50,64,120,46,99,111,109],"ok":true,"email":[97,50,64,120,46,99,111,109]}
+{"input":[97,64,120,50,121,46,99,111,109],"ok":true,"email":[97,64,120,50,121,46,99,111,109]}
+{"input":[78,50,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,51,64,120,46,99,111,109],"ok":true,"email":[97,51,64,120,46,99,111,109]}
+{"input":[97,64,120,51,121,46,99,111,109],"ok":true,"email":[97,64,120,51,121,46,99,111,109]}
+{"input":[78,51,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,52,64,120,46,99,111,109],"ok":true,"email":[97,52,64,120,46,99,111,109]}
+{"input":[97,64,120,52,121,46,99,111,109],"ok":true,"email":[97,64,120,52,121,46,99,111,109]}
+{"input":[78,52,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,53,64,120,46,99,111,109],"ok":true,"email":[97,53,64,120,46,99,111,109]}
+{"input":[97,64,120,53,121,46,99,111,109],"ok":true,"email":[97,64,120,53,121,46,99,111,109]}
+{"input":[78,53,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,54,64,120,46,99,111,109],"ok":true,"email":[97,54,64,120,46,99,111,109]}
+{"input":[97,64,120,54,121,46,99,111,109],"ok":true,"email":[97,64,120,54,121,46,99,111,109]}
+{"input":[78,54,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,55,64,120,46,99,111,109],"ok":true,"email":[97,55,64,120,46,99,111,109]}
+{"input":[97,64,120,55,121,46,99,111,109],"ok":true,"email":[97,64,120,55,121,46,99,111,109]}
+{"input":[78,55,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,56,64,120,46,99,111,109],"ok":true,"email":[97,56,64,120,46,99,111,109]}
+{"input":[97,64,120,56,121,46,99,111,109],"ok":true,"email":[97,64,120,56,121,46,99,111,109]}
+{"input":[78,56,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,57,64,120,46,99,111,109],"ok":true,"email":[97,57,64,120,46,99,111,109]}
+{"input":[97,64,120,57,121,46,99,111,109],"ok":true,"email":[97,64,120,57,121,46,99,111,109]}
+{"input":[78,57,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,58,64,120,46,99,111,109],"ok":false,"reason":"The email address contains invalid characters before the @-sign: ':'."}
+{"input":[97,64,120,58,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters: ':'."}
 {"input":[78,58,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: ':'."}
+{"input":[97,59,64,120,46,99,111,109],"ok":false,"reason":"The email address contains invalid characters before the @-sign: ';'."}
+{"input":[97,64,120,59,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters: ';'."}
 {"input":[78,59,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: ';'."}
 {"input":[97,60,64,120,46,99,111,109],"ok":false,"reason":"An open angle bracket at the start of the email address has to be followed by a close angle bracket at the end."}
+{"input":[97,64,120,60,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters: '\u003c'."}
 {"input":[78,60,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"An open angle bracket at the start of the email address has to be followed by a close angle bracket at the end."}
+{"input":[97,61,64,120,46,99,111,109],"ok":true,"email":[97,61,64,120,46,99,111,109]}
+{"input":[97,64,120,61,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters: '='."}
+{"input":[78,61,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,62,64,120,46,99,111,109],"ok":false,"reason":"The email address contains invalid characters before the @-sign: '\u003e'."}
+{"input":[97,64,120,62,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters: '\u003e'."}
 {"input":[78,62,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '\u003e'."}
+{"input":[97,63,64,120,46,99,111,109],"ok":true,"email":[97,63,64,120,46,99,111,109]}
+{"input":[97,64,120,63,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters: '?'."}
+{"input":[78,63,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,64,64,120,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters: '@'."}
+{"input":[97,64,120,64,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters: '@'."}
+{"input":[78,64,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The part after the @-sign contains invalid characters: '\u003c', '\u003e', '@', SPACE."}
+{"input":[97,65,64,120,46,99,111,109],"ok":true,"email":[97,65,64,120,46,99,111,109]}
+{"input":[97,64,120,65,121,46,99,111,109],"ok":true,"email":[97,64,120,97,121,46,99,111,109]}
+{"input":[78,65,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,66,64,120,46,99,111,109],"ok":true,"email":[97,66,64,120,46,99,111,109]}
+{"input":[97,64,120,66,121,46,99,111,109],"ok":true,"email":[97,64,120,98,121,46,99,111,109]}
+{"input":[78,66,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,67,64,120,46,99,111,109],"ok":true,"email":[97,67,64,120,46,99,111,109]}
+{"input":[97,64,120,67,121,46,99,111,109],"ok":true,"email":[97,64,120,99,121,46,99,111,109]}
+{"input":[78,67,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,68,64,120,46,99,111,109],"ok":true,"email":[97,68,64,120,46,99,111,109]}
+{"input":[97,64,120,68,121,46,99,111,109],"ok":true,"email":[97,64,120,100,121,46,99,111,109]}
+{"input":[78,68,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,69,64,120,46,99,111,109],"ok":true,"email":[97,69,64,120,46,99,111,109]}
+{"input":[97,64,120,69,121,46,99,111,109],"ok":true,"email":[97,64,120,101,121,46,99,111,109]}
+{"input":[78,69,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,70,64,120,46,99,111,109],"ok":true,"email":[97,70,64,120,46,99,111,109]}
+{"input":[97,64,120,70,121,46,99,111,109],"ok":true,"email":[97,64,120,102,121,46,99,111,109]}
+{"input":[78,70,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,71,64,120,46,99,111,109],"ok":true,"email":[97,71,64,120,46,99,111,109]}
+{"input":[97,64,120,71,121,46,99,111,109],"ok":true,"email":[97,64,120,103,121,46,99,111,109]}
+{"input":[78,71,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,72,64,120,46,99,111,109],"ok":true,"email":[97,72,64,120,46,99,111,109]}
+{"input":[97,64,120,72,121,46,99,111,109],"ok":true,"email":[97,64,120,104,121,46,99,111,109]}
+{"input":[78,72,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,73,64,120,46,99,111,109],"ok":true,"email":[97,73,64,120,46,99,111,109]}
+{"input":[97,64,120,73,121,46,99,111,109],"ok":true,"email":[97,64,120,105,121,46,99,111,109]}
+{"input":[78,73,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,74,64,120,46,99,111,109],"ok":true,"email":[97,74,64,120,46,99,111,109]}
+{"input":[97,64,120,74,121,46,99,111,109],"ok":true,"email":[97,64,120,106,121,46,99,111,109]}
+{"input":[78,74,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,75,64,120,46,99,111,109],"ok":true,"email":[97,75,64,120,46,99,111,109]}
+{"input":[97,64,120,75,121,46,99,111,109],"ok":true,"email":[97,64,120,107,121,46,99,111,109]}
+{"input":[78,75,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,76,64,120,46,99,111,109],"ok":true,"email":[97,76,64,120,46,99,111,109]}
+{"input":[97,64,120,76,121,46,99,111,109],"ok":true,"email":[97,64,120,108,121,46,99,111,109]}
+{"input":[78,76,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,77,64,120,46,99,111,109],"ok":true,"email":[97,77,64,120,46,99,111,109]}
+{"input":[97,64,120,77,121,46,99,111,109],"ok":true,"email":[97,64,120,109,121,46,99,111,109]}
+{"input":[78,77,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,78,64,120,46,99,111,109],"ok":true,"email":[97,78,64,120,46,99,111,109]}
+{"input":[97,64,120,78,121,46,99,111,109],"ok":true,"email":[97,64,120,110,121,46,99,111,109]}
+{"input":[78,78,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,79,64,120,46,99,111,109],"ok":true,"email":[97,79,64,120,46,99,111,109]}
+{"input":[97,64,120,79,121,46,99,111,109],"ok":true,"email":[97,64,120,111,121,46,99,111,109]}
+{"input":[78,79,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,80,64,120,46,99,111,109],"ok":true,"email":[97,80,64,120,46,99,111,109]}
+{"input":[97,64,120,80,121,46,99,111,109],"ok":true,"email":[97,64,120,112,121,46,99,111,109]}
+{"input":[78,80,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,81,64,120,46,99,111,109],"ok":true,"email":[97,81,64,120,46,99,111,109]}
+{"input":[97,64,120,81,121,46,99,111,109],"ok":true,"email":[97,64,120,113,121,46,99,111,109]}
+{"input":[78,81,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,82,64,120,46,99,111,109],"ok":true,"email":[97,82,64,120,46,99,111,109]}
+{"input":[97,64,120,82,121,46,99,111,109],"ok":true,"email":[97,64,120,114,121,46,99,111,109]}
+{"input":[78,82,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,83,64,120,46,99,111,109],"ok":true,"email":[97,83,64,120,46,99,111,109]}
+{"input":[97,64,120,83,121,46,99,111,109],"ok":true,"email":[97,64,120,115,121,46,99,111,109]}
+{"input":[78,83,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,84,64,120,46,99,111,109],"ok":true,"email":[97,84,64,120,46,99,111,109]}
+{"input":[97,64,120,84,121,46,99,111,109],"ok":true,"email":[97,64,120,116,121,46,99,111,109]}
+{"input":[78,84,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,85,64,120,46,99,111,109],"ok":true,"email":[97,85,64,120,46,99,111,109]}
+{"input":[97,64,120,85,121,46,99,111,109],"ok":true,"email":[97,64,120,117,121,46,99,111,109]}
+{"input":[78,85,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,86,64,120,46,99,111,109],"ok":true,"email":[97,86,64,120,46,99,111,109]}
+{"input":[97,64,120,86,121,46,99,111,109],"ok":true,"email":[97,64,120,118,121,46,99,111,109]}
+{"input":[78,86,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,87,64,120,46,99,111,109],"ok":true,"email":[97,87,64,120,46,99,111,109]}
+{"input":[97,64,120,87,121,46,99,111,109],"ok":true,"email":[97,64,120,119,121,46,99,111,109]}
+{"input":[78,87,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,88,64,120,46,99,111,109],"ok":true,"email":[97,88,64,120,46,99,111,109]}
+{"input":[97,64,120,88,121,46,99,111,109],"ok":true,"email":[97,64,120,120,121,46,99,111,109]}
+{"input":[78,88,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,89,64,120,46,99,111,109],"ok":true,"email":[97,89,64,120,46,99,111,109]}
+{"input":[97,64,120,89,121,46,99,111,109],"ok":true,"email":[97,64,120,121,121,46,99,111,109]}
+{"input":[78,89,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,90,64,120,46,99,111,109],"ok":true,"email":[97,90,64,120,46,99,111,109]}
+{"input":[97,64,120,90,121,46,99,111,109],"ok":true,"email":[97,64,120,122,121,46,99,111,109]}
+{"input":[78,90,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,91,64,120,46,99,111,109],"ok":false,"reason":"The email address contains invalid characters before the @-sign: '['."}
+{"input":[97,64,120,91,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters: '['."}
 {"input":[78,91,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '['."}
+{"input":[97,92,64,120,46,99,111,109],"ok":false,"reason":"The email address contains invalid characters before the @-sign: \"\\\"."}
+{"input":[97,64,120,92,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters: \"\\\"."}
 {"input":[78,92,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: \"\\\"."}
+{"input":[97,93,64,120,46,99,111,109],"ok":false,"reason":"The email address contains invalid characters before the @-sign: ']'."}
+{"input":[97,64,120,93,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters: ']'."}
 {"input":[78,93,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: ']'."}
+{"input":[97,94,64,120,46,99,111,109],"ok":true,"email":[97,94,64,120,46,99,111,109]}
+{"input":[97,64,120,94,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters: '^'."}
+{"input":[78,94,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,95,64,120,46,99,111,109],"ok":true,"email":[97,95,64,120,46,99,111,109]}
+{"input":[97,64,120,95,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters: '_'."}
+{"input":[78,95,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,96,64,120,46,99,111,109],"ok":true,"email":[97,96,64,120,46,99,111,109]}
+{"input":[97,64,120,96,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters: '`'."}
+{"input":[78,96,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,97,64,120,46,99,111,109],"ok":true,"email":[97,97,64,120,46,99,111,109]}
+{"input":[97,64,120,97,121,46,99,111,109],"ok":true,"email":[97,64,120,97,121,46,99,111,109]}
+{"input":[78,97,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,98,64,120,46,99,111,109],"ok":true,"email":[97,98,64,120,46,99,111,109]}
+{"input":[97,64,120,98,121,46,99,111,109],"ok":true,"email":[97,64,120,98,121,46,99,111,109]}
+{"input":[78,98,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,99,64,120,46,99,111,109],"ok":true,"email":[97,99,64,120,46,99,111,109]}
+{"input":[97,64,120,99,121,46,99,111,109],"ok":true,"email":[97,64,120,99,121,46,99,111,109]}
+{"input":[78,99,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,100,64,120,46,99,111,109],"ok":true,"email":[97,100,64,120,46,99,111,109]}
+{"input":[97,64,120,100,121,46,99,111,109],"ok":true,"email":[97,64,120,100,121,46,99,111,109]}
+{"input":[78,100,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,101,64,120,46,99,111,109],"ok":true,"email":[97,101,64,120,46,99,111,109]}
+{"input":[97,64,120,101,121,46,99,111,109],"ok":true,"email":[97,64,120,101,121,46,99,111,109]}
+{"input":[78,101,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,102,64,120,46,99,111,109],"ok":true,"email":[97,102,64,120,46,99,111,109]}
+{"input":[97,64,120,102,121,46,99,111,109],"ok":true,"email":[97,64,120,102,121,46,99,111,109]}
+{"input":[78,102,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,103,64,120,46,99,111,109],"ok":true,"email":[97,103,64,120,46,99,111,109]}
+{"input":[97,64,120,103,121,46,99,111,109],"ok":true,"email":[97,64,120,103,121,46,99,111,109]}
+{"input":[78,103,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,104,64,120,46,99,111,109],"ok":true,"email":[97,104,64,120,46,99,111,109]}
+{"input":[97,64,120,104,121,46,99,111,109],"ok":true,"email":[97,64,120,104,121,46,99,111,109]}
+{"input":[78,104,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,105,64,120,46,99,111,109],"ok":true,"email":[97,105,64,120,46,99,111,109]}
+{"input":[97,64,120,105,121,46,99,111,109],"ok":true,"email":[97,64,120,105,121,46,99,111,109]}
+{"input":[78,105,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,106,64,120,46,99,111,109],"ok":true,"email":[97,106,64,120,46,99,111,109]}
+{"input":[97,64,120,106,121,46,99,111,109],"ok":true,"email":[97,64,120,106,121,46,99,111,109]}
+{"input":[78,106,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,107,64,120,46,99,111,109],"ok":true,"email":[97,107,64,120,46,99,111,109]}
+{"input":[97,64,120,107,121,46,99,111,109],"ok":true,"email":[97,64,120,107,121,46,99,111,109]}
+{"input":[78,107,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,108,64,120,46,99,111,109],"ok":true,"email":[97,108,64,120,46,99,111,109]}
+{"input":[97,64,120,108,121,46,99,111,109],"ok":true,"email":[97,64,120,108,121,46,99,111,109]}
+{"input":[78,108,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,109,64,120,46,99,111,109],"ok":true,"email":[97,109,64,120,46,99,111,109]}
+{"input":[97,64,120,109,121,46,99,111,109],"ok":true,"email":[97,64,120,109,121,46,99,111,109]}
+{"input":[78,109,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,110,64,120,46,99,111,109],"ok":true,"email":[97,110,64,120,46,99,111,109]}
+{"input":[97,64,120,110,121,46,99,111,109],"ok":true,"email":[97,64,120,110,121,46,99,111,109]}
+{"input":[78,110,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,111,64,120,46,99,111,109],"ok":true,"email":[97,111,64,120,46,99,111,109]}
+{"input":[97,64,120,111,121,46,99,111,109],"ok":true,"email":[97,64,120,111,121,46,99,111,109]}
+{"input":[78,111,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,112,64,120,46,99,111,109],"ok":true,"email":[97,112,64,120,46,99,111,109]}
+{"input":[97,64,120,112,121,46,99,111,109],"ok":true,"email":[97,64,120,112,121,46,99,111,109]}
+{"input":[78,112,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,113,64,120,46,99,111,109],"ok":true,"email":[97,113,64,120,46,99,111,109]}
+{"input":[97,64,120,113,121,46,99,111,109],"ok":true,"email":[97,64,120,113,121,46,99,111,109]}
+{"input":[78,113,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,114,64,120,46,99,111,109],"ok":true,"email":[97,114,64,120,46,99,111,109]}
+{"input":[97,64,120,114,121,46,99,111,109],"ok":true,"email":[97,64,120,114,121,46,99,111,109]}
+{"input":[78,114,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,115,64,120,46,99,111,109],"ok":true,"email":[97,115,64,120,46,99,111,109]}
+{"input":[97,64,120,115,121,46,99,111,109],"ok":true,"email":[97,64,120,115,121,46,99,111,109]}
+{"input":[78,115,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,116,64,120,46,99,111,109],"ok":true,"email":[97,116,64,120,46,99,111,109]}
+{"input":[97,64,120,116,121,46,99,111,109],"ok":true,"email":[97,64,120,116,121,46,99,111,109]}
+{"input":[78,116,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,117,64,120,46,99,111,109],"ok":true,"email":[97,117,64,120,46,99,111,109]}
+{"input":[97,64,120,117,121,46,99,111,109],"ok":true,"email":[97,64,120,117,121,46,99,111,109]}
+{"input":[78,117,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,118,64,120,46,99,111,109],"ok":true,"email":[97,118,64,120,46,99,111,109]}
+{"input":[97,64,120,118,121,46,99,111,109],"ok":true,"email":[97,64,120,118,121,46,99,111,109]}
+{"input":[78,118,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,119,64,120,46,99,111,109],"ok":true,"email":[97,119,64,120,46,99,111,109]}
+{"input":[97,64,120,119,121,46,99,111,109],"ok":true,"email":[97,64,120,119,121,46,99,111,109]}
+{"input":[78,119,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,120,64,120,46,99,111,109],"ok":true,"email":[97,120,64,120,46,99,111,109]}
+{"input":[97,64,120,120,121,46,99,111,109],"ok":true,"email":[97,64,120,120,121,46,99,111,109]}
+{"input":[78,120,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,121,64,120,46,99,111,109],"ok":true,"email":[97,121,64,120,46,99,111,109]}
+{"input":[97,64,120,121,121,46,99,111,109],"ok":true,"email":[97,64,120,121,121,46,99,111,109]}
+{"input":[78,121,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,122,64,120,46,99,111,109],"ok":true,"email":[97,122,64,120,46,99,111,109]}
+{"input":[97,64,120,122,121,46,99,111,109],"ok":true,"email":[97,64,120,122,121,46,99,111,109]}
+{"input":[78,122,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,123,64,120,46,99,111,109],"ok":true,"email":[97,123,64,120,46,99,111,109]}
+{"input":[97,64,120,123,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters: '{'."}
+{"input":[78,123,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,124,64,120,46,99,111,109],"ok":true,"email":[97,124,64,120,46,99,111,109]}
+{"input":[97,64,120,124,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters: '|'."}
+{"input":[78,124,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,125,64,120,46,99,111,109],"ok":true,"email":[97,125,64,120,46,99,111,109]}
+{"input":[97,64,120,125,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters: '}'."}
+{"input":[78,125,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,126,64,120,46,99,111,109],"ok":true,"email":[97,126,64,120,46,99,111,109]}
+{"input":[97,64,120,126,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters: '~'."}
+{"input":[78,126,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,127,64,120,46,99,111,109],"ok":false,"reason":"The email address contains invalid characters before the @-sign: U+007F."}
+{"input":[97,64,120,127,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters: U+007F."}
 {"input":[78,127,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: U+007F."}
 {"input":[97,128,64,120,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: U+0080."}
 {"input":[97,64,120,128,121,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: U+0080."}
@@ -306,35 +583,92 @@
 {"input":[97,137,64,120,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: U+0089."}
 {"input":[97,64,120,137,121,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: U+0089."}
 {"input":[97,138,64,120,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: U+008A."}
+{"input":[97,160,64,120,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: NO-BREAK SPACE."}
+{"input":[97,64,120,160,121,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: NO-BREAK SPACE."}
+{"input":[78,160,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
 {"input":[97,64,120,161,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+00A1 at position 2 of 'x¡y' not allowed)."}
+{"input":[97,162,64,120,46,99,111,109],"ok":true,"email":[97,162,64,120,46,99,111,109]}
 {"input":[97,64,120,162,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+00A2 at position 2 of 'x¢y' not allowed)."}
+{"input":[78,162,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '¢'."}
 {"input":[97,64,120,163,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+00A3 at position 2 of 'x£y' not allowed)."}
+{"input":[78,163,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '£'."}
 {"input":[97,64,120,164,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+00A4 at position 2 of 'x¤y' not allowed)."}
 {"input":[97,64,120,165,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+00A5 at position 2 of 'x¥y' not allowed)."}
+{"input":[97,166,64,120,46,99,111,109],"ok":true,"email":[97,166,64,120,46,99,111,109]}
 {"input":[97,64,120,166,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+00A6 at position 2 of 'x¦y' not allowed)."}
+{"input":[78,166,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '¦'."}
 {"input":[97,64,120,167,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+00A7 at position 2 of 'x§y' not allowed)."}
 {"input":[97,64,120,168,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters after Unicode normalization: SPACE."}
+{"input":[78,168,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '¨'."}
+{"input":[97,169,64,120,46,99,111,109],"ok":true,"email":[97,169,64,120,46,99,111,109]}
 {"input":[97,64,120,169,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+00A9 at position 2 of 'x©y' not allowed)."}
+{"input":[78,169,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '©'."}
+{"input":[97,170,64,120,46,99,111,109],"ok":true,"email":[97,170,64,120,46,99,111,109]}
+{"input":[97,64,120,170,121,46,99,111,109],"ok":true,"email":[97,64,120,97,121,46,99,111,109]}
+{"input":[78,170,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,171,64,120,46,99,111,109],"ok":true,"email":[97,171,64,120,46,99,111,109]}
 {"input":[97,64,120,171,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+00AB at position 2 of 'x«y' not allowed)."}
+{"input":[78,171,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '«'."}
 {"input":[97,64,120,172,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+00AC at position 2 of 'x¬y' not allowed)."}
+{"input":[78,172,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '¬'."}
+{"input":[97,173,64,120,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: SOFT HYPHEN."}
+{"input":[78,173,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: SOFT HYPHEN."}
 {"input":[97,64,120,174,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+00AE at position 2 of 'x®y' not allowed)."}
 {"input":[97,64,120,175,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters after Unicode normalization: SPACE."}
+{"input":[78,175,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '¯'."}
+{"input":[97,176,64,120,46,99,111,109],"ok":true,"email":[97,176,64,120,46,99,111,109]}
 {"input":[97,64,120,176,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+00B0 at position 2 of 'x°y' not allowed)."}
+{"input":[78,176,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '°'."}
+{"input":[97,177,64,120,46,99,111,109],"ok":true,"email":[97,177,64,120,46,99,111,109]}
 {"input":[97,64,120,177,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+00B1 at position 2 of 'x±y' not allowed)."}
+{"input":[78,177,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '±'."}
+{"input":[97,178,64,120,46,99,111,109],"ok":true,"email":[97,178,64,120,46,99,111,109]}
+{"input":[97,64,120,178,121,46,99,111,109],"ok":true,"email":[97,64,120,50,121,46,99,111,109]}
+{"input":[78,178,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,179,64,120,46,99,111,109],"ok":true,"email":[97,179,64,120,46,99,111,109]}
+{"input":[97,64,120,179,121,46,99,111,109],"ok":true,"email":[97,64,120,51,121,46,99,111,109]}
+{"input":[78,179,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
 {"input":[97,64,120,180,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters after Unicode normalization: SPACE."}
 {"input":[97,64,120,182,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+00B6 at position 2 of 'x¶y' not allowed)."}
 {"input":[97,64,120,183,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+00B7 not allowed at position 2 in 'x·y')."}
 {"input":[97,64,120,184,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters after Unicode normalization: SPACE."}
+{"input":[97,186,64,120,46,99,111,109],"ok":true,"email":[97,186,64,120,46,99,111,109]}
+{"input":[97,64,120,186,121,46,99,111,109],"ok":true,"email":[97,64,120,111,121,46,99,111,109]}
+{"input":[78,186,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,187,64,120,46,99,111,109],"ok":true,"email":[97,187,64,120,46,99,111,109]}
 {"input":[97,64,120,187,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+00BB at position 2 of 'x»y' not allowed)."}
+{"input":[78,187,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '»'."}
+{"input":[97,188,64,120,46,99,111,109],"ok":true,"email":[97,188,64,120,46,99,111,109]}
 {"input":[97,64,120,188,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+2044 at position 3 of 'x1⁄4y' not allowed)."}
+{"input":[78,188,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,189,64,120,46,99,111,109],"ok":true,"email":[97,189,64,120,46,99,111,109]}
 {"input":[97,64,120,189,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+2044 at position 3 of 'x1⁄2y' not allowed)."}
+{"input":[78,189,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
 {"input":[97,64,120,190,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+2044 at position 3 of 'x3⁄4y' not allowed)."}
 {"input":[97,64,120,191,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+00BF at position 2 of 'x¿y' not allowed)."}
 {"input":[97,64,120,215,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+00D7 at position 2 of 'x×y' not allowed)."}
 {"input":[97,64,120,247,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+00F7 at position 2 of 'x÷y' not allowed)."}
 {"input":[97,64,120,319,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+00B7 not allowed at position 3 in 'xl·y')."}
 {"input":[97,64,120,320,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+00B7 not allowed at position 3 in 'xl·y')."}
+{"input":[97,453,64,120,46,99,111,109],"ok":true,"email":[97,453,64,120,46,99,111,109]}
+{"input":[97,64,120,453,121,46,99,111,109],"ok":true,"email":[97,64,120,100,382,121,46,99,111,109]}
+{"input":[78,453,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,456,64,120,46,99,111,109],"ok":true,"email":[97,456,64,120,46,99,111,109]}
+{"input":[97,64,120,456,121,46,99,111,109],"ok":true,"email":[97,64,120,108,106,121,46,99,111,109]}
+{"input":[78,456,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
 {"input":[97,64,120,582,121,46,99,111,109],"ok":true,"email":[97,64,120,583,121,46,99,111,109]}
+{"input":[97,688,64,120,46,99,111,109],"ok":true,"email":[97,688,64,120,46,99,111,109]}
+{"input":[97,64,120,688,121,46,99,111,109],"ok":true,"email":[97,64,120,104,121,46,99,111,109]}
+{"input":[78,688,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,689,64,120,46,99,111,109],"ok":true,"email":[97,689,64,120,46,99,111,109]}
+{"input":[97,64,120,689,121,46,99,111,109],"ok":true,"email":[97,64,120,614,121,46,99,111,109]}
+{"input":[78,689,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,697,64,120,46,99,111,109],"ok":true,"email":[97,697,64,120,46,99,111,109]}
+{"input":[97,64,120,697,121,46,99,111,109],"ok":true,"email":[97,64,120,697,121,46,99,111,109]}
+{"input":[78,697,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,698,64,120,46,99,111,109],"ok":true,"email":[97,698,64,120,46,99,111,109]}
+{"input":[97,64,120,698,121,46,99,111,109],"ok":true,"email":[97,64,120,698,121,46,99,111,109]}
+{"input":[78,698,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
 {"input":[97,64,120,706,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+02C2 at position 2 of 'x˂y' not allowed)."}
 {"input":[97,64,120,707,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+02C3 at position 2 of 'x˃y' not allowed)."}
 {"input":[97,64,120,708,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+02C4 at position 2 of 'x˄y' not allowed)."}
@@ -349,20 +683,197 @@
 {"input":[97,64,120,731,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters after Unicode normalization: SPACE."}
 {"input":[97,64,120,732,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters after Unicode normalization: SPACE."}
 {"input":[97,64,120,733,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters after Unicode normalization: SPACE."}
+{"input":[97,768,64,120,46,99,111,109],"ok":true,"email":[224,64,120,46,99,111,109]}
+{"input":[97,64,120,768,121,46,99,111,109],"ok":true,"email":[97,64,120,768,121,46,99,111,109]}
+{"input":[78,768,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: COMBINING GRAVE ACCENT."}
+{"input":[97,769,64,120,46,99,111,109],"ok":true,"email":[225,64,120,46,99,111,109]}
+{"input":[97,64,120,769,121,46,99,111,109],"ok":true,"email":[97,64,120,769,121,46,99,111,109]}
+{"input":[78,769,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: COMBINING ACUTE ACCENT."}
+{"input":[97,888,64,120,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: U+0378."}
+{"input":[97,64,120,888,121,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: U+0378."}
+{"input":[78,888,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: U+0378."}
+{"input":[97,889,64,120,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: U+0379."}
+{"input":[97,64,120,889,121,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: U+0379."}
+{"input":[78,889,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: U+0379."}
 {"input":[97,64,120,890,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters after Unicode normalization: SPACE."}
 {"input":[97,894,64,120,46,99,111,109],"ok":false,"reason":"After Unicode normalization: The email address contains invalid characters before the @-sign: ';'."}
 {"input":[97,64,120,894,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters after Unicode normalization: ';'."}
 {"input":[97,64,120,900,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters after Unicode normalization: SPACE."}
 {"input":[97,64,120,901,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters after Unicode normalization: SPACE."}
+{"input":[97,1154,64,120,46,99,111,109],"ok":true,"email":[97,1154,64,120,46,99,111,109]}
+{"input":[97,64,120,1154,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+0482 at position 2 of 'x҂y' not allowed)."}
+{"input":[78,1154,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '҂'."}
+{"input":[97,1160,64,120,46,99,111,109],"ok":true,"email":[97,1160,64,120,46,99,111,109]}
+{"input":[97,64,120,1160,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+0488 at position 2 of 'x҈y' not allowed)."}
+{"input":[78,1160,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: COMBINING CYRILLIC HUNDRED THOUSANDS SIGN."}
+{"input":[97,1161,64,120,46,99,111,109],"ok":true,"email":[97,1161,64,120,46,99,111,109]}
+{"input":[97,64,120,1161,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+0489 at position 2 of 'x҉y' not allowed)."}
+{"input":[78,1161,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: COMBINING CYRILLIC MILLIONS SIGN."}
 {"input":[78,1165,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,1370,64,120,46,99,111,109],"ok":true,"email":[97,1370,64,120,46,99,111,109]}
+{"input":[97,64,120,1370,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+055A at position 2 of 'x՚y' not allowed)."}
+{"input":[78,1370,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '՚'."}
+{"input":[97,1371,64,120,46,99,111,109],"ok":true,"email":[97,1371,64,120,46,99,111,109]}
+{"input":[97,64,120,1371,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+055B at position 2 of 'x՛y' not allowed)."}
+{"input":[78,1371,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '՛'."}
+{"input":[97,1418,64,120,46,99,111,109],"ok":true,"email":[97,1418,64,120,46,99,111,109]}
+{"input":[97,64,120,1418,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+058A at position 2 of 'x֊y' not allowed)."}
+{"input":[78,1418,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '֊'."}
+{"input":[97,1470,64,120,46,99,111,109],"ok":true,"email":[97,1470,64,120,46,99,111,109]}
+{"input":[97,64,120,1470,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+05BE at position 2 of 'x־y' not allowed)."}
+{"input":[78,1470,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '־'."}
+{"input":[97,1472,64,120,46,99,111,109],"ok":true,"email":[97,1472,64,120,46,99,111,109]}
+{"input":[97,64,120,1472,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+05C0 at position 2 of 'x׀y' not allowed)."}
+{"input":[78,1472,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '׀'."}
+{"input":[97,1475,64,120,46,99,111,109],"ok":true,"email":[97,1475,64,120,46,99,111,109]}
+{"input":[97,64,120,1475,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+05C3 at position 2 of 'x׃y' not allowed)."}
+{"input":[78,1475,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '׃'."}
+{"input":[97,1488,64,120,46,99,111,109],"ok":true,"email":[97,1488,64,120,46,99,111,109]}
+{"input":[97,64,120,1488,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Invalid direction for codepoint at position 2 in a left-to-right label)."}
+{"input":[78,1488,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,1489,64,120,46,99,111,109],"ok":true,"email":[97,1489,64,120,46,99,111,109]}
+{"input":[97,64,120,1489,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Invalid direction for codepoint at position 2 in a left-to-right label)."}
+{"input":[78,1489,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,1536,64,120,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: ARABIC NUMBER SIGN."}
+{"input":[97,64,120,1536,121,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: ARABIC NUMBER SIGN."}
+{"input":[78,1536,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: ARABIC NUMBER SIGN."}
+{"input":[97,1537,64,120,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: ARABIC SIGN SANAH."}
+{"input":[97,64,120,1537,121,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: ARABIC SIGN SANAH."}
+{"input":[78,1537,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: ARABIC SIGN SANAH."}
+{"input":[97,1544,64,120,46,99,111,109],"ok":true,"email":[97,1544,64,120,46,99,111,109]}
+{"input":[97,64,120,1544,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+0608 at position 2 of 'x؈y' not allowed)."}
+{"input":[78,1544,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '؈'."}
+{"input":[97,64,120,1545,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+0609 at position 2 of 'x؉y' not allowed)."}
+{"input":[78,1545,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '؉'."}
+{"input":[97,64,120,1546,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+060A at position 2 of 'x؊y' not allowed)."}
+{"input":[78,1546,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '؊'."}
+{"input":[97,1547,64,120,46,99,111,109],"ok":true,"email":[97,1547,64,120,46,99,111,109]}
+{"input":[97,64,120,1547,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+060B at position 2 of 'x؋y' not allowed)."}
+{"input":[78,1547,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '؋'."}
+{"input":[97,1548,64,120,46,99,111,109],"ok":true,"email":[97,1548,64,120,46,99,111,109]}
+{"input":[97,64,120,1548,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+060C at position 2 of 'x،y' not allowed)."}
+{"input":[97,1549,64,120,46,99,111,109],"ok":true,"email":[97,1549,64,120,46,99,111,109]}
+{"input":[97,64,120,1549,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+060D at position 2 of 'x؍y' not allowed)."}
+{"input":[78,1549,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '؍'."}
+{"input":[97,1563,64,120,46,99,111,109],"ok":true,"email":[97,1563,64,120,46,99,111,109]}
+{"input":[97,64,120,1563,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+061B at position 2 of 'x؛y' not allowed)."}
+{"input":[78,1563,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '؛'."}
+{"input":[97,1564,64,120,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: ARABIC LETTER MARK."}
+{"input":[97,64,120,1564,121,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: ARABIC LETTER MARK."}
+{"input":[78,1564,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: ARABIC LETTER MARK."}
+{"input":[97,1568,64,120,46,99,111,109],"ok":true,"email":[97,1568,64,120,46,99,111,109]}
+{"input":[97,64,120,1568,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Invalid direction for codepoint at position 2 in a left-to-right label)."}
+{"input":[78,1568,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,1569,64,120,46,99,111,109],"ok":true,"email":[97,1569,64,120,46,99,111,109]}
+{"input":[97,64,120,1569,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Invalid direction for codepoint at position 2 in a left-to-right label)."}
+{"input":[78,1569,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,1600,64,120,46,99,111,109],"ok":true,"email":[97,1600,64,120,46,99,111,109]}
+{"input":[97,64,120,1600,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+0640 at position 2 of 'xـy' not allowed)."}
+{"input":[78,1600,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,1632,64,120,46,99,111,109],"ok":true,"email":[97,1632,64,120,46,99,111,109]}
+{"input":[97,64,120,1632,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Invalid direction for codepoint at position 2 in a left-to-right label)."}
+{"input":[78,1632,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,1633,64,120,46,99,111,109],"ok":true,"email":[97,1633,64,120,46,99,111,109]}
+{"input":[97,64,120,1633,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Invalid direction for codepoint at position 2 in a left-to-right label)."}
+{"input":[78,1633,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,1643,64,120,46,99,111,109],"ok":true,"email":[97,1643,64,120,46,99,111,109]}
+{"input":[97,64,120,1643,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+066B at position 2 of 'x٫y' not allowed)."}
+{"input":[78,1643,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '٫'."}
+{"input":[97,1644,64,120,46,99,111,109],"ok":true,"email":[97,1644,64,120,46,99,111,109]}
+{"input":[97,64,120,1644,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+066C at position 2 of 'x٬y' not allowed)."}
+{"input":[78,1644,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '٬'."}
+{"input":[97,1765,64,120,46,99,111,109],"ok":true,"email":[97,1765,64,120,46,99,111,109]}
+{"input":[97,64,120,1765,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Invalid direction for codepoint at position 2 in a left-to-right label)."}
+{"input":[78,1765,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,1789,64,120,46,99,111,109],"ok":true,"email":[97,1789,64,120,46,99,111,109]}
+{"input":[97,64,120,1789,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Invalid direction for codepoint at position 2 in a left-to-right label)."}
+{"input":[78,1789,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '۽'."}
+{"input":[97,1790,64,120,46,99,111,109],"ok":true,"email":[97,1790,64,120,46,99,111,109]}
+{"input":[97,64,120,1790,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Invalid direction for codepoint at position 2 in a left-to-right label)."}
+{"input":[78,1790,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '۾'."}
+{"input":[97,1807,64,120,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: SYRIAC ABBREVIATION MARK."}
+{"input":[97,64,120,1807,121,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: SYRIAC ABBREVIATION MARK."}
+{"input":[78,1807,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: SYRIAC ABBREVIATION MARK."}
 {"input":[97,64,120,1855,121,46,99,111,109],"ok":true,"email":[97,64,120,1855,121,46,99,111,109]}
+{"input":[97,1984,64,120,46,99,111,109],"ok":true,"email":[97,1984,64,120,46,99,111,109]}
+{"input":[97,64,120,1984,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Invalid direction for codepoint at position 2 in a left-to-right label)."}
+{"input":[78,1984,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,1985,64,120,46,99,111,109],"ok":true,"email":[97,1985,64,120,46,99,111,109]}
+{"input":[97,64,120,1985,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Invalid direction for codepoint at position 2 in a left-to-right label)."}
+{"input":[78,1985,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,2036,64,120,46,99,111,109],"ok":true,"email":[97,2036,64,120,46,99,111,109]}
+{"input":[97,64,120,2036,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Invalid direction for codepoint at position 2 in a left-to-right label)."}
+{"input":[78,2036,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,2037,64,120,46,99,111,109],"ok":true,"email":[97,2037,64,120,46,99,111,109]}
+{"input":[97,64,120,2037,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Invalid direction for codepoint at position 2 in a left-to-right label)."}
+{"input":[78,2037,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,2046,64,120,46,99,111,109],"ok":true,"email":[97,2046,64,120,46,99,111,109]}
+{"input":[97,64,120,2046,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+07FE at position 2 of 'x߾y' not allowed)."}
+{"input":[78,2046,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '߾'."}
+{"input":[97,2047,64,120,46,99,111,109],"ok":true,"email":[97,2047,64,120,46,99,111,109]}
+{"input":[97,64,120,2047,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+07FF at position 2 of 'x߿y' not allowed)."}
+{"input":[78,2047,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '߿'."}
+{"input":[97,2184,64,120,46,99,111,109],"ok":true,"email":[97,2184,64,120,46,99,111,109]}
+{"input":[97,64,120,2184,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+0888 at position 2 of 'x࢈y' not allowed)."}
+{"input":[78,2184,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '࢈'."}
+{"input":[97,2307,64,120,46,99,111,109],"ok":true,"email":[97,2307,64,120,46,99,111,109]}
+{"input":[97,64,120,2307,121,46,99,111,109],"ok":true,"email":[97,64,120,2307,121,46,99,111,109]}
+{"input":[78,2307,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: DEVANAGARI SIGN VISARGA."}
+{"input":[97,2363,64,120,46,99,111,109],"ok":true,"email":[97,2363,64,120,46,99,111,109]}
+{"input":[97,64,120,2363,121,46,99,111,109],"ok":true,"email":[97,64,120,2363,121,46,99,111,109]}
+{"input":[78,2363,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: DEVANAGARI VOWEL SIGN OOE."}
+{"input":[97,2406,64,120,46,99,111,109],"ok":true,"email":[97,2406,64,120,46,99,111,109]}
+{"input":[97,64,120,2406,121,46,99,111,109],"ok":true,"email":[97,64,120,2406,121,46,99,111,109]}
+{"input":[78,2406,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,2407,64,120,46,99,111,109],"ok":true,"email":[97,2407,64,120,46,99,111,109]}
+{"input":[97,64,120,2407,121,46,99,111,109],"ok":true,"email":[97,64,120,2407,121,46,99,111,109]}
+{"input":[78,2407,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,2548,64,120,46,99,111,109],"ok":true,"email":[97,2548,64,120,46,99,111,109]}
+{"input":[97,64,120,2548,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+09F4 at position 2 of 'x৴y' not allowed)."}
+{"input":[78,2548,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,2549,64,120,46,99,111,109],"ok":true,"email":[97,2549,64,120,46,99,111,109]}
+{"input":[97,64,120,2549,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+09F5 at position 2 of 'x৵y' not allowed)."}
+{"input":[78,2549,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,2554,64,120,46,99,111,109],"ok":true,"email":[97,2554,64,120,46,99,111,109]}
+{"input":[97,64,120,2554,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+09FA at position 2 of 'x৺y' not allowed)."}
+{"input":[78,2554,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '৺'."}
 {"input":[97,64,120,2605,121,46,99,111,109],"ok":true,"email":[97,64,120,2605,121,46,99,111,109]}
+{"input":[97,3263,64,120,46,99,111,109],"ok":true,"email":[97,3263,64,120,46,99,111,109]}
+{"input":[97,64,120,3263,121,46,99,111,109],"ok":true,"email":[97,64,120,3263,121,46,99,111,109]}
+{"input":[78,3263,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: KANNADA VOWEL SIGN I."}
+{"input":[97,3270,64,120,46,99,111,109],"ok":true,"email":[97,3270,64,120,46,99,111,109]}
+{"input":[97,64,120,3270,121,46,99,111,109],"ok":true,"email":[97,64,120,3270,121,46,99,111,109]}
+{"input":[78,3270,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: KANNADA VOWEL SIGN E."}
 {"input":[97,64,120,3406,121,46,99,111,109],"ok":true,"email":[97,64,120,3406,121,46,99,111,109]}
 {"input":[78,3543,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: U+0DD7."}
+{"input":[97,64,120,3851,121,46,99,111,109],"ok":true,"email":[97,64,120,3851,121,46,99,111,109]}
+{"input":[97,64,120,3852,121,46,99,111,109],"ok":true,"email":[97,64,120,3851,121,46,99,111,109]}
+{"input":[97,3898,64,120,46,99,111,109],"ok":true,"email":[97,3898,64,120,46,99,111,109]}
+{"input":[97,64,120,3898,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+0F3A at position 2 of 'x༺y' not allowed)."}
+{"input":[97,3899,64,120,46,99,111,109],"ok":true,"email":[97,3899,64,120,46,99,111,109]}
+{"input":[97,64,120,3899,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+0F3B at position 2 of 'x༻y' not allowed)."}
+{"input":[97,64,120,3900,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+0F3C at position 2 of 'x༼y' not allowed)."}
+{"input":[97,64,120,3901,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+0F3D at position 2 of 'x༽y' not allowed)."}
 {"input":[97,64,120,4193,121,46,99,111,109],"ok":true,"email":[97,64,120,4193,121,46,99,111,109]}
+{"input":[97,64,120,4352,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+1100 at position 2 of 'xᄀy' not allowed)."}
+{"input":[97,64,120,4353,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+1101 at position 2 of 'xᄁy' not allowed)."}
 {"input":[97,64,120,4815,121,46,99,111,109],"ok":true,"email":[97,64,120,4815,121,46,99,111,109]}
+{"input":[97,5120,64,120,46,99,111,109],"ok":true,"email":[97,5120,64,120,46,99,111,109]}
+{"input":[97,64,120,5120,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+1400 at position 2 of 'x᐀y' not allowed)."}
+{"input":[78,5120,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '᐀'."}
 {"input":[97,64,120,5355,121,46,99,111,109],"ok":true,"email":[97,64,120,5355,121,46,99,111,109]}
+{"input":[97,5760,64,120,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: OGHAM SPACE MARK."}
+{"input":[97,64,120,5760,121,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: OGHAM SPACE MARK."}
+{"input":[78,5760,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
 {"input":[78,5861,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,5870,64,120,46,99,111,109],"ok":true,"email":[97,5870,64,120,46,99,111,109]}
+{"input":[97,64,120,5870,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+16EE at position 2 of 'xᛮy' not allowed)."}
+{"input":[78,5870,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,5871,64,120,46,99,111,109],"ok":true,"email":[97,5871,64,120,46,99,111,109]}
+{"input":[97,64,120,5871,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+16EF at position 2 of 'xᛯy' not allowed)."}
+{"input":[78,5871,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,6158,64,120,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: MONGOLIAN VOWEL SEPARATOR."}
+{"input":[78,6158,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: MONGOLIAN VOWEL SEPARATOR."}
 {"input":[97,64,120,6516,121,46,99,111,109],"ok":true,"email":[97,64,120,6516,121,46,99,111,109]}
 {"input":[78,7232,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
 {"input":[97,7794,64,120,46,99,111,109],"ok":true,"email":[97,7794,64,120,46,99,111,109]}
@@ -381,19 +892,110 @@
 {"input":[97,64,120,8175,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters after Unicode normalization: '`'."}
 {"input":[97,64,120,8189,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters after Unicode normalization: SPACE."}
 {"input":[97,64,120,8190,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters after Unicode normalization: SPACE."}
+{"input":[97,8192,64,120,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: EN QUAD."}
+{"input":[97,64,120,8192,121,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: EN QUAD."}
+{"input":[97,8206,64,120,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: LEFT-TO-RIGHT MARK."}
+{"input":[97,64,120,8206,121,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: LEFT-TO-RIGHT MARK."}
+{"input":[78,8206,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: LEFT-TO-RIGHT MARK."}
+{"input":[97,8207,64,120,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: RIGHT-TO-LEFT MARK."}
+{"input":[97,64,120,8207,121,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: RIGHT-TO-LEFT MARK."}
+{"input":[78,8207,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: RIGHT-TO-LEFT MARK."}
 {"input":[97,64,120,8215,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters after Unicode normalization: SPACE."}
+{"input":[97,8216,64,120,46,99,111,109],"ok":true,"email":[97,8216,64,120,46,99,111,109]}
+{"input":[97,64,120,8216,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+2018 at position 2 of 'x‘y' not allowed)."}
+{"input":[78,8216,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '‘'."}
+{"input":[97,8217,64,120,46,99,111,109],"ok":true,"email":[97,8217,64,120,46,99,111,109]}
+{"input":[97,64,120,8217,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+2019 at position 2 of 'x’y' not allowed)."}
+{"input":[78,8217,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '’'."}
+{"input":[97,8232,64,120,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: LINE SEPARATOR."}
+{"input":[97,64,120,8232,121,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: LINE SEPARATOR."}
+{"input":[78,8232,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,8233,64,120,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: PARAGRAPH SEPARATOR."}
+{"input":[97,64,120,8233,121,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: PARAGRAPH SEPARATOR."}
+{"input":[78,8233,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,8234,64,120,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: LEFT-TO-RIGHT EMBEDDING."}
+{"input":[97,64,120,8234,121,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: LEFT-TO-RIGHT EMBEDDING."}
+{"input":[78,8234,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: LEFT-TO-RIGHT EMBEDDING."}
+{"input":[97,8235,64,120,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: RIGHT-TO-LEFT EMBEDDING."}
+{"input":[97,64,120,8235,121,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: RIGHT-TO-LEFT EMBEDDING."}
+{"input":[78,8235,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: RIGHT-TO-LEFT EMBEDDING."}
+{"input":[97,8236,64,120,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: POP DIRECTIONAL FORMATTING."}
+{"input":[97,64,120,8236,121,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: POP DIRECTIONAL FORMATTING."}
+{"input":[78,8236,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: POP DIRECTIONAL FORMATTING."}
+{"input":[97,8237,64,120,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: LEFT-TO-RIGHT OVERRIDE."}
+{"input":[97,64,120,8237,121,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: LEFT-TO-RIGHT OVERRIDE."}
+{"input":[78,8237,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: LEFT-TO-RIGHT OVERRIDE."}
+{"input":[97,8238,64,120,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: RIGHT-TO-LEFT OVERRIDE."}
+{"input":[97,64,120,8238,121,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: RIGHT-TO-LEFT OVERRIDE."}
+{"input":[78,8238,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: RIGHT-TO-LEFT OVERRIDE."}
+{"input":[97,8239,64,120,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: NARROW NO-BREAK SPACE."}
+{"input":[97,64,120,8239,121,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: NARROW NO-BREAK SPACE."}
+{"input":[78,8239,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
 {"input":[97,64,120,8252,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters after Unicode normalization: '!'."}
 {"input":[97,64,120,8254,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters after Unicode normalization: SPACE."}
+{"input":[97,8255,64,120,46,99,111,109],"ok":true,"email":[97,8255,64,120,46,99,111,109]}
+{"input":[97,64,120,8255,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+203F at position 2 of 'x‿y' not allowed)."}
+{"input":[78,8255,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '‿'."}
+{"input":[97,64,120,8256,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+2040 at position 2 of 'x⁀y' not allowed)."}
+{"input":[78,8256,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '⁀'."}
+{"input":[97,8260,64,120,46,99,111,109],"ok":true,"email":[97,8260,64,120,46,99,111,109]}
+{"input":[97,64,120,8260,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+2044 at position 2 of 'x⁄y' not allowed)."}
+{"input":[78,8260,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '⁄'."}
 {"input":[97,64,120,8263,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters after Unicode normalization: '?'."}
 {"input":[97,64,120,8264,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters after Unicode normalization: '!', '?'."}
 {"input":[97,64,120,8265,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters after Unicode normalization: '!', '?'."}
+{"input":[97,8294,64,120,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: LEFT-TO-RIGHT ISOLATE."}
+{"input":[97,64,120,8294,121,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: LEFT-TO-RIGHT ISOLATE."}
+{"input":[78,8294,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: LEFT-TO-RIGHT ISOLATE."}
+{"input":[97,8295,64,120,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: RIGHT-TO-LEFT ISOLATE."}
+{"input":[97,64,120,8295,121,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: RIGHT-TO-LEFT ISOLATE."}
+{"input":[78,8295,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: RIGHT-TO-LEFT ISOLATE."}
+{"input":[97,8296,64,120,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: FIRST STRONG ISOLATE."}
+{"input":[97,64,120,8296,121,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: FIRST STRONG ISOLATE."}
+{"input":[78,8296,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: FIRST STRONG ISOLATE."}
+{"input":[97,8297,64,120,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: POP DIRECTIONAL ISOLATE."}
+{"input":[97,64,120,8297,121,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: POP DIRECTIONAL ISOLATE."}
+{"input":[78,8297,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: POP DIRECTIONAL ISOLATE."}
+{"input":[97,8314,64,120,46,99,111,109],"ok":true,"email":[97,8314,64,120,46,99,111,109]}
 {"input":[97,64,120,8314,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters after Unicode normalization: '+'."}
+{"input":[78,8314,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '⁺'."}
+{"input":[97,64,120,8315,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+2212 at position 2 of 'x−y' not allowed)."}
+{"input":[78,8315,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '⁻'."}
 {"input":[97,64,120,8316,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters after Unicode normalization: '='."}
 {"input":[97,64,120,8317,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters after Unicode normalization: '('."}
 {"input":[97,64,120,8318,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters after Unicode normalization: ')'."}
 {"input":[97,64,120,8330,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters after Unicode normalization: '+'."}
+{"input":[97,64,120,8331,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+2212 at position 2 of 'x−y' not allowed)."}
+{"input":[97,64,120,8332,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters after Unicode normalization: '='."}
+{"input":[97,64,120,8333,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters after Unicode normalization: '('."}
+{"input":[97,64,120,8334,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters after Unicode normalization: ')'."}
+{"input":[97,64,120,8360,121,46,99,111,109],"ok":true,"email":[97,64,120,114,115,121,46,99,111,109]}
 {"input":[97,64,120,8380,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+20BC at position 2 of 'x₼y' not allowed)."}
+{"input":[97,64,120,8400,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+20D0 at position 2 of 'x⃐y' not allowed)."}
+{"input":[97,64,120,8401,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+20D1 at position 2 of 'x⃑y' not allowed)."}
+{"input":[97,64,120,8448,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters after Unicode normalization: '/'."}
+{"input":[97,64,120,8449,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters after Unicode normalization: '/'."}
+{"input":[97,64,120,8470,121,46,99,111,109],"ok":true,"email":[97,64,120,110,111,121,46,99,111,109]}
+{"input":[97,64,120,8480,121,46,99,111,109],"ok":true,"email":[97,64,120,115,109,121,46,99,111,109]}
+{"input":[97,8494,64,120,46,99,111,109],"ok":true,"email":[97,8494,64,120,46,99,111,109]}
+{"input":[97,64,120,8494,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+212E at position 2 of 'x℮y' not allowed)."}
+{"input":[78,8494,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '℮'."}
 {"input":[97,8513,64,120,46,99,111,109],"ok":true,"email":[97,8513,64,120,46,99,111,109]}
+{"input":[97,64,120,8544,121,46,99,111,109],"ok":true,"email":[97,64,120,105,121,46,99,111,109]}
+{"input":[97,64,120,8545,121,46,99,111,109],"ok":true,"email":[97,64,120,105,105,121,46,99,111,109]}
+{"input":[97,8723,64,120,46,99,111,109],"ok":true,"email":[97,8723,64,120,46,99,111,109]}
+{"input":[97,64,120,8723,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+2213 at position 2 of 'x∓y' not allowed)."}
+{"input":[78,8723,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '∓'."}
+{"input":[97,64,120,9312,121,46,99,111,109],"ok":true,"email":[97,64,120,49,121,46,99,111,109]}
+{"input":[97,64,120,9313,121,46,99,111,109],"ok":true,"email":[97,64,120,50,121,46,99,111,109]}
+{"input":[97,64,120,9332,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters after Unicode normalization: '(', ')'."}
+{"input":[97,64,120,9333,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters after Unicode normalization: '(', ')'."}
+{"input":[97,64,120,9352,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters: '⒈'."}
+{"input":[97,64,120,9353,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters: '⒉'."}
+{"input":[97,64,120,9372,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters after Unicode normalization: '(', ')'."}
+{"input":[97,64,120,9373,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters after Unicode normalization: '(', ')'."}
+{"input":[97,64,120,9398,121,46,99,111,109],"ok":true,"email":[97,64,120,97,121,46,99,111,109]}
+{"input":[97,64,120,9399,121,46,99,111,109],"ok":true,"email":[97,64,120,98,121,46,99,111,109]}
 {"input":[97,9801,64,120,46,99,111,109],"ok":true,"email":[97,9801,64,120,46,99,111,109]}
 {"input":[78,10011,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '✛'."}
 {"input":[97,64,120,11267,121,46,99,111,109],"ok":true,"email":[97,64,120,11315,121,46,99,111,109]}
@@ -415,8 +1017,19 @@
 {"input":[97,64,120,12285,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters (Codepoint U+2FFD not allowed at position 2 in 'x⿽y.com')."}
 {"input":[97,64,120,12286,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters (Codepoint U+2FFE not allowed at position 2 in 'x⿾y.com')."}
 {"input":[97,64,120,12287,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters (Codepoint U+2FFF not allowed at position 2 in 'x⿿y.com')."}
+{"input":[97,64,120,12290,121,46,99,111,109],"ok":true,"email":[97,64,120,46,121,46,99,111,109]}
+{"input":[97,64,120,12334,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+302E at position 2 of 'x〮y' not allowed)."}
+{"input":[97,64,120,12335,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+302F at position 2 of 'x〯y' not allowed)."}
+{"input":[97,64,120,12337,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+3031 at position 2 of 'x〱y' not allowed)."}
+{"input":[97,64,120,12338,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+3032 at position 2 of 'x〲y' not allowed)."}
+{"input":[97,64,120,12690,121,46,99,111,109],"ok":true,"email":[97,64,120,19968,121,46,99,111,109]}
+{"input":[97,64,120,12691,121,46,99,111,109],"ok":true,"email":[97,64,120,20108,121,46,99,111,109]}
 {"input":[78,12712,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
 {"input":[97,64,120,12783,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters (Codepoint U+31EF not allowed at position 2 in 'x㇯y.com')."}
+{"input":[97,64,120,12832,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters after Unicode normalization: '(', ')'."}
+{"input":[97,64,120,12833,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters after Unicode normalization: '(', ')'."}
+{"input":[97,64,120,13250,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters: '㏂'."}
+{"input":[97,64,120,13255,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters: '㏇'."}
 {"input":[97,13433,64,120,46,99,111,109],"ok":true,"email":[97,13433,64,120,46,99,111,109]}
 {"input":[97,13933,64,120,46,99,111,109],"ok":true,"email":[97,13933,64,120,46,99,111,109]}
 {"input":[97,14433,64,120,46,99,111,109],"ok":true,"email":[97,14433,64,120,46,99,111,109]}
@@ -476,6 +1089,12 @@
 {"input":[78,41475,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
 {"input":[78,41975,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
 {"input":[78,42527,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,42889,64,120,46,99,111,109],"ok":true,"email":[97,42889,64,120,46,99,111,109]}
+{"input":[97,64,120,42889,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+A789 at position 2 of 'x꞉y' not allowed)."}
+{"input":[78,42889,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '꞉'."}
+{"input":[97,42890,64,120,46,99,111,109],"ok":true,"email":[97,42890,64,120,46,99,111,109]}
+{"input":[97,64,120,42890,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+A78A at position 2 of 'x꞊y' not allowed)."}
+{"input":[78,42890,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '꞊'."}
 {"input":[97,43145,64,120,46,99,111,109],"ok":true,"email":[97,43145,64,120,46,99,111,109]}
 {"input":[78,43809,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
 {"input":[78,44329,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
@@ -500,8 +1119,20 @@
 {"input":[78,53829,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
 {"input":[78,54329,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
 {"input":[78,54829,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,55296,64,120,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: U+D800."}
+{"input":[97,64,120,55296,121,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: U+D800."}
+{"input":[78,55296,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: U+D800."}
+{"input":[97,55297,64,120,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: U+D801."}
+{"input":[97,64,120,55297,121,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: U+D801."}
+{"input":[78,55297,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: U+D801."}
 {"input":[78,55363,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: U+D843."}
 {"input":[78,56363,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: U+DC2B."}
+{"input":[97,57344,64,120,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: U+E000."}
+{"input":[97,64,120,57344,121,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: U+E000."}
+{"input":[78,57344,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: U+E000."}
+{"input":[97,57345,64,120,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: U+E001."}
+{"input":[97,64,120,57345,121,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: U+E001."}
+{"input":[78,57345,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: U+E001."}
 {"input":[78,57363,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: U+E013."}
 {"input":[78,58363,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: U+E3FB."}
 {"input":[78,59363,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: U+E7E3."}
@@ -511,19 +1142,103 @@
 {"input":[78,63363,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: U+F783."}
 {"input":[78,63821,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
 {"input":[97,64431,64,120,46,99,111,109],"ok":true,"email":[97,64431,64,120,46,99,111,109]}
+{"input":[97,64434,64,120,46,99,111,109],"ok":true,"email":[97,64434,64,120,46,99,111,109]}
+{"input":[97,64,120,64434,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+FBB2 at position 2 of 'x﮲y' not allowed)."}
+{"input":[78,64434,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '﮲'."}
+{"input":[97,64,120,64606,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters after Unicode normalization: SPACE."}
+{"input":[97,64,120,64607,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters after Unicode normalization: SPACE."}
+{"input":[97,65020,64,120,46,99,111,109],"ok":true,"email":[97,65020,64,120,46,99,111,109]}
+{"input":[97,64,120,65020,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Invalid direction for codepoint at position 2 in a left-to-right label)."}
+{"input":[78,65020,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '﷼'."}
 {"input":[97,64,120,65042,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters (Codepoint U+FE12 not allowed at position 2 in 'x︒y.com')."}
 {"input":[97,64,120,65049,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters (Codepoint U+FE19 not allowed at position 2 in 'x︙y.com')."}
 {"input":[97,64,120,65072,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters (Codepoint U+FE30 not allowed at position 2 in 'x︰y.com')."}
+{"input":[97,64,120,65075,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters after Unicode normalization: '_'."}
+{"input":[97,64,120,65076,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters after Unicode normalization: '_'."}
+{"input":[97,64,120,65104,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters after Unicode normalization: ','."}
+{"input":[97,64,120,65109,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters after Unicode normalization: ':'."}
+{"input":[97,64,120,65119,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters after Unicode normalization: '#'."}
+{"input":[97,65123,64,120,46,99,111,109],"ok":true,"email":[97,65123,64,120,46,99,111,109]}
+{"input":[97,64,120,65123,121,46,99,111,109],"ok":true,"email":[97,64,120,45,121,46,99,111,109]}
+{"input":[78,65123,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '﹣'."}
+{"input":[97,64,120,65129,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters after Unicode normalization: '$'."}
+{"input":[97,64,120,65130,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters after Unicode normalization: '%'."}
+{"input":[97,64,120,65284,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters after Unicode normalization: '$'."}
+{"input":[78,65293,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '－'."}
+{"input":[97,64,120,65294,121,46,99,111,109],"ok":true,"email":[97,64,120,46,121,46,99,111,109]}
 {"input":[97,64,120,65313,121,46,99,111,109],"ok":true,"email":[97,64,120,97,121,46,99,111,109]}
+{"input":[97,64,120,65377,121,46,99,111,109],"ok":true,"email":[97,64,120,46,121,46,99,111,109]}
+{"input":[97,65529,64,120,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: INTERLINEAR ANNOTATION ANCHOR."}
+{"input":[97,64,120,65529,121,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: INTERLINEAR ANNOTATION ANCHOR."}
+{"input":[78,65529,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: INTERLINEAR ANNOTATION ANCHOR."}
+{"input":[97,65530,64,120,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: INTERLINEAR ANNOTATION SEPARATOR."}
+{"input":[97,64,120,65530,121,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: INTERLINEAR ANNOTATION SEPARATOR."}
+{"input":[78,65530,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: INTERLINEAR ANNOTATION SEPARATOR."}
 {"input":[97,64,120,65532,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters (Codepoint U+FFFC not allowed at position 2 in 'x￼y.com')."}
 {"input":[97,64,120,65533,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters (Codepoint U+FFFD not allowed at position 2 in 'x�y.com')."}
 {"input":[97,64,120,65830,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+10126 at position 2 of 'x𐄦y' not allowed)."}
+{"input":[97,65856,64,120,46,99,111,109],"ok":true,"email":[97,65856,64,120,46,99,111,109]}
+{"input":[97,64,120,65856,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+10140 at position 2 of 'x𐅀y' not allowed)."}
+{"input":[78,65856,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,65857,64,120,46,99,111,109],"ok":true,"email":[97,65857,64,120,46,99,111,109]}
+{"input":[97,64,120,65857,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+10141 at position 2 of 'x𐅁y' not allowed)."}
+{"input":[78,65857,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
 {"input":[78,66211,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,64,120,66273,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+102E1 at position 2 of 'x𐋡y' not allowed)."}
+{"input":[97,64,120,66274,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+102E2 at position 2 of 'x𐋢y' not allowed)."}
 {"input":[78,66828,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
 {"input":[97,64,120,67370,121,46,99,111,109],"ok":true,"email":[97,64,120,67370,121,46,99,111,109]}
+{"input":[97,67672,64,120,46,99,111,109],"ok":true,"email":[97,67672,64,120,46,99,111,109]}
+{"input":[97,64,120,67672,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+10858 at position 2 of 'x𐡘y' not allowed)."}
+{"input":[78,67672,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,67673,64,120,46,99,111,109],"ok":true,"email":[97,67673,64,120,46,99,111,109]}
+{"input":[97,64,120,67673,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+10859 at position 2 of 'x𐡙y' not allowed)."}
+{"input":[78,67673,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,67703,64,120,46,99,111,109],"ok":true,"email":[97,67703,64,120,46,99,111,109]}
+{"input":[97,64,120,67703,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+10877 at position 2 of 'x𐡷y' not allowed)."}
+{"input":[78,67703,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '𐡷'."}
+{"input":[97,67704,64,120,46,99,111,109],"ok":true,"email":[97,67704,64,120,46,99,111,109]}
+{"input":[97,64,120,67704,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+10878 at position 2 of 'x𐡸y' not allowed)."}
+{"input":[78,67704,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '𐡸'."}
 {"input":[78,68425,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
 {"input":[78,68467,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: U+00010B73."}
+{"input":[97,68736,64,120,46,99,111,109],"ok":true,"email":[97,68736,64,120,46,99,111,109]}
+{"input":[97,64,120,68736,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Invalid direction for codepoint at position 2 in a left-to-right label)."}
+{"input":[78,68736,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,68737,64,120,46,99,111,109],"ok":true,"email":[97,68737,64,120,46,99,111,109]}
+{"input":[97,64,120,68737,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Invalid direction for codepoint at position 2 in a left-to-right label)."}
+{"input":[78,68737,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,68800,64,120,46,99,111,109],"ok":true,"email":[97,68800,64,120,46,99,111,109]}
+{"input":[97,64,120,68800,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Invalid direction for codepoint at position 2 in a left-to-right label)."}
+{"input":[78,68800,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,68801,64,120,46,99,111,109],"ok":true,"email":[97,68801,64,120,46,99,111,109]}
+{"input":[97,64,120,68801,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Invalid direction for codepoint at position 2 in a left-to-right label)."}
+{"input":[78,68801,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,69006,64,120,46,99,111,109],"ok":true,"email":[97,69006,64,120,46,99,111,109]}
+{"input":[97,64,120,69006,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+10D8E at position 2 of 'x𐶎y' not allowed)."}
+{"input":[78,69006,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '𐶎'."}
+{"input":[97,69007,64,120,46,99,111,109],"ok":true,"email":[97,69007,64,120,46,99,111,109]}
+{"input":[97,64,120,69007,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+10D8F at position 2 of 'x𐶏y' not allowed)."}
+{"input":[78,69007,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '𐶏'."}
+{"input":[97,69216,64,120,46,99,111,109],"ok":true,"email":[97,69216,64,120,46,99,111,109]}
+{"input":[97,64,120,69216,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+10E60 at position 2 of 'x𐹠y' not allowed)."}
+{"input":[78,69216,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,69217,64,120,46,99,111,109],"ok":true,"email":[97,69217,64,120,46,99,111,109]}
+{"input":[97,64,120,69217,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+10E61 at position 2 of 'x𐹡y' not allowed)."}
+{"input":[78,69217,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,69293,64,120,46,99,111,109],"ok":true,"email":[97,69293,64,120,46,99,111,109]}
+{"input":[97,64,120,69293,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+10EAD at position 2 of 'x𐺭y' not allowed)."}
+{"input":[78,69293,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: '𐺭'."}
+{"input":[97,69457,64,120,46,99,111,109],"ok":true,"email":[97,69457,64,120,46,99,111,109]}
+{"input":[97,64,120,69457,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+10F51 at position 2 of 'x𐽑y' not allowed)."}
+{"input":[78,69457,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,69458,64,120,46,99,111,109],"ok":true,"email":[97,69458,64,120,46,99,111,109]}
+{"input":[97,64,120,69458,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+10F52 at position 2 of 'x𐽒y' not allowed)."}
+{"input":[78,69458,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
 {"input":[78,69745,32,60,97,64,120,46,99,111,109,62],"ok":true,"email":[97,64,120,46,99,111,109]}
+{"input":[97,69821,64,120,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: KAITHI NUMBER SIGN."}
+{"input":[97,64,120,69821,121,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: KAITHI NUMBER SIGN."}
+{"input":[78,69821,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: KAITHI NUMBER SIGN."}
 {"input":[97,64,120,70381,121,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: U+000112ED."}
 {"input":[97,70461,64,120,46,99,111,109],"ok":true,"email":[97,70461,64,120,46,99,111,109]}
 {"input":[97,71440,64,120,46,99,111,109],"ok":true,"email":[97,71440,64,120,46,99,111,109]}
@@ -602,6 +1317,8 @@
 {"input":[97,64,120,124898,121,46,99,111,109],"ok":true,"email":[97,64,120,124898,121,46,99,111,109]}
 {"input":[97,125667,64,120,46,99,111,109],"ok":false,"reason":"The email address contains unsafe characters: U+0001EAE3."}
 {"input":[78,126846,32,60,97,64,120,46,99,111,109,62],"ok":false,"reason":"The display name contains invalid characters when not quoted: U+0001EF7E."}
+{"input":[97,64,120,127233,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters after Unicode normalization: ','."}
+{"input":[97,64,120,127234,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign contains invalid characters after Unicode normalization: ','."}
 {"input":[97,127276,64,120,46,99,111,109],"ok":true,"email":[97,127276,64,120,46,99,111,109]}
 {"input":[97,64,120,128194,121,46,99,111,109],"ok":false,"reason":"The part after the @-sign is invalid (Codepoint U+1F4C2 at position 2 of 'x📂y' not allowed)."}
 {"input":[97,128950,64,120,46,99,111,109],"ok":true,"email":[97,128950,64,120,46,99,111,109]}

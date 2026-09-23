@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity/pyunicodedata"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
@@ -207,30 +208,56 @@ func TestValidateEmailMatchesLivePydantic(t *testing.T) {
 }
 
 // selectGolden keeps a small, deterministic slice of the live answers for
-// golden_test.go: every hand-picked and surrogate case, the first 40
-// inputs of every refusal class (reasonClass), every 3000th other refusal
-// and every 1500th accepted input.
+// golden_test.go: every hand-picked and surrogate case; for the code point
+// sweeps, every ASCII probe and the first two probes of every (sweep,
+// outcome class, category, bidirectional class) cell; the first 40 inputs
+// of every refusal class; every 3000th other refusal and every 1500th
+// accepted input.
 func selectGolden(corpus [][]rune, want []verdict) []goldenCase {
 	fixed := len(handPicked()) + len(surrogateCases())
 	perClass := map[string]int{}
+	perCell := map[string]int{}
 	var out []goldenCase
 	accepted, refused := 0, 0
 	for index, input := range corpus {
 		keep := index < fixed
+		outcome := "ok"
+		if !want[index].OK {
+			outcome = reasonClass(want[index].Reason)
+		}
+		if kind, probe, ok := sweepProbe(input); ok {
+			cell := kind + "|" + outcome + "|" + pyunicodedata.Category(probe) + "|" + pyunicodedata.Bidirectional(probe)
+			perCell[cell]++
+			keep = keep || probe < 0x80 || perCell[cell] <= 2
+		}
 		if want[index].OK {
 			accepted++
 			keep = keep || accepted%1500 == 1
 		} else {
 			refused++
-			class := reasonClass(want[index].Reason)
-			perClass[class]++
-			keep = keep || perClass[class] <= 40 || refused%3000 == 1
+			perClass[outcome]++
+			keep = keep || perClass[outcome] <= 40 || refused%3000 == 1
 		}
 		if keep {
 			out = append(out, goldenCase{Input: input, OK: want[index].OK, Email: want[index].Email, Reason: want[index].Reason})
 		}
 	}
 	return out
+}
+
+// sweepProbe recognises the three sweep shapes and returns the code point
+// under test.
+func sweepProbe(input []rune) (string, rune, bool) {
+	text := func(from, to int) string { return string(input[from:to]) }
+	switch {
+	case len(input) == 8 && input[0] == 'a' && text(2, 8) == "@x.com":
+		return "local", input[1], true
+	case len(input) == 9 && text(0, 3) == "a@x" && text(4, 9) == "y.com":
+		return "domain", input[3], true
+	case len(input) == 12 && input[0] == 'N' && text(2, 12) == " <a@x.com>":
+		return "display", input[1], true
+	}
+	return "", 0, false
 }
 
 // checkGolden compares the committed golden with the live selection, or

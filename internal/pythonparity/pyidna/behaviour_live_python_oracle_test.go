@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity/pyunicodedata"
 )
 
 // behaviourProgram answers each call with the live idna package: the
@@ -101,6 +103,25 @@ func behaviourCorpus() []behaviourCall {
 	return calls
 }
 
+// sweepProbe recognises behaviourCorpus's code point sweep shapes and
+// returns the code point under test.
+func sweepProbe(call behaviourCall) (string, rune, bool) {
+	t := call.Text
+	switch {
+	case call.Fn == "remap" && len(t) == 3 && t[0] == 'x' && t[2] == 'y':
+		return "x_y", t[1], true
+	case call.Fn == "alabel" && len(t) == 2 && t[0] == 'x':
+		return "x_", t[1], true
+	case call.Fn == "alabel" && len(t) == 1:
+		return "_", t[0], true
+	case call.Fn == "alabel" && len(t) == 2 && t[0] == 0x05d0:
+		return "alef_", t[1], true
+	case call.Fn == "alabel" && len(t) == 3 && t[0] == 0x0915 && t[1] == 0x094d:
+		return "virama_", t[2], true
+	}
+	return "", 0, false
+}
+
 func goBehaviour(call behaviourCall) behaviourResult {
 	var out []rune
 	var err *Error
@@ -166,9 +187,12 @@ func TestBehaviourMatchesLivePython(t *testing.T) {
 	if differences > 0 {
 		t.Fatalf("%d differences", differences)
 	}
-	// The golden keeps the first 30 calls of every (function, outcome
-	// class) pair and every 2000th other call.
+	// The golden keeps, for the code point sweeps, every ASCII probe and the
+	// first two probes of every (function, shape, outcome class, category,
+	// bidirectional class, joining type) cell; the first 30 calls of every
+	// (function, outcome class) pair; and every 2000th other call.
 	perClass := map[string]int{}
+	perCell := map[string]int{}
 	var golden []behaviourGolden
 	for index, call := range calls {
 		expected := want[index]
@@ -177,7 +201,13 @@ func TestBehaviourMatchesLivePython(t *testing.T) {
 			class = call.Fn + "|" + expected.Kind + "|" + messageClass(expected.Message)
 		}
 		perClass[class]++
-		if perClass[class] <= 30 || index%2000 == 0 {
+		keep := perClass[class] <= 30 || index%2000 == 0
+		if shape, probe, ok := sweepProbe(call); ok {
+			cell := class + "|" + shape + "|" + pyunicodedata.Category(probe) + "|" + pyunicodedata.Bidirectional(probe) + "|" + joiningType(probe)
+			perCell[cell]++
+			keep = keep || probe < 0x80 || perCell[cell] <= 2
+		}
+		if keep {
 			golden = append(golden, behaviourGolden{Call: call, Want: expected})
 		}
 	}

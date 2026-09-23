@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -24,7 +25,32 @@ var datetimeCorpus = []string{
 	`"0000-01-01"`, `"9999-12-31T23:59:59Z"`, `"1e3"`, `"-1"`, `"17e8"`, `"  2026-09-23"`, `"2026-09-23_02:00"`,
 	`"2026-09-23t02:00:00z"`, `"2026-09-23T02:00:00,5Z"`, `"1700000000.123456789"`, `"1700000000123"`, `"+5"`, `"5."`,
 	`1700000000`, `1700000000123`, `1.5`, `-1.5`, `1e20`, `-1e20`, `0`, `true`, `null`, `[]`, `{}`,
-	`123456789012345678901234567890`, `"2026-09-23T02:00:60Z"`, `"2026-09-23T24:00:00"`,
+	`123456789012345678901234567890`, `-62150000000`, `-1.25`, `-0.75`, `-1700000000.123456`, `-20000000001.25`, `1e308`, `-1e308`, `9223372036854775807`, `9223372036854775808`, `-9223372036854775808`, `-9223372036854775809`, `253402300799999`, `253402300800000`, `-62167219200000.5`, `-62167219200`, `-62167219201`, `-62150000000000`, `-62150000000.5`, `-62167219200001`, `253402300799.9999999`, `20000000000.5`, `2e10`, `-2.0000000001e10`, `"2026-09-23T02:00:60Z"`, `"2026-09-23T24:00:00"`,
+}
+
+// numericStringCorpus crosses signs, mantissas and exponents, including
+// exponents whose value overflows or underflows an f64, and integers at
+// and past the i64 bounds.
+func numericStringCorpus() []string {
+	var corpus []string
+	for _, sign := range []string{"", "+", "-"} {
+		for _, mantissa := range []string{"1.5", ".5", "5.", "0.0", "1700000000.5", "0.", "."} {
+			for _, exponent := range []string{"", "e5", "E999", "e-999", "e+10", "e308", "e309", "e-400", "E+999", "e-5", "e", "e+"} {
+				corpus = append(corpus, strconv.Quote(sign+mantissa+exponent))
+			}
+		}
+		for _, integer := range []string{
+			"9223372036854775807", "9223372036854775808", "99999999999999999999", "18446744073709551626", "0", "1e999",
+			"20000000000", "20000000001", "20000000000999", "20000000001000", "62135596800", "62135596801", "62167219200",
+			"62167219201", "62167219200000", "62167219200001", "253402300799", "253402300800", "253402300799999",
+			"253402300800000", "20000000000999.0", "20000000001000.0", "170000000000000.0", "62167219200.5",
+			"62135596800.5", "62167219200000.5", "253402300799.9999995", "253402300799999.9995", "0.0000005",
+			"0.0000015", "1.9999999", "1.5.5", "1.e5", "5", "",
+		} {
+			corpus = append(corpus, strconv.Quote(sign+integer))
+		}
+	}
+	return corpus
 }
 
 const pythonDatetimeProgram = `
@@ -49,7 +75,8 @@ func TestParseDatetimeMatchesLivePydantic(t *testing.T) {
 	_, file, _, _ := runtime.Caller(0)
 	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
 	python := pyoracle.Resolve(t, root)
-	input, _ := json.Marshal(datetimeCorpus)
+	corpus := append(append([]string{}, datetimeCorpus...), numericStringCorpus()...)
+	input, _ := json.Marshal(corpus)
 	command := exec.Command(python, "-c", pythonDatetimeProgram)
 	command.Stdin = strings.NewReader(string(input))
 	output, err := command.CombinedOutput()
@@ -61,7 +88,10 @@ func TestParseDatetimeMatchesLivePydantic(t *testing.T) {
 	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &want); err != nil {
 		t.Fatalf("decode: %v: %s", err, output)
 	}
-	for index, text := range datetimeCorpus {
+	if len(want) != len(corpus) {
+		t.Fatalf("python returned %d results for %d inputs", len(want), len(corpus))
+	}
+	for index, text := range corpus {
 		var raw any
 		decoder := json.NewDecoder(strings.NewReader(text))
 		decoder.UseNumber()
@@ -95,4 +125,5 @@ func TestParseDatetimeMatchesLivePydantic(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(proofDir, "api-pytime"), []byte("executed"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	t.Logf("%d values compared", len(corpus))
 }

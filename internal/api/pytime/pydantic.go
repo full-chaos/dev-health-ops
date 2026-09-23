@@ -63,26 +63,50 @@ func fromUnix(seconds float64) (DateTime, *ValidationError) {
 	return DateTime{Time: at, Aware: true}, nil
 }
 
-// isNumeric is speedate's numeric-string test: an optional sign, digits, and
-// an optional '.' fraction.
-func isNumeric(text string) bool {
-	body := strings.TrimPrefix(strings.TrimPrefix(text, "-"), "+")
-	if len(body) < len(text)-1 {
-		return false
+// numericTimestamp is speedate's numeric-string branch: a string holding a
+// "." is a Rust f64 literal (an optional sign, digits with a "." and
+// optional fraction or a "." and digits, then an optional exponent);
+// otherwise an optional sign and ASCII digits that fit an i64. Anything
+// else (including "1e5", surrounding space, or 20 digits) is parsed as a
+// date.
+func numericTimestamp(text string) (float64, bool) {
+	body := text
+	if strings.HasPrefix(body, "+") || strings.HasPrefix(body, "-") {
+		body = body[1:]
 	}
-	whole, fraction, hasFraction := strings.Cut(body, ".")
-	if whole == "" || !digits(whole) {
-		return false
+	if !strings.Contains(body, ".") {
+		if body == "" || !digits(body) {
+			return 0, false
+		}
+		value, err := strconv.ParseInt(text, 10, 64)
+		if err != nil {
+			return 0, false
+		}
+		return float64(value), true
 	}
-	return !hasFraction || fraction == "" || digits(fraction)
+	mantissa, exponent, hasExponent := strings.Cut(strings.ToLower(body), "e")
+	whole, fraction, _ := strings.Cut(mantissa, ".")
+	if (whole == "" && fraction == "") || (whole != "" && !digits(whole)) || (fraction != "" && !digits(fraction)) {
+		return 0, false
+	}
+	if hasExponent {
+		exponent = strings.TrimPrefix(strings.TrimPrefix(exponent, "+"), "-")
+		if exponent == "" || !digits(exponent) {
+			return 0, false
+		}
+	}
+	value, err := strconv.ParseFloat(text, 64)
+	if err != nil {
+		if numErr, ok := err.(*strconv.NumError); !ok || numErr.Err != strconv.ErrRange {
+			return 0, false
+		}
+	}
+	return value, true
 }
 
 func parseString(text string) (DateTime, *ValidationError) {
-	if isNumeric(text) {
-		seconds, err := strconv.ParseFloat(text, 64)
-		if err == nil {
-			return fromUnix(seconds)
-		}
+	if seconds, ok := numericTimestamp(text); ok {
+		return fromUnix(seconds)
 	}
 	if parsed, ok := parseFull(text); ok {
 		if parsed.Time.Year() == 0 {

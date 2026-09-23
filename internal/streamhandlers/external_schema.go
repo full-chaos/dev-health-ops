@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/full-chaos/dev-health-ops/internal/api/externalingest"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/api/recordvalidation"
 )
 
 type externalFieldType uint8
@@ -35,7 +35,7 @@ type externalFieldRule struct {
 // declared field reach a sink column or a named "unstored" reason) --
 // NOT a validation rule engine any more (CHAOS-6345, no second
 // implementation of the shape rules): normalizeExternalRecords
-// decides accept/reject through externalingest.ValidateRecords alone, the
+// decides accept/reject through recordvalidation.ValidateRecords alone, the
 // one exact validator. The per-field required/enum metadata below is
 // UNUSED for validation decisions now; kept because it costs nothing to
 // leave in a name/metadata table and rewriting every literal into a bare
@@ -241,7 +241,7 @@ func buildExternalRecordSchemas() map[string]map[string]externalFieldRule {
 }
 
 // externalKindsWithoutPythonModel names record kinds this worker accepts
-// that externalingest.ValidateRecords cannot validate at all, because
+// that recordvalidation.ValidateRecords cannot validate at all, because
 // RECORD_KIND_MODELS (schemas.py) has no entry for them -- confirmed by
 // reading schemas.py's RECORD_KIND_MODELS dict directly (21 kinds) against
 // this package's 22, and normalize.py's ALLOWED_KINDS_BY_SYSTEM (every
@@ -262,7 +262,7 @@ var externalKindsWithoutPythonModel = map[string]bool{
 
 // validateExternalRecord reports whether normalize_batch would accept
 // kind's payload for every kind BUT externalKindsWithoutPythonModel,
-// checking (in Python's order) externalingest.ValidateRecords' shape
+// checking (in Python's order) recordvalidation.ValidateRecords' shape
 // rules, then the one post-shape semantic check normalize.py applies
 // outside validate_records itself (service_repository_mapping.v1's
 // repository_identity_required -- ServiceRepositoryMappingV1.repo_full_name/
@@ -273,7 +273,7 @@ var externalKindsWithoutPythonModel = map[string]bool{
 // fixtures, the stored-version golden-fixture reference test) -- NOT a
 // second validation rule set (CHAOS-6345) for every kind Python
 // actually has: the shape RULES for those live only in
-// externalingest.ValidateRecords. normalizeExternalRecords (the production
+// recordvalidation.ValidateRecords. normalizeExternalRecords (the production
 // accept/reject path) never calls this -- it uses
 // externalShapeErrorsByIndex, which passes OrderedPayload (input order
 // preserved) directly, plus its own inline repository_identity_required
@@ -295,7 +295,7 @@ func validateExternalRecord(kind string, payload map[string]any) error {
 		return fmt.Errorf("%s: %w", kind, err)
 	}
 	ordered, _ := decoded.(*pyjson.Object)
-	items := externalingest.ValidateRecords([]externalingest.RecordInput{{Kind: kind, Payload: ordered}})
+	items := recordvalidation.ValidateRecords([]recordvalidation.RecordInput{{Kind: kind, Payload: ordered}})
 	if len(items) > 0 {
 		return fmt.Errorf("%s: %s", items[0].Path, items[0].Message)
 	}

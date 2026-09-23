@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/full-chaos/dev-health-ops/internal/api/externalingest"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/api/recordvalidation"
 	"github.com/full-chaos/dev-health-ops/internal/streamrunner"
 	"github.com/google/uuid"
 )
@@ -360,7 +360,7 @@ type externalRecord struct {
 	Kind, ExternalID string
 	Payload          map[string]any
 	// OrderedPayload is the payload decoded via pyjson.Decode: input key
-	// ORDER preserved, not just numeric type. externalingest.ValidateRecords
+	// ORDER preserved, not just numeric type. recordvalidation.ValidateRecords
 	// needs this -- envelope_pydantic.go's own doc comment confirms
 	// pydantic's extra_forbidden errors are reported in INPUT order, which
 	// a map[string]any (Go map iteration order, unrelated to JSON input
@@ -516,13 +516,13 @@ func ensureJSONEOF(decoder *json.Decoder) error {
 // unsupported_kind_for_system in the caller: normalize_batch never reaches
 // its own kind-for-system check when validate_records already rejected
 // that index.
-func externalShapeErrorsByIndex(records []externalRecord) map[int]externalingest.ValidationErrorItem {
-	inputs := make([]externalingest.RecordInput, len(records))
+func externalShapeErrorsByIndex(records []externalRecord) map[int]recordvalidation.ValidationErrorItem {
+	inputs := make([]recordvalidation.RecordInput, len(records))
 	for index, record := range records {
-		inputs[index] = externalingest.RecordInput{Kind: record.Kind, Payload: record.OrderedPayload}
+		inputs[index] = recordvalidation.RecordInput{Kind: record.Kind, Payload: record.OrderedPayload}
 	}
-	byIndex := make(map[int]externalingest.ValidationErrorItem)
-	for _, item := range externalingest.ValidateRecords(inputs) {
+	byIndex := make(map[int]recordvalidation.ValidationErrorItem)
+	for _, item := range recordvalidation.ValidateRecords(inputs) {
 		if _, exists := byIndex[item.Index]; !exists {
 			byIndex[item.Index] = item
 		}
@@ -536,7 +536,7 @@ func externalShapeErrorsByIndex(records []externalRecord) map[int]externalingest
 // ValidationErrorItem.Path is already fully qualified
 // (externalingest/validate.go's errorPath), so routing it through
 // rejection() would double-prefix it.
-func shapeRejection(record externalRecord, item externalingest.ValidationErrorItem) externalRejection {
+func shapeRejection(record externalRecord, item recordvalidation.ValidationErrorItem) externalRejection {
 	return externalRejection{
 		Index: item.Index, Kind: record.Kind, ExternalID: record.ExternalID,
 		Code: item.Code, Message: item.Message, Path: item.Path,

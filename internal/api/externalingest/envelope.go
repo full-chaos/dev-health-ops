@@ -1,10 +1,8 @@
 package externalingest
 
 import (
-	"bytes"
-	"encoding/json"
-	"fmt"
-	"io"
+	"math/big"
+	"net/http"
 	"sort"
 	"time"
 
@@ -50,107 +48,91 @@ type Record struct {
 	ordered *pyjson.Object
 }
 
-var sourceSystems = map[string]bool{
-	"github": true, "gitlab": true, "jira": true, "linear": true,
-	"pagerduty": true, "atlassian": true, "custom": true,
-}
-
-var entityFamilies = map[string]bool{legacyEntityFamily: true, operationalEntityFamily: true}
-
 const (
 	legacyEntityFamily      = "legacy"
 	operationalEntityFamily = "operational"
 )
 
-// parseEnvelope decodes and shape-validates raw exactly as
-// router.py's _parse_envelope_or_400 (BatchEnvelope.model_validate_json)
-// does: unknown top-level keys, missing required fields, wrong JSON types,
-// an empty records array, and window.endedAt < window.startedAt are all
-// rejected here, before any business rule runs. err is nil only when
-// envelope is fully well-formed.
+// parseEnvelope is router.py's _parse_envelope_or_400: the envelope
+// validated as BatchEnvelope.model_validate_json does
+// (ValidateEnvelopeJSON). A failure is the 400 invalid_envelope "Malformed
+// batch envelope" with errors=[dict(e) ...]; where json.dumps cannot write
+// those errors (a JSON syntax error's bytes input, a validator's exception
+// in ctx, a NaN input) or the window validator raises TypeError, the Python
+// api answers its unhandled 500, and so does this. err is nil only for a
+// valid envelope.
 func parseEnvelope(raw []byte) (*BatchEnvelope, error) {
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.DisallowUnknownFields()
-	var envelope BatchEnvelope
-	if err := decoder.Decode(&envelope); err != nil {
-		return nil, fmt.Errorf("malformed batch envelope: %w", err)
+	valid, errs, typeErr := ValidateEnvelopeJSON(raw)
+	if typeErr != nil {
+		return nil, unhandledError()
 	}
-	// Decode stops after the first complete JSON value and, on its own,
-	// silently accepts trailing garbage after it -- unlike Python's
-	// BatchEnvelope.model_validate_json, which parses the whole string
-	// strictly and rejects anything left over. A batch this repo's own
-	// worker then finds malformed (internal/streamhandlers/
-	// external_ingest.go checks for EOF, external_ingest.go:390) must be
-	// rejected HERE, at accept time, not acknowledged and permanently
-	// stuck failing downstream.
-	if err := decoder.Decode(new(json.RawMessage)); err != io.EOF {
-		return nil, fmt.Errorf("malformed batch envelope: trailing data after the JSON value")
-	}
-	if envelope.SchemaVersion == "" {
-		return nil, fmt.Errorf("schemaVersion is required")
-	}
-	if len(envelope.IdempotencyKey) < 1 || len(envelope.IdempotencyKey) > 255 {
-		return nil, fmt.Errorf("idempotencyKey must be 1-255 characters")
-	}
-	if envelope.Source.Type == "" {
-		envelope.Source.Type = "customer_push"
-	} else if envelope.Source.Type != "customer_push" {
-		return nil, fmt.Errorf("source.type must be %q", "customer_push")
-	}
-	if !sourceSystems[envelope.Source.System] {
-		return nil, fmt.Errorf("source.system is invalid")
-	}
-	if len(envelope.Source.Instance) < 1 || len(envelope.Source.Instance) > 255 {
-		return nil, fmt.Errorf("source.instance must be 1-255 characters")
-	}
-	if envelope.Source.EntityFamily == "" {
-		envelope.Source.EntityFamily = legacyEntityFamily
-	} else if !entityFamilies[envelope.Source.EntityFamily] {
-		return nil, fmt.Errorf("source.entityFamily is invalid")
-	}
-	if envelope.Window != nil && envelope.Window.EndedAt.Before(envelope.Window.StartedAt) {
-		return nil, fmt.Errorf("window.endedAt must be >= window.startedAt")
-	}
-	if len(envelope.Records) < 1 {
-		return nil, fmt.Errorf("records must be non-empty")
-	}
-	orderedPayloads(raw, envelope.Records)
-	for index, record := range envelope.Records {
-		if record.Kind == "" {
-			return nil, fmt.Errorf("records[%d].kind is required", index)
+	if len(errs) > 0 {
+		details := make([]pyjson.Value, len(errs))
+		for index, item := range errs {
+			if item.Unrenderable {
+				return nil, unhandledError()
+			}
+			details[index] = item.Dict()
 		}
-		if len(record.ExternalID) < 1 || len(record.ExternalID) > 512 {
-			return nil, fmt.Errorf("records[%d].externalId must be 1-512 characters", index)
+		if _, err := pyjson.Marshal(details); err != nil {
+			return nil, unhandledError()
 		}
+		failure := newIngestError(http.StatusBadRequest, "invalid_envelope", "Malformed batch envelope")
+		failure.Details = details
+		return nil, failure
 	}
-	return &envelope, nil
+	envelope := &BatchEnvelope{
+		SchemaVersion:  valid.SchemaVersion,
+		IdempotencyKey: valid.IdempotencyKey,
+		Source: SourceDescriptor{
+			Type: valid.Source.Type, System: valid.Source.System, Instance: valid.Source.Instance,
+			EntityFamily: valid.Source.EntityFamily, Producer: valid.Source.Producer, ProducerVersion: valid.Source.ProducerVersion,
+		},
+	}
+	if valid.Window != nil {
+		envelope.Window = &IngestWindow{StartedAt: valid.Window.StartedAt.Time, EndedAt: valid.Window.EndedAt.Time}
+	}
+	for _, record := range valid.Records {
+		payload, _ := toAny(record.Payload).(map[string]any)
+		envelope.Records = append(envelope.Records, Record{
+			Kind: record.Kind, ExternalID: record.ExternalID, Payload: payload, ordered: record.Payload,
+		})
+	}
+	return envelope, nil
 }
 
-// orderedPayloads fills each record's ordered payload from raw, which
-// encoding/json has already accepted. A payload pyjson cannot read in the
-// same position (never expected) keeps a key-sorted copy of Payload.
-func orderedPayloads(raw []byte, records []Record) {
-	var list []pyjson.Value
-	if decoded, err := pyjson.Decode(raw); err == nil {
-		if root, ok := decoded.(*pyjson.Object); ok {
-			if value, ok := root.Get("records"); ok {
-				list, _ = value.([]pyjson.Value)
-			}
+// unhandledError is the Python api's unhandled-exception answer on this
+// prefix (api/_errors.py): 500 internal_error "Internal Server Error".
+func unhandledError() *ingestError {
+	failure := newIngestError(http.StatusInternalServerError, "internal_error", "Internal Server Error")
+	failure.Unhandled = true
+	return failure
+}
+
+// toAny converts a pyjson value to the encoding/json shapes the accept path
+// stores and hashes (float64 numbers, []any, map[string]any).
+func toAny(value pyjson.Value) any {
+	switch typed := value.(type) {
+	case *pyjson.Object:
+		out := make(map[string]any, typed.Len())
+		for _, key := range typed.Keys() {
+			item, _ := typed.Get(key)
+			out[key] = toAny(item)
 		}
-	}
-	for index := range records {
-		if index < len(list) {
-			if item, ok := list[index].(*pyjson.Object); ok {
-				if payload, ok := item.Get("payload"); ok {
-					if object, ok := payload.(*pyjson.Object); ok {
-						records[index].ordered = object
-						continue
-					}
-				}
-			}
+		return out
+	case []pyjson.Value:
+		out := make([]any, len(typed))
+		for index, item := range typed {
+			out[index] = toAny(item)
 		}
-		records[index].ordered = objectFromMap(records[index].Payload)
+		return out
+	case pyjson.Int:
+		f, _ := new(big.Float).SetInt(typed.Int).Float64()
+		return f
+	case pyjson.Float:
+		return float64(typed)
 	}
+	return value
 }
 
 // objectFromMap is an ordered copy of a decoded map, keys sorted.
@@ -181,9 +163,4 @@ func fromAny(value any) pyjson.Value {
 		return pyjson.Float(typed)
 	}
 	return value
-}
-
-func isRFC3339(value string) bool {
-	_, err := time.Parse(time.RFC3339, value)
-	return err == nil
 }

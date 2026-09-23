@@ -68,6 +68,7 @@ func Routes(deps Deps) []httpapi.Route {
 		{Method: http.MethodPost, Pattern: prefix + "/tokens", Handler: adminBody(h.createOrgToken)},
 		{Method: http.MethodPost, Pattern: prefix + "/tokens/{token_id}/rotate", Handler: admin(h.rotateToken), Allow: "POST"},
 		{Method: http.MethodPost, Pattern: prefix + "/tokens/{token_id}/revoke", Handler: admin(h.revokeToken), Allow: "POST"},
+		{Method: http.MethodPost, Pattern: prefix + "/sources/{source_id}/validate", Handler: admin(h.validateSource), Allow: "POST"},
 		{Method: http.MethodGet, Pattern: prefix + "/sources/{source_id}/batches", Handler: admin(h.listSourceBatches), Allow: "GET"},
 		{Method: http.MethodGet, Pattern: prefix + "/batches/{ingestion_id}", Handler: admin(h.getBatch), Allow: "GET"},
 		{Method: http.MethodGet, Pattern: prefix + "/schemas", Handler: admin(h.listSchemas), Allow: "GET"},

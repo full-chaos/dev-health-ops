@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -990,5 +991,31 @@ func TestAllowOverrideAndExplicitHead(t *testing.T) {
 					recorder.Code, recorder.Header().Get("Allow"), c.status, c.allow)
 			}
 		}
+	}
+}
+
+// TestUndeclaredBodyAtTheMaximumLimitReachesTheHandler: at MaxBodyBytes =
+// math.MaxInt64 the one-byte-past probe cannot be limit+1 (it wraps
+// negative and reads nothing); the body must still arrive whole.
+func TestUndeclaredBodyAtTheMaximumLimitReachesTheHandler(t *testing.T) {
+	const payload = "a chunked body under the largest limit"
+	var seen string
+	options := testOptions(Route{
+		Method:  http.MethodPost,
+		Pattern: "/v1/chunked",
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			seen = string(body)
+			w.WriteHeader(http.StatusNoContent)
+		}),
+	})
+	options.MaxBodyBytes = math.MaxInt64
+	handler := handlerFor(t, options)
+	request := httptest.NewRequest(http.MethodPost, "/v1/chunked", strings.NewReader(payload))
+	request.ContentLength = -1
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent || seen != payload {
+		t.Fatalf("status %d, handler saw %q, want 204 and %q", response.Code, seen, payload)
 	}
 }

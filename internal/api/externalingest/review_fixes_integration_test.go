@@ -70,8 +70,11 @@ func TestAcceptBatchAgainstFaultsAndEdgeCases(t *testing.T) {
 		req.Header.Set("Authorization", "Bearer "+token)
 		recorder := httptest.NewRecorder()
 		deps.handleAcceptBatch()(recorder, req)
-		if recorder.Code != http.StatusBadRequest {
-			t.Fatalf("status = %d, body = %s, want 400 (trailing garbage must never be accepted)", recorder.Code, recorder.Body.String())
+		// The Python api answers a JSON syntax error with its unhandled 500:
+		// the 400 it builds carries the raw bytes as the error's input,
+		// which json.dumps cannot write.
+		if recorder.Code != http.StatusInternalServerError {
+			t.Fatalf("status = %d, body = %s, want the Python api's 500 (trailing garbage must never be accepted)", recorder.Code, recorder.Body.String())
 		}
 		if got := countBatches(t, ctx, pool, orgID); got != 0 {
 			t.Fatalf("a rejected envelope must not write a row: got %d", got)

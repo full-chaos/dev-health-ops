@@ -156,7 +156,23 @@ VALUES ($1::uuid, $2, 'github', 'acme/venue-repo', 'run_daily_metrics', 'task-12
 // normalizer over every response is harmless there: blanking an
 // already-identical value changes nothing about whether the two sides
 // match.
-func blankExternalIngestVolatileFields(_ venueoracle.Request, body string) string {
+// seededByIDRequestNames names the three "get seeded ... by id" cases:
+// both planes read the IDENTICAL row (seeded once, before the CREATE
+// DATABASE ... TEMPLATE copy, with a FIXED created_at/updated_at literal),
+// so their ingestionId/createdAt/updatedAt are not volatile at all and
+// blanking them would hide a real divergence -- exactly what happened
+// before this map existed: a round-1 review of CHAOS-6359 reverted only
+// batchStatusResponse's inline createdAt/updatedAt formatting (leaving the
+// shared formatOptionalRFC3339 helper fixed) and the live oracle still
+// PASSED, because these three cases' createdAt/updatedAt were blanked
+// before comparison.
+var seededByIDRequestNames = map[string]bool{
+	"get seeded batch by id":           true,
+	"get seeded failed batch by id":    true,
+	"get seeded recompute batch by id": true,
+}
+
+func blankExternalIngestVolatileFields(request venueoracle.Request, body string) string {
 	decoded, err := pyjson.DecodeString(body)
 	if err != nil {
 		return body
@@ -166,10 +182,12 @@ func blankExternalIngestVolatileFields(_ venueoracle.Request, body string) strin
 		return body
 	}
 	changed := false
-	for _, key := range []string{"ingestionId", "createdAt", "updatedAt"} {
-		if _, ok := object.Get(key); ok {
-			object.Set(key, "<"+key+">")
-			changed = true
+	if !seededByIDRequestNames[request.Name] {
+		for _, key := range []string{"ingestionId", "createdAt", "updatedAt"} {
+			if _, ok := object.Get(key); ok {
+				object.Set(key, "<"+key+">")
+				changed = true
+			}
 		}
 	}
 	if items, ok := object.Get("items"); ok {
@@ -194,6 +212,51 @@ func blankExternalIngestVolatileFields(_ venueoracle.Request, body string) strin
 		return body
 	}
 	return string(rewritten)
+}
+
+// seededListItemField finds the items[] entry whose ingestionId is
+// ingestionID in a GET /batches response body and returns its named string
+// field, or "" (and fails the test) if either is missing.
+func seededListItemField(t *testing.T, body, ingestionID, field string) string {
+	t.Helper()
+	decoded, err := pyjson.DecodeString(body)
+	if err != nil {
+		t.Fatalf("decode list batches body: %v", err)
+	}
+	object, ok := decoded.(*pyjson.Object)
+	if !ok {
+		t.Fatalf("list batches body is not an object: %s", body)
+	}
+	items, ok := object.Get("items")
+	if !ok {
+		t.Fatalf("list batches body has no items: %s", body)
+	}
+	list, ok := items.([]pyjson.Value)
+	if !ok {
+		t.Fatalf("list batches items is not an array: %s", body)
+	}
+	for _, item := range list {
+		itemObject, ok := item.(*pyjson.Object)
+		if !ok {
+			continue
+		}
+		id, ok := itemObject.Get("ingestionId")
+		if !ok {
+			continue
+		}
+		idStr, _ := id.(string)
+		if idStr != ingestionID {
+			continue
+		}
+		value, ok := itemObject.Get(field)
+		if !ok {
+			t.Fatalf("list batches item %q has no field %q", ingestionID, field)
+		}
+		valueStr, _ := value.(string)
+		return valueStr
+	}
+	t.Fatalf("list batches: no item with ingestionId %q", ingestionID)
+	return ""
 }
 
 // TestExternalIngestVenueOracle is CHAOS-6321's proof shape: the REAL
@@ -356,6 +419,22 @@ func TestExternalIngestVenueOracle(t *testing.T) {
 	}
 	if schemaPython.Headers["etag"] != schemaGo.Headers["etag"] || schemaPython.Headers["etag"] == "" {
 		t.Errorf("get schema known version: etag python=%q go=%q", schemaPython.Headers["etag"], schemaGo.Headers["etag"])
+	}
+
+	// batchListItem's own createdAt formatting (handlers.go, separate from
+	// batchStatusResponse's) is only reached through GET /batches -- and
+	// that list mixes freshly-accepted rows (genuinely per-plane-volatile
+	// createdAt, which blankExternalIngestVolatileFields must still blank
+	// in the Diff above) with the seeded ones. This pins the one list item
+	// this test CAN check exactly: the seeded batch's own entry, by its
+	// known fixed id, unblanked.
+	listRequest := venueoracle.Request{Name: "list batches (createdAt check)", Method: "GET", Path: "/api/v1/external-ingest/batches", Headers: auth}
+	listPython := venue.ServePython(t, []venueoracle.Request{listRequest})[0]
+	listGo := venueoracle.Do(t, goBase, listRequest)
+	pythonSeededCreatedAt := seededListItemField(t, listPython.Body, seed.seededBatchID, "createdAt")
+	goSeededCreatedAt := seededListItemField(t, listGo.Body, seed.seededBatchID, "createdAt")
+	if pythonSeededCreatedAt != goSeededCreatedAt || pythonSeededCreatedAt == "" {
+		t.Errorf("list batches: seeded item createdAt python=%q go=%q", pythonSeededCreatedAt, goSeededCreatedAt)
 	}
 
 	pythonBatches := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB),

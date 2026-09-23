@@ -47,26 +47,32 @@ func (store PostgresStore) Decide(ctx context.Context, orgID, featureKey string)
 	if store.Now != nil {
 		evaluatedAt = store.Now().UTC()
 	}
-	state, err := loadState(ctx, store.Pool, orgID, featureKey, evaluatedAt)
+	state, err := LoadState(ctx, store.Pool, orgID, featureKey, evaluatedAt)
 	if err != nil {
 		return Decision{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	return Decide(featureKey, state), nil
 }
 
-type stateQueryer interface {
+// Queryer is the minimal *pgxpool.Pool surface LoadState needs -- exported
+// so a caller with its own hand-rolled query interface (e.g. a white-box
+// unit test injecting a fake row, or a caller open-coding a transaction)
+// can call LoadState directly without a real pool. *pgxpool.Pool satisfies
+// this interface already; no adapter is needed for the production path.
+type Queryer interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
 }
 
-// loadState reads the complete policy input for (orgID, featureKey) in one
-// statement. FROM feature_flags (not organizations) is deliberate and
-// matches providersync.loadCanonicalIncidentFeatureState's own query shape:
-// this function never needs to answer "does the org exist" -- see Store's
-// doc comment -- only "what does the engine decide", which is well-defined
+// LoadState reads the complete policy input for (orgID, featureKey) in one
+// statement. FROM feature_flags (not organizations) is deliberate: this
+// function never needs to answer "does the org exist" -- see Store's doc
+// comment -- only "what does the engine decide", which is well-defined
 // (COMMUNITY tier, no overrides) even for an org with no organizations or
-// org_licenses row at all.
-func loadState(
-	ctx context.Context, queryer stateQueryer, orgID, featureKey string, evaluatedAt time.Time,
+// org_licenses row at all. Exported so a caller already holding its own
+// Queryer-shaped connection (or a fake one, in a test) can load a State
+// without going through PostgresStore/a real pool.
+func LoadState(
+	ctx context.Context, queryer Queryer, orgID, featureKey string, evaluatedAt time.Time,
 ) (State, error) {
 	state := State{MinTier: "community", OrgTier: "community", EvaluatedAt: evaluatedAt}
 	var featureMinTier, licenseTier *string

@@ -52,7 +52,7 @@ type fakeQueryer struct{ row fakeRow }
 
 func (q fakeQueryer) QueryRow(context.Context, string, ...any) pgx.Row { return q.row }
 
-var _ stateQueryer = fakeQueryer{}
+var _ Queryer = fakeQueryer{}
 
 func ptr[T any](v T) *T { return &v }
 
@@ -69,7 +69,7 @@ func row(
 
 func TestLoadStateFeatureNotRegistered(t *testing.T) {
 	queryer := fakeQueryer{row: fakeRow{err: pgx.ErrNoRows}}
-	state, err := loadState(context.Background(), queryer, "org-1", "agent_context_runtime", evaluatedAt)
+	state, err := LoadState(context.Background(), queryer, "org-1", "agent_context_runtime", evaluatedAt)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestLoadStateLicenseTierTakesPriorityOverOrganizationTier(t *testing.T) {
 		ptr("enterprise"), []byte(`{"agent_context_runtime": true}`),
 		ptr("community"),
 	)}}
-	state, err := loadState(context.Background(), queryer, "org-1", "agent_context_runtime", evaluatedAt)
+	state, err := LoadState(context.Background(), queryer, "org-1", "agent_context_runtime", evaluatedAt)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestLoadStateFallsBackToOrganizationTierWhenNoLicenseRow(t *testing.T) {
 		(*string)(nil), []byte(nil),
 		ptr("team"),
 	)}}
-	state, err := loadState(context.Background(), queryer, "org-1", "agent_context_runtime", evaluatedAt)
+	state, err := LoadState(context.Background(), queryer, "org-1", "agent_context_runtime", evaluatedAt)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -124,7 +124,7 @@ func TestLoadStateMalformedFeaturesOverrideJSONIsAnError(t *testing.T) {
 		ptr("community"), []byte(`not json`),
 		ptr("community"),
 	)}}
-	_, err := loadState(context.Background(), queryer, "org-1", "agent_context_runtime", evaluatedAt)
+	_, err := LoadState(context.Background(), queryer, "org-1", "agent_context_runtime", evaluatedAt)
 	if err == nil {
 		t.Fatal("expected an error decoding malformed features_override JSON")
 	}
@@ -148,7 +148,7 @@ func TestLoadStateNonObjectFeaturesOverrideIsSilentlyNoOverride(t *testing.T) {
 				ptr("community"), []byte(encoded),
 				ptr("community"),
 			)}}
-			state, err := loadState(context.Background(), queryer, "org-1", "agent_context_runtime", evaluatedAt)
+			state, err := LoadState(context.Background(), queryer, "org-1", "agent_context_runtime", evaluatedAt)
 			if err != nil {
 				t.Fatalf("unexpected error decoding valid non-object JSON %q: %v", encoded, err)
 			}
@@ -178,7 +178,7 @@ func TestLoadStateOverflowingLicenseOverrideNumberIsStillDecoded(t *testing.T) {
 		ptr("community"), []byte(`{"agent_context_runtime": 1e10000}`),
 		ptr("community"),
 	)}}
-	state, err := loadState(context.Background(), queryer, "org-1", "agent_context_runtime", evaluatedAt)
+	state, err := LoadState(context.Background(), queryer, "org-1", "agent_context_runtime", evaluatedAt)
 	if err != nil {
 		t.Fatalf("unexpected error decoding an overflowing-but-valid JSON number: %v", err)
 	}
@@ -203,7 +203,7 @@ func TestLoadStatePopulatesOrgOverrideConfig(t *testing.T) {
 		(*string)(nil), []byte(nil),
 		ptr("community"),
 	)}}
-	state, err := loadState(context.Background(), queryer, "org-1", "agent_context_runtime", evaluatedAt)
+	state, err := LoadState(context.Background(), queryer, "org-1", "agent_context_runtime", evaluatedAt)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -230,7 +230,7 @@ func TestLoadStateNonObjectOrgOverrideConfigIsSilentlyNil(t *testing.T) {
 		(*string)(nil), []byte(nil),
 		ptr("community"),
 	)}}
-	state, err := loadState(context.Background(), queryer, "org-1", "agent_context_runtime", evaluatedAt)
+	state, err := LoadState(context.Background(), queryer, "org-1", "agent_context_runtime", evaluatedAt)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

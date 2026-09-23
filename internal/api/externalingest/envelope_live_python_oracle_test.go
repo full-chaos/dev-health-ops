@@ -76,19 +76,23 @@ func envelopeCorpus() [][]byte {
 			[]byte(strings.Repeat("[", depth)))
 	}
 	parts := map[string][]string{
-		"schemaVersion":  {`"external-ingest.v1"`, `"v2"`, `""`, `1`, `null`, `["x"]`},
-		"idempotencyKey": {`"k"`, `""`, `"` + strings.Repeat("k", 255) + `"`, `"` + strings.Repeat("é", 256) + `"`, `7`, `null`},
+		"schemaVersion": {`"external-ingest.v1"`, `"v2"`, `""`, `1`, `null`, `["x"]`},
+		"idempotencyKey": {`"k"`, `""`, `"` + strings.Repeat("k", 255) + `"`, `"` + strings.Repeat("é", 256) + `"`, `7`, `null`,
+			`"` + strings.Repeat("é", 255) + `"`, `"` + strings.Repeat("😀", 255) + `"`, `"` + strings.Repeat("😀", 256) + `"`},
 		"source": {`{"system": "github", "instance": "i"}`, `{"system": "GitHub", "instance": "i"}`, `{"system": "jira", "instance": ""}`,
 			`{"type": "customer_push", "system": "custom", "instance": "i", "entityFamily": "operational", "producer": "p", "producerVersion": null}`,
 			`{"system": "linear", "instance": "i", "entity_family": "legacy", "producer_version": 1, "x": 1}`, `[]`, `"s"`, `null`,
-			`{"system": "github", "instance": "` + strings.Repeat("é", 256) + `", "type": "other"}`},
+			`{"system": "github", "instance": "` + strings.Repeat("é", 256) + `", "type": "other"}`,
+			`{"system": "github", "instance": "` + strings.Repeat("é", 255) + `"}`},
 		"window": {`null`, `{"startedAt": "2026-01-01", "endedAt": "2026-01-01T00:00:00"}`, `{"startedAt": 0, "endedAt": -1}`,
 			`{"startedAt": "x", "endedAt": "y"}`, `{"startedAt": "2026-01-01T00:00:00Z"}`, `{"endedAt": "2026-01-01T00:00:00Z", "extra": 1}`, `1`, `[]`,
 			`{"startedAt": "2026-01-01T10:00:00+02:00", "endedAt": "2026-01-01T09:00:00+01:00"}`, `{"startedAt": ".5", "endedAt": 1.5}`},
 		"records": {`[]`, `[{"kind": "k", "externalId": "e", "payload": {}}]`, `[1, "x", null]`, `{}`, `"r"`,
 			`[{"kind": "k", "externalId": "", "payload": []}, {"kind": null, "payload": {}, "extra": 2}]`,
 			`[{"kind": "k", "external_id": "e", "externalId": 5, "payload": {"a": NaN}}]`,
-			`[{"kind": "k", "externalId": "` + strings.Repeat("e", 513) + `", "payload": {}}]`},
+			`[{"kind": "k", "externalId": "` + strings.Repeat("e", 513) + `", "payload": {}}]`,
+			`[{"kind": "k", "externalId": "` + strings.Repeat("é", 512) + `", "payload": {}}]`,
+			`[{"kind": "k", "externalId": "` + strings.Repeat("😀", 513) + `", "payload": {}}]`},
 	}
 	keys := []string{"schemaVersion", "idempotencyKey", "source", "window", "records"}
 	random := rand.New(rand.NewSource(6320))
@@ -115,6 +119,22 @@ func envelopeCorpus() [][]byte {
 			body = body[:random.Intn(len(body)+1)]
 		}
 		corpus = append(corpus, []byte(body))
+	}
+	// Every pool value once, beside the first (valid) value of each other
+	// field, so boundary values such as multi-byte strings at a length
+	// limit are always compared.
+	for _, key := range keys {
+		for _, value := range parts[key] {
+			fields := make([]string, len(keys))
+			for index, other := range keys {
+				chosen := parts[other][0]
+				if other == key {
+					chosen = value
+				}
+				fields[index] = fmt.Sprintf("%q: %s", other, chosen)
+			}
+			corpus = append(corpus, []byte("{"+strings.Join(fields, ", ")+"}"))
+		}
 	}
 	return corpus
 }

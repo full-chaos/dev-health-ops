@@ -521,13 +521,13 @@ check_live_python_oracles() {
       DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^(TestAdminSchemaMatchesLivePython)$' \
+        -run '^(TestAdminSchemaMatchesLivePython|TestCustomerPushBodiesMatchLiveFastAPI)$' \
         ./internal/apiservice/customerpush
   ); then
     rm -rf -- "${proof_dir}"
     return 1
   fi
-  for proof_name in api-policy-principal api-pyjson api-pyjson-dumps api-orgs-registry api-pytime api-health-revisions api-pybody-queryint pythonparity-strrepr pythonparity-utf8-replace httpapi-forwarded-scheme api-customerpush-schema; do
+  for proof_name in api-policy-principal api-pyjson api-pyjson-dumps api-orgs-registry api-pytime api-health-revisions api-pybody-queryint pythonparity-strrepr pythonparity-utf8-replace httpapi-forwarded-scheme api-customerpush-schema api-customerpush-bodies; do
     proof_file="${proof_dir}/${proof_name}"
     if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
       printf 'ERROR: api live Python oracle %s did not run\n' "${proof_name}" >&2
@@ -579,7 +579,7 @@ check_live_python_oracles() {
     return 1
   fi
 
-  printf 'go test -count=1: internal/api/externalingest (schema bundle vs live Python schema_registry)\n'
+  printf 'go test -count=1: internal/api/externalingest (schema bundle and operational host vs live Python)\n'
   if ! (
     cd "${ROOT}"
     "${GO_ENV_OFF[@]}" \
@@ -589,18 +589,20 @@ check_live_python_oracles() {
       PYTHON="${PYTHON:-python3}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^TestSchemaBundleMatchesLivePython$' \
+        -run '^(TestSchemaBundleMatchesLivePython|TestOperationalProviderInstanceMatchesLivePython)$' \
         ./internal/api/externalingest
   ); then
     rm -rf -- "${proof_dir}"
     return 1
   fi
-  proof_file="${proof_dir}/externalingest-schema-bundle"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: externalingest schema-bundle live Python oracle measurement did not occur\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
+  for proof_name in externalingest-schema-bundle externalingest-operational-host; do
+    proof_file="${proof_dir}/${proof_name}"
+    if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+      printf 'ERROR: externalingest live Python oracle %s did not run\n' "${proof_name}" >&2
+      rm -rf -- "${proof_dir}"
+      return 1
+    fi
+  done
 
   printf 'go test -count=1: internal/jobs/metrics/aigovernance (ai_governance port vs live Python, CHAOS-4285)\n'
   if ! (

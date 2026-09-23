@@ -390,12 +390,29 @@ func (discard) Write(p []byte) (int, error) { return len(p), nil }
 // mirrors Starlette, which never rewrites a path) stops those requests here.
 // The check is the mux's own rule (net/http cleanPath over EscapedPath), so
 // every request that passes it is one the mux routes without redirecting.
+//
+// A "." or ".." segment is the one exception: Starlette matches it
+// literally (a "{param}" can capture ".."), so its escaped form is
+// percent-encoded instead (escapeDotSegments) and the request routes as it
+// does in Starlette; the decoded path is unchanged.
 func strictPaths(next http.Handler, notFound http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		escaped := r.URL.EscapedPath()
-		if r.RequestURI == "*" || !strings.HasPrefix(escaped, "/") || canonicalPath(escaped) != escaped {
+		if r.RequestURI == "*" || !strings.HasPrefix(escaped, "/") {
 			notFound(w, r)
 			return
+		}
+		if canonicalPath(escaped) != escaped {
+			protected := escapeDotSegments(escaped)
+			if canonicalPath(protected) != protected {
+				notFound(w, r)
+				return
+			}
+			rewritten := r.Clone(r.Context())
+			url := *r.URL
+			url.RawPath = protected
+			rewritten.URL = &url
+			r = rewritten
 		}
 		next.ServeHTTP(w, r)
 	})

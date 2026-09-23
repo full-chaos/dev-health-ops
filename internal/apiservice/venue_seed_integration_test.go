@@ -304,6 +304,16 @@ func venueRequests(f venueFixture, tokens map[string]string) []venueoracle.Reque
 	add("slash: GET unknown/", "GET", "/api/v1/nothing-here/", nil, nil)
 	add("slash: GET unknown (add direction)", "GET", "/api/v1/nothing-here", nil, nil)
 	add("slash: GET /health with slash and Host", "GET", "/health/", map[string]string{"Host": "api.example.com:8443"}, nil)
+	// Dot segments: Starlette matches the decoded path literally, so an
+	// encoded ".." is an {org_id} value. Invalid UTF-8: uvicorn's unquote
+	// replaces each maximal ill-formed subpart with one U+FFFD, which the
+	// Location carries as %EF%BF%BD.
+	add("slash: encoded dot-dot segment", "GET", ent+"%2e%2e/", nil, nil)
+	add("slash: encoded dot segment", "GET", ent+"%2E/", nil, nil)
+	add("slash: encoded dot-dot without slash", "GET", ent+"%2e%2e", nil, nil)
+	add("slash: invalid utf-8 byte", "GET", ent+"%FF/", nil, nil)
+	add("slash: truncated utf-8 sequence", "GET", ent+"%E2%82/", nil, nil)
+	add("slash: overlong utf-8 pair", "GET", ent+"a%C0%AFb/", nil, nil)
 
 	// Team + identity admin CRUD (CHAOS-6310). Both org-A callers below
 	// authenticate to the SAME org, so their writes accumulate in order --

@@ -39,6 +39,23 @@ func TestRedirectSlashesIsStarlettes(t *testing.T) {
 		{"GET", "/folders", "http://example.com/folders/", 307},
 		{"GET", "/items/a%20b/?x=1&y=%2F", "http://example.com/items/a%20b?x=1&y=%2F", 307},
 		{"GET", "/items/caf%C3%A9/", "http://example.com/items/caf%C3%A9", 307},
+		// Dot segments: Starlette matches the decoded path literally, so ".."
+		// is an {id} value, never a parent step.
+		{"GET", "/items/%2e%2e/", "http://example.com/items/..", 307},
+		{"GET", "/items/%2E/", "http://example.com/items/.", 307},
+		{"GET", "/items/../", "http://example.com/items/..", 307},
+		{"GET", "/items/%2e%2e", "", 200},
+		{"GET", "/items/%2e%2e/%2e%2e/", "", 404},
+		{"GET", "/items/../items/", "", 404},
+		{"GET", "/items/..", "", 200},
+		{"GET", "/items/.", "", 200},
+		{"GET", "/items/../x", "", 404},
+		{"GET", "/items//x", "", 404},
+		// Invalid UTF-8: uvicorn's unquote replaces each maximal ill-formed
+		// subpart with one U+FFFD before Starlette quotes the path back.
+		{"GET", "/items/%FF/", "http://example.com/items/%EF%BF%BD", 307},
+		{"GET", "/items/%E2%82/", "http://example.com/items/%EF%BF%BD", 307},
+		{"GET", "/items/a%E2%82%ACb%C0%AF/", "http://example.com/items/a%E2%82%ACb%EF%BF%BD%EF%BF%BD", 307},
 		{"GET", "/items", "", 200},
 		{"GET", "/nothing/", "", 404},
 		{"GET", "/nothing", "", 404},

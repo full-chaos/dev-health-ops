@@ -1,7 +1,11 @@
 package restprove
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
@@ -10,12 +14,12 @@ import (
 func serviceArgs(extra ...string) []string {
 	return append([]string{
 		"-python-api-url", "http://api:8000",
-		"-candidate-bearer-exec", `["/bin/true"]`,
-		"-baseline-bearer-exec", `["/bin/true"]`,
+		"-candidate-bearer-exec", `["mint-edge-token"]`,
+		"-baseline-bearer-exec", `["mint-edge-token"]`,
 		"-org", "org-1",
 		"-recorded-by", "chris",
 		"-review-evidence", "test",
-		"-artifact-dir", "/nonexistent-artifacts",
+		"-artifact-dir", os.TempDir() + "/rest-prove-service-test-unused",
 		"-dry-run",
 	}, extra...)
 }
@@ -82,13 +86,50 @@ func TestNotRunKeysNamesNoEdgeLegForADHOAPIEntry(t *testing.T) {
 	}
 }
 
-func TestRunRefusesAServiceWithNoCorpusEntries(t *testing.T) {
-	f, err := parseFlags(serviceArgs("-service", "dho-api", "-dho-api-url", "http://127.0.0.1:1"))
+func TestRunRefusesAServiceWithNoCorpusEntriesBeforeSendingAnything(t *testing.T) {
+	var hits atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hits.Add(1) }))
+	defer server.Close()
+	args := serviceArgs("-service", "dho-api", "-dho-api-url", server.URL)
+	args = append(args, "-artifact-dir", t.TempDir())
+	f, err := parseFlags(args)
 	if err != nil {
 		t.Fatal(err)
 	}
+	f.service = "a-service-no-corpus-entry-targets"
 	err = run(f)
 	if err == nil || !strings.Contains(err.Error(), "would send nothing") {
 		t.Fatalf("a run that plans nothing must fail loudly before any request, got %v", err)
+	}
+	if hits.Load() != 0 {
+		t.Fatalf("a run that plans nothing sent %d request(s)", hits.Load())
+	}
+}
+
+func TestParseFlags_DHOAPIRefusesABuildInfoURLOnAnotherService(t *testing.T) {
+	base := serviceArgs("-service", "dho-api", "-dho-api-url", "http://go-api:8000")
+	if _, err := parseFlags(append(base, "-buildinfo-url", "http://query-api:8090/buildinfo")); err == nil || !strings.Contains(err.Error(), "-buildinfo-url") {
+		t.Fatalf("a build identity read from another service must be refused, got %v", err)
+	}
+	if _, err := parseFlags(append(base, "-buildinfo-url", "https://go-api:8000/buildinfo")); err == nil {
+		t.Fatal("a build identity read over another scheme than the measured service must be refused")
+	}
+	f, err := parseFlags(append(base, "-buildinfo-url", "http://go-api:8000/buildinfo"))
+	if err != nil || f.buildInfoURL != "http://go-api:8000/buildinfo" {
+		t.Fatalf("an explicit -buildinfo-url on the dho api host must be accepted: %v", err)
+	}
+	// query-api runs keep an explicit -buildinfo-url exactly as before.
+	if _, err := parseFlags(serviceArgs("-buildinfo-url", "http://elsewhere:1/buildinfo")); err != nil {
+		t.Fatalf("query-api run: %v", err)
+	}
+}
+
+func TestParseFlags_DHOAPIRequiresEdgeTokenBearers(t *testing.T) {
+	args := serviceArgs("-service", "dho-api", "-dho-api-url", "http://go-api:8000")
+	for _, flagName := range []string{"-candidate-bearer-exec", "-baseline-bearer-exec"} {
+		bad := append(append([]string(nil), args...), flagName, `["mint-envelope"]`)
+		if _, err := parseFlags(bad); err == nil || !strings.Contains(err.Error(), "mint-edge-token") {
+			t.Fatalf("%s running mint-envelope must be refused under dho-api, got %v", flagName, err)
+		}
 	}
 }

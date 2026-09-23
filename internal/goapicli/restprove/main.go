@@ -225,7 +225,7 @@ func registerFlags() (*flag.FlagSet, *flags) {
 	fs.StringVar(&f.serviceName, "service", string(goapiproof.RESTServiceQueryAPI), "which Go service this run measures: query-api (default) or dho-api. One run measures one service; the build every receipt names is read from that service's /buildinfo, and only that service's corpus entries are sent")
 	fs.StringVar(&f.pythonAPIURL, "python-api-url", "", "the Python api service's OWN in-cluster address -- the baseline leg (required). Never an edge or ingress URL, for the same reason as -query-api-url")
 	fs.BoolVar(&f.pythonForwarderOff, "python-forwarder-off", false, "attest that the Python app's forwarding switch for every endpoint it can forward to query-api (RESTEndpointSpec.PythonForwarder: POST /api/v1/investment/explain) is OFF for this whole run, so a 200 baseline there is Python's own answer and is compared. The Python app relays query-api's answer without any header that marks it, so nothing on the response can show which plane computed it: without this flag such a 200 baseline is refused by name, and with it every receipt for such an endpoint records the attestation")
-	fs.StringVar(&f.buildInfoURL, "buildinfo-url", "", "GET /buildinfo on query-api -- the ONLY source of the build identity every receipt names. Defaults to -query-api-url + \"/buildinfo\"")
+	fs.StringVar(&f.buildInfoURL, "buildinfo-url", "", "GET /buildinfo on the service this run measures -- the ONLY source of the build identity every receipt names. Defaults to that service's address + \"/buildinfo\"; under -service=dho-api it must be on the -dho-api-url host")
 	fs.BoolVar(&f.allowProverBuildSkew, proverBuildSkewFlag[1:], false, "measure even when this binary was not built from the candidate build's commit (or carries no commit at all): its declarations, shapes and corpus are then another commit's, and the report records the skew as prover_build_skew_allowed")
 	fs.StringVar(&f.candidateBuild, "candidate-build", "", "optional CROSS-CHECK: fail if the running build is not this sha. Never the source of the value written -- the value written always comes from /buildinfo, matching go-api-prove's own -candidate-build flag")
 	fs.StringVar(&f.queryAPISrc, "query-api-src", "", "OPTIONAL dev-only override: path to a REAL query-api source checkout, read LIVE to confirm this corpus's paths match what the mux actually mounts (migrationmatrix.LoadQueryAPIMuxRoutes). Empty (the default) uses goapiproof.MountedRESTPaths, the checked-in snapshot this binary ships with -- the operator tools image carries no Go source tree at all, so that is the ONLY option available there. Set this only when running from a real repo checkout, to catch drift immediately instead of waiting for TestMountedRESTPathsMatchesTheRealQueryAPIMux's own CI run")
@@ -276,6 +276,44 @@ func (f flags) sendsEdgeCredentialLeg() bool {
 	return f.service != goapiproof.RESTServiceDHOAPI
 }
 
+// checkDHOAPIIdentity refuses a dho-api run whose build identity or
+// credential could come from somewhere other than the dho api: an explicit
+// -buildinfo-url must be on the same scheme and host as -dho-api-url (a
+// build read from query-api would name the wrong build on every receipt),
+// and both bearers must be edge tokens, which is what the dho api
+// authenticates (the effective-principal envelope is query-api's).
+func (f flags) checkDHOAPIIdentity() error {
+	if f.buildInfoURL != "" && f.dhoAPIURL != "" {
+		build, err := url.Parse(f.buildInfoURL)
+		if err != nil {
+			return fmt.Errorf("-buildinfo-url is not a valid URL (its value is not printed here)")
+		}
+		candidate, err := url.Parse(f.dhoAPIURL)
+		if err != nil {
+			return fmt.Errorf("-dho-api-url is not a valid URL (its value is not printed here)")
+		}
+		if build.Scheme != candidate.Scheme || build.Host != candidate.Host {
+			return fmt.Errorf("-buildinfo-url must be on the same scheme and host as -dho-api-url under -service=dho-api: the build every receipt names is the build of the service measured")
+		}
+	}
+	for _, bearer := range []struct{ name, raw string }{
+		{"-candidate-bearer-exec", f.candidateBearerExec},
+		{"-baseline-bearer-exec", f.baselineBearerExec},
+	} {
+		if bearer.raw == "" {
+			continue // reported as missing by the required-flag check
+		}
+		argv, err := parseHelperArgv(bearer.name, bearer.raw)
+		if err != nil {
+			return err
+		}
+		if argv[0] != "mint-edge-token" {
+			return fmt.Errorf("%s must run mint-edge-token under -service=dho-api: the dho api authenticates the api's edge token, not the effective-principal envelope", bearer.name)
+		}
+	}
+	return nil
+}
+
 func parseFlags(args []string) (flags, error) {
 	fs, fp := registerFlags()
 	if err := fs.Parse(args); err != nil {
@@ -289,6 +327,11 @@ func parseFlags(args []string) (flags, error) {
 		return f, err
 	}
 	f.service = service
+	if f.service == goapiproof.RESTServiceDHOAPI {
+		if err := f.checkDHOAPIIdentity(); err != nil {
+			return f, err
+		}
+	}
 	if f.buildInfoURL == "" {
 		f.buildInfoURL = strings.TrimRight(f.candidateBase(), "/") + "/buildinfo"
 	}

@@ -9,6 +9,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
 type venueFixture struct {
@@ -92,12 +94,9 @@ func venueSeed(t *testing.T, ctx context.Context, pool *pgxpool.Pool) venueFixtu
 	return f
 }
 
-func b64(text string) *string {
-	encoded := base64.StdEncoding.EncodeToString([]byte(text))
-	return &encoded
-}
+func b64(text string) *string { return venueoracle.B64(text) }
 
-func venueRequests(f venueFixture, tokens map[string]string) []venueRequest {
+func venueRequests(f venueFixture, tokens map[string]string) []venueoracle.Request {
 	bearer := func(name string) map[string]string {
 		return map[string]string{"Authorization": "Bearer " + tokens[name]}
 	}
@@ -112,9 +111,9 @@ func venueRequests(f venueFixture, tokens map[string]string) []venueRequest {
 	json := func(headers map[string]string) map[string]string {
 		return with(headers, "Content-Type", "application/json")
 	}
-	var out []venueRequest
+	var out []venueoracle.Request
 	add := func(name, method, path string, headers map[string]string, body *string) {
-		out = append(out, venueRequest{Name: name, Method: method, Path: path, Headers: headers, Body: body})
+		out = append(out, venueoracle.Request{Name: name, Method: method, Path: path, Headers: headers, Body: body})
 	}
 	me := "/api/v1/orgs/me"
 	ent := "/api/v1/licensing/entitlements/"

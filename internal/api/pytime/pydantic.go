@@ -20,7 +20,7 @@ const (
 	parsingPrefix   = "Input should be a valid datetime, "
 	// unixMillisBound is speedate's MS_WATERSHED: a larger magnitude is
 	// milliseconds, not seconds.
-	unixMillisBound = 2e10
+	unixMillisBound = 20_000_000_000
 )
 
 // ParseDatetime is pydantic's lax `datetime` validation of a decoded JSON
@@ -34,55 +34,223 @@ func ParseDatetime(value any) (DateTime, *ValidationError) {
 	case string:
 		return parseString(typed)
 	case float64:
-		return fromUnix(typed)
+		return fromFloat(typed)
 	case *big.Int:
+		if typed.IsInt64() {
+			return fromTimestamp(typed.Int64(), 0)
+		}
 		f, _ := new(big.Float).SetInt(typed).Float64()
-		return fromUnix(f)
+		return fromFloat(f)
 	default:
 		return DateTime{}, &ValidationError{"datetime_type", datetimeTypeMsg}
 	}
 }
 
-func fromUnix(seconds float64) (DateTime, *ValidationError) {
-	if math.IsNaN(seconds) {
+// fromFloat is pydantic's float_as_datetime: NaN is refused, then
+// speedate's DateTime::from_float_with_config takes the floor as the
+// timestamp and |fract| as microseconds (thousandths above MS_WATERSHED).
+// For a negative non-integral value that adds |fract| to the floor, which
+// is speedate's result, not the value's.
+func fromFloat(timestamp float64) (DateTime, *ValidationError) {
+	if math.IsNaN(timestamp) {
 		return DateTime{}, &ValidationError{"datetime_parsing", parsingPrefix + "NaN values not permitted"}
 	}
-	if math.Abs(seconds) > unixMillisBound {
-		seconds /= 1000
+	fraction := math.Abs(timestamp - math.Trunc(timestamp))
+	if math.IsInf(timestamp, 0) {
+		fraction = math.NaN()
 	}
-	const maxSeconds, minSeconds = 253402300799.0, -62135596800.0
-	if seconds > maxSeconds || math.IsInf(seconds, 1) {
-		return DateTime{}, &ValidationError{"datetime_parsing", parsingPrefix + "dates after 9999 are not supported as unix timestamps"}
+	scale := 1e6
+	if math.Abs(timestamp) > unixMillisBound {
+		scale = 1e3
 	}
-	if seconds < minSeconds || math.IsInf(seconds, -1) {
-		return DateTime{}, &ValidationError{"datetime_parsing", parsingPrefix + "dates before 0000 are not supported as unix timestamps"}
+	return fromTimestamp(rustF64ToI64(math.Floor(timestamp)), rustF64ToU32(math.Round(fraction*scale)))
+}
+
+// fromTimestamp is pydantic's int_as_datetime: speedate's timestamp, with
+// its error as a datetime_parsing error.
+func fromTimestamp(timestamp int64, micro uint32) (DateTime, *ValidationError) {
+	second, total, failure := speedateTimestamp(timestamp, micro)
+	if failure != "" {
+		return DateTime{}, &ValidationError{"datetime_parsing", parsingPrefix + failure}
 	}
-	whole := math.Floor(seconds)
-	micros := int64(math.Round((seconds - whole) * 1e6))
-	at := time.Unix(int64(whole), 0).UTC().Add(time.Duration(micros) * time.Microsecond)
+	return unixDateTime(second, total)
+}
+
+// unixDateTime converts speedate's result to Python's datetime, which
+// refuses year 0.
+func unixDateTime(second int64, micro uint32) (DateTime, *ValidationError) {
+	at := time.Unix(second, int64(micro)*1000).UTC()
+	if at.Year() == 0 {
+		return DateTime{}, &ValidationError{"datetime_parsing", parsingPrefix + "year 0 is out of range"}
+	}
 	return DateTime{Time: at, Aware: true}, nil
 }
 
-// isNumeric is speedate's numeric-string test: an optional sign, digits, and
-// an optional '.' fraction.
-func isNumeric(text string) bool {
-	body := strings.TrimPrefix(strings.TrimPrefix(text, "-"), "+")
-	if len(body) < len(text)-1 {
-		return false
+// speedateNumber is speedate's float_parse_bytes: an optional sign and
+// ASCII digits accumulated with wrapping i64 arithmetic are an int unless
+// the running value turns negative; if the first byte that is not a digit
+// is ".", the whole text is a Rust f64 literal (an optional sign, digits
+// with a "." and optional fraction or a "." and digits, then an optional
+// exponent; an exponent too large reads as an infinity). Any other text
+// (including "1e5", surrounding space, or an i64 overflow) is not a number.
+func speedateNumber(text string) (integer int64, float float64, isFloat, ok bool) {
+	neg, body := false, text
+	switch {
+	case len(text) >= 2 && text[0] == '-':
+		neg, body = true, text[1:]
+	case len(text) >= 2 && text[0] == '+':
+		body = text[1:]
+	case text == "":
+		return 0, 0, false, false
 	}
-	whole, fraction, hasFraction := strings.Cut(body, ".")
-	if whole == "" || !digits(whole) {
-		return false
+	var value int64
+	for index := 0; index < len(body); index++ {
+		digit := body[index]
+		if digit < '0' || digit > '9' {
+			if digit != '.' {
+				return 0, 0, false, false
+			}
+			float, ok := rustFloat(text)
+			return 0, float, true, ok
+		}
+		value = value*10 + int64(digit-'0')
+		if index > 0 && value < 0 {
+			return 0, 0, false, false
+		}
 	}
-	return !hasFraction || fraction == "" || digits(fraction)
+	if neg {
+		value = -value
+	}
+	return value, 0, false, true
+}
+
+// rustFloat is lexical's STANDARD f64 grammar, which Rust's parse shares
+// for finite text: an overflowing exponent gives an infinity, not an error.
+func rustFloat(text string) (float64, bool) {
+	body := text
+	if strings.HasPrefix(body, "+") || strings.HasPrefix(body, "-") {
+		body = body[1:]
+	}
+	mantissa, exponent, hasExponent := strings.Cut(strings.ToLower(body), "e")
+	whole, fraction, _ := strings.Cut(mantissa, ".")
+	if (whole == "" && fraction == "") || (whole != "" && !digits(whole)) || (fraction != "" && !digits(fraction)) {
+		return 0, false
+	}
+	if hasExponent {
+		exponent = strings.TrimPrefix(strings.TrimPrefix(exponent, "+"), "-")
+		if exponent == "" || !digits(exponent) {
+			return 0, false
+		}
+	}
+	value, err := strconv.ParseFloat(text, 64)
+	if err != nil {
+		if numErr, ok := err.(*strconv.NumError); !ok || numErr.Err != strconv.ErrRange {
+			return 0, false
+		}
+	}
+	return value, true
+}
+
+// Speedate's timestamp bounds (0000-01-01 and 9999-12-31T23:59:59) and
+// its error texts.
+const (
+	speedateUnix0000 = -62_167_219_200
+	speedateUnix9999 = 253_402_300_799
+	dateTooSmall     = "dates before 0000 are not supported as unix timestamps"
+	dateTooLarge     = "dates after 9999 are not supported as unix timestamps"
+	timeTooLarge     = "numeric times may not exceed 86,399 seconds"
+)
+
+// speedateTimestamp is DateTime::from_timestamp_with_config with the
+// inferred unit: a magnitude above MS_WATERSHED is milliseconds, whose
+// remainder is added to micro, then the second must fall in speedate's
+// range. It returns the unix second and microsecond, or the error text.
+func speedateTimestamp(timestamp int64, micro uint32) (int64, uint32, string) {
+	if timestamp == math.MinInt64 {
+		return 0, 0, dateTooSmall
+	}
+	second, extra := timestamp, int64(0)
+	if timestamp > unixMillisBound || timestamp < -unixMillisBound {
+		second, extra = timestamp/1000, (timestamp%1000)*1000
+		if extra < 0 {
+			second--
+			extra += 1_000_000
+		}
+	}
+	total := uint64(micro) + uint64(extra)
+	if total > math.MaxUint32 {
+		return 0, 0, timeTooLarge
+	}
+	if total >= 1_000_000 {
+		second += int64(total / 1_000_000) // second is far from overflow here
+		total %= 1_000_000
+	}
+	if second < speedateUnix0000 {
+		return 0, 0, dateTooSmall
+	}
+	if second > speedateUnix9999 {
+		return 0, 0, dateTooLarge
+	}
+	return second, uint32(total), ""
+}
+
+// rustF64ToI64 and rustF64ToU32 are Rust's saturating `as` casts.
+func rustF64ToI64(f float64) int64 {
+	switch {
+	case math.IsNaN(f):
+		return 0
+	case f >= 9223372036854775807:
+		return math.MaxInt64
+	case f <= -9223372036854775808:
+		return math.MinInt64
+	}
+	return int64(f)
+}
+
+func rustF64ToU32(f float64) uint32 {
+	switch {
+	case math.IsNaN(f) || f <= 0:
+		return 0
+	case f >= math.MaxUint32:
+		return math.MaxUint32
+	}
+	return uint32(f)
+}
+
+// numericString is DateTime::parse_bytes_with_config's numeric branch. A
+// failure makes pydantic parse the text as a date: an int's timestamp
+// fails there with the same range error, and a float's is not a date.
+func numericString(text string) (DateTime, *ValidationError, bool) {
+	integer, float, isFloat, ok := speedateNumber(text)
+	if !ok {
+		return DateTime{}, nil, false
+	}
+	var second int64
+	var micro uint32
+	var failure string
+	if isFloat {
+		normalized := float
+		if math.Abs(float) > unixMillisBound {
+			normalized = float / 1000
+		}
+		whole := rustF64ToI64(math.Floor(normalized))
+		second, micro, failure = speedateTimestamp(whole, rustF64ToU32(math.Round((normalized-float64(whole))*1e6)))
+		if failure != "" {
+			return DateTime{}, &ValidationError{"datetime_from_date_parsing", fromDatePrefix + dateReason(text)}, true
+		}
+	} else {
+		second, micro, failure = speedateTimestamp(integer, 0)
+		if failure != "" {
+			return DateTime{}, &ValidationError{"datetime_from_date_parsing", fromDatePrefix + failure}, true
+		}
+	}
+	parsed, yearZero := unixDateTime(second, micro)
+	return parsed, yearZero, true
 }
 
 func parseString(text string) (DateTime, *ValidationError) {
-	if isNumeric(text) {
-		seconds, err := strconv.ParseFloat(text, 64)
-		if err == nil {
-			return fromUnix(seconds)
-		}
+	if parsed, failure, ok := numericString(text); ok {
+		return parsed, failure
 	}
 	if parsed, ok := parseFull(text); ok {
 		if parsed.Time.Year() == 0 {

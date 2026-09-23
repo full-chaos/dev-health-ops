@@ -109,7 +109,7 @@ def test_moving_the_sdl_without_updating_the_pin_fails(
     # strings differ -- the 2026-09-01 failure was a person not knowing this
     # table existed.
     assert "DEAD" in err
-    assert "go-api-routing enable" in err
+    assert "dho goapi routing enable" in err
 
 
 def test_bumping_the_pin_without_documenting_it_still_fails(

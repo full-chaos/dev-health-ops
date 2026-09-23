@@ -209,6 +209,6 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     assert "  RUN  internal/platform/config" in result.stdout
     assert "  RUN  cmd/query-api/internal/analytics" in result.stdout
     assert "  RUN  cmd/query-api/internal/featureflags" in result.stdout
-    assert "  RUN  cmd/go-api-routing" in result.stdout
+    assert "  RUN  internal/goapicli/routing" in result.stdout
     assert "  RUN  cmd/query-api/internal/explain" in result.stdout
     assert "  SKIP cmd/query-api/internal/analytics: " not in result.stdout

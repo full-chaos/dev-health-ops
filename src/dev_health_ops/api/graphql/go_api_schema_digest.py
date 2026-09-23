@@ -39,7 +39,7 @@ things enforce that:
   ``test_go_api_document_digest.py``; it was the SCHEMA digest producer
   that nothing measured against Go -- codex r1 corrected an overbroad
   claim here.)
-* ``go-api-routing enable`` (the Go verb) refuses unless the RUNNING
+* ``dho goapi routing enable`` (the Go verb) refuses unless the RUNNING
   query-api's ``GET /registry`` reports this exact value, so the
   DEPLOYMENTS provably match at the moment rows are written.
 """

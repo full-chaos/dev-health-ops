@@ -65,11 +65,11 @@ func queryBool(values url.Values, name string, defaultValue bool) (bool, *pybody
 	if !present {
 		return defaultValue, nil
 	}
-	if parsed, ok := pybody.PydanticBool(value); ok {
+	parsed, failureType, failureMsg := pybody.PydanticBool(value)
+	if failureType == "" {
 		return parsed, nil
 	}
-	return false, &pybody.Error{Type: "bool_parsing", Loc: []pyjson.Value{"query", name},
-		Msg: "Input should be a valid boolean, unable to interpret input", Input: value}
+	return false, &pybody.Error{Type: failureType, Loc: []pyjson.Value{"query", name}, Msg: failureMsg, Input: value}
 }
 
 // querySearch is `q`-shaped: an optional string with pydantic's

@@ -12,9 +12,11 @@
 package main
 
 import (
-	"math"
 	"strings"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 )
 
 // scopeLevelValues/whatArtifactsValues mirror MetricFilter's two
@@ -248,46 +250,28 @@ func validateStringListField(loc []any, value any) []pydanticErrorDetail {
 	return errs
 }
 
-// coerceBoolBodyField reproduces Pydantic's lenient `bool` coercion for
-// one already-JSON-decoded value -- confirmed live for every branch: a
-// bool passes through, the case-insensitive string forms
-// true/false/1/0/yes/no/on/off/y/n coerce, 1.0/0.0/1/0 (integral
-// numbers) coerce, any other numeric STRING (e.g. "2") or whole number
-// (e.g. 2) is bool_parsing, and a genuinely fractional number (e.g. 1.5)
-// is bool_type -- a different error TYPE for the two numeric-failure
-// shapes, not a single generic one.
+// coerceBoolBodyField is pydantic's lax `bool` validation of one
+// already-decoded value (a JSON body field or a raw query string), through
+// the one shared rule (pybody.PydanticBool): bool_parsing for a string, int
+// or integral float it cannot interpret, bool_type for anything else. nil
+// is absent. A JSON number arrives here as float64 (encoding/json), so an
+// integer beyond 2^53 is judged as its float value (named limit: pydantic
+// sees the exact int, which only differs at the int64 edges).
 func coerceBoolBodyField(loc []any, value any) (b bool, present bool, detail *pydanticErrorDetail) {
+	var input pyjson.Value
 	switch v := value.(type) {
 	case nil:
 		return false, false, nil
-	case bool:
-		return v, true, nil
-	case string:
-		switch strings.ToLower(strings.TrimSpace(v)) {
-		case "true", "1", "yes", "on", "y", "t":
-			return true, true, nil
-		case "false", "0", "no", "off", "n", "f":
-			return false, true, nil
-		}
-		return false, true, &pydanticErrorDetail{
-			Type: "bool_parsing", Loc: loc, Msg: "Input should be a valid boolean, unable to interpret input", Input: v,
-		}
 	case float64:
-		if v == 0 {
-			return false, true, nil
-		}
-		if v == 1 {
-			return true, true, nil
-		}
-		if v == math.Trunc(v) {
-			return false, true, &pydanticErrorDetail{
-				Type: "bool_parsing", Loc: loc, Msg: "Input should be a valid boolean, unable to interpret input", Input: v,
-			}
-		}
-		return false, true, &pydanticErrorDetail{Type: "bool_type", Loc: loc, Msg: "Input should be a valid boolean", Input: v}
+		input = pyjson.Float(v)
 	default:
-		return false, true, &pydanticErrorDetail{Type: "bool_type", Loc: loc, Msg: "Input should be a valid boolean", Input: v}
+		input = v
 	}
+	coerced, kind, msg := pybody.PydanticBool(input)
+	if kind != "" {
+		return false, true, &pydanticErrorDetail{Type: kind, Loc: loc, Msg: msg, Input: value}
+	}
+	return coerced, true, nil
 }
 
 // validateBodyDateField ports Pydantic's `date` field validation for one

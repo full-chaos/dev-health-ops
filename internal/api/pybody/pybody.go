@@ -255,59 +255,91 @@ func (e *Errors) DefaultedString(object *pyjson.Object, name string, minLength, 
 	return e.validateStringValue(raw, loc, minLength, maxLength)
 }
 
-// PydanticBool reports the bool value raw coerces to under pydantic's lax
-// (non-strict) bool validation -- verified live against the installed
-// pydantic (2.13.4): a native JSON bool; the JSON integers 0/1 exactly (any
-// other integer, e.g. 2 or -1, is an error); a JSON float equal to exactly
-// 0.0 or 1.0 (any other float, including 0.5, is an error -- equality by
-// VALUE, so 1e0 and 1.00 both match 1.0, but 1.0000000001 does not); or one
-// of a fixed, case-insensitive string vocabulary -- true/false, t/f,
-// yes/no, y/n, on/off, 1/0 -- with no leading/trailing whitespace and no
-// other string accepted (" true " and "TRUE " both fail; "TRUE" and "tRuE"
-// both pass).
-func PydanticBool(raw pyjson.Value) (bool, bool) {
+// pydanticBool is pydantic's lax (non-strict) bool validation of a decoded
+// JSON value. It returns the value, or the pydantic error to report:
+//   - a JSON bool is itself;
+//   - a str is true/false, t/f, yes/no, y/n, on/off or 1/0 (case-
+//     insensitive, no surrounding whitespace), else bool_parsing;
+//   - an int within int64 is 0 or 1, else bool_parsing; a larger int is
+//     bool_type;
+//   - a float with no fraction strictly inside (-2^63, 2^63) is taken as
+//     that int (so 2.0 is bool_parsing); any other float (0.5, inf, 1e300,
+//     -2^63 itself) is bool_type;
+//   - anything else is bool_type.
+//
+// Measured against the installed pydantic 2 (TypeAdapter(bool | None) on
+// each branch's inputs); TestOptionalBoolLaxCoercionMatchesPydantic pins
+// them.
+func pydanticBool(raw pyjson.Value) (bool, *boolFailure) {
 	switch v := raw.(type) {
 	case bool:
-		return v, true
+		return v, nil
 	case pyjson.Int:
-		if v.IsInt64() {
-			switch v.Int64() {
-			case 0:
-				return false, true
-			case 1:
-				return true, true
-			}
+		if !v.IsInt64() {
+			return false, boolTypeFailure
 		}
+		return intBool(v.Int64())
 	case pyjson.Float:
-		switch float64(v) {
-		case 0:
-			return false, true
-		case 1:
-			return true, true
+		f := float64(v)
+		if f != math.Trunc(f) || math.IsInf(f, 0) || f <= -9223372036854775808 || f >= 9223372036854775808 {
+			return false, boolTypeFailure
 		}
+		return intBool(int64(f))
 	case string:
 		switch strings.ToLower(v) {
 		case "true", "t", "yes", "y", "on", "1":
-			return true, true
+			return true, nil
 		case "false", "f", "no", "n", "off", "0":
-			return false, true
+			return false, nil
 		}
+		return false, boolParsingFailure
 	}
-	return false, false
+	return false, boolTypeFailure
+}
+
+func intBool(value int64) (bool, *boolFailure) {
+	switch value {
+	case 0:
+		return false, nil
+	case 1:
+		return true, nil
+	}
+	return false, boolParsingFailure
+}
+
+type boolFailure struct{ Type, Msg string }
+
+var (
+	boolTypeFailure    = &boolFailure{"bool_type", "Input should be a valid boolean"}
+	boolParsingFailure = &boolFailure{"bool_parsing", "Input should be a valid boolean, unable to interpret input"}
+)
+
+// PydanticBool is pydanticBool for validators outside this package: the
+// value, or the pydantic error type and message ("" when valid).
+func PydanticBool(raw pyjson.Value) (bool, string, string) {
+	value, failure := pydanticBool(raw)
+	if failure != nil {
+		return false, failure.Type, failure.Msg
+	}
+	return value, "", ""
+}
+
+func boolError(loc []pyjson.Value, input pyjson.Value, failure *boolFailure) Error {
+	return Error{Type: failure.Type, Loc: loc, Msg: failure.Msg, Input: input}
 }
 
 // OptionalBool validates one `bool | None` field. present is false when the
 // field is absent or null (the default/unset case); a present value that
-// does not coerce to a bool under pydantic's lax rules (PydanticBool) is a
-// "bool_type" pydantic error.
+// does not coerce to a bool under pydantic's lax rules is pydanticBool's
+// error (bool_parsing or bool_type).
 func (e *Errors) OptionalBool(object *pyjson.Object, name string) (bool, bool) {
 	raw, ok := object.Get(name)
 	if !ok || raw == nil {
 		return false, false
 	}
-	value, isBool := PydanticBool(raw)
-	if !isBool {
-		*e = append(*e, Error{Type: "bool_type", Loc: []pyjson.Value{"body", name}, Msg: "Input should be a valid boolean", Input: raw})
+	value, failure := pydanticBool(raw)
+	if failure != nil {
+		*e = append(*e, boolError([]pyjson.Value{"body", name}, raw, failure))
 		return false, false
 	}
 	return value, true
@@ -328,9 +360,9 @@ func (e *Errors) DefaultedBool(object *pyjson.Object, name string) (bool, bool) 
 		*e = append(*e, Error{Type: "bool_type", Loc: loc, Msg: "Input should be a valid boolean", Input: nil})
 		return false, false
 	}
-	value, isBool := PydanticBool(raw)
-	if !isBool {
-		*e = append(*e, Error{Type: "bool_type", Loc: loc, Msg: "Input should be a valid boolean", Input: raw})
+	value, failure := pydanticBool(raw)
+	if failure != nil {
+		*e = append(*e, boolError(loc, raw, failure))
 		return false, false
 	}
 	return value, true

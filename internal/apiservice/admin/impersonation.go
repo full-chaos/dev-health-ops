@@ -3,6 +3,8 @@ package admin
 import (
 	"context"
 	"log/slog"
+	"math"
+	"math/big"
 	"net"
 	"net/http"
 	"os"
@@ -16,6 +18,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
 const impersonationPrefix = "/api/v1/admin"
@@ -38,24 +41,57 @@ func (h *handlers) now() time.Time {
 	return time.Now()
 }
 
-// impersonationTTL is _impersonation_ttl_minutes(): IMPERSONATION_TTL_MINUTES
-// (default 60), read fresh per call as the Python function does (an
-// operator can change the environment between requests in a long-running
-// process only via a restart either way, but the Python code re-reads it
-// every call, so a test that stubs os.Setenv mid-process still matches).
-func impersonationTTL() (time.Duration, *pybody.Error) {
+// pythonTimedeltaMaxMinutes is the largest whole number of minutes
+// datetime.timedelta(minutes=N) accepts before Python raises OverflowError
+// -- unhandled by this route, so the generic 500 (verified live against
+// /usr/bin/python3: timedelta(minutes=1_439_999_999_999) succeeds,
+// timedelta(minutes=1_440_000_000_000) raises "days=1000000000; must have
+// magnitude <= 999999999").
+const pythonTimedeltaMaxMinutes = 1_439_999_999_999
+
+// maxSafeTTL is the largest time.Duration Go can represent (int64
+// nanoseconds, ~292 years) -- far below Python's own timedelta.max
+// (~2.7M years), so a TTL Python accepts can still be unrepresentable as a
+// literal Go Duration. Every such TTL is clamped to this ceiling rather
+// than multiplied out, which would silently overflow int64 and wrap to a
+// NEGATIVE duration -- an already-expired session for a config value
+// Python honours as "active".
+const maxSafeTTL = time.Duration(math.MaxInt64)
+
+// impersonationTTL is _impersonation_ttl_minutes() plus the
+// timedelta(minutes=...) call its one caller makes immediately after:
+// IMPERSONATION_TTL_MINUTES (default 60), read fresh per call as the
+// Python function does (an operator can change the environment between
+// requests in a long-running process only via a restart either way, but
+// the Python code re-reads it every call, so a test that stubs os.Setenv
+// mid-process still matches). minutes is parsed with Python's own int()
+// grammar (pythonparity.ParseInt: arbitrary precision, Unicode decimal
+// digits, underscore separators) rather than a narrower ASCII-only, fixed-
+// width parser -- IMPERSONATION_TTL_MINUTES="١" (an Arabic-Indic digit)
+// is 1 to Python's int(), not a parse failure. unhandled reports a TTL
+// Python's own timedelta(...) call would itself overflow on (an unhandled
+// exception in Python, not one of the two explicit HTTPException(500)
+// cases pyErr covers).
+func impersonationTTL() (ttl time.Duration, unhandled bool, pyErr *pybody.Error) {
 	raw := strings.TrimSpace(os.Getenv("IMPERSONATION_TTL_MINUTES"))
 	if raw == "" {
 		raw = "60"
 	}
-	minutes, ok := parsePyInt(raw)
-	if !ok {
-		return 0, &pybody.Error{Type: "value_error", Msg: "Invalid IMPERSONATION_TTL_MINUTES configuration"}
+	minutes, err := pythonparity.ParseInt(raw)
+	if err != nil {
+		return 0, false, &pybody.Error{Type: "value_error", Msg: "Invalid IMPERSONATION_TTL_MINUTES configuration"}
 	}
-	if minutes <= 0 {
-		return 0, &pybody.Error{Type: "value_error", Msg: "IMPERSONATION_TTL_MINUTES must be > 0"}
+	if minutes.Sign() <= 0 {
+		return 0, false, &pybody.Error{Type: "value_error", Msg: "IMPERSONATION_TTL_MINUTES must be > 0"}
 	}
-	return time.Duration(minutes) * time.Minute, nil
+	if minutes.CmpAbs(big.NewInt(pythonTimedeltaMaxMinutes)) > 0 {
+		return 0, true, nil
+	}
+	safeMinutes := big.NewInt(int64(maxSafeTTL / time.Minute))
+	if minutes.Cmp(safeMinutes) > 0 {
+		return maxSafeTTL, false, nil
+	}
+	return time.Duration(minutes.Int64()) * time.Minute, false, nil
 }
 
 // startImpersonation is impersonation.py's start_impersonation.
@@ -122,7 +158,15 @@ func (h *handlers) startImpersonation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ttl, ttlErr := impersonationTTL()
+	ttl, ttlUnhandled, ttlErr := impersonationTTL()
+	if ttlUnhandled {
+		// Python's own timedelta(minutes=...) raised OverflowError here --
+		// an unhandled exception, not one of the two explicit
+		// HTTPException(500, ...) messages below, so it renders the
+		// generic 500 the same way any other unhandled exception does.
+		policy.WriteInternal(w)
+		return
+	}
 	if ttlErr != nil {
 		policy.WriteDetail(w, http.StatusInternalServerError, ttlErr.Msg, nil)
 		return

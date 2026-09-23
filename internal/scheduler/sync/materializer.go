@@ -1338,6 +1338,67 @@ func canonicalIncidentDecisionViaLicensing(ctx context.Context, tx rowQuerier, o
 	return decision.Allowed, FeatureDecisionReason(decision.Reason), nil
 }
 
+// canonicalIncidentDecisionForUpdateViaLicensing is the row-locking
+// (*ForUpdate) form. It closes the fourth, last copy of the local decode
+// bug the rest of this PR fixed elsewhere: the previous local
+// implementation's `map[string]bool` unmarshal of
+// org_licenses.features_override failed outright on a numeric override
+// value, silently discarding it and falling through to tier -- the
+// locking and non-locking forms could disagree on that exact case until
+// this fix (confirmed live, both forms now agree for every reachable
+// reason).
+//
+// Locking and decoding are two steps here, not one: Postgres refuses
+// `FOR UPDATE` on the nullable side of an outer join (confirmed live,
+// SQLSTATE 0A000), and licensing.LoadState's single statement LEFT JOINs
+// org_feature_overrides onto feature_flags for exactly the common "no
+// override row" case. So this function locks the two rows the previous
+// local implementation locked -- feature_flags by key, then
+// org_feature_overrides by (org_id, feature_id) -- with their own narrow,
+// single-table `FOR UPDATE` statements (never organizations/org_licenses,
+// which the previous implementation never locked either), and THEN calls
+// licensing.LoadState/Decide inside the SAME transaction: Postgres's
+// normal MVCC guarantees mean that unlocked read sees the row versions
+// this function just locked, consistently, until the transaction ends --
+// the decode and the decision still live in exactly one place.
+//
+// licensing.LoadState does not check organization existence (see its own
+// doc comment): a nonexistent org resolves to the COMMUNITY tier instead
+// of this decision denying outright with invalid_feature_state, the same
+// intentional parity tradeoff already made for the non-locking form and
+// for external_postgres.go elsewhere in this PR.
+func canonicalIncidentDecisionForUpdateViaLicensing(ctx context.Context, tx rowQuerier, orgID string, now time.Time) (bool, FeatureDecisionReason, error) {
+	if _, err := uuid.Parse(orgID); err != nil {
+		// Python: require_canonical_incident_feature_for_update_sync's own
+		// `except ValueError` catch on an unparseable org_id, before
+		// evaluate_org_feature_sync is ever called.
+		return false, FeatureDecisionReasonInvalidFeatureState, nil
+	}
+	var featureID string
+	err := tx.QueryRow(ctx, `
+SELECT id::text FROM public.feature_flags WHERE key=$1 FOR UPDATE`,
+		canonicalIncidentFeatureKey).Scan(&featureID)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return false, "", fmt.Errorf("lock canonical incident feature: %w", err)
+	}
+	if err == nil {
+		var lockedFeatureID string
+		lockErr := tx.QueryRow(ctx, `
+SELECT feature_id::text FROM public.org_feature_overrides
+WHERE org_id=$1::uuid AND feature_id=$2::uuid FOR UPDATE`,
+			orgID, featureID).Scan(&lockedFeatureID)
+		if lockErr != nil && !errors.Is(lockErr, pgx.ErrNoRows) {
+			return false, "", fmt.Errorf("lock canonical incident override: %w", lockErr)
+		}
+	}
+	state, err := licensing.LoadState(ctx, tx, orgID, canonicalIncidentFeatureKey, now.UTC())
+	if err != nil {
+		return false, "", fmt.Errorf("lock canonical incident entitlement: %w", err)
+	}
+	decision := licensing.Decide(canonicalIncidentFeatureKey, state)
+	return decision.Allowed, FeatureDecisionReason(decision.Reason), nil
+}
+
 // canonicalIncidentDecision is canonicalIncidentAllowed's full form: every
 // return point below is annotated with the FeatureDecisionReason
 // decide_feature (feature_policy.py) would produce for the identical input
@@ -1346,111 +1407,14 @@ func canonicalIncidentDecisionViaLicensing(ctx context.Context, tx rowQuerier, o
 // reason was added -- this is a mechanical surfacing of an already-computed
 // answer, not a new decision path.
 //
-// !lockRows delegates to canonicalIncidentDecisionViaLicensing above; the
-// row-locking SQL below now serves only the *ForUpdate callers.
+// Both branches now delegate to internal/api/licensing:
+// canonicalIncidentDecisionViaLicensing (non-locking) or
+// canonicalIncidentDecisionForUpdateViaLicensing (locking) above.
 func canonicalIncidentDecision(ctx context.Context, tx rowQuerier, orgID string, now time.Time, lockRows bool) (bool, FeatureDecisionReason, error) {
 	if !lockRows {
 		return canonicalIncidentDecisionViaLicensing(ctx, tx, orgID, now)
 	}
-	if _, err := uuid.Parse(orgID); err != nil {
-		// Python: require_canonical_incident_feature_for_update_sync's own
-		// `except ValueError` catch on an unparseable org_id, before
-		// evaluate_org_feature_sync is ever called.
-		return false, FeatureDecisionReasonInvalidFeatureState, nil
-	}
-	lockClause := "\nFOR UPDATE"
-	var featureID, minTier string
-	var globallyEnabled bool
-	err := tx.QueryRow(ctx, `
-SELECT id::text,min_tier,is_enabled
-FROM public.feature_flags
-WHERE key='canonical_incident_ingestion'`+lockClause).Scan(&featureID, &minTier, &globallyEnabled)
-	if errors.Is(err, pgx.ErrNoRows) {
-		// Python: features_by_key.get(feature_key) is None -> is_registered=False.
-		return false, FeatureDecisionReasonFeatureNotRegistered, nil
-	}
-	if err != nil {
-		return false, "", fmt.Errorf("lock canonical incident feature: %w", err)
-	}
-	tierRank := map[string]int{"community": 0, "team": 1, "enterprise": 2}
-	minimumRank, validMinimum := tierRank[minTier]
-	if !validMinimum {
-		// Python: LicenseTier(str(feature.min_tier)) raises ValueError ->
-		// is_storage_valid=False, checked FIRST in decide_feature.
-		return false, FeatureDecisionReasonInvalidFeatureState, nil
-	}
-	if !globallyEnabled {
-		return false, FeatureDecisionReasonGlobalDisabled, nil
-	}
-	var overrideEnabled *bool
-	var overrideExpires *time.Time
-	err = tx.QueryRow(ctx, `
-SELECT is_enabled,expires_at
-FROM public.org_feature_overrides
-WHERE org_id=$1::uuid AND feature_id=$2::uuid`+lockClause, orgID, featureID).Scan(&overrideEnabled, &overrideExpires)
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return false, "", fmt.Errorf("lock canonical incident override: %w", err)
-	}
-	if overrideEnabled != nil && (overrideExpires == nil || overrideExpires.After(now.UTC())) {
-		// Python's ORG_OVERRIDE_EXPIRED/ORG_OVERRIDE_REQUIRED and the
-		// _TIER_BOUND_OVERRIDE_FEATURES-gated TIER_REQUIRED branch here are
-		// unreachable for canonical_incident_ingestion -- see
-		// FeatureDecisionReason's doc comment.
-		if *overrideEnabled {
-			return true, FeatureDecisionReasonEnabledByOrgOverride, nil
-		}
-		return false, FeatureDecisionReasonOrgOverrideDisabled, nil
-	}
-	var orgTier *string
-	var licenseTier *string
-	var licenseFeatures []byte
-	err = tx.QueryRow(ctx, `
-SELECT coalesce(organization.tier,'community'),license.tier,license.features_override::jsonb
-FROM public.organizations AS organization
-LEFT JOIN public.org_licenses AS license ON license.org_id=organization.id
-WHERE organization.id=$1::uuid`, orgID).Scan(&orgTier, &licenseTier, &licenseFeatures)
-	if errors.Is(err, pgx.ErrNoRows) {
-		// No Python-observable equivalent: evaluate_org_feature_sync has no
-		// "organization row missing" branch (org_tier/license resolution
-		// fails soft to community there). Labeled INVALID_FEATURE_STATE as
-		// the closest existing reason for "entitlement data could not be
-		// resolved" -- a pre-existing behavior difference (this function
-		// denies outright; Python would likely still evaluate tier), not
-		// something this change alters.
-		return false, FeatureDecisionReasonInvalidFeatureState, nil
-	}
-	if err != nil {
-		return false, "", fmt.Errorf("load canonical incident entitlement: %w", err)
-	}
-	if len(licenseFeatures) > 0 {
-		var overrides map[string]bool
-		if json.Unmarshal(licenseFeatures, &overrides) == nil {
-			if allowed, ok := overrides["canonical_incident_ingestion"]; ok {
-				// Python's ORG_OVERRIDE_REQUIRED and TIER_REQUIRED (via
-				// _TIER_BOUND_OVERRIDE_FEATURES) branches here are likewise
-				// unreachable for this feature key.
-				if allowed {
-					return true, FeatureDecisionReasonEnabledByLicenseOverride, nil
-				}
-				return false, FeatureDecisionReasonLicenseOverrideDisabled, nil
-			}
-		}
-	}
-	resolvedTier := "community"
-	if orgTier != nil {
-		resolvedTier = *orgTier
-	}
-	if licenseTier != nil {
-		resolvedTier = *licenseTier
-	}
-	orgRank, validOrgTier := tierRank[resolvedTier]
-	if !validOrgTier {
-		orgRank = tierRank["community"]
-	}
-	if orgRank >= minimumRank {
-		return true, FeatureDecisionReasonEnabledByTier, nil
-	}
-	return false, FeatureDecisionReasonTierRequired, nil
+	return canonicalIncidentDecisionForUpdateViaLicensing(ctx, tx, orgID, now)
 }
 
 // loadPlanSources loads the enabled sources a plan runs against.

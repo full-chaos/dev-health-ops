@@ -71,6 +71,19 @@ type Queryer interface {
 // org_licenses row at all. Exported so a caller already holding its own
 // Queryer-shaped connection (or a fake one, in a test) can load a State
 // without going through PostgresStore/a real pool.
+//
+// A caller that must LOCK the feature_flags/org_feature_overrides rows
+// first (a materialization-phase gate re-checking entitlement under a
+// held transaction) cannot get that from this single statement directly:
+// Postgres refuses `FOR UPDATE` on the nullable side of the LEFT JOINs
+// this query needs for the "no override row" case (confirmed live,
+// SQLSTATE 0A000). Such a caller locks the two rows itself with its own
+// narrow, single-table `FOR UPDATE` queries first, then calls LoadState
+// (unlocked) inside the SAME transaction -- which reads the now-locked row
+// versions consistently under Postgres's normal MVCC guarantees until
+// that transaction ends -- and feeds the result to Decide. See
+// internal/scheduler/sync.canonicalIncidentDecisionForUpdateViaLicensing
+// for the reference implementation of that pattern.
 func LoadState(
 	ctx context.Context, queryer Queryer, orgID, featureKey string, evaluatedAt time.Time,
 ) (State, error) {

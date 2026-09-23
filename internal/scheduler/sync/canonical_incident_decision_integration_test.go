@@ -203,17 +203,18 @@ func TestCanonicalIncidentDecisionNonLockingMatchesLockingForEveryReachableReaso
 }
 
 // TestCanonicalIncidentDecisionNonLockingDeniesNumericLicenseOverride is the
-// CHAOS-6286 regression case: the non-locking form's local `map[string]bool`
+// CHAOS-6286 regression case: both forms' former local `map[string]bool`
 // decode of org_licenses.features_override used to fail outright on a
 // numeric override value (JSON `0` is not a valid bool), silently discarding
 // the whole overrides map and falling through to tier -- so a numeric-0
 // override was admitted (enabled_by_tier) instead of denied
 // (license_override_disabled). licensing.LoadState/Decide, via
 // jsonTruth, treats JSON `0` as Python's bool(0) == False, matching the
-// shared engine and the worker's own execution-time recheck. Red on the
-// pre-CHAOS-6286-widening code (asserted here against CanonicalIncidentDecision
-// only -- the still-local locking form is intentionally NOT covered by this
-// case, see this file's package doc / the PR's RISK-NOTES).
+// shared engine and the worker's own execution-time recheck. This case
+// covers the non-locking form; its sibling
+// TestCanonicalIncidentDecisionForUpdateDeniesNumericLicenseOverride below
+// covers the locking form, which had the identical bug in its own,
+// separate local decode.
 func TestCanonicalIncidentDecisionNonLockingDeniesNumericLicenseOverride(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -240,6 +241,49 @@ VALUES ($1, 'community', '{"canonical_incident_ingestion":0}'::jsonb)`, decision
 	}
 
 	allowed, reason := decideCanonicalIncidentNonLocking(t, ctx, pool)
+	if allowed {
+		t.Fatalf("allowed=true reason=%q want denied: a numeric-0 license override must not fall through to tier", reason)
+	}
+	if reason != FeatureDecisionReasonLicenseOverrideDisabled {
+		t.Fatalf("reason=%q want=%q", reason, FeatureDecisionReasonLicenseOverrideDisabled)
+	}
+}
+
+// TestCanonicalIncidentDecisionForUpdateDeniesNumericLicenseOverride is
+// TestCanonicalIncidentDecisionNonLockingDeniesNumericLicenseOverride's
+// sibling for the row-locking form (CanonicalIncidentDecisionForUpdate):
+// its own, separate local `map[string]bool` decode had the identical
+// numeric-override bug, now fixed by locking the feature_flags/
+// org_feature_overrides rows and then reading+deciding through the same
+// licensing.LoadState/Decide the non-locking form uses (see
+// canonicalIncidentDecisionForUpdateViaLicensing's doc comment for why
+// locking and decoding are two steps here).
+func TestCanonicalIncidentDecisionForUpdateDeniesNumericLicenseOverride(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createCanonicalIncidentDecisionTables(t, ctx, pool)
+	seedCanonicalIncidentFeatureFlag(t, ctx, pool, "enterprise", true)
+	if _, err := pool.Exec(ctx, `
+INSERT INTO organizations (id, tier) VALUES ($1, 'community')`, decisionOrgID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+INSERT INTO org_licenses (org_id, tier, features_override)
+VALUES ($1, 'community', '{"canonical_incident_ingestion":0}'::jsonb)`, decisionOrgID); err != nil {
+		t.Fatal(err)
+	}
+
+	allowed, reason := decideCanonicalIncident(t, ctx, pool)
 	if allowed {
 		t.Fatalf("allowed=true reason=%q want denied: a numeric-0 license override must not fall through to tier", reason)
 	}

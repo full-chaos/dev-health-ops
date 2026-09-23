@@ -97,18 +97,12 @@ Lockstep check: this operator image and the api/migrate image
 (dev-health.image, image.repository/image.tag) must come from the SAME
 commit, since the operator's posture manifest has to match the schema the
 migrate Job just applied -- the exact mismatch that produced
-runtime_role_unauthorized on production revision 14. Only comparable when
-BOTH sides carry this repo's `sha-<12 hex>` immutable-tag convention: a
-sha256 digest does not encode which commit it was built from, so a
-digest-only pin on either side is never compared here -- that would be
-fabricating a mapping this chart cannot verify. Keeping a digest pin in
-lockstep with the api image is the operator's own responsibility.
+runtime_role_unauthorized on production revision 14. Shared with
+river-hooks.yaml's identical check on its own hook image -- see
+dev-health.lockstepImageCheck (_helpers.tpl) for the one place this
+calculation, and its digest-pin exemption, live.
 */}}
-{{- $apiImageShaTag := regexFind ":sha-[0-9a-f]{12}$" (include "dev-health.image" .) }}
-{{- $operatorImageShaTag := regexFind ":sha-[0-9a-f]{12}$" $operatorImage }}
-{{- if and $apiImageShaTag $operatorImageShaTag (ne $apiImageShaTag $operatorImageShaTag) }}
-{{- fail (printf "migrations.hook.routeActivate.image (%s) and image.repository/image.tag (%s) are pinned to different commits (%s vs %s) -- the operator's posture manifest must match the database the migrate Job just migrated." $operatorImage (include "dev-health.image" .) $operatorImageShaTag $apiImageShaTag) }}
-{{- end }}
+{{- include "dev-health.lockstepImageCheck" (dict "context" . "image" $operatorImage "labelWithValue" (printf "migrations.hook.routeActivate.image (%s)" $operatorImage) "reason" "the operator's posture manifest must match the database the migrate Job just migrated.") }}
 {{- $routeKinds := list "dispatch_sync_run" "finalize_sync_run" "post_sync" "reference_discovery" }}
 {{- if $poolerSecret.create }}
 ---

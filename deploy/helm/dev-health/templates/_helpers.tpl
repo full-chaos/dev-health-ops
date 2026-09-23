@@ -408,3 +408,36 @@ Component selector labels — call with (dict "component" "api" "context" $)
 {{ include "dev-health.selectorLabels" .context }}
 app.kubernetes.io/component: {{ .component }}
 {{- end }}
+
+{{/*
+Lockstep image check — call with (dict "context" $ "image" <resolved hook
+image> "labelWithValue" <pre-formatted "<flag description> (<image>)" text>
+"reason" <trailing sentence naming why the two must match>).
+
+Shared by route-activate-hooks.yaml (its own operator image) and
+river-hooks.yaml (the River hook image): both run a Go operator binary
+against the database the migrate Job just migrated, so that operator's
+image must be pinned to the SAME commit as image.repository/image.tag
+(dev-health.image) -- production revision 14 went down on exactly this
+mismatch (a floating/stale operator image against a freshly migrated
+database, failing runtime_role_unauthorized with no diagnostics).
+
+Only comparable when BOTH sides carry this repo's `sha-<12 hex>`
+immutable-tag convention: a sha256 digest does not encode which commit it
+was built from, so a digest-only pin on either side is never compared here
+-- that would be fabricating a mapping this chart cannot verify. Keeping a
+digest pin in lockstep with the api image is the operator's own
+responsibility. This is a NAMED, KNOWN limit shared by both callers (see
+each caller's own comment and the CHAOS-6324 follow-up ticket for the
+digest -> commit resolution this cannot currently do); it is not
+"unlimited trust" -- it is the same limit the pin-format check right
+above each caller's own call site already accepts (a digest is a valid
+pin on its own, just not one this specific comparison can use).
+*/}}
+{{- define "dev-health.lockstepImageCheck" -}}
+{{- $apiImageTag := regexFind ":sha-[0-9a-f]{12}$" (include "dev-health.image" .context) -}}
+{{- $hookImageTag := regexFind ":sha-[0-9a-f]{12}$" .image -}}
+{{- if and $apiImageTag $hookImageTag (ne $apiImageTag $hookImageTag) -}}
+{{- fail (printf "%s and image.repository/image.tag (%s) are pinned to different commits (%s vs %s) -- %s" .labelWithValue (include "dev-health.image" .context) $hookImageTag $apiImageTag .reason) -}}
+{{- end -}}
+{{- end }}

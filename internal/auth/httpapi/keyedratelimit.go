@@ -19,6 +19,23 @@ type fixedWindowEntry struct {
 	count int
 }
 
+// maxKeyedLimiterEntries hard-caps a KeyedLimiter's live entry count. sweep
+// only reclaims an entry once its OWN window has fully elapsed -- it has no
+// power to shrink the set of entries still inside their current window, so
+// it cannot bound how many an authenticated caller creates within a single
+// window by hitting many distinct paths before that window ever expires
+// (reproduced live: 5,000 distinct paths from one caller, all still
+// present, sweep not yet due). This cap is the backstop for exactly that
+// window: once reached, a BRAND-NEW (key, path) pair is refused outright
+// rather than admitted, so the map can never grow past it -- fail closed
+// on cardinality, never fail open. It never affects an already-tracked
+// pair's own counting. 100,000 is far above any real admin population x
+// real rate-limited admin path count (see KeyedLimiter's own doc comment
+// on that expected cardinality), and far below what would pressure
+// process memory (a fixedWindowEntry plus its map overhead is on the
+// order of 100 bytes).
+const maxKeyedLimiterEntries = 100_000
+
 // KeyedLimiter is a fixed-window rate limiter scoped per (key, exact request
 // path) -- the Go equivalent of Python's slowapi default strategy (the
 // `limits` package's FixedWindowRateLimiter over MemoryStorage). Confirmed
@@ -50,10 +67,14 @@ type KeyedLimiter struct {
 	// like /users/{user_id}/password carries a caller-supplied target id
 	// -- NOT a small fixed route set. An authenticated caller sending
 	// distinct target ids (the handler validates the target only AFTER
-	// this limiter runs) can otherwise grow this map without bound.
-	// sweep (below) evicts every expired entry at most once per window,
-	// so steady-state memory is bounded by callers active within the
-	// last window, never by total requests ever seen.
+	// this limiter runs) can otherwise grow this map. sweep (below)
+	// evicts every expired entry at most once per window, bounding
+	// steady-state memory to callers active within the last window; it
+	// CANNOT bound growth from many distinct pairs created within a
+	// single window, since none of them have expired yet for sweep to
+	// reclaim -- maxKeyedLimiterEntries is the hard backstop for that
+	// case (reproduced live: 5,000 distinct paths inside one window, all
+	// still present, no sweep yet due).
 	entries map[string]*fixedWindowEntry
 	// lastSweep is when entries was last swept for expired windows.
 	lastSweep time.Time
@@ -88,7 +109,15 @@ func (l *KeyedLimiter) Allow(key, path string) bool {
 	l.sweep(now)
 	entryKey := key + "\x00" + path
 	entry := l.entries[entryKey]
+	isNewPair := entry == nil
 	if entry == nil || now.Sub(entry.start) >= l.window {
+		if isNewPair && len(l.entries) >= maxKeyedLimiterEntries {
+			// The map is saturated and this pair has never been seen: fail
+			// closed rather than grow past the cap. An existing pair (a
+			// window rollover, not a brand-new key) is never refused this
+			// way -- only admission of a NEW entry is capped.
+			return false
+		}
 		entry = &fixedWindowEntry{start: now}
 		l.entries[entryKey] = entry
 	}

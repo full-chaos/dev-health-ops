@@ -104,6 +104,47 @@ func TestKeyedLimiterEvictsExpiredEntries(t *testing.T) {
 	}
 }
 
+// TestKeyedLimiterCapsMapGrowthWithinOneWindow is the codex-review
+// pr2873-r2 P1: sweep only reclaims an entry once ITS OWN window has
+// elapsed, so it cannot bound how many distinct (key, path) pairs a
+// caller creates WITHIN one window -- reproduced live with 5,000 distinct
+// paths from one caller, all still present, no sweep yet due. Proves the
+// hard cap: the map never grows past maxKeyedLimiterEntries, and once
+// saturated a genuinely NEW pair is refused (fail closed), while an
+// already-tracked pair's own counting is unaffected by the cap.
+func TestKeyedLimiterCapsMapGrowthWithinOneWindow(t *testing.T) {
+	now := time.Now()
+	limiter := NewKeyedLimiter(5, time.Hour, func() time.Time { return now })
+
+	for i := range maxKeyedLimiterEntries {
+		if !limiter.Allow("admin-user:a", fmt.Sprintf("/x/%d", i)) {
+			t.Fatalf("path %d (within the cap) was refused, want allowed", i)
+		}
+	}
+	limiter.mu.Lock()
+	got := len(limiter.entries)
+	limiter.mu.Unlock()
+	if got != maxKeyedLimiterEntries {
+		t.Fatalf("entries after filling the cap = %d, want %d", got, maxKeyedLimiterEntries)
+	}
+
+	if limiter.Allow("admin-user:a", "/x/one-too-many") {
+		t.Fatal("a brand-new pair past the cap was allowed, want refused (fail closed)")
+	}
+	limiter.mu.Lock()
+	got = len(limiter.entries)
+	limiter.mu.Unlock()
+	if got != maxKeyedLimiterEntries {
+		t.Fatalf("entries after the refused pair = %d, want unchanged at %d (the cap must never grow the map)", got, maxKeyedLimiterEntries)
+	}
+
+	// An already-tracked pair keeps working normally even while the map
+	// is saturated -- the cap only refuses ADMISSION of a new pair.
+	if !limiter.Allow("admin-user:a", "/x/0") {
+		t.Fatal("an existing, already-counted pair was refused by the saturation cap, want allowed (it is not a new pair)")
+	}
+}
+
 // TestKeyedLimiterZeroConfigurationIsUnlimited matches NewBucket's own
 // degenerate-configuration contract: a non-positive limit or window never
 // silently produces a limiter that refuses everything.
@@ -191,5 +232,35 @@ func TestKeyedRateLimitWithRefusesOverTheKeyedBudget(t *testing.T) {
 	}
 	if reached != 3 {
 		t.Fatalf("inner handler reached %d times, want 3 (2 for a, 1 for b)", reached)
+	}
+}
+
+// TestKeyedRateLimitUsesTheDefaultErrorWriter exercises KeyedRateLimit
+// itself (not just KeyedRateLimitWith, which the mounted admin route
+// uses) -- codex-review pr2873-r2 P3: KeyedRateLimit had 0% coverage.
+// Proves its refusal renders through this package's default WriteError,
+// the Python-wire generic envelope (Code, not a caller-supplied writer).
+func TestKeyedRateLimitUsesTheDefaultErrorWriter(t *testing.T) {
+	limiter := NewKeyedLimiter(1, time.Hour, nil)
+	keyFunc := func(r *http.Request) string { return "k" }
+	handler := KeyedRateLimit(limiter, keyFunc)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	call := func() *httptest.ResponseRecorder {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/x", nil))
+		return response
+	}
+
+	if got := call().Code; got != http.StatusNoContent {
+		t.Fatalf("call 1 = %d, want 204", got)
+	}
+	second := call()
+	if second.Code != http.StatusTooManyRequests {
+		t.Fatalf("call 2 = %d, want 429", second.Code)
+	}
+	if body := second.Body.String(); body == "" {
+		t.Fatal("KeyedRateLimit's default writer produced an empty body")
 	}
 }

@@ -247,9 +247,7 @@ dev-health-acr:dev
 dev-health-go-worker:latest
 dev-health-go-scheduler:latest
 dev-health-go-reconciler:latest
-dev-health-go-stream-ingest:latest
-dev-health-go-stream-external:latest
-dev-health-go-stream-pagerduty:latest
+ghcr.io/full-chaos/dev-health-go-dho:local
 dev-health-go-operator:latest
 EOF
 
@@ -270,7 +268,9 @@ ACR_KIAC_CLUSTER_NAME=dev-full ACR_KIAC_ALLOW_VERSION_DRIFT=1 \
 ```
 
 One image serves the four River worker groups (`heavy`, `ops`, `sync`,
-`sync-provider`); the three `stream-*` images are separate build targets. The
+`sync-provider`); the three `stream-*` groups run `dho stream-runner` from the dho image
+(`ghcr.io/full-chaos/dev-health-go-dho:local`, the tag Compose builds), with
+`subcommand: stream-runner` so the verb is the first argument. The
 `heavy` group is also the metrics compatibility bridge's only caller, so it must
 be present whenever `metricsApi.enabled` is true.
 
@@ -514,9 +514,9 @@ goWorkers:
     - { name: sync-provider,     image: dev-health-go-worker:latest,           queues: [sync_provider], queueConcurrency: {sync_provider: 2}, replicas: 0, terminationGracePeriodSeconds: 960, autoscaling: {enabled: false} }
     - { name: reconciler,        image: dev-health-go-reconciler:latest,       replicas: 1, terminationGracePeriodSeconds: 60, autoscaling: {enabled: false} }
     - { name: scheduler,         image: dev-health-go-scheduler:latest,        replicas: 1, terminationGracePeriodSeconds: 60, autoscaling: {enabled: false} }
-    - { name: stream-external,   image: dev-health-go-stream-external:latest,  runtimeProfile: external,  replicas: 1, terminationGracePeriodSeconds: 60, autoscaling: {enabled: false} }
-    - { name: stream-ingest,     image: dev-health-go-stream-ingest:latest,    runtimeProfile: ingest,    replicas: 1, terminationGracePeriodSeconds: 60, autoscaling: {enabled: false} }
-    - { name: stream-pagerduty,  image: dev-health-go-stream-pagerduty:latest, runtimeProfile: pagerduty, replicas: 1, terminationGracePeriodSeconds: 60, autoscaling: {enabled: false} }
+    - { name: stream-external,   image: ghcr.io/full-chaos/dev-health-go-dho:local, subcommand: stream-runner, runtimeProfile: external,  replicas: 1, terminationGracePeriodSeconds: 60, autoscaling: {enabled: false} }
+    - { name: stream-ingest,     image: ghcr.io/full-chaos/dev-health-go-dho:local, subcommand: stream-runner, runtimeProfile: ingest,    replicas: 1, terminationGracePeriodSeconds: 60, autoscaling: {enabled: false} }
+    - { name: stream-pagerduty,  image: ghcr.io/full-chaos/dev-health-go-dho:local, subcommand: stream-runner, runtimeProfile: pagerduty, replicas: 1, terminationGracePeriodSeconds: 60, autoscaling: {enabled: false} }
 ```
 
 `lane-a-acr.yaml`:

@@ -31,7 +31,7 @@ func quietLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard
 // test` runs with this package's own source directory as the working
 // directory (two levels below the repo root), so the production default
 // "contracts/jobs/v1" (relative to the dho api image's WORKDIR /app) never
-// resolves here -- matching cmd/dev-health-scheduler's own testContractRoot
+// resolves here -- matching internal/schedulerservice's own testContractRoot
 // convention. Every test in this package that reaches buildDeps with
 // APIDatabaseURI configured needs this; a package-level override means a
 // future such test gets it automatically, rather than each one repeating

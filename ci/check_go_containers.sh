@@ -12,12 +12,12 @@ readonly VERSION="phase1-ci"
 readonly COMMIT="0000000000000000000000000000000000000000"
 readonly BUILD_TIME="1970-01-01T00:00:00Z"
 readonly SOURCE_DATE_EPOCH="0"
-# The long-running services the smoke runs to readiness. stream-runner and
-# reconciler are not image targets: they are `dho stream-runner` and `dho
-# reconciler`, smoked on the dho image (the chart default) and on the
-# operator image (what prod pins for them).
-readonly RUNTIME_TARGETS=(worker scheduler reconciler reconciler-operator stream-runner stream-runner-operator)
-readonly ALL_TARGETS=(worker scheduler operator contractcheck migrate dho)
+# The long-running services the smoke runs to readiness. stream-runner,
+# reconciler and scheduler are not image targets: they are `dho stream-runner`,
+# `dho reconciler` and `dho scheduler`, smoked on the dho image (the chart
+# default) and on the operator image (what prod pins for them).
+readonly RUNTIME_TARGETS=(worker scheduler scheduler-operator reconciler reconciler-operator stream-runner stream-runner-operator)
+readonly ALL_TARGETS=(worker operator contractcheck migrate dho)
 readonly CONTAINER_SECURITY_ARGS=(
   --read-only
   --cap-drop ALL
@@ -173,6 +173,14 @@ smoke_target() {
       image_target=dho
       verb_args=(stream-runner)
       ;;
+    scheduler)
+      image_target=dho
+      verb_args=(scheduler)
+      ;;
+    scheduler-operator)
+      image_target=operator
+      verb_args=(scheduler)
+      ;;
     reconciler)
       image_target=dho
       verb_args=(reconciler)
@@ -267,7 +275,7 @@ smoke_target() {
     fi
   else
     case "${target}" in
-      scheduler)
+      scheduler | scheduler-operator)
         dependencies="domain_postgres queue_postgres river_schema scheduler_loop"
         ;;
       reconciler | reconciler-operator)

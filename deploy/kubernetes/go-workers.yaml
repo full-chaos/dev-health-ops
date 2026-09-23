@@ -184,8 +184,8 @@ spec:
       securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
       containers:
         - name: scheduler
-          image: ghcr.io/full-chaos/dev-health-go-scheduler:latest
-          args: ["--shutdown-timeout=60s", "--http-addr=:8080"]
+          image: ghcr.io/full-chaos/dev-health-go-dho:latest
+          args: ["scheduler", "--shutdown-timeout=60s", "--http-addr=:8080"]
           envFrom: [{configMapRef: {name: dev-health-config}}, {configMapRef: {name: dev-health-go-worker-config}}, {secretRef: {name: dev-health-secrets}}, {secretRef: {name: dev-health-go-worker-secrets}}]
           ports: [{name: metrics, containerPort: 8080}]
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}

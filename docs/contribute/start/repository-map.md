@@ -47,7 +47,7 @@ New provider work belongs under `src/dev_health_ops/providers/<provider>/`. Lega
 Go process entry points live under `cmd/`:
 
 - `dev-health-worker`;
-- `dev-health-scheduler`;
+- `dho scheduler`;
 - `dho reconciler`;
 - `dho stream-runner`;
 - `dho workers`;

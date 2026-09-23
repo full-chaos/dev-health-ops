@@ -193,10 +193,11 @@ services:
     stop_grace_period: 60s
   go-scheduler:
     <<: *go-worker
-    image: ${DEV_HEALTH_GO_SCHEDULER_IMAGE:-ghcr.io/full-chaos/dev-health-go-scheduler:latest}
+    image: ${DEV_HEALTH_GO_DHO_IMAGE:-ghcr.io/full-chaos/dev-health-go-dho:latest}
     labels:
       dev-health.io/worker-group: scheduler
     command:
+      - "scheduler"
       - "--shutdown-timeout=60s"
       - *flag-http-addr
       - *flag-river-schema

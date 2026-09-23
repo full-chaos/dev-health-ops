@@ -141,7 +141,14 @@
           },
           {
             "if": {"properties": {"name": {"const": "scheduler"}}, "required": ["name"]},
-            "then": {"properties": {"binary": {"const": "dev-health-scheduler"}}, "required": ["binary"]}
+            "then": {
+              "properties": {"binary": {"const": "dho"}, "subcommand": {"const": "scheduler"}},
+              "required": ["binary", "subcommand"]
+            }
+          },
+          {
+            "if": {"properties": {"subcommand": {"const": "scheduler"}}, "required": ["subcommand"]},
+            "then": {"properties": {"name": {"const": "scheduler"}}, "required": ["name"]}
           }
         ],
         "required": [

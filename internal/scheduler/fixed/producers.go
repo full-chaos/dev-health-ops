@@ -239,7 +239,7 @@ type RetentionProducer struct {
 // policy bindings at a fixed v3 route. This is a convenience default for
 // tests; it does NOT read migration-state.json's active producer_version.
 // Production always calls NewRetentionProducerForRoute with the
-// registry-supplied version instead -- see cmd/dev-health-scheduler/fixed.go.
+// registry-supplied version instead -- see internal/schedulerservice/fixed.go.
 // The literal here must track whatever contracts/jobs/v1/registry.json's
 // current_version for system.retention_cleanup actually is: every policy's
 // RetentionSpec.ContractVersion below is pinned to that same single version

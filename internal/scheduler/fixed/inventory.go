@@ -579,7 +579,7 @@ func RetiredBeatInventory() []RetiredLegacyEntry {
 				"chain (dispatch_daily_metrics_partitioned/run_daily_metrics_batch/" +
 				"run_daily_metrics_finalize_task) were only ever reachable via this Beat entry.",
 			Evidence: "CHAOS-4026, CHAOS-4056 beat-schedule inventory (COVERED, checked-in and " +
-				"active per cmd/dev-health-scheduler/fixed.go).",
+				"active per internal/schedulerservice/fixed.go).",
 		},
 		{
 			Name:    "run-complexity-daily",

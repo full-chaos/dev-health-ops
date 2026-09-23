@@ -87,7 +87,7 @@ func startupRetryable(err error) bool {
 // check whose error carries real diagnostic detail -- like
 // postureguard.Guard.Ready's, which names both posture-manifest digests --
 // needs this to make that detail reach an operator at all. Mirrors
-// cmd/dev-health-scheduler's wrapSchedulerReadinessCheckWithLogging exactly;
+// internal/schedulerservice's wrapSchedulerReadinessCheckWithLogging exactly;
 // not shared between the two binaries because neither imports the other's
 // package for a two-line helper.
 func wrapStreamRunnerReadinessCheckWithLogging(logger *slog.Logger, check string, ready health.CheckFunc) health.CheckFunc {

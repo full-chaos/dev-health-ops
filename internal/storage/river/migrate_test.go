@@ -71,7 +71,6 @@ func TestLongRunningCommandsCannotAutoMigrate(t *testing.T) {
 	// TestServiceVerbsCannotMigrate, which walks the command tree instead.
 	for _, command := range []string{
 		"dev-health-worker",
-		"dev-health-scheduler",
 	} {
 		directory := filepath.Join(repositoryRoot, "cmd", command)
 		entries, err := os.ReadDir(directory)

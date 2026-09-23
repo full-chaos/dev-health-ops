@@ -108,11 +108,11 @@ func Routes(deps Deps) []httpapi.Route {
 
 // LoadJobRegistry is configure's seam for constructing the Producer this
 // package needs (internal/apiservice wires it once at startup, the same way
-// cmd/dev-health-scheduler and dev-health-workerctl already load it). root
+// internal/schedulerservice and dev-health-workerctl already load it). root
 // is jobruntime.Load's checked-in manifest directory, staged into the dho
 // api image (docker/go-worker.Dockerfile's dho target) at
 // "contracts/jobs/v1"; a caller two directories below the repo root (a Go
-// test package, matching cmd/dev-health-scheduler's own testContractRoot
+// test package, matching internal/schedulerservice's own testContractRoot
 // convention) passes "../../contracts/jobs/v1" instead.
 func LoadJobRegistry(root string) (*jobruntime.Registry, error) {
 	return jobruntime.Load(root)

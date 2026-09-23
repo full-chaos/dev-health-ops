@@ -104,7 +104,7 @@ def _queue_concurrency_env(process: dict) -> str:
 
 # dho service verbs a worker process names first (`dho stream-runner ...`,
 # `dho reconciler ...`); every argument after the verb is a flag.
-_DHO_SERVICE_VERBS = frozenset({"stream-runner", "reconciler"})
+_DHO_SERVICE_VERBS = frozenset({"stream-runner", "reconciler", "scheduler"})
 
 
 def _process_verb(container: dict) -> str | None:
@@ -639,15 +639,17 @@ def test_river_worker_renderers_select_manifest_queues_without_profiles() -> Non
         environment = compose[service_name]["environment"]
         assert "DEV_HEALTH_QUEUE_CONCURRENCY" not in environment
         assert "DEV_HEALTH_WORKER_GROUP" not in environment
-    # The reconciler is `dho reconciler`: the dho image with the verb first.
-    for services in (compose, swarm):
-        assert _process_verb(services["go-reconciler"]) == "reconciler"
-        assert "/dev-health-go-dho:" in str(services["go-reconciler"]["image"])
-    container = deployments["dev-health-go-reconciler"]["spec"]["template"]["spec"][
-        "containers"
-    ][0]
-    assert _process_verb(container) == "reconciler", container.get("args")
-    assert "/dev-health-go-dho:" in container["image"], container["image"]
+    # The reconciler and the scheduler are `dho reconciler` and `dho
+    # scheduler`: the dho image with the verb first.
+    for verb in ("reconciler", "scheduler"):
+        for services in (compose, swarm):
+            assert _process_verb(services[f"go-{verb}"]) == verb
+            assert "/dev-health-go-dho:" in str(services[f"go-{verb}"]["image"])
+        container = deployments[f"dev-health-go-{verb}"]["spec"]["template"]["spec"][
+            "containers"
+        ][0]
+        assert _process_verb(container) == verb, container.get("args")
+        assert "/dev-health-go-dho:" in container["image"], container["image"]
     for service_name in (
         "go-stream-external",
         "go-stream-ingest",
@@ -931,20 +933,17 @@ def test_python_image_packages_and_validates_job_contracts() -> None:
 
 
 def test_scheduler_image_packages_runtime_policy_inputs() -> None:
+    # The scheduler is `dho scheduler`, run from the dho image; it loads
+    # contracts/jobs/v1 relative to /app.
     dockerfile = _GO_WORKER_DOCKERFILE.read_text(encoding="utf-8")
 
     assert (
-        "cp -R /src/contracts/jobs/v1 " + "/runtime/scheduler/app/contracts/jobs/v1;"
+        "cp -R /src/contracts/jobs/v1 " + "/runtime/dho/app/contracts/jobs/v1;"
         in dockerfile
     )
-    assert (
-        "cp /src/deploy/go-workers/deployment.json "
-        + "/runtime/scheduler/app/deploy/go-workers/deployment.json;"
-        in dockerfile
-    )
-    scheduler_target = dockerfile.split("FROM runtime AS scheduler", maxsplit=1)[1]
-    scheduler_target = scheduler_target.split("FROM runtime AS", maxsplit=1)[0]
-    assert "WORKDIR /app" in scheduler_target
+    dho_target = dockerfile.split("FROM runtime AS dho", maxsplit=1)[1]
+    dho_target = dho_target.split("FROM runtime AS", maxsplit=1)[0]
+    assert "WORKDIR /app" in dho_target
 
 
 def test_deployment_pgbouncer_budget_matches_production_compose_defaults() -> None:

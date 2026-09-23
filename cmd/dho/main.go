@@ -19,6 +19,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/mintcli"
 	"github.com/full-chaos/dev-health-ops/internal/reconcilerservice"
 	"github.com/full-chaos/dev-health-ops/internal/rivermigrate"
+	"github.com/full-chaos/dev-health-ops/internal/schedulerservice"
 	"github.com/full-chaos/dev-health-ops/internal/streamrunnerservice"
 	"github.com/full-chaos/dev-health-ops/internal/workersctl"
 )
@@ -34,6 +35,7 @@ func commands() []cli.Command {
 		mintcli.Command(),
 		reconcilerservice.Command(),
 		rivermigrate.Command(),
+		schedulerservice.Command(),
 		streamrunnerservice.Command(),
 		workersctl.Command(),
 	}

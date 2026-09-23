@@ -229,7 +229,7 @@ type executedProofLoadReporter interface {
 }
 
 // HasLoadedExecutedProof delegates the "has evidence EVER loaded in this
-// process" question to the materializer so cmd/dev-health-scheduler can
+// process" question to the materializer so internal/schedulerservice can
 // register it as a required readiness check without reaching through the
 // narrow Materializer interface.
 //

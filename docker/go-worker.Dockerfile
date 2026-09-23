@@ -44,7 +44,6 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     set -eu; \
     for command in \
         dev-health-worker \
-        dev-health-scheduler \
         dev-health-worker-migrate \
         dho; do \
       GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build \
@@ -62,9 +61,6 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       /runtime/worker/app/contracts/jobs \
       /runtime/worker/app/config \
       /runtime/worker/app/deploy/go-workers \
-      /runtime/scheduler/usr/local/bin \
-      /runtime/scheduler/app/contracts/jobs \
-      /runtime/scheduler/app/deploy/go-workers \
       /runtime/operator/usr/local/bin \
       /runtime/operator/app/contracts/jobs \
       /runtime/operator/app/contracts/sync-dispatch \
@@ -78,9 +74,6 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       /runtime/dho/app/contracts/sync-dispatch; \
     cp /out/dev-health-worker /runtime/worker/usr/local/bin/dev-health-worker; \
     cp /out/dho /runtime/worker/usr/local/bin/dho; \
-    cp /out/dev-health-scheduler /runtime/scheduler/usr/local/bin/dev-health-scheduler; \
-    cp -R /src/contracts/jobs/v1 /runtime/scheduler/app/contracts/jobs/v1; \
-    cp /src/deploy/go-workers/deployment.json /runtime/scheduler/app/deploy/go-workers/deployment.json; \
     cp /out/dho /runtime/operator/usr/local/bin/dho; \
     cp /out/dho /runtime/contractcheck/usr/local/bin/dho; \
     cp -R /src/contracts/jobs/v1 /runtime/worker/app/contracts/jobs/v1; \
@@ -120,11 +113,6 @@ COPY --from=build --chown=65532:65532 /runtime/worker/ /
 WORKDIR /app
 ENTRYPOINT ["/usr/local/bin/dev-health-worker"]
 
-FROM runtime AS scheduler
-COPY --from=build --chown=65532:65532 /runtime/scheduler/ /
-WORKDIR /app
-ENTRYPOINT ["/usr/local/bin/dev-health-scheduler"]
-
 # The operator image runs dho; route activation passes `workers routes apply
 # ...` as args (spec S2 folded dev-health-workerctl into `dho workers`).
 FROM runtime AS operator
@@ -143,10 +131,10 @@ CMD ["contracts", "validate"]
 # dho is the operator binary (cmd/dho): one binary whose compiled-in
 # verticals are selected by the first argument, so every Deployment of it
 # passes its subcommand as args (`dho api`, `dho stream-runner
-# --profile=...`, `dho reconciler`). CHAOS-6247: the api vertical's
-# webhook-intake routes write to the job outbox, which needs the checked-in
-# contracts/jobs/v1 manifest (jobruntime.Load); the reconciler also loads
-# contracts/sync-dispatch/v1 -- so, like worker/scheduler/operator/
+# --profile=...`, `dho reconciler`, `dho scheduler`). The api vertical's
+# webhook-intake routes (CHAOS-6247), the reconciler and the scheduler load the
+# checked-in contracts/jobs/v1 manifest (jobruntime.Load), and the reconciler
+# also loads contracts/sync-dispatch/v1 -- so, like worker/operator/
 # contractcheck, this target stages them under /app and declares a WORKDIR.
 # The stream-runner verb reads no staged file.
 FROM runtime AS dho

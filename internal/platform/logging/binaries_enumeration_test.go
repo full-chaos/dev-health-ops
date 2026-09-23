@@ -39,7 +39,6 @@ var binaryLogging = map[string]string{
 	"dev-health-migration-matrix":            "silent",
 	"dev-health-provider-fixture":            "silent",
 	"dev-health-provider-normalized-fixture": "silent",
-	"dev-health-scheduler":                   "shell",
 	"dev-health-worker":                      "shell",
 	"dev-health-worker-migrate":              "silent",
 	"dho":                                    "cli",

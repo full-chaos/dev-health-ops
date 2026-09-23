@@ -1,13 +1,16 @@
-package main
+package schedulerservice
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
@@ -150,5 +153,24 @@ func TestSchedulerActivationIsPrivateSourceReviewedComposition(t *testing.T) {
 	)
 	if !errors.Is(err, errSchedulerActivationUnavailable) {
 		t.Fatalf("failed private factory error = %v", err)
+	}
+}
+
+// TestSchedulerCommandRunsThePinnedSpec runs `dho scheduler --help` through
+// the dho dispatch and requires the usage line of schedulerSpec's service
+// identity: the help is rendered from the spec the verb executes, so a
+// Command whose Run executed any other spec (or none) would print another.
+func TestSchedulerCommandRunsThePinnedSpec(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := cli.Execute(context.Background(), "dho", []cli.Command{Command()}, cli.Env{
+		Args:   []string{"scheduler", "--help"},
+		Stdout: &stdout,
+		Stderr: &stderr,
+	})
+	if code != 0 {
+		t.Fatalf("dho scheduler --help = %d, want 0\nstderr: %s", code, stderr.String())
+	}
+	if !strings.HasPrefix(stdout.String(), "Usage: dev-health-scheduler [options]\n") {
+		t.Fatalf("dho scheduler --help is not the dev-health-scheduler spec's help:\n%s", stdout.String())
 	}
 }

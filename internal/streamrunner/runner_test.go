@@ -573,10 +573,17 @@ func TestShutdownReadinessIsNotRestoredByTheCycleInFlight(t *testing.T) {
 		t.Fatalf("readiness after Shutdown = %#v, want not ready", readiness)
 	}
 	runner.mu.Lock()
-	up := runner.up
+	up, lastSuccess := runner.up, runner.lastSuccess
 	runner.mu.Unlock()
 	if up {
 		t.Fatal("up gauge is set after Shutdown; the in-flight cycle's success tail restored it")
+	}
+	// lastSuccess feeds worker_stream_last_success_age_seconds; the success tail
+	// sets it in the same statement as up, so it is pinned separately: a tail
+	// that keeps the readiness guard but moves this assignment outside it must
+	// also fail here.
+	if !lastSuccess.IsZero() {
+		t.Fatalf("last-success time = %v after Shutdown; the in-flight cycle's success tail set it", lastSuccess)
 	}
 }
 

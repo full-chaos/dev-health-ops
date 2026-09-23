@@ -169,41 +169,65 @@ func TestRESTAdmitCandidateAlone_RefusesWhatRESTAdmitRefusesOnTheCandidate(t *te
 	}
 }
 
-// TestBaselineTimeoutDeclaredExactlyOnTheTeamScopedRequests pins that NO
-// corpus entry carries a BaselineTimeoutDeclared today. Historically the
-// team-scoped requests on home and work-units (GET and POST) carried one --
-// a declaration is a claim that the REFERENCE PLANE cannot answer inside
-// the run's budget -- but all four of those routes are now in
+// Every team-scoped request on home and work-units (GET and POST) is bound to a
+// live team id and carries the declaration; no other request carries one.
+//
+// GET/POST /api/v1/home and GET/POST /api/v1/work-units are all in
 // DeletedPythonBodyOperations (CHAOS-6241, restdeletedbody.go): their
-// baseline answers the fixed sentinel immediately, every time, so it never
-// times out any more, and restdeletedbody.go's own init() clears the
-// declaration on every entry it overrides. Any future route that adds a
-// genuine one (a route NOT in DeletedPythonBodyOperations, whose reference
-// plane really is slow) is expected to update this test's exemption
-// alongside its own new declaration.
+// baseline answers the fixed sentinel immediately in the overwhelming
+// case, so a real timeout is rare now, not the common path it once was --
+// but the declaration is left in place, not cleared: its NonEmptyPaths is
+// read independently of the timeout mechanism (cmd/query-api's own
+// team_scope_routes_integration_test.go cross-checks it against the real
+// candidate handler's response, regardless of BodyMode), and the rare
+// genuine-timeout case still has somewhere to land instead of going
+// unproven.
 func TestBaselineTimeoutDeclaredExactlyOnTheTeamScopedRequests(t *testing.T) {
+	routes := []string{
+		"REST:GET:/api/v1/home", "REST:POST:/api/v1/home",
+		"REST:GET:/api/v1/work-units", "REST:POST:/api/v1/work-units",
+	}
+	team := map[string]bool{}
 	for _, operation := range KnownRESTOperations() {
 		spec, err := SpecForREST(operation)
 		if err != nil {
 			t.Fatal(err)
 		}
 		for _, req := range spec.Requests {
-			if req.BaselineTimeoutDeclared != nil {
-				t.Errorf("%s/%s carries a BaselineTimeoutDeclared -- want none: every route that used to declare one is a deleted-Python-body route now", operation, req.Name)
+			bindsTeam := false
+			for _, binding := range req.IDBindings {
+				if binding.Producer == "team_id" {
+					bindsTeam = true
+				}
+			}
+			isRoute := false
+			for _, route := range routes {
+				isRoute = isRoute || route == operation
+			}
+			key := operation + "/" + req.Name
+			switch {
+			case isRoute && bindsTeam:
+				team[key] = true
+				if req.BaselineTimeoutDeclared == nil {
+					t.Errorf("%s binds a team id and carries no BaselineTimeoutDeclared", key)
+				}
+			case req.BaselineTimeoutDeclared != nil:
+				t.Errorf("%s carries a BaselineTimeoutDeclared but is not a team-scoped request on the four routes", key)
 			}
 		}
+	}
+	if len(team) != 4 {
+		t.Fatalf("team-scoped requests on the four routes = %v, want exactly 4 (GET+POST home home_team_scoped, GET+POST work-units team_scoped)", team)
 	}
 }
 
 // ValidateRESTCorpus runs every declaration's own validation: a corpus entry
-// whose declaration is invalid does not load. No COMMITTED entry carries a
-// BaselineTimeoutDeclared any more (every route this corpus proves is a
-// deleted-Python-body route as of CHAOS-6241, and restdeletedbody.go's
-// init() clears the declaration on every one of those -- see
-// TestBaselineTimeoutDeclaredExactlyOnTheTeamScopedRequests), so this test
-// temporarily swaps an existing operation's own Requests for a synthetic
-// one carrying a valid-then-broken declaration -- restRunOrder requires
-// every restEndpointSpecs KEY to appear exactly once (ValidateRESTCorpus
+// whose declaration is invalid does not load. Rather than mutating one of
+// the 4 real declared entries in place (fragile: it stops proving anything
+// the day their own shape changes), this test temporarily swaps an
+// existing operation's own Requests for a synthetic one carrying a
+// valid-then-broken declaration -- restRunOrder requires every
+// restEndpointSpecs KEY to appear exactly once (ValidateRESTCorpus
 // checks the two counts agree), so this reuses an existing key rather than
 // adding a new one. Which key does not matter: restdeletedbody.go's init()
 // already ran once at package load, before this test's own temporary swap,

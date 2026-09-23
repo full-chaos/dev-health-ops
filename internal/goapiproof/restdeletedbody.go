@@ -140,13 +140,22 @@ func init() {
 			}
 			req.WantBaselineStatus = pythonBodyDeletedSentinelStatus
 			req.StatusDivergenceReason = PythonBodyDeletedReason
-			// A baseline-timeout declaration is a claim that the
-			// REFERENCE PLANE cannot answer inside the run's budget --
-			// moot now that the reference plane answers the fixed
-			// sentinel immediately, every time, rather than ever timing
-			// out; ValidateRESTCorpus also requires BodyMode json for
-			// one, which this override never leaves an entry holding.
-			req.BaselineTimeoutDeclared = nil
+			// BaselineTimeoutDeclared is left AS DECLARED, not cleared:
+			// its NonEmptyPaths is read independently of the run/timeout
+			// mechanism it also backs (cmd/query-api's own
+			// team_scope_routes_integration_test.go cross-checks it
+			// against the real candidate handler's response, regardless
+			// of this route's BodyMode) -- clearing it here silently
+			// dropped that declaration and broke that test. The timeout
+			// MECHANISM itself (RESTAdmitCandidateAlone, proveUnderBaselineTimeout)
+			// stays live too: a deleted-body baseline answers the fixed
+			// sentinel immediately in the overwhelming case, but a real
+			// transport timeout is not impossible, and this declaration
+			// still lets that rare case admit on the candidate alone
+			// rather than going unproven. ValidateRESTCorpus's own
+			// BaselineTimeoutDeclaration.Validate accepts
+			// RESTBodyModeCandidateShape for exactly this reason
+			// (restbaselinetimeout.go).
 			if req.WantCandidateStatus == 200 {
 				req.BodyMode = RESTBodyModeCandidateShape
 				req.CandidateShapeArray = arrayShaped

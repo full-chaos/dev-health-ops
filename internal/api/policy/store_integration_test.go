@@ -31,6 +31,10 @@ const apiRolePassword = "policy_integration_api_password"
 // column types of src/dev_health_ops/models (GUID is a native uuid).
 var schemaDDL = []string{
 	`CREATE TABLE public.organizations (id uuid PRIMARY KEY, name text NOT NULL)`,
+	// The rest of APIPosture(): readiness requires every declared table.
+	`CREATE TABLE public.feature_flags (id uuid PRIMARY KEY)`,
+	`CREATE TABLE public.org_feature_overrides (id uuid PRIMARY KEY)`,
+	`CREATE TABLE public.org_licenses (id uuid PRIMARY KEY)`,
 	`CREATE TABLE public.users (
 		id uuid PRIMARY KEY, email text NOT NULL UNIQUE,
 		is_active boolean, is_superuser boolean, token_version integer NOT NULL DEFAULT 0)`,

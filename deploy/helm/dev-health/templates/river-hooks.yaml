@@ -274,6 +274,23 @@ spec:
 {{- end }}
 {{- if .Values.migrations.hook.riverMigrate.enabled }}
 {{- /*
+The River hook runs `dho migrate river`, so its image must carry dho as the
+entrypoint and must be the build the rest of the migration chain runs. It is
+riverMigrate.image, else routeActivate.image (the operator image). There is no
+chart-default fallback: a default tag is not a published, pinned build, and a
+hook that cannot pull fails the upgrade at ImagePullBackOff. The pin rule is
+route-activate's: repo@sha256:<digest>, repo:sha-<12 hex>, or repo:local with
+pullPolicy Never or IfNotPresent.
+*/}}
+{{- $riverImage := .Values.migrations.hook.riverMigrate.image | default .Values.migrations.hook.routeActivate.image }}
+{{- $riverPullPolicy := .Values.migrations.hook.riverMigrate.pullPolicy | default .Values.migrations.hook.routeActivate.pullPolicy | default .Values.image.pullPolicy }}
+{{- $riverImageIsDigestPinned := and $riverImage (contains "@sha256:" $riverImage) }}
+{{- $riverImageIsImmutableTag := and $riverImage (regexMatch "^.+:sha-[0-9a-f]{12}$" $riverImage) }}
+{{- $riverImageIsSideloadedLocal := and $riverImage (regexMatch "^.+:local$" $riverImage) (or (eq $riverPullPolicy "Never") (eq $riverPullPolicy "IfNotPresent")) }}
+{{- if not (or $riverImageIsDigestPinned $riverImageIsImmutableTag $riverImageIsSideloadedLocal) }}
+{{- fail (printf "the River hook image %q (migrations.hook.riverMigrate.image, else migrations.hook.routeActivate.image) is not a pinned dho image. The hook runs `dho migrate river --apply-and-check` and needs the operator image built from the same commit as image.repository/image.tag: set migrations.hook.riverMigrate.image or migrations.hook.routeActivate.image to repo@sha256:<digest> or repo:sha-<12 hex>; repo:local is accepted only with pullPolicy Never or IfNotPresent." $riverImage) }}
+{{- end }}
+{{- /*
 This hook owns the River step, so the elevated DSN reaches it under
 MIGRATION_DATABASE_URI and reaches the weight-0 migrate Job under POSTGRES_URI
 instead -- two consumers, two variable names, which is exactly how Compose
@@ -333,12 +350,11 @@ spec:
       containers:
         - name: river-migrate
           {{- /*
-          Defaults to the operator image the route-activate hook runs
-          (migrations.hook.routeActivate.image: docker/go-worker.Dockerfile
-          target `operator`, entrypoint /usr/local/bin/dho, pinned to the same
-          commit as the migrate Job's image -- that hook's render refuses
-          anything else), else the dho image (goApi.image). Both are
-          distroless: no shell. `dho migrate river --apply-and-check` does in Go what this
+          The image is riverMigrate.image, else the operator image the
+          route-activate hook runs (routeActivate.image:
+          docker/go-worker.Dockerfile target `operator`, entrypoint
+          /usr/local/bin/dho), pinned (checked above). It is distroless: no
+          shell. `dho migrate river --apply-and-check` does in Go what this
           hook's /bin/sh wrapper used to: it resolves MIGRATION_DATABASE_URI,
           else POSTGRES_URI, else exits 1 with the same message; then it
           applies the pinned River bundle and the full runtime grant posture,
@@ -347,8 +363,8 @@ spec:
           and the release would start workers against a schema that is not
           what the binary expects. Compose runs the same verb.
           */}}
-          image: {{ .Values.migrations.hook.riverMigrate.image | default .Values.migrations.hook.routeActivate.image | default (include "dev-health.goApiImage" .) | quote }}
-          imagePullPolicy: {{ .Values.migrations.hook.riverMigrate.pullPolicy | default .Values.migrations.hook.routeActivate.pullPolicy | default .Values.goApi.image.pullPolicy }}
+          image: {{ $riverImage | quote }}
+          imagePullPolicy: {{ $riverPullPolicy }}
           securityContext:
             allowPrivilegeEscalation: false
           args: [migrate, river, --apply-and-check]

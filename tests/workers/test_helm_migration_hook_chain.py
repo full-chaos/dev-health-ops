@@ -162,18 +162,42 @@ def test_river_migrate_defaults_to_the_pinned_operator_image() -> None:
     assert container["image"] != migrate_image
 
 
-def test_river_migrate_falls_back_to_the_dho_image() -> None:
-    """With route activation off there is no operator image to share; the
-    hook then runs the dho image (goApi.image), which CI publishes."""
-    jobs = _jobs(
-        *_BOTH_ON,
+def _render_stderr(*sets: str) -> tuple[int, str]:
+    argv = ["helm", "template", _RELEASE, str(_CHART)]
+    for item in sets:
+        argv += ["--set", item]
+    completed = subprocess.run(argv, capture_output=True, text=True)
+    return completed.returncode, completed.stderr
+
+
+@pytest.mark.parametrize(
+    "image",
+    [
+        "",
+        "ghcr.io/full-chaos/dev-health-go-operator:latest",
+        "ghcr.io/full-chaos/dev-health-go-dho:0.1.0",
+    ],
+)
+def test_river_migrate_refuses_an_unpinned_image(image: str) -> None:
+    """With route activation off there is no operator image to share, and a
+    chart-default tag is not a published, pinned build: the hook would fail
+    at ImagePullBackOff mid-upgrade. The render refuses it instead."""
+    code, stderr = _render_stderr(
+        "migrations.hook.provisionRoles.enabled=true",
+        "migrations.hook.riverMigrate.enabled=true",
         "migrations.hook.routeActivate.enabled=false",
-        "migrations.hook.routeActivate.image=",
+        f"migrations.hook.riverMigrate.image={image}",
     )
+    assert code != 0, "an unpinned River hook image rendered"
+    assert "is not a pinned dho image" in stderr, stderr
+
+
+def test_river_migrate_takes_its_own_pinned_image() -> None:
+    """riverMigrate.image, when set and pinned, wins over the operator image."""
+    own = "ghcr.io/full-chaos/dev-health-go-dho@sha256:" + "b" * 64
+    jobs = _jobs(*_BOTH_ON, f"migrations.hook.riverMigrate.image={own}")
     container = jobs[_RIVER]["spec"]["template"]["spec"]["containers"][0]
-    assert container["image"].startswith("ghcr.io/full-chaos/dev-health-go-dho:"), (
-        container["image"]
-    )
+    assert container["image"] == own, container["image"]
 
 
 def test_river_migrate_applies_and_checks_with_no_shell() -> None:

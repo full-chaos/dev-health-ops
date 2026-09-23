@@ -113,7 +113,11 @@ def test_route_activate_is_absent_by_default() -> None:
     [
         (),
         ("migrations.hook.provisionRoles.enabled=true",),
-        ("migrations.hook.riverMigrate.enabled=true",),
+        # The River hook needs a pinned dho image of its own to render at all.
+        (
+            "migrations.hook.riverMigrate.enabled=true",
+            f"migrations.hook.riverMigrate.image={_PINNED_OPERATOR_IMAGE}",
+        ),
     ],
 )
 def test_route_activate_needs_both_prerequisites(sets: tuple[str, ...]) -> None:

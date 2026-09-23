@@ -776,10 +776,12 @@ migrations:
       #    provisioning, which is the only ordering a fresh install survives.
       enabled: false
       # -- Image the River hook runs `dho migrate river --apply-and-check`
-      #    from. EMPTY MEANS routeActivate.image (the pinned operator image,
-      #    entrypoint dho), else the dho image (goApi.image). Either way the
-      #    image must carry dho as its entrypoint: the hook sets args only,
-      #    no command.
+      #    from. EMPTY MEANS routeActivate.image (the operator image,
+      #    entrypoint dho). The render refuses an image that is not pinned
+      #    (repo@sha256:<digest>, repo:sha-<12 hex>, or repo:local with
+      #    pullPolicy Never/IfNotPresent) -- there is no chart-default
+      #    fallback. The image must carry dho as its entrypoint: the hook sets
+      #    args only, no command.
       image: ""
       pullPolicy: ""
     # -- CHAOS-4272/CHAOS-4455: sync-dispatch route activation and the

@@ -258,6 +258,8 @@ func venueRequests(f venueFixture, tokens map[string]string) []venueoracle.Reque
 		{"text plain", `{"events":[]}`, "text/plain"},
 		{"bad json", `{"events":`, "application/json"},
 		{"nan payload", `{"events":[` + strings.Replace(event, `"f":1.5`, `"f":NaN`, 1) + `]}`, "application/json"},
+		{"lone surrogate payload", `{"events":[` + strings.Replace(event, `"f":1.5`, `"f":"\ud800"`, 1) + `]}`, "application/json"},
+		{"lone surrogate bad name", `{"events":[` + strings.Replace(event, `"page_viewed"`, `"\ud800"`, 1) + `]}`, "application/json"},
 	} {
 		headers := map[string]string{}
 		if body.contentType != "" {

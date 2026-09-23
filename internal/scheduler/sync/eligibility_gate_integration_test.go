@@ -135,7 +135,8 @@ func seedEligibilityFixture(ctx context.Context, pool *pgxpool.Pool, fixture eli
 			org_id uuid NOT NULL,
 			feature_id uuid NOT NULL,
 			is_enabled boolean,
-			expires_at timestamptz
+			expires_at timestamptz,
+			config json
 		)`,
 		`CREATE TABLE public.org_licenses (
 			org_id uuid PRIMARY KEY,

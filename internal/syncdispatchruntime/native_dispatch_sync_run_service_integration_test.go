@@ -98,10 +98,13 @@ func withDispatchServicePool(t *testing.T, fn func(ctx context.Context, pool *pg
 	// error handling cannot undo without a savepoint. Production always has
 	// these tables; this is a test-fixture-completeness requirement, not a
 	// production behavior this port needs to defend against.
+	//
+	// organizations/org_licenses/tier_limits are created by
+	// createReferenceDiscoveryTables above (CHAOS-6286: the same tables the
+	// non-locking canonical-incident gate now reads via internal/api/licensing
+	// need to exist for every test in this package, not only this cap-resolution
+	// one, so they moved to the shared fixture) -- only the seed row is local.
 	if _, err := pool.Exec(ctx, `
-CREATE TABLE public.organizations (id uuid PRIMARY KEY, tier text NULL);
-CREATE TABLE public.org_licenses (org_id uuid PRIMARY KEY, tier text NULL, limits_override jsonb NULL);
-CREATE TABLE public.tier_limits (tier text NOT NULL, limit_key text NOT NULL, limit_value text NULL, PRIMARY KEY (tier, limit_key));
 INSERT INTO public.organizations (id, tier) VALUES ('`+discoveryTestOrg+`', 'community');`); err != nil {
 		t.Fatal(err)
 	}

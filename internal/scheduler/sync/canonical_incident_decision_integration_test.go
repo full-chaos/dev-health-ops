@@ -24,7 +24,8 @@ CREATE TABLE feature_flags (
 	id uuid PRIMARY KEY, key text NOT NULL, min_tier text NOT NULL, is_enabled boolean NOT NULL
 );
 CREATE TABLE org_feature_overrides (
-	org_id uuid NOT NULL, feature_id uuid NOT NULL, is_enabled boolean, expires_at timestamptz
+	org_id uuid NOT NULL, feature_id uuid NOT NULL, is_enabled boolean, expires_at timestamptz,
+	config json
 );
 CREATE TABLE organizations (id uuid PRIMARY KEY, tier text);
 CREATE TABLE org_licenses (
@@ -90,7 +91,175 @@ func decideCanonicalIncident(t *testing.T, ctx context.Context, pool *pgxpool.Po
 // decide-and-assert shape; each row is its own fresh database so seed
 // order between rows can never leak.
 func TestCanonicalIncidentDecisionCoversEveryReachableReason(t *testing.T) {
-	cases := []struct {
+	cases := canonicalIncidentDecisionReasonCases()
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+			instance, err := containers.StartPostgres(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer instance.Close(context.Background())
+			pool, err := pgxpool.New(ctx, instance.URI)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer pool.Close()
+			createCanonicalIncidentDecisionTables(t, ctx, pool)
+			testCase.seed(t, ctx, pool)
+
+			allowed, reason := decideCanonicalIncident(t, ctx, pool)
+			if allowed != testCase.wantAllowed {
+				t.Errorf("allowed=%v want=%v", allowed, testCase.wantAllowed)
+			}
+			if reason != testCase.wantReason {
+				t.Errorf("reason=%q want=%q", reason, testCase.wantReason)
+			}
+
+			// CanonicalIncidentAllowedForUpdate's bool must always agree with
+			// the reason-carrying sibling's bool -- proving the "byte-identical
+			// existing wrapper" delegation is actually wired, not just declared.
+			var boolOnlyAllowed bool
+			withDecisionTx(t, ctx, pool, func(tx pgx.Tx) {
+				var err error
+				boolOnlyAllowed, err = CanonicalIncidentAllowedForUpdate(ctx, tx, decisionOrgID, time.Now().UTC())
+				if err != nil {
+					t.Fatalf("CanonicalIncidentAllowedForUpdate: %v", err)
+				}
+			})
+			if boolOnlyAllowed != allowed {
+				t.Errorf("CanonicalIncidentAllowedForUpdate=%v disagrees with CanonicalIncidentDecisionForUpdate=%v", boolOnlyAllowed, allowed)
+			}
+		})
+	}
+}
+
+// decideCanonicalIncidentNonLocking exercises the non-locking form
+// (CanonicalIncidentDecision), which since CHAOS-6286's scheduler widening
+// delegates to internal/api/licensing instead of this file's own SQL.
+func decideCanonicalIncidentNonLocking(t *testing.T, ctx context.Context, pool *pgxpool.Pool) (bool, FeatureDecisionReason) {
+	t.Helper()
+	var allowed bool
+	var reason FeatureDecisionReason
+	withDecisionTx(t, ctx, pool, func(tx pgx.Tx) {
+		var err error
+		allowed, reason, err = CanonicalIncidentDecision(ctx, tx, decisionOrgID, time.Now().UTC())
+		if err != nil {
+			t.Fatalf("CanonicalIncidentDecision: %v", err)
+		}
+	})
+	return allowed, reason
+}
+
+// TestCanonicalIncidentDecisionNonLockingMatchesLockingForEveryReachableReason
+// proves the non-locking form -- now delegating to internal/api/licensing --
+// still agrees with the locking form's own local SQL for every reachable
+// reason this feature key can produce, run through the identical case table
+// TestCanonicalIncidentDecisionCoversEveryReachableReason pins for the
+// locking path.
+func TestCanonicalIncidentDecisionNonLockingMatchesLockingForEveryReachableReason(t *testing.T) {
+	cases := canonicalIncidentDecisionReasonCases()
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+			instance, err := containers.StartPostgres(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer instance.Close(context.Background())
+			pool, err := pgxpool.New(ctx, instance.URI)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer pool.Close()
+			createCanonicalIncidentDecisionTables(t, ctx, pool)
+			testCase.seed(t, ctx, pool)
+
+			allowed, reason := decideCanonicalIncidentNonLocking(t, ctx, pool)
+			if allowed != testCase.wantAllowed {
+				t.Errorf("allowed=%v want=%v", allowed, testCase.wantAllowed)
+			}
+			if reason != testCase.wantReason {
+				t.Errorf("reason=%q want=%q", reason, testCase.wantReason)
+			}
+
+			var boolOnlyAllowed bool
+			withDecisionTx(t, ctx, pool, func(tx pgx.Tx) {
+				var err error
+				boolOnlyAllowed, err = CanonicalIncidentAllowed(ctx, tx, decisionOrgID, time.Now().UTC())
+				if err != nil {
+					t.Fatalf("CanonicalIncidentAllowed: %v", err)
+				}
+			})
+			if boolOnlyAllowed != allowed {
+				t.Errorf("CanonicalIncidentAllowed=%v disagrees with CanonicalIncidentDecision=%v", boolOnlyAllowed, allowed)
+			}
+		})
+	}
+}
+
+// TestCanonicalIncidentDecisionNonLockingDeniesNumericLicenseOverride is the
+// CHAOS-6286 regression case: the non-locking form's local `map[string]bool`
+// decode of org_licenses.features_override used to fail outright on a
+// numeric override value (JSON `0` is not a valid bool), silently discarding
+// the whole overrides map and falling through to tier -- so a numeric-0
+// override was admitted (enabled_by_tier) instead of denied
+// (license_override_disabled). licensing.LoadState/Decide, via
+// jsonTruth, treats JSON `0` as Python's bool(0) == False, matching the
+// shared engine and the worker's own execution-time recheck. Red on the
+// pre-CHAOS-6286-widening code (asserted here against CanonicalIncidentDecision
+// only -- the still-local locking form is intentionally NOT covered by this
+// case, see this file's package doc / the PR's RISK-NOTES).
+func TestCanonicalIncidentDecisionNonLockingDeniesNumericLicenseOverride(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createCanonicalIncidentDecisionTables(t, ctx, pool)
+	seedCanonicalIncidentFeatureFlag(t, ctx, pool, "enterprise", true)
+	if _, err := pool.Exec(ctx, `
+INSERT INTO organizations (id, tier) VALUES ($1, 'community')`, decisionOrgID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+INSERT INTO org_licenses (org_id, tier, features_override)
+VALUES ($1, 'community', '{"canonical_incident_ingestion":0}'::jsonb)`, decisionOrgID); err != nil {
+		t.Fatal(err)
+	}
+
+	allowed, reason := decideCanonicalIncidentNonLocking(t, ctx, pool)
+	if allowed {
+		t.Fatalf("allowed=true reason=%q want denied: a numeric-0 license override must not fall through to tier", reason)
+	}
+	if reason != FeatureDecisionReasonLicenseOverrideDisabled {
+		t.Fatalf("reason=%q want=%q", reason, FeatureDecisionReasonLicenseOverrideDisabled)
+	}
+}
+
+// canonicalIncidentDecisionReasonCases is the shared case table both the
+// locking and non-locking coverage tests run: every case must produce an
+// identical (allowed, reason) answer from both forms, since they read the
+// same tables for the same feature key and differ only in locking + (for
+// the non-locking form) which code computes the answer.
+func canonicalIncidentDecisionReasonCases() []struct {
+	name        string
+	seed        func(t *testing.T, ctx context.Context, pool *pgxpool.Pool)
+	wantAllowed bool
+	wantReason  FeatureDecisionReason
+} {
+	return []struct {
 		name        string
 		seed        func(t *testing.T, ctx context.Context, pool *pgxpool.Pool)
 		wantAllowed bool
@@ -215,48 +384,6 @@ VALUES ($1, 'enterprise', '{"canonical_incident_ingestion":false}'::jsonb)`, dec
 			wantAllowed: false,
 			wantReason:  FeatureDecisionReasonTierRequired,
 		},
-	}
-
-	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-			defer cancel()
-			instance, err := containers.StartPostgres(ctx)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer instance.Close(context.Background())
-			pool, err := pgxpool.New(ctx, instance.URI)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer pool.Close()
-			createCanonicalIncidentDecisionTables(t, ctx, pool)
-			testCase.seed(t, ctx, pool)
-
-			allowed, reason := decideCanonicalIncident(t, ctx, pool)
-			if allowed != testCase.wantAllowed {
-				t.Errorf("allowed=%v want=%v", allowed, testCase.wantAllowed)
-			}
-			if reason != testCase.wantReason {
-				t.Errorf("reason=%q want=%q", reason, testCase.wantReason)
-			}
-
-			// CanonicalIncidentAllowedForUpdate's bool must always agree with
-			// the reason-carrying sibling's bool -- proving the "byte-identical
-			// existing wrapper" delegation is actually wired, not just declared.
-			var boolOnlyAllowed bool
-			withDecisionTx(t, ctx, pool, func(tx pgx.Tx) {
-				var err error
-				boolOnlyAllowed, err = CanonicalIncidentAllowedForUpdate(ctx, tx, decisionOrgID, time.Now().UTC())
-				if err != nil {
-					t.Fatalf("CanonicalIncidentAllowedForUpdate: %v", err)
-				}
-			})
-			if boolOnlyAllowed != allowed {
-				t.Errorf("CanonicalIncidentAllowedForUpdate=%v disagrees with CanonicalIncidentDecisionForUpdate=%v", boolOnlyAllowed, allowed)
-			}
-		})
 	}
 }
 

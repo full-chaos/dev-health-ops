@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/licensing"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -26,6 +27,10 @@ var (
 	materializerNamespace  = uuid.MustParse("0f17e412-bca5-4cc1-a1e2-c1a6d15104a5")
 	ErrInvalidMaterializer = errors.New("invalid scheduled sync materializer")
 )
+
+// canonicalIncidentFeatureKey is the feature key both the locking and
+// non-locking canonical-incident decision forms in this file evaluate.
+const canonicalIncidentFeatureKey = "canonical_incident_ingestion"
 
 // NativeMaterializer owns the domain-side transaction that persists a planned
 // sync run. The caller retains its coordinator transaction for policy locks,
@@ -1296,6 +1301,43 @@ func canonicalIncidentAllowed(ctx context.Context, tx rowQuerier, orgID string, 
 	return allowed, err
 }
 
+// canonicalIncidentDecisionViaLicensing is the non-locking (CHAOS-4209)
+// form, delegating to the shared internal/api/licensing decision engine --
+// the same one internal/providersync/incident_entitlement.go and
+// internal/streamhandlers/external_postgres.go already consume -- instead
+// of a local re-implementation. This closes a numeric-license-override
+// decode gap the local `map[string]bool` unmarshal had: a JSON `0` value
+// for this feature key fails that unmarshal outright, so the whole
+// overrides map was silently discarded and the decision fell through to
+// tier, returning enabled_by_tier where the shared, Python-parity engine
+// treats `0` as false and denies (confirmed live: a numeric override of 0
+// was admitted here and refused at the worker's execution-time recheck).
+//
+// licensing.LoadState does not check organization existence (see its own
+// doc comment): a nonexistent org resolves to the COMMUNITY tier instead
+// of this decision denying outright, the same intentional parity tradeoff
+// already made for external_postgres.go in this change, not something
+// this function newly introduces on its own.
+//
+// The locking (*ForUpdate) path below is unchanged: FOR UPDATE is an
+// UPDATE-class Postgres privilege the shared package's read-only Queryer
+// contract does not take, and the domain role must not gain it -- see
+// CanonicalIncidentAllowed's doc comment for why that boundary is real.
+func canonicalIncidentDecisionViaLicensing(ctx context.Context, tx rowQuerier, orgID string, now time.Time) (bool, FeatureDecisionReason, error) {
+	if _, err := uuid.Parse(orgID); err != nil {
+		// Python: require_canonical_incident_feature_for_update_sync's own
+		// `except ValueError` catch on an unparseable org_id, before
+		// evaluate_org_feature_sync is ever called.
+		return false, FeatureDecisionReasonInvalidFeatureState, nil
+	}
+	state, err := licensing.LoadState(ctx, tx, orgID, canonicalIncidentFeatureKey, now.UTC())
+	if err != nil {
+		return false, "", fmt.Errorf("load canonical incident entitlement: %w", err)
+	}
+	decision := licensing.Decide(canonicalIncidentFeatureKey, state)
+	return decision.Allowed, FeatureDecisionReason(decision.Reason), nil
+}
+
 // canonicalIncidentDecision is canonicalIncidentAllowed's full form: every
 // return point below is annotated with the FeatureDecisionReason
 // decide_feature (feature_policy.py) would produce for the identical input
@@ -1303,17 +1345,20 @@ func canonicalIncidentAllowed(ctx context.Context, tx rowQuerier, orgID string, 
 // comment. The bool/error control flow is UNCHANGED from before this
 // reason was added -- this is a mechanical surfacing of an already-computed
 // answer, not a new decision path.
+//
+// !lockRows delegates to canonicalIncidentDecisionViaLicensing above; the
+// row-locking SQL below now serves only the *ForUpdate callers.
 func canonicalIncidentDecision(ctx context.Context, tx rowQuerier, orgID string, now time.Time, lockRows bool) (bool, FeatureDecisionReason, error) {
+	if !lockRows {
+		return canonicalIncidentDecisionViaLicensing(ctx, tx, orgID, now)
+	}
 	if _, err := uuid.Parse(orgID); err != nil {
 		// Python: require_canonical_incident_feature_for_update_sync's own
 		// `except ValueError` catch on an unparseable org_id, before
 		// evaluate_org_feature_sync is ever called.
 		return false, FeatureDecisionReasonInvalidFeatureState, nil
 	}
-	lockClause := ""
-	if lockRows {
-		lockClause = "\nFOR UPDATE"
-	}
+	lockClause := "\nFOR UPDATE"
 	var featureID, minTier string
 	var globallyEnabled bool
 	err := tx.QueryRow(ctx, `

@@ -418,6 +418,23 @@ DELETED_GO_SERVED_RESOLVER_MODULES: dict[str, Path] = {
     / "graphql"
     / "resolvers"
     / "analytics.py",
+    # CHAOS-6240: NOT a query-api migration -- this internal HTTP bridge
+    # (execute_remaining_metrics, read_metric_execution) had no caller
+    # anywhere at all (ops Go, acr, ask-dev, web, deploy, scripts, ci), so
+    # the whole module -- every subprocess-exec/capacity/ledger helper that
+    # existed only to serve those two routes, WORKER_METRICS_SOURCE's
+    # already-ledgered symbols included -- is deleted rather than replaced.
+    # Tracked here anyway: this dict's own mechanism (test_deleted_symbols_
+    # are_not_redefined) is what proves an absent file's ledgered symbols
+    # stay gone, regardless of why the file was deleted.
+    "worker metrics bridge": WORKER_METRICS_SOURCE,
+    # CHAOS-6240: worker_auth.py's only importer was worker_metrics.py
+    # (confirmed by grep across src/); with that route gone, this shared
+    # "narrow internal worker bridge" auth helper (authorize_worker_bridge)
+    # has zero callers left and is deleted with it, WORKER_AUTH_SOURCE's
+    # already-ledgered symbols (authorize_metric_repair/
+    # authorize_workgraph_repair, deleted in an earlier PR) included.
+    "worker auth helper": WORKER_AUTH_SOURCE,
 }
 
 # The kernels RETAINED as Go-parity oracles, on the metrics/compounding_risk.py

@@ -14917,134 +14917,6 @@
       "disclosure_behavior": "OrgIdMiddleware exempts this prefix (api/middleware/__init__.py:86) so the raw bearer never reaches the JWT decoder; ImpersonationMiddleware still peeks it (harmless: fails the JWT-shape check and is caught)."
     },
     {
-      "id": "POST /internal/worker/remaining-metrics/v1/execute [dev-health-ops-api]",
-      "surface_kind": "rest",
-      "method": "POST",
-      "route": "/internal/worker/remaining-metrics/v1/execute",
-      "graphql_field_name": null,
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/internal/worker_metrics.py",
-        "line": 1956,
-        "router_local_path": "/remaining-metrics/v1/execute"
-      },
-      "gaps": [],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "worker_operational_bridge_token"
-      ],
-      "primary_validator": {
-        "description": "authorize_worker_bridge() (shared helper) checks Authorization: Bearer against WORKER_OPERATIONAL_BRIDGE_TOKEN with hmac.compare_digest + bounded length; fails closed (401) if unset. A repair-token route additionally rejects the value if it equals the ordinary bridge token, so bridge and repair capabilities can't be confused.",
-        "anchor": {
-          "path": "src/dev_health_ops/api/internal/worker_auth.py",
-          "line": 13,
-          "line_end": 15
-        }
-      },
-      "token_shape": {
-        "token_type": "opaque bearer (shared secret)",
-        "issuer": null,
-        "audience": null,
-        "algorithm": null
-      },
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ runs get_authenticated_user_from_headers on ANY Authorization header value, decoding it as an ops JWT via authenticate_access_token, before this route's own validator runs. Exempts only path prefix /api/v1/internal/acr/. A non-JWT bearer degrades to anonymous (InvalidTokenError caught, returns None) rather than erroring -- observable but not fatal.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": "request body (execution/run ids); no org_id",
-      "tenant_requirement": "none",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": "401 on missing/invalid/wrong-class bridge token."
-    },
-    {
-      "id": "GET /internal/worker/metric-executions/v1/{execution_id} [dev-health-ops-api]",
-      "surface_kind": "rest",
-      "method": "GET",
-      "route": "/internal/worker/metric-executions/v1/{execution_id}",
-      "graphql_field_name": null,
-      "service": "dev-health-ops-api",
-      "source": {
-        "file": "src/dev_health_ops/api/internal/worker_metrics.py",
-        "line": 1968,
-        "router_local_path": "/metric-executions/v1/{execution_id}"
-      },
-      "gaps": [],
-      "classification": "protected",
-      "public_rationale": null,
-      "accepted_credential_classes": [
-        "worker_operational_bridge_token"
-      ],
-      "primary_validator": {
-        "description": "authorize_worker_bridge() (shared helper) checks Authorization: Bearer against WORKER_OPERATIONAL_BRIDGE_TOKEN with hmac.compare_digest + bounded length; fails closed (401) if unset. A repair-token route additionally rejects the value if it equals the ordinary bridge token, so bridge and repair capabilities can't be confused.",
-        "anchor": {
-          "path": "src/dev_health_ops/api/internal/worker_auth.py",
-          "line": 13,
-          "line_end": 15
-        }
-      },
-      "token_shape": {
-        "token_type": "opaque bearer (shared secret)",
-        "issuer": null,
-        "audience": null,
-        "algorithm": null
-      },
-      "reachable_validators": [
-        {
-          "description": "OrgIdMiddleware.__call__ runs get_authenticated_user_from_headers on ANY Authorization header value, decoding it as an ops JWT via authenticate_access_token, before this route's own validator runs. Exempts only path prefix /api/v1/internal/acr/. A non-JWT bearer degrades to anonymous (InvalidTokenError caught, returns None) rather than erroring -- observable but not fatal.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/__init__.py",
-            "line": 36,
-            "line_end": 91,
-            "note": "OrgIdMiddleware.__call__, ACR exemption at line 86"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        },
-        {
-          "description": "ImpersonationMiddleware._may_be_superuser peeks at the Authorization bearer value with an UNVERIFIED base64 JSON decode of the JWT payload segment (token.split('.')[1]) on every request, superuser-or-not, with NO path exemption (unlike OrgIdMiddleware's /api/v1/internal/acr/ carve-out) -- runs even for ACR-authenticated requests. A non-JWT opaque token (svc_acr_*, fcpush_*, worker-bridge secret) fails the split/decode and is caught by a broad except, so this is benign but still 'observes' every credential class before its intended validator.",
-          "anchor": {
-            "path": "src/dev_health_ops/api/middleware/impersonation.py",
-            "line": 108,
-            "line_end": 141,
-            "note": "_may_be_superuser unverified JWT peek, no path exemption"
-          },
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
-      "action": null,
-      "resource_resolver": "request body (execution/run ids); no org_id",
-      "tenant_requirement": "none",
-      "current_state_cache_behavior": null,
-      "impersonation_policy": "subject_to_impersonation_override",
-      "entitlement_requirement": null,
-      "disclosure_behavior": "401 on missing/invalid/wrong-class bridge token."
-    },
-    {
       "id": "GET /api/v1/licensing/entitlements/{org_id} [dev-health-ops-api]",
       "surface_kind": "rest",
       "method": "GET",
@@ -15112,7 +14984,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 145,
+        "line": 143,
         "router_local_path": "/health"
       },
       "gaps": [],
@@ -15162,7 +15034,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 192,
+        "line": 190,
         "router_local_path": "/ready"
       },
       "gaps": [],
@@ -15212,7 +15084,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 203,
+        "line": 201,
         "router_local_path": "/health/workers"
       },
       "gaps": [],
@@ -15262,7 +15134,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 365,
+        "line": 363,
         "router_local_path": "/api/v1/meta"
       },
       "gaps": [],
@@ -15312,7 +15184,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 371,
+        "line": 369,
         "router_local_path": "/api/v1/home"
       },
       "gaps": [],
@@ -15371,7 +15243,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 381,
+        "line": 379,
         "router_local_path": "/api/v1/home"
       },
       "gaps": [],
@@ -15430,7 +15302,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 397,
+        "line": 395,
         "router_local_path": "/api/v1/explain"
       },
       "gaps": [],
@@ -15489,7 +15361,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 404,
+        "line": 402,
         "router_local_path": "/api/v1/explain"
       },
       "gaps": [],
@@ -15548,7 +15420,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 421,
+        "line": 419,
         "router_local_path": "/api/v1/heatmap"
       },
       "gaps": [],
@@ -15607,7 +15479,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 440,
+        "line": 438,
         "router_local_path": "/api/v1/work-units"
       },
       "gaps": [],
@@ -15666,7 +15538,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 448,
+        "line": 446,
         "router_local_path": "/api/v1/work-units"
       },
       "gaps": [],
@@ -15725,7 +15597,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 463,
+        "line": 461,
         "router_local_path": "/api/v1/work-units/{work_unit_id}/explain"
       },
       "gaps": [],
@@ -15784,7 +15656,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 484,
+        "line": 482,
         "router_local_path": "/api/v1/flame"
       },
       "gaps": [],
@@ -15843,7 +15715,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 495,
+        "line": 493,
         "router_local_path": "/api/v1/flame/aggregated"
       },
       "gaps": [],
@@ -15902,7 +15774,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 515,
+        "line": 513,
         "router_local_path": "/api/v1/quadrant"
       },
       "gaps": [],
@@ -15961,7 +15833,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 531,
+        "line": 529,
         "router_local_path": "/api/v1/drilldown/prs"
       },
       "gaps": [],
@@ -16020,7 +15892,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 541,
+        "line": 539,
         "router_local_path": "/api/v1/drilldown/prs"
       },
       "gaps": [],
@@ -16079,7 +15951,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 556,
+        "line": 554,
         "router_local_path": "/api/v1/drilldown/issues"
       },
       "gaps": [],
@@ -16138,7 +16010,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 566,
+        "line": 564,
         "router_local_path": "/api/v1/drilldown/issues"
       },
       "gaps": [],
@@ -16197,7 +16069,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 581,
+        "line": 579,
         "router_local_path": "/api/v1/people"
       },
       "gaps": [],
@@ -16256,7 +16128,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 592,
+        "line": 590,
         "router_local_path": "/api/v1/people/{person_id}/summary"
       },
       "gaps": [],
@@ -16315,7 +16187,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 604,
+        "line": 602,
         "router_local_path": "/api/v1/people/{person_id}/metric"
       },
       "gaps": [],
@@ -16374,7 +16246,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 616,
+        "line": 614,
         "router_local_path": "/api/v1/people/{person_id}/drilldown/prs"
       },
       "gaps": [],
@@ -16433,7 +16305,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 632,
+        "line": 630,
         "router_local_path": "/api/v1/people/{person_id}/drilldown/issues"
       },
       "gaps": [],
@@ -16492,7 +16364,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 648,
+        "line": 646,
         "router_local_path": "/api/v1/opportunities"
       },
       "gaps": [],
@@ -16551,7 +16423,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 664,
+        "line": 662,
         "router_local_path": "/api/v1/opportunities"
       },
       "gaps": [],
@@ -16610,7 +16482,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 674,
+        "line": 672,
         "router_local_path": "/api/v1/investment"
       },
       "gaps": [],
@@ -16669,7 +16541,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 689,
+        "line": 687,
         "router_local_path": "/api/v1/investment"
       },
       "gaps": [],
@@ -16728,7 +16600,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 699,
+        "line": 697,
         "router_local_path": "/api/v1/investment/sunburst"
       },
       "gaps": [],
@@ -16787,7 +16659,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 716,
+        "line": 714,
         "router_local_path": "/api/v1/investment/explain"
       },
       "gaps": [],
@@ -16846,7 +16718,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 738,
+        "line": 736,
         "router_local_path": "/api/v1/investment/flow"
       },
       "gaps": [],
@@ -16905,7 +16777,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 748,
+        "line": 746,
         "router_local_path": "/api/v1/investment/flow/repo-team"
       },
       "gaps": [],
@@ -16964,7 +16836,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 756,
+        "line": 754,
         "router_local_path": "/api/v1/sankey"
       },
       "gaps": [],
@@ -17023,7 +16895,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 774,
+        "line": 772,
         "router_local_path": "/api/v1/sankey"
       },
       "gaps": [],
@@ -17082,7 +16954,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/main.py",
-        "line": 784,
+        "line": 782,
         "router_local_path": "/api/v1/filters/options"
       },
       "gaps": [],

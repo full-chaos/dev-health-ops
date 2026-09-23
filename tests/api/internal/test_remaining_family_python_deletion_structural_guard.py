@@ -126,8 +126,17 @@ def test_deleted_remaining_family_python_modules_do_not_exist() -> None:
 def test_deleted_remaining_family_python_modules_have_no_dispatch_entry() -> None:
     """The corresponding worker_metrics.py `_REMAINING_RUNNERS` dispatch key
     must also be gone -- checking only file-existence would miss a
-    resurrected inline handler that never got its own module back."""
-    assert WORKER_METRICS_SOURCE.is_file(), f"missing source: {WORKER_METRICS_SOURCE}"
+    resurrected inline handler that never got its own module back.
+
+    CHAOS-6240 deleted worker_metrics.py entirely (its 2 HTTP routes had no
+    caller anywhere) -- with the file gone, `_REMAINING_RUNNERS` cannot
+    dispatch anything, which trivially satisfies this test's assertion, the
+    same "absent module is stronger than an absent dispatch key" reasoning
+    tests/api/graphql/test_go_served_resolver_python_deletion_structural_
+    guard.py's DELETED_GO_SERVED_RESOLVER_MODULES ledger already applies.
+    """
+    if not WORKER_METRICS_SOURCE.is_file():
+        return
     source = WORKER_METRICS_SOURCE.read_text(encoding="utf-8")
 
     still_dispatched = sorted(

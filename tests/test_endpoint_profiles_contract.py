@@ -162,12 +162,21 @@ def test_inventory_row_count_matches_the_baseline():
     /internal/worker/daily-metrics/v1/redrive` and `POST /internal/worker/
     workgraph/v1/executions/{id}/repair`) are deleted with their rows; the
     Go `dev-health-workerctl` verbs run those repairs natively, so the rows
-    stand at 352 (296 REST + 56 GraphQL).
+    stood at 352 (296 REST + 56 GraphQL).
     = 351, -1 REST under CHAOS-6243: `POST /api/internal/worker-sync/
     dispatch-budget-estimate` is deleted with its row -- the Go dispatcher
     estimates budgets in-process (internal/syncbudget), so nothing calls
-    the route, and it was the last route in worker_sync.py. Recounted from
-    the file.
+    the route, and it was the last route in worker_sync.py.
+    = 349, -2 REST under CHAOS-6240 (landed independently from the same
+    pre-existing 352 baseline as CHAOS-6243 above -- see the MERGE HAZARD
+    note below for why neither decrement subsumes the other): `POST
+    /internal/worker/remaining-metrics/v1/execute` and `GET /internal/worker/
+    metric-executions/v1/{execution_id}` are deleted with their rows -- an
+    executed search found no caller anywhere (ops Go, acr, ask-dev, web,
+    deploy, scripts, ci), so worker_metrics.py (every subprocess-exec/
+    capacity/ledger helper that existed only to serve these two routes) is
+    deleted whole, not migrated. The rows stand at 349 (293 REST + 56
+    GraphQL), recounted from the file per the rule below.
 
     MERGE HAZARD, recorded because it has now nearly landed silently more
     than once. Each change edited these same asserts, and each was correct
@@ -188,9 +197,9 @@ def test_inventory_row_count_matches_the_baseline():
     rows = inventory["rows"]
     rest = [r for r in rows if r["surface_kind"] == "rest"]
     graphql = [r for r in rows if r["surface_kind"] in _GRAPHQL_KINDS]
-    assert len(rest) == 295, len(rest)
+    assert len(rest) == 293, len(rest)
     assert len(graphql) == 56, len(graphql)
-    assert len(rows) == 351, len(rows)
+    assert len(rows) == 349, len(rows)
 
 
 def test_no_graphql_subscription_is_profiled():
@@ -251,8 +260,14 @@ def test_classification_summary_matches_the_baseline():
     # workgraph/executions/{id}/repair) were also protected (the operator
     # repair token); the Go workerctl verbs own those operations now.
     # - 1 under CHAOS-6243: the deleted worker-sync/dispatch-budget-estimate
-    # row was protected (worker bridge bearer). Recounted from the file.
-    assert len(protected) == 324, len(protected)
+    # row was protected (worker bridge bearer).
+    # - 2 more under CHAOS-6240 (landed independently from the same
+    # pre-existing 325 baseline as CHAOS-6243 above -- see the MERGE HAZARD
+    # note in test_inventory_row_count_matches_the_baseline): the deleted
+    # remaining-metrics/execute and metric-executions/{id} rows were also
+    # protected (worker bridge bearer, same as every other worker_metrics.py
+    # route). Recounted from the file.
+    assert len(protected) == 322, len(protected)
     # 22 + the four fastapi doc routes + /metrics.
     assert len(public) == 27, len(public)
     assert len(protected) + len(public) == len(rows)

@@ -375,7 +375,7 @@ func normalizeRows(rows string, seeded map[string]bool, start time.Time) string 
 		return "<id>"
 	})
 	rows = venuePrefix.ReplaceAllString(rows, "<prefix>")
-	rows = regexp.MustCompile(`fcpush_[A-Za-z0-9_-]{5}\b`).ReplaceAllStringFunc(rows, func(match string) string {
+	rows = regexp.MustCompile(`fcpush_[A-Za-z0-9_-]{5}`).ReplaceAllStringFunc(rows, func(match string) string {
 		switch match {
 		case "fcpush_aaaaa", "fcpush_bbbbb", "fcpush_ccccc", "fcpush_ddddd", "fcpush_eeeee":
 			return match

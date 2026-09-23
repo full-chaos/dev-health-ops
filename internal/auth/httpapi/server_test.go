@@ -1019,3 +1019,48 @@ func TestUndeclaredBodyAtTheMaximumLimitReachesTheHandler(t *testing.T) {
 		t.Fatalf("status %d, handler saw %q, want 204 and %q", response.Code, seen, payload)
 	}
 }
+
+// TestExplicitHeadBesideALiteralSiblingOfAWildcard pins ExplicitHead on a
+// route table where a literal GET path sits beside a wildcard GET path of
+// the same shape (GET /s/literal and GET /s/{id}): the table builds, each
+// request reaches the most specific route for its method, and a method no
+// route of the path has (HEAD included) is that path's 405.
+func TestExplicitHeadBesideALiteralSiblingOfAWildcard(t *testing.T) {
+	answer := func(body string) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(body)) })
+	}
+	server, err := NewServer(ServerOptions{
+		Address: "127.0.0.1:0", RequestTimeout: time.Second, MaxBodyBytes: 1024, ExplicitHead: true,
+		Routes: []Route{
+			{Method: http.MethodGet, Pattern: "/s/literal", Handler: answer("literal")},
+			{Method: http.MethodGet, Pattern: "/s/{id}", Handler: answer("wildcard")},
+			{Method: http.MethodPost, Pattern: "/s/{id}", Handler: answer("post")},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		method, path string
+		status       int
+		allow, body  string
+	}{
+		{http.MethodGet, "/s/literal", 200, "", "literal"},
+		{http.MethodGet, "/s/other", 200, "", "wildcard"},
+		{http.MethodPost, "/s/other", 200, "", "post"},
+		{http.MethodHead, "/s/literal", 405, "GET", ""},
+		{http.MethodHead, "/s/other", 405, "GET, POST", ""},
+		// Starlette matches the wildcard route for a method only it has.
+		{http.MethodPost, "/s/literal", 200, "", "post"},
+		{http.MethodPut, "/s/literal", 405, "GET", ""},
+		{http.MethodPut, "/s/other", 405, "GET, POST", ""},
+	}
+	for _, c := range cases {
+		recorder := httptest.NewRecorder()
+		server.Handler().ServeHTTP(recorder, httptest.NewRequest(c.method, c.path, nil))
+		if recorder.Code != c.status || recorder.Header().Get("Allow") != c.allow || (c.body != "" && recorder.Body.String() != c.body) {
+			t.Errorf("%s %s: %d Allow=%q %q, want %d %q %q", c.method, c.path, recorder.Code,
+				recorder.Header().Get("Allow"), recorder.Body.String(), c.status, c.allow, c.body)
+		}
+	}
+}

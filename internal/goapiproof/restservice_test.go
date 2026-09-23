@@ -9,9 +9,9 @@ import (
 // and restores both tables exactly.
 func withDHOAPISpec(t *testing.T, inOrder bool) string {
 	t.Helper()
-	const operation = "REST:GET:/health"
+	const operation = "REST:GET:/test-only-dho-api-probe"
 	restEndpointSpecs[operation] = RESTEndpointSpec{
-		Method: "GET", Path: "/health", Service: RESTServiceDHOAPI, PublicNoAuth: true,
+		Method: "GET", Path: "/test-only-dho-api-probe", Service: RESTServiceDHOAPI, PublicNoAuth: true,
 		Requests: []RESTRequest{{Name: "probe", WantCandidateStatus: 200, WantBaselineStatus: 200, BodyMode: RESTBodyModeJSON}},
 	}
 	order := restRunOrder
@@ -51,7 +51,7 @@ func TestServiceScopedViewsNeverMixServices(t *testing.T) {
 	if got := KnownRESTPaths(); !slices.Equal(got, pathsBefore) {
 		t.Fatalf("a dho-api path leaked into query-api's coverage paths: %v", got)
 	}
-	if got := KnownRESTPathsFor(RESTServiceDHOAPI); !slices.Equal(got, []string{"/health"}) {
+	if got := KnownRESTPathsFor(RESTServiceDHOAPI); !slices.Equal(got, []string{"/test-only-dho-api-probe"}) {
 		t.Fatalf("dho-api paths = %v", got)
 	}
 	if err := AssertRESTPathCoverage(MountedRESTPaths()); err != nil {

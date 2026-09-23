@@ -683,6 +683,13 @@ func Do(t *testing.T, base string, request Request) Response {
 	return Response{Status: response.StatusCode, Headers: headers, Body: string(raw)}
 }
 
+// RowsReporter is the part of *testing.T TableRows reports through.
+type RowsReporter interface {
+	Helper()
+	Fatal(args ...any)
+	Fatalf(format string, args ...any)
+}
+
 // jsonTypeOIDs are Postgres's json, jsonb and their array types.
 var jsonTypeOIDs = map[uint32]string{114: "json", 3802: "jsonb", 199: "json[]", 3807: "jsonb[]"}
 
@@ -704,7 +711,7 @@ func decodedJSONColumns(fields []pgconn.FieldDescription) []string {
 // TableRows runs query on uri and renders every row, in query order, as
 // "v1 v2 ... | ...". A json or jsonb result column fails the test: cast it
 // ::text so the stored text is compared (decodedJSONColumns).
-func TableRows(t *testing.T, ctx context.Context, uri, query string) string {
+func TableRows(t RowsReporter, ctx context.Context, uri, query string) string {
 	t.Helper()
 	pool, err := pgxpool.New(ctx, uri)
 	if err != nil {

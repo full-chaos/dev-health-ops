@@ -2,15 +2,24 @@ package providerfoundation
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
+
+// testGitHubAppPrivateKeyPEM is a placeholder key CONTENT for tests that
+// only prove a private_key_path file's bytes were loaded verbatim -- not
+// shaped-tests that actually sign a JWT (githubAppJWT's own parseability
+// checks are exercised separately, live, by the RS256 signing path).
+const testGitHubAppPrivateKeyPEM = "-----BEGIN RSA PRIVATE KEY-----\ntest-key-content-not-a-real-key\n-----END RSA PRIVATE KEY-----\n"
 
 func TestExplicitProviderClientsApplyTypedAuthentication(t *testing.T) {
 	t.Parallel()
@@ -481,5 +490,69 @@ func TestDecodeCredentialLeavesNonGitHubCamelCaseKeysAlone(t *testing.T) {
 	}
 	if got, ok := credential.Secret("appId"); !ok || got.Reveal() != "not-actually-a-github-field" {
 		t.Error(`a non-github credential's "appId" field must survive decode unchanged`)
+	}
+}
+
+// TestGitHubAppAuthBuildsFromPrivateKeyPath is round 1 finding #1's own
+// reproduction: a stored credential row carrying app_id/installation_id/
+// private_key_path (no inline private_key at all) must pass
+// ValidateCredentialShape AND let NewGitHubAppAuth actually read the file
+// and build usable auth, matching github_credentials_from_mapping's own
+// file-read fallback (resolver.py:269-276).
+func TestGitHubAppAuthBuildsFromPrivateKeyPath(t *testing.T) {
+	keyFile := filepath.Join(t.TempDir(), "app-key.pem")
+	if err := os.WriteFile(keyFile, []byte(testGitHubAppPrivateKeyPEM), 0o600); err != nil {
+		t.Fatalf("write test key file: %v", err)
+	}
+	credential := testCredential("github", map[string]string{
+		"app_id": "12345", "installation_id": "67890", "private_key_path": keyFile,
+	})
+	if err := ValidateCredentialShape(credential); err != nil {
+		t.Fatalf("ValidateCredentialShape rejected a private_key_path-only credential: %v", err)
+	}
+	doer := &githubAppDoer{}
+	auth, err := NewGitHubAppAuth(credential, githubAPIBase, doer)
+	if err != nil {
+		t.Fatalf("NewGitHubAppAuth: %v", err)
+	}
+	if auth.privateKey.Reveal() != testGitHubAppPrivateKeyPEM {
+		t.Error("NewGitHubAppAuth did not load the private key from private_key_path")
+	}
+}
+
+// TestGitHubAppAuthMissingPrivateKeyPathFileFailsClosed proves an
+// unreadable private_key_path (matching Python's `except OSError: return
+// None`) fails the same way a wholly-missing private key does, never a
+// distinguishable error that could leak the attempted path.
+func TestGitHubAppAuthMissingPrivateKeyPathFileFailsClosed(t *testing.T) {
+	credential := testCredential("github", map[string]string{
+		"app_id": "12345", "installation_id": "67890", "private_key_path": filepath.Join(t.TempDir(), "does-not-exist.pem"),
+	})
+	doer := &githubAppDoer{}
+	if _, err := NewGitHubAppAuth(credential, githubAPIBase, doer); !errors.Is(err, ErrCredentialInvalid) {
+		t.Errorf("NewGitHubAppAuth = %v, want ErrCredentialInvalid", err)
+	}
+}
+
+// TestDecodeCredentialDuplicateAliasIsDeterministic is round 1 finding
+// #2's own reproduction: a row carrying BOTH "appId" and "app_id" (with
+// different values) must decode to the SAME winner on every call --
+// specifically, whichever spelling appears LAST in the JSON text
+// (matching Python's dict-comprehension-over-insertion-order precedence),
+// never a Go-map-iteration-randomized one. Run many times: a flaky
+// pre-fix decode would fail this well before it exhausts the loop.
+func TestDecodeCredentialDuplicateAliasIsDeterministic(t *testing.T) {
+	// "appId" appears BEFORE "app_id" in the JSON text -- the canonical
+	// spelling is last, so it must win every time.
+	plaintext := []byte(`{"appId":"alias-value","app_id":"canonical-value","installation_id":"1","private_key":"k"}`)
+	for i := 0; i < 500; i++ {
+		credential, err := decodeCredential(EncryptedCredential{Provider: "github", ID: "cred-1", Name: "default"}, plaintext)
+		if err != nil {
+			t.Fatalf("decodeCredential (run %d): %v", i, err)
+		}
+		got, _ := credential.Secret("app_id")
+		if got.Reveal() != "canonical-value" {
+			t.Fatalf("run %d: app_id = %q, want the LAST-in-document-order value %q (nondeterministic alias resolution)", i, got.Reveal(), "canonical-value")
+		}
 	}
 }

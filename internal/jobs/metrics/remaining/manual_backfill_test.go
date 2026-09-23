@@ -78,7 +78,7 @@ func TestManualBackfillDayScopeWorkItemAttributionIgnoresDay(t *testing.T) {
 // TestManualBackfillDayScopedFamiliesExcludesWorkItemAttribution guards the
 // deliberate omission documented on ManualBackfillDayScopedFamilies: `start`
 // assumes a "day" column on every family's readback table
-// (manualBackfillReadbackTable, cmd/dev-health-workerctl/main.go), which is
+// (manualBackfillReadbackTable, internal/workersctl/main.go), which is
 // false for work_item_attribution. Adding it back to this list without also
 // fixing that hint would silently reintroduce a broken readback query.
 func TestManualBackfillDayScopedFamiliesExcludesWorkItemAttribution(t *testing.T) {

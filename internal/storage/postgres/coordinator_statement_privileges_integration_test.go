@@ -171,7 +171,7 @@ func coordinatorStatements() []coordinatorStatement {
 	return []coordinatorStatement{
 		{
 			name: "workerctl authenticator touches its credential",
-			site: "internal/joboperator/auth.go Authenticate, wired at cmd/dev-health-workerctl/main.go, on the coordinator pool since the CHAOS-3113 repoint",
+			site: "internal/joboperator/auth.go Authenticate, wired at internal/workersctl/main.go, on the coordinator pool since the CHAOS-3113 repoint",
 			// The UPDATE inside the CTE is why SELECT alone is not enough:
 			// authentication is a write. This runs on EVERY workerctl
 			// invocation, before any command dispatches, so its denial makes
@@ -195,7 +195,7 @@ func coordinatorStatements() []coordinatorStatement {
 		},
 		{
 			name:      "workerctl audit trail opens an entry",
-			site:      "internal/joboperator/audit.go PostgresAuditor.Begin, wired at cmd/dev-health-workerctl/main.go, on the coordinator pool since the CHAOS-3113 repoint",
+			site:      "internal/joboperator/audit.go PostgresAuditor.Begin, wired at internal/workersctl/main.go, on the coordinator pool since the CHAOS-3113 repoint",
 			privilege: "worker_operator_audits INSERT",
 			sql: `INSERT INTO public.worker_operator_audits (
 					credential_id, principal_type, principal_id, action, resource_type,
@@ -259,7 +259,7 @@ func coordinatorStatements() []coordinatorStatement {
 		},
 		{
 			name:      "sync-dispatch route pause",
-			site:      "internal/syncroute/control.go Pause, wired at cmd/dev-health-workerctl/main.go, on the coordinator pool since the CHAOS-3113 repoint",
+			site:      "internal/syncroute/control.go Pause, wired at internal/workersctl/main.go, on the coordinator pool since the CHAOS-3113 repoint",
 			privilege: "sync_dispatch_transport_routes UPDATE (domain side is SELECT-only)",
 			sql: `UPDATE public.sync_dispatch_transport_routes
 				SET paused = TRUE, paused_at = now(), generation = generation + 1, updated_at = now()

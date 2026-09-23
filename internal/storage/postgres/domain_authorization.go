@@ -845,7 +845,7 @@ func domainPosture() RolePosture {
 //     control.go:197 runs `LOCK TABLE public.worker_job_outbox IN SHARE ROW
 //     EXCLUSIVE MODE` (needs UPDATE, confirmed empirically) inside Rollback
 //     only — ApplyCheckedIn touches worker_job_routes and nothing else —
-//     reached by dev-health-workerctl and dev-health-reconciler, both of which
+//     reached by `dho workers` and dev-health-reconciler, both of which
 //     now run their jobroute controller on the coordinator pool. The table is a
 //     THREE-role table: domain SELECT+INSERT (outbox producer), queue
 //     SELECT+UPDATE+DELETE (dispatch drain), coordinator SELECT+UPDATE (this

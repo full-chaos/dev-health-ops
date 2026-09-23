@@ -1115,7 +1115,7 @@ services:
   # readiness on that drift, since nothing actually consumes Celery
   # anymore. Folded in from the proven design already running the shared
   # bigboy stack (compose/compose.go.workers.yml, untracked, outside this
-  # repository): `dev-health-workerctl` mints and uses an audited operator
+  # repository): `dho workers` mints and uses an audited operator
   # credential to flip each kind to `river`, the exact reference
   # implementation option (a) names. This is the default for THIS file;
   # `sync.provider_unit`'s own canary-route activation (the fifth
@@ -1123,7 +1123,7 @@ services:
   # that promotion is a separate, already-tracked decision, not a
   # compose default.
   #
-  # dev-health-workerctl authenticates its very first database action (the
+  # dho workers authenticates its very first database action (the
   # operator token) against `internal_service_credentials` -- there is no
   # Go-native way to mint that row, so this one-shot reuses the existing
   # Python CLI command the bigboy overlay also uses
@@ -1203,6 +1203,7 @@ services:
   go-sync-dispatch-route-activate:
     <<: *go-worker-route-activate
     command:
+      - workers
       - routes
       - apply
       - --reason
@@ -1214,6 +1215,7 @@ services:
   go-sync-finalize-route-activate:
     <<: *go-worker-route-activate
     command:
+      - workers
       - routes
       - apply
       - --reason
@@ -1241,6 +1243,7 @@ services:
   go-sync-post-route-activate:
     <<: *go-worker-route-activate
     command:
+      - workers
       - routes
       - apply
       - --reason
@@ -1265,6 +1268,7 @@ services:
   go-sync-reference-route-activate:
     <<: *go-worker-route-activate
     command:
+      - workers
       - routes
       - apply
       - --reason

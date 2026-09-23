@@ -2,9 +2,9 @@
 
 WHY THIS EXISTS
 
-`.gitignore` line 75 once read `dev-health-workerctl` — a bare name, plainly
+`.gitignore` line 75 once read `dho workers` — a bare name, plainly
 meant for the built binary. A bare name also matches the *directory*
-`cmd/dev-health-workerctl/`, so its three tracked Go sources matched an ignore
+`internal/workersctl/`, so its three tracked Go sources matched an ignore
 rule. Git does not apply ignore rules to already-tracked files, so they stayed
 tracked and the mistake stayed invisible.
 
@@ -92,7 +92,7 @@ def test_no_tracked_file_matches_a_repository_ignore_rule() -> None:
         "walk while git still tracks them:\n\n  "
         + "\n  ".join(sorted(offenders))
         + "\n\nFix the RULE, not the file. Two shapes work and one does not:\n"
-        "  bare name matching a directory -> anchor it:      /dev-health-workerctl\n"
+        "  bare name matching a directory -> anchor it:      /dho workers\n"
         "  broad content glob             -> negate beside:  !path/to/tracked\n"
         "  trailing-slash DIRECTORY rule  -> negation FAILS; git will not\n"
         "      re-include a file inside an excluded directory. Rewrite the rule\n"

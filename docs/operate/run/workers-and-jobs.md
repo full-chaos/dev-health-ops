@@ -188,7 +188,7 @@ capacity, not a second application-level queue mapping.
 Inspect all River groups and their queue sets with the authenticated operator:
 
 ```bash
-dev-health-workerctl workers queues status
+dho workers queues status
 ```
 
 The JSON response reports each group's canonical `queues`, desired and live
@@ -201,13 +201,13 @@ and every affected queue. The operation is audited and requires a reason and a
 correlation ID:
 
 ```bash
-dev-health-workerctl workers queues drain \
+dho workers queues drain \
   --group metrics-workers \
   --queue metrics --queue reports \
   --reason deploy_drain \
   --correlation-id rollout-2026-08-15
 
-dev-health-workerctl workers queues undrain \
+dho workers queues undrain \
   --group metrics-workers \
   --queue metrics --queue reports \
   --reason deploy_resume \
@@ -224,8 +224,8 @@ stopping one process and does not require a global queue owner.
 jobs directly:
 
 ```bash
-dev-health-workerctl jobs list --state available --state retryable --state running --state scheduled
-dev-health-workerctl jobs inspect <id>
+dho workers jobs list --state available --state retryable --state running --state scheduled
+dho workers jobs inspect <id>
 ```
 
 See [Operator commands § Blocked/failed partition inspection and repair](../runbooks/operator-commands.md#b-blockedfailed-partition-inspection-and-repair)

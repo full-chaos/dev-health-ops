@@ -47,7 +47,6 @@ RUN --mount=type=cache,target=/go/pkg/mod \
         dev-health-scheduler \
         dev-health-reconciler \
         dev-health-stream-runner \
-        dev-health-workerctl \
         worker-contractcheck \
         dev-health-worker-migrate \
         dho; do \
@@ -83,7 +82,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       /runtime/migrate/usr/local/bin \
       /runtime/dho/usr/local/bin; \
     cp /out/dev-health-worker /runtime/worker/usr/local/bin/dev-health-worker; \
-    cp /out/dev-health-workerctl /runtime/worker/usr/local/bin/dev-health-workerctl; \
+    cp /out/dho /runtime/worker/usr/local/bin/dho; \
     cp /out/dev-health-scheduler /runtime/scheduler/usr/local/bin/dev-health-scheduler; \
     cp -R /src/contracts/jobs/v1 /runtime/scheduler/app/contracts/jobs/v1; \
     cp /src/deploy/go-workers/deployment.json /runtime/scheduler/app/deploy/go-workers/deployment.json; \
@@ -91,7 +90,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     cp -R /src/contracts/jobs/v1 /runtime/reconciler/app/contracts/jobs/v1; \
     cp -R /src/contracts/sync-dispatch/v1 /runtime/reconciler/app/contracts/sync-dispatch/v1; \
     cp /out/dev-health-stream-runner /runtime/stream-runner/usr/local/bin/dev-health-stream-runner; \
-    cp /out/dev-health-workerctl /runtime/operator/usr/local/bin/dev-health-workerctl; \
+    cp /out/dho /runtime/operator/usr/local/bin/dho; \
     cp /out/worker-contractcheck /runtime/contractcheck/usr/local/bin/worker-contractcheck; \
     cp -R /src/contracts/jobs/v1 /runtime/worker/app/contracts/jobs/v1; \
     cp /src/deploy/go-workers/deployment.json /runtime/worker/app/deploy/go-workers/deployment.json; \
@@ -142,10 +141,12 @@ FROM runtime AS stream-runner
 COPY --from=build --chown=65532:65532 /runtime/stream-runner/ /
 ENTRYPOINT ["/usr/local/bin/dev-health-stream-runner"]
 
+# The operator image runs dho; route activation passes `workers routes apply
+# ...` as args (spec S2 folded dev-health-workerctl into `dho workers`).
 FROM runtime AS operator
 COPY --from=build --chown=65532:65532 /runtime/operator/ /
 WORKDIR /app
-ENTRYPOINT ["/usr/local/bin/dev-health-workerctl"]
+ENTRYPOINT ["/usr/local/bin/dho"]
 
 FROM runtime AS contractcheck
 COPY --from=build --chown=65532:65532 /runtime/contractcheck/ /

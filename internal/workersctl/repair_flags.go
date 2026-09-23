@@ -1,4 +1,4 @@
-package main
+package workersctl
 
 import (
 	"encoding/json"

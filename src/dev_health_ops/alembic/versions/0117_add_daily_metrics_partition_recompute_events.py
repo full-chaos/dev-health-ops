@@ -4,7 +4,7 @@ Revision ID: 0117
 Revises: 0116
 Create Date: 2026-08-29 00:00:00
 
-``dev-health-workerctl metrics partition-recompute`` (CHAOS-4459) is the
+``dho workers metrics partition-recompute`` (CHAOS-4459) is the
 partition-level counterpart to 0116's finalize-redrive ledger: a
 ``daily_metrics_run`` whose partitions are ALL ``status='succeeded'`` can
 still have wrong family output if the writer that computed it has since

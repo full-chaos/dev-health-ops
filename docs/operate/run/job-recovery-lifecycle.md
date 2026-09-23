@@ -368,7 +368,7 @@ Every row the relay itself moves to `dead` also logs one line
 ### Counting the class
 
 ```sh
-dev-health-workerctl workgraph list-undelivered [--ceiling-hours 72]
+dho workers workgraph list-undelivered [--ceiling-hours 72]
 ```
 
 The command is read-only and uses the sweep's own classification SQL on the
@@ -401,11 +401,11 @@ every `daily_partition` River job for a run has failed and been discarded,
 nothing re-enqueues work for that run on its own — a fresh
 `metrics.daily_dispatch` run of `Dispatcher.Work` still calls the SAME
 `PublishPartition` with the SAME `metrics.daily_partition:<id>` outbox dedupe
-key, so it silently no-ops. `dev-health-workerctl metrics daily-redrive --org
+key, so it silently no-ops. `dho workers metrics daily-redrive --org
 <uuid> --from <YYYY-MM-DD> --to <YYYY-MM-DD> --review-evidence "<what you
 verified>"` closes this for one org+day window in two ordered steps (
 `--review-evidence` is required, with no default — see
-[cli-reference](../../reference/cli/index.md#dev-health-workerctl-metrics)
+[cli-reference](../../reference/cli/index.md#dho-workers-metrics)
 for why). It FIRST runs the bulk ledger repair (a Go-native Postgres
 transaction on the coordinator role, `internal/jobs/repair`) for every
 `running` run in scope, authorizing retry for any `ambiguous`/stuck-`executing`
@@ -418,7 +418,7 @@ treats it as new work instead of replaying the original's permanent record.
 The order matters: publishing a partition job before the ledger repair lands
 just reproduces `ambiguous_refused` on the redriven attempt and re-
 terminalizes the partition `failed_permanent`, undoing the reset (see
-[cli-reference](../../reference/cli/index.md#dev-health-workerctl-metrics)
+[cli-reference](../../reference/cli/index.md#dho-workers-metrics)
 for the exact env vars and required-order rationale).
 
 **The redrive above does not cover a run stranded one step LATER, after every
@@ -431,7 +431,7 @@ every other kind here. If THAT job is discarded by River before
 hitting the same memory-bound class CHAOS-4361 fixed for partitions), the run
 sits `status='running'` forever despite 100% partition success, and
 `daily-redrive`'s own stranded-partition predicate never matches it (it
-requires at least one non-succeeded partition). `dev-health-workerctl metrics
+requires at least one non-succeeded partition). `dho workers metrics
 daily-finalize --run <uuid>|--all-complete --review-evidence "<what you
 verified>"` closes this the same way: a fresh, nonce-scoped
 `metrics.daily_finalize:redrive:<run id>:<nonce>` job, published only after
@@ -455,7 +455,7 @@ invocation, publishing nothing, if any row's original claim still reads as
 live (retry once that claim settles). This is what actually unblocked 13
 prod runs found stuck in the CHAOS-4389 stranded shape whose finalize ledger
 row, not the Go-side run state, was the thing blocking them. See
-[cli-reference](../../reference/cli/index.md#dev-health-workerctl-metrics)
+[cli-reference](../../reference/cli/index.md#dho-workers-metrics)
 for the exact command shape, `--all-complete`'s cross-organization sweep,
 the ledger-repair ordering, and its telemetry counters.
 
@@ -466,7 +466,7 @@ completed (CHAOS-4405).** `run_daily_metrics_finalize` now also writes
 landed has zero rows in either table, even though its run is a perfectly
 healthy `status='succeeded'`. Neither `daily-redrive` (partitions only) nor
 `daily-finalize` (only ever touches a run still stuck non-terminal) can
-re-execute an already-completed day. `dev-health-workerctl metrics
+re-execute an already-completed day. `dho workers metrics
 finalize-redrive --org <uuid> --from <YYYY-MM-DD> --to <YYYY-MM-DD>
 --review-evidence "<why>"` closes this: it transactionally resets an
 eligible `'succeeded'` run back to a claimable state (in the same
@@ -492,7 +492,7 @@ completion path to close this row either, so `daily-finalize --all-complete`
 also runs `ReconcileOrphanedFinalizeRedriveRuns` right before its own sweep,
 closing any such row `'closed_orphaned'` once it confirms (via the
 queue-control pool) the job is really gone, not merely still in flight. See
-[cli-reference](../../reference/cli/index.md#dev-health-workerctl-metrics)
+[cli-reference](../../reference/cli/index.md#dho-workers-metrics)
 for the full command shape, the `--include-succeeded` gate, and why
 re-running finalize twice for the same day is safe (argMax dedup).
 
@@ -500,7 +500,7 @@ re-running finalize twice for the same day is safe (argMax dedup).
 `jobs retry` and `metrics daily-redrive` both recover a run/partition that
 was dispatched and then stranded or discarded — they need a row to already
 exist. A day sync never ran for, or one whose row aged out of River's
-retention, has no row to recover. `dev-health-workerctl metrics remaining
+retention, has no row to recover. `dho workers metrics remaining
 start --family <family> --day <YYYY-MM-DD> [--to <YYYY-MM-DD>] --org <uuid>
 --review-evidence "<why>"` (CHAOS-4254) closes this gap for the day-scoped
 remaining-metrics families (`complexity`, `dora`, `release_impact`):
@@ -516,7 +516,7 @@ single-day (`backfill_days == 1`) 0-row partition is backfillable regardless
 of whether the day has closed, while a non-zero-row day, an in-progress
 automatic run, or an AMBIGUOUS multi-day partition whose aggregate can't
 prove any one day's own row count are all refused. See
-[cli-reference](../../reference/cli/index.md#dev-health-workerctl-metrics)
+[cli-reference](../../reference/cli/index.md#dho-workers-metrics)
 for the full command shape and coverage rule.
 
 ## Sources

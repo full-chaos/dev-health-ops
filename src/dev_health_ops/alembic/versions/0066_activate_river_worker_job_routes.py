@@ -15,7 +15,7 @@ through Celery; promoting the kind to plain ``river`` would route all 59 pairs
 at once, regardless of those switches.
 
 Why the route rows are seeded here rather than promoted one at a time with
-``dev-health-workerctl job-routes apply``:
+``dho workers job-routes apply``:
 
 ``jobroute.Controller.ApplyCheckedIn`` consults a Celery quiescer whenever it
 moves a row off its rollback route, and the only production implementation
@@ -85,7 +85,7 @@ _CUTOVER_OPT_IN_VALUE: Final = "1"
 # Its durable row is never read here, so whatever an operator decided stays
 # intact. On a fresh database 0061 and 0064 leave it on celery at generation 1
 # precisely so the canary is an explicit operator decision, and this kind is the
-# one that ``dev-health-workerctl job-routes apply`` can actually promote:
+# one that ``dho workers job-routes apply`` can actually promote:
 # PostgresCelerySyncProviderQuiescer serves sync.provider_unit and rejects every
 # other kind, which is the same limitation that makes the other 23 rows worth
 # seeding here rather than promoting one at a time.
@@ -240,7 +240,7 @@ def downgrade() -> None:
     the kind or ``worker_job_runs`` shows it running, so that two runtimes never
     own the same work; plain SQL cannot make that guarantee.  Stop the Go
     workers and the reconciler before downgrading, or use
-    ``dev-health-workerctl job-routes rollback`` per kind to get the proof.
+    ``dho workers job-routes rollback`` per kind to get the proof.
     """
 
     _retarget(_ROLLBACK_TRANSPORT, frozenset({_RIVER_TRANSPORT, "river_canary"}))

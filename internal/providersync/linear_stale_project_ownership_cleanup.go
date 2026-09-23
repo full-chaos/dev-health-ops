@@ -35,7 +35,7 @@ import (
 // left behind by that historical writer bug -- pure hygiene, no reader
 // depends on them being gone, same class of action as
 // RetireLinearPseudoProjectRows (linear_pseudo_project_cleanup.go). Nothing
-// in this package calls it; it is wired to a dev-health-workerctl verb an
+// in this package calls it; it is wired to a dho workers verb an
 // operator runs by hand.
 //
 // Deliberately excludes the {org_id}:linear:{team_key} pseudo-identity row:

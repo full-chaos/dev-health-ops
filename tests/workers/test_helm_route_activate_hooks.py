@@ -7,7 +7,7 @@ post_sync, reference_discovery. The Celery fleet has had no consumer since
 CHAOS-4026, so a fresh install's producer stages outbox rows for a transport
 nothing drains, and the reconciler's own route fence refuses readiness on
 that drift. This chart never ran the fix
-(`dev-health-workerctl routes apply`) for any of the four.
+(`dho workers routes apply`) for any of the four.
 
 CHAOS-4455: `sync-provider` (goWorkers.groups) is one of
 goWorkers.expectedWorkerGroups, and both lists already agree in
@@ -236,7 +236,7 @@ def test_the_no_op_done_container_actually_exits_zero() -> None:
 def test_each_kind_invokes_routes_apply_with_that_exact_kind(kind: str) -> None:
     """No `command:` override on these containers -- the operator image has
     no shell (see the distroless test below), so the args are passed
-    straight to its own ENTRYPOINT (dev-health-workerctl)."""
+    straight to its own ENTRYPOINT (dho workers)."""
     jobs = _jobs(*_FULL_CHAIN_ON)
     init_containers = {
         c["name"]: c
@@ -247,7 +247,7 @@ def test_each_kind_invokes_routes_apply_with_that_exact_kind(kind: str) -> None:
         f"this container has no shell to run a command script in: {container.get('command')}"
     )
     args = container["args"]
-    assert args[:2] == ["routes", "apply"], args
+    assert args[:3] == ["workers", "routes", "apply"], args
     assert args[-1] == kind, (
         f"the kind argument must be {kind!r}, not fused with another: {args!r}"
     )
@@ -776,7 +776,7 @@ def test_route_dsn_script_builds_dsns_from_parts_and_never_from_a_dsn_value(
 #
 # codex review (r1, P1 -- executed): an unencoded `#` in a password truncates
 # the URI at the fragment delimiter, dropping everything after it (including
-# the host/port/db) -- confirmed against the real `dev-health-workerctl`
+# the host/port/db) -- confirmed against the real `dho workers`
 # binary: `{"error":{"code":"database_unavailable"}}` with the raw password,
 # success once percent-encoded. Every RFC 3986 reserved/sub-delim character
 # that can appear in a generated password is exercised here, in ONE pass.

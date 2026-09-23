@@ -71,7 +71,7 @@ const (
 	// `workerctl workgraph trigger` / `workerctl investment trigger`: an
 	// operator-invoked manual enqueue of a workgraph.build /
 	// investment.materialize request through workgraph.RequestWriter.WriteTx
-	// (cmd/dev-health-workerctl/trigger_workgraph.go,
+	// (internal/workersctl/trigger_workgraph.go,
 	// trigger_investment.go). Like ActionProvidersyncCleanup, this does not
 	// go through this service's own job/route/queue backends and has no
 	// natural Action otherwise. codex review, 2026-09-05, r1 P1: the first

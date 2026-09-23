@@ -65,7 +65,7 @@ real ones"). Treat PARITY? rows as "check this first", not "this is broken".
 
 | file:line | classification | why |
 | --- | --- | --- |
-| `cmd/dev-health-workerctl/main.go:1944` | INFRA | CLI argument parsing (`positiveID`), no Python reference -- landed after this inventory's original sweep, added on a later pass |
+| `internal/workersctl/main.go:1944` | INFRA | CLI argument parsing (`positiveID`), no Python reference -- landed after this inventory's original sweep, added on a later pass |
 | `internal/externalrecompute/valkey.go:307` | INFRA | internal cache-key/ticket parsing |
 | `internal/streamrunner/valkey.go:365` | INFRA | internal cache-key parsing |
 | `internal/streamrunner/valkey.go:368` | INFRA | internal cache-key parsing |

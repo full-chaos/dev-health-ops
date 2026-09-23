@@ -194,7 +194,7 @@ func TestPostgresOperatorAuthenticationBackendAndAudit(t *testing.T) {
 	// an admin pool can run any statement, so the test proved nothing about
 	// which runtime role can, and it would have passed identically while the
 	// real CLI was 100% broken. The restricted coordinator login is the pool
-	// cmd/dev-health-workerctl actually builds its authenticator on, so it is
+	// internal/workersctl actually builds its authenticator on, so it is
 	// the only connection that measures the deployed privilege.
 	authenticator, err := NewAuthenticator(coordinatorPool)
 	if err != nil {
@@ -380,7 +380,7 @@ func TestPostgresOperatorAuthenticationBackendAndAudit(t *testing.T) {
 // own manifest.
 //
 //   - Half one: the restricted coordinator role -- the login
-//     cmd/dev-health-workerctl builds its authenticator on -- completes a real
+//     internal/workersctl builds its authenticator on -- completes a real
 //     authentication against the real grants ApplyPinnedMigrations emits.
 //     Grants are derived from CoordinatorPosture(), so this fails if the
 //     migration and the posture ever disagree.

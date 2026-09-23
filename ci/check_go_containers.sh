@@ -163,14 +163,15 @@ smoke_target() {
   docker run --rm "${CONTAINER_SECURITY_ARGS[@]}" "${tag}" --version \
     | grep -F '"version":"phase1-ci"' >/dev/null \
     || die "${target} did not report injected version metadata"
-  # The root Compose worker service inherits a pre-stop route rollback hook.
-  # It overrides the worker entrypoint with this binary, so package it in the
-  # worker target and prove that exact override is executable.
+  # The worker image packages dho so operators can run `dho workers ...` in
+  # a worker pod (spec S2 folded dev-health-workerctl into dho). Prove the
+  # binary runs and its workers vertical is reachable.
   if [ "${target}" = "worker" ]; then
-    docker run --rm --entrypoint /usr/local/bin/dev-health-workerctl \
+    docker run --rm --entrypoint /usr/local/bin/dho \
       "${CONTAINER_SECURITY_ARGS[@]}" "${tag}" --version \
       | grep -F '"version":"phase1-ci"' >/dev/null \
-      || die "worker image does not package the Compose lifecycle operator"
+      || die "worker image does not package dho"
+    smoke_workers_vertical --entrypoint /usr/local/bin/dho "${tag}"
   fi
 
   ACTIVE_CONTAINER="${container_name}"
@@ -280,6 +281,7 @@ smoke() {
   docker run --rm "${CONTAINER_SECURITY_ARGS[@]}" "${IMAGE_PREFIX}-operator:ci" --version \
     | grep -F '"version":"phase1-ci"' >/dev/null \
     || die "operator did not report injected version metadata"
+  smoke_workers_vertical "${IMAGE_PREFIX}-operator:ci"
 
   # migrate (cmd/dev-health-worker-migrate) is a one-shot job, not a
   # long-running service: it has no readiness surface to smoke-test against,
@@ -304,7 +306,7 @@ smoke() {
   # CHAOS-5560 (2026-09-11): migrate's configuration-error diagnostic moved
   # from a plain-text "configuration error: %s\n" line to a single JSON
   # object (config.WriteConfigError -- one shared writer, now also used by
-  # cmd/dev-health-workerctl) so an operator script can parse the class and
+  # internal/workersctl) so an operator script can parse the class and
   # the offending key reliably instead of substring-matching prose that is
   # free to be reworded. Parse the object and assert its stable shape --
   # never a substring match on `detail`'s prose, which is not a contract.
@@ -320,6 +322,22 @@ smoke() {
 # route-less api keeps: live, READY (it has no dependency yet, only its own
 # listener), metrics served, and every api path answered with the Python
 # api's own 404 body plus its security headers. It then stops cleanly.
+# smoke_workers_vertical runs `dho workers status` with no database
+# configured: the verb tree must be reached and fail closed with the JSON
+# configuration error naming the first missing DSN (exit 1), not an unknown
+# command (exit 2) or a crash.
+smoke_workers_vertical() {
+  local output code
+  set +e
+  output="$(docker run --rm "${CONTAINER_SECURITY_ARGS[@]}" "$@" workers status 2>&1 >/dev/null)"
+  code=$?
+  set -e
+  [ "${code}" -eq 1 ] || die "dho workers status exited ${code}, want 1 (configuration error)"
+  printf '%s' "${output}" | grep -v '^{"time"' \
+    | jq -e '.error.code == "configuration_error" and (.error.detail | contains("POSTGRES_URI"))' >/dev/null \
+    || die "dho workers status did not report the missing POSTGRES_URI configuration error"
+}
+
 smoke_dho() {
   local tag="${IMAGE_PREFIX}-dho:ci"
   local container_name="dev-health-go-dho-smoke-$$"

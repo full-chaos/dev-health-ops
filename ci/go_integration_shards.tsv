@@ -46,8 +46,8 @@
 shards	6
 cmd/dev-health-reconciler	5
 cmd/dev-health-worker	246
-cmd/dev-health-workerctl	14
 internal/goapicli/routing	100
+internal/workersctl	14
 cmd/query-api	391
 cmd/query-api/internal/aianalytics	65
 cmd/query-api/internal/analytics	251

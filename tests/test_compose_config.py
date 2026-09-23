@@ -1832,7 +1832,7 @@ def test_go_operator_target_services_declare_a_nonempty_command() -> None:
     Dockerfile`'s `operator` target (the four `go-sync-*-route-activate`
     services, via the shared `x-go-worker-route-activate` anchor) has no
     ENTRYPOINT of its own baked into the image -- Compose's `command:` is
-    the only thing that tells `dev-health-workerctl` what to do. The
+    the only thing that tells `dho workers` what to do. The
     anchor itself declares no `command:` (each concrete service supplies
     its own `routes apply ...` args), so restoring a service that merges
     the anchor with nothing else silently ships zero args:
@@ -1865,9 +1865,11 @@ def test_go_operator_target_services_declare_a_nonempty_command() -> None:
             "`command:` -- it would run with zero args and fail closed "
             "with {'error': {'code': 'invalid_request'}}"
         )
-        assert command[:2] == ["routes", "apply"], (
+        # The operator image's entrypoint is dho; `workers` selects the
+        # operator verbs (spec S2).
+        assert command[:3] == ["workers", "routes", "apply"], (
             f"{name}'s command {command!r} no longer starts with "
-            "['routes', 'apply'] -- update this assertion if that's a "
+            "['workers', 'routes', 'apply'] -- update this assertion if that's a "
             "deliberate change to what the operator binary is invoked to do"
         )
         # A prefix-only check (`command[:2]`)
@@ -1879,9 +1881,9 @@ def test_go_operator_target_services_declare_a_nonempty_command() -> None:
         # -- OUT_OF_VOCABULARY_KIND below is deliberately not one of them,
         # this list is exhaustive of what compose.yml currently ships).
         assert (
-            len(command) == 7
-            and command[2] == "--reason"
-            and command[4] == "--correlation-id"
+            len(command) == 8
+            and command[3] == "--reason"
+            and command[5] == "--correlation-id"
         ), (
             f"{name}'s command {command!r} is missing --reason/--correlation-id "
             "or extra/missing arguments -- the bare ['routes', 'apply'] shape "

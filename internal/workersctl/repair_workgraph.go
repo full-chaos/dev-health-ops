@@ -1,4 +1,4 @@
-package main
+package workersctl
 
 import (
 	"context"
@@ -254,7 +254,7 @@ func writeRepairOutcome(stdout, stderr io.Writer, result any, err error, dryRun 
 // --output-evidence for confirm_succeeded) themselves.
 func workgraphRepairCommandHint(requestID string, attemptCount int) string {
 	return fmt.Sprintf(
-		`dev-health-workerctl workgraph repair --request %s --expected-attempt-count %d --resolution <confirm_succeeded|retry_safe> --review-evidence "<what you verified>" [--output-evidence '{"...":"..."}']`,
+		`dho workers workgraph repair --request %s --expected-attempt-count %d --resolution <confirm_succeeded|retry_safe> --review-evidence "<what you verified>" [--output-evidence '{"...":"..."}']`,
 		requestID, attemptCount,
 	)
 }

@@ -51,7 +51,7 @@ const (
 	// That single fact is what keeps ~2.5 weeks of accumulated legacy rows
 	// structurally invisible to this consumer: a worker starting up cannot
 	// replay the backlog even by accident, because it never selects those rows.
-	// The backlog is reachable only through `dev-health-workerctl
+	// The backlog is reachable only through `dho workers
 	// external-recompute replay`, which an operator runs once, by hand, and
 	// which collapses the backlog instead of replaying it row by row.
 	NativeDrainTaskName = "external_ingest.recompute.native.v1"

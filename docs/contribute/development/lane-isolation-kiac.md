@@ -453,7 +453,6 @@ api: { enabled: true, replicas: 1, autoscaling: { enabled: false } }
 metricsApi: { enabled: true, replicas: 1 }
 web: { enabled: true, replicas: 1, autoscaling: { enabled: false } }
 billingEdge: { enabled: false }
-cronjobs: { dailyMetrics: { enabled: false }, syncGithub: { enabled: false } }
 networkPolicy: { enabled: false }
 ingress: { enabled: false }
 

@@ -1206,7 +1206,7 @@ found that wrong: acr's identity resolution does not filter `projects.is_active`
 `is_active=0` already legitimately marks two REAL completed Linear projects for an unrelated reason, so
 it could never be a reader-recognizable "retired" signal for anyone. The collector now NEVER writes this
 identity to `projects`, active or tombstoned; already-synced orgs' stale rows (either shape) are retired
-by a separate, one-time operator action -- `dev-health-workerctl providersync
+by a separate, one-time operator action -- `dho workers providersync
 retire-linear-pseudo-projects` (`internal/providersync/linear_pseudo_project_cleanup.go`), a physical
 `ALTER TABLE projects DELETE`, never a per-sync write.
 
@@ -1217,7 +1217,7 @@ row above) -- those stale rows were never reachable by any reader (this section'
 `linear_team_key`/`project_id` arms never select `project_key`; the acr project-fact join only ever
 matches through `projects.project_key`, which is `NULL` for every real Linear project since CHAOS-4530),
 so this is pure hygiene, confirmed empirically on local org `70d529e0` (every stale row's `team_id` agreed
-with its NULL-keyed replacement before deletion). `dev-health-workerctl providersync
+with its NULL-keyed replacement before deletion). `dho workers providersync
 retire-stale-linear-project-ownership` (`internal/providersync/linear_stale_project_ownership_cleanup.go`)
 deletes them via the same synchronous `ALTER TABLE ... DELETE` pattern, and explicitly excludes any
 `project_id` shaped like the `{org_id}:linear:{team_key}` pseudo-identity -- that row is CHAOS-4560's
@@ -1801,10 +1801,11 @@ does not collapse to `unassigned`.
    "Auto-import teams, projects & members" checkbox with these three).
 2. Trigger the sync through the sync-config UI or worker-backed trigger endpoint
    so the configured worker credentials are used.
-3. After the sync succeeds, run daily metrics with the same analytics database:
+3. After the sync succeeds, dispatch daily metrics for that day (the worker
+   computes them into the same analytics database):
 
    ```bash
-   CLICKHOUSE_URI=clickhouse://... dev-hops metrics daily
+   dho workers metrics daily-start --org <org-id> --day <YYYY-MM-DD>
    ```
 
 4. Open `dev-health-web` in a real browser (Playwright is preferred for evidence)
@@ -1960,7 +1961,7 @@ flowchart TD
    `work_item_team_attributions`. The org is derived from the sync config
    (#923), so `--org` is optional.
 3. **Work-graph build**, then
-4. **`dev-health-workerctl investment trigger`** — these rebuild
+4. **`dho workers investment trigger`** — these rebuild
    `work_unit_investments` + its `structural_evidence_json` `issues` **and**
    `prs` arrays (the coverage join keys — see the CHAOS-2416 bullet in §0);
    the backfill does not trigger them.

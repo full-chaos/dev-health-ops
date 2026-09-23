@@ -1,4 +1,4 @@
-package main
+package workersctl
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 )
 
 // This file exists because of the 2026-09-07 route-activate incident. Every
-// `dev-health-workerctl` invocation built from ops main after
+// `dho workers` invocation built from ops main after
 // b6deeeb98ee2 (CHAOS-5437, #2380) exited 1 with exactly
 // `{"error":{"code":"runtime_role_unauthorized"}}` against the shared
 // compose stack, and that one string was the ENTIRE diagnostic surface: the

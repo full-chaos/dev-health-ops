@@ -358,7 +358,7 @@ def test_go_worker_groups_are_enabled_by_default_under_go_default_state() -> Non
     operator = manifest["operator_cli"]
     assert operator == {
         "name": "worker-operator",
-        "binary": "dev-health-workerctl",
+        "binary": "dho",
         "max_concurrent_invocations": 1,
         "queue_control_max_connections": 2,
         "domain_max_connections": 2,
@@ -377,7 +377,7 @@ def test_go_worker_groups_are_enabled_by_default_under_go_default_state() -> Non
             "WORKER_DATABASE_MODE",
         ],
         "secret_env": [
-            # CHAOS-4530: dev-health-workerctl providersync retire-linear-
+            # CHAOS-4530: dho workers providersync retire-linear-
             # pseudo-projects reads ClickHouse directly (the operator CLI's
             # first ClickHouse-touching verb), so it now requires the DSN too.
             "CLICKHOUSE_URI",
@@ -401,13 +401,10 @@ def test_go_worker_image_packages_work_item_semantic_config() -> None:
 
 
 def test_go_worker_image_packages_lifecycle_route_operator() -> None:
-    """The worker image must contain Compose's inherited stop-hook executable."""
+    """The worker image packages dho, so `dho workers ...` runs in a worker pod."""
     dockerfile = _GO_WORKER_DOCKERFILE.read_text(encoding="utf-8")
 
-    assert (
-        "cp /out/dev-health-workerctl "
-        "/runtime/worker/usr/local/bin/dev-health-workerctl;"
-    ) in dockerfile
+    assert "cp /out/dho /runtime/worker/usr/local/bin/dho;" in dockerfile
 
 
 def test_go_deployment_surfaces_are_additive_and_group_complete() -> None:

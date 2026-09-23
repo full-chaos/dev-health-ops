@@ -136,14 +136,16 @@ Provider authentication can come from CLI flags or environment variables such as
 
 ### Compute metrics
 
-```bash
-# Daily analytics rollups
-CLICKHOUSE_URI="clickhouse://ch:ch@localhost:8123/default" \
-  dev-hops metrics daily --backfill 30
+The Go scheduler computes metrics every day. To dispatch a run by hand, use
+the operator CLI in a worker pod (or with the worker's database settings):
 
-# Complexity and hotspot snapshots for a repository
-CLICKHOUSE_URI="clickhouse://ch:ch@localhost:8123/default" \
-  dev-hops metrics complexity --repo-path /path/to/repo --backfill 30
+```bash
+# Daily analytics rollups for one organization and day range
+dho workers metrics daily-start --org <org-uuid> --day 2026-08-01 --to 2026-08-30
+
+# Complexity (and the other remaining families) for one day
+dho workers metrics remaining trigger-backstop --family complexity --org <org-uuid> \
+  --day 2026-08-30 --review-evidence "manual run: <why>"
 ```
 
 ### Generate demo data

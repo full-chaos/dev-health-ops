@@ -1989,7 +1989,7 @@ func (collector *MetricsCollector) ObserveDailyMetricsBlockedRun(outcome string,
 // nothing still calls this with 0 so the series stays present, not absent.
 //
 // No production caller wires this today: the only place that invokes the
-// bulk-repair endpoint for finalize rows is `dev-health-workerctl metrics
+// bulk-repair endpoint for finalize rows is `dho workers metrics
 // daily-finalize`, a one-shot CLI process with no /metrics endpoint to
 // scrape -- a counter incremented here before that process exits is never
 // observed by anything. This mirrors dispatchMetricsRemaining's own

@@ -63,7 +63,7 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
     `dev-hops work-graph build` was deleted under CHAOS-4924 and `dev-hops
     investment materialize` was deleted under CHAOS-5173 -- both were
     direct-Python-compute CLI entry points, superseded by the native River
-    kinds triggered via `dev-health-workerctl workgraph trigger` /
+    kinds triggered via `dho workers workgraph trigger` /
     `investment trigger`. This hook stays a no-op, kept as the extension
     point cli.py already calls, rather than also ripping out its wiring.
     """

@@ -38,7 +38,7 @@ The advice that used to sit here -- trigger the equivalent Celery job instead --
 
 `--db` and `--analytics-db` are **not** aliases. They point to different databases serving different roles (see Dual-Database Architecture below). If `POSTGRES_URI` is not set, `--db` falls back to `DATABASE_URI`.
 
-Subcommands like `metrics daily` also accept `--sink` to select the output backend. Legacy values (`mongo`, `sqlite`, `postgres`, `both`) are rejected immediately with a migration message. ClickHouse is the only supported analytics backend.
+Subcommands that write analytics accept `--sink` to select the output backend. Legacy values (`mongo`, `sqlite`, `postgres`, `both`) are rejected immediately with a migration message. ClickHouse is the only supported analytics backend.
 
 > **Caveat:** Some subcommands (e.g., `audit completeness`, `audit coverage`, `work-graph build`) define their own `--db` flag that accepts an **analytics** (ClickHouse) connection string, overriding the global `--db` meaning for that subcommand. Check individual subcommand docs below for the expected connection type.
 
@@ -89,9 +89,8 @@ Requires: ClickHouse (--analytics-db / CLICKHOUSE_URI), organization (--org / OR
 | Requirement | Commands |
 |-------------|----------|
 | ClickHouse (`--analytics-db` / `CLICKHOUSE_URI`) | `sync git`, `sync prs`, `sync blame`, `sync cicd`, `sync deployments`, `sync incidents`, `sync security`, `sync tests`, `sync teams`; `metrics validate-flags`, `metrics compounding-risk` (+org); `audit perf`, `audit schema`; `ai allowlist list/set` (+org); `migrate clickhouse` (bare + `upgrade`/`status`/`repair`) |
-| `dev-health-workerctl` binary on `PATH` (or `DEV_HEALTH_WORKERCTL_BIN`), Postgres coordinator (+org) | `metrics daily`, `metrics rebuild`, `metrics dora`, `metrics complexity`, `metrics capacity`, `metrics release-impact` (CHAOS-5055: dispatch to the Go worker, no direct ClickHouse connection of their own) |
 | PostgreSQL (`--db` / `POSTGRES_URI`) | `billing reconcile`; `migrate postgres` (bare + `upgrade`/`downgrade`/`current`); `migrate configs-to-integrations` (one-time child-config -> integration data migration; `--dry-run` to preview); legacy `migrate upgrade`/`downgrade`/`current` |
-| Organization (`--org` / `ORG_ID`) | `metrics daily`, `metrics rebuild`, `metrics dora`, `metrics complexity`, `metrics capacity`, `metrics release-impact` (CHAOS-5055), `metrics compounding-risk`, `backfill run`, `ai allowlist list/set` |
+| Organization (`--org` / `ORG_ID`) | `metrics compounding-risk`, `backfill run`, `ai allowlist list/set` |
 
 > The org id auto-resolves from the first organization in PostgreSQL when `--org`/`ORG_ID` are omitted; the preflight only fails when no org can be resolved.
 
@@ -172,7 +171,7 @@ work-items dataset case, one per provider, dispatched via the river
 trigger. To force a backfill for a specific sync configuration and window,
 use `dev-hops backfill run --config-id <uuid> [--since ...] [--before ...]`,
 which dispatches through the same native route. To inspect what the queue is
-doing, use `dev-health-workerctl jobs list --queue sync_provider --kind
+doing, use `dho workers jobs list --queue sync_provider --kind
 <kind>` / `jobs inspect <id>`.
 
 ### `sync cicd`
@@ -321,160 +320,42 @@ The bundled `src/dev_health_ops/config/team_mapping.yaml` is intentionally empty
 >
 > **Interim Workaround:** Prefer the scheduled Go run over an inline invocation; it validates the same inputs before admitting the job. See [Run workers and jobs](../../operate/run/workers-and-jobs.md).
 
-### `metrics daily`
+### `metrics daily` / `metrics rebuild` (deleted)
 
-**CHAOS-5055:** this command no longer computes metrics in Python. It
-dispatches a run through `dev-health-workerctl metrics daily-start` -- the
-same `StartRunTx` coordinator transaction the post-sync and fixed-schedule
-fanout paths use -- and the worker decides the native/bridge split per
-family exactly as it does for any other trigger. Requires
-`dev-health-workerctl` on `PATH` (or `DEV_HEALTH_WORKERCTL_BIN` set to its
-path). `--repo-name`, `--no-commits`, `--sink`, `--provider` had no Go-side
-equivalent and are no longer accepted; use `--repo-id` (resolve a repo name
-to its UUID yourself) if you need repository scoping.
+These two `dev-hops` verbs only executed the Go operator verb and were
+deleted at spec S2. Run it directly:
 
 ```bash
 # Single day, every org repository
-dev-hops metrics daily --org <org-uuid> --before 2025-02-02 --backfill 1
+dho workers metrics daily-start --org <org-uuid> --day 2025-02-01
 
-# 7-day range
-dev-hops metrics daily --org <org-uuid> --before 2025-02-02 --backfill 7
+# Day range (inclusive)
+dho workers metrics daily-start --org <org-uuid> --day 2025-01-26 --to 2025-02-01
 
 # Scope to specific repositories (repeatable)
-dev-hops metrics daily --org <org-uuid> --before 2025-02-02 --repo-id <uuid>
+dho workers metrics daily-start --org <org-uuid> --day 2025-02-01 --repo-id <uuid>
 ```
 
-**Options:**
-| Option | Description |
-|--------|-------------|
-| `--since` | Start date. Mutually exclusive with `--backfill` |
-| `--before` | End date (exclusive, default: tomorrow) |
-| `--backfill N` | Dispatch N days ending before `--before` (default: 1) |
-| `--repo-id` | Repository UUID to scope this run to; repeatable. Omit for every org repository (deferred discovery) |
+See [`metrics daily-start`](#metrics-daily-start-chaos-5055) for the full
+contract.
 
-### `metrics rebuild`
+### `metrics dora` / `complexity` / `capacity` / `release-impact` (deleted)
 
-**CHAOS-5055:** alias for `metrics daily` -- both now build the identical
-`dev-health-workerctl metrics daily-start` request. Kept as a separate verb
-for operator muscle memory (historically: "recompute one or more repos over
-a range after correcting/re-syncing source data").
+These `dev-hops` verbs only executed the Go operator verb and were deleted at
+spec S2. Run it directly, one dispatch per family (and per day for the
+day-scoped families):
 
 ```bash
-# Rebuild all repos for the last 7 days
-dev-hops metrics rebuild --org <org-uuid> --backfill 7
+dho workers metrics remaining trigger-backstop --family dora --org <org-uuid> \
+  --day 2026-08-01 --review-evidence "CHAOS-1234 -- routine trigger, no automatic run yet today"
 
-# Rebuild specific repos (repeatable --repo-id) over an explicit range
-dev-hops metrics rebuild \
-  --org <org-uuid> \
-  --repo-id 550e8400-e29b-41d4-a716-446655440000 \
-  --repo-id 550e8400-e29b-41d4-a716-446655440001 \
-  --since 2025-01-01 --before 2025-02-01
+dho workers metrics remaining trigger-backstop --family capacity --org <org-uuid> \
+  --team <team-uuid> --review-evidence "CHAOS-1234 -- routine trigger"
 ```
 
-**Options:** same as `metrics daily` above.
-
-### `metrics dora`
-
-**CHAOS-5055:** no longer computes in Python. Dispatches one
-`dev-health-workerctl metrics remaining trigger-backstop --family dora`
-per day in range. The verb applies ONE uniform flag policy to every family
-it accepts (team-lead ruling), regardless of that family's own
-families.json `replay` mode: `--day` defaults to yesterday UTC, targeting
-today requires the explicit `--today` flag (added automatically here
-whenever the requested day is today), and `--review-evidence` is always
-required -- `dora` is specifically an `append_latest_generation` family (a
-second live generation for the same org+day genuinely appends a duplicate
-row, no dedup on replay, CHAOS-4242), which is exactly the kind of risk that
-policy exists for. `--repo-id`/`--repo-name`/`--metrics`/`--sink` had no
-equivalent on the dispatch path and are no longer accepted.
-
-```bash
-dev-hops metrics dora --org <org-uuid> --backfill 30 \
-  --review-evidence "CHAOS-1234 -- routine trigger, no automatic run yet today"
-```
-
-**Options:**
-| Option | Description |
-|--------|-------------|
-| `--since` / `--before` / `--backfill N` | Date range (as in `metrics daily`) |
-| `--review-evidence` | Justification text, forwarded to the verb (**required**) |
-
-### `metrics complexity`
-
-**CHAOS-5055:** no longer computes in Python. Dispatches one
-`dev-health-workerctl metrics remaining trigger-backstop --family complexity`
-per day in range, under the SAME uniform flag policy as every other
-trigger-backstop family (see `metrics dora` above): `--day` defaults to
-yesterday UTC, `--today` is required (and added automatically here) to
-target today, `--review-evidence` is always required.
-`--repo-id`/`-s`/`--lang`/`--exclude`/`--max-files`/`--sink` had no
-equivalent on the dispatch path and are no longer accepted.
-
-> **Note (CHAOS-2850/CHAOS-2888):** `--backfill N` must not fabricate N days of historical complexity from current file contents. There is no persisted historical file-content snapshot, so the DB complexity path writes complexity only when it has a real target-day input contract; run it daily (or let Go's daily complexity fixed schedule run -- the Celery `dispatch_complexity_job` beat cadence it replaced was deleted under CHAOS-4026 on 2026-08-21) to build a genuine trend. Historical API backfills skip complexity recompute unless a future real historical source of truth is added.
-
-```bash
-dev-hops metrics complexity --org <org-uuid> --backfill 30 \
-  --review-evidence "CHAOS-1234 -- routine trigger, no automatic run yet today"
-```
-
-**Options:**
-| Option | Description |
-|--------|-------------|
-| `--since` / `--before` / `--backfill N` | Date range (as in `metrics daily`) |
-| `--review-evidence` | Justification text, forwarded to the verb (**required**) |
-
-### `metrics capacity`
-
-**CHAOS-5055:** no longer computes in Python. Dispatches one
-`dev-health-workerctl metrics remaining trigger-backstop --family capacity`
-request (one dispatch per invocation -- capacity scopes by team, not a day
-range). `--review-evidence` is required (uniform policy across every
-trigger-backstop family); `--today` is added automatically when `--day`
-resolves to today UTC (the default). `--db`/`--work-scope-id`/
-`--target-items`/`--target-date`/`--history-days`/`--simulations`/
-`--dry-run` had no equivalent on the dispatch path (the worker always uses
-the fixed-schedule fanout's own history_days=90/simulations=10000, and every
-dispatch is a real, durable, async run -- there is no synchronous preview)
-and are no longer accepted.
-
-```bash
-# Forecast a single team, right now
-dev-hops metrics capacity --org <org-uuid> --team-id <team-uuid> \
-  --review-evidence "CHAOS-1234 -- routine trigger, no automatic run yet today"
-
-# Forecast all discovered teams for a specific past day
-dev-hops metrics capacity --org <org-uuid> --all-teams --day 2026-08-01 \
-  --review-evidence "CHAOS-1234 -- backfilling a missed weekly run"
-```
-
-**Options:**
-| Option | Description |
-|--------|-------------|
-| `--team-id` | Team UUID to scope this forecast to; exactly one of `--team-id`/`--all-teams` is required |
-| `--all-teams` | Forecast every team in the organization |
-| `--day` | Dedup day for the run this trigger becomes, NOT a compute window (YYYY-MM-DD, UTC); defaults to today UTC |
-| `--review-evidence` | Justification text, forwarded to the verb (**required**) |
-
-### `metrics release-impact`
-
-**CHAOS-5055:** no longer computes in Python. Dispatches one
-`dev-health-workerctl metrics remaining trigger-backstop --family
-release_impact` per day in range. `release_impact` is an
-`append_latest_generation` family (families.json) -- same duplication risk
-as `dora` -- so the verb requires `--today` (added automatically for the
-current UTC day) and `--review-evidence`. `--recomputation-window`/`--sink`
-had no equivalent on the dispatch path and are no longer accepted.
-
-```bash
-dev-hops metrics release-impact --org <org-uuid> --backfill 7 \
-  --review-evidence "CHAOS-1234 -- routine trigger, no automatic run yet today"
-```
-
-**Options:**
-| Option | Description |
-|--------|-------------|
-| `--since` / `--before` / `--backfill N` | Date range (as in `metrics daily`) |
-| `--review-evidence` | Justification text, forwarded to the verb (**required**) |
+`--day` defaults to yesterday UTC, targeting today requires `--today`, and
+`--review-evidence` is always required. See `metrics remaining
+trigger-backstop` below for the full contract.
 
 ### `metrics validate-flags`
 
@@ -1030,7 +911,7 @@ dev-hops workers inspect --state active
 
 ### Worker operator CLI
 
-`dev-health-workerctl` is the authenticated Go operator binary. Read this before
+`dho workers` is the authenticated Go operator binary. Read this before
 the verb reference below — three of its requirements are not discoverable from
 the verbs themselves.
 
@@ -1067,8 +948,8 @@ parsing at the first positional, so an id-first invocation fails with a generic
 `invalid_request` that names neither the cause nor the fix:
 
 ```bash
-dev-health-workerctl jobs retry 9457 --reason r --correlation-id c   # invalid_request
-dev-health-workerctl jobs retry --reason r --correlation-id c 9457   # parses
+dho workers jobs retry 9457 --reason r --correlation-id c   # invalid_request
+dho workers jobs retry --reason r --correlation-id c 9457   # parses
 ```
 
 **`COORDINATOR_DATABASE_URI` is required, and not every image carries it.**
@@ -1092,14 +973,14 @@ with no hint that a different container would work.
     daily-redrive` below is a narrow, daily-metrics-specific exception, not a
     counterexample to this warning.
 
-### `dev-health-workerctl metrics`
+### `dho workers metrics`
 
 #### `metrics daily-start` (CHAOS-5055)
 
 Dispatch a daily-metrics run for one (organization, day-range[, repository
 set]) through the same `StartRunTx` coordinator transaction the post-sync
-and fixed-schedule fanout paths use. This is the replacement backing
-`dev-hops metrics daily`/`rebuild` (see the CLI reference above): the worker
+and fixed-schedule fanout paths use. It replaced the deleted
+`dev-hops metrics daily`/`rebuild` verbs: the worker
 decides the native/bridge split per family exactly as it does for any other
 trigger source, so there is no separate, unguarded Python write path. Not
 restricted to historical days (unlike `metrics remaining start` below) --
@@ -1120,14 +1001,14 @@ BEFORE that day's fixed-schedule occurrence) -- closing that would mean
 changing the nightly schedule's own behavior, deliberately out of scope here.
 
 ```bash
-dev-health-workerctl metrics daily-start \
+dho workers metrics daily-start \
   --org 70d529e0-3c06-4597-8480-794fd02328b6 \
   --day 2026-09-01 \
   --to 2026-09-04
 
 # Scope to specific repositories (repeatable --repo-id); omit for every
 # org repository (deferred discovery, resolved by the worker)
-dev-health-workerctl metrics daily-start \
+dho workers metrics daily-start \
   --org 70d529e0-3c06-4597-8480-794fd02328b6 \
   --day 2026-09-04 \
   --repo-id 550e8400-e29b-41d4-a716-446655440000
@@ -1142,7 +1023,7 @@ original dispatch used, so a bare re-dispatch alone is not enough — see
 
 ```bash
 WORKER_OPERATOR_TOKEN=<operator-token> \
-dev-health-workerctl metrics daily-redrive \
+dho workers metrics daily-redrive \
   --org 70d529e0-3c06-4597-8480-794fd02328b6 \
   --from 2026-08-08 \
   --to 2026-08-27 \
@@ -1229,7 +1110,7 @@ success. This is the finalize-side counterpart of the CHAOS-4358 gap
 
 ```bash
 WORKER_OPERATOR_TOKEN=<operator-token> \
-dev-health-workerctl metrics daily-finalize \
+dho workers metrics daily-finalize \
   --run 6f2caa3e-2a8b-4e46-9c47-6a5a0a5b9a12 \
   --review-evidence "confirmed all partitions succeeded and no user_metrics_daily/ic_landscape_rolling_30d rows exist yet for this run's target_day -- the prior metrics.daily_finalize job never reached CompleteFinalize"
 ```
@@ -1380,7 +1261,7 @@ it opens is rolled back, never committed), and does not require
 
 ```bash
 WORKER_OPERATOR_TOKEN=<operator-token> \
-dev-health-workerctl metrics finalize-redrive \
+dho workers metrics finalize-redrive \
   --org c6a38355-dad6-42e4-8cc9-4c712450827d \
   --from 2026-05-01 --to 2026-05-31 \
   --dry-run
@@ -1390,7 +1271,7 @@ Then run for real:
 
 ```bash
 WORKER_OPERATOR_TOKEN=<operator-token> \
-dev-health-workerctl metrics finalize-redrive \
+dho workers metrics finalize-redrive \
   --org c6a38355-dad6-42e4-8cc9-4c712450827d \
   --from 2026-05-01 --to 2026-05-31 \
   --review-evidence "CHAOS-4405: backfilling compounding_risk_daily(team)/team_cognitive_load_daily for days finalized before #1963 landed the team-aggregation write"
@@ -1535,7 +1416,7 @@ recompute that day once its partition read `'succeeded'`.
 
 ```bash
 WORKER_OPERATOR_TOKEN=<operator-token> \
-dev-health-workerctl metrics partition-recompute \
+dho workers metrics partition-recompute \
   --org c6a38355-dad6-42e4-8cc9-4c712450827d \
   --from 2026-08-20 --to 2026-08-27 \
   --family repo_user_commit \
@@ -1546,7 +1427,7 @@ Then run for real:
 
 ```bash
 WORKER_OPERATOR_TOKEN=<operator-token> \
-dev-health-workerctl metrics partition-recompute \
+dho workers metrics partition-recompute \
   --org c6a38355-dad6-42e4-8cc9-4c712450827d \
   --from 2026-08-20 --to 2026-08-27 \
   --family repo_user_commit \
@@ -1632,7 +1513,7 @@ already has a "succeeded" partition and needs exactly this bypass.
 
 ```bash
 WORKER_OPERATOR_TOKEN=<operator-token> \
-dev-health-workerctl metrics remaining start \
+dho workers metrics remaining start \
   --family dora \
   --day 2026-08-25 --to 2026-08-27 \
   --org c6a38355-dad6-42e4-8cc9-4c712450827d \
@@ -1744,30 +1625,30 @@ JOIN remaining_metric_partitions partition ON partition.run_id = run.id
 WHERE run.org_id = '<org>' AND run.family = '<family>' AND run.generation = '<that day's printed generation>';
 ```
 
-### `dev-health-workerctl routes`
+### `dho workers routes`
 
 Inspect or control one fixed sync-dispatch transport route through the
 authenticated, payload-redacted Go operator binary:
 
 ```bash
-dev-health-workerctl routes status dispatch_sync_run
+dho workers routes status dispatch_sync_run
 
-dev-health-workerctl routes apply \
+dho workers routes apply \
   --reason deployment \
   --correlation-id change-123 \
   dispatch_sync_run
 
-dev-health-workerctl routes pause \
+dho workers routes pause \
   --reason maintenance \
   --correlation-id change-123 \
   dispatch_sync_run
 
-dev-health-workerctl routes drain \
+dho workers routes drain \
   --reason maintenance \
   --correlation-id change-123 \
   dispatch_sync_run
 
-dev-health-workerctl routes resume \
+dho workers routes resume \
   --reason maintenance \
   --correlation-id change-123 \
   dispatch_sync_run
@@ -1891,7 +1772,7 @@ dev-hops work-graph build --db "$CLICKHOUSE_URI" \
 
 ## Investment
 
-> **CHAOS-5173:** the `dev-hops investment materialize` verb was deleted — it was a separate, direct-Python-compute entry point from the `investment.materialize` River kind, which is NATIVE and runs through the same worker dispatch/idempotency every other kind does. Use `dev-health-workerctl investment trigger --org <uuid> [--from <YYYY-MM-DD>] [--to <YYYY-MM-DD>] --review-evidence "<text>" [--dry-run]` to enqueue a fresh run through the native executor instead. It drops every flag with no Go-side equivalent (`--window-days`, `--repo-id`, `--team-id`, every LLM flag, `--force`, `--persist-evidence-snippets`, `--allow-unscoped`, `--analytics-db`/`--db`) — only an org id and an optional `--from`/`--to` window exist on the request.
+> **CHAOS-5173:** the `dev-hops investment materialize` verb was deleted — it was a separate, direct-Python-compute entry point from the `investment.materialize` River kind, which is NATIVE and runs through the same worker dispatch/idempotency every other kind does. Use `dho workers investment trigger --org <uuid> [--from <YYYY-MM-DD>] [--to <YYYY-MM-DD>] --review-evidence "<text>" [--dry-run]` to enqueue a fresh run through the native executor instead. It drops every flag with no Go-side equivalent (`--window-days`, `--repo-id`, `--team-id`, every LLM flag, `--force`, `--persist-evidence-snippets`, `--allow-unscoped`, `--analytics-db`/`--db`) — only an org id and an optional `--from`/`--to` window exist on the request.
 
 During preprocessing, the native materializer emits an `investment repo
 attribution` log record scoped by `org_id` and `run_id`. The `own_signal`,
@@ -1936,7 +1817,7 @@ generation to distinguish `team_ownership` from direct churn and
 
 ## Recommendations
 
-> **CHAOS-5307:** the `dev-hops recommendations compute` preview verb was deleted — a Python CLI running `RuleEngine` directly is Python compute executing in production tooling, read-only or not (team-lead ruling). There is no `dev-hops` wrapper verb for recommendations. For the persisted, generation-deduped compute, use `dev-health-workerctl metrics remaining trigger-backstop --family recommendations --team <team-uuid>` (or `--all-teams`) `--window <days> --review-evidence <why>` directly — **not** `metrics remaining start`, which only accepts `complexity`/`dora`/`release_impact` and rejects `recommendations` outright. A Go-native `workerctl recommendations preview` verb is tracked as a follow-up so the read-only preview capability itself is not lost.
+> **CHAOS-5307:** the `dev-hops recommendations compute` preview verb was deleted — a Python CLI running `RuleEngine` directly is Python compute executing in production tooling, read-only or not (team-lead ruling). There is no `dev-hops` wrapper verb for recommendations. For the persisted, generation-deduped compute, use `dho workers metrics remaining trigger-backstop --family recommendations --team <team-uuid>` (or `--all-teams`) `--window <days> --review-evidence <why>` directly — **not** `metrics remaining start`, which only accepts `complexity`/`dora`/`release_impact` and rejects `recommendations` outright. A Go-native `workerctl recommendations preview` verb is tracked as a follow-up so the read-only preview capability itself is not lost.
 
 ---
 
@@ -2147,11 +2028,10 @@ dev-hops sync git --provider github \
 #    for a specific sync config: dev-hops backfill run --config-id <uuid>
 #    [--since ...] [--before ...]
 
-# 4. Compute metrics (CHAOS-5055: dispatches to dev-health-workerctl; needs
-#    it on PATH plus a running worker/Postgres coordinator)
-dev-hops metrics daily \
+# 4. Compute metrics (needs a running worker and the Postgres coordinator)
+dho workers metrics daily-start \
   --org "$ORG_ID" \
-  --backfill 30
+  --day "$(date -u -d '30 days ago' +%F)" --to "$(date -u -d yesterday +%F)"
 ```
 
 ### Local Development

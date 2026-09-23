@@ -50,7 +50,7 @@ reason, and the only place a downgrade could send it back to (``celery``) is a
 transport nothing can execute. An explicitly irreversible data migration,
 with the reason stated, beats a reversible one that reintroduces a black
 hole. To roll a kind back deliberately, an operator uses
-``dev-health-workerctl job-routes rollback`` -- except CHAOS-5320 also
+``dho workers job-routes rollback`` -- except CHAOS-5320 also
 removes ``celery`` as a legal rollback target in the producer, so that
 command's own celery path is retired by this same change; the supported
 mitigation for a bad Go rollout is now pausing the kind, not rolling it back

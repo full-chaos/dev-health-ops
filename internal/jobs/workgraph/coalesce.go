@@ -83,7 +83,7 @@ type WriteOutcome struct {
 //     shared with workerctl's replay of the same seam), "post-sync:"
 //     (cmd/dev-health-worker/sync_dispatch.go), "fixed-schedule:"
 //     (internal/scheduler/fixed/producers.go) and "manual-trigger:"
-//     (cmd/dev-health-workerctl/trigger_investment.go). That separation is
+//     (internal/workersctl/trigger_investment.go). That separation is
 //     load-bearing rather than tidy: a post-sync materialize request can be the
 //     prerequisite half of a completion fence a later handoff waits on, and a
 //     manual-trigger request is an operator's explicit backfill. Cancelling

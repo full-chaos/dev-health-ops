@@ -95,6 +95,3 @@ tests/acceptance/artifacts/wave4/junit-corpus.xml
 # `uv sync` runs in different worktrees don't serialize on ~/.cache/uv/.lock.
 .uv-cache/
 worktrees/
-# Anchored: a bare name also matches the directory cmd/dev-health-workerctl/,
-# which hid its three tracked Go sources from every gitignore-aware tool.
-/dev-health-workerctl

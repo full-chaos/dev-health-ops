@@ -376,11 +376,15 @@ var errPendingInviteExists = errors.New("a pending invite already exists for thi
 
 // insertInvite is invites.py's create_invite (token minting is the
 // caller's -- see requestcrypto.go).
-func (s pgStore) insertInvite(ctx context.Context, orgID uuid.UUID, email, role string, invitedByID uuid.UUID, tokenHash string, ttl time.Duration) (*orgInvite, error) {
+// insertInvite takes tx, not the pool: Python's create_invite and the
+// router's own emit_audit_log share the request's one SQLAlchemy session
+// and its one implicit commit, so the invite INSERT and the member_invited
+// audit row share one Go transaction too.
+func (s pgStore) insertInvite(ctx context.Context, tx pgx.Tx, orgID uuid.UUID, email, role string, invitedByID uuid.UUID, tokenHash string, ttl time.Duration) (*orgInvite, error) {
 	now := s.now().UTC()
 	normalizedEmail := strings.ToLower(strings.TrimSpace(email))
 	var existsID uuid.UUID
-	err := s.Pool.QueryRow(ctx, `
+	err := tx.QueryRow(ctx, `
 SELECT id FROM org_invites
 WHERE org_id = $1 AND lower(email) = $2 AND status = 'pending' AND expires_at >= $3
 LIMIT 1`, orgID, normalizedEmail, now).Scan(&existsID)
@@ -394,7 +398,7 @@ LIMIT 1`, orgID, normalizedEmail, now).Scan(&existsID)
 		ID: uuid.New(), OrgID: orgID, Email: normalizedEmail, Role: role, InvitedByID: &invitedByID,
 		Status: "pending", ExpiresAt: now.Add(ttl), CreatedAt: now, UpdatedAt: now,
 	}
-	_, err = s.Pool.Exec(ctx, `
+	_, err = tx.Exec(ctx, `
 INSERT INTO org_invites (id, org_id, email, role, token_hash, invited_by_id, status, expires_at, created_at, updated_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
 		invite.ID, invite.OrgID, invite.Email, invite.Role, tokenHash, invite.InvitedByID,

@@ -109,7 +109,7 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), orgID, newMembe
 	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{
 		Normalize: func(request venueoracle.Request, body string) string {
 			for _, field := range []string{"id", "created_at", "updated_at", "expires_at"} {
-				body = redactField(body, field)
+				body = redactField(t, body, field)
 			}
 			return body
 		},

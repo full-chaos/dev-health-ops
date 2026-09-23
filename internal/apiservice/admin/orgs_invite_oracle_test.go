@@ -51,9 +51,25 @@ VALUES ($1, $2, $3, 'admin', now(), now(), now())`, uuid.New(), orgID, adminID)
 	})
 
 	requests := []venueoracle.Request{
+		// request_metadata is compared row-for-row below (audit_logs), so
+		// this request sets explicit, stable User-Agent/X-Forwarded-For/
+		// X-Request-ID headers: leaving them unset would let each plane's
+		// own default HTTP client identity (httpx TestClient's "testclient"
+		// vs Go's http.Client's "Go-http-client/1.1" and 127.0.0.1) leak
+		// into the comparison, which is a test-harness artifact, not a
+		// product difference -- see the users oracle's identical ruling.
 		{Name: "create invite", Method: "POST", Path: "/api/v1/admin/orgs/" + orgID.String() + "/invites",
-			Headers: map[string]string{"Authorization": "Bearer " + venue.Tokens["admin"], "Content-Type": "application/json"},
-			Body:    venueoracle.B64(`{"email":"invitee@example.com","role":"member"}`)},
+			Headers: map[string]string{
+				"Authorization": "Bearer " + venue.Tokens["admin"], "Content-Type": "application/json",
+				"User-Agent": "venue-oracle-test/1.0", "X-Forwarded-For": "203.0.113.42", "X-Request-ID": "venue-create-invite-req",
+			},
+			Body: venueoracle.B64(`{"email":"invitee@example.com","role":"member"}`)},
+		// Unauthenticated + malformed body: FastAPI validates the pydantic
+		// body parameter before the auth Depends() ever runs, so this is a
+		// 422 on both planes, never a 401 -- see the impersonation and users
+		// oracles' identical case for the P1 this pins.
+		{Name: "unauthenticated malformed body", Method: "POST", Path: "/api/v1/admin/orgs/" + orgID.String() + "/invites",
+			Headers: map[string]string{"Content-Type": "application/json"}, Body: venueoracle.B64(`{`)},
 	}
 	python := venue.ServePython(t, requests)
 	goBase, _ := startGoServer(t, ctx, venue, jwtKey)
@@ -68,7 +84,7 @@ VALUES ($1, $2, $3, 'admin', now(), now(), now())`, uuid.New(), orgID, adminID)
 			// -- see the impersonation oracle's identical ruling for
 			// expires_at.
 			for _, field := range []string{"id", "expires_at", "created_at", "updated_at"} {
-				body = redactField(body, field)
+				body = redactField(t, body, field)
 			}
 			return body
 		},
@@ -83,6 +99,6 @@ VALUES ($1, $2, $3, 'admin', now(), now(), now())`, uuid.New(), orgID, adminID)
 }
 
 func orgInviteAuditQuery(orgID, adminID uuid.UUID) string {
-	return fmt.Sprintf(`SELECT org_id, user_id, action, resource_type, status, changes
+	return fmt.Sprintf(`SELECT org_id, user_id, action, resource_type, status, changes, request_metadata
 FROM audit_logs WHERE org_id = '%s' AND user_id = '%s' ORDER BY created_at`, orgID, adminID)
 }

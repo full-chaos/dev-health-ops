@@ -26,16 +26,16 @@ func (h *handlers) orgRoutes() []httpapi.Route {
 	return []httpapi.Route{
 		{Method: http.MethodGet, Pattern: orgsPrefix + "/orgs", Handler: h.guard.Wrap(policy.Superuser, http.HandlerFunc(h.listOrganizations))},
 		{Method: http.MethodGet, Pattern: orgsPrefix + "/orgs/{org_id}", Handler: h.guard.Wrap(policy.Superuser, http.HandlerFunc(h.getOrganization))},
-		{Method: http.MethodPost, Pattern: orgsPrefix + "/orgs", Handler: h.guard.Wrap(policy.Superuser, http.HandlerFunc(h.createOrganization))},
-		{Method: http.MethodPatch, Pattern: orgsPrefix + "/orgs/{org_id}", Handler: h.guard.Wrap(policy.Superuser, http.HandlerFunc(h.updateOrganization))},
+		{Method: http.MethodPost, Pattern: orgsPrefix + "/orgs", Handler: h.bodyFirst(policy.Superuser, http.HandlerFunc(h.createOrganization))},
+		{Method: http.MethodPatch, Pattern: orgsPrefix + "/orgs/{org_id}", Handler: h.bodyFirst(policy.Superuser, http.HandlerFunc(h.updateOrganization))},
 		{Method: http.MethodDelete, Pattern: orgsPrefix + "/orgs/{org_id}", Handler: h.guard.Wrap(policy.Superuser, http.HandlerFunc(h.deleteOrganizationStub))},
 		{Method: http.MethodGet, Pattern: orgsPrefix + "/orgs/{org_id}/members", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.listMembers))},
-		{Method: http.MethodPost, Pattern: orgsPrefix + "/orgs/{org_id}/members", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.addMember))},
+		{Method: http.MethodPost, Pattern: orgsPrefix + "/orgs/{org_id}/members", Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.addMember))},
 		{Method: http.MethodPost, Pattern: orgsPrefix + "/orgs/{org_id}/invites",
-			Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.createOrgInvite)), RateLimitPerSecond: 1, RateLimitBurst: 10},
-		{Method: http.MethodPatch, Pattern: orgsPrefix + "/orgs/{org_id}/members/{user_id}", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.updateMemberRole))},
+			Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.createOrgInvite)), RateLimitPerSecond: 1, RateLimitBurst: 10},
+		{Method: http.MethodPatch, Pattern: orgsPrefix + "/orgs/{org_id}/members/{user_id}", Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.updateMemberRole))},
 		{Method: http.MethodDelete, Pattern: orgsPrefix + "/orgs/{org_id}/members/{user_id}", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.removeMember))},
-		{Method: http.MethodPost, Pattern: orgsPrefix + "/orgs/{org_id}/transfer-ownership", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.transferOwnership))},
+		{Method: http.MethodPost, Pattern: orgsPrefix + "/orgs/{org_id}/transfer-ownership", Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.transferOwnership))},
 	}
 }
 
@@ -169,10 +169,7 @@ func (h *handlers) getOrganization(w http.ResponseWriter, r *http.Request) {
 // createOrganization is orgs.py's create_organization.
 func (h *handlers) createOrganization(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	body, outcome, failure, err := pybody.Read(r)
-	if !handleBodyOutcome(w, body, outcome, failure, err) {
-		return
-	}
+	body := bodyFromContext(ctx)
 	var errs pybody.Errors
 	object, ok := errs.Object(body)
 	var name, slug, description, tier, ownerUserID string
@@ -243,10 +240,7 @@ func (h *handlers) updateOrganization(w http.ResponseWriter, r *http.Request) {
 		policy.WriteInternal(w)
 		return
 	}
-	body, outcome, failure, err := pybody.Read(r)
-	if !handleBodyOutcome(w, body, outcome, failure, err) {
-		return
-	}
+	body := bodyFromContext(ctx)
 	var errs pybody.Errors
 	object, ok := errs.Object(body)
 	patch := orgUpdate{}
@@ -345,10 +339,7 @@ func (h *handlers) addMember(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureOrgAdminAccess(ctx, w, user, orgID) {
 		return
 	}
-	body, outcome, failure, err := pybody.Read(r)
-	if !handleBodyOutcome(w, body, outcome, failure, err) {
-		return
-	}
+	body := bodyFromContext(ctx)
 	var errs pybody.Errors
 	object, ok := errs.Object(body)
 	var targetUserIDRaw, role, invitedByRaw string
@@ -408,10 +399,7 @@ func (h *handlers) createOrgInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, outcome, failure, err := pybody.Read(r)
-	if !handleBodyOutcome(w, body, outcome, failure, err) {
-		return
-	}
+	body := bodyFromContext(ctx)
 	var errs pybody.Errors
 	object, ok := errs.Object(body)
 	var email, role string
@@ -451,9 +439,20 @@ func (h *handlers) createOrgInvite(w http.ResponseWriter, r *http.Request) {
 		inviterName = *inviterEmail
 	}
 
+	// The invite INSERT and the member_invited audit row share ONE
+	// transaction (Python: create_invite and emit_audit_log share the
+	// request's own SQLAlchemy session, one implicit commit for both).
+	tx, txErr := h.store.Pool.Begin(ctx)
+	if txErr != nil {
+		h.logger.ErrorContext(ctx, "admin: create invite begin tx failed", "error", txErr)
+		policy.WriteInternal(w)
+		return
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
 	tokenID := uuid.New()
 	token := buildInviteToken(tokenID)
-	invite, err := h.store.insertInvite(ctx, orgID, email, role, invitedByID, hashInviteToken(token), 72*time.Hour)
+	invite, err := h.store.insertInvite(ctx, tx, orgID, email, role, invitedByID, hashInviteToken(token), 72*time.Hour)
 	if err == errPendingInviteExists {
 		policy.WriteDetail(w, http.StatusConflict, "A pending invite already exists for this email", nil)
 		return
@@ -470,11 +469,16 @@ func (h *handlers) createOrgInvite(w http.ResponseWriter, r *http.Request) {
 	changes.Set("status", invite.Status)
 	changesBytes, _ := pyjson.Marshal(changes)
 	description := "Organization invite created"
-	if _, err := h.audit.Write(ctx, requestAuditEntry(r, audit.Entry{
+	if _, err := h.audit.Write(ctx, tx, requestAuditEntry(r, audit.Entry{
 		OrgID: orgID, UserID: &invitedByID, Action: audit.ActionMemberInvited, ResourceType: audit.ResourceMembership,
 		ResourceID: invite.ID.String(), Description: &description, Changes: changesBytes,
 	})); err != nil {
 		h.logger.ErrorContext(ctx, "admin: invite audit write failed", "error", err)
+		policy.WriteInternal(w)
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		h.logger.ErrorContext(ctx, "admin: create invite commit failed", "error", err)
 		policy.WriteInternal(w)
 		return
 	}
@@ -503,10 +507,7 @@ func (h *handlers) updateMemberRole(w http.ResponseWriter, r *http.Request) {
 		policy.WriteInternal(w)
 		return
 	}
-	body, outcome, failure, err := pybody.Read(r)
-	if !handleBodyOutcome(w, body, outcome, failure, err) {
-		return
-	}
+	body := bodyFromContext(ctx)
 	var errs pybody.Errors
 	object, ok := errs.Object(body)
 	var role string
@@ -590,10 +591,7 @@ func (h *handlers) transferOwnership(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureOrgAdminAccess(ctx, w, user, orgID) {
 		return
 	}
-	body, outcome, failure, err := pybody.Read(r)
-	if !handleBodyOutcome(w, body, outcome, failure, err) {
-		return
-	}
+	body := bodyFromContext(ctx)
 	var errs pybody.Errors
 	object, ok := errs.Object(body)
 	var newOwnerRaw string

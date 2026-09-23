@@ -104,8 +104,8 @@ func (d BaselineTimeoutDeclaration) Validate(req RESTRequest) error {
 	if req.WantCandidateStatus != 200 {
 		return fmt.Errorf("baseline-timeout declaration needs WantCandidateStatus 200, got %d", req.WantCandidateStatus)
 	}
-	if req.BodyMode != RESTBodyModeJSON {
-		return fmt.Errorf("baseline-timeout declaration needs BodyMode %q: the candidate body is what is checked", RESTBodyModeJSON)
+	if req.BodyMode != RESTBodyModeJSON && req.BodyMode != RESTBodyModeCandidateShape {
+		return fmt.Errorf("baseline-timeout declaration needs BodyMode %q or %q: the candidate body is what is checked", RESTBodyModeJSON, RESTBodyModeCandidateShape)
 	}
 	return nil
 }

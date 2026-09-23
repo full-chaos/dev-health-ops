@@ -87,6 +87,16 @@ func queryScopeID(r *http.Request) string {
 	return r.URL.Query().Get("scope_id")
 }
 
+// corpusRequest reads a real corpus request, then restores it to its
+// pre-CHAOS-6241 (200, 200)/JSON shape on this LOCAL copy only: every
+// caller below exercises the bounded-candidate JSON-comparison mechanism
+// itself (resolveIteratingRequest's own skip/stop/win decisions over a
+// real Compare()), not this ticket's deleted-Python-body override -- both
+// REST:POST:/api/v1/investment/flow and REST:GET:/api/v1/work-units are
+// now in goapiproof.DeletedPythonBodyOperations, whose committed
+// (200, 500)/candidate_shape shape would refuse every fake baseline these
+// tests build to answer 200 with real data. Every OTHER field (Parity,
+// IDBindings, Produces, ...) is left exactly as the live corpus declares.
 func corpusRequest(t *testing.T, operation, name string) (goapiproof.RESTEndpointSpec, goapiproof.RESTRequest, goapiproof.RESTIDBinding) {
 	t.Helper()
 	spec, err := goapiproof.SpecForREST(operation)
@@ -101,6 +111,9 @@ func corpusRequest(t *testing.T, operation, name string) (goapiproof.RESTEndpoin
 		if !ok {
 			t.Fatalf("%s request %q declares no bounded-candidate binding", operation, name)
 		}
+		request.WantBaselineStatus = 200
+		request.BodyMode = goapiproof.RESTBodyModeJSON
+		request.StatusDivergenceReason = ""
 		return spec, request, binding
 	}
 	t.Fatalf("%s declares no request %q", operation, name)

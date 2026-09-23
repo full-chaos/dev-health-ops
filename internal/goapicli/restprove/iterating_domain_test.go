@@ -259,44 +259,69 @@ func assertCellConsistent(t *testing.T, name, got string, receipts int, reads []
 // sunburst repo_scoped case binds the one with data, the work-units
 // repo_scoped search does the same, and the explain case explains that
 // search's unit inside that same repository.
+// TestRunMeasurement_RepositoryScopedCasesBindARepositoryWithData runs the
+// full real corpus the way an operator does. GET /api/v1/filters/options,
+// POST /api/v1/investment/flow, GET /api/v1/work-units and POST
+// /api/v1/work-units/{work_unit_id}/explain are all deleted-Python-body
+// routes (CHAOS-6241, goapiproof/restdeletedbody.go): their baseline now
+// always answers the fixed sentinel, so the bounded-candidate search that
+// picks repo-data over repo-empty runs entirely off the CANDIDATE leg's
+// own Produces now (RESTIDListIsEmpty/ExtractRESTIDCandidates against the
+// candidate body only) -- there is no baseline body left to compare
+// against, so flowEmptyBaseline (the pre-deletion baseline capture) is no
+// longer read; flowEmptyCandidate and flowData (the pre-deletion CANDIDATE
+// captures) still stand in for what query-api itself answers, unaffected
+// by whether the baseline changed underneath them.
 func TestRunMeasurement_RepositoryScopedCasesBindARepositoryWithData(t *testing.T) {
 	const build = "build123"
-	flowEmptyBaseline := readProveFixture(t, "investmentflow_reposcoped_emptyrepo_baseline_acc5f56b.json")
 	flowEmptyCandidate := readProveFixture(t, "investmentflow_reposcoped_emptyrepo_candidate_2a7a073a.json")
 	flowData := readProveFixture(t, "investmentflow_dynamicorg_baseline_1988f415.json")
-	handler := func(candidate bool) http.HandlerFunc {
-		return func(w http.ResponseWriter, r *http.Request) {
-			if candidate {
-				w.Header().Set("x-dev-health-build", build)
-			}
-			raw, _ := io.ReadAll(r.Body)
-			body := string(raw)
-			switch {
-			case r.URL.Path == "/api/v1/filters/options":
-				_, _ = w.Write([]byte(`{"teams":["team-a"],"repos":["repo-empty","repo-data"]}`))
-			case r.URL.Path == "/api/v1/investment/flow" && strings.Contains(body, `"level":"repo"`):
-				switch {
-				case strings.Contains(body, "repo-empty") && candidate:
-					_, _ = w.Write([]byte(flowEmptyCandidate))
-				case strings.Contains(body, "repo-empty"):
-					_, _ = w.Write([]byte(flowEmptyBaseline))
-				default:
-					_, _ = w.Write([]byte(flowData))
-				}
-			case r.URL.Path == "/api/v1/work-units" && r.URL.Query().Get("scope_type") == "repo":
-				if r.URL.Query().Get("scope_id") == "repo-data" {
-					_, _ = w.Write([]byte(`[{"work_unit_id":"ABC-123"}]`))
-					return
-				}
-				_, _ = w.Write([]byte(`[]`))
-			default:
-				_, _ = w.Write([]byte(`{}`))
-			}
-		}
+	sentinel := func(w http.ResponseWriter) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"detail":"this route is served by query-api and has no Python implementation"}`))
 	}
-	candidate := httptest.NewServer(handler(true))
+	candidateHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("x-dev-health-build", build)
+		raw, _ := io.ReadAll(r.Body)
+		body := string(raw)
+		switch {
+		case r.URL.Path == "/api/v1/filters/options":
+			_, _ = w.Write([]byte(`{"teams":["team-a"],"repos":["repo-empty","repo-data"]}`))
+		case r.URL.Path == "/api/v1/investment/flow" && strings.Contains(body, `"level":"repo"`):
+			if strings.Contains(body, "repo-empty") {
+				_, _ = w.Write([]byte(flowEmptyCandidate))
+				return
+			}
+			_, _ = w.Write([]byte(flowData))
+		case r.URL.Path == "/api/v1/work-units" && r.URL.Query().Get("scope_type") == "repo":
+			if r.URL.Query().Get("scope_id") == "repo-data" {
+				_, _ = w.Write([]byte(`[{"work_unit_id":"ABC-123"}]`))
+				return
+			}
+			_, _ = w.Write([]byte(`[]`))
+		case strings.HasSuffix(r.URL.Path, "/explain"):
+			// A non-empty object: RESTBodyModeCandidateShape refuses an
+			// empty one as not live (AssertRESTCandidateShape).
+			_, _ = w.Write([]byte(`{"summary":"explained"}`))
+		default:
+			_, _ = w.Write([]byte(`{}`))
+		}
+	})
+	baselineHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/filters/options", "/api/v1/investment/flow", "/api/v1/work-units":
+			sentinel(w)
+		default:
+			if strings.HasSuffix(r.URL.Path, "/explain") {
+				sentinel(w)
+				return
+			}
+			_, _ = w.Write([]byte(`{}`))
+		}
+	})
+	candidate := httptest.NewServer(candidateHandler)
 	defer candidate.Close()
-	baseline := httptest.NewServer(referencePlane(handler(false)))
+	baseline := httptest.NewServer(referencePlane(baselineHandler))
 	defer baseline.Close()
 
 	dir := t.TempDir()
@@ -537,72 +562,57 @@ func TestIterationDecision_EveryCorpusSearchSkipsNoDataAndStopsOnFailure(t *test
 	t.Logf("swept %d bounded-candidate corpus entries", swept)
 }
 
-// TestRunMeasurement_NullVersusEmptyPullRequestsIsReportedAsAMismatch
-// runs the full corpus the way an operator does. The first person listed
-// answers {"items":[]} on the baseline and {"items":null} on the
-// candidate: zero non-null leaves on both legs under a parity that arms
-// the vacuity check, and the legs differ. The report carries that
-// person's drilldown_prs_default outcome as a mismatch; the search does
-// not move on to the person with pull requests.
-func TestRunMeasurement_NullVersusEmptyPullRequestsIsReportedAsAMismatch(t *testing.T) {
+// TestResolveIteratingRequest_NullVersusEmptyPullRequestsIsReportedAsAMismatch
+// drives drilldown_prs_default directly through resolveIteratingRequest.
+// The first person listed answers {"items":[]} on the baseline and
+// {"items":null} on the candidate: zero non-null leaves on both legs under
+// a parity that arms the vacuity check, and the legs differ. The outcome
+// is a mismatch on that first person; the search does not move on to the
+// person with pull requests.
+//
+// GET /api/v1/people/{person_id}/drilldown/prs is a deleted-Python-body
+// route (CHAOS-6241, goapiproof/restdeletedbody.go): corpusRequest
+// restores drilldown_prs_default to its pre-deletion (200, 200)/JSON
+// shape on a local copy, the same way iterating_produces_test.go's own
+// tests already do, so this test keeps exercising the real bounded search
+// + Compare() vacuity interaction. Driven directly rather than through the
+// full runMeasurement/corpus pipeline (unreachable here since
+// restEndpointSpecs is unexported), so no GET /api/v1/people fake is
+// needed either -- the person pool is supplied straight to
+// resolveIteratingRequest's own producedCandidates.
+func TestResolveIteratingRequest_NullVersusEmptyPullRequestsIsReportedAsAMismatch(t *testing.T) {
 	const build = "build123"
 	prs := `{"items":[{"repo_id":"ABC-123","number":7,"title":"ABC-123","created_at":"2026-01-01T00:00:00"}]}`
-	handler := func(candidate bool) http.HandlerFunc {
-		return func(w http.ResponseWriter, r *http.Request) {
-			if candidate {
-				w.Header().Set("x-dev-health-build", build)
-			}
-			switch {
-			case r.URL.Path == "/api/v1/people":
-				_, _ = w.Write([]byte(`[{"person_id":"p-first"},{"person_id":"p-data"}]`))
-			case r.URL.Path == "/api/v1/people/p-first/drilldown/prs" && candidate:
-				_, _ = w.Write([]byte(`{"items":null}`))
-			case r.URL.Path == "/api/v1/people/p-first/drilldown/prs":
-				_, _ = w.Write([]byte(`{"items":[]}`))
-			case r.URL.Path == "/api/v1/people/p-data/drilldown/prs":
-				_, _ = w.Write([]byte(prs))
-			default:
-				_, _ = w.Write([]byte(`{}`))
+	scopeOf := func(r *http.Request) string {
+		parts := strings.Split(r.URL.Path, "/")
+		for i, p := range parts {
+			if p == "people" && i+1 < len(parts) {
+				return parts[i+1]
 			}
 		}
+		return ""
 	}
-	candidate := httptest.NewServer(handler(true))
-	defer candidate.Close()
-	baseline := httptest.NewServer(referencePlane(handler(false)))
-	defer baseline.Close()
-	dir := t.TempDir()
-	reportPath := dir + "/report.json"
-	artifacts, err := goapiproof.NewArtifactStore(dir + "/artifacts")
+	candidateURL, baselineURL, scopes := scopedFixtureServers(t, build, scopeOf,
+		map[string]string{"p-first": `{"items":null}`, "p-data": prs},
+		map[string]string{"p-first": `{"items":[]}`, "p-data": prs},
+	)
+	f := flags{queryAPIURL: candidateURL, pythonAPIURL: baselineURL, org: "org-1", recordedBy: "chris", reviewEvidence: "test", timeout: 5 * time.Second}
+	spec, request, binding := corpusRequest(t, "REST:GET:/api/v1/people/{person_id}/drilldown/prs", "drilldown_prs_default")
+
+	writer := &fakeReceiptWriter{}
+	attempt, err := resolveIteratingRequest(context.Background(), goapiproof.NewLegClient(0), f, "REST:GET:/api/v1/people/{person_id}/drilldown/prs",
+		spec, request, binding, map[string]string{}, map[string][]string{binding.Producer: {"p-first", "p-data"}},
+		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil)
 	if err != nil {
-		t.Fatalf("NewArtifactStore: %v", err)
+		t.Fatalf("resolveIteratingRequest: %v", err)
 	}
-	f := flags{
-		queryAPIURL: candidate.URL, pythonAPIURL: baseline.URL,
-		org: "org-1", recordedBy: "chris", reviewEvidence: "test",
-		timeout: 5 * time.Second, dryRun: true, reportPath: reportPath,
+	t.Logf("-> admitted=%v terminal=%q refusal=%q attempts=%v scopes=%v", attempt.out.Admitted, attempt.out.TerminalState, attempt.out.Refusal, attempt.out.Attempts, *scopes)
+	if !attempt.out.Admitted || attempt.out.TerminalState != goapiproof.TerminalStateMismatch || len(attempt.out.Attempts) != 0 {
+		t.Fatalf("attempt = %+v, want a mismatch on p-first with no skipped attempt", attempt.out)
 	}
-	_ = captureStdout(t, func() {
-		_ = runMeasurement(context.Background(), goapiproof.NewLegClient(0), f,
-			staticCredentialForTest(), staticCredentialForTest(), sameProverBuildForTest(build), nil, artifacts)
-	})
-	raw, err := os.ReadFile(reportPath)
-	if err != nil {
-		t.Fatalf("read report: %v", err)
+	if len(*scopes) == 0 || (*scopes)[0] != "p-first" {
+		t.Fatalf("scopes tried = %v, want p-first tried first (and the search must not move past it)", *scopes)
 	}
-	var report jsonReport
-	if err := json.Unmarshal(raw, &report); err != nil {
-		t.Fatalf("decode report: %v", err)
-	}
-	for _, o := range report.Outcomes {
-		if o.Operation == "REST:GET:/api/v1/people/{person_id}/drilldown/prs" && o.Request == "drilldown_prs_default" {
-			t.Logf("drilldown_prs_default -> admitted=%v terminal=%q refusal=%q bound=%v attempts=%v", o.Admitted, o.TerminalState, o.Refusal, o.BoundIDs, o.Attempts)
-			if !o.Admitted || o.TerminalState != goapiproof.TerminalStateMismatch || o.BoundIDs["person_id"] != "p-first" || len(o.Attempts) != 0 {
-				t.Fatalf("drilldown_prs_default = %+v, want a mismatch on p-first with no skipped attempt", o)
-			}
-			return
-		}
-	}
-	t.Fatal("report has no drilldown_prs_default outcome")
 }
 
 // TestProveOneRESTRequest_AllNullRowsUnderDedupAreNeverAMatch sweeps every
@@ -611,6 +621,14 @@ func TestRunMeasurement_NullVersusEmptyPullRequestsIsReportedAsAMismatch(t *test
 // null: the planes' own bodies carry no evidence, so the request must not
 // be admitted as a match (the synthetic key built from those nulls is not
 // a leaf of either answer).
+//
+// Every dedup-injecting request's own route is a deleted-Python-body
+// route today (CHAOS-6241, goapiproof/restdeletedbody.go), so its
+// BodyMode is candidate_shape or status_only in the committed corpus, not
+// json -- this sweep restores each one to its pre-deletion (200, 200)/JSON
+// shape on a LOCAL copy, so it keeps exercising Compare()'s own
+// null-row/dedup interaction (unaffected by that ticket) against a real
+// two-leg body, the same way it always has.
 func TestProveOneRESTRequest_AllNullRowsUnderDedupAreNeverAMatch(t *testing.T) {
 	const build = "abc123def456"
 	swept := 0
@@ -620,9 +638,12 @@ func TestProveOneRESTRequest_AllNullRowsUnderDedupAreNeverAMatch(t *testing.T) {
 			t.Fatalf("SpecForREST(%s): %v", operation, err)
 		}
 		for _, request := range spec.Requests {
-			if request.DedupListPath == "" || request.BodyMode != goapiproof.RESTBodyModeJSON {
+			if request.DedupListPath == "" {
 				continue
 			}
+			request.WantBaselineStatus = 200
+			request.BodyMode = goapiproof.RESTBodyModeJSON
+			request.StatusDivergenceReason = ""
 			swept++
 			row := map[string]any{}
 			for _, field := range request.DedupKeyFields {

@@ -84,12 +84,18 @@ func workUnitIDProducerNames(t *testing.T) map[string]bool {
 // an invented name. An entry that lost its binding would send the literal
 // placeholder instead and answer 404 -- a refused entry rather than a
 // failing one, which is exactly the shape that sits unnoticed in a report.
+//
+// POST /api/v1/work-units/{work_unit_id}/explain is a deleted-Python-body
+// route (CHAOS-6241, restdeletedbody.go): WantBaselineStatus is 500 for
+// every request now, including the ones that reach a real explanation, so
+// "does this request want an explanation" is read from WantCandidateStatus
+// instead -- the only leg that still computes anything.
 func TestWorkUnitExplainBoundEntriesConsumeTheWorkUnitsProducer(t *testing.T) {
 	spec := restEndpointSpecs[workUnitExplainOperation]
 	allowedProducers := workUnitIDProducerNames(t)
 	bound := 0
 	for _, request := range spec.Requests {
-		wantsAnExplanation := request.WantBaselineStatus == 200
+		wantsAnExplanation := request.WantCandidateStatus == 200
 		hasPathBinding := false
 		for _, binding := range request.IDBindings {
 			if binding.PathParam == "work_unit_id" {
@@ -101,10 +107,10 @@ func TestWorkUnitExplainBoundEntriesConsumeTheWorkUnitsProducer(t *testing.T) {
 		}
 		switch {
 		case wantsAnExplanation && !hasPathBinding:
-			t.Errorf("request %q expects 200 but binds no work_unit_id: the literal path placeholder can never name a real work unit", request.Name)
+			t.Errorf("request %q expects candidate 200 but binds no work_unit_id: the literal path placeholder can never name a real work unit", request.Name)
 		case !wantsAnExplanation && hasPathBinding:
-			t.Errorf("request %q binds a live work_unit_id but expects %d: a bound entry reaches a real unit, so it cannot also be the negative path",
-				request.Name, request.WantBaselineStatus)
+			t.Errorf("request %q binds a live work_unit_id but expects candidate %d: a bound entry reaches a real unit, so it cannot also be the negative path",
+				request.Name, request.WantCandidateStatus)
 		}
 		if hasPathBinding {
 			bound++
@@ -146,8 +152,11 @@ func TestWorkUnitExplainScopedLiveEntries_BindScopeIDAndTheScopedWorkUnit(t *tes
 			if req == nil {
 				t.Fatalf("%s has no %q entry", workUnitExplainOperation, tc.request)
 			}
-			if req.WantCandidateStatus != 200 || req.WantBaselineStatus != 200 {
-				t.Fatalf("%s WantCandidateStatus/WantBaselineStatus = %d/%d, want 200/200", tc.request, req.WantCandidateStatus, req.WantBaselineStatus)
+			// POST /api/v1/work-units/{work_unit_id}/explain is a
+			// deleted-Python-body route (CHAOS-6241): the baseline now
+			// always answers the fixed sentinel, not a real 200.
+			if req.WantCandidateStatus != 200 || req.WantBaselineStatus != 500 {
+				t.Fatalf("%s WantCandidateStatus/WantBaselineStatus = %d/%d, want 200/500", tc.request, req.WantCandidateStatus, req.WantBaselineStatus)
 			}
 			if req.Timeout != tc.wantTimeout {
 				t.Fatalf("%s Timeout = %v, want %v", tc.request, req.Timeout, tc.wantTimeout)

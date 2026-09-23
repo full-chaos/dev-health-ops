@@ -33,6 +33,16 @@ const (
 // repoTeamLinkCopiesTicket is read from the declaration, never retyped.
 var repoTeamLinkCopiesTicket = investmentFlowRepoTeamLinkCopiesDefect.Ticket
 
+// repoTeamScopeBranchNames are POST /api/v1/investment/flow/repo-team's
+// four scope branches. POST /api/v1/investment/flow/repo-team is a
+// deleted-Python-body route (CHAOS-6241, restdeletedbody.go): every
+// Request's own WantBaselineStatus/BodyMode no longer distinguishes them
+// (all four are overridden to the same fixed-sentinel shape), so the tests
+// below select branches by NAME -- their own Parity field, what these
+// tests actually exercise against captured pre-deletion fixture pairs, is
+// left untouched by that override.
+var repoTeamScopeBranchNames = map[string]bool{"default_org": true, "theme_scoped_org": true, "team_scoped": true, "repo_scoped": true}
+
 // The *_baseline_* fixtures are reference-plane bodies captured from a
 // production deployed-vs-deployed prove run (each file name carries the
 // first 8 hex digits of its own sha256). *_perrowcandidate_* is the
@@ -115,7 +125,7 @@ func TestRepoTeamEveryScopeBranchComparesCapturedBodies(t *testing.T) {
 	}
 	var branches []string
 	for _, request := range spec.Requests {
-		if request.WantBaselineStatus != 200 || request.BodyMode != RESTBodyModeJSON {
+		if !repoTeamScopeBranchNames[request.Name] {
 			continue
 		}
 		branches = append(branches, request.Name)
@@ -644,7 +654,7 @@ func TestRepoTeamScopeListDuplicateAxes(t *testing.T) {
 	type axis struct{ list, kind string }
 	cells := 0
 	for _, request := range spec.Requests {
-		if request.WantBaselineStatus != 200 {
+		if !repoTeamScopeBranchNames[request.Name] {
 			continue
 		}
 		for _, a := range []axis{{"data.nodes", "unique"}, {"data.nodes", "repeated_equal"}, {"data.nodes", "repeated_different"}, {"data.links", "unique"}, {"data.links", "repeated_equal"}, {"data.links", "repeated_different"}} {

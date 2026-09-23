@@ -311,6 +311,13 @@ func TestRESTRequest_StatusDivergenceIsDeclaredOnlyWhereGenuine(t *testing.T) {
 	// by operation and request name, so a future entry that declares one
 	// is a deliberate, reviewed addition to this allowlist, not a silent
 	// regression this test stopped checking.
+	// Every operation this map used to name for /api/v1/drilldown/issues,
+	// /api/v1/people/{person_id}/drilldown/issues and /api/v1/flame is now
+	// in DeletedPythonBodyOperations (CHAOS-6241) and skipped by the loop
+	// below entirely -- their old per-entry reasons (a 503 from a
+	// ClickHouse planning failure, a 422/200 duration-fallback gap) are no
+	// longer why their baseline diverges; every request under those
+	// operations now diverges for the SAME reason, the fixed sentinel.
 	knownStatusDivergences := map[string]map[string]bool{
 		"REST:GET:/api/v1/quadrant": {
 			// baseline's wip_throughput read answers 503 Data unavailable
@@ -319,50 +326,17 @@ func TestRESTRequest_StatusDivergenceIsDeclaredOnlyWhereGenuine(t *testing.T) {
 			"wip_throughput_org":           true,
 			"wip_throughput_person_scoped": true,
 		},
-		"REST:GET:/api/v1/drilldown/issues": {
-			// baseline answers 503 in production on the issue drilldown
-			// routes; query-api answers 200 with real data. team_scoped
-			// is not in this set: its statement avoids the exception, so
-			// its baseline genuinely answers 200 and its body compares.
-			"default_window":  true,
-			"range_days_90":   true,
-			"explicit_window": true,
-		},
-		"REST:POST:/api/v1/drilldown/issues": {
-			"default_filters":         true,
-			"explicit_scope_and_sort": true,
-		},
-		"REST:GET:/api/v1/people/{person_id}/drilldown/issues": {
-			"drilldown_issues_default":         true,
-			"valid_cursor":                     true,
-			"limit_above_ceiling":              true,
-			"limit_zero_falls_back_to_default": true,
-		},
-		"REST:GET:/api/v1/flame": {
-			// baseline answers 503 in production on the issue entity_type
-			// read (the same cause the issue-drilldown routes share);
-			// query-api answers 200 with real data. issue_entity_id_not_found
-			// shares the same cause: the baseline never reaches its own
-			// not-found branch, so it answers 503 there too, while
-			// query-api reaches its not-found branch and answers 404.
-			"issue_entity_id_bound_200": true,
-			"issue_entity_id_not_found": true,
-			// pr_gap_entity_id_bound_status_divergence: a terminal PR
-			// (merged/closed) with neither merged_at nor closed_at set
-			// answers 422 on the candidate plane (no measurable duration)
-			// and 200 on the baseline plane (its fallback chain has no
-			// status gate). See that entry's own doc comment in
-			// restcorpus.go.
-			"pr_gap_entity_id_bound_status_divergence": true,
-			// issue_gap_entity_id_bound_status_divergence: candidate
-			// answers 422 for the same reason; baseline answers 503, the
-			// same route-level ClickHouse planning failure
-			// issue_entity_id_bound_200 already declares, unconditional
-			// on this row's own content. See that entry's own doc comment.
-			"issue_gap_entity_id_bound_status_divergence": true,
-		},
 	}
 	for operation, spec := range restEndpointSpecs {
+		if DeletedPythonBodyOperations[operation] {
+			// A whole class of divergence, one cause, already tracked by
+			// its own single list (restdeletedbody.go) and its own guard
+			// (TestDeletedPythonBodyOperations_EveryRequestIsOverridden) --
+			// allowlisting each of its many Requests here individually
+			// would be exactly the "32 scattered edits" this ticket's
+			// design exists to avoid.
+			continue
+		}
 		for _, req := range spec.Requests {
 			if req.WantCandidateStatus == req.WantBaselineStatus {
 				continue
@@ -489,14 +463,19 @@ func TestDrilldownIssuesParityDatetimeCitation_NonVacuousMatchIsIdleNotStale(t *
 // must carry exactly one live entry per producible entity_type, each
 // id-bound to the producer restcorpus.go's own doc comment names -- pr_id
 // (from GET /api/v1/drilldown/prs) for "pr", work_item_id (from GET
-// /api/v1/drilldown/issues) for "issue" -- the "pr" entry must carry
-// flamePRIDBoundParity's own declared BaselineDefect, and the "issue"
-// entry, whose baseline is declared failing in production, must stay
-// status-only with its own one-leg structural check on the candidate
-// body. A silent regression that drops either entry, binds the
-// wrong producer, or reverts the issue entry to a (200, 200) JSON
-// comparison it would status-refuse against the real baseline, fails
-// here rather than only being noticed the next time an operator runs
+// /api/v1/drilldown/issues) for "issue". GET /api/v1/flame is one of
+// restdeletedbody.go's DeletedPythonBodyOperations (CHAOS-6241): every
+// entry whose baseline used to be a real computed answer -- "pr" and
+// "deployment" were (200, 200)/JSON, "issue" was already declared
+// failing at (200, 503)/status-only -- now answers the fixed sentinel
+// instead, so all three are (200, 500)/candidate_shape. The "issue"
+// entry's own Produces (issue_flame_frame_id off its candidate body's
+// frames[].id) still runs under candidate_shape exactly as it did under
+// status_only -- both modes read Produces from the candidate leg. A
+// silent regression that drops either entry, binds the wrong producer,
+// or reverts an entry to a (200, 200) JSON comparison against the dead
+// baseline (which would status-refuse every live run) fails here rather
+// than only being noticed the next time an operator runs
 // go-api-rest-prove live.
 func TestFlameCorpus_HasIDBoundLiveEntriesForPRIssueAndDeployment(t *testing.T) {
 	spec, err := SpecForREST("REST:GET:/api/v1/flame")
@@ -550,11 +529,11 @@ func TestFlameCorpus_HasIDBoundLiveEntriesForPRIssueAndDeployment(t *testing.T) 
 	if !IsOperatorSuppliedIDProducer("deployment_entity_id") {
 		t.Error("deployment_entity_id is not declared in restOperatorSuppliedProducers")
 	}
-	if deployment.WantCandidateStatus != 200 || deployment.WantBaselineStatus != 200 {
-		t.Errorf("deployment entry status = (%d, %d), want (200, 200)", deployment.WantCandidateStatus, deployment.WantBaselineStatus)
+	if deployment.WantCandidateStatus != 200 || deployment.WantBaselineStatus != 500 {
+		t.Errorf("deployment entry status = (%d, %d), want (200, 500) -- GET /api/v1/flame is a deleted-Python-body route (CHAOS-6241)", deployment.WantCandidateStatus, deployment.WantBaselineStatus)
 	}
-	if deployment.BodyMode != RESTBodyModeJSON {
-		t.Errorf("deployment entry BodyMode = %q, want json", deployment.BodyMode)
+	if deployment.BodyMode != RESTBodyModeCandidateShape {
+		t.Errorf("deployment entry BodyMode = %q, want candidate_shape", deployment.BodyMode)
 	}
 	if len(deployment.Parity.BaselineDefects) != 0 {
 		t.Errorf("deployment entry Parity.BaselineDefects = %+v, want none -- fetch_deployment carries no declared divergence", deployment.Parity.BaselineDefects)
@@ -585,28 +564,41 @@ func TestFlameCorpus_HasIDBoundLiveEntriesForPRIssueAndDeployment(t *testing.T) 
 		t.Errorf("deployment gap entry Parity.BaselineDefects = %+v, want none -- both planes raise the identical literal body", deploymentGap.Parity.BaselineDefects)
 	}
 
-	if pr.WantCandidateStatus != 200 || pr.WantBaselineStatus != 200 {
-		t.Errorf("pr entry status = (%d, %d), want (200, 200)", pr.WantCandidateStatus, pr.WantBaselineStatus)
+	if pr.WantCandidateStatus != 200 || pr.WantBaselineStatus != 500 {
+		t.Errorf("pr entry status = (%d, %d), want (200, 500) -- GET /api/v1/flame is a deleted-Python-body route (CHAOS-6241)", pr.WantCandidateStatus, pr.WantBaselineStatus)
 	}
+	if pr.BodyMode != RESTBodyModeCandidateShape {
+		t.Errorf("pr entry BodyMode = %q, want candidate_shape", pr.BodyMode)
+	}
+	// pr.Parity.BaselineDefects is left as-is by the deleted-body override
+	// (restdeletedbody.go only rewrites Want*/StatusDivergenceReason/
+	// BodyMode) -- inert now that BodyMode is not json, but not cleared,
+	// since clearing it would erase real history a future body restoration
+	// could want back.
 	if len(pr.Parity.BaselineDefects) != 1 || pr.Parity.BaselineDefects[0].Ticket != "CHAOS-5803" || !pr.Parity.BaselineDefects[0].Intermittent {
 		t.Errorf("pr entry BaselineDefects = %+v, want exactly one Intermittent CHAOS-5803 entry", pr.Parity.BaselineDefects)
 	}
 
-	// issue's baseline is declared failing in production: status-only,
-	// diverging Want, no body comparison -- a regression back to (200,
-	// 200)/JSON would status-refuse every live run against the real
-	// baseline (RESTRefusalUnexpectedStatus).
-	if issue.WantCandidateStatus != 200 || issue.WantBaselineStatus != 503 {
-		t.Errorf("issue entry status = (%d, %d), want (200, 503)", issue.WantCandidateStatus, issue.WantBaselineStatus)
+	// issue was already declared failing in production before CHAOS-6241
+	// (200, 503); the deleted-body override moves every entry's baseline
+	// to the fixed sentinel regardless of what it declared before, so this
+	// is now (200, 500)/candidate_shape -- a regression back to (200,
+	// 200)/JSON, or back to (200, 503)/status_only, would either
+	// status-refuse every live run against the real baseline
+	// (RESTRefusalUnexpectedStatus) or silently drop the only liveness
+	// check this branch has.
+	if issue.WantCandidateStatus != 200 || issue.WantBaselineStatus != 500 {
+		t.Errorf("issue entry status = (%d, %d), want (200, 500)", issue.WantCandidateStatus, issue.WantBaselineStatus)
 	}
-	if issue.BodyMode != RESTBodyModeStatusOnly {
-		t.Errorf("issue entry BodyMode = %q, want status_only", issue.BodyMode)
+	if issue.BodyMode != RESTBodyModeCandidateShape {
+		t.Errorf("issue entry BodyMode = %q, want candidate_shape", issue.BodyMode)
 	}
 	if issue.StatusDivergenceReason == "" {
 		t.Error("issue entry declares a status divergence with no StatusDivergenceReason")
 	}
 	// issue_flame_frame_id is this entry's own one-leg structural check on
-	// the candidate's 200 body: status_only compares no body between
+	// the candidate's 200 body: candidate_shape (like status_only before
+	// it) compares no body between
 	// planes, and this is the only live case of the "issue" branch, so
 	// nothing else confirms the shape flame.Response/Frame's own json
 	// tags promise here. A silent regression that drops it loses the
@@ -686,8 +678,11 @@ func TestPersonDrilldownPRsSiblings_BindToTheExposedWinner(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s entry not found", name)
 		}
-		if req.WantBaselineStatus != 200 {
-			t.Fatalf("%s WantBaselineStatus = %d, want 200 -- this route's baseline is not declared failing in production", name, req.WantBaselineStatus)
+		// GET /api/v1/people/{person_id}/drilldown/prs is a
+		// deleted-Python-body route (CHAOS-6241, restdeletedbody.go): its
+		// baseline now always answers the fixed sentinel, not a real 200.
+		if req.WantBaselineStatus != 500 {
+			t.Fatalf("%s WantBaselineStatus = %d, want 500 -- this route's Python body has been deleted", name, req.WantBaselineStatus)
 		}
 		found := false
 		for _, binding := range req.IDBindings {
@@ -1066,16 +1061,20 @@ func TestDrilldownPRsRepoScoped_BindsToAPRProducingRepo(t *testing.T) {
 	}
 }
 
-// TestDrilldownIssuesTeamScoped_ComparesUnderDrilldownIssuesParity pins
-// GET/POST /api/v1/drilldown/issues' own "team_scoped" entry: the
-// team-scoped statement does not raise the org-wide exception, so its
-// baseline answers 200 in production, and this entry must compare bodies
-// under drilldownIssuesParity like every other admissible request on this
-// route, never take the status-only baseline-failure path. A regression
-// that reverts either entry to a declared 503 baseline, or drops its
-// BodyMode/Parity, fails here rather than only being noticed against the
-// real baseline, which answers 200 on this team-scoped read.
-func TestDrilldownIssuesTeamScoped_ComparesUnderDrilldownIssuesParity(t *testing.T) {
+// TestDrilldownIssuesTeamScoped_MatchesItsSiblingsUnderTheDeletedBodyOverride
+// pins GET/POST /api/v1/drilldown/issues' own "team_scoped" entry post
+// CHAOS-6241: before the Python body was deleted, team_scoped was the ONE
+// entry on this route whose baseline genuinely answered 200 (every other
+// entry's baseline already answered 503 in production), so it alone
+// compared real bodies under drilldownIssuesParity. The body is gone now
+// -- EVERY entry on this route, team_scoped included, gets the same
+// (200, 500)/candidate_shape override (restdeletedbody.go), so team_scoped
+// is no longer an exception among its siblings; drilldownIssuesParity's
+// own BaselineDefect declarations are inert (BodyMode is not json) but
+// left on the literal, same as every other overridden entry. A regression
+// that reverts team_scoped to (200, 200)/JSON would status-refuse it
+// against the real (now-sentinel) baseline.
+func TestDrilldownIssuesTeamScoped_MatchesItsSiblingsUnderTheDeletedBodyOverride(t *testing.T) {
 	for _, op := range []string{"REST:GET:/api/v1/drilldown/issues", "REST:POST:/api/v1/drilldown/issues"} {
 		spec, err := SpecForREST(op)
 		if err != nil {
@@ -1090,31 +1089,14 @@ func TestDrilldownIssuesTeamScoped_ComparesUnderDrilldownIssuesParity(t *testing
 		if req == nil {
 			t.Fatalf("%s has no team_scoped entry", op)
 		}
-		if req.WantCandidateStatus != 200 || req.WantBaselineStatus != 200 {
-			t.Errorf("%s team_scoped wants = %d/%d, want 200/200", op, req.WantCandidateStatus, req.WantBaselineStatus)
+		if req.WantCandidateStatus != 200 || req.WantBaselineStatus != 500 {
+			t.Errorf("%s team_scoped wants = %d/%d, want 200/500 -- this route's Python body has been deleted", op, req.WantCandidateStatus, req.WantBaselineStatus)
 		}
-		if req.StatusDivergenceReason != "" {
-			t.Errorf("%s team_scoped StatusDivergenceReason = %q, want empty -- wants no longer diverge", op, req.StatusDivergenceReason)
+		if req.StatusDivergenceReason == "" {
+			t.Errorf("%s team_scoped StatusDivergenceReason is empty, want the deleted-body reason", op)
 		}
-		if req.BodyMode != RESTBodyModeJSON {
-			t.Errorf("%s team_scoped BodyMode = %q, want RESTBodyModeJSON", op, req.BodyMode)
-		}
-		if len(req.Parity.BaselineDefects) != 2 ||
-			req.Parity.BaselineDefects[0].Ticket != drilldownIssuesParity.BaselineDefects[0].Ticket ||
-			req.Parity.BaselineDefects[1].Ticket != drilldownIssuesParity.BaselineDefects[1].Ticket {
-			t.Fatalf("%s team_scoped Parity BaselineDefects = %+v, want drilldownIssuesParity's own datetime and boundary-tie defects", op, req.Parity.BaselineDefects)
-		}
-
-		identical := `{"items":[{"work_item_id":"w1","provider":"linear","status":"done","team_id":"T1","cycle_time_hours":1.5,"lead_time_hours":2.5,"started_at":"2026-01-01T00:00:00","completed_at":"2026-01-02T00:00:00"}]}`
-		snap := restSnapshotFromJSON(t, identical)
-		if result := Compare(snap, snap, req.Parity); result.TerminalState != TerminalStateMatch {
-			t.Errorf("%s team_scoped identical bodies terminal = %s (refusal %q), want match", op, result.TerminalState, result.StructuralRefusal)
-		}
-
-		mismatched := `{"items":[{"work_item_id":"w1","provider":"linear","status":"open","team_id":"T1","cycle_time_hours":1.5,"lead_time_hours":2.5,"started_at":"2026-01-01T00:00:00","completed_at":"2026-01-02T00:00:00"}]}`
-		msnap := restSnapshotFromJSON(t, mismatched)
-		if result := Compare(snap, msnap, req.Parity); result.TerminalState != TerminalStateMismatch {
-			t.Errorf("%s team_scoped differing-status bodies terminal = %s (refusal %q), want mismatch", op, result.TerminalState, result.StructuralRefusal)
+		if req.BodyMode != RESTBodyModeCandidateShape {
+			t.Errorf("%s team_scoped BodyMode = %q, want candidate_shape", op, req.BodyMode)
 		}
 	}
 }

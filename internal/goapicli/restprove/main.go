@@ -2318,7 +2318,7 @@ func proveOneRESTRequest(
 				return out, nil
 			}
 		}
-	} else if len(request.Produces) > 0 {
+	} else if request.BodyMode == goapiproof.RESTBodyModeCandidateShape || len(request.Produces) > 0 {
 		// A StatusOnly request may still Produce ids, but only in the one
 		// shape ValidateRESTCorpus admits (goapiproof/restcorpus.go): the
 		// two Want statuses differ and the CANDIDATE's own want is 200 --
@@ -2328,7 +2328,10 @@ func proveOneRESTRequest(
 		// with a body: here that is the CANDIDATE, not the BASELINE the
 		// decodeBody branch above reads for every other request. Decoded
 		// through the same production decoder (DecodeRESTSnapshot) real
-		// evidence uses, never hand-built.
+		// evidence uses, never hand-built. A RESTBodyModeCandidateShape
+		// request reaches this branch even with no Produces at all --
+		// its own shape assertion below needs the SAME candidate-only
+		// decode, so the two never duplicate it.
 		//
 		// A declared producer this branch cannot resolve refuses THIS
 		// request by name -- a body that does not decode as
@@ -2353,6 +2356,20 @@ func proveOneRESTRequest(
 			out.Refusal = goapiproof.RESTRefusalTrailingBytes
 			out.Detail = "the candidate body carried bytes after its JSON value"
 			return out, nil
+		}
+		if request.BodyMode == goapiproof.RESTBodyModeCandidateShape {
+			// The one check RESTBodyModeStatusOnly never runs at all: with
+			// no second leg worth admitting a body from (see
+			// restcorpus.go's own RESTBodyModeCandidateShape doc comment),
+			// this is the only evidence a live run has that the candidate
+			// answered something real rather than a live, technically-200
+			// but empty or null body.
+			if shapeErr := goapiproof.AssertRESTCandidateShape(candidateSnap.Data, request.CandidateShapeArray); shapeErr != nil {
+				out.Admitted = false
+				out.Refusal = goapiproof.RESTRefusalCandidateShapeInvalid
+				out.Detail = shapeErr.Error()
+				return out, nil
+			}
 		}
 		out.producedIDs = make(map[string]string, len(request.Produces))
 		out.producedCandidateIDs = make(map[string][]string, len(request.Produces))
@@ -2388,6 +2405,32 @@ func proveOneRESTRequest(
 		}
 	}
 
+	// TerminalStateUnsupported, never TerminalStateMatch, for EVERY
+	// admitted request restdeletedbody.go's init() overrode (identified by
+	// its own PythonBodyDeletedReason, the one string it writes) --
+	// candidate_shape (asserted just above) AND status_only (the
+	// candidate's own want is not 200, e.g. a Go-side 404/422/503
+	// refusal): neither compares a baseline body, since there is none
+	// worth comparing against, so writing "match" would let either
+	// receipt satisfy EnablementProofClause (receipt.go) -- the SAME
+	// predicate go_api_routing_admin's `enable` preflight and
+	// migrationmatrix's REST "proven" column both read -- and silently
+	// promote a route on evidence no stronger than "the candidate
+	// answered its own expected status". "unsupported" is already the
+	// vocabulary's own word for "this pair could not be judged match or
+	// mismatch" (Compare's own watermark-missing/-drift cases use it
+	// identically), is already in the Postgres terminal_state CHECK
+	// constraint, and is already excluded by EnablementProofClause -- so
+	// this reaches a real receipt, still readable by an operator and by
+	// ReadRESTProof's own exclusion of it, without inventing a new DB
+	// value or a migration for it. Scoped by StatusDivergenceReason, not
+	// by BodyMode alone, so a PRE-EXISTING, unrelated status_only entry
+	// (e.g. the CHAOS-5868 baseline-503 class) keeps writing "match"
+	// exactly as it always has -- this never widens beyond what
+	// restdeletedbody.go itself touched.
+	if terminalState == goapiproof.TerminalStateMatch && request.StatusDivergenceReason == goapiproof.PythonBodyDeletedReason {
+		terminalState = goapiproof.TerminalStateUnsupported
+	}
 	out.TerminalState = terminalState
 	out.DifferencesOutsideBaselineDefect = differences
 	out.BaselineDefectsMatched = matchedDefects

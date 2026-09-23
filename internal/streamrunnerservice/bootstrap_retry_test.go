@@ -129,6 +129,19 @@ func waitForReadiness(t *testing.T, registry *health.Registry, within time.Durat
 	}
 }
 
+// waitForLogLine waits for a line the component logs at a known point of its
+// start-up, so a test observes state from that point on instead of racing it.
+func waitForLogLine(t *testing.T, logs *syncBuffer, line string, within time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(within)
+	for !strings.Contains(logs.String(), line) {
+		if time.Now().After(deadline) {
+			t.Fatalf("%q was not logged within %s:\n%s", line, within, logs.String())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 // TestStreamRunnerReadinessRecoversAfterAStartupDependencyOutage pins the
 // property the stream runner exists to keep: a dependency that is down while
 // the process starts, and comes back later, leaves the process ready and
@@ -176,6 +189,13 @@ func TestStreamRunnerReadinessRecoversAfterAStartupDependencyOutage(t *testing.T
 			}
 			runStreamComponents(t, registry, components)
 
+			// A readiness sample copies the registered check list first and
+			// runs the checks after, so a sample taken while the consumers are
+			// being built can list no loop checks yet and still pass
+			// stream_consumer once they start. "stream consumers started" is
+			// logged after every loop check is registered and the consumers
+			// run, so readiness is sampled only from then on.
+			waitForLogLine(t, &logs, "stream consumers started", 15*time.Second)
 			status := waitForReadiness(t, registry, 15*time.Second)
 			want := []string{
 				"clickhouse", "domain_postgres", "internal_ingest_loop", "posture_manifest_lockstep",

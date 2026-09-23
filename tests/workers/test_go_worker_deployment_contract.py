@@ -1260,7 +1260,9 @@ def test_no_renderer_still_emits_the_deleted_operational_bridge(
         args = [str(a) for a in (container.get("args") or [])]
         assert not any(
             arg.startswith(flag) for arg in args for flag in _BRIDGE_FLAGS
-        ), f"go-workers.yaml:{document['metadata']['name']} still renders an operational-bridge flag"
+        ), (
+            f"go-workers.yaml:{document['metadata']['name']} still renders an operational-bridge flag"
+        )
 
     # Helm: render the real templating engine (default values and with
     # metricsApi enabled, the state most likely to have re-introduced a

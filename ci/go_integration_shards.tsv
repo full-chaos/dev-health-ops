@@ -69,7 +69,7 @@ cmd/query-api/internal/throughputforecast	41
 cmd/query-api/internal/workgraph	280
 internal/api/externalingest	10
 internal/api/licensing	6
-internal/api/policy	8
+internal/api/policy	3
 internal/apiservice/acr	6
 internal/cacheinvalidation	2
 internal/externalrecompute	32

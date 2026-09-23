@@ -22,14 +22,22 @@ import (
 // approval condition 1's OTHER half (ruling 26): ground truth for this
 // destructive port is the venue, not org_deletion.py's regex. It seeds a
 // real, migrated ClickHouse (chschema.Apply, the actual migration chain)
-// with rows for a target org and a control org in git_blame -- which also
-// exercises git_blame_dirty_paths_mv's own MATERIALIZED VIEW trigger, the
-// one case this route's live table discovery treats specially -- runs a
-// REAL (non-dry-run) DELETE /orgs/{org_id} against the real Go route, then
-// asks DiscoverClickHouseOrgTables (the exact function the route itself
-// calls, never a second hand-authored table list) for every table it
-// would purge and asserts the target org has ZERO rows in every one of
-// them, while the control org's own rows survive.
+// with rows for a target org and a control org in TWO independent tables
+// -- git_blame (org_id UUID, also exercises git_blame_dirty_paths_mv's own
+// MATERIALIZED VIEW trigger, the one case this route's live table
+// discovery treats specially) and backfill_log (org_id String, so the
+// non-UUID condition branch is exercised too) -- runs a REAL (non-dry-run)
+// DELETE /orgs/{org_id} against the real Go route, then asks
+// DiscoverClickHouseOrgTables (the exact function the route itself calls,
+// never a second hand-authored table list) for every table it would purge
+// and asserts the target org has ZERO rows in every one of them, while the
+// control org's own rows survive. Two independently-seeded tables (an
+// adversarial-review finding on this test's original single-table version:
+// every OTHER discovered table saw zero rows for either org, so a
+// regression that skipped deleting from any of them would still pass)
+// means the "every discovered table" loop below is a real proof for at
+// least two of them, not just an assertion that nothing existed anywhere
+// to begin with.
 func TestOrgDeletionPurgesEveryDiscoveredClickHouseTable(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	t.Cleanup(cancel)
@@ -90,6 +98,13 @@ VALUES ($1, 'venue-chdel-super@example.com', true, true, true, 0, now(), now())`
 			t.Fatalf("seed git_blame: %v", err)
 		}
 	}
+	for _, org := range []uuid.UUID{targetOrgID, controlOrgID} {
+		if err := chConn.Exec(ctx,
+			`INSERT INTO backfill_log (job_id, org_id, chunk_index, chunk_since, chunk_before, provider, items_synced, duration_ms, status) VALUES (?, ?, 0, today(), today(), 'github', 1, 1, 'complete')`,
+			uuid.New().String(), org.String()); err != nil {
+			t.Fatalf("seed backfill_log: %v", err)
+		}
+	}
 
 	countGitBlame := func(orgID uuid.UUID) uint64 {
 		t.Helper()
@@ -107,11 +122,22 @@ VALUES ($1, 'venue-chdel-super@example.com', true, true, true, 0, now(), now())`
 		}
 		return count
 	}
+	countBackfillLog := func(orgID uuid.UUID) uint64 {
+		t.Helper()
+		var count uint64
+		if err := chConn.QueryRow(ctx, `SELECT count() FROM backfill_log WHERE org_id = ?`, orgID.String()).Scan(&count); err != nil {
+			t.Fatalf("count backfill_log: %v", err)
+		}
+		return count
+	}
 	if got := countGitBlame(targetOrgID); got != 1 {
 		t.Fatalf("seed: git_blame count for target org = %d, want 1", got)
 	}
 	if got := countDirtyPaths(targetOrgID); got != 1 {
 		t.Fatalf("seed: the git_blame_dirty_paths_mv trigger did not fire -- git_blame_dirty_paths count for target org = %d, want 1", got)
+	}
+	if got := countBackfillLog(targetOrgID); got != 1 {
+		t.Fatalf("seed: backfill_log count for target org = %d, want 1", got)
 	}
 
 	goBase, _ := startGoServer(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) {
@@ -139,6 +165,12 @@ VALUES ($1, 'venue-chdel-super@example.com', true, true, true, 0, now(), now())`
 	}
 	if got := countDirtyPaths(controlOrgID); got != 1 {
 		t.Errorf("git_blame_dirty_paths count for control org after delete = %d, want 1 (untouched)", got)
+	}
+	if got := countBackfillLog(targetOrgID); got != 0 {
+		t.Errorf("backfill_log count for target org after delete = %d, want 0", got)
+	}
+	if got := countBackfillLog(controlOrgID); got != 1 {
+		t.Errorf("backfill_log count for control org after delete = %d, want 1 (untouched)", got)
 	}
 
 	// Ground truth, not a sample: ask the route's own discovery function

@@ -4,6 +4,7 @@ package admin_test
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http/httptest"
@@ -23,6 +24,13 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
+// adminDepsExtra lets a caller of startGoServer set the admin area's own
+// extra dependencies (CHAOS-6306: ClickHouseDSN/Decryptor/PagerDuty/
+// HTTPDoer) without widening every other venue test's call site -- the
+// default (no extras) leaves apiservice.Deps exactly as it was before those
+// fields existed.
+type adminDepsExtra func(*apiservice.Deps)
+
 // venueJWTIssuer/venueJWTAudience mirror config.go's unexported
 // defaultJWTIssuer/defaultJWTAudience and auth.py's own JWT_ISSUER/
 // JWT_AUDIENCE defaults -- both planes agree on these with neither
@@ -37,7 +45,7 @@ const (
 // OrgScope/Impersonation middlewares -- against venue's Go copy, the same
 // wiring apiservice's own configure() does when deps.Pool is set
 // (service.go). Everything it opens is closed by t.Cleanup.
-func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue, jwtKey string) (base string, pool *pgxpool.Pool) {
+func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue, jwtKey string, extras ...adminDepsExtra) (base string, pool *pgxpool.Pool) {
 	t.Helper()
 	goPool, err := pgxpool.New(ctx, venue.GoAPIDatabaseURI(t))
 	if err != nil {
@@ -65,7 +73,11 @@ func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue, 
 	if err != nil {
 		t.Fatalf("config.Load: %v", err)
 	}
-	routes := apiservice.Routes(apiservice.Deps{Pool: goPool, Valkey: valkeyClient, Auth: auth, Guard: guard}, logger)
+	deps := apiservice.Deps{Pool: goPool, Valkey: valkeyClient, Auth: auth, Guard: guard}
+	for _, extra := range extras {
+		extra(&deps)
+	}
+	routes := apiservice.Routes(deps, logger)
 	requestScope := policy.NewScope(auth, logger)
 	server, err := apiservice.NewServer(cfg, logger, routes, requestScope.OrgScope, requestScope.Impersonation)
 	if err != nil {
@@ -118,6 +130,65 @@ func redactField(t *testing.T, body, key string) string {
 		}
 	}
 	object.Set(key, "")
+	encoded, err := pyjson.Marshal(object)
+	if err != nil {
+		return body
+	}
+	return string(encoded)
+}
+
+// dropKnownStaleClickHouseWarnings removes org_deletion.py's own stale-table
+// warnings (clickHouseOrgTableKnownPythonOnlyStale, orgdeletion_clickhouse_
+// oracle_test.go) from a delete-org response body's top-level "warnings"
+// array before comparison -- CHAOS-6306 condition 1's accepted, SEPARATELY
+// proven divergence (TestClickHouseOrgTableDiscoveryMatchesThePythonMigrationRegex):
+// Python's static migration-regex still names 5 tables that no longer exist
+// or never held org_id, so it always warns on them; Go's live
+// system.columns discovery never even attempts a table it did not
+// discover, so it never emits those 5 warnings at all. Any OTHER warning
+// (a real, unexplained divergence) is left in place and still fails the
+// comparison. A non-JSON-object body, or one with no "warnings" key,
+// passes through unchanged, matching redactField's own contract.
+func dropKnownStaleClickHouseWarnings(t *testing.T, body string) string {
+	t.Helper()
+	if body == "" {
+		return body
+	}
+	value, err := pyjson.DecodeString(body)
+	if err != nil {
+		return body
+	}
+	object, ok := value.(*pyjson.Object)
+	if !ok {
+		return body
+	}
+	raw, present := object.Get("warnings")
+	if !present {
+		return body
+	}
+	list, ok := raw.([]pyjson.Value)
+	if !ok {
+		return body
+	}
+	filtered := make([]pyjson.Value, 0, len(list))
+	for _, entry := range list {
+		text, ok := entry.(string)
+		if !ok {
+			filtered = append(filtered, entry)
+			continue
+		}
+		stale := false
+		for table := range clickHouseOrgTableKnownPythonOnlyStale {
+			if text == fmt.Sprintf("ClickHouse table %s missing or has no org_id column; skipped.", table) {
+				stale = true
+				break
+			}
+		}
+		if !stale {
+			filtered = append(filtered, entry)
+		}
+	}
+	object.Set("warnings", filtered)
 	encoded, err := pyjson.Marshal(object)
 	if err != nil {
 		return body

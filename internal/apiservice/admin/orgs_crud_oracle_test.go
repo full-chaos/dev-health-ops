@@ -18,8 +18,8 @@ import (
 // list/add/patch-role/remove, and transfer-ownership. User routes have
 // their own oracle test in CHAOS-6304 (users_oracle_test.go); this test
 // seeds users directly by SQL only as membership targets. DELETE
-// /orgs/{org_id} is out of scope (stubbed 501, see orgs.go's
-// deleteOrganizationStub doc comment).
+// /orgs/{org_id} has its own oracle test, CHAOS-6306's
+// orgdeletion_oracle_test.go.
 func TestOrgCRUDMatchesThePythonAPI(t *testing.T) {
 	ctx := context.Background()
 	root := repoRoot(t)

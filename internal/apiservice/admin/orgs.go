@@ -24,7 +24,7 @@ func (h *handlers) orgRoutes() []httpapi.Route {
 		{Method: http.MethodGet, Pattern: orgsPrefix + "/orgs/{org_id}", Handler: h.guard.Wrap(policy.Superuser, http.HandlerFunc(h.getOrganization))},
 		{Method: http.MethodPost, Pattern: orgsPrefix + "/orgs", Handler: h.bodyFirst(policy.Superuser, http.HandlerFunc(h.createOrganization))},
 		{Method: http.MethodPatch, Pattern: orgsPrefix + "/orgs/{org_id}", Handler: h.bodyFirst(policy.Superuser, http.HandlerFunc(h.updateOrganization))},
-		{Method: http.MethodDelete, Pattern: orgsPrefix + "/orgs/{org_id}", Handler: h.guard.Wrap(policy.Superuser, http.HandlerFunc(h.deleteOrganizationStub))},
+		{Method: http.MethodDelete, Pattern: orgsPrefix + "/orgs/{org_id}", Handler: h.guard.Wrap(policy.Superuser, http.HandlerFunc(h.deleteOrganization))},
 		{Method: http.MethodGet, Pattern: orgsPrefix + "/orgs/{org_id}/members", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.listMembers))},
 		{Method: http.MethodPost, Pattern: orgsPrefix + "/orgs/{org_id}/members", Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.addMember))},
 		// create_org_invite (POST /orgs/{org_id}/invites) is NOT mounted
@@ -340,17 +340,6 @@ func (h *handlers) updateOrganization(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	policy.WriteJSON(w, http.StatusOK, obj, nil)
-}
-
-// deleteOrganizationStub: organization deletion is served separately.
-// org_deletion.py is a 660-line dynamic scan+purge across ~40 Postgres
-// tables plus every ClickHouse table discovered by regexing the migration
-// files for org_id columns, plus a PagerDuty OAuth revocation step; it is
-// its own port, not a route handler. Stubbed 501, matching this admin
-// surface's existing drift-review-endpoint precedent for "not yet ported
-// natively" (see ops AGENTS.md's CS6 note).
-func (h *handlers) deleteOrganizationStub(w http.ResponseWriter, r *http.Request) {
-	policy.WriteDetail(w, http.StatusNotImplemented, "Organization deletion is served separately", nil)
 }
 
 // listMembers is orgs.py's list_members.

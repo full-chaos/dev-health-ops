@@ -65,10 +65,33 @@ type Deps struct {
 	// the same "not configured yet" rule as Pool.
 	Producer *joboutbox.Producer
 	// Decryptor decrypts pagerduty_webhook_bindings.signing_secret_encrypted
-	// (wire-compatible with core/encryption.py's encrypt_value/decrypt_value).
-	// Its zero value is a legal, always-failing decryptor -- see buildDeps's
-	// own comment on SettingsEncryptionKey below.
+	// (wire-compatible with core/encryption.py's encrypt_value/decrypt_value)
+	// and is reused by the admin org-deletion route (CHAOS-6306) to read a
+	// stored PagerDuty OAuth token before revoking it. Its zero value is a
+	// legal, always-failing decryptor -- see buildDeps's own comment on
+	// SettingsEncryptionKey below.
 	Decryptor providerfoundation.FernetDecryptor
+	// PagerDuty is the admin org-deletion route's own dependency
+	// (CHAOS-6306): the OAuth client config used to revoke a stored token.
+	PagerDuty providerfoundation.PagerDutyRevokeConfig
+	// HTTPDoer is the client the org-deletion route's PagerDuty revoke call
+	// uses; nil means admin.Routes defaults it to http.DefaultClient. A
+	// venue test overrides it to reach a fake revoke endpoint from the Go
+	// plane too.
+	HTTPDoer providerfoundation.HTTPDoer
+	// ClickHouseDSN is the org-deletion route's analytics-table purge
+	// connection (CHAOS-6306), sourced from CLICKHOUSE_URI -- the same
+	// broadly-privileged, unrestricted-posture credential
+	// cmd/dev-health-worker's own daily/sync/reports jobs already use, NOT
+	// deps.ClickHouse/API_CLICKHOUSE_URI (that connection is locked to
+	// chclickhouse.APIPosture's closed, exact manifest -- teams/identities
+	// only -- so it structurally cannot hold ALTER DELETE on org-deletion's
+	// live-discovered purge targets, which grow with every future
+	// org_id-bearing table and can never be a fixed enumerated grant list).
+	// "" = not configured; every ClickHouse count/delete is skipped with a
+	// warning, matching org_deletion.py's own behavior when its ClickHouse
+	// client cannot connect.
+	ClickHouseDSN string
 }
 
 // TelemetryConfig is TELEMETRY_ENDPOINT (where /telemetry/report sends) and

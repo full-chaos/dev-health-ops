@@ -52,6 +52,15 @@ pynacl==1.6.2
 cffi==2.0.0
 pycparser==3.0
 
+# --- CHAOS-6306: org_deletion.py's own import closure ---
+# internal/apiservice/admin's org-deletion oracle tests read/execute
+# dev_health_ops.api.services.org_deletion (the migration-regex divergence
+# proof, and the PagerDuty revoke venue proof) via this same pyoracle
+# resolver. org_deletion.py imports dev_health_ops.core.encryption for
+# decrypt_value, which imports cryptography.fernet. cffi is already listed
+# above for pynacl; cryptography needs no other transitive.
+cryptography==50.0.0
+
 # --- ClickHouse client used to APPLY the migrations ---
 clickhouse-connect==0.15.1
 lz4==4.4.5

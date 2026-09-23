@@ -53,6 +53,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	"github.com/full-chaos/dev-health-ops/internal/platform/shell"
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -174,10 +175,14 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 	// same as any other not-yet-ported area.
 	if deps.Pool != nil && deps.Guard != nil {
 		routes = append(routes, admin.Routes(admin.Deps{
-			Pool:   deps.Pool,
-			Valkey: deps.Valkey,
-			Guard:  deps.Guard,
-			Logger: logger,
+			Pool:          deps.Pool,
+			Valkey:        deps.Valkey,
+			Guard:         deps.Guard,
+			Logger:        logger,
+			ClickHouseDSN: deps.ClickHouseDSN,
+			Decryptor:     deps.Decryptor,
+			PagerDuty:     deps.PagerDuty,
+			HTTPDoer:      deps.HTTPDoer,
 		})...)
 	}
 	routes = append(routes, webhookintake.Routes(webhookintake.Deps{
@@ -215,6 +220,18 @@ func configure(
 		ExpectedWorkerGroups: cfg.APIExpectedWorkerGroups,
 	}
 	deps.Telemetry = TelemetryConfig{Endpoint: cfg.TelemetryEndpoint, ValkeyURI: cfg.ValkeyURI.Reveal()}
+	// deps.Decryptor is already set by buildDeps (webhookintake's own
+	// SettingsEncryptionKey gating) when a pool is configured -- the only
+	// case admin.Routes (and its org-deletion PagerDuty revoke call) is
+	// ever mounted at all. PagerDuty is the org-deletion route's own
+	// dependency (CHAOS-6306): the OAuth client config used to revoke a
+	// stored token.
+	deps.PagerDuty = providerfoundation.PagerDutyRevokeConfig{ClientID: cfg.PagerDutyOAuthClientID.Reveal()}
+	// deps.ClickHouseDSN: see Deps' own doc comment for why this is
+	// CLICKHOUSE_URI, never API_CLICKHOUSE_URI.
+	if cfg.ClickHouseURI.Configured() {
+		deps.ClickHouseDSN = cfg.ClickHouseURI.Reveal()
+	}
 	server, err := NewServer(cfg, logger, Routes(deps, logger), scope...)
 	if err != nil {
 		return nil, err

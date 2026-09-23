@@ -67,7 +67,7 @@ import (
 // Go-side round-trip), and "serve" answers a batch of requests with
 // TestClient over the real app.
 const pythonProgram = `
-import base64, json, sys
+import base64, json, os, sys
 mode = sys.argv[1]
 if mode == "migrate":
     from alembic import command
@@ -92,6 +92,24 @@ elif mode == "call":
         out.append(target(*call.get("args", []), **call.get("kwargs", {})))
     print(json.dumps(out))
 elif mode == "serve":
+    # Test-runner-only monkeypatch (never a production src/ edit, CHAOS-6306
+    # condition 2): when set, points PagerDutyOAuthConfig.from_env()'s
+    # revoke_url at a fake endpoint, so a venue test can prove the Go and
+    # Python planes revoke against the SAME fake server without the
+    # production PagerDutyOAuthConfig ever gaining a revoke_url env knob.
+    _pd_revoke_override = os.environ.get("VENUE_PAGERDUTY_REVOKE_URL_OVERRIDE")
+    if _pd_revoke_override:
+        import dataclasses
+        from dev_health_ops.providers.pagerduty import oauth as _pd_oauth
+        _pd_original_from_env = _pd_oauth.PagerDutyOAuthConfig.from_env.__func__
+
+        def _pd_patched_from_env(cls):
+            config = _pd_original_from_env(cls)
+            if config is None:
+                return config
+            return dataclasses.replace(config, revoke_url=_pd_revoke_override)
+
+        _pd_oauth.PagerDutyOAuthConfig.from_env = classmethod(_pd_patched_from_env)
     from fastapi.testclient import TestClient
     from dev_health_ops.api.main import app
     client = TestClient(app, raise_server_exceptions=False, follow_redirects=False)

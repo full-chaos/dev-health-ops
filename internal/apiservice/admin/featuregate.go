@@ -29,11 +29,12 @@ import (
 // A failure of the check itself denies too (Python swallows every exception
 // into False); it is logged loudly here, never silently.
 //
-// Named limit: the Python process-wide LicenseManager (a signed JWT in
-// LICENSE_KEY, self-hosted installs) is not consulted. Without one it is
-// the community tier, which holds none of the three features gated here, so
-// on an install with no process license the two planes agree; an install
-// with one keeps the Python api until it is ported.
+// Named limit: the Python process-wide LicenseManager (a signed key in
+// LICENSE_KEY, self-hosted installs) is not consulted. Without one it is the
+// community tier, which holds none of the three features gated here, so on a
+// process with neither LICENSE_KEY nor LICENSE_PUBLIC_KEY the two planes
+// agree. A Go api process that has either set refuses to start (apiservice
+// buildDeps), so the disagreement can never be served.
 func (h *handlers) requireFeature(ctx context.Context, w http.ResponseWriter, feature, orgID string) bool {
 	allowed, err := h.orgHasFeature(ctx, feature, orgID)
 	if err != nil {

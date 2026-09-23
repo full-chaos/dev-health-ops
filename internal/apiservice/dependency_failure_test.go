@@ -90,6 +90,22 @@ func TestStartupDependencyFailuresNameTheDependency(t *testing.T) {
 			dependency: "api_clickhouse", reason: "api_clickhouse_open_failed",
 			errorText: "ClickHouse readiness check failed",
 		},
+		"process license": {
+			cfg: func(t *testing.T) config.Config {
+				t.Setenv("LICENSE_KEY", "signed-key-value")
+				return config.Config{APIAddress: "127.0.0.1:0"}
+			},
+			dependency: "api_process_license", reason: "api_process_license_unsupported",
+			errorText: "LICENSE_KEY is set",
+		},
+		"process license public key": {
+			cfg: func(t *testing.T) config.Config {
+				t.Setenv("LICENSE_PUBLIC_KEY", "public-key-value")
+				return config.Config{APIAddress: "127.0.0.1:0"}
+			},
+			dependency: "api_process_license", reason: "api_process_license_unsupported",
+			errorText: "LICENSE_PUBLIC_KEY is set",
+		},
 		"server": {
 			cfg:        func(*testing.T) config.Config { return config.Config{} },
 			dependency: "api_server", reason: "api_server_config_failed",
@@ -175,5 +191,20 @@ func TestShellLogsTheStartupDependencyReason(t *testing.T) {
 	}
 	if strings.Contains(output, testCredential) {
 		t.Fatalf("a credential reached the log:\n%s", output)
+	}
+}
+
+func TestProcessLicenseVariableIgnoresUnsetAndEmpty(t *testing.T) {
+	env := map[string]string{"LICENSE_KEY": "", "LICENSE_PUBLIC_KEY": ""}
+	lookup := func(key string) (string, bool) { value, ok := env[key]; return value, ok }
+	if got := processLicenseVariable(lookup); got != "" {
+		t.Fatalf("empty values named %q, want none", got)
+	}
+	if got := processLicenseVariable(func(string) (string, bool) { return "", false }); got != "" {
+		t.Fatalf("unset values named %q, want none", got)
+	}
+	env["LICENSE_PUBLIC_KEY"] = "k"
+	if got := processLicenseVariable(lookup); got != "LICENSE_PUBLIC_KEY" {
+		t.Fatalf("got %q, want LICENSE_PUBLIC_KEY", got)
 	}
 }

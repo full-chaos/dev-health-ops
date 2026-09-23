@@ -2,6 +2,7 @@ package apiservice
 
 import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"os"
 
 	"context"
 	"fmt"
@@ -225,6 +226,11 @@ func buildDeps(
 	var deps Deps
 	var components []lifecycle.Component
 
+	if name := processLicenseVariable(os.LookupEnv); name != "" {
+		return Deps{}, nil, dependencyFailure(ctx, logger, "api_process_license", "api_process_license_unsupported",
+			fmt.Errorf("%s is set: the Go api does not evaluate a process-wide license, and its feature-gated routes would answer differently from the Python api; unset it or keep these routes on the Python api", name))
+	}
+
 	if cfg.APIDatabaseURI.Configured() {
 		pool, err := postgres.New(ctx, postgres.DefaultConfig(cfg.APIDatabaseURI.Reveal()))
 		if err != nil {
@@ -296,4 +302,18 @@ func buildDeps(
 		slog.Bool("webhook_secret_decryptor_configured", deps.Pool != nil && cfg.SettingsEncryptionKey.Configured()),
 	)
 	return deps, components, nil
+}
+
+// processLicenseVariable names the first process-license variable (the signed
+// key and the public key Python's LicenseManager reads from its environment)
+// that holds a value, "" when neither does. The Go feature gates decide from
+// the org's own license rows only, so a process that sets either would serve
+// gated routes differently from Python; start-up refuses instead.
+func processLicenseVariable(lookup func(string) (string, bool)) string {
+	for _, name := range []string{"LICENSE_KEY", "LICENSE_PUBLIC_KEY"} {
+		if value, ok := lookup(name); ok && value != "" {
+			return name
+		}
+	}
+	return ""
 }

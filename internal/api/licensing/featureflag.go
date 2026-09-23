@@ -37,7 +37,7 @@ const (
 // "community". A value that is not a LicenseTier member (compared exactly,
 // as LicenseTier(value) does) is "community", as Python's ValueError
 // fallback is.
-func ResolveOrgTier(ctx context.Context, q stateQueryer, orgID uuid.UUID) (string, error) {
+func ResolveOrgTier(ctx context.Context, q Queryer, orgID uuid.UUID) (string, error) {
 	var licenseTier *string
 	err := q.QueryRow(ctx, `SELECT tier FROM org_licenses WHERE org_id = $1 LIMIT 1`, orgID).Scan(&licenseTier)
 	switch {
@@ -76,7 +76,7 @@ func memberOrCommunity(tier *string) string {
 // function (a pre-migration database) cannot occur on a database the api
 // role's posture check has already accepted, so it is not ported.
 func FeatureFlagState(
-	ctx context.Context, q stateQueryer, orgID uuid.UUID, featureKey, minTier string, now time.Time,
+	ctx context.Context, q Queryer, orgID uuid.UUID, featureKey, minTier string, now time.Time,
 ) (state, tier string, err error) {
 	tier, err = ResolveOrgTier(ctx, q, orgID)
 	if err != nil {
@@ -91,7 +91,7 @@ func FeatureFlagState(
 			return StateDisabled, tier, nil
 		}
 	}
-	loaded, err := loadState(ctx, q, orgID.String(), featureKey, now.UTC())
+	loaded, err := LoadState(ctx, q, orgID.String(), featureKey, now.UTC())
 	if err != nil {
 		return "", "", fmt.Errorf("load feature state: %w", err)
 	}

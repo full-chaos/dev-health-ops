@@ -62,24 +62,9 @@ _MISSING_CASES = [
     # remaining Python producer of this family at any scope. No other verb
     # below requires both tokens together; nothing replaces this row.
     #
-    # CHAOS-5055: daily/rebuild/dora/complexity/release-impact/capacity
-    # dispatch to dev-health-workerctl (worker/Postgres-scoped) instead of
-    # connecting to ClickHouse directly -- they need --org, not
-    # --analytics-db/CLICKHOUSE_URI. dora/complexity/release-impact/capacity
-    # also require --review-evidence at the argparse level now (uniform
-    # policy) -- supplied here so THIS test actually exercises the org
-    # preflight rather than tripping argparse's own required-flag error
-    # first.
-    (("metrics", "daily"), ("organization",)),
-    (("metrics", "dora", "--review-evidence", "x"), ("organization",)),
-    (("metrics", "complexity", "--review-evidence", "x"), ("organization",)),
-    (("metrics", "release-impact", "--review-evidence", "x"), ("organization",)),
-    (
-        ("metrics", "capacity", "--all-teams", "--review-evidence", "x"),
-        ("organization",),
-    ),
+    # The daily/rebuild/dora/complexity/release-impact/capacity wrappers
+    # were deleted at spec S2; `dho workers metrics ...` replaces them.
     (("metrics", "validate-flags"), ("ClickHouse",)),
-    (("metrics", "rebuild"), ("organization",)),
     # CHAOS-5351: `sync work-items` is deleted along with
     # run_work_items_sync_job -- the native provider-sync route is the only
     # production ingest path now, and this Celery-era CLI verb no longer

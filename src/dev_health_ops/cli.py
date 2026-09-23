@@ -194,7 +194,7 @@ def _cmd_maintenance_scrub_error_text(ns: argparse.Namespace) -> int:
 # deleted here -- see the removal note at the `recommendations` group's old
 # registration site in `main()` above for the full rationale. The Go worker's
 # NATIVE `metrics.remaining.recommendations` kind (persisted, generation-
-# deduped) is unaffected; dispatch it via `dev-health-workerctl metrics
+# deduped) is unaffected; dispatch it via `dho workers metrics
 # remaining trigger-backstop --family recommendations`.
 
 
@@ -401,21 +401,12 @@ _REQUIREMENT_ORDER: tuple[str, ...] = (
 
 _COMMAND_REQUIREMENTS: dict[tuple[str, ...], frozenset[str]] = {
     # --- metrics (ClickHouse analytics store) ---
-    # CHAOS-5055: daily/rebuild/dora/complexity/release-impact dispatch to
-    # dev-health-workerctl (worker/Postgres-scoped) instead of connecting to
-    # ClickHouse directly -- they need --org, not --analytics-db/CLICKHOUSE_URI.
-    ("metrics", "daily"): frozenset({_REQ_ORG}),
-    ("metrics", "dora"): frozenset({_REQ_ORG}),
-    ("metrics", "complexity"): frozenset({_REQ_ORG}),
-    ("metrics", "release-impact"): frozenset({_REQ_ORG}),
+    # The daily/rebuild/dora/complexity/release-impact/capacity wrappers
+    # were deleted at spec S2 (run `dho workers metrics ...` instead).
     ("metrics", "validate-flags"): frozenset({_REQ_CLICKHOUSE}),
-    ("metrics", "rebuild"): frozenset({_REQ_ORG}),
     # CHAOS-5308: ("metrics", "compounding-risk") deleted -- the whole CLI
     # verb (job_compounding_risk.py) is gone, no remaining Python producer
     # of this family at any scope.
-    # CHAOS-5055: capacity dispatches to dev-health-workerctl instead of
-    # taking its own ClickHouse DSN -- needs --org, not --db/CLICKHOUSE_URI.
-    ("metrics", "capacity"): frozenset({_REQ_ORG}),
     # --- sync (persist to ClickHouse analytics store) ---
     ("sync", "git"): frozenset({_REQ_CLICKHOUSE}),
     ("sync", "prs"): frozenset({_REQ_CLICKHOUSE}),
@@ -640,10 +631,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     from dev_health_ops.audit.ai_governance import cli as ai_governance_cli
     from dev_health_ops.fixtures import runner as fixtures_runner
-    from dev_health_ops.metrics import (
-        job_ff_validation,
-        workerctl_dispatch,
-    )
+    from dev_health_ops.metrics import job_ff_validation
     from dev_health_ops.processors import sync as sync_processor
     from dev_health_ops.providers import teams as teams_provider
     from dev_health_ops.push import cli as push_cli
@@ -704,9 +692,9 @@ def build_parser() -> argparse.ArgumentParser:
         dest="metrics_command", required=True
     )
 
-    workerctl_dispatch.register_commands(metrics_subparsers)
-    workerctl_dispatch.register_trigger_backstop_commands(metrics_subparsers)
-    workerctl_dispatch.register_capacity_trigger_command(metrics_subparsers)
+    # The daily/rebuild/trigger-backstop/capacity wrappers only exec'd the Go
+    # operator verbs; they are deleted (spec S2). Run `dho workers metrics
+    # ...` directly.
     job_ff_validation.register_commands(metrics_subparsers)
 
     # ---- audit ----
@@ -759,7 +747,7 @@ def build_parser() -> argparse.ArgumentParser:
     # trigger`"). With `compute` gone the group has zero verbs left, so the
     # whole top-level `recommendations` command is removed rather than left
     # as a dead, always-invalid-choice subparser. A Go-native preview verb
-    # (`dev-health-workerctl recommendations preview`) is tracked as a
+    # (`dho workers recommendations preview`) is tracked as a
     # follow-up so the preview capability itself is not lost.
 
     # ---- migrate ----

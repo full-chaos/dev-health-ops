@@ -35,7 +35,7 @@
   },
   "operator_cli": {
     "name": "worker-operator",
-    "binary": "dev-health-workerctl",
+    "binary": "dho",
     "max_concurrent_invocations": 1,
     "queue_control_max_connections": 2,
     "domain_max_connections": 2,

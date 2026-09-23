@@ -129,7 +129,7 @@ Use the worker contract checker and operator CLI help as the exact command sourc
 
 ```bash
 go run ./cmd/worker-contractcheck --help
-go run ./cmd/dev-health-workerctl --help
+go run ./internal/workersctl --help
 ```
 
 Do not change a route from Celery to River without the job-specific shadow, parity, canary, and rollback evidence required by the migration contract.

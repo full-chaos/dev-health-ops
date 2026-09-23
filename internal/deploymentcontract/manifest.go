@@ -424,7 +424,7 @@ func validateMigrationJob(job MigrationJob, budget PostgresBudget) error {
 }
 
 func validateOperatorCLI(operator OperatorCLI) error {
-	if operator.Name != "worker-operator" || operator.Binary != "dev-health-workerctl" ||
+	if operator.Name != "worker-operator" || operator.Binary != "dho" ||
 		operator.MaxConcurrentInvocations != 1 || operator.QueueControlMaxConnections < 1 ||
 		operator.QueueControlMaxConnections > 4 || operator.DomainMaxConnections < 1 ||
 		operator.DomainMaxConnections > 16 ||

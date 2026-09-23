@@ -1,7 +1,7 @@
-// dev-health-workerctl is the authenticated, payload-redacted River operator
+// dho workers is the authenticated, payload-redacted River operator
 // CLI. It deliberately has no network listener and accepts credentials only
 // through WORKER_OPERATOR_TOKEN or WORKER_OPERATOR_TOKEN_FILE.
-package main
+package workersctl
 
 import (
 	"context"
@@ -10,7 +10,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
 	"slices"
 	"sort"
@@ -18,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/deploymentcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/joboperator"
@@ -27,7 +27,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/repair"
 	platformconfig "github.com/full-chaos/dev-health-ops/internal/platform/config"
-	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	platformsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
@@ -44,18 +43,28 @@ import (
 )
 
 const (
-	serviceName            = "dev-health-workerctl"
+	serviceName            = "dho workers"
 	operatorAdvisoryKey    = int64(30330001)
 	defaultDomainRole      = "devhealth_domain"
 	defaultQueueRole       = "devhealth_queue"
 	defaultCoordinatorRole = "devhealth_coordinator"
 )
 
-func main() {
-	// The trigger and replay paths log through slog.Default(); this makes
-	// that the redacting handler, on stderr beside workerctl's JSON errors.
-	logging.InstallDefault(logging.NewJSON(os.Stderr, slog.LevelInfo))
-	os.Exit(execute(context.Background(), os.Args[1:], os.LookupEnv, os.Stdout, os.Stderr))
+// Command is the `dho workers` vertical: the operator CLI that was the
+// dho workers binary (spec S2). Every word after `workers` goes to
+// the verb tree below unchanged, so `dho workers <verb> ...` takes exactly
+// the argv `dho workers <verb> ...` took and writes the same JSON.
+// The trigger and replay paths log through slog.Default(); cli.Main has
+// already made that the redacting JSON handler on stderr.
+func Command() cli.Command {
+	return cli.Command{
+		Name:    "workers",
+		Summary: "operate the Go job runtime: status, jobs, metrics, routes, queues, streams, repairs",
+		Kind:    cli.Verb,
+		Run: func(ctx context.Context, env cli.Env) int {
+			return execute(ctx, env.Args, env.Lookup, env.Stdout, env.Stderr)
+		},
+	}
 }
 
 type operatorRuntime struct {
@@ -2747,7 +2756,13 @@ func writeConfigError(stderr io.Writer, err error) int {
 	return 1
 }
 
+// writeError writes the JSON error and returns the exit code of the dho
+// contract (spec §3): a malformed invocation is a usage error (2), every
+// other failure is 1.
 func writeError(stderr io.Writer, code string) int {
 	_, _ = fmt.Fprintf(stderr, "{\"error\":{\"code\":%q}}\n", code)
-	return 1
+	if code == "invalid_request" {
+		return cli.ExitUsage
+	}
+	return cli.ExitFailure
 }

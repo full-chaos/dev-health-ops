@@ -1,4 +1,4 @@
-package main
+package workersctl
 
 // replay_external_recompute_test.go covers the command surface of the one-shot
 // backlog drain (CHAOS-5296). The collapse and enqueue behaviour it drives is
@@ -22,7 +22,7 @@ func TestDispatchExternalRecomputeRejectsUnknownVerb(t *testing.T) {
 		var stdout, stderr bytes.Buffer
 		code := dispatchExternalRecompute(context.Background(), &operatorRuntime{},
 			args, &stdout, &stderr)
-		if code != 1 || stderr.String() != invalidRequestJSON {
+		if code != 2 || stderr.String() != invalidRequestJSON {
 			t.Fatalf("%s: code=%d stdout=%q stderr=%q", name, code, stdout.String(), stderr.String())
 		}
 	}
@@ -41,7 +41,7 @@ func TestDispatchExternalRecomputeReplayRequiresReviewEvidence(t *testing.T) {
 		var stdout, stderr bytes.Buffer
 		code := dispatchExternalRecomputeReplay(context.Background(), &operatorRuntime{},
 			args[1:], &stdout, &stderr)
-		if code != 1 || stderr.String() != invalidRequestJSON {
+		if code != 2 || stderr.String() != invalidRequestJSON {
 			t.Fatalf("%s review evidence: code=%d stdout=%q stderr=%q",
 				name, code, stdout.String(), stderr.String())
 		}
@@ -57,7 +57,7 @@ func TestDispatchExternalRecomputeReplayRejectsBadFlags(t *testing.T) {
 		var stdout, stderr bytes.Buffer
 		code := dispatchExternalRecomputeReplay(context.Background(), &operatorRuntime{},
 			args, &stdout, &stderr)
-		if code != 1 || stderr.String() != invalidRequestJSON {
+		if code != 2 || stderr.String() != invalidRequestJSON {
 			t.Fatalf("%s: code=%d stdout=%q stderr=%q", name, code, stdout.String(), stderr.String())
 		}
 	}

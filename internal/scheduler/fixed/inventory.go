@@ -562,7 +562,7 @@ func RetiredBeatInventory() []RetiredLegacyEntry {
 				"externalrecompute.NativeDrainTaskName, and the deletion of the Celery task " +
 				"all land in one change, so no version exists that can enqueue the legacy " +
 				"task. Rows written under the old name before the cutover are drained once by " +
-				"`dev-health-workerctl external-recompute replay`.",
+				"`dho workers external-recompute replay`.",
 		},
 		// CHAOS-4026 (2026-08-21): Celery is retired -- zero Python celery
 		// services have run in prod since the 2026-08-19 stop (owner

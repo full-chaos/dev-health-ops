@@ -14,7 +14,7 @@ kind already owned by a terminal run/ledger.
 
 The new ``TerminalOutboxClose`` reconciler step (internal/syncreconciler/
 terminal_outbox_close.go) and its backlog reaper
-(``dev-health-workerctl sync-dispatch-outbox close-backlog``) both scan by
+(``dho workers sync-dispatch-outbox close-backlog``) both scan by
 ``kind`` + ``status = 'dispatched'`` independent of ``sync_run_id`` -- the
 existing ``uq_sync_dispatch_outbox_run_kind`` unique index (sync_run_id, kind)
 does not serve this access path at all, and ``ix_sync_dispatch_outbox_due``

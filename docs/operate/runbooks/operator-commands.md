@@ -1,14 +1,14 @@
 ---
 page_id: op-rb-operator-commands
-summary: Full dev-health-workerctl operator command inventory -- backfill/redrive, blocked-partition repair, team attribution + ownership repair, workgraph rebuild, full reset -- with the Python-legacy verbs it replaces marked or deleted.
+summary: Full dho workers operator command inventory -- backfill/redrive, blocked-partition repair, team attribution + ownership repair, workgraph rebuild, full reset -- with the Python-legacy verbs it replaces marked or deleted.
 content_type: runbook
 owner: platform-operations
 source_of_truth:
-  - cmd/dev-health-workerctl/main.go
-  - cmd/dev-health-workerctl/repair_metrics_execution.go
-  - cmd/dev-health-workerctl/repair_workgraph.go
-  - cmd/dev-health-workerctl/trigger_workgraph.go
-  - cmd/dev-health-workerctl/trigger_investment.go
+  - internal/workersctl/main.go
+  - internal/workersctl/repair_metrics_execution.go
+  - internal/workersctl/repair_workgraph.go
+  - internal/workersctl/trigger_workgraph.go
+  - internal/workersctl/trigger_investment.go
   - docs/go-migration-matrix.md
   - docs/contribute/architecture/team-attribution.md
 applicability: current
@@ -22,7 +22,7 @@ Prod runs the Go worker fleet (River-queue based). Celery workers/Beat were **st
 [Run workers and jobs](../run/workers-and-jobs.md) for the current runtime map.
 {: .fc-page-lede }
 
-Every mutating command below is `dev-health-workerctl` (Go binary; compose service `go-workerctl`, profile
+Every mutating command below is `dho workers` (Go binary; compose service `go-workerctl`, profile
 `go-cutover`). **Pull both profiles explicitly before using it** --
 `--profile go-cutover --profile go-workers pull -q go-workerctl` -- the default `--profile go-workers pull`
 does not include `go-cutover` and a real redrive has already run a stale operator image that silently lacked
@@ -40,14 +40,14 @@ which per verb.
 
 | Command | Source | When to use |
 |---|---|---|
-| `dev-health-workerctl metrics daily-start --org <uuid> --day <YYYY-MM-DD> [--to <YYYY-MM-DD>] [--repo-id <uuid> ...]` | `main.go:957-1033` (`dispatchMetricsDailyStart`, CHAOS-5055) | Start a fresh daily-metrics run for an org/day range (optionally repo-scoped) through the same `StartRunTx` coordinator path the automatic post-sync/fixed-schedule fanout uses. Bounded to 31 days per call. |
-| `dev-health-workerctl metrics daily-redrive --org <uuid> --from <YYYY-MM-DD> --to <YYYY-MM-DD> --review-evidence "<text>"` | `main.go:781-897` (CHAOS-4358) | Repair a run stranded because River discarded every `daily_partition` job dispatched for it. Repairs the compatibility-bridge partition ledger first, then republishes. Bulk path only ever authorizes `retry_safe`, never `confirm_succeeded`. `--review-evidence` is required, free text, no default. |
-| `dev-health-workerctl metrics finalize-redrive --org <uuid> --from <YYYY-MM-DD> --to <YYYY-MM-DD> [--include-succeeded=true\|false] [--dry-run] --review-evidence "<text>"` | `main.go:1295-1378` (CHAOS-4405) | Re-run `metrics.daily_finalize` for a day **already completed**, to backfill fields added later (e.g. `compounding_risk_daily(team)`, `team_cognitive_load_daily` after CHAOS-4399). `--include-succeeded` defaults **true** -- that's the point of this verb; pass `=false` to restrict to the never-attempted/failed/expired-lease subset instead. `--review-evidence` required unless `--dry-run`. |
-| `dev-health-workerctl metrics partition-recompute --org <uuid> --from <YYYY-MM-DD> --to <YYYY-MM-DD> --family repo_user_commit [--dry-run] --review-evidence "<text>"` | `main.go:1623-1694` (CHAOS-4459) | Repair partitions where ALL partitions succeeded but were computed under a now-known-wrong writer (CHAOS-4341's `org_id=''` writer bug). Only recovery path for a "succeeded but wrong" partition. `--family` is restricted to `daily.SupportedPartitionRecomputeFamilies` (today: `repo_user_commit` only) -- it scopes audit intent, not the recompute blast radius: every family in the partition is recomputed, not just the named one. |
-| `dev-health-workerctl metrics remaining start --family <complexity\|dora\|release_impact> --org <uuid> --day <YYYY-MM-DD> [--to <YYYY-MM-DD>] --review-evidence "<text>"` | `main.go:1763-1931` (CHAOS-4254, `internal/jobs/metrics/remaining/manual_backfill.go:77`) | Dispatch a NEW remaining-metrics run for a historical (org, family, day) that was **never dispatched at all** -- outside what `daily-redrive`/`jobs retry` can recover. Bounded to 31 days per call; refuses today and the future (a day still open could race the automatic trigger and double-write). Other families use `trigger-backstop` instead. |
-| `dev-health-workerctl metrics remaining trigger-backstop --family <work_item_attribution\|complexity\|dora\|release_impact\|capacity\|recommendations> --org <uuid> [--day <YYYY-MM-DD>] [--today] --review-evidence "<text>" [--team <uuid>\|--all-teams] [--window <days>]` | `main.go:2148-2285` | Trigger a fixed-schedule backstop family NOW instead of waiting for its own occurrence (e.g. work_item_attribution's watermark-driven recompute). `--day` is a **dedup key for the run this becomes, not a compute window** -- work_item_attribution always recomputes from its live watermark regardless of `--day`. Defaults to yesterday UTC; `--today` is required to target today explicitly (coexists with, never suppresses, the schedule's own occurrence -- the two compete for the family's single worker slot, not correctness). `capacity`/`recommendations` require exactly one of `--team`/`--all-teams`; every other family ignores both. |
-| `dev-hops metrics daily` / `rebuild` | `workerctl_dispatch.py` -> `dev-health-workerctl metrics daily-start` | No longer legacy (CHAOS-5055/#2232): dispatches through the row above instead of computing in Python. The old direct-compute `job_daily.py` CLI wrappers were dead code (unwired, zero callers) and were deleted (CHAOS-5307). |
-| `dev-hops metrics complexity` / `dora` / `capacity` | `workerctl_dispatch.py` -> `metrics remaining trigger-backstop --family <name>` | No longer legacy (CHAOS-5055/#2232): dispatches through the row above instead of computing in Python. The old direct-compute `job_complexity_db.py`/`job_dora.py`/`job_capacity.py` CLI wrappers were dead code (unwired, zero callers) and were deleted (CHAOS-5307). `job_dora.py`/`job_capacity.py` and their compute functions were later deleted outright once the dora/capacity native Go executors landed with no live Python producer left to compare against (CHAOS-5336); `job_complexity_db.py`'s compute function is unaffected by that later sweep. |
+| `dho workers metrics daily-start --org <uuid> --day <YYYY-MM-DD> [--to <YYYY-MM-DD>] [--repo-id <uuid> ...]` | `main.go:957-1033` (`dispatchMetricsDailyStart`, CHAOS-5055) | Start a fresh daily-metrics run for an org/day range (optionally repo-scoped) through the same `StartRunTx` coordinator path the automatic post-sync/fixed-schedule fanout uses. Bounded to 31 days per call. |
+| `dho workers metrics daily-redrive --org <uuid> --from <YYYY-MM-DD> --to <YYYY-MM-DD> --review-evidence "<text>"` | `main.go:781-897` (CHAOS-4358) | Repair a run stranded because River discarded every `daily_partition` job dispatched for it. Repairs the compatibility-bridge partition ledger first, then republishes. Bulk path only ever authorizes `retry_safe`, never `confirm_succeeded`. `--review-evidence` is required, free text, no default. |
+| `dho workers metrics finalize-redrive --org <uuid> --from <YYYY-MM-DD> --to <YYYY-MM-DD> [--include-succeeded=true\|false] [--dry-run] --review-evidence "<text>"` | `main.go:1295-1378` (CHAOS-4405) | Re-run `metrics.daily_finalize` for a day **already completed**, to backfill fields added later (e.g. `compounding_risk_daily(team)`, `team_cognitive_load_daily` after CHAOS-4399). `--include-succeeded` defaults **true** -- that's the point of this verb; pass `=false` to restrict to the never-attempted/failed/expired-lease subset instead. `--review-evidence` required unless `--dry-run`. |
+| `dho workers metrics partition-recompute --org <uuid> --from <YYYY-MM-DD> --to <YYYY-MM-DD> --family repo_user_commit [--dry-run] --review-evidence "<text>"` | `main.go:1623-1694` (CHAOS-4459) | Repair partitions where ALL partitions succeeded but were computed under a now-known-wrong writer (CHAOS-4341's `org_id=''` writer bug). Only recovery path for a "succeeded but wrong" partition. `--family` is restricted to `daily.SupportedPartitionRecomputeFamilies` (today: `repo_user_commit` only) -- it scopes audit intent, not the recompute blast radius: every family in the partition is recomputed, not just the named one. |
+| `dho workers metrics remaining start --family <complexity\|dora\|release_impact> --org <uuid> --day <YYYY-MM-DD> [--to <YYYY-MM-DD>] --review-evidence "<text>"` | `main.go:1763-1931` (CHAOS-4254, `internal/jobs/metrics/remaining/manual_backfill.go:77`) | Dispatch a NEW remaining-metrics run for a historical (org, family, day) that was **never dispatched at all** -- outside what `daily-redrive`/`jobs retry` can recover. Bounded to 31 days per call; refuses today and the future (a day still open could race the automatic trigger and double-write). Other families use `trigger-backstop` instead. |
+| `dho workers metrics remaining trigger-backstop --family <work_item_attribution\|complexity\|dora\|release_impact\|capacity\|recommendations> --org <uuid> [--day <YYYY-MM-DD>] [--today] --review-evidence "<text>" [--team <uuid>\|--all-teams] [--window <days>]` | `main.go:2148-2285` | Trigger a fixed-schedule backstop family NOW instead of waiting for its own occurrence (e.g. work_item_attribution's watermark-driven recompute). `--day` is a **dedup key for the run this becomes, not a compute window** -- work_item_attribution always recomputes from its live watermark regardless of `--day`. Defaults to yesterday UTC; `--today` is required to target today explicitly (coexists with, never suppresses, the schedule's own occurrence -- the two compete for the family's single worker slot, not correctness). `capacity`/`recommendations` require exactly one of `--team`/`--all-teams`; every other family ignores both. |
+| `dev-hops metrics daily` / `rebuild` | deleted (spec S2) | Run `dho workers metrics daily-start` (the row above). |
+| `dev-hops metrics complexity` / `dora` / `capacity` | deleted (spec S2) | Run `dho workers metrics remaining trigger-backstop --family <name>` (the row above). |
 | `dev-hops metrics compounding-risk` | `job_compounding_risk.py` | **Legacy**, duplicate coverage -- `job_daily.py`'s finalize already writes this nightly. |
 | `dev-hops metrics validate-flags` | `job_ff_validation.py` | Read-only diagnostic, no write. Safe to run any time. |
 
@@ -62,17 +62,17 @@ fallback path (retained but skip-gated). Confirm current status against `familie
 
 | Command | Source | When to use |
 |---|---|---|
-| `dev-health-workerctl metrics daily-blocked --org <uuid> [--limit N]` | `main.go:1046-1089` (CHAOS-5040) | Read-only. List blocked runs for an org with failure reasons, failed/succeeded partition counts. No `--repair` flag exists on purpose -- the only safe way out is `daily-redrive`. |
-| `dev-health-workerctl metrics list-ambiguous-executions [--org <uuid>]` | `repair_metrics_execution.go:150-220` | Read-only. Lists `metric_compatibility_executions` rows stuck `state='ambiguous'`. Each row's output includes a ready-to-copy `metrics execution-repair` command with `--execution`/`--expected-state`/`--expected-attempt-count` pre-filled. |
-| `dev-health-workerctl metrics execution-repair --execution <uuid> --expected-state <executing\|ambiguous> --expected-attempt-count <N> --resolution <confirm_succeeded\|retry_safe> --review-evidence "<text>" [--output-evidence '<json>'] [--dry-run]` | `repair_metrics_execution.go:29-113` (CHAOS-5042) | Per-execution repair when a family's readers would SUM-duplicate on a bulk `retry_safe` (e.g. `file_hotspots`). `confirm_succeeded` requires real `--output-evidence` JSON describing the output that already exists; refused for `retry_safe`. |
-| `dev-health-workerctl metrics daily-finalize --run <uuid> --review-evidence "<text>"` **or** `--all-complete [--limit N] --review-evidence "<text>"` | `main.go:1091-1273` (CHAOS-4389, finalize-ledger repair CHAOS-4409) | Repair a run stuck `status='running'` with 100% partitions succeeded whose ONE `metrics.daily_finalize` job was discarded. `--all-complete` only ever touches never-attempted (`finalization_status='pending'`) rows; a run whose finalize already ran needs `--run` individually (a human must confirm it didn't already write real output). |
-| `dev-health-workerctl jobs list [--state <s> ...] [--kind K] [--queue Q] [--limit N]` | `main.go:706-728` | Read-only. Generic River job listing (default states: available/retryable/running/scheduled). |
-| `dev-health-workerctl jobs inspect <id>` | `main.go:729-741` | Read-only. Full job detail by River job id. |
-| `dev-health-workerctl jobs cancel <id> --reason <code> --correlation-id <id>` / `jobs retry <id> --reason <code> --correlation-id <id>` | `main.go:742-769` | Generic job-level cancel/retry, audited via `joboperator.Service`'s Action/audit pipeline (unlike the metrics/workgraph repair verbs, which bypass it -- see each verb's own doc comment). |
-| `dev-health-workerctl workgraph list-ambiguous [--org <uuid>]` | `repair_workgraph.go:77-131` | Read-only. Lists `work_graph_execution_requests` rows stuck `state='ambiguous'` on both the request and its ledger row, unleased. Each row includes a ready-to-copy `workgraph repair` command. |
-| `dev-health-workerctl workgraph list-undelivered [--ceiling-hours N]` | `list_undelivered.go` | Read-only. Counts outbox rows that cannot reach River on their own — pending behind a completion fence that cannot or did not arrive, or dead while their work-graph request stayed pending — grouped by job kind and the reason the reconciler's undelivered sweep assigns. See [undelivered outbox rows](../run/job-recovery-lifecycle.md#undelivered-outbox-rows). |
-| `dev-health-workerctl workgraph repair --request <uuid> --resolution <confirm_succeeded\|retry_safe> --expected-attempt-count <N> --review-evidence "<text>" [--output-evidence '<json>'] [--dry-run]` | `repair_workgraph.go:144-228` (CHAOS-5042) | Repair a stuck `workgraph.build`/`investment.materialize` ledger row. Runs as one Postgres transaction on the operator role (CHAOS-5459); no API bridge or repair token. |
-| `dev-health-workerctl sync-dispatch-outbox close-backlog [--dry-run] [--batch-size N]` | `main.go:1585-1621` (CHAOS-4583) | Drain a pre-existing `sync_dispatch_outbox` backlog; the forward reconciler stage only prevents new backlog, it doesn't retroactively clean an existing one. Not org-scoped. |
+| `dho workers metrics daily-blocked --org <uuid> [--limit N]` | `main.go:1046-1089` (CHAOS-5040) | Read-only. List blocked runs for an org with failure reasons, failed/succeeded partition counts. No `--repair` flag exists on purpose -- the only safe way out is `daily-redrive`. |
+| `dho workers metrics list-ambiguous-executions [--org <uuid>]` | `repair_metrics_execution.go:150-220` | Read-only. Lists `metric_compatibility_executions` rows stuck `state='ambiguous'`. Each row's output includes a ready-to-copy `metrics execution-repair` command with `--execution`/`--expected-state`/`--expected-attempt-count` pre-filled. |
+| `dho workers metrics execution-repair --execution <uuid> --expected-state <executing\|ambiguous> --expected-attempt-count <N> --resolution <confirm_succeeded\|retry_safe> --review-evidence "<text>" [--output-evidence '<json>'] [--dry-run]` | `repair_metrics_execution.go:29-113` (CHAOS-5042) | Per-execution repair when a family's readers would SUM-duplicate on a bulk `retry_safe` (e.g. `file_hotspots`). `confirm_succeeded` requires real `--output-evidence` JSON describing the output that already exists; refused for `retry_safe`. |
+| `dho workers metrics daily-finalize --run <uuid> --review-evidence "<text>"` **or** `--all-complete [--limit N] --review-evidence "<text>"` | `main.go:1091-1273` (CHAOS-4389, finalize-ledger repair CHAOS-4409) | Repair a run stuck `status='running'` with 100% partitions succeeded whose ONE `metrics.daily_finalize` job was discarded. `--all-complete` only ever touches never-attempted (`finalization_status='pending'`) rows; a run whose finalize already ran needs `--run` individually (a human must confirm it didn't already write real output). |
+| `dho workers jobs list [--state <s> ...] [--kind K] [--queue Q] [--limit N]` | `main.go:706-728` | Read-only. Generic River job listing (default states: available/retryable/running/scheduled). |
+| `dho workers jobs inspect <id>` | `main.go:729-741` | Read-only. Full job detail by River job id. |
+| `dho workers jobs cancel <id> --reason <code> --correlation-id <id>` / `jobs retry <id> --reason <code> --correlation-id <id>` | `main.go:742-769` | Generic job-level cancel/retry, audited via `joboperator.Service`'s Action/audit pipeline (unlike the metrics/workgraph repair verbs, which bypass it -- see each verb's own doc comment). |
+| `dho workers workgraph list-ambiguous [--org <uuid>]` | `repair_workgraph.go:77-131` | Read-only. Lists `work_graph_execution_requests` rows stuck `state='ambiguous'` on both the request and its ledger row, unleased. Each row includes a ready-to-copy `workgraph repair` command. |
+| `dho workers workgraph list-undelivered [--ceiling-hours N]` | `list_undelivered.go` | Read-only. Counts outbox rows that cannot reach River on their own — pending behind a completion fence that cannot or did not arrive, or dead while their work-graph request stayed pending — grouped by job kind and the reason the reconciler's undelivered sweep assigns. See [undelivered outbox rows](../run/job-recovery-lifecycle.md#undelivered-outbox-rows). |
+| `dho workers workgraph repair --request <uuid> --resolution <confirm_succeeded\|retry_safe> --expected-attempt-count <N> --review-evidence "<text>" [--output-evidence '<json>'] [--dry-run]` | `repair_workgraph.go:144-228` (CHAOS-5042) | Repair a stuck `workgraph.build`/`investment.materialize` ledger row. Runs as one Postgres transaction on the operator role (CHAOS-5459); no API bridge or repair token. |
+| `dho workers sync-dispatch-outbox close-backlog [--dry-run] [--batch-size N]` | `main.go:1585-1621` (CHAOS-4583) | Drain a pre-existing `sync_dispatch_outbox` backlog; the forward reconciler stage only prevents new backlog, it doesn't retroactively clean an existing one. Not org-scoped. |
 
 Related reference (not a command, background): [Job recovery lifecycle](../run/job-recovery-lifecycle.md) --
 River only rescues a stuck-`running` job after `max(RescueStuckJobsAfter=1h default, kind timeout)`; a job
@@ -99,11 +99,11 @@ Diff it against the same query after step 5. This is a prerequisite, not an opti
 
 | Command | Source | When to use |
 |---|---|---|
-| No manual trigger | `cmd/dev-health-worker/provider_sync.go`'s work-items dataset case (CHAOS-5351) | `work_item_team_attributions` is recomputed automatically: the native Go provider-sync route (river `sync_provider` queue, one work-items case per provider) and webhooks keep it current for every provider, with no operator action needed. `dev-hops sync work-items` is deleted (CHAOS-5351) -- it called the now-deleted `run_work_items_sync_job` directly. `dev-hops backfill run` still exists but now dispatches a provider backfill through the SAME native route (`run_backfill_via_planner`) rather than recomputing attributions on its own; use `dev-health-workerctl jobs list --queue sync_provider --kind <kind>` / `jobs inspect <id>` to inspect what the river queue is doing for a given org's units. |
-| `dev-health-workerctl workgraph trigger --org <uuid> [--from <YYYY-MM-DD>] [--to <YYYY-MM-DD>] --review-evidence "<text>" [--dry-run]` | `trigger_workgraph.go:98-283` (CHAOS-5172) | Step 3: enqueue a fresh `workgraph.build` request through the same `workgraph.RequestWriter.WriteTx` path the automatic post-sync/scheduled producers use. |
-| `dev-health-workerctl investment trigger --org <uuid> [--from <YYYY-MM-DD>] [--to <YYYY-MM-DD>] --review-evidence "<text>" [--dry-run]` | `trigger_investment.go:73-222` (CHAOS-5173) | Step 4, native path: enqueue a fresh `investment.materialize` request through the native executor. Drops every flag with no Go-side equivalent (`--window-days`, `--repo-id`, `--team-id`, every LLM flag, `--force`, `--persist-evidence-snippets`, `--allow-unscoped`, `--analytics-db`/`--db`) -- only an org id and an optional `--from`/`--to` window exist on the request. |
-| `dev-health-workerctl providersync retire-linear-pseudo-projects [--org <uuid>] [--dry-run]` | `main.go:1408-1466` (CHAOS-4530 follow-up) | One-time cleanup of `{org_id}:linear:{team_key}` pseudo-project rows in `projects`. Destructive (physical delete), authorized before any ClickHouse call is attempted. |
-| `dev-health-workerctl providersync retire-stale-linear-project-ownership [--org <uuid>] [--dry-run]` | `main.go:1486-1558` (CHAOS-4548) | One-time cleanup of stale `team_project_ownership` rows still stamped with the old team-key `project_key`. Destructive, same authorization gate as the pseudo-projects cleanup. |
+| No manual trigger | `cmd/dev-health-worker/provider_sync.go`'s work-items dataset case (CHAOS-5351) | `work_item_team_attributions` is recomputed automatically: the native Go provider-sync route (river `sync_provider` queue, one work-items case per provider) and webhooks keep it current for every provider, with no operator action needed. `dev-hops sync work-items` is deleted (CHAOS-5351) -- it called the now-deleted `run_work_items_sync_job` directly. `dev-hops backfill run` still exists but now dispatches a provider backfill through the SAME native route (`run_backfill_via_planner`) rather than recomputing attributions on its own; use `dho workers jobs list --queue sync_provider --kind <kind>` / `jobs inspect <id>` to inspect what the river queue is doing for a given org's units. |
+| `dho workers workgraph trigger --org <uuid> [--from <YYYY-MM-DD>] [--to <YYYY-MM-DD>] --review-evidence "<text>" [--dry-run]` | `trigger_workgraph.go:98-283` (CHAOS-5172) | Step 3: enqueue a fresh `workgraph.build` request through the same `workgraph.RequestWriter.WriteTx` path the automatic post-sync/scheduled producers use. |
+| `dho workers investment trigger --org <uuid> [--from <YYYY-MM-DD>] [--to <YYYY-MM-DD>] --review-evidence "<text>" [--dry-run]` | `trigger_investment.go:73-222` (CHAOS-5173) | Step 4, native path: enqueue a fresh `investment.materialize` request through the native executor. Drops every flag with no Go-side equivalent (`--window-days`, `--repo-id`, `--team-id`, every LLM flag, `--force`, `--persist-evidence-snippets`, `--allow-unscoped`, `--analytics-db`/`--db`) -- only an org id and an optional `--from`/`--to` window exist on the request. |
+| `dho workers providersync retire-linear-pseudo-projects [--org <uuid>] [--dry-run]` | `main.go:1408-1466` (CHAOS-4530 follow-up) | One-time cleanup of `{org_id}:linear:{team_key}` pseudo-project rows in `projects`. Destructive (physical delete), authorized before any ClickHouse call is attempted. |
+| `dho workers providersync retire-stale-linear-project-ownership [--org <uuid>] [--dry-run]` | `main.go:1486-1558` (CHAOS-4548) | One-time cleanup of stale `team_project_ownership` rows still stamped with the old team-key `project_key`. Destructive, same authorization gate as the pseudo-projects cleanup. |
 | Team membership resolution (admin override layer) | `docs/contribute/architecture/team-attribution.md` §CHAOS-4321 | Not a CLI command. Admin panel `/org/admin/identities` writes `identities.team_ids`; `teams.manual_members` is the admin-exclusive override roster. No CLI mutation path exists. |
 
 **Team-attribution recovery order** (`docs/contribute/architecture/team-attribution.md` §5): (1) merge +
@@ -119,7 +119,7 @@ resolution (admin override in `identities`/`teams.manual_members`, else provider
 
 ## Workerctl on Kubernetes (Trap #169, amended)
 
-**No pod on k8s carries both `dev-health-workerctl` AND the coordinator DSN it needs.** The workerctl binary ships only in the go-worker image, but `COORDINATOR_DATABASE_URI` is set only on scheduler and reconciler Deployments.
+**No pod on k8s carries both `dho workers` AND the coordinator DSN it needs.** The workerctl binary ships only in the go-worker image, but `COORDINATOR_DATABASE_URI` is set only on scheduler and reconciler Deployments.
 
 **Solution: one-off corrective Pod.** Apply a temporary Pod manifest with secrets via `secretKeyRef` (never flags/argv — Trap #121, R167):
 
@@ -127,7 +127,7 @@ resolution (admin override in `identities`/`teams.manual_members`, else provider
 apiVersion: v1
 kind: Pod
 metadata:
-  name: dev-health-workerctl-oneoff
+  name: dho-workers-oneoff
   namespace: default
 spec:
   serviceAccountName: default
@@ -161,7 +161,7 @@ spec:
 
 The runtime is distroless (no shell); one Pod per verb. Delete after completion:
 ```bash
-kubectl delete pod dev-health-workerctl-oneoff
+kubectl delete pod dho-workers-oneoff
 ```
 
 **Required**: `--review-evidence` is REQUIRED on trigger verbs **even with `--dry-run`** (unlike `finalize-redrive` where dry-run omits it). Never use `--daily-redrive` on already-succeeded days.
@@ -170,7 +170,7 @@ kubectl delete pod dev-health-workerctl-oneoff
 
 | Command | Source | When to use |
 |---|---|---|
-| `dev-health-workerctl workgraph trigger ...` | `trigger_workgraph.go:98-283` (CHAOS-5172) | Enqueue a FRESH `workgraph.build` request through the same coordinator path the automatic producers use, instead of a second, unguarded Python compute. |
+| `dho workers workgraph trigger ...` | `trigger_workgraph.go:98-283` (CHAOS-5172) | Enqueue a FRESH `workgraph.build` request through the same coordinator path the automatic producers use, instead of a second, unguarded Python compute. |
 No legacy `dev-hops` rows remain here: `dev-hops work-graph build` (`work_graph/runner.py`'s `run_work_graph_build`) is DELETED under CHAOS-4924 -- `WorkGraphBuilder.build()` had shrunk to a 0-stats no-op by then. `dev-hops investment materialize` is DELETED under CHAOS-5173 -- it was a separate, direct-Python-compute entry point from the native `investment.materialize` River kind. Use `workgraph trigger` / `investment trigger` above.
 
 See §(c) above for the full ordered recovery sequence these two commands participate in.

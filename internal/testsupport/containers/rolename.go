@@ -71,7 +71,7 @@ func DatabaseName(uri string) (string, error) {
 // -- far more than two concurrent lanes need to avoid a collision -- while
 // keeping `<existing role literal>_<suffix>` inside PostgreSQL's 63-byte
 // NAMEDATALEN even for this repository's longest existing role literal
-// (29 characters, cmd/dev-health-workerctl). Using the FULL database name
+// (29 characters, internal/workersctl). Using the FULL database name
 // instead (which also carries a lane prefix, e.g. "lane_4661_scratch_...")
 // would risk PostgreSQL silently truncating two different generated role
 // names to the same 63-byte prefix, defeating the uniqueness this exists to

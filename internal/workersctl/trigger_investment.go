@@ -1,4 +1,4 @@
-// trigger_investment.go: `dev-health-workerctl investment trigger` (CHAOS-5173).
+// trigger_investment.go: `dho workers investment trigger` (CHAOS-5173).
 //
 // `dev-hops investment materialize` (src/dev_health_ops/work_graph/runner.py:281,
 // calling materialize_investments from work_graph/investment/materialize.py)
@@ -31,7 +31,7 @@
 // (--llm-provider/--model/--llm-api-key/--llm-base-url/--llm-concurrency/
 // --llm-batch-*, all resolved server-side); --persist-evidence-snippets,
 // --force, --allow-unscoped, --analytics-db/--db.
-package main
+package workersctl
 
 import (
 	"context"
@@ -53,7 +53,7 @@ import (
 // its own namespace so none can ever collide with another's.
 var manualInvestmentTriggerNamespace = uuid.MustParse("6a1d3f47-8c2e-4a9b-b5f0-1e6d2c8a9b34")
 
-// dispatchInvestment routes `dev-health-workerctl investment ...`. Only
+// dispatchInvestment routes `dho workers investment ...`. Only
 // `trigger` exists today; unlike `workgraph`, there is no `investment
 // repair`/`list-ambiguous` -- stuck investment.materialize requests are
 // resolved through `workgraph repair` (repair_workgraph.go), since both

@@ -18,7 +18,7 @@ lifecycle: active
 Companion to [`python-go-live-path-ledger.md`](reference/runtime/python-go-live-path-ledger.md) (narrative +
 mermaid diagrams) and [`contracts/provider-matrix/v1/README.md`](https://github.com/full-chaos/dev-health-ops/blob/main/contracts/provider-matrix/v1/README.md)
 (the frozen provider x dataset parity contract, CUT-08). This page's top-level sections mirror the operator's
-own mental model -- the CLI areas `dev-hops`/`dev-health-workerctl` expose -- with the generated,
+own mental model -- the CLI areas `dev-hops`/`dho workers` expose -- with the generated,
 drift-gated tables nested under them (chris, 2026-09-04). Every generated table's Executor column answers
 "who runs this today":
 
@@ -50,7 +50,7 @@ registration wiring, so no curated Python dict or hand-set JSON field can silent
 worker actually executes. INVESTMENT/WORK-GRAPH's table is entirely hand-curated (no registry file exists
 for those 5 kinds; see [Known gaps](#known-gaps-not-fixed-in-this-pr)). Every CLI-verb sub-table under SYNC/
 METRICS/RECOMMENDATIONS/WEBHOOKS/STREAMS/SCHEDULER-RECONCILER-OPERATOR is hand-curated prose (read against
-both CLI trees -- Python `dev_health_ops.cli` and Go `cmd/dev-health-workerctl`/`dev-health-stream-runner` --
+both CLI trees -- Python `dev_health_ops.cli` and Go `internal/workersctl`/`dev-health-stream-runner` --
 at the pinned sha below), because no JSON registry maps a CLI verb to a River kind or Python entrypoint.
 
 Regenerate the generated tables after any change to a source-of-truth file:
@@ -98,7 +98,7 @@ go run ./cmd/dev-health-migration-matrix -render -root .
 ```
 
 **Re-read on 2026-09-20.** Every hand-curated citation and CLI-verb row on this page was re-checked against
-`1205ec23c1cf` (see the PR body for the per-row audit table): the `cmd/dev-health-workerctl/main.go` verb-group
+`1205ec23c1cf` (see the PR body for the per-row audit table): the `internal/workersctl/main.go` verb-group
 ranges (`providersync`, `sync-dispatch-outbox`, `metrics` daily/finalize, `metrics remaining`) had drifted with file growth and
 were corrected to the current function bounds; the seven `river, native` remaining-family citations had pointed
 at unrelated lines of `daily.go` and now name each family's own block in `cmd/dev-health-worker/daily.go`; the
@@ -342,8 +342,8 @@ tooling and Python trigger shells over the same native path:
 | CLI verb/area | Executor | Writer call site | Ticket |
 |---|---|---|---|
 | `dev-hops sync` (git/prs/blame/cicd/deployments/incidents/teams/work-items) | NATIVE (worker-side; Python CLI verbs are operator-trigger shells over the same Go sync-dispatch path, `sync_processor.register_commands`) | `internal/providersync/*` -- see the generated table below, all NATIVE (jira team/project/membership catalog collection moved to `JiraTeamCatalogCollector` last) | -- |
-| `dev-health-workerctl providersync retire-linear-pseudo-projects` / `retire-stale-linear-project-ownership` | NATIVE | `cmd/dev-health-workerctl/main.go:1423-1602` | -- |
-| `dev-health-workerctl sync-dispatch-outbox close-backlog` | NATIVE | `cmd/dev-health-workerctl/main.go:1605-1665` | -- |
+| `dho workers providersync retire-linear-pseudo-projects` / `retire-stale-linear-project-ownership` | NATIVE | `internal/workersctl/main.go:1423-1602` | -- |
+| `dho workers sync-dispatch-outbox close-backlog` | NATIVE | `internal/workersctl/main.go:1605-1665` | -- |
 
 ### Provider sync, by provider x dataset (generated from `contracts/provider-matrix/v1/matrix.json`)
 
@@ -451,13 +451,13 @@ which had been unreachable dead code (never wired into `cli.py`'s argparse tree)
 
 | CLI verb | Executor | Writer call site | Ticket |
 |---|---|---|---|
-| `dev-hops metrics daily` / `rebuild` | NATIVE (dispatch) | `workerctl_dispatch.py` `_cmd_metrics_daily`/`_cmd_metrics_rebuild` -> `dev-health-workerctl metrics daily-start` -- the worker's own all-native partition handler computes the rest (CHAOS-5055/#2232; the Python bridge is gone, CHAOS-3092 PR-A). The old direct-Python-compute `job_daily.py` `_cmd_metrics_daily`/`_cmd_metrics_rebuild` (never wired into `cli.py`, zero callers) were deleted (CHAOS-5307); `run_daily_metrics_job`/`run_daily_metrics_finalize` themselves are unaffected -- other live callers remain (the worker bridge, fixtures, tests; `scripts/compute_metrics_daily.py` was itself deleted, CHAOS-5254/#2306) | CHAOS-5055/CHAOS-5307 |
-| `dev-health-workerctl metrics partition-recompute` | PARTIAL | `internal/jobs/metrics/daily/partition_recompute.go` -- Go-native REDRIVE only (bumps `daily_metrics_runs.generation`, republishes the partition claim); the recompute itself is the ordinary all-native partition handler re-running every family for the reset days (no Python on this path), not a compute engine on its own. `--family` (repo_user_commit only) scopes audit intent, not blast radius: every family in the partition is recomputed; the daily-family output tables are ReplacingMergeTree since migration 096 and Go readers dedup, while `compounding_risk_daily` is append-only MergeTree with reader-side argMax, so a recompute appends duplicate physical rows there by design. Known gaps: days whose run generation was replaced by finalize-redrive are excluded from eligibility | CHAOS-4459 |
-| `dev-health-workerctl metrics daily-redrive` / `daily-finalize` / `finalize-redrive` | NATIVE (ledger repair) -> replays the ordinary all-native handler | `cmd/dev-health-workerctl/main.go:821-953,1164-1420` (`dispatchMetrics`'s inline `daily-redrive` case, `dispatchMetricsDailyFinalize`, `finalizeLedgerRepairGate`, `dispatchMetricsFinalizeRedrive`) | CHAOS-4358/4389/4405 |
-| `dev-hops metrics complexity` / `dora` / `capacity` | NATIVE (dispatch) | `workerctl_dispatch.py` -> `dev-health-workerctl metrics remaining trigger-backstop --family <complexity\|dora\|capacity>` (CHAOS-5055/#2232). The old direct-Python-compute `job_complexity_db.py`/`job_dora.py`/`job_capacity.py` CLI wrappers (never wired into `cli.py`, zero callers) were deleted (CHAOS-5307). `job_dora.py`/`job_capacity.py` and `compute_dora.py` are now deleted outright (CHAOS-5336): the native `DORAExecutor` (`internal/jobs/metrics/remaining/dora_native.go`, `dora_native_clickhouse.go`) is the sole DORA producer, with no Python fallback left to guard against drifting from -- proved end to end against a real Postgres+ClickHouse pair by `dora_pagerduty_incident_restore_time_integration_test.go`. `compute_capacity.py`/`metrics/forecast.py` survive as API-only Python -- CHAOS-5349 landed the Go query-api port of the three GraphQL operations that call them (`capacityForecast`/`capacityForecasts` -> `cmd/query-api/internal/capacityforecast/`, `throughputForecast` -> `cmd/query-api/internal/throughputforecast/`, all three registered in `cmd/query-api/query_route.go`'s `digestByOperation`), `query_route.go` routes through the fail-closed `routeswitch.PostgresSwitch` (`cmd/query-api/internal/routeswitch/postgres_switch.go:123 Enabled`), which serves Go traffic for an operation once its `go_api_routing_state` row says so. The Python field bodies for these three operations raise `GoServedOperationUnavailableError`: with no routing row, or when query-api fails, the field returns a GraphQL error and Python never answers. The Python resolvers (`resolvers/capacity.py`, `resolvers/forecast.py`) and `metrics/capacity_queries.py` do not exist; `compute_capacity.py`/`metrics/forecast.py` remain only as parity oracles for the Go kernels. `metrics release-impact`'s own module (`job_release_impact.py`) no longer exists as a file at all. | CHAOS-5055/CHAOS-5307/CHAOS-5336/CHAOS-5349 |
+| `dev-hops metrics daily` / `rebuild` | DELETED (spec S2) | The wrappers only exec'd `dho workers metrics daily-start`; run that verb directly. | -- |
+| `dho workers metrics partition-recompute` | PARTIAL | `internal/jobs/metrics/daily/partition_recompute.go` -- Go-native REDRIVE only (bumps `daily_metrics_runs.generation`, republishes the partition claim); the recompute itself is the ordinary all-native partition handler re-running every family for the reset days (no Python on this path), not a compute engine on its own. `--family` (repo_user_commit only) scopes audit intent, not blast radius: every family in the partition is recomputed; the daily-family output tables are ReplacingMergeTree since migration 096 and Go readers dedup, while `compounding_risk_daily` is append-only MergeTree with reader-side argMax, so a recompute appends duplicate physical rows there by design. Known gaps: days whose run generation was replaced by finalize-redrive are excluded from eligibility | CHAOS-4459 |
+| `dho workers metrics daily-redrive` / `daily-finalize` / `finalize-redrive` | NATIVE (ledger repair) -> replays the ordinary all-native handler | `internal/workersctl/main.go:821-953,1164-1420` (`dispatchMetrics`'s inline `daily-redrive` case, `dispatchMetricsDailyFinalize`, `finalizeLedgerRepairGate`, `dispatchMetricsFinalizeRedrive`) | CHAOS-4358/4389/4405 |
+| `dev-hops metrics complexity` / `dora` / `capacity` | DELETED (spec S2) | The wrappers only exec'd `dho workers metrics remaining trigger-backstop --family <name>`; run that verb directly. | -- |
 | `dev-hops metrics validate-flags` | **N/A -- confirmed still a read-only diagnostic**, no ClickHouse write, no worker path | `job_ff_validation.py` `_cmd_validate_flags` -> `run_validate_flags` (prints a report only) | -- |
 | `dev-hops metrics compounding-risk` | DELETED (CHAOS-5308) -- was a standalone CLI backfill wrapper, duplicate coverage of `job_daily.py`'s finalize (which already writes `compounding_risk_daily` nightly regardless); `job_compounding_risk.py` deleted whole, along with its orchestrator (`build_compounding_risk_rows_for_day`, `compounding_risk.py`) -- no remaining Python producer of this family at any scope | -- | CHAOS-4287/CHAOS-5308 |
-| `dev-health-workerctl metrics remaining start` | NATIVE (manual backfill trigger) | `cmd/dev-health-workerctl/main.go:1829-1977` (`dispatchMetricsRemaining`'s `start` case) -- help text is stale, only lists complexity/dora/release_impact (doesn't mention membership_backfill/recommendations/work_item_attribution, which also exist) | CHAOS-4254 |
+| `dho workers metrics remaining start` | NATIVE (manual backfill trigger) | `internal/workersctl/main.go:1829-1977` (`dispatchMetricsRemaining`'s `start` case) -- help text is stale, only lists complexity/dora/release_impact (doesn't mention membership_backfill/recommendations/work_item_attribution, which also exist) | CHAOS-4254 |
 | membership_backfill / cognitive load / benchmarking | no dedicated Python CLI verb found | see the two tables below | -- |
 
 ### Daily metrics families (`internal/jobs/metrics/daily/families.json`)
@@ -545,9 +545,9 @@ deleted, the frozen file and this one test survive.
 
 `dev-hops work-graph build` (`work_graph/runner.py run_work_graph_build`) is DELETED under
 CHAOS-4924 -- `WorkGraphBuilder.build()` had shrunk to a 0-stats no-op by then; use
-`dev-health-workerctl workgraph trigger` instead (table below).
+`dho workers workgraph trigger` instead (table below).
 
-`dev-hops investment materialize` was deleted entirely (CHAOS-5173) -- it was a separate, direct-Python-compute entry point from the `investment.materialize` River kind (NATIVE, table below); `dev-health-workerctl investment trigger` (see §(c)/(d) in `docs/operate/runbooks/operator-commands.md`) is the only CLI path now, and it goes through the native executor like the automatic producers do.
+`dev-hops investment materialize` was deleted entirely (CHAOS-5173) -- it was a separate, direct-Python-compute entry point from the `investment.materialize` River kind (NATIVE, table below); `dho workers investment trigger` (see §(c)/(d) in `docs/operate/runbooks/operator-commands.md`) is the only CLI path now, and it goes through the native executor like the automatic producers do.
 
 No COMPAT-Python CLI verbs remain in this section (CHAOS-3092 close condition).
 
@@ -604,7 +604,7 @@ All NATIVE, no Python involvement found in any of the three:
 |---|---|---|
 | `dev-health-scheduler` | NATIVE | `cmd/dev-health-scheduler/` -- writes `worker_job_outbox` only |
 | `dev-health-reconciler` | NATIVE | `cmd/dev-health-reconciler/` -- relays outbox into `river_job` |
-| `dev-health-workerctl` (operator CLI: status/jobs/queues/routes/job-routes/contracts) | NATIVE | pure Go, no Python calls found in this CLI's own dispatch tree |
+| `dho workers` (operator CLI: status/jobs/queues/routes/job-routes/contracts) | NATIVE | pure Go, no Python calls found in this CLI's own dispatch tree |
 
 ## Out of migration scope (Python by design)
 

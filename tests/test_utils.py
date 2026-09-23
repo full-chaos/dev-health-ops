@@ -273,7 +273,7 @@ class TestBatchProcessingCLIArguments:
 
     def test_metrics_daily_no_longer_accepts_provider(self):
         """CHAOS-5055: `metrics daily` now dispatches to
-        `dev-health-workerctl metrics daily-start` instead of computing in
+        `dho workers metrics daily-start` instead of computing in
         Python directly, and --provider has no equivalent on that path (the
         worker's native/bridge split decides this per family, not the
         caller). This pins the removal instead of a stale default."""
@@ -499,7 +499,7 @@ class TestCLIPlumbing:
         """CHAOS-5173: `dev-hops investment materialize` is deleted entirely --
         a direct-Python-compute CLI entry point separate from the
         `investment.materialize` River kind (NATIVE since CHAOS-4441).
-        `dev-health-workerctl investment trigger` is the only CLI path now.
+        `dho workers investment trigger` is the only CLI path now.
         This pins the removal instead of stale root/leaf-argument-plumbing
         assertions, matching test_grafana_subcommand_removed above."""
         parser = build_parser()

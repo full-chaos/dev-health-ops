@@ -150,7 +150,7 @@ The foundation provides:
 - `dev-health-scheduler` — bounded schedule-evaluation foundation;
 - `dev-health-reconciler` — route-safe outbox and River reconciliation loop;
 - `dev-health-stream-runner` — stream-oriented process foundation;
-- `dev-health-workerctl` — payload-redacted operator CLI;
+- `dho workers` — payload-redacted operator CLI;
 - `worker-contractcheck` — job registry, route, profile, capability, and migration-state validation.
 
 Shared packages under `internal/` cover configuration, health, lifecycle, logging, secrets, PostgreSQL, ClickHouse, Valkey, River, job contracts, operator controls, outbox, scheduler, reconciler, and test harnesses.

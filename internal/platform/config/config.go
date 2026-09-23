@@ -1051,7 +1051,7 @@ func envOrDefault(lookup secrets.LookupEnv, key, fallback string) string {
 // unescaped URI can "successfully" parse with credential material
 // misattributed into the path, and no denylist of suspicious characters
 // guards against that. Callers report form="uri" with no name at all.
-// Exported so cmd/dev-health-worker-migrate and cmd/dev-health-workerctl
+// Exported so cmd/dev-health-worker-migrate and internal/workersctl
 // apply the identical rule.
 func ComponentDatabaseIdentity(scheme string, built secrets.Value) string {
 	if !built.Configured() {
@@ -1071,7 +1071,7 @@ func ComponentDatabaseIdentity(scheme string, built secrets.Value) string {
 // defense in depth.
 //
 // One JSON diagnostic writer, shared by every Go entry point that can
-// surface a configuration error: cmd/dev-health-workerctl and
+// surface a configuration error: internal/workersctl and
 // cmd/dev-health-worker-migrate for a
 // ResolveDSN/ResolveDSNFromComponents/secrets.Resolve error, and
 // internal/platform/shell.Execute (dev-health-worker, the reconciler, the
@@ -1420,7 +1420,7 @@ func (spec ComponentSpec) setComponentKeys(lookup secrets.LookupEnv) (keys []str
 // ClickHouseSpec are the canonical component definitions for CHAOS-5560's
 // four Load()-resolved DSNs, exported so every caller that needs one of
 // these connections shares the exact same field names and defaults:
-// cmd/dev-health-workerctl once read
+// internal/workersctl once read
 // POSTGRES_URI/WORKER_DATABASE_URI/COORDINATOR_DATABASE_URI/CLICKHOUSE_URI
 // directly instead of going through Load(), which meant it could not use
 // the component form at all; it now calls ResolveDSN with these same specs

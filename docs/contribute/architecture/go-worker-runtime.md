@@ -55,7 +55,7 @@ below is derived from it.
 | `stream-pagerduty` | `dev-health-stream-runner` | Valkey streams | none | 60s |
 
 The run-once steps are `go-river-provision`, `go-river-migrate`, and
-`go-contractcheck`; the operator CLI is `dev-health-workerctl`. Their ordering
+`go-contractcheck`; the operator CLI is `dho workers`. Their ordering
 is a hard dependency chain — see [Deployment couplings](#deployment-couplings).
 
 A worker consumes exactly the queues it is given and constructs exactly the
@@ -215,7 +215,7 @@ there. The constructor does not decide the pool; the caller's role does. A
 constructor being "already used somewhere" is therefore no evidence at all
 about which pool it belongs on in a new caller.
 
-**`dev-health-workerctl`** — `cmd/dev-health-workerctl/main.go`.
+**`dho workers`** — `internal/workersctl/main.go`.
 
 | Component | Constructed at | Pool |
 | --- | --- | --- |
@@ -998,7 +998,7 @@ That distinction has exactly four consumers, and none of them route:
 | Consumer | What it does with the group label |
 | --- | --- |
 | `worker_instances` presence / `EXPECTED_WORKER_GROUPS` health (CHAOS-3942) | `deploy/kubernetes/go-workers.yaml`'s `EXPECTED_WORKER_GROUPS` ConfigMap key (`heavy,ops,sync,sync-provider`) tells `/health/workers` which presence rows to expect before it flips from Celery-authoritative to Go-authoritative. It deliberately excludes `reconciler`/`scheduler`/`stream-*`: those run a separate role with their own `/healthz` and never register `worker_instances` presence. An earlier reconciler cut misread this variable as a *rollback-safety* declaration (`cmd/dev-health-reconciler/dependencies.go`, the `buildUnreclaimableSweep` doc comment) — wrong, because the variable's own contract excludes the reconciler and because rollback safety already rests on the durable `worker_job_routes` row, not on an env list. |
-| `workerctl workers status` grouping | `cmd/dev-health-workerctl/main.go`'s `manifestQueueStatusSource.Status` keys live presence rows by `WorkerPresenceSummary.WorkerGroup` and cross-checks each group's queue set against the deployment manifest (`slices.Equal(summary.Queues, queues)`) — a display and consistency check, not a dispatch decision. |
+| `workerctl workers status` grouping | `internal/workersctl/main.go`'s `manifestQueueStatusSource.Status` keys live presence rows by `WorkerPresenceSummary.WorkerGroup` and cross-checks each group's queue set against the deployment manifest (`slices.Equal(summary.Queues, queues)`) — a display and consistency check, not a dispatch decision. |
 | `joboperator` drain-and-mutation targeting | `internal/joboperator/service.go`'s `Queues`, `Drain`, and `Undrain` all take a `group string` and validate it with `isValidWorkerGroup` before acting. An operator drains *a group* (a named, deployed set of replicas) — the group answers "which replicas do I signal," never "which queue does this job kind go to." |
 | Log labels | `Config.LogAttrs` (`internal/platform/config/config.go:764-767`) emits `worker_group` as a `slog` attribute alongside `queue_workers`, purely so a log line can be filtered to one deployed group. |
 
@@ -1528,7 +1528,7 @@ network; a lookup that works from one stack can fail from another.
 
 ## Operator surface
 
-`dev-health-workerctl` is a coordinator binary: its first database action —
+`dho workers` is a coordinator binary: its first database action —
 authenticating the operator token against `internal_service_credentials` — is a
 coordinator-exclusive read. It needs `COORDINATOR_DATABASE_URI`, and **not every
 worker image carries it**; `go-worker-heavy` does not, while `go-reconciler`

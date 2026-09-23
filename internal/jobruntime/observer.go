@@ -292,7 +292,7 @@ type DailyMetricsBlockedRunObserver interface {
 // still read as live. A nil observer makes this a silent no-op, matching
 // every other observer in this package: telemetry must never gate durable
 // state. See ObserveDailyMetricsFinalizeLedgerRepair's own doc comment for
-// why no production caller wires this from `dev-health-workerctl` today.
+// why no production caller wires this from `dho workers` today.
 type DailyMetricsFinalizeLedgerRepairObserver interface {
 	ObserveDailyMetricsFinalizeLedgerRepair(outcome string, count int) error
 }

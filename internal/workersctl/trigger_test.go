@@ -1,4 +1,4 @@
-package main
+package workersctl
 
 import (
 	"bytes"
@@ -21,7 +21,7 @@ func TestDispatchWorkgraphTriggerRequiresOrg(t *testing.T) {
 	code := dispatchWorkgraph(context.Background(), &operatorRuntime{}, []string{
 		"trigger", "--review-evidence", "testing",
 	}, &stdout, &stderr)
-	if code != 1 || stderr.String() != invalidRequestJSON {
+	if code != 2 || stderr.String() != invalidRequestJSON {
 		t.Fatalf("missing --org: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }
@@ -31,7 +31,7 @@ func TestDispatchWorkgraphTriggerRequiresReviewEvidence(t *testing.T) {
 	code := dispatchWorkgraph(context.Background(), &operatorRuntime{}, []string{
 		"trigger", "--org", validTriggerOrg,
 	}, &stdout, &stderr)
-	if code != 1 || stderr.String() != invalidRequestJSON {
+	if code != 2 || stderr.String() != invalidRequestJSON {
 		t.Fatalf("missing --review-evidence: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }
@@ -41,7 +41,7 @@ func TestDispatchWorkgraphTriggerRejectsInvalidOrg(t *testing.T) {
 	code := dispatchWorkgraph(context.Background(), &operatorRuntime{}, []string{
 		"trigger", "--org", "not-a-uuid", "--review-evidence", "testing",
 	}, &stdout, &stderr)
-	if code != 1 || stderr.String() != invalidRequestJSON {
+	if code != 2 || stderr.String() != invalidRequestJSON {
 		t.Fatalf("invalid org: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }
@@ -51,7 +51,7 @@ func TestDispatchWorkgraphTriggerRejectsMalformedDate(t *testing.T) {
 	code := dispatchWorkgraph(context.Background(), &operatorRuntime{}, []string{
 		"trigger", "--org", validTriggerOrg, "--review-evidence", "testing", "--from", "not-a-date",
 	}, &stdout, &stderr)
-	if code != 1 || stderr.String() != invalidRequestJSON {
+	if code != 2 || stderr.String() != invalidRequestJSON {
 		t.Fatalf("malformed --from: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }
@@ -190,7 +190,7 @@ func TestDispatchInvestmentTriggerRequiresOrg(t *testing.T) {
 	code := dispatchInvestment(context.Background(), &operatorRuntime{}, []string{
 		"trigger", "--review-evidence", "testing",
 	}, &stdout, &stderr)
-	if code != 1 || stderr.String() != invalidRequestJSON {
+	if code != 2 || stderr.String() != invalidRequestJSON {
 		t.Fatalf("missing --org: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }
@@ -200,7 +200,7 @@ func TestDispatchInvestmentTriggerRequiresReviewEvidence(t *testing.T) {
 	code := dispatchInvestment(context.Background(), &operatorRuntime{}, []string{
 		"trigger", "--org", validTriggerOrg,
 	}, &stdout, &stderr)
-	if code != 1 || stderr.String() != invalidRequestJSON {
+	if code != 2 || stderr.String() != invalidRequestJSON {
 		t.Fatalf("missing --review-evidence: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }
@@ -210,7 +210,7 @@ func TestDispatchInvestmentTriggerRejectsInvalidOrg(t *testing.T) {
 	code := dispatchInvestment(context.Background(), &operatorRuntime{}, []string{
 		"trigger", "--org", "not-a-uuid", "--review-evidence", "testing",
 	}, &stdout, &stderr)
-	if code != 1 || stderr.String() != invalidRequestJSON {
+	if code != 2 || stderr.String() != invalidRequestJSON {
 		t.Fatalf("invalid org: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }
@@ -218,7 +218,7 @@ func TestDispatchInvestmentTriggerRejectsInvalidOrg(t *testing.T) {
 func TestDispatchInvestmentDispatchesUnknownVerb(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := dispatchInvestment(context.Background(), &operatorRuntime{}, []string{"bogus"}, &stdout, &stderr)
-	if code != 1 || stderr.String() != invalidRequestJSON {
+	if code != 2 || stderr.String() != invalidRequestJSON {
 		t.Fatalf("unknown investment verb should be invalid_request: code=%d stderr=%q", code, stderr.String())
 	}
 }
@@ -339,7 +339,7 @@ func TestDispatchWorkgraphTriggerRejectsContractInvalidOrg(t *testing.T) {
 	code := dispatchWorkgraph(context.Background(), commandRuntime(t, commandAuthorizer{}), []string{
 		"trigger", "--org", contractInvalidOrg, "--review-evidence", "testing", "--dry-run",
 	}, &stdout, &stderr)
-	if code != 1 || stderr.String() != invalidRequestJSON {
+	if code != 2 || stderr.String() != invalidRequestJSON {
 		t.Fatalf("contract-invalid org: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }
@@ -350,7 +350,7 @@ func TestDispatchInvestmentTriggerRejectsContractInvalidOrg(t *testing.T) {
 	code := dispatchInvestment(context.Background(), commandRuntime(t, commandAuthorizer{}), []string{
 		"trigger", "--org", contractInvalidOrg, "--review-evidence", "testing", "--dry-run",
 	}, &stdout, &stderr)
-	if code != 1 || stderr.String() != invalidRequestJSON {
+	if code != 2 || stderr.String() != invalidRequestJSON {
 		t.Fatalf("contract-invalid org: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }
@@ -367,7 +367,7 @@ func TestDispatchWorkgraphTriggerRejectsYearZeroScope(t *testing.T) {
 		"trigger", "--org", validTriggerOrg, "--review-evidence", "testing",
 		"--from", "0000-01-01", "--dry-run",
 	}, &stdout, &stderr)
-	if code != 1 || stderr.String() != invalidRequestJSON {
+	if code != 2 || stderr.String() != invalidRequestJSON {
 		t.Fatalf("year-zero --from: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }
@@ -378,7 +378,7 @@ func TestDispatchInvestmentTriggerRejectsYearZeroScope(t *testing.T) {
 		"trigger", "--org", validTriggerOrg, "--review-evidence", "testing",
 		"--to", "0000-12-31", "--dry-run",
 	}, &stdout, &stderr)
-	if code != 1 || stderr.String() != invalidRequestJSON {
+	if code != 2 || stderr.String() != invalidRequestJSON {
 		t.Fatalf("year-zero --to: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }

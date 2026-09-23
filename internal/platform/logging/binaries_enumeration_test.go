@@ -44,7 +44,6 @@ var binaryLogging = map[string]string{
 	"dev-health-stream-runner":               "shell",
 	"dev-health-worker":                      "shell",
 	"dev-health-worker-migrate":              "silent",
-	"dev-health-workerctl":                   "installs",
 	"dho":                                    "cli",
 	"gqlgen-guard":                           "silent",
 	"query-api":                              "installs",

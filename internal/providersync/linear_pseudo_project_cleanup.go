@@ -22,7 +22,7 @@ import (
 // written before that correction (linear_reference_catalog_route.go no
 // longer writes ANY row -- active or tombstone -- for this identity, see
 // that file's CollectReferenceCatalog). It is NOT a per-sync mutation:
-// nothing in this package calls it; it is wired to a dev-health-workerctl
+// nothing in this package calls it; it is wired to a dho workers
 // verb an operator runs by hand, once per environment (or once per org, if
 // scoped), same class of action as `metrics partition-recompute`.
 

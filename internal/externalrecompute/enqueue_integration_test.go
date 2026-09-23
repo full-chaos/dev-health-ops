@@ -72,7 +72,7 @@ func enqueueTestPool(t *testing.T, ctx context.Context) *pgxpool.Pool {
 	createCompatibilityTables(t, ctx, pool)
 	// Column shapes follow the real migrations (0057 for the daily tables, 0046
 	// for the outbox, and the work-graph request table as
-	// cmd/dev-health-workerctl/trigger_integration_test.go declares it), so a
+	// internal/workersctl/trigger_integration_test.go declares it), so a
 	// type or length this code cannot actually satisfy fails here rather than
 	// in production.
 	if _, err := pool.Exec(ctx, `

@@ -14,7 +14,7 @@ import (
 // terminal_outbox_close.go) -- local read 6568/6568 non-terminal across all
 // four kinds, prod ~19.7k, both accumulated since 2026-06-29/2026-06-25. This
 // file is the one-time (or as-needed) operator-invoked backlog reaper, wired
-// to `dev-health-workerctl sync-dispatch-outbox close-backlog`, mirroring
+// to `dho workers sync-dispatch-outbox close-backlog`, mirroring
 // CHAOS-4548's dry-run-first cleanup verb shape (`providersync
 // retire-stale-linear-project-ownership`): --dry-run reports what a real
 // pass would do, across every org, without writing anything.

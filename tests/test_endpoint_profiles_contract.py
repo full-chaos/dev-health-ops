@@ -161,7 +161,7 @@ def test_inventory_row_count_matches_the_baseline():
     (`POST /internal/worker/metric-executions/v1/{id}/repair`, `POST
     /internal/worker/daily-metrics/v1/redrive` and `POST /internal/worker/
     workgraph/v1/executions/{id}/repair`) are deleted with their rows; the
-    Go `dev-health-workerctl` verbs run those repairs natively, so the rows
+    Go `dho workers` verbs run those repairs natively, so the rows
     stood at 352 (296 REST + 56 GraphQL).
     = 351, -1 REST under CHAOS-6243: `POST /api/internal/worker-sync/
     dispatch-budget-estimate` is deleted with its row -- the Go dispatcher

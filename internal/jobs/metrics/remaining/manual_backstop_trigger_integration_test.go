@@ -287,7 +287,7 @@ func TestStartManualBackfillRunWorkItemAttributionCoexistsWithASameDayAutomaticO
 	// the only realistic way these ScopeKeys ever match.
 	day := time.Now().UTC().Format("2006-01-02")
 
-	// Same generation SHAPE cmd/dev-health-workerctl's manualBackstopTriggerGeneration
+	// Same generation SHAPE internal/workersctl's manualBackstopTriggerGeneration
 	// mints ("manual-trigger:<family>:<org>:<day>") -- that helper lives in
 	// package main and is not importable from here, but the exact string is
 	// not load-bearing for this test, only that it differs from the

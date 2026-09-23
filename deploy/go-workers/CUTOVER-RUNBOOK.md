@@ -23,7 +23,7 @@ Celery to River, verifying them, and rolling back.
   `post_sync`, `reference_discovery`). Those live in
   `sync_dispatch_transport_routes`, which `0049` seeds `transport='celery'` and
   which no migration flips. They move only through
-  `dev-health-workerctl routes apply`, separately from this procedure.
+  `dho workers routes apply`, separately from this procedure.
 - **The scheduler.** Beat ownership is not transferred here.
 
 ---
@@ -42,7 +42,7 @@ Do not start until every one of these is true. Each is a stop, not a warning.
    nothing fails loudly.
 
    ```bash
-   dev-health-workerctl workers queues status
+   dho workers queues status
    ```
 
    Confirm for each group: `queues`, `desired_replicas`, non-zero expiring
@@ -157,7 +157,7 @@ for kind in \
   system.heartbeat system.retention_cleanup \
   workgraph.build
 do
-  dev-health-workerctl job-routes status "$kind"
+  dho workers job-routes status "$kind"
 done
 ```
 
@@ -202,7 +202,7 @@ for the kind, or `worker_job_runs` shows it running. That refusal is the
 protection against two runtimes owning the same work.
 
 ```bash
-dev-health-workerctl job-routes rollback \
+dho workers job-routes rollback \
   --reason cutover_rollback \
   --correlation-id <change-id> \
   <kind>

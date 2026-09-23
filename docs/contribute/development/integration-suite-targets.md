@@ -165,7 +165,7 @@ semantics that a version change can move.
 | `cmd/dev-health-worker` | 24s | kiac | kiac | **host** | **no** | Sensitive via `dora_refusal_boot`, which classifies ordering contracts from `system.tables.sorting_key`. Role names parameterised by CHAOS-4661; still host-bound overall for Valkey -- moving PostgreSQL alone does not move the package until Valkey is also resolved (CHAOS-4666). |
 | `internal/syncreconciler` | 16s | kiac | — | — | yes | Role names parameterised by CHAOS-4661: `unreclaimable_sweep_role_split_integration_test.go` plus 3 same-package consumers of `kernel_integration_test.go`'s shared role fixture (`active_active_integration_test.go`, `terminal_delivery_repair_integration_test.go` × 3 call sites) that a `CREATE ROLE` grep could not see. |
 | `internal/externalrecompute` | 15s | kiac | — | **host** | yes | Uses Valkey. |
-| `cmd/dev-health-workerctl` | 13s | kiac | — | — | yes | Role names parameterised by CHAOS-4661. |
+| `internal/workersctl` | 13s | kiac | — | — | yes | Role names parameterised by CHAOS-4661. |
 | `internal/joboperator` | 13s | kiac | — | — | yes | Role names parameterised by CHAOS-4661 (2 test functions sharing 1 setup helper). |
 | `internal/synccoverage` | 13s | kiac | — | — | yes | Pure PostgreSQL. |
 | `internal/testsupport/containers` | 13s | **host** | **host** | **host** | yes | Engine-neutral (boot/open/close only) — but it is the harness's own self-test, so it must keep exercising the container path. |
@@ -554,7 +554,7 @@ content (sha256 digest match), never via `git checkout`.
 | `internal/joboutbox` | **PASS** — full package, both runs |
 | `internal/joboperator` | **PASS** — full package, both runs |
 | `internal/syncreconciler` | **PASS** — full package, both runs |
-| `cmd/dev-health-workerctl` | **PASS** — full package, both runs |
+| `internal/workersctl` | **PASS** — full package, both runs |
 | `cmd/dev-health-worker` | **PASS** — the role-creating test (`TestRiverWorkerClientRunsReindexerWithoutPermissionErrors`); the package's other tests are Valkey/ClickHouse suites this ticket does not touch and stay host-bound regardless (see the matrix) |
 | `internal/syncdispatchruntime` | **PASS** — the 9 role-creating tests across its 3 files; same host-Valkey caveat as above |
 | `internal/jobs/metrics/daily` | **PASS** — see red-on-baseline and mutation-proof above |

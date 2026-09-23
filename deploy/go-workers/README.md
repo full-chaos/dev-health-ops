@@ -35,7 +35,7 @@ metrics-overflow  -> metrics, webhooks   (overlaps metrics intentionally)
 River distributes claims safely among all consumers of an overlapping queue.
 There is no global unique-queue-owner requirement.
 
-The manifest also budgets one concurrent `dev-health-workerctl` invocation
+The manifest also budgets one concurrent `dho workers` invocation
 with two domain and two queue-control session connections. The operator is a
 one-shot authenticated CLI, not a replica-bearing process, and its dedicated
 image target receives the operator token only when an operator invokes it.
@@ -363,7 +363,7 @@ sections.
    separate `apply`; scale groups per step 3 below.
 
    This bootstrap validates schema and contracts only. It does not invoke
-   `dev-health-workerctl`, mutate a worker route, or transfer Celery/Beat
+   `dho workers`, mutate a worker route, or transfer Celery/Beat
    ownership. For an existing local Postgres volume, the post-Alembic
    provision step is what grants access to tables that did not exist when
    `/docker-entrypoint-initdb.d` originally ran.
@@ -374,7 +374,7 @@ sections.
    before allowing an autoscaler or adding a second replica. Swarm has no
    native HPA; use the same signals for a manual one-at-a-time scale and wait
    through its start-first rolling update.
-4. Run `dev-health-workerctl workers queues status`. Confirm each group's
+4. Run `dho workers workers queues status`. Confirm each group's
    `queues`, `desired_replicas`, expiring `live_replicas`, `queue_backlog`,
    `active_jobs`, `drain_state`, and connection-budget headroom.
 5. Scrape `/metrics` and alert on all three capacity signals before proceeding:
@@ -442,13 +442,13 @@ Use an explicit queue set for a deliberate drain or resume. The group and every
 queue are required, and the action is audited:
 
 ```bash
-dev-health-workerctl workers queues drain \
+dho workers queues drain \
   --group analytics-workers \
   --queue metrics --queue reports \
   --reason deploy_drain \
   --correlation-id rollout-2026-08-15
 
-dev-health-workerctl workers queues undrain \
+dho workers queues undrain \
   --group analytics-workers \
   --queue metrics --queue reports \
   --reason deploy_resume \
@@ -573,7 +573,7 @@ Two consequences worth knowing:
 
 ### River control DSNs must use session semantics
 
-`COORDINATOR_DATABASE_URI` (read by `go-reconciler`, `go-scheduler`, and `dev-health-workerctl`) and
+`COORDINATOR_DATABASE_URI` (read by `go-reconciler`, `go-scheduler`, and `dho workers`) and
 `dev-health-worker-migrate`'s `MIGRATION_DATABASE_URI`, which is a distinct,
 more-privileged DSN — never reused as a coordinator runtime identity) must
 point at the dedicated PgBouncer session endpoint (`6434` locally) or direct
@@ -753,7 +753,7 @@ service that reached `go-river-provision` **without** `go-river-migrate`
 `docker compose run go-workerctl …`) silently wiped whatever grants a prior
 `go-river-migrate` run had established down to that stale subset. In prod
 this produced a `go-reconciler` crash loop ("worker outbox database
-unavailable") and a `dev-health-workerctl` `runtime_role_unauthorized`
+unavailable") and a `dho workers` `runtime_role_unauthorized`
 failure on every invocation, including `--help`.
 
 **The fix and the resulting contract:** `provision_river_roles.sql` is now
@@ -946,7 +946,7 @@ the `api` container's own memory limit:
   aggregate-exhaustion risk.
 - The compatibility bridge no longer collapses a signaled/resource-exhausted
   runner with zero recorded progress into the `ambiguous` state that used to
-  require an operator repair (`dev-health-workerctl metrics execution-repair`) before any retry
+  require an operator repair (`dho workers metrics execution-repair`) before any retry
   could re-claim it; it authorizes the retry itself (see
   `worker_metrics._mark_retry_authorized`), so a single OOM kill no longer
   permanently fails the partition. "Zero progress" is signalled at the write

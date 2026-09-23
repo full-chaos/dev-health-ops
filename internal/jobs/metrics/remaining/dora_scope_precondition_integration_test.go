@@ -138,7 +138,7 @@ func TestClaimPartitionReturnsScope(t *testing.T) {
 // status='failed' when the discard happened -- it never self-deletes.
 // ClaimPartition's own WHERE clause already treats 'failed' as reclaimable
 // (status IN ('pending','failed')), so once this fix ships, retrying any of
-// those discarded River jobs (dev-health-workerctl's existing `jobs retry`
+// those discarded River jobs (dho workers's existing `jobs retry`
 // command, StateDiscarded is retry-eligible per
 // internal/joboperator/service.go's retryEligible) re-claims the SAME
 // partition row -- with its scope now intact -- and writes the missing

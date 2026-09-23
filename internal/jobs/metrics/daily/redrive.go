@@ -259,7 +259,7 @@ ORDER BY partition.run_id, partition.ordinal`, orgID, from, to, now)
 	if err := tx.Commit(ctx); err != nil {
 		return outcome, ErrUnavailable
 	}
-	// codex review (round 1): today's only caller (dev-health-workerctl) is a
+	// codex review (round 1): today's only caller (dho workers) is a
 	// one-shot CLI process with no Prometheus scrape endpoint and no
 	// observer wired, so these calls are a no-op in practice -- this is
 	// forward-wiring for a future long-lived caller (e.g. an automatic

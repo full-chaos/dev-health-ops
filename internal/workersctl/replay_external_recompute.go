@@ -1,4 +1,4 @@
-// replay_external_recompute.go: `dev-health-workerctl external-recompute replay`
+// replay_external_recompute.go: `dho workers external-recompute replay`
 // (CHAOS-5296).
 //
 // The native drain (internal/externalrecompute/drain.go) only ever claims rows
@@ -15,7 +15,7 @@
 // Start with --dry-run: it prints the identical per-group report the real run
 // prints, minus the writes.
 
-package main
+package workersctl
 
 import (
 	"context"

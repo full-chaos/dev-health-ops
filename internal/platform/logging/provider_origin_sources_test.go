@@ -568,7 +568,7 @@ func passesContent(call *ast.CallExpr) bool {
 // workerBinaries are the binaries the invariant covers.
 var workerBinaries = []string{
 	"dev-health-worker", "dev-health-stream-runner", "dev-health-scheduler",
-	"dev-health-reconciler", "dev-health-workerctl", "dev-health-worker-migrate",
+	"dev-health-reconciler", "dho", "dev-health-worker-migrate",
 }
 
 // accessorOnlyCarriers are error types that hold provider content in a field

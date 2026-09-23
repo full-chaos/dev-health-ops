@@ -22,7 +22,7 @@ with no executor behind it. The producer fails closed on it rather than
 staging outbox rows the Go relay would release forever
 (``internal/joboutbox/relay.go``), which is correct -- but it means a freshly
 migrated environment lands on ``celery`` and dispatches NO provider unit at
-all until an operator runs ``dev-health-workerctl job-routes apply``. Nothing
+all until an operator runs ``dho workers job-routes apply``. Nothing
 in the bring-up path would say so.
 
 Production is already past this: a route dump taken for CHAOS-4082 shows
@@ -67,7 +67,7 @@ only place it could reverse to is ``celery``, a transport with no executor.
 
 An explicitly irreversible data migration, with the reason stated, beats a
 reversible one that corrupts production. To undo this deliberately, an
-operator uses ``dev-health-workerctl job-routes rollback``, which is the
+operator uses ``dho workers job-routes rollback``, which is the
 supported path, takes the quiescence barrier, and records who did it.
 
 Quiescence. ``workerctl job-routes apply`` gates promotion behind a Celery

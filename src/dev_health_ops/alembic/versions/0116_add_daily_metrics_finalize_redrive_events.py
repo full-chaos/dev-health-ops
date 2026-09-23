@@ -4,7 +4,7 @@ Revision ID: 0116
 Revises: 0115
 Create Date: 2026-08-28 00:00:00
 
-``dev-health-workerctl metrics finalize-redrive`` (CHAOS-4405) is the first
+``dho workers metrics finalize-redrive`` (CHAOS-4405) is the first
 operator verb in this codebase that mutates a TERMINAL ``daily_metrics_runs``
 row (``status='succeeded'`` -> ``'running'``) rather than only ever repairing
 a non-terminal one -- it exists to re-run ``run_daily_metrics_finalize`` for

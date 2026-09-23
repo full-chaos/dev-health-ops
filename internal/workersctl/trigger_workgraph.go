@@ -1,4 +1,4 @@
-// trigger_workgraph.go: `dev-health-workerctl workgraph trigger` (CHAOS-5172).
+// trigger_workgraph.go: `dho workers workgraph trigger` (CHAOS-5172).
 //
 // `dev-hops work-graph build` (src/dev_health_ops/work_graph/runner.py:56
 // run_work_graph_build) computes work graph edges entirely in Python,
@@ -14,7 +14,7 @@
 // No existing operator surface does this: `workgraph repair`
 // (repair_workgraph.go) only resolves an ALREADY-STUCK 'ambiguous' row: it
 // never constructs a new request.
-package main
+package workersctl
 
 import (
 	"context"

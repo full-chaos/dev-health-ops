@@ -69,7 +69,7 @@ func unsupportedManualBackfillFamilyError() error {
 // work_item_attribution (CHAOS-5016) is deliberately NOT listed here even
 // though manualBackfillDayScope (below) supports it: `start`'s readback_hint
 // assumes every family's writes table has a "day" column
-// (manualBackfillReadbackTable, cmd/dev-health-workerctl/main.go) which is
+// (manualBackfillReadbackTable, internal/workersctl/main.go) which is
 // true for complexity/dora/release_impact but false for
 // work_item_attribution's own tables (work_item_team_attributions and
 // work_item_attribution_backstop_runs are keyed on computed_at/completed_at,

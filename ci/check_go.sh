@@ -1283,7 +1283,7 @@ check_contract() {
 # excluded from check_integration. It used to be the other way around: an
 # opt-IN allowlist that ran only the packages someone remembered to add. That
 # shape silently excluded internal/providerfoundation's ClickHouse/Valkey
-# suite, cmd/dev-health-workerctl's suite (which additionally did not even
+# suite, internal/workersctl's suite (which additionally did not even
 # compile — see main_integration_test.go), and was structurally guaranteed to
 # do it again to the next package anyone adds, because "not on the list" and
 # "not written yet" look identical from the gate's point of view.
@@ -2210,7 +2210,7 @@ check_multi_replica_workers() {
 # everything under the tag even compile", which matters independently: a
 # package can compile and still be (legitimately or not) denylisted, or it can
 # be in the run set and simply not build, the way
-# cmd/dev-health-workerctl/main_integration_test.go didn't after its
+# internal/workersctl/main_integration_test.go didn't after its
 # constructor's signature changed underneath it. `go vet -tags=integration
 # ./...` needs no Docker and runs in seconds, so it belongs in the fast path
 # rather than the Docker-backed integration job.

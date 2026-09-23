@@ -1,4 +1,4 @@
-package main
+package workersctl
 
 import (
 	"context"
@@ -197,7 +197,7 @@ ORDER BY execution.last_attempt_at`, orgFilter)
 // --expected-attempt-count come straight from this read.
 func metricsExecutionRepairCommandHint(executionID, state string, attemptCount int) string {
 	return fmt.Sprintf(
-		`dev-health-workerctl metrics execution-repair --execution %s --expected-state %s --expected-attempt-count %d --resolution <confirm_succeeded|retry_safe> --review-evidence "<what you verified>" [--output-evidence '{"...":"..."}']`,
+		`dho workers metrics execution-repair --execution %s --expected-state %s --expected-attempt-count %d --resolution <confirm_succeeded|retry_safe> --review-evidence "<what you verified>" [--output-evidence '{"...":"..."}']`,
 		executionID, state, attemptCount,
 	)
 }

@@ -1060,9 +1060,9 @@ async def run_daily_metrics_finalize(
 # (the direct-Python-compute `dev-hops metrics daily`/`rebuild` CLI verbs)
 # were deleted here. They were already 100% orphaned before this change --
 # CHAOS-5055/#2232 repointed `cli.py` to register
-# `workerctl_dispatch.register_commands` instead (which dispatches through
-# `dev-health-workerctl metrics daily-start`, see that module's own
-# docstring), and nothing anywhere in the repo still called these functions
+# `workerctl_dispatch.register_commands` instead (which dispatched through
+# the Go operator's `metrics daily-start`; that wrapper module was itself
+# deleted at spec S2), and nothing anywhere in the repo still called these functions
 # or `job_daily.register_commands` by name (verified by repo-wide search
 # before deletion). `run_daily_metrics_job`/`run_daily_metrics_finalize`
 # above are NOT dead -- they still have live callers (the worker bridge,

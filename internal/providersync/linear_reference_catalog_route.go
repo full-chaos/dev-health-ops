@@ -457,7 +457,7 @@ func (handler LinearReferenceCatalogRouteHandler) CollectReferenceCatalog(
 	// rows (both the original is_active=1 shape and this fix's own
 	// short-lived is_active=0 tombstone shape) are retired ONCE, operator-
 	// invoked, not per-sync: RetireLinearPseudoProjectRows
-	// (linear_pseudo_project_cleanup.go), wired to `dev-health-workerctl
+	// (linear_pseudo_project_cleanup.go), wired to `dho workers
 	// providersync retire-linear-pseudo-projects`.
 	//
 	// The MATCHING team_project_ownership row below is intentionally KEPT.

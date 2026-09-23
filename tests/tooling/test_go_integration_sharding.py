@@ -31,7 +31,7 @@ EXPECTED_PACKAGES = {
     "internal/goapiproof",
     "cmd/dev-health-reconciler",
     "cmd/dev-health-worker",
-    "cmd/dev-health-workerctl",
+    "internal/workersctl",
     # CHAOS-5486: the routing verbs' first //go:build integration file --
     # `enable` driven end to end against a real Postgres and a real HTTP
     # server, because an adversarial round proved that disabling the

@@ -240,7 +240,7 @@ func TestLinearReferenceCatalogCollectsTeamsMembersProjectsAndOwnership(t *testi
 	// unrelated reason, so it could never be a safe "retired" signal for any
 	// reader. Already-synced orgs' stale rows (both shapes) are retired by a
 	// separate, one-time operator cleanup (linear_pseudo_project_cleanup.go
-	// / `dev-health-workerctl providersync retire-linear-pseudo-projects`),
+	// / `dho workers providersync retire-linear-pseudo-projects`),
 	// never by this per-sync walk. So Projects is 1 (the one real project
 	// only), ProjectsWithoutKey counts it (nil key). The matching
 	// team_project_ownership row is still emitted (see the Ownership

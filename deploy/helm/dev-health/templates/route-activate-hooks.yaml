@@ -8,7 +8,7 @@ post_sync, reference_discovery. The Celery fleet has had no consumer since
 CHAOS-4026, so a fresh install's producer stages outbox rows for a transport
 nothing drains, and the reconciler's own `sync_dispatch_route_fence` refuses
 readiness on that drift. An operator has always had to run
-`dev-health-workerctl routes apply` by hand for each kind; this chart never
+`dho workers routes apply` by hand for each kind; this chart never
 ran that step. `sync.provider_unit`'s OWN route lives in a different table
 (`worker_job_routes`) and migration 0107 already promotes it unconditionally
 -- see that migration's docstring -- so CHAOS-4455's remaining gap (the
@@ -20,7 +20,7 @@ Reference design: the proven bigboy compose overlay
 (compose/compose.go.workers.yml, untracked, outside this repository) and PR
 chore/celery-retire-pr3's root compose.yml, which folds the same chain into
 the default `docker compose up`. Both serialize the four route mutations
-behind one operator credential, because dev-health-workerctl's operator
+behind one operator credential, because dho workers's operator
 permits one audited mutation at a time.
 
 Kubernetes shape. Compose expresses the serialization as five one-shot
@@ -422,7 +422,7 @@ spec:
         - name: route-activate-{{ $kind | replace "_" "-" }}
           {{- /*
           No `command:` override -- the operator image's own ENTRYPOINT
-          (dev-health-workerctl) runs directly with these args, since the
+          (dho; `workers` selects the operator verbs) runs directly with these args, since the
           image has no shell to run a wrapper script in anyway (see the
           route-dsn step's comment above).
           */}}
@@ -431,6 +431,7 @@ spec:
           securityContext:
             allowPrivilegeEscalation: false
           args:
+            - workers
             - routes
             - apply
             - --reason

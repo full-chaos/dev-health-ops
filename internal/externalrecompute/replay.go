@@ -11,7 +11,7 @@ package externalrecompute
 // deploying the fix.
 //
 // This code is what an operator runs, once, by hand, instead
-// (`dev-health-workerctl external-recompute replay`).
+// (`dho workers external-recompute replay`).
 //
 // IT COLLAPSES RATHER THAN REPLAYS. Replaying each row individually would mean
 // one bounded plan per ingested batch across the whole gap -- thousands of

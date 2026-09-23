@@ -680,9 +680,10 @@ func stringsFromAny(value any) []string {
 }
 
 // intFromAny reads an already-validated field with pydantic's lax int
-// rule (pybody.PydanticInt, the rule validation used), or fallback for an
-// absent/null value. Values arrive in legacyJSON's shape (a number is a
-// float64) or from a GET handler's own filter map.
+// rule (pybody.PydanticInt, the rule validation used), saturated at Go's
+// int range, or fallback for an absent/null value. Values arrive in
+// legacyJSON's shape (an exact pyjson.Int, or a float64) or from a GET
+// handler's own filter map (float64).
 func intFromAny(value any, fallback int) int {
 	var raw pyjson.Value
 	switch v := value.(type) {
@@ -694,10 +695,10 @@ func intFromAny(value any, fallback int) int {
 		raw = v
 	}
 	number, kind, _ := pybody.PydanticInt(raw)
-	if kind != "" || !number.IsInt64() {
+	if kind != "" {
 		return fallback
 	}
-	return int(number.Int64())
+	return saturatedInt(number)
 }
 
 // dateFromAny reads an already-validated `date | None` field with
@@ -705,8 +706,10 @@ func intFromAny(value any, fallback int) int {
 // a YYYY-MM-DD string, or a datetime string or unix timestamp at
 // midnight. ok is false for an absent/null value, as Python's None.
 func dateFromAny(value any) (t time.Time, ok bool) {
-	switch value.(type) {
+	switch typed := value.(type) {
 	case string, float64:
+	case pyjson.Int:
+		value = typed.Int
 	default:
 		return time.Time{}, false
 	}

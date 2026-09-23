@@ -319,6 +319,9 @@ func TestQueryAPIBodiesMatchLiveFastAPI(t *testing.T) {
 	if mismatches > 0 {
 		t.Fatalf("%d of %d route answers differ; by class: %v", mismatches, compared, classes)
 	}
+	if byteDiffs > 0 {
+		t.Fatalf("%d 422 bodies equal FastAPI's as JSON but not byte for byte", byteDiffs)
+	}
 	if knownNullGap == 0 {
 		t.Fatal("the named null gap is closed (every null FastAPI refuses is refused by Go): remove nullGap and compare those bodies directly")
 	}
@@ -329,8 +332,8 @@ func TestQueryAPIBodiesMatchLiveFastAPI(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(proof, "query-api-bodies"), []byte("executed"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("%d bodies, %d route answers compared; 0 mismatches beyond the named null gap (%d answers); %d 422 bodies equal as JSON but not byte for byte",
-		len(items), compared, knownNullGap, byteDiffs)
+	t.Logf("%d bodies, %d route answers compared; 0 mismatches beyond the named null gap (%d answers); every matching 422 byte for byte",
+		len(items), compared, knownNullGap)
 }
 
 // nullGap is the named gap the query-api validators carry apart from

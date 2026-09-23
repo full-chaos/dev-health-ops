@@ -9,8 +9,6 @@ package main
 
 import (
 	"errors"
-	"math"
-	"math/big"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 )
@@ -41,10 +39,11 @@ func decodeRequestBody(loc []any, body []byte) (value pyjson.Value, empty bool, 
 	return decoded, decoded == nil, nil
 }
 
-// legacyJSON converts a validated body to the encoding/json shape the
-// routes' parameter builders read (map[string]any, []any, float64,
-// string, bool, nil). Only a body that already passed validation is
-// converted, so the numbers it holds are ones the models accept.
+// legacyJSON converts a validated body to the shape the routes' parameter
+// builders read: map[string]any, []any, string, bool, nil, a float as
+// float64, and an int kept exact as pyjson.Int (intFromAny and
+// dateFromAny, the builders' only number readers, take it as is). Only a
+// body that already passed validation is converted.
 func legacyJSON(value pyjson.Value) any {
 	switch typed := value.(type) {
 	case *pyjson.Object:
@@ -60,9 +59,6 @@ func legacyJSON(value pyjson.Value) any {
 			out[index] = legacyJSON(item)
 		}
 		return out
-	case pyjson.Int:
-		f, _ := new(big.Float).SetInt(typed.Int).Float64()
-		return f
 	case pyjson.Float:
 		return float64(typed)
 	default:
@@ -77,11 +73,4 @@ func objectField(value pyjson.Value, key string) (pyjson.Value, bool) {
 		return nil, false
 	}
 	return object.Get(key)
-}
-
-// isFiniteNumber reports a JSON number that pyjson can render (json.dumps
-// with allow_nan=False refuses NaN and the infinities).
-func isFiniteNumber(value pyjson.Value) bool {
-	f, ok := value.(pyjson.Float)
-	return !ok || (!math.IsNaN(float64(f)) && !math.IsInf(float64(f), 0))
 }

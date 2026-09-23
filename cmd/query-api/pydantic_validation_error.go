@@ -33,6 +33,8 @@ package main
 
 import (
 	"log"
+	"math"
+	"math/big"
 	"net/http"
 	"sort"
 	"strconv"
@@ -427,8 +429,9 @@ func allDigits(s string) bool {
 // (pybody.PydanticInt): a bool; an int; a finite float with no fraction
 // strictly inside the int64 range; a str pydantic-core parses as an int.
 // A JSON null is the absent optional (present false, no error); the
-// caller has already found the key. n is 0 when the int does not fit Go's
-// int (the models' fields then fail their own use, not validation).
+// caller has already found the key. An int beyond Go's int saturates at
+// its bound: Python carries the exact int onward, and every use here
+// (a limit, a day count) treats the bound as "as many as there are".
 func coerceIntBodyField(loc []any, value pyjson.Value) (n int, detail *pydanticErrorDetail) {
 	if value == nil {
 		return 0, nil
@@ -437,10 +440,18 @@ func coerceIntBodyField(loc []any, value pyjson.Value) (n int, detail *pydanticE
 	if kind != "" {
 		return 0, &pydanticErrorDetail{Type: kind, Loc: loc, Msg: msg, Input: value}
 	}
-	if number.IsInt64() {
-		return int(number.Int64()), nil
+	return saturatedInt(number), nil
+}
+
+// saturatedInt is number as a Go int, clamped to the int range.
+func saturatedInt(number *big.Int) int {
+	switch {
+	case number.Cmp(big.NewInt(math.MaxInt)) > 0:
+		return math.MaxInt
+	case number.Cmp(big.NewInt(math.MinInt)) < 0:
+		return math.MinInt
 	}
-	return 0, nil
+	return int(number.Int64())
 }
 
 // stringBodyFieldError builds the string_type detail Pydantic's `str`

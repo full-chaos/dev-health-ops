@@ -8,6 +8,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
 // queryBoolDefaultTrue mirrors FastAPI's `active_only: bool = True` query
@@ -42,15 +43,6 @@ func pytimeRFC3339(value time.Time) string {
 	return value.UTC().Format("2006-01-02T15:04:05.999999") + "Z"
 }
 
-func sortedKeys(m map[string][]string) []string {
-	out := make([]string, 0, len(m))
-	for key := range m {
-		out = append(out, key)
-	}
-	sort.Strings(out)
-	return out
-}
-
 func sortedKeysBool(m map[string]bool) []string {
 	out := make([]string, 0, len(m))
 	for key := range m {
@@ -69,24 +61,22 @@ func toSet(values []string) map[string]bool {
 }
 
 // unknownTeamIDsDetail mirrors f"Unknown team_id(s): {sorted(set(missing))}"
-// -- Python's f-string renders a list via repr(), single-quoted elements,
-// comma-space separated.
-//
-// KNOWN GAP (CHAOS-6310 r1 finding #6, left open on purpose): Python's
-// repr() switches to double quotes (no escaping) when a value holds a
-// single quote and no double quote -- e.g. repr("doesn't-exist") is
-// "doesn't-exist", not 'doesn't-exist'. This single-quotes unconditionally
-// instead of reproducing that rule locally: a shared repr()-matching
-// encoder (pythonparity.StrRepr/IsPrintable) already exists in another
-// lane's unpushed work and is moving into the CHAOS-6322 shared PR so
-// every consumer gets ONE implementation instead of several that can
-// drift apart (R299). This switches to it once that PR lands.
+// -- Python's f-string renders a list via repr(), which reprs each element
+// with Python's own quoting rule (single quotes, EXCEPT double quotes when
+// the value holds a single quote and no double quote -- e.g.
+// repr("doesn't-exist") is "doesn't-exist", not 'doesn't-exist'), comma-
+// space separated. r2 (CHAOS-6310) found the prior unconditional
+// single-quoting was a live, reproducible parity break for any team_id
+// containing an apostrophe; pythonparity.StrRepr (landed via CHAOS-6322,
+// #2850) is the shared repr()-matching encoder, so this uses it instead of
+// a second, narrower implementation (R299: one implementation, not several
+// that can drift).
 func unknownTeamIDsDetail(missing []string) string {
 	unique := toSet(missing)
 	sorted := sortedKeysBool(unique)
 	quoted := make([]string, len(sorted))
 	for index, value := range sorted {
-		quoted[index] = "'" + value + "'"
+		quoted[index] = pythonparity.StrRepr(value)
 	}
 	return "Unknown team_id(s): [" + strings.Join(quoted, ", ") + "]"
 }

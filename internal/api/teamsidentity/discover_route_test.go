@@ -1,6 +1,7 @@
 package teamsidentity
 
 import (
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -73,6 +74,34 @@ func TestTeamsDiscoverCapturedByWildcardOnRealRoutesToday(t *testing.T) {
 			"{team_id} wildcard's AdminOrg guard) -- routing for this path changed, re-check the "+
 			"ingress assumption in this test's doc comment before updating the expectation",
 			rec.Code, http.StatusUnauthorized)
+	}
+}
+
+// TestGetTeamInterceptsDiscoverMissingProvider is CHAOS-6310 r2 finding #4's
+// direct reproduction and fix: an AUTHENTICATED (guard already satisfied --
+// this calls the unwrapped handler directly, the same way an admin request
+// reaches it after guard.Wrap passes) GET .../teams/discover with no
+// `provider` query parameter must answer Python's own 422 "Field required"
+// for that missing query parameter, not fall through to a team lookup on
+// the literal string "discover" (which answered Go's 404 "Team not found"
+// before this fix, live-proved as a P1 against the real venue). A request
+// that DOES supply `provider` still falls through to the pre-existing
+// "team not found" 404 -- discover's real behavior once a provider is
+// present is CHAOS-6311's to implement; this fixes only the one case r2
+// proved live.
+func TestGetTeamInterceptsDiscoverMissingProvider(t *testing.T) {
+	h := handlers{store: Store{}, logger: slog.Default()}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/teams/discover", nil)
+	req.SetPathValue("team_id", "discover")
+	rec := httptest.NewRecorder()
+	h.getTeam(rec, req)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("GET .../teams/discover with no provider: got %d, want 422\nbody: %s", rec.Code, rec.Body.String())
+	}
+	want := `{"detail":[{"type":"missing","loc":["query","provider"],"msg":"Field required","input":null}]}`
+	if rec.Body.String() != want {
+		t.Errorf("body = %s, want %s", rec.Body.String(), want)
 	}
 }
 

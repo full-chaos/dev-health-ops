@@ -19,6 +19,7 @@ import (
 	"errors"
 	"io"
 	"math"
+	"math/big"
 	"mime"
 	"net/http"
 	"strconv"
@@ -393,23 +394,43 @@ func (e *Errors) OptionalStringList(object *pyjson.Object, name string) ([]strin
 	return out, true
 }
 
-// OptionalStringArrayDict validates one `dict[str, list[str]]` field (e.g.
-// `Field(default_factory=dict)`): absent/null resolves to the zero value,
-// a non-object value is "dict_type", and a non-list value at any key is
-// "list_type" at loc body.<name>.<key> -- matching pydantic's per-key
-// reporting.
-func (e *Errors) OptionalStringArrayDict(object *pyjson.Object, name string) (map[string][]string, bool) {
-	raw, ok := object.Get(name)
-	if !ok || raw == nil {
-		return nil, false
+// OrderedStringListDict is dict[str, list[str]] with its keys carried in
+// the REQUEST's own INSERTION order -- Python's dict preserves it, and it
+// is observable wherever this port re-serializes the dict: a JSON response
+// body, or (teamsidentity) the ClickHouse text a route persists. CHAOS-6310
+// r2 finding #3 found that sorting keys here (this port's earlier choice,
+// made only because no insertion-order-preserving type existed yet) is a
+// live, reproducible parity break in BOTH the response bytes and the
+// stored text -- not merely a cosmetic ordering choice.
+type OrderedStringListDict struct {
+	Keys   []string
+	Values map[string][]string
+}
+
+// NewOrderedStringListDict returns an empty dict.
+func NewOrderedStringListDict() *OrderedStringListDict {
+	return &OrderedStringListDict{Values: map[string][]string{}}
+}
+
+// Set adds key at the end, or replaces its values in place, same semantics
+// as pyjson.Object.Set.
+func (d *OrderedStringListDict) Set(key string, values []string) {
+	if _, exists := d.Values[key]; !exists {
+		d.Keys = append(d.Keys, key)
 	}
-	loc := []pyjson.Value{"body", name}
-	nested, isObject := raw.(*pyjson.Object)
-	if !isObject {
-		*e = append(*e, Error{Type: "dict_type", Loc: loc, Msg: "Input should be a valid dictionary", Input: raw})
-		return nil, false
-	}
-	out := make(map[string][]string, nested.Len())
+	d.Values[key] = values
+}
+
+// Get returns key's values and whether key is present.
+func (d *OrderedStringListDict) Get(key string) ([]string, bool) {
+	values, ok := d.Values[key]
+	return values, ok
+}
+
+// stringArrayDict is OptionalStringArrayDict/DefaultedStringArrayDict's
+// shared non-null parse path: nested is already known to be a JSON object.
+func (e *Errors) stringArrayDict(nested *pyjson.Object, loc []pyjson.Value) (*OrderedStringListDict, bool) {
+	out := NewOrderedStringListDict()
 	valid := true
 	for _, key := range nested.Keys() {
 		value, _ := nested.Get(key)
@@ -431,12 +452,31 @@ func (e *Errors) OptionalStringArrayDict(object *pyjson.Object, name string) (ma
 			}
 			values = append(values, text)
 		}
-		out[key] = values
+		out.Set(key, values)
 	}
 	if !valid {
 		return nil, false
 	}
 	return out, true
+}
+
+// OptionalStringArrayDict validates one `dict[str, list[str]]` field (e.g.
+// `Field(default_factory=dict)`): absent/null resolves to the zero value,
+// a non-object value is "dict_type", and a non-list value at any key is
+// "list_type" at loc body.<name>.<key> -- matching pydantic's per-key
+// reporting.
+func (e *Errors) OptionalStringArrayDict(object *pyjson.Object, name string) (*OrderedStringListDict, bool) {
+	raw, ok := object.Get(name)
+	if !ok || raw == nil {
+		return nil, false
+	}
+	loc := []pyjson.Value{"body", name}
+	nested, isObject := raw.(*pyjson.Object)
+	if !isObject {
+		*e = append(*e, Error{Type: "dict_type", Loc: loc, Msg: "Input should be a valid dictionary", Input: raw})
+		return nil, false
+	}
+	return e.stringArrayDict(nested, loc)
 }
 
 // OptionalBoundedInt validates one `int` field with pydantic `ge`/`le`
@@ -498,7 +538,7 @@ func (e *Errors) DefaultedStringList(object *pyjson.Object, name string) ([]stri
 // counterpart (no `| None` in the pydantic model): absent resolves to the
 // zero value, an explicit JSON null is a "dict_type" error. See
 // DefaultedStringList's doc for why null and absent differ here.
-func (e *Errors) DefaultedStringArrayDict(object *pyjson.Object, name string) (map[string][]string, bool) {
+func (e *Errors) DefaultedStringArrayDict(object *pyjson.Object, name string) (*OrderedStringListDict, bool) {
 	raw, ok := object.Get(name)
 	if !ok {
 		return nil, false
@@ -513,34 +553,7 @@ func (e *Errors) DefaultedStringArrayDict(object *pyjson.Object, name string) (m
 		*e = append(*e, Error{Type: "dict_type", Loc: loc, Msg: "Input should be a valid dictionary", Input: raw})
 		return nil, false
 	}
-	out := make(map[string][]string, nested.Len())
-	valid := true
-	for _, key := range nested.Keys() {
-		value, _ := nested.Get(key)
-		keyLoc := append(append([]pyjson.Value(nil), loc...), key)
-		list, isList := value.([]pyjson.Value)
-		if !isList {
-			*e = append(*e, Error{Type: "list_type", Loc: keyLoc, Msg: "Input should be a valid list", Input: value})
-			valid = false
-			continue
-		}
-		values := make([]string, 0, len(list))
-		for index, item := range list {
-			text, isString := item.(string)
-			if !isString {
-				itemLoc := append(append([]pyjson.Value(nil), keyLoc...), int64(index))
-				*e = append(*e, Error{Type: "string_type", Loc: itemLoc, Msg: "Input should be a valid string", Input: item})
-				valid = false
-				continue
-			}
-			values = append(values, text)
-		}
-		out[key] = values
-	}
-	if !valid {
-		return nil, false
-	}
-	return out, true
+	return e.stringArrayDict(nested, loc)
 }
 
 // OptionalAnyDict validates one `dict[str, Any] | None = None` field:
@@ -604,12 +617,26 @@ func (e *Errors) DefaultedBoundedInt(object *pyjson.Object, name string, minValu
 // is "int_from_float"; a string that parses cleanly as a base-10 integer
 // (ASCII whitespace trimmed) coerces, one that does not is "int_parsing";
 // any other JSON type is "int_type" -- then bounds-checked.
+//
+// r2 (CHAOS-6310) P1: this used to coerce straight to int64 (v.Int64() on
+// pyjson.Int's *big.Int, or int64(f) on a float) BEFORE the bounds check.
+// Python ints are unbounded, and pyjson.Int already carries the value as a
+// *big.Int for exactly that reason, but big.Int.Int64() is documented as
+// "undefined" for a value that does not fit in 64 bits -- measured on this
+// host it silently WRAPS: sync_policy 2**64+1, whose real magnitude is far
+// past `le: 2`, wrapped to 1 and was accepted as a valid write. minValue/
+// maxValue are always representable as int64 (they are declared as int64
+// literals at every call site), so once a candidate value is known to be
+// representable as int64, comparing the plain int64s is exact; the fix is
+// to do that check with math/big BEFORE ever converting down, exactly the
+// same pattern QueryInt (queryint.go) already uses for query-parameter
+// bounds -- one comparison rule, not two that can disagree at the edges.
 func (e *Errors) boundedInt(raw pyjson.Value, name string, minValue, maxValue int64) (int64, bool) {
 	loc := []pyjson.Value{"body", name}
-	var value int64
+	var value *big.Int
 	switch v := raw.(type) {
 	case pyjson.Int:
-		value = v.Int64()
+		value = v.Int
 	case pyjson.Float:
 		f := float64(v)
 		if f != math.Trunc(f) {
@@ -617,12 +644,12 @@ func (e *Errors) boundedInt(raw pyjson.Value, name string, minValue, maxValue in
 				Msg: "Input should be a valid integer, got a number with a fractional part"})
 			return 0, false
 		}
-		value = int64(f)
+		value, _ = big.NewFloat(f).Int(nil)
 	case string:
-		parsed, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
-		if err != nil {
-			*e = append(*e, Error{Type: "int_parsing", Loc: loc, Input: raw,
-				Msg: "Input should be a valid integer, unable to parse string as an integer"})
+		parsed, failure := ParsePydanticInt(v)
+		if failure != nil {
+			failure.Loc, failure.Input = loc, raw
+			*e = append(*e, *failure)
 			return 0, false
 		}
 		value = parsed
@@ -630,21 +657,23 @@ func (e *Errors) boundedInt(raw pyjson.Value, name string, minValue, maxValue in
 		*e = append(*e, Error{Type: "int_type", Loc: loc, Msg: "Input should be a valid integer", Input: raw})
 		return 0, false
 	}
-	if value < minValue {
+	if value.Cmp(big.NewInt(minValue)) < 0 {
 		ctx := pyjson.NewObject()
 		ctx.Set("ge", minValue)
 		*e = append(*e, Error{Type: "greater_than_equal", Loc: loc, Input: raw, Ctx: ctx,
 			Msg: "Input should be greater than or equal to " + strconv.FormatInt(minValue, 10)})
 		return 0, false
 	}
-	if value > maxValue {
+	if value.Cmp(big.NewInt(maxValue)) > 0 {
 		ctx := pyjson.NewObject()
 		ctx.Set("le", maxValue)
 		*e = append(*e, Error{Type: "less_than_equal", Loc: loc, Input: raw, Ctx: ctx,
 			Msg: "Input should be less than or equal to " + strconv.FormatInt(maxValue, 10)})
 		return 0, false
 	}
-	return value, true
+	// value.Int64() is now exact: it is bounds-checked against minValue/
+	// maxValue above, both of which are int64 by signature.
+	return value.Int64(), true
 }
 
 // undecodableBytes stands for request bytes that are not UTF-8.

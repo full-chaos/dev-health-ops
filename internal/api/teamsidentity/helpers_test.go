@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 )
 
 // TestQueryBoolDefaultTrueMatchesFastAPI pins queryBoolDefaultTrue against
@@ -67,35 +69,29 @@ func TestQueryBoolDefaultTrueMatchesFastAPI(t *testing.T) {
 
 // TestUnknownTeamIDsDetailSortsAndQuotes proves the 404 detail sorts unique
 // ids and single-quotes each, matching
-// f"Unknown team_id(s): {sorted(set(missing))}" for the common case. The
-// apostrophe-escaping rule (Python's repr() switches quote style for a
-// value holding a single quote and no double quote) is a KNOWN, documented
-// gap pending a shared pythonparity repr encoder -- see
-// unknownTeamIDsDetail's doc comment.
+// f"Unknown team_id(s): {sorted(set(missing))}" for the common case, AND
+// (r2, CHAOS-6310 r1 finding #6, fixed) that a value holding an apostrophe
+// switches to Python repr()'s double-quote form via the shared
+// pythonparity.StrRepr encoder -- this was the live, reproducible gap the
+// r2 codex round caught (a P1: Go single-quoted unconditionally, Python
+// double-quotes here).
 func TestUnknownTeamIDsDetailSortsAndQuotes(t *testing.T) {
-	got := unknownTeamIDsDetail([]string{"b", "a", "b"})
-	want := `Unknown team_id(s): ['a', 'b']`
-	if got != want {
-		t.Errorf("got %s, want %s", got, want)
+	cases := []struct {
+		name string
+		in   []string
+		want string
+	}{
+		{"common case, no apostrophe", []string{"b", "a", "b"}, `Unknown team_id(s): ['a', 'b']`},
+		{"apostrophe switches to double quotes", []string{"doesn't-exist"}, `Unknown team_id(s): ["doesn't-exist"]`},
+		{"mixed: only the apostrophe-holding element switches", []string{"plain", "doesn't-exist"}, `Unknown team_id(s): ["doesn't-exist", 'plain']`},
 	}
-}
-
-// TestSortedKeysIsDeterministic proves sortedKeys (used to order the
-// provider-conflict check, r1 finding #5) is alphabetical and stable,
-// independent of Go's randomized map iteration.
-func TestSortedKeysIsDeterministic(t *testing.T) {
-	m := map[string][]string{"z-provider": {"v"}, "a-provider": {"v"}, "m-provider": {"v"}}
-	want := []string{"a-provider", "m-provider", "z-provider"}
-	for i := 0; i < 5; i++ {
-		got := sortedKeys(m)
-		if len(got) != len(want) {
-			t.Fatalf("got %v, want %v", got, want)
-		}
-		for j := range want {
-			if got[j] != want[j] {
-				t.Fatalf("got %v, want %v", got, want)
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			got := unknownTeamIDsDetail(test.in)
+			if got != test.want {
+				t.Errorf("got %s, want %s", got, test.want)
 			}
-		}
+		})
 	}
 }
 
@@ -103,24 +99,50 @@ func TestSortedKeysIsDeterministic(t *testing.T) {
 // pythonProviderIdentitiesJSON (built on the shared pyjson.Dumps, not a
 // route-local encoder) against Python's bare `json.dumps` default
 // separators (", ", ": "), captured live -- pyjson.Marshal's compact
-// Starlette-response form omits both spaces.
+// Starlette-response form omits both spaces. Also proves (r2, CHAOS-6310
+// finding #3) that keys render in the dict's OWN order, not sorted: the
+// last case's insertion order ("b" then "a") is deliberately
+// non-alphabetical, matching Python's dict, which never reorders.
 func TestPythonProviderIdentitiesJSONMatchesJSONDumpsSpacing(t *testing.T) {
+	build := func(pairs ...struct {
+		key    string
+		values []string
+	}) *pybody.OrderedStringListDict {
+		d := pybody.NewOrderedStringListDict()
+		for _, p := range pairs {
+			d.Set(p.key, p.values)
+		}
+		return d
+	}
+	pair := func(key string, values ...string) struct {
+		key    string
+		values []string
+	} {
+		return struct {
+			key    string
+			values []string
+		}{key, values}
+	}
 	cases := []struct {
-		in   map[string][]string
+		name string
+		in   *pybody.OrderedStringListDict
 		want string
 	}{
-		{in: map[string][]string{}, want: `{}`},
-		{in: map[string][]string{"order-provider-0": {"order-value-0"}}, want: `{"order-provider-0": ["order-value-0"]}`},
-		{in: map[string][]string{"a": {}}, want: `{"a": []}`},
-		{in: map[string][]string{"b": {"x", "y"}, "a": {"z"}}, want: `{"a": ["z"], "b": ["x", "y"]}`},
+		{"nil dict", nil, `{}`},
+		{"empty dict", pybody.NewOrderedStringListDict(), `{}`},
+		{"single key", build(pair("order-provider-0", "order-value-0")), `{"order-provider-0": ["order-value-0"]}`},
+		{"empty value list", build(pair("a")), `{"a": []}`},
+		{"insertion order preserved, not sorted", build(pair("b", "x", "y"), pair("a", "z")), `{"b": ["x", "y"], "a": ["z"]}`},
 	}
 	for _, tc := range cases {
-		got, err := pythonProviderIdentitiesJSON(tc.in)
-		if err != nil {
-			t.Fatalf("pythonProviderIdentitiesJSON(%v): %v", tc.in, err)
-		}
-		if got != tc.want {
-			t.Errorf("pythonProviderIdentitiesJSON(%v) = %s, want %s", tc.in, got, tc.want)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := pythonProviderIdentitiesJSON(tc.in)
+			if err != nil {
+				t.Fatalf("pythonProviderIdentitiesJSON: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("pythonProviderIdentitiesJSON = %s, want %s", got, tc.want)
+			}
+		})
 	}
 }

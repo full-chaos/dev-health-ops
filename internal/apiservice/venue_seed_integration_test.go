@@ -322,6 +322,10 @@ func venueRequests(f venueFixture, tokens map[string]string) []venueoracle.Reque
 	add("teams: create is update on same id", "POST", teams, json(bearer("admin")), b64(`{"team_id":"eng","name":"Engineering Renamed"}`))
 	add("teams: get existing", "GET", teams+"/eng", bearer("admin"), nil)
 	add("teams: get missing", "GET", teams+"/nope", bearer("admin"), nil)
+	// r2 finding #4: GET .../teams/discover without `provider` must be the
+	// SAME 422 "Field required" on both planes, not Go's own 404 "Team not
+	// found" from treating "discover" as a team_id.
+	add("teams: get discover without provider", "GET", teams+"/discover", bearer("admin"), nil)
 	add("teams: list after create", "GET", teams, bearer("admin"), nil)
 	add("teams: patch description only", "PATCH", teams+"/eng", json(bearer("admin")), b64(`{"description":"patched"}`))
 	add("teams: patch missing team", "PATCH", teams+"/nope", json(bearer("admin")), b64(`{"name":"x"}`))
@@ -357,20 +361,27 @@ func venueRequests(f venueFixture, tokens map[string]string) []venueoracle.Reque
 		b64(`{"extra_data":"not-a-dict"}`))
 	add("teams: create coerces sync_policy string", "POST", teams, json(bearer("admin")),
 		b64(`{"team_id":"qa4","name":"QA4","sync_policy":"1"}`))
+	// r2 finding #1: sync_policy far past int64 (2**64+1) must be a bounds
+	// rejection on both planes, not a wrapped-and-accepted write.
+	add("teams: create rejects sync_policy beyond int64", "POST", teams, json(bearer("admin")),
+		b64(`{"team_id":"qa5","name":"QA5","sync_policy":18446744073709551617}`))
 	add("teams: list rejects active_only=not-a-bool", "GET", teams+"?active_only=not-a-bool", bearer("admin"), nil)
 	add("identities: create rejects null provider_identities (create-shaped, no | None)", "POST", identities, json(bearer("admin")),
 		b64(`{"canonical_id":"carol","provider_identities":null}`))
 	add("identities: create rejects null team_ids (create-shaped, no | None)", "POST", identities, json(bearer("admin")),
 		b64(`{"canonical_id":"dave","team_ids":null}`))
-	// Status-only proof (r1 finding #6): both APIs 404 here regardless of
-	// how the message escapes the apostrophe -- the message BODY's
-	// element-quoting is a documented, still-open gap (see
-	// unknownTeamIDsDetail's doc comment and
-	// venueOracleKnownGapRequest/unknownTeamIDDetailPattern in
-	// venue_oracle_integration_test.go, which blanks exactly this one
-	// request's quoting difference before comparing, never any other).
-	add(venueOracleKnownGapRequest, "POST", identities, json(bearer("admin")),
+	// r1 finding #6, fixed in r2: unknownTeamIDsDetail now uses the shared
+	// pythonparity.StrRepr encoder, so the full response BODY -- not just
+	// the status -- must match byte for byte here too, including the
+	// apostrophe's repr()-style double-quote switch.
+	add("identities: create unknown team_id with apostrophe", "POST", identities, json(bearer("admin")),
 		b64(`{"canonical_id":"erin","team_ids":["doesn't-exist"]}`))
+	// r2 finding #3: provider_identities must preserve the request's own
+	// insertion order ("zeta" before "alpha") in BOTH the response body and
+	// the identity read back afterward, not an alphabetized order.
+	add("identities: create multi-provider preserves insertion order", "POST", identities, json(bearer("admin")),
+		b64(`{"canonical_id":"frank","provider_identities":{"zeta":["z-gh"],"alpha":["a-gh"]}}`))
+	add("identities: get multi-provider identity preserves stored order", "GET", identities, bearer("admin"), nil)
 	return out
 }
 

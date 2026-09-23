@@ -19,7 +19,6 @@ package teamsidentity
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -29,6 +28,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 )
 
@@ -76,7 +76,7 @@ type Identity struct {
 	CanonicalID        string
 	DisplayName        *string
 	Email              *string
-	ProviderIdentities map[string][]string
+	ProviderIdentities *pybody.OrderedStringListDict
 	TeamIDs            []string
 	IsActive           bool
 	UpdatedAt          time.Time
@@ -415,19 +415,29 @@ func (s Store) queryIdentities(ctx context.Context, orgID string, canonicalID *s
 }
 
 // decodeProviderIdentities mirrors _decode_provider_identities: malformed
-// or non-object JSON is a silent {}, never a read failure.
-func decodeProviderIdentities(raw string) map[string][]string {
+// or non-object JSON is a silent {}, never a read failure. Parses with
+// pyjson (not encoding/json into a map[string]any, which is unordered) so
+// the persisted text's own key order survives the round trip -- r2,
+// CHAOS-6310 finding #3: a response GET-ing back what an earlier write
+// stored must reproduce that write's provider order, not an alphabetized
+// or randomized one.
+func decodeProviderIdentities(raw string) *pybody.OrderedStringListDict {
+	out := pybody.NewOrderedStringListDict()
 	if raw == "" {
-		return map[string][]string{}
+		return out
 	}
-	var decoded map[string]any
-	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
-		return map[string][]string{}
+	decoded, err := pyjson.DecodeString(raw)
+	if err != nil {
+		return out
 	}
-	out := make(map[string][]string, len(decoded))
-	for key, value := range decoded {
-		list, ok := value.([]any)
-		if !ok {
+	object, isObject := decoded.(*pyjson.Object)
+	if !isObject {
+		return out
+	}
+	for _, key := range object.Keys() {
+		value, _ := object.Get(key)
+		list, isList := value.([]pyjson.Value)
+		if !isList {
 			continue
 		}
 		strs := make([]string, 0, len(list))
@@ -436,7 +446,7 @@ func decodeProviderIdentities(raw string) map[string][]string {
 				strs = append(strs, fmt.Sprintf("%v", item))
 			}
 		}
-		out[key] = strs
+		out.Set(key, strs)
 	}
 	return out
 }
@@ -466,7 +476,8 @@ func (s Store) FindIdentityByProviderIdentity(ctx context.Context, orgID, provid
 		return nil, err
 	}
 	for i := range identities {
-		for _, candidate := range identities[i].ProviderIdentities[provider] {
+		candidates, _ := identities[i].ProviderIdentities.Get(provider)
+		for _, candidate := range candidates {
 			if candidate == identityValue {
 				return &identities[i], nil
 			}
@@ -482,7 +493,7 @@ type IdentityWrite struct {
 	CanonicalID        string
 	DisplayName        *string
 	Email              *string
-	ProviderIdentities *map[string][]string
+	ProviderIdentities *pybody.OrderedStringListDict
 	TeamIDs            *[]string
 }
 
@@ -504,10 +515,10 @@ func (s Store) CreateOrUpdateIdentity(ctx context.Context, orgID string, write I
 	if resolvedEmail == nil && existing != nil {
 		resolvedEmail = existing.Email
 	}
-	resolvedProviders := map[string][]string{}
+	resolvedProviders := pybody.NewOrderedStringListDict()
 	if write.ProviderIdentities != nil {
-		resolvedProviders = *write.ProviderIdentities
-	} else if existing != nil {
+		resolvedProviders = write.ProviderIdentities
+	} else if existing != nil && existing.ProviderIdentities != nil {
 		resolvedProviders = existing.ProviderIdentities
 	}
 	var resolvedTeamIDs []string
@@ -566,7 +577,7 @@ type identityInsertRow struct {
 	UpdatedAt              time.Time
 }
 
-// pythonProviderIdentitiesJSON renders m the way `storage/clickhouse.py`'s
+// pythonProviderIdentitiesJSON renders d the way `storage/clickhouse.py`'s
 // bare `json.dumps(m)` call (no keyword arguments at all) renders a
 // `dict[str, list[str]]` -- pyjson.Marshal's compact `{"a":["b"]}`
 // (Starlette's own response separators) differs from that in both spacing
@@ -576,16 +587,19 @@ type identityInsertRow struct {
 // encoder for exactly this bare-`json.dumps()` shape (internal/api/pyjson,
 // already used by internal/api/telemetry and internal/api/producttelemetry
 // for the same reason), not a route-local one, so every ClickHouse
-// JSON-column writer shares one implementation. Keys are sorted (matching
-// encoding/json.Marshal's map-key sort, this package's prior behavior) --
-// Python's dict preserves the original request's insertion order instead,
-// which this does not attempt to reproduce; a multi-key provider_identities
-// value can therefore still differ from Python's by key order, only the
-// spacing/escaping, and the single-key case, are proven byte-identical here.
-func pythonProviderIdentitiesJSON(m map[string][]string) (string, error) {
+// JSON-column writer shares one implementation. Keys are written in d's OWN
+// order (r2, CHAOS-6310 finding #3, fixed): sorting here (this package's
+// prior behavior, matching encoding/json.Marshal's map-key sort) was a
+// live, reproducible mismatch against Python's dict, which preserves the
+// original request's insertion order -- d is an OrderedStringListDict for
+// exactly this reason, carried from the request all the way to this write.
+func pythonProviderIdentitiesJSON(d *pybody.OrderedStringListDict) (string, error) {
 	object := pyjson.NewObject()
-	for _, key := range sortedKeys(m) {
-		object.Set(key, m[key])
+	if d != nil {
+		for _, key := range d.Keys {
+			values, _ := d.Get(key)
+			object.Set(key, values)
+		}
 	}
 	return pyjson.Dumps(object)
 }

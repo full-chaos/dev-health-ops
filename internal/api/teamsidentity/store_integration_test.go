@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
@@ -153,6 +154,30 @@ func TestTeamCRUDRoundTrip(t *testing.T) {
 		t.Fatalf("manual_members not tracked: %+v", afterAdd)
 	}
 
+	// r2 (CHAOS-6310) finding #5: the EARLIER omitted-field update (above,
+	// "PATCH-shaped update") ran before any member ever existed, so a
+	// regression that CLEARED manual_members on an omitted Members/
+	// ManualMembers field would have been indistinguishable from correctly
+	// preserving an already-empty roster -- that update could not have
+	// caught it. This one runs AFTER AddMembers has populated a real,
+	// non-empty roster, with Members/ManualMembers both omitted (nil), so a
+	// clearing regression is now observable: the roster must still be
+	// exactly {alice@example.com} afterward, not wiped by the update this
+	// field is not part of.
+	afterOmittedUpdate, err := store.CreateOrUpdateTeam(ctx, orgID, TeamWrite{
+		TeamID: "team-a", Name: "Team A Renamed Again", Description: got.Description,
+		RepoPatterns: &got.RepoPatterns, ProjectKeys: &got.ProjectKeys,
+	})
+	if err != nil {
+		t.Fatalf("omitted-field update after members exist: %v", err)
+	}
+	if len(afterOmittedUpdate.Members) != 1 || afterOmittedUpdate.Members[0] != "alice@example.com" {
+		t.Fatalf("members cleared by an update that omitted the field: %+v", afterOmittedUpdate)
+	}
+	if len(afterOmittedUpdate.ManualMembers) != 1 || afterOmittedUpdate.ManualMembers[0] != "alice@example.com" {
+		t.Fatalf("manual_members cleared by an update that omitted the field: %+v", afterOmittedUpdate)
+	}
+
 	afterRemove, err := store.RemoveMembers(ctx, orgID, "team-a", map[string]bool{"alice@example.com": true})
 	if err != nil {
 		t.Fatalf("remove members: %v", err)
@@ -191,9 +216,11 @@ func TestIdentityCRUDRoundTrip(t *testing.T) {
 	const orgID = "org-1"
 
 	email := "bob@example.com"
+	bobProviders := pybody.NewOrderedStringListDict()
+	bobProviders.Set("github", []string{"bob-gh"})
 	created, err := store.CreateOrUpdateIdentity(ctx, orgID, IdentityWrite{
 		CanonicalID: "bob", Email: &email,
-		ProviderIdentities: &map[string][]string{"github": {"bob-gh"}},
+		ProviderIdentities: bobProviders,
 		TeamIDs:            &[]string{},
 	})
 	if err != nil {
@@ -202,7 +229,8 @@ func TestIdentityCRUDRoundTrip(t *testing.T) {
 	if created.CanonicalID != "bob" || created.Email == nil || *created.Email != email {
 		t.Fatalf("created identity mismatch: %+v", created)
 	}
-	if len(created.ProviderIdentities["github"]) != 1 || created.ProviderIdentities["github"][0] != "bob-gh" {
+	createdGithub, _ := created.ProviderIdentities.Get("github")
+	if len(createdGithub) != 1 || createdGithub[0] != "bob-gh" {
 		t.Fatalf("provider_identities not round-tripped: %+v", created.ProviderIdentities)
 	}
 

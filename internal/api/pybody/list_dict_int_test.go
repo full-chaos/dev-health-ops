@@ -62,7 +62,7 @@ func TestNewValidatorsHappyPath(t *testing.T) {
 		t.Errorf("OptionalStringList: %v %v", list, present)
 	}
 	dict, present := errs.OptionalStringArrayDict(object, "b")
-	if !present || len(dict["github"]) != 2 {
+	if !present || len(dict.Values["github"]) != 2 {
 		t.Errorf("OptionalStringArrayDict: %v %v", dict, present)
 	}
 	value, present := errs.OptionalBoundedInt(object, "c", 0, 2)
@@ -185,6 +185,50 @@ func TestBoundedIntCoercionMatchesPydantic(t *testing.T) {
 	}
 }
 
+// TestBoundedIntRejectsValuesBeyondInt64 is CHAOS-6310 r2 finding #1's
+// direct reproduction: a live venue run sent sync_policy=2**64+1 (an
+// ordinary JSON integer, unbounded in Python) and Go accepted it as team
+// row "overflow-policy" (200) while Python answered 422 "less_than_equal".
+// pyjson.Int's underlying *big.Int carries 2**64+1 exactly; the bug was
+// converting it to int64 (which wraps, undefined per math/big's own docs)
+// BEFORE the bounds check, so the wrapped value (1) passed a `le: 2` bound
+// meant to reject it. Also covers the symmetric case (far below minValue)
+// and a JSON-float and a decimal-string carrying the same out-of-range
+// magnitude, since the fix (compare with math/big before ever narrowing to
+// int64) is one code path for all three input shapes.
+func TestBoundedIntRejectsValuesBeyondInt64(t *testing.T) {
+	huge := "18446744073709551617" // 2**64 + 1
+	veryNegative := "-18446744073709551617"
+	body := `{"json_int":` + huge + `,"json_int_neg":` + veryNegative +
+		`,"json_float":1.8446744073709552e19,"str_int":"` + huge + `"}`
+	var errs Errors
+	object, ok := errs.Object(Body{Value: mustDecode(t, body)})
+	if !ok {
+		t.Fatal("object refused")
+	}
+	if _, present := errs.OptionalBoundedInt(object, "json_int", 0, 2); present {
+		t.Error(`OptionalBoundedInt(2**64+1, le=2): present=true, want a rejected greater-than-max value`)
+	}
+	if _, present := errs.OptionalBoundedInt(object, "json_int_neg", 0, 2); present {
+		t.Error(`OptionalBoundedInt(-(2**64+1), ge=0): present=true, want a rejected less-than-min value`)
+	}
+	if _, present := errs.OptionalBoundedInt(object, "json_float", 0, 2); present {
+		t.Error(`OptionalBoundedInt(1.8446744073709552e19, le=2): present=true, want a rejected out-of-range value`)
+	}
+	if _, present := errs.OptionalBoundedInt(object, "str_int", 0, 2); present {
+		t.Error(`OptionalBoundedInt("2**64+1", le=2): present=true, want a rejected out-of-range value`)
+	}
+	for _, e := range errs {
+		if e.Type != "less_than_equal" && e.Type != "greater_than_equal" {
+			t.Errorf("unexpected error type %q for %v (loc %v) -- an out-of-range magnitude must fail the BOUNDS check, never int_parsing/int_type/int_from_float",
+				e.Type, e.Input, e.Loc)
+		}
+	}
+	if len(errs) != 4 {
+		t.Fatalf("got %d errors, want 4: %+v", len(errs), errs)
+	}
+}
+
 // TestEveryOptionalHelperTreatsNullAndAbsentAlike is the shared-package
 // table test CHAOS-6310 r1 finding #1 asked for (R299): every `Optional*`
 // helper's field is declared `X | None` in the pydantic model it mirrors,
@@ -268,7 +312,7 @@ func TestEveryOptionalHelperTreatsNullAndAbsentAlike(t *testing.T) {
 		if _, present := errs.OptionalStringArrayDict(object, "dict_null"); present {
 			t.Error("null must be present=false")
 		}
-		if v, present := errs.OptionalStringArrayDict(object, "dict"); !present || len(v["p"]) != 1 {
+		if v, present := errs.OptionalStringArrayDict(object, "dict"); !present || len(v.Values["p"]) != 1 {
 			t.Errorf("present value: got %v/%v", v, present)
 		}
 		if len(errs) != 0 {

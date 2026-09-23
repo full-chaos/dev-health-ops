@@ -52,6 +52,12 @@ func Routes(conn driver.Conn, guard *policy.Guard, logger *slog.Logger) []httpap
 		// TestRoutesRegisterWithoutPanicking proves the ACTUAL route table
 		// below builds cleanly today, and will catch any future addition
 		// (this one included) that reintroduces the same conflict.
+		// r2 (CHAOS-6310) finding #4: the wildcard capturing "discover" was
+		// proved live to answer Go's own 404 "Team not found" where Python
+		// answers 422 "Field required" for a missing `provider` query
+		// parameter -- getTeam below now intercepts exactly that one case
+		// (the only one this PR can prove without CHAOS-6311's business
+		// logic) before it ever reaches a team lookup.
 		{Method: http.MethodDelete, Pattern: "/api/v1/admin/teams/{team_id}",
 			Handler: guard.Wrap(policy.AdminOrg, http.HandlerFunc(h.deleteTeam))},
 		{Method: http.MethodGet, Pattern: "/api/v1/admin/teams/{team_id}",
@@ -159,8 +165,11 @@ func identityJSON(identity Identity) *pyjson.Object {
 	setOptionalString(out, "display_name", identity.DisplayName)
 	setOptionalString(out, "email", identity.Email)
 	providers := pyjson.NewObject()
-	for _, key := range sortedKeys(identity.ProviderIdentities) {
-		providers.Set(key, stringsToValues(identity.ProviderIdentities[key]))
+	if identity.ProviderIdentities != nil {
+		for _, key := range identity.ProviderIdentities.Keys {
+			values, _ := identity.ProviderIdentities.Get(key)
+			providers.Set(key, stringsToValues(values))
+		}
 	}
 	out.Set("provider_identities", providers)
 	out.Set("team_ids", stringsToValues(identity.TeamIDs))
@@ -265,8 +274,36 @@ func (h handlers) deleteTeam(w http.ResponseWriter, r *http.Request) {
 	policy.WriteJSON(w, http.StatusOK, out, nil)
 }
 
+// discoverMissingProviderDetail is the exact 422 body FastAPI's own
+// Query(...) dependency raises for GET /api/v1/admin/teams/discover
+// without its required `provider` query parameter (captured against the
+// live venue). CHAOS-6311 owns the real discover implementation (external
+// provider calls through IntegrationCredentialsService); this route table
+// cannot yet mount a literal /teams/discover pattern beside the
+// {team_id} wildcard without panicking httpapi's ServeMux construction
+// (see the route-table comment on Routes, and
+// TestTeamsDiscoverStaticRouteWins/TestRoutesRegisterWithoutPanicking).
+// r2 (CHAOS-6310) finding #4: leaving "discover" to fall all the way
+// through to a team lookup answered Go's OWN 404 "Team not found" where
+// Python answers 422 "Field required" for the one case this route can
+// prove without CHAOS-6311's business logic -- a missing `provider`. This
+// intercepts exactly that case inside the wildcard handler (the one
+// discriminator this route table can express); a request that DOES supply
+// `provider` still falls through to today's "team not found" 404,
+// unchanged and no worse than before -- discover's actual behavior once a
+// provider is present is CHAOS-6311's to implement and prove.
+func discoverMissingProviderDetail() *pyjson.Object {
+	return pybody.Detail([]pybody.Error{{
+		Type: "missing", Loc: []pyjson.Value{"query", "provider"}, Msg: "Field required", Input: nil,
+	}})
+}
+
 func (h handlers) getTeam(w http.ResponseWriter, r *http.Request) {
 	teamID := pathParam(r, "team_id")
+	if teamID == "discover" && !r.URL.Query().Has("provider") {
+		policy.WriteJSON(w, http.StatusUnprocessableEntity, discoverMissingProviderDetail(), nil)
+		return
+	}
 	team, err := h.store.GetTeam(r.Context(), orgIDOf(r.Context()), teamID)
 	if err != nil {
 		h.internal(w, r, "get team", err)
@@ -370,10 +407,13 @@ func storedFacets(identity Identity) map[string]bool {
 	if identity.CanonicalID != "" {
 		facets[identity.CanonicalID] = true
 	}
-	for _, values := range identity.ProviderIdentities {
-		for _, value := range values {
-			if value != "" {
-				facets[value] = true
+	if identity.ProviderIdentities != nil {
+		for _, key := range identity.ProviderIdentities.Keys {
+			values, _ := identity.ProviderIdentities.Get(key)
+			for _, value := range values {
+				if value != "" {
+					facets[value] = true
+				}
 			}
 		}
 	}
@@ -407,7 +447,7 @@ func (h handlers) createOrUpdateIdentity(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if !hasProviders {
-		providerIdentities = map[string][]string{}
+		providerIdentities = pybody.NewOrderedStringListDict()
 	}
 	if !hasTeamIDs {
 		teamIDs = []string{}
@@ -435,17 +475,16 @@ func (h handlers) createOrUpdateIdentity(w http.ResponseWriter, r *http.Request)
 	}
 
 	// A submitted provider identity must not already belong to a DIFFERENT
-	// canonical identity. Iterated in SORTED provider order, not Go's
-	// randomized map order -- otherwise which conflict is reported first
-	// is nondeterministic across otherwise-identical requests. Python's own
-	// `for provider, identities in provider_identities.items()` walks
-	// insertion order instead, so this does not byte-match Python's choice
-	// of WHICH conflict comes first when a request names more than one --
-	// deterministic-but-different beats nondeterministic, and a request
-	// naming exactly one conflicting provider (matching this route's own
-	// venue oracle coverage) is unaffected either way.
-	for _, provider := range sortedKeys(providerIdentities) {
-		for _, identityValue := range providerIdentities[provider] {
+	// canonical identity. Iterated in the request's own INSERTION order,
+	// matching Python's `for provider, identities in
+	// provider_identities.items()` exactly -- r1 used a sorted order here
+	// (Go's map iteration is randomized and no insertion-order-preserving
+	// type existed yet), which was deterministic but could still report a
+	// DIFFERENT conflict first than Python when a request names more than
+	// one; r2's OrderedStringListDict removes that gap too.
+	for _, provider := range providerIdentities.Keys {
+		values, _ := providerIdentities.Get(provider)
+		for _, identityValue := range values {
 			owner, err := h.store.FindIdentityByProviderIdentity(ctx, orgID, provider, identityValue)
 			if err != nil {
 				h.internal(w, r, "check provider identity ownership", err)
@@ -474,7 +513,7 @@ func (h handlers) createOrUpdateIdentity(w http.ResponseWriter, r *http.Request)
 	}
 	newTeamIDs := toSet(teamIDs)
 
-	write := IdentityWrite{CanonicalID: canonicalID, ProviderIdentities: &providerIdentities, TeamIDs: &teamIDs}
+	write := IdentityWrite{CanonicalID: canonicalID, ProviderIdentities: providerIdentities, TeamIDs: &teamIDs}
 	if hasDisplayName {
 		write.DisplayName = &displayName
 	}

@@ -39,23 +39,6 @@ const venueKey = "venue-oracle-signing-key-0123456789abcdef"
 // venue oracle diff can blank them before comparing bodies.
 var timestampFieldPattern = regexp.MustCompile(`"(created_at|updated_at|last_drift_sync_at)":"[^"]*"`)
 
-// unknownTeamIDDetailPattern matches the "Unknown team_id(s): [...]" 404
-// detail body. Its element-quoting style is a KNOWN, OPEN gap (CHAOS-6310
-// r1 finding #6): Python's repr() switches to double quotes for a value
-// holding a single quote and no double quote; this port does not
-// reproduce that rule locally on purpose, pending a shared
-// pythonparity.StrRepr encoder another lane's PR is moving to
-// CHAOS-6322 (R299 -- one implementation, not several that can drift
-// apart). Blanked ONLY for the one request that exercises an apostrophe,
-// by name, so this stays a documented exception, never a general
-// weakening of the byte-for-byte body comparison every other request
-// still gets.
-var unknownTeamIDDetailPattern = regexp.MustCompile(`Unknown team_id\(s\): \[.*?\]`)
-
-// venueOracleKnownGapRequest names the one request whose body carries the
-// still-open finding #6 gap above.
-const venueOracleKnownGapRequest = "identities: unknown team_id with apostrophe (status only, see finding #6)"
-
 func venueRoot() string {
 	_, file, _, _ := runtime.Caller(0)
 	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
@@ -100,21 +83,19 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 	requests := venueRequests(seed, venue.Tokens)
 	var receipt strings.Builder
 	receipt.WriteString(venueoracle.Diff(t, base, requests, venue.ServePython(t, requests), venueoracle.DiffOptions{
-		// Composes THREE independent normalizations, each scoped to its own
-		// known cause: normalizeRuled's own rules, the team/identity admin
-		// timestamp blanking (CHAOS-6310 -- each plane mints its own
+		// Composes TWO independent normalizations, each scoped to its own
+		// known cause: normalizeRuled's own rules, and the team/identity
+		// admin timestamp blanking (CHAOS-6310 -- each plane mints its own
 		// ReplacingMergeTree row's now(), a construction-time value never
 		// meant to agree, exactly what Normalize's own doc comment
-		// describes), and the ONE known, tracked r1 finding #6 gap (an
-		// apostrophe-quoting difference), blanked ONLY for the one request
-		// that exercises it, by name -- never weakening the byte-for-byte
-		// check for anything else.
+		// describes). r1 finding #6 (the apostrophe-quoting gap) is fixed
+		// as of r2 -- unknownTeamIDsDetail now uses the shared
+		// pythonparity.StrRepr encoder (CHAOS-6322, #2850) -- so the
+		// byte-for-byte body comparison no longer needs a per-request
+		// exception for it.
 		Normalize: func(request venueoracle.Request, body string) string {
 			body = normalizeRuled(body)
 			body = timestampFieldPattern.ReplaceAllString(body, `"$1":"<time>"`)
-			if request.Name == venueOracleKnownGapRequest {
-				body = unknownTeamIDDetailPattern.ReplaceAllString(body, "Unknown team_id(s): [<pending-shared-repr>]")
-			}
 			return body
 		},
 		Inspect: func(request venueoracle.Request, goResponse venueoracle.Response) {

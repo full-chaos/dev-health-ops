@@ -247,7 +247,10 @@ func TestLoaderResolvesRunAuthLikeSyncTaskBootstrap(t *testing.T) {
 		// Stamped with a matching witness: unchanged.
 		witnessMapping := newObject()
 		witnessMapping.set("token", "stamped-token")
-		witness := RunAuthFingerprint(witnessMapping, &stamped, f.integID)
+		witness, err := RunAuthFingerprint(witnessMapping, &stamped, f.integID)
+		if err != nil {
+			t.Fatal(err)
+		}
 		f.exec(`UPDATE public.sync_runs SET credential_fingerprint = $1`, witness)
 		check("matching witness strict", f.loader(map[string]string{"SYNC_RUN_AUTH_STRICT": "true"}), expect(&stamped, "stamped-token"))
 
@@ -468,5 +471,93 @@ func TestLoaderHydratesPagerDutyLikeResolveRunAuth(t *testing.T) {
 		if results := run(loader(nil)); !estimated(results) || oauth.calls.Load()+doer.calls.Load() != before {
 			t.Fatalf("api token: %+v", results)
 		}
+	})
+}
+
+// sequenceDoer answers the token exchange with each status in turn.
+type sequenceDoer struct {
+	statuses []int
+	calls    atomic.Int64
+}
+
+func (d *sequenceDoer) Do(request *http.Request) (*http.Response, error) {
+	call := int(d.calls.Add(1)) - 1
+	status := d.statuses[min(call, len(d.statuses)-1)]
+	return &http.Response{
+		StatusCode: status, Header: http.Header{"Content-Type": {"application/json"}},
+		Body: io.NopCloser(strings.NewReader(`{"access_token": "cc-token", "expires_in": 3600}`)), Request: request,
+	}, nil
+}
+
+// TestLoaderRoundTwoParity pins the three round-2 review reproductions:
+// a failed token exchange is retried for the next unit (Python caches only
+// a successful exchange), a credential holding a NaN literal still decrypts
+// to a mapping, and dict() of a list of pairs is accepted at every loader
+// site Python applies it.
+func TestLoaderRoundTwoParity(t *testing.T) {
+	t.Run("failed exchange is not cached", func(t *testing.T) {
+		withLoaderFixture(t, "pagerduty", func(f *loaderFixture) {
+			f.exec(`INSERT INTO public.sync_runs (id, org_id) VALUES ($1, $2)`, f.runID, f.orgID)
+			f.exec(`UPDATE public.integrations SET credential_id = $1`, f.credential("pagerduty", true,
+				`{"auth_mode": "client_credentials", "client_id": "i", "client_secret": "s", "subdomain": "acme", "region": "us"}`))
+			first := f.unit("pagerduty", "incidents", nil)
+			second := f.unit("pagerduty", "services", nil)
+			doer := &sequenceDoer{statuses: []int{http.StatusTooManyRequests, http.StatusOK}}
+			loader := f.loader(nil)
+			loader.PagerDutyOAuth, loader.PagerDutyDoer = &fakePagerDutyOAuth{}, doer
+			results, err := loader.EstimateUnits(f.ctx, f.orgID, f.runID, []string{first, second})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if results[first].Err == nil || len(results[second].Estimates) != 1 || doer.calls.Load() != 2 {
+				t.Fatalf("429 then 200: first=%+v second=%+v exchanges=%d; want the second unit estimated after a second exchange",
+					results[first], results[second], doer.calls.Load())
+			}
+		})
+	})
+
+	t.Run("NaN literal and pair lists", func(t *testing.T) {
+		withLoaderFixture(t, "github", func(f *loaderFixture) {
+			f.exec(`INSERT INTO public.sync_runs (id, org_id) VALUES ($1, $2)`, f.runID, f.orgID)
+			f.exec(`UPDATE public.integrations SET credential_id = $1`, f.credential("github", true, `{"token": "t", "x": NaN}`))
+			flags := `[["sync_prs", 1]]`
+			unit := f.unit("github", "work-items", &flags)
+			results, err := f.loader(nil).EstimateUnits(f.ctx, f.orgID, f.runID, []string{unit})
+			if err != nil {
+				t.Fatal(err)
+			}
+			// work-items with sync_prs from the pair list: rest_core +
+			// graphql_cost + secondary_abuse_risk.
+			if results[unit].Err != nil || len(results[unit].Estimates) != 3 {
+				t.Fatalf("NaN credential with pair-list flags: %+v", results[unit])
+			}
+		})
+		withLoaderFixture(t, "pagerduty", func(f *loaderFixture) {
+			f.exec(`INSERT INTO public.sync_runs (id, org_id) VALUES ($1, $2)`, f.runID, f.orgID)
+			f.exec(`UPDATE public.integrations SET credential_id = $1`, f.credential("pagerduty", true, `{"subdomain": "acme"}`))
+			f.exec(`INSERT INTO public.integration_datasets (id, org_id, integration_id, dataset_key, options)
+VALUES ($1, $2, $3, 'incident-alerts', '[["enrichment_cap", 250]]')`, uuid.NewString(), f.orgID, f.integID)
+			unit := f.unit("pagerduty", "incident-alerts", nil)
+			results, err := f.loader(nil).EstimateUnits(f.ctx, f.orgID, f.runID, []string{unit})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if results[unit].Err != nil || len(results[unit].Estimates) != 2 || results[unit].Estimates[1].EstimatedUnits != 600 {
+				t.Fatalf("pair-list dataset options: %+v", results[unit])
+			}
+		})
+		withLoaderFixture(t, "linear", func(f *loaderFixture) {
+			f.exec(`INSERT INTO public.sync_runs (id, org_id) VALUES ($1, $2)`, f.runID, f.orgID)
+			f.exec(`UPDATE public.integrations SET credential_id = $1, config = '[["team_id", ""]]'`, f.credential("linear", true, `{"api_key": "k"}`))
+			f.exec(`UPDATE public.integration_sources SET external_id = 'linear', metadata = '[["planner_managed_sync_config_id", "c"]]'`)
+			unit := f.unit("linear", "work-items", nil)
+			results, err := f.loader(nil).EstimateUnits(f.ctx, f.orgID, f.runID, []string{unit})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if results[unit].Err != nil || len(results[unit].Estimates) == 0 {
+				t.Fatalf("pair-list linear metadata and config: %+v", results[unit])
+			}
+		})
 	})
 }

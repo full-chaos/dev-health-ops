@@ -265,13 +265,9 @@ FROM public.sync_runs WHERE id = $1::uuid AND org_id = $2`, runID, orgID).Scan(&
 	if err != nil {
 		return Context{}, err
 	}
-	flagsObject, err := dictOrEmpty(flagsValue)
+	processorFlags, err := processorFlags(flagsValue)
 	if err != nil {
 		return Context{}, err
-	}
-	processorFlags := make(map[string]bool, len(flagsObject.keys))
-	for _, key := range flagsObject.keys {
-		processorFlags[key] = truthy(flagsObject.values[key])
 	}
 
 	if err := checkLinearPlaceholderInputs(sourceProvider, integrationProvider, sourceExternalID, sourceMetadataText, integrationConfigText); err != nil {
@@ -344,7 +340,10 @@ func (loader Loader) resolveRunAuth(
 		credentialID = run.credentialID
 	}
 	if run.witness != nil && *run.witness != "" {
-		current := RunAuthFingerprint(mapping, credentialID, integrationID)
+		current, err := RunAuthFingerprint(mapping, credentialID, integrationID)
+		if err != nil {
+			return nil, nil, err
+		}
 		if current != *run.witness {
 			strict := pythonparity.Lower(pythonparity.Strip(loader.getenv("SYNC_RUN_AUTH_STRICT")))
 			if in(strict, "1", "true", "yes", "on") {
@@ -484,8 +483,8 @@ func checkLinearPlaceholderInputs(sourceProvider, integrationProvider, externalI
 }
 
 // RunAuthFingerprint is credentials/fingerprint.py credential_fingerprint
-// over a decrypted mapping.
-func RunAuthFingerprint(credentials any, credentialID *string, integrationID string) string {
+// over a decrypted mapping. It fails where Python's hashing raises.
+func RunAuthFingerprint(credentials any, credentialID *string, integrationID string) (string, error) {
 	fallback := func() *object {
 		scope := newObject()
 		id := "env"
@@ -509,12 +508,16 @@ func RunAuthFingerprint(credentials any, credentialID *string, integrationID str
 			"refresh_token", "refreshToken", "api_token", "apiToken", "api_key", "apiKey",
 			"private_key", "privateKey", "client_secret", "clientSecret"} {
 			if value := get(mapping, key); truthy(value) {
-				scope.set(key+"_sha256", sha256Hex(pyStr(value)))
+				digest, err := sha256Hex(pyStr(value))
+				if err != nil {
+					return "", err
+				}
+				scope.set(key+"_sha256", digest)
 			}
 		}
 	}
 	if !ok || len(scope.keys) == 0 {
 		scope = fallback()
 	}
-	return fingerprintOf(scope)
+	return fingerprintOf(scope), nil
 }

@@ -70,7 +70,11 @@ func estimateGitHub(context Context) ([]Estimate, error) {
 			candidate.set("base_url", baseURL)
 		}
 		if token := get(mapping, "token"); truthy(token) {
-			candidate.set("token_sha256", sha256Hex(pyStr(token)))
+			digest, err := sha256Hex(pyStr(token))
+			if err != nil {
+				return nil, err
+			}
+			candidate.set("token_sha256", digest)
 		}
 		if len(candidate.keys) > 0 {
 			scope = candidate
@@ -154,7 +158,11 @@ func estimateGitLab(context Context) ([]Estimate, error) {
 		}
 		token := firstTruthy(get(mapping, "token"), get(mapping, "private_token"), get(mapping, "access_token"))
 		if truthy(token) {
-			candidate.set("token_sha256", sha256Hex(pyStr(token)))
+			digest, err := sha256Hex(pyStr(token))
+			if err != nil {
+				return nil, err
+			}
+			candidate.set("token_sha256", digest)
 		}
 		if len(candidate.keys) > 0 {
 			scope = candidate
@@ -287,7 +295,11 @@ func estimateJira(context Context) ([]Estimate, error) {
 		}
 		for _, secretKey := range []string{"api_token", "apiToken", "access_token", "accessToken", "refresh_token", "refreshToken"} {
 			if value := get(mapping, secretKey); truthy(value) {
-				candidate.set(secretKey+"_sha256", sha256Hex(pyStr(value)))
+				digest, err := sha256Hex(pyStr(value))
+				if err != nil {
+					return nil, err
+				}
+				candidate.set(secretKey+"_sha256", digest)
 			}
 		}
 		if len(candidate.keys) > 0 {
@@ -447,9 +459,13 @@ func estimatePagerDuty(context Context) ([]Estimate, error) {
 	if value, present := mapping.get("subdomain"); present {
 		subdomain = pyStr(value)
 	}
+	fingerprint, err := sha256Hex(subdomain)
+	if err != nil {
+		return nil, err
+	}
 	bucket := Bucket{
 		Provider: "pagerduty", OrgID: context.OrgID, Host: host,
-		CredentialFingerprint: sha256Hex(subdomain), Dimension: DimensionRESTCore,
+		CredentialFingerprint: fingerprint, Dimension: DimensionRESTCore,
 	}
 	dataset := context.DatasetKey
 	if family, enrichment := pagerDutyEnrichmentFamilies[dataset]; enrichment {

@@ -96,12 +96,7 @@ type oracleOutput struct {
 // declaredDivergence names the inputs where the Go port is known and
 // decided to differ. Each one must STILL differ (checked below), so a later
 // change that closes or moves it is noticed instead of passing quietly.
-func declaredDivergence(input oracleEstimateInput, python json.RawMessage) string {
-	if strings.Contains(input.Credentials, "NaN") {
-		// json.loads accepts the NaN literal; Go's decoder refuses it, so
-		// the unit's estimate fails. No writer stores NaN in a credential.
-		return "nan-literal"
-	}
+func declaredDivergence(_ oracleEstimateInput, python json.RawMessage) string {
 	var result struct {
 		Estimates []struct {
 			EstimatedUnits json.Number `json:"estimated_units"`
@@ -183,7 +178,7 @@ func TestBudgetEstimatorMatchesLivePython(t *testing.T) {
 				t.Errorf("no case produced an estimate for %s: the comparison would pass on empty output", provider)
 			}
 		}
-		for _, name := range []string{"nan-literal", "estimate-past-int64"} {
+		for _, name := range []string{"estimate-past-int64"} {
 			if divergences[name] == 0 {
 				t.Errorf("declared divergence %q has no case", name)
 			}
@@ -195,17 +190,11 @@ func TestBudgetEstimatorMatchesLivePython(t *testing.T) {
 	t.Run("fingerprint", func(t *testing.T) {
 		for index, oracleCase := range output.Fingerprint {
 			credentials, err := decodeJSON([]byte(oracleCase.Input.Credentials))
-			if strings.Contains(oracleCase.Input.Credentials, "NaN") {
-				if err == nil {
-					t.Errorf("case %d: NaN credential decoded; the declared divergence moved", index)
-				}
-				continue
-			}
 			if err != nil {
 				t.Fatalf("case %d: decode: %v", index, err)
 			}
-			got := RunAuthFingerprint(credentials, oracleCase.Input.CredentialID, oracleIntegrationID)
-			if oracleCase.Python.Error != "" || got != oracleCase.Python.Fingerprint {
+			got, goErr := RunAuthFingerprint(credentials, oracleCase.Input.CredentialID, oracleIntegrationID)
+			if (oracleCase.Python.Error != "") != (goErr != nil) || got != oracleCase.Python.Fingerprint {
 				t.Errorf("case %d %s: python %q (%s), go %q", index, oracleCase.Input.Credentials,
 					oracleCase.Python.Fingerprint, oracleCase.Python.Error, got)
 			}
@@ -343,13 +332,9 @@ func oracleContext(input oracleEstimateInput) (Context, error) {
 	if err != nil {
 		return Context{}, err
 	}
-	flags, err := dictOrEmpty(flagsValue)
+	processorFlags, err := processorFlags(flagsValue)
 	if err != nil {
 		return Context{}, err
-	}
-	processorFlags := map[string]bool{}
-	for _, key := range flags.keys {
-		processorFlags[key] = truthy(flags.values[key])
 	}
 	optionsValue, err := decodeJSON([]byte(input.DatasetOptions))
 	if err != nil {

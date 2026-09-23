@@ -126,6 +126,16 @@ FLAGS = (
     '{"sync_prs": 0, "fetch_worklogs": 1, "gql_enabled": "x"}',
     '{"jira_fetch_worklogs": [], "atlassian_gql_enabled": {"a": 1}}',
     "null",
+    # dict() of an iterable of pairs, as SyncTaskBootstrap.load applies it.
+    '[["sync_prs", 1]]',
+    '[[1, true], [true, false], ["1", 1], [1.0, 0]]',
+    '["ab", {"sync_prs": 1, "x": 2}]',
+    "[[null, 1], [0.5, 1], [false, 1]]",
+    '"text"',
+    '[["only-one"]]',
+    "[[[1], 2]]",
+    "5",
+    "true",
 )
 
 # One ordinary mapping per provider, for the dataset x window x flags sweep.
@@ -188,6 +198,8 @@ SHARED_CREDENTIALS = (
     '{"region": "eu"}',
     '{"dup": 1, "dup": 2, "token": "first", "token": "second"}',
     '{"token": "t", "base_url": "https://x.example", "x": NaN}',
+    '{"token": "t", "app_id": Infinity, "installation_id": -Infinity, "user_id": NaN}',
+    '{"token": "\\ud83d\\ude00 \\ud800 lone", "base_url": " https://x.example/ "}',
 )
 
 OPTIONS = (
@@ -204,6 +216,10 @@ OPTIONS = (
     '{"enrichment_cap": null}',
     '{"enrichment_cap": 4611686018427387904}',
     '{"enrichment_cap": 100000000000000000000}',
+    '[["enrichment_cap", 250]]',
+    '[["enrichment_cap", 7], [1, 2], ["enrichment_cap", 350]]',
+    '[["enrichment_cap"]]',
+    '[{"a": 1}]',
 )
 
 ENVIRONMENTS: tuple[dict[str, str], ...] = (

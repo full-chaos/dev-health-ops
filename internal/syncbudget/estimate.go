@@ -134,9 +134,15 @@ func scaledUnits(fixedFloor, spanDays int) int {
 	return max(fixedFloor, fixedFloor*max(1, spanDays))
 }
 
-func sha256Hex(text string) string {
+// sha256Hex is hashlib.sha256(text.encode("utf-8")).hexdigest(): the
+// strict UTF-8 encode raises on a lone surrogate, which a JSON \uD800
+// escape can put in a Python str (see hasSurrogate).
+func sha256Hex(text string) (string, error) {
+	if hasSurrogate(text) {
+		return "", errUnicodeEncode
+	}
 	sum := sha256.Sum256([]byte(text))
-	return hex.EncodeToString(sum[:])
+	return hex.EncodeToString(sum[:]), nil
 }
 
 // fingerprintOf is each estimator's _credential_fingerprint over its safe

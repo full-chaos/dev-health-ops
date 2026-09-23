@@ -30,18 +30,23 @@ func (loader Loader) hydratePagerDuty(ctx context.Context, cache hydrationCache,
 	if credentialID != nil {
 		key = *credentialID
 	}
-	if err, done := cache[key]; done {
+	if cache[key] {
+		return nil
+	}
+	if err := loader.hydratePagerDutyOnce(ctx, orgID, key, mapping); err != nil {
+		// Not cached: Python retries a failed exchange for the next unit.
 		return err
 	}
-	err := loader.hydratePagerDutyOnce(ctx, orgID, key, mapping)
-	cache[key] = err
-	return err
+	cache[key] = true
+	return nil
 }
 
-// hydrationCache holds one hydration outcome per credential for one batch:
-// Python cached client-credentials tokens per process, and an OAuth token
-// valid past the renewal window is valid for the whole batch.
-type hydrationCache map[string]error
+// hydrationCache records, per credential, a hydration that SUCCEEDED in
+// this batch: Python's client-credentials token cache keeps a token only
+// after a successful exchange, and an OAuth token valid past the renewal
+// window stays valid for the batch. A failure is never cached, so the next
+// unit tries again, as each Python unit did.
+type hydrationCache map[string]bool
 
 var errPagerDutyHydration = errors.New("PagerDuty credential hydration failed")
 

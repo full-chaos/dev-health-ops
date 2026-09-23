@@ -17,15 +17,25 @@ import "fmt"
 // operations to DeletedPythonBodyOperations and nothing else.
 //
 // What is left untouched: a Request whose declared WantCandidateStatus
-// and WantBaselineStatus already agree at one of frameworkOnlyEqualStatuses
-// below (422/401/403/429) -- these are enforced BEFORE the handler body
-// ever runs, so they hold identically whether or not the body has been
-// deleted. Everything else -- WantBaselineStatus == 200 (the real happy
-// path), an equal pair the HANDLER used to compute itself (a 404
-// not-found, a 503 availability gate -- exactly as dead as a 200 once the
-// body is gone), or an already-divergent pair (an earlier
-// production-observed handler failure) -- described what the now-deleted
-// body used to compute, so it is overridden to the fixed sentinel.
+// and WantBaselineStatus already agree at one of
+// frameworkValidatableEqualStatuses (422/401/403/429) AND is
+// isFrameworkValidatedEqualStatus (see below) -- FastAPI/Pydantic
+// request-shape validation or an auth/rate-limit gate, enforced BEFORE
+// the handler body ever runs, so it holds identically whether or not the
+// body has been deleted. The framework/handler distinction is DERIVED
+// from what the entry already declares, never a bare status-code list
+// and never a hand-set per-entry flag: a status like 422 is used BOTH for
+// framework-level validation AND for a handler's own data-dependent
+// refusal (flame's deployment_gap_entity_id_bound_422 answers 422 from
+// validateFlameFrames' gap check, not from Pydantic), so the status code
+// alone cannot tell them apart. See isFrameworkValidatedEqualStatus's own
+// doc comment for the derivation. Everything else -- WantBaselineStatus
+// == 200 (the real happy path), an equal pair the HANDLER used to
+// compute itself (a 404 not-found, a 503 availability gate, or a
+// data-dependent 422/etc -- exactly as dead as a 200 once the body is
+// gone), or an already-divergent pair (an earlier production-observed
+// handler failure) -- described what the now-deleted body used to
+// compute, so it is overridden to the fixed sentinel.
 
 // DeletedPythonBodyOperations names every REST corpus operation (the
 // same "REST:<METHOD>:<path>" key restEndpointSpecs is keyed by) whose
@@ -93,6 +103,41 @@ const pythonBodyDeletedSentinelStatus = 500
 // corpus reason.
 const PythonBodyDeletedReason = "the Python handler's body has been deleted and replaced with a fixed diagnostic error; it answers this status unconditionally for any request that reaches it, regardless of what it used to compute, so its real answer is never compared"
 
+// frameworkValidatableEqualStatuses are the ONLY statuses an equal
+// (WantCandidateStatus == WantBaselineStatus) pair may declare and still
+// be a CANDIDATE for isFrameworkValidatedEqualStatus below: every one of
+// these CAN be enforced by FastAPI itself -- Pydantic/type-coercion
+// (422), an auth Depends() (401/403), or the rate limiter (429) -- but,
+// for 422 specifically, is not always: see isFrameworkValidatedEqualStatus.
+var frameworkValidatableEqualStatuses = map[int]bool{422: true, 401: true, 403: true, 429: true}
+
+// isFrameworkValidatedEqualStatus derives, from fields the entry ALREADY
+// declares, whether an equal-status pair is enforced by FastAPI/Pydantic
+// itself (strictly BEFORE the handler body runs) rather than computed BY
+// the handler body -- so this file never hand-sets a per-entry flag, and
+// a future entry is classified correctly without anyone touching this
+// file.
+//
+// The derivation: req.IDBindings is empty. IDBindings exists so a LATER
+// request can consume a SPECIFIC entity id an earlier request Produced,
+// or an operator supplied -- it exists to let the corpus reach a
+// particular resolved entity's data. FastAPI's own request-shape
+// validation (a malformed/missing query or body field, an out-of-range
+// Literal) runs on the raw incoming request, before any handler code --
+// let alone any entity resolution -- ever executes; a corpus entry
+// proving it needs no resolved entity at all, and every one of today's
+// committed framework-validated 422/401/403/429 entries indeed declares
+// no IDBindings. A handler-computed refusal is the opposite by
+// construction: it can only fire once the handler has resolved and
+// inspected a SPECIFIC entity's data (flame's
+// deployment_gap_entity_id_bound_422 needs a real, bound deployment id to
+// reach validateFlameFrames' gap check at all), so it declares an
+// IDBindings entry pointing at that resolution -- which is exactly what
+// distinguishes it here, and exactly why it correctly derives to false.
+func isFrameworkValidatedEqualStatus(req RESTRequest) bool {
+	return frameworkValidatableEqualStatuses[req.WantBaselineStatus] && len(req.IDBindings) == 0
+}
+
 // init rewrites every Request under an operation named in
 // DeletedPythonBodyOperations, IN PLACE (RESTEndpointSpec.Requests is a
 // slice; restEndpointSpecs[op] returns a copy of the struct but that
@@ -102,19 +147,6 @@ const PythonBodyDeletedReason = "the Python handler's body has been deleted and 
 // package-level var initializer -- including restEndpointSpecs' own
 // giant literal -- completes before any init() in the package runs, so
 // the table is fully built by the time this runs.
-// frameworkOnlyEqualStatuses are the ONLY statuses an equal
-// (WantCandidateStatus == WantBaselineStatus) pair may declare and still
-// be left untouched by init() below: every one of these is enforced by
-// FastAPI itself -- Pydantic/type-coercion (422), an auth Depends()
-// (401/403), or the rate limiter (429) -- strictly BEFORE the handler
-// body runs, so it holds identically whether or not that body has been
-// deleted. Any OTHER equal pair (404, 503, or anything else) is
-// APPLICATION logic the handler itself used to compute -- e.g. this
-// route's own "absent_work_unit" 404 and a availability-gated 503 --
-// which is exactly as dead as a 200 happy path once the body is gone, so
-// it is NOT exempted: init() overrides it below like every other entry.
-var frameworkOnlyEqualStatuses = map[int]bool{422: true, 401: true, 403: true, 429: true}
-
 func init() {
 	for operation := range DeletedPythonBodyOperations {
 		spec, ok := restEndpointSpecs[operation]
@@ -124,7 +156,7 @@ func init() {
 		arrayShaped := deletedBodyArrayShapedOperations[operation]
 		for i := range spec.Requests {
 			req := &spec.Requests[i]
-			if req.WantCandidateStatus == req.WantBaselineStatus && frameworkOnlyEqualStatuses[req.WantBaselineStatus] {
+			if req.WantCandidateStatus == req.WantBaselineStatus && isFrameworkValidatedEqualStatus(*req) {
 				// Framework-level parity: left exactly as declared,
 				// comparison and all.
 				continue
@@ -173,19 +205,19 @@ func init() {
 // under an operation named in DeletedPythonBodyOperations -- carries a
 // shape init() above should have overridden and did not: WantBaselineStatus
 // == 200 (a live happy path against a baseline that no longer computes
-// one, ever), or BodyMode == RESTBodyModeJSON where the two Want values
-// are not one of frameworkOnlyEqualStatuses' own framework-enforced pairs
-// (a full baseline-equality comparison against the fixed sentinel, which
-// would refuse every live run). A pure predicate over one Request, not a
-// corpus walk, so a test can assert it fires on a constructed bad
-// Request -- proof the guard can fail, not just that today's committed
-// corpus happens to pass it (see restdeletedbody_test.go).
+// one, ever), or BodyMode == RESTBodyModeJSON on a request that does not
+// derive isFrameworkValidatedEqualStatus (a full baseline-equality
+// comparison against the fixed sentinel, which would refuse every live
+// run). A pure predicate over one Request, not a corpus walk, so a test
+// can assert it fires on a constructed bad Request -- proof the guard can
+// fail, not just that today's committed corpus happens to pass it (see
+// restdeletedbody_test.go).
 func RequestBreaksDeletedBodyInvariant(req RESTRequest) bool {
 	if req.WantBaselineStatus == 200 {
 		return true
 	}
 	if req.BodyMode == RESTBodyModeJSON {
-		return req.WantCandidateStatus != req.WantBaselineStatus || !frameworkOnlyEqualStatuses[req.WantBaselineStatus]
+		return req.WantCandidateStatus != req.WantBaselineStatus || !isFrameworkValidatedEqualStatus(req)
 	}
 	return false
 }

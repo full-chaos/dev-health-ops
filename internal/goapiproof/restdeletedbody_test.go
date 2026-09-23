@@ -54,7 +54,7 @@ func TestRequestBreaksDeletedBodyInvariant_Cells(t *testing.T) {
 			false,
 		},
 		{
-			"correctly left alone: framework-level 422/422 parity",
+			"correctly left alone: framework-level 422/422 parity, no IDBindings",
 			RESTRequest{WantCandidateStatus: 422, WantBaselineStatus: 422, BodyMode: RESTBodyModeJSON},
 			false,
 		},
@@ -71,6 +71,16 @@ func TestRequestBreaksDeletedBodyInvariant_Cells(t *testing.T) {
 		{
 			"regression: full JSON parity against a handler-computed 404/404 (not framework-level)",
 			RESTRequest{WantCandidateStatus: 404, WantBaselineStatus: 404, BodyMode: RESTBodyModeJSON},
+			true,
+		},
+		{
+			"regression: a handler-computed 422/422 pair (IDBindings set, like flame's deployment_gap_entity_id_bound_422) is NOT exempted by status code alone",
+			RESTRequest{WantCandidateStatus: 422, WantBaselineStatus: 422, BodyMode: RESTBodyModeJSON, IDBindings: []RESTIDBinding{{Producer: "deployment_gap_entity_id", QueryParam: "entity_id"}}},
+			true,
+		},
+		{
+			"regression: even a no-IDBindings 200/200 pair still breaks (the derivation only ever exempts an EQUAL 422/401/403/429 pair, and 200 always means a live happy path)",
+			RESTRequest{WantCandidateStatus: 200, WantBaselineStatus: 200, BodyMode: RESTBodyModeJSON},
 			true,
 		},
 		{
@@ -114,5 +124,65 @@ func TestDeletedPythonBodyOperations_ArrayShapedSubsetIsWellFormed(t *testing.T)
 				t.Errorf("%s/%s CandidateShapeArray = %v, want %v (operation array-shaped = %v)", operation, req.Name, req.CandidateShapeArray, wantArray, wantArray)
 			}
 		}
+	}
+}
+
+// TestIsFrameworkValidatedEqualStatus_AgreesWithCommittedCorpus proves the
+// derivation against the REAL committed corpus, not just hand-built
+// cells: every entry init() left as a live equal-status comparison (proof
+// it was judged framework-validated) must have empty IDBindings, and
+// flame's own deployment_gap_entity_id_bound_422 -- the one entry the
+// OLD, hand-maintained status-code whitelist misclassified -- must derive
+// false when reconstructed with its declared (pre-override) shape.
+//
+// An entry init() left alone keeps WantCandidateStatus == WantBaselineStatus
+// post-init (only an OVERRIDDEN entry's WantBaselineStatus ever changes),
+// so "== still equal, at one of the four framework-validatable statuses"
+// identifies exactly today's "whitelist members" from live corpus state,
+// with no need to observe pre-init state.
+func TestIsFrameworkValidatedEqualStatus_AgreesWithCommittedCorpus(t *testing.T) {
+	checked := 0
+	for operation, spec := range restEndpointSpecs {
+		for _, req := range spec.Requests {
+			if req.WantCandidateStatus != req.WantBaselineStatus || !frameworkValidatableEqualStatuses[req.WantBaselineStatus] {
+				continue
+			}
+			checked++
+			if len(req.IDBindings) != 0 {
+				t.Errorf("%s/%s is a live %d/%d pair with IDBindings=%+v -- isFrameworkValidatedEqualStatus would derive false, so init() should have overridden it, not left it alone", operation, req.Name, req.WantCandidateStatus, req.WantBaselineStatus, req.IDBindings)
+			}
+			if !isFrameworkValidatedEqualStatus(req) {
+				t.Errorf("%s/%s: isFrameworkValidatedEqualStatus = false for a request init() left alone", operation, req.Name)
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("swept zero live equal-status framework-validatable requests -- the sweep covered nothing")
+	}
+	t.Logf("checked %d live framework-validated entries, all deriving true with empty IDBindings", checked)
+
+	spec, err := SpecForREST("REST:GET:/api/v1/flame")
+	if err != nil {
+		t.Fatalf("SpecForREST: %v", err)
+	}
+	var gap *RESTRequest
+	for i := range spec.Requests {
+		if spec.Requests[i].Name == "deployment_gap_entity_id_bound_422" {
+			gap = &spec.Requests[i]
+		}
+	}
+	if gap == nil {
+		t.Fatal("flame corpus has no deployment_gap_entity_id_bound_422 entry")
+	}
+	if len(gap.IDBindings) == 0 {
+		t.Fatal("deployment_gap_entity_id_bound_422 carries no IDBindings -- the derivation's whole premise for this entry no longer holds")
+	}
+	// Reconstruct the entry's DECLARED (pre-override) shape -- its live
+	// WantBaselineStatus is 500 post-override, so testing the live struct
+	// directly would trivially skip frameworkValidatableEqualStatuses'
+	// membership check rather than exercise the derivation.
+	declared := RESTRequest{WantCandidateStatus: 422, WantBaselineStatus: 422, BodyMode: RESTBodyModeJSON, IDBindings: gap.IDBindings}
+	if isFrameworkValidatedEqualStatus(declared) {
+		t.Error("deployment_gap_entity_id_bound_422's declared shape derives isFrameworkValidatedEqualStatus = true, want false -- this is the exact misclassification STEP 173 caught")
 	}
 }

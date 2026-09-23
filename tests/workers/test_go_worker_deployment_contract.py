@@ -774,7 +774,11 @@ def test_go_compose_bootstrap_is_post_alembic_fail_closed_and_route_inert() -> N
         contractcheck["depends_on"]["go-river-migrate"]["condition"]
         == "service_completed_successfully"
     )
-    assert "validate" in _command_string(contractcheck)
+    # Exact argv, not a substring: dho's own subcommand dispatch requires
+    # the "contracts" group name before "validate" -- a command of just
+    # ["validate"] is `dho: unknown command "validate"` (exit 2), not the
+    # old worker-contractcheck binary's own top-level verb.
+    assert contractcheck["command"] == ["contracts", "validate"]
 
     for name, service in services.items():
         if name in {"go-river-provision", "go-river-migrate", "go-contractcheck"}:

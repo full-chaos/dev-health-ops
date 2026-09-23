@@ -330,4 +330,13 @@ func TestExternalIngestPayloadHashVenueOracle(t *testing.T) {
 	if pythonHashes != goHashes {
 		t.Errorf("external_ingest_batches.payload_hash rows differ:\n python: %s\n go:     %s", pythonHashes, goHashes)
 	}
+
+	// This test's comparison shape (digest VALUES read back per case, a
+	// same-plane replay check, and a cross-plane plant+retry both ways)
+	// does not fit venueoracle.Diff, so it never reaches Diff's own
+	// writeProof call. Written here, on the outer t so the proof file's
+	// name matches ci/check_go.sh's discovery (the bare function name,
+	// no subtest suffix), once every case above has actually run a real
+	// comparison against both live planes.
+	venueoracle.WriteProof(t)
 }

@@ -879,3 +879,13 @@ func writeProof(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// WriteProof is writeProof, exported for a venue-oracle test whose
+// comparison shape does not fit Diff (e.g. comparing stored digest VALUES
+// across planes, or planting a row cross-plane and retrying) and so calls
+// ServePython/Do/TableRows directly instead. Such a test must call this
+// itself once its real, both-planes comparison has actually run -- the
+// discovery in ci/check_go.sh's venue-oracles verb finds it by its
+// ...VenueOracle... name regardless, and fails loudly if no proof file
+// shows up for it.
+func WriteProof(t *testing.T) { writeProof(t) }

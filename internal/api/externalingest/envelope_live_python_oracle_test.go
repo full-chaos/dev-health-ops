@@ -1,0 +1,198 @@
+package externalingest
+
+import (
+	"bytes"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"math/rand"
+	"strings"
+	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+)
+
+// pythonEnvelopeProgram runs BatchEnvelope.model_validate_json on each
+// base64 body: "ok", the errors as [type, loc, msg], or the TypeError.
+const pythonEnvelopeProgram = `
+import base64, json, sys
+from pydantic import ValidationError
+from dev_health_ops.api.external_ingest.schemas import BatchEnvelope
+out = []
+for raw in json.loads(sys.stdin.read()):
+    try:
+        BatchEnvelope.model_validate_json(base64.b64decode(raw))
+        out.append("ok")
+    except ValidationError as exc:
+        out.append([[e["type"], list(e["loc"]), e["msg"]] for e in exc.errors()])
+    except TypeError:
+        out.append("TypeError")
+print(json.dumps(out))
+`
+
+// envelopeCorpus is JSON syntax errors of every jiter kind, envelope field
+// errors in and out of order, and a seeded fuzz: valid envelopes with parts
+// replaced, dropped, duplicated, renamed or cut.
+func envelopeCorpus() [][]byte {
+	valid := `{"schemaVersion": "external-ingest.v1", "idempotencyKey": "k-1", "source": {"system": "github", "instance": "acme/api"}, "window": {"startedAt": "2026-01-01T00:00:00Z", "endedAt": "2026-01-02T00:00:00Z"}, "records": [{"kind": "repository.v1", "externalId": "r-1", "payload": {"externalId": "acme/api"}}]}`
+	fixed := []string{
+		``, ` `, "\n\n", `{`, `[`, `"`, `"ab`, `{"a"`, `{"a":`, `{"a":1,`, `[1,`, `[1`, `{"a":"x`, `x`, ` x`, "\nx", `{} x`, "{}\n\nx",
+		"{}  \n  x", `1 2`, `{"a":1}}`, `{"a" 1}`, `{"a":1 "b"}`, `{1:2}`, `{,}`, `[,1]`, `[1,]`, `{"a":1,}`, `[1 2]`, `{"a":tr}`,
+		`{"a":nul}`, `{"a":fals`, `{"a":tx}`, `{"a":-}`, `{"a":01}`, `{"a":1.}`, `{"a":1.e5}`, `{"a":1e}`, `{"a":-a}`, `{"a":"\q"}`,
+		`{"a":"\u12"}`, `{"a":"\u12G4"}`, `{"a":"\ud800"}`, `{"a":"\ud800x"}`, `{"a":"\ud800\u0041"}`, `{"a":"\udc00"}`,
+		"{\"a\":\"a\x01\"}", "{\"a\":\"\xff\"}", "{\"a\":\"\xc3\"}", "\xff", "{\"\xff\":1}", "{\"a\":\xff}", "{\"a\":1}\n\xff",
+		`{"a":NaN}`, `{"a":-NaN}`, `{"a":Infinity}`, `{"a":-Infinity}`, `{"a":+1}`, `{"a":Inf}`, `{"a":nan}`, `{"a":1e999}`,
+		`{"a":123456789012345678901234567890}`, `{"a":[1,2,]}`, "\t{}", "\r\n{}\r\nx", `{"a":"\/"}`, "{\"a\":\"\t\"}", "\"\xe2\x82\xac",
+		"{\"\xc3\xa9\":1} x", `[]`, `"s"`, `1`, `null`, `true`, `{}`, `{"a":"\ud800\udc00"}`, `{"a":1.5E+3}`, `{"a":-0}`,
+		valid,
+		`{"schemaVersion":1,"schema_version":"v","idempotencyKey":"","source":{"system":"x","instance":"","type":"y","extra":1,"entityFamily":"z","producer":1},"window":{"startedAt":"2026-01-02T00:00:00Z","endedAt":"2026-01-01T00:00:00Z"},"records":[1,{"kind":1,"externalId":"","payload":[],"q":1}],"zzz":1,"aaa":2}`,
+		`{"schemaVersion":"v","idempotencyKey":"k","source":{"system":"github","instance":"i"},"records":[]}`,
+		`{"schema_version":5,"idempotencyKey":"k","source":"s","window":1,"records":{}}`,
+		`{"schemaVersion":"v","idempotencyKey":"k","source":{"system":"github","instance":"i"},"window":{"startedAt":"2026-01-02T00:00:00","endedAt":"2026-01-01T00:00:00Z"},"records":[{"kind":"k","externalId":"e","payload":{}}]}`,
+		`{"schemaVersion":"v","idempotencyKey":"k","source":{"system":"github","instance":"i"},"window":{"startedAt":"2026-01-02T00:00:00","endedAt":"2026-01-01T00:00:00"},"records":[{"kind":"k","externalId":"e","payload":{}}]}`,
+		`{"schemaVersion":"v","idempotencyKey":"k","source":{"system":"github","instance":"i"},"window":{"startedAt":1767225600,"endedAt":"2026-01-01T00:00:00+02:00"},"records":[{"kind":"k","externalId":"e","payload":{}}]}`,
+		`{"schemaVersion":"v","idempotencyKey":"k","source":{"system":"github","instance":"i"},"window":{"started_at":"x","ended_at":true},"records":[{"kind":"k","external_id":"e","payload":{}}]}`,
+		`{"schemaVersion":"v","schemaVersion":5,"idempotencyKey":"k","source":{"system":"github","instance":"i"},"records":[{"kind":"k","externalId":"e","payload":{}}]}`,
+	}
+	var corpus [][]byte
+	for _, body := range fixed {
+		corpus = append(corpus, []byte(body))
+	}
+	parts := map[string][]string{
+		"schemaVersion":  {`"external-ingest.v1"`, `"v2"`, `""`, `1`, `null`, `["x"]`},
+		"idempotencyKey": {`"k"`, `""`, `"` + strings.Repeat("k", 255) + `"`, `"` + strings.Repeat("é", 256) + `"`, `7`, `null`},
+		"source": {`{"system": "github", "instance": "i"}`, `{"system": "GitHub", "instance": "i"}`, `{"system": "jira", "instance": ""}`,
+			`{"type": "customer_push", "system": "custom", "instance": "i", "entityFamily": "operational", "producer": "p", "producerVersion": null}`,
+			`{"system": "linear", "instance": "i", "entity_family": "legacy", "producer_version": 1, "x": 1}`, `[]`, `"s"`, `null`,
+			`{"system": "github", "instance": "` + strings.Repeat("é", 256) + `", "type": "other"}`},
+		"window": {`null`, `{"startedAt": "2026-01-01", "endedAt": "2026-01-01T00:00:00"}`, `{"startedAt": 0, "endedAt": -1}`,
+			`{"startedAt": "x", "endedAt": "y"}`, `{"startedAt": "2026-01-01T00:00:00Z"}`, `{"endedAt": "2026-01-01T00:00:00Z", "extra": 1}`, `1`, `[]`,
+			`{"startedAt": "2026-01-01T10:00:00+02:00", "endedAt": "2026-01-01T09:00:00+01:00"}`, `{"startedAt": ".5", "endedAt": 1.5}`},
+		"records": {`[]`, `[{"kind": "k", "externalId": "e", "payload": {}}]`, `[1, "x", null]`, `{}`, `"r"`,
+			`[{"kind": "k", "externalId": "", "payload": []}, {"kind": null, "payload": {}, "extra": 2}]`,
+			`[{"kind": "k", "external_id": "e", "externalId": 5, "payload": {"a": NaN}}]`,
+			`[{"kind": "k", "externalId": "` + strings.Repeat("e", 513) + `", "payload": {}}]`},
+	}
+	keys := []string{"schemaVersion", "idempotencyKey", "source", "window", "records"}
+	random := rand.New(rand.NewSource(6320))
+	for range 1500 {
+		var fields []string
+		for _, key := range keys {
+			if random.Intn(6) == 0 {
+				continue
+			}
+			pool := parts[key]
+			name := key
+			if random.Intn(8) == 0 {
+				name = map[string]string{"schemaVersion": "schema_version", "idempotencyKey": "idempotency_key", "source": "source",
+					"window": "window", "records": "records"}[key]
+			}
+			fields = append(fields, fmt.Sprintf("%q: %s", name, pool[random.Intn(len(pool))]))
+		}
+		if random.Intn(5) == 0 {
+			fields = append(fields, `"extra": 1`)
+		}
+		random.Shuffle(len(fields), func(a, b int) { fields[a], fields[b] = fields[b], fields[a] })
+		body := "{" + strings.Join(fields, ", ") + "}"
+		if random.Intn(10) == 0 {
+			body = body[:random.Intn(len(body)+1)]
+		}
+		corpus = append(corpus, []byte(body))
+	}
+	return corpus
+}
+
+// TestEnvelopeValidationMatchesLivePython compares ValidateEnvelopeJSON
+// with BatchEnvelope.model_validate_json on envelopeCorpus: each error's
+// type, loc and msg in order, or success, or the TypeError. jiter's JSON
+// syntax texts other than EOF, trailing characters and expected value are
+// a named limit: for those, the type and loc must match, and message
+// differences are counted and reported.
+func TestEnvelopeValidationMatchesLivePython(t *testing.T) {
+	root, python := oracleRoot(t)
+	corpus := envelopeCorpus()
+	encoded := make([]string, len(corpus))
+	for index, body := range corpus {
+		encoded[index] = base64.StdEncoding.EncodeToString(body)
+	}
+	input, _ := json.Marshal(encoded)
+	output := runPython(t, root, python, pythonEnvelopeProgram, input)
+	lines := bytes.Split(bytes.TrimSpace(output), []byte("\n"))
+	var want []json.RawMessage
+	if err := json.Unmarshal(lines[len(lines)-1], &want); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(want) != len(corpus) {
+		t.Fatalf("python returned %d results for %d bodies", len(want), len(corpus))
+	}
+	mismatches, limited, syntax := 0, 0, 0
+	for index, body := range corpus {
+		_, errs, typeErr := ValidateEnvelopeJSON(body)
+		got := `"ok"`
+		switch {
+		case typeErr != nil:
+			got = `"TypeError"`
+		case len(errs) > 0:
+			rows := make([]string, len(errs))
+			for i, err := range errs {
+				loc, _ := pyjson.Marshal(err.Loc)
+				if err.Loc == nil {
+					loc = []byte("[]")
+				}
+				message, _ := json.Marshal(err.Msg)
+				rows[i] = fmt.Sprintf("[%q, %s, %s]", err.Type, loc, message)
+			}
+			got = "[" + strings.Join(rows, ", ") + "]"
+		}
+		var wantValue, gotValue any
+		_ = json.Unmarshal(want[index], &wantValue)
+		if err := json.Unmarshal([]byte(got), &gotValue); err != nil {
+			t.Fatalf("render: %v %s", err, got)
+		}
+		wantText, _ := json.Marshal(wantValue)
+		gotText, _ := json.Marshal(gotValue)
+		if bytes.Equal(wantText, gotText) {
+			if strings.Contains(string(wantText), "json_invalid") {
+				syntax++
+			}
+			continue
+		}
+		if isLimitedSyntaxMessage(wantValue, gotValue) {
+			limited++
+			continue
+		}
+		mismatches++
+		if mismatches <= 15 {
+			t.Errorf("%q:\n  go     %s\n  python %s", body, gotText, wantText)
+		}
+	}
+	if mismatches > 0 {
+		t.Fatalf("%d of %d bodies differ", mismatches, len(corpus))
+	}
+	writeOracleProof(t, "externalingest-envelope-validation")
+	t.Logf("%d bodies compared (%d JSON syntax errors exact); %d named-limit syntax messages differ; 0 other mismatches",
+		len(corpus), syntax, limited)
+}
+
+// isLimitedSyntaxMessage reports a json_invalid pair whose messages
+// differ only where the named limit allows: neither is an EOF, trailing
+// characters or expected value error.
+func isLimitedSyntaxMessage(want, got any) bool {
+	wantRows, ok1 := want.([]any)
+	gotRows, ok2 := got.([]any)
+	if !ok1 || !ok2 || len(wantRows) != 1 || len(gotRows) != 1 {
+		return false
+	}
+	w, g := wantRows[0].([]any), gotRows[0].([]any)
+	if w[0] != "json_invalid" || g[0] != "json_invalid" {
+		return false
+	}
+	for _, message := range []string{w[2].(string), g[2].(string)} {
+		for _, exact := range []string{"EOF while parsing", "trailing characters", "expected value"} {
+			if strings.Contains(message, exact) {
+				return false
+			}
+		}
+	}
+	return true
+}

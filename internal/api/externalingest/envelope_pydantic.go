@@ -1,0 +1,289 @@
+package externalingest
+
+import (
+	"errors"
+	"math/big"
+
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
+)
+
+// PydanticError is one pydantic validation error: type, location, message.
+type PydanticError struct {
+	Type string
+	Loc  []pyjson.Value
+	Msg  string
+}
+
+// EnvelopeRecord is one validated RecordEnvelope.
+type EnvelopeRecord struct {
+	Kind, ExternalID string
+	Payload          *pyjson.Object
+}
+
+// ValidEnvelope is the part of a validated BatchEnvelope the admin validate
+// route reads.
+type ValidEnvelope struct {
+	SchemaVersion string
+	Records       []EnvelopeRecord
+}
+
+// ErrNaiveAwareComparison is the TypeError IngestWindow's validator raises
+// comparing a naive with an aware datetime; pydantic does not catch it, so
+// the Python api answers an unhandled 500.
+var ErrNaiveAwareComparison = errors.New("can't compare offset-naive and offset-aware datetimes")
+
+// ValidateEnvelopeJSON is BatchEnvelope.model_validate_json(raw): jiter's
+// JSON parse (one json_invalid error with an empty loc), then JSON-mode
+// validation of the envelope models (schemas.py), every error in
+// pydantic's order: a model's extra keys first, in input order, then its
+// fields in declaration order (the alias looked up before the field name).
+func ValidateEnvelopeJSON(raw []byte) (*ValidEnvelope, []PydanticError, error) {
+	value, syntax := parseJiter(raw)
+	if syntax != nil {
+		return nil, []PydanticError{{Type: "json_invalid", Loc: nil, Msg: syntax.Message()}}, nil
+	}
+	v := &envelopeValidator{}
+	envelope := v.batch(value)
+	if v.typeErr != nil {
+		return nil, nil, v.typeErr
+	}
+	if len(v.errs) > 0 {
+		return nil, v.errs, nil
+	}
+	return envelope, nil, nil
+}
+
+type envelopeValidator struct {
+	errs    []PydanticError
+	typeErr error
+}
+
+func (v *envelopeValidator) add(kind string, loc []pyjson.Value, msg string) {
+	v.errs = append(v.errs, PydanticError{Type: kind, Loc: loc, Msg: msg})
+}
+
+// jsonField is one field of a JSON-mode model: its name, alias, whether it
+// has a default, and its validator (ok false when it failed).
+type jsonField struct {
+	name, alias string
+	hasDefault  bool
+	validate    func(value pyjson.Value, loc []pyjson.Value) bool
+}
+
+// model validates object as a JSON-mode model with extra="forbid" and
+// populate_by_name: extras first, then the fields. It returns the values
+// found by field name (absent when defaulted or invalid) and whether every
+// field passed.
+func (v *envelopeValidator) model(value pyjson.Value, loc []pyjson.Value, fields []jsonField) (map[string]pyjson.Value, bool) {
+	object, ok := value.(*pyjson.Object)
+	if !ok {
+		v.add("model_type", loc, "Input should be an object")
+		return nil, false
+	}
+	known := map[string]bool{}
+	for _, field := range fields {
+		known[field.name] = true
+		if field.alias != "" {
+			known[field.alias] = true
+		}
+	}
+	for _, key := range object.Keys() {
+		if !known[key] {
+			v.add("extra_forbidden", appendLoc(loc, key), "Extra inputs are not permitted")
+		}
+	}
+	valid := true
+	values := map[string]pyjson.Value{}
+	for _, field := range fields {
+		key := field.name
+		if field.alias != "" {
+			key = field.alias
+		}
+		item, present := object.Get(key)
+		if !present && field.alias != "" {
+			if byName, ok := object.Get(field.name); ok {
+				key, item, present = field.name, byName, true
+			}
+		}
+		if !present {
+			if !field.hasDefault {
+				v.add("missing", appendLoc(loc, key), "Field required")
+				valid = false
+			}
+			continue
+		}
+		if field.validate(item, appendLoc(loc, key)) {
+			values[field.name] = item
+		} else {
+			valid = false
+		}
+	}
+	return values, valid
+}
+
+func (v *envelopeValidator) str(minLength, maxLength int) func(pyjson.Value, []pyjson.Value) bool {
+	return func(value pyjson.Value, loc []pyjson.Value) bool {
+		errs := validateNode(&schemaNode{Type: "str", MinLength: optionalInt(minLength), MaxLength: optionalInt(maxLength)}, value, loc)
+		for _, err := range errs {
+			v.add(err.Type, err.Loc, err.Msg)
+		}
+		return len(errs) == 0
+	}
+}
+
+func optionalInt(n int) *int {
+	if n <= 0 {
+		return nil
+	}
+	return &n
+}
+
+func (v *envelopeValidator) nullableStr(value pyjson.Value, loc []pyjson.Value) bool {
+	if value == nil {
+		return true
+	}
+	return v.str(0, 0)(value, loc)
+}
+
+func (v *envelopeValidator) literal(expected ...string) func(pyjson.Value, []pyjson.Value) bool {
+	return func(value pyjson.Value, loc []pyjson.Value) bool {
+		if text, ok := value.(string); ok {
+			for _, want := range expected {
+				if text == want {
+					return true
+				}
+			}
+		}
+		v.add("literal_error", loc, "Input should be "+literalChoices(expected))
+		return false
+	}
+}
+
+// datetime is a JSON-mode datetime: a string or a number (a bool is a
+// datetime_type error).
+func (v *envelopeValidator) datetime(value pyjson.Value, loc []pyjson.Value) (pytime.DateTime, bool) {
+	var input any
+	switch typed := value.(type) {
+	case string:
+		input = typed
+	case pyjson.Int:
+		input = new(big.Int).Set(typed.Int)
+	case pyjson.Float:
+		input = float64(typed)
+	}
+	parsed, failure := pytime.ParseDatetime(input)
+	if failure != nil {
+		v.add(failure.Type, loc, failure.Msg)
+		return pytime.DateTime{}, false
+	}
+	return parsed, true
+}
+
+func (v *envelopeValidator) batch(value pyjson.Value) *ValidEnvelope {
+	out := &ValidEnvelope{}
+	fields := []jsonField{
+		{name: "schema_version", alias: "schemaVersion", validate: v.str(0, 0)},
+		{name: "idempotency_key", alias: "idempotencyKey", validate: v.str(1, 255)},
+		{name: "source", validate: v.source},
+		{name: "window", hasDefault: true, validate: v.window},
+		{name: "records", validate: func(value pyjson.Value, loc []pyjson.Value) bool {
+			records, ok := v.records(value, loc)
+			out.Records = records
+			return ok
+		}},
+	}
+	values, ok := v.model(value, nil, fields)
+	if !ok {
+		return nil
+	}
+	out.SchemaVersion, _ = values["schema_version"].(string)
+	return out
+}
+
+func (v *envelopeValidator) source(value pyjson.Value, loc []pyjson.Value) bool {
+	_, ok := v.model(value, loc, []jsonField{
+		{name: "type", hasDefault: true, validate: v.literal("customer_push")},
+		{name: "system", validate: v.literal("github", "gitlab", "jira", "linear", "pagerduty", "atlassian", "custom")},
+		{name: "instance", validate: v.str(1, 255)},
+		{name: "entity_family", alias: "entityFamily", hasDefault: true, validate: v.literal("legacy", "operational")},
+		{name: "producer", hasDefault: true, validate: v.nullableStr},
+		{name: "producer_version", alias: "producerVersion", hasDefault: true, validate: v.nullableStr},
+	})
+	return ok
+}
+
+// window is `IngestWindow | None`: two datetimes, and _ended_after_started
+// once both are valid.
+func (v *envelopeValidator) window(value pyjson.Value, loc []pyjson.Value) bool {
+	if value == nil {
+		return true
+	}
+	var started *pytime.DateTime
+	_, ok := v.model(value, loc, []jsonField{
+		{name: "started_at", alias: "startedAt", validate: func(item pyjson.Value, at []pyjson.Value) bool {
+			parsed, ok := v.datetime(item, at)
+			if ok {
+				started = &parsed
+			}
+			return ok
+		}},
+		{name: "ended_at", alias: "endedAt", validate: func(item pyjson.Value, at []pyjson.Value) bool {
+			ended, ok := v.datetime(item, at)
+			if !ok || started == nil {
+				return ok
+			}
+			if ended.Aware != started.Aware {
+				if v.typeErr == nil {
+					v.typeErr = ErrNaiveAwareComparison
+				}
+				return false
+			}
+			if ended.Time.Before(started.Time) {
+				v.add("value_error", at, "Value error, window.endedAt must be >= window.startedAt")
+				return false
+			}
+			return true
+		}},
+	})
+	return ok
+}
+
+// records is `list[RecordEnvelope] = Field(..., min_length=1)`.
+func (v *envelopeValidator) records(value pyjson.Value, loc []pyjson.Value) ([]EnvelopeRecord, bool) {
+	items, ok := value.([]pyjson.Value)
+	if !ok {
+		v.add("list_type", loc, "Input should be a valid array")
+		return nil, false
+	}
+	var out []EnvelopeRecord
+	valid := true
+	for index, item := range items {
+		record := EnvelopeRecord{}
+		values, ok := v.model(item, appendLoc(loc, int64(index)), []jsonField{
+			{name: "kind", validate: v.str(0, 0)},
+			{name: "external_id", alias: "externalId", validate: v.str(1, 512)},
+			{name: "payload", validate: func(payload pyjson.Value, at []pyjson.Value) bool {
+				object, ok := payload.(*pyjson.Object)
+				if !ok {
+					v.add("dict_type", at, "Input should be an object")
+					return false
+				}
+				record.Payload = object
+				return true
+			}},
+		})
+		if !ok {
+			valid = false
+			continue
+		}
+		record.Kind, _ = values["kind"].(string)
+		record.ExternalID, _ = values["external_id"].(string)
+		out = append(out, record)
+	}
+	if valid && len(items) < 1 {
+		v.add("too_short", loc, "List should have at least 1 item after validation, not 0")
+		return nil, false
+	}
+	return out, valid
+}

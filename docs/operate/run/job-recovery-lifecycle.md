@@ -433,7 +433,7 @@ sits `status='running'` forever despite 100% partition success, and
 `daily-redrive`'s own stranded-partition predicate never matches it (it
 requires at least one non-succeeded partition). `dho workers metrics
 daily-finalize --run <uuid>|--all-complete --review-evidence "<what you
-verified>"` closes this the same way: a fresh, nonce-scoped
+verified>" --reason <code> --correlation-id <id>` closes this the same way: a fresh, nonce-scoped
 `metrics.daily_finalize:redrive:<run id>:<nonce>` job, published only after
 re-verifying under a row lock that the run is still `running`, every
 partition is still `succeeded`, and finalization has not already settled.
@@ -468,7 +468,7 @@ healthy `status='succeeded'`. Neither `daily-redrive` (partitions only) nor
 `daily-finalize` (only ever touches a run still stuck non-terminal) can
 re-execute an already-completed day. `dho workers metrics
 finalize-redrive --org <uuid> --from <YYYY-MM-DD> --to <YYYY-MM-DD>
---review-evidence "<why>"` closes this: it transactionally resets an
+--review-evidence "<why>" --reason <code> --correlation-id <id>` closes this: it transactionally resets an
 eligible `'succeeded'` run back to a claimable state (in the same
 transaction as the fresh publish) so it can reach `FinalizeHandler.Work`
 again at all — both Go's `ClaimFinalize` and the Python compat bridge's own
@@ -502,7 +502,7 @@ was dispatched and then stranded or discarded — they need a row to already
 exist. A day sync never ran for, or one whose row aged out of River's
 retention, has no row to recover. `dho workers metrics remaining
 start --family <family> --day <YYYY-MM-DD> [--to <YYYY-MM-DD>] --org <uuid>
---review-evidence "<why>"` (CHAOS-4254) closes this gap for the day-scoped
+--review-evidence "<why>" --reason <code> --correlation-id <id>` (CHAOS-4254) closes this gap for the day-scoped
 remaining-metrics families (`complexity`, `dora`, `release_impact`):
 `remaining.PostgresStore.StartManualBackfillRun` inserts through the same
 `insertRun` path every automatic producer's `StartRunTx` shares, under a

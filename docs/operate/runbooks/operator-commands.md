@@ -51,7 +51,7 @@ which per verb.
 | `dho workers metrics remaining start --family <complexity\|dora\|release_impact> --org <uuid> --day <YYYY-MM-DD> [--to <YYYY-MM-DD>] --review-evidence "<text>" --reason <code> --correlation-id <id>` | `main.go:1763-1931` (CHAOS-4254, `internal/jobs/metrics/remaining/manual_backfill.go:77`) | Dispatch a NEW remaining-metrics run for a historical (org, family, day) that was **never dispatched at all** -- outside what `daily-redrive`/`jobs retry` can recover. Bounded to 31 days per call; refuses today and the future (a day still open could race the automatic trigger and double-write). Other families use `trigger-backstop` instead. |
 | `dho workers metrics remaining trigger-backstop --family <work_item_attribution\|complexity\|dora\|release_impact\|capacity\|recommendations> --org <uuid> [--day <YYYY-MM-DD>] [--today] --review-evidence "<text>" [--team <uuid>\|--all-teams] [--window <days>] --reason <code> --correlation-id <id>` | `main.go:2148-2285` | Trigger a fixed-schedule backstop family NOW instead of waiting for its own occurrence (e.g. work_item_attribution's watermark-driven recompute). `--day` is a **dedup key for the run this becomes, not a compute window** -- work_item_attribution always recomputes from its live watermark regardless of `--day`. Defaults to yesterday UTC; `--today` is required to target today explicitly (coexists with, never suppresses, the schedule's own occurrence -- the two compete for the family's single worker slot, not correctness). `capacity`/`recommendations` require exactly one of `--team`/`--all-teams`; every other family ignores both. |
 | `dev-hops metrics daily` / `rebuild` | deleted (spec S2) | Run `dho workers metrics daily-start` (the row above). |
-| `dev-hops metrics complexity` / `dora` / `capacity` | deleted (spec S2) | Run `dho workers metrics remaining trigger-backstop --family <name>` (the row above). |
+| `dev-hops metrics complexity` / `dora` / `capacity` | deleted (spec S2) | Run `dho workers metrics remaining trigger-backstop --family <name> --reason <code> --correlation-id <id>` (the row above). |
 | `dev-hops metrics compounding-risk` | `job_compounding_risk.py` | **Legacy**, duplicate coverage -- `job_daily.py`'s finalize already writes this nightly. |
 | `dev-hops metrics validate-flags` | `job_ff_validation.py` | Read-only diagnostic, no write. Safe to run any time. |
 
@@ -207,8 +207,8 @@ above, not a tested runbook. Dry-run it against a non-prod target first.
 After fixing a defect in daily metrics computation, run this sequence to backfill affected days:
 
 1. Deploy the fix (native path, new River kind).
-2. `metrics daily-redrive --org <uuid> --from <date> --to <date> --review-evidence "..."` — repair runs stranded by River discard.
-3. `metrics finalize-redrive --org <uuid> --from <date> --to <date> --review-evidence "..."` — re-run finalize for already-completed days, backfilling new fields (e.g., new investment dimensions). **Pass `--include-succeeded=true` explicitly** (it is the default, but makes intent clear).
+2. `metrics daily-redrive --org <uuid> --from <date> --to <date> --review-evidence "..." --reason <code> --correlation-id <id>` — repair runs stranded by River discard.
+3. `metrics finalize-redrive --org <uuid> --from <date> --to <date> --review-evidence "..." --reason <code> --correlation-id <id>` — re-run finalize for already-completed days, backfilling new fields (e.g., new investment dimensions). **Pass `--include-succeeded=true` explicitly** (it is the default, but makes intent clear).
 4. `workgraph trigger` then `investment trigger` per §(c) — re-derive work graph and investment tables against corrected metrics.
 5. Verify via readback queries.
 

@@ -38,6 +38,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/externalingest"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/acr"
+	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
@@ -133,6 +134,21 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		Valkey: deps.Valkey,
 		Logger: logger,
 	})...)
+	// admin (CHAOS-6250) is this Service's first real consumer of
+	// policy.Guard: unlike acr/externalingest it cannot answer a nil-Store
+	// route with CodeInternal, because Guard.Wrap itself needs a live
+	// Authenticator to build the route table. Mount it only when the
+	// protected-route runtime is actually up (deps.Pool configured); with no
+	// pool these paths are simply absent from the mux, same as any other
+	// not-yet-ported area.
+	if deps.Pool != nil && deps.Guard != nil {
+		routes = append(routes, admin.Routes(admin.Deps{
+			Pool:   deps.Pool,
+			Valkey: deps.Valkey,
+			Guard:  deps.Guard,
+			Logger: logger,
+		})...)
+	}
 	return routes
 }
 

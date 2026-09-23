@@ -45,7 +45,15 @@ func apiPosture() RolePosture {
 			// Read root for GET /api/v1/internal/acr/entitlements/{org_id}:
 			// existence (404 if absent) and the tier fallback when no
 			// org_licenses row exists (internal/apiservice/acr/store.go).
-			{"organizations", false, false, false},
+			// CHAOS-6250 (admin org CRUD: create_organization,
+			// update_organization) adds insert/update. Deletion is NOT
+			// ported in this PR (internal/apiservice/admin/orgs.go's
+			// deleteOrganizationStub) -- no AllowDelete here yet. ONE entry
+			// per table is a hard requirement (validateGrantSet rejects a
+			// duplicate TableName as ErrMigrationConfiguration), so a
+			// second route area needing more on an already-declared table
+			// widens this entry in place rather than appending its own.
+			{"organizations", true, true, false},
 			// The one feature row this route ever reads (key =
 			// "agent_context_runtime"), never any other feature.
 			{"feature_flags", false, false, false},
@@ -81,9 +89,22 @@ func apiPosture() RolePosture {
 			// The protected-route principal (internal/api/policy): the users
 			// row behind every access token, org membership behind
 			// X-Org-Id, and the active impersonation session of a superuser.
-			{"users", false, false, false},
-			{"memberships", false, false, false},
-			{"impersonation_sessions", false, false, false},
+			// CHAOS-6250 (admin org/user/invite/impersonation routes) is the
+			// first route area over this principal to WRITE these three:
+			// user/org/member CRUD, password changes, invite creation, and
+			// starting/stopping impersonation sessions.
+			{"users", true, true, true},
+			{"memberships", true, true, true},
+			{"impersonation_sessions", true, true, false},
+			// Invite creation (CHAOS-6250's create_org_invite); accept-invite
+			// is a separate, not-yet-ported route.
+			{"org_invites", true, false, false},
+			// setUserPassword revokes every outstanding refresh token
+			// (refresh_tokens.py's revoke_all_for_user) on a password change.
+			{"refresh_tokens", false, true, false},
+			// The generic audit writer (internal/api/audit): member_invited
+			// and password_changed rows, plus impersonation_start/stop.
+			{"audit_logs", true, false, false},
 		},
 	}
 }

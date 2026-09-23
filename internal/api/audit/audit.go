@@ -1,0 +1,128 @@
+// Package audit is the shared audit_logs writer for dho api's ported admin
+// routes. It reproduces api/utils/audit.py's emit_audit_log and
+// api/services/audit.py's AuditService.log: both are thin builders over the
+// same audit_logs row shape (models/audit.py AuditLog), so one Go writer
+// serves every caller -- the caller builds the Entry (extracting request
+// metadata, merging impersonation context when relevant); this package only
+// inserts it.
+package audit
+
+import (
+	"context"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+// Action is models/audit.py AuditAction's value. Only the actions this PR's
+// routes emit are declared; the Python enum has many more, but a string
+// column accepts any value either side ever writes.
+type Action string
+
+const (
+	ActionMemberInvited      Action = "member_invited"
+	ActionPasswordChanged    Action = "password_changed"
+	ActionImpersonationStart Action = "impersonation_start"
+	ActionImpersonationStop  Action = "impersonation_stop"
+)
+
+// ResourceType is models/audit.py AuditResourceType's value.
+type ResourceType string
+
+const (
+	ResourceMembership ResourceType = "membership"
+	ResourceUser       ResourceType = "user"
+	ResourceSession    ResourceType = "session"
+)
+
+// Entry is one audit_logs row, in the column order and nullability of
+// models/audit.py AuditLog. Changes and RequestMetadata are stored as JSON
+// (pyjson.Marshal, so the Python and Go planes render identical JSON for the
+// same value); either may be nil, matching a Python None.
+type Entry struct {
+	OrgID        uuid.UUID
+	UserID       *uuid.UUID
+	Action       Action
+	ResourceType ResourceType
+	ResourceID   string
+	Description  *string
+	// Changes and RequestMetadata are pre-encoded JSON (or nil): the caller
+	// builds them with pyjson so map key order and number/string rendering
+	// match the Python plane byte for byte, the same discipline pybody uses
+	// for response bodies. Both columns are Postgres `json` (alembic
+	// 0001_initial_schema.py: sa.JSON()), NOT `jsonb` -- `json` stores the
+	// original text verbatim, so key order survives a read-back; `jsonb`
+	// parses and re-serializes, silently reordering keys. Getting this
+	// wrong is invisible until something diffs the raw text (measured: the
+	// integration test below failed on exactly this before the schema was
+	// corrected to `json`).
+	Changes         []byte
+	RequestMetadata []byte
+	// Status defaults to "success" (AuditLog.status's own column default)
+	// when empty, matching emit_audit_log's status: str = "success" and
+	// AuditService.log's identical default.
+	Status       string
+	ErrorMessage *string
+}
+
+// Writer inserts audit_logs rows. PGWriter is the production implementation.
+type Writer interface {
+	Write(ctx context.Context, entry Entry) (uuid.UUID, error)
+}
+
+// PGWriter is Writer over the api Service's Postgres pool.
+type PGWriter struct {
+	Pool *pgxpool.Pool
+	// Now is injectable for tests; nil means time.Now.
+	Now func() time.Time
+}
+
+func (w PGWriter) now() time.Time {
+	if w.Now != nil {
+		return w.Now()
+	}
+	return time.Now()
+}
+
+// Write inserts entry and returns its generated id. It never assigns
+// created_at itself in SQL (now()): the Go plane's clock, injected the same
+// way PGStore's is, keeps a test's expected timestamp exact.
+func (w PGWriter) Write(ctx context.Context, entry Entry) (uuid.UUID, error) {
+	status := entry.Status
+	if status == "" {
+		status = "success"
+	}
+	id := uuid.New()
+	_, err := w.Pool.Exec(ctx, `
+INSERT INTO audit_logs
+	(id, org_id, user_id, action, resource_type, resource_id, description,
+	 changes, request_metadata, status, error_message, created_at)
+VALUES
+	($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+		id, entry.OrgID, entry.UserID, string(entry.Action), string(entry.ResourceType),
+		entry.ResourceID, entry.Description, jsonOrEmptyObject(entry.Changes), jsonOrEmptyObject(entry.RequestMetadata),
+		status, entry.ErrorMessage, w.now().UTC(),
+	)
+	if err != nil {
+		return uuid.UUID{}, err
+	}
+	return id, nil
+}
+
+// jsonOrEmptyObject is AuditLog.__init__'s own coercion (models/audit.py:
+// "self.changes = changes or {}", "self.request_metadata = request_metadata
+// or {}") -- BOTH columns are nullable in the schema, but every row ever
+// constructed through AuditLog(...) (create_entry included, which is every
+// row emit_audit_log or AuditService.log produces) stores "{}", never SQL
+// NULL, when the caller passed nothing. An empty/nil Changes or
+// RequestMetadata renders "{}"; a non-empty slice passes through for pgx's
+// json encoder. Caught by TestOrgInviteAndPasswordChangeAuditMatchThePythonAPI
+// (the set_user_password row: Python's changes column read back as an empty
+// map, Go's as SQL NULL, before this fix).
+func jsonOrEmptyObject(raw []byte) any {
+	if len(raw) == 0 {
+		return []byte("{}")
+	}
+	return raw
+}

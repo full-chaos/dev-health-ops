@@ -16,6 +16,8 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 )
 
 // WriteJSON writes body as Starlette's JSONResponse renders it: compact
@@ -23,6 +25,31 @@ import (
 // extra headers are set before the status line.
 func WriteJSON(w http.ResponseWriter, status int, body any, extra http.Header) {
 	payload, err := Marshal(body)
+	if err != nil {
+		payload = []byte(`{"detail":"Internal Server Error"}`)
+		status = http.StatusInternalServerError
+	}
+	for key, values := range extra {
+		for _, value := range values {
+			w.Header().Add(key, value)
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
+	w.WriteHeader(status)
+	_, _ = io.Copy(w, bytes.NewReader(payload))
+}
+
+// WritePyJSON writes body the same way WriteJSON does, except body is a
+// pyjson.Value (an *pyjson.Object built by a route, or pybody.Detail's own
+// *pyjson.Object) rendered through pyjson.Marshal -- never through
+// WriteJSON's stdlib encoding/json path, which cannot see pyjson.Object's
+// unexported fields and silently renders it as "{}" (reflection finds no
+// exported fields and no MarshalJSON method). A route whose body carries
+// anything pyjson controls -- key order, pydantic-exact number encoding, a
+// value pybody produced -- calls this, never WriteJSON.
+func WritePyJSON(w http.ResponseWriter, status int, body pyjson.Value, extra http.Header) {
+	payload, err := pyjson.Marshal(body)
 	if err != nil {
 		payload = []byte(`{"detail":"Internal Server Error"}`)
 		status = http.StatusInternalServerError

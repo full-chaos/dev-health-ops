@@ -97,8 +97,8 @@ func TestPagerDutyV3WebhookMarshalCanonicalShape(t *testing.T) {
 	}
 	// Field order matches PagerDutyEvent's own declaration order
 	// (id, event_type, occurred_at, data) -- model_dump_json() emits fields
-	// in declaration order, not sorted (unlike canonicalJSON, used only for
-	// delivery-key hashing elsewhere in this package).
+	// in declaration order, not sorted (unlike pyjson.MarshalCanonical, used
+	// only for delivery-key hashing elsewhere in this package).
 	want := `{"event":{"id":"E1","event_type":"incident.triggered","occurred_at":"2026-01-02T03:04:05Z","data":{"incident":{"id":"I1"}}}}`
 	if string(got) != want {
 		t.Fatalf("got  %s\nwant %s", got, want)

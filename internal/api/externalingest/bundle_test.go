@@ -7,15 +7,20 @@ import "testing"
 // compute_etag through ci/check_go.sh's live-python-oracles verb, rather
 // than pinning a hash computed once and typed into this file (a digest, not
 // execution -- see that test's doc comment). This file keeps the tests that
-// do not need a live Python process: escapeNonASCII's own byte-level
-// contract, and the two Go-only invariants below.
+// do not need a live Python process: canonicalMarshal's astral-rune
+// contract (internal/api/pyjson's own tests cover MarshalCanonical
+// directly; this pins that the thin wrapper here still calls it), and the
+// two Go-only invariants below.
 
-func TestEscapeNonASCIISurrogatePairsAnAstralRune(t *testing.T) {
+func TestCanonicalMarshalSurrogatePairsAnAstralRune(t *testing.T) {
 	// U+1F600 GRINNING FACE, outside the BMP: Python's ensure_ascii emits a
 	// UTF-16 surrogate pair for it, not a single \u escape.
-	got := string(escapeNonASCII([]byte(`"` + string(rune(0x1F600)) + `"`)))
-	want := `"` + `\u` + `d83d` + `\u` + `de00` + `"`
-	if got != want {
+	got, err := canonicalMarshal(map[string]any{"x": string(rune(0x1F600))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"x":"` + `\u` + `d83d` + `\u` + `de00` + `"}`
+	if string(got) != want {
 		t.Fatalf("got %s, want %s", got, want)
 	}
 }

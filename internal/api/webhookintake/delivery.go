@@ -35,7 +35,7 @@ func deliveryKey(event webhookEvent) (string, error) {
 	if event.DeliveryID != "" {
 		return event.DeliveryID, nil
 	}
-	canonical, err := canonicalJSON(event.PayloadParsed)
+	canonical, err := pyjson.MarshalCanonical(event.PayloadParsed)
 	if err != nil {
 		return "", err
 	}
@@ -51,7 +51,7 @@ func persistWebhookDelivery(ctx context.Context, pool *pgxpool.Pool, event webho
 	if err != nil {
 		return uuid.UUID{}, fmt.Errorf("compute delivery key: %w", err)
 	}
-	canonical, err := canonicalJSON(event.PayloadParsed)
+	canonical, err := pyjson.MarshalCanonical(event.PayloadParsed)
 	if err != nil {
 		return uuid.UUID{}, fmt.Errorf("canonicalize payload: %w", err)
 	}

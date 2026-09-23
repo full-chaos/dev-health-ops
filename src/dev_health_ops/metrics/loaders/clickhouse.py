@@ -67,56 +67,6 @@ async def _clickhouse_query_dicts(
 _WORK_ITEMS_LOADER_MAX_BLOCK_SIZE = 8_192
 
 
-class TestopsRowCapExceeded(MemoryError):
-    """A testops loader read exceeded its configured hard row cap.
-
-    Deliberately a ``MemoryError`` subclass, not a new exception hierarchy.
-    ``worker_metrics_runner.py``'s ``main()`` already classifies a bare
-    ``MemoryError`` as ``EXIT_RESOURCE_EXHAUSTED`` (CHAOS-4264), which the
-    parent (``worker_metrics.py``) durably persists as a classified
-    ``_CompatibilityProcessFailure(reason="resource_exhausted")`` -- the same
-    failure_reason column and counter this ticket asked to use, already wired
-    end to end, with `safe_to_retry` correctly derived from whether any
-    progress lines were emitted before the failure. Raising a new,
-    unclassified exception type here would either fall through to the
-    generic ``process_failed`` bucket (losing the distinction) or require
-    extending the ``{process_signaled, resource_exhausted, process_failed}``
-    cross-process/cross-language vocabulary while CHAOS-4316/CHAOS-4317 are
-    concurrently extending the same shared classification -- reusing the
-    resource-exhaustion bucket (this genuinely IS a resource bound, just
-    enforced before the OS/rlimit would have) avoids that collision. The
-    table/org_id/row counts are still visible via this exception's message
-    -- not silently folded into a generic MemoryError.
-
-    CHAOS-5245: the loader methods that used to raise this (and the
-    devhealth_testops_loader_row_cap_exceeded_total counter, the error log
-    line, and _enforce_row_cap that emitted them) are deleted along with
-    compute_testops.py -- nothing raises this anymore in practice. Kept
-    only because worker_metrics_runner.py:227-229 still imports it into a
-    tuple of exception types main() classifies.
-    """
-
-    # CHAOS-4350 (team-lead ruling, 2026-08-26): a fixed token, present
-    # verbatim in this message (was ALSO in the now-deleted _enforce_row_cap
-    # error log line, so a SigNoz log search could distinguish a
-    # deliberately-tripped guard from a real, unbounded OOM even though both
-    # surface as the same MemoryError/resource_exhausted classification
-    # upstream). Kept for message-format stability even though nothing
-    # raises this anymore.
-    TOKEN = "testops_row_cap_exceeded"
-
-    def __init__(self, *, table: str, org_id: str, max_rows: int, fetched: int) -> None:
-        self.table = table
-        self.org_id = org_id
-        self.max_rows = max_rows
-        self.fetched = fetched
-        super().__init__(
-            f"{self.TOKEN}: table={table!r} org_id={org_id!r} "
-            f"max_rows={max_rows} fetched>={fetched} -- refusing to compute "
-            "testops metrics on a partial/truncated result"
-        )
-
-
 def _decode_provider_identities_json(value: Any) -> dict[str, list[str]]:
     """Decode an `identities.provider_identities` ClickHouse row value.
 

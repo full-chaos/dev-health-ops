@@ -22,6 +22,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 )
 
 // jobStatusDisabled is JobStatus.DISABLED.value (settings.py's int enum).
@@ -355,23 +357,8 @@ func (h *handlers) orgDeletionPurgeClickHouse(ctx context.Context, orgIDStr stri
 	}
 	defer conn.Close()
 
-	rows, err := conn.Query(ctx,
-		`SELECT table, type FROM system.columns WHERE database = currentDatabase() AND name = 'org_id' ORDER BY table`)
-	if err != nil {
-		result.warnings = append(result.warnings, "ClickHouse migration table catalog is empty.")
-		return
-	}
-	type chTable struct{ name, orgIDType string }
-	var tables []chTable
-	for rows.Next() {
-		var t chTable
-		if err := rows.Scan(&t.name, &t.orgIDType); err != nil {
-			continue
-		}
-		tables = append(tables, t)
-	}
-	rows.Close()
-	if len(tables) == 0 {
+	tables, err := DiscoverClickHouseOrgTables(ctx, conn)
+	if err != nil || len(tables) == 0 {
 		result.warnings = append(result.warnings, "ClickHouse migration table catalog is empty.")
 		return
 	}
@@ -379,25 +366,68 @@ func (h *handlers) orgDeletionPurgeClickHouse(ctx context.Context, orgIDStr stri
 	for _, t := range tables {
 		condition := "org_id = ?"
 		var bind any = orgIDStr
-		if isUUIDType(t.orgIDType) {
+		if isUUIDType(t.OrgIDType) {
 			condition = "org_id = toUUID(?)"
 		}
 		var count uint64
-		countRow := conn.QueryRow(ctx, fmt.Sprintf("SELECT count() FROM `%s` WHERE %s", t.name, condition), bind)
+		countRow := conn.QueryRow(ctx, fmt.Sprintf("SELECT count() FROM `%s` WHERE %s", t.Name, condition), bind)
 		if err := countRow.Scan(&count); err != nil {
-			result.warnings = append(result.warnings, fmt.Sprintf("ClickHouse table %s missing or has no org_id column; skipped.", t.name))
+			result.warnings = append(result.warnings, fmt.Sprintf("ClickHouse table %s missing or has no org_id column; skipped.", t.Name))
 			continue
 		}
-		result.clickhouseTables = append(result.clickhouseTables, t.name)
-		result.clickhouseCount[t.name] = int64(count)
+		result.clickhouseTables = append(result.clickhouseTables, t.Name)
+		result.clickhouseCount[t.Name] = int64(count)
 		result.clickhouseTotal += int64(count)
 		if dryRun || count == 0 {
 			continue
 		}
-		if err := conn.Exec(ctx, fmt.Sprintf("ALTER TABLE `%s` DELETE WHERE %s", t.name, condition), bind); err != nil {
-			result.warnings = append(result.warnings, fmt.Sprintf("Unable to delete ClickHouse table %s.", t.name))
+		if err := conn.Exec(ctx, fmt.Sprintf("ALTER TABLE `%s` DELETE WHERE %s", t.Name, condition), bind); err != nil {
+			result.warnings = append(result.warnings, fmt.Sprintf("Unable to delete ClickHouse table %s.", t.Name))
 		}
 	}
+}
+
+// ChTable is one org_id-bearing ClickHouse table, as
+// DiscoverClickHouseOrgTables finds it.
+type ChTable struct{ Name, OrgIDType string }
+
+// DiscoverClickHouseOrgTables is the live table-discovery half of the
+// CHAOS-6306 named divergence from org_deletion.py's static regex-parse of
+// migration files (see this file's package doc comment): every table in
+// the connected database carrying a column literally named org_id, read
+// straight from system.columns rather than duplicated as a second,
+// hand-maintained list. It is exported and is the ONE place this query is
+// written -- both orgDeletionPurgeClickHouse and the live table-set
+// agreement oracle (orgdeletion_clickhouse_oracle_test.go, package
+// admin_test) call it, so a test asserting the two discovery mechanisms
+// agree is never quietly comparing itself.
+func DiscoverClickHouseOrgTables(ctx context.Context, conn driver.Conn) ([]ChTable, error) {
+	// A plain VIEW (engine = 'View') has no storage of its own -- it is a
+	// saved SELECT over another table this query already discovers
+	// directly. ALTER TABLE ... DELETE against one either errors outright
+	// or, if ClickHouse ever accepted it, would double-report/double-purge
+	// rows the underlying table already accounts for. A MaterializedView is
+	// kept: unlike a plain VIEW it owns real backing storage (its own
+	// implicit inner table, or its declared TO target) that ALTER TABLE
+	// DELETE legitimately targets by the view's own name.
+	rows, err := conn.Query(ctx,
+		`SELECT c.table, c.type FROM system.columns AS c
+		 JOIN system.tables AS t ON t.database = c.database AND t.name = c.table
+		 WHERE c.database = currentDatabase() AND c.name = 'org_id' AND t.engine != 'View'
+		 ORDER BY c.table`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var tables []ChTable
+	for rows.Next() {
+		var t ChTable
+		if err := rows.Scan(&t.Name, &t.OrgIDType); err != nil {
+			continue
+		}
+		tables = append(tables, t)
+	}
+	return tables, nil
 }
 
 // isUUIDType reports whether a ClickHouse column type string names UUID

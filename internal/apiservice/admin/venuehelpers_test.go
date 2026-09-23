@@ -23,6 +23,13 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
+// adminDepsExtra lets a caller of startGoServer set the admin area's own
+// extra dependencies (CHAOS-6306: ClickHouseDSN/Decryptor/PagerDuty/
+// HTTPDoer) without widening every other venue test's call site -- the
+// default (no extras) leaves apiservice.Deps exactly as it was before those
+// fields existed.
+type adminDepsExtra func(*apiservice.Deps)
+
 // venueJWTIssuer/venueJWTAudience mirror config.go's unexported
 // defaultJWTIssuer/defaultJWTAudience and auth.py's own JWT_ISSUER/
 // JWT_AUDIENCE defaults -- both planes agree on these with neither
@@ -37,7 +44,7 @@ const (
 // OrgScope/Impersonation middlewares -- against venue's Go copy, the same
 // wiring apiservice's own configure() does when deps.Pool is set
 // (service.go). Everything it opens is closed by t.Cleanup.
-func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue, jwtKey string) (base string, pool *pgxpool.Pool) {
+func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue, jwtKey string, extras ...adminDepsExtra) (base string, pool *pgxpool.Pool) {
 	t.Helper()
 	goPool, err := pgxpool.New(ctx, venue.GoAPIDatabaseURI(t))
 	if err != nil {
@@ -65,7 +72,11 @@ func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue, 
 	if err != nil {
 		t.Fatalf("config.Load: %v", err)
 	}
-	routes := apiservice.Routes(apiservice.Deps{Pool: goPool, Valkey: valkeyClient, Auth: auth, Guard: guard}, logger)
+	deps := apiservice.Deps{Pool: goPool, Valkey: valkeyClient, Auth: auth, Guard: guard}
+	for _, extra := range extras {
+		extra(&deps)
+	}
+	routes := apiservice.Routes(deps, logger)
 	requestScope := policy.NewScope(auth, logger)
 	server, err := apiservice.NewServer(cfg, logger, routes, requestScope.OrgScope, requestScope.Impersonation)
 	if err != nil {

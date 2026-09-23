@@ -404,16 +404,19 @@ type ChTable struct{ Name, OrgIDType string }
 func DiscoverClickHouseOrgTables(ctx context.Context, conn driver.Conn) ([]ChTable, error) {
 	// A plain VIEW (engine = 'View') has no storage of its own -- it is a
 	// saved SELECT over another table this query already discovers
-	// directly. ALTER TABLE ... DELETE against one either errors outright
-	// or, if ClickHouse ever accepted it, would double-report/double-purge
-	// rows the underlying table already accounts for. A MaterializedView is
-	// kept: unlike a plain VIEW it owns real backing storage (its own
-	// implicit inner table, or its declared TO target) that ALTER TABLE
-	// DELETE legitimately targets by the view's own name.
+	// directly. A MaterializedView is excluded too: verified live against
+	// this repo's actual schema (git_blame_dirty_paths_mv, currently the
+	// only live MV any migration creates), ClickHouse flatly refuses
+	// ALTER TABLE ... DELETE against a MATERIALIZED VIEW object --
+	// "MATERIALIZED VIEW targets existing table X. Execute the statement
+	// directly on it." (error 80) -- so it can never be a real purge
+	// target by its own name; the table it feeds (git_blame_dirty_paths
+	// here) already carries its own org_id column and is discovered and
+	// purged directly, so nothing is left unpurged by excluding the MV.
 	rows, err := conn.Query(ctx,
 		`SELECT c.table, c.type FROM system.columns AS c
 		 JOIN system.tables AS t ON t.database = c.database AND t.name = c.table
-		 WHERE c.database = currentDatabase() AND c.name = 'org_id' AND t.engine != 'View'
+		 WHERE c.database = currentDatabase() AND c.name = 'org_id' AND t.engine NOT IN ('View', 'MaterializedView')
 		 ORDER BY c.table`)
 	if err != nil {
 		return nil, err

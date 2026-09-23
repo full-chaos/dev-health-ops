@@ -5,6 +5,7 @@ package admin_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os/exec"
 	"sort"
 	"testing"
@@ -17,17 +18,33 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
+// clickHouseOrgTableKnownPythonOnlyStale is org_deletion.py's own
+// migration-history staleness in _clickhouse_tables_from_migrations():
+// every entry here is a table name Python's static regex still reports,
+// with the reason it is stale. Team-lead's ruling (R356: no Python edit
+// for this): the Go route's live system.columns discovery is the ground
+// truth; this map is an ACCEPTANCE GATE naming today's exact, understood
+// divergence, not a general allowance -- TestClickHouseOrgTableDiscoveryMatchesThePythonMigrationRegex
+// below fails loud if the real divergence set ever stops matching this
+// map exactly, in either direction.
+var clickHouseOrgTableKnownPythonOnlyStale = map[string]string{
+	"ci_daily_rollup":         "migration 093 DROPs this table; the regex only sees migration 026's CREATE, never 093's DROP",
+	"commit_daily_rollup":     "migration 093 DROPs this table; the regex only sees migration 026's CREATE, never 093's DROP",
+	"deployment_daily_rollup": "migration 093 DROPs this table; the regex only sees migration 026's/045's CREATE, never 093's DROP",
+	"ai_attribution_new":      "migration 044's own shadow-swap temp table (EXCHANGE TABLES then DROP), gone by the end of that same migration",
+	"statement":               "a false positive: the regex matched literal prose inside migration 027's own module docstring, not real SQL",
+}
+
 // TestClickHouseOrgTableDiscoveryMatchesThePythonMigrationRegex is CHAOS-6306
 // approval condition 1: the Go org-deletion route discovers org_id-bearing
 // ClickHouse tables LIVE from system.columns (admin.DiscoverClickHouseOrgTables
 // -- the exact function orgDeletionPurgeClickHouse itself calls, never a
 // second hand-authored copy), while org_deletion.py discovers the same set by
 // statically regex-parsing the migration files
-// (_clickhouse_tables_from_migrations). Team-lead's ruling: this is an
-// accepted named divergence ONLY as long as an oracle proves the two
-// mechanisms agree today -- a difference here is a hard FAIL, never a
-// warning, because org-deletion is destructive and its scope must never
-// silently widen relative to the Python route it replaces.
+// (_clickhouse_tables_from_migrations). Team-lead's ruling (26): this is an
+// accepted named divergence, proven by asserting the EXACT known-stale set
+// above -- never a bare "they differ" warning, and never silently widening
+// if the real set drifts from what is named here.
 //
 // This test needs a real, migrated ClickHouse (chschema.Apply runs the
 // actual migration chain) and a python3 interpreter; it does not need the
@@ -55,11 +72,10 @@ func TestClickHouseOrgTableDiscoveryMatchesThePythonMigrationRegex(t *testing.T)
 	if err != nil {
 		t.Fatalf("DiscoverClickHouseOrgTables: %v", err)
 	}
-	goNames := make([]string, len(goTables))
-	for i, table := range goTables {
-		goNames[i] = table.Name
+	goSet := map[string]bool{}
+	for _, table := range goTables {
+		goSet[table.Name] = true
 	}
-	sort.Strings(goNames)
 
 	root := repoRoot(t)
 	python := pyoracle.Resolve(t, root)
@@ -81,17 +97,48 @@ print(json.dumps(sorted(org_deletion._clickhouse_tables_from_migrations())))
 	if err := json.Unmarshal(output, &pythonNames); err != nil {
 		t.Fatalf("decode python output: %v\n%s", err, output)
 	}
-	sort.Strings(pythonNames)
+	pythonSet := map[string]bool{}
+	for _, name := range pythonNames {
+		pythonSet[name] = true
+	}
 
-	if len(goNames) == 0 || len(pythonNames) == 0 {
-		t.Fatalf("empty discovered table set (go=%d python=%d) -- the migration chain likely did not apply", len(goNames), len(pythonNames))
+	if len(goSet) == 0 || len(pythonSet) == 0 {
+		t.Fatalf("empty discovered table set (go=%d python=%d) -- the migration chain likely did not apply", len(goSet), len(pythonSet))
 	}
-	if len(goNames) != len(pythonNames) {
-		t.Fatalf("table set SIZE diverged: go=%d python=%d\ngo=%v\npython=%v", len(goNames), len(pythonNames), goNames, pythonNames)
-	}
-	for i := range goNames {
-		if goNames[i] != pythonNames[i] {
-			t.Fatalf("table set diverged at index %d: go=%q python=%q\ngo=%v\npython=%v", i, goNames[i], pythonNames[i], goNames, pythonNames)
+
+	// Every table Python has and Go does not must be named, with a reason,
+	// in clickHouseOrgTableKnownPythonOnlyStale -- and every name in that
+	// map must actually be reproduced, or the map itself has rotted.
+	var unexplained []string
+	seen := map[string]bool{}
+	for name := range pythonSet {
+		if goSet[name] {
+			continue
 		}
+		seen[name] = true
+		if _, known := clickHouseOrgTableKnownPythonOnlyStale[name]; !known {
+			unexplained = append(unexplained, fmt.Sprintf("python has %q, go does not, and it is NOT in clickHouseOrgTableKnownPythonOnlyStale -- either a new staleness bug in org_deletion.py, or Go's live discovery just started missing a real table", name))
+		}
+	}
+	for name := range clickHouseOrgTableKnownPythonOnlyStale {
+		if !seen[name] {
+			unexplained = append(unexplained, fmt.Sprintf("clickHouseOrgTableKnownPythonOnlyStale names %q, but python no longer reports it and go doesn't either -- the entry is stale, remove it", name))
+		}
+	}
+
+	// Every table Go has and Python does not is a hard FAIL: Go's scope
+	// must never silently widen beyond what this test has named and a
+	// human has reviewed.
+	var goOnly []string
+	for name := range goSet {
+		if !pythonSet[name] {
+			goOnly = append(goOnly, name)
+		}
+	}
+	sort.Strings(goOnly)
+
+	if len(unexplained) > 0 || len(goOnly) > 0 {
+		sort.Strings(unexplained)
+		t.Fatalf("ClickHouse org-table discovery diverged from the accepted set:\nunexplained: %v\ngo-only (never accepted): %v", unexplained, goOnly)
 	}
 }

@@ -40,6 +40,13 @@ const (
 	venueJWTAudience = "dev-health-api"
 )
 
+// adminDepsExtra lets a caller of startGoServer set fields on
+// apiservice.Deps (e.g. CHAOS-6357's Now, to drive the admin area's keyed
+// rate limiter's clock) without widening every other venue test's call
+// site -- the default (no extras) leaves apiservice.Deps exactly as it was
+// before those fields existed.
+type adminDepsExtra func(*apiservice.Deps)
+
 // startGoServer builds the real Go api -- Postgres pool, Valkey client,
 // the protected-route runtime, every mounted route area, and the
 // OrgScope/Impersonation middlewares -- against venue's Go copy, the same

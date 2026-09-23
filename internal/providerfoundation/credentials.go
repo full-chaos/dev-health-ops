@@ -9,12 +9,12 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
-	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"golang.org/x/crypto/pbkdf2"
 )
@@ -137,16 +137,57 @@ func decryptFernet(token string, key []byte) ([]byte, error) {
 	return plain[:len(plain)-padding], nil
 }
 
+// githubFieldAliases mirrors github_credentials_from_mapping's alias dict
+// (credentials/resolver.py:259-265) exactly: a GitHub App credential row a
+// web client wrote can carry camelCase field names. Applied ONLY for
+// provider=="github", matching that Python function's own call-site
+// scoping (it is never called for another provider) -- an unrelated
+// provider's literal "appId"-shaped field name is never silently renamed.
+//
+// r2 (round 1 finding #2): if both an alias and its canonical spelling
+// are present on the SAME row, Python's own behavior is deterministic --
+// `{aliases.get(k, k): v for k, v in cred_dict.items() if v is not None}`
+// is a dict comprehension over `cred_dict.items()` in the JSON TEXT's own
+// key order (Python dicts, and json.loads, preserve insertion order), so
+// whichever spelling appears LAST in the stored JSON wins. This decode
+// used to walk a plain `map[string]any` from encoding/json, whose
+// iteration order Go randomizes on every call -- round 1 measured the
+// alias winning 245/2000 runs on the IDENTICAL input, a real
+// nondeterminism bug independent of whether it also happened to match
+// Python (it did not, reliably, precisely because it was random).
+// Decoding with pyjson.DecodeString instead (an *pyjson.Object, which
+// preserves JSON document order the same way pyjson.Object does
+// everywhere else in this codebase) and walking .Keys() in that order
+// makes the "later key wins" rule deterministic and matches Python's own
+// document-order precedence exactly, not merely "some fixed order".
+var githubFieldAliases = map[string]string{
+	"appId":          "app_id",
+	"baseUrl":        "base_url",
+	"installationId": "installation_id",
+	"privateKey":     "private_key",
+	"privateKeyPath": "private_key_path",
+}
+
 func decodeCredential(record EncryptedCredential, plaintext []byte) (Credential, error) {
-	var values map[string]any
-	if err := json.Unmarshal(plaintext, &values); err != nil {
+	decoded, err := pyjson.DecodeString(string(plaintext))
+	if err != nil {
 		return Credential{}, ErrCredentialInvalid
 	}
-	fields := make(map[string]secrets.Value, len(values))
-	for key, value := range values {
+	object, isObject := decoded.(*pyjson.Object)
+	if !isObject {
+		return Credential{}, ErrCredentialInvalid
+	}
+	fields := make(map[string]secrets.Value, object.Len())
+	for _, key := range object.Keys() {
+		value, _ := object.Get(key)
 		text, ok := value.(string)
 		if !ok || strings.TrimSpace(key) == "" {
 			return Credential{}, ErrCredentialInvalid
+		}
+		if record.Provider == "github" {
+			if canonical, aliased := githubFieldAliases[key]; aliased {
+				key = canonical
+			}
 		}
 		fields[key] = secrets.NewValue(text)
 	}
@@ -185,7 +226,14 @@ func ValidateCredentialShape(credential Credential) error {
 	switch credential.Provider {
 	case "github":
 		token := has("token")
-		app := has("app_id") && has("private_key") && has("installation_id")
+		// r2 (round 1 finding #1): github_credentials_from_mapping accepts
+		// EITHER private_key (inline PEM content) OR private_key_path (a
+		// file path it reads at resolve time, resolver.py:269-276) as
+		// satisfying the App-auth triple -- this is a pure SHAPE check
+		// (no file I/O here; NewGitHubAppAuth does the actual read), so a
+		// private_key_path-only row must pass it the same way Python's
+		// own shape check (GitHubCredentials's validation) does.
+		app := has("app_id") && (has("private_key") || has("private_key_path")) && has("installation_id")
 		if token == app {
 			return ErrCredentialInvalid
 		}

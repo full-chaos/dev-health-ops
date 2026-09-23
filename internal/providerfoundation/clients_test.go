@@ -2,15 +2,24 @@ package providerfoundation
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
+
+// testGitHubAppPrivateKeyPEM is a placeholder key CONTENT for tests that
+// only prove a private_key_path file's bytes were loaded verbatim -- not
+// shaped-tests that actually sign a JWT (githubAppJWT's own parseability
+// checks are exercised separately, live, by the RS256 signing path).
+const testGitHubAppPrivateKeyPEM = "-----BEGIN RSA PRIVATE KEY-----\ntest-key-content-not-a-real-key\n-----END RSA PRIVATE KEY-----\n"
 
 func TestExplicitProviderClientsApplyTypedAuthentication(t *testing.T) {
 	t.Parallel()
@@ -429,5 +438,144 @@ func TestJiraBaseURLFallsBackToConfigWhenNoSecretExists(t *testing.T) {
 
 	if got := jiraCredentialBaseURL(credential); got != "https://config.atlassian.net" {
 		t.Fatalf("jiraCredentialBaseURL = %q, want the config value", got)
+	}
+}
+
+// TestDecodeCredentialNormalizesGitHubAppCamelCaseAliases is CHAOS-6352's
+// own reproduction: a GitHub App credential row written with camelCase
+// keys (appId/privateKey/installationId -- the shape
+// github_credentials_from_mapping's own doc comment says a real web-
+// written row can carry, resolver.py:243-268) must decode to the
+// CANONICAL snake_case field names decodeCredential's callers
+// (ValidateCredentialShape, NewGitHubAppAuth) actually check.
+func TestDecodeCredentialNormalizesGitHubAppCamelCaseAliases(t *testing.T) {
+	plaintext := []byte(`{"appId":"12345","privateKey":"-----BEGIN RSA PRIVATE KEY-----\nZmFrZQ==\n-----END RSA PRIVATE KEY-----","installationId":"67890"}`)
+	credential, err := decodeCredential(EncryptedCredential{Provider: "github", ID: "cred-1", Name: "default"}, plaintext)
+	if err != nil {
+		t.Fatalf("decodeCredential: %v", err)
+	}
+	for name, want := range map[string]string{
+		"app_id":          "12345",
+		"installation_id": "67890",
+	} {
+		got, ok := credential.Secret(name)
+		if !ok || got.Reveal() != want {
+			t.Errorf("Secret(%q) = %q, %v; want %q, true", name, got.Reveal(), ok, want)
+		}
+	}
+	if _, ok := credential.Secret("private_key"); !ok {
+		t.Error(`Secret("private_key") not present after decoding a "privateKey"-keyed row`)
+	}
+	if _, ok := credential.Secret("appId"); ok {
+		t.Error(`Secret("appId") must not survive decode -- it should be renamed to "app_id", not duplicated`)
+	}
+	if err := ValidateCredentialShape(credential); err != nil {
+		t.Errorf("ValidateCredentialShape rejected a camelCase-sourced GitHub App credential: %v", err)
+	}
+}
+
+// TestDecodeCredentialLeavesNonGitHubCamelCaseKeysAlone proves the alias
+// normalization is scoped to provider=="github" only, matching
+// github_credentials_from_mapping's own call-site scoping -- an unrelated
+// provider's field literally named "appId" (however unlikely) is never
+// silently renamed.
+func TestDecodeCredentialLeavesNonGitHubCamelCaseKeysAlone(t *testing.T) {
+	plaintext := []byte(`{"appId":"not-actually-a-github-field"}`)
+	credential, err := decodeCredential(EncryptedCredential{Provider: "gitlab", ID: "cred-1", Name: "default"}, plaintext)
+	if err != nil {
+		t.Fatalf("decodeCredential: %v", err)
+	}
+	if _, ok := credential.Secret("app_id"); ok {
+		t.Error(`a non-github credential's "appId" field must not be renamed to "app_id"`)
+	}
+	if got, ok := credential.Secret("appId"); !ok || got.Reveal() != "not-actually-a-github-field" {
+		t.Error(`a non-github credential's "appId" field must survive decode unchanged`)
+	}
+}
+
+// TestGitHubAppAuthBuildsFromPrivateKeyPath is round 1 finding #1's own
+// reproduction: a stored credential row carrying app_id/installation_id/
+// private_key_path (no inline private_key at all) must pass
+// ValidateCredentialShape AND let NewGitHubAppAuth actually read the file
+// and build usable auth, matching github_credentials_from_mapping's own
+// file-read fallback (resolver.py:269-276).
+func TestGitHubAppAuthBuildsFromPrivateKeyPath(t *testing.T) {
+	keyFile := filepath.Join(t.TempDir(), "app-key.pem")
+	if err := os.WriteFile(keyFile, []byte(testGitHubAppPrivateKeyPEM), 0o600); err != nil {
+		t.Fatalf("write test key file: %v", err)
+	}
+	credential := testCredential("github", map[string]string{
+		"app_id": "12345", "installation_id": "67890", "private_key_path": keyFile,
+	})
+	if err := ValidateCredentialShape(credential); err != nil {
+		t.Fatalf("ValidateCredentialShape rejected a private_key_path-only credential: %v", err)
+	}
+	doer := &githubAppDoer{}
+	auth, err := NewGitHubAppAuth(credential, githubAPIBase, doer)
+	if err != nil {
+		t.Fatalf("NewGitHubAppAuth: %v", err)
+	}
+	if auth.privateKey.Reveal() != testGitHubAppPrivateKeyPEM {
+		t.Error("NewGitHubAppAuth did not load the private key from private_key_path")
+	}
+}
+
+// TestGitHubAppAuthMissingPrivateKeyPathFileFailsClosed proves an
+// unreadable private_key_path (matching Python's `except OSError: return
+// None`) fails the same way a wholly-missing private key does, never a
+// distinguishable error that could leak the attempted path.
+func TestGitHubAppAuthMissingPrivateKeyPathFileFailsClosed(t *testing.T) {
+	credential := testCredential("github", map[string]string{
+		"app_id": "12345", "installation_id": "67890", "private_key_path": filepath.Join(t.TempDir(), "does-not-exist.pem"),
+	})
+	doer := &githubAppDoer{}
+	if _, err := NewGitHubAppAuth(credential, githubAPIBase, doer); !errors.Is(err, ErrCredentialInvalid) {
+		t.Errorf("NewGitHubAppAuth = %v, want ErrCredentialInvalid", err)
+	}
+}
+
+// TestGitHubAppAuthEmptyInlineKeyDoesNotFallBackToPath is round 2 finding
+// #1's own reproduction: a stored credential row carrying an EXPLICIT empty
+// private_key alongside a valid private_key_path must be rejected, not
+// silently authenticated with the path-backed key. Python's own check is
+// `"private_key" not in cred_dict` (resolver.py:263) -- a PRESENCE check,
+// not a truthiness one -- so a present-but-empty private_key never
+// triggers the path fallback and the credential is rejected downstream
+// (an empty private_key fails GitHubCredentials's own construction).
+func TestGitHubAppAuthEmptyInlineKeyDoesNotFallBackToPath(t *testing.T) {
+	keyFile := filepath.Join(t.TempDir(), "app-key.pem")
+	if err := os.WriteFile(keyFile, []byte(testGitHubAppPrivateKeyPEM), 0o600); err != nil {
+		t.Fatalf("write test key file: %v", err)
+	}
+	credential := testCredential("github", map[string]string{
+		"app_id": "12345", "installation_id": "67890",
+		"private_key": "", "private_key_path": keyFile,
+	})
+	doer := &githubAppDoer{}
+	if _, err := NewGitHubAppAuth(credential, githubAPIBase, doer); !errors.Is(err, ErrCredentialInvalid) {
+		t.Errorf("NewGitHubAppAuth = %v, want ErrCredentialInvalid (must not silently authenticate with the path key when private_key is present-but-empty)", err)
+	}
+}
+
+// TestDecodeCredentialDuplicateAliasIsDeterministic is round 1 finding
+// #2's own reproduction: a row carrying BOTH "appId" and "app_id" (with
+// different values) must decode to the SAME winner on every call --
+// specifically, whichever spelling appears LAST in the JSON text
+// (matching Python's dict-comprehension-over-insertion-order precedence),
+// never a Go-map-iteration-randomized one. Run many times: a flaky
+// pre-fix decode would fail this well before it exhausts the loop.
+func TestDecodeCredentialDuplicateAliasIsDeterministic(t *testing.T) {
+	// "appId" appears BEFORE "app_id" in the JSON text -- the canonical
+	// spelling is last, so it must win every time.
+	plaintext := []byte(`{"appId":"alias-value","app_id":"canonical-value","installation_id":"1","private_key":"k"}`)
+	for i := 0; i < 500; i++ {
+		credential, err := decodeCredential(EncryptedCredential{Provider: "github", ID: "cred-1", Name: "default"}, plaintext)
+		if err != nil {
+			t.Fatalf("decodeCredential (run %d): %v", i, err)
+		}
+		got, _ := credential.Secret("app_id")
+		if got.Reveal() != "canonical-value" {
+			t.Fatalf("run %d: app_id = %q, want the LAST-in-document-order value %q (nondeterministic alias resolution)", i, got.Reveal(), "canonical-value")
+		}
 	}
 }

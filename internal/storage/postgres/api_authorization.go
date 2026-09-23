@@ -90,6 +90,12 @@ func apiPosture() RolePosture {
 			// /health/workers' worker heartbeat presence.
 			{"alembic_version", false, false, false},
 			{"worker_instances", false, false, false},
+			// Plan area K: the org telemetry settings, the instance usage
+			// counts /telemetry/report reads, and its audit row. (There is no
+			// Postgres repos table: repositories live in ClickHouse.)
+			{"settings", true, true, false},
+			{"sync_configurations", false, false, false},
+			{"audit_logs", true, false, false},
 		},
 	}
 }

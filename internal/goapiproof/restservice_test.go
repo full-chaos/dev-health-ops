@@ -40,10 +40,12 @@ func TestParseRESTService(t *testing.T) {
 func TestServiceScopedViewsNeverMixServices(t *testing.T) {
 	queryBefore := slices.Clone(RESTRunOrderFor(RESTServiceQueryAPI))
 	pathsBefore := slices.Clone(KnownRESTPaths())
+	dhoBefore := slices.Clone(RESTRunOrderFor(RESTServiceDHOAPI))
+	dhoPathsBefore := slices.Clone(KnownRESTPathsFor(RESTServiceDHOAPI))
 	operation := withDHOAPISpec(t, true)
 
-	if got := RESTRunOrderFor(RESTServiceDHOAPI); !slices.Equal(got, []string{operation}) {
-		t.Fatalf("dho-api run order = %v, want just %s", got, operation)
+	if got := RESTRunOrderFor(RESTServiceDHOAPI); !slices.Equal(got, append(dhoBefore, operation)) {
+		t.Fatalf("dho-api run order = %v, want %v then %s", got, dhoBefore, operation)
 	}
 	if got := RESTRunOrderFor(RESTServiceQueryAPI); !slices.Equal(got, queryBefore) {
 		t.Fatalf("a dho-api entry leaked into query-api's run order: %v", got)
@@ -51,7 +53,7 @@ func TestServiceScopedViewsNeverMixServices(t *testing.T) {
 	if got := KnownRESTPaths(); !slices.Equal(got, pathsBefore) {
 		t.Fatalf("a dho-api path leaked into query-api's coverage paths: %v", got)
 	}
-	if got := KnownRESTPathsFor(RESTServiceDHOAPI); !slices.Equal(got, []string{"/test-only-dho-api-probe"}) {
+	if got := KnownRESTPathsFor(RESTServiceDHOAPI); !slices.Contains(got, "/test-only-dho-api-probe") || len(got) != len(dhoPathsBefore)+1 {
 		t.Fatalf("dho-api paths = %v", got)
 	}
 	if err := AssertRESTPathCoverage(MountedRESTPaths()); err != nil {
